@@ -6,9 +6,10 @@ import json
 import unittest
 from typing import Any
 
+from app.services.unit_task_manifest import backend_stage_manifest, frontend_api_task_manifest
 from app.agents.main.unit_task_prompt import build_unit_generation_prompt
 from app.agents.main.unit_task_rules import (
-    frontend_api_task_manifest,
+    example_task_id,
     requirement_output_contracts,
     resolve_unit_task_rules,
 )
@@ -395,13 +396,24 @@ class UnitTaskPromptTests(unittest.TestCase):
                     api_contract_id="orders-api",
                     endpoint_id="orders.list",
                 ),
+                _requirement(
+                    "frontend.api_module",
+                    "users-api:users.list",
+                    api_contract_id="users-api",
+                    endpoint_id="users.list",
+                ),
             ],
         )
 
         manifest = frontend_api_task_manifest(context)
 
-        self.assertEqual(len(manifest), 1)
+        self.assertEqual(len(manifest), 2)
+        self.assertEqual(
+            [item["api_contract_id"] for item in manifest],
+            ["orders-api", "users-api"],
+        )
         self.assertEqual(manifest[0]["endpoint_ids"], ["orders.list", "orders.update"])
+        self.assertEqual(manifest[1]["endpoint_ids"], ["users.list"])
         self.assertEqual(
             manifest[0]["module_path"],
             canonical_frontend_api_module_path("orders-api"),
@@ -414,7 +426,99 @@ class UnitTaskPromptTests(unittest.TestCase):
                 ("orders.list", "orders.update"),
             ),
         )
-        self.assertIn(manifest[0]["task_id"], "\n".join(resolve_unit_task_rules(context)))
+        self.assertEqual(
+            manifest[1]["task_id"],
+            frontend_api_task_id(context.unit_id, "users-api", ("users.list",)),
+        )
+        self.assertEqual(example_task_id(context), manifest[0]["task_id"])
+        self.assertIn("task_id", manifest[0])
+        self.assertNotIn("id", manifest[0])
+
+        rendered_rules = "\n".join(resolve_unit_task_rules(context))
+        frontend_manifest_json = rendered_rules.split(
+            "suffix, and do not shorten, rename, or reuse an ID from a retained Task:\n",
+            1,
+        )[1].split("\nThat single Task implements", 1)[0]
+        visible_manifest = json.loads(frontend_manifest_json)
+        self.assertEqual(
+            visible_manifest,
+            [
+                {
+                    ("id" if key == "task_id" else key): value
+                    for key, value in item.items()
+                }
+                for item in manifest
+            ],
+        )
+        self.assertIn(f'"id": "{manifest[0]["task_id"]}"', rendered_rules)
+        self.assertIn(f'"id": "{manifest[1]["task_id"]}"', rendered_rules)
+        self.assertNotIn('"task_id":', rendered_rules)
+
+        prompt = build_unit_generation_prompt(context)
+        self.assertIn(f'"id": "{manifest[0]["task_id"]}"', prompt)
+        self.assertNotIn('"task_id":', prompt)
+
+    def test_complete_prompts_use_id_for_candidate_and_backend_manifest_tasks(self) -> None:
+        """完整 Prompt 的 Task 示例与两类 Manifest 均展示正式 id 字段。"""
+
+        frontend_context = _unit_context(
+            "frontend:api-client",
+            "frontend",
+            [_requirement(
+                "frontend.api_module",
+                "orders-api:orders.list",
+                api_contract_id="orders-api",
+                endpoint_id="orders.list",
+            )],
+        )
+        frontend_task_id = frontend_api_task_id(
+            frontend_context.unit_id,
+            "orders-api",
+            ("orders.list",),
+        )
+        frontend_prompt = build_unit_generation_prompt(frontend_context)
+        frontend_example_json = frontend_prompt.split(
+            "Task JSON shape example; use the exact IDs and requirement manifest "
+            "from the Unit-Kind Rules rather than inventing or copying placeholders:\n",
+            1,
+        )[1].split("\nAllowed `deliverables[].kind`", 1)[0]
+        frontend_example = json.loads(frontend_example_json)
+
+        self.assertEqual(frontend_example["tasks"][0]["id"], frontend_task_id)
+        self.assertNotIn("task_id", frontend_example["tasks"][0])
+        self.assertIn(f'"id": "{frontend_task_id}"', frontend_prompt)
+        self.assertNotIn('"task_id":', frontend_prompt)
+
+        backend_context = _backend_endpoint_context("database")
+        backend_prompt = build_unit_generation_prompt(backend_context)
+        backend_example_json = backend_prompt.split(
+            "Task JSON shape example; use the exact IDs and requirement manifest "
+            "from the Unit-Kind Rules rather than inventing or copying placeholders:\n",
+            1,
+        )[1].split("\nAllowed `deliverables[].kind`", 1)[0]
+        backend_example = json.loads(backend_example_json)
+        backend_internal_manifest = backend_stage_manifest(backend_context)
+        backend_visible_manifest = _backend_endpoint_manifest(backend_context)
+
+        self.assertEqual(
+            backend_example["tasks"][0]["id"],
+            "backend:endpoint:orders-api:orders.list::objects",
+        )
+        self.assertNotIn("task_id", backend_example["tasks"][0])
+        self.assertEqual(
+            backend_visible_manifest,
+            [
+                {
+                    ("id" if key == "task_id" else key): value
+                    for key, value in item.items()
+                }
+                for item in backend_internal_manifest
+            ],
+        )
+        self.assertIn("Use each exact id", backend_prompt)
+        self.assertIn("`task_id` is not a legal Candidate Task field", backend_prompt)
+        self.assertNotIn('"task_id":', backend_prompt)
+        self.assertIn(f'"id": "{backend_internal_manifest[0]["task_id"]}"', backend_prompt)
 
     def test_mixed_backend_rules_form_endpoint_branch_join_without_mapping_task(self) -> None:
         """Mixed Endpoint 只生成五个 responsibility Task，并在 service 汇合两条来源分支。"""
@@ -422,10 +526,30 @@ class UnitTaskPromptTests(unittest.TestCase):
         context = _backend_endpoint_context("database", "external_api")
 
         rendered = "\n".join(resolve_unit_task_rules(context))
+        internal_manifest = backend_stage_manifest(context)
+        visible_manifest = _backend_endpoint_manifest(context)
         manifest = {
             item["stage"]: item
-            for item in _backend_endpoint_manifest(context)
+            for item in visible_manifest
         }
+
+        self.assertEqual(len(visible_manifest), 5)
+        self.assertEqual(
+            [item["stage"] for item in visible_manifest],
+            ["objects", "repository", "upstream", "service", "controller"],
+        )
+        self.assertNotIn('"task_id":', rendered)
+        self.assertIn("Use each exact id", rendered)
+        self.assertEqual(
+            visible_manifest,
+            [
+                {
+                    ("id" if key == "task_id" else key): value
+                    for key, value in item.items()
+                }
+                for item in internal_manifest
+            ],
+        )
 
         for stage in ("objects", "repository", "upstream", "service", "controller"):
             self.assertIn(f"backend:endpoint:orders-api:orders.list::{stage}", rendered)
@@ -464,7 +588,7 @@ class UnitTaskPromptTests(unittest.TestCase):
             ["objects", "repository", "service", "controller"],
         )
         self.assertEqual(
-            [item["task_id"] for item in manifest],
+            [item["id"] for item in manifest],
             [
                 "backend:endpoint:orders-api:orders.list::objects",
                 "backend:endpoint:orders-api:orders.list::repository",
@@ -488,7 +612,7 @@ class UnitTaskPromptTests(unittest.TestCase):
         )
         self.assertNotIn("mapping", {item["stage"] for item in manifest})
         self.assertTrue(all(
-            item["task_id"].startswith(
+            item["id"].startswith(
                 "backend:endpoint:orders-api:orders.list::"
             )
             for item in manifest
@@ -519,9 +643,22 @@ class UnitTaskPromptTests(unittest.TestCase):
 
         rendered = "\n".join(resolve_unit_task_rules(context))
 
-        self.assertIn(f'"task_id": "{unit_id}::controller"', rendered)
+        self.assertIn(f'"id": "{unit_id}::controller"', rendered)
         self.assertIn(f'"{unit_id}::service"', rendered)
-        self.assertNotIn(f'"task_id": "{unit_id}::service"', rendered)
+        self.assertNotIn(f'"id": "{unit_id}::service"', rendered)
+        self.assertNotIn('"task_id":', rendered)
+
+        internal_manifest = backend_stage_manifest(context)
+        visible_manifest = _backend_endpoint_manifest(context)
+        self.assertEqual(internal_manifest[0]["task_id"], f"{unit_id}::controller")
+        self.assertEqual(
+            internal_manifest[0]["dependencies"],
+            [f"{unit_id}::service"],
+        )
+        self.assertEqual(
+            visible_manifest[0]["dependencies"],
+            internal_manifest[0]["dependencies"],
+        )
 
     def test_backend_rules_accept_empty_physical_source_set(self) -> None:
         """无物理来源的 Endpoint 仍允许 objects-service-controller 增量拓扑。"""
@@ -549,11 +686,12 @@ class UnitTaskPromptTests(unittest.TestCase):
 
         rendered = "\n".join(resolve_unit_task_rules(context))
 
-        self.assertIn(f'"task_id": "{unit_id}::objects"', rendered)
-        self.assertIn(f'"task_id": "{unit_id}::service"', rendered)
-        self.assertIn(f'"task_id": "{unit_id}::controller"', rendered)
-        self.assertNotIn(f'"task_id": "{unit_id}::repository"', rendered)
-        self.assertNotIn(f'"task_id": "{unit_id}::upstream"', rendered)
+        self.assertIn(f'"id": "{unit_id}::objects"', rendered)
+        self.assertIn(f'"id": "{unit_id}::service"', rendered)
+        self.assertIn(f'"id": "{unit_id}::controller"', rendered)
+        self.assertNotIn(f'"id": "{unit_id}::repository"', rendered)
+        self.assertNotIn(f'"id": "{unit_id}::upstream"', rendered)
+        self.assertNotIn('"task_id":', rendered)
 
     def test_backend_rules_reject_legacy_entity_stage_requirement(self) -> None:
         """旧 entity/mapping responsibility 不能重新进入 Endpoint Unit Prompt。"""

@@ -62,6 +62,9 @@ Use this file before broad code exploration. It is a routing map, not full docum
 
 正式修订确认 TechnicalPlan 后，application/page/endpoint 续接统一进入现有 `api_design_readiness_gate`；应用级门禁按当前 TechnicalPlan 检查全部 Endpoint，并使用同一 `refresh` 确认动作。无 Endpoint 直接放行；保存映射仍不自动推进。`services/application_build_context.py` 逐 Contract 复用正式映射读取与校验，为应用级 DAG 提供完整 `endpoint_designs`、来源与数据流；生成前再次读取当前磁盘，不使用旧门禁快照。回归：`tests.test_application_api_design_continuation`、`tests.test_workflow_request`、`tests.test_api_design_node`、`pnpm test:workflow-preview`。
 
+
+新生成 Unit Candidate 的缺失任务级 `id` 绑定由 `services/unit_candidate_id_binding.py` 负责，身份清单在 `services/unit_task_manifest.py` 与 Prompt 共用：Backend 按 Endpoint 阶段、frontend API 按 Contract/本轮 Endpoint 集合、page/static/bootstrap 按固定任务分组。`unit_candidate_parser.py` 严格解析完整任务后，仅在显式冻结 Context 下证明整份候选的 `provides/kind/target_id` 唯一完整覆盖才原子补 ID；已有值不覆盖，无 Context 保持严格拒绝缺 ID。随后仍执行原有 ID 与完整 Local/Global 校验，不改变重试预算、AG-UI、恢复候选、Pending/Formal 文件结构或确认门。不依赖已移除的 DAG 调试开关或日志模块。回归：`tests.test_unit_candidate_id_binding`、`tests.test_unit_generation_orchestrator`、`tests.test_unit_task_prompt`，并覆盖 Scope Assembly、Recovery 和 Pending。
+
 ## Update Policy
 
 Update this index in the same change when a code change:

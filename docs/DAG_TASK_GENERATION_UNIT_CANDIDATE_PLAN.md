@@ -1061,12 +1061,18 @@ Global issue
 platform compilation data
 ```
 
-Task ID 继续由模型生成。
+模型仍应输出固定 Task ID。当前生成入口在严格解析完整 envelope 后，允许对缺失的
+任务级 `id` 做一次确定性绑定：`unit_task_manifest.py` 与 Prompt 共用当前职责分组清单，
+`unit_candidate_id_binding.py` 以全部交付物的精确 `provides`、`kind`、`target_id` 验证
+整份候选对清单的一一完整覆盖。仅缺字段且唯一可证时原子补入固定 ID，然后执行
+原有 ID 检查和完整 Local Validator。无冻结 Context、重复/混合/缺失/未知职责、
+归属不符或已有冲突 ID 均不允许补入；空字符串、null、空白和错误类型也不视为缺字段。
+原始响应不变，绑定不依赖调试开关或专用日志；不按标题、位置或交付物 ID 猜测。
 
 平台禁止：
 
 ```text
-自动补 Task ID
+无法由冻结职责唯一证明时补 Task ID，或覆盖已有 Task ID
 自动修改 owner
 重复 ID 自动 rename
 静默 drop 非法 Task
@@ -1158,7 +1164,7 @@ attempt budget。对于当前 latest Candidate，`model + origin=generated` 必�
 
 | 模型返回字段 | 必填规则 |
 | --- | --- |
-| `id` | 必填，在当前 Candidate 内唯一，遵守对应 Unit 的 ID 规则；Backend Endpoint 沿用阶段 ID 格式，`frontend:api-client` 则按 `unit_id + api_contract_id + 本轮 Endpoint ID 集合` 的稳定哈希后缀生成，不能复用 retained Task ID。 |
+| `id` | 有效 Candidate 中必填且唯一；模型遗漏字段时仅允许按上文完整职责证明补入固定 ID，其他非法已有值不覆盖。Backend Endpoint 沿用阶段 ID 格式，`frontend:api-client` 按 `unit_id + api_contract_id + 本轮 Endpoint ID 集合` 的稳定哈希后缀生成，不能复用 retained Task ID。 |
 | `unit_id`、`owner` | 必填，必须与平台指定的当前 Unit 及 owner 范围一致，不能通过归一化修改错误归属。 |
 | `title`、`description` | 必填，使用中文说明具体实施职责。 |
 | `dependencies` | 必填数组，可为空；仅引用本 Candidate 内的 Task ID。跨 Unit 及历史保留任务依赖由平台组装。 |
@@ -2471,7 +2477,7 @@ UnitGenerationAttemptResult
 
 平台在 dispatch 前通过 `AttemptIdentity.allocate()` 分配独立 `attempt-<uuid>`；
 Worker 必须回传原身份，反序列化缺少 `attempt_id` 时拒绝输入，不补发 ID。
-`candidate_id` 使用独立的 `candidate-<uuid>`，Task ID 仍由模型提供，三者不可互相代替。
+`candidate_id` 使用独立的 `candidate-<uuid>`；Task ID 由模型提供，或仅在字段缺失且冻结职责唯一可证时由平台绑定固定值，三者不可互相代替。
 Job 构造时必须校验 identity 与 Context 的 Run/Unit 一致；Candidate 的 `identity` 保存
 `CandidateIdentity`，其生成来源单独保存为 `generated_from: AttemptIdentity`，recovered 来源
 则保存 `recovered_from`，不再把 Attempt 计数和 ID 混入 Candidate 当前身份。两者都不保留
