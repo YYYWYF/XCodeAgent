@@ -145,6 +145,36 @@ class WorkspaceCodeChangeTests(unittest.TestCase):
                 ["frontend/dist/manifest.json"],
             )
 
+    def test_typescript_incremental_caches_are_not_user_code_changes(self) -> None:
+        """tsbuildinfo 的新增、刷新、删除不进入差异，源码和配置仍正常捕获。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            frontend = root / "frontend"
+            nested = frontend / "config"
+            nested.mkdir(parents=True)
+            refreshed = frontend / "tsconfig.tsbuildinfo"
+            deleted = nested / "tsconfig.node.tsbuildinfo"
+            refreshed.write_text("old diagnostics", encoding="utf-8")
+            deleted.write_text("old cache", encoding="utf-8")
+            before = snapshot_workspace(workspace)
+
+            refreshed.write_text("updated diagnostics", encoding="utf-8")
+            deleted.unlink()
+            (nested / "tsconfig.app.TSBUILDINFO").write_text("new cache", encoding="utf-8")
+            (frontend / "tsconfig.json").write_text("{}", encoding="utf-8")
+            (frontend / "cache.tsbuildinfo.ts").write_text("export {}", encoding="utf-8")
+            after = snapshot_workspace(workspace)
+
+            files = diff_workspace_snapshots(before, after, source_tool="test.agent")
+            self.assertEqual(
+                [item["path"] for item in files],
+                ["frontend/cache.tsbuildinfo.ts", "frontend/tsconfig.json"],
+            )
+            assert before is not None and after is not None
+            self.assertNotIn("frontend/tsconfig.tsbuildinfo", before.files)
+            self.assertNotIn("frontend/tsconfig.tsbuildinfo", after.files)
+
     def test_agent_internal_directory_is_not_included(self) -> None:
         """验证工作目录中的 .devagentstudio 状态文件不会进入用户代码变更集。"""
 

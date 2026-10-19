@@ -1092,7 +1092,7 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
-                "app.graph.nodes.direct_modification.run_project_restart_validation",
+                "app.graph.nodes.direct_modification.run_direct_fix_validation",
                 side_effect=fake_checks,
             ):
                 update = validate_direct_fix(
@@ -1132,7 +1132,7 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
-                "app.graph.nodes.direct_modification.run_project_restart_validation",
+                "app.graph.nodes.direct_modification.run_direct_fix_validation",
                 return_value={
                     "test_results": [
                         {
@@ -1166,7 +1166,7 @@ class DirectModificationNodeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             with patch(
-                "app.graph.nodes.direct_modification.run_project_restart_validation",
+                "app.graph.nodes.direct_modification.run_direct_fix_validation",
                 return_value={
                     "test_results": [
                         {
@@ -1192,7 +1192,7 @@ class DirectModificationNodeTests(unittest.TestCase):
                     }
                 )
 
-        self.assertEqual(update["status"], "failed")
+        self.assertEqual(update["status"], "in_progress")
         self.assertFalse(update["quality_gate_passed"])
         self.assertEqual(update["integration_next_action"], "direct_modification_repair")
         self.assertEqual(len(update["revision_requests"]), 1)

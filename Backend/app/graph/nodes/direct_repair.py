@@ -298,6 +298,7 @@ def direct_modification_repair(state: ProjectState) -> dict[str, Any]:
     new_direct_changes: list[dict[str, Any]] = []
     execution_state = {
         **state,
+        "repair_task_plan": plan,
         "revision_requests": revision_requests,
         "build_execution_scope": {"type": "application", "targetId": "conversation"},
     }

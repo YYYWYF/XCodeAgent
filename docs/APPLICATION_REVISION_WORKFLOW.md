@@ -170,7 +170,7 @@ TechnicalPlan 草稿 -> 确认并成为 canonical -> Build DAG
 
 代码不是正式计划草稿：
 
-- `implementation_fix` 的 workspace owner 可直接写入精确授权的普通工作区文件；frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`，再写入代码并执行独立验证。用户取消确认时以正常完成终态结束且不展示异常卡；独立验证通过后直接完成当前小修改，不启动项目预览，也不进入正式验收。
+- `implementation_fix` 的 workspace owner 可直接写入精确授权的普通工作区文件；frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`，再写入代码并执行独立验证。用户取消确认时以正常完成终态结束且不展示异常卡；独立验证通过后直接完成当前小修改，不切换到正式预览或验收阶段。
 - formal revision 不以“计划已修改”为终点。所有受影响正式产物确认且非 stale 后，必须生成并确认 Build DAG，再进入代码修改、测试、预览和验收。
 - 设计 branch 完成原 TechnicalPlan 确认后，由系统自动继续同一次 revision；用户不需要回到工作台重新输入需求或再次确认影响范围。
 - Build/Test 后的用户反馈重新进入统一路由，形成下一次向前修正；不自动恢复代码或已确认正式产物。
@@ -336,7 +336,9 @@ flowchart TD
     J -- 确认生成草稿 --> M["工作台正式草稿流程"]
 ```
 
-`implementation_fix` 不复用正式 Workflow 的完整 `integration_test`。代码写入后由 `validate_direct_fix` 读取本轮真实 diff，只执行受影响的 frontend/backend 构建与静态检查，不生成新的单元测试，也不执行已有单元测试；同层失败只有在证据命中真实变更文件，或本轮修改了 package、tsconfig、pom 等工程级配置时才阻断，无法归因的既有失败只作为 advisory。验证失败后的自动修复仍限制在这些真实文件内。缺少或仅有占位文件路径时直接停止并展示失败证据，不能据此推断正式语义变化；只有 RepairPlanner 显式输出 `formal_revision` 才展示正式修改确认。
+`implementation_fix` 不复用正式 Workflow 的完整 `integration_test`。代码写入后由 `validate_direct_fix` 读取本轮真实 diff；前端改动必须依次通过 `pnpm exec tsc -b`、`pnpm exec vite build` 和现有项目重启验收，前一项失败即停止后续检查。命令复用受控进程登记、退出码、超时和日志证据，不生成或执行单元测试。前端编译、打包失败属于工程级阻断，即使错误发生于本轮之前、报错文件不在本轮 diff 中，也不能降为 advisory。
+
+可修复失败沿现有 `direct_modification_repair` 的 RepairPlanner → SmallTask → `validate_direct_fix` 闭环，最多三轮。修复范围包含本轮真实差异文件，以及根据真实编译诊断、命令 cwd 和当前前端工程解析出的已存在源码文件；Vite 的 importer/file 诊断也可定位源码，禁止凭模型猜测授权不存在、依赖目录或工作区外路径。SmallTask 接收本轮 RepairPlan 策略与原失败证据，修复后必须重新执行全部前端验收。自动修复期间整轮保持 `in_progress`，失败的验收步骤与检查项仍如实显示失败；预算耗尽或无法修复才返回终止性失败，已有服务运行状态不能覆盖该失败。项目启动故障继续保持原非代码修复语义。缺少或仅有占位文件路径时直接停止并展示失败证据，不能据此推断正式语义变化；只有 RepairPlanner 显式输出 `formal_revision` 才展示正式修改确认。
 
 ### 5.2 工作台正式草稿流程
 
