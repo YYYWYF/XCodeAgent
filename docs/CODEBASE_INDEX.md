@@ -2,6 +2,8 @@
 
 Last updated: 2026-10-19
 
+性能报告的用户说明由 `workspace/performance_report.py` 生成，按整体结论、中文分类评分、五项指标解释、最多三项真实改进项、完整报告入口和检测环境排序；命令执行完成与质量评级分别表达。`services/lighthouse_report.py` 从当前 Lighthouse 报告提取有限的原始指标评级、计分失败项与采样上下文，`frontend_performance_runner.py` 以中文运行并将 `performance_details` 随现有检查结果保留到质量门及内部 JSON；缺失、非法和部分失败数据不补零或推测问题。现有 AG-UI 报告路径投影不变。`TestReportDocument.tsx` 复用 Markdown/主题样式和既有 Electron `openReportFile` IPC，只处理工作区性能目录下的相对 HTML 链接。回归：`tests.test_lighthouse_report`、`tests.test_test_documents`、`tests.test_frontend_performance_runner`、`pnpm test:workflow-preview`。
+
 测试报告自动展示由 `AiChatPanel/hooks/useTestReportPanel.ts` 根据当前 `integration_test` 完成事件或审查确认门快照触发：测试阶段报告路径就绪后主动展开右侧并选择“测试报告”，按 application/run/path 每轮只导航一次，只有渲染状态确认报告面板可见后才消耗导航标记，避免同批默认面板回退覆盖切换请求后永久跳过；之后保留用户手动切换或关闭。新测试启动事件阻止旧确认快照提前聚焦；同路径的新运行和完成状态变化重新读取 Markdown，避免性能测试后显示旧报告。沿现有 AG-UI 公开投影及面板布局逻辑，无新协议或样式。回归：`pnpm test:workflow-preview`；`pnpm test:test-report` 使用与项目匹配的 React 18 测试渲染器执行生产布局与报告 hook 的真实 effect，覆盖同批覆盖、隐藏面板、手动选择和新运行刷新。测试运行器保留 React/renderer 的原生 Node 实现，避免打包 act 的 MessagePort 收尾问题。
 
 `workspace/code_changes.py` 的共享代码差异快照按文件名后缀精确排除 TypeScript `*.tsbuildinfo` 增量构建缓存（含嵌套路径），避免 SmallTask 修复批次内执行 `tsc -b` 后把缓存刷新误判为批次外写入。源码、`tsconfig.json` 与后缀仅出现在文件名中间的源码仍参与差异归属和越界检查，不增加写权限。回归：`tests.test_workspace_code_changes`、`tests.test_small_task`、`tests.test_direct_validation`（真实批次内 tsc 刷新缓存并返回完整复验）。

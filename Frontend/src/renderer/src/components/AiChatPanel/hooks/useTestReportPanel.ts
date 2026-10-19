@@ -126,17 +126,6 @@ export function useTestReportPanel({
   const available = Boolean(path) && reportPhaseActive
   const testPhaseCompleted = workflowTestReportCompleted(workflow, activeWorkflowPhase)
 
-  useEffect(() => {
-    void fetch('http://127.0.0.1:18769/', {
-      method: 'POST',
-      body: JSON.stringify({
-        run: workflow?.runId, phase: workflow?.summary.phase, activeWorkflowPhase,
-        reportPhaseActive, available, testPhaseCompleted, path,
-        panel: rightPanel?.type, rightPanelOpen, handled: handledReportRef.current
-      })
-    }).catch(() => undefined)
-  }, [activeWorkflowPhase, available, path, reportPhaseActive, rightPanel, rightPanelOpen, testPhaseCompleted, workflow])
-
   // 报告路径只来自受控 AG-UI 投影；读取失败保留独立错误态，不影响测试矩阵。
   useEffect(() => {
     if (!available || !workspaceRoot) {

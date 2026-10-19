@@ -145,6 +145,7 @@ import { useDevelopmentArtifactDetail } from './hooks/useDevelopmentArtifactDeta
 import { useCodeChangeRevert } from './hooks/useCodeChangeRevert'
 import { useCodeReviewReportPanel } from './hooks/useCodeReviewReportPanel'
 import { useTestReportPanel } from './hooks/useTestReportPanel'
+import TestReportDocument from './components/TestReportDocument'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { useSessionRuntimeStore } from './hooks/useSessionRuntimeStore'
 import { useWorkbenchRunRefresh } from './hooks/useWorkbenchRunRefresh'
@@ -5519,12 +5520,12 @@ export default function AiChatPanel({
             }}
           />
           <div className={cx('workspace-content')}>
-            <DocPanel
+            <TestReportDocument
               content={testReportContent}
-              docName="测试报告"
               error={testReportError}
               generating={testReportLoading}
               title={testReportPath}
+              workspaceRoot={application.workspaceRoot}
             />
           </div>
         </div>
