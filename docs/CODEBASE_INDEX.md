@@ -1,6 +1,8 @@
 # DevAgent Studio Codebase Index
 
-Last updated: 2026-10-16
+Last updated: 2026-10-19
+
+应用文件目录树由 `Frontend/.../SourcePanel/useSourceTree.ts` 读取初始快照并在首次展开目录时按需补读子树，保持工作区与 Git revision 一致；`sourceTreeModel.ts` 合并子树时保留已加载后代，`SourceTree.tsx` 展示目录加载与失败重试。初始读取深度不限制后续可浏览的 Java 包层级，异步回执不能污染已切换或卸载的工作区。回归：`pnpm test:source-tree`；实际 UI 验证使用 Electron。
 
 单元测试生成进度沿原 `unit_test.checks` → `agent-process.checks` 投影可选 `activeToolActivity`：`graph/subgraphs/testing.py` 将 TestGeneration Agent 已脱敏的文件工具回调发布到本轮各端生成检查，同次调用按 `callId` 更新最新状态，生成检查收口即清除；不写入 Graph State、测试报告或持久化检查历史。`protocols/workflow/stream_events.py` 与 `Frontend/.../service/workspaceToolActivity.ts` 只保留可展示文件工具与必要字段。`ProcessSteps` 在“正在调用 TestGeneration Agent…”下方复用开发任务的 `WorkflowRunCard/WorkspaceToolActivity.tsx` 和主题样式，显示最新操作及运行/成功/失败图标，不增加独立顶层步骤。回归：`tests.test_testing_subgraph_events`、`tests.test_workflow_ag_ui`、`pnpm test:chat-skills`。
 
