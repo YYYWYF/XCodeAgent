@@ -9,7 +9,6 @@ from app.graph.nodes.direct_modification import (
     classify_direct_modification,
     execute_backend_direct_modification,
     execute_frontend_direct_modification,
-    execute_workspace_direct_modification,
     finalize_direct_modification,
     respond_to_casual_conversation,
     respond_to_workspace_question,
@@ -29,7 +28,6 @@ _DIRECT_ENTRY_NODES = {
     "scan_change_impact_code",
     "execute_frontend",
     "execute_backend",
-    "execute_workspace",
     "finalize_direct_modification",
 }
 
@@ -50,7 +48,6 @@ def _route_classification(
     "answer_workspace",
     "execute_frontend",
     "execute_backend",
-    "execute_workspace",
     "scan_change_impact_code",
     "finalize",
 ]:
@@ -74,8 +71,6 @@ def _route_classification(
         return "execute_frontend"
     if owner in {"backend", "fullstack"}:
         return "execute_backend"
-    if owner == "workspace":
-        return "execute_workspace"
     return "finalize"
 
 
@@ -162,8 +157,6 @@ def direct_next_node_name(node_name: str, state: ProjectState) -> str | None:
     if node_name == "execute_frontend":
         route = _route_frontend(state)
         return "finalize_direct_modification" if route == "finalize" else route
-    if node_name == "execute_workspace":
-        return "finalize_direct_modification"
     if node_name == "validate_direct_fix":
         route = _route_direct_validation(state)
         return "finalize_direct_modification" if route == "finalize" else route
@@ -185,7 +178,6 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     builder.add_node("answer_workspace", respond_to_workspace_question)
     builder.add_node("execute_frontend", execute_frontend_direct_modification)
     builder.add_node("execute_backend", execute_backend_direct_modification)
-    builder.add_node("execute_workspace", execute_workspace_direct_modification)
     builder.add_node("validate_direct_fix", validate_direct_fix)
     builder.add_node("direct_modification_repair", direct_modification_repair)
     builder.add_node("finalize_direct_modification", finalize_direct_modification)
@@ -206,7 +198,6 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
             "scan_change_impact_code": "scan_change_impact_code",
             "execute_frontend": "execute_frontend",
             "execute_backend": "execute_backend",
-            "execute_workspace": "execute_workspace",
             "finalize_direct_modification": "finalize_direct_modification",
         },
     )
@@ -228,7 +219,6 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
             "answer_workspace": "answer_workspace",
             "execute_frontend": "execute_frontend",
             "execute_backend": "execute_backend",
-            "execute_workspace": "execute_workspace",
             "scan_change_impact_code": "scan_change_impact_code",
             "finalize": "finalize_direct_modification",
         },
@@ -271,7 +261,6 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
             "finalize": "finalize_direct_modification",
         },
     )
-    builder.add_edge("execute_workspace", "finalize_direct_modification")
     builder.add_conditional_edges(
         "validate_direct_fix",
         _route_direct_validation,

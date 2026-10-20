@@ -63,6 +63,7 @@ CONVERSATION_EVENT_NAME = "conversation"
 CONVERSATION_STATE_KEY = "conversation"
 
 _DIRECT_CONFIRMATION_MODES = {
+    "implementation_fix_confirmation",
     "small_task_scope_confirmation",
 }
 
@@ -80,6 +81,7 @@ _DIRECT_CONTINUATION_STATE_KEYS = (
     "direct_modification_confidence",
     "direct_modification_reason",
     "direct_modification_summary",
+    "direct_modification_confirm_scope",
     "direct_modification_target_paths",
     "direct_modification_approved_paths",
     "direct_modification_result",
@@ -191,6 +193,10 @@ class DirectModificationInput(BaseModel):
         alias="originalRequest",
         max_length=16_000,
     )
+    confirm_scope_before_execution: bool = Field(
+        default=True,
+        alias="confirmScopeBeforeExecution",
+    )
     target: DirectModificationTarget | None = None
     element_context: DirectModificationElementContext | None = Field(
         default=None,
@@ -232,7 +238,7 @@ def conversation_capabilities() -> dict[str, Any]:
             "implementation_fix",
             "formal_revision",
         ],
-        "owners": ["frontend", "backend", "fullstack", "workspace", "none", "unknown"],
+        "owners": ["frontend", "backend", "fullstack", "none", "unknown"],
         "statuses": [
             "in_progress",
             "completed",
@@ -245,6 +251,13 @@ def conversation_capabilities() -> dict[str, Any]:
             "clientNodeSelectionAllowed": False,
             "additionalModelImpactAnalysis": False,
             "userVisibleExplanation": "reason-only",
+        },
+        "scopeConfirmation": {
+            "requestField": "confirmScopeBeforeExecution",
+            "default": True,
+            "appliesTo": "implementation_fix",
+            "clarificationMode": "implementation_fix_confirmation",
+            "editableRequestDuringReview": True,
         },
         "workflowIndependent": True,
         "pauseContinuation": {
@@ -285,7 +298,10 @@ def conversation_capabilities() -> dict[str, Any]:
             "todoPlanningEnabled": False,
             "confirmationContinuation": {
                 "source": "server-checkpoint",
-                "modes": ["small_task_scope_confirmation"],
+                "modes": [
+                    "implementation_fix_confirmation",
+                    "small_task_scope_confirmation",
+                ],
                 "skips": ["scan_workspace_code", "classify_intent"],
             },
         },
@@ -552,6 +568,7 @@ def build_conversation_ag_ui_stream(
             "change_impact_code_scan": {},
             "direct_modification_approved_paths": _safe_approved_paths(request.approved_paths),
             "direct_modification_handoff_decision": str(request.handoff_decision or ""),
+            "direct_modification_confirm_scope": request.confirm_scope_before_execution,
             "direct_modification_resume_node": "",
             "integration_repair_enabled": False,
             "frontend_performance_test_enabled": False,

@@ -94,6 +94,13 @@ function readableAgentError(
       detail: normalized || undefined
     }
   }
+  if (normalized.startsWith('无权修改（超出职责范围）：')) {
+    return {
+      message: normalized,
+      hint: '二次修改只允许写入 frontend/ 或 backend/；本次目标超出范围，已在执行前拒绝，未写入文件。',
+      modelServiceError: false
+    }
+  }
   return {
     message: normalized || '任务没有返回有效结果。',
     hint: '请查看错误详情和相关执行记录后重试。',

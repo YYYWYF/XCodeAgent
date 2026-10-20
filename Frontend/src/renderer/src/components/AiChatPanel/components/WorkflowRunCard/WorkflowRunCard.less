@@ -1658,6 +1658,15 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   font-size: 14px;
   font-weight: 600;
   border-radius: 10px;
+
+  &:disabled,
+  &[disabled] {
+    color: var(--wb-text-secondary, rgba(0, 0, 0, 0.45)) !important;
+    border-color: var(--wb-border, #d9d9d9) !important;
+    background: var(--wb-surface-hover, rgba(0, 0, 0, 0.04)) !important;
+    box-shadow: none !important;
+    opacity: 1;
+  }
 }
 
 // 就绪态内嵌的初始化提交区，复用 version-commit-reminder 的视觉语言。
@@ -1747,10 +1756,12 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
   }
 
   &[disabled] {
-    color: rgba(255, 255, 255, 0.8);
-    background: linear-gradient(135deg, #6b3cf0 0%, #3f6cf5 100%);
+    color: var(--wb-text-secondary, rgba(0, 0, 0, 0.45)) !important;
+    background: var(--wb-surface-hover, rgba(0, 0, 0, 0.04)) !important;
+    border: 1px solid var(--wb-border, #d9d9d9) !important;
     box-shadow: none;
-    opacity: 0.5;
+    opacity: 1;
+    filter: none;
   }
 }
 

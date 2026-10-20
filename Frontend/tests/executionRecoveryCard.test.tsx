@@ -14,7 +14,7 @@ import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
 import { applicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
 import { initialConnectionState } from '../src/renderer/src/service/connectionState'
-import { workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
+import { isDirectModificationScopeDenied, workbenchRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 import { recoveryFailureMessage } from '../src/renderer/src/service/recoveryFailureMessage'
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
@@ -127,6 +127,28 @@ test('二次修改新一轮扫描和分类不展示旧确认，本轮等待输�
   workflow.summary.status = 'requires_user_input'
   workflow.summary.clarification = { ...confirmation, message: '本轮确认事项' }
   assert.equal(workflowClarification(workflow)?.message, '本轮确认事项')
+})
+
+/** 越权拒绝优先用结构化错误码识别，错误码缺失时保留拒绝文案兜底。 */
+test('二次修改职责范围拒绝显示专属标题和无重试说明', () => {
+  const denial = '无权修改（超出职责范围）：当前修改只允许写入 frontend/ 目录，目标路径超出范围：README.md。本次请求已在执行前拒绝，未写入文件。'
+  const workflow = {
+    runId: 'scope-denied-run', threadId: 'conversation-thread', events: [],
+    state: { workflow_scope: 'conversation' },
+    summary: { status: 'failed', phase: 'conversation', errorCode: 'DIRECT_MODIFICATION_SCOPE_DENIED', message: denial }
+  } as unknown as WorkflowRunPayload
+
+  assert.equal(isDirectModificationScopeDenied(workflow), true)
+  assert.equal(isDirectModificationScopeDenied(undefined, denial), true)
+  assert.equal(isDirectModificationScopeDenied(undefined, '任务执行失败。'), false)
+
+  const markup = renderToStaticMarkup(createElement(AgentErrorCard, {
+    title: '无权修改该路径', error: denial
+  }))
+  assert.match(markup, /无权修改该路径/)
+  assert.match(markup, /只允许写入 frontend\/ 或 backend\//)
+  assert.match(markup, /请求已在执行前拒绝，未写入文件/)
+  assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试|<button/)
 })
 
 test('单测恢复仅在同 Run 正在执行且无待确认交互时隐藏旧确认', () => {

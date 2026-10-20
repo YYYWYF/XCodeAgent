@@ -61,6 +61,7 @@ class ProjectState(TypedDict, total=False):
     direct_modification_confidence: float
     direct_modification_reason: str
     direct_modification_summary: str
+    direct_modification_confirm_scope: bool
     direct_modification_approved_paths: list[str]
     direct_modification_handoff_decision: str
     direct_modification_target_paths: list[str]

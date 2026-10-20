@@ -19,7 +19,6 @@ DIRECT_NODE_LABELS = {
     "answer_workspace": "读取工作区并回答",
     "execute_backend": "执行后端修改",
     "execute_frontend": "执行前端修改",
-    "execute_workspace": "执行工作区修改",
     "validate_direct_fix": "验证本次修改",
     "direct_modification_repair": "自动修复局部代码",
     "finalize_direct_modification": "整理修改结果",
@@ -32,7 +31,6 @@ DIRECT_NODE_PERCENT = {
     "answer_workspace": 80,
     "execute_backend": 40,
     "execute_frontend": 65,
-    "execute_workspace": 80,
     "validate_direct_fix": 80,
     "direct_modification_repair": 90,
     "finalize_direct_modification": 100,
@@ -88,6 +86,7 @@ def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:
         "message": direct_state_message(state) or str(result.get("summary") or "自由对话已结束。"),
         "request": str(state.get("request") or ""),
         "previewUrl": state.get("preview_url") or result.get("previewUrl"),
+        "errorCode": result.get("errorCode"),
         "launchResult": state.get("launch_result") or result.get("launchResult"),
         "clarification": (
             state.get("clarification")
@@ -303,6 +302,7 @@ def direct_node_status(node_name: str, update: dict[str, Any]) -> str:
     # 正式修改影响范围和 SmallTask 范围扩展由独立卡片确认，不把分类节点也显示成确认门。
     if node_name == "classify_intent" and clarification_mode in {
         "revision_impact_confirmation",
+        "implementation_fix_confirmation",
         "small_task_scope_confirmation",
     }:
         return "completed"

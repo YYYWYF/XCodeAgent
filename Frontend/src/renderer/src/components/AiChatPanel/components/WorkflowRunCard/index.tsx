@@ -66,6 +66,7 @@ import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import WorkspaceToolActivity from './WorkspaceToolActivity'
+import DirectModificationScopeReview from './DirectModificationScopeReview'
 import UnitTestConfirmationPanel from './UnitTestConfirmationPanel'
 import FrontendPerformanceConfirmationPanel from './FrontendPerformanceConfirmationPanel'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
@@ -319,12 +320,22 @@ export default function WorkflowRunCard({
         ? 'rejected'
         : undefined
   const hasRevisionImpactDecision = Boolean(revisionImpactDecision)
-  const workflowCardStatusVariant =
-    workflowCardResult || (status === 'requires_user_input' ? 'pending' : undefined)
   const requiresConfirmation =
     !staleFrontendPerformanceConfirmation &&
     clarification?.status === 'requires_user_input' &&
     !hasWorkflowCardResult
+  const activeConfirmation =
+    requiresConfirmation && interactionAvailability === 'active'
+  // Lifecycle 已判定过期的旧快照仍保留问题上下文，但不能继续标成当前待确认。
+  const staleConfirmation =
+    requiresConfirmation && interactionAvailability === 'stale'
+  const workflowCardStatusVariant =
+    workflowCardResult ||
+    (staleConfirmation
+      ? 'stale'
+      : status === 'requires_user_input'
+        ? 'pending'
+        : undefined)
   // 技术规划正文由右侧文档面板展示；确认后左侧只保留确认状态和有效的修改入口。
   const technicalPlanConfirmationResolved = Boolean(
     clarification?.mode === 'technical_plan_confirmation' &&
@@ -340,6 +351,9 @@ export default function WorkflowRunCard({
     clarificationQuestions.every((question, index) =>
       clarificationAnswerComplete(question, answers[clarificationQuestionKey(question, index)])
     )
+  const implementationFixCancelled =
+    clarification?.mode === 'implementation_fix_confirmation' &&
+    selectedAnswerValues(answers.implementation_fix_confirmation).includes('否')
   const updateAnswer = (key: string, value: WorkflowClarificationAnswer): void => {
     setAnswers((currentAnswers) => {
       const nextAnswers = { ...currentAnswers, [key]: value }
@@ -368,8 +382,8 @@ export default function WorkflowRunCard({
       className={cx(
         'workflow-run-card',
         apiDesignReadinessGate && 'workflow-run-card-api-design-readiness',
-        requiresConfirmation && 'workflow-run-card-pending',
-        revisionImpact && requiresConfirmation && 'workflow-run-card-revision-impact'
+        activeConfirmation && 'workflow-run-card-pending',
+        revisionImpact && activeConfirmation && 'workflow-run-card-revision-impact'
       )}
     >
       <div className={cx('workflow-run-header')}>
@@ -393,7 +407,9 @@ export default function WorkflowRunCard({
                   ? 'default'
                   : workflowCardResult === 'submitted'
                     ? 'purple'
-                    : workflowStatusColor(status)
+                    : staleConfirmation
+                      ? 'default'
+                      : workflowStatusColor(status)
             }
           >
             {workflowCardResult === 'confirmed'
@@ -402,7 +418,9 @@ export default function WorkflowRunCard({
                 ? '已取消'
                 : workflowCardResult === 'submitted'
                   ? '已提交'
-                  : workflowStatusText(status)}
+                  : staleConfirmation
+                    ? '已失效'
+                    : workflowStatusText(status)}
           </Tag>
         ) : null}
       </div>
@@ -509,11 +527,11 @@ export default function WorkflowRunCard({
           {!reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
             <div className={cx('workflow-clarification-header')}>
               <div>
-                <Text strong>待确认事项</Text>
+                <Text strong>{staleConfirmation ? '原确认内容' : '待确认事项'}</Text>
               </div>
               <Tag
                 className={cx('workflow-confirmation-count')}
-                color={requiresConfirmation ? 'gold' : 'default'}
+                color={activeConfirmation ? 'gold' : 'default'}
               >
                 {confirmationItemCount}
               </Tag>
@@ -525,7 +543,7 @@ export default function WorkflowRunCard({
               message={
                 interactionAvailability === 'unavailable'
                   ? '正在校准确认状态，请稍候。'
-                  : '该确认已提交或已失效，请使用当前计划操作继续。'
+                  : '此确认已失效，请使用当前计划操作继续。'
               }
               showIcon
               type="info"
@@ -778,6 +796,9 @@ export default function WorkflowRunCard({
             <>
               {confirmationArtifact && <ConfirmationArtifact artifact={confirmationArtifact} />}
               <ClarificationContext clarification={clarification} />
+              {clarification?.mode === 'implementation_fix_confirmation' && (
+                <DirectModificationScopeReview clarification={clarification} />
+              )}
               {clarificationQuestions.map((question, index) => {
                 // 已答历史卡：保留原控件形态（勾选框/单选/文本框），回填留痕答案并禁用，
                 // 让用户看到的回填样式与当初作答时一致，而不是一行只读「已答：」文字。
@@ -839,7 +860,7 @@ export default function WorkflowRunCard({
                     size="large"
                     type="primary"
                   >
-                    确认并继续
+                    {implementationFixCancelled ? '确认取消' : '确认并继续'}
                   </Button>
                 )}
             </>
@@ -1153,9 +1174,7 @@ export function PlanConfirmationCard({
   onRevise,
   plan,
   planType,
-  productPlan,
   requiresConfirmation,
-  spec,
   title
 }: {
   artifact?: WorkflowConfirmationArtifact
@@ -2094,6 +2113,7 @@ function WorkflowContext({ context }: { context: Record<string, unknown> }): Rea
   )
 }
 
+/** 按问题类型展示结构化确认控件，并保留业务自定义选项文案。 */
 function ClarificationQuestionControl({
   disabled,
   onChange,
@@ -2127,6 +2147,12 @@ function ClarificationQuestionControl({
   }
 
   if (question.type === 'yesno') {
+    const yesNoOptions = options.length >= 2
+      ? options.slice(0, 2)
+      : [
+          { label: '是', value: '是', description: '' },
+          { label: '否', value: '否', description: '' }
+        ]
     return (
       <>
         <Radio.Group
@@ -2134,8 +2160,9 @@ function ClarificationQuestionControl({
           onChange={(event) => setSelectedValues([String(event.target.value)])}
           value={selectedValues[0]}
         >
-          <Radio value="是">是</Radio>
-          <Radio value="否">否</Radio>
+          {yesNoOptions.map((option) => (
+            <Radio key={option.value} value={option.value}>{option.label}</Radio>
+          ))}
           {question.allowOther !== false && <Radio value={OTHER_OPTION_VALUE}>其他</Radio>}
         </Radio.Group>
         {otherSelected && (

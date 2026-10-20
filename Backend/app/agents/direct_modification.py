@@ -25,6 +25,7 @@ from app.domain.application_revision import (
 from app.services.direct_modification import (
     direct_path_matches_owner,
     parse_direct_modification_agent_result,
+    validated_direct_scope_denial_paths,
 )
 from app.services.revision_routing import enforce_revision_routing
 from app.utils.model_output import extract_json_object
@@ -41,7 +42,6 @@ DirectModificationOwner = Literal[
     "frontend",
     "backend",
     "fullstack",
-    "workspace",
     "none",
     "unknown",
 ]
@@ -63,6 +63,14 @@ _FRONTEND_REQUIRED_SKILLS = (
     "/.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md",
     "/.devagentstudio/builtin-skills/code-block-template/SKILL.md",
     "/.devagentstudio/builtin-skills/react-develop-specification/SKILL.md",
+)
+_DIRECT_RESULT_SUMMARY_INSTRUCTIONS = (
+    "## User-facing result summary\n"
+    "Write the JSON `summary` field for display in the workbench. Keep it concise (prefer under 240 Chinese characters). "
+    "Start with one short outcome sentence, then use 2–4 Markdown bullet lines for the user-visible changes and verification outcome. "
+    "Put each bullet on its own line. Do not write inline numbered items, semicolon-separated run-on prose, "
+    "step-by-step implementation narration, or repeat full file paths already shown in the file-change card. "
+    "Markdown is allowed inside the `summary` string; do not wrap the JSON object itself in Markdown.\n"
 )
 _DIRECT_VERIFICATION_REPAIR_INSTRUCTIONS = (
     "## Internal verification and self-repair\n"
@@ -105,6 +113,7 @@ class DirectModificationDecision:
     earliest_artifact: EarliestRevisionArtifact | None = None
     affected_artifact_keys: tuple[str, ...] = ()
     affected_resource_keys: tuple[str, ...] = ()
+    clarified_requirements: tuple[str, ...] = ()
 
 
 def _direct_modification_classifier_prompt(
@@ -118,10 +127,11 @@ def _direct_modification_classifier_prompt(
     return (
         "Route one message in an application-development workbench. Return exactly one JSON object "
         "and no Markdown. Classify by the user's requested outcome, not isolated keywords. "
-        "You are conservative about write authorization, not about collecting design details: when the "
-        "user's business intent is clear, route it to the matching workflow even if page paths, components, "
-        "API details, visual tokens, or recommendation logic are not provided. The downstream workflow owns "
-        "requirements clarification, design completion, implementation planning, and source-file discovery.\n\n"
+        "You are conservative about write authorization, not about collecting implementation details: when "
+        "the user's requested change and expected outcome are clear, route it to the matching workflow even if "
+        "page paths, components, API details, visual tokens, or recommendation logic are not provided. The "
+        "downstream workflow owns requirements clarification when a product change is clear but formal design "
+        "details are missing, as well as design completion, implementation planning, and source-file discovery.\n\n"
         "Intents:\n"
         "- casual_chat: greetings, identity questions, general conversation, explanations, or general "
         "knowledge that does not require inspecting the current workspace. Examples: '你是谁', '解释一下 "
@@ -133,9 +143,7 @@ def _direct_modification_classifier_prompt(
         "semantics remain unchanged. This includes small changes to an existing page's UI appearance, "
         "layout, spacing, copy, responsive behavior, or browser interaction. Route these UI-only requests "
         "to owner=frontend and execute them in the current workbench; do not send them back to any design "
-        "stage. It may edit frontend/backend code only after the user confirms the proposed implementation "
-        "scope; ordinary workspace files are the only implementation fixes that do not need this extra "
-        "confirmation. Examples: '订单页的提交按钮点了没反应，修一下', '修复头像加载失败的前端报错', "
+        "stage. Examples: '订单页的提交按钮点了没反应，修一下', '修复头像加载失败的前端报错', "
         "'订单卡片改成双列', '详情页换成深色视觉', '把表格间距调大', '接口已经确定，只把空值校验补上'.\n"
         "- formal_revision: a change to confirmed product or technical semantics. It must include "
         "formalBranch, revisionType, earliestArtifact and affected keys. A clear product request does not "
@@ -147,6 +155,12 @@ def _direct_modification_classifier_prompt(
         "identified. Do not use it to ask for a route, component list, implementation approach, or visual "
         "recommendation that the downstream workflow can determine. Examples: '帮我改一下', '这里有问题，"
         "处理下', '优化一下' (with no object, behavior, or expected result).\n\n"
+        "A frontend/backend label by itself is not a requested change. If the user only says something like "
+        "'前端需求', '改一下前端', or '后端要改', without identifying what existing page/feature/API "
+        "should change or what outcome they want, route to clarification. Ask for the concrete change or "
+        "expected behavior before assigning an implementation owner. Do not turn the layer label into a "
+        "generic frontend/backend task. File paths and component names remain optional when the requested "
+        "change itself is clear.\n\n"
         "Formal branches and revision types:\n"
         "- design_stage_revision only for requirement_scope_change or product_behavior_change; "
         "earliestArtifact is requirement-spec or product-plan. Existing-page UI-only changes are never "
@@ -169,16 +183,23 @@ def _direct_modification_classifier_prompt(
         "- data_source_change -> workbench_plan_revision / technical-plan: '把 mock 数据换成 MySQL', "
         "'订单列表改从真实数据库读取'.\n\n"
         "Owners:\n"
-        "- frontend: only UI, React, styling, browser interaction, or frontend API-consumption code.\n"
-        "- backend: only server, data model, persistence, validation, or API implementation code.\n"
-        "- fullstack: a localized request that requires both backend and frontend changes.\n"
-        "- workspace: localized documentation, tests, scripts, repository configuration, or files outside "
-        "the frontend/backend ownership roots. targetPaths must contain precise relative paths or narrow globs.\n"
+        "- frontend: requested files inside frontend/, including source, tests, scripts, documentation, and "
+        "configuration. Never write outside frontend/.\n"
+        "- backend: requested files inside backend/, including source, tests, scripts, documentation, and "
+        "configuration. Never write outside backend/.\n"
+        "- fullstack: a localized request that requires both frontend/ and backend/ changes; never write "
+        "outside these two directories.\n"
         "- none: casual chat, read-only workspace questions, or formal workflow routing.\n"
         "- unknown: there is not enough information to choose safely.\n\n"
         "Write reason and clarificationQuestion in Simplified Chinese. The clarification question "
         "must state what concrete information the user should add. Never classify an identity question such "
         "as '你是谁' as a workspace change.\n\n"
+        "For implementation_fix, also return clarifiedRequirements as an array of 1 to 6 concise items for "
+        "the pre-execution user review. Restate only the user's requested outcome, target, and explicit "
+        "constraints; split distinct requirements into separate items, one short sentence per item, and do "
+        "not write a long paragraph, preamble, code path, owner label, or implementation proposal. Do not "
+        "invent missing details or change the user's scope. Return unnumbered strings because the UI adds "
+        "the numbering. Use the user's language. For every other route, return an empty array.\n\n"
         "When the current request contains an original user request followed by a latest user supplement, "
         "treat them as one continuation. The latest supplement is authoritative; a concrete path or directory "
         "provided there is already answered, so do not ask the same clarification again.\n\n"
@@ -201,14 +222,16 @@ def _direct_modification_classifier_prompt(
         "关键反例：‘用户请求新增一个页面，但未指定页面路径、组件和推荐逻辑’不能回答“无法安全执行”，"
         "也不能进入 clarification；应路由为 formal_revision/design_stage_revision/requirement-spec，"
         "并让后续需求节点补齐页面目标和实现细节。formal_revision 不需要猜测 candidatePaths，缺少既有路径时留空即可。\n\n"
-        "For a localized frontend/backend change, put every exact existing file required by the user's outcome "
-        "but located outside the normal source roots in targetPaths. This is not limited to known config-file "
-        "types. Never propose a directory, broad glob, lockfile, secret file, installed dependency, generated "
-        "output, migration, schema, or .devagentstudio artifact. targetPaths are only candidates; backend policy "
-        "decides whether they are added to this run's file scope.\n\n"
+        "For implementation_fix, every targetPaths entry must be a precise relative file path inside the "
+        "owner's allowed directory: frontend/ for frontend, backend/ for backend, and either for fullstack. "
+        "Documentation, tests, scripts, and configuration inside those directories are valid targets. Never "
+        "propose a path outside these two directories, an absolute path, a broad glob, a lockfile, secret file, "
+        "installed dependency, generated output, migration, schema, or .devagentstudio artifact. The backend "
+        "will reject any out-of-scope target before execution.\n\n"
         "For formal_revision, keep clarificationQuestion and questions empty: the next step is the formal "
         "revision confirmation, not a request for detailed design. For implementation_fix, do not ask for "
-        "implementation details that the execution Agent can discover from the bounded workspace context.\n\n"
+        "file paths or implementation details that the execution Agent can discover from bounded workspace "
+        "context, but require the user's desired change or expected outcome to be concrete first.\n\n"
         "For casual_chat, answer the user's message directly in response. The response must be in the "
         "user's language, concise, natural, and ready to display as the final assistant message. Do not "
         "describe this routing decision, ask for modification details, or claim workspace inspection. "
@@ -220,9 +243,10 @@ def _direct_modification_classifier_prompt(
         '"formalBranch":"design_stage_revision|workbench_plan_revision|null",'
         '"revisionType":"requirement_scope_change|product_behavior_change|technical_contract_change|endpoint_implementation_change|data_source_change|null",'
         '"earliestArtifact":"requirement-spec|product-plan|technical-plan|null",'
-        '"owner":"frontend|backend|fullstack|workspace|none|unknown",'
+        '"owner":"frontend|backend|fullstack|none|unknown",'
         '"confidence":0.0,"reason":"short reason",'
         '"clarificationQuestion":"question when clarification is needed",'
+        '"clarifiedRequirements":[],'
         '"candidatePaths":["precise/relative/path"],'
         '"affectedArtifactKeys":[],"affectedResourceKeys":[],"questions":[]}\n\n'
         f"Bounded workspace scan context:\n{_workspace_routing_context(workspace_snapshot)}\n\n"
@@ -361,9 +385,45 @@ def _normalize_direct_modification_decision(
 ) -> DirectModificationDecision:
     """校验模型分类结果，并对低置信度结果执行安全降级。"""
 
+    raw_route = str(payload.get("route") or "").strip()
+    raw_owner = str(payload.get("owner") or "").strip()
+    raw_target_paths = tuple(
+        _safe_target_paths(payload.get("candidatePaths") or payload.get("targetPaths"))
+    )
+    raw_scope_denial_paths = validated_direct_scope_denial_paths(
+        raw_target_paths,
+        owner="unknown",
+    )
+    if raw_route == "implementation_fix" and raw_scope_denial_paths:
+        return DirectModificationDecision(
+            intent="implementation_fix",
+            owner="unknown",
+            scope="direct",
+            confidence=0.0,
+            reason="修改目标超出 frontend/ 和 backend/ 可写目录。",
+            clarification_question="",
+            target_paths=raw_target_paths,
+        )
+    routing_payload = payload
+    if (
+        raw_route == "implementation_fix"
+        and raw_owner not in {"frontend", "backend", "fullstack", "none", "unknown"}
+        and raw_target_paths
+    ):
+        # 精确目标已经确定所属目录时，按当前目录边界归属 Agent，不保留额外写入角色。
+        roots = {
+            path.replace("\\", "/").split("/", 1)[0].casefold()
+            for path in raw_target_paths
+        }
+        if roots == {"frontend"}:
+            routing_payload = {**payload, "owner": "frontend"}
+        elif roots == {"backend"}:
+            routing_payload = {**payload, "owner": "backend"}
+        elif roots == {"frontend", "backend"}:
+            routing_payload = {**payload, "owner": "fullstack"}
     try:
         routed = enforce_revision_routing(
-            payload,
+            routing_payload,
             user_request=user_request,
             target=target,
         )
@@ -381,8 +441,18 @@ def _normalize_direct_modification_decision(
     )
     response = str(payload.get("response") or payload.get("answer") or "").strip()
     target_paths = tuple(_safe_target_paths(candidate.candidate_paths))
-    if intent == "implementation_fix" and owner == "workspace" and not target_paths:
-        return _clarification_fallback("工作区普通文件修改缺少精确路径。")
+    clarified_requirements = _normalize_clarified_requirements(
+        payload.get("clarifiedRequirements")
+    )
+    if (
+        raw_route == "implementation_fix"
+        and intent == "clarification"
+        and validated_direct_scope_denial_paths(target_paths, owner=owner)
+    ):
+        # 即使低置信度规则把写入候选降级为澄清，越出两棵可写目录仍应明确拒绝。
+        intent = "implementation_fix"
+        owner = "unknown"
+        reason = "修改目标超出 frontend/ 和 backend/ 可写目录。"
     if intent == "clarification":
         return DirectModificationDecision(
             intent="clarification",
@@ -409,12 +479,35 @@ def _normalize_direct_modification_decision(
         clarification_question=clarification_question,
         response=response if intent == "casual_chat" else "",
         target_paths=target_paths,
+        clarified_requirements=(
+            clarified_requirements if intent == "implementation_fix" else ()
+        ),
         formal_branch=candidate.formal_branch,
         revision_type=candidate.revision_type,
         earliest_artifact=candidate.earliest_artifact,
         affected_artifact_keys=tuple(candidate.affected_artifact_keys),
         affected_resource_keys=tuple(candidate.affected_resource_keys),
     )
+
+
+def _normalize_clarified_requirements(value: Any) -> tuple[str, ...]:
+    """清理模型生成的逐条需求复述，限制条数和单项长度。"""
+
+    if not isinstance(value, list):
+        return ()
+    items: list[str] = []
+    seen: set[str] = set()
+    for item in value[:6]:
+        if not isinstance(item, str):
+            continue
+        text = " ".join(item.split()).strip()
+        if not text:
+            continue
+        text = text[:240].rstrip()
+        if text and text not in seen:
+            items.append(text)
+            seen.add(text)
+    return tuple(items)
 
 
 def _chinese_clarification_question(value: Any) -> str:
@@ -498,18 +591,17 @@ def _decode_json_string_prefix(raw: str) -> str | None:
 
 
 def _safe_target_paths(value: Any) -> list[str]:
-    """裁剪分类器给出的普通工作区目标路径，拒绝敏感和正式工件范围。"""
+    """裁剪分类器给出的写入目标，保留越界路径供确定性预检明确拒绝。"""
 
     if not isinstance(value, list):
         return []
     result: list[str] = []
     for item in value[:100]:
-        path = str(item or "").strip().replace("\\", "/").lstrip("/")
+        path = str(item or "").strip().replace("\\", "/")
         parts = [part for part in path.split("/") if part]
         lowered = path.casefold()
         if (
             not parts
-            or ".." in parts
             or any(part == ".env" or part.startswith(".env.") for part in parts)
             or ".devagentstudio/" in lowered
         ):
@@ -594,7 +686,8 @@ def _frontend_direct_modification_prompt(
         "Do not create, read as an execution contract, or depend on RequirementSpec, ProjectPlan, "
         "BuildTaskPlan, approved tasks, or a task DAG. Inspect the existing implementation, make "
         "the smallest safe change, and verify it with the repository's existing frontend commands.\n"
-        "Write only frontend application code. You may read backend code and the backend handoff, "
+        "Write only files inside the frontend/ directory, including its source, tests, documentation, "
+        "scripts, and configuration. You may read backend files and the backend handoff, "
         "but must not modify backend files. Never create temporary scripts for verification.\n"
         "This is a direct-edit run: task and write_todos are unavailable. Do not delegate discovery "
         "or verification. Inspect relevant code progressively and avoid unrelated repository-wide "
@@ -618,6 +711,7 @@ def _frontend_direct_modification_prompt(
         "verification, alreadySatisfied, and failureReason. Set alreadySatisfied=true only after "
         "verifying that the exact requested behavior already exists. Do not return Markdown around "
         "the JSON object.\n\n"
+        f"{_DIRECT_RESULT_SUMMARY_INSTRUCTIONS}\n"
         f"Bounded quick-chat summary:\n{conversation_summary or '(empty)'}\n\n"
         f"Backend handoff for this run:\n{handoff}\n\n"
         "Selected DOM source context:\n"
@@ -639,7 +733,8 @@ def _data_source_direct_modification_prompt(
         "Do not create, read as an execution contract, or depend on RequirementSpec, ProjectPlan, "
         "BuildTaskPlan, approved tasks, or a task DAG. Inspect the existing implementation, make "
         "the smallest safe change, and verify it with the repository's existing backend commands.\n"
-        "Write only backend application code. You may read frontend code to understand consumers, "
+        "Write only files inside the backend/ directory, including its source, tests, documentation, "
+        "scripts, and configuration. You may read frontend files to understand consumers, "
         "but must not modify frontend files. There are currently no mandatory built-in skills for "
         "this direct backend flow. Never create temporary scripts for verification.\n"
         "This is a direct-edit run: task and write_todos are unavailable. Do not delegate discovery "
@@ -654,31 +749,8 @@ def _data_source_direct_modification_prompt(
         "contain summary, endpoints, changedFiles, and notes; endpoints must describe method, path, "
         "request, and response when an API changed. Set alreadySatisfied=true only after verifying "
         "the exact requested behavior already exists. Do not return Markdown around the JSON object.\n\n"
+        f"{_DIRECT_RESULT_SUMMARY_INSTRUCTIONS}\n"
         f"Bounded quick-chat summary:\n{conversation_summary or '(empty)'}\n\n"
-        f"Current user request:\n{user_request}"
-    )
-
-
-def _workspace_direct_modification_prompt(
-    *,
-    user_request: str,
-    conversation_summary: str,
-    target_paths: list[str],
-) -> str:
-    """构造文档、测试、脚本和普通配置文件的受限修改 Prompt。"""
-
-    return (
-        f"{DIRECT_MODIFICATION_MODE_MARKER}\n"
-        "You are handling one localized non-product workspace change. Modify only the precise "
-        "allowed paths in the task packet. This mode may update ordinary documentation, tests, "
-        "scripts, or repository configuration, but must not modify application frontend/backend "
-        "code, .env files, database migrations, RequirementSpec, ProjectPlan, API contracts, or "
-        "other .devagentstudio workflow artifacts. Do not use task, write_todos, or subagents. Inspect "
-        "only relevant context, make the smallest change, and use proportionate existing checks. "
-        "For documentation-only work, state why no command is necessary. Return exactly one JSON "
-        "object using the SmallTask result contract.\n\n"
-        f"Authorized target paths:\n{json.dumps(target_paths, ensure_ascii=False)}\n\n"
-        f"Bounded conversation summary:\n{conversation_summary[-4_000:] or '(empty)'}\n\n"
         f"Current user request:\n{user_request}"
     )
 
@@ -700,19 +772,12 @@ def invoke_frontend_direct_modification(
     scoped_paths = _approved_owner_paths(approved_paths, owner="frontend")
     source_candidates = _approved_owner_paths(candidate_files, owner="frontend")
     task_candidates = list(dict.fromkeys([*scoped_paths, *source_candidates]))[:100]
-    # 有精确候选时锁死到这些路径，避免 Agent 在整个 Frontend/src/** 下反复探索；
-    # 候选为空才退回全树，此时靠 run_limit 兜底。
-    allowed_paths = (
-        task_candidates
-        if task_candidates
-        else ["Frontend/src/**", "frontend/src/**", *scoped_paths]
-    )
     return invoke_small_task_agent(
         packet={
             "source": "free_chat",
             "owner": "frontend",
             "description": user_request,
-            "allowedPaths": allowed_paths,
+            "allowedPaths": ["Frontend/**", "frontend/**", *scoped_paths],
             "approvedPaths": scoped_paths,
             "targetFiles": task_candidates,
             "candidateFiles": task_candidates,
@@ -749,26 +814,12 @@ def invoke_data_source_direct_modification(
     scoped_paths = _approved_owner_paths(approved_paths, owner="backend")
     source_candidates = _approved_owner_paths(candidate_files, owner="backend")
     task_candidates = list(dict.fromkeys([*scoped_paths, *source_candidates]))[:100]
-    # 与前端一致：有精确候选时锁死路径，避免在 Backend/app/** 下大范围探索。
-    allowed_paths = (
-        task_candidates
-        if task_candidates
-        else [
-            "Backend/app/**",
-            "Backend/src/**",
-            "Backend/tests/**",
-            "backend/app/**",
-            "backend/src/**",
-            "backend/tests/**",
-            *scoped_paths,
-        ]
-    )
     return invoke_small_task_agent(
         packet={
             "source": "free_chat",
             "owner": "backend",
             "description": user_request,
-            "allowedPaths": allowed_paths,
+            "allowedPaths": ["Backend/**", "backend/**", *scoped_paths],
             "approvedPaths": scoped_paths,
             "targetFiles": task_candidates,
             "candidateFiles": task_candidates,
@@ -778,50 +829,6 @@ def invoke_data_source_direct_modification(
             "legacyInstructions": _data_source_direct_modification_prompt(
                 user_request=user_request,
                 conversation_summary=conversation_summary,
-            ),
-        },
-        workspace=workspace,
-        selected_skill_names=selected_skill_names,
-        on_tool_activity=on_tool_activity,
-    )
-
-
-def invoke_workspace_direct_modification(
-    *,
-    user_request: str,
-    conversation_summary: str,
-    target_paths: list[str],
-    approved_paths: list[str] | None = None,
-    workspace: str | None,
-    selected_skill_names: list[str] | None,
-    on_tool_activity: ToolActivityCallback | None = None,
-) -> str:
-    """使用共享 SmallTask Agent 执行精确路径限定的非产品工作区修改。"""
-
-    scoped_paths = list(
-        dict.fromkeys(
-            [
-                *_safe_target_paths(target_paths),
-                *_approved_owner_paths(approved_paths, owner="workspace"),
-            ]
-        )
-    )[:100]
-    return invoke_small_task_agent(
-        packet={
-            "source": "free_chat",
-            "kind": "workspace_change",
-            "owner": "workspace",
-            "description": user_request,
-            "allowedPaths": scoped_paths,
-            "approvedPaths": _approved_owner_paths(approved_paths, owner="workspace"),
-            "targetFiles": scoped_paths,
-            "acceptanceCriteria": ["按用户要求完成限定路径内的局部工作区修改。"],
-            "request": user_request,
-            "conversationSummary": conversation_summary[-4_000:],
-            "legacyInstructions": _workspace_direct_modification_prompt(
-                user_request=user_request,
-                conversation_summary=conversation_summary,
-                target_paths=scoped_paths,
             ),
         },
         workspace=workspace,

@@ -228,7 +228,12 @@ export function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
-  const collapseCompletedWorkspaceScan = hasWorkspaceInspection && step.status === 'completed'
+  // 扫描节点从出现到完成都保持默认收起，避免流式进度更新自动展开详情。
+  const isWorkspaceScanNode =
+    hasWorkspaceInspection ||
+    hasWorkspaceInspectionProgress ||
+    step.nodeName === 'inspect_workspace' ||
+    step.nodeName === 'scan_workspace_code'
   const isRepairStep =
     step.kind === 'workflow' &&
     (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
@@ -275,7 +280,7 @@ export function ProcessStep({
     !awaitingInput
   const [open, setOpen] = useState(
     expandable &&
-      !collapseCompletedWorkspaceScan &&
+      !isWorkspaceScanNode &&
       !collapseConversationDetail &&
       (step.status === 'running' ||
         awaitingInput ||
@@ -290,12 +295,7 @@ export function ProcessStep({
   )
 
   useEffect(() => {
-    // 正式流程和二次修改的扫描完成时收起一次，后续更新不覆盖用户的手动展开。
-    if (collapseCompletedWorkspaceScan) setOpen(false)
-  }, [collapseCompletedWorkspaceScan])
-
-  useEffect(() => {
-    if (collapseConversationDetail || collapseCompletedWorkspaceScan) return
+    if (collapseConversationDetail || isWorkspaceScanNode) return
     if (
       expandable &&
       (step.status === 'running' ||
@@ -316,13 +316,13 @@ export function ProcessStep({
     expandable,
     hasBuildRun,
     hasChecks,
-    collapseCompletedWorkspaceScan,
     hasDagGeneration,
     hasProjectPlanUpdate,
     hasWorkspaceInspection,
     hasWorkspaceInspectionProgress,
     hasRepairPanel,
     hasToolActivity,
+    isWorkspaceScanNode,
     step.status
   ])
 
@@ -679,7 +679,6 @@ function processStepTitle(
     answer_workspace: '读取工作区并回答',
     execute_frontend: '修改前端文件',
     execute_backend: '修改后端文件',
-    execute_workspace: '修改工作区文件',
     integration_test: '验证修改',
     validate_direct_fix: '验证本次修改',
     direct_modification_repair: '自动修复局部代码',

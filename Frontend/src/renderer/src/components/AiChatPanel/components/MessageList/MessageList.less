@@ -192,6 +192,33 @@
   margin-bottom: 20px;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--wb-border);
+
+  .@{class-prefix}-markdown-content {
+    font-size: 14px;
+    line-height: 1.75;
+
+    p + p {
+      margin-top: 10px;
+    }
+
+    ol,
+    ul {
+      margin: 10px 0 14px;
+      padding-left: 24px;
+    }
+
+    li {
+      padding-left: 3px;
+    }
+
+    li + li {
+      margin-top: 10px;
+    }
+
+    strong {
+      font-weight: 600;
+    }
+  }
 }
 
 .@{class-prefix}-ai-message-text.ant-typography {

@@ -93,7 +93,7 @@ class RevisionRoutingCandidate(RevisionModel):
         default=None,
         alias="earliestArtifact",
     )
-    owner: Literal["frontend", "backend", "fullstack", "workspace", "none", "unknown"]
+    owner: Literal["frontend", "backend", "fullstack", "none", "unknown"]
     affected_artifact_keys: list[str] = Field(
         default_factory=list,
         alias="affectedArtifactKeys",

@@ -256,6 +256,14 @@
   padding-top: 4px;
 }
 
+.@{class-prefix}-composer-send-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .@{class-prefix}-composer-selected-skills {
   display: contents;
 
@@ -313,6 +321,25 @@
   min-width: 0;
   align-items: center;
   gap: 2px;
+}
+
+.@{class-prefix}-composer-scope-confirmation {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+
+  .ant-switch {
+    flex: 0 0 auto;
+  }
+
+  .ant-typography {
+    color: inherit;
+  }
 }
 
 .@{class-prefix}-composer-resource-button.ant-btn,

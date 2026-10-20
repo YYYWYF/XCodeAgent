@@ -36,6 +36,8 @@ type Props = {
   workspaceRoot?: string
   /** 提交操作是否被禁用（Agent 运行中等）。 */
   commitDisabled?: boolean
+  /** 已进入开发后切回计划时，只展示就绪状态并禁用卡片操作。 */
+  actionsDisabled?: boolean
   /** 当前是迭代：模板沿用已有工程，未重新拉取远端模板。 */
   reusedExistingTemplate?: boolean
   /** 当前分支名：自动提交的落点，展示给用户看提交去了哪里。 */
@@ -75,6 +77,7 @@ export default function TemplatePreparingCard({
   orphaned = false,
   workspaceRoot,
   commitDisabled = false,
+  actionsDisabled = false,
   reusedExistingTemplate = false,
   branchName,
   repositoryBranch,
@@ -154,6 +157,7 @@ export default function TemplatePreparingCard({
         retryingRepositoryBranch={retryingRepositoryBranch}
         workspaceRoot={workspaceRoot}
         commitDisabled={commitDisabled}
+        actionsDisabled={actionsDisabled}
       />
     )
   }
@@ -198,7 +202,8 @@ function ReadyCard({
   onRetryRepositoryBranch,
   retryingRepositoryBranch = false,
   workspaceRoot,
-  commitDisabled
+  commitDisabled,
+  actionsDisabled = false
 }: {
   onEnterDevelopment?: () => void
   reusedExistingTemplate?: boolean
@@ -210,6 +215,7 @@ function ReadyCard({
   retryingRepositoryBranch?: boolean
   workspaceRoot?: string
   commitDisabled: boolean
+  actionsDisabled?: boolean
 }): ReactElement {
   // 无 workspaceRoot 时跳过提交区，仅展示就绪态与进入开发按钮。
   const commit = useMilestoneCommit(workspaceRoot ?? '', 'template-init', 'Z000000-0000 #comment chore: 初始化应用工程')
@@ -270,7 +276,7 @@ function ReadyCard({
           </div>
           <div className={cx('template-preparing-commit-actions')}>
             <Button
-              disabled={commitDisabled || inspecting}
+              disabled={commitDisabled || actionsDisabled || inspecting}
               icon={<ReloadOutlined />}
               onClick={() => void loadSnapshot()}
               size="small"
@@ -292,11 +298,15 @@ function ReadyCard({
             <Text type="secondary">{`当前 ${eligiblePaths.length} 个文件可提交。`}</Text>
           </div>
           <div className={cx('template-preparing-commit-actions')}>
-            <Button disabled={commitDisabled || inspecting} onClick={handleDefer} size="small">
+            <Button
+              disabled={commitDisabled || actionsDisabled || inspecting}
+              onClick={handleDefer}
+              size="small"
+            >
               稍后
             </Button>
             <Button
-              disabled={commitDisabled || inspecting}
+              disabled={commitDisabled || actionsDisabled || inspecting}
               onClick={() => void handleOpenCommit()}
               size="small"
               type="primary"
@@ -354,7 +364,7 @@ function ReadyCard({
             {pushNotOnRemote && onRetryRepositoryBranch ? (
               <Button
                 className={cx('template-preparing-push-retry')}
-                disabled={retryingRepositoryBranch}
+                disabled={actionsDisabled || retryingRepositoryBranch}
                 icon={<ReloadOutlined />}
                 loading={retryingRepositoryBranch}
                 onClick={onRetryRepositoryBranch}
@@ -379,6 +389,7 @@ function ReadyCard({
 
       <Button
         className={cx('template-preparing-enter-btn')}
+        disabled={actionsDisabled}
         onClick={() => onEnterDevelopment?.()}
         size="large"
         type="primary"
@@ -389,7 +400,7 @@ function ReadyCard({
       {workspaceRoot && (
         <MilestoneCommitModal
           title="应用模板已就绪，建议创建初始化提交"
-          disabled={commitDisabled}
+          disabled={commitDisabled || actionsDisabled}
           commit={commit}
         />
       )}

@@ -67,6 +67,7 @@ import {
   shouldShowIncompleteChangesHint,
   workflowCodeChanges,
   workflowCodeChangesBeforeConfirmation,
+  formatDirectModificationSummary,
   workflowFinalResultPresentation,
   workflowShouldShowCodeChanges,
   workflowShouldShowCodeReview,
@@ -489,7 +490,14 @@ export default function MessageList({
     (designPhasePlanning &&
       ((applicationTemplatePreparationEligible &&
         (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
+        // 回到计划阶段时仍展示已就绪模板，方便用户看见当前结果并重新进入开发。
+        (currentPhase === 'planning' &&
+          applicationLifecycle?.initialization?.stage === 'ready_for_workbench') ||
         templatePreparation?.status === 'RUNNING'))
+  const templateReadyActionsDisabled =
+    currentPhase === 'planning' &&
+    applicationLifecycle?.initialization?.stage === 'ready_for_workbench' &&
+    !applicationTemplatePreparationEligible
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -900,6 +908,10 @@ export default function MessageList({
                 (showWorkflowCard && requiresClarification && !entityDesignCardVisible)
                   ? ''
                   : visibleAssistantContent
+              const displayAssistantContent =
+                !messageLoading && conversation && visibleCodeChanges && finalResult.terminal
+                  ? formatDirectModificationSummary(effectiveAssistantContent)
+                  : effectiveAssistantContent
               // 正文、状态和卡片都没有可见内容时，整条 assistant 消息连同 Agent 头一起隐藏。
               const hasVisibleAssistantBody = Boolean(
                 message.revisionHandoff ||
@@ -914,7 +926,7 @@ export default function MessageList({
                     message.toolCalls?.length &&
                     !hasConversationToolActivity) ||
                   (!messageLoading && visibleCodeChanges) ||
-                  effectiveAssistantContent.trim() ||
+                  displayAssistantContent.trim() ||
                   (message.workflow && (entityDesignCardVisible || showWorkflowCard)) ||
                   (message.workflow?.summary.phase === 'entity_source_binding' &&
                     message.workflow.summary.status === 'completed' &&
@@ -1033,20 +1045,10 @@ export default function MessageList({
                             {previewRepairPlanMessage ? (
                               <PreviewRepairPlanCard content={effectiveAssistantContent} />
                             ) : (
-                              <MarkdownContent content={effectiveAssistantContent} />
+                              <MarkdownContent content={displayAssistantContent} />
                             )}
                           </div>
                         )}
-                        {!messageLoading && message.id === latestAssistantMessageId &&
-                        canEnterModifiedTesting(message.workflow) ? (
-                          <div className={cx('workflow-test-phase-confirmation')}>
-                            <Text>本轮修改已完成，可以重新测试、审查和验收。</Text>
-                            <Button type="primary" disabled={mutationDisabled}
-                              onClick={() => onSubmitClarification(message.workflow!, {
-                                modified_test_entry: { action: 'start' }
-                              })}>进入本轮测试</Button>
-                          </div>
-                        ) : null}
                         {!messageLoading && visibleCodeChanges && codeChangesBeforeConfirmation && (
                           <CodeChangeCard
                             codeChanges={visibleCodeChanges}
@@ -1128,6 +1130,29 @@ export default function MessageList({
                               reverting={revertingCodeChangeIds.has(visibleCodeChanges.id)}
                             />
                           )}
+                        {!messageLoading && message.id === latestAssistantMessageId &&
+                        canEnterModifiedTesting(message.workflow) ? (
+                          <section className={cx('template-preparing-card', 'template-preparing-ready')}>
+                            <div className={cx('template-preparing-head')}>
+                              <CheckCircleOutlined className={cx('template-preparing-icon', 'is-ready')} />
+                              <Text strong>本轮修改已完成</Text>
+                            </div>
+                            <Text className={cx('template-preparing-desc')} type="secondary">
+                              可以重新测试、审查和验收。
+                            </Text>
+                            <Button
+                              className={cx('template-preparing-enter-btn')}
+                              disabled={mutationDisabled}
+                              onClick={() => onSubmitClarification(message.workflow!, {
+                                modified_test_entry: { action: 'start' }
+                              })}
+                              size="large"
+                              type="primary"
+                            >
+                              进入本轮测试
+                            </Button>
+                          </section>
+                        ) : null}
                         {!messageLoading &&
                           visibleCodeChanges &&
                           message.workflow &&
@@ -1202,6 +1227,7 @@ export default function MessageList({
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
                   templatePreparation={templatePreparation}
+                  actionsDisabled={templateReadyActionsDisabled}
                   onEnterDevelopment={onEnterDevelopment}
                   onRetry={onRetryTemplateGeneration}
                   orphaned={templateGenerationOrphaned}

@@ -22,7 +22,7 @@ _STAGES = {
     "integration_test", "small_task_repair", "code_review", "acceptance",
     "test_phase_confirmation", "review_phase_confirmation", "acceptance_phase_confirmation",
     "scan_workspace_code", "scan_change_impact_code", "classify_intent", "execute_frontend",
-    "execute_backend", "execute_workspace", "validate_direct_fix", "direct_modification_repair",
+    "execute_backend", "validate_direct_fix", "direct_modification_repair",
     "finalize_direct_modification", "finalize_project",
 }
 _REQUIREMENT_STAGES = {"requirements", "product_planning"}
@@ -108,7 +108,7 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
     if node in {"unit_test", "unit_test_repair", "test_phase_confirmation"}:
         from app.services.stage_execution_artifacts import load_stage_execution_artifacts
         fields.update(load_stage_execution_artifacts({**state, **fields}, fields["build_task_plan"], node))
-    if state.get("retry_source_run_id") and node in {"classify_intent", "execute_frontend", "execute_backend", "execute_workspace", "code_review", "unit_test", "integration_test"}:
+    if state.get("retry_source_run_id") and node in {"classify_intent", "execute_frontend", "execute_backend", "code_review", "unit_test", "integration_test"}:
         from app.graph.nodes.workspace_inspection import inspect_workspace
         fields.update({key: value for key, value in inspect_workspace({**state, **fields}).items() if key.startswith("workspace_")})
     return fields

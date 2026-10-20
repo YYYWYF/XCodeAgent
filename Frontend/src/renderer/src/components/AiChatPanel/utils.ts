@@ -349,6 +349,21 @@ export function workflowFinalResultPresentation(
   }
 }
 
+/** 将二次修改的终态摘要整理为可扫描的 Markdown 段落和列表。 */
+export function formatDirectModificationSummary(content: string): string {
+  return content
+    .trim()
+    .replace(/[；;]\s*(?=\d+[.)]\s+)/g, '\n')
+    .replace(/([：:])\s*(?=\d+[.)]\s+)/g, '$1\n')
+    .replace(/\s+(?=\d+[.)]\s+)/g, '\n')
+    .replace(/[；;]\s*/g, '\n\n')
+    .replace(/(^|\n)\s*(\d+)[.)]\s+/g, '$1$2. ')
+    .replace(/([。！？])\s*(?=[^。\n！？:：]{2,18}[：:])/g, '$1\n\n')
+    .replace(/^([^\n：:。！？]{2,24}[：:])\s*/gm, '**$1**\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 /** 从实时且成功的启动节点中提取一次性预览导航目标。 */
 export function workflowPreviewTarget(
   workflow: WorkflowRunPayload | undefined,

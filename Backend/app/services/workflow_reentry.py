@@ -142,7 +142,7 @@ class BusinessTargetResolver:
             } and not (source.workflow_scope == "conversation" and target_node in {
                 "scan_workspace_code", "classify_intent", "scan_change_impact_code",
                 "respond_conversation", "answer_workspace", "execute_frontend",
-                "execute_backend", "execute_workspace", "validate_direct_fix",
+                "execute_backend", "validate_direct_fix",
                 "direct_modification_repair", "finalize_direct_modification",
             }))
             or (

@@ -32,6 +32,27 @@ export type RecoveryIncidentPresentation =
 
 const MODEL_PLANNING_FAILURE_CODE = 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
 const MODEL_PLANNING_FAILURE_PREFIX = 'UNIT_GENERATION_MODEL_'
+const DIRECT_MODIFICATION_SCOPE_DENIED_CODE = 'DIRECT_MODIFICATION_SCOPE_DENIED'
+const DIRECT_MODIFICATION_SCOPE_DENIED_MESSAGE_PREFIX = '无权修改（超出职责范围）：'
+
+/** 从结构化错误码或拒绝消息识别二次修改的职责范围拒绝。 */
+export function isDirectModificationScopeDenied(
+  workflow?: WorkflowRunPayload,
+  message?: string
+): boolean {
+  const result = workflow?.result
+  const stateResult = workflow?.state?.direct_modification_result
+  const resultErrorCode = result && typeof result === 'object'
+    ? (result as Record<string, unknown>).errorCode : undefined
+  const stateErrorCode = stateResult && typeof stateResult === 'object'
+    ? (stateResult as Record<string, unknown>).errorCode : undefined
+  if ([workflow?.summary.errorCode, resultErrorCode, stateErrorCode]
+    .includes(DIRECT_MODIFICATION_SCOPE_DENIED_CODE)) return true
+  const candidates = [message, workflow?.summary.message]
+  return candidates.some((value) =>
+    typeof value === 'string' && value.trim().startsWith(DIRECT_MODIFICATION_SCOPE_DENIED_MESSAGE_PREFIX)
+  )
+}
 
 /** 仅识别已定义的执行计划模型基础设施错误，不用关键词归因其他异常。 */
 export function isWorkbenchModelPlanningFailure(

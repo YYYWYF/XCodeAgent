@@ -306,7 +306,10 @@ type UseWorkflowConversationResult = {
   ) => Promise<boolean>
   handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
-  handleSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
+  handleSend: (
+    workflowDebug?: WorkflowDebugOptions,
+    confirmScopeBeforeExecution?: boolean
+  ) => Promise<void>
   handleStartDetailConfirmation: (
     selectedPageId: string,
     pageLabel: string,
@@ -510,10 +513,15 @@ function smallTaskHandoffApproved(answers: ClarificationAnswers): boolean {
   return confirmationAnswerApproved(answers, 'small_task_handoff')
 }
 
+/** 判断用户是否确认按已展示的需求和代码范围执行实现修改。 */
+function implementationFixConfirmationApproved(answers: ClarificationAnswers): boolean {
+  return confirmationAnswerApproved(answers, 'implementation_fix_confirmation')
+}
+
 /** 解析通用 yes/no 确认答案，兼容结构化单选和字符串答案。 */
 function confirmationAnswerApproved(
   answers: ClarificationAnswers,
-  key: 'small_task_handoff'
+  key: 'small_task_handoff' | 'implementation_fix_confirmation'
 ): boolean {
   const answer = answers[key]
   if (typeof answer === 'string') {
@@ -894,7 +902,10 @@ export function useWorkflowConversation({
   )
 
   /** 首次发送时创建阶段会话；简单模式补充输入优先复用当前会话和 thread。 */
-  const handleSend = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+  const handleSend = async (
+    workflowDebug?: WorkflowDebugOptions,
+    confirmScopeBeforeExecution?: boolean
+  ): Promise<void> => {
     // 重入时即使本地流登记为空，Backend 仍运行也不能再次启动当前会话。
     if (workbenchExecutionRunning(ownedWorkbenchExecution(applicationLifecycleRef.current, activeSession))) return
     // 已有上下文的调试先解析业务 Graph；结束后新建 Run，暂停后仍走原执行续接。
@@ -930,6 +941,16 @@ export function useWorkflowConversation({
       workflowDebug,
       inputMode
     )
+    const pendingConversationClarification = conversation && activeWorkflow
+      ? workflowClarification(activeWorkflow)
+      : undefined
+    const canAppendToPendingConversation = Boolean(
+      activeWorkflow?.summary.status === 'requires_user_input' &&
+        pendingConversationClarification &&
+        ['direct_modification_clarification', 'implementation_fix_confirmation'].includes(
+          String(pendingConversationClarification.mode || '')
+        )
+    )
     const requestMessage = conversation
       ? appendElementContextToConversationPrompt(message, inspectedElementContext)
       : message
@@ -958,6 +979,12 @@ export function useWorkflowConversation({
       titleFrom: message,
       workflowDebug,
       conversation,
+      ...(canAppendToPendingConversation
+        ? { originalRequest: workflowOriginalRequest(activeWorkflow as WorkflowRunPayload) }
+        : {}),
+      conversationConfirmScopeBeforeExecution:
+        confirmScopeBeforeExecution ??
+        (pendingConversationClarification?.confirmScopeBeforeExecution === true),
       conversationElementContext: conversation ? inspectedElementContext : undefined
     })
     if (sent && conversation && inspectedElementContext) {
@@ -1178,6 +1205,7 @@ export function useWorkflowConversation({
       conversationApprovedPaths?: string[]
       conversationHandoffDecision?: 'approved' | 'rejected'
       conversationImpactInteractionId?: string
+      conversationConfirmScopeBeforeExecution?: boolean
       revisionRequest?: Record<string, unknown>
       revisionContinuation?: { changeId: string; token: string }
       revisionInteraction?: WorkflowRevisionDraftInteraction
@@ -1514,6 +1542,8 @@ export function useWorkflowConversation({
         conversationApprovedPaths: options?.conversationApprovedPaths,
         conversationHandoffDecision: options?.conversationHandoffDecision,
         conversationImpactInteractionId: options?.conversationImpactInteractionId,
+        conversationConfirmScopeBeforeExecution:
+          options?.conversationConfirmScopeBeforeExecution,
         revisionRequest: options?.revisionRequest,
         revisionContinuation: options?.revisionContinuation,
         developmentContinuation: options?.developmentContinuation,
@@ -1873,7 +1903,9 @@ export function useWorkflowConversation({
       return false
     const originalRequest = workflowOriginalRequest(workflow)
     const clarificationMode = workflowClarificationMode(workflow)
+    const clarification = workflowClarification(workflow)
     const handoffApproved = smallTaskHandoffApproved(answers)
+    const implementationFixApproved = implementationFixConfirmationApproved(answers)
     const revisionSubmission = revisionImpactSubmission(workflow, answers)
     const revisionDraftInteraction = revisionDraftInteractionSubmission(answers)
     const technicalPlanInteraction = technicalPlanConfirmationSubmission(
@@ -1998,6 +2030,19 @@ export function useWorkflowConversation({
           conversationApprovedPaths: handoffApproved ? smallTaskRequestedPaths(workflow) : [],
           conversationHandoffDecision: handoffApproved ? 'approved' : 'rejected',
           titleFrom: originalRequest || 'SmallTask 范围确认'
+        }
+      )
+    }
+    if (conversation && clarificationMode === 'implementation_fix_confirmation') {
+      return sendWorkflowMessage(
+        implementationFixApproved
+          ? '用户已确认该需求理解，按整理后的需求继续修改。'
+          : '用户取消了本次实现修改。',
+        {
+          originalRequest,
+          conversation: true,
+          conversationHandoffDecision: implementationFixApproved ? 'approved' : 'rejected',
+          titleFrom: originalRequest || '需求理解确认'
         }
       )
     }
@@ -2276,7 +2321,9 @@ export function useWorkflowConversation({
           ? workflow.runId
           : undefined,
       titleFrom: originalRequest || '补充需求确认',
-      conversation
+      conversation,
+      conversationConfirmScopeBeforeExecution:
+        conversation ? clarification?.confirmScopeBeforeExecution === true : undefined
     })
   }
 

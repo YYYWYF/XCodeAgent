@@ -120,6 +120,60 @@ def validated_dynamic_workspace_paths(
     return approved[:100]
 
 
+def validated_direct_scope_denial_paths(values: Any, *, owner: str) -> list[str]:
+    """提取超出当前前后端职责目录的目标路径，供写入前拒绝并说明原因。"""
+
+    if not isinstance(values, (list, tuple)):
+        return []
+    allowed_roots = {
+        "frontend": {"frontend"},
+        "backend": {"backend"},
+        "fullstack": {"frontend", "backend"},
+    }.get(owner, {"frontend", "backend"})
+    path_owner = owner if owner in {"frontend", "backend", "fullstack"} else "fullstack"
+    denied: list[str] = []
+    for value in values[:100]:
+        raw_path = str(value or "").strip().replace("\\", "/")
+        if (
+            not raw_path
+            or "\x00" in raw_path
+            or any(ord(character) < 32 for character in raw_path)
+        ):
+            continue
+        parts = [part for part in raw_path.split("/") if part]
+        is_absolute = raw_path.startswith("/") or (
+            len(raw_path) >= 3 and raw_path[1] == ":" and raw_path[2] == "/"
+        )
+        if (
+            not parts
+            or is_absolute
+            or any(part in {".", ".."} for part in parts)
+            or len(parts) < 2
+            or parts[0].casefold() not in allowed_roots
+            or not direct_path_matches_owner(raw_path, path_owner)
+        ):
+            lowered_parts = [part.casefold() for part in parts]
+            owner_index = next(
+                (index for index, part in enumerate(lowered_parts) if part in {"frontend", "backend"}),
+                None,
+            )
+            display_parts = (
+                parts
+                if any(part in {".", ".."} for part in parts)
+                else parts[owner_index:]
+                if is_absolute and owner_index is not None
+                else ["（绝对路径）"]
+                if is_absolute
+                else parts
+            )
+            normalized = "/".join(display_parts)[:1_000]
+            if not normalized:
+                normalized = "（无效路径）"
+            if normalized not in denied:
+                denied.append(normalized)
+    return denied
+
+
 def _is_safe_dynamic_path_candidate(path: str, *, owner: str) -> bool:
     """校验动态路径必须精确、归属正确且不触及敏感或生成目录。"""
 
@@ -135,11 +189,14 @@ def _is_safe_dynamic_path_candidate(path: str, *, owner: str) -> bool:
         return False
     if any(part in _DYNAMIC_PATH_DENIED_PARTS for part in lowered_parts):
         return False
-    if owner == "frontend" and "frontend" not in lowered_parts:
+    if owner not in {"frontend", "backend", "fullstack"}:
         return False
-    if owner == "backend" and "backend" not in lowered_parts:
+    root = lowered_parts[0] if lowered_parts else ""
+    if owner == "frontend" and root != "frontend":
         return False
-    if owner == "fullstack" and not ({"frontend", "backend"} & set(lowered_parts)):
+    if owner == "backend" and root != "backend":
+        return False
+    if owner == "fullstack" and root not in {"frontend", "backend"}:
         return False
     return True
 
@@ -303,19 +360,24 @@ def validated_direct_stage_result(
 
 
 def direct_path_matches_owner(path: str, owner: str) -> bool:
-    """按虚拟工程目录判断一次代码变更是否属于当前 Agent。"""
+    """按工作区顶层目录判断一次代码变更是否属于当前前端或后端 Agent。"""
 
     parts = [part.casefold() for part in path.replace("\\", "/").split("/") if part]
-    if owner == "workspace":
-        lowered = "/".join(parts)
-        return bool(parts) and not (
-            any(part == ".env" or part.startswith(".env.") for part in parts)
-            or ".devagentstudio/" in lowered
-            or "frontend" in parts
-            or "backend" in parts
-        )
-    expected = "frontend" if owner == "frontend" else "backend"
-    return expected in parts
+    if (
+        len(parts) < 2
+        or any(part in {".", ".."} for part in path.replace("\\", "/").split("/"))
+        or any(part == ".env" or part.startswith(".env.") for part in parts)
+        or ".devagentstudio" in parts
+    ):
+        return False
+    root = parts[0]
+    if owner == "frontend":
+        return root == "frontend"
+    if owner == "backend":
+        return root == "backend"
+    if owner == "fullstack":
+        return root in {"frontend", "backend"}
+    return False
 
 
 def append_direct_conversation_summary(

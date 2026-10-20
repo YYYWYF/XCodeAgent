@@ -13,6 +13,7 @@ import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
 import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
+  formatDirectModificationSummary,
   pageDetailTargetKey,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
@@ -948,6 +949,18 @@ test('最终结果标题区分成功和失败 Workflow', () => {
     terminal: true,
     title: '任务执行失败'
   })
+})
+
+test('二次修改完成摘要将行内编号与验证小节拆成可读列表', () => {
+  const formatted = formatDirectModificationSummary(
+    '已完成验收修复： 1) 删除首页路由； 2) 修改应用标题。路由链路源码核对： / → /page → 首页；验证结果：构建通过。'
+  )
+
+  assert.equal(
+    formatted,
+    '**已完成验收修复：**\n1. 删除首页路由\n2. 修改应用标题。\n\n' +
+      '**路由链路源码核对：**\n/ → /page → 首页\n\n**验证结果：**\n构建通过。'
+  )
 })
 
 test('只有初始化完成阶段视为模板与开发预览就绪', () => {

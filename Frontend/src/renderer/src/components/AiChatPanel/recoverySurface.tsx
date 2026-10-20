@@ -9,6 +9,7 @@ import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../../typin
 import RecoveryIncidentCard from '../RecoveryIncidentCard/RecoveryIncidentCard'
 import AgentErrorCard from '../AgentErrorCard'
 import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
+import { isDirectModificationScopeDenied } from '../../service/recoveryIncident'
 import { isConversationWorkflow } from './conversationMode'
 
 export type RecoverySurfaceProps = {
@@ -46,6 +47,8 @@ export default function RecoverySurface({
   if (!(incident.kind === 'needs_attention' && incident.reasonCode === 'RETRY_ENTRY_NOT_FOUND') && !isApplicationPlanningPhase && (activeExecutionRecovery
     ? activeExecutionRecovery.workflowScope === 'conversation'
     : isConversationWorkflow(currentWorkflow))) {
+    const denialMessage = recoveryError || incident.failureMessage || incident.recoveryMessage
+    const scopeDenied = isDirectModificationScopeDenied(currentWorkflow, denialMessage)
     /** 重试前保留后端动作的确认要求，并沿用统一先对账再恢复的调用。 */
     const retry = (): void => {
       if (actionDisabled || recoveryRunning) return
@@ -62,12 +65,12 @@ export default function RecoverySurface({
     return (
       <div data-testid="workbench-recovery-incident">
         <AgentErrorCard
-          title="任务执行异常"
+          title={scopeDenied ? '无权修改该路径' : '任务执行异常'}
           error={recoveryError || recoveryFailureMessage(incident.failureDiagnostic) ||
             incident.failureMessage || (activeExecutionRecovery?.executionStatus === 'interrupted'
               ? '执行已中断，未收到完成结果。请重试同步当前节点状态。'
               : incident.recoveryMessage)}
-          onRetry={retry}
+          onRetry={scopeDenied ? undefined : retry}
           retryDisabled={actionDisabled}
           retrying={recoveryRunning}
         />

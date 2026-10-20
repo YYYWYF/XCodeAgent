@@ -6,7 +6,7 @@
 
 1. 用户在工作台通过统一对话入口描述问题、代码修改或正式计划修改，不需要选择内部 Workflow 节点。
 2. `Workbench Conversation Coordinator` 负责只读分类和确定性路由，但它不是拥有全部工具的万能 Agent。
-3. 不改变已确认产品或技术语义的修改走 `implementation_fix`；普通工作区文件可由现有 SmallTask 路径直接修改，前端/后端代码修改必须先弹出实现范围确认，再由 SmallTask 修改、验证并完成。
+3. 不改变已确认产品或技术语义的修改走 `implementation_fix`；普通工作区文件可由现有 SmallTask 路径直接修改。代码范围确认开关默认开启；系统先识别意图并整理需求、修改归属和候选路径，等待用户确认后才执行。关闭开关时，需求明确后直接执行；无论开关状态如何，只有“前端需求”这类缺少具体修改结果的请求都必须先澄清；用户可在确认前继续补充，系统会重新整理需求和范围。
 4. 改变正式产品/技术语义的请求走 `formal_revision`，再确定是 `design_stage_revision` 还是 `workbench_plan_revision`。
 5. 改变 RequirementSpec 或 ProductPlan 语义的请求走 `design_stage_revision`：用户确认影响范围后返回现有设计阶段，复用原 `application_planning_workflow`、原 thread/checkpoint、最早节点路由和逐层确认逻辑；既有页面的 UI 小改动不走该分支。
 6. 不需要重跑需求、产品或 UI 的 TechnicalPlan、API 契约或数据约束修改走 `workbench_plan_revision`：用户确认影响范围后创建独立计划阶段会话，并通过原 planning checkpoint 的 `technical_planning` 节点重新生成 `technical-plan.json`。
@@ -31,7 +31,7 @@
 
 - `design_intent_analysis` 已能在原 planning Graph/thread/checkpoint 中选择最早受影响的 RequirementSpec、ProductPlan 或 UiDesign 节点，并重新经过后续确认门；这套稳定逻辑直接作为 `design_stage_revision` 的执行基础。
 - 当前正式规划链是 RequirementSpec -> ProductPlan -> UiDesign -> TechnicalPlan，PageDetail 不再是当前权威。
-- `/conversation/run` 已有工作区扫描、闲聊、只读问答、frontend/backend/fullstack/workspace owner 分流。
+- `/conversation/run` 已有工作区扫描、闲聊、只读问答，以及 frontend/backend/fullstack 写入归属；没有独立 Workspace 写入 Agent。
 - SmallTask 已有精确路径限制、真实 before/after diff、集成测试和 RepairPlanner 有界修复。
 - page/endpoint target 已进入自由协作协议和分类上下文。
 - 主 Workflow 已有 TechnicalPlan、Build DAG 确认、Build、Test、Preview 和 Acceptance 能力。
@@ -170,7 +170,7 @@ TechnicalPlan 草稿 -> 确认并成为 canonical -> Build DAG
 
 代码不是正式计划草稿：
 
-- `implementation_fix` 分类为 frontend/backend/fullstack 后直接写入代码并执行独立验证；workspace owner 可直接写入精确授权的普通工作区文件。独立验证通过后直接完成当前小修改，不切换到正式预览或验收阶段。
+- `implementation_fix` 分类为 frontend/backend/fullstack 后，只能写入对应的 `frontend/`、`backend/` 目录（全栈可写两者）并执行独立验证；目标超出目录范围时在执行前直接拒绝。独立验证通过后直接完成当前小修改，不切换到正式预览或验收阶段。
 - formal revision 不以“计划已修改”为终点。所有受影响正式产物确认且非 stale 后，必须生成并确认 Build DAG，再进入代码修改、测试、预览和验收。
 - 设计 branch 完成原 TechnicalPlan 确认后，由系统自动继续同一次 revision；用户不需要回到工作台重新输入需求或再次确认影响范围。
 - Build/Test 后的用户反馈重新进入统一路由，形成下一次向前修正；不自动恢复代码或已确认正式产物。
@@ -197,7 +197,7 @@ formal_revision
 | `casual_chat` | tool-less ChatModel | 否 |
 | `workspace_question` | 只读 WorkspaceAssistant | 否 |
 | `clarification` | AG-UI 结构化澄清门 | 否 |
-| `implementation_fix` | frontend/backend/workspace SmallTask wrapper | frontend/backend/fullstack 按分类归属直接执行；workspace 普通文件仍受精确路径授权约束 |
+| `implementation_fix` | frontend/backend SmallTask wrapper | 默认先展示整理后的需求及修改范围并等待确认；关闭 `confirmScopeBeforeExecution` 时需求明确后直接执行，需求不明确时仍先澄清；fullstack 顺序调用 backend、frontend；所有写入限定在对应目录，目录外目标执行前拒绝 |
 | `formal_revision` | Coordinator 再选择 branch | 先确认只读影响范围，再进入设计阶段或工作台草稿流程 |
 
 模型只能输出结构化分类候选，不能输出任意 Graph 节点名或直接获得写权限。
@@ -224,10 +224,10 @@ Coordinator 先由模型按语义分类，再由服务端执行不依赖自然�
 1. 新增、删除、移除、下线或重命名页面、实体、角色、模块、操作或业务流程，属于 `formal_revision`；口语表达与正式表达等价。
 2. API method、path、request、response、错误码、权限、数据来源、表、列、约束、事务或副作用变化，按模型输出进入对应 formal branch。
 3. 既有页面的视觉、布局、间距、文案、响应式和交互微调属于 `implementation_fix/frontend`；只有新增页面/模块或改变业务行为、验收规则等产品语义时才进入 `formal_revision`。
-4. 目标不唯一、期望结果存在实质歧义或置信度低于 0.70 时先澄清，不能猜测代码路径。
+4. 请求缺少具体修改对象或期望结果（例如只说“前端需求”）、目标不唯一、期望结果存在实质歧义或置信度低于 0.70 时先澄清，不能猜测代码路径。
 5. 请求或候选路径涉及 `.devagentstudio` 正式产物时，服务端禁止 `implementation_fix`。
 6. 服务端校验 route、branch、revisionType、earliestArtifact、owner 和候选范围字段；只纠正不安全或不一致的结构，不重新解释用户自然语言，也不追加模型证据分析。
-7. `implementation_fix` 的 frontend/backend/fullstack owner 在分类完成后直接执行；workspace owner 的普通文件修改仍受精确路径授权约束。
+7. `implementation_fix` 的 frontend/backend/fullstack owner 在分类完成后默认等待实现范围确认；关闭开关时，需求明确后直接执行，需求不明确时仍先澄清。写入限制在对应的 `frontend/`、`backend/` 根目录，全栈可写两者，其他路径在执行前拒绝。
 
 ### 3.4 上下文输入
 
@@ -329,7 +329,7 @@ flowchart TD
     E -- casual_chat --> F["直接回答"]
     E -- workspace_question --> G["只读工作区回答"]
     E -- clarification --> H["等待结构化澄清"]
-    E -- implementation_fix --> I["非 workspace 先确认实现范围，再 SmallTask -> 范围验证 -> 完成"]
+    E -- implementation_fix --> I["需求不明确先澄清；开关开启时展示整理后的需求和范围并等待确认；然后 SmallTask -> 范围验证 -> 完成"]
     E -- formal_revision --> J["展示影响范围确认卡"]
     J -- 取消 --> K["结束，不执行 branch"]
     J -- 确认返回设计阶段 --> L["现有设计阶段修订"]
@@ -677,7 +677,7 @@ SmallTask 只执行有界实现任务：
 - 越界时返回 `requires_workflow`，由 Coordinator 重新分类；
 - `completed` 只表示修改可进入独立验证，不等于正式计划确认。
 
-普通 `README`、`docs/*.md`、测试、脚本和配置可以由 workspace SmallTask 修改；RequirementSpec、ProductPlan 和设计阶段修改进入 `design_stage_revision`，TechnicalPlan Markdown 进入 `workbench_plan_revision`。
+自由对话中的局部实现由 frontend/backend SmallTask 执行，只允许写入对应的 `frontend/` 或 `backend/` 目录（全栈可写两者）；目录外目标在执行前拒绝。RequirementSpec、ProductPlan 和设计阶段修改进入 `design_stage_revision`，TechnicalPlan Markdown 进入 `workbench_plan_revision`。
 
 ### 8.3 专业 Agent 复用
 
@@ -1068,7 +1068,7 @@ safe revert service
 | 现有能力 | 处理方式 |
 | --- | --- |
 | workspace scan、闲聊、只读问答 | 原样复用 |
-| frontend/backend/workspace SmallTask | 原样复用，继续禁止正式产物 |
+| frontend/backend SmallTask | 前后端目录根是唯一可写范围，继续禁止正式产物 |
 | direct integration test + RepairPlanner | 原样复用 |
 | direct formal handoff | 替换固定节点为影响范围确认；approved 后按 branch handoff |
 | application-planning Graph/thread/checkpoint | design branch 原样复用，返回最早设计节点并沿原确认链执行 |

@@ -219,6 +219,7 @@ import RecoverySurface from './recoverySurface'
 import { revisionContinuationHandoffFromWorkflow } from '../../service/applicationPagePlanning'
 import {
   applicationPlanningRecoveryIncident,
+  isDirectModificationScopeDenied,
   workbenchRecoveryIncident
 } from '../../service/recoveryIncident'
 import { runPlanningStageEntryTransaction } from './planningStageEntry'
@@ -2576,9 +2577,12 @@ export default function AiChatPanel({
 
   // 普通二次修改发送前清理旧的页面详细设计标记，避免历史 Workflow 触发进度卡片。
   const handleConversationSend = useCallback(
-    async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+    async (
+      workflowDebug?: WorkflowDebugOptions,
+      confirmScopeBeforeExecution?: boolean
+    ): Promise<void> => {
       setGeneratingDetailTargetKey('')
-      await handleSend(workflowDebug)
+      await handleSend(workflowDebug, confirmScopeBeforeExecution)
     },
     [handleSend]
   )
@@ -4032,6 +4036,10 @@ export default function AiChatPanel({
         : recoveryError,
     globalFallbackError
   })
+  const globalFallbackScopeDenied = isDirectModificationScopeDenied(
+    latestWorkflowForDisplay,
+    globalFallback.error
+  )
   // 无当前执行所属会话时，不把共享规划、预览或投影错误转交给其他会话和阶段。
   const showGlobalFallback =
     globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
@@ -5404,8 +5412,9 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
+                      title={globalFallbackScopeDenied ? '无权修改该路径' : undefined}
                       error={globalFallback.error}
-                      onRetry={pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
+                      onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
                         ? handleRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
@@ -5509,6 +5518,18 @@ export default function AiChatPanel({
                       isTechnicalPlanningPhase
                         ? '可以询问技术规划或报错原因，也可以描述要修改的技术方案…'
                         : productConversationAvailable ? PRODUCT_CONVERSATION_PLACEHOLDER : undefined
+                    }
+                    showScopeConfirmationToggle={
+                      !productConversationAvailable && !isApplicationPlanningPhase
+                    }
+                    initialScopeConfirmationEnabled={
+                      activeWorkflow?.summary.status === 'requires_user_input' &&
+                      [
+                        'direct_modification_clarification',
+                        'implementation_fix_confirmation'
+                      ].includes(String(activeWorkflow.summary.clarification?.mode || ''))
+                        ? activeWorkflow.summary.clarification?.confirmScopeBeforeExecution
+                        : undefined
                     }
                     sendDisabled={productConversationSendDisabled}
                     sendDisabledHint={

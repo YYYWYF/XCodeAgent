@@ -5,9 +5,9 @@ import {
   StopOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Button, Input, Select, Tag, Tooltip, Typography } from 'antd'
+import { Button, Input, Select, Switch, Tag, Tooltip, Typography } from 'antd'
 import type { KeyboardEvent, ReactElement } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   ChatMessageSkill,
   EditorMode,
@@ -49,9 +49,14 @@ type ChatComposerProps = {
   onDraftChange: (value: string) => void
   onInspectedElementContextClear?: () => void
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
-  onSend: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
+  onSend: (
+    workflowDebug?: WorkflowDebugOptions,
+    confirmScopeBeforeExecution?: boolean
+  ) => Promise<void>
   onStopGenerating: () => void
   placeholder?: string
+  showScopeConfirmationToggle?: boolean
+  initialScopeConfirmationEnabled?: boolean
   sendDisabled?: boolean
   sendDisabledHint?: string
   stopping: boolean
@@ -76,6 +81,8 @@ export default function ChatComposer({
   onSend,
   onStopGenerating,
   placeholder,
+  showScopeConfirmationToggle = false,
+  initialScopeConfirmationEnabled = true,
   sendDisabled = false,
   sendDisabledHint,
   stopping,
@@ -86,6 +93,9 @@ export default function ChatComposer({
   const initialBuildScope = workflowDebugBuildScope(activeWorkflow)
   const resumeNodeOptions = workflowDebugNodesForStage(debugStage)
   const [debugEnabled, setDebugEnabled] = useState(debugOnly)
+  const [confirmScopeBeforeExecution, setConfirmScopeBeforeExecution] = useState(
+    initialScopeConfirmationEnabled
+  )
   const [traceOpen, setTraceOpen] = useState(false)
   const [resumeFrom, setResumeFrom] = useState(initialResumeFrom)
   const [buildScopeType, setBuildScopeType] =
@@ -96,6 +106,12 @@ export default function ChatComposer({
   const [buildScopeApiContractId, setBuildScopeApiContractId] = useState(
     initialBuildScope.apiContractId || ''
   )
+  // 从待处理的二次修改澄清或确认卡恢复本轮开关状态。
+  useEffect(() => {
+    if (typeof initialScopeConfirmationEnabled === 'boolean') {
+      setConfirmScopeBeforeExecution(initialScopeConfirmationEnabled)
+    }
+  }, [initialScopeConfirmationEnabled])
   const selectedResumeFrom = resumeNodeOptions.some((option) => option.value === resumeFrom)
     ? resumeFrom
     : resumeNodeOptions[0]?.value || ''
@@ -144,7 +160,8 @@ export default function ChatComposer({
         ? { enabled: true, resumeFrom: stageMention.node }
         : debugStage === 'planning' && productDesignStageMentionFromText(draft, debugStage)
           ? undefined
-          : currentDebugOptions()
+          : currentDebugOptions(),
+      confirmScopeBeforeExecution
     )
   }
 
@@ -385,31 +402,50 @@ export default function ChatComposer({
                 {stopping ? 'Agent 正在退出，请稍候' : 'Agent 正在运行，结束任务后可调试'}
               </Text>
             )}
-            {(loading || stopping) && !debugOnly ? (
-              <Button
-                aria-label={stopping ? '正在停止生成' : '停止生成'}
-                aria-busy={stopping}
-                className={cx('composer-send-button')}
-                danger
-                disabled={stopping}
-                loading={stopping}
-                icon={<StopOutlined />}
-                onClick={onStopGenerating}
-                shape="circle"
-                title={stopping ? '正在停止生成…' : '停止生成'}
-              />
-            ) : (
-              <Button
-                aria-label={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
-                className={cx('composer-send-button')}
-                disabled={!canSend || workspaceBusy || sendDisabled || (debugOnly && loading)}
-                icon={<SendOutlined />}
-                onClick={handleSend}
-                shape="circle"
-                title={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
-                type="primary"
-              />
-            )}
+            <div className={cx('composer-send-actions')}>
+              {showScopeConfirmationToggle && !debugEnabled && (
+                <Tooltip
+                  overlayClassName={cx('composer-tool-tooltip')}
+                  title="开启后会先整理澄清后的需求和修改范围，确认后才开始改代码；关闭时只在需求不明确时追问。"
+                >
+                  <label className={cx('composer-scope-confirmation')}>
+                    <Switch
+                      aria-label="先确认修改范围"
+                      checked={confirmScopeBeforeExecution}
+                      disabled={loading || workspaceBusy || sendDisabled}
+                      onChange={setConfirmScopeBeforeExecution}
+                      size="small"
+                    />
+                    <Text>先澄清后开发</Text>
+                  </label>
+                </Tooltip>
+              )}
+              {(loading || stopping) && !debugOnly ? (
+                <Button
+                  aria-label={stopping ? '正在停止生成' : '停止生成'}
+                  aria-busy={stopping}
+                  className={cx('composer-send-button')}
+                  danger
+                  disabled={stopping}
+                  loading={stopping}
+                  icon={<StopOutlined />}
+                  onClick={onStopGenerating}
+                  shape="circle"
+                  title={stopping ? '正在停止生成…' : '停止生成'}
+                />
+              ) : (
+                <Button
+                  aria-label={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
+                  className={cx('composer-send-button')}
+                  disabled={!canSend || workspaceBusy || sendDisabled || (debugOnly && loading)}
+                  icon={<SendOutlined />}
+                  onClick={handleSend}
+                  shape="circle"
+                  title={debugEnabled ? '从指定节点执行' : '发送给 Workflow'}
+                  type="primary"
+                />
+              )}
+            </div>
           </div>
         </div>
       </div>

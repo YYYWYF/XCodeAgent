@@ -958,6 +958,12 @@ export type WorkflowApiDesignReadinessItem = {
 
 export type WorkflowClarification = {
   mode?: string
+  confirmScopeBeforeExecution?: boolean
+  clarifiedRequest?: string
+  reason?: string
+  owner?: 'frontend' | 'backend' | 'fullstack' | string
+  requestedPaths?: string[]
+  target?: Record<string, unknown>
   diffReviewFileCount?: number
   status?: string
   question_schema?: string

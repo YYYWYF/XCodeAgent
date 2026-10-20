@@ -217,7 +217,7 @@ def route_from_change_impact(
             confidence=0.0,
         )
         return RevisionRoutingResult(candidate=candidate)
-    safe_owner = owner if owner in {"frontend", "backend", "fullstack", "workspace"} else "unknown"
+    safe_owner = owner if owner in {"frontend", "backend", "fullstack"} else "unknown"
     candidate = RevisionRoutingCandidate(
         route=RevisionRoute.IMPLEMENTATION_FIX,
         owner=safe_owner,

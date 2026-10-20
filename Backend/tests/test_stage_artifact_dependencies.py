@@ -64,7 +64,7 @@ class StageArtifactDependencyTests(unittest.TestCase):
             "ui_confirmation": {"requirement_spec", "product_plan", "ui_designs"},
         }
         source_only = {"inspect_workspace", "scan_workspace_code", "scan_change_impact_code", "classify_intent",
-            "execute_frontend", "execute_backend", "execute_workspace", "validate_direct_fix",
+            "execute_frontend", "execute_backend", "validate_direct_fix",
             "direct_modification_repair", "finalize_direct_modification"}
         without_tasks = source_only | set(planning) | {"technical_planning_begin", "technical_planning_generate",
             "technical_planning_commit", "technical_planning_confirm", "template_reconcile", "project_planning",

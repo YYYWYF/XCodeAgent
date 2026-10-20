@@ -91,6 +91,7 @@ export type SendWorkflowMessageOptions = {
   conversationApprovedPaths?: string[]
   conversationHandoffDecision?: 'approved' | 'rejected'
   conversationImpactInteractionId?: string
+  conversationConfirmScopeBeforeExecution?: boolean
 }
 
 /** 将已选 DOM 的源码文件和行号直接附加到普通二次修改需求。 */
@@ -169,6 +170,9 @@ export function buildWorkflowForwardedProps(
             : {}),
           ...(options.conversationImpactInteractionId !== undefined
             ? { impactInteractionId: options.conversationImpactInteractionId }
+            : {}),
+          ...(options.conversationConfirmScopeBeforeExecution !== undefined
+            ? { confirmScopeBeforeExecution: options.conversationConfirmScopeBeforeExecution }
             : {})
         }
       : undefined
