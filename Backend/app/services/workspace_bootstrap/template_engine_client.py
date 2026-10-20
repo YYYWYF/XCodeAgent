@@ -48,7 +48,7 @@ class TemplateEngineClient:
         """调用 V3 `/v1/generate` 并分块写临时 ZIP，同时计算 SHA-256。"""
 
         if not self._base_url:
-            raise TemplateEngineError("模板生成服务地址未配置，无法生成 V3 TemplateState。")
+            raise TemplateEngineError("模板生成服务地址未配置，无法生成模板代码。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
