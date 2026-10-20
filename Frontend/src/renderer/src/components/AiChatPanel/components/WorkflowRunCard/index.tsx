@@ -271,6 +271,8 @@ export default function WorkflowRunCard({
   const productPlanObject = readProductPlan(workflow)
   const projectPlanObject = readProjectPlan(workflow)
   const technicalPlanObject = readTechnicalPlan(workflow)
+  // 技术规划弹框的「页面概览」版块需要上游 RequirementSpec 提取页面风格，故一并读取。
+  const requirementSpecObject = readRequirementSpec(workflow)
   // 产物确认答案键必须与当前 mode 一一对应，避免确认产品规划时误发需求确认答案。
   const artifactAnswerKey =
     clarification?.mode === 'requirement_document_confirmation'
@@ -672,6 +674,9 @@ export default function WorkflowRunCard({
                       ? technicalPlanObject
                       : projectPlanObject
                 }
+                // 技术规划弹框「页面概览」版块复用上游产物：交互/布局来自 productPlan，风格来自 spec。
+                productPlan={productPlanObject}
+                spec={requirementSpecObject}
                 planType={
                   clarification?.mode === 'requirement_document_confirmation'
                     ? 'product'
@@ -1078,7 +1083,9 @@ export function PlanConfirmationCard({
   onRevise,
   plan,
   planType,
+  productPlan,
   requiresConfirmation,
+  spec,
   title
 }: {
   artifact?: WorkflowConfirmationArtifact
@@ -1088,7 +1095,11 @@ export function PlanConfirmationCard({
   onRevise: (request: string) => void
   plan?: Record<string, unknown>
   planType: 'product' | 'technical' | 'project'
+  /** 技术规划弹框「页面概览」版块用：交互/布局来自 productPlan。 */
+  productPlan?: Record<string, unknown>
   requiresConfirmation: boolean
+  /** 技术规划弹框「页面概览」版块用：页面风格从 spec 自由文本提取。 */
+  spec?: Record<string, unknown>
   title: string
 }): ReactElement {
   const [viewing, setViewing] = useState(false)

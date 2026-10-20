@@ -967,3 +967,311 @@
     grid-template-columns: minmax(82px, 0.8fr) auto minmax(108px, 1.2fr);
   }
 }
+
+// ===== 页面概览 tab：彩色标题条 + 紧凑行 =====
+// 三块各用一个带图标的彩色标题条区分（交互=紫、布局=绿、风格=蓝），
+// 内容用行内标签而非嵌套卡片，减少层级、避免与需求文档面板的卡片网格重复视觉。
+.@{class-prefix}-page-design-overview {
+  gap: 14px;
+}
+
+.@{class-prefix}-page-design-overview-block {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+// 彩色标题条：图标 + 标题 + 渐变细线，颜色随块语义变化。
+.@{class-prefix}-page-design-overview-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--wb-border);
+  color: var(--wb-text);
+  font-size: 13px;
+  font-weight: 600;
+
+  > .anticon {
+    flex: 0 0 auto;
+    font-size: 14px;
+  }
+
+  > span {
+    flex: 0 0 auto;
+  }
+
+  // 标题条右侧的渐变填充条，让标题条不只是一行文字，增加视觉层次。
+  &::after {
+    flex: 1 1 auto;
+    height: 1px;
+    min-width: 16px;
+    background: linear-gradient(
+      to right,
+      color-mix(in srgb, currentColor 32%, transparent),
+      transparent
+    );
+    content: '';
+  }
+}
+
+// 三块语义色：交互=紫(主色)、布局=绿、风格=蓝。
+.@{class-prefix}-page-design-overview-block.is-interaction .@{class-prefix}-page-design-overview-bar {
+  color: var(--wb-accent);
+
+  .anticon {
+    color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-page-design-overview-block.is-layout .@{class-prefix}-page-design-overview-bar {
+  color: var(--wb-code-add-text);
+
+  .anticon {
+    color: var(--wb-code-add-text);
+  }
+}
+
+// 风格块用蓝色：light/dark 各给一个值，避免新增全局 token。
+.@{class-prefix}-page-design-overview-block.is-style .@{class-prefix}-page-design-overview-bar {
+  color: #2563eb;
+
+  .anticon {
+    color: #2563eb;
+  }
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .@{class-prefix}-page-design-overview-block.is-style .@{class-prefix}-page-design-overview-bar,
+body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .@{class-prefix}-page-design-overview-block.is-style .@{class-prefix}-page-design-overview-bar {
+  color: #6ea8fe;
+
+  .anticon {
+    color: #6ea8fe;
+  }
+}
+
+// 子卡网格：每页/每维度一张卡，自适应多列，避免单列长滚动。
+.@{class-prefix}-page-design-overview-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 9px;
+  min-width: 0;
+}
+
+// 子卡：浅底 + 左侧语义色条，让每张卡有归属感，不靠加重边框。
+.@{class-prefix}-page-design-overview-card {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px 12px 11px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+
+  &:hover {
+    border-color: var(--wb-accent-border);
+    box-shadow: 0 2px 10px color-mix(in srgb, var(--wb-accent) 8%, transparent);
+  }
+}
+
+// 卡片标题：页名/维度名，左侧带语义色竖条强化块归属。
+.@{class-prefix}-page-design-overview-card-title {
+  position: relative;
+  padding-left: 9px;
+  overflow: hidden;
+
+  &::before {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    left: 0;
+    width: 3px;
+    border-radius: 2px;
+    background: currentColor;
+    content: '';
+    opacity: 0.55;
+  }
+
+  .is-interaction & {
+    color: var(--wb-accent);
+  }
+
+  .is-layout & {
+    color: var(--wb-code-add-text);
+  }
+
+  .is-style & {
+    color: #2563eb;
+  }
+
+  body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .is-style &,
+  body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .is-style & {
+    color: #6ea8fe;
+  }
+
+  > .ant-typography {
+    // 继承 card-title 的语义色（紫/绿/蓝），让页名/维度名带颜色突出。
+    color: currentColor;
+  }
+}
+
+// 页面目标：次级灰文，放在标题下做一句话说明。
+.@{class-prefix}-page-design-overview-goal {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+// 操作列表：每条操作一行，无额外边框，靠间距分隔。
+.@{class-prefix}-page-design-overview-action-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.@{class-prefix}-page-design-overview-action {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-page-design-overview-action-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+
+  > .ant-typography {
+    // 操作名用交互块语义色(紫)，突出可操作内容。
+    overflow: hidden;
+    min-width: 0;
+    color: var(--wb-accent);
+    font-size: 13px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+// 行为类型胶囊：按类型分色，让跳转/提交/变更一眼可辨。
+.@{class-prefix}-page-design-overview-action-type {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--wb-text-secondary);
+  background: var(--wb-canvas);
+  font-size: 11px;
+  font-style: normal;
+
+  // 跳转=蓝。
+  &.is-navigation {
+    color: #2563eb;
+    background: rgba(37, 99, 235, 0.1);
+  }
+
+  // 提交=绿。
+  &.is-submit {
+    color: var(--wb-code-add-text);
+    background: color-mix(in srgb, var(--wb-code-add-text) 12%, transparent);
+  }
+
+  // 数据变更=橙。
+  &.is-mutation {
+    color: #b45309;
+    background: rgba(180, 83, 9, 0.1);
+  }
+}
+
+// 暗色主题下蓝/橙胶囊用暗色值，保证可读。
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .@{class-prefix}-page-design-overview-action-type.is-navigation,
+body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .@{class-prefix}-page-design-overview-action-type.is-navigation {
+  color: #6ea8fe;
+  background: rgba(110, 168, 254, 0.16);
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .@{class-prefix}-page-design-overview-action-type.is-mutation,
+body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .@{class-prefix}-page-design-overview-action-type.is-mutation {
+  color: #e8a13d;
+  background: rgba(232, 161, 61, 0.16);
+}
+
+.@{class-prefix}-page-design-overview-action-result {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+// 业务信息项磁贴：网格平铺，每项独立一格。
+.@{class-prefix}-page-design-overview-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.@{class-prefix}-page-design-overview-tile {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--wb-surface-subtle);
+
+  > strong {
+    // 信息项标签用布局块语义色(绿)，与卡片标题色系呼应。
+    overflow: hidden;
+    color: var(--wb-code-add-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > span {
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}
+
+// 标签行：跳转目标 / 风格标签复用。
+.@{class-prefix}-page-design-overview-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+
+  .ant-tag {
+    margin-inline-end: 0;
+  }
+}
+
+// 风格来源原文：次级灰文，放在标签下。
+.@{class-prefix}-page-design-overview-source {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+// 窄屏：子卡单列，磁贴收窄。
+@container (max-width: 560px) {
+  .@{class-prefix}-page-design-overview-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .@{class-prefix}-page-design-overview-tiles {
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  }
+}

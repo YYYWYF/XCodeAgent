@@ -26,7 +26,13 @@ import { SchemaTree } from './TechnicalPlanSchemaTree'
 
 const { Text } = Typography
 
-export type SectionKey = 'architecture' | 'entities' | 'api-contracts' | 'page-bindings' | 'authorization'
+export type SectionKey =
+  | 'architecture'
+  | 'entities'
+  | 'api-contracts'
+  | 'page-bindings'
+  | 'authorization'
+  | 'page-design-overview'
 
 type SectionProps = {
   sectionKey: SectionKey

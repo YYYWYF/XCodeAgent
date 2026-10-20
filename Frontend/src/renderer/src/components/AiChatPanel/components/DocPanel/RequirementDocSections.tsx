@@ -26,7 +26,11 @@ import {
   stringItems,
   textValue,
   type JsonRecord,
-  type RequirementPageRow
+  type RequirementApiContractRow,
+  type RequirementInteractionRow,
+  type RequirementLayoutRow,
+  type RequirementPageRow,
+  type RequirementStyleHintRow
 } from './RequirementDocPanelData'
 
 const { Text } = Typography
@@ -129,13 +133,30 @@ export function RequirementOverviewSection({
           <Text type="secondary">暂无功能模块</Text>
         )}
       </div>
-      {/* 概览扩展：页面交互。来自 ProductPlan 各页 actions / navigation_targets。 */}
+      {/* 概览扩展四块：页面交互 / 页面布局 / 页面风格 / 接口请求与响应。
+          各自抽成独立 section 组件，便于产品/技术规划面板按数据来源单独复用。 */}
+      <RequirementInteractionSection rows={interactions} />
+      <RequirementLayoutSection rows={layouts} />
+      <RequirementStyleSection rows={styleHints} />
+      <RequirementApiContractSection rows={apiContracts} />
+    </section>
+  )
+}
+
+/** 渲染「页面交互」区块：按页面聚合 ProductPlan 各页的操作与跳转目标。 */
+export function RequirementInteractionSection({
+  rows
+}: {
+  rows: RequirementInteractionRow[]
+}): ReactElement {
+  return (
+    <>
       <div className={cx('requirement-doc-section-title')}>
         <InteractionOutlined /> <span>页面交互</span>
       </div>
       <div className={cx('requirement-doc-card-list')}>
-        {interactions.length ? (
-          interactions.map((interaction) => (
+        {rows.length ? (
+          rows.map((interaction) => (
             <article className={cx('requirement-doc-card')} key={interaction.key}>
               <div className={cx('requirement-doc-card-heading')}>
                 <strong>{interaction.pageName}</strong>
@@ -175,13 +196,24 @@ export function RequirementOverviewSection({
           <Text type="secondary">暂无页面交互</Text>
         )}
       </div>
-      {/* 概览扩展：页面布局。来自 ProductPlan 各页 information_items / goal。 */}
+    </>
+  )
+}
+
+/** 渲染「页面布局」区块：按页面展示目标与业务信息项。 */
+export function RequirementLayoutSection({
+  rows
+}: {
+  rows: RequirementLayoutRow[]
+}): ReactElement {
+  return (
+    <>
       <div className={cx('requirement-doc-section-title')}>
         <LayoutOutlined /> <span>页面布局</span>
       </div>
       <div className={cx('requirement-doc-card-list')}>
-        {layouts.length ? (
-          layouts.map((layout) => (
+        {rows.length ? (
+          rows.map((layout) => (
             <article className={cx('requirement-doc-card')} key={layout.key}>
               <div className={cx('requirement-doc-card-heading')}>
                 <strong>{layout.pageName}</strong>
@@ -205,13 +237,24 @@ export function RequirementOverviewSection({
           <Text type="secondary">暂无页面布局</Text>
         )}
       </div>
-      {/* 概览扩展：页面风格。UiDesign 无独立字段，从 spec 自由文本按维度提取。 */}
+    </>
+  )
+}
+
+/** 渲染「页面风格」区块：从 spec 自由文本按维度提取的风格标签卡。 */
+export function RequirementStyleSection({
+  rows
+}: {
+  rows: RequirementStyleHintRow[]
+}): ReactElement {
+  return (
+    <>
       <div className={cx('requirement-doc-section-title')}>
         <BgColorsOutlined /> <span>页面风格</span>
       </div>
       <div className={cx('requirement-doc-card-list')}>
-        {styleHints.length ? (
-          styleHints.map((hint) => (
+        {rows.length ? (
+          rows.map((hint) => (
             <article className={cx('requirement-doc-card')} key={hint.key}>
               <div className={cx('requirement-doc-card-heading')}>
                 <strong>{hint.dimensionLabel}</strong>
@@ -228,13 +271,24 @@ export function RequirementOverviewSection({
           <Text type="secondary">暂无页面风格</Text>
         )}
       </div>
-      {/* 概览扩展：接口请求与响应。来自 TechnicalPlan.api_contracts。 */}
+    </>
+  )
+}
+
+/** 渲染「接口请求与响应」区块：遍历 TechnicalPlan.api_contracts 拍平的摘要卡。 */
+export function RequirementApiContractSection({
+  rows
+}: {
+  rows: RequirementApiContractRow[]
+}): ReactElement {
+  return (
+    <>
       <div className={cx('requirement-doc-section-title')}>
         <ApiOutlined /> <span>接口请求与响应</span>
       </div>
       <div className={cx('requirement-doc-card-list')}>
-        {apiContracts.length ? (
-          apiContracts.map((contract) => (
+        {rows.length ? (
+          rows.map((contract) => (
             <article className={cx('requirement-doc-card')} key={contract.key}>
               <div className={cx('requirement-doc-card-heading')}>
                 <strong>{contract.method} {contract.path}</strong>
@@ -253,7 +307,7 @@ export function RequirementOverviewSection({
           <Text type="secondary">暂无接口请求与响应</Text>
         )}
       </div>
-    </section>
+    </>
   )
 }
 

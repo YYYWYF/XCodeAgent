@@ -119,7 +119,11 @@ export default function DocPanel({
               </div>
             ) : isTechnicalPlan ? (
               technicalPlan && productPlan ? (
-                <TechnicalPlanDocPanel plan={technicalPlan} productPlan={productPlan} />
+                <TechnicalPlanDocPanel
+                  plan={technicalPlan}
+                  productPlan={productPlan}
+                  spec={requirementSpec}
+                />
               ) : (
                 <div className={cx('doc-panel-empty')}>
                   <Text strong>技术规划可视化暂不可用</Text>
