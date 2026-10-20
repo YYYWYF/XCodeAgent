@@ -16,6 +16,8 @@ export type AgentChatMessage = {
   content: string
   skills?: ChatMessageSkill[]
   workflow?: WorkflowRunPayload
+  /** 工作流卡片已提交的最终操作结果，用于恢复历史状态。 */
+  workflowCardResult?: 'confirmed' | 'cancelled' | 'submitted'
   /** 当前 assistant 轮次的模型或 Workflow 错误，统一交给错误卡片渲染。 */
   error?: string
   codeChanges?: WorkspaceCodeChangeSet

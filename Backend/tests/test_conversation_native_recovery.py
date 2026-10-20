@@ -90,7 +90,7 @@ class ConversationNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state["max_repair_iterations"], 3)
             if confirmation:
                 return {"status": "requires_user_input", "phase": "classify_intent",
-                        "clarification": {"mode": "implementation_fix_confirmation", "message": "请确认修改范围"}}
+                        "clarification": {"mode": "small_task_scope_confirmation", "message": "请确认修改范围"}}
             return {"status": "in_progress", "conversation_intent": "casual_chat"}
 
         async def reply(state):

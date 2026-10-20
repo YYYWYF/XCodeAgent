@@ -881,8 +881,6 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   code_review_repair_confirmation?: WorkflowCodeReviewRepairConfirmation
   /** 正式修改影响范围的结构化批准或拒绝动作。 */
   revision_impact_confirmation?: 'approved' | 'rejected'
-  /** 前后端实现修复开始前的用户确认。 */
-  implementation_fix_confirmation?: 'approved' | 'rejected'
   /** 正式草稿交互必须携带服务端绑定的 change、revision 与 hash。 */
   revision_draft_interaction?: WorkflowRevisionDraftInteraction
   /** API 开发门禁的映射重新检测动作。 */

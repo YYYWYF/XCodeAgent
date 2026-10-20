@@ -450,8 +450,8 @@ class DirectModificationPromptTests(unittest.TestCase):
 class DirectModificationNodeTests(unittest.TestCase):
     """验证分类、Agent 执行、测试和收口节点的快速模式语义。"""
 
-    def test_code_implementation_fix_requires_user_confirmation(self) -> None:
-        """前后端实现修复在写入代码前必须先展示确认门。"""
+    def test_code_implementation_fix_starts_after_owner_classification(self) -> None:
+        """前后端实现修复在归属分类后直接进入对应执行节点。"""
 
         decision = DirectModificationDecision(
             intent="implementation_fix",
@@ -472,12 +472,12 @@ class DirectModificationNodeTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(update["status"], "requires_user_input")
-        self.assertEqual(update["clarification"]["mode"], "implementation_fix_confirmation")
-        self.assertEqual(_route_classification(update), "finalize")
+        self.assertEqual(update["status"], "in_progress")
+        self.assertEqual(update["clarification"], {})
+        self.assertEqual(_route_classification(update), "execute_frontend")
 
     def test_dom_context_prioritizes_frontend_target_path(self) -> None:
-        """DOM 定位文件应进入实现确认和后续 Frontend Agent 的首选候选。"""
+        """DOM 定位文件应成为 Frontend Agent 的首选候选。"""
 
         decision = DirectModificationDecision(
             intent="implementation_fix",
@@ -508,10 +508,8 @@ class DirectModificationNodeTests(unittest.TestCase):
             update["direct_modification_target_paths"],
             ["frontend/src/pages/PageAgeEntry/index.tsx"],
         )
-        self.assertEqual(
-            update["clarification"]["requestedPaths"],
-            ["frontend/src/pages/PageAgeEntry/index.tsx"],
-        )
+        self.assertEqual(update["status"], "in_progress")
+        self.assertEqual(_route_classification(update), "execute_frontend")
 
     def test_workspace_implementation_fix_keeps_direct_path(self) -> None:
         """普通工作区文件实现修复不增加代码修改确认门。"""
@@ -1732,8 +1730,8 @@ class DirectModificationProtocolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "重新选择元素"):
                 resolve_direct_element_context(context, workspace_root=workspace)
 
-    def test_approved_implementation_confirmation_uses_server_checkpoint(self) -> None:
-        """实现确认必须复用服务端分类结果并从代码扫描节点继续。"""
+    def test_approved_small_task_scope_confirmation_uses_server_checkpoint(self) -> None:
+        """SmallTask 范围确认必须复用服务端分类结果继续执行。"""
 
         request = DirectModificationInput.model_validate(
             {
@@ -1761,24 +1759,23 @@ class DirectModificationProtocolTests(unittest.TestCase):
                     "workspacePath": "Frontend/src/Login.tsx",
                 },
                 "direct_modification_approved_paths": [],
-                "change_impact_code_scan_required": True,
                 "clarification": {
-                    "mode": "implementation_fix_confirmation",
+                    "mode": "small_task_scope_confirmation",
                     "requestedPaths": [],
                 },
             },
         )
 
         self.assertIsNotNone(continuation)
-        self.assertEqual(continuation["direct_modification_resume_node"], "scan_change_impact_code")
+        self.assertEqual(continuation["direct_modification_resume_node"], "execute_frontend")
         self.assertEqual(continuation["conversation_intent"], "implementation_fix")
         self.assertEqual(continuation["direct_modification_owner"], "frontend")
         self.assertEqual(continuation["request"], "修复登录按钮无响应")
         self.assertEqual(continuation["status"], "in_progress")
         self.assertEqual(continuation["element_context"]["line"], 8)
 
-    def test_rejected_implementation_confirmation_is_completed_terminal_state(self) -> None:
-        """取消实现修改确认必须直接成功收口，不得成为失败 Workflow。"""
+    def test_rejected_small_task_scope_confirmation_is_completed_terminal_state(self) -> None:
+        """拒绝 SmallTask 范围扩展后直接成功收口，不得成为失败 Workflow。"""
 
         request = DirectModificationInput.model_validate(
             {
@@ -1799,9 +1796,8 @@ class DirectModificationProtocolTests(unittest.TestCase):
                 "direct_modification_scope": "direct",
                 "direct_modification_target_paths": ["Frontend/src/Login.tsx"],
                 "direct_modification_approved_paths": [],
-                "change_impact_code_scan_required": True,
                 "clarification": {
-                    "mode": "implementation_fix_confirmation",
+                    "mode": "small_task_scope_confirmation",
                     "requestedPaths": [],
                 },
             },
@@ -1835,8 +1831,8 @@ class DirectModificationProtocolTests(unittest.TestCase):
                 checkpoint_values={"status": "completed"},
             )
 
-    def test_stream_approved_confirmation_emits_code_scan_as_first_node(self) -> None:
-        """确认续跑的 AG-UI 事件应从代码证据扫描开始且不包含意图分类。"""
+    def test_stream_approved_small_task_scope_confirmation_resumes_owner_node(self) -> None:
+        """SmallTask 范围确认的 AG-UI 续跑直接回到原代码归属节点。"""
 
         captured_states: list[dict[str, Any]] = []
         checkpoint_values = {
@@ -1848,11 +1844,8 @@ class DirectModificationProtocolTests(unittest.TestCase):
             "direct_modification_scope": "direct",
             "direct_modification_target_paths": ["Frontend/src/Login.tsx"],
             "direct_modification_approved_paths": [],
-            "change_impact_enabled": True,
-            "change_impact_code_scan_required": True,
-            "change_impact_analysis": {"analysisStatus": "completed"},
             "clarification": {
-                "mode": "implementation_fix_confirmation",
+                "mode": "small_task_scope_confirmation",
                 "requestedPaths": [],
             },
         }
@@ -1884,20 +1877,9 @@ class DirectModificationProtocolTests(unittest.TestCase):
                 )
 
             async def astream(self, initial_state, *_args, **_kwargs):
-                """发送确认后代码扫描、前端执行和收口事件。"""
+                """发送确认后前端执行和收口事件。"""
 
                 captured_states.append(initial_state)
-                yield "updates", {
-                    "scan_change_impact_code": {
-                        "phase": "change_impact_code_scan",
-                        "status": "in_progress",
-                        "message": "已取得目标代码证据。",
-                        "change_impact_code_scan": {
-                            "performed": True,
-                            "findings": [{"path": "Frontend/src/Login.tsx"}],
-                        },
-                    }
-                }
                 yield "updates", {
                     "execute_frontend": {
                         "phase": "execute_frontend",
@@ -1925,7 +1907,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
                         "messages": [
                             {
                                 "role": "user",
-                                "content": "用户已确认实现修改范围，请继续执行。",
+                                "content": "用户已确认扩大代码范围，请继续执行。",
                             }
                         ],
                         "forwardedProps": {
@@ -1948,12 +1930,9 @@ class DirectModificationProtocolTests(unittest.TestCase):
 
         self.assertEqual(len(captured_states), 1)
         self.assertEqual(captured_states[0]["request"], "修复登录按钮无响应")
-        self.assertEqual(
-            captured_states[0]["direct_modification_resume_node"],
-            "scan_change_impact_code",
-        )
+        self.assertEqual(captured_states[0]["direct_modification_resume_node"], "execute_frontend")
         self.assertNotIn("判断修改类型", frames)
-        self.assertIn("取得目标代码证据", frames)
+        self.assertIn("前端修改完成", frames)
 
     def test_stream_rejected_revision_impact_finishes_without_scan_or_error(self) -> None:
         """取消正式修改影响范围后应直接成功收口，不扫描、不分类、不报错。"""
@@ -2153,13 +2132,14 @@ class DirectModificationProtocolTests(unittest.TestCase):
         self.assertIs(capability["targetRequired"], False)
         self.assertEqual(capability["executionPolicy"]["subagentsEnabled"], False)
         self.assertEqual(capability["executionPolicy"]["todoPlanningEnabled"], False)
-        self.assertEqual(
-            capability["executionPolicy"]["implementationFixConfirmation"]["requiredOwners"],
-            ["frontend", "backend", "fullstack"],
-        )
+        self.assertNotIn("implementationFixConfirmation", capability["executionPolicy"])
         self.assertEqual(
             capability["executionPolicy"]["confirmationContinuation"]["skips"],
             ["scan_workspace_code", "classify_intent"],
+        )
+        self.assertEqual(
+            capability["executionPolicy"]["confirmationContinuation"]["modes"],
+            ["small_task_scope_confirmation"],
         )
         self.assertIs(
             capability["formalRevision"]["additionalModelImpactAnalysis"],

@@ -211,44 +211,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
                 ],
             },
         }
-    if (
-        decision.intent == "implementation_fix"
-        and decision.owner in {"frontend", "backend", "fullstack"}
-        and str(state.get("direct_modification_handoff_decision") or "").strip().lower()
-        != "approved"
-    ):
-        target_resources = _revision_affected_resources(
-            state.get("change_target"),
-            list(decision.affected_resource_keys),
-        )
-        owner_label = {
-            "frontend": "前端代码",
-            "backend": "后端代码",
-            "fullstack": "前后端代码",
-        }[decision.owner]
-        return {
-            **base,
-            "status": "requires_user_input",
-            "message": f"该请求属于{owner_label}实现修复，请先确认修改范围。",
-            "clarification": {
-                "mode": "implementation_fix_confirmation",
-                "status": "requires_user_input",
-                "message": f"该请求属于不改变已确认产品语义的{owner_label}实现修复。",
-                "reason": decision.reason,
-                "requestedPaths": target_paths,
-                "requestedResources": target_resources,
-                "owner": decision.owner,
-                "questions": [
-                    {
-                        "id": "implementation_fix_confirmation",
-                        "header": "实现修改确认",
-                        "question": f"将直接修改{owner_label}并执行后续检查，是否确认继续？",
-                        "type": "yesno",
-                        "allowOther": False,
-                    }
-                ],
-            },
-        }
     if decision.intent == "casual_chat" and decision.response:
         return {
             **base,

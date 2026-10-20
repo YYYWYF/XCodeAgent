@@ -368,6 +368,10 @@ type MessageListProps = {
     answers: ClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>
   ) => Promise<void>
+  /** 已确认的技术规划通过当前技术规划对话发起修订。 */
+  onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
+  /** 技术规划生成、消息发送或工作区写入期间禁用已确认卡的修改入口。 */
+  reviseConfirmedTechnicalPlanDisabled?: boolean
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
   /** 错误来自当前设计阶段规划时，允许用户回到规划页重试。 */
   /** 模板生成失败时，只重试模板下载与初始化阶段。 */
@@ -380,7 +384,7 @@ type MessageListProps = {
   commitDisabled?: boolean
 }
 
-/** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
+/** 渲染聊天消息、Workflow 最终状态、历史卡片结果和代码变更操作。 */
 export default function MessageList({
   applicationLifecycle,
   applicationTemplatePreparationEligible,
@@ -421,6 +425,8 @@ export default function MessageList({
   onRevertCodeChanges,
   onRetryTemplateGeneration,
   onStartIterationPlanning,
+  onReviseConfirmedTechnicalPlan,
+  reviseConfirmedTechnicalPlanDisabled = false,
   revertingCodeChangeIds,
   onSubmitClarification,
   workspaceRoot,
@@ -428,6 +434,17 @@ export default function MessageList({
 }: MessageListProps): ReactElement {
   const planningWorkflow = planningState?.workflow
   const mutationDisabled = loading || actionsDisabled
+  let latestConfirmedTechnicalPlanMessageIndex = -1
+  for (let index = 0; index < messages.length; index += 1) {
+    const item = messages[index]
+    if (
+      item.workflow &&
+      item.workflowCardResult === 'confirmed' &&
+      workflowClarification(item.workflow)?.mode === 'technical_plan_confirmation'
+    ) {
+      latestConfirmedTechnicalPlanMessageIndex = index
+    }
+  }
   const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
   // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
   // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
@@ -863,7 +880,7 @@ export default function MessageList({
               const showPlanningLoading = Boolean(
                 messageLoading && !messageError && !message.revisionHandoff &&
                 !isUiDesignConfirmationCard && !showWorkflowCard && !planningActivityVisible &&
-                !visibleAssistantContent.trim()
+                !visibleAssistantContent.trim() && !(conversation && visibleProcessSteps?.length)
               )
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
@@ -958,7 +975,14 @@ export default function MessageList({
                               dagPendingPlanCompletion={dagPendingPlanCompletion}
                               loading={messageLoading}
                               onOpenPendingDagConfirmation={onOpenPendingDagConfirmation}
+                              runFinishedAt={
+                                message.workflow
+                                  ? applicationLifecycle?.endedExecutions?.[message.workflow.runId]
+                                      ?.execution.updatedAt
+                                  : undefined
+                              }
                               steps={visibleProcessSteps}
+                              workflow={message.workflow}
                             />
                           )}
                         {!hideEntityWorkflowChrome &&
@@ -1054,10 +1078,22 @@ export default function MessageList({
                               }
                               historicalClarificationAnswers={historicalClarificationAnswers}
                               interactionAvailability={interactionAvailability}
+                              workflowCardResult={message.workflowCardResult}
                               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
                               onSubmitClarification={onSubmitClarification}
+                              onReviseConfirmedTechnicalPlan={
+                                messageIndex === latestConfirmedTechnicalPlanMessageIndex &&
+                                currentPhase === 'planning' &&
+                                planningWorkflow &&
+                                planningWorkflowPhase(planningWorkflow) === 'technical_planning'
+                                  ? onReviseConfirmedTechnicalPlan
+                                  : undefined
+                              }
+                              reviseConfirmedTechnicalPlanDisabled={
+                                mutationDisabled || reviseConfirmedTechnicalPlanDisabled
+                              }
                               uiDesignActivePageId={uiDesignActivePageId}
                               onUiDesignActivePageChange={onUiDesignActivePageChange}
                               uiDesignActingPageIds={uiDesignActingPageIds}

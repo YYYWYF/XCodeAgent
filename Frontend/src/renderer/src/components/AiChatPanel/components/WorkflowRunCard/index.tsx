@@ -129,10 +129,15 @@ export type ClarificationAnswers = WorkflowClarificationAnswers
 type WorkflowRunCardProps = {
   disabled?: boolean
   interactionAvailability: WorkflowInteractionAvailability
+  workflowCardResult?: 'confirmed' | 'cancelled' | 'submitted'
   /** 已答完的历史澄清卡：header→答案 映射，存在时按原控件形态回填答案并以禁用态展示。 */
   historicalClarificationAnswers?: Record<string, string>
+  /** 当前技术规划会话繁忙时禁用已确认卡上的修改入口。 */
+  reviseConfirmedTechnicalPlanDisabled?: boolean
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
+  /** 已确认的技术规划通过当前规划会话发起正式修订。 */
+  onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -159,12 +164,16 @@ type WorkflowRunCardProps = {
   workspaceRoot?: string
 }
 
+/** 渲染 Workflow 交互卡片，并按已保存的操作结果恢复卡片状态。 */
 export default function WorkflowRunCard({
   disabled,
   historicalClarificationAnswers,
   interactionAvailability,
+  workflowCardResult,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
+  onReviseConfirmedTechnicalPlan,
+  reviseConfirmedTechnicalPlanDisabled,
   onSubmitClarification,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -302,8 +311,26 @@ export default function WorkflowRunCard({
                     | undefined
                 )?.length || clarificationQuestions.length
               : clarificationQuestions.length
+  const hasWorkflowCardResult = Boolean(workflowCardResult)
+  const revisionImpactDecision =
+    workflowCardResult === 'confirmed'
+      ? 'approved'
+      : workflowCardResult === 'cancelled'
+        ? 'rejected'
+        : undefined
+  const hasRevisionImpactDecision = Boolean(revisionImpactDecision)
+  const workflowCardStatusVariant =
+    workflowCardResult || (status === 'requires_user_input' ? 'pending' : undefined)
   const requiresConfirmation =
-    !staleFrontendPerformanceConfirmation && clarification?.status === 'requires_user_input'
+    !staleFrontendPerformanceConfirmation &&
+    clarification?.status === 'requires_user_input' &&
+    !hasWorkflowCardResult
+  // 技术规划正文由右侧文档面板展示；确认后左侧只保留确认状态和有效的修改入口。
+  const technicalPlanConfirmationResolved = Boolean(
+    clarification?.mode === 'technical_plan_confirmation' &&
+      artifactConfirmation &&
+      !requiresConfirmation
+  )
   const [answers, setAnswers] = useState<ClarificationAnswers>(() =>
     loadClarificationDraft(workflow.threadId, clarificationQuestions)
   )
@@ -352,9 +379,32 @@ export default function WorkflowRunCard({
             工作流执行
           </Text>
         </div>
-        <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
-          {workflowStatusText(status)}
-        </Tag>
+        {/* 阶段入口卡只表达跳转动作，不显示通用待确认状态标签。 */}
+        {!planningStageEntry ? (
+          <Tag
+            className={cx(
+              'workflow-run-status',
+              workflowCardStatusVariant && `workflow-run-status-${workflowCardStatusVariant}`
+            )}
+            color={
+              workflowCardResult === 'confirmed'
+                ? 'green'
+                : workflowCardResult === 'cancelled'
+                  ? 'default'
+                  : workflowCardResult === 'submitted'
+                    ? 'purple'
+                    : workflowStatusColor(status)
+            }
+          >
+            {workflowCardResult === 'confirmed'
+              ? '已确认'
+              : workflowCardResult === 'cancelled'
+                ? '已取消'
+                : workflowCardResult === 'submitted'
+                  ? '已提交'
+                  : workflowStatusText(status)}
+          </Tag>
+        ) : null}
       </div>
       {unitTestRunning ? (
         <div className={cx('workflow-run-progress')}>
@@ -427,7 +477,23 @@ export default function WorkflowRunCard({
         </div>
       )}
       {/* API 映射门禁使用专用卡片，即使没有通用问题列表也必须提供配置和确认入口。 */}
-      {(clarificationQuestions.length > 0 ||
+      {technicalPlanConfirmationResolved ? (
+        workflowCardResult === 'confirmed' && onReviseConfirmedTechnicalPlan ? (
+          <div className={cx('workflow-clarification')}>
+            <PlanConfirmationCard
+              artifact={undefined}
+              confirmed
+              disabled={Boolean(reviseConfirmedTechnicalPlanDisabled)}
+              onAbandon={() => undefined}
+              onConfirm={() => undefined}
+              onRevise={onReviseConfirmedTechnicalPlan}
+              planType="technical"
+              requiresConfirmation={false}
+              title={artifactConfirmation?.title || '技术规划'}
+            />
+          </div>
+        ) : null
+      ) : (clarificationQuestions.length > 0 ||
         artifactConfirmation ||
         uiDesignConfirmation ||
         apiDesignRequired ||
@@ -490,9 +556,10 @@ export default function WorkflowRunCard({
               type="error"
             />
           )}
-          {revisionImpact && requiresConfirmation ? (
+          {revisionImpact && (requiresConfirmation || hasRevisionImpactDecision) ? (
             <RevisionImpactReview
               disabled={disabled || interactionAvailability !== 'active'}
+              decision={revisionImpactDecision}
               impact={revisionImpact}
               onDecision={(decision) =>
                 onSubmitClarification?.(workflow, {
@@ -512,9 +579,11 @@ export default function WorkflowRunCard({
                 })
               }
             />
-          ) : planningStageEntry && requiresConfirmation ? (
+          ) : planningStageEntry ? (
             <PlanningStageEntryCard
-              disabled={disabled || interactionAvailability !== 'active'}
+              disabled={
+                disabled || interactionAvailability !== 'active' || !requiresConfirmation
+              }
               onEnterPlanning={() =>
                 onSubmitClarification?.(workflow, {
                   planning_stage_entry: 'enter',
@@ -1074,9 +1143,10 @@ function readRequirementsConfirmed(workflow: WorkflowRunPayload): boolean {
   return false
 }
 
-/** 规划文档确认卡片：展示当前文档并提交放弃或确认操作。 */
+/** 规划文档确认卡片：展示产物状态并提交当前阶段支持的确认或修改操作。 */
 export function PlanConfirmationCard({
   artifact,
+  confirmed = false,
   disabled,
   onAbandon,
   onConfirm,
@@ -1089,6 +1159,7 @@ export function PlanConfirmationCard({
   title
 }: {
   artifact?: WorkflowConfirmationArtifact
+  confirmed?: boolean
   disabled: boolean
   onAbandon: () => void
   onConfirm: () => void
@@ -1160,7 +1231,7 @@ export function PlanConfirmationCard({
           <>
             <span className={cx('artifact-auth-status')}>
               <CheckCircleOutlined aria-hidden="true" />
-              {title}已生成
+              {title}{confirmed ? '已确认' : '已生成'}
             </span>
             <span className={cx('artifact-auth-actions')}>
               {canView ? (
@@ -1174,23 +1245,25 @@ export function PlanConfirmationCard({
               {canRevise ? (
                 <Button
                   className={cx('requirement-spec-edit-btn')}
-                  disabled={disabled}
+                  disabled={disabled || confirmed}
                   onClick={startRevision}
                 >
                   修改
                 </Button>
-              ) : (
+              ) : !confirmed ? (
                 <Button disabled={disabled} onClick={onAbandon}>
                   放弃
                 </Button>
-              )}
-              <Button
-                disabled={disabled || !requiresConfirmation}
-                onClick={onConfirm}
-                type="primary"
-              >
-                确认保存
-              </Button>
+              ) : null}
+              {!confirmed ? (
+                <Button
+                  disabled={disabled || !requiresConfirmation}
+                  onClick={onConfirm}
+                  type="primary"
+                >
+                  确认保存
+                </Button>
+              ) : null}
             </span>
           </>
         )}
@@ -2640,7 +2713,7 @@ function taskStatusText(status: string): string {
 function workflowStatusColor(status: string): string {
   if (status === 'completed' || status === 'passed') return 'green'
   if (status === 'failed' || status === 'error') return 'red'
-  if (status === 'requires_user_input') return 'gold'
+  if (status === 'requires_user_input') return 'red'
   if (status === 'running') return 'purple'
   return 'default'
 }

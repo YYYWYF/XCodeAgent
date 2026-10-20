@@ -88,7 +88,13 @@ export default function DocPanel({
               <small>{title?.split('/').pop() || 'requirement-spec.json'}</small>
             </span>
             {requirementSpec ? (
-              <Tag className={cx('doc-panel-technical-status')}>
+              <Tag
+                className={cx(
+                  'doc-panel-technical-status',
+                  requirementSpec.confirmation_status === 'confirmed' &&
+                    'doc-panel-technical-status-confirmed'
+                )}
+              >
                 {requirementStatusLabel(requirementSpec)}
               </Tag>
             ) : null}
