@@ -13,9 +13,6 @@ import './RequirementDocPanel.less'
 type Props = {
   productPlan: JsonRecord
   spec: JsonRecord
-  // TechnicalPlan 用于概览 tab 展示接口请求与响应；SourcePlanningDoc 等只读复用场景
-  // 不一定持有 TechnicalPlan，故设为可选，缺省时概览该块显示空态。
-  technicalPlan?: JsonRecord
 }
 
 const requirementDocSections: Array<{ key: RequirementSectionKey; label: string }> = [
@@ -27,8 +24,7 @@ const requirementDocSections: Array<{ key: RequirementSectionKey; label: string 
 /** 渲染右侧需求文档产物视图，所有交互仅改变本面板内的阅读位置。 */
 export default function RequirementDocPanel({
   productPlan,
-  spec,
-  technicalPlan
+  spec
 }: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
   return (
@@ -53,12 +49,7 @@ export default function RequirementDocPanel({
         ))}
       </div>
       {activeSection === 'overview' ? (
-        <RequirementOverviewSection
-          sectionKey="overview"
-          spec={spec}
-          productPlan={productPlan}
-          technicalPlan={technicalPlan || {}}
-        />
+        <RequirementOverviewSection sectionKey="overview" spec={spec} />
       ) : null}
       {activeSection === 'pages' ? (
         <RequirementPagesSection productPlan={productPlan} sectionKey="pages" spec={spec} />

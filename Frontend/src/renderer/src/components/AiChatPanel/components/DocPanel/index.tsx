@@ -134,7 +134,6 @@ export default function DocPanel({
               <RequirementDocPanel
                 productPlan={productPlan || {}}
                 spec={requirementSpec || {}}
-                technicalPlan={technicalPlan || {}}
               />
             ) : (
               <MarkdownContent content={content ?? ''} />

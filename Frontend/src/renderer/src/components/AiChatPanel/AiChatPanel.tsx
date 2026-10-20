@@ -1460,8 +1460,8 @@ export default function AiChatPanel({
   const requirementProductPlanForDoc = requirementDocViewActive
     ? productPlanMemory || productPlanFile
     : undefined
-  // 需求文档概览 tab 扩展：把已有 TechnicalPlan（接口请求/响应）投影到概览。
-  // 首次需求草稿阶段 TechnicalPlan 尚未生成，此处为 undefined，概览显示空态。
+  // 需求文档视图下仍向 DocPanel 传入 TechnicalPlan，供技术规划面板分支复用；
+  // 需求文档概览本身不再展示接口请求/响应等后续产物模块。
   const requirementTechnicalPlanForDoc = requirementDocViewActive
     ? technicalPlanMemory || technicalPlanFile
     : undefined
