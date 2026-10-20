@@ -336,13 +336,35 @@
 }
 
 .@{class-prefix}-revision-session-handoff-request.ant-typography {
-  display: -webkit-box;
+  display: block;
+  max-height: 84px;
   margin-top: 4px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   color: var(--wb-text-tertiary);
   font-size: 12px;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--wb-accent-border) transparent;
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--wb-accent-border);
+    border-radius: 999px;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--wb-text-tertiary);
+  }
 }
 
 .@{class-prefix}-planning-workflow-activity-intent.ant-tag {
