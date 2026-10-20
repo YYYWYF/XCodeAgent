@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from typing import Any
-from uuid import uuid4
 
 from app.workspace.task_documents import _TASK_RUNTIME_FIELDS, build_task_plan_sha256
 
@@ -25,19 +24,6 @@ def confirmed_plan_build_handoff(
         "test_phase_confirmation": {}, "review_phase_confirmation": {},
         "acceptance_phase_confirmation": {}, "code_review_repair_confirmation": {},
     }
-
-
-def archive_checkpoint_build_attempt(state: dict[str, Any], run_id: str) -> None:
-    """恢复尝试退出后归档其当前绑定，让同一重试 Run 的业务降级重新绑定。"""
-    from app.workspace.task_documents import build_execution_record_path
-
-    path = build_execution_record_path(state, run_id)
-    if not path.exists():
-        return
-    # 只移动本次 child 的 execution 记录；来源进度与不可变 Build 计划副本不变。
-    directory = path.parent / "checkpoint-attempts" / uuid4().hex
-    directory.mkdir(parents=True, exist_ok=True)
-    path.replace(directory / path.name)
 
 
 def restart_build_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

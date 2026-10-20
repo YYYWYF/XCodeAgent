@@ -10,11 +10,12 @@ from unittest.mock import AsyncMock, patch
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, END
 from langgraph.types import interrupt
+from app.domain.execution_recovery import DurableExecutionStatus
 
 from app.graph.state import ProjectState
 from app.services.stage_artifacts import ArtifactStateGraph, load_stage_artifacts
 from app.services.checkpoint_execution import read_checkpoint_execution, resolve_checkpoint_source
-from app.services.checkpoint_first_retry import prepare_checkpoint_first_retry
+from app.services.business_node_retry import prepare_business_node_retry
 from app.services.business_node_retry import read_retry_hint, retry_action_plan
 from app.services.stage_prerequisites import StagePrerequisiteError, regeneration_for_retry
 from app.services.application_lifecycle import load_application_lifecycle
@@ -25,6 +26,29 @@ from tests.test_retry_preparation_failures import RetryPreparationFailureTests
 
 class CheckpointAuthorityTests(unittest.IsolatedAsyncioTestCase):
     """使用真实 Graph 区分业务 checkpoint、旧索引和进程存活事实。"""
+
+    async def test_committed_request_before_workflow_entry_has_retry_action(self):
+        """首业务节点尚未进入时，使用同一 checkpoint 已保存的入口及原请求。"""
+        from app.services.workflow_reentry import workflow_entry
+        with tempfile.TemporaryDirectory() as root:
+            source = BusinessNodeRetryTests().source(root).model_copy(update={"status": DurableExecutionStatus.INTERRUPTED})
+            builder = ArtifactStateGraph(ProjectState)
+            builder.add_node("workflow_entry", workflow_entry)
+
+            def build(state):
+                """该业务节点尚不应被调用。"""
+                raise AssertionError("仍停在业务入口之前")
+
+            builder.add_node("build", build)
+            builder.add_edge(START, "workflow_entry")
+            builder.add_edge("workflow_entry", "build")
+            builder.add_edge("build", END)
+            graph = builder.compile(checkpointer=InMemorySaver(), interrupt_before=["workflow_entry"])
+            await graph.ainvoke({"active_run_id": "source", "request": "开发当前页面", "resume_from": "build"},
+                               {"configurable": {"thread_id": "thread"}})
+            plan = await retry_action_plan(source, graph)
+            self.assertEqual(plan.primary_action.target_node, "build")
+            self.assertEqual((await read_retry_hint(source, graph)).request, "开发当前页面")
 
     async def test_sqlite_current_failure_does_not_decode_whole_history(self):
         """生产同款 SQLite 的当前现场足够时，不扫描整段历史也能取回节点和提问。"""
@@ -56,7 +80,7 @@ class CheckpointAuthorityTests(unittest.IsolatedAsyncioTestCase):
             source, graph, _ = await RetryPreparationFailureTests().fixture(root)
             with patch.object(graph, "aget_state", AsyncMock(side_effect=OSError("database busy"))):
                 with self.assertRaises(RecoveryExecutionError) as caught:
-                    await prepare_checkpoint_first_retry(source, graph)
+                    await prepare_business_node_retry(source, graph)
             self.assertEqual(caught.exception.code, "RETRY_CHECKPOINT_UNAVAILABLE")
             self.assertIn(source.run_id, load_application_lifecycle(root).active_executions)
 
@@ -167,8 +191,8 @@ class ArtifactPrerequisiteRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(action.primary_action.label, "重新生成UI 设计")
             self.assertEqual(action.primary_action.target_node, "ui_confirmation")
             with patch("app.graph.application_planning_workflow.application_planning_graph_for_request", AsyncMock(return_value=planning)):
-                context = await prepare_checkpoint_first_retry(source, original_graph)
-            self.assertFalse(context.graph.attempt)
+                context = await prepare_business_node_retry(source, original_graph)
+            self.assertIs(context.graph, planning)
             self.assertEqual(context.workflow_scope, "application_planning")
             self.assertEqual(context.child_execution.execution_kind, "application_planning")
             self.assertNotIn(source.run_id, load_application_lifecycle(root).active_executions)
@@ -178,8 +202,7 @@ class ArtifactPrerequisiteRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("__interrupt__", str(chunks))
                 self.assertEqual(seen[0]["request"], "原始问题 ORIGINAL")
                 self.assertEqual(seen[0]["product_plan"], {"product": "current"})
-                self.assertEqual(context.retry_origin.node, "build")
-                self.assertEqual(context.retry_origin.regeneration_node, "ui_confirmation")
+                self.assertEqual(context.recovery_plan.target_node, "ui_confirmation")
             finally:
                 await abandon_prepared_retry(workspace=root, source=source, before=before,
                     new_run_id=context.new_run_id, lease=context.workspace_lease)

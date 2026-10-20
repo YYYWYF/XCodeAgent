@@ -6,6 +6,28 @@ from app.persistence.execution_recovery import get_execution, update_execution_s
 from app.services import application_lifecycle as lifecycle_service
 
 
+async def stop_planning_execution(workspace: str, thread_id: str):
+    """等待规划工作真实退出并保留本轮修订，以原 checkpoint 签发继续生成动作。"""
+    from app.protocols.workflow.run_control import workflow_run_registry
+    from app.workspace.run_lease import workspace_run_leases
+
+    current = lifecycle_service.load_application_lifecycle(workspace)
+    if current is None or current.initialization.thread_id != thread_id:
+        raise ValueError("当前规划线程与应用不匹配。")
+    active = current.active_formal_revision
+    run_id = active.planning_run_id if active and active.planning_thread_id == thread_id else current.active_run_id
+    source = await get_execution(workspace, run_id) if run_id else None
+    if source is None or source.execution_kind != "application_planning" or source.thread_id != thread_id:
+        raise ValueError("当前没有可停止的规划执行，请同步当前任务。")
+    outcome = await workflow_run_registry.cancel_and_wait(run_id, workspace=workspace)
+    if outcome not in {"cancelled", "not_running"}:
+        raise RuntimeError("后台仍在退出，请再次点击停止生成；本轮修改和继续入口已保留。")
+    # Runtime 的取消收尾已经完成后再标记中断；停止不能归档或删除正式修订。
+    await update_execution_status(workspace=workspace, run_id=run_id, status=DurableExecutionStatus.INTERRUPTED)
+    workspace_run_leases.release_run(workspace_root=workspace, run_id=run_id)
+    return lifecycle_service.load_application_lifecycle(workspace)
+
+
 async def end_planning_execution(workspace: str, thread_id: str):
     """先等待真实工作退出，再收口同一 Run/Thread 的修订，不改变 Agent 或阶段准入。"""
     from app.protocols.workflow.run_control import workflow_run_registry

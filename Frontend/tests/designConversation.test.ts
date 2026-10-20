@@ -11,7 +11,8 @@ import {
   isSupersededTechnicalPlanTransitionMessage,
   isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex,
-  rollbackPlanningSubmissionMessages
+  rollbackPlanningSubmissionMessages,
+  rollbackUnansweredPlanningSubmission
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/uiDesignPreviewHistory'
 import {
   ensureApplicationPlanningAction,
@@ -415,6 +416,23 @@ const planningSubmissionMessages: AgentChatMessage[] = [
   { id: 3, role: 'assistant', content: '并行到达的其他消息', createdAt: 3 },
   { id: 4, role: 'assistant', content: '', planningLoading: true, createdAt: 4 }
 ]
+test('离线确认反复失败不累积用户消息，实际回复和其他异步消息保留', () => {
+  const transaction = { sessionKey: 'planning-session', messageIds: [2, 4] }
+  assert.deepEqual(rollbackUnansweredPlanningSubmission(planningSubmissionMessages, transaction)
+    .map((item) => item.id), [1, 3])
+  const answered = planningSubmissionMessages.map((item) => item.id === 4
+    ? { ...item, content: '已开始处理' } : item)
+  assert.equal(rollbackUnansweredPlanningSubmission(answered, transaction), answered)
+  const streamed = planningSubmissionMessages.map((item) => item.id === 4
+    ? { ...item, workflow: canonicalTechnicalPlanWorkflow } : item)
+  assert.equal(rollbackUnansweredPlanningSubmission(streamed, transaction), streamed)
+  let history = planningSubmissionMessages.filter((item) => !transaction.messageIds.includes(item.id))
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    history = rollbackUnansweredPlanningSubmission([...history,
+      ...planningSubmissionMessages.filter((item) => transaction.messageIds.includes(item.id))], transaction)
+  }
+  assert.deepEqual(history.map((item) => item.id), [1, 3])
+})
 assert.deepEqual(
   rollbackPlanningSubmissionMessages(planningSubmissionMessages, {
     sessionKey: 'planning-session',

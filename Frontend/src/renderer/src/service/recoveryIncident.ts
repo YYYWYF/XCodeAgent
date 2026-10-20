@@ -11,6 +11,7 @@ import { isTemplateEngineFailure } from './recoveryFailureMessage'
 export type RecoveryIncidentPresentation =
   | {
       kind: 'recoverable'
+      presentation?: 'stopped_generation'
       title: string
       failureDiagnostic?: RecoveryFailureDiagnostic | null
       failureMessage?: string
@@ -104,14 +105,18 @@ export function applicationPlanningRecoveryIncident(
   const failureTitle = recovery?.failureDiagnostic?.operation === 'template_reconcile'
     ? '模板更新失败' : '模板生成失败'
   if (recovery && actionPlan?.status === 'recoverable' && actionPlan.primaryAction) {
+    // Backend 仅为已中断的规划签发「继续生成」；存在真实失败诊断时仍保留错误展示。
+    const stopped = recovery.classification === 'ready_to_continue' &&
+      actionPlan.primaryAction.label === '继续生成' && !recovery.failureDiagnostic
     return {
       kind: 'recoverable',
-      title: actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
+      ...(stopped ? { presentation: 'stopped_generation' as const } : {}),
+      title: stopped ? '已停止生成' : actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
         ? '前置文件需要重新生成' : templateFailure ? failureTitle : '执行已中断',
       failureDiagnostic: actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE' && recovery.failureDiagnostic
         ? { ...recovery.failureDiagnostic, userMessage: actionPlan.message } : recovery.failureDiagnostic,
-      failureMessage: currentPlanningFailureMessage(state, actionPlan),
-      recoveryMessage: actionPlan.message,
+      failureMessage: stopped ? undefined : currentPlanningFailureMessage(state, actionPlan),
+      recoveryMessage: stopped ? '本轮修改已保留，可基于最新文件继续生成。' : actionPlan.message,
       action: actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
     }

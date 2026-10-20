@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from app.domain.application_lifecycle import ApplicationLifecycle
+from app.domain.application_lifecycle import ApplicationLifecycle, WorkbenchExecutionStatus
 from app.protocols.workflow.request import workflow_run_inputs
 from app.protocols.workflow.run_control import build_workflow_plan_control_ag_ui_stream
 from app.services.application_lifecycle import (
@@ -79,6 +80,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         identity = load_pending_build_task_plan(self.state)["draft_identity"]
+        self.pending_identity = identity
         return {
             "planning_run_id": identity["planning_run_id"],
             "draft_digest": identity["draft_digest"],
@@ -95,6 +97,7 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
     def _write_lifecycle(self) -> None:
         """写入停在 DAG 确认门禁的最小 application lifecycle。"""
 
+        identity = self.pending_identity
         lifecycle = ApplicationLifecycle.model_validate(
             {
                 "application": {"id": "app-abandon", "name": "Abandon 测试"},
@@ -127,13 +130,21 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
                         "pageId": "orders",
                         "threadId": "thread-abandon",
                         "runId": "workflow-current",
+                        "ownerSessionId": identity["owner_session_id"],
                         "phase": "prepare_build_tasks",
                         "status": "awaiting_user",
                         "pendingInteraction": {
                             "id": "pending-dag",
                             "type": "task_plan_confirmation",
                             "basedOnRevision": 4,
-                            "payload": {"mode": "build_task_plan_confirmation"},
+                            "payload": {
+                                "mode": "build_task_plan_confirmation",
+                                "draftIdentity": {
+                                    "ownerSessionId": identity["owner_session_id"],
+                                    "planningRunId": identity["planning_run_id"],
+                                    "draftDigest": identity["draft_digest"],
+                                },
+                            },
                             "artifactRefs": [],
                             "createdAt": "2026-09-08T00:00:00Z",
                         },
@@ -362,6 +373,35 @@ class AbandonPendingBuildTaskPlanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inputs["plan_control_action"], "abandon")
         self.assertEqual(inputs["plan_control_planning_run_id"], "planning-run-current")
         self.assertEqual(inputs["plan_control_draft_digest"], "e" * 64)
+
+    def test_abandon_preserves_other_drafts_owners_and_running_executions(self) -> None:
+        """只收口精确匹配的等待门，其他草稿、owner、范围及运行中执行保持原样。"""
+
+        self._write_lifecycle()
+        current = load_application_lifecycle(self.state["workspace"])
+        source = current.active_executions["workflow-current"]
+        pending = source.pending_interaction
+        other_payload = deepcopy(pending.payload)
+        other_payload["draftIdentity"]["draftDigest"] = "f" * 64
+        others = {
+            "other-draft": source.model_copy(update={"run_id": "other-draft", "pending_interaction": pending.model_copy(update={"payload": other_payload})}),
+            "other-owner": source.model_copy(update={"run_id": "other-owner", "owner_session_id": "other-session"}),
+            "other-scope": source.model_copy(update={"run_id": "other-scope", "target_id": "customers"}),
+            "still-running": source.model_copy(update={"run_id": "still-running", "status": WorkbenchExecutionStatus.RUNNING}),
+        }
+        write_application_lifecycle(self.state["workspace"], current.model_copy(update={
+            "active_executions": {**current.active_executions, **others},
+        }))
+        identity = load_pending_build_task_plan(self.state)["draft_identity"]
+        result = abandon_pending_build_task_plan(
+            self.state, planning_run_id=identity["planning_run_id"], draft_digest=identity["draft_digest"],
+        )
+        final = load_application_lifecycle(self.state["workspace"])
+        self.assertEqual(result.status, "abandoned")
+        self.assertEqual(final.active_executions, others)
+        self.assertEqual(final.resource_locks.pages, {})
+        self.assertIsNone(final.resource_locks.application)
+        self.assertEqual(self.formal_path.read_bytes(), self.formal_bytes)
 
     async def test_abandon_action_does_not_cancel_or_end_execution(self) -> None:
         """AG-UI Abandon 收口 Pending/PlanningRun，但不调用 Scheduler cancel 或 lifecycle end。"""

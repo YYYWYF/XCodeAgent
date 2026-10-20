@@ -223,9 +223,21 @@ function recoveredPendingInteractionMatches(
   const recoveryDraftIdentity = dagDraftIdentity(recovery.confirmation)
   const recoveryOwnerSessionId = String(recovery.ownerSessionId || '').trim()
   const workflowOwnerSessionId = dagDraftOwnerSessionId(clarification)
+  // 当前执行已经接管同一草稿时，以它的 Run/Thread 和未提交交互授权，来源 Run 不再可操作。
+  const current = Object.values(lifecycle?.activeExecutions || {}).find(
+    (execution) => dagDraftIdentity(execution.pendingInteraction?.payload) === recoveryDraftIdentity
+  )
+  const executionMatches = current
+    ? current.runId === workflow.runId &&
+      current.threadId === workflow.threadId &&
+      current.status === 'awaiting_user' &&
+      current.pendingInteraction?.type === 'task_plan_confirmation' &&
+      !current.pendingInteraction.submittedAt &&
+      dagDraftOwnerSessionId(current.pendingInteraction.payload) === recoveryOwnerSessionId
+    : recovery.workflowRunId === workflow.runId
   return (
     workflowMode === 'build_task_plan_confirmation' &&
-    recovery.workflowRunId === workflow.runId &&
+    executionMatches &&
     Boolean(recoveryOwnerSessionId) &&
     workflowOwnerSessionId === recoveryOwnerSessionId &&
     Boolean(workflowDraftIdentity) &&

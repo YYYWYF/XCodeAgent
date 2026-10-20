@@ -17,6 +17,19 @@ import DevelopmentTargetPicker from '../src/renderer/src/components/AiChatPanel/
 import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
 import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide/quickTasks'
 
+test('技术规划停止生成的结束回执不展示开发工作区检查卡', () => {
+  const ended: WorkflowRunPayload = {
+    runId: 'technical-run', threadId: 'planning-thread', events: [],
+    state: { workflow_scope: 'application_planning' },
+    summary: { status: 'completed', phase: 'plan_control',
+      planControl: { action: 'end', status: 'ended', targetRunId: 'technical-run' } }
+  }
+  assert.equal(developmentNextStep([message(completion()), message(ended)]), undefined)
+  const currentLifecycle = { initialization: { threadId: 'planning-thread' }, endedExecutions: {} } as ApplicationLifecycle
+  // 现场已显示的回执即便只有 Run/Thread，也能由当前规划归属判定，不能永远等待不存在的归档。
+  assert.equal(developmentNextStep([message({ ...ended, state: undefined })], currentLifecycle), undefined)
+})
+
 test('原开发 Run 已结束后，同 Thread 新测试失败不显示重新选择开发任务', () => {
   const failed = { runId: 'test-run', threadId: 'shared-thread', events: [],
     summary: { status: 'failed', phase: 'integration_test' } } as WorkflowRunPayload

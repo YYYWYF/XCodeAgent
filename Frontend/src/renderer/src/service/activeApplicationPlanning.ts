@@ -40,6 +40,8 @@ export type ApplicationPlanningCurrentState = {
   recoveryActionError?: string
   /** 用户正在结束本轮修订；失败后的按钮继续 End，不改为恢复已取消的 Graph。 */
   endRequested?: boolean
+  /** 停止生成尚未确认退出时，只允许重试停止，不提前恢复业务执行。 */
+  stopRequested?: boolean
   workflow?: WorkflowRunPayload
   /** Backend 根据 Durable Execution、checkpoint 与 Native Interrupt 生成的唯一恢复解释。 */
   recovery?: ApplicationPlanningRecoveryProjection
@@ -49,6 +51,8 @@ export type ApplicationPlanningCurrentEvent =
   | { type: 'run_started'; applicationId: string; threadId: string }
   | { type: 'run_settled'; applicationId: string; threadId: string }
   | { type: 'planning_end_started'; applicationId: string; threadId: string }
+  | { type: 'planning_stop_started'; applicationId: string; threadId: string }
+  | { type: 'planning_stopped'; applicationId: string; threadId: string; lifecycle: ApplicationLifecycle }
   | { type: 'planning_ended'; applicationId: string; threadId: string;
       lifecycle: ApplicationLifecycle; workflow: WorkflowRunPayload }
   | { type: 'template_generation_failed'; applicationId: string; threadId: string; error: string; connectionError?: string }
@@ -346,6 +350,13 @@ export function reduceApplicationPlanningCurrentState(
   }
   if (event.type === 'planning_end_started') {
     return { ...current, endRequested: true, transportState: 'running', error: undefined, recoveryActionError: undefined }
+  }
+  if (event.type === 'planning_stop_started') {
+    return { ...current, stopRequested: true, transportState: 'running', error: undefined, recoveryActionError: undefined }
+  }
+  if (event.type === 'planning_stopped') {
+    return { ...current, lifecycle: latestApplicationLifecycle(current.lifecycle, event.lifecycle),
+      transportState: 'idle', stopRequested: false, error: undefined, recoveryActionError: undefined }
   }
   if (event.type === 'planning_ended') {
     return { ...current, lifecycle: latestApplicationLifecycle(current.lifecycle, event.lifecycle),

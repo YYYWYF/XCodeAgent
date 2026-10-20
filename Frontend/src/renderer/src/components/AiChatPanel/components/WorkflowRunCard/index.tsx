@@ -83,7 +83,6 @@ import {
 } from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
-import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
 import RequirementSpecEditor from '../../../Welcome/RequirementSpecEditor'
 import './WorkflowRunCard.less'
 
@@ -1095,7 +1094,7 @@ export function PlanConfirmationCard({
   const [viewing, setViewing] = useState(false)
   const [revising, setRevising] = useState(false)
   const [revisionRequest, setRevisionRequest] = useState('')
-  const canView = Boolean(artifact || plan)
+  const canView = planType !== 'technical' && Boolean(artifact || plan)
   const canRevise = planType === 'technical'
   const documentLabel =
     planType === 'product' ? '需求文档' : planType === 'technical' ? '技术规划' : '项目计划书'
@@ -1198,8 +1197,6 @@ export function PlanConfirmationCard({
       >
         {planType === 'product' && artifact ? (
           <ConfirmationArtifact artifact={artifact} />
-        ) : planType === 'technical' && plan ? (
-          <TechnicalPlanSummary plan={plan} />
         ) : plan ? (
           <ProjectPlanSummary plan={plan} />
         ) : artifact ? (

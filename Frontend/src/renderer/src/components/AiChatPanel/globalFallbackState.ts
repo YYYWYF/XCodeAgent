@@ -2,6 +2,12 @@ import type { PlanExecutionMode } from './planExecutionMode'
 import type { AgentChatMessage } from './types'
 import { parseRecoveryFailureDiagnostic } from '../../service/recoveryActionPlan'
 import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
+import type { ConnectionState } from '../../service/connectionState'
+
+/** Backend 连接失败优先于独立预览连接，不让预览重连按钮接管后端停服。 */
+export function prioritizedConnection(workflow: ConnectionState, preview: ConnectionState): ConnectionState {
+  return workflow.status !== 'healthy' ? workflow : preview.status === 'unavailable' ? preview : workflow
+}
 
 /** 只提取最新消息的失败给底部兜底，新请求、运行占位或成功消息不继承历史错误。 */
 export function latestConversationFailure(messages: AgentChatMessage[]): string | undefined {

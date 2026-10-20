@@ -1581,6 +1581,36 @@ test('PendingPlan recovery 缺少 threadId 仍按 owner、WorkflowRunId 和 Draf
   assert.equal(recoveredWorkflow?.runId, 'workflow-recovered')
   assert.equal(workflowInteractionAvailability(recoveredWorkflow!, lifecycle), 'active')
 
+  // 首次确认失败后来源 Run 已被接管；同一草稿的再次确认必须绑定当前 execution。
+  const currentExecution = {
+    ...recoveredExecution!,
+    runId: 'workflow-confirm-current',
+    pendingInteraction: {
+      ...recoveredExecution!.pendingInteraction!,
+      payload: planningRefresh.confirmation
+    }
+  }
+  const handedOffLifecycle = {
+    ...lifecycle,
+    activeExecutions: { [currentExecution.runId]: currentExecution }
+  } as ApplicationLifecycle
+  const boundExecution = pendingDagConfirmationExecution(handedOffLifecycle, 'thread-owner')
+  const boundWorkflow = pendingDagConfirmationWorkflow([], boundExecution, handedOffLifecycle)
+  assert.equal(boundWorkflow?.runId, 'workflow-confirm-current')
+  assert.deepEqual(boundWorkflow?.summary.clarification?.draftIdentity, planningRefresh.confirmation.draftIdentity)
+  assert.equal(workflowInteractionAvailability(boundWorkflow!, handedOffLifecycle), 'active')
+  assert.equal(workflowInteractionAvailability(recoveredWorkflow!, handedOffLifecycle), 'stale')
+  const submittedLifecycle = {
+    ...handedOffLifecycle,
+    activeExecutions: {
+      [currentExecution.runId]: {
+        ...currentExecution,
+        pendingInteraction: { ...currentExecution.pendingInteraction, submittedAt: '2026-10-19T00:00:00Z' }
+      }
+    }
+  } as ApplicationLifecycle
+  assert.equal(workflowInteractionAvailability(boundWorkflow!, submittedLifecycle), 'stale')
+
   const clarification = recoveredWorkflow!.summary.clarification!
   const ownerMismatchWorkflow = {
     ...recoveredWorkflow,

@@ -82,8 +82,10 @@ def execution_recovery_capabilities() -> dict[str, Any]:
         "endpoint": "/execution-recovery/execute",
         "transport": "ag-ui-sse",
         "retry": {
-            "mode": "checkpoint-once-then-business-node",
-            "checkpointFields": ["failedNode", "request"],
+            "mode": "full-context-node-reexecution",
+            "checkpointFields": ["failedNode", "request", "businessContext"],
+            "nodeInputs": "current-disk-overrides-checkpoint",
+            "confirmation": "explicit-user-confirmation",
             "missingEntry": "dismissible_notice",
         },
         "request": {
@@ -137,8 +139,8 @@ def build_execution_recovery_ag_ui_stream(
             allow_stopped = action == "continue" and source.status is DurableExecutionStatus.CANCELLED
             if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not allow_stopped:
                 raise RecoveryExecutionError("RECOVERY_SOURCE_NOT_ACTIONABLE", "原执行未失败或中断，请同步当前状态。")
-            from app.services.checkpoint_first_retry import prepare_checkpoint_first_retry
-            context = await prepare_checkpoint_first_retry(source, graph, allow_stopped=allow_stopped)
+            from app.services.business_node_retry import prepare_business_node_retry
+            context = await prepare_business_node_retry(source, graph, allow_stopped=allow_stopped)
             async for frame in _native_recovery_stream(context, accept):
                 yield frame
             return

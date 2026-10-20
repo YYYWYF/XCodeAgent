@@ -366,6 +366,8 @@ def restart_application_planning_lifecycle(
         raise ApplicationLifecycleConflictError("生命周期状态尚未初始化。")
     if current.initialization.stage not in {
         *APPLICATION_PLANNING_ACTIVE_STAGES,
+        # 已确认技术规划后的模板失败不结束产品修订能力，仍可回退原设计产物。
+        ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         ApplicationLifecycleStage.READY_FOR_WORKBENCH,
     }:
         raise ApplicationLifecycleConflictError(
@@ -1011,6 +1013,7 @@ def record_abandoned_planning_result(
     draft_digest: str,
     base_confirmed_plan_digest: str | None,
     build_execution_scope: dict[str, Any],
+    owner_session_id: str,
     workflow_run_id: str = "",
 ) -> ApplicationLifecycle | None:
     """持久化 Planning result 的 Abandon tombstone，并收口对应待确认 execution。
@@ -1045,20 +1048,15 @@ def record_abandoned_planning_result(
         }
         executions = dict(current.active_executions)
         resource_locks = current.resource_locks
-        execution = executions.get(workflow_run_id) if workflow_run_id else None
-        pending = execution.pending_interaction if execution is not None else None
-        # 只收口已经停在 Build DAG 确认门禁的 execution；绝不借 Abandon 取消生成中运行。
-        if (
-            execution is not None
-            and execution.status == WorkbenchExecutionStatus.AWAITING_USER
-            and pending is not None
-            and (
-                pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION
-                or pending.payload.get("mode") == "build_task_plan_confirmation"
-            )
+        from app.services.pending_plan_execution import pending_plan_execution_ids
+
+        # 生成来源只用于溯源；确认失败交接后，收口仍持有同一草稿确认门的当前执行。
+        for matching_run_id in pending_plan_execution_ids(
+            current, owner_session_id=owner_session_id, planning_run_id=planning_run_id,
+            draft_digest=draft_digest, build_execution_scope=build_execution_scope,
         ):
-            executions.pop(workflow_run_id, None)
-            resource_locks = _resource_locks_without_run(resource_locks, workflow_run_id)
+            executions.pop(matching_run_id, None)
+            resource_locks = _resource_locks_without_run(resource_locks, matching_run_id)
         latest = max(executions.values(), key=lambda item: item.updated_at) if executions else None
         updated = current.model_copy(
             update={

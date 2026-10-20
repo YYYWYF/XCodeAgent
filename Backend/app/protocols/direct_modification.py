@@ -258,7 +258,7 @@ def conversation_capabilities() -> dict[str, Any]:
             "endpoint": "/execution-recovery/execute",
             "executionKind": "workbench",
             "workflowScope": "conversation",
-            "authority": "shared-native-checkpoint-reentry",
+            "authority": "checkpoint-context-node-reexecution",
         },
         "targetRequired": False,
         "target": {

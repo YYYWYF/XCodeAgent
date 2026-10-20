@@ -15,7 +15,7 @@ export function initialConnectionState(connected = false): ConnectionState {
     : { status: 'connecting', requestGeneration: 0 }
 }
 
-/** 开始新的连接或权威刷新请求，并用递增代次隔离晚到结果。 */
+/** 开始连接或权威刷新；健康连接的普通同步不冒充重连，代次仍隔离晚到结果。 */
 export function beginConnectionRequest(
   current: ConnectionState,
   requestGeneration: number
@@ -23,7 +23,8 @@ export function beginConnectionRequest(
   if (requestGeneration < current.requestGeneration) return current
   return {
     ...current,
-    status: current.lastConnectedAt ? 'reconnecting' : 'connecting',
+    status: current.status === 'healthy' ? 'healthy'
+      : current.lastConnectedAt ? 'reconnecting' : 'connecting',
     requestGeneration
   }
 }

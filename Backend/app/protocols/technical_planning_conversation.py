@@ -1,4 +1,4 @@
-"""在原 application-page-planning AG-UI 端点提供只读问答和显式技术修改。"""
+"""在原规划 AG-UI 端点提供问答、技术修改与上游设计回退。"""
 
 import asyncio
 from typing import Any, AsyncIterator, Literal
@@ -10,7 +10,7 @@ from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.persistence.execution_recovery import get_execution
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.protocols.application_planning_run_lock import application_planning_run_lock
-from app.services.application_lifecycle import load_application_lifecycle
+from app.services.application_lifecycle import APPLICATION_PLANNING_ACTIVE_STAGES, load_application_lifecycle
 from app.services.execution_recovery_projection import recovery_failure_diagnostic
 from app.services.technical_planning_retry import (
     TechnicalPlanningMessageRevision, prepare_technical_planning_retry,
@@ -21,7 +21,7 @@ class TechnicalPlanningConversationRequest(BaseModel):
     """验证自由输入的动作和原规划身份，禁止客户端选择任意节点。"""
 
     model_config = ConfigDict(extra="forbid")
-    action: Literal["classify", "revise"]
+    action: Literal["classify", "revise", "revise_design"]
     workspaceRoot: str = Field(min_length=1)
     applicationId: str = Field(min_length=1)
     planningThreadId: str = Field(min_length=1)
@@ -38,8 +38,10 @@ async def _current_context(graph, request: TechnicalPlanningConversationRequest)
             or lifecycle.initialization.thread_id != request.planningThreadId):
         raise ValueError("技术规划对话与当前应用或规划线程不匹配。")
     if lifecycle.initialization.stage not in {
-        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
-        ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        # 计划对话回退上游后仍使用同一线程；不能把当前产物阶段当成对话入口阶段。
+        *APPLICATION_PLANNING_ACTIVE_STAGES,
+        # 模板失败仍属于原计划会话，允许提问和发起新的规划修改。
+        ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
     }:
         raise ValueError("当前不在技术规划阶段，请使用对应阶段的输入入口。")
     active_graph = await graph(workspace=request.workspaceRoot, project_id=request.applicationId) if callable(graph) else graph
@@ -53,7 +55,7 @@ async def _current_context(graph, request: TechnicalPlanningConversationRequest)
 
 
 def build_technical_planning_conversation_stream(*, graph, payload: dict[str, Any], raw: dict, accept=None) -> AsyncIterator[str]:
-    """分类只返回标准 AG-UI 答复，修改再进入原 Workflow 的技术规划生成节点。"""
+    """分类返回 AG-UI 结果，修改沿原线程进入技术生成或设计意图流程。"""
 
     async def classify() -> AgUiActionResult:
         """用权威规划事实回答问题，并返回仅绑定当前版本的修改意图。"""
@@ -82,7 +84,7 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
         })
 
     async def revise() -> AsyncIterator[str]:
-        """重新验证分类时的版本后，复用原生成流；变化或无计划时明确拒绝。"""
+        """重新验证分类时的版本后复用原流程；只有技术修改要求已有计划。"""
         from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 
         try:
@@ -92,7 +94,9 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             if (not request.sourceRunId or request.sourceRunId != values.get("active_run_id")
                     or not request.checkpointId or request.checkpointId != checkpoint_id):
                 raise ValueError("技术规划状态已变化，请同步最新状态后重新提交修改要求。")
-            prepare_technical_planning_retry(values, new_request=request.request)
+            target_node = "design_intent_analysis" if request.action == "revise_design" else "technical_planning"
+            if target_node == "technical_planning":
+                prepare_technical_planning_retry(values, new_request=request.request)
         except Exception as exc:
             error = exc
 
@@ -110,16 +114,16 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             return
         normalized = {
             "threadId": request.planningThreadId, "runId": payload.get("runId"),
-            "request": request.request, "resumeFrom": "technical_planning",
+            "request": request.request, "resumeFrom": target_node,
             "forwardedProps": {"workspaceRoot": request.workspaceRoot, "workflowScope": "application_planning"},
         }
         async for frame in build_workflow_ag_ui_stream(
             graph=graph, payload=normalized, accept=accept,
-            technical_planning_revision=TechnicalPlanningMessageRevision(request.request, checkpoint_id),
+            technical_planning_revision=TechnicalPlanningMessageRevision(request.request, checkpoint_id, target_node),
         ):
             yield frame
 
-    if isinstance(raw, dict) and raw.get("action") == "revise":
+    if isinstance(raw, dict) and raw.get("action") in {"revise", "revise_design"}:
         return revise()
     return build_ag_ui_action_stream(
         payload=payload, event_name="technical-planning-conversation",

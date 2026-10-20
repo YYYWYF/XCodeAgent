@@ -173,7 +173,8 @@ export function pendingDagConfirmationWorkflow(
     recovery.confirmation
   ) {
     return {
-      runId: recovery.workflowRunId || execution.runId,
+      // Pending 的 workflowRunId 是生成来源；确认失败交接后必须继续当前有效 execution。
+      runId: execution.runId,
       threadId: execution.threadId,
       events: [],
       summary: {

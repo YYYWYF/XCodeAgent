@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+
+test('Backend 停服优先于预览断线和 UI 待确认，恢复按钮必须同步 Backend', () => {
+  const backend = { status: 'unavailable' as const, requestGeneration: 1, lastError: 'Failed to fetch' }
+  const preview = { status: 'unavailable' as const, requestGeneration: 2, lastError: '预览断线' }
+  assert.equal(prioritizedConnection(backend, preview), backend)
+  assert.equal(prioritizedConnection(backend, { ...preview, status: 'healthy' }), backend)
+  assert.equal(globalFallbackState({ connectionStatus: backend.status, hasRecoveryIncident: false }).visible, true)
+})
 import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ConnectionStatusBanner from '../src/renderer/src/components/ConnectionStatusBanner'
@@ -7,6 +15,7 @@ import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recovery
 import RetryEntryNotice from '../src/renderer/src/components/RetryEntryNotice'
 import {
   globalFallbackState,
+  prioritizedConnection,
   conversationUsesWorkflowRecovery,
   acceptancePreviewCanFocus,
   latestConversationFailure,
@@ -211,6 +220,17 @@ test('connection request generation rejects a late failure from an older request
   const succeededB = completeConnectionRequest(requestB, 2, 200)
   const lateFailureA = failConnectionRequest(succeededB, 1, 'late failure', 300)
   assert.deepEqual(lateFailureA, succeededB)
+})
+
+test('健康连接的正常同步不显示重连，真实断连后的同步仍显示重连', () => {
+  const healthyRead = beginConnectionRequest(initialConnectionState(true), 1)
+  assert.equal(healthyRead.status, 'healthy')
+  assert.doesNotMatch(renderSurfaces(healthyRead), /正在重新连接 Backend/)
+  const failed = failConnectionRequest(healthyRead, 1, 'Failed to fetch')
+  const reconnect = beginConnectionRequest(failed, 2)
+  assert.equal(reconnect.status, 'reconnecting')
+  assert.match(renderSurfaces(reconnect), /正在重新连接 Backend/)
+  assert.equal(beginConnectionRequest(initialConnectionState(), 1).status, 'connecting')
 })
 
 /** 无恢复入口只显示可关闭提示，正常连接不应重复提供重试。 */

@@ -1,6 +1,18 @@
 import type { ApplicationLifecycle, WorkflowRunPayload, WorkbenchExecution } from '../../typings'
 import type { AgentChatMessage } from './types'
 import type { SessionIdentity } from './hooks/sessionRuntime'
+import type { ApplicationPlanningCurrentState } from '../../service/activeApplicationPlanning'
+import { planningWorkflowIsActivelyRunning } from '../../service/applicationPlanningWorkflowState'
+
+/** 重入后的后台规划继续提供停止入口；权威待确认或终态不能被旧 running 消息覆盖。 */
+export function planningGenerationRunning(state?: ApplicationPlanningCurrentState): boolean {
+  if (!state) return false
+  if (state.transportState === 'running') return true
+  if (state.checkpointMissing) return false
+  // 只读同步不会建立生成流，恢复投影才是后台是否仍在运行的依据。
+  if (state.recovery) return state.recovery.classification === 'running'
+  return planningWorkflowIsActivelyRunning(state.workflow)
+}
 
 /** 从权威生命周期定位当前可见会话的执行，禁止借用其它会话的进度。 */
 export function ownedWorkbenchExecution(

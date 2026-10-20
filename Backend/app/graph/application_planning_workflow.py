@@ -96,7 +96,9 @@ def _route_start(state: ProjectState) -> str:
     if resume_from == "template_reconcile":
         raise ApplicationLifecycleConflictError("Template Reconcile 只能通过 retry_template_reconcile 动作重试。")
     resume_nodes = {
-        "requirements", "product_planning", "ui_confirmation", "planning_stage_entry",
+        "design_chat_response",
+        "requirements", "requirements_review", "product_planning", "requirement_document_review",
+        "ui_confirmation", "ui_confirmation_review", "planning_stage_entry",
         "technical_planning", "technical_planning_begin", "technical_planning_generate",
         "technical_planning_commit", "technical_planning_confirm", "technical_planning_review",
     }
@@ -870,14 +872,19 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_edge(START, "workflow_entry")
     builder.add_conditional_edges("workflow_entry", _route_start, {
         "design_intent_analysis": "design_intent_analysis",
+        "design_chat_response": "design_chat_response",
         "requirements": "requirements",
+        "requirements_review": "requirements_review",
         "product_planning": "product_planning",
+        "requirement_document_review": "requirement_document_review",
         "ui_confirmation": "ui_confirmation",
+        "ui_confirmation_review": "ui_confirmation_review",
         "planning_stage_entry": "planning_stage_entry",
         "technical_planning_begin": "technical_planning_begin",
         "technical_planning_generate": "technical_planning_generate",
         "technical_planning_commit": "technical_planning_commit",
         "technical_planning_confirm": "technical_planning_confirm",
+        "technical_planning_review": "technical_planning_review",
         "template_reconcile": "template_reconcile",
     })
     builder.add_conditional_edges("design_intent_analysis", route_design_intent, {

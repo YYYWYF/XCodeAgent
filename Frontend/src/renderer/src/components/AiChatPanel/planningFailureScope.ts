@@ -2,6 +2,27 @@ import type { ApplicationPlanningCurrentState } from '../../service/activeApplic
 import type { WorkflowRunPayload } from '../../typings'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import { workbenchPhaseForNode } from '../../workbenchPhase'
+import type { ConnectionState } from '../../service/connectionState'
+
+/** 连接故障属于当前规划线程，不受旧 Recovery Run 或缺失 checkpoint 的业务过滤影响。 */
+export function planningConnectionForSession(input: {
+  state?: ApplicationPlanningCurrentState
+  session?: SessionIdentity
+  sessionWorkflow?: WorkflowRunPayload
+  currentPhase: string
+  executionPhase: string
+}): ConnectionState | undefined {
+  const { state, session, sessionWorkflow, currentPhase, executionPhase } = input
+  // Backend 断连是基础设施故障，优先于业务阶段、历史 Run 和确认门归属。
+  if (state?.connection && state.connection.status !== 'healthy' &&
+      (!session || session.workflowId === state.application.id)) return state.connection
+  if (!state || !['product', 'planning'].includes(currentPhase) || currentPhase !== executionPhase)
+    return undefined
+  if (session && (session.workbenchPhase !== currentPhase || session.workflowId !== state.application.id))
+    return undefined
+  if (sessionWorkflow && sessionWorkflow.threadId !== state.threadId) return undefined
+  return state.connection
+}
 
 /** 仅补接当前业务阶段的权威快照，计划会话不能收到上游遗留的 UI 确认卡。 */
 export function planningSnapshotForStage(

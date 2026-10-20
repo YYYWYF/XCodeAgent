@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { planningFailureStateForSession, planningSnapshotForStage } from '../src/renderer/src/components/AiChatPanel/planningFailureScope'
+import { planningConnectionForSession, planningFailureStateForSession, planningSnapshotForStage } from '../src/renderer/src/components/AiChatPanel/planningFailureScope'
 
 test('计划会话晚绑定可接入技术中断快照，但不接入上游 UI 确认和其他阶段快照', () => {
   const failed = { runId: 'failed', summary: { phase: 'technical_planning', status: 'failed' },
@@ -31,6 +31,23 @@ function fixture() {
   } as SessionIdentity
   return { state, session, sessionWorkflow: workflow, currentPhase: 'planning', executionPhase: 'planning' }
 }
+
+test('确认断线不因旧恢复源或缺失 checkpoint 隐藏，同线程重试失败仍可见', () => {
+  const input = fixture()
+  const connection = { status: 'unavailable' as const, requestGeneration: 3, lastError: 'Failed to fetch' }
+  const state = { ...input.state, connection,
+    recovery: { ...input.state.recovery!, sourceRunId: 'previous-run' } }
+  assert.equal(planningFailureStateForSession({ ...input, state }), undefined)
+  assert.equal(planningConnectionForSession({ ...input, state }), connection)
+  assert.equal(planningConnectionForSession({ ...input, state: { ...state, checkpointMissing: true } }), connection)
+  assert.equal(planningConnectionForSession({ ...input, state: { ...state,
+    connection: { ...connection, requestGeneration: 4 } } })?.status, 'unavailable')
+  assert.equal(planningConnectionForSession({ ...input, state,
+    sessionWorkflow: { ...input.sessionWorkflow, threadId: 'another-thread' } }), connection)
+  assert.equal(planningConnectionForSession({ ...input, state,
+    session: { ...input.session, workflowId: 'another-app' } }), undefined)
+  assert.equal(planningConnectionForSession({ ...input, state, currentPhase: 'product' }), connection)
+})
 
 test('当前执行所属计划会话保留失败和重试状态', () => {
   const input = fixture()

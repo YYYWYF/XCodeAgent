@@ -56,6 +56,17 @@ class StageExecutionArtifactTests(unittest.TestCase):
         (self.root / "frontend/src/Page.tsx").write_text("changed source")
         self.assertFalse(load_stage_execution_artifacts(self.state, self.plan, "test_phase_confirmation")["unit_test_gate_passed"])
 
+    def test_repair_reads_latest_failure_report_without_granting_confirmation(self):
+        """修复入口读取最新失败报告并保留返修证据，不能投影为单测通过。"""
+        report = bind_unit_test_report(self.state, {"passed": False, "revision_requests": [{"reason": "编译失败"}]})
+        path = self.root / ".devagentstudio/reports/unit-test-report.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report))
+        fields = load_stage_execution_artifacts({**self.state, "unit_test_report": {"stale": True}}, self.plan, "unit_test_repair")
+        self.assertEqual(fields["unit_test_report"], report)
+        self.assertFalse(fields["unit_test_gate_passed"])
+        self.assertFalse(fields["unit_test_quality_gate_passed"])
+
     def test_unfinished_newer_build_invalidates_old_success(self):
         """最新记录未完成收尾时不借用旧成功，也不把批次完成当作 Build 完成。"""
         write_build_execution_record(self.state, {**self.record, "execution_run_id": "newer", "execution_stage": "batch_committed"})

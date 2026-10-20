@@ -1,4 +1,4 @@
-"""重试只提取失败节点和原提问，节点输入由当前磁盘资产重新构造。"""
+"""从完整失败现场读取业务上下文，以最新磁盘输入重新执行原节点。"""
 
 from __future__ import annotations
 
@@ -13,15 +13,9 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord, DurableExecutionStatus, RecoveryAction, RecoveryActionKind,
     RecoveryActionPlan, RecoveryExecutionError, RecoveryIncidentStatus,
 )
-from app.domain.workflow_recovery_boundary import failed_node_reentry_target
 
 NO_RETRY_ENTRY = "找不到恢复入口，请手动发起流程。"
 _locks: dict[tuple[str, str], asyncio.Lock] = {}
-_TECHNICAL = {"technical_planning_begin", "technical_planning_generate", "technical_planning_commit"}
-_CONFIRMATIONS = {
-    "requirements_review", "requirement_document_review", "ui_confirmation_review",
-    "technical_planning_review", "technical_planning_confirm", "planning_stage_entry",
-}
 
 
 @dataclass(frozen=True)
@@ -43,15 +37,16 @@ async def read_retry_hint(source: DurableExecutionRecord, graph: Any) -> RetryHi
 
 
 async def _read_retry_hint(source: DurableExecutionRecord, graph: Any) -> RetryHint | None:
-    """读取本 Run 的已提交记录定位节点，不校验或复制旧执行 State。"""
-    from app.services.retry_origin import load_retry_origin
-    origin = load_retry_origin(source.workspace, source.run_id, source.thread_id)
-    if origin is not None:
-        return RetryHint(node=origin.regeneration_node or origin.node, request=origin.request)
+    """读取本 Run 的已提交记录定位节点，与实际执行共用同一入口解释。"""
     from app.services.checkpoint_execution import read_checkpoint_execution
     execution = await read_checkpoint_execution(source, graph)
+    return _execution_retry_hint(execution, graph)
+
+
+def _execution_retry_hint(execution, graph) -> RetryHint | None:
+    """确认处理失败时重新展示原审阅门，其他业务节点保持原失败位置。"""
     if execution is not None:
-        node = failed_node_reentry_target(execution.node, source.execution_kind, source.workflow_scope)
+        node = "technical_planning_review" if execution.node == "technical_planning_confirm" else execution.node
         if node in graph.nodes and node not in {"workflow_entry", "handle_failure", "await_user_input", "__end__"}:
             return RetryHint(node=node, request=execution.request)
     return None
@@ -65,7 +60,9 @@ async def retry_action_plan(source: DurableExecutionRecord, graph: Any) -> Recov
     target = issue.node if issue else hint.node if hint else ""
     digest = hashlib.sha256(f"{source.run_id}:{source.updated_at}:{target}".encode()).hexdigest()
     action = RecoveryAction(actionId=f"retry:{digest}", kind=RecoveryActionKind.RETRY_BUSINESS_NODE,
-                            targetNode=target, label=issue.label if issue else "重试",
+                            targetNode=target, label=issue.label if issue else (
+                                "继续生成" if source.execution_kind == "application_planning"
+                                and source.status is DurableExecutionStatus.INTERRUPTED else "重试"),
                             description=issue.message if issue else "读取当前文件，重新执行失败的业务步骤。",
                             requiresConfirmation=False) if hint else None
     return RecoveryActionPlan(incidentId=digest, sourceRunId=source.run_id, threadId=source.thread_id,
@@ -143,9 +140,8 @@ def _stopped_workbench_source(source: DurableExecutionRecord) -> bool:
                 and execution.owner_session_id == source.owner_session_id)
 
 
-async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any, *, allow_stopped: bool = False,
-                                      retry_origin=None):
-    """串行交接运行归属，以全新 Graph 输入重新执行节点，不 fork 旧 checkpoint。"""
+async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any, *, allow_stopped: bool = False):
+    """读取完整失败现场、刷新磁盘输入，再串行交接运行归属并重新执行一次。"""
     if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not (allow_stopped and _stopped_workbench_source(source)):
         raise RecoveryExecutionError("RETRY_SOURCE_ACTIVE", "当前执行不是失败或中断状态。")
     from app.services.application_lifecycle import (
@@ -156,14 +152,16 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
     from app.services.execution_recovery import observe_execution_started
     from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext, _acquire_workspace_lease, _recovery_observability
     from app.services.failed_run_cleanup import require_failed_run_drained
-    from app.services.stage_artifacts import load_stage_artifacts
+    from app.services.checkpoint_execution import read_checkpoint_execution
+    from app.services.retry_node_state import retry_node_state, refresh_retry_node_inputs
 
     async with _locks.setdefault((source.workspace, source.run_id), asyncio.Lock()):
         lifecycle = load_application_lifecycle(source.workspace)
         if source.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, source.run_id}:
             raise RecoveryExecutionError("RETRY_SOURCE_SUPERSEDED", "原任务已被新的执行替代，请查看当前流程。")
-        # 已固定的原始现场贯穿准备与执行，避免二次读取时转向恢复过程产生的新失败。
-        hint = RetryHint(node=retry_origin.regeneration_node or retry_origin.node, request=retry_origin.request) if retry_origin else await read_retry_hint(source, graph)
+        # 节点和完整输入必须来自同一份已提交现场，不拼接其他 Run 的历史状态。
+        checkpoint = await read_checkpoint_execution(source, graph)
+        hint = _execution_retry_hint(checkpoint, graph)
         if hint is None:
             await release_unretryable_execution(source)
             raise RecoveryExecutionError("RETRY_ENTRY_NOT_FOUND", NO_RETRY_ENTRY)
@@ -179,27 +177,18 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
         issue = regeneration_for_retry(source.workspace, node, graph)
         if issue:
             node = issue.node
-            if retry_origin is not None:
-                retry_origin = retry_origin.model_copy(update={"regeneration_node": node})
         planning_handoff = node not in graph.nodes and node in {"requirements", "product_planning", "ui_confirmation", "technical_planning_begin"}
         if planning_handoff:
             from app.graph.application_planning_workflow import application_planning_graph_for_request
             graph = await application_planning_graph_for_request(workspace=source.workspace, project_id=source.project_id)
-        # 事务内部结果没有落盘时回到该业务阶段入口，不能使用旧候选或旧确认动作。
-        if node in _TECHNICAL:
-            node = "technical_planning_begin"
-        if node in {"unit_test_repair", "small_task_repair"}:
-            node = "unit_test" if node == "unit_test_repair" else "integration_test"
-        if node in _CONFIRMATIONS:
-            node = {"requirements_review": "requirements", "requirement_document_review": "product_planning",
-                    "ui_confirmation_review": "ui_confirmation", "technical_planning_review": "technical_planning_begin",
-                    "technical_planning_confirm": "technical_planning_begin"}.get(node, node)
-        state: dict[str, Any] = {"workspace": source.workspace, "project_id": source.project_id,
+        state = retry_node_state(checkpoint.snapshot.values, node,
+                                 planning=source.execution_kind == "application_planning" or planning_handoff)
+        state.update({"workspace": source.workspace, "project_id": source.project_id,
                                  "request": hint.request, "resume_from": node,
                                  "active_thread_id": source.thread_id,
                                  "retry_source_run_id": source.run_id,
                                  "owner_session_id": source.owner_session_id or "",
-                                 "workflow_scope": source.workflow_scope or ""}
+                                 "workflow_scope": source.workflow_scope or ""})
         if execution:
             scope = {"type": execution.scope, "targetId": execution.target_id}
             if execution.development_target and execution.development_target.api_contract_id:
@@ -209,7 +198,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             revision = lifecycle.active_formal_revision
             state.update(change_id=revision.change_id, change_target=revision.target.model_dump(mode="json", by_alias=True))
             if source.execution_kind == "application_planning" and revision.planning_thread_id == source.thread_id:
-                generation_target = "technical_planning" if node in _TECHNICAL else node
+                generation_target = "technical_planning" if node.startswith("technical_planning_") else node
                 state.update(design_change_submission=True, design_change_request=hint.request,
                     design_change_target=generation_target, design_change_generation_target=generation_target,
                     design_change_generation_request=hint.request)
@@ -217,26 +206,17 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             state["workflow_action"] = "retry_template_reconcile"
         if planning_handoff:
             state["workflow_scope"] = "application_planning"
-            generation_target = "technical_planning" if node in _TECHNICAL else node
+            generation_target = "technical_planning" if node.startswith("technical_planning_") else node
             state.update(design_change_submission=True, design_change_request=hint.request,
                 design_change_target=generation_target, design_change_generation_target=generation_target,
                 design_change_generation_request=hint.request)
-        state.update(load_stage_artifacts(state, node))
-        if node == "technical_planning_begin":
-            from app.services.technical_planning_retry import prepare_technical_planning_retry
-            state.update(prepare_technical_planning_retry(state))
+        refresh_retry_node_inputs(state, node)
         if source.workflow_scope == "conversation":
-            # 保留失败节点；工作区事实由节点入口重新读取，不复制旧分类或工具结果。
+            # 从原失败节点继续，分类、授权、变更集和返修证据均保留。
             state["direct_modification_resume_node"] = node
         new_run = f"retry-{uuid4().hex}"
         observability = _recovery_observability(run_id=new_run, thread_id=source.thread_id,
             project_id=source.project_id, workspace=source.workspace)
-        if retry_origin is not None:
-            from app.services.retry_origin import save_retry_origin
-
-            # 所有可能失败的锚点写入必须先于身份交接和新租约；写入失败仍保留原执行重试入口。
-            save_retry_origin(source.workspace, source.run_id, retry_origin)
-            save_retry_origin(source.workspace, new_run, retry_origin)
         revision_number = lifecycle.revision if lifecycle else None
         before_handoff = lifecycle
         lease = None
@@ -263,14 +243,19 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             state.update(active_run_id=new_run, active_thread_id=source.thread_id, observability=observability,
                          lifecycle=application_lifecycle_payload(lifecycle) if lifecycle else None)
             # 指定一个全新的 checkpoint identity，使 LangGraph 从 START 接受新输入；不读取旧 State。
-            config = {"configurable": {"thread_id": source.thread_id, "checkpoint_ns": "", "checkpoint_id": str(uuid4())}}
+            config = {
+                "configurable": {"thread_id": source.thread_id, "checkpoint_ns": "", "checkpoint_id": str(uuid4())},
+                # 嵌套 Agent 重建 Context 时仍能识别本轮取消身份，不能沿用来源 Run。
+                "metadata": {"run_id": new_run, "thread_id": source.thread_id, "workspace": source.workspace,
+                             "selected_skill_names": list(state.get("selected_skill_names") or [])},
+            }
             return NativeRecoveryRuntimeContext(source_execution=source, child_execution=child,
                 recovery_plan=SimpleNamespace(target_node=node), new_run_id=new_run, thread_id=source.thread_id,
                 project_id=source.project_id, workspace=source.workspace, workflow_scope=state["workflow_scope"] or None,
                 graph=graph, fork_config=config, observation_config={"configurable": {"thread_id": source.thread_id}},
                 fork_snapshot=SimpleNamespace(values=state), lifecycle_payload=state["lifecycle"],
                 workspace_lease=lease, observability=observability, heartbeat_task=None, restart_node=True,
-                retry_lifecycle_before_handoff=before_handoff, retry_origin=retry_origin)
+                retry_lifecycle_before_handoff=before_handoff)
         except BaseException as exc:
             from app.services.retry_preparation import abandon_prepared_retry
             from app.services.failed_run_cleanup import shield_run_cleanup

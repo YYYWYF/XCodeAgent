@@ -106,7 +106,6 @@ class NativeRecoveryRuntimeContext:
     restart_node: bool = False
     retry_lifecycle_before_handoff: Any = None
     runtime_started: bool = False
-    retry_origin: Any = None
 
     def node_recovery_context(self) -> NodeRecoveryContext | None:
         """从已验证的 source、child 和 checkpoint 生成一次性节点侧视图。"""

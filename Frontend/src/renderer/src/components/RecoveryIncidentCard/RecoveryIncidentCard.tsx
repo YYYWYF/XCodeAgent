@@ -11,6 +11,7 @@ import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
 import { cx } from '../../utils'
 import '../ApplicationPlanningRecoveryIncidentCard/ApplicationPlanningRecoveryIncidentCard.less'
 import RetryEntryNotice from '../RetryEntryNotice'
+import EndedTaskNotice from '../AiChatPanel/components/NextDevelopmentGuide/EndedTaskNotice'
 
 const { Text } = Typography
 
@@ -55,6 +56,14 @@ export default function RecoveryIncidentCard({
     onAction()
   }
 
+  // 正常停止复用开发阶段的继续卡片，仍沿用服务端恢复动作与原确认要求。
+  if (incident.kind === 'recoverable' && incident.presentation === 'stopped_generation') {
+    return <div data-testid={testId}>
+      <EndedTaskNotice mode="stopped_generation" continuing={retrying}
+        disabled={disabled || !onAction} onContinue={async () => handleAction()} />
+      {error ? <Text type="danger">{error}</Text> : null}
+    </div>
+  }
   const icon = retrying ? <LoadingOutlined spin /> : <WarningOutlined />
 
   return (

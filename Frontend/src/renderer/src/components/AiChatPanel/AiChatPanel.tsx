@@ -80,7 +80,8 @@ import {
   PRODUCT_CONVERSATION_PLACEHOLDER,
   PRODUCT_CONVERSATION_RUNNING_HINT,
   productConversationRoute,
-  productConversationSendBlocked
+  productConversationSendBlocked,
+  productDesignStageMentionFromText
 } from './components/ChatComposer/productConversation'
 import AcceptanceCommitDock from './components/AcceptanceCommitDock'
 import AcceptanceDecisionDock from './components/AcceptanceDecisionDock'
@@ -107,6 +108,7 @@ import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesi
 import {
   compactPlanningMessageHistory,
   rollbackPlanningSubmissionMessages,
+  rollbackUnansweredPlanningSubmission,
   type PlanningSubmissionTransaction
 } from './components/MessageList/uiDesignPreviewHistory'
 import PageContextHeader from './components/PageContextHeader'
@@ -147,6 +149,7 @@ import { useSessionRuntimeStore } from './hooks/useSessionRuntimeStore'
 import { useWorkbenchRunRefresh } from './hooks/useWorkbenchRunRefresh'
 import {
   generationControlOwner,
+  planningGenerationRunning,
   ownedWorkbenchExecution,
   restoreWorkbenchPresentation,
   workbenchExecutionRunning
@@ -164,6 +167,9 @@ import {
 } from './hooks/revisionSession'
 import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRuntime'
 import { sessionToRestoreForPhase } from './hooks/phaseSessionSelection'
+import { createPlanningStageReentry } from './planningStageReentry'
+import { pendingFormalRevisionStart, retryFormalRevisionStart } from './formalRevisionStartRetry'
+import { readApplicationPlanningAuthoritativeSnapshot } from '../../service/applicationPlanningRecovery'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import {
   applicationMutationReadonlyForSession,
@@ -202,10 +208,11 @@ import {
   acceptancePreviewCanFocus,
   conversationUsesWorkflowRecovery,
   globalFallbackState,
+  prioritizedConnection,
   latestConversationFailure,
   workbenchRecoveryCoveredByExecution
 } from './globalFallbackState'
-import { planningFailureStateForSession, planningSnapshotForStage } from './planningFailureScope'
+import { planningConnectionForSession, planningFailureStateForSession, planningSnapshotForStage } from './planningFailureScope'
 import { initialConnectionState } from '../../service/connectionState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
 import RecoverySurface from './recoverySurface'
@@ -2358,6 +2365,35 @@ export default function AiChatPanel({
     [handleStartDesignStageRevision]
   )
 
+  const revisionStartRetryLock = useRef(false)
+  const [revisionStartRetrying, setRevisionStartRetrying] = useState(false)
+
+  /** 目标会话已准备但确认尚未入场时，重试必须补交原请求，不能恢复上一轮完成规划。 */
+  const handleRetryPlanning = (): void => {
+    if (!activeSession?.revisionContext) { onRetryPlanning?.(); return }
+    if (revisionStartRetryLock.current) return
+    revisionStartRetryLock.current = true
+    setRevisionStartRetrying(true)
+    void retryFormalRevisionStart({
+      session: activeSession,
+      read: async () => {
+        const snapshot = await readApplicationPlanningAuthoritativeSnapshot(
+          application, activeSession.revisionContext!.planningThreadId
+        )
+        return { snapshot, lifecycle: snapshot?.lifecycle || await getApplicationLifecycle(application) }
+      },
+      onLifecycle: (lifecycle) => onApplicationLifecycleChange(lifecycle),
+      start: async (input) => {
+        designRevisionStartInteractionRef.current = ''
+        await handleStartDesignStageRevision(input)
+      },
+      recover: () => onRetryPlanning?.()
+    }).catch((reason) => message.error(formatError(reason, '重新提交正式修改失败'))).finally(() => {
+      revisionStartRetryLock.current = false
+      setRevisionStartRetrying(false)
+    })
+  }
+
   const {
     activeWorkflow: localActiveWorkflow,
     conversationRunning,
@@ -2465,7 +2501,9 @@ export default function AiChatPanel({
   const displayedMessages = restoredRun.messages
   const restoredRunRunning = !planEnded && workbenchExecutionRunning(ownedExecution)
   const loading = localWorkflowLoading || restoredRunRunning
-  const stopping = localWorkflowStopping || (restoredRunRunning && ownedExecution?.status === 'stopping')
+  const [stopGenerationPending, setStopGenerationPending] = useState(false)
+  const stopGenerationPendingRef = useRef(false)
+  const stopping = stopGenerationPending || localWorkflowStopping || (restoredRunRunning && ownedExecution?.status === 'stopping')
   // 已结束任务也只读刷新工作区资格；切换会话或本地开始新运行后自动停止旧轮询。
   const endedExecutionForSession = planEnded ? Object.values(applicationLifecycle?.endedExecutions || {})
     .find((item) => item.execution.ownerSessionId === activeSession?.sessionId) : undefined
@@ -2480,19 +2518,28 @@ export default function AiChatPanel({
   const currentGenerationOwner = generationControlOwner(
     localWorkflowLoading,
     restoredRunRunning,
-    isApplicationPlanningPhase && planningState?.transportState === 'running'
+    isApplicationPlanningPhase && activeWorkbenchPhase === derivedWorkbenchPhase &&
+      planningGenerationRunning(planningState)
   )
-  const currentGenerationLoading = currentGenerationOwner !== undefined
+  const currentGenerationLoading = stopGenerationPending || currentGenerationOwner !== undefined
 
-  /** 生成中的结束按钮按执行归属收口，工作台统一走 End 并释放占用。 */
+  /** 点击后立即显示停止进度，等待所属执行收口，期间拒绝重复点击。 */
   const handleStopCurrentGeneration = (): void => {
-    if (currentGenerationOwner === 'planning') {
-      void onStopPlanning().catch((reason) => {
-        if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止规划失败'))
-      })
-      return
-    }
-    void handleEndPlan(ownedExecution?.runId || activeWorkflow?.runId)
+    if (stopGenerationPendingRef.current) return
+    stopGenerationPendingRef.current = true
+    setStopGenerationPending(true)
+    // 即使生成状态先于停止请求回执消失，也保留按钮上的 loading，直到请求真正完成。
+    void (async () => {
+      try {
+        if (currentGenerationOwner === 'planning') await onStopPlanning()
+        else await handleEndPlan(ownedExecution?.runId || activeWorkflow?.runId)
+      } catch (reason) {
+        if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止生成失败'))
+      } finally {
+        stopGenerationPendingRef.current = false
+        setStopGenerationPending(false)
+      }
+    })()
   }
 
   // 普通二次修改发送前清理旧的页面详细设计标记，避免历史 Workflow 触发进度卡片。
@@ -2979,6 +3026,9 @@ export default function AiChatPanel({
   // ensurePlanningSession 用 ref 持有，避免 effect 依赖它循环。
   const ensurePlanningSessionRef = useRef(ensurePlanningSession)
   ensurePlanningSessionRef.current = ensurePlanningSession
+  const planningStageReentryRef = useRef<ReturnType<typeof createPlanningStageReentry>>()
+  const injectPlanningChunkRef = useRef(injectPlanningChunk)
+  injectPlanningChunkRef.current = injectPlanningChunk
   const activeFormalRevision = applicationLifecycle?.activeFormalRevision
   const formalRevisionPlanningActive = Boolean(
     activeFormalRevision &&
@@ -3210,12 +3260,16 @@ export default function AiChatPanel({
     // 若此时不注册句柄，Runtime 最早的流式数据（"正在生成需求文档大纲…"）会被丢弃。
     // 总是注册，chunk 到达时 sessionKey 未就绪则缓存，待 ensurePlanningSession 完成后回放。
     const injectChunk = (chunk: { content?: string; workflow?: WorkflowRunPayload }): void => {
+      if (planningStageReentryRef.current) {
+        planningStageReentryRef.current.publish(chunk)
+        return
+      }
       const sessionKey = planningSessionKeyRef.current
       if (!sessionKey) {
         pendingPlanningChunksRef.current.push(chunk)
         return
       }
-      injectPlanningChunk(sessionKey, chunk)
+      injectPlanningChunkRef.current(sessionKey, chunk)
     }
     onPlanningStreamReady(injectChunk)
     return () => {
@@ -3809,6 +3863,11 @@ export default function AiChatPanel({
   )
   const conversationActive = conversationRunning || isConversationWorkflow(latestWorkflowForDisplay)
   // 确认入口继续读取后端状态；失败入口必须另行校验当前会话与执行的精确归属。
+  const pendingRevisionStart = isApplicationPlanningPhase
+    ? pendingFormalRevisionStart(applicationLifecycle, activeSession) : undefined
+  const pendingRevisionStartError = pendingRevisionStart && planningState?.transportState !== 'running' &&
+    planningState?.transportState !== 'reconciling'
+    ? '正式修改尚未启动，请重试提交已确认的修改要求。' : undefined
   const sessionPlanningFailureState = planningFailureStateForSession({
     state: planningState,
     session: activeSession,
@@ -3819,8 +3878,16 @@ export default function AiChatPanel({
     executionPhase: derivedWorkbenchPhase
   })
   const planningError = sessionPlanningFailureState?.error
+  // 网络连接独立于业务 Run 归属：确认尚未到达服务端时，不能被旧恢复源过滤成健康。
+  const planningConnection = planningConnectionForSession({
+    state: planningState,
+    session: activeSession,
+    sessionWorkflow: resolveWorkflowForDisplay(undefined, displayedMessages),
+    currentPhase: activeWorkbenchPhase,
+    executionPhase: derivedWorkbenchPhase
+  })
   const workflowConnection = isApplicationPlanningPhase
-    ? sessionPlanningFailureState?.connection || initialConnectionState(true)
+    ? planningConnection || initialConnectionState(true)
     : (templateGenerationRecoverable || templateReconcileRetryable) && planningState
       ? planningState.connection
       : connectionState
@@ -3844,6 +3911,7 @@ export default function AiChatPanel({
     )
   const currentPreviewRetry =
     !conversationNeedsRecovery &&
+    !pendingRevisionStart &&
     !planningNeedsRecovery &&
     (previewConnectionUnavailable ||
       (previewFallbackError && workflowConnection.status === 'healthy'))
@@ -3851,12 +3919,7 @@ export default function AiChatPanel({
           void previewRuntime.retry()
         }
       : undefined
-  const activeConnectionState =
-    conversationNeedsRecovery && workflowConnection.status !== 'healthy'
-      ? workflowConnection
-      : previewConnectionUnavailable
-        ? previewRuntime.connection
-        : workflowConnection
+  const activeConnectionState = prioritizedConnection(workflowConnection, previewRuntime.connection)
   const planningReconnectRef = useRef<{ scope: string; status: string }>()
   const reconcilePlanningRef = useRef(onReconcilePlanning)
   reconcilePlanningRef.current = onReconcilePlanning
@@ -3897,7 +3960,7 @@ export default function AiChatPanel({
       }
     : undefined
   const currentRecoveryIncident =
-    Boolean(recoveryProjectionError) ||
+    Boolean(pendingRevisionStart) || Boolean(recoveryProjectionError) ||
     workbenchExecutionInProgress ||
     endedWorkbenchRecovery ||
     Boolean(workflowCodeReviewRetry(activeWorkflow)) ||
@@ -3908,7 +3971,7 @@ export default function AiChatPanel({
         ? applicationPlanningRecoveryIncident(sessionPlanningFailureState)
         : workbenchRecoveryIncident(activeExecutionRecovery, latestWorkflowForDisplay)
   const globalFallbackError =
-    recoveryProjectionError ||
+    pendingRevisionStartError || recoveryProjectionError ||
     (isApplicationPlanningPhase
       ? uiDesignRecoveryError(sessionPlanningFailureState?.recovery)
       : undefined) ||
@@ -3939,7 +4002,8 @@ export default function AiChatPanel({
   })
   // 无当前执行所属会话时，不把共享规划、预览或投影错误转交给其他会话和阶段。
   const showGlobalFallback =
-    globalFallback.visible && (!isApplicationPlanningPhase || Boolean(sessionPlanningFailureState))
+    globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
+      !isApplicationPlanningPhase || Boolean(pendingRevisionStartError) || Boolean(sessionPlanningFailureState))
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
@@ -4707,7 +4771,18 @@ export default function AiChatPanel({
             message.error(
               formatError(reason, '技术规划确认未提交成功，上一轮规划连接未能正常结束，请重试')
             )
+            return
           }
+          // 尚无回复的失败提交不作为成功发送留痕；只撤销本次消息，不影响卡片填写和其他流式结果。
+          if (planningSubmission) {
+            const transaction = planningSubmission
+            setSessionMessagesRef.current(transaction.sessionKey, (messages) =>
+              rollbackUnansweredPlanningSubmission(messages, transaction)
+            )
+            planningNewRoundRef.current = false
+            persistPlanningSession(transaction.sessionKey)
+          }
+          message.error(formatError(reason, '后端服务暂时不可用，请重新同步后重试。'))
         }
       )
       return
@@ -4772,8 +4847,8 @@ export default function AiChatPanel({
   )
 
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
-  const handleInitialProductConversationSend = async (): Promise<void> => {
-    const trimmed = draft.trim()
+  const handleInitialProductConversationSend = async (sourceRequest = draft): Promise<void> => {
+    const trimmed = sourceRequest.trim()
     if (!trimmed || productConversationSendDisabled || workflowInputLocked) {
       return
     }
@@ -4794,13 +4869,44 @@ export default function AiChatPanel({
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
-    appendPlanningUserMessage({ design_change_request: trimmed })
+    const submission = appendPlanningUserMessage({ design_change_request: trimmed })
     if (isTechnicalPlanningPhase) {
+      // 只有本次输入触发的新设计执行才切阶段；浏览历史和只读问答不改变用户选择。
+      const reentry = createPlanningStageReentry({
+        sourceSessionKey: submission?.sessionKey || planningSessionKeyRef.current || activeSession?.key || '',
+        prepareDesignSession: async (workflow) => {
+          const identity = await ensurePlanningSessionRef.current(
+            `design-reentry:${workflow.threadId}:${workflow.runId}`, 'product'
+          )
+          if (submission) {
+            setSessionMessagesRef.current(submission.sessionKey, (messages) =>
+              messages.filter((item) => !(submission.messageIds.includes(item.id) && item.planningLoading))
+            )
+            persistPlanningSession(submission.sessionKey)
+          }
+          planningSessionKeyRef.current = identity.key
+          planningNewRoundRef.current = true
+          appendPlanningUserMessage({ design_change_request: trimmed })
+          setActiveView('chat')
+          setActiveDetailTarget({ type: 'none' })
+          switchPhase('product', 'auto')
+          return identity.key
+        },
+        publish: (key, chunk) => {
+          if (key) injectPlanningChunkRef.current(key, chunk)
+          else pendingPlanningChunksRef.current.push(chunk)
+        }
+      })
+      planningStageReentryRef.current = reentry
       try {
         await onSubmitPlanningClarification(currentPlanningWorkflow, {}, undefined, undefined, trimmed, true)
+        await reentry.finish()
         setDraftByKey(draftKey, '')
       } catch (reason) {
+        await reentry.finish().catch(() => undefined)
         message.error(reason instanceof Error ? reason.message : '技术规划对话失败，请重试。')
+      } finally {
+        if (planningStageReentryRef.current === reentry) planningStageReentryRef.current = undefined
       }
       return
     }
@@ -4814,13 +4920,31 @@ export default function AiChatPanel({
     setDraftByKey(draftKey, '')
   }
 
-  /** 在当前设计或计划会话中从所选节点开始调试，并保留本轮消息的乐观回滚。 */
-  const handleApplicationPlanningDebug = async (
+  /** 在当前设计或计划会话中从所选节点继续，并保留本轮消息的乐观回滚。 */
+  const handleApplicationPlanningNodeSend = async (
     workflowDebug: WorkflowDebugOptions,
     debugStage: ApplicationPlanningDebugStage
   ): Promise<void> => {
     const node = workflowDebug.resumeFrom || ''
-    const request = draft.trim() || `从节点 ${node} 开始调试。`
+    const stageMention = productDesignStageMentionFromText(draft, debugStage)
+    const request =
+      (stageMention?.node === node ? stageMention.request : draft.trim()) ||
+      `从节点 ${node} 开始执行。`
+    if (stageMention && planningWorkflowRequiresUserInput(currentPlanningWorkflow)) {
+      const currentNode = planningWorkflowPhase(currentPlanningWorkflow)
+      const requestTargetsCurrentStage =
+        stageMention.node === 'requirements'
+          ? ['design_intent_analysis', 'requirements', 'product_planning', 'requirement_document_review']
+            .includes(currentNode)
+          : currentNode === stageMention.node
+      if (!requestTargetsCurrentStage) {
+        message.error('当前规划节点有待确认事项，请先完成确认后再切换节点。')
+        return
+      }
+      // 当前节点仍在等待用户输入时，沿原中断续接提交，不能用节点重入越过确认门。
+      await handleInitialProductConversationSend(stageMention.request)
+      return
+    }
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
@@ -4831,7 +4955,7 @@ export default function AiChatPanel({
     } catch (reason) {
       rollbackPlanningSubmission(transaction)
       if (!isAuthenticationFailure(reason)) {
-        message.error(formatError(reason, '调试规划节点失败'))
+        message.error(formatError(reason, '启动规划节点失败'))
       }
     }
   }
@@ -5146,6 +5270,16 @@ export default function AiChatPanel({
                       retryLabel="继续开发"
                       onRetry={() => { void retryRevisionDevelopmentHandoff() }}
                     />
+                  ) : isApplicationPlanningPhase && sessionPlanningFailureState?.stopRequested ? (
+                    <AgentErrorCard
+                      title="生成尚未停止"
+                      error={sessionPlanningFailureState.recoveryActionError || '正在等待后台退出，请稍候。'}
+                      retryLabel="重试停止生成"
+                      retrying={sessionPlanningFailureState.transportState === 'running'}
+                      onRetry={() => { void onStopPlanning().catch((reason) => {
+                        if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止生成失败'))
+                      }) }}
+                    />
                   ) : isApplicationPlanningPhase && sessionPlanningFailureState?.endRequested ? (
                     <AgentErrorCard
                       title="设计任务尚未结束"
@@ -5168,7 +5302,7 @@ export default function AiChatPanel({
                       isApplicationPlanningPhase={isApplicationPlanningPhase}
                       onExecuteRecoveryAction={(recovery) => { void handleExecuteRecoveryAction(recovery) }}
                       onRetryCurrentRecovery={() => { void retryCurrentRecovery() }}
-                      onRetryPlanning={onRetryPlanning}
+                      onRetryPlanning={handleRetryPlanning}
                       planningState={sessionPlanningFailureState}
                       recoveryError={
                         isApplicationPlanningPhase
@@ -5182,12 +5316,12 @@ export default function AiChatPanel({
                   ) : globalFallback.error ? (
                     <AgentErrorCard
                       error={globalFallback.error}
-                      onRetry={retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
-                        ? onRetryPlanning
+                      onRetry={pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
+                        ? handleRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
                           : () => { void retryCurrentRecovery() })}
-                      retrying={recoveryRunning}
+                      retrying={recoveryRunning || revisionStartRetrying}
                     />
                   ) : null}
                 </div>
@@ -5259,13 +5393,6 @@ export default function AiChatPanel({
                 />
               ) : (
                 <>
-                  {isApplicationPlanningPhase && planningState?.lifecycle.activeFormalRevision && !currentGenerationLoading ? (
-                    <div className={cx('ai-chat-planning-end')}>
-                      <Button danger onClick={() => { void onStopPlanning().catch((reason) => {
-                        if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '结束设计任务失败'))
-                      }) }}>结束任务</Button>
-                    </div>
-                  ) : null}
                   <ChatComposer
                     activeWorkflow={activeWorkflow}
                     copy={copy}
@@ -5312,7 +5439,7 @@ export default function AiChatPanel({
                           if (workflowDebug?.enabled && (isDesignPhase || isTechnicalPlanningPhase)) {
                             const debugStage = isDesignPhase ? 'design' : 'planning'
                             commitBeforeSend.requestAdvance(() =>
-                              handleApplicationPlanningDebug(workflowDebug, debugStage)
+                              handleApplicationPlanningNodeSend(workflowDebug, debugStage)
                             )
                             return
                           }

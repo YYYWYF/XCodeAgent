@@ -271,12 +271,6 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
     """校验候选摘要并幂等原子提交 TechnicalPlan JSON/Markdown。"""
 
     boundary = _technical_boundary(state)
-    if (
-        boundary.boundary is ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED
-        and state.get("technical_plan_repair_source_run_id")
-    ):
-        # 提交失败后的显式重试不复用旧候选，由原 begin/generate 重新生成再提交。
-        return {"phase": "technical_planning_begin", "resume_from": ""}
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.CANDIDATE_COMMITTED:
         raise ValueError("TechnicalPlan commit 只能从 CANDIDATE_COMMITTED boundary 开始。")
     candidate = state.get("technical_plan_candidate")

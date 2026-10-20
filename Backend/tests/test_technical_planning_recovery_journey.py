@@ -485,7 +485,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             self.harness.model_name = "working-model"
             run_b = await self.harness.execute_action(action_a)
             self.assertNotEqual(run_b.run_id, source_a.run_id)
-            self.assertEqual(run_b.first_node, "technical_planning_begin")
+            self.assertEqual(run_b.first_node, "technical_planning_generate")
             self.assertNotEqual(run_b.status, DurableExecutionStatus.FAILED)
 
             lifecycle = load_application_lifecycle(self.harness.workspace)
@@ -518,11 +518,6 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 ["DeepSeek", "working-model"],
             )
 
-            from app.services.retry_origin import load_retry_origin
-            origin = load_retry_origin(str(self.harness.workspace), source_a.run_id, source_a.thread_id)
-            self.assertEqual(origin.source_run_id, source_a.run_id)
-            self.assertEqual(origin.node, "technical_planning_generate")
-            self.assertTrue(origin.checkpoint_attempted)
             self.assertEqual(run_b.status, DurableExecutionStatus.AWAITING_USER)
 
             attempts = await list_recovery_attempts_for_thread(
@@ -574,18 +569,11 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 thread_id=self.harness.thread_id,
             )
             self.assertEqual(attempts_after_b, [])
-            from app.services.retry_origin import load_retry_origin
-            origin = load_retry_origin(str(self.harness.workspace), run_b.run_id, run_b.thread_id)
-            self.assertEqual(origin.source_run_id, source_a.run_id)
-            self.assertEqual(origin.node, source_a.current_node)
-            self.assertEqual(origin.request, self.harness.request)
-            self.assertTrue(origin.checkpoint_attempted)
-
             self.harness.model_name = "working-model"
             run_c = await self.harness.execute_action(action_b)
             self.assertNotEqual(run_c.run_id, run_b.run_id)
-            self.assertEqual(run_b.first_node, "technical_planning_begin")
-            self.assertEqual(run_c.first_node, "technical_planning_begin")
+            self.assertEqual(run_b.first_node, "technical_planning_generate")
+            self.assertEqual(run_c.first_node, "technical_planning_generate")
             self.assertNotEqual(run_c.status, DurableExecutionStatus.FAILED)
 
             lifecycle = load_application_lifecycle(self.harness.workspace)

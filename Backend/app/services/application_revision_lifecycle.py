@@ -417,6 +417,16 @@ def ensure_technical_plan_generation_lifecycle(
 
     initialization = current.initialization
     if (
+        initialization.stage is ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
+        and repair_source_run_id
+        and current.active_run_id == repair_source_run_id
+    ):
+        # 模板失败后明确修改已存在的技术规划，沿同一来源回到生成，不能重放旧确认。
+        return restart_application_planning_lifecycle(
+            workspace, stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            active_run_id=expected_run_id,
+        )
+    if (
         initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
         and initialization.status is ApplicationLifecycleStatus.RUNNING
     ):

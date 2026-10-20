@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from tests import test_retry_preparation_failures as fixtures
-from app.services.checkpoint_first_retry import prepare_checkpoint_first_retry
+from app.services.business_node_retry import prepare_business_node_retry
 from app.services.application_lifecycle import load_application_lifecycle, end_workbench_execution
 from app.services.execution_cleanup import (
     best_effort_checkpoint_housekeeping, finalize_runtime_ownership, retry_cleanup_persistence,
@@ -23,7 +23,7 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
 
     async def assert_original_retry_works(self, root, source, graph):
         """交接失败后原入口仍可执行，并保持原始提问。"""
-        context = await prepare_checkpoint_first_retry(source, graph)
+        context = await prepare_business_node_retry(source, graph)
         try:
             chunks = [item async for item in context.graph.astream(context.fork_snapshot.values,
                 config=context.fork_config, stream_mode=["updates", "custom"])]
@@ -41,7 +41,7 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
                 source, graph, _ = await fixtures.RetryPreparationFailureTests().fixture(root)
                 with patch(location, side_effect=RuntimeError("temporary preparation failure")):
                     with self.assertRaisesRegex(RuntimeError, "重试准备未完成"):
-                        await prepare_checkpoint_first_retry(source, graph)
+                        await prepare_business_node_retry(source, graph)
                 state = load_application_lifecycle(root)
                 self.assertEqual(set(state.active_executions), {source.run_id})
                 self.assertEqual(state.active_executions[source.run_id].status.value, "failed")
@@ -74,7 +74,7 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
 
             with patch("app.services.execution_recovery.observe_execution_started", register_then_fail):
                 with self.assertRaisesRegex(RuntimeError, "重试准备未完成"):
-                    await prepare_checkpoint_first_retry(source, graph)
+                    await prepare_business_node_retry(source, graph)
             self.assertEqual(load_application_lifecycle(root).active_run_id, source.run_id)
             self.assertEqual((await get_execution(root, child_ids[0])).status.value, "cancelled")
             candidates = await list_recovery_projection_candidates(root)
@@ -86,7 +86,7 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as root:
             source, graph, _ = await fixtures.RetryPreparationFailureTests().fixture(root)
             source = source.model_copy(update={"workflow_scope": "conversation"})
-            context = await prepare_checkpoint_first_retry(source, graph)
+            context = await prepare_business_node_retry(source, graph)
             with patch("app.protocols.direct_modification.validate_selected_user_skills",
                        side_effect=RuntimeError("before runtime")):
                 frames = "".join([item async for item in _native_recovery_stream(context, None)])
@@ -172,10 +172,10 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(graph, "aget_state", hang), \
                  patch("app.services.retry_preparation.CHECKPOINT_PREPARATION_SECONDS", .02):
                 with self.assertRaises(RecoveryExecutionError) as missing:
-                    await prepare_checkpoint_first_retry(source, graph)
+                    await prepare_business_node_retry(source, graph)
                 self.assertEqual(missing.exception.code, "RETRY_CHECKPOINT_UNAVAILABLE")
             self.assertIn(source.run_id, load_application_lifecycle(root).active_executions)
-            context = await prepare_checkpoint_first_retry(source, graph)
+            context = await prepare_business_node_retry(source, graph)
             try:
                 chunks = [chunk async for chunk in context.graph.astream(context.fork_snapshot.values,
                     config=context.fork_config, stream_mode=["updates", "custom"])]
@@ -189,7 +189,7 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
         from app.services.application_lifecycle import start_workbench_execution
         with tempfile.TemporaryDirectory() as root:
             source, graph, _ = await fixtures.RetryPreparationFailureTests().fixture(root)
-            context = await prepare_checkpoint_first_retry(source, graph)
+            context = await prepare_business_node_retry(source, graph)
             start_workbench_execution(root, scope="page", target_id="page-b", page_id="page-b",
                 thread_id="other-thread", run_id="other-run", phase="build", owner_session_id="other-session")
             await abandon_prepared_retry(workspace=root, source=source,
@@ -200,11 +200,11 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(state.resource_locks.pages["page-b"].run_id, "other-run")
             self.assertEqual(state.active_executions[source.run_id].status.value, "failed")
 
-    async def test_checkpoint_update_timeout_falls_back_once(self):
-        """恢复准备没有返回时取消一次，仍在同次重试执行业务节点。"""
+    async def test_retry_does_not_fork_or_resume_checkpoint(self):
+        """新执行直接接收完整输入，不调用旧 checkpoint 的更新或续跑接口。"""
         with tempfile.TemporaryDirectory() as root:
             source, graph, received = await fixtures.RetryPreparationFailureTests().fixture(root)
-            context = await prepare_checkpoint_first_retry(source, graph)
+            context = await prepare_business_node_retry(source, graph)
             cancelled = asyncio.Event()
 
             async def hang(*args, **kwargs):
@@ -220,7 +220,7 @@ class RetryBoundaryFailureTests(unittest.IsolatedAsyncioTestCase):
                     chunks = [item async for item in context.graph.astream(context.fork_snapshot.values,
                         config=context.fork_config, stream_mode=["updates", "custom"])]
                 self.assertTrue(chunks)
-                self.assertTrue(cancelled.is_set())
+                self.assertFalse(cancelled.is_set())
                 self.assertEqual(len(received), 2)
                 self.assertEqual(received[-1]["request"], "原始问题 ORIGINAL")
             finally:

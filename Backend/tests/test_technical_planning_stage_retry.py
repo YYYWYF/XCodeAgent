@@ -35,6 +35,38 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
         await close_workflow_checkpointer_for_workspace(workspace=str(self.harness.workspace))
         self.harness.close()
 
+    async def test_failed_confirmation_reopens_review_without_replaying_approval(self):
+        """确认处理失败后重试重新展示原审阅门，旧确认不能批准当前磁盘产物。"""
+        from app.services.business_node_retry import prepare_business_node_retry
+        from app.services.retry_preparation import abandon_prepared_retry
+
+        harness = self.harness
+        with patch("app.config.Settings.from_env", side_effect=harness.current_settings), \
+             patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(deepcopy(harness.candidate), [], None)):
+            await harness.initialize_graph()
+            await harness.run_initial()
+            config = {"configurable": {"thread_id": harness.thread_id}}
+            await harness.graph.aupdate_state(config, {
+                "phase": "technical_planning_confirm", "status": "failed",
+                "application_planning_interaction": {"action": "confirm"},
+            }, as_node="technical_planning_confirm")
+            source = (await get_execution(str(harness.workspace), harness.source_run_id)).model_copy(
+                update={"status": DurableExecutionStatus.FAILED})
+            context = await prepare_business_node_retry(source, harness.graph)
+            try:
+                self.assertEqual(context.recovery_plan.target_node, "technical_planning_review")
+                with patch("app.graph.nodes.application_technical_planning.commit_technical_plan_document",
+                           side_effect=AssertionError("重试不能自动确认")):
+                    result = await context.graph.ainvoke(context.fork_snapshot.values, context.fork_config)
+                self.assertIn("__interrupt__", result)
+                self.assertEqual(result["application_planning_interaction"], {})
+                snapshot = await harness.graph.aget_state(config)
+                self.assertEqual(snapshot.next, ("technical_planning_review",))
+            finally:
+                await abandon_prepared_retry(workspace=str(harness.workspace), source=source,
+                    before=context.retry_lifecycle_before_handoff, new_run_id=context.new_run_id,
+                    lease=context.workspace_lease)
+
     async def _retry(self, *, has_plan: bool, native: bool, commit_failure: bool = False) -> None:
         """从生成中断或异常失败重开，检查模型实际收到的基线和修改要求。"""
         harness = self.harness
@@ -50,8 +82,9 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                 # 磁盘计划为最新基线；checkpoint 中仍可保留旧版本。
                 baseline["summary"] = "磁盘最新技术规划"
                 commit_technical_plan_document(state, baseline)
-            state["technical_plan_repair_candidate"] = {"summary": "不应复用的失败候选"}
-            state["technical_plan_repair_errors"] = ["上次错误"]
+                state["technical_plan"] = deepcopy(baseline)
+            state["technical_plan_repair_candidate"] = {}
+            state["technical_plan_repair_errors"] = []
             state["application_planning_recovery_boundary"] = _technical_input_boundary(
                 state, operation=ApplicationPlanningOperation.REPAIR,
                 gate_id="retry-gate", artifact_revision="retry-revision", request=harness.request,
@@ -79,7 +112,7 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                 if native:
                     _, _, action = await harness.resolve_action()
                     child = await harness.execute_action(action)
-                    self.assertEqual(child.first_node, "technical_planning_begin")
+                    self.assertEqual(child.first_node, "technical_planning_commit" if commit_failure else "technical_planning_generate")
                     self.assertEqual(child.status, DurableExecutionStatus.AWAITING_USER, "\n".join(
                         frame for frame in harness.last_recovery_frames if "RUN_ERROR" in frame
                     ))
@@ -93,7 +126,7 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                         },
                     )]
                     self.assertFalse(any('"type": "RUN_ERROR"' in frame for frame in frames))
-                if native and commit_failure and not has_plan:
+                if native and commit_failure:
                     # 保存失败的候选仍可由 checkpoint 安全提交，无需再次请求生成模型。
                     generate.assert_not_called()
                 else:
@@ -128,7 +161,7 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
         await self._retry(has_plan=False, native=True)
 
     async def test_commit_retry_with_plan(self) -> None:
-        """保存失败时以已有计划重新生成，而不是重放旧候选提交。"""
+        """保存失败时保留本轮候选，从原 commit 重试并重新经过确认门。"""
         await self._retry(has_plan=True, native=True, commit_failure=True)
 
     async def test_commit_retry_without_plan(self) -> None:
@@ -243,11 +276,8 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
             task = asyncio.create_task(harness.run_initial())
             try:
                 await asyncio.wait_for(started.wait(), timeout=5)
-                frames = [frame async for frame in build_workflow_cancellation_ag_ui_stream(
-                    thread_id="pause-control-thread", run_id="pause-control-run",
-                    target_run_id=harness.source_run_id, workspace=str(harness.workspace),
-                )]
-                self.assertIn('"status":"cancelled"', "".join(frames))
+                from app.services.planning_execution_end import stop_planning_execution
+                await stop_planning_execution(str(harness.workspace), harness.thread_id)
                 with self.assertRaises(asyncio.CancelledError):
                     await task
             finally:
@@ -269,6 +299,7 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                              DurableExecutionStatus.INTERRUPTED)
             _, projection, action = await harness.resolve_action()
             self.assertEqual(projection.classification, "ready_to_continue")
+            self.assertEqual(action["primaryAction"]["label"], "继续生成")
             with (
                 patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as generate,
                 patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),

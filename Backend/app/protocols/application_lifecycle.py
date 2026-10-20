@@ -67,6 +67,7 @@ class ApplicationLifecycleAction(BaseModel):
         "prepare_session_deletion",
         "skip_entity_development",
         "end_planning_execution",
+        "stop_planning_execution",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
@@ -115,6 +116,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "prepare_session_deletion",
             "skip_entity_development",
             "end_planning_execution",
+            "stop_planning_execution",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
@@ -249,6 +251,11 @@ def build_application_lifecycle_ag_ui_stream(
                 ),
             )
             message = "应用生命周期已创建。"
+        elif request.action == "stop_planning_execution":
+            from app.services.planning_execution_end import stop_planning_execution
+
+            state = await stop_planning_execution(request.workspace_root, str(payload.get("threadId") or ""))
+            message = "生成已停止，本轮修改已保留，可以在原会话继续生成。"
         elif request.action == "end_planning_execution":
             from app.services.planning_execution_end import end_planning_execution
 
@@ -386,7 +393,7 @@ def build_application_lifecycle_ag_ui_stream(
     # 删除准备必须能停止目标会话的预览维护运行，不能先被维护互斥挡住。
     guarded_workspace = (
         None
-        if action in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution"}
+        if action in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution", "stop_planning_execution"}
         else str(resolved_input.get("workspaceRoot") or "") or None
     )
     return build_ag_ui_action_stream(
@@ -399,5 +406,5 @@ def build_application_lifecycle_ag_ui_stream(
         error_data=lambda _exc: {"action": resolved_input.get("action")},
         accept=accept,
         workspace_root=guarded_workspace,
-        register_workspace_run=action not in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution"},
+        register_workspace_run=action not in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution", "stop_planning_execution"},
     )

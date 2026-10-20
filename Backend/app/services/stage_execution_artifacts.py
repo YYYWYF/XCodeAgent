@@ -75,6 +75,10 @@ def load_stage_execution_artifacts(state: dict[str, Any], plan: dict[str, Any], 
         "build_run_id": "", "build_run_plan_path": "", "build_run_plan_sha256": "",
         "unit_test_gate_passed": False, "unit_test_quality_gate_passed": False,
         "unit_test_report": {}, "unit_test_report_path": ""}
+    if node == "unit_test_repair":
+        # 修复实际消费本轮失败报告，不能在读取 Build 事实时清掉返修证据。
+        fields.update(unit_test_report=state.get("unit_test_report") or {},
+                      unit_test_report_path=state.get("unit_test_report_path") or "")
     if not plan:
         return fields
     candidates = _result_candidates(artifact / "plans/build-runs")
@@ -113,7 +117,7 @@ def load_stage_execution_artifacts(state: dict[str, Any], plan: dict[str, Any], 
             "build_run_id", "build_run_plan_path", "build_run_plan_sha256", "tasks", "build_results", "build_summary",
         ) if key in progress})
         break
-    if node == "test_phase_confirmation":
+    if node in {"unit_test_repair", "test_phase_confirmation"}:
         report_path = artifact / "reports/unit-test-report.json"
         report = _read_result_object(report_path)
         if report is not None:
@@ -123,9 +127,11 @@ def load_stage_execution_artifacts(state: dict[str, Any], plan: dict[str, Any], 
             files = context.get("files") or {}
             if not isinstance(files, dict):
                 return fields
-            if (report.get("passed") is True and context.get("plan_sha256") == digest
+            if (context.get("plan_sha256") == digest
                     and context.get("build_execution_scope") == scope
                     and all(value and _file_digest(root, path) == value for path, value in files.items())):
-                fields.update(unit_test_gate_passed=True, unit_test_quality_gate_passed=True,
-                              unit_test_report=report, unit_test_report_path=str(report_path))
+                if node == "unit_test_repair" or report.get("passed") is True:
+                    fields.update(unit_test_report=report, unit_test_report_path=str(report_path))
+                if node == "test_phase_confirmation" and report.get("passed") is True:
+                    fields.update(unit_test_gate_passed=True, unit_test_quality_gate_passed=True)
     return fields

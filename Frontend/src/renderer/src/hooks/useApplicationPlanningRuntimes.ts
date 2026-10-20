@@ -117,7 +117,7 @@ export function useApplicationPlanningRuntimes(
     }
   }, [options.activePlannings, ensureRuntime])
 
-  // 仅跟进冷恢复暂报 running 的执行，等待租约收口；正常流和确认/恢复门均不轮询。
+  // 跟进脱离本地流的运行与 UI 后台生成池；只读 GET 不恢复 Graph，也不提交确认。
   useEffect(() => {
     const timer = window.setInterval(() => {
       for (const runtime of runtimesRef.current.values()) {

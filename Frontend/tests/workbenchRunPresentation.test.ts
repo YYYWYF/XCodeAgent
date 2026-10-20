@@ -6,6 +6,7 @@ import ChatComposer from '../src/renderer/src/components/AiChatPanel/components/
 import { isConversationWorkflow } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import {
   generationControlOwner,
+  planningGenerationRunning,
   ownedWorkbenchExecution,
   restoreWorkbenchPresentation,
   workbenchExecutionRunning
@@ -16,6 +17,32 @@ import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPane
 import type { ApplicationLifecycle, WorkbenchExecution, ExecutionRecoveryCandidate } from '../src/renderer/src/typings'
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import type { DagGenerationSnapshot } from '../src/renderer/src/service/agUiAgent'
+import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
+
+test('规划冷重入无本地流时仍能停止，后台待确认及终态不会被旧 running 消息误判', () => {
+  const state = { transportState: 'idle', workflow: {
+    summary: { status: 'running', phase: 'technical_planning' }
+  }, recovery: { classification: 'running' } } as ApplicationPlanningCurrentState
+  assert.equal(generationControlOwner(false, false, planningGenerationRunning(state)), 'planning')
+  const html = renderToStaticMarkup(createElement(ChatComposer, {
+    copy: { title: '规划 Agent', placeholder: '修改技术规划' } as any,
+    draft: '', loading: planningGenerationRunning(state), stopping: false, workspaceBusy: false,
+    workspaceRoot: '/tmp/planning-reentry', selectedSkills: [],
+    onDraftChange: () => undefined, onSelectedSkillsChange: () => undefined,
+    onSend: async () => undefined, onStopGenerating: () => undefined
+  }))
+  assert.match(html, /<button[^>]*aria-label="停止生成"/)
+  assert.doesNotMatch(html, /<button[^>]*aria-label="停止生成"[^>]*disabled/)
+  for (const classification of ['awaiting_user', 'completed', 'failed', 'stopped', 'cancelled'] as const) {
+    assert.equal(planningGenerationRunning({ ...state,
+      recovery: { ...state.recovery!, classification } }), false)
+  }
+  assert.equal(planningGenerationRunning({ ...state, checkpointMissing: true }), false)
+  assert.equal(planningGenerationRunning({ ...state, recovery: undefined }), true)
+  assert.equal(planningGenerationRunning({ ...state, recovery: undefined,
+    workflow: { ...state.workflow!, summary: { status: 'requires_user_input' } } }), false)
+  assert.equal(planningGenerationRunning(undefined), false)
+})
 
 const session = { sessionId: 'session-1', workflowId: 'app-1' } as SessionIdentity
 
@@ -61,7 +88,7 @@ test('重入恢复运行状态和已有任务进度，重复读取不增加消�
   assert.equal(second.messages[0].processSteps?.[0].dagGeneration?.revision, 2)
 })
 
-test('二次修改重开后无本地流，恢复的真实执行仍显示可用结束按钮', () => {
+test('二次修改重开后无本地流，恢复的真实执行仍显示可用停止生成按钮', () => {
   const lifecycle = fixture()
   const messages = [{ id: 1, role: 'assistant', content: '', workflow: {
     runId: 'run-1', threadId: 'graph-thread', events: [],
@@ -81,8 +108,8 @@ test('二次修改重开后无本地流，恢复的真实执行仍显示可用�
     onDraftChange: () => undefined, onSelectedSkillsChange: () => undefined,
     onSend: async () => undefined, onStopGenerating: () => undefined
   }))
-  assert.match(html, /<button[^>]*aria-label="结束任务"/)
-  assert.doesNotMatch(html, /<button[^>]*aria-label="结束任务"[^>]*disabled/)
+  assert.match(html, /<button[^>]*aria-label="停止生成"/)
+  assert.doesNotMatch(html, /<button[^>]*aria-label="停止生成"[^>]*disabled/)
   assert.doesNotMatch(html, /暂停执行|aria-label="发送给 Workflow"/)
   lifecycle.activeExecutions = {}
   assert.equal(generationControlOwner(false,

@@ -79,6 +79,10 @@ export function developmentNextStep(
   for (let index = messages.length - 1; index >= 0; index--) {
     const workflow = messages[index].workflow
     if (!workflow) continue
+    // 规划结束只关闭本轮修订，没有开发 End 归档，也不需要等待工作区继续资格。
+    // 当前规划线程由 lifecycle 证明归属，已显示的结束回执同样不能落入开发引导。
+    if (workflow.state?.workflow_scope === 'application_planning' ||
+        lifecycle?.initialization?.threadId === workflow.threadId) return undefined
     if (isConversationWorkflow(workflow)) {
       // 已完成的闲聊/只读问答不消费引导；待确认修改、失败或暂停的对话应保留自己的当前入口。
       if (

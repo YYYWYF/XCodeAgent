@@ -689,7 +689,7 @@ def build_workflow_ag_ui_stream(
                 checkpoint_values = dict(checkpoint_snapshot.values)
             if technical_planning_revision is not None:
                 # 分类与启动之间重新持锁核对版本，禁止旧问答结果覆盖新计划或另一轮输入。
-                if (workflow_scope != "application_planning" or resume_from != "technical_planning"
+                if (workflow_scope != "application_planning" or resume_from != technical_planning_revision.target_node
                         or checkpoint_snapshot.config["configurable"]["checkpoint_id"] != technical_planning_revision.checkpoint_id):
                     raise ValueError("技术规划状态已变化，请同步后重新提交修改要求。")
             snapshot_only = (

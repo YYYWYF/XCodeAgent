@@ -48,7 +48,7 @@ class TemplateEngineClient:
         """调用 V3 `/v1/generate` 并分块写临时 ZIP，同时计算 SHA-256。"""
 
         if not self._base_url:
-            raise TemplateEngineError("Template Engine 地址未配置，无法生成 V3 TemplateState。")
+            raise TemplateEngineError("模板生成服务地址未配置，无法生成 V3 TemplateState。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
@@ -60,10 +60,10 @@ class TemplateEngineClient:
             async with self._client_factory(timeout=timeout, trust_env=False) as client:
                 async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
                     if response.status_code >= 400:
-                        raise await _engine_response_error(response, "Template Engine 拒绝请求")
+                        raise await _engine_response_error(response, "模板生成服务拒绝请求")
                     content_type = response.headers.get("content-type")
                     if not content_type or not content_type.lower().startswith("application/zip"):
-                        raise TemplateEngineError("Template Engine 未返回 application/zip。")
+                        raise TemplateEngineError("模板生成服务未返回 application/zip。")
                     with os.fdopen(descriptor, "wb") as output:
                         descriptor = -1
                         async for chunk in response.aiter_bytes(_CHUNK_BYTES):
@@ -76,9 +76,9 @@ class TemplateEngineClient:
                         os.fsync(output.fileno())
             return TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
         except httpx.TimeoutException as exc:
-            raise TemplateEngineError("调用 Template Engine 超时。") from exc
+            raise TemplateEngineError("调用模板生成服务超时。") from exc
         except httpx.HTTPError as exc:
-            raise TemplateEngineError("调用 Template Engine 失败。") from exc
+            raise TemplateEngineError("调用模板生成服务失败。") from exc
         except Exception:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -146,9 +146,9 @@ class TemplateEngineClient:
         """调用 V3 `/v1/update`；APPLY 的 204 表示无变化。"""
 
         if not self._base_url:
-            raise TemplateEngineError("Template Engine 地址未配置。")
+            raise TemplateEngineError("模板生成服务地址未配置。")
         if mode not in {"APPLY", "RECONCILE"}:
-            raise TemplateEngineError("Template Engine 更新 mode 必须是 APPLY 或 RECONCILE。")
+            raise TemplateEngineError("模板生成服务更新 mode 必须是 APPLY 或 RECONCILE。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-update-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
@@ -185,14 +185,14 @@ class TemplateEngineClient:
                         descriptor = -1
                         temporary_path.unlink(missing_ok=True)
                         if mode == "RECONCILE":
-                            raise TemplateEngineError("Template Engine V3 RECONCILE 必须返回更新包，不能返回 HTTP 204。", http_status=204)
+                            raise TemplateEngineError("模板生成服务 V3 RECONCILE 必须返回更新包，不能返回 HTTP 204。", http_status=204)
                         logger.info("模板更新接口返回无变更（HTTP 204）。")
                         return None
                     if response.status_code >= 400:
-                        raise await _engine_response_error(response, "Template Engine 拒绝更新请求")
+                        raise await _engine_response_error(response, "模板生成服务拒绝更新请求")
                     content_type = response.headers.get("content-type")
                     if not content_type or not content_type.lower().startswith("application/zip"):
-                        raise TemplateEngineError("Template Engine 更新未返回 application/zip。")
+                        raise TemplateEngineError("模板生成服务更新未返回 application/zip。")
                     with os.fdopen(descriptor, "wb") as output:
                         descriptor = -1
                         async for chunk in response.aiter_bytes(_CHUNK_BYTES):
@@ -208,10 +208,10 @@ class TemplateEngineClient:
             return download
         except httpx.TimeoutException as exc:
             logger.warning("模板更新接口调用超时：endpoint=%s/v1/update。", self._base_url)
-            raise TemplateEngineError("调用 Template Engine 更新超时。") from exc
+            raise TemplateEngineError("调用模板生成服务更新超时。") from exc
         except httpx.HTTPError as exc:
             logger.warning("模板更新接口调用失败：endpoint=%s/v1/update，error=%s。", self._base_url, type(exc).__name__)
-            raise TemplateEngineError("调用 Template Engine 更新失败。") from exc
+            raise TemplateEngineError("调用模板生成服务更新失败。") from exc
         except Exception:
             logger.exception("模板更新接口处理失败：endpoint=%s/v1/update。", self._base_url)
             if descriptor >= 0:

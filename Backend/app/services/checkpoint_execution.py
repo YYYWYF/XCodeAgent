@@ -36,11 +36,29 @@ def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
         return None
     tasks = getattr(snapshot, "tasks", ()) or ()
     failed = [task.name for task in tasks if getattr(task, "error", None)]
+    # 用户停止后的原生 CancelledError 是中断证据，不应把继续生成误投影为业务失败。
+    if source.status is DurableExecutionStatus.INTERRUPTED and all(
+        str(task.error) == "CancelledError()" for task in tasks if getattr(task, "error", None)
+    ):
+        failed = []
     pending = list(getattr(snapshot, "next", ()) or ())
     raw_status = str(values.get("status") or "")
     phase = str(values.get("phase") or "")
     candidates = failed or ([phase] if raw_status == "failed" and phase in getattr(graph, "nodes", {}) else pending)
     node = str(candidates[0]) if len(candidates) == 1 else ""
+    if node == "workflow_entry":
+        # 请求已提交但尚未进入业务节点时，入口来自同一 checkpoint 的调度字段。
+        entry = str(values.get("direct_modification_resume_node") or values.get("resume_from") or "")
+        if not entry:
+            from app.graph.direct_modification_workflow import _route_direct_entry
+            from app.graph.application_planning_workflow import _route_start as planning_start
+            from app.graph.workflow import route_workflow_start as workbench_start
+
+            route = (_route_direct_entry if source.workflow_scope == "conversation" else
+                     planning_start if source.execution_kind == "application_planning" else workbench_start)
+            entry = route(values)
+        if entry in graph.nodes and entry != "workflow_entry":
+            node = entry
     interaction = values.get("application_planning_interaction") or {}
     question = interaction.get("request") if interaction.get("action") in {"answer", "revise", "design_change"} else ""
     request = str(question or values.get("design_change_generation_request")

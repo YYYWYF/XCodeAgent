@@ -17,6 +17,7 @@ type ApplicationLifecyclePayload = {
     | 'workspace_attach'
     | 'prepare_session_deletion'
     | 'end_planning_execution'
+    | 'stop_planning_execution'
   lifecycle?: ApplicationLifecycle
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
   repositoryBranch?: RepositoryBranchOutcome
@@ -183,6 +184,17 @@ export async function createApplicationLifecycle(
     application.id,
     threadId
   )
+}
+
+/** 通过既有 AG-UI 控制端点停止生成，保留修订及原任务继续资格。 */
+export async function stopApplicationPlanningExecution(
+  application: Pick<ApplicationConfig, 'workspaceRoot' | 'id'>,
+  threadId: string
+): Promise<ApplicationLifecycle> {
+  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  return assertApplicationLifecycleOwnership(await runApplicationLifecycleAction(threadId, {
+    action: 'stop_planning_execution', workspaceRoot: application.workspaceRoot
+  }), application.id)
 }
 
 /** 通过既有 AG-UI 控制端点完整结束当前规划修订，保留文件并释放执行占用。 */

@@ -10,7 +10,7 @@ from app.services.application_lifecycle import (
     load_application_lifecycle, start_workbench_execution, update_workbench_execution,
 )
 from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
-from app.services.checkpoint_first_retry import prepare_checkpoint_first_retry
+from app.services.business_node_retry import prepare_business_node_retry
 from app.services.execution_recovery import observe_execution_started, observe_execution_failed
 from tests.test_business_node_retry import BusinessNodeRetryTests
 from tests.test_checkpoint_first_retry import CheckpointFirstRetryTests
@@ -42,7 +42,7 @@ class FailedExecutionReconciliationTests(unittest.IsolatedAsyncioTestCase):
                 return {"status": "completed"}
 
             graph, _, _, _, _, received = await CheckpointFirstRetryTests().fixture(root, behavior)
-            context = await prepare_checkpoint_first_retry(source, graph)
+            context = await prepare_business_node_retry(source, graph)
             try:
                 child = load_application_lifecycle(root).active_executions[context.new_run_id]
                 self.assertIsNone(child.pending_interaction)
@@ -147,6 +147,7 @@ class FailedExecutionReconciliationTests(unittest.IsolatedAsyncioTestCase):
             source = self.pending(root)
             with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[source])), \
                     patch("app.services.execution_recovery_projection.workflow_graph_for_request", AsyncMock(return_value=object())), \
+                    patch("app.services.checkpoint_execution.resolve_checkpoint_source", AsyncMock(return_value=source)), \
                     patch("app.services.business_node_retry.read_retry_hint", AsyncMock(return_value=RetryHint("build", "原问题"))):
                 projection = await resolve_execution_recovery_projection(root, active_workbench_run_ids={"source"})
             self.assertTrue(projection.candidates[0].can_continue)

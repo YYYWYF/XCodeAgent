@@ -2462,6 +2462,8 @@ export function useWorkflowConversation({
     }).execution
     const ended = Boolean(workflowDebugEndedControl(activeWorkflow, messages, lifecycle))
     await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
+      // 节点恢复由输入框提交时也要消费已发送草稿，避免 @ 阶段入口留在编辑区。
+      clearDraft: true,
       // 已成功 End 的执行没有续接令牌；显式调试建立新 Run，只复用原业务 Graph 线程。
       resumeState: ended ? undefined : source,
       executionThreadId: source.threadId,

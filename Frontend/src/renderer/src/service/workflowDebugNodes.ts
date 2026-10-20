@@ -31,7 +31,6 @@ const WORKFLOW_DEBUG_NODES_BY_STAGE: Record<WorkflowDebugStage, readonly Workflo
   ],
   // 确认节点只能由正式确认卡触发，避免调试入口越过用户确认。
   planning: [
-    { value: 'planning_stage_entry', title: '进入计划阶段' },
     { value: 'technical_planning', title: '生成技术规划' }
   ]
 }

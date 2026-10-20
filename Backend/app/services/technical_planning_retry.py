@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from app.domain.application_planning_recovery import (
@@ -24,6 +24,7 @@ class TechnicalPlanningMessageRevision:
 
     request: str
     checkpoint_id: str
+    target_node: Literal["technical_planning", "design_intent_analysis"] = "technical_planning"
 
 
 def prepare_technical_planning_retry(

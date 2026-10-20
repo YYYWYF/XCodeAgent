@@ -26,8 +26,8 @@ import {
   type WorkflowRevisionContinuationHandoff
 } from './applicationPagePlanning'
 import { isAuthenticationFailure } from './authentication'
-import { endApplicationPlanningExecution } from './applicationLifecycle'
-import { planningWorkflowCanPublishDuringRun } from './applicationPlanningWorkflowState'
+import { endApplicationPlanningExecution, stopApplicationPlanningExecution } from './applicationLifecycle'
+import { planningWorkflowCanPublishDuringRun, planningWorkflowPhase } from './applicationPlanningWorkflowState'
 import {
   readApplicationPlanningAuthoritativeSnapshot,
   type ApplicationPlanningAuthoritativeSnapshot,
@@ -68,6 +68,8 @@ export type ApplicationPlanningRuntimeDependencies = {
   saveRequirementSpecDraft?: typeof saveRequirementSpecDraft
   /** 结束控制测试可替换 AG-UI 调用，生产必须完成后端修订收口。 */
   endPlanningExecution?: typeof endApplicationPlanningExecution
+  /** 停止生成保留正式修订，并在读取原 checkpoint 后提供继续动作。 */
+  stopPlanningExecution?: typeof stopApplicationPlanningExecution
   /** 测试可替换权威读取；生产使用独立 applicationPlanningRecovery client。 */
   readAuthoritativeSnapshot?: (
     application: ApplicationPlanningCurrentState['application'],
@@ -433,8 +435,38 @@ export class ApplicationPlanningRuntime {
     return saved
   }
 
-  /** 停止 transport 后等待服务端取消落盘，并刷新 Canonical 生命周期。 */
+  /** 停止生成只中断执行，保留原会话、修订和 checkpoint，继续动作由后端签发。 */
   async stop(): Promise<void> {
+    const current = this.requireCurrentState()
+    this.technicalMessageAbort?.abort()
+    let acknowledge!: (stopped: boolean) => void
+    this.planningEndAcknowledgement = {
+      sourceToken: this.runToken,
+      result: new Promise<boolean>((resolve) => { acknowledge = resolve })
+    }
+    ++this.runToken
+    this.dispatch({ type: 'planning_stop_started', applicationId: this.applicationId, threadId: this.threadId })
+    try {
+      const stop = this.dependencies.stopPlanningExecution ?? stopApplicationPlanningExecution
+      const lifecycle = await stop(current.application, this.threadId)
+      await this.session.stop().catch(() => undefined)
+      this.runActive = false
+      this.dispatch({ type: 'planning_stopped', applicationId: this.applicationId, threadId: this.threadId, lifecycle })
+      acknowledge(true)
+      const outcome = await this.reconcileCurrentState()
+      if (outcome.status === 'uncertain') throw new Error(outcome.error)
+    } catch (reason) {
+      this.reportRecoveryActionFailure(reason, '停止生成失败，请重试停止生成。')
+      throw reason
+    } finally {
+      acknowledge(false)
+      this.runActive = false
+      this.dispatch({ type: 'run_settled', applicationId: this.applicationId, threadId: this.threadId })
+    }
+  }
+
+  /** 显式结束本轮修订时才释放修订身份，停止生成不调用此入口。 */
+  async end(): Promise<void> {
     const current = this.requireCurrentState()
     this.technicalMessageAbort?.abort()
     if (current.lifecycle.activeFormalRevision) {
@@ -456,7 +488,8 @@ export class ApplicationPlanningRuntime {
         const message = '本轮设计任务已结束，已有文件已保留，可以新建会话继续修改。'
         const workflow: WorkflowRunPayload = {
           runId: current.workflow?.runId || current.lifecycle.activeRunId || 'planning-ended',
-          threadId: this.threadId, events: [], summary: { status: 'completed', phase: 'plan_control', lifecycle,
+          threadId: this.threadId, events: [], state: { workflow_scope: 'application_planning' },
+          summary: { status: 'completed', phase: 'plan_control', lifecycle,
             planControl: { action: 'end', status: 'ended', targetRunId: current.workflow?.runId || current.lifecycle.activeRunId } }
         }
         this.runActive = false
@@ -499,7 +532,7 @@ export class ApplicationPlanningRuntime {
     }
   }
 
-  /** 技术提问只发布回复；明确修改才使用原生成会话，且没有计划时不承接首次生成。 */
+  /** 提问只发布回复；技术修改复用原生成，上游变更回到原设计意图链路。 */
   private async submitTechnicalPlanningMessage(request: string): Promise<void> {
     const abort = new AbortController()
     let revised = false
@@ -521,7 +554,7 @@ export class ApplicationPlanningRuntime {
         const merged = await this.sendMessageWithinTransport(token, request, {
           editorMode: 'frontend', workspaceRoot: current.application.workspaceRoot,
           technicalPlanningConversation: {
-            action: 'revise', workspaceRoot: current.application.workspaceRoot || '',
+            action: reply.intent === 'design_change' ? 'revise_design' : 'revise', workspaceRoot: current.application.workspaceRoot || '',
             applicationId: this.applicationId, planningThreadId: this.threadId, request,
             sourceRunId: reply.sourceRunId, checkpointId: reply.checkpointId
           }
@@ -541,9 +574,9 @@ export class ApplicationPlanningRuntime {
   }
 
   /** 以 single-flight 方式读取并原子提交当前 application planning 权威快照。 */
-  async reconcileCurrentState(): Promise<PlanningReconcileOutcome> {
+  async reconcileCurrentState(background = false): Promise<PlanningReconcileOutcome> {
     if (this.reconcilePromise) return this.reconcilePromise
-    this.reconcilePromise = this.performReconcile()
+    this.reconcilePromise = this.performReconcile(background)
     try {
       return await this.reconcilePromise
     } finally {
@@ -551,28 +584,29 @@ export class ApplicationPlanningRuntime {
     }
   }
 
-  /** 冷恢复暂报 running 时只读追踪租约收口，不自动执行任何恢复动作。 */
+  /** 冷恢复跟进运行收口；UI 后台池独立执行期间也检测 Backend，绝不自动重跑节点。 */
   async refreshDetachedRunningState(): Promise<void> {
     if (this.disposed || this.runActive || this.session.hasActiveRun()) return
     const current = this.dependencies.getCurrentState()
     if (
       current?.application.id !== this.applicationId || current.threadId !== this.threadId ||
       current.transportState !== 'idle' || current.connection.status !== 'healthy' ||
-      current.recovery?.classification !== 'running'
+      (current.recovery?.classification !== 'running' && planningWorkflowPhase(current.workflow) !== 'ui_confirmation')
     ) return
     // 第一次读取可能早于孤儿租约到期；后续只读对账负责显露兜底入口。
-    await this.reconcileCurrentState()
+    await this.reconcileCurrentState(true)
   }
 
   /** 执行一次只读对账，失败只更新 Connection State，不伪造业务 Recovery。 */
-  private async performReconcile(): Promise<PlanningReconcileOutcome> {
+  private async performReconcile(background: boolean): Promise<PlanningReconcileOutcome> {
     const current = this.requireCurrentState()
     if (this.runActive) throw new Error('当前 Planning write transport 尚未结束。')
     // Runtime 重建后本地 token 从零开始，但 Canonical State 保留上一实例的连接代次。
     // 新对账必须越过该代次，否则 reducer 会丢弃权威结果并一直停在 reconciling。
     this.runToken = Math.max(this.runToken, current.connection.requestGeneration)
     const token = ++this.runToken
-    this.dispatch({
+    // 后台健康读取不切换成「正在重连」，避免每五秒闪现浮层、禁用正常确认操作。
+    if (!background) this.dispatch({
       type: 'reconcile_started',
       applicationId: this.applicationId,
       threadId: this.threadId,

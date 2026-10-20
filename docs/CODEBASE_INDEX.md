@@ -1,6 +1,20 @@
 # DevAgent Studio Codebase Index
 
-Last updated: 2026-10-19
+Last updated: 2026-10-20
+
+放弃开发任务计划时，`services/pending_plan_execution.py` 以已验证 Pending 的 owner、DraftIdentity 和开发范围定位当前未提交的任务确认执行；`application_lifecycle.py::record_abandoned_planning_result` 收口匹配执行及其资源，生成来源 Run 仅用于溯源。确认失败发生执行交接后，Abandon 不再遗留当前确认门；其他草稿/会话、运行中执行和正式计划保留。现有 AG-UI Abandon 端点不变。回归：`tests.test_build_task_plan_lifecycle`、`tests.test_build_task_plan_abandon`。
+
+开发任务计划确认使用 `dag_planning_inputs.py` 的业务输入指纹，排除扫描时间及代码索引缓存命中、耗时、进度等观测字段；源码 revision、正式合同、范围和索引业务事实仍严格复验。`stageOutputState.ts` 恢复确认卡时以当前匹配 DraftIdentity 的 execution 续接，Pending 的来源 Workflow Run 仅保留生成溯源，避免确认失败交接后继续旧 Run。回归：`tests.test_build_task_plan_lifecycle`、`pnpm test:dag-generation`；正常链仍需用户明确确认后进入 Build。
+
+规划正常停止后的继续入口复用开发阶段 `NextDevelopmentGuide/EndedTaskNotice.tsx`，以 `stopped_generation` 展示「已停止生成 / 继续生成」；`RecoveryIncidentCard` 仅转交 Backend 签发的原恢复动作与确认要求，不套用开发任务的工作区未变化准入。真实失败继续显示错误恢复卡。
+
+正式修改确认前 Backend 已停服时，`AiChatPanel/formalRevisionStartRetry.ts` 从目标 StageSession 的原确认身份和当前 Lifecycle pending impact 还原已确认的启动请求；显式重试先走原 AG-UI 只读同步，未入场补交原确认，已入场走原执行恢复。旧完成 checkpoint 不能吞掉本次提交；来源失效或应用/Thread 不匹配明确报错，断线保留原会话，禁止重复点击并显示重试进度。回归：`pnpm test:application-planning-runtime` 的 `formalRevisionStartRetry.test.ts`。
+
+UI 后台生成池所在的 `ui_confirmation` 审阅门由现有 Runtime 五秒定时器通过只读 AG-UI GET 检测后端连接，不能因 Electron 本地设计稿读取仍成功而保持假健康。后台对账不发布 `reconcile_started`，避免周期性重连闪烁；失败保留原 Workflow/Recovery 并显示底部断连与显式同步。`planningFailureScope.ts` 的基础设施断连不受同应用的阶段/历史 Run 过滤，`globalFallbackState.ts::prioritizedConnection` 让 Backend 连接优先于预览断线；业务恢复仍按原会话隔离。重连只读孤立 UI 生成恢复投影，显式重试沿原动作，不自动生成或确认。回归：`pnpm test:application-planning-runtime`、`pnpm test:connection-recovery`，实际验证用 Electron 停服/重连现场。
+
+计划输入回退需求/UI 时，`AiChatPanel/planningStageReentry.ts` 按本次原 Graph 的实际设计节点帧准备独立 DESIGN StageSession，切换工作台到设计阶段，再顺序投递缓存的 Agent 进度和产物确认；问答和技术修改留在 PLAN 会话。`AiChatPanel` 只为当前用户请求启用交接，不以历史产物或浏览阶段触发重跑。Graph thread、业务 Agent、产物生成及确认后续链不变；需求联合确认 → UI → 计划入口 → 技术规划仍走现有流程。回归：`pnpm test:application-planning-runtime` 的 `planningStageReentry.test.ts`。
+
+模板生成失败仍可使用原计划会话底部的三类 @ 目标：`protocols/technical_planning_conversation.py` 接受 `application_template_generation_failed`；`services/application_lifecycle.py::restart_application_planning_lifecycle` 支持从该状态回退设计；`application_revision_lifecycle.py::ensure_technical_plan_generation_lifecycle` 在同一失败来源下支持明确修改已有 TechnicalPlan。保留 Run/Thread、checkpoint 版本与正式产物确认规则。回归：`tests.test_technical_planning_conversation` 以真实 Graph 验证截图中的新增页面停在联合文档确认门，技术修改停回技术确认门。
 
 性能报告的用户说明由 `workspace/performance_report.py` 生成，按整体结论、中文分类评分、五项指标解释、最多三项真实改进项、完整报告入口和检测环境排序；命令执行完成与质量评级分别表达。`services/lighthouse_report.py` 从当前 Lighthouse 报告提取有限的原始指标评级、计分失败项与采样上下文，`frontend_performance_runner.py` 以中文运行并将 `performance_details` 随现有检查结果保留到质量门及内部 JSON；缺失、非法和部分失败数据不补零或推测问题。现有 AG-UI 报告路径投影不变。`TestReportDocument.tsx` 复用 Markdown/主题样式和既有 Electron `openReportFile` IPC，只处理工作区性能目录下的相对 HTML 链接。回归：`tests.test_lighthouse_report`、`tests.test_test_documents`、`tests.test_frontend_performance_runner`、`pnpm test:workflow-preview`。
 
@@ -16,11 +30,13 @@ Last updated: 2026-10-19
 
 恢复入口定位优先用原生 `aget_state` 读取当前 root checkpoint，仅当前现场不属于来源 Run 或失败终态缺少业务节点时查询历史，避免每次点击重复解码整个线程。`checkpoint_execution.py` / `business_node_retry.py` 区分读取超时、I/O 故障与读取成功后确无入口：前者以 `RETRY_CHECKPOINT_UNAVAILABLE` 保留原重试资格，只有后者可释放来源并提示手动发起。不增加 Lifecycle 准入；异步持久化不变。回归包含生产同款 AsyncSqliteSaver，以及超时后再次点击成功。
 
-嵌套 Agent 的暂停取消由公共 `services/run_workers.py` 识别：显式 ContextVar 绑定优先；框架重建 Context 时从本次 RunnableConfig 的 run_id/workspace 元数据恢复身份，模型与工具边界继续拒绝取消后的新调用，并等待在途调用及真实 worker 收尾。`checkpoint_first_retry.py` 的 fork 只选 checkpoint 位置，保留当前 Runtime 元数据，避免沿来源 Run 取消。Agent 内部节点、提示词和 Lifecycle 准入不变。回归：`tests.test_worker_runtime_identity`（真实 DeepAgent 及受控本地模型）、`tests.test_checkpoint_first_retry`、`tests.test_end_task_workers`。
+统一重试直接使用原 Graph 的 `custom` 进度和 `messages` 流，不再包装或缓冲节点结果。一次点击只执行原失败节点一次，失败直接由原 AG-UI Runtime 收口；带/不带子图命名空间的进度均实时交付。回归：`tests.test_checkpoint_first_retry`。
+
+嵌套 Agent 的暂停取消由公共 `services/run_workers.py` 识别：显式 ContextVar 绑定优先；框架重建 Context 时从本次 RunnableConfig 的 run_id/workspace 元数据恢复身份，模型与工具边界继续拒绝取消后的新调用，并等待在途调用及真实 worker 收尾。统一节点重试创建新 Run 和独立 checkpoint 分支，取消及 worker 元数据由本轮 Runtime 提供，不继承来源 Run 的取消身份。Agent 内部节点、提示词和 Lifecycle 准入不变。回归：`tests.test_worker_runtime_identity`（真实 DeepAgent 及受控本地模型）、`tests.test_checkpoint_first_retry`、`tests.test_end_task_workers`。
 
 OpenAI 兼容模型 HTTP 客户端通过 `services/model_request_cancellation.py` 的 request/response hooks 在原始字节块边界观察同次 Run 取消；推理与 SSE 心跳尚未变成 Agent 输出时也会关闭本次响应，SDK 迟到重试不得再次发送。保持共享客户端、超时与代理配置，其他 Run 不受影响；纯网络无字节期间仍由既有 HTTP read timeout 收口。回归：`tests.test_model_request_cancellation`、`tests.test_model_factory`。
 
-工作台失败恢复不受同 Thread 旧开发 End 归档影响：`AiChatPanel/planExecutionMode.ts::workflowExecutionEnded` 与 `developmentNextStep.ts` 只按失败 Workflow 的具体 Run/Thread 匹配结束事实；新测试、审查等执行失败保留现有统一 Recovery 卡，不跳到仅允许未开发目标的选择器。点击仍使用既有 checkpoint-first / 原失败节点自动降级服务，不改 Agent 或 Lifecycle 准入。回归：`pnpm test:connection-recovery`、`pnpm test:development-artifacts`。
+工作台失败恢复不受同 Thread 旧开发 End 归档影响：`AiChatPanel/planExecutionMode.ts::workflowExecutionEnded` 与 `developmentNextStep.ts` 只按失败 Workflow 的具体 Run/Thread 匹配结束事实；新测试、审查等执行失败保留现有统一 Recovery 卡，不跳到仅允许未开发目标的选择器。点击仍使用统一原失败节点重执行服务，不改 Agent 或 Lifecycle 准入。回归：`pnpm test:connection-recovery`、`pnpm test:development-artifacts`。
 
 技术规划确认回到原开发会话时，`Frontend/src/main/sessionPersistence.ts` 以同目录临时文件原子替换正式会话记录；创建与保存入口共用它，避免交接消息保存期间 `sessions:list` 读取半份 JSON、漏掉原会话并清空显式选择。会话身份、IPC 契约及 Agent/Lifecycle 逻辑不变。回归：`pnpm test:stage-sessions` 中的 `sessionPersistence.test.ts`。
 
@@ -29,8 +45,6 @@ OpenAI 兼容模型 HTTP 客户端通过 `services/model_request_cancellation.py
 技术规划确认后的前端开发交接：`AiChatPanel` 用当前 checkpoint 已签发、尚未消费的 continuation 补交冷启动遗漏，按 change/token 仅自动尝试一次；交接失败保留“继续开发”错误入口，点击后先沿原 AG-UI GET 同步，已消费则交回统一执行恢复。`useWorkflowConversation.ts` 对显式目标 SessionIdentity 按该目标重算现有 DAG owner 只读规则，不能用来源计划会话的只读渲染值拒绝开发 owner；普通输入仍检查当前会话，其他 owner 仍被阻止。交接同步刷新正式产物目录，避免沿用生成期间的空列表。回归：`Frontend/tests/workflowConversationRuntime.test.ts`；Agent 与 Lifecycle 准入规则不变。
 
 正式修订的开发续接由 `services/revision_continuation_handoff.py` 协调：`workflow/request.py` 只读验证一次性凭据；Runtime 在消费前以原 `workflow_entry` 路由提交开发入口 checkpoint，保存原提问及 Run/Thread，不存原始 token。`application_lifecycle.py::start_workbench_execution` 在既有锁内把凭据消费、执行登记及资源交接合并为单次原子写；入场失败不提前消费，提交后中断沿已有 checkpoint 重试。既有 revision/身份/产物规则未扩展，Agent 节点未改。回归：`tests.test_revision_continuation_handoff`、`tests.test_workflow_request`、`tests.test_application_revision`。
-
-该交接修复的早期 Electron 阻断记录保留于 `docs/verification/revision-build-handoff-20261018/result.json` 与 `frontend-fixed-result.json`。后续已在交接提交后真实退出 Backend，重启后用统一重试成功到达 API 确认门，原提问保留；确认映射后由真实 mimo-v2.6-flash 生成本轮任务计划并进入 Build。两次正常 revision 检查均匹配；最新恢复验收与截图见同目录 `recovery-fixed-result.json`，早期停止记录不能作为当前结果。
 
 当前规划确认的响应投影由 `services/planning_confirmation_projection.py` 收口：Lifecycle 仅定位当前 Run/Thread，原生 checkpoint 证实同 owner 有新的上游审阅门后，`/application-lifecycle/run` 与 Workflow 终帧中的旧 Pending 任务确认退居非活动展示。旧草稿文件、依赖摘要和执行状态原样保留，不增加 Lifecycle 准入校验，不修改 Agent。此处不扫描全部上游，也不递归传播无关文件哈希。回归：`tests.test_planning_confirmation_projection`、`tests.test_planning_refresh_recovery`、`tests.test_workflow_ag_ui`。
 
@@ -73,13 +87,11 @@ For small local edits that do not change structure or ownership, leave the index
 
 `services/workflow_input_artifacts.py::pregraph_artifact_values` 为请求适配器的规划投影及调试产物读取复用阶段依赖解析：已能定位生成节点的产物问题延后到 Graph 阶段入口，在 Agent 调用前发布结构化失败，使原提问和真实节点先进入 checkpoint；没有对应产物问题的其他读取异常仍明确上报。`WorkbenchPage` 不再因业务规划产物缺失/损坏返回首页卸载修复入口，application.json 配置与基础设施加载错误仍沿原处理。`StagePrerequisiteError` 的外层中文说明只展示产物和下一步，文件名与底层错误保留在 `failureDiagnostic`；`RecoveryIncidentCard` 去掉重复说明，原始诊断仅在默认收起的“错误详情”中显示。回归：`tests.test_pregraph_artifact_recovery`、`tests.test_checkpoint_execution_authority`、`tests.test_workflow_request`、`tests.test_workflow_ag_ui`、`pnpm test:connection-recovery`。
 
-2026-10-18 Electron 验收进展：损坏 ProductPlan 已显示“重新生成产品计划”动作，真实 mimo-v2.6-flash 成功重生成并停在 requirement_document_review，原提问保留且旧执行/资源锁释放。但旧 Pending BuildTaskPlan 仍被前端投影为等待任务确认，导致新联合确认卡只读；重新进入后仍复现，测试已按无出口停止。现场与原字节备份位于 `docs/verification/checkpoint-authority-20261018/`，不能视为完整确认及继续验收通过。
-
-`services/failed_execution_reconciliation.py` 将 Durable FAILED/INTERRUPTED 同步到同 Run/Thread 的当前 Workbench 投影：清掉该失败执行的旧 pending，保留原节点和失败诊断；实际运行、线程与命令退出后仅释放该执行的占用。失败提交、恢复投影 GET 与业务重试准备共用幂等收口，不能由旧 awaiting_user 拒绝重试；正常 Durable awaiting_user、其他运行和已结束任务不变，不增加 Lifecycle 准入校验。原 checkpoint 仍可重现有效确认门，降级重执行也必须经过原确认门。回归：`tests.test_failed_execution_reconciliation`。
+`services/failed_execution_reconciliation.py` 将 Durable FAILED/INTERRUPTED 同步到同 Run/Thread 的当前 Workbench 投影：清掉该失败执行的旧 pending，保留原节点和失败诊断；实际运行、线程与命令退出后仅释放该执行的占用。失败提交、恢复投影 GET 与业务重试准备共用幂等收口，不能由旧 awaiting_user 拒绝重试；正常 Durable awaiting_user、其他运行和已结束任务不变，不增加 Lifecycle 准入校验。节点重执行仍须经过原确认门，失败的 TechnicalPlan 确认处理回到原 review 重新等待用户确认。回归：`tests.test_failed_execution_reconciliation`。
 
 创建规划的明确业务重入节点不读取或校验 Lifecycle 阶段；需求草稿落盘后 Lifecycle 已前进，也直接进入 checkpoint 指定的需求节点重新执行。模板对账按既有显式重试动作进入，不以修订 Lifecycle 状态匹配作为路由条件。回归：`tests.test_business_node_retry`。
 
-`services/stage_artifacts.py::ArtifactStateGraph` 在初始化规划、主 Workflow 和二次修改的阶段入口读取当前磁盘正式产物；需求联合节点优先读取需求/产品草稿，下游只读正式版本。State 传递请求、范围与运行身份，不替代磁盘资产。生成结果和确认仍由原节点提交。
+`services/stage_artifacts.py::ArtifactStateGraph` 在初始化规划、主 Workflow 和二次修改的阶段入口读取当前磁盘正式产物；单测修复入口保留本轮失败报告并优先读取匹配当前计划/范围/源码的磁盘报告，不把失败报告标为通过；需求联合节点优先读取需求/产品草稿，下游只读正式版本。State 传递请求、范围与运行身份，不替代磁盘资产。生成结果和确认仍由原节点提交。
 
 磁盘读取按阶段依赖裁剪：需求只读 RequirementSpec，产品规划读需求与 ProductPlan，UI 读需求、产品与 UiDesigns；技术规划及开发/质量阶段才读取 TechnicalPlan。扫描和快速修改节点不预加载正式规划，API 就绪检查和权限初始化不预读 BuildTaskPlan。未消费的正式产物只清空 State 内容与路径投影，不解析对应磁盘文件或展示为已生成产物；必要前置损坏仍显式失败，原确认门保持不变。回归：`tests.test_stage_artifact_dependencies`、`tests.test_business_node_retry`、`tests.test_stage_execution_artifacts`。
 
@@ -105,17 +117,17 @@ TestGeneration 写入边界在平铺测试文件外，仅允许当前 Jest 契�
 
 旧 Build 绑定快照和单测报告属于可重新计算的结果缓存：`stage_execution_artifacts.py` 对缺失、不可读、损坏及非法结构按结果失效处理，明确清空 checkpoint 中旧 Build/单测通过投影，再交给既有确认节点重做 Build 或单测。最新执行记录无法读取时不借用更旧成功；损坏文件原样保留，正式输入和原确认门不变。回归：`tests.test_stage_execution_artifacts`。
 
-聊天底部 `/execution-recovery/execute` 的公共重试由 `services/checkpoint_first_retry.py` 协调：先从原失败 checkpoint 固定节点和上次提问，最多尝试一次 checkpoint 续跑；恢复准备、执行异常或目标节点返回 failed 时，在同一 AG-UI Run 内自动降级为 `services/business_node_retry.py` 的全新业务节点重执行，不要求用户再次点击。两条路径的节点入口均重新读取当前磁盘资产，正式产物仍需确认。模型配置、认证、额度及外部服务连接错误不进行双重自动尝试；取消不会触发降级。降级前等待实际工作及命令退出。
+聊天底部 `/execution-recovery/execute` 统一调用 `services/business_node_retry.py`：从同 Run 的最新已提交失败现场保留完整业务上下文，经 `retry_node_state.py` 清理一次性操作并读取节点最新磁盘输入，以新 Run 在原 Thread 的全新 checkpoint 分支重新执行原失败节点。没有 checkpoint 续跑、自动降级或错误类型双重尝试；`/health.execution_recovery.retry.mode` 为 `full-context-node-reexecution`。技术规划提交保留未落盘候选；测试修复保留报告、任务与变更集，不回退生成或测试阶段。原工作真实退出后才交接资源，正式产物仍需显式确认。回归：`tests.test_checkpoint_first_retry`、`tests.test_business_node_retry`、`tests.test_conversation_native_recovery`、`tests.test_technical_planning_stage_retry`。
 
-`services/retry_origin.py` 在 `.devagentstudio/recovery/retry-origins/<run摘要>.json` 原子保存原 Run/Thread、节点、提问、checkpoint config 及恢复机会已消费标记。恢复失败后，投影及后续点击继续使用这份原始现场，不能恢复新产生的入口错误或重复消费原 checkpoint；原业务节点成功后解除锚定，后续节点失败按其自身现场处理。仅当原始节点确实无法读取时显示可关闭的 `RETRY_ENTRY_NOT_FOUND` 提示，并释放旧执行占用。恢复尝试的失败输出不会作为第二张终止报错卡提前发布，正常成功/最终失败仍由既有 Workflow/Conversation AG-UI 协议收口。回归：`tests.test_checkpoint_first_retry`、`tests.test_business_node_retry`、`tests.test_technical_planning_stage_retry`、`tests.test_execution_recovery_protocol`、`tests.test_conversation_native_recovery`。
+重试不再维护 retry-origins 辅助文件或完成标记，节点、原请求和业务上下文都来自原执行 checkpoint；新执行再次失败时按它自己的当前现场定位。只有确无业务入口时显示可关闭的 `RETRY_ENTRY_NOT_FOUND` 并释放原失败占用。已保存请求尚停在 `workflow_entry` 时，从同一 checkpoint 的 `resume_from` / 二次修改入口或原 Graph 默认路由定位首业务节点，保留可重试入口。
 
-原节点成功后的完成标记由 `retry_origin.py::complete_retry_origin` 接入既有后台落盘补偿；补写期间先在当前 Backend 停用旧锚点，不因辅助记录 I/O 失败把成功改成失败。新来源/节点锚点保存成功后撤销旧补写责任，延迟任务不得覆盖后续业务的新失败。该补写不持有业务 worker、执行租约或资源锁，checkpoint 与业务执行机制不变。回归：`tests.test_retry_completion_persistence`。
+原节点成功后，下游失败直接读取新 Run 的最新 checkpoint，不需要额外完成标记或补写责任。回归：`tests.test_retry_completion_persistence`。
 
-重试辅助记录的读取、解析或 Thread 匹配失败只使该记录不可用，仍从原执行 checkpoint 定位节点和问题。`prepare_checkpoint_first_retry` 固定现场后传给 `prepare_business_node_retry`，后者在原执行退出后、交接身份和取得新租约之前完成源/子 Run 锚点落盘；写入失败不创建新占用，原失败执行仍可重试。回归：`tests.test_retry_preparation_failures`，不改 Agent 节点和 Lifecycle 校验。
+重试准备在身份交接和新租约之前读取完整 checkpoint 并刷新节点输入；读取超时或 I/O 故障保留原失败入口，绝不把读取失败当作入口缺失。准备或协议入场失败由 `retry_preparation.py` 撤销本次 child 并恢复原 owner。回归：`tests.test_retry_preparation_failures`、`tests.test_retry_boundary_failures`。
 
 任务候选磁盘快照在 PlanningRun 的 active 和 validated 状态均保留；业务失败重试没有专用模型失败快照时，也读取同来源已提交候选。仍按来源 Run/Thread/Owner、提交 revision、当前输入指纹和局部/全局验证器判断复用，新 Run 生成自己的 Pending 确认门。避免“任务已落盘但 Graph 随后失败”时再次请求模型。回归：`tests.test_planning_interruption`。
 
-`services/task_plan_confirmation.py` 只接受磁盘上摘要和 provenance 均有效的 PendingPlan。`task_planning_adapter.py` 的旧 Confirm/Regenerate 动作失效后，没有可确认草稿就显式失败，不能生成空确认门；checkpoint 续跑因此失败时，由统一重试协调器在同一次点击中降级为全新业务生成，普通执行沿既有失败清理释放资源。不新增 Lifecycle 阶段校验，不改变 Agent 生成逻辑。回归：`tests.test_task_planning_native_regenerate_context`、`tests.test_checkpoint_first_retry`、`tests.test_failed_run_cleanup`。
+`services/task_plan_confirmation.py` 只接受磁盘上摘要和 provenance 均有效的 PendingPlan。`task_planning_adapter.py` 的旧 Confirm/Regenerate 动作失效后，没有可确认草稿就显式失败，不能生成空确认门；统一重试清除旧 Confirm/Regenerate 操作后从原节点重新生成或展示新 Pending 确认，失败沿既有清理释放资源。不新增 Lifecycle 阶段校验，不改变 Agent 生成逻辑。回归：`tests.test_task_planning_native_regenerate_context`、`tests.test_checkpoint_first_retry`、`tests.test_failed_run_cleanup`。
 
 `services/task_input_freshness.py` 复用原平台业务合同编译器，按任务交付物精确选择并比较直接消费的 Endpoint 参数、Schema、字段映射及页面接口依赖；页面自身实现合同仍由 `page_task_freshness.py` 检查，不将其他 Scope 或确认元数据变化递归传播。`build_task_reuse.py` 不再让过期任务声明 capability 或 Endpoint owner；`dag_planning_inputs.py` 从本轮生成的保留摘要中排除过期任务；`scope_assembly.py` 在有效 Candidate 就绪后替换过期任务及其完成状态，未变任务保留，原正式基线和不可变 Build 快照不变。Agent、模型提示及 Lifecycle 校验未变。回归：`tests.test_task_input_freshness`、`tests.test_build_task_reuse`、`tests.test_unit_generation_requirements`、`tests.test_scope_assembly`、`tests.test_dag_planning_orchestrator`。缺少恢复入口的 `RetryEntryNotice` 沿用主题和输入区宽度。
 
@@ -123,9 +135,11 @@ TestGeneration 写入边界在平铺测试文件外，仅允许当前 Jest 契�
 
 `services/planning_execution_end.py` 通过既有 `/application-lifecycle/run` 的 `end_planning_execution` AG-UI 控制动作结束当前正式规划修订：等待真实 Run/worker/命令退出后，将执行标记为用户结束、释放精确 Run 租约和修订占用，保留磁盘产物并恢复已完成应用的工作台状态。该控制动作不登记第二个业务执行，不增加 Lifecycle 准入。`applicationPlanningRuntime.ts` 使旧流回调失效，只有后端 End 成功才发布 `planning_ended` 并清除旧恢复展示；AppEntryPage 同步该权威回执。Agent 与确认门逻辑不变。回归：`tests.test_planning_execution_end`、`tests.test_application_lifecycle_protocol`、`pnpm test:application-planning-runtime`；Electron 真实模型验证返回设计、生成中结束、新会话再次修改。
 
+规划的“停止生成”通过既有 `/application-lifecycle/run` 的 `stop_planning_execution` AG-UI 动作等待真实 Run/worker/命令退出；仅将原执行置为 interrupted，保留正式修订、原 Thread、请求及已保存产物。`ApplicationPlanningRuntime.stop` 先屏蔽旧流迟到回执，再读取原 checkpoint 的权威 Recovery ActionPlan，在原阶段会话显示“继续生成”，点击沿统一完整上下文＋最新磁盘输入的原节点重执行，不自动确认新产物。停止超时保留“重试停止生成”，显式 End 才调用 `end_planning_execution` 释放修订。规划 End 与开发 End 按 Scope/当前规划 Thread 区分，不显示开发工作区资格检查卡。回归：`tests.test_planning_execution_end`、`tests.test_technical_planning_stage_retry`、`pnpm test:application-planning-runtime`、`pnpm test:connection-recovery`，Electron 验证原会话继续入口。
+
 `AiChatPanel/workbenchRunPresentation.ts::generationControlOwner` 让本地请求和重开后仍在运行的当前会话 Backend 执行共用生成控制归属；二次修改的输入框因此在没有旧 transport 时仍展示结束按钮，沿既有 `handleEndPlan` 精确结束恢复出来的 Run。结束后的权威投影撤下控制并恢复输入，不创建新业务 Run、不改 Agent 或增加 Lifecycle 校验。回归：`pnpm test:connection-recovery` 的重开二次修改按钮渲染与无本地流 End 协议测试；Electron 使用真实模型验证执行中重开与占用释放。
 
-`services/retry_preparation.py` 为 checkpoint 入口读取、恢复配置查找和 `aupdate_state` 提供独立 5 秒期限；平台准备超时与模型连接超时分开分类，前者同次点击自动降级。取消后未退出的准备任务仍计入真实退出边界，不能与业务重执行重叠。业务交接保存交接前快照；租约/持久化登记失败及协议入场前失败只撤销本次 child、恢复原失败入口，保留其他运行和原节点/提问。未启动 child 登记为 cancelled，不进入 FAILED/INTERRUPTED 恢复候选，避免规划恢复卡转向准备过程产生的伪失败。`NativeRecoveryRuntimeContext` 的 `runtime_started` 标识原 Runtime 是否已承担收尾责任，`protocols/execution_recovery.py` 负责此前的回退。回归：`tests.test_retry_boundary_failures`。
+`services/retry_preparation.py` 为完整 checkpoint 读取提供独立 5 秒期限；读取超时保留原失败入口，不启动业务执行。取消后未退出的准备任务仍计入真实退出边界，不能与业务重执行重叠。业务交接保存交接前快照；租约/持久化登记失败及协议入场前失败只撤销本次 child、恢复原失败入口，保留其他运行和原节点/提问。未启动 child 登记为 cancelled，不进入 FAILED/INTERRUPTED 恢复候选，避免规划恢复卡转向准备过程产生的伪失败。`NativeRecoveryRuntimeContext` 的 `runtime_started` 标识原 Runtime 是否已承担收尾责任，`protocols/execution_recovery.py` 负责此前的回退。回归：`tests.test_retry_boundary_failures`。
 
 `services/execution_cleanup.py` 将 checkpoint 例行历史清理与业务入口解耦：维护报错或两秒超时不拒绝新请求，同工作区不堆积维护任务。实际工作退出后，终态持久化失败或两秒未返回由后台继续补写；停止心跳、注销运行、释放租约和规划线程锁采用独立最终释放，任一步报错不跳过后续释放。不会用超时冒充业务工作退出，不修改 Agent 或增加 Lifecycle 准入条件。前端保留 `RETRY_PREPARATION_FAILED` 的明确重试说明。回归：`tests.test_retry_boundary_failures`、`tests.test_failed_run_cleanup_timeout`、`tests.test_direct_modification`、`tests.test_workflow_ag_ui`。
 
@@ -138,7 +152,7 @@ TestGeneration 写入边界在平铺测试文件外，仅允许当前 Jest 契�
 
 `protocols/workflow/runtime.py` 将请求适配器的输入校验失败也放入 AG-UI 生命周期收口，保留 Run/Thread 身份并发布业务错误、状态快照及 RunFinished；误选确认节点不能在建流前抛出 HTTP 500、误导前端显示 Backend 不可用，也不启动 Graph 或占用业务资源。`tests.test_workflow_ag_ui` 的固定工作区数据库按测试隔离，避免重复 Run ID 污染后续验证。
 
-失败运行清理由 `services/failed_run_cleanup.py` 统一承载：主 Workflow（包括 application_planning）与 Conversation 的异常、终止性业务失败先封锁本 Run 的后续工作，终止受控命令及启动验收进程，再等待 `run_workers` 中真实线程退出。清理在连接取消后继续；线程尚未退出时不释放运行租约、心跳或规划线程锁。Workbench FAILED 保留 execution、诊断、resourceKeys 和原生 checkpoint，仅移除该 Run 的 `resourceLocks`；`application_lifecycle.py::handoff_workbench_execution_for_recovery` 从 resourceKeys 重建完整恢复资源，冲突时拒绝覆盖其他 owner。异常收口增加 AG-UI `workflow.cleanup` 进度；先封锁/取消本 Run 再关闭 Graph。错误回执及前台最终收尾各最多等待 5 秒，超时也发布原始失败与重试入口，后台持有同一清理任务直至真实退出并自动释放。同步线程登记采用非阻塞观察，进程回收使用独立线程池，避免业务线程池耗尽阻塞清理。重试准备和 checkpoint 自动降级同样有界等待，未退出时返回 `RUN_CLEANUP_PENDING` 且不创建新占用；前端保留其明确操作说明。无法退出的 Python 线程不强制解锁，持续挂起时明确要求重启 Backend 后重试。最终沿原 lifecycle/Workflow 事件发布释放状态。不得清理 checkpoint、自动重试或绕过确认门。回归：`tests.test_failed_run_cleanup`、`tests.test_failed_run_cleanup_timeout`、`tests.test_conversation_native_recovery`、`tests.test_end_task_workers`。
+失败运行清理由 `services/failed_run_cleanup.py` 统一承载：主 Workflow（包括 application_planning）与 Conversation 的异常、终止性业务失败先封锁本 Run 的后续工作，终止受控命令及启动验收进程，再等待 `run_workers` 中真实线程退出。清理在连接取消后继续；线程尚未退出时不释放运行租约、心跳或规划线程锁。Workbench FAILED 保留 execution、诊断、resourceKeys 和原生 checkpoint，仅移除该 Run 的 `resourceLocks`；`application_lifecycle.py::handoff_workbench_execution_for_recovery` 从 resourceKeys 重建完整恢复资源，冲突时拒绝覆盖其他 owner。异常收口增加 AG-UI `workflow.cleanup` 进度；先封锁/取消本 Run 再关闭 Graph。错误回执及前台最终收尾各最多等待 5 秒，超时也发布原始失败与重试入口，后台持有同一清理任务直至真实退出并自动释放。同步线程登记采用非阻塞观察，进程回收使用独立线程池，避免业务线程池耗尽阻塞清理。统一节点重试准备同样有界等待，未退出时返回 `RUN_CLEANUP_PENDING` 且不创建新占用；前端保留其明确操作说明。无法退出的 Python 线程不强制解锁，持续挂起时明确要求重启 Backend 后重试。最终沿原 lifecycle/Workflow 事件发布释放状态。不得清理 checkpoint、自动重试或绕过确认门。回归：`tests.test_failed_run_cleanup`、`tests.test_failed_run_cleanup_timeout`、`tests.test_conversation_native_recovery`、`tests.test_end_task_workers`。
 
 设计/计划的输入、确认卡和 `applicationPlanningRuntime.ts` 显式提交不再使用应用级 `planningState` 的连接或 transport 状态作为前置拒绝条件；旧错误、断线及只读同步不能要求用户先同步才能再次提交。保留当前请求的 loading、实际 AG-UI 执行控制及已有正式确认门，不新增锁。回归：`pnpm test:application-planning-runtime`、`pnpm test:design-conversation`。
 
@@ -180,7 +194,7 @@ TestGeneration 写入边界在平铺测试文件外，仅允许当前 Jest 契�
 
 任务计划待确认时显式 End，`services/planning_refresh_recovery.py` 按 Pending 的精确 `workflow_run_id` 对照 `endedExecutions`，暂时将草稿投影为不可行动：保留草稿但释放其全应用确认占用，避免结束后“继续任务”被 Pending 锁置灰。原任务继续入场消费归档后，重新经过原任务计划确认门；不自动确认草稿。回归：`tests.test_planning_refresh_recovery`。
 
-技术规划自由输入沿原 `/application-page-planning/run` 的 `forwardedProps.technicalPlanningConversation`：`agents/technical_planning_conversation.py` 识别只读问答或明确技术修改，`protocols/technical_planning_conversation.py` 验证当前应用/规划线程；`classify` 用独立 AG-UI transport 返回回答，不登记原工作区 Run，不改 checkpoint、lifecycle 或恢复入口。`revise` 必须携带分类时的 sourceRunId/checkpointId，在原规划写锁内再次校验版本后，由 `services/technical_planning_retry.py` 整理现有计划和新要求，复用原 begin/generate/commit/review；无计划只引导上方重试，文本确认不能越过正式确认门。前端 `service/technicalPlanningConversation.ts` 使用 @ag-ui/client，`applicationPlanningRuntime.ts` 管理取消和原会话续接，`AiChatPanel` 将计划阶段底部输入交给该路径。回归：`tests.test_technical_planning_conversation`、`pnpm test:application-planning-runtime`。
+技术规划自由输入沿原 `/application-page-planning/run` 的 `forwardedProps.technicalPlanningConversation`：`agents/technical_planning_conversation.py` 区分 `reply`、`revise` 和上游 `design_change`；计划输入框的 @ 候选为技术规划、需求设计、UI设计，属于业务对话目标，不使用调试节点白名单。`classify` 用独立 AG-UI transport 返回回答，不登记原工作区 Run，不改 checkpoint、lifecycle 或恢复入口。`revise` / `revise_design` 携带分类时的 sourceRunId/checkpointId，在原规划写锁内再次校验版本；前者由 `services/technical_planning_retry.py` 整理已有计划并复用 begin/generate/commit/review，无计划只引导上方重试；后者进入原 `design_intent_analysis`，由设计 Policy 回退最早产物，即使技术计划尚未生成也可回到上游。明确 @需求设计 / @UI设计 经同一 Policy，访问控制仍优先回到需求；产物重生成后必须重新确认，文本不能越过正式确认门。前端 `service/technicalPlanningConversation.ts` 使用 @ag-ui/client，`applicationPlanningRuntime.ts` 管理取消和原线程续接。回归：`tests.test_technical_planning_conversation`、`tests.test_product_conversation_policy`、`pnpm test:application-planning-runtime`、`pnpm test:design-mention`。
 
 结束任务沿 `/workflow/run` 的原 AG-UI Plan Control：`services/run_workers.py` 用运行 ContextVar 和 `WorkerStateGraph` 登记主图/验收同步节点的完整退出（含 Agent 后的写盘/回滚），`agents/execution_control.py` 为所有工作区 Agent 工厂注入统一模型/工具取消中间件；异步工具调用独立持有登记，外层取消不能提前释放实际同步工作。受控命令默认继承运行身份。`WorkflowRunRegistry.cancel_and_wait` 同时等待外层 Task、同步工作和命令退出，30 秒未完成明确失败，End 不释放锁或返回成功；前端等待预算为 40 秒，`PlanExecutionDock` 全阶段提供 End 和 loading。
 
@@ -188,7 +202,7 @@ TestGeneration 写入边界在平铺测试文件外，仅允许当前 Jest 契�
 
 集成测试安排 `small_task_repair` 后公开状态保持 `in_progress`，真实检查项失败仍留在矩阵与报告中，只有终止性失败进入 failed lifecycle。`services/small_task_context.py` 从编译诊断按命令 cwd 解析已授权且真实存在的源码候选，优先交给 SmallTask，并传递 `repair_task_plan.strategy`；不扩大 allowedPaths。`graph/nodes/small_task.py::unit_test_repair` 在首次执行、结束任务后继续和 Native Recovery 时统一将权威 `unit_test_repair_task_plan`、`unit_test_report`、`unit_test_results` 映射为 SmallTask 的策略、报告与修订证据，避免通用集成测试上下文覆盖单测计划。`agents/small_task/agent.py` 沿用前端 Agent 的 `DirectModificationMiddleware(required_tools=[execute_tool])`，确保每轮模型请求包含已注册的命令工具；Prompt 对已诊断的依赖缺失先执行既定安装与真实复测，无需源码改动时返回带验证证据的 `already_satisfied`，再由原单测节点复核。SmallTask 使用现有 LangChain ModelCallLimitMiddleware 限制每次任务 24 轮模型调用，超限明确收口为失败；`middleware/small_task_cancellation.py` 和动态文件范围按内部 active Run 观察取消，防止同步修复线程在 End 后继续调用模型或工具。前端 End 不受普通写入只读门禁拦截，先等待本地流落盘/收口，再走原 AG-UI Plan Control；后端按 workspace/精确 Run 校验后等待真实 owner 取消，超时不释放锁。Pending Abandon、正式确认与其他 Run 保持各自边界。回归：`tests.test_unit_test_repair_context`（真实 Graph/结束归档/AG-UI 续接、生产 Agent 工具流安装与复测）、`tests.test_integration_repair_progress`、`tests.test_workflow_run_control`、`pnpm test:connection-recovery`。
 
-TechnicalPlan 的 `repair` 重入基线由 `domain/application_planning_recovery.py::validate_application_planning_baseline` 统一校验，技术事务入口与兜底执行器共用：只有当前 TechnicalPlan 缺失或为空、且 boundary 未声明 baseline 摘要时允许无基线续修；已有计划或已有摘要必须匹配，`revise` 始终要求有效基线。技术规划重试复用原 begin/generate/commit 节点：`services/technical_planning_retry.py` 为显式阶段重试及 Native 失败重试保留服务端 checkpoint 的上次业务要求，优先以当前落盘技术规划为基线，无已有计划则走原生成器的首次生成分支；清空旧候选/错误，重新建立当前输入边界，不把“继续执行”提示作为业务要求。公共重试不再依赖精确 Node Entry fork，生成或提交失败均读取当前磁盘并重新走 begin/generate/commit；成功仍暂停在正式确认门。失败审阅的重新生成动作把原生成 Run 写入内部 `technical_plan_repair_source_run_id`；begin 在输入提交后由 `application_revision_lifecycle.py` 校验原归属并 CAS 交接到新 Run，未交接时异常重试也由既有 pre-ownership 规则领取。字段在 begin 消费、generate 返回或新修订重置时清空，并从两处 Workflow 公开投影排除；不作为新的配置或产物来源。回归：`tests.test_technical_planning_stage_retry`、`tests.test_technical_planning_repair_baseline`（真实 Graph、Durable Store 与 AG-UI 恢复链路）。
+TechnicalPlan 的 `repair` 重入基线由 `domain/application_planning_recovery.py::validate_application_planning_baseline` 统一校验，技术事务入口与兜底执行器共用：只有当前 TechnicalPlan 缺失或为空、且 boundary 未声明 baseline 摘要时允许无基线续修；已有计划或已有摘要必须匹配，`revise` 始终要求有效基线。技术规划重试复用原 begin/generate/commit 节点：`services/technical_planning_retry.py` 为显式阶段重试及 Native 失败重试保留服务端 checkpoint 的上次业务要求，优先以当前落盘技术规划为基线，无已有计划则走原生成器的首次生成分支；清空旧候选/错误，重新建立当前输入边界，不把“继续执行”提示作为业务要求。公共重试保留完整事务上下文，从原 begin/generate/commit 失败节点执行；生成输入读取当前磁盘，commit 保留未落盘候选，成功仍暂停在正式确认门。失败审阅的重新生成动作把原生成 Run 写入内部 `technical_plan_repair_source_run_id`；begin 在输入提交后由 `application_revision_lifecycle.py` 校验原归属并 CAS 交接到新 Run，未交接时异常重试也由既有 pre-ownership 规则领取。字段在 begin 消费、generate 返回或新修订重置时清空，并从两处 Workflow 公开投影排除；不作为新的配置或产物来源。回归：`tests.test_technical_planning_stage_retry`、`tests.test_technical_planning_repair_baseline`（真实 Graph、Durable Store 与 AG-UI 恢复链路）。
 
 技术规划 begin/generate/commit 的“停止生成”是可恢复暂停：`protocols/workflow/runtime.py` 保留取消控制回执，同时把 Durable execution 记为 `interrupted`，由现有 InterruptedTargetResolver 和恢复动作继续；工作台取消与结束保持原语义。`service/applicationPlanningRecovery.ts` 接受后端当前合法的 `cancelled/stopped` 终态投影，但不为终态自行制造恢复动作，也不重写已有取消记录。回归：`tests.test_technical_planning_stage_retry` 的真实 AG-UI 暂停→恢复→确认门，`pnpm test:application-planning-recovery`、`pnpm test:application-planning-runtime`。
 
@@ -279,7 +293,7 @@ DAG 中断候选由 `Backend/app/workspace/planning_interruption_documents.py` �
 
 ## Backend
 
-验收拒绝沿用 `/workflow/run` 的 AG-UI End：`AiChatPanel.handleAcceptanceReject` 等待 `useWorkflowConversation.handleEndPlan` 的明确成功结果后才创建开发会话；失败保留原验收入口。`handleEndPlan` 返回 boolean 供顺序交接，原结束控制仍等待真实工作退出及后端释放，不新增 Lifecycle 校验。Build 的 checkpoint-first 自动降级在 `drain_failed_run` 后调用 `services/build_restart.archive_checkpoint_build_attempt`，将该 child 当前 execution 绑定原样移到 `plans/build-runs/checkpoint-attempts/<attempt-id>/`，之后同一 AG-UI Run 从固定原始节点/提问建立业务执行绑定；来源进度和不可变 Build 计划副本不变，不读取新失败 checkpoint，不改 Build Agent/Scheduler 节点逻辑。回归：`tests.test_checkpoint_first_retry`、`pnpm test:connection-recovery`，并在 Electron 覆盖拒绝验收和 Build 执行中断后单次重试。
+验收拒绝沿用 `/workflow/run` 的 AG-UI End：`AiChatPanel.handleAcceptanceReject` 等待 `useWorkflowConversation.handleEndPlan` 的明确成功结果后才创建开发会话；失败保留原验收入口。`handleEndPlan` 返回 boolean 供顺序交接，原结束控制仍等待真实工作退出及后端释放，不新增 Lifecycle 校验。Build 统一重试在旧工作退出后创建新 Run，读取原失败上下文及磁盘执行记录，不再创建同 Run 的 checkpoint 恢复尝试或归档降级绑定。回归：`tests.test_checkpoint_first_retry`、`pnpm test:connection-recovery`，并在 Electron 覆盖拒绝验收和 Build 执行中断后单次重试。
 
 质量结果失效由 `services/workflow_quality_results.py` 提供：真实 Build/代码修改入口与正式修订确认把旧测试、审查、验收结果改为 pending，纯只读对话保留结果。`ConversationExecution.started_node` 在平台运行边界更新结果，不改 Agent 节点。前端 `utils.currentRoundAcceptancePassed` 只展示当前无活动执行/正式修改的通过结果；`hooks/revisionSession.revisionStartTarget` 使用 impact 绑定目标，空对象不再遮蔽 application 默认目标。回归：`tests.test_acceptance_decision_projection`、`pnpm test:acceptance-phase`。
 

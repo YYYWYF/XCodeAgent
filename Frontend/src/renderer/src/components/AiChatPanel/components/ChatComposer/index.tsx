@@ -23,6 +23,8 @@ import type { ChatCopy } from '../../types'
 import { workflowDebugNodesForStage } from '../../../../service/workflowDebugNodes'
 import ResourceSkillMenu from './ResourceSkillMenu'
 import { workflowDebugBuildScope } from '../../debugExecutionScope'
+import { productDesignStageMentionFromText } from './productConversation'
+import WorkflowStageMentionInput from './WorkflowStageMentionInput'
 import './ChatComposer.less'
 
 const { Text } = Typography
@@ -134,7 +136,16 @@ export default function ChatComposer({
   /** 校验当前状态并提交对话内容。 */
   const handleSend = (): void => {
     if (!hasDebugNode || workspaceBusy || sendDisabled || (debugOnly && loading)) return
-    onSend(currentDebugOptions())
+    // 计划阶段的 @ 是对话意图提示，保留原文交给技术规划路由，不伪装成调试重入。
+    const stageMention = debugStage === 'design'
+      ? productDesignStageMentionFromText(draft, debugStage) : undefined
+    onSend(
+      stageMention
+        ? { enabled: true, resumeFrom: stageMention.node }
+        : debugStage === 'planning' && productDesignStageMentionFromText(draft, debugStage)
+          ? undefined
+          : currentDebugOptions()
+    )
   }
 
   /** 处理输入区键盘操作，空文本时 Backspace 依次删除最后一个技能标签。 */
@@ -170,21 +181,39 @@ export default function ChatComposer({
               </div>
             )}
             {!debugOnly && (
-              <TextArea
-                aria-label={`${copy.title}输出内容`}
-                autoSize={{ minRows: 1, maxRows: 6 }}
-                bordered={false}
-                placeholder={placeholder || copy.placeholder}
-                value={draft}
-                onChange={(event) => onDraftChange(event.target.value)}
-                onKeyDown={handleInputKeyDown}
-                onPressEnter={(event) => {
-                  if (!event.shiftKey) {
-                    event.preventDefault()
-                    handleSend()
-                  }
-                }}
-              />
+              debugStage === 'design' || debugStage === 'planning' ? (
+                <WorkflowStageMentionInput
+                  key={debugStage}
+                  stage={debugStage}
+                  ariaLabel={`${copy.title}输出内容`}
+                  onChange={onDraftChange}
+                  onKeyDown={handleInputKeyDown}
+                  onPressEnter={(event) => {
+                    if (!event.shiftKey) {
+                      event.preventDefault()
+                      handleSend()
+                    }
+                  }}
+                  placeholder={placeholder || copy.placeholder}
+                  value={draft}
+                />
+              ) : (
+                <TextArea
+                  aria-label={`${copy.title}输出内容`}
+                  autoSize={{ minRows: 1, maxRows: 6 }}
+                  bordered={false}
+                  placeholder={placeholder || copy.placeholder}
+                  value={draft}
+                  onChange={(event) => onDraftChange(event.target.value)}
+                  onKeyDown={handleInputKeyDown}
+                  onPressEnter={(event) => {
+                    if (!event.shiftKey) {
+                      event.preventDefault()
+                      handleSend()
+                    }
+                  }}
+                />
+              )
             )}
           </div>
           {!debugOnly && inspectedElementContext && (
@@ -356,16 +385,18 @@ export default function ChatComposer({
                 {stopping ? 'Agent 正在退出，请稍候' : 'Agent 正在运行，结束任务后可调试'}
               </Text>
             )}
-            {loading && !debugOnly ? (
+            {(loading || stopping) && !debugOnly ? (
               <Button
-                aria-label={stopping ? '正在结束任务' : '结束任务'}
+                aria-label={stopping ? '正在停止生成' : '停止生成'}
+                aria-busy={stopping}
                 className={cx('composer-send-button')}
                 danger
                 disabled={stopping}
+                loading={stopping}
                 icon={<StopOutlined />}
                 onClick={onStopGenerating}
                 shape="circle"
-                title={stopping ? '正在结束任务…' : '结束任务'}
+                title={stopping ? '正在停止生成…' : '停止生成'}
               />
             ) : (
               <Button

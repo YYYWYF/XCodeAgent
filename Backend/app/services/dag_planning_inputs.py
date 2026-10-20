@@ -65,9 +65,17 @@ class SequentialPlanningInputs(FrozenPlanningModel):
     formal_source_refs: _FormalSourceRefs
 
     def input_fingerprint(self) -> str:
-        """对完整冻结 Planning Inputs 计算唯一摘要，供 Run 与 Confirm 共用。"""
+        """核对完整业务输入，扫描耗时及缓存命中等观测信息不代表代码发生变化。"""
 
-        return _input_digest(self.model_dump(mode="json"))
+        value = self.model_dump(mode="json")
+        snapshot = value["workspace_snapshot"]
+        snapshot.pop("generated_at", None)
+        graph = snapshot.get("code_graph")
+        if isinstance(graph, dict):
+            # 保留 revision、索引内容、可用性和警告，仅排除每次扫描产生的运行投影。
+            for key in ("status", "buildType", "cacheHit", "message", "durationMs", "progress"):
+                graph.pop(key, None)
+        return _input_digest(value)
 
     def requirements(self) -> UnitGenerationRequirements:
         """验证基线身份及 retained 全量覆盖，再调用 T2.3 计算本轮职责。"""

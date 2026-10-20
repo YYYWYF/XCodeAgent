@@ -1,4 +1,4 @@
-"""验证按节点重试不复制旧 State，磁盘资产优先且无入口不占用新会话。"""
+"""验证完整失败上下文与当前磁盘输入合并后重新执行原节点。"""
 
 import json
 import tempfile
@@ -54,7 +54,7 @@ class BusinessNodeRetryTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(RecoveryExecutionError) as denied:
                     await prepare_business_node_retry(source, object())
                 self.assertEqual(denied.exception.code, "RETRY_SOURCE_ACTIVE")
-                with patch("app.services.business_node_retry.read_retry_hint", AsyncMock(return_value=None)), patch("app.services.business_node_retry.release_unretryable_execution", AsyncMock()) as release:
+                with patch("app.services.checkpoint_execution.read_checkpoint_execution", AsyncMock(return_value=None)), patch("app.services.business_node_retry.release_unretryable_execution", AsyncMock()) as release:
                     with self.assertRaises(RecoveryExecutionError) as missing:
                         await prepare_business_node_retry(source, object(), allow_stopped=True)
                     self.assertEqual(missing.exception.code, "RETRY_ENTRY_NOT_FOUND")
@@ -144,7 +144,7 @@ class BusinessNodeRetryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(load_stage_artifacts(state, "ui_confirmation")["requirement_spec"]["value"], "edited")
 
     async def test_fresh_retry_graph_discards_checkpoint_state_and_reads_current_files(self):
-        """同 Thread 新执行从 START 重进节点，旧确认和旧产物不会复活。"""
+        """同 Thread 新执行从 START 重进节点，保留完整业务上下文，但旧确认动作不会复活。"""
         from app.graph.state import ProjectState
         with tempfile.TemporaryDirectory() as workspace:
             _write_ready_workbench_lifecycle(workspace)
@@ -174,7 +174,7 @@ class BusinessNodeRetryTests(unittest.IsolatedAsyncioTestCase):
                 self.write_json(workspace, "specs/requirement-spec.json", {"from": "current disk"})
                 await graph.ainvoke(context.fork_snapshot.values, context.fork_config)
                 self.assertEqual(received[-1]["request"], "保留上次提问")
-                self.assertNotIn("clarification", received[-1])
+                self.assertEqual(received[-1]["clarification"], {})
                 self.assertEqual(received[-1]["requirement_spec"], {"from": "current disk"})
                 self.assertNotEqual(context.new_run_id, "source")
             finally:

@@ -5,7 +5,7 @@ import { createAgUiHttpAgent } from './authentication'
 import { getApplicationPlanningUrl } from './applicationPagePlanning'
 
 export type TechnicalPlanningMessage = {
-  action: 'classify' | 'revise'
+  action: 'classify' | 'revise' | 'revise_design'
   workspaceRoot: string
   applicationId: string
   planningThreadId: string
@@ -15,7 +15,7 @@ export type TechnicalPlanningMessage = {
 }
 
 export type TechnicalPlanningReply = {
-  intent: 'reply' | 'revise'
+  intent: 'reply' | 'revise' | 'design_change'
   message: string
   planningThreadId: string
   sourceRunId: string
@@ -48,7 +48,7 @@ export async function readTechnicalPlanningReply(
     if (result?.status === 'failed') {
       throw new Error((result.error as { message?: string } | undefined)?.message || '技术规划对话失败。')
     }
-    if (result?.status !== 'completed' || !['reply', 'revise'].includes(String(result.intent)) ||
+    if (result?.status !== 'completed' || !['reply', 'revise', 'design_change'].includes(String(result.intent)) ||
         result.planningThreadId !== planningThreadId || typeof result.message !== 'string' ||
         typeof result.sourceRunId !== 'string' || !result.sourceRunId ||
         typeof result.checkpointId !== 'string' || !result.checkpointId) {
