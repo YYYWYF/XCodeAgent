@@ -58,7 +58,7 @@ export function applicationIndexOf(application: ApplicationConfig): ApplicationI
     id: application.id,
     workspaceRoot,
     name: application.appName.trim() || application.name,
-    lastOpenedAt: Date.now()
+    lastOpenedAt: application.lastOpenedAt
   }
 }
 
