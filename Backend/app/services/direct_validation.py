@@ -27,8 +27,14 @@ def run_direct_fix_validation(
     state: dict[str, Any],
     *,
     affected_layers: set[str],
+    lightweight: bool = False,
 ) -> dict[str, Any]:
-    """前端按 tsc、Vite、重启顺序验收，编译失败保留真实诊断并立即返修。"""
+    """前端按 tsc、Vite、重启顺序验收，编译失败保留真实诊断并立即返修。
+
+    lightweight=True 时只跑 tsc 类型检查，跳过 vite build 和项目重启：
+    用于自动修复轮次，避免每轮 repair 都重复完整构建把时间拖长。
+    首次验证仍跑全套，保证交付前的完整门禁。
+    """
 
     results: list[dict[str, Any]] = []
     if "frontend" in affected_layers:
@@ -51,11 +57,17 @@ def run_direct_fix_validation(
             return {"test_results": [result], "test_events": [result["id"]]}
 
         log_root = workflow_artifact_root(state).resolve() / "runtime" / "direct-validation"
+        # 首次验证跑 tsc + vite build；repair 轮次只跑 tsc，跳过 vite build。
+        checks = (
+            (("frontend_typecheck", "前端类型检查（tsc -b）", ["tsc", "-b"]),)
+            if lightweight
+            else (
+                ("frontend_typecheck", "前端类型检查（tsc -b）", ["tsc", "-b"]),
+                ("frontend_build", "前端构建检查（vite build）", ["vite", "build"]),
+            )
+        )
         # 分开执行以保留准确的命令、退出码和日志，同时保证 && 的短路语义。
-        for check_id, name, command in (
-            ("frontend_typecheck", "前端类型检查（tsc -b）", ["tsc", "-b"]),
-            ("frontend_build", "前端构建检查（vite build）", ["vite", "build"]),
-        ):
+        for check_id, name, command in checks:
             result = _run_command_result(
                 check_id=check_id,
                 name=name,
@@ -72,8 +84,10 @@ def run_direct_fix_validation(
             if not result["passed"]:
                 return {"test_results": results, "test_events": [item["id"] for item in results]}
 
-    restart = run_project_restart_validation(state)
-    results.extend(restart["test_results"])
+    # 首次验证才重启项目；repair 轮次跳过重启，类型检查通过即视为可继续。
+    if not lightweight:
+        restart = run_project_restart_validation(state)
+        results.extend(restart["test_results"])
     return {"test_results": results, "test_events": [item["id"] for item in results]}
 
 

@@ -700,12 +700,19 @@ def invoke_frontend_direct_modification(
     scoped_paths = _approved_owner_paths(approved_paths, owner="frontend")
     source_candidates = _approved_owner_paths(candidate_files, owner="frontend")
     task_candidates = list(dict.fromkeys([*scoped_paths, *source_candidates]))[:100]
+    # 有精确候选时锁死到这些路径，避免 Agent 在整个 Frontend/src/** 下反复探索；
+    # 候选为空才退回全树，此时靠 run_limit 兜底。
+    allowed_paths = (
+        task_candidates
+        if task_candidates
+        else ["Frontend/src/**", "frontend/src/**", *scoped_paths]
+    )
     return invoke_small_task_agent(
         packet={
             "source": "free_chat",
             "owner": "frontend",
             "description": user_request,
-            "allowedPaths": ["Frontend/src/**", "frontend/src/**", *scoped_paths],
+            "allowedPaths": allowed_paths,
             "approvedPaths": scoped_paths,
             "targetFiles": task_candidates,
             "candidateFiles": task_candidates,
@@ -742,20 +749,26 @@ def invoke_data_source_direct_modification(
     scoped_paths = _approved_owner_paths(approved_paths, owner="backend")
     source_candidates = _approved_owner_paths(candidate_files, owner="backend")
     task_candidates = list(dict.fromkeys([*scoped_paths, *source_candidates]))[:100]
+    # 与前端一致：有精确候选时锁死路径，避免在 Backend/app/** 下大范围探索。
+    allowed_paths = (
+        task_candidates
+        if task_candidates
+        else [
+            "Backend/app/**",
+            "Backend/src/**",
+            "Backend/tests/**",
+            "backend/app/**",
+            "backend/src/**",
+            "backend/tests/**",
+            *scoped_paths,
+        ]
+    )
     return invoke_small_task_agent(
         packet={
             "source": "free_chat",
             "owner": "backend",
             "description": user_request,
-            "allowedPaths": [
-                "Backend/app/**",
-                "Backend/src/**",
-                "Backend/tests/**",
-                "backend/app/**",
-                "backend/src/**",
-                "backend/tests/**",
-                *scoped_paths,
-            ],
+            "allowedPaths": allowed_paths,
             "approvedPaths": scoped_paths,
             "targetFiles": task_candidates,
             "candidateFiles": task_candidates,

@@ -79,8 +79,10 @@ def create_small_task_agent(
             # 与前端 Agent 一样，在每次模型调用前补回可能被中间层遗漏的命令工具。
             DirectModificationMiddleware(required_tools=[execute_tool]),
             SmallTaskCancellationMiddleware(),
-            # 局部任务不能无限探索；达到上限后抛出可被执行器明确收口的错误。
-            ModelCallLimitMiddleware(run_limit=24, exit_behavior="error"),
+            # 局部任务不能无限探索：12 次模型调用足够读完候选并写出 diff。
+            # 用 end 而非 error：额度耗尽时让 Agent 正常收口返回当前结果，
+            # 而不是抛异常被当成执行失败、触发 validate(build)+repair 的重型连锁。
+            ModelCallLimitMiddleware(run_limit=12, exit_behavior="end"),
         ],
         backend=ScopedSmallTaskBackend(
             create_workspace_backend(

@@ -847,7 +847,7 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
         [captured.code_change_set] if captured.code_change_set else [],
         on_progress=_code_graph_progress_writer("execute_frontend"),
     )
-    return _stage_update(
+    update = _stage_update(
         state,
         stage="frontend",
         phase="execute_frontend",
@@ -855,6 +855,24 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
         code_change_set=captured.code_change_set,
         code_graph_index=code_graph_index,
     )
+    # Agent 声称完成但没写出任何真实 diff（探索额度耗尽、误判 already_satisfied 等）时，
+    # 不进 validate 跑 tsc/vite build——那只会白白触发重型构建和后续 repair 循环。
+    # 改为要求用户补充精确修改范围，由 classify_intent 重新进入。
+    if (
+        update.get("status") == "in_progress"
+        and not _code_change_set_has_files(captured.code_change_set)
+    ):
+        update["status"] = "requires_user_input"
+        update["message"] = (
+            "未检测到实际代码改动。请补充要修改的具体页面或组件，"
+            "或说明要修复的问题现象，以便精确定位。"
+        )
+        update["clarification"] = {
+            "mode": "require_direct_modification_scope",
+            "status": "requires_user_input",
+            "message": update["message"],
+        }
+    return update
 
 
 def execute_backend_direct_modification(state: ProjectState) -> dict[str, Any]:
@@ -952,7 +970,13 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
     }
-    result = run_direct_fix_validation(validation_state, affected_layers=affected_layers)
+    result = run_direct_fix_validation(
+        validation_state,
+        affected_layers=affected_layers,
+        # 首次验证跑全套（tsc + vite build + 重启）；repair 轮次只跑 tsc，
+        # 避免每轮修复都重复完整构建和重启，把总耗时拉长。
+        lightweight=repair_iteration > 0,
+    )
     test_results = _scope_direct_validation_results(
         [item for item in result.get("test_results", []) if isinstance(item, dict)],
         changed_paths=changed_paths,

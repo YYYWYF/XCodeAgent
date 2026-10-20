@@ -55,6 +55,16 @@ def build_small_task_prompt(packet: dict[str, Any]) -> str:
         "Invoke tools through real tool calls, never as Action/Action Input text. "
         "Always finish with one complete JSON result containing status and a nonempty summary; "
         "tool arguments or an empty final message are not execution results.\n\n"
+        "Write-first budget: you have a hard ceiling of 12 model calls for this task, and "
+        "exploration must stay bounded. Produce the first real diff within your first 6 tool "
+        "calls. If packet.candidateFiles is non-empty, read only those files (at most one extra "
+        "neighbor) and then write; do not broaden the search. If candidateFiles is empty, read "
+        "at most 3 files from the narrowest plausible path under allowedPaths and then write "
+        "based on what you have. Exploration-only tools (grep/ls/glob over directories, reading "
+        "build or dependency metadata) must not exceed 8 calls total across the whole task. "
+        "If a tool call errors, retry that exact step at most once; do not pivot to a new "
+        "exploration path. When the budget is tight, prefer writing the bounded fix and "
+        "verifying over reading more context.\n\n"
         "Required JSON contract:\n"
         '{"status":"completed|already_satisfied|requires_user_confirmation|requires_workflow|failed",'
         '"summary":"...","changedFiles":[],"verification":[],'
