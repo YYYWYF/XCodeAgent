@@ -193,7 +193,7 @@ def planning_inputs(*, plan=None, baseline=None, required=None, scope=None, cont
         "scope": scope,
         "template_context": {
             "state_path": ".devagentstudio/template-state.json",
-            "template_revision": "fixture-template-r1",
+            "template_revision": "2026.10.13.1",
             "effective_capabilities": {},
         },
     }

@@ -19,9 +19,36 @@ class RequestedConfigTests(unittest.TestCase):
             root = Path(directory)
             self._write(root, login=True, authorization=True)
             self.assertEqual(
-                compile_template_requested_config(root)["capabilities"],
+                compile_template_requested_config(root, include_application_config=True)["capabilities"],
                 {"login": {"enabled": True, "config": {}}, "authorization": {"enabled": True, "config": {}}},
             )
+            self.assertEqual(
+                compile_template_requested_config(root, include_application_config=True)["applicationConfig"],
+                {
+                    "appName": "订单中心",
+                    "appIcon": "AppstoreOutlined",
+                    "theme": {"primaryColor": "#6b3cf0"},
+                    "auth": {
+                        "enable": True,
+                        "authnSource": "yst",
+                        "yht": {
+                            "clientId": "000",
+                            "privateKey": "111",
+                            "publicKey": "123",
+                            "centerPublicKey": "456",
+                        },
+                    },
+                },
+            )
+
+    def test_reconcile_request_omits_application_config(self) -> None:
+        """设置变更只能提示人工更新环境文件，后续 Reconcile 不得覆盖受管配置。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write(root, login=True, authorization=False)
+            requested = compile_template_requested_config(root)
+            self.assertNotIn("applicationConfig", requested)
 
     def test_rejects_technical_plan_from_an_older_configuration_revision(self) -> None:
         """当前 application.json 已变化时，旧 TechnicalPlan 不得驱动模板请求。"""
@@ -44,7 +71,7 @@ class RequestedConfigTests(unittest.TestCase):
         devagentstudio = root / ".devagentstudio"
         (devagentstudio / "plans").mkdir(parents=True, exist_ok=True)
         (devagentstudio / "application.json").write_text(
-            json.dumps({"schemaVersion": 6, "configRevision": 1, "datasource": {"type": "database"}, "auth": {"enable": login}, "authorization": {"enabled": authorization, "initialAdministratorSubjects": ["ops@example.com"] if authorization else []}}),
+            json.dumps({"schemaVersion": 6, "configRevision": 1, "appName": "订单中心", "appIcon": "AppstoreOutlined", "theme": {"primaryColor": "#6b3cf0"}, "datasource": {"type": "database"}, "auth": {"enable": login, "yht": {"clientId": "000", "privateKey": "111", "publicKey": "123", "centerPublicKey": "456"}}, "authorization": {"enabled": authorization, "initialAdministratorSubjects": ["ops@example.com"] if authorization else []}}),
             encoding="utf-8",
         )
         (devagentstudio / "plans/technical-plan.json").write_text(

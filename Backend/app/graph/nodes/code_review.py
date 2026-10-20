@@ -17,9 +17,9 @@ def review_phase_confirmation(state: ProjectState) -> dict[str, Any]:
     if state.get("quality_gate_passed") is not True:
         return {
             "phase": "review_phase_confirmation",
-            "status": "failed",
-            "message": "集成测试尚未通过，不能进入审查阶段。",
-            "error": "只有集成质量门禁通过后才能进入代码审查。",
+            "status": "in_progress",
+            "message": "重新检查当前代码的集成质量门禁。",
+            "code_review_next_action": "integration_test",
             "timeline": ["review_phase_confirmation"],
         }
     submission = state.get("review_phase_confirmation")
@@ -140,9 +140,9 @@ def acceptance_phase_confirmation(state: ProjectState) -> dict[str, Any]:
     if review_status != "completed" or repair_status not in {"not_required", "completed"}:
         return {
             "phase": "acceptance_phase_confirmation",
-            "status": "failed",
-            "message": "代码审查失败，不能进入验收阶段。",
-            "error": state.get("error") or "代码审查未完成。",
+            "status": "in_progress",
+            "message": "重新审查当前代码后进入验收确认。",
+            "acceptance_next_action": "code_review",
             "timeline": ["acceptance_phase_confirmation"],
         }
     submission = state.get("acceptance_phase_confirmation")

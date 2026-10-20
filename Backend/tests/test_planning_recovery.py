@@ -225,6 +225,7 @@ class PlanningRecoveryContractTests(unittest.TestCase):
         })
         pending_unit = unit("page:failed")
         failed = PlanningRun(
+            unit_display_names={},
             planning_run_id="run-1",
             workflow_run_id="workflow-recovered",
             thread_id="thread-1",

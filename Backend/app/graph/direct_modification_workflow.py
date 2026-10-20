@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, START
+from app.services.stage_artifacts import ArtifactStateGraph as WorkerStateGraph
 
 from app.graph.nodes.direct_modification import (
     classify_direct_modification,
@@ -23,6 +24,7 @@ from app.services.workflow_reentry import SYNTHETIC_WORKFLOW_ENTRY_NODE, workflo
 
 
 _DIRECT_ENTRY_NODES = {
+    "classify_intent", "respond_conversation", "answer_workspace", "validate_direct_fix", "direct_modification_repair",
     "scan_workspace_code",
     "scan_change_impact_code",
     "execute_frontend",
@@ -174,7 +176,7 @@ def direct_next_node_name(node_name: str, state: ProjectState) -> str | None:
 def build_direct_modification_graph(*, checkpointer: Any) -> Any:
     """构建不依赖正式规划产物的快速修改 LangGraph。"""
 
-    builder = StateGraph(ProjectState)
+    builder = WorkerStateGraph(ProjectState)
     builder.add_node(SYNTHETIC_WORKFLOW_ENTRY_NODE, workflow_entry)
     builder.add_node("classify_intent", classify_direct_modification)
     builder.add_node("scan_workspace_code", scan_workspace_code)
@@ -195,6 +197,11 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
         SYNTHETIC_WORKFLOW_ENTRY_NODE,
         _route_direct_entry,
         {
+            "classify_intent": "classify_intent",
+            "respond_conversation": "respond_conversation",
+            "answer_workspace": "answer_workspace",
+            "validate_direct_fix": "validate_direct_fix",
+            "direct_modification_repair": "direct_modification_repair",
             "scan_workspace_code": "scan_workspace_code",
             "scan_change_impact_code": "scan_change_impact_code",
             "execute_frontend": "execute_frontend",

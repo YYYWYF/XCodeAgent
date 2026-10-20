@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -46,6 +47,9 @@ def _prepare_generating_workspace(workspace: Path) -> None:
             {
                 "schemaVersion": 6,
                 "configRevision": 1,
+                "appName": "任务中心",
+                "appIcon": "AppstoreOutlined",
+                "theme": {"primaryColor": "#6b3cf0"},
                 "auth": {"enable": False},
                 "authorization": {"enabled": False, "initialAdministratorSubjects": []},
             },
@@ -85,14 +89,24 @@ def _write_package(path: Path, *, include_application: bool) -> None:
     """构造最小 Engine ZIP；可故意省略 Spring Boot 入口触发 Readiness。"""
 
     state = {
-        "schemaVersion": 2,
-        "templateRevision": "r1",
+        "schemaVersion": 3,
+        "templateRevision": "2026.10.17.1",
         "requested": {},
         "effective": {},
-        "appliedAdditions": {},
+        "installedArtifacts": {},
+        "managedContributions": {},
+        "managedConfiguration": {
+            "appName": "任务中心",
+            "appIcon": "AppstoreOutlined",
+            "primaryColor": "#6b3cf0",
+        },
     }
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("frontend/package.json", "{}\n")
+        package.writestr(
+            "frontend/.env",
+            'PUBLIC_APP_NAME="任务中心"\nPUBLIC_APP_ICON="AppstoreOutlined"\nPUBLIC_THEME_PRIMARY_COLOR="#6b3cf0"\n',
+        )
         package.writestr("backend/pom.xml", "<project />\n")
         if include_application:
             package.writestr("backend/src/main/java/demo/DemoApplication.java", "class DemoApplication {}\n")
@@ -101,6 +115,55 @@ def _write_package(path: Path, *, include_application: bool) -> None:
 
 class WorkspaceBootstrapServiceTests(unittest.TestCase):
     """验证服务把 Readiness 失败限定在物化事务并投影为不可恢复失败。"""
+
+    def test_success_keeps_template_projected_environment_in_first_git_baseline(self) -> None:
+        """首次生成必须原样提交模板服务投影的环境配置。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            _prepare_generating_workspace(workspace)
+            package = Path(directory) / "engine.zip"
+            _write_package(package, include_application=True)
+            download = TemplatePackageDownload(
+                temporary_path=package,
+                sha256="ignored",
+                size=package.stat().st_size,
+                content_type="application/zip",
+            )
+            service = WorkspaceBootstrapService(_settings())
+            with (
+                patch(
+                    "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
+                    new=AsyncMock(return_value=download),
+                ),
+                patch(
+                    "app.services.workspace_bootstrap.service.push_workspace_branch",
+                    return_value={"status": "skipped"},
+                ),
+            ):
+                result = asyncio.run(service._run(workspace))
+
+            generated = (workspace / "frontend/.env").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn('PUBLIC_APP_NAME="任务中心"', generated)
+            self.assertIn('PUBLIC_APP_ICON="AppstoreOutlined"', generated)
+            self.assertIn('PUBLIC_THEME_PRIMARY_COLOR="#6b3cf0"', generated)
+            self.assertIn("lifecycle", result)
+            state = json.loads(
+                (workspace / ".devagentstudio/template-state.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["managedConfiguration"]["appName"], "任务中心")
+
+            committed = subprocess.run(
+                ["git", "show", "HEAD:frontend/.env"],
+                cwd=workspace,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            self.assertEqual(committed, generated)
 
     def test_readiness_failure_rolls_back_roots_and_marks_lifecycle_failed(self) -> None:
         """缺少后端入口时不得留下模板半成品，且 lifecycle 必须为 FAILED。"""

@@ -9,6 +9,8 @@ from langchain_core.runnables.config import ensure_config
 from langchain_openai import ChatOpenAI
 from pydantic import PrivateAttr
 
+from app.agents.opencode_stream_fallback import nonstream_fallback
+
 
 class _OpenCodeGoHeaders:
     """在调用边界读取会话配置，避免缓存模型把不同会话的请求头混在一起。"""
@@ -29,23 +31,54 @@ class _OpenCodeGoHeaders:
     def invoke(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
         """为同步非流式调用附加当前会话请求头。"""
 
-        return super().invoke(input, config=config, **self._request_kwargs(config, kwargs))
+        try:
+            return super().invoke(input, config=config, **self._request_kwargs(config, kwargs))
+        except Exception as error:
+            fallback = nonstream_fallback(self, error)
+            if fallback is None:
+                raise
+            return fallback.invoke(input, config=config, **kwargs)
 
     async def ainvoke(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
         """为异步非流式调用附加当前会话请求头。"""
 
-        return await super().ainvoke(input, config=config, **self._request_kwargs(config, kwargs))
+        try:
+            return await super().ainvoke(input, config=config, **self._request_kwargs(config, kwargs))
+        except Exception as error:
+            fallback = nonstream_fallback(self, error)
+            if fallback is None:
+                raise
+            return await fallback.ainvoke(input, config=config, **kwargs)
 
     def stream(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
         """为同步流式调用附加当前会话请求头，保持原有流式生命周期。"""
 
-        yield from super().stream(input, config=config, **self._request_kwargs(config, kwargs))
+        emitted = False
+        try:
+            for chunk in super().stream(input, config=config, **self._request_kwargs(config, kwargs)):
+                emitted = True
+                yield chunk
+        except Exception as error:
+            # 一旦向调用方交付响应，禁止重新请求，避免工具调用或文本被重复消费。
+            fallback = None if emitted else nonstream_fallback(self, error)
+            if fallback is None:
+                raise
+            yield from fallback.stream(input, config=config, **kwargs)
 
     async def astream(self, input: Any, config: RunnableConfig | None = None, **kwargs: Any) -> Any:
         """为异步流式调用附加当前会话请求头，保持每次并发调用配置独立。"""
 
-        async for chunk in super().astream(input, config=config, **self._request_kwargs(config, kwargs)):
-            yield chunk
+        emitted = False
+        try:
+            async for chunk in super().astream(input, config=config, **self._request_kwargs(config, kwargs)):
+                emitted = True
+                yield chunk
+        except Exception as error:
+            fallback = None if emitted else nonstream_fallback(self, error)
+            if fallback is None:
+                raise
+            async for chunk in fallback.astream(input, config=config, **kwargs):
+                yield chunk
 
 
 class OpenCodeGoChatOpenAI(_OpenCodeGoHeaders, ChatOpenAI):

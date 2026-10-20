@@ -21,12 +21,14 @@ from app.services.application_lifecycle import (
     _application_lifecycle_lock,
     application_lifecycle_path,
     execution_belongs_to_active_revision,
+    handoff_application_planning_run_for_recovery,
     load_application_lifecycle,
     persist_application_lifecycle_transition,
     restart_application_planning_lifecycle,
     write_application_lifecycle,
 )
 from app.services.artifact_invalidation import canonical_sha256
+from app.services.workflow_quality_results import pending_quality_results
 from app.services.access_control_intent import has_explicit_capability_change
 from app.services.application_config_change_resolver import (
     resolve_application_config_changes,
@@ -148,6 +150,7 @@ def submit_revision_impact(
             "revision": current.revision + 1,
             "pending_revision_impact": None,
             "active_formal_revision": active,
+            **({"extensions": pending_quality_results(current.extensions)} if active is not None else {}),
         }
     )
     write_application_lifecycle(workspace, updated, expected_revision=current.revision)
@@ -244,8 +247,6 @@ def begin_technical_plan_revision_generation(
             _assert_technical_plan_revision_identity(
                 active=active,
                 change_id=change_id,
-                interaction_id=interaction_id,
-                request=request,
                 target=target,
             )
             if (
@@ -326,6 +327,7 @@ def begin_technical_plan_revision_generation(
                 "active_run_id": expected_run_id,
                 "pending_revision_impact": None,
                 "active_formal_revision": next_active,
+                "extensions": pending_quality_results(current.extensions),
                 "error": None,
             }
         )
@@ -379,16 +381,12 @@ def _assert_technical_plan_revision_identity(
     *,
     active: ActiveFormalRevision,
     change_id: str,
-    interaction_id: str,
-    request: str,
     target: RevisionTarget,
 ) -> None:
-    """验证已批准 Formal Revision 与 TechnicalPlan begin 输入完全一致。"""
+    """验证技术规划仍属于原正式修订，允许当前审阅门和修改要求变化。"""
 
     if (
         active.change_id != change_id
-        or active.impact_interaction_id != interaction_id
-        or active.request != request
         or active.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
         or active.target != target
     ):
@@ -403,6 +401,7 @@ def ensure_technical_plan_generation_lifecycle(
     active_run_id: str | None,
     thread_id: str | None = None,
     change_id: str | None = None,
+    repair_source_run_id: str | None = None,
 ) -> ApplicationLifecycle:
     """幂等推进 TechnicalPlan generation lifecycle，并验证 thread/run 所有权。"""
 
@@ -418,19 +417,36 @@ def ensure_technical_plan_generation_lifecycle(
 
     initialization = current.initialization
     if (
+        initialization.stage is ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
+        and repair_source_run_id
+        and current.active_run_id == repair_source_run_id
+    ):
+        # 模板失败后明确修改已存在的技术规划，沿同一来源回到生成，不能重放旧确认。
+        return restart_application_planning_lifecycle(
+            workspace, stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            active_run_id=expected_run_id,
+        )
+    if (
         initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
         and initialization.status is ApplicationLifecycleStatus.RUNNING
     ):
-        if current.active_run_id != expected_run_id:
-            raise ApplicationLifecycleConflictError(
-                "TechnicalPlan generation activeRunId 与当前 transaction 不匹配。"
-            )
         if change_id:
             active = current.active_formal_revision
             if active is None or active.change_id != change_id:
                 raise ApplicationLifecycleConflictError(
                     "TechnicalPlan generation 缺少匹配的 active formal revision。"
                 )
+        if current.active_run_id != expected_run_id:
+            source_run_id = str(repair_source_run_id or "").strip()
+            if not source_run_id or current.active_run_id != source_run_id:
+                raise ApplicationLifecycleConflictError(
+                    "TechnicalPlan generation activeRunId 与当前 transaction 不匹配。"
+                )
+            # 只消费当前失败审阅门提交的来源，复用原归属校验及 revision CAS，不猜测旧 Run。
+            current = handoff_application_planning_run_for_recovery(
+                workspace, source_run_id=source_run_id, new_run_id=expected_run_id,
+                thread_id=expected_thread_id, expected_lifecycle_revision=current.revision,
+            )
         return current
 
     if change_id:
@@ -438,12 +454,25 @@ def ensure_technical_plan_generation_lifecycle(
         if (
             active is None
             or active.change_id != change_id
-            or active.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+            or not (
+                active.formal_branch is FormalRevisionBranch.WORKBENCH_PLAN_REVISION
+                or (
+                    active.formal_branch is FormalRevisionBranch.DESIGN_STAGE_REVISION
+                    and active.status == "design_planning"
+                )
+            )
         ):
             raise ApplicationLifecycleConflictError(
                 "TechnicalPlan formal revision 不在允许的 lifecycle predecessor。"
             )
-        if initialization.stage not in {
+        # 设计修订仍经过显式 planning_stage_entry 门禁；该门禁已消费后，
+        # generation 入口可从 awaiting_user 推进，不能要求先有旧技术确认。
+        design_stage_entry = (
+            active.formal_branch is FormalRevisionBranch.DESIGN_STAGE_REVISION
+            and initialization.stage is ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY
+            and initialization.status is ApplicationLifecycleStatus.AWAITING_USER
+        )
+        if not design_stage_entry and initialization.stage not in {
             ApplicationLifecycleStage.READY_FOR_WORKBENCH,
             ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
         }:
@@ -534,45 +563,21 @@ def consume_revision_continuation(
 ) -> ActiveFormalRevision:
     """验证 application/change/TechnicalPlan/lifecycle 绑定并一次性消费 continuation。"""
 
+    from app.services.revision_continuation_handoff import consumed_continuation_state
+
     current = _required_lifecycle(workspace)
-    active = current.active_formal_revision
-    if active is None or active.change_id != change_id:
-        raise ApplicationLifecycleConflictError("continuation changeId 不匹配。")
-    if active.status != "continuation_ready" or active.continuation_consumed_at is not None:
-        raise ApplicationLifecycleConflictError("continuation 已消费或当前不可用。")
-    if active.continuation_lifecycle_revision != current.revision:
-        raise ApplicationLifecycleConflictError("continuation 绑定的 lifecycle revision 已变化。")
-    if not secrets.compare_digest(
-        str(active.continuation_token_sha256 or ""),
-        _token_sha256(token),
-    ):
-        raise ApplicationLifecycleConflictError("continuation token 无效。")
-    if active.technical_plan_sha256 != canonical_sha256(technical_plan_path):
-        raise ApplicationLifecycleConflictError("TechnicalPlan 已变化，continuation 作废。")
-    next_active = active.model_copy(
-        update={
-            "status": "building",
-            "continuation_token_sha256": None,
-            "continuation_consumed_at": utc_now(),
-        }
-    )
-    updated = current.model_copy(
-        update={
-            "updated_at": utc_now(),
-            "revision": current.revision + 1,
-            "active_formal_revision": next_active,
-            # READY_FOR_WORKBENCH 在这里仅恢复“应用早已完成首次创建”的终态，
-            # 不经过 generating_application_template_files，也不代表重新生成模板。
-            # 后续当前节点由 activeFormalRevision/activeExecutions 驱动为 DAG 与 Build。
-            "initialization": ApplicationInitialization(
-                stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
-                status=ApplicationLifecycleStatus.COMPLETED,
-                threadId=active.planning_thread_id,
-            ),
-        }
-    )
+    updated = consumed_continuation_state(current, change_id=change_id, token=token,
+                                         technical_plan_path=technical_plan_path)
+    updated = updated.model_copy(update={"updated_at": utc_now(), "revision": current.revision + 1})
     write_application_lifecycle(workspace, updated, expected_revision=current.revision)
-    return next_active
+    return updated.active_formal_revision
+
+
+def validate_revision_continuation(workspace: str | Path, **identity) -> ActiveFormalRevision:
+    """请求解析只验证原续接合同，任何入场前错误都不提前消费凭据。"""
+    from app.services.revision_continuation_handoff import validated_continuation
+
+    return validated_continuation(_required_lifecycle(workspace), **identity)
 
 
 def update_active_revision_progress(

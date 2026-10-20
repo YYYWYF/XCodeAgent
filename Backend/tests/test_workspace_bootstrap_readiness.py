@@ -63,11 +63,12 @@ def _prepare_workspace(workspace: Path, *, requested: dict[str, object] | None =
     state_path.write_text(
         json.dumps(
             {
-            "schemaVersion": 2,
-            "templateRevision": "template-r1",
+            "schemaVersion": 3,
+            "templateRevision": "2026.10.17.1",
             "requested": requested or {},
             "effective": effective or {},
-            "appliedAdditions": {},
+            "installedArtifacts": {},
+            "managedContributions": {},
             }
         ),
         encoding="utf-8",
@@ -122,7 +123,7 @@ class WorkspaceBootstrapReadinessTests(unittest.TestCase):
                 effective={},
             )
 
-            with self.assertRaisesRegex(WorkspaceBootstrapReadinessError, "effective"):
+            with self.assertRaisesRegex(ValueError, "TEMPLATE_STATE_SCHEMA_UNSUPPORTED"):
                 validate_workspace_bootstrap_readiness(
                     workspace,
                     requested_config=_requested_config(login=True),

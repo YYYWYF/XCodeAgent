@@ -127,8 +127,8 @@ def _identity_matches(value: Any, identity: Any, *, camel_case: bool = False) ->
     )
 
 
-def _pending_is_terminal_residue(workspace: str, identity: Any) -> bool:
-    """判断当前 Pending 是否已被 Formal 确认或 authoritative Abandon 终结。"""
+def _pending_is_inactive(workspace: str, identity: Any) -> bool:
+    """判断 Pending 是否已终结，或因原任务已结束而暂时不可行动。"""
 
     try:
         formal = load_confirmed_build_task_plan(workspace)
@@ -150,6 +150,10 @@ def _pending_is_terminal_residue(workspace: str, identity: Any) -> bool:
     except (OSError, TypeError, ValueError):
         # 生命周期损坏时没有可验证的 Abandon 身份，不把未知状态误判为终态。
         lifecycle = None
+    # End 保留草稿供原任务继续，但不能让它继续占用全应用输入或展示确认动作。
+    # 继续成功入场会原子消费该归档，原确认门随后重新接管 Pending；不自动确认或删除草稿。
+    if lifecycle and identity.workflow_run_id in lifecycle.ended_executions:
+        return True
     marker = lifecycle.extensions.get("planningResultLifecycle") if lifecycle else None
     return (
         isinstance(marker, dict)
@@ -165,7 +169,7 @@ def _resolve_actionable_pending_plan_locked(
     """在已持有 Pending 生命周期锁时解析唯一可行动 PendingPlan。"""
 
     pending, identity = _pending_plan(workspace)
-    if pending is None or _pending_is_terminal_residue(workspace, identity):
+    if pending is None or _pending_is_inactive(workspace, identity):
         return None
     return pending, identity
 

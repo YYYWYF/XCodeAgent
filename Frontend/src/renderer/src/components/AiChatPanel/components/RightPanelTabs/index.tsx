@@ -22,6 +22,10 @@ export type WorkspaceTab = {
   key: WorkspaceTabKey
   label: string
   available: boolean
+  /** 新 PendingPlan 首次就绪时短暂强调一次目标 Tab。 */
+  attention?: boolean
+  /** 当前仍有待确认内容时展示稳定、低干扰的状态点。 */
+  pending?: boolean
 }
 
 type Props = {
@@ -43,12 +47,24 @@ export default function RightPanelTabs({ tabs, active, onChange, onClose }: Prop
             <button
               key={tab.key}
               type="button"
-              className={cx('workspace-tab', active === tab.key && 'active')}
+              className={cx(
+                'workspace-tab',
+                active === tab.key && 'active',
+                tab.attention && 'attention',
+                tab.pending && 'pending'
+              )}
               disabled={!available}
               title={available ? tab.label : `${tab.label}（暂无内容）`}
+              aria-label={tab.pending ? `${tab.label}，有待确认内容` : tab.label}
               onClick={() => onChange(tab.key)}
             >
-              {tab.key === 'field-mapping' ? <NodeIndexOutlined style={{ marginRight: 6 }} /> : null}{tab.label}
+              {tab.key === 'field-mapping' ? (
+                <NodeIndexOutlined style={{ marginRight: 6 }} />
+              ) : null}
+              {tab.label}
+              {tab.pending ? (
+                <span className={cx('workspace-tab-pending-dot')} aria-hidden="true" />
+              ) : null}
             </button>
           )
         })}

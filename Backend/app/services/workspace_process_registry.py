@@ -44,6 +44,12 @@ class WorkspaceProcessRegistry:
         for process in processes:
             _terminate_process_group(process, force=False)
 
+    def active_run_processes(self, run_id: str) -> list[int]:
+        """读取本次运行尚未退出的受控进程，供失败释放和恢复入场复验。"""
+        with self._lock:
+            return [process.pid for process in self._run_processes.get(run_id, set())
+                    if process.poll() is None]
+
     def wait_run_processes(self, run_id: str, timeout_seconds: float = 5.0) -> list[int]:
         """等待目标运行的受控子进程退出，并强制结束超时的进程组。"""
 
@@ -56,6 +62,12 @@ class WorkspaceProcessRegistry:
                     process.wait(timeout=max(0.0, deadline - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     _terminate_process_group(process, force=True)
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        pass
+            # 父命令退出后仍可能有忽略 SIGTERM 的派生进程，不能只检查父 PID。
+            _terminate_process_group(process, force=True)
         return [process.pid for process in processes if process.poll() is None]
 
     @contextmanager
@@ -63,6 +75,9 @@ class WorkspaceProcessRegistry:
         self, *popenargs: Any, workspace: str | Path, run_id: str = "", **kwargs: Any,
     ) -> Iterator[subprocess.Popen[Any]]:
         """为需自行观察就绪的短期进程提供登记、取消和异常回收边界。"""
+        from app.services.run_workers import current_run_id
+
+        run_id = run_id or current_run_id()
         key = _workspace_key(workspace)
         _configure_process_group(kwargs)
         with self._lock:
@@ -86,6 +101,8 @@ class WorkspaceProcessRegistry:
                 except subprocess.TimeoutExpired:
                     _terminate_process_group(process, force=True)
                     process.wait(timeout=1)
+                # 正常父命令退出也要清理残留进程组，避免先注销后失去派生进程身份。
+                _terminate_process_group(process, force=True)
             finally:
                 # communicate 被取消时也必须关闭 PIPE，避免退出后的文件句柄泄漏。
                 for stream in (process.stdin, process.stdout, process.stderr):
@@ -114,6 +131,9 @@ class WorkspaceProcessRegistry:
     ) -> subprocess.CompletedProcess[Any]:
         """按 subprocess.run 语义执行命令，并在整个等待期间登记其进程组。"""
 
+        from app.services.run_workers import current_run_id
+
+        run_id = run_id or current_run_id()
         key = _workspace_key(workspace)
         with self._lock:
             if key in self._deleting_workspaces:
@@ -181,13 +201,18 @@ class WorkspaceProcessRegistry:
     def start(self, workspace: str | Path, argv: list[str], **kwargs: Any) -> subprocess.Popen[Any]:
         """在删除栅栏内启动并登记长生命周期子进程，供启动验收统一回收。"""
 
+        from app.services.run_workers import current_run_id
+
+        run_id = current_run_id()
         key = _workspace_key(workspace)
         with self._lock:
-            if key in self._deleting_workspaces:
+            if key in self._deleting_workspaces or run_id in self._cancelled_runs:
                 raise RuntimeError("应用正在删除，已拒绝启动验证进程。")
             _configure_process_group(kwargs)
             process = subprocess.Popen(argv, **kwargs)
             self._processes.setdefault(key, []).append(process)
+            if run_id:
+                self._run_processes.setdefault(run_id, set()).add(process)
             return process
 
     def release(self, workspace: str | Path, process: subprocess.Popen[Any]) -> None:
@@ -273,6 +298,10 @@ class WorkspaceProcessRegistry:
             self._processes[key] = [item for item in processes if item is not process]
             if not self._processes[key]:
                 self._processes.pop(key, None)
+            for run_id, processes in list(self._run_processes.items()):
+                processes.discard(process)
+                if not processes:
+                    self._run_processes.pop(run_id, None)
 
 
 def _workspace_key(workspace: str | Path) -> str:
@@ -338,7 +367,7 @@ def _is_git_command(argv: Any) -> bool:
 def _terminate_process_group(process: subprocess.Popen[Any], *, force: bool) -> None:
     """跨平台终止命令及其派生子进程，进程已退出时视为成功。"""
 
-    if process.poll() is not None:
+    if os.name == "nt" and process.poll() is not None:
         return
     try:
         if os.name == "nt":
@@ -357,8 +386,9 @@ def _terminate_process_group(process: subprocess.Popen[Any], *, force: bool) -> 
                 check=False,
             )
         else:
+            # 受控命令在独立 session 内启动；父进程退出后仍以原 PID 定位其进程组。
             os.killpg(
-                os.getpgid(process.pid),
+                os.getpgid(process.pid) if process.poll() is None else process.pid,
                 signal.SIGKILL if force else signal.SIGTERM,
             )
     except (OSError, ProcessLookupError):

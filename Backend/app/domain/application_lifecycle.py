@@ -279,6 +279,17 @@ class DevelopmentContinuation(ApplicationLifecycleModel):
     consumed_at: datetime | None = Field(default=None, alias="consumedAt")
 
 
+class EndedWorkbenchExecution(ApplicationLifecycleModel):
+    """结束成功后保留原身份与资源声明，释放锁但不丢弃继续资格。"""
+
+    execution: WorkbenchExecution
+    claims: list[ExecutionResourceClaim]
+    workspace: str
+    fingerprint: str
+    source_failed: bool = Field(default=False, alias="sourceFailed")
+    formal_revision: ActiveFormalRevision | None = Field(default=None, alias="formalRevision")
+
+
 class ApplicationLifecycle(ApplicationLifecycleModel):
     """表示 application-lifecycle.json 的完整业务快照。"""
 
@@ -294,6 +305,7 @@ class ApplicationLifecycle(ApplicationLifecycleModel):
         default_factory=dict,
         alias="activeExecutions",
     )
+    ended_executions: dict[str, EndedWorkbenchExecution] = Field(default_factory=dict, alias="endedExecutions")
     development_continuations: dict[str, DevelopmentContinuation] = Field(
         default_factory=dict,
         alias="developmentContinuations",

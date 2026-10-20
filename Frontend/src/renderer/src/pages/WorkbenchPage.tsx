@@ -39,11 +39,13 @@ import type {
   ApplicationBranch,
   ApplicationConfig,
   ApplicationLifecycle,
+  ApplicationPlanningDebugStage,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode,
+  WorkflowDebugOptions,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
@@ -64,7 +66,8 @@ type Props = {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
-    designChangeRequest?: string
+    designChangeRequest?: string,
+    technicalPlanningConversation?: boolean
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onIterationStarted: (
@@ -72,7 +75,12 @@ type Props = {
     threadId: string,
     lifecycle: ApplicationLifecycle
   ) => void
-  onStartIterationPlanning: (applicationId: string, request: string) => Promise<void>
+  onStartIterationPlanning: (
+    applicationId: string,
+    request: string,
+    workflowDebug?: WorkflowDebugOptions,
+    debugStage?: ApplicationPlanningDebugStage
+  ) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
@@ -253,10 +261,26 @@ function WorkbenchPage({
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
           if (lifecycleReadyForWorkbench) {
-            const details = [...inspection.missing, ...inspection.invalid].join('、')
-            failWorkbenchEntry(
-              details ? `工作区规划产物缺失或损坏：${details}` : '工作区规划产物不完整。'
-            )
+            // 冷启动缓存可能仍是开发就绪，而正式修订已把磁盘产物转为待确认；以当前生命周期决定入口，避免误报损坏。
+            const currentLifecycle = await getApplicationLifecycle({
+              workspaceRoot: application.workspaceRoot,
+              id: application.id,
+              appName: application.appName
+            })
+            if (!active) return
+            onApplicationLifecycleChange(currentLifecycle)
+            if (!isApplicationCreationComplete(currentLifecycle)) return
+            const artifactNames: Record<string, string> = {
+              'requirement-spec': '需求文档', 'product-plan': '产品计划', 'technical-plan': '技术规划'
+            }
+            // 入口提示只显示业务产物名称，文件路径留在诊断日志和恢复卡详情中。
+            const details = [...new Set([...inspection.missing, ...inspection.invalid].map(
+              (path) => artifactNames[path.split('/').pop()?.replace(/\.(json|md)$/, '') || ''] || '规划文档'
+            ))].join('、')
+            // 业务产物损坏需要进入工作台修复；不能返回首页并把重新生成入口一起卸载。
+            message.warning(details
+              ? `规划文件缺失或不完整：${details}。执行时会提供对应步骤的重新生成入口。`
+              : '规划文件不完整。执行时会提供对应步骤的重新生成入口。')
           }
         }
       } catch (error) {
@@ -281,7 +305,7 @@ function WorkbenchPage({
       active = false
       window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, planningRefreshRevision])
+  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, onApplicationLifecycleChange, planningRefreshRevision])
 
   useEffect(() => {
     let active = true
@@ -754,8 +778,13 @@ function WorkbenchPage({
                   onReturnWelcome={onReturnWelcome}
                   onSubmitPlanningClarification={onSubmitPlanningClarification}
                   onStartDesignStageRevision={onStartDesignStageRevision}
-                  onStartIterationPlanning={(request) =>
-                    onStartIterationPlanning(workspaceApplication.id, request)
+                  onStartIterationPlanning={(request, workflowDebug, debugStage) =>
+                    onStartIterationPlanning(
+                      workspaceApplication.id,
+                      request,
+                      workflowDebug,
+                      debugStage
+                    )
                   }
                   onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                   onPlanningStreamReady={onPlanningStreamReady}

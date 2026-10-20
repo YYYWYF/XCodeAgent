@@ -135,6 +135,12 @@ def integration_test_checks(value: Any) -> list[dict[str, Any]]:
             "advisory": bool(raw_check.get("advisory")),
             "evidence": str(raw_check.get("evidence") or "")[:1_000],
         }
+        if status == "running" and check_id in {
+            "frontend_test_generation", "backend_test_generation",
+        }:
+            activity = _test_generation_tool_activity(raw_check.get("activeToolActivity"))
+            if activity is not None:
+                normalized_check["activeToolActivity"] = activity
         passed_tests = raw_check.get("passed_tests", raw_check.get("passedTests"))
         total_tests = raw_check.get("total_tests", raw_check.get("totalTests"))
         if (
@@ -168,6 +174,32 @@ def integration_test_checks(value: Any) -> list[dict[str, Any]]:
             normalized_check["reportPath"] = report_path.strip()[:1_000]
         checks.append(normalized_check)
     return checks
+
+
+def _test_generation_tool_activity(value: Any) -> dict[str, Any] | None:
+    """仅投影测试 Agent 已脱敏的文件工具活动，不携带参数或文件内容。"""
+
+    categories = {
+        "ls": "browse", "read_file": "read", "glob": "search", "grep": "search",
+        "write_file": "write", "edit_file": "write", "delete_file": "delete",
+    }
+    if not isinstance(value, dict):
+        return None
+    tool = value.get("tool")
+    if not isinstance(tool, str) or tool not in categories:
+        return None
+    status = value.get("status")
+    if not isinstance(status, str) or status not in {"running", "completed", "failed"}:
+        return None
+    call_id = str(value.get("callId") or "").strip()[:256]
+    message = str(value.get("message") or "").strip()[:320]
+    if not call_id or not message:
+        return None
+    return {
+        "callId": call_id, "tool": tool, "category": categories[tool],
+        "status": status, "message": message,
+        **({"path": str(value["path"])[:260]} if value.get("path") else {}),
+    }
 
 
 def _normalized_performance_scores(value: dict[str, Any]) -> dict[str, int]:

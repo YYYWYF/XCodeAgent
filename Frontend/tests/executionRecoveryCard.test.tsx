@@ -19,6 +19,65 @@ import { recoveryFailureMessage } from '../src/renderer/src/service/recoveryFail
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../src/renderer/src/typings'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 
+/** 产物问题只在详情保留文件名和解析错误，外层展示业务产物名称及明确生成动作。 */
+test('产品计划损坏的解析细节只出现在可展开详情中', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  candidate.recoveryActionPlan.reasonCode = 'STAGE_PREREQUISITE_INCOMPLETE'
+  candidate.recoveryActionPlan.message = '产品计划不完整，请重新生成并确认后继续。'
+  candidate.recoveryActionPlan.primaryAction = {
+    actionId: 'regenerate-product', kind: 'retry_business_node', targetNode: 'product_planning',
+    label: '重新生成产品计划', description: '重新生成产品计划', requiresConfirmation: false
+  }
+  candidate.failureDiagnostic = {
+    sourceRunId: candidate.sourceRunId, origin: 'business', code: 'STAGE_PREREQUISITE_INCOMPLETE',
+    operation: 'prepare_build_tasks', message: 'product-plan.json: Expecting value: line 1 column 12',
+    userMessage: '旧错误说明 product-plan.json'
+  }
+  const incident = workbenchRecoveryIncident(candidate)!
+  const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, { incident, onAction: () => undefined }))
+  const detailsStart = markup.indexOf('<details')
+  const detailsEnd = markup.indexOf('</details>') + '</details>'.length
+  const outside = markup.slice(0, detailsStart) + markup.slice(detailsEnd)
+  assert.match(outside, /产品计划不完整/)
+  assert.match(outside, /重新生成产品计划/)
+  assert.doesNotMatch(outside, /product-plan\.json|Expecting value|line 1 column/)
+  assert.match(markup.slice(detailsStart, detailsEnd), /product-plan\.json.*Expecting value/)
+  assert.doesNotMatch(markup.slice(detailsStart, detailsEnd), /<details[^>]*\bopen/)
+})
+
+/** 无 checkpoint 入口只显示可关闭提示，不能继续派发相同重试。 */
+test('找不到节点时 Planning 和二次修改均使用可关闭提示', () => {
+  const candidate = recovery('blocked')
+  candidate.recoveryActionPlan.reasonCode = 'RETRY_ENTRY_NOT_FOUND'
+  candidate.recoveryActionPlan.message = '找不到恢复入口，请手动发起流程。'
+  candidate.workflowScope = 'conversation'
+  const markup = renderToStaticMarkup(createElement(RecoverySurface, {
+    isApplicationPlanningPhase: false, activeExecutionRecovery: candidate,
+    recoveryRunning: false, onExecuteRecoveryAction: () => undefined
+  }))
+  assert.match(markup, /找不到恢复入口，请手动发起流程/)
+  assert.match(markup, /aria-label="关闭恢复提示"/)
+  assert.doesNotMatch(markup, /agent-error-card|>重试</)
+})
+
+/** 测试失败统一解释为阶段重启，前端仍只执行后端签发的恢复动作。 */
+test('测试局部修复失败的兜底说明从测试阶段重新开始', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  candidate.recoveryActionPlan.primaryAction = {
+    actionId: 'restart-tests', kind: 'retry_business_node', targetNode: 'integration_test',
+    label: '重新测试', description: '从测试阶段重新开始', requiresConfirmation: false
+  }
+  const incident = workbenchRecoveryIncident(candidate)
+  assert.equal(incident?.kind, 'recoverable')
+  if (incident?.kind !== 'recoverable') return
+  assert.match(incident.recoveryMessage, /从测试阶段重新开始/)
+  assert.match(incident.recoveryMessage, /重新计算本轮修复次数/)
+  assert.equal(incident.action.actionId, 'restart-tests')
+  assert.equal(incident.action.targetNode, 'integration_test')
+})
+
 /** 模板失败显示明确原因，并保留后端签发的原节点重试动作。 */
 test('模板故障在底部展示真实原因，不标成模型调用失败', () => {
   const state = planningStateFromRecovery({ sourceRunId: 'template-run', model: '',
@@ -778,7 +837,7 @@ test('消息区不再显示历史恢复错误，下方保留唯一恢复入口',
   assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试/)
 })
 
-test('connection error shows one Retry entry without inventing a Recovery action', () => {
+test('connection error shows one status-sync entry without inventing a Recovery action', () => {
   const connection = {
     ...initialConnectionState(true),
     status: 'unavailable' as const,
@@ -789,7 +848,7 @@ test('connection error shows one Retry entry without inventing a Recovery action
   )
   assert.match(markup, /Backend 暂时不可用/)
   assert.match(markup, /与后端连接中断，当前规划状态尚未确认/)
-  assert.match(markup, /重试/)
+  assert.match(markup, /重新同步/)
   assert.doesNotMatch(markup, /recovery-incident/)
   assert.doesNotMatch(markup, /错误详情/)
   assert.doesNotMatch(markup, /重新执行技术规划/)
@@ -1052,7 +1111,8 @@ test('application planning modal renders the shared current incident', () => {
       onReturnHome: () => undefined,
       onSubmit: async () => undefined,
       onSaveRequirementSpec: async () => ({ artifact: {} as never, requirementSpec: {} }),
-      onRetry: () => undefined
+      onRetry: () => undefined,
+      onReconnect: () => undefined
     })
   )
   assert.match(markup, /HTTP 状态码[\s\S]*503/)

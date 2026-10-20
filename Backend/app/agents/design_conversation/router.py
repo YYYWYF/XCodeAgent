@@ -38,6 +38,17 @@ def classify_design_conversation(
             affected_page_ids=_mentioned_page_ids(request, product_plan),
             response="",
         )
+    # 显式 @ 上游目标仍进入既有 Policy；UI 前置产物与访问控制优先级保持原规则。
+    mentions = re.findall(r"@(需求设计|UI设计)(?=$|[\s，。,.!！?？:：])", request, re.IGNORECASE)
+    if mentions:
+        requirement_target = mentions[-1] == "需求设计"
+        return DesignConversationDecision(
+            intent="requirement_change" if requirement_target else "ui_change",
+            change_level="requirement" if requirement_target else "ui",
+            reason="用户明确指定重新执行的上游设计目标。",
+            affected_page_ids=_mentioned_page_ids(request, product_plan),
+            response="",
+        )
     active_settings = settings or Settings.from_env()
     prompt = _classification_prompt(
         request,

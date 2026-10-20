@@ -1,11 +1,7 @@
 import {
-  CaretDownOutlined,
-  CaretRightOutlined,
   CodeOutlined,
   FileOutlined,
   FileTextOutlined,
-  FolderOpenOutlined,
-  FolderOutlined,
   LeftOutlined,
   ProfileOutlined,
   RightOutlined
@@ -22,14 +18,13 @@ import sql from 'highlight.js/lib/languages/sql'
 import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
-import {
-  readWorkspaceFile,
-  readWorkspaceTree,
-  type WorkspaceTreeNode
-} from '../../../../service/workspaceTools'
+import { readWorkspaceFile, type WorkspaceTreeNode } from '../../../../service/workspaceTools'
 import { cx } from '../../../../utils'
-import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import { BROWSABLE_DESIGN_DOCS } from '../../designArtifacts'
+import SourcePlanningDoc from './SourcePlanningDoc'
+import SourceTree from './SourceTree'
+import { ancestorDirPaths } from './sourceTreeModel'
+import { useSourceTree } from './useSourceTree'
 import './SourcePanel.less'
 
 hljs.registerLanguage('bash', bash)
@@ -51,8 +46,6 @@ type Props = {
   revision?: string
 }
 
-const MAX_DEPTH = 6
-const TREE_LIMIT = 2000
 const MAX_CHARS = 200000
 /**
  * 探测文档是否存在时读取的字符数。
@@ -62,9 +55,6 @@ const MAX_CHARS = 200000
  * 既满足约束，也只需拉回极少量内容。
  */
 const PROBE_CHARS = 200
-
-/** 规划文档的全部候选路径，用于判断选中的是不是文档（决定渲染 Markdown 还是代码）。 */
-const DOC_PATHS = new Set(BROWSABLE_DESIGN_DOCS.flatMap((doc) => [...doc.markdownPaths]))
 
 /**
  * 每份规划文档的图标与色调：三者同形同色时在树里难以区分，按语义各给一个。
@@ -116,109 +106,25 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 收集树中所有目录节点的 path，用于默认全部展开（浅层）。 */
-function collectDirPaths(node: WorkspaceTreeNode | undefined, maxDepth = 2): string[] {
-  if (!node || node.kind !== 'directory' || maxDepth <= 0) return []
-  const paths = [node.path]
-  for (const child of node.children || []) {
-    if (child.kind === 'directory') {
-      paths.push(...collectDirPaths(child, maxDepth - 1))
-    }
-  }
-  return paths
-}
-
-/** 在树中查找指定 path 的文件节点的所有祖先目录 path，用于展开到该文件。 */
-function ancestorDirPaths(tree: WorkspaceTreeNode | undefined, targetPath: string): string[] {
-  if (!tree) return []
-  const result: string[] = []
-  const walk = (node: WorkspaceTreeNode, ancestors: string[]): boolean => {
-    if (node.path === targetPath) return true
-    if (node.kind === 'directory') {
-      for (const child of node.children || []) {
-        if (walk(child, [...ancestors, node.path])) {
-          result.push(...ancestors, node.path)
-          return true
-        }
-      }
-    }
-    return false
-  }
-  walk(tree, [])
-  return Array.from(new Set(result))
-}
-
-/** 递归渲染目录树节点。 */
-function renderTreeNodes(
-  node: WorkspaceTreeNode,
-  depth: number,
-  expanded: Set<string>,
-  selectedPath: string,
-  onToggle: (path: string) => void,
-  onSelectFile: (node: WorkspaceTreeNode) => void
-): ReactElement {
-  const isDir = node.kind === 'directory'
-  const isExpanded = expanded.has(node.path)
-  const isSelected = node.path === selectedPath
-  const paddingLeft = 8 + depth * 14
-
-  return (
-    <li className={cx('source-tree-node')} key={node.path}>
-      <button
-        className={cx('source-tree-row', isDir && 'is-dir', isSelected && 'is-selected')}
-        onClick={() => (isDir ? onToggle(node.path) : onSelectFile(node))}
-        style={{ paddingLeft: `${paddingLeft}px` }}
-        title={node.name}
-        type="button"
-      >
-        {isDir ? (
-          <>
-            {isExpanded ? <CaretDownOutlined /> : <CaretRightOutlined />}
-            {isExpanded ? <FolderOpenOutlined /> : <FolderOutlined />}
-          </>
-        ) : (
-          <>
-            <span className={cx('source-tree-leaf-spacer')} aria-hidden="true" />
-            {/\.tsx?$|\.jsx?$|\.json$|\.css$|\.less$|\.scss$|\.html?$|\.md$/.test(node.name) ? (
-              <CodeOutlined />
-            ) : (
-              <FileOutlined />
-            )}
-          </>
-        )}
-        <span className={cx('source-tree-name')}>{node.name}</span>
-      </button>
-      {isDir && isExpanded && node.children && node.children.length > 0 ? (
-        <ul className={cx('source-tree-children')}>
-          {node.children
-            .slice()
-            .sort((a, b) => {
-              // 目录在前，文件在后；同类按名称排序
-              const aDir = a.kind === 'directory' ? 0 : 1
-              const bDir = b.kind === 'directory' ? 0 : 1
-              if (aDir !== bDir) return aDir - bDir
-              return a.name.localeCompare(b.name)
-            })
-            .map((child) =>
-              renderTreeNodes(child, depth + 1, expanded, selectedPath, onToggle, onSelectFile)
-            )}
-        </ul>
-      ) : null}
-    </li>
-  )
-}
-
 /** 应用文件面板：左侧可整栏收起的目录树（规划文档 + 工程源码）+ 右侧内容查看器。 */
 export default function SourcePanel({
   workspaceRoot,
   initialFilePath,
   revision
 }: Props): ReactElement {
-  const [tree, setTree] = useState<WorkspaceTreeNode | undefined>()
-  const [treeLoading, setTreeLoading] = useState(false)
-  const [treeError, setTreeError] = useState('')
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const {
+    tree,
+    treeLoading,
+    treeError,
+    expanded,
+    setExpanded,
+    branchLoading,
+    branchErrors,
+    handleToggle,
+    loadDirectory
+  } = useSourceTree(workspaceRoot, revision)
   const [selectedPath, setSelectedPath] = useState('')
+  const [fileReadSequence, setFileReadSequence] = useState(0)
   const [fileContent, setFileContent] = useState('')
   const [fileLoading, setFileLoading] = useState(false)
   const [fileError, setFileError] = useState('')
@@ -228,43 +134,13 @@ export default function SourcePanel({
   // 规划文档的可用路径：key -> 实际存在的路径。探测完成前不下"缺失"结论，避免置灰闪烁。
   const [docPaths, setDocPaths] = useState<Record<string, string>>({})
   const [docsProbed, setDocsProbed] = useState(false)
-
-  // 加载工作区工程目录树（frontend + backend 等），后端自动过滤 .devagentstudio/node_modules
-  useEffect(() => {
-    if (!workspaceRoot) {
-      setTree(undefined)
-      setTreeError('')
-      return
-    }
-    let cancelled = false
-    setTreeLoading(true)
-    setTreeError('')
-    void readWorkspaceTree({
-      workspace_root: workspaceRoot,
-      path: '.',
-      max_depth: MAX_DEPTH,
-      include_hidden: false,
-      limit: TREE_LIMIT,
-      revision
-    })
-      .then((result) => {
-        if (cancelled) return
-        setTree(result.tree)
-        // 默认展开前两层目录（根 + frontend/backend/src 等）
-        setExpanded(new Set(collectDirPaths(result.tree, 2)))
-      })
-      .catch((error) => {
-        if (cancelled) return
-        setTree(undefined)
-        setTreeError(error instanceof Error ? error.message : '读取工程目录失败')
-      })
-      .finally(() => {
-        if (!cancelled) setTreeLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [workspaceRoot, revision])
+  const selectedDoc = BROWSABLE_DESIGN_DOCS.find((doc) => doc.markdownPaths.includes(selectedPath))
+  const selectedDocumentKey =
+    selectedDoc?.key === 'requirement-spec' ||
+    selectedDoc?.key === 'product-plan' ||
+    selectedDoc?.key === 'technical-plan'
+      ? selectedDoc.key
+      : undefined
 
   // 规划文档位于 .devagentstudio 下，不出现在工程目录树里（树默认不列隐藏目录），
   // 因此单独探测一遍：每个文档取第一个存在的路径，都不存在则标记为缺失。
@@ -331,36 +207,46 @@ export default function SourcePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tree, docsProbed, docPaths, initialFilePath, initialTried])
 
-  const loadFile = (filePath: string): void => {
-    if (!workspaceRoot || !filePath) return
-    setSelectedPath(filePath)
+  // 规划文档由独立组件读取结构化数据；工程文件沿用现有读取和高亮方式。
+  useEffect(() => {
+    if (!workspaceRoot || !selectedPath || selectedDocumentKey) return
+    let cancelled = false
     setFileLoading(true)
     setFileError('')
     setFileContent('')
     setFileTruncated(false)
     void readWorkspaceFile({
       workspace_root: workspaceRoot,
-      path: filePath,
+      path: selectedPath,
       max_chars: MAX_CHARS,
       revision
     })
       .then((result) => {
+        if (cancelled) return
         setFileContent(result.content || '')
         setFileTruncated(result.truncated)
       })
       .catch((error) => {
+        if (cancelled) return
         setFileError(error instanceof Error ? error.message : '读取文件失败')
       })
-      .finally(() => setFileLoading(false))
-  }
+      .finally(() => {
+        if (!cancelled) setFileLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceRoot, selectedPath, selectedDocumentKey, revision, fileReadSequence])
 
-  const handleToggle = (path: string): void => {
-    setExpanded((current) => {
-      const next = new Set(current)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
+  /** 选择文件并清空上一个文件的展示状态，避免切换时闪现旧内容。 */
+  const loadFile = (filePath: string): void => {
+    if (!workspaceRoot || !filePath) return
+    setSelectedPath(filePath)
+    setFileReadSequence((current) => current + 1)
+    setFileLoading(false)
+    setFileError('')
+    setFileContent('')
+    setFileTruncated(false)
   }
 
   const handleSelectFile = (node: WorkspaceTreeNode): void => {
@@ -378,11 +264,8 @@ export default function SourcePanel({
     return escapeHtml(fileContent)
   }, [fileContent, selectedPath])
 
-  // 规划文档按 Markdown 渲染；源码仍走代码高亮。
-  const selectedIsDoc = selectedPath ? DOC_PATHS.has(selectedPath) : false
-  const selectedDocLabel = BROWSABLE_DESIGN_DOCS.find((doc) =>
-    doc.markdownPaths.includes(selectedPath)
-  )?.label
+  // 三份规划文档复用之前阶段的可视化，源码仍走代码高亮。
+  const selectedDocLabel = selectedDoc?.label
 
   return (
     <div className={cx('source-panel', treeCollapsed && 'is-tree-collapsed')}>
@@ -459,7 +342,16 @@ export default function SourcePanel({
               </div>
             ) : tree ? (
               <ul className={cx('source-tree')}>
-                {renderTreeNodes(tree, 0, expanded, selectedPath, handleToggle, handleSelectFile)}
+                <SourceTree
+                  node={tree}
+                  expanded={expanded}
+                  selectedPath={selectedPath}
+                  branchLoading={branchLoading}
+                  branchErrors={branchErrors}
+                  onToggle={handleToggle}
+                  onRetry={(path) => void loadDirectory(path)}
+                  onSelectFile={handleSelectFile}
+                />
               </ul>
             ) : (
               <div className={cx('source-panel-tree-empty')}>
@@ -479,7 +371,16 @@ export default function SourcePanel({
             </Text>
           ) : null}
         </header>
-        {fileLoading ? (
+        {selectedDocumentKey ? (
+          <SourcePlanningDoc
+            key={`${workspaceRoot}:${revision || ''}:${selectedPath}:${fileReadSequence}`}
+            workspaceRoot={workspaceRoot}
+            documentKey={selectedDocumentKey}
+            documentPath={selectedPath}
+            productPlanPath={docPaths['product-plan']}
+            revision={revision}
+          />
+        ) : fileLoading ? (
           <div className={cx('source-panel-viewer-loading')}>
             <Spin size="small" />
             <Text type="secondary">正在读取文件…</Text>
@@ -489,15 +390,9 @@ export default function SourcePanel({
             <Empty description={fileError} image={Empty.PRESENTED_IMAGE_SIMPLE} />
           </div>
         ) : fileContent ? (
-          selectedIsDoc ? (
-            <div className={cx('source-panel-doc')}>
-              <MarkdownContent content={fileContent} />
-            </div>
-          ) : (
-            <pre className={cx('source-panel-pre')}>
-              <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
-            </pre>
-          )
+          <pre className={cx('source-panel-pre')}>
+            <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
+          </pre>
         ) : (
           <div className={cx('source-panel-viewer-empty')}>
             <Empty

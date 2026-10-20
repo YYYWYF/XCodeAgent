@@ -1,36 +1,42 @@
 .@{class-prefix}-acceptance-commit-dock {
   display: flex;
+  min-width: 0;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--wb-surface, #fff);
-  border: 1px solid var(--wb-border, #eef0f3);
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 10px;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
 
-  &.saved {
-    background: rgba(22, 163, 74, 0.06);
-    border-color: rgba(22, 163, 74, 0.2);
+  &.@{class-prefix}-saved {
+    background: color-mix(in srgb, var(--wb-development-completed) 7%, var(--wb-canvas));
+    border-color: color-mix(in srgb, var(--wb-development-completed) 30%, var(--wb-border));
   }
 
-  &.warning {
-    background: rgba(250, 140, 22, 0.08);
-    border-color: rgba(250, 140, 22, 0.28);
+  &.@{class-prefix}-warning {
+    background: color-mix(in srgb, var(--wb-warning) 6%, var(--wb-canvas));
+    border-color: color-mix(in srgb, var(--wb-warning) 28%, var(--wb-border));
   }
 }
 
 .@{class-prefix}-acceptance-commit-icon {
   display: inline-flex;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   align-items: center;
-  color: var(--wb-accent, #6b3cf0);
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--wb-surface);
+  color: var(--wb-accent);
+  font-size: 18px;
 
-  .@{class-prefix}-acceptance-commit-dock.saved & {
-    color: #16a34a;
+  .@{class-prefix}-acceptance-commit-dock.@{class-prefix}-saved & {
+    color: var(--wb-development-completed);
   }
 
-  .@{class-prefix}-acceptance-commit-dock.warning & {
-    color: var(--wb-warning, #fa8c16);
+  .@{class-prefix}-acceptance-commit-dock.@{class-prefix}-warning & {
+    color: var(--wb-warning);
   }
 }
 
@@ -38,11 +44,18 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
 
   // 提交信息可能较长（含文件数），允许换行而不是撑破卡片。
   > .ant-typography {
+    margin: 0;
+    color: var(--wb-text);
     font-size: 13px;
+    line-height: 1.6;
     word-break: break-word;
+  }
+
+  > .ant-typography-secondary {
+    color: var(--wb-text-secondary);
   }
 }

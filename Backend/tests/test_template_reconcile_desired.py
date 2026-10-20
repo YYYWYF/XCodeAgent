@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from app.services.template_reconcile.desired import (
+    TemplateCapabilityError,
     compile_template_capabilities,
     requested_config_from_application_config,
 )
@@ -42,10 +43,55 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
 
         self.assertEqual(
             requested_config_from_application_config(
-                {"auth": {"enable": True}, "authorization": {"enabled": False}}
+                {
+                    "appName": "订单中心",
+                    "appIcon": "AppstoreOutlined",
+                    "theme": {"primaryColor": "#6b3cf0"},
+                    "auth": {
+                        "enable": True,
+                        "yht": {
+                            "clientId": "000",
+                            "privateKey": "111",
+                            "publicKey": "123",
+                            "centerPublicKey": "456",
+                        },
+                    },
+                    "authorization": {"enabled": False},
+                }
             ),
-            {"capabilities": {"login": {"enabled": True, "config": {}}}},
+            {
+                "capabilities": {"login": {"enabled": True, "config": {}}},
+                "applicationConfig": {
+                    "appName": "订单中心",
+                    "appIcon": "AppstoreOutlined",
+                    "theme": {"primaryColor": "#6b3cf0"},
+                    "auth": {
+                        "enable": True,
+                        "authnSource": "yst",
+                        "yht": {
+                            "clientId": "000",
+                            "privateKey": "111",
+                            "publicKey": "123",
+                            "centerPublicKey": "456",
+                        },
+                    },
+                },
+            },
         )
+
+    def test_rejects_enabled_login_without_complete_yht_configuration(self) -> None:
+        """启用登录时拒绝把不完整的一号通配置交给模板引擎。"""
+
+        with self.assertRaisesRegex(TemplateCapabilityError, "privateKey"):
+            requested_config_from_application_config(
+                {
+                    "appName": "订单中心",
+                    "appIcon": "AppstoreOutlined",
+                    "theme": {"primaryColor": "#6b3cf0"},
+                    "auth": {"enable": True, "yht": {"clientId": "000"}},
+                    "authorization": {"enabled": False},
+                }
+            )
 
     def test_does_not_render_template_capabilities_in_technical_plan_markdown(self) -> None:
         """确认 TechnicalPlan 不再保存或展示应用级模板开关。"""

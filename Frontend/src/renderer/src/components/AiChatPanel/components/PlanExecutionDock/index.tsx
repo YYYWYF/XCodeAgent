@@ -2,9 +2,7 @@ import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
   LoadingOutlined,
-  LockOutlined,
-  PauseCircleOutlined,
-  RedoOutlined
+  LockOutlined
 } from '@ant-design/icons'
 import { Button, Modal, Popconfirm, Typography } from 'antd'
 import { useEffect, useState } from 'react'
@@ -19,6 +17,7 @@ import './PlanExecutionDock.less'
 const { Text } = Typography
 
 type Props = {
+  ending?: boolean
   dependencyLocked?: boolean
   execution?: WorkbenchExecution
   developmentTotals?: { completed: number; total: number }
@@ -27,14 +26,13 @@ type Props = {
   testEntryGate?: TestEntryGate
   onAccept: () => Promise<boolean>
   onConfirmInteraction: (decision: 'reject' | 'once' | 'always') => void
-  onEnd: () => void
+  onEnd: () => void | Promise<void>
   onOpenPreview: () => void
-  onRetry: () => void
-  onStop: () => void
 }
 
 /** 仅替换工作区最底部输入区，承载计划锁定说明和必要控制动作。 */
 export default function PlanExecutionDock({
+  ending = false,
   dependencyLocked = false,
   execution,
   developmentTotals,
@@ -44,9 +42,7 @@ export default function PlanExecutionDock({
   onAccept,
   onConfirmInteraction,
   onEnd,
-  onOpenPreview,
-  onRetry,
-  onStop
+  onOpenPreview
 }: Props): ReactElement {
   const [acceptanceConfirmOpen, setAcceptanceConfirmOpen] = useState(false)
   const [accepting, setAccepting] = useState(false)
@@ -84,7 +80,7 @@ export default function PlanExecutionDock({
 
   return (
     <section
-      aria-busy={mode === 'stopping'}
+      aria-busy={ending || mode === 'stopping'}
       aria-live="polite"
       className={cx('plan-execution-dock', mode)}
     >
@@ -100,14 +96,14 @@ export default function PlanExecutionDock({
         </span>
         <div className={cx('plan-execution-dock-copy')}>
           <Text strong>
-            {dependencyLocked
+            {ending ? '正在结束任务…' : dependencyLocked
               ? '该页面被关联计划锁定'
               : developmentGateBlocked
                 ? '继续完成开发产物'
                 : planModeTitle(mode)}
           </Text>
           <Text type="secondary">
-            {dependencyLocked
+            {ending ? '正在等待后台 Agent、工具和命令退出，请稍候。' : dependencyLocked
               ? dependencyLockDescription(ownerPageId, execution?.phase)
               : developmentGateBlocked
                 ? developmentGateReason
@@ -118,29 +114,14 @@ export default function PlanExecutionDock({
                   )}
           </Text>
         </div>
-        {!dependencyLocked && (
+        {ending ? <Button loading disabled>正在结束</Button> : !dependencyLocked && (
           <div className={cx('plan-execution-dock-actions')}>
-            {(mode === 'running' || mode === 'stopping') && (
-              <>
-                <Button
-                  danger
-                  icon={<PauseCircleOutlined />}
-                  loading={mode === 'stopping'}
-                  onClick={onStop}
-                >
-                  {mode === 'stopping' ? '正在暂停' : '暂停执行'}
-                </Button>
-              </>
-            )}
             {mode === 'awaiting_authorization' && (
               <>
                 <Button onClick={() => onConfirmInteraction('reject')}>拒绝</Button>
                 <Button onClick={() => onConfirmInteraction('once')}>仅本次允许</Button>
                 <Button onClick={() => onConfirmInteraction('always')} type="primary">
                   始终允许
-                </Button>
-                <Button danger onClick={onStop}>
-                  暂停执行
                 </Button>
               </>
             )}
@@ -150,14 +131,11 @@ export default function PlanExecutionDock({
                 <Button onClick={() => onConfirmInteraction('once')} type="primary">
                   确认并重试失败任务
                 </Button>
-                <Button danger onClick={onStop}>
-                  暂停执行
-                </Button>
               </>
             )}
             {mode === 'awaiting_unit_test_confirmation' && (
               <div className={cx('plan-execution-dock-interaction')}>
-                单元测试门禁等待选择，确认卡可选择继续执行或跳过。
+                请在上方确认卡选择执行单元测试或不执行单元测试。
               </div>
             )}
             {mode === 'awaiting_frontend_performance_confirmation' && (
@@ -213,47 +191,18 @@ export default function PlanExecutionDock({
                 </Button>
               </>
             )}
-            {(mode === 'failed' || mode === 'stopped') && (
-              <>
-                {mode === 'stopped' && (
-                  <Button icon={<RedoOutlined />} onClick={onRetry} type="primary">
-                    继续执行
-                  </Button>
-                )}
-                <Popconfirm
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  okText="结束计划"
-                  onConfirm={onEnd}
-                  title="结束后将释放工作区并恢复自由输入，确定结束吗？"
-                >
-                  <Button danger type="text">
-                    结束
-                  </Button>
-                </Popconfirm>
-              </>
-            )}
-            {mode === 'awaiting_plan_adjustment' && (
-              <Popconfirm
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-                okText="结束计划"
-                onConfirm={onEnd}
-                title="确定结束当前计划吗？"
-              >
-                <Button danger type="text">
-                  结束
-                </Button>
-              </Popconfirm>
-            )}
+            <Popconfirm cancelText="取消" okButtonProps={{ danger: true }} okText="结束任务"
+              onConfirm={onEnd} title="结束后将停止所有相关执行；工作区未变化时可继续任务。">
+              <Button danger type="text">结束任务</Button>
+            </Popconfirm>
           </div>
         )}
       </div>
 
-      {mode === 'stopping' ? (
+      {ending || mode === 'stopping' ? (
         <div
-          aria-label="正在等待后端暂停计划执行"
-          aria-valuetext="正在安全暂停并保存进度"
+          aria-label="正在等待后端结束任务"
+          aria-valuetext="正在等待所有相关执行退出"
           className={cx('plan-execution-dock-loading')}
           role="progressbar"
         >
@@ -291,9 +240,9 @@ function dependencyLockDescription(ownerPageId?: string, phase?: string): string
 /** 返回计划控制栏当前状态的主标题。 */
 function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
   return {
-    running: '计划执行期间已暂停自由输入',
-    stopping: '正在暂停计划执行…',
-    awaiting_authorization: '执行已暂停，等待授权',
+    running: '计划正在执行',
+    stopping: '正在等待后台退出…',
+    awaiting_authorization: '等待操作授权',
     awaiting_repair_confirmation: 'RepairPlanner 需要你的确认',
     awaiting_unit_test_confirmation: '等待单元测试选择',
     awaiting_frontend_performance_confirmation: '等待前端性能测试选择',
@@ -302,9 +251,9 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
     awaiting_acceptance_phase_confirmation: '等待进入验收阶段',
     awaiting_code_review_repair_confirmation: '等待一键修复代码问题',
     awaiting_acceptance: '页面已准备好，等待最终验收',
-    awaiting_plan_adjustment: '执行已暂停',
+    awaiting_plan_adjustment: '等待调整计划',
     failed: '计划执行失败',
-    stopped: '计划执行已暂停'
+    stopped: '当前执行已停止'
   }[mode]
 }
 
@@ -333,7 +282,7 @@ function planModeDescription(
     return '代码审查发现问题，请在上方执行一键修复。'
   }
   if (mode === 'awaiting_unit_test_confirmation') {
-    return '请在上方确认卡选择继续执行或跳过单元测试。'
+    return '请在上方确认卡选择执行单元测试或不执行单元测试。'
   }
   if (mode === 'awaiting_frontend_performance_confirmation') {
     return '请在上方确认卡选择继续执行或跳过前端性能测试。'
@@ -342,7 +291,7 @@ function planModeDescription(
     return String(payload?.message || 'Agent 请求执行受保护操作。')
   }
   if (mode === 'stopping') {
-    return '后端正在安全结束当前任务并保存可恢复进度，请稍候；完成后会显示继续执行、调整计划和结束操作。'
+    return '正在等待后台工作退出；也可以结束当前任务。'
   }
   if (mode === 'awaiting_acceptance') return '请检查右侧预览，验收通过后才会完成计划。'
   if (mode === 'awaiting_plan_adjustment') return '可在上方输入计划调整意见或结束当前计划。'

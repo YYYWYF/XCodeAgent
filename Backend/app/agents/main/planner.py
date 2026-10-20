@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
+from app.agents.main.technical_plan_language import repair_technical_plan_chinese_prose
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -49,6 +50,32 @@ DATASOURCE_PENDING_REQUIREMENT = (
     "MySQL8 + Redis architecture boundary in ProjectPlan.architecture."
 )
 
+TECHNICAL_PLAN_LANGUAGE_REQUIREMENT = (
+    "语言要求：所有面向用户的自然语言内容必须使用简体中文，包括 architecture.frontend/backend/data、"
+    "实体描述、字段 label/description、接口分组 name、Endpoint name/summary、"
+    "Schema description 及页面依赖 trigger。不得生成英文说明句子；已有基线中的英文说明也须改写为中文，"
+    "保持原有业务含义和技术决策。JSON 键、稳定 ID、字段名、类型枚举、HTTP 方法、接口路径、"
+    "Schema 引用和错误码保持技术标识符格式；React、Java8、Springboot、MySQL8、Redis 等技术名称可保留。"
+    "返回前逐项检查上述说明字段，确保没有遗漏的英文句子。\n"
+)
+
+TECHNICAL_PLAN_FINAL_LANGUAGE_REQUIREMENT = (
+    "\n最终输出语言复核（优先级高于前文示例及 Existing TechnicalPlan 中的写法）："
+    "以下面向用户的字段都必须写成简体中文完整句子：architecture.frontend、architecture.backend、"
+    "architecture.data；entities[].description、entities[].fields[].label 和 description；"
+    "api_contracts[].name、api_contracts[].endpoints[].name 和 summary；每个 Schema 属性的 description；"
+    "pages[].references.endpoint_dependencies[].trigger。不要保留这些字段中的英文句子。"
+    "若旧计划或输入上下文在这些字段中包含英文，先忠实翻译成中文再返回；英文技术名词和代码标识符可保留。"
+    "只改写上述自然语言值，不得改变 ID、字段名、类型、接口方法与路径、引用关系或业务语义。"
+    "返回前逐字段复核，确保说明内容是中文。\n"
+)
+
+TECHNICAL_PLAN_CONTRACT_LANGUAGE_FINAL_REQUIREMENT = (
+    "\n最终语言复核：你只返回 api_contracts，但其中接口分组 name、Endpoint name/summary 和 Schema 属性 description "
+    "都是面向用户的自然语言，必须用简体中文书写。若旧计划或上文示例为英文，先翻译成中文再返回；"
+    "保留 ID、字段名、类型、路径和引用关系。\n"
+)
+
 
 def _technical_planning_prompt(
     requirement_spec: dict[str, Any],
@@ -77,20 +104,20 @@ def _technical_planning_prompt(
     item_schema_id = f"{entity_id}ListItem"
     response_example = {
         "architecture": {
-            "frontend": "A React single-page administration client communicates with the service through REST JSON APIs.",
-            "backend": "A Java8 and Springboot service exposes REST APIs organized by business capability.",
-            "data": "MySQL8 provides persistence and Redis provides caching for hot data.",
+            "frontend": "React 单页管理客户端通过 REST 接口与后端交换 JSON 数据。",
+            "backend": "Java8 和 Springboot 服务按业务能力组织并提供 REST 接口。",
+            "data": "MySQL8 负责数据持久化，Redis 负责热点数据缓存。",
         },
         "entities": [
             {
                 "id": entity_id,
                 "name": str(entity.get("name") or entity_id),
-                "description": str(entity.get("description") or "记录订单业务信息。"),
+                "description": str(entity.get("description") or "业务实体"),
                 "fields": [
                     {
                         "name": field_name,
                         "label": "订单编号",
-                        "description": "用于唯一识别业务订单的编号。",
+                        "description": "用于唯一识别订单的业务编号。",
                         "type": "text",
                         "required": True,
                     }
@@ -110,7 +137,7 @@ def _technical_planning_prompt(
                         "properties": {
                             "displayValue": {
                                 "type": "string",
-                                "description": "A value formatted for list display.",
+                                "description": "用于列表展示的格式化值。",
                                 "entity_field_ref": f"{entity_id}.{field_name}",
                             }
                         },
@@ -133,7 +160,7 @@ def _technical_planning_prompt(
                         "name": "查询订单列表",
                         "method": "GET",
                         "path": f"/api/{entity_id.lower()}",
-                        "summary": "Query a paginated list.",
+                        "summary": "按分页条件查询订单列表。",
                         "parameters": [
                             {"name": "current", "in": "query", "required": False, "schema": {"type": "integer", "default": 1}},
                             {"name": "pageSize", "in": "query", "required": False, "schema": {"type": "integer", "default": 20}},
@@ -154,7 +181,7 @@ def _technical_planning_prompt(
                         {
                             "endpoint_id": f"{contract_id}.list",
                             "usage": "page_load",
-                            "trigger": "Page entry or filter submission",
+                            "trigger": "进入页面或提交筛选条件时",
                             "required_for_initial_load": True,
                         }
                     ],
@@ -213,6 +240,7 @@ def _technical_planning_prompt(
     return (
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
         "The object has exactly four sections: architecture, entities, api_contracts, and pages.\n\n"
+        f"{TECHNICAL_PLAN_LANGUAGE_REQUIREMENT}\n"
         "Field definitions:\n"
         "1. architecture is a technical summary. frontend describes the client form and communication style; "
         "backend describes the Java8/Springboot service boundary; data describes MySQL8 persistence and Redis caching.\n"
@@ -293,6 +321,7 @@ def _technical_planning_prompt(
         "endpoint_dependencies. Do not return the TechnicalPlan until this audit passes.\n\n"
         f"{revision_context}"
         f"planning_adjustment_request:\n{str(requirement_spec.get('planning_adjustment_request') or '').strip()}\n"
+        f"{TECHNICAL_PLAN_FINAL_LANGUAGE_REQUIREMENT}"
     )
 
 
@@ -328,6 +357,7 @@ def _planning_prompt(
         "product decisions. Do not redesign layouts, components, page goals, product actions, or visual "
         "states. Design only architecture, API contracts, schemas, data sources, permissions, and the "
         "technical references needed to implement the confirmed UI.\n"
+        f"{TECHNICAL_PLAN_LANGUAGE_REQUIREMENT}\n"
         f"{datasource_requirement}\n"
         "Never assign, infer, or persist a data source type on entities or as a top-level "
         "data_sources section; entities stay source-free. Physical bindings belong to Endpoint API design.\n"
@@ -409,7 +439,7 @@ def _planning_prompt(
         "    }\n"
         "  },\n"
         '  "endpoints": [\n'
-        '    {"id": "inventory.list", "method": "GET", "path": "/api/inventory", "summary": "List inventory items", '
+        '    {"id": "inventory.list", "method": "GET", "path": "/api/inventory", "summary": "查询库存列表", '
         '"parameters": [], "request_schema_ref": null, "response_schema_ref": "InventoryListResponse", '
         '"error_codes": [], "authentication": {"required": true}}\n'
         "  ]\n"
@@ -488,7 +518,8 @@ def _planning_prompt(
         "with explicit assumptions and risks in this one plan; do not return questions or defer them "
         "to later confirmation rounds.\n"
         f"{revision_context}RequirementSpec:\n"
-        f"{json.dumps(requirement_spec, ensure_ascii=False)}"
+        f"{json.dumps(requirement_spec, ensure_ascii=False)}\n"
+        f"{TECHNICAL_PLAN_FINAL_LANGUAGE_REQUIREMENT}"
     )
 
 
@@ -777,11 +808,13 @@ def _technical_contract_repair_prompt(
         "whether a request body exists from operation semantics, not HTTP method: bodyless commands may use null "
         "request_schema_ref; operations that consume body fields must define and reference a real request schema. "
         "Never add an empty request schema only to silence validation.\n\n"
+        f"{TECHNICAL_PLAN_LANGUAGE_REQUIREMENT}\n"
         f"Requested contract ids:\n{json.dumps(contract_ids, ensure_ascii=False)}\n\n"
         f"Validation errors:\n{json.dumps(validation_errors[:12], ensure_ascii=False)}\n\n"
         f"Contracts to repair:\n{json.dumps(target_contracts, ensure_ascii=False)}\n\n"
         f"Bound entities:\n{json.dumps(entity_context, ensure_ascii=False)}\n\n"
         f"Related confirmed product actions:\n{json.dumps(product_actions, ensure_ascii=False)}\n"
+        f"{TECHNICAL_PLAN_CONTRACT_LANGUAGE_FINAL_REQUIREMENT}"
     )
 
 
@@ -824,7 +857,7 @@ def repair_technical_plan_api_contracts_with_chat_model(
         for contract in existing_plan.get("api_contracts", [])
         if isinstance(contract, dict)
     ]
-    return create_technical_plan(
+    repaired_plan = create_technical_plan(
         requirement_spec,
         agent_plan={
             "architecture": deepcopy(existing_plan.get("architecture", {})),
@@ -832,6 +865,10 @@ def repair_technical_plan_api_contracts_with_chat_model(
             "api_contracts": merged_contracts,
             "pages": deepcopy(existing_plan.get("pages", [])),
         },
+    )
+    return repair_technical_plan_chinese_prose(
+        repaired_plan,
+        invoke_model=lambda prompt: _invoke_prompt_with_chat_model(prompt, settings=settings),
     )
 
 
@@ -856,10 +893,14 @@ def plan_project_with_chat_model(
 
     if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
         agent_plan = _parse_technical_plan_model_output(agent_note)
-        return create_technical_plan(
+        technical_plan = create_technical_plan(
             requirement_spec,
             agent_plan=agent_plan,
             datasource_type=datasource_type,
+        )
+        return repair_technical_plan_chinese_prose(
+            technical_plan,
+            invoke_model=lambda prompt: _invoke_prompt_with_chat_model(prompt, settings=settings),
         )
     agent_plan = extract_json_object(agent_note)
     plan = create_project_plan(

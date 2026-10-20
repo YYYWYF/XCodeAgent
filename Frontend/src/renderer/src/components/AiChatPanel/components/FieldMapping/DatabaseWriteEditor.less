@@ -6,7 +6,7 @@
 
   .database-write-list { min-width: 0; overflow: auto hidden; background: transparent; }
   .database-write-head, .database-write-row { display: grid; grid-template-columns: var(--database-write-columns); gap: 9px; align-items: center; min-width: 690px; margin-inline: 8px; padding: 8px 10px; }
-  .database-write-head { min-height: 34px; color: var(--wb-text-secondary); font-size: 11px; font-weight: 600;
+  .database-write-head { min-height: 34px; color: var(--wb-text-secondary); font-size: 12px; font-weight: 600;
     > span { min-width: 0; }
   }
   .database-write-row { position: relative; min-height: 58px; border: 1px solid var(--wb-border); border-radius: 7px; background: var(--wb-canvas); transition: background-color .15s ease;
@@ -19,9 +19,9 @@
   .database-write-column-select, .database-write-source-select, .database-write-parameter-select, .database-write-fixed-input { width: 100%; min-width: 0; }
   .database-write-static-field, .database-write-parameter-value { display: block; min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
   .database-write-parameter-summary { display: flex; min-width: 0; align-items: center; gap: 6px; }
-  .database-write-parameter-location { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-hover); color: var(--wb-text-secondary); font-size: 10px; font-weight: 600; line-height: 1.2; }
-  .database-write-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 11px; font-weight: 600; line-height: 1; }
-  .database-write-error { grid-column: 1 / -1; color: var(--wb-code-delete-text); font-size: 12px; }
+  .database-write-parameter-location { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-hover); color: var(--wb-text-secondary); font-size: 12px; font-weight: 600; line-height: 1.2; }
+  .database-write-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 12px; font-weight: 600; line-height: 1; }
+  .database-write-error { grid-column: 1 / -1; color: var(--wb-code-delete-text); font-size: 13px; }
   .database-write-empty { display: flex; min-height: 60px; align-items: center; justify-content: center; border: 1px dashed var(--wb-border-strong); border-radius: 8px; background: var(--wb-canvas); }
   .database-write-actions { display: flex; justify-content: flex-end; margin-top: 9px;
     .ant-btn { min-height: 32px; padding-inline: 11px; border-color: var(--wb-border-strong); border-radius: 6px; background: var(--wb-canvas); color: var(--wb-accent); box-shadow: none; }

@@ -10,6 +10,7 @@ from app.services.authorization_resource_inspection import verified_auth_resourc
 from app.services.build_task_reuse_contracts import ExternalCapability, RetainedEndpointOwner, ReuseFacts
 from app.services.planning_frozen import plain_json
 from app.services.planning_issues import IssueCategory, ValidationIssue
+from app.services.task_input_freshness import task_covers_current_input
 
 
 _IMPLEMENTATION_CHECKS = {"frontend.api_contract", "frontend.static_data_contract"}
@@ -319,9 +320,14 @@ def resolve_reuse_facts(
     for task in tasks:
         unit_id, task_id = task["unit_id"], task["id"]
         retained[unit_id].append(task_id)
-        for capability in sorted(_capabilities(task, all_unit_ids, issues)):
+        declared = _capabilities(task, all_unit_ids, issues)
+        # 已确认任务保留审计；直接输入过期时不能再声明覆盖本轮职责。
+        for capability in sorted(declared if task_covers_current_input(task, formal_plan, build_context) else ()):
             capabilities[unit_id].setdefault(capability, []).append(task_id)
     owners = _endpoint_owners(tasks, _formal_endpoints(formal_plan, issues), issues)
+    current_ids = {task["id"] for task in tasks
+                   if task_covers_current_input(task, formal_plan, build_context, check_page=False)}
+    owners = [owner for owner in owners if owner.owner_task_id in current_ids]
     external = _external_capabilities(unit_ids, build_context, workspace_snapshot, template_state_context, issues)
     external.extend(_auth_external_capabilities(
         unit_ids, capabilities, formal_plan, workspace_snapshot, auth_resource_inspection, issues,

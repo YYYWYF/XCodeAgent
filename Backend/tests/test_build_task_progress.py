@@ -31,6 +31,7 @@ from app.services.planning_run_events import (
     UnitAttemptStarted,
     UnitValidationStarted,
 )
+from app.services.planning_unit_display_names import project_plan_unit_display_names
 from app.services.planning_run_progress import (
     DAG_GENERATION_SNAPSHOT_SCHEMA_VERSION,
     project_planning_run_progress,
@@ -328,6 +329,63 @@ class BuildTaskProgressTests(unittest.TestCase):
 
 class PlanningRunProgressProjectorTests(unittest.TestCase):
     """验证 PlanningRun 是新进度快照的唯一事实来源。"""
+
+    def test_business_display_names_use_plan_names_and_disambiguate_duplicates(self) -> None:
+        """页面与接口取当前 TechnicalPlan 名称，缺失或重复时安全区分。"""
+
+        names = project_plan_unit_display_names(
+            {
+                "artifact_type": "technical-plan",
+                "pages": [
+                    {"id": "orders", "name": "订单列表"},
+                    {"id": "orders-copy", "name": "订单列表"},
+                    {"id": "unnamed", "name": "unnamed"},
+                ],
+                "api_contracts": [
+                    {
+                        "id": "order_api",
+                        "endpoints": [
+                            {"id": "list", "name": "查询订单列表"},
+                            {"id": "list_copy", "name": "查询订单列表"},
+                            {"id": "unnamed_endpoint", "name": "unnamed_endpoint"},
+                        ],
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(names["page:orders"], "订单列表页面（第 1 个页面）")
+        self.assertEqual(names["page:orders-copy"], "订单列表页面（第 2 个页面）")
+        self.assertEqual(names["page:unnamed"], "未命名页面（第 3 项）")
+        self.assertEqual(
+            names["backend:endpoint:order_api:list"],
+            "查询订单列表接口（第 1 个接口）",
+        )
+        self.assertEqual(
+            names["backend:endpoint:order_api:list_copy"],
+            "查询订单列表接口（第 2 个接口）",
+        )
+        self.assertEqual(
+            names["backend:endpoint:order_api:unnamed_endpoint"],
+            "未命名接口（第 3 项）",
+        )
+        self.assertEqual(names["frontend:api-client"], "前端接口调用封装")
+        self.assertNotIn("page:orders", names.values())
+        self.assertNotIn("backend:endpoint:order_api:list", names.values())
+
+    def test_run_display_name_does_not_change_unit_identity_or_counts(self) -> None:
+        """名称从 Run 投影，缺名允许类别兜底，Unit 身份和数量保持不变。"""
+
+        state = run()
+        projected = project_planning_run_progress(state.model_copy(update={
+            "unit_display_names": {"page:orders": "订单列表页面"},
+        }))
+        legacy = project_planning_run_progress(state)
+
+        self.assertEqual(projected["units"][0]["id"], "page:orders")
+        self.assertEqual(projected["units"][0]["displayName"], "订单列表页面")
+        self.assertNotIn("displayName", legacy["units"][0])
+        self.assertEqual(projected["summary"], legacy["summary"])
 
     def test_projects_every_unit_status_without_predictive_percentage(self) -> None:
         """七种 Unit 状态均原样投影，汇总只使用离散事实计数。"""

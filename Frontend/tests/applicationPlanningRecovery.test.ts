@@ -55,6 +55,20 @@ assert.equal(ready?.inputCommitted, true)
 assert.equal(ready?.recoveryActionPlan?.primaryAction?.kind, 'restart_stage')
 assert.equal(ready?.recoveryActionPlan?.primaryAction?.label, '重新执行技术规划')
 
+// 后端取消/停止属于合法终态；接收完整投影，但不在前端自行制造恢复动作。
+for (const classification of ['cancelled', 'stopped'] as const) {
+  const terminal = applicationPlanningRecoveryProjection(recoveryWorkflow({
+    schemaVersion: 'application-planning-recovery.v1', classification,
+    sourceRunId: 'run-A', threadId: 'planning-thread',
+    canContinue: false, userActionRequired: false, inputCommitted: false,
+    reasonCode: `DURABLE_APPLICATION_PLANNING_${classification.toUpperCase()}`,
+    message: '当前规划已停止。', recoveryActionPlan: null
+  }))
+  assert.equal(terminal?.classification, classification)
+  assert.equal(terminal?.canContinue, false)
+  assert.equal(terminal?.recoveryActionPlan, null)
+}
+
 const diagnosticReady = applicationPlanningRecoveryProjection(
   recoveryWorkflow({
     schemaVersion: 'application-planning-recovery.v1',

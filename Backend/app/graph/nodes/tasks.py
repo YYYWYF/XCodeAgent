@@ -20,6 +20,7 @@ from app.services.artifact_invalidation import (
     stale_artifact_keys,
 )
 from app.services.build_context_resolver import resolve_confirmation_context
+from app.services.application_build_context import application_endpoint_context
 from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
@@ -131,7 +132,7 @@ def _build_prerequisite_errors(
     scope = build_execution_scope if isinstance(build_execution_scope, dict) else {}
     target_type = str(scope.get("type") or "")
     target_id = str(scope.get("targetId") or "")
-    if target_type in {"page", "endpoint"} and target_id:
+    if target_type in {"application", "page", "endpoint"} and target_id:
         try:
             readiness = api_design_readiness(
                 workspace or "",
@@ -506,7 +507,7 @@ def _confirmed_build_task_plan_result(
             "mode": "build_task_plan_confirmation",
             "status": "clear",
             "confirmationStatus": "confirmed",
-            "message": "Build DAG 已确认，可以进入 Build。",
+            "message": "任务计划已确认，可以开始执行。",
         },
         "clarification": {},
     }
@@ -579,12 +580,8 @@ def _resolve_build_context(
         "page_implementation_contract": None,
         "endpoint_contract": None,
         "direct_endpoint_contracts": [],
-        "endpoint_ids": [],
-        "entity_ids": [],
-        "endpoint_designs": [],
-        "source_types": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
-        "source_refs": {},
+        **application_endpoint_context(workspace_root(state), project_plan),
         "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }
 

@@ -48,6 +48,39 @@ def _write_ready_workbench_lifecycle(workspace: str) -> None:
 class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
     """验证不启动 Graph 的计划控制动作仍完整收口业务产物。"""
 
+    async def test_end_waits_for_live_repair_and_timeout_preserves_execution(self) -> None:
+        """生命周期误报失败时也必须停止真实修复；取消超时不能提前释放锁。"""
+
+        for outcome in ("cancelled", "cancel_timeout"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                _write_ready_workbench_lifecycle(directory)
+                start_workbench_execution(
+                    directory, scope="application", target_id="application", page_id=None,
+                    thread_id="repair-thread", run_id="repair-run", phase="small_task_repair",
+                )
+                async def cancel_repair(*args: object, **kwargs: object) -> str:
+                    """确认取消执行时目标仍被生命周期持有。"""
+                    self.assertIn("repair-run", load_application_lifecycle(directory).active_executions)
+                    return outcome
+
+                with patch("app.protocols.workflow.run_control.get_execution", new=AsyncMock(return_value=None)), patch(
+                    "app.protocols.workflow.run_control.workflow_run_registry.is_active", return_value=True,
+                ), patch(
+                    "app.protocols.workflow.run_control.workflow_run_registry.cancel_and_wait",
+                    new=AsyncMock(side_effect=cancel_repair),
+                ) as cancel:
+                    frames = "".join([frame async for frame in build_workflow_plan_control_ag_ui_stream(
+                        action="end", workspace=directory, target_run_id="repair-run",
+                        thread_id="control-thread", run_id="control-run",
+                    )])
+                cancel.assert_awaited_once_with("repair-run", workspace=directory, ending=True)
+                remaining = load_application_lifecycle(directory).active_executions
+                self.assertEqual("repair-run" in remaining, outcome == "cancel_timeout")
+                if outcome == "cancel_timeout":
+                    self.assertIn("PLAN_CONTROL_RUN_STOP_FAILED", frames)
+                else:
+                    self.assertIn('"status":"ended"', frames)
+
     async def test_registry_rejects_duplicate_active_task_without_overwriting_owner(self) -> None:
         """活跃 owner 存在时，重复 register 必须保留旧 task。"""
 
@@ -138,7 +171,7 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
             ) as abandon:
                 frames = [frame async for frame in stream]
 
-            end.assert_called_once_with(directory, run_id="run-dag")
+            end.assert_called_once_with(directory, run_id="run-dag", preserve_resume=True)
             abandon.assert_not_called()
             self.assertTrue(frames)
 

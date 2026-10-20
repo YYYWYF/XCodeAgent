@@ -30,7 +30,7 @@ WORKFLOW_NODE_LABELS = {
     "entity_source_binding": "实体数据源绑定",
     "project_planning": "技术规划调整",
     "inspect_workspace": "扫描工作区代码",
-    "prepare_build_tasks": "构建任务 DAG 生成",
+    "prepare_build_tasks": "生成开发任务计划",
     "authorization_bootstrap": "权限数据库初始化",
     "build": "代码生成与构建协调",
     "unit_test": "开发阶段单元测试",
@@ -187,7 +187,8 @@ def workflow_capabilities() -> dict[str, Any]:
                 "not_running",
                 "cancel_timeout",
             ],
-            "semantics": "final_server_task_state_after_bounded_wait; authoritative PendingPlan wins over cancellation",
+            "semantics": "等待 server Task、同步 Agent/工具收尾和命令退出；超时不宣告停止，普通 Pause 的 authoritative PendingPlan 优先。",
+            "waitTimeoutSeconds": 30,
         },
         "pendingOwnership": {
             "requestField": "forwardedProps.sessionId",
@@ -206,7 +207,13 @@ def workflow_capabilities() -> dict[str, Any]:
             "actions": ["stop", "end", "abandon"],
             "abandonIdentityFields": ["planningRunId", "draftDigest"],
             "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
-            "endSemantics": "按当前 workspace、Workbench 类型和精确 target runId 终止并清理目标 execution；不要求原始 thread/session 持有。",
+            "endSemantics": "按精确 workspace/runId 停止全部相关工作后释放资源，超时保留锁；归档原执行以供工作区未变化时继续。",
+            "endedResume": {
+                "requestField": "forwardedProps.resumeExecutionRunId",
+                "availabilityField": "lifecycle.endedExecutions.<runId>.workspaceUnchanged",
+                "checkedAtField": "lifecycle.endedExecutionsCheckedAt",
+                "semantics": "原会话/目标/Graph checkpoint；入场锁内复验工作区指纹和资源，继续不提交正式确认。",
+            },
             "stopSemantics": "保留当前 execution 的 thread/session 持有校验，只暂停并保留恢复所需的 lifecycle 记录。",
         },
         "clarificationModes": {
@@ -366,6 +373,12 @@ def workflow_capabilities() -> dict[str, Any]:
                             "required": "boolean",
                             "advisory": "boolean; advisory checks never block the quality gate",
                             "evidence": "brief sanitized evidence",
+                            "activeToolActivity": (
+                                "optional ephemeral latest sanitized file-tool activity for a "
+                                "running frontend_test_generation or backend_test_generation check; "
+                                "same callId is updated through running/completed/failed and cleared "
+                                "when the generation check settles"
+                            ),
                             "passed_tests": "optional non-negative integer for unit-test checks",
                             "total_tests": "optional non-negative integer for unit-test checks",
                             "performanceScores": (

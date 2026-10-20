@@ -66,6 +66,13 @@ def classify_execution_failure(
     """根据异常类型和受控操作上下文生成带安全诊断摘要的失败证据。"""
 
     normalized_operation = str(operation or "").strip() or None
+    from app.services.stage_prerequisites import StagePrerequisiteError
+    if isinstance(exc, StagePrerequisiteError):
+        return ExecutionFailureEvidence(
+            origin=ExecutionFailureOrigin.BUSINESS, code="STAGE_PREREQUISITE_INCOMPLETE",
+            operation=normalized_operation, replay_compatible=True,
+            diagnostic_message=exc.issue.diagnostic, user_message=str(exc),
+        )
     # 模板领域的 models 模块不是模型 SDK，必须在通用模块归因前识别。
     # 保留原可重放属性和真实 Graph 节点，恢复入口仍由既有 resolver 验证。
     if isinstance(exc, WorkspaceBootstrapError):

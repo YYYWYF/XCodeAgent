@@ -11,13 +11,16 @@
   background: var(--wb-canvas);
 }
 
-// 验收待确认时预览占满主区域，并为底部决策栏预留空间。
+// 验收底栏参与正常布局，高度由提示内容决定，预览仅占据剩余空间。
 .@{class-prefix}-acceptance-awaiting {
-  --acceptance-decision-dock-height: 84px;
-
   .@{class-prefix}-embedded-preview-pane {
-    box-sizing: border-box;
-    padding-bottom: var(--acceptance-decision-dock-height);
+    padding-bottom: 0;
+    container-type: inline-size;
+  }
+
+  .@{class-prefix}-browser-preview-panel {
+    flex: 1;
+    height: auto;
   }
 }
 
@@ -421,7 +424,7 @@
     &-type {
       flex-shrink: 0;
       color: var(--wb-text-tertiary, #909196);
-      font-size: 11px;
+      font-size: 12px;
       text-transform: uppercase;
       min-width: 64px;
     }
@@ -464,10 +467,4 @@
   font-size: 15px;
   font-weight: 500;
   border-radius: 8px;
-}
-
-@media (max-width: 720px) {
-  .@{class-prefix}-acceptance-awaiting {
-    --acceptance-decision-dock-height: 132px;
-  }
 }

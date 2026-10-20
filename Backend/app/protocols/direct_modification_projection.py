@@ -288,6 +288,9 @@ def direct_node_process_step(
 def direct_node_status(node_name: str, update: dict[str, Any]) -> str:
     """把 Graph 节点业务状态映射为流程步骤终态。"""
 
+    # 修复期间整轮继续运行，但本次失败的验收和检查项仍如实展示失败。
+    if node_name == "validate_direct_fix" and update.get("quality_gate_passed") is False:
+        return "failed"
     status = str(update.get("status") or "")
     if status == "failed":
         return "failed"

@@ -41,6 +41,11 @@
   gap: 12px;
 }
 
+// 确认状态提示跟随工作台正文色，深色主题使用白色文字并保留浅色主题的可读性。
+.@{class-prefix}-workflow-confirmation-status .ant-alert-message {
+  color: var(--wb-text);
+}
+
 .@{class-prefix}-workflow-artifacts,
 .@{class-prefix}-workflow-clarification,
 .@{class-prefix}-workflow-build-progress,
@@ -268,10 +273,19 @@
   }
 
   > .ant-collapse-header {
+    // 无默认折叠图标时按块布局约束宽度，避免 Ant Design 的头部文本按长行撑开。
+    display: block;
     align-items: center;
     min-width: 0;
-    padding: 12px 54px 12px 14px;
+    padding: 12px 14px;
     color: var(--wb-text-primary);
+
+    > .ant-collapse-header-text {
+      display: block;
+      min-width: 0;
+      width: 100%;
+      max-width: 100%;
+    }
   }
 
   > .ant-collapse-content {
@@ -309,14 +323,16 @@
   display: flex;
   min-width: 0;
   width: 100%;
+  max-width: 100%;
   flex: 1 1 auto;
   flex-direction: column;
 }
 
 .@{class-prefix}-workflow-build-task-header {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: flex-start;
   gap: 12px;
 
   .ant-tag {
@@ -325,48 +341,42 @@
   }
 }
 
-.@{class-prefix}-workflow-build-tool-activity {
+.@{class-prefix}-workflow-build-task-footer {
   display: flex;
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 10px;
-  color: var(--workflow-task-running);
-  background: color-mix(in srgb, var(--wb-accent) 11%, var(--wb-surface));
-  border: 1px solid var(--workflow-task-running-border);
-  border-left: 3px solid var(--workflow-task-running);
-  border-radius: 6px;
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--wb-accent) 10%, transparent);
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
 
-  .ant-typography {
-    min-width: 0;
+  .ant-tag {
     margin: 0;
-    color: inherit;
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+}
+
+.@{class-prefix}-workflow-build-task-details-toggle.ant-btn {
+  color: var(--wb-text-secondary);
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
   }
 
-  &.@{class-prefix}-failed {
-    color: var(--workflow-task-danger);
-    background: color-mix(in srgb, var(--wb-danger) 10%, var(--wb-surface));
-    border-color: var(--workflow-task-danger-border);
-    border-left-color: var(--workflow-task-danger);
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 1px;
   }
 }
 
 .@{class-prefix}-workflow-build-task-header-shell > .@{class-prefix}-workflow-build-tool-activity {
   margin-top: 9px;
-}
-
-.@{class-prefix}-workflow-build-tool-activity-icon {
-  display: grid;
-  flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  font-size: 16px;
-  place-items: center;
 }
 
 .@{class-prefix}-workflow-build-task-status-icon {
@@ -1984,12 +1994,12 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
   border-color: transparent;
   background: var(--wb-accent-soft);
   color: var(--wb-accent);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 // 中等提示：模块级候选提交点，只提示不弹窗。
 .@{class-prefix}-workflow-build-checkpoint-hint {
   display: block;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 13px;
 }

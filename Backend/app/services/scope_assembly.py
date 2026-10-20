@@ -21,6 +21,7 @@ from app.services.build_task_planner import (
 )
 from app.services.build_unit_compiler import BuildUnitCompilationError
 from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.task_input_freshness import task_covers_current_input
 from app.services.planning_frozen import (
     FrozenJsonObject,
     FrozenPlanningModel,
@@ -501,8 +502,9 @@ def assemble_scope_build_task_plan(
 
     ``build_execution_scope`` 由当前 PlanningRun 显式提供，是唯一允许写入 Plan
     root 的权威 Scope；ConfirmedPlan 和 skeleton 仅提供历史 Task 与当前编译骨架。
-    本服务不选择 Candidate、不执行 retry、不写 PendingPlan，也不做 Task replacement。
-    任一来源或 ID 冲突均在 registry 建立前失败，禁止自动 rename 或精确重复合并。
+    本服务不选择 Candidate、不执行 retry、不写 PendingPlan。
+    本轮有有效 Candidate 时，替换直接输入过期的旧任务；不受影响的任务继续保留。
+    其余来源或 ID 冲突均在 registry 建立前失败，不自动 rename 或合并。
     """
 
     if not all(
@@ -537,6 +539,11 @@ def assemble_scope_build_task_plan(
     candidates, candidate_unit_by_task_id = _candidate_tasks(
         candidates_by_unit, required_units
     )
+    # 固定 ID 的新任务替换过期合同，不能继承 completed；旧文件及不可变 Build Run 仍保留。
+    retained = [task for task in retained if not (
+        task["unit_id"] in required_units
+        and not task_covers_current_input(task, project_plan, build_context)
+    )]
     collision_issues = _collision_issues(
         retained, candidates, candidate_unit_by_task_id
     )

@@ -19,7 +19,6 @@ from app.graph.direct_modification_workflow import clear_direct_modification_gra
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
-
 from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,

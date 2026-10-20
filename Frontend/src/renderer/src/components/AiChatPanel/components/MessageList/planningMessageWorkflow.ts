@@ -1,13 +1,5 @@
 import type { WorkflowRunPayload } from '../../../../typings'
 
-/** 只锁定 Canonical Planning Current State 对应的当前消息操作。 */
-export function planningMessageActionsDisabled(
-  isCurrentPlanningMessage: boolean,
-  mutationBlocked: boolean
-): boolean {
-  return isCurrentPlanningMessage && mutationBlocked
-}
-
 /** 判断确认交互是否由当前审阅门或当前权威消息承载，避免新快照复用旧消息宿主时被误锁定。 */
 export function planningInteractionIsCurrent(
   isCurrentPlanningReview: boolean,

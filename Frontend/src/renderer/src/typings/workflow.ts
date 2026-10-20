@@ -891,7 +891,7 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
 
 export type WorkflowApiDesignGateAction = {
   action: 'refresh'
-  targetType: 'page' | 'endpoint'
+  targetType: 'application' | 'page' | 'endpoint'
   targetId: string
   apiContractId?: string
 }
@@ -1352,6 +1352,8 @@ export type ApplicationLifecycle = {
   }
   activeRunId?: string
   activeExecutions: Record<string, WorkbenchExecution>
+  endedExecutionsCheckedAt?: string
+  endedExecutions?: Record<string, { execution: WorkbenchExecution; workspaceUnchanged: boolean }>
   resourceLocks?: {
     application?: ExecutionResourceLock
     pages: Record<string, ExecutionResourceLock>
@@ -1368,6 +1370,8 @@ export type ApplicationLifecycle = {
     sourceThreadId: string
     sourceRunId: string
     planningThreadId: string
+    /** 最近拥有此修订的规划 Run，供缺失恢复入口后的精确收尾使用。 */
+    planningRunId?: string | null
     status: string
     currentArtifact?: string | null
     remainingArtifacts?: string[]
@@ -1404,6 +1408,7 @@ export type WorkflowRunPayload = {
 }
 
 export type WorkflowAction =
+  | 'start_modified_testing'
   | 'retry_code_review'
   | 'retry_template_reconcile'
   | 'start_design_revision'
@@ -1442,6 +1447,9 @@ export type WorkflowDebugOptions = {
   buildTaskPlanPath?: string
 }
 
+export type WorkflowDebugStage = 'development' | 'design' | 'planning'
+export type ApplicationPlanningDebugStage = Exclude<WorkflowDebugStage, 'development'>
+
 export type WorkflowBuildExecutionScope = {
   type: 'application' | 'page' | 'data_source' | 'endpoint'
   targetId?: string
@@ -1452,7 +1460,7 @@ export type WorkflowBuildToolActivity = {
   callId: string
   tool: 'ls' | 'read_file' | 'glob' | 'grep' | 'write_file' | 'edit_file' | 'delete_file'
   category: 'browse' | 'read' | 'search' | 'write' | 'delete'
-  status: 'running' | 'failed'
+  status: 'running' | 'completed' | 'failed'
   message: string
   path?: string
 }

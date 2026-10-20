@@ -66,6 +66,7 @@ class PlanningProgressProjectionTests(unittest.TestCase):
             ("technical_planning_generate", {"technical_plan_candidate": {"id": "candidate"}}, ["technical_planning_commit"]),
             ("technical_planning_generate", {"status": "requires_user_input", "technical_plan_candidate": {}}, ["technical_planning_review"]),
             ("technical_planning_commit", {"status": "requires_user_input"}, ["technical_planning_review"]),
+            ("technical_planning_commit", {"phase": "technical_planning_begin", "status": "running"}, ["technical_planning_begin"]),
             ("technical_planning_confirm", {"status": "completed"}, []),
             ("technical_planning_confirm", {"template_reconcile_pending": True}, ["template_reconcile"]),
             ("technical_planning_confirm", {"application_planning_review_route": "technical_planning_begin"}, ["technical_planning_begin"]),

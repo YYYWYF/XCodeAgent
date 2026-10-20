@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from deepagents import create_deep_agent
+from app.agents.execution_control import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 
@@ -72,6 +72,10 @@ def create_test_generation_agent(
         "snapshots, or end-to-end tests. Frontend tests must be flat under frontend/tests "
         "and end in .test.ts or .test.tsx; do not impose an additional filename separator "
         "convention. Use only npm packages already declared by the current frontend project. "
+        "If the existing Jest configuration requires missing test helpers, you may also write "
+        "frontend/tests/setupTests.ts, frontend/tests/__mocks__/styleMock.cjs and "
+        "frontend/tests/__mocks__/fileMock.cjs. These are helpers, not runnable test files; "
+        "do not include them in test_files or create other helper paths. "
         "Never introduce, request, or assume a new npm dependency for a generated test. "
         "Backend tests must mirror the Java package under backend/src/test/java and use "
         "<Class>Test.java. Use only testing libraries already available from the current "

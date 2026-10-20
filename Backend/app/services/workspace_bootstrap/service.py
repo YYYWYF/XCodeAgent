@@ -11,6 +11,7 @@ from app.services.application_lifecycle import (
     begin_application_template_generation,
     complete_workspace_bootstrap,
 )
+from app.services.application_config import read_application_config
 from app.services.repository_branch import push_workspace_branch
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
@@ -71,7 +72,13 @@ class WorkspaceBootstrapService:
         template_mutation_coordinator.begin_preparation(workspace)
         coordinator_started = True
         try:
-            requested_config = await asyncio.to_thread(compile_template_requested_config, workspace)
+            requested_config = await asyncio.to_thread(
+                compile_template_requested_config,
+                workspace,
+                include_application_config=True,
+            )
+            application_config = await asyncio.to_thread(read_application_config, workspace)
+            source_revision = application_config.get("configRevision")
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             # 新迭代沿用已有工程：模板请求只由 application.json 派生，各迭代完全一致，
             # 因此已物化的模板本来就在正确的状态。重新下载会把应用累积的业务代码整体覆盖掉。
@@ -127,6 +134,15 @@ class WorkspaceBootstrapService:
             template_mutation_coordinator.enter_commit_section(workspace)
             lifecycle: Any = None
 
+            def assert_application_revision(root: Path) -> None:
+                """在 Git baseline 前拒绝模板下载期间发生的配置修订竞争。"""
+
+                current = read_application_config(root)
+                if current.get("configRevision") != source_revision:
+                    raise WorkspaceBootstrapError(
+                        "Bootstrap 期间 application.json.configRevision 已变化，请重新确认 TechnicalPlan。"
+                    )
+
             def commit_readiness(root: Path) -> None:
                 """在物化事务内验证完整性，并把唯一 READY 写入与其绑定。"""
 
@@ -135,6 +151,7 @@ class WorkspaceBootstrapService:
                     root,
                     requested_config=requested_config,
                 )
+                assert_application_revision(root)
                 lifecycle = complete_workspace_bootstrap(
                     root,
                     succeeded=True,
@@ -146,6 +163,7 @@ class WorkspaceBootstrapService:
                 workspace=workspace,
                 archive_path=package.archive_path,
                 template_state=package.template_state,
+                before_baseline=assert_application_revision,
                 readiness=commit_readiness,
             )
             if lifecycle is None:

@@ -263,6 +263,8 @@ class ActiveFormalRevision(RevisionModel):
         max_length=256,
     )
     planning_thread_id: str = Field(alias="planningThreadId", min_length=1, max_length=512)
+    # 保留最近拥有此修订的规划执行，Run 释放后仍可精确收尾，不依赖 checkpoint。
+    planning_run_id: str | None = Field(default=None, alias="planningRunId", max_length=512)
     status: Literal[
         "design_planning",
         "drafting",

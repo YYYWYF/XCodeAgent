@@ -52,6 +52,8 @@ export type ApplicationPlanningRecoveryProjection = {
     | 'running'
     | 'ready_to_continue'
     | 'completed'
+    | 'cancelled'
+    | 'stopped'
     | 'failed'
     | 'blocked'
     | 'conflict'
@@ -80,6 +82,8 @@ const APPLICATION_PLANNING_RECOVERY_CLASSIFICATIONS = new Set([
   'running',
   'ready_to_continue',
   'completed',
+  'cancelled',
+  'stopped',
   'failed',
   'blocked',
   'conflict',
@@ -206,17 +210,6 @@ export function applicationPlanningRecoveryProjection(
   return undefined
 }
 
-/** 标识目标 planning thread 尚未产生可恢复 checkpoint。 */
-export class ApplicationPlanningCheckpointNotFoundError extends Error {
-  readonly code = 'application_planning_checkpoint_not_found'
-
-  /** 保留后端返回的可读错误信息，同时提供稳定机器码。 */
-  constructor(message: string) {
-    super(message)
-    this.name = 'ApplicationPlanningCheckpointNotFoundError'
-  }
-}
-
 /** 校验 application planning recovery 的标准 action 信封。 */
 function readRecoveryEnvelope(value: unknown): ApplicationPlanningRecoveryEnvelope | undefined {
   if (!value || typeof value !== 'object') return undefined
@@ -299,15 +292,13 @@ async function readRecoveryEnvelopeOnce(
 async function readApplicationPlanningAuthoritativeSnapshotOnce(
   application: ApplicationConfig,
   threadId: string
-): Promise<ApplicationPlanningAuthoritativeSnapshot> {
+): Promise<ApplicationPlanningAuthoritativeSnapshot | undefined> {
   const envelope = await readRecoveryEnvelopeOnce(application, threadId)
   if (envelope.status === 'failed') {
     const message = envelope.error?.message || '读取应用规划权威状态失败。'
-    if (envelope.code === 'application_planning_checkpoint_not_found') {
-      throw new ApplicationPlanningCheckpointNotFoundError(message)
-    }
     throw new Error(message)
   }
+  if (envelope.checkpointAvailable === false) return undefined
   const workflow = readWorkflowPayload(envelope)
   if (!workflow) throw new Error('读取应用规划权威状态没有返回有效的 Workflow 快照。')
   if (workflow.threadId !== threadId) {
@@ -330,14 +321,13 @@ async function readApplicationPlanningAuthoritativeSnapshotOnce(
 export async function readApplicationPlanningAuthoritativeSnapshot(
   application: ApplicationConfig,
   threadId: string
-): Promise<ApplicationPlanningAuthoritativeSnapshot> {
+): Promise<ApplicationPlanningAuthoritativeSnapshot | undefined> {
   let lastError: unknown
   for (let attempt = 0; attempt < APPLICATION_PLANNING_RECONCILE_ATTEMPTS; attempt += 1) {
     try {
       return await readApplicationPlanningAuthoritativeSnapshotOnce(application, threadId)
     } catch (reason) {
       if (
-        reason instanceof ApplicationPlanningCheckpointNotFoundError ||
         isAuthenticationFailure(reason)
       ) {
         throw reason

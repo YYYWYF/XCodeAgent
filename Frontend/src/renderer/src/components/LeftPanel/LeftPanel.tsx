@@ -3,11 +3,13 @@ import type { ReactElement } from 'react'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
+  ApplicationPlanningDebugStage,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode,
+  WorkflowDebugOptions,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
@@ -47,10 +49,15 @@ type Props = {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
-    designChangeRequest?: string
+    designChangeRequest?: string,
+    technicalPlanningConversation?: boolean
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
-  onStartIterationPlanning: (request: string) => Promise<void>
+  onStartIterationPlanning: (
+    request: string,
+    workflowDebug?: WorkflowDebugOptions,
+    debugStage?: ApplicationPlanningDebugStage
+  ) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void

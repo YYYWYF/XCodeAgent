@@ -260,7 +260,7 @@ function PathList({
     <ul className={cx('workspace-inspection-paths')}>
       {items.map((item) => (
         <li key={`${item.kind}:${item.path}`}>
-          <span>{workspaceKindLabel(item.kind)}</span>
+          <span title={workspaceKindLabel(item.kind)}>{workspaceKindLabel(item.kind)}</span>
           <code title={item.path}>{item.path}</code>
         </li>
       ))}

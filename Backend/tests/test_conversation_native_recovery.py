@@ -153,6 +153,21 @@ class ConversationNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 source = await get_execution(directory, "source")
                 self.assertEqual(source.status.value, "interrupted" if interrupted else "failed", str(source.failure))
                 self.assertEqual(source.workflow_scope, "conversation")
+                if not interrupted:
+                    # 失败释放运行占用，但真实 Graph checkpoint 和 source 身份必须仍可恢复。
+                    failed_lifecycle = load_application_lifecycle(directory)
+                    self.assertIsNone(failed_lifecycle.resource_locks.application)
+                    self.assertEqual(failed_lifecycle.active_executions["source"].status.value, "failed")
+                    self.assertTrue((await graph.aget_state({"configurable": {"thread_id": "thread"}})).values)
+                before_pause_entry = dict(calls)
+                rejected_pause = [frame async for frame in build_conversation_ag_ui_stream(payload={
+                    "threadId": "thread", "runId": "invalid-pause-continuation",
+                    "messages": [{"role": "user", "content": "继续二次修改"}],
+                    "forwardedProps": {"sessionId": "session", "conversation": {
+                        "workspaceRoot": directory, "resumeExecutionRunId": "source"}},
+                })]
+                self.assertIn("不是可继续的主动暂停", "".join(rejected_pause))
+                self.assertEqual(calls, before_pause_entry)
                 self.assertEqual(source.current_node, "scan_workspace_code" if first_node else "classify_intent", str(source.failure) + "\n" + "".join(frames)[-2000:])
                 fail = False
                 projection = await resolve_execution_recovery_projection(directory,

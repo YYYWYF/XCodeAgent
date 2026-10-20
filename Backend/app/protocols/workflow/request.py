@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.domain.workflow_recovery_boundary import failed_node_reentry_target
 
 from pathlib import Path
 from typing import Any
@@ -35,10 +36,11 @@ from app.workspace.task_documents import load_build_task_plan_json
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 from app.services.build_task_planner import tasks_from_build_task_plan
 from app.services.application_revision_lifecycle import (
-    consume_revision_continuation,
+    validate_revision_continuation,
     submit_revision_impact,
 )
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.design_revision_admission import design_revision_input
 from app.services.development_continuation import (
     validate_development_continuation,
     validate_entity_binding_continuation,
@@ -243,7 +245,24 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(
                 "创建规划 UI 动作必须通过 applicationPlanningInteraction 提交。"
             )
-    if workflow_action == "retry_failed_tasks":
+    ended_resume = None
+    if explicit_resume_execution_run_id and workspace and workflow_scope not in APPLICATION_PLANNING_SCOPES:
+        lifecycle = load_application_lifecycle(workspace)
+        ended_resume = lifecycle.ended_executions.get(explicit_resume_execution_run_id) if lifecycle else None
+        if ended_resume is not None:
+            if workflow_action or clarification_answers or explicit_resume_from or debug_state:
+                raise ValueError("继续已结束任务不能同时提交确认、业务动作或节点调试。")
+            # 已结束任务只能回到服务端保存的阶段；继续本身不代表用户提交正式确认。
+            resume_from = _supported_resume_node(
+                failed_node_reentry_target(ended_resume.execution.phase) if ended_resume.source_failed else ended_resume.execution.phase,
+                workflow_scope=workflow_scope,
+            )
+    if workflow_action == "start_modified_testing":
+        # 二次修改已在独立 Graph 完成并释放占用；这是新测试执行，不恢复旧确认或旧质量结果。
+        resume_from = "integration_test"
+        resume_values_from_state = {}
+        resume_state = None
+    elif workflow_action == "retry_failed_tasks":
         raise ValueError(
             "retry_failed_tasks 入口已更新，请刷新当前恢复状态并使用上方恢复卡片。"
         )
@@ -309,6 +328,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         resume_from == "review_phase_confirmation"
         and not review_phase_confirmation
+        and ended_resume is None
         and workflow_scope != "application_planning"
     ):
         raise ValueError(
@@ -317,6 +337,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         resume_from == "acceptance_phase_confirmation"
         and not acceptance_phase_confirmation
+        and ended_resume is None
         and workflow_scope != "application_planning"
     ):
         raise ValueError(
@@ -325,6 +346,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         resume_from == "code_review"
         and not code_review_repair_confirmation
+        and ended_resume is None
         and workflow_scope != "application_planning"
         and _clarification_mode(resume_state) == "code_review_repair_confirmation"
     ):
@@ -375,6 +397,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         workspace=workspace,
         request=request,
     )
+    design_revision_values = design_revision_input(
+        forwarded_props.get("_designRevisionIntent"), workspace=workspace,
+        request=request, workflow_scope=workflow_scope, resume_from=resume_from,
+    )
     selectedPageId = (
         _optional_text(payload.get("selectedPageId"))
         or _optional_text(payload.get("selected_page_id"))
@@ -414,6 +440,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("detail_target_type"))
         or _optional_text(resume_values_from_state.get("detail_target_type"))
     )
+    if api_design_gate_target_type == "application":
+        selectedPageId = ""
+        selected_api_contract_id = ""
+        selected_endpoint_id = ""
+        selected_entity_id = ""
+        detail_target_type = ""
     if api_design_gate_target_type in {"page", "endpoint"}:
         detail_target_type = api_design_gate_target_type
         gate_target_id = _optional_text(api_design_gate_action.get("targetId")) if api_design_gate_action else None
@@ -516,7 +548,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             detail_target_type = "endpoint"
     if workflow_action == "continue_revision_build":
         assert revision_continuation is not None
-        active_revision = consume_revision_continuation(
+        active_revision = validate_revision_continuation(
             workspace,
             change_id=revision_continuation.change_id,
             token=revision_continuation.token,
@@ -541,12 +573,12 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         selected_entity_id = ""
         detail_target_type = ""
         if revision_build_target_type == "application":
-            resume_from = "inspect_workspace"
+            resume_from = "api_design_readiness_gate"
         elif revision_build_target_type == "page":
             selectedPageId = str(active_revision.target.page_id or "").strip()
             if not selectedPageId:
                 raise ValueError("revision lifecycle 页面目标缺少 pageId。")
-            resume_from = "development_readiness_gate"
+            resume_from = "api_design_readiness_gate"
             selected_api_contract_id = ""
             selected_endpoint_id = ""
             detail_target_type = "page"
@@ -559,7 +591,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             ).strip()
             if not selected_api_contract_id or not selected_endpoint_id:
                 raise ValueError("revision lifecycle Endpoint 目标缺少完整接口标识。")
-            resume_from = "development_readiness_gate"
+            resume_from = "api_design_readiness_gate"
             detail_target_type = "endpoint"
         else:
             raise ValueError(
@@ -610,8 +642,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         forwarded_props=forwarded_props,
         resume_state=resume_state,
     )
+    from app.services.workflow_input_artifacts import pregraph_artifact_values
+    artifact_entry_node = resume_from or "api_design_readiness_gate"
     project_plan_start_values = (
-        _project_plan_start_values(workspace, selected_page_id=selectedPageId)
+        pregraph_artifact_values(workspace, artifact_entry_node,
+            lambda: _project_plan_start_values(workspace, selected_page_id=selectedPageId))
         if workflow_scope not in APPLICATION_PLANNING_SCOPES
         else {}
     )
@@ -621,7 +656,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     )
     # formal revision continuation 不解析客户端构建范围；它的 scope 与
     # entry node 已由同一 lifecycle target 决定，必须保持原子一致。
-    if revision_build_target_type == "application":
+    if revision_build_target_type == "application" or api_design_gate_target_type == "application":
         build_execution_scope = {"type": "application", "targetId": "application"}
     elif revision_build_target_type == "page":
         build_execution_scope = {"type": "page", "targetId": selectedPageId}
@@ -676,12 +711,14 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     resume_values = {
         **resume_values_from_state,
         **project_plan_start_values,
-        **_debug_resume_values(debug_state, workspace=workspace),
+        **pregraph_artifact_values(workspace, artifact_entry_node,
+            lambda: _debug_resume_values(debug_state, workspace=workspace)),
         **({"owner_session_id": owner_session_id} if owner_session_id else {}),
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
         ),
         **technical_revision_values,
+        **design_revision_values,
         **({"change_id": continuation_change_id} if continuation_change_id else {}),
         **(
             {
@@ -727,6 +764,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         **({"entity_design_action": entity_design_action} if entity_design_action else {}),
         **({"api_design_gate_action": api_design_gate_action} if api_design_gate_action else {}),
+        **({"api_design_gate_action": {}} if workflow_action == "continue_revision_build" else {}),
         **({"ui_design_action": ui_design_action} if ui_design_action else {}),
         **({"acceptance_decision": acceptance_decision} if acceptance_decision else {}),
         **(
@@ -799,6 +837,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
     }
     return {
+        "ended_resume": ended_resume is not None,
+        "ended_resume_failed": bool(ended_resume and ended_resume.source_failed),
         "plan_control_run_id": (
             _optional_text(payload.get("planControlRunId"))
             or _optional_text(payload.get("plan_control_run_id"))
@@ -831,6 +871,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "request": request,
         "workflow_action": workflow_action,
+        # 凭据仅留在当前请求适配器内，不写入公开 Workflow 或开发 checkpoint。
+        "revision_continuation_consume": (
+            revision_continuation.model_dump() if workflow_action == "continue_revision_build" else None
+        ),
         "development_continuation_consume": (
             development_continuation.model_dump()
             if workflow_action == "continue_after_entity_binding"
@@ -1135,6 +1179,7 @@ def _supported_workflow_action(value: str) -> str:
         value
         if value
         in {
+            "start_modified_testing",
             "retry_failed_tasks",
             "retry_code_review",
             "start_revision",
@@ -1361,6 +1406,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "review_phase_confirmation",
             "code_review",
             "acceptance_phase_confirmation",
+            "launch_project",
             "acceptance",
             "finalize_project",
         }
@@ -2182,7 +2228,7 @@ def _unit_test_decision(value: Any) -> str:
 
 
 def _frontend_performance_decision(value: Any) -> str:
-    """从结构化确认答案提取前端性能测试的 skip/run 决策。"""
+    """只从结构化确认答案提取明确的性能测试执行或跳过动作。"""
 
     if not isinstance(value, dict):
         return ""
@@ -2191,11 +2237,7 @@ def _frontend_performance_decision(value: Any) -> str:
         selected = answer.get("selected")
         answer = selected[0] if isinstance(selected, list) and selected else selected
     normalized = str(answer or "").strip().casefold()
-    if normalized in {"skip", "是", "yes", "true", "跳过"}:
-        return "skip"
-    if normalized in {"run", "否", "no", "false", "继续"}:
-        return "run"
-    return ""
+    return normalized if normalized in {"skip", "run"} else ""
 
 
 def _page_acceptance_decision(value: Any) -> str:

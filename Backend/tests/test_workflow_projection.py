@@ -625,7 +625,10 @@ class WorkflowProjectionTests(unittest.TestCase):
             [],
         )
 
-        self.assertIn("构建检查已完成", summary["message"])
+        self.assertEqual(
+            summary["message"],
+            "构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。",
+        )
         self.assertNotIn("项目预览已就绪", summary["message"])
         self.assertNotIn("预览地址", summary["message"])
         self.assertIsNone(summary["previewUrl"])

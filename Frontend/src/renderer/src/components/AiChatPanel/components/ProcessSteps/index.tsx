@@ -2,12 +2,14 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   CodeOutlined,
+  DownOutlined,
   LoadingOutlined,
   MinusCircleOutlined,
   PauseCircleOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
-  ToolOutlined
+  ToolOutlined,
+  UpOutlined
 } from '@ant-design/icons'
 import { Button, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
@@ -20,7 +22,9 @@ import type {
 import { isCompactProcessStepNode } from '../../../../service/processStepHistory'
 import { cx } from '../../../../utils'
 import { openLocalReportFile } from '../../../../utils/reportFile'
+import type { DagPendingPlanCompletion } from '../../dagPendingPlanPresentation'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
+import WorkspaceToolActivity from '../WorkflowRunCard/WorkspaceToolActivity'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
 import RepairInProgressPanel from './RepairInProgressPanel'
@@ -35,7 +39,9 @@ const { Text } = Typography
 
 type Props = {
   conversation?: boolean
+  dagPendingPlanCompletion?: DagPendingPlanCompletion
   loading: boolean
+  onOpenPendingDagConfirmation?: () => void
   steps: ProcessStepRecord[]
   waitingPrompt?: string
   waitingForInput?: boolean
@@ -44,7 +50,9 @@ type Props = {
 /** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
 export default function ProcessSteps({
   conversation = false,
+  dagPendingPlanCompletion,
   loading,
+  onOpenPendingDagConfirmation,
   steps,
   waitingPrompt = '',
   waitingForInput = false
@@ -52,12 +60,23 @@ export default function ProcessSteps({
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
   const hasProjectPlanUpdate = steps.some((step) => Boolean(step.projectPlanUpdate))
   const hasWorkspaceInspection = steps.some((step) => Boolean(step.workspaceInspection))
+  // 当前 PendingPlan 的提醒位于步骤内部，重进会话时须展开其外层轨迹；历史 Run 不参与。
+  const hasPendingDagCompletion = Boolean(
+    dagPendingPlanCompletion?.planningRunId &&
+      steps.some(
+        (step) => step.dagGeneration?.planningRunId === dagPendingPlanCompletion.planningRunId
+      )
+  )
   const displayItems = buildProcessDisplayItems(steps, conversation)
   const toolActivityCount = conversation
     ? steps.filter((step) => isToolActivityStep(step)).length
     : 0
   const [open, setOpen] = useState(
-    loading || waitingForInput || hasProjectPlanUpdate || hasWorkspaceInspection
+    loading ||
+      waitingForInput ||
+      hasProjectPlanUpdate ||
+      hasWorkspaceInspection ||
+      hasPendingDagCompletion
   )
 
   useEffect(() => {
@@ -66,11 +85,19 @@ export default function ProcessSteps({
       waitingForInput ||
       hasTestChecklist ||
       hasProjectPlanUpdate ||
-      hasWorkspaceInspection
+      hasWorkspaceInspection ||
+      hasPendingDagCompletion
     ) {
       setOpen(true)
     }
-  }, [hasProjectPlanUpdate, hasTestChecklist, hasWorkspaceInspection, loading, waitingForInput])
+  }, [
+    hasPendingDagCompletion,
+    hasProjectPlanUpdate,
+    hasTestChecklist,
+    hasWorkspaceInspection,
+    loading,
+    waitingForInput
+  ])
 
   const statusClassName = loading ? 'running' : waitingForInput ? 'waiting' : 'completed'
 
@@ -123,7 +150,6 @@ export default function ProcessSteps({
             const latestStep = item.steps[item.steps.length - 1]
             return (
               <ToolActivityChain
-                count={item.steps.length}
                 isLast={index === displayItems.length - 1}
                 key="tool-activity-chain"
                 latestDetail={latestStep.detail}
@@ -155,6 +181,8 @@ export default function ProcessSteps({
               toolSteps={item.toolSteps}
               waitingForInput={waitingForInput}
               waitingPrompt={waitingPrompt}
+              dagPendingPlanCompletion={dagPendingPlanCompletion}
+              onOpenPendingDagConfirmation={onOpenPendingDagConfirmation}
             />
           )
         })}
@@ -166,7 +194,9 @@ export default function ProcessSteps({
 /** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
 export function ProcessStep({
   conversation,
+  dagPendingPlanCompletion,
   isLast,
+  onOpenPendingDagConfirmation,
   settled,
   step,
   toolSteps = [],
@@ -174,7 +204,9 @@ export function ProcessStep({
   waitingPrompt
 }: {
   conversation: boolean
+  dagPendingPlanCompletion?: DagPendingPlanCompletion
   isLast: boolean
+  onOpenPendingDagConfirmation?: () => void
   settled: boolean
   step: ProcessStepRecord
   toolSteps?: ProcessStepRecord[]
@@ -187,14 +219,23 @@ export function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
-  const collapseCompletedWorkspaceScan =
-    step.nodeName === 'scan_workspace_code' && hasWorkspaceInspection && step.status === 'completed'
+  const collapseCompletedWorkspaceScan = hasWorkspaceInspection && step.status === 'completed'
   const isRepairStep =
     step.kind === 'workflow' &&
     (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
   const hasRepairActivity = isRepairStep && step.status === 'running'
   const hasRepairCompletion = isRepairStep && step.status === 'completed'
   const hasRepairPanel = hasRepairActivity || hasRepairCompletion
+  const dagSnapshotMatchesPendingPlan = Boolean(
+    step.dagGeneration &&
+      dagPendingPlanCompletion?.planningRunId &&
+      step.dagGeneration.planningRunId === dagPendingPlanCompletion.planningRunId
+  )
+  const hideUnverifiedActiveDagSnapshot = Boolean(
+    step.dagGeneration?.status === 'active' &&
+      dagPendingPlanCompletion &&
+      !dagSnapshotMatchesPendingPlan
+  )
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
   const hasToolActivity = toolSteps.length > 0
@@ -225,6 +266,7 @@ export function ProcessStep({
     !awaitingInput
   const [open, setOpen] = useState(
     expandable &&
+      !collapseCompletedWorkspaceScan &&
       !collapseConversationDetail &&
       (step.status === 'running' ||
         awaitingInput ||
@@ -232,19 +274,19 @@ export function ProcessStep({
         hasBuildRun ||
         hasDagGeneration ||
         hasProjectPlanUpdate ||
-        (hasWorkspaceInspection && !collapseCompletedWorkspaceScan) ||
+        hasWorkspaceInspection ||
         hasWorkspaceInspectionProgress ||
         hasRepairPanel ||
         hasToolActivity)
   )
 
   useEffect(() => {
-    if (collapseConversationDetail) return
-    // 二次修改的导航扫描完成后只保留节点摘要，避免工作区大图持续占满对话区。
-    if (collapseCompletedWorkspaceScan) {
-      setOpen(false)
-      return
-    }
+    // 正式流程和二次修改的扫描完成时收起一次，后续更新不覆盖用户的手动展开。
+    if (collapseCompletedWorkspaceScan) setOpen(false)
+  }, [collapseCompletedWorkspaceScan])
+
+  useEffect(() => {
+    if (collapseConversationDetail || collapseCompletedWorkspaceScan) return
     if (
       expandable &&
       (step.status === 'running' ||
@@ -336,10 +378,18 @@ export function ProcessStep({
   return (
     <details
       className={className}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        if (event.target === event.currentTarget) setOpen(event.currentTarget.open)
+      }}
       open={open}
     >
-      <summary className={cx('process-step-summary')}>{summaryContent}</summary>
+      <summary className={cx('process-step-summary')}>
+        {summaryContent}
+        <span className={cx('tool-activity-chain-toggle', 'process-step-toggle')}>
+          <span>{open ? '收起详情' : '展开详情'}</span>
+          {open ? <UpOutlined aria-hidden="true" /> : <DownOutlined aria-hidden="true" />}
+        </span>
+      </summary>
       <div className={cx('process-step-detail')}>
         {(!hasChecks || (step.nodeName === 'unit_test' && step.status === 'failed')) &&
           !hasDagGeneration &&
@@ -370,7 +420,19 @@ export function ProcessStep({
           />
         )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
-        {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
+        {step.dagGeneration && !hideUnverifiedActiveDagSnapshot ? (
+          <DagGenerationProgress
+            completion={
+              dagSnapshotMatchesPendingPlan
+                ? {
+                    summary: dagPendingPlanCompletion?.summary,
+                    onGoToConfirmation: onOpenPendingDagConfirmation
+                  }
+                : undefined
+            }
+            snapshot={step.dagGeneration}
+          />
+        ) : null}
         {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
         {step.workspaceInspectionProgress && !step.workspaceInspection && (
           <WorkspaceInspectionProgressPanel progress={step.workspaceInspectionProgress} />
@@ -405,7 +467,6 @@ function NodeToolActivityChain({
     [...steps].reverse().find((tool) => tool.status === 'running') || steps[steps.length - 1]
   return (
     <ToolActivityChain
-      count={steps.length}
       isLast
       latestDetail={latestStep.detail}
       latestIcon={stepIcon(latestStep, !loading)}
@@ -497,9 +558,8 @@ function IntegrationTestChecklist({
             <SafetyCertificateOutlined />
           </span>
           <span>
-            <Text className={cx('integration-test-checklist-eyebrow')}>QUALITY GATE</Text>
             <Text className={cx('integration-test-checklist-title')} strong>
-              集成检查矩阵
+              测试检查步骤
             </Text>
           </span>
         </div>
@@ -537,12 +597,9 @@ function IntegrationTestChecklist({
               <span className={cx('integration-test-check-icon')}>
                 {testCheckIcon(check.status)}
               </span>
-              <span className={cx('integration-test-check-content')}>
+              <div className={cx('integration-test-check-content')}>
                 <span className={cx('integration-test-check-heading')}>
                   <Text>{check.name}</Text>
-                  <span className={cx('integration-test-check-scope')}>
-                    {check.required ? 'REQUIRED' : 'OPTIONAL'}
-                  </span>
                 </span>
                 {testCheckCountLabel(check) && (
                   <Text type="secondary">{testCheckCountLabel(check)}</Text>
@@ -551,7 +608,10 @@ function IntegrationTestChecklist({
                   check.status === 'failed' ||
                   check.status === 'skipped') &&
                   check.evidence && <Text type="secondary">{check.evidence}</Text>}
-              </span>
+                {check.status === 'running' && check.activeToolActivity && (
+                  <WorkspaceToolActivity activity={check.activeToolActivity} />
+                )}
+              </div>
               <span className={cx('integration-test-check-actions')}>
                 {reportPath && (
                   <Button

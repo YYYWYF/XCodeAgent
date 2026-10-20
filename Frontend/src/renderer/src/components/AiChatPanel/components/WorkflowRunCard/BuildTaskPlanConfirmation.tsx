@@ -55,7 +55,7 @@ export default function BuildTaskPlanConfirmation({
           <span className={cx('workflow-dag-confirmation-overview-text')}>
             <Typography.Text strong>任务计划待确认</Typography.Text>
             <Typography.Text type="secondary">
-              请核对本次开发目标、修改范围和验收标准，确认后进入 Build
+              请核对本次开发目标、修改范围和验收标准，确认后执行任务
             </Typography.Text>
           </span>
           <span className={cx('workflow-dag-confirmation-count')}>{tasks.length} 个任务</span>
@@ -141,7 +141,7 @@ export default function BuildTaskPlanConfirmation({
             size="small"
             type="primary"
           >
-            确认并进入 Build
+            确认并执行任务
           </Button>
         </Space>
       </footer>

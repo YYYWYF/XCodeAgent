@@ -3,35 +3,11 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from typing import Any
 
 from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.unit_task_manifest import PHYSICAL_SOURCE_TYPES, backend_stage_manifest
 from app.agents.field_value_prompt_rules import FIELD_VALUE_PLANNING_RULES
-
-
-_ENDPOINT_STAGE_BY_KIND = {
-    "backend.objects": "objects",
-    "backend.repository": "repository",
-    "backend.upstream": "upstream",
-    "backend.application_service": "service",
-    "backend.endpoint_controller": "controller",
-}
-_REQUIREMENT_PREFIX_BY_KIND = {
-    "backend.objects": "backend.endpoint.objects",
-    "backend.repository": "backend.repository",
-    "backend.upstream": "backend.upstream",
-    "backend.application_service": "backend.application_service",
-    "backend.endpoint_controller": "backend.endpoint_controller",
-}
-_STAGE_ORDER = {
-    "objects": 0,
-    "repository": 1,
-    "upstream": 1,
-    "service": 2,
-    "controller": 3,
-}
-_PHYSICAL_SOURCE_TYPES = frozenset({"database", "external_api"})
 
 
 def _stable_json(value: Any) -> str:
@@ -46,29 +22,6 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) and value and value == value.strip() else ""
 
 
-def _source_types(refs: Mapping[str, Any]) -> tuple[str, ...] | None:
-    """读取 Endpoint responsibility 携带的完整有序物理来源集合。"""
-
-    values = refs.get("data_source_types")
-    if not isinstance(values, (list, tuple)):
-        return None
-    result = tuple(value for value in values if _text(value))
-    if (
-        len(result) != len(values)
-        or len(set(result)) != len(result)
-        or tuple(sorted(result)) != result
-        or set(result) - _PHYSICAL_SOURCE_TYPES
-    ):
-        return None
-    return result
-
-
-def _endpoint_task_id(unit_id: str, stage: str) -> str:
-    """使用已含 Endpoint 身份的 Unit ID 生成唯一阶段 Task ID。"""
-
-    return f"{unit_id}::{stage}"
-
-
 def _bootstrap_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     """为后端公共依赖与框架启用生成唯一 bootstrap Task 规则。"""
 
@@ -79,7 +32,7 @@ def _bootstrap_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     })
     if (
         not source_types
-        or set(source_types) - _PHYSICAL_SOURCE_TYPES
+        or set(source_types) - PHYSICAL_SOURCE_TYPES
         or any(
             _text(requirement.source_refs.get("kind")) != "backend.bootstrap"
             for requirement in context.generation_requirements
@@ -110,94 +63,6 @@ def _bootstrap_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         "repositories, services, Controllers, DDL, migrations, seed data, tests, builds, "
         "verification, or acceptance work.",
     )
-
-
-def _backend_stage_manifest(
-    context: UnitGenerationContext,
-) -> tuple[dict[str, Any], ...]:
-    """把 Endpoint responsibilities 编译为不含实体身份的固定阶段清单。"""
-
-    result: list[dict[str, Any]] = []
-    for requirement in context.generation_requirements:
-        refs = requirement.source_refs
-        kind = _text(refs.get("kind"))
-        stage = _ENDPOINT_STAGE_BY_KIND.get(kind, "")
-        api_contract_id = _text(refs.get("api_contract_id"))
-        endpoint_id = _text(refs.get("endpoint_id"))
-        target_id = _text(refs.get("target_id"))
-        source_types = _source_types(refs)
-        expected_unit_id = f"backend:endpoint:{api_contract_id}:{endpoint_id}"
-        expected_requirement_id = (
-            f"{_REQUIREMENT_PREFIX_BY_KIND.get(kind, '')}:{api_contract_id}:{endpoint_id}"
-        )
-        if (
-            not stage
-            or not api_contract_id
-            or not endpoint_id
-            or target_id != endpoint_id
-            or source_types is None
-            or expected_unit_id != context.unit_id
-            or requirement.requirement_id != expected_requirement_id
-            or refs.get("artifact") != "endpoint-api-design"
-            or "entity_id" in refs
-        ):
-            raise ValueError(
-                f"Backend Endpoint Unit {context.unit_id} 含无法绑定到当前 Endpoint 的职责。"
-            )
-        result.append({
-            "requirement_id": requirement.requirement_id,
-            "api_contract_id": api_contract_id,
-            "endpoint_id": endpoint_id,
-            "data_source_types": list(source_types),
-            "stage": stage,
-            "task_id": _endpoint_task_id(context.unit_id, stage),
-            "deliverable_kind": kind,
-        })
-    stages = [item["stage"] for item in result]
-    if len(stages) != len(set(stages)):
-        raise ValueError(f"Backend Endpoint Unit {context.unit_id} 含重复 Endpoint responsibility。")
-    retained_task_ids = {
-        task_id
-        for summary in context.dependency_context.get("retained_task_summaries", ())
-        if isinstance(summary, Mapping)
-        and (task_id := _text(summary.get("id")))
-        and summary.get("unit_id") in {None, context.unit_id}
-    }
-    available_task_ids = {
-        item["task_id"] for item in result
-    } | retained_task_ids
-    for item in result:
-        source_types = set(item["data_source_types"])
-        objects_id = _endpoint_task_id(context.unit_id, "objects")
-        branch_ids = [
-            _endpoint_task_id(context.unit_id, stage)
-            for source_type, stage in (
-                ("database", "repository"),
-                ("external_api", "upstream"),
-            )
-            if source_type in source_types
-            and _endpoint_task_id(context.unit_id, stage) in available_task_ids
-        ]
-        service_id = _endpoint_task_id(context.unit_id, "service")
-        if item["stage"] == "objects":
-            dependencies: list[str] = []
-        elif item["stage"] in {"repository", "upstream"}:
-            dependencies = [objects_id] if objects_id in available_task_ids else []
-        elif item["stage"] == "service":
-            dependencies = branch_ids or (
-                [objects_id] if objects_id in available_task_ids else []
-            )
-        else:
-            dependencies = (
-                [service_id]
-                if service_id in available_task_ids
-                else branch_ids or ([objects_id] if objects_id in available_task_ids else [])
-            )
-        item["dependencies"] = dependencies
-    return tuple(sorted(
-        result,
-        key=lambda item: (_STAGE_ORDER[item["stage"]], item["requirement_id"]),
-    ))
 
 
 def _backend_common_rules() -> tuple[str, ...]:
@@ -233,12 +98,19 @@ def _endpoint_topology_rules(
 ) -> tuple[str, ...]:
     """声明 Endpoint responsibility 的固定 Task 数量、ID 和候选内依赖图。"""
 
+    prompt_manifest = tuple(
+        {
+            ("id" if key == "task_id" else key): value
+            for key, value in item.items()
+        }
+        for item in manifest
+    )
     return (
         "Emit exactly one Task per record in this endpoint-responsibility manifest and no "
-        "other backend Task. Use each exact task_id, exact dependencies, and one matching "
+        "other backend Task. Use each exact id, exact dependencies, and one matching "
         "deliverable per record. "
         "There is no entity loop and no standalone mapping Task or deliverable:\n"
-        + _stable_json(manifest),
+        + _stable_json(prompt_manifest),
         "The manifest dependencies preserve the complete Endpoint topology across both this "
         "incremental Candidate and exact same-Unit retained stable stage IDs: objects is the "
         "root; repository/upstream branch from objects; service joins available physical "
@@ -342,7 +214,7 @@ def resolve_backend_unit_task_rules(
         return _bootstrap_rules(context)
     if not context.unit_id.startswith("backend:endpoint:"):
         raise ValueError(f"Backend Unit {context.unit_id} 没有 Endpoint 任务规划规则。")
-    manifest = _backend_stage_manifest(context)
+    manifest = backend_stage_manifest(context)
     if not manifest:
         raise ValueError(f"Backend Endpoint Unit {context.unit_id} 缺少增量职责。")
     source_type_sets = {tuple(item["data_source_types"]) for item in manifest}

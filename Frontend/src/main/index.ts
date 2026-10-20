@@ -11,6 +11,7 @@ import { DEVAGENTSTUDIO_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
+import { writeSessionAtomically } from './sessionPersistence'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
@@ -1443,10 +1444,9 @@ async function createChatSession(
       updatedAt: now
     })
     await ensureSessionsDir(workspaceRoot, editorMode)
-    await fs.writeFile(
+    await writeSessionAtomically(
       getSessionFile(workspaceRoot, editorMode, session.id),
-      `${JSON.stringify(session, null, 2)}\n`,
-      'utf8'
+      session
     )
     return session
   })
@@ -1659,7 +1659,7 @@ function setupSessionStorageIpc(): void {
     if (immutableIdentityChanged) {
       throw new Error('session phase identity is immutable')
     }
-    await fs.writeFile(sessionFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8')
+    await writeSessionAtomically(sessionFile, session)
     return { ok: true, session: sessionSummary(session) }
   })
 

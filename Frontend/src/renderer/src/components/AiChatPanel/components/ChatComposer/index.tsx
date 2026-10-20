@@ -13,34 +13,23 @@ import type {
   EditorMode,
   WorkflowBuildExecutionScope,
   WorkflowDebugOptions,
+  WorkflowDebugStage,
   WorkflowRunPayload,
   InspectedElementContext
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import { skillsAfterEmptyBackspace } from '../../skillSelection'
 import type { ChatCopy } from '../../types'
+import { workflowDebugNodesForStage } from '../../../../service/workflowDebugNodes'
 import ResourceSkillMenu from './ResourceSkillMenu'
 import { workflowDebugBuildScope } from '../../debugExecutionScope'
+import { productDesignStageMentionFromText } from './productConversation'
+import WorkflowStageMentionInput from './WorkflowStageMentionInput'
 import './ChatComposer.less'
 
 const { Text } = Typography
 const { TextArea } = Input
 const { Option } = Select
-
-const resumeNodeOptions = [
-  { value: 'bootstrap_template_generation', label: 'bootstrap_template_generation（下载模板）' },
-  { value: 'api_design_readiness_gate', label: 'api_design_readiness_gate' },
-  { value: 'inspect_workspace', label: 'inspect_workspace' },
-  { value: 'inspect_database_context', label: 'inspect_database_context' },
-  { value: 'prepare_build_tasks', label: 'prepare_build_tasks' },
-  { value: 'build', label: 'build' },
-  { value: 'unit_test', label: 'unit_test' },
-  { value: 'unit_test_repair', label: 'unit_test_repair' },
-  { value: 'integration_test', label: 'integration_test' },
-  { value: 'launch_project', label: 'launch_project' },
-  { value: 'acceptance', label: 'acceptance' },
-  { value: 'finalize_project', label: 'finalize_project' }
-]
 
 const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; label: string }> = [
   { value: 'application', label: '整个应用' },
@@ -52,6 +41,7 @@ type ChatComposerProps = {
   activeWorkflow?: WorkflowRunPayload
   copy: ChatCopy[EditorMode]
   debugOnly?: boolean
+  debugStage?: WorkflowDebugStage
   draft: string
   initialResumeFrom?: string
   inspectedElementContext?: InspectedElementContext
@@ -70,10 +60,12 @@ type ChatComposerProps = {
   workspaceRoot: string
 }
 
+/** 按当前工作阶段展示专属调试节点，并处理工作流输入与节点启动参数。 */
 export default function ChatComposer({
   activeWorkflow,
   copy,
   debugOnly = false,
+  debugStage = 'development',
   draft,
   initialResumeFrom = 'api_design_readiness_gate',
   inspectedElementContext,
@@ -92,6 +84,7 @@ export default function ChatComposer({
   workspaceRoot
 }: ChatComposerProps): ReactElement {
   const initialBuildScope = workflowDebugBuildScope(activeWorkflow)
+  const resumeNodeOptions = workflowDebugNodesForStage(debugStage)
   const [debugEnabled, setDebugEnabled] = useState(debugOnly)
   const [traceOpen, setTraceOpen] = useState(false)
   const [resumeFrom, setResumeFrom] = useState(initialResumeFrom)
@@ -103,8 +96,11 @@ export default function ChatComposer({
   const [buildScopeApiContractId, setBuildScopeApiContractId] = useState(
     initialBuildScope.apiContractId || ''
   )
-  const hasDebugNode = !debugEnabled || Boolean(resumeFrom)
-  const isBuildTaskDebug = debugEnabled && resumeFrom === 'prepare_build_tasks'
+  const selectedResumeFrom = resumeNodeOptions.some((option) => option.value === resumeFrom)
+    ? resumeFrom
+    : resumeNodeOptions[0]?.value || ''
+  const hasDebugNode = !debugEnabled || Boolean(selectedResumeFrom)
+  const isBuildTaskDebug = debugEnabled && selectedResumeFrom === 'prepare_build_tasks'
   const hasBuildScopeTarget =
     buildScopeType === 'application' ||
     (Boolean(buildScopeTargetId.trim()) &&
@@ -118,7 +114,7 @@ export default function ChatComposer({
     debugEnabled
       ? {
           enabled: true,
-          resumeFrom,
+          resumeFrom: selectedResumeFrom,
           ...(isBuildTaskDebug
             ? {
                 buildExecutionScope: {
@@ -140,7 +136,16 @@ export default function ChatComposer({
   /** 校验当前状态并提交对话内容。 */
   const handleSend = (): void => {
     if (!hasDebugNode || workspaceBusy || sendDisabled || (debugOnly && loading)) return
-    onSend(currentDebugOptions())
+    // 计划阶段的 @ 是对话意图提示，保留原文交给技术规划路由，不伪装成调试重入。
+    const stageMention = debugStage === 'design'
+      ? productDesignStageMentionFromText(draft, debugStage) : undefined
+    onSend(
+      stageMention
+        ? { enabled: true, resumeFrom: stageMention.node }
+        : debugStage === 'planning' && productDesignStageMentionFromText(draft, debugStage)
+          ? undefined
+          : currentDebugOptions()
+    )
   }
 
   /** 处理输入区键盘操作，空文本时 Backspace 依次删除最后一个技能标签。 */
@@ -176,21 +181,39 @@ export default function ChatComposer({
               </div>
             )}
             {!debugOnly && (
-              <TextArea
-                aria-label={`${copy.title}输出内容`}
-                autoSize={{ minRows: 1, maxRows: 6 }}
-                bordered={false}
-                placeholder={placeholder || copy.placeholder}
-                value={draft}
-                onChange={(event) => onDraftChange(event.target.value)}
-                onKeyDown={handleInputKeyDown}
-                onPressEnter={(event) => {
-                  if (!event.shiftKey) {
-                    event.preventDefault()
-                    handleSend()
-                  }
-                }}
-              />
+              debugStage === 'design' || debugStage === 'planning' ? (
+                <WorkflowStageMentionInput
+                  key={debugStage}
+                  stage={debugStage}
+                  ariaLabel={`${copy.title}输出内容`}
+                  onChange={onDraftChange}
+                  onKeyDown={handleInputKeyDown}
+                  onPressEnter={(event) => {
+                    if (!event.shiftKey) {
+                      event.preventDefault()
+                      handleSend()
+                    }
+                  }}
+                  placeholder={placeholder || copy.placeholder}
+                  value={draft}
+                />
+              ) : (
+                <TextArea
+                  aria-label={`${copy.title}输出内容`}
+                  autoSize={{ minRows: 1, maxRows: 6 }}
+                  bordered={false}
+                  placeholder={placeholder || copy.placeholder}
+                  value={draft}
+                  onChange={(event) => onDraftChange(event.target.value)}
+                  onKeyDown={handleInputKeyDown}
+                  onPressEnter={(event) => {
+                    if (!event.shiftKey) {
+                      event.preventDefault()
+                      handleSend()
+                    }
+                  }}
+                />
+              )
             )}
           </div>
           {!debugOnly && inspectedElementContext && (
@@ -212,13 +235,35 @@ export default function ChatComposer({
                   <Select
                     className={cx('workflow-debug-node-select')}
                     disabled={loading}
+                    dropdownClassName={cx('workflow-debug-node-dropdown')}
+                    optionLabelProp="label"
                     placeholder="选择开始节点"
-                    value={resumeFrom}
+                    value={selectedResumeFrom}
                     onChange={setResumeFrom}
                   >
                     {resumeNodeOptions.map((option) => (
-                      <Option key={option.value} value={option.value}>
-                        {option.label}
+                      <Option
+                        key={option.value}
+                        label={
+                          <span className={cx('workflow-debug-node-option')}>
+                            <span className={cx('workflow-debug-node-title')}>
+                              {option.title}
+                            </span>
+                            <span className={cx('workflow-debug-node-id')}>
+                              {option.value}
+                            </span>
+                          </span>
+                        }
+                        value={option.value}
+                      >
+                        <span className={cx('workflow-debug-node-option')}>
+                          <span className={cx('workflow-debug-node-title')}>
+                            {option.title}
+                          </span>
+                          <span className={cx('workflow-debug-node-id')}>
+                            {option.value}
+                          </span>
+                        </span>
                       </Option>
                     ))}
                   </Select>
@@ -337,19 +382,21 @@ export default function ChatComposer({
             )}
             {debugOnly && loading && (
               <Text className={cx('workflow-debug-running-hint')}>
-                {stopping ? 'Agent 正在暂停，请稍候' : 'Agent 正在运行，暂停或等待结束后可调试'}
+                {stopping ? 'Agent 正在退出，请稍候' : 'Agent 正在运行，结束任务后可调试'}
               </Text>
             )}
-            {loading && !debugOnly ? (
+            {(loading || stopping) && !debugOnly ? (
               <Button
-                aria-label={stopping ? '正在停止' : '停止生成'}
+                aria-label={stopping ? '正在停止生成' : '停止生成'}
+                aria-busy={stopping}
                 className={cx('composer-send-button')}
                 danger
                 disabled={stopping}
+                loading={stopping}
                 icon={<StopOutlined />}
                 onClick={onStopGenerating}
                 shape="circle"
-                title={stopping ? '正在停止...' : '停止生成'}
+                title={stopping ? '正在停止生成…' : '停止生成'}
               />
             ) : (
               <Button

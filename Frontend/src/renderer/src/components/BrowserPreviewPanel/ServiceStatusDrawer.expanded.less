@@ -1,0 +1,41 @@
+// 展开时只保留日志面板，让日志内容使用抽屉正文的剩余高度。
+.preview-service-drawer.is-log-expanded {
+  .ant-drawer-body {
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .preview-service-drawer__body {
+    box-sizing: border-box;
+    flex: 1;
+    min-height: 0;
+    gap: 0;
+  }
+
+  .preview-service-section,
+  .preview-service-actions,
+  .preview-database-check {
+    display: none;
+  }
+
+  .preview-log-panel {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .preview-log-panel__header,
+  .preview-log-tabs,
+  .preview-log-toolbar,
+  .preview-service-callout {
+    flex-shrink: 0;
+  }
+
+  .preview-service-logs,
+  .preview-log-empty {
+    flex: 1;
+    height: 0;
+    min-height: 0;
+  }
+}

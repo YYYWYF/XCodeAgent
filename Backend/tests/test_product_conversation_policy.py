@@ -17,6 +17,25 @@ from app.agents.design_conversation import (
 class ProductConversationPolicyTests(unittest.TestCase):
     """验证产品自由输入的语义分类和确定性能力门禁。"""
 
+    def test_explicit_upstream_mentions_keep_formal_prerequisites(self) -> None:
+        """明确目标不再交给模型猜测，但 UI 目标仍须满足上游确认。"""
+        for request, expected in (("@需求设计 重新生成", "requirements"), ("@UI设计 调整布局", "ui_confirmation")):
+            with self.subTest(request=request):
+                with patch("app.agents.design_conversation.router.create_chat_model") as model:
+                    decision = classify_design_conversation(
+                        request, requirement_spec={"confirmation_status": "confirmed"},
+                        product_plan={"confirmation_status": "confirmed"}, ui_designs={},
+                    )
+                model.assert_not_called()
+                self.assertEqual(resolve_design_target(
+                    decision, requirement_spec={"confirmation_status": "confirmed"},
+                    product_plan={"confirmation_status": "confirmed"},
+                ), expected)
+                self.assertEqual(resolve_design_target(
+                    decision, requirement_spec={"confirmation_status": "pending_user_confirmation"},
+                    product_plan={"confirmation_status": "confirmed"},
+                ), "requirements")
+
     def _fallback(self, request: str) -> DesignConversationDecision:
         """强制模型调用失败，读取不依赖外部服务的保守分类结果。"""
 

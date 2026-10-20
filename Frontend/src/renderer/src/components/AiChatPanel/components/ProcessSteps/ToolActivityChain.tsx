@@ -8,7 +8,6 @@ import './ToolActivityChain.less'
 const { Text } = Typography
 
 type Props = {
-  count: number
   isLast: boolean
   latestDetail?: string
   latestIcon: ReactNode
@@ -19,7 +18,6 @@ type Props = {
 /** 将多条工具步骤收拢为一条最新活动，并允许用户展开完整调用链。 */
 export default function ToolActivityChain({
   children,
-  count,
   isLast,
   latestDetail,
   latestIcon,
@@ -27,7 +25,6 @@ export default function ToolActivityChain({
 }: Props): ReactElement {
   const [expanded, setExpanded] = useState(false)
   const detail = latestDetail?.trim()
-  const summary = detail ? `已记录 ${count} 次调用 · ${detail}` : `已记录 ${count} 次调用`
 
   return (
     <section aria-label="工具调用链" className={cx('tool-activity-chain', isLast && 'last')}>
@@ -35,9 +32,11 @@ export default function ToolActivityChain({
         <span className={cx('tool-activity-chain-icon')}>{latestIcon}</span>
         <span className={cx('tool-activity-chain-copy')}>
           <Text strong>{latestTitle}</Text>
-          <Text type="secondary" title={summary}>
-            {summary}
-          </Text>
+          {detail && (
+            <Text type="secondary" title={detail}>
+              {detail}
+            </Text>
+          )}
         </span>
         <button
           aria-expanded={expanded}

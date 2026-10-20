@@ -1,0 +1,85 @@
+.@{class-prefix}-ended-task-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 18px;
+  margin-top: 6px;
+  color: var(--wb-text);
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: 12px;
+
+  .@{class-prefix}-ended-task-notice-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    color: var(--wb-text-secondary);
+    background: var(--wb-control);
+    border: 1px solid var(--wb-border);
+    border-radius: 50%;
+    font-size: 17px;
+  }
+
+  .@{class-prefix}-ended-task-notice-copy {
+    display: flex;
+    flex: 1 1 180px;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+
+    > .ant-typography {
+      margin: 0;
+      color: var(--wb-text);
+      font-size: 13px;
+      line-height: 20px;
+      overflow-wrap: anywhere;
+    }
+    > .ant-typography-secondary {
+      color: var(--wb-text-secondary);
+      font-size: 12px;
+      line-height: 18px;
+    }
+  }
+
+  .ant-btn.@{class-prefix}-ended-task-notice-action {
+    flex: 0 0 auto;
+    width: auto;
+    height: 34px;
+    margin-left: auto;
+    padding: 0 13px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: none;
+    color: var(--wb-accent);
+    background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-surface));
+    border-color: color-mix(in srgb, var(--wb-accent) 22%, var(--wb-border));
+
+    &:hover,
+    &:focus-visible {
+      color: var(--wb-accent-hover);
+      background: var(--wb-accent-soft);
+      border-color: var(--wb-accent);
+    }
+    &.ant-btn-primary {
+      color: var(--wb-primary-button-text, #fff);
+      background: var(--wb-accent);
+      border-color: var(--wb-accent);
+      &:hover,
+      &:focus-visible {
+        background: var(--wb-accent-hover);
+        border-color: var(--wb-accent-hover);
+      }
+    }
+    &[disabled] {
+      color: var(--wb-text-secondary);
+      background: var(--wb-control);
+      border-color: var(--wb-border);
+    }
+  }
+}

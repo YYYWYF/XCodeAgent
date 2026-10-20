@@ -8,6 +8,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
 from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.task_input_freshness import task_covers_current_input
 from app.services.frozen_contract_catalog import (
     ContractCatalogBindingError,
     FormalContractSourceRef,
@@ -23,6 +24,7 @@ from app.services.planning_frozen import (
     tuple_input,
 )
 from app.services.planning_run_contracts import PlanningRun, UnitRunState
+from app.services.planning_unit_display_names import project_plan_unit_display_names
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_generation_requirement_targets import scoped_formal_targets
 from app.services.unit_generation_requirements import resolve_generation_requirements
@@ -63,9 +65,17 @@ class SequentialPlanningInputs(FrozenPlanningModel):
     formal_source_refs: _FormalSourceRefs
 
     def input_fingerprint(self) -> str:
-        """对完整冻结 Planning Inputs 计算唯一摘要，供 Run 与 Confirm 共用。"""
+        """核对完整业务输入，扫描耗时及缓存命中等观测信息不代表代码发生变化。"""
 
-        return _input_digest(self.model_dump(mode="json"))
+        value = self.model_dump(mode="json")
+        snapshot = value["workspace_snapshot"]
+        snapshot.pop("generated_at", None)
+        graph = snapshot.get("code_graph")
+        if isinstance(graph, dict):
+            # 保留 revision、索引内容、可用性和警告，仅排除每次扫描产生的运行投影。
+            for key in ("status", "buildType", "cacheHit", "message", "durationMs", "progress"):
+                graph.pop(key, None)
+        return _input_digest(value)
 
     def requirements(self) -> UnitGenerationRequirements:
         """验证基线身份及 retained 全量覆盖，再调用 T2.3 计算本轮职责。"""
@@ -126,15 +136,22 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         from app.workspace.task_documents import build_task_plan_sha256
 
         units = {}
+        registry = self.base_confirmed_plan["task_registry"] if self.base_confirmed_plan is not None else {}
         for key, strategy in requirements.generation_strategy_by_unit.items():
             if strategy in {"model", "deterministic"} and not requirements.generation_requirements_by_unit[key]:
                 fail_requirement_input("PLANNING_EMPTY_GENERATION_STRATEGY", "空职责的生成策略不能创建可调度 Unit。", unit_ids=(key,))
+            # 本轮生成会替换直接输入过期的任务，不能向模型或进度声明这些旧任务仍被复用。
+            retained = tuple(task_id for task_id in self.reuse_facts.retained_task_ids_by_unit.get(key, ())
+                             if not (strategy in {"model", "deterministic"}
+                                     and not task_covers_current_input(registry[task_id], self.project_plan, self.build_context)))
             units[key] = UnitRunState.create(
                 unit_id=key, kind=self.skeleton_plan["build_units"][key]["kind"],
                 generation_strategy=strategy,
-                retained_task_ids=self.reuse_facts.retained_task_ids_by_unit.get(key, ()),
+                retained_task_ids=retained,
                 reusable_capabilities=tuple(self.reuse_facts.reusable_capabilities_by_unit.get(key, {})),
             )
+        # 同一冻结输入只在新 Run 创建时派生名称，后续发布和重连均读取 Run。
+        display_names = project_plan_unit_display_names(plain_json(self.project_plan))
         return PlanningRun(
             planning_run_id=planning_run_id, workflow_run_id=workflow_run_id, thread_id=thread_id,
             build_execution_scope=self.build_execution_scope,
@@ -143,6 +160,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             if self.base_confirmed_plan is not None else None,
             required_unit_ids=tuple(units), planning_unit_ids=requirements.planning_unit_ids,
             unit_states=units, started_at=at, updated_at=at,
+            unit_display_names={key: display_names[key] for key in units if key in display_names},
         )
 
     def unit_context(

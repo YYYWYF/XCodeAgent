@@ -1,5 +1,11 @@
-import { AppstoreOutlined, CodeOutlined, DeleteOutlined, GlobalOutlined } from '@ant-design/icons'
-import { Button, message, Modal, Radio } from 'antd'
+import {
+  AppstoreOutlined,
+  CodeOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  GlobalOutlined
+} from '@ant-design/icons'
+import { Button, message, Modal, Radio, Tooltip } from 'antd'
 import { useEffect, useState } from 'react'
 import {
   clearDeletedApplicationClientState,
@@ -128,6 +134,21 @@ export default function WelcomeRecentProjects({
     }
   }
 
+  // 将历史应用的场景描述写入系统剪贴板，便于在新应用里复用同一段需求描述。
+  const copyApplicationScenario = async (application: ApplicationConfig): Promise<void> => {
+    const scenario = application.senario?.trim()
+    if (!scenario) {
+      message.info('该项目暂无场景描述')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(scenario)
+      message.success('场景描述已复制')
+    } catch {
+      message.error('复制失败，请手动复制场景描述')
+    }
+  }
+
   // 删除真实目录前展示完整路径并要求二次确认，索引移除仍保持单次确认。
   const requestDelete = (): void => {
     if (!applicationToDelete) return
@@ -214,14 +235,25 @@ export default function WelcomeRecentProjects({
                     {recentTimestamp === undefined ? '最近打开' : formatRecentTime(recentTimestamp)}
                   </time>
                 </button>
-                <Button
-                  aria-label={`删除 ${application.name}`}
-                  className={cx('welcome-project-delete')}
-                  icon={<DeleteOutlined />}
-                  onClick={() => openDeleteDialog(application)}
-                  title={`删除 ${application.name}`}
-                  type="text"
-                />
+                <span className={cx('welcome-project-actions')}>
+                  <Tooltip title="复制场景描述">
+                    <Button
+                      aria-label={`复制 ${application.name} 的场景描述`}
+                      className={cx('welcome-project-copy')}
+                      icon={<CopyOutlined />}
+                      onClick={() => void copyApplicationScenario(application)}
+                      type="text"
+                    />
+                  </Tooltip>
+                  <Button
+                    aria-label={`删除 ${application.name}`}
+                    className={cx('welcome-project-delete')}
+                    icon={<DeleteOutlined />}
+                    onClick={() => openDeleteDialog(application)}
+                    title={`删除 ${application.name}`}
+                    type="text"
+                  />
+                </span>
               </div>
             )
           })

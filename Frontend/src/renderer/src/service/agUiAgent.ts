@@ -3,6 +3,7 @@ import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
 import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
+import { readWorkspaceToolActivity } from './workspaceToolActivity'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
@@ -11,6 +12,7 @@ import type {
   WorkflowClarificationAnswers,
   WorkflowConfirmationArtifact,
   WorkflowBuildExecutionScope,
+  WorkflowBuildToolActivity,
   WorkflowDebugOptions,
   WorkflowAction,
   WorkflowEvent,
@@ -28,6 +30,7 @@ export type SendWorkflowMessageOptions = {
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
   applicationPlanningInteraction?: ApplicationPlanningInteraction
+  technicalPlanningConversation?: import('./technicalPlanningConversation').TechnicalPlanningMessage
   productStageConversation?: {
     request: string
   }
@@ -57,7 +60,7 @@ export type SendWorkflowMessageOptions = {
   workflowScope?: string
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
-    | { action: 'retry_current_failure'; sourceRunId: string }
+    | { action: 'continue' | 'retry_current_failure'; sourceRunId: string }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
@@ -112,6 +115,7 @@ export function buildWorkflowForwardedProps(
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,
     applicationPlanningInteraction: options.applicationPlanningInteraction,
+    technicalPlanningConversation: options.technicalPlanningConversation,
     productStageConversation: options.productStageConversation,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
@@ -145,6 +149,9 @@ export function buildWorkflowForwardedProps(
       ? {
           workspaceRoot: options.workspaceRoot,
           selectedSkillNames: options.selectedSkillNames,
+          ...(options.resumeExecutionRunId !== undefined
+            ? { resumeExecutionRunId: options.resumeExecutionRunId }
+            : {}),
           ...(options.conversationTarget !== undefined
             ? { target: options.conversationTarget }
             : {}),
@@ -218,6 +225,7 @@ export type IntegrationTestCheckRecord = {
   required: boolean
   advisory?: boolean
   evidence?: string
+  activeToolActivity?: WorkflowBuildToolActivity
   passedTests?: number
   totalTests?: number
   performanceScores?: {
@@ -283,6 +291,7 @@ export type DagGenerationIssueRecord = {
 
 export type DagGenerationUnitRecord = {
   id: string
+  displayName?: string
   kind: string
   participation: DagGenerationParticipation
   generationStrategy: DagGenerationStrategy
@@ -444,7 +453,8 @@ export type ProcessStepRecord = {
 
 const DEFAULT_AGENT_BASE_URL = 'http://127.0.0.1:8000'
 const STOP_NATURAL_DRAIN_MS = 300
-const STOP_CONTROL_TIMEOUT_MS = 4_000
+// 后端最多等待 30 秒真实退出，控制请求需留出传输和进程收尾余量。
+const STOP_CONTROL_TIMEOUT_MS = 40_000
 const STOP_TRANSPORT_DRAIN_MS = 800
 
 export type WorkflowCancellationStatus =
@@ -571,6 +581,7 @@ export class AgUiChatSession {
   private resolveActiveRunCompletion?: () => void
   private rejectStoppedRun?: (reason: Error) => void
   private unresolvedServerRunId?: string
+  private activeWorkspaceRoot?: string
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
@@ -579,8 +590,10 @@ export class AgUiChatSession {
   }
 
   /** 返回当前会话是否仍有本地活动运行或尚未确认退出的服务端运行。 */
-  hasActiveRun(): boolean {
-    return Boolean(this.activeRunId || this.unresolvedServerRunId)
+  hasActiveRun(runId?: string): boolean {
+    return runId
+      ? this.activeRunId === runId || this.unresolvedServerRunId === runId
+      : Boolean(this.activeRunId || this.unresolvedServerRunId)
   }
 
   /** 有限等待旧运行自然结束，否则由服务端确认退出后再收口本地 SSE。 */
@@ -599,7 +612,7 @@ export class AgUiChatSession {
       return
     }
 
-    const cancellation = await cancelWorkflowRun(this.threadId, runId, undefined, this.endpointUrl)
+    const cancellation = await cancelWorkflowRun(this.threadId, runId, this.activeWorkspaceRoot, this.endpointUrl)
     const serverStopped =
       cancellation.status === 'cancelled' ||
       cancellation.status === 'pending_confirmation' ||
@@ -661,6 +674,9 @@ export class AgUiChatSession {
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
         if (!acceptingEvents) return
+        if (event.name === 'technical-planning-conversation' && event.value?.status === 'failed') {
+          runErrorMessage = event.value.error?.message || '技术规划修改失败。'
+        }
         if (event.name === 'application-lifecycle') {
           const lifecycle = readApplicationLifecycle(event.value)
           if (lifecycle) options.onApplicationLifecycle?.(lifecycle)
@@ -758,6 +774,7 @@ export class AgUiChatSession {
     const runId = randomUUID()
     this.activeAgent = requestAgent
     this.activeRunId = runId
+    this.activeWorkspaceRoot = options.workspaceRoot
     this.activeRunCompletion = new Promise((resolve) => {
       this.resolveActiveRunCompletion = resolve
     })
@@ -1075,8 +1092,10 @@ function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord
       return undefined
     }
     if (units.length < 200) {
+      const displayName = boundedString(unit.displayName, 160)
       units.push({
         id,
+        ...(displayName && displayName !== id ? { displayName } : {}),
         kind: boundedString(unit.kind, 80) || 'unknown',
         participation: participation as DagGenerationParticipation,
         generationStrategy: generationStrategy as DagGenerationStrategy,
@@ -1217,6 +1236,10 @@ export function readIntegrationTestChecks(
     const evidence = stringValue(check.evidence).slice(0, 1_000)
     const passedTests = optionalNonNegativeInteger(check.passedTests ?? check.passed_tests)
     const totalTests = optionalNonNegativeInteger(check.totalTests ?? check.total_tests)
+    const activeToolActivity =
+      status === 'running' && ['frontend_test_generation', 'backend_test_generation'].includes(id)
+        ? readWorkspaceToolActivity(check.activeToolActivity)
+        : undefined
     checks.push({
       id,
       name,
@@ -1224,6 +1247,7 @@ export function readIntegrationTestChecks(
       required: check.required === true,
       ...(check.advisory === true ? { advisory: true } : {}),
       ...(evidence ? { evidence } : {}),
+      ...(activeToolActivity ? { activeToolActivity } : {}),
       ...(passedTests !== undefined ? { passedTests } : {}),
       ...(totalTests !== undefined ? { totalTests } : {})
     })

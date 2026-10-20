@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from app.domain.application_lifecycle import EndedWorkbenchExecution
+from app.services.ended_workspace import (
+    workspace_fingerprint,
+    ended_workspace_unchanged,
+)
+
 import hashlib
 import json
 import logging
@@ -14,6 +20,13 @@ from typing import Any
 from pydantic import ValidationError
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.preview_runtime_guard import maintenance_lock, require_no_maintenance
+from app.services.workflow_quality_results import (
+    CODE_MUTATION_PHASES,
+    pending_quality_results,
+)
+from app.services.workspace_bootstrap.materializer import (
+    clear_bootstrap_managed_artifacts,
+)
 
 from app.domain.development_artifacts import DevelopmentArtifacts
 from app.domain.application_lifecycle import (
@@ -37,8 +50,9 @@ from app.domain.application_lifecycle import (
     utc_now,
 )
 
-
-APPLICATION_LIFECYCLE_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
+APPLICATION_LIFECYCLE_RELATIVE_PATH = (
+    WORKSPACE_ARTIFACT_DIR / "application-lifecycle.json"
+)
 _STATE_LOCKS: dict[str, threading.RLock] = {}
 _STATE_LOCKS_GUARD = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
@@ -64,8 +78,12 @@ class ApplicationLifecycleMissingError(ApplicationLifecyclePersistenceError):
     """
 
 
-ALLOWED_STAGE_TRANSITIONS: dict[ApplicationLifecycleStage, set[ApplicationLifecycleStage]] = {
-    ApplicationLifecycleStage.COLLECTING_REQUIREMENT: {ApplicationLifecycleStage.ANALYZING_REQUIREMENT},
+ALLOWED_STAGE_TRANSITIONS: dict[
+    ApplicationLifecycleStage, set[ApplicationLifecycleStage]
+] = {
+    ApplicationLifecycleStage.COLLECTING_REQUIREMENT: {
+        ApplicationLifecycleStage.ANALYZING_REQUIREMENT
+    },
     ApplicationLifecycleStage.ANALYZING_REQUIREMENT: {
         ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
         ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
@@ -159,14 +177,24 @@ def completed_development_artifacts(value: Any) -> DevelopmentArtifacts | None:
         return getattr(progress, "initial_development_status", None) == "completed"
 
     inherited = DevelopmentArtifacts(catalog_error=None)
-    inherited.pages = {key: item for key, item in source.pages.items() if completed(item)}
-    inherited.entities = {key: item for key, item in source.entities.items() if completed(item)}
+    inherited.pages = {
+        key: item for key, item in source.pages.items() if completed(item)
+    }
+    inherited.entities = {
+        key: item for key, item in source.entities.items() if completed(item)
+    }
     inherited.endpoints = {
-        contract_id: {endpoint_id: item for endpoint_id, item in endpoints.items() if completed(item)}
+        contract_id: {
+            endpoint_id: item
+            for endpoint_id, item in endpoints.items()
+            if completed(item)
+        }
         for contract_id, endpoints in source.endpoints.items()
     }
     inherited.endpoints = {
-        contract_id: endpoints for contract_id, endpoints in inherited.endpoints.items() if endpoints
+        contract_id: endpoints
+        for contract_id, endpoints in inherited.endpoints.items()
+        if endpoints
     }
     if not (inherited.pages or inherited.entities or inherited.endpoints):
         return None
@@ -211,13 +239,17 @@ def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ApplicationLifecycleCorruptedError(f"生命周期状态文件损坏：{path}") from exc
+        raise ApplicationLifecycleCorruptedError(
+            f"生命周期状态文件损坏：{path}"
+        ) from exc
     if not isinstance(raw, dict):
         raise ApplicationLifecycleCorruptedError("生命周期状态文件根节点必须是对象。")
     try:
         return ApplicationLifecycle.model_validate(raw)
     except ValidationError as exc:
-        raise ApplicationLifecycleCorruptedError("生命周期状态文件未通过 schema 校验。") from exc
+        raise ApplicationLifecycleCorruptedError(
+            "生命周期状态文件未通过 schema 校验。"
+        ) from exc
 
 
 def write_application_lifecycle(
@@ -234,6 +266,15 @@ def write_application_lifecycle(
         from app.services.development_artifacts import reconcile_development_artifacts
 
         state = reconcile_development_artifacts(workspace, state)
+        # 只记录现有规划归属，不增加准入校验；清空 activeRunId 后仍保留失败修订的归属。
+        if state.active_formal_revision is not None and state.active_run_id:
+            state = state.model_copy(
+                update={
+                    "active_formal_revision": state.active_formal_revision.model_copy(
+                        update={"planning_run_id": state.active_run_id}
+                    )
+                }
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         if expected_revision is not None:
             current = load_application_lifecycle(workspace)
@@ -358,6 +399,8 @@ def restart_application_planning_lifecycle(
         raise ApplicationLifecycleConflictError("生命周期状态尚未初始化。")
     if current.initialization.stage not in {
         *APPLICATION_PLANNING_ACTIVE_STAGES,
+        # 已确认技术规划后的模板失败不结束产品修订能力，仍可回退原设计产物。
+        ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
         ApplicationLifecycleStage.READY_FOR_WORKBENCH,
     }:
         raise ApplicationLifecycleConflictError(
@@ -365,7 +408,9 @@ def restart_application_planning_lifecycle(
             f"{current.initialization.stage.value}。"
         )
     if not str(current.initialization.thread_id or "").strip():
-        raise ApplicationLifecycleConflictError("设计修订缺少原 application planning thread。")
+        raise ApplicationLifecycleConflictError(
+            "设计修订缺少原 application planning thread。"
+        )
     updated = current.model_copy(
         update={
             "updated_at": utc_now(),
@@ -399,6 +444,7 @@ def start_workbench_execution(
     replaces_run_id: str | None = None,
     resource_claims: list[ExecutionResourceClaim] | None = None,
     development_continuation_consume: dict[str, str] | None = None,
+    revision_continuation_consume: dict[str, str] | None = None,
     initial_development_entry: bool = False,
     api_contract_id: str | None = None,
     requires_test_entry: bool = False,
@@ -418,19 +464,96 @@ def start_workbench_execution(
     ):
         require_no_maintenance(workspace)
         from app.services.development_artifacts import (
-            execution_development_metadata, reconcile_development_artifacts, require_test_entry,
+            execution_development_metadata,
+            reconcile_development_artifacts,
+            require_test_entry,
         )
 
         if requires_test_entry:
             require_test_entry(workspace)
         current = load_application_lifecycle(workspace)
         if current is None:
-            raise ApplicationLifecycleConflictError("进入计划执行模式前必须先创建生命周期状态。")
-        if current.initialization.stage != ApplicationLifecycleStage.READY_FOR_WORKBENCH:
+            raise ApplicationLifecycleConflictError(
+                "进入计划执行模式前必须先创建生命周期状态。"
+            )
+        if revision_continuation_consume is not None:
+            from app.services.revision_continuation_handoff import (
+                consumed_continuation_state,
+            )
+
+            # 仅修改内存；后面的既有入场检查全部通过后，与 execution/资源锁一次落盘。
+            current = consumed_continuation_state(
+                current,
+                **revision_continuation_consume,
+                technical_plan_path=Path(workspace)
+                / WORKSPACE_ARTIFACT_DIR
+                / "plans/technical-plan.json",
+            )
+        if (
+            current.initialization.stage
+            != ApplicationLifecycleStage.READY_FOR_WORKBENCH
+        ):
             raise ApplicationLifecycleConflictError(
                 "应用尚未完成创建规划，当前阶段 "
                 f"{current.initialization.stage.value} 不能启动工作台计划执行。"
             )
+        archived = current.ended_executions.get(replaces_run_id or "")
+        if archived is not None:
+            original = archived.execution
+            if (
+                original.thread_id != thread_id
+                or original.scope != scope
+                or original.target_id != target_id
+                or original.owner_session_id
+                != (str(owner_session_id or "").strip() or None)
+            ):
+                raise ApplicationLifecycleConflictError(
+                    "结束任务的继续请求不属于原会话或目标。"
+                )
+            if not ended_workspace_unchanged(str(workspace), archived.fingerprint):
+                raise ApplicationLifecycleConflictError(
+                    "工作区已变化，不能安全继续，请重新发起任务。"
+                )
+            requested_keys = {
+                _resource_claim_key(claim)
+                for claim in [*archived.claims, *(resource_claims or [])]
+            }
+            for other_id in current.active_executions:
+                occupied = {
+                    _resource_claim_key(claim)
+                    for claim in _resource_claims_for_run(
+                        current.resource_locks, other_id
+                    )
+                }
+                if (
+                    requested_keys & occupied
+                    or (requested_keys and "application:application" in occupied)
+                    or (occupied and "application:application" in requested_keys)
+                ):
+                    raise ApplicationLifecycleConflictError(
+                        "原任务资源已被其他执行占用，请先结束相关任务。"
+                    )
+            if current.active_formal_revision is not None:
+                raise ApplicationLifecycleConflictError(
+                    "已有新的正式修订，不能继续旧任务。"
+                )
+            # 仅在内存中恢复原登记以复用既有确认校验；新执行与资源锁成功写盘后才消费归档。
+            current = current.model_copy(
+                update={
+                    "active_executions": {
+                        **current.active_executions,
+                        original.run_id: original,
+                    },
+                    "ended_executions": {
+                        key: value
+                        for key, value in current.ended_executions.items()
+                        if key != replaces_run_id
+                    },
+                    "active_formal_revision": archived.formal_revision
+                    or current.active_formal_revision,
+                }
+            )
+            resource_claims = [*(resource_claims or []), *archived.claims]
         _assert_application_mutation_admission(
             workspace,
             current,
@@ -458,7 +581,9 @@ def start_workbench_execution(
         if development_continuation_consume is not None:
             # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。
             # 请求解析、模型校验或写盘失败都不能单独烧掉一次性续接凭据。
-            from app.services.development_continuation import validate_development_continuation
+            from app.services.development_continuation import (
+                validate_development_continuation,
+            )
 
             continuation = validate_development_continuation(
                 workspace,
@@ -468,27 +593,47 @@ def start_workbench_execution(
                 lifecycle=current,
             )
             source = current.active_executions[continuation.source_run_id]
-            if replaces_run_id != source.run_id or scope != source.scope or target_id != source.target_id:
+            if (
+                replaces_run_id != source.run_id
+                or scope != source.scope
+                or target_id != source.target_id
+            ):
                 raise ApplicationLifecycleConflictError("续接运行必须接替原开发目标。")
-            current = current.model_copy(update={"development_continuations": {
-                **current.development_continuations,
-                continuation.id: continuation.model_copy(update={
-                    "status": "consumed", "token_sha256": None, "consumed_at": utc_now(),
-                }),
-            }})
+            current = current.model_copy(
+                update={
+                    "development_continuations": {
+                        **current.development_continuations,
+                        continuation.id: continuation.model_copy(
+                            update={
+                                "status": "consumed",
+                                "token_sha256": None,
+                                "consumed_at": utc_now(),
+                            }
+                        ),
+                    }
+                }
+            )
         current = reconcile_development_artifacts(workspace, current)
         development_metadata = execution_development_metadata(
-            current, phase=phase, scope=scope, target_id=target_id,
-            api_contract_id=api_contract_id, initial_entry=initial_development_entry,
+            current,
+            phase=phase,
+            scope=scope,
+            target_id=target_id,
+            api_contract_id=api_contract_id,
+            initial_entry=initial_development_entry,
             replaces_run_id=replaces_run_id,
         )
         resource_locks = current.resource_locks
         transferred_claims: list[ExecutionResourceClaim] = []
         if replaces_run_id and replaces_run_id in current.active_executions:
-            transferred_claims = _resource_claims_for_run(resource_locks, replaces_run_id)
+            transferred_claims = _resource_claims_for_run(
+                resource_locks, replaces_run_id
+            )
             executions = dict(current.active_executions)
             executions.pop(replaces_run_id, None)
-            resource_locks = _resource_locks_without_run(resource_locks, replaces_run_id)
+            resource_locks = _resource_locks_without_run(
+                resource_locks, replaces_run_id
+            )
             current = current.model_copy(
                 update={
                     "active_executions": executions,
@@ -502,6 +647,11 @@ def start_workbench_execution(
             ]
         )
         acquired_at = utc_now()
+        if phase in CODE_MUTATION_PHASES:
+            # 新修改不能沿用上一轮验收通过；只更新结果，不增加准入条件。
+            current = current.model_copy(
+                update={"extensions": pending_quality_results(current.extensions)}
+            )
         normalized_owner_session_id = str(owner_session_id or "").strip() or None
         next_locks = _resource_locks_with_claims(
             resource_locks,
@@ -583,6 +733,48 @@ def handoff_workbench_execution_for_recovery(
             raise ApplicationLifecycleConflictError(
                 "RECOVERY_STATE_DRIFT: child runId 已被其他 Workbench execution 占用。"
             )
+        retry_locks = None
+        if source.status in {
+            WorkbenchExecutionStatus.FAILED,
+            WorkbenchExecutionStatus.STOPPED,
+        }:
+            from app.services.failed_run_cleanup import failed_execution_retry_claims
+            from app.services.run_workers import active_worker_runs
+            from app.services.workspace_process_registry import (
+                workspace_process_registry,
+            )
+
+            if (
+                source_run_id in active_worker_runs()
+                or workspace_process_registry.active_run_processes(source_run_id)
+            ):
+                raise ApplicationLifecycleConflictError(
+                    "失败任务仍在退出，暂不能重试。"
+                )
+            # 失败不再持有资源锁；恢复必须重新取得完整集合，不能覆盖后来任务的占用。
+            claims = failed_execution_retry_claims(source)
+            requested = {_resource_claim_key(claim) for claim in claims}
+            for other_id in current.active_executions:
+                if other_id == source_run_id:
+                    continue
+                occupied = {
+                    _resource_claim_key(claim)
+                    for claim in _resource_claims_for_run(
+                        current.resource_locks, other_id
+                    )
+                }
+                # 与正常登记的具名资源语义一致；应用范围不能在重试时突然扩成所有页面/接口的锁。
+                if requested & occupied:
+                    raise ApplicationLifecycleConflictError(
+                        "重试所需资源正被其他任务占用，请等待其结束。"
+                    )
+            retry_locks = _resource_locks_with_claims(
+                _resource_locks_without_run(current.resource_locks, source_run_id),
+                claims=claims,
+                run_id=new_run_id,
+                owner_page_id=source.page_id,
+                acquired_at=utc_now(),
+            )
         now = utc_now()
         child = source.model_copy(
             update={
@@ -605,10 +797,14 @@ def handoff_workbench_execution_for_recovery(
                 "revision": current.revision + 1,
                 "active_run_id": new_run_id,
                 "active_executions": executions,
-                "resource_locks": _transfer_resource_locks(
-                    current.resource_locks,
-                    source_run_id=source_run_id,
-                    new_run_id=new_run_id,
+                "resource_locks": (
+                    retry_locks
+                    if retry_locks is not None
+                    else _transfer_resource_locks(
+                        current.resource_locks,
+                        source_run_id=source_run_id,
+                        new_run_id=new_run_id,
+                    )
                 ),
             }
         )
@@ -729,8 +925,7 @@ def _assert_application_mutation_admission(
     active_executions = [
         execution
         for run_id, execution in current.active_executions.items()
-        if run_id != replaces_run_id
-        and _is_active_dag_planning_execution(execution)
+        if run_id != replaces_run_id and _is_active_dag_planning_execution(execution)
     ]
     if active_executions:
         raise ApplicationLifecycleConflictError(
@@ -813,7 +1008,9 @@ def expand_workbench_execution_resources(
         current = load_application_lifecycle(workspace)
         execution = current.active_executions.get(run_id) if current else None
         if current is None or execution is None:
-            raise ApplicationLifecycleConflictError("当前没有可扩展资源范围的工作台计划执行。")
+            raise ApplicationLifecycleConflictError(
+                "当前没有可扩展资源范围的工作台计划执行。"
+            )
         additions = [
             claim.model_copy(
                 update={
@@ -858,6 +1055,7 @@ def update_workbench_execution(
     pending_type: PendingInteractionType | None = None,
     pending_payload: dict[str, Any] | None = None,
     error: ApplicationLifecycleError | None = None,
+    extension_updates: dict[str, Any] | None = None,
 ) -> ApplicationLifecycle:
     """在节点完成、等待用户、失败或停止边界更新当前计划执行快照。"""
 
@@ -867,6 +1065,15 @@ def update_workbench_execution(
         active = current.active_executions.get(run_id) if current else None
         if current is None or active is None:
             raise ApplicationLifecycleConflictError("当前没有可更新的工作台计划执行。")
+        # 业务边界的持久化结果与执行快照同一次落盘，避免只在前端显示已确认。
+        if extension_updates:
+            current = current.model_copy(
+                update={"extensions": {**current.extensions, **extension_updates}}
+            )
+        if phase in CODE_MUTATION_PHASES and status == WorkbenchExecutionStatus.RUNNING:
+            current = current.model_copy(
+                update={"extensions": pending_quality_results(current.extensions)}
+            )
         next_revision = current.revision + 1
         pending = (
             _pending_interaction(
@@ -913,14 +1120,18 @@ def complete_workbench_execution(
             raise ApplicationLifecycleConflictError("当前没有可完成的工作台计划执行。")
         if active is None:
             if not missing_ok:
-                raise ApplicationLifecycleConflictError("当前没有可完成的工作台计划执行。")
+                raise ApplicationLifecycleConflictError(
+                    "当前没有可完成的工作台计划执行。"
+                )
             # Graph terminal 已提交而 lifecycle execution 尚未完成时，允许只按 run owner
             # 清理孤儿锁；不伪造一条已经不存在的 execution，也不触碰其他并行运行。
             return _persist_workbench_execution_removal(
                 workspace,
                 current=current,
                 executions=dict(current.active_executions),
-                resource_locks=_resource_locks_without_run(current.resource_locks, run_id),
+                resource_locks=_resource_locks_without_run(
+                    current.resource_locks, run_id
+                ),
             )
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
@@ -939,6 +1150,7 @@ def record_abandoned_planning_result(
     draft_digest: str,
     base_confirmed_plan_digest: str | None,
     build_execution_scope: dict[str, Any],
+    owner_session_id: str,
     workflow_run_id: str = "",
 ) -> ApplicationLifecycle | None:
     """持久化 Planning result 的 Abandon tombstone，并收口对应待确认 execution。
@@ -973,21 +1185,25 @@ def record_abandoned_planning_result(
         }
         executions = dict(current.active_executions)
         resource_locks = current.resource_locks
-        execution = executions.get(workflow_run_id) if workflow_run_id else None
-        pending = execution.pending_interaction if execution is not None else None
-        # 只收口已经停在 Build DAG 确认门禁的 execution；绝不借 Abandon 取消生成中运行。
-        if (
-            execution is not None
-            and execution.status == WorkbenchExecutionStatus.AWAITING_USER
-            and pending is not None
-            and (
-                pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION
-                or pending.payload.get("mode") == "build_task_plan_confirmation"
-            )
+        from app.services.pending_plan_execution import pending_plan_execution_ids
+
+        # 生成来源只用于溯源；确认失败交接后，收口仍持有同一草稿确认门的当前执行。
+        for matching_run_id in pending_plan_execution_ids(
+            current,
+            owner_session_id=owner_session_id,
+            planning_run_id=planning_run_id,
+            draft_digest=draft_digest,
+            build_execution_scope=build_execution_scope,
         ):
-            executions.pop(workflow_run_id, None)
-            resource_locks = _resource_locks_without_run(resource_locks, workflow_run_id)
-        latest = max(executions.values(), key=lambda item: item.updated_at) if executions else None
+            executions.pop(matching_run_id, None)
+            resource_locks = _resource_locks_without_run(
+                resource_locks, matching_run_id
+            )
+        latest = (
+            max(executions.values(), key=lambda item: item.updated_at)
+            if executions
+            else None
+        )
         updated = current.model_copy(
             update={
                 "updated_at": now,
@@ -1010,6 +1226,7 @@ def end_workbench_execution(
     *,
     run_id: str,
     missing_ok: bool = False,
+    preserve_resume: bool = False,
 ) -> ApplicationLifecycle:
     """终止当前计划并释放工作区输入锁，同时保留最后执行快照供审计。"""
 
@@ -1025,6 +1242,27 @@ def end_workbench_execution(
                 return current
             raise ApplicationLifecycleConflictError("当前没有可结束的工作台计划执行。")
         ending_execution = current.active_executions[run_id]
+        if preserve_resume:
+            # 控制面已等待真实工作退出；只在此时采集稳定基线，和释放锁一次写盘。
+            archived = EndedWorkbenchExecution(
+                execution=ending_execution.model_copy(
+                    update={"status": WorkbenchExecutionStatus.STOPPED}
+                ),
+                claims=_resource_claims_for_run(current.resource_locks, run_id),
+                workspace=str(Path(workspace).resolve()),
+                fingerprint=workspace_fingerprint(workspace),
+                sourceFailed=ending_execution.status == WorkbenchExecutionStatus.FAILED,
+                formalRevision=(
+                    current.active_formal_revision
+                    if execution_belongs_to_active_revision(current, ending_execution)
+                    else None
+                ),
+            )
+            current = current.model_copy(
+                update={
+                    "ended_executions": {**current.ended_executions, run_id: archived}
+                }
+            )
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
         ended = _persist_workbench_execution_removal(
@@ -1044,7 +1282,9 @@ def end_workbench_execution(
         return ended
 
 
-def stop_workbench_execution(workspace: str | Path, *, run_id: str) -> ApplicationLifecycle:
+def stop_workbench_execution(
+    workspace: str | Path, *, run_id: str
+) -> ApplicationLifecycle:
     """在没有活动网络 Run 时把等待中的计划显式标记为可恢复停止。"""
 
     current = load_application_lifecycle(workspace)
@@ -1151,8 +1391,13 @@ def persist_workbench_interaction_submission(
             from app.services.development_artifacts import require_test_entry
 
             current = require_test_entry(workspace)
-        if pending.id != interaction_id or pending.based_on_revision != based_on_revision:
-            raise ApplicationLifecycleConflictError("待处理交互已过期或不属于当前页面运行。")
+        if (
+            pending.id != interaction_id
+            or pending.based_on_revision != based_on_revision
+        ):
+            raise ApplicationLifecycleConflictError(
+                "待处理交互已过期或不属于当前页面运行。"
+            )
         if pending.submitted_at is not None:
             return current
         next_revision = current.revision + 1
@@ -1221,7 +1466,11 @@ def _persist_workbench_execution_removal(
     """原子移除指定运行，并按明确结束语义释放其 formal revision。"""
 
     next_revision = current.revision + 1
-    latest = max(executions.values(), key=lambda item: item.updated_at) if executions else None
+    latest = (
+        max(executions.values(), key=lambda item: item.updated_at)
+        if executions
+        else None
+    )
     updated = current.model_copy(
         update={
             "updated_at": utc_now(),
@@ -1235,13 +1484,13 @@ def _persist_workbench_execution_removal(
             "active_executions": executions,
             "resource_locks": resource_locks,
             **(
-                {"active_formal_revision": None}
-                if clear_active_formal_revision
-                else {}
+                {"active_formal_revision": None} if clear_active_formal_revision else {}
             ),
         }
     )
-    return write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+    return write_application_lifecycle(
+        workspace, updated, expected_revision=current.revision
+    )
 
 
 def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClaim:
@@ -1254,7 +1503,11 @@ def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClai
     }.get(scope, ExecutionResourceType.APPLICATION)
     return ExecutionResourceClaim(
         type=resource_type,
-        targetId="application" if resource_type == ExecutionResourceType.APPLICATION else target_id,
+        targetId=(
+            "application"
+            if resource_type == ExecutionResourceType.APPLICATION
+            else target_id
+        ),
         role=ExecutionResourceRole.PRIMARY,
         reason=ExecutionResourceReason.PRIMARY_TARGET,
     )
@@ -1396,17 +1649,27 @@ def _resource_locks_without_run(
 
     return ExecutionResourceLocks(
         application=(
-            None if locks.application and locks.application.run_id == run_id else locks.application
+            None
+            if locks.application and locks.application.run_id == run_id
+            else locks.application
         ),
-        pages={key: value for key, value in locks.pages.items() if value.run_id != run_id},
+        pages={
+            key: value for key, value in locks.pages.items() if value.run_id != run_id
+        },
         endpoints={
-            key: value for key, value in locks.endpoints.items() if value.run_id != run_id
+            key: value
+            for key, value in locks.endpoints.items()
+            if value.run_id != run_id
         },
         apiContracts={
-            key: value for key, value in locks.api_contracts.items() if value.run_id != run_id
+            key: value
+            for key, value in locks.api_contracts.items()
+            if value.run_id != run_id
         },
         dataSources={
-            key: value for key, value in locks.data_sources.items() if value.run_id != run_id
+            key: value
+            for key, value in locks.data_sources.items()
+            if value.run_id != run_id
         },
     )
 
@@ -1432,7 +1695,9 @@ def _transfer_resource_locks(
         application=transfer(locks.application) if locks.application else None,
         pages={key: transfer(value) for key, value in locks.pages.items()},
         endpoints={key: transfer(value) for key, value in locks.endpoints.items()},
-        apiContracts={key: transfer(value) for key, value in locks.api_contracts.items()},
+        apiContracts={
+            key: transfer(value) for key, value in locks.api_contracts.items()
+        },
         dataSources={key: transfer(value) for key, value in locks.data_sources.items()},
     )
 
@@ -1443,10 +1708,23 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
     payload = state.model_dump(mode="json", by_alias=True)
     from app.services.development_artifacts import test_entry_gate
 
-    payload["testEntryGate"] = test_entry_gate(state).model_dump(mode="json", by_alias=True)
+    payload["testEntryGate"] = test_entry_gate(state).model_dump(
+        mode="json", by_alias=True
+    )
     # continuation 的原请求和 token 哈希只属于服务端控制面；公开运行结果通过
     # developmentContinuation 单独投射当前可执行动作，生命周期快照不暴露内部登记表。
     payload.pop("developmentContinuations", None)
+    if state.ended_executions:
+        payload["endedExecutionsCheckedAt"] = utc_now().isoformat()
+    payload["endedExecutions"] = {
+        run_id: {
+            "execution": item.execution.model_dump(mode="json", by_alias=True),
+            "workspaceUnchanged": ended_workspace_unchanged(
+                item.workspace, item.fingerprint
+            ),
+        }
+        for run_id, item in state.ended_executions.items()
+    }
     return payload
 
 
@@ -1495,10 +1773,17 @@ def complete_workspace_bootstrap(
     current = load_application_lifecycle(workspace)
     if current is None:
         raise ApplicationLifecycleConflictError("Bootstrap 前必须先创建生命周期状态。")
-    if current.initialization.stage != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
-        raise ApplicationLifecycleConflictError("当前生命周期不允许提交 Bootstrap 结果。")
+    if (
+        current.initialization.stage
+        != ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES
+    ):
+        raise ApplicationLifecycleConflictError(
+            "当前生命周期不允许提交 Bootstrap 结果。"
+        )
     if succeeded and not readiness_verified:
-        raise ApplicationLifecycleConflictError("Bootstrap 必须先在物化事务内通过 Readiness 校验。")
+        raise ApplicationLifecycleConflictError(
+            "Bootstrap 必须先在物化事务内通过 Readiness 校验。"
+        )
     if succeeded:
         return persist_application_lifecycle_transition(
             workspace,
@@ -1516,6 +1801,8 @@ def complete_workspace_bootstrap(
             occurredAt=utc_now(),
         ),
     )
+
+
 def begin_application_template_generation(
     workspace: str | Path,
     *,
@@ -1525,8 +1812,13 @@ def begin_application_template_generation(
 
     current = load_application_lifecycle(workspace)
     if current is None:
-        raise ApplicationLifecycleConflictError("生成应用模板文件前必须先创建生命周期状态。")
-    if current.initialization.stage == ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES:
+        raise ApplicationLifecycleConflictError(
+            "生成应用模板文件前必须先创建生命周期状态。"
+        )
+    if (
+        current.initialization.stage
+        == ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES
+    ):
         return current
     if (
         current.initialization.stage
@@ -1550,16 +1842,24 @@ def retry_application_template_generation(
     *,
     active_run_id: str | None = None,
 ) -> ApplicationLifecycle:
-    """仅允许失败的首次 Bootstrap 显式重试，并清除上一轮错误。"""
+    """仅允许失败的首次 Bootstrap 显式重试，清理上轮受管残留后重新开始。"""
 
     current = load_application_lifecycle(workspace)
     if current is None:
-        raise ApplicationLifecycleConflictError("重试应用模板前必须先创建生命周期状态。")
-    if current.initialization.stage != ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED:
+        raise ApplicationLifecycleConflictError(
+            "重试应用模板前必须先创建生命周期状态。"
+        )
+    if (
+        current.initialization.stage
+        != ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED
+    ):
         raise ApplicationLifecycleConflictError(
             "只有失败的应用模板生成可以重试；当前阶段为 "
             f"{current.initialization.stage.value}。"
         )
+    # 失败态是唯一允许清理 frontend/backend/.git/TemplateState 的入口：这些路径仅属于
+    # 尚未成功交付的首次 Bootstrap，清理后才能避免下一轮被 preflight 误判为覆盖工程。
+    clear_bootstrap_managed_artifacts(workspace)
     return persist_application_lifecycle_transition(
         workspace,
         stage=ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
@@ -1580,7 +1880,9 @@ def _pending_interaction(
     """根据应用、类型和 revision 生成稳定且可重放的交互标识。"""
 
     seed = f"{state.application.id}:{interaction_type.value}:{revision}"
-    interaction_id = f"interaction-{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+    interaction_id = (
+        f"interaction-{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+    )
     return PendingInteraction(
         id=interaction_id,
         type=interaction_type,
@@ -1609,7 +1911,9 @@ def _artifact_confirmation_status(
         or value.get("artifact_type") != expected_artifact_type
     ):
         return "invalid"
-    confirmation_status = value.get("confirmation_status") if isinstance(value, dict) else None
+    confirmation_status = (
+        value.get("confirmation_status") if isinstance(value, dict) else None
+    )
     return confirmation_status if isinstance(confirmation_status, str) else "invalid"
 
 
@@ -1627,7 +1931,10 @@ def _transition_already_applied(
         state.initialization.stage == stage
         and state.initialization.status == status
         and (not active_run_id or state.active_run_id == active_run_id)
-        and ((error is None and state.error is None) or (error is not None and state.error == error))
+        and (
+            (error is None and state.error is None)
+            or (error is not None and state.error == error)
+        )
     )
 
 

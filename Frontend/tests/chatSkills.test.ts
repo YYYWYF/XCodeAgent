@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createElement, type ComponentProps } from 'react'
+import {
+  Children,
+  createElement,
+  isValidElement,
+  type ComponentProps,
+  type ReactNode
+} from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import BrowserPreviewPanel from '../src/renderer/src/components/BrowserPreviewPanel/BrowserPreviewPanel'
+import FreeChatHistory from '../src/renderer/src/components/AiChatPanel/components/SessionSidebar/FreeChatHistory'
 import {
   beginOptimisticSkillSend,
   normalizeChatSkills,
@@ -14,6 +22,7 @@ import {
   appendElementContextToConversationPrompt,
   buildWorkflowForwardedProps,
   readDagGenerationSnapshot,
+  readIntegrationTestChecks,
   readProjectPlanUpdate,
   readWorkspaceInspectionSnapshot
 } from '../src/renderer/src/service/agUiAgent'
@@ -36,7 +45,10 @@ import {
   shouldUseConversation
 } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import { workflowDebugBuildScope } from '../src/renderer/src/components/AiChatPanel/debugExecutionScope'
+import UnitTestConfirmationPanel from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/UnitTestConfirmationPanel'
+import FrontendPerformanceConfirmationPanel from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/FrontendPerformanceConfirmationPanel'
 import WorkflowRunCard, {
+  buildClarificationContinuationMessage,
   buildToolActivityPlacement,
   PlanConfirmationCard,
   workflowOriginalRequest
@@ -88,7 +100,73 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 
+test('会话列表保护当前查看和当前推进的会话，历史会话仍可删除', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    for (const activeSessionId of ['viewed', 'history']) {
+      const sessions: ComponentProps<typeof FreeChatHistory>['sessions'] = [
+        'viewed', 'advancing', 'history'
+      ].map((id) => ({
+        id,
+        title: id,
+        editorMode: 'frontend',
+        workbenchPhase: 'development',
+        workflowId: 'application',
+        threadId: `thread-${id}`,
+        createdAt: 1,
+        updatedAt: 1,
+        messageCount: 1
+      }))
+      const markup = renderToStaticMarkup(createElement(FreeChatHistory, {
+        open: true,
+        historyEnabled: true,
+        activeSessionId,
+        advancingSessionId: 'advancing',
+        loadingSessions: false,
+        onClose: () => undefined,
+        onCreateSession: () => undefined,
+        onDeleteSession: async () => { throw new Error('渲染列表不能执行删除') },
+        onOpenSession: async () => undefined,
+        sessionCreationDisabled: false,
+        sessionRunStates: { advancing: 'running' },
+        sessions,
+        theme
+      }))
+      for (const session of sessions) {
+        const button = markup.match(new RegExp(`<button[^>]*aria-label="删除会话 ${session.id}"[^>]*>`))?.[0]
+        assert.ok(button, `应保留 ${session.id} 的删除按钮`)
+        const protectedSession = session.id === activeSessionId || session.id === 'advancing'
+        assert.equal(button.includes('disabled=""'), protectedSession)
+        assert.equal(button.includes('title="当前会话不能删除"'), protectedSession)
+      }
+    }
+  }
+})
+
 const testLocalStorage = new Map<string, string>()
+
+test('验收预览禁用元素审查，移除设备切换并保留页面导航和浏览器入口', () => {
+  const application = {
+    name: '验收预览',
+    menus: { items: [] },
+    pages: []
+  } as ComponentProps<typeof BrowserPreviewPanel>['application']
+  for (const theme of ['light', 'dark']) {
+    const markup = renderToStaticMarkup(
+      createElement('div', { 'data-theme': theme }, createElement(BrowserPreviewPanel, {
+        application,
+        inspectionDisabled: true,
+        requestedUrl: 'http://localhost:3000/page/orders'
+      }))
+    )
+    const inspectorButton = markup.match(/<button[^>]*aria-label="审查元素"[^>]*>/)?.[0]
+    assert.ok(inspectorButton)
+    assert.ok(inspectorButton.includes('disabled=""'))
+    assert.doesNotMatch(markup, /browser-viewport-switcher|aria-label="视口"/)
+    assert.match(markup, /aria-label="页面"/)
+    assert.match(markup, /aria-label="在系统浏览器打开"/)
+    assert.match(markup, /src="http:\/\/localhost:3000\/page\/orders"/)
+  }
+})
 
 // 服务端渲染测试只需提供工作台阶段 Provider 读取的最小本地存储接口。
 Object.defineProperty(globalThis, 'window', {
@@ -226,6 +304,15 @@ test('prepare_build_tasks 调试默认继承当前页面范围', () => {
   })
 
   assert.deepEqual(scope, { type: 'page', targetId: 'pet_list_page' })
+})
+
+test('二次修改主动继续把来源 Run 送入独立 AG-UI 协议', () => {
+  const props = buildWorkflowForwardedProps({
+    editorMode: 'frontend', workspaceRoot: '/workspace', conversation: true,
+    resumeExecutionRunId: 'paused-conversation'
+  })
+  assert.equal(props.conversation?.resumeExecutionRunId, 'paused-conversation')
+  assert.equal(props.conversation?.workspaceRoot, '/workspace')
 })
 
 test('页面和 Endpoint 开发目标严格规范化并投影到 Workflow scope', () => {
@@ -757,7 +844,7 @@ test('自由对话运行时展示实时步骤与工具活动', () => {
   assert.match(markup, /正在处理请求/)
   assert.match(markup, /正在调用 read_file 工具/)
   assert.match(markup, /展开调用链/)
-  assert.match(markup, /已记录 2 次调用/)
+  assert.doesNotMatch(markup, /tool-activity-chain-copy[^]*?已记录 2 次调用/)
   assert.doesNotMatch(markup, /已调用 grep 工具/)
 })
 
@@ -1477,7 +1564,7 @@ test('AG-UI DAG 生成步骤按稳定 ID 合并最新完整快照', async () => 
   }
 })
 
-test('工作区检查快照过滤绝对路径并渲染默认展开的科技感面板', () => {
+test('DAG 前置工作区扫描过滤绝对路径并默认收起完成结果', () => {
   const snapshot = readWorkspaceInspectionSnapshot({
     schemaVersion: '1.0.0',
     revision: 'revision-1234567890',
@@ -1517,7 +1604,7 @@ test('工作区检查快照过滤绝对路径并渲染默认展开的科技感�
   assert.match(markup, /FastAPI/)
   assert.match(markup, /Backend\/app/)
   assert.match(markup, /代码图暂不可用/)
-  assert.ok((markup.match(/ open=""/g) || []).length >= 2)
+  assert.equal((markup.match(/ open=""/g) || []).length, 1)
   assert.doesNotMatch(markup, /private\/workspace|snapshot\.json/)
 })
 
@@ -1722,9 +1809,11 @@ test('DAG 快照解析和展示不暴露模型原文或内部 JSON', () => {
   )
 
   assert.ok(snapshot)
-  assert.match(markup, /执行计划进度/)
-  assert.match(markup, /page:home/)
-  assert.match(markup, /retained 0 \/ candidate 1/)
+  assert.match(markup, /任务生成进度/)
+  assert.equal(snapshot.units[0].id, 'page:home')
+  assert.match(markup, /未命名页面/)
+  assert.match(markup, /新增 1 项任务/)
+  assert.doesNotMatch(markup, /page:home|retained 0 \/ candidate 1/)
   assert.doesNotMatch(
     JSON.stringify(snapshot),
     /raw-model-output|\/workspace\/build-task-plan\.json|candidate:secret/
@@ -1913,9 +2002,8 @@ test('集成测试步骤渲染具体检查项而不是数字详情', () => {
 
   assert.match(markup, /前端构建检查/)
   assert.match(markup, /前端 lint 通过/)
-  assert.match(markup, /QUALITY GATE/)
-  assert.match(markup, /REQUIRED/)
-  assert.match(markup, /OPTIONAL/)
+  assert.match(markup, /测试检查步骤/)
+  assert.doesNotMatch(markup, /QUALITY GATE|REQUIRED|OPTIONAL/)
   assert.match(markup, /已通过/)
   assert.match(markup, /已跳过/)
   assert.match(markup, /通过 3\/3 个测试/)
@@ -1985,7 +2073,7 @@ test('测试修复保留读取、编辑和验证调用，默认收起且仅在�
     )
     assert.match(markup, /正在执行局部修复任务/)
     assert.match(markup, /正在编辑文件：\/backend\/src\/App.java/)
-    assert.match(markup, /已记录 3 次调用/)
+    assert.doesNotMatch(markup, /已记录 3 次调用/)
     assert.match(markup, /aria-expanded="false"/)
     assert.match(markup, /展开调用链/)
     assert.doesNotMatch(markup, /tool-activity-chain-body/)
@@ -2220,7 +2308,7 @@ test('局部修复完成态展示紫色结果卡并隐藏普通动作详情', ()
   assert.doesNotMatch(markup, /动作详情/)
 })
 
-test('单元测试生成期间展示运行中的集成检查矩阵', () => {
+test('单元测试生成期间展示运行中的测试检查步骤', () => {
   const markup = renderToStaticMarkup(
     createElement(ProcessSteps, {
       loading: true,
@@ -2246,7 +2334,7 @@ test('单元测试生成期间展示运行中的集成检查矩阵', () => {
     })
   )
 
-  assert.match(markup, /集成检查矩阵/)
+  assert.match(markup, /测试检查步骤/)
   assert.match(markup, /前端单元测试生成检查/)
   assert.match(markup, /正在调用 TestGeneration Agent/)
   assert.match(markup, /检查中/)
@@ -2254,47 +2342,298 @@ test('单元测试生成期间展示运行中的集成检查矩阵', () => {
   assert.match(markup, /anticon-spin/)
 })
 
-test('构建完成后展示单元测试跳过确认按钮', () => {
-  const markup = renderWorkflowRunCard({
-      interactionAvailability: 'active',
-      workflow: {
-        runId: 'run-unit-test-confirmation',
-        threadId: 'thread-unit-test-confirmation',
-        summary: {
-          status: 'requires_user_input',
-          phase: 'integration_test',
-          message: '项目预览已就绪，请确认是否符合预期。 预览地址：http://127.0.0.1:3000。',
-          clarification: {}
-        },
-        result: {
-          clarification: {
-            mode: 'unit_test_confirmation',
-            status: 'requires_user_input',
-            message: '构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？',
-            questions: [
-              {
-                id: 'unit_test_confirmation',
-                header: '单元测试',
-                question: '是否跳过单元测试？',
-                type: 'choice',
-                options: [
-                  { label: '是，跳过单元测试', value: 'skip' },
-                  { label: '否，继续执行', value: 'run' }
-                ]
-              }
-            ]
-          }
-        },
-        events: []
+test('单测生成检查在说明下方复用开发任务的工具活动与状态图标', () => {
+  for (const layer of ['frontend', 'backend']) {
+    for (const [status, icon] of [
+      ['running', 'loading'],
+      ['completed', 'check-circle'],
+      ['failed', 'close-circle']
+    ] as const) {
+      const evidence = '正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。'
+      const activity = {
+        callId: 'read-source',
+        tool: 'read_file',
+        category: 'read',
+        status,
+        message: `正在读取文件：/${layer}/src/Orders.tsx`
       }
+      const checks = readIntegrationTestChecks([
+        {
+          id: `${layer}_test_generation`,
+          name: `${layer === 'frontend' ? '前端' : '后端'}单元测试生成检查`,
+          status: 'running',
+          required: true,
+          evidence,
+          activeToolActivity: { ...activity, args: { content: 'PRIVATE CONTENT' } }
+        }
+      ])
+      assert.deepEqual(checks?.[0].activeToolActivity, activity)
+      const markup = renderToStaticMarkup(
+        createElement(ProcessSteps, {
+          loading: true,
+          steps: [
+            {
+              id: 'workflow:unit_test',
+              kind: 'workflow',
+              status: 'running',
+              title: '正在执行 开发阶段单元测试',
+              detail: '',
+              sequence: 1,
+              nodeName: 'unit_test',
+              checks
+            }
+          ]
+        })
+      )
+      const evidenceIndex = markup.indexOf(evidence)
+      const activityIndex = markup.indexOf('workflow-build-tool-activity')
+      assert.ok(evidenceIndex >= 0 && activityIndex > evidenceIndex)
+      assert.match(markup, new RegExp(activity.message))
+      const toolIcon = markup.match(
+        /workflow-build-tool-activity-icon[^>]*>([\s\S]*?)<\/span>/
+      )?.[1]
+      assert.ok(toolIcon)
+      assert.match(toolIcon, new RegExp(`data-icon="${icon}"`))
+      assert.doesNotMatch(markup, /PRIVATE CONTENT|工具调用链/)
+    }
+  }
+})
+
+test('单测工具活动不进入完成检查、其他检查和持久化历史', () => {
+  const activity = { callId: 'read', tool: 'read_file', status: 'running', message: '读取文件' }
+  for (const [id, status, tool] of [
+    ['frontend_test_generation', 'passed', 'read_file'],
+    ['backend_test_generation', 'failed', 'read_file'],
+    ['frontend_test_generation', 'skipped', 'read_file'],
+    ['frontend_build', 'running', 'read_file'],
+    ['frontend_test_generation', 'running', 'execute'],
+    ['frontend_test_generation', 'running', 'toString']
+  ]) {
+    const checks = readIntegrationTestChecks([
+      {
+        id,
+        name: '测试检查',
+        status,
+        required: true,
+        activeToolActivity: { ...activity, tool }
+      }
+    ])
+    assert.equal(checks?.[0].activeToolActivity, undefined)
+  }
+  const persisted = normalizePersistentSessionMessage({
+    id: 1,
+    role: 'assistant',
+    content: '',
+    createdAt: 1,
+    processSteps: [
+      {
+        id: 'workflow:unit_test',
+        kind: 'workflow',
+        status: 'running',
+        title: '单元测试',
+        detail: '',
+        sequence: 1,
+        checks: [
+          {
+            id: 'frontend_test_generation',
+            name: '测试生成',
+            status: 'running',
+            required: true,
+            activeToolActivity: activity
+          }
+        ]
+      }
+    ]
+  })
+  assert.doesNotMatch(JSON.stringify(persisted), /activeToolActivity|读取文件/)
+})
+
+test('各阶段跳过和执行的对话使用中文选项标签，协议答案保持不变', () => {
+  for (const [mode, header, skipLabel, runLabel] of [
+    ['unit_test_confirmation', '单元测试', '不执行单元测试', '执行单元测试'],
+    ['frontend_performance_confirmation', '前端性能测试', '跳过性能测试', '执行性能测试']
+  ] as const) {
+    const workflow: WorkflowRunPayload = {
+      runId: 'run-test-choice',
+      threadId: 'thread-test-choice',
+      events: [],
+      summary: {
+        request: '开发年龄录入页面',
+        status: 'requires_user_input',
+        clarification: {
+          mode,
+          status: 'requires_user_input',
+          questions: [
+            {
+              id: mode,
+              header,
+              question: `是否执行${header}？`,
+              type: 'choice',
+              options: [
+                { label: runLabel, value: 'run' },
+                { label: skipLabel, value: 'skip' }
+              ]
+            }
+          ]
+        }
+      }
+    }
+    for (const decision of ['skip', 'run'] as const) {
+      const answers = { [mode]: decision }
+      const message = buildClarificationContinuationMessage(workflow, answers)
+      assert.match(message, new RegExp(`回答：${decision === 'skip' ? skipLabel : runLabel}`))
+      assert.doesNotMatch(message, /回答：(skip|run)/)
+      assert.deepEqual(answers, { [mode]: decision })
+    }
+    assert.match(
+      buildClarificationContinuationMessage(workflow, {
+        [mode]: { selected: ['skip'], other: '下次再执行' }
+      }),
+      new RegExp(`已选：${skipLabel}；其他补充：下次再执行`)
+    )
+    assert.match(
+      buildClarificationContinuationMessage(workflow, { [mode]: ['run'] }),
+      new RegExp(`回答：${runLabel}`)
+    )
+    workflow.summary.clarification!.questions![0].type = 'text'
+    assert.match(buildClarificationContinuationMessage(workflow, { [mode]: 'run' }), /回答：run/)
+  }
+})
+
+test('构建完成后按执行和不执行顺序展示单元测试确认按钮', () => {
+  const markup = renderWorkflowRunCard({
+    interactionAvailability: 'active',
+    workflow: {
+      runId: 'run-unit-test-confirmation',
+      threadId: 'thread-unit-test-confirmation',
+      summary: {
+        status: 'requires_user_input',
+        phase: 'integration_test',
+        message: '项目预览已就绪，请确认是否符合预期。 预览地址：http://127.0.0.1:3000。',
+        clarification: {}
+      },
+      result: {
+        clarification: {
+          mode: 'unit_test_confirmation',
+          status: 'requires_user_input',
+          message:
+            '构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。',
+          questions: [
+            {
+              id: 'unit_test_confirmation',
+              header: '单元测试',
+              question: '是否执行单元测试？',
+              type: 'choice',
+              options: [
+                { label: '执行单元测试', value: 'run' },
+                { label: '不执行单元测试', value: 'skip' }
+              ]
+            }
+          ]
+        }
+      },
+      events: []
+    }
   })
 
-  assert.match(markup, /是否跳过单元测试？/)
-  assert.match(markup, /是，跳过单元测试/)
-  assert.match(markup, /否，继续执行/)
+  assert.match(
+    markup,
+    /构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。/
+  )
+  assert.match(markup, />执行单元测试<.*>不执行单元测试</)
+  assert.doesNotMatch(markup, /是，跳过单元测试|否，继续执行/)
   assert.match(markup, /待确认事项/)
   assert.doesNotMatch(markup, /项目预览已就绪/)
   assert.doesNotMatch(markup, /127\.0\.0\.1:3000/)
+})
+
+test('单元测试左右按钮提交对应决策，并保留禁用状态与默认文案', () => {
+  for (const disabled of [false, true]) {
+    const decisions: Array<'skip' | 'run'> = []
+    const panel = UnitTestConfirmationPanel({
+      disabled,
+      onSubmit: (decision) => decisions.push(decision)
+    })
+    assert.match(renderToStaticMarkup(panel), /跳过单元测试不会对代码质量产生较大影响。/)
+    const actions = Children.toArray(panel.props.children).find(
+      (child) => isValidElement(child) && child.type === 'div'
+    )
+    assert.ok(isValidElement<{ children: ReactNode }>(actions))
+    const buttons = Children.toArray(actions.props.children)
+    for (const [index, label] of ['执行单元测试', '不执行单元测试'].entries()) {
+      const button = buttons[index]
+      assert.ok(
+        isValidElement<{ children: string; disabled: boolean; onClick: () => void }>(button)
+      )
+      assert.equal(button.props.children, label)
+      assert.equal(button.props.disabled, disabled)
+      if (!disabled) button.props.onClick()
+    }
+    assert.deepEqual(decisions, disabled ? [] : ['run', 'skip'])
+  }
+})
+
+test('性能测试确认按执行和跳过顺序展示，并提交对应动作', () => {
+  for (const disabled of [false, true]) {
+    const decisions: Array<'skip' | 'run'> = []
+    const panel = FrontendPerformanceConfirmationPanel({
+      disabled,
+      onSubmit: (decision) => decisions.push(decision)
+    })
+    const markup = renderToStaticMarkup(panel)
+    assert.match(markup, /构建检查已完成。.*是否执行前端性能测试？/)
+    assert.match(markup, />执行性能测试<.*>跳过性能测试</)
+    assert.doesNotMatch(markup, /是否跳过|是，|否，|单元测试已完成/)
+    const actions = Children.toArray(panel.props.children).find(
+      (child) => isValidElement(child) && child.type === 'div'
+    )
+    assert.ok(isValidElement<{ children: ReactNode }>(actions))
+    const buttons = Children.toArray(actions.props.children)
+    for (const [index, label] of ['执行性能测试', '跳过性能测试'].entries()) {
+      const button = buttons[index]
+      assert.ok(
+        isValidElement<{ children: string; disabled: boolean; onClick: () => void }>(button)
+      )
+      assert.equal(button.props.children, label)
+      assert.equal(button.props.disabled, disabled)
+      if (!disabled) button.props.onClick()
+    }
+    assert.deepEqual(decisions, disabled ? [] : ['run', 'skip'])
+  }
+})
+
+test('工作流确认卡展示性能测试执行和跳过动作', () => {
+  const markup = renderWorkflowRunCard({
+    interactionAvailability: 'active',
+    workflow: {
+      runId: 'run-performance-confirmation',
+      threadId: 'thread-performance-confirmation',
+      summary: {
+        status: 'requires_user_input',
+        phase: 'integration_test',
+        clarification: {
+          mode: 'frontend_performance_confirmation',
+          status: 'requires_user_input',
+          questions: [
+            {
+              id: 'frontend_performance_confirmation',
+              header: '前端性能测试',
+              question: '是否执行前端性能测试？',
+              type: 'choice',
+              allowOther: false,
+              options: [
+                { label: '执行性能测试', value: 'run' },
+                { label: '跳过性能测试', value: 'skip' }
+              ]
+            }
+          ]
+        }
+      },
+      events: []
+    }
+  })
+  assert.match(markup, />执行性能测试<.*>跳过性能测试</)
+  assert.doesNotMatch(markup, /是，跳过性能测试|否，继续执行/)
 })
 
 test('项目启动节点不展示已过期的前端性能测试确认', () => {
@@ -2309,16 +2648,16 @@ test('项目启动节点不展示已过期的前端性能测试确认', () => {
           clarification: {
             mode: 'frontend_performance_confirmation',
             status: 'requires_user_input',
-            message: '单元测试已完成。是否跳过前端性能测试？',
+            message: '构建检查已完成。是否执行前端性能测试？',
             questions: [
               {
                 id: 'frontend_performance_confirmation',
                 header: '前端性能测试',
-                question: '是否跳过前端性能测试？',
+                question: '是否执行前端性能测试？',
                 type: 'choice',
                 options: [
-                  { label: '是，跳过性能测试', value: 'skip' },
-                  { label: '否，继续执行', value: 'run' }
+                  { label: '执行性能测试', value: 'run' },
+                  { label: '跳过性能测试', value: 'skip' }
                 ]
               }
             ]
@@ -2329,8 +2668,8 @@ test('项目启动节点不展示已过期的前端性能测试确认', () => {
   })
 
   assert.match(markup, /正在启动项目预览/)
-  assert.doesNotMatch(markup, /是否跳过前端性能测试/)
-  assert.doesNotMatch(markup, /是，跳过性能测试/)
+  assert.doesNotMatch(markup, /是否执行前端性能测试/)
+  assert.doesNotMatch(markup, /执行性能测试|跳过性能测试/)
   assert.doesNotMatch(markup, /待确认事项/)
   assert.doesNotMatch(markup, /该确认已提交或已失效/)
 })
@@ -3086,6 +3425,57 @@ test('运行中任务默认折叠并只显示最新工具活动', () => {
   assert.equal(buildToolActivityPlacement(task, false), 'header')
   assert.equal(buildToolActivityPlacement(task, true), 'details')
   assert.equal(buildToolActivityPlacement({ ...task, status: 'completed' }, false), undefined)
+})
+
+test('构建工具成功显示勾，失败显示叉，运行中显示加载图标', () => {
+  for (const [status, icon] of [
+    ['completed', 'check-circle'],
+    ['failed', 'close-circle'],
+    ['running', 'loading']
+  ] as const) {
+    const markup = renderToStaticMarkup(
+      createElement(ProcessSteps, {
+        loading: true,
+        steps: [
+          {
+            id: 'workflow:build',
+            kind: 'workflow',
+            status: 'running',
+            title: '正在执行 代码生成与构建协调',
+            detail: '正在执行构建任务：home',
+            sequence: 1,
+            nodeName: 'build',
+            buildExecutionSlice: {
+              scope: { type: 'page', targetId: 'home' },
+              tasks: [
+                {
+                  id: 'home',
+                  title: '实现页面',
+                  status: 'running',
+                  activeToolActivity: {
+                    callId: 'write-home',
+                    tool: 'write_file',
+                    category: 'write',
+                    status,
+                    message:
+                      status === 'completed'
+                        ? '已完成写入文件：/frontend/src/Home.tsx'
+                        : '写入文件',
+                    path: '/frontend/src/Home.tsx'
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      })
+    )
+    const toolIcon = markup.match(
+      /<span class="[^"<>]*workflow-build-tool-activity-icon[^"<>]*"[^>]*>([\s\S]*?)<\/span>/
+    )?.[1]
+    assert.ok(toolIcon, '构建卡片必须显示当前工具调用图标')
+    assert.match(toolIcon, new RegExp(`data-icon="${icon}"`))
+  }
 })
 
 test('更早的 session 可从 timeline 和 snake_case 测试报告恢复步骤', () => {

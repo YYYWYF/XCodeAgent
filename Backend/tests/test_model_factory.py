@@ -47,8 +47,13 @@ class ModelFactoryOverrideTests(unittest.TestCase):
             http_client=self.sync_factory.return_value, http_async_client=self.async_factory.return_value,
             streaming=True, callbacks=None, extra_body=None,
         )
-        self.sync_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0))
-        self.async_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0))
+        from app.services.model_request_cancellation import (
+            check_model_request, guard_model_response, check_async_model_request, guard_async_model_response,
+        )
+        self.sync_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0),
+            event_hooks={"request": [check_model_request], "response": [guard_model_response]})
+        self.async_factory.assert_called_once_with(trust_env=True, timeout=httpx.Timeout(120.0, connect=30.0),
+            event_hooks={"request": [check_async_model_request], "response": [guard_async_model_response]})
         self.handler_factory.assert_not_called()
 
     def test_explicit_none_matches_omitted_overrides(self) -> None:

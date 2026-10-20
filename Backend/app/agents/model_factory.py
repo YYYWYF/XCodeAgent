@@ -7,6 +7,10 @@ from langchain_openai import ChatOpenAI
 from app.config import Settings
 from app.agents.model_request_headers import OpenCodeGoChatAnthropic, OpenCodeGoChatOpenAI
 from app.services.model_output_logger import ModelOutputLogHandler
+from app.services.model_request_cancellation import (
+    check_model_request, guard_model_response,
+    check_async_model_request, guard_async_model_response,
+)
 
 
 def create_chat_model(
@@ -123,10 +127,12 @@ def create_chat_model(
         http_client=httpx.Client(
             trust_env=settings.model_trust_env,
             timeout=timeout,
+            event_hooks={"request": [check_model_request], "response": [guard_model_response]},
         ),
         http_async_client=httpx.AsyncClient(
             trust_env=settings.model_trust_env,
             timeout=timeout,
+            event_hooks={"request": [check_async_model_request], "response": [guard_async_model_response]},
         ),
         streaming=True,
         callbacks=(

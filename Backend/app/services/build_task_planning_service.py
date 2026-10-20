@@ -106,7 +106,9 @@ def _load_recovery_for_retry(
     if interrupted:
         return load_planning_interruption(workspace_state, source_id)
     try:
-        return load_planning_recovery(dict(workspace_state), source_id)
+        recovery = load_planning_recovery(dict(workspace_state), source_id)
+        # Graph 可在任务候选落盘后才失败；业务重试同样读取已提交候选，不能只认模型异常快照。
+        return recovery or load_planning_interruption(workspace_state, source_id)
     except Exception:
         # Recovery 是优化状态；损坏、摘要错误、IO 异常和 schema 失效都不能覆盖新 Run。
         _LOGGER.warning(

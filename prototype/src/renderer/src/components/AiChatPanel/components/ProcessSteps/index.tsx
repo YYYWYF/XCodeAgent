@@ -344,7 +344,7 @@ function IntegrationTestChecklist({
           <span>
             <Text className={cx('integration-test-checklist-eyebrow')}>QUALITY GATE</Text>
             <Text className={cx('integration-test-checklist-title')} strong>
-              集成检查矩阵
+              测试检查步骤
             </Text>
           </span>
         </div>

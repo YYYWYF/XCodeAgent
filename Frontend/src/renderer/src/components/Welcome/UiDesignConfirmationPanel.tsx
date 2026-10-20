@@ -872,7 +872,7 @@ export default function UiDesignConfirmationPanel({
                         </Button>
                         <Button
                           className={cx('ui-design-action-btn')}
-                          disabled={generating || templates.length === 0}
+                          disabled={disabled || generating || templates.length === 0}
                           icon={<LayoutOutlined />}
                           onClick={() => setTemplatePickerFor(pageId)}
                           title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
@@ -1071,7 +1071,7 @@ export default function UiDesignConfirmationPanel({
                   </Button>
                   <Button
                     className={cx('ui-design-action-btn')}
-                    disabled={generating || templates.length === 0}
+                    disabled={disabled || generating || templates.length === 0}
                     icon={<LayoutOutlined />}
                     onClick={() => setTemplatePickerFor(pageId)}
                     title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
@@ -1090,7 +1090,7 @@ export default function UiDesignConfirmationPanel({
                   ) : (
                     <Button
                       className={cx('ui-design-action-btn', 'ui-design-action-btn-regenerate')}
-                      disabled={generating}
+                      disabled={disabled || generating}
                       icon={<ReloadOutlined />}
                       onClick={() => submitPageAction(pageId, 'regenerate')}
                       title={
@@ -1240,7 +1240,7 @@ export default function UiDesignConfirmationPanel({
                       <img src={previewImg} alt={tpl.manifest.name} draggable={false} />
                     ) : (
                       <div className={cx('ui-design-template-thumb-empty')}>
-                        <Text type="secondary" style={{ fontSize: 11 }}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
                           暂无预览图
                         </Text>
                       </div>

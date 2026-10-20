@@ -52,6 +52,7 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
 
         self.assertEqual(config["ci"]["collect"]["url"], ["http://localhost:3000"])
         self.assertEqual(settings["skipAudits"], ["full-page-screenshot"])
+        self.assertEqual(settings["locale"], "zh-CN")
 
     def test_missing_frontend_returns_skipped_advisory(self) -> None:
         """没有可启动前端时跳过性能测试且不阻断门禁。"""
@@ -154,6 +155,7 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
         self.assertEqual(check["performance_scores"]["performance"], 92)
         self.assertEqual(check["performance_scores"]["best_practices"], 100)
         self.assertEqual(check["performance_metrics"]["lcp"], 1800)
+        self.assertIn("metric_scores", check["performance_details"])
         self.assertTrue(check["report_path"].endswith("frontend-performance.html"))
         stop.assert_called_once()
 

@@ -6,6 +6,7 @@ import unittest
 from pydantic import ValidationError
 
 from app.services.build_task_reuse import resolve_reuse_facts
+from app.services.build_unit_compiler import apply_unit_compilation
 from app.services.build_task_reuse_contracts import ExternalCapability, ReuseFacts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.planning_frozen import freeze_json
@@ -87,7 +88,7 @@ def _inputs(*tasks: dict, source_type: str = "database", formal_plan: dict | Non
     ]
     context = {"required_unit_ids": required_unit_ids}
     facts = resolve_reuse_facts(
-        confirmed_plan=_plan(*tasks) if tasks else None, unit_skeleton=skeleton,
+        confirmed_plan=_plan(*apply_unit_compilation(skeleton, list(tasks), {"project_plan": plan})) if tasks else None, unit_skeleton=skeleton,
         build_context=context, workspace_snapshot={"workspace_revision": "snapshot-1"}, formal_plan=plan,
     )
     # 此处直接使用上游事实 DTO；真实模板检查与证据生成已由 T2.2 workspace 回归覆盖。

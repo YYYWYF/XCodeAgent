@@ -483,7 +483,9 @@ def _configuration_alignment_update(
         "product_plan_json_path": product_json_path,
         "clarification": {
             **_confirmation_payload(pending_product),
-            "mode": "application_configuration_alignment",
+            # 配置投影问题继续使用联合确认卡，复用已有编辑、修订和确认动作。
+            # 确认时仍重新同步 Markdown 并检查配置，不能将诊断变成无可提交的特殊门。
+            "errors": list(errors),
             "message": "本次修订的应用配置与需求/产品权限规则不一致："
             + "；".join(errors)
             + " 请修订两份草稿后再次联合确认。",
@@ -502,7 +504,16 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _product_planning_request(state, interaction)
     action = str(interaction.get("action") or "")
-    existing = state.get("product_plan")
+    # 阶段磁盘加载用空对象表示尚无产物；首次生成不能把它当作历史版本校验。
+    existing = state.get("product_plan") or None
+    # 修订游标由上游提交到 checkpoint；旧产品稿只作为本次生成基线，
+    # 不可先修补或直接恢复旧确认卡而跳过最新需求的完整产品规划。
+    revision_generation = (
+        state.get("design_change_submission") is True
+        and state.get("design_change_generation_target") == "product_planning"
+        and bool(str(state.get("design_change_generation_request") or "").strip())
+        and not interaction
+    )
     clarification = state.get("clarification")
     if (
         isinstance(existing, dict)
@@ -541,7 +552,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             action == "confirm" if application_planning_scope else _user_confirmed(request)
         )
         pages_drifted = _ordered_page_ids(existing) != _ordered_page_ids(requirement_spec)
-        if not (confirming and pages_drifted):
+        if not revision_generation and not (confirming and pages_drifted):
             existing_errors = validate_product_plan(existing, requirement_spec)
             if existing_errors:
                 logger.warning("existing_product_plan_validation_errors: %s", existing_errors)
@@ -558,6 +569,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
         and not _has_explicit_submission(state)
+        and not revision_generation
     ):
         markdown_path, json_path = write_product_plan_documents(state, existing)
         return {

@@ -3,13 +3,10 @@ import {
   ArrowRightOutlined,
   AimOutlined,
   CloudServerOutlined,
-  DesktopOutlined,
   ExpandOutlined,
-  MobileOutlined,
-  ReloadOutlined,
-  TabletOutlined
+  ReloadOutlined
 } from '@ant-design/icons'
-import { Button, Input, Segmented, Select, Tooltip, Typography } from 'antd'
+import { Button, Input, Select, Tooltip, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -39,9 +36,8 @@ import {
 
 const { Text } = Typography
 
-type PreviewViewport = 'desktop' | 'tablet' | 'mobile'
-
 type Props = {
+  inspectionDisabled?: boolean
   serviceControl?: ServiceStatusControl
   /**
    * 外部托管预览的服务状态（历史版本预览用）。
@@ -76,6 +72,7 @@ function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
 
 /** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
 export default function BrowserPreviewPanel({
+  inspectionDisabled = false,
   serviceControl,
   externalServiceStatus,
   application,
@@ -112,13 +109,13 @@ export default function BrowserPreviewPanel({
   const [navigation, setNavigation] = useState(() => ({ history: [initialUrl], index: 0 }))
   const [draftUrl, setDraftUrl] = useState(initialUrl)
   const [selectedPage, setSelectedPage] = useState(initialPagePath)
-  const [viewport, setViewport] = useState<PreviewViewport>('desktop')
   const [refreshKey, setRefreshKey] = useState(0)
   const [openError, setOpenError] = useState('')
   const [launchError, setLaunchError] = useState(externalError || '')
   const previewUrl = navigation.history[navigation.index]
   const frameKey = `${previewUrl}-${refreshKey}`
   const elementInspector = useElementInspector({
+    disabled: inspectionDisabled,
     frameKey,
     onElementContextChange,
     onInspectingChange,
@@ -295,7 +292,9 @@ export default function BrowserPreviewPanel({
           />
           <Tooltip
             title={
-              elementInspector.active
+              inspectionDisabled
+                ? '验收阶段不支持元素审查'
+                : elementInspector.active
                 ? '退出元素审查'
                 : elementInspector.ready
                   ? '审查预览页面中的元素'
@@ -307,7 +306,7 @@ export default function BrowserPreviewPanel({
                 aria-label={elementInspector.active ? '退出审查' : '审查元素'}
                 aria-pressed={elementInspector.active}
                 className={cx('browser-inspector-button')}
-                disabled={!elementInspector.ready && !elementInspector.active}
+                disabled={inspectionDisabled || (!elementInspector.ready && !elementInspector.active)}
                 icon={<AimOutlined />}
                 onClick={elementInspector.toggle}
                 type="primary"
@@ -323,17 +322,6 @@ export default function BrowserPreviewPanel({
             value={selectedPage}
             onChange={handlePageChange}
           />
-          <Segmented
-            aria-label="视口"
-            className={cx('browser-viewport-switcher')}
-            options={[
-              { label: <DesktopOutlined />, value: 'desktop' },
-              { label: <TabletOutlined />, value: 'tablet' },
-              { label: <MobileOutlined />, value: 'mobile' }
-            ]}
-            value={viewport}
-            onChange={(value) => setViewport(value as PreviewViewport)}
-          />
           <Tooltip title="在系统浏览器打开">
             <Button
               aria-label="在系统浏览器打开"
@@ -346,7 +334,7 @@ export default function BrowserPreviewPanel({
       </div>
 
       <div className={cx('browser-preview-stage')}>
-        <div className={cx('browser-preview-viewport', viewport)}>
+        <div className={cx('browser-preview-viewport')}>
           {showServiceEmptyState ? (
             <div className={cx('browser-preview-service-empty')} role="status">
               <span className={cx('browser-preview-service-empty__icon')} aria-hidden="true">

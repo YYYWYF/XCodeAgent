@@ -10,6 +10,7 @@ from typing import AsyncIterator
 
 import aiosqlite
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.domain.workflow_recovery_boundary import failed_reentry_target
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
@@ -494,7 +495,7 @@ async def _claim_recovery_attempt(
         or not plan.target_node
         or (
             source.status is DurableExecutionStatus.FAILED
-            and plan.target_node != source.current_node
+            and plan.target_node != failed_reentry_target(source)
         )
     ):
         raise RecoveryExecutionError(
@@ -589,7 +590,9 @@ async def _claim_recovery_attempt(
                 persisted_source.execution_kind != "workbench"
                 or persisted_source.status is not DurableExecutionStatus.FAILED
                 or persisted_source.failure is not None
-                or persisted_source.current_node != plan.target_node
+                # 多个内部节点可归到同一业务入口，但 claim 前真实失败位置仍不能漂移。
+                or persisted_source.current_node != source.current_node
+                or failed_reentry_target(persisted_source) != plan.target_node
             ):
                 raise RecoveryExecutionError(
                     "RECOVERY_SOURCE_NOT_ADMISSIBLE",
@@ -1747,7 +1750,7 @@ async def list_recovery_projection_candidates(
     *,
     limit: int = 16,
 ) -> list[DurableExecutionRecord]:
-    """只读取没有正式恢复 child 的 FAILED/INTERRUPTED execution 叶子。"""
+    """读取未主动结束的执行索引，业务状态统一由 checkpoint 解释。"""
 
     await initialize_execution_recovery_store(workspace)
     bounded_limit = max(1, min(int(limit), 128))
@@ -1760,7 +1763,7 @@ async def list_recovery_projection_candidates(
                    e.started_at, e.updated_at, e.ended_at, e.owner_session_id,
                    e.failure_json
             FROM execution_records AS e
-            WHERE e.status IN (?, ?)
+            WHERE e.status IN (?, ?, ?, ?)
               AND NOT EXISTS (
                   SELECT 1
                   FROM recovery_attempts AS a
@@ -1773,6 +1776,8 @@ async def list_recovery_projection_candidates(
             (
                 DurableExecutionStatus.INTERRUPTED.value,
                 DurableExecutionStatus.FAILED.value,
+                DurableExecutionStatus.RUNNING.value,
+                DurableExecutionStatus.AWAITING_USER.value,
                 RecoveryAttemptStatus.FAILED_PRESTART.value,
                 bounded_limit,
             ),

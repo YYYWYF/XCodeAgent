@@ -31,6 +31,7 @@ from app.services.build_task_plan_lifecycle import (
     release_session_owned_pending_build_task_plan,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
+from app.services.planning_confirmation_projection import prioritize_checkpoint_confirmation
 from app.services.workbench_progress_projection import project_workbench_progress
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.execution_recovery_projection import resolve_execution_recovery_projection
@@ -66,6 +67,8 @@ class ApplicationLifecycleAction(BaseModel):
         "prepare_session_deletion",
         "skip_entity_development",
         "register_managed_database",
+        "end_planning_execution",
+        "stop_planning_execution",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
@@ -116,6 +119,8 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "prepare_session_deletion",
             "skip_entity_development",
             "register_managed_database",
+            "end_planning_execution",
+            "stop_planning_execution",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
@@ -125,6 +130,12 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "readOnly": True,
             "identity": ["runId", "threadId", "ownerSessionId"],
             "dagGenerationSchema": "dag-generation.v1",
+        },
+        "endedTasks": {
+            "field": "endedExecutions", "checkedAtField": "endedExecutionsCheckedAt",
+            "availability": "workspaceUnchanged", "resumeEndpoint": "/workflow/run",
+            "resumeField": "forwardedProps.resumeExecutionRunId",
+            "checks": ["workspace_fingerprint", "owner_session", "thread", "target", "resource_claims", "checkpoint_run"],
         },
         "workflowIndependent": True,
         "developmentArtifacts": {
@@ -148,6 +159,11 @@ def application_lifecycle_input(payload: dict[str, Any]) -> dict[str, Any] | Non
         return None
     value = forwarded_props.get("applicationLifecycle")
     return value if isinstance(value, dict) else None
+
+
+async def _current_planning_refresh(workspace: str) -> dict[str, Any]:
+    """读取旧任务候选后，由当前 checkpoint 确认门决定其展示优先级。"""
+    return await prioritize_checkpoint_confirmation(workspace, resolve_planning_refresh_state(workspace))
 
 
 async def _prepare_session_deletion(request: ApplicationLifecycleAction) -> Any:
@@ -245,6 +261,16 @@ def build_application_lifecycle_ag_ui_stream(
             return await register_managed_database_action(
                 request.workspace_root, request.application.id,
             )
+        elif request.action == "stop_planning_execution":
+            from app.services.planning_execution_end import stop_planning_execution
+
+            state = await stop_planning_execution(request.workspace_root, str(payload.get("threadId") or ""))
+            message = "生成已停止，本轮修改已保留，可以在原会话继续生成。"
+        elif request.action == "end_planning_execution":
+            from app.services.planning_execution_end import end_planning_execution
+
+            state = await end_planning_execution(request.workspace_root, str(payload.get("threadId") or ""))
+            message = "本轮设计任务已结束，已有文件已保留，可以新建会话继续修改。"
         elif request.action == "get":
             from app.services.development_artifacts import refresh_development_artifacts
 
@@ -333,7 +359,7 @@ def build_application_lifecycle_ag_ui_stream(
             # 恢复或收口后的投影仅附加到当前响应，不能伪装成可跨重启持久化的生命周期事实。
             data["lifecycle"]["extensions"] = {
                 **dict(data["lifecycle"].get("extensions") or {}),
-                "planningRefresh": resolve_planning_refresh_state(request.workspace_root),
+                "planningRefresh": await _current_planning_refresh(request.workspace_root),
             }
         if request.action == "get":
             # 复用已落盘的进度供 Renderer 重入恢复，仅附加到 AG-UI 读取结果。
@@ -357,6 +383,15 @@ def build_application_lifecycle_ag_ui_stream(
                 recovery_projection = ExecutionRecoveryProjection(
                     generated_at=datetime.now(timezone.utc), error=ExecutionRecoveryProjectionError(),
                 )
+            # 无重试节点的执行已在退出后释放；同一 GET 必须立即返回新的 owner/资源状态。
+            refreshed = load_application_lifecycle(request.workspace_root)
+            if refreshed is not None and refreshed.revision > state.revision:
+                extensions = data["lifecycle"]["extensions"]
+                data["lifecycle"] = application_lifecycle_payload(refreshed)
+                data["lifecycle"]["extensions"] = {
+                    **extensions,
+                    "planningRefresh": await _current_planning_refresh(request.workspace_root),
+                }
             data["lifecycle"]["extensions"]["executionRecovery"] = recovery_projection.model_dump(
                 mode="json", by_alias=True,
             )
@@ -368,7 +403,7 @@ def build_application_lifecycle_ag_ui_stream(
     # 删除准备必须能停止目标会话的预览维护运行，不能先被维护互斥挡住。
     guarded_workspace = (
         None
-        if action in {"get", "workspace_attach", "prepare_session_deletion"}
+        if action in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution", "stop_planning_execution"}
         else str(resolved_input.get("workspaceRoot") or "") or None
     )
     return build_ag_ui_action_stream(
@@ -381,5 +416,5 @@ def build_application_lifecycle_ag_ui_stream(
         error_data=lambda _exc: {"action": resolved_input.get("action")},
         accept=accept,
         workspace_root=guarded_workspace,
-        register_workspace_run=action not in {"get", "workspace_attach", "prepare_session_deletion"},
+        register_workspace_run=action not in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution", "stop_planning_execution"},
     )

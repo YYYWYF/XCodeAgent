@@ -8,6 +8,7 @@ const { Text } = Typography
 
 type Props = {
   disabled?: boolean
+  submitting?: boolean
   onReject: () => void
   onAccept: () => void
 }
@@ -15,6 +16,7 @@ type Props = {
 /** 验收待确认底栏：不通过返回开发对话，通过动作由上层处理。 */
 export default function AcceptanceDecisionDock({
   disabled = false,
+  submitting = false,
   onReject,
   onAccept
 }: Props): ReactElement {
@@ -29,13 +31,13 @@ export default function AcceptanceDecisionDock({
           disabled={disabled}
           icon={<CloseCircleOutlined />}
           onClick={onReject}
-          type="primary"
         >
           不通过，进入对话
         </Button>
         <Button
           disabled={disabled}
           icon={<CheckCircleOutlined />}
+          loading={submitting}
           onClick={onAccept}
           type="primary"
         >

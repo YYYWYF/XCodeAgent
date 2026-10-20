@@ -169,6 +169,7 @@ class PlanningRunTests(unittest.TestCase):
             "candidate_task_count": len(recovered.tasks),
         })
         state = sm.PlanningRun(
+            unit_display_names={},
             planning_run_id="run-2", workflow_run_id="workflow-2", thread_id="thread-2",
             phase="generating_units",
             build_execution_scope={"type": "page", "targetId": "orders"},
@@ -209,6 +210,7 @@ class PlanningRunTests(unittest.TestCase):
         )
         accepted = sm.accept_recovered_candidate(
             sm.PlanningRun(
+                unit_display_names={},
                 planning_run_id="run-2",
                 workflow_run_id="workflow-2",
                 thread_id="thread-2",
@@ -254,6 +256,7 @@ class PlanningRunTests(unittest.TestCase):
                 })
                 with self.assertRaises(ValidationError):
                     sm.PlanningRun(
+                        unit_display_names={},
                         planning_run_id="run-2", workflow_run_id="workflow-2", thread_id="thread-2",
                         build_execution_scope={"type": "page", "targetId": "orders"},
                         input_fingerprint="frozen-input", base_confirmed_plan_digest="confirmed-digest",
@@ -285,6 +288,7 @@ class PlanningRunTests(unittest.TestCase):
             "candidate_task_count": len(generated.tasks),
         })
         state = sm.PlanningRun(
+            unit_display_names={},
             planning_run_id="run-2", workflow_run_id="workflow-2", thread_id="thread-2",
             phase="global_check", build_execution_scope={"type": "page", "targetId": "orders"},
             input_fingerprint="frozen-input", base_confirmed_plan_digest="confirmed-digest",

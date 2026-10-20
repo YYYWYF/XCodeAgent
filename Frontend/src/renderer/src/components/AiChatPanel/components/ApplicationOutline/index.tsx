@@ -255,7 +255,7 @@ export default function ApplicationOutline({
                   ))}
                   {visibleApiContracts.length === 0 ? (
                     <div className={cx('outline-empty')}>
-                      project_plan.json 的 api_contracts 中暂无接口
+                      暂无接口
                     </div>
                   ) : null}
                 </div>

@@ -112,6 +112,8 @@ def plan_business_node_reentry_action(
         if reentry_plan.target_node == "prepare_build_tasks"
         else "重试失败任务"
         if reentry_plan.target_node == "build"
+        else "重新测试"
+        if reentry_plan.target_node == "integration_test"
         else "重新执行失败步骤"
     )
     action = _action(
@@ -174,14 +176,14 @@ def plan_interrupted_continue_action(
         incident_id=incident_id,
         kind=RecoveryActionKind.CONTINUE_CHECKPOINT,
         label="继续执行",
-        description="从最新已验证的 checkpoint 继续执行未完成步骤。",
+        description="接着上次的进度，继续完成剩余步骤。",
     )
     return _action_plan(
         source=source,
         incident_id=incident_id,
         status=RecoveryIncidentStatus.RECOVERABLE,
         reason_code="INTERRUPTED_CONTINUE_READY",
-        message="已验证中断执行的最新 checkpoint，可以继续执行。",
+        message="上次任务已中断，点击「继续执行」接着完成。",
         primary_action=action,
     )
 
@@ -240,6 +242,7 @@ def _failed_node_retry_label(node: str | None) -> str:
         "prepare_build_tasks": "重新生成执行计划",
         "build": "重新执行代码生成",
         "code_review": "重新执行代码审查",
+        "integration_test": "重新测试",
     }.get(normalized, "重新执行失败步骤")
 
 

@@ -173,7 +173,8 @@ export function pendingDagConfirmationWorkflow(
     recovery.confirmation
   ) {
     return {
-      runId: recovery.workflowRunId || execution.runId,
+      // Pending 的 workflowRunId 是生成来源；确认失败交接后必须继续当前有效 execution。
+      runId: execution.runId,
       threadId: execution.threadId,
       events: [],
       summary: {
@@ -348,22 +349,16 @@ export function stageOutputPhase(
   return 'other'
 }
 
-/** 返回 Unit 的用户可见状态；前置与复用 Unit 永不误标为生成中。 */
+/** 按实际生成状态返回中文文案，不从参与方式反向推断状态。 */
 export function dagGenerationUnitStatusLabel(unit: DagGenerationUnitRecord): string {
-  if (unit.status === 'not_required') {
-    if (unit.participation === 'not_required') return 'not_required'
-    if (unit.participation === 'prerequisite_only') return 'prerequisite'
-    if (unit.participation === 'reuse_only') return 'reused'
-    if (unit.participation === 'structural_only') return 'structural'
-  }
   return {
-    not_required: 'not_required',
-    pending: 'waiting',
-    generating: 'generating',
-    validating: 'validating',
-    candidate_ready: 'candidate_ready',
-    round_exhausted: 'round_exhausted',
-    aborted: 'aborted'
+    not_required: '无需生成',
+    pending: '等待生成',
+    generating: '生成中',
+    validating: '校验中',
+    candidate_ready: '生成完成',
+    round_exhausted: '本轮尝试已用尽',
+    aborted: '已终止'
   }[unit.status]
 }
 
@@ -376,36 +371,124 @@ export function dagGenerationUnitAttemptCopy(unit: DagGenerationUnitRecord): str
   ) {
     return ''
   }
-  return `attempt ${unit.attemptInRound}/${unit.localAttemptLimit}`
+  return `第 ${unit.attemptInRound}/${unit.localAttemptLimit} 次尝试`
 }
 
 /** 返回复用与候选任务的安全数量，不展示 Candidate Task 身份或正文。 */
 export function dagGenerationUnitTaskCopy(unit: DagGenerationUnitRecord): string {
   if (unit.retainedTaskCount === 0 && unit.candidateTaskCount === 0) return ''
-  return `retained ${unit.retainedTaskCount} / candidate ${unit.candidateTaskCount}`
+  const retained = unit.retainedTaskCount
+  const added = unit.candidateTaskCount
+  if (retained > 0 && added > 0) return `复用 ${retained} 项 · 新增 ${added} 项`
+  if (retained > 0) return `复用 ${retained} 项任务`
+  return `新增 ${added} 项任务`
 }
 
-/** 返回 Unit 当前策略文案，auth 等确定性 Unit 始终明确标识 deterministic。 */
+/** 返回与生成状态分离的处理策略文案。 */
 export function dagGenerationStrategyLabel(unit: DagGenerationUnitRecord): string {
-  if (unit.generationStrategy === 'not_required') return 'not_required'
-  if (unit.generationStrategy === 'deterministic') return 'deterministic'
-  if (unit.generationStrategy === 'prerequisite_only') return 'prerequisite'
-  if (unit.generationStrategy === 'reuse_only') return 'reused'
-  if (unit.generationStrategy === 'structural_only') return 'structural'
-  if (unit.participation === 'reuse_and_generate') return 'reuse_and_generate'
-  return 'model'
+  if (unit.participation === 'reuse_and_generate') return '部分复用 · 部分新增'
+  if (unit.generationStrategy === 'model') return 'AI 生成'
+  if (unit.generationStrategy === 'deterministic') return '系统生成'
+  if (unit.generationStrategy === 'reuse_only') {
+    if (unit.retainedTaskCount > 0) return '复用已有任务'
+    if (unit.reusableCapabilityCount > 0) return '沿用已有能力'
+    return '已有职责已满足'
+  }
+  if (unit.generationStrategy === 'prerequisite_only') return '前置条件已满足'
+  if (unit.generationStrategy === 'structural_only') return '用于组织任务，无需单独开发'
+  return '无新增任务需求'
+}
+
+/** 返回 Unit 的用户可见名称，动态业务名称优先，历史快照缺名时按类别安全兜底。 */
+export function dagGenerationUnitDisplayName(
+  unit: DagGenerationUnitRecord,
+  index: number,
+  units: DagGenerationUnitRecord[]
+): string {
+  const displayName = unit.displayName?.trim()
+  if (displayName && displayName !== unit.id) return displayName
+
+  const knownNames: Record<string, string> = {
+    'frontend:api-client': '前端接口调用封装',
+    'frontend:data:static': '前端静态数据处理',
+    'frontend:auth-guard': '页面访问权限配置',
+    'frontend:shell': '前端应用环境',
+    'frontend:route-registry': '前端页面路由配置',
+    'backend:bootstrap': '后端基础环境配置',
+    'application:root': '应用任务结构',
+    'app:integration': '应用集成节点'
+  }
+  const knownName = knownNames[unit.id]
+  if (knownName) return knownName
+
+  const pageUnit = unit.kind === 'page' || unit.id.startsWith('page:')
+  const endpointUnit = unit.id.startsWith('backend:endpoint:')
+  const categoryName = pageUnit
+    ? '未命名页面'
+    : endpointUnit
+      ? '未命名接口'
+      : unit.id.startsWith('frontend:data:')
+        ? '前端数据处理'
+        : unit.kind === 'frontend'
+          ? '前端公共能力'
+          : unit.kind === 'backend'
+            ? '后端公共能力'
+            : unit.kind === 'database'
+              ? '数据库开发任务'
+              : unit.kind === 'authorization'
+                ? '权限配置任务'
+                : unit.kind === 'app'
+                  ? '应用集成任务'
+                  : '开发任务'
+  const sameCategoryOrdinal = units
+    .slice(0, index + 1)
+    .filter((candidate) => {
+      if (pageUnit) return candidate.kind === 'page' || candidate.id.startsWith('page:')
+      if (endpointUnit) return candidate.id.startsWith('backend:endpoint:')
+      return candidate.kind === unit.kind && candidate.id !== 'application:root'
+    }).length
+  const sameCategoryCount = units.filter((candidate) => {
+    if (pageUnit) return candidate.kind === 'page' || candidate.id.startsWith('page:')
+    if (endpointUnit) return candidate.id.startsWith('backend:endpoint:')
+    return candidate.kind === unit.kind && candidate.id !== 'application:root'
+  }).length
+  return sameCategoryCount > 1 ? `${categoryName}（第 ${sameCategoryOrdinal} 项）` : categoryName
+}
+
+/** 在面向普通用户的校验说明中替换当前快照可识别的 Unit ID。 */
+export function dagGenerationIssueMessage(
+  message: string,
+  units: DagGenerationUnitRecord[]
+): string {
+  return units
+    .map((unit, index) => ({
+      id: unit.id,
+      displayName: dagGenerationUnitDisplayName(unit, index, units)
+    }))
+    .sort((left, right) => right.id.length - left.id.length)
+    .reduce((copy, item) => {
+      return copy.split(item.id).join(item.displayName)
+    }, message)
 }
 
 /** 返回 Run 级摘要；round_exhausted 只描述局部轮次，不提升为 Run 失败。 */
 export function dagGenerationSummaryCopy(snapshot: DagGenerationSnapshot): string {
   if (snapshot.status === 'failed') return '执行计划生成失败'
   if (snapshot.status === 'cancelled') return '执行计划生成已取消'
-  if (snapshot.summary.roundExhaustedUnitCount > 0) return '本轮已耗尽，等待修复决策'
-  if (snapshot.phase === 'global_check') return '正在执行 Global validation'
-  if (snapshot.globalRepairRound > 0) {
-    return `正在执行 Global repair ${snapshot.globalRepairRound}/${snapshot.globalRepairLimit}`
+  // 当前阶段优先于累计修复轮次，后续汇总、校验和保存不能继续标成修复中。
+  const phaseMessage = {
+    preparing: '正在准备开发任务',
+    global_check: '正在进行全局校验',
+    assembling: '正在汇总开发任务',
+    validating: '正在校验执行计划',
+    persisting_pending: '正在保存待确认计划'
   }
-  if (snapshot.summary.activeUnitCount > 0) return '正在处理 Unit'
-  if (snapshot.summary.pendingUnitCount > 0) return 'Unit 等待调度'
-  return 'Unit 候选已就绪，等待全局校验'
+  if (snapshot.phase !== 'generating_units') return phaseMessage[snapshot.phase]
+  if (snapshot.summary.roundExhaustedUnitCount > 0) return '部分开发任务本轮尝试已用尽'
+  if (snapshot.globalRepairRound > 0) {
+    return `正在进行全局修复，第 ${snapshot.globalRepairRound}/${snapshot.globalRepairLimit} 轮`
+  }
+  if (snapshot.summary.activeUnitCount > 0) return '正在处理开发任务'
+  if (snapshot.summary.pendingUnitCount > 0) return '开发任务等待安排'
+  return '开发任务已生成，等待全局校验'
 }

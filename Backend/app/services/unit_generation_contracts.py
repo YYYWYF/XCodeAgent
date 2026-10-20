@@ -188,7 +188,8 @@ class CandidateAttempt(_GenerationModel):
     candidate_id 默认由平台生成；反序列化可恢复原 ID。from_generated_attempt() 仅在
     candidate_id 为 None 时分配新 ID，显式值必须通过自身字段校验。后续模型响应适配器
     只能提交 tasks，不得把模型输出直接展开为本 DTO 的平台元数据。
-    tasks 保留原始任务正文，包括非法或缺失 Task ID，供后续 Validator 报错。
+    tasks 保存生成入口交付的任务（可能已按冻结职责唯一绑定缺失 ID）；其他非法字段
+    仍交给 Validator 报错。原始模型正文保留在 UnitGenerationAttemptResult.raw_response。
     validation_issues 复用 T1.1 契约，不在此实现归因或状态转换。Candidate 当前
     identity 只表达当前 Run/Unit/round；generated_from 或 recovered_from 才表达来源。
     """

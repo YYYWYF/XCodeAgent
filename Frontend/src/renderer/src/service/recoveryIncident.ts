@@ -11,6 +11,7 @@ import { isTemplateEngineFailure } from './recoveryFailureMessage'
 export type RecoveryIncidentPresentation =
   | {
       kind: 'recoverable'
+      presentation?: 'stopped_generation'
       title: string
       failureDiagnostic?: RecoveryFailureDiagnostic | null
       failureMessage?: string
@@ -104,12 +105,18 @@ export function applicationPlanningRecoveryIncident(
   const failureTitle = recovery?.failureDiagnostic?.operation === 'template_reconcile'
     ? '模板更新失败' : '模板生成失败'
   if (recovery && actionPlan?.status === 'recoverable' && actionPlan.primaryAction) {
+    // Backend 仅为已中断的规划签发「继续生成」；存在真实失败诊断时仍保留错误展示。
+    const stopped = recovery.classification === 'ready_to_continue' &&
+      actionPlan.primaryAction.label === '继续生成' && !recovery.failureDiagnostic
     return {
       kind: 'recoverable',
-      title: templateFailure ? failureTitle : '执行已中断',
-      failureDiagnostic: recovery.failureDiagnostic,
-      failureMessage: currentPlanningFailureMessage(state, actionPlan),
-      recoveryMessage: actionPlan.message,
+      ...(stopped ? { presentation: 'stopped_generation' as const } : {}),
+      title: stopped ? '已停止生成' : actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
+        ? '前置文件需要重新生成' : templateFailure ? failureTitle : '执行已中断',
+      failureDiagnostic: actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE' && recovery.failureDiagnostic
+        ? { ...recovery.failureDiagnostic, userMessage: actionPlan.message } : recovery.failureDiagnostic,
+      failureMessage: stopped ? undefined : currentPlanningFailureMessage(state, actionPlan),
+      recoveryMessage: stopped ? '本轮修改已保留，可基于最新文件继续生成。' : actionPlan.message,
       action: actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
     }
@@ -170,6 +177,7 @@ export function workbenchRecoveryIncident(
   const failureMessage = buildRetry && /^Workflow failed[：:]\s*完成 \d+ 个节点。$/.test(rawFailureMessage || '')
     ? '开发任务执行失败。' : rawFailureMessage
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
+    const regenerate = actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
     const retryingNode = ['retry_failed_node', 'retry_business_node'].includes(
       actionPlan.primaryAction.kind
     )
@@ -177,12 +185,13 @@ export function workbenchRecoveryIncident(
     const nodeLabel = targetNode ? WORKBENCH_RETRY_NODE_LABELS[targetNode] : undefined
     return {
       kind: 'recoverable',
-      title: retryingNode
+      title: regenerate ? '前置文件需要重新生成' : retryingNode
         ? '当前执行失败'
         : '工作台执行需要恢复',
-      failureDiagnostic,
+      failureDiagnostic: regenerate && failureDiagnostic
+        ? { ...failureDiagnostic, userMessage: actionPlan.message } : failureDiagnostic,
       failureMessage,
-      recoveryMessage: buildRetry
+      recoveryMessage: regenerate ? actionPlan.message : buildRetry
         ? `${completedMessage}将保留已完成进度，${buildSummary?.retry_available === true
             ? '仅重试失败任务。'
             : buildSummary?.recovery_available === true
@@ -190,10 +199,13 @@ export function workbenchRecoveryIncident(
               : '继续处理失败任务。'}`
         : candidate.executionStatus === 'interrupted' && targetNode === 'build'
           ? '将从开发实现阶段重新开始，重新检查当前文件并执行任务清单。'
+          : retryingNode && targetNode === 'integration_test'
+            // 恢复入口由后端签发；此处只解释测试阶段重启，不在前端改写节点或预算。
+            ? '将从测试阶段重新开始，重新检查当前代码，并重新计算本轮修复次数。'
           : retryingNode
         ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
         : '可以继续当前执行。',
-      action: retryingNode
+      action: retryingNode && !regenerate
         ? { ...actionPlan.primaryAction, label: '重试' }
         : actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
@@ -205,7 +217,9 @@ export function workbenchRecoveryIncident(
       title: candidate.executionStatus === 'failed' ? '当前执行失败' : '执行未完成',
       failureDiagnostic,
       failureMessage,
-      recoveryMessage: '请重试；系统会重新确认执行起点。',
+      recoveryMessage: actionPlan.reasonCode === 'RETRY_ENTRY_NOT_FOUND'
+        ? '找不到恢复入口，请手动发起流程。'
+        : '请重试；系统会重新确认执行起点。',
       reasonCode: actionPlan.reasonCode
     }
   }

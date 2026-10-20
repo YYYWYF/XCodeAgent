@@ -22,6 +22,7 @@ from app.services.access_control_intent import (
     has_explicit_capability_change,
     has_explicit_business_access_control_change,
 )
+from app.services.design_revision_admission import approve_design_revision_from_checkpoint
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -59,6 +60,7 @@ def invalidated_downstream_planning_state() -> dict[str, Any]:
         "technical_plan_candidate_sha256": "",
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
+        "technical_plan_repair_source_run_id": "",
         "project_plan": {},
         "project_plan_path": "",
         "project_plan_json_path": "",
@@ -78,6 +80,7 @@ def technical_plan_revision_reset_state() -> dict[str, Any]:
         "technical_plan_candidate_sha256": "",
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
+        "technical_plan_repair_source_run_id": "",
         "project_plan": {},
         "project_plan_path": "",
         "project_plan_json_path": "",
@@ -89,6 +92,12 @@ def technical_plan_revision_reset_state() -> dict[str, Any]:
 def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
     """识别产品语义；只有确定性 Policy 允许的修改才回退正式生命周期。"""
 
+    intent = state.get("design_revision_intent")
+    if isinstance(intent, dict) and intent:
+        # 当前节点已有 durable 输入；批准后即使在需求节点前退出，也能从本节点幂等恢复。
+        approve_design_revision_from_checkpoint(
+            _workspace(state), intent, str(state.get("active_thread_id") or ""),
+        )
     request = str(state.get("request") or "").strip()
     if not request:
         raise ValueError("设计变更必须提供用户输入。")
@@ -197,6 +206,7 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
         }
     update: dict[str, Any] = {
         "workflow_scope": "application_planning",
+        "design_revision_intent": {},
         # design_intent_analysis 已消费本次 START 指令；即使下游生成中断，
         # checkpoint 也不能继续携带旧入口污染下一次恢复。
         "resume_from": "",
@@ -406,7 +416,17 @@ def design_node_update(
         return normalized_update
     generation_target = str(state.get("design_change_generation_target") or "")
     generation_request = str(state.get("design_change_generation_request") or "")
-    if generation_target == node_name and update.get("status") == "completed":
+    # 需求与产品计划共用确认门：需求草稿就绪即应生成新的 ProductPlan，
+    # 不能等需求单独 confirmed，否则旧待确认产品稿会被直接复用。
+    requirement_draft_ready = (
+        node_name == "requirements"
+        and (_dict_value(update.get("requirement_spec")) or {}).get("confirmation_status")
+        == "pending_user_confirmation"
+        and not update.get("pending_application_config_target")
+    )
+    if generation_target == node_name and (
+        update.get("status") == "completed" or requirement_draft_ready
+    ):
         generation_target = DESIGN_CHANGE_NEXT_NODE.get(node_name, "")
         generation_request = _downstream_regeneration_request(node_name, generation_target)
     return {

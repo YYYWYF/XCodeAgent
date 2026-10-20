@@ -2,19 +2,11 @@
 
 ## 边界与现状
 
-ReuseFacts 回答 confirmed DAG 已登记哪些职责、workspace 已证明哪些能力。
-它不回答任务是否执行成功，也不计算本轮缺项、`planning_unit_ids`、
-`generation_requirements`、Candidate、Scope Assembly 或执行依赖。
+ReuseFacts 回答已确认任务计划登记了哪些职责、当前工作区证据能证明哪些能力。它不判断任务是否执行成功，也不计算本轮职责缺项、`planning_unit_ids`、`generation_requirements`、Candidate 或执行依赖；这些工作分别由职责需求计算、候选生成和任务图组装负责。
 
-T2.4 已移除 `tasks.py` 中按历史 Task completed 判断 shell reuse 的分支；
-shell 改为只消费 `resolve_template_prerequisite_facts` 的外部能力证据。
-其他 Unit 的 `_replaceable_unit_ids` 与 `_merge_prepared_scope_tasks` 仍按整 Unit 替换，
-与新规划基线不同。T2.2 的完整事实层尚未接入这些旧决策。
-后续接入必须同时遵守“同一共享 Unit 可 retain + generate”和 append-only 约束。
+**当前生产集成**：`task_planning_adapter.py` 在 DAG 输入准备阶段调用 `resolve_reuse_facts`，并将冻结事实传入 `assemble_mainline_planning_inputs`。`unit_generation_requirements.py` 用这些事实计算每个职责分组尚缺的工作；`dag_planning_orchestrator.py` 将事实用于候选生成、局部校验和全局问题归因；`scope_assembly.py` 校验 ReuseFacts 与完整正式任务注册表一致，再保留正式任务并追加当前 Run 的候选任务。当前主流程不是按整个职责分组替换历史任务，也不只在 shell 路径消费复用事实。
 
-T2.3 的 `unit_generation_requirements.py` 已消费本层事实计算缺项；输入、精确职责身份
-和生成策略见 `docs/UNIT_GENERATION_REQUIREMENTS.md`。除 shell 外，两层仍未接入旧 Planning 主流程。
-shell 的独立接口与验收见 `docs/FRONTEND_SHELL_PREREQUISITE.md`。
+事实层仍保持纯函数边界：它读取调用方提供的已确认计划、骨架、正式计划与工作区证据，不自行读写工作区，不选择 Candidate，不执行 Scope Assembly，不保存 PendingPlan。当前路径的主要调用链见 [DAG 任务生成技术交接](DAG_TASK_GENERATION_TECHNICAL_HANDOFF.md)。
 
 ## 接口
 
@@ -26,23 +18,22 @@ resolve_reuse_facts(
     build_context,
     workspace_snapshot,
     formal_plan,
-    template_readiness=None,
+    template_state_context=None,
     auth_resource_inspection=None,
 ) -> ReuseFacts
 ```
 
 - `confirmed_plan`：来自 `load_confirmed_build_task_plan(workspace_root)` 的正式文件内容，或 `None`。
   函数自身不读取文件，也不能替调用方证明任意内存 dict 的文件来源。
-  防御检查拒绝非 confirmed、失败计划、非 v3 或未通过 task graph validation 的输入。
+  防御检查拒绝非 confirmed、失败计划、非 `build-dag.v4` 或未通过 task graph validation 的输入。
 - `unit_skeleton`：当前 `ensure_build_unit_skeleton` 输出，使用 `build_units` 的精确键。
-- `build_context`：现有定向上下文。`required_unit_ids` 仅用于 workspace 前置问题归因，
-  不裁剪历史 Task；`template_variant` 在存在时必须与只读检查结果一致。
+- `build_context`：现有定向上下文。`required_unit_ids` 仅用于模板前置问题归因，不裁剪历史 Task；
+  `template_context` 必须与单独传入的 `template_state_context` 完全一致。
 - `workspace_snapshot`：当前工作区快照，以 `workspace_revision` 标识证据所属快照。
 - `formal_plan`：完整正式 TechnicalPlan 的运行时投影；Endpoint 目录来自
   `api_contracts[].id + endpoints[].id`，不能只传当前目标的裁剪目录。
-- `template_readiness`：可选，必须由调用方在同次工作区检查中调用现有
-  `inspect_template_generation_readiness` 获得，不能由模型生成。
-  本 Task 不改变 WorkspaceSnapshot 存储格式。
+- `template_state_context`：可选的冻结 V2 TemplateState 绑定；必须来自正式 TemplateState，
+  且与 BuildContext 中的 `template_context` 一致。不能从文件扫描或模型输出推断。
 - `auth_resource_inspection`：T2.5B 可选权限资源检查证据，由调用方在同次 workspace
   检查中使用当前确认 catalog 调用 `inspect_authorization_resource_catalog` 获得。
   不能从扫描结果、模型陈述或旧 catalog 的检查结果补造该证据。
@@ -100,15 +91,14 @@ capability 和正式 Endpoint owner。不会因此产生 orders API 的 capabili
 
 ## workspace external capability
 
-第一项有现成确定性证据的能力是 `frontend.shell.ready`：
+第一项由正式输入提供的能力是 `frontend.shell.ready`：
 
 - 骨架包含 `frontend:shell`；
-- 平台模板只读检查 `ready=True`、无 errors，具有 manifest 和 main/auth 变体；
-- 存在 workspace revision，且与 BuildContext 的模板变体不冲突。
+- `template_state_context` 明确绑定 `.devagentstudio/template-state.json`，包含有效的 `template_revision` 与 `effective_capabilities`，并与 `build_context.template_context` 一致；
+- 当前 `WorkspaceSnapshot` 提供有效的 `workspace_revision`。
 
-外部能力记录 template manifest 路径及内容 SHA-256，提供证据追踪。
-它不创建 shell Task，也不创建 Task dependency。
-缺少 `template_readiness` 时不宣称 shell 已满足；已有上游 gate 仍负责前置检查。
+外部能力记录 TemplateState 路径、模板 revision、绑定内容摘要及 workspace revision，提供证据追踪。
+它不创建 shell Task，也不创建 Task dependency。缺少有效 `template_state_context` 时不宣称 shell 已满足；已有上游 gate 仍负责前置检查。
 
 扫描到 package.json、App.tsx、HTTP client 或模型声称 `inspection_status=completed`
 都不构成能力证明。当前服务不从这些弱线索推导 adapter、Endpoint 或权限资源已满足。
@@ -159,11 +149,11 @@ facts = resolve_reuse_facts(
 证据只说明同次检查时的 workspace 状态，不承诺之后文件不变，不替代 Build 验证。
 
 历史 R1 provider 和 workspace 的 R2 external capability 可以同时存在。
-本任务不接入旧 Planning 主流程、不修改 Build execution、writer ownership 或 Page dependency compile。
+上述 `auth_resource_inspection` 是 `resolve_reuse_facts` 支持的可选输入。当前 `task_planning_adapter.py` 的生产调用传入冻结的 TemplateState context，但没有传入 `auth_resource_inspection`；因此本节描述的是复用事实层的可选契约，不能据此断言该工作区权限资源检查已接入当前主线。
 
 ## 验证入口
 
-- 新增：`Backend/tests/test_build_task_reuse.py`、`test_build_task_reuse_workspace.py`。
+- 复用事实与工作区能力证据：`Backend/tests/test_build_task_reuse.py`、`test_build_task_reuse_workspace.py`。
 - 前置契约：`test_planning_issues.py`、`test_unit_generation_contracts.py`、`test_confirmed_build_task_plan_loader.py`。
 - 必须回归：R-PLAN、R-TEMPLATE、R-AUTH 全部文件。
 - T2.5B 新增：`Backend/tests/test_build_task_reuse_auth.py`；必须回归 R-AUTH、R-PLAN，

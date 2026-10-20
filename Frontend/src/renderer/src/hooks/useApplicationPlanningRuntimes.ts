@@ -5,7 +5,12 @@ import {
   type ApplicationPlanningRuntimeDependencies
 } from '../service/applicationPlanningRuntime'
 import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
-import type { ApplicationPlanningConfirmation, WorkflowRunPayload } from '../typings'
+import type {
+  ApplicationPlanningDebugStage,
+  ApplicationPlanningConfirmation,
+  WorkflowDebugOptions,
+  WorkflowRunPayload
+} from '../typings'
 
 export type ApplicationPlanningRuntimesOptions = {
   activePlannings: ApplicationPlanningCurrentState[]
@@ -26,7 +31,12 @@ export type ApplicationPlanningRuntimesController = {
   saveRequirementSpec: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['saveRequirementSpec']>) => ReturnType<ApplicationPlanningRuntime['saveRequirementSpec']>
   startDesignRevision: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['startDesignRevision']>) => Promise<void>
   retryCurrentFailure: (applicationId: string) => Promise<void>
-  startIterationPlanning: (applicationId: string, request: string) => Promise<void>
+  startIterationPlanning: (
+    applicationId: string,
+    request: string,
+    workflowDebug?: WorkflowDebugOptions,
+    debugStage?: ApplicationPlanningDebugStage
+  ) => Promise<void>
   retryTemplateReconcile: (applicationId: string) => Promise<void>
   reconcileCurrentState: (applicationId: string) => ReturnType<ApplicationPlanningRuntime['reconcileCurrentState']>
   stop: (applicationId: string) => Promise<void>
@@ -88,7 +98,7 @@ export function useApplicationPlanningRuntimes(
     return ensureRuntime(current)
   }, [ensureRuntime])
 
-  // 这里只同步前端对象的存在性，不执行后台 checkpoint 对账或周期性轮询。
+  // 同步前端对象的存在性；脱离本地执行流的 running 由下方只读校准跟进。
   useEffect(() => {
     for (const [key, runtime] of runtimesRef.current) {
       const current = optionsRef.current.getPlanningState(runtime.applicationId)
@@ -106,6 +116,18 @@ export function useApplicationPlanningRuntimes(
       })
     }
   }, [options.activePlannings, ensureRuntime])
+
+  // 跟进脱离本地流的运行与 UI 后台生成池；只读 GET 不恢复 Graph，也不提交确认。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const runtime of runtimesRef.current.values()) {
+        void runtime.refreshDetachedRunningState().catch((reason: unknown) => {
+          console.error('[planning-runtime] detached running reconcile failed', reason)
+        })
+      }
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // 应用根部真正卸载时才释放所有后台执行器；视图显隐不会触发这里。
   useEffect(() => () => {
@@ -142,7 +164,8 @@ export function useApplicationPlanningRuntimes(
     /** 使用调用时的当前状态重试。 */
     retryCurrentFailure: (applicationId) => requireRuntime(applicationId).retryCurrentFailure(),
     /** 新迭代发起后用户输入需求，启动 planning workflow。 */
-    startIterationPlanning: (applicationId, request) => requireRuntime(applicationId).startIterationPlanning(request),
+    startIterationPlanning: (applicationId, request, workflowDebug, debugStage) =>
+      requireRuntime(applicationId).startIterationPlanning(request, workflowDebug, debugStage),
     /** 使用专用 AG-UI 动作重试 Template Reconcile。 */
     retryTemplateReconcile: (applicationId) => requireRuntime(applicationId).retryTemplateReconcile(),
     /** 只读同步指定应用当前权威状态。 */

@@ -9,9 +9,9 @@ from app.services.node_recovery_context import NodeRecoveryContext, bind_node_re
 
 
 class IntegrationTestReentryTests(unittest.TestCase):
-    """确保外层兜底重入不会重置业务预算或带回单测。"""
+    """确保显式失败重试重开预算，暂停续接及内部循环保持原规则。"""
 
-    def prepare(self, node, progress=None):
+    def prepare(self, node, progress=None, reason=WorkflowReentryReason.INTERRUPTED_CONTINUE):
         """提供真实恢复上下文并替换耗时的代码图扫描。"""
 
         state = {
@@ -23,7 +23,7 @@ class IntegrationTestReentryTests(unittest.TestCase):
         }
         context = NodeRecoveryContext(
             source_run_id="source", execution_run_id="child", thread_id="thread",
-            target_node=node, checkpoint_id="entry", reentry_reason=WorkflowReentryReason.INTERRUPTED_CONTINUE,
+            target_node=node, checkpoint_id="entry", reentry_reason=reason,
             entry_state=state, internal_progress={**state, **progress} if progress else None,
         )
         with bind_recovery_runtime(context), bind_node_recovery(state, node), patch(
@@ -58,6 +58,32 @@ class IntegrationTestReentryTests(unittest.TestCase):
 
         with self.assertRaises(RecoveryExecutionError):
             self.prepare("integration_test", {"build_execution_scope": {"type": "application"}})
+
+    def test_failure_restart_clears_tasks_and_budget_preserving_changes(self):
+        """失败重试保留已落盘变更证据，但不复用旧任务、确认或性能选择。"""
+
+        changes = [{"id": "repair-diff", "files": [{"path": "frontend/src/main.ts"}]}]
+        for reason in (WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY):
+            with self.subTest(reason=reason):
+                state, updates = self.prepare("integration_test", {
+                    "repair_iteration": 3, "repair_tasks": [{"id": "old"}],
+                    "repair_task_plan": {"decision": "repair"}, "small_task_tasks": [{"id": "old"}],
+                    "small_task_handoff": {"mode": "small_task_scope_confirmation"},
+                    "small_task_handoff_submission": {"decision": "approved"},
+                    "frontend_performance_decision": "skip", "small_task_code_change_sets": changes,
+                    "code_changes": {"id": "merged"},
+                }, reason=reason)
+                self.assertEqual(state["repair_iteration"], 0)
+                self.assertEqual(updates["repair_iteration"], 0)
+                self.assertEqual(state["max_repair_iterations"], 3)
+                for key in ("repair_tasks", "small_task_tasks", "small_task_results"):
+                    self.assertEqual(state[key], [])
+                for key in ("repair_task_plan", "small_task_handoff", "small_task_handoff_submission", "clarification"):
+                    self.assertEqual(state[key], {})
+                self.assertEqual(state["frontend_performance_decision"], "")
+                self.assertEqual(state["small_task_code_change_sets"], changes)
+                self.assertEqual(state["code_changes"], {"id": "merged"})
+                self.assertEqual(state["unit_test_decision"], "skip")
 
     def test_normal_loop_does_not_reset(self):
         """普通用户确认及内部循环不触发外层恢复处理。"""

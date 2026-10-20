@@ -7,7 +7,7 @@ import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
 import './ApiDesignReadinessGateCard.less'
 
 type DevelopmentTarget = {
-  type: 'page' | 'endpoint'
+  type: 'application' | 'page' | 'endpoint'
   id: string
   label?: string
   apiContractId?: string

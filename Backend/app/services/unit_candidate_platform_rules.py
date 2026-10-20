@@ -16,6 +16,7 @@ from app.services.business_acceptance import (
 )
 from app.services.page_identity import page_id_to_page_key
 from app.services.planning_issues import ValidationIssue
+from app.services.planning_frozen import plain_json
 from app.services.unit_generation_contracts import UnitGenerationContext
 
 
@@ -273,7 +274,8 @@ def _slice_owners(value: Any) -> tuple[RetainedEndpointOwner, ...]:
 
     if not isinstance(value, (list, tuple)):
         raise ValueError("retained_endpoint_owners 必须是数组")
-    return tuple(RetainedEndpointOwner.model_validate(item) for item in value)
+    # Context 已递归冻结为 mappingproxy，先恢复 JSON 容器再执行原有严格字段校验。
+    return tuple(RetainedEndpointOwner.model_validate(plain_json(item)) for item in value)
 
 
 def _slice_issues(value: Any) -> tuple[ValidationIssue, ...]:

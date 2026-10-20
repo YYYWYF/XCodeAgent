@@ -23,7 +23,7 @@
   .database-query-empty { display: flex; min-height: 62px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 10px 12px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-canvas); }
   .database-query-list, .database-query-group-list { width: 100%; min-width: 0; overflow: auto hidden; border: 0; border-radius: 8px; background: transparent; }
   .database-query-head, .database-query-row { display: grid; grid-template-columns: var(--database-query-columns); gap: 9px; align-items: center; min-width: 780px; margin-inline: 8px; padding: 8px 10px; }
-  .database-query-head { min-height: 34px; background: transparent; color: var(--wb-text-secondary); font-size: 11px; font-weight: 600;
+  .database-query-head { min-height: 34px; background: transparent; color: var(--wb-text-secondary); font-size: 12px; font-weight: 600;
     > span { min-width: 0; }
   }
   .database-query-row { min-height: 58px; border: 1px solid var(--wb-border); border-radius: 0; background: var(--wb-canvas); transition: background-color .15s ease;
@@ -44,10 +44,10 @@
   }
   .database-query-source-cell { min-width: 0; }
   .database-query-source-select { width: 100%; min-width: 0; }
-  .database-query-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 11px; font-weight: 600; line-height: 1; }
+  .database-query-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 12px; font-weight: 600; line-height: 1; }
   .database-query-parameter-cell > span { min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
   .database-query-parameter-summary { display: flex; align-items: center; gap: 6px; }
-  .database-query-parameter-location { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-hover); color: var(--wb-text-secondary); font-size: 10px; font-weight: 600; line-height: 1.2; }
+  .database-query-parameter-location { flex: 0 0 auto; padding: 3px 6px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface-hover); color: var(--wb-text-secondary); font-size: 12px; font-weight: 600; line-height: 1.2; }
   .database-query-parameter-value { min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
   .database-query-no-value { grid-column: 3 / 5; color: var(--wb-text-tertiary); font-size: 12px; }
 
@@ -62,7 +62,7 @@
   .database-query-condition-card > .database-query-group-list > .database-query-row { border-radius: 7px; }
   .database-query-group-toolbar { margin-bottom: 8px; }
   .database-query-group-list { background: transparent; }
-  .database-query-group-empty { padding: 13px 10px; border: 1px dashed var(--wb-border-strong); border-radius: 7px; background: var(--wb-canvas); color: var(--wb-text-tertiary); font-size: 12px; text-align: center; }
+  .database-query-group-empty { padding: 13px 10px; border: 1px dashed var(--wb-border-strong); border-radius: 7px; background: var(--wb-canvas); color: var(--wb-text-tertiary); font-size: 13px; text-align: center; }
   .database-query-delete-group.ant-btn { display: inline-flex; width: 34px; min-width: 34px; height: 34px; min-height: 34px; align-items: center; justify-content: center; padding: 0; border-color: transparent; background: transparent; color: var(--wb-code-delete-text); font-size: 18px;
     .anticon { font-size: 18px; }
     &:not(:disabled):hover, &:not(:disabled):focus-visible { border-color: transparent; background: color-mix(in srgb, var(--wb-code-delete-text) 8%, var(--wb-canvas)); color: var(--wb-code-delete-text); }

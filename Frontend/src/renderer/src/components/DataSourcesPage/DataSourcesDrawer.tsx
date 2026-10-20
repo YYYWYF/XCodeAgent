@@ -1,5 +1,5 @@
 import { confirmWorkspaceAction } from '../workspaceDialogs'
-import { ApiOutlined, CloseOutlined, DatabaseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons'
+import { ApiOutlined, CloseOutlined, DatabaseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Input, Spin, Tooltip, message } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
@@ -57,6 +57,11 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
     const sources = mode === 'external_api' ? externals : databases
     setTab((current) => sources.some((source) => source.id === current) ? current : sources[0]?.id || '')
   }, [mode, tabIds])
+
+  /** 切换数据库后清空本地关键词，避免沿用上一连接的筛选而误以为没有表。 */
+  useEffect(() => {
+    if (mode === 'database') setSearch('')
+  }, [mode, tab])
 
   /** 重新读取服务器事实，关闭后的响应不再写入界面。 */
   const load = async (): Promise<void> => {
@@ -214,8 +219,10 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
   const operations = allOperations
     .filter(({ source, operation }) => `${operation.name} ${operation.description || ''} ${operation.path} ${source.name}`.toLowerCase().includes(search.toLowerCase()))
   const allVisibleTables = tables.filter((table) => mode === 'database' && table.sourceId === tab)
-  const visibleTables = allVisibleTables.filter((table) => `${table.table} ${table.description}`.toLowerCase().includes(search.toLowerCase()))
-  const showSearch = mode === 'external_api' ? allOperations.length >= 5 : allVisibleTables.length >= 5
+  // 只筛选已加载的表名和说明，不随输入调用服务端，也不改变右侧已选表详情。
+  const tableKeyword = search.trim().toLowerCase()
+  const visibleTables = allVisibleTables.filter((table) => `${table.table} ${table.description || ''}`.toLowerCase().includes(tableKeyword))
+  const showSearch = mode === 'external_api' ? allOperations.length >= 5 : database?.mode === 'builtin' || allVisibleTables.length >= 5
   const selectedOperationDirectory = detail?.kind === 'operation' ? fullSource?.directories.find((directory) => directory.id === detail.directoryId) : undefined
 
   /** 将表清单动作结果同步到数据源公开对象，避免列表计数等待下一次全量读取。 */
@@ -230,12 +237,16 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
   }
 
   return <div className={`source-drawer-stack ${detail ? 'with-detail' : ''}`} role="region" aria-label={mode === 'external_api' ? '外部 API' : '数据源'}>
-    <section className="source-drawer-list"><header className="source-drawer-header">{mode === 'external_api' ? <ApiOutlined /> : <DatabaseOutlined />}<div><h3>{mode === 'external_api' ? '外部 API' : '数据源'}</h3><p>{mode === 'external_api' ? '已登记的接口域与外部接口，按出入参粒度绑定' : '已接入的数据库连接与数据表，按字段粒度绑定'}</p></div><Button type="text" aria-label="关闭数据来源" icon={<CloseOutlined />} onClick={() => guard(onClose)} /></header>
+    <section className={`source-drawer-list ${mode === 'database' && database?.mode === 'builtin' ? 'is-builtin-database-list' : ''}`}><header className="source-drawer-header">{mode === 'external_api' ? <ApiOutlined /> : <DatabaseOutlined />}<div><h3>{mode === 'external_api' ? '外部 API' : '数据源'}</h3><p>{mode === 'external_api' ? '已登记的接口域与外部接口，按出入参粒度绑定' : '已接入的数据库连接与数据表，按字段粒度绑定'}</p></div><Button type="text" aria-label="关闭数据来源" icon={<CloseOutlined />} onClick={() => guard(onClose)} /></header>
       {(mode === 'external_api' ? !externals.length : !databases.length) ? null : <nav className="source-drawer-tabs">{mode === 'external_api' ? <>{externals.map((source) => <button key={source.id} className={tab === source.id ? 'selected' : ''} onClick={() => guard(() => { closeDetail(); setTab(source.id) })}>{source.name}</button>)}<Tooltip title="新增接口域"><span><Button type="text" aria-label="新增接口域" icon={<PlusOutlined />} onClick={() => guard(() => setEditor({ createType: 'external_api', open: true }))} /></span></Tooltip></> : <>{databases.map((source) => <button key={source.id} className={tab === source.id ? 'selected' : ''} onClick={() => guard(() => { closeDetail(); setTab(source.id) })}>{source.name}</button>)}</>}</nav>}
-      <div className={`source-drawer-tools ${mode === 'external_api' ? !activeExternal ? 'source-drawer-tools-empty' : '' : !database ? 'source-drawer-tools-empty' : ''}`}>{mode === 'external_api' ? activeExternal ? <div className="source-drawer-tool-row"><span className="source-drawer-static-hint">接口按出入参粒度与应用 API 适配。</span><div className="source-drawer-tool-actions"><Button onClick={() => guard(() => { void openDomain(activeExternal) })}>域设置</Button><Button disabled={!defaultDirectory} type="primary" onClick={() => guard(() => { if (defaultDirectory) void openOperation(activeExternal.id, defaultDirectory.id) })}>新增接口</Button></div></div> : <div className="source-drawer-empty-guide"><span className="source-empty-icon"><ApiOutlined /></span><strong>暂无接口域</strong><span>创建接口域后，可统一配置 Base URL 并管理域下的外部接口。</span><Button icon={<PlusOutlined />} type="primary" onClick={() => setEditor({ createType: 'external_api', open: true })}>新增接口域</Button></div> : database ? <div className="source-drawer-tool-row"><span className="source-drawer-static-hint">数据表按字段粒度参与应用 API 绑定。</span><div className="source-drawer-tool-actions">{database.mode === 'builtin' ? <Button disabled={loading} icon={<ReloadOutlined />} onClick={() => void load()}>刷新数据表</Button> : <><Button disabled={loading} onClick={() => guard(() => { void openConnection(database) })}>连接设置</Button>
+      <div className={`source-drawer-tools ${mode === 'external_api' ? !activeExternal ? 'source-drawer-tools-empty' : '' : !database ? 'source-drawer-tools-empty' : ''}`}>{mode === 'external_api' ? activeExternal ? <div className="source-drawer-tool-row"><span className="source-drawer-static-hint">接口按出入参粒度与应用 API 适配。</span><div className="source-drawer-tool-actions"><Button onClick={() => guard(() => { void openDomain(activeExternal) })}>域设置</Button><Button disabled={!defaultDirectory} type="primary" onClick={() => guard(() => { if (defaultDirectory) void openOperation(activeExternal.id, defaultDirectory.id) })}>新增接口</Button></div></div> : <div className="source-drawer-empty-guide"><span className="source-empty-icon"><ApiOutlined /></span><strong>暂无接口域</strong><span>创建接口域后，可统一配置 Base URL 并管理域下的外部接口。</span><Button icon={<PlusOutlined />} type="primary" onClick={() => setEditor({ createType: 'external_api', open: true })}>新增接口域</Button></div> : database ? <div className="source-drawer-tool-row"><span className="source-drawer-static-hint">{database.mode === 'builtin' ? '数据表' : '数据表按字段粒度参与应用 API 绑定。'}</span><div className="source-drawer-tool-actions">{database.mode === 'builtin' ? <Button type="text" size="small" className="source-drawer-refresh" aria-label="刷新数据表" loading={loading} icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button> : <><Button disabled={loading} onClick={() => guard(() => { void openConnection(database) })}>连接设置</Button>
         <Button type="primary" disabled={loading || saving} onClick={() => setAddingTables(true)}>添加数据表</Button></>}</div></div> : <div className="source-drawer-empty-guide"><span className="source-empty-icon"><DatabaseOutlined /></span><strong>暂无数据库连接</strong><span className="source-database-empty-description">创建连接后，可检测数据库并添加用于字段绑定的数据表。</span><Button icon={<PlusOutlined />} type="primary" onClick={() => setEditor({ createType: 'database', open: true })}>新增数据库连接</Button></div>}
-        {database?.mode === 'builtin' ? <p className="source-drawer-table-hint">表结构在实体中维护，字段实时读取。</p> : null}
-        {showSearch ? <Input.Search className="source-drawer-search" placeholder={mode === 'external_api' ? '搜索接口名称、说明或路径' : '搜索表名或说明'} value={search} onChange={(event) => setSearch(event.target.value)} /> : null}
+        {database?.mode === 'builtin' ? <p className="source-drawer-table-hint">表结构在实体中维护。</p> : null}
+        {showSearch ? mode === 'database' && database?.mode === 'builtin' ? (
+          <Input allowClear prefix={<SearchOutlined />} className="source-drawer-search source-drawer-table-search"
+            aria-label="搜索数据表" placeholder="搜索表名或说明" value={search}
+            onChange={(event) => setSearch(event.target.value)} />
+        ) : <Input.Search allowClear className="source-drawer-search" aria-label={mode === 'external_api' ? '搜索接口' : '搜索数据表'} placeholder={mode === 'external_api' ? '搜索接口名称、说明或路径' : '搜索表名或说明'} value={search} onChange={(event) => setSearch(event.target.value)} /> : null}
       </div>
       {error ? <Alert type="error" message={error} action={<Button onClick={() => {
         if (detail?.kind === 'operation' && !fullSource) void openOperation(detail.sourceId, detail.directoryId, detail.operationId)
@@ -249,7 +260,7 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
           <TableOutlined />
           <span className="source-table-row-copy"><strong title={table.table}>{table.table}</strong><small title={table.description}>{table.description || '暂无说明'}</small></span>
         </button>)}
-        {!loading && !error && !visibleTables.length && <Empty description={database?.mode === 'builtin' ? '暂无已建成的数据表，请先在实体中执行建表' : '暂未添加数据表'} />}</div> : null}</Spin>
+        {!loading && !error && !visibleTables.length && <Empty description={tableKeyword && allVisibleTables.length ? '未找到匹配的数据表' : database?.mode === 'builtin' ? '暂无已建成的数据表，请先在实体中执行建表' : '暂未添加数据表'} />}</div> : null}</Spin>
     </section>
     {detail && <section className="source-drawer-detail"><header className={`source-drawer-header ${detail.kind === 'operation' ? 'source-drawer-operation-header' : ''}`}>{detail.kind === 'table' ? <TableOutlined /> : <span className="source-operation-header-icon"><ApiOutlined /><small>API</small></span>}<div><h3>{detail.kind === 'table' ? detail.table.table : operationEditing ? detail.operation ? '编辑 API' : '新建 API' : detail.operation?.name || '新建 API'}</h3>{detail.kind === 'table' ? <p>{database?.mode === 'builtin' ? '查看表结构、调试数据和操作记录' : '查看数据表及字段信息'}</p> : operationEditing ? <p>配置接口的请求信息、参数及请求/响应体</p> : null}</div><div className="source-drawer-header-actions">{detail.kind === 'operation' && detail.operation && !operationEditing ? <><Button className="source-operation-header-edit" icon={<EditOutlined />} onClick={() => { setDirty(false); setOperationEditing(true) }}>编辑接口</Button><Button className="source-operation-header-delete" danger icon={<DeleteOutlined />} onClick={() => void deleteOperation()}>删除</Button></> : null}<Button className="source-operation-header-close" type="text" aria-label="关闭详情" icon={<CloseOutlined />} onClick={() => guard(closeDetail)} /></div></header>
       <div className={`source-detail-content ${detail.kind === 'operation' && detail.operation && !operationEditing ? 'source-operation-detail-content' : ''}`} ref={detailContentRef}><Spin spinning={detailLoading}>{detail.kind === 'table' ? database?.mode === 'builtin' ? <DatabaseTableTabs key={`${detail.table.sourceId}:${detail.table.table}`} workspaceRoot={workspaceRoot} table={detail.table} theme={theme} /> : <DatabaseTableDetail workspaceRoot={workspaceRoot} table={detail.table} onRemoved={(next) => { syncManagedTables(next); closeDetail() }} /> : fullSource && detail.operation && !operationEditing && selectedOperationDirectory ? <DataSourceOperationDetails

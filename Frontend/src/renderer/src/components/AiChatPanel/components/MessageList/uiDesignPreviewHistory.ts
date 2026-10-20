@@ -8,6 +8,17 @@ export type PlanningSubmissionTransaction = {
   messageIds: number[]
 }
 
+/** 连接失败且本轮尚无回复时撤销乐观消息；已有实际输出的提交仍保留追踪记录。 */
+export function rollbackUnansweredPlanningSubmission(
+  messages: AgentChatMessage[],
+  transaction: PlanningSubmissionTransaction
+): AgentChatMessage[] {
+  const ids = new Set(transaction.messageIds)
+  const hasResponse = messages.some((message) => ids.has(message.id) && message.role === 'assistant' &&
+    Boolean(message.content || message.workflow || message.toolCalls?.length || message.processSteps?.length || message.error))
+  return hasResponse ? messages : rollbackPlanningSubmissionMessages(messages, transaction)
+}
+
 /** 按本次提交记录的消息 ID 精确回滚，保留期间到达的其他异步消息。 */
 export function rollbackPlanningSubmissionMessages(
   messages: AgentChatMessage[],
@@ -156,7 +167,7 @@ export function isSupersededPlanningProgressMessage(
   return message.workflow?.summary?.status === 'running'
 }
 
-/** 模板准备终态覆盖空的规划进度，避免模板已就绪后仍显示“正在恢复计划阶段”。 */
+/** 模板准备终态覆盖空的规划进度，避免模板已就绪后仍显示规划加载占位。 */
 export function isTemplateSupersededPlanningProgressMessage(
   message: AgentChatMessage,
   templatePreparationVisible: boolean

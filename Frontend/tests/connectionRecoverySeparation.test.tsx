@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+
+test('Backend 停服优先于预览断线和 UI 待确认，恢复按钮必须同步 Backend', () => {
+  const backend = { status: 'unavailable' as const, requestGeneration: 1, lastError: 'Failed to fetch' }
+  const preview = { status: 'unavailable' as const, requestGeneration: 2, lastError: '预览断线' }
+  assert.equal(prioritizedConnection(backend, preview), backend)
+  assert.equal(prioritizedConnection(backend, { ...preview, status: 'healthy' }), backend)
+  assert.equal(globalFallbackState({ connectionStatus: backend.status, hasRecoveryIncident: false }).visible, true)
+})
 import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ConnectionStatusBanner from '../src/renderer/src/components/ConnectionStatusBanner'
 import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
-import AgentErrorCard from '../src/renderer/src/components/AgentErrorCard'
+import RetryEntryNotice from '../src/renderer/src/components/RetryEntryNotice'
 import {
   globalFallbackState,
+  prioritizedConnection,
   conversationUsesWorkflowRecovery,
   acceptancePreviewCanFocus,
   latestConversationFailure,
@@ -32,6 +41,8 @@ import './workflowConversationRuntime.test'
 import './workbenchRunPresentation.test'
 import './workbenchRunRefresh.test'
 import './templateRecovery.test'
+import './planningFailureScope.test'
+import './applicationLifecycleTimeout.test'
 
 test('二次修改断线及恢复候选始终复用 Workflow 重试，预览断线不抢入口', () => {
   const healthy = { conversationActive: true, workflowConnectionStatus: 'healthy',
@@ -211,19 +222,33 @@ test('connection request generation rejects a late failure from an older request
   assert.deepEqual(lateFailureA, succeededB)
 })
 
-test('healthy GET without Recovery candidate shows the Recovery error card', () => {
+test('健康连接的正常同步不显示重连，真实断连后的同步仍显示重连', () => {
+  const healthyRead = beginConnectionRequest(initialConnectionState(true), 1)
+  assert.equal(healthyRead.status, 'healthy')
+  assert.doesNotMatch(renderSurfaces(healthyRead), /正在重新连接 Backend/)
+  const failed = failConnectionRequest(healthyRead, 1, 'Failed to fetch')
+  const reconnect = beginConnectionRequest(failed, 2)
+  assert.equal(reconnect.status, 'reconnecting')
+  assert.match(renderSurfaces(reconnect), /正在重新连接 Backend/)
+  assert.equal(beginConnectionRequest(initialConnectionState(), 1).status, 'connecting')
+})
+
+/** 无恢复入口只显示可关闭提示，正常连接不应重复提供重试。 */
+test('healthy GET without Recovery candidate shows a dismissible notice', () => {
   const fallback = globalFallbackState({
     connectionStatus: 'healthy',
     hasRecoveryIncident: false,
     recoveryError: NO_RECOVERY_ENTRY_ERROR
   })
   const html = fallback.visible && fallback.error
-    ? renderToStaticMarkup(createElement(AgentErrorCard, { error: fallback.error }))
+    ? renderToStaticMarkup(createElement(RetryEntryNotice))
     : ''
 
   assert.equal(fallback.visible, true)
-  assert.match(html, /role="alert"/)
-  assert.match(html, /已同步后端状态，但当前会话没有可验证的恢复入口。/)
+  assert.match(html, /role="status"/)
+  assert.match(html, /找不到恢复入口，请手动发起流程。/)
+  assert.match(html, /aria-label="关闭恢复提示"/)
+  assert.doesNotMatch(html, />重试</)
 })
 
 test('没有恢复入口的最新消息错误也在底部展示，新请求不继承历史错误', () => {
@@ -265,9 +290,9 @@ test('验收预览在断线、恢复候选或错误出现时让出分栏，入�
     { connectionStatus: 'healthy', hasRecoveryIncident: true },
     { connectionStatus: 'healthy', hasRecoveryIncident: false, globalFallbackError: '启动失败' }
   ]) {
-    assert.equal(acceptancePreviewCanFocus('acceptance', true, globalFallbackState(input).visible), false)
+    assert.equal(acceptancePreviewCanFocus('acceptance', true, globalFallbackState(input).visible, 'awaiting_acceptance'), false)
   }
-  assert.equal(acceptancePreviewCanFocus('acceptance', true, false), true)
-  assert.equal(acceptancePreviewCanFocus('acceptance', false, false), false)
-  assert.equal(acceptancePreviewCanFocus('build', true, false), false)
+  assert.equal(acceptancePreviewCanFocus('acceptance', true, false, 'awaiting_acceptance'), true)
+  assert.equal(acceptancePreviewCanFocus('acceptance', false, false, 'awaiting_acceptance'), false)
+  assert.equal(acceptancePreviewCanFocus('build', true, false, 'awaiting_acceptance'), false)
 })

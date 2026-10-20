@@ -58,6 +58,8 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 "prepare_session_deletion",
                 "skip_entity_development",
                 "register_managed_database",
+                "end_planning_execution",
+                "stop_planning_execution",
             ],
         )
 

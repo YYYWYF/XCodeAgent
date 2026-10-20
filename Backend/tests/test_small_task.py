@@ -195,8 +195,9 @@ class SmallTaskExecutionTests(unittest.TestCase):
                     ]
                 ),
                 workspace,
-                user_skills_backend=StateBackend(),
-                agent_memory_backend=StateBackend(),
+                # 只读挂载使用真实文件 backend；StateBackend 需要宿主显式注册 files channel。
+                user_skills_backend=create_workspace_backend(workspace),
+                agent_memory_backend=create_workspace_backend(workspace),
             )
             result = agent.invoke(
                 {
@@ -342,6 +343,38 @@ class SmallTaskExecutionTests(unittest.TestCase):
         self.assertEqual(result["small_task_route"], "integration_test")
         self.assertEqual(result["integration_next_action"], "integration_test")
         self.assertEqual(result["repair_iteration"], 1)
+
+    def test_build_cache_exclusion_preserves_source_and_config_scope_checks(self) -> None:
+        """忽略增量缓存后，批次外源码与 tsconfig 变更仍必须拒绝。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace) / "frontend"
+            source = root / "src"
+            source.mkdir(parents=True)
+            target = source / "App.tsx"
+            target.write_text("export default Ap;", encoding="utf-8")
+            (root / "tsconfig.json").write_text("{}", encoding="utf-8")
+
+            def repair_with_unrelated_changes(**_kwargs: object) -> str:
+                """模拟修复、编译缓存及真实越界文件同时变化。"""
+                target.write_text("export default null;", encoding="utf-8")
+                (root / "tsconfig.tsbuildinfo").write_text("cache", encoding="utf-8")
+                (root / "tsconfig.json").write_text('{"strict":false}', encoding="utf-8")
+                (source / "Other.tsx").write_text("export default null;", encoding="utf-8")
+                return json.dumps({"status": "completed", "summary": "修复完成"})
+
+            with patch(
+                "app.services.small_task.invoke_small_task_agent",
+                side_effect=repair_with_unrelated_changes,
+            ):
+                execution = execute_small_task_batch(
+                    state={"workspace": workspace},
+                    tasks=[_task("repair-app", "frontend/src/App.tsx")],
+                )
+
+        self.assertEqual(execution["results"][0]["status"], "failed")
+        self.assertEqual(execution["unauthorizedPaths"], ["frontend/src/Other.tsx", "frontend/tsconfig.json"])
+        self.assertEqual(execution["results"][0]["changedFiles"], ["frontend/src/App.tsx"])
 
     def test_main_node_stops_for_complex_task_confirmation(self) -> None:
         """SmallTask 返回复杂升级时主图必须暂停并生成统一影响确认卡。"""

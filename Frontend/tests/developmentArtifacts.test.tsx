@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import './workbenchPhaseNavigation.test'
+import './developmentNextStep.test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
@@ -188,7 +189,7 @@ function CurrentPhase(): JSX.Element {
 }
 
 /** 在实际阶段上下文中渲染确认卡，隔离服务端测试所需的本地存储。 */
-function renderConfirmation(gate?: TestEntryGate, disabled = false): string {
+function renderConfirmation(gate?: TestEntryGate, disabled = false, message?: string): string {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
@@ -199,6 +200,7 @@ function renderConfirmation(gate?: TestEntryGate, disabled = false): string {
       <WorkbenchPhaseProvider applicationId="test" lifecycle={lifecycle(gate)}>
         <TestPhaseConfirmationCard
           disabled={disabled}
+          message={message}
           target={{ type: 'endpoint', id: 'age', label: 'POST /api/age' }}
           onSubmit={() => assert.fail('渲染卡片不应启动测试')}
         />
@@ -232,6 +234,18 @@ test('全量门禁解锁后恢复测试目标和入口，提交期间保留禁�
   assert.match(renderConfirmation(allowed, true), /disabled=""/)
 })
 
+test('测试确认卡复用后端单测决策文案，并保留未完成产物的提示', () => {
+  const skippedMessage =
+    '代码生成与 Build 已完成，单元测试已跳过，确认后将进入测试阶段，执行测试与失败修复。'
+  const skippedHtml = renderConfirmation(allowed, false, skippedMessage)
+  assert.match(skippedHtml, /单元测试已跳过/)
+  assert.doesNotMatch(skippedHtml, /单元测试门禁已完成/)
+  assert.match(renderConfirmation(allowed), /单元测试门禁已完成/)
+  const blockedHtml = renderConfirmation(blocked, false, skippedMessage)
+  assert.match(blockedHtml, /完成全部开发产物后可进入测试/)
+  assert.doesNotMatch(blockedHtml, /单元测试已跳过/)
+})
+
 test('门禁读取中或错误时显示原因且不暴露测试入口', () => {
   assert.match(renderConfirmation(), /正在读取开发产物状态/)
   const html = renderConfirmation({ ...blocked, blockers: [], reason: '产物目录读取失败' })
@@ -254,18 +268,17 @@ function renderPhaseDock(
       onConfirmInteraction={() => undefined}
       onEnd={() => undefined}
       onOpenPreview={() => undefined}
-      onRetry={() => undefined}
-      onStop={() => undefined}
     />
   )
 }
 
-test('底部失败状态只保留结束控制，停止状态仍可继续', () => {
-  const failed = renderPhaseDock('failed')
-  const stopped = renderPhaseDock('stopped')
-  assert.doesNotMatch(failed, /重试失败任务|继续执行/)
-  assert.match(failed, /结束/)
-  assert.match(stopped, /继续执行/)
+test('执行控制移除暂停和暂停续接，运行、停止及失败均可结束任务', () => {
+  for (const mode of ['running', 'stopping', 'stopped', 'failed', 'awaiting_authorization', 'awaiting_repair_confirmation'] as const) {
+    const html = renderPhaseDock(mode)
+    assert.doesNotMatch(html, /暂停执行|正在暂停|继续执行/)
+    assert.match(html, /结束任务/)
+    assert.doesNotMatch(html, /<button[^>]*disabled[^>]*>结束任务/)
+  }
 })
 
 test('底部阶段提示遵循全应用开发门禁，2/3 不声称可以进入测试或审查', () => {

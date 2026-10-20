@@ -149,7 +149,7 @@ DAG Planning 的跨会话 ownership 采用两层合同，不能把执行阶段�
 
 所有涉及 `ProjectPlan` 生成或调整的节点，在真正进入任务拆分、构建或任何代码修改前都必须让用户确认。未确认的计划只能作为 `pending_project_plan` 或待确认状态存在，不能作为 Build/Codegen 的执行依据。`inspect_workspace` 只生成内部事实快照，不改变用户确认过的产品语义，不需要单独用户确认。
 
-`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，也必须只读校验已确认 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState 与冻结的 template_context、PageImplementationContract 和当前范围的 EntitySourceBinding；任一前置条件不满足时返回 `build_prerequisite_error`，绝不修改上游正式产物、生成任务 DAG 或进入 `build`。定向 Build Context 以 TechnicalPlan API Contract 和已确认实体绑定为权威来源。集成测试失败后的修复不回到 `build`：`integration_test` 只负责确定性检查、质量门禁和调用只读 RepairPlanner 生成任务包；局部任务统一进入 `small_task_repair`，由共享 SmallTask Agent 执行后再回到 `integration_test`。
+`prepare_build_tasks` 是代码生成前的最后硬保护：即使前序路由、旧会话状态或手工续跑误入该节点，也必须只读校验已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState、冻结的 `template_context`、PageImplementationContract、当前范围的 TechnicalPlan API Contract 和 Endpoint API Design；任一前置条件不满足时返回 `build_prerequisite_error`，绝不修改上游正式产物、生成任务 DAG 或进入 `build`。定向 Build Context 以当前 TechnicalPlan API Contract 和已确认的 Endpoint API Design 为权威来源；EntitySourceBinding 不属于当前 DAG Planning 输入。集成测试失败后的修复不回到 `build`：`integration_test` 只负责确定性检查、质量门禁和调用只读 RepairPlanner 生成任务包；局部任务统一进入 `small_task_repair`，由共享 SmallTask Agent 执行后再回到 `integration_test`。
 
 页面任务只继承 `frontend:*` 公共 Unit 和同页面 Unit 内部依赖，不把 `backend:endpoint:*` 或 `database:*` 编译成任务依赖。数据库前置任务完成后，BuildScheduler 可把依赖已满足且文件锁不重叠的 backend 与 page 任务放入同一批次，Build Subgraph 再按 owner 并发调用前后端 Agent；并发工作区快照按各自任务的 `change_scope/target_files/allowed_paths` 过滤后再归属，防止前端文件计入后端结果。API Contract 是并行期间的共同事实来源，`app:integration` 仍等待 endpoint 与 page 两边完成后统一验证。该设计沿用 learn-coding-agent 的契约先行、执行后验证循环，采用 OpenCode 的独立 owner/tool 执行边界，并让 Deep Agents 的专业 Agent 仅获得各自任务范围；每个 owner 仍只接收当前批次的紧凑任务与正式产物引用，符合 128k 上下文预算。
 
@@ -313,61 +313,27 @@ SQLite checkpointer 保存各 execution thread 的主 Graph 状态；恢复只�
 
 ### `prepare_build_tasks`
 
-先由确定性服务根据已确认 TechnicalPlan 生成完整 `build-dag.v4` Unit DAG 骨架，再由 planning-only ChatModel 根据当前范围的 `PageImplementationContract`、TechnicalPlan Endpoint、React UI 引用、已确认实体绑定和 `WorkspaceSnapshot` 生成可执行静态 task DAG：
+`prepare_build_tasks` 的当前生产路径由 `task_planning_adapter` 交给异步规划服务处理，不是一次调用模型生成整个 Scope 的任务清单：
 
-- 使用 `inspect_workspace` 生成的 `WorkspaceSnapshot` 作为唯一工作区事实来源，不读取、创建、修改或删除代码文件，也不查询或注入 request-scoped 代码图上下文；
-- 生成稳定的 `task_id`；
-- Normal Build 只规划 `backend`、`frontend` 代码任务；`database` owner、`database:*` Unit 和数据库变更任务由实体确认流程负责，不进入本 DAG；
-- 后端任务类型使用 `backend.code`，前端任务类型使用 `frontend.code`，数据库表结构和数据源操作不从已确认实体上下文重新推导；
-- 计算任务依赖；
-- 标记可并行任务；
-- 以 `change_scope` 记录新增、修改、删除文件及每项改动目的，并据此设置允许修改的文件范围；
-- 以 `impact_scope` 记录受影响模块、公共契约、风险和影响摘要；
-- 绑定验收标准；
-- 初始化任务状态为 `pending`，后续只在 `pending/running/completed/failed` 中流转；
-- 校验循环依赖和缺失依赖。
+1. `build_unit_skeleton.py` 从已确认 TechnicalPlan 构造标准职责分组骨架：应用根节点、共享前端职责、后端基础环境、每项接口操作和每个页面。当前标准骨架不创建 `frontend:data:<sourceId>` 分组；数据源 `sourceId` 是数据映射的来源身份，不能据此推断存在逐数据源的职责分组。
+2. `task_planning_adapter.py` 读取当前正式任务计划、目标范围、工作区快照和已确认正式输入，调用 `resolve_reuse_facts`；`unit_generation_requirements.py` 再按职责和复用事实计算本轮缺项及待规划分组。复用事实层只整理已有任务、显式能力、接口操作归属和已验证的外部能力，本身不生成候选任务。
+3. `assemble_mainline_planning_inputs` 冻结本轮输入后，`plan_dag_sequential` 为本次运行创建新的 PlanningRun。调度器按职责分组生成候选任务并执行单组校验与有限重试；平台确定性职责在模型调度之外处理。只有工作流明确提供可验证的来源运行时才检查恢复候选；恢复候选归入新 PlanningRun，并重新通过当前校验。
+4. 所需候选齐备后，`scope_assembly.py` 保留正式基线任务、追加本轮候选并重新编译完整任务图。全局校验仅对可明确归因的本轮生成问题重开相应职责分组；基线、输入或平台问题不会靠猜测候选归属来重试。
+5. 完整校验通过后，服务原子写入待确认任务计划和 DraftIdentity，工作流停在用户确认门。只有确认准确的当前待确认任务计划后，才会提升为正式任务计划并进入 Build；待确认计划和 PlanningRun 投影均是内部工作区状态，不是用户编辑入口。
 
-Unit Graph 是跨 Unit 依赖的唯一权威来源。页面 scope 从 `PageImplementationContract.requiredEndpointIds` 得到接口集合，并直接加载 TechnicalPlan Endpoint 契约；endpoint 任务不嵌入 page Unit。模型显式依赖只用于同 Unit 内排序，跨 Unit 边由确定性编译器生成。
+当前职责分组名称、生成策略和进度投影见 [DAG 任务生成技术交接](DAG_TASK_GENERATION_TECHNICAL_HANDOFF.md) 与 [Build 任务单元语义化文案](design/build-task-unit-labels.md)。这些文案只决定展示名称；内部 `unit_id`、调度身份和职责数量仍由代码决定。`frontend:data:static` 在需求/展示代码中有定义，但当前标准骨架和生产目标范围不会创建它，不能把该定义写成已启用的标准分组。
 
-`build-dag.v4` 的 Unit ID 采用新的层次：
-
-- `application:root` 表示整应用根；
-- `backend:bootstrap` 表示后端共享基础能力：数据库来源幂等补齐 Maven、数据源与 MyBatis-Plus，外部 API 来源幂等补齐与模板 Spring Boot 2.7.2 对应的 Spring Cloud OpenFeign 依赖和全局扫描启用；static-only 范围不创建该 Unit；
-- `backend:endpoint:<apiContractId>:<endpointId>` 表示单个接口的后端实现范围；
-- `frontend:shell`、`frontend:api-client`、`frontend:auth-guard` 表示 Normal Build 可消费或实现的前端公共能力；auth 模板的 `resources.ts` 与 `routes.tsx` 托管区由 Build 启动前的平台投影登记，不属于 Build Unit；
-- `page:<pageId>` 表示页面实现范围。
-
-页面 Unit 依赖它使用的 backend endpoint Unit。数据库实体与外部 API 实体都由 backend endpoint Unit 承载，静态实体由 `frontend:data:<sourceId>` Unit 承载。包含 database 或 external_api 实体的范围都要求 `backend:bootstrap`，并由 Unit Graph 建立 `backend:bootstrap → backend:endpoint:*`；bootstrap 按实际来源组合 MyBatis/MySQL 与 OpenFeign 能力，只生成一个共享任务。数据库表操作已在实体确认阶段完成，因此正常 Build Unit 骨架不创建 `database:*` Unit，也不存在 `database → endpoint` 依赖；页面与后端仍可按契约并行生成，并由集成测试验证一致性。
-
-DataSource Agent 对 database 和 external_api 统一加载 `springboot-backend-generate`；单来源任务只展开对应 reference，混合来源任务仅加载一次入口并按 database 后 external_api 的顺序展开当前 bootstrap/endpoint reference。
-
-代码图不参与 DAG 任务生成。进入 `build` 后，Frontend Agent 与承载 backend task 的 DataSource Agent 才按 `task_id` 使用绑定当前 `workspaceRoot` 的 `code_graph_context`：已有目标文件优先查询 `file_summary`，未知业务符号优先查询 `search_symbols`，命中后再按需查询引用、影响和相关测试。只有 `status=ready` 且 `matches/relations/relatedTests/impactedFiles` 至少一项非空的结果才作为导航；空结果、异常或不可用状态会立即降级为任务 `target_files/allowed_paths/change_scope` 内的文件搜索和真实源码读取，不会令任务失败或扩大写入授权。代码图始终不是源码事实，修改前必须读取当前文件。
-
-任务规划模型输入中的数据源事实只来自当前范围的 `executable_details.endpoint_designs`。TechnicalPlan Endpoint、动态映射节点/边、业务规则/来源快照与 API Contract 只在 `TaskPreparationContext.executable_details` 出现一次；完整元数据、连接信息和未确认输入不进入模型。
-
-任务 DAG 保存前会执行确定性语义校验，不只校验拓扑：Normal Build 的 Unit 骨架不包含 `database:*`，模型误返回 `owner=database` 或 `database:*` 候选时会保留原候选并把职责越界写入 `task_graph.validation.errors`，不能以静默删除的方式掩盖边界问题。当本轮 `planning_unit_ids` 包含 `backend:bootstrap` 时，候选必须包含该 Unit 的可执行后端任务；遗漏会作为平台校验错误回灌模型并自动重生成。已准备且不在本轮替换范围内的 bootstrap 任务继续复用，不要求重复生成。数据库表结构和数据源操作继续由实体确认流程负责；backend/page/frontend Unit 的 owner 必须与 Unit 语义一致。候选任务的边界、owner、Unit 和拓扑均属于平台设计，校验失败会自动回灌错误并重生成，不要求用户人工拆分任务。
-
-Build Task 不复制 ProductPlan、UiDesign 或 TechnicalPlan 中的业务验收。页面行为来自 ProductPlan、React UI 稿和 `PageImplementationContract`；Endpoint 契约来自 TechnicalPlan。内部 `acceptance_checks` 由确定性编译器生成。
-
-Build 仅接受当前 `build-dag.v4` 与冻结的 `template_context`；旧计划必须重新规划，不做版本迁移或历史字段回填。当前候选任务按正式 Endpoint/API Contract 编译工程检查，缺少上下文时拒绝候选。
-
-任务编译器不再按 Schema gap 自动删除、补齐或生成数据库任务，也不会推导缺失的 `database_scope`。正常 Build 只消费 Endpoint 动态映射图中的 Source Field、确认快照和执行证据，生成后端持久化代码任务。
-
-Normal Build DAG 只注册具有 `change_scope`、`allowed_paths` 或 `target_files` 的代码实现任务。仅检查已有前端壳、路由树、布局或 Provider 的候选任务会被 DAG 校验拒绝并自动重生成；auth 模板的资源目录和 routes 托管区仅由 Build 启动前的平台投影修改，main 模板继续使用既有页面与菜单初始化边界。`WorkspaceSnapshot` 能证明已有能力时，相应 `build_units.status` 记为 `reused` 并保存 `reuse_evidence`。
-
-该节点不生成新需求，也不编写业务代码。`ProjectPlan` 只参与 `unit_graph` 和 `build_units` 骨架生成，不包含具体可执行 task；模型输入中的 `application_skeleton` 仅作非执行背景。模型负责将当前已确认的 PageImplementationContract、TechnicalPlan Endpoint 语义、Endpoint 动态映射节点/边、业务规则、API Contract 和当前工程结构转换成后端/前端可执行 task DAG；Graph 节点只接收结构化 `build_task_plan`、执行确定性结构字段编译与 DAG 校验，任何任务边界越界都保留错误并自动重生成，再交给后续 Build Subgraph 执行。
-
-`prepare_build_tasks` 校验页面引用、Endpoint、Schema 与当前版已确认 Endpoint API 设计，并二次复检契约指纹和双文件状态。页面上下文以运行时 `PageImplementationContract`、React UI 路径、TechnicalPlan Endpoint、API Contract 和有界 Endpoint 设计摘要为准。
+详细的恢复来源、PlanningRun 状态和 Pending 身份边界见该交接文档；本节后文关于按代码校验、冻结输入和当前确认门的规则以实现为准。
 
 该边界沿用 learn-coding-agent 的紧凑“收集目标上下文→规划动作→验证 DAG”循环、OpenCode 的 plan/build 分离，以及 Deep Agents 的渐进上下文原则。完整内容保存在独立文件中，跨 Unit 顺序由可恢复、可审计的 Unit Graph 固定编译，以适应页面级重复规划和 128k 上下文预算。
 
 任务 DAG 的用户心智必须按应用级和页面级组织：用户看到和推进的是应用基础能力、页面生成、页面内容实现和整体集成验证。内部 DAG 保留 API、共享组件、权限和页面实现等支撑任务，并通过依赖边把它们挂到对应页面任务之前或页面任务组内；菜单、路由、页面占位和项目级测试不属于 DAG 任务。不得把用户可见计划退化为底层 Agent/文件操作清单；后续生成执行应优先以“生成某个页面及其支撑 API/交互/验证”为自然工作单元。
 
-`prepare_build_tasks` 的生产入口通过 async Planning adapter 创建后端签发的 PlanningRun。正式输入由服务端从已确认 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效 Endpoint API Design 和权限切片组装并冻结；EntitySourceBinding 不参与正常 DAG Planning。平台按 Unit 建立 FIFO Worker Pool，最多并发三个 model Unit，Local Retry 重新进入队尾；模型只返回当前 Unit 的 `tasks`，不得决定 Worker 数量、跨 Unit 调度或最终执行批次。Task Candidate 仍携带单任务级并行提示，但 Scope 编译器会结合依赖与文件冲突生成平台批次。所有 Unit 通过 Barrier 后才执行 Scope Assembly 和 Global Validation/Repair，只有完整校验通过才写 PendingPlan。模型未返回可解析任务、越过平台职责边界或生成无效 DAG 时，平台在 PlanningRun 内部有界重试；重试耗尽才进入失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
+`prepare_build_tasks` 的生产入口通过异步规划适配器创建后端签发的 PlanningRun。正式输入由服务端从已确认的 ProductPlan、TechnicalPlan、PageImplementationContract、API Contract、当前有效的 Endpoint API Design 和权限切片组装并冻结；EntitySourceBinding 不参与正常 DAG 任务生成。平台按职责分组建立先进先出工作队列，最多并发三个模型请求；单组重试任务重新进入队尾。模型只返回当前职责分组的 `tasks`，不得决定工作线程数量、跨组调度或最终执行批次。候选任务仍携带单任务级并行提示，但范围编译器会结合依赖与文件冲突生成平台批次。全部必需职责分组通过结果齐备检查后，才执行完整任务图组装和全局校验/修复；只有完整校验通过才写入待确认任务计划。模型未返回可解析任务、越过平台职责边界或生成无效任务图时，平台在 PlanningRun 内部有界重试；重试耗尽才进入失败处理，不把任务拆分规则交给用户，也不能用硬编码任务清单代替模型规划结果。
 
-DAG Planning 的基础设施失败恢复只接受 Native Recovery 验证的 source Workflow Run。失败 PlanningRun 保持终态，新尝试创建新的 PlanningRun；Recovery Snapshot 只作为可失效的优化输入，恢复 Candidate 必须重新匹配当前输入并通过当前 Local Validation，失败时退化为重新生成。恢复 Candidate 与生成 Candidate 一样继续经过 Barrier、Scope Assembly 和 Global Validation，成功前不得进入 PendingPlan 或 FormalPlan。Regenerate 正常操作消费精确旧 Pending 并全新生成；其失败恢复在同一个 `prepare_build_tasks` 节点内读取持久化操作事实，确认旧 Pending 已消费后可复用该失败 Run 的有效 Candidate，且不会重复消费或自动确认新 Pending。
+DAG 任务生成的基础设施失败恢复只接受经工作流原生恢复机制验证的来源执行。失败的 PlanningRun 保持终态；每次新尝试都创建新的 PlanningRun。恢复快照只是可能失效的优化输入，恢复候选任务必须重新匹配当前输入并通过单组校验，否则退化为重新生成。恢复候选任务和新生成候选任务一样，要经过结果齐备检查、完整任务图组装和全局校验，成功前不得写入待确认任务计划或正式任务计划。普通 `Regenerate` 会消费准确的旧待确认任务计划后全新生成；若生成失败且工作流进入恢复，同一个 `prepare_build_tasks` 节点可根据持久化操作事实确认旧待确认任务计划已经消费，再复用该失败运行中仍有效的候选任务，不会重复消费或自动确认新计划。
 
-调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState 与冻结的 template_context、当前 PageImplementationContract、Endpoint 契约和 EntitySourceBinding。任一前置条件未满足时返回可定位错误，不修改上游正式产物。
+调用模型生成任务 DAG 前，节点必须只读检查已确认的 RequirementSpec、ProductPlan、UiManifest、TechnicalPlan、TemplateState 与冻结的 `template_context`、当前 PageImplementationContract、接口契约和当前 Endpoint API Design。任一前置条件未满足时返回可定位错误，不修改上游正式产物。EntitySourceBinding 不属于当前 DAG 任务生成输入。
 
 `build_task_plan` 至少包含：
 
@@ -591,7 +557,7 @@ acceptance.START
 
 `launch_project` 继续复用现有工程识别、前后端启动、健康检查和 `launch_project.progress` 事件，
 但在子图内成功状态为 `completed`；启动失败直接结束子图。恢复已有成功启动快照时不得重复启动。
-`page_acceptance` 显式映射生命周期 `PAGE_ACCEPTANCE`。验收项目启动期间与预览就绪后都保留验收 Agent 对话区，右侧预览以分栏形式打开；当前前端“不通过，进入对话”让普通
+`page_acceptance` 显式映射生命周期 `PAGE_ACCEPTANCE`。从审查首次进入验收时先恢复分栏，显示验收 Agent 对话区和项目启动步骤；已有右侧内容或旧预览不触发全屏。只有当前 execution 进入 `awaiting_acceptance`、验收预览已打开且没有连接或恢复故障时才自动铺满预览；启动中、停止或失败时保留对话步骤和原恢复入口。当前前端“不通过，进入对话”让普通
 消息走 `/conversation/run`，不提交验收结果；“验收通过”仅提示功能暂未开放，后端 accepted/finalize 能力保留。
 
 验收运行态的 AG-UI 最终投影必须包含 `previewUrl`、`launchResult` 和 `acceptanceRequest`，而启动过程的实时进度
@@ -610,7 +576,7 @@ acceptance.START
 
 输出至少包含：
 
-- `test_results`：每项测试的通过状态、命令和证据；单元测试命令若能从 Jest、Vitest 或 Maven 输出中解析数量，还会提供 `passed_tests` 与 `total_tests` 供集成检查矩阵展示；`frontend_performance` 额外携带 `performance_scores`、`performance_metrics` 与 `report_path`；
+- `test_results`：每项测试的通过状态、命令和证据；单元测试命令若能从 Jest、Vitest 或 Maven 输出中解析数量，还会提供 `passed_tests` 与 `total_tests` 供测试检查步骤展示；`frontend_performance` 额外携带 `performance_scores`、`performance_metrics` 与 `report_path`；
 - `test_report`：确定性测试汇总和质量门禁结果；
 - `test_report_path`：结构化测试报告 JSON 路径；
 - `quality_gate_passed`：是否允许进入审查确认和后续验收；
@@ -630,7 +596,7 @@ acceptance.START
 - 前端：读取 `Frontend/package.json`（兼容 `frontend/`、`app/frontend/` 和根 `package.json`），根据 lockfile 选择 `pnpm` 或 `yarn`，执行 install、build，并在有对应测试文件时优先执行 `test:unit`、否则执行 `test`；
 - 后端：仅识别当前平台的 Maven Wrapper / Maven（`mvnw`、`mvnw.cmd`、`pom.xml`），先执行 `-B -Dmaven.test.skip=true clean install`，确认构建通过且存在对应 `*Test.java` 后再执行 `-B -DfailIfNoTests=true test`；不探测 Python 工程或执行 pytest；
 - 缺失必需入口（如前端 package.json、frontend build script）会失败。没有对应单测文件时不执行 Jest/Maven test，并以明确原因跳过；不执行 E2E。
-- 前端性能测试：单测确认后弹出“是否跳过”按钮；继续执行时用 `launch_frontend_project(skip_install=True)` 启动用户 `frontend` 工程并解析真实 `preview_url`，再由 `npx --yes --package @lhci/cli@0.7.2 lhci autorun` 对 `collect.url=[preview_url]` 执行 Lighthouse；使用模拟采集但把网络/CPU 限速调至接近本地无限制，避免 dev server 大体积未打包模块被限速模型放大；结果 advisory，失败不进入质量门禁阻断或修复闭环。
+- 前端性能测试：构建检查完成后询问“是否执行前端性能测试？”，从左到右展示“执行性能测试”（`run`）和“跳过性能测试”（`skip`），通过现有 AG-UI 结构化确认续接。选择执行时用 `launch_frontend_project(skip_install=True)` 启动用户 `frontend` 工程并解析真实 `preview_url`，再由 `npx --yes --package @lhci/cli@0.7.2 lhci autorun` 对 `collect.url=[preview_url]` 执行 Lighthouse；跳过时不启动前端或 Lighthouse，直接进入质量门禁。使用模拟采集但把网络/CPU 限速调至接近本地无限制，避免 dev server 大体积未打包模块被限速模型放大；结果 advisory，失败不进入质量门禁阻断或修复闭环。
 
 任务编译和执行还必须遵守以下确定性边界：
 

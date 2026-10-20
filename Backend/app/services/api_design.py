@@ -1565,8 +1565,14 @@ def _target_endpoints(
     target_id: str,
     api_contract_id: str | None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """解析页面或单 Endpoint 对应的唯一 TechnicalPlan 接口集合。"""
+    """解析应用、页面或单 Endpoint 对应的当前 TechnicalPlan 接口集合。"""
 
+    if target_type == "application":
+        return [
+            (contract, endpoint)
+            for contract in _dict_items(project_plan.get("api_contracts"))
+            for endpoint in _dict_items(contract.get("endpoints"))
+        ]
     if target_type == "endpoint":
         return [find_endpoint(project_plan, str(api_contract_id or ""), target_id)]
     if target_type != "page":

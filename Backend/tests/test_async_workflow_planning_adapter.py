@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
@@ -23,6 +24,7 @@ from app.graph.nodes.task_planning_adapter import (
     production_unit_generation_policy,
 )
 from app.services.build_task_planning_service import run_mainline_planning
+from app.services.build_task_progress import PlanningRunProgressPublisher
 from app.services.application_lifecycle import (
     create_application_lifecycle, start_workbench_execution,
     update_workbench_execution, write_application_lifecycle,
@@ -217,11 +219,12 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             tasks=tasks,
         )
 
-    async def _native_regenerate_round(self, *, interrupted: bool) -> None:
+    async def _native_regenerate_round(self, *, interrupted: bool, with_baseline: bool = True) -> None:
         """从真实 Pending 经过 Graph、Durable 记录和 Native fork 恢复 Regenerate。"""
 
         scope = execution_scope(name="orders")
-        write_build_task_plan_json(self._state(scope), confirmed_baseline(self.plan, scope))
+        if with_baseline:
+            write_build_task_plan_json(self._state(scope), confirmed_baseline(self.plan, scope))
         saver = InMemorySaver()
         model_calls = 0
         service_calls = 0
@@ -254,15 +257,6 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         graph = build_graph(checkpointer=saver, prepare_build_tasks_node=adapter)
         seed_thread = "regenerate-seed"
-        with patch(
-            "app.graph.nodes.task_planning_adapter.load_template_state",
-            return_value=_ready_template(self.workspace),
-        ):
-            await graph.ainvoke(self._state(scope), config={"configurable": {"thread_id": seed_thread}})
-        old_pending = load_pending_build_task_plan(self._state(scope))
-        old_identity = validate_pending_self_digest(old_pending)
-        source_run_id = "regenerate-source-interrupted" if interrupted else "regenerate-source-failed"
-        thread_id = seed_thread
         lifecycle = create_application_lifecycle(
             application_id="native-regenerate", application_name="Native Regenerate",
         )
@@ -278,6 +272,15 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             thread_id=seed_thread, run_id="workflow-async-adapter",
             phase="prepare_build_tasks", owner_session_id="session-async-adapter",
         )
+        with patch(
+            "app.graph.nodes.task_planning_adapter.load_template_state",
+            return_value=_ready_template(self.workspace),
+        ):
+            await graph.ainvoke(self._state(scope), config={"configurable": {"thread_id": seed_thread}})
+        old_pending = load_pending_build_task_plan(self._state(scope))
+        old_identity = validate_pending_self_digest(old_pending)
+        source_run_id = "regenerate-source-interrupted" if interrupted else "regenerate-source-failed"
+        thread_id = seed_thread
         waiting = update_workbench_execution(
             self.workspace, run_id="workflow-async-adapter", phase="prepare_build_tasks",
             status=WorkbenchExecutionStatus.AWAITING_USER,
@@ -388,6 +391,8 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
                 await graph.ainvoke(None, config=context.fork_config)
         finally:
             await stop_execution_heartbeat(context.heartbeat_task)
+            if context.workspace_lease is not None:
+                context.workspace_lease.release()
         new_pending = load_pending_build_task_plan(source_state)
         self.assertIsNotNone(new_pending)
         self.assertNotEqual(new_pending["draft_identity"]["draft_digest"], old_identity.draft_digest)
@@ -396,6 +401,84 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(committed_fact["current_workflow_run_id"], context.new_run_id)
         self.assertEqual(service_calls, before_resume_calls + 1)
         self.assertGreater(model_calls, 0)
+        projection = load_planning_run(source_state)
+        self.assertEqual(projection["unit_display_names"]["page:orders"], "Order页面")
+
+    async def test_native_regenerate_without_retained_owners_preserves_run_names(self) -> None:
+        """初次 Pending 的失败及中断恢复走真实 Native 链，并持久化新 Run 名称。"""
+
+        await self._native_regenerate_round(interrupted=False, with_baseline=False)
+
+    async def test_native_regenerate_interruption_without_retained_owners_preserves_run_names(self) -> None:
+        """无 Formal 基线的中断继续独立验证名称，不依赖 retained owner 解析。"""
+
+        await self._native_regenerate_round(interrupted=True, with_baseline=False)
+
+    async def test_regenerate_names_are_read_after_pending_consumption(self) -> None:
+        """消费旧 Pending 后修改正式计划，生成输入、实时及结果都使用刷新后的名称。"""
+
+        from app.graph.nodes import task_planning_adapter as adapter_module
+
+        # 本用例走真实磁盘重载和运行时物化，正式 ProductPlan 必须包含页面事实。
+        for page in self.plan["pages"]:
+            page["references"]["endpoint_dependencies"] = [{"endpoint_id": f"{page['pageId']}.list"}]
+        write_json(self.workspace, ARTIFACT_PATHS["technical_plan"], formal_artifacts(self.plan)["technical_plan"])
+        write_json(self.workspace, ARTIFACT_PATHS["product_plan"], {
+            "artifact_type": "product-plan", "confirmation_status": "confirmed", "pages": deepcopy(self.plan["pages"]),
+        })
+        write_confirmed_endpoint_designs(self.workspace, self.plan)
+        state = self._state(execution_scope(name="orders"))
+        state["project_plan_json_path"] = str(self.workspace / ARTIFACT_PATHS["technical_plan"])
+        adapter = create_async_workflow_planning_adapter(policy=self.policy, generate_once=self._generate)
+        readiness = _ready_template(self.workspace)
+        with patch("app.graph.nodes.task_planning_adapter.load_template_state", return_value=readiness):
+            initial = await adapter(state)
+        self.assertIn("planning_run_id", initial)
+        self.assertIsNotNone(load_pending_build_task_plan(state), initial.get("clarification"))
+        identity = validate_pending_self_digest(load_pending_build_task_plan(state))
+        old_names = dict(load_planning_run(state)["unit_display_names"])
+        state["build_task_plan_confirmation"] = {
+            "action": "regenerate", "planning_run_id": identity.planning_run_id,
+            "draft_digest": identity.draft_digest,
+        }
+        original_assemble = adapter_module._assemble_planning_context
+        refreshed = []
+
+        def assemble_after_consume(current_state):
+            """在真实输入工厂内验证消费边界，再写入新版正式计划及匹配的 Endpoint Design。"""
+
+            self.assertIsNone(load_pending_build_task_plan(current_state))
+            fresh_plan = deepcopy(self.plan)
+            fresh_plan["pages"][0]["name"] = "当前订单列表"
+            fresh_plan["api_contracts"][0]["endpoints"][0]["name"] = "当前订单查询"
+            write_json(self.workspace, ARTIFACT_PATHS["technical_plan"], formal_artifacts(fresh_plan)["technical_plan"])
+            write_json(self.workspace, ARTIFACT_PATHS["product_plan"], {
+                "artifact_type": "product-plan", "confirmation_status": "confirmed", "pages": deepcopy(fresh_plan["pages"]),
+            })
+            write_confirmed_endpoint_designs(self.workspace, fresh_plan)
+            context = original_assemble(current_state)
+            refreshed.append(context)
+            return context
+
+        events = []
+        with (
+            patch("app.graph.nodes.task_planning_adapter.load_template_state", return_value=readiness),
+            patch("app.graph.nodes.task_planning_adapter._assemble_planning_context", side_effect=assemble_after_consume),
+            patch("app.graph.nodes.task_planning_adapter.create_planning_run_progress_publisher", return_value=PlanningRunProgressPublisher(events.append)),
+        ):
+            result = await adapter(state)
+        self.assertEqual(len(refreshed), 1)
+        self.assertEqual(refreshed[0].inputs.project_plan["pages"][0]["name"], "当前订单列表")
+        self.assertNotEqual(result["planning_run_id"], initial["planning_run_id"])
+        saved = load_planning_run(state)
+        self.assertEqual(saved["unit_display_names"]["page:orders"], "当前订单列表页面")
+        self.assertNotEqual(saved["unit_display_names"], old_names)
+        for event in events:
+            names = {unit["id"]: unit.get("displayName") for unit in event["dag_generation"]["units"]}
+            self.assertEqual(names["page:orders"], "当前订单列表页面")
+            self.assertEqual(names["backend:endpoint:orders-api:orders.list"], "当前订单查询接口")
+        self.assertTrue(events)
+        self.assertEqual(result["dag_generation_progress"], events[-1]["dag_generation"])
 
     async def test_native_regenerate_failure_retries_consumed_operation(self) -> None:
         """无业务 failed checkpoint 的异常可经上方恢复入口重新调用操作服务。"""

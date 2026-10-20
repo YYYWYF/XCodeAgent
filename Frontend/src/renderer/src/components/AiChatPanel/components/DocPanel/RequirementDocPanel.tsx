@@ -22,7 +22,10 @@ const requirementDocSections: Array<{ key: RequirementSectionKey; label: string 
 ]
 
 /** 渲染右侧需求文档产物视图，所有交互仅改变本面板内的阅读位置。 */
-export default function RequirementDocPanel({ productPlan, spec }: Props): ReactElement {
+export default function RequirementDocPanel({
+  productPlan,
+  spec
+}: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
   return (
     <div className={cx('requirement-doc-panel')}>

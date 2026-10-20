@@ -38,7 +38,10 @@ from app.services.direct_modification import (
     validated_dynamic_workspace_paths,
     validated_direct_stage_result,
 )
-from app.services.project_launcher import run_project_restart_validation
+from app.services.direct_validation import (
+    DIRECT_FRONTEND_BUILD_CHECKS,
+    run_direct_fix_validation,
+)
 from app.services.revision_routing import (
     build_small_task_revision_confirmation,
     route_from_change_impact,
@@ -971,7 +974,7 @@ def execute_workspace_direct_modification(state: ProjectState) -> dict[str, Any]
 
 
 def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
-    """只启动验收本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
+    """对受影响前端执行编译打包和项目重启验收，失败交给局部修复节点。"""
 
     repair_iteration = max(0, int(state.get("repair_iteration", 0) or 0))
     max_repair_iterations = max(
@@ -987,8 +990,7 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
     }
-    # 快速修复只围绕已捕获的 ChangeSet 做真实启动验收，避免重新运行整个工程构建。
-    result = run_project_restart_validation(validation_state)
+    result = run_direct_fix_validation(validation_state, affected_layers=affected_layers)
     test_results = _scope_direct_validation_results(
         [item for item in result.get("test_results", []) if isinstance(item, dict)],
         changed_paths=changed_paths,
@@ -1024,7 +1026,7 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
     report_path = write_test_report_markdown(validation_state, report)
     return {
         "phase": "validate_direct_fix",
-        "status": "completed" if passed else "failed",
+        "status": "completed" if passed else "in_progress" if can_repair else "failed",
         "message": (
             "本次修改范围验证通过。"
             if passed
@@ -1096,6 +1098,10 @@ def _scope_direct_validation_results(
 
     scoped: list[dict[str, Any]] = []
     for result in results:
+        # 前端编译打包是工程级门禁；既有源码错误也必须阻断并进入修复。
+        if result.get("id") in DIRECT_FRONTEND_BUILD_CHECKS and result.get("layer") == "frontend":
+            scoped.append(result)
+            continue
         # 启动验收失败不能依据日志中是否出现文件名降级；环境失败仍阻断但不返修代码。
         if isinstance(result.get("startup"), dict):
             scoped.append(result)
@@ -1164,12 +1170,12 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         status = "completed"
     elif is_answer and current_status == "completed":
         status = "completed"
-    elif launch_result and launch_result.get("status") != "failed":
-        status = "completed"
     elif current_status == "requires_user_input":
         status = "requires_user_input"
     elif current_status == "failed" or launch_result.get("status") == "failed":
         status = "failed"
+    elif launch_result and launch_result.get("status") != "failed":
+        status = "completed"
     else:
         status = current_status if current_status in {"completed", "failed"} else "failed"
 

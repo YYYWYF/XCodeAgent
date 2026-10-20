@@ -71,6 +71,16 @@ export default function FreeChatHistory({
     if (tab === 'regular' && !sessionCreationDisabled && historyEnabled) onCreateSession()
   }
 
+  /** 当前查看或正在推进的会话均保留，浏览历史不会解除推进会话的保护。 */
+  const isCurrentSession = (sessionId: string): boolean =>
+    sessionId === activeSessionId || sessionId === advancingSessionId
+
+  /** 在确认时再次检查会话归属，阻止打开弹窗后成为当前会话的记录被删除。 */
+  const handleDeleteSession = async (sessionId: string): Promise<void> => {
+    if (isCurrentSession(sessionId)) return
+    await onDeleteSession(sessionId)
+  }
+
   if (!open) return null
 
   return (
@@ -175,10 +185,10 @@ export default function FreeChatHistory({
                 </button>
                 <Popconfirm
                   cancelText="取消"
-                  disabled={deletingSessionId === session.id}
+                  disabled={isCurrentSession(session.id) || deletingSessionId === session.id}
                   okButtonProps={{ danger: true }}
                   okText="删除"
-                  onConfirm={() => onDeleteSession(session.id)}
+                  onConfirm={() => handleDeleteSession(session.id)}
                   title={
                     sessionRunStates[session.id]
                       ? '确定删除这个对话并停止正在进行的任务吗？'
@@ -188,11 +198,15 @@ export default function FreeChatHistory({
                   <Button
                     aria-label={`删除会话 ${session.title}`}
                     danger
-                    disabled={loadingSessions || deletingSessionId === session.id}
+                    disabled={
+                      isCurrentSession(session.id) ||
+                      loadingSessions ||
+                      deletingSessionId === session.id
+                    }
                     icon={<DeleteOutlined />}
                     loading={deletingSessionId === session.id}
                     size="small"
-                    title="删除会话"
+                    title={isCurrentSession(session.id) ? '当前会话不能删除' : '删除会话'}
                     type="text"
                   />
                 </Popconfirm>

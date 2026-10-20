@@ -1,5 +1,6 @@
 import { MIN_ASSISTANT_PANEL_RATIO, MIN_RIGHT_PANEL_RATIO } from './constants'
 import type {
+  ApplicationLifecycle,
   WorkflowRunPayload,
   WorkspaceCodeChangeFile,
   WorkspaceCodeChangeSet
@@ -40,6 +41,14 @@ export type WorkspaceCodeChangeSection<T> = {
 export type WorkspacePathParts = {
   directory: string
   fileName: string
+}
+
+/** 当前轮次有执行或正式修改时，不把上一轮通过结果作为提交提示。 */
+export function currentRoundAcceptancePassed(lifecycle?: ApplicationLifecycle): boolean {
+  return lifecycle?.extensions?.acceptanceStatus === 'passed' &&
+    !lifecycle.activeFormalRevision && !lifecycle.pendingRevisionImpact &&
+    !Object.values(lifecycle.activeExecutions || {}).some((execution) =>
+      ['running', 'stopping', 'awaiting_user'].includes(execution.status))
 }
 
 /** 仅在当前验收仍等待用户决策且尚未通过时展示底部验收操作。 */

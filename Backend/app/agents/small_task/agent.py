@@ -1,7 +1,8 @@
 """创建工作台和自由对话共同使用的局部代码修改 Agent。"""
 
-from deepagents import create_deep_agent
+from app.agents.execution_control import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
+from langchain.agents.middleware import ModelCallLimitMiddleware
 
 from app.agents.small_task.scope import ScopedSmallTaskBackend, is_small_task_path_allowed
 from app.agents.frontend_test_instructions import FRONTEND_TEST_INSTRUCTIONS
@@ -10,6 +11,7 @@ from app.agents.workspace_scope import (
     create_workspace_permissions,
 )
 from app.middleware.direct_modification import DirectModificationMiddleware
+from app.middleware.small_task_cancellation import SmallTaskCancellationMiddleware
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
@@ -60,6 +62,7 @@ def create_small_task_agent(
         "verification blocker. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}"
     )
+    execute_tool = create_execute_tool(workspace_root)
     return create_deep_agent(
         name="small-task-coding-agent",
         model=model,
@@ -70,9 +73,15 @@ def create_small_task_agent(
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=[
             create_delete_file_tool(workspace_root, path_guard=is_small_task_path_allowed),
-            create_execute_tool(workspace_root),
+            execute_tool,
         ],
-        middleware=[DirectModificationMiddleware()],
+        middleware=[
+            # 与前端 Agent 一样，在每次模型调用前补回可能被中间层遗漏的命令工具。
+            DirectModificationMiddleware(required_tools=[execute_tool]),
+            SmallTaskCancellationMiddleware(),
+            # 局部任务不能无限探索；达到上限后抛出可被执行器明确收口的错误。
+            ModelCallLimitMiddleware(run_limit=24, exit_behavior="error"),
+        ],
         backend=ScopedSmallTaskBackend(
             create_workspace_backend(
                 workspace_root,

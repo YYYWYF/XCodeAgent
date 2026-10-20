@@ -12,19 +12,19 @@ from tests.test_build_task_reuse import _inputs
 
 
 def _template_state_context(workspace: Path) -> dict:
-    """写入并读取真实 V2 TemplateState，生成 Build 允许冻结的唯一模板证据。"""
+    """写入并读取真实 V3 TemplateState，生成 Build 允许冻结的唯一模板证据。"""
 
     state_path = workspace / ".devagentstudio/template-state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
-        '{"schemaVersion":2,"templateRevision":"template-r1","requested":{},"effective":{},"appliedAdditions":{}}',
+        '{"schemaVersion":3,"templateRevision":"2026.10.13.1","requested":{},"effective":{},"installedArtifacts":{},"managedContributions":{}}',
         encoding="utf-8",
     )
     return template_context(load_template_state(workspace))
 
 
 def _ready_template(workspace: Path) -> dict:
-    """提供 Adapter 测试所需的原始 V2 State，调用方必须自行冻结为 BuildContext。"""
+    """提供 Adapter 测试所需的原始 V3 State，调用方必须自行冻结为 BuildContext。"""
 
     _template_state_context(workspace)
     (workspace / ".devagentstudio/application.json").write_text(
