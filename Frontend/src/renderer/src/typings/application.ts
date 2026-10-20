@@ -183,9 +183,11 @@ export interface ApplicationSchemaConfig {
   dataSources?: ApplicationDataSourceDefinition[]
   auth: {
     enable: boolean
-    authnSource: string
     yht: {
       clientId: string
+      privateKey: string
+      publicKey: string
+      centerPublicKey: string
     }
   }
   authorization: ApplicationAuthorizationSeed

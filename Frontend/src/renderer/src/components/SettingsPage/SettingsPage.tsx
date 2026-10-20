@@ -7,11 +7,9 @@ import {
   DeleteOutlined,
   DesktopOutlined,
   FundOutlined,
-  LayoutOutlined,
   LockOutlined,
   MessageOutlined,
   PlusOutlined,
-  RadarChartOutlined,
   SaveOutlined,
   SettingOutlined,
   ShopOutlined,
@@ -21,26 +19,13 @@ import {
   UserOutlined,
   CloseOutlined
 } from '@ant-design/icons'
-import {
-  Anchor,
-  AutoComplete,
-  Button,
-  Form,
-  Input,
-  Radio,
-  Switch,
-  Typography,
-  message
-} from 'antd'
+import { Anchor, Button, Form, Input, Radio, Switch, Typography, message } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useMemo, useState } from 'react'
 import type { ApplicationConfig } from '../../typings'
 import { cx } from '../../utils'
-import { applicationIconOptions, trackMethodOptions } from '../Welcome/constants'
-import {
-  ApplicationProjectionSyncError,
-  saveApplication
-} from '../Welcome/applicationService'
+import { applicationIconOptions } from '../Welcome/constants'
+import { saveApplication } from '../Welcome/applicationService'
 import './SettingsPage.less'
 
 const { Title, Text } = Typography
@@ -76,7 +61,7 @@ type Props = {
 
 type SettingsFormValues = Pick<
   ApplicationConfig,
-  'appName' | 'appIcon' | 'senario' | 'layout' | 'theme' | 'auth' | 'track' | 'apiTrack'
+  'appName' | 'appIcon' | 'senario' | 'theme' | 'auth'
 > & {
   envVariables: EnvVariable[]
 }
@@ -121,14 +106,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
 
   // antd v4 的 Form.useWatch 在 Form 挂载前可能返回 undefined，用 getFieldValue 兜底更安全
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? application?.auth?.enable ?? false
-  const trackEnabled =
-    Form.useWatch(['track', 'enable'], form) ?? application?.track?.enable ?? false
-  const apiTrackEnabled =
-    Form.useWatch(['apiTrack', 'enable'], form) ?? application?.apiTrack?.enable ?? false
-  const useHeaderEnabled =
-    Form.useWatch(['layout', 'useHeader'], form) ?? application?.layout?.useHeader ?? true
-  const useFooterEnabled =
-    Form.useWatch(['layout', 'useFooter'], form) ?? application?.layout?.useFooter ?? false
   // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
   const safeEnvVariables = useMemo<EnvVariable[]>(() => {
     const devVars = application?.environment?.dev ?? []
@@ -144,20 +121,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
 
   const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
   const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
-
-  const [trackMethodSearch, setTrackMethodSearch] = useState('')
-  const trackMethodFilteredOptions = useMemo(() => {
-    const keyword = trackMethodSearch.trim().toLowerCase()
-    if (!keyword) return trackMethodOptions
-    return trackMethodOptions.filter((option) => option.value.toLowerCase().includes(keyword))
-  }, [trackMethodSearch])
-
-  const headerBar = useHeaderEnabled ? (
-    <rect fill="#bfbfbf" height="6" rx="1" width="96" x="0" y="0" />
-  ) : null
-  const footerBar = useFooterEnabled ? (
-    <rect fill="#bfbfbf" height="6" rx="1" width="96" x="0" y="58" />
-  ) : null
 
   // 校验设置并通过统一应用保存入口加密数据库凭据。
   const handleSave = async (): Promise<void> => {
@@ -185,11 +148,27 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
       const persistedApplication = await saveApplication(updatedApplication)
       onSaved(persistedApplication)
       message.success('保存成功')
-    } catch (error: any) {
+      if (
+        application.appName !== persistedApplication.appName ||
+        application.appIcon !== persistedApplication.appIcon ||
+        application.theme?.primaryColor !== persistedApplication.theme?.primaryColor
+      ) {
+        message.warning(
+          '应用名称、图标或主题色已保存；请按需更新工程内 frontend/.env 后重新构建前端。',
+          6
+        )
+      }
+    } catch (error) {
       // antd validateFields 校验失败时返回 { errorFields, values }，非 Error 实例
       // errorFields 按字段注册顺序排列（静态字段先于 Form.List 动态字段），
       // 需要按 DOM 视觉位置（从上到下）找出第一个可见的错误
-      if (error?.errorFields?.length) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'errorFields' in error &&
+        Array.isArray(error.errorFields) &&
+        error.errorFields.length > 0
+      ) {
         // 扫描所有带 .ant-form-item-has-error 的 DOM 元素，按 Y 坐标排序
         const errorNodes = document.querySelectorAll('.ant-form-item-has-error')
         const byPosition = Array.from(errorNodes)
@@ -209,9 +188,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
           const firstErr = error.errorFields[0]?.errors?.[0]
           if (firstErr) message.error(firstErr)
         }
-      } else if (error instanceof ApplicationProjectionSyncError) {
-        onSaved(error.application)
-        message.error(error.message)
       } else if (error instanceof Error) {
         message.error(`保存失败：${error.message}`)
       }
@@ -221,19 +197,14 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
   }
 
   // 兜底 initialValues，防止 application 字段缺失导致 Form 报错
-  const safeLayout = application?.layout ?? { type: '', useHeader: true, useFooter: false }
-  const safeAuth = application?.auth ?? { enable: false, authnSource: '', yht: { clientId: '' } }
-  const safeTrack = application?.track ?? {
-    enable: false,
-    uploadId: '',
-    apiHost: '',
-    method: 'post'
-  }
-  const safeApiTrack = application?.apiTrack ?? {
-    enable: false,
-    businessId: '',
-    traceBaggage: '',
-    apiTrackHost: ''
+  const safeAuth = {
+    enable: application?.auth?.enable ?? false,
+    yht: {
+      clientId: application?.auth?.yht?.clientId ?? '',
+      privateKey: application?.auth?.yht?.privateKey ?? '',
+      publicKey: application?.auth?.yht?.publicKey ?? '',
+      centerPublicKey: application?.auth?.yht?.centerPublicKey ?? ''
+    }
   }
   return (
     <div className={cx('settings-page')}>
@@ -286,38 +257,11 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
               }
             />
             <Anchor.Link
-              href="#settings-layout"
-              title={
-                <span className={cx('settings-anchor-item')}>
-                  <LayoutOutlined />
-                  <span>导航模式</span>
-                </span>
-              }
-            />
-            <Anchor.Link
               href="#settings-auth"
               title={
                 <span className={cx('settings-anchor-item')}>
                   <LockOutlined />
                   <span>认证</span>
-                </span>
-              }
-            />
-            <Anchor.Link
-              href="#settings-page-track"
-              title={
-                <span className={cx('settings-anchor-item')}>
-                  <RadarChartOutlined />
-                  <span>页面埋点</span>
-                </span>
-              }
-            />
-            <Anchor.Link
-              href="#settings-api-track"
-              title={
-                <span className={cx('settings-anchor-item')}>
-                  <RadarChartOutlined />
-                  <span>接口埋点</span>
                 </span>
               }
             />
@@ -341,10 +285,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
               appIcon: application.appIcon ?? 'AppstoreOutlined',
               senario: application.senario ?? '',
               theme: application.theme ?? { primaryColor: '#6b3cf0' },
-              layout: safeLayout,
               auth: safeAuth,
-              track: safeTrack,
-              apiTrack: safeApiTrack,
               envVariables: safeEnvVariables
             }}
             labelCol={{ flex: '0 0 170px' }}
@@ -404,213 +345,50 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
               </Form.Item>
             </SettingsCard>
 
-            <SettingsCard id="settings-layout" icon={<LayoutOutlined />} title="导航模式">
-              <Form.Item label="布局方式" name={['layout', 'type']}>
-                <Radio.Group
-                  className={cx('settings-nav-picker')}
-                  optionType="button"
-                  buttonStyle="solid"
-                >
-                  <Radio.Button value="side">
-                    <span className={cx('settings-nav-preview')}>
-                      <svg height="52" viewBox="0 0 96 64" width="78">
-                        <defs>
-                          <clipPath id="settings-nav-side-clip">
-                            <rect height="64" rx="5" width="96" x="0" y="0" />
-                          </clipPath>
-                        </defs>
-                        <g clipPath="url(#settings-nav-side-clip)">
-                          <rect fill="#fff" height="64" width="96" x="0" y="0" />
-                          <rect fill="#2c2c2c" height="64" width="24" x="0" y="0" />
-                          <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="9" />
-                          <rect fill="#555" height="2" rx="1" width="8" x="5" y="15" />
-                          <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="22" />
-                          <rect fill="#555" height="2" rx="1" width="6" x="5" y="28" />
-                          <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="35" />
-                          <rect fill="#555" height="2" rx="1" width="9" x="5" y="41" />
-                          <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="48" />
-                          <rect fill="#555" height="2" rx="1" width="7" x="5" y="54" />
-                          {headerBar}
-                          {footerBar}
-                        </g>
-                        <rect
-                          fill="none"
-                          height="64"
-                          rx="5"
-                          stroke="#d9d9d9"
-                          strokeWidth="1"
-                          width="96"
-                          x="0"
-                          y="0"
-                        />
-                      </svg>
-                      <span className={cx('settings-nav-label')}>左侧导航</span>
-                    </span>
-                  </Radio.Button>
-                  <Radio.Button value="top">
-                    <span className={cx('settings-nav-preview')}>
-                      <svg height="52" viewBox="0 0 96 64" width="78">
-                        <defs>
-                          <clipPath id="settings-nav-top-clip">
-                            <rect height="64" rx="5" width="96" x="0" y="0" />
-                          </clipPath>
-                        </defs>
-                        <g clipPath="url(#settings-nav-top-clip)">
-                          <rect fill="#fff" height="64" width="96" x="0" y="0" />
-                          <rect fill="#2c2c2c" height="16" width="96" x="0" y="0" />
-                          {headerBar}
-                          {footerBar}
-                        </g>
-                        <rect
-                          fill="none"
-                          height="64"
-                          rx="5"
-                          stroke="#d9d9d9"
-                          strokeWidth="1"
-                          width="96"
-                          x="0"
-                          y="0"
-                        />
-                      </svg>
-                      <span className={cx('settings-nav-label')}>顶部导航</span>
-                    </span>
-                  </Radio.Button>
-                  <Radio.Button value="mix">
-                    <span className={cx('settings-nav-preview')}>
-                      <svg height="52" viewBox="0 0 96 64" width="78">
-                        <defs>
-                          <clipPath id="settings-nav-mix-clip">
-                            <rect height="64" rx="5" width="96" x="0" y="0" />
-                          </clipPath>
-                        </defs>
-                        <g clipPath="url(#settings-nav-mix-clip)">
-                          <rect fill="#fff" height="64" width="96" x="0" y="0" />
-                          <rect fill="#2c2c2c" height="14" width="96" x="0" y="0" />
-                          <rect fill="#2c2c2c" height="50" width="24" x="0" y="14" />
-                          <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="21" />
-                          <rect fill="#555" height="2" rx="1" width="8" x="5" y="27" />
-                          <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="33" />
-                          <rect fill="#555" height="2" rx="1" width="7" x="5" y="39" />
-                          <rect fill="#444" height="3" rx="1.5" width="14" x="5" y="45" />
-                          <rect fill="#555" height="2" rx="1" width="9" x="5" y="51" />
-                          {headerBar}
-                          {footerBar}
-                        </g>
-                        <rect
-                          fill="none"
-                          height="64"
-                          rx="5"
-                          stroke="#d9d9d9"
-                          strokeWidth="1"
-                          width="96"
-                          x="0"
-                          y="0"
-                        />
-                      </svg>
-                      <span className={cx('settings-nav-label')}>混合导航</span>
-                    </span>
-                  </Radio.Button>
-                </Radio.Group>
-              </Form.Item>
-              <div className={cx('settings-nav-toggles')}>
-                <Form.Item label="开启头部" name={['layout', 'useHeader']} valuePropName="checked">
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                </Form.Item>
-                <Form.Item label="开启底部" name={['layout', 'useFooter']} valuePropName="checked">
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                </Form.Item>
-              </div>
-            </SettingsCard>
-
             <SettingsCard
               id="settings-auth"
               icon={<LockOutlined />}
-              title="认证"
+              title="一号通登录"
               compact
-              disabled={!authEnabled}
               extra={
                 <Form.Item name={['auth', 'enable']} valuePropName="checked" noStyle>
                   <Switch checkedChildren="开启" unCheckedChildren="关闭" />
                 </Form.Item>
               }
             >
-              <Form.Item
-                label="认证来源"
-                name={['auth', 'authnSource']}
-                rules={[{ required: authEnabled, message: '请填写认证来源' }]}
-              >
-                <Input disabled={!authEnabled} />
-              </Form.Item>
-              <Form.Item
-                label="一号通clientId"
-                name={['auth', 'yht', 'clientId']}
-                rules={[{ required: authEnabled, message: '请填写clientId' }]}
-              >
-                <Input disabled={!authEnabled} />
-              </Form.Item>
-            </SettingsCard>
-
-            <SettingsCard
-              id="settings-page-track"
-              icon={<RadarChartOutlined />}
-              title="页面埋点"
-              compact
-              disabled={!trackEnabled}
-              extra={
-                <Form.Item name={['track', 'enable']} valuePropName="checked" noStyle>
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                </Form.Item>
-              }
-            >
-              <Form.Item
-                label="上传标识"
-                name={['track', 'uploadId']}
-                rules={[{ required: trackEnabled, message: '请填写上传标识' }]}
-              >
-                <Input disabled={!trackEnabled} />
-              </Form.Item>
-              <Form.Item label="上报地址" name={['track', 'apiHost']}>
-                <Input disabled={!trackEnabled} />
-              </Form.Item>
-              <Form.Item label="请求方式" name={['track', 'method']}>
-                <AutoComplete
-                  allowClear={false}
-                  defaultActiveFirstOption={false}
-                  disabled={!trackEnabled}
-                  filterOption={false}
-                  onSearch={setTrackMethodSearch}
-                  onSelect={() => setTrackMethodSearch('')}
-                  options={trackMethodFilteredOptions}
-                  placeholder="post"
-                />
-              </Form.Item>
-            </SettingsCard>
-
-            <SettingsCard
-              id="settings-api-track"
-              icon={<RadarChartOutlined />}
-              title="接口埋点"
-              compact
-              disabled={!apiTrackEnabled}
-              extra={
-                <Form.Item name={['apiTrack', 'enable']} valuePropName="checked" noStyle>
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                </Form.Item>
-              }
-            >
-              <Form.Item
-                label="业务标识"
-                name={['apiTrack', 'businessId']}
-                rules={[{ required: apiTrackEnabled, message: '请填写业务标识' }]}
-              >
-                <Input disabled={!apiTrackEnabled} />
-              </Form.Item>
-              <Form.Item label="链路透传信息" name={['apiTrack', 'traceBaggage']}>
-                <Input disabled={!apiTrackEnabled} />
-              </Form.Item>
-              <Form.Item label="接口埋点地址" name={['apiTrack', 'apiTrackHost']}>
-                <Input disabled={!apiTrackEnabled} />
-              </Form.Item>
+              {authEnabled ? (
+                <>
+                  <Form.Item
+                    label="clientId"
+                    name={['auth', 'yht', 'clientId']}
+                    rules={[{ required: true, message: '请填写 clientId' }]}
+                  >
+                    <Input />
+                  </Form.Item>
+                  <Form.Item
+                    extra="请填写加密后的内容。"
+                    label="privateKey"
+                    name={['auth', 'yht', 'privateKey']}
+                    rules={[{ required: true, message: '请填写 privateKey' }]}
+                  >
+                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
+                  </Form.Item>
+                  <Form.Item
+                    label="publicKey"
+                    name={['auth', 'yht', 'publicKey']}
+                    rules={[{ required: true, message: '请填写 publicKey' }]}
+                  >
+                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
+                  </Form.Item>
+                  <Form.Item
+                    label="centerPublicKey"
+                    name={['auth', 'yht', 'centerPublicKey']}
+                    rules={[{ required: true, message: '请填写 centerPublicKey' }]}
+                  >
+                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
+                  </Form.Item>
+                </>
+              ) : null}
             </SettingsCard>
 
             <SettingsCard id="settings-environment" icon={<CodeOutlined />} title="环境变量">
@@ -730,7 +508,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
                 )}
               </Form.List>
             </SettingsCard>
-
           </Form>
         </div>
       </div>

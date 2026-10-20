@@ -371,7 +371,7 @@ type ApplicationAuthorizationSeed = {
 - 前端不解析 Cookie，不在请求体、请求头或查询参数中提交“当前用户 subjectId”；成员管理接口路径中的 `subjectId` 只表示被管理对象。
 - 一号通认证未能提供经过验证的 `Authentication` 时，权限运行时不能标记为 ready，第一阶段步骤 7 不能通过验收。
 - 未认证访问由 Spring Security 返回 401；身份认证成功后才进入资源裁决并可能返回 403。
-- RBAC 模块不得自行复制一号通协议实现，也不得从 `authnSource`、`clientId` 或任意未验证字符串推导当前成员。
+- RBAC 模块不得自行复制一号通协议实现，也不得从一号通配置、`clientId` 或任意未验证字符串推导当前成员。
 
 ### RequirementSpec 权限需求
 

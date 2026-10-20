@@ -26,7 +26,7 @@ logger = logging.getLogger("uvicorn.error")
 # 后续接入真实 Engine 后可移除。
 _GIT_FALLBACK_FRONTEND_URL = "https://github.com/ruyue1/frontend-template.git"
 _GIT_FALLBACK_BACKEND_URL = "https://github.com/Hupy2118/springboot-template.git"
-_GIT_FALLBACK_TEMPLATE_REVISION = "git-fallback-v1"
+_GIT_FALLBACK_TEMPLATE_REVISION = "2026.10.19.1"
 # 必须与读取方一致：template_package.py 用 app.branding 的 WORKSPACE_ARTIFACT_DIR
 # 定位 ZIP 内的 TemplateState。这里硬编码旧目录名会让 Bootstrap 直接失败。
 _TEMPLATE_STATE_ZIP_PATH = (WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix()
@@ -268,7 +268,7 @@ def _git_clone(url: str, dest: Path) -> None:
 
 
 def _build_fallback_template_state(requested_config: dict[str, Any]) -> dict[str, Any]:
-    """从请求编译 fallback TemplateState：requested/effective 取已启用能力，appliedAdditions 为空。"""
+    """从请求编译可被 V3 Bootstrap 接受的 fallback TemplateState。"""
 
     capabilities = requested_config.get("capabilities") if isinstance(requested_config, dict) else None
     enabled: dict[str, dict[str, Any]] = {}
@@ -284,9 +284,11 @@ def _build_fallback_template_state(requested_config: dict[str, Any]) -> dict[str
                     config = {}
                 enabled[capability_id] = {"enabled": True, "config": config}
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "templateRevision": _GIT_FALLBACK_TEMPLATE_REVISION,
         "requested": enabled,
         "effective": enabled,
-        "appliedAdditions": {},
+        # Git fallback 只复制基础模板，尚未安装任何可追踪的 Extension 或聚合资源。
+        "installedArtifacts": {},
+        "managedContributions": {},
     }

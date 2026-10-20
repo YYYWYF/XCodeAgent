@@ -11,7 +11,6 @@ import {
   LockOutlined,
   MenuOutlined,
   MessageOutlined,
-  RadarChartOutlined,
   ShopOutlined,
   ShoppingOutlined,
   TeamOutlined,
@@ -21,7 +20,6 @@ import {
 import { Button, Form, Input, Radio, Select, Switch } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { useMemo, useState } from 'react'
 import type { ApplicationDraft } from '../../typings'
 import { validateBranchName, validateRepoUrl } from '../../service/repositoryBranch'
 import { cx } from '../../utils'
@@ -29,10 +27,9 @@ import {
   applicationIconOptions,
   defaultRepoUrl,
   initialApplicationDraft,
-  terminalLabels,
-  trackMethodOptions
+  terminalLabels
 } from './constants'
-import { TabHintInput, TabHintAutoComplete } from './components/TabHintInput'
+import { TabHintInput } from './components/TabHintInput'
 import DatasourceConfigFields from './DatasourceConfigFields'
 
 const { TextArea } = Input
@@ -83,16 +80,8 @@ export default function ApplicationForm({
 }: Props): ReactElement {
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? true
   const authorizationEnabled = Form.useWatch(['authorization', 'enabled'], form) ?? false
-  const trackEnabled = Form.useWatch(['track', 'enable'], form) ?? true
-  const apiTrackEnabled = Form.useWatch(['apiTrack', 'enable'], form) ?? true
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
   const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
-  const [trackMethodSearch, setTrackMethodSearch] = useState('')
-  const trackMethodFilteredOptions = useMemo(() => {
-    const keyword = trackMethodSearch.trim().toLowerCase()
-    if (!keyword) return trackMethodOptions
-    return trackMethodOptions.filter((option) => option.value.toLowerCase().includes(keyword))
-  }, [trackMethodSearch])
 
   /** 将选中的预设主题色写入应用表单。 */
   const applyThemeColor = (color: string): void => {
@@ -184,9 +173,7 @@ export default function ApplicationForm({
             {
               validator: (_rule, value: string) => {
                 const invalidReason = validateRepoUrl(value)
-                return invalidReason
-                  ? Promise.reject(new Error(invalidReason))
-                  : Promise.resolve()
+                return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
               }
             }
           ]}
@@ -201,9 +188,7 @@ export default function ApplicationForm({
             {
               validator: (_rule, value: string) => {
                 const invalidReason = validateBranchName(value)
-                return invalidReason
-                  ? Promise.reject(new Error(invalidReason))
-                  : Promise.resolve()
+                return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
               }
             }
           ]}
@@ -309,12 +294,11 @@ export default function ApplicationForm({
         className={cx(
           'application-form-section',
           'application-form-section--full',
-          'application-form-section--toggle',
-          !authEnabled && 'application-form-section--disabled'
+          'application-form-section--toggle'
         )}
       >
         <div className={cx('application-form-section-head')}>
-          <SectionTitle icon={<LockOutlined />}>认证</SectionTitle>
+          <SectionTitle icon={<LockOutlined />}>一号通登录</SectionTitle>
           <Form.Item
             className={cx('application-form-switch')}
             name={['auth', 'enable']}
@@ -328,20 +312,39 @@ export default function ApplicationForm({
             />
           </Form.Item>
         </div>
-        <Form.Item
-          label="认证来源"
-          name={['auth', 'authnSource']}
-          rules={[{ required: authEnabled, message: '启用认证后请填写认证来源' }]}
-        >
-          <Input disabled={!authEnabled} />
-        </Form.Item>
-        <Form.Item
-          label="一号通clientId"
-          name={['auth', 'yht', 'clientId']}
-          rules={[{ required: authEnabled, message: '启用认证后请填写一号通clientId' }]}
-        >
-          <Input disabled={!authEnabled} />
-        </Form.Item>
+        {authEnabled ? (
+          <>
+            <Form.Item
+              label="clientId"
+              name={['auth', 'yht', 'clientId']}
+              rules={[{ required: true, message: '启用一号通登录后请填写 clientId' }]}
+            >
+              <Input />
+            </Form.Item>
+            <Form.Item
+              extra="请填写加密后的内容。"
+              label="privateKey"
+              name={['auth', 'yht', 'privateKey']}
+              rules={[{ required: true, message: '启用一号通登录后请填写 privateKey' }]}
+            >
+              <TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
+            </Form.Item>
+            <Form.Item
+              label="publicKey"
+              name={['auth', 'yht', 'publicKey']}
+              rules={[{ required: true, message: '启用一号通登录后请填写 publicKey' }]}
+            >
+              <TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
+            </Form.Item>
+            <Form.Item
+              label="centerPublicKey"
+              name={['auth', 'yht', 'centerPublicKey']}
+              rules={[{ required: true, message: '启用一号通登录后请填写 centerPublicKey' }]}
+            >
+              <TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
+            </Form.Item>
+          </>
+        ) : null}
       </section>
 
       <section
@@ -407,84 +410,6 @@ export default function ApplicationForm({
         </Form.Item>
       </section>
 
-      <section
-        className={cx(
-          'application-form-section',
-          'application-form-section--full',
-          'application-form-section--toggle',
-          !trackEnabled && 'application-form-section--disabled'
-        )}
-      >
-        <div className={cx('application-form-section-head')}>
-          <SectionTitle icon={<RadarChartOutlined />}>页面埋点</SectionTitle>
-          <Form.Item
-            className={cx('application-form-switch')}
-            name={['track', 'enable']}
-            valuePropName="checked"
-            noStyle
-          >
-            <Switch checkedChildren="启用" unCheckedChildren="关闭" />
-          </Form.Item>
-        </div>
-        <Form.Item
-          label="上传标识"
-          name={['track', 'uploadId']}
-          rules={[{ required: trackEnabled, message: '启用页面埋点后请填写上传标识' }]}
-        >
-          <Input disabled={!trackEnabled} />
-        </Form.Item>
-        <Form.Item label="上报地址" name={['track', 'apiHost']}>
-          <Input disabled={!trackEnabled} />
-        </Form.Item>
-        <Form.Item label="请求方式" name={['track', 'method']}>
-          <TabHintAutoComplete
-            form={form}
-            fieldName={['track', 'method']}
-            allowClear={false}
-            defaultActiveFirstOption={false}
-            disabled={!trackEnabled}
-            filterOption={false}
-            onSearch={setTrackMethodSearch}
-            onSelect={() => setTrackMethodSearch('')}
-            options={trackMethodFilteredOptions}
-            placeholder="post"
-          />
-        </Form.Item>
-      </section>
-
-      <section
-        className={cx(
-          'application-form-section',
-          'application-form-section--full',
-          'application-form-section--toggle',
-          !apiTrackEnabled && 'application-form-section--disabled'
-        )}
-      >
-        <div className={cx('application-form-section-head')}>
-          <SectionTitle icon={<RadarChartOutlined />}>接口埋点</SectionTitle>
-          <Form.Item
-            className={cx('application-form-switch')}
-            name={['apiTrack', 'enable']}
-            valuePropName="checked"
-            noStyle
-          >
-            <Switch checkedChildren="启用" unCheckedChildren="关闭" />
-          </Form.Item>
-        </div>
-        <Form.Item
-          label="业务标识"
-          name={['apiTrack', 'businessId']}
-          rules={[{ required: apiTrackEnabled, message: '启用接口埋点后请填写业务标识' }]}
-        >
-          <Input disabled={!apiTrackEnabled} />
-        </Form.Item>
-        <Form.Item label="链路透传信息" name={['apiTrack', 'traceBaggage']}>
-          <Input disabled={!apiTrackEnabled} />
-        </Form.Item>
-        <Form.Item label="接口埋点地址" name={['apiTrack', 'apiTrackHost']}>
-          <Input disabled={!apiTrackEnabled} />
-        </Form.Item>
-      </section>
     </Form>
   )
 }

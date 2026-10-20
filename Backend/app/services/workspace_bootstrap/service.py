@@ -12,7 +12,6 @@ from app.services.application_lifecycle import (
     complete_workspace_bootstrap,
 )
 from app.services.application_config import read_application_config
-from app.services.application_config.projection import project_template_app_config
 from app.services.repository_branch import push_workspace_branch
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
@@ -73,7 +72,11 @@ class WorkspaceBootstrapService:
         template_mutation_coordinator.begin_preparation(workspace)
         coordinator_started = True
         try:
-            requested_config = await asyncio.to_thread(compile_template_requested_config, workspace)
+            requested_config = await asyncio.to_thread(
+                compile_template_requested_config,
+                workspace,
+                include_application_config=True,
+            )
             application_config = await asyncio.to_thread(read_application_config, workspace)
             source_revision = application_config.get("configRevision")
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
@@ -140,12 +143,6 @@ class WorkspaceBootstrapService:
                         "Bootstrap 期间 application.json.configRevision 已变化，请重新确认 TechnicalPlan。"
                     )
 
-            def inject_application_config(staging: Path) -> None:
-                """在事务 staging 内覆盖模板默认的公开应用配置。"""
-
-                assert_application_revision(workspace)
-                project_template_app_config(staging, application_config)
-
             def commit_readiness(root: Path) -> None:
                 """在物化事务内验证完整性，并把唯一 READY 写入与其绑定。"""
 
@@ -153,7 +150,6 @@ class WorkspaceBootstrapService:
                 validate_workspace_bootstrap_readiness(
                     root,
                     requested_config=requested_config,
-                    application_config=application_config,
                 )
                 assert_application_revision(root)
                 lifecycle = complete_workspace_bootstrap(
@@ -167,7 +163,6 @@ class WorkspaceBootstrapService:
                 workspace=workspace,
                 archive_path=package.archive_path,
                 template_state=package.template_state,
-                staging_projection=inject_application_config,
                 before_baseline=assert_application_revision,
                 readiness=commit_readiness,
             )

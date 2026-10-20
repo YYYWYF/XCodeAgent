@@ -31,6 +31,17 @@ test('生成 schemaVersion 6 权限配置', () => {
   })
 })
 
+/** 验证新建应用只写入一号通登录字段，且不预填任何凭据。 */
+test('生成一号通登录初始配置', () => {
+  const schema = buildApplicationSchema(structuredClone(initialApplicationDraft) as ApplicationDraft)
+
+  assert.deepEqual(schema.auth, {
+    enable: false,
+    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '' }
+  })
+  assert.equal('authnSource' in schema.auth, false)
+})
+
 /** 验证首轮规划请求只携带当前权限开关和管理员种子，不携带 provider 或页面开关。 */
 test('规划请求携带当前权限事实', () => {
   const draft = structuredClone(initialApplicationDraft) as ApplicationDraft

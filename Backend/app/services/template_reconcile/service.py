@@ -30,7 +30,7 @@ class TemplateReconcileService:
         if mode == "RECONCILE" and requested != _requested(current):
             raise TemplateStateError("RECONCILE_REQUESTED_CONFIG_MISMATCH：requestedConfig 与当前 V3 State.requested 不一致。")
         client = TemplateEngineClient(base_url=self._settings.template_engine_base_url, connect_timeout=self._settings.template_engine_connect_timeout_seconds, read_timeout=self._settings.template_engine_read_timeout_seconds, max_package_bytes=self._settings.template_package_max_bytes)
-        download = await client.update(current.model_dump(mode="json"), requested_config, mode=mode)
+        download = await client.update(current.model_dump(mode="json", exclude_none=True), requested_config, mode=mode)
         if download is None:
             return "NO_CHANGE"
         try:

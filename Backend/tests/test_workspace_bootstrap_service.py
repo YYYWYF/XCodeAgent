@@ -95,11 +95,18 @@ def _write_package(path: Path, *, include_application: bool) -> None:
         "effective": {},
         "installedArtifacts": {},
         "managedContributions": {},
+        "managedConfiguration": {
+            "appName": "任务中心",
+            "appIcon": "AppstoreOutlined",
+            "primaryColor": "#6b3cf0",
+        },
     }
     with zipfile.ZipFile(path, "w") as package:
         package.writestr("frontend/package.json", "{}\n")
-        package.writestr("frontend/src/config/app.generated.ts", "// template default\n")
-        package.writestr("frontend/src/config/types.ts", "export type AppConfig = unknown;\n")
+        package.writestr(
+            "frontend/.env",
+            'PUBLIC_APP_NAME="任务中心"\nPUBLIC_APP_ICON="AppstoreOutlined"\nPUBLIC_THEME_PRIMARY_COLOR="#6b3cf0"\n',
+        )
         package.writestr("backend/pom.xml", "<project />\n")
         if include_application:
             package.writestr("backend/src/main/java/demo/DemoApplication.java", "class DemoApplication {}\n")
@@ -109,8 +116,8 @@ def _write_package(path: Path, *, include_application: bool) -> None:
 class WorkspaceBootstrapServiceTests(unittest.TestCase):
     """验证服务把 Readiness 失败限定在物化事务并投影为不可恢复失败。"""
 
-    def test_success_projects_application_config_into_first_git_baseline(self) -> None:
-        """首次生成必须在 Git baseline 中提交真实应用配置而非模板默认值。"""
+    def test_success_keeps_template_projected_environment_in_first_git_baseline(self) -> None:
+        """首次生成必须原样提交模板服务投影的环境配置。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
@@ -137,17 +144,20 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
             ):
                 result = asyncio.run(service._run(workspace))
 
-            generated = (workspace / "frontend/src/config/app.generated.ts").read_text(
+            generated = (workspace / "frontend/.env").read_text(
                 encoding="utf-8"
             )
-            self.assertIn('"name": "任务中心"', generated)
-            self.assertIn('"icon": "AppstoreOutlined"', generated)
-            self.assertIn('"primaryColor": "#6b3cf0"', generated)
-            self.assertNotIn("template default", generated)
+            self.assertIn('PUBLIC_APP_NAME="任务中心"', generated)
+            self.assertIn('PUBLIC_APP_ICON="AppstoreOutlined"', generated)
+            self.assertIn('PUBLIC_THEME_PRIMARY_COLOR="#6b3cf0"', generated)
             self.assertIn("lifecycle", result)
+            state = json.loads(
+                (workspace / ".devagentstudio/template-state.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["managedConfiguration"]["appName"], "任务中心")
 
             committed = subprocess.run(
-                ["git", "show", "HEAD:frontend/src/config/app.generated.ts"],
+                ["git", "show", "HEAD:frontend/.env"],
                 cwd=workspace,
                 check=True,
                 capture_output=True,

@@ -41,7 +41,10 @@ export const initialApplicationDraft: ApplicationDraft = {
     }
   },
   envText: '',
-  auth: { enable: false, authnSource: '', yht: { clientId: '' } },
+  auth: {
+    enable: false,
+    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '' }
+  },
   authorization: {
     enabled: false,
     initialAdministratorSubjects: []

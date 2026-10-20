@@ -100,20 +100,16 @@ class WorkspaceMaterializer:
         workspace: str | Path,
         archive_path: str | Path,
         template_state: TemplateStateV3,
-        staging_projection: Callable[[Path], None] | None = None,
         before_baseline: Callable[[Path], None] | None = None,
         readiness: Callable[[Path], None] | None = None,
     ) -> str:
-        """在 staging 注入可选投影后完整提交 ZIP、Git baseline 与唯一 TemplateState。"""
+        """完整提交 ZIP 的安全文件、Git baseline 与唯一 TemplateState。"""
 
         root = Path(workspace).expanduser().resolve()
         self._preflight(root)
         journal = BootstrapJournal(workspace=root)
         try:
             journal.staging = self._extract_to_staging(root, Path(archive_path))
-            # 投影必须先于 manifest，确保完整性摘要和首次 Git baseline 都覆盖实例配置。
-            if staging_projection is not None:
-                staging_projection(journal.staging)
             manifest = _build_file_manifest(journal.staging)
             targets = _materialization_targets(journal.staging)
             _validate_materialization_targets_available(root, targets)
@@ -183,7 +179,7 @@ class WorkspaceMaterializer:
 def _write_template_state(path: Path, template_state: TemplateStateV3) -> None:
     """以同目录原子替换落盘 Engine 原样输出的 TemplateState。"""
 
-    atomic_write_json(path, template_state.model_dump(mode="json"))
+    atomic_write_json(path, template_state.model_dump(mode="json", exclude_none=True))
 
 
 def _materialization_targets(staging: Path) -> list[Path]:

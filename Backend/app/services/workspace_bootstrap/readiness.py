@@ -9,7 +9,6 @@ from typing import Any, Protocol
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_state import effective_capabilities, load_template_state, requested_capabilities
-from app.services.application_config.projection import validate_projected_app_config
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapReadinessError
 
@@ -87,7 +86,6 @@ def validate_workspace_bootstrap_readiness(
     workspace: str | Path,
     *,
     requested_config: dict[str, Any],
-    application_config: dict[str, Any] | None = None,
     git_manager: GitBaselineVerifier | None = None,
 ) -> None:
     """验证正式产物、真实入口、State 映射、Git 和 staging 均符合当前契约。"""
@@ -100,8 +98,6 @@ def validate_workspace_bootstrap_readiness(
     state = load_template_state(root)
     _validate_requested_capabilities(state, requested_config)
     _validate_entrypoints(root)
-    if application_config is not None:
-        validate_projected_app_config(root, application_config)
     _validate_staging_absent(root)
     (git_manager or BootstrapGitManager()).verify_baseline(root)
 

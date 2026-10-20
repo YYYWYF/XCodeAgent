@@ -7,44 +7,8 @@ import {
   saveWorkspaceApplicationConfig
 } from '../../service/applicationStorage'
 import { resolveBranchChain } from '../../service/applicationBranches'
-import {
-  projectApplicationConfig,
-  type ApplicationConfigProjectionResult
-} from '../../service/applicationConfigProjection'
 import { encryptApplicationForPersistence } from '../../service/databaseCredentialCrypto'
 import type { ApplicationConfig, ApplicationBranch } from '../../typings'
-
-export class ApplicationProjectionSyncError extends Error {
-  application: ApplicationConfig
-
-  /** 标记 canonical 配置已保存、但模板工程同步失败的部分成功状态。 */
-  constructor(application: ApplicationConfig, cause: unknown) {
-    const detail = cause instanceof Error ? cause.message : String(cause)
-    super(`配置已保存，工程配置同步失败：${detail}`)
-    this.name = 'ApplicationProjectionSyncError'
-    this.application = application
-  }
-}
-
-type ApplicationConfigProjector = (
-  workspaceRoot: string,
-  expectedConfigRevision: number
-) => Promise<ApplicationConfigProjectionResult>
-
-/** 同步已保存配置的公开投影，并保留 canonical 已成功写入的部分成功事实。 */
-export async function syncSavedApplicationProjection(
-  application: ApplicationConfig,
-  projector: ApplicationConfigProjector = projectApplicationConfig
-): Promise<ApplicationConfig> {
-  const workspaceRoot = application.workspaceRoot?.trim()
-  if (!workspaceRoot) throw new Error('应用缺少工作区路径，不能同步工程配置')
-  try {
-    await projector(workspaceRoot, application.configRevision)
-  } catch (error) {
-    throw new ApplicationProjectionSyncError(application, error)
-  }
-  return application
-}
 
 /**
  * 保存工作区唯一 application.json，并更新不含配置副本的首页索引。
@@ -101,7 +65,7 @@ export async function saveApplication(application: ApplicationConfig): Promise<A
       .map(applicationIndexOf)
   ]
   await saveStoredApplications(nextApplications)
-  return syncSavedApplicationProjection(savedApplication)
+  return savedApplication
 }
 
 /** 保存应用后使用同一个密文对象打开工作台。 */

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -74,41 +73,6 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             gitignore = (workspace / ".gitignore").read_text(encoding="utf-8")
             self.assertIn(".devagentstudio/runtime/", gitignore)
             self.assertTrue(BootstrapGitManager().verify_baseline(workspace))
-
-    def test_staging_projection_precedes_manifest_and_git_baseline(self) -> None:
-        """staging 投影必须进入物化摘要和首次 Git 提交。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory) / "workspace"
-            workspace.mkdir()
-            archive = Path(directory) / "template.zip"
-            _write_package(
-                archive,
-                {"frontend/src/config/app.generated.ts": "// default\n"},
-            )
-
-            def project(staging: Path) -> None:
-                """模拟确定性投影器在 manifest 生成前覆盖模板默认值。"""
-
-                (staging / "frontend/src/config/app.generated.ts").write_text(
-                    "// projected\n", encoding="utf-8"
-                )
-
-            WorkspaceMaterializer().materialize(
-                workspace=workspace,
-                archive_path=archive,
-                template_state=_template_state(),
-                staging_projection=project,
-            )
-
-            committed = subprocess.run(
-                ["git", "show", "HEAD:frontend/src/config/app.generated.ts"],
-                cwd=workspace,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
-            self.assertEqual(committed, "// projected\n")
 
     def test_materialize_commits_all_safe_zip_files_including_template_contracts(self) -> None:
         """模板新增任意安全文件时，Bootstrap 必须按原路径完整提交而非依赖 allow-list。"""
