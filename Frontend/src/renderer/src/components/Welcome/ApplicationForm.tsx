@@ -17,7 +17,7 @@ import {
   ToolOutlined,
   UserOutlined
 } from '@ant-design/icons'
-import { Button, Form, Input, Radio, Select, Switch } from 'antd'
+import { Button, Form, Input, Radio, Select, Switch, Typography } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import type { ApplicationDraft } from '../../typings'
@@ -33,6 +33,7 @@ import { TabHintInput } from './components/TabHintInput'
 import DatasourceConfigFields from './DatasourceConfigFields'
 
 const { TextArea } = Input
+const { Text } = Typography
 
 /** 新建应用可直接选用的主题色，默认紫保持现有默认值。 */
 const themeColorPresets = [
@@ -58,14 +59,27 @@ const iconComponents: Record<string, typeof AppstoreOutlined> = {
 
 type Props = {
   form: FormInstance<ApplicationDraft>
-  onSelectProjectParent: () => void
-  selectingParent: boolean
+  /** 设置页复用新建表单时，创建期字段仅展示不允许编辑。 */
+  mode?: 'create' | 'settings'
+  /** 设置页传入已持久化配置转换出的初始草稿。 */
+  initialValues?: ApplicationDraft & { envVariables?: unknown }
+  onSelectProjectParent?: () => void
+  selectingParent?: boolean
+  children?: ReactNode
 }
 
 /** 渲染应用创建表单的分组标题。 */
-function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode }): ReactElement {
+function SectionTitle({
+  icon,
+  children,
+  className
+}: {
+  icon: ReactNode
+  children: ReactNode
+  className?: string
+}): ReactElement {
   return (
-    <div className={cx('application-form-section-title')}>
+    <div className={cx('application-form-section-title', className)}>
       <span className={cx('application-form-section-icon')}>{icon}</span>
       <span className={cx('application-form-section-text')}>{children}</span>
     </div>
@@ -76,12 +90,23 @@ function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode
 export default function ApplicationForm({
   form,
   onSelectProjectParent,
-  selectingParent
+  selectingParent = false,
+  mode = 'create',
+  initialValues,
+  children
 }: Props): ReactElement {
+  const isSettingsMode = mode === 'settings'
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? true
   const authorizationEnabled = Form.useWatch(['authorization', 'enabled'], form) ?? false
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
   const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
+  // 只读字段没有注册为 Form.Item 时，直接回退到 application.json 对应的初始配置。
+  const persistedValues = initialValues ?? initialApplicationDraft
+  const projectPath = Form.useWatch('projectPath', form) ?? persistedValues.projectPath
+  const terminal = Form.useWatch('terminal', form) ?? persistedValues.terminal
+  const repoUrl = Form.useWatch('repoUrl', form) ?? persistedValues.repoUrl
+  const branchName = Form.useWatch('branchName', form) ?? persistedValues.branchName
+  const rootPath = Form.useWatch(['menus', 'rootPath'], form) ?? persistedValues.menus.rootPath
 
   /** 将选中的预设主题色写入应用表单。 */
   const applyThemeColor = (color: string): void => {
@@ -92,37 +117,54 @@ export default function ApplicationForm({
     <Form
       className={cx('application-form')}
       form={form}
-      initialValues={initialApplicationDraft}
+      initialValues={initialValues ?? initialApplicationDraft}
       layout="vertical"
     >
-      <section className={cx('application-form-section', 'application-form-section--full')}>
-        <SectionTitle icon={<FolderOpenOutlined />}>项目位置</SectionTitle>
+      <section
+        id={isSettingsMode ? 'settings-project' : undefined}
+        className={cx('application-form-section', 'application-form-section--full')}
+      >
+        <SectionTitle className="application-form-section-title--with-content" icon={<FolderOpenOutlined />}>
+          项目目录
+        </SectionTitle>
+        <div className={cx('application-form-section-description')}>
+          在创建应用时选择，保存后无法修改。
+        </div>
         <Form.Item
-          extra="请输入一个新的项目目录，或选择一个空目录；已有 DevAgent Studio 应用目录不能复用。"
-          label="新应用项目目录"
-          required
+          extra={
+            isSettingsMode
+              ? undefined
+              : '请输入一个新的项目目录，或选择一个空目录；已有 DevAgent Studio 应用目录不能复用。'
+          }
         >
-          <Input.Group compact>
-            <Form.Item
-              name="projectPath"
-              noStyle
-              rules={[{ required: true, message: '请选择项目创建位置' }]}
-            >
-              <Input style={{ width: 'calc(100% - 132px)' }} />
-            </Form.Item>
-            <Button
-              icon={<FolderOpenOutlined />}
-              loading={selectingParent}
-              onClick={onSelectProjectParent}
-              style={{ width: 132 }}
-            >
-              选择文件夹
-            </Button>
-          </Input.Group>
+          {isSettingsMode ? (
+            <Text className={cx('application-form-readonly-value')}>{projectPath || '—'}</Text>
+          ) : (
+            <Input.Group compact>
+              <Form.Item
+                name="projectPath"
+                noStyle
+                rules={[{ required: true, message: '请选择项目创建位置' }]}
+              >
+                <Input aria-label="项目目录" style={{ width: 'calc(100% - 132px)' }} />
+              </Form.Item>
+              <Button
+                icon={<FolderOpenOutlined />}
+                loading={selectingParent}
+                onClick={onSelectProjectParent}
+                style={{ width: 132 }}
+              >
+                选择文件夹
+              </Button>
+            </Input.Group>
+          )}
         </Form.Item>
       </section>
 
-      <section className={cx('application-form-section', 'application-form-section--full')}>
+      <section
+        id={isSettingsMode ? 'settings-basic' : undefined}
+        className={cx('application-form-section', 'application-form-section--full')}
+      >
         <SectionTitle icon={<AppstoreOutlined />}>基础信息</SectionTitle>
         <div className={cx('application-form-grid')}>
           <Form.Item
@@ -132,14 +174,22 @@ export default function ApplicationForm({
           >
             <Input />
           </Form.Item>
-          <Form.Item label="终端类型" name="terminal">
-            <Radio.Group>
-              {Object.entries(terminalLabels).map(([value, label]) => (
-                <Radio.Button key={value} value={value}>
-                  {label}
-                </Radio.Button>
-              ))}
-            </Radio.Group>
+          <Form.Item label="终端类型">
+            {isSettingsMode ? (
+              <Text className={cx('application-form-readonly-value')}>
+                {terminalLabels[terminal] ?? terminal}
+              </Text>
+            ) : (
+              <Form.Item name="terminal" noStyle>
+                <Radio.Group>
+                  {Object.entries(terminalLabels).map(([value, label]) => (
+                    <Radio.Button key={value} value={value}>
+                      {label}
+                    </Radio.Button>
+                  ))}
+                </Radio.Group>
+              </Form.Item>
+            )}
           </Form.Item>
         </div>
         <Form.Item label="应用图标" name="appIcon">
@@ -166,76 +216,100 @@ export default function ApplicationForm({
         >
           <TextArea rows={3} />
         </Form.Item>
-        <Form.Item
-          label="码云地址"
-          name="repoUrl"
-          rules={[
-            {
-              validator: (_rule, value: string) => {
-                const invalidReason = validateRepoUrl(value)
-                return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
-              }
-            }
-          ]}
-        >
-          <Input prefix={<GithubOutlined />} placeholder={defaultRepoUrl} />
-        </Form.Item>
-        <Form.Item
-          label="版本号（对应码云仓库中的分支名）"
-          name="branchName"
-          rules={[
-            { required: true, whitespace: true, message: '请输入版本号' },
-            {
-              validator: (_rule, value: string) => {
-                const invalidReason = validateBranchName(value)
-                return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
-              }
-            }
-          ]}
-          extra="应用代码会推送到远端的这个分支。如果远端已经有同名分支，它上面的代码会被覆盖。"
-        >
-          <Input placeholder="v1_0" />
-        </Form.Item>
-      </section>
-
-      <section className={cx('application-form-section', 'application-form-section--full')}>
-        <div className={cx('application-form-section-head')}>
-          <SectionTitle icon={<MenuOutlined />}>菜单</SectionTitle>
-          <Form.Item
-            className={cx('application-form-switch')}
-            name={['menus', 'enable']}
-            valuePropName="checked"
-            noStyle
-          >
-            <Switch checkedChildren="启用" unCheckedChildren="关闭" />
-          </Form.Item>
-        </div>
-        <Form.Item
-          label="页面根路由"
-          name={['menus', 'rootPath']}
-          rules={[
-            { required: true, message: '请输入页面根路由' },
-            {
-              validator: (_rule, value: string) => {
-                if ((menusEnabled || authEnabled) && value === '/') {
-                  return Promise.reject(new Error('启用默认菜单或认证时，根路由不能为 /'))
+        <Form.Item label="码云地址">
+          {isSettingsMode ? (
+            <Text className={cx('application-form-readonly-value')}>{repoUrl || '—'}</Text>
+          ) : (
+            <Form.Item
+              name="repoUrl"
+              noStyle
+              rules={[
+                {
+                  validator: (_rule, value: string) => {
+                    const invalidReason = validateRepoUrl(value)
+                    return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
+                  }
                 }
-                return Promise.resolve()
-              }
-            }
-          ]}
+              ]}
+            >
+              <Input prefix={<GithubOutlined />} placeholder={defaultRepoUrl} />
+            </Form.Item>
+          )}
+        </Form.Item>
+        <Form.Item
+          extra="应用代码会推送到远端的这个分支。如果远端已经有同名分支，它上面的代码会被覆盖。"
+          label="版本号（对应码云仓库中的分支名）"
         >
-          <TabHintInput
-            form={form}
-            fieldName={['menus', 'rootPath']}
-            placeholder="请输入页面根路由"
-          />
+          {isSettingsMode ? (
+            <Text className={cx('application-form-readonly-value')}>{branchName || '—'}</Text>
+          ) : (
+            <Form.Item
+              name="branchName"
+              noStyle
+              rules={[
+                { required: true, whitespace: true, message: '请输入版本号' },
+                {
+                  validator: (_rule, value: string) => {
+                    const invalidReason = validateBranchName(value)
+                    return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
+                  }
+                }
+              ]}
+            >
+              <Input placeholder="v1_0" />
+            </Form.Item>
+          )}
         </Form.Item>
       </section>
 
-      <section className={cx('application-form-section', 'application-form-section--full')}>
-        <SectionTitle icon={<BgColorsOutlined />}>主题</SectionTitle>
-        <Form.Item label="主题色">
+      <section
+        id={isSettingsMode ? 'settings-menu' : undefined}
+        className={cx('application-form-section', 'application-form-section--full')}
+      >
+        <SectionTitle className="application-form-section-title--with-content" icon={<MenuOutlined />}>
+          菜单根路由
+        </SectionTitle>
+        <div className={cx('application-form-section-description')}>
+          用于确定应用菜单页面的统一访问路径前缀。
+        </div>
+        <Form.Item>
+          {isSettingsMode ? (
+            <Text className={cx('application-form-readonly-value')}>{rootPath || '—'}</Text>
+          ) : (
+            <Form.Item
+              name={['menus', 'rootPath']}
+              noStyle
+              rules={[
+                { required: true, message: '请输入页面根路由' },
+                {
+                  validator: (_rule, value: string) => {
+                    if ((menusEnabled || authEnabled) && value === '/') {
+                      return Promise.reject(new Error('启用默认菜单或认证时，根路由不能为 /'))
+                    }
+                    return Promise.resolve()
+                  }
+                }
+              ]}
+            >
+              <TabHintInput
+                aria-label="页面根路由"
+                form={form}
+                fieldName={['menus', 'rootPath']}
+                placeholder="请输入页面根路由"
+              />
+            </Form.Item>
+          )}
+        </Form.Item>
+      </section>
+
+      <section
+        id={isSettingsMode ? 'settings-theme' : undefined}
+        className={cx('application-form-section', 'application-form-section--full')}
+      >
+        <SectionTitle className="application-form-section-title--with-content" icon={<BgColorsOutlined />}>
+          主题
+        </SectionTitle>
+        <Form.Item>
           <Form.Item name={['theme', 'primaryColor']} hidden>
             <Input />
           </Form.Item>
@@ -291,6 +365,7 @@ export default function ApplicationForm({
       <DatasourceConfigFields form={form} />
 
       <section
+        id={isSettingsMode ? 'settings-auth' : undefined}
         className={cx(
           'application-form-section',
           'application-form-section--full',
@@ -348,6 +423,7 @@ export default function ApplicationForm({
       </section>
 
       <section
+        id={isSettingsMode ? 'settings-authorization' : undefined}
         className={cx(
           'application-form-section',
           'application-form-section--full',
@@ -409,6 +485,8 @@ export default function ApplicationForm({
           />
         </Form.Item>
       </section>
+
+      {children}
 
     </Form>
   )

@@ -91,6 +91,20 @@
   letter-spacing: 0.01em;
 }
 
+// 省略字段标签的分区沿用 antd 垂直表单标签的 padding-bottom，避免相邻块的外边距折叠。
+.@{class-prefix}-application-form-section-title--with-content {
+  display: flex;
+  padding-bottom: 8px;
+}
+
+// 分区标题的补充说明沿用表单次要文本颜色，并与实际字段保持适度距离。
+.@{class-prefix}-application-form-section-description {
+  margin: -4px 0 8px;
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .@{class-prefix}-application-form-switch {
   margin-bottom: 0 !important;
 }
@@ -149,6 +163,16 @@
   textarea {
     resize: vertical !important;
   }
+}
+
+// 设置页中的创建期固定字段以文本展示，避免误导用户这些值仍可修改。
+.@{class-prefix}-application-form-readonly-value {
+  display: block;
+  min-height: 32px;
+  padding: 5px 0;
+  color: var(--modal-text);
+  line-height: 22px;
+  overflow-wrap: anywhere;
 }
 
 // 数据库配置保持标题、条件字段和端口输入在明暗主题下使用统一弹窗变量。

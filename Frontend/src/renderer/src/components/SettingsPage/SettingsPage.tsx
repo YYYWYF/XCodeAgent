@@ -1,49 +1,25 @@
 import {
   AppstoreOutlined,
-  BankOutlined,
-  CloudOutlined,
   CodeOutlined,
-  DashboardOutlined,
   DeleteOutlined,
-  DesktopOutlined,
-  FundOutlined,
   LockOutlined,
-  MessageOutlined,
   PlusOutlined,
   SaveOutlined,
   SettingOutlined,
-  ShopOutlined,
-  ShoppingOutlined,
-  TeamOutlined,
-  ToolOutlined,
-  UserOutlined,
   CloseOutlined
 } from '@ant-design/icons'
-import { Anchor, Button, Form, Input, Radio, Switch, Typography, message } from 'antd'
-import type { ReactElement, ReactNode } from 'react'
+import { Anchor, Button, Form, Input, Typography, message } from 'antd'
+import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
-import type { ApplicationConfig } from '../../typings'
+import { DatasourceEnum, type ApplicationConfig, type ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
-import { applicationIconOptions } from '../Welcome/constants'
+import ApplicationForm from '../Welcome/ApplicationForm'
 import { saveApplication } from '../Welcome/applicationService'
+import { buildDatasourceConfig } from '../Welcome/utils'
+import '../Welcome/ApplicationFormModal.less'
 import './SettingsPage.less'
 
 const { Title, Text } = Typography
-
-const iconComponents: Record<string, typeof AppstoreOutlined> = {
-  AppstoreOutlined,
-  DesktopOutlined,
-  DashboardOutlined,
-  ShopOutlined,
-  ShoppingOutlined,
-  TeamOutlined,
-  UserOutlined,
-  ToolOutlined,
-  CloudOutlined,
-  MessageOutlined,
-  BankOutlined,
-  FundOutlined
-}
 
 type EnvVariable = {
   key: string
@@ -59,44 +35,36 @@ type Props = {
   onSaved: (application: ApplicationConfig) => void
 }
 
-type SettingsFormValues = Pick<
-  ApplicationConfig,
-  'appName' | 'appIcon' | 'senario' | 'theme' | 'auth'
-> & {
+type SettingsFormValues = ApplicationDraft & {
   envVariables: EnvVariable[]
 }
 
-function SettingsCard({
-  icon,
-  title,
-  children,
-  extra,
-  disabled,
-  id,
-  compact
-}: {
-  icon: ReactNode
-  title: string
-  children: ReactNode
-  extra?: ReactNode
-  disabled?: boolean
-  id?: string
-  compact?: boolean
-}) {
-  return (
-    <section id={id} className={cx('settings-card', disabled && 'settings-card--disabled')}>
-      <header className={cx('settings-card-header')}>
-        <span className={cx('settings-card-title')}>
-          <span className={cx('settings-card-icon')}>{icon}</span>
-          <Text strong>{title}</Text>
-        </span>
-        {extra ? <span className={cx('settings-card-extra')}>{extra}</span> : null}
-      </header>
-      <div className={cx('settings-card-body', compact && 'settings-card-body--compact')}>
-        {children}
-      </div>
-    </section>
-  )
+/** 将已持久化的应用配置补全为新建表单可直接展示的草稿形状。 */
+function createSettingsDraft(application: ApplicationConfig): ApplicationDraft {
+  if (application.datasource.type === DatasourceEnum.DB) {
+    const database = application.datasource.db ?? { useBuiltin: false }
+    return {
+      ...application,
+      projectPath: application.workspaceRoot,
+      branchName: application.branchName ?? '',
+      envText: '',
+      datasource: {
+        type: DatasourceEnum.DB,
+        db: {
+          ...database,
+          connectionMode: database.dbidMode ? 'dbid' : 'plant'
+        }
+      }
+    }
+  }
+
+  return {
+    ...application,
+    projectPath: application.workspaceRoot,
+    branchName: application.branchName ?? '',
+    envText: '',
+    datasource: application.datasource
+  }
 }
 
 /** 组织并保存应用级基础能力与环境配置。 */
@@ -104,8 +72,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
   const [form] = Form.useForm<SettingsFormValues>()
   const [saving, setSaving] = useState(false)
 
-  // antd v4 的 Form.useWatch 在 Form 挂载前可能返回 undefined，用 getFieldValue 兜底更安全
-  const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? application?.auth?.enable ?? false
+  const settingsDraft = useMemo(() => createSettingsDraft(application), [application])
   // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
   const safeEnvVariables = useMemo<EnvVariable[]>(() => {
     const devVars = application?.environment?.dev ?? []
@@ -120,8 +87,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
   }, [application?.environment?.dev, application?.environment?.prod])
 
   const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
-  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
-
   // 校验设置并通过统一应用保存入口加密数据库凭据。
   const handleSave = async (): Promise<void> => {
     try {
@@ -142,7 +107,14 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
       }
       const updatedApplication: ApplicationConfig = {
         ...application,
-        ...rest,
+        appName: rest.appName,
+        appIcon: rest.appIcon,
+        senario: rest.senario,
+        theme: rest.theme,
+        auth: rest.auth,
+        authorization: rest.authorization,
+        datasource: buildDatasourceConfig(rest.datasource),
+        menus: application.menus,
         environment
       }
       const persistedApplication = await saveApplication(updatedApplication)
@@ -196,16 +168,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
     }
   }
 
-  // 兜底 initialValues，防止 application 字段缺失导致 Form 报错
-  const safeAuth = {
-    enable: application?.auth?.enable ?? false,
-    yht: {
-      clientId: application?.auth?.yht?.clientId ?? '',
-      privateKey: application?.auth?.yht?.privateKey ?? '',
-      publicKey: application?.auth?.yht?.publicKey ?? '',
-      centerPublicKey: application?.auth?.yht?.centerPublicKey ?? ''
-    }
-  }
   return (
     <div className={cx('settings-page')}>
       <header className={cx('settings-page-header')}>
@@ -277,121 +239,24 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
           </Anchor>
         </aside>
         <div className={cx('settings-page-scroll')}>
-          <Form
+          <ApplicationForm
             form={form}
-            layout="horizontal"
             initialValues={{
-              appName: application.appName ?? '',
-              appIcon: application.appIcon ?? 'AppstoreOutlined',
-              senario: application.senario ?? '',
-              theme: application.theme ?? { primaryColor: '#6b3cf0' },
-              auth: safeAuth,
+              ...settingsDraft,
               envVariables: safeEnvVariables
             }}
-            labelCol={{ flex: '0 0 170px' }}
-            wrapperCol={{ flex: 'auto' }}
-            className={cx('settings-form')}
+            mode="settings"
           >
-            <SettingsCard id="settings-basic" icon={<AppstoreOutlined />} title="基础信息">
-              <Form.Item
-                label="应用名称"
-                name="appName"
-                rules={[{ required: true, message: '请输入应用名称' }]}
-              >
-                <Input />
-              </Form.Item>
-              <Form.Item label="应用图标" name="appIcon">
-                <Radio.Group
-                  className={cx('settings-icon-picker')}
-                  optionType="button"
-                  buttonStyle="solid"
-                >
-                  {applicationIconOptions.map((option) => {
-                    const Icon = iconComponents[option.value]
-                    return (
-                      <Radio.Button
-                        key={option.value}
-                        aria-label={option.label}
-                        value={option.value}
-                      >
-                        {Icon ? <Icon /> : null}
-                      </Radio.Button>
-                    )
-                  })}
-                </Radio.Group>
-              </Form.Item>
-              <Form.Item label="应用场景" name="senario">
-                <Input.TextArea rows={2} style={{ resize: 'vertical' }} />
-              </Form.Item>
-              <Form.Item
-                label="主题色"
-                name={['theme', 'primaryColor']}
-                rules={[
-                  { required: true, message: '请输入主题色' },
-                  { pattern: /^#[0-9A-Fa-f]{6}$/, message: '主题色必须是 #RRGGBB 格式' }
-                ]}
-              >
-                <Input
-                  className={cx('settings-theme-color-input')}
-                  prefix={
-                    <span
-                      aria-hidden="true"
-                      className={cx('settings-theme-color-swatch')}
-                      style={{ backgroundColor: themePrimaryColor }}
-                    />
-                  }
-                  placeholder="#6b3cf0"
-                />
-              </Form.Item>
-            </SettingsCard>
-
-            <SettingsCard
-              id="settings-auth"
-              icon={<LockOutlined />}
-              title="一号通登录"
-              compact
-              extra={
-                <Form.Item name={['auth', 'enable']} valuePropName="checked" noStyle>
-                  <Switch checkedChildren="开启" unCheckedChildren="关闭" />
-                </Form.Item>
-              }
+            <section
+              id="settings-environment"
+              className={cx('application-form-section', 'application-form-section--full')}
             >
-              {authEnabled ? (
-                <>
-                  <Form.Item
-                    label="clientId"
-                    name={['auth', 'yht', 'clientId']}
-                    rules={[{ required: true, message: '请填写 clientId' }]}
-                  >
-                    <Input />
-                  </Form.Item>
-                  <Form.Item
-                    extra="请填写加密后的内容。"
-                    label="privateKey"
-                    name={['auth', 'yht', 'privateKey']}
-                    rules={[{ required: true, message: '请填写 privateKey' }]}
-                  >
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                  <Form.Item
-                    label="publicKey"
-                    name={['auth', 'yht', 'publicKey']}
-                    rules={[{ required: true, message: '请填写 publicKey' }]}
-                  >
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                  <Form.Item
-                    label="centerPublicKey"
-                    name={['auth', 'yht', 'centerPublicKey']}
-                    rules={[{ required: true, message: '请填写 centerPublicKey' }]}
-                  >
-                    <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} />
-                  </Form.Item>
-                </>
-              ) : null}
-            </SettingsCard>
-
-            <SettingsCard id="settings-environment" icon={<CodeOutlined />} title="环境变量">
+              <div className={cx('application-form-section-title', 'datasource-config-title')}>
+                <span className={cx('application-form-section-icon')}>
+                  <CodeOutlined />
+                </span>
+                <span className={cx('application-form-section-text')}>环境变量</span>
+              </div>
               {/* 第一行：开发/生产环境标签 — 纯展示 */}
               <div className={cx('settings-env-labels')}>
                 <span className={cx('settings-env-labels-key')} />
@@ -507,8 +372,8 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
                   </>
                 )}
               </Form.List>
-            </SettingsCard>
-          </Form>
+            </section>
+          </ApplicationForm>
         </div>
       </div>
     </div>
