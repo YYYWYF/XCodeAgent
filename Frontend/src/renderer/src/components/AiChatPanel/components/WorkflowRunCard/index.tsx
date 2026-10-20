@@ -40,7 +40,8 @@ import type {
   WorkflowRevisionDraftInteraction,
   WorkflowRevisionImpact,
   WorkflowTestTarget,
-  WorkflowRunPayload
+  WorkflowRunPayload,
+  ApplicationConfig
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import {
@@ -85,6 +86,7 @@ import {
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
 import RequirementSpecEditor from '../../../Welcome/RequirementSpecEditor'
+import ApplicationConfigPrerequisiteCard from './ApplicationConfigPrerequisiteCard'
 import './WorkflowRunCard.less'
 
 const { Text } = Typography
@@ -163,6 +165,7 @@ type WorkflowRunCardProps = {
   rootPath?: string
   workflow: WorkflowRunPayload
   workspaceRoot?: string
+  application?: ApplicationConfig
 }
 
 /** 渲染 Workflow 交互卡片，并按已保存的操作结果恢复卡片状态。 */
@@ -184,7 +187,8 @@ export default function WorkflowRunCard({
   onSaveRequirementSpec,
   rootPath,
   workflow,
-  workspaceRoot
+  workspaceRoot,
+  application
 }: WorkflowRunCardProps): ReactElement {
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
   const status = String(workflow.summary.status || 'unknown')
@@ -236,6 +240,7 @@ export default function WorkflowRunCard({
     clarification?.mode === 'frontend_performance_confirmation' &&
     !staleFrontendPerformanceConfirmation
   const revisionImpact = workflowRevisionImpact(workflow, clarification)
+  const applicationConfigPrerequisite = clarification?.mode === 'application_config_prerequisite'
   const revisionDraftBinding = workflowRevisionDraftBinding(workflow, clarification)
   const dagConfirmation = clarification?.mode === 'build_task_plan_confirmation'
   const testPhaseConfirmation = clarification?.mode === 'test_phase_confirmation'
@@ -480,6 +485,15 @@ export default function WorkflowRunCard({
         />
       )}
       {projectLaunch && <ProjectLaunchCard workflow={workflow} />}
+      {applicationConfigPrerequisite && application ? (
+        <ApplicationConfigPrerequisiteCard
+          application={application}
+          disabled={disabled || interactionAvailability !== 'active'}
+          pending={(clarification as Record<string, unknown>).configPrerequisite as Record<string, unknown>}
+          onCancel={() => onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'cancelled' } })}
+          onSubmit={(changes) => onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'apply', changes } })}
+        />
+      ) : null}
       {!entityDesignReview && Object.keys(artifacts).length > 0 && artifactConfirmation && (
         <div className={cx('workflow-artifacts')}>
           <div className={cx('workflow-section-heading')}>

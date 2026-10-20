@@ -5300,6 +5300,7 @@ export default function AiChatPanel({
                 reviseConfirmedTechnicalPlanDisabled={
                   productConversationSendDisabled || workflowInputLocked
                 }
+                application={application}
                 onStartIterationPlanning={async (request) => {
                   appendPlanningUserMessage({ design_change_request: request })
                   await onStartIterationPlanning(request)

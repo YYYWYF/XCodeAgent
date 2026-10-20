@@ -30,6 +30,9 @@ class ProjectState(TypedDict, total=False):
     complexity_decision: dict[str, Any]
     conversation_intent: str
     conversation_response: str
+    application_config_prerequisite: dict[str, Any]
+    application_config_cached_decision: dict[str, Any]
+    application_config_resume: str
     product_conversation_result: dict[str, Any]
     change_impact_enabled: bool
     change_impact_analysis: dict[str, Any]
@@ -54,8 +57,6 @@ class ProjectState(TypedDict, total=False):
     application_planning_interaction: dict[str, Any]
     application_planning_review_route: str
     requirement_revision_id: str
-    authorization_config_conflict: dict[str, Any]
-    pending_application_config_target: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float

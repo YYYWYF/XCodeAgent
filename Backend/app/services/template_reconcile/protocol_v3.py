@@ -86,6 +86,7 @@ class TemplateStateV3(ProtocolV3Model):
     installedArtifacts: dict[NonBlankStringV3, InstalledArtifactStateV3]
     managedContributions: dict[NonBlankStringV3, ManagedContributionV3]
     managedConfiguration: dict[str, Any] | None = None
+    stateSequence: StrictInt = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_relations(self) -> "TemplateStateV3":

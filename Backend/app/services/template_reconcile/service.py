@@ -9,6 +9,12 @@ from app.services.template_reconcile.executor_v3 import UpdatePackageExecutorV3,
 from app.services.template_reconcile.protocol_v3 import TemplateStateV3
 from app.services.template_reconcile.state_v3 import load_template_state_v3, write_template_state_v3
 from app.services.template_reconcile.update_package_v3 import validate_update_package_v3
+from app.services.template_reconcile.update_package_v4 import validate_update_package_v4
+from app.services.template_reconcile.transaction_v4 import apply_working_copy_v4, recover_v4_transaction
+from app.services.template_reconcile.desired import compile_template_capabilities
+from app.services.application_config import read_application_config
+from app.branding import WORKSPACE_ARTIFACT_DIR
+import json
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplateStateError
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 
@@ -17,6 +23,47 @@ class TemplateReconcileService:
     def __init__(self, settings: Settings) -> None:
         """保存 Template Engine 连接与 ZIP 限额。"""
         self._settings = settings
+
+    async def reconcile_capabilities(self, workspace: str | Path) -> str:
+        """从 canonical application.json 安装缺失能力，不读取 TechnicalPlan 或计算摘要。"""
+
+        if not self._settings.template_reconcile_enabled:
+            raise TemplateStateError("TEMPLATE_RECONCILE_DISABLED：模板能力增量更新功能尚未开启。")
+        root = Path(workspace).expanduser().resolve()
+        recover_v4_transaction(root)
+        current = load_template_state_v3(root)
+        desired = compile_template_capabilities(read_application_config(root))
+        installed = set(current.effective)
+        if installed - set(desired):
+            raise TemplateStateError("CAPABILITY_REMOVAL_UNSUPPORTED：已安装能力不能关闭。")
+        if set(desired) <= installed:
+            return "NO_CHANGE"
+        requested = {"capabilities": desired}
+        client = TemplateEngineClient(
+            base_url=self._settings.template_engine_base_url,
+            connect_timeout=self._settings.template_engine_connect_timeout_seconds,
+            read_timeout=self._settings.template_engine_read_timeout_seconds,
+            max_package_bytes=self._settings.template_package_max_bytes,
+        )
+        download = await client.update_v4(current.model_dump(mode="json", exclude_none=True, exclude={"managedConfiguration"}), requested)
+        if download is None:
+            raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：缺失能力时 V4 返回无变更。")
+        try:
+            validated = validate_update_package_v4(download.temporary_path, self._limits())
+            package = validated.package
+            if package.mode != "APPLY" or package.sourceRevision != current.templateRevision or package.expectedStateSequence != current.stateSequence:
+                raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 包未绑定当前 State。")
+            next_state = package.nextTemplateState
+            if next_state.stateSequence != current.stateSequence + 1 or not set(desired) <= set(next_state.effective) or installed - set(next_state.effective):
+                raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 能力或 State 序列无效。")
+            store = WorkingCopyStoreV3(root)
+            UpdatePackageExecutorV3().execute(package, store, validated.payloads)
+            state_entry = store.entry((WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix())
+            state_entry.working = (json.dumps(next_state.model_dump(mode="json", exclude_none=True, exclude={"managedConfiguration"}), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            apply_working_copy_v4(root, store)
+            return "CHANGED"
+        finally:
+            download.temporary_path.unlink(missing_ok=True)
 
     async def reconcile(self, workspace: str | Path, *, change_id: str, requested_config: dict[str, Any], technical_plan_sha256: str, mode: Literal["APPLY", "RECONCILE"] = "APPLY") -> str:
         """下载、预检并执行一次 V3 更新；V2 State 会被明确拒绝。"""
@@ -30,7 +77,10 @@ class TemplateReconcileService:
         if mode == "RECONCILE" and requested != _requested(current):
             raise TemplateStateError("RECONCILE_REQUESTED_CONFIG_MISMATCH：requestedConfig 与当前 V3 State.requested 不一致。")
         client = TemplateEngineClient(base_url=self._settings.template_engine_base_url, connect_timeout=self._settings.template_engine_connect_timeout_seconds, read_timeout=self._settings.template_engine_read_timeout_seconds, max_package_bytes=self._settings.template_package_max_bytes)
-        download = await client.update(current.model_dump(mode="json", exclude_none=True), requested_config, mode=mode)
+        current_payload = current.model_dump(mode="json", exclude_none=True)
+        if "stateSequence" not in current.model_fields_set:
+            current_payload.pop("stateSequence", None)
+        download = await client.update(current_payload, requested_config, mode=mode)
         if download is None:
             return "NO_CHANGE"
         try:

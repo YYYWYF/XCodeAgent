@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload
+from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload, UpdatePackageDownloadV4
 
 _CHUNK_BYTES = 64 * 1024
 logger = logging.getLogger("uvicorn.error")
@@ -214,6 +214,64 @@ class TemplateEngineClient:
             raise TemplateEngineError("调用模板生成服务更新失败。") from exc
         except Exception:
             logger.exception("模板更新接口处理失败：endpoint=%s/v1/update。", self._base_url)
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary_path.unlink(missing_ok=True)
+            raise
+
+    async def update_v4(
+        self,
+        current_template_state: dict[str, Any],
+        requested_config: dict[str, Any],
+        *,
+        mode: str = "APPLY",
+        temporary_dir: str | Path | None = None,
+    ) -> "UpdatePackageDownloadV4 | None":
+        """下载 V4 Capability 包；传输和结果均不计算或携带摘要。"""
+
+        if not self._base_url or mode not in {"APPLY", "RECONCILE"}:
+            raise TemplateEngineError("V4 模板更新连接或 mode 无效。")
+        if set(requested_config) != {"capabilities"}:
+            raise TemplateEngineError("V4 requestedConfig 只能包含 capabilities。")
+        directory = str(Path(temporary_dir)) if temporary_dir is not None else None
+        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-v4-", suffix=".zip", dir=directory)
+        temporary_path = Path(name)
+        size = 0
+        try:
+            timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
+            async with self._client_factory(timeout=timeout, trust_env=False) as client:
+                async with client.stream(
+                    "POST", f"{self._base_url}/v1/update",
+                    json={"protocolVersion": "4", "currentTemplateState": current_template_state, "requestedConfig": requested_config, "mode": mode},
+                    headers={"Accept": "application/zip"},
+                ) as response:
+                    if response.status_code == 204:
+                        os.close(descriptor)
+                        descriptor = -1
+                        temporary_path.unlink(missing_ok=True)
+                        if mode == "RECONCILE":
+                            raise TemplateEngineError("V4 RECONCILE 不得返回 204。")
+                        return None
+                    if response.status_code >= 400:
+                        raise await _engine_response_error(response, "模板生成服务拒绝 V4 更新请求")
+                    content_type = response.headers.get("content-type")
+                    if not content_type or not content_type.lower().startswith("application/zip"):
+                        raise TemplateEngineError("V4 更新未返回 application/zip。")
+                    with os.fdopen(descriptor, "wb") as output:
+                        descriptor = -1
+                        async for chunk in response.aiter_bytes(_CHUNK_BYTES):
+                            size += len(chunk)
+                            if size > self._max_package_bytes:
+                                raise TemplateEngineError("V4 更新 ZIP 超过下载大小限制。")
+                            output.write(chunk)
+                        output.flush()
+                        os.fsync(output.fileno())
+            return UpdatePackageDownloadV4(temporary_path, size, content_type)
+        except httpx.TimeoutException as exc:
+            raise TemplateEngineError("调用 V4 模板更新超时。") from exc
+        except httpx.HTTPError as exc:
+            raise TemplateEngineError("调用 V4 模板更新失败。") from exc
+        except Exception:
             if descriptor >= 0:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)

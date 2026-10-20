@@ -422,7 +422,6 @@ def design_node_update(
         node_name == "requirements"
         and (_dict_value(update.get("requirement_spec")) or {}).get("confirmation_status")
         == "pending_user_confirmation"
-        and not update.get("pending_application_config_target")
     )
     if generation_target == node_name and (
         update.get("status") == "completed" or requirement_draft_ready
@@ -487,8 +486,6 @@ def begin_current_artifact_revision(
         update.update(
             {
                 "requirement_revision_id": uuid4().hex,
-                "authorization_config_conflict": {},
-                "pending_application_config_target": {},
                 "clarification": {},
                 "requirements_confirmed": False,
                 "requirement_spec_path": "",

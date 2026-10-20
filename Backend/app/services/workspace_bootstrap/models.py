@@ -75,6 +75,15 @@ class TemplatePackageDownload:
 
 
 @dataclass(frozen=True)
+class UpdatePackageDownloadV4:
+    """V4 增量包仅保留路径、大小和媒体类型。"""
+
+    temporary_path: Path
+    size: int
+    content_type: str | None
+
+
+@dataclass(frozen=True)
 class ValidatedTemplatePackage:
     """保存通过安全和根目录契约检查的 Package 与 TemplateState。"""
 

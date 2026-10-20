@@ -219,6 +219,9 @@ class DirectModificationInput(BaseModel):
         alias="impactInteractionId",
         max_length=256,
     )
+    config_request_id: str | None = Field(default=None, alias="configRequestId", min_length=8, max_length=128)
+    config_operation_id: str | None = Field(default=None, alias="configOperationId", min_length=8, max_length=128)
+    config_decision: str | None = Field(default=None, alias="configDecision")
 
 
 def conversation_capabilities() -> dict[str, Any]:
@@ -346,6 +349,59 @@ def resolve_direct_element_context(
                 "workspacePath": workspace_path,
             }
     raise ValueError("所选 DOM 的源码文件已不存在，请刷新预览后重新选择元素。")
+
+
+def _application_config_continuation(
+    *, request: DirectModificationInput, workspace_root: str, thread_id: str, checkpoint_values: Any
+) -> dict[str, Any]:
+    """凭原会话配置卡和已应用操作恢复缓存主意图，不重新执行分类模型。"""
+
+    from app.config import Settings
+    from app.services.application_config import read_application_config
+    from app.services.application_config_orchestrator import ApplicationConfigOrchestrator
+
+    values = checkpoint_values if isinstance(checkpoint_values, dict) else {}
+    pending = values.get("application_config_prerequisite")
+    if not isinstance(pending, dict) or pending.get("status") != "AWAITING_CONFIG":
+        raise ValueError("当前会话没有可继续的应用配置卡。")
+    if pending.get("requestId") != request.config_request_id or pending.get("sourceThreadId") != thread_id:
+        raise ValueError("应用配置卡与当前会话或请求不匹配。")
+    original = pending.get("originalRequest")
+    if not isinstance(original, str) or not original or (request.original_request is not None and request.original_request != original):
+        raise ValueError("应用配置继续动作与原始用户请求不匹配。")
+    if request.config_decision == "cancelled":
+        return {
+            **values,
+            "request": original,
+            "application_config_prerequisite": {**pending, "status": "CANCELLED"},
+            "application_config_resume": "consumed",
+            "direct_modification_resume_node": "finalize_direct_modification",
+            "status": "completed",
+            "message": "已取消本次配置与原业务请求。",
+            "clarification": {},
+            "timeline": [],
+        }
+    if request.config_decision != "applied" or not request.config_operation_id:
+        raise ValueError("应用配置继续动作缺少已应用的操作身份。")
+    operation = ApplicationConfigOrchestrator(Settings.from_env()).get_operation(workspace_root, request.config_operation_id)
+    if operation.get("status") != "APPLIED" or operation.get("requestId") != request.config_request_id:
+        raise ValueError("应用配置操作尚未完成或不属于当前请求。")
+    current = read_application_config(workspace_root)
+    if current["configRevision"] != operation.get("configRevision"):
+        raise ValueError("应用配置继续前已发生其他修改，请刷新卡片。")
+    cached = values.get("application_config_cached_decision")
+    if pending.get("businessRequestRequired") and not isinstance(cached, dict):
+        raise ValueError("原业务主意图缺失，不能重新分类代替。")
+    return {
+        **values,
+        "request": original,
+        "application_config_prerequisite": {**pending, "status": "CONFIG_APPLIED"},
+        "application_config_resume": "applied",
+        "direct_modification_resume_node": "classify_intent",
+        "status": "in_progress",
+        "clarification": {},
+        "timeline": [],
+    }
 
 
 def _direct_confirmation_continuation(
@@ -553,6 +609,9 @@ def build_conversation_ag_ui_stream(
             "clarification": {},
             "conversation_intent": "",
             "conversation_response": "",
+            "application_config_prerequisite": {},
+            "application_config_cached_decision": {},
+            "application_config_resume": "",
             "direct_modification_result": {},
             "change_id": str(request.change_id or ""),
             "change_target": (
@@ -632,6 +691,16 @@ def build_conversation_ag_ui_stream(
                 state_view = ({**state_view, **native_recovery_context.fork_snapshot.values}
                               if native_recovery_context.restart_node else dict(native_recovery_context.fork_snapshot.values))
                 config = native_recovery_context.fork_config
+            if native_recovery_context is None and request.config_request_id:
+                checkpoint = await active_graph.aget_state(config)
+                continuation = _application_config_continuation(
+                    request=request,
+                    workspace_root=workspace_root,
+                    thread_id=thread_id,
+                    checkpoint_values=getattr(checkpoint, "values", {}),
+                )
+                state_view.update(continuation)
+                user_request = str(continuation["request"])
             if (
                 native_recovery_context is None
                 and

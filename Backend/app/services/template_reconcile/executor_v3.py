@@ -111,6 +111,11 @@ def apply_working_copy_v3(workspace: str | Path, store: WorkingCopyStoreV3) -> N
     """仅在全部 Operation 成功后提交；任一落盘失败则恢复 before-image。"""
     root = Path(workspace).expanduser().resolve()
     committed: list[WorkingCopyEntryV3] = []
+    for entry in store.changed():
+        path = _target(root, entry.path)
+        actual = path.read_bytes() if path.exists() else None
+        if actual != entry.original:
+            raise UpdateExecutionV3Error("MANAGED_SURFACE_CONFLICT：目标文件在预检后发生变化。")
     try:
         for entry in store.changed():
             path = _target(root, entry.path)
@@ -135,7 +140,10 @@ def _target(root: Path, raw: str) -> Path:
     parsed = PurePosixPath(raw)
     if parsed.is_absolute() or any(part in {"", ".", ".."} for part in parsed.parts):
         raise UpdateExecutionV3Error("UNSAFE_TARGET_PATH：Operation target 非法。")
-    target = (root / Path(*parsed.parts)).resolve()
+    candidate = root / Path(*parsed.parts)
+    if any(path.is_symlink() for path in (candidate, *candidate.parents) if path != root and root in path.parents):
+        raise UpdateExecutionV3Error("UNSAFE_TARGET_PATH：Operation target 包含符号链接。")
+    target = candidate.resolve()
     if root not in target.parents:
         raise UpdateExecutionV3Error("UNSAFE_TARGET_PATH：Operation target 越界。")
     return target

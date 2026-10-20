@@ -6,7 +6,6 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from langgraph.config import get_stream_writer
 
@@ -24,21 +23,6 @@ from app.graph.state import ProjectState
 from app.services.data_source_policy import (
     apply_authoritative_datasource_type,
     datasource_type_from_artifact,
-)
-from app.services.application_authorization_config import (
-    ApplicationAuthorizationConfigError,
-    authorization_configuration_can_enable,
-    authorization_configuration_is_enabled,
-    persist_authorization_configuration,
-)
-from app.domain.application_config_change import ApplicationConfigChange
-from app.services.application_config import ApplicationConfigService
-from app.services.application_config_change_resolver import (
-    ApplicationConfigChangeResolutionError,
-    resolve_application_config_changes,
-)
-from app.services.application_revision_lifecycle import (
-    stage_active_revision_initial_administrator_subjects,
 )
 from app.services.requirement_spec import (
     apply_requirement_spec_editor_changes,
@@ -206,47 +190,6 @@ def requirements(state: ProjectState) -> dict:
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _request_for_requirement_node(state, interaction)
     design_revision_requested = _has_design_revision_for_node(state, "requirements")
-    # 处理前一轮权限配置冲突的用户选择；解决后才允许继续生成需求草稿。
-    conflict = state.get("authorization_config_conflict")
-    conflict_resolved = False
-    conflict_invalidated = False
-    if (
-        application_planning_scope
-        and isinstance(conflict, dict)
-        and conflict.get("requested") is True
-    ):
-        # 权限初始化问题只能被创建它的需求修订事务消费；缺失或不匹配的
-        # revisionId 视为已失效，不能在新需求分析前截获本轮输入。
-        revision_id = str(state.get("requirement_revision_id") or "").strip()
-        if str(conflict.get("revisionId") or "").strip() != revision_id:
-            conflict = {}
-            conflict_invalidated = True
-        else:
-            resolution = _resolve_authorization_config_conflict(
-                state,
-                interaction,
-                conflict,
-                existing_spec if isinstance(existing_spec, dict) else {},
-            )
-            if resolution.get("result") is not None:
-                return resolution["result"]
-            request = str(resolution["request"])
-            conflict_resolved = True
-    if application_planning_scope and not conflict and not conflict_resolved:
-        target = _explicit_authorization_config_target(state, request)
-        if target is not None:
-            # 首次规划也必须先冻结 Capability Intent，不能等业务规则反向决定应用能力。
-            return _authorization_config_conflict_result(
-                existing_spec if isinstance(existing_spec, dict) else {},
-                state,
-                {
-                    "requested": True,
-                    "evidence": [target["evidence"]],
-                    "pendingApplicationConfigTarget": target,
-                },
-                collecting_admin=True,
-                message="已识别到启用权限控制的应用能力目标。请补充真实初始管理员 Subject 后原子提交配置。",
-            )
     revision_requested = design_revision_requested or (
         interaction.get("action") == "revise"
         if application_planning_scope
@@ -328,18 +271,6 @@ def requirements(state: ProjectState) -> dict:
         datasource_type,
     )
     _apply_menus_root_path_to_pages(spec, state)
-    if (
-        application_planning_scope
-        and _authorization_requested_by_requirement(spec)
-        and not authorization_configuration_is_enabled(str(state.get("workspace") or ""))
-    ):
-        # 已验证的业务权限规则就是开启应用权限的意图；只收集无法从角色名推导的真实管理员 subjectId。
-        return _authorization_config_conflict_result(
-            spec,
-            state,
-            {"requested": True, "evidence": _authorization_requirement_evidence(spec)},
-            collecting_admin=True,
-        )
     clarification = analysis["clarification"]
     clarification = _without_technical_datasource_questions(clarification, spec)
     clarification = _without_non_substantive_completeness_questions(
@@ -385,8 +316,6 @@ def requirements(state: ProjectState) -> dict:
             "requirement_spec_path": "",
             "requirement_spec_json_path": "",
             "clarification": clarification,
-            "authorization_config_conflict": {},
-            "pending_application_config_target": {},
             "timeline": ["requirements"],
         }
     next_clarification_round = clarification_round
@@ -444,8 +373,6 @@ def requirements(state: ProjectState) -> dict:
             "requirement_spec_path": "",
             "requirement_spec_json_path": "",
             "clarification": clarification,
-            "authorization_config_conflict": {},
-            "pending_application_config_target": {},
             "timeline": ["requirements"],
         }
 
@@ -460,270 +387,20 @@ def requirements(state: ProjectState) -> dict:
         "requirement_spec_path": spec_path,
         "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
         "clarification": clarification,
-        "authorization_config_conflict": (
-            {}
-            if conflict_resolved or conflict_invalidated
-            else state.get("authorization_config_conflict", {})
-        ),
-        "pending_application_config_target": {},
-        "timeline": ["requirements"],
-    }
-
-
-def _authorization_config_answer_text(value: object) -> str:
-    """读取选择题或文本题中的权限配置回答。"""
-
-    if isinstance(value, dict):
-        selected = value.get("selected")
-        if isinstance(selected, list):
-            return ",".join(str(item).strip() for item in selected if str(item).strip())
-        return str(selected or value.get("other") or "").strip()
-    return str(value or "").strip()
-
-
-def _explicit_authorization_config_target(state: ProjectState, request: str) -> dict[str, Any] | None:
-    """把首次规划的显式权限意图冻结为可恢复目标，不在解析阶段写 application.json。"""
-
-    workspace = str(state.get("workspace") or "").strip()
-    if not workspace:
-        return None
-    try:
-        changes = resolve_application_config_changes(request, workspace_root=workspace)
-    except ApplicationConfigChangeResolutionError as exc:
-        raise ValueError(f"无法解析应用权限配置目标：{exc}") from exc
-    authorization_change = next(
-        (change for change in changes if change.path == "authorization.enabled"),
-        None,
-    )
-    if authorization_change is None or authorization_change.to_value is not True:
-        return None
-    return {
-        "changes": [change.model_dump(by_alias=True) for change in changes],
-        "requiresInitialAdministratorSubjects": True,
-        "evidence": authorization_change.evidence,
-    }
-
-
-def _authorization_subjects(value: object) -> list[str]:
-    """从管理员回答中拆分 subjectId，并保持首次出现顺序。"""
-
-    subjects: list[str] = []
-    seen: set[str] = set()
-    for item in re.split(r"[,，;；\n]+", _authorization_config_answer_text(value)):
-        subject = item.strip()
-        if subject and subject not in seen:
-            seen.add(subject)
-            subjects.append(subject)
-    return subjects
-
-
-def _authorization_config_conflict_result(
-    spec: dict,
-    state: ProjectState,
-    conflict: dict,
-    *,
-    collecting_admin: bool = False,
-    message: str | None = None,
-) -> dict:
-    """构造配置冲突前置澄清，禁止在此之前写入 RequirementSpec 草稿。"""
-
-    workspace = str(state.get("workspace") or "").strip()
-    revision_id = str(state.get("requirement_revision_id") or "").strip() or uuid4().hex
-    can_enable = bool(workspace) and authorization_configuration_can_enable(workspace)
-    if collecting_admin:
-        questions = [
-            {
-                "id": "authorization_initial_admin",
-                "header": "初始管理员",
-                "dimension": "内置权限初始化",
-                "question": "请输入认证系统中真实存在或可预配置的初始管理员 subjectId；多个值请用逗号分隔。",
-                "type": "text",
-                "placeholder": "例如 user@example.com",
-            }
-        ]
-    else:
-        options = [
-            {
-                "label": "移除权限要求",
-                "value": "remove",
-                "description": "保持当前关闭权限配置，并移除本轮业务权限要求。",
-            }
-        ]
-        if can_enable:
-            options.insert(
-                0,
-                {
-                    "label": "启用权限控制",
-                    "value": "enable",
-                    "description": "使用数据库并补充真实管理员 subjectId 后继续需求分析。",
-                },
-            )
-        questions = [
-            {
-                "id": "authorization_config_decision",
-                "header": "权限配置冲突",
-                "dimension": "权限开关与业务需求",
-                "question": "业务描述提出了权限控制，但当前应用配置未启用权限。请选择处理方式。",
-                "type": "choice",
-                "multiSelect": False,
-                "allowOther": False,
-                "options": options,
-            }
-        ]
-    clarification = {
-        "mode": "authorization_configuration_conflict",
-        "status": "requires_user_input",
-        "question_schema": "gemini_cli.ask_user.v1",
-        "questions": questions,
-        "message": message
-        or "请先解决应用权限配置与业务需求之间的冲突，再继续生成 RequirementSpec。",
-        "conflictEvidence": conflict.get("evidence", []),
-    }
-    spec["confirmation_status"] = "pending_user_input"
-    spec["clarification_status"] = "requires_user_input"
-    spec["clarification_questions"] = questions
-    return {
-        "phase": "requirements",
-        "status": "requires_user_input",
-        "requirement_spec": spec,
-        "requirements_confirmed": False,
-        "requirements_clarification_round": _clarification_round(state),
-        "requirement_spec_path": "",
-        "requirement_spec_json_path": "",
-        "authorization_config_conflict": {
-            **conflict,
-            "revisionId": revision_id,
-            "decision": "enable" if collecting_admin else "",
-        },
-        "pending_application_config_target": (
-            conflict.get("pendingApplicationConfigTarget", {})
-            if isinstance(conflict.get("pendingApplicationConfigTarget"), dict)
-            else {}
-        ),
-        "requirement_revision_id": revision_id,
-        "clarification": clarification,
         "timeline": ["requirements"],
     }
 
 
 def _authorization_requested_by_requirement(spec: dict[str, Any]) -> bool:
-    """判断已归一化的需求是否包含明确的页面或操作权限控制。"""
+    """判断 RequirementSpec 是否包含需要继续澄清的页面或操作授权规则。"""
 
     authorization = spec.get("authorization_requirements")
     if not isinstance(authorization, dict):
         return False
     return any(
-        isinstance(authorization.get(field_name), list)
-        and bool(authorization[field_name])
+        isinstance(authorization.get(field_name), list) and bool(authorization[field_name])
         for field_name in ("restrictedPages", "restrictedOperations")
     )
-
-
-def _authorization_requirement_evidence(spec: dict[str, Any]) -> list[str]:
-    """提取已验证权限规则的原始需求证据，供管理员初始化提示说明原因。"""
-
-    authorization = spec.get("authorization_requirements")
-    if not isinstance(authorization, dict):
-        return []
-    evidence: list[str] = []
-    for field_name in ("restrictedPages", "restrictedOperations"):
-        rules = authorization.get(field_name)
-        if not isinstance(rules, list):
-            continue
-        for rule in rules:
-            if not isinstance(rule, dict):
-                continue
-            for source in rule.get("sourceRefs", []):
-                text = str(source).strip()
-                if text and text not in evidence:
-                    evidence.append(text)
-    return evidence[:8]
-
-
-def _resolve_authorization_config_conflict(
-    state: ProjectState,
-    interaction: dict,
-    conflict: dict,
-    existing_spec: dict,
-) -> dict:
-    """处理前置澄清答案；正式修订仅暂存管理员，确认边界才提交配置。"""
-
-    answers = interaction.get("answers") if isinstance(interaction, dict) else {}
-    answers = answers if isinstance(answers, dict) else {}
-    decision = _authorization_config_answer_text(
-        answers.get("authorization_config_decision")
-    )
-    decision = decision or str(conflict.get("decision") or "").strip()
-    workspace = str(state.get("workspace") or "").strip()
-    if decision == "enable":
-        if not authorization_configuration_can_enable(workspace):
-            return {
-                "result": _authorization_config_conflict_result(
-                    existing_spec,
-                    state,
-                    conflict,
-                    message="当前应用不是数据库数据源，不能启用内置权限；请选择移除权限要求。",
-                )
-            }
-        subjects = _authorization_subjects(answers.get("authorization_initial_admin"))
-        if not subjects:
-            return {
-                "result": _authorization_config_conflict_result(
-                    existing_spec,
-                    state,
-                    conflict,
-                    collecting_admin=True,
-                )
-            }
-        staged_revision = stage_active_revision_initial_administrator_subjects(
-            workspace,
-            subjects=subjects,
-        )
-        if staged_revision is None:
-            # 首次创建提交被冻结的 Resolver 输出；配置不允许由 RequirementSpec 或 LLM 改写。
-            try:
-                target = conflict.get("pendingApplicationConfigTarget")
-                raw_changes = target.get("changes") if isinstance(target, dict) else None
-                changes = (
-                    [ApplicationConfigChange.model_validate(item) for item in raw_changes]
-                    if isinstance(raw_changes, list)
-                    else []
-                )
-                if changes:
-                    ApplicationConfigService(workspace).apply(
-                        changes=changes,
-                        initial_administrator_subjects=subjects,
-                    )
-                else:
-                    persist_authorization_configuration(
-                        workspace,
-                        initial_administrator_subjects=subjects,
-                    )
-            except (ApplicationAuthorizationConfigError, ValueError) as exc:
-                raise ValueError(str(exc)) from exc
-        return {
-            "request": "\n".join(
-                [
-                    "权限配置冲突已确认解决：启用权限控制。",
-                    "涉及权限控制：是。",
-                    f"初始管理员成员标识：{'、'.join(subjects)}。",
-                    str(interaction.get("request") or state.get("request") or ""),
-                ]
-            )
-        }
-    if decision == "remove":
-        return {
-            "request": "\n".join(
-                [
-                    "权限配置冲突已确认解决：移除本轮业务权限要求。",
-                    "涉及权限控制：否。",
-                    str(interaction.get("request") or state.get("request") or ""),
-                ]
-            )
-        }
-    return {
-        "result": _authorization_config_conflict_result(existing_spec, state, conflict)
-    }
 
 
 def _requirement_spec_draft_payload(

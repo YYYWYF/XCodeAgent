@@ -221,11 +221,6 @@ def prepare_application_planning_review_resume(
                 "design_interaction_origin": effective_node_name,
                 "application_planning_interaction": {},
                 "requirement_revision_id": uuid4().hex,
-                # 设计变更开启新的需求修订事务。上一轮尚未完成的权限配置
-                # 冲突仅是临时交互状态，不能在新的需求分析前被 requirements
-                # 节点优先消费并错误地重新展示初始管理员 subjectId 问题。
-                "authorization_config_conflict": {},
-                "pending_application_config_target": {},
                 "clarification": {},
             },
             target_node="design_intent_analysis",

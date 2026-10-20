@@ -39,6 +39,10 @@ from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
     build_application_lifecycle_ag_ui_stream,
 )
+from app.protocols.application_config_operation import (
+    application_config_capabilities,
+    build_application_config_ag_ui_stream,
+)
 from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
@@ -167,6 +171,7 @@ async def health() -> dict[str, object]:
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
             "application_lifecycle": application_lifecycle_capabilities(),
+            "application_config": application_config_capabilities(),
             "application_development_planning": application_development_planning_capabilities(),
             "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
@@ -199,6 +204,20 @@ async def run_application_page_planning(
             payload=input_data,
             accept=accept,
         ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/application-config/run")
+async def run_application_config(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 动作流预览、提交或读取应用配置操作。"""
+
+    return StreamingResponse(
+        build_application_config_ag_ui_stream(payload=input_data, settings=settings, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

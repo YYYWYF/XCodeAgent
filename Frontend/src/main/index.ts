@@ -1548,6 +1548,26 @@ function setupWorkspaceIpc(): void {
     }
     const currentApplication = await readManagedWorkspaceApplication(workspaceRoot)
     const nextApplication = { ...(payload.application as Record<string, unknown>) }
+    const generatedState = path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'template-state.json')
+    if (await fs.stat(generatedState).then(() => true, () => false)) {
+      const current = currentApplication as Record<string, unknown>
+      const currentTheme = current.theme as Record<string, unknown> | undefined
+      const nextTheme = nextApplication.theme as Record<string, unknown> | undefined
+      const currentAuth = current.auth as Record<string, unknown> | undefined
+      const nextAuth = nextApplication.auth as Record<string, unknown> | undefined
+      const currentAuthorization = current.authorization as Record<string, unknown> | undefined
+      const nextAuthorization = nextApplication.authorization as Record<string, unknown> | undefined
+      const managedChanged = current.appName !== nextApplication.appName ||
+        current.appIcon !== nextApplication.appIcon ||
+        currentTheme?.primaryColor !== nextTheme?.primaryColor ||
+        currentAuth?.enable !== nextAuth?.enable ||
+        JSON.stringify(currentAuth?.yht) !== JSON.stringify(nextAuth?.yht) ||
+        currentAuthorization?.enabled !== nextAuthorization?.enabled ||
+        JSON.stringify(currentAuthorization?.initialAdministratorSubjects) !== JSON.stringify(nextAuthorization?.initialAdministratorSubjects)
+      if (managedChanged) {
+        throw new Error('已生成应用的配置字段必须通过后端统一配置操作提交。')
+      }
+    }
     // 只有实际配置变化才递增版本，避免打开或刷新应用时制造过期规划产物。
     if (JSON.stringify(currentApplication) !== JSON.stringify(nextApplication)) {
       nextApplication.configRevision = Number(currentApplication.configRevision) + 1

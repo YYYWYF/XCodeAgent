@@ -24,6 +24,7 @@ import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
+import { applyConfigChanges, type ConfigChanges } from '../../../service/applicationConfigOperation'
 import {
   beginConnectionRequest,
   completeConnectionRequest,
@@ -1206,6 +1207,9 @@ export function useWorkflowConversation({
       conversationHandoffDecision?: 'approved' | 'rejected'
       conversationImpactInteractionId?: string
       conversationConfirmScopeBeforeExecution?: boolean
+      conversationConfigRequestId?: string
+      conversationConfigOperationId?: string
+      conversationConfigDecision?: 'applied' | 'cancelled'
       revisionRequest?: Record<string, unknown>
       revisionContinuation?: { changeId: string; token: string }
       revisionInteraction?: WorkflowRevisionDraftInteraction
@@ -1544,6 +1548,9 @@ export function useWorkflowConversation({
         conversationImpactInteractionId: options?.conversationImpactInteractionId,
         conversationConfirmScopeBeforeExecution:
           options?.conversationConfirmScopeBeforeExecution,
+        conversationConfigRequestId: options?.conversationConfigRequestId,
+        conversationConfigOperationId: options?.conversationConfigOperationId,
+        conversationConfigDecision: options?.conversationConfigDecision,
         revisionRequest: options?.revisionRequest,
         revisionContinuation: options?.revisionContinuation,
         developmentContinuation: options?.developmentContinuation,
@@ -1904,6 +1911,7 @@ export function useWorkflowConversation({
     const originalRequest = workflowOriginalRequest(workflow)
     const clarificationMode = workflowClarificationMode(workflow)
     const clarification = workflowClarification(workflow)
+    const configPrerequisite = configPrerequisiteSubmission(workflow, answers)
     const handoffApproved = smallTaskHandoffApproved(answers)
     const implementationFixApproved = implementationFixConfirmationApproved(answers)
     const revisionSubmission = revisionImpactSubmission(workflow, answers)
@@ -1923,6 +1931,34 @@ export function useWorkflowConversation({
       ? undefined
       : workflowSelectedPageId(workflow) || selectedPageId
     const continuationEntityId = workflowSelectedEntityId(workflow) || selectedEntityId
+    if (conversation && clarificationMode === 'application_config_prerequisite' && configPrerequisite) {
+      if (loading || workspaceBusy) return false
+      if (configPrerequisite.action === 'cancelled') {
+        return sendWorkflowMessage('用户已取消本次应用配置与原业务请求。', {
+          originalRequest,
+          conversation: true,
+          conversationConfigRequestId: configPrerequisite.requestId,
+          conversationConfigDecision: 'cancelled',
+          titleFrom: originalRequest || '取消应用配置'
+        })
+      }
+      const operation = await applyConfigChanges(
+        application.workspaceRoot,
+        configPrerequisite.expectedConfigRevision,
+        configPrerequisite.changes,
+        undefined,
+        configPrerequisite.requestId
+      )
+      if (!operation.operationId || operation.status !== 'APPLIED') return false
+      return sendWorkflowMessage('应用配置已确认，继续处理原请求。', {
+        originalRequest,
+        conversation: true,
+        conversationConfigRequestId: configPrerequisite.requestId,
+        conversationConfigOperationId: operation.operationId,
+        conversationConfigDecision: 'applied',
+        titleFrom: originalRequest || '应用配置确认'
+      })
+    }
     if (
       conversation &&
       clarificationMode === 'revision_impact_confirmation' &&
@@ -2663,6 +2699,25 @@ function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | unde
     if (workflow) return workflow
   }
   return undefined
+}
+
+/** 从服务端 checkpoint 的配置卡读取动作参数，拒绝客户端伪造或缺失的续跑身份。 */
+function configPrerequisiteSubmission(
+  workflow: WorkflowRunPayload,
+  answers: ClarificationAnswers
+): { action: 'apply'; requestId: string; expectedConfigRevision: number; changes: ConfigChanges } | { action: 'cancelled'; requestId: string } | undefined {
+  const answer = answers.application_config_prerequisite
+  const clarification = workflowClarification(workflow) as Record<string, unknown> | undefined
+  const pending = clarification?.configPrerequisite
+  if (!answer || typeof answer !== 'object' || Array.isArray(answer) || !pending || typeof pending !== 'object' || Array.isArray(pending)) return undefined
+  const action = String((answer as Record<string, unknown>).action || '')
+  const requestId = String((pending as Record<string, unknown>).requestId || '')
+  if (!requestId) return undefined
+  if (action === 'cancelled') return { action: 'cancelled', requestId }
+  const expectedConfigRevision = Number((pending as Record<string, unknown>).expectedConfigRevision)
+  const changes = (answer as Record<string, unknown>).changes
+  if (action !== 'apply' || !Number.isInteger(expectedConfigRevision) || expectedConfigRevision < 1 || !changes || typeof changes !== 'object' || Array.isArray(changes)) return undefined
+  return { action: 'apply', requestId, expectedConfigRevision, changes: changes as ConfigChanges }
 }
 
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {

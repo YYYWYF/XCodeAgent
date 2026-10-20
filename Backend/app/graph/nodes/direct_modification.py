@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -46,6 +46,9 @@ from app.services.revision_routing import (
     build_small_task_revision_confirmation,
     route_from_change_impact,
 )
+from app.services.application_config_prerequisite import analyze_application_config_prerequisite
+from app.services.access_control_intent import has_explicit_business_access_control_change, has_explicit_capability_change
+from app.services.application_config.schema import ApplicationConfigError
 from app.services.test_validation import evaluate_quality_gate
 from app.domain.change_impact import (
     AnalysisStatus,
@@ -62,7 +65,18 @@ from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_j
 def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
     """识别快速修改归属，并在不安全时转为澄清或正式规划提示。"""
 
-    request = str(state.get("request") or "").strip()
+    original_request = str(state.get("request") or "")
+    request = original_request.strip()
+    config_resume = state.get("application_config_resume")
+    cached_decision = state.get("application_config_cached_decision")
+    config_analysis = None
+    workspace = workspace_from_state(state)
+    if config_resume != "applied" and workspace:
+        try:
+            config_analysis = analyze_application_config_prerequisite(original_request, workspace)
+        except ApplicationConfigError:
+            if has_explicit_capability_change(request) or has_explicit_business_access_control_change(request):
+                raise
     if state.get("direct_modification_handoff_decision") == "rejected":
         # 用户已经拒绝上一轮写入确认时，不再重新调用任何分析模型。
         decision = DirectModificationDecision(
@@ -72,6 +86,14 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
             confidence=1.0,
             reason="用户已取消本次修改。",
             clarification_question="本次修改已取消。",
+        )
+    elif config_resume == "applied" and isinstance(cached_decision, dict) and cached_decision:
+        # 配置确认后只恢复第一次分类结果，绝不重新让模型改写原主业务意图。
+        decision = DirectModificationDecision(**cached_decision)
+    elif config_analysis is not None and config_analysis.requires_card and not config_analysis.business_request_required:
+        decision = DirectModificationDecision(
+            intent="clarification", owner="unknown", scope="clarification", confidence=1.0,
+            reason="仅需应用配置更新。", clarification_question="",
         )
     else:
         decision = classify_direct_modification_intent(
@@ -152,6 +174,44 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "acceptance_request": {},
         "timeline": ["classify_intent"],
     }
+    if config_resume == "applied":
+        pending = state.get("application_config_prerequisite")
+        if isinstance(pending, dict) and pending.get("businessRequestRequired") is False:
+            return {
+                **base, "status": "completed", "message": "应用配置已完成。",
+                "application_config_resume": "consumed",
+                "application_config_prerequisite": {**pending, "status": "RESUMED"},
+                "clarification": {},
+            }
+    if config_analysis is not None and config_analysis.conflict:
+        return {**base, "status": "failed", "message": config_analysis.conflict, "clarification": {}}
+    if config_analysis is not None and config_analysis.requires_card:
+        request_id = f"config_{uuid4().hex}"
+        pending = {
+            "requestId": request_id,
+            "originalRequest": original_request,
+            "sourceThreadId": str(state.get("active_thread_id") or ""),
+            "expectedConfigRevision": config_analysis.expected_config_revision,
+            "configIntents": list(config_analysis.config_intents),
+            "configPrerequisites": list(config_analysis.config_prerequisites),
+            "suggestedChanges": config_analysis.suggested_changes,
+            "businessRequestRequired": config_analysis.business_request_required,
+            "status": "AWAITING_CONFIG",
+        }
+        return {
+            **base,
+            "status": "requires_user_input",
+            "message": "请先确认应用配置，再继续处理原请求。",
+            "application_config_prerequisite": pending,
+            "application_config_cached_decision": asdict(decision) if config_analysis.business_request_required else {},
+            "clarification": {
+                "mode": "application_config_prerequisite",
+                "status": "requires_user_input",
+                "message": "请先确认应用配置，再继续处理原请求。",
+                "configPrerequisite": pending,
+                "questions": [],
+            },
+        }
     if state.get("direct_modification_handoff_decision") == "rejected":
         return {
             **base,

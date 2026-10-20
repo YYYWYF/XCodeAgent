@@ -380,6 +380,7 @@ type MessageListProps = {
   /** 新迭代发起后用户提交迭代需求，启动 planning workflow。 */
   onStartIterationPlanning?: (request: string) => Promise<void>
   revertingCodeChangeIds: ReadonlySet<string>
+  application?: ApplicationConfig
   workspaceRoot?: string
   /** 模板就绪卡片提交操作是否被禁用（Agent 运行中等）。 */
   commitDisabled?: boolean
@@ -430,6 +431,7 @@ export default function MessageList({
   reviseConfirmedTechnicalPlanDisabled = false,
   revertingCodeChangeIds,
   onSubmitClarification,
+  application,
   workspaceRoot,
   commitDisabled = false
 }: MessageListProps): ReactElement {
@@ -1103,6 +1105,7 @@ export default function MessageList({
                               onSaveRequirementSpec={onSaveRequirementSpec}
                               rootPath={rootPath}
                               workflow={planningCardWorkflow || message.workflow}
+                              application={application}
                               workspaceRoot={workspaceRoot}
                             />
                           ) : null)}
@@ -1209,6 +1212,7 @@ export default function MessageList({
                 disabled={mutationDisabled}
                 interactionAvailability="active"
                 workflow={currentPlanningConfirmation}
+                application={application}
                 onSubmitClarification={onSubmitClarification}
                 onSaveRequirementSpec={onSaveRequirementSpec}
                 uiDesignActivePageId={uiDesignActivePageId}

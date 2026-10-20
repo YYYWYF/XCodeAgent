@@ -91,6 +91,9 @@ export type SendWorkflowMessageOptions = {
   conversationApprovedPaths?: string[]
   conversationHandoffDecision?: 'approved' | 'rejected'
   conversationImpactInteractionId?: string
+  conversationConfigRequestId?: string
+  conversationConfigOperationId?: string
+  conversationConfigDecision?: 'applied' | 'cancelled'
   conversationConfirmScopeBeforeExecution?: boolean
 }
 
@@ -170,6 +173,15 @@ export function buildWorkflowForwardedProps(
             : {}),
           ...(options.conversationImpactInteractionId !== undefined
             ? { impactInteractionId: options.conversationImpactInteractionId }
+            : {}),
+          ...(options.conversationConfigRequestId !== undefined
+            ? { configRequestId: options.conversationConfigRequestId }
+            : {}),
+          ...(options.conversationConfigOperationId !== undefined
+            ? { configOperationId: options.conversationConfigOperationId }
+            : {}),
+          ...(options.conversationConfigDecision !== undefined
+            ? { configDecision: options.conversationConfigDecision }
             : {}),
           ...(options.conversationConfirmScopeBeforeExecution !== undefined
             ? { confirmScopeBeforeExecution: options.conversationConfirmScopeBeforeExecution }

@@ -14,9 +14,7 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.application_revision_lifecycle import (
-    _awaits_initial_administrator_subjects,
     _build_active_formal_revision,
-    commit_active_revision_application_config_changes,
 )
 
 
@@ -76,6 +74,4 @@ def approve_design_revision_from_checkpoint(
                 'extensions': pending_quality_results(current.extensions),
             })
             write_application_lifecycle(workspace, updated, expected_revision=current.revision)
-        if not _awaits_initial_administrator_subjects(active):
-            active = commit_active_revision_application_config_changes(workspace, change_id=active.change_id)
         return active

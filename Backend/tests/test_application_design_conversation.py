@@ -89,16 +89,16 @@ class ApplicationDesignConversationTests(unittest.TestCase):
 
         self.assertEqual((decision.intent, decision.change_level), ("requirement_change", "requirement"))
 
-    def test_authorization_initialization_question_stays_in_requirements_review(self) -> None:
-        """权限初始化待回答时必须产生 RequirementSpec 原生中断。"""
+    def test_authorization_business_question_stays_in_requirements_review(self) -> None:
+        """权限业务澄清仍由 RequirementSpec 原生中断处理。"""
 
         target = _route_requirements(
             {
                 "requirement_spec": {"confirmation_status": "pending_user_input"},
                 "clarification": {
-                    "mode": "authorization_configuration_conflict",
+                    "mode": "authorization_business_review",
                     "status": "requires_user_input",
-                    "questions": [{"id": "authorization_initial_admin"}],
+                    "questions": [{"id": "authorization_business_review"}],
                 },
             }
         )
