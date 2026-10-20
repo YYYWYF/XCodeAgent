@@ -124,11 +124,16 @@
     font-size: 12px;
   }
 
-  > strong {
+  > .@{class-prefix}-technical-plan-architecture-description {
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    overflow: visible;
     color: var(--wb-text);
     font-size: 13px;
     font-weight: 500;
     line-height: 1.7;
+    text-overflow: clip;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
   }
