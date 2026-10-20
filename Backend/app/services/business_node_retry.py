@@ -40,16 +40,25 @@ async def _read_retry_hint(source: DurableExecutionRecord, graph: Any) -> RetryH
     """读取本 Run 的已提交记录定位节点，与实际执行共用同一入口解释。"""
     from app.services.checkpoint_execution import read_checkpoint_execution
     execution = await read_checkpoint_execution(source, graph)
-    return _execution_retry_hint(execution, graph)
+    return _execution_retry_hint(execution, graph, source)
 
 
-def _execution_retry_hint(execution, graph) -> RetryHint | None:
-    """确认处理失败时重新展示原审阅门，其他业务节点保持原失败位置。"""
+def _execution_retry_hint(execution, graph, source) -> RetryHint | None:
+    """测试修复失败回到完整测试阶段，二次修改和暂停续接保持原节点。"""
     if execution is not None:
         node = "technical_planning_review" if execution.node == "technical_planning_confirm" else execution.node
+        if (_failed_test_retry(source) and node == "small_task_repair"):
+            node = "integration_test"
         if node in graph.nodes and node not in {"workflow_entry", "handle_failure", "await_user_input", "__end__"}:
             return RetryHint(node=node, request=execution.request)
     return None
+
+
+def _failed_test_retry(source: DurableExecutionRecord) -> bool:
+    """只识别主工作流失败重试，避免改变二次修改及正常暂停继续。"""
+    return (source.execution_kind == "workbench"
+            and source.workflow_scope != "conversation"
+            and source.status is DurableExecutionStatus.FAILED)
 
 
 async def retry_action_plan(source: DurableExecutionRecord, graph: Any) -> RecoveryActionPlan:
@@ -161,7 +170,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             raise RecoveryExecutionError("RETRY_SOURCE_SUPERSEDED", "原任务已被新的执行替代，请查看当前流程。")
         # 节点和完整输入必须来自同一份已提交现场，不拼接其他 Run 的历史状态。
         checkpoint = await read_checkpoint_execution(source, graph)
-        hint = _execution_retry_hint(checkpoint, graph)
+        hint = _execution_retry_hint(checkpoint, graph, source)
         if hint is None:
             await release_unretryable_execution(source)
             raise RecoveryExecutionError("RETRY_ENTRY_NOT_FOUND", NO_RETRY_ENTRY)
@@ -183,6 +192,11 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             graph = await application_planning_graph_for_request(workspace=source.workspace, project_id=source.project_id)
         state = retry_node_state(checkpoint.snapshot.values, node,
                                  planning=source.execution_kind == "application_planning" or planning_handoff)
+        if _failed_test_retry(source) and node == "integration_test":
+            from app.services.integration_test_reentry import fresh_integration_test_fields
+
+            # 统一重试从新 Graph 输入启动，不进入 Native Recovery 上下文；在此重开测试轮次。
+            state.update(fresh_integration_test_fields())
         state.update({"workspace": source.workspace, "project_id": source.project_id,
                                  "request": hint.request, "resume_from": node,
                                  "active_thread_id": source.thread_id,
