@@ -50,6 +50,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   const [reportedError, setReportedError] = useState(false)
   const [metadata, setMetadata] = useState<ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata>()
   const [metadataLoading, setMetadataLoading] = useState(false)
+  const [metadataRevision, setMetadataRevision] = useState(0)
   const [refresh, setRefresh] = useState(0)
   const sourcesReader = useRef<BindingSourcesReader>()
   const locked = useRef(false)
@@ -57,6 +58,9 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   const key = target ? JSON.stringify([workspaceRoot, target.apiContractId, target.endpointId]) : ''
   const entry = entries[key]
   const sourceKey = selectionKey(entry?.value.selection)
+  const selectedDatabaseSourceId = entry?.value.selection?.sourceType === 'database' ? entry.value.selection.sourceId : undefined
+  const builtinSelected = Boolean(selectedDatabaseSourceId
+    && catalog.sources.some((source) => source.id === selectedDatabaseSourceId && source.type === 'database' && source.mode === 'builtin'))
   const activeKey = useRef(key)
   activeKey.current = key
   const entryRef = useRef(entry)
@@ -88,6 +92,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
     setError('')
     const reader = observeBindingSources(workspaceRoot, ({ catalog: sources, tables: selected }) => {
       setCatalog(sources); setTables(selected); publish('catalog', undefined, endpointRecoveryScope(workspaceRoot))
+      setMetadataRevision((value) => value + 1)
     }, (reason) => failRead(reason, 'catalog', endpointRecoveryScope(workspaceRoot)))
     sourcesReader.current = reader
     return () => { reader.dispose(); sourcesReader.current = undefined }
@@ -119,8 +124,8 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   useEffect(() => {
     const selection = entry?.value.selection
     setMetadata(undefined)
-    // 已确认的数据库映射直接展示保存的字段快照，进入编辑后才查询实时列。
-    if (!selection || selection.sourceType === 'static' || entry?.readOnly && selection.sourceType === 'database') { setMetadataLoading(false); publish('metadata'); return }
+    // 外部库只读仍展示保存快照；内置表可能刚重建，必须回读以提示引用失效。
+    if (!selection || selection.sourceType === 'static' || entry?.readOnly && selection.sourceType === 'database' && !builtinSelected) { setMetadataLoading(false); publish('metadata'); return }
     let disposed = false
     setMetadataLoading(true); setError('')
     const request = selection.sourceType === 'database'
@@ -130,7 +135,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
       .catch((reason) => { if (!disposed) failRead(reason, 'metadata') })
       .finally(() => { if (!disposed) setMetadataLoading(false) })
     return () => { disposed = true }
-  }, [workspaceRoot, key, sourceKey, entry?.readOnly, refresh])
+  }, [workspaceRoot, key, sourceKey, entry?.readOnly, refresh, builtinSelected, metadataRevision])
 
   /** 面板内重试仅校准来源和当前契约；不调用会删除草稿的 reload，也不重放保存或确认。 */
   const recover = async (): Promise<void> => {

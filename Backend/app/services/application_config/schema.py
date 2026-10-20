@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
+from app.domain.managed_database import ManagedDatabaseRegistration
+
 
 CURRENT_APPLICATION_SCHEMA_VERSION = 6
 
@@ -32,6 +36,12 @@ def validate_application_snapshot(application: Any) -> dict[str, Any]:
         if type(value) is not bool:
             raise ApplicationConfigError(f"application.json 的 {path} 必须是布尔值。")
         values[path] = value
+    registration = application.get("managedDatabase")
+    if registration is not None:
+        try:
+            ManagedDatabaseRegistration.model_validate(registration)
+        except ValidationError:
+            raise ApplicationConfigError("application.json 的 managedDatabase 注册绑定无效。") from None
     return application
 
 

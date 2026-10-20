@@ -882,6 +882,7 @@ class RevisionLifecycleTests(unittest.TestCase):
                 requirement_spec,
                 product_plan,
                 ui_designs,
+                {},
             )
 
         validate_api_contracts.assert_called_once_with(artifact)

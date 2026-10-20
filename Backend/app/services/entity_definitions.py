@@ -76,11 +76,32 @@ def _derived_field_name(label: str, index: int) -> str:
 
 
 def entity_table_name(entity_id: str) -> str:
-    """把实体 id 转换为 snake_case 表名，作为数据库目标表的规范名称。"""
+    """从实体稳定 ID 派生业务名；实际数据库目标由 entity_database_table_name 读取。"""
 
     normalized = re.sub(r"(?<!^)(?=[A-Z])", "_", str(entity_id or "")).lower()
     normalized = re.sub(r"[^a-z0-9_]+", "_", normalized).strip("_")
     return normalized or "entity"
+
+
+def entity_database_table_name(entity: dict[str, Any]) -> str:
+    """读取正式真实表名；未使用内置绑定的实体仍按业务 ID 生成新表名。"""
+
+    name = entity.get("table_name") if "table_name" in entity else entity_table_name(str(entity.get("id") or ""))
+    # 共用读取器保留外置库已有标识符；内置前缀及字符规则在绑定入口单独校验。
+    if not isinstance(name, str) or not name or len(name) > 64 or "\x00" in name:
+        raise ValueError("实体表名必须为非空字符串，不含空字符，且长度不超过 64。")
+    return name
+
+
+def entity_detail_table_name(detail: dict[str, Any]) -> str:
+    """从详情中的固定绑定或目标表结构读取真实表名，不重新拼接应用前缀。"""
+
+    if "table_name" in detail:
+        return entity_database_table_name(detail)
+    target = detail.get("table_design")
+    if isinstance(target, dict) and target.get("name"):
+        return entity_database_table_name({"table_name": target["name"]})
+    return entity_database_table_name({"id": detail.get("entity_id")})
 
 
 def entity_ids(entities: Any) -> list[str]:
@@ -278,6 +299,7 @@ def _entity_design_summary(
         "entity_id": str(detail.get("entity_id") or ""),
         "entity_name": str(detail.get("entity_name") or detail.get("entity_id") or ""),
         "data_source_type": entity_design_source_type(detail),
+        **({"table_name": detail["table_name"]} if "table_name" in detail else {}),
         "fields": [
             {
                 "name": str(field.get("name") or ""),
@@ -671,6 +693,8 @@ def normalize_entity(
     module_id = str(value.get("module_id") or "").strip()
     if module_id:
         normalized["module_id"] = module_id
+    if with_types and "table_name" in value:
+        normalized["table_name"] = entity_database_table_name(value)
     # 计划阶段实体不携带 data_source；数据源在实体设计阶段选择并确认。
     normalized.pop("data_source", None)
     return normalized
@@ -729,6 +753,13 @@ def merge_entities(
                 "name": item.get("name") or stable.get("name") or "",
                 "description": item.get("description") or stable.get("description") or "",
                 "fields": fields,
+                **(
+                    {"table_name": stable["table_name"]}
+                    if with_types and "table_name" in stable
+                    else {"table_name": item["table_name"]}
+                    if with_types and "table_name" in item
+                    else {}
+                ),
                 **(
                     {"module_id": item.get("module_id") or stable.get("module_id")}
                     if item.get("module_id") or stable.get("module_id")
@@ -820,7 +851,7 @@ def entity_mysql_target_table(entity: Any) -> dict[str, Any]:
     """把业务实体确定性编译为目标 MySQL 表结构，作为 schema diff 的基线。"""
 
     normalized = normalize_entity(entity, 0, with_types=True)
-    table_name = entity_table_name(str(normalized.get("id") or ""))
+    table_name = entity_database_table_name(normalized)
     columns: list[dict[str, Any]] = [
         {
             "name": "id",
@@ -858,6 +889,8 @@ def entity_mysql_target_table(entity: Any) -> dict[str, Any]:
 def database_operation_field_errors(
     entities: Any,
     data_origin: Any,
+    *,
+    builtin: bool = False,
 ) -> list[str]:
     """校验数据库操作字段与已确认实体一致，防止详情阶段发明字段。"""
 
@@ -865,7 +898,7 @@ def database_operation_field_errors(
     if not normalized_entities:
         return []
     entity_tables = {
-        entity_table_name(str(item.get("id") or "")): item for item in normalized_entities
+        entity_database_table_name(item): item for item in normalized_entities
     }
     allowed_columns: set[str] = {RESERVED_ENTITY_FIELD}
     for entity in normalized_entities:
@@ -877,6 +910,7 @@ def database_operation_field_errors(
     kind = str(effective_source.get("kind") or "")
     # 实体设计确认的目标表允许执行补列等既有表操作；新建表仍需规范表名。
     matched_table = str(origin.get("matched_table") or "").strip()
+    allowed_matched_table = "" if builtin else matched_table
     errors: list[str] = []
     for operation in origin.get("database_operations") if isinstance(origin.get("database_operations"), list) else []:
         if not isinstance(operation, dict):
@@ -900,7 +934,7 @@ def database_operation_field_errors(
                     )
             continue
         table_name = str(raw_table or "").strip()
-        if table_name and table_name not in entity_tables and table_name != matched_table:
+        if table_name and table_name not in entity_tables and table_name != allowed_matched_table:
             errors.append(f"数据库操作表名 {table_name or '空'} 不是实体定义的目标表。")
         column_name = str(operation.get("column") or "").strip()
         if column_name and column_name not in allowed_columns:

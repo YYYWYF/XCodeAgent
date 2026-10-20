@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import './databaseCheckPanel.test'
+import './databaseTableTabs.test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PreviewRuntimeBusinessError, leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
@@ -14,6 +16,9 @@ import {
   shouldShowPreviewServiceEmptyState
 } from '../src/renderer/src/components/BrowserPreviewPanel/serviceStatusPolicy'
 import { navigatePreviewToStartedProject } from '../src/renderer/src/utils/previewUrl'
+
+// 顺序运行会替换全局 fetch 的协议用例，避免两个异步模块的网络替身相互覆盖。
+await import('./databaseOperations.test')
 
 const originalFetch = globalThis.fetch
 Object.assign(globalThis, { window: { devAgentStudio: { agentBaseUrl: 'http://127.0.0.1:8000' } } })

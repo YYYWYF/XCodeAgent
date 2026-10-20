@@ -42,6 +42,19 @@ export type PreviewRepair = {
   iteration?: number
   codeChangeSets?: WorkspaceCodeChangeSet[]
 }
+export type PreviewDatabaseCheck = {
+  status: 'checking' | 'ready' | 'blocked' | 'error'
+  message: string
+  checkedAt?: string | null
+  entities: Array<{
+    entityId: string
+    label: string
+    tableName: string
+    status: 'SYNCED' | 'NOT_CREATED' | 'STRUCTURE_MISMATCH' | 'TABLE_CONFLICT' | 'CHECKING' | 'NOT_CHECKED'
+    differenceCount: number
+    differences: Array<{ category: string; target: string; expected: string | null; actual: string | null }>
+  }>
+}
 export type PreviewRuntimePayload = {
   status: 'in_progress' | 'completed' | 'failed'
   runtime?: {
@@ -51,6 +64,7 @@ export type PreviewRuntimePayload = {
     backend: PreviewServiceState
     previewUrl?: string
     failedStage?: string
+    databaseCheck?: PreviewDatabaseCheck
     repairAvailable?: boolean
     logs?: Record<'frontend' | 'backend', PreviewLog[]>
     maintenance?: { threadId: string; action: string }

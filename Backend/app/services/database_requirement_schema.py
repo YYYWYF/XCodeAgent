@@ -6,7 +6,7 @@ from typing import Any
 
 from app.services.entity_definitions import (
     entity_mysql_target_table,
-    entity_table_name,
+    entity_detail_table_name,
     normalize_entities,
 )
 from app.services.database_schema_summary import dict_items, text_items
@@ -85,8 +85,8 @@ def _merge_entity_target_tables(
                 continue
             if new_table_entity_ids is not None and entity_id not in new_table_entity_ids:
                 continue
-            table_name = entity_table_name(entity_id)
             entity_table = entity_mysql_target_table(entity)
+            table_name = entity_table["name"]
             table = _required_table(tables, table_name)
             table.setdefault("comment", entity_table.get("comment") or "")
             table.setdefault("primary_key", entity_table.get("primary_key") or [])
@@ -167,7 +167,7 @@ def _target_table_names(target: dict[str, Any]) -> list[str]:
             names.extend([matched_table, *binding_tables])
             continue
         if entity_id:
-            names.append(entity_table_name(entity_id))
+            names.append(entity_detail_table_name(entity_design))
     return list(dict.fromkeys(name for name in names if name))
 
 
@@ -202,7 +202,7 @@ def _merge_entity_design_columns(
                     "source_evidence": binding,
                 },
             )
-        if table_name == entity_table_name(entity_id):
+        if table_name == entity_detail_table_name(entity_design):
             for field in dict_items(entity_design.get("fields")):
                 field_name = str(field.get("name") or "").strip()
                 if not field_name:

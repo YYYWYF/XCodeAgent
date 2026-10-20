@@ -66,7 +66,7 @@ export function useDevelopmentArtifactDetail({
     })
   }
 
-  /** 点击实体只打开该实体的空白详情。 */
+  /** 点击实体打开其已保存的信息，仅更新本地浏览选择。 */
   const onEntitySelect: ApplicationOutlineProps['onEntitySelect'] = (entity) => {
     openDetail({ entityId: entity.id, label: entity.label })
   }

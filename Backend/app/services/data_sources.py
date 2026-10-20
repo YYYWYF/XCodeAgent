@@ -307,6 +307,7 @@ def _database_source_from_application(application: dict[str, Any] | None) -> dic
         if dbid_mode is not None or plant_mode is not None:
             raise DataSourceError("平台内置数据库不应同时包含外部连接配置。")
         source_base["mode"] = "builtin"
+        source_base["name"] = "平台内置数据库"
         return _normalize_source(source_base)
     if use_builtin is not False:
         if dbid_mode is None and plant_mode is None:
@@ -601,7 +602,7 @@ def _public_source(source: dict[str, Any]) -> DataSourcePublic:
         return DatabaseSourcePublic(
             type="database",
             id=str(source["id"]),
-            name=str(source["name"]),
+            name="平台内置数据库" if source.get("mode") == "builtin" else str(source["name"]),
             mode=str(source.get("mode") or "direct"),
             domain=source.get("domain"),
             port=source.get("port"),
@@ -703,11 +704,21 @@ def mutate_catalog(
         return DataSourceCatalogPublic(sources=[_public_source(item) for item in next_sources])
 
 
+def database_source_mode(workspace_root: str | Path, source_id: str) -> str:
+    """读取当前数据库来源模式，内置元数据不能落到外部凭据解析分支。"""
+
+    source = next((item for item in _read_catalog(workspace_root, source_id=source_id)
+                   if item.get("id") == source_id and item.get("type") == "database"), None)
+    if source is None:
+        raise DataSourceError("目标数据库数据源不存在。")
+    return str(source.get("mode") or "")
+
+
 def selected_tables(workspace_root: str | Path) -> list[dict[str, str]]:
-    """从数据库数据源对象投影已管理表清单，不读取或保存字段结构。"""
+    """外部库投影已添加表；内置库实时读取 SaaS 归属目录，不保存字段副本。"""
 
     with DATA_SOURCE_LOCK:
-        result: list[dict[str, str]] = []
+        sources: list[dict[str, Any]] = []
         # 先读轻量索引，再按数据库 ID 读取详情，避免无关外部 API 的字段结构阻塞表清单。
         summaries = _read_catalog(workspace_root, detail=False)
         for summary in summaries:
@@ -720,16 +731,32 @@ def selected_tables(workspace_root: str | Path) -> list[dict[str, str]]:
             )
             if source is None:
                 continue
-            schema = str(source.get("schema") or "")
-            for managed in source.get("managedTables") or []:
-                if str(managed.get("table") or ""):
-                    result.append({
-                        "sourceId": str(source["id"]),
-                        "schema": schema,
-                        "table": str(managed["table"]),
-                        "description": str(managed.get("description") or ""),
-                    })
-        return sorted(result, key=lambda item: (item["sourceId"], item["table"]))
+            sources.append(source)
+    # 全局锁只保护本地目录快照；SaaS 请求不能阻塞其他应用的外置库操作。
+    result: list[dict[str, str]] = []
+    for source in sources:
+        if source.get("mode") == "builtin":
+            from app.services.managed_database_metadata import read_managed_tables
+
+            metadata = read_managed_tables(workspace_root, str(source["id"]))
+            with DATA_SOURCE_LOCK:
+                current = next((item for item in _read_catalog(workspace_root, source_id=str(source["id"]))
+                                if item.get("id") == source["id"]), None)
+                if current != source:
+                    raise DataSourceError("读取期间数据源配置已变化，请刷新数据表。")
+            result.extend({"sourceId": str(source["id"]), "schema": "", "table": item["name"],
+                           "description": item["description"]} for item in metadata["tables"])
+            continue
+        schema = str(source.get("schema") or "")
+        for managed in source.get("managedTables") or []:
+            if str(managed.get("table") or ""):
+                result.append({
+                    "sourceId": str(source["id"]),
+                    "schema": schema,
+                    "table": str(managed["table"]),
+                    "description": str(managed.get("description") or ""),
+                })
+    return sorted(result, key=lambda item: (item["sourceId"], item["table"]))
 
 
 def change_selected_tables(
@@ -747,6 +774,8 @@ def change_selected_tables(
         source = next((item for item in sources if str(item.get("id")) == source_id), None)
         if source is None or source.get("type") != "database":
             raise DataSourceError("目标数据源不是数据库或不存在。")
+        if source.get("mode") == "builtin":
+            raise DataSourceError("平台内置数据库的表由实体建表维护，无需手动添加或移除。")
         managed = list(source.get("managedTables") or [])
         requested = list(dict.fromkeys(tables))
         if remove:

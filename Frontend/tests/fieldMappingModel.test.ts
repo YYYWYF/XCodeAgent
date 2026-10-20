@@ -5,6 +5,20 @@ import { allowedFilterOperators, defaultDatabaseOperation, defaultDatabaseUsageF
 import { inferSelection, resetDraftForDatabaseOperation } from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/model'
 import { valueSummary } from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/valueRules'
 
+/** 内置表使用完整物理表名和空 Schema，写入选择仍能恢复并通过字段身份校验。 */
+test('builtin table writes preserve empty schema without losing selection', () => {
+  const body = field('request_body', 'name')
+  const draft: WorkflowApiDesignDraft = {
+    apiContractId: 'orders', endpointId: 'create', databaseOperation: 'create',
+    fieldMappings: [{ endpointField: body, mappingType: 'business_description', businessDescription: '写入名称' }],
+    databaseWrites: [{ sourceType: 'database', sourceId: 'application-database', schema: '',
+      table: '12ab34cd56ef_orders', column: 'name', type: 'varchar(255)',
+      right: { kind: 'endpoint', endpointField: body } }]
+  }
+  assert.deepEqual(inferSelection(draft).selection, { sourceType: 'database', sourceId: 'application-database', schema: '', table: '12ab34cd56ef_orders' })
+  assert.equal(validateApiDesignDraft(draft)['__databaseWrite:0'], undefined)
+})
+
 /** 构造用于验证 CRUD 切换的请求字段。 */
 function field(location: WorkflowApiField['location'], path: string): WorkflowApiField {
   return { nodeType: 'endpoint_field', id: `${location}:${path}`, side: 'request', location, path, type: 'string', required: true, description: '' }

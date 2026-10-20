@@ -87,6 +87,10 @@ class Settings:
     template_package_max_files: int = 10000
     template_package_max_extracted_bytes: int = 524288000
     template_reconcile_enabled: bool = True
+    # SaaS 注册只在启用模拟数据库时使用，服务密钥不进入工作区或前端配置。
+    managed_database_base_url: str = "http://127.0.0.1:18081"
+    managed_database_service_key: str = field(default="", repr=False)
+    managed_database_timeout_seconds: float = 15.0
     git_username: str = ""
     git_token: str = ""
 
@@ -241,6 +245,13 @@ class Settings:
             ),
             template_reconcile_enabled=_env_bool(
                 "DEVAGENTSTUDIO_TEMPLATE_RECONCILE_ENABLED", default=True
+            ),
+            managed_database_base_url=os.getenv(
+                "DEVAGENTSTUDIO_MANAGED_DATABASE_BASE_URL", "http://127.0.0.1:18081"
+            ).rstrip("/"),
+            managed_database_service_key=os.getenv("MANAGED_DATABASE_SERVICE_KEY", ""),
+            managed_database_timeout_seconds=_env_float(
+                "DEVAGENTSTUDIO_MANAGED_DATABASE_TIMEOUT_SECONDS", default=15.0, minimum=0.1
             ),
             git_username=os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", ""),
             git_token=os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", ""),

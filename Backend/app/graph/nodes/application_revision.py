@@ -14,12 +14,16 @@ from app.agents.main.planner import plan_project_with_chat_model
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.application_config import read_application_config
+from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.application_revision_lifecycle import (
     discard_active_revision,
     issue_revision_continuation,
     update_active_revision_progress,
 )
 from app.services.api_contract_validation import validate_api_contract_consistency
+from app.services.entity_display_language import validate_entity_display_language
+from app.services.data_source_policy import uses_builtin_database
 from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
@@ -265,16 +269,17 @@ def _create_technical_plan_draft(
         **requirement_spec,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
-        "application_config": _load_json_object(workspace / WORKSPACE_ARTIFACT_DIR / "application.json"),
+        "application_config": read_application_config(workspace),
         "planning_adjustment_request": revision_request or active.request,
     }
     artifact = plan_project_with_chat_model(
         technical_input,
         existing_plan=existing,
     )
+    artifact = bind_plan_entity_tables(artifact, technical_input["application_config"])
     artifact = attach_page_implementation_contracts(artifact, product_plan, ui_designs)
     artifact["confirmation_status"] = "pending_user_confirmation"
-    _validate_technical_plan(artifact, requirement_spec, product_plan, ui_designs)
+    _validate_technical_plan(artifact, requirement_spec, product_plan, ui_designs, technical_input["application_config"])
     markdown = render_project_plan_markdown(artifact)
     based_on_paths = {
         "product-plan": plans / "product-plan.json",
@@ -340,6 +345,7 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
             )
         )
         synchronized.pop("basedOn", None)
+        synchronized = bind_plan_entity_tables(synchronized, read_application_config(workspace))
         return attach_page_implementation_contracts(
             synchronized,
             product_plan,
@@ -362,6 +368,7 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
             requirement_spec,
             product_plan,
             ui_designs,
+            read_application_config(workspace),
         ),
     )
 
@@ -371,6 +378,7 @@ def _validate_technical_plan(
     requirement_spec: dict[str, Any],
     product_plan: dict[str, Any],
     ui_designs: dict[str, Any],
+    application: dict[str, Any],
 ) -> None:
     """复用当前 TechnicalPlan/PIC 校验集合，任何错误都阻止 canonical 提交。"""
 
@@ -385,6 +393,7 @@ def _validate_technical_plan(
         *validate_api_contract_consistency(runtime),
         *validate_project_plan_datasource_policy(runtime),
         *validate_technical_plan_api_contracts(artifact),
+        *validate_entity_display_language(artifact, builtin=uses_builtin_database(application)),
         *validate_page_implementation_contracts(artifact, product_plan, ui_designs),
     ]
     if errors:

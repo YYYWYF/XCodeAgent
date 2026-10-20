@@ -1,6 +1,6 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
-import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle, ManagedDatabaseRegistration } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 import type { RepositoryBranchOutcome } from './repositoryBranch'
 
@@ -16,7 +16,10 @@ type ApplicationLifecyclePayload = {
     | 'retry_bootstrap_template_generation'
     | 'workspace_attach'
     | 'prepare_session_deletion'
+    | 'register_managed_database'
   lifecycle?: ApplicationLifecycle
+  managedDatabase?: ManagedDatabaseRegistration
+  configRevision?: number
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
   repositoryBranch?: RepositoryBranchOutcome
   error?: { type?: string; message?: string }
@@ -167,6 +170,31 @@ export async function createApplicationLifecycle(
     application.id,
     threadId
   )
+}
+
+/** 通过 AG-UI 注册模拟数据库，使用已落盘的 SaaS 身份继续后续规划。 */
+export async function registerManagedDatabaseApplication(
+  application: ApplicationConfig,
+  threadId: string
+): Promise<ApplicationConfig> {
+  if (application.datasource.type !== 'database' || application.datasource.db?.useBuiltin !== true) {
+    return application
+  }
+  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
+  const payload = await runApplicationLifecycleRequest(threadId, {
+    action: 'register_managed_database',
+    workspaceRoot: application.workspaceRoot,
+    application: { id: application.id, appName: application.appName }
+  })
+  assertApplicationLifecycleOwnership(payload.lifecycle, application.id, threadId)
+  if (payload.managedDatabase?.status !== 'REGISTERED' || !Number.isInteger(payload.configRevision)) {
+    throw new Error('模拟数据库注册未返回完整绑定。')
+  }
+  return {
+    ...application,
+    managedDatabase: payload.managedDatabase,
+    configRevision: payload.configRevision!
+  }
 }
 
 // 先接管可能中断的 Workspace，再读取权威生命周期，并合并 StrictMode 等并发请求。

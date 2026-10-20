@@ -1789,6 +1789,13 @@ def create_technical_plan(
         else datasource_type_from_artifact(spec, fallback="database")
     )
     entities = _technical_entities(agent_plan)
+    # 创建与修订使用上游从 application.json 注入的配置，模型不决定应用前缀。
+    if isinstance(spec.get("application_config"), dict):
+        from app.services.entity_table_binding import bind_plan_entity_tables
+
+        entities = bind_plan_entity_tables(
+            {"entities": entities}, spec["application_config"],
+        )["entities"]
     contract_sources = [
         {
             "id": "unbound",

@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
 import { previewServiceActionAvailability } from './serviceStatusPolicy'
+import DatabaseCheckPanel from './DatabaseCheckPanel'
 import './ServiceStatusDrawer.less'
 
 export type ServiceStatusControl = {
@@ -26,6 +27,8 @@ export type ServiceStatusControl = {
   blockedReason: string
   onRestart: () => void
   onDiagnose: () => void
+  showDatabaseCheck?: boolean
+  onOpenEntity?: (entityId: string) => void
 }
 
 type ServiceLayer = 'frontend' | 'backend'
@@ -47,12 +50,14 @@ function serviceLabel(layer: ServiceLayer): string {
 }
 
 /** 返回服务层的说明，帮助用户在没有地址或失败时快速判断下一步。 */
-function serviceHint(layer: ServiceLayer, status: PreviewServiceState['status']): string {
+function serviceHint(layer: ServiceLayer, status: PreviewServiceState['status'], resourceFailure: boolean): string {
   if (status === 'skipped')
     return layer === 'backend' ? '当前项目无需启动后端进程' : '等待前端运行时就绪'
   if (status === 'starting') return '正在执行依赖、构建与就绪检测'
   if (status === 'running') return '进程已受控运行，可从预览地址访问'
-  if (status === 'failed') return '请查看本次启动日志，必要时诊断并修复'
+  if (status === 'failed') return resourceFailure
+    ? '请先处理实体表或内置数据库配置，再重新启动'
+    : '请查看本次启动日志，必要时诊断并修复'
   return '尚未建立本次启动进程'
 }
 
@@ -123,6 +128,12 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
     setFollowing(true)
   }
 
+  /** 关闭服务抽屉后定位实体，只改变浏览选择，不执行建表或推进工作流。 */
+  const openEntity = (entityId: string): void => {
+    props.setOpen(false)
+    props.onOpenEntity?.(entityId)
+  }
+
   return (
     <Drawer
       title={
@@ -174,7 +185,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                   <div className="preview-service-card__meter" aria-hidden="true">
                     <span />
                   </div>
-                  <p className="preview-service-card__hint">{serviceHint(layer, status)}</p>
+                  <p className="preview-service-card__hint">{serviceHint(layer, status, layer === 'backend' && runtime?.failedStage === 'backend_database_resource')}</p>
                   <div className="preview-service-card__endpoint">
                     <span>服务端口</span>
                     {port ? (
@@ -311,6 +322,8 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
             </div>
           )}
         </section>
+        {props.showDatabaseCheck && <DatabaseCheckPanel report={runtime?.databaseCheck}
+          onOpenEntity={props.onOpenEntity ? openEntity : undefined} />}
       </div>
     </Drawer>
   )

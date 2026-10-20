@@ -1,6 +1,6 @@
 const DATA_SOURCES_CHANGED_EVENT = 'devagentstudio-data-sources-changed'
 
-/** 仅在数据源变更已成功保存后通知同一窗口中的工作区读取者。 */
+/** 数据源保存或实体表完成变更后，通知同一工作区重新读取真实目录和字段。 */
 export function notifyDataSourcesChanged(workspaceRoot: string): void {
   window.dispatchEvent(new CustomEvent(DATA_SOURCES_CHANGED_EVENT, { detail: { workspaceRoot } }))
 }

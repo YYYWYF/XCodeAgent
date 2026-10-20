@@ -52,6 +52,8 @@ from app.protocols.data_sources import data_sources_capabilities
 from app.protocols.endpoint_designs import endpoint_designs_capabilities
 from app.routes.data_sources import data_sources_router
 from app.routes.endpoint_designs import endpoint_designs_router
+from app.routes.entity_tables import entity_tables_router
+from app.protocols.entity_tables import entity_tables_capabilities
 from app.protocols.revision_preview import (
     build_revision_preview_ag_ui_stream,
     revision_preview_capabilities,
@@ -134,6 +136,7 @@ app = FastAPI(
 )
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
+app.include_router(entity_tables_router)
 
 
 class ApprovalActionRequest(BaseModel):
@@ -172,6 +175,7 @@ async def health() -> dict[str, object]:
             "preview_runtime": preview_runtime_capabilities(),
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
+            "entity_tables": entity_tables_capabilities(),
             "code_changes": code_changes_capabilities(),
             "revision_preview": revision_preview_capabilities(),
             "version_control": version_control_capabilities(),

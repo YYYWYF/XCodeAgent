@@ -68,7 +68,7 @@ export function inferSelection(draft: WorkflowApiDesignDraft): { selection: Bind
     selections.set(selectionKey(target), target)
   }
   for (const write of draft.databaseWrites || []) {
-    if (write.sourceType !== 'database' || !write.sourceId || !write.schema || !write.table) continue
+    if (write.sourceType !== 'database' || !write.sourceId || !write.table) continue
     const target: BindingSelection = {
       sourceType: 'database', sourceId: write.sourceId, schema: write.schema, table: write.table
     }

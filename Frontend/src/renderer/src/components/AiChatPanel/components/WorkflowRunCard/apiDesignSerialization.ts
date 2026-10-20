@@ -418,7 +418,7 @@ export function validateApiDesignDraft(draft: WorkflowApiDesignDraft): ApiDesign
   const writeColumns = new Set<string>()
   databaseWrites.forEach((write, index) => {
     const rowKey = `__databaseWrite:${index}`
-    if (!write.column || !write.sourceId || !write.schema || !write.table) {
+    if (!write.column || !write.sourceId || !write.table) {
       errors[rowKey] = '请先选择当前数据表中的目标字段。'
       return
     }
@@ -596,7 +596,7 @@ export function databaseQueryPreview(query: WorkflowApiDatabaseQuery): string {
 /** 把数据库写入列和值来源转换为简短预览。 */
 export function databaseWritePreview(write: WorkflowApiDatabaseWriteDraft): string {
   const right = valueSummary(write.right)
-  return `${right} → ${write.schema}.${write.table}.${write.column || '待选字段'}`
+  return `${right} → ${[write.schema, write.table, write.column || '待选字段'].filter(Boolean).join('.')}`
 }
 
 /** 返回草稿中所有已配置字段的可读数据流。 */

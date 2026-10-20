@@ -77,6 +77,8 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
     from app.agents.repair_planner import plan_build_failure_repair_with_repair_planner_agent
     # 诊断使用实时校准后的失败事实，避免持久记录仍为 running 时把成功摘要交给模型。
     record = runtime_snapshot(workspace, logs=False)
+    if record.get("failedStage") == "backend_database_resource":
+        return {**previous, "status": "failed", "message": "当前失败来自数据库资源，请先处理实体表、SaaS 或连接配置，再重新启动；无需修改业务代码。"}
     evidence = {"launch": record, "logs": read_logs(workspace), "validation": previous.get("validation")}
     iteration = int(previous.get("iteration", 0))
     if iteration >= 3:

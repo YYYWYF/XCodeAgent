@@ -1,5 +1,6 @@
 import {
   CaretDownOutlined,
+  DatabaseOutlined,
   FilterOutlined,
   LockOutlined,
   SearchOutlined
@@ -56,17 +57,21 @@ export default function ApplicationOutline({
   developmentArtifacts,
   currentBranch,
   apiContracts = [],
+  entities = [],
   onApiEndpointSelect,
+  onEntitySelect,
   onPageSelect,
   outlineLocked,
   pages,
   pageTree,
   selectedApiEndpointKey,
+  selectedEntityId,
   selectedPageId
 }: ApplicationOutlineProps): ReactElement {
   const [outlineQuery, setOutlineQuery] = useState('')
   const [pagesExpanded, setPagesExpanded] = useState(true)
   const [apiExpanded, setApiExpanded] = useState(true)
+  const [entitiesExpanded, setEntitiesExpanded] = useState(true)
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
     () => new Set()
   )
@@ -90,7 +95,7 @@ export default function ApplicationOutline({
           })),
     [pageTree, pages]
   )
-  const selectedKey = selectedApiEndpointKey
+  const selectedKey = selectedApiEndpointKey || selectedEntityId
     ? ''
     : containsMenuKey(pageItems, selectedPageId)
       ? selectedPageId
@@ -118,6 +123,12 @@ export default function ApplicationOutline({
       return endpoints.length > 0 ? [{ ...contract, endpoints }] : []
     })
   }, [apiContracts, outlineQuery])
+  const query = outlineQuery.trim().toLocaleLowerCase()
+  const visibleEntities = entities.filter((entity) =>
+    [entity.id, entity.label, entity.purpose].some((value) =>
+      value.toLocaleLowerCase().includes(query)
+    )
+  )
   /** 独立切换一个 API contract 分组，避免多个资源同时收起或展开。 */
   const handleApiContractToggle = (contractId: string): void => {
     setCollapsedApiContractIds((current) => {
@@ -138,10 +149,10 @@ export default function ApplicationOutline({
         <div className={cx('session-outline-content')}>
           <Input
             allowClear
-            aria-label="搜索页面或接口"
+            aria-label="搜索页面、接口或实体"
             className={cx('session-search')}
             onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面或接口"
+            placeholder="搜索页面、接口或实体"
             prefix={<SearchOutlined />}
             value={outlineQuery}
           />
@@ -250,8 +261,41 @@ export default function ApplicationOutline({
                 </div>
               ) : null}
             </section>
-
-
+            <section className={cx('outline-section')}>
+              <button
+                aria-expanded={entitiesExpanded}
+                className={cx('outline-section-heading')}
+                onClick={() => setEntitiesExpanded((current) => !current)}
+                type="button"
+              >
+                <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
+                <span>实体</span>
+                <span className={cx('development-count')}>{entities.length}</span>
+              </button>
+              {entitiesExpanded ? (
+                <div className={cx('api-list')}>
+                  {visibleEntities.map((entity) => (
+                    <button
+                      aria-current={selectedEntityId === entity.id ? 'true' : undefined}
+                      aria-label={`${entity.label}，${entity.id}`}
+                      className={cx('api-row', 'entity-row', selectedEntityId === entity.id && 'selected')}
+                      key={entity.id}
+                      onClick={() => onEntitySelect(entity)}
+                      title={entity.purpose}
+                      type="button"
+                    >
+                      <DatabaseOutlined className={cx('api-endpoint-icon')} />
+                      <span className={cx('api-copy')}><strong>{entity.label}</strong></span>
+                    </button>
+                  ))}
+                  {visibleEntities.length === 0 ? (
+                    <div className={cx('outline-empty')}>
+                      {entities.length === 0 ? '当前计划中暂无实体' : '没有匹配的实体'}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
           </div>
         </div>
         {outlineLocked ? (

@@ -70,7 +70,7 @@ _CLEARABLE_DIRS = {
 # 发起新迭代时清空的 .devagentstudio 顶层文件（除保留项外）。
 #
 # 注意这是一份**显式清单**：没列进来的文件一律保留。`iteration-artifacts.json`
-# （每轮的页面计划/设计事实）正是靠这一点跨迭代存活 —— 它是版本维度的历史，
+# （每轮的页面计划/设计事实）及 database-deliveries.json（已交付结构基线）靠这一点跨迭代存活，
 # 清了就没法回答"这个产物是哪一轮做的"。别把它加进来。
 _CLEARABLE_FILES = {
     "application-lifecycle.json",

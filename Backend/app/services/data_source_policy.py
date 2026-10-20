@@ -18,6 +18,25 @@ class DataSourcePolicyError(ValueError):
     """表示应用数据源配置不符合当前正式数据源策略。"""
 
 
+def uses_builtin_database(application: dict[str, Any]) -> bool:
+    """仅由权威应用配置判断内置模式，不根据表名或注册残留字段推断。"""
+
+    datasource = application.get("datasource")
+    database = datasource.get("db") if isinstance(datasource, dict) else None
+    return bool(isinstance(datasource, dict) and datasource.get("type") == "database"
+                and isinstance(database, dict) and database.get("useBuiltin") is True)
+
+
+def workspace_uses_builtin_database(workspace_root: str | Path | None) -> bool:
+    """从当前应用配置判断内置模式；尚未初始化配置的工作区不启用内置规则。"""
+
+    from app.services.database_credentials import load_application_json
+
+    if not workspace_root or not (Path(workspace_root) / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
+        return False
+    return uses_builtin_database(load_application_json(workspace_root))
+
+
 def read_application_datasource_type(workspace_root: str | Path) -> DatasourceType:
     """从工作区 application.json 读取唯一权威的数据源类型。"""
 

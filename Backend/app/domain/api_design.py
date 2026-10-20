@@ -175,7 +175,8 @@ class DatabaseBinding(ApiDesignModel):
     """保存单表身份，即使返回字段全部为业务生成仍能恢复选择。"""
     source_type: Literal["database"] = Field(alias="sourceType")
     source_id: str = Field(alias="sourceId", min_length=1, max_length=128)
-    schema_name: str = Field(alias="schema", min_length=1, max_length=256)
+    # 内置来源留空，由 SaaS 固定挂载解析；外部来源在确认时核对实际 Schema。
+    schema_name: str = Field(alias="schema", max_length=256)
     table: str = Field(min_length=1, max_length=256)
 
 

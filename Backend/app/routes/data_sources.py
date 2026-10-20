@@ -16,6 +16,20 @@ from app.protocols.data_sources import (
 data_sources_router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 
 
+@data_sources_router.post("/database-rows")
+async def database_rows(input_data: dict[str, Any] = Body(...), accept: Optional[str] = Header(default="text/event-stream")) -> StreamingResponse:
+    """分页读取内置表数据，不进入主工作流或执行写入。"""
+
+    return _data_source_response(action="database_rows", input_data=input_data, accept=accept)
+
+
+@data_sources_router.post("/database-operations")
+async def database_operations(input_data: dict[str, Any] = Body(...), accept: Optional[str] = Header(default="text/event-stream")) -> StreamingResponse:
+    """读取当前内置表的最近操作，不触发操作重放。"""
+
+    return _data_source_response(action="database_operations", input_data=input_data, accept=accept)
+
+
 @data_sources_router.post("/selected-tables")
 async def selected_tables(
     input_data: dict[str, Any] = Body(...),

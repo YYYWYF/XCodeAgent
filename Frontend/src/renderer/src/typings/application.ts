@@ -108,10 +108,17 @@ export interface ApplicationAuthorizationSeed {
   initialAdministratorSubjects: string[]
 }
 
+/** 保存 SaaS 返回的应用身份，未知或在途状态禁止再次创建。 */
+export type ManagedDatabaseRegistration =
+  | { status: 'REGISTERED'; datasourceKey: string; datasourceId: number }
+  | { status: 'REGISTERING' | 'FAILED' | 'UNKNOWN' }
+
 export interface ApplicationSchemaConfig {
   schemaVersion: 6
   /** 标识 application.json 的当前配置事实版本，供规划和模板链路检测过期产物。 */
   configRevision: number
+  /** 只保存注册状态与固定绑定，不包含服务密钥和数据库凭据。 */
+  managedDatabase?: ManagedDatabaseRegistration
   appName: string
   appIcon: string
   senario: string

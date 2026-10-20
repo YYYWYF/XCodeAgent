@@ -19,8 +19,11 @@ from app.services.backend_launch_support import (
 from app.services.backend_startup_diagnostics import (
     OUTPUT_LIMIT, read_log_tail, redact_startup_text,
     sanitize_startup_log, startup_root_cause, startup_source_fingerprint,
+    database_resource_failure,
 )
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.managed_database_runtime import ManagedDatabaseStartupError, prepare_managed_startup
+from app.services.runtime_log_redaction import attach_redacted_logs
 
 BACKEND_STARTUP_TIMEOUT_SECONDS = 60
 BACKEND_STARTUP_STABILITY_SECONDS = 3
@@ -89,6 +92,20 @@ def run_backend_startup_check(
     maven_command: str,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    """与实体重建共用工作区启动锁，覆盖检查、创建临时 Java 及退出回收。"""
+
+    from app.services.backend_process_registry import backend_launch_lock
+
+    with backend_launch_lock(root):
+        return _run_backend_startup_check_locked(root=root, backend_root=backend_root, log_root=log_root,
+                                                run_id=run_id, maven_command=maven_command, on_progress=on_progress)
+
+
+def _run_backend_startup_check_locked(
+    *, root: Path, backend_root: Path, log_root: Path, run_id: str,
+    maven_command: str,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     """启动本轮构建产物并回收进程，将结构化错误与独立日志交给现有质量门禁。"""
     result: dict[str, Any] = {
         "id": CHECK_ID, "name": CHECK_NAME, "layer": "backend", "language": "java",
@@ -109,10 +126,15 @@ def run_backend_startup_check(
         "started_at": datetime.now(UTC).isoformat(),
     }
     category = "backend_startup"
+    log_threads = []
+    snapshot = None
     try:
-        environment, config_error = _backend_runtime_environment(root)
-        if config_error:
-            raise RuntimeError(f"后端启动配置不可用：{config_error}")
+        snapshot = prepare_managed_startup(root)
+        # 外置库仍在检查 Java/JAR 前解析连接配置，保持原有失败次序与诊断路径。
+        if snapshot is None:
+            environment, config_error = _backend_runtime_environment(root)
+            if config_error:
+                raise RuntimeError(f"后端启动配置不可用：{config_error}")
         java = shutil.which("java")
         if not java:
             raise RuntimeError("未找到 Java 命令：java。")
@@ -135,6 +157,11 @@ def run_backend_startup_check(
             jar, _candidates = _find_backend_snapshot_jar(backend_root / "target")
         if jar is None or _jar_has_main_class(jar) is not True:
             raise RuntimeError("后端 JAR 损坏或缺少可执行 Main-Class。")
+        if snapshot is not None:
+            environment, config_error = _backend_runtime_environment(root, managed_snapshot=snapshot)
+            if config_error:
+                category = "backend_database_resource"
+                raise RuntimeError(f"后端启动配置不可用：{config_error}")
         argv = [java, "-jar", str(jar), "--server.address=127.0.0.1", "--server.port=0"]
         execution["argv"] = [java, "-jar", jar.relative_to(root).as_posix(), *argv[3:]]
         execution["cwd"] = jar.parent.relative_to(root).as_posix()
@@ -142,8 +169,11 @@ def run_backend_startup_check(
         with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
             with workspace_process_registry.managed_process(
                 argv, workspace=root, run_id=run_id, cwd=jar.parent, env=environment,
-                stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if snapshot is not None else stdout,
+                stderr=subprocess.PIPE if snapshot is not None else stderr, stdin=subprocess.DEVNULL,
             ) as process:
+                if snapshot is not None:
+                    log_threads = attach_redacted_logs(process, stdout_path, stderr_path, environment)
                 passed, timed_out, evidence = wait_for_startup(
                     process, stdout_path, stderr_path, run_id,
                 )
@@ -157,14 +187,20 @@ def run_backend_startup_check(
                 ):
                     result.update(passed=False, evidence="检测完成前进程已退出或当前运行已停止。")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        if isinstance(exc, ManagedDatabaseStartupError):
+            category = "backend_database_resource"
         result.update(passed=False, evidence=f"后端启动检查失败：{exc}")
         execution["error"] = str(exc)
     finally:
+        for thread in log_threads:
+            thread.join(timeout=2)
         # 源日志也清理，避免修复 Agent 通过虚拟路径读到数据库密码。
         for path in attempt_root.glob("*.log"):
             sanitize_startup_log(path, environment)
     stdout_text, stderr_text = read_log_tail(stdout_path), read_log_tail(stderr_path)
     root_cause = startup_root_cause(stdout_text, stderr_text) if not result["passed"] else ""
+    if snapshot is not None and not result["passed"] and database_resource_failure(stdout_text + stderr_text):
+        category = "backend_database_resource"
     result["evidence"] = redact_startup_text(
         str(result["evidence"]) + ("\n" + root_cause if root_cause else ""), environment,
     )[:OUTPUT_LIMIT]
@@ -181,7 +217,7 @@ def run_backend_startup_check(
         execution[key + "_virtual"] = execution[key]
     result["execution"] = execution
     result["source_fingerprint"] = startup_source_fingerprint(root)
-    result["repair_hints"] = _repair_hints(backend_root, root)
+    result["repair_hints"] = [] if category == "backend_database_resource" else _repair_hints(backend_root, root)
     _report(on_progress, result, "passed" if result["passed"] else "failed")
     return result
 

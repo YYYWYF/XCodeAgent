@@ -51,7 +51,7 @@ class ApiDesignTests(unittest.TestCase):
                 "tables": [{"table_name": "products", "comment": "商品"}],
                 "schemas": {"products": [{"column_name": "id", "column_type": "bigint"}]},
             },
-        ):
+        ), patch("app.services.data_sources.database_source_mode", return_value="direct"):
             result = load_database_columns("unused", "db", "products")
         self.assertEqual(result["tables"], [{"name": "products", "description": "商品"}])
         self.assertEqual(result["columns"][0]["name"], "id")

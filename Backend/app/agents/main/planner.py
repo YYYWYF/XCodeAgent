@@ -11,7 +11,7 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.frontend_page_tree import flatten_frontend_pages
-from app.services.data_source_policy import DatasourceType
+from app.services.data_source_policy import DatasourceType, uses_builtin_database
 from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
@@ -64,8 +64,8 @@ def _technical_planning_prompt(
     pages = [item for item in product_plan.get("pages", []) if isinstance(item, dict)]
     entity = {
         "id": "Order",
-        "name": "Order",
-        "description": "Order business entity",
+        "name": "订单",
+        "description": "记录订单业务信息。",
         "fields": [{"name": "order_number"}],
     }
     entity_id = str(entity.get("id") or "Order")
@@ -85,12 +85,12 @@ def _technical_planning_prompt(
             {
                 "id": entity_id,
                 "name": str(entity.get("name") or entity_id),
-                "description": str(entity.get("description") or "Business entity"),
+                "description": str(entity.get("description") or "记录订单业务信息。"),
                 "fields": [
                     {
                         "name": field_name,
-                        "label": "Business field",
-                        "description": "The business meaning of this field.",
+                        "label": "订单编号",
+                        "description": "用于唯一识别业务订单的编号。",
                         "type": "text",
                         "required": True,
                     }
@@ -221,7 +221,14 @@ def _technical_planning_prompt(
         "has a stable id, name, description, and fields. Each field contains name, label, description, "
         "type, and required; enum fields also contain enum_values. type is one of text, long_text, "
         "number, decimal, date, datetime, enum, or boolean. Field names use snake_case.\n"
-        "3. api_contracts is the interface contract collection. Each contract contains id, name, entity_ids, base_path, "
+        + ("Entity name and description, and every field label and description, must be non-empty Chinese text "
+        "containing at least one Chinese character. Technical abbreviations such as ID and API may appear within "
+        "Chinese text. Entity description becomes the database table COMMENT, and field label becomes the column "
+        "COMMENT; never use English-only prose for these display fields. Keep entity id, table_name, field name, "
+        "type, and API identifiers in their technical format. When revising an existing candidate, translate any "
+        "English-only display fields into Chinese while preserving their business meaning and technical identifiers.\n"
+        if uses_builtin_database(requirement_spec.get("application_config") or {}) else "")
+        + "3. api_contracts is the interface contract collection. Each contract contains id, name, entity_ids, base_path, "
         "authentication, schemas, and endpoints. entity_ids identifies every related business entity. A business "
         "Contract name is a concise user-facing Chinese name such as 订单管理; it is distinct from the stable id. "
         "Schema properties may use interface-specific names. Add entity_field_ref=<EntityId>.<field_name> when a "

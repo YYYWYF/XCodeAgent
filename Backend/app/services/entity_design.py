@@ -32,10 +32,10 @@ from app.services.entity_definitions import (
     data_source_type_label,
     database_operation_field_errors,
     entity_mysql_target_table,
-    entity_table_name,
     normalize_data_source_type,
     normalize_entity,
 )
+from app.services.entity_table_binding import bound_entity_table_errors
 
 
 ENTITY_DESIGN_STAGE_DATA_SOURCE_SELECTION = "data_source_selection"
@@ -652,7 +652,7 @@ def prepare_database_design(
     normalized = normalize_entity(entity, 0, with_types=True)
     entity_id = str(normalized.get("id") or "")
     target_table = entity_mysql_target_table(normalized)
-    target_name = str(target_table.get("name") or entity_table_name(entity_id))
+    target_name = target_table["name"]
     target_columns = {
         str(column.get("name") or ""): column
         for column in _dict_items(target_table.get("columns"))
@@ -1196,6 +1196,8 @@ def apply_complete_entity_design(
 def entity_design_validation_errors(
     project_plan: dict[str, Any],
     detail: dict[str, Any],
+    *,
+    builtin: bool = False,
 ) -> list[str]:
     """确定性校验实体设计：表名与字段必须落在实体定义内，不允许静默改实体。"""
 
@@ -1215,7 +1217,8 @@ def entity_design_validation_errors(
     source_type = normalize_data_source_type(detail.get("data_source_type"))
     errors: list[str] = []
     if source_type == "database":
-        errors.extend(_database_design_errors(project_plan, detail, allowed_columns, entity_fields))
+        errors.extend(bound_entity_table_errors(normalized, detail, builtin=builtin))
+        errors.extend(_database_design_errors(project_plan, detail, allowed_columns, entity_fields, builtin=builtin))
     elif source_type == "external_api":
         errors.extend(
             _external_api_design_errors(
@@ -1244,6 +1247,8 @@ def _database_design_errors(
     detail: dict[str, Any],
     allowed_columns: set[str],
     entity_fields: dict[str, dict[str, Any]],
+    *,
+    builtin: bool,
 ) -> list[str]:
     """校验数据库方案的绑定、差异与表操作是否落在实体定义内。"""
 
@@ -1262,7 +1267,7 @@ def _database_design_errors(
         "database_operations": operations,
         "matched_table": str(database_design.get("matched_table") or ""),
     }
-    errors.extend(database_operation_field_errors(project_plan.get("entities"), origin))
+    errors.extend(database_operation_field_errors(project_plan.get("entities"), origin, builtin=builtin))
     bindings = _dict_items(database_design.get("bindings"))
     table_generation = database_design.get("table_generation")
     generation_required = (

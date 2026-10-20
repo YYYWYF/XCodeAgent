@@ -432,11 +432,24 @@ def acceptance(state: ProjectState) -> dict:
 
 
 def finalize_project(state: ProjectState) -> dict:
-    """汇总工作流最终完成状态。"""
+    """用户验收通过后生成版本数据库脚本，再汇总工作流最终完成状态。"""
+
+    from app.services.database_delivery import export_database_scripts
+
+    if state.get("accepted") is not True and state.get("acceptance_decision") != "accepted":
+        return {"phase": "finalize_project", "status": "failed", "error": "请先明确通过项目验收，再生成交付产物。",
+                "message": "请先明确通过项目验收，再生成交付产物。"}
+    try:
+        scripts = export_database_scripts(workspace_root(state))
+    except (ValueError, OSError) as exc:
+        message = f"数据库脚本交付失败：{exc}"
+        return {"phase": "finalize_project", "status": "failed", "error": message, "message": message}
 
     return {
         "phase": "completed",
         "status": "completed",
+        "error": "",
+        "message": "项目验收完成，数据库脚本已生成：" + "、".join(scripts) if scripts else "项目验收完成。",
         "timeline": ["finalize_project"],
     }
 

@@ -120,11 +120,11 @@ test('开发产物接口树展示 Contract 和 Endpoint 名称并通过悬停提
   assert.match(html, /查询商品列表，GET \/api\/product/)
 })
 
-test('开发目录只呈现页面和 Endpoint，规划实体不显示为开发产物', () => {
+test('开发目录展示实体浏览入口并标记当前选中的实体', () => {
   const html = renderToStaticMarkup(
     <ApplicationOutline
       apiContracts={[]}
-      entities={[{ id: 'Order', label: '订单实体', purpose: '规划定义' }]}
+      entities={[{ id: 'Order', label: '订单实体', purpose: '规划定义', dataSourceType: 'database' }]}
       pages={[]}
       pageTree={[]}
       outlineLocked={false}
@@ -133,11 +133,12 @@ test('开发目录只呈现页面和 Endpoint，规划实体不显示为开发�
       selectedEntityId="Order"
       onPageSelect={() => undefined}
       onApiEndpointSelect={() => undefined}
-      onEntitySelect={() => assert.fail('实体不应提供开发入口')}
+      onEntitySelect={() => assert.fail('渲染时不应触发实体选择')}
     />
   )
   assert.match(html, /页面|接口/)
-  assert.doesNotMatch(html, /实体|Order/)
+  assert.match(html, /订单实体，Order/)
+  assert.match(html, /aria-current="true"/)
 })
 
 test('完成比例只统计页面和 Endpoint，实体状态不影响阶段准入', () => {

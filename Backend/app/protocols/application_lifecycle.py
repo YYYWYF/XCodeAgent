@@ -65,6 +65,7 @@ class ApplicationLifecycleAction(BaseModel):
         "cleanup_session_failed_executions",
         "prepare_session_deletion",
         "skip_entity_development",
+        "register_managed_database",
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
@@ -90,6 +91,8 @@ class ApplicationLifecycleAction(BaseModel):
             not str(self.entity_id or "").strip() or not str(self.reason or "").strip()
         ):
             raise ValueError("skip_entity_development 必须提供 entityId 和明确的跳过理由。")
+        if self.action == "register_managed_database" and self.application is None:
+            raise ValueError("注册模拟数据库必须提供当前应用身份。")
         return self
 
 
@@ -112,6 +115,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "cleanup_session_failed_executions",
             "prepare_session_deletion",
             "skip_entity_development",
+            "register_managed_database",
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
@@ -235,6 +239,12 @@ def build_application_lifecycle_ag_ui_stream(
                 ),
             )
             message = "应用生命周期已创建。"
+        elif request.action == "register_managed_database":
+            from app.protocols.managed_database_registration import register_managed_database_action
+
+            return await register_managed_database_action(
+                request.workspace_root, request.application.id,
+            )
         elif request.action == "get":
             from app.services.development_artifacts import refresh_development_artifacts
 

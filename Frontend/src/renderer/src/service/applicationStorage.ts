@@ -280,7 +280,16 @@ export async function saveWorkspaceApplicationConfig(
   if (!workspaceApi?.writeApplication) {
     throw new Error('当前环境不支持保存工作区 application.json')
   }
-  const result = await workspaceApi.writeApplication({ workspaceRoot, application })
+  // SaaS 身份只由后端注册动作写入；设置、分支和旧规划快照都必须保留磁盘事实。
+  const disk = await loadWorkspaceApplicationConfig(workspaceRoot)
+  const result = await workspaceApi.writeApplication({
+    workspaceRoot,
+    application: {
+      ...application,
+      managedDatabase: disk.managedDatabase,
+      configRevision: Math.max(application.configRevision, disk.configRevision)
+    }
+  })
   if (!isRecord(result.application)) {
     throw new Error('工作区 application.json 保存后格式无效')
   }

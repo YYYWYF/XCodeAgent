@@ -61,7 +61,7 @@ class DataSourcesServiceTests(unittest.TestCase):
 
         source = catalog.sources[0]
         self.assertEqual(source.id, "application-database")
-        self.assertEqual(source.name, "商品管理数据库")
+        self.assertEqual(source.name, "平台内置数据库")
         self.assertEqual(source.mode, "builtin")
         self.assertNotIn("revision", json.loads(self.data_sources_file().read_text(encoding="utf-8")))
         index_entry = json.loads(self.data_sources_file().read_text(encoding="utf-8"))["sources"][0]
@@ -145,14 +145,14 @@ class DataSourcesServiceTests(unittest.TestCase):
             {"appName": "原应用", "datasource": {"type": "database", "db": {"useBuiltin": True}}}
         )
         initial = public_catalog(self.workspace)
-        self.assertEqual([source.name for source in initial.sources], ["原应用数据库"])
+        self.assertEqual([source.name for source in initial.sources], ["平台内置数据库"])
         mutate_catalog(
             self.workspace,
             action="create",
             source={"type": "external_api", "name": "独立 API", "baseUrl": "https://example.com"},
         )
         catalog = public_catalog(self.workspace)
-        self.assertEqual([source.name for source in catalog.sources], ["原应用数据库", "独立 API"])
+        self.assertEqual([source.name for source in catalog.sources], ["平台内置数据库", "独立 API"])
 
         deleted = mutate_catalog(
             self.workspace,

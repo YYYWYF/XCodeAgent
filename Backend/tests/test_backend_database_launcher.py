@@ -123,7 +123,11 @@ class BackendDatabaseLauncherTests(unittest.TestCase):
             backend = workspace / "backend"
             backend.mkdir()
             (backend / "pom.xml").write_text("<project />", encoding="utf-8")
-            _write_application(workspace, use_builtin=True)
+            _write_application(workspace)
+            application_file = workspace / ".devagentstudio/application.json"
+            application = json.loads(application_file.read_text(encoding="utf-8"))
+            application["datasource"]["db"]["plantMode"]["schema"] = ""
+            application_file.write_text(json.dumps(application), encoding="utf-8")
             with (
                 patch(
                     "app.services.backend_project_launcher.shutil.which",
@@ -136,7 +140,25 @@ class BackendDatabaseLauncherTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["failed_stage"], "backend_database_config")
-        self.assertIn("平台内置数据库", result["message"])
+        self.assertIn("数据库配置", result["message"])
+        run.assert_not_called()
+        popen.assert_not_called()
+
+    def test_unreadable_application_is_config_failure_before_maven(self) -> None:
+        """应用配置损坏时不能在尚未确定模式前归类为 SaaS 资源错误。"""
+
+        with tempfile.TemporaryDirectory() as temporary_root:
+            workspace = Path(temporary_root)
+            backend = workspace / "backend"
+            backend.mkdir()
+            (backend / "pom.xml").write_text("<project />", encoding="utf-8")
+            _write_application(workspace)
+            (workspace / ".devagentstudio/application.json").write_text("{invalid-json", encoding="utf-8")
+            with patch("app.services.backend_project_launcher.shutil.which", side_effect=["/usr/bin/mvn", "/usr/bin/java"]), \
+                 patch("app.services.backend_project_launcher.subprocess.run") as run, \
+                 patch("app.services.backend_project_launcher.subprocess.Popen") as popen:
+                result = launch_backend_project(workspace)
+        self.assertEqual(result["failed_stage"], "backend_database_config")
         run.assert_not_called()
         popen.assert_not_called()
 

@@ -1247,6 +1247,11 @@ export default function AiChatPanel({
     setRightPanel,
     setRightPanelLayout
   })
+  /** 从启动检查定位当前应用的实体详情，不修改会话目标或自动发起实体开发。 */
+  const handleOpenDatabaseEntity = (entityId: string): void => {
+    const entity = developmentPlanningEntities.find((item) => item.id === entityId)
+    if (entity) artifactOutlineProps.onEntitySelect?.(entity)
+  }
   // 中间区卡片点"查看设计稿"时：切到右侧"UI设计稿"tab 并选中该页。
   const handleUiDesignActivePageChange = useCallback(
     (pageId: string) => {
@@ -5220,6 +5225,8 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              theme={theme}
+              useBuiltinDatabase={application.datasource.type === 'database' && application.datasource.db?.useBuiltin === true}
               onConfigureApi={(target) => handleOpenApiDesignConfig(target)}
               developmentArtifacts={applicationLifecycle?.developmentArtifacts}
               apiContracts={developmentPlanningApiContracts}
@@ -5350,7 +5357,9 @@ export default function AiChatPanel({
             }}
           />
           <BrowserPreviewPanel
-            serviceControl={previewRuntime.control}
+            serviceControl={{ ...previewRuntime.control,
+              showDatabaseCheck: application.datasource.type === 'database' && application.datasource.db?.useBuiltin === true,
+              onOpenEntity: handleOpenDatabaseEntity }}
             application={application}
             pages={displayedPlanningPages}
             requestKey={rightPanel.requestKey}

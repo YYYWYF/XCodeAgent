@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,10 @@ from app.services.backend_launch_support import (
     _run_backend_repackage,
 )
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.managed_database_runtime import ManagedDatabaseStartupError, prepare_managed_startup
+from app.services.database_credentials import DatabaseCredentialError
+from app.services.backend_startup_diagnostics import database_resource_failure, read_log_tail
+from app.services.preview_runtime_state import record_database_check
 from app.utils.subprocess_output import subprocess_output_text
 from app.utils.subprocess_platform import preview_process_creation_options
 
@@ -38,7 +43,7 @@ _BACKEND_PORT_PATTERN = re.compile(
 )
 
 
-def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
+def launch_backend_project(workspace_path: str | Path, *, on_progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """按普通工作目录构建并启动 Java 后端，不依赖 LangGraph 状态。"""
 
     root = Path(workspace_path).expanduser().resolve()
@@ -84,6 +89,7 @@ def launch_backend_project(workspace_path: str | Path) -> dict[str, Any]:
             runtime_root=runtime_root,
             maven_command=maven_command,
             java_command=java_command,
+            on_progress=on_progress,
         )
 
 
@@ -130,10 +136,21 @@ def _launch_backend_project_locked(
     runtime_root: Path,
     maven_command: str,
     java_command: str,
+    on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """在工作区锁内完成旧进程清理、Maven 构建和新 Java 进程启动。"""
 
-    runtime_environment, database_config_error = _backend_runtime_environment(root)
+    if on_progress:
+        on_progress("正在检查当前应用数据库配置与实体表结构…")
+    try:
+        managed_snapshot = prepare_managed_startup(root, on_readiness=lambda report: record_database_check(root, report))
+    except DatabaseCredentialError as exc:
+        return _failed_backend_launch(str(exc), root=root, backend_root=backend_root,
+                                      pom_path=pom_path, runtime_root=runtime_root,
+                                      failed_stage=("backend_database_resource" if isinstance(exc, ManagedDatabaseStartupError)
+                                                    else "backend_database_config"))
+    # 内置模式此时只检查结构，连接凭据延后到构建完成再获取。
+    runtime_environment, database_config_error = ({}, None) if managed_snapshot is not None else _backend_runtime_environment(root)
     if database_config_error:
         return _failed_backend_launch(
             f"当前应用数据库配置不可用于启动后端：{database_config_error}",
@@ -160,6 +177,8 @@ def _launch_backend_project_locked(
             prebuild_cleanup=prebuild_cleanup,
         )
 
+    if on_progress:
+        on_progress("数据库预检通过，正在构建后端…")
     build_result = _run_backend_build(
         maven_command=maven_command,
         workspace=root,
@@ -246,11 +265,25 @@ def _launch_backend_project_locked(
                 prebuild_cleanup=prebuild_cleanup,
             )
 
+    if managed_snapshot is not None:
+        if on_progress:
+            on_progress("正在复核实体表并获取内置数据库调试连接…")
+        runtime_environment, database_config_error = _backend_runtime_environment(
+            root, managed_snapshot=managed_snapshot, on_database_check=lambda report: record_database_check(root, report),
+        )
+        if database_config_error:
+            return _failed_backend_launch(database_config_error, root=root, backend_root=backend_root,
+                                          pom_path=pom_path, runtime_root=runtime_root,
+                                          failed_stage="backend_database_resource", build=build_result)
+
+    if on_progress:
+        on_progress("正在启动 Java 后端并检测服务就绪…")
     server_result, process = _start_backend_server(
         java_command=java_command,
         jar_path=jar_path,
         runtime_root=runtime_root,
         environment=runtime_environment,
+        **({"redact_output": True} if managed_snapshot is not None else {}),
     )
     if process is not None:
         register_backend_process(root, process)
@@ -277,12 +310,19 @@ def _launch_backend_project_locked(
         "ready_checked_at": datetime.now(UTC).isoformat(),
     }
     if not ready or not process_running:
+        if process is not None and returncode is not None and managed_snapshot is not None:
+            for thread in getattr(process, "_devagent_log_threads", []):
+                thread.join(timeout=2)
+        resource_failure = managed_snapshot is not None and database_resource_failure(
+            read_log_tail(runtime_root / "backend.stdout.log") + read_log_tail(runtime_root / "backend.stderr.log"))
         if returncode is not None:
             message = f"Java 后端进程已退出（退出码：{returncode}）。"
         elif process is None:
             message = "Java 后端启动命令执行失败。"
         else:
             message = "Java 后端就绪检查超时。"
+        if resource_failure:
+            message = "Java 无法连接平台内置数据库，请检查本机网络、数据库授权及 SaaS 调试账号配置后重新启动。"
         if process is not None:
             pid_file_value = server_result.get("pid_file")
             server["cleanup"] = terminate_backend_process(
@@ -296,7 +336,7 @@ def _launch_backend_project_locked(
             backend_root=backend_root,
             pom_path=pom_path,
             runtime_root=runtime_root,
-            failed_stage="backend_start",
+            failed_stage="backend_database_resource" if resource_failure else "backend_start",
             build=build_result,
             repackage=repackage_result,
             target_root=target_root,
@@ -473,6 +513,7 @@ def _start_backend_server(
     jar_path: Path,
     runtime_root: Path,
     environment: dict[str, str],
+    redact_output: bool = False,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """在 target 目录后台启动 Java JAR，并注入当前应用的数据库环境。"""
 
@@ -487,8 +528,8 @@ def _start_backend_server(
         process = subprocess.Popen(
             argv,
             cwd=str(jar_path.parent),
-            stdout=stdout,
-            stderr=stderr,
+            stdout=subprocess.PIPE if redact_output else stdout,
+            stderr=subprocess.PIPE if redact_output else stderr,
             stdin=subprocess.DEVNULL,
             env=environment,
             **preview_process_creation_options(),
@@ -511,6 +552,10 @@ def _start_backend_server(
         )
     stdout.close()
     stderr.close()
+    if redact_output:
+        from app.services.runtime_log_redaction import attach_redacted_logs
+
+        process._devagent_log_threads = attach_redacted_logs(process, stdout_path, stderr_path, environment)
     pid_path = runtime_root / "backend.pid"
     pid_path.write_text(str(process.pid), encoding="utf-8")
     return (

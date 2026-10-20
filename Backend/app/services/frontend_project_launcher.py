@@ -90,6 +90,7 @@ def launch_frontend_project(
     preview_url = _preview_url(scripts.get(script_name, ""))
     existing_server = None if force_restart else _reuse_ready_server(runtime_root, preview_url)
     if existing_server is not None:
+        preview_url = existing_server["preview_url"]
         return {
             **_base_launch_payload(
                 root=root,
@@ -187,8 +188,8 @@ def launch_frontend_project(
         stdout_offset=_stdout_offset,
         fallback_url=preview_url,
     )
-    if resolved_url != preview_url and _preview_is_ready(resolved_url):
-        preview_url = resolved_url
+    # 已发布的本轮地址是端口事实；HTTP 受限时也不能退回别的项目占用的默认端口。
+    preview_url = resolved_url
     returncode = process.poll() if process is not None else None
     process_running = process is not None and returncode is None
     launch_status = "running" if ready and process_running else "failed"
@@ -512,7 +513,13 @@ def _reuse_ready_server(runtime_root: Path, preview_url: str) -> dict[str, Any] 
         pid = int(pid_path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
-    if pid <= 0 or not _preview_is_ready(preview_url):
+    if pid <= 0 or not _pid_is_running(pid):
+        return None
+    stdout_log = runtime_root / "frontend.stdout.log"
+    if not _dev_server_log_is_ready(stdout_log, 0) or _dev_server_stderr_is_fatal(runtime_root / "frontend.stderr.log"):
+        return None
+    preview_url = _resolve_actual_preview_url(stdout_log, 0, preview_url)
+    if not _preview_is_ready(preview_url):
         return None
     return {
         "pid": pid,
@@ -566,9 +573,9 @@ def _resolve_actual_preview_url(
     except OSError:
         return fallback_url
 
-    match = _DEV_SERVER_URL_PATTERN.search(content)
-    if match:
-        return match.group(1).rstrip("/")
+    matches = _DEV_SERVER_URL_PATTERN.findall(content)
+    if matches:
+        return matches[-1].rstrip("/")
     return fallback_url
 
 
@@ -593,10 +600,11 @@ def _wait_until_ready(
             return False
         if _dev_server_stderr_is_fatal(stderr_log):
             return False
-        if _preview_is_ready(preview_url):
-            return True
         if stdout_log is not None and _dev_server_log_is_ready(stdout_log, stdout_offset):
-            return True
+            # 默认端口可能属于其他应用，只有本轮日志就绪后才探测它发布的地址。
+            actual_url = _resolve_actual_preview_url(stdout_log, stdout_offset, preview_url)
+            if _preview_is_ready(actual_url) or _dev_server_log_is_ready(stdout_log, stdout_offset):
+                return process.poll() is None
         time.sleep(SERVER_READY_INTERVAL_SECONDS)
     return False
 
@@ -627,10 +635,9 @@ def _dev_server_log_is_ready(stdout_log: Path, stdout_offset: int) -> bool:
         "compiled with warnings",
         "webpack compiled successfully",
         "you can now view",
-        "ready in",
-        "local:",
     )
-    return any(marker in content for marker in ready_markers)
+    # Vite 的 ready in 会早于 Local 地址输出，不能在地址发布之前放行。
+    return bool(_DEV_SERVER_URL_PATTERN.search(content)) or any(marker in content for marker in ready_markers)
 
 
 _FATAL_STDERR_PATTERNS = (
