@@ -83,6 +83,36 @@ export function developmentNextStep(
     // 当前规划线程由 lifecycle 证明归属，已显示的结束回执同样不能落入开发引导。
     if (workflow.state?.workflow_scope === 'application_planning' ||
         lifecycle?.initialization?.threadId === workflow.threadId) return undefined
+    const precedingUserMessage = messages
+      .slice(0, index)
+      .reverse()
+      .find((message) => message.role === 'user')
+    if (
+      workflow.summary.status === 'failed' &&
+      precedingUserMessage?.content.trim() === '继续已结束的任务。'
+    ) {
+      const archived = Object.values(lifecycle?.endedExecutions || {})
+        .filter(
+          (item) =>
+            item.execution.threadId === workflow.threadId &&
+            item.execution.status === 'stopped'
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(right.execution.updatedAt) - Date.parse(left.execution.updatedAt)
+        )[0]
+      // 恢复请求若在启动前失败，原归档仍是唯一权威入口；重建同一 Thread 的继续卡。
+      if (archived) {
+        return {
+          key: workflow.runId,
+          reason: 'ended',
+          endedRunId: archived.execution.runId,
+          workspaceUnchanged:
+            lifecycle?.endedExecutions?.[archived.execution.runId]?.workspaceUnchanged,
+          target: undefined
+        }
+      }
+    }
     if (isConversationWorkflow(workflow)) {
       // 已完成的闲聊/只读问答不消费引导；待确认修改、失败或暂停的对话应保留自己的当前入口。
       if (

@@ -280,6 +280,33 @@ function planningUserMessageText(answers: WorkflowClarificationAnswers): string 
   return lines.join('\n')
 }
 
+/** 把规划卡的结构化动作映射为可持久化的完成状态。 */
+function planningWorkflowCardResult(
+  answers: WorkflowClarificationAnswers
+): 'confirmed' | 'cancelled' | 'submitted' | undefined {
+  const revisionInteraction = answers.revision_draft_interaction
+  if (revisionInteraction && typeof revisionInteraction === 'object') {
+    if (revisionInteraction.action === 'confirm') return 'confirmed'
+    if (revisionInteraction.action === 'discard') return 'cancelled'
+    if (revisionInteraction.action === 'save' || revisionInteraction.action === 'revise') {
+      return 'submitted'
+    }
+  }
+
+  switch (answers.__applicationPlanningAction) {
+    case 'confirm':
+    case 'enter_planning':
+      return 'confirmed'
+    case 'answer':
+    case 'revise':
+    case 'ui_action':
+    case 'design_change':
+      return 'submitted'
+    default:
+      return undefined
+  }
+}
+
 const PLANNING_ANSWER_LABELS: Record<string, string> = {
   ui_design_confirmation: 'UI 设计稿确认',
   requirement_document_confirmation: '需求文档确认',
@@ -4553,6 +4580,36 @@ export default function AiChatPanel({
     }
   }
 
+  /** 把已提交的卡片结果写回来源消息，恢复会话时仍能显示最终状态。 */
+  const persistWorkflowCardResult = async (
+    sourceSession: typeof activeSession,
+    workflow: WorkflowRunPayload,
+    result: 'confirmed' | 'cancelled' | 'submitted'
+  ): Promise<void> => {
+    if (!sourceSession) return
+    const currentMessages = getSessionMessages(sourceSession.key)
+    let changed = false
+    const nextMessages = currentMessages.map((item) => {
+      if (item.role !== 'assistant' || item.workflow?.runId !== workflow.runId) return item
+      if (item.workflowCardResult === result) return item
+      changed = true
+      return { ...item, workflowCardResult: result }
+    })
+    if (!changed) return
+    setSessionMessages(sourceSession.key, nextMessages)
+    try {
+      await persistSession({
+        editorMode: sourceSession.editorMode,
+        messages: nextMessages,
+        sessionId: sourceSession.sessionId,
+        threadId: sourceSession.threadId,
+        revisionContext: sourceSession.revisionContext
+      })
+    } catch (error) {
+      message.warning(formatError(error, '工作流卡片状态保存失败'))
+    }
+  }
+
   /** 提交详细设计确认后进入 DAG/构建链路，停止使用详细设计生成进度遮罩。 */
   const handleSubmitWorkflowClarification = async (
     workflow: WorkflowRunPayload,
@@ -4573,6 +4630,8 @@ export default function AiChatPanel({
         return
       }
       const planningAnswers = ensureApplicationPlanningAction(workflow, answers)
+      const planningCardResult = planningWorkflowCardResult(planningAnswers)
+      const sourceSession = activeSession
       const revisionDraftAction =
         planningAnswers && typeof planningAnswers.revision_draft_interaction === 'object'
           ? String(
@@ -4748,6 +4807,8 @@ export default function AiChatPanel({
             planningNewRoundRef.current = false
             rollbackPlanningSubmission(planningSubmission)
             message.error(stageEntryOutcome.error.message)
+          } else if (stageEntryOutcome.status === 'completed' && planningCardResult) {
+            await persistWorkflowCardResult(sourceSession, workflow, planningCardResult)
           }
           return
         } else {
@@ -4761,8 +4822,13 @@ export default function AiChatPanel({
           )
         }
       }
-      void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec).catch(
-        (reason) => {
+      void onSubmitPlanningClarification(workflow, planningAnswers, editedRequirementSpec)
+        .then(async () => {
+          if (planningCardResult && !isUiDesignPageAction) {
+            await persistWorkflowCardResult(sourceSession, workflow, planningCardResult)
+          }
+        })
+        .catch((reason) => {
           if (reason instanceof ApplicationPlanningSubmissionNotCommittedError) {
             planningNewRoundRef.current = false
             rollbackPlanningSubmission(planningSubmission)
@@ -4788,8 +4854,20 @@ export default function AiChatPanel({
             persistPlanningSession(transaction.sessionKey)
           }
           message.error(formatError(reason, '后端服务暂时不可用，请重新同步后重试。'))
-        }
-      )
+        })
+      return
+    }
+    const revisionImpactDecision = answers.revision_impact_confirmation
+    if (revisionImpactDecision === 'approved' || revisionImpactDecision === 'rejected') {
+      const sourceSession = activeSession
+      const submitted = await handleSubmitClarification(workflow, answers)
+      if (submitted) {
+        await persistWorkflowCardResult(
+          sourceSession,
+          workflow,
+          revisionImpactDecision === 'approved' ? 'confirmed' : 'cancelled'
+        )
+      }
       return
     }
     await handleSubmitClarification(workflow, answers)
@@ -5208,6 +5286,12 @@ export default function AiChatPanel({
                   // 这里没有可等的 Promise，只能如实返回"还没提交"。
                   commitBeforeSend.requestAdvance(submit)
                 }}
+                onReviseConfirmedTechnicalPlan={
+                  isTechnicalPlanningPhase ? handleInitialProductConversationSend : undefined
+                }
+                reviseConfirmedTechnicalPlanDisabled={
+                  productConversationSendDisabled || workflowInputLocked
+                }
                 onStartIterationPlanning={async (request) => {
                   appendPlanningUserMessage({ design_change_request: request })
                   await onStartIterationPlanning(request)

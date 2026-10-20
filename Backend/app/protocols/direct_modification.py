@@ -63,7 +63,6 @@ CONVERSATION_EVENT_NAME = "conversation"
 CONVERSATION_STATE_KEY = "conversation"
 
 _DIRECT_CONFIRMATION_MODES = {
-    "implementation_fix_confirmation",
     "small_task_scope_confirmation",
 }
 
@@ -284,17 +283,9 @@ def conversation_capabilities() -> dict[str, Any]:
         "executionPolicy": {
             "subagentsEnabled": False,
             "todoPlanningEnabled": False,
-            "implementationFixConfirmation": {
-                "requiredOwners": ["frontend", "backend", "fullstack"],
-                "workspaceOwnerBypasses": True,
-                "mode": "implementation_fix_confirmation",
-            },
             "confirmationContinuation": {
                 "source": "server-checkpoint",
-                "modes": [
-                    "implementation_fix_confirmation",
-                    "small_task_scope_confirmation",
-                ],
+                "modes": ["small_task_scope_confirmation"],
                 "skips": ["scan_workspace_code", "classify_intent"],
             },
         },
@@ -361,9 +352,9 @@ def _direct_confirmation_continuation(
     if mode not in _DIRECT_CONFIRMATION_MODES:
         if decision == "rejected" and str(request.impact_interaction_id or "").strip():
             return None
-        raise ValueError("确认续跑找不到匹配的实现修改确认 checkpoint。")
+        raise ValueError("确认续跑找不到匹配的 SmallTask 范围确认 checkpoint。")
     if values.get("status") != "requires_user_input":
-        raise ValueError("实现修改确认已过期，不能继续写入。")
+        raise ValueError("SmallTask 范围确认已过期，不能继续写入。")
     if values.get("conversation_intent") != "implementation_fix":
         raise ValueError("确认 checkpoint 的修改意图已变化，不能继续写入。")
     owner = str(values.get("direct_modification_owner") or "").strip()
@@ -432,11 +423,6 @@ def _direct_confirmation_continuation(
         "fullstack": "execute_backend",
     }[owner]
     resume_node = owner_node
-    if (
-        mode == "implementation_fix_confirmation"
-        and values.get("change_impact_code_scan_required") is True
-    ):
-        resume_node = "scan_change_impact_code"
     continuation.update(
         {
             "status": "in_progress",

@@ -510,15 +510,10 @@ function smallTaskHandoffApproved(answers: ClarificationAnswers): boolean {
   return confirmationAnswerApproved(answers, 'small_task_handoff')
 }
 
-/** 判断用户是否确认继续执行前后端实现修复。 */
-function implementationFixConfirmationApproved(answers: ClarificationAnswers): boolean {
-  return confirmationAnswerApproved(answers, 'implementation_fix_confirmation')
-}
-
 /** 解析通用 yes/no 确认答案，兼容结构化单选和字符串答案。 */
 function confirmationAnswerApproved(
   answers: ClarificationAnswers,
-  key: 'small_task_handoff' | 'implementation_fix_confirmation'
+  key: 'small_task_handoff'
 ): boolean {
   const answer = answers[key]
   if (typeof answer === 'string') {
@@ -723,6 +718,7 @@ export function useWorkflowConversation({
   const connectionStateRef = useRef(connectionState)
   const planControlRequestRef = useRef<PlanControlRequestGuard>()
   const endingPlanRef = useRef(false)
+  const continuingEndedRunRef = useRef<string>()
   const [endingPlan, setEndingPlan] = useState(false)
   const runFinalizationRef = useRef<Record<string, { promise: Promise<void>; resolve: () => void }>>({})
   const activePlanControlContextRef = useRef<ActivePlanControlContext>()
@@ -1878,7 +1874,6 @@ export function useWorkflowConversation({
     const originalRequest = workflowOriginalRequest(workflow)
     const clarificationMode = workflowClarificationMode(workflow)
     const handoffApproved = smallTaskHandoffApproved(answers)
-    const implementationFixApproved = implementationFixConfirmationApproved(answers)
     const revisionSubmission = revisionImpactSubmission(workflow, answers)
     const revisionDraftInteraction = revisionDraftInteractionSubmission(answers)
     const technicalPlanInteraction = technicalPlanConfirmationSubmission(
@@ -1991,19 +1986,6 @@ export function useWorkflowConversation({
         titleFrom: `正式产物：${revisionDraftInteraction.artifactKey}`,
         conversation: false
       })
-    }
-    if (conversation && clarificationMode === 'implementation_fix_confirmation') {
-      return sendWorkflowMessage(
-        implementationFixApproved
-          ? '用户已确认实现修改范围，请继续执行。'
-          : '用户未确认实现修改范围，本次修改已停止。',
-        {
-          originalRequest,
-          conversation: true,
-          conversationHandoffDecision: implementationFixApproved ? 'approved' : 'rejected',
-          titleFrom: originalRequest || '实现修改确认'
-        }
-      )
     }
     if (conversation && clarificationMode === 'small_task_scope_confirmation') {
       return sendWorkflowMessage(
@@ -2411,18 +2393,42 @@ export function useWorkflowConversation({
     return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
-  /** 继续已结束的原任务；重新 GET 资格，最终由后端原子校验指纹、身份和资源。 */
+  /** 继续已结束的原任务；按后端执行范围选择恢复入口，并由后端原子校验 checkpoint 身份。 */
   const handleContinueEndedPlan = async (runId: string): Promise<void> => {
-    if (loading || workspaceBusy || !activeSession) return
-    if (!(await refreshExecutionRecoveryLifecycle())) return
-    const archived = applicationLifecycleRef.current?.endedExecutions?.[runId]
-    if (!archived?.workspaceUnchanged) return
-    // 原始公开消息可能在断线前未落盘；继续只需要精确服务端身份，业务状态从 checkpoint 读取。
-    await sendWorkflowMessage('继续已结束的任务。', {
-      executionThreadId: archived.execution.threadId, resumeExecutionRunId: runId,
-      selectedPageId: archived.execution.scope === 'page' ? archived.execution.targetId : '',
-      titleFrom: '继续任务'
-    })
+    if (loading || workspaceBusy || !activeSession || continuingEndedRunRef.current) return
+    const sessionIdentity = activeSession
+    continuingEndedRunRef.current = runId
+    setRecoveryErrorForSession(sessionIdentity.key)
+    try {
+      if (!(await refreshExecutionRecoveryLifecycle())) {
+        setRecoveryErrorForSession(sessionIdentity.key, '无法读取最新的任务状态，请稍后重试。')
+        return
+      }
+      if (activeInputRef.current.key !== sessionIdentity.key) return
+      const archived = applicationLifecycleRef.current?.endedExecutions?.[runId]
+      if (!archived) {
+        setRecoveryErrorForSession(sessionIdentity.key, '原任务的继续凭据已不存在，请刷新状态后重新发起任务。')
+        return
+      }
+      if (!archived.workspaceUnchanged) {
+        setRecoveryErrorForSession(sessionIdentity.key, '工作区已变化，不能安全恢复原 checkpoint；请重新发起任务。')
+        return
+      }
+      const conversationCheckpoint =
+        archived.execution.scope === 'application' &&
+        archived.execution.targetId === 'conversation'
+      // 原始公开消息可能在断线前未落盘；业务状态和真实入口都从服务端身份及 checkpoint 读取。
+      await sendWorkflowMessage('继续已结束的任务。', {
+        executionThreadId: archived.execution.threadId,
+        resumeExecutionRunId: runId,
+        selectedPageId: archived.execution.scope === 'page' ? archived.execution.targetId : '',
+        conversation: conversationCheckpoint,
+        sessionIdentity,
+        titleFrom: '继续任务'
+      })
+    } finally {
+      if (continuingEndedRunRef.current === runId) continuingEndedRunRef.current = undefined
+    }
   }
 
   /** 在原审查会话和执行范围内重新调用失败的扫描或修复模型子步骤。 */

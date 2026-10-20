@@ -67,19 +67,56 @@ class ConversationExecution:
             return
         await assert_run_id_available(self.workspace, self.run_id)
         values = getattr(snapshot, "values", {}) or {}
-        previous = lifecycle.active_executions.get(str(values.get("active_run_id") or ""))
+        checkpoint_run_id = str(values.get("active_run_id") or "")
+        previous = lifecycle.active_executions.get(checkpoint_run_id)
         replaces = None
         if paused_run_id:
             source = await get_execution(self.workspace, paused_run_id)
+            archived = lifecycle.ended_executions.get(paused_run_id)
+            archived_execution = archived.execution if archived else None
+            normalized_owner = str(owner or "").strip() or None
+            if (
+                previous is not None
+                and previous.run_id == paused_run_id
+                and (previous.thread_id != self.thread_id or previous.owner_session_id != owner)
+            ) or (
+                archived_execution is not None
+                and archived_execution.run_id == paused_run_id
+                and (
+                    archived_execution.thread_id != self.thread_id
+                    or archived_execution.owner_session_id != normalized_owner
+                )
+            ):
+                raise ValueError("二次修改运行不属于当前会话。")
+            active_pause = bool(
+                previous is not None
+                and previous.run_id == paused_run_id
+                and previous.status.value == "stopped"
+            )
+            ended_pause = bool(
+                previous is None
+                and checkpoint_run_id == paused_run_id
+                and archived_execution is not None
+                and archived_execution.run_id == paused_run_id
+                and archived_execution.status.value == "stopped"
+                and archived_execution.scope == "application"
+                and archived_execution.target_id == "conversation"
+                and archived_execution.thread_id == self.thread_id
+                and archived_execution.owner_session_id == normalized_owner
+            )
             # 主动暂停必须已经完全退出；异常中断不得借此入口绕过兜底恢复。
-            if (previous is None or previous.run_id != paused_run_id
-                    or previous.status.value != "stopped" or source is None
+            if (not (active_pause or ended_pause) or source is None
                     or source.status is not DurableExecutionStatus.CANCELLED
                     or source.thread_id != self.thread_id
+                    or source.owner_session_id != normalized_owner
                     or source.workflow_scope != "conversation"
                     or paused_run_id in active_worker_runs()
                     or not getattr(snapshot, "next", ())):
                 raise ValueError("当前二次修改不是可继续的主动暂停，请刷新运行状态。")
+            if ended_pause:
+                # 结束卡保留的只是续跑资格；启动入口再次校验 checkpoint 和身份，
+                # 随后由生命周期原子接管并消费归档，避免前端单独删除恢复凭据。
+                replaces = paused_run_id
         if previous is not None:
             # 未终止的请求只能走统一恢复，不能以重新发送覆盖中断事实或绕过确认门。
             if previous.thread_id != self.thread_id or previous.owner_session_id != owner:

@@ -300,9 +300,8 @@ def direct_node_status(node_name: str, update: dict[str, Any]) -> str:
         if isinstance(clarification, dict)
         else ""
     )
-    # 分类节点已经成功决定修改路径时，等待职责属于独立确认卡，不能把分类本身也显示成确认门。
+    # 正式修改影响范围和 SmallTask 范围扩展由独立卡片确认，不把分类节点也显示成确认门。
     if node_name == "classify_intent" and clarification_mode in {
-        "implementation_fix_confirmation",
         "revision_impact_confirmation",
         "small_task_scope_confirmation",
     }:

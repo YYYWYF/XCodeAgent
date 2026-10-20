@@ -170,7 +170,7 @@ TechnicalPlan 草稿 -> 确认并成为 canonical -> Build DAG
 
 代码不是正式计划草稿：
 
-- `implementation_fix` 的 workspace owner 可直接写入精确授权的普通工作区文件；frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`，再写入代码并执行独立验证。用户取消确认时以正常完成终态结束且不展示异常卡；独立验证通过后直接完成当前小修改，不切换到正式预览或验收阶段。
+- `implementation_fix` 分类为 frontend/backend/fullstack 后直接写入代码并执行独立验证；workspace owner 可直接写入精确授权的普通工作区文件。独立验证通过后直接完成当前小修改，不切换到正式预览或验收阶段。
 - formal revision 不以“计划已修改”为终点。所有受影响正式产物确认且非 stale 后，必须生成并确认 Build DAG，再进入代码修改、测试、预览和验收。
 - 设计 branch 完成原 TechnicalPlan 确认后，由系统自动继续同一次 revision；用户不需要回到工作台重新输入需求或再次确认影响范围。
 - Build/Test 后的用户反馈重新进入统一路由，形成下一次向前修正；不自动恢复代码或已确认正式产物。
@@ -197,7 +197,7 @@ formal_revision
 | `casual_chat` | tool-less ChatModel | 否 |
 | `workspace_question` | 只读 WorkspaceAssistant | 否 |
 | `clarification` | AG-UI 结构化澄清门 | 否 |
-| `implementation_fix` | frontend/backend/workspace SmallTask wrapper | workspace 普通文件可直接写入；frontend/backend/fullstack 需先确认实现范围 |
+| `implementation_fix` | frontend/backend/workspace SmallTask wrapper | frontend/backend/fullstack 按分类归属直接执行；workspace 普通文件仍受精确路径授权约束 |
 | `formal_revision` | Coordinator 再选择 branch | 先确认只读影响范围，再进入设计阶段或工作台草稿流程 |
 
 模型只能输出结构化分类候选，不能输出任意 Graph 节点名或直接获得写权限。
@@ -227,7 +227,7 @@ Coordinator 先由模型按语义分类，再由服务端执行不依赖自然�
 4. 目标不唯一、期望结果存在实质歧义或置信度低于 0.70 时先澄清，不能猜测代码路径。
 5. 请求或候选路径涉及 `.devagentstudio` 正式产物时，服务端禁止 `implementation_fix`。
 6. 服务端校验 route、branch、revisionType、earliestArtifact、owner 和候选范围字段；只纠正不安全或不一致的结构，不重新解释用户自然语言，也不追加模型证据分析。
-7. `implementation_fix` 的 frontend/backend/fullstack owner 必须先通过 `implementation_fix_confirmation`；workspace owner 的普通文件修改可以直接执行。
+7. `implementation_fix` 的 frontend/backend/fullstack owner 在分类完成后直接执行；workspace owner 的普通文件修改仍受精确路径授权约束。
 
 ### 3.4 上下文输入
 
@@ -239,7 +239,7 @@ Coordinator 分类只读取有界上下文：
 - 有界 WorkspaceSnapshot 和 code graph 导航摘要；
 - 当前 scoped dirty diff 摘要；
 - 当前页面/API 目标与会话上下文；普通自然语言由 Coordinator 自动分类。
-- 可选的当前 DOM 源码上下文：`tagName + /src/ 虚拟路径 + line + column`。服务端必须将其解析为工作区内真实前端文件后才能进入分类和 SmallTask 候选；该上下文不能扩张写权限或替代实现修改确认。
+- 可选的当前 DOM 源码上下文：`tagName + /src/ 虚拟路径 + line + column`。服务端必须将其解析为工作区内真实前端文件后才能进入分类和 SmallTask 候选；该上下文不能扩张写权限或替代正式修改影响范围确认。
 
 输出示例：
 

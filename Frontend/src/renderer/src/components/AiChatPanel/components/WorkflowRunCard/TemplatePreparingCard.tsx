@@ -254,8 +254,8 @@ function ReadyCard({
       </div>
       <Text type="secondary" className={cx('template-preparing-desc')}>
         {reusedExistingTemplate
-          ? 'TechnicalPlan 已确认，沿用本应用已有工程（未重新拉取模板）。'
-          : 'TechnicalPlan 已确认，应用模板已生成。'}
+          ? '技术规划已确认，沿用本应用已有工程（未重新拉取模板）。'
+          : '技术规划已确认，应用模板已生成。'}
       </Text>
 
       {/* 读不到 Git 状态：模板已生成，仓库本该存在，值得报出来并允许重试。 */}

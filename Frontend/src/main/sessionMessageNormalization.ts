@@ -23,6 +23,12 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
   const approval = cloneJsonRecord(message.approval)
   const codeChanges = cloneJsonRecord(message.codeChanges)
   const workflow = cloneJsonRecord(message.workflow)
+  const workflowCardResult =
+    message.workflowCardResult === 'confirmed' ||
+    message.workflowCardResult === 'cancelled' ||
+    message.workflowCardResult === 'submitted'
+      ? message.workflowCardResult
+      : undefined
   const skills = normalizeSessionMessageSkills(message.skills)
   const toolCalls = normalizeSessionToolCalls(message.toolCalls)
   const processSteps = normalizeSessionProcessSteps(message.processSteps)
@@ -43,6 +49,7 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
     ...(approvalStatus ? { approvalStatus } : {}),
     ...(codeChanges ? { codeChanges } : {}),
     ...(workflow ? { workflow } : {}),
+    ...(workflowCardResult ? { workflowCardResult } : {}),
     ...(skills.length > 0 ? { skills } : {}),
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
     ...(processSteps.length > 0 ? { processSteps } : {}),

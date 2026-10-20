@@ -43,6 +43,48 @@ test('原开发 Run 已结束后，同 Thread 新测试失败不显示重新选�
   assert.equal(developmentNextStep([message(failed)], sameRun)?.endedRunId, 'test-run')
 })
 
+test('继续已结束任务的启动失败时，只要原 Thread 仍有停止归档就重建继续入口', () => {
+  const failedContinue = {
+    runId: 'continue-attempt',
+    threadId: 'conversation-thread',
+    events: [],
+    state: { workflow_scope: 'conversation' },
+    summary: { status: 'failed', phase: 'conversation' }
+  } as WorkflowRunPayload
+  const archived = {
+    execution: {
+      runId: 'paused-conversation',
+      threadId: 'conversation-thread',
+      scope: 'application',
+      targetId: 'conversation',
+      status: 'stopped',
+      updatedAt: '2026-10-20T00:00:00Z'
+    },
+    workspaceUnchanged: true
+  }
+  const lifecycle = {
+    endedExecutions: { 'paused-conversation': archived }
+  } as unknown as ApplicationLifecycle
+  const userMessage: AgentChatMessage = {
+    id: 2,
+    role: 'user',
+    content: '继续已结束的任务。'
+  }
+  const step = developmentNextStep(
+    [userMessage, message(failedContinue)],
+    lifecycle
+  )
+  assert.equal(step?.endedRunId, 'paused-conversation')
+  assert.equal(step?.workspaceUnchanged, true)
+  assert.equal(
+    developmentNextStep(
+      [userMessage, message({ ...failedContinue, threadId: 'other-thread' })],
+      lifecycle
+    ),
+    undefined
+  )
+})
+
 /** 构造服务端已经确认当前页初次完成的真实结构。 */
 function completion(): WorkflowRunPayload {
   return {

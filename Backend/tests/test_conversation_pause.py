@@ -10,7 +10,7 @@ from app.graph.direct_modification_workflow import build_direct_modification_gra
 from app.persistence.execution_recovery import get_execution
 from app.protocols.direct_modification import build_conversation_ag_ui_stream
 from app.protocols.workflow.run_control import workflow_run_registry
-from app.services.application_lifecycle import create_application_lifecycle, write_application_lifecycle, load_application_lifecycle
+from app.services.application_lifecycle import create_application_lifecycle, write_application_lifecycle, load_application_lifecycle, end_workbench_execution
 from app.services.run_workers import active_worker_runs
 
 
@@ -25,7 +25,11 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
         """主动继续的新 Run 若再次异常，仍由兜底恢复原节点。"""
         await self._run_pause_scenario(fail_on_resume=True)
 
-    async def _run_pause_scenario(self, fail_on_resume=False):
+    async def test_continue_after_end_consumes_checkpoint_archive(self):
+        """结束卡继续时仍从原 conversation checkpoint 恢复并原子消费归档。"""
+        await self._run_pause_scenario(end_before_resume=True)
+
+    async def _run_pause_scenario(self, fail_on_resume=False, end_before_resume=False):
         """驱动真实暂停、原生继续及可选的后续异常恢复。"""
         entered, release = threading.Event(), threading.Event()
         calls = {"scan": 0, "classify": 0}
@@ -45,7 +49,7 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("继续后的模型请求异常")
             self.assertEqual(state["request"], "修改按钮文字")
             return {"phase": "classify_intent", "status": "requires_user_input",
-                    "clarification": {"mode": "implementation_fix_confirmation", "message": "请确认修改"}}
+                    "clarification": {"mode": "small_task_scope_confirmation", "message": "请确认修改"}}
 
         async def finalize(state):
             """保存正常确认边界，不执行下游写入。"""
@@ -101,6 +105,12 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(before.next, ("classify_intent",))
                 self.assertIn("二次修改运行不属于当前会话", await run("wrong-owner", "paused", "other"))
                 self.assertEqual(calls, {"scan": 1, "classify": 1})
+                if end_before_resume:
+                    # Electron 的“任务已结束”按钮先释放活动锁，再从生命周期归档继续。
+                    end_workbench_execution(directory, run_id="paused", preserve_resume=True)
+                    ended = load_application_lifecycle(directory)
+                    self.assertNotIn("paused", ended.active_executions)
+                    self.assertIn("paused", ended.ended_executions)
                 resumed = await run("continued", "paused")
                 expected_run = "continued"
                 if fail_on_resume:
@@ -124,9 +134,11 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
                 after = await graph.aget_state({"configurable": {"thread_id": "thread"}})
                 self.assertEqual(after.values["active_run_id"], expected_run)
                 self.assertEqual(after.values["request"], "修改按钮文字")
-                self.assertEqual(after.values["clarification"]["mode"], "implementation_fix_confirmation")
+                self.assertEqual(after.values["clarification"]["mode"], "small_task_scope_confirmation")
                 self.assertFalse(after.next)
                 self.assertEqual(load_application_lifecycle(directory).active_executions[expected_run].status.value, "awaiting_user")
+                if end_before_resume:
+                    self.assertNotIn("paused", load_application_lifecycle(directory).ended_executions)
                 self.assertIn("不是可继续的主动暂停", await run("duplicate", "paused"))
                 self.assertEqual(calls, {"scan": 1, "classify": 3 if fail_on_resume else 2})
 

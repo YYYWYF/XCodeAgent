@@ -19,6 +19,7 @@ import type {
   ProcessStepRecord,
   WorkspaceInspectionProgress
 } from '../../../../service/agUiAgent'
+import type { WorkflowRunPayload } from '../../../../typings/workflow'
 import { isCompactProcessStepNode } from '../../../../service/processStepHistory'
 import { cx } from '../../../../utils'
 import { openLocalReportFile } from '../../../../utils/reportFile'
@@ -30,6 +31,7 @@ import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
 import RepairInProgressPanel from './RepairInProgressPanel'
 import RepairToolActivityRow from './RepairToolActivityRow'
 import { buildProcessDisplayItems, isToolActivityStep } from './processDisplayItems'
+import ConversationProgressSummary from './ConversationProgressSummary'
 import { integrationTestCheckReportPath } from './reportAction'
 import ToolActivityChain from './ToolActivityChain'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
@@ -42,7 +44,9 @@ type Props = {
   dagPendingPlanCompletion?: DagPendingPlanCompletion
   loading: boolean
   onOpenPendingDagConfirmation?: () => void
+  runFinishedAt?: string
   steps: ProcessStepRecord[]
+  workflow?: WorkflowRunPayload
   waitingPrompt?: string
   waitingForInput?: boolean
 }
@@ -53,7 +57,9 @@ export default function ProcessSteps({
   dagPendingPlanCompletion,
   loading,
   onOpenPendingDagConfirmation,
+  runFinishedAt,
   steps,
+  workflow,
   waitingPrompt = '',
   waitingForInput = false
 }: Props): ReactElement {
@@ -68,9 +74,6 @@ export default function ProcessSteps({
       )
   )
   const displayItems = buildProcessDisplayItems(steps, conversation)
-  const toolActivityCount = conversation
-    ? steps.filter((step) => isToolActivityStep(step)).length
-    : 0
   const [open, setOpen] = useState(
     loading ||
       waitingForInput ||
@@ -131,17 +134,23 @@ export default function ProcessSteps({
                   ? 'Agent 等待补充'
                   : 'Agent 执行完成'}
           </Text>
-          <Text type="secondary">
-            {loading
-              ? currentStepLabel(steps, conversation)
-              : waitingForInput
-                ? '请根据下方提示补充修改需求'
-                : conversation
-                  ? toolActivityCount > 0
-                    ? `${toolActivityCount} 次工具调用 · 可展开查看调用链`
-                    : `已展示 ${steps.length} 个过程步骤`
+          {conversation ? (
+            <ConversationProgressSummary
+              currentStageLabel={conversationCurrentStageLabel(steps)}
+              loading={loading}
+              runFinishedAt={runFinishedAt || workflow?.summary.lifecycle?.updatedAt}
+              waitingForInput={waitingForInput}
+              workflow={workflow}
+            />
+          ) : (
+            <Text type="secondary">
+              {loading
+                ? currentStepLabel(steps)
+                : waitingForInput
+                  ? '请根据下方提示补充修改需求'
                   : `已归档 ${steps.length} 个步骤`}
-          </Text>
+            </Text>
+          )}
         </span>
       </summary>
       <div className={cx('process-steps-list')}>
@@ -635,18 +644,18 @@ function IntegrationTestChecklist({
 }
 
 /** 返回当前执行步骤在总步骤中的位置与标题。 */
-function currentStepLabel(steps: ProcessStepRecord[], conversation: boolean): string {
-  const activeTool = [...steps]
-    .reverse()
-    .find((step) => isToolActivityStep(step) && step.status === 'running')
-  if (conversation && activeTool) {
-    const toolCount = steps.filter((step) => isToolActivityStep(step)).length
-    return `${processStepTitle(activeTool, true, false)} · 已记录 ${toolCount} 次调用`
-  }
-
+function currentStepLabel(steps: ProcessStepRecord[]): string {
   const activeIndex = steps.findIndex((step) => step.status === 'running')
   if (activeIndex < 0) return `正在准备 · ${steps.length} 个步骤`
-  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${processStepTitle(steps[activeIndex], conversation, false)}`
+  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${processStepTitle(steps[activeIndex], false, false)}`
+}
+
+/** 选择当前自由对话的业务节点标题，工具调用只在执行详情中展示。 */
+function conversationCurrentStageLabel(steps: ProcessStepRecord[]): string {
+  const activeStage = [...steps]
+    .reverse()
+    .find((step) => step.kind === 'workflow' && step.status === 'running')
+  return activeStage ? processStepTitle(activeStage, true, false) : '正在处理当前阶段'
 }
 
 /** 为自由对话把内部节点和工具步骤转换成用户可理解的实时状态。 */

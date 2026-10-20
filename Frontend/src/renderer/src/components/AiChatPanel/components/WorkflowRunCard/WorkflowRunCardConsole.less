@@ -122,6 +122,27 @@
   border-radius: 5px;
 }
 
+// 状态标签的颜色由状态语义决定，并复用明暗主题的工作台色值。
+.@{class-prefix}-workflow-run-card {
+  .@{class-prefix}-workflow-run-status-confirmed.ant-tag {
+    color: var(--wb-code-add-text) !important;
+    background: color-mix(in srgb, var(--wb-code-add-text) 9%, var(--wb-surface)) !important;
+    border-color: color-mix(in srgb, var(--wb-code-add-text) 42%, var(--wb-border)) !important;
+  }
+
+  .@{class-prefix}-workflow-run-status-pending.ant-tag {
+    color: var(--wb-danger) !important;
+    background: color-mix(in srgb, var(--wb-danger) 8%, var(--wb-surface)) !important;
+    border-color: color-mix(in srgb, var(--wb-danger) 40%, var(--wb-border)) !important;
+  }
+
+  .@{class-prefix}-workflow-run-status-cancelled.ant-tag {
+    color: var(--wb-text-secondary) !important;
+    background: var(--wb-surface-subtle) !important;
+    border-color: var(--wb-border-strong) !important;
+  }
+}
+
 .@{class-prefix}-workflow-run-message {
   display: flex;
   min-width: 0;
