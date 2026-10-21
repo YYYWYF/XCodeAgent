@@ -81,6 +81,10 @@ from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
 )
+from app.protocols.temporary_chat import (
+    build_temporary_chat_ag_ui_stream,
+    temporary_chat_capabilities,
+)
 from app.protocols.execution_recovery import (
     build_execution_recovery_ag_ui_stream,
     execution_recovery_capabilities,
@@ -187,6 +191,7 @@ async def health() -> dict[str, object]:
             "repository_branch": repository_branch_capabilities(),
             "iteration_service": iteration_service_capabilities(),
             "conversation": conversation_capabilities(),
+            "temporary_chat": temporary_chat_capabilities(),
             "execution_recovery": execution_recovery_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
@@ -437,6 +442,20 @@ async def run_conversation(
 
     return StreamingResponse(
         build_conversation_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/temporary-chat/run")
+async def run_temporary_chat(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """运行独立只读临时对话 AG-UI 流。"""
+
+    return StreamingResponse(
+        build_temporary_chat_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

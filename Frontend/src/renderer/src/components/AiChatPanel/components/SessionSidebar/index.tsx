@@ -9,7 +9,7 @@ import {
   ThunderboltOutlined
 } from '@ant-design/icons'
 import type { CSSProperties, ReactElement } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import type {
@@ -24,6 +24,8 @@ import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
 import ApplicationOutline from '../ApplicationOutline'
 import FreeChatHistory from './FreeChatHistory'
+import TemporaryChatOverlay from '../TemporaryChatOverlay'
+import { useTemporaryChats } from './useTemporaryChats'
 import './SessionSidebar.less'
 
 const COLLAPSED_SIDEBAR_WIDTH = 68
@@ -146,8 +148,13 @@ export default function SessionSidebar({
 }: SessionSidebarProps): ReactElement {
   const [collapsed, setCollapsed] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [activeTemporaryChatId, setActiveTemporaryChatId] = useState<string | null>(null)
   const [resizing, setResizing] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
+  const temporaryChats = useTemporaryChats(workspaceRoot)
+  const activeTemporaryChat = temporaryChats.sessions.find(
+    (session) => session.id === activeTemporaryChatId
+  )
   const compactLayout = useCompactWorkbench()
   // 设计阶段（forceCollapsed）折叠成图标栏：不显示 Page/API 大纲，只留快捷入口图标。
   // 小屏（compactLayout）与大屏共用 collapsed 状态：默认展开常驻左侧，仅手动折叠成图标栏。
@@ -157,6 +164,7 @@ export default function SessionSidebar({
   const handleRailNavigation = (navigate: () => void): void => {
     const action = (): void => {
       setHistoryOpen(false)
+      setActiveTemporaryChatId(null)
       navigate()
     }
     if (onBeforeNavigate) onBeforeNavigate(action)
@@ -174,11 +182,51 @@ export default function SessionSidebar({
   const handleHistoryToggle = (): void => {
     const next = !historyOpen
     const action = (): void => {
+      if (next) setActiveTemporaryChatId(null)
       setHistoryOpen(next)
     }
     if (next && onBeforeNavigate) onBeforeNavigate(action)
     else action()
   }
+
+  /** 新建内存临时对话并直接打开只读聊天浮层。 */
+  const handleCreateTemporaryChat = (): void => {
+    if (!workspaceRoot) return
+    const sessionId = temporaryChats.createSession()
+    setHistoryOpen(false)
+    setActiveTemporaryChatId(sessionId)
+  }
+
+  /** 从临时对话列表重新打开当前 Renderer 中保留的会话。 */
+  const handleOpenTemporaryChat = (sessionId: string): void => {
+    if (!temporaryChats.sessions.some((session) => session.id === sessionId)) return
+    setHistoryOpen(false)
+    setActiveTemporaryChatId(sessionId)
+  }
+
+  /** 从临时对话列表关闭会话并立即清除其消息。 */
+  const handleDeleteTemporaryChat = (sessionId: string): void => {
+    temporaryChats.deleteSession(sessionId)
+    if (activeTemporaryChatId === sessionId) setActiveTemporaryChatId(null)
+  }
+
+  /** 返回临时对话列表并保留本次 Renderer 生命周期内的聊天内容。 */
+  const handleBackFromTemporaryChat = (): void => {
+    setActiveTemporaryChatId(null)
+    setHistoryOpen(true)
+  }
+
+  /** 关闭临时对话并清除上下文，不写入常规会话历史。 */
+  const handleCloseTemporaryChat = (): void => {
+    if (activeTemporaryChatId) temporaryChats.deleteSession(activeTemporaryChatId)
+    setActiveTemporaryChatId(null)
+    setHistoryOpen(false)
+  }
+
+  /** 当工作区切换清空临时会话时同步关闭旧会话浮层。 */
+  useEffect(() => {
+    if (activeTemporaryChatId && !activeTemporaryChat) setActiveTemporaryChatId(null)
+  }, [activeTemporaryChat, activeTemporaryChatId])
 
   /** 从历史侧栏切换会话，保留侧栏以明确当前会话并支持连续切换。 */
   const handleOpenHistorySession = async (sessionId: string): Promise<void> => {
@@ -380,14 +428,28 @@ export default function SessionSidebar({
         loadingSessions={loadingSessions}
         onClose={() => setHistoryOpen(false)}
         onCreateSession={handleCreateHistorySession}
+        onCreateTemporaryChat={handleCreateTemporaryChat}
+        onDeleteTemporaryChat={handleDeleteTemporaryChat}
         onDeleteSession={onDeleteSession}
         onOpenSession={handleOpenHistorySession}
+        onOpenTemporaryChat={handleOpenTemporaryChat}
         sessionCreationDisabled={sessionCreationDisabled}
         sessionError={sessionError}
         sessionRunStates={sessionRunStates}
         sessions={sessions}
+        temporaryChats={temporaryChats.sessions}
+        temporaryChatEnabled={Boolean(workspaceRoot)}
         theme={theme}
       />
+      {activeTemporaryChat ? (
+        <TemporaryChatOverlay
+          key={activeTemporaryChat.id}
+          onBack={handleBackFromTemporaryChat}
+          onClose={handleCloseTemporaryChat}
+          onSend={(request) => temporaryChats.sendMessage(activeTemporaryChat.id, request)}
+          session={activeTemporaryChat}
+        />
+      ) : null}
     </>
   )
 }

@@ -25,12 +25,17 @@ type FreeChatHistoryProps = {
   loadingSessions: boolean
   onClose: () => void
   onCreateSession: () => void
+  onCreateTemporaryChat: () => void
+  onDeleteTemporaryChat: (sessionId: string) => void
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
+  onOpenTemporaryChat: (sessionId: string) => void
   sessionCreationDisabled: boolean
   sessionError?: string
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
+  temporaryChats: import('./useTemporaryChats').TemporaryChatSession[]
+  temporaryChatEnabled: boolean
   theme: 'light' | 'dark'
 }
 
@@ -44,15 +49,20 @@ export default function FreeChatHistory({
   loadingSessions,
   onClose,
   onCreateSession,
+  onCreateTemporaryChat,
+  onDeleteTemporaryChat,
   onDeleteSession,
   onOpenSession,
+  onOpenTemporaryChat,
   sessionCreationDisabled,
   sessionError,
   sessionRunStates,
-  sessions
+  sessions,
+  temporaryChats,
+  temporaryChatEnabled
 }: FreeChatHistoryProps): ReactElement | null {
   const [tab, setTab] = useState<'regular' | 'temporary'>(historyEnabled ? 'regular' : 'temporary')
-  // 常规会话继续按原阶段门控，临时标签仅展示未开放的空态。
+  // 常规会话继续按原阶段门控，临时会话在当前 Renderer 生命周期内独立管理。
   useEffect(() => {
     setTab(historyEnabled ? 'regular' : 'temporary')
   }, [historyEnabled])
@@ -66,9 +76,13 @@ export default function FreeChatHistory({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [onClose, open])
 
-  /** 仅常规标签可以新建真实对话，临时能力接入前不生成展示记录。 */
+  /** 按当前标签分别创建持久常规会话或内存临时会话。 */
   const handleCreateSession = (): void => {
-    if (tab === 'regular' && !sessionCreationDisabled && historyEnabled) onCreateSession()
+    if (tab === 'temporary') {
+      if (temporaryChatEnabled) onCreateTemporaryChat()
+      return
+    }
+    if (!sessionCreationDisabled && historyEnabled) onCreateSession()
   }
 
   /** 当前查看或正在推进的会话均保留，浏览历史不会解除推进会话的保护。 */
@@ -126,12 +140,16 @@ export default function FreeChatHistory({
             onClick={() => setTab('temporary')}
             type="button"
           >
-            临时对话 <span>0</span>
+            临时对话 <span>{temporaryChats.length}</span>
           </button>
         </div>
         <Button
           className={cx('free-chat-history-create')}
-          disabled={tab === 'temporary' || sessionCreationDisabled || !historyEnabled}
+          disabled={
+            tab === 'temporary'
+              ? !temporaryChatEnabled
+              : sessionCreationDisabled || !historyEnabled
+          }
           icon={<PlusOutlined />}
           onClick={handleCreateSession}
         >
@@ -147,19 +165,54 @@ export default function FreeChatHistory({
           <InfoCircleOutlined />
           {tab === 'regular'
             ? '仅「当前推进」的对话可执行工作流，其余对话仅供查看。'
-            : '临时对话暂未开放。'}
+            : '临时对话可查阅和讨论当前工程；不会修改文件或发起工作流，关闭后清除。'}
         </p>
         {tab === 'regular' && loadingSessions ? (
           <div className={cx('free-chat-history-loading')}>
             <Spin size="small" />
             读取会话...
           </div>
-        ) : tab === 'temporary' || sessions.length === 0 ? (
+        ) : tab === 'temporary' && temporaryChats.length > 0 ? (
+          <div className={cx('free-chat-history-list')}>
+            {temporaryChats.map((session) => (
+              <div className={cx('free-chat-history-item')} key={session.id}>
+                <button
+                  aria-label={`打开临时对话 ${session.number}`}
+                  className={cx('free-chat-history-open')}
+                  onClick={() => onOpenTemporaryChat(session.id)}
+                  type="button"
+                >
+                  <CommentOutlined />
+                  <span className={cx('free-chat-history-title')}>临时对话 {session.number}</span>
+                  {session.isRunning ? (
+                    <span className={cx('free-chat-history-active-label')}>回答中</span>
+                  ) : null}
+                </button>
+                <Popconfirm
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  okText="关闭"
+                  onConfirm={() => onDeleteTemporaryChat(session.id)}
+                  title="关闭并清除这条临时对话？"
+                >
+                  <Button
+                    aria-label={`关闭临时对话 ${session.number}`}
+                    danger
+                    icon={<DeleteOutlined />}
+                    size="small"
+                    title="关闭并清除"
+                    type="text"
+                  />
+                </Popconfirm>
+              </div>
+            ))}
+          </div>
+        ) : tab === 'regular' && sessions.length === 0 ? (
           <Empty
-            description={tab === 'regular' ? '还没有常规对话' : '还没有临时对话'}
+            description="还没有常规对话"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
-        ) : (
+        ) : tab === 'regular' ? (
           <div className={cx('free-chat-history-list')}>
             {sessions.map((session) => (
               <div
@@ -213,6 +266,11 @@ export default function FreeChatHistory({
               </div>
             ))}
           </div>
+        ) : (
+          <Empty
+            description={temporaryChatEnabled ? '还没有临时对话' : '当前工程暂不可用'}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
         )}
         {tab === 'regular' && sessionError ? (
           <p className={cx('free-chat-history-error')}>{sessionError}</p>

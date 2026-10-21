@@ -192,7 +192,7 @@ function WorkbenchPage({
     (reason: string): void => {
       if (entryStageRef.current !== 'loading' || entryFailureHandledRef.current) return
       entryFailureHandledRef.current = true
-      message.error(`工作台加载失败，已返回首页：${reason}`)
+      message.error(`工作台加载失败，已返回首页。`)
       onEntryLoadFailure()
     },
     [onEntryLoadFailure]
