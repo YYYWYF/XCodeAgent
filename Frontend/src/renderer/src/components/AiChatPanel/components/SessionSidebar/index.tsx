@@ -377,9 +377,9 @@ export default function SessionSidebar({
               <span>文件</span>
             </button>
             <button
-              className={cx(skillsActive && 'active')}
-              onClick={() => handleRailNavigation(onShowSkills)}
-              title="技能"
+              aria-disabled="true"
+              disabled
+              title="技能版块尚未完善，暂不可用"
               type="button"
             >
               <ThunderboltOutlined />
