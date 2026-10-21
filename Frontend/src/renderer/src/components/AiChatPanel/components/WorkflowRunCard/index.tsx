@@ -85,7 +85,6 @@ import {
 } from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
-import RequirementSpecEditor from '../../../Welcome/RequirementSpecEditor'
 import ApplicationConfigPrerequisiteCard from './ApplicationConfigPrerequisiteCard'
 import './WorkflowRunCard.less'
 
@@ -1039,16 +1038,15 @@ function readRequirementSpec(workflow: WorkflowRunPayload): Record<string, unkno
 }
 
 /**
- * 需求文档确认卡片：展示右侧草稿状态 + 修改（弹窗结构化编辑器）+ 确认并继续规划。
- * 右侧需求文档只读；点「修改」打开 Modal 编辑页面/角色/流程，保存后同步给草稿，
- * 确认只提交确认语义，禁止用前端快照覆盖后端已经生成或保存的新文档。
+ * 需求文档确认卡片：展示右侧草稿状态 + 修改（行内输入意见）+ 确认并继续规划。
+ * 与计划阶段保持一致：点「修改」不弹结构化编辑框，而是切到行内输入，
+ * 用户自由描述修改意见后提交，后端按修订请求重新生成需求文档。
+ * 这样不限制用户只能改弹框里列出的模块，任何范围都能用自然语言表达。
  */
 function RequirementSpecConfirmationCard({
   disabled,
-  onSaveRequirementSpec,
   onSubmit,
   requiresConfirmation,
-  rootPath,
   workflow
 }: {
   artifact?: WorkflowConfirmationArtifact
@@ -1066,35 +1064,27 @@ function RequirementSpecConfirmationCard({
   const requirementsConfirmed = readRequirementsConfirmed(workflow)
   const clarification = workflowClarification(workflow)
   const errors = clarification?.errors?.map(String).filter(Boolean) || []
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState<Record<string, unknown> | undefined>()
-  const [saving, setSaving] = useState(false)
-  const canEdit = Boolean(spec) && Boolean(onSaveRequirementSpec)
+  const [revising, setRevising] = useState(false)
+  const [revisionRequest, setRevisionRequest] = useState('')
 
-  const startEditing = (): void => {
-    if (!spec) return
-    // 每次打开都从当前 spec 重新克隆草稿，丢弃上次未保存的编辑，
-    // 保证取消后重开看到的是原始内容，而非上次编辑后的内容。
-    setDraft(JSON.parse(JSON.stringify(spec)) as Record<string, unknown>)
-    setEditing(true)
+  /** 切换为行内修改输入，并清空上一轮未提交内容。 */
+  const startRevision = (): void => {
+    setRevisionRequest('')
+    setRevising(true)
   }
 
-  const cancelEditing = (): void => {
-    setEditing(false)
-    setDraft(undefined)
+  /** 仅把非空修改意见提交给既有确认协议，后端识别为修订请求并重新生成。 */
+  const submitRevision = (): void => {
+    const request = revisionRequest.trim()
+    if (!request) return
+    setRevising(false)
+    onSubmit(request)
   }
 
-  const saveAndClose = async (): Promise<void> => {
-    if (!draft || saving) return
-    setSaving(true)
-    try {
-      await onSaveRequirementSpec?.(workflow, draft)
-      // 保存后丢弃草稿，下次重开从后端 inject 的最新 spec 重新克隆。
-      setDraft(undefined)
-      setEditing(false)
-    } finally {
-      setSaving(false)
-    }
+  /** 取消行内修改并丢弃本地未提交内容，不触发任何工作流动作。 */
+  const cancelRevision = (): void => {
+    setRevising(false)
+    setRevisionRequest('')
   }
 
   return (
@@ -1113,57 +1103,60 @@ function RequirementSpecConfirmationCard({
           <Text type="secondary">确认后将转为正式需求文档并进入下一阶段。</Text>
         </div>
       ) : null}
-      <div className={cx('artifact-auth-bar-footer')}>
-        <span className={cx('artifact-auth-status')}>
-          <CheckCircleOutlined aria-hidden="true" />
-          {requirementsConfirmed ? '需求文档已确认' : '需求草稿待确认'}
-        </span>
-        <span className={cx('artifact-auth-actions')}>
-          {canEdit ? (
-            <Button
-              className={cx('requirement-spec-edit-btn')}
+      <div
+        className={cx(
+          'artifact-auth-bar-footer',
+          revising && 'technical-plan-revision-inline'
+        )}
+      >
+        {revising ? (
+          <div className={cx('technical-plan-revision-editor')}>
+            <Input
+              aria-label="需求文档修改意见"
+              autoFocus
               disabled={disabled}
-              onClick={startEditing}
-            >
-              修改
-            </Button>
-          ) : null}
-          <Button
-            disabled={disabled || !requiresConfirmation}
-            onClick={() => onSubmit()}
-            type="primary"
-          >
-            确认并继续规划
-          </Button>
-        </span>
-      </div>
-      <Modal
-        cancelText="取消"
-        centered
-        className={cx('requirement-spec-edit-modal')}
-        footer={
-          <div className={cx('requirement-spec-edit-modal-actions')}>
-            <Button onClick={cancelEditing}>取消</Button>
+              onChange={(event) => setRevisionRequest(event.target.value)}
+              onKeyDown={(event) => {
+                // Escape 只退出本地编辑态，不触发后端修订。
+                if (event.key === 'Escape') cancelRevision()
+              }}
+              placeholder="输入需求文档修改意见"
+              value={revisionRequest}
+            />
             <Button
-              disabled={disabled}
-              loading={saving}
-              onClick={() => void saveAndClose()}
+              disabled={disabled || !revisionRequest.trim()}
+              onClick={submitRevision}
               type="primary"
             >
-              保存并退出编辑
+              提交
             </Button>
+            <Button onClick={cancelRevision}>取消</Button>
           </div>
-        }
-        onCancel={cancelEditing}
-        open={editing}
-        title="修改需求文档"
-        width={920}
-        destroyOnClose
-      >
-        {draft ? (
-          <RequirementSpecEditor onChange={setDraft} rootPath={rootPath || '/'} spec={draft} />
-        ) : null}
-      </Modal>
+        ) : (
+          <>
+            <span className={cx('artifact-auth-status')}>
+              <CheckCircleOutlined aria-hidden="true" />
+              {requirementsConfirmed ? '需求文档已确认' : '需求草稿待确认'}
+            </span>
+            <span className={cx('artifact-auth-actions')}>
+              <Button
+                className={cx('requirement-spec-edit-btn')}
+                disabled={disabled}
+                onClick={startRevision}
+              >
+                修改
+              </Button>
+              <Button
+                disabled={disabled || !requiresConfirmation}
+                onClick={() => onSubmit()}
+                type="primary"
+              >
+                确认并继续规划
+              </Button>
+            </span>
+          </>
+        )}
+      </div>
     </div>
   )
 }
