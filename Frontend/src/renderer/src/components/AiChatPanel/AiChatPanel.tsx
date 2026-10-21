@@ -5618,9 +5618,10 @@ export default function AiChatPanel({
       ) : null}
 
       {/* 左下角三个入口改为抽屉：与临时对话/历史对话/数据源同一套浮层形态，
-          对话区不再被整块替换。宽度按内容型页面放宽（设置是锚点+表单，用 wide）。 */}
+          对话区不再被整块替换。宽度按内容型页面放宽（设置是锚点+表单，用 wide）。
+          点击抽屉外部（对话区/右侧栏）自动收起，与各页面头部关闭按钮等价。 */}
       {activeView === 'skills' ? (
-        <WorkbenchDrawer label="技能" size="wide">
+        <WorkbenchDrawer label="技能" onClose={() => setActiveView('chat')} size="wide">
           <SkillsPage
             onClose={() => setActiveView('chat')}
             onSkillDisabled={handleSkillDisabled}
@@ -5629,12 +5630,12 @@ export default function AiChatPanel({
         </WorkbenchDrawer>
       ) : null}
       {activeView === 'files' ? (
-        <WorkbenchDrawer label="文件">
+        <WorkbenchDrawer label="文件" onClose={() => setActiveView('chat')}>
           <AgentFilesPage onClose={() => setActiveView('chat')} />
         </WorkbenchDrawer>
       ) : null}
       {activeView === 'settings' ? (
-        <WorkbenchDrawer label="应用设置" size="wide">
+        <WorkbenchDrawer label="应用设置" onClose={() => setActiveView('chat')} size="wide">
           <SettingsPage
             application={application}
             onClose={() => setActiveView('chat')}

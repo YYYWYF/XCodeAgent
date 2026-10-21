@@ -25,6 +25,11 @@ export default function TemporaryChatOverlay({
 }: TemporaryChatOverlayProps): ReactElement {
   const [draft, setDraft] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  // 浮层根节点引用，给"点击外部收起"判断用。
+  const rootRef = useRef<HTMLElement | null>(null)
+  // 用 ref 持有最新 onBack，避免监听器因 onBack 引用变化反复挂载/卸载。
+  const onBackRef = useRef(onBack)
+  onBackRef.current = onBack
 
   useEffect(() => {
     /** 在浮层打开期间响应 Escape，按临时对话关闭语义清除当前上下文。 */
@@ -35,6 +40,37 @@ export default function TemporaryChatOverlay({
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
+
+  // 点击浮层外部自动收起：与其他工作台抽屉（技能/文件/设置/对话管理）行为一致。
+  // 收起语义用 onBack（返回对话管理列表），不用 onClose——后者会清除临时对话内容，
+  // 用户可能只是误点空白处，不应丢失已输入的对话。
+  // 用 mousedown 而非 click：click 在 mouseup 才触发，用户在浮层内按下拖到外部松开
+  // （选择文本）不应被误判为"点击外部"。
+  // 排除 antd 浮层（Popconfirm/Tooltip/Modal 等）：它们 portal 到 body，DOM 在
+  // 浮层外但语义上属于浮层内的交互，不应触发收起。
+  useEffect(() => {
+    const handleMouseDown = (event: MouseEvent): void => {
+      const root = rootRef.current
+      if (!root) return
+      const target = event.target as Node | null
+      if (!target) return
+      if (root.contains(target)) return
+      if (target instanceof Element) {
+        const floating = target.closest(
+          '.ant-modal-wrap, .ant-modal-mask, .ant-select-dropdown, ' +
+            '.ant-picker-dropdown, .ant-popover, .ant-tooltip, .ant-dropdown, ' +
+            '.ant-cascader-dropdown, .ant-tree-select-dropdown, .ant-message, ' +
+            '.ant-notification, .ant-popconfirm'
+        )
+        if (floating) return
+      }
+      onBackRef.current?.()
+    }
+    document.addEventListener('mousedown', handleMouseDown, true)
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown, true)
+    }
+  }, [])
 
   useEffect(() => {
     /** 新消息或请求状态变化后将对话视口滚动到底部。 */
@@ -57,7 +93,7 @@ export default function TemporaryChatOverlay({
   }
 
   return (
-    <aside aria-label="临时对话" className={cx('temporary-chat-overlay')}>
+    <aside aria-label="临时对话" className={cx('temporary-chat-overlay')} ref={rootRef}>
       <header className={cx('temporary-chat-header')}>
         <span aria-hidden="true" className={cx('temporary-chat-agent-icon')}>
           <span

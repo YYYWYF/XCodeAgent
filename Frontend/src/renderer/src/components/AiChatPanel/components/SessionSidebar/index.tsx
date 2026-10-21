@@ -328,6 +328,7 @@ export default function SessionSidebar({
                 aria-expanded={historyOpen}
                 aria-label={historyOpen ? '关闭对话管理' : '打开对话管理'}
                 className={cx('free-chat-nav-main')}
+                data-history-toggle="true"
                 onClick={handleHistoryToggle}
                 title="对话管理"
                 type="button"
