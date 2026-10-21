@@ -729,7 +729,7 @@ export default function UiDesignConfirmationPanel({
           <CheckOutlined />
         </span>
         <div className={cx('ui-design-header-copy')}>
-          <h4>确认UI设计稿</h4>
+          <h4>UI设计稿</h4>
           <p>
             如需视觉参考可选择模板或换一换生成设计稿，也可以跳过；完成后需手动进入计划阶段。
           </p>
