@@ -1,0 +1,9 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+openai>=2.0,<3
+httpx>=0.28,<1
+httpx-sse>=0.4.3,<1
+ag-ui-protocol==1.0.0
+pydantic>=2.10,<3
+pydantic-settings>=2.7,<3
+langsmith>=0.14.5,<1

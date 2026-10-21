@@ -1,0 +1,42 @@
+# Local environment; keep the distributable configuration template.
+.env
+.env.*
+!.env.example
+
+# Python environments, bytecode and test/tool caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Runtime history, validation output and rotated logs.
+/data/
+/var/
+*.log
+*.log.*
+
+# Generated Python distribution files.
+/build/
+/dist/
+*.egg-info/
+
+# Local editor, package cache and operating-system files.
+.idea/
+.vscode/
+.npm-cache/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.bak
+*.tmp
+*.swp
+*.swo
+*~
