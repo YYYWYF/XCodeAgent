@@ -26,11 +26,6 @@
     }
   }
 
-  // 关闭时整体灰显
-  &--disabled {
-    opacity: 0.55;
-  }
-
   .ant-form-item {
     margin-bottom: 16px;
   }
@@ -107,6 +102,22 @@
 
 .@{class-prefix}-application-form-switch {
   margin-bottom: 0 !important;
+}
+
+// 开关依赖提示与控件保持同行，避免占用分区内容区域。
+.@{class-prefix}-application-form-toggle-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.@{class-prefix}-application-form-toggle-hint {
+  color: var(--modal-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: right;
 }
 
 // 双列字段网格：同分区内的短字段并排

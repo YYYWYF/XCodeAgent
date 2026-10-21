@@ -109,9 +109,12 @@ export default function ApplicationConfigEditor({
         <div className={cx('application-form-section-head')}>
           <div className={cx('application-form-section-title')}><span className={cx('application-form-section-icon')}><LockOutlined /></span><span className={cx('application-form-section-text')}>一号通登录</span></div>
           {show('auth.enable') ? (
-            <Form.Item className={cx('application-form-switch')} name={['auth', 'enable']} valuePropName="checked" noStyle>
-              <Switch checkedChildren="启用" disabled={capabilityToggleDisabled(lockedCapabilities?.login, authorizationEnabled)} unCheckedChildren="关闭" />
-            </Form.Item>
+            <div className={cx('application-form-toggle-control')}>
+              {authorizationEnabled ? <span className={cx('application-form-toggle-hint')}>权限已启用，无法关闭登录开关，请先关闭权限。</span> : null}
+              <Form.Item className={cx('application-form-switch')} name={['auth', 'enable']} valuePropName="checked" noStyle>
+                <Switch checkedChildren="启用" disabled={capabilityToggleDisabled(lockedCapabilities?.login, authorizationEnabled)} unCheckedChildren="关闭" />
+              </Form.Item>
+            </div>
           ) : null}
         </div>
         {lockedCapabilities?.login ? <p className={cx('application-form-section-description')}>已启用登录。关闭会删除已注入的工程代码，现阶段暂不支持。</p> : null}
@@ -128,7 +131,7 @@ export default function ApplicationConfigEditor({
       {show('authorization.enabled') || show('authorization.initialAdministratorSubjects') ? (
       <section
         id={mode === 'settings' ? 'settings-authorization' : undefined}
-        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle', !authorizationEnabled && 'application-form-section--disabled')}
+        className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle')}
       >
         <div className={cx('application-form-section-head')}>
           <div className={cx('application-form-section-title')}><span className={cx('application-form-section-icon')}><LockOutlined /></span><span className={cx('application-form-section-text')}>权限控制</span></div>
@@ -151,7 +154,7 @@ export default function ApplicationConfigEditor({
           ) : null}
         </div>
         {lockedCapabilities?.authorization ? <p className={cx('application-form-section-description')}>已启用权限控制。关闭会删除已注入的工程代码，现阶段暂不支持。</p> : null}
-        {show('authorization.initialAdministratorSubjects') ? <Form.Item
+        {authorizationEnabled && show('authorization.initialAdministratorSubjects') ? <Form.Item
           extra="每个成员标识输入后按回车确认；必须填写认证系统中的真实 subjectId。"
           label="初始管理员成员标识"
           name={['authorization', 'initialAdministratorSubjects']}
@@ -165,7 +168,7 @@ export default function ApplicationConfigEditor({
             }
           }]}
         >
-          <Select disabled={!authorizationEnabled} mode="tags" placeholder="8位工号，输入后按回车" tokenSeparators={[',', '，', '\n']} />
+          <Select mode="tags" placeholder="8位工号，输入后按回车" tokenSeparators={[',', '，', '\n']} />
         </Form.Item> : null}
       </section>
       ) : null}
