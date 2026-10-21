@@ -231,7 +231,7 @@ def create_application_lifecycle(
 
 
 def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | None:
-    """读取并严格校验状态文件；缺失时返回空，损坏时显式失败。"""
+    """读取生命周期快照，允许可选字段缺失并保留额外字段；损坏内容显式失败。"""
 
     path = application_lifecycle_path(workspace)
     if not path.exists():
@@ -245,10 +245,12 @@ def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | 
     if not isinstance(raw, dict):
         raise ApplicationLifecycleCorruptedError("生命周期状态文件根节点必须是对象。")
     try:
-        return ApplicationLifecycle.model_validate(raw)
+        # 磁盘快照不套用动作请求的额外字段禁令；递归保留扩展数据，避免读后写回丢失字段。
+        # 可选字段沿用模型默认值；身份、执行归属等必要数据仍按其实际类型读取。
+        return ApplicationLifecycle.model_validate(raw, extra="allow")
     except ValidationError as exc:
         raise ApplicationLifecycleCorruptedError(
-            "生命周期状态文件未通过 schema 校验。"
+            "生命周期状态文件中的必要字段缺失或字段内容无效。"
         ) from exc
 
 

@@ -106,7 +106,7 @@ class ExecutionResourceReason(StrEnum):
 class ApplicationLifecycleModel(BaseModel):
     """为生命周期模型提供统一的驼峰序列化配置。"""
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
 
 class ApplicationIdentity(ApplicationLifecycleModel):

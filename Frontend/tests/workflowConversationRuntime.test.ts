@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createElement, type MutableRefObject, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import type { AgUiChatSession } from '../src/renderer/src/service/agUiAgent'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import {
@@ -36,6 +37,59 @@ const OWNER_SESSION_ID = 'session-owner'
 const OWNER_THREAD_ID = 'thread-owner'
 const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
+
+test('无生命周期冷启动收口连接：业务失败展示真实错误，显式同步成功后清除', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  const fakeWindow = Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } })
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow })
+  let root: ReactTestRenderer | undefined
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  let failed = true
+  const actions: string[] = []
+  const params = buildRuntimeParams({ activeSession: buildSessionIdentity(),
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: buildIdleLifecycle(), agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined })
+  params.applicationLifecycle = undefined
+  /** 挂载真实 Hook，覆盖静态渲染无法执行的初始连接 effect。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (input, init) => {
+    assert.ok(String(input).endsWith('/application-lifecycle/run'))
+    const body = JSON.parse(String(init?.body))
+    actions.push(body.forwardedProps.applicationLifecycle.action)
+    if (!failed) return sseResponse(body.threadId, body.runId, { applicationLifecycle: buildIdleLifecycle() })
+    const result = { applicationLifecycle: { schemaVersion: 1, threadId: body.threadId,
+      runId: body.runId, status: 'failed', error: { type: 'ApplicationLifecycleCorruptedError',
+        message: '生命周期状态文件未通过 schema 校验。' } } }
+    const events = [{ type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+      { type: 'STATE_SNAPSHOT', snapshot: result },
+      { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId, result }]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+      { headers: { 'content-type': 'text/event-stream' } })
+  }
+  try {
+    await act(async () => { root = create(createElement(Probe)) })
+    assert.equal(runtime.connectionState.status, 'healthy')
+    assert.equal(runtime.lifecycleSyncError, '生命周期状态文件未通过 schema 校验。')
+    assert.deepEqual(actions, ['workspace_attach'])
+    failed = false
+    await act(async () => { assert.equal(await runtime.refreshExecutionRecoveryLifecycle(), true) })
+    assert.equal(runtime.connectionState.status, 'healthy')
+    assert.equal(runtime.lifecycleSyncError, undefined)
+    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'get'])
+    // 真正的网络失败仍走连接提示，不能被业务错误分类吞掉。
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
+    await act(async () => { assert.equal(await runtime.refreshExecutionRecoveryLifecycle(), false) })
+    assert.equal(runtime.connectionState.status, 'unavailable')
+    assert.equal(runtime.lifecycleSyncError, undefined)
+  } finally {
+    await act(async () => { root?.unmount() })
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
 
 test('规划来源只读时，正式续接按显式开发 owner 判断；其他目标仍被阻止', async () => {
   const previousWindow = globalThis.window

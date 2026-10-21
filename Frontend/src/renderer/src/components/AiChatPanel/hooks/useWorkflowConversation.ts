@@ -20,7 +20,7 @@ import {
   getApplicationPlanningUrl,
   revisionContinuationHandoffFromWorkflow
 } from '../../../service/applicationPagePlanning'
-import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
+import { ApplicationLifecycleActionError, getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
@@ -286,6 +286,7 @@ type UseWorkflowConversationParams = {
 type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
   connectionState: ConnectionState
+  lifecycleSyncError?: string
   workbenchRefreshConnection: WorkbenchRunRefreshConnection
   conversationRunning: boolean
   error?: string
@@ -722,6 +723,7 @@ export function useWorkflowConversation({
   const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
     initialConnectionState(Boolean(applicationLifecycle))
   )
+  const [lifecycleSyncError, setLifecycleSyncError] = useState<string>()
   const connectionRequestGenerationRef = useRef(0)
   const applicationLifecycleRef = useRef(applicationLifecycle)
   const connectionStateRef = useRef(connectionState)
@@ -740,8 +742,9 @@ export function useWorkflowConversation({
     const next = { ...initialConnectionState(Boolean(applicationLifecycleRef.current)), requestGeneration: generation }
     connectionStateRef.current = next
     setConnectionState(next)
+    setLifecycleSyncError(undefined)
     return () => { ++connectionRequestGenerationRef.current }
-  }, [application.id, activeSession?.key, draftKey])
+  }, [application.id, application.workspaceRoot, activeSession?.key, draftKey])
 
   const workbenchRefreshConnection: WorkbenchRunRefreshConnection = {
     scopeKey: activeSession?.key,
@@ -768,6 +771,7 @@ export function useWorkflowConversation({
   // 任一成功到达的 Backend lifecycle 都能恢复连接维度，但不会改写 Recovery projection。
   useEffect(() => {
     if (!applicationLifecycle) return
+    setLifecycleSyncError(undefined)
     setConnectionState((current) =>
       completeConnectionRequest(current, current.requestGeneration)
     )
@@ -1048,6 +1052,7 @@ export function useWorkflowConversation({
     try {
       const lifecycle = await getApplicationLifecycle(application)
       if (!isCurrent()) return false
+      setLifecycleSyncError(undefined)
       applicationLifecycleRef.current = lifecycle
       onApplicationLifecycleChange(lifecycle)
       connectionStateRef.current = completeConnectionRequest(
@@ -1063,6 +1068,13 @@ export function useWorkflowConversation({
       return true
     } catch (error) {
       if (!isCurrent()) return false
+      // 完整业务失败响应证明连接正常，工作区读取错误应保留在独立同步入口。
+      if (error instanceof ApplicationLifecycleActionError) {
+        connectionStateRef.current = completeConnectionRequest(connectionStateRef.current, requestGeneration)
+        setConnectionState(connectionStateRef.current)
+        setLifecycleSyncError(error.message)
+        return false
+      }
       setConnectionState((current) =>
         failConnectionRequest(
           current,
@@ -1073,6 +1085,11 @@ export function useWorkflowConversation({
       return false
     }
   }
+
+  // 冷启动或切换会话必须收口初始连接；没有 lifecycle/运行中 Run 时也不能永久停在 connecting。
+  useEffect(() => {
+    if (application.workspaceRoot) void refreshExecutionRecoveryLifecycle()
+  }, [application.id, application.workspaceRoot, activeSession?.key, draftKey])
 
   /** 单次点击先刷新 durable truth，再执行 Backend 当前允许的恢复或重新判断失败。 */
   const retryCurrentRecovery = async (): Promise<boolean> => {
@@ -2661,6 +2678,7 @@ export function useWorkflowConversation({
   return {
     activeWorkflow,
     connectionState,
+    lifecycleSyncError,
     workbenchRefreshConnection,
     conversationRunning,
     error,

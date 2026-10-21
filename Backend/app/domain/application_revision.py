@@ -56,6 +56,8 @@ class EarliestRevisionArtifact(StrEnum):
 class RevisionTarget(RevisionModel):
     """保存应用、页面或接口会话的稳定业务目标。"""
 
+    model_config = ConfigDict(extra="allow")
+
     type: Literal["application", "page", "endpoint"]
     page_id: str | None = Field(default=None, alias="pageId", max_length=512)
     api_contract_id: str | None = Field(
@@ -134,6 +136,8 @@ class RevisionRoutingCandidate(RevisionModel):
 
 class RevisionImpact(RevisionModel):
     """投影执行任何正式分支前的只读影响范围确认内容。"""
+
+    model_config = ConfigDict(extra="allow")
 
     formal_branch: FormalRevisionBranch = Field(alias="formalBranch")
     revision_type: RevisionType = Field(alias="revisionType")
@@ -231,6 +235,8 @@ class RevisionDraftMetadata(RevisionModel):
 class PendingRevisionImpact(RevisionModel):
     """保存尚未批准且未获取 formal revision lease 的影响范围确认。"""
 
+    model_config = ConfigDict(extra="allow")
+
     change_id: str = Field(alias="changeId", min_length=1, max_length=256)
     interaction_id: str = Field(alias="interactionId", min_length=1, max_length=256)
     source_thread_id: str = Field(alias="sourceThreadId", min_length=1, max_length=512)
@@ -244,6 +250,8 @@ class PendingRevisionImpact(RevisionModel):
 
 class ActiveFormalRevision(RevisionModel):
     """保存一个 application 唯一 active formal revision 及 continuation 绑定。"""
+
+    model_config = ConfigDict(extra="allow")
 
     change_id: str = Field(alias="changeId", min_length=1, max_length=256)
     formal_branch: FormalRevisionBranch = Field(alias="formalBranch")

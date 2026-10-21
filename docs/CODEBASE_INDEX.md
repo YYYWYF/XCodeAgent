@@ -2,6 +2,10 @@
 
 Last updated: 2026-10-21
 
+生命周期磁盘快照由 `services/application_lifecycle.py::load_application_lifecycle` 递归允许额外字段，生命周期及持久化修订/开发状态模型保留额外数据供写回；可选字段缺失时使用已有模型默认值。必要身份、字段类型及文件 JSON 结构继续检查；动作请求的必填身份与确认规则不变。回归：`tests.test_application_lifecycle_snapshot`、`tests.test_application_lifecycle`。
+
+工作台连接冷启动由 `AiChatPanel/hooks/useWorkflowConversation.ts` 在应用/会话切换后沿既有 Lifecycle AG-UI 同步收口，即使缺少 lifecycle 和活动 Run 也不遗留 `connecting`。`service/applicationLifecycle.ts::ApplicationLifecycleActionError` 表示 Backend 已响应的业务失败；Hook 保持连接健康并独立投影 `lifecycleSyncError`，底部展示“工作区状态读取失败 / 重新同步”，不自动修复状态文件或执行节点。回归：`pnpm test:connection-recovery` 的真实 React effect 冷启动、schema 失败及显式同步恢复。
+
 主工作流测试阶段的 `small_task_repair` 是集成测试内部修复步骤：失败后的公开 Recovery 动作和实际执行入口均由 `services/business_node_retry.py` 映射到 `integration_test`；统一重试在新 Graph State 中复用 `integration_test_reentry.py::fresh_integration_test_fields` 清除旧检查、任务、确认及修复次数，保留源码、变更归属和单测状态，并读取当前磁盘输入。二次修改 `workflow_scope=conversation`、开发阶段 `unit_test_repair` 和暂停续接仍保持原入口。回归：`tests.test_testing_stage_retry`、`tests.test_checkpoint_first_retry`、`tests.test_integration_test_reentry`。
 
 放弃开发任务计划时，`services/pending_plan_execution.py` 以已验证 Pending 的 owner、DraftIdentity 和开发范围定位当前未提交的任务确认执行；`application_lifecycle.py::record_abandoned_planning_result` 收口匹配执行及其资源，生成来源 Run 仅用于溯源。确认失败发生执行交接后，Abandon 不再遗留当前确认门；其他草稿/会话、运行中执行和正式计划保留。现有 AG-UI Abandon 端点不变。回归：`tests.test_build_task_plan_lifecycle`、`tests.test_build_task_plan_abandon`。

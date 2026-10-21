@@ -2431,6 +2431,7 @@ export default function AiChatPanel({
     activeWorkflow: localActiveWorkflow,
     conversationRunning,
     connectionState,
+    lifecycleSyncError,
     workbenchRefreshConnection,
     error,
     handleAcceptPreview,
@@ -3986,9 +3987,9 @@ export default function AiChatPanel({
   // End 成功后立即隐藏旧 Recovery；Backend lifecycle 投影更新前也不能再点旧重试。
   const endedWorkbenchRecovery = !isApplicationPlanningPhase && planEnded
   const recoveryProjectionError =
-    isApplicationPlanningPhase && planningState?.checkpointMissing
+    lifecycleSyncError || (isApplicationPlanningPhase && planningState?.checkpointMissing
       ? undefined
-      : executionRecoveryReadError(applicationLifecycle)
+      : executionRecoveryReadError(applicationLifecycle))
   // 恢复投影失败只重新读取该投影，不误派发到另一个独立节点或执行旧动作。
   const retryRecoveryProjection = recoveryProjectionError
     ? () => {
@@ -5413,7 +5414,8 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
-                      title={globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      title={lifecycleSyncError ? '工作区状态读取失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      retryLabel={lifecycleSyncError ? '重新同步' : undefined}
                       error={globalFallback.error}
                       onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
                         ? handleRetryPlanning

@@ -7,9 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DevelopmentArtifactModel(BaseModel):
-    """严格校验产物状态，统一使用公开 camelCase 字段。"""
+    """读取产物状态并保留额外字段，统一使用公开 camelCase 字段。"""
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 class DevelopmentArtifactTarget(DevelopmentArtifactModel):

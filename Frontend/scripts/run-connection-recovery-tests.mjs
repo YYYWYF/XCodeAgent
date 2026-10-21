@@ -3,6 +3,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
+import { createRequire } from 'node:module'
+
+// Hook 回归使用原生 React 调度，确保真实 effect 执行且 act 不遗留 MessagePort。
+process.env.NODE_ENV = 'test'
+const require = createRequire(import.meta.url)
+const reactModules = ['react', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-dom', 'react-dom/server', 'react-test-renderer']
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const entryFile = path.join(frontendRoot, 'tests', 'connectionRecoverySeparation.test.tsx')
@@ -17,6 +23,7 @@ try {
     configFile: false,
     logLevel: 'error',
     root: frontendRoot,
+    define: { 'process.env.NODE_ENV': JSON.stringify('test') },
     css: {
       preprocessorOptions: {
         less: { additionalData: '@class-prefix: xa;', javascriptEnabled: true }
@@ -28,7 +35,13 @@ try {
       minify: false,
       outDir: outputDirectory,
       ssr: entryFile,
-      rollupOptions: { output: { entryFileNames: path.basename(outputFile) } }
+      rollupOptions: {
+        external: reactModules,
+        output: {
+          entryFileNames: path.basename(outputFile),
+          paths: (id) => reactModules.includes(id) ? require.resolve(id) : id
+        }
+      }
     }
   })
   await import(`${pathToFileURL(outputFile).href}?run=${Date.now()}`)

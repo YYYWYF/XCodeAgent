@@ -42,7 +42,8 @@ type ResolvedApplicationLifecyclePayload = ApplicationLifecyclePayload & {
   lifecycle: ApplicationLifecycle
 }
 
-/** 携带后端错误类型的生命周期动作失败，供调用方按类型决定是否补建状态。 */class ApplicationLifecycleActionError extends Error {
+/** 携带后端错误类型的业务失败；收到此错误表示 Backend 已正常响应。 */
+export class ApplicationLifecycleActionError extends Error {
   readonly errorType: string | undefined
 
   constructor(errorType: string | undefined, message: string) {
