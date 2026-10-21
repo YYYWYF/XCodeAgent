@@ -6,6 +6,15 @@ from typing import Any
 from app.domain.execution_recovery import DurableExecutionStatus, RecoveryExecutionError
 
 
+_NON_BUSINESS_RECOVERY_NODES = {
+    "workflow_entry",
+    "handle_failure",
+    "await_user_input",
+    "__end__",
+    "completed",
+}
+
+
 @dataclass(frozen=True)
 class CheckpointExecution:
     """保存同一次已提交现场的状态、节点、提问和原生快照。"""
@@ -26,6 +35,59 @@ def execution_is_live(source) -> bool:
             or bool(workspace_process_registry.active_run_processes(source.run_id)))
 
 
+def _has_native_user_interrupt(source, snapshot, tasks) -> bool:
+    """按各工作流公开的真实中断载荷区分确认门和过期状态字段。"""
+    if source.execution_kind == "application_planning":
+        from app.protocols.application_planning_interrupt import application_planning_interrupt_from_snapshot
+
+        return application_planning_interrupt_from_snapshot(snapshot) is not None
+    return any(getattr(task, "interrupts", ()) for task in tasks)
+
+
+def _application_planning_successor(phase: str, values: dict[str, Any], graph) -> str:
+    """仅在规划节点有确定性路由时推导其唯一业务后继。"""
+    if phase not in getattr(graph, "nodes", {}):
+        return ""
+    from app.graph.application_planning_workflow import (
+        _route_product_planning,
+        _route_requirements,
+        _route_technical_planning,
+        _route_technical_planning_commit,
+        _route_technical_planning_confirm,
+        _route_technical_planning_generate,
+        _route_ui_confirmation,
+    )
+    from app.graph.application_planning_interrupts import (
+        route_planning_stage_entry,
+        route_requirements_review,
+        route_technical_planning_review,
+    )
+
+    routers = {
+        "requirements": _route_requirements,
+        "requirements_review": route_requirements_review,
+        "product_planning": _route_product_planning,
+        "ui_confirmation": _route_ui_confirmation,
+        "planning_stage_entry": route_planning_stage_entry,
+        "technical_planning": _route_technical_planning,
+        "technical_planning_generate": _route_technical_planning_generate,
+        "technical_planning_commit": _route_technical_planning_commit,
+        "technical_planning_confirm": _route_technical_planning_confirm,
+        "technical_planning_review": route_technical_planning_review,
+    }
+    router = routers.get(phase)
+    if router is None:
+        return ""
+    try:
+        target = str(router(values) or "")
+    except Exception:
+        # 缺少路由所需的 checkpoint 字段时由调用方重跑最后业务节点。
+        return ""
+    if target in _NON_BUSINESS_RECOVERY_NODES or target not in getattr(graph, "nodes", {}):
+        return ""
+    return target
+
+
 def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
     """仅解释属于原 Run 的 root 现场，待执行节点优先于过期的阶段展示字段。"""
     values = getattr(snapshot, "values", {}) or {}
@@ -44,6 +106,28 @@ def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
     pending = list(getattr(snapshot, "next", ()) or ())
     raw_status = str(values.get("status") or "")
     phase = str(values.get("phase") or "")
+    live = execution_is_live(source)
+    native_interrupt = _has_native_user_interrupt(source, snapshot, tasks)
+    if failed or raw_status == "failed":
+        status = DurableExecutionStatus.FAILED
+    elif native_interrupt:
+        status = DurableExecutionStatus.AWAITING_USER
+    elif raw_status in {"requires_user_input", "awaiting_user"}:
+        if source.execution_kind == "application_planning":
+            # Planning 的状态投影只有在 checkpoint 持有真实审阅中断载荷时才代表确认门。
+            status = DurableExecutionStatus.RUNNING if live else DurableExecutionStatus.INTERRUPTED
+        else:
+            status = DurableExecutionStatus.AWAITING_USER
+    elif live:
+        status = DurableExecutionStatus.RUNNING
+    elif pending:
+        status = DurableExecutionStatus.INTERRUPTED
+    elif raw_status in {"completed", "cancelled", "stopped"}:
+        status = DurableExecutionStatus(raw_status)
+    else:
+        # 未提交明确终态且真实工作已退出：保留最后现场，不能借用索引假定仍在确认。
+        status = DurableExecutionStatus.INTERRUPTED
+
     candidates = failed or ([phase] if raw_status == "failed" and phase in getattr(graph, "nodes", {}) else pending)
     node = str(candidates[0]) if len(candidates) == 1 else ""
     if node == "workflow_entry":
@@ -59,23 +143,24 @@ def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
             entry = route(values)
         if entry in graph.nodes and entry != "workflow_entry":
             node = entry
+    if node in _NON_BUSINESS_RECOVERY_NODES:
+        node = ""
+    if not node and status in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
+        # 没有唯一的失败/待执行节点时，先读取 checkpoint 状态中的确定性后继；
+        # 路由缺失或存在歧义时，从最后业务节点带完整上下文重新执行。
+        successor = (
+            _application_planning_successor(phase, values, graph)
+            if source.execution_kind == "application_planning" and not pending
+            else ""
+        )
+        if successor:
+            node = successor
+        elif phase in getattr(graph, "nodes", {}) and phase not in _NON_BUSINESS_RECOVERY_NODES:
+            node = phase
     interaction = values.get("application_planning_interaction") or {}
     question = interaction.get("request") if interaction.get("action") in {"answer", "revise", "design_change"} else ""
     request = str(question or values.get("design_change_generation_request")
                   or values.get("design_change_request") or values.get("request") or "").strip()
-    if failed or raw_status == "failed":
-        status = DurableExecutionStatus.FAILED
-    elif any(getattr(task, "interrupts", ()) for task in tasks) or raw_status in {"requires_user_input", "awaiting_user"}:
-        status = DurableExecutionStatus.AWAITING_USER
-    elif execution_is_live(source):
-        status = DurableExecutionStatus.RUNNING
-    elif pending:
-        status = DurableExecutionStatus.INTERRUPTED
-    elif raw_status in {"completed", "cancelled", "stopped"}:
-        status = DurableExecutionStatus(raw_status)
-    else:
-        # 未提交明确终态且真实工作已退出：保留最后现场，不能借用索引假定仍在确认。
-        status = DurableExecutionStatus.INTERRUPTED
     return CheckpointExecution(snapshot, status, node, request)
 
 

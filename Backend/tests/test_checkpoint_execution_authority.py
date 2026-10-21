@@ -137,6 +137,91 @@ class CheckpointAuthorityTests(unittest.IsolatedAsyncioTestCase):
                            {"configurable": {"thread_id": source.thread_id}})
         self.assertEqual((await resolve_checkpoint_source(source, graph)).status.value, "awaiting_user")
 
+    async def test_planning_status_without_native_review_interrupt_is_retryable(self):
+        """Planning 的 requires_user_input 投影没有原生审阅中断时应统一视为中断。"""
+        source = BusinessNodeRetryTests().source("/unused").model_copy(update={
+            "execution_kind": "application_planning",
+            "workflow_scope": "application_planning",
+            "status": DurableExecutionStatus.INTERRUPTED,
+        })
+        snapshot = SimpleNamespace(
+            values={"active_run_id": source.run_id, "request": "恢复需求生成",
+                    "phase": "requirements", "status": "requires_user_input"},
+            next=("requirements",), tasks=(), config={},
+        )
+        graph = SimpleNamespace(
+            nodes={"requirements": object(), "product_planning": object()},
+            aget_state=AsyncMock(return_value=snapshot),
+        )
+        with patch("app.services.checkpoint_execution.execution_is_live", return_value=False):
+            resolved = await resolve_checkpoint_source(source, graph)
+            plan = await retry_action_plan(resolved, graph)
+        self.assertEqual(resolved.status, DurableExecutionStatus.INTERRUPTED)
+        self.assertEqual(plan.primary_action.target_node, "requirements")
+
+    async def test_application_planning_native_review_interrupt_stays_awaiting_user(self):
+        """真实规划审阅中断继续由用户确认，不被中断回退规则转换。"""
+        source = BusinessNodeRetryTests().source("/unused").model_copy(update={
+            "execution_kind": "application_planning",
+            "workflow_scope": "application_planning",
+            "status": DurableExecutionStatus.INTERRUPTED,
+        })
+        interrupt_item = SimpleNamespace(value={"type": "application_planning_review"}, id="review-id")
+        task = SimpleNamespace(error=None, interrupts=(interrupt_item,))
+        snapshot = SimpleNamespace(
+            values={"active_run_id": source.run_id, "phase": "requirements_review",
+                    "status": "requires_user_input"},
+            next=("requirements_review",), tasks=(task,), config={},
+        )
+        graph = SimpleNamespace(nodes={"requirements_review": object()}, aget_state=AsyncMock(return_value=snapshot))
+        with patch("app.services.checkpoint_execution.execution_is_live", return_value=False):
+            resolved = await resolve_checkpoint_source(source, graph)
+        self.assertEqual(resolved.status, DurableExecutionStatus.AWAITING_USER)
+
+    async def test_empty_interrupted_planning_checkpoint_routes_to_unique_successor(self):
+        """R02 这种无 next 的需求现场按保存状态确定地进入 ProductPlan。"""
+        source = BusinessNodeRetryTests().source("/unused").model_copy(update={
+            "execution_kind": "application_planning",
+            "workflow_scope": "application_planning",
+            "status": DurableExecutionStatus.INTERRUPTED,
+        })
+        snapshot = SimpleNamespace(
+            values={"active_run_id": source.run_id, "request": "创建任务中心",
+                    "phase": "requirements", "status": "clear",
+                    "clarification": {"status": "clear"},
+                    "requirement_spec": {"confirmation_status": "pending"},
+                    "product_plan": {}},
+            next=(), tasks=(), config={},
+        )
+        graph = SimpleNamespace(
+            nodes={"requirements": object(), "requirements_review": object(), "product_planning": object()},
+            aget_state=AsyncMock(return_value=snapshot),
+        )
+        with patch("app.services.checkpoint_execution.execution_is_live", return_value=False):
+            execution = await read_checkpoint_execution(source, graph)
+            plan = await retry_action_plan(source, graph)
+        self.assertEqual(execution.status, DurableExecutionStatus.INTERRUPTED)
+        self.assertEqual(execution.node, "product_planning")
+        self.assertEqual(plan.primary_action.target_node, "product_planning")
+        self.assertEqual(execution.request, "创建任务中心")
+
+    async def test_ambiguous_planning_route_retries_last_business_node(self):
+        """无法推导唯一规划后继时回到 checkpoint 中保存的最后业务节点。"""
+        source = BusinessNodeRetryTests().source("/unused").model_copy(update={
+            "execution_kind": "application_planning",
+            "workflow_scope": "application_planning",
+            "status": DurableExecutionStatus.INTERRUPTED,
+        })
+        snapshot = SimpleNamespace(
+            values={"active_run_id": source.run_id, "request": "继续自定义阶段",
+                    "phase": "custom_business", "status": "running"},
+            next=(), tasks=(), config={},
+        )
+        graph = SimpleNamespace(nodes={"custom_business": object()}, aget_state=AsyncMock(return_value=snapshot))
+        with patch("app.services.checkpoint_execution.execution_is_live", return_value=False):
+            execution = await read_checkpoint_execution(source, graph)
+        self.assertEqual(execution.node, "custom_business")
+
 
 class ArtifactPrerequisiteRecoveryTests(unittest.IsolatedAsyncioTestCase):
     """验证上游损坏提示、明确生成入口及跨 Graph 交接和撤销。"""

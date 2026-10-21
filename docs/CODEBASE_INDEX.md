@@ -1,6 +1,6 @@
 # DevAgent Studio Codebase Index
 
-Last updated: 2026-10-20
+Last updated: 2026-10-21
 
 主工作流测试阶段的 `small_task_repair` 是集成测试内部修复步骤：失败后的公开 Recovery 动作和实际执行入口均由 `services/business_node_retry.py` 映射到 `integration_test`；统一重试在新 Graph State 中复用 `integration_test_reentry.py::fresh_integration_test_fields` 清除旧检查、任务、确认及修复次数，保留源码、变更归属和单测状态，并读取当前磁盘输入。二次修改 `workflow_scope=conversation`、开发阶段 `unit_test_repair` 和暂停续接仍保持原入口。回归：`tests.test_testing_stage_retry`、`tests.test_checkpoint_first_retry`、`tests.test_integration_test_reentry`。
 
@@ -30,7 +30,7 @@ UI 后台生成池所在的 `ui_confirmation` 审阅门由现有 Runtime 五秒�
 
 单元测试生成进度沿原 `unit_test.checks` → `agent-process.checks` 投影可选 `activeToolActivity`：`graph/subgraphs/testing.py` 将 TestGeneration Agent 已脱敏的文件工具回调发布到本轮各端生成检查，同次调用按 `callId` 更新最新状态，生成检查收口即清除；不写入 Graph State、测试报告或持久化检查历史。`protocols/workflow/stream_events.py` 与 `Frontend/.../service/workspaceToolActivity.ts` 只保留可展示文件工具与必要字段。`ProcessSteps` 在“正在调用 TestGeneration Agent…”下方复用开发任务的 `WorkflowRunCard/WorkspaceToolActivity.tsx` 和主题样式，显示最新操作及运行/成功/失败图标，不增加独立顶层步骤。回归：`tests.test_testing_subgraph_events`、`tests.test_workflow_ag_ui`、`pnpm test:chat-skills`。
 
-恢复入口定位优先用原生 `aget_state` 读取当前 root checkpoint，仅当前现场不属于来源 Run 或失败终态缺少业务节点时查询历史，避免每次点击重复解码整个线程。`checkpoint_execution.py` / `business_node_retry.py` 区分读取超时、I/O 故障与读取成功后确无入口：前者以 `RETRY_CHECKPOINT_UNAVAILABLE` 保留原重试资格，只有后者可释放来源并提示手动发起。不增加 Lifecycle 准入；异步持久化不变。回归包含生产同款 AsyncSqliteSaver，以及超时后再次点击成功。
+恢复入口定位优先用原生 `aget_state` 读取当前 root checkpoint，仅当前现场不属于来源 Run 或失败终态缺少业务节点时查询历史，避免每次点击重复解码整个线程。`checkpoint_execution.py` / `business_node_retry.py` 区分读取超时、I/O 故障与读取成功后确无入口：前者以 `RETRY_CHECKPOINT_UNAVAILABLE` 保留原重试资格，只有后者可释放来源并提示手动发起。Application Planning 的 `awaiting_user` 只有 checkpoint 持有真实审阅中断载荷时才作为确认门；无原生中断的中断现场统一归为 `interrupted`。没有唯一 `next` 时优先按 checkpoint 中最后业务节点的确定性路由选择后继，路由不明确则从该业务节点带完整状态创建新 Run 重执行。不增加 Lifecycle 准入；异步持久化不变。回归包含生产同款 AsyncSqliteSaver、空 `next` 路由、歧义回退及超时后再次点击成功。
 
 统一重试直接使用原 Graph 的 `custom` 进度和 `messages` 流，不再包装或缓冲节点结果。一次点击只执行原失败节点一次，失败直接由原 AG-UI Runtime 收口；带/不带子图命名空间的进度均实时交付。回归：`tests.test_checkpoint_first_retry`。
 

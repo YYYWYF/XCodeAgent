@@ -109,7 +109,16 @@ class ApplicationPlanningRecoveryProjectionTests(unittest.IsolatedAsyncioTestCas
             update={"stage": ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
                     "status": ApplicationLifecycleStatus.FAILED})})
         write_application_lifecycle(str(self.workspace), lifecycle)
-        graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(values={}, config={})))
+
+        async def empty_history(config):
+            """模拟 checkpoint 查询成功但来源 Run 没有任何已提交现场。"""
+            if False:
+                yield None
+
+        graph = SimpleNamespace(
+            aget_state=AsyncMock(return_value=SimpleNamespace(values={}, config={})),
+            aget_state_history=empty_history,
+        )
         with (patch("app.protocols.application_page_planning.reconcile_workspace_recovery", new=AsyncMock()),
               patch("app.persistence.execution_recovery.list_executions_for_thread", new=AsyncMock(return_value=[self.source])),
               patch("app.persistence.execution_recovery.get_execution", new=AsyncMock(return_value=self.source))):
