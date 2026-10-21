@@ -23,7 +23,7 @@ import {
 
 const { Text } = Typography
 
-export type RequirementSectionKey = 'overview' | 'pages' | 'flows'
+export type RequirementSectionKey = 'overview' | 'pages' | 'flows' | 'page-design-overview'
 
 type SectionProps = {
   sectionKey: RequirementSectionKey

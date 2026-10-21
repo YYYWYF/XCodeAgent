@@ -128,7 +128,6 @@ export default function DocPanel({
                 <TechnicalPlanDocPanel
                   plan={technicalPlan}
                   productPlan={productPlan}
-                  spec={requirementSpec}
                 />
               ) : (
                 <div className={cx('doc-panel-empty')}>
