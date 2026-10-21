@@ -5,15 +5,9 @@ import type { ReactElement } from 'react'
 import type { WorkflowApiDatabaseCondition, WorkflowApiDatabaseConditionOperator, WorkflowApiDatabaseQuery, WorkflowApiField } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
 import { allowedDatabaseConditionOperators, apiDesignFieldKey, queryParameterCompatible } from '../WorkflowRunCard/apiDesignSerialization'
-import { addQueryCondition, addQueryGroup, emptyQueryCondition, removeQueryItem, replaceQueryCondition } from './databaseQueryModel'
+import { addQueryCondition, addQueryGroup, DATABASE_CONDITION_LABELS, emptyQueryCondition, removeQueryItem, replaceQueryCondition } from './databaseQueryModel'
 import ValueRuleEditor from './ValueRuleEditor'
 import './DatabaseQueryEditor.less'
-
-const OPERATOR_LABELS: Record<WorkflowApiDatabaseConditionOperator, string> = {
-  eq: '等于', ne: '不等于', gt: '大于', gte: '大于等于', lt: '小于', lte: '小于等于',
-  contains: '包含', not_contains: '不包含', starts_with: '前缀匹配', ends_with: '后缀匹配',
-  in: '属于', not_in: '不属于', between: '介于', not_between: '不介于', is_null: '为空', is_not_null: '不为空'
-}
 
 const QUERY_JOIN_OPTIONS = [
   { value: 'and', label: '全部条件 AND' },
@@ -61,10 +55,10 @@ export default function DatabaseQueryEditor({ selection, columns, fields, query,
           options={columns.map((column) => ({ value: column.name, label: `${column.name}${column.description ? `（${column.description}）` : ''} · ${column.type}` }))}
           onChange={(name) => { const column = columns.find((item) => item.name === name); if (column) { update(index, { ...condition, column: name, type: column.type, description: column.description, operator: 'eq', right: undefined }, groupIndex) } }} />}
       </div>
-      {readOnly ? <span className="database-static-operator">{OPERATOR_LABELS[condition.operator]}</span> : <Select disabled={!editable || busy || !condition.column} value={condition.operator} options={operators.map((operator) => ({ value: operator, label: OPERATOR_LABELS[operator] }))}
+      {readOnly ? <span className="database-static-operator">{DATABASE_CONDITION_LABELS[condition.operator]}</span> : <Select disabled={!editable || busy || !condition.column} value={condition.operator} options={operators.map((operator) => ({ value: operator, label: DATABASE_CONDITION_LABELS[operator] }))}
         onChange={(operator: WorkflowApiDatabaseConditionOperator) => { update(index, { ...condition, operator, right: operator === 'is_null' || operator === 'is_not_null' ? undefined : condition.right?.kind === 'fixed' ? { kind: 'fixed', value: undefined } : condition.right }, groupIndex) }} />}
       {isNull ? <span className="database-query-no-value">无需右值</span> : <>
-        <ValueRuleEditor key={`${condition.column}:${condition.operator}`} title={condition.column || '查询条件'} right={condition.right} fields={fields} type={condition.type}
+        <ValueRuleEditor key={`${condition.column}:${condition.operator}`} title={condition.column || '查询条件'} right={condition.right} fields={fields} type={condition.type} ruleTarget={{ area: 'query', key: condition.column }}
           collection={['in', 'not_in', 'between', 'not_between'].includes(condition.operator)} readOnly={readOnly}
           disabled={!editable || busy || !condition.column} onChange={(right) => update(index, { ...condition, right }, groupIndex)} />
       </>}

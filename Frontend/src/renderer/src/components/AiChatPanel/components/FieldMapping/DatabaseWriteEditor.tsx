@@ -5,6 +5,7 @@ import type { WorkflowApiDatabaseWriteDraft, WorkflowApiField } from '../../../.
 import type { BindingSelection } from '../../../../typings/endpointDesign'
 import ValueRuleEditor from './ValueRuleEditor'
 import './DatabaseWriteEditor.less'
+import MappingAssistReview from './MappingAssistReview'
 
 type Props = {
   selection: BindingSelection & { sourceType: 'database' }
@@ -53,8 +54,9 @@ export default function DatabaseWriteEditor({ selection, columns, fields, writes
               updateWrite(index, { ...write, column: column?.name || '', type: column?.type || 'unknown', description: column?.description || '',
                 right: right?.kind === 'fixed' ? { kind: 'fixed', value: '' } : { kind: 'endpoint' } })
             }} />}
+        {readOnly && <MappingAssistReview area="write" target={write.column} />}
       </div>
-      <ValueRuleEditor title={write.column || '写入字段'} right={right} fields={fields} type={write.type} readOnly={readOnly}
+      <ValueRuleEditor title={write.column || '写入字段'} right={right} fields={fields} type={write.type} readOnly={readOnly} ruleTarget={{ area: 'write', key: write.column }}
         disabled={!editable || busy || !write.column} onChange={(right) => updateWrite(index, { ...write, right })} />
       {!readOnly ? <Button className="database-write-delete" danger type="text" disabled={!editable || busy}
         icon={<DeleteOutlined />} aria-label="删除写入字段" onClick={() => removeWrite(index)} /> : null}

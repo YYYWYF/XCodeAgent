@@ -1,5 +1,11 @@
-import type { WorkflowApiDatabaseCondition, WorkflowApiDatabaseQuery } from '../../../../typings'
+import type { WorkflowApiDatabaseCondition, WorkflowApiDatabaseConditionOperator, WorkflowApiDatabaseQuery } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
+
+export const DATABASE_CONDITION_LABELS: Record<WorkflowApiDatabaseConditionOperator, string> = {
+  eq: '等于', ne: '不等于', gt: '大于', gte: '大于等于', lt: '小于', lte: '小于等于',
+  contains: '包含', not_contains: '不包含', starts_with: '前缀匹配', ends_with: '后缀匹配',
+  in: '属于', not_in: '不属于', between: '介于', not_between: '不介于', is_null: '为空', is_not_null: '不为空'
+}
 
 /** 为当前数据表创建尚待选择列和右值的查询条件。 */
 export function emptyQueryCondition(selection: BindingSelection & { sourceType: 'database' }): WorkflowApiDatabaseCondition {

@@ -9,8 +9,15 @@ import type {
   WorkflowApiDesignAction
 } from '../typings'
 import type { BindingDraft, BindingSelection } from '../typings/endpointDesign'
+import type { MappingAssistAction, MappingAssistRequest, MappingAssistProgress, MappingAssistFailure } from '../typings/endpointDesignAssist'
 import { createAgUiHttpAgent } from './authentication'
 import { AgUiBusinessError } from './agUiBusinessError'
+
+/** 保留本轮失败阶段，仍按原 AG-UI 业务失败处理，不自动重放模型调用。 */
+export class MappingAssistError extends AgUiBusinessError {
+  /** 只携带服务端签发的短期恢复凭据，不接受客户端中间配置。 */
+  constructor(message: string, public readonly failure: MappingAssistFailure) { super(message) }
+}
 
 /** 返回 Endpoint 设计独立 AG-UI 路由地址。 */
 function endpointDesignsUrl(): string {
@@ -28,7 +35,7 @@ function readPayload(value: unknown): EndpointDesignsPayload | undefined {
     payload.schemaVersion !== 1 ||
     typeof payload.runId !== 'string' ||
     typeof payload.threadId !== 'string' ||
-    !['completed', 'failed'].includes(String(payload.status))
+    !['completed', 'failed', 'in_progress'].includes(String(payload.status))
   ) return undefined
   return payload as EndpointDesignsPayload
 }
@@ -96,35 +103,63 @@ export async function saveEndpointDesign(
 
 /** 运行一次独立 Endpoint 设计 AG-UI 动作并收敛最终状态。 */
 async function runEndpointDesignAction(
-  action: 'get' | 'prepare' | 'save' | 'save_draft' | 'discard_draft',
+  action: 'get' | 'prepare' | 'save' | 'save_draft' | 'discard_draft' | MappingAssistAction,
   workspaceRoot: string,
   apiContractId: string,
   endpointId: string,
   extra: Record<string, unknown> | undefined,
-  messageContent: string
+  messageContent: string,
+  options: { signal?: AbortSignal; onProgress?: (progress: MappingAssistProgress) => void } = {}
 ): Promise<EndpointDesignsPayload> {
   const threadId = randomUUID()
   const agent = createAgUiHttpAgent({ url: endpointDesignsUrl(), threadId })
   const message: Message = { id: randomUUID(), role: 'user', content: messageContent }
   agent.addMessage(message)
   let payload: EndpointDesignsPayload | undefined
+  let finished = false
+  /** 进度只更新辅助运行状态，不覆盖最终业务结果。 */
+  const accept = (value: EndpointDesignsPayload | undefined): void => {
+    if (!value) return
+    if (value.status === 'in_progress') { if (value.progress) options.onProgress?.(value.progress); return }
+    payload = value
+  }
   const subscriber: AgentSubscriber = {
     onCustomEvent: ({ event }) => {
-      if (event.name === 'endpoint-designs') payload = readPayload(event.value) ?? payload
+      if (event.name === 'endpoint-designs') accept(readPayload(event.value))
     },
     onStateSnapshotEvent: ({ event }) => {
-      payload = readState(event.snapshot) ?? payload
-    }
+      accept(readState(event.snapshot))
+    },
+    onRunFinishedEvent: () => { finished = true }
   }
-  const result = await agent.runAgent({
-    forwardedProps: {
-      endpointDesigns: { action, workspaceRoot, apiContractId, endpointId, ...extra }
+  /** 取消当前独立请求，关闭 HTTP 流后由后端收口对应模型任务。 */
+  const abort = (): void => agent.abortRun()
+  options.signal?.addEventListener('abort', abort, { once: true })
+  try {
+    if (options.signal?.aborted) throw new DOMException('已取消 AI 辅助', 'AbortError')
+    const result = await agent.runAgent({
+      forwardedProps: {
+        endpointDesigns: { action, workspaceRoot, apiContractId, endpointId, ...extra }
+      }
+    }, subscriber)
+    if (options.signal?.aborted) throw new DOMException('已取消 AI 辅助', 'AbortError')
+    accept(readState(result.result))
+    if (!finished) throw new Error('Endpoint 设计连接已中断，请重新发起当前操作。')
+    if (!payload) throw new Error('Endpoint 设计接口没有返回有效状态。')
+    if (payload.status === 'failed') {
+      const message = payload.error?.message || 'Endpoint 设计接口操作失败。'
+      if (action === 'generate_mapping' && payload.assistFailure) throw new MappingAssistError(message, payload.assistFailure)
+      throw new AgUiBusinessError(message)
     }
-  }, subscriber)
-  payload = readState(result.result) ?? readPayload((result.result as { endpointDesigns?: unknown })?.endpointDesigns) ?? payload
-  if (!payload) throw new Error('Endpoint 设计接口没有返回有效状态。')
-  if (payload.status === 'failed') throw new AgUiBusinessError(payload.error?.message || 'Endpoint 设计接口操作失败。')
-  return payload
+    return payload
+  } finally { options.signal?.removeEventListener('abort', abort) }
+}
+
+/** 辅助调用复用独立 Endpoint AG-UI 流，不进入主 Workflow。 */
+export async function requestMappingAssist(action: MappingAssistAction, request: MappingAssistRequest,
+  extra: Record<string, unknown>, options: { signal?: AbortSignal; onProgress?: (progress: MappingAssistProgress) => void } = {}): Promise<EndpointDesignsPayload> {
+  const { workspaceRoot, apiContractId, endpointId, ...input } = request
+  return runEndpointDesignAction(action, workspaceRoot, apiContractId, endpointId, { ...input, ...extra }, '请求字段映射 AI 辅助。', options)
 }
 
 /** 持久化未确认草稿，既不生成正式产物也不推进主工作流。 */

@@ -1,12 +1,20 @@
 import { Button, Input, Modal, Select } from 'antd'
 import { createContext, useContext, useEffect, useRef, useState, type ReactElement } from 'react'
 import './ValueRuleEditor.less'
+import type { RuleAssistTarget } from '../../../../typings/endpointDesignAssist'
+import RuleAssistSection from './RuleAssistSection'
 
 export const RuleEditingContext = createContext<(delta: number) => void>(() => {})
+
+/** 原规则弹窗挂载即占用外层保存锁，候选生成或采用不提前释放。 */
+export function useRuleEditingLock(): void {
+  const editing = useContext(RuleEditingContext)
+  useEffect(() => { editing(1); return () => editing(-1) }, [editing])
+}
 export type RuleContent = { dependencies: string[]; description: string; missing: 'error' | 'omit' | 'default'; defaultValue?: unknown }
 type InputSource = 'source' | 'endpoint' | 'builtin'
 type InputRow = { id: number; source: InputSource; field?: string }
-type Props = { title: string; initial: RuleContent; options: Array<{ value: string; label: string; group?: string }>; type: string; collection?: boolean; disabled: boolean; canDirect?: boolean; purposeOnly?: boolean; onDirect?: () => void; onApply: (value: RuleContent) => void; onClose: () => void }
+type Props = { title: string; initial: RuleContent; options: Array<{ value: string; label: string; group?: string }>; type: string; collection?: boolean; disabled: boolean; canDirect?: boolean; purposeOnly?: boolean; ruleTarget?: RuleAssistTarget; onDirect?: () => void; onApply: (value: RuleContent) => void; onClose: () => void }
 
 /** 从依赖身份区分数据源、接口参数与内置上下文，不修改持久化字段键。 */
 function inputSource(key: string): InputSource {
@@ -14,13 +22,12 @@ function inputSource(key: string): InputSource {
 }
 
 /** 在独立弹窗编辑规则，显式应用前不覆盖原映射，并阻止外层确认旧值。 */
-export default function RuleEditor({ title, initial, options, type, disabled, purposeOnly, onApply, onClose }: Props): ReactElement {
+export default function RuleEditor({ title, initial, options, type, disabled, purposeOnly, ruleTarget, onApply, onClose }: Props): ReactElement {
   const [value, setValue] = useState(initial)
   const [rows, setRows] = useState<InputRow[]>(() => initial.dependencies.map((field, id) => ({ id, source: inputSource(field), field })))
   const nextId = useRef(initial.dependencies.length)
   const [error, setError] = useState('')
-  const editing = useContext(RuleEditingContext)
-  useEffect(() => { editing(1); return () => editing(-1) }, [editing])
+  useRuleEditingLock()
   // 候选字段由调用场景限定；空类别不进入菜单，内置参数仅保留未开放提示。
   const sourceOptions = [
     { value: 'source', label: '数据源字段' },
@@ -74,6 +81,8 @@ export default function RuleEditor({ title, initial, options, type, disabled, pu
       {!rows.length ? <span className="field-rule-empty">无输入，按业务规则独立生成</span> : null}
     </div> : null}
     <label>处理规则<Input.TextArea disabled={disabled} value={value.description} maxLength={2000} autoSize={{ minRows: 5, maxRows: 10 }} placeholder="说明如何根据输入字段得到目标值" onChange={(event) => { setValue({ ...value, description: event.target.value }); setError('') }} /></label>
+    {!purposeOnly && <RuleAssistSection target={ruleTarget} dependencies={rows.map((row) => row.field || '')} description={value.description} disabled={disabled}
+      onAdopt={(description) => { setValue({ ...value, description }); setError('') }} />}
     </div>
   </Modal>
 }

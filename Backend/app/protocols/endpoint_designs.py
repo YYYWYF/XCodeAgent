@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncIterator
 
-from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
+from app.protocols.ag_ui_action_stream import AgUiActionResult, ProgressReporter, build_ag_ui_action_stream
+from app.domain.endpoint_design_assist import ReplaceMappingRequest, RefineRuleRequest, GenerateMappingRequest
+from app.services.endpoint_design_assist import replace_mapping, refine_rule, generate_mapping
+from app.services.endpoint_design_assist_retry import MappingGenerationFailure
 from app.services.binding_workspace import BindingDraftRequest, save_binding_draft, clear_binding_draft
 from app.services.endpoint_design_detail import (
     EndpointDesignDetailRequest,
@@ -26,11 +30,12 @@ def endpoint_designs_capabilities() -> dict[str, Any]:
         "name": "endpoint-designs",
         "endpoint": "/endpoint-designs/run",
         "transport": "ag-ui-sse",
-        "actions": ["get", "prepare", "save", "save_draft", "discard_draft"],
+        "actions": ["get", "prepare", "save", "save_draft", "discard_draft", "generate_mapping", "refine_rule", "replace_mapping"],
         "customEventName": ENDPOINT_DESIGNS_EVENT_NAME,
         "stateSnapshotKey": "endpointDesigns",
         "workflowIndependent": True,
         "readOnly": False,
+        "mappingGenerationSteps": ["operation", "query", "write", "return", "description"],
     }
 
 
@@ -65,16 +70,33 @@ def build_endpoint_designs_ag_ui_stream(
             request = EndpointDesignSaveRequest.model_validate(request_values)
             saved = save_endpoint_design(request)
             return AgUiActionResult(data={"action": action, "saved": saved, "detail": saved.get("detail")}, message="Endpoint API 映射配置已保存。")
-        raise ValueError("endpointDesigns.action 必须是 get、prepare、save、save_draft 或 discard_draft。")
+        raise ValueError("endpointDesigns.action 不属于当前支持的动作。")
+
+    async def assist_operation(report: ProgressReporter) -> AgUiActionResult:
+        """辅助动作复用标准生命周期与取消边界，建议和应用均不落盘。"""
+        action = str(request_input.get("action"))
+        values = {key: value for key, value in request_input.items() if key != "action"}
+        thread_id = str(payload.get("threadId") or "")
+        if action == "generate_mapping":
+            result = await generate_mapping(GenerateMappingRequest.model_validate(values), report, thread_id)
+            message = "请先补充数据库操作的待明确信息，再继续生成。" if result["mapping"] is None else "完整映射已生成，请预览后替换当前草稿。"
+            return AgUiActionResult(data={"action": action, "assistance": result}, message=message)
+        if action == "refine_rule":
+            result = await refine_rule(RefineRuleRequest.model_validate(values), report, thread_id)
+            return AgUiActionResult(data={"action": action, "refinedRule": result}, message="业务规则建议已生成，采用后仍需应用规则。")
+        result = await asyncio.to_thread(replace_mapping, ReplaceMappingRequest.model_validate(values))
+        return AgUiActionResult(data={"action": action, "applied": result}, message="完整映射已校验，请补全未配置项后保存并确认草稿。")
 
     return build_ag_ui_action_stream(
         payload=payload,
         event_name=ENDPOINT_DESIGNS_EVENT_NAME,
         state_key="endpointDesigns",
         run_id_prefix="endpoint-designs",
-        operation=operation,
+        operation=operation if request_input.get("action") not in {"generate_mapping", "refine_rule", "replace_mapping"} else None,
+        progress_operation=assist_operation if request_input.get("action") in {"generate_mapping", "refine_rule", "replace_mapping"} else None,
         error_message_prefix="Endpoint API 映射操作失败",
-        error_data=lambda _exc: {"action": str(request_input.get("action") or "get")},
+        error_data=lambda exc: {"action": str(request_input.get("action") or "get"),
+                                **({"assistFailure": exc.failure} if isinstance(exc, MappingGenerationFailure) else {})},
         accept=accept,
     )
 

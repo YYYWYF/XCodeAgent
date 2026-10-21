@@ -1,4 +1,5 @@
 import type { WorkflowApiDesignPayload, WorkflowApiDesignDraft } from './workflow'
+import type { MappingApplied, MappingAssistance, MappingAssistAction, MappingAssistFailure, MappingAssistProgress, RefinedMappingRule } from './endpointDesignAssist'
 
 /** 工作台单一绑定对象，仅用于中间状态。 */
 export type BindingSelection = { sourceType: 'database'; sourceId: string; schema: string; table: string } |
@@ -53,8 +54,13 @@ export type EndpointDesignsPayload = {
   schemaVersion: 1
   runId: string
   threadId: string
-  status: 'completed' | 'failed'
-  action?: 'get' | 'prepare' | 'save' | 'save_draft' | 'discard_draft'
+  status: 'completed' | 'failed' | 'in_progress'
+  action?: 'get' | 'prepare' | 'save' | 'save_draft' | 'discard_draft' | MappingAssistAction
+  progress?: MappingAssistProgress
+  assistance?: MappingAssistance
+  assistFailure?: MappingAssistFailure
+  refinedRule?: RefinedMappingRule
+  applied?: MappingApplied
   draft?: BindingDraft
   detail?: EndpointDesignDetail
   preparation?: EndpointDesignPreparation

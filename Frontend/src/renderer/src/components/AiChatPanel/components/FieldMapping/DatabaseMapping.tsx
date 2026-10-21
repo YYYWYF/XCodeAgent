@@ -12,6 +12,7 @@ import { mappingCandidates } from './model'
 import { DATABASE_OPERATION_LABELS } from './model'
 import DatabaseQueryEditor from './DatabaseQueryEditor'
 import DatabaseWriteEditor from './DatabaseWriteEditor'
+import type { MappingAssistArea } from '../../../../typings/endpointDesignAssist'
 
 const CRUD_OPTIONS = Object.entries(DATABASE_OPERATION_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -27,13 +28,18 @@ type Props = {
   errors: Record<string, string>
   onOperationChange: (operation: WorkflowApiDatabaseOperation) => void
   onChange: (draft: WorkflowApiDesignDraft) => void
+  applied?: { serial: number; areas: MappingAssistArea[]; targets: Array<{ area: MappingAssistArea; key: string }> }
 }
 
 /** 渲染数据库 CRUD 的查询、写入和返回配置。 */
-export default function DatabaseMapping({ fields, selection, metadata, draft, operation, editable, readOnly, busy, errors, onOperationChange, onChange }: Props): ReactElement {
+export default function DatabaseMapping({ fields, selection, metadata, draft, operation, editable, readOnly, busy, errors, onOperationChange, onChange, applied }: Props): ReactElement {
   const [collapsed, setCollapsed] = useState<Record<'query' | 'write' | 'return', boolean>>({ query: !readOnly, write: !readOnly, return: !readOnly })
   // 切换编辑与详情模式时重置默认状态，普通草稿更新保留用户的展开选择。
   useEffect(() => { setCollapsed({ query: !readOnly, write: !readOnly, return: !readOnly }) }, [readOnly])
+  // 应用后只展开涉及区域，用户随后仍可自由折叠。
+  useEffect(() => {
+    if (applied) setCollapsed((current) => ({ ...current, ...Object.fromEntries(applied.areas.filter((area) => area !== 'description').map((area) => [area, false])) }))
+  }, [applied?.serial])
   const columns = metadata?.columns || []
   const responseFields = fields.filter((field) => field.side === 'response')
 
@@ -50,24 +56,26 @@ export default function DatabaseMapping({ fields, selection, metadata, draft, op
   /** 返回字段复用单数据源规则编辑器，不改变来源选择旅程。 */
   const renderField = (field: WorkflowApiField): ReactElement => <ResponseFieldMapping key={apiDesignFieldKey(field)} field={field} fields={fields}
     sources={metadata ? mappingCandidates(field, selection, metadata) : []} draft={draft} readOnly={readOnly} disabled={!editable || busy}
-    error={errors[apiDesignFieldKey(field)]} onChange={onChange} />
+    error={errors[apiDesignFieldKey(field)]} aiChanged={applied?.targets.some((target) => target.area === 'return' && target.key === apiDesignFieldKey(field))} onChange={onChange} />
 
   /** 展开或收起指定配置区。 */
   const toggle = (section: 'query' | 'write' | 'return'): void => setCollapsed((current) => ({ ...current, [section]: !current[section] }))
   /** 渲染配置区标题及展开按钮。 */
   const heading = (section: 'query' | 'write' | 'return', title: string): ReactElement => <div className="database-section-heading">
-    <div className="database-section-title is-card"><h4>{title}</h4></div>
+    <div className="database-section-title is-card"><h4>{title}</h4>{applied?.areas.includes(section) && <span className="mapping-assist-mark">AI 已应用</span>}</div>
+    <div>
     <Button className="database-section-toggle" type="text" aria-expanded={!collapsed[section]} aria-label={`${collapsed[section] ? '展开' : '收起'}${title}`}
-      icon={collapsed[section] ? <DownOutlined /> : <UpOutlined />} onClick={() => toggle(section)} />
+      icon={collapsed[section] ? <DownOutlined /> : <UpOutlined />} onClick={() => toggle(section)} /></div>
   </div>
 
   return <div className={`database-mapping${readOnly ? ' is-readonly' : ''}`}>
     <section className="binding-section database-operation-section">
-      <div className="database-section-heading"><div className="database-section-title is-card"><h4>数据库操作</h4></div>
+      <div className="database-section-heading"><div className="database-section-title is-card"><h4>数据库操作</h4>{applied && <span className="mapping-assist-mark">AI 已应用</span>}</div>
         {readOnly ? <span className="database-static-operation">{operation ? DATABASE_OPERATION_LABELS[operation] : '—'}</span>
           : <Select disabled={!editable || busy} value={operation} placeholder="选择操作类型" options={CRUD_OPTIONS} onChange={onOperationChange} />}</div>
       {errors.__databaseOperation && !busy ? <small className="database-mapping-error">{errors.__databaseOperation}</small> : null}</section>
-    <MappingDescription draft={draft} disabled={!editable || busy} readOnly={readOnly} onChange={onChange} />
+    <MappingDescription draft={draft} disabled={!editable || busy} readOnly={readOnly} onChange={onChange}
+      expandSignal={applied?.areas.includes('description') ? applied.serial : undefined} />
     {operation && operation !== 'create' ? <section className={`binding-section database-query-section${collapsed.query ? ' is-collapsed' : ''}`}>{heading('query', '查询条件')}
       {!collapsed.query ? <div className="database-section-content"><DatabaseQueryEditor selection={selection} columns={columns} fields={fields} query={draft.databaseQuery}
         editable={editable} readOnly={readOnly} busy={busy} error={errors.__databaseQuery} onChange={(databaseQuery) => onChange({ ...draft, databaseQuery })} /></div> : null}</section> : null}

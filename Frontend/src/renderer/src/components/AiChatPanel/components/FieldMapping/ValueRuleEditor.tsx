@@ -6,8 +6,9 @@ import RuleEditor, { type RuleContent } from './RuleEditor'
 import BusinessRuleEntry from './BusinessRuleEntry'
 import ReadOnlyValue from './ReadOnlyValue'
 import { BUILTIN_OPTIONS, VALUE_SOURCE_OPTIONS, businessValue, parseValue, valueText } from './valueRules'
+import type { RuleAssistTarget } from '../../../../typings/endpointDesignAssist'
 
-type Props = { right?: WorkflowApiValueRight; fields: WorkflowApiField[]; type: string; title: string; readOnly: boolean; disabled: boolean; collection?: boolean; allowEndpoint?: boolean; onSource?: () => void; onBusiness?: () => void; onCancelPending?: () => void; onChange: (right?: WorkflowApiValueRight) => void }
+type Props = { right?: WorkflowApiValueRight; fields: WorkflowApiField[]; type: string; title: string; readOnly: boolean; disabled: boolean; collection?: boolean; allowEndpoint?: boolean; ruleTarget?: RuleAssistTarget; onSource?: () => void; onBusiness?: () => void; onCancelPending?: () => void; onChange: (right?: WorkflowApiValueRight) => void }
 
 const PARAMETER_LOCATION_LABELS = { path: '路径参数', query: '查询参数', header: '请求头', request_body: '请求体', response_body: '响应体' }
 
@@ -17,7 +18,7 @@ function parameterPopupContainer(trigger: HTMLElement): HTMLElement {
 }
 
 /** 为查询、写入、外部入参和业务返回值提供统一取值与行内处理控件。 */
-export default function ValueRuleEditor({ right, fields, type, title, readOnly, disabled, collection, allowEndpoint = true, onSource, onBusiness, onCancelPending, onChange }: Props): ReactElement {
+export default function ValueRuleEditor({ right, fields, type, title, readOnly, disabled, collection, allowEndpoint = true, ruleTarget, onSource, onBusiness, onCancelPending, onChange }: Props): ReactElement {
   const [pending, setPending] = useState<WorkflowApiBusinessValue | undefined>(() => right?.kind === 'business' && !right.businessDescription ? businessValue(right) : undefined)
   const [fixedInput, setFixedInput] = useState<{ value: unknown; text: string }>()
   const parameterAnchor = useRef<HTMLDivElement>(null)
@@ -78,7 +79,7 @@ export default function ValueRuleEditor({ right, fields, type, title, readOnly, 
           : <div ref={parameterAnchor} className="field-parameter-anchor"><TreeSelect<string> allowClear showSearch treeDefaultExpandAll treeLine treeNodeFilterProp="searchText" treeNodeLabelProp="label" popupClassName="field-parameter-tree" placement={popupLayout.placement} listHeight={popupLayout.height} dropdownAlign={{ overflow: { adjustX: true, adjustY: false } }} onDropdownVisibleChange={updateParameterPopup} getPopupContainer={parameterPopupContainer} aria-label={`${title}接口参数`} disabled={disabled} placeholder="选择接口参数" value={right?.kind === 'endpoint' && right.endpointField ? apiDesignFieldKey(right.endpointField) : undefined} treeData={parameterTree} onChange={(key) => { const field = requestFields.find((item) => apiDesignFieldKey(item) === key); onChange({ kind: 'endpoint', ...(field ? { endpointField: endpointFieldSnapshot(field) } : {}) }) }} /></div>}
     </div>
     {pending && !readOnly ? <RuleEditor key={pending.origin} title={`业务规则 · ${title}`} initial={{ dependencies: [...pending.endpointFields.map(apiDesignFieldKey), ...pending.builtinFields.map((key) => `builtin:${key}`)], description: pending.businessDescription, missing: pending.missingBehavior, defaultValue: pending.defaultValue }}
-      options={[...options, ...BUILTIN_OPTIONS.map((item) => ({ ...item, value: `builtin:${item.value}` }))]} type={type} collection={collection} disabled={disabled} canDirect={pending.endpointFields.length === 1 && !pending.builtinFields.length}
+      options={[...options, ...BUILTIN_OPTIONS.map((item) => ({ ...item, value: `builtin:${item.value}` }))]} type={type} collection={collection} disabled={disabled} ruleTarget={ruleTarget} canDirect={pending.endpointFields.length === 1 && !pending.builtinFields.length}
       onDirect={() => { onChange({ kind: 'endpoint', endpointField: pending.endpointFields[0] }); setPending(undefined) }} onClose={() => { setPending(undefined); onCancelPending?.() }} onApply={apply} /> : null}
   </div>
 }

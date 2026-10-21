@@ -55,6 +55,18 @@ class ApiDesignTests(unittest.TestCase):
             result = load_database_columns("unused", "db", "products")
         self.assertEqual(result["tables"], [{"name": "products", "description": "商品"}])
         self.assertEqual(result["columns"][0]["name"], "id")
+        self.assertNotIn("primaryKey", result["columns"][0])
+
+    def test_database_column_load_preserves_real_constraints(self) -> None:
+        """直接连接的列约束完整投射，默认值不转为应用写入配置。"""
+        with patch("app.services.api_design._mysql_metadata", return_value={"database": "app", "tables": [], "schemas": {
+            "products": [{"column_name": "id", "column_type": "bigint", "is_nullable": "NO", "column_key": "PRI",
+                          "extra": "auto_increment", "column_default": None}]}}), patch("app.services.data_sources.database_source_mode", return_value="direct"):
+            column = load_database_columns("unused", "db", "products")["columns"][0]
+        self.assertFalse(column["nullable"])
+        self.assertTrue(column["primaryKey"])
+        self.assertTrue(column["autoIncrement"])
+        self.assertIsNone(column["defaultValue"])
 
     def test_database_crud_defaults_and_filter_operator_contract(self) -> None:
         """HTTP 方法默认 CRUD 与类型感知运算符保持当前 v5 语义。"""

@@ -8,8 +8,9 @@ import BusinessRuleEntry from './BusinessRuleEntry'
 import ValueRuleEditor from './ValueRuleEditor'
 import ReadOnlyValue from './ReadOnlyValue'
 import { BUILTIN_OPTIONS, VALUE_SOURCE_OPTIONS } from './valueRules'
+import MappingAssistReview from './MappingAssistReview'
 
-type Props = { field: WorkflowApiField; fields: WorkflowApiField[]; sources: WorkflowApiSourceField[]; draft: WorkflowApiDesignDraft; readOnly: boolean; disabled: boolean; error?: string; onChange: (draft: WorkflowApiDesignDraft) => void }
+type Props = { field: WorkflowApiField; fields: WorkflowApiField[]; sources: WorkflowApiSourceField[]; draft: WorkflowApiDesignDraft; readOnly: boolean; disabled: boolean; error?: string; aiChanged?: boolean; onChange: (draft: WorkflowApiDesignDraft) => void }
 
 /** 为两种数据来源提供统一表头，编辑态沿用映射行的嵌套列宽。 */
 export function ResponseFieldMappingHeader({ readOnly }: { readOnly: boolean }): ReactElement {
@@ -21,7 +22,7 @@ export function ResponseFieldMappingHeader({ readOnly }: { readOnly: boolean }):
 }
 
 /** 按目标返回字段展示直接来源、多字段加工或无来源业务生成。 */
-export default function ResponseFieldMapping({ field, fields, sources, draft, readOnly, disabled, error, onChange }: Props): ReactElement {
+export default function ResponseFieldMapping({ field, fields, sources, draft, readOnly, disabled, error, aiChanged, onChange }: Props): ReactElement {
   const [editing, setEditing] = useState(false)
   const sourceLabel = draft.sourceBinding?.sourceType === 'static' ? '静态数据字段' : '数据源字段'
   const mapping = draft.fieldMappings.find((item) => apiDesignFieldKey(item.endpointField) === apiDesignFieldKey(field))
@@ -60,13 +61,14 @@ export default function ResponseFieldMapping({ field, fields, sources, draft, re
   if (readOnly) return <div className="field-response-row is-readonly">
     <div className="field-response-target" title={field.path}>
       <code>{field.path}</code><span className="field-response-type">{field.type}</span>
+      <MappingAssistReview area="return" target={apiDesignFieldKey(field)} />
     </div>
     <ReadOnlyValue title={field.path} right={valueMapping?.right} sourceFields={selected} businessDescription={ruleDescription}
       endpointFields={requestDependencies} builtinFields={ruleInputs?.builtinFields} />
     {issue ? <small className="field-rule-error">{issue}</small> : null}
   </div>
   return <div className="field-response-row">
-    <div className="field-response-target" title={`${field.path} · ${field.type}`}><code>{field.path}</code><span>{field.type}</span></div><span className="field-response-arrow">←</span>
+    <div className="field-response-target" title={`${field.path} · ${field.type}`}><code>{field.path}</code><span>{field.type}</span>{aiChanged && <small className="mapping-assist-mark">AI 已应用</small>}</div><span className="field-response-arrow">←</span>
     <div className="field-value-control">
       {sourceMode ? <>
         <div className={`field-value-inputs${readOnly ? ' is-readonly' : ''}`}>
@@ -81,7 +83,7 @@ export default function ResponseFieldMapping({ field, fields, sources, draft, re
             inputCount={selected.length + requestDependencies.length + (ruleInputs?.builtinFields?.length || 0)} disabled={disabled} onClick={() => setEditing(true)} />
             : <Select allowClear showSearch optionFilterProp="label" disabled={disabled} placeholder="选择当前数据源字段" value={selected[0] ? sourceFieldKey(selected[0]) : undefined} options={options} onChange={direct} />}
         </div>
-        {editing ? <RuleEditor title={`业务处理 · ${field.path}`} initial={{ dependencies: [...selected.map((source) => `source:${sourceFieldKey(source)}`), ...requestDependencies.map((item) => `endpoint:${apiDesignFieldKey(item)}`), ...(ruleInputs?.builtinFields || []).map((key) => `builtin:${key}`)], description: ruleDescription, missing: ruleInputs?.missingBehavior || 'error', defaultValue: ruleInputs?.defaultValue }} options={ruleOptions} type={field.type} disabled={disabled} canDirect={selected.length === 1} onDirect={() => direct(selected[0] && sourceFieldKey(selected[0]))} onApply={apply} onClose={() => setEditing(false)} /> : null}
+        {editing ? <RuleEditor ruleTarget={{ area: 'return', key: apiDesignFieldKey(field) }} title={`业务处理 · ${field.path}`} initial={{ dependencies: [...selected.map((source) => `source:${sourceFieldKey(source)}`), ...requestDependencies.map((item) => `endpoint:${apiDesignFieldKey(item)}`), ...(ruleInputs?.builtinFields || []).map((key) => `builtin:${key}`)], description: ruleDescription, missing: ruleInputs?.missingBehavior || 'error', defaultValue: ruleInputs?.defaultValue }} options={ruleOptions} type={field.type} disabled={disabled} canDirect={selected.length === 1} onDirect={() => direct(selected[0] && sourceFieldKey(selected[0]))} onApply={apply} onClose={() => setEditing(false)} /> : null}
       </> : <ValueRuleEditor title={field.path} fields={fields} type={field.type} disabled={disabled} readOnly={readOnly} onBusiness={() => setEditing(true)} onSource={() => direct()} right={valueMapping?.right} onChange={(right) => onChange(replaceFieldMapping(draft, right ? { endpointField, mappingType: 'value_mapping', right } : { endpointField, mappingType: 'unconfigured' }))} />}
     </div>
     {issue ? <small className="field-rule-error">{issue}</small> : null}

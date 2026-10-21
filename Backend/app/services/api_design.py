@@ -300,6 +300,11 @@ def load_database_columns(workspace_root: str | Path, source_id: str, table: str
                 "type": str(item.get("column_type") or "unknown"),
                 "required": str(item.get("is_nullable") or "YES") == "NO",
                 "description": str(item.get("comment") or ""),
+                # 仅投射数据库实际返回的约束；缺失属性保持未知，不用本地设计补写。
+                **({"nullable": item["is_nullable"] == "YES"} if item.get("is_nullable") in {"YES", "NO"} else {}),
+                **({"primaryKey": item["column_key"] == "PRI"} if "column_key" in item else {}),
+                **({"autoIncrement": "auto_increment" in str(item["extra"]).lower()} if "extra" in item else {}),
+                **({"defaultValue": item["column_default"]} if "column_default" in item else {}),
             }
             for item in _dict_items(columns)
             if str(item.get("column_name") or "").strip()
