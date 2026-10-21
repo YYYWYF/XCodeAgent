@@ -23,6 +23,10 @@
   &[data-status='completed'] {
     background: var(--wb-development-completed);
   }
+  &[data-status='changed'], &[data-status='unavailable'] {
+    background: var(--wb-accent);
+    outline: 2px solid var(--wb-border);
+  }
 }
 
 @keyframes development-status-pulse {

@@ -5,6 +5,7 @@ import { isConversationWorkflow } from './conversationMode'
 import { workflowEndedPlanControl } from './planExecutionMode'
 import { workflowClarification } from './components/WorkflowRunCard/workflowClarification'
 import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
+import { developmentDisplayStatus } from '../../developmentArtifacts'
 
 export type DevelopmentNextStep = {
   key: string
@@ -200,6 +201,6 @@ export function nextDevelopmentTask(
     (task) =>
       task.id !== currentId &&
       task.kind !== 'entity' &&
-      task.progress?.initialDevelopmentStatus === 'pending'
+      Boolean(task.progress && ['pending', 'changed', 'unavailable'].includes(developmentDisplayStatus(task.progress)))
   )
 }

@@ -167,6 +167,18 @@ async def _run_async_workflow_planning_adapter(
 ) -> dict[str, Any]:
     """执行 generation、Confirm 或 Regenerate，并只信任服务端正式输入。"""
 
+    # 调试或恢复直接进入规划时也不能绕过具体开发目标选择。
+    if _build_execution_scope_from_state(state).get("type") == "application":
+        from app.graph.nodes.api_design import api_design_readiness_gate
+
+        return api_design_readiness_gate({
+            **state,
+            "selectedPageId": "",
+            "selected_endpoint_id": "",
+            "selected_api_contract_id": "",
+            "api_design_gate_action": {},
+        })
+
     action_payload = state.get("build_task_plan_confirmation")
     if isinstance(action_payload, dict) and action_payload.get("action"):
         action = action_payload.get("action")

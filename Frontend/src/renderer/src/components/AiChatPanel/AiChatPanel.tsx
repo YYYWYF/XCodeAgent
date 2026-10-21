@@ -105,6 +105,7 @@ import {
 } from './components/MilestoneCommitReminder/useCommitBeforeSend'
 import { asMessageClause, pushRepositoryBranch } from '../../service/repositoryBranch'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
+import { workflowClarification } from './components/WorkflowRunCard/workflowClarification'
 import {
   compactPlanningMessageHistory,
   rollbackPlanningSubmissionMessages,
@@ -5208,7 +5209,23 @@ export default function AiChatPanel({
               )}
 
               <MessageList
-                developmentNextStepContent={nextDevelopmentStep ? (
+                developmentNextStepContent={
+                  !isApplicationPlanningPhase &&
+                  latestWorkflowForDisplay &&
+                  workflowClarification(latestWorkflowForDisplay)?.mode === 'development_target_selection' ? (
+                    <QuickTaskGuide
+                      selectionRequired
+                      selectionMessage={workflowClarification(latestWorkflowForDisplay)?.message}
+                      developmentArtifacts={applicationLifecycle?.developmentArtifacts}
+                      currentBranch={application.branchName}
+                      apiContracts={developmentPlanningApiContracts}
+                      disabled={loading || workflowInputLocked || otherSessionExecutionLocked}
+                      entities={developmentPlanningEntities}
+                      loading={loadingSessions || !developmentPlanningReady}
+                      onStart={handleNextDevelopmentStart}
+                      pages={displayedPlanningPages}
+                    />
+                  ) : nextDevelopmentStep ? (
                   <NextDevelopmentGuide
                     key={nextDevelopmentStep.key}
                     step={nextDevelopmentStep}

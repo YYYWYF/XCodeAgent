@@ -1290,6 +1290,9 @@ export type DevelopmentArtifactTarget =
   | { type: 'endpoint'; apiContractId: string; endpointId: string }
 
 export type DevelopmentArtifactProgress = {
+  changeStatus?: 'unchanged' | 'changed' | 'unavailable'
+  changeReason?: string | null
+  checkedChangeId?: string | null
   initialDevelopmentStatus: 'pending' | 'in_progress' | 'completed' | 'skipped'
   skippedAt?: string | null
   skipReason?: string | null

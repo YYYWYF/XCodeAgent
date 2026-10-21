@@ -250,7 +250,8 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
         for key, progress in endpoints.items()
     ]
     # Build 计划只描述当前目标的执行范围；不能据此跳过其他尚未初次完成的产物。
-    completed = sum(progress.initial_development_status == "completed" for _, progress in records)
+    completed = sum(progress.initial_development_status == "completed" and progress.change_status == "unchanged"
+                    for _, progress in records)
     in_progress = sum(progress.initial_development_status == "in_progress" for _, progress in records)
     reason = artifacts.catalog_error
     if state.initialization.stage != "ready_for_workbench":
@@ -262,7 +263,8 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
     return TestEntryGate(
         allowed=reason is None, total=len(records), completed=completed,
         pending=len(records) - completed - in_progress, inProgress=in_progress,
-        blockers=[target for target, progress in records if progress.initial_development_status != "completed"],
+        blockers=[target for target, progress in records
+                  if progress.initial_development_status != "completed" or progress.change_status != "unchanged"],
         reason=reason,
     )
 
@@ -303,8 +305,10 @@ def require_test_entry(workspace: str | Path) -> ApplicationLifecycle:
     return state
 
 
-def complete_initial_development(workspace: str | Path, *, run_id: str) -> ApplicationLifecycle:
-    """由已校验 Build 与单测证据的节点提交当前初次开发目标，重复提交保持幂等。"""
+def complete_initial_development(
+    workspace: str | Path, *, run_id: str, build_state: dict[str, Any] | None = None,
+) -> ApplicationLifecycle:
+    """提交当前目标及同轮验证成功的接口，原子保存完成证据并保持幂等。"""
 
     from app.services.application_lifecycle import (
         _application_lifecycle_lock, application_lifecycle_path, write_application_lifecycle,
@@ -315,21 +319,48 @@ def complete_initial_development(workspace: str | Path, *, run_id: str) -> Appli
         execution = state.active_executions.get(run_id)
         if execution is None:
             raise ValueError("初次开发完成缺少有效的服务端 execution。")
-        if execution.development_purpose != "initial" or execution.development_target is None:
+        if execution.development_target is None:
             return state
         progress = artifact_progress(state.development_artifacts, execution.development_target)
-        if not isinstance(progress, DevelopmentArtifactProgress) or progress.initial_development_status == "completed":
+        if not isinstance(progress, DevelopmentArtifactProgress):
+            return state
+        completed = progress.initial_development_status == "completed"
+        if execution.development_purpose != "initial" and not completed:
             return state
         if execution.status not in ACTIVE_STATUSES:
+            if completed:
+                return state
             raise ValueError("已停止或失败的 execution 不能提交初次开发完成。")
         if state.development_artifacts.catalog_error:
             raise ValueError(state.development_artifacts.catalog_error)
-        progress.initial_development_status = "completed"
-        progress.completed_at = utc_now()
-        progress.completed_run_id = run_id
-        progress.completed_thread_id = execution.thread_id
-        # 记下"在哪一轮完成"。读不到分支名就留空，不伪造。
-        progress.completed_branch_name = read_workspace_branch_name(workspace) or None
+        targets = [execution.development_target]
+        if execution.development_target.type == "page" and build_state is not None:
+            from app.services.development_completion_evidence import completed_page_endpoints
+
+            targets.extend(completed_page_endpoints(
+                build_state, page_id=execution.development_target.page_id or "", run_id=run_id,
+            ))
+        changed = False
+        completed_at = utc_now()
+        branch = read_workspace_branch_name(workspace) or None
+        for target in targets:
+            current = artifact_progress(state.development_artifacts, target)
+            if not isinstance(current, DevelopmentArtifactProgress):
+                continue
+            if current.initial_development_status != "completed":
+                current.initial_development_status = "completed"
+                current.completed_at = completed_at
+                current.completed_run_id = run_id
+                current.completed_thread_id = execution.thread_id
+                current.completed_branch_name = branch
+                changed = True
+            if current.change_status != "unchanged":
+                # 仅清除本轮验证成功目标的变更，首次完成身份与归属保持不变。
+                current.change_status = "unchanged"
+                current.change_reason = None
+                changed = True
+        if not changed:
+            return state
         updated = state.model_copy(update={"revision": state.revision + 1, "updated_at": utc_now()})
         return write_application_lifecycle(workspace, updated, expected_revision=state.revision)
 

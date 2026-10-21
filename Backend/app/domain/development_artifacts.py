@@ -53,6 +53,10 @@ class DevelopmentArtifactProgress(DevelopmentArtifactModel):
     # completed 事实会被继承，只靠状态三档分不出来。归属**只增不改**：一旦在 v1.0 完成，
     # 后续迭代继承时保留原值，不会被改写成新分支。
     completed_branch_name: str | None = Field(default=None, alias="completedBranchName")
+    # 当前正式合同的增量分析结果独立于首次完成事实，重新开发成功后才清除。
+    change_status: Literal["unchanged", "changed", "unavailable"] = Field(default="unchanged", alias="changeStatus")
+    change_reason: str | None = Field(default=None, alias="changeReason")
+    checked_change_id: str | None = Field(default=None, alias="checkedChangeId")
 
     @model_validator(mode="after")
     def validate_completion(self) -> "DevelopmentArtifactProgress":

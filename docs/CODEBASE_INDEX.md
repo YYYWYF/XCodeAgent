@@ -2,6 +2,16 @@
 
 Last updated: 2026-10-21
 
+页面完成时，`graph/nodes/lifecycle.py::test_phase_confirmation` 在 Build 和单测门均通过后，将当前 Graph 证据交给 `services/development_artifacts.py::complete_initial_development`。`services/development_completion_evidence.py` 校验同 Run、同页面、Build 计划摘要及执行切片，复用调度器依赖闭包，仅将本轮切片内全部任务为 completed/already_satisfied 的 Endpoint 与页面在同一 lifecycle 写入中登记完成；范围外、缺任务、未通过验证的接口不补记，首次完成身份保持不变。现有 AG-UI lifecycle 事件同步界面及完整目录测试门禁。回归：`tests.test_page_api_completion`、`tests.test_development_artifacts`。
+
+单个页面/API 经 Build 和单测门禁完成后，`graph/nodes/lifecycle.py::test_phase_confirmation` 在应用尚不具备全量测试资格时返回 `completed`、清空 clarification 并以 `integration_next_action=end` 终止本轮 Graph；Workflow Lifecycle 同步移除当前 execution 和资源锁，底部恢复自由输入，完成引导仅提供后续任务入口。全部目标完成时仍保留显式测试确认，不自动进入测试。回归：`tests.test_development_artifacts` 的真实 AG-UI 完成流与后续任务登记、`tests.test_workflow_test_phase_confirmation`。
+
+已完成目标的修订变更分析行为与验证边界见 `docs/COMPLETED_DEVELOPMENT_CHANGE_ANALYSIS.md`。
+
+正式修订 `continue_revision_build` 在既有 `api_design_readiness_gate` 内执行 `services/completed_development_analysis.py` 的批量只分析分支：按当前目录仅检查初次已完成页面/API，复用 `resolve_reuse_facts`、`task_covers_current_input` 和 `resolve_generation_requirements`，不创建 PlanningRun、Pending/Formal DAG，不调用模型或进入 Build，随后以 `development_target_selection` 收口执行并显示 QuickTaskGuide。页面只检查自身及前端访问职责，依赖契约可读但未完成目标从不成为分析调度目标。`DevelopmentArtifactProgress.changeStatus/changeReason/checkedChangeId` 独立保存当前变更；输入不可用显示待检查并阻止测试，原目标成功通过 Build/单测后清除变更但保留首次完成证据。界面圆点、进度、选择器及继续开发推荐消费同一显示状态。回归：`tests.test_completed_development_analysis`、`tests.test_workflow_request`、`pnpm test:development-artifacts`。
+
+开发 API 门禁每次读取当前正式映射：全部有效自动放行，缺失/失效仍配置后显式刷新。具体 page/endpoint 才可继续 DAG；application 或无目标通过后以 `clarification.mode=development_target_selection` 完成配置交接并 END，Lifecycle 释放本轮 execution 与修订占用，不记录开发完成。AiChatPanel 复用 QuickTaskGuide 展示“你想开发哪个页面或 API？”，用户沿既有逐目标入口启动；production task_planning_adapter 同样拦截 application 范围，防止恢复/调试绕过。回归：`tests.test_api_design_node`、`tests.test_application_api_design_continuation`、`tests.test_development_target_selection`、`pnpm test:development-artifacts`。
+
 生命周期磁盘快照由 `services/application_lifecycle.py::load_application_lifecycle` 递归允许额外字段，生命周期及持久化修订/开发状态模型保留额外数据供写回；可选字段缺失时使用已有模型默认值。必要身份、字段类型及文件 JSON 结构继续检查；动作请求的必填身份与确认规则不变。回归：`tests.test_application_lifecycle_snapshot`、`tests.test_application_lifecycle`。
 
 工作台连接冷启动由 `AiChatPanel/hooks/useWorkflowConversation.ts` 在应用/会话切换后沿既有 Lifecycle AG-UI 同步收口，即使缺少 lifecycle 和活动 Run 也不遗留 `connecting`。`service/applicationLifecycle.ts::ApplicationLifecycleActionError` 表示 Backend 已响应的业务失败；Hook 保持连接健康并独立投影 `lifecycleSyncError`，底部展示“工作区状态读取失败 / 重新同步”，不自动修复状态文件或执行节点。回归：`pnpm test:connection-recovery` 的真实 React effect 冷启动、schema 失败及显式同步恢复。
@@ -64,9 +74,9 @@ Use this file before broad code exploration. It is a routing map, not full docum
 
 前端性能测试确认使用正向问题“是否执行前端性能测试？”，`WorkflowRunCard/FrontendPerformanceConfirmationPanel.tsx` 从左到右展示“执行性能测试”（`run`）和“跳过性能测试”（`skip`）。沿现有 AG-UI `clarificationAnswers.frontend_performance_confirmation` 续接 `integration_test`；`protocols/workflow/request.py` 与 `graph/subgraphs/testing.py` 只解析明确的 `run`/`skip` 动作，不将是/否或布尔答案映射成反向动作。跳过不启动前端或 Lighthouse，执行沿原性能测试分支，性能检查仍不阻断质量门禁。回归：`tests.test_workflow_request`、`tests.test_testing_subgraph_events`、`pnpm test:chat-skills`。
 
-> 当前旅程规则：Endpoint 的自包含字段映射由独立 `/endpoint-designs/run` AG-UI 配置流负责；页面和接口开发必须先进入主 `/workflow/run` 的 `api_design_readiness_gate`。页面门禁检查全部关联 Endpoint，接口门禁只检查自身；只要目标包含 Endpoint，首次门禁就通过 `apiDesigns` 展示全部 Endpoint 的已完成、待配置和已失效状态，并以缺失子集决定是否阻断；用户点击任一条目后打开右侧字段映射工作台查看或配置，保存确认后只更新当前会话的本地已配置状态，可继续配置其他 Endpoint。用户点击门禁“确认并检测”后统一复检，检测通过便直接继续开发，不再进入 `api_design_confirmation` 或展示聚合映射确认卡片；无 Endpoint 的纯静态页面直接放行。字段映射步骤与保存操作不再在对话区重复展示，保存不会自动推进开发。旧版 `development_readiness_gate` 与 EntitySourceBinding 仅保留为独立旧入口。
+> 当前旅程规则：Endpoint 的自包含字段映射由独立 `/endpoint-designs/run` AG-UI 配置流负责；页面和接口开发必须先进入主 `/workflow/run` 的 `api_design_readiness_gate`。页面门禁检查全部关联 Endpoint，接口门禁只检查自身；目标存在缺失或失效 Endpoint 时，门禁通过 `apiDesigns` 展示全部 Endpoint 的已完成、待配置和已失效状态，并以缺失子集决定是否阻断；用户点击任一条目后打开右侧字段映射工作台查看或配置，保存确认后只更新当前会话的本地已配置状态，可继续配置其他 Endpoint。用户点击门禁“确认并检测”后统一复检，检测通过便直接继续开发，不再进入 `api_design_confirmation` 或展示聚合映射确认卡片；无 Endpoint 的纯静态页面直接放行。字段映射步骤与保存操作不再在对话区重复展示，保存不会自动推进开发。旧版 `development_readiness_gate` 与 EntitySourceBinding 仅保留为独立旧入口。
 
-正式修订确认 TechnicalPlan 后，application/page/endpoint 续接统一进入现有 `api_design_readiness_gate`；应用级门禁按当前 TechnicalPlan 检查全部 Endpoint，并使用同一 `refresh` 确认动作。无 Endpoint 直接放行；保存映射仍不自动推进。`services/application_build_context.py` 逐 Contract 复用正式映射读取与校验，为应用级 DAG 提供完整 `endpoint_designs`、来源与数据流；生成前再次读取当前磁盘，不使用旧门禁快照。回归：`tests.test_application_api_design_continuation`、`tests.test_workflow_request`、`tests.test_api_design_node`、`pnpm test:workflow-preview`。
+正式修订确认 TechnicalPlan 后，application/page/endpoint 续接统一进入现有 `api_design_readiness_gate`；应用级门禁按当前 TechnicalPlan 检查全部 Endpoint，全部有效自动通过，阻断后的配置使用同一 `refresh` 检测动作。应用范围通过后选择具体页面/API，无 Endpoint 同样进入目标选择；保存映射仍不自动推进。`services/application_build_context.py` 保留完整映射输入的内部组装能力，但 production DAG 只允许逐个页面/API入口；生成前再次读取当前磁盘，不使用旧门禁快照。回归：`tests.test_application_api_design_continuation`、`tests.test_workflow_request`、`tests.test_api_design_node`、`pnpm test:workflow-preview`。
 
 
 新生成 Unit Candidate 的缺失任务级 `id` 绑定由 `services/unit_candidate_id_binding.py` 负责，身份清单在 `services/unit_task_manifest.py` 与 Prompt 共用：Backend 按 Endpoint 阶段、frontend API 按 Contract/本轮 Endpoint 集合、page/static/bootstrap 按固定任务分组。`unit_candidate_parser.py` 严格解析完整任务后，仅在显式冻结 Context 下证明整份候选的 `provides/kind/target_id` 唯一完整覆盖才原子补 ID；已有值不覆盖，无 Context 保持严格拒绝缺 ID。随后仍执行原有 ID 与完整 Local/Global 校验，不改变重试预算、AG-UI、恢复候选、Pending/Formal 文件结构或确认门。不依赖已移除的 DAG 调试开关或日志模块。回归：`tests.test_unit_candidate_id_binding`、`tests.test_unit_generation_orchestrator`、`tests.test_unit_task_prompt`，并覆盖 Scope Assembly、Recovery 和 Pending。

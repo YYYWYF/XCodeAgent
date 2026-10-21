@@ -18,6 +18,8 @@ export function testEntryGateReason(gate?: TestEntryGate): string {
 
 /** 为圆点提供可访问的状态说明，未登记产物一律不视为完成。 */
 export function developmentStatusLabel(progress?: DevelopmentArtifactProgress): string {
+  if (progress?.initialDevelopmentStatus === 'completed' && progress.changeStatus === 'changed') return `有变更：${progress.changeReason || '需要按最新正式产物重新开发'}`
+  if (progress?.initialDevelopmentStatus === 'completed' && progress.changeStatus === 'unavailable') return `待检查：${progress.changeReason || '暂无法判断变更'}`
   if (progress?.initialDevelopmentStatus === 'skipped') return '已按用户决定跳过实体开发'
   if (progress?.initialDevelopmentStatus === 'completed') return '初次开发已完成'
   if (progress?.initialDevelopmentStatus === 'in_progress') return '初次开发中（可能正在等待确认）'
@@ -26,6 +28,8 @@ export function developmentStatusLabel(progress?: DevelopmentArtifactProgress): 
 
 /** 为新会话产物卡片提供简短且统一的开发状态文案。 */
 export function developmentStatusText(progress?: DevelopmentArtifactProgress): string {
+  if (progress?.initialDevelopmentStatus === 'completed' && progress.changeStatus === 'changed') return '有变更'
+  if (progress?.initialDevelopmentStatus === 'completed' && progress.changeStatus === 'unavailable') return '待检查'
   if (progress?.initialDevelopmentStatus === 'skipped') return '已跳过'
   if (progress?.initialDevelopmentStatus === 'completed') return '已初次完成'
   if (progress?.initialDevelopmentStatus === 'in_progress') return '开发中'
@@ -36,7 +40,14 @@ export function developmentStatusText(progress?: DevelopmentArtifactProgress): s
 export function developmentCompletedCount(
   records: (DevelopmentArtifactProgress | undefined)[]
 ): number {
-  return records.filter((record) => record?.initialDevelopmentStatus === 'completed').length
+  return records.filter((record) => record?.initialDevelopmentStatus === 'completed'
+    && (!record.changeStatus || record.changeStatus === 'unchanged')).length
+}
+
+/** 优先展示当前变更结果，首次开发事实仍保留在原记录中。 */
+export function developmentDisplayStatus(progress?: DevelopmentArtifactProgress): string {
+  return progress?.initialDevelopmentStatus === 'completed' && progress.changeStatus
+    && progress.changeStatus !== 'unchanged' ? progress.changeStatus : progress?.initialDevelopmentStatus || 'pending'
 }
 
 /** 只统计页面与 Endpoint；规划实体不参与开发完成比例或阶段门禁。 */

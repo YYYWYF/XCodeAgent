@@ -7,7 +7,7 @@ import {
 import { Button, Empty, Input, Select, Typography } from 'antd'
 import { useState, type ReactElement } from 'react'
 import { cx } from '../../../../utils'
-import { developmentStatusText } from '../../../../developmentArtifacts'
+import { developmentDisplayStatus, developmentStatusText } from '../../../../developmentArtifacts'
 import type { QuickTaskItem } from '../QuickTaskGuide/quickTasks'
 import {
   filterDevelopmentTargets,
@@ -20,6 +20,8 @@ const statuses = [
   ['all', '全部'],
   ['pending', '未开发'],
   ['in_progress', '开发中'],
+  ['changed', '有变更'],
+  ['unavailable', '待检查'],
   ['completed', '已完成']
 ] as const
 
@@ -42,7 +44,7 @@ export default function DevelopmentTargetPicker({
   const [kind, setKind] = useState<TargetKindFilter>('all')
   const targets = tasks.filter((task) => task.kind !== 'entity')
   const completed = targets.filter(
-    (task) => task.progress?.initialDevelopmentStatus === 'completed'
+    (task) => developmentDisplayStatus(task.progress) === 'completed'
   ).length
   const filtered = filterDevelopmentTargets(targets, status, kind, search)
   return (
@@ -76,7 +78,7 @@ export default function DevelopmentTargetPicker({
               <span>
                 {value === 'all'
                   ? targets.length
-                  : targets.filter((task) => task.progress?.initialDevelopmentStatus === value)
+                  : targets.filter((task) => task.progress && developmentDisplayStatus(task.progress) === value)
                       .length}
               </span>
             </Button>
@@ -118,11 +120,11 @@ export default function DevelopmentTargetPicker({
                   </div>
                   <span
                     className={cx('next-development-guide-item-status')}
-                    data-status={task.progress?.initialDevelopmentStatus}
+                    data-status={developmentDisplayStatus(task.progress)}
                   >
                     {developmentStatusText(task.progress)}
                   </span>
-                  {task.progress?.initialDevelopmentStatus === 'pending' ? (
+                  {task.progress && ['pending', 'changed', 'unavailable'].includes(developmentDisplayStatus(task.progress)) ? (
                     <Button
                       className={cx('next-development-guide-item-action')}
                       size="small"

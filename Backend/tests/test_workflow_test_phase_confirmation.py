@@ -33,6 +33,12 @@ class WorkflowTestPhaseConfirmationTests(unittest.TestCase):
             create_application_lifecycle(application_id="test", application_name="测试"))
         completion.start()
         self.addCleanup(completion.stop)
+        gate = patch("app.graph.nodes.lifecycle.test_entry_gate", return_value=TestEntryGate(
+            allowed=True, total=1, completed=1, pending=0, inProgress=0,
+            blockers=[], reason=None,
+        ))
+        gate.start()
+        self.addCleanup(gate.stop)
 
     def test_empty_public_build_summary_does_not_override_completed_state(self) -> None:
         """公开结果中的空摘要不得覆盖 StateSnapshot 中的 Build 完成事实。"""

@@ -10,6 +10,7 @@ import {
 import { Button, Typography } from 'antd'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { cx } from '../../../../utils'
+import { developmentDisplayStatus } from '../../../../developmentArtifacts'
 import {
   developmentTargetTaskId,
   nextDevelopmentTask,
@@ -59,7 +60,7 @@ export default function NextDevelopmentGuide({
   const nextTask = nextDevelopmentTask(tasks, step.target)
   const targets = tasks.filter((task) => task.kind !== 'entity')
   const remaining = targets.filter(
-    (task) => task.progress?.initialDevelopmentStatus !== 'completed'
+    (task) => developmentDisplayStatus(task.progress) !== 'completed'
   )
   const pendingPages = remaining.filter((task) => task.kind === 'page').length
   const pendingApis = remaining.filter((task) => task.kind === 'endpoint').length
@@ -70,7 +71,7 @@ export default function NextDevelopmentGuide({
   const blocked = disabled || loading || Boolean(catalogError) || Boolean(startingId)
   /** 即时锁住双击；启动失败时保留原引导卡，成功后由新 Workflow 取代旧完成事实。 */
   const handleStart = async (task: QuickTaskItem): Promise<void> => {
-    if (blocked || startingRef.current || task.progress?.initialDevelopmentStatus !== 'pending')
+    if (blocked || startingRef.current || !task.progress || !['pending', 'changed', 'unavailable'].includes(developmentDisplayStatus(task.progress)))
       return
     startingRef.current = true
     setStartingId(task.id)

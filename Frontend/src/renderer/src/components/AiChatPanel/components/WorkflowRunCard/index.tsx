@@ -191,7 +191,6 @@ export default function WorkflowRunCard({
 }: WorkflowRunCardProps): ReactElement {
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
   const status = String(workflow.summary.status || 'unknown')
-  const artifacts = workflow.summary.artifacts || {}
   const clarification = workflowClarification(workflow)
   const unitTestRunning = workflowUnitTestRunning(workflow) && !clarification
   // 项目启动快照可能暂时保留上一测试节点已提交的性能测试确认；启动卡不应重复展示该旧交互。
@@ -495,20 +494,6 @@ export default function WorkflowRunCard({
           }}
         />
       ) : null}
-      {!entityDesignReview && Object.keys(artifacts).length > 0 && artifactConfirmation && (
-        <div className={cx('workflow-artifacts')}>
-          <div className={cx('workflow-section-heading')}>
-            <Text type="secondary">已生成产物</Text>
-            <span>{Object.keys(artifacts).length} 个</span>
-          </div>
-          {Object.entries(artifacts).map(([name, path]) => (
-            <div className={cx('workflow-artifact-item')} key={name}>
-              <span className={cx('workflow-artifact-marker')} aria-hidden="true" />
-              <Text code>{path.split(/[\\/]/).filter(Boolean).pop() || '未命名文件'}</Text>
-            </div>
-          ))}
-        </div>
-      )}
       {/* API 映射门禁使用专用卡片，即使没有通用问题列表也必须提供配置和确认入口。 */}
       {technicalPlanConfirmationResolved ? (
         workflowCardResult === 'confirmed' && onReviseConfirmedTechnicalPlan ? (
@@ -539,7 +524,7 @@ export default function WorkflowRunCard({
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
         <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
-          {!reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+          {!artifactConfirmation && !reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
             <div className={cx('workflow-clarification-header')}>
               <div>
                 <Text strong>{staleConfirmation ? '原确认内容' : '待确认事项'}</Text>
@@ -1063,7 +1048,8 @@ function RequirementSpecConfirmationCard({
   workflow: WorkflowRunPayload
 }): ReactElement {
   const spec = readRequirementSpec(workflow)
-  const requirementsConfirmed = readRequirementsConfirmed(workflow)
+  // 当前审阅门要求重新确认时，旧版本的确认标记不能遮住本轮提示或冒充已确认。
+  const requirementsConfirmed = !requiresConfirmation && readRequirementsConfirmed(workflow)
   const clarification = workflowClarification(workflow)
   const errors = clarification?.errors?.map(String).filter(Boolean) || []
   const [revising, setRevising] = useState(false)
@@ -1099,10 +1085,14 @@ function RequirementSpecConfirmationCard({
           type="warning"
         />
       ) : null}
-      {!requirementsConfirmed && spec ? (
+      {!requirementsConfirmed ? (
         <div className={cx('requirement-spec-draft-summary')}>
-          <Text strong>需求草稿已展示在右侧</Text>
-          <Text type="secondary">确认后将转为正式需求文档并进入下一阶段。</Text>
+          <div>
+            <Text strong>需求文档已生成，已展示在右侧</Text>
+          </div>
+          <div>
+            <Text type="secondary">请在右侧查看内容，确认无误后继续规划，也可以先修改。</Text>
+          </div>
         </div>
       ) : null}
       <div
@@ -1231,6 +1221,16 @@ export function PlanConfirmationCard({
 
   return (
     <div className={cx('artifact-auth-bar', 'project-plan-confirmation-card')}>
+      {!confirmed && !revising ? (
+        <div className={cx('requirement-spec-draft-summary')}>
+          <div>
+            <Text strong>{title}已生成，已展示在右侧</Text>
+          </div>
+          <div>
+            <Text type="secondary">请在右侧查看内容，确认无误后保存，也可以先提出修改意见。</Text>
+          </div>
+        </div>
+      ) : null}
       <div className={cx('artifact-auth-bar-footer', revising && 'technical-plan-revision-inline')}>
         {revising ? (
           <div className={cx('technical-plan-revision-editor')}>

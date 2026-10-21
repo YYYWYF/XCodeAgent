@@ -198,8 +198,8 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertEqual(state.development_artifacts.pages["one"].initial_development_status, "completed")
         self.assertEqual(state.active_executions[retry].development_purpose, "initial")
 
-    def test_page_does_not_complete_endpoint_and_last_target_unlocks(self) -> None:
-        """每个目标独立计数，最后完成项先写盘再解锁。"""
+    def test_page_without_api_execution_evidence_does_not_complete_endpoint(self) -> None:
+        """缺少同轮接口执行证据时仍独立计数，最后完成项先写盘再解锁。"""
 
         self.technical["entities"] = [{"id": "Order", "fields": [{"name": "number"}]}]
         self.technical["api_contracts"][0]["entity_ids"] = ["Order"]
@@ -242,8 +242,9 @@ class DevelopmentArtifactsTests(unittest.TestCase):
                                            "apiContractId": "api"},
                  "build_summary": {"status": "completed"}, "unit_test_gate_passed": True}
         confirmation = test_phase_confirmation(state)
-        self.assertEqual(confirmation["status"], "requires_user_input")
-        self.assertFalse(confirmation["clarification"]["testEntryGate"]["allowed"])
+        self.assertEqual(confirmation["status"], "completed")
+        self.assertEqual(confirmation["clarification"], {})
+        self.assertEqual(confirmation["integration_next_action"], "end")
 
     def test_debug_restart_and_retry_project_active_target_without_granting_completion(self) -> None:
         """调试重启及失败重试均投影紫色，但不改变修订执行的首次完成资格。"""
@@ -291,20 +292,26 @@ class DevelopmentArtifactsTests(unittest.TestCase):
                 self.assertEqual(test_entry_gate(state).in_progress, 0)
 
     def test_build_and_unit_test_evidence_are_required(self) -> None:
-        """真实节点仅在 Build 与单测门均通过后标绿，其他产物未完成时保留等待状态。"""
+        """真实节点仅在 Build 与单测门均通过后标绿，随后结束当前开发轮次。"""
 
         run_id = self.start("one")
         state = {"workspace": str(self.workspace), "active_run_id": run_id,
                  "build_execution_scope": {"type": "page", "targetId": "one"}}
-        self.assertEqual(test_phase_confirmation(state)["status"], "failed")
+        # 当前节点会回到缺失证据的原阶段，不能把“尚未完成”误认成已失败或已完成。
+        result = test_phase_confirmation(state)
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(result["integration_next_action"], "build")
         state["build_summary"] = {"status": "completed"}
-        self.assertEqual(test_phase_confirmation(state)["status"], "failed")
+        result = test_phase_confirmation(state)
+        self.assertEqual(result["status"], "in_progress")
+        self.assertEqual(result["integration_next_action"], "unit_test")
         self.assertEqual(test_entry_gate(refresh_development_artifacts(self.workspace)).completed, 0)
         state["unit_test_gate_passed"] = True
         state["test_phase_confirmation"] = {"action": "confirm"}
         result = test_phase_confirmation(state)
-        self.assertEqual(result["status"], "requires_user_input")
-        self.assertFalse(result["clarification"]["testEntryGate"]["allowed"])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["clarification"], {})
+        self.assertEqual(result["integration_next_action"], "end")
         self.assertEqual(test_entry_gate(refresh_development_artifacts(self.workspace)).completed, 1)
 
     def test_revision_and_late_failure_cannot_reset_completion(self) -> None:
@@ -486,12 +493,24 @@ class DevelopmentArtifactsTests(unittest.TestCase):
     def test_last_completion_reaches_ag_ui_before_user_test_confirmation(self) -> None:
         """真实节点与协议联动：最后一个目标标绿后等待确认，不自动开始测试。"""
 
+        self._assert_development_completion_stream(all_completed=True)
+
+    def test_partial_completion_finishes_run_and_releases_input(self) -> None:
+        """真实 AG-UI 完成帧释放单目标执行和锁，后续新任务可正常登记。"""
+
+        self._assert_development_completion_stream(all_completed=False)
+        self.start("two")
+
+    def _assert_development_completion_stream(self, *, all_completed: bool) -> None:
+        """使用真实节点、路由和 Lifecycle 检查完成通知及最终确认两种边界。"""
+
         from langgraph.checkpoint.memory import InMemorySaver
         from langgraph.graph import END, START, StateGraph
         from app.graph.state import ProjectState
+        from app.graph.workflow import route_test_phase_confirmation
         from app.protocols.workflow import build_workflow_ag_ui_stream
 
-        self.product["pages"] = [{"pageId": "one"}]
+        self.product["pages"] = [{"pageId": "one"}] if all_completed else [{"pageId": "one"}, {"pageId": "two"}]
         self.technical["api_contracts"] = []
         self.write_plans()
 
@@ -506,7 +525,8 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         builder.add_node("test_phase_confirmation", test_phase_confirmation)
         builder.add_edge(START, "api_design_readiness_gate")
         builder.add_edge("api_design_readiness_gate", "test_phase_confirmation")
-        builder.add_edge("test_phase_confirmation", END)
+        builder.add_conditional_edges("test_phase_confirmation", route_test_phase_confirmation,
+                                      {"completed": END, "await_user_input": END})
         graph = builder.compile(checkpointer=InMemorySaver())
 
         async def collect() -> list[dict]:
@@ -524,6 +544,13 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "RUN_FINISHED")
         lifecycle_events = [event["value"] for event in events if event.get("name") == "application-lifecycle"]
         self.assertEqual(lifecycle_events[0]["developmentArtifacts"]["pages"]["one"]["initialDevelopmentStatus"], "in_progress")
-        self.assertTrue(lifecycle_events[-1]["testEntryGate"]["allowed"])
-        self.assertEqual(lifecycle_events[-1]["activeExecutions"]["complete-run"]["status"], "awaiting_user")
+        self.assertEqual(lifecycle_events[-1]["testEntryGate"]["allowed"], all_completed)
+        workflow = events[-1]["result"]["workflow"]
+        if all_completed:
+            self.assertEqual(lifecycle_events[-1]["activeExecutions"]["complete-run"]["status"], "awaiting_user")
+        else:
+            self.assertEqual(lifecycle_events[-1]["activeExecutions"], {})
+            self.assertFalse(any(lifecycle_events[-1]["resourceLocks"].values()))
+            self.assertEqual(workflow["summary"]["status"], "completed")
+            self.assertEqual(workflow["state"]["clarification"], {})
         self.assertEqual(events[-1]["result"]["workflow"]["summary"]["lifecycle"]["testEntryGate"]["completed"], 1)

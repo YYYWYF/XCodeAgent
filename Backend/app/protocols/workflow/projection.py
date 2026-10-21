@@ -489,6 +489,8 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             if isinstance(candidate, dict) and candidate
             else ["technical_planning_review"]
         )
+    if (update.get("clarification") or {}).get("mode") == "development_target_selection":
+        return []
     if node_name == "technical_planning_confirm":
         # 与当前 Graph 的确认后路由一致；确认通过后不能再次投射生成加载态。
         if update.get("application_planning_review_route") == "technical_planning_begin":
@@ -574,6 +576,8 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
             return []
         return ["handle_failure"]
     if node_name == "test_phase_confirmation":
+        if update.get("integration_next_action") == "end":
+            return []
         build_summary = update.get("build_summary")
         build_completed = (
             isinstance(build_summary, dict)
@@ -1076,7 +1080,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         clarification = update.get("clarification")
         clarification = clarification if isinstance(clarification, dict) else {}
         return {
-            "message": clarification.get("message") or "开发已完成，等待确认进入测试阶段。",
+            "message": clarification.get("message") or update.get("message") or "开发已完成，等待确认进入测试阶段。",
             "data": {
                 "clarification": clarification,
                 "testTarget": update.get("test_target") or clarification.get("testTarget"),
@@ -1452,6 +1456,8 @@ def _workflow_summary(
         message = product_conversation["response"]
     elif result.get("phase") == "design_chat_response" and conversation_response:
         message = conversation_response
+    elif clarification.get("mode") == "development_target_selection":
+        message = str(clarification["message"])
     elif status == "requires_user_input":
         message = _workflow_user_input_message(result, clarification)
     else:

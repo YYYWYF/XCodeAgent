@@ -228,12 +228,13 @@ export function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
-  // 扫描节点从出现到完成都保持默认收起，避免流式进度更新自动展开详情。
-  const isWorkspaceScanNode =
+  // 扫描和 API 设计前置检查从出现到完成都默认收起，避免流式更新自动展开详情。
+  const isDefaultCollapsedNode =
     hasWorkspaceInspection ||
     hasWorkspaceInspectionProgress ||
     step.nodeName === 'inspect_workspace' ||
-    step.nodeName === 'scan_workspace_code'
+    step.nodeName === 'scan_workspace_code' ||
+    step.nodeName === 'api_design_readiness_gate'
   const isRepairStep =
     step.kind === 'workflow' &&
     (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
@@ -280,7 +281,7 @@ export function ProcessStep({
     !awaitingInput
   const [open, setOpen] = useState(
     expandable &&
-      !isWorkspaceScanNode &&
+      !isDefaultCollapsedNode &&
       !collapseConversationDetail &&
       (step.status === 'running' ||
         awaitingInput ||
@@ -295,7 +296,7 @@ export function ProcessStep({
   )
 
   useEffect(() => {
-    if (collapseConversationDetail || isWorkspaceScanNode) return
+    if (collapseConversationDetail || isDefaultCollapsedNode) return
     if (
       expandable &&
       (step.status === 'running' ||
@@ -322,7 +323,7 @@ export function ProcessStep({
     hasWorkspaceInspectionProgress,
     hasRepairPanel,
     hasToolActivity,
-    isWorkspaceScanNode,
+    isDefaultCollapsedNode,
     step.status
   ])
 

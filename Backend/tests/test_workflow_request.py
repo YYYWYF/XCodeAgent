@@ -101,6 +101,7 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["request"], "调整全局技术方案")
         self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
+        self.assertTrue(inputs["resume_values"]["completed_development_analysis"])
         self.assertEqual(inputs["resume_values"]["api_design_gate_action"], {})
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],

@@ -15,6 +15,7 @@ class ProjectState(TypedDict, total=False):
     owner_session_id: str
     observability: dict[str, Any]
     change_id: str
+    completed_development_analysis: bool
     change_target: dict[str, Any]
     element_context: dict[str, Any]
     lifecycle: dict[str, Any]

@@ -17,16 +17,30 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
     """在页面或接口开发前检查全部目标映射，通过后直接继续开发流程。"""
 
     workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
+    if state.get("completed_development_analysis") is True:
+        # 正式修订续接只分析已完成目标，不进入映射门禁或任何任务生成/Build。
+        from app.services.completed_development_analysis import analyze_completed_development
+
+        summary = analyze_completed_development(workspace, change_id=str(state.get("change_id") or ""))
+        message = (
+            f"已检查 {summary['checked']} 个已完成页面/API，{summary['changed']} 个有变更"
+            f"，{summary['unavailable']} 个暂无法判断。你想开发哪个页面或 API？"
+        )
+        return {
+            **development_target_selection({}),
+            "completed_development_analysis": False,
+            "clarification": {"mode": "development_target_selection", "message": message},
+            "message": message,
+        }
     project_plan = state.get("project_plan")
     if not workspace or not isinstance(project_plan, dict):
         raise ApiDesignError("缺少工作区或已确认 TechnicalPlan，无法检查 API 设计。")
     action = state.get("api_design_gate_action")
     action = action if isinstance(action, dict) else {}
-    scope = state.get("build_execution_scope") or {}
     state_target_type = (
         "endpoint" if str(state.get("selected_endpoint_id") or "").strip()
         else "page" if str(state.get("selectedPageId") or "").strip()
-        else "application" if scope.get("type") == "application" else "page"
+        else "application"
     )
     state_target_id = (
         str(state.get("selected_endpoint_id") or "").strip()
@@ -58,11 +72,10 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         target_id=target_id,
         api_contract_id=api_contract_id,
     )
-    # 首次进入时即使全部 Endpoint 已完成，也要展示门禁卡供用户查看或修改；
-    # 只有用户明确提交 refresh 后，检测通过才允许继续后续开发节点。
-    has_endpoint_designs = bool(readiness["api_designs"])
-    is_refresh = str(action.get("action") or "") == "refresh"
-    if (not has_endpoint_designs) or (readiness["ready"] and is_refresh):
+    # 当前磁盘映射有效时直接通过；无具体目标只完成配置检查，不授权全量 DAG。
+    if readiness["ready"]:
+        if target_type == "application":
+            return development_target_selection(readiness)
         return {
             "phase": "api_design_readiness_gate",
             "status": "completed",
@@ -74,16 +87,10 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         }
     target_label = _development_target_label(project_plan, target_type, target_id)
     missing = readiness["missing_api_designs"]
-    all_ready = readiness["ready"]
     labels = "、".join(f"{item.get('method')} {item.get('path')}" for item in missing)
-    if all_ready:
-        question = "当前目标关联的 API 字段映射已全部准备，可查看或修改；确认后将重新检测并继续开发。"
-        message = "当前目标的字段映射已准备，请确认检测后继续开发。"
-        placeholder = "可先查看或修改右侧字段映射，完成后点击确认并检测。"
-    else:
-        question = f"当前目标依赖的 API 尚未完成设计：{labels}。请分别配置后重新检测。"
-        message = "部分接口配置需要重新确认，请检查并保存后继续。"
-        placeholder = "请通过门禁卡片配置映射并重新检测。"
+    question = f"当前目标依赖的 API 尚未完成设计：{labels}。请分别配置后重新检测。"
+    message = "部分接口配置需要重新确认，请检查并保存后继续。"
+    placeholder = "请通过门禁卡片配置映射并重新检测。"
     clarification = build_ask_user_payload(
         [
             AskUserQuestion(
@@ -115,6 +122,23 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         "api_design_gate_action": {},
         "api_design_readiness": readiness,
         "clarification": clarification,
+        "timeline": ["api_design_readiness_gate"],
+    }
+
+
+def development_target_selection(readiness: dict[str, Any]) -> dict[str, Any]:
+    """结束无具体目标的配置交接，交给已有页面/API入口逐个启动开发。"""
+
+    return {
+        "phase": "api_design_readiness_gate",
+        "status": "completed",
+        "api_design_gate_action": {},
+        "api_design_readiness": readiness,
+        "clarification": {
+            "mode": "development_target_selection",
+            "message": "API 字段映射检测已通过，你想开发哪个页面或 API？",
+        },
+        "message": "API 字段映射检测已通过，请选择一个页面或 API 开始开发。",
         "timeline": ["api_design_readiness_gate"],
     }
 

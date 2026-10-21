@@ -35,8 +35,8 @@ class ApplicationApiDesignContinuationTests(unittest.TestCase):
             self.assertEqual(api_design_readiness_gate({**state, "api_design_gate_action": action})["status"], "requires_user_input")
             for endpoint_id in ("orders.list", "orders.create"):
                 write_endpoint_design(workspace, _empty_design(workspace, endpoint_id))
-            # 保存仅改变磁盘映射，仍需提交原门禁的确认检测动作。
-            self.assertEqual(api_design_readiness_gate(state)["status"], "requires_user_input")
+            # 再次校验已有效时结束应用级配置交接，必须逐个选择开发目标。
+            self.assertEqual(api_design_readiness_gate(state)["clarification"]["mode"], "development_target_selection")
             self.assertEqual(api_design_readiness_gate({**state, "api_design_gate_action": action})["status"], "completed")
             context = _resolve_build_context(state, plan, scope, {})
             formal = mainline_formal_contract_inputs({"product_plan": {"artifact_type": "product-plan"}}, plan, context)
