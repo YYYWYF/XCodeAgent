@@ -264,7 +264,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         config = {"configurable": {"thread_id": "planning-confirm"}}
         _ = [
             chunk
-            async for chunk in graph.astream({"request": "原始业务提问"}, config=config, stream_mode="updates")
+            async for chunk in graph.astream({}, config=config, stream_mode="updates")
         ]
         snapshot = await graph.aget_state(config)
         projected = project_application_planning_interrupt(
@@ -292,7 +292,6 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
 
         completed = await graph.aget_state(config)
         self.assertEqual(completed.values["status"], "completed")
-        self.assertEqual(completed.values["request"], "原始业务提问")
         self.assertEqual(
             completed.values["requirement_spec"]["confirmation_status"],
             "confirmed",
@@ -329,17 +328,22 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-    async def test_design_change_does_not_reintroduce_authorization_configuration_state(
+    async def test_design_change_clears_pending_authorization_configuration_conflict(
         self,
     ) -> None:
-        """设计变更不再创建已移除的权限配置追问状态。"""
+        """设计变更不能让上一轮权限初始化问题泄漏到新的需求修订。"""
 
         graph = _interrupt_test_graph()
         config = {"configurable": {"thread_id": "planning-design-change-auth-reset"}}
         _ = [
             chunk
             async for chunk in graph.astream(
-                {},
+                {
+                    "authorization_config_conflict": {
+                        "requested": True,
+                        "decision": "enable",
+                    }
+                },
                 config=config,
                 stream_mode="updates",
             )
@@ -365,7 +369,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         updated = await graph.aget_state(config)
-        self.assertNotIn("authorization_config_conflict", updated.values)
+        self.assertEqual(updated.values["authorization_config_conflict"], {})
 
     async def test_same_artifact_can_be_revised_twice_before_confirmation(self) -> None:
         """同一产物连续二次修订时应生成新门禁，并只确认最后一个版本。"""

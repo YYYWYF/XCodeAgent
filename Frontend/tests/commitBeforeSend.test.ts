@@ -76,7 +76,8 @@ test('阶段内审批与验收确认不拦', () => {
     { review_phase_confirmation: { action: 'confirm' } },
     { acceptance_phase_confirmation: { action: 'confirm' } },
     { code_review_repair_confirmation: { action: 'repair_all' } },
-    { api_design_gate: { action: 'confirm' } }
+    { api_design_gate: { action: 'confirm' } },
+    { implementation_fix_confirmation: 'approved' }
   ]) {
     assert.equal(isStageAdvanceDecision(answers), false, `${JSON.stringify(answers)} 不换阶段`)
   }

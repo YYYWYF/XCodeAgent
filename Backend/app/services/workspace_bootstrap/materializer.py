@@ -100,7 +100,6 @@ class WorkspaceMaterializer:
         workspace: str | Path,
         archive_path: str | Path,
         template_state: TemplateStateV3,
-        before_baseline: Callable[[Path], None] | None = None,
         readiness: Callable[[Path], None] | None = None,
     ) -> str:
         """完整提交 ZIP 的安全文件、Git baseline 与唯一 TemplateState。"""
@@ -120,8 +119,6 @@ class WorkspaceMaterializer:
                 os.replace(source, target)
                 journal.moved_roots.append(target)
             _verify_materialized_files(root, manifest)
-            if before_baseline is not None:
-                before_baseline(root)
             journal.template_state_written = True
             _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
             journal.git_initialized = True
@@ -179,7 +176,7 @@ class WorkspaceMaterializer:
 def _write_template_state(path: Path, template_state: TemplateStateV3) -> None:
     """以同目录原子替换落盘 Engine 原样输出的 TemplateState。"""
 
-    atomic_write_json(path, template_state.model_dump(mode="json", exclude_none=True))
+    atomic_write_json(path, template_state.model_dump(mode="json"))
 
 
 def _materialization_targets(staging: Path) -> list[Path]:

@@ -18,10 +18,8 @@ from app.domain.application_planning_recovery import (
     ApplicationPlanningRecoveryBoundary,
     application_planning_sha256,
     parse_application_planning_boundary,
-    validate_application_planning_baseline,
 )
 from app.domain.application_revision import RevisionTarget
-from app.services.design_revision_admission import design_revision_matches
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
@@ -35,7 +33,6 @@ from app.domain.execution_recovery import (
     WorkflowReentryReason,
     execution_failure_sha256,
 )
-from app.domain.workflow_recovery_boundary import failed_reentry_target
 from app.persistence.execution_recovery import (
     claim_recovery_finalization,
     claim_native_recovery_attempt,
@@ -56,9 +53,6 @@ from app.services.application_lifecycle import (
     resource_claims_for_run,
 )
 from app.services.backend_instance import current_backend_instance
-from app.services.technical_planning_retry import (
-    TECHNICAL_PLANNING_RETRY_NODES, prepare_technical_planning_retry,
-)
 from app.services.execution_recovery_source_admission import assess_recovery_source
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
@@ -74,7 +68,6 @@ from app.services.workflow_reentry import (
     FailureTargetResolver,
     InterruptedTargetResolver,
     recovery_plan_from_reentry,
-    resolve_node_entry_boundary,
     semantic_context_sha256,
 )
 from app.services.node_recovery_context import NodeRecoveryContext
@@ -103,15 +96,10 @@ class NativeRecoveryRuntimeContext:
     entry_state: dict[str, Any] | None = None
     internal_progress: dict[str, Any] | None = None
     source_lineage_run_ids: tuple[str, ...] = ()
-    restart_node: bool = False
-    retry_lifecycle_before_handoff: Any = None
-    runtime_started: bool = False
 
-    def node_recovery_context(self) -> NodeRecoveryContext | None:
+    def node_recovery_context(self) -> NodeRecoveryContext:
         """从已验证的 source、child 和 checkpoint 生成一次性节点侧视图。"""
 
-        if self.restart_node:
-            return None
         source = self.source_execution
         return NodeRecoveryContext(
             source_run_id=source.run_id,
@@ -138,7 +126,7 @@ class NativeRecoveryRuntimeContext:
         values = getattr(self.fork_snapshot, "values", {})
         values = values if isinstance(values, dict) else {}
         return {
-            "request": str(values.get("request") or "") if self.restart_node else "从 durable checkpoint 继续执行。",
+            "request": "从 durable checkpoint 继续执行。",
             "selected_skills_error": None,
             "selected_skill_names": list(values.get("selected_skill_names") or []),
             "project_id": self.project_id or "",
@@ -146,7 +134,7 @@ class NativeRecoveryRuntimeContext:
             "editor_mode": str(values.get("editor_mode") or "") or None,
             "workflow_scope": self.workflow_scope or "",
             "application_planning_interaction": None,
-            "resume_from": self.recovery_plan.target_node if self.restart_node else "",
+            "resume_from": "",
             "resume_values": {},
             "application_name": str(values.get("application_name") or "") or None,
             "workflow_debug_enabled": False,
@@ -349,7 +337,7 @@ async def prepare_native_recovery(
         or reentry_plan.execution_kind != source.execution_kind
         or (
             source.status is DurableExecutionStatus.FAILED
-            and reentry_plan.target_node != failed_reentry_target(source)
+            and reentry_plan.target_node != source.current_node
         )
     ):
         raise RecoveryExecutionError(
@@ -487,42 +475,6 @@ async def _apply_application_planning_transaction_authority(
         ) from exc
     values = getattr(snapshot, "values", {})
     values = values if isinstance(values, dict) else {}
-    if plan.target_node in TECHNICAL_PLANNING_RETRY_NODES and source.status is DurableExecutionStatus.FAILED:
-        # 已证明来源 checkpoint 后，按本轮用户输入和已有计划重建生成事务。
-        values = {**values, **prepare_technical_planning_retry(values)}
-    if plan.target_node == "design_intent_analysis":
-        # 设计意图识别先读取输入，正式产物节点才取得生命周期 ownership；
-        # 识别失败时保留原审阅阶段，以同 thread、revision CAS 领取 child。
-        lifecycle = load_application_lifecycle(workspace)
-        intent = values.get("design_revision_intent")
-        if (
-            isinstance(intent, dict) and intent
-            and design_revision_matches(lifecycle, intent, source.thread_id)
-            and lifecycle.revision == plan.lifecycle_revision
-            and str(values.get("active_run_id") or "") == source.run_id
-            and lifecycle.initialization.stage is ApplicationLifecycleStage.READY_FOR_WORKBENCH
-            and lifecycle.initialization.status is ApplicationLifecycleStatus.COMPLETED
-        ):
-            # 正式设计修订已在 Graph 冻结输入，但尚未进入需求节点取得生命周期运行归属。
-            return plan.model_copy(update={
-                "lifecycle_ownership_mode": RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
-            })
-        if (
-            lifecycle is not None
-            and lifecycle.initialization.thread_id == source.thread_id
-            and lifecycle.initialization.status is ApplicationLifecycleStatus.AWAITING_USER
-            and lifecycle.initialization.stage in {
-                ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
-                ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
-                ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
-                ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
-            }
-            and lifecycle.revision == plan.lifecycle_revision
-            and str(values.get("active_run_id") or "") == source.run_id
-        ):
-            return plan.model_copy(update={
-                "lifecycle_ownership_mode": RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
-            })
     boundary = parse_application_planning_boundary(
         values.get("application_planning_recovery_boundary")
     )
@@ -541,18 +493,24 @@ async def _apply_application_planning_transaction_authority(
             "LIFECYCLE_DRIFT",
             "TechnicalPlan transaction boundary 的 request authority 已发生变化。",
         )
-    try:
-        validate_application_planning_baseline(boundary, values.get("technical_plan"))
-    except ValueError as exc:
+    if (
+        boundary.operation
+        in {
+            ApplicationPlanningOperation.REVISE,
+            ApplicationPlanningOperation.REPAIR,
+        }
+        and boundary.baseline_sha256 is None
+    ):
         raise RecoveryExecutionError(
             "LIFECYCLE_DRIFT",
-            str(exc),
-        ) from exc
+            "TechnicalPlan 修订或修复 boundary 缺少 baseline authority。",
+        )
 
     change_id = str(values.get("change_id") or "").strip()
     if boundary.operation is ApplicationPlanningOperation.REVISE and change_id:
         _validate_formal_revision_transaction_identity(
             values=values,
+            boundary=boundary,
             lifecycle=lifecycle,
         )
 
@@ -560,17 +518,8 @@ async def _apply_application_planning_transaction_authority(
     status = lifecycle.initialization.status
     mode = RecoveryLifecycleOwnershipMode.SOURCE_OWNED
     if stage is ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY:
-        # 设计修订也经过同一显式入口；上方已验证该 change、branch 与 target 的权威归属。
-        active = lifecycle.active_formal_revision
-        design_revision_entry = (
-            boundary.operation is ApplicationPlanningOperation.REVISE
-            and active is not None
-            and active.change_id == change_id
-            and active.formal_branch.value == "design_stage_revision"
-            and active.status == "design_planning"
-        )
         if (
-            (boundary.operation is not ApplicationPlanningOperation.INITIAL and not design_revision_entry)
+            boundary.operation is not ApplicationPlanningOperation.INITIAL
             or status is not ApplicationLifecycleStatus.AWAITING_USER
         ):
             raise RecoveryExecutionError(
@@ -602,17 +551,6 @@ async def _apply_application_planning_transaction_authority(
         )
     ):
         mode = RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
-    elif (
-        stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
-        and status is ApplicationLifecycleStatus.RUNNING
-        and lifecycle.active_run_id != source.run_id
-        and boundary.operation is ApplicationPlanningOperation.REPAIR
-        and str(values.get("technical_plan_repair_source_run_id") or "") == lifecycle.active_run_id
-        and str(values.get("active_run_id") or "") == source.run_id
-        and lifecycle.initialization.thread_id == source.thread_id
-    ):
-        # 失败审阅已提交输入，但 begin 尚未交接旧生成 Run；child 以现有 CAS 领取归属。
-        mode = RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP
     elif not (
         stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
         and status is ApplicationLifecycleStatus.RUNNING
@@ -628,9 +566,10 @@ async def _apply_application_planning_transaction_authority(
 def _validate_formal_revision_transaction_identity(
     *,
     values: dict[str, Any],
+    boundary: Any,
     lifecycle: Any,
 ) -> None:
-    """验证原修订、分支和目标归属，不用最初确认门或请求阻止节点重入。"""
+    """验证 Formal Revision transaction 的 change、gate、请求、分支和目标事实一致。"""
 
     change_id = str(values.get("change_id") or "").strip()
     target_value = values.get("change_target")
@@ -646,6 +585,7 @@ def _validate_formal_revision_transaction_identity(
             "LIFECYCLE_DRIFT",
             "Formal Revision INPUT_COMMITTED boundary 的 target identity 无效。",
         ) from exc
+    request = _technical_request_from_values(values)
     pending = lifecycle.pending_revision_impact
     active = lifecycle.active_formal_revision
     if pending is not None and active is not None:
@@ -656,16 +596,17 @@ def _validate_formal_revision_transaction_identity(
     if pending is not None:
         matches = (
             pending.change_id == change_id
+            and pending.interaction_id == str(boundary.gate_id or "")
+            and pending.request == request
             and pending.impact.formal_branch.value == "workbench_plan_revision"
             and pending.target == target
         )
     elif active is not None:
         matches = (
             active.change_id == change_id
-            and (
-                active.formal_branch.value == "workbench_plan_revision"
-                or (active.formal_branch.value == "design_stage_revision" and active.status == "design_planning")
-            )
+            and active.impact_interaction_id == str(boundary.gate_id or "")
+            and active.request == request
+            and active.formal_branch.value == "workbench_plan_revision"
             and active.target == target
         )
     else:
@@ -871,12 +812,6 @@ async def _fork_and_start(
         "active_thread_id": source.thread_id,
         "observability": observability,
     }
-    if (
-        source.execution_kind == "application_planning"
-        and source.status is DurableExecutionStatus.FAILED
-        and plan.target_node in TECHNICAL_PLANNING_RETRY_NODES
-    ):
-        updates.update(prepare_technical_planning_retry(source_values, target_node=plan.target_node))
     if lifecycle is not None:
         updates["lifecycle"] = application_lifecycle_payload(lifecycle)
     try:
@@ -1008,29 +943,6 @@ async def _failed_source_state(
 
     if source.status is not DurableExecutionStatus.FAILED:
         return None
-    if target_node != source.current_node:
-        # 测试重启使用阶段入口，但变更证据必须取自真实失败的修复调用，不能丢掉
-        # 先前修复已提交的 Diff，也不能把失败任务重新派发到新一轮测试中。
-        boundary = await resolve_node_entry_boundary(
-            workspace=source.workspace, source=source,
-            target_node=str(source.current_node), graph=graph,
-        )
-        snapshot = await graph.aget_state({"configurable": {
-            "thread_id": source.thread_id, "checkpoint_ns": boundary.checkpoint_ns,
-            "checkpoint_id": boundary.checkpoint_id,
-        }})
-        values = dict(snapshot.values)
-        for key in ("build_execution_scope", "build_run_id", "build_run_plan_path", "build_run_plan_sha256"):
-            if values.get(key) != entry_state.get(key):
-                raise RecoveryExecutionError(
-                    "RECOVERY_INTERNAL_PROGRESS_DRIFT", "测试阶段入口与失败修复的范围或 Build 绑定不一致。"
-                )
-        progress = await _failed_source_state(
-            graph, source, entry_state=values, target_node=str(source.current_node),
-            entry_checkpoint_id=boundary.checkpoint_id,
-        )
-        # 异常可能发生在节点更新提交前，此时仍保留修复入口已有的变更证据。
-        return progress if progress is not None else values
     history_reader = getattr(graph, "aget_state_history", None)
     if not callable(history_reader):
         return None
@@ -1221,10 +1133,10 @@ async def _revalidate_finalizing_recovery(
             "RECOVERY_SOURCE_CHECKPOINT_INVALID",
             "source checkpoint nextNodes 已偏离 child first Node。",
         )
-    if source.status is DurableExecutionStatus.FAILED and next_nodes != [failed_reentry_target(source)]:
+    if source.status is DurableExecutionStatus.FAILED and next_nodes != [source.current_node]:
         raise RecoveryExecutionError(
             "RECOVERY_STATE_DRIFT",
-            "FAILED source 的 checkpoint successor 已偏离当前业务恢复入口。",
+            "FAILED source 的 checkpoint successor 已偏离当前失败节点。",
         )
     if any(getattr(task, "interrupts", ()) for task in getattr(snapshot, "tasks", ()) or ()):
         raise RecoveryExecutionError(
@@ -1312,7 +1224,7 @@ def _validate_checkpoint_reentry_source(
         or (plan is not None and plan.target_node != target_node)
         or (
             source.status is DurableExecutionStatus.FAILED
-            and target_node != failed_reentry_target(source)
+            and target_node != source.current_node
         )
     ):
         raise RecoveryExecutionError(
@@ -1457,7 +1369,7 @@ def _require_checkpoint_reentry_plan(
         or not plan.target_node
         or (
             source.status is DurableExecutionStatus.FAILED
-            and plan.target_node != failed_reentry_target(source)
+            and plan.target_node != source.current_node
         )
     ):
         raise RecoveryExecutionError(

@@ -7,7 +7,6 @@ from typing import Any
 
 from app.services.direct_modification import direct_path_matches_owner
 from app.services.small_task import build_small_task_handoff
-from app.services.direct_validation import direct_frontend_diagnostic_paths
 from app.services.small_task_scope import (
     _task_paths,
     small_task_preflight,
@@ -20,7 +19,7 @@ REPAIR_OWNERS = ("frontend", "backend")
 
 
 def authorized_direct_repair_paths(state: dict[str, Any]) -> dict[str, list[str]]:
-    """从真实差异和前端编译诊断提取本轮自动修复的精确授权路径。"""
+    """从真实前后端差异提取本轮自动修复的父级授权路径。"""
 
     paths = {owner: [] for owner in REPAIR_OWNERS}
 
@@ -59,9 +58,6 @@ def authorized_direct_repair_paths(state: dict[str, Any]) -> dict[str, list[str]
     if isinstance(handoff, dict):
         for path in handoff.get("changedFiles", []):
             add("backend", path)
-    # 编译门禁可修复本轮之前已存在的源码错误，诊断解析仍保持精确文件授权。
-    for path in direct_frontend_diagnostic_paths(state):
-        add("frontend", path)
     return paths
 
 

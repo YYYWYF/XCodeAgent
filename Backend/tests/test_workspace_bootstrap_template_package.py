@@ -22,70 +22,12 @@ class TemplatePackageTests(unittest.TestCase):
             path = Path(directory) / "template.zip"
             path.write_bytes(package)
             result = validate_template_package(path, self._limits())
-            self.assertEqual(result.template_state.templateRevision, "2026.10.10.1")
-
-    def test_accepts_template_contract_directory(self) -> None:
-        """确认契约目录及其任意文件、子目录可以随 V3 ZIP 交付。"""
-
-        entries = {"frontend/package.json": "{}", "backend/pom.xml": "<project/>",
-                   ".devagentstudio/template-state.json": json.dumps(self._state())}
-        for name in ("route-projector.json", "route-projector-input.schema.json", "route-projector-output.schema.json"):
-            entries[".devagentstudio/template-contracts/" + name] = "{}"
-        entries.update({
-            ".devagentstudio/template-contracts/": "",
-            ".devagentstudio/template-contracts/extra.txt": "contract",
-            ".devagentstudio/template-contracts/schemas/": "",
-            ".devagentstudio/template-contracts/schemas/custom.json": "{}",
-        })
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "template.zip"
-            path.write_bytes(self._archive(entries))
-            self.assertEqual(validate_template_package(path, self._limits()).template_state.templateRevision, "2026.10.10.1")
-
-    def test_accepts_maven_contribution_without_optional_version_or_scope(self) -> None:
-        """确认 Engine 可省略未指定的 Maven version 与 scope。"""
-
-        state = self._state()
-        state["managedContributions"] = {
-            "maven:ZA21:bee-starter-auth": {
-                "type": "MAVEN_DEPENDENCY",
-                "target": "backend/pom.xml",
-                "owners": [],
-                "spec": {
-                    "groupId": "ZA21",
-                    "artifactId": "bee-starter-auth",
-                },
-                "appliedRevision": "2026.10.10.1",
-            }
-        }
-        # Maven contribution 必须拥有一个 effective capability；这里使用 login 表示真实归属。
-        state["effective"] = {"login": {"enabled": True, "config": {}}}
-        state["managedContributions"]["maven:ZA21:bee-starter-auth"]["owners"] = ["login"]
-        entries = {
-            "frontend/package.json": "{}",
-            "backend/pom.xml": "<project/>",
-            ".devagentstudio/template-state.json": json.dumps(state),
-        }
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "template.zip"
-            path.write_bytes(self._archive(entries))
-            validated = validate_template_package(path, self._limits()).template_state
-
-        contribution = validated.managedContributions["maven:ZA21:bee-starter-auth"]
-        self.assertIsNone(contribution.spec.version)
-        self.assertIsNone(contribution.spec.scope)
+            self.assertEqual(result.template_state.templateRevision, "R1")
 
     def test_rejects_unmanaged_and_internal_paths(self) -> None:
         """确认额外 root、额外 .devagentstudio 与路径穿越均被拒绝。"""
 
-        cases = (
-            "scripts/setup.sh",
-            ".devagentstudio/application.json",
-            ".devagentstudio/template-contracts-other/custom.json",
-            ".devagentstudio/template-contracts/../application.json",
-            "../escape",
-        )
+        cases = ("scripts/setup.sh", ".devagentstudio/application.json", "../escape")
         for entry in cases:
             with self.subTest(entry=entry), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "template.zip"
@@ -102,12 +44,11 @@ class TemplatePackageTests(unittest.TestCase):
         """构造 Engine State fixture。"""
 
         return {
-            "schemaVersion": 3,
-            "templateRevision": "2026.10.10.1",
+            "schemaVersion": 2,
+            "templateRevision": "R1",
             "requested": {},
             "effective": {},
-            "installedArtifacts": {},
-            "managedContributions": {},
+            "appliedAdditions": {},
         }
 
     def _archive(self, entries: dict[str, str]) -> bytes:

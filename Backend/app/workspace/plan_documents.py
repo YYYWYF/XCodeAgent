@@ -775,10 +775,6 @@ def _technical_entity_markdown(entity: dict[str, Any]) -> str:
             "",
             str(entity.get("description") or "暂无实体描述。"),
             "",
-            *(
-                [f"- 数据库真实表名：`{entity['table_name']}`", ""]
-                if entity.get("table_name") else []
-            ),
             *(field_rows if fields else ["- 暂无字段"]),
         ]
     )

@@ -5,7 +5,7 @@ import type { WorkbenchPhase } from '../../../workbenchPhase'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
 import type { PersistSessionInput } from './useChatSessions'
-import { activeFormalRevisionStageSession, formalRevisionHandoffRestorable } from './revisionSession'
+import { activeFormalRevisionStageSession } from './revisionSession'
 
 type HandoffRecoveryInput = {
   applicationId: string
@@ -28,8 +28,10 @@ type HandoffRecoveryInput = {
 /** 只用当前批准修订和精确来源会话恢复展示归属，不发送请求或启动新的 Graph。 */
 export async function restoreFormalRevisionHandoff(input: HandoffRecoveryInput): Promise<SessionIdentity> {
   const active = input.lifecycle?.activeFormalRevision
-  if (!active || !formalRevisionHandoffRestorable(input.lifecycle, input.phase)) {
-    throw new Error('当前生命周期没有可恢复的正式修订阶段交接。')
+  if (!active || active.formalBranch !== 'design_stage_revision' || active.status !== 'design_planning' ||
+    !['product', 'planning'].includes(input.phase) ||
+    active.planningThreadId !== input.lifecycle?.initialization.threadId) {
+    throw new Error('当前生命周期没有可恢复的设计阶段交接。')
   }
   const phase = input.phase as 'product' | 'planning'
   const source = input.sessions.find((session) => session.workflowId === input.applicationId &&
@@ -86,7 +88,8 @@ export function useFormalRevisionHandoffRecovery(input: HandoffRecoveryInput): v
   latest.current = input
   useEffect(() => {
     const active = input.lifecycle?.activeFormalRevision
-    if (input.loading || !active || !formalRevisionHandoffRestorable(input.lifecycle, input.phase)) return
+    if (input.loading || !active || active.formalBranch !== 'design_stage_revision' ||
+      active.status !== 'design_planning' || !['product', 'planning'].includes(input.phase)) return
     const key = `${input.applicationId}:${active.changeId}:${input.phase}`
     if (attempted.current.has(key)) return
     attempted.current.add(key)

@@ -181,8 +181,7 @@ async def generate_unit_candidate_once(
                         cause=exc,
                     ) from exc
                 model_turns += 1
-                response_content = getattr(response, "content", "")
-                raw_response = extract_candidate_text(response_content) or ""
+                raw_response = extract_candidate_text(getattr(response, "content", "")) or ""
                 metadata = _generation_metadata(
                     response,
                     settings=active_settings,
@@ -233,7 +232,6 @@ async def generate_unit_candidate_once(
             tasks = parse_raw_unit_candidate(
                 raw_response,
                 unit_id=frozen_job.context.unit_id,
-                task_identity_context=frozen_job.context,
             )
             validation_issues = ()
         except RawUnitCandidateParseError as exc:

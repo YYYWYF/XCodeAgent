@@ -25,11 +25,7 @@ export function pathDirname(value: string): string {
 
 /** 把未知异常转换成可展示的错误文案。 */
 export function formatError(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : fallback
-  // 浏览器原生网络异常转为产品文案，业务错误仍保留原始说明。
-  return /^(?:TypeError:\s*)?(?:Failed to fetch|fetch failed|NetworkError when attempting to fetch resource\.?|Load failed)$/i.test(message.trim())
-    ? '后端服务不可用'
-    : message
+  return error instanceof Error ? error.message : fallback
 }
 
 export function formatHistoryTime(value: number): string {

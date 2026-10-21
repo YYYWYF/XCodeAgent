@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import dataclasses
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,23 +17,15 @@ def _load_environment() -> None:
 
 _load_environment()
 
-_DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
-
-
 @dataclass(frozen=True)
 class Settings:
-    model_base_url: str
-    model_api_key: str
-    model_name: str
-    model_provider: str = "openai"
-    model_trust_env: bool = False
+    model_transmit_url: str = "http://127.0.0.1:8100"
+    model_transmit_token: str = field(default="", repr=False)
+    model_transmit_trust_env: bool = False
+    model_transmit_spaid: str = ""
     model_output_log_enabled: bool = False
     model_timeout_seconds: float = 120.0
     model_max_retries: int = 2
-    anthropic_api_version: str = "2023-06-01"
-    model_custom_headers: dict[str, str] = field(default_factory=dict)
-    # OpenCode Go 请求元数据默认关闭；开启后按当前会话发送 session 和客户端身份。
-    model_opencode_go_headers_enabled: bool = False
     default_system_prompt: str = (
         "You are a helpful local agent. Answer clearly and concisely."
     )
@@ -45,17 +35,7 @@ class Settings:
     # 思考过程与正文共用该预算，且网关会把 thinking 以 [{'thinking': ..}] 碎片
     # 形式逐 token 拼进 content——16384 时思考可吃掉大部分预算导致正文在
     # `export default` 前被截断，故提到 32768 给足余量。
-    # UI 设计稿节点的独立模型配置（可选）。GLM-5.2 等推理模型在长代码任务上
-    # thinking 压不掉、生成耗时是正文的两三倍；给 UI 节点单独配一个非推理模型
-    # （如 DeepSeek-V4 Pro，其官方 API 真正支持 thinking 开关）可显著缩短生成
-    # 时间，其他节点继续用全局模型。四项（base_url/api_key/name）同时配置才生效，
-    # 缺任一项即回落全局模型；provider/headers/trust_env 缺省跟随全局。
-    ui_design_model_base_url: str = ""
-    ui_design_model_api_key: str = ""
-    ui_design_model_name: str = ""
-    ui_design_model_provider: str = ""
-    ui_design_model_custom_headers: dict[str, str] = field(default_factory=dict)
-    ui_design_model_trust_env: bool | None = None
+    # UI 和 DAG 只保留业务调用预算；所有场景共用转发服务当前启用的模型。
     ui_design_max_tokens: int = 32768
     # UI 设计稿生成后校验失败时的自动修复重试次数（回喂错误给 LLM 让其修正）。
     # 默认 1：外层校验重试 1 次 + 内层 API 重试 1 次，最坏 4 次 LLM 调用，
@@ -87,78 +67,37 @@ class Settings:
     template_package_max_files: int = 10000
     template_package_max_extracted_bytes: int = 524288000
     template_reconcile_enabled: bool = True
-    # SaaS 注册只在启用模拟数据库时使用，服务密钥不进入工作区或前端配置。
-    managed_database_base_url: str = "http://127.0.0.1:18081"
-    managed_database_service_key: str = field(default="", repr=False)
-    managed_database_timeout_seconds: float = 15.0
     git_username: str = ""
     git_token: str = ""
 
     @property
+    def model_name(self) -> str:
+        """返回本应用的逻辑模型标识，实际模型名称由转发服务响应提供。"""
+        return "studio-model"
+
+    @property
     def model_api_name(self) -> str:
-        return _DISPLAY_MODEL_SUFFIX.sub("", self.model_name).strip()
+        """为工作流证据提供稳定的逻辑模型名，不读取上游模型环境变量。"""
+        return self.model_name
+
+    @property
+    def model_provider(self) -> str:
+        """标识所有模型调用均经过独立转发服务。"""
+        return "transmit"
 
     @property
     def provider_api_name(self) -> str:
+        """返回当前传输提供方，保持工作流元数据的含义明确。"""
         return self.model_provider
-
-    def for_ui_design_model(self) -> "Settings":
-        """返回 UI 设计稿节点应使用的模型配置视图。
-
-        独立配置（UI_DESIGN_MODEL_BASE_URL/API_KEY/NAME 三项齐全）生效时，返回
-        替换了模型字段的 Settings 副本（provider/custom_headers/trust_env 缺省
-        跟随全局值）；未配置时返回自身（回落全局模型）。
-        """
-
-        if not (
-            self.ui_design_model_base_url
-            and self.ui_design_model_api_key
-            and self.ui_design_model_name
-        ):
-            return self
-        provider = self.ui_design_model_provider or self.model_provider
-        if provider == "openai-compatible":
-            provider = "openai"
-        if provider not in ("openai", "anthropic"):
-            raise RuntimeError(
-                "Only UI_DESIGN_MODEL_PROVIDER=openai or anthropic is supported."
-            )
-        return dataclasses.replace(
-            self,
-            model_base_url=self.ui_design_model_base_url,
-            model_api_key=self.ui_design_model_api_key,
-            model_name=self.ui_design_model_name,
-            model_provider=provider,
-            model_custom_headers=(
-                self.ui_design_model_custom_headers or self.model_custom_headers
-            ),
-            model_trust_env=(
-                self.ui_design_model_trust_env
-                if self.ui_design_model_trust_env is not None
-                else self.model_trust_env
-            ),
-        )
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """从环境变量加载模型、UI/DAG 专属生成和持久化配置。"""
-
-        base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
-        model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
-        if model_provider == "openai-compatible":
-            model_provider = "openai"
-        if model_provider not in ("openai", "anthropic"):
-            raise RuntimeError(
-                "Only MODEL_PROVIDER=openai or anthropic is supported."
-            )
-        custom_headers_raw = os.getenv("MODEL_CUSTOM_HEADERS", "")
-        custom_headers = _parse_custom_headers(custom_headers_raw)
+        """读取转发服务连接和既有业务预算，不读取或持有真实上游连接信息。"""
         return cls(
-            model_base_url=base_url,
-            model_api_key=_required_any("MODEL_API_KEY", "OPENAI_API_KEY"),
-            model_name=_required_any("MODEL_NAME", "OPENAI_MODEL"),
-            model_provider=model_provider,
-            model_trust_env=_env_bool("MODEL_TRUST_ENV", default=False),
+            model_transmit_url=os.getenv("MODEL_TRANSMIT_URL", "http://127.0.0.1:8100").strip().rstrip("/"),
+            model_transmit_token=os.getenv("MODEL_TRANSMIT_TOKEN", "").strip(),
+            model_transmit_trust_env=_env_bool("MODEL_TRANSMIT_TRUST_ENV", default=False),
+            model_transmit_spaid=os.getenv("MODEL_TRANSMIT_SPAID", "").strip(),
             model_output_log_enabled=_env_bool(
                 "MODEL_OUTPUT_LOG_ENABLED", default=False
             ),
@@ -166,33 +105,12 @@ class Settings:
                 os.getenv("MODEL_TIMEOUT_SECONDS", "120.0")
             ),
             model_max_retries=int(os.getenv("MODEL_MAX_RETRIES", "2")),
-            anthropic_api_version=os.getenv(
-                "ANTHROPIC_API_VERSION", "2023-06-01"
-            ),
-            model_custom_headers=custom_headers,
-            model_opencode_go_headers_enabled=_env_bool(
-                "MODEL_OPENCODE_GO_HEADERS_ENABLED", default=False
-            ),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",
                 "You are a helpful local agent. Answer clearly and concisely.",
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
             default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "32768")),
-            ui_design_model_base_url=os.getenv("UI_DESIGN_MODEL_BASE_URL", "").strip(),
-            ui_design_model_api_key=os.getenv("UI_DESIGN_MODEL_API_KEY", "").strip(),
-            ui_design_model_name=os.getenv("UI_DESIGN_MODEL_NAME", "").strip(),
-            ui_design_model_provider=(
-                os.getenv("UI_DESIGN_MODEL_PROVIDER", "").strip().lower()
-            ),
-            ui_design_model_custom_headers=_parse_custom_headers(
-                os.getenv("UI_DESIGN_MODEL_CUSTOM_HEADERS", "")
-            ),
-            ui_design_model_trust_env=(
-                _env_bool("UI_DESIGN_MODEL_TRUST_ENV", default=False)
-                if os.getenv("UI_DESIGN_MODEL_TRUST_ENV") is not None
-                else None
-            ),
             ui_design_max_tokens=int(
                 os.getenv("DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS", "32768")
             ),
@@ -246,31 +164,9 @@ class Settings:
             template_reconcile_enabled=_env_bool(
                 "DEVAGENTSTUDIO_TEMPLATE_RECONCILE_ENABLED", default=True
             ),
-            managed_database_base_url=os.getenv(
-                "DEVAGENTSTUDIO_MANAGED_DATABASE_BASE_URL", "http://127.0.0.1:18081"
-            ).rstrip("/"),
-            managed_database_service_key=os.getenv("MANAGED_DATABASE_SERVICE_KEY", ""),
-            managed_database_timeout_seconds=_env_float(
-                "DEVAGENTSTUDIO_MANAGED_DATABASE_TIMEOUT_SECONDS", default=15.0, minimum=0.1
-            ),
             git_username=os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", ""),
             git_token=os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", ""),
         )
-
-
-def _required(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
-
-
-def _required_any(*names: str) -> str:
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-    raise RuntimeError(f"Missing required environment variable: {' or '.join(names)}")
 
 
 def _env_int(name: str, *, default: int, minimum: int) -> int:
@@ -337,27 +233,6 @@ def _env_bool(name: str, *, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_custom_headers(raw: str) -> dict[str, str]:
-    """把 MODEL_CUSTOM_HEADERS 环境变量解析为 header dict。
-
-    格式："Key1: Value1\\nKey2: Value2"，与 .env 里多行字符串兼容。
-    """
-
-    if not raw or not raw.strip():
-        return {}
-    headers: dict[str, str] = {}
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line or ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        key = key.strip()
-        value = value.strip()
-        if key:
-            headers[key] = value
-    return headers
 
 
 def dag_business_self_check_enabled() -> bool:

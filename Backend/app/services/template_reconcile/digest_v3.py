@@ -7,10 +7,7 @@ from app.services.template_reconcile.protocol_v3 import TemplateStateV3
 
 def template_state_digest_v3(state: TemplateStateV3) -> str:
     """按递归排序 JSON 生成冻结 State digest。"""
-    snapshot = state.model_dump(mode="json", exclude_none=True)
-    if "stateSequence" not in state.model_fields_set:
-        snapshot.pop("stateSequence", None)
-    raw = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    raw = json.dumps(state.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 def package_digest_v3(path: str | Path) -> str:

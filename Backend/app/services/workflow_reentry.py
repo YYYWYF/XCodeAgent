@@ -25,7 +25,6 @@ from app.domain.execution_recovery import (
 from app.persistence.execution_recovery import (
     insert_node_entry_boundary,
 )
-from app.domain.workflow_recovery_boundary import failed_reentry_target
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.execution_recovery import durable_execution_status
 from app.services.execution_recovery_lineage import resolve_recovery_lineage_head
@@ -69,7 +68,7 @@ class FailureTargetResolver:
                 "FAILED_EXCEPTION_EVIDENCE_MISSING",
                 "failure_retry 只接受异常逃出 Node 后产生的 FAILED execution。",
             )
-        target_node = failed_reentry_target(source)
+        target_node = str(source.current_node or "").strip()
         if not target_node:
             raise RecoveryExecutionError(
                 "NODE_ENTRY_AUTHORITY_MISSING",
@@ -142,7 +141,7 @@ class BusinessTargetResolver:
             } and not (source.workflow_scope == "conversation" and target_node in {
                 "scan_workspace_code", "classify_intent", "scan_change_impact_code",
                 "respond_conversation", "answer_workspace", "execute_frontend",
-                "execute_backend", "validate_direct_fix",
+                "execute_backend", "execute_workspace", "validate_direct_fix",
                 "direct_modification_repair", "finalize_direct_modification",
             }))
             or (
@@ -161,8 +160,6 @@ class BusinessTargetResolver:
                 "BUSINESS_RETRY_SOURCE_INVALID",
                 "服务端无法证明该业务失败的原节点和重试资格。",
             )
-        # 先按真实失败位置证明 lifecycle 归属，再选择该阶段的恢复入口。
-        target_node = failed_reentry_target(source)
         boundary = await resolve_node_entry_boundary(
             workspace=workspace,
             source=source,

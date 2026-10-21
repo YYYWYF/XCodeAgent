@@ -4,7 +4,7 @@ import type { Message } from '@ag-ui/core'
 import type { VersionControlCommitResult, VersionControlSnapshot } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
-type VersionControlAction = 'inspect' | 'inspect_all' | 'commit' | 'summarize'
+type VersionControlAction = 'inspect' | 'inspect_all' | 'commit'
 
 type VersionControlAgUiPayload = {
   schemaVersion: 1
@@ -19,8 +19,6 @@ type VersionControlAgUiPayload = {
   message?: string
   committedPaths?: string[]
   remainingDirty?: boolean
-  /** summarize 动作生成的业务变更说明；生成不出来时是空串。 */
-  changeSummary?: string
   error?: { type?: string; message?: string }
 }
 
@@ -142,19 +140,6 @@ export async function inspectAllVersionControl(
     throw new Error('版本控制接口没有返回完整的 Git 状态。')
   }
   return response.snapshot
-}
-
-/** 按本次未提交改动生成业务变更说明，用于预填「提交并推送」弹窗的说明框。
- *
- * 生成不出来（无改动、产物缺失、模型失败）时后端返回空串，这里原样返回空串 ——
- * 调用方保持空框让用户自己写，不要把"没生成出来"当成错误弹提示。
- */
-export async function summarizeVersionControl(workspaceRoot: string): Promise<string> {
-  const response = await runVersionControl(
-    { action: 'summarize', workspaceRoot },
-    '根据本次改动生成变更说明。'
-  )
-  return typeof response.changeSummary === 'string' ? response.changeSummary : ''
 }
 
 /** 在用户确认后提交精确选择的二次修改文件。 */

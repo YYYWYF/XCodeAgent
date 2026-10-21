@@ -1,4 +1,4 @@
-from app.agents.execution_control import create_deep_agent
+from deepagents import create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
 
 from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE

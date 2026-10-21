@@ -2,14 +2,12 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   CodeOutlined,
-  DownOutlined,
   LoadingOutlined,
   MinusCircleOutlined,
   PauseCircleOutlined,
   RobotOutlined,
   SafetyCertificateOutlined,
-  ToolOutlined,
-  UpOutlined
+  ToolOutlined
 } from '@ant-design/icons'
 import { Button, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
@@ -19,19 +17,13 @@ import type {
   ProcessStepRecord,
   WorkspaceInspectionProgress
 } from '../../../../service/agUiAgent'
-import type { WorkflowRunPayload } from '../../../../typings/workflow'
 import { isCompactProcessStepNode } from '../../../../service/processStepHistory'
 import { cx } from '../../../../utils'
 import { openLocalReportFile } from '../../../../utils/reportFile'
-import type { DagPendingPlanCompletion } from '../../dagPendingPlanPresentation'
 import { BuildExecutionRunCard } from '../WorkflowRunCard'
-import WorkspaceToolActivity from '../WorkflowRunCard/WorkspaceToolActivity'
 import DagGenerationProgress from './DagGenerationProgress'
 import ProjectPlanUpdatePanel from './ProjectPlanUpdatePanel'
 import RepairInProgressPanel from './RepairInProgressPanel'
-import RepairToolActivityRow from './RepairToolActivityRow'
-import { buildProcessDisplayItems, isToolActivityStep } from './processDisplayItems'
-import ConversationProgressSummary from './ConversationProgressSummary'
 import { integrationTestCheckReportPath } from './reportAction'
 import ToolActivityChain from './ToolActivityChain'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
@@ -41,45 +33,33 @@ const { Text } = Typography
 
 type Props = {
   conversation?: boolean
-  dagPendingPlanCompletion?: DagPendingPlanCompletion
   loading: boolean
-  onOpenPendingDagConfirmation?: () => void
-  runFinishedAt?: string
   steps: ProcessStepRecord[]
-  workflow?: WorkflowRunPayload
   waitingPrompt?: string
   waitingForInput?: boolean
 }
 
+type ProcessDisplayItem =
+  | { kind: 'step'; step: ProcessStepRecord; toolSteps?: ProcessStepRecord[] }
+  | { kind: 'tool-chain'; steps: ProcessStepRecord[] }
+
 /** 渲染一条可折叠的 Agent 执行轨迹，并在测试步骤中保留结构化检查结果。 */
 export default function ProcessSteps({
   conversation = false,
-  dagPendingPlanCompletion,
   loading,
-  onOpenPendingDagConfirmation,
-  runFinishedAt,
   steps,
-  workflow,
   waitingPrompt = '',
   waitingForInput = false
 }: Props): ReactElement {
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
   const hasProjectPlanUpdate = steps.some((step) => Boolean(step.projectPlanUpdate))
   const hasWorkspaceInspection = steps.some((step) => Boolean(step.workspaceInspection))
-  // 当前 PendingPlan 的提醒位于步骤内部，重进会话时须展开其外层轨迹；历史 Run 不参与。
-  const hasPendingDagCompletion = Boolean(
-    dagPendingPlanCompletion?.planningRunId &&
-      steps.some(
-        (step) => step.dagGeneration?.planningRunId === dagPendingPlanCompletion.planningRunId
-      )
-  )
   const displayItems = buildProcessDisplayItems(steps, conversation)
+  const toolActivityCount = conversation
+    ? steps.filter((step) => isToolActivityStep(step)).length
+    : 0
   const [open, setOpen] = useState(
-    loading ||
-      waitingForInput ||
-      hasProjectPlanUpdate ||
-      hasWorkspaceInspection ||
-      hasPendingDagCompletion
+    loading || waitingForInput || hasProjectPlanUpdate || hasWorkspaceInspection
   )
 
   useEffect(() => {
@@ -88,19 +68,11 @@ export default function ProcessSteps({
       waitingForInput ||
       hasTestChecklist ||
       hasProjectPlanUpdate ||
-      hasWorkspaceInspection ||
-      hasPendingDagCompletion
+      hasWorkspaceInspection
     ) {
       setOpen(true)
     }
-  }, [
-    hasPendingDagCompletion,
-    hasProjectPlanUpdate,
-    hasTestChecklist,
-    hasWorkspaceInspection,
-    loading,
-    waitingForInput
-  ])
+  }, [hasProjectPlanUpdate, hasTestChecklist, hasWorkspaceInspection, loading, waitingForInput])
 
   const statusClassName = loading ? 'running' : waitingForInput ? 'waiting' : 'completed'
 
@@ -134,23 +106,17 @@ export default function ProcessSteps({
                   ? 'Agent 等待补充'
                   : 'Agent 执行完成'}
           </Text>
-          {conversation ? (
-            <ConversationProgressSummary
-              currentStageLabel={conversationCurrentStageLabel(steps)}
-              loading={loading}
-              runFinishedAt={runFinishedAt || workflow?.summary.lifecycle?.updatedAt}
-              waitingForInput={waitingForInput}
-              workflow={workflow}
-            />
-          ) : (
-            <Text type="secondary">
-              {loading
-                ? currentStepLabel(steps)
-                : waitingForInput
-                  ? '请根据下方提示补充修改需求'
+          <Text type="secondary">
+            {loading
+              ? currentStepLabel(steps, conversation)
+              : waitingForInput
+                ? '请根据下方提示补充修改需求'
+                : conversation
+                  ? toolActivityCount > 0
+                    ? `${toolActivityCount} 次工具调用 · 可展开查看调用链`
+                    : `已展示 ${steps.length} 个过程步骤`
                   : `已归档 ${steps.length} 个步骤`}
-            </Text>
-          )}
+          </Text>
         </span>
       </summary>
       <div className={cx('process-steps-list')}>
@@ -159,6 +125,7 @@ export default function ProcessSteps({
             const latestStep = item.steps[item.steps.length - 1]
             return (
               <ToolActivityChain
+                count={item.steps.length}
                 isLast={index === displayItems.length - 1}
                 key="tool-activity-chain"
                 latestDetail={latestStep.detail}
@@ -190,8 +157,6 @@ export default function ProcessSteps({
               toolSteps={item.toolSteps}
               waitingForInput={waitingForInput}
               waitingPrompt={waitingPrompt}
-              dagPendingPlanCompletion={dagPendingPlanCompletion}
-              onOpenPendingDagConfirmation={onOpenPendingDagConfirmation}
             />
           )
         })}
@@ -200,12 +165,49 @@ export default function ProcessSteps({
   )
 }
 
+/** 为自由对话把工具步骤归入所属节点，缺少节点归属时才保留顶层调用链。 */
+function buildProcessDisplayItems(
+  steps: ProcessStepRecord[],
+  conversation: boolean
+): ProcessDisplayItem[] {
+  if (!conversation) return steps.map((step) => ({ kind: 'step', step }))
+
+  const workflowNodeNames = new Set(
+    steps
+      .filter((step) => !isToolActivityStep(step) && step.nodeName)
+      .map((step) => String(step.nodeName))
+  )
+  const toolStepsByNode = new Map<string, ProcessStepRecord[]>()
+  const orphanToolSteps: ProcessStepRecord[] = []
+  for (const step of steps.filter((candidate) => isToolActivityStep(candidate))) {
+    const nodeName = String(step.nodeName || '')
+    if (!nodeName || !workflowNodeNames.has(nodeName)) {
+      orphanToolSteps.push(step)
+      continue
+    }
+    toolStepsByNode.set(nodeName, [...(toolStepsByNode.get(nodeName) || []), step])
+  }
+
+  const items: ProcessDisplayItem[] = []
+  let orphanToolChainAdded = false
+  for (const step of steps) {
+    if (isToolActivityStep(step)) {
+      if (orphanToolSteps.includes(step) && !orphanToolChainAdded) {
+        items.push({ kind: 'tool-chain', steps: orphanToolSteps })
+        orphanToolChainAdded = true
+      }
+      continue
+    }
+    const toolSteps = step.nodeName ? toolStepsByNode.get(step.nodeName) : undefined
+    items.push({ kind: 'step', step, ...(toolSteps?.length ? { toolSteps } : {}) })
+  }
+  return items
+}
+
 /** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
-export function ProcessStep({
+function ProcessStep({
   conversation,
-  dagPendingPlanCompletion,
   isLast,
-  onOpenPendingDagConfirmation,
   settled,
   step,
   toolSteps = [],
@@ -213,9 +215,7 @@ export function ProcessStep({
   waitingPrompt
 }: {
   conversation: boolean
-  dagPendingPlanCompletion?: DagPendingPlanCompletion
   isLast: boolean
-  onOpenPendingDagConfirmation?: () => void
   settled: boolean
   step: ProcessStepRecord
   toolSteps?: ProcessStepRecord[]
@@ -228,28 +228,12 @@ export function ProcessStep({
   const hasProjectPlanUpdate = Boolean(step.projectPlanUpdate)
   const hasWorkspaceInspection = Boolean(step.workspaceInspection)
   const hasWorkspaceInspectionProgress = Boolean(step.workspaceInspectionProgress)
-  // 扫描节点从出现到完成都保持默认收起，避免流式进度更新自动展开详情。
-  const isWorkspaceScanNode =
-    hasWorkspaceInspection ||
-    hasWorkspaceInspectionProgress ||
-    step.nodeName === 'inspect_workspace' ||
-    step.nodeName === 'scan_workspace_code'
-  const isRepairStep =
-    step.kind === 'workflow' &&
-    (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
+  const collapseCompletedWorkspaceScan =
+    step.nodeName === 'scan_workspace_code' && hasWorkspaceInspection && step.status === 'completed'
+  const isRepairStep = step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair'
   const hasRepairActivity = isRepairStep && step.status === 'running'
   const hasRepairCompletion = isRepairStep && step.status === 'completed'
   const hasRepairPanel = hasRepairActivity || hasRepairCompletion
-  const dagSnapshotMatchesPendingPlan = Boolean(
-    step.dagGeneration &&
-      dagPendingPlanCompletion?.planningRunId &&
-      step.dagGeneration.planningRunId === dagPendingPlanCompletion.planningRunId
-  )
-  const hideUnverifiedActiveDagSnapshot = Boolean(
-    step.dagGeneration?.status === 'active' &&
-      dagPendingPlanCompletion &&
-      !dagSnapshotMatchesPendingPlan
-  )
   const hasDetail = Boolean(step.detail.trim())
   const hasResult = Boolean(step.result?.trim())
   const hasToolActivity = toolSteps.length > 0
@@ -268,34 +252,31 @@ export function ProcessStep({
       hasRepairPanel)
   const awaitingInput = !titleOnly && waitingForInput && step.status === 'requires_user_input'
   // 二次修改的普通动作详情默认收起，流式更新不自动展开；结构化进度和确认提示沿用原展示规则。
-  const collapseConversationDetail =
-    conversation &&
-    !hasChecks &&
-    !hasBuildRun &&
-    !hasDagGeneration &&
-    !hasProjectPlanUpdate &&
-    !hasWorkspaceInspection &&
-    !hasWorkspaceInspectionProgress &&
-    !hasRepairPanel &&
+  const collapseConversationDetail = conversation &&
+    !hasChecks && !hasBuildRun && !hasDagGeneration && !hasProjectPlanUpdate &&
+    !hasWorkspaceInspection && !hasWorkspaceInspectionProgress && !hasRepairPanel &&
     !awaitingInput
   const [open, setOpen] = useState(
-    expandable &&
-      !isWorkspaceScanNode &&
-      !collapseConversationDetail &&
+    expandable && !collapseConversationDetail &&
       (step.status === 'running' ||
         awaitingInput ||
         hasChecks ||
         hasBuildRun ||
         hasDagGeneration ||
         hasProjectPlanUpdate ||
-        hasWorkspaceInspection ||
+        (hasWorkspaceInspection && !collapseCompletedWorkspaceScan) ||
         hasWorkspaceInspectionProgress ||
         hasRepairPanel ||
         hasToolActivity)
   )
 
   useEffect(() => {
-    if (collapseConversationDetail || isWorkspaceScanNode) return
+    if (collapseConversationDetail) return
+    // 二次修改的导航扫描完成后只保留节点摘要，避免工作区大图持续占满对话区。
+    if (collapseCompletedWorkspaceScan) {
+      setOpen(false)
+      return
+    }
     if (
       expandable &&
       (step.status === 'running' ||
@@ -316,13 +297,13 @@ export function ProcessStep({
     expandable,
     hasBuildRun,
     hasChecks,
+    collapseCompletedWorkspaceScan,
     hasDagGeneration,
     hasProjectPlanUpdate,
     hasWorkspaceInspection,
     hasWorkspaceInspectionProgress,
     hasRepairPanel,
     hasToolActivity,
-    isWorkspaceScanNode,
     step.status
   ])
 
@@ -347,20 +328,6 @@ export function ProcessStep({
       <Text>{processStepTitle(step, conversation, settled)}</Text>
     </>
   )
-
-  if (
-    isToolActivityStep(step) &&
-    (step.nodeName === 'small_task_repair' || step.nodeName === 'unit_test_repair')
-  ) {
-    return (
-      <RepairToolActivityRow
-        icon={stepIcon(step, settled)}
-        isLast={isLast}
-        step={step}
-        title={processStepTitle(step, conversation, settled)}
-      />
-    )
-  }
 
   if (awaitingInput) {
     const clarificationText =
@@ -387,18 +354,10 @@ export function ProcessStep({
   return (
     <details
       className={className}
-      onToggle={(event) => {
-        if (event.target === event.currentTarget) setOpen(event.currentTarget.open)
-      }}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
       open={open}
     >
-      <summary className={cx('process-step-summary')}>
-        {summaryContent}
-        <span className={cx('tool-activity-chain-toggle', 'process-step-toggle')}>
-          <span>{open ? '收起详情' : '展开详情'}</span>
-          {open ? <UpOutlined aria-hidden="true" /> : <DownOutlined aria-hidden="true" />}
-        </span>
-      </summary>
+      <summary className={cx('process-step-summary')}>{summaryContent}</summary>
       <div className={cx('process-step-detail')}>
         {(!hasChecks || (step.nodeName === 'unit_test' && step.status === 'failed')) &&
           !hasDagGeneration &&
@@ -413,11 +372,7 @@ export function ProcessStep({
             />
           )}
         {hasRepairPanel && (
-          <RepairInProgressPanel
-            completed={hasRepairCompletion}
-            detail={step.detail}
-            executing={hasToolActivity}
-          />
+          <RepairInProgressPanel completed={hasRepairCompletion} detail={step.detail} />
         )}
         {hasToolActivity && (
           <NodeToolActivityChain
@@ -429,19 +384,7 @@ export function ProcessStep({
           />
         )}
         {step.checks && <IntegrationTestChecklist checks={step.checks} />}
-        {step.dagGeneration && !hideUnverifiedActiveDagSnapshot ? (
-          <DagGenerationProgress
-            completion={
-              dagSnapshotMatchesPendingPlan
-                ? {
-                    summary: dagPendingPlanCompletion?.summary,
-                    onGoToConfirmation: onOpenPendingDagConfirmation
-                  }
-                : undefined
-            }
-            snapshot={step.dagGeneration}
-          />
-        ) : null}
+        {step.dagGeneration && <DagGenerationProgress snapshot={step.dagGeneration} />}
         {step.projectPlanUpdate && <ProjectPlanUpdatePanel update={step.projectPlanUpdate} />}
         {step.workspaceInspectionProgress && !step.workspaceInspection && (
           <WorkspaceInspectionProgressPanel progress={step.workspaceInspectionProgress} />
@@ -472,10 +415,10 @@ function NodeToolActivityChain({
   waitingForInput: boolean
   waitingPrompt: string
 }): ReactElement {
-  const latestStep =
-    [...steps].reverse().find((tool) => tool.status === 'running') || steps[steps.length - 1]
+  const latestStep = steps[steps.length - 1]
   return (
     <ToolActivityChain
+      count={steps.length}
       isLast
       latestDetail={latestStep.detail}
       latestIcon={stepIcon(latestStep, !loading)}
@@ -567,8 +510,9 @@ function IntegrationTestChecklist({
             <SafetyCertificateOutlined />
           </span>
           <span>
+            <Text className={cx('integration-test-checklist-eyebrow')}>QUALITY GATE</Text>
             <Text className={cx('integration-test-checklist-title')} strong>
-              测试检查步骤
+              集成检查矩阵
             </Text>
           </span>
         </div>
@@ -606,9 +550,12 @@ function IntegrationTestChecklist({
               <span className={cx('integration-test-check-icon')}>
                 {testCheckIcon(check.status)}
               </span>
-              <div className={cx('integration-test-check-content')}>
+              <span className={cx('integration-test-check-content')}>
                 <span className={cx('integration-test-check-heading')}>
                   <Text>{check.name}</Text>
+                  <span className={cx('integration-test-check-scope')}>
+                    {check.required ? 'REQUIRED' : 'OPTIONAL'}
+                  </span>
                 </span>
                 {testCheckCountLabel(check) && (
                   <Text type="secondary">{testCheckCountLabel(check)}</Text>
@@ -617,10 +564,7 @@ function IntegrationTestChecklist({
                   check.status === 'failed' ||
                   check.status === 'skipped') &&
                   check.evidence && <Text type="secondary">{check.evidence}</Text>}
-                {check.status === 'running' && check.activeToolActivity && (
-                  <WorkspaceToolActivity activity={check.activeToolActivity} />
-                )}
-              </div>
+              </span>
               <span className={cx('integration-test-check-actions')}>
                 {reportPath && (
                   <Button
@@ -644,18 +588,18 @@ function IntegrationTestChecklist({
 }
 
 /** 返回当前执行步骤在总步骤中的位置与标题。 */
-function currentStepLabel(steps: ProcessStepRecord[]): string {
+function currentStepLabel(steps: ProcessStepRecord[], conversation: boolean): string {
+  const activeTool = [...steps]
+    .reverse()
+    .find((step) => isToolActivityStep(step) && step.status === 'running')
+  if (conversation && activeTool) {
+    const toolCount = steps.filter((step) => isToolActivityStep(step)).length
+    return `${processStepTitle(activeTool, true, false)} · 已记录 ${toolCount} 次调用`
+  }
+
   const activeIndex = steps.findIndex((step) => step.status === 'running')
   if (activeIndex < 0) return `正在准备 · ${steps.length} 个步骤`
-  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${processStepTitle(steps[activeIndex], false, false)}`
-}
-
-/** 选择当前自由对话的业务节点标题，工具调用只在执行详情中展示。 */
-function conversationCurrentStageLabel(steps: ProcessStepRecord[]): string {
-  const activeStage = [...steps]
-    .reverse()
-    .find((step) => step.kind === 'workflow' && step.status === 'running')
-  return activeStage ? processStepTitle(activeStage, true, false) : '正在处理当前阶段'
+  return `第 ${activeIndex + 1} / ${steps.length} 步 · ${processStepTitle(steps[activeIndex], conversation, false)}`
 }
 
 /** 为自由对话把内部节点和工具步骤转换成用户可理解的实时状态。 */
@@ -679,6 +623,7 @@ function processStepTitle(
     answer_workspace: '读取工作区并回答',
     execute_frontend: '修改前端文件',
     execute_backend: '修改后端文件',
+    execute_workspace: '修改工作区文件',
     integration_test: '验证修改',
     validate_direct_fix: '验证本次修改',
     direct_modification_repair: '自动修复局部代码',
@@ -694,6 +639,11 @@ function processStepTitle(
   if (step.status === 'failed') return `${label}失败`
   if (step.status === 'requires_user_input') return `等待确认 · ${label}`
   return step.status === 'running' && !settled ? `正在${label}` : `已完成${label}`
+}
+
+/** 判断自由对话中需要合并展示的工具和命令步骤。 */
+function isToolActivityStep(step: ProcessStepRecord): boolean {
+  return step.kind === 'tool' || step.kind === 'command'
 }
 
 /** 渲染非结构化步骤的详情或执行结果。 */

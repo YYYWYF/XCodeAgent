@@ -19,7 +19,13 @@ const devAgentStudioApi = {
   auth: {
     login: () => ipcRenderer.invoke('auth:login'),
     status: () => ipcRenderer.invoke('auth:status'),
-    getAccessToken: () => ipcRenderer.invoke('auth:get-access-token'),
+    cancel: () => ipcRenderer.invoke('auth:cancel'),
+    requestCloudJson: (request) => ipcRenderer.invoke('auth:cloud-request', request),
+    onProgress: (listener) => {
+      const handler = (_event, progress) => listener(progress)
+      ipcRenderer.on('auth:progress', handler)
+      return () => ipcRenderer.removeListener('auth:progress', handler)
+    },
     reauthenticate: () => ipcRenderer.invoke('auth:reauthenticate'),
   },
   settings: {

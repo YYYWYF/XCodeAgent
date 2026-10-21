@@ -2,7 +2,6 @@ import {
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
-  DownOutlined,
   LoadingOutlined,
   PauseCircleOutlined
 } from '@ant-design/icons'
@@ -40,8 +39,7 @@ import type {
   WorkflowRevisionDraftInteraction,
   WorkflowRevisionImpact,
   WorkflowTestTarget,
-  WorkflowRunPayload,
-  ApplicationConfig
+  WorkflowRunPayload
 } from '../../../../typings'
 import { cx } from '../../../../utils'
 import {
@@ -58,7 +56,6 @@ import ConfirmationArtifact from './ConfirmationArtifact'
 import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactReview'
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
-import BuildTaskInstructions from './BuildTaskInstructions'
 import DetailReview from './DetailReview'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
 import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
@@ -66,10 +63,6 @@ import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
-import WorkspaceToolActivity from './WorkspaceToolActivity'
-import DirectModificationScopeReview from './DirectModificationScopeReview'
-import UnitTestConfirmationPanel from './UnitTestConfirmationPanel'
-import FrontendPerformanceConfirmationPanel from './FrontendPerformanceConfirmationPanel'
 import ReviewPhaseConfirmationCard from './ReviewPhaseConfirmationCard'
 import AcceptancePhaseConfirmationCard from './AcceptancePhaseConfirmationCard'
 import CodeReviewCard from './CodeReviewCard'
@@ -85,8 +78,8 @@ import {
 } from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import ProjectPlanSummary from '../../../Welcome/ProjectPlanSummary'
+import TechnicalPlanSummary from '../../../Welcome/TechnicalPlanSummary'
 import RequirementSpecEditor from '../../../Welcome/RequirementSpecEditor'
-import ApplicationConfigPrerequisiteCard from './ApplicationConfigPrerequisiteCard'
 import './WorkflowRunCard.less'
 
 const { Text } = Typography
@@ -94,13 +87,13 @@ const { TextArea } = Input
 
 const OTHER_OPTION_VALUE = '__other__'
 
-/** 校验门禁卡片的应用、页面或 Endpoint 开发目标。 */
+/** 校验门禁卡片的页面或 Endpoint 开发目标，拒绝不完整的历史载荷。 */
 function normalizeApiDesignDevelopmentTarget(
   value: unknown
-): { type: 'application' | 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string } | undefined {
+): { type: 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const target = value as Record<string, unknown>
-  const type = target.type === 'application' ? 'application' : target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
+  const type = target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
   const id = String(target.id || '')
   if (!type || !id) return undefined
   return {
@@ -132,15 +125,10 @@ export type ClarificationAnswers = WorkflowClarificationAnswers
 type WorkflowRunCardProps = {
   disabled?: boolean
   interactionAvailability: WorkflowInteractionAvailability
-  workflowCardResult?: 'confirmed' | 'cancelled' | 'submitted'
   /** 已答完的历史澄清卡：header→答案 映射，存在时按原控件形态回填答案并以禁用态展示。 */
   historicalClarificationAnswers?: Record<string, string>
-  /** 当前技术规划会话繁忙时禁用已确认卡上的修改入口。 */
-  reviseConfirmedTechnicalPlanDisabled?: boolean
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
-  /** 已确认的技术规划通过当前规划会话发起正式修订。 */
-  onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
   onSubmitClarification?: (
     workflow: WorkflowRunPayload,
     answers: ClarificationAnswers,
@@ -165,19 +153,14 @@ type WorkflowRunCardProps = {
   rootPath?: string
   workflow: WorkflowRunPayload
   workspaceRoot?: string
-  application?: ApplicationConfig
 }
 
-/** 渲染 Workflow 交互卡片，并按已保存的操作结果恢复卡片状态。 */
 export default function WorkflowRunCard({
   disabled,
   historicalClarificationAnswers,
   interactionAvailability,
-  workflowCardResult,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
-  onReviseConfirmedTechnicalPlan,
-  reviseConfirmedTechnicalPlanDisabled,
   onSubmitClarification,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -187,8 +170,7 @@ export default function WorkflowRunCard({
   onSaveRequirementSpec,
   rootPath,
   workflow,
-  workspaceRoot,
-  application
+  workspaceRoot
 }: WorkflowRunCardProps): ReactElement {
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
   const status = String(workflow.summary.status || 'unknown')
@@ -206,9 +188,6 @@ export default function WorkflowRunCard({
   const codeReviewRepairConfirmation = clarification?.mode === 'code_review_repair_confirmation'
   // 恢复或重跑测试节点时快照可能短暂携带上一轮审查结果，必须以当前阶段为显示边界。
   const codeReview = workflowShouldShowCodeReview(workflow)
-  const reviewStage = ['code_review', 'acceptance_phase_confirmation'].includes(
-    String(workflow.summary.phase || '')
-  )
   const staleFrontendPerformanceConfirmation =
     launchNode && clarification?.mode === 'frontend_performance_confirmation'
   const confirmationArtifact = workflowConfirmationArtifact(workflow, clarification)
@@ -240,7 +219,6 @@ export default function WorkflowRunCard({
     clarification?.mode === 'frontend_performance_confirmation' &&
     !staleFrontendPerformanceConfirmation
   const revisionImpact = workflowRevisionImpact(workflow, clarification)
-  const applicationConfigPrerequisite = clarification?.mode === 'application_config_prerequisite'
   const revisionDraftBinding = workflowRevisionDraftBinding(workflow, clarification)
   const dagConfirmation = clarification?.mode === 'build_task_plan_confirmation'
   const testPhaseConfirmation = clarification?.mode === 'test_phase_confirmation'
@@ -254,7 +232,7 @@ export default function WorkflowRunCard({
     ? clarification?.errors
     : [
         ...(Array.isArray(clarification?.errors) ? clarification.errors : []),
-        '当前待确认计划的确认信息不完整，请刷新后重试。'
+        '当前任务规划缺少服务端 DraftIdentity，请刷新后重试。'
       ]
   // 产物确认（需求文档/产品规划/UI设计/技术规划）：展示已生成与确认操作，不走通用表单。
   const artifactConfirmation = clarification?.mode
@@ -286,8 +264,6 @@ export default function WorkflowRunCard({
   const productPlanObject = readProductPlan(workflow)
   const projectPlanObject = readProjectPlan(workflow)
   const technicalPlanObject = readTechnicalPlan(workflow)
-  // 技术规划弹框的「页面概览」版块需要上游 RequirementSpec 提取页面风格，故一并读取。
-  const requirementSpecObject = readRequirementSpec(workflow)
   // 产物确认答案键必须与当前 mode 一一对应，避免确认产品规划时误发需求确认答案。
   const artifactAnswerKey =
     clarification?.mode === 'requirement_document_confirmation'
@@ -317,36 +293,8 @@ export default function WorkflowRunCard({
                     | undefined
                 )?.length || clarificationQuestions.length
               : clarificationQuestions.length
-  const hasWorkflowCardResult = Boolean(workflowCardResult)
-  const revisionImpactDecision =
-    workflowCardResult === 'confirmed'
-      ? 'approved'
-      : workflowCardResult === 'cancelled'
-        ? 'rejected'
-        : undefined
-  const hasRevisionImpactDecision = Boolean(revisionImpactDecision)
   const requiresConfirmation =
-    !staleFrontendPerformanceConfirmation &&
-    clarification?.status === 'requires_user_input' &&
-    !hasWorkflowCardResult
-  const activeConfirmation =
-    requiresConfirmation && interactionAvailability === 'active'
-  // Lifecycle 已判定过期的旧快照仍保留问题上下文，但不能继续标成当前待确认。
-  const staleConfirmation =
-    requiresConfirmation && interactionAvailability === 'stale'
-  const workflowCardStatusVariant =
-    workflowCardResult ||
-    (staleConfirmation
-      ? 'stale'
-      : status === 'requires_user_input'
-        ? 'pending'
-        : undefined)
-  // 技术规划正文由右侧文档面板展示；确认后左侧只保留确认状态和有效的修改入口。
-  const technicalPlanConfirmationResolved = Boolean(
-    clarification?.mode === 'technical_plan_confirmation' &&
-      artifactConfirmation &&
-      !requiresConfirmation
-  )
+    !staleFrontendPerformanceConfirmation && clarification?.status === 'requires_user_input'
   const [answers, setAnswers] = useState<ClarificationAnswers>(() =>
     loadClarificationDraft(workflow.threadId, clarificationQuestions)
   )
@@ -356,9 +304,6 @@ export default function WorkflowRunCard({
     clarificationQuestions.every((question, index) =>
       clarificationAnswerComplete(question, answers[clarificationQuestionKey(question, index)])
     )
-  const implementationFixCancelled =
-    clarification?.mode === 'implementation_fix_confirmation' &&
-    selectedAnswerValues(answers.implementation_fix_confirmation).includes('否')
   const updateAnswer = (key: string, value: WorkflowClarificationAnswer): void => {
     setAnswers((currentAnswers) => {
       const nextAnswers = { ...currentAnswers, [key]: value }
@@ -387,8 +332,8 @@ export default function WorkflowRunCard({
       className={cx(
         'workflow-run-card',
         apiDesignReadinessGate && 'workflow-run-card-api-design-readiness',
-        activeConfirmation && 'workflow-run-card-pending',
-        revisionImpact && activeConfirmation && 'workflow-run-card-revision-impact'
+        requiresConfirmation && 'workflow-run-card-pending',
+        revisionImpact && requiresConfirmation && 'workflow-run-card-revision-impact'
       )}
     >
       <div className={cx('workflow-run-header')}>
@@ -398,36 +343,9 @@ export default function WorkflowRunCard({
             工作流执行
           </Text>
         </div>
-        {/* 阶段入口卡只表达跳转动作，不显示通用待确认状态标签。 */}
-        {!planningStageEntry ? (
-          <Tag
-            className={cx(
-              'workflow-run-status',
-              workflowCardStatusVariant && `workflow-run-status-${workflowCardStatusVariant}`
-            )}
-            color={
-              workflowCardResult === 'confirmed'
-                ? 'green'
-                : workflowCardResult === 'cancelled'
-                  ? 'default'
-                  : workflowCardResult === 'submitted'
-                    ? 'purple'
-                    : staleConfirmation
-                      ? 'default'
-                      : workflowStatusColor(status)
-            }
-          >
-            {workflowCardResult === 'confirmed'
-              ? '已确认'
-              : workflowCardResult === 'cancelled'
-                ? '已取消'
-                : workflowCardResult === 'submitted'
-                  ? '已提交'
-                  : staleConfirmation
-                    ? '已失效'
-                    : workflowStatusText(status)}
-          </Tag>
-        ) : null}
+        <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
+          {workflowStatusText(status)}
+        </Tag>
       </div>
       {unitTestRunning ? (
         <div className={cx('workflow-run-progress')}>
@@ -485,15 +403,6 @@ export default function WorkflowRunCard({
         />
       )}
       {projectLaunch && <ProjectLaunchCard workflow={workflow} />}
-      {applicationConfigPrerequisite && application ? (
-        <ApplicationConfigPrerequisiteCard
-          application={application}
-          disabled={disabled || interactionAvailability !== 'active'}
-          pending={(clarification as Record<string, unknown>).configPrerequisite as Record<string, unknown>}
-          onCancel={() => onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'cancelled' } })}
-          onSubmit={(changes) => onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'apply', changes } })}
-        />
-      ) : null}
       {!entityDesignReview && Object.keys(artifacts).length > 0 && artifactConfirmation && (
         <div className={cx('workflow-artifacts')}>
           <div className={cx('workflow-section-heading')}>
@@ -503,31 +412,15 @@ export default function WorkflowRunCard({
           {Object.entries(artifacts).map(([name, path]) => (
             <div className={cx('workflow-artifact-item')} key={name}>
               <span className={cx('workflow-artifact-marker')} aria-hidden="true" />
-              <Text code>{path.split(/[\\/]/).filter(Boolean).pop() || '未命名文件'}</Text>
+              <Text code>
+                {name}: {path}
+              </Text>
             </div>
           ))}
         </div>
       )}
       {/* API 映射门禁使用专用卡片，即使没有通用问题列表也必须提供配置和确认入口。 */}
-      {technicalPlanConfirmationResolved ? (
-        workflowCardResult === 'confirmed' && onReviseConfirmedTechnicalPlan ? (
-          <div className={cx('workflow-clarification')}>
-            <PlanConfirmationCard
-              artifact={undefined}
-              confirmed
-              disabled={Boolean(reviseConfirmedTechnicalPlanDisabled)}
-              onAbandon={() => undefined}
-              onConfirm={() => undefined}
-              onRevise={onReviseConfirmedTechnicalPlan}
-              planType="technical"
-              requiresConfirmation={false}
-              title={artifactConfirmation?.title || '技术规划'}
-            />
-          </div>
-        ) : null
-      ) : (clarificationQuestions.length > 0 ||
-        artifactConfirmation ||
-        uiDesignConfirmation ||
+      {(clarificationQuestions.length > 0 ||
         apiDesignRequired ||
         unitTestConfirmation ||
         detailReview ||
@@ -538,14 +431,14 @@ export default function WorkflowRunCard({
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
         <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
-          {!reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+          {!apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
             <div className={cx('workflow-clarification-header')}>
               <div>
-                <Text strong>{staleConfirmation ? '原确认内容' : '待确认事项'}</Text>
+                <Text strong>待确认事项</Text>
               </div>
               <Tag
                 className={cx('workflow-confirmation-count')}
-                color={activeConfirmation ? 'gold' : 'default'}
+                color={requiresConfirmation ? 'gold' : 'default'}
               >
                 {confirmationItemCount}
               </Tag>
@@ -553,11 +446,10 @@ export default function WorkflowRunCard({
           )}
           {requiresConfirmation && interactionAvailability !== 'active' && (
             <Alert
-              className={cx('workflow-confirmation-status')}
               message={
                 interactionAvailability === 'unavailable'
                   ? '正在校准确认状态，请稍候。'
-                  : '此确认已失效，请使用当前计划操作继续。'
+                  : '该确认已提交或已失效，请使用当前计划操作继续。'
               }
               showIcon
               type="info"
@@ -588,10 +480,9 @@ export default function WorkflowRunCard({
               type="error"
             />
           )}
-          {revisionImpact && (requiresConfirmation || hasRevisionImpactDecision) ? (
+          {revisionImpact && requiresConfirmation ? (
             <RevisionImpactReview
               disabled={disabled || interactionAvailability !== 'active'}
-              decision={revisionImpactDecision}
               impact={revisionImpact}
               onDecision={(decision) =>
                 onSubmitClarification?.(workflow, {
@@ -611,11 +502,9 @@ export default function WorkflowRunCard({
                 })
               }
             />
-          ) : planningStageEntry ? (
+          ) : planningStageEntry && requiresConfirmation ? (
             <PlanningStageEntryCard
-              disabled={
-                disabled || interactionAvailability !== 'active' || !requiresConfirmation
-              }
+              disabled={disabled || interactionAvailability !== 'active'}
               onEnterPlanning={() =>
                 onSubmitClarification?.(workflow, {
                   planning_stage_entry: 'enter',
@@ -627,7 +516,6 @@ export default function WorkflowRunCard({
           ) : testPhaseConfirmation && requiresConfirmation ? (
             <TestPhaseConfirmationCard
               disabled={disabled || interactionAvailability !== 'active'}
-              message={clarification?.message}
               onSubmit={() =>
                 onSubmitClarification?.(workflow, {
                   test_phase_confirmation: {
@@ -775,9 +663,6 @@ export default function WorkflowRunCard({
                       ? technicalPlanObject
                       : projectPlanObject
                 }
-                // 技术规划弹框「页面概览」版块复用上游产物：交互/布局来自 productPlan，风格来自 spec。
-                productPlan={productPlanObject}
-                spec={requirementSpecObject}
                 planType={
                   clarification?.mode === 'requirement_document_confirmation'
                     ? 'product'
@@ -792,11 +677,9 @@ export default function WorkflowRunCard({
           ) : uiDesignConfirmation ? (
             <UiDesignConfirmationPanel
               disabled={disabled || interactionAvailability !== 'active'}
-              onSubmit={(currentWorkflow, answers) => {
-                // 历史 UI 卡保留预览能力，但不能提交生成、调整或正式确认动作。
-                if (disabled || interactionAvailability !== 'active') return
-                return onSubmitClarification?.(currentWorkflow, answers)
-              }}
+              onSubmit={(currentWorkflow, answers) =>
+                onSubmitClarification?.(currentWorkflow, answers)
+              }
               showPreview={false}
               iterationOrigins={uiDesignIterationOrigins}
               activePageId={uiDesignActivePageId}
@@ -810,9 +693,6 @@ export default function WorkflowRunCard({
             <>
               {confirmationArtifact && <ConfirmationArtifact artifact={confirmationArtifact} />}
               <ClarificationContext clarification={clarification} />
-              {clarification?.mode === 'implementation_fix_confirmation' && (
-                <DirectModificationScopeReview clarification={clarification} />
-              )}
               {clarificationQuestions.map((question, index) => {
                 // 已答历史卡：保留原控件形态（勾选框/单选/文本框），回填留痕答案并禁用，
                 // 让用户看到的回填样式与当初作答时一致，而不是一行只读「已答：」文字。
@@ -874,7 +754,7 @@ export default function WorkflowRunCard({
                     size="large"
                     type="primary"
                   >
-                    {implementationFixCancelled ? '确认取消' : '确认并继续'}
+                    确认并继续
                   </Button>
                 )}
             </>
@@ -885,12 +765,11 @@ export default function WorkflowRunCard({
   )
 }
 
-/** 仅在当前影响确认门读取 revision impact，避免历史影响范围遮蔽后续映射/DAG 确认。 */
+/** 从 clarification、summary 或公开 state/result 读取只读 revision impact。 */
 function workflowRevisionImpact(
   workflow: WorkflowRunPayload,
   clarification?: WorkflowClarification
 ): WorkflowRevisionImpact | undefined {
-  if (clarification?.mode !== 'revision_impact_confirmation') return undefined
   const clarificationImpact = (clarification as Record<string, unknown> | undefined)?.revisionImpact
   const candidates = [
     clarificationImpact,
@@ -1064,8 +943,6 @@ function RequirementSpecConfirmationCard({
 }): ReactElement {
   const spec = readRequirementSpec(workflow)
   const requirementsConfirmed = readRequirementsConfirmed(workflow)
-  const clarification = workflowClarification(workflow)
-  const errors = clarification?.errors?.map(String).filter(Boolean) || []
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Record<string, unknown> | undefined>()
   const [saving, setSaving] = useState(false)
@@ -1099,14 +976,6 @@ function RequirementSpecConfirmationCard({
 
   return (
     <div className={cx('requirement-spec-confirmation-card')}>
-      {errors.length > 0 ? (
-        <Alert
-          description={errors.join('；')}
-          message={<Text strong>需求文档需要调整</Text>}
-          showIcon
-          type="warning"
-        />
-      ) : null}
       {!requirementsConfirmed && spec ? (
         <div className={cx('requirement-spec-draft-summary')}>
           <Text strong>需求草稿已展示在右侧</Text>
@@ -1178,10 +1047,9 @@ function readRequirementsConfirmed(workflow: WorkflowRunPayload): boolean {
   return false
 }
 
-/** 规划文档确认卡片：展示产物状态并提交当前阶段支持的确认或修改操作。 */
+/** 规划文档确认卡片：展示当前文档并提交放弃或确认操作。 */
 export function PlanConfirmationCard({
   artifact,
-  confirmed = false,
   disabled,
   onAbandon,
   onConfirm,
@@ -1192,24 +1060,19 @@ export function PlanConfirmationCard({
   title
 }: {
   artifact?: WorkflowConfirmationArtifact
-  confirmed?: boolean
   disabled: boolean
   onAbandon: () => void
   onConfirm: () => void
   onRevise: (request: string) => void
   plan?: Record<string, unknown>
   planType: 'product' | 'technical' | 'project'
-  /** 技术规划弹框「页面概览」版块用：交互/布局来自 productPlan。 */
-  productPlan?: Record<string, unknown>
   requiresConfirmation: boolean
-  /** 技术规划弹框「页面概览」版块用：页面风格从 spec 自由文本提取。 */
-  spec?: Record<string, unknown>
   title: string
 }): ReactElement {
   const [viewing, setViewing] = useState(false)
   const [revising, setRevising] = useState(false)
   const [revisionRequest, setRevisionRequest] = useState('')
-  const canView = planType !== 'technical' && Boolean(artifact || plan)
+  const canView = Boolean(artifact || plan)
   const canRevise = planType === 'technical'
   const documentLabel =
     planType === 'product' ? '需求文档' : planType === 'technical' ? '技术规划' : '项目计划书'
@@ -1264,7 +1127,7 @@ export function PlanConfirmationCard({
           <>
             <span className={cx('artifact-auth-status')}>
               <CheckCircleOutlined aria-hidden="true" />
-              {title}{confirmed ? '已确认' : '已生成'}
+              {title}已生成
             </span>
             <span className={cx('artifact-auth-actions')}>
               {canView ? (
@@ -1278,25 +1141,23 @@ export function PlanConfirmationCard({
               {canRevise ? (
                 <Button
                   className={cx('requirement-spec-edit-btn')}
-                  disabled={disabled || confirmed}
+                  disabled={disabled}
                   onClick={startRevision}
                 >
                   修改
                 </Button>
-              ) : !confirmed ? (
+              ) : (
                 <Button disabled={disabled} onClick={onAbandon}>
                   放弃
                 </Button>
-              ) : null}
-              {!confirmed ? (
-                <Button
-                  disabled={disabled || !requiresConfirmation}
-                  onClick={onConfirm}
-                  type="primary"
-                >
-                  确认保存
-                </Button>
-              ) : null}
+              )}
+              <Button
+                disabled={disabled || !requiresConfirmation}
+                onClick={onConfirm}
+                type="primary"
+              >
+                确认保存
+              </Button>
             </span>
           </>
         )}
@@ -1314,6 +1175,8 @@ export function PlanConfirmationCard({
       >
         {planType === 'product' && artifact ? (
           <ConfirmationArtifact artifact={artifact} />
+        ) : planType === 'technical' && plan ? (
+          <TechnicalPlanSummary plan={plan} />
         ) : plan ? (
           <ProjectPlanSummary plan={plan} />
         ) : artifact ? (
@@ -1424,13 +1287,6 @@ function BuildExecutionSliceProgress({
   const displayTasks = sortBuildTasksForDisplay(tasks)
   const expandedTaskKeys = new Set(activeTaskKeys)
 
-  /** 仅由底栏箭头切换任务详情，行内展开不会触发整张任务卡片。 */
-  const toggleTaskDetails = (id: string): void => {
-    setActiveTaskKeys((current) =>
-      current.includes(id) ? current.filter((key) => key !== id) : [...current, id]
-    )
-  }
-
   return (
     <div className={cx('workflow-build-progress')}>
       <div className={cx('workflow-build-progress-header')}>
@@ -1499,7 +1355,10 @@ function BuildExecutionSliceProgress({
             activeKey={activeTaskKeys}
             className={cx('workflow-build-task-list')}
             expandIconPosition="right"
-            collapsible="icon"
+            onChange={(keys) => {
+              const nextKeys = Array.isArray(keys) ? keys : [keys]
+              setActiveTaskKeys(nextKeys.map(String))
+            }}
           >
             {displayTasks.map((task) => (
               <Collapse.Panel
@@ -1507,19 +1366,12 @@ function BuildExecutionSliceProgress({
                 header={
                   <BuildExecutionTaskHeader
                     expanded={expandedTaskKeys.has(taskId(task))}
-                    onToggle={() => toggleTaskDetails(taskId(task))}
                     task={task}
                   />
                 }
                 key={taskId(task)}
-                showArrow={false}
               >
                 <BuildExecutionTaskDetails task={task} />
-                <BuildExecutionTaskFooter
-                  expanded
-                  onToggle={() => toggleTaskDetails(taskId(task))}
-                  task={task}
-                />
               </Collapse.Panel>
             ))}
           </Collapse>
@@ -1589,11 +1441,9 @@ function BuildProgressStat({
 
 function BuildExecutionTaskHeader({
   expanded,
-  onToggle,
   task
 }: {
   expanded: boolean
-  onToggle: () => void
   task: WorkflowBuildExecutionTask
 }): ReactElement {
   /** 渲染可折叠任务卡片的头部摘要。 */
@@ -1609,57 +1459,27 @@ function BuildExecutionTaskHeader({
         </span>
         <div className={cx('workflow-build-task-title')}>
           <Text strong>{title}</Text>
-          <BuildTaskInstructions description={description} />
+          <Text type="secondary">{description}</Text>
         </div>
+        <Tag
+          className={cx('workflow-build-task-status-tag', status)}
+          color={taskStatusColor(status)}
+        >
+          {taskStatusText(status)}
+        </Tag>
+        {/* 弱提醒：任务完成且确实写过文件时标记"可形成检查点"，只做标记、不弹窗。 */}
+        {isCheckpointCandidate(task) ? (
+          <Tag
+            className={cx('workflow-build-task-checkpoint-tag')}
+            title="本轮改动已落盘，可在版本入口创建提交"
+          >
+            可形成检查点
+          </Tag>
+        ) : null}
       </div>
       {buildToolActivityPlacement(task, expanded) === 'header' && (
-        <WorkspaceToolActivity activity={task.activeToolActivity!} />
+        <BuildToolActivity activity={task.activeToolActivity!} />
       )}
-      {!expanded && <BuildExecutionTaskFooter expanded={false} onToggle={onToggle} task={task} />}
-    </div>
-  )
-}
-
-/** 在卡片最底部展示任务状态、检查点提示及详情展开入口。 */
-function BuildExecutionTaskFooter({
-  expanded,
-  onToggle,
-  task
-}: {
-  expanded: boolean
-  onToggle: () => void
-  task: WorkflowBuildExecutionTask
-}): ReactElement {
-  const status = buildTaskDisplayStatus(task.status)
-  const title = displayTaskTitle(task)
-  return (
-    <div className={cx('workflow-build-task-footer')}>
-      <Tag className={cx('workflow-build-task-status-tag', status)} color={taskStatusColor(status)}>
-        {taskStatusText(status)}
-      </Tag>
-      {/* 弱提醒：任务完成且确实写过文件时标记"可形成检查点"，只做标记、不弹窗。 */}
-      {isCheckpointCandidate(task) ? (
-        <Tag
-          className={cx('workflow-build-task-checkpoint-tag')}
-          title="本轮改动已落盘，可在版本入口创建提交"
-        >
-          可形成检查点
-        </Tag>
-      ) : null}
-      <Button
-        aria-expanded={expanded}
-        aria-label={`${expanded ? '收起' : '展开'}任务详情：${title}`}
-        className={cx('workflow-build-task-details-toggle')}
-        icon={<DownOutlined rotate={expanded ? 180 : 0} />}
-        onClick={(event) => {
-          event.stopPropagation()
-          onToggle()
-        }}
-        onKeyDown={(event) => event.stopPropagation()}
-        onKeyPress={(event) => event.stopPropagation()}
-        size="small"
-        type="text"
-      />
     </div>
   )
 }
@@ -1756,7 +1576,7 @@ function BuildExecutionTaskDetails({ task }: { task: WorkflowBuildExecutionTask 
         </div>
       )}
       {buildToolActivityPlacement(task, true) === 'details' && (
-        <WorkspaceToolActivity activity={task.activeToolActivity!} />
+        <BuildToolActivity activity={task.activeToolActivity!} />
       )}
     </div>
   )
@@ -1771,6 +1591,28 @@ export function buildToolActivityPlacement(
 
   if (task.status !== 'running' || !task.activeToolActivity) return undefined
   return expanded ? 'details' : 'header'
+}
+
+function BuildToolActivity({
+  activity
+}: {
+  activity: NonNullable<WorkflowBuildExecutionTask['activeToolActivity']>
+}): ReactElement {
+  /** 以单行高亮样式展示当前任务最新工具操作，不展开原始工具参数。 */
+
+  return (
+    <div
+      aria-label={activity.message}
+      aria-live="polite"
+      className={cx('workflow-build-tool-activity', activity.status)}
+      title={activity.message}
+    >
+      <span className={cx('workflow-build-tool-activity-icon')} aria-hidden="true">
+        {activity.status === 'running' ? <LoadingOutlined spin /> : <CloseCircleOutlined />}
+      </span>
+      <Text>{activity.message}</Text>
+    </div>
+  )
 }
 
 function BuildTaskDetailItem({ label, value }: { label: string; value: string }): ReactElement {
@@ -2127,7 +1969,6 @@ function WorkflowContext({ context }: { context: Record<string, unknown> }): Rea
   )
 }
 
-/** 按问题类型展示结构化确认控件，并保留业务自定义选项文案。 */
 function ClarificationQuestionControl({
   disabled,
   onChange,
@@ -2161,12 +2002,6 @@ function ClarificationQuestionControl({
   }
 
   if (question.type === 'yesno') {
-    const yesNoOptions = options.length >= 2
-      ? options.slice(0, 2)
-      : [
-          { label: '是', value: '是', description: '' },
-          { label: '否', value: '否', description: '' }
-        ]
     return (
       <>
         <Radio.Group
@@ -2174,9 +2009,8 @@ function ClarificationQuestionControl({
           onChange={(event) => setSelectedValues([String(event.target.value)])}
           value={selectedValues[0]}
         >
-          {yesNoOptions.map((option) => (
-            <Radio key={option.value} value={option.value}>{option.label}</Radio>
-          ))}
+          <Radio value="是">是</Radio>
+          <Radio value="否">否</Radio>
           {question.allowOther !== false && <Radio value={OTHER_OPTION_VALUE}>其他</Radio>}
         </Radio.Group>
         {otherSelected && (
@@ -2264,6 +2098,56 @@ function ClarificationQuestionControl({
       placeholder={question.placeholder || '请输入你的补充说明'}
       value={typeof value === 'string' ? value : ''}
     />
+  )
+}
+
+/** 构建检查完成后提供跳过或继续单元测试的双按钮确认面板。 */
+function UnitTestConfirmationPanel({
+  disabled,
+  message,
+  onSubmit
+}: {
+  disabled?: boolean
+  message?: string
+  onSubmit: (decision: 'skip' | 'run') => void
+}): ReactElement {
+  return (
+    <div className={cx('workflow-unit-test-confirmation')}>
+      <Text>{message || '构建检查已完成。是否跳过单元测试？'}</Text>
+      <div className={cx('workflow-unit-test-confirmation-actions')}>
+        <Button disabled={disabled} onClick={() => onSubmit('skip')} type="default">
+          是，跳过单元测试
+        </Button>
+        <Button disabled={disabled} onClick={() => onSubmit('run')} type="primary">
+          否，继续执行
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** 单元测试完成后提供跳过或继续前端性能测试的双按钮确认面板。 */
+function FrontendPerformanceConfirmationPanel({
+  disabled,
+  message,
+  onSubmit
+}: {
+  disabled?: boolean
+  message?: string
+  onSubmit: (decision: 'skip' | 'run') => void
+}): ReactElement {
+  return (
+    <div className={cx('workflow-frontend-performance-confirmation')}>
+      <Text>{message || '单元测试已完成。是否跳过前端性能测试？'}</Text>
+      <div className={cx('workflow-frontend-performance-confirmation-actions')}>
+        <Button disabled={disabled} onClick={() => onSubmit('skip')} type="default">
+          是，跳过性能测试
+        </Button>
+        <Button disabled={disabled} onClick={() => onSubmit('run')} type="primary">
+          否，继续执行
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -2603,7 +2487,7 @@ export function buildClarificationContinuationMessage(
     .map((question, index) => {
       const key = clarificationQuestionKey(question, index)
       const value = answers[key]
-      const answer = clarificationAnswerText(value, question)
+      const answer = clarificationAnswerText(value)
       if (!answer || !String(answer).trim()) return ''
       return `- ${
         question.header || question.dimension || `问题${index + 1}`
@@ -2616,26 +2500,16 @@ export function buildClarificationContinuationMessage(
   return answerLines.join('\n')
 }
 
-/** 展示选择项的中文标签，协议枚举仍由原始 answers 单独提交。 */
-function clarificationAnswerText(
-  value: WorkflowClarificationAnswer | undefined,
-  question: WorkflowClarificationQuestion
-): string {
-  /** 只转换题目声明的选项值，保留自由输入和其他补充原文。 */
-  const choiceLabel = (selected: string): string =>
-    question.type === 'text'
-      ? selected
-      : question.options?.find((option) => (option.value || option.label) === selected)?.label ||
-        selected
+function clarificationAnswerText(value: WorkflowClarificationAnswer | undefined): string {
   if (typeof value === 'object' && value && !Array.isArray(value) && 'selected' in value) {
     const selected = selectedAnswerValues(value).filter((item) => item !== OTHER_OPTION_VALUE)
-    const parts = selected.length > 0 ? [`已选：${selected.map(choiceLabel).join('、')}`] : []
+    const parts = selected.length > 0 ? [`已选：${selected.join('、')}`] : []
     const other = answerOtherText(value).trim()
     if (other) parts.push(`其他补充：${other}`)
     return parts.join('；')
   }
-  if (Array.isArray(value)) return value.map(choiceLabel).join('、')
-  return typeof value === 'string' ? choiceLabel(value) : ''
+  if (Array.isArray(value)) return value.join('、')
+  return typeof value === 'string' ? value : ''
 }
 
 // 从 Workflow payload 的多个位置读取待确认载荷，兼容流式快照、最终结果和自定义事件。
@@ -2754,7 +2628,7 @@ function taskStatusText(status: string): string {
 function workflowStatusColor(status: string): string {
   if (status === 'completed' || status === 'passed') return 'green'
   if (status === 'failed' || status === 'error') return 'red'
-  if (status === 'requires_user_input') return 'red'
+  if (status === 'requires_user_input') return 'gold'
   if (status === 'running') return 'purple'
   return 'default'
 }

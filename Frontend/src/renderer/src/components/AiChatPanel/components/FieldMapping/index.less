@@ -4,7 +4,7 @@
     h4 { margin: 0 10px 14px; color: var(--wb-text-secondary); }
     .binding-contract { min-width: 0; margin: 0 0 14px; }
     .binding-contract-heading { display: flex; min-width: 0; align-items: center; gap: 8px; min-height: 27px; padding: 0 10px 4px;
-      > .anticon:first-child { width: 10px; flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 12px; }
+      > .anticon:first-child { width: 10px; flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 9px; }
       > .anticon:nth-child(2) { flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 13px; }
       strong { min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 12px; font-weight: 600; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
     }
@@ -17,7 +17,7 @@
       > .anticon { flex: 0 0 auto; color: var(--wb-accent); font-size: 12px; }
     }
     .binding-endpoint-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px;
-      strong { overflow: hidden; font-size: 12px; font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+      strong { overflow: hidden; font-size: 11px; font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
     }
   }
   .binding-editor { flex: 1; min-width: 0; overflow: auto; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--wb-border-strong) transparent; padding: 22px 24px 32px;
@@ -178,12 +178,12 @@
   .external-mapping-table { width: 100%; min-width: 0; overflow: auto hidden; border: 0; border-radius: 0; background: transparent; }
   .external-mapping-table-head, .external-mapping-table .external-mapping-row { display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(200px, 1fr); gap: 9px; align-items: center; min-width: 400px; }
   .external-mapping-table.is-grouped > .external-mapping-table-head, .external-mapping-table.is-grouped .external-mapping-row { grid-template-columns: minmax(180px, 1.1fr) 120px minmax(200px, 1fr) 34px; min-width: 575px; }
-  .external-mapping-table-head { min-height: 34px; margin-inline: 8px; padding: 8px 10px; color: var(--wb-text-secondary); font-size: 12px; font-weight: 600;
+  .external-mapping-table-head { min-height: 34px; margin-inline: 8px; padding: 8px 10px; color: var(--wb-text-secondary); font-size: 11px; font-weight: 600;
     > span { min-width: 0; }
   }
   .external-mapping-group { min-width: 0;
     + .external-mapping-group { margin-top: 8px; }
-    h5 { display: flex; min-height: 30px; align-items: center; margin: 0 8px; padding: 6px 10px 4px; color: var(--wb-text-secondary); font-size: 12px; font-weight: 600; line-height: 18px; }
+    h5 { display: flex; min-height: 30px; align-items: center; margin: 0 8px; padding: 6px 10px 4px; color: var(--wb-text-secondary); font-size: 11px; font-weight: 600; line-height: 18px; }
   }
   .external-mapping-table .external-mapping-row { position: relative; min-height: 58px; margin: 0 8px; padding: 8px 10px; border: 1px solid var(--wb-border); border-radius: 7px; background: var(--wb-canvas); transition: background-color .15s ease;
     & + .external-mapping-row { margin-top: 8px; }
@@ -198,7 +198,7 @@
   .external-mapping-delete { display: inline-flex; width: 34px; height: 34px; align-items: center; justify-content: center; justify-self: center; padding: 0; color: var(--wb-code-delete-text);
     &:hover, &:focus-visible { color: var(--wb-code-delete-text); background: color-mix(in srgb, var(--wb-code-delete-text) 9%, var(--wb-canvas)); }
   }
-  .external-mapping-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 12px; font-weight: 600; line-height: 1; }
+  .external-mapping-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 11px; font-weight: 600; line-height: 1; }
   .external-mapping-fixed-summary { display: block; min-width: 0; overflow: hidden; color: var(--wb-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
   .external-mapping-target { display: flex; min-width: 0; min-height: 38px; align-items: center; color: var(--wb-text);
     .external-mapping-target-main { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px; }
@@ -206,12 +206,12 @@
     .external-mapping-target-name { display: block; min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--wb-text); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
     .external-mapping-target-description { color: var(--wb-text-secondary); }
     .external-mapping-target-type { color: var(--wb-text-secondary); font-size: inherit; }
-    .external-mapping-required { flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 12px; line-height: 17px; white-space: nowrap;
+    .external-mapping-required { flex: 0 0 auto; color: var(--wb-text-secondary); font-size: 10px; line-height: 17px; white-space: nowrap;
       &.is-unmapped { padding: 0 7px; border: 1px solid color-mix(in srgb, var(--wb-code-delete-text) 24%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--wb-code-delete-text) 9%, var(--wb-canvas)); color: var(--wb-code-delete-text); font-weight: 600; }
     }
     .external-mapping-target-side { display: none; }
   }
-  .external-mapping-empty { padding: 12px; color: var(--wb-text-secondary); font-size: 13px; }
+  .external-mapping-empty { padding: 12px; color: var(--wb-text-secondary); font-size: 12px; }
   .external-mapping-unmapped { color: var(--wb-text-tertiary); }
   button:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
   button:disabled { opacity: .5; cursor: default; }
@@ -248,7 +248,7 @@
   .binding-workspace .external-mapping-table .external-mapping-row .external-mapping-delete { justify-self: end; }
   .binding-workspace .external-mapping-table-head, .binding-workspace .external-mapping-group h5 { margin-inline: 0; padding-inline: 2px; }
   .binding-workspace .external-mapping-target { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .binding-workspace .external-mapping-target .external-mapping-target-side { display: block; color: var(--wb-text-secondary); font-size: 12px; font-weight: 600; }
+  .binding-workspace .external-mapping-target .external-mapping-target-side { display: block; color: var(--wb-text-secondary); font-size: 10px; font-weight: 600; }
   .binding-workspace .external-mapping-table .external-mapping-row .binding-field-error { grid-column: 1; }
 }
 

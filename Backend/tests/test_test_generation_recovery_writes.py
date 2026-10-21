@@ -99,30 +99,11 @@ class TestGenerationRecoveryWritesTests(unittest.TestCase):
             ".devagentstudio/plans/technical-plan.json",
             "frontend/src/apis/orders.ts",
             ".env",
-            ".devagentstudio/runtime/launch/other.log",
-            ".devagentstudio/runtime/launch/frontend.stdout.log.backup",
-            ".devagentstudio/runtime/other/frontend.stdout.log",
-            ".devagentstudio/runtime/launch/config.json",
         ):
             with self.subTest(path=path):
                 result = self._generate_during_renewal(path)
                 self.assertEqual(result["status"], "failed")
                 self.assertIn(path, result["validation"]["unauthorized_paths"])
-
-    def test_launcher_logs_do_not_fail_test_generation(self) -> None:
-        """预览服务写入固定 stdout/stderr 时，合法测试生成仍可完成。"""
-
-        for directory, names in (
-            ("launch", ("frontend", "backend", "backend-build", "backend-repackage", "install")),
-            ("launch-ui-design", ("frontend", "install")),
-        ):
-            for name in names:
-                for stream in ("stdout", "stderr"):
-                    path = f".devagentstudio/runtime/{directory}/{name}.{stream}.log"
-                    with self.subTest(path=path):
-                        result = self._generate_during_renewal(path)
-                        self.assertEqual(result["status"], "completed")
-                        self.assertNotIn("unauthorized_paths", result["validation"])
 
     def test_only_exact_database_and_sqlite_sidecars_are_excluded(self) -> None:
         """仅排除平台数据库及 SQLite 自有附属文件，不按目录或前缀放行。"""

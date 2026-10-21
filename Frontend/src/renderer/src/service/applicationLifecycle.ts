@@ -1,6 +1,6 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
-import type { ApplicationConfig, ApplicationLifecycle, ManagedDatabaseRegistration } from '../typings'
+import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 import type { RepositoryBranchOutcome } from './repositoryBranch'
 
@@ -16,12 +16,7 @@ type ApplicationLifecyclePayload = {
     | 'retry_bootstrap_template_generation'
     | 'workspace_attach'
     | 'prepare_session_deletion'
-    | 'register_managed_database'
-    | 'end_planning_execution'
-    | 'stop_planning_execution'
   lifecycle?: ApplicationLifecycle
-  managedDatabase?: ManagedDatabaseRegistration
-  configRevision?: number
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
   repositoryBranch?: RepositoryBranchOutcome
   error?: { type?: string; message?: string }
@@ -29,7 +24,6 @@ type ApplicationLifecyclePayload = {
 
 /** 工作区尚未建立生命周期状态：后端以 ApplicationLifecycleMissingError 单独标识，可幂等补建。 */
 const MISSING_LIFECYCLE_ERROR_TYPE = 'ApplicationLifecycleMissingError'
-const LIFECYCLE_STATUS_REQUEST_TIMEOUT_MS = 20_000
 
 /** Bootstrap 动作的结果：权威 lifecycle + 非致命的远端分支推送结果。 */
 export type ApplicationTemplateBootstrapResult = {
@@ -63,17 +57,18 @@ function isLifecycleMissingError(error: unknown): boolean {
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
 const workspaceAttachRequests = new Map<string, Promise<ApplicationLifecycle>>()
 
-// 校验生命周期快照只属于当前应用，禁止同目录或异步回包造成跨应用串态。
-// 注意：不校验 threadId。同一应用复用工作区时，后端 ensure 幂等返回旧 lifecycle
-// （保留旧 threadId），这是正常的"打开已有应用/新建同 id 应用"场景，应复用旧 threadId
-// 而非报错。application.id 不匹配才是真正的跨应用冲突。
+// 校验生命周期快照只属于当前应用及初始化线程，禁止同目录或异步回包造成跨应用串态。
 function assertApplicationLifecycleOwnership(
   lifecycle: ApplicationLifecycle,
   applicationId?: string,
-  _threadId?: string
+  threadId?: string
 ): ApplicationLifecycle {
   if (applicationId && lifecycle.application.id !== applicationId) {
     throw new Error('当前工作区已属于另一个应用，请为新应用选择独立的项目目录。')
+  }
+  const lifecycleThreadId = lifecycle.initialization.threadId
+  if (threadId && lifecycleThreadId && lifecycleThreadId !== threadId) {
+    throw new Error('当前工作区已有另一个应用规划线程，请为每个应用使用独立的项目目录。')
   }
   return lifecycle
 }
@@ -126,25 +121,10 @@ async function runApplicationLifecycleRequest(
       payload = readApplicationLifecycleState(event.snapshot) ?? payload
     }
   }
-  // 只限制状态同步请求；模板生成、创建、删除等业务动作不套用查询超时。
-  const statusRequest = action.action === 'get' || action.action === 'workspace_attach'
-  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined
-  let result: Awaited<ReturnType<typeof agent.runAgent>>
-  try {
-    const request = agent.runAgent({ forwardedProps: { applicationLifecycle: action } }, subscriber)
-    result = statusRequest ? await Promise.race([
-      request,
-      new Promise<never>((_resolve, reject) => {
-        timeoutId = globalThis.setTimeout(() => {
-          // 先结束等待，即使底层网络没有响应取消，也能释放共享查询供下一次同步使用。
-          reject(new Error('应用状态同步超时，请重新同步。'))
-          agent.abortRun()
-        }, LIFECYCLE_STATUS_REQUEST_TIMEOUT_MS)
-      })
-    ]) : await request
-  } finally {
-    if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
-  }
+  const result = await agent.runAgent(
+    { forwardedProps: { applicationLifecycle: action } },
+    subscriber
+  )
   payload = readApplicationLifecycleState(result.result) ?? payload
   if (!payload) throw new Error('生命周期接口没有返回有效的 AG-UI 状态。')
   if (payload.status === 'failed') {
@@ -187,53 +167,6 @@ export async function createApplicationLifecycle(
     application.id,
     threadId
   )
-}
-
-/** 通过 AG-UI 注册模拟数据库，使用已落盘的 SaaS 身份继续后续规划。 */
-export async function registerManagedDatabaseApplication(
-  application: ApplicationConfig,
-  threadId: string
-): Promise<ApplicationConfig> {
-  if (application.datasource.type !== 'database' || application.datasource.db?.useBuiltin !== true) {
-    return application
-  }
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  const payload = await runApplicationLifecycleRequest(threadId, {
-    action: 'register_managed_database',
-    workspaceRoot: application.workspaceRoot,
-    application: { id: application.id, appName: application.appName }
-  })
-  assertApplicationLifecycleOwnership(payload.lifecycle, application.id, threadId)
-  if (payload.managedDatabase?.status !== 'REGISTERED' || !Number.isInteger(payload.configRevision)) {
-    throw new Error('模拟数据库注册未返回完整绑定。')
-  }
-  return {
-    ...application,
-    managedDatabase: payload.managedDatabase,
-    configRevision: payload.configRevision!
-  }
-}
-
-/** 通过既有 AG-UI 控制端点停止生成，保留修订及原任务继续资格。 */
-export async function stopApplicationPlanningExecution(
-  application: Pick<ApplicationConfig, 'workspaceRoot' | 'id'>,
-  threadId: string
-): Promise<ApplicationLifecycle> {
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return assertApplicationLifecycleOwnership(await runApplicationLifecycleAction(threadId, {
-    action: 'stop_planning_execution', workspaceRoot: application.workspaceRoot
-  }), application.id)
-}
-
-/** 通过既有 AG-UI 控制端点完整结束当前规划修订，保留文件并释放执行占用。 */
-export async function endApplicationPlanningExecution(
-  application: Pick<ApplicationConfig, 'workspaceRoot' | 'id'>,
-  threadId: string
-): Promise<ApplicationLifecycle> {
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return assertApplicationLifecycleOwnership(await runApplicationLifecycleAction(threadId, {
-    action: 'end_planning_execution', workspaceRoot: application.workspaceRoot
-  }), application.id)
 }
 
 // 先接管可能中断的 Workspace，再读取权威生命周期，并合并 StrictMode 等并发请求。

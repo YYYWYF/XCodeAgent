@@ -33,7 +33,7 @@ export default function AcceptancePhaseConfirmationCard({
       {/* 转换前的最后一步：提醒用户先把审查阶段的修复提交掉。 */}
       {workspaceRoot ? (
         <MilestoneCommitReminder
-          defaultCommitMessage="Z000000-0000 #comment fix: 完成审查阶段修复"
+          defaultCommitMessage="fix: 完成审查阶段修复"
           disabled={Boolean(disabled)}
           inline
           milestoneId={`${workspaceRoot}:acceptance-gate`}

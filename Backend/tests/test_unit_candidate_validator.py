@@ -5,16 +5,12 @@ from __future__ import annotations
 from copy import deepcopy
 import unittest
 
-from pydantic import ValidationError
-
 from app.services.build_task_reuse_contracts import RetainedEndpointOwner, ReuseFacts
 from app.services.business_acceptance import (
     canonical_frontend_api_module_path,
     frontend_api_task_id,
 )
 from app.services.planning_issues import ValidationIssue
-from app.services.planning_frozen import freeze_json
-from app.services.unit_candidate_platform_rules import _slice_owners
 from app.services.unit_candidate_validator import validate_unit_candidate
 from app.services.unit_generation_contracts import UnitGenerationContext
 
@@ -218,16 +214,6 @@ def _reuse_facts(*owners: RetainedEndpointOwner, issues: tuple[ValidationIssue, 
 
 class UnitCandidateValidatorTests(unittest.TestCase):
     """验证 Local Validator 是纯函数且严格区分内容问题与平台 fatal。"""
-
-    def test_retained_owner_slice_accepts_frozen_json_without_relaxing_schema(self):
-        """冻结容器可按当前协议解析，未知字段和错误标量仍被严格拒绝。"""
-
-        owner = {"api_contract_id": "orders-api", "endpoint_id": "orders.list",
-                 "owner_task_id": "orders:api", "owner_unit_id": "frontend:api-client"}
-        self.assertEqual(_slice_owners(freeze_json([owner])), (RetainedEndpointOwner.model_validate(owner),))
-        for invalid in ({**owner, "unknown": True}, {**owner, "owner_unit_id": False}):
-            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
-                _slice_owners(freeze_json([invalid]))
 
     def _assert_local_retry(self, issues: list[ValidationIssue], unit_id: str) -> None:
         """断言所有模型内容问题只归因并重试当前 Unit。"""

@@ -1,27 +1,10 @@
-"""集中管理测试重入：失败后重开测试轮次，暂停续接保留原有进度。"""
+"""测试阶段重入时刷新磁盘事实，保留同一入口的修复额度和任务。"""
 
 from copy import deepcopy
 from typing import Any
 
-from app.domain.execution_recovery import RecoveryExecutionError, WorkflowReentryReason
+from app.domain.execution_recovery import RecoveryExecutionError
 from app.services.node_recovery_context import current_node_recovery_context
-
-
-def fresh_integration_test_fields() -> dict[str, Any]:
-    """重开测试检查和修复预算，保留磁盘源码、变更归属及单测阶段状态。"""
-
-    return {
-        "integration_build_checks_completed": False, "integration_build_results": [],
-        "test_results": [], "test_report": {}, "quality_gate_passed": False,
-        "repair_iteration": 0, "repair_tasks": [], "repair_task_plan": {},
-        "repair_task_plan_path": None, "repair_return_node": "integration_test",
-        "small_task_tasks": [], "small_task_results": [],
-        "small_task_handoff": {}, "small_task_handoff_submission": {},
-        "small_task_route": "", "integration_next_action": "",
-        "clarification": {}, "frontend_performance_decision": "",
-        "test_report_path": None, "test_report_json_path": None,
-        "needs_revision": False, "revision_requests": [],
-    }
 
 
 def prepare_integration_test_reentry(
@@ -54,17 +37,8 @@ def prepare_integration_test_reentry(
         # 源码可能已由上一轮修复改变，重新执行检查，不能复用旧通过结果。
         restored.update({"integration_build_checks_completed": False, "integration_build_results": [], "test_results": [], "test_report": {}})
     restored.update({"status": "in_progress", "error": None, "quality_gate_passed": False})
-    if recovery.reentry_reason in {WorkflowReentryReason.FAILURE_RETRY, WorkflowReentryReason.BUSINESS_RETRY}:
-        # 只有用户显式重试失败测试才开启新预算；内部修复循环没有恢复上下文，
-        # 暂停继续也不走此分支，避免自动循环借重入无限补充修复额度。
-        restored.update(fresh_integration_test_fields())
-        # 保留 code_changes/code_change_sets/small_task_code_change_sets：重启测试
-        # 只丢弃旧检查与旧任务，不能回滚磁盘代码或丢掉已经完成的变更归属。
     from app.graph.nodes.workspace_inspection import inspect_workspace
 
     scanned = inspect_workspace(restored)
     fields = {key: value for key, value in scanned.items() if key.startswith("workspace_")}
-    # 重置值也必须提交主图；仅传给节点会让未被节点返回的旧任务与预算留在 checkpoint。
-    updates = {key: value for key, value in restored.items() if key not in state or value != state[key]}
-    updates.update({"workspace_snapshot": {}, **fields})
-    return {**restored, **updates}, updates
+    return {**restored, "workspace_snapshot": {}, **fields}, fields

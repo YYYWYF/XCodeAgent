@@ -20,12 +20,7 @@ from app.persistence.data_sources import (
     read_sources,
     write_sources,
 )
-from app.services.database_crypto import is_encrypted_password
-from app.services.database_credentials import (
-    DatabaseCredentialError,
-    MySQLConnectionConfig,
-    validate_mysql_config,
-)
+from app.services.database_crypto import DatabaseCryptoError, decrypt_password, is_encrypted_password
 from app.services.data_source_json_fields import (
     DataSourceFieldType,
     DataSourceJsonFieldError,
@@ -307,7 +302,6 @@ def _database_source_from_application(application: dict[str, Any] | None) -> dic
         if dbid_mode is not None or plant_mode is not None:
             raise DataSourceError("平台内置数据库不应同时包含外部连接配置。")
         source_base["mode"] = "builtin"
-        source_base["name"] = "平台内置数据库"
         return _normalize_source(source_base)
     if use_builtin is not False:
         if dbid_mode is None and plant_mode is None:
@@ -602,7 +596,7 @@ def _public_source(source: dict[str, Any]) -> DataSourcePublic:
         return DatabaseSourcePublic(
             type="database",
             id=str(source["id"]),
-            name="平台内置数据库" if source.get("mode") == "builtin" else str(source["name"]),
+            name=str(source["name"]),
             mode=str(source.get("mode") or "direct"),
             domain=source.get("domain"),
             port=source.get("port"),
@@ -704,21 +698,11 @@ def mutate_catalog(
         return DataSourceCatalogPublic(sources=[_public_source(item) for item in next_sources])
 
 
-def database_source_mode(workspace_root: str | Path, source_id: str) -> str:
-    """读取当前数据库来源模式，内置元数据不能落到外部凭据解析分支。"""
-
-    source = next((item for item in _read_catalog(workspace_root, source_id=source_id)
-                   if item.get("id") == source_id and item.get("type") == "database"), None)
-    if source is None:
-        raise DataSourceError("目标数据库数据源不存在。")
-    return str(source.get("mode") or "")
-
-
 def selected_tables(workspace_root: str | Path) -> list[dict[str, str]]:
-    """外部库投影已添加表；内置库实时读取 SaaS 归属目录，不保存字段副本。"""
+    """从数据库数据源对象投影已管理表清单，不读取或保存字段结构。"""
 
     with DATA_SOURCE_LOCK:
-        sources: list[dict[str, Any]] = []
+        result: list[dict[str, str]] = []
         # 先读轻量索引，再按数据库 ID 读取详情，避免无关外部 API 的字段结构阻塞表清单。
         summaries = _read_catalog(workspace_root, detail=False)
         for summary in summaries:
@@ -731,32 +715,16 @@ def selected_tables(workspace_root: str | Path) -> list[dict[str, str]]:
             )
             if source is None:
                 continue
-            sources.append(source)
-    # 全局锁只保护本地目录快照；SaaS 请求不能阻塞其他应用的外置库操作。
-    result: list[dict[str, str]] = []
-    for source in sources:
-        if source.get("mode") == "builtin":
-            from app.services.managed_database_metadata import read_managed_tables
-
-            metadata = read_managed_tables(workspace_root, str(source["id"]))
-            with DATA_SOURCE_LOCK:
-                current = next((item for item in _read_catalog(workspace_root, source_id=str(source["id"]))
-                                if item.get("id") == source["id"]), None)
-                if current != source:
-                    raise DataSourceError("读取期间数据源配置已变化，请刷新数据表。")
-            result.extend({"sourceId": str(source["id"]), "schema": "", "table": item["name"],
-                           "description": item["description"]} for item in metadata["tables"])
-            continue
-        schema = str(source.get("schema") or "")
-        for managed in source.get("managedTables") or []:
-            if str(managed.get("table") or ""):
-                result.append({
-                    "sourceId": str(source["id"]),
-                    "schema": schema,
-                    "table": str(managed["table"]),
-                    "description": str(managed.get("description") or ""),
-                })
-    return sorted(result, key=lambda item: (item["sourceId"], item["table"]))
+            schema = str(source.get("schema") or "")
+            for managed in source.get("managedTables") or []:
+                if str(managed.get("table") or ""):
+                    result.append({
+                        "sourceId": str(source["id"]),
+                        "schema": schema,
+                        "table": str(managed["table"]),
+                        "description": str(managed.get("description") or ""),
+                    })
+        return sorted(result, key=lambda item: (item["sourceId"], item["table"]))
 
 
 def change_selected_tables(
@@ -774,8 +742,6 @@ def change_selected_tables(
         source = next((item for item in sources if str(item.get("id")) == source_id), None)
         if source is None or source.get("type") != "database":
             raise DataSourceError("目标数据源不是数据库或不存在。")
-        if source.get("mode") == "builtin":
-            raise DataSourceError("平台内置数据库的表由实体建表维护，无需手动添加或移除。")
         managed = list(source.get("managedTables") or [])
         requested = list(dict.fromkeys(tables))
         if remove:
@@ -811,22 +777,28 @@ def validate_saved_source(workspace_root: str | Path, source_id: str) -> dict[st
 
 
 def validate_source(source: dict[str, Any], workspace_root: str | Path | None = None) -> dict[str, Any]:
-    """校验单个数据源，并对直连和 DBID 数据库执行只读连接检测。"""
+    """校验单个数据源，并对直连数据库执行只读连接检测。"""
 
     candidate = _source_with_stored_password(source, workspace_root)
     _validate_source(candidate)
-    if candidate.get("type") != "database" or candidate.get("mode") == "builtin":
+    if candidate.get("type") != "database" or candidate.get("mode") != "direct":
         return {"valid": True, "connection": "not_tested"}
-    config = _source_mysql_config(candidate)
+    password_ciphertext = str(candidate.get("passwordCiphertext") or "")
+    try:
+        password = decrypt_password(password_ciphertext)
+    except DatabaseCryptoError as exc:
+        raise DataSourceError(
+            "数据库密码已加密，但当前环境无法解密；请确认使用当前后端的加密公钥，或重新保存密码。"
+        ) from exc
     try:
         import pymysql
 
         connection = pymysql.connect(
-            host=config.host,
-            port=config.port,
-            user=config.user,
-            password=config.password,
-            database=config.database,
+            host=str(candidate["domain"]),
+            port=int(candidate["port"]),
+            user=str(candidate["userName"]),
+            password=password,
+            database=str(candidate["schema"]),
             connect_timeout=5,
             read_timeout=5,
         )
@@ -838,11 +810,11 @@ def validate_source(source: dict[str, Any], workspace_root: str | Path | None = 
     return {"valid": True, "connection": "ok"}
 
 
-def resolve_database_config(
+def resolve_direct_database_config(
     workspace_root: str | Path,
     source_id: str,
 ) -> dict[str, Any]:
-    """为受信任的后端服务解析直连或 DBID MySQL，禁止公开密码。"""
+    """为受信任的后端服务解析直属 MySQL 连接，禁止公开密文或明文密码。"""
 
     sources = _read_catalog(workspace_root)
     source = next(
@@ -857,31 +829,24 @@ def resolve_database_config(
         raise DataSourceError("目标数据库数据源不存在。")
     if source.get("type") != "database":
         raise DataSourceError("目标数据源不是数据库。")
-    config = _source_mysql_config(source)
+    if source.get("mode") != "direct":
+        raise DataSourceError("当前数据库模式不支持实时读取元数据，仅直属 MySQL 可用。")
+    password_ciphertext = str(source.get("passwordCiphertext") or "")
+    try:
+        password = decrypt_password(password_ciphertext)
+    except DatabaseCryptoError as exc:
+        raise DataSourceError(
+            "数据库密码无法解密，请重新保存当前直属 MySQL 数据源。"
+        ) from exc
     return {
         "sourceId": str(source["id"]),
         "name": str(source.get("name") or source["id"]),
-        "host": config.host,
-        "port": config.port,
-        "user": config.user,
-        "password": config.password,
-        "database": config.database,
+        "host": str(source.get("domain") or ""),
+        "port": int(source.get("port") or 3306),
+        "user": str(source.get("userName") or ""),
+        "password": password,
+        "database": str(source.get("schema") or ""),
     }
-
-
-def _source_mysql_config(source: dict[str, Any]) -> MySQLConnectionConfig:
-    """把目录连接投影到共享凭据解析器，统一覆盖检测与后续元数据读取。"""
-
-    mode = source.get("mode")
-    if mode not in {"direct", "dbid"}:
-        raise DataSourceError("当前数据库模式不支持实时连接，仅直连或 DBID MySQL 可用。")
-    connection_fields = dict(source)
-    if mode == "direct":
-        connection_fields["pwd"] = source.get("passwordCiphertext")
-    try:
-        return validate_mysql_config(connection_fields, mode=mode)
-    except DatabaseCredentialError as exc:
-        raise DataSourceError(str(exc)) from exc
 
 
 def _source_with_stored_password(

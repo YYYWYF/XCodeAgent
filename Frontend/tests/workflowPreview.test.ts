@@ -1,11 +1,7 @@
 import assert from 'node:assert/strict'
 import './planningProgressCard.test'
-import './workflowArtifactNames.test'
-import './performanceReportDocument.test'
-import './technicalPlanArtifact.test'
 import { workflowDebugResumeSource } from '../src/renderer/src/components/AiChatPanel/workflowDebugResume'
 import { test } from 'node:test'
-import { canEnterModifiedTesting } from '../src/renderer/src/components/AiChatPanel/modifiedTestEntry'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { WorkbenchPhaseContext } from '../src/renderer/src/context/workbenchPhaseState'
@@ -13,7 +9,6 @@ import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
 import {
   apiEndpointDisplayPath,
   endpointDetailTargetKey,
-  formatDirectModificationSummary,
   pageDetailTargetKey,
   workflowDetailTargetKey,
   workflowFinalResultPresentation,
@@ -30,7 +25,6 @@ import WorkflowRunCard, {
   BuildExecutionRunCard
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard'
 import CodeReviewCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/CodeReviewCard'
-import { splitBuildTaskInstructions } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/buildTaskInstructionRows'
 import ReviewPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ReviewPhaseConfirmationCard'
 import {
   deriveDisplayedPlanExecutionMode,
@@ -39,6 +33,7 @@ import {
   planExecutionContextForPage,
   planExecutionForPage,
   planExecutionShowsDebugResume,
+  resolveWorkflowForDisplay,
   shouldRenderPlanExecutionDock,
   withWorkflowExecutionStatus,
   workflowCodeReviewRetry,
@@ -63,11 +58,7 @@ import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/
 import { processStepsForMessageDisplay } from '../src/renderer/src/service/processStepHistory'
 import { workspaceToolErrorMessage } from '../src/renderer/src/service/workspaceTools'
 import { codeReviewReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useCodeReviewReportPanel'
-import {
-  nextTestReportFocusKey,
-  testReportFocusKey,
-  workflowTestReportCompleted
-} from '../src/renderer/src/components/AiChatPanel/hooks/useTestReportPanel'
+import { testReportFocusKey } from '../src/renderer/src/components/AiChatPanel/hooks/useTestReportPanel'
 import { integrationTestCheckReportPath } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/reportAction'
 import { workspaceTabIsAvailable } from '../src/renderer/src/components/AiChatPanel/components/RightPanelTabs/tabAvailability'
 import {
@@ -95,17 +86,6 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
-
-test('二次代码修改完成后可进入本轮测试，旧测试确认、问答和失败不提供该入口', () => {
-  const workflow = previewWorkflow({ phase: 'conversation', intent: 'implementation_fix', status: 'completed' })
-  workflow.codeChanges = { id: 'changes', files: [{ path: 'frontend/src/page.tsx' }] } as NonNullable<WorkflowRunPayload['codeChanges']>
-  assert.equal(canEnterModifiedTesting(workflow), true)
-  assert.equal(canEnterModifiedTesting(JSON.parse(JSON.stringify(workflow))), true)
-  assert.equal(canEnterModifiedTesting({ ...workflow, summary: { ...workflow.summary, status: 'failed' } }), false)
-  assert.equal(canEnterModifiedTesting({ ...workflow, summary: { ...workflow.summary, intent: 'read_only' } }), false)
-  assert.equal(canEnterModifiedTesting({ ...workflow, summary: { ...workflow.summary, phase: 'test_phase_confirmation' } }), false)
-  assert.equal(canEnterModifiedTesting({ ...workflow, codeChanges: undefined }), false)
-})
 
 /** 构造指定运行状态的最小 Workflow 预览测试数据。 */
 function previewWorkflow(
@@ -159,105 +139,6 @@ test('单测调试复用仍登记的 Build thread，避免聊天 thread 丢失�
       'unit_test'
     ),
     emptyDebug
-  )
-})
-
-test('结束控制回执按精确目标选择原业务 Graph，不能借用其他历史执行', () => {
-  const source = {
-    ...previewWorkflow({ phase: 'small_task_repair', status: 'stopped' }, 'repair-run'),
-    threadId: 'test-graph'
-  }
-  const other = { ...source, runId: 'other-run', threadId: 'other-graph' }
-  const ended = previewWorkflow(
-    {
-      phase: 'plan_control',
-      status: 'completed',
-      planControl: { action: 'end', status: 'ended', targetRunId: source.runId }
-    },
-    'control-run'
-  )
-  const messages: AgentChatMessage[] = [source, other, ended].map((workflow, id) => ({
-    id,
-    role: 'assistant',
-    content: '',
-    workflow
-  }))
-  assert.equal(workflowDebugResumeSource(ended, messages, undefined, 'integration_test'), source)
-  assert.equal(
-    workflowDebugResumeSource(ended, messages.slice(1), undefined, 'integration_test'),
-    ended
-  )
-  const stopped = {
-    ...ended,
-    summary: {
-      ...ended.summary,
-      planControl: { action: 'stop', status: 'stopped', targetRunId: source.runId }
-    }
-  }
-  assert.equal(workflowDebugResumeSource(stopped, messages, undefined, 'integration_test'), stopped)
-})
-
-test('连续入场拒绝可定位当前 End；已开始或仍登记的新执行禁止回溯', () => {
-  const source = {
-    ...previewWorkflow({ phase: 'small_task_repair', status: 'stopped' }, 'repair'),
-    threadId: 'business-graph'
-  }
-  const ended = previewWorkflow(
-    {
-      phase: 'plan_control',
-      status: 'completed',
-      planControl: { action: 'end', status: 'ended', targetRunId: source.runId }
-    },
-    'end'
-  )
-  const failure = previewWorkflow({ phase: 'failed', status: 'failed' }, 'rejected')
-  failure.events = [{ type: 'workflow.run.failed', status: 'failed' }]
-  const secondFailure = { ...failure, runId: 'rejected-again' }
-  const messages: AgentChatMessage[] = [source, ended, failure, secondFailure].map(
-    (workflow, id) => ({
-      id,
-      role: 'assistant',
-      content: '',
-      workflow
-    })
-  )
-  assert.equal(
-    workflowDebugResumeSource(secondFailure, messages, undefined, 'integration_test'),
-    source
-  )
-  const entered = {
-    ...failure,
-    runId: 'entered',
-    events: [{ type: 'workflow.node.started', status: 'running', nodeName: 'integration_test' }]
-  }
-  assert.equal(
-    workflowDebugResumeSource(
-      secondFailure,
-      [
-        messages[0],
-        messages[1],
-        { id: 5, role: 'assistant', content: '', workflow: entered },
-        messages[3]
-      ],
-      undefined,
-      'integration_test'
-    ),
-    secondFailure
-  )
-  assert.equal(workflowDebugResumeSource(entered, messages, undefined, 'integration_test'), entered)
-  const registered = pageExecution({
-    runId: secondFailure.runId,
-    threadId: secondFailure.threadId,
-    status: 'failed'
-  })
-  assert.equal(
-    workflowDebugResumeSource(
-      secondFailure,
-      messages,
-      planLifecycle(registered),
-      'integration_test'
-    ),
-    secondFailure
   )
 })
 
@@ -615,49 +496,6 @@ test('同一路径的测试报告在新的 Workflow 运行中获得新的自动�
   assert.equal(first, 'application-1:run-1:.devagentstudio/reports/test-report.md')
 })
 
-test('集成测试已完成但审查确认节点尚未到达时即可自动展示报告', () => {
-  const workflow = previewWorkflow({ phase: 'integration_test', status: 'completed' })
-  workflow.events = [
-    { type: 'workflow.node.started', node: { id: 'integration_test' } },
-    { type: 'workflow.node.completed', node: { id: 'integration_test' }, status: 'completed' }
-  ]
-  assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
-})
-
-test('测试启动事件阻止旧确认门触发报告聚焦，完成后再放行', () => {
-  const workflow = previewWorkflow({ phase: 'integration_test', status: 'running' })
-  workflow.state = { phase: 'review_phase_confirmation' }
-  workflow.events = [{ type: 'workflow.node.started', node: { id: 'integration_test' } }]
-  assert.equal(workflowTestReportCompleted(workflow, 'review_phase_confirmation'), false)
-  workflow.events.push({ type: 'workflow.node.completed', nodeName: 'integration_test' })
-  assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
-})
-
-test('恢复快照中的测试完成确认可从 state 或 result 读取', () => {
-  for (const field of ['state', 'result'] as const) {
-    const workflow = previewWorkflow({ phase: 'integration_test' })
-    workflow[field] = { phase: 'review_phase_confirmation' }
-    assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
-  }
-  assert.equal(workflowTestReportCompleted(undefined, 'review_phase_confirmation'), false)
-  const confirmed = previewWorkflow({ phase: 'review_phase_confirmation' })
-  confirmed.events = [{ type: 'workflow.node.started', node: { id: 'integration_test' } }]
-  assert.equal(workflowTestReportCompleted(confirmed, 'integration_test'), true)
-})
-
-test('报告就绪后导航一次，保留手动切换，同一路径的新运行可再次导航', () => {
-  const input = {
-    applicationId: 'application-1', available: true, completed: true,
-    handledKey: '', path: '.devagentstudio/reports/test-report.md', workflowRunId: 'run-1'
-  }
-  const first = nextTestReportFocusKey(input)
-  assert.equal(first, testReportFocusKey(input.applicationId, input.workflowRunId, input.path))
-  assert.equal(nextTestReportFocusKey({ ...input, handledKey: first! }), undefined)
-  assert.notEqual(nextTestReportFocusKey({ ...input, handledKey: first!, workflowRunId: 'run-2' }), undefined)
-  assert.equal(nextTestReportFocusKey({ ...input, available: false }), undefined)
-  assert.equal(nextTestReportFocusKey({ ...input, completed: false }), undefined)
-})
-
 test('完整 Lighthouse 报告按钮只允许出现在前端性能检查行', () => {
   const reportPath = '.devagentstudio/runtime/tests/frontend_performance/lighthouse.html'
 
@@ -951,18 +789,6 @@ test('最终结果标题区分成功和失败 Workflow', () => {
   })
 })
 
-test('二次修改完成摘要将行内编号与验证小节拆成可读列表', () => {
-  const formatted = formatDirectModificationSummary(
-    '已完成验收修复： 1) 删除首页路由； 2) 修改应用标题。路由链路源码核对： / → /page → 首页；验证结果：构建通过。'
-  )
-
-  assert.equal(
-    formatted,
-    '**已完成验收修复：**\n1. 删除首页路由\n2. 修改应用标题。\n\n' +
-      '**路由链路源码核对：**\n/ → /page → 首页\n\n**验证结果：**\n构建通过。'
-  )
-})
-
 test('只有初始化完成阶段视为模板与开发预览就绪', () => {
   const lifecycle = planLifecycle(pageExecution())
 
@@ -1135,11 +961,6 @@ test('设计阶段二次修改批准后在 Graph 回写前仍恢复到独立设�
 
   assert.equal(deriveWorkbenchPhase(lifecycle), 'product')
   lifecycle.activeFormalRevision.currentArtifact = 'technical-plan'
-  assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
-  lifecycle.activeFormalRevision.currentArtifact = 'ui-design'
-  lifecycle.initialization = { stage: 'generating_technical_plan', status: 'running' }
-  assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
-  lifecycle.initialization.status = 'failed'
   assert.equal(deriveWorkbenchPhase(lifecycle), 'planning')
   lifecycle.initialization = {
     stage: 'awaiting_technical_plan_confirmation',
@@ -1418,8 +1239,6 @@ test('当前请求仍在运行时即使生命周期暂为空也保持输入锁',
 test('简单模式运行时保留对话框，正式计划运行时显示计划控制栏', () => {
   assert.equal(shouldRenderPlanExecutionDock('running', true), false)
   assert.equal(shouldRenderPlanExecutionDock('stopping', true), false)
-  assert.equal(shouldRenderPlanExecutionDock('stopped', true), true)
-  assert.equal(shouldRenderPlanExecutionDock('failed', true), false)
   assert.equal(shouldRenderPlanExecutionDock('running', false), true)
   assert.equal(shouldRenderPlanExecutionDock('idle', false), false)
 })
@@ -1428,22 +1247,11 @@ test('本地停止请求在 Workflow 快照到达前立即进入停止 loading',
   assert.equal(deriveDisplayedPlanExecutionMode(undefined, 'stopping', true, true), 'stopping')
 })
 
-test('在途停止保留反馈，最终暂停展示以当前后端执行为准', () => {
+test('本地停止状态优先于尚未刷新的运行中生命周期快照', () => {
   const execution = pageExecution()
 
   assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopping', true), 'stopping')
-  assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false), 'running')
-})
-
-test('暂停请求不能覆盖已提交的测试确认门', () => {
-  const execution = pageExecution({ status: 'awaiting_user', phase: 'test_phase_confirmation',
-    pendingInteraction: { id: 'test-gate', type: 'test_phase_confirmation', basedOnRevision: 9,
-      payload: { mode: 'test_phase_confirmation' }, artifactRefs: [], createdAt: '', submittedAt: null } })
-  const lifecycle = planLifecycle(execution)
-  const workflow = { ...previewWorkflow({ lifecycle, status: 'requires_user_input', phase: execution.phase }),
-    runId: execution.runId, threadId: execution.threadId }
-  assert.equal(withWorkflowExecutionStatus(workflow, 'stopped'), workflow)
-  assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false, true), 'awaiting_test_phase_confirmation')
+  assert.equal(deriveDisplayedPlanExecutionMode(execution, 'stopped', false), 'stopped')
 })
 
 test('暂停后的调试窗口默认选中最近完成的可恢复节点', () => {
@@ -1639,61 +1447,6 @@ test('不在资源集合中的页面仍可自由输入', () => {
   assert.equal(context.dependencyLocked, false)
 })
 
-/** 验证应用级门禁可提交现有确认检测动作，不因目标类型变成禁用卡。 */
-test('需求配置诊断保留标准联合确认按钮并展示可处理原因', () => {
-  const workflow: WorkflowRunPayload = {
-    runId: 'alignment-run', threadId: 'alignment-thread', events: [],
-    summary: {
-      phase: 'product_planning', status: 'requires_user_input',
-      clarification: {
-        mode: 'requirement_document_confirmation', status: 'requires_user_input',
-        errors: ['请补充真实初始管理员 subjectId。'],
-        questions: [{ id: 'confirmation', question: '请确认完整需求文档。', type: 'text' }]
-      }
-    },
-    state: { requirement_spec: { confirmation_status: 'pending_user_confirmation' } }
-  }
-  const markup = renderToStaticMarkup(createElement(WorkbenchPhaseContext.Provider, {
-    value: {
-      phase: 'design', derivedPhase: 'design', reachedPhase: 'design', manualOverride: null,
-      agent: WORKBENCH_PHASE_AGENTS.design, recordReachedPhase: () => {},
-      switchPhase: () => {}, canEdit: () => true
-    }
-  }, createElement(WorkflowRunCard, { workflow, interactionAvailability: 'active' })))
-  assert.match(markup, /需求文档需要调整/)
-  assert.match(markup, /请补充真实初始管理员 subjectId/)
-  assert.match(markup, /确认并继续规划/)
-  assert.doesNotMatch(markup, /<button[^>]*disabled[^>]*>[^<]*确认并继续规划/)
-})
-
-test('应用级 API 门禁保留可用的确认检测按钮', () => {
-  const workflow: WorkflowRunPayload = {
-    runId: 'application-gate-run', threadId: 'application-gate-thread', events: [],
-    summary: {
-      phase: 'api_design_readiness_gate', status: 'requires_user_input',
-      revisionImpact: {
-        interactionId: 'previous-impact', formalBranch: 'workbench_plan_revision'
-      } as WorkflowRunPayload['summary']['revisionImpact'],
-      clarification: {
-        mode: 'api_design_required', status: 'requires_user_input',
-        developmentTarget: { type: 'application', id: 'application', label: '整个应用' },
-        apiDesigns: [{ api_contract_id: 'orders-api', endpoint_id: 'orders.list', method: 'GET', path: '/orders', status: 'stale', designed: false }]
-      }
-    }
-  }
-  const markup = renderToStaticMarkup(createElement(WorkbenchPhaseContext.Provider, {
-    value: {
-      phase: 'development', derivedPhase: 'development', reachedPhase: 'development',
-      manualOverride: null, agent: WORKBENCH_PHASE_AGENTS.development,
-      recordReachedPhase: () => {}, switchPhase: () => {}, canEdit: () => false
-    }
-  }, createElement(WorkflowRunCard, { workflow, interactionAvailability: 'active' })))
-  const button = markup.match(/<button[^>]*api-design-readiness-confirm-button[^>]*>/)?.[0]
-  assert.ok(button)
-  assert.doesNotMatch(button, /disabled/)
-  assert.doesNotMatch(markup, /确认并进入计划阶段/)
-})
-
 /** 验证 API 设计门禁同时展示已完成、待配置和需重新配置的 Endpoint。 */
 test('API 设计门禁展示目标范围内的完整 Endpoint 状态', () => {
   const workflow: WorkflowRunPayload = {
@@ -1830,57 +1583,6 @@ test('API 设计门禁在全部完成时仍展示字段映射概览', () => {
   assert.match(markup, /ant-alert-success/)
 })
 
-test('任务说明按连续序号拆行，保留路径、版本号和未编号说明', () => {
-  assert.deepEqual(
-    splitBuildTaskInstructions(
-      '1. 创建 frontend/src/App.tsx，使用 React 18.2.0。 2. 配置 API /api/age。 3. 验证构建。'
-    ),
-    [
-      { number: 1, content: '创建 frontend/src/App.tsx，使用 React 18.2.0。' },
-      { number: 2, content: '配置 API /api/age。' },
-      { number: 3, content: '验证构建。' }
-    ]
-  )
-  assert.deepEqual(splitBuildTaskInstructions('执行说明\n1、创建对象\n2、验证结果'), [
-    { content: '执行说明' },
-    { number: 1, content: '创建对象' },
-    { number: 2, content: '验证结果' }
-  ])
-  assert.deepEqual(splitBuildTaskInstructions('支持 Node 20.19.0'), [
-    { content: '支持 Node 20.19.0' }
-  ])
-  assert.deepEqual(splitBuildTaskInstructions('  '), [])
-})
-
-test('执行卡片默认逐行收起编号说明，状态与详情箭头位于底栏', () => {
-  const markup = renderToStaticMarkup(
-    createElement(BuildExecutionRunCard, {
-      status: 'completed',
-      executionSlice: {
-        scope: { type: 'application', targetId: 'application' },
-        tasks: [
-          {
-            id: 'dto',
-            title: '创建请求与响应对象',
-            status: 'completed',
-            description:
-              '1. 创建请求对象，保留必填字段。 2. 创建响应对象，保留确认类型。 3. 验证对象映射。',
-            targetFiles: ['backend/src/Input.java']
-          }
-        ]
-      }
-    })
-  )
-  assert.equal((markup.match(/workflow-build-instruction-row[^"<>]*collapsed/g) || []).length, 3)
-  const footer = markup.slice(markup.indexOf('workflow-build-task-footer'))
-  assert.ok(markup.indexOf('workflow-build-task-footer') > markup.indexOf('验证对象映射。'))
-  assert.match(footer, /workflow-build-task-status-tag/)
-  assert.match(footer, /可形成检查点/)
-  assert.match(footer, /aria-expanded="false" aria-label="展开任务详情：创建请求与响应对象"/)
-  assert.doesNotMatch(markup, /ant-collapse-arrow/)
-  assert.doesNotMatch(markup, /任务 ID/)
-})
-
 test('构建卡片将已满足要求的任务展示为完成，并与其他状态保持一致排序', () => {
   const executionSlice: WorkflowBuildExecutionSlice = {
     scope: { type: 'page', targetId: 'age_entry_page' },
@@ -2002,5 +1704,5 @@ test('单测矩阵显示修复额度耗尽原因', () => {
     })
   )
   assert.match(markup, /单元测试子步骤已用完各 10 次修复额度/)
-  assert.match(markup, /测试检查步骤/)
+  assert.match(markup, /集成检查矩阵/)
 })

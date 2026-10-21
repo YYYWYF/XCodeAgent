@@ -20,6 +20,7 @@ import {
 } from '../../../../workbenchPhase'
 import {
   planningWorkflowActivity,
+  planningWorkflowNeedsChatLoading,
   planningWorkflowPhase,
   planningWorkflowRequiresUserInput,
   workflowCardRequiresUserInput
@@ -31,6 +32,7 @@ import type {
   WorkspaceCodeChangeSet
 } from '../../../../typings'
 import {
+  planningMutationBlocked,
   type ApplicationPlanningCurrentState
 } from '../../../../service/activeApplicationPlanning'
 import { cx } from '../../../../utils'
@@ -38,14 +40,12 @@ import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
 import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
-import DagGenerationProgress from '../ProcessSteps/DagGenerationProgress'
 import VersionCommitReminder from '../VersionCommitReminder'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
 import DevelopmentContinuationCard from '../WorkflowRunCard/DevelopmentContinuationCard'
-import { canEnterModifiedTesting } from '../../modifiedTestEntry'
 import RemainingEntityBindingsCard from '../WorkflowRunCard/RemainingEntityBindingsCard'
 import TemplatePreparingCard, {
   isTemplatePreparing
@@ -58,7 +58,6 @@ import {
   workflowMessageContentForDisplay
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage } from '../../types'
-import type { DagPendingPlanCompletion } from '../../dagPendingPlanPresentation'
 import type { ChatSessionDevelopmentContinuation } from '../../../../service/chatSessions'
 import { conversationRevisionHandoffCommitted, isConversationWorkflow } from '../../conversationMode'
 import { workflowDevelopmentContinuation } from '../../developmentContinuation'
@@ -67,13 +66,13 @@ import {
   shouldShowIncompleteChangesHint,
   workflowCodeChanges,
   workflowCodeChangesBeforeConfirmation,
-  formatDirectModificationSummary,
   workflowFinalResultPresentation,
   workflowShouldShowCodeChanges,
   workflowShouldShowCodeReview,
   workflowShouldShowProjectLaunch
 } from '../../utils'
-import { workflowMessageInteractionAvailability } from '../../planExecutionMode'
+import { workflowInteractionAvailability } from '../../planExecutionMode'
+import { phasePendingDetail } from './phasePending'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
 import { isTemplateEngineFailure } from '../../../../service/recoveryFailureMessage'
@@ -93,7 +92,9 @@ import {
   planningReviewMatchesActiveWorkflow
 } from './productConversationPresentation'
 import {
-  planningInteractionIsCurrent
+  planningMessageActionsDisabled,
+  planningInteractionIsCurrent,
+  resolvePlanningMessageWorkflow
 } from './planningMessageWorkflow'
 import './MessageList.less'
 
@@ -152,6 +153,28 @@ function MessageAgentHeader({ agentKey }: { agentKey: WorkbenchPhase }): ReactEl
       </span>
       <span className={cx('ai-message-agent-name')}>{agent.role}</span>
     </div>
+  )
+}
+
+/** 创建阶段快照未到达时的加载卡，文案跟随当前阶段 Agent 身份。 */
+function PhasePendingCard({
+  agentKey,
+  detail
+}: {
+  agentKey: WorkbenchPhase
+  detail: string
+}): ReactElement {
+  const agent = WORKBENCH_PHASE_AGENTS[agentKey]
+  return (
+    <section aria-live="polite" className={cx('planning-workflow-activity', 'running')}>
+      <span className={cx('planning-workflow-activity-icon')} aria-hidden="true">
+        <LoadingOutlined spin />
+      </span>
+      <div className={cx('planning-workflow-activity-copy')}>
+        <Text strong>{agent.role} 正在处理</Text>
+        <Text type="secondary">{detail}</Text>
+      </div>
+    </section>
   )
 }
 
@@ -301,15 +324,11 @@ type MessageListProps = {
   applicationTemplatePreparationEligible: boolean
   codeChangeActionsDisabled: boolean
   conversationRunning: boolean
-  /** 操作占用仅禁用提交，不将其他会话的锁显示成当前 Agent loading。 */
-  actionsDisabled?: boolean
-  /** 当前 owner 的待确认任务身份与可信进度摘要。 */
-  dagPendingPlanCompletion?: DagPendingPlanCompletion
+  /** 右侧阶段产物面板可见时，把 Build DAG 确认卡从消息流移出以避免重复。 */
+  dagConfirmationInStageOutput?: boolean
   entityDesignSession?: boolean
   /** 普通自由对话没有消息时使用的工作区级快捷任务内容。 */
   emptyContent?: ReactNode
-  /** 开发完成或主动结束成功后，紧随消息展示当前会话的下一步入口。 */
-  developmentNextStepContent?: ReactNode
   /** 当前会话错误只影响滚动和占位判断，错误卡统一由 Composer 上方展示。 */
   error?: string
   /** 设计阶段：规划 workflow 确认卡始终可提交（由 planningSubmitRef 驱动），
@@ -322,8 +341,6 @@ type MessageListProps = {
   /** 模板基线的远端推送结果：模板卡据此如实说明"推送成功"还是"没推上去"。 */
   repositoryBranch?: ApplicationConfig['repositoryBranch']
   onRetryRepositoryBranch?: () => void
-  /** 从左侧进度卡主动打开当前 PendingPlan 的确认视图。 */
-  onOpenPendingDagConfirmation?: () => void
   retryingRepositoryBranch?: boolean
   /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
   uiDesignActivePageId?: string
@@ -369,10 +386,6 @@ type MessageListProps = {
     answers: ClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>
   ) => Promise<void>
-  /** 已确认的技术规划通过当前技术规划对话发起修订。 */
-  onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
-  /** 技术规划生成、消息发送或工作区写入期间禁用已确认卡的修改入口。 */
-  reviseConfirmedTechnicalPlanDisabled?: boolean
   onOpenCodeChangeFile: (codeChanges: WorkspaceCodeChangeSet, selectedPath: string) => void
   /** 错误来自当前设计阶段规划时，允许用户回到规划页重试。 */
   /** 模板生成失败时，只重试模板下载与初始化阶段。 */
@@ -380,29 +393,25 @@ type MessageListProps = {
   /** 新迭代发起后用户提交迭代需求，启动 planning workflow。 */
   onStartIterationPlanning?: (request: string) => Promise<void>
   revertingCodeChangeIds: ReadonlySet<string>
-  application?: ApplicationConfig
   workspaceRoot?: string
   /** 模板就绪卡片提交操作是否被禁用（Agent 运行中等）。 */
   commitDisabled?: boolean
 }
 
-/** 渲染聊天消息、Workflow 最终状态、历史卡片结果和代码变更操作。 */
+/** 渲染聊天消息、Workflow 最终状态和代码变更操作。 */
 export default function MessageList({
   applicationLifecycle,
   applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
   conversationRunning,
-  actionsDisabled = false,
-  dagPendingPlanCompletion,
+  dagConfirmationInStageOutput = false,
   entityDesignSession = false,
   emptyContent,
-  developmentNextStepContent,
   designPhasePlanning = false,
   reusedExistingTemplate = false,
   branchName,
   repositoryBranch,
   onRetryRepositoryBranch,
-  onOpenPendingDagConfirmation,
   retryingRepositoryBranch = false,
   error,
   uiDesignActivePageId,
@@ -427,27 +436,13 @@ export default function MessageList({
   onRevertCodeChanges,
   onRetryTemplateGeneration,
   onStartIterationPlanning,
-  onReviseConfirmedTechnicalPlan,
-  reviseConfirmedTechnicalPlanDisabled = false,
   revertingCodeChangeIds,
   onSubmitClarification,
-  application,
   workspaceRoot,
   commitDisabled = false
 }: MessageListProps): ReactElement {
   const planningWorkflow = planningState?.workflow
-  const mutationDisabled = loading || actionsDisabled
-  let latestConfirmedTechnicalPlanMessageIndex = -1
-  for (let index = 0; index < messages.length; index += 1) {
-    const item = messages[index]
-    if (
-      item.workflow &&
-      item.workflowCardResult === 'confirmed' &&
-      workflowClarification(item.workflow)?.mode === 'technical_plan_confirmation'
-    ) {
-      latestConfirmedTechnicalPlanMessageIndex = index
-    }
-  }
+  const currentPlanningMessageIndex = findCurrentPlanningMessageIndex(messages, planningWorkflow)
   const planningReviewMessageIndexes = canonicalPlanningReviewMessageIndexes(messages)
   // 当前 planning checkpoint 是确认权限的唯一权威。普通问答可以继续向后追加消息，
   // 但只要服务端仍挂起在同一 gateId + artifactRevision，原确认卡就必须保持可操作。
@@ -455,11 +450,8 @@ export default function MessageList({
     designPhasePlanning && planningWorkflow && planningWorkflowRequiresUserInput(planningWorkflow)
       ? planningReviewIdentity(planningWorkflow)
       : undefined
+  const planningActionsBlocked = planningMutationBlocked(planningState)
   const { phase: currentPhase, locked: phaseLocked } = useWorkbenchPhase()
-  // 当前操作只读取后端门禁；历史消息是否存在、能否回填均不参与确认资格。
-  const currentPlanningConfirmation = designPhasePlanning && !phaseLocked &&
-    messageAgentPhase(planningWorkflow, currentPhase) === currentPhase &&
-    planningWorkflowRequiresUserInput(planningWorkflow) ? planningWorkflow : undefined
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
   const followLatestContentRef = useRef(true)
@@ -479,9 +471,8 @@ export default function MessageList({
   const templatePreparationFailed = templateGenerationFailed || templateReconcileRetryable
   const latestVersionReminderMessageId = findLatestVersionReminderMessageId(messages)
   const latestUiDesignPreviewIndex = latestUiDesignPreviewMessageIndex(messages)
-  const currentPlanningPhase = designPhasePlanning &&
-    messageAgentPhase(planningWorkflow, currentPhase) === currentPhase
-    ? planningWorkflowPhase(planningWorkflow) : ''
+  const currentPlanningPhase = designPhasePlanning ? planningWorkflowPhase(planningWorkflow) : ''
+  const pendingPhaseDetail = phasePendingDetail(currentPhase)
 
   // 模板准备状态由 lifecycle/当前生成任务直接驱动，优先级高于规划会话的空加载占位。
   // 失败态（首次 Bootstrap 失败 / 模板增量更新失败）不再依赖阶段与资格门禁：它会阻断整个
@@ -492,14 +483,7 @@ export default function MessageList({
     (designPhasePlanning &&
       ((applicationTemplatePreparationEligible &&
         (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
-        // 回到计划阶段时仍展示已就绪模板，方便用户看见当前结果并重新进入开发。
-        (currentPhase === 'planning' &&
-          applicationLifecycle?.initialization?.stage === 'ready_for_workbench') ||
         templatePreparation?.status === 'RUNNING'))
-  const templateReadyActionsDisabled =
-    currentPhase === 'planning' &&
-    applicationLifecycle?.initialization?.stage === 'ready_for_workbench' &&
-    !applicationTemplatePreparationEligible
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -580,21 +564,12 @@ export default function MessageList({
   // 消息或加载状态切换后主动安排一次跟随，ResizeObserver 不可用时仍可工作。
   useEffect(() => {
     scheduleScrollUpdate()
-  }, [loading, messages, scheduleScrollUpdate, visibleError, developmentNextStepContent])
+  }, [loading, messages, scheduleScrollUpdate, visibleError])
 
   // 是否在渲染空态（需求输入卡 / 空会话提示）。空态需要消息区占满面板高度来垂直居中，
   // 所以它决定消息区是"撑满"还是"按内容收缩"（见下面的 has-content 修饰类）。
   const showingEmptyState =
-    messages.every(isResiduePlanningPlaceholder) && !visibleError && !templatePreparationVisible &&
-    !currentPlanningConfirmation
-  const hasMatchingPendingDagProgress = Boolean(
-    dagPendingPlanCompletion?.planningRunId &&
-      messages.some((message) =>
-        processStepsForMessageDisplay(message.processSteps, message.workflow)?.some(
-          (step) => step.dagGeneration?.planningRunId === dagPendingPlanCompletion.planningRunId
-        )
-      )
-  )
+    messages.every(isResiduePlanningPlaceholder) && !visibleError && !templatePreparationVisible
 
   return (
     <div className={cx('ai-message-list-shell', !showingEmptyState && 'has-content')}>
@@ -619,8 +594,24 @@ export default function MessageList({
                 agentKey={currentPhase}
                 onSubmit={(request) => onStartIterationPlanning?.(request) ?? Promise.resolve()}
               />
-            ) : loading ? (
-              <div role="status"><LoadingOutlined spin /> <Text>正在处理…</Text></div>
+            ) : designPhasePlanning ? (
+              // 设计阶段空态也渲染为消息流里的同一张边框加载卡，不再使用全屏 Spin。
+              <article className={cx('ai-message', 'assistant')}>
+                <div className={cx('ai-message-content')}>
+                  <MessageAgentHeader agentKey={currentPhase} />
+                  <PhasePendingCard
+                    agentKey={currentPhase}
+                    detail={currentPhase === 'planning' ? '正在恢复计划阶段…' : '正在准备需求确认…'}
+                  />
+                </div>
+              </article>
+            ) : pendingPhaseDetail ? (
+              <article className={cx('ai-message', 'assistant')}>
+                <div className={cx('ai-message-content')}>
+                  <MessageAgentHeader agentKey={currentPhase} />
+                  <PhasePendingCard agentKey={currentPhase} detail={pendingPhaseDetail} />
+                </div>
+              </article>
             ) : emptyContent ? (
               emptyContent
             ) : (
@@ -628,7 +619,7 @@ export default function MessageList({
                 <span className={cx('ai-message-empty-mark')}>
                   <RobotOutlined />
                 </span>
-                <Text type="secondary">暂无会话记录</Text>
+                <Text strong>从一个想法开始</Text>
               </div>
             )
           ) : (
@@ -714,16 +705,17 @@ export default function MessageList({
               const isCurrentPlanningMessage = Boolean(
                 designPhasePlanning &&
                   planningWorkflow &&
-                  (isCurrentPlanningReview ||
-                    (message.workflow?.threadId === planningWorkflow.threadId &&
-                      message.workflow?.runId === planningWorkflow.runId))
+                  (isCurrentPlanningReview || messageIndex === currentPlanningMessageIndex)
               )
               const currentPlanningInteraction = planningInteractionIsCurrent(
                 isCurrentPlanningReview,
                 isCurrentPlanningMessage
               )
-              // 历史会话按原消息展示，不能用当前修订的快照替换最后一条旧规划消息。
-              const planningCardWorkflow = message.workflow
+              const planningCardWorkflow = resolvePlanningMessageWorkflow(
+                message.workflow,
+                planningWorkflow,
+                isCurrentPlanningMessage
+              )
               const currentPresentationWorkflow = isCurrentPlanningMessage
                 ? planningCardWorkflow
                 : message.workflow
@@ -757,8 +749,7 @@ export default function MessageList({
                 : undefined
               // 规划中断和失败统一由底部恢复区域展示，空消息沿用下方规则隐藏 Agent 头。
               const planningActivityVisible = Boolean(
-                planningActivity && !messageError && planningCardWorkflow?.summary.status !== 'failed' &&
-                (planningActivity.status !== 'running' || (loading && isCurrentPlanningMessage))
+                planningActivity && !messageError && planningCardWorkflow?.summary.status !== 'failed'
               )
               // 当前技术规划失败仅保留必要的交接回执，移除原中断卡对应的 Agent 头像和名称。
               const hideInterruptedPlanningAgent = Boolean(
@@ -800,9 +791,11 @@ export default function MessageList({
                 message.workflow && messageClarification?.mode === 'review_phase_confirmation'
               const isAcceptancePhaseConfirmationCard =
                 message.workflow && messageClarification?.mode === 'acceptance_phase_confirmation'
-              // 完整 DAG 确认表单始终由右侧承载，Pending 消费后也不在左侧恢复历史表单。
-              const isDagConfirmation =
-                messageClarification?.mode === 'build_task_plan_confirmation'
+              // Build DAG 确认只属于右侧阶段产物；普通消息流不恢复或复制确认卡。
+              const dagConfirmationMovedToStageOutput = Boolean(
+                dagConfirmationInStageOutput &&
+                  messageClarification?.mode === 'build_task_plan_confirmation'
+              )
               const isCodeReviewCard = workflowShouldShowCodeReview(message.workflow)
               // 创建规划的产品/技术阶段也展示 WorkflowRunCard，保证运行与确认状态连续可见。
               const isPlanningStageCard =
@@ -815,9 +808,9 @@ export default function MessageList({
                 planningCardWorkflow &&
                   (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
                   !isDuplicatePlanningReview &&
-                  !(currentPlanningConfirmation && isCurrentPlanningReview) &&
-                  !isDagConfirmation &&
-                  ((requiresClarification && !isUiDesignConfirmationCard) ||
+                  ((requiresClarification &&
+                    !isUiDesignConfirmationCard &&
+                    !dagConfirmationMovedToStageOutput) ||
                     isLatestUiDesignConfirmationCard ||
                     isPlanningStageCard ||
                     isLaunchProjectCard ||
@@ -837,14 +830,16 @@ export default function MessageList({
                 !applicationLifecycle?.activeFormalRevision
               const interactionAvailability =
                 planningCardWorkflow && requiresClarification
-                  ? designPhasePlanning || browsingDesignHistory || conversationRevisionHandoffCommitted(planningCardWorkflow, applicationLifecycle)
+                  ? browsingDesignHistory || conversationRevisionHandoffCommitted(planningCardWorkflow, applicationLifecycle)
                     ? 'stale'
-                    : workflowMessageInteractionAvailability(
-                        planningCardWorkflow,
-                        applicationLifecycle,
-                        messageIndex < messages.length - 1 && !currentPlanningInteraction,
-                        conversation || designPhasePlanning
-                      )
+                    : messageIndex < messages.length - 1 && !currentPlanningInteraction
+                      ? 'stale'
+                      : conversation || designPhasePlanning
+                        ? 'active'
+                        : workflowInteractionAvailability(
+                            planningCardWorkflow,
+                            applicationLifecycle
+                          )
                   : 'stale'
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。
@@ -886,12 +881,29 @@ export default function MessageList({
                 planningCardWorkflow &&
                 isStructuredPlanningWorkflow(planningCardWorkflow) &&
                 planningCardWorkflow.summary?.status === 'running'
-              // 占位消息不是执行凭据；仅当前 Agent 确实运行时显示普通 loading。
-              const showPlanningLoading = Boolean(
-                messageLoading && !messageError && !message.revisionHandoff &&
-                !isUiDesignConfirmationCard && !showWorkflowCard && !planningActivityVisible &&
-                !visibleAssistantContent.trim() && !(conversation && visibleProcessSteps?.length)
-              )
+              const isPlanningLoadingPlaceholder = Boolean(message.planningLoading)
+              // 某些首帧会先带 running workflow，随后旧的占位标记可能被流式文本清掉；
+              // 只要当前仍在运行且消息没有正文/确认卡，就继续显示生成中，避免只剩 Agent 头像。
+              const isPlanningWorkflowRunning =
+                designPhasePlanning && planningCardWorkflow?.summary?.status === 'running'
+              // UI 确认阶段的轮询 no-op resume 会经历 running→requires_user_input 抖动。
+              // running 期间 showWorkflowCard 可能因 requiresClarification/index 抖动瞬间为 false，
+              // 导致 planningWorkflowNeedsChatLoading 返回 true、闪现"正在生成设计方案"loading 卡片，
+              // 随后 requires_user_input 到达又切回 UI 确认卡，如此循环闪烁。UI 确认卡本身就能
+              // 覆盖 running 态（卡片内 actingPageIds 显示逐页生成中），不需要外层 loading 卡片。
+              // 只要这张消息是 UI 确认卡（phase=ui_confirmation），强制不显示 loading。
+              const showPlanningLoading =
+                !messageError &&
+                !message.revisionHandoff &&
+                !isUiDesignConfirmationCard &&
+                planningWorkflowNeedsChatLoading(
+                  planningCardWorkflow,
+                  designPhasePlanning,
+                  isPlanningLoadingPlaceholder,
+                  showWorkflowCard,
+                  visibleAssistantContent,
+                  message.role === 'assistant' && messageIndex === messages.length - 1
+                )
               // 待确认卡片（requiresClarification）已由 WorkflowRunCard 展示表单/选项，
               // 隐藏流式文本原文（如「还有 N 个问题需要补充」），避免与卡片重复。
               // UI 确认阶段轮询 run 期间 status=running 但 phase 仍是 ui_confirmation，
@@ -910,10 +922,6 @@ export default function MessageList({
                 (showWorkflowCard && requiresClarification && !entityDesignCardVisible)
                   ? ''
                   : visibleAssistantContent
-              const displayAssistantContent =
-                !messageLoading && conversation && visibleCodeChanges && finalResult.terminal
-                  ? formatDirectModificationSummary(effectiveAssistantContent)
-                  : effectiveAssistantContent
               // 正文、状态和卡片都没有可见内容时，整条 assistant 消息连同 Agent 头一起隐藏。
               const hasVisibleAssistantBody = Boolean(
                 message.revisionHandoff ||
@@ -928,7 +936,7 @@ export default function MessageList({
                     message.toolCalls?.length &&
                     !hasConversationToolActivity) ||
                   (!messageLoading && visibleCodeChanges) ||
-                  displayAssistantContent.trim() ||
+                  effectiveAssistantContent.trim() ||
                   (message.workflow && (entityDesignCardVisible || showWorkflowCard)) ||
                   (message.workflow?.summary.phase === 'entity_source_binding' &&
                     message.workflow.summary.status === 'completed' &&
@@ -965,16 +973,38 @@ export default function MessageList({
                         {message.developmentContinuation ? (
                           <DevelopmentContinuationCard
                             continuation={message.developmentContinuation}
-                            disabled={mutationDisabled}
+                            disabled={loading}
                             onContinue={() =>
                               onContinueDevelopment?.(message.id, message.developmentContinuation!)
                             }
                           />
                         ) : null}
                         {/* 通用失败只由底部控制面展示，历史消息也不渲染错误卡。 */}
-                        {showPlanningLoading && (
-                          <div role="status"><LoadingOutlined spin /> <Text>正在处理…</Text></div>
-                        )}
+                        {/* 创建规划占位消息：初次进入或用户提交后当前阶段 Agent 正在准备，
+                            planningLoading 标记的占位消息显示与「正在分析需求」一致的
+                            边框卡片加载态，流式 chunk 到达后 planningLoading 被清除并展示返回内容。 */}
+                        {showPlanningLoading &&
+                          (planningActivity && planningCardWorkflow ? (
+                            <PlanningWorkflowActivity workflow={planningCardWorkflow} />
+                          ) : (
+                            <PhasePendingCard
+                              agentKey={messageAgentPhase(
+                                currentPresentationWorkflow,
+                                currentPhase
+                              )}
+                              detail={
+                                isPlanningWorkflowRunning
+                                  ? currentPhase === 'planning'
+                                    ? '正在生成技术规划…'
+                                    : '正在生成设计方案…'
+                                  : designPhasePlanning
+                                    ? currentPhase === 'planning'
+                                      ? '正在恢复计划阶段…'
+                                      : '正在准备需求确认…'
+                                    : '正在处理…'
+                              }
+                            />
+                          ))}
                         {!showPlanningLoading &&
                         planningActivityVisible &&
                         planningCardWorkflow ? (
@@ -986,17 +1016,8 @@ export default function MessageList({
                           !designPhasePlanning && (
                             <ProcessSteps
                               conversation={conversation}
-                              dagPendingPlanCompletion={dagPendingPlanCompletion}
                               loading={messageLoading}
-                              onOpenPendingDagConfirmation={onOpenPendingDagConfirmation}
-                              runFinishedAt={
-                                message.workflow
-                                  ? applicationLifecycle?.endedExecutions?.[message.workflow.runId]
-                                      ?.execution.updatedAt
-                                  : undefined
-                              }
                               steps={visibleProcessSteps}
-                              workflow={message.workflow}
                             />
                           )}
                         {!hideEntityWorkflowChrome &&
@@ -1047,7 +1068,7 @@ export default function MessageList({
                             {previewRepairPlanMessage ? (
                               <PreviewRepairPlanCard content={effectiveAssistantContent} />
                             ) : (
-                              <MarkdownContent content={displayAssistantContent} />
+                              <MarkdownContent content={effectiveAssistantContent} />
                             )}
                           </div>
                         )}
@@ -1067,7 +1088,7 @@ export default function MessageList({
                             // 实体设计卡片在确认后也要保留展示（锁定态），
                             // 否则完成快照会清掉确认设计的上下文。
                             <EntityDesignChatCard
-                              disabled={mutationDisabled || interactionAvailability !== 'active'}
+                              disabled={loading || interactionAvailability !== 'active'}
                               onInteraction={scheduleScrollUpdate}
                               onSubmitClarification={onSubmitClarification}
                               workflow={message.workflow}
@@ -1076,28 +1097,20 @@ export default function MessageList({
                           ) : showWorkflowCard ? (
                             <WorkflowRunCard
                               disabled={
-                                mutationDisabled ||
+                                loading ||
+                                planningMessageActionsDisabled(
+                                  isCurrentPlanningMessage,
+                                  planningActionsBlocked
+                                ) ||
                                 interactionAvailability !== 'active' ||
                                 planningArtifactAnswered
                               }
                               historicalClarificationAnswers={historicalClarificationAnswers}
                               interactionAvailability={interactionAvailability}
-                              workflowCardResult={message.workflowCardResult}
                               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
                               onSubmitClarification={onSubmitClarification}
-                              onReviseConfirmedTechnicalPlan={
-                                messageIndex === latestConfirmedTechnicalPlanMessageIndex &&
-                                currentPhase === 'planning' &&
-                                planningWorkflow &&
-                                planningWorkflowPhase(planningWorkflow) === 'technical_planning'
-                                  ? onReviseConfirmedTechnicalPlan
-                                  : undefined
-                              }
-                              reviseConfirmedTechnicalPlanDisabled={
-                                mutationDisabled || reviseConfirmedTechnicalPlanDisabled
-                              }
                               uiDesignActivePageId={uiDesignActivePageId}
                               onUiDesignActivePageChange={onUiDesignActivePageChange}
                               uiDesignActingPageIds={uiDesignActingPageIds}
@@ -1105,13 +1118,12 @@ export default function MessageList({
                               onSaveRequirementSpec={onSaveRequirementSpec}
                               rootPath={rootPath}
                               workflow={planningCardWorkflow || message.workflow}
-                              application={application}
                               workspaceRoot={workspaceRoot}
                             />
                           ) : null)}
                         {message.workflow ? (
                           <RemainingEntityBindingsCard
-                            disabled={mutationDisabled || messageIndex !== messages.length - 1}
+                            disabled={loading || messageIndex !== messages.length - 1}
                             lifecycle={applicationLifecycle}
                             onJump={onEntityDesignGateJump}
                             workflow={message.workflow}
@@ -1133,29 +1145,6 @@ export default function MessageList({
                               reverting={revertingCodeChangeIds.has(visibleCodeChanges.id)}
                             />
                           )}
-                        {!messageLoading && message.id === latestAssistantMessageId &&
-                        canEnterModifiedTesting(message.workflow) ? (
-                          <section className={cx('template-preparing-card', 'template-preparing-ready')}>
-                            <div className={cx('template-preparing-head')}>
-                              <CheckCircleOutlined className={cx('template-preparing-icon', 'is-ready')} />
-                              <Text strong>本轮修改已完成</Text>
-                            </div>
-                            <Text className={cx('template-preparing-desc')} type="secondary">
-                              可以重新测试、审查和验收。
-                            </Text>
-                            <Button
-                              className={cx('template-preparing-enter-btn')}
-                              disabled={mutationDisabled}
-                              onClick={() => onSubmitClarification(message.workflow!, {
-                                modified_test_entry: { action: 'start' }
-                              })}
-                              size="large"
-                              type="primary"
-                            >
-                              进入本轮测试
-                            </Button>
-                          </section>
-                        ) : null}
                         {!messageLoading &&
                           visibleCodeChanges &&
                           message.workflow &&
@@ -1194,44 +1183,12 @@ export default function MessageList({
               )
             })
           )}
-          {dagPendingPlanCompletion && !hasMatchingPendingDagProgress ? (
-            <article className={cx('ai-message', 'assistant')}>
-              <div className={cx('ai-message-content')}>
-                <DagGenerationProgress
-                  completion={{
-                    summary: dagPendingPlanCompletion.summary,
-                    onGoToConfirmation: onOpenPendingDagConfirmation
-                  }}
-                />
-              </div>
-            </article>
-          ) : null}
-          {currentPlanningConfirmation ? (
-            <div data-testid="current-planning-confirmation">
-              <WorkflowRunCard
-                disabled={mutationDisabled}
-                interactionAvailability="active"
-                workflow={currentPlanningConfirmation}
-                application={application}
-                onSubmitClarification={onSubmitClarification}
-                onSaveRequirementSpec={onSaveRequirementSpec}
-                uiDesignActivePageId={uiDesignActivePageId}
-                onUiDesignActivePageChange={onUiDesignActivePageChange}
-                uiDesignActingPageIds={uiDesignActingPageIds}
-                onUiDesignActingPageIdsChange={onUiDesignActingPageIdsChange}
-                rootPath={rootPath}
-                workspaceRoot={workspaceRoot}
-              />
-            </div>
-          ) : null}
-          {developmentNextStepContent}
           {templatePreparationVisible ? (
             <article className={cx('ai-message', 'assistant', 'template-preparing-message')}>
               <div className={cx('ai-message-content')}>
                 <TemplatePreparingCard
                   lifecycle={applicationLifecycle}
                   templatePreparation={templatePreparation}
-                  actionsDisabled={templateReadyActionsDisabled}
                   onEnterDevelopment={onEnterDevelopment}
                   onRetry={onRetryTemplateGeneration}
                   orphaned={templateGenerationOrphaned}
@@ -1289,6 +1246,21 @@ function findLastAssistantMessage(messages: AgentChatMessage[]): AgentChatMessag
     if (messages[index].role === 'assistant') return messages[index]
   }
   return undefined
+}
+
+/** 找到与当前 Planning thread 对应的最后一条卡片宿主，不从阶段或文案猜测归属。 */
+function findCurrentPlanningMessageIndex(
+  messages: AgentChatMessage[],
+  currentWorkflow: WorkflowRunPayload | undefined
+): number {
+  if (!currentWorkflow?.threadId) return -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === 'assistant' && message.workflow?.threadId === currentWorkflow.threadId) {
+      return index
+    }
+  }
+  return -1
 }
 
 /** 从 Workflow 终态提取失败摘要，覆盖后端未额外发送 RUN_ERROR 的失败路径。 */

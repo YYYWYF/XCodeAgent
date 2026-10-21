@@ -64,14 +64,10 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
     if (!field.required || field.section === 'response_body') return false
     return !entry.value.draft.externalApiBindings?.some((item) => item.externalField.section === field.section && item.externalField.path === field.path && item.right)
   }))
-  const missingWriteColumns = Boolean(selection?.sourceType === 'database' && metadata && 'columns' in metadata
-    && entry?.value.draft.databaseWrites?.some((write) => write.column && (
-      write.sourceId !== selection.sourceId || write.schema !== selection.schema || write.table !== selection.table
-      || !(metadata.columns || []).some((column) => column.name === write.column && column.type === write.type))))
   const editable = Boolean(entry && !entry.readOnly && !entry.complex && !entry.conflict)
     const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0 && !entry?.value.draft.externalApiBindings?.length
   const canConfirm = editable && !sourceChanging && editingRules === 0
-    && (withoutSource || fields.length > 0 && Boolean(selection && (selection.sourceType === 'static' || metadata)) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingWriteColumns && !missingRequiredExternal)
+    && (withoutSource || fields.length > 0 && Boolean(selection && (selection.sourceType === 'static' || metadata)) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingRequiredExternal)
   const databaseSelection = selection?.sourceType === 'database' ? selection : undefined
 
   useEffect(() => { setKind(undefined); setSourceChanging(false); setPendingSelection(null); setAdvanced(false); setSourceCollapsed(false); setValidation(undefined) }, [state.key, entry?.readOnly])
@@ -191,10 +187,8 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
                 {sourceChanging ? <div className="database-source-toolbar"><Space><Button disabled={busy} onClick={cancelSourceChange}>取消</Button><Button type="primary" disabled={busy || entry.conflict || !pendingSelectionChanged} onClick={() => changeSelection(pendingSelection, kind)}>确认更换</Button></Space></div> : null}
                 {kind && kind !== 'static' && !candidates.length ? <p>暂无可绑定来源，请先配置{kind === 'database' ? '连接并添加数据表' : '外部 API 接口'}。</p> : null}
               </>}
-              {unavailableTable ? <Alert type="warning" message="所选表已不在当前应用的可用表清单中，请刷新数据源并重新选择。" /> : null}
-              {missingFields ? <Alert type="warning" message="映射引用的数据库字段已发生变化，请重新配置并确认 API 映射。" /> : null}
+              {unavailableTable ? <Alert type="warning" message="所选表不在已添加清单中，请先添加后再确认。" /> : null}
               {missingQueryColumns ? <Alert type="warning" message="查询条件中的数据库列已失效，请重新选择当前数据表中的列。" /> : null}
-              {missingWriteColumns ? <Alert type="warning" message="写入字段已发生变化，请重新配置并确认 API 映射。" /> : null}
             </div> : null}
           </section>}
           {/* 更换来源时隐藏旧表单但保持挂载，取消后恢复未应用的 JSON 和映射输入。 */}

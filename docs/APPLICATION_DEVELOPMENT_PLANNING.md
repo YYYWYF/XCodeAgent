@@ -28,8 +28,6 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 
 确认卡是只读 Planning-result 门禁：`confirm` 精确验证 `planning_run_id + draft_digest` 后提升当前 Pending 并进入 Build；`abandon` 删除当前 Pending、结束对应 Workflow execution，但保留聊天会话和已有正式计划；结构化 `regenerate` 先删除旧 Pending，再回到 `prepare_build_tasks` 创建全新 PlanningRun，后续失败不恢复旧 Pending。同一应用的所有页面和 Scope 共用一个 DAG Planning/待确认互斥域。活跃生成只允许取消整个 Workflow/PlanningRun，当前权威运行卡显示“取消运行”；待确认阶段改用确认卡上的放弃/重新生成/确认，不提供 Unit 级取消。刷新只恢复服务端权威状态投影，不保证原请求继续执行或事件补发；唯一 Pending 和精确 DraftIdentity 是确认权威，没有 Pending 时不得从聊天历史、旧卡片或旧 execution 恢复待确认状态。
 
-前端把 DAG 进度与确认操作分开：左侧 `MessageList` 的 `ProcessSteps` 保留 Unit、重试和全局校验明细；当前会话成为有效 PendingPlan owner 后，进度卡显示“任务生成完成”和可重复使用的“去确认”导航。只有与 PendingPlan 的 DraftIdentity 中 `planningRunId` 完全匹配、且处于 `persisting_pending` 的完整快照才提供 Unit/任务计数；恢复时缺少该快照则显示不带数量的摘要，不从其他 PlanningRun 补数。完整确认表单只在右侧“待确认任务”Tab，由当前会话 owner 的有效 PendingPlan 控制显隐；生成、普通 Build/Test/Review/Acceptance 和 Pending 消费后均隐藏。新 DraftIdentity 首次就绪时自动打开确认 Tab 并短暂强调一次；引导记录按应用和 owner 会话隔离，仅控制 UI 导航，不构成确认 authority。相同身份的 lifecycle 刷新不重复引导，用户切换其他 Tab 或关闭面板后由用户决定何时返回；左侧按钮每次都能重新打开确认。Confirm、Regenerate 或 Abandon 被服务端确认消费后，若右侧仍停留在确认 Tab 则回到“开发产物”；关闭状态继续保持关闭。冷启动恢复仍依赖生命周期 PendingPlan、owner 和 DraftIdentity，历史消息本身不恢复确认入口。
-
 ## 数据源配置与直接映射工作台
 
 - 左侧拆为“数据源”和“外部 API”两个互斥入口，均采用列表与详情双层抽屉，打开不改变当前会话或右侧映射选择。数据源侧只展示数据库连接和已添加表；外部 API 侧先创建接口域，再按域 Tab 展示域内平铺接口。当前界面隐藏目录管理和目录选择，新增接口统一写入当前域的“默认目录”；域名、目录、Operation 的正式存储结构不变。数据库仍只允许一个，连接编辑按 ID 读取完整详情，不用列表摘要回填连接字段。
@@ -41,10 +39,6 @@ Build DAG 的生产入口是主 `/workflow/run` 中的 async Planning adapter。
 - 定向回归：`tests.test_binding_workspace`、Endpoint 详情/协议、数据源路由、API Design/readiness，覆盖外部必填字段缺失和重复来源。UI 静态检查使用 `pnpm typecheck:web`；本次按用户要求不执行前端测试、pnpm build、/health 或 Electron 验证，视觉与运行时验收未执行。
 
 ## Initial Development Completion and Test Entry
-
-开发会话的对话末尾由 `NextDevelopmentGuide` 提供下一步引导。页面/Endpoint 到达 `test_phase_confirmation`，且当前 lifecycle 的初次完成记录匹配本轮 Run/Graph thread 时展示“初次开发已完成”；主动 End 只有在 `/workflow/run` 返回成功结束回执、当前请求收口后展示“本次开发已结束”，明确放弃待确认规划的 `abandoned` 成功回执也展示结束引导。普通节点 completed、失败、暂停、停止中、失败 End 与拒绝放弃均不触发。引导只读正式目录和 lifecycle，不写开发状态；未完成目标主动结束仍保持实际状态。推荐按目录顺序优先其他 pending 页面，再选 pending Endpoint；用户也可展开“全部页面与 API”完整清单，按状态、类型和名称/路径联合筛选；筛选不改变推荐目标或正式开发状态，列表不默认选中任何项。已完成或开发中的项不重复启动，目录读取错误或应用执行锁未释放时不能发起。End 保留待确认规划的既有合同不变；规划仍可操作时明确提示先处理或放弃规划。正式目录成功读取且非空的页面/API 全部完成后隐藏继续开发卡片，测试入口及阻断原因由既有测试阶段确认卡负责；加载中、目录错误、空目录或进度未知不当成全部完成。
-
-引导卡的按钮在当前 DEVELOPMENT 可见会话中追加“开始开发页面/接口”用户消息，保留此前记录；每轮创建独立 Graph thread，通过原 `/workflow/run` 和 API Design/DAG 确认门进入开发。会话创建时的 `developmentTarget` 元数据不改写，最新正式 Workflow 的显式目标用于当前上下文、普通后续请求和重新打开会话时的详情恢复；不根据标题、自然语言或其他会话推断目标。新任务开始后旧引导退出当前控制面，不自动选择、结束或确认任何任务。
 
 页面和 Endpoint 必须分别作为显式开发目标走完一次初次流程，全部完成后才能进入测试阶段。页面开发顺带实现依赖 Endpoint 不替接口标记完成。实体也单独计数，只有用户显式确认且正式 EntitySourceBinding 成功写盘后才完成；选表、生成设计和等待确认均不算完成。三类产物全部完成后才能进入测试阶段。
 

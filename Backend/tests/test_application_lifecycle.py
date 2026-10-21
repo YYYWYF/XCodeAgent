@@ -351,7 +351,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
             self.assertFalse((workspace / ".devagentstudio/template-generation-manifest.json").exists())
 
     def test_failed_workspace_bootstrap_can_enter_a_new_generation_attempt(self) -> None:
-        """模板失败后只能由显式重试清理受管残留并回到生成阶段。"""
+        """模板失败后只能由显式重试动作清除错误并回到生成阶段。"""
 
         with tempfile.TemporaryDirectory() as directory:
             state = create_application_lifecycle(application_id="app-1", application_name="任务中心")
@@ -375,12 +375,6 @@ class ApplicationLifecycleTests(unittest.TestCase):
                 succeeded=False,
                 error_message="Template Engine unavailable",
             )
-            # 模拟物化事务在失败前已留下的模板根、Git 和 State；正式规划文件不属于清理范围。
-            (Path(directory) / "frontend").mkdir()
-            (Path(directory) / "backend").mkdir()
-            (Path(directory) / ".git").mkdir()
-            state_path = Path(directory) / ".devagentstudio/template-state.json"
-            state_path.write_text("{}", encoding="utf-8")
 
             retried = retry_application_template_generation(directory, active_run_id="retry-run")
 
@@ -391,9 +385,6 @@ class ApplicationLifecycleTests(unittest.TestCase):
             self.assertEqual(retried.initialization.status, ApplicationLifecycleStatus.RUNNING)
             self.assertEqual(retried.active_run_id, "retry-run")
             self.assertIsNone(retried.error)
-            for relative in ("frontend", "backend", ".git", ".devagentstudio/template-state.json"):
-                self.assertFalse((Path(directory) / relative).exists(), relative)
-            self.assertTrue((Path(directory) / ".devagentstudio/application-lifecycle.json").is_file())
 
     def test_current_snapshot_loads_with_workbench_defaults(self) -> None:
         """当前初始化快照应获得空的工作台字段默认值且不包含 delivery。"""

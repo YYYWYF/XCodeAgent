@@ -19,6 +19,7 @@ DIRECT_NODE_LABELS = {
     "answer_workspace": "读取工作区并回答",
     "execute_backend": "执行后端修改",
     "execute_frontend": "执行前端修改",
+    "execute_workspace": "执行工作区修改",
     "validate_direct_fix": "验证本次修改",
     "direct_modification_repair": "自动修复局部代码",
     "finalize_direct_modification": "整理修改结果",
@@ -31,6 +32,7 @@ DIRECT_NODE_PERCENT = {
     "answer_workspace": 80,
     "execute_backend": 40,
     "execute_frontend": 65,
+    "execute_workspace": 80,
     "validate_direct_fix": 80,
     "direct_modification_repair": 90,
     "finalize_direct_modification": 100,
@@ -86,7 +88,6 @@ def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:
         "message": direct_state_message(state) or str(result.get("summary") or "自由对话已结束。"),
         "request": str(state.get("request") or ""),
         "previewUrl": state.get("preview_url") or result.get("previewUrl"),
-        "errorCode": result.get("errorCode"),
         "launchResult": state.get("launch_result") or result.get("launchResult"),
         "clarification": (
             state.get("clarification")
@@ -287,9 +288,6 @@ def direct_node_process_step(
 def direct_node_status(node_name: str, update: dict[str, Any]) -> str:
     """把 Graph 节点业务状态映射为流程步骤终态。"""
 
-    # 修复期间整轮继续运行，但本次失败的验收和检查项仍如实展示失败。
-    if node_name == "validate_direct_fix" and update.get("quality_gate_passed") is False:
-        return "failed"
     status = str(update.get("status") or "")
     if status == "failed":
         return "failed"
@@ -299,10 +297,10 @@ def direct_node_status(node_name: str, update: dict[str, Any]) -> str:
         if isinstance(clarification, dict)
         else ""
     )
-    # 正式修改影响范围和 SmallTask 范围扩展由独立卡片确认，不把分类节点也显示成确认门。
+    # 分类节点已经成功决定修改路径时，等待职责属于独立确认卡，不能把分类本身也显示成确认门。
     if node_name == "classify_intent" and clarification_mode in {
-        "revision_impact_confirmation",
         "implementation_fix_confirmation",
+        "revision_impact_confirmation",
         "small_task_scope_confirmation",
     }:
         return "completed"

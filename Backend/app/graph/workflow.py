@@ -4,8 +4,7 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from langgraph.graph import END, START
-from app.services.stage_artifacts import ArtifactStateGraph as StateGraph
+from langgraph.graph import END, START, StateGraph
 
 from app.graph import nodes
 from app.graph.nodes.task_planning_adapter import (
@@ -82,8 +81,6 @@ def route_workflow_start(state: ProjectState) -> str:
         return "code_review"
     if state.get("resume_from") == "acceptance_phase_confirmation":
         return "acceptance_phase_confirmation"
-    if state.get("resume_from") == "launch_project":
-        return "acceptance"
     if state.get("resume_from") == "integration_test":
         return "integration_test"
     if state.get("resume_from") == "small_task_repair":
@@ -178,8 +175,6 @@ def route_build_result(state: ProjectState) -> str:
 def route_test_phase_confirmation(state: ProjectState) -> str:
     """根据测试阶段确认结果选择暂停或继续集成测试。"""
 
-    if state.get("status") == "in_progress" and state.get("integration_next_action") in {"build", "unit_test"}:
-        return str(state["integration_next_action"])
     if state.get("status") == "requires_user_input":
         return "await_user_input"
     build_summary = state.get("build_summary")
@@ -205,8 +200,6 @@ def route_test_phase_confirmation(state: ProjectState) -> str:
 def route_review_phase_confirmation(state: ProjectState) -> str:
     """根据审查阶段确认结果选择暂停或开始代码审查。"""
 
-    if state.get("status") == "in_progress" and state.get("code_review_next_action") == "integration_test":
-        return "integration_test"
     if state.get("status") == "requires_user_input":
         return "await_user_input"
     if state.get("status") == "completed" and state.get("quality_gate_passed") is True:
@@ -227,8 +220,6 @@ def route_code_review(state: ProjectState) -> str:
 def route_acceptance_phase_confirmation(state: ProjectState) -> str:
     """根据用户确认结果选择进入验收子图或暂停等待。"""
 
-    if state.get("status") == "in_progress" and state.get("acceptance_next_action") == "code_review":
-        return "code_review"
     if state.get("status") == "requires_user_input":
         return "await_user_input"
     if state.get("status") == "completed":
@@ -336,7 +327,7 @@ def build_graph(
 
         with bind_node_recovery(state, "prepare_build_tasks"):
             fields = {}
-            if state.get("workspace"):
+            if current_node_recovery_context() is not None:
                 # 规划恢复基于当前磁盘重新冻结输入，旧缓存只由规划自身判断是否可复用。
                 scanned = nodes.inspect_workspace(state)
                 fields = {key: value for key, value in scanned.items() if key.startswith("workspace_")}
@@ -394,17 +385,16 @@ def build_graph(
 
         with bind_node_recovery(state, "integration_test"):
             prepared, fields = prepare_integration_test_reentry(state, "integration_test")
-            # 先合并重启清理，再让本轮真实结果覆盖，不能用入口重置覆盖新报告或新任务。
-            return {**fields, **nodes.integration_test(prepared)}
+            return {**nodes.integration_test(prepared), **fields}
 
     def small_task_repair_with_recovery(state: ProjectState) -> dict[str, Any]:
-        """仅暂停续接保留修复进度，失败恢复统一由测试阶段入口重新开始。"""
+        """保留已提交修复任务及次数，完成后仍返回集成检查复测。"""
 
         from app.services.integration_test_reentry import prepare_integration_test_reentry
 
         with bind_node_recovery(state, "small_task_repair"):
             prepared, fields = prepare_integration_test_reentry(state, "small_task_repair")
-            return {**fields, **nodes.small_task_repair(prepared)}
+            return {**nodes.small_task_repair(prepared), **fields}
 
     builder.add_node("integration_test", integration_test_with_recovery)
     builder.add_node("small_task_repair", small_task_repair_with_recovery)
@@ -540,8 +530,6 @@ def build_graph(
         "test_phase_confirmation",
         route_test_phase_confirmation,
         {
-            "build": "build",
-            "unit_test": "unit_test",
             "integration_test": "integration_test",
             "await_user_input": END,
             "handle_failure": "handle_failure",
@@ -551,7 +539,6 @@ def build_graph(
         "review_phase_confirmation",
         route_review_phase_confirmation,
         {
-            "integration_test": "integration_test",
             "code_review": "code_review",
             "await_user_input": END,
             "handle_failure": "handle_failure",
@@ -571,7 +558,6 @@ def build_graph(
         "acceptance_phase_confirmation",
         route_acceptance_phase_confirmation,
         {
-            "code_review": "code_review",
             "acceptance": "acceptance",
             "await_user_input": END,
             "handle_failure": "handle_failure",

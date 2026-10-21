@@ -9,7 +9,6 @@ from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from langgraph.types import Command
 
 from app.agents.workspace_scope import resolve_workspace_root
 from app.domain.application_revision import RevisionImpact, RevisionTarget
@@ -17,6 +16,7 @@ from app.graph.direct_modification_workflow import (
     direct_modification_graph_for_request,
     direct_next_node_name,
 )
+from app.persistence.checkpoints import cleanup_workflow_checkpoints
 from app.protocols.ag_ui_action_stream import (
     AgUiActionProgress,
     AgUiActionResult,
@@ -53,8 +53,6 @@ from app.services.user_skill_runtime import validate_selected_user_skills
 from app.services.conversation_execution import ConversationExecution
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
 from app.services.node_recovery_context import bind_recovery_runtime
-from app.services.run_workers import bind_run_workers
-from app.services.failed_run_cleanup import shield_run_cleanup
 from app.services.workflow_reentry import SYNTHETIC_WORKFLOW_ENTRY_NODE
 from app.workspace.run_lease import WorkspaceRunLease, workspace_run_leases
 
@@ -81,7 +79,6 @@ _DIRECT_CONTINUATION_STATE_KEYS = (
     "direct_modification_confidence",
     "direct_modification_reason",
     "direct_modification_summary",
-    "direct_modification_confirm_scope",
     "direct_modification_target_paths",
     "direct_modification_approved_paths",
     "direct_modification_result",
@@ -193,17 +190,12 @@ class DirectModificationInput(BaseModel):
         alias="originalRequest",
         max_length=16_000,
     )
-    confirm_scope_before_execution: bool = Field(
-        default=True,
-        alias="confirmScopeBeforeExecution",
-    )
     target: DirectModificationTarget | None = None
     element_context: DirectModificationElementContext | None = Field(
         default=None,
         alias="elementContext",
     )
     change_id: str | None = Field(default=None, alias="changeId", max_length=256)
-    resume_execution_run_id: str | None = Field(default=None, alias="resumeExecutionRunId", min_length=1, max_length=256)
     approved_paths: list[str] = Field(
         default_factory=list,
         alias="approvedPaths",
@@ -219,9 +211,6 @@ class DirectModificationInput(BaseModel):
         alias="impactInteractionId",
         max_length=256,
     )
-    config_request_id: str | None = Field(default=None, alias="configRequestId", min_length=8, max_length=128)
-    config_operation_id: str | None = Field(default=None, alias="configOperationId", min_length=8, max_length=128)
-    config_decision: str | None = Field(default=None, alias="configDecision")
 
 
 def conversation_capabilities() -> dict[str, Any]:
@@ -241,7 +230,7 @@ def conversation_capabilities() -> dict[str, Any]:
             "implementation_fix",
             "formal_revision",
         ],
-        "owners": ["frontend", "backend", "fullstack", "none", "unknown"],
+        "owners": ["frontend", "backend", "fullstack", "workspace", "none", "unknown"],
         "statuses": [
             "in_progress",
             "completed",
@@ -255,25 +244,12 @@ def conversation_capabilities() -> dict[str, Any]:
             "additionalModelImpactAnalysis": False,
             "userVisibleExplanation": "reason-only",
         },
-        "scopeConfirmation": {
-            "requestField": "confirmScopeBeforeExecution",
-            "default": True,
-            "appliesTo": "implementation_fix",
-            "clarificationMode": "implementation_fix_confirmation",
-            "editableRequestDuringReview": True,
-        },
         "workflowIndependent": True,
-        "pauseContinuation": {
-            "requestField": "forwardedProps.conversation.resumeExecutionRunId",
-            "authority": "server-checkpoint",
-            "sameThread": True,
-            "abnormalInterruption": "/execution-recovery/execute",
-        },
         "nodeRecovery": {
             "endpoint": "/execution-recovery/execute",
             "executionKind": "workbench",
             "workflowScope": "conversation",
-            "authority": "checkpoint-context-node-reexecution",
+            "authority": "shared-native-checkpoint-reentry",
         },
         "targetRequired": False,
         "target": {
@@ -299,6 +275,11 @@ def conversation_capabilities() -> dict[str, Any]:
         "executionPolicy": {
             "subagentsEnabled": False,
             "todoPlanningEnabled": False,
+            "implementationFixConfirmation": {
+                "requiredOwners": ["frontend", "backend", "fullstack"],
+                "workspaceOwnerBypasses": True,
+                "mode": "implementation_fix_confirmation",
+            },
             "confirmationContinuation": {
                 "source": "server-checkpoint",
                 "modes": [
@@ -351,59 +332,6 @@ def resolve_direct_element_context(
     raise ValueError("所选 DOM 的源码文件已不存在，请刷新预览后重新选择元素。")
 
 
-def _application_config_continuation(
-    *, request: DirectModificationInput, workspace_root: str, thread_id: str, checkpoint_values: Any
-) -> dict[str, Any]:
-    """凭原会话配置卡和已应用操作恢复缓存主意图，不重新执行分类模型。"""
-
-    from app.config import Settings
-    from app.services.application_config import read_application_config
-    from app.services.application_config_orchestrator import ApplicationConfigOrchestrator
-
-    values = checkpoint_values if isinstance(checkpoint_values, dict) else {}
-    pending = values.get("application_config_prerequisite")
-    if not isinstance(pending, dict) or pending.get("status") != "AWAITING_CONFIG":
-        raise ValueError("当前会话没有可继续的应用配置卡。")
-    if pending.get("requestId") != request.config_request_id or pending.get("sourceThreadId") != thread_id:
-        raise ValueError("应用配置卡与当前会话或请求不匹配。")
-    original = pending.get("originalRequest")
-    if not isinstance(original, str) or not original or (request.original_request is not None and request.original_request != original):
-        raise ValueError("应用配置继续动作与原始用户请求不匹配。")
-    if request.config_decision == "cancelled":
-        return {
-            **values,
-            "request": original,
-            "application_config_prerequisite": {**pending, "status": "CANCELLED"},
-            "application_config_resume": "consumed",
-            "direct_modification_resume_node": "finalize_direct_modification",
-            "status": "completed",
-            "message": "已取消本次配置与原业务请求。",
-            "clarification": {},
-            "timeline": [],
-        }
-    if request.config_decision != "applied" or not request.config_operation_id:
-        raise ValueError("应用配置继续动作缺少已应用的操作身份。")
-    operation = ApplicationConfigOrchestrator(Settings.from_env()).get_operation(workspace_root, request.config_operation_id)
-    if operation.get("status") != "APPLIED" or operation.get("requestId") != request.config_request_id:
-        raise ValueError("应用配置操作尚未完成或不属于当前请求。")
-    current = read_application_config(workspace_root)
-    if current["configRevision"] != operation.get("configRevision"):
-        raise ValueError("应用配置继续前已发生其他修改，请刷新卡片。")
-    cached = values.get("application_config_cached_decision")
-    if pending.get("businessRequestRequired") and not isinstance(cached, dict):
-        raise ValueError("原业务主意图缺失，不能重新分类代替。")
-    return {
-        **values,
-        "request": original,
-        "application_config_prerequisite": {**pending, "status": "CONFIG_APPLIED"},
-        "application_config_resume": "applied",
-        "direct_modification_resume_node": "classify_intent",
-        "status": "in_progress",
-        "clarification": {},
-        "timeline": [],
-    }
-
-
 def _direct_confirmation_continuation(
     *,
     request: DirectModificationInput,
@@ -424,9 +352,9 @@ def _direct_confirmation_continuation(
     if mode not in _DIRECT_CONFIRMATION_MODES:
         if decision == "rejected" and str(request.impact_interaction_id or "").strip():
             return None
-        raise ValueError("确认续跑找不到匹配的 SmallTask 范围确认 checkpoint。")
+        raise ValueError("确认续跑找不到匹配的实现修改确认 checkpoint。")
     if values.get("status") != "requires_user_input":
-        raise ValueError("SmallTask 范围确认已过期，不能继续写入。")
+        raise ValueError("实现修改确认已过期，不能继续写入。")
     if values.get("conversation_intent") != "implementation_fix":
         raise ValueError("确认 checkpoint 的修改意图已变化，不能继续写入。")
     owner = str(values.get("direct_modification_owner") or "").strip()
@@ -495,6 +423,11 @@ def _direct_confirmation_continuation(
         "fullstack": "execute_backend",
     }[owner]
     resume_node = owner_node
+    if (
+        mode == "implementation_fix_confirmation"
+        and values.get("change_impact_code_scan_required") is True
+    ):
+        resume_node = "scan_change_impact_code"
     continuation.update(
         {
             "status": "in_progress",
@@ -528,13 +461,10 @@ def build_conversation_ag_ui_stream(
     normalized_payload = {**payload, "threadId": thread_id, "runId": run_id}
     cancel_run_id = _cancel_run_id(normalized_payload)
     if cancel_run_id:
-        forwarded = normalized_payload.get("forwardedProps") or {}
-        conversation = conversation_input(normalized_payload) or {}
         return build_workflow_cancellation_ag_ui_stream(
             thread_id=thread_id,
             run_id=run_id,
             target_run_id=cancel_run_id,
-            workspace=str(conversation.get("workspaceRoot") or forwarded.get("workspaceRoot") or ""),
             accept=accept,
         )
     raw_input = conversation_input(normalized_payload)
@@ -586,8 +516,7 @@ def build_conversation_ag_ui_stream(
                 interaction_id=str(request.impact_interaction_id),
                 decision="rejected",
             )
-        from app.services.execution_cleanup import best_effort_checkpoint_housekeeping
-        await best_effort_checkpoint_housekeeping(workspace_root)
+        await cleanup_workflow_checkpoints(workspace=workspace_root)
         active_graph = native_recovery_context.graph if native_recovery_context else await direct_modification_graph_for_request(
             workspace=workspace_root
         )
@@ -609,9 +538,6 @@ def build_conversation_ag_ui_stream(
             "clarification": {},
             "conversation_intent": "",
             "conversation_response": "",
-            "application_config_prerequisite": {},
-            "application_config_cached_decision": {},
-            "application_config_resume": "",
             "direct_modification_result": {},
             "change_id": str(request.change_id or ""),
             "change_target": (
@@ -627,7 +553,6 @@ def build_conversation_ag_ui_stream(
             "change_impact_code_scan": {},
             "direct_modification_approved_paths": _safe_approved_paths(request.approved_paths),
             "direct_modification_handoff_decision": str(request.handoff_decision or ""),
-            "direct_modification_confirm_scope": request.confirm_scope_before_execution,
             "direct_modification_resume_node": "",
             "integration_repair_enabled": False,
             "frontend_performance_test_enabled": False,
@@ -675,32 +600,8 @@ def build_conversation_ag_ui_stream(
         }
         try:
             if native_recovery_context is not None:
-                native_recovery_context.runtime_started = True
-            paused_snapshot = None
-            if request.resume_execution_run_id:
-                paused_snapshot = await active_graph.aget_state(config)
-                # 仅恢复服务端 checkpoint；继续按钮文本和客户端旧快照都不作为业务输入。
-                state_view = dict(paused_snapshot.values)
-                user_request = str(state_view.get("request") or "")
-                lease = workspace_run_leases.acquire(
-                    workspace_root=workspace_root, project_id=None,
-                    execution_scope={"type": "application", "targetId": "conversation"},
-                    thread_id=thread_id, run_id=run_id,
-                )
-            if native_recovery_context is not None:
-                state_view = ({**state_view, **native_recovery_context.fork_snapshot.values}
-                              if native_recovery_context.restart_node else dict(native_recovery_context.fork_snapshot.values))
+                state_view = dict(native_recovery_context.fork_snapshot.values)
                 config = native_recovery_context.fork_config
-            if native_recovery_context is None and request.config_request_id:
-                checkpoint = await active_graph.aget_state(config)
-                continuation = _application_config_continuation(
-                    request=request,
-                    workspace_root=workspace_root,
-                    thread_id=thread_id,
-                    checkpoint_values=getattr(checkpoint, "values", {}),
-                )
-                state_view.update(continuation)
-                user_request = str(continuation["request"])
             if (
                 native_recovery_context is None
                 and
@@ -732,11 +633,9 @@ def build_conversation_ag_ui_stream(
                         )
 
             await execution.start(state_view, await active_graph.aget_state(config) if hasattr(active_graph, "aget_state") else None,
-                                  str((normalized_payload.get("forwardedProps") or {}).get("sessionId") or "") or None,
-                                  paused_run_id=request.resume_execution_run_id)
+                                  str((normalized_payload.get("forwardedProps") or {}).get("sessionId") or "") or None)
             initial_node_name = native_recovery_context.recovery_plan.target_node if native_recovery_context else str(
-                (paused_snapshot.next[0] if paused_snapshot else None)
-                or state_view.get("direct_modification_resume_node")
+                state_view.get("direct_modification_resume_node")
                 or "scan_workspace_code"
             )
             if (
@@ -765,14 +664,9 @@ def build_conversation_ag_ui_stream(
                     percent=0,
                 )
             async for stream_mode, chunk in _conversation_graph_stream(active_graph,
-                (state_view if native_recovery_context and native_recovery_context.restart_node else None if native_recovery_context else Command(update={
-                    "active_run_id": run_id, "active_thread_id": thread_id,
-                    "lifecycle": state_view.get("lifecycle"),
-                }) if paused_snapshot else state_view),
+                None if native_recovery_context else state_view,
                 config=config,
                 context=native_recovery_context,
-                run_id=run_id,
-                workspace=workspace_root,
             ):
                 if stream_mode == "custom":
                     await _report_custom_progress(
@@ -910,19 +804,10 @@ def build_conversation_ag_ui_stream(
             await execution.failed(error)
             raise
         finally:
-            async def release_conversation_ownership() -> None:
-                """连接取消也不打断失败工作清理，退出后释放本次运行登记。"""
-                from app.services.failed_run_cleanup import drain_failed_run
-                from app.services.execution_cleanup import finalize_runtime_ownership
-                if execution.failure_error is not None or execution.failed_state is not None:
-                    await drain_failed_run(run_id)
-                try:
-                    await execution.close()
-                finally:
-                    await finalize_runtime_ownership(heartbeat=None,
-                        unregister=lambda: workflow_run_registry.unregister(run_id, current_task), lease=lease)
-
-            await shield_run_cleanup(release_conversation_ownership())
+            await execution.close()
+            if lease is not None:
+                lease.release()
+            workflow_run_registry.unregister(run_id, current_task)
 
     return build_ag_ui_action_stream(
         payload=normalized_payload,
@@ -949,12 +834,10 @@ def build_conversation_ag_ui_stream(
 
 
 async def _conversation_graph_stream(graph: Any, state: Any, *, config: dict[str, Any],
-                                     context: NativeRecoveryRuntimeContext | None,
-                                     run_id: str, workspace: str):
+                                     context: NativeRecoveryRuntimeContext | None):
     """把原 Graph 流绑定到统一 Native 节点上下文，保留节点内部恢复与修复预算。"""
 
-    with (bind_recovery_runtime(context.node_recovery_context() if context else None),
-          bind_run_workers(run_id, workspace)):
+    with bind_recovery_runtime(context.node_recovery_context() if context else None):
         async for chunk in graph.astream(state, config=config, stream_mode=["updates", "custom"]):
             yield chunk
 

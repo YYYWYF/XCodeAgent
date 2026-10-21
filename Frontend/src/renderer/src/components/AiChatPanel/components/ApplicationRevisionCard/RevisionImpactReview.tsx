@@ -9,7 +9,6 @@ const { Text } = Typography
 
 type RevisionImpactReviewProps = {
   disabled?: boolean
-  decision?: 'approved' | 'rejected'
   impact: WorkflowRevisionImpact
   onDecision: (decision: 'approved' | 'rejected') => void
 }
@@ -17,7 +16,6 @@ type RevisionImpactReviewProps = {
 /** 只展示路由模型给出的原因，并保留正式分支进入前的明确确认动作。 */
 export default function RevisionImpactReview({
   disabled,
-  decision,
   impact,
   onDecision
 }: RevisionImpactReviewProps): ReactElement {
@@ -41,22 +39,14 @@ export default function RevisionImpactReview({
         <Text className={cx('application-revision-impact-reason-label')}>修改原因</Text>
         <Text className={cx('application-revision-impact-reason-copy')}>{impact.reason}</Text>
       </div>
-      {decision ? (
-        <Text className={cx('application-revision-impact-result')} type="secondary">
-          {decision === 'approved'
-            ? '已确认进入正式修改流程。'
-            : '已取消本次正式修改，当前正式产物保持不变。'}
-        </Text>
-      ) : (
-        <div className={cx('application-revision-impact-actions')}>
-          <Button disabled={disabled} onClick={() => onDecision('rejected')}>
-            取消
-          </Button>
-          <Button disabled={disabled} onClick={() => onDecision('approved')} type="primary">
-            {designBranch ? '确认并返回设计阶段' : '确认并进入计划阶段'}
-          </Button>
-        </div>
-      )}
+      <div className={cx('application-revision-impact-actions')}>
+        <Button disabled={disabled} onClick={() => onDecision('rejected')}>
+          取消
+        </Button>
+        <Button disabled={disabled} onClick={() => onDecision('approved')} type="primary">
+          {designBranch ? '确认并返回设计阶段' : '确认并进入计划阶段'}
+        </Button>
+      </div>
     </section>
   )
 }

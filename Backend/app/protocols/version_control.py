@@ -9,11 +9,9 @@ from app.services.version_control import (
     CommitVersionControlRequest,
     InspectAllVersionControlRequest,
     InspectVersionControlRequest,
-    SummarizeVersionControlRequest,
     commit_version_control,
     inspect_all_version_control,
     inspect_version_control,
-    summarize_version_control,
 )
 
 
@@ -27,7 +25,7 @@ def version_control_capabilities() -> dict[str, Any]:
         "name": "version-control",
         "endpoint": "/version-control/run",
         "transport": "ag-ui-sse",
-        "actions": ["inspect", "inspect_all", "commit", "summarize"],
+        "actions": ["inspect", "inspect_all", "commit"],
         "customEventName": VERSION_CONTROL_EVENT_NAME,
         "stateSnapshotKey": "versionControl",
         "workflowIndependent": True,
@@ -60,19 +58,8 @@ def build_version_control_ag_ui_stream(
             result = commit_version_control(request)
             data = result.model_dump(by_alias=True)
             message = f"已提交本次修改：{result.commit_sha[:8]}。"
-        elif action == "summarize":
-            request = SummarizeVersionControlRequest.model_validate(version_control_input)
-            result = await summarize_version_control(request)
-            data = result.model_dump(by_alias=True)
-            message = (
-                "已生成变更说明。"
-                if result.change_summary
-                else "暂未能生成变更说明，请手动填写。"
-            )
         else:
-            raise ValueError(
-                "versionControl.action 必须是 inspect、inspect_all、commit 或 summarize。"
-            )
+            raise ValueError("versionControl.action 必须是 inspect、inspect_all 或 commit。")
         return AgUiActionResult(data=data, message=message)
 
     return build_ag_ui_action_stream(

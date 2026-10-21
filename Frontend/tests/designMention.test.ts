@@ -1,23 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { parseDesignMentions } from '../src/renderer/src/service/designMention'
-import {
-  productDesignStageMentionFromText,
-  workflowStageMentions
-} from '../src/renderer/src/components/AiChatPanel/components/ChatComposer/productConversation'
-
-// 计划对话提供三个业务目标，和只允许当前阶段重入的调试菜单分开。
-test('计划阶段提供技术规划、需求设计与 UI 设计三个对话目标', () => {
-  assert.deepEqual(workflowStageMentions('planning').map((item) => item.node), [
-    'technical_planning', 'requirements', 'ui_confirmation'
-  ])
-  assert.deepEqual(productDesignStageMentionFromText('@技术规划 调整接口方案', 'planning'), {
-    node: 'technical_planning', label: '技术规划', description: '返回技术规划节点',
-    request: '调整接口方案'
-  })
-  assert.equal(productDesignStageMentionFromText('@需求设计 调整需求', 'planning')?.node, 'requirements')
-  assert.equal(productDesignStageMentionFromText('@技术规划 调整方案', 'design'), undefined)
-})
 
 /** 复刻出问题的那份页面清单：展示名带空格，pageId 是下划线形式。 */
 const HELLO_WORLD_PAGES = [{ pageId: 'hello_world', name: 'Hello World' }]

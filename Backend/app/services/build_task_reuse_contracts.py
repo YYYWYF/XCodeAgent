@@ -55,26 +55,3 @@ class ReuseFacts(FrozenPlanningModel):
     retained_endpoint_owners: Annotated[tuple[RetainedEndpointOwner, ...], BeforeValidator(tuple_input)]
     external_capabilities: Annotated[tuple[ExternalCapability, ...], BeforeValidator(tuple_input)]
     issues: Annotated[tuple[ValidationIssue, ...], BeforeValidator(tuple_input)] = Field(default=())
-
-    def retained_subset(self, task_ids: tuple[str, ...]) -> "ReuseFacts":
-        """按已组装的保留集合投影全部来源事实，不改写原始正式基线。"""
-
-        selected = set(task_ids)
-        known = {task for tasks in self.retained_task_ids_by_unit.values() for task in tasks}
-        if not selected <= known:
-            raise ValueError("保留集合包含不属于正式基线的任务。")
-        return ReuseFacts(
-            retained_task_ids_by_unit={
-                unit: [task for task in tasks if task in selected]
-                for unit, tasks in self.retained_task_ids_by_unit.items()
-            },
-            reusable_capabilities_by_unit={
-                unit: {capability: [task for task in tasks if task in selected]
-                       for capability, tasks in capabilities.items() if selected.intersection(tasks)}
-                for unit, capabilities in self.reusable_capabilities_by_unit.items()
-            },
-            retained_endpoint_owners=tuple(owner for owner in self.retained_endpoint_owners
-                                           if owner.owner_task_id in selected),
-            external_capabilities=self.external_capabilities,
-            issues=self.issues,
-        )

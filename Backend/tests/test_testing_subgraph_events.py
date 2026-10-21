@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import unittest
-from typing import Any
 from unittest.mock import patch
 
-from app.agents.tool_activity_stream import ToolActivityCallback
 from app.graph.subgraphs.testing import (
     INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE,
     INTEGRATION_TEST_PROGRESS_REPORTER_KEY,
     _check_progress_snapshot_writer,
-    _route_frontend_performance_confirmation,
     _repair_scoped_tasks,
-    _route_unit_test_confirmation,
     actual_project_checks,
     build_project_checks,
     build_testing_subgraph,
@@ -297,7 +293,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         clarification = {
             "mode": "frontend_performance_confirmation",
             "status": "requires_user_input",
-            "message": "是否执行前端性能测试？",
+            "message": "是否跳过前端性能测试？",
             "questions": [{"id": "frontend_performance_confirmation"}],
         }
 
@@ -356,7 +352,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         clarification = {
             "mode": "frontend_performance_confirmation",
             "status": "requires_user_input",
-            "message": "是否执行前端性能测试？",
+            "message": "是否跳过前端性能测试？",
             "questions": [{"id": "frontend_performance_confirmation"}],
         }
         cached_build_results = [
@@ -559,27 +555,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             result["clarification"]["mode"],
             "unit_test_confirmation",
         )
-        self.assertEqual(
-            result["clarification"]["message"],
-            "构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。",
-        )
-        question = result["clarification"]["questions"][0]
-        self.assertEqual(question["question"], "是否执行单元测试？")
-        self.assertEqual(
-            [(option["label"], option["value"]) for option in question["options"]],
-            [("执行单元测试", "run"), ("不执行单元测试", "skip")],
-        )
         invoke_agent.assert_not_called()
-
-    def test_unit_test_choices_route_to_generation_or_skip(self) -> None:
-        """确认选项分别进入测试生成和跳过分支，不能颠倒行为。"""
-
-        for decision, target in [("run", "generate_unit_tests"), ("skip", "skip_unit_tests")]:
-            with self.subTest(decision=decision):
-                result = unit_test_confirmation({"unit_test_decision": decision})
-                self.assertEqual(result["status"], "in_progress")
-                self.assertEqual(result["clarification"], {})
-                self.assertEqual(_route_unit_test_confirmation(result), target)
 
     def test_disabled_unit_test_generation_skips_confirmation(self) -> None:
         """快速修改模式关闭测试生成时不应被新的确认门阻塞。"""
@@ -591,7 +567,7 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         self.assertIn("unit_test_confirmation:auto_skipped_disabled", result["test_events"])
 
     def test_frontend_performance_confirmation_pauses_without_decision(self) -> None:
-        """构建检查完成后未选择性能测试时，应暂停并展示正向动作。"""
+        """单测完成后未选择性能测试时，应暂停并展示确认载荷。"""
 
         with patch(
             "app.graph.subgraphs.testing.frontend_performance_available",
@@ -610,36 +586,6 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             "frontend_performance_confirmation",
         )
         self.assertEqual(result["integration_next_action"], "await_user_input")
-        question = result["clarification"]["questions"][0]
-        self.assertEqual(question["question"], "是否执行前端性能测试？")
-        self.assertEqual(
-            [(option["label"], option["value"]) for option in question["options"]],
-            [("执行性能测试", "run"), ("跳过性能测试", "skip")],
-        )
-        self.assertIn("是否执行前端性能测试？", result["clarification"]["message"])
-
-    def test_frontend_performance_routes_only_explicit_actions(self) -> None:
-        """执行、跳过按动作路由，含糊的是非答案不能越过确认门。"""
-
-        for decision, expected in (
-            ("run", "frontend_performance_test"),
-            ("skip", "skip_frontend_performance"),
-            ({"selected": ["run"]}, "frontend_performance_test"),
-            ({"selected": "skip"}, "skip_frontend_performance"),
-            ("是", "await_user_input"),
-            ("否", "await_user_input"),
-            (True, "await_user_input"),
-            (False, "await_user_input"),
-            ("继续", "await_user_input"),
-            ("", "await_user_input"),
-        ):
-            with self.subTest(decision=decision):
-                self.assertEqual(
-                    _route_frontend_performance_confirmation(
-                        {"frontend_performance_decision": decision}
-                    ),
-                    expected,
-                )
 
     def test_frontend_performance_confirmation_auto_skips_when_disabled(self) -> None:
         """快速修改流程关闭性能测试时自动跳过确认门。"""
@@ -897,58 +843,6 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             "正在调用 TestGeneration Agent",
             progress_events[0]["check"]["evidence"],
         )
-
-    def test_generation_tool_activity_updates_checks_and_clears_on_completion(self) -> None:
-        """真实调用适配器必须转发工具生命周期，生成终态必须清除临时活动。"""
-
-        snapshots: list[dict[str, Any]] = []
-        activity = {
-            "callId": "read-source", "tool": "read_file", "category": "read",
-            "message": "正在读取文件：/frontend/src/Orders.tsx",
-            "path": "/frontend/src/Orders.tsx",
-        }
-
-        def generate(
-            state: dict[str, Any],
-            workspace: str | None,
-            *,
-            selected_skill_names: list[str] | None,
-            on_tool_activity: ToolActivityCallback,
-        ) -> dict[str, Any]:
-            """模拟底层 Agent 连续发布同一次工具调用的各个状态。"""
-
-            self.assertEqual(workspace, "/tmp/workspace")
-            self.assertEqual(selected_skill_names, ["test-skill"])
-            for status in ("running", "completed", "failed"):
-                on_tool_activity({**activity, "status": status})
-            return {"status": "skipped", "summary": "无可生成测试。"}
-
-        with patch(
-            "app.graph.subgraphs.testing.get_stream_writer", return_value=snapshots.append,
-        ), patch(
-            "app.agents.test_generation.generate_or_update_unit_tests_with_agent",
-            side_effect=generate,
-        ):
-            config = {"configurable": {
-                INTEGRATION_TEST_PROGRESS_REPORTER_KEY: _check_progress_snapshot_writer("unit_test.checks"),
-            }}
-            state = {
-                "workspace": "/tmp/workspace", "selected_skill_names": ["test-skill"],
-                "unit_test_generation_context": {
-                    "has_targets": True, "affected_layers": ["frontend", "backend"],
-                },
-            }
-            generated = generate_unit_tests(state, config=config)
-            validate_generated_unit_tests({**state, **generated}, config=config)
-
-        self.assertEqual(len(snapshots), 10)
-        self.assertTrue(all(event["type"] == "unit_test.checks" for event in snapshots))
-        for index, status in enumerate(("running", "completed", "failed")):
-            for check in snapshots[3 + index * 2]["checks"]:
-                self.assertEqual(check["activeToolActivity"], {**activity, "status": status})
-                self.assertIn("正在调用 TestGeneration Agent", check["evidence"])
-        self.assertTrue(all("activeToolActivity" not in check for check in snapshots[-1]["checks"]))
-        self.assertNotIn("activeToolActivity", str(generated))
 
     def test_final_results_place_generation_and_unit_tests_after_build(self) -> None:
         """完成态矩阵按每层构建、生成检查、单元测试的顺序返回。"""

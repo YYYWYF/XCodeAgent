@@ -1,6 +1,8 @@
 .idea
 .DS_Store
 **/.env
+.env.*
+!.env.example
 **/var/workspaces/
 .claude/
 .codegraph/
@@ -14,3 +16,35 @@ __pycache__/
 *.bak
 .pnpm-store/
 .vscode/
+
+# Runtime data and local package caches.
+/var/
+.npm-cache/
+node_modules/
+
+# Python test/tool output and virtual environments.
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+*.py[cod]
+*.egg-info/
+
+# Root-level distribution output; Frontend/build contains source packaging assets.
+/build/
+/dist/
+
+# Rotated logs and local editor/operating-system files.
+*.log
+*.log.*
+*.tmp
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini

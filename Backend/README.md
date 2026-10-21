@@ -24,7 +24,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中，提供主工作流可调试节点，并可传入已落盘的 RequirementSpec、ProjectPlan、WorkspaceSnapshot 或 BuildTaskPlan 路径。选择 `launch_project` 会进入验收子图并强制重跑项目启动；审查和最终验收确认仍通过各自的结构化确认动作提交。
+Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中，可以选择开始节点并传入已落盘的 RequirementSpec、ProjectPlan、WorkspaceSnapshot 或 BuildTaskPlan 路径。
 
 服务启动后：
 
@@ -132,26 +132,26 @@ curl -X POST http://127.0.0.1:8000/tools/terminal/exec \
 
 实际密钥放在本地 `.env`，并已被 `.gitignore` 忽略。提交或分享代码时使用 `.env.example` 作为模板。
 
-OpenAI-compatible 服务示例：
+模型转发服务连接示例（先启动相邻的 `code7.1_model_transmit`）：
 
 ```dotenv
-MODEL_PROVIDER=openai
-MODEL_BASE_URL=https://api.moonshot.cn/v1
-MODEL_API_KEY=replace-with-your-token
-MODEL_NAME=moonshot-v1-8k
+MODEL_TRANSMIT_URL=http://127.0.0.1:8100
+MODEL_TRANSMIT_TOKEN=replace-with-service-token
+MODEL_TRANSMIT_TRUST_ENV=false
 ```
 
-也可以使用 `OPENAI_BASE_URL`、`OPENAI_API_KEY` 和 `OPENAI_MODEL` 作为 `MODEL_*` 的兼容别名。`MODEL_PROVIDER` 只支持 `openai` 或 `openai-compatible`，后者会被归一化为 `openai`。
+本副本不读取任何真实上游地址、模型名称、密钥或 UI 独立模型配置。模型信息在首次调用时通过 `/model-info/run` 获取，推理通过 `/model-inference/run`，两者均使用 AG-UI。统一适配器返回 LangChain 消息，保留文本流、工具调用、结束原因和用量。服务未启动不会阻塞后端导入或登录窗口，实际模型调用会明确失败。详见 `../docs/MODEL_TRANSMIT.md`。
 
 可选覆盖项：
 
 ```dotenv
 AGENT_SYSTEM_PROMPT="You are a helpful local agent."
 AGENT_TEMPERATURE=0.2
-AGENT_MAX_TOKENS=2048
-UI_DESIGN_MAX_TOKENS=4096
-UI_DESIGN_MAX_RETRIES=2
-MODEL_TRUST_ENV=false
+AGENT_MAX_TOKENS=32768
+DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS=32768
+DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES=1
+MODEL_MAX_RETRIES=2
+MODEL_TIMEOUT_SECONDS=120
 MODEL_OUTPUT_LOG_ENABLED=false
 DEVAGENTSTUDIO_WORKSPACE_ROOT=/Users/yifei/Documents/example-workspace
 DEVAGENTSTUDIO_CHECKPOINT_RETENTION_DAYS=30
@@ -160,7 +160,7 @@ LANGSMITH_API_KEY=replace-with-your-langsmith-key
 LANGSMITH_PROJECT=devagentstudio-workflow
 ```
 
-`UI_DESIGN_MAX_TOKENS` 控制单个 UI 设计稿模型调用的最大输出 token 数；`UI_DESIGN_MAX_RETRIES` 控制设计稿代码校验失败后的最大自动修复次数。
+`DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS` 控制单个 UI 设计稿模型调用的输出预算；`DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES` 控制设计稿代码校验失败后的业务修复次数。上游 SDK 重试仅由转发服务根据调用预算执行，Studio 的 HTTP 传输层不自动重试。
 
 `MODEL_OUTPUT_LOG_ENABLED=true` 会在模型生成时把文本输出流式打印到后端控制台，并在调用结束后打印工具调用概要，便于调试。
 

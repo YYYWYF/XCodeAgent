@@ -11,7 +11,6 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.repair_planner import plan_repairs_with_repair_planner_agent
-from app.agents.tool_activity_stream import ToolActivityCallback
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.graph.state import ProjectState
@@ -25,7 +24,6 @@ from app.services.frontend_performance_runner import (
 from app.services.integration_test_runner import run_integration_checks
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
 from app.services.test_validation import evaluate_quality_gate
-from app.services.test_generation_diagnostics import generation_failure_diagnostics
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.test_documents import (
@@ -122,8 +120,6 @@ def _check_progress_snapshot_writer(
             ),
             "report_path": str(check.get("report_path") or "")[:1_000] or None,
         }
-        if status == "running" and isinstance(check.get("activeToolActivity"), dict):
-            checks[check_id]["activeToolActivity"] = dict(check["activeToolActivity"])
         writer(
             {
                 "type": event_type,
@@ -273,24 +269,24 @@ def _unit_test_confirmation_payload() -> dict[str, Any]:
     return {
         "mode": "unit_test_confirmation",
         "status": "requires_user_input",
-        "message": "构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。",
+        "message": "构建检查已完成。单元测试不是必需步骤，可能耗时较长，是否跳过单元测试？",
         "questions": [
             {
                 "id": "unit_test_confirmation",
                 "header": "单元测试",
-                "question": "是否执行单元测试？",
+                "question": "是否跳过单元测试？",
                 "type": "choice",
                 "allowOther": False,
                 "options": [
                     {
-                        "label": "执行单元测试",
-                        "value": "run",
-                        "description": "继续生成并执行单元测试。",
-                    },
-                    {
-                        "label": "不执行单元测试",
+                        "label": "是，跳过单元测试",
                         "value": "skip",
                         "description": "不生成、不执行单元测试。",
+                    },
+                    {
+                        "label": "否，继续执行",
+                        "value": "run",
+                        "description": "继续生成并执行单元测试。",
                     },
                 ],
             }
@@ -301,7 +297,7 @@ def _unit_test_confirmation_payload() -> dict[str, Any]:
 def _frontend_performance_decision(
     state: ProjectState | dict[str, Any],
 ) -> str:
-    """读取明确的执行或跳过动作，不再按反向的是非问题解释答案。"""
+    """读取并规范化用户对前端性能测试的 skip/run 决策。"""
 
     raw_decision = state.get("frontend_performance_decision")
     if isinstance(raw_decision, dict) and "selected" in raw_decision:
@@ -312,7 +308,11 @@ def _frontend_performance_decision(
             else selected
         )
     normalized = str(raw_decision or "").strip().casefold()
-    return normalized if normalized in _FRONTEND_PERFORMANCE_DECISIONS else ""
+    if normalized in {"skip", "是", "yes", "true", "跳过"}:
+        return "skip"
+    if normalized in {"run", "否", "no", "false", "继续"}:
+        return "run"
+    return ""
 
 
 def _frontend_performance_confirmation_payload() -> dict[str, Any]:
@@ -323,25 +323,25 @@ def _frontend_performance_confirmation_payload() -> dict[str, Any]:
         "status": "requires_user_input",
         "message": (
             "构建检查已完成。前端性能测试不是必需步骤，可能耗时较长，"
-            "是否执行前端性能测试？"
+            "是否跳过前端性能测试？"
         ),
         "questions": [
             {
                 "id": "frontend_performance_confirmation",
                 "header": "前端性能测试",
-                "question": "是否执行前端性能测试？",
+                "question": "是否跳过前端性能测试？",
                 "type": "choice",
                 "allowOther": False,
                 "options": [
                     {
-                        "label": "执行性能测试",
-                        "value": "run",
-                        "description": "启动用户 frontend 工程并执行 Lighthouse 性能测试。",
-                    },
-                    {
-                        "label": "跳过性能测试",
+                        "label": "是，跳过性能测试",
                         "value": "skip",
                         "description": "不启动前端、不执行 Lighthouse 性能测试。",
+                    },
+                    {
+                        "label": "否，继续执行",
+                        "value": "run",
+                        "description": "启动用户 frontend 工程并执行 Lighthouse 性能测试。",
                     },
                 ],
             }
@@ -471,14 +471,6 @@ def collect_unit_test_targets(state: ProjectState) -> dict[str, Any]:
                     changed_paths.append(path)
                 if path and _source_layer(path) and _is_behavioral_change(item):
                     source_paths.append(path)
-    if not changed_paths:
-        # 节点业务重试没有旧 Build 内存结果；阶段入口已从当前正式任务计划和磁盘收集文件。
-        for item in state.get("development_review_files", []):
-            path = _normalized_workspace_path(item)
-            if path:
-                changed_paths.append(path)
-                if _source_layer(path):
-                    source_paths.append(path)
     source_paths = list(dict.fromkeys(source_paths))[:100]
     changed_paths = list(dict.fromkeys(changed_paths))
     affected_layers = list(
@@ -546,24 +538,12 @@ def generate_unit_tests(
         if layer in {"frontend", "backend"}
     ]
     reporter = _progress_reporter(config)
-    generation_evidence = "正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。"
-
-    def report_tool_activity(activity: dict[str, Any]) -> None:
-        """把同一次测试生成调用的最新工具活动同步到本轮各端生成检查。"""
-
-        for layer in context_layers:
-            check = _generation_progress_check(
-                layer, evidence=generation_evidence, required=True,
-            )
-            check["activeToolActivity"] = activity
-            _report_generation_progress(reporter, check=check, status="running")
-
     for layer in context_layers:
         _report_generation_progress(
             reporter,
             check=_generation_progress_check(
                 layer,
-                evidence=generation_evidence,
+                evidence="正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。",
                 required=True,
             ),
             status="running",
@@ -589,7 +569,6 @@ def generate_unit_tests(
                 state={**state, "unit_test_generation_context": context},
                 workspace=workspace_from_state(state),
                 selected_skill_names=state.get("selected_skill_names"),
-                on_tool_activity=report_tool_activity if reporter is not None else None,
             )
         except Exception as exc:
             result = _skipped_generation_result(
@@ -673,13 +652,6 @@ def validate_generated_unit_tests(
     passed = status != "failed" and not validation_failed
     skipped = status == "skipped" and not validation_failed
     summary = str(generation.get("summary") or "未生成单元测试文件。")[:2_000]
-    # 质量门与修复规划必须消费确定性失败，不得用模型自述的成功摘要覆盖实际违规。
-    failure_evidence, failure_details = generation_failure_diagnostics(
-        workspace_from_state(state) or "", validation,
-    ) if not passed else ("", [])
-    if not passed and not failure_details:
-        # 无确定性违规项时仍保留真实生成异常，不能用通用文案掩盖模型或工具错误。
-        failure_evidence = f"生成检查未通过：{summary}"
     checks = [
         {
             "id": f"{layer}_test_generation",
@@ -699,10 +671,7 @@ def validate_generated_unit_tests(
             "skipped": skipped,
             "required": bool(generation.get("test_files")) and not skipped,
             "command": None,
-            "evidence": failure_evidence[:2_000] if not passed else summary,
-            "generation_validation": validation,
-            "generation_failure_details": failure_details,
-            "agent_summary": summary,
+            "evidence": summary,
             "failure_category": None if passed else "test_generation_failure",
             "execution": {
                 "tool": "test-generation-agent" if not skipped else "none",
@@ -799,7 +768,6 @@ def _invoke_test_generation_agent(
     state: dict[str, Any],
     workspace: str | None,
     selected_skill_names: list[str] | None,
-    on_tool_activity: ToolActivityCallback | None = None,
 ) -> dict[str, Any]:
     """延迟导入 TestGeneration Agent，避免 Agent bundle 初始化污染确定性收集阶段。"""
 
@@ -809,7 +777,7 @@ def _invoke_test_generation_agent(
         state,
         workspace,
         selected_skill_names=selected_skill_names,
-        on_tool_activity=on_tool_activity,
+        on_tool_activity=None,
     )
 
 
@@ -1293,7 +1261,7 @@ def actual_project_checks(
 def frontend_performance_confirmation(
     state: ProjectState,
 ) -> dict[str, Any]:
-    """在构建检查完成后暂停，等待用户明确执行或跳过前端性能测试。"""
+    """在单元测试阶段完成后暂停，等待用户选择是否跳过前端性能测试。"""
 
     if state.get("frontend_performance_test_enabled") is False:
         return {
@@ -2001,8 +1969,6 @@ def integration_test(state: ProjectState) -> dict:
         if waiting_for_test_decision
         else "completed"
         if quality_gate_passed
-        else "in_progress"
-        if result.get("integration_next_action") == "small_task_repair"
         else "failed"
     )
     resumed_build_checks_completed = (

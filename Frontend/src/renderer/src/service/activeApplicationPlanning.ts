@@ -1,4 +1,3 @@
-import { mergeEndedTaskAvailability } from './endedTaskAvailability'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -13,6 +12,7 @@ import { mergeWorkbenchProgress } from './workbenchProgressMerge'
 import {
   beginConnectionRequest,
   completeConnectionRequest,
+  connectionAllowsMutation,
   failConnectionRequest,
   initialConnectionState,
   type ConnectionState
@@ -30,18 +30,12 @@ export type ApplicationPlanningCurrentState = {
   connection: ConnectionState
   /** 当前 renderer 是否由持久化状态恢复该规划，用于只执行一次本地产物冷恢复。 */
   restoreArtifactsFromDisk?: boolean
-  /** 后端明确没有执行存档时，不展示旧确认、恢复动作或历史执行错误。 */
-  checkpointMissing?: boolean
   /** 当前规划会话最近一次模型/Workflow 错误，仅用于前端实时展示。 */
   error?: string
   /** 当前规划状态只读同步失败时的界面提示。 */
   syncError?: string
   /** 当前一次显式恢复动作的失败原因，不覆盖后端签发的 Recovery ActionPlan。 */
   recoveryActionError?: string
-  /** 用户正在结束本轮修订；失败后的按钮继续 End，不改为恢复已取消的 Graph。 */
-  endRequested?: boolean
-  /** 停止生成尚未确认退出时，只允许重试停止，不提前恢复业务执行。 */
-  stopRequested?: boolean
   workflow?: WorkflowRunPayload
   /** Backend 根据 Durable Execution、checkpoint 与 Native Interrupt 生成的唯一恢复解释。 */
   recovery?: ApplicationPlanningRecoveryProjection
@@ -50,11 +44,6 @@ export type ApplicationPlanningCurrentState = {
 export type ApplicationPlanningCurrentEvent =
   | { type: 'run_started'; applicationId: string; threadId: string }
   | { type: 'run_settled'; applicationId: string; threadId: string }
-  | { type: 'planning_end_started'; applicationId: string; threadId: string }
-  | { type: 'planning_stop_started'; applicationId: string; threadId: string }
-  | { type: 'planning_stopped'; applicationId: string; threadId: string; lifecycle: ApplicationLifecycle }
-  | { type: 'planning_ended'; applicationId: string; threadId: string;
-      lifecycle: ApplicationLifecycle; workflow: WorkflowRunPayload }
   | { type: 'template_generation_failed'; applicationId: string; threadId: string; error: string; connectionError?: string }
   | { type: 'recovery_action_started'; applicationId: string; threadId: string }
   | { type: 'recovery_action_failed'; applicationId: string; threadId: string; error: string }
@@ -243,7 +232,7 @@ export function latestApplicationLifecycle(
     current,
     incoming
   )
-  return mergeEndedTaskAvailability(mergeWorkbenchProgress(merged, current, incoming), current, incoming)
+  return mergeWorkbenchProgress(merged, current, incoming)
 }
 
 // 直接根据权威 lifecycle 状态计算首页展示状态。
@@ -272,6 +261,16 @@ export function planningTransportBusy(
   state?: ApplicationPlanningCurrentState
 ): boolean {
   return state?.transportState === 'running' || state?.transportState === 'reconciling'
+}
+
+/** 判断 mutation 是否必须等待 transport 回到已确认的 idle 状态。 */
+export function planningMutationBlocked(
+  state?: ApplicationPlanningCurrentState
+): boolean {
+  return Boolean(
+    state &&
+      (state.transportState !== 'idle' || !connectionAllowsMutation(state.connection))
+  )
 }
 
 /** 从恢复投影、Workflow、lifecycle 与当前运行态中恢复真实失败原因，绝不使用恢复说明覆盖错误。 */
@@ -323,8 +322,7 @@ function reducePlanningWorkflow(
       current.connection.requestGeneration
     ),
     lifecycle,
-    workflow: mergedWorkflow,
-    checkpointMissing: false
+    workflow: mergedWorkflow
   }
 }
 
@@ -341,27 +339,11 @@ export function reduceApplicationPlanningCurrentState(
     return {
       ...current,
       error: undefined,
-      transportState: 'running',
-      checkpointMissing: false
+      transportState: 'running'
     }
   }
   if (event.type === 'run_settled') {
     return { ...current, transportState: 'idle' }
-  }
-  if (event.type === 'planning_end_started') {
-    return { ...current, endRequested: true, transportState: 'running', error: undefined, recoveryActionError: undefined }
-  }
-  if (event.type === 'planning_stop_started') {
-    return { ...current, stopRequested: true, transportState: 'running', error: undefined, recoveryActionError: undefined }
-  }
-  if (event.type === 'planning_stopped') {
-    return { ...current, lifecycle: latestApplicationLifecycle(current.lifecycle, event.lifecycle),
-      transportState: 'idle', stopRequested: false, error: undefined, recoveryActionError: undefined }
-  }
-  if (event.type === 'planning_ended') {
-    return { ...current, lifecycle: latestApplicationLifecycle(current.lifecycle, event.lifecycle),
-      workflow: event.workflow, transportState: 'idle', recovery: undefined,
-      error: undefined, recoveryActionError: undefined, checkpointMissing: false, endRequested: false }
   }
   if (event.type === 'template_generation_failed') {
     // 模板任务与 Planning Graph 独立；仅失败的后端校准改变连接，不制造 Graph 恢复事实。
@@ -407,10 +389,7 @@ export function reduceApplicationPlanningCurrentState(
     return {
       ...current,
       connection: completeConnectionRequest(current.connection, event.requestGeneration),
-      transportState: 'idle',
-      checkpointMissing: true,
-      workflow: undefined, recovery: undefined, error: undefined, syncError: undefined,
-      recoveryActionError: undefined
+      transportState: 'idle'
     }
   }
   if (event.type === 'reconcile_received') {
@@ -453,7 +432,6 @@ export function reduceApplicationPlanningCurrentState(
     return {
       ...current,
       workflow: event.workflow,
-      checkpointMissing: false,
       lifecycle,
       recovery: event.recovery,
       error,

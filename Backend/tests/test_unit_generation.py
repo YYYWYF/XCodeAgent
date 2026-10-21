@@ -59,9 +59,7 @@ def _settings(*, dag_unit_max_tokens: int = 4096) -> Settings:
     """构造不读取环境变量的模型设置。"""
 
     return Settings(
-        model_base_url="https://example.com/v1",
-        model_api_key="test-key",
-        model_name="test-model [display]",
+        model_transmit_url="http://127.0.0.1:8100",
         dag_unit_max_tokens=dag_unit_max_tokens,
     )
 

@@ -37,11 +37,8 @@ DAG_GENERATION_STAGES: tuple[tuple[str, str], ...] = (
 class PlanningRunProgressPublisher:
     """把 Controller 的只读快照投影并写入现有 DAG custom stream。"""
 
-    def __init__(
-        self,
-        writer: ProgressWriter,
-    ) -> None:
-        """绑定单个 Run 的进度写入器和 revision 顺序门禁，名称由 Run 持有。"""
+    def __init__(self, writer: ProgressWriter) -> None:
+        """绑定单个 Run 的同步 stream writer，并初始化 revision 顺序门禁。"""
 
         self._writer = writer
         self._planning_run_id: str | None = None
@@ -81,7 +78,7 @@ def emit_dag_generation_progress(
 
 
 def create_planning_run_progress_publisher() -> PlanningRunSnapshotPublisher | None:
-    """在 LangGraph 上下文创建 publisher，名称只从快照读取，离线调用安全降级。"""
+    """在 LangGraph custom-stream 上下文创建 publisher，离线调用安全降级。"""
 
     try:
         writer = get_stream_writer()
@@ -94,21 +91,9 @@ def _planning_run_progress_message(snapshot: DagGenerationSnapshot) -> str:
     """从当前离散状态生成简短说明，不引入百分比或预测完成度。"""
 
     if snapshot["status"] == "failed":
-        return "开发任务生成失败，已停止。"
+        return "PlanningRun 已失败，DAG 生成停止。"
     if snapshot["status"] == "cancelled":
-        return "开发任务生成已取消。"
-    # 当前阶段优先于历史修复轮次；仅生成阶段按 Unit 活动细化说明。
-    ready = snapshot["summary"]["readyUnitCount"]
-    total = snapshot["summary"]["unitCount"]
-    phase_message = {
-        "preparing": "正在准备开发任务。",
-        "global_check": f"正在进行全局校验，{ready}/{total} 项工作已就绪。",
-        "assembling": "正在汇总开发任务。",
-        "validating": "正在校验执行计划。",
-        "persisting_pending": "正在保存待确认计划。",
-    }.get(snapshot["phase"])
-    if phase_message is not None:
-        return phase_message
+        return "PlanningRun 已取消，DAG 生成停止。"
     active = next(
         (
             unit
@@ -119,30 +104,16 @@ def _planning_run_progress_message(snapshot: DagGenerationSnapshot) -> str:
     )
     if active is not None:
         action = "校验" if active["status"] == "validating" else "生成"
-        display_name = active.get("displayName") or _unit_fallback_name(active)
-        return f"正在{action}开发任务：{display_name}。"
-    if snapshot["globalRepairRound"] > 0:
-        return (
-            f"正在进行全局修复，第 {snapshot['globalRepairRound']}/"
-            f"{snapshot['globalRepairLimit']} 轮。"
-        )
-    if snapshot["summary"]["pendingUnitCount"] > 0:
-        return "开发任务等待安排。"
-    return f"开发任务进度已更新，{ready}/{total} 项工作已就绪。"
-
-
-def _unit_fallback_name(unit: Mapping[str, Any]) -> str:
-    """在业务名称不可用时仅返回中文类别，不回显 Unit ID。"""
-
-    return {
-        "frontend": "前端开发任务",
-        "backend": "后端开发任务",
-        "database": "数据库开发任务",
-        "page": "页面开发任务",
-        "application": "应用任务",
-        "app": "应用集成任务",
-        "authorization": "权限配置任务",
-    }.get(str(unit.get("kind") or ""), "开发任务")
+        return f"正在{action} Unit {active['id']}。"
+    ready = snapshot["summary"]["readyUnitCount"]
+    total = snapshot["summary"]["unitCount"]
+    if snapshot["phase"] == "global_check":
+        return f"正在执行 Global 检查，{ready}/{total} 个 Unit 已就绪。"
+    if snapshot["phase"] in {"assembling", "validating"}:
+        return f"正在{('组装' if snapshot['phase'] == 'assembling' else '校验')}完整 DAG。"
+    if snapshot["phase"] == "persisting_pending":
+        return "正在保存待确认的 Build Task Plan。"
+    return f"PlanningRun 已更新，{ready}/{total} 个 Unit 已就绪。"
 
 
 class BuildTaskProgressTracker:

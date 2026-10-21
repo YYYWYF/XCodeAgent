@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.git_branch import GitBranchError, validate_branch_name
-from app.services.git_credentials import git_env, git_failure_detail
 from app.services.version_publish import build_authenticated_remote_url
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -152,70 +151,7 @@ def push_baseline_to_branch(
             commit_sha,
             f"远端已存在版本 {branch}，未覆盖其中的代码。",
         )
-
-    # 用户确认过覆盖，但服务端以非快进拒绝：`--force` 在这里**没用** ——
-    # 服务端开了 receive.denyNonFastForwards 时会把 force 一起拒掉
-    # （"denying non-fast-forward ... you should pull first"），这是服务端策略，
-    # 客户端无法绕过。模板基线又是全新初始化的历史，与远端既有分支没有共同祖先，
-    # 所以只要远端已有同名分支，普通推送和 force 都推不上去。
-    # 要真正"全覆盖"，只能先删掉远端那条分支再推 —— 与新建时确认覆盖的语义一致。
-    if allow_overwrite and _is_non_fast_forward_rejection(detail):
-        return _replace_remote_branch(root, remote_url, branch, commit_sha)
-
     return _branch_result(branch, "failed", commit_sha, detail)
-
-
-def _replace_remote_branch(
-    root: Path,
-    remote_url: str,
-    branch: str,
-    commit_sha: str,
-) -> dict[str, Any]:
-    """先删掉远端同名分支再推送，实现"全覆盖"；失败收敛为结果而不抛异常。
-
-    只在用户确认过覆盖时调用。删除前先记录远端原 HEAD 并写进结果信息 —— 这一步是
-    破坏性的（那条分支上的提交会变成不可达对象），把 sha 留在提示里，用户需要时还能
-    从服务端的 reflog / 回收站找回。
-
-    远端分支不存在时（`ls-remote` 无输出）直接跳过删除，避免多一次无谓的失败调用。
-    """
-
-    previous_sha = ""
-    listed = _run_git(
-        root, ["ls-remote", remote_url, f"refs/heads/{branch}"], timeout=_BRANCH_CHECK_TIMEOUT_SECONDS
-    )
-    if listed.returncode == 0 and listed.stdout.strip():
-        previous_sha = listed.stdout.split()[0].strip()
-
-    if previous_sha:
-        deleted = _run_git(
-            root,
-            ["push", remote_url, "--delete", f"refs/heads/{branch}"],
-            timeout=_BRANCH_PUSH_TIMEOUT_SECONDS,
-        )
-        if deleted.returncode != 0:
-            return _branch_result(
-                branch,
-                "failed",
-                commit_sha,
-                f"远端已存在版本 {branch}，但删除失败，无法覆盖：{_failure_detail(deleted)}",
-            )
-
-    # 分支已不存在，普通推送即可建出来（不再需要 --force）。
-    pushed = _run_git(
-        root,
-        ["push", remote_url, f"HEAD:refs/heads/{branch}"],
-        timeout=_BRANCH_PUSH_TIMEOUT_SECONDS,
-    )
-    if pushed.returncode == 0:
-        suffix = f"远端原有提交 {previous_sha[:8]} 已被覆盖。" if previous_sha else ""
-        return _branch_result(branch, "pushed", commit_sha, suffix)
-    return _branch_result(
-        branch,
-        "failed",
-        commit_sha,
-        f"远端版本 {branch} 已被删除，但重新推送失败：{_failure_detail(pushed)}",
-    )
 
 
 def create_local_branch(
@@ -326,24 +262,16 @@ def delete_remote_branch(repo_url: str, branch_name: str) -> dict[str, Any]:
     return _branch_result(branch, "failed", "", _failure_detail(completed))
 
 
-def push_workspace_branch(
-    workspace_root: str | Path,
-    *,
-    allow_overwrite: bool | None = None,
-) -> dict[str, Any]:
+def push_workspace_branch(workspace_root: str | Path) -> dict[str, Any]:
     """把工作区当前 HEAD 推到应用配置里那条分支；**永不抛异常**。
 
     分支名与仓库地址都从工作区自己的 `application.json` 读（`read_workspace_repository_target`），
     所以调用方不需要重复解析配置。未配置分支名的工作区（如「添加本地文件夹」接入的目录）
     直接返回 skipped。
 
-    `allow_overwrite` 显式传入时以它为准，为 None 才用配置里新建时确认过的
-    `branchOverwriteConfirmed`。工作台的「重试提交」走前者 —— 它有自己的确认弹窗，
-    语义是"用户此刻明确要求覆盖"，不该被新建时的旧决定束缚。
-
     两处调用方共用它：
     - Bootstrap 收尾（`workspace_bootstrap/service.py`）—— 基线提交后建出远端分支；
-    - 工作台的「重试推送」动作（`protocols/repository_branch.py`）—— 上次失败后重试。
+    - 工作台的「重试推送」动作（`protocols/repository_branch.py`）—— 上次因网络失败后重试。
     两边都要求非致命，所以异常在这里收敛成 `status: "failed"`。
     """
 
@@ -358,9 +286,7 @@ def push_workspace_branch(
             root,
             repo_url,
             branch_name,
-            allow_overwrite=(
-                overwrite_confirmed if allow_overwrite is None else allow_overwrite
-            ),
+            allow_overwrite=overwrite_confirmed,
         )
     except Exception as exc:  # noqa: BLE001 - 调用方都要求非致命
         return _branch_result("", "failed", "", f"远端版本推送失败：{exc}")
@@ -404,47 +330,11 @@ def _is_transient_push_failure(detail: str) -> bool:
     )
 
 
-def _is_non_fast_forward_rejection(detail: str) -> bool:
-    """判断推送失败是否因为"远端同名分支与本地历史分叉、且服务端禁止非快进"。
-
-    两种形态都要认，它们出现在不同阶段：
-
-    - `! [rejected] ... (fetch first)` —— **客户端**在非 force 推送时的本地拒绝；
-    - `remote: error: denying non-fast-forward ... (you should pull first)` 与
-      `! [remote rejected] ... (non-fast-forward)` —— **服务端**开了
-      receive.denyNonFastForwards，连 `--force` 一起拒绝（公司内 Gitee 就是这种）。
-
-    这不是提交信息或权限问题，重试也不会成功；只有删掉远端分支再推才能覆盖。
-    """
-
-    lowered = detail.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "denying non-fast-forward",
-            "you should pull first",
-            "non-fast-forward",
-            "fetch first",
-        )
-    )
-
-
 def _is_rejected_push(detail: str) -> bool:
-    """判断推送失败是否只是"远端分支已存在且历史分叉"这类拒绝。
-
-    只认**非快进**语义的拒绝，绝不能按 "rejected" 泛匹配 —— git 的两种输出前缀不同：
-
-    - `! [rejected]        HEAD -> v1.0 (non-fast-forward)` —— 远端已有分叉历史，
-      不覆盖是对的，返回 skipped 让用户知道没推。
-    - `! [remote rejected] HEAD -> v1.0 (pre-receive hook declined)` —— 服务端钩子拒绝，
-      最常见的原因是当前账号**没有该仓库的推送权限**（公司内 Gitee 正是按员工身份校验）。
-      这不是"已存在"，必须按 failed 报出来，否则用户会以为代码已经在远端了。
-
-    两种前缀里只有前者含子串 `[rejected]`（后者是 `[remote rejected]`），据此区分。
-    """
+    """判断推送失败是否只是"远端分支已存在且历史分叉"这类拒绝。"""
 
     lowered = detail.lower()
-    return "[rejected]" in lowered or "non-fast-forward" in lowered or "fetch first" in lowered
+    return "rejected" in lowered or "non-fast-forward" in lowered or "fetch first" in lowered
 
 
 def _read_head(repository_root: Path) -> str:
@@ -455,9 +345,10 @@ def _read_head(repository_root: Path) -> str:
 
 
 def _failure_detail(completed: subprocess.CompletedProcess[str]) -> str:
-    """从失败命令中提取可展示的原因（认证类失败附带可操作提示），并限制长度。"""
+    """从失败命令中提取可展示的原因，并限制长度。"""
 
-    return git_failure_detail(completed)
+    detail = (completed.stderr or completed.stdout or "").strip() or "未知错误"
+    return detail[:512]
 
 
 def _run_git(
@@ -474,8 +365,6 @@ def _run_git(
         ["git", *arguments],
         workspace=cwd,
         cwd=str(cwd),
-        # 禁用交互式提问：无 TTY 时等输入会把推送流程挂住（见 services/git_credentials）。
-        env=git_env(),
         text=True,
         capture_output=True,
         check=False,

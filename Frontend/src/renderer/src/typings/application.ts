@@ -108,17 +108,10 @@ export interface ApplicationAuthorizationSeed {
   initialAdministratorSubjects: string[]
 }
 
-/** 保存 SaaS 返回的应用身份，未知或在途状态禁止再次创建。 */
-export type ManagedDatabaseRegistration =
-  | { status: 'REGISTERED'; datasourceKey: string; datasourceId: number }
-  | { status: 'REGISTERING' | 'FAILED' | 'UNKNOWN' }
-
 export interface ApplicationSchemaConfig {
   schemaVersion: 6
   /** 标识 application.json 的当前配置事实版本，供规划和模板链路检测过期产物。 */
   configRevision: number
-  /** 只保存注册状态与固定绑定，不包含服务密钥和数据库凭据。 */
-  managedDatabase?: ManagedDatabaseRegistration
   appName: string
   appIcon: string
   senario: string
@@ -131,7 +124,7 @@ export interface ApplicationSchemaConfig {
    * 分支列表推断。
    */
   branches?: ApplicationBranch[]
-  /** 应用代码提交目标仓库地址（码云/GitHub）。新建应用时默认填平台仓库，用户可改成自己的仓库。 */
+  /** 应用代码提交目标仓库地址（码云/GitHub）；当前阶段固定写死，后续开放自定义。 */
   repoUrl: string
   /**
    * 当前正在开发的分支名；指向 branches 中正在编辑的那条。
@@ -190,11 +183,9 @@ export interface ApplicationSchemaConfig {
   dataSources?: ApplicationDataSourceDefinition[]
   auth: {
     enable: boolean
+    authnSource: string
     yht: {
       clientId: string
-      privateKey: string
-      publicKey: string
-      centerPublicKey: string
     }
   }
   authorization: ApplicationAuthorizationSeed
@@ -496,12 +487,7 @@ export interface ApplicationDraft {
   senario: string
   projectPath: string
   repoUrl: string
-  /**
-   * 应用代码在远端仓库中的分支名；默认 v1_0（表单标签为「版本号」），用户可改。
-   *
-   * 默认值用下划线而不是点号：公司内 Gitee 的分支名白名单只允许字母、数字、下划线
-   * （服务端错误码 git017），`v1.0` 会在推送时被 pre-receive hook 拒绝。
-   */
+  /** 应用代码在远端仓库中的分支名；默认 v1.0（表单标签为「版本号」），用户可改。 */
   branchName: string
   terminal: ApplicationTerminal
   layout: ApplicationSchemaConfig['layout']

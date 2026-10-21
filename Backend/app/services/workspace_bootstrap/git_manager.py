@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.branding import WORKSPACE_ARTIFACT_DIR_NAME
-from app.services.git_commit_message import template_baseline_commit_message
-from app.services.git_identity import apply_commit_identity
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapError
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -34,9 +32,8 @@ class BootstrapGitManager:
 
         root = Path(workspace).expanduser().resolve()
         self._run(root, ["git", "init"])
-        # 提交身份必须用仓库服务端认可的邮箱：公司内 Gitee 会校验 author email，
-        # 未授权就拒绝推送并报 git002。这里不再硬编码占位身份。
-        apply_commit_identity(root, self._run)
+        self._run(root, ["git", "config", "--local", "user.name", "DevAgentStudio"])
+        self._run(root, ["git", "config", "--local", "user.email", "devagentstudio@local"])
         # 排除运行时产物，避免日志、缓存和 checkpoint 污染后续提交检查。
         gitignore = root / ".gitignore"
         if not gitignore.exists():
@@ -46,7 +43,7 @@ class BootstrapGitManager:
         if (root / WORKSPACE_ARTIFACT_DIR_NAME).is_dir():
             add_paths.append(WORKSPACE_ARTIFACT_DIR_NAME)
         self._run(root, ["git", "add", "--", *add_paths])
-        self._run(root, ["git", "commit", "-m", template_baseline_commit_message()])
+        self._run(root, ["git", "commit", "-m", "chore: 模板初始化"])
         return self._run(root, ["git", "rev-parse", "HEAD"]).strip()
 
     def verify_baseline(self, workspace: str | Path) -> str:

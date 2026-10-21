@@ -13,7 +13,6 @@ from app.services.frontend_project_launcher import (
     stop_frontend_project,
 )
 from app.services.workspace_process_registry import workspace_process_registry
-from app.services.lighthouse_report import parse_lighthouse_report
 from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -68,7 +67,6 @@ def _lighthouserc_config(preview_url: str) -> dict[str, Any]:
                 "url": [preview_url],
                 "numberOfRuns": 1,
                 "settings": {
-                    "locale": "zh-CN",
                     # 保持 Lighthouse 7.3 可用的移动端模拟采集链路，
                     # 但把网络/CPU 限速调到接近本地无限制，避免
                     # dev server 未打包依赖被 1.6Mbps 模型放大。
@@ -290,7 +288,6 @@ def run_frontend_performance_check(
         }
         if parsed is not None:
             result["performance_scores"] = parsed["scores"]
-            result["performance_details"] = parsed["details"]
             result["performance_metrics"] = parsed["metrics"]
         if report_path:
             result["report_path"] = str(report_path)
@@ -427,7 +424,36 @@ def _parse_lighthouse_report(runtime_dir: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(lhr, dict):
         return None
-    return parse_lighthouse_report(lhr)
+    categories = lhr.get("categories") if isinstance(lhr.get("categories"), dict) else {}
+    audits = lhr.get("audits") if isinstance(lhr.get("audits"), dict) else {}
+    scores: dict[str, int] = {}
+    for key, label in (
+        ("performance", "performance"),
+        ("accessibility", "accessibility"),
+        ("best-practices", "best_practices"),
+        ("seo", "seo"),
+    ):
+        category = categories.get(key)
+        if isinstance(category, dict):
+            raw_score = category.get("score")
+            if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool):
+                scores[label] = max(0, min(100, int(round(raw_score * 100))))
+    metrics: dict[str, float] = {}
+    for key, output_key in (
+        ("first-contentful-paint", "fcp"),
+        ("largest-contentful-paint", "lcp"),
+        ("total-blocking-time", "tbt"),
+        ("cumulative-layout-shift", "cls"),
+        ("speed-index", "si"),
+    ):
+        audit = audits.get(key)
+        if isinstance(audit, dict):
+            value = audit.get("numericValue")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                metrics[output_key] = round(float(value), 3)
+    if not scores and not metrics:
+        return None
+    return {"scores": scores, "metrics": metrics}
 
 
 def _find_html_report(runtime_dir: Path) -> Path | None:

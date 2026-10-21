@@ -11,16 +11,6 @@ OUTPUT_LIMIT = 4_000
 LOG_READ_LIMIT = 256_000
 
 
-def database_resource_failure(text: str) -> bool:
-    """识别 JDBC 登录或连接故障，使资源问题不进入业务代码自动修复。"""
-
-    return any(marker in text for marker in (
-        "Access denied for user", "Communications link failure", "Unknown database",
-        "Could not create connection to database", "SQLNonTransientConnectionException",
-        "CannotGetJdbcConnectionException", "Unable to acquire JDBC Connection",
-    ))
-
-
 def startup_source_fingerprint(root: Path) -> str:
     """记录构建相关源码及应用配置，等待确认期间有修改时使启动缓存失效。"""
     files: set[Path] = set()

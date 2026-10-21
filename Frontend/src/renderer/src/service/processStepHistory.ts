@@ -16,7 +16,7 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   inspect_workspace: '扫描工作区代码',
   scan_workspace_code: '扫描工作区代码',
   inspect_database_context: '数据库上下文检查',
-  prepare_build_tasks: '生成开发任务计划',
+  prepare_build_tasks: '构建任务 DAG 生成',
   authorization_bootstrap: '权限数据库初始化',
   build: '代码生成与构建协调',
   unit_test: '开发阶段单元测试',
@@ -211,14 +211,13 @@ export function processStepsForMessageDisplay(
   const displaySteps = processStepsForDisplay(steps, workflow)
   if (!displaySteps?.length) return displaySteps
 
-  // 局部修复保留工具活动，由修复节点统一承载；其他正式节点仍隐藏底层工具。
+  // 自由对话需要展示工具和当前动作；正式 Workflow 则隐藏底层工具，避免重复渲染。
   if (isConversationWorkflow(workflow)) return displaySteps
 
   const stableSteps = displaySteps.filter(
     (step) =>
-      ((step.kind !== 'tool' && step.kind !== 'command') ||
-        step.nodeName === 'small_task_repair' ||
-        step.nodeName === 'unit_test_repair') &&
+      step.kind !== 'tool' &&
+      step.kind !== 'command' &&
       !(
         step.status === 'running' &&
         HIDDEN_RUNNING_ACCEPTANCE_NODES.has(String(step.nodeName || ''))
@@ -359,12 +358,7 @@ function completedWorkflowProcessSteps(
     }
     stepsById.set(step.id, step)
   }
-  // 新 Run 的开始事件已经明确执行边界；checkpoint timeline 可能包含来源 Run
-  // 的开发步骤，不能在尚无完成事件时将它们投影为本次恢复已完成的节点。
-  const hasCurrentRunStart = workflow.events.some(
-    (event) => event.type === 'workflow.run.started' || event.type === 'workflow.node.started'
-  )
-  if (stepsById.size === 0 && !hasCurrentRunStart) {
+  if (stepsById.size === 0) {
     const timeline = workflowTimeline(workflow)
     for (const [index, nodeName] of timeline.entries()) {
       const label = workflowNodeLabel(nodeName)

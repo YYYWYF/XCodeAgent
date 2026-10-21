@@ -51,9 +51,8 @@ class MavenDependencySpecV3(ProtocolV3Model):
     """描述 Maven 依赖受管资源。"""
     groupId: NonBlankStringV3
     artifactId: NonBlankStringV3
-    # Engine 对未指定版本或 scope 的依赖省略字段；None 才使它们成为真正可选字段。
-    version: StrictStr | None = None
-    scope: StrictStr | None = None
+    version: StrictStr | None
+    scope: StrictStr | None
 
 
 class JavaAnnotationContributionV3(ProtocolV3Model):
@@ -78,15 +77,13 @@ ManagedContributionV3 = Annotated[Union[JavaAnnotationContributionV3, MavenDepen
 
 
 class TemplateStateV3(ProtocolV3Model):
-    """表示当前唯一接受的 V3 TemplateState 与可选受管配置快照。"""
+    """表示当前唯一接受的六字段 TemplateState。"""
     schemaVersion: Literal[3]
     templateRevision: TemplateRevisionV3
     requested: dict[NonBlankStringV3, CapabilityStateV3]
     effective: dict[NonBlankStringV3, CapabilityStateV3]
     installedArtifacts: dict[NonBlankStringV3, InstalledArtifactStateV3]
     managedContributions: dict[NonBlankStringV3, ManagedContributionV3]
-    managedConfiguration: dict[str, Any] | None = None
-    stateSequence: StrictInt = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_relations(self) -> "TemplateStateV3":

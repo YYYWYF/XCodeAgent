@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
@@ -14,6 +14,7 @@ from app.agents.direct_modification import (
     classify_direct_modification_intent,
     invoke_data_source_direct_modification,
     invoke_frontend_direct_modification,
+    invoke_workspace_direct_modification,
     parse_direct_modification_agent_result,
 )
 from app.agents.change_impact_analyzer import (
@@ -35,20 +36,13 @@ from app.services.direct_modification import (
     direct_state_message,
     direct_test_log_paths,
     validated_dynamic_workspace_paths,
-    validated_direct_scope_denial_paths,
     validated_direct_stage_result,
 )
-from app.services.direct_validation import (
-    DIRECT_FRONTEND_BUILD_CHECKS,
-    run_direct_fix_validation,
-)
+from app.services.project_launcher import run_project_restart_validation
 from app.services.revision_routing import (
     build_small_task_revision_confirmation,
     route_from_change_impact,
 )
-from app.services.application_config_prerequisite import analyze_application_config_prerequisite
-from app.services.access_control_intent import has_explicit_business_access_control_change, has_explicit_capability_change
-from app.services.application_config.schema import ApplicationConfigError
 from app.services.test_validation import evaluate_quality_gate
 from app.domain.change_impact import (
     AnalysisStatus,
@@ -65,18 +59,7 @@ from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_j
 def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
     """识别快速修改归属，并在不安全时转为澄清或正式规划提示。"""
 
-    original_request = str(state.get("request") or "")
-    request = original_request.strip()
-    config_resume = state.get("application_config_resume")
-    cached_decision = state.get("application_config_cached_decision")
-    config_analysis = None
-    workspace = workspace_from_state(state)
-    if config_resume != "applied" and workspace:
-        try:
-            config_analysis = analyze_application_config_prerequisite(original_request, workspace)
-        except ApplicationConfigError:
-            if has_explicit_capability_change(request) or has_explicit_business_access_control_change(request):
-                raise
+    request = str(state.get("request") or "").strip()
     if state.get("direct_modification_handoff_decision") == "rejected":
         # 用户已经拒绝上一轮写入确认时，不再重新调用任何分析模型。
         decision = DirectModificationDecision(
@@ -86,14 +69,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
             confidence=1.0,
             reason="用户已取消本次修改。",
             clarification_question="本次修改已取消。",
-        )
-    elif config_resume == "applied" and isinstance(cached_decision, dict) and cached_decision:
-        # 配置确认后只恢复第一次分类结果，绝不重新让模型改写原主业务意图。
-        decision = DirectModificationDecision(**cached_decision)
-    elif config_analysis is not None and config_analysis.requires_card and not config_analysis.business_request_required:
-        decision = DirectModificationDecision(
-            intent="clarification", owner="unknown", scope="clarification", confidence=1.0,
-            reason="仅需应用配置更新。", clarification_question="",
         )
     else:
         decision = classify_direct_modification_intent(
@@ -126,10 +101,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
             ]
         )
     )[:100]
-    scope_denial_paths = validated_direct_scope_denial_paths(
-        target_paths,
-        owner=decision.owner,
-    )
     base: dict[str, Any] = {
         "phase": "classify_intent",
         "conversation_intent": decision.intent,
@@ -141,9 +112,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "direct_stage_results": {},
         "direct_code_change_sets": [],
         "direct_modification_result": {},
-        "direct_modification_confirm_scope": (
-            state.get("direct_modification_confirm_scope") is True
-        ),
         "direct_modification_target_paths": target_paths,
         "direct_modification_approved_paths": approved_paths,
         "change_impact_analysis": {},
@@ -174,44 +142,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
         "acceptance_request": {},
         "timeline": ["classify_intent"],
     }
-    if config_resume == "applied":
-        pending = state.get("application_config_prerequisite")
-        if isinstance(pending, dict) and pending.get("businessRequestRequired") is False:
-            return {
-                **base, "status": "completed", "message": "应用配置已完成。",
-                "application_config_resume": "consumed",
-                "application_config_prerequisite": {**pending, "status": "RESUMED"},
-                "clarification": {},
-            }
-    if config_analysis is not None and config_analysis.conflict:
-        return {**base, "status": "failed", "message": config_analysis.conflict, "clarification": {}}
-    if config_analysis is not None and config_analysis.requires_card:
-        request_id = f"config_{uuid4().hex}"
-        pending = {
-            "requestId": request_id,
-            "originalRequest": original_request,
-            "sourceThreadId": str(state.get("active_thread_id") or ""),
-            "expectedConfigRevision": config_analysis.expected_config_revision,
-            "configIntents": list(config_analysis.config_intents),
-            "configPrerequisites": list(config_analysis.config_prerequisites),
-            "suggestedChanges": config_analysis.suggested_changes,
-            "businessRequestRequired": config_analysis.business_request_required,
-            "status": "AWAITING_CONFIG",
-        }
-        return {
-            **base,
-            "status": "requires_user_input",
-            "message": "请先确认应用配置，再继续处理原请求。",
-            "application_config_prerequisite": pending,
-            "application_config_cached_decision": asdict(decision) if config_analysis.business_request_required else {},
-            "clarification": {
-                "mode": "application_config_prerequisite",
-                "status": "requires_user_input",
-                "message": "请先确认应用配置，再继续处理原请求。",
-                "configPrerequisite": pending,
-                "questions": [],
-            },
-        }
     if state.get("direct_modification_handoff_decision") == "rejected":
         return {
             **base,
@@ -278,6 +208,44 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
                 ],
             },
         }
+    if (
+        decision.intent == "implementation_fix"
+        and decision.owner in {"frontend", "backend", "fullstack"}
+        and str(state.get("direct_modification_handoff_decision") or "").strip().lower()
+        != "approved"
+    ):
+        target_resources = _revision_affected_resources(
+            state.get("change_target"),
+            list(decision.affected_resource_keys),
+        )
+        owner_label = {
+            "frontend": "前端代码",
+            "backend": "后端代码",
+            "fullstack": "前后端代码",
+        }[decision.owner]
+        return {
+            **base,
+            "status": "requires_user_input",
+            "message": f"该请求属于{owner_label}实现修复，请先确认修改范围。",
+            "clarification": {
+                "mode": "implementation_fix_confirmation",
+                "status": "requires_user_input",
+                "message": f"该请求属于不改变已确认产品语义的{owner_label}实现修复。",
+                "reason": decision.reason,
+                "requestedPaths": target_paths,
+                "requestedResources": target_resources,
+                "owner": decision.owner,
+                "questions": [
+                    {
+                        "id": "implementation_fix_confirmation",
+                        "header": "实现修改确认",
+                        "question": f"将直接修改{owner_label}并执行后续检查，是否确认继续？",
+                        "type": "yesno",
+                        "allowOther": False,
+                    }
+                ],
+            },
+        }
     if decision.intent == "casual_chat" and decision.response:
         return {
             **base,
@@ -286,68 +254,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
             "conversation_response": decision.response,
             "clarification": {},
             "timeline": ["classify_intent"],
-        }
-    if decision.intent == "implementation_fix" and scope_denial_paths:
-        joined_paths = "、".join(scope_denial_paths)
-        allowed_directories = {
-            "frontend": "frontend/",
-            "backend": "backend/",
-            "fullstack": "frontend/ 和 backend/",
-        }.get(decision.owner, "frontend/ 或 backend/")
-        message = (
-            f"无权修改（超出职责范围）：当前修改只允许写入 {allowed_directories} 目录，"
-            f"目标路径超出范围：{joined_paths}。本次请求已在执行前拒绝，未写入文件。"
-        )
-        return {
-            **base,
-            "status": "failed",
-            "message": message,
-            "direct_modification_result": {
-                "status": "failed",
-                "errorCode": "DIRECT_MODIFICATION_SCOPE_DENIED",
-                "summary": message,
-                "failureReason": message,
-                "changedFiles": [],
-            },
-            "clarification": {},
-        }
-    if (
-        decision.intent == "implementation_fix"
-        and decision.owner in {"frontend", "backend", "fullstack"}
-        and state.get("direct_modification_confirm_scope") is True
-        and str(state.get("direct_modification_handoff_decision") or "").strip().lower()
-        != "approved"
-    ):
-        message = "AI 已按条整理你的需求，请确认理解是否准确。"
-        clarified_request = "\n".join(decision.clarified_requirements).strip() or request
-        return {
-            **base,
-            "status": "requires_user_input",
-            "message": message,
-            "clarification": {
-                "mode": "implementation_fix_confirmation",
-                "status": "requires_user_input",
-                "message": message,
-                "reason": decision.reason,
-                "clarifiedRequest": clarified_request,
-                "owner": decision.owner,
-                "requestedPaths": list(decision.target_paths),
-                "target": state.get("change_target") or {},
-                "confirmScopeBeforeExecution": True,
-                "questions": [
-                    {
-                        "id": "implementation_fix_confirmation",
-                        "header": "请确认需求理解",
-                        "question": "AI 对需求的理解是否准确？确认后将按此需求开始修改。",
-                        "type": "yesno",
-                        "allowOther": False,
-                        "options": [
-                            {"label": "理解准确，按此修改", "value": "是"},
-                            {"label": "取消本次修改", "value": "否"},
-                        ],
-                    }
-                ],
-            },
         }
     if decision.intent == "clarification" or decision.owner == "unknown":
         question = decision.clarification_question
@@ -359,9 +265,6 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
                 "mode": "direct_modification_clarification",
                 "status": "requires_user_input",
                 "message": question,
-                "confirmScopeBeforeExecution": (
-                    state.get("direct_modification_confirm_scope") is True
-                ),
                 "questions": [
                     {
                         "id": "direct_modification_clarification",
@@ -433,6 +336,9 @@ def _should_run_change_impact_analysis(
         "delete", "add", "change", "modify", "refactor", "update",
     )
     if not any(marker in text for marker in mutation_markers):
+        return False
+    # 明确的普通工作区文件修改已有精确路径边界；它不需要用产品契约阻断。
+    if decision.owner == "workspace" and decision.target_paths:
         return False
     return True
 
@@ -540,7 +446,9 @@ def _decision_from_impact_analysis(
             affected_artifact_keys=tuple(artifact_keys),
             affected_resource_keys=tuple(resource_keys),
         )
-    if candidate.owner not in {"frontend", "backend", "fullstack"}:
+    if candidate.owner not in {"frontend", "backend", "fullstack", "workspace"} or (
+        candidate.owner == "workspace" and not getattr(decision, "target_paths", ())
+    ):
         # Analyzer 只证明契约保持，并不替分类器猜测实现归属；没有安全 owner
         # 时必须停在澄清，不得让 graph 以 implementation_fix 继续写入。
         return replace(
@@ -974,7 +882,7 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
         [captured.code_change_set] if captured.code_change_set else [],
         on_progress=_code_graph_progress_writer("execute_frontend"),
     )
-    update = _stage_update(
+    return _stage_update(
         state,
         stage="frontend",
         phase="execute_frontend",
@@ -982,24 +890,6 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
         code_change_set=captured.code_change_set,
         code_graph_index=code_graph_index,
     )
-    # Agent 声称完成但没写出任何真实 diff（探索额度耗尽、误判 already_satisfied 等）时，
-    # 不进 validate 跑 tsc/vite build——那只会白白触发重型构建和后续 repair 循环。
-    # 改为要求用户补充精确修改范围，由 classify_intent 重新进入。
-    if (
-        update.get("status") == "in_progress"
-        and not _code_change_set_has_files(captured.code_change_set)
-    ):
-        update["status"] = "requires_user_input"
-        update["message"] = (
-            "未检测到实际代码改动。请补充要修改的具体页面或组件，"
-            "或说明要修复的问题现象，以便精确定位。"
-        )
-        update["clarification"] = {
-            "mode": "require_direct_modification_scope",
-            "status": "requires_user_input",
-            "message": update["message"],
-        }
-    return update
 
 
 def execute_backend_direct_modification(state: ProjectState) -> dict[str, Any]:
@@ -1045,8 +935,43 @@ def execute_backend_direct_modification(state: ProjectState) -> dict[str, Any]:
     }
 
 
+def execute_workspace_direct_modification(state: ProjectState) -> dict[str, Any]:
+    """使用共享 SmallTask Agent 修改分类器明确给出的普通工作区路径。"""
+
+    workspace = workspace_from_state(state)
+    captured = capture_agent_file_changes(
+        workspace=workspace,
+        source_tool="conversation.workspace_change",
+        action=lambda: invoke_workspace_direct_modification(
+            user_request=str(state.get("request") or ""),
+            conversation_summary=str(state.get("direct_modification_summary") or ""),
+            target_paths=list(state.get("direct_modification_target_paths", [])),
+            approved_paths=state.get("direct_modification_approved_paths"),
+            workspace=workspace,
+            selected_skill_names=state.get("selected_skill_names"),
+            on_tool_activity=_tool_activity_writer("execute_workspace"),
+        ),
+        capture_exceptions=True,
+    )
+    stage_result = validated_direct_stage_result(
+        _direct_result_from_capture(captured),
+        code_change_set=captured.code_change_set,
+        owner="workspace",
+    )
+    update = _stage_update(
+        state,
+        stage="workspace",
+        phase="execute_workspace",
+        stage_result=stage_result,
+        code_change_set=captured.code_change_set,
+    )
+    if update.get("status") == "in_progress":
+        update["status"] = "completed"
+    return update
+
+
 def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
-    """对受影响前端执行编译打包和项目重启验收，失败交给局部修复节点。"""
+    """只启动验收本轮真实改动所属工程层，并把可归因失败交给局部修复节点。"""
 
     repair_iteration = max(0, int(state.get("repair_iteration", 0) or 0))
     max_repair_iterations = max(
@@ -1062,13 +987,8 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
     }
-    result = run_direct_fix_validation(
-        validation_state,
-        affected_layers=affected_layers,
-        # 首次验证跑全套（tsc + vite build + 重启）；repair 轮次只跑 tsc，
-        # 避免每轮修复都重复完整构建和重启，把总耗时拉长。
-        lightweight=repair_iteration > 0,
-    )
+    # 快速修复只围绕已捕获的 ChangeSet 做真实启动验收，避免重新运行整个工程构建。
+    result = run_project_restart_validation(validation_state)
     test_results = _scope_direct_validation_results(
         [item for item in result.get("test_results", []) if isinstance(item, dict)],
         changed_paths=changed_paths,
@@ -1104,7 +1024,7 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
     report_path = write_test_report_markdown(validation_state, report)
     return {
         "phase": "validate_direct_fix",
-        "status": "completed" if passed else "in_progress" if can_repair else "failed",
+        "status": "completed" if passed else "failed",
         "message": (
             "本次修改范围验证通过。"
             if passed
@@ -1176,10 +1096,6 @@ def _scope_direct_validation_results(
 
     scoped: list[dict[str, Any]] = []
     for result in results:
-        # 前端编译打包是工程级门禁；既有源码错误也必须阻断并进入修复。
-        if result.get("id") in DIRECT_FRONTEND_BUILD_CHECKS and result.get("layer") == "frontend":
-            scoped.append(result)
-            continue
         # 启动验收失败不能依据日志中是否出现文件名降级；环境失败仍阻断但不返修代码。
         if isinstance(result.get("startup"), dict):
             scoped.append(result)
@@ -1248,12 +1164,12 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         status = "completed"
     elif is_answer and current_status == "completed":
         status = "completed"
+    elif launch_result and launch_result.get("status") != "failed":
+        status = "completed"
     elif current_status == "requires_user_input":
         status = "requires_user_input"
     elif current_status == "failed" or launch_result.get("status") == "failed":
         status = "failed"
-    elif launch_result and launch_result.get("status") != "failed":
-        status = "completed"
     else:
         status = current_status if current_status in {"completed", "failed"} else "failed"
 
@@ -1284,8 +1200,6 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         if normalized_test_report_path.endswith(".devagentstudio/reports/test-report.md")
         else None
     )
-    previous_result = state.get("direct_modification_result")
-    previous_result = previous_result if isinstance(previous_result, dict) else {}
     direct_result = {
         "status": status,
         "intent": conversation_intent,
@@ -1309,11 +1223,6 @@ def finalize_direct_modification(state: ProjectState) -> dict[str, Any]:
         "smallTaskResults": state.get("small_task_results", []),
         "changeImpactAnalysis": state.get("change_impact_analysis", {}),
         "changeImpactCodeScan": state.get("change_impact_code_scan", {}),
-        **(
-            {"errorCode": previous_result["errorCode"]}
-            if previous_result.get("errorCode")
-            else {}
-        ),
     }
     return {
         "phase": "conversation",

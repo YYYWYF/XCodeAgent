@@ -2,12 +2,6 @@ import type { PlanExecutionMode } from './planExecutionMode'
 import type { AgentChatMessage } from './types'
 import { parseRecoveryFailureDiagnostic } from '../../service/recoveryActionPlan'
 import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
-import type { ConnectionState } from '../../service/connectionState'
-
-/** Backend 连接失败优先于独立预览连接，不让预览重连按钮接管后端停服。 */
-export function prioritizedConnection(workflow: ConnectionState, preview: ConnectionState): ConnectionState {
-  return workflow.status !== 'healthy' ? workflow : preview.status === 'unavailable' ? preview : workflow
-}
 
 /** 只提取最新消息的失败给底部兜底，新请求、运行占位或成功消息不继承历史错误。 */
 export function latestConversationFailure(messages: AgentChatMessage[]): string | undefined {
@@ -51,21 +45,11 @@ export function globalFallbackState(input: {
   }
 }
 
-/** 当前执行进入待验收后才铺满预览，启动过程与故障恢复继续展示对话步骤。 */
-export function acceptancePreviewCanFocus(
-  phase: string,
-  previewOpen: boolean,
-  fallbackVisible: boolean,
-  executionMode: PlanExecutionMode
-): boolean {
-  return (
-    phase === 'acceptance' &&
-    executionMode === 'awaiting_acceptance' &&
-    previewOpen &&
-    !fallbackVisible
-  )
+/** 验收预览仅在没有兜底入口时占满区域，故障时保留助手分栏供用户重试。 */
+export function acceptancePreviewCanFocus(phase: string, previewOpen: boolean, fallbackVisible: boolean): boolean {
+  return phase === 'acceptance' && previewOpen && !fallbackVisible
 }
-export const NO_RECOVERY_ENTRY_ERROR = '找不到恢复入口，请手动发起流程。'
+export const NO_RECOVERY_ENTRY_ERROR = '已同步后端状态，但当前会话没有可验证的恢复入口。'
 
 /** 二次修改的执行故障由原统一恢复处理，预览订阅的断线不能抢走按钮。 */
 export function conversationUsesWorkflowRecovery(input: {

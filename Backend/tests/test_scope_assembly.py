@@ -261,33 +261,6 @@ def _auth_inputs(*, providers: tuple[tuple[str, str, str], ...] = ()) -> tuple[d
 
 
 class ScopeAssemblyTests(unittest.TestCase):
-    def test_changed_page_contract_replaces_old_fixed_id_without_completed_status(self) -> None:
-        """过期页面以同一固定 ID 生成新待执行任务，不污染其他页或继承旧完成态。"""
-
-        inputs = _base_inputs()
-        task_id = "page:customers::page"
-        current = task(task_id, "page:customers", "frontend.page",
-                       "frontend/src/pages/Customers/index.tsx", "customers")
-        old = {**deepcopy(current), "status": "completed", "description": "旧的三个说明区",
-               "source_refs": {"page_input_sha256": "outdated-contract"}}
-        baseline = inputs["base_confirmed_plan"]
-        baseline["task_registry"][task_id] = old
-        baseline["task_graph"]["nodes"].append(task_id)
-        baseline["task_graph"]["topological_order"].append(task_id)
-        baseline["build_units"]["page:customers"]["task_ids"].append(task_id)
-        inputs["reuse_facts"] = _reuse_facts(baseline)
-        inputs["generation_requirements_by_unit"] = {"page:customers": _requirement("page:customers")}
-        inputs["candidates_by_unit"] = {"page:customers": _candidate("page:customers", [current])}
-        before = deepcopy(baseline)
-        result = assemble_scope_build_task_plan(**inputs)
-        registry = result.assembled_plan["task_registry"]
-        self.assertEqual(registry[task_id]["status"], "pending")
-        self.assertNotEqual(registry[task_id]["description"], old["description"])
-        self.assertIn("orders:api", result.retained_task_ids)
-        self.assertNotIn(task_id, result.retained_task_ids)
-        self.assertEqual(result.candidate_task_ids, (task_id,))
-        self.assertEqual(baseline, before)
-
     def test_assembly_never_appends_route_projector_task(self) -> None:
         """Route Projection 已是成功 DAG 的收尾步骤，Assembly 不得添加伪业务任务。"""
 

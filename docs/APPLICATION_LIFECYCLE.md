@@ -3,7 +3,6 @@
 ## 设计边界
 
 - 生命周期文件只保存当前阶段、revision、引用、待交互和短错误摘要；正式 Markdown/JSON、Build DAG、测试日志和会话记录按需从各自文件加载，不复制进生命周期或模型上下文。
-- 阶段入口统一从磁盘读取当前正式产物，需求联合节点也读取已有草稿。失败重试仅从同 Run 的 checkpoint 提取失败节点与原提问，以新 Run 重新执行业务节点，不恢复旧 State 或旧确认动作。找不到节点时，旧工作真实退出后释放其生命周期占用与进程内租约，返回“找不到恢复入口，请手动发起流程。”可关闭提示，不阻塞其他会话；确认门仍由各业务节点负责。
 
 ## 权威边界
 
@@ -16,8 +15,6 @@
 顶层只保存 application 标识、UTC `updatedAt`、单调递增 `revision`、`initialization`、活动 run 引用、按 runId 索引的 `activeExecutions`、按稳定业务标识索引的 `resourceLocks`、当前 revision impact/formal revision、错误和扩展容器，不保存 schema 版本字段。应用标识同时作为当前工作区业务身份，不再重复保存同值的 project 标识。`initialization.threadId` 定位原 application-planning checkpoint；进入 `ready_for_workbench` 后继续保留，但只能由 lifecycle 绑定且经用户确认的 `design_stage_revision` 恢复，不能重新打开初始化状态。工作台待交互与错误只嵌入各自 execution，避免一个页面的确认覆盖另一个页面。
 
 写入使用同目录临时文件、文件 fsync、原子替换和目录 fsync。损坏或不符合当前结构的文件会显式拒绝读取，不根据旧索引、localStorage、checkpoint 或正式文档反向生成状态文件。所有状态文件和动作输入先经过 Pydantic 校验。
-
-设计阶段正式修订从开发工作台返回时，HTTP 入口只验证并冻结原影响确认凭据，不提前消费 `pendingRevisionImpact`。原规划 Graph 先持久化本次输入与 Run，随后 `design_intent_analysis` 节点幂等批准原 changeId，再提交配置变化并回退到最早产物。批准完成但需求节点尚未开始时异常中止，由原节点 checkpoint 签发显式兜底动作；重启不自动重新生成。恢复 handoff 合法推进 lifecycle revision，不要求它仍等于首次批准前的版本。内部 `design_revision_intent` 不进入公开状态，节点完成后清空。
 
 ## 新建应用状态机
 
@@ -51,11 +48,9 @@ UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不
 
 每个 `WorkbenchExecution` 可选持久化 `ownerSessionId`，它是该 Workflow execution 所属可见 Chat Session 的稳定业务标识；旧 lifecycle 文件缺少该字段时按 `None` 兼容读取。`threadId` 仍只表示 Workflow/Graph execution thread，不等价于 Chat Session thread。DAG Planning application-level lock 的唯一 execution source 是 `phase=prepare_build_tasks` 且 `status=running/stopping`；PendingPlan 的 `awaiting_user` 归属由 Pending/DraftIdentity 的 `ownerSessionId` 投影负责，普通 Build、authorization bootstrap、Unit Test、Review、Acceptance 不因 active execution 或 `ownerSessionId` 产生 DAG lock。Confirm 接管、phase/status 更新必须保留原 `ownerSessionId`，不得重新猜测。
 
-主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段普通任务的 `resourceLocks` 作为可观测、可持久化的资源元数据，不参与普通启动门禁；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收和停止仍保留登记；`finalize_project` 成功或用户明确“结束计划”清理该 run 当前拥有的登记。明确“结束计划”按当前 workspace、Workbench 类型与精确 runId 校验目标并清理 execution，不以原始 thread/session 拒绝；暂停仍保留 thread/session 归属校验。已停止的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。结构化测试阶段确认与审查阶段确认是仅有可跨 thread 转交 execution 的恢复动作，分别用于进入空白测试会话和审查会话；scope 与 target 校验不放宽。该令牌不参与 Graph 状态重建。
+主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段 `resourceLocks` 仅作为可观测、可持久化的资源元数据，不参与启动门禁：同工作区、同页面、共享 API/数据源或应用级范围均不会因为已有登记被拒绝；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收、失败和停止仍保留登记，只有 `finalize_project` 成功或用户明确“结束计划”才清理该 run 当前拥有的登记。明确“结束计划”按当前 workspace、Workbench 类型与精确 runId 校验目标并清理 execution，不以原始 thread/session 拒绝；暂停仍保留 thread/session 归属校验。已停止或失败的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。结构化测试阶段确认与审查阶段确认是仅有可跨 thread 转交 execution 的恢复动作，分别用于进入空白测试会话和审查会话；scope 与 target 校验不放宽。该令牌不参与 Graph 状态重建。
 
-主 Workflow、创建规划与自由对话的异常或终止性业务失败，先按精确 Run 封锁后续 Agent/工具调用并终止受控命令及启动验收进程，再等待真实后台线程（含写盘和回滚）退出。清理不因 AG-UI 连接取消而中止；在途线程尚未退出时继续保留运行占用。退出后停止心跳、注销活动任务、释放工作区运行租约与规划线程锁。Workbench 的 `FAILED` execution、原始诊断、完整 `resourceKeys` 和 LangGraph checkpoint 保留用于显式重试，仅清除该 Run 当前拥有的 `resourceLocks`，不影响其他运行。Native Recovery 重试从失败记录的完整资源键重新申请恢复集合；若被后来的任务占用则拒绝覆盖，仍保留原失败与 checkpoint。重新生成的正式产物继续经过原确认门，不自动重试或确认。
-
-普通启动不执行业务资源集合互斥，不放宽文件、命令、敏感操作或 Agent 工具权限。失败重试的资源重获单独检查后来 owner，防止旧恢复覆盖新任务；它不改变普通启动规则。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复全面业务互斥前应重新引入显式策略开关和冲突 UX。
+当前实现只关闭业务资源集合的互斥执法，不放宽文件、命令、敏感操作或 Agent 工具权限。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复业务互斥前应重新引入显式策略开关和冲突 UX，而不是让持久化字段隐式阻断。
 
 资源登记成功产生的 lifecycle revision 必须立即到达 application store，因此当前页面控制栏在同一 React 提交中更新，不等待 Graph 首节点完成，也不通过重新读取文件猜测状态。页面与 API 目录暂不展示资源占用标识，后续统一设计只读取现有 `resourceLocks` 投影。
 
@@ -163,10 +158,3 @@ RepairPlanner 若请求扩大业务资源范围，必须在确认载荷中给出
 同一初始化阶段允许更新运行状态或活动 run 引用；跨阶段只允许图中边。初始化确认和澄清由对应 thread 的 Graph checkpoint 与历史 Workflow 快照恢复，不在状态文件根节点重复保存 pending interaction。工作台 execution 的待处理交互仍使用 `id + basedOnRevision` 校验，过期提交显式冲突。
 
 新应用创建时必须通过 AG-UI `applicationLifecycle.action = create` 显式创建状态文件。客户端重启后只使用 `get` 读取当前状态；缺失状态不会触发历史数据推断。TechnicalPlan 经开发确认后进入“生成应用模板文件”阶段，前端在下载前通过 `begin_template_generation` 显式打开该阶段，完成真实文件写入后通过 `complete_template_generation` 提交结果；失败会保留可重试的模板失败态，后端复核 RequirementSpec、ProductPlan、TechnicalPlan 已确认，且 UiDesign 已确认或明确跳过后，才允许进入工作台。
-
-
-### 正式规划修订的结束控制
-
-设计/计划中的正式修订使用既有 `/application-lifecycle/run` AG-UI 动作 `end_planning_execution`，由请求 threadId 定位本轮规划，不另启业务 Graph。控制层等待本轮 Run、真实 worker 和命令退出，再取消其执行索引、释放精确 Run 占用与本轮正式修订，恢复 `ready_for_workbench/completed`。已经生成的文件保留，后续修改仍需重新生成并显式确认。等待退出超时保留修订及“重试结束任务”入口；不得把 End 失败转为 checkpoint 重试。工作台已经接管的开发执行仍沿原工作台 End 处理。
-
-生成中 End 会使原返回设计请求断开。前端仅在后端确认 End 成功后，将这次断开作为正常结束收口；来源开发会话保留已交接记录，不显示取消引起的网络错误，也不撤销设计会话。真正的交接失败仍沿原错误处理。

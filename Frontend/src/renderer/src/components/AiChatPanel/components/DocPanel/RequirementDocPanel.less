@@ -17,7 +17,7 @@
   gap: 14px;
   min-width: 0;
   color: var(--wb-text);
-  font-size: 13px;
+  font-size: 12px;
   container-type: inline-size;
 }
 
@@ -50,7 +50,7 @@
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 14px;
+  font-size: 11px;
   line-height: 1.35;
   white-space: nowrap;
   transition: color 0.18s ease;
@@ -102,7 +102,7 @@
   align-items: center;
   gap: 6px;
   color: var(--wb-text);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
 
   .anticon {
@@ -128,7 +128,7 @@
   border-radius: 999px;
   color: var(--wb-text-secondary);
   background: var(--wb-surface);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -152,17 +152,6 @@
   transition:
     border-color 0.18s ease,
     box-shadow 0.18s ease;
-}
-
-// 页面卡：内容比角色/模块卡多得多，给它更大的内边距与更松的块间距，
-// 再压一层极轻阴影做出"浮起"感 —— 这是"立体"的来源，不靠加重边框。
-//
-// 阴影用黑色基色而不是 --wb-text：暗色主题下 --wb-text 是浅色，拿它混出的会是
-// 一层发白的"辉光"，方向反了。仓库既有的 --wb-shadow 同样是两套主题都用黑色基色。
-.@{class-prefix}-requirement-doc-page-card {
-  gap: 10px;
-  padding: 12px 14px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .@{class-prefix}-requirement-doc-page-card:hover,
@@ -193,13 +182,13 @@
 
   > strong {
     color: var(--wb-text);
-    font-size: 13px;
+    font-size: 12px;
   }
 
   > code {
     overflow: hidden;
     color: var(--wb-text-tertiary);
-    font-size: 12px;
+    font-size: 10px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -207,7 +196,7 @@
   > span {
     flex: 0 0 auto;
     color: var(--wb-text-tertiary);
-    font-size: 12px;
+    font-size: 10px;
   }
 }
 
@@ -217,7 +206,7 @@
   border-radius: 999px;
   color: var(--wb-accent);
   background: var(--wb-accent-soft);
-  font-size: 12px;
+  font-size: 10px;
   font-style: normal;
 
   &.@{class-prefix}-is-should {
@@ -236,170 +225,88 @@
   }
 }
 
-// 页面卡头部：序号徽章 + 名称 + 路径 chip。序号给多张卡一个视觉锚点，便于扫读。
-.@{class-prefix}-requirement-doc-page-head {
+.@{class-prefix}-requirement-doc-page-heading {
   display: flex;
-  align-items: center;
-  gap: 9px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
-}
 
-.@{class-prefix}-requirement-doc-page-index {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  color: var(--wb-accent);
-  background: var(--wb-accent-soft);
-  border: 1px solid var(--wb-accent-border);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.@{class-prefix}-requirement-doc-page-title {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-
-  > strong {
-    color: var(--wb-text);
-    font-size: 14px;
-  }
-}
-
-// 路径做成 chip：和名称拉开层级，也避免裸 code 混在标题里像正文。
-.@{class-prefix}-requirement-doc-page-path {
-  overflow: hidden;
-  max-width: 100%;
-  padding: 1px 6px;
-  border-radius: 4px;
-  color: var(--wb-text-secondary);
-  background: var(--wb-control);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.@{class-prefix}-requirement-doc-page-desc {
-  margin: 0;
-  color: var(--wb-text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-// 主区内嵌面板：浅底 + 细边框，把"平铺的小标题"变成可分辨的区块。
-.@{class-prefix}-requirement-doc-page-zone {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--wb-border-soft);
-  border-radius: 7px;
-  background: var(--wb-surface-subtle);
-
-  // 规则区（状态要求 / 产品验收标准）：长尾细节，改用一条分隔线而非面板底，
-  // 降低视觉重量，不与目标 / 操作抢注意力。内容仍全部可见。
-  &.@{class-prefix}-is-muted {
-    gap: 6px;
-    padding: 0;
-    border: 0;
-    border-top: 1px solid var(--wb-border);
-    border-radius: 0;
-    background: transparent;
-    padding-top: 10px;
-  }
-}
-
-.@{class-prefix}-requirement-doc-page-zone-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--wb-text-tertiary);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-
-  // 小色点作为区块锚点，和下方内容形成"标题—内容"的视觉分组。
-  &::before {
-    flex: 0 0 auto;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--wb-accent);
-    content: '';
+  > div {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
 
-  .@{class-prefix}-requirement-doc-page-zone.@{class-prefix}-is-muted &::before {
-    background: var(--wb-text-tertiary);
-  }
-}
-
-.@{class-prefix}-requirement-doc-page-zone-body {
-  margin: 0;
-  color: var(--wb-text);
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-// 业务信息磁贴：信息项彼此独立，网格比竖排列表更易扫读，也是"立体"的主要来源。
-.@{class-prefix}-requirement-doc-page-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 6px;
-  min-width: 0;
-}
-
-.@{class-prefix}-requirement-doc-page-tile {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid var(--wb-border);
-  border-radius: 6px;
-  background: var(--wb-canvas);
-
-  > strong {
+  > div > strong {
     color: var(--wb-text);
     font-size: 13px;
-    font-weight: 600;
+  }
+
+  > div > code {
+    overflow: hidden;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   > span {
-    color: var(--wb-text-secondary);
-    font-size: 13px;
-    line-height: 1.55;
+    flex: 0 0 auto;
+    color: var(--wb-text-tertiary);
+    font-size: 10px;
   }
 }
 
-// 规则区条目：标签 + 说明的紧凑两行，比"小标题 + 列表"更省垂直空间。
-.@{class-prefix}-requirement-doc-page-rules {
+.@{class-prefix}-requirement-doc-page-goal {
   display: grid;
-  gap: 5px;
+  gap: 3px;
   margin: 0;
-  padding: 0;
-  list-style: none;
+  padding: 8px 10px;
+  border-left: 3px solid var(--wb-accent);
+  border-radius: 0 6px 6px 0;
+  color: var(--wb-text);
+  background: linear-gradient(
+    to right,
+    var(--wb-accent-soft),
+    color-mix(in srgb, var(--wb-accent-soft) 40%, transparent)
+  );
+  font-size: 11px;
 
-  > li {
+  > span {
+    color: var(--wb-accent);
+    font-size: 10px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-requirement-doc-page-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+
+  > ul {
     display: grid;
-    gap: 1px;
-    min-width: 0;
+    gap: 5px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
 
-    > strong {
-      color: var(--wb-text);
-      font-size: 13px;
-      font-weight: 500;
-    }
+    > li {
+      display: grid;
+      gap: 1px;
+      min-width: 0;
 
-    > span {
-      color: var(--wb-text-secondary);
-      font-size: 13px;
+      > strong {
+        color: var(--wb-text);
+        font-size: 11px;
+        font-weight: 500;
+      }
+
+      > span {
+        color: var(--wb-text-secondary);
+        font-size: 11px;
+      }
     }
   }
 }
@@ -443,6 +350,13 @@
   }
 }
 
+.@{class-prefix}-requirement-doc-page-block-title {
+  color: var(--wb-text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .@{class-prefix}-requirement-doc-action-list {
   display: grid;
   gap: 6px;
@@ -468,7 +382,7 @@
 
   > strong {
     color: var(--wb-text);
-    font-size: 13px;
+    font-size: 11px;
   }
 
   > em {
@@ -477,7 +391,7 @@
     border-radius: 999px;
     color: var(--wb-text-secondary);
     background: var(--wb-surface);
-    font-size: 12px;
+    font-size: 10px;
     font-style: normal;
   }
 
@@ -502,12 +416,12 @@
   align-items: flex-start;
   gap: 5px;
   color: var(--wb-text-secondary);
-  font-size: 13px;
+  font-size: 11px;
 
   > .anticon {
     margin-top: 2px;
     color: var(--wb-accent);
-    font-size: 12px;
+    font-size: 10px;
   }
 }
 
@@ -531,7 +445,7 @@
     position: relative;
     padding-left: 12px;
     color: var(--wb-text-secondary);
-    font-size: 13px;
+    font-size: 11px;
 
     &::before {
       position: absolute;
@@ -561,13 +475,13 @@
 
     > strong {
       color: var(--wb-text);
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 500;
     }
 
     > span {
       color: var(--wb-text-secondary);
-      font-size: 13px;
+      font-size: 11px;
     }
   }
 }
@@ -581,7 +495,7 @@
 
   > li {
     color: var(--wb-text-secondary);
-    font-size: 13px;
+    font-size: 11px;
     line-height: 1.55;
 
     &::marker {

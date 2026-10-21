@@ -22,23 +22,23 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         raise ApiDesignError("缺少工作区或已确认 TechnicalPlan，无法检查 API 设计。")
     action = state.get("api_design_gate_action")
     action = action if isinstance(action, dict) else {}
-    scope = state.get("build_execution_scope") or {}
     state_target_type = (
-        "endpoint" if str(state.get("selected_endpoint_id") or "").strip()
-        else "page" if str(state.get("selectedPageId") or "").strip()
-        else "application" if scope.get("type") == "application" else "page"
+        "endpoint" if str(state.get("selected_endpoint_id") or "").strip() else "page"
     )
     state_target_id = (
         str(state.get("selected_endpoint_id") or "").strip()
         if state_target_type == "endpoint"
-        else "application" if state_target_type == "application"
         else str(state.get("selectedPageId") or "").strip()
     )
     action_target_type = str(action.get("targetType") or "").strip()
-    target_type = action_target_type if action_target_type in {"application", "page", "endpoint"} else (
+    target_type = action_target_type if action_target_type in {"page", "endpoint"} else (
         state_target_type
     )
-    target_id = str(action.get("targetId") or "").strip() or state_target_id
+    target_id = str(action.get("targetId") or "").strip() or (
+        str(state.get("selected_endpoint_id") or "").strip()
+        if target_type == "endpoint"
+        else str(state.get("selectedPageId") or "").strip()
+    )
     if not target_id:
         raise ApiDesignError("请选择要开始开发的页面或 API。")
     if action and state_target_id and (target_type != state_target_type or target_id != state_target_id):
@@ -82,7 +82,7 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         placeholder = "可先查看或修改右侧字段映射，完成后点击确认并检测。"
     else:
         question = f"当前目标依赖的 API 尚未完成设计：{labels}。请分别配置后重新检测。"
-        message = "部分接口配置需要重新确认，请检查并保存后继续。"
+        message = "存在未完成或已失效的 API 设计，当前开发目标已暂停。"
         placeholder = "请通过门禁卡片配置映射并重新检测。"
     clarification = build_ask_user_payload(
         [
@@ -126,8 +126,6 @@ def _development_target_label(
 ) -> str:
     """读取开发目标展示名称，缺失时回退到稳定 ID。"""
 
-    if target_type == "application":
-        return "整个应用"
     if target_type == "page":
         page = next(
             (

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import {
   ArrowRightOutlined,
@@ -31,6 +31,18 @@ function formatError(error: unknown, fallback: string): string {
 /** 渲染带有自定义关闭控件和设备流入口的无边框登录窗口。 */
 export function LoginApp(): JSX.Element {
   const [loggingIn, setLoggingIn] = useState(false)
+  const [progress, setProgress] = useState('')
+  useEffect(() => window.devAgentStudio?.auth.onProgress((value) => setProgress(value.message)), [])
+
+  /** 显式取消 Python 中的授权轮询后再允许重新登录。 */
+  const handleCancel = async (): Promise<void> => {
+    try {
+      await window.devAgentStudio?.auth.cancel()
+      setProgress('登录已取消，可以重新发起登录。')
+    } catch (error) {
+      message.error(formatError(error, '取消登录失败'))
+    }
+  }
   const { theme } = useApplicationTheme()
 
   /** 请求关闭当前登录窗口，主进程会按既有逻辑隐藏窗口并保留应用后台运行。 */
@@ -47,13 +59,16 @@ export function LoginApp(): JSX.Element {
     }
 
     setLoggingIn(true)
+    setProgress('正在连接 Python 认证服务…')
     try {
       const result = await authApi.login()
       if (!result.ok) {
         throw new Error('登录失败')
       }
     } catch (error) {
-      message.error(formatError(error, '登录失败'))
+      const errorMessage = formatError(error, '登录失败')
+      setProgress(errorMessage)
+      message.error(errorMessage)
       setLoggingIn(false)
     }
   }
@@ -132,10 +147,14 @@ export function LoginApp(): JSX.Element {
               size="large"
               type="primary"
             >
-              {loggingIn ? '登录中' : '启动安全登录'}
+              {loggingIn ? '等待云效授权' : '使用云效登录'}
             </Button>
+            <Text className={cx('login-action-hint')} role="status" aria-live="polite">
+              {progress || '将在系统浏览器中完成云效登录'}
+            </Text>
+            {loggingIn && <Button type="text" onClick={() => void handleCancel()}>取消登录</Button>}
             <Text className={cx('login-action-hint')}>
-              <SafetyCertificateOutlined /> 凭证仅保存在当前运行环境
+              <SafetyCertificateOutlined /> 凭证在本机加密保存，退出应用后删除
             </Text>
           </div>
         </section>

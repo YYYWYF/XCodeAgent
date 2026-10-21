@@ -17,7 +17,6 @@ from app.domain.application_planning_recovery import (
     application_planning_boundary_payload,
     application_planning_sha256,
     parse_application_planning_boundary,
-    validate_application_planning_baseline,
 )
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
@@ -57,7 +56,7 @@ def _technical_request(state: ProjectState) -> str:
     """从当前交互或服务端设计变更上下文读取 TechnicalPlan 请求。"""
 
     interaction = state.get("application_planning_interaction")
-    if isinstance(interaction, dict) and interaction.get("action") in {"answer", "revise", "design_change"}:
+    if isinstance(interaction, dict) and interaction:
         return str(interaction.get("request") or "").strip()
     return str(
         state.get("design_change_generation_request")
@@ -120,26 +119,27 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
     request = _technical_request(state)
     if operation is ApplicationPlanningOperation.REVISE and not request:
         raise ValueError("TechnicalPlan revise 必须提供明确的修改要求。")
-    validate_application_planning_baseline(boundary, state.get("technical_plan"))
+    if operation in {
+        ApplicationPlanningOperation.REVISE,
+        ApplicationPlanningOperation.REPAIR,
+    } and boundary.baseline_sha256 is None:
+        raise ValueError("TechnicalPlan 修订/修复缺少 baseline 摘要。")
+    baseline = state.get("technical_plan")
+    if (
+        operation in {
+            ApplicationPlanningOperation.REVISE,
+            ApplicationPlanningOperation.REPAIR,
+        }
+        and (
+            not isinstance(baseline, dict)
+            or not baseline
+            or application_planning_sha256(baseline) != boundary.baseline_sha256
+        )
+    ):
+        raise ValueError("TechnicalPlan 修订/修复 baseline 与 boundary 不匹配。")
 
     change_id = str(state.get("change_id") or "").strip()
-    repair_source = str(state.get("technical_plan_repair_source_run_id") or "")
-    if repair_source and _lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
-        # 阶段重试由原 checkpoint 证明来源，再用既有 CAS 把生成归属交给新 Run。
-        ensure_technical_plan_generation_lifecycle(
-            workspace, active_run_id=state.get("active_run_id"),
-            thread_id=state.get("active_thread_id"), change_id=change_id or None,
-            repair_source_run_id=repair_source,
-        )
-    # 需求/设计正式修订已经拥有自己的 revision，不得再次按技术专项修订入场。
-    active_revision = _lifecycle.active_formal_revision
-    design_revision = (
-        active_revision is not None
-        and active_revision.change_id == change_id
-        and active_revision.formal_branch.value == "design_stage_revision"
-        and active_revision.status == "design_planning"
-    )
-    if operation is ApplicationPlanningOperation.REVISE and change_id and not design_revision:
+    if operation is ApplicationPlanningOperation.REVISE and change_id:
         target = state.get("change_target")
         if not isinstance(target, dict) or not target:
             raise ValueError("TechnicalPlan formal revision 缺少 change target。")
@@ -159,11 +159,6 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
             active_run_id=state.get("active_run_id"),
             thread_id=state.get("active_thread_id"),
             change_id=change_id or None,
-            repair_source_run_id=(
-                state.get("technical_plan_repair_source_run_id")
-                if operation is ApplicationPlanningOperation.REPAIR
-                else None
-            ),
         )
     return {
         "phase": "technical_planning_begin",
@@ -176,7 +171,6 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
         "application_planning_interaction": {},
         "technical_plan_candidate": {},
         "technical_plan_candidate_sha256": "",
-        "technical_plan_repair_source_run_id": "",
         "lifecycle": application_lifecycle_payload(lifecycle),
         "timeline": ["technical_planning_begin"],
     }
@@ -208,8 +202,14 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             **technical_requirement,
             "planning_adjustment_request": request,
         }
+    repair_seed = state.get("technical_plan_repair_candidate")
+    repair_errors = state.get("technical_plan_repair_errors")
     existing_plan = (
-        deepcopy(state.get("technical_plan"))
+        deepcopy(repair_seed)
+        if boundary.operation is ApplicationPlanningOperation.REPAIR
+        and isinstance(repair_seed, dict)
+        and repair_seed
+        else deepcopy(state.get("technical_plan"))
         if isinstance(state.get("technical_plan"), dict)
         and state.get("technical_plan")
         else None
@@ -218,6 +218,12 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         state,
         technical_requirement,
         existing_plan,
+        initial_errors=(
+            [str(error) for error in repair_errors]
+            if boundary.operation is ApplicationPlanningOperation.REPAIR
+            and isinstance(repair_errors, list)
+            else None
+        ),
     )
     if plan is None:
         # 生成失败不写磁盘、不改生命周期；审阅节点会把错误作为当前业务交互展示。
@@ -225,7 +231,6 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "phase": "technical_planning_generate",
             "status": "requires_user_input",
             "technical_plan_repair_candidate": failed_candidate or {},
-            "technical_plan_repair_source_run_id": "",
             "technical_plan_repair_errors": errors[:12],
             "application_planning_recovery_boundary": _boundary_payload_for_state(
                 state,
@@ -250,7 +255,6 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         ),
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
-        "technical_plan_repair_source_run_id": "",
         "timeline": ["technical_planning_generate"],
     }
 

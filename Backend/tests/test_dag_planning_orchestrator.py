@@ -63,48 +63,6 @@ def _business_description_context(plan: dict, scope: dict) -> dict:
 
 
 class ConcurrentPlanningIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_page_replacement_uses_same_fixed_id_through_global_validation(self):
-        """真实组装与来源校验接纳同 ID 页面替换，再次规划只复用当前合同的完成任务。"""
-
-        async def generate_fixed(job, **kwargs):
-            """仅替换模型传输，严格返回生产页面规则规定的固定任务 ID。"""
-
-            self.calls.append((job, kwargs))
-            tasks = model_tasks(job)
-            tasks[0]["id"] = f"{job.identity.unit_id}::page"
-            response = SimpleNamespace(content=json.dumps({"tasks": tasks}), response_metadata={"finish_reason": "stop"})
-            model = SimpleNamespace(ainvoke=AsyncMock(return_value=response))
-            with patch("app.services.unit_generation.create_chat_model", return_value=model):
-                return await generate_unit_candidate_once(job, **kwargs)
-
-        first = await self._plan(planning_inputs(required=["page:a", "page:history"]), generate_once=generate_fixed)
-        baseline = plain_json(first.assembly.assembled_plan)
-        baseline.update(confirmation_status="confirmed", confirmed_at=AT)
-        for task in baseline["task_registry"].values():
-            task["status"] = "completed"
-        old_baseline = deepcopy(baseline)
-        changed = plain_json(planning_inputs().project_plan)
-        changed["page_implementation_contracts"][0]["uiDesignRef"]["sha256"] = "b" * 64
-        self.calls.clear()
-        result = await self._plan(planning_inputs(plan=changed, baseline=baseline, required=["page:a"]),
-                                  generate_once=generate_fixed, planning_run_id="replacement")
-        self.assertEqual(len(self.calls), 1)
-        self.assertEqual(result.planning_run.global_repair_round, 0)
-        self.assertEqual(result.planning_run.unit_states["page:a"].retained_task_ids, ())
-        self.assertEqual(result.assembly.retained_task_ids, ("page:history::page",))
-        registry = plain_json(result.assembly.assembled_plan["task_registry"])
-        self.assertEqual(registry["page:a::page"]["status"], "pending")
-        self.assertEqual(registry["page:history::page"]["status"], "completed")
-        self.assertEqual(baseline, old_baseline)
-        current = plain_json(result.assembly.assembled_plan)
-        current.update(confirmation_status="confirmed", confirmed_at=AT)
-        current["task_registry"]["page:a::page"]["status"] = "completed"
-        self.calls.clear()
-        reused = await self._plan(planning_inputs(plan=changed, baseline=current, required=["page:a"]),
-                                  generate_once=generate_fixed, planning_run_id="unchanged")
-        self.assertEqual(self.calls, [])
-        self.assertEqual(reused.assembly.reused_task_ids, ("page:a::page",))
-
     def setUp(self):
         """使用临时工作区记录模型调用、冻结 Context 与已发布阶段。"""
 

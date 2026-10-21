@@ -58,7 +58,6 @@ type Props = {
   ) => Promise<void>
   onSaveRequirementSpec: (spec: Record<string, unknown>) => Promise<RequirementSpecDraftSaveResult>
   onRetry: () => void
-  onReconnect: () => void
 }
 
 // 展示产品、UI 与技术规划的当前状态；所有业务动作由应用根部提供。
@@ -71,8 +70,7 @@ export default function ApplicationPagePlanningModal({
   onReturnHome,
   onSubmit,
   onSaveRequirementSpec,
-  onRetry,
-  onReconnect
+  onRetry
 }: Props): JSX.Element {
   const application = planning.application
   // UI 确认期间保留面板，避免逐页动作的中间快照短暂丢失 clarification 时回切进度页。
@@ -177,7 +175,7 @@ export default function ApplicationPagePlanningModal({
 
       <div className={cx('page-planning-screen-body')}>
         <div className={cx('page-planning-screen-content')}>
-          <ConnectionStatusBanner connection={planning.connection} onReconnect={onReconnect} />
+          <ConnectionStatusBanner connection={planning.connection} onReconnect={onRetry} />
           {recoveryIncident ? (
             <ApplicationPlanningRecoveryIncidentCard
               onAction={onRetry}

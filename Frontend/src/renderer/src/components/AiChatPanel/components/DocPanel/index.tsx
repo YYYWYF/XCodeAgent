@@ -39,7 +39,6 @@ type Props = {
   productPlan?: Record<string, unknown>
   requirementSpec?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
-  technicalPlanStatus?: string
   structuredDocument?: 'requirement-doc' | 'technical-plan'
   structuredDocumentLoading?: boolean
 }
@@ -54,7 +53,6 @@ export default function DocPanel({
   productPlan,
   requirementSpec,
   technicalPlan,
-  technicalPlanStatus,
   structuredDocument,
   structuredDocumentLoading
 }: Props): ReactElement {
@@ -76,7 +74,7 @@ export default function DocPanel({
             </span>
             {technicalPlan ? (
               <Tag className={cx('doc-panel-technical-status')}>
-                {technicalPlanStatus || technicalPlanStatusLabel(technicalPlan)}
+                {technicalPlanStatusLabel(technicalPlan)}
               </Tag>
             ) : null}
           </div>
@@ -88,13 +86,7 @@ export default function DocPanel({
               <small>{title?.split('/').pop() || 'requirement-spec.json'}</small>
             </span>
             {requirementSpec ? (
-              <Tag
-                className={cx(
-                  'doc-panel-technical-status',
-                  requirementSpec.confirmation_status === 'confirmed' &&
-                    'doc-panel-technical-status-confirmed'
-                )}
-              >
+              <Tag className={cx('doc-panel-technical-status')}>
                 {requirementStatusLabel(requirementSpec)}
               </Tag>
             ) : null}
@@ -125,11 +117,7 @@ export default function DocPanel({
               </div>
             ) : isTechnicalPlan ? (
               technicalPlan && productPlan ? (
-                <TechnicalPlanDocPanel
-                  plan={technicalPlan}
-                  productPlan={productPlan}
-                  spec={requirementSpec}
-                />
+                <TechnicalPlanDocPanel plan={technicalPlan} productPlan={productPlan} />
               ) : (
                 <div className={cx('doc-panel-empty')}>
                   <Text strong>技术规划可视化暂不可用</Text>
@@ -137,10 +125,7 @@ export default function DocPanel({
                 </div>
               )
             ) : requirementReady ? (
-              <RequirementDocPanel
-                productPlan={productPlan || {}}
-                spec={requirementSpec || {}}
-              />
+              <RequirementDocPanel productPlan={productPlan || {}} spec={requirementSpec || {}} />
             ) : (
               <MarkdownContent content={content ?? ''} />
             )}

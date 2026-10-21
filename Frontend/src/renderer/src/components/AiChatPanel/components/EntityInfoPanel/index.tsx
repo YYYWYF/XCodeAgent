@@ -56,7 +56,7 @@ function stringList(value: unknown): string[] {
   return text ? [text] : []
 }
 
-/** 展示单个实体的概要与设计信息，未传工作区时只读取已保存的数据。 */
+/** 展示单个实体的概要信息、字段清单与设计入口。 */
 export default function EntityInfoPanel({
   entity,
   theme,
@@ -317,7 +317,7 @@ export default function EntityInfoPanel({
           {dataSourceType === 'database' && tableName ? (
             <div className={cx('entity-info-design-block')}>
               <Text type="secondary">
-                数据库字段信息（{workspaceRoot ? '实时查询' : '已保存设计'} · {tableName}）
+                数据库字段信息（实时查询 · {tableName}）
               </Text>
               {dbColumnsLoading ? (
                 <Text className={cx('entity-info-db-status')} type="secondary">
@@ -363,7 +363,7 @@ export default function EntityInfoPanel({
                 />
               ) : (
                 <Text className={cx('entity-info-db-status')} type="secondary">
-                  {dbColumnsError || (workspaceRoot ? '未能读取该表的字段信息。' : '尚未保存该表的字段信息。')}
+                  {dbColumnsError || '未能读取该表的字段信息。'}
                 </Text>
               )}
             </div>

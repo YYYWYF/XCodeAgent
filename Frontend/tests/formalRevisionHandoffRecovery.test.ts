@@ -5,8 +5,6 @@ import { createSessionIdentity } from '../src/renderer/src/components/AiChatPane
 import { restoreFormalRevisionHandoff } from '../src/renderer/src/components/AiChatPanel/hooks/useFormalRevisionHandoffRecovery'
 import { conversationRevisionHandoffCommitted } from '../src/renderer/src/components/AiChatPanel/conversationMode'
 import { workflowInteractionAvailability, workflowMessageInteractionAvailability } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
-import { formalRevisionHandoffRestorable, retainFormalRevisionSessionAfterStart } from '../src/renderer/src/components/AiChatPanel/hooks/revisionSession'
-import type { WorkflowDesignStageRevisionStart } from '../src/renderer/src/typings'
 
 const activeRevisionLifecycle = {
   activeFormalRevision: {
@@ -93,56 +91,4 @@ assert.equal(conversationRevisionHandoffCommitted({ ...handedOffConversation, ru
 
 assert.equal(workflowInteractionAvailability(handedOffConversation, activeRevisionLifecycle), 'stale')
 assert.equal(workflowMessageInteractionAvailability(handedOffConversation, activeRevisionLifecycle, false, true), 'stale')
-
-// TechnicalPlan-only 已接纳的断线启动必须保留展示身份，并能从精确来源重建 PLAN 会话。
-{
-  const lifecycle = {
-    ...activeRevisionLifecycle,
-    initialization: { threadId: 'planning-graph-thread', stage: 'awaiting_technical_plan_confirmation', status: 'awaiting_user' },
-    activeFormalRevision: { ...activeRevisionLifecycle.activeFormalRevision!, formalBranch: 'workbench_plan_revision', status: 'drafting' }
-  } as ApplicationLifecycle
-  const input = {
-    impact: { formalBranch: 'workbench_plan_revision', interactionId: 'impact-1' },
-    sourceConversationThreadId: 'source-thread', sourceRunId: 'source-run'
-  } as WorkflowDesignStageRevisionStart
-  assert.equal(retainFormalRevisionSessionAfterStart(input, undefined), true)
-  assert.equal(retainFormalRevisionSessionAfterStart(input, lifecycle), true)
-  assert.equal(retainFormalRevisionSessionAfterStart(input, { ...lifecycle, activeFormalRevision: undefined }), false)
-  assert.equal(retainFormalRevisionSessionAfterStart({ ...input, sourceRunId: 'other-run' }, lifecycle), false)
-  assert.equal(formalRevisionHandoffRestorable(lifecycle, 'planning'), true)
-  assert.equal(formalRevisionHandoffRestorable(lifecycle, 'product'), false)
-  assert.equal(formalRevisionHandoffRestorable(lifecycle, 'development'), false)
-  const source = createSessionIdentity({
-    workspaceRoot: '/workspace', editorMode: 'frontend', sessionId: sourceDevelopmentSession.id,
-    threadId: sourceDevelopmentSession.threadId, workflowId: 'workflow-1', workbenchPhase: 'development',
-    stage: 'DEVELOPMENT', sequence: 1, entryKey: sourceDevelopmentSession.entryKey
-  })
-  const target = createSessionIdentity({
-    workspaceRoot: '/workspace', editorMode: 'frontend', sessionId: 'restored-plan',
-    threadId: 'restored-plan-thread', workflowId: 'workflow-1', workbenchPhase: 'planning',
-    stage: 'PLAN', sequence: 2, entryKey: 'revision-plan:change-1:recovery'
-  })
-  const restored = await restoreFormalRevisionHandoff({
-    applicationId: 'workflow-1', lifecycle, sessions: [sourceDevelopmentSession], phase: 'planning', loading: false,
-    /** 只加载原始开发来源。 */
-    loadSessionIdentity: async () => source,
-    /** 恢复展示会话，绝不触发模型或 Graph。 */
-    ensurePlanningSession: async (_key, phase, context) => {
-      assert.equal(phase, 'planning')
-      assert.equal(context?.formalBranch, 'workbench_plan_revision')
-      return target
-    },
-    /** 空历史用于覆盖断线后展示身份缺失。 */
-    getSessionMessages: () => [],
-    /** 本测试不写外部会话存储。 */
-    setSessionMessages: () => {},
-    /** 本测试不写外部会话存储。 */
-    persistSession: async () => {},
-    /** 确认恢复后仍使用原 planning Graph。 */
-    onRestored: identity => { assert.equal(identity.revisionContext?.planningThreadId, 'planning-graph-thread') },
-    /** 测试直接传播异常。 */
-    onError: () => {}
-  })
-  assert.equal(restored.sessionId, 'restored-plan')
-}
 console.log('formal revision handoff recovery tests passed')

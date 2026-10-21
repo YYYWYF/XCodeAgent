@@ -105,13 +105,7 @@ class WorkflowReentryContractTests(unittest.IsolatedAsyncioTestCase):
 
                 builder.add_node(node_name, run)
                 builder.add_edge(START, "workflow_entry")
-                if node_name == "small_task_repair":
-                    # 修复不是独立恢复起点，真实历史必须包含同轮测试阶段入口。
-                    builder.add_node("integration_test", workflow_entry)
-                    builder.add_edge("workflow_entry", "integration_test")
-                    builder.add_edge("integration_test", node_name)
-                else:
-                    builder.add_edge("workflow_entry", node_name)
+                builder.add_edge("workflow_entry", node_name)
                 builder.add_edge(node_name, END)
                 graph = builder.compile(checkpointer=InMemorySaver())
                 source = _source(workspace=Path(raw_workspace), run_id="business", thread_id="thread", current_node=node_name).model_copy(update={"failure": None})
@@ -119,7 +113,7 @@ class WorkflowReentryContractTests(unittest.IsolatedAsyncioTestCase):
                     config={"configurable": {"thread_id": source.thread_id}})
                 plan = await BusinessTargetResolver().resolve(workspace=raw_workspace, source=source,
                     graph=graph, require_source_lifecycle=False)
-                self.assertEqual(plan.target_node, "integration_test" if node_name == "small_task_repair" else node_name)
+                self.assertEqual(plan.target_node, node_name)
                 self.assertEqual(plan.reason, WorkflowReentryReason.BUSINESS_RETRY)
                 self.assertTrue(plan.context_authority.checkpoint_id)
 

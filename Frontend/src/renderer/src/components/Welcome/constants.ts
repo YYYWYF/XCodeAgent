@@ -20,16 +20,13 @@ export const applicationIconOptions: ReadonlyArray<{ value: string; label: strin
 /** 默认应用图标：列表中的第一个。 */
 export const defaultApplicationIcon = applicationIconOptions[0].value
 
-/** 默认码云地址：平台提供的应用仓库；用户可在表单里改成自己的仓库地址。 */
-export const defaultRepoUrl = 'https://github.com/ruyue1/user-application'
-
 export const initialApplicationDraft: ApplicationDraft = {
   appName: '',
   appIcon: defaultApplicationIcon,
   senario: '',
   projectPath: '',
-  repoUrl: defaultRepoUrl,
-  branchName: 'v1_0',
+  repoUrl: 'https://github.com/ruyue1/user-application',
+  branchName: 'v1.0',
   terminal: 'PC',
   layout: { type: 'side', useHeader: true, useFooter: false },
   theme: { primaryColor: '#6b3cf0' },
@@ -41,10 +38,7 @@ export const initialApplicationDraft: ApplicationDraft = {
     }
   },
   envText: '',
-  auth: {
-    enable: false,
-    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '' }
-  },
+  auth: { enable: false, authnSource: '', yht: { clientId: '' } },
   authorization: {
     enabled: false,
     initialAdministratorSubjects: []

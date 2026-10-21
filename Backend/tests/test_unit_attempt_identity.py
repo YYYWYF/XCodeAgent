@@ -130,7 +130,7 @@ class UnitAttemptIdentityTests(unittest.TestCase):
     def test_settings_policy_handoff_preserves_fixed_local_contract(self) -> None:
         """Settings 的固定 Local 值直接构造 Policy，不存在接受 1 后交接失败的路径。"""
 
-        settings = Settings(model_base_url="test", model_api_key="test", model_name="test")
+        settings = Settings(model_transmit_url="http://127.0.0.1:8100")
         policy = UnitGenerationPolicy(
             **_policy_payload(), local_max_attempts=settings.dag_unit_local_max_attempts,
             model_max_tokens=settings.dag_unit_max_tokens,

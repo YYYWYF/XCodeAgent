@@ -1,7 +1,6 @@
 """T7.3 Confirm 的真实磁盘、实际 DAG 门禁与故障注入测试。"""
 
 from copy import deepcopy
-import asyncio
 import json
 import os
 from pathlib import Path
@@ -11,11 +10,7 @@ from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from app.domain.application_lifecycle import ApplicationLifecycle
 from app.protocols.workflow.lifecycle import begin_workflow_lifecycle, fail_workflow_lifecycle
-from app.protocols.workflow.run_control import build_workflow_plan_control_ag_ui_stream
-from app.services.application_lifecycle import (
-    load_application_lifecycle, write_application_lifecycle, update_workbench_execution,
-)
-from app.domain.application_lifecycle import PendingInteractionType, WorkbenchExecutionStatus
+from app.services.application_lifecycle import load_application_lifecycle, write_application_lifecycle
 
 from app.services.build_task_plan_lifecycle import (
     abandon_pending_build_task_plan,
@@ -57,15 +52,15 @@ class ConfirmPromotionTests(unittest.TestCase):
         return planning_inputs(plan=self.plan, baseline=baseline, scope=self.scope,
                                context=self.context, required=self.context["required_unit_ids"])
 
-    def _write_pending(self, run_id="run-1", workflow_run_id="workflow-confirm"):
+    def _write_pending(self, run_id="run-1"):
         """使用 T7.2 writer 和 Planning 的真实输入指纹生成待确认身份。"""
 
         write_pending_build_task_plan_atomic(
             self.state, self.draft, owner_session_id="session-confirm", planning_run_id=run_id,
-            workflow_run_id=workflow_run_id,
+            workflow_run_id="workflow-confirm",
             base_confirmed_plan_digest=build_task_plan_sha256(plain_json(self.inputs.base_confirmed_plan))
             if self.inputs.base_confirmed_plan is not None else None,
-            input_fingerprint=self.inputs.input_fingerprint(),
+            input_fingerprint=_input_digest(self.inputs.model_dump(mode="json")),
             build_execution_scope=self.scope, created_at="2026-09-06T00:00:00Z",
             planning_provenance={
                 "schema_version": "planning-provenance.v2",
@@ -246,60 +241,6 @@ class ConfirmPromotionTests(unittest.TestCase):
         self.assertFalse(self.pending_path.exists())
         self.assertEqual(load_application_lifecycle(self.state["workspace"]).active_run_id, "workflow-r3")
 
-    def test_abandon_after_stale_confirm_closes_current_execution(self):
-        """源码变化使确认被拒绝后，放弃同一草稿必须收口接管后的执行而非生成来源。"""
-
-        self._write_pending(workflow_run_id="workflow-current")
-        self._write_lifecycle()
-        payload = {
-            "mode": "build_task_plan_confirmation",
-            "draftIdentity": {
-                "ownerSessionId": "session-confirm", "planningRunId": self.request["planning_run_id"],
-                "draftDigest": self.request["draft_digest"],
-            },
-        }
-        current = load_application_lifecycle(self.state["workspace"])
-        source = current.active_executions["workflow-current"].model_copy(update={"owner_session_id": "session-confirm"})
-        write_application_lifecycle(self.state["workspace"], current.model_copy(update={"active_executions": {source.run_id: source}}))
-        waiting = update_workbench_execution(
-            self.state["workspace"], run_id=source.run_id, phase="prepare_build_tasks",
-            status=WorkbenchExecutionStatus.AWAITING_USER,
-            pending_type=PendingInteractionType.TASK_PLAN_CONFIRMATION, pending_payload=payload,
-        ).active_executions[source.run_id].pending_interaction
-        begin_workflow_lifecycle(
-            {"workspace": self.state["workspace"], "resume_values": {
-                "owner_session_id": "session-confirm", "build_execution_scope": self.scope,
-                "resume_execution_run_id": source.run_id,
-                "lifecycle_interaction_submission": {"runId": source.run_id, "id": waiting.id,
-                                                     "basedOnRevision": waiting.based_on_revision},
-            }}, thread_id="thread-confirm", run_id="confirm-current", phase="prepare_build_tasks",
-        )
-        changed = self.inputs.model_dump(mode="json")
-        changed["workspace_snapshot"]["workspace_revision"] = "user-edited-code"
-        self.assertEqual(self._confirm(current_inputs=changed).status, "stale_inputs")
-        update_workbench_execution(
-            self.state["workspace"], run_id="confirm-current", phase="prepare_build_tasks",
-            status=WorkbenchExecutionStatus.AWAITING_USER,
-            pending_type=PendingInteractionType.TASK_PLAN_CONFIRMATION, pending_payload=payload,
-        )
-        self.assertFalse(self.formal_path.exists())
-        async def abandon_through_ag_ui():
-            """通过界面使用的原 AG-UI 控制端点收口当前确认 Run。"""
-            stream = build_workflow_plan_control_ag_ui_stream(
-                action="abandon", workspace=self.state["workspace"], target_run_id="confirm-current",
-                planning_run_id=self.request["planning_run_id"], draft_digest=self.request["draft_digest"],
-                thread_id="thread-confirm", run_id="abandon-request", owner_session_id="session-confirm",
-            )
-            return "".join([frame async for frame in stream])
-
-        self.assertIn('"status":"abandoned"', asyncio.run(abandon_through_ag_ui()))
-        self.assertFalse(self.pending_path.exists())
-        self.assertFalse(self.formal_path.exists())
-        final = load_application_lifecycle(self.state["workspace"])
-        self.assertEqual(final.active_executions, {})
-        self.assertIsNone(final.active_run_id)
-        self.assertEqual(self._confirm().status, "stale_draft")
-
     def test_confirm_rejects_persisted_route_projection_payload(self):
         """Confirm 必须拒绝把已删除的 route_projection 页面正文持久化进 Pending。"""
 
@@ -384,33 +325,6 @@ class ConfirmPromotionTests(unittest.TestCase):
         changed = deepcopy(payload)
         changed["base_confirmed_plan"] = {**self.draft, "confirmation_status": "confirmed"}
         self._assert_rejected("stale_inputs", current_inputs=changed)
-
-    def test_scan_cache_transition_keeps_confirmation_but_code_changes_do_not(self):
-        """真实 Pending 确认可容忍扫描观测变化，但代码和索引业务事实变化仍阻断。"""
-
-        payload = self.inputs.model_dump(mode="json")
-        payload["workspace_snapshot"] = {
-            "workspace_revision": "same-code", "generated_at": "first-scan",
-            "code_graph": {"available": True, "workspaceRevision": "same-code",
-                           "status": "ready", "buildType": "incremental", "cacheHit": False,
-                           "message": "已扫描", "durationMs": 12, "progress": [], "symbolsIndexed": 10},
-        }
-        self.inputs = SequentialPlanningInputs.model_validate(payload)
-        self._write_pending()
-        changed = deepcopy(payload)
-        changed["workspace_snapshot"]["generated_at"] = "second-scan"
-        changed["workspace_snapshot"]["code_graph"].update(
-            status="cache_hit", buildType="cache_hit", cacheHit=True,
-            message="缓存已就绪", durationMs=0, progress=["cache_hit"],
-        )
-        # 同一确认门仍精确校验草稿、业务范围和源码 revision，不自动提升 Pending。
-        self.assertFalse(self.formal_path.exists())
-        for field, value in (("workspace_revision", "changed-code"), ("code_graph", {"available": False})):
-            stale = deepcopy(changed)
-            stale["workspace_snapshot"][field] = value
-            self._assert_rejected("stale_inputs", current_inputs=stale)
-        result = confirm_pending_build_task_plan(self.state, **self.request, current_inputs=changed)
-        self.assertEqual(result.status, "confirmed")
 
     def test_validation_order(self):
         """同时制造多层错误，结果必须按身份→self→base→inputs→DAG 决定。"""

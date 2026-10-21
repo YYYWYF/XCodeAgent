@@ -12,7 +12,6 @@ const { Text } = Typography
 
 type Props = {
   disabled?: boolean
-  message?: string
   target?: WorkflowTestTarget
   onSubmit: () => void
   /** 工作区根目录：驱动卡内的提交提醒。 */
@@ -25,7 +24,6 @@ const TEST_PHASE_CONFIRMATION_DESCRIPTION =
 /** 渲染 Build 完成后的测试阶段进入确认卡。 */
 export default function TestPhaseConfirmationCard({
   disabled,
-  message,
   target,
   onSubmit,
   workspaceRoot
@@ -44,7 +42,7 @@ export default function TestPhaseConfirmationCard({
             {gate?.allowed
               ? entityTarget
                 ? '实体设计已确认，确认后将进入测试阶段，执行测试与失败修复'
-                : message || TEST_PHASE_CONFIRMATION_DESCRIPTION
+                : TEST_PHASE_CONFIRMATION_DESCRIPTION
               : testEntryGateReason(gate)}
           </Text>
         </div>
@@ -86,7 +84,7 @@ export default function TestPhaseConfirmationCard({
           无 workspaceRoot、或没有可提交变更时组件自己不渲染（见 shouldRenderCommitReminder）。 */}
       {gate?.allowed && workspaceRoot ? (
         <MilestoneCommitReminder
-          defaultCommitMessage="Z000000-0000 #comment feat: 完成开发阶段代码"
+          defaultCommitMessage="feat: 完成开发阶段代码"
           disabled={Boolean(disabled)}
           inline
           milestoneId={`${workspaceRoot}:test-gate`}

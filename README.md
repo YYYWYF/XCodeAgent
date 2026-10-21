@@ -1,3 +1,11 @@
+# 模型转发接入版 DevAgent Studio
+
+先启动相邻 `code7.1_model_transmit`，再按 [模型转发接入说明](docs/MODEL_TRANSMIT.md) 配置并启动 Studio。上游模型连接配置已移至独立转发服务；现有聊天保存、上下文构造和业务流程保持原有职责。
+
+认证配置、开发启动、凭据生命周期及验证方式见 [docs/YUNXIAO_LOGIN.md](docs/YUNXIAO_LOGIN.md)。先填写本目录 `Backend/.env` 的 `YUNXIAO_ENDPOINT`；真实来源 `.env` 未复制。
+
+用户操作指南见 [DevAgent Studio 用户使用手册](docs/USER_MANUAL.md)，涵盖创建应用、设计确认、技术规划、接口映射、开发测试、验收交付与后续迭代。
+
 # DevAgent Studio 桌面端打包
 
 本项目由 Electron 前端和 Python 后端组成。下面的脚本会先用 PyInstaller 构建并暂存后端，再生成对应平台的 Electron 开发安装包。所有命令均从**项目根目录**执行；Windows 和 macOS 需要分别在对应系统上打包，Mac 的 Intel 与 Apple Silicon 也必须分别在同架构机器上打包。

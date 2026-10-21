@@ -105,12 +105,6 @@ def has_explicit_business_access_control_change(request: str) -> bool:
         r"所有人.*(?:可见|访问)",
         r"403",
     )
-    if any(term in text for term in permission_terms) and any(
+    return any(term in text for term in permission_terms) and any(
         re.search(pattern, text) is not None for pattern in access_patterns
-    ):
-        return True
-    # “只有管理员可以查看”等表达本身已经指定主体和受限操作，不需要出现“权限”一词。
-    return any(re.search(pattern, text) is not None for pattern in (
-        r"(?:只有|仅限|仅|只允许)\s*[^，。；;]{0,30}(?:管理员|角色|员工|财务|用户)[^，。；;]{0,30}(?:可以|能|可)(?:查看|看到|访问|编辑|删除|操作|使用)",
-        r"(?:管理员|角色|员工|财务|用户)[^，。；;]{0,20}(?:不能|不得|无法|禁止)(?:查看|访问|编辑|删除|操作|使用)",
-    ))
+    )

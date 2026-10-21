@@ -45,11 +45,11 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
         with open(template_state_path, "w", encoding="utf-8") as handle:
             json.dump(
                 {
-                    "schemaVersion": 3,
-                    "templateRevision": "2026.10.16.1",
+                    "schemaVersion": 2,
+                    "templateRevision": "scheduler-test-r1",
                     "requested": {},
                     "effective": {},
-                    "installedArtifacts": {}, "managedContributions": {},
+                    "appliedAdditions": {},
                 },
                 handle,
             )
@@ -242,10 +242,14 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 "build_execution_scope": scope, **binding, "progress": progress,
                 "progress_source_run_id": "run-source", "execution_stage": "batch_committed",
             })
-            # 新重试只传源执行身份，进度从上述业务文件读取，不绑定 checkpoint 上下文。
-            entry["retry_source_run_id"] = "run-source"
-            entry["request"] = "只重试未完成任务"
+            context = NodeRecoveryContext(
+                source_run_id="run-source", execution_run_id="run-child",
+                thread_id="thread-build", target_node="build", checkpoint_id="entry-build",
+                reentry_reason=WorkflowReentryReason.FAILURE_RETRY,
+                entry_state={**entry, "active_run_id": "run-source"},
+            )
             with (
+                bind_recovery_runtime(context), bind_node_recovery(entry, "build"),
                 patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner),
                 patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
             ):
@@ -269,9 +273,9 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             os.makedirs(os.path.dirname(template_path), exist_ok=True)
             with open(template_path, "w", encoding="utf-8") as handle:
                 json.dump({
-                    "schemaVersion": 3,
-                    "templateRevision": "2026.10.16.1",
-                    "requested": {}, "effective": {}, "installedArtifacts": {}, "managedContributions": {},
+                    "schemaVersion": 2,
+                    "templateRevision": "scheduler-missing-route-r1",
+                    "requested": {}, "effective": {}, "appliedAdditions": {},
                 }, handle)
             plan["template_context"] = template_context(load_template_state(workspace))
             plan_path = os.path.join(workspace, ".devagentstudio", "plans", "build-task-plan.json")
@@ -631,11 +635,11 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         """构造含单个页面任务的 v4 计划与最小无权限模板。"""
 
         state = {
-            "schemaVersion": 3,
-            "templateRevision": "2026.10.16.1",
+            "schemaVersion": 2,
+            "templateRevision": "test-r1",
             "requested": {},
             "effective": {},
-            "installedArtifacts": {}, "managedContributions": {},
+            "appliedAdditions": {},
         }
         _write_workspace_file(workspace, ".devagentstudio/template-state.json")
         with open(os.path.join(workspace, ".devagentstudio/template-state.json"), "w", encoding="utf-8") as handle:

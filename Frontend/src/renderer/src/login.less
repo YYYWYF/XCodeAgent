@@ -172,7 +172,7 @@ body {
   .@{class-prefix}-login-kicker.ant-typography {
     color: #c4b5fd;
     font:
-      12px/1.2 ui-monospace,
+      10px/1.2 ui-monospace,
       SFMono-Regular,
       Menlo,
       Monaco,
@@ -227,7 +227,7 @@ body {
 
   code {
     margin-left: auto;
-    font-size: 12px;
+    font-size: 8px;
     letter-spacing: 0.08em;
   }
 }
@@ -238,7 +238,7 @@ body {
   padding: 12px 14px 13px;
   color: #b5a8c6;
   font:
-    12px/1.4 ui-monospace,
+    10px/1.4 ui-monospace,
     SFMono-Regular,
     Menlo,
     Monaco,
@@ -280,7 +280,7 @@ body {
     align-items: center;
     min-width: 0;
     color: #aa9aba;
-    font-size: 12px;
+    font-size: 10px;
     line-height: 1.35;
     white-space: nowrap;
   }
@@ -388,7 +388,7 @@ body {
   align-items: center;
   justify-content: center;
   color: var(--login-text-secondary);
-  font-size: 13px;
+  font-size: 9px;
 
   .anticon {
     color: #3ca17f;
@@ -409,5 +409,18 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .@{class-prefix}-login-terminal-cursor {
     animation: none;
+  }
+}
+
+.@{class-prefix}-login-action .ant-btn-text {
+  height: 32px;
+  color: var(--login-text-secondary);
+  background: transparent;
+  box-shadow: none;
+  &:hover, &:focus {
+    color: var(--login-text);
+    background: var(--login-soft);
+    box-shadow: none;
+    transform: none;
   }
 }

@@ -19,4 +19,4 @@ def load_template_state_v3(workspace: str | Path) -> TemplateStateV3:
 
 def write_template_state_v3(workspace: str | Path, state: TemplateStateV3) -> None:
     """原子持久化 Engine 返回的 V3 State。"""
-    atomic_write_json(Path(workspace).expanduser().resolve() / TEMPLATE_STATE_V3_RELATIVE_PATH, state.model_dump(mode="json", exclude_none=True))
+    atomic_write_json(Path(workspace).expanduser().resolve() / TEMPLATE_STATE_V3_RELATIVE_PATH, state.model_dump(mode="json"))

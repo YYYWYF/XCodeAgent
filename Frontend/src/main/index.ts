@@ -11,7 +11,6 @@ import { DEVAGENTSTUDIO_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
-import { writeSessionAtomically } from './sessionPersistence'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
@@ -27,10 +26,13 @@ import {
 import {
   clearAuthState,
   ensureDevAgentStudioDataDir,
-  getAccessToken,
+  getAuthenticationStatus,
+  revokeLocalCredentials,
+  shutdownAuthentication,
+  requestAuthenticatedCloud,
   getDevAgentStudioDataDir,
   hasValidAuthToken,
-  loginWithCmbDeviceFlow
+  loginWithYunxiao
 } from './auth'
 
 registerDesignRuntimeScheme()
@@ -1444,9 +1446,10 @@ async function createChatSession(
       updatedAt: now
     })
     await ensureSessionsDir(workspaceRoot, editorMode)
-    await writeSessionAtomically(
+    await fs.writeFile(
       getSessionFile(workspaceRoot, editorMode, session.id),
-      session
+      `${JSON.stringify(session, null, 2)}\n`,
+      'utf8'
     )
     return session
   })
@@ -1548,26 +1551,6 @@ function setupWorkspaceIpc(): void {
     }
     const currentApplication = await readManagedWorkspaceApplication(workspaceRoot)
     const nextApplication = { ...(payload.application as Record<string, unknown>) }
-    const generatedState = path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'template-state.json')
-    if (await fs.stat(generatedState).then(() => true, () => false)) {
-      const current = currentApplication as Record<string, unknown>
-      const currentTheme = current.theme as Record<string, unknown> | undefined
-      const nextTheme = nextApplication.theme as Record<string, unknown> | undefined
-      const currentAuth = current.auth as Record<string, unknown> | undefined
-      const nextAuth = nextApplication.auth as Record<string, unknown> | undefined
-      const currentAuthorization = current.authorization as Record<string, unknown> | undefined
-      const nextAuthorization = nextApplication.authorization as Record<string, unknown> | undefined
-      const managedChanged = current.appName !== nextApplication.appName ||
-        current.appIcon !== nextApplication.appIcon ||
-        currentTheme?.primaryColor !== nextTheme?.primaryColor ||
-        currentAuth?.enable !== nextAuth?.enable ||
-        JSON.stringify(currentAuth?.yht) !== JSON.stringify(nextAuth?.yht) ||
-        currentAuthorization?.enabled !== nextAuthorization?.enabled ||
-        JSON.stringify(currentAuthorization?.initialAdministratorSubjects) !== JSON.stringify(nextAuthorization?.initialAdministratorSubjects)
-      if (managedChanged) {
-        throw new Error('已生成应用的配置字段必须通过后端统一配置操作提交。')
-      }
-    }
     // 只有实际配置变化才递增版本，避免打开或刷新应用时制造过期规划产物。
     if (JSON.stringify(currentApplication) !== JSON.stringify(nextApplication)) {
       nextApplication.configRevision = Number(currentApplication.configRevision) + 1
@@ -1679,7 +1662,7 @@ function setupSessionStorageIpc(): void {
     if (immutableIdentityChanged) {
       throw new Error('session phase identity is immutable')
     }
-    await writeSessionAtomically(sessionFile, session)
+    await fs.writeFile(sessionFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8')
     return { ok: true, session: sessionSummary(session) }
   })
 
@@ -1697,18 +1680,18 @@ function setupSessionStorageIpc(): void {
   })
 }
 
-/** 注册登录、内存 token 读取和重新认证所需的 Electron IPC。 */
+/** 注册 Python 认证桥接、公开进度及重新登录所需的 Electron IPC。 */
 function setupAuthIpc(): void {
-  ipcMain.handle('auth:status', async () => ({
-    authenticated: hasValidAuthToken()
-  }))
+  ipcMain.handle('auth:status', async () => getAuthenticationStatus())
+  ipcMain.handle('auth:cloud-request', async (_event, request) => requestAuthenticatedCloud(request))
+  ipcMain.handle('auth:cancel', async () => { await clearAuthState(); return { ok: true } })
 
-  ipcMain.handle('auth:get-access-token', async () => ({
-    accessToken: getAccessToken()
-  }))
-
-  ipcMain.handle('auth:login', async () => {
-    await loginWithCmbDeviceFlow()
+  ipcMain.handle('auth:login', async (event) => {
+    if (isQuitting || event.sender !== loginWindow?.webContents) throw new Error('当前窗口不能发起登录。')
+    await loginWithYunxiao((progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('auth:progress', progress)
+    })
+    if (isQuitting) throw new Error('应用正在退出。')
     if (loginWindow && !loginWindow.isDestroyed()) {
       loginWindow.destroy()
     }
@@ -1836,9 +1819,9 @@ function createLoginWindow(): void {
   loadRendererPage(loginWindow, 'login')
 }
 
-/** 根据主进程内存中的登录态打开主窗口或登录窗口。 */
+/** 根据 Python 凭据文件中的有效登录态打开主窗口或登录窗口。 */
 async function openAuthenticatedWindow(): Promise<void> {
-  if (hasValidAuthToken()) {
+  if (await hasValidAuthToken()) {
     if (loginWindow && !loginWindow.isDestroyed()) {
       loginWindow.hide()
     }
@@ -1896,10 +1879,10 @@ function setupTray(): void {
 async function clearAuthStateBeforeStartup(): Promise<boolean> {
   try {
     await ensureDevAgentStudioDataDir()
-    await clearAuthState()
+    await revokeLocalCredentials()
     return true
   } catch (error) {
-    const authFile = path.join(getDevAgentStudioDataDir(), 'auth.json')
+    const authFile = path.join(getDevAgentStudioDataDir(), 'yst-login', 'auth.json')
     console.error('Failed to clear auth token during startup', error)
     dialog.showErrorBox(
       '认证状态清理失败',
@@ -1996,7 +1979,7 @@ let quitCleanupStarted = false
 /** 在应用退出前清除认证状态并停止本地后端服务。 */
 async function cleanupBeforeQuit(): Promise<void> {
   try {
-    await clearAuthState()
+    await shutdownAuthentication()
   } catch (error) {
     console.error('Failed to clear auth token', error)
   }
@@ -2011,6 +1994,13 @@ async function cleanupBeforeQuit(): Promise<void> {
     await stopBackendService()
   } catch (error) {
     console.error('Failed to stop backend service', error)
+  }
+  // 后端结束后再清理一次，覆盖强制终止或迟到写入的竞态。
+  try {
+    await revokeLocalCredentials()
+  } catch (error) {
+    console.error('认证文件最终清理失败', error)
+    dialog.showErrorBox('登录凭据清理失败', '请检查用户数据目录的文件权限。下次启动应用会再次清理残留凭据。')
   }
 }
 

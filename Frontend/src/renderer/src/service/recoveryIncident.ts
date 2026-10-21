@@ -11,7 +11,6 @@ import { isTemplateEngineFailure } from './recoveryFailureMessage'
 export type RecoveryIncidentPresentation =
   | {
       kind: 'recoverable'
-      presentation?: 'stopped_generation'
       title: string
       failureDiagnostic?: RecoveryFailureDiagnostic | null
       failureMessage?: string
@@ -32,27 +31,6 @@ export type RecoveryIncidentPresentation =
 
 const MODEL_PLANNING_FAILURE_CODE = 'UNIT_GENERATION_INFRASTRUCTURE_FAILURE'
 const MODEL_PLANNING_FAILURE_PREFIX = 'UNIT_GENERATION_MODEL_'
-const DIRECT_MODIFICATION_SCOPE_DENIED_CODE = 'DIRECT_MODIFICATION_SCOPE_DENIED'
-const DIRECT_MODIFICATION_SCOPE_DENIED_MESSAGE_PREFIX = '无权修改（超出职责范围）：'
-
-/** 从结构化错误码或拒绝消息识别二次修改的职责范围拒绝。 */
-export function isDirectModificationScopeDenied(
-  workflow?: WorkflowRunPayload,
-  message?: string
-): boolean {
-  const result = workflow?.result
-  const stateResult = workflow?.state?.direct_modification_result
-  const resultErrorCode = result && typeof result === 'object'
-    ? (result as Record<string, unknown>).errorCode : undefined
-  const stateErrorCode = stateResult && typeof stateResult === 'object'
-    ? (stateResult as Record<string, unknown>).errorCode : undefined
-  if ([workflow?.summary.errorCode, resultErrorCode, stateErrorCode]
-    .includes(DIRECT_MODIFICATION_SCOPE_DENIED_CODE)) return true
-  const candidates = [message, workflow?.summary.message]
-  return candidates.some((value) =>
-    typeof value === 'string' && value.trim().startsWith(DIRECT_MODIFICATION_SCOPE_DENIED_MESSAGE_PREFIX)
-  )
-}
 
 /** 仅识别已定义的执行计划模型基础设施错误，不用关键词归因其他异常。 */
 export function isWorkbenchModelPlanningFailure(
@@ -126,18 +104,12 @@ export function applicationPlanningRecoveryIncident(
   const failureTitle = recovery?.failureDiagnostic?.operation === 'template_reconcile'
     ? '模板更新失败' : '模板生成失败'
   if (recovery && actionPlan?.status === 'recoverable' && actionPlan.primaryAction) {
-    // Backend 仅为已中断的规划签发「继续生成」；存在真实失败诊断时仍保留错误展示。
-    const stopped = recovery.classification === 'ready_to_continue' &&
-      actionPlan.primaryAction.label === '继续生成' && !recovery.failureDiagnostic
     return {
       kind: 'recoverable',
-      ...(stopped ? { presentation: 'stopped_generation' as const } : {}),
-      title: stopped ? '已停止生成' : actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
-        ? '前置文件需要重新生成' : templateFailure ? failureTitle : '执行已中断',
-      failureDiagnostic: actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE' && recovery.failureDiagnostic
-        ? { ...recovery.failureDiagnostic, userMessage: actionPlan.message } : recovery.failureDiagnostic,
-      failureMessage: stopped ? undefined : currentPlanningFailureMessage(state, actionPlan),
-      recoveryMessage: stopped ? '本轮修改已保留，可基于最新文件继续生成。' : actionPlan.message,
+      title: templateFailure ? failureTitle : '执行已中断',
+      failureDiagnostic: recovery.failureDiagnostic,
+      failureMessage: currentPlanningFailureMessage(state, actionPlan),
+      recoveryMessage: actionPlan.message,
       action: actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
     }
@@ -198,7 +170,6 @@ export function workbenchRecoveryIncident(
   const failureMessage = buildRetry && /^Workflow failed[：:]\s*完成 \d+ 个节点。$/.test(rawFailureMessage || '')
     ? '开发任务执行失败。' : rawFailureMessage
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
-    const regenerate = actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
     const retryingNode = ['retry_failed_node', 'retry_business_node'].includes(
       actionPlan.primaryAction.kind
     )
@@ -206,13 +177,12 @@ export function workbenchRecoveryIncident(
     const nodeLabel = targetNode ? WORKBENCH_RETRY_NODE_LABELS[targetNode] : undefined
     return {
       kind: 'recoverable',
-      title: regenerate ? '前置文件需要重新生成' : retryingNode
+      title: retryingNode
         ? '当前执行失败'
         : '工作台执行需要恢复',
-      failureDiagnostic: regenerate && failureDiagnostic
-        ? { ...failureDiagnostic, userMessage: actionPlan.message } : failureDiagnostic,
+      failureDiagnostic,
       failureMessage,
-      recoveryMessage: regenerate ? actionPlan.message : buildRetry
+      recoveryMessage: buildRetry
         ? `${completedMessage}将保留已完成进度，${buildSummary?.retry_available === true
             ? '仅重试失败任务。'
             : buildSummary?.recovery_available === true
@@ -220,13 +190,10 @@ export function workbenchRecoveryIncident(
               : '继续处理失败任务。'}`
         : candidate.executionStatus === 'interrupted' && targetNode === 'build'
           ? '将从开发实现阶段重新开始，重新检查当前文件并执行任务清单。'
-          : retryingNode && targetNode === 'integration_test'
-            // 恢复入口由后端签发；此处只解释测试阶段重启，不在前端改写节点或预算。
-            ? '将从测试阶段重新开始，重新检查当前代码，并重新计算本轮修复次数。'
           : retryingNode
         ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
         : '可以继续当前执行。',
-      action: retryingNode && !regenerate
+      action: retryingNode
         ? { ...actionPlan.primaryAction, label: '重试' }
         : actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
@@ -238,9 +205,7 @@ export function workbenchRecoveryIncident(
       title: candidate.executionStatus === 'failed' ? '当前执行失败' : '执行未完成',
       failureDiagnostic,
       failureMessage,
-      recoveryMessage: actionPlan.reasonCode === 'RETRY_ENTRY_NOT_FOUND'
-        ? '找不到恢复入口，请手动发起流程。'
-        : '请重试；系统会重新确认执行起点。',
+      recoveryMessage: '请重试；系统会重新确认执行起点。',
       reasonCode: actionPlan.reasonCode
     }
   }

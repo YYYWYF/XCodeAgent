@@ -96,8 +96,8 @@ def abandon_pending_build_task_plan(
     tombstone；生命周期写入失败时保留 Pending，不伪报成功。Pending 删除成功后
     同时移除身份匹配的 PlanningRun 快照，让本次 DAG 生成真正结束；Formal 永不改动。
     Regenerate 复用精确删除能力时显式关闭 tombstone，因为它会立即创建新的 PlanningRun。
-    Lifecycle 按已验证的草稿身份收口当前确认执行；生成来源只用于溯源，
-    不接受控制请求猜测当前执行。
+    ``workflow_run_id`` 仅保留旧调用方参数；Lifecycle 始终使用 PendingPlan 内冻结的
+    Workflow 身份，不接受控制请求猜测。
     """
 
     from app.services.application_lifecycle import record_abandoned_planning_result
@@ -150,8 +150,7 @@ def abandon_pending_build_task_plan(
                 draft_digest=identity.draft_digest,
                 base_confirmed_plan_digest=identity.base_confirmed_plan_digest,
                 build_execution_scope=dict(identity.build_execution_scope),
-                owner_session_id=identity.owner_session_id,
-                # 保留生成来源作溯源，不把它当作当前执行的清理令牌。
+                # PendingPlan 内冻结的 Workflow 身份优先于控制请求中的可选输入。
                 workflow_run_id=identity.workflow_run_id,
             )
         build_task_plan_pending_json_path(state).unlink()

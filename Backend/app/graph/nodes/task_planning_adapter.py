@@ -37,7 +37,6 @@ from app.services.build_task_plan_lifecycle import (
     confirm_pending_build_task_plan,
 )
 from app.services.build_task_planner import tasks_from_build_task_plan
-from app.services.build_restart import confirmed_plan_build_handoff
 from app.services.build_task_planning_service import (
     MainlinePlanningResult,
     run_mainline_planning,
@@ -52,7 +51,6 @@ from app.services.planning_run_contracts import PlanningRun, PlanningRunProjecti
 from app.services.planning_run_progress import project_planning_run_progress
 from app.services.node_recovery_context import current_node_recovery_context
 from app.services.template_state import load_template_state, template_context
-from app.services.task_plan_confirmation import require_pending_task_plan
 from app.services.unit_generation_contracts import (
     UnitGenerationAttemptResult,
     UnitGenerationPolicy,
@@ -192,8 +190,6 @@ async def _run_async_workflow_planning_adapter(
     if isinstance(context, dict):
         return context
     planning_kwargs: dict[str, Any] = {}
-    if state.get("retry_source_run_id"):
-        planning_kwargs["recovery_source_workflow_run_id"] = state["retry_source_run_id"]
     recovery_context = current_node_recovery_context()
     if (
         recovery_context is not None
@@ -620,7 +616,6 @@ def _project_confirm_result(
             "unit_graph": confirmed_plan.get("unit_graph", {}),
             "last_persisted_build_execution_scope": context.scope,
             **context.formal_state,
-            **confirmed_plan_build_handoff(state, confirmed_plan, already_confirmed=result.status == "already_confirmed"),
         }
     return _stale_confirm_result(result, state=state, context=context)
 
@@ -633,8 +628,7 @@ def _stale_confirm_result(
 ) -> dict[str, Any]:
     """拒绝过期、已放弃或校验失败的 Confirm，并保留当前 Pending 供重新确认。"""
 
-    # 只保留仍有真实草稿的确认门；已消费的旧动作不能制造空确认并占住主流程。
-    pending = require_pending_task_plan(state)
+    pending = load_pending_build_task_plan(state) or {}
     errors = list(result.errors) or [
         "待确认任务规划已过期或被替换，请重新生成后再确认。"
     ]

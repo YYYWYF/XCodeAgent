@@ -52,7 +52,7 @@ from app.services.api_design_schema import resolve_mapping_schema
 from app.services.data_sources import (
     DataSourceError,
     public_catalog,
-    resolve_database_config,
+    resolve_direct_database_config,
 )
 from app.services.frontend_page_tree import project_plan_page_records
 from app.tools.mysql_info import mysql_table_info
@@ -246,13 +246,7 @@ def initial_api_design_payload(
 
 
 def load_database_tables(workspace_root: str | Path, source_id: str) -> dict[str, Any]:
-    """按当前来源模式读取内置 SaaS 或外部 MySQL 表清单，不返回凭据。"""
-
-    from app.services.data_sources import database_source_mode
-    from app.services.managed_database_metadata import read_managed_tables
-
-    if database_source_mode(workspace_root, source_id) == "builtin":
-        return read_managed_tables(workspace_root, source_id)
+    """实时读取直属 MySQL 表清单，不返回任何连接凭据。"""
 
     payload = _mysql_metadata(workspace_root, source_id)
     schemas = payload.get("schemas") if isinstance(payload.get("schemas"), dict) else {}
@@ -273,13 +267,7 @@ def load_database_tables(workspace_root: str | Path, source_id: str) -> dict[str
 
 
 def load_database_columns(workspace_root: str | Path, source_id: str, table: str) -> dict[str, Any]:
-    """按当前来源模式读取真实列，内置来源由 SaaS 校验精确表归属。"""
-
-    from app.services.data_sources import database_source_mode
-    from app.services.managed_database_metadata import read_managed_columns
-
-    if database_source_mode(workspace_root, source_id) == "builtin":
-        return read_managed_columns(workspace_root, source_id, table)
+    """实时读取直属 MySQL 单表字段并转换为前端候选结构。"""
 
     payload = _mysql_metadata(workspace_root, source_id, table=table)
     schemas = payload.get("schemas") if isinstance(payload.get("schemas"), dict) else {}
@@ -431,9 +419,6 @@ def api_design_readiness(
                 if design is None:
                     raise ApiDesignError("API 设计正式产物无法读取。")
                 _validate_persisted_design(project_plan, contract, endpoint, design)
-                from app.services.managed_database_metadata import validate_managed_snapshots
-
-                validate_managed_snapshots(workspace_root, design)
             except (ApiDesignError, ValueError) as exc:
                 status = {
                     "status": "stale",
@@ -486,9 +471,6 @@ def load_confirmed_endpoint_designs(
             if design is None:
                 raise ApiDesignError(f"Endpoint {contract_id}/{endpoint_id} 缺少当前版已确认动态映射。")
             _validate_persisted_design(project_plan, contract, endpoint, design)
-            from app.services.managed_database_metadata import validate_managed_snapshots
-
-            validate_managed_snapshots(workspace_root, design)
             result.append(design)
     found = {str(item.get("endpointId") or "") for item in result}
     missing = [endpoint_id for endpoint_id in endpoint_ids if endpoint_id not in found]
@@ -1204,11 +1186,9 @@ def _validated_source_snapshots(
     for (source_id, table), refs in sorted(database_refs.items()):
         metadata = load_database_columns(workspace_root, source_id, table)
         actual_schema = str(metadata.get("schema") or metadata.get("database") or "")
-        if isinstance(binding, DatabaseBinding) and binding.source_id == source_id and binding.table == table and binding.schema_name != actual_schema:
-            raise ApiDesignError("数据库表绑定与当前来源的 Schema 不一致，请重新选择。")
         columns = {str(item.get("name") or ""): item for item in _dict_items(metadata.get("columns"))}
         for ref in refs:
-            if (actual_schema or metadata.get("managedDatasourceKey")) and ref.schema_name != actual_schema:
+            if actual_schema and ref.schema_name != actual_schema:
                 raise ApiDesignError(f"数据库字段 Schema 与实时元数据不一致：{ref.schema_name}.{ref.table}。")
             actual = columns.get(ref.column)
             if actual is None:
@@ -1420,7 +1400,7 @@ def _mysql_metadata(workspace_root: str | Path, source_id: str, *, table: str | 
     """解析内部凭据并调用既有只读 MySQL 元数据工具。"""
 
     try:
-        config = resolve_database_config(workspace_root, source_id)
+        config = resolve_direct_database_config(workspace_root, source_id)
         raw = mysql_table_info(
             host=config["host"],
             port=config["port"],
@@ -1435,7 +1415,7 @@ def _mysql_metadata(workspace_root: str | Path, source_id: str, *, table: str | 
     if not isinstance(payload, dict) or payload.get("status") != "ok":
         raise ApiDesignError(str(payload.get("error") or "数据库元数据读取失败。"))
     if payload.get("database_exists") is False:
-        raise ApiDesignError("MySQL 的目标 Schema 不存在。")
+        raise ApiDesignError("直属 MySQL 的目标 Schema 不存在。")
     return payload
 
 
@@ -1565,14 +1545,8 @@ def _target_endpoints(
     target_id: str,
     api_contract_id: str | None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """解析应用、页面或单 Endpoint 对应的当前 TechnicalPlan 接口集合。"""
+    """解析页面或单 Endpoint 对应的唯一 TechnicalPlan 接口集合。"""
 
-    if target_type == "application":
-        return [
-            (contract, endpoint)
-            for contract in _dict_items(project_plan.get("api_contracts"))
-            for endpoint in _dict_items(contract.get("endpoints"))
-        ]
     if target_type == "endpoint":
         return [find_endpoint(project_plan, str(api_contract_id or ""), target_id)]
     if target_type != "page":

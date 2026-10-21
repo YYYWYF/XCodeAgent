@@ -167,7 +167,7 @@ def _draft_database_writes(value: Any) -> list[dict[str, Any]]:
         table = str(item.get("table") or "")
         column = str(item.get("column") or "")
         column_type = str(item.get("type") or "unknown")
-        if not source_id or not table or len(source_id) > 128 or len(schema) > 256 or len(table) > 256 or len(column) > 256:
+        if not source_id or not schema or not table or len(source_id) > 128 or len(schema) > 256 or len(table) > 256 or len(column) > 256:
             raise ValueError("数据库写入字段缺少有效的数据表身份。")
         row = {
             "sourceType": "database", "sourceId": source_id, "schema": schema, "table": table,
@@ -288,7 +288,7 @@ def validate_binding_selection(workspace: str | Path, selection: BindingTarget, 
     if selection.source_type != "external_api" and draft.get("externalApiBindings"):
         raise ValueError("外部 API 取值规则只能绑定外部接口。")
     if selection.source_type == "database":
-        if not selection.table or selection.schema_name is None or not any(
+        if not selection.table or not selection.schema_name or not any(
             item["sourceId"] == selection.source_id and item["schema"] == selection.schema_name and item["table"] == selection.table
             for item in selected_tables(workspace)
         ):

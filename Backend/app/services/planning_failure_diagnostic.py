@@ -70,7 +70,7 @@ def planning_failure_evidence(
         rounds.append((unit.generation_round, unit.current_issues))
         for round_number, issues in rounds:
             for issue in issues:
-                reason = f"{unit_id}，第 {round_number} 轮：{_issue_reason(issue.code)}"
+                reason = f"{unit_id}，第 {round_number} 轮：{_issue_reason(issue.code)}（{issue.code}）"
                 if reason not in reasons:
                     reasons.append(reason)
     diagnostic = "\n".join([summary, *reasons])[:2048]

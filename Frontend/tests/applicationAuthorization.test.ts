@@ -9,7 +9,6 @@ import {
 } from '../src/renderer/src/service/applicationStorage'
 import { initialApplicationDraft } from '../src/renderer/src/components/Welcome/constants'
 import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/utils'
-import { settingsConfigChanges } from '../src/renderer/src/components/SettingsPage/settingsConfigChanges'
 
 /** 验证新建表单只生成当前 v6 的内置权限种子，并清理重复成员标识。 */
 test('生成 schemaVersion 6 权限配置', () => {
@@ -30,17 +29,6 @@ test('生成 schemaVersion 6 权限配置', () => {
     enabled: true,
     initialAdministratorSubjects: ['ops@example.com', 'admin@example.com']
   })
-})
-
-/** 验证新建应用只写入一号通登录字段，且不预填任何凭据。 */
-test('生成一号通登录初始配置', () => {
-  const schema = buildApplicationSchema(structuredClone(initialApplicationDraft) as ApplicationDraft)
-
-  assert.deepEqual(schema.auth, {
-    enable: false,
-    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '' }
-  })
-  assert.equal('authnSource' in schema.auth, false)
 })
 
 /** 验证首轮规划请求只携带当前权限开关和管理员种子，不携带 provider 或页面开关。 */
@@ -126,23 +114,4 @@ test('拒绝权限配置前置条件冲突', () => {
     initialAdministratorSubjects: ['current-user']
   }
   assert.throws(() => buildApplicationSchema(placeholderAdministrator), /current-user/)
-})
-
-/** 验证设置页只把受管字段差异交给统一配置事务。 */
-test('设置页配置提案只包含发生变化的白名单字段', () => {
-  const current = {
-    ...buildApplicationSchema(structuredClone(initialApplicationDraft) as ApplicationDraft),
-    id: 'application-settings-test',
-    workspaceRoot: '/tmp/application-settings-test'
-  } as ApplicationConfig
-  const next = structuredClone(current)
-  next.appName = '新的应用名称'
-  next.theme.primaryColor = '#e60012'
-  next.authorization.initialAdministratorSubjects = ['ops@example.com']
-
-  assert.deepEqual(settingsConfigChanges(current, next), {
-    appName: '新的应用名称',
-    'theme.primaryColor': '#e60012',
-    'authorization.initialAdministratorSubjects': ['ops@example.com']
-  })
 })

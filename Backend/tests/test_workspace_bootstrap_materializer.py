@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
-from app.services.template_reconcile.protocol_v3 import TemplateStateV3
+from app.services.template_reconcile.protocol_v2 import TemplateStateV2
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 
@@ -23,16 +23,15 @@ class _FailingGitManager:
         raise OSError("git commit failed")
 
 
-def _template_state() -> TemplateStateV3:
-    """返回满足当前唯一 V3 契约的最小 State。"""
+def _template_state() -> TemplateStateV2:
+    """返回满足当前唯一 V2 契约的最小 State。"""
 
-    return TemplateStateV3.model_validate({
-        "schemaVersion": 3,
-        "templateRevision": "2026.10.17.1",
+    return TemplateStateV2.model_validate({
+        "schemaVersion": 2,
+        "templateRevision": "template-r1",
         "requested": {},
         "effective": {},
-        "installedArtifacts": {},
-        "managedContributions": {},
+        "appliedAdditions": {},
     })
 
 
@@ -70,8 +69,8 @@ class WorkspaceMaterializerTests(unittest.TestCase):
             self.assertTrue((workspace / ".git").is_dir())
             self.assertTrue((workspace / TEMPLATE_STATE_RELATIVE_PATH).is_file())
             self.assertFalse((workspace / ".devagentstudio/bootstrap-staging").exists())
-            gitignore = (workspace / ".gitignore").read_text(encoding="utf-8")
-            self.assertIn(".devagentstudio/runtime/", gitignore)
+            exclude = (workspace / ".git/info/exclude").read_text(encoding="utf-8")
+            self.assertIn(".devagentstudio/", exclude)
             self.assertTrue(BootstrapGitManager().verify_baseline(workspace))
 
     def test_materialize_commits_all_safe_zip_files_including_template_contracts(self) -> None:

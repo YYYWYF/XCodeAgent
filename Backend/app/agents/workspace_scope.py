@@ -15,7 +15,7 @@ from app.services.builtin_skills import (
 )
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.workspace.virtual_paths import host_workspace_virtual_deny_patterns
-from app.workspace.workspace import DEFAULT_IGNORED_DIRS, SENSITIVE_FILE_NAMES
+from app.workspace.workspace import SENSITIVE_FILE_NAMES
 
 
 AgentWorkspaceMode = Literal[
@@ -45,21 +45,6 @@ _DATA_SOURCE_IGNORED_DIRECTORY_NAMES = frozenset(
         "dist",
         "node_modules",
         "out",
-    }
-)
-_WORKSPACE_ASSISTANT_IGNORED_DIRECTORY_NAMES = frozenset(
-    {
-        *DEFAULT_IGNORED_DIRS,
-        ".cache",
-        ".gradle",
-        ".tox",
-        "bower_components",
-        "coverage",
-        "jspm_packages",
-        "out",
-        "target",
-        "vendor",
-        "venv",
     }
 )
 
@@ -184,21 +169,7 @@ def create_workspace_permissions(
         )
         return permissions
 
-    if mode == "workspace_assistant":
-        permissions.extend(
-            [
-                FilesystemPermission(
-                    operations=["read", "write"],
-                    paths=_workspace_assistant_ignored_virtual_paths(),
-                    mode="deny",
-                ),
-                FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),
-                FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
-            ]
-        )
-        return permissions
-
-    if mode in {"database", "repair_planner"}:
+    if mode in {"database", "repair_planner", "workspace_assistant"}:
         permissions.extend(
             [
                 FilesystemPermission(operations=["read"], paths=["/**"], mode="allow"),
@@ -335,28 +306,6 @@ def _data_source_ignored_virtual_paths() -> list[str]:
                     f"/{root}/**/{name}/**",
                 ]
             )
-    return paths
-
-
-def _workspace_assistant_ignored_virtual_paths() -> list[str]:
-    """生成只读工程问答对依赖、构建输出和缓存目录的拒绝规则。"""
-
-    paths = [
-        "/.devagentstudio/cache",
-        "/.devagentstudio/cache/",
-        "/.devagentstudio/cache/**",
-    ]
-    for name in sorted(_WORKSPACE_ASSISTANT_IGNORED_DIRECTORY_NAMES):
-        paths.extend(
-            [
-                f"/{name}",
-                f"/{name}/",
-                f"/{name}/**",
-                f"/**/{name}",
-                f"/**/{name}/",
-                f"/**/{name}/**",
-            ]
-        )
     return paths
 
 

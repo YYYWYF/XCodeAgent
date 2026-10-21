@@ -3,7 +3,6 @@ import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
 import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
-import { readWorkspaceToolActivity } from './workspaceToolActivity'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
@@ -12,7 +11,6 @@ import type {
   WorkflowClarificationAnswers,
   WorkflowConfirmationArtifact,
   WorkflowBuildExecutionScope,
-  WorkflowBuildToolActivity,
   WorkflowDebugOptions,
   WorkflowAction,
   WorkflowEvent,
@@ -30,7 +28,6 @@ export type SendWorkflowMessageOptions = {
   application?: ApplicationConfig
   clarificationAnswers?: WorkflowClarificationAnswers
   applicationPlanningInteraction?: ApplicationPlanningInteraction
-  technicalPlanningConversation?: import('./technicalPlanningConversation').TechnicalPlanningMessage
   productStageConversation?: {
     request: string
   }
@@ -60,7 +57,7 @@ export type SendWorkflowMessageOptions = {
   workflowScope?: string
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
-    | { action: 'continue' | 'retry_current_failure'; sourceRunId: string }
+    | { action: 'retry_current_failure'; sourceRunId: string }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void
@@ -91,10 +88,6 @@ export type SendWorkflowMessageOptions = {
   conversationApprovedPaths?: string[]
   conversationHandoffDecision?: 'approved' | 'rejected'
   conversationImpactInteractionId?: string
-  conversationConfigRequestId?: string
-  conversationConfigOperationId?: string
-  conversationConfigDecision?: 'applied' | 'cancelled'
-  conversationConfirmScopeBeforeExecution?: boolean
 }
 
 /** 将已选 DOM 的源码文件和行号直接附加到普通二次修改需求。 */
@@ -119,7 +112,6 @@ export function buildWorkflowForwardedProps(
     application: options.application,
     clarificationAnswers: options.clarificationAnswers,
     applicationPlanningInteraction: options.applicationPlanningInteraction,
-    technicalPlanningConversation: options.technicalPlanningConversation,
     productStageConversation: options.productStageConversation,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
@@ -153,9 +145,6 @@ export function buildWorkflowForwardedProps(
       ? {
           workspaceRoot: options.workspaceRoot,
           selectedSkillNames: options.selectedSkillNames,
-          ...(options.resumeExecutionRunId !== undefined
-            ? { resumeExecutionRunId: options.resumeExecutionRunId }
-            : {}),
           ...(options.conversationTarget !== undefined
             ? { target: options.conversationTarget }
             : {}),
@@ -173,18 +162,6 @@ export function buildWorkflowForwardedProps(
             : {}),
           ...(options.conversationImpactInteractionId !== undefined
             ? { impactInteractionId: options.conversationImpactInteractionId }
-            : {}),
-          ...(options.conversationConfigRequestId !== undefined
-            ? { configRequestId: options.conversationConfigRequestId }
-            : {}),
-          ...(options.conversationConfigOperationId !== undefined
-            ? { configOperationId: options.conversationConfigOperationId }
-            : {}),
-          ...(options.conversationConfigDecision !== undefined
-            ? { configDecision: options.conversationConfigDecision }
-            : {}),
-          ...(options.conversationConfirmScopeBeforeExecution !== undefined
-            ? { confirmScopeBeforeExecution: options.conversationConfirmScopeBeforeExecution }
             : {})
         }
       : undefined
@@ -241,7 +218,6 @@ export type IntegrationTestCheckRecord = {
   required: boolean
   advisory?: boolean
   evidence?: string
-  activeToolActivity?: WorkflowBuildToolActivity
   passedTests?: number
   totalTests?: number
   performanceScores?: {
@@ -307,7 +283,6 @@ export type DagGenerationIssueRecord = {
 
 export type DagGenerationUnitRecord = {
   id: string
-  displayName?: string
   kind: string
   participation: DagGenerationParticipation
   generationStrategy: DagGenerationStrategy
@@ -469,8 +444,7 @@ export type ProcessStepRecord = {
 
 const DEFAULT_AGENT_BASE_URL = 'http://127.0.0.1:8000'
 const STOP_NATURAL_DRAIN_MS = 300
-// 后端最多等待 30 秒真实退出，控制请求需留出传输和进程收尾余量。
-const STOP_CONTROL_TIMEOUT_MS = 40_000
+const STOP_CONTROL_TIMEOUT_MS = 4_000
 const STOP_TRANSPORT_DRAIN_MS = 800
 
 export type WorkflowCancellationStatus =
@@ -595,9 +569,7 @@ export class AgUiChatSession {
   private activeRunId?: string
   private activeRunCompletion?: Promise<void>
   private resolveActiveRunCompletion?: () => void
-  private rejectStoppedRun?: (reason: Error) => void
   private unresolvedServerRunId?: string
-  private activeWorkspaceRoot?: string
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
   constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
@@ -606,10 +578,8 @@ export class AgUiChatSession {
   }
 
   /** 返回当前会话是否仍有本地活动运行或尚未确认退出的服务端运行。 */
-  hasActiveRun(runId?: string): boolean {
-    return runId
-      ? this.activeRunId === runId || this.unresolvedServerRunId === runId
-      : Boolean(this.activeRunId || this.unresolvedServerRunId)
+  hasActiveRun(): boolean {
+    return Boolean(this.activeRunId || this.unresolvedServerRunId)
   }
 
   /** 有限等待旧运行自然结束，否则由服务端确认退出后再收口本地 SSE。 */
@@ -628,7 +598,7 @@ export class AgUiChatSession {
       return
     }
 
-    const cancellation = await cancelWorkflowRun(this.threadId, runId, this.activeWorkspaceRoot, this.endpointUrl)
+    const cancellation = await cancelWorkflowRun(this.threadId, runId, undefined, this.endpointUrl)
     const serverStopped =
       cancellation.status === 'cancelled' ||
       cancellation.status === 'pending_confirmation' ||
@@ -651,12 +621,7 @@ export class AgUiChatSession {
       )
     }
     if (!transportSettled) {
-      // 服务端已确认停止，但 SDK abort 可能没有结束原 Promise；让调用者真正进入 finally。
-      if (this.activeRunId === runId && this.activeAgent === activeAgent) {
-        const reason = new Error('Workflow 已停止。')
-        reason.name = 'AbortError'
-        this.rejectStoppedRun?.(reason)
-      }
+      this.finishActiveRun(runId, activeAgent)
     }
   }
 
@@ -682,17 +647,12 @@ export class AgUiChatSession {
     let runErrorMessage = ''
     let runErrorCode: string | undefined
     let runFinished = false
-    let acceptingEvents = true
     const emitToolCalls = (nextToolCalls: ToolCallRecord[]): void => {
       toolCalls = nextToolCalls
       options.onToolCalls?.(toolCalls)
     }
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
-        if (!acceptingEvents) return
-        if (event.name === 'technical-planning-conversation' && event.value?.status === 'failed') {
-          runErrorMessage = event.value.error?.message || '技术规划修改失败。'
-        }
         if (event.name === 'application-lifecycle') {
           const lifecycle = readApplicationLifecycle(event.value)
           if (lifecycle) options.onApplicationLifecycle?.(lifecycle)
@@ -743,7 +703,6 @@ export class AgUiChatSession {
         }
       },
       onStateSnapshotEvent: ({ event }) => {
-        if (!acceptingEvents) return
         workflow = reconcileWorkflowFailurePayload(workflow, readWorkflowFromState(event.snapshot))
         if (workflow) {
           emitWorkflowLifecycle(workflow, options.onApplicationLifecycle)
@@ -751,38 +710,30 @@ export class AgUiChatSession {
         }
       },
       onTextMessageContentEvent: ({ event, textMessageBuffer }) => {
-        if (!acceptingEvents) return
         options.onContent?.(`${textMessageBuffer}${event.delta}`)
       },
       onTextMessageEndEvent: ({ textMessageBuffer }) => {
-        if (!acceptingEvents) return
         options.onContent?.(textMessageBuffer)
       },
       onRunErrorEvent: ({ event }) => {
-        if (!acceptingEvents) return
         // RUN_ERROR 是运行失败终态；HttpAgent 不会自动 reject，需要在会话边界显式抛出。
         runErrorMessage = event.message || 'Workflow 运行失败，请重试。'
         runErrorCode = event.code
       },
       onRunFinishedEvent: () => {
-        if (!acceptingEvents) return
         // HTTP 流结束不等于节点完成；停服导致的提前 EOF 必须进入原连接错误路径。
         runFinished = true
       },
       onToolCallStartEvent: ({ event }) => {
-        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'start', event))
       },
       onToolCallArgsEvent: ({ event }) => {
-        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'args', event))
       },
       onToolCallEndEvent: ({ event }) => {
-        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'end', event))
       },
       onToolCallResultEvent: ({ event }) => {
-        if (!acceptingEvents) return
         emitToolCalls(applyToolCallEvent(toolCalls, 'result', event))
       }
     }
@@ -790,25 +741,19 @@ export class AgUiChatSession {
     const runId = randomUUID()
     this.activeAgent = requestAgent
     this.activeRunId = runId
-    this.activeWorkspaceRoot = options.workspaceRoot
     this.activeRunCompletion = new Promise((resolve) => {
       this.resolveActiveRunCompletion = resolve
     })
     let result: Awaited<ReturnType<HttpAgent['runAgent']>>
-    const stoppedRun = new Promise<never>((_resolve, reject) => {
-      this.rejectStoppedRun = reject
-    })
     try {
-      result = await Promise.race([requestAgent.runAgent(
+      result = await requestAgent.runAgent(
         {
           runId,
           forwardedProps: buildWorkflowForwardedProps(options)
         },
         subscriber
-      ), stoppedRun])
+      )
     } finally {
-      // 收口后丢弃旧 transport 的迟到帧，防止覆盖暂停态或下一轮执行。
-      acceptingEvents = false
       this.finishActiveRun(runId, requestAgent)
     }
     if (runErrorMessage) {
@@ -852,7 +797,6 @@ export class AgUiChatSession {
     this.resolveActiveRunCompletion?.()
     this.activeRunCompletion = undefined
     this.resolveActiveRunCompletion = undefined
-    this.rejectStoppedRun = undefined
   }
 }
 
@@ -1108,10 +1052,8 @@ function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord
       return undefined
     }
     if (units.length < 200) {
-      const displayName = boundedString(unit.displayName, 160)
       units.push({
         id,
-        ...(displayName && displayName !== id ? { displayName } : {}),
         kind: boundedString(unit.kind, 80) || 'unknown',
         participation: participation as DagGenerationParticipation,
         generationStrategy: generationStrategy as DagGenerationStrategy,
@@ -1252,10 +1194,6 @@ export function readIntegrationTestChecks(
     const evidence = stringValue(check.evidence).slice(0, 1_000)
     const passedTests = optionalNonNegativeInteger(check.passedTests ?? check.passed_tests)
     const totalTests = optionalNonNegativeInteger(check.totalTests ?? check.total_tests)
-    const activeToolActivity =
-      status === 'running' && ['frontend_test_generation', 'backend_test_generation'].includes(id)
-        ? readWorkspaceToolActivity(check.activeToolActivity)
-        : undefined
     checks.push({
       id,
       name,
@@ -1263,7 +1201,6 @@ export function readIntegrationTestChecks(
       required: check.required === true,
       ...(check.advisory === true ? { advisory: true } : {}),
       ...(evidence ? { evidence } : {}),
-      ...(activeToolActivity ? { activeToolActivity } : {}),
       ...(passedTests !== undefined ? { passedTests } : {}),
       ...(totalTests !== undefined ? { totalTests } : {})
     })

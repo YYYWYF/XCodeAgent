@@ -9,17 +9,14 @@ import { cx } from '../../utils'
 
 type Props = {
   form: FormInstance<ApplicationDraft>
-  /** 设置页展示创建期数据源配置时禁用全部控件。 */
-  readOnly?: boolean
 }
 
 type ExternalDatabaseFieldsProps = {
   mode: DatasourceConnectionMode
-  readOnly: boolean
 }
 
 /** 渲染两种外部数据库方案共用的连接字段，并按方案补充专属凭据。 */
-function ExternalDatabaseFields({ mode, readOnly }: ExternalDatabaseFieldsProps): JSX.Element {
+function ExternalDatabaseFields({ mode }: ExternalDatabaseFieldsProps): JSX.Element {
   const configKey = mode === 'dbid' ? 'dbidMode' : 'plantMode'
 
   return (
@@ -29,7 +26,7 @@ function ExternalDatabaseFields({ mode, readOnly }: ExternalDatabaseFieldsProps)
         name={['datasource', 'db', configKey, 'domain']}
         preserve={false}
       >
-        <Input disabled={readOnly} placeholder="例如：127.0.0.1" />
+        <Input placeholder="例如：127.0.0.1" />
       </Form.Item>
       <Form.Item
         label="端口"
@@ -46,7 +43,6 @@ function ExternalDatabaseFields({ mode, readOnly }: ExternalDatabaseFieldsProps)
       >
         <InputNumber
           className={cx('datasource-config-port')}
-          disabled={readOnly}
           max={65535}
           min={1}
           placeholder="例如：3306"
@@ -59,7 +55,7 @@ function ExternalDatabaseFields({ mode, readOnly }: ExternalDatabaseFieldsProps)
           name={['datasource', 'db', 'dbidMode', 'dbid']}
           preserve={false}
         >
-          <Input disabled={readOnly} placeholder="请输入DBID" />
+          <Input placeholder="请输入DBID" />
         </Form.Item>
       ) : null}
       <Form.Item
@@ -67,7 +63,7 @@ function ExternalDatabaseFields({ mode, readOnly }: ExternalDatabaseFieldsProps)
         name={['datasource', 'db', configKey, 'userName']}
         preserve={false}
       >
-        <Input disabled={readOnly} placeholder="请输入数据库用户名" />
+        <Input placeholder="请输入数据库用户名" />
       </Form.Item>
       {mode === 'plant' ? (
         <Form.Item
@@ -75,7 +71,7 @@ function ExternalDatabaseFields({ mode, readOnly }: ExternalDatabaseFieldsProps)
           name={['datasource', 'db', 'plantMode', 'pwd']}
           preserve={false}
         >
-          <Input.Password autoComplete="new-password" disabled={readOnly} placeholder="请输入数据库密码" />
+          <Input.Password autoComplete="new-password" placeholder="请输入数据库密码" />
         </Form.Item>
       ) : null}
       <Form.Item
@@ -83,14 +79,14 @@ function ExternalDatabaseFields({ mode, readOnly }: ExternalDatabaseFieldsProps)
         name={['datasource', 'db', configKey, 'schema']}
         preserve={false}
       >
-        <Input disabled={readOnly} placeholder="请输入数据库Schema" />
+        <Input placeholder="请输入数据库Schema" />
       </Form.Item>
     </div>
   )
 }
 
 /** 渲染数据库连接配置；创建应用不选数据源类型，实体数据源类型在项目计划阶段按实体选择。 */
-export default function DatasourceConfigFields({ form, readOnly = false }: Props): JSX.Element {
+export default function DatasourceConfigFields({ form }: Props): JSX.Element {
   const useBuiltin =
     (Form.useWatch(['datasource', 'db', 'useBuiltin'], form) as boolean | undefined) ?? false
   const connectionMode = Form.useWatch(['datasource', 'db', 'connectionMode'], form) as
@@ -99,7 +95,6 @@ export default function DatasourceConfigFields({ form, readOnly = false }: Props
 
   /** 切换模拟或外部数据库时清除不再适用的连接草稿。 */
   const handleDatabaseTypeChange = (event: RadioChangeEvent): void => {
-    if (readOnly) return
     const nextUseBuiltin = event.target.value as boolean
 
     form.setFieldValue(['datasource', 'db', 'useBuiltin'], nextUseBuiltin)
@@ -110,7 +105,6 @@ export default function DatasourceConfigFields({ form, readOnly = false }: Props
 
   /** 切换外部连接方案时清除另一方案的数据和校验状态。 */
   const handleConnectionModeChange = (event: RadioChangeEvent): void => {
-    if (readOnly) return
     const nextMode = event.target.value as DatasourceConnectionMode
     const inactiveField = nextMode === 'dbid' ? 'plantMode' : 'dbidMode'
     form.setFieldValue(['datasource', 'db', inactiveField], undefined)
@@ -126,7 +120,7 @@ export default function DatasourceConfigFields({ form, readOnly = false }: Props
       </div>
 
       <Form.Item label="数据库类型" name={['datasource', 'db', 'useBuiltin']} preserve={false}>
-        <Radio.Group buttonStyle="solid" disabled={readOnly} onChange={handleDatabaseTypeChange}>
+        <Radio.Group buttonStyle="solid" onChange={handleDatabaseTypeChange}>
           <Radio.Button value={true}>模拟数据库</Radio.Button>
           <Radio.Button value={false}>外部数据库</Radio.Button>
         </Radio.Group>
@@ -139,13 +133,13 @@ export default function DatasourceConfigFields({ form, readOnly = false }: Props
             name={['datasource', 'db', 'connectionMode']}
             preserve={false}
           >
-            <Radio.Group buttonStyle="solid" disabled={readOnly} onChange={handleConnectionModeChange}>
+            <Radio.Group buttonStyle="solid" onChange={handleConnectionModeChange}>
               <Radio.Button value="dbid">通过DBID连接</Radio.Button>
               <Radio.Button value="plant">通过账号密码连接</Radio.Button>
             </Radio.Group>
           </Form.Item>
 
-          {connectionMode ? <ExternalDatabaseFields mode={connectionMode} readOnly={readOnly} /> : null}
+          {connectionMode ? <ExternalDatabaseFields mode={connectionMode} /> : null}
         </>
       ) : null}
     </section>

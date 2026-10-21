@@ -11,13 +11,13 @@ import {
   isSupersededTechnicalPlanTransitionMessage,
   isTemplateSupersededPlanningProgressMessage,
   latestUiDesignPreviewMessageIndex,
-  rollbackPlanningSubmissionMessages,
-  rollbackUnansweredPlanningSubmission
+  rollbackPlanningSubmissionMessages
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/uiDesignPreviewHistory'
 import {
   ensureApplicationPlanningAction,
   planningRequirementsConfirmed,
   planningTechnicalPlanConfirmed,
+  planningWorkflowNeedsChatLoading,
   planningWorkflowActivity,
   planningWorkflowCanPublishDuringRun,
   planningWorkflowIsActivelyRunning,
@@ -89,6 +89,7 @@ import {
 import { initialConnectionState } from '../src/renderer/src/service/connectionState'
 import { runPlanningStageEntryTransaction } from '../src/renderer/src/components/AiChatPanel/planningStageEntry'
 import {
+  planningMessageActionsDisabled,
   planningInteractionIsCurrent,
   resolvePlanningMessageWorkflow
 } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
@@ -304,6 +305,8 @@ assert.equal(
   historicalCompletedWorkflow
 )
 
+assert.equal(planningMessageActionsDisabled(true, true), true)
+assert.equal(planningMessageActionsDisabled(false, true), false)
 // 新 gate/revision 暂时复用旧消息宿主时，当前宿主仍应保持可交互；真正历史卡才失效。
 assert.equal(planningInteractionIsCurrent(false, true), true)
 assert.equal(planningInteractionIsCurrent(true, false), true)
@@ -416,23 +419,6 @@ const planningSubmissionMessages: AgentChatMessage[] = [
   { id: 3, role: 'assistant', content: '并行到达的其他消息', createdAt: 3 },
   { id: 4, role: 'assistant', content: '', planningLoading: true, createdAt: 4 }
 ]
-test('离线确认反复失败不累积用户消息，实际回复和其他异步消息保留', () => {
-  const transaction = { sessionKey: 'planning-session', messageIds: [2, 4] }
-  assert.deepEqual(rollbackUnansweredPlanningSubmission(planningSubmissionMessages, transaction)
-    .map((item) => item.id), [1, 3])
-  const answered = planningSubmissionMessages.map((item) => item.id === 4
-    ? { ...item, content: '已开始处理' } : item)
-  assert.equal(rollbackUnansweredPlanningSubmission(answered, transaction), answered)
-  const streamed = planningSubmissionMessages.map((item) => item.id === 4
-    ? { ...item, workflow: canonicalTechnicalPlanWorkflow } : item)
-  assert.equal(rollbackUnansweredPlanningSubmission(streamed, transaction), streamed)
-  let history = planningSubmissionMessages.filter((item) => !transaction.messageIds.includes(item.id))
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    history = rollbackUnansweredPlanningSubmission([...history,
-      ...planningSubmissionMessages.filter((item) => transaction.messageIds.includes(item.id))], transaction)
-  }
-  assert.deepEqual(history.map((item) => item.id), [1, 3])
-})
 assert.deepEqual(
   rollbackPlanningSubmissionMessages(planningSubmissionMessages, {
     sessionKey: 'planning-session',
@@ -959,7 +945,8 @@ assert.equal(
   sessionToRestoreForPhase(
     [oldDevelopmentSession, developmentSession],
     'development',
-    developmentSession.id
+    developmentSession.id,
+    oldDevelopmentSession.id
   )?.id,
   developmentSession.id
 )
@@ -967,18 +954,12 @@ assert.equal(
   sessionToRestoreForPhase(
     [oldDevelopmentSession, developmentSession],
     'development',
-    'missing-explicit-session'
+    'missing-explicit-session',
+    oldDevelopmentSession.id
   ),
   undefined
 )
 assert.deepEqual(sessionsForWorkbenchPhase([oldDevelopmentSession], 'planning'), [])
-// 浏览阶段直接选最近更新的会话，不因消息多、修订不同或空会话而退回旧记录。
-assert.equal(sessionToRestoreForPhase([developmentSession, oldDevelopmentSession], 'development')?.id, oldDevelopmentSession.id)
-assert.equal(sessionToRestoreForPhase([
-  oldDevelopmentSession,
-  { ...developmentSession, id: 'latest-empty', updatedAt: 1000, messageCount: 0 }
-], 'development')?.id, 'latest-empty')
-assert.equal(sessionToRestoreForPhase([], 'planning'), undefined)
 assert.equal(
   revisionDevelopmentSessionForContinuation(
     [...revisionSessionCandidates, developmentSession, sourceDevelopmentSession],
@@ -1413,8 +1394,64 @@ assert.deepEqual(
   [12]
 )
 assert.equal(planningWorkflowSettlesLoading(summaryOnlyQuestionsWorkflow), true)
+assert.equal(
+  planningWorkflowNeedsChatLoading(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'requirements' }
+    } as WorkflowRunPayload,
+    true,
+    false,
+    false,
+    ''
+  ),
+  true
+)
+assert.equal(
+  planningWorkflowNeedsChatLoading(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'requirements' }
+    } as WorkflowRunPayload,
+    true,
+    false,
+    false,
+    '正在分析需求'
+  ),
+  false
+)
+assert.equal(
+  planningWorkflowNeedsChatLoading(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'requirements' }
+    } as WorkflowRunPayload,
+    true,
+    false,
+    true,
+    ''
+  ),
+  false
+)
+assert.equal(
+  planningWorkflowNeedsChatLoading(summaryOnlyQuestionsWorkflow, true, true, true, ''),
+  false
+)
 // TechnicalPlan 二次修改确认后的主 Workflow 已进入开发前置门禁，
 // 规划会话不应再显示“恢复计划阶段”的 loading 占位。
+assert.equal(
+  planningWorkflowNeedsChatLoading(
+    {
+      ...summaryOnlyQuestionsWorkflow,
+      summary: { status: 'running', phase: 'development_readiness_gate' }
+    } as WorkflowRunPayload,
+    true,
+    false,
+    false,
+    ''
+  ),
+  false
+)
 assert.equal(shouldSuppressConfirmedTechnicalPlanTransitionChunk(undefined, true), true)
 assert.equal(
   shouldSuppressConfirmedTechnicalPlanTransitionChunk(
@@ -1575,6 +1612,10 @@ const technicalPlanningWithStaleEntry = {
 
 assert.equal(planningWorkflowRequiresUserInput(technicalPlanningWithStaleEntry), false)
 assert.equal(planningWorkflowCanPublishDuringRun(technicalPlanningWithStaleEntry), true)
+assert.equal(
+  planningWorkflowNeedsChatLoading(technicalPlanningWithStaleEntry, true, false, false, '', true),
+  true
+)
 // 进入计划阶段后的事务子节点首帧可能尚未携带 lifecycle，仍须显示现有技术规划进度卡。
 const technicalPlanningGenerateFirstFrame = {
   ...summaryOnlyQuestionsWorkflow,
@@ -1591,6 +1632,13 @@ const technicalPlanningGenerateFirstFrame = {
 } as WorkflowRunPayload
 assert.equal(planningWorkflowPhase(technicalPlanningGenerateFirstFrame), 'technical_planning')
 assert.equal(planningWorkflowActivity(technicalPlanningGenerateFirstFrame)?.title, '正在生成技术规划')
+assert.equal(
+  planningWorkflowNeedsChatLoading(technicalPlanningGenerateFirstFrame, true, false, false, ''),
+  true
+)
+// 阶段交接已有末条空助手消息但 workflow 尚未投递时，仍应沿用原加载卡。
+assert.equal(planningWorkflowNeedsChatLoading(undefined, true, false, false, '', true), true)
+assert.equal(planningWorkflowNeedsChatLoading(undefined, true, false, false, '', false), false)
 
 const latePlanningEntryFrame = {
   ...technicalPlanningWithStaleEntry,

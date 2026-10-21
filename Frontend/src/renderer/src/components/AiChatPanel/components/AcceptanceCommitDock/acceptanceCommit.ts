@@ -12,7 +12,7 @@
  */
 
 /** 自动提交的消息。带上语义，让历史里能看出这是验收节点。 */
-export const ACCEPTANCE_COMMIT_MESSAGE = 'Z000000-0000 #comment chore: 开发完成'
+export const ACCEPTANCE_COMMIT_MESSAGE = 'chore: 验收通过，保存当前版本代码'
 
 export type AcceptanceCommitDecision =
   /** 有变更且可安全提交：执行自动提交。 */

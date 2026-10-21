@@ -106,7 +106,7 @@
 }
 
 .@{class-prefix}-workbench-version-caret {
-  font-size: 12px;
+  font-size: 10px;
   opacity: 0.6;
 }
 
@@ -154,7 +154,7 @@
 .@{class-prefix}-version-dropdown-candidate-count {
   flex-shrink: 0;
   color: var(--wb-text-secondary);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .@{class-prefix}-version-dropdown-candidate-files {
@@ -162,7 +162,7 @@
   flex-direction: column;
   gap: 1px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--wb-text-secondary);
 
   > span {
@@ -450,14 +450,6 @@
         border-radius: 50%;
         background: var(--wb-accent, #6b3cf0);
       }
-
-      // 条目里需要用户留意的关键短语（分支落点、"每个版本各自占一个分支"等）：
-      // 主色 + 半粗，从同色的正文里挑出来。实测主色压在这个面板底上明暗两套主题
-      // 分别有 5.13:1 / 4.96:1，加粗后更宽裕。
-      .@{class-prefix}-workbench-generate-emphasis {
-        color: var(--wb-accent, #6b3cf0);
-        font-weight: 600;
-      }
     }
   }
 }
@@ -476,17 +468,6 @@
   .@{class-prefix}-workbench-generate-required {
     margin-right: 3px;
     color: #ff4d4f;
-  }
-
-  // 生成中的进行时提示：跟在"变更说明"标签后面，弱化处理，不跟标签抢注意力。
-  .@{class-prefix}-workbench-generate-field-hint {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: 8px;
-    color: var(--wb-text-secondary, #5a5267);
-    font-size: 13px;
-    font-weight: 400;
   }
 }
 
@@ -533,7 +514,7 @@
   border-radius: 8px;
   background: var(--wb-accent, #6b3cf0);
   color: #fff;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
 }
@@ -548,7 +529,7 @@
   border-radius: 8px;
   background: var(--wb-warning, #fa8c16);
   color: #fff;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
 }

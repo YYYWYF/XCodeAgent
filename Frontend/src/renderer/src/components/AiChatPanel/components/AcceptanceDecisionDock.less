@@ -1,143 +1,55 @@
-// 提示与验收动作共享通栏容器，避免聊天列限宽和绝对定位造成错位。
-.@{class-prefix}-acceptance-footer {
-  flex: 0 0 auto;
-  min-width: 0;
-  max-height: 55%;
-  overflow-y: auto;
-  border-top: 1px solid var(--wb-border);
-  background: var(--wb-canvas);
-}
-
-.@{class-prefix}-acceptance-footer-notices {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 20px 24px 0;
-
-  &:empty {
-    display: none;
-  }
-
-  .@{class-prefix}-version-commit-reminder {
-    box-sizing: border-box;
-    gap: 14px;
-    padding: 16px 18px;
-    border-radius: 10px;
-  }
-
-  .@{class-prefix}-version-commit-copy {
-    gap: 5px;
-
-    .ant-typography {
-      font-size: 13px;
-      overflow-wrap: anywhere;
-    }
-  }
-
-  .@{class-prefix}-version-commit-actions {
-    flex-wrap: wrap;
-    gap: 8px;
-
-    .ant-btn {
-      height: 32px;
-      padding-inline: 12px;
-    }
-  }
-}
-
 .@{class-prefix}-acceptance-decision-dock {
+  position: absolute;
+  z-index: 8;
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
-  min-height: 88px;
+  height: var(--acceptance-decision-dock-height, 72px);
+  min-height: var(--acceptance-decision-dock-height, 72px);
   box-sizing: border-box;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px 24px;
-  padding: 20px 24px;
+  gap: 16px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--wb-border);
+  background: var(--wb-surface);
+  box-shadow: var(--wb-shadow);
 }
 
 .@{class-prefix}-acceptance-decision-copy {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
 
   .ant-typography {
-    margin: 0;
-    color: var(--wb-text);
-    font-size: 14px;
-    line-height: 1.5;
-  }
-
-  .ant-typography-secondary {
-    color: var(--wb-text-secondary);
-    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
 .@{class-prefix}-acceptance-decision-actions {
   display: flex;
   flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-left: auto;
+  gap: 8px;
 
   .ant-btn {
-    height: 40px;
-    padding-inline: 18px;
-    border-radius: 8px;
-  }
-
-  .ant-btn-default {
-    color: var(--wb-text);
-    background: var(--wb-canvas);
-    border-color: var(--wb-border-strong);
-
-    &:hover:not(:disabled),
-    &:focus-visible:not(:disabled) {
-      color: var(--wb-accent);
-      background: var(--wb-accent-soft);
-      border-color: var(--wb-accent);
-    }
-  }
-
-  .ant-btn:focus-visible {
-    outline: 2px solid var(--wb-accent);
-    outline-offset: 3px;
-  }
-
-  .ant-btn:disabled {
-    color: var(--wb-text-tertiary);
-    background: var(--wb-control);
-    border-color: var(--wb-border);
+    min-height: 36px;
+    border-radius: 6px;
   }
 }
 
-// 根据预览面板的实际宽度收起操作列，分栏时也能正确适配。
-@container (max-width: 720px) {
-  .@{class-prefix}-acceptance-footer-notices {
-    padding: 16px 16px 0;
-
-    .@{class-prefix}-version-commit-reminder {
-      grid-template-columns: auto minmax(0, 1fr);
-    }
-
-    .@{class-prefix}-version-commit-actions {
-      grid-column: 1 / -1;
-      justify-content: flex-end;
-    }
-  }
-
+@media (max-width: 720px) {
   .@{class-prefix}-acceptance-decision-dock {
     align-items: stretch;
     flex-direction: column;
-    gap: 16px;
-    padding: 20px 16px;
+    gap: 8px;
+    padding: 10px 12px;
   }
 
   .@{class-prefix}-acceptance-decision-actions {
-    margin-left: 0;
-
     .ant-btn {
       flex: 1;
       min-width: 0;

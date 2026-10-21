@@ -13,12 +13,8 @@ from app.services.application_config import read_application_config
 from app.services.template_reconcile.desired import TemplateCapabilityError, requested_config_from_application_config
 
 
-def compile_template_requested_config(
-    workspace_root: str | Path,
-    *,
-    include_application_config: bool = False,
-) -> dict[str, Any]:
-    """验证 confirmed TechnicalPlan 后生成当前 Engine 请求，仅首次 Generate 携带基础应用配置。"""
+def compile_template_requested_config(workspace_root: str | Path) -> dict[str, Any]:
+    """验证 confirmed TechnicalPlan 后，仅从 application.json 生成当前 Engine 请求。"""
 
     root = Path(workspace_root).expanduser().resolve()
     technical_plan = _load_object(
@@ -32,12 +28,7 @@ def compile_template_requested_config(
             raise TemplateConfigError(
                 "TechnicalPlan 基于过期 application.json 配置生成，必须先重新规划。"
             )
-        requested = requested_config_from_application_config(application_config)
-        if not include_application_config:
-            # 设置页变更只提示用户手工更新工程环境变量；后续 Reconcile 不能借由
-            # applicationConfig 覆写用户已维护的 frontend/.env。
-            requested.pop("applicationConfig", None)
-        return requested
+        return requested_config_from_application_config(application_config)
     except TemplateCapabilityError as exc:
         raise TemplateConfigError(str(exc)) from exc
 

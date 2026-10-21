@@ -171,9 +171,6 @@ class TestGenerationTests(unittest.TestCase):
                     "test('orders', () => expect(1).toBe(1));\n",
                     encoding="utf-8",
                 )
-                support = root / "frontend/tests/__mocks__/styleMock.cjs"
-                support.parent.mkdir(parents=True, exist_ok=True)
-                support.write_text("module.exports = {};\n", encoding="utf-8")
                 return json.dumps(
                     {
                         "status": "completed",
@@ -532,10 +529,6 @@ class TestGenerationTests(unittest.TestCase):
             is_test_generation_path_allowed("/backend/src/test/java/../../main/HackTest.java")
         )
         self.assertFalse(is_test_generation_path_allowed("/frontend/src/pages/Orders.tsx"))
-        for path in ("setupTests.ts", "__mocks__/styleMock.cjs", "__mocks__/fileMock.cjs"):
-            self.assertTrue(is_test_generation_path_allowed("/frontend/tests/" + path))
-        self.assertFalse(is_test_generation_path_allowed("/frontend/tests/__mocks__/arbitrary.cjs"))
-        self.assertFalse(is_test_generation_path_allowed("/frontend/tests/__mocks__/../../src/hack.ts"))
         tools = [SimpleNamespace(name="execute"), SimpleNamespace(name="write_file")]
         self.assertEqual([tool.name for tool in _without_disabled_tools(tools)], ["write_file"])
 

@@ -23,8 +23,6 @@ export type ChatSessionMessage = {
   approvalStatus?: AgentApprovalStatus;
   codeChanges?: WorkspaceCodeChangeSet;
   workflow?: WorkflowRunPayload;
-  /** 工作流卡片已提交的最终操作结果，用于恢复历史状态。 */
-  workflowCardResult?: 'confirmed' | 'cancelled' | 'submitted';
   /** 持久化当前 assistant 轮次的模型或 Workflow 错误，恢复历史时仍能显示错误卡片。 */
   error?: string;
   toolCalls?: ToolCallRecord[];
@@ -217,7 +215,6 @@ function getElectronInvoke(): ElectronInvoke | undefined {
   return electronApi?.ipcRenderer?.invoke;
 }
 
-/** 规范化历史消息字段，并校验可持久化的 Workflow 卡片结果。 */
 function normalizeMessages(value: unknown): ChatSessionMessage[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -242,12 +239,6 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
       workflow:
         item.workflow && typeof item.workflow === 'object'
           ? (item.workflow as WorkflowRunPayload)
-          : undefined,
-      workflowCardResult:
-        item.workflowCardResult === 'confirmed' ||
-        item.workflowCardResult === 'cancelled' ||
-        item.workflowCardResult === 'submitted'
-          ? item.workflowCardResult
           : undefined,
       error:
         typeof item.error === 'string' && item.error.trim() ? item.error.trim() : undefined,

@@ -12,6 +12,7 @@ import {
   retryApplicationTemplateReadiness
 } from '../service/templateApi'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
+import { asMessageClause } from '../service/repositoryBranch'
 import type { RepositoryBranchOutcome } from '../service/repositoryBranch'
 
 /**
@@ -29,9 +30,10 @@ function notifyRepositoryBranch(outcome?: RepositoryBranchOutcome): void {
     )
     return
   }
-  // 失败原因可能包含服务端返回的多行 policy 说明（提交信息规范等），塞进 toast 会变成
-  // 一条读不完的提示。toast 只给结论，完整原因由卡片的"未提交到远端"区展示。
-  message.warning(`版本 ${branch} 未提交到远端，应用本身可以正常使用，详情见卡片，稍后可重试。`)
+  // 后端消息是完整句子（自带句号），嵌进本句前先去掉句末标点，否则会出现「。。」。
+  message.warning(
+    `版本 ${branch} 未提交到远端：${asMessageClause(outcome.message, '原因未知')}。应用本身可以正常使用，稍后可重试。`
+  )
 }
 
 type UseApplicationTemplateGenerationOptions = {

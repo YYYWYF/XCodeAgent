@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload, UpdatePackageDownloadV4
+from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload
 
 _CHUNK_BYTES = 64 * 1024
 logger = logging.getLogger("uvicorn.error")
@@ -26,7 +26,7 @@ logger = logging.getLogger("uvicorn.error")
 # 后续接入真实 Engine 后可移除。
 _GIT_FALLBACK_FRONTEND_URL = "https://github.com/ruyue1/frontend-template.git"
 _GIT_FALLBACK_BACKEND_URL = "https://github.com/Hupy2118/springboot-template.git"
-_GIT_FALLBACK_TEMPLATE_REVISION = "2026.10.19.1"
+_GIT_FALLBACK_TEMPLATE_REVISION = "git-fallback-v1"
 # 必须与读取方一致：template_package.py 用 app.branding 的 WORKSPACE_ARTIFACT_DIR
 # 定位 ZIP 内的 TemplateState。这里硬编码旧目录名会让 Bootstrap 直接失败。
 _TEMPLATE_STATE_ZIP_PATH = (WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix()
@@ -48,7 +48,7 @@ class TemplateEngineClient:
         """调用 V3 `/v1/generate` 并分块写临时 ZIP，同时计算 SHA-256。"""
 
         if not self._base_url:
-            raise TemplateEngineError("模板生成服务地址未配置，无法生成模板代码。")
+            raise TemplateEngineError("Template Engine 地址未配置，无法生成 V3 TemplateState。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
@@ -60,10 +60,10 @@ class TemplateEngineClient:
             async with self._client_factory(timeout=timeout, trust_env=False) as client:
                 async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
                     if response.status_code >= 400:
-                        raise await _engine_response_error(response, "模板生成服务拒绝请求")
+                        raise await _engine_response_error(response, "Template Engine 拒绝请求")
                     content_type = response.headers.get("content-type")
                     if not content_type or not content_type.lower().startswith("application/zip"):
-                        raise TemplateEngineError("模板生成服务未返回 application/zip。")
+                        raise TemplateEngineError("Template Engine 未返回 application/zip。")
                     with os.fdopen(descriptor, "wb") as output:
                         descriptor = -1
                         async for chunk in response.aiter_bytes(_CHUNK_BYTES):
@@ -76,9 +76,9 @@ class TemplateEngineClient:
                         os.fsync(output.fileno())
             return TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
         except httpx.TimeoutException as exc:
-            raise TemplateEngineError("调用模板生成服务超时。") from exc
+            raise TemplateEngineError("调用 Template Engine 超时。") from exc
         except httpx.HTTPError as exc:
-            raise TemplateEngineError("调用模板生成服务失败。") from exc
+            raise TemplateEngineError("调用 Template Engine 失败。") from exc
         except Exception:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -146,9 +146,9 @@ class TemplateEngineClient:
         """调用 V3 `/v1/update`；APPLY 的 204 表示无变化。"""
 
         if not self._base_url:
-            raise TemplateEngineError("模板生成服务地址未配置。")
+            raise TemplateEngineError("Template Engine 地址未配置。")
         if mode not in {"APPLY", "RECONCILE"}:
-            raise TemplateEngineError("模板生成服务更新 mode 必须是 APPLY 或 RECONCILE。")
+            raise TemplateEngineError("Template Engine 更新 mode 必须是 APPLY 或 RECONCILE。")
         directory = str(Path(temporary_dir)) if temporary_dir is not None else None
         descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-update-", suffix=".zip", dir=directory)
         temporary_path = Path(name)
@@ -185,14 +185,14 @@ class TemplateEngineClient:
                         descriptor = -1
                         temporary_path.unlink(missing_ok=True)
                         if mode == "RECONCILE":
-                            raise TemplateEngineError("模板生成服务 V3 RECONCILE 必须返回更新包，不能返回 HTTP 204。", http_status=204)
+                            raise TemplateEngineError("Template Engine V3 RECONCILE 必须返回更新包，不能返回 HTTP 204。", http_status=204)
                         logger.info("模板更新接口返回无变更（HTTP 204）。")
                         return None
                     if response.status_code >= 400:
-                        raise await _engine_response_error(response, "模板生成服务拒绝更新请求")
+                        raise await _engine_response_error(response, "Template Engine 拒绝更新请求")
                     content_type = response.headers.get("content-type")
                     if not content_type or not content_type.lower().startswith("application/zip"):
-                        raise TemplateEngineError("模板生成服务更新未返回 application/zip。")
+                        raise TemplateEngineError("Template Engine 更新未返回 application/zip。")
                     with os.fdopen(descriptor, "wb") as output:
                         descriptor = -1
                         async for chunk in response.aiter_bytes(_CHUNK_BYTES):
@@ -208,70 +208,12 @@ class TemplateEngineClient:
             return download
         except httpx.TimeoutException as exc:
             logger.warning("模板更新接口调用超时：endpoint=%s/v1/update。", self._base_url)
-            raise TemplateEngineError("调用模板生成服务更新超时。") from exc
+            raise TemplateEngineError("调用 Template Engine 更新超时。") from exc
         except httpx.HTTPError as exc:
             logger.warning("模板更新接口调用失败：endpoint=%s/v1/update，error=%s。", self._base_url, type(exc).__name__)
-            raise TemplateEngineError("调用模板生成服务更新失败。") from exc
+            raise TemplateEngineError("调用 Template Engine 更新失败。") from exc
         except Exception:
             logger.exception("模板更新接口处理失败：endpoint=%s/v1/update。", self._base_url)
-            if descriptor >= 0:
-                os.close(descriptor)
-            temporary_path.unlink(missing_ok=True)
-            raise
-
-    async def update_v4(
-        self,
-        current_template_state: dict[str, Any],
-        requested_config: dict[str, Any],
-        *,
-        mode: str = "APPLY",
-        temporary_dir: str | Path | None = None,
-    ) -> "UpdatePackageDownloadV4 | None":
-        """下载 V4 Capability 包；传输和结果均不计算或携带摘要。"""
-
-        if not self._base_url or mode not in {"APPLY", "RECONCILE"}:
-            raise TemplateEngineError("V4 模板更新连接或 mode 无效。")
-        if set(requested_config) != {"capabilities"}:
-            raise TemplateEngineError("V4 requestedConfig 只能包含 capabilities。")
-        directory = str(Path(temporary_dir)) if temporary_dir is not None else None
-        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-v4-", suffix=".zip", dir=directory)
-        temporary_path = Path(name)
-        size = 0
-        try:
-            timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
-            async with self._client_factory(timeout=timeout, trust_env=False) as client:
-                async with client.stream(
-                    "POST", f"{self._base_url}/v1/update",
-                    json={"protocolVersion": "4", "currentTemplateState": current_template_state, "requestedConfig": requested_config, "mode": mode},
-                    headers={"Accept": "application/zip"},
-                ) as response:
-                    if response.status_code == 204:
-                        os.close(descriptor)
-                        descriptor = -1
-                        temporary_path.unlink(missing_ok=True)
-                        if mode == "RECONCILE":
-                            raise TemplateEngineError("V4 RECONCILE 不得返回 204。")
-                        return None
-                    if response.status_code >= 400:
-                        raise await _engine_response_error(response, "模板生成服务拒绝 V4 更新请求")
-                    content_type = response.headers.get("content-type")
-                    if not content_type or not content_type.lower().startswith("application/zip"):
-                        raise TemplateEngineError("V4 更新未返回 application/zip。")
-                    with os.fdopen(descriptor, "wb") as output:
-                        descriptor = -1
-                        async for chunk in response.aiter_bytes(_CHUNK_BYTES):
-                            size += len(chunk)
-                            if size > self._max_package_bytes:
-                                raise TemplateEngineError("V4 更新 ZIP 超过下载大小限制。")
-                            output.write(chunk)
-                        output.flush()
-                        os.fsync(output.fileno())
-            return UpdatePackageDownloadV4(temporary_path, size, content_type)
-        except httpx.TimeoutException as exc:
-            raise TemplateEngineError("调用 V4 模板更新超时。") from exc
-        except httpx.HTTPError as exc:
-            raise TemplateEngineError("调用 V4 模板更新失败。") from exc
-        except Exception:
             if descriptor >= 0:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)
@@ -326,7 +268,7 @@ def _git_clone(url: str, dest: Path) -> None:
 
 
 def _build_fallback_template_state(requested_config: dict[str, Any]) -> dict[str, Any]:
-    """从请求编译可被 V3 Bootstrap 接受的 fallback TemplateState。"""
+    """从请求编译 fallback TemplateState：requested/effective 取已启用能力，appliedAdditions 为空。"""
 
     capabilities = requested_config.get("capabilities") if isinstance(requested_config, dict) else None
     enabled: dict[str, dict[str, Any]] = {}
@@ -342,11 +284,9 @@ def _build_fallback_template_state(requested_config: dict[str, Any]) -> dict[str
                     config = {}
                 enabled[capability_id] = {"enabled": True, "config": config}
     return {
-        "schemaVersion": 3,
+        "schemaVersion": 2,
         "templateRevision": _GIT_FALLBACK_TEMPLATE_REVISION,
         "requested": enabled,
         "effective": enabled,
-        # Git fallback 只复制基础模板，尚未安装任何可追踪的 Extension 或聚合资源。
-        "installedArtifacts": {},
-        "managedContributions": {},
+        "appliedAdditions": {},
     }

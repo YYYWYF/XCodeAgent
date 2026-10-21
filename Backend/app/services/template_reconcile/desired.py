@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
 _SUPPORTED_CAPABILITIES = frozenset({"login", "authorization"})
-_PRIMARY_COLOR_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
-_YHT_AUTHN_SOURCE = "yst"
-_YHT_CONFIG_FIELDS = ("clientId", "privateKey", "publicKey", "centerPublicKey")
 
 
 class TemplateCapabilityError(ValueError):
@@ -38,54 +34,4 @@ def compile_template_capabilities(application_config: Any) -> dict[str, dict[str
 def requested_config_from_application_config(application_config: Any) -> dict[str, Any]:
     """只从 canonical application.json 编译 Template Engine RequestedConfig。"""
 
-    return {
-        "capabilities": compile_template_capabilities(application_config),
-        "applicationConfig": compile_template_application_config(application_config),
-    }
-
-
-def compile_template_application_config(application_config: Any) -> dict[str, Any]:
-    """编译首次 Generate 所需的基础信息和一号通登录配置。"""
-
-    if not isinstance(application_config, dict):
-        raise TemplateCapabilityError("application.json 必须是对象。")
-    app_name = application_config.get("appName")
-    app_icon = application_config.get("appIcon")
-    theme = application_config.get("theme")
-    primary_color = theme.get("primaryColor") if isinstance(theme, dict) else None
-    if not isinstance(app_name, str) or not app_name.strip() or len(app_name) > 128:
-        raise TemplateCapabilityError("application.json.appName 必须是长度不超过 128 的非空字符串。")
-    if not isinstance(app_icon, str) or not app_icon.strip() or len(app_icon) > 128:
-        raise TemplateCapabilityError("application.json.appIcon 必须是长度不超过 128 的非空字符串。")
-    if not isinstance(primary_color, str) or _PRIMARY_COLOR_PATTERN.fullmatch(primary_color) is None:
-        raise TemplateCapabilityError("application.json.theme.primaryColor 必须是 #RRGGBB 格式。")
-    return {
-        "appName": app_name,
-        "appIcon": app_icon,
-        "theme": {"primaryColor": primary_color},
-        "auth": _compile_template_auth_config(application_config.get("auth")),
-    }
-
-
-def _compile_template_auth_config(value: Any) -> dict[str, Any]:
-    """将 application.json 的一号通字段映射为模板引擎固定的认证请求形状。"""
-
-    if not isinstance(value, dict) or type(value.get("enable")) is not bool:
-        raise TemplateCapabilityError("application.json.auth.enable 必须是布尔值。")
-    yht = value.get("yht")
-    if not isinstance(yht, dict):
-        yht = {}
-    config: dict[str, str] = {}
-    for field in _YHT_CONFIG_FIELDS:
-        raw_value = yht.get(field, "")
-        if not isinstance(raw_value, str):
-            raise TemplateCapabilityError(f"application.json.auth.yht.{field} 必须是字符串。")
-        if value["enable"] is True and not raw_value.strip():
-            raise TemplateCapabilityError(f"启用一号通登录时必须填写 application.json.auth.yht.{field}。")
-        config[field] = raw_value
-    return {
-        "enable": value["enable"],
-        # 认证来源不再由用户输入；Template Engine 仍要求固定来源标识。
-        "authnSource": _YHT_AUTHN_SOURCE,
-        "yht": config,
-    }
+    return {"capabilities": compile_template_capabilities(application_config)}

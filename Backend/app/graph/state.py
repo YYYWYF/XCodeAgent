@@ -22,7 +22,6 @@ class ProjectState(TypedDict, total=False):
     selected_skill_names: list[str]
     phase: str
     resume_from: str
-    retry_source_run_id: str
     resume_execution_run_id: str
     workflow_action: str
     request_complexity: str
@@ -30,9 +29,6 @@ class ProjectState(TypedDict, total=False):
     complexity_decision: dict[str, Any]
     conversation_intent: str
     conversation_response: str
-    application_config_prerequisite: dict[str, Any]
-    application_config_cached_decision: dict[str, Any]
-    application_config_resume: str
     product_conversation_result: dict[str, Any]
     change_impact_enabled: bool
     change_impact_analysis: dict[str, Any]
@@ -44,7 +40,6 @@ class ProjectState(TypedDict, total=False):
     revision_draft: dict[str, Any]
     revision_interaction: dict[str, Any]
     design_change_submission: bool
-    design_revision_intent: dict[str, Any]
     design_change_request: str
     design_change_target: str
     design_change_reason: str
@@ -57,12 +52,13 @@ class ProjectState(TypedDict, total=False):
     application_planning_interaction: dict[str, Any]
     application_planning_review_route: str
     requirement_revision_id: str
+    authorization_config_conflict: dict[str, Any]
+    pending_application_config_target: dict[str, Any]
     direct_modification_owner: str
     direct_modification_scope: str
     direct_modification_confidence: float
     direct_modification_reason: str
     direct_modification_summary: str
-    direct_modification_confirm_scope: bool
     direct_modification_approved_paths: list[str]
     direct_modification_handoff_decision: str
     direct_modification_target_paths: list[str]
@@ -92,8 +88,6 @@ class ProjectState(TypedDict, total=False):
     technical_plan_candidate_sha256: str
     technical_plan_repair_candidate: dict[str, Any]
     technical_plan_repair_errors: list[str]
-    # 失败审阅门确认重试后，记录待交接的原生成 Run；只供当前事务内部消费。
-    technical_plan_repair_source_run_id: str
     project_plan: dict[str, Any]
     pages: list[dict[str, Any]]
     frontend_pages: list[dict[str, Any]]

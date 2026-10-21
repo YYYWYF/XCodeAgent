@@ -4,15 +4,11 @@ import { cx } from '../../../../utils'
 import ApplicationOutline from '../ApplicationOutline'
 import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import EndpointDesignResult from '../EndpointDesignResult'
-import EntityInfoPanel from '../EntityInfoPanel'
-import EntityTablePanel from '../EntityTablePanel'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
 import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
-  theme: 'light' | 'dark'
-  useBuiltinDatabase?: boolean
   onEndpointRecovery?: EndpointRecoveryReporter
   detailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
@@ -21,10 +17,8 @@ type Props = ApplicationOutlineProps & {
   onConfigureApi?: (target: { apiContractId: string; endpointId: string; label?: string }) => void
 }
 
-/** 并排展示产物菜单与接口、实体详情，菜单选择不改变开发工作流。 */
+/** 并排展示常驻菜单和随选中产物更新的详情占位，菜单选择不切换工作区标签。 */
 export default function DevelopmentArtifactsPanel({
-  theme,
-  useBuiltinDatabase,
   detailLabel,
   apiTarget,
   workspaceRoot,
@@ -33,9 +27,6 @@ export default function DevelopmentArtifactsPanel({
   onEndpointRecovery,
   ...outlineProps
 }: Props): ReactElement {
-  const selectedEntity = outlineProps.entities.find(
-    (entity) => entity.id === outlineProps.selectedEntityId
-  )
   const { detail, error, loading, reload } = useEndpointDesignDetail(
     workspaceRoot,
     apiTarget,
@@ -56,11 +47,6 @@ export default function DevelopmentArtifactsPanel({
           loading ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>正在读取映射结果…</h3></div>
             : error ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>读取失败</h3>{onEndpointRecovery ? <p>请使用下方重试入口同步映射结果。</p> : <><p>{error}</p><Button onClick={reload} type="primary">重试</Button></>}</div>
               : <EndpointDesignResult detail={detail} />
-        ) : selectedEntity ? (
-          useBuiltinDatabase && workspaceRoot ? (
-            <EntityTablePanel key={`${workspaceRoot}:${selectedEntity.id}`} workspaceRoot={workspaceRoot}
-              entityId={selectedEntity.id} label={selectedEntity.label} />
-          ) : <EntityInfoPanel entity={selectedEntity} theme={theme} />
         ) : <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
           <h3>{detailLabel || '请选择开发产物'}</h3>
           <p>{detailLabel ? '详情内容待设计' : '点击左侧菜单查看详情'}</p>

@@ -341,18 +341,18 @@ def test_phase_confirmation(state: ProjectState) -> dict:
     if build_summary is None:
         return {
             "phase": "test_phase_confirmation",
-            "status": "in_progress",
-            "message": "重新核对并完成当前构建产物。",
-            "integration_next_action": "build",
+            "status": "failed",
+            "message": "Build 尚未完成，不能进入测试阶段。",
+            "error": "只有 Build 完成后才能进入测试阶段确认。",
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
     if state.get("unit_test_gate_passed") is not True:
         return {
             "phase": "test_phase_confirmation",
-            "status": "in_progress",
-            "message": "重新执行当前单元测试门禁。",
-            "integration_next_action": "unit_test",
+            "status": "failed",
+            "message": "单元测试门禁尚未完成，不能进入测试阶段。",
+            "error": "只有单元测试通过或明确跳过后才能进入测试阶段确认。",
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
@@ -390,11 +390,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "mode": "test_phase_confirmation",
             "status": "requires_user_input",
             "message": (
-                (
-                    "代码生成与 Build 已完成，单元测试已跳过，确认后将进入测试阶段，执行测试与失败修复。"
-                    if state.get("unit_test_decision") == "skip"
-                    else "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复。"
-                )
+                "代码生成、Build 与单元测试门禁已完成，确认后将进入测试阶段，执行测试与失败修复。"
                 if gate.allowed else f"当前产物初次开发已完成。{gate.reason}"
             ),
             "testEntryGate": gate.model_dump(mode="json", by_alias=True),
@@ -436,24 +432,11 @@ def acceptance(state: ProjectState) -> dict:
 
 
 def finalize_project(state: ProjectState) -> dict:
-    """用户验收通过后生成版本数据库脚本，再汇总工作流最终完成状态。"""
-
-    from app.services.database_delivery import export_database_scripts
-
-    if state.get("accepted") is not True and state.get("acceptance_decision") != "accepted":
-        return {"phase": "finalize_project", "status": "failed", "error": "请先明确通过项目验收，再生成交付产物。",
-                "message": "请先明确通过项目验收，再生成交付产物。"}
-    try:
-        scripts = export_database_scripts(workspace_root(state))
-    except (ValueError, OSError) as exc:
-        message = f"数据库脚本交付失败：{exc}"
-        return {"phase": "finalize_project", "status": "failed", "error": message, "message": message}
+    """汇总工作流最终完成状态。"""
 
     return {
         "phase": "completed",
         "status": "completed",
-        "error": "",
-        "message": "项目验收完成，数据库脚本已生成：" + "、".join(scripts) if scripts else "项目验收完成。",
         "timeline": ["finalize_project"],
     }
 

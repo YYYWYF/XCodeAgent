@@ -61,7 +61,7 @@ class DataSourcesServiceTests(unittest.TestCase):
 
         source = catalog.sources[0]
         self.assertEqual(source.id, "application-database")
-        self.assertEqual(source.name, "平台内置数据库")
+        self.assertEqual(source.name, "商品管理数据库")
         self.assertEqual(source.mode, "builtin")
         self.assertNotIn("revision", json.loads(self.data_sources_file().read_text(encoding="utf-8")))
         index_entry = json.loads(self.data_sources_file().read_text(encoding="utf-8"))["sources"][0]
@@ -145,14 +145,14 @@ class DataSourcesServiceTests(unittest.TestCase):
             {"appName": "原应用", "datasource": {"type": "database", "db": {"useBuiltin": True}}}
         )
         initial = public_catalog(self.workspace)
-        self.assertEqual([source.name for source in initial.sources], ["平台内置数据库"])
+        self.assertEqual([source.name for source in initial.sources], ["原应用数据库"])
         mutate_catalog(
             self.workspace,
             action="create",
             source={"type": "external_api", "name": "独立 API", "baseUrl": "https://example.com"},
         )
         catalog = public_catalog(self.workspace)
-        self.assertEqual([source.name for source in catalog.sources], ["平台内置数据库", "独立 API"])
+        self.assertEqual([source.name for source in catalog.sources], ["原应用数据库", "独立 API"])
 
         deleted = mutate_catalog(
             self.workspace,
@@ -637,12 +637,12 @@ class DataSourcesServiceTests(unittest.TestCase):
             "passwordCiphertext": ciphertext,
         }
         with patch(
-            "app.services.database_credentials.decrypt_password", return_value="plain-password"
+            "app.services.data_sources.decrypt_password", return_value="plain-password"
         ) as decrypt, patch.dict(sys.modules, {"pymysql": SimpleNamespace(connect=connect)}):
             result = validate_source(source)
 
         self.assertEqual(result, {"valid": True, "connection": "ok"})
-        decrypt.assert_called_once_with(ciphertext, key_file=None)
+        decrypt.assert_called_once_with(ciphertext)
         self.assertEqual(connect.call_args.kwargs["password"], "plain-password")
         connection.close.assert_called_once_with()
 
@@ -677,12 +677,12 @@ class DataSourcesServiceTests(unittest.TestCase):
             "userName": "app2",
         }
         with patch(
-            "app.services.database_credentials.decrypt_password", return_value="plain-password"
+            "app.services.data_sources.decrypt_password", return_value="plain-password"
         ) as decrypt, patch.dict(sys.modules, {"pymysql": SimpleNamespace(connect=connect)}):
             result = validate_source(edited_source, self.workspace)
 
         self.assertEqual(result, {"valid": True, "connection": "ok"})
-        decrypt.assert_called_once_with(ciphertext, key_file=None)
+        decrypt.assert_called_once_with(ciphertext)
         self.assertEqual(connect.call_args.kwargs["password"], "plain-password")
 
     def test_database_connection_error_is_clear_and_hides_driver_class_name(self) -> None:
@@ -700,7 +700,7 @@ class DataSourcesServiceTests(unittest.TestCase):
             "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:platform-key-v1:cipher",
         }
         with patch(
-            "app.services.database_credentials.decrypt_password", return_value="plain-password"
+            "app.services.data_sources.decrypt_password", return_value="plain-password"
         ), patch.dict(sys.modules, {"pymysql": SimpleNamespace(connect=connect)}):
             with self.assertRaises(DataSourceError) as raised:
                 validate_source(source)

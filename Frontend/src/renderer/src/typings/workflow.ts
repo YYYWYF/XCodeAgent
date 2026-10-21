@@ -881,6 +881,8 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   code_review_repair_confirmation?: WorkflowCodeReviewRepairConfirmation
   /** 正式修改影响范围的结构化批准或拒绝动作。 */
   revision_impact_confirmation?: 'approved' | 'rejected'
+  /** 前后端实现修复开始前的用户确认。 */
+  implementation_fix_confirmation?: 'approved' | 'rejected'
   /** 正式草稿交互必须携带服务端绑定的 change、revision 与 hash。 */
   revision_draft_interaction?: WorkflowRevisionDraftInteraction
   /** API 开发门禁的映射重新检测动作。 */
@@ -889,7 +891,7 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
 
 export type WorkflowApiDesignGateAction = {
   action: 'refresh'
-  targetType: 'application' | 'page' | 'endpoint'
+  targetType: 'page' | 'endpoint'
   targetId: string
   apiContractId?: string
 }
@@ -958,12 +960,6 @@ export type WorkflowApiDesignReadinessItem = {
 
 export type WorkflowClarification = {
   mode?: string
-  confirmScopeBeforeExecution?: boolean
-  clarifiedRequest?: string
-  reason?: string
-  owner?: 'frontend' | 'backend' | 'fullstack' | string
-  requestedPaths?: string[]
-  target?: Record<string, unknown>
   diffReviewFileCount?: number
   status?: string
   question_schema?: string
@@ -1356,8 +1352,6 @@ export type ApplicationLifecycle = {
   }
   activeRunId?: string
   activeExecutions: Record<string, WorkbenchExecution>
-  endedExecutionsCheckedAt?: string
-  endedExecutions?: Record<string, { execution: WorkbenchExecution; workspaceUnchanged: boolean }>
   resourceLocks?: {
     application?: ExecutionResourceLock
     pages: Record<string, ExecutionResourceLock>
@@ -1374,8 +1368,6 @@ export type ApplicationLifecycle = {
     sourceThreadId: string
     sourceRunId: string
     planningThreadId: string
-    /** 最近拥有此修订的规划 Run，供缺失恢复入口后的精确收尾使用。 */
-    planningRunId?: string | null
     status: string
     currentArtifact?: string | null
     remainingArtifacts?: string[]
@@ -1412,7 +1404,6 @@ export type WorkflowRunPayload = {
 }
 
 export type WorkflowAction =
-  | 'start_modified_testing'
   | 'retry_code_review'
   | 'retry_template_reconcile'
   | 'start_design_revision'
@@ -1451,9 +1442,6 @@ export type WorkflowDebugOptions = {
   buildTaskPlanPath?: string
 }
 
-export type WorkflowDebugStage = 'development' | 'design' | 'planning'
-export type ApplicationPlanningDebugStage = Exclude<WorkflowDebugStage, 'development'>
-
 export type WorkflowBuildExecutionScope = {
   type: 'application' | 'page' | 'data_source' | 'endpoint'
   targetId?: string
@@ -1464,7 +1452,7 @@ export type WorkflowBuildToolActivity = {
   callId: string
   tool: 'ls' | 'read_file' | 'glob' | 'grep' | 'write_file' | 'edit_file' | 'delete_file'
   category: 'browse' | 'read' | 'search' | 'write' | 'delete'
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'failed'
   message: string
   path?: string
 }

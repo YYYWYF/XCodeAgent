@@ -87,6 +87,7 @@ for package_name in (
     "app",
     "ag_ui",
     "fastapi",
+    "httpx_sse",
     "langchain_core",
     "langchain_openai",
     "langgraph",

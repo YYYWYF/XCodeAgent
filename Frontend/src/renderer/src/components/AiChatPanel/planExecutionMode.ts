@@ -56,17 +56,6 @@ export function workflowEndedPlanControl(workflow?: WorkflowRunPayload): boolean
   })
 }
 
-/** 结束事实只属于同一次执行，旧开发 Run 的结束不能遮住同 Thread 新测试的失败重试。 */
-export function workflowExecutionEnded(
-  workflow: WorkflowRunPayload | undefined,
-  lifecycle: ApplicationLifecycle | undefined
-): boolean {
-  if (workflowEndedPlanControl(workflow)) return true
-  if (!workflow || workflow.summary.status !== 'failed') return false
-  const ended = lifecycle?.endedExecutions?.[workflow.runId]?.execution
-  return ended?.runId === workflow.runId && ended.threadId === workflow.threadId
-}
-
 
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {
@@ -194,10 +183,6 @@ export function workflowMessageInteractionAvailability(
   if (isDagConfirmationWorkflow(workflow)) {
     return workflowInteractionAvailability(workflow, lifecycle)
   }
-  // 后续暂停/继续消息不代表已消费确认；同一后端 Pending 仍有效就保留操作入口。
-  if (!isConversationWorkflow(workflow) && workflowInteractionAvailability(workflow, lifecycle) === 'active') {
-    return 'active'
-  }
   if (hasNewerMessage) return 'stale'
   if (conversationRevisionHandoffCommitted(workflow, lifecycle)) return 'stale'
   return locallyManaged ? 'active' : workflowInteractionAvailability(workflow, lifecycle)
@@ -223,21 +208,9 @@ function recoveredPendingInteractionMatches(
   const recoveryDraftIdentity = dagDraftIdentity(recovery.confirmation)
   const recoveryOwnerSessionId = String(recovery.ownerSessionId || '').trim()
   const workflowOwnerSessionId = dagDraftOwnerSessionId(clarification)
-  // 当前执行已经接管同一草稿时，以它的 Run/Thread 和未提交交互授权，来源 Run 不再可操作。
-  const current = Object.values(lifecycle?.activeExecutions || {}).find(
-    (execution) => dagDraftIdentity(execution.pendingInteraction?.payload) === recoveryDraftIdentity
-  )
-  const executionMatches = current
-    ? current.runId === workflow.runId &&
-      current.threadId === workflow.threadId &&
-      current.status === 'awaiting_user' &&
-      current.pendingInteraction?.type === 'task_plan_confirmation' &&
-      !current.pendingInteraction.submittedAt &&
-      dagDraftOwnerSessionId(current.pendingInteraction.payload) === recoveryOwnerSessionId
-    : recovery.workflowRunId === workflow.runId
   return (
     workflowMode === 'build_task_plan_confirmation' &&
-    executionMatches &&
+    recovery.workflowRunId === workflow.runId &&
     Boolean(recoveryOwnerSessionId) &&
     workflowOwnerSessionId === recoveryOwnerSessionId &&
     Boolean(workflowDraftIdentity) &&
@@ -303,7 +276,7 @@ export function deriveDisplayedPlanExecutionMode(
 ): PlanExecutionMode {
   if (requestRunning && workflowStatus === 'stopping') return 'stopping'
   if (
-    !hasLifecycleSnapshot && !execution &&
+    (!hasLifecycleSnapshot || execution) &&
     (workflowStatus === 'stopped' || workflowStatus === 'cancelled')
   ) {
     return 'stopped'
@@ -321,12 +294,12 @@ export function deriveDisplayedPlanExecutionMode(
   return 'idle'
 }
 
-/** 二次修改主动暂停后显示继续入口；运行与异常仍保留各自原控制面。 */
+/** 自由对话期间隐藏计划控制栏，仅让正式 Workflow 占用底部控制栏。 */
 export function shouldRenderPlanExecutionDock(
   mode: PlanExecutionMode,
   conversationActive: boolean
 ): mode is Exclude<PlanExecutionMode, 'idle'> {
-  return mode !== 'idle' && (!conversationActive || mode === 'stopped')
+  return mode !== 'idle' && !conversationActive
 }
 
 /** 乐观更新指定计划执行的控制状态，不覆盖独立的创建生命周期状态。 */
@@ -339,10 +312,6 @@ export function withWorkflowExecutionStatus(
   const lifecycle = workflow.summary.lifecycle
   const executionRunId = targetRunId || workflow.runId
   const execution = lifecycle?.activeExecutions?.[executionRunId]
-  // 正常最终回执已提交同 Run 的确认门时，迟到暂停意图不能改写该权威事实。
-  if (status === 'stopped' && workflow.summary.status === 'requires_user_input' &&
-    execution?.status === 'awaiting_user' && execution.threadId === workflow.threadId &&
-    execution.pendingInteraction && !execution.pendingInteraction.submittedAt) return workflow
   const nextLifecycle =
     lifecycle && execution
       ? {

@@ -7,8 +7,6 @@ from collections.abc import Sequence
 from typing import Any, NoReturn
 
 from app.services.planning_issues import ValidationIssue
-from app.services.unit_candidate_id_binding import bind_missing_task_ids
-from app.services.unit_generation_contracts import UnitGenerationContext
 from app.utils.model_output import extract_json_root_object_with_repair
 
 
@@ -86,13 +84,12 @@ def parse_raw_unit_candidate(
     raw_text: str,
     *,
     unit_id: str,
-    task_identity_context: UnitGenerationContext | None = None,
 ) -> list[dict[str, Any]]:
     """严格解析 ``{"tasks": [...]}``，失败时不返回任何部分任务。
 
-    严格解析 envelope/Task object；仅在显式提供冻结 Context 时，允许唯一职责绑定补入
-    缺失的任务 ID，再校验 ID。原始响应不修改，已有字段不覆盖，其他字段留给完整
-    Local Validator；不调用 ``build_task_planner`` normalize 路径。
+    本函数只验证 Raw Candidate envelope、Task object 和模型 Task ID 身份。
+    Task 的 owner、Unit、职责、路径及依赖由后续 Local Validator 校验；这里既不
+    修复也不删除任何模型字段，并且不调用旧 ``build_task_planner`` normalize 路径。
     """
 
     if not isinstance(raw_text, str):
@@ -203,13 +200,6 @@ def parse_raw_unit_candidate(
             ]
         )
 
-    if task_identity_context is not None and all(isinstance(task, dict) for task in raw_tasks):
-        if task_identity_context.unit_id != unit_id:
-            raise ValueError("任务身份绑定 Context 与 Parser Unit 不一致。")
-        raw_tasks, binding_issues = bind_missing_task_ids(task_identity_context, raw_tasks)
-        if binding_issues:
-            raise RawUnitCandidateParseError(binding_issues)
-
     task_issues: list[ValidationIssue] = []
     task_ids: set[str] = set()
     for index, task in enumerate(raw_tasks):
@@ -254,7 +244,7 @@ def parse_raw_unit_candidate(
                     f"Unit Candidate tasks[{index}].id 必须是无首尾空白的非空身份。",
                     unit_id=unit_id,
                     index=index,
-                    actual_id=task_id,
+                    task_ids=(task_id,),
                 )
             )
             continue

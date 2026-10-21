@@ -1,3 +1,4 @@
+import { runAuthentication } from '../src/main/authClient'
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { requestCloudJson } from '../src/renderer/src/service/cloudApi'
@@ -208,71 +209,80 @@ test('AG-UI Python 请求不会携带 access_token', async () => {
   assert.equal(authorization, null)
 })
 
-test('Java JSON 请求从 Electron 内存读取 token 并强制使用 Bearer 头', async () => {
+test('云端请求通过 IPC 交给 Python，渲染器不读取 token 或发送 fetch', async () => {
   const originalWindow = globalThis.window
   const originalFetch = globalThis.fetch
-  let authorization: string | null = null
+  let sent: unknown
   Object.assign(globalThis, {
-    window: {
-      devAgentStudio: {
-        auth: {
-          getAccessToken: async () => ({ accessToken: 'memory-token' })
-        }
-      }
-    },
-    fetch: async (_url: string, init?: RequestInit) => {
-      authorization = new Headers(init?.headers).get('Authorization')
-      return jsonResponse(200, { ok: true })
-    }
+    window: { devAgentStudio: { auth: { requestCloudJson: async (input: unknown) => {
+      sent = input
+      return { httpStatus: 200, body: { ok: true } }
+    } } } },
+    fetch: async () => { throw new Error('渲染器不得直接调用云端') }
   })
-
   try {
-    const result = await requestCloudJson<{ ok: boolean }>('https://cloud.example/api', {
-      headers: { Authorization: 'Bearer caller-token' }
+    const result = await requestCloudJson('https://cloud.example/api', {
+      method: 'POST', body: '{}', headers: { Authorization: 'Bearer should-not-forward' }
     })
     assert.deepEqual(result, { ok: true })
-    assert.equal(authorization, 'Bearer memory-token')
-  } finally {
-    Object.assign(globalThis, { window: originalWindow, fetch: originalFetch })
-  }
+    assert.deepEqual(sent, { url: 'https://cloud.example/api', method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
+  } finally { Object.assign(globalThis, { window: originalWindow, fetch: originalFetch }) }
 })
 
-test('Java 401 与缺少内存 token 都发布认证失败', async () => {
-  const originalWindow = globalThis.window
-  const originalFetch = globalThis.fetch
-  const statuses: number[] = []
-  const unsubscribe = subscribeAuthenticationFailure((failure) => {
-    statuses.push(failure.status)
+for (const status of [401, 403] as const) {
+  test(`Python 云端代理返回 ${status} 仍触发全局认证提示`, async () => {
+    const originalWindow = globalThis.window
+    const statuses: number[] = []
+    const unsubscribe = subscribeAuthenticationFailure((failure) => statuses.push(failure.status))
+    Object.assign(globalThis, { window: { devAgentStudio: { auth: {
+      requestCloudJson: async () => ({ httpStatus: status, body: { detail: '认证拒绝' } })
+    } } } })
+    try {
+      await assert.rejects(requestCloudJson('https://cloud.example/api'))
+      assert.deepEqual(statuses, [status])
+    } finally { unsubscribe(); Object.assign(globalThis, { window: originalWindow }) }
   })
+}
 
+test('主进程消费 Python AG-UI 进度和最终文件登录状态', async () => {
+  const originalFetch = globalThis.fetch
+  const progress: string[] = []
+  let sent: unknown
+  Object.assign(globalThis, { fetch: async (_url: unknown, init: RequestInit) => {
+    sent = JSON.parse(String(init.body)).forwardedProps.authentication
+    return eventStreamResponse([
+      { type: 'RUN_STARTED', threadId: 'auth-thread', runId: 'auth-run' },
+      { type: 'CUSTOM', name: 'authentication', value: { status: 'in_progress', progress: { stage: 'awaiting_authorization', message: '等待授权', percent: 25 } } },
+      { type: 'RUN_FINISHED', threadId: 'auth-thread', runId: 'auth-run', result: { authentication: { status: 'completed', authenticated: true, user: { id: 'u1', name: '用户' } } } }
+    ])
+  } })
   try {
-    Object.assign(globalThis, {
-      window: {
-        devAgentStudio: {
-          auth: {
-            getAccessToken: async () => ({ accessToken: 'memory-token' })
-          }
-        }
-      },
-      fetch: async () => jsonResponse(401)
-    })
-    await assert.rejects(requestCloudJson('https://cloud.example/api'))
-    assert.deepEqual(statuses, [401])
+    const result = await runAuthentication('http://127.0.0.1:8000', { action: 'status' }, (value) => { progress.push(value.progress!.stage) })
+    assert.equal(result.authenticated, true)
+    assert.deepEqual(progress, ['awaiting_authorization'])
+    assert.deepEqual(sent, { action: 'status' })
+  } finally { Object.assign(globalThis, { fetch: originalFetch }) }
+})
 
-    resetAuthenticationFailure()
-    Object.assign(globalThis, {
-      window: {
-        devAgentStudio: {
-          auth: {
-            getAccessToken: async () => ({ accessToken: null })
-          }
-        }
-      }
-    })
-    await assert.rejects(requestCloudJson('https://cloud.example/api'))
-    assert.deepEqual(statuses, [401, 401])
-  } finally {
-    unsubscribe()
-    Object.assign(globalThis, { window: originalWindow, fetch: originalFetch })
-  }
+test('主进程拒绝非本机后端及不完整的认证结果', async () => {
+  await assert.rejects(runAuthentication('https://remote.example', { action: 'status' }), /本机/)
+  const originalFetch = globalThis.fetch
+  Object.assign(globalThis, { fetch: async () => eventStreamResponse([
+    { type: 'RUN_STARTED', threadId: 't', runId: 'r' },
+    { type: 'RUN_FINISHED', threadId: 't', runId: 'r', result: {} }
+  ]) })
+  try { await assert.rejects(runAuthentication('http://127.0.0.1:8000', { action: 'status' }), /完整结果/) }
+  finally { Object.assign(globalThis, { fetch: originalFetch }) }
+})
+
+test('浏览器打开失败不会被 SDK subscriber 吞掉', async () => {
+  const originalFetch = globalThis.fetch
+  Object.assign(globalThis, { fetch: async () => eventStreamResponse([
+    { type: 'RUN_STARTED', threadId: 't', runId: 'r' },
+    { type: 'CUSTOM', name: 'authentication', value: { status: 'in_progress', progress: { stage: 'awaiting_authorization', message: '等待授权', percent: 25 } } },
+    { type: 'RUN_FINISHED', threadId: 't', runId: 'r', result: { authentication: { status: 'completed' } } }
+  ]) })
+  try {
+    await assert.rejects(runAuthentication('http://127.0.0.1:8000', { action: 'login' }, () => { throw new Error('浏览器打开失败') }), /浏览器打开失败/)
+  } finally { Object.assign(globalThis, { fetch: originalFetch }) }
 })

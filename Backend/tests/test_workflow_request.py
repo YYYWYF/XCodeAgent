@@ -23,32 +23,12 @@ from app.services.application_lifecycle import (
 from app.services.application_revision_lifecycle import register_revision_impact
 from app.protocols.workflow.request import (
     _build_execution_scope,
-    _frontend_performance_decision,
     _resume_values,
     workflow_run_inputs,
 )
 
 
 class WorkflowRequestTests(unittest.TestCase):
-    def test_modified_testing_starts_fresh_without_old_confirmation_or_quality_results(self) -> None:
-        """二次修改用新测试入口和原提问，不借用旧确认、通过结果或恢复身份。"""
-        request = "整理前端实现，保留原始输入标记"
-        inputs = workflow_run_inputs({
-            "request": request,
-            "forwardedProps": {
-                "workflowAction": "start_modified_testing",
-                "selectedPageId": "journey",
-                "resumeState": {"summary": {"phase": "acceptance", "status": "completed"},
-                                "state": {"quality_gate_passed": True, "accepted": True,
-                                          "frontend_performance_decision": "skip"}},
-            },
-        })
-        self.assertEqual(inputs["request"], request)
-        self.assertEqual(inputs["resume_from"], "integration_test")
-        self.assertEqual(inputs["resume_values"]["selectedPageId"], "journey")
-        for key in ("quality_gate_passed", "accepted", "frontend_performance_decision", "resume_execution_run_id"):
-            self.assertNotIn(key, inputs["resume_values"])
-
     def test_forwards_page_session_as_pending_owner(self) -> None:
         """页面对话 ID 必须进入 Graph state，且不与 Workflow Run 身份混用。"""
 
@@ -62,7 +42,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertEqual(inputs["resume_values"]["owner_session_id"], "session-owner-1")
 
     def test_application_revision_continuation_ignores_stale_client_scope(self) -> None:
-        """application continuation 清空旧目标并进入共用映射门禁。"""
+        """application continuation 必须清空旧目标并直接进入工作区扫描。"""
 
         active_revision = SimpleNamespace(
             request="调整全局技术方案",
@@ -76,7 +56,7 @@ class WorkflowRequestTests(unittest.TestCase):
             ),
         )
         with patch(
-            "app.protocols.workflow.request.validate_revision_continuation",
+            "app.protocols.workflow.request.consume_revision_continuation",
             return_value=active_revision,
         ):
             inputs = workflow_run_inputs(
@@ -100,8 +80,7 @@ class WorkflowRequestTests(unittest.TestCase):
             )
 
         self.assertEqual(inputs["request"], "调整全局技术方案")
-        self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
-        self.assertEqual(inputs["resume_values"]["api_design_gate_action"], {})
+        self.assertEqual(inputs["resume_from"], "inspect_workspace")
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
             {"type": "application", "targetId": "application"},
@@ -112,7 +91,7 @@ class WorkflowRequestTests(unittest.TestCase):
         self.assertNotIn("detail_target_type", inputs["resume_values"])
 
     def test_page_revision_continuation_ignores_stale_application_scope(self) -> None:
-        """page continuation 由 lifecycle 锁定页面并进入映射门禁。"""
+        """page continuation 由 lifecycle 锁定页面并保留实体绑定门禁。"""
 
         active_revision = SimpleNamespace(
             request="修改订单页",
@@ -126,7 +105,7 @@ class WorkflowRequestTests(unittest.TestCase):
             ),
         )
         with patch(
-            "app.protocols.workflow.request.validate_revision_continuation",
+            "app.protocols.workflow.request.consume_revision_continuation",
             return_value=active_revision,
         ):
             inputs = workflow_run_inputs(
@@ -145,7 +124,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
         self.assertEqual(inputs["resume_values"]["selectedPageId"], "orders")
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
@@ -167,7 +146,7 @@ class WorkflowRequestTests(unittest.TestCase):
             ),
         )
         with patch(
-            "app.protocols.workflow.request.validate_revision_continuation",
+            "app.protocols.workflow.request.consume_revision_continuation",
             return_value=active_revision,
         ):
             inputs = workflow_run_inputs(
@@ -187,7 +166,7 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(inputs["resume_from"], "api_design_readiness_gate")
+        self.assertEqual(inputs["resume_from"], "development_readiness_gate")
         self.assertNotIn("selectedPageId", inputs["resume_values"])
         self.assertEqual(inputs["resume_values"]["selected_api_contract_id"], "orders-api")
         self.assertEqual(inputs["resume_values"]["selected_endpoint_id"], "orders.list")
@@ -215,7 +194,7 @@ class WorkflowRequestTests(unittest.TestCase):
             ),
         )
         with patch(
-            "app.protocols.workflow.request.validate_revision_continuation",
+            "app.protocols.workflow.request.consume_revision_continuation",
             return_value=active_revision,
         ), self.assertRaisesRegex(ValueError, "缺少 pageId"):
             workflow_run_inputs(
@@ -1180,40 +1159,28 @@ class WorkflowRequestTests(unittest.TestCase):
     def test_frontend_performance_confirmation_is_forwarded_as_resume_decision(self) -> None:
         """前端性能测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
 
-        for decision in ("run", "skip"):
-            for answer in (decision, {"selected": decision}, {"selected": [decision]}):
-                with self.subTest(answer=answer):
-                    inputs = workflow_run_inputs(
-                        {
-                            "clarificationAnswers": {
-                                "frontend_performance_confirmation": answer
-                            },
-                            "resumeState": {
-                                "summary": {
-                                    "status": "requires_user_input",
-                                    "phase": "integration_test",
-                                }
-                            },
-                        }
-                    )
-                    self.assertEqual(inputs["resume_from"], "integration_test")
-                    self.assertEqual(
-                        inputs["resume_values"]["frontend_performance_decision"],
-                        decision,
-                    )
-                    self.assertNotIn("user_interaction_submission", inputs)
+        inputs = workflow_run_inputs(
+            {
+                "clarificationAnswers": {
+                    "frontend_performance_confirmation": {
+                        "selected": "run",
+                    }
+                },
+                "resumeState": {
+                    "summary": {
+                        "status": "requires_user_input",
+                        "phase": "integration_test",
+                    }
+                },
+            }
+        )
 
-    def test_frontend_performance_rejects_ambiguous_yes_no_answers(self) -> None:
-        """性能测试确认只消费动作值，不再把是或否解释为跳过或执行。"""
-
-        for answer in ("是", "否", "yes", "no", True, False, "继续", None):
-            with self.subTest(answer=answer):
-                self.assertEqual(
-                    _frontend_performance_decision(
-                        {"frontend_performance_confirmation": answer}
-                    ),
-                    "",
-                )
+        self.assertEqual(inputs["resume_from"], "integration_test")
+        self.assertEqual(
+            inputs["resume_values"]["frontend_performance_decision"],
+            "run",
+        )
+        self.assertNotIn("user_interaction_submission", inputs)
 
     def test_performance_resume_keeps_integration_build_cache(self) -> None:
         """性能测试确认恢复时必须保留集成构建缓存，避免测试阶段从头重跑。"""

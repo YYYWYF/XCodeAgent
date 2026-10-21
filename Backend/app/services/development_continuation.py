@@ -24,7 +24,6 @@ from app.services.application_lifecycle import (
 )
 from app.services.artifact_invalidation import canonical_sha256
 from app.services.development_readiness import development_readiness
-from app.services.data_source_policy import workspace_uses_builtin_database
 from app.workspace.plan_documents import load_project_plan_json
 
 
@@ -119,7 +118,7 @@ def issue_development_continuation(
         raise ApplicationLifecycleConflictError("开发 continuation 已消费。")
     plan_path = _technical_plan_path(workspace)
     plan = load_project_plan_json(plan_path, hydrate_detail_designs=True)
-    readiness = _continuation_readiness(plan, continuation.target, builtin=workspace_uses_builtin_database(workspace))
+    readiness = _continuation_readiness(plan, continuation.target)
     if not readiness.get("ready"):
         return development_continuation_payload(
             continuation,
@@ -185,7 +184,7 @@ def validate_development_continuation(
     if continuation.technical_plan_sha256 != canonical_sha256(plan_path):
         raise ApplicationLifecycleConflictError("TechnicalPlan 已变化，开发 continuation 作废。")
     plan = load_project_plan_json(plan_path, hydrate_detail_designs=True)
-    if not _continuation_readiness(plan, continuation.target, builtin=workspace_uses_builtin_database(workspace)).get("ready"):
+    if not _continuation_readiness(plan, continuation.target).get("ready"):
         raise ApplicationLifecycleConflictError("原开发目标的实体前置尚未全部完成。")
     return continuation
 
@@ -229,8 +228,6 @@ def development_continuation_payload(
 def _continuation_readiness(
     project_plan: dict[str, Any],
     target: DevelopmentContinuationTarget,
-    *,
-    builtin: bool,
 ) -> dict[str, Any]:
     """使用 continuation 的服务端目标复检实体绑定，不接受客户端目标覆盖。"""
 
@@ -239,14 +236,12 @@ def _continuation_readiness(
             project_plan,
             target_type="page",
             target_id=str(target.page_id or ""),
-            builtin=builtin,
         )
     return development_readiness(
         project_plan,
         target_type="endpoint",
         target_id=str(target.endpoint_id or ""),
         api_contract_id=str(target.api_contract_id or ""),
-        builtin=builtin,
     )
 
 

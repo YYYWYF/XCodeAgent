@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from app.agents.execution_control import create_deep_agent
+from deepagents import create_deep_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 
 from app.agents.code_analyze.scope import CodeReviewRepairScopedBackend

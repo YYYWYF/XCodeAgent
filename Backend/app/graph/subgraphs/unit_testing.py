@@ -36,8 +36,6 @@ def unit_test_quality_gate(state: ProjectState) -> dict[str, Any]:
         test_results=state.get("test_results", []),
         source="unit_test",
     )
-    from app.services.stage_execution_artifacts import bind_unit_test_report
-    report = bind_unit_test_report(state, report)
     report_path = str(
         state.get("unit_test_report_path")
         or workflow_artifact_root(state) / "reports" / "unit-test-report.json"

@@ -1,7 +1,6 @@
-import type { Dispatch, SetStateAction } from 'react'
 import { useState } from 'react'
 import type { ApplicationOutlineProps } from '../components/ApplicationOutline'
-import type { RightPanelLayout, RightPanelState } from '../types'
+import type { RightPanelState } from '../types'
 
 type ArtifactSelection = {
   applicationId: string
@@ -16,8 +15,7 @@ type ArtifactSelection = {
 type Options = {
   applicationId: string
   setRightPanel: (panel?: RightPanelState) => void
-  /** 打开产物详情时需要确保右侧可见；隐藏态下切回分栏，已是分栏/全宽则不动。 */
-  setRightPanelLayout: Dispatch<SetStateAction<RightPanelLayout>>
+  onRightPanelOpenChange: (open: boolean) => void
 }
 
 type DevelopmentArtifactDetail = {
@@ -38,7 +36,7 @@ type DevelopmentArtifactDetail = {
 export function useDevelopmentArtifactDetail({
   applicationId,
   setRightPanel,
-  setRightPanelLayout
+  onRightPanelOpenChange
 }: Options): DevelopmentArtifactDetail {
   const [selection, setSelection] = useState<ArtifactSelection>()
   const currentSelection = selection?.applicationId === applicationId ? selection : undefined
@@ -47,8 +45,7 @@ export function useDevelopmentArtifactDetail({
   const openDetail = (target: Omit<ArtifactSelection, 'applicationId'>): void => {
     setSelection({ ...target, applicationId })
     setRightPanel({ type: 'outline' })
-    // 隐藏态下打开详情要恢复可见；已是分栏/全宽则保持用户当前布局。
-    setRightPanelLayout((current) => (current === 'hidden' ? 'split' : current))
+    onRightPanelOpenChange(true)
   }
 
   /** 点击页面只打开该页面的空白详情。 */
@@ -66,7 +63,7 @@ export function useDevelopmentArtifactDetail({
     })
   }
 
-  /** 点击实体打开其已保存的信息，仅更新本地浏览选择。 */
+  /** 点击实体只打开该实体的空白详情。 */
   const onEntitySelect: ApplicationOutlineProps['onEntitySelect'] = (entity) => {
     openDetail({ entityId: entity.id, label: entity.label })
   }

@@ -650,6 +650,7 @@ flowchart TD
     SCAN["scan_workspace_code / 扫描工作区代码"]
     BE["execute_backend / 执行后端快速修改"]
     FE["execute_frontend / 执行前端快速修改"]
+    WS["execute_workspace / 执行普通工作区修改"]
     TEST["integration_test / 快速修改验证"]
     REPAIR["direct_modification_repair / 快速修改自动修复"]
     LAUNCH["launch_project / 启动修改后项目"]
@@ -663,6 +664,7 @@ flowchart TD
     C -->|"workspace_question"| QA
     C -->|"frontend"| FE
     C -->|"backend/fullstack"| BE
+    C -->|"workspace change with exact paths"| WS
     C -->|"clarification/formal workflow"| FINAL
     BE -->|"fullstack + backend handoff"| FE
     BE -->|"backend only"| TEST
@@ -673,6 +675,7 @@ flowchart TD
     REPAIR -->|"failure/confirmation"| FINAL
     CHAT --> FINAL
     QA --> FINAL
+    WS --> FINAL
     LAUNCH --> FINAL
     FINAL --> E
 ```
@@ -680,12 +683,12 @@ flowchart TD
 ### 10.1 `classify_intent / 分类消息意图`
 
 - **类型**：直接 ChatModel 路由器。
-- **当前提示词**：System Prompt 和 `agents/direct_modification.py::_direct_modification_classifier_prompt`。要求基于前置扫描事实按结果分类 `casual_chat/workspace_question/clarification/implementation_fix/formal_revision`，识别 frontend/backend/fullstack owner，并为正式修改输出 branch、revision type、最早产物和影响范围；已存在页面/组件且不改变正式语义的明确局部修改必须分类为 `implementation_fix`。只说“前端需求”等未给出具体改动结果的请求必须澄清。前端、后端和全栈 Agent 可分别写入 `frontend/`、`backend/` 或这两个目录；目录内的文档、测试、脚本和配置也归对应 Agent。路径超出当前 owner 范围时执行前直接拒绝。置信度不足时澄清；请求明确后，是否在执行前展示整理后的需求和修改范围由 `confirmScopeBeforeExecution` 开关决定。
-- **输入**：当前消息、最多 4000 字符会话摘要、最多 16000 字符的页面/组件/入口/高价值配置/API 路由/共享契约/代码图扫描上下文、已有 handoff 决策和可选的 `confirmScopeBeforeExecution`。
-- **输出**：intent、owner、scope、confidence、reason、target paths、可选 casual response、clarification 或 `implementation_fix_confirmation`；确认卡展示整理后的需求和修改范围，允许用户先补充后重新识别。
-- **校验规则**：低置信度或 unknown owner 转澄清；frontend/backend/fullstack 目标分别必须落在对应根目录内，目录外路径执行前直接拒绝；精确文件候选仅在 owner 匹配、位于 workspace 内且真实存在时动态并入本次 `approvedPaths`；继续拒绝 lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.devagentstudio` 和 `..`。正式修改先登记 lifecycle 绑定的只读 impact，不直接 handoff 内部节点；classifier 若已为 `casual_chat` 返回自然语言 `response`，分类节点直接完成，只有缺少 response 时才调用兜底节点。
+- **当前提示词**：System Prompt 和 `agents/direct_modification.py::_direct_modification_classifier_prompt`。要求基于前置扫描事实按结果分类 `casual_chat/workspace_question/clarification/implementation_fix/formal_revision`，识别 owner，并为正式修改输出 branch、revision type、最早产物和影响范围；已存在页面/组件且不改变正式语义的明确局部修改必须分类为 `implementation_fix`。局部修改需要默认源码根之外的任意现有文件时仍保留对应 owner，并输出精确文件路径作为本次授权候选，置信度不足时才保守澄清。
+- **输入**：当前消息、最多 4000 字符会话摘要、最多 16000 字符的页面/组件/入口/高价值配置/API 路由/共享契约/代码图扫描上下文、已有 handoff 决策。
+- **输出**：intent、owner、scope、confidence、reason、target paths、可选 casual response 或 clarification。
+- **校验规则**：低置信度或 unknown owner 转澄清；workspace owner 必须有窄且可验证的相对路径范围；前后端额外文件候选只在路径属于 owner、位于 workspace 内且真实存在时动态并入本次 `approvedPaths`；拒绝宽目录范围、lockfile、`.env`/凭据文件、依赖/生成目录、schema/migration、`.devagentstudio` 和 `..`。正式修改先登记 lifecycle 绑定的只读 impact，不直接 handoff 内部节点；classifier 若已为 `casual_chat` 返回自然语言 `response`，分类节点直接完成，只有缺少 response 时才调用兜底节点。
 - **依赖文件**：`agents/direct_modification.py`、`graph/nodes/direct_modification.py`、`services/direct_modification.py`。
-- **依赖节点**：上游 `scan_workspace_code`；下游对话、问答、frontend/backend/fullstack 修改或 finalize。
+- **依赖节点**：上游 `scan_workspace_code`；下游对话、问答、frontend/backend/workspace 修改或 finalize。
 
 ### 10.2 `respond_conversation / 常规对话回复`
 
@@ -719,10 +722,10 @@ flowchart TD
 ### 10.5 `execute_backend / 执行后端快速修改`
 
 - **类型**：共享 SmallTask Agent，后端限定 packet。
-- **当前提示词**：SmallTask System/packet Prompt，packet 内附 `_data_source_direct_modification_prompt` legacy instructions。要求不依赖正式计划，只做最小局部修改，写入范围为 `Backend/**|backend/**`，执行聚焦检查，并为 fullstack 生成 backend handoff。
+- **当前提示词**：SmallTask System/packet Prompt，packet 内附 `_data_source_direct_modification_prompt` legacy instructions。要求不依赖正式计划，只做最小局部修改，默认限定前后端的 `app/src/tests` 源码根，执行聚焦检查，并为 fullstack 生成 backend handoff。
 - **输入**：用户请求、摘要、已批准路径、workspace、选定技能。
 - **输出**：backend stage result、真实 code diff、backend handoff。
-- **校验规则**：所有写入必须位于 `Backend/` 或 `backend/` 根目录；精确目标仍需通过本轮路径、安全和存在性校验；安装依赖和生成目录不可读写；真实 diff 与结果交叉验证；局部失败但已有真实 diff 可继续独立测试。
+- **校验规则**：路径 owner 校验；扫描得到的后端路由/模型源码优先；配置文件只有通过本轮确定性动态授权才能写入；安装依赖和生成目录不可读写；真实 diff 与结果交叉验证；局部失败但已有真实 diff 可继续独立测试。
 - **依赖文件**：`agents/direct_modification.py`、`agents/small_task/*`、`graph/nodes/direct_modification.py`、`services/direct_modification.py`。
 - **依赖节点**：上游 `classify_intent`；backend-only 进入 test，fullstack 进入 frontend。
 
@@ -732,11 +735,21 @@ flowchart TD
 - **当前提示词**：SmallTask Prompt + `_frontend_direct_modification_prompt` legacy instructions。要求读取前端必选技能、限定 `Frontend/**|frontend/**`、使用 backend handoff、最小修改并执行聚焦检查。
 - **输入**：请求、摘要、backend handoff、扫描得到的页面/组件/API client 源码候选、本轮确定性校验通过的动态文件路径、技能。
 - **输出**：frontend stage result 和真实 diff。
-- **校验规则**：写入范围为 `Frontend/**|frontend/**`；目录内源码、测试、文档、脚本和配置均可写，候选路径仍须通过 owner 和安全目录校验；随后读取扫描命中的源码候选；`node_modules/dist/build/target/.next/.turbo` 等目录不可读写；真实 diff 与结果一致性；尝试写入前后端根目录以外的路径时在执行前拒绝。
+- **校验规则**：默认写入范围仅为 `Frontend/src/**|frontend/src/**`；源码根之外的任意文件类型均可在通过精确路径、存在性、owner 和安全目录校验后临时追加，并排在读取候选最前；随后读取扫描命中的源码候选；`node_modules/dist/build/target/.next/.turbo` 等目录不可读写；路径 owner、技能边界、diff 和结果一致性；超范围走 handoff。
 - **依赖文件**：`agents/direct_modification.py`、`agents/small_task/*`、内置前端技能。
 - **依赖节点**：上游 `classify_intent` 或 backend；下游 `integration_test`。
 
-### 10.7 `integration_test / 快速修改验证`
+### 10.7 `execute_workspace / 执行普通工作区修改`
+
+- **类型**：共享 SmallTask Agent，精确路径限定。
+- **当前提示词**：SmallTask Prompt + `_workspace_direct_modification_prompt`。只允许普通文档、测试、脚本和配置；禁止产品代码、`.env`、迁移和正式 `.devagentstudio` 工件。
+- **输入**：分类器给出的精确 target paths、用户请求、摘要。
+- **输出**：workspace stage result 和 diff。
+- **校验规则**：无精确路径不执行；path guard；结果和 diff 校验。
+- **依赖文件**：`agents/direct_modification.py`、`agents/small_task/*`。
+- **依赖节点**：上游 `classify_intent`；下游直接 finalize，目前不进入 Integration Test。
+
+### 10.8 `integration_test / 快速修改验证`
 
 - **类型**：复用 Testing Subgraph，关闭正式 API contract check 和 Testing RepairPlanner 自动路由。
 - **输入**：快速修改 diff、Build-like results、repair iteration。
@@ -745,7 +758,7 @@ flowchart TD
 - **依赖文件**：`graph/nodes/direct_modification.py`、`graph/subgraphs/testing.py`。
 - **依赖节点**：上游 frontend/backend；下游 launch 或 direct repair。
 
-### 10.8 `direct_modification_repair / 快速修改自动修复`
+### 10.9 `direct_modification_repair / 快速修改自动修复`
 
 - **类型**：RepairPlanner + SmallTask 批量修复。
 - **当前提示词**：复用 Testing RepairPlanner Prompt 与 SmallTask Prompt。
@@ -755,13 +768,13 @@ flowchart TD
 - **依赖文件**：`graph/nodes/direct_repair.py`、`services/direct_repair.py`、RepairPlanner/SmallTask 实现。
 - **依赖节点**：上游快速修改 Integration Test；成功回到 Integration Test。
 
-### 10.9 `launch_project / 启动修改后项目`
+### 10.10 `launch_project / 启动修改后项目`
 
 - **类型**：复用主流程确定性启动节点。
 - **输入/输出/校验**：与主流程 `launch_project` 相同。
 - **依赖节点**：上游快速修改质量门禁；下游 finalize，不进入主流程用户验收节点。
 
-### 10.10 `finalize_direct_modification / 汇总自由对话结果`
+### 10.11 `finalize_direct_modification / 汇总自由对话结果`
 
 - **类型**：确定性汇总节点；无 LLM 提示词。
 - **输入**：intent、owner、各 stage result、test/launch/repair 结果、所有 code change sets、会话摘要。
@@ -1121,4 +1134,5 @@ flowchart TD
 | `answer_workspace`                          | `agents/workspace_assistant/agent.py::create_workspace_assistant_agent` 内 `base_system_prompt` | 同文件 `workspace_assistant_prompt`                                                           | question、bounded summary、workspace                                                                                                                                                           |
 | `execute_backend`                           | SmallTask System Prompt                                                                         | SmallTask packet + `_data_source_direct_modification_prompt` legacy instructions              | request、summary、approved backend paths                                                                                                                                                       |
 | `execute_frontend`                          | SmallTask System Prompt                                                                         | SmallTask packet + `_frontend_direct_modification_prompt` legacy instructions                 | request、summary、backend handoff、approved frontend paths                                                                                                                                     |
+| `execute_workspace`                         | SmallTask System Prompt                                                                         | SmallTask packet + `_workspace_direct_modification_prompt` legacy instructions                | request、summary、precise target paths                                                                                                                                                         |
 | `direct_modification_repair`                | RepairPlanner + SmallTask System Prompts                                                        | Testing repair Prompt + SmallTask packet Prompt                                               | TestReport、revision requests、original diff paths、iteration                                                                                                                                  |

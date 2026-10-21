@@ -42,7 +42,7 @@
   display: block;
   margin-bottom: 12px;
   color: var(--data-source-modal-text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -180,26 +180,8 @@
 .@{class-prefix}-data-source-table-picker-item em {
   flex: 0 0 auto;
   color: var(--data-source-modal-text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   font-style: normal;
-}
-
-// 字段详情继承工作台令牌，让浅色、深色主题保持相同的信息层级。
-.source-drawer-stack .source-table-detail {
-  .source-table-summary { margin-bottom: 18px; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7;
-    p { margin: 0; overflow-wrap: anywhere; }
-    .source-table-schema { display: block; margin-bottom: 4px; color: var(--wb-text-tertiary); font-size: 12px; }
-  }
-  .ant-alert { margin-bottom: 16px; }
-  .ant-table { font-size: 12px; }
-  .ant-table-thead > tr > th { padding: 10px 8px; color: var(--wb-text-secondary); background: var(--wb-surface-subtle); font-weight: 500; }
-  .ant-table-tbody > tr > td { padding: 12px 8px; border-color: var(--wb-border); }
-  .ant-table-tbody > tr:hover > td { background: var(--wb-surface-hover); }
-  td.source-column-name, td.source-column-type, .source-column-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-  td.source-column-type, td.source-column-description { color: var(--wb-text-secondary); }
-  td.source-column-description { overflow-wrap: anywhere; }
-  .source-column-empty { color: var(--wb-text-tertiary); }
-  .source-column-code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 @media (max-width: 560px) {
@@ -208,7 +190,7 @@
   }
 
   .@{class-prefix}-data-source-table-picker-hint {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .@{class-prefix}-data-source-table-picker-item {

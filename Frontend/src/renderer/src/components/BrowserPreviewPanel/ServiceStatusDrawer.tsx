@@ -5,21 +5,16 @@ import {
   CloseCircleFilled,
   CopyOutlined,
   ExclamationCircleFilled,
-  FullscreenExitOutlined,
-  FullscreenOutlined,
   LoadingOutlined,
   ReloadOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Drawer, Tabs, Typography } from 'antd'
-import { useEffect, useState } from 'react'
+import { Alert, Button, Drawer, Empty, Tabs, Typography } from 'antd'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
-import { previewServiceActionAvailability, previewServiceLaunchLabel } from './serviceStatusPolicy'
-import DatabaseCheckPanel from './DatabaseCheckPanel'
-import ServiceLogContent from './ServiceLogContent'
+import { previewServiceActionAvailability } from './serviceStatusPolicy'
 import './ServiceStatusDrawer.less'
-import './ServiceStatusDrawer.expanded.less'
 
 export type ServiceStatusControl = {
   open: boolean
@@ -31,8 +26,6 @@ export type ServiceStatusControl = {
   blockedReason: string
   onRestart: () => void
   onDiagnose: () => void
-  showDatabaseCheck?: boolean
-  onOpenEntity?: (entityId: string) => void
 }
 
 type ServiceLayer = 'frontend' | 'backend'
@@ -54,14 +47,12 @@ function serviceLabel(layer: ServiceLayer): string {
 }
 
 /** 返回服务层的说明，帮助用户在没有地址或失败时快速判断下一步。 */
-function serviceHint(layer: ServiceLayer, status: PreviewServiceState['status'], resourceFailure: boolean): string {
+function serviceHint(layer: ServiceLayer, status: PreviewServiceState['status']): string {
   if (status === 'skipped')
     return layer === 'backend' ? '当前项目无需启动后端进程' : '等待前端运行时就绪'
   if (status === 'starting') return '正在执行依赖、构建与就绪检测'
   if (status === 'running') return '进程已受控运行，可从预览地址访问'
-  if (status === 'failed') return resourceFailure
-    ? '请先处理实体表或内置数据库配置，再重新启动'
-    : '请查看本次启动日志，必要时诊断并修复'
+  if (status === 'failed') return '请查看本次启动日志，必要时诊断并修复'
   return '尚未建立本次启动进程'
 }
 
@@ -84,7 +75,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   const [tab, setTab] = useState<ServiceLayer>('frontend')
   const [following, setFollowing] = useState(true)
   const [copyError, setCopyError] = useState('')
-  const [logsExpanded, setLogsExpanded] = useState(false)
+  const logRef = useRef<HTMLPreElement>(null)
   const runtime = snapshot?.runtime
   const logs = runtime?.logs?.[tab] || []
   const content = logs
@@ -100,7 +91,10 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   })
   const actionTone = busy ? 'is-busy' : 'is-ready'
   const actionLabel = busy ? '处理中' : runtime ? '可操作' : '可启动'
-  const launchLabel = previewServiceLaunchLabel(runtime)
+  const launchLabel =
+    runtime?.frontend.status === 'running' && runtime?.backend.status === 'running'
+      ? '重启服务'
+      : '启动服务'
   const launching = busy && !!props.busyLaunchLabel
 
   useEffect(() => {
@@ -109,13 +103,13 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   }, [runtime?.attemptId, runtime?.failedStage])
 
   useEffect(() => {
-    if (!props.open) setLogsExpanded(false)
-  }, [props.open])
+    if (following && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [content, following, tab])
 
   /** 复制当前端的脱敏日志，并反馈剪贴板错误。 */
-  const copyLogs = async (text = content): Promise<void> => {
+  const copyLogs = async (): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(text)
+      await navigator.clipboard.writeText(content)
       setCopyError('')
     } catch {
       setCopyError('无法访问剪贴板，请选择日志文本复制。')
@@ -127,12 +121,6 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
     if (key !== 'frontend' && key !== 'backend') return
     setTab(key)
     setFollowing(true)
-  }
-
-  /** 关闭服务抽屉后定位实体，只改变浏览选择，不执行建表或推进工作流。 */
-  const openEntity = (entityId: string): void => {
-    props.setOpen(false)
-    props.onOpenEntity?.(entityId)
   }
 
   return (
@@ -149,7 +137,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
       onClose={() => props.setOpen(false)}
       width="min(520px, 100%)"
       getContainer={false}
-      className={`preview-service-drawer${logsExpanded ? ' is-log-expanded' : ''}`}
+      rootClassName="preview-service-drawer"
     >
       <div className="preview-service-drawer__body">
         <section
@@ -186,7 +174,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                   <div className="preview-service-card__meter" aria-hidden="true">
                     <span />
                   </div>
-                  <p className="preview-service-card__hint">{serviceHint(layer, status, layer === 'backend' && runtime?.failedStage === 'backend_database_resource')}</p>
+                  <p className="preview-service-card__hint">{serviceHint(layer, status)}</p>
                   <div className="preview-service-card__endpoint">
                     <span>服务端口</span>
                     {port ? (
@@ -244,12 +232,12 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               诊断并修复
             </Button>
           </div>
-          {props.error && (
+          {(props.error || copyError) && (
             <Alert
               className="preview-service-callout is-error"
               type="error"
               showIcon
-              message={props.error}
+              message={props.error || copyError}
             />
           )}
         </section>
@@ -303,36 +291,26 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               >
                 {following ? '跟随最新' : '恢复跟随'}
               </Button>
-              <Button
-                size="small"
-                icon={logsExpanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
-                aria-label={logsExpanded ? '还原日志高度' : '展开日志至抽屉高度'}
-                aria-pressed={logsExpanded}
-                onClick={() => setLogsExpanded((expanded) => !expanded)}
-              >
-                {logsExpanded ? '还原' : '展开'}
-              </Button>
             </div>
           </div>
-          {copyError && (
-            <Alert
-              type="error"
-              showIcon
-              message={copyError}
-              className="preview-service-callout is-error"
-            />
+          {content ? (
+            <pre
+              ref={logRef}
+              className="preview-service-logs"
+              aria-label={`${tab === 'frontend' ? '前端' : '后端'}启动日志`}
+              onScroll={(event) => {
+                const node = event.currentTarget
+                if (node.scrollHeight - node.scrollTop - node.clientHeight > 24) setFollowing(false)
+              }}
+            >
+              {content}
+            </pre>
+          ) : (
+            <div className="preview-log-empty">
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本次启动暂无日志" />
+            </div>
           )}
-          <ServiceLogContent
-            content={content}
-            label={`${tab === 'frontend' ? '前端' : '后端'}启动日志`}
-            following={following}
-            expanded={logsExpanded}
-            onPauseFollowing={() => setFollowing(false)}
-            onCopy={copyLogs}
-          />
         </section>
-        {props.showDatabaseCheck && <DatabaseCheckPanel report={runtime?.databaseCheck}
-          onOpenEntity={props.onOpenEntity ? openEntity : undefined} />}
       </div>
     </Drawer>
   )

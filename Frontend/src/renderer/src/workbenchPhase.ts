@@ -426,9 +426,6 @@ export function deriveWorkbenchPhase(lifecycle?: ApplicationLifecycle): Workbenc
     activeFormalRevision?.formalBranch === 'design_stage_revision' &&
     activeFormalRevision.status === 'design_planning'
   ) {
-    // 技术生成已实际开始时，修订的 currentArtifact 可能仍停留在上一份 UI 产物；
-    // 展示和失败入口应跟随当前技术阶段，不能因此把计划会话当成历史会话。
-    if (TECHNICAL_PLANNING_STAGES.has(lifecycle.initialization.stage)) return 'planning'
     return activeFormalRevision.currentArtifact === 'technical-plan' ? 'planning' : 'product'
   }
   if (

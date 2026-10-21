@@ -6,20 +6,12 @@ import type { ReactElement } from 'react'
 import type { DatabaseDataSource } from '../../typings'
 import { changeSelectedTables, requestApiDesignDatabaseColumns, requestApiDesignDatabaseTables, requestSourceReferences } from '../../service/dataSources'
 import type { ApiDesignDatabaseMetadata, SelectedDataTable } from '../../service/dataSources'
-import { subscribeDataSourcesChanged } from '../../service/dataSourceEvents'
 import { cx } from '../../utils'
 import './DatabaseTables.less'
 
 const { Text } = Typography
 
 type ImportProps = { workspaceRoot: string; source: DatabaseDataSource; selected: SelectedDataTable[]; theme: 'light' | 'dark'; onClose: () => void; onSaved: (tables: SelectedDataTable[]) => void }
-
-/** 弱化缺省展示，同时保留零值、空字符串等真实数据库默认值。 */
-function renderColumnDefault(value: string | null | undefined): ReactElement {
-  if (value == null) return <span className="source-column-empty" title="未提供默认值">—</span>
-  const label = value === '' ? "''" : value
-  return <span className="source-column-code" title={label}>{label}</span>
-}
 
 /** 从实时发现的数据库表中批量添加应用候选，不创建或修改数据库表。 */
 export function AddDatabaseTables({ workspaceRoot, source, selected, theme, onClose, onSaved }: ImportProps): ReactElement {
@@ -86,13 +78,12 @@ export function AddDatabaseTables({ workspaceRoot, source, selected, theme, onCl
   </Modal>
 }
 
-/** 展示真实表字段；内置表由实体维护，外部表仍可移除应用候选。 */
-export function DatabaseTableDetail({ workspaceRoot, table, onRemoved, readOnly = false }: { workspaceRoot: string; table: SelectedDataTable; onRemoved: (tables: SelectedDataTable[]) => void; readOnly?: boolean }): ReactElement {
+/** 展示表字段并只移除应用中的候选引用。 */
+export function DatabaseTableDetail({ workspaceRoot, table, onRemoved }: { workspaceRoot: string; table: SelectedDataTable; onRemoved: (tables: SelectedDataTable[]) => void }): ReactElement {
   const [metadata, setMetadata] = useState<ApiDesignDatabaseMetadata>()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [retry, setRetry] = useState(0)
-  useEffect(() => subscribeDataSourcesChanged(workspaceRoot, () => setRetry((value) => value + 1)), [workspaceRoot])
   useEffect(() => {
     let disposed = false
     setLoading(true); setError(''); setMetadata(undefined)
@@ -113,20 +104,9 @@ export function DatabaseTableDetail({ workspaceRoot, table, onRemoved, readOnly 
         } })
     } catch (reason) { setError(reason instanceof Error ? reason.message : '读取引用失败。') }
   }
-  return <div className="source-table-detail">
-    {table.schema || table.description ? <div className="source-table-summary">
-      {table.schema ? <span className="source-table-schema">Schema · {table.schema}</span> : null}
-      {table.description ? <p>{table.description}</p> : null}
-    </div> : null}
+  return <div className="source-table-detail"><p>{table.schema} · {table.table}</p><p>{table.description}</p>
     {error && <Alert type="error" message={error} action={<Button onClick={() => setRetry((value) => value + 1)}>重试</Button>} />}
-    <Table size="small" tableLayout="fixed" loading={loading} rowKey="name" dataSource={metadata?.columns || []} pagination={false} scroll={readOnly ? { x: 650 } : undefined}
-      columns={[
-        { title: '字段', dataIndex: 'name', width: 170, ellipsis: true, className: 'source-column-name' },
-        { title: '类型', dataIndex: 'type', width: 110, ellipsis: true, className: 'source-column-type' },
-        ...(readOnly ? [
-          { title: '必填', dataIndex: 'required', width: 50, align: 'center' as const, render: (value: boolean) => value ? '是' : '否' },
-          { title: '主键', dataIndex: 'primaryKey', width: 50, align: 'center' as const, render: (value: boolean) => value ? '是' : '否' },
-          { title: '默认值', dataIndex: 'defaultValue', width: 90, ellipsis: true, render: renderColumnDefault }
-        ] : []), { title: '说明', dataIndex: 'description', className: 'source-column-description' }]} />
-    {!readOnly ? <Space><Button danger onClick={() => void remove()}>移除</Button></Space> : null}</div>
+    <Table size="small" loading={loading} rowKey="name" dataSource={metadata?.columns || []} pagination={false}
+      columns={[{ title: '字段', dataIndex: 'name' }, { title: '类型', dataIndex: 'type' }, { title: '说明', dataIndex: 'description' }]} />
+    <Space><Button danger onClick={() => void remove()}>移除</Button></Space></div>
 }

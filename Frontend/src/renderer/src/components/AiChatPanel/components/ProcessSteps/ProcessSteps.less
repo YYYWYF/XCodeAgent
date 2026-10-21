@@ -46,7 +46,6 @@
   display: inline-flex;
   width: 34px;
   height: 34px;
-  flex: 0 0 34px;
   align-items: center;
   justify-content: center;
   color: var(--wb-accent);
@@ -108,42 +107,40 @@
   }
 
   &.@{class-prefix}-running {
-    > .@{class-prefix}-process-step-summary > .@{class-prefix}-process-step-icon {
+    .@{class-prefix}-process-step-icon {
       color: #fff;
       background: var(--wb-accent);
       border-color: var(--wb-accent);
       box-shadow: 0 0 0 4px var(--wb-accent-soft);
     }
 
-    > .@{class-prefix}-process-step-summary > .ant-typography {
+    .@{class-prefix}-process-step-summary .ant-typography {
       color: var(--wb-text);
       font-weight: 650;
     }
   }
 
   &.@{class-prefix}-failed {
-    > .@{class-prefix}-process-step-summary > .@{class-prefix}-process-step-icon {
+    .@{class-prefix}-process-step-icon {
       color: var(--wb-danger);
       background: var(--wb-code-delete);
       border-color: var(--wb-danger);
     }
 
-    > .@{class-prefix}-process-step-summary > .ant-typography {
+    .@{class-prefix}-process-step-summary .ant-typography {
       color: var(--wb-danger);
     }
   }
 
   &.@{class-prefix}-requires_user_input {
-    > .@{class-prefix}-process-step-summary > .@{class-prefix}-process-step-icon {
+    .@{class-prefix}-process-step-icon {
       color: var(--wb-warning);
       background: var(--wb-surface-subtle);
       border-color: var(--wb-warning);
     }
   }
 
-  &.@{class-prefix}-repair-completed
-    > .@{class-prefix}-process-step-summary
-    > .ant-typography {
+  &.@{class-prefix}-repair-completed .@{class-prefix}-process-step-summary .ant-typography {
     color: var(--wb-accent);
     font-weight: 650;
   }
@@ -172,29 +169,6 @@
   user-select: text;
 }
 
-details > .@{class-prefix}-process-step-summary {
-  list-style: none;
-
-  &::-webkit-details-marker {
-    display: none;
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--wb-accent);
-    outline-offset: 3px;
-    border-radius: 4px;
-  }
-}
-
-.@{class-prefix}-process-step-summary > .@{class-prefix}-process-step-toggle {
-  margin-left: auto;
-  font-size: 12px;
-
-  > span {
-    color: inherit;
-  }
-}
-
 .@{class-prefix}-process-step-icon {
   position: absolute;
   top: 50%;
@@ -208,7 +182,7 @@ details > .@{class-prefix}-process-step-summary {
   background: var(--wb-canvas);
   border: 1px solid var(--wb-accent-border);
   border-radius: 50%;
-  font-size: 12px;
+  font-size: 8px;
   transform: translateY(-50%);
 }
 
@@ -240,7 +214,7 @@ details > .@{class-prefix}-process-step-summary {
 
 .@{class-prefix}-process-step-detail-label.ant-typography {
   color: var(--wb-text-tertiary);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -328,6 +302,15 @@ details > .@{class-prefix}-process-step-summary {
   box-shadow: inset 0 0 12px var(--wb-accent-soft);
 }
 
+.@{class-prefix}-integration-test-checklist-eyebrow.ant-typography {
+  color: var(--wb-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+  line-height: 1.3;
+}
+
 .@{class-prefix}-integration-test-checklist-title.ant-typography {
   color: var(--wb-text);
   font-size: 13px;
@@ -360,7 +343,7 @@ details > .@{class-prefix}-process-step-summary {
 
   small {
     margin-top: 2px;
-    font-size: 12px;
+    font-size: 9px;
     line-height: 1.1;
   }
 
@@ -460,7 +443,7 @@ details > .@{class-prefix}-process-step-summary {
 .@{class-prefix}-integration-test-check-index {
   color: var(--wb-text-tertiary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: 9px;
   line-height: 18px;
   text-align: center;
   background: var(--wb-surface-subtle);
@@ -483,10 +466,6 @@ details > .@{class-prefix}-process-step-summary {
   flex-direction: column;
   gap: 2px;
 
-  .@{class-prefix}-workflow-build-tool-activity {
-    margin-top: 6px;
-  }
-
   .@{class-prefix}-integration-test-check-heading {
     display: flex;
     min-width: 0;
@@ -505,7 +484,7 @@ details > .@{class-prefix}-process-step-summary {
     display: -webkit-box;
     overflow: hidden;
     color: var(--wb-text-tertiary);
-    font-size: 12px;
+    font-size: 11px;
     line-height: 1.45;
     overflow-wrap: anywhere;
     -webkit-box-orient: vertical;
@@ -513,11 +492,22 @@ details > .@{class-prefix}-process-step-summary {
   }
 }
 
+.@{class-prefix}-integration-test-check-scope {
+  padding: 1px 5px;
+  color: var(--wb-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 8px;
+  line-height: 1.35;
+  background: var(--wb-surface-subtle);
+  border: 1px solid var(--wb-border);
+  border-radius: 4px;
+}
+
 .@{class-prefix}-integration-test-check-status.ant-typography {
   flex: 0 0 auto;
   padding: 2px 7px;
   color: var(--wb-text-tertiary);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
   white-space: nowrap;
   background: var(--wb-surface-subtle);
@@ -538,7 +528,7 @@ details > .@{class-prefix}-process-step-summary {
   height: 26px;
   padding: 0 9px;
   color: var(--wb-accent);
-  font-size: 12px;
+  font-size: 11px;
   background: var(--wb-accent-soft);
   border-color: var(--wb-accent-border);
   border-radius: 7px;

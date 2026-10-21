@@ -79,27 +79,6 @@ class BackendStartupCheckTests(unittest.TestCase):
         self.assertIn('--server.port=0', result['command'])
         self.assertNotIn(str(self.root), result['command'])
 
-    def test_external_config_error_precedes_jar_checks_and_keeps_original_category(self) -> None:
-        """外置配置失败沿用原检查次序，不受内置延后取密逻辑影响。"""
-
-        with patch.object(startup, '_backend_runtime_environment', return_value=({}, '外置配置无效')), \
-             patch.object(startup, '_find_backend_snapshot_jar') as jar:
-            result = self.check()
-        self.assertFalse(result['passed'])
-        self.assertEqual(result['failure_category'], 'backend_startup')
-        self.assertIn('外置配置无效', result['evidence'])
-        jar.assert_not_called()
-
-    def test_external_connection_error_does_not_suppress_repair_hints(self) -> None:
-        """同样的连接异常日志仅在内置启动快照存在时归类为资源错误。"""
-
-        hints = [{'path': 'backend/src/main/resources/application.yml'}]
-        with patch.object(startup, 'database_resource_failure', return_value=True), \
-             patch.object(startup, '_repair_hints', return_value=hints):
-            result = self.check('print("Communications link failure"); raise SystemExit(1)')
-        self.assertEqual(result['failure_category'], 'backend_startup')
-        self.assertEqual(result['repair_hints'], hints)
-
     def test_banner_or_completion_without_listener_never_passes(self) -> None:
         """横幅和单独 Started 日志均不足以放行。"""
         for message in [':: Spring Boot :: (v2.7.2)', 'Started Application in 0.1 seconds']:

@@ -82,12 +82,10 @@ class FakeModelConnectionError(Exception):
 
 
 def _settings_for(model_name: str) -> Settings:
-    """构造只用于测试的当前模型配置，不访问外部模型服务。"""
+    """以转发连接地址模拟当前配置变化，不在 Studio 保存真实上游模型名。"""
 
     return Settings(
-        model_base_url="https://model.test.invalid/v1",
-        model_api_key="test-key",
-        model_name=model_name,
+        model_transmit_url=f"https://{model_name.lower()}.transmit.test.invalid",
     )
 
 
@@ -267,10 +265,10 @@ class TechnicalPlanningRecoveryJourneyHarness:
         """只替代模型调用，按当前 Settings 产生真实 classifier 可识别的 404 或合法计划。"""
 
         del initial_errors
-        model_name = Settings.from_env().model_name
-        self.called_models.append(model_name)
-        if model_name != "working-model":
-            raise FakeModelConnectionError(model=model_name)
+        settings = Settings.from_env()
+        self.called_models.append(settings.model_transmit_url)
+        if settings.model_transmit_url != _settings_for("working-model").model_transmit_url:
+            raise FakeModelConnectionError(model=settings.model_name)
         return deepcopy(self.candidate), [], None
 
     async def run_initial(self) -> None:
@@ -445,7 +443,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(claim.acquired)
 
     async def test_failed_technical_planning_retries_exact_generation_node(self) -> None:
-        """用户修正模型配置后，重试沿业务入口生成并保留正式确认门。"""
+        """Technical Planning 生成异常只能从精确失败节点重入并使用当前模型。"""
 
         with (
             patch(
@@ -470,14 +468,14 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(run_a.failure)
             assert run_a.failure is not None
             self.assertEqual(run_a.failure.http_status, 404)
-            self.assertEqual(run_a.failure.model, "DeepSeek")
+            self.assertEqual(run_a.failure.model, "studio-model")
 
             source_a, projection_a, action_a = await self.harness.resolve_action()
             self.assertEqual(projection_a.classification, "ready_to_continue")
             self.assertEqual(action_a["status"], "recoverable")
             self.assertEqual(
                 action_a["primaryAction"]["kind"],
-                RecoveryActionKind.RETRY_BUSINESS_NODE.value,
+                RecoveryActionKind.RETRY_FAILED_NODE.value,
             )
             self.assertTrue(action_a["incidentId"])
             self.assertTrue(action_a["primaryAction"]["actionId"])
@@ -515,16 +513,36 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 self.harness.called_models,
-                ["DeepSeek", "working-model"],
+                [_settings_for(name).model_transmit_url for name in ("DeepSeek", "working-model")],
             )
 
-            self.assertEqual(run_b.status, DurableExecutionStatus.AWAITING_USER)
+            resolution = await resolve_recovery_lineage_head(
+                self.harness.workspace,
+                thread_id=self.harness.thread_id,
+                execution_kind="application_planning",
+            )
+            self.assertEqual(resolution.state, RecoveryLineageState.AWAITING_USER_HEAD)
+            self.assertIsNotNone(resolution.head)
+            assert resolution.head is not None
+            self.assertEqual(resolution.head.run_id, run_b.run_id)
+            self.assertEqual(
+                resolution.head.status,
+                DurableExecutionStatus.AWAITING_USER,
+            )
 
             attempts = await list_recovery_attempts_for_thread(
                 self.harness.workspace,
                 thread_id=self.harness.thread_id,
             )
-            self.assertEqual(attempts, [])
+            self.assertEqual(len(attempts), 1)
+            native_attempt = next(
+                attempt
+                for attempt in attempts
+                if attempt.source_run_id == source_a.run_id
+            )
+            self.assertIsNotNone(native_attempt.source_checkpoint_id)
+            self.assertNotIn("strategy", native_attempt.model_fields)
+            self.assertNotIn("source_authority_kind", native_attempt.model_fields)
 
             executions = await list_executions_for_thread(
                 self.harness.workspace,
@@ -537,7 +555,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_g7_repeated_failure_retries_from_canonical_child_checkpoint(self) -> None:
-        """配置错误连续失败后仍保留 A 的节点和问题，不恢复新产生的 B checkpoint。"""
+        """G7 锁定 A→B 失败后只从 B 的同 Node checkpoint 再次恢复。"""
 
         with (
             patch(
@@ -561,19 +579,29 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(source_b.current_node, source_a.current_node)
             self.assertEqual(
                 action_b["primaryAction"]["kind"],
-                RecoveryActionKind.RETRY_BUSINESS_NODE.value,
+                RecoveryActionKind.RETRY_FAILED_NODE.value,
             )
 
             attempts_after_b = await list_recovery_attempts_for_thread(
                 self.harness.workspace,
                 thread_id=self.harness.thread_id,
             )
-            self.assertEqual(attempts_after_b, [])
+            self.assertEqual(len(attempts_after_b), 1)
+            attempt_from_a = attempts_after_b[0]
+            boundary_b = await get_node_entry_boundary(
+                self.harness.workspace,
+                source_run_id=run_b.run_id,
+                thread_id=self.harness.thread_id,
+                target_node=source_b.current_node or "",
+            )
+            self.assertIsNotNone(boundary_b)
+            assert boundary_b is not None
+
             self.harness.model_name = "working-model"
             run_c = await self.harness.execute_action(action_b)
             self.assertNotEqual(run_c.run_id, run_b.run_id)
             self.assertEqual(run_b.first_node, "technical_planning_generate")
-            self.assertEqual(run_c.first_node, "technical_planning_generate")
+            self.assertEqual(run_c.first_node, source_b.current_node)
             self.assertNotEqual(run_c.status, DurableExecutionStatus.FAILED)
 
             lifecycle = load_application_lifecycle(self.harness.workspace)
@@ -586,14 +614,33 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(lifecycle.active_run_id, run_c.run_id)
             self.assertEqual(
                 self.harness.called_models,
-                ["DeepSeek", "MiMo", "working-model"],
+                [_settings_for(name).model_transmit_url for name in ("DeepSeek", "MiMo", "working-model")],
             )
 
             attempts = await list_recovery_attempts_for_thread(
                 self.harness.workspace,
                 thread_id=self.harness.thread_id,
             )
-            self.assertEqual(attempts, [])
+            self.assertEqual(len(attempts), 2)
+            attempt_from_b = next(
+                attempt for attempt in attempts if attempt.source_run_id == run_b.run_id
+            )
+            self.assertEqual(attempt_from_b.source_run_id, source_b.run_id)
+            self.assertEqual(
+                attempt_from_b.source_checkpoint_id,
+                boundary_b.checkpoint_id,
+            )
+            self.assertNotEqual(
+                attempt_from_b.source_checkpoint_id,
+                attempt_from_a.source_checkpoint_id,
+            )
+            attempts_by_source = {attempt.source_run_id: attempt for attempt in attempts}
+            self.assertIsNotNone(
+                attempts_by_source[self.harness.source_run_id].source_checkpoint_id
+            )
+            self.assertIsNotNone(attempts_by_source[run_b.run_id].source_checkpoint_id)
+            for attempt in attempts:
+                self.assertIsNotNone(attempt.source_checkpoint_id)
 
             executions = await list_executions_for_thread(
                 self.harness.workspace,

@@ -5,6 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from langchain_core.messages import AIMessageChunk
+
 from app.config import Settings
 from app.services.ui_design_generator import (
     _auto_fix_missing_imports,
@@ -22,9 +24,7 @@ class UiDesignSettingsTests(unittest.TestCase):
         """UI 设计生成配置缺省时应提供足够的输出上限、一次修复机会与并发度。"""
 
         environment = {
-            "MODEL_BASE_URL": "https://example.test/v1",
-            "MODEL_API_KEY": "test-key",
-            "MODEL_NAME": "test-model",
+            "MODEL_TRANSMIT_URL": "http://127.0.0.1:8100",
         }
         with patch.dict(os.environ, environment, clear=True):
             settings = Settings.from_env()
@@ -37,9 +37,7 @@ class UiDesignSettingsTests(unittest.TestCase):
         """UI 设计生成配置应允许通过独立环境变量覆盖默认值。"""
 
         environment = {
-            "MODEL_BASE_URL": "https://example.test/v1",
-            "MODEL_API_KEY": "test-key",
-            "MODEL_NAME": "test-model",
+            "MODEL_TRANSMIT_URL": "http://127.0.0.1:8100",
             "DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS": "12288",
             "DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES": "3",
             "DEVAGENTSTUDIO_UI_DESIGN_CONCURRENCY": "5",
@@ -74,16 +72,13 @@ class UiDesignGeneratorTests(unittest.TestCase):
         """单页设计稿生成必须绑定 UI 设计专用输出上限。"""
 
         model = MagicMock()
-        model.bind.return_value.invoke.return_value = SimpleNamespace(
+        model.bind.return_value.stream.return_value = [AIMessageChunk(
             content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
-        )
+        )]
         settings = SimpleNamespace(
             ui_design_max_tokens=12288,
             ui_design_max_retries=2,
         )
-        # 独立模型未配置时 for_ui_design_model 返回自身；SimpleNamespace 假 Settings
-        # 补该方法等价回落（本用例不覆盖独立模型解析，由 test_llm_provider 负责）。
-        settings.for_ui_design_model = lambda: settings
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
             return_value=settings,
@@ -107,17 +102,16 @@ class UiDesignGeneratorTests(unittest.TestCase):
 
         model = MagicMock()
         bound_model = model.bind.return_value
-        bound_model.invoke.side_effect = [
+        bound_model.stream.side_effect = [
             RuntimeError("Connection error."),
-            SimpleNamespace(
+            [AIMessageChunk(
                 content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
-            ),
+            )],
         ]
         settings = SimpleNamespace(
             ui_design_max_tokens=8192,
             ui_design_max_retries=2,
         )
-        settings.for_ui_design_model = lambda: settings
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
             return_value=settings,
@@ -133,7 +127,7 @@ class UiDesignGeneratorTests(unittest.TestCase):
                 "MoviePage",
             )
 
-        self.assertEqual(bound_model.invoke.call_count, 2)
+        self.assertEqual(bound_model.stream.call_count, 2)
         self.assertIn("export default MoviePage", code)
 
     def test_truncated_output_is_continued_not_regenerated(self) -> None:
@@ -153,12 +147,11 @@ class UiDesignGeneratorTests(unittest.TestCase):
         continuation = " /></div>;\nexport default MoviePage;"
         model = MagicMock()
         bound_model = model.bind.return_value
-        bound_model.invoke.side_effect = [
-            SimpleNamespace(content=partial),       # 首次：截断，无 export default
-            SimpleNamespace(content=continuation),  # 续写：补全
+        bound_model.stream.side_effect = [
+            [AIMessageChunk(content=partial)],       # 首次：截断，无 export default
+            [AIMessageChunk(content=continuation)],  # 续写：补全
         ]
         settings = SimpleNamespace(ui_design_max_tokens=32768, ui_design_max_retries=1)
-        settings.for_ui_design_model = lambda: settings
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
             return_value=settings,
@@ -175,11 +168,11 @@ class UiDesignGeneratorTests(unittest.TestCase):
             )
 
         # 只调 2 次：首次生成 + 一次续写，不触发整页 repair。
-        self.assertEqual(bound_model.invoke.call_count, 2)
+        self.assertEqual(bound_model.stream.call_count, 2)
         self.assertIn("export default MoviePage", code)
         self.assertIn("<ProTable", code)
         # 续写的 prompt 必须带"从断点续写"指令与已生成的部分代码。
-        continuation_prompt = bound_model.invoke.call_args_list[1][0][0]
+        continuation_prompt = bound_model.stream.call_args_list[1][0][0]
         self.assertIn("CUT OFF", continuation_prompt)
         self.assertIn("MoviePage", continuation_prompt)
         # 续写成功后 validate 第二次收到的是拼接后的完整代码。

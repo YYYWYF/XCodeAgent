@@ -203,16 +203,12 @@ class BuildTaskPlanRegenerateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pending["draft_identity"]["planning_run_id"], recovered.planning_run.planning_run_id)
         self.assertGreater(calls, 0)
         first_calls = calls
-        committed_kwargs = {**kwargs, "current_inputs_factory": Mock(side_effect=AssertionError("已提交结果不应重读输入"))}
         committed = await regenerate_pending_build_task_plan(
             self.state, workflow_run_id="workflow-r4",
-            recovery_source_workflow_run_id="workflow-r3", **committed_kwargs,
+            recovery_source_workflow_run_id="workflow-r3", **kwargs,
         )
         self.assertEqual(committed.status, "regenerated")
         self.assertEqual(calls, first_calls)
-        self.assertEqual(dict(committed.planning_run.unit_display_names), dict(recovered.planning_run.unit_display_names))
-        self.assertTrue(committed.planning_run.unit_display_names)
-        committed_kwargs["current_inputs_factory"].assert_not_called()
         stale = await regenerate_pending_build_task_plan(
             self.state, workflow_run_id="forged", **kwargs,
         )

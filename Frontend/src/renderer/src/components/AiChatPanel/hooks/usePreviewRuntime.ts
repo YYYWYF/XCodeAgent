@@ -10,7 +10,6 @@ import { useSessionRuntimeStore } from './useSessionRuntimeStore'
 import { usePreviewRuntimeConnection } from './usePreviewRuntimeConnection'
 import type { ConnectionState } from '../../../service/connectionState'
 import { previewRecoveryAction } from '../previewRuntimeRecovery'
-import { previewServiceLaunchLabel } from '../../BrowserPreviewPanel/serviceStatusPolicy'
 
 type Options = {
   workspace: string
@@ -32,7 +31,6 @@ export function usePreviewRuntime(options: Options): {
   repairBusy: boolean
   connection: ConnectionState
   retry: () => Promise<void>
-  reconnect: () => Promise<void>
   act: (action: PreviewAction, feedback?: string) => Promise<void>
 } {
   const { acquireSessionExecution, releaseSessionExecution, updateSessionExecutionStatus } =
@@ -217,7 +215,14 @@ export function usePreviewRuntime(options: Options): {
     }
     cancelRequestedRef.current = false
     busyRef.current = true
-    setBusyLaunchLabel(action === 'restart' ? previewServiceLaunchLabel(snapshot?.runtime) : undefined)
+    setBusyLaunchLabel(
+      action === 'restart'
+        ? snapshot?.runtime?.frontend.status === 'running' &&
+          snapshot.runtime.backend.status === 'running'
+          ? '重启服务'
+          : '启动服务'
+        : undefined
+    )
     setBusy(true)
     setError('')
     failedActionRef.current = undefined
@@ -416,11 +421,6 @@ export function usePreviewRuntime(options: Options): {
   return {
     connection: previewConnection.connection,
     retry,
-    /** 连接入口只重新读取预览状态，不重放启动、诊断或修复动作。 */
-    reconnect: async () => {
-      try { await previewConnection.read(activeThread) }
-      catch { /* 通信失败由连接状态持有，不能转成新的会话执行失败。 */ }
-    },
     control: {
       open,
       setOpen,

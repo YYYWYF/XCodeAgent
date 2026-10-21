@@ -55,12 +55,7 @@
 
   "auth": {
     "enable": true,
-    "yht": {
-      "clientId": "",
-      "privateKey": "加密后的内容",
-      "publicKey": "",
-      "centerPublicKey": ""
-    }
+    "authnSource": "yht"
   },
 
   "authorization": {

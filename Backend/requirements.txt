@@ -1,9 +1,9 @@
-ag-ui-protocol>=0.1.19
+ag-ui-protocol==1.0.0
 aiosqlite>=0.20.0
 openai>=1.0.0
 fastapi>=0.115.0
 httpx>=0.27.0
-httpx-sse>=0.4.0
+httpx-sse>=0.4.3,<0.5
 langchain-core>=0.3.0
 langchain-openai==1.3.3
 langgraph>=1.2.8,<2.0.0
@@ -21,3 +21,6 @@ portalocker>=3.0.0
 code-review-graph==2.3.7
 tree-sitter==0.26.0
 tree-sitter-language-pack==0.11.0
+
+# 非 Windows 平台的系统安全钥匙串；Windows 凭据直接使用 DPAPI。
+keyring>=25.6,<26

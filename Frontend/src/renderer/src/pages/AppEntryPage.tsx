@@ -106,7 +106,7 @@ function AppEntryContent(): JSX.Element {
       const lifecycle =
         event.type === 'reconcile_received'
           ? event.lifecycle
-          : event.type === 'lifecycle_received' || event.type === 'planning_ended'
+          : event.type === 'lifecycle_received'
             ? event.lifecycle
             : event.type === 'workflow_received'
               ? workflowApplicationLifecycle(event.workflow)
@@ -336,9 +336,6 @@ function AppEntryContent(): JSX.Element {
               void planningRuntimeController.retryCurrentFailure(visiblePlanning.application.id)
             }
           }}
-          onReconnect={() => {
-            void planningRuntimeController.reconcileCurrentState(visiblePlanning.application.id).catch(console.error)
-          }}
           onReturnHome={planningController.returnHome}
           theme={theme}
           visible
@@ -367,13 +364,8 @@ function AppEntryContent(): JSX.Element {
             onIterationStarted={(application, threadId, lifecycle) => {
               planningController.startPlanning(application, threadId, lifecycle, false, false)
             }}
-            onStartIterationPlanning={(applicationId, request, workflowDebug, debugStage) =>
-              planningRuntimeController.startIterationPlanning(
-                applicationId,
-                request,
-                workflowDebug,
-                debugStage
-              )
+            onStartIterationPlanning={(applicationId, request) =>
+              planningRuntimeController.startIterationPlanning(applicationId, request)
             }
             onRevisionContinuationHandlerChange={(handler) =>
               registerRevisionContinuation(activeApplication.id, handler)

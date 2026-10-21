@@ -12,6 +12,7 @@ from app.graph.application_planning_revision import (
     cleared_design_change_context,
     design_artifact_node_state,
     design_node_update,
+    earliest_available_design_target,
     formal_revision_design_target,
     is_design_change,
     prepare_ui_revision_state,
@@ -22,7 +23,6 @@ from app.protocols.application_page_planning import (
 )
 from app.protocols.workflow.projection import _workflow_next_nodes, _workflow_start_node
 from app.protocols.workflow.request import workflow_run_inputs
-from app.agents.design_conversation import DesignConversationDecision, resolve_design_target
 from app.agents.design_conversation.router import classify_design_conversation
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
@@ -87,18 +87,18 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             ui_designs={"confirmation_status": "confirmed"},
         )
 
-        self.assertEqual((decision.intent, decision.change_level), ("requirement_change", "requirement"))
+        self.assertEqual(decision.target, "requirements")
 
-    def test_authorization_business_question_stays_in_requirements_review(self) -> None:
-        """权限业务澄清仍由 RequirementSpec 原生中断处理。"""
+    def test_authorization_initialization_question_stays_in_requirements_review(self) -> None:
+        """权限初始化待回答时必须产生 RequirementSpec 原生中断。"""
 
         target = _route_requirements(
             {
                 "requirement_spec": {"confirmation_status": "pending_user_input"},
                 "clarification": {
-                    "mode": "authorization_business_review",
+                    "mode": "authorization_configuration_conflict",
                     "status": "requires_user_input",
-                    "questions": [{"id": "authorization_business_review"}],
+                    "questions": [{"id": "authorization_initial_admin"}],
                 },
             }
         )
@@ -169,8 +169,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         """需求意图应调用真实生命周期服务，从后续阶段回到分析并保存原始输入。"""
 
         classify.return_value = SimpleNamespace(
-            intent="requirement_change",
-            change_level="requirement",
+            target="requirements",
             reason="页面清单发生变化",
             affected_page_ids=["orders"],
             response="",
@@ -345,26 +344,6 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         self.assertNotEqual(downstream["request"], "新增报表页")
         self.assertIn("ProductPlan", downstream["request"])
 
-    def test_joint_requirement_draft_advances_product_generation(self) -> None:
-        """联合确认前需求草稿已就绪时推进产品生成，澄清未结束时保留原节点。"""
-        state = {
-            "design_change_submission": True,
-            "design_change_request": "修改说明",
-            "design_change_target": "requirements",
-            "design_change_generation_target": "requirements",
-            "design_change_generation_request": "修改说明",
-        }
-        for confirmation, expected in [
-            ("pending_user_confirmation", "product_planning"),
-            ("pending_user_input", "requirements"),
-        ]:
-            with self.subTest(confirmation=confirmation):
-                update = design_node_update(state, "requirements", {
-                    "status": "clear",
-                    "requirement_spec": {"confirmation_status": confirmation},
-                })
-                self.assertEqual(update["design_change_generation_target"], expected)
-
     def test_terminal_snapshot_drops_design_change_context(self) -> None:
         """已终结快照禁止回传设计变更上下文，防止旧变更指令在后续轮次复活。"""
 
@@ -519,16 +498,16 @@ class ApplicationDesignConversationTests(unittest.TestCase):
         """意图 Agent 不能越过尚未确认的上游产物。"""
 
         self.assertEqual(
-            resolve_design_target(
-                DesignConversationDecision(intent="ui_change", change_level="ui", reason="调整界面"),
+            earliest_available_design_target(
+                "ui_confirmation",
                 requirement_spec={"confirmation_status": "pending_user_confirmation"},
                 product_plan={"confirmation_status": "confirmed"},
             ),
             "requirements",
         )
         self.assertEqual(
-            resolve_design_target(
-                DesignConversationDecision(intent="ui_change", change_level="ui", reason="调整界面"),
+            earliest_available_design_target(
+                "ui_confirmation",
                 requirement_spec={"confirmation_status": "confirmed"},
                 product_plan={"confirmation_status": "pending_user_confirmation"},
             ),

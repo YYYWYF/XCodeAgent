@@ -62,9 +62,6 @@ from app.services.authorization_deliverability import (
 )
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
-from app.services.entity_table_binding import bind_plan_entity_tables
-from app.services.entity_display_language import validate_entity_display_language
-from app.services.data_source_policy import workspace_uses_builtin_database
 from app.services.product_plan import require_current_product_plan
 from app.services.page_dependencies import (
     close_page_action_endpoint_dependencies,
@@ -251,10 +248,7 @@ def _attach_technical_plan_contracts(
             ],
         ),
     }
-    bound_plan = bind_plan_entity_tables(
-        closed_plan, read_application_config(workspace_from_state(state)),
-    )
-    return attach_page_implementation_contracts(bound_plan, product_plan, ui_designs)
+    return attach_page_implementation_contracts(closed_plan, product_plan, ui_designs)
 
 
 def _technical_plan_contract_errors(
@@ -691,7 +685,6 @@ def _entity_source_binding_implementation(state: ProjectState) -> dict:
         entity_errors = _pending_entity_design_validation_errors(
             pending_plan,
             selected_entity_id,
-            builtin=workspace_uses_builtin_database(workspace_from_state(state)),
         )
         if entity_errors:
             review_plan = _attach_entity_design_validation_errors(
@@ -1132,8 +1125,6 @@ def _apply_entity_design_action(
 def _pending_entity_design_validation_errors(
     project_plan: dict[str, Any],
     entity_id: str,
-    *,
-    builtin: bool = False,
 ) -> list[str]:
     """确认前校验实体设计是否符合 ProjectPlan 契约，返回可读错误列表。"""
 
@@ -1147,7 +1138,7 @@ def _pending_entity_design_validation_errors(
     )
     if detail is None:
         return [f"实体 {entity_id} 尚未生成实体设计。"]
-    return entity_design_validation_errors(project_plan, detail, builtin=builtin)
+    return entity_design_validation_errors(project_plan, detail)
 
 
 def _attach_entity_design_validation_errors(
@@ -1812,10 +1803,6 @@ def _project_plan_validation_errors(
         *validate_project_plan_dependencies(validation_plan),
         *validate_api_contract_consistency(validation_plan),
         *validate_project_plan_datasource_policy(validation_plan),
-        *validate_entity_display_language(project_plan, builtin=bool(
-            state and workspace_from_state(state)
-            and workspace_uses_builtin_database(workspace_from_state(state))
-        )),
     ]
     # 实体定义严格规则继续暂停；API entity_ids、字段引用和分页规则在确认前启用。
     if (

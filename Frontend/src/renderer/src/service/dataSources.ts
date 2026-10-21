@@ -10,7 +10,6 @@ import type {
 import { createAgUiHttpAgent } from './authentication'
 import { AgUiBusinessError } from './agUiBusinessError'
 import { notifyDataSourcesChanged } from './dataSourceEvents'
-import type { DatabaseDataPage, DatabaseTableOperation } from '../typings/managedDatabase'
 
 type DataSourceAction =
   | 'list'
@@ -21,7 +20,6 @@ type DataSourceAction =
   | 'detail'
   | 'database_tables'
   | 'database_columns'
-  | 'database_rows' | 'database_operations'
   | 'external_operation'
   | 'selected_tables' | 'add_tables' | 'remove_tables' | 'references'
 
@@ -30,12 +28,10 @@ export type SelectedDataTable = { sourceId: string; schema: string; table: strin
 
 export type ApiDesignDatabaseMetadata = {
   sourceId?: string
-  managedDatasourceKey?: string
   schema?: string
   table?: string
   tables?: Array<{ name: string; description?: string; columnCount?: number }>
-  columns?: Array<{ name: string; type: string; required?: boolean; description?: string;
-    nullable?: boolean; primaryKey?: boolean; autoIncrement?: boolean; defaultValue?: string | null }>
+  columns?: Array<{ name: string; type: string; required?: boolean; description?: string }>
 }
 
 export type ApiDesignExternalOperationMetadata = {
@@ -53,7 +49,7 @@ export type ApiDesignExternalOperationMetadata = {
   }>
 }
 
-export type DataSourcesPayload = {
+type DataSourcesPayload = {
   schemaVersion: 1
   runId: string
   threadId: string
@@ -64,9 +60,6 @@ export type DataSourcesPayload = {
   validation?: DataSourceValidation
   tables?: SelectedDataTable[]
   references?: string[]
-  dataPage?: DatabaseDataPage
-  operations?: DatabaseTableOperation[]
-  historyLimit?: number
   error?: { type?: string; message?: string }
 }
 
@@ -124,13 +117,11 @@ function readDataSourcesFromResult(value: unknown): DataSourcesPayload | undefin
   return readDataSourcesPayload((value as { dataSources?: unknown }).dataSources)
 }
 
-/** 通过标准 AG-UI 客户端执行数据源动作，可由详情面板取消只读请求。 */
-export async function runDataSourceAction(
+async function runDataSourceAction(
   workspaceRoot: string,
   action: DataSourceAction,
   actionInput: Record<string, unknown>,
-  messageContent: string,
-  signal?: AbortSignal
+  messageContent: string
 ): Promise<DataSourcesPayload> {
   const threadId = randomUUID()
   const agent = createAgUiHttpAgent({ url: getDataSourcesUrl(action), threadId })
@@ -148,19 +139,10 @@ export async function runDataSourceAction(
       dataSources = readDataSourcesFromState(event.snapshot) ?? dataSources
     }
   }
-  /** 复用客户端取消能力，不自行维护 fetch 或 SSE 连接。 */
-  const abort = (): void => agent.abortRun()
-  if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError')
-  signal?.addEventListener('abort', abort, { once: true })
-  let result: Awaited<ReturnType<typeof agent.runAgent>>
-  try {
-    result = await agent.runAgent(
-      { forwardedProps: { dataSources: { workspaceRoot, ...actionInput } } }, subscriber
-    )
-  } finally {
-    signal?.removeEventListener('abort', abort)
-  }
-  if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError')
+  const result = await agent.runAgent(
+    { forwardedProps: { dataSources: { workspaceRoot, ...actionInput } } },
+    subscriber
+  )
   dataSources = readDataSourcesFromResult(result.result) ?? dataSources
   if (!dataSources) throw new Error('数据源接口没有返回有效的 AG-UI 状态。')
   if (dataSources.status === 'failed') {

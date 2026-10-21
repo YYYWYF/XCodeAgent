@@ -6,7 +6,6 @@ import fnmatch
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator
-from app.services.workspace_process_registry import workspace_process_registry
 
 from deepagents.backends.protocol import (
     BackendProtocol,
@@ -25,7 +24,6 @@ _CURRENT_SMALL_TASK_PATHS: ContextVar[tuple[str, ...]] = ContextVar(
     "devagentstudio_small_task_paths",
     default=(),
 )
-_CURRENT_SMALL_TASK_RUN: ContextVar[str] = ContextVar("small_task_run_id", default="")
 _FORMAL_PATH_MARKERS = (".devagentstudio/", "requirement-spec", "project-plan", "build-task")
 _IGNORED_CODE_CONTEXT_DIRS = frozenset(
     {
@@ -46,9 +44,7 @@ _IGNORED_CODE_CONTEXT_DIRS = frozenset(
 
 
 @contextmanager
-def small_task_path_scope(
-    paths: list[str] | tuple[str, ...], *, run_id: str = "",
-) -> Iterator[None]:
+def small_task_path_scope(paths: list[str] | tuple[str, ...]) -> Iterator[None]:
     """在一次 Agent 调用的 Context 中安装不可跨线程污染的文件写入范围。"""
 
     token = _CURRENT_SMALL_TASK_PATHS.set(
@@ -58,18 +54,15 @@ def small_task_path_scope(
             if (normalized := _normalize_scope(path))
         )
     )
-    run_token = _CURRENT_SMALL_TASK_RUN.set(run_id)
     try:
         yield
     finally:
-        _CURRENT_SMALL_TASK_RUN.reset(run_token)
         _CURRENT_SMALL_TASK_PATHS.reset(token)
 
 
 def is_small_task_path_allowed(path: str) -> bool:
     """判断虚拟工作区路径是否命中当前 SmallTask 的授权范围。"""
 
-    _require_active_small_task()
     candidate = _normalize_candidate(path)
     if not candidate or _is_forbidden_path(candidate):
         return False
@@ -85,7 +78,6 @@ class ScopedSmallTaskBackend(BackendProtocol):
     def ls(self, path: str) -> LsResult:
         """列出源码目录并过滤安装依赖、缓存和构建产物。"""
 
-        _require_active_small_task()
         if _is_ignored_code_context_path(path):
             return LsResult(error=_read_scope_error(path), entries=[])
         result = self._delegate.ls(path)
@@ -104,7 +96,6 @@ class ScopedSmallTaskBackend(BackendProtocol):
     def read(self, file_path: str, offset: int = 0, limit: int = 2_000) -> ReadResult:
         """读取源码文件并拒绝依赖安装目录和生成目录。"""
 
-        _require_active_small_task()
         if _is_ignored_code_context_path(file_path):
             return ReadResult(error=_read_scope_error(file_path))
         return self._delegate.read(file_path, offset, limit)
@@ -117,7 +108,6 @@ class ScopedSmallTaskBackend(BackendProtocol):
     ) -> GrepResult:
         """默认从当前任务的源码根搜索，并过滤生成或依赖目录。"""
 
-        _require_active_small_task()
         if _is_ignored_code_context_path(path or "") or _is_ignored_code_context_path(
             glob or ""
         ):
@@ -138,7 +128,6 @@ class ScopedSmallTaskBackend(BackendProtocol):
     def glob(self, pattern: str, path: str | None = None) -> GlobResult:
         """默认从当前任务的源码根匹配，并拒绝依赖和构建目录。"""
 
-        _require_active_small_task()
         if _is_ignored_code_context_path(pattern) or _is_ignored_code_context_path(
             path or ""
         ):
@@ -179,7 +168,6 @@ class ScopedSmallTaskBackend(BackendProtocol):
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """转发批量源码读取，同时拒绝依赖安装目录和生成目录。"""
 
-        _require_active_small_task()
         allowed_paths = [
             path for path in paths if not _is_ignored_code_context_path(path)
         ]
@@ -215,14 +203,6 @@ class ScopedSmallTaskBackend(BackendProtocol):
         """把未涉及写入边界的兼容 backend 属性交给底层实现。"""
 
         return getattr(self._delegate, name)
-
-
-def _require_active_small_task() -> None:
-    """阻止异步取消后仍在线程中返回的 Agent 继续读写工作区。"""
-
-    run_id = _CURRENT_SMALL_TASK_RUN.get()
-    if run_id and workspace_process_registry.is_run_cancelled(run_id):
-        raise RuntimeError("当前运行已停止，SmallTask 不再执行工作区工具。")
 
 
 def _normalize_scope(value: Any) -> str:

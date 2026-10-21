@@ -1,7 +1,7 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
 import { useState } from 'react'
-import { createApplicationLifecycle, registerManagedDatabaseApplication } from '../../service/applicationLifecycle'
+import { createApplicationLifecycle } from '../../service/applicationLifecycle'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import { checkRemoteBranch } from '../../service/repositoryBranch'
 import { encryptSensitiveDatasourceFields } from '../../service/databaseCredentialCrypto'
@@ -148,12 +148,9 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
       }
       const persistedApplication = await saveApplication(application)
       const lifecycle = await createApplicationLifecycle(persistedApplication, planningThreadId)
-      const registeredApplication = await registerManagedDatabaseApplication(
-        persistedApplication, planningThreadId
-      )
 
       setModalOpen(false)
-      onStartPlanning(registeredApplication, planningThreadId, lifecycle)
+      onStartPlanning(persistedApplication, planningThreadId, lifecycle)
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {

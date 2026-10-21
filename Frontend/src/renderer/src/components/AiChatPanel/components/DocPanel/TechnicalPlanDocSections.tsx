@@ -26,19 +26,13 @@ import { SchemaTree } from './TechnicalPlanSchemaTree'
 
 const { Text } = Typography
 
-export type SectionKey =
-  | 'architecture'
-  | 'entities'
-  | 'api-contracts'
-  | 'page-bindings'
-  | 'authorization'
-  | 'page-design-overview'
+export type SectionKey = 'architecture' | 'entities' | 'api-contracts' | 'page-bindings' | 'authorization'
 
 type SectionProps = {
   sectionKey: SectionKey
 }
 
-/** 渲染三层架构摘要，完整展示可自动换行的说明。 */
+/** 渲染三层架构的紧凑摘要，不扩大右侧文档的纵向占用。 */
 export function ArchitectureSection({
   architecture,
   sectionKey
@@ -62,7 +56,7 @@ export function ArchitectureSection({
         {layers.map(([label, value], index) => (
           <div className={cx('technical-plan-architecture-layer')} key={label}>
             <span>{label}</span>
-            <p className={cx('technical-plan-architecture-description')}>{value}</p>
+            <strong>{value}</strong>
             {index < layers.length - 1 ? <RightOutlined aria-hidden="true" /> : null}
           </div>
         ))}
@@ -246,7 +240,7 @@ export function ContractSection({
         </div>
         <div className={cx('technical-plan-endpoint-block')}>
           <div className={cx('technical-plan-subtitle')}>
-            <span>接口列表</span>
+            <span>Endpoints</span>
             <span>{endpoints.length}</span>
           </div>
           <div className={cx('technical-plan-endpoint-table')}>
@@ -264,7 +258,6 @@ export function ContractSection({
                     `${selectedContractId}-endpoint-${index + 1}`
                   )
                   const method = textValue(endpoint.method, 'GET').toUpperCase()
-                  const summary = textValue(endpoint.summary, '待补充接口说明')
                   return (
                     <button
                       className={cx(
@@ -282,13 +275,13 @@ export function ContractSection({
                         {textValue(endpoint.name, '未命名接口')}
                       </span>
                       <code>{textValue(endpoint.path, '/')}</code>
-                      <span title={summary}>{summary}</span>
+                      <span>{textValue(endpoint.summary, '待补充接口说明')}</span>
                     </button>
                   )
                 })
               ) : (
                 <div className={cx('technical-plan-endpoint-empty')}>
-                  <Text type="secondary">暂无接口</Text>
+                  <Text type="secondary">暂无 Endpoint</Text>
                 </div>
               )}
             </div>

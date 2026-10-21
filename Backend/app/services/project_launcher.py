@@ -157,7 +157,7 @@ def _launch_project_preview(
         report("backend", "skipped", backend["message"])
     else:
         report("backend", "running", "正在构建并启动后端服务，完成后进入前端启动…")
-        backend = launch_backend_project(root, on_progress=lambda message: report("backend", "running", message))
+        backend = launch_backend_project(root)
         backend_process = backend.pop("_process", None)
         if backend.get("status") == "failed":
             report(

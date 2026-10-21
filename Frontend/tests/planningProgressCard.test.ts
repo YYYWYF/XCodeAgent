@@ -37,10 +37,7 @@ function planningProgress(phase: string, status: string): WorkflowRunPayload {
 function renderPlanningMessage(
   workflow: WorkflowRunPayload,
   recovery?: ApplicationPlanningRecoveryProjection,
-  revisionHandoff?: AgentChatMessage['revisionHandoff'],
-  executionRunning = workflow.summary.status === 'running',
-  withoutHistory = false,
-  history?: AgentChatMessage[]
+  revisionHandoff?: AgentChatMessage['revisionHandoff']
 ): string {
   return renderToStaticMarkup(createElement(
     WorkbenchPhaseContext.Provider,
@@ -52,11 +49,11 @@ function renderPlanningMessage(
       canEdit: () => false
     } },
     createElement(MessageList, {
-      conversationRunning: false, designPhasePlanning: true, loading: executionRunning,
-      planningState: {
-        workflow, recovery, transportState: executionRunning ? 'running' : 'idle', connection: { status: 'healthy', requestGeneration: 1 }
-      } as ApplicationPlanningCurrentState,
-      messages: history ?? (withoutHistory ? [] : [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow, revisionHandoff }]),
+      conversationRunning: false, designPhasePlanning: true, loading: false,
+      planningState: recovery ? {
+        workflow, recovery, transportState: 'idle', connection: { status: 'healthy', requestGeneration: 1 }
+      } as ApplicationPlanningCurrentState : undefined,
+      messages: [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow, revisionHandoff }],
       revertingCodeChangeIds: new Set<string>(),
       onRevertCodeChanges: ignoreAction, onOpenCodeChangeFile: ignoreAction,
       onSubmitClarification: ignoreConfirmation
@@ -114,62 +111,6 @@ test('技术规划终态不残留 loading 卡', () => {
     const markup = renderPlanningMessage(planningProgress('technical_planning', status))
     assert.doesNotMatch(markup, /anticon-loading/)
     assert.doesNotMatch(markup, /正在生成技术规划/)
-  }
-})
-
-/** 空历史与旧 running 快照都不能冒充当前 Agent 在执行。 */
-test('空会话和陈旧运行消息不产生恢复卡或 loading', () => {
-  const workflow = planningProgress('technical_planning_generate', 'running')
-  for (const withoutHistory of [false, true]) {
-    const markup = renderPlanningMessage(workflow, undefined, undefined, false, withoutHistory)
-    assert.doesNotMatch(markup, /anticon-loading|正在恢复|正在处理|正在生成技术规划|尚未进入/)
-  }
-  assert.match(renderPlanningMessage(workflow, undefined, undefined, true, true), /anticon-loading/)
-})
-
-/** 本机没有聊天历史时，后端的真实确认门禁仍提供正式确认操作。 */
-test('无本地会话仍展示后端当前确认操作', () => {
-  const workflow = planningProgress('technical_planning', 'requires_user_input')
-  workflow.summary.clarification = {
-    mode: 'technical_plan_confirmation', status: 'requires_user_input',
-    questions: []
-  }
-  workflow.state = {
-    application_planning_interrupt: {
-      gateId: 'current-gate', artifact: 'technical_plan', artifactRevision: 'current-revision'
-    }
-  }
-  const markup = renderPlanningMessage(workflow, undefined, undefined, false, true)
-  assert.match(markup, /确认保存/)
-  assert.doesNotMatch(markup, /anticon-loading|正在恢复|暂无会话记录/)
-  assert.doesNotMatch(markup, /<button[^>]*disabled[^>]*>[^<]*确认保存/)
-})
-
-/** 旧聊天不能遮住当前门禁，也不能继续提交已过期的确认。 */
-test('历史消息未回填时当前后端确认仍独立可用且只出现一次', () => {
-  const current = planningProgress('technical_planning', 'requires_user_input')
-  current.summary.clarification = {
-    mode: 'technical_plan_confirmation', status: 'requires_user_input', questions: []
-  }
-  current.state = { application_planning_interrupt: {
-    gateId: 'new-gate', artifact: 'technical_plan', artifactRevision: 'new-revision'
-  } }
-  const old = { ...current, runId: 'old-run', state: { application_planning_interrupt: {
-    gateId: 'old-gate', artifact: 'technical_plan', artifactRevision: 'old-revision'
-  } } }
-  for (const history of [
-    [{ id: 1, role: 'user', content: '之前的消息', createdAt: 1 }],
-    [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow: old }],
-    [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow: current }]
-  ] as AgentChatMessage[][]) {
-    const markup = renderPlanningMessage(current, undefined, undefined, false, false, history)
-    assert.equal((markup.match(/data-testid="current-planning-confirmation"/g) || []).length, 1)
-    const currentMarkup = markup.slice(markup.indexOf('data-testid="current-planning-confirmation"'))
-    assert.match(currentMarkup, /确认保存/)
-    assert.doesNotMatch(currentMarkup, /<button[^>]*disabled/)
-    if (history[0].workflow === current) {
-      assert.equal((markup.match(/确认保存/g) || []).length, 1)
-    }
   }
 })
 

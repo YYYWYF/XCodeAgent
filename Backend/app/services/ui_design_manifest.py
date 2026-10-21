@@ -459,19 +459,8 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
     }
 
 
-def validate_ui_design_code(
-    page: dict[str, Any],
-    code: str,
-    *,
-    allow_missing: bool = False,
-) -> list[str]:
-    """校验 TSX 只视觉展开 ProductPlan 已声明的业务语义。
-
-    ``allow_missing=True`` 时放宽 missing 检查：允许代码里缺少 ProductPlan 声明的
-    actions / information_items。用于 UI 调整场景——用户可能主动要求删掉某个视觉
-    板块（对应一个 information_item）或某个操作，此时 missing 是用户意图而非模型遗漏，
-    不应触发修复循环把删掉的部分加回来。unknown（越界）检查始终保留。
-    """
+def validate_ui_design_code(page: dict[str, Any], code: str) -> list[str]:
+    """校验 TSX 只视觉展开 ProductPlan 已声明的业务语义。"""
 
     inspection = inspect_ui_code_bindings(code)
     expected_actions = _expected_ids(page, "actions", "actionId")
@@ -482,34 +471,29 @@ def validate_ui_design_code(
     if actual_actions != set(expected_actions):
         missing = sorted(set(expected_actions) - actual_actions)
         unknown = sorted(actual_actions - set(expected_actions))
-        # 调整场景下用户可能主动删除某个操作，只有 missing 没有 unknown 时不报错。
-        if not (allow_missing and missing and not unknown):
-            message = (
-                "业务操作标记必须与 ProductPlan actions 完全一致"
-                f"（缺少：{missing or '无'}；越界：{unknown or '无'}）。"
-            )
-            if missing:
-                message += _expression_bound_hint(code, "data-action-id")
-            errors.append(message)
+        message = (
+            "业务操作标记必须与 ProductPlan actions 完全一致"
+            f"（缺少：{missing or '无'}；越界：{unknown or '无'}）。"
+        )
+        if missing:
+            message += _expression_bound_hint(code, "data-action-id")
+        errors.append(message)
     if actual_items != set(expected_items):
         missing = sorted(set(expected_items) - actual_items)
         unknown = sorted(actual_items - set(expected_items))
-        # 调整场景下用户可能主动删除某个信息板块，只有 missing 没有 unknown 时不报错。
-        if not (allow_missing and missing and not unknown):
-            message = (
-                "业务信息标记必须与 ProductPlan information_items 完全一致"
-                f"（缺少：{missing or '无'}；越界：{unknown or '无'}）。"
-            )
-            if missing:
-                message += _expression_bound_hint(code, "data-information-item-id")
-            errors.append(message)
+        message = (
+            "业务信息标记必须与 ProductPlan information_items 完全一致"
+            f"（缺少：{missing or '无'}；越界：{unknown or '无'}）。"
+        )
+        if missing:
+            message += _expression_bound_hint(code, "data-information-item-id")
+        errors.append(message)
     for kind, expected, actual in (
         ("action", expected_actions, inspection["actions"]),
         ("information item", expected_items, inspection["information_items"]),
     ):
         missing_controls = [item_id for item_id in expected if not actual.get(item_id)]
-        # 调整场景下用户可能删除某些 item，它们自然没有 control-id，不应报错。
-        if missing_controls and not allow_missing:
+        if missing_controls:
             message = f"以下 {kind} 缺少静态 data-control-id：{', '.join(missing_controls)}。"
             message += _expression_bound_hint(code, "data-control-id")
             errors.append(message)
@@ -519,15 +503,9 @@ def validate_ui_design_code(
         if isinstance(action.get("behavior"), dict)
         and action["behavior"].get("type") == "interface"
     ]
-    # 调整场景下用户可能删除某些 action，只对代码里仍存在的 action 校验 effect。
-    surviving_interface_actions = (
-        [aid for aid in interface_actions if aid in actual_actions]
-        if allow_missing
-        else interface_actions
-    )
     missing_effects = [
         action_id
-        for action_id in surviving_interface_actions
+        for action_id in interface_actions
         if not inspection["interaction_effects"].get(action_id)
     ]
     if missing_effects:
@@ -537,9 +515,6 @@ def validate_ui_design_code(
     missing_step_effects: list[str] = []
     for action in _dict_items(page.get("actions")):
         action_id = str(action.get("actionId") or "").strip()
-        # 调整场景下用户可能删除某些 action，跳过已不存在的 action 的步骤校验。
-        if allow_missing and action_id not in actual_actions:
-            continue
         behavior = action.get("behavior") if isinstance(action.get("behavior"), dict) else {}
         if behavior.get("type") != "sequence":
             continue

@@ -29,19 +29,8 @@ def build_small_task_prompt(packet: dict[str, Any]) -> str:
         f"{SMALL_TASK_MODE_MARKER}\n"
         "Execute exactly one bounded coding task from the packet below.\n"
         "Before writing, compare the requested change with the packet's confirmedContext, "
-        "allowedPaths, engineeringAcceptanceChecks, and businessAcceptanceChecks. "
-        "Use failureEvidence and repairStrategy to distinguish dependency/toolchain failures from source failures. "
-        "For an already diagnosed missing installed dependency, inspect only the declared package manager "
-        "and scripts as needed, install the already declared dependencies within allowedPaths, and rerun "
-        "the exact failed check before investigating unrelated source or workflow artifacts. "
-        "Do not add or change dependencies unless explicitly authorized by the packet. "
-        "If the check now passes without source edits, return already_satisfied with concrete verification "
-        "evidence; do not invent a code change to report progress. "
-        "For source failures, read in this order: "
-        "packet.candidateFiles first. Follow packet.repairStrategy when supplied: once the "
-        "reported source error is confirmed, apply the bounded fix instead of repeatedly "
-        "reading build configuration. Read unchanged files only once unless a new diagnostic "
-        "requires another range. Then read "
+        "allowedPaths, engineeringAcceptanceChecks, and businessAcceptanceChecks. Read in this order: "
+        "packet.candidateFiles first, then "
         "the narrowest relevant source directory under allowedPaths, then package or build metadata "
         "only when verification requires it. Never inspect node_modules, dist, build, target, cache, "
         "or generated dependency contents; use package manifests and lockfiles when dependency names "
@@ -55,16 +44,6 @@ def build_small_task_prompt(packet: dict[str, Any]) -> str:
         "Invoke tools through real tool calls, never as Action/Action Input text. "
         "Always finish with one complete JSON result containing status and a nonempty summary; "
         "tool arguments or an empty final message are not execution results.\n\n"
-        "Write-first budget: you have a hard ceiling of 12 model calls for this task, and "
-        "exploration must stay bounded. Produce the first real diff within your first 6 tool "
-        "calls. If packet.candidateFiles is non-empty, read only those files (at most one extra "
-        "neighbor) and then write; do not broaden the search. If candidateFiles is empty, read "
-        "at most 3 files from the narrowest plausible path under allowedPaths and then write "
-        "based on what you have. Exploration-only tools (grep/ls/glob over directories, reading "
-        "build or dependency metadata) must not exceed 8 calls total across the whole task. "
-        "If a tool call errors, retry that exact step at most once; do not pivot to a new "
-        "exploration path. When the budget is tight, prefer writing the bounded fix and "
-        "verifying over reading more context.\n\n"
         "Required JSON contract:\n"
         '{"status":"completed|already_satisfied|requires_user_confirmation|requires_workflow|failed",'
         '"summary":"...","changedFiles":[],"verification":[],'
@@ -83,12 +62,8 @@ def invoke_small_task_agent(
     """使用本次工作流技能快照调用共享小任务 Agent。"""
 
     from app.agents import create_agent_bundle
-    from app.services.run_workers import current_run_id
 
-    with small_task_path_scope(
-        _string_list(packet.get("allowedPaths"), limit=100),
-        run_id=str(packet.get("executionRunId") or current_run_id()),
-    ):
+    with small_task_path_scope(_string_list(packet.get("allowedPaths"), limit=100)):
         return invoke_agent_with_tool_activity(
             create_agent_bundle(workspace, selected_skill_names).small_task,
             {"messages": [{"role": "user", "content": build_small_task_prompt(packet)}]},
@@ -152,7 +127,7 @@ def normalize_small_task_result(agent_note: str) -> dict[str, Any]:
 
 
 def _read_small_task_output(agent_note: str) -> tuple[dict[str, Any], str | None]:
-    """接收唯一完整结果对象，允许前置说明，禁止从工具参数或损坏 JSON 内捞取结果。"""
+    """只接收完整结果对象，禁止把工具参数或损坏 JSON 的嵌套对象当成执行结果。"""
 
     text = agent_note.strip()
     if not text or text == NO_AGENT_TEXT:
@@ -163,17 +138,6 @@ def _read_small_task_output(agent_note: str) -> tuple[dict[str, Any], str | None
         lines = text.splitlines()
         if len(lines) >= 3 and lines[-1].strip() == "```":
             text = "\n".join(lines[1:-1]).strip()
-    # 模型可能在最终结果前附带说明；只剥离不含 JSON 结构的独立说明行。
-    # 必须解析剩余全文，不能从损坏外层、数组或多个结果中选择一个“成功”对象。
-    object_start = text.find("{")
-    if object_start > 0:
-        prefix = text[:object_start]
-        if (
-            "[" not in prefix
-            and "```" not in prefix
-            and not prefix.rsplit("\n", 1)[-1].strip()
-        ):
-            text = text[object_start:]
     try:
         payload = json.loads(text)
     except (ValueError, TypeError):

@@ -6,8 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from langgraph.graph import END, START
-from app.services.stage_artifacts import ArtifactStateGraph as StateGraph
+from langgraph.graph import END, START, StateGraph
 from langgraph.config import get_stream_writer
 
 from app.graph import nodes
@@ -85,32 +84,74 @@ def _route_start(state: ProjectState) -> str:
     """根据原创建规划 thread 的恢复点选择正常阶段或设计意图入口。"""
 
     resume_from = str(state.get("resume_from") or "").strip()
+    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
+    lifecycle = load_application_lifecycle(workspace) if workspace else None
     if resume_from == "design_intent_analysis":
         return "design_intent_analysis"
     if (
         resume_from == "template_reconcile"
         and state.get("workflow_action") == "retry_template_reconcile"
+        and lifecycle is not None
+        and lifecycle.active_formal_revision is not None
+        and lifecycle.active_formal_revision.status == "template_reconcile_failed"
     ):
         # 专用重试必须复用已确认的 TechnicalPlan，不能重放旧确认动作。
         return "template_reconcile"
     if resume_from == "template_reconcile":
         raise ApplicationLifecycleConflictError("Template Reconcile 只能通过 retry_template_reconcile 动作重试。")
-    resume_nodes = {
-        "design_chat_response",
-        "requirements", "requirements_review", "product_planning", "requirement_document_review",
-        "ui_confirmation", "ui_confirmation_review", "planning_stage_entry",
-        "technical_planning", "technical_planning_begin", "technical_planning_generate",
-        "technical_planning_commit", "technical_planning_confirm", "technical_planning_review",
+    allowed_resume_stages = {
+        "requirements": {
+            ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
+            ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_CLARIFICATION,
+        },
+        "product_planning": {
+            ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+            ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION,
+        },
+        "ui_confirmation": {
+            ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+            ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION,
+        },
+        "planning_stage_entry": {
+            ApplicationLifecycleStage.AWAITING_PLANNING_STAGE_ENTRY,
+        },
+        "technical_planning": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
+        "technical_planning_begin": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            ApplicationLifecycleStage.READY_FOR_WORKBENCH,
+        },
+        "technical_planning_generate": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+        },
+        "technical_planning_commit": {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
+        "technical_planning_confirm": {
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+        },
     }
-    if resume_from in resume_nodes:
-        # 明确的业务节点直接重执行，不以 Lifecycle 阶段判断是否允许重试。
+    if resume_from in allowed_resume_stages:
+        if (
+            lifecycle is not None
+            and lifecycle.initialization.stage
+            not in allowed_resume_stages[resume_from]
+        ):
+            raise ApplicationLifecycleConflictError(
+                "application_planning 恢复入口与 lifecycle 不匹配："
+                f"resume_from={resume_from}，"
+                f"lifecycle={lifecycle.initialization.stage.value}。"
+            )
         return "technical_planning_begin" if resume_from == "technical_planning" else resume_from
     if resume_from:
         raise ApplicationLifecycleConflictError(
             f"application_planning 不支持恢复入口：{resume_from}"
         )
-    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
-    lifecycle = load_application_lifecycle(workspace) if workspace else None
     if (
         lifecycle is None
         or lifecycle.initialization.stage
@@ -143,6 +184,9 @@ def _route_requirements(state: ProjectState) -> str:
         and confirmation_status == "pending_user_input"
     ):
         return "requirements_review"
+    if isinstance(state.get("pending_application_config_target"), dict) and state["pending_application_config_target"]:
+        # 任何未提交配置目标都必须在 RequirementSpec 阶段解决，禁止带入 ProductPlan。
+        return "requirements"
     return "product_planning"
 
 
@@ -173,10 +217,6 @@ def _route_technical_planning_generate(state: ProjectState) -> str:
     """候选已生成时提交产物，否则回到 TechnicalPlan 原生审阅门。"""
 
     candidate = state.get("technical_plan_candidate")
-    boundary = state.get("application_planning_recovery_boundary") or {}
-    if boundary.get("boundary") == "input_committed" and state.get("technical_plan_repair_source_run_id"):
-        # 提交失败的 fork 清空旧候选后仍保留原提交入口，由该入口交回原生成链路。
-        return "technical_planning_commit"
     return "technical_planning_commit" if isinstance(candidate, dict) and candidate else "technical_planning_review"
 
 
@@ -186,16 +226,6 @@ def _route_technical_planning_confirm(state: ProjectState) -> str:
     if str(state.get("application_planning_review_route") or "").strip() == "technical_planning_begin":
         return "technical_planning_begin"
     return "template_reconcile" if state.get("template_reconcile_pending") else "completed"
-
-
-def _route_technical_planning_commit(state: ProjectState) -> str:
-    """提交失败重试返回原生成入口，正常提交仍进入正式确认门。"""
-
-    return (
-        "technical_planning_begin"
-        if state.get("phase") == "technical_planning_begin"
-        else "technical_planning_review"
-    )
 
 
 def _requirements(state: ProjectState) -> dict:
@@ -869,19 +899,14 @@ def build_application_planning_graph(*, checkpointer):
     builder.add_edge(START, "workflow_entry")
     builder.add_conditional_edges("workflow_entry", _route_start, {
         "design_intent_analysis": "design_intent_analysis",
-        "design_chat_response": "design_chat_response",
         "requirements": "requirements",
-        "requirements_review": "requirements_review",
         "product_planning": "product_planning",
-        "requirement_document_review": "requirement_document_review",
         "ui_confirmation": "ui_confirmation",
-        "ui_confirmation_review": "ui_confirmation_review",
         "planning_stage_entry": "planning_stage_entry",
         "technical_planning_begin": "technical_planning_begin",
         "technical_planning_generate": "technical_planning_generate",
         "technical_planning_commit": "technical_planning_commit",
         "technical_planning_confirm": "technical_planning_confirm",
-        "technical_planning_review": "technical_planning_review",
         "template_reconcile": "template_reconcile",
     })
     builder.add_conditional_edges("design_intent_analysis", route_design_intent, {
@@ -924,10 +949,7 @@ def build_application_planning_graph(*, checkpointer):
             "technical_planning_review": "technical_planning_review",
         },
     )
-    builder.add_conditional_edges("technical_planning_commit", _route_technical_planning_commit, {
-        "technical_planning_begin": "technical_planning_begin",
-        "technical_planning_review": "technical_planning_review",
-    })
+    builder.add_edge("technical_planning_commit", "technical_planning_review")
     builder.add_conditional_edges(
         "technical_planning_review",
         route_technical_planning_review,

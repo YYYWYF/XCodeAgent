@@ -19,15 +19,17 @@ from app.agents.test_generation.capabilities import (
     load_frontend_test_capabilities,
     unavailable_frontend_test_imports,
 )
-from app.agents.test_generation.runtime_artifacts import is_preview_runtime_artifact
-from app.agents.test_generation.scope import is_frontend_test_support_path
 from app.utils.model_output import extract_json_object
 from app.workspace.code_changes import capture_workspace_changes
-from app.workspace.artifact_snapshot import internal_artifact_snapshot
 
 
 MAX_TEST_FILES = 5
 _SOURCE_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".java"}
+# 仅平台恢复数据库及 SQLite 自有附属文件属于运行态，不能放宽整个 recovery 目录。
+_RECOVERY_RUNTIME_ARTIFACT_PATHS = frozenset(
+    f"recovery/execution-recovery.sqlite{suffix}"
+    for suffix in ("", "-wal", "-shm", "-journal")
+)
 
 
 def generate_or_update_unit_tests_with_agent(
@@ -111,7 +113,7 @@ def generate_or_update_unit_tests_with_agent(
     added_files = _changed_paths(change_set, change_type="added")
     if not added_files:
         added_files = [path for path in changed_files if path not in security_before]
-    unauthorized = [path for path in changed_files if not _allowed_test_path(path) and not is_frontend_test_support_path(path)]
+    unauthorized = [path for path in changed_files if not _allowed_test_path(path)]
     unauthorized.extend(
         path
         for path in sorted(set(internal_before) | set(internal_after))
@@ -121,7 +123,7 @@ def generate_or_update_unit_tests_with_agent(
         path
         for path in sorted(set(security_before) | set(security_after))
         if security_before.get(path) != security_after.get(path)
-        and not _allowed_test_path(path) and not is_frontend_test_support_path(path)
+        and not _allowed_test_path(path)
     )
     unauthorized = list(dict.fromkeys(unauthorized))
     if unauthorized:
@@ -166,8 +168,6 @@ def generate_or_update_unit_tests_with_agent(
         for path in changed_files
         if (layer := _test_path_layer(path)) and layer not in source_layers
     ]
-    if "frontend" not in source_layers:
-        unrelated_layer_paths.extend(path for path in changed_files if is_frontend_test_support_path(path))
     if unrelated_layer_paths:
         validation["unaffected_layer_paths"] = list(dict.fromkeys(unrelated_layer_paths))
     if not test_files and not any(
@@ -542,17 +542,26 @@ def _sha256(path: Path) -> str:
 
 
 def _internal_artifact_snapshot(workspace: str) -> dict[str, str]:
-    """快照正式工件，并从通用快照中排除精确的预览运行文件。"""
+    """快照正式工件，排除 checkpoint 和平台恢复数据库的运行期写入。"""
 
-    artifact_prefix = f"{WORKSPACE_ARTIFACT_DIR}/"
-    return {
-        path: digest
-        for path, digest in internal_artifact_snapshot(workspace).items()
-        if not (
-            path.startswith(artifact_prefix)
-            and is_preview_runtime_artifact(path[len(artifact_prefix) :])
-        )
-    }
+    root = Path(workspace).expanduser().resolve() / WORKSPACE_ARTIFACT_DIR
+    snapshot: dict[str, str] = {}
+    if not root.is_dir():
+        return snapshot
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(name for name in dirnames if name != "checkpoints")
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            # 心跳续租会并行写数据库；按根目录下的精确路径排除，其余内部文件仍检查。
+            if path.relative_to(root).as_posix() in _RECOVERY_RUNTIME_ARTIFACT_PATHS:
+                continue
+            try:
+                snapshot[path.relative_to(root.parent).as_posix()] = hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+            except OSError:
+                continue
+    return snapshot
 
 
 def _workspace_security_snapshot(workspace: str) -> dict[str, str]:

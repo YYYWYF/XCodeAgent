@@ -2,8 +2,10 @@ import {
   DatabaseOutlined,
   ApiOutlined,
   FolderOutlined,
+  HistoryOutlined,
   HourglassOutlined,
   LeftOutlined,
+  PlusOutlined,
   RightOutlined,
   SettingOutlined,
   ThunderboltOutlined
@@ -24,8 +26,6 @@ import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
 import ApplicationOutline from '../ApplicationOutline'
 import FreeChatHistory from './FreeChatHistory'
-import TemporaryChatOverlay from '../TemporaryChatOverlay'
-import { useTemporaryChats } from './useTemporaryChats'
 import './SessionSidebar.less'
 
 const COLLAPSED_SIDEBAR_WIDTH = 68
@@ -54,16 +54,18 @@ type SessionSidebarProps = {
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
   deletingSessionId?: string
-  advancingSessionId?: string
+  temporaryChatActive: boolean
   filesActive: boolean
   dataSourcesActive: boolean
   dataSourcesEnabled: boolean
   externalApisActive: boolean
   forceCollapsed?: boolean
   loadingSessions: boolean
+  onCloseTemporaryChat: () => void
   onBeforeNavigate?: (action: () => void) => void
   onCreateFreeChatSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
+  onOpenTemporaryChat: () => void
   onOpenSession: (sessionId: string) => Promise<void>
   outlineLocked: boolean
   onApiEndpointSelect: (target: {
@@ -92,14 +94,9 @@ type SessionSidebarProps = {
   sessionCreationDisabled: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
+  showDevelopmentActions: boolean
   settingsActive: boolean
   skillsActive: boolean
-  /**
-   * 是否展示「历史对话 / 新建自由对话」这一组。该能力目前只在开发阶段开放：
-   * 会话创建与导航还依赖开发阶段的运行态，其他阶段展示需要一并改这些逻辑，
-   * 所以这里单独按阶段门控，不影响文件/技能/设置等其他快捷入口。
-   */
-  historyEnabled: boolean
   theme: 'light' | 'dark'
   workspaceRoot: string
 }
@@ -111,16 +108,18 @@ export default function SessionSidebar({
   deletingSessionId,
   currentBranch,
   entities = [],
-  advancingSessionId,
+  temporaryChatActive,
   filesActive,
   dataSourcesActive,
   dataSourcesEnabled,
   externalApisActive,
   forceCollapsed = false,
   loadingSessions,
+  onCloseTemporaryChat,
   onBeforeNavigate,
   onCreateFreeChatSession,
   onDeleteSession,
+  onOpenTemporaryChat,
   onOpenSession,
   onApiEndpointSelect,
   onEntitySelect,
@@ -140,33 +139,28 @@ export default function SessionSidebar({
   sessionCreationDisabled,
   sessionRunStates,
   sessions,
+  showDevelopmentActions,
   settingsActive,
   skillsActive,
-  historyEnabled,
-  theme,
-  workspaceRoot
+  theme
 }: SessionSidebarProps): ReactElement {
   const [collapsed, setCollapsed] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [activeTemporaryChatId, setActiveTemporaryChatId] = useState<string | null>(null)
   const [resizing, setResizing] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
-  const temporaryChats = useTemporaryChats(workspaceRoot)
-  const activeTemporaryChat = temporaryChats.sessions.find(
-    (session) => session.id === activeTemporaryChatId
-  )
   const compactLayout = useCompactWorkbench()
   // 设计阶段（forceCollapsed）折叠成图标栏：不显示 Page/API 大纲，只留快捷入口图标。
   // 小屏（compactLayout）与大屏共用 collapsed 状态：默认展开常驻左侧，仅手动折叠成图标栏。
   const effectiveCollapsed = forceCollapsed ? true : collapsed
 
+  // 离开开发阶段时关闭历史浮层，避免重新进入开发阶段后恢复旧的展开状态。
+  useEffect(() => {
+    if (!showDevelopmentActions) setHistoryOpen(false)
+  }, [showDevelopmentActions])
+
   /** 关闭历史侧栏并执行用户选择的左栏导航。 */
   const handleRailNavigation = (navigate: () => void): void => {
-    const action = (): void => {
-      setHistoryOpen(false)
-      setActiveTemporaryChatId(null)
-      navigate()
-    }
+    const action = (): void => { setHistoryOpen(false); navigate() }
     if (onBeforeNavigate) onBeforeNavigate(action)
     else action()
   }
@@ -178,55 +172,13 @@ export default function SessionSidebar({
     else onCreateFreeChatSession()
   }
 
-  /** 通过唯一入口打开或关闭对话管理面板。 */
+  /** 打开历史会话面板时先关闭临时对话，避免两个浮层相互遮挡。 */
   const handleHistoryToggle = (): void => {
     const next = !historyOpen
-    const action = (): void => {
-      if (next) setActiveTemporaryChatId(null)
-      setHistoryOpen(next)
-    }
+    const action = (): void => { if (next) onCloseTemporaryChat(); setHistoryOpen(next) }
     if (next && onBeforeNavigate) onBeforeNavigate(action)
     else action()
   }
-
-  /** 新建内存临时对话并直接打开只读聊天浮层。 */
-  const handleCreateTemporaryChat = (): void => {
-    if (!workspaceRoot) return
-    const sessionId = temporaryChats.createSession()
-    setHistoryOpen(false)
-    setActiveTemporaryChatId(sessionId)
-  }
-
-  /** 从临时对话列表重新打开当前 Renderer 中保留的会话。 */
-  const handleOpenTemporaryChat = (sessionId: string): void => {
-    if (!temporaryChats.sessions.some((session) => session.id === sessionId)) return
-    setHistoryOpen(false)
-    setActiveTemporaryChatId(sessionId)
-  }
-
-  /** 从临时对话列表关闭会话并立即清除其消息。 */
-  const handleDeleteTemporaryChat = (sessionId: string): void => {
-    temporaryChats.deleteSession(sessionId)
-    if (activeTemporaryChatId === sessionId) setActiveTemporaryChatId(null)
-  }
-
-  /** 返回临时对话列表并保留本次 Renderer 生命周期内的聊天内容。 */
-  const handleBackFromTemporaryChat = (): void => {
-    setActiveTemporaryChatId(null)
-    setHistoryOpen(true)
-  }
-
-  /** 关闭临时对话并清除上下文，不写入常规会话历史。 */
-  const handleCloseTemporaryChat = (): void => {
-    if (activeTemporaryChatId) temporaryChats.deleteSession(activeTemporaryChatId)
-    setActiveTemporaryChatId(null)
-    setHistoryOpen(false)
-  }
-
-  /** 当工作区切换清空临时会话时同步关闭旧会话浮层。 */
-  useEffect(() => {
-    if (activeTemporaryChatId && !activeTemporaryChat) setActiveTemporaryChatId(null)
-  }, [activeTemporaryChat, activeTemporaryChatId])
 
   /** 从历史侧栏切换会话，保留侧栏以明确当前会话并支持连续切换。 */
   const handleOpenHistorySession = async (sessionId: string): Promise<void> => {
@@ -325,75 +277,110 @@ export default function SessionSidebar({
         ) : null}
         <nav className={cx('session-footer-nav')} aria-label="快捷入口">
           <div className={cx('session-rail-primary')}>
-            <div className={cx('free-chat-nav-row', historyOpen && 'active')}>
+            <div className={cx('free-chat-nav-row', temporaryChatActive && 'active')}>
               <button
-                aria-expanded={historyOpen}
-                aria-label={historyOpen ? '关闭对话管理' : '打开对话管理'}
+                aria-current={temporaryChatActive ? 'page' : undefined}
                 className={cx('free-chat-nav-main')}
-                onClick={handleHistoryToggle}
-                title="对话管理"
+                onClick={() => handleRailNavigation(onOpenTemporaryChat)}
+                title="临时对话"
                 type="button"
               >
                 <SidebarAssetIcon source={freeChatIcon} />
-                <span>对话管理</span>
+                <span>临时对话</span>
               </button>
+              {showDevelopmentActions ? (
+                <button
+                  aria-label="新建自由对话"
+                  className={cx('free-chat-new-session')}
+                  disabled={sessionCreationDisabled}
+                  onClick={handleCreateHistorySession}
+                  title={sessionCreationDisabled ? '当前阶段有流程未结束' : '新建自由对话'}
+                  type="button"
+                >
+                  <PlusOutlined />
+                </button>
+              ) : null}
             </div>
-            {dataSourcesEnabled ? (
-              <button
-                className={cx(dataSourcesActive && 'active')}
-                onClick={() => handleRailNavigation(onShowDataSources)}
-                title="数据源"
-                type="button"
-              >
-                <DatabaseOutlined />
-                <span>数据源</span>
-              </button>
+            {showDevelopmentActions ? (
+              <>
+                <button
+                  aria-expanded={historyOpen}
+                  aria-label={historyOpen ? '关闭历史对话' : '打开历史对话'}
+                  className={cx('free-chat-history-trigger', historyOpen && 'active')}
+                  onClick={handleHistoryToggle}
+                  title={historyOpen ? '关闭历史对话' : '打开历史对话'}
+                  type="button"
+                >
+                  <HistoryOutlined />
+                  <span>历史对话</span>
+                  {sessions.length > 0 ? (
+                    <span className={cx('free-chat-history-trigger-count')}>
+                      {sessions.length > 99 ? '99+' : sessions.length}
+                    </span>
+                  ) : null}
+                </button>
+                {dataSourcesEnabled ? (
+                  <button
+                    className={cx(dataSourcesActive && 'active')}
+                    onClick={() => handleRailNavigation(onShowDataSources)}
+                    title="数据源"
+                    type="button"
+                  >
+                    <DatabaseOutlined />
+                    <span>数据源</span>
+                  </button>
+                ) : null}
+                {dataSourcesEnabled ? (
+                  <button
+                    className={cx(externalApisActive && 'active')}
+                    onClick={() => handleRailNavigation(onShowExternalApis)}
+                    title="外部 API"
+                    type="button"
+                  >
+                    <ApiOutlined />
+                    <span>外部 API</span>
+                  </button>
+                ) : null}
+                <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
+                  <HourglassOutlined />
+                  <span>推荐任务</span>
+                </button>
+              </>
             ) : null}
-            {dataSourcesEnabled ? (
-              <button
-                className={cx(externalApisActive && 'active')}
-                onClick={() => handleRailNavigation(onShowExternalApis)}
-                title="外部 API"
-                type="button"
-              >
-                <ApiOutlined />
-                <span>外部 API</span>
-              </button>
-            ) : null}
-            <button aria-disabled="true" disabled title="推荐任务暂不可用" type="button">
-              <HourglassOutlined />
-              <span>推荐任务</span>
-            </button>
           </div>
           <span className={cx('session-rail-divider')} aria-hidden="true" />
           <div className={cx('session-rail-secondary')}>
-            <button
-              className={cx(filesActive && 'active')}
-              onClick={() => handleRailNavigation(onShowFiles)}
-              title="文件"
-              type="button"
-            >
-              <FolderOutlined />
-              <span>文件</span>
-            </button>
-            <button
-              className={cx(skillsActive && 'active')}
-              onClick={() => handleRailNavigation(onShowSkills)}
-              title="技能"
-              type="button"
-            >
-              <ThunderboltOutlined />
-              <span>技能</span>
-            </button>
-            <button
-              className={cx(settingsActive && 'active')}
-              onClick={() => handleRailNavigation(onShowSettings)}
-              title="设置"
-              type="button"
-            >
-              <SettingOutlined />
-              <span>设置</span>
-            </button>
+            {showDevelopmentActions ? (
+              <>
+                <button
+                  className={cx(filesActive && 'active')}
+                  onClick={() => handleRailNavigation(onShowFiles)}
+                  title="文件"
+                  type="button"
+                >
+                  <FolderOutlined />
+                  <span>文件</span>
+                </button>
+                <button
+                  className={cx(skillsActive && 'active')}
+                  onClick={() => handleRailNavigation(onShowSkills)}
+                  title="技能"
+                  type="button"
+                >
+                  <ThunderboltOutlined />
+                  <span>技能</span>
+                </button>
+                <button
+                  className={cx(settingsActive && 'active')}
+                  onClick={() => handleRailNavigation(onShowSettings)}
+                  title="设置"
+                  type="button"
+                >
+                  <SettingOutlined />
+                  <span>设置</span>
+                </button>
+              </>
+            ) : null}
             <span className={cx('session-user')} aria-label="当前用户 S" title="当前用户">
               <span className={cx('session-user-avatar')}>S</span>
               <span className={cx('session-user-name')}>S</span>
@@ -418,36 +405,20 @@ export default function SessionSidebar({
           />
         ) : null}
       </aside>
-      <FreeChatHistory
-        key={workspaceRoot}
-        open={historyOpen}
-        historyEnabled={historyEnabled}
-        advancingSessionId={advancingSessionId}
-        activeSessionId={activeSessionId}
-        deletingSessionId={deletingSessionId}
-        loadingSessions={loadingSessions}
-        onClose={() => setHistoryOpen(false)}
-        onCreateSession={handleCreateHistorySession}
-        onCreateTemporaryChat={handleCreateTemporaryChat}
-        onDeleteTemporaryChat={handleDeleteTemporaryChat}
-        onDeleteSession={onDeleteSession}
-        onOpenSession={handleOpenHistorySession}
-        onOpenTemporaryChat={handleOpenTemporaryChat}
-        sessionCreationDisabled={sessionCreationDisabled}
-        sessionError={sessionError}
-        sessionRunStates={sessionRunStates}
-        sessions={sessions}
-        temporaryChats={temporaryChats.sessions}
-        temporaryChatEnabled={Boolean(workspaceRoot)}
-        theme={theme}
-      />
-      {activeTemporaryChat ? (
-        <TemporaryChatOverlay
-          key={activeTemporaryChat.id}
-          onBack={handleBackFromTemporaryChat}
-          onClose={handleCloseTemporaryChat}
-          onSend={(request) => temporaryChats.sendMessage(activeTemporaryChat.id, request)}
-          session={activeTemporaryChat}
+      {showDevelopmentActions && historyOpen ? (
+        <FreeChatHistory
+          activeSessionId={activeSessionId}
+          deletingSessionId={deletingSessionId}
+          loadingSessions={loadingSessions}
+          onClose={() => setHistoryOpen(false)}
+          onCreateSession={handleCreateHistorySession}
+          onDeleteSession={onDeleteSession}
+          onOpenSession={handleOpenHistorySession}
+          sessionCreationDisabled={sessionCreationDisabled}
+          sessionError={sessionError}
+          sessionRunStates={sessionRunStates}
+          sessions={sessions}
+          theme={theme}
         />
       ) : null}
     </>

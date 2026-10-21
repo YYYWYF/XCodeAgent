@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import './dagConfirmationPresentation.test'
 import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -13,24 +12,10 @@ import type {
   DagGenerationUnitRecord
 } from '../src/renderer/src/service/agUiAgent'
 import { processStepsForDisplay } from '../src/renderer/src/service/processStepHistory'
-import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
-import DagGenerationProgress from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/DagGenerationProgress'
-import {
-  dagGenerationCompletionSummary,
-  pendingDagManualNavigationDecision,
-  pendingDagGuidanceStorageKey,
-  pendingDagPlanIdentityKey,
-  recordPendingDagPlanAutoGuided,
-  shouldRenderPendingDagConfirmationTab,
-  shouldAutoGuidePendingDagPlan,
-  wasPendingDagPlanAutoGuided
-} from '../src/renderer/src/components/AiChatPanel/dagPendingPlanPresentation'
 import {
   dagGenerationStrategyLabel,
   dagGenerationSummaryCopy,
-  dagGenerationIssueMessage,
   dagGenerationUnitAttemptCopy,
-  dagGenerationUnitDisplayName,
   dagGenerationUnitStatusLabel,
   dagGenerationUnitTaskCopy,
   currentDagConfirmationDraftIdentity,
@@ -88,170 +73,6 @@ test('统一 DAG 任务列表为新增和复用任务显示对应 Tag', () => {
   assert.match(markup, />复用<\/span>/)
   assert.match(markup, /实现订单接口/)
   assert.match(markup, /复用基础客户端/)
-})
-
-test('仅匹配最终 Pending PlanningRun 的完整快照才能提供完成计数', () => {
-  const finalSnapshot = snapshot({ phase: 'persisting_pending' }, [
-    unit({ status: 'candidate_ready', retainedTaskCount: 1, candidateTaskCount: 2 })
-  ])
-
-  assert.deepEqual(dagGenerationCompletionSummary(finalSnapshot, 'planning-run-1'), {
-    readyUnitCount: 1,
-    unitCount: 1,
-    addedTaskCount: 2,
-    reusedTaskCount: 1
-  })
-  assert.equal(dagGenerationCompletionSummary(finalSnapshot, 'another-planning-run'), undefined)
-  assert.equal(dagGenerationCompletionSummary(snapshot(), 'planning-run-1'), undefined)
-})
-
-test('左侧完成卡提供去确认入口并保留可展开的生成详情', () => {
-  const finalSnapshot = snapshot({ phase: 'persisting_pending' }, [
-    unit({ status: 'candidate_ready', retainedTaskCount: 1, candidateTaskCount: 2 })
-  ])
-  const summary = dagGenerationCompletionSummary(finalSnapshot, 'planning-run-1')
-  const markup = renderToStaticMarkup(
-    createElement(DagGenerationProgress, {
-      completion: { summary, onGoToConfirmation: () => undefined },
-      snapshot: finalSnapshot
-    })
-  )
-
-  assert.match(markup, /任务生成完成/)
-  assert.match(markup, /任务计划已准备好，请确认后继续开发。/)
-  assert.match(markup, /去确认/)
-  assert.match(markup, /1\/1 项工作已就绪/)
-  assert.match(markup, /新增 2 项任务/)
-  assert.match(markup, /查看生成明细/)
-  assert.match(markup, /未命名页面/)
-})
-
-test('当前 PendingPlan 完成态覆盖旧 Run 的活动快照，匹配快照保留明细与导航', () => {
-  const finalSnapshot = snapshot({ phase: 'persisting_pending' }, [
-    unit({ status: 'candidate_ready', candidateTaskCount: 2 })
-  ])
-  const completionSummary = dagGenerationCompletionSummary(finalSnapshot, 'planning-run-1')
-  assert.ok(completionSummary)
-
-  /** 渲染单个步骤以比较旧快照与当前 PendingPlan 完成态。 */
-  const renderProgress = (dagGeneration: DagGenerationSnapshot): string =>
-    renderToStaticMarkup(
-      createElement(ProcessSteps, {
-        dagPendingPlanCompletion: {
-          planningRunId: 'planning-run-1',
-          summary: completionSummary
-        },
-        loading: false,
-        onOpenPendingDagConfirmation: () => undefined,
-        steps: [
-          {
-            id: 'planning',
-            kind: 'workflow',
-            status: 'completed',
-            title: '生成任务计划',
-            detail: '',
-            sequence: 1,
-            nodeName: 'prepare_build_tasks',
-            dagGeneration
-          }
-        ]
-      })
-    )
-
-  const staleActiveMarkup = renderProgress(
-    snapshot({ planningRunId: 'planning-run-old', phase: 'generating_units' }, [
-      unit({ status: 'generating' })
-    ])
-  )
-  assert.doesNotMatch(staleActiveMarkup, /任务生成进度/)
-  assert.doesNotMatch(staleActiveMarkup, /<details class="xa-process-steps xa-completed" open=""/)
-
-  const currentMarkup = renderProgress(finalSnapshot)
-  assert.match(currentMarkup, /任务生成完成/)
-  assert.match(currentMarkup, /去确认/)
-  assert.match(currentMarkup, /查看生成明细/)
-  // 模拟切回会话后的首次渲染：外层轨迹及 DAG 节点均展开，内部过程记录仍可收起。
-  assert.match(currentMarkup, /<details class="xa-process-steps xa-completed" open=""/)
-  assert.match(
-    currentMarkup,
-    /<details class="xa-process-step [^"]*has-dag-generation[^"]*" open=""/
-  )
-  assert.doesNotMatch(currentMarkup, /<details class="xa-dag-generation-details[^"]*" open=""/)
-})
-
-test('已消费 PendingPlan 和普通完成步骤在重进会话时保持归档收起', () => {
-  const markup = renderToStaticMarkup(
-    createElement(ProcessSteps, {
-      loading: false,
-      steps: [
-        {
-          id: 'planning',
-          kind: 'workflow',
-          status: 'completed',
-          title: '生成任务计划',
-          detail: '',
-          sequence: 1,
-          nodeName: 'prepare_build_tasks',
-          dagGeneration: snapshot({ status: 'completed' })
-        }
-      ]
-    })
-  )
-  assert.doesNotMatch(markup, /<details class="xa-process-steps xa-completed" open=""/)
-  assert.doesNotMatch(markup, /去确认/)
-})
-
-test('恢复快照不完整时显示无伪造计数的完成入口，Tab 仅对当前 owner 显示', () => {
-  const markup = renderToStaticMarkup(
-    createElement(DagGenerationProgress, {
-      completion: { onGoToConfirmation: () => undefined }
-    })
-  )
-
-  assert.match(markup, /任务生成完成/)
-  assert.match(markup, /去确认/)
-  assert.doesNotMatch(markup, /\d+\/\d+ 项工作已就绪/)
-  assert.equal(shouldRenderPendingDagConfirmationTab(false), false)
-  assert.equal(shouldRenderPendingDagConfirmationTab(true), true)
-})
-
-test('自动引导按应用、owner 与 DraftIdentity 去重，新 DraftIdentity 可以再次引导', () => {
-  const values = new Map<string, string>()
-  const storage = {
-    getItem: (key: string): string | null => values.get(key) || null,
-    setItem: (key: string, value: string): void => {
-      values.set(key, value)
-    }
-  }
-  const storageKey = pendingDagGuidanceStorageKey('app-a', 'session-a')
-  const identityKey = pendingDagPlanIdentityKey({
-    planningRunId: 'planning-run-a',
-    draftDigest: DAG_DRAFT_DIGEST
-  })
-  assert.ok(storageKey)
-  assert.ok(identityKey)
-  assert.notEqual(
-    pendingDagGuidanceStorageKey('app-a', 'session-a'),
-    pendingDagGuidanceStorageKey('app-b', 'session-a')
-  )
-  assert.notEqual(
-    pendingDagGuidanceStorageKey('app-a', 'session-a'),
-    pendingDagGuidanceStorageKey('app-a', 'session-b')
-  )
-  assert.equal(shouldAutoGuidePendingDagPlan(identityKey, ''), true)
-  assert.equal(wasPendingDagPlanAutoGuided(storage, storageKey, identityKey), false)
-  assert.equal(recordPendingDagPlanAutoGuided(storage, storageKey, identityKey), true)
-  assert.equal(wasPendingDagPlanAutoGuided(storage, storageKey, identityKey), true)
-  assert.equal(shouldAutoGuidePendingDagPlan(identityKey, identityKey), false)
-  const nextIdentityKey = `planning-run-b:${'a'.repeat(64)}`
-  assert.equal(shouldAutoGuidePendingDagPlan(nextIdentityKey, identityKey), true)
-})
-
-test('手动去确认只检查当前 owner，可重复导航且不重置已打开的确认视图', () => {
-  assert.equal(pendingDagManualNavigationDecision(false, false), 'unavailable')
-  assert.equal(pendingDagManualNavigationDecision(true, true), 'already-showing')
-  assert.equal(pendingDagManualNavigationDecision(true, false), 'navigate')
-  assert.equal(pendingDagManualNavigationDecision(true, false), 'navigate')
 })
 
 /** 构造 DAG Planning owner 测试所需的最小活动 execution。 */
@@ -652,7 +473,6 @@ test('新版 Snapshot 会严格解析，并丢弃 Candidate 正文和旧 stages 
   const parsed = readDagGenerationSnapshot({
     ...snapshot({}, [
       unit({
-        displayName: '订单列表页面',
         participation: 'reuse_and_generate',
         status: 'candidate_ready',
         retainedTaskCount: 2,
@@ -669,7 +489,6 @@ test('新版 Snapshot 会严格解析，并丢弃 Candidate 正文和旧 stages 
   assert.equal(parsed.planningRunId, 'planning-run-1')
   assert.equal(parsed.revision, 1)
   assert.equal(parsed.units[0]?.participation, 'reuse_and_generate')
-  assert.equal(parsed.units[0]?.displayName, '订单列表页面')
   assert.equal(parsed.units[0]?.issues[0]?.message, '契约需要修复')
   assert.equal('tasks' in parsed, false)
   assert.equal(JSON.stringify(parsed).includes('candidate-body-must-stay-private'), false)
@@ -725,16 +544,16 @@ test('所有 Unit 状态都有稳定展示，waiting 与 round_exhausted 不伪�
   const labels = statuses.map((status) => dagGenerationUnitStatusLabel(unit({ status })))
 
   assert.deepEqual(labels, [
-    '无需生成',
-    '等待生成',
-    '生成中',
-    '校验中',
-    '生成完成',
-    '本轮尝试已用尽',
-    '已终止'
+    'not_required',
+    'waiting',
+    'generating',
+    'validating',
+    'candidate_ready',
+    'round_exhausted',
+    'aborted'
   ])
   const exhausted = snapshot({}, [unit({ status: 'round_exhausted' })])
-  assert.equal(dagGenerationSummaryCopy(exhausted), '部分开发任务本轮尝试已用尽')
+  assert.equal(dagGenerationSummaryCopy(exhausted), '本轮已耗尽，等待修复决策')
   assert.equal(dagGenerationSummaryCopy(exhausted).includes('failed'), false)
   assert.equal(JSON.stringify(exhausted).toLowerCase().includes('percent'), false)
 })
@@ -749,35 +568,16 @@ test('模型重试与 reuse_and_generate 显示真实 attempt 和安全任务计
     candidateTaskCount: 1
   })
 
-  assert.equal(dagGenerationUnitAttemptCopy(retrying), '第 2/3 次尝试')
-  assert.equal(dagGenerationUnitTaskCopy(retrying), '复用 2 项 · 新增 1 项')
-  assert.equal(dagGenerationStrategyLabel(retrying), '部分复用 · 部分新增')
+  assert.equal(dagGenerationUnitAttemptCopy(retrying), 'attempt 2/3')
+  assert.equal(dagGenerationUnitTaskCopy(retrying), 'retained 2 / candidate 1')
+  assert.equal(dagGenerationStrategyLabel(retrying), 'reuse_and_generate')
 })
 
 test('Global repair 显示真实轮次，failed/cancelled 只由 Run status 决定', () => {
   const repairing = snapshot({ globalRepairRound: 1, globalRepairLimit: 2 })
-  assert.equal(dagGenerationSummaryCopy(repairing), '正在进行全局修复，第 1/2 轮')
+  assert.equal(dagGenerationSummaryCopy(repairing), '正在执行 Global repair 1/2')
   assert.equal(dagGenerationSummaryCopy(snapshot({ status: 'failed' })), '执行计划生成失败')
   assert.equal(dagGenerationSummaryCopy(snapshot({ status: 'cancelled' })), '执行计划生成已取消')
-})
-
-test('修复轮次不能覆盖当前汇总、校验和保存阶段', () => {
-  const expected = {
-    preparing: '正在准备开发任务',
-    global_check: '正在进行全局校验',
-    assembling: '正在汇总开发任务',
-    validating: '正在校验执行计划',
-    persisting_pending: '正在保存待确认计划'
-  } as const
-  for (const [phase, copy] of Object.entries(expected)) {
-    assert.equal(
-      dagGenerationSummaryCopy(snapshot({
-        phase: phase as DagGenerationSnapshot['phase'], globalRepairRound: 1,
-        summary: { ...snapshot().summary, roundExhaustedUnitCount: 1 }
-      })),
-      copy
-    )
-  }
 })
 
 test('shell、无需参与和复用状态区分展示，auth 确定性生成不展示虚假 attempt', () => {
@@ -812,112 +612,12 @@ test('shell、无需参与和复用状态区分展示，auth 确定性生成不�
     localAttemptLimit: 0
   })
 
-  assert.equal(dagGenerationUnitStatusLabel(shell), '无需生成')
-  assert.equal(dagGenerationUnitStatusLabel(reusedShell), '无需生成')
-  assert.equal(dagGenerationUnitStatusLabel(notRequired), '无需生成')
-  assert.equal(dagGenerationStrategyLabel(notRequired), '无新增任务需求')
-  assert.equal(dagGenerationStrategyLabel(shell), '前置条件已满足')
-  assert.equal(dagGenerationStrategyLabel(reusedShell), '已有职责已满足')
-  assert.equal(dagGenerationStrategyLabel(authorization), '系统生成')
+  assert.equal(dagGenerationUnitStatusLabel(shell), 'prerequisite')
+  assert.equal(dagGenerationUnitStatusLabel(reusedShell), 'reused')
+  assert.equal(dagGenerationUnitStatusLabel(notRequired), 'not_required')
+  assert.equal(dagGenerationStrategyLabel(notRequired), 'not_required')
+  assert.equal(dagGenerationStrategyLabel(authorization), 'deterministic')
   assert.equal(dagGenerationUnitAttemptCopy(authorization), '')
-})
-
-test('reuse_only 会按真实复用对象选择准确中文策略', () => {
-  const retainedTasks = unit({
-    participation: 'reuse_only',
-    generationStrategy: 'reuse_only',
-    status: 'not_required',
-    retainedTaskCount: 2
-  })
-  const reusableCapability = unit({
-    participation: 'reuse_only',
-    generationStrategy: 'reuse_only',
-    status: 'not_required',
-    reusableCapabilityCount: 1
-  })
-
-  assert.equal(dagGenerationStrategyLabel(retainedTasks), '复用已有任务')
-  assert.equal(dagGenerationStrategyLabel(reusableCapability), '沿用已有能力')
-})
-
-test('Unit 业务名、共享能力名和历史快照兜底均不显示内部 ID', () => {
-  const namedPage = unit({ displayName: '订单列表页面' })
-  const sharedApiClient = unit({ id: 'frontend:api-client', kind: 'frontend' })
-  const unnamedPages = [
-    unit({ id: 'page:one', displayName: undefined }),
-    unit({ id: 'page:two', displayName: undefined })
-  ]
-
-  assert.equal(dagGenerationUnitDisplayName(namedPage, 0, [namedPage]), '订单列表页面')
-  assert.equal(
-    dagGenerationUnitDisplayName(sharedApiClient, 0, [sharedApiClient]),
-    '前端接口调用封装'
-  )
-  assert.equal(
-    dagGenerationUnitDisplayName(unnamedPages[0], 0, unnamedPages),
-    '未命名页面（第 1 项）'
-  )
-  assert.equal(
-    dagGenerationUnitDisplayName(unnamedPages[1], 1, unnamedPages),
-    '未命名页面（第 2 项）'
-  )
-  assert.equal(dagGenerationUnitDisplayName(namedPage, 0, [namedPage]).includes(namedPage.id), false)
-  assert.equal(
-    dagGenerationIssueMessage('【page:orders】的依赖需要校验', [namedPage]),
-    '【订单列表页面】的依赖需要校验'
-  )
-})
-
-test('进度卡完整展示中文阶段、状态、策略、尝试和任务数量', () => {
-  const current = snapshot(
-    {
-      globalRepairRound: 1,
-      globalIssues: [
-        {
-          code: 'GLOBAL_CHECK',
-          level: 'global',
-          category: 'validation',
-          unitIds: ['page:orders'],
-          retryUnitIds: [],
-          retryable: true,
-          message: '【page:orders】的接口依赖仍需校验'
-        }
-      ]
-    },
-    [
-      unit({
-        displayName: '订单列表页面',
-        participation: 'reuse_and_generate',
-        status: 'generating',
-        attemptInRound: 1,
-        retainedTaskCount: 2,
-        candidateTaskCount: 1
-      })
-    ]
-  )
-  const markup = renderToStaticMarkup(createElement(DagGenerationProgress, { snapshot: current }))
-
-  for (const copy of [
-    '正在进行全局修复，第 1/2 轮',
-    '正在生成开发任务',
-    '全局修复 第 1/2 轮',
-    '全局校验问题',
-    '订单列表页面',
-    '部分复用 · 部分新增',
-    '生成中',
-    '第 1/3 次尝试',
-    '复用 2 项 · 新增 1 项',
-    '【订单列表页面】的接口依赖仍需校验'
-  ]) {
-    assert.ok(markup.includes(copy), `缺少展示文案：${copy}`)
-  }
-  assert.equal(markup.includes('进度版本'), false)
-  assert.equal(
-    /page:orders|Global repair|Global issues|candidate_ready|reuse_and_generate|attempt 1\/3/.test(
-      markup
-    ),
-    false
-  )
 })
 
 test('同一 PlanningRun 的旧 revision 不会覆盖新状态', () => {
@@ -1580,36 +1280,6 @@ test('PendingPlan recovery 缺少 threadId 仍按 owner、WorkflowRunId 和 Draf
   assert.equal(recoveredExecution?.threadId, 'thread-owner')
   assert.equal(recoveredWorkflow?.runId, 'workflow-recovered')
   assert.equal(workflowInteractionAvailability(recoveredWorkflow!, lifecycle), 'active')
-
-  // 首次确认失败后来源 Run 已被接管；同一草稿的再次确认必须绑定当前 execution。
-  const currentExecution = {
-    ...recoveredExecution!,
-    runId: 'workflow-confirm-current',
-    pendingInteraction: {
-      ...recoveredExecution!.pendingInteraction!,
-      payload: planningRefresh.confirmation
-    }
-  }
-  const handedOffLifecycle = {
-    ...lifecycle,
-    activeExecutions: { [currentExecution.runId]: currentExecution }
-  } as ApplicationLifecycle
-  const boundExecution = pendingDagConfirmationExecution(handedOffLifecycle, 'thread-owner')
-  const boundWorkflow = pendingDagConfirmationWorkflow([], boundExecution, handedOffLifecycle)
-  assert.equal(boundWorkflow?.runId, 'workflow-confirm-current')
-  assert.deepEqual(boundWorkflow?.summary.clarification?.draftIdentity, planningRefresh.confirmation.draftIdentity)
-  assert.equal(workflowInteractionAvailability(boundWorkflow!, handedOffLifecycle), 'active')
-  assert.equal(workflowInteractionAvailability(recoveredWorkflow!, handedOffLifecycle), 'stale')
-  const submittedLifecycle = {
-    ...handedOffLifecycle,
-    activeExecutions: {
-      [currentExecution.runId]: {
-        ...currentExecution,
-        pendingInteraction: { ...currentExecution.pendingInteraction, submittedAt: '2026-10-19T00:00:00Z' }
-      }
-    }
-  } as ApplicationLifecycle
-  assert.equal(workflowInteractionAvailability(boundWorkflow!, submittedLifecycle), 'stale')
 
   const clarification = recoveredWorkflow!.summary.clarification!
   const ownerMismatchWorkflow = {

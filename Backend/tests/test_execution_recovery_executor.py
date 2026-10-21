@@ -7,9 +7,6 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
-
-from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
 
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
@@ -19,37 +16,9 @@ from app.domain.execution_recovery import (
     RecoveryPlan,
 )
 from app.services.execution_recovery_executor import (
-    _apply_application_planning_transaction_authority,
     _handoff_lifecycle,
     _validate_finalization_lifecycle,
 )
-
-
-class DesignIntentRecoveryOwnershipTests(unittest.IsolatedAsyncioTestCase):
-    """验证设计分类失败只在原待确认窗口中领取恢复 ownership。"""
-
-    async def test_design_intent_recovery_requires_same_thread_revision_and_run(self) -> None:
-        """同身份待确认窗口可以恢复，线程、版本、源 Run 或运行状态漂移不能授权。"""
-
-        async def read_state(_config):
-            """提供已验证源 Run 的分类节点入口快照。"""
-            return SimpleNamespace(values={"active_run_id": "source-run"})
-
-        source = SimpleNamespace(execution_kind="application_planning", thread_id="thread", run_id="source-run")
-        plan = RecoveryPlan(source_run_id="source-run", thread_id="thread", target_node="design_intent_analysis", checkpoint_id="entry", lifecycle_revision=7)
-        for thread_id, revision, status, run_id, allowed in (
-            ("thread", 7, ApplicationLifecycleStatus.AWAITING_USER, "source-run", True),
-            ("other", 7, ApplicationLifecycleStatus.AWAITING_USER, "source-run", False),
-            ("thread", 8, ApplicationLifecycleStatus.AWAITING_USER, "source-run", False),
-            ("thread", 7, ApplicationLifecycleStatus.RUNNING, "source-run", False),
-            ("thread", 7, ApplicationLifecycleStatus.AWAITING_USER, "other-run", False),
-        ):
-            with self.subTest(thread=thread_id, revision=revision, status=status, run=run_id):
-                source.run_id = run_id
-                lifecycle = SimpleNamespace(revision=revision, initialization=SimpleNamespace(thread_id=thread_id, status=status, stage=ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION))
-                with patch("app.services.execution_recovery_executor.load_application_lifecycle", return_value=lifecycle):
-                    result = await _apply_application_planning_transaction_authority(workspace="/tmp/design-recovery", source=source, graph=SimpleNamespace(aget_state=read_state), plan=plan)
-                self.assertEqual(result.lifecycle_ownership_mode is RecoveryLifecycleOwnershipMode.PRE_OWNERSHIP, allowed)
 
 
 class ExecutionRecoveryExecutorTests(unittest.TestCase):

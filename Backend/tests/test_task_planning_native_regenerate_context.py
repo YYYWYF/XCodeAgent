@@ -7,9 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.domain.execution_recovery import WorkflowReentryReason
-from app.domain.execution_recovery import RecoveryExecutionError
-from app.graph.nodes.task_planning_adapter import _run_regenerate_branch, _run_async_workflow_planning_adapter, _stale_confirm_result
-from app.services.build_task_plan_lifecycle import ConfirmPromotionResult
+from app.graph.nodes.task_planning_adapter import _run_regenerate_branch, _run_async_workflow_planning_adapter
 from app.services.node_recovery_context import (
     NodeRecoveryContext, bind_node_recovery, bind_recovery_runtime,
 )
@@ -18,15 +16,6 @@ from tests.test_unit_generation_contracts import _policy_payload
 
 
 class TaskPlanningNativeRegenerateContextTests(unittest.IsolatedAsyncioTestCase):
-    async def test_consumed_pending_cannot_create_an_empty_confirmation(self) -> None:
-        """旧动作失效且草稿缺失时失败，不能输出等待确认或空 DraftIdentity。"""
-
-        context = SimpleNamespace(scope={"type": "application", "targetId": "application"})
-        with patch("app.services.task_plan_confirmation.load_pending_build_task_plan", return_value=None):
-            with self.assertRaises(RecoveryExecutionError) as raised:
-                _stale_confirm_result(ConfirmPromotionResult(status="stale_draft"), state={}, context=context)
-        self.assertEqual(raised.exception.code, "TASK_PLAN_PENDING_UNAVAILABLE")
-
     """覆盖无业务 failed 快照和中断继续时的 adapter 操作交接。"""
 
     async def test_ordinary_interruption_selects_candidate_progress(self) -> None:

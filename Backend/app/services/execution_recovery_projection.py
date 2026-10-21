@@ -11,15 +11,26 @@ from app.domain.execution_recovery import (
     ExecutionRecoveryProjection,
     ExecutionRecoveryProjectionError,
     ExecutionRecoveryProjectionCandidate,
+    RecoveryExecutionError,
 )
 from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.execution_recovery import (
     list_recovery_projection_candidates,
 )
+from app.services.execution_recovery_action_planner import (
+    plan_business_node_reentry_action,
+    plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
+)
 from app.services.execution_failure_classifier import public_failure_diagnostic
 from app.services.execution_recovery import recovery_graph_for_execution
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.execution_recovery_reconciliation import (
+    reconcile_interrupted_execution_state,
+)
+from app.services.execution_recovery_source_admission import assess_recovery_source
+from app.services.workflow_reentry import BusinessTargetResolver, FailureTargetResolver, InterruptedTargetResolver
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -71,8 +82,6 @@ async def resolve_execution_recovery_projection(
 
     generated_at = datetime.now(timezone.utc)
     try:
-        from app.services.checkpoint_execution import index_missing_checkpoint_executions
-        await index_missing_checkpoint_executions(workspace)
         records = await list_recovery_projection_candidates(workspace, limit=16)
     except Exception as exc:
         logger.warning(
@@ -120,6 +129,14 @@ async def _resolve_candidate(
 ) -> ExecutionRecoveryProjectionCandidate | None:
     """为单条记录选择 Graph，FAILED 与 INTERRUPTED 均走各自 authority resolver。"""
 
+    # persistence candidate query 只返回 FAILED/INTERRUPTED；即使未来查询边界漂移，
+    # projection 也必须在进入 Generic Recovery 前直接 fail closed。
+    if record.status not in {
+        DurableExecutionStatus.FAILED,
+        DurableExecutionStatus.INTERRUPTED,
+    }:
+        return None
+
     graph_factory = (
         application_planning_graph_for_request
         if record.execution_kind == "application_planning"
@@ -129,21 +146,105 @@ async def _resolve_candidate(
         workspace=record.workspace,
         project_id=record.project_id,
     )
-    from app.services.checkpoint_execution import resolve_checkpoint_source
-    record = await resolve_checkpoint_source(record, graph)
-    if record.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
+    authority_plan = None
+    if record.status is DurableExecutionStatus.FAILED:
+        if record.failure is None and record.execution_kind == "workbench":
+            try:
+                reentry_plan = await BusinessTargetResolver().resolve(
+                    workspace=record.workspace, source=record, graph=graph
+                )
+            except RecoveryExecutionError as exc:
+                action_plan = plan_business_node_reentry_action(
+                    workspace=record.workspace, source=record, error=exc
+                )
+            else:
+                action_plan = plan_business_node_reentry_action(
+                    workspace=record.workspace, source=record, reentry_plan=reentry_plan
+                )
+                authority_plan = reentry_plan
+        else:
+            admission = assess_recovery_source(record)
+            if not admission.admissible:
+                action_plan = plan_failed_node_reentry_action(
+                    workspace=record.workspace,
+                    source=record,
+                    error=RecoveryExecutionError(
+                        admission.reason_code,
+                        "业务 FAILED 缺少 escaped exception evidence，已阻止 RETRY_FAILED_NODE。",
+                    ),
+                )
+            else:
+                try:
+                    reentry_plan = await FailureTargetResolver().resolve(
+                        workspace=record.workspace,
+                        source=record,
+                        graph=graph,
+                    )
+                except RecoveryExecutionError as exc:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=record.workspace,
+                        source=record,
+                        error=exc,
+                    )
+                else:
+                    action_plan = plan_failed_node_reentry_action(
+                        workspace=record.workspace,
+                        source=record,
+                        reentry_plan=reentry_plan,
+                    )
+                    authority_plan = reentry_plan
+    elif record.status is DurableExecutionStatus.INTERRUPTED:
+        resolution = await InterruptedTargetResolver().resolve(
+            workspace=record.workspace,
+            source=record,
+            graph=graph,
+        )
+        if resolution.kind == "terminal":
+            await reconcile_interrupted_execution_state(
+                workspace=record.workspace,
+                source=record,
+                status=resolution.terminal_status or DurableExecutionStatus.COMPLETED,
+                snapshot=resolution.snapshot,
+            )
+            return None
+        if resolution.kind == "awaiting_user":
+            # 原生 interrupt 已经是现有交互的 authority；只对账，不生成恢复 action。
+            await reconcile_interrupted_execution_state(
+                workspace=record.workspace,
+                source=record,
+                status=resolution.terminal_status or DurableExecutionStatus.AWAITING_USER,
+                snapshot=resolution.snapshot,
+            )
+            return None
+        if resolution.kind == "continue" and resolution.reentry_plan is not None:
+            action_plan = plan_interrupted_continue_action(
+                workspace=record.workspace,
+                source=record,
+                reentry_plan=resolution.reentry_plan,
+            )
+            authority_plan = resolution.reentry_plan
+        else:
+            action_plan = plan_interrupted_continue_action(
+                workspace=record.workspace,
+                source=record,
+                error=RecoveryExecutionError(
+                    resolution.reason_code,
+                    resolution.reason,
+                ),
+            )
+    availability = {
+        "recoverable": "ready",
+        "awaiting_user": "awaiting_user",
+        "needs_attention": "blocked",
+    }[action_plan.status.value]
+    owner_session_id = await _resolve_owner_session_id(
+        record=record,
+        plan=authority_plan,
+        graph=graph,
+    )
+    if owner_session_id is None:
         return None
-    from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
-    reconcile_failed_execution_lifecycle(record)
-    from app.services.business_node_retry import retry_action_plan, release_unretryable_execution
-    action_plan = await retry_action_plan(record, graph)
-    if action_plan.primary_action is None:
-        await release_unretryable_execution(record)
-    availability = "ready" if action_plan.primary_action else "blocked"
-    can_continue = action_plan.primary_action is not None
-    owner_session_id = record.owner_session_id
-    if not owner_session_id:
-        return None
+    can_continue = action_plan.status.value == "recoverable" and action_plan.primary_action is not None
     return ExecutionRecoveryProjectionCandidate(
         source_run_id=record.run_id,
         owner_session_id=owner_session_id,
@@ -151,7 +252,7 @@ async def _resolve_candidate(
         execution_kind=record.execution_kind,
         workflow_scope=record.workflow_scope,
         execution_status=record.status.value,
-        current_node=action_plan.primary_action.target_node if action_plan.primary_action else record.current_node,
+        current_node=record.current_node,
         availability=availability,
         can_continue=can_continue,
         reason_code=action_plan.reason_code,
@@ -160,6 +261,45 @@ async def _resolve_candidate(
         failureDiagnostic=recovery_failure_diagnostic(record),
         recoveryActionPlan=action_plan.model_dump(mode="json", by_alias=True),
     )
+
+
+async def _resolve_owner_session_id(
+    *,
+    record: DurableExecutionRecord,
+    plan: object,
+    graph: object,
+) -> str | None:
+    """优先读取 durable ownership，旧记录仅回查 P0.3A 精确 checkpoint。"""
+
+    owner_session_id = str(record.owner_session_id or "").strip()
+    if owner_session_id:
+        return owner_session_id
+    authority = getattr(plan, "context_authority", None)
+    checkpoint_id = getattr(plan, "checkpoint_id", None) or getattr(
+        authority, "checkpoint_id", None
+    )
+    if not checkpoint_id or not hasattr(graph, "aget_state"):
+        return None
+    config = {
+        "configurable": {
+            "thread_id": record.thread_id,
+            "checkpoint_ns": str(
+                getattr(plan, "checkpoint_ns", None)
+                or getattr(authority, "checkpoint_ns", "")
+                or ""
+            ),
+            "checkpoint_id": str(checkpoint_id),
+        }
+    }
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception:
+        return None
+    values = getattr(snapshot, "values", {})
+    if not isinstance(values, dict):
+        return None
+    resolved = str(values.get("owner_session_id") or "").strip()
+    return resolved or None
 
 
 __all__ = ["recovery_failure_diagnostic", "resolve_execution_recovery_projection"]

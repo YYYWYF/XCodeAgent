@@ -16,8 +16,6 @@ export type AgentChatMessage = {
   content: string
   skills?: ChatMessageSkill[]
   workflow?: WorkflowRunPayload
-  /** 工作流卡片已提交的最终操作结果，用于恢复历史状态。 */
-  workflowCardResult?: 'confirmed' | 'cancelled' | 'submitted'
   /** 当前 assistant 轮次的模型或 Workflow 错误，统一交给错误卡片渲染。 */
   error?: string
   codeChanges?: WorkspaceCodeChangeSet
@@ -60,14 +58,6 @@ export type RightPanelState =
       sessionKey: string
       view?: 'stage' | 'confirmation'
     }
-
-/**
- * 右侧工作区的三档布局：隐藏、分栏、全宽。
- *
- * 取代了原先布尔式的"右侧面板是否打开"——那只能表达开/关，无法表达"全宽覆盖"，
- * 也无法让分隔线上的三档控件有稳定的状态源。
- */
-export type RightPanelLayout = 'hidden' | 'split' | 'full'
 
 export type ChatCopy = Record<
   EditorMode,

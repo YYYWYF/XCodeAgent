@@ -1184,8 +1184,6 @@ def _workflow_start_node(
         return "prepare_build_tasks"
     if resume_from == "build":
         return "build"
-    if resume_from == "authorization_bootstrap":
-        return "authorization_bootstrap"
     if resume_from == "unit_test":
         return "unit_test"
     if resume_from == "unit_test_repair":
@@ -1202,8 +1200,6 @@ def _workflow_start_node(
         return "code_review"
     if resume_from == "acceptance_phase_confirmation":
         return "acceptance_phase_confirmation"
-    if resume_from == "launch_project":
-        return "acceptance"
     if resume_from == "acceptance":
         return "acceptance"
     if resume_from == "finalize_project":
@@ -1344,7 +1340,6 @@ def _public_workflow_state(value: dict[str, Any]) -> dict[str, Any]:
             "application_planning_recovery_boundary",
             "technical_plan_candidate",
             "technical_plan_candidate_sha256",
-            "technical_plan_repair_source_run_id",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }

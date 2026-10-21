@@ -1,10 +1,8 @@
 import type {
   CSSProperties,
-  Dispatch,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
-  RefObject,
-  SetStateAction
+  RefObject
 } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
@@ -12,8 +10,7 @@ import {
   DEFAULT_DIFF_PANEL_WIDTH,
   DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO
 } from '../constants'
-import type { RightPanelLayout, RightPanelState } from '../types'
-import type { WorkbenchPhase } from '../../../workbenchPhase'
+import type { RightPanelState } from '../types'
 import { clampAssistantPanelRatio } from '../utils'
 
 type AssistantPreviewLayout = {
@@ -23,39 +20,28 @@ type AssistantPreviewLayout = {
   handlePanelSplitDragStart: (event: ReactMouseEvent<HTMLDivElement>) => void
   panelRef: RefObject<HTMLElement>
   panelStyle?: CSSProperties
-  rightPanelLayout: RightPanelLayout
   rightPanel?: RightPanelState
-  setRightPanelLayout: Dispatch<SetStateAction<RightPanelLayout>>
   setRightPanel: (panel?: RightPanelState) => void
   splitDragging: boolean
 }
 
-/** 进入审查或验收时恢复对话分栏，其余阶段保留用户选择的布局。 */
-export function phaseEntryRightPanelLayout(
-  phase: WorkbenchPhase,
-  currentLayout: RightPanelLayout
-): RightPanelLayout {
-  return phase === 'review' || phase === 'acceptance' ? 'split' : currentLayout
-}
-
-/** 管理右侧工作区的三档布局（隐藏/分栏/全宽）、分栏宽度、拖拽及预览初始比例。 */
-export function useAssistantPreviewLayout(): AssistantPreviewLayout {
+/** 管理对话区与右侧工作区的分栏宽度、拖拽及预览初始比例。 */
+export function useAssistantPreviewLayout({
+  rightPanelOpen
+}: {
+  rightPanelOpen: boolean
+}): AssistantPreviewLayout {
   const panelRef = useRef<HTMLElement | null>(null)
   const [rightPanel, setRightPanel] = useState<RightPanelState>()
   const previousRightPanelTypeRef = useRef<RightPanelState['type']>()
   const [assistantPanelRatio, setAssistantPanelRatio] = useState(DEFAULT_ASSISTANT_PANEL_RATIO)
-  // 三档布局取代了原先布尔式的 rightPanelOpen：隐藏与全宽在尺寸上互斥，
-  // 用单一状态源避免"开着但铺满"这类组合态。
-  const [rightPanelLayout, setRightPanelLayout] = useState<RightPanelLayout>('split')
   const [splitDragging, setSplitDragging] = useState(false)
   const embeddedPreviewOpen = rightPanel?.type === 'preview'
-  // 只有分栏态需要注入宽度变量；隐藏与全宽由 CSS 决定尺寸。
-  const panelStyle =
-    rightPanelLayout === 'split'
-      ? ({
-          '--assistant-panel-width': `${(assistantPanelRatio * 100).toFixed(4)}%`
-        } as CSSProperties)
-      : undefined
+  const panelStyle = rightPanelOpen
+    ? ({
+        '--assistant-panel-width': `${(assistantPanelRatio * 100).toFixed(4)}%`
+      } as CSSProperties)
+    : undefined
 
   /** 切入预览时扩宽右侧面板；切入 Diff 时按目标宽度初始化，之后允许拖拽。 */
   useLayoutEffect(() => {
@@ -75,9 +61,7 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
   }, [rightPanel?.type])
 
   useEffect(() => {
-    // 只有分栏态才有宽度可言：隐藏与全宽都不参与比例约束，
-    // 且切离分栏时要终止拖拽，否则会留下全局 col-resize 光标。
-    if (rightPanelLayout !== 'split') {
+    if (!rightPanelOpen) {
       setSplitDragging(false)
       return
     }
@@ -86,10 +70,10 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
     if (nextRatio !== assistantPanelRatio) {
       setAssistantPanelRatio(nextRatio)
     }
-  }, [assistantPanelRatio, rightPanelLayout])
+  }, [assistantPanelRatio, rightPanelOpen])
 
   useEffect(() => {
-    if (rightPanelLayout !== 'split') return undefined
+    if (!rightPanelOpen) return undefined
 
     /** 在窗口尺寸改变后重新约束左右面板比例。 */
     const handleWindowResize = (): void => {
@@ -98,7 +82,7 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
 
     window.addEventListener('resize', handleWindowResize)
     return () => window.removeEventListener('resize', handleWindowResize)
-  }, [rightPanelLayout])
+  }, [rightPanelOpen])
 
   useEffect(() => {
     if (!splitDragging) return undefined
@@ -151,9 +135,7 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
     handlePanelSplitDragStart,
     panelRef,
     panelStyle,
-    rightPanelLayout,
     rightPanel,
-    setRightPanelLayout,
     setRightPanel,
     splitDragging
   }

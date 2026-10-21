@@ -177,16 +177,11 @@ test('最左侧窄栏：顶部 4 个抽屉入口 + 底部 4 个入口（含用�
   assert.ok(html.includes('session-user'), '窄栏缺少用户头像')
 })
 
-test('目录树在左侧并列出规划文档，默认不置灰', () => {
+test('目录树在右侧并列出规划文档，默认不置灰', () => {
   const html = renderToStaticMarkup(
     <ReleasedVersionPanel application={application()} workspaceRoot="/workspace" />
   )
   assert.ok(html.includes('目录树'), '缺少目录树栏目标题')
-  // 树在左、内容在右：目录树容器必须先于内容查看器出现在 DOM 里。
-  const treeIndex = html.indexOf('source-panel-tree')
-  const viewerIndex = html.indexOf('source-panel-viewer')
-  assert.ok(treeIndex >= 0 && viewerIndex >= 0, '缺少目录树或内容查看器容器')
-  assert.ok(treeIndex < viewerIndex, '目录树应排在内容查看器之前（树在左）')
   // 有 Markdown 形态的规划文档都应在树中；UI 设计稿是结构化 JSON，不进文档分组。
   for (const label of ['需求文档', '产品规划', '技术规划']) {
     assert.ok(html.includes(label), `目录树缺少「${label}」`)

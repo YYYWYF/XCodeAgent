@@ -18,7 +18,6 @@ def development_readiness(
     target_type: str,
     target_id: str,
     api_contract_id: str | None = None,
-    builtin: bool = False,
 ) -> dict[str, Any]:
     """检查目标引用的实体是否都已完成独立 EntitySourceBinding。"""
 
@@ -47,7 +46,7 @@ def development_readiness(
             if (
                 normalized_id
                 and isinstance(detail, dict)
-                and entity_design_validation_errors(project_plan, detail, builtin=builtin)
+                and entity_design_validation_errors(project_plan, detail)
                 and normalized_id not in missing_ids
             ):
                 missing_ids.append(normalized_id)

@@ -120,10 +120,10 @@ def build_context(plan: dict, scope: dict) -> dict:
                 "authorization": {"enabled": bool(plan.get("authorization_manifest"))}
             },
         ),
-        # DAG Planning 的测试输入必须显式绑定当前 V3 TemplateState 快照。
+        # DAG Planning 的测试输入必须显式绑定当前 V2 TemplateState 快照。
         "template_context": {
             "state_path": ".devagentstudio/template-state.json",
-            "template_revision": "2026.10.13.1",
+            "template_revision": "fixture-template-r1",
             "effective_capabilities": {},
         },
     }

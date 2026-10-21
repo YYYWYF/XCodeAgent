@@ -16,11 +16,6 @@ try {
     logLevel: 'error',
     root: frontendRoot,
     ssr: { noExternal: true },
-    css: {
-      preprocessorOptions: {
-        less: { additionalData: '@class-prefix: test;', javascriptEnabled: true }
-      }
-    },
     build: {
       emptyOutDir: true,
       minify: false,

@@ -13,8 +13,6 @@ function harness() {
   let merged = lifecycle
   let merges = 0
   const observer: WorkbenchRunRefreshConnection = {
-    /** 与生产请求代次一致，阻止旧查询覆盖新查询。 */
-    isCurrentRequest: (requestGeneration) => requestGeneration === generation,
     /** 预留代次时保留当前连接展示。 */
     start: () => {
       state = { ...state, requestGeneration: ++generation }
@@ -85,18 +83,5 @@ test('新的连接请求完成后，旧轮询失败不能再次显示不可用',
   reject(new Error('旧轮询超时'))
   await request
   assert.equal(current.snapshot().state.status, 'healthy')
-  assert.equal(current.snapshot().state.requestGeneration, newer)
-})
-
-test('新的查询完成后旧轮询成功也不能回写生命周期', async () => {
-  const current = harness()
-  let resolve!: (value: ApplicationLifecycle) => void
-  const pending = new Promise<ApplicationLifecycle>(success => { resolve = success })
-  const request = refreshWorkbenchRun(() => pending, current.merge, current.observer, () => true)
-  const newer = current.observer.start()
-  current.observer.settle(newer)
-  resolve(current.lifecycle)
-  await request
-  assert.equal(current.snapshot().merges, 0)
   assert.equal(current.snapshot().state.requestGeneration, newer)
 })

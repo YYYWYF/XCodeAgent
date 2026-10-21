@@ -64,9 +64,7 @@ def _settings() -> Settings:
     """构造不访问环境变量的测试模型设置。"""
 
     return Settings(
-        model_base_url="https://example.com/v1",
-        model_api_key="test-key",
-        model_name="test-model [display]",
+        model_transmit_url="http://127.0.0.1:8100",
     )
 
 
@@ -113,70 +111,6 @@ class SequentialUnitGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.attempt_in_round, 1)
         self.assertEqual(state.total_attempts, 1)
         self.assertEqual(len(self.controller.snapshot.candidates), 1)
-
-    async def test_missing_id_binds_before_full_validation_without_retry(self) -> None:
-        """唯一职责只漏 ID 时一次调用即可 ready，原始模型响应保持未补身份。"""
-
-        task = _task()
-        task.pop("id")
-        model = _Model(_response(task))
-        state = await self._run(model)
-        self.assertEqual(state.generation_status, "candidate_ready")
-        self.assertEqual(state.attempt_in_round, 1)
-        candidate = self.controller.snapshot.candidates[state.latest_candidate_id]
-        self.assertEqual(candidate.tasks[0]["id"], "page:orders::page")
-        self.assertNotIn('"id": "page:orders::page"', model.content)
-
-    async def test_json_repair_then_id_binding_keeps_full_validation(self) -> None:
-        """未转义引号先走现有 JSON 修复，再绑定缺失 ID 并通过完整局部校验。"""
-
-        task = _task()
-        task.pop("id")
-        task["description"] = '实现"订单"页面'
-        raw_response = _response(task).replace('\\"订单\\"', '"订单"')
-        with self.assertRaises(json.JSONDecodeError):
-            json.loads(raw_response)
-        state = await self._run(_Model(raw_response))
-        self.assertEqual(state.generation_status, "candidate_ready")
-        self.assertEqual(state.attempt_in_round, 1)
-        candidate = self.controller.snapshot.candidates[state.latest_candidate_id]
-        self.assertEqual(candidate.tasks[0]["id"], "page:orders::page")
-
-    async def test_bound_id_does_not_bypass_owner_validation(self) -> None:
-        """补入身份后错误 owner 仍失败并沿原 Local retry 反馈重试。"""
-
-        task = _task()
-        task.pop("id")
-        task["owner"] = "backend"
-        first, second = _Model(_response(task)), _Model(_response(_task()))
-        state = await self._run(first, second)
-        self.assertEqual(state.attempt_in_round, 2)
-        self.assertIn("CANDIDATE_OWNER_MISMATCH", second.prompts[0])
-        invalid = next(item for item in self.controller.snapshot.candidates.values() if item.status == "invalid")
-        self.assertEqual(invalid.tasks[0]["id"], "page:orders::page")
-
-    async def test_ambiguous_binding_uses_existing_retry_flow(self) -> None:
-        """未知职责不能补 ID，结构化绑定错误进入下一次 Prompt。"""
-
-        task = _task()
-        task.pop("id")
-        task["deliverables"][0]["provides"] = ["unknown"]
-        first, second = _Model(_response(task)), _Model(_response(_task()))
-        state = await self._run(first, second)
-        self.assertEqual(state.generation_status, "candidate_ready")
-        self.assertEqual(state.attempt_in_round, 2)
-        self.assertIn("RAW_CANDIDATE_TASK_ID_BINDING_INVALID", second.prompts[0])
-
-    async def test_bound_id_does_not_rewrite_unknown_dependencies(self) -> None:
-        """绑定身份后保留错误依赖，并由现有 Validator 拒绝及反馈。"""
-
-        task = _task()
-        task.pop("id")
-        task["dependencies"] = ["unknown-task"]
-        first, second = _Model(_response(task)), _Model(_response(_task()))
-        state = await self._run(first, second)
-        self.assertEqual(state.attempt_in_round, 2)
-        self.assertIn("CANDIDATE_DEPENDENCY_UNKNOWN", second.prompts[0])
 
     async def test_invalid_then_valid_uses_two_attempts(self) -> None:
         """一次 Local validation 失败后只重试当前 Unit，并在第二次成功。"""

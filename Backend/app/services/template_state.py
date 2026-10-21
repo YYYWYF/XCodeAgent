@@ -26,14 +26,14 @@ def template_state_path(workspace: str | Path) -> Path:
 def load_template_state(workspace: str | Path) -> dict[str, Any]:
     """读取 V3 State 并返回隔离的 JSON 语义副本。"""
 
-    return load_template_state_v3(workspace).model_dump(mode="json", exclude_none=True)
+    return load_template_state_v3(workspace).model_dump(mode="json")
 
 
 def validate_template_state(value: Any) -> dict[str, Any]:
     """严格验证 V3 State 并返回规范 JSON，不接受历史 State。"""
 
     try:
-        return TemplateStateV3.model_validate(value).model_dump(mode="json", exclude_none=True)
+        return TemplateStateV3.model_validate(value).model_dump(mode="json")
     except ValueError as exc:
         raise TemplateStateError("TEMPLATE_STATE_SCHEMA_UNSUPPORTED：TemplateState 不是当前 V3 协议。") from exc
 

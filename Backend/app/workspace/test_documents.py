@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from app.workspace.spec_documents import workspace_root
-from app.workspace.performance_report import render_performance_report
 
 
 TEST_REPORT_RELATIVE_PATH = ".devagentstudio/reports/test-report.md"
@@ -90,6 +89,46 @@ def _check_by_id(test_report: dict[str, Any], check_id: str) -> dict[str, Any] |
     )
 
 
+def _score_rows(check: dict[str, Any]) -> list[tuple[str, str]]:
+    """提取 Lighthouse 四项分类得分。"""
+
+    scores = check.get("performance_scores")
+    scores = scores if isinstance(scores, dict) else {}
+    return [
+        (label, str(scores[key]))
+        for key, label in (
+            ("performance", "Performance"),
+            ("accessibility", "Accessibility"),
+            ("best_practices", "Best Practices"),
+            ("seo", "SEO"),
+        )
+        if isinstance(scores.get(key), (int, float))
+        and not isinstance(scores.get(key), bool)
+    ]
+
+
+def _metric_rows(check: dict[str, Any]) -> list[tuple[str, str]]:
+    """提取并格式化 Lighthouse 五项核心指标。"""
+
+    metrics = check.get("performance_metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    rows: list[tuple[str, str]] = []
+    for key, label in (
+        ("fcp", "FCP"),
+        ("lcp", "LCP"),
+        ("tbt", "TBT"),
+        ("cls", "CLS"),
+        ("si", "SI"),
+    ):
+        value = metrics.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            continue
+        rows.append(
+            (label, f"{float(value):.3f}" if key == "cls" else f"{float(value) / 1000:.2f}s")
+        )
+    return rows
+
+
 def render_test_report_markdown(
     state: dict[str, Any], test_report: dict[str, Any]
 ) -> str:
@@ -119,7 +158,44 @@ def render_test_report_markdown(
 
     if str(state.get("frontend_performance_decision") or "") == "run":
         check = _check_by_id(test_report, "frontend_performance")
-        lines.extend(render_performance_report(check, workspace))
+        lines.extend(["", "## 2. 前端性能测试", ""])
+        if check is None:
+            lines.append("前端性能测试已选择执行，但未获得 Lighthouse 检查结果。")
+        else:
+            evidence = _safe_report_text(check.get("evidence"), workspace=workspace)
+            lines.extend(
+                [
+                    f"- 状态：{_check_status_label(check)}",
+                    f"- 结果摘要：{evidence or '未提供'}",
+                    "",
+                ]
+            )
+            score_rows = _score_rows(check)
+            metric_rows = _metric_rows(check)
+            if score_rows:
+                lines.extend(
+                    [
+                        "### Lighthouse 分类得分",
+                        "",
+                        "| 分类 | 得分 |",
+                        "| --- | ---: |",
+                        *(f"| {label} | {value} |" for label, value in score_rows),
+                        "",
+                    ]
+                )
+            if metric_rows:
+                lines.extend(
+                    [
+                        "### 核心性能指标",
+                        "",
+                        "| 指标 | 数值 |",
+                        "| --- | ---: |",
+                        *(f"| {label} | {value} |" for label, value in metric_rows),
+                        "",
+                    ]
+                )
+            if not score_rows and not metric_rows:
+                lines.append("未获得可展示的 Lighthouse 分类得分或核心指标。")
     return "\n".join(lines).rstrip() + "\n"
 
 

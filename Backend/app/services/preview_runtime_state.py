@@ -139,26 +139,6 @@ def record_progress(workspace: str | Path, stage: str, status: str, message: str
         write_record(workspace, value)
 
 
-def record_database_check(workspace: str | Path, report: dict[str, Any]) -> None:
-    """保存本轮结构检查的安全投影，随现有预览 AG-UI 快照发布。"""
-
-    def safe(value: Any) -> Any:
-        """递归脱敏显示文案和差异，避免数据库默认值等文本泄露凭据。"""
-
-        if isinstance(value, str):
-            return redact(value)
-        if isinstance(value, dict):
-            return {key: safe(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [safe(item) for item in value]
-        return value
-
-    with _lock:
-        value = read_record(workspace)
-        value["databaseCheck"] = safe(report)
-        write_record(workspace, value)
-
-
 def mark_interrupted_attempt(workspace: str | Path, *, layer: str) -> None:
     """把平台进程重启时遗留的启动中状态收口为可重新启动的失败状态。"""
 
@@ -276,14 +256,6 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                 if not pid_path.is_file() or int(pid_path.read_text().strip()) != pid:
                     raise ProcessLookupError()
                 if layer == "frontend":
-                    from app.services.frontend_project_launcher import _resolve_actual_preview_url
-
-                    # 当前存活 PID 的启动日志优先于推算端口，校准 HTTP 被旧项目响应的误绑定。
-                    actual_url = _resolve_actual_preview_url(root / "frontend.stdout.log", 0, "")
-                    if actual_url:
-                        part.update(url=actual_url, port=_port_from_url(actual_url))
-                        if value.get("status") == "running":
-                            value["previewUrl"] = actual_url
                     if not _frontend_runtime_is_ready(root, part):
                         raise ProcessLookupError()
                 else:
@@ -299,7 +271,7 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
     value["repairAvailable"] = bool(
         value.get("attemptId")
         and value.get("status") == "failed"
-        and value.get("failedStage") not in {"stop", "launch_interrupted", "backend_database_resource"}
+        and value.get("failedStage") not in {"stop", "launch_interrupted"}
     )
     value["maintenance"] = maintenance_owner(workspace)
     return value

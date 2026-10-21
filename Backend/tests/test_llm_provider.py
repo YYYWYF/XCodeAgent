@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""验证当前转发配置与现有消息辅助转换，不保留上游连接配置。"""
 
 import json
 import os
@@ -11,252 +11,59 @@ from app.services.llm_client import _openai_messages, _openai_tool
 
 class ModelProviderConversionTests(unittest.TestCase):
     def test_openai_tool_uses_function_schema(self) -> None:
-        tool = _openai_tool(
-            {
-                "name": "file_read",
-                "description": "Read a file.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                },
-            }
-        )
+        """辅助工具声明保持模型所需函数格式。"""
+        result = _openai_tool({"name": "read", "input_schema": {"type": "object", "required": ["path"]}})
+        self.assertEqual(result["function"]["name"], "read")
+        self.assertEqual(result["function"]["parameters"]["required"], ["path"])
 
-        self.assertEqual(tool["type"], "function")
-        self.assertEqual(tool["function"]["name"], "file_read")
-        self.assertEqual(tool["function"]["parameters"]["required"], ["path"])
+    def test_message_tool_calls_and_results_preserve_relationship(self) -> None:
+        """工具调用编号与工具结果对应，不丢失参数。"""
+        result = _openai_messages([
+            {"role": "assistant", "tool_calls": [{"id": "call-1", "name": "read", "input": {"path": "README.md"}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": "ok"},
+        ])
+        self.assertEqual(json.loads(result[0]["tool_calls"][0]["function"]["arguments"]), {"path": "README.md"})
+        self.assertEqual(result[1]["tool_call_id"], "call-1")
 
-    def test_openai_messages_convert_tool_calls_and_results(self) -> None:
-        messages = _openai_messages(
-            [
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {"id": "call-1", "name": "file_read", "input": {"path": "README.md"}}
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "tool_call_id": "call-1",
-                    "content": '{"ok":true}',
-                    "is_error": False,
-                },
-            ]
-        )
-
-        function = messages[0]["tool_calls"][0]["function"]
-        self.assertEqual(function["name"], "file_read")
-        self.assertEqual(json.loads(function["arguments"]), {"path": "README.md"})
-        self.assertEqual(
-            messages[1],
-            {"role": "tool", "tool_call_id": "call-1", "content": '{"ok":true}'},
-        )
-
-    def test_settings_default_to_openai_provider_when_not_configured(self) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-            },
-            clear=True,
-        ):
+    def test_defaults_start_without_upstream_configuration(self) -> None:
+        """未配置真实模型时后端可启动，连接信息仅指向转发服务。"""
+        with patch.dict(os.environ, {}, clear=True):
             settings = Settings.from_env()
+        self.assertEqual(settings.model_transmit_url, "http://127.0.0.1:8100")
+        self.assertEqual(settings.model_name, "studio-model")
+        self.assertEqual(settings.model_provider, "transmit")
+        self.assertFalse(hasattr(settings, "model_api_key"))
+        self.assertFalse(hasattr(settings, "model_base_url"))
 
-        self.assertEqual(settings.model_provider, "openai")
-
-    def test_settings_normalize_openai_compatible_provider(self) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_PROVIDER": "openai-compatible",
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-            },
-            clear=True,
-        ):
+    def test_transmit_settings_and_business_budgets_are_independent(self) -> None:
+        """服务连接与 UI/DAG 调用预算独立读取，密钥不进入配置 repr。"""
+        with patch.dict(os.environ, {
+            "MODEL_TRANSMIT_URL": "http://transmit.test:8100/", "MODEL_TRANSMIT_TOKEN": "private-test-token",
+            "MODEL_TRANSMIT_TRUST_ENV": "true", "MODEL_TRANSMIT_SPAID": "spaid-test",
+            "MODEL_MAX_RETRIES": "0", "MODEL_TIMEOUT_SECONDS": "45",
+            "DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS": "12288",
+            "DEVAGENTSTUDIO_DAG_UNIT_MAX_TOKENS": "4096",
+        }, clear=True):
             settings = Settings.from_env()
-
-        self.assertEqual(settings.model_provider, "openai")
-
-    def test_settings_load_ui_design_limits(self) -> None:
-        """验证 UI 设计稿生成限制可由环境变量覆盖。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-                "DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS": "12288",
-                "DEVAGENTSTUDIO_UI_DESIGN_MAX_RETRIES": "3",
-            },
-            clear=True,
-        ):
-            settings = Settings.from_env()
-
+        self.assertEqual(settings.model_transmit_url, "http://transmit.test:8100")
+        self.assertEqual(settings.model_transmit_spaid, "spaid-test")
+        self.assertTrue(settings.model_transmit_trust_env)
+        self.assertEqual(settings.model_max_retries, 0)
+        self.assertEqual(settings.model_timeout_seconds, 45)
         self.assertEqual(settings.ui_design_max_tokens, 12288)
-        self.assertEqual(settings.ui_design_max_retries, 3)
+        self.assertEqual(settings.dag_unit_max_tokens, 4096)
+        self.assertNotIn("private-test-token", repr(settings))
 
-    def test_dag_business_self_check_defaults_to_disabled(self) -> None:
-        """验证 DAG 业务自检在未配置环境变量时默认关闭。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-            },
-            clear=True,
-        ):
+    def test_upstream_environment_is_not_a_configuration_source(self) -> None:
+        """历史上游变量即使存在也不能覆盖当前统一转发合同。"""
+        with patch.dict(os.environ, {
+            "MODEL_BASE_URL": "https://upstream.invalid/v1", "MODEL_API_KEY": "must-not-read",
+            "MODEL_NAME": "must-not-read", "UI_DESIGN_MODEL_NAME": "must-not-read",
+        }, clear=True):
             settings = Settings.from_env()
-
-        self.assertFalse(settings.dag_business_self_check_enabled)
-
-    def test_dag_business_self_check_can_be_enabled(self) -> None:
-        """验证环境变量可显式开启 DAG 业务自检。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-                "DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED": "true",
-            },
-            clear=True,
-        ):
-            settings = Settings.from_env()
-
-        self.assertTrue(settings.dag_business_self_check_enabled)
-
-    def test_ui_design_model_falls_back_to_global_when_unconfigured(self) -> None:
-        """未配置 UI_DESIGN_MODEL_* 时，UI 节点用全局模型（for_ui_design_model 返回自身）。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-            },
-            clear=True,
-        ):
-            settings = Settings.from_env()
-
-        self.assertIs(settings.for_ui_design_model(), settings)
-
-    def test_ui_design_model_requires_all_three_fields(self) -> None:
-        """UI_DESIGN_MODEL_* 缺任一项即回落全局模型，不产生半配置状态。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-                "UI_DESIGN_MODEL_BASE_URL": "https://api.deepseek.com/v1",
-                "UI_DESIGN_MODEL_NAME": "deepseek-v4-pro",
-                # 缺 UI_DESIGN_MODEL_API_KEY
-            },
-            clear=True,
-        ):
-            settings = Settings.from_env()
-
-        self.assertIs(settings.for_ui_design_model(), settings)
-
-    def test_ui_design_model_overrides_when_fully_configured(self) -> None:
-        """三项齐全时，UI 节点模型字段整体替换为独立配置，缺省项跟随全局。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_PROVIDER": "openai",
-                "MODEL_BASE_URL": "https://tunnel.example.com/v1",
-                "MODEL_API_KEY": "global-key",
-                "MODEL_NAME": "glm-5.2",
-                "MODEL_CUSTOM_HEADERS": "CF-Access-Client-Id: global-id",
-                "UI_DESIGN_MODEL_BASE_URL": "https://api.deepseek.com/v1",
-                "UI_DESIGN_MODEL_API_KEY": "deepseek-key",
-                "UI_DESIGN_MODEL_NAME": "deepseek-v4-pro",
-            },
-            clear=True,
-        ):
-            settings = Settings.from_env()
-            resolved = settings.for_ui_design_model()
-
-        self.assertEqual(resolved.model_base_url, "https://api.deepseek.com/v1")
-        self.assertEqual(resolved.model_api_key, "deepseek-key")
-        self.assertEqual(resolved.model_name, "deepseek-v4-pro")
-        # 缺省项跟随全局：provider / custom_headers / trust_env。
-        self.assertEqual(resolved.model_provider, "openai")
-        self.assertEqual(
-            resolved.model_custom_headers, {"CF-Access-Client-Id": "global-id"}
-        )
-        # 非模型字段不受影响。
-        self.assertEqual(resolved.ui_design_max_tokens, settings.ui_design_max_tokens)
-
-    def test_ui_design_model_explicit_provider_and_headers_win(self) -> None:
-        """显式配置的 UI_DESIGN_MODEL_PROVIDER/CUSTOM_HEADERS 覆盖全局值。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_PROVIDER": "anthropic",
-                "MODEL_BASE_URL": "https://tunnel.example.com/v1",
-                "MODEL_API_KEY": "global-key",
-                "MODEL_NAME": "glm-5.2",
-                "MODEL_CUSTOM_HEADERS": "X-Global: 1",
-                "UI_DESIGN_MODEL_PROVIDER": "openai",
-                "UI_DESIGN_MODEL_BASE_URL": "https://api.deepseek.com/v1",
-                "UI_DESIGN_MODEL_API_KEY": "deepseek-key",
-                "UI_DESIGN_MODEL_NAME": "deepseek-v4-pro",
-                "UI_DESIGN_MODEL_CUSTOM_HEADERS": "X-UI: 2",
-            },
-            clear=True,
-        ):
-            resolved = Settings.from_env().for_ui_design_model()
-
-        self.assertEqual(resolved.model_provider, "openai")
-        self.assertEqual(resolved.model_custom_headers, {"X-UI": "2"})
-
-    def test_ui_design_model_rejects_unknown_provider(self) -> None:
-        """UI_DESIGN_MODEL_PROVIDER 非法时在解析点报错（misconfiguration fails loud）。"""
-
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-                "UI_DESIGN_MODEL_PROVIDER": "other",
-                "UI_DESIGN_MODEL_BASE_URL": "https://api.deepseek.com/v1",
-                "UI_DESIGN_MODEL_API_KEY": "deepseek-key",
-                "UI_DESIGN_MODEL_NAME": "deepseek-v4-pro",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "UI_DESIGN_MODEL_PROVIDER"):
-                Settings.from_env().for_ui_design_model()
-
-    def test_settings_reject_non_openai_provider(self) -> None:
-        with patch.dict(
-            os.environ,
-            {
-                "MODEL_PROVIDER": "other",
-                "MODEL_BASE_URL": "https://example.com/v1",
-                "MODEL_API_KEY": "test-key",
-                "MODEL_NAME": "test-model",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "Only OpenAI-compatible"):
-                Settings.from_env()
+        self.assertEqual(settings.model_name, "studio-model")
+        self.assertEqual(settings.model_transmit_url, "http://127.0.0.1:8100")
+        self.assertNotIn("must-not-read", repr(settings))
 
 
 if __name__ == "__main__":

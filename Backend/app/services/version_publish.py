@@ -12,12 +12,6 @@ from urllib.parse import urlparse, urlunparse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.git_branch import validate_branch_name
-from app.services.git_commit_message import ensure_board_number
-from app.services.git_credentials import (
-    git_env,
-    git_failure_detail,
-    uses_local_credentials,
-)
 from app.services.workspace_process_registry import workspace_process_registry
 
 
@@ -96,8 +90,7 @@ def publish_version(
         # 说明为空时回退到分支名。这里原先是 request.version_label —— 版本号模型
         # 去掉后该字段已不存在，说明为空时会抛 AttributeError（前端禁用了空说明提交，
         # 所以没暴露出来，但直接调接口就会中招）。
-        # 统一补看板编号：提交入口不止一处，且看板要求每次提交都带编号。
-        commit_message = ensure_board_number(request.description.strip() or branch)
+        commit_message = request.description.strip() or branch
         _run_git_checked(
             repository_root,
             ["commit", "-m", commit_message],
@@ -116,7 +109,7 @@ def publish_version(
     report("push", "正在推送到应用分支…", 60)
 
     remote_url = build_authenticated_remote_url(request.repo_url)
-    remote_name = PUBLISH_REMOTE_NAME
+    remote_name = "devagentstudio-publish"
     _ensure_remote(repository_root, remote_name, remote_url)
 
     pushed = False
@@ -158,9 +151,6 @@ def publish_version(
         commitSha=commit_sha,
     )
 
-
-# 发布用的远端名。version_control 读取"远端已到哪"来界定本次推送范围，必须与此一致。
-PUBLISH_REMOTE_NAME = "devagentstudio-publish"
 
 _RUNTIME_ARTIFACT_PATHS = (
     ".devagentstudio/runtime",
@@ -267,18 +257,11 @@ def _ensure_remote(repository_root: Path, name: str, url: str) -> None:
 
 
 def build_authenticated_remote_url(repo_url: str) -> str:
-    """把 repo_url 变成可推送的远端地址。
+    """把 repo_url 注入环境变量中的 git 凭证，拼成可 push 的认证 URL。
 
-    远端分支动作（services/repository_branch.py）与版本发布共用这一处地址拼装，
-    避免两份实现各自处理凭证。凭证来源由 services/git_credentials 决定：
-    helper 模式下原样返回，认证交给本机 git 凭证助手；env 模式下注入 .env 里的
-    用户名与 token。
+    远端分支动作（services/repository_branch.py）与版本发布共用这一处凭证拼装，
+    避免两份实现各自处理 token。
     """
-
-    if uses_local_credentials():
-        # URL 里一旦内嵌用户名，git 就不再询问本机凭证助手 —— 这正是 helper 模式要避免的。
-        # 同时原始地址也不会把 token 写进工作区的 .git/config。
-        return repo_url
 
     username = os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", "").strip()
     token = os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", "").strip()
@@ -310,8 +293,6 @@ def _run_git(
         ["git", *arguments],
         workspace=repository_root,
         cwd=str(repository_root),
-        # 禁用交互式提问：无 TTY 时等输入会把发布流程挂住（见 services/git_credentials）。
-        env=git_env(),
         text=True,
         capture_output=True,
         check=False,
@@ -330,6 +311,6 @@ def _run_git_checked(
 
     completed = _run_git(repository_root, arguments, timeout=timeout)
     if completed.returncode != 0:
-        # 认证类失败（缺凭证 / 无权限）在原文前附上可操作提示，用户才知道该去做什么。
-        raise VersionPublishError(f"{error_prefix}：{git_failure_detail(completed)}")
+        detail = completed.stderr.strip() or completed.stdout.strip() or "未知错误"
+        raise VersionPublishError(f"{error_prefix}：{detail}")
     return completed.stdout

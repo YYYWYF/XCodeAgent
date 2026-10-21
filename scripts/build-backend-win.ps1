@@ -1,4 +1,4 @@
-# Windows x64 后端打包步骤：
+﻿# Windows x64 后端打包步骤：
 # 1. 打开powershell,在 64 位 Windows 机器的项目根目录执行本脚本：
 #    powershell -ExecutionPolicy Bypass -File scripts/build-backend-win.ps1
 # 2. 执行前请确保 Backend\.env 已存在。
@@ -8,7 +8,7 @@
 #    cd Frontend
 #    pnpm build:win:dev
 
-# 注意：后端需要有一个.env文件，存放密钥，这个后续要上传到git，也要参与打包
+# 后端 .env 仅配置转发连接和应用环境，不包含上游模型密钥；真实环境文件不得提交。
 
 [CmdletBinding()]
 param(

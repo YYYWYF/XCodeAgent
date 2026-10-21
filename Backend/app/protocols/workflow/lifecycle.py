@@ -125,10 +125,7 @@ def begin_workflow_lifecycle(
         resume_values.get("resume_execution_run_id") or ""
     ).strip()
     if explicit_resume_run_id:
-        previous = lifecycle.active_executions.get(explicit_resume_run_id) or (
-            lifecycle.ended_executions[explicit_resume_run_id].execution
-            if explicit_resume_run_id in lifecycle.ended_executions else None
-        )
+        previous = lifecycle.active_executions.get(explicit_resume_run_id)
         # 先校验应用级调试执行的原身份，再以服务端切片纠正新执行；页面之间仍禁止串目标。
         application_resume = use_executed_scope and previous is not None and previous.scope == "application"
         _validate_resumable_execution(
@@ -157,7 +154,6 @@ def begin_workflow_lifecycle(
             run_id=revision_continuation_replaces_run_id,
             scope=scope_type,
             target_id=target_id,
-            pending_consumption=workflow_inputs.get("revision_continuation_consume") is not None,
         )
     submission_run_id = (
         str(submission.get("runId") or "")
@@ -181,7 +177,6 @@ def begin_workflow_lifecycle(
         ),
         resource_claims=resource_claims,
         development_continuation_consume=workflow_inputs.get("development_continuation_consume"),
-        revision_continuation_consume=workflow_inputs.get("revision_continuation_consume"),
         initial_development_entry=(
             (phase == "api_design_readiness_gate" or use_executed_scope)
             and workflow_inputs.get("workflow_action") != "continue_revision_build"
@@ -205,7 +200,6 @@ def _validate_revision_continuation_replacement(
     run_id: str,
     scope: str,
     target_id: str,
-    pending_consumption: bool = False,
 ) -> None:
     """校验存在来源 execution 时的 continuation 原子接管边界。"""
 
@@ -213,8 +207,8 @@ def _validate_revision_continuation_replacement(
     execution = lifecycle.active_executions.get(run_id)
     if (
         active_revision is None
-        or active_revision.status != ("continuation_ready" if pending_consumption else "building")
-        or (not pending_consumption and active_revision.continuation_consumed_at is None)
+        or active_revision.status != "building"
+        or active_revision.continuation_consumed_at is None
         or active_revision.continuation_source_run_id != run_id
         or execution is None
         or execution.phase != "application_revision"
@@ -236,9 +230,7 @@ def _validate_resumable_execution(
 ) -> None:
     """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
 
-    execution = lifecycle.active_executions.get(run_id) or (
-        lifecycle.ended_executions[run_id].execution if run_id in lifecycle.ended_executions else None
-    )
+    execution = lifecycle.active_executions.get(run_id)
     if execution is None:
         raise ApplicationLifecycleConflictError("要继续的工作台执行已不存在，请刷新后重试。")
     resumable_status = execution.status in {
@@ -464,17 +456,11 @@ def project_workflow_lifecycle_boundary(
         projected_phase = "code_review"
     elif node_name == "acceptance_phase_confirmation" and status == "completed":
         projected_phase = "acceptance"
-    # 只有原验收节点实际消费了用户决定后才记录通过；后续 finalize 沿既有逻辑释放资源。
-    acceptance_passed = node_name == "acceptance" and status == "completed" and update.get("accepted") is True
     state = update_workbench_execution(
         workspace,
         run_id=run_id,
         phase=projected_phase,
         status=WorkbenchExecutionStatus.RUNNING,
-        extension_updates=(
-            {"testExecutionStatus": "passed", "reviewStatus": "passed", "acceptanceStatus": "passed"}
-            if acceptance_passed else None
-        ),
     )
     payload = application_lifecycle_payload(state)
     if node_name == "prepare_build_tasks":

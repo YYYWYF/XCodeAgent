@@ -319,9 +319,6 @@ def _skip_snapshot_path(
         return True
     if path.name.casefold() in CODE_CHANGE_IGNORED_FILE_NAMES:
         return True
-    # tsc -b 会在源码目录外刷新增量缓存，它不属于 Agent 的源码或配置变更。
-    if path.name.casefold().endswith(".tsbuildinfo"):
-        return True
     if _is_ignored_snapshot_path(path, root, ignored_dirs=ignored_dirs):
         return True
     return _is_sensitive_path(path)

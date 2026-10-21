@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.domain.application_lifecycle import WorkbenchExecution, WorkbenchExecutionStatus
+from app.domain.application_lifecycle import WorkbenchExecution
 from app.services.workbench_progress_projection import project_workbench_progress
 from app.workspace.planning_run_documents import project_planning_run
 from tests.planning_run_fixtures import AT, run
@@ -42,24 +42,3 @@ class WorkbenchProgressProjectionTests(unittest.TestCase):
             result = project_workbench_progress("/workspace", SimpleNamespace(active_executions={execution.run_id: execution}))
         self.assertEqual(result[execution.run_id]["status"], "running")
         self.assertNotIn("dagGeneration", result[execution.run_id])
-
-    def test_reconnect_and_terminal_run_keep_frozen_names_without_plan_reads(self):
-        """活动及失败展示都使用本轮名称，磁盘计划变化不会重新命名历史 Run。"""
-
-        planning = run().model_copy(update={"unit_display_names": {"page:orders": "原订单列表页面"}})
-        execution = WorkbenchExecution(
-            scope="page", targetId="orders", threadId="thread-1", runId="workflow-1",
-            ownerSessionId="session-1", phase="prepare_build_tasks", status="running",
-            startedAt=AT, updatedAt=AT,
-        )
-        state = SimpleNamespace(active_executions={execution.run_id: execution})
-        with (
-            patch("app.services.workbench_progress_projection.load_planning_run", return_value=project_planning_run(planning)),
-            patch("app.workspace.plan_documents.load_project_plan_json", side_effect=AssertionError("不得重读计划取名")) as load_plan,
-        ):
-            for status in ("running", "stopping", "failed"):
-                with self.subTest(status=status):
-                    execution.status = WorkbenchExecutionStatus(status)
-                    result = project_workbench_progress("/workspace", state)
-                    self.assertEqual(result[execution.run_id]["dagGeneration"]["units"][0]["displayName"], "原订单列表页面")
-        load_plan.assert_not_called()

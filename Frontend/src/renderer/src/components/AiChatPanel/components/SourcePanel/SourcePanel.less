@@ -8,7 +8,7 @@
   background: var(--wb-canvas);
 }
 
-// 左栏：目录树（规划文档 + 工程源码）。树在左、内容在右。
+// 右栏：目录树（规划文档 + 工程源码）。内容在左、树在右，与原型口径一致。
 .@{class-prefix}-source-panel-tree {
   display: flex;
   flex: 0 0 240px;
@@ -16,7 +16,7 @@
   width: 240px;
   min-height: 0;
   background: var(--wb-surface-subtle);
-  border-right: 1px solid var(--wb-border);
+  border-left: 1px solid var(--wb-border);
 }
 
 .@{class-prefix}-source-panel-tree-head {
@@ -64,7 +64,7 @@
   width: 34px;
   padding: 10px 0;
   border: 0;
-  border-right: 1px solid var(--wb-border);
+  border-left: 1px solid var(--wb-border);
   background: var(--wb-surface-subtle);
   color: var(--wb-text-secondary);
   cursor: pointer;
@@ -96,11 +96,6 @@
   min-height: 0;
   overflow: auto;
   padding: 16px 20px;
-}
-
-// 与设计、计划阶段的可视化采用相同留白，复用章节吸顶及明暗主题样式。
-.@{class-prefix}-source-panel-structured {
-  padding: 16px 18px;
 }
 
 .@{class-prefix}-source-panel-tree-loading,
@@ -144,9 +139,7 @@
   text-align: left;
   cursor: pointer;
   user-select: none;
-  transition:
-    background 120ms ease,
-    color 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
 
   > .anticon {
     flex: 0 0 auto;
@@ -228,7 +221,7 @@
 }
 
 .@{class-prefix}-source-panel-truncated.ant-typography {
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .@{class-prefix}-source-panel-viewer-loading,

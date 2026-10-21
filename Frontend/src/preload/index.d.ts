@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { AuthenticationProgress, CloudJsonRequest } from '../shared/authentication'
 import type {
   ApplicationSchemaConfig,
   DevelopmentPlanningPageTreeNode
@@ -15,7 +16,9 @@ declare global {
       auth: {
         login: () => Promise<{ ok: true }>
         status: () => Promise<{ authenticated: boolean }>
-        getAccessToken: () => Promise<{ accessToken: string | null }>
+        cancel: () => Promise<{ ok: true }>
+        requestCloudJson: (request: CloudJsonRequest) => Promise<{ httpStatus: number; body: unknown }>
+        onProgress: (listener: (progress: AuthenticationProgress) => void) => () => void
         reauthenticate: () => Promise<{ ok: true }>
       }
       settings: {

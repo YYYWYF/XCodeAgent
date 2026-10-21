@@ -6,7 +6,6 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 import os
 import subprocess
 import zipfile
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -137,36 +136,17 @@ def _is_auxiliary_snapshot_jar(path: Path) -> bool:
     )
 
 
-def _backend_runtime_environment(
-    root: Path, *, managed_snapshot=None, on_database_check: Callable[[dict], None] | None = None,
-) -> tuple[dict[str, str], str | None]:
+def _backend_runtime_environment(root: Path) -> tuple[dict[str, str], str | None]:
     """构造后端子进程环境，清除全局数据库变量并绑定当前应用配置。"""
 
     environment = os.environ.copy()
     for key in _BACKEND_DATABASE_ENV_KEYS:
         environment.pop(key, None)
-    # SaaS 服务密钥只属于 Studio，不能继承给生成的业务应用。
-    environment.pop("MANAGED_DATABASE_SERVICE_KEY", None)
 
     application_file = root / WORKSPACE_ARTIFACT_DIR / "application.json"
     if not application_file.is_file():
         return environment, None
     try:
-        from app.services.managed_database_runtime import prepare_managed_startup, resolve_managed_runtime
-
-        snapshot = managed_snapshot or prepare_managed_startup(root, on_readiness=on_database_check)
-        if snapshot is not None:
-            connection = resolve_managed_runtime(root, snapshot, on_readiness=on_database_check)
-            environment.update({
-                "MYSQL_HOST": connection.host, "MYSQL_PORT": str(connection.port),
-                "MYSQL_USER": connection.username, "MYSQL_PWD": connection.password.get_secret_value(),
-                "MYSQL_DATABASE": connection.database, "MYSQL_JDBC_URL": connection.jdbc_url(),
-                "SPRING_DATASOURCE_URL": connection.jdbc_url(), "SPRING_DATASOURCE_USERNAME": connection.username,
-                "SPRING_DATASOURCE_PASSWORD": connection.password.get_secret_value(),
-                "SPRING_SQL_INIT_MODE": "never", "SPRING_JPA_HIBERNATE_DDL_AUTO": "none",
-                "SPRING_FLYWAY_ENABLED": "false", "SPRING_LIQUIBASE_ENABLED": "false",
-            })
-            return environment, None
         config = resolve_application_mysql_config(root)
     except DatabaseCredentialError as exc:
         return environment, str(exc)

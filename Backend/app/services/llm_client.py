@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import httpx
 import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
-from openai import AsyncOpenAI
-
+from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.model_output_logger import log_model_output
 
@@ -37,14 +35,11 @@ class ModelProvider(Protocol):
     ) -> ModelResponse: ...
 
 
-class OpenAIProvider:
+class TransmitProvider:
     def __init__(self, settings: Settings) -> None:
+        """为旧内部消息辅助接口接入同一个转发模型，避免残留直连出口。"""
         self.output_log_enabled = settings.model_output_log_enabled
-        self.client = AsyncOpenAI(
-            api_key=settings.model_api_key,
-            base_url=settings.model_base_url,
-            http_client=httpx.AsyncClient(trust_env=settings.model_trust_env),
-        )
+        self.client = create_chat_model(settings)
 
     async def complete(
         self,
@@ -56,25 +51,23 @@ class OpenAIProvider:
         temperature: float,
         tools: List[Dict[str, Any]] | None = None,
     ) -> ModelResponse:
+        """经统一转发模型生成结果，工具格式转换不改变上下文保存逻辑。"""
         openai_messages = [
             {"role": "system", "content": system},
             *_openai_messages(messages),
         ]
         request: Dict[str, Any] = {
-            "model": model,
-            "messages": openai_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
         if tools:
             request["tools"] = [_openai_tool(tool) for tool in tools]
-        response = await self.client.chat.completions.create(**request)
-        message = response.choices[0].message
+        message = await self.client.ainvoke(openai_messages, **request)
         tool_calls = [
             ModelToolCall(
-                id=str(tool_call.id),
-                name=str(tool_call.function.name),
-                input=_json_object(tool_call.function.arguments),
+                id=str(tool_call["id"]),
+                name=str(tool_call["name"]),
+                input=tool_call["args"],
             )
             for tool_call in (message.tool_calls or [])
         ]
@@ -82,7 +75,7 @@ class OpenAIProvider:
             log_model_output(
                 content=message.content or "",
                 tool_calls=[
-                    {"id": tool_call.id, "name": tool_call.function.name}
+                    {"id": tool_call["id"], "name": tool_call["name"]}
                     for tool_call in (message.tool_calls or [])
                 ],
             )
@@ -90,9 +83,8 @@ class OpenAIProvider:
 
 
 def create_model_provider(settings: Settings) -> ModelProvider:
-    if settings.model_provider == "openai":
-        return OpenAIProvider(settings)
-    raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
+    """创建统一转发提供方，不再按上游厂商在 Studio 内创建客户端。"""
+    return TransmitProvider(settings)
 
 
 def _openai_tool(tool: Dict[str, Any]) -> Dict[str, Any]:

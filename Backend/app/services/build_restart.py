@@ -3,27 +3,7 @@
 from copy import deepcopy
 from typing import Any
 
-from app.workspace.task_documents import _TASK_RUNTIME_FIELDS, build_task_plan_sha256
-
-
-def confirmed_plan_build_handoff(
-    state: dict[str, Any], plan: dict[str, Any], *, already_confirmed: bool = False,
-) -> dict[str, Any]:
-    """新确认计划切换 Build 运行绑定，同计划的重复确认保留原执行进度。"""
-    if (already_confirmed and state.get("build_run_id") and state.get("build_run_plan_path")
-            and state.get("build_run_plan_sha256") == build_task_plan_sha256(plan)):
-        return {}
-    # Graph State 按字段合并；仅更新任务计划会留下旧绑定，甚至被旧重试来源再次覆盖。
-    # 只清除内存中的上一轮执行信息，已有源码和落盘执行证据仍由原机制读取与保留。
-    return {
-        "build_run_id": "", "build_run_plan_path": "", "build_run_plan_sha256": "",
-        "build_results": [], "build_summary": {}, "build_execution_slice": {},
-        "ready_tasks": [], "pending_build_results": [],
-        "retry_failed_tasks": False, "retry_source_run_id": "",
-        # 上轮点击过的确认是一次性动作，不能替新计划自动跨过下游确认门。
-        "test_phase_confirmation": {}, "review_phase_confirmation": {},
-        "acceptance_phase_confirmation": {}, "code_review_repair_confirmation": {},
-    }
+from app.workspace.task_documents import _TASK_RUNTIME_FIELDS
 
 
 def restart_build_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -39,7 +19,7 @@ def restart_build_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str
         "repair_task_plan": {}, "repair_task_plan_path": "", "repair_tasks": [],
         "repair_iteration": 0, "database_change_plan": {}, "database_approval_requests": [],
         "platform_projection_evidence": {}, "route_projection_evidence": {},
-        "clarification": {}, "workspace_snapshot": {},
+        "clarification": {}, "request": "", "workspace_snapshot": {},
     }
     return refresh_build_workspace(restarted)
 

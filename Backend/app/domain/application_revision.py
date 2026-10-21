@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.domain.application_config_change import ApplicationConfigChange
 
 
 class RevisionModel(BaseModel):
@@ -92,7 +93,7 @@ class RevisionRoutingCandidate(RevisionModel):
         default=None,
         alias="earliestArtifact",
     )
-    owner: Literal["frontend", "backend", "fullstack", "none", "unknown"]
+    owner: Literal["frontend", "backend", "fullstack", "workspace", "none", "unknown"]
     affected_artifact_keys: list[str] = Field(
         default_factory=list,
         alias="affectedArtifactKeys",
@@ -238,6 +239,11 @@ class PendingRevisionImpact(RevisionModel):
     request: str = Field(min_length=1, max_length=16_000)
     target: RevisionTarget
     impact: RevisionImpact
+    pending_application_config_changes: list[ApplicationConfigChange] = Field(
+        default_factory=list,
+        alias="pendingApplicationConfigChanges",
+        max_length=4,
+    )
     based_on_lifecycle_revision: int = Field(alias="basedOnLifecycleRevision", ge=1)
     status: Literal["pending"] = "pending"
 
@@ -257,8 +263,6 @@ class ActiveFormalRevision(RevisionModel):
         max_length=256,
     )
     planning_thread_id: str = Field(alias="planningThreadId", min_length=1, max_length=512)
-    # 保留最近拥有此修订的规划执行，Run 释放后仍可精确收尾，不依赖 checkpoint。
-    planning_run_id: str | None = Field(default=None, alias="planningRunId", max_length=512)
     status: Literal[
         "design_planning",
         "drafting",
@@ -274,6 +278,18 @@ class ActiveFormalRevision(RevisionModel):
     remaining_artifacts: list[str] = Field(
         default_factory=list,
         alias="remainingArtifacts",
+        max_length=100,
+    )
+    # 该集合是当前 Revision 的待确认配置提案，不是 application.json 的副本。
+    pending_application_config_changes: list[ApplicationConfigChange] = Field(
+        default_factory=list,
+        alias="pendingApplicationConfigChanges",
+        max_length=4,
+    )
+    # 初始管理员是权限配置提案的一部分；仅在对应正式产物确认时写入 application.json。
+    pending_initial_administrator_subjects: list[str] = Field(
+        default_factory=list,
+        alias="pendingInitialAdministratorSubjects",
         max_length=100,
     )
     technical_plan_sha256: str | None = Field(

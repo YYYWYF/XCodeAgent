@@ -12,6 +12,11 @@ from app.domain.execution_recovery import (
     DurableExecutionStatus,
     ExecutionFailureEvidence,
     ExecutionFailureOrigin,
+    WorkflowReentryContextAuthority,
+    WorkflowReentryContextAuthorityKind,
+    WorkflowReentryLifecycleAuthority,
+    WorkflowReentryPlan,
+    WorkflowReentryReason,
 )
 from app.services.execution_recovery_projection import (
     recovery_failure_diagnostic,
@@ -53,6 +58,30 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             ended_at=now,
         )
 
+    def _reentry_plan(self, run_id: str) -> WorkflowReentryPlan:
+        """构造 projection 使用的中断 checkpoint authority。"""
+
+        return WorkflowReentryPlan(
+            reason=WorkflowReentryReason.INTERRUPTED_CONTINUE,
+            execution_kind="workbench",
+            target_node="build",
+            thread_id="thread-A",
+            source_run_id=run_id,
+            lineage_parent_run_id=run_id,
+            context_authority=WorkflowReentryContextAuthority(
+                kind=WorkflowReentryContextAuthorityKind.CHECKPOINT,
+                source_run_id=run_id,
+                thread_id="thread-A",
+                target_node="build",
+                checkpoint_id="projection-checkpoint",
+                checkpoint_ns="",
+            ),
+            lifecycle_authority=WorkflowReentryLifecycleAuthority(
+                owner_run_id=run_id,
+                revision=None,
+            ),
+        )
+
     async def test_empty_projection_when_no_interrupted_execution_exists(self) -> None:
         """没有中断 execution 时返回空 candidates。"""
 
@@ -84,49 +113,151 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
         self.assertEqual(projection.error.code, "RECOVERY_PROJECTION_READ_FAILED")
 
-    async def test_current_retry_only_exposes_public_fields(self) -> None:
-        """当前重试只公开节点动作，不泄漏 checkpoint 或旧恢复 authority。"""
-        from app.services.business_node_retry import RetryHint
+    async def test_ready_native_only_exposes_public_fields(self) -> None:
+        """READY_NATIVE 只能投影可继续状态，不泄漏内部 RecoveryPlan authority。"""
+
         record = self._record("run-A")
-        with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[record])), \
-                patch("app.services.checkpoint_execution.resolve_checkpoint_source", AsyncMock(return_value=record)), \
-                patch("app.services.execution_recovery_projection.workflow_graph_for_request", AsyncMock(return_value=object())), \
-                patch("app.services.business_node_retry.read_retry_hint", AsyncMock(return_value=RetryHint("build", "original question"))):
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=object()),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        kind="continue",
+                        reentry_plan=self._reentry_plan(record.run_id),
+                    )
+                ),
+            ),
+        ):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(len(projection.candidates), 1)
         candidate = projection.candidates[0].model_dump(mode="json", by_alias=True)
         self.assertTrue(candidate["canContinue"])
         self.assertEqual(candidate["availability"], "ready")
         self.assertEqual(candidate["ownerSessionId"], "session-A")
-        for forbidden in ("checkpointId", "checkpointNs", "workspaceRevision", "workspaceSnapshotHash", "recoveryPointId", "strategy"):
+        for forbidden in (
+            "checkpointId",
+            "checkpointNs",
+            "workspaceRevision",
+            "workspaceSnapshotHash",
+            "recoveryPointId",
+            "strategy",
+        ):
             self.assertNotIn(forbidden, candidate)
 
-    async def test_missing_node_produces_dismissible_notice(self) -> None:
-        """没有节点时签发当前可关闭提示并收口原执行，不依赖已移除的精确恢复 resolver。"""
-        record = self._record("run-invalid")
-        with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[record])), \
-                patch("app.services.checkpoint_execution.resolve_checkpoint_source", AsyncMock(return_value=record)), \
-                patch("app.services.execution_recovery_projection.workflow_graph_for_request", AsyncMock(return_value=object())), \
-                patch("app.services.business_node_retry.read_retry_hint", AsyncMock(return_value=None)), \
-                patch("app.services.business_node_retry.release_unretryable_execution", AsyncMock()) as release:
-            projection = await resolve_execution_recovery_projection(str(self.workspace))
-        self.assertEqual(projection.candidates[0].reason_code, "RETRY_ENTRY_NOT_FOUND")
-        self.assertFalse(projection.candidates[0].can_continue)
-        release.assert_awaited_once_with(record)
+    async def test_invalid_interrupted_authority_is_blocked(self) -> None:
+        """最新中断 authority 无效时只投影 blocked，不生成恢复 action。"""
 
-    async def test_unowned_record_is_not_assigned_owner_from_checkpoint(self) -> None:
-        """当前合同不支持历史 owner 补造，checkpoint 只用于节点与提问定位。"""
-        from app.services.business_node_retry import RetryHint
-        record = self._record("run-unowned").model_copy(update={"owner_session_id": None})
-        graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(
-            values={"active_run_id": record.run_id, "owner_session_id": "checkpoint-owner", "request": "original"},
-            next=("build",), tasks=(), config={})))
-        with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[record])), \
-                patch("app.services.execution_recovery_projection.workflow_graph_for_request", AsyncMock(return_value=graph)), \
-                patch("app.services.business_node_retry.read_retry_hint", AsyncMock(return_value=RetryHint("build", "original question"))):
+        record = self._record("run-invalid")
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=object()),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        kind="needs_attention",
+                        reentry_plan=None,
+                        reason_code="INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING",
+                        reason="missing latest checkpoint",
+                    )
+                ),
+            ),
+        ):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
-        self.assertEqual(projection.candidates, [])
+
+        self.assertEqual(projection.candidates[0].availability, "blocked")
+        self.assertFalse(projection.candidates[0].can_continue)
+
+    async def test_legacy_record_uses_exact_checkpoint_owner_without_mutating_record(self) -> None:
+        """旧记录只允许从 P0.3A 精确 checkpoint 读取 ownership。"""
+
+        record = self._record("run-legacy").model_copy(update={"owner_session_id": None})
+        snapshot = type("Snapshot", (), {"values": {"owner_session_id": "session-legacy"}})()
+        plan = self._reentry_plan(record.run_id).model_copy(
+            update={
+                "context_authority": self._reentry_plan(record.run_id).context_authority.model_copy(
+                    update={"checkpoint_id": "checkpoint-exact", "checkpoint_ns": "namespace"}
+                )
+            }
+        )
+        graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=graph),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(kind="continue", reentry_plan=plan)
+                ),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates[0].owner_session_id, "session-legacy")
+        graph.aget_state.assert_awaited_once_with(
+            {
+                "configurable": {
+                    "thread_id": record.thread_id,
+                    "checkpoint_ns": "namespace",
+                    "checkpoint_id": "checkpoint-exact",
+                }
+            }
+        )
         self.assertIsNone(record.owner_session_id)
-        graph.aget_state.assert_awaited_once()
+
+    async def test_legacy_record_without_checkpoint_owner_is_not_projected(self) -> None:
+        """旧记录无法从精确 checkpoint 证明 ownership 时必须 fail closed。"""
+
+        record = self._record("run-unowned").model_copy(update={"owner_session_id": None})
+        snapshot = type("Snapshot", (), {"values": {}})()
+        plan = self._reentry_plan(record.run_id).model_copy(
+            update={
+                "context_authority": self._reentry_plan(record.run_id).context_authority.model_copy(
+                    update={"checkpoint_id": "checkpoint-exact"}
+                )
+            }
+        )
+        graph = type("Graph", (), {"aget_state": AsyncMock(return_value=snapshot)})()
+        with (
+            patch(
+                "app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                new=AsyncMock(return_value=[record]),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.workflow_graph_for_request",
+                new=AsyncMock(return_value=graph),
+            ),
+            patch(
+                "app.services.execution_recovery_projection.InterruptedTargetResolver.resolve",
+                new=AsyncMock(
+                    return_value=SimpleNamespace(kind="continue", reentry_plan=plan)
+                ),
+            ),
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+
+        self.assertEqual(projection.candidates, [])
 
     async def test_business_failure_uses_only_matching_lifecycle_error(self) -> None:
         """无异常 evidence 时补充同 Run/Thread 原始业务错误，不读取其他会话错误。"""

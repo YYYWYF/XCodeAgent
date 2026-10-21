@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, AsyncIterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,7 +33,6 @@ DataSourceActionName = Literal[
     "detail",
     "database_tables",
     "database_columns",
-    "database_rows", "database_operations",
     "external_operation",
     "selected_tables", "add_tables", "remove_tables", "references",
 ]
@@ -52,8 +50,6 @@ class DataSourceRequest(BaseModel):
     directory_id: str | None = Field(default=None, alias="directoryId", max_length=128)
     source: dict[str, Any] | None = None
     tables: list[str] = Field(default_factory=list, max_length=2000)
-    page_number: int = Field(default=1, alias="pageNumber", ge=1, le=100001, strict=True)
-    page_size: int = Field(default=20, alias="pageSize", ge=1, le=100, strict=True)
 
 
 def data_sources_capabilities() -> dict[str, Any]:
@@ -66,7 +62,6 @@ def data_sources_capabilities() -> dict[str, Any]:
         "actions": [
             "list", "create", "update", "delete", "validate", "detail",
             "database_tables", "database_columns", "external_operation",
-            "database_rows", "database_operations",
             "selected_tables", "add_tables", "remove_tables", "references",
         ],
         "endpoints": {
@@ -78,8 +73,6 @@ def data_sources_capabilities() -> dict[str, Any]:
             "detail": "/data-sources/detail",
             "database_tables": "/data-sources/database-tables",
             "database_columns": "/data-sources/database-columns",
-            "database_rows": "/data-sources/database-rows",
-            "database_operations": "/data-sources/database-operations",
             "external_operation": "/data-sources/external-operation",
             "selected_tables": "/data-sources/selected-tables",
             "add_tables": "/data-sources/add-tables",
@@ -110,18 +103,8 @@ def build_data_sources_ag_ui_stream(
 
         request = DataSourceRequest.model_validate(action_input)
         _validate_action_input(request, action)
-        if action in {"database_rows", "database_operations"}:
-            from app.services.managed_database_table_data import read_table_page, read_table_operations
-
-            if action == "database_rows":
-                page = await asyncio.to_thread(read_table_page, request.workspace_root, str(request.source_id),
-                                               str(request.table), request.page_number, request.page_size)
-                return AgUiActionResult(data={"action": action, "dataPage": page}, message="已读取当前表数据。")
-            history = await asyncio.to_thread(read_table_operations, request.workspace_root, str(request.source_id), str(request.table))
-            return AgUiActionResult(data={"action": action, **history}, message="已读取当前表最近操作。")
         if action == "selected_tables":
-            tables = await asyncio.to_thread(selected_tables, request.workspace_root)
-            return AgUiActionResult(data={"action": action, "tables": tables}, message="已读取应用可用的数据表。")
+            return AgUiActionResult(data={"action": action, "tables": selected_tables(request.workspace_root)}, message="已读取添加的数据表。")
         if action in {"add_tables", "remove_tables"}:
             tables = change_selected_tables(request.workspace_root, str(request.source_id), request.tables, action == "remove_tables")
             return AgUiActionResult(data={"action": action, "tables": tables}, message="已更新应用数据表清单，数据库未被修改。")
@@ -145,14 +128,13 @@ def build_data_sources_ag_ui_stream(
                 message="已读取接口详情。",
             )
         if action == "database_tables":
-            metadata = await asyncio.to_thread(load_database_tables, request.workspace_root, str(request.source_id or ""))
+            metadata = load_database_tables(request.workspace_root, str(request.source_id or ""))
             return AgUiActionResult(
                 data={"action": action, "metadata": metadata},
                 message="已读取数据库表清单。",
             )
         if action == "database_columns":
-            metadata = await asyncio.to_thread(
-                load_database_columns,
+            metadata = load_database_columns(
                 request.workspace_root,
                 str(request.source_id or ""),
                 str(request.table or ""),
@@ -213,9 +195,6 @@ def _validate_action_input(
 ) -> None:
     """校验固定动作所需字段，避免不同路由之间混用请求参数。"""
 
-    if action != "database_rows" and {"page_number", "page_size"} & request.model_fields_set:
-        raise ValueError("分页参数仅用于表数据查询。")
-
     if action in {"add_tables", "remove_tables", "references"}:
         if not request.source_id or request.source is not None:
             raise ValueError("清单和引用操作必须提供 sourceId。")
@@ -232,7 +211,7 @@ def _validate_action_input(
         if request.source is not None or not request.source_id:
             raise ValueError("读取数据库表必须提供 sourceId。")
         return
-    if action in {"database_columns", "database_rows", "database_operations"}:
+    if action == "database_columns":
         if request.source is not None or not request.source_id or not request.table:
             raise ValueError("读取数据库字段必须提供 sourceId 和 table。")
         return

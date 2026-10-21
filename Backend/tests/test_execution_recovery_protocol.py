@@ -25,7 +25,7 @@ from app.protocols.execution_recovery import (
 )
 from app.domain.application_lifecycle import ApplicationInitialization
 from app.services.application_lifecycle import (
-    create_application_lifecycle, write_application_lifecycle, start_workbench_execution, load_application_lifecycle,
+    create_application_lifecycle, write_application_lifecycle, start_workbench_execution,
 )
 
 
@@ -255,17 +255,15 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         for output in outputs:
-            self.assertIn("RETRY_ENTRY_NOT_FOUND", output)
-            self.assertIn('"status":"notice"', output)
-            self.assertNotIn('"type":"RUN_ERROR"', output)
-            self.assertIn('"type":"RUN_FINISHED"', output)
+            self.assertIn("NODE_ENTRY_AUTHORITY_MISSING", output)
+            self.assertIn('"type":"RUN_ERROR"', output)
         self.assertEqual(
             await list_recovery_attempts_from_source(self.workspace, source.run_id),
             [],
         )
 
-    async def test_missing_node_history_releases_source_and_emits_closable_notice(self) -> None:
-        """找不到业务节点只发提示并释放原占用，不 claim child 或阻塞新运行。"""
+    async def test_missing_committed_history_has_no_recovery_side_effects(self) -> None:
+        """没有 committed history 时必须 fail closed，且不 claim child。"""
 
         now = datetime.now(timezone.utc)
         source = DurableExecutionRecord(
@@ -320,12 +318,7 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
             ]
 
         output = "".join(frames)
-        self.assertIn("RETRY_ENTRY_NOT_FOUND", output)
-        self.assertNotIn('"type":"RUN_ERROR"', output)
-        self.assertIn('"type":"RUN_FINISHED"', output)
-        current = load_application_lifecycle(self.workspace)
-        self.assertNotIn(source.run_id, current.active_executions)
-        self.assertIsNone(current.resource_locks.application)
+        self.assertIn("INTERRUPTED_CHECKPOINT_AUTHORITY_MISSING", output)
         self.assertEqual(await list_recovery_attempts_from_source(self.workspace, source.run_id), [])
         self.assertIsNone(await get_execution(self.workspace, "recovery-child"))
 

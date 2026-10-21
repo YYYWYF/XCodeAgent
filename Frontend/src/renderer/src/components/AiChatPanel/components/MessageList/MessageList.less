@@ -180,7 +180,7 @@
 
   .ant-typography-secondary {
     color: var(--wb-text-tertiary);
-    font-size: 12px;
+    font-size: 11px;
   }
 
   &.failed > span {
@@ -192,33 +192,6 @@
   margin-bottom: 20px;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--wb-border);
-
-  .@{class-prefix}-markdown-content {
-    font-size: 14px;
-    line-height: 1.75;
-
-    p + p {
-      margin-top: 10px;
-    }
-
-    ol,
-    ul {
-      margin: 10px 0 14px;
-      padding-left: 24px;
-    }
-
-    li {
-      padding-left: 3px;
-    }
-
-    li + li {
-      margin-top: 10px;
-    }
-
-    strong {
-      font-weight: 600;
-    }
-  }
 }
 
 .@{class-prefix}-ai-message-text.ant-typography {
@@ -336,35 +309,13 @@
 }
 
 .@{class-prefix}-revision-session-handoff-request.ant-typography {
-  display: block;
-  max-height: 84px;
+  display: -webkit-box;
   margin-top: 4px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   color: var(--wb-text-tertiary);
   font-size: 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  overscroll-behavior: contain;
-  scrollbar-color: var(--wb-accent-border) transparent;
-  scrollbar-width: thin;
-
-  &::-webkit-scrollbar {
-    width: 6px;
-  }
-
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background: var(--wb-accent-border);
-    border-radius: 999px;
-  }
-
-  &::-webkit-scrollbar-thumb:hover {
-    background: var(--wb-text-tertiary);
-  }
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .@{class-prefix}-planning-workflow-activity-intent.ant-tag {
@@ -501,5 +452,5 @@
   align-items: center;
   gap: 6px;
   margin-top: 8px;
-  font-size: 13px;
+  font-size: 12px;
 }

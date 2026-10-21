@@ -5,12 +5,10 @@ from __future__ import annotations
 import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 
 from app.agents.small_task import invoke_small_task_agent, normalize_small_task_result
 from app.agents.tool_activity_stream import ToolActivityCallback
 from app.services.backend_startup_diagnostics import startup_failure_packet
-from app.services.small_task_context import repair_candidate_files, repair_strategy
 from app.services.engineering_acceptance_verifier import unauthorized_batch_paths
 from app.services.small_task_scope import (
     SMALL_TASK_MAX_CONCURRENCY,
@@ -45,11 +43,7 @@ def build_small_task_packet(
         "description": str(task.get("description") or task.get("failure_reason") or "")[:4_000],
         "allowedPaths": allowed_paths[:100],
         "targetFiles": _string_list(task.get("target_files"), limit=100),
-        "candidateFiles": repair_candidate_files(
-            task, str(state.get("workspace") or state.get("workspace_path") or "") or None,
-        ),
-        "repairStrategy": repair_strategy(state),
-        "executionRunId": str(state.get("active_run_id") or ""),
+        "candidateFiles": _string_list(task.get("target_files"), limit=100),
         "changeScope": _bounded_items(task.get("change_scope"), limit=100),
         "engineeringAcceptanceChecks": _bounded_items(
             task.get("acceptance_checks") or task.get("engineering_acceptance_checks"),
@@ -154,18 +148,13 @@ def execute_small_task_batch(
                     },
                 }
         except Exception as exc:
-            failure_reason = (
-                f"局部任务在 {exc.run_count} 轮模型调用后仍未完成，已停止本轮修复。"
-                if isinstance(exc, ModelCallLimitExceededError)
-                else f"{type(exc).__name__}: {exc}"
-            )
             normalized = {
                 "status": "failed",
                 "summary": "SmallTask Agent 执行异常。",
                 "changedFiles": [],
                 "verification": [],
                 "alreadySatisfied": False,
-                "failureReason": failure_reason[:2_000],
+                "failureReason": f"{type(exc).__name__}: {exc}"[:2_000],
                 "escalation": {},
                 "agentNote": "",
             }

@@ -26,12 +26,6 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
             '{"status":"completed","summary":"broken", "nested": {"status":"completed","summary":"inner"}',
             '{"status":"completed"}', '{"status":"completed","summary":"  "}',
             '{"status":"unknown","summary":"结果"}', '[]',
-            'Action: read_file\nAction Input:\n{"status":"completed","summary":"工具参数"}',
-            '[\n{"status":"completed","summary":"数组里的结果"}\n]',
-            '说明\n{"broken":\n{"status":"completed","summary":"嵌套结果"}',
-            '说明\n{"status":"completed","summary":"结果"}\n还需要处理',
-            '说明\n{"status":"completed","summary":"结果"}{"status":"failed","summary":"冲突"}',
-            '说明\n```json\n{"status":"completed","summary":"结果"}\n```',
         ]
         for response in responses:
             with self.subTest(response=response):
@@ -50,46 +44,6 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 result = normalize_small_task_result(response)
                 self.assertEqual(result["status"], status)
                 self.assertIsNone(result["failureCode"])
-
-    def test_explanatory_prefix_preserves_all_valid_business_results(self) -> None:
-        """最终消息中的独立说明行不应破坏 JSON，也不能改变失败或人工确认语义。"""
-        for status in ("completed", "already_satisfied", "failed", "requires_workflow", "requires_user_confirmation"):
-            with self.subTest(status=status):
-                response = '修复已写入并完成静态复核。\n构建重跑交由工作流测试执行器。\n\n' + json.dumps({
-                    "status": status, "summary": "最终结果", "changedFiles": ["frontend/src/App.tsx"],
-                    "verification": ["静态复核完成"], "failureReason": None,
-                })
-                result = normalize_small_task_result(response)
-                self.assertEqual(result["status"], status)
-                self.assertIsNone(result["failureCode"])
-                self.assertEqual(result["verification"], ["静态复核完成"])
-
-    def test_completed_repair_with_explanation_returns_to_retest_without_rereading(self) -> None:
-        """复现真实日志：已写入的修复附带说明时只调用一次 Agent，并带真实 Diff 进入复测。"""
-        with tempfile.TemporaryDirectory() as workspace:
-            task = repair_task("frontend_build")
-            task.update({"owner": "frontend", "allowed_paths": ["frontend"]})
-            target = Path(workspace) / "frontend/src/pages/AgeEntry/index.tsx"
-            target.parent.mkdir(parents=True)
-            target.write_text("validator: (_, value) => {}", encoding="utf-8")
-
-            def complete_repair(**kwargs: object) -> str:
-                """模拟定点写入类型修复后，返回与实际模型相同的说明加结果形式。"""
-                target.write_text("validator: (_: unknown, value: unknown) => {}", encoding="utf-8")
-                return '修复已写入并完成静态复核，pnpm run build 留给工作流测试执行器。\n\n' + json.dumps({
-                    "status": "completed", "summary": "修复 TS7006", "changedFiles": [
-                        "frontend/src/pages/AgeEntry/index.tsx",
-                    ], "verification": ["参数补充显式类型，待真实构建复测"], "failureReason": None,
-                    "escalation": {"pendingCommands": ["pnpm run build"]},
-                })
-
-            with patch("app.services.small_task.invoke_small_task_agent", side_effect=complete_repair) as invoke:
-                result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
-            invoke.assert_called_once()
-            self.assertEqual(route_small_task_result(result), "integration_test")
-            self.assertEqual(result["small_task_results"][0]["status"], "completed")
-            self.assertIsNone(result["small_task_results"][0]["failureCode"])
-            self.assertTrue(result["small_task_code_change_sets"])
 
     def test_real_batch_protocol_failures_retry_until_per_check_budget_is_exhausted(self) -> None:
         """前两张图的响应走真实执行器，前九次返回复测，第十次停止且不清零额度。"""

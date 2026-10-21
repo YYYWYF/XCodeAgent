@@ -24,18 +24,6 @@ _CURRENT_TEST_PATHS: ContextVar[tuple[str, ...]] = ContextVar(
     default=(),
 )
 
-_FRONTEND_TEST_SUPPORT_PATHS = frozenset({
-    "frontend/tests/setupTests.ts",
-    "frontend/tests/__mocks__/styleMock.cjs",
-    "frontend/tests/__mocks__/fileMock.cjs",
-})
-
-
-def is_frontend_test_support_path(path: str) -> bool:
-    """仅接受当前 Jest 契约引用的三个辅助文件，不开放任意嵌套目录或配置。"""
-
-    return _normalize_candidate(path) in _FRONTEND_TEST_SUPPORT_PATHS
-
 
 def test_generation_path_scope(paths: list[str] | tuple[str, ...]):
     """在一次测试生成调用中安装精确的测试文件范围。"""
@@ -63,8 +51,6 @@ def is_test_generation_path_allowed(path: str) -> bool:
     candidate = _normalize_candidate(path)
     if not candidate:
         return False
-    if is_frontend_test_support_path(candidate):
-        return True
     lowered = candidate.casefold()
     frontend_prefix = "frontend/tests/"
     backend_prefix = "backend/src/test/java/"

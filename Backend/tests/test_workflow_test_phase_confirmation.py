@@ -261,32 +261,6 @@ class WorkflowTestPhaseConfirmationTests(unittest.TestCase):
             "test_phase_confirmation",
         )
 
-    def test_confirmation_message_distinguishes_skipped_unit_tests(self) -> None:
-        """测试阶段确认按实际单测决策展示跳过或门禁完成文案。"""
-
-        gate = TestEntryGate(
-            allowed=True, total=1, completed=1, pending=0, inProgress=0,
-            blockers=[], reason=None,
-        )
-        for decision in ("skip", "run"):
-            with (
-                self.subTest(decision=decision),
-                patch("app.graph.nodes.lifecycle.test_entry_gate", return_value=gate),
-            ):
-                confirmation = test_phase_confirmation({
-                    "build_summary": {"status": "completed", "failed": 0},
-                    "unit_test_gate_passed": True,
-                    "unit_test_decision": decision,
-                })
-                message = confirmation["clarification"]["message"]
-                self.assertEqual(confirmation["status"], "requires_user_input")
-                if decision == "skip":
-                    self.assertIn("单元测试已跳过", message)
-                    self.assertNotIn("单元测试门禁已完成", message)
-                else:
-                    self.assertIn("单元测试门禁已完成", message)
-                    self.assertNotIn("单元测试已跳过", message)
-
     def test_completed_build_run_recovers_pending_tasks_overwritten_by_debug(self) -> None:
         """调试快照把任务重置为 pending 时应从同一 Build Run 的证据恢复。"""
 

@@ -12,9 +12,7 @@ from app.config import Settings
 
 
 _MODEL_ENV = {
-    "MODEL_BASE_URL": "https://example.com/v1",
-    "MODEL_API_KEY": "test-key",
-    "MODEL_NAME": "test-model",
+    "MODEL_TRANSMIT_URL": "http://127.0.0.1:8100",
 }
 _DAG_FIELDS = {
     "DEVAGENTSTUDIO_DAG_UNIT_MAX_TOKENS": ("dag_unit_max_tokens", 4096),
@@ -34,12 +32,11 @@ class DagSettingsTests(unittest.TestCase):
         """环境缺省与直接构造均提供 DAG=4096/3/3/2，保留全局原默认值。"""
 
         for settings in (_settings(), Settings(
-            model_base_url=_MODEL_ENV["MODEL_BASE_URL"],
-            model_api_key=_MODEL_ENV["MODEL_API_KEY"], model_name=_MODEL_ENV["MODEL_NAME"],
+            model_transmit_url=_MODEL_ENV["MODEL_TRANSMIT_URL"],
         )):
             for field, expected in _DAG_FIELDS.values():
                 self.assertEqual(getattr(settings, field), expected)
-            self.assertEqual(settings.default_max_tokens, 2048)
+            self.assertEqual(settings.default_max_tokens, 32768)
             self.assertEqual(settings.model_max_retries, 2)
             self.assertEqual(settings.build_task_plan_max_retries, 2)
 
@@ -119,7 +116,7 @@ class DagSettingsTests(unittest.TestCase):
             self.assertEqual((settings.dag_unit_local_max_attempts, settings.dag_global_repair_limit), (3, 2))
         for field in ("dag_unit_local_max_attempts", "dag_global_repair_limit"):
             with self.assertRaises(TypeError):
-                Settings(model_base_url="test", model_api_key="test", model_name="test", **{field: 1})
+                Settings(model_transmit_url="http://127.0.0.1:8100", **{field: 1})
         example = dotenv_values(Path(__file__).resolve().parents[1] / ".env.example", interpolate=False)
         self.assertNotIn("DEVAGENTSTUDIO_DAG_UNIT_LOCAL_MAX_ATTEMPTS", example)
         self.assertNotIn("DEVAGENTSTUDIO_DAG_GLOBAL_REPAIR_LIMIT", example)

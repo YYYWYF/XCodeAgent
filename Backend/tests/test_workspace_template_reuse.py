@@ -87,7 +87,7 @@ def _materialized_workspace(workspace: Path, *, requested: dict[str, object] | N
 
 
 def _settings() -> Settings:
-    return Settings(model_base_url="http://model", model_api_key="key", model_name="model")
+    return Settings(model_transmit_url="http://127.0.0.1:8100")
 
 
 def _dirty(workspace: Path) -> None:

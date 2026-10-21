@@ -9,11 +9,7 @@ from pathlib import Path
 import httpx
 
 from app.services.workspace_bootstrap.models import TemplateEngineError
-from app.services.template_reconcile.protocol_v3 import TemplateStateV3
-from app.services.workspace_bootstrap.template_engine_client import (
-    TemplateEngineClient,
-    _build_fallback_template_state,
-)
+from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 
 
 class TemplateEngineClientTests(unittest.TestCase):
@@ -110,22 +106,3 @@ class TemplateEngineClientTests(unittest.TestCase):
         )
         self.assertEqual(409, raised.exception.http_status)
         self.assertIn('"traceId":"trace-123"', str(raised.exception))
-
-    def test_git_fallback_state_matches_current_v3_contract(self) -> None:
-        """确认 Git fallback 不会重新产出已删除的 V2 TemplateState。"""
-
-        state = _build_fallback_template_state(
-            {
-                "capabilities": {
-                    "login": {"enabled": True, "config": {}},
-                    "authorization": {"enabled": False, "config": {}},
-                }
-            }
-        )
-
-        validated = TemplateStateV3.model_validate(state)
-
-        self.assertEqual(3, validated.schemaVersion)
-        self.assertEqual({"login"}, set(validated.requested))
-        self.assertEqual({}, validated.installedArtifacts)
-        self.assertEqual({}, validated.managedContributions)

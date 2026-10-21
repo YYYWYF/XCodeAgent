@@ -103,8 +103,8 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
                     initial_administrator_subjects=["ops@example.com"],
                 )
 
-    def test_natural_language_permission_request_keeps_business_spec_without_config_question(self) -> None:
-        """明确受控页面保留业务规则，不再收集管理员配置文本题。"""
+    def test_natural_language_permission_request_only_collects_admin_subject(self) -> None:
+        """明确受控页面应自动启用权限意图，不能要求用户重复选择开关。"""
 
         spec = create_requirement_spec(
             "涉及权限控制：是",
@@ -150,20 +150,45 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
                 },
             ):
                 first = requirements({"workflow_scope": "application_planning", "workspace": workspace, "request": "设计变更：我想添加权限功能，需要管理员才能看到列表页", "timeline": []})
-            self.assertNotIn(
-                "authorization_initial_admin",
-                [item.get("id") for item in first["clarification"].get("questions", []) if isinstance(item, dict)],
-            )
+            self.assertEqual(first["clarification"]["questions"][0]["id"], "authorization_initial_admin")
             self.assertEqual(first["requirement_spec"]["authorization_requirements"]["restrictedPages"][0]["targetPageId"], "home")
-            persisted = json.loads(target.read_text(encoding="utf-8"))
-            self.assertFalse(persisted["auth"]["enable"])
-            self.assertEqual(persisted["authorization"]["initialAdministratorSubjects"], [])
 
-    def test_explicit_enable_does_not_use_requirement_config_question(self) -> None:
-        """显式能力开关不再由 RequirementSpec 收集 Subject 或直写配置。"""
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={"requirement_spec": spec, "clarification": {"status": "clear", "questions": []}},
+            ):
+                requirements({
+                    "workflow_scope": "application_planning",
+                    "workspace": workspace,
+                    "request": "继续处理。",
+                    "timeline": [],
+                    "requirement_spec": first["requirement_spec"],
+                    "requirement_revision_id": first["requirement_revision_id"],
+                    "authorization_config_conflict": first["authorization_config_conflict"],
+                    "application_planning_interaction": {"action": "answer", "answers": {"authorization_initial_admin": "ops@example.com"}},
+                })
+            persisted = json.loads(target.read_text(encoding="utf-8"))
+            self.assertTrue(persisted["auth"]["enable"])
+            self.assertEqual(persisted["authorization"]["initialAdministratorSubjects"], ["ops@example.com"])
+
+    def test_explicit_enable_freezes_target_then_commits_with_subject(self) -> None:
+        """首次明确开启权限必须先持久化 Resolver target，再与 Subject 原子提交。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             target = _write_current_config(workspace)
+            first = requirements(
+                {
+                    "workflow_scope": "application_planning",
+                    "workspace": workspace,
+                    "request": "开启权限管理",
+                    "timeline": [],
+                }
+            )
+            self.assertEqual(first["clarification"]["questions"][0]["id"], "authorization_initial_admin")
+            pending = first["pending_application_config_target"]
+            self.assertTrue(pending["requiresInitialAdministratorSubjects"])
+            self.assertEqual(pending["changes"][0]["path"], "authorization.enabled")
+
             with patch(
                 "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
                 return_value={
@@ -171,20 +196,29 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
                     "clarification": {"status": "clear", "questions": []},
                 },
             ):
-                result = requirements(
+                requirements(
                     {
                         "workflow_scope": "application_planning",
                         "workspace": workspace,
                         "request": "继续处理。",
                         "timeline": [],
+                        "requirement_spec": first["requirement_spec"],
+                        "requirement_revision_id": first["requirement_revision_id"],
+                        "authorization_config_conflict": first["authorization_config_conflict"],
+                        "pending_application_config_target": pending,
+                        "application_planning_interaction": {
+                            "action": "answer",
+                            "answers": {"authorization_initial_admin": "user001"},
+                        },
                     }
                 )
             persisted = json.loads(target.read_text(encoding="utf-8"))
-            self.assertNotIn("authorization_initial_admin", [item.get("id") for item in result["clarification"].get("questions", []) if isinstance(item, dict)])
-            self.assertEqual(persisted["configRevision"], 1)
-            self.assertFalse(persisted["authorization"]["enabled"])
+            self.assertEqual(persisted["configRevision"], 2)
+            self.assertTrue(persisted["auth"]["enable"])
+            self.assertTrue(persisted["authorization"]["enabled"])
+            self.assertEqual(persisted["authorization"]["initialAdministratorSubjects"], ["user001"])
 
-    def test_obsolete_authorization_conflict_is_ignored_by_requirement_revision(
+    def test_stale_authorization_conflict_is_not_consumed_by_new_requirement_revision(
         self,
     ) -> None:
         """revisionId 不匹配的旧权限初始化问题不能劫持新增登录需求。"""
@@ -227,6 +261,7 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
                     }
                 )
 
+        self.assertEqual(result["authorization_config_conflict"], {})
         self.assertNotIn(
             "authorization_initial_admin",
             [

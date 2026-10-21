@@ -139,13 +139,7 @@ def validate_application_planning_review_action(
         return
 
     if submission.action == "answer":
-        # 产品规划的操作归属也是待回答问题，答案由原 ProductPlan 节点处理；
-        # 回答只补齐业务事实，之后仍停在需求文档联合确认门。
-        product_operation_question = (
-            artifact == "requirement_document"
-            and mode == "authorization_operation_action_resolution"
-        )
-        if (artifact != "requirement_spec" and not product_operation_question) or not has_questions:
+        if artifact != "requirement_spec" or not has_questions:
             raise ValueError(
                 f"当前 {artifact} 审阅门不允许 action=answer；澄清问题必须存在且不能提交确认卡答案。"
             )
@@ -221,20 +215,21 @@ def prepare_application_planning_review_resume(
                 "design_interaction_origin": effective_node_name,
                 "application_planning_interaction": {},
                 "requirement_revision_id": uuid4().hex,
+                # 设计变更开启新的需求修订事务。上一轮尚未完成的权限配置
+                # 冲突仅是临时交互状态，不能在新的需求分析前被 requirements
+                # 节点优先消费并错误地重新展示初始管理员 subjectId 问题。
+                "authorization_config_conflict": {},
+                "pending_application_config_target": {},
                 "clarification": {},
             },
             target_node="design_intent_analysis",
         )
 
-    # 确认按钮的控制文案不是业务提问，后续节点及失败重试继续保留真实用户要求。
-    business_request = str(state.get("request") or "").strip()
-    if submission.action in {"answer", "revise"} and submission.request.strip():
-        business_request = submission.request.strip()
     update: dict[str, Any] = {
         **runtime_update,
         # 原生 interrupt 已精确决定恢复节点，本轮开始后必须消费旧 START 指令。
         "resume_from": "",
-        "request": business_request,
+        "request": submission.request.strip(),
         # 用户开始处理原审阅门后，上一轮普通产品对话的 preserve 提示已经消费；
         # 后续正式生成必须按新 artifact revision 决定展示，不能继续隐藏卡片。
         "product_conversation_result": {},
@@ -249,7 +244,7 @@ def prepare_application_planning_review_resume(
             operation=ApplicationPlanningOperation.INITIAL,
             gate_id=payload["gateId"],
             artifact_revision=payload["artifactRevision"],
-            request=business_request,
+            request=submission.request,
         )
         return ApplicationPlanningReviewResumeDecision(
             update=update,
@@ -292,13 +287,6 @@ def prepare_application_planning_review_resume(
             artifact_revision=payload["artifactRevision"],
             request=submission.request,
         )
-        if effective_node_name == "technical_planning":
-            # 已校验的失败审阅动作先把来源写进 checkpoint；begin 才做 lifecycle CAS 交接。
-            update["technical_plan_repair_source_run_id"] = (
-                str(state.get("active_run_id") or "")
-                if clarification.get("mode") == "technical_plan_generation_error"
-                else ""
-            )
         if effective_node_name == "ui_confirmation":
             update["ui_design_action"] = {
                 "action": "adjust_pages",

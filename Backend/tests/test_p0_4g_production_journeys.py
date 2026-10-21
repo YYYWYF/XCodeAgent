@@ -106,12 +106,10 @@ class FakeModelConnectionError(Exception):
 
 
 def _settings_for(model_name: str) -> Settings:
-    """构造当前模型快照，确保每次真实节点进入边界都读取最新设置。"""
+    """用独立转发地址模拟连接配置变化，真实模型信息始终归转发服务。"""
 
     return Settings(
-        model_base_url="https://model.test.invalid/v1",
-        model_api_key="test-key",
-        model_name=model_name,
+        model_transmit_url=f"https://{model_name.lower()}.transmit.test.invalid",
     )
 
 
@@ -270,8 +268,12 @@ class _ProductionModelBoundary:
         """记录一次最低层 provider 调用并模拟可切换的首次模型失败。"""
 
         kind = self._kind(prompt)
-        self.calls.append((self.settings.model_name, kind))
-        if kind == "requirements" and self.settings.model_name == self.failed_model:
+        self.calls.append((self.settings.model_transmit_url, kind))
+        failed_url = (
+            _settings_for(self.failed_model).model_transmit_url
+            if self.failed_model is not None else None
+        )
+        if kind == "requirements" and self.settings.model_transmit_url == failed_url:
             raise FakeModelConnectionError(model=self.settings.model_name)
         return AIMessage(content=self._response_text(kind))
 
@@ -1399,7 +1401,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     async def test_initial_requirements_uses_real_node_and_public_child_retry(self) -> None:
-        """首次 Requirements 真实节点 404 后只重入 requirements，并读取 MiMo。"""
+        """首次 Requirements 连接失败后只重入 requirements，并读取最新转发配置。"""
 
         model_config = {"name": "DeepSeek"}
         model_calls: list[tuple[str, str]] = []
@@ -1517,7 +1519,7 @@ class P04GProductionJourneyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [model for model, kind in model_calls if kind == "requirements"],
-            ["DeepSeek", "MiMo"],
+            [_settings_for("DeepSeek").model_transmit_url, _settings_for("MiMo").model_transmit_url],
         )
 
     async def test_c6_formal_revision_interrupted_continue_preserves_context_after_backend_restart(

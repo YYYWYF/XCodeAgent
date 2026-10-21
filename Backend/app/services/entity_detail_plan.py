@@ -175,7 +175,6 @@ def create_entity_detail_plan(
     detail: dict[str, Any] = {
         "id": f"entity_detail:{entity_id}",
         "entity_id": entity_id,
-        **({"table_name": normalized["table_name"]} if "table_name" in normalized else {}),
         "entity_name": str(normalized.get("name") or entity_id),
         "description": str(normalized.get("description") or ""),
         "module_id": str(normalized.get("module_id") or ""),
@@ -240,7 +239,6 @@ def refresh_entity_detail_table_design(detail: dict[str, Any]) -> dict[str, Any]
         entity_mysql_target_table(
             {
                 "id": entity_id,
-                **({"table_name": detail["table_name"]} if "table_name" in detail else {}),
                 "name": detail.get("entity_name") or entity_id,
                 "description": detail.get("description") or "",
                 "fields": fields,

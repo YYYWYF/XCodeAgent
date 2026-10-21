@@ -19,6 +19,7 @@ from app.graph.direct_modification_workflow import clear_direct_modification_gra
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
+
 from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,
@@ -39,10 +40,6 @@ from app.protocols.application_lifecycle import (
     application_lifecycle_capabilities,
     build_application_lifecycle_ag_ui_stream,
 )
-from app.protocols.application_config_operation import (
-    application_config_capabilities,
-    build_application_config_ag_ui_stream,
-)
 from app.protocols.application_page_planning import (
     application_page_planning_capabilities,
     build_application_page_planning_ag_ui_stream,
@@ -53,10 +50,9 @@ from app.protocols.code_changes import (
 )
 from app.protocols.data_sources import data_sources_capabilities
 from app.protocols.endpoint_designs import endpoint_designs_capabilities
+from app.routes.authentication import router as authentication_router
 from app.routes.data_sources import data_sources_router
 from app.routes.endpoint_designs import endpoint_designs_router
-from app.routes.entity_tables import entity_tables_router
-from app.protocols.entity_tables import entity_tables_capabilities
 from app.protocols.revision_preview import (
     build_revision_preview_ag_ui_stream,
     revision_preview_capabilities,
@@ -80,10 +76,6 @@ from app.protocols.iteration_service import (
 from app.protocols.direct_modification import (
     build_conversation_ag_ui_stream,
     conversation_capabilities,
-)
-from app.protocols.temporary_chat import (
-    build_temporary_chat_ag_ui_stream,
-    temporary_chat_capabilities,
 )
 from app.protocols.execution_recovery import (
     build_execution_recovery_ag_ui_stream,
@@ -141,9 +133,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.include_router(authentication_router)
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
-app.include_router(entity_tables_router)
 
 
 class ApprovalActionRequest(BaseModel):
@@ -160,8 +152,12 @@ async def health() -> dict[str, object]:
         "backendInstanceId": current_backend_instance().instance_id,
         "provider": settings.model_provider,
         "model": settings.model_api_name,
-        "configured_model": settings.model_name,
-        "base_url": settings.model_base_url,
+        "model_transmit": {
+            "url": settings.model_transmit_url,
+            "transport": "ag-ui-sse",
+            "modelInfoEndpoint": "/model-info/run",
+            "inferenceEndpoint": "/model-inference/run",
+        },
         "builtin_skills": available_builtin_skills(),
         "observability": {
             "langsmith": {
@@ -172,10 +168,10 @@ async def health() -> dict[str, object]:
         },
         "database_encryption": database_encryption_metadata(),
         "tools": {
+            "authentication": {"endpoint": "/authentication/run", "transport": "ag-ui-sse", "workflowIndependent": True, "actions": ["initialize", "login", "status", "cancel", "logout", "shutdown", "request"], "credentialStorage": "encrypted-environment-file", "expiresAtUnit": "unix-seconds"},
             "workflow_run": workflow_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
             "application_lifecycle": application_lifecycle_capabilities(),
-            "application_config": application_config_capabilities(),
             "application_development_planning": application_development_planning_capabilities(),
             "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
@@ -183,7 +179,6 @@ async def health() -> dict[str, object]:
             "preview_runtime": preview_runtime_capabilities(),
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
-            "entity_tables": entity_tables_capabilities(),
             "code_changes": code_changes_capabilities(),
             "revision_preview": revision_preview_capabilities(),
             "version_control": version_control_capabilities(),
@@ -191,7 +186,6 @@ async def health() -> dict[str, object]:
             "repository_branch": repository_branch_capabilities(),
             "iteration_service": iteration_service_capabilities(),
             "conversation": conversation_capabilities(),
-            "temporary_chat": temporary_chat_capabilities(),
             "execution_recovery": execution_recovery_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
@@ -209,20 +203,6 @@ async def run_application_page_planning(
             payload=input_data,
             accept=accept,
         ),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/application-config/run")
-async def run_application_config(
-    input_data: dict[str, Any] = Body(...),
-    accept: Optional[str] = Header(default="text/event-stream"),
-) -> StreamingResponse:
-    """通过独立 AG-UI 动作流预览、提交或读取应用配置操作。"""
-
-    return StreamingResponse(
-        build_application_config_ag_ui_stream(payload=input_data, settings=settings, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -442,20 +422,6 @@ async def run_conversation(
 
     return StreamingResponse(
         build_conversation_ag_ui_stream(payload=input_data, accept=accept),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@app.post("/temporary-chat/run")
-async def run_temporary_chat(
-        input_data: dict[str, Any] = Body(...),
-        accept: Optional[str] = Header(default="text/event-stream"),
-) -> StreamingResponse:
-    """运行独立只读临时对话 AG-UI 流。"""
-
-    return StreamingResponse(
-        build_temporary_chat_ag_ui_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -27,7 +27,6 @@ import {
   resolveBranchChain
 } from '../service/applicationBranches'
 import { publishVersion } from '../service/versionPublish'
-import { summarizeVersionControl } from '../service/versionControl'
 import { startIteration } from '../service/iterationService'
 import { asMessageClause, createRepositoryBranch } from '../service/repositoryBranch'
 import type {
@@ -39,13 +38,11 @@ import type {
   ApplicationBranch,
   ApplicationConfig,
   ApplicationLifecycle,
-  ApplicationPlanningDebugStage,
   DevelopmentPlanningApiContract,
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageTreeNode,
   DevelopmentPlanningPageOption,
   EditorMode,
-  WorkflowDebugOptions,
   WorkflowClarificationAnswers,
   WorkflowDesignStageRevisionStart,
   WorkflowRunPayload
@@ -66,8 +63,7 @@ type Props = {
     answers: WorkflowClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
-    designChangeRequest?: string,
-    technicalPlanningConversation?: boolean
+    designChangeRequest?: string
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
   onIterationStarted: (
@@ -75,12 +71,7 @@ type Props = {
     threadId: string,
     lifecycle: ApplicationLifecycle
   ) => void
-  onStartIterationPlanning: (
-    applicationId: string,
-    request: string,
-    workflowDebug?: WorkflowDebugOptions,
-    debugStage?: ApplicationPlanningDebugStage
-  ) => Promise<void>
+  onStartIterationPlanning: (applicationId: string, request: string) => Promise<void>
   onRevisionContinuationHandlerChange: (
     handler?: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
   ) => void
@@ -162,6 +153,7 @@ function WorkbenchPage({
   const [chatSessionHistoryReady, setChatSessionHistoryReady] = useState(false)
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
+  const [rightPanelOpen, setRightPanelOpen] = useState(true)
   // —— 应用分支（提交并推送/发起新迭代/切换分支）状态 ——
   // 当前查看的分支名；为空时取当前分支（branchName）。
   const [viewingBranchName, setViewingBranchName] = useState<string>('')
@@ -169,8 +161,6 @@ function WorkbenchPage({
   const [versionGenerating, setVersionGenerating] = useState<{ stepIndex: number } | null>(null)
   // 提交推送弹框：变更说明草稿。
   const [publishDescription, setPublishDescription] = useState('')
-  // 提交推送弹框：是否正在根据本次改动生成变更说明（生成期间弹窗照常可用）。
-  const [descriptionGenerating, setDescriptionGenerating] = useState(false)
   // 提交推送弹框是否开启。
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   // 发起新迭代弹框是否开启。
@@ -192,7 +182,7 @@ function WorkbenchPage({
     (reason: string): void => {
       if (entryStageRef.current !== 'loading' || entryFailureHandledRef.current) return
       entryFailureHandledRef.current = true
-      message.error(`工作台加载失败，已返回首页。`)
+      message.error(`工作台加载失败，已返回首页：${reason}`)
       onEntryLoadFailure()
     },
     [onEntryLoadFailure]
@@ -261,26 +251,10 @@ function WorkbenchPage({
         if (!inspection.ready) {
           console.warn('工作区规划产物不完整。', inspection)
           if (lifecycleReadyForWorkbench) {
-            // 冷启动缓存可能仍是开发就绪，而正式修订已把磁盘产物转为待确认；以当前生命周期决定入口，避免误报损坏。
-            const currentLifecycle = await getApplicationLifecycle({
-              workspaceRoot: application.workspaceRoot,
-              id: application.id,
-              appName: application.appName
-            })
-            if (!active) return
-            onApplicationLifecycleChange(currentLifecycle)
-            if (!isApplicationCreationComplete(currentLifecycle)) return
-            const artifactNames: Record<string, string> = {
-              'requirement-spec': '需求文档', 'product-plan': '产品计划', 'technical-plan': '技术规划'
-            }
-            // 入口提示只显示业务产物名称，文件路径留在诊断日志和恢复卡详情中。
-            const details = [...new Set([...inspection.missing, ...inspection.invalid].map(
-              (path) => artifactNames[path.split('/').pop()?.replace(/\.(json|md)$/, '') || ''] || '规划文档'
-            ))].join('、')
-            // 业务产物损坏需要进入工作台修复；不能返回首页并把重新生成入口一起卸载。
-            message.warning(details
-              ? `规划文件缺失或不完整：${details}。执行时会提供对应步骤的重新生成入口。`
-              : '规划文件不完整。执行时会提供对应步骤的重新生成入口。')
+            const details = [...inspection.missing, ...inspection.invalid].join('、')
+            failWorkbenchEntry(
+              details ? `工作区规划产物缺失或损坏：${details}` : '工作区规划产物不完整。'
+            )
           }
         }
       } catch (error) {
@@ -305,7 +279,7 @@ function WorkbenchPage({
       active = false
       window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, onApplicationLifecycleChange, planningRefreshRevision])
+  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, planningRefreshRevision])
 
   useEffect(() => {
     let active = true
@@ -333,9 +307,7 @@ function WorkbenchPage({
     if (!applicationLifecycle) return
     setWorkspaceApplication((prev) => {
       if (prev.branches && prev.branches.length > 0) return prev
-      // 兜底分支名与新建表单默认值保持一致（公司内 Gitee 只允许字母、数字、下划线，
-      // 所以是 v1_0 而不是 v1.0）。
-      const branchName = prev.branchName || 'v1_0'
+      const branchName = prev.branchName || 'v1.0'
       const initialBranch = createInitialBranch(branchName, applicationLifecycle, Date.now())
       return { ...prev, branches: [initialBranch], branchName: initialBranch.name }
     })
@@ -450,44 +422,12 @@ function WorkbenchPage({
 
   const autoPublishShownRef = useRef(false)
 
-  // 生成期间用户是否已经动过输入框。生成是异步的，用户可能在模型返回前就先打字；
-  // 那种情况下不能拿模型结果覆盖他写的内容。
-  const descriptionEditedRef = useRef(false)
-
-  // 变更说明的手写入口：标记已编辑，之后模型返回不再覆盖。
-  const handleDescriptionChange = useCallback((value: string): void => {
-    descriptionEditedRef.current = true
-    setPublishDescription(value)
-  }, [])
-
-  /** 弹窗打开后按本次改动生成变更说明，预填进输入框。
-   *
-   * 不阻塞弹窗：先照旧打开，生成结果回来了再填。生成不出来（空串）或请求失败都保持
-   * 空框让用户自己写 —— 生成只是便利，不能把用户挡在提交之外。
-   */
-  const requestDescriptionDraft = useCallback((workspaceRoot: string): void => {
-    if (!workspaceRoot) return
-    setDescriptionGenerating(true)
-    void summarizeVersionControl(workspaceRoot)
-      .then((generated) => {
-        if (generated && !descriptionEditedRef.current) {
-          setPublishDescription(generated)
-        }
-      })
-      .catch(() => {
-        // 生成失败静默降级：留空框即可，不额外弹提示打扰提交流程。
-      })
-      .finally(() => setDescriptionGenerating(false))
-  }, [])
-
   // 打开提交并推送弹框。
   const handleOpenPublish = useCallback((): void => {
     setPublishDescription('')
     setVersionGenerating(null)
     setPublishModalOpen(true)
-    descriptionEditedRef.current = false
-    requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
-  }, [requestDescriptionDraft, workspaceApplication.workspaceRoot])
+  }, [])
 
   // 进入工作台时若当前迭代已可发布，视为自动弹框已消费（避免一进来就打断阶段回看）；
   // 仅本会话内旅程推进到可发布时才自动弹出发布弹框。
@@ -504,10 +444,7 @@ function WorkbenchPage({
       autoPublishShownRef.current = true
       setPublishDescription('')
       setPublishModalOpen(true)
-      descriptionEditedRef.current = false
-      requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionReleasable])
 
   // 确认提交并推送：调后端真实 git 提交并推送到当前分支，三步进度实时推进。
@@ -746,6 +683,8 @@ function WorkbenchPage({
                 onReturnWelcome={onReturnWelcome}
                 lifecycle={topBarLifecycle}
                 developmentTotals={topBarDevelopmentTotals}
+                rightPanelOpen={rightPanelOpen}
+                onToggleRightPanel={() => setRightPanelOpen((open) => !open)}
                 theme={theme}
                 onThemeChange={handleThemeChange}
                 onPublishBranch={handleOpenPublish}
@@ -756,6 +695,7 @@ function WorkbenchPage({
                 }}
                 onBranchSelect={handleBranchSelect}
                 viewingBranchName={viewingBranchName}
+                versionReadOnly={viewingHistoricalVersion}
               />
               <div className={cx('workbench-shell-body')}>
                 <LeftPanel
@@ -778,13 +718,8 @@ function WorkbenchPage({
                   onReturnWelcome={onReturnWelcome}
                   onSubmitPlanningClarification={onSubmitPlanningClarification}
                   onStartDesignStageRevision={onStartDesignStageRevision}
-                  onStartIterationPlanning={(request, workflowDebug, debugStage) =>
-                    onStartIterationPlanning(
-                      workspaceApplication.id,
-                      request,
-                      workflowDebug,
-                      debugStage
-                    )
+                  onStartIterationPlanning={(request) =>
+                    onStartIterationPlanning(workspaceApplication.id, request)
                   }
                   onRevisionContinuationHandlerChange={onRevisionContinuationHandlerChange}
                   onPlanningStreamReady={onPlanningStreamReady}
@@ -798,6 +733,8 @@ function WorkbenchPage({
                   onRetryTemplateReconcile={onRetryTemplateReconcile}
                   planningState={planningState}
                   theme={theme}
+                  rightPanelOpen={rightPanelOpen}
+                  onRightPanelOpenChange={setRightPanelOpen}
                   // 只读双 tab 只针对回看历史分支（非当前分支）。
                   versionReadOnly={viewingHistoricalVersion}
                   // 该分支名：历史分支的应用文件与预览都按它读取当时的内容。
@@ -816,8 +753,7 @@ function WorkbenchPage({
                   : undefined
               }
               publishDescription={publishDescription}
-              descriptionGenerating={descriptionGenerating}
-              onDescriptionChange={handleDescriptionChange}
+              onDescriptionChange={setPublishDescription}
               generating={versionGenerating}
               onCancelPublish={() => {
                 if (versionGenerating) return

@@ -427,9 +427,7 @@ def _carried_ui_page_manifest(
     if not code:
         # 目录被清掉或写入失败：没有代码可继承。
         return None
-    # 用户可能在 UI 调整时主动删除某些板块/操作，继承已确认设计稿时放宽 missing 检查，
-    # 只校验越界与语法错误，避免把用户刻意删减后的设计稿误判为"对不上"而退回未生成。
-    if validate_ui_design_code(page, code, allow_missing=True):
+    if validate_ui_design_code(page, code):
         return None
     return build_ui_page_manifest(
         page,

@@ -183,4 +183,4 @@ def _download(path: Path) -> TemplatePackageDownload:
 def _settings() -> Settings:
     """构造不访问网络的最小 Template Engine 配置。"""
 
-    return Settings(model_base_url="http://model", model_api_key="key", model_name="model", template_engine_base_url="http://engine")
+    return Settings(model_transmit_url="http://127.0.0.1:8100", template_engine_base_url="http://engine")

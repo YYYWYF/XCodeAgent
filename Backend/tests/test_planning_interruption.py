@@ -56,7 +56,7 @@ class PlanningInterruptionTests(unittest.IsolatedAsyncioTestCase):
         await controller.apply(CandidateReady(candidate=candidate, at=AT))
         return controller
 
-    async def retry(self, inputs=None, *, source="source", interrupted=True, workflow="child"):
+    async def retry(self, inputs=None):
         """以新 execution 调用真实主线服务，并记录实际模型 Unit 调用。"""
 
         generated = []
@@ -72,25 +72,12 @@ class PlanningInterruptionTests(unittest.IsolatedAsyncioTestCase):
 
         current = MainlinePlanningInputs.model_validate({
             **(inputs or self.inputs).model_dump(mode="python"),
-            "owner_session_id": "owner", "thread_id": "thread", "workflow_run_id": workflow,
+            "owner_session_id": "owner", "thread_id": "thread", "workflow_run_id": "child",
         })
         result = await run_mainline_planning(current, workspace_state=self.state,
             policy=self.policy, generate_once=generate,
-            recovery_source_workflow_run_id=source, recovery_interrupted=interrupted)
+            recovery_source_workflow_run_id="source", recovery_interrupted=True)
         return result, generated
-
-    async def test_business_retry_reuses_validated_candidates_after_graph_failure(self):
-        """候选和 Pending 已落盘后 Graph 失败，业务重试不再调用模型且仍需重新确认。"""
-
-        first, generated = await self.retry(source=None, workflow="source")
-        self.assertEqual(set(generated), {"page:a", "page:b"})
-        snapshot = load_planning_interruption(self.state, "source")
-        self.assertEqual(set(snapshot.candidates_by_unit), {"page:a", "page:b"})
-        retried, generated = await self.retry(interrupted=False)
-        self.assertEqual(generated, [])
-        self.assertNotEqual(first.planning_run_id, retried.planning_run_id)
-        self.assertEqual(retried.terminal_status, "pending_confirmation")
-        self.assertEqual(first.pending_plan["task_registry"], retried.pending_plan["task_registry"])
 
     async def test_interruption_reuses_ready_sibling_and_keeps_confirmation(self):
         """中断读取已落盘候选，只生成缺失 Unit，最终仍停在 Pending 确认门。"""
