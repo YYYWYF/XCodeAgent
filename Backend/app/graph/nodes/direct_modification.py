@@ -46,7 +46,7 @@ from app.services.revision_routing import (
     build_small_task_revision_confirmation,
     route_from_change_impact,
 )
-from app.services.application_config_prerequisite import analyze_application_config_prerequisite
+from app.services.application_config_prerequisite import analyze_application_config_prerequisite, business_request_for_routing
 from app.services.access_control_intent import has_explicit_business_access_control_change, has_explicit_capability_change
 from app.services.application_config.schema import ApplicationConfigError
 from app.services.test_validation import evaluate_quality_gate
@@ -90,14 +90,17 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
     elif config_resume == "applied" and isinstance(cached_decision, dict) and cached_decision:
         # 配置确认后只恢复第一次分类结果，绝不重新让模型改写原主业务意图。
         decision = DirectModificationDecision(**cached_decision)
-    elif config_analysis is not None and config_analysis.requires_card and not config_analysis.business_request_required:
+    elif config_analysis is not None and config_analysis.config_route in {"awaiting_config_confirmation", "config_only_satisfied"} and not config_analysis.business_request_required:
         decision = DirectModificationDecision(
             intent="clarification", owner="unknown", scope="clarification", confidence=1.0,
             reason="仅需应用配置更新。", clarification_question="",
         )
     else:
+        # 混合请求保留完整原文用于 checkpoint 恢复；分类只看剥离后的业务子意图，
+        # 防止“主题色”这类全局配置词把新增页面错误归为前端微调。
+        routing_request = business_request_for_routing(request) if config_analysis is not None and config_analysis.business_request_required else request
         decision = classify_direct_modification_intent(
-            user_request=request,
+            user_request=routing_request,
             conversation_summary=str(state.get("direct_modification_summary") or ""),
             workspace_snapshot=_workspace_snapshot_for_classification(state),
             on_response_delta=_conversation_text_delta_writer(),
@@ -183,6 +186,11 @@ def classify_direct_modification(state: ProjectState) -> dict[str, Any]:
                 "application_config_prerequisite": {**pending, "status": "RESUMED"},
                 "clarification": {},
             }
+    if config_analysis is not None and config_analysis.config_route == "config_only_satisfied":
+        return {
+            **base, "status": "completed", "message": "应用配置已满足，无需修改。",
+            "application_config_resume": "consumed", "clarification": {},
+        }
     if config_analysis is not None and config_analysis.conflict:
         return {**base, "status": "failed", "message": config_analysis.conflict, "clarification": {}}
     if config_analysis is not None and config_analysis.requires_card:

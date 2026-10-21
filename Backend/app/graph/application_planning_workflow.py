@@ -53,7 +53,6 @@ from app.services.application_revision_lifecycle import (
     update_active_revision_progress,
 )
 from app.config import Settings
-from app.services.artifact_invalidation import canonical_sha256
 from app.services.template_reconcile.finalization import (
     claim_template_reconcile_finalization,
     mark_template_reconcile_failed,
@@ -61,7 +60,6 @@ from app.services.template_reconcile.finalization import (
 from app.services.template_reconcile.service import (
     TemplateReconcileService,
 )
-from app.services.template_reconcile.runtime_v2 import load_current_attempt
 from app.services.template_reconcile.template_preparation import (
     template_preparation_projection_v2,
 )
@@ -70,7 +68,6 @@ from app.services.application_planning_generation_lifecycle import ensure_genera
 from app.services.template_scaffold_injection import (
     inject_deterministic_backend_skeleton,
 )
-from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
 from app.workspace.plan_documents import technical_plan_json_path
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.workflow_reentry import workflow_entry
@@ -759,8 +756,6 @@ def _reconcile_revision_template_capabilities(workspace: str, change_id: str) ->
     """在二次 TechnicalPlan 确认后、Skeleton 前执行一次受开关保护的模板能力补充。"""
 
     settings = Settings.from_env()
-    if not settings.template_reconcile_enabled:
-        return
     plan_path = Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
     claim = claim_template_reconcile_finalization(
         workspace,
@@ -769,25 +764,9 @@ def _reconcile_revision_template_capabilities(workspace: str, change_id: str) ->
     )
     if not claim.acquired:
         raise ApplicationLifecycleConflictError("Template Reconcile 已在执行或等待后续收口，不能重复触发。")
-    try:
-        requested_config = compile_template_requested_config(workspace)
-        service = TemplateReconcileService(settings)
-        arguments = {
-            "workspace": workspace,
-            "change_id": change_id,
-            "requested_config": requested_config,
-            "technical_plan_sha256": canonical_sha256(plan_path),
-            # 正常 Template Preparation 始终请求 Engine APPLY；RECONCILE 仅由显式 Repair 调用。
-            "mode": "APPLY",
-        }
-        # 用户从 template_reconcile_failed 恢复时必须产生新 Attempt；运行中 Attempt 才走 crash recovery。
-        if (attempt := load_current_attempt(workspace)) is not None and attempt.status == "FAILED" and attempt.phase == "FAILED":
-            asyncio.run(service.retry_template_preparation(**arguments))
-        else:
-            asyncio.run(service.reconcile(**arguments))
-    except Exception:
-        # 外层同时覆盖 Skeleton 失败，并统一把 active revision 标记为可重试失败。
-        raise
+    # V4 Ensure 只以 application.json Desired 和 template-state.json Applied 决定是否调用引擎。
+    # 因而 Skeleton 失败后的重试会得到 NO_CHANGE，不会重放 Capability 安装。
+    asyncio.run(TemplateReconcileService(settings).reconcile_capabilities(workspace))
 
 
 def _sync_design_revision_artifact(

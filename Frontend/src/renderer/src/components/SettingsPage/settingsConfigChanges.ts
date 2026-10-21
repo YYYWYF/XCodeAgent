@@ -12,6 +12,49 @@ export type ApplySettingsConfigChanges = (
   changes: ConfigChanges
 ) => Promise<ConfigOperation>
 
+/** 把后端返回的已安装能力转换为用户可核对的工程代码变更说明。 */
+function capabilityEffectMessage(capabilities: string[] | undefined): string | undefined {
+  const labels = [...new Set(capabilities || [])]
+    .map((capability) => ({ login: '登录', authorization: '权限' }[capability]))
+    .filter((label): label is string => Boolean(label))
+  return labels.length ? `已向工程注入${labels.join('、')}能力相关代码。` : undefined
+}
+
+/** 汇总已实际写入工程的配置副作用，未知文件也必须向用户展示其路径。 */
+export function configOperationEffectMessages(operation: ConfigOperation | undefined): string[] {
+  const messages = [capabilityEffectMessage(operation?.installedCapabilities)].filter(
+    (message): message is string => Boolean(message)
+  )
+  for (const file of [...new Set(operation?.changedFiles || [])]) {
+    if (file === 'frontend/.env') {
+      messages.push('已更新 frontend/.env；请重新构建或重启前端服务以加载新配置。')
+    } else if (file === 'backend/src/main/resources/application.yml') {
+      messages.push('已更新 application.yml；请重启后端服务以加载新配置。')
+    } else {
+      messages.push(`已更新工程文件：${file}。`)
+    }
+  }
+  return messages
+}
+
+/** 在配置失败时说明哪些工程变更未能确认完成，避免将部分写入误报为成功。 */
+export function configOperationFailureMessage(error: unknown, changes: ConfigChanges): string {
+  const reason = error instanceof Error ? error.message : '应用配置提交失败，请重试。'
+  const pending: string[] = []
+  if (Object.keys(changes).some((path) => path === 'auth.enable' || path.startsWith('auth.yht.'))) {
+    pending.push('登录相关工程配置')
+  }
+  if ('authorization.enabled' in changes) pending.push('权限能力代码')
+  return pending.length
+    ? `应用配置提交失败：${reason}。以下工程变更未能确认完成：${pending.join('、')}。`
+    : `应用配置提交失败：${reason}`
+}
+
+/** 汇总设置保存后的工程同步提醒，确保界面一次只显示一个反馈弹框。 */
+export function settingsSaveNoticeMessages(operation: ConfigOperation | undefined): string[] {
+  return ['应用配置已保存。', ...configOperationEffectMessages(operation)]
+}
+
 /** 从设置表单提取应用配置白名单字段，避免提交整份旧 application.json。 */
 export function settingsConfigChanges(current: ApplicationConfig, next: ApplicationConfig): ConfigChanges {
   const changes: ConfigChanges = {}

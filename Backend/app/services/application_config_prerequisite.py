@@ -26,6 +26,16 @@ class ConfigPrerequisiteAnalysis:
     conflict: str | None = None
 
     @property
+    def config_route(self) -> str:
+        """返回配置意图的明确路由，避免用 requires_card 猜测是否命中配置。"""
+
+        if self.requires_card:
+            return "awaiting_config_confirmation"
+        if _has_config_request(self.original_request) and not self.business_request_required:
+            return "config_only_satisfied"
+        return "business_continuation" if self.business_request_required else "not_applicable"
+
+    @property
     def requires_card(self) -> bool:
         """只有尚未满足的显式或隐含目标需要配置卡。"""
 
@@ -61,8 +71,22 @@ def analyze_application_config_prerequisite(request: str, workspace: str | Path)
             explicit.append({"path": "appName", "desiredValue": name, "source": "explicit"})
             if name:
                 suggested["appName"] = name
+    theme_intent = _theme_color_intent(request)
+    if theme_intent is not None:
+        desired = theme_intent["desiredValue"]
+        if desired is None or desired.casefold() != str(application["theme"]["primaryColor"]).casefold():
+            explicit.append(theme_intent)
+            if desired is not None:
+                suggested["theme.primaryColor"] = desired
+    icon_intent = _app_icon_intent(request)
+    if icon_intent is not None:
+        desired = icon_intent["desiredValue"]
+        if desired is None or desired != application.get("appIcon"):
+            explicit.append(icon_intent)
+            if desired is not None:
+                suggested["appIcon"] = desired
     business_access = has_explicit_business_access_control_change(request)
-    business_required = business_access or bool(re.search(r"新增|增加|创建|开发|实现|修改|调整|修复|查询|页面|接口|按钮", request) and not _pure_config_request(request))
+    business_required = business_access or _has_remaining_business_request(request)
     prerequisites: list[dict[str, Any]] = []
     if business_access and "authorization" not in installed and not application["authorization"]["enabled"]:
         if any(intent.path == "authorization.enabled" and not intent.enabled for intent in raw_intents) or re.search(r"(?:不要|不想|禁止|不能)\s*(?:开启|启用)?\s*(?:权限|授权)", request):
@@ -89,13 +113,48 @@ def analyze_application_config_prerequisite(request: str, workspace: str | Path)
     )
 
 
-def _pure_config_request(request: str) -> bool:
-    """只为有限的纯配置短句省略业务分类，混合任务保持主路由。"""
+def _theme_color_intent(request: str) -> dict[str, Any] | None:
+    """从应用级主题表达提取受管颜色；页面或组件作用域不属于应用配置。"""
 
-    text = request.strip()
-    return bool(re.fullmatch(
-        r"(?:把|将)?(?:应用|系统)?(?:名称|名字)(?:改为|修改为|设为|设置为|改成)\s*[^，,。；;\s]+|"
-        r"(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|"
-        r"(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)",
-        text,
-    ))
+    if not re.search(r"(?:应用|系统|全局)?(?:主题色|主题颜色|主色)", request):
+        return None
+    if re.search(r"(?:页面|首页|卡片|按钮|组件|模块).{0,12}(?:主题色|主题颜色|主色|颜色)", request):
+        return None
+    hex_match = re.search(r"#([0-9a-fA-F]{6})\b", request)
+    if hex_match:
+        value: str | None = f"#{hex_match.group(1).lower()}"
+    elif re.search(r"蓝色|蓝", request):
+        value = "#1677ff"
+    else:
+        value = None
+    return {"path": "theme.primaryColor", "desiredValue": value, "source": "explicit", "valueStatus": "resolved" if value else "needs_user_selection"}
+
+
+def _app_icon_intent(request: str) -> dict[str, Any] | None:
+    """只映射现有图标选项，未知图标要求用户在配置卡选择。"""
+
+    match = re.search(r"(?:应用|系统)?图标(?:改为|修改为|设为|设置为|改成)\s*([^，,。；;\s]+)", request, re.IGNORECASE)
+    if match is None:
+        return None
+    aliases = {"dashboard": "DashboardOutlined", "仪表盘": "DashboardOutlined", "appstore": "AppstoreOutlined", "应用商店": "AppstoreOutlined", "desktop": "DesktopOutlined", "桌面": "DesktopOutlined"}
+    value = aliases.get(match.group(1).casefold())
+    return {"path": "appIcon", "desiredValue": value, "source": "explicit", "valueStatus": "resolved" if value else "needs_user_selection"}
+
+
+def _has_config_request(request: str) -> bool:
+    """判断文本是否包含本模块负责的应用配置语义，即使目标当前已满足。"""
+
+    return bool(_theme_color_intent(request) or _app_icon_intent(request) or re.search(r"(?:应用|系统)?(?:名称|名字)(?:改为|修改为|设为|设置为|改成)|(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", request))
+
+
+def _has_remaining_business_request(request: str) -> bool:
+    """移除配置子句后检查独立业务对象，通用“修改”本身不再制造业务需求。"""
+
+    return bool(re.search(r"新增|增加|创建|开发|实现|修复|查询|页面|接口|按钮|功能", business_request_for_routing(request)))
+
+
+def business_request_for_routing(request: str) -> str:
+    """仅抽出混合请求中的非配置部分供分类，不改变 checkpoint 保存的原始请求。"""
+
+    text = re.sub(r"(?:把|将)?(?:应用|系统)?(?:主题色|主题颜色|主色|图标|名称|名字)(?:改为|修改为|设为|设置为|改成).*?(?=(?:，|,|。|；|;|并|同时|然后)|$)", "", request, flags=re.IGNORECASE)
+    return re.sub(r"(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", "", text).strip(" ，,；;")

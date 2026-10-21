@@ -7,13 +7,14 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main import requirements_analyzer
 from app.graph.application_planning_workflow import (
     _reconcile_confirmed_revision,
+    _reconcile_revision_template_capabilities,
     _technical_planning,
     _requirements,
     _route_requirements,
@@ -48,6 +49,7 @@ from app.services.application_revision_lifecycle import (
 from app.services.template_reconcile.finalization import (
     claim_template_reconcile_finalization,
 )
+from app.services.template_reconcile.service import TemplateReconcileService
 from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
 from app.workspace.spec_documents import (
@@ -875,6 +877,23 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
             self.assertTrue(result["template_reconcile_pending"])
             self.assertEqual(result["application_planning_interaction"], {})
+
+            # 正式修订模板节点只执行 V4 Ensure；不能再依赖 TechnicalPlan SHA、V3
+            # requestedConfig 或 template-preparation retry attempt。
+            ensure = AsyncMock(return_value="NO_CHANGE")
+            with patch(
+                "app.graph.application_planning_workflow.Settings.from_env",
+                return_value=SimpleNamespace(template_reconcile_enabled=True),
+            ), patch(
+                "app.graph.application_planning_workflow.claim_template_reconcile_finalization",
+                return_value=SimpleNamespace(acquired=True),
+            ), patch.object(
+                TemplateReconcileService,
+                "reconcile_capabilities",
+                ensure,
+            ):
+                _reconcile_revision_template_capabilities(str(workspace), active.change_id)
+            ensure.assert_awaited_once_with(str(workspace))
 
             def failing_reconcile(root: str, change_id: str) -> None:
                 """模拟已取得 Reconcile 进入权后 Engine 更新失败。"""

@@ -10,6 +10,7 @@ import {
 import { initialApplicationDraft } from '../src/renderer/src/components/Welcome/constants'
 import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/utils'
 import { settingsConfigChanges } from '../src/renderer/src/components/SettingsPage/settingsConfigChanges'
+import { capabilityToggleDisabled } from '../src/renderer/src/components/Welcome/ApplicationConfigEditor'
 
 /** 验证新建表单只生成当前 v6 的内置权限种子，并清理重复成员标识。 */
 test('生成 schemaVersion 6 权限配置', () => {
@@ -41,6 +42,12 @@ test('生成一号通登录初始配置', () => {
     yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '' }
   })
   assert.equal('authnSource' in schema.auth, false)
+})
+
+test('应用设置只锁定已写入工程的登录和权限能力开关', () => {
+  assert.equal(capabilityToggleDisabled(true), true)
+  assert.equal(capabilityToggleDisabled(false), false)
+  assert.equal(capabilityToggleDisabled(false, true), true)
 })
 
 /** 验证首轮规划请求只携带当前权限开关和管理员种子，不携带 provider 或页面开关。 */

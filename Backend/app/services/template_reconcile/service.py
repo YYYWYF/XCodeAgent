@@ -1,4 +1,4 @@
-"""执行当前唯一支持的 Template Capability Reconcile V3 编排。"""
+"""执行历史 V3 更新与当前 V4 Capability Ensure 编排。"""
 from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
@@ -19,7 +19,7 @@ from app.services.workspace_bootstrap.models import ArchiveLimits, TemplateState
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 
 class TemplateReconcileService:
-    """以 V3 Update Package 收敛 Capability，全部 Operation 成功后才提交 State。"""
+    """以受校验的更新包收敛 Capability，全部 Operation 成功后才提交 State。"""
     def __init__(self, settings: Settings) -> None:
         """保存 Template Engine 连接与 ZIP 限额。"""
         self._settings = settings
@@ -27,17 +27,34 @@ class TemplateReconcileService:
     async def reconcile_capabilities(self, workspace: str | Path) -> str:
         """从 canonical application.json 安装缺失能力，不读取 TechnicalPlan 或计算摘要。"""
 
+        root = Path(workspace).expanduser().resolve()
+        # 先以两个 canonical 文件做纯本地判定：已满足时不得创建 Client、访问网络或改写 State。
+        desired = compile_template_capabilities(read_application_config(root))
+        current = load_template_state_v3(root)
+        applied = {
+            name: capability.model_dump(mode="json")
+            for name, capability in current.effective.items()
+        }
+        if set(applied) - set(desired):
+            raise TemplateStateError("CAPABILITY_REMOVAL_UNSUPPORTED：已安装能力不能关闭。")
+        # 名称相同但配置不同仍需要 Engine 明确收敛，不能误报为已满足。
+        if applied == desired:
+            return "NO_CHANGE"
         if not self._settings.template_reconcile_enabled:
             raise TemplateStateError("TEMPLATE_RECONCILE_DISABLED：模板能力增量更新功能尚未开启。")
-        root = Path(workspace).expanduser().resolve()
         recover_v4_transaction(root)
-        current = load_template_state_v3(root)
+        # 恢复事务可能已完成上次安装；两个 canonical 输入都重新读取，不能沿用旧快照。
         desired = compile_template_capabilities(read_application_config(root))
-        installed = set(current.effective)
-        if installed - set(desired):
+        current = load_template_state_v3(root)
+        applied = {
+            name: capability.model_dump(mode="json")
+            for name, capability in current.effective.items()
+        }
+        if set(applied) - set(desired):
             raise TemplateStateError("CAPABILITY_REMOVAL_UNSUPPORTED：已安装能力不能关闭。")
-        if set(desired) <= installed:
+        if applied == desired:
             return "NO_CHANGE"
+        installed = set(applied)
         requested = {"capabilities": desired}
         client = TemplateEngineClient(
             base_url=self._settings.template_engine_base_url,
@@ -54,7 +71,11 @@ class TemplateReconcileService:
             if package.mode != "APPLY" or package.sourceRevision != current.templateRevision or package.expectedStateSequence != current.stateSequence:
                 raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 包未绑定当前 State。")
             next_state = package.nextTemplateState
-            if next_state.stateSequence != current.stateSequence + 1 or not set(desired) <= set(next_state.effective) or installed - set(next_state.effective):
+            next_applied = {
+                name: capability.model_dump(mode="json")
+                for name, capability in next_state.effective.items()
+            }
+            if next_state.stateSequence != current.stateSequence + 1 or next_applied != desired or installed - set(next_applied):
                 raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 能力或 State 序列无效。")
             store = WorkingCopyStoreV3(root)
             UpdatePackageExecutorV3().execute(package, store, validated.payloads)
