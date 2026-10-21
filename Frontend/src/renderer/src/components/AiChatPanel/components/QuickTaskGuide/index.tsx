@@ -24,9 +24,6 @@ import './QuickTaskStatus.less'
 const { Text, Title } = Typography
 
 type QuickTaskGuideProps = {
-  /** API 检测完成后提示用户逐个选择开发目标。 */
-  selectionRequired?: boolean
-  selectionMessage?: string
   developmentArtifacts?: DevelopmentArtifacts
   /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
   currentBranch?: string
@@ -150,8 +147,6 @@ function QuickTaskSection({
 
 /** 在空白对话区并排展示页面与接口快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
-  selectionRequired = false,
-  selectionMessage,
   developmentArtifacts,
   currentBranch,
   apiContracts,
@@ -175,11 +170,9 @@ export default function QuickTaskGuide({
           <MessageOutlined />
         </span>
         <div>
-          <Title level={3}>{selectionRequired ? '你想开发哪个页面或 API？' : '今天想从哪里开始？'}</Title>
+          <Title level={3}>今天想从哪里开始？</Title>
           <Text type="secondary">
-            {selectionRequired
-              ? selectionMessage || 'API 配置检测已通过，请选择一个具体目标开始开发。'
-              : '选择一个页面或接口开始正式任务，也可以直接在下方自由对话。'}
+            选择一个页面或接口开始正式任务，也可以直接在下方自由对话。
           </Text>
         </div>
       </header>

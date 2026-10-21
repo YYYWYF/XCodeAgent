@@ -246,6 +246,23 @@ test('完成后的闲聊不消费引导，新的修改确认、失败或暂停�
   }
 })
 
+test('API 检查后复用会话末尾卡片并保留检查结果与推荐入口', () => {
+  const html = renderToStaticMarkup(
+    <NextDevelopmentGuide
+      step={{ key: 'selection', reason: 'selection', message: '已检查 1 个已完成页面/API，1 个有变更。' }}
+      tasks={tasks}
+      disabled={false}
+      loading={false}
+      onStart={async () => undefined}
+    />
+  )
+  assert.match(html, /继续开发引导/)
+  assert.match(html, /已检查 1 个已完成页面\/API，1 个有变更/)
+  assert.match(html, /推荐下一项/)
+  assert.match(html, /查看全部页面 \/ API/)
+  assert.doesNotMatch(html, /本轮开发已完成|本轮开发已结束|quick-task-grid/)
+})
+
 test('全部完成显示暂无可开发任务，目录错误和锁定仍禁止发起新任务', () => {
   const step = developmentNextStep([message(completion())], lifecycle)!
   const html = renderToStaticMarkup(

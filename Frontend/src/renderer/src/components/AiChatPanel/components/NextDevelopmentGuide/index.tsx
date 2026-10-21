@@ -65,7 +65,9 @@ export default function NextDevelopmentGuide({
   const pendingPages = remaining.filter((task) => task.kind === 'page').length
   const pendingApis = remaining.filter((task) => task.kind === 'endpoint').length
   const statusLabel =
-    step.reason === 'completed'
+    step.reason === 'selection'
+      ? 'API 设计前置检查已完成'
+      : step.reason === 'completed'
       ? `${currentTask?.title || step.target?.label || '当前产物'}初次开发已完成`
       : '本次开发已结束'
   const blocked = disabled || loading || Boolean(catalogError) || Boolean(startingId)
@@ -117,8 +119,10 @@ export default function NextDevelopmentGuide({
           <CheckCircleOutlined />
         </span>
         <div className={cx('next-development-guide-heading-copy')}>
-          <Text strong>{step.reason === 'completed' ? '本轮开发已完成' : '本轮开发已结束'}</Text>
-          <Text type="secondary">继续完善应用，或在下方描述下一步修改。</Text>
+          <Text strong>{step.reason === 'selection' ? '你想开发哪个页面或 API？' : step.reason === 'completed' ? '本轮开发已完成' : '本轮开发已结束'}</Text>
+          <Text type="secondary">{step.reason === 'selection'
+            ? step.message || 'API 配置检测已通过，请选择一个具体目标开始开发。'
+            : '继续完善应用，或在下方描述下一步修改。'}</Text>
         </div>
         <span className={cx('next-development-guide-status')}>
           {step.reason === 'completed' ? <CheckCircleOutlined aria-hidden="true" /> : null}

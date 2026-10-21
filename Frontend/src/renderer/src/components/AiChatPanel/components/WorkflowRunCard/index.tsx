@@ -1047,7 +1047,6 @@ function RequirementSpecConfirmationCard({
   rootPath?: string
   workflow: WorkflowRunPayload
 }): ReactElement {
-  const spec = readRequirementSpec(workflow)
   // 当前审阅门要求重新确认时，旧版本的确认标记不能遮住本轮提示或冒充已确认。
   const requirementsConfirmed = !requiresConfirmation && readRequirementsConfirmed(workflow)
   const clarification = workflowClarification(workflow)

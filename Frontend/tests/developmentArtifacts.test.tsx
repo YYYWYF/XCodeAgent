@@ -21,6 +21,7 @@ import ApiOutlineGroup from '../src/renderer/src/components/AiChatPanel/componen
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
 import PlanExecutionDock from '../src/renderer/src/components/AiChatPanel/components/PlanExecutionDock'
 import QuickTaskGuide from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide'
+import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
 import { developmentCompletedCount, developmentStatusText } from '../src/renderer/src/developmentArtifacts'
 import type { ApplicationLifecycle, TestEntryGate } from '../src/renderer/src/typings'
 import type { PlanExecutionMode } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
@@ -36,13 +37,11 @@ test('修订变更状态保留首次完成事实，选择卡和目录圆点展�
   assert.match(dot, /data-status="changed"/)
   assert.match(dot, /有变更：接口参数变化/)
   const html = renderToStaticMarkup(createElement(QuickTaskGuide, {
-    selectionRequired: true, selectionMessage: '变更检查已完成，请选择目标。',
     developmentArtifacts: { pages: { orders: changed }, endpoints: {}, entities: {} },
     pages: [{ pageId: 'orders', label: '订单', path: '/orders', hasDetailPlan: true }],
     apiContracts: [], entities: [], disabled: false, loading: false, onStart: async () => undefined
   }))
-  assert.match(html, /你想开发哪个页面或 API/)
-  assert.match(html, /变更检查已完成/)
+  assert.match(html, /今天想从哪里开始/)
   assert.match(html, /有变更/)
 })
 
@@ -114,11 +113,9 @@ test('新会话卡片只显示页面和接口，不提供实体设计入口', ()
 
 test('API 检测通过后的选择卡要求具体页面或接口，支持空目标清单', () => {
   const html = renderToStaticMarkup(
-    <QuickTaskGuide
-      selectionRequired
-      pages={[]}
-      apiContracts={[]}
-      entities={[]}
+    <NextDevelopmentGuide
+      step={{ key: 'selection', reason: 'selection' }}
+      tasks={[]}
       disabled={false}
       loading={false}
       onStart={async () => undefined}
@@ -126,8 +123,9 @@ test('API 检测通过后的选择卡要求具体页面或接口，支持空目�
   )
   assert.match(html, /你想开发哪个页面或 API？/)
   assert.match(html, /API 配置检测已通过/)
-  assert.match(html, /项目计划中暂无页面/)
-  assert.match(html, /项目计划中暂无接口/)
+  assert.match(html, /暂无可开发任务/)
+  assert.match(html, /查看全部页面 \/ API/)
+  assert.doesNotMatch(html, /本轮开发已完成|本轮开发已结束|quick-task-grid/)
   assert.doesNotMatch(html, /今天想从哪里开始|整个应用/)
 })
 

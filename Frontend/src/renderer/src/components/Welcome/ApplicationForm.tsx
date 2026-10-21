@@ -68,7 +68,6 @@ export default function ApplicationForm({
   const persistedValues = initialValues ?? initialApplicationDraft
   const menusEnabled = Form.useWatch(['menus', 'enable'], form) ?? true
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? persistedValues.auth.enable
-  const themePrimaryColor = Form.useWatch(['theme', 'primaryColor'], form) ?? '#6b3cf0'
   const projectPath = Form.useWatch('projectPath', form) ?? persistedValues.projectPath
   const terminal = Form.useWatch('terminal', form) ?? persistedValues.terminal
   const repoUrl = Form.useWatch('repoUrl', form) ?? persistedValues.repoUrl

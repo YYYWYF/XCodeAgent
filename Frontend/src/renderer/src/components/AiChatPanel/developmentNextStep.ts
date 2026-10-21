@@ -9,7 +9,8 @@ import { developmentDisplayStatus } from '../../developmentArtifacts'
 
 export type DevelopmentNextStep = {
   key: string
-  reason: 'completed' | 'ended'
+  reason: 'completed' | 'ended' | 'selection'
+  message?: string
   endedRunId?: string
   workspaceUnchanged?: boolean
   target?: ChatSessionDevelopmentTarget

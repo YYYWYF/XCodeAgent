@@ -5213,17 +5213,18 @@ export default function AiChatPanel({
                   !isApplicationPlanningPhase &&
                   latestWorkflowForDisplay &&
                   workflowClarification(latestWorkflowForDisplay)?.mode === 'development_target_selection' ? (
-                    <QuickTaskGuide
-                      selectionRequired
-                      selectionMessage={workflowClarification(latestWorkflowForDisplay)?.message}
-                      developmentArtifacts={applicationLifecycle?.developmentArtifacts}
-                      currentBranch={application.branchName}
-                      apiContracts={developmentPlanningApiContracts}
+                    <NextDevelopmentGuide
+                      key={latestWorkflowForDisplay.runId}
+                      step={{
+                        key: latestWorkflowForDisplay.runId,
+                        reason: 'selection',
+                        message: workflowClarification(latestWorkflowForDisplay)?.message
+                      }}
+                      tasks={nextDevelopmentTasks}
                       disabled={loading || workflowInputLocked || otherSessionExecutionLocked}
-                      entities={developmentPlanningEntities}
                       loading={loadingSessions || !developmentPlanningReady}
+                      catalogError={applicationLifecycle?.developmentArtifacts?.catalogError}
                       onStart={handleNextDevelopmentStart}
-                      pages={displayedPlanningPages}
                     />
                   ) : nextDevelopmentStep ? (
                   <NextDevelopmentGuide

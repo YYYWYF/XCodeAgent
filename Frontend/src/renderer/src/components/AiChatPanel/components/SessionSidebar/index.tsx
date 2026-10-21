@@ -129,7 +129,6 @@ export default function SessionSidebar({
   onShowDataSources,
   onShowExternalApis,
   onShowSettings,
-  onShowSkills,
   outlineLocked,
   pages,
   pageTree,
@@ -141,7 +140,6 @@ export default function SessionSidebar({
   sessionRunStates,
   sessions,
   settingsActive,
-  skillsActive,
   historyEnabled,
   theme,
   workspaceRoot
