@@ -159,6 +159,9 @@ export default function UiDesignConfirmationPanel({
   const templates = useMemo(() => getAvailableTemplates(), [])
   // 正在为哪个页面挑选模板（pageId，null=关闭模板选择弹窗）。
   const [templatePickerFor, setTemplatePickerFor] = useState<string | null>(null)
+  // 模板选择弹窗中悬浮预览的模板图片 url（null=不显示放大浮层）。
+  // hover 模板缩略图时设置，离开时清空；仅用于视觉放大，不改变卡片点击=选模板的行为。
+  const [templatePreviewImage, setTemplatePreviewImage] = useState<string | null>(null)
   // 正在执行动作（选模板/换一换）的 pageId 集合：这些页渲染区显示加载态，run 完成后清除。
   // 受控模式（外部传入）优先，否则用内部状态；变化时通知外部联动右侧加载态。
   const [internalActingPageIds, setInternalActingPageIds] = useState<string[]>([])
@@ -1214,10 +1217,13 @@ export default function UiDesignConfirmationPanel({
       <Modal
         cancelText="取消"
         footer={null}
-        onCancel={() => setTemplatePickerFor(null)}
+        onCancel={() => {
+          setTemplatePickerFor(null)
+          setTemplatePreviewImage(null)
+        }}
         open={Boolean(templatePickerFor)}
         title="选择页面模板"
-        width={720}
+        width={960}
         wrapClassName={cx('ui-design-template-picker-modal')}
       >
         <div className={cx('ui-design-template-cards')}>
@@ -1235,9 +1241,23 @@ export default function UiDesignConfirmationPanel({
                   key={tpl.manifest.id}
                   onClick={() => confirmTemplatePick(tpl.manifest.id)}
                 >
-                  <div className={cx('ui-design-template-thumb')}>
+                  <div
+                    className={cx('ui-design-template-thumb')}
+                    onMouseEnter={() =>
+                      previewImg ? setTemplatePreviewImage(previewImg) : undefined
+                    }
+                    onMouseLeave={() => setTemplatePreviewImage(null)}
+                  >
                     {previewImg ? (
-                      <img src={previewImg} alt={tpl.manifest.name} draggable={false} />
+                      <>
+                        <img src={previewImg} alt={tpl.manifest.name} draggable={false} />
+                        {/* 默认显示的蒙层：淡灰遮罩 + 中央眼睛图标 + 操作提示文案。
+                            鼠标移入缩略图时蒙层淡出，同时触发大图预览浮层。
+                            pointer-events:none 让 hover 事件落在缩略图容器上，蒙层自身不拦截。 */}
+                        <div className={cx('ui-design-template-thumb-mask')}>
+                          <EyeOutlined className={cx('ui-design-template-thumb-mask-icon')} />
+                        </div>
+                      </>
                     ) : (
                       <div className={cx('ui-design-template-thumb-empty')}>
                         <Text type="secondary" style={{ fontSize: 12 }}>
@@ -1247,7 +1267,9 @@ export default function UiDesignConfirmationPanel({
                     )}
                   </div>
                   <div className={cx('ui-design-template-card-body')}>
-                    <Text strong>{tpl.manifest.name}</Text>
+                    <Text className={cx('ui-design-template-name')} strong>
+                      {tpl.manifest.name}
+                    </Text>
                     <Text
                       className={cx('ui-design-template-desc')}
                       title={desc}
@@ -1261,10 +1283,18 @@ export default function UiDesignConfirmationPanel({
             })
           })()}
         </div>
-        <Text className={cx('ui-design-template-picker-hint')} type="secondary">
+        <Text className={cx('ui-design-template-picker-hint')}>
           模板只定版式与结构（表格/表单/页签等），点击后由 AI 把本页真实信息与操作填入该版式，
           需重新生成一次，期间该页显示「生成中」。内容与「换一换」一致，只是版式由你指定。
         </Text>
+        {/* 悬浮缩略图时的大图预览浮层：position:fixed 脱离 Modal 容器，覆盖在弹窗之上。
+            pointer-events:none 让鼠标事件穿透到下层的缩略图，避免浮层"盖住"鼠标导致 hover 抖动。
+            点击行为不变——浮层本身不响应，鼠标按下仍落在卡片上触发选模板。 */}
+        {templatePreviewImage ? (
+          <div className={cx('ui-design-template-image-zoom')}>
+            <img src={templatePreviewImage} alt="模板预览" draggable={false} />
+          </div>
+        ) : null}
       </Modal>
     </section>
   )
