@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from app.services.workspace_process_registry import workspace_process_registry
+from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
 from app.utils.subprocess_platform import preview_process_creation_options
 
@@ -817,6 +818,11 @@ def _process_tree_pids(pid: int) -> list[int]:
 def _terminate_process_tree(pid: int) -> tuple[bool, bool]:
     """终止指定进程及其全部后代，返回 (是否确认全部退出, 是否动用了强制终止)。"""
 
+    if os.name == "nt":
+        # PID 文件恢复与内存进程停机使用相同的整树终止能力。
+        _force_kill_pid(pid)
+        return _wait_for_pid_exit(pid, FRONTEND_STOP_TIMEOUT_SECONDS), True
+
     targets = _process_tree_pids(pid)
     for target in targets:
         try:
@@ -913,17 +919,9 @@ def _wait_for_pid_exit(pid: int, timeout_seconds: float) -> bool:
 
 
 def _pid_is_running(pid: int) -> bool:
-    """使用零信号检查 PID 是否仍存在且可被当前用户观察。"""
+    """只读检查 PID，避免 Windows 零信号调用意外终止进程。"""
 
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return pid_is_running(pid)
 
 
 def _remove_pid_file(

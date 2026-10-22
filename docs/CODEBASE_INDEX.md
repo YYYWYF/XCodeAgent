@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+Windows 预览进程存活探测统一由 `Backend/app/utils/process_liveness.py` 通过只申请 SYNCHRONIZE 的进程句柄和零等待状态读取实现，前后端 PID 停机及 `project_launcher.py` 的只读预览检查复用该适配器，禁止用 Windows `os.kill(pid, 0)` 探测。前端仅剩 PID 文件时同样通过 `taskkill /PID <pid> /T /F` 终止整树并确认退出，失败保留 PID 文件。回归：`tests.test_windows_preview_processes`、`tests.test_project_launcher`。
+
 Last updated: 2026-10-21
 
 页面完成时，`graph/nodes/lifecycle.py::test_phase_confirmation` 在 Build 和单测门均通过后，将当前 Graph 证据交给 `services/development_artifacts.py::complete_initial_development`。`services/development_completion_evidence.py` 校验同 Run、同页面、Build 计划摘要及执行切片，复用调度器依赖闭包，仅将本轮切片内全部任务为 completed/already_satisfied 的 Endpoint 与页面在同一 lifecycle 写入中登记完成；范围外、缺任务、未通过验证的接口不补记，首次完成身份保持不变。现有 AG-UI lifecycle 事件同步界面及完整目录测试门禁。回归：`tests.test_page_api_completion`、`tests.test_development_artifacts`。

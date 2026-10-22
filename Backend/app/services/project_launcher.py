@@ -3,7 +3,6 @@ from __future__ import annotations
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,6 +17,7 @@ from app.services.frontend_project_launcher import (
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.utils.process_liveness import pid_is_running
 
 
 LaunchProgressCallback = Callable[[str, str, str], None]
@@ -389,14 +389,13 @@ def _project_restart_check(*, passed: bool, message: str, code: str | None, laye
 
 
 def _pid_file_is_running(path: Path) -> bool:
-    """读取启动器 PID 文件并以零信号确认进程仍存活。"""
+    """读取启动器 PID 文件并只读确认进程仍存活。"""
 
     try:
         pid = int(path.read_text(encoding="utf-8").strip())
         if pid <= 0:
             return False
-        os.kill(pid, 0)
-        return True
+        return pid_is_running(pid)
     except (OSError, ValueError):
         return False
 
