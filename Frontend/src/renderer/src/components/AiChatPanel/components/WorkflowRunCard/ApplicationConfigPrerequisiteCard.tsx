@@ -4,10 +4,13 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ApplicationConfig, ApplicationDraft } from '../../../../typings'
 import { configOperationFailureMessage, settingsConfigChanges } from '../../../SettingsPage/settingsConfigChanges'
 import ApplicationConfigEditor, { type ApplicationConfigFieldPath } from '../../../Welcome/ApplicationConfigEditor'
+import { LOGIN_AUTHORIZATION_DEFAULTS } from '../../../Welcome/constants'
 import type { ConfigChanges } from '../../../../service/applicationConfigOperation'
 import { cx } from '../../../../utils'
 
 const { Text } = Typography
+const EMPTY_CONFIG_CHANGES: ConfigChanges = {}
+const EMPTY_PREREQUISITES: ConfigPrerequisite[] = []
 
 export type ConfigPrerequisite = {
   path?: string
@@ -40,14 +43,16 @@ export default function ApplicationConfigPrerequisiteCard({
   const [acceptInferred, setAcceptInferred] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string>()
-  const suggested = pending.suggestedChanges || {}
-  const inferred = pending.configPrerequisites || []
-  const explicit = pending.configIntents || []
-  const editablePaths = [...explicit, ...inferred]
-    .map((item) => item.path)
-    .filter((path): path is ApplicationConfigFieldPath => isApplicationConfigFieldPath(path))
+  const suggested = pending.suggestedChanges ?? EMPTY_CONFIG_CHANGES
+  const inferred = pending.configPrerequisites ?? EMPTY_PREREQUISITES
+  const explicit = pending.configIntents ?? EMPTY_PREREQUISITES
+  const editablePaths = resolveConversationEditablePaths(explicit, inferred, suggested)
   const needsInferredAcceptance = inferred.length > 0
-  const initialValues = useMemo(() => mergeSuggested(application, suggested), [application, suggested])
+  const initialChanges = useMemo(
+    () => resolveConversationInitialChanges(explicit, inferred, suggested),
+    [explicit, inferred, suggested]
+  )
+  const initialValues = useMemo(() => mergeSuggested(application, initialChanges), [application, initialChanges])
 
   useEffect(() => {
     // 流式快照补全建议后，保持用户已输入字段，只补充首次展示的初始值。
@@ -126,8 +131,53 @@ function isApplicationConfigFieldPath(path: string | undefined): path is Applica
   return [
     'appName', 'appIcon', 'theme.primaryColor', 'auth.enable',
     'auth.yht.clientId', 'auth.yht.privateKey', 'auth.yht.publicKey', 'auth.yht.centerPublicKey',
-    'authorization.enabled', 'authorization.initialAdministratorSubjects'
+    'auth.yht.centerUri', 'auth.yht.authorizeUri', 'auth.yht.redirectUri', 'auth.yht.endUrl', 'auth.yht.logoutShareJs',
+    'authorization.enabled', 'authorization.initialAdministratorSubjects', 'authorization.api.baseUrl', 'authorization.api.viewId'
   ].includes(path as ApplicationConfigFieldPath)
+}
+
+const LOGIN_CONFIGURATION_PATHS: readonly ApplicationConfigFieldPath[] = [
+  'auth.enable', 'auth.yht.clientId', 'auth.yht.privateKey', 'auth.yht.publicKey', 'auth.yht.centerPublicKey',
+  'auth.yht.centerUri', 'auth.yht.authorizeUri', 'auth.yht.redirectUri', 'auth.yht.endUrl', 'auth.yht.logoutShareJs'
+]
+const AUTHORIZATION_CONFIGURATION_PATHS: readonly ApplicationConfigFieldPath[] = [
+  'authorization.enabled', 'authorization.initialAdministratorSubjects', 'authorization.api.baseUrl', 'authorization.api.viewId'
+]
+
+/** 将启动能力的开关意图扩展为完整字段组，使对话卡与新建、设置页使用同一配置表单。 */
+export function resolveConversationEditablePaths(
+  explicit: ConfigPrerequisite[],
+  inferred: ConfigPrerequisite[],
+  suggested: ConfigChanges
+): ApplicationConfigFieldPath[] {
+  const paths = new Set<ApplicationConfigFieldPath>([
+    ...[...explicit, ...inferred].map((item) => item.path),
+    ...Object.keys(suggested)
+  ].filter(isApplicationConfigFieldPath))
+  const hasLoginConfiguration = [...paths].some((path) => path === 'auth.enable' || path.startsWith('auth.yht.'))
+  const hasAuthorizationConfiguration = [...paths].some((path) => path === 'authorization.enabled' || path.startsWith('authorization.'))
+  // 权限能力依赖登录；任一能力的启动必须让用户能填写其全部必填字段。
+  if (hasLoginConfiguration || hasAuthorizationConfiguration) {
+    for (const path of LOGIN_CONFIGURATION_PATHS) paths.add(path)
+  }
+  if (hasAuthorizationConfiguration) {
+    for (const path of AUTHORIZATION_CONFIGURATION_PATHS) paths.add(path)
+  }
+  return [...paths]
+}
+
+/** 将权限启动意图同步为登录初始值，确保依赖凭据字段在确认前即可见且可校验。 */
+export function resolveConversationInitialChanges(
+  explicit: ConfigPrerequisite[],
+  inferred: ConfigPrerequisite[],
+  suggested: ConfigChanges
+): ConfigChanges {
+  const capabilityIntents = [...explicit, ...inferred]
+  const enables = (path: 'auth.enable' | 'authorization.enabled'): boolean =>
+    suggested[path] === true || capabilityIntents.some((item) => item.path === path && item.desiredValue === true)
+  return enables('auth.enable') || enables('authorization.enabled')
+    ? { ...suggested, 'auth.enable': true }
+    : suggested
 }
 
 /** 根据用户填写与明确勾选状态生成卡片提交提案，推断依赖绝不自动写入。 */
@@ -142,10 +192,7 @@ export function configPrerequisiteChanges(
   const proposed = structuredClone(values)
   for (const item of inferred) {
     if (!item.path || item.desiredValue === undefined) continue
-    const parts = item.path.split('.')
-    let cursor = proposed as unknown as Record<string, unknown>
-    for (const part of parts.slice(0, -1)) cursor = cursor[part] as Record<string, unknown>
-    cursor[parts.at(-1) || item.path] = item.desiredValue
+    applyConfigValue(proposed, item.path, item.desiredValue)
   }
   return settingsConfigChanges(application, proposed)
 }
@@ -156,8 +203,13 @@ export function mergeConversationConfigValues(
   values: ApplicationDraft
 ): ApplicationConfig {
   const partial = values as Partial<ApplicationDraft>
+  // 对话卡也可能收到未启用登录时落盘的旧快照，合并局部字段前先补齐当前契约的基线。
   const currentYht = application.auth.yht ?? {
-    clientId: '', privateKey: '', publicKey: '', centerPublicKey: ''
+    clientId: '',
+    privateKey: '',
+    publicKey: '',
+    centerPublicKey: '',
+    ...LOGIN_AUTHORIZATION_DEFAULTS
   }
   return {
     ...structuredClone(application),
@@ -169,18 +221,55 @@ export function mergeConversationConfigValues(
       ...partial.auth,
       yht: { ...currentYht, ...partial.auth?.yht }
     },
-    authorization: { ...application.authorization, ...partial.authorization }
+    authorization: {
+      ...application.authorization,
+      ...partial.authorization,
+      ...(application.authorization.api || partial.authorization?.api ? {
+        api: {
+          baseUrl: partial.authorization?.api?.baseUrl ?? application.authorization.api?.baseUrl ?? '',
+          viewId: partial.authorization?.api?.viewId ?? application.authorization.api?.viewId ?? ''
+        }
+      } : {})
+    }
   }
 }
 
 /** 将后端建议覆盖到当前配置，避免在卡片中展示或回传未建议的字段变更。 */
-function mergeSuggested(application: ApplicationConfig, suggested: ConfigChanges): ApplicationConfig {
+export function mergeSuggested(application: ApplicationConfig, suggested: ConfigChanges): ApplicationConfig {
   const result = structuredClone(application)
+  // 对话卡直接消费旧 application.json，先补齐与新建/设置页一致的默认表单值。
+  const { clientId = '', privateKey = '', publicKey = '', centerPublicKey = '', ...existingYht } = result.auth.yht ?? {}
+  result.auth.yht = {
+    clientId,
+    privateKey,
+    publicKey,
+    centerPublicKey,
+    ...LOGIN_AUTHORIZATION_DEFAULTS,
+    ...existingYht
+  }
+  result.authorization.api = {
+    baseUrl: LOGIN_AUTHORIZATION_DEFAULTS.baseUrl,
+    viewId: LOGIN_AUTHORIZATION_DEFAULTS.viewId,
+    ...result.authorization.api
+  }
   for (const [path, value] of Object.entries(suggested)) {
-    const parts = path.split('.')
-    let cursor: Record<string, unknown> = result as unknown as Record<string, unknown>
-    for (const part of parts.slice(0, -1)) cursor = cursor[part] as Record<string, unknown>
-    cursor[parts.at(-1) || path] = value
+    applyConfigValue(result, path, value)
   }
   return result
+}
+
+/** 按白名单字段路径写入配置，并为旧快照中不存在的对象层级创建容器。 */
+function applyConfigValue(target: ApplicationConfig, path: string, value: unknown): void {
+  const parts = path.split('.')
+  let cursor = target as unknown as Record<string, unknown>
+  for (const part of parts.slice(0, -1)) {
+    const nested = cursor[part]
+    if (nested === undefined) {
+      cursor[part] = {}
+    } else if (typeof nested !== 'object' || nested === null || Array.isArray(nested)) {
+      throw new Error(`${path} 的父级配置结构无效。`)
+    }
+    cursor = cursor[part] as Record<string, unknown>
+  }
+  cursor[parts.at(-1) || path] = value
 }

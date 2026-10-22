@@ -186,7 +186,8 @@ export function buildApplicationSchema(
     auth: values.auth,
     authorization: {
       enabled: authorizationEnabled,
-      initialAdministratorSubjects
+      initialAdministratorSubjects,
+      ...(authorizationEnabled ? { api: values.authorization.api } : {})
     },
     track: values.track,
     apiTrack: values.apiTrack,

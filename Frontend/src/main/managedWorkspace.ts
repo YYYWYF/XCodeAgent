@@ -23,10 +23,11 @@ export function assertCurrentApplicationSchema(applicationRecord: Record<string,
       : undefined
   const administratorSubjectsValue = authorizationRecord?.initialAdministratorSubjects
   const authorizationKeys = authorizationRecord ? Object.keys(authorizationRecord) : []
+  const authorizationApi = authorizationRecord?.api
   if (
     !authorizationRecord ||
     typeof authorizationRecord.enabled !== 'boolean' ||
-    authorizationKeys.some((key) => !['enabled', 'initialAdministratorSubjects'].includes(key)) ||
+    authorizationKeys.some((key) => !['enabled', 'initialAdministratorSubjects', 'api'].includes(key)) ||
     !Array.isArray(administratorSubjectsValue) ||
     !administratorSubjectsValue.every(
       (subject: unknown) => typeof subject === 'string' && subject.trim().length > 0
@@ -42,6 +43,22 @@ export function assertCurrentApplicationSchema(applicationRecord: Record<string,
   }
   if (authorizationEnabled && administratorSubjects.length === 0) {
     throw new Error('无法添加该项目：启用权限后至少需要一个初始管理员成员')
+  }
+  if (!authorizationApi && authorizationEnabled) {
+    throw new Error('无法添加该项目：启用权限时必须提供有效的 authorization.api 配置')
+  }
+  if (
+    authorizationApi !== undefined &&
+    (
+      !authorizationApi ||
+      typeof authorizationApi !== 'object' ||
+      Array.isArray(authorizationApi) ||
+      Object.keys(authorizationApi).length !== 2 ||
+      typeof (authorizationApi as Record<string, unknown>).baseUrl !== 'string' ||
+      typeof (authorizationApi as Record<string, unknown>).viewId !== 'string'
+    )
+  ) {
+    throw new Error('无法添加该项目：application.json 的 authorization.api 配置无效')
   }
   if (
     authorizationEnabled &&

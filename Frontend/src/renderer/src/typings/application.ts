@@ -106,6 +106,11 @@ export type ApplicationLayout =
 export interface ApplicationAuthorizationSeed {
   enabled: boolean
   initialAdministratorSubjects: string[]
+  /** 权限服务仅在启用权限能力时参与工程投影。 */
+  api?: {
+    baseUrl: string
+    viewId: string
+  }
 }
 
 /** 保存 SaaS 返回的应用身份，未知或在途状态禁止再次创建。 */
@@ -195,6 +200,11 @@ export interface ApplicationSchemaConfig {
       privateKey: string
       publicKey: string
       centerPublicKey: string
+      centerUri: string
+      authorizeUri: string
+      redirectUri: string
+      endUrl: string
+      logoutShareJs: string
     }
   }
   authorization: ApplicationAuthorizationSeed

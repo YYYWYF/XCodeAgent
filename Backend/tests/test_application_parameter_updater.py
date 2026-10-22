@@ -19,18 +19,18 @@ class ParameterUpdaterTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.env = self.root / "frontend/.env"
-        self.yaml = self.root / "backend/src/main/resources/application.yml"
+        self.yaml = self.root / "backend/src/main/resources/application-dev.yml"
         self.env.parent.mkdir(parents=True)
         self.yaml.parent.mkdir(parents=True)
-        self.env.write_bytes(b'OTHER=value\r\nPUBLIC_APP_NAME="Before"\r\n')
+        self.env.write_bytes(b'OTHER=value\r\nPUBLIC_APP_NAME="Before"\r\nPUBLIC_APP_ICON="old"\r\nPUBLIC_THEME_PRIMARY_COLOR="#000000"\r\nPUBLIC_YHT_CLIENT_ID="old"\r\nPUBLIC_YHT_AUTHORIZE_URI="old"\r\nPUBLIC_YHT_END_URL="old"\r\nPUBLIC_YHT_LOGOUT_SHARE_JS="old"\r\n')
         self.yaml.write_bytes(
-            b'server:\r\n  port: 8080\r\n# BEGIN DEVAGENTSTUDIO MANAGED: login-auth\r\nauth:\r\n'
-            b'  client-id: "old"\r\n  private-key: "old"\r\n  public-key: "old"\r\n'
-            b'  center-public-key: "old"\r\n# END DEVAGENTSTUDIO MANAGED: login-auth\r\n'
+            b'server:\r\n  port: 8080\r\nyht:\r\n  authentication:\r\n'
+            b'    client-id: "old"\r\n    private-key: "old"\r\n    public-key: "old"\r\n    center-public-key: "old"\r\n    center-uri: "old"\r\n    authorize-uri: "old"\r\n    redirect-uri: "old"\r\n  api:\r\n    base-url: "old"\r\n    view-id: "old"\r\n'
         )
         self.config = {
             "appName": "After", "appIcon": "app", "theme": {"primaryColor": "#123456"},
-            "auth": {"yht": {"clientId": "new", "privateKey": "secret-1", "publicKey": "pub", "centerPublicKey": "center"}},
+            "auth": {"yht": {"clientId": "new", "privateKey": "secret-1", "publicKey": "pub", "centerPublicKey": "center", "centerUri": "http://center", "authorizeUri": "http://authorize", "redirectUri": "http://redirect", "endUrl": "http://end", "logoutShareJs": "http://logout"}},
+            "authorization": {"api": {"baseUrl": "http://api", "viewId": "view"}},
         }
         self.updater = ApplicationParameterUpdater()
 
@@ -54,13 +54,22 @@ class ParameterUpdaterTests(unittest.TestCase):
         """多文件更新保留其他 YAML，结果不回显密钥。"""
 
         plan = self.updater.preview(self.root, self.config, login_applied=True)
-        self.assertEqual(plan.changed_files, ("frontend/.env", "backend/src/main/resources/application.yml"))
+        self.assertEqual(plan.changed_files, ("frontend/.env", "backend/src/main/resources/application-dev.yml"))
         self.assertNotIn("secret-1", repr(plan))
         self.updater.apply(self.root, plan)
         content = self.yaml.read_bytes()
         self.assertTrue(content.startswith(b'server:\r\n  port: 8080\r\n'))
-        self.assertIn(b'  private-key: "secret-1"\r\n', content)
+        self.assertIn(b'    private-key: "secret-1"\r\n', content)
         self.assertEqual(self.updater.preview(self.root, self.config, login_applied=True).changed_files, ())
+
+    def test_optional_login_address_can_be_empty(self) -> None:
+        """用户清空可选地址时同时更新现有 env/YAML 叶子。"""
+
+        self.config["auth"]["yht"]["authorizeUri"] = ""
+        plan = self.updater.preview(self.root, self.config, login_applied=True)
+        self.updater.apply(self.root, plan)
+        self.assertIn(b'PUBLIC_YHT_AUTHORIZE_URI=""\r\n', self.env.read_bytes())
+        self.assertIn(b'    authorize-uri: ""\r\n', self.yaml.read_bytes())
 
     def test_rejects_duplicates_invalid_yaml_and_symlink(self) -> None:
         """在写入前拒绝重复 Key、重复 auth、非法 YAML 和符号链接。"""

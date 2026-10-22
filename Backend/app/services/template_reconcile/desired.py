@@ -9,7 +9,10 @@ from typing import Any
 _SUPPORTED_CAPABILITIES = frozenset({"login", "authorization"})
 _PRIMARY_COLOR_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _YHT_AUTHN_SOURCE = "yst"
-_YHT_CONFIG_FIELDS = ("clientId", "privateKey", "publicKey", "centerPublicKey")
+_YHT_CONFIG_FIELDS = (
+    "clientId", "privateKey", "publicKey", "centerPublicKey", "centerUri", "authorizeUri",
+    "redirectUri", "endUrl", "logoutShareJs",
+)
 
 
 class TemplateCapabilityError(ValueError):
@@ -59,12 +62,19 @@ def compile_template_application_config(application_config: Any) -> dict[str, An
         raise TemplateCapabilityError("application.json.appIcon 必须是长度不超过 128 的非空字符串。")
     if not isinstance(primary_color, str) or _PRIMARY_COLOR_PATTERN.fullmatch(primary_color) is None:
         raise TemplateCapabilityError("application.json.theme.primaryColor 必须是 #RRGGBB 格式。")
-    return {
+    result = {
         "appName": app_name,
         "appIcon": app_icon,
         "theme": {"primaryColor": primary_color},
         "auth": _compile_template_auth_config(application_config.get("auth")),
     }
+    authorization = application_config.get("authorization")
+    if isinstance(authorization, dict) and isinstance(authorization.get("api"), dict):
+        api = authorization["api"]
+        if isinstance(api.get("baseUrl"), str) and isinstance(api.get("viewId"), str):
+            # Generate 只接收工程可投影的 API 值，不泄露开关或管理员种子。
+            result["authorization"] = {"api": {"baseUrl": api["baseUrl"], "viewId": api["viewId"]}}
+    return result
 
 
 def _compile_template_auth_config(value: Any) -> dict[str, Any]:
@@ -80,7 +90,7 @@ def _compile_template_auth_config(value: Any) -> dict[str, Any]:
         raw_value = yht.get(field, "")
         if not isinstance(raw_value, str):
             raise TemplateCapabilityError(f"application.json.auth.yht.{field} 必须是字符串。")
-        if value["enable"] is True and not raw_value.strip():
+        if value["enable"] is True and field in {"clientId", "privateKey", "publicKey", "centerPublicKey"} and not raw_value.strip():
             raise TemplateCapabilityError(f"启用一号通登录时必须填写 application.json.auth.yht.{field}。")
         config[field] = raw_value
     return {

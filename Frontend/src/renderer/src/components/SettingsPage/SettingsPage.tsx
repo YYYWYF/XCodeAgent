@@ -11,7 +11,7 @@ import {
 import { Anchor, Button, Form, Input, Modal, Typography, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
-import { DatasourceEnum, type ApplicationConfig, type ApplicationDraft } from '../../typings'
+import { type ApplicationConfig, type ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from '../Welcome/ApplicationForm'
 import { saveApplication } from '../Welcome/applicationService'
@@ -24,6 +24,7 @@ import {
   settingsSaveNoticeMessages
 } from './settingsConfigChanges'
 import { buildDatasourceConfig } from '../Welcome/utils'
+import { createSettingsDraft } from './settingsDraft'
 import '../Welcome/ApplicationFormModal.less'
 import './SettingsPage.less'
 
@@ -45,34 +46,6 @@ type Props = {
 
 type SettingsFormValues = ApplicationDraft & {
   envVariables: EnvVariable[]
-}
-
-/** 将已持久化的应用配置补全为新建表单可直接展示的草稿形状。 */
-function createSettingsDraft(application: ApplicationConfig): ApplicationDraft {
-  if (application.datasource.type === DatasourceEnum.DB) {
-    const database = application.datasource.db ?? { useBuiltin: false }
-    return {
-      ...application,
-      projectPath: application.workspaceRoot,
-      branchName: application.branchName ?? '',
-      envText: '',
-      datasource: {
-        type: DatasourceEnum.DB,
-        db: {
-          ...database,
-          connectionMode: database.dbidMode ? 'dbid' : 'plant'
-        }
-      }
-    }
-  }
-
-  return {
-    ...application,
-    projectPath: application.workspaceRoot,
-    branchName: application.branchName ?? '',
-    envText: '',
-    datasource: application.datasource
-  }
 }
 
 /** 组织并保存应用级基础能力与环境配置。 */

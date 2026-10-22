@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from copy import deepcopy
@@ -24,20 +25,38 @@ from app.workspace.run_lease import workspace_run_leases
 _PATHS = frozenset({
     "appName", "appIcon", "theme.primaryColor", "auth.enable",
     "auth.yht.clientId", "auth.yht.privateKey", "auth.yht.publicKey", "auth.yht.centerPublicKey",
-    "authorization.enabled", "authorization.initialAdministratorSubjects",
+    "auth.yht.centerUri", "auth.yht.authorizeUri", "auth.yht.redirectUri", "auth.yht.endUrl", "auth.yht.logoutShareJs",
+    "authorization.enabled", "authorization.initialAdministratorSubjects", "authorization.api.baseUrl", "authorization.api.viewId",
+})
+_OPTIONAL_SCALAR_PATHS = frozenset({
+    "auth.yht.centerUri", "auth.yht.authorizeUri", "auth.yht.redirectUri", "auth.yht.endUrl",
+    "auth.yht.logoutShareJs", "authorization.api.baseUrl", "authorization.api.viewId",
 })
 _LOCKS: dict[str, asyncio.Lock] = {}
 _MISSING = object()
+_FAILURE_STAGE_LABELS = {
+    "template_state_read": "读取工程模板状态",
+    "template_capability_reconcile": "模板能力代码安装",
+    "application_parameter_update": "工程参数写入",
+}
+_FAILURE_CODE_HINTS = {
+    "TEMPLATE_ENGINE_UNAVAILABLE": "模板引擎不可用，请检查模板服务连接后重试。",
+    "TEMPLATE_STATE_INVALID": "模板能力状态或更新包不符合当前工程合同，请检查模板服务返回结果。",
+    "TEMPLATE_PACKAGE_CONTRACT_INVALID": "模板更新包校验失败，请检查模板服务返回结果。",
+    "CONFIG_APPLY_FAILED": "工程参数写入未完成，请检查受管配置文件后重试。",
+}
 
 
 class ApplicationConfigOperationError(ValueError):
     """统一配置操作的安全错误码与说明。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, failure_stage: str | None = None, failure_code: str | None = None) -> None:
         """构造不携带提交值的可投影错误。"""
 
         super().__init__(f"{code}：{message}")
         self.code = code
+        self.failure_stage = failure_stage
+        self.failure_code = failure_code
 
 
 class ApplicationConfigOrchestrator:
@@ -71,7 +90,8 @@ class ApplicationConfigOrchestrator:
         parameter_files: list[str] = []
         if state_path.is_file():
             try:
-                parameter_files = list(self._parameters.preview(root, proposed, login_applied="login" in desired).changed_files)
+                # 新能力尚未通过 V4 生成受管节点时，预览不能抢先把缺结构误判为冲突。
+                parameter_files = list(self._parameters.preview(root, proposed, login_applied="login" in installed, authorization_applied="authorization" in installed).changed_files)
             except ParameterUpdateError as exc:
                 raise ApplicationConfigOperationError("CONFIG_TARGET_CONFLICT", "工程参数文件与受管字段合同冲突。") from exc
         changed = tuple(path for path in changes if _value_at(current, path) != _value_at(proposed, path))
@@ -96,7 +116,11 @@ class ApplicationConfigOrchestrator:
                 raise ApplicationConfigOperationError("CONFIG_WORKSPACE_BUSY", "工作区有正在执行的任务。")
             record = self._read_operation(root, operation_id)
             if record is not None:
-                if record["expectedConfigRevision"] != expected_revision or set(record["changedKeys"]) != set(changes) or record.get("requestId") != request_id:
+                if (
+                    record["expectedConfigRevision"] != expected_revision
+                    or record.get("changesDigest") != _changes_digest(changes)
+                    or record.get("requestId") != request_id
+                ):
                     raise ApplicationConfigOperationError("CONFIG_OPERATION_CONFLICT", "operationId 已绑定另一份配置提案。")
                 if record["status"] == "APPLIED":
                     return record
@@ -128,6 +152,8 @@ class ApplicationConfigOrchestrator:
                     "changedFiles": [],
                     "installedCapabilities": [],
                     "requestId": request_id,
+                    # 仅持久化提案的稳定摘要，重试时既能验证字段值又不会在运行态文件写入密钥。
+                    "changesDigest": _changes_digest(changes),
                 }
                 self._write_operation(root, record)
                 if target_revision != expected_revision:
@@ -138,6 +164,7 @@ class ApplicationConfigOrchestrator:
                         record["errorCode"] = "CONFIG_SAVE_FAILED"
                         self._write_operation(root, record)
                         raise ApplicationConfigOperationError("CONFIG_SAVE_FAILED", "应用配置未保存，可使用原 operationId 重试。") from exc
+            failure_stage = "template_state_read"
             try:
                 state_path = root / WORKSPACE_ARTIFACT_DIR / "template-state.json"
                 if state_path.is_file():
@@ -145,13 +172,20 @@ class ApplicationConfigOrchestrator:
                     desired_capabilities = _desired_capabilities(desired)
                     # 仅修改名称、主题或参数时不能触发模板更新包；能力差异才进入 V4 收敛。
                     if before != desired_capabilities:
+                        failure_stage = "template_capability_reconcile"
                         await self._reconcile.reconcile_capabilities(root)
+                    failure_stage = "template_state_read"
                     after = set(load_template_state_v3(root).effective)
                     record["installedCapabilities"] = sorted(after - before)
                     self._write_operation(root, record)
-                    plan = self._parameters.preview(root, desired, login_applied="login" in after)
+                    failure_stage = "application_parameter_update"
+                    plan = self._parameters.preview(root, desired, login_applied="login" in after, authorization_applied="authorization" in after)
                     self._parameters.apply(root, plan)
                     record["changedFiles"] = list(plan.changed_files)
+                # 失败操作恢复成功后清除旧错误码，避免 APPLIED 状态仍显示历史失败。
+                record.pop("errorCode", None)
+                record.pop("failureStage", None)
+                record.pop("failureSummary", None)
                 record["status"] = "APPLIED"
                 record["configRevision"] = desired["configRevision"]
                 self._write_operation(root, record)
@@ -159,9 +193,17 @@ class ApplicationConfigOrchestrator:
             except Exception as exc:
                 record["status"] = "FAILED"
                 # 持久状态只记录安全错误码，不写上游异常或任何字段值。
-                record["errorCode"] = getattr(exc, "code", "CONFIG_APPLY_FAILED")
+                failure_code = _safe_failure_code(exc)
+                record["errorCode"] = failure_code
+                record["failureStage"] = failure_stage
+                record["failureSummary"] = _failure_summary(failure_stage, failure_code)
                 self._write_operation(root, record)
-                raise ApplicationConfigOperationError("CONFIG_APPLY_FAILED", "工程配置未完全应用，可使用原 operationId 重试。") from exc
+                raise ApplicationConfigOperationError(
+                    "CONFIG_APPLY_FAILED",
+                    f"{record['failureSummary']}（内部错误码：{failure_code}），可使用原 operationId 重试。",
+                    failure_stage=failure_stage,
+                    failure_code=failure_code,
+                ) from exc
 
     def get_operation(self, workspace: str | Path, operation_id: str) -> dict[str, Any]:
         """读取仅含字段名和阶段的持久操作状态。"""
@@ -185,7 +227,7 @@ class ApplicationConfigOrchestrator:
             elif path == "authorization.initialAdministratorSubjects":
                 if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
                     raise ApplicationConfigOperationError("CONFIG_VALUE_INVALID", "初始管理员必须是非空 Subject 列表。")
-            elif not isinstance(value, str):
+            elif not isinstance(value, str) or (path not in _OPTIONAL_SCALAR_PATHS and not value.strip()):
                 raise ApplicationConfigOperationError("CONFIG_VALUE_INVALID", f"{path} 必须是字符串。")
             cursor = result
             parts = path.split(".")
@@ -259,3 +301,25 @@ def _desired_capabilities(config: dict[str, Any]) -> set[str]:
     if config["authorization"]["enabled"]:
         result.add("authorization")
     return result
+
+
+def _safe_failure_code(error: Exception) -> str:
+    """只提取稳定错误码，禁止把上游响应正文或配置值写进运行态记录。"""
+
+    code = getattr(error, "code", None)
+    return code if isinstance(code, str) and code else "CONFIG_APPLY_FAILED"
+
+
+def _changes_digest(changes: dict[str, Any]) -> str:
+    """为一次配置提案生成不暴露字段值的稳定身份摘要。"""
+
+    encoded = json.dumps(changes, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _failure_summary(stage: str, code: str) -> str:
+    """将内部阶段和错误码转换为可行动且不含敏感信息的用户提示。"""
+
+    stage_label = _FAILURE_STAGE_LABELS.get(stage, "工程配置同步")
+    hint = _FAILURE_CODE_HINTS.get(code, "请根据内部错误码检查该环节后重试。")
+    return f"{stage_label}失败：{hint}"

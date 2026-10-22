@@ -27,8 +27,8 @@ def _newline(content: str) -> str:
 def _quoted(value: str) -> str:
     """用 JSON 双引号转义安全表示 dotenv 与 YAML 字符串。"""
 
-    if not isinstance(value, str) or not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
-        raise ParameterUpdateError("CONFIG_VALUE_INVALID：配置值必须为不含控制字符的非空字符串。")
+    if not isinstance(value, str) or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ParameterUpdateError("CONFIG_VALUE_INVALID：配置值必须为不含控制字符的字符串。")
     return json.dumps(value, ensure_ascii=False)
 
 
@@ -52,12 +52,50 @@ def edit_dotenv(original: bytes, values: Mapping[str, str]) -> bytes:
             updated.append(f"{key}={_quoted(values[key])}{match.group(3) or ''}")
         else:
             updated.append(line)
-    for key, value in values.items():
-        if key not in found:
-            if updated and not updated[-1].endswith(("\n", "\r")):
-                updated.append(_newline(content))
-            updated.append(f"{key}={_quoted(value)}{_newline(content)}")
+    missing = set(values) - found
+    if missing:
+        raise ParameterUpdateError("CONFIG_STRUCTURE_MISSING：frontend/.env 缺少受管键。")
     return "".join(updated).encode("utf-8")
+
+
+def edit_yht_yaml(original: bytes, values: Mapping[str, str]) -> bytes:
+    """只替换 application-dev.yml 已有的 yht 受管叶子，不创建任何节点。"""
+
+    try:
+        content = original.decode("utf-8")
+        parsed = yaml.safe_load(content)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 无法安全解析。") from exc
+    if not isinstance(parsed, dict):
+        raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 根必须是映射。")
+    for path, value in values.items():
+        cursor: object = parsed
+        for part in path.split("."):
+            if not isinstance(cursor, dict) or part not in cursor:
+                raise ParameterUpdateError("CONFIG_STRUCTURE_MISSING：application-dev.yml 缺少受管配置结构。")
+            cursor = cursor[part]
+        if not isinstance(value, str):
+            raise ParameterUpdateError("CONFIG_VALUE_INVALID：配置值必须是字符串。")
+    result = content
+    # 这些键在模板 1016 的 yht 树下唯一；保留原注释、缩进和其它行，只换值部分。
+    for path, value in values.items():
+        key = path.rsplit(".", 1)[-1]
+        matches = list(re.finditer(rf"(?m)^(\s*{re.escape(key)}\s*:\s*).*?(\r?\n|$)", result))
+        if len(matches) != 1:
+            raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 受管叶子重复或无法定位。")
+        match = matches[0]
+        result = result[:match.start()] + f"{match.group(1)}{_quoted(value)}{match.group(2)}" + result[match.end():]
+    try:
+        projected = yaml.safe_load(result)
+    except yaml.YAMLError as exc:
+        raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：更新后 application-dev.yml 无效。") from exc
+    for path, value in values.items():
+        cursor: object = projected
+        for part in path.split("."):
+            cursor = cursor[part] if isinstance(cursor, dict) else None
+        if cursor != value:
+            raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 字段校验失败。")
+    return result.encode("utf-8")
 
 
 def edit_auth_yaml(original: bytes, values: Mapping[str, str]) -> bytes:

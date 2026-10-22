@@ -57,10 +57,44 @@ test('根据已持久化权限开关确定唯一模板分支', () => {
     resolveApplicationTemplateBranch({
       ...base,
       auth: { enable: true },
-      authorization: { enabled: true, initialAdministratorSubjects: ['ops@example.com'] }
+      authorization: {
+        enabled: true,
+        initialAdministratorSubjects: ['ops@example.com'],
+        api: { baseUrl: 'https://authorization.example.test', viewId: 'roles-view' }
+      }
     }),
     'auth'
   )
+})
+
+/** 验证当前权限配置可携带后端 schema v6 定义的权限服务参数。 */
+test('允许读取带 authorization.api 的当前权限工作区', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    const agentDirectory = path.join(workspaceRoot, '.devagentstudio')
+    await fs.mkdir(agentDirectory)
+    await fs.writeFile(
+      path.join(agentDirectory, 'application.json'),
+      JSON.stringify({
+        schemaVersion: 6,
+        configRevision: 4,
+        appName: '权限服务项目',
+        auth: { enable: true },
+        authorization: {
+          enabled: true,
+          initialAdministratorSubjects: ['12345678'],
+          api: { baseUrl: 'https://authorization.example.test', viewId: 'roles-view' }
+        }
+      }),
+      'utf8'
+    )
+
+    const application = await readManagedWorkspaceApplication(workspaceRoot)
+    assert.deepEqual(application.authorization, {
+      enabled: true,
+      initialAdministratorSubjects: ['12345678'],
+      api: { baseUrl: 'https://authorization.example.test', viewId: 'roles-view' }
+    })
+  })
 })
 
 /** 验证旧结构因不是当前 schemaVersion 而不能通过。 */
@@ -125,7 +159,11 @@ test('拒绝缺少认证或初始管理员的权限工作区', async () => {
       JSON.stringify({
         ...base,
         auth: { enable: true },
-        authorization: { ...base.authorization, initialAdministratorSubjects: ['ops@example.com'] }
+        authorization: {
+          ...base.authorization,
+          initialAdministratorSubjects: ['ops@example.com'],
+          api: { baseUrl: 'https://authorization.example.test', viewId: 'roles-view' }
+        }
       }),
       'utf8'
     )
