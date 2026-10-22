@@ -59,3 +59,34 @@
     color: var(--wb-text-secondary);
   }
 }
+
+// 紧凑横幅：仅图标本行文案，比卡片形态省一半高度。
+// 用在"代码尚未自动保存"等提示场景——需要可见但不该占据底部大块空间。
+.@{class-prefix}-acceptance-commit-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+
+  &.@{class-prefix}-warning {
+    background: color-mix(in srgb, var(--wb-warning) 8%, var(--wb-canvas));
+    color: var(--wb-warning);
+
+    .anticon {
+      font-size: 14px;
+    }
+  }
+}
+
+.@{class-prefix}-acceptance-commit-banner-text {
+  margin: 0;
+  // 超长错误信息截断 + title 悬浮看完整文案，不换行保持单行高度。
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font-size: inherit;
+}

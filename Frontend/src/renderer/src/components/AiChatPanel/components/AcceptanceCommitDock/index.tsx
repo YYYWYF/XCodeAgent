@@ -42,15 +42,19 @@ export default function AcceptanceCommitDock({
     return (
       <>
         {error ? (
-          <section className={cx('acceptance-commit-dock', 'warning')}>
-            <span className={cx('acceptance-commit-icon')}>
-              <ExclamationCircleOutlined />
-            </span>
-            <div className={cx('acceptance-commit-copy')}>
-              <Text strong>代码尚未自动保存</Text>
-              <Text type="secondary">{error}</Text>
-            </div>
-          </section>
+          // 紧凑横幅形态：单行图标+文案，去掉卡片 padding/圆角/背景边框，避免占据底部过多高度。
+          // 仅作提示，不阻断操作；详细信息 hover icon 可见。
+          <div
+            aria-live="polite"
+            className={cx('acceptance-commit-banner', 'warning')}
+            role="status"
+            title={error}
+          >
+            <ExclamationCircleOutlined aria-hidden="true" />
+            <Text className={cx('acceptance-commit-banner-text')}>
+              代码尚未自动保存：{error}
+            </Text>
+          </div>
         ) : null}
         {renderManualReview()}
       </>
