@@ -16,6 +16,10 @@ const devAgentStudioApi = {
   isElectron: true,
   agentBaseUrl,
   platform: process.platform,
+  clipboard: {
+    /** 将日志等纯文本交给主进程写入系统剪贴板。 */
+    writeText: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write-text', text)
+  },
   auth: {
     login: () => ipcRenderer.invoke('auth:login'),
     status: () => ipcRenderer.invoke('auth:status'),
@@ -26,7 +30,7 @@ const devAgentStudioApi = {
     load: () => ipcRenderer.invoke('settings:load'),
     saveTheme: (payload) => ipcRenderer.invoke('settings:save-theme', payload),
     onThemeChanged: (listener) => {
-      const handler = (_event, payload) => listener(payload);
+      const handler = (_event, payload): void => listener(payload);
       ipcRenderer.on('settings:theme-changed', handler);
       return () => ipcRenderer.removeListener('settings:theme-changed', handler);
     },

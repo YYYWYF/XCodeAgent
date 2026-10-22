@@ -1,6 +1,93 @@
-.preview-service-logs {
-  user-select: text;
-  cursor: text;
+.preview-log-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--wb-surface-subtle), transparent 42%), var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+
+  .preview-service-logs {
+    flex-shrink: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    user-select: text;
+    cursor: text;
+  }
+
+  .preview-log-empty {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+}
+
+.preview-log-search {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 10px 0;
+
+  &__count {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+  }
+
+  .ant-input-search {
+    width: min(220px, 100%);
+  }
+
+  .ant-input-affix-wrapper,
+  .ant-input,
+  .ant-input-search-button {
+    color: var(--wb-text);
+    background: var(--wb-editor);
+    border-color: var(--wb-border-strong);
+  }
+
+  .ant-input::placeholder,
+  .ant-input-clear-icon {
+    color: var(--wb-text-tertiary);
+  }
+
+  .ant-input-search-button .anticon {
+    color: var(--wb-text-secondary);
+  }
+
+  .ant-input-affix-wrapper:hover,
+  .ant-input-affix-wrapper-focused,
+  .ant-input-search-button:hover,
+  .ant-input-search-button:focus {
+    border-color: var(--wb-accent);
+    box-shadow: 0 0 0 2px var(--wb-accent-soft);
+  }
+
+  .ant-input-search-button:hover,
+  .ant-input-search-button:focus,
+  .ant-input-search-button:hover .anticon,
+  .ant-input-search-button:focus .anticon,
+  .ant-input-clear-icon:hover {
+    color: var(--wb-accent);
+  }
+
+  .ant-input-affix-wrapper-disabled,
+  .ant-input[disabled],
+  .ant-btn[disabled] {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+}
+
+.preview-log-match {
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 2px;
+  box-shadow: inset 0 -1px var(--wb-accent-border);
 }
 
 .preview-log-context-menu {

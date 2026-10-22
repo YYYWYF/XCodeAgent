@@ -13,6 +13,7 @@ import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './des
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { writeSessionAtomically } from './sessionPersistence'
 import { setupApplicationSettingsIpc } from './applicationSettings'
+import { setupClipboardIpc } from './clipboard'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
 import { endpointDesignDocumentStatus, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
@@ -1943,6 +1944,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupApplicationSettingsIpc()
   setupAuthIpc()
   setupBrowserIpc()
+  setupClipboardIpc()
   setupProjectPreviewIpc()
   setupWorkspaceIpc()
   setupSessionStorageIpc()

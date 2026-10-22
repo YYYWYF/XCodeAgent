@@ -13,6 +13,9 @@ declare global {
       isElectron: boolean
       agentBaseUrl: string
       platform: string
+      clipboard: {
+        writeText: (text: string) => Promise<void>
+      }
       auth: {
         login: () => Promise<{ ok: true }>
         status: () => Promise<{ authenticated: boolean }>
