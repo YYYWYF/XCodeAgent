@@ -143,6 +143,7 @@ export function useMappingAssist(request: MappingAssistRequest | undefined, meta
   }
 
   return { open, instruction, setInstruction, clarification, setClarification, answers, setAnswer,
+    isExternal: request?.selection.sourceType === 'external_api',
     requirementsLength: requirements.instruction.length + requirements.clarification.length, preview, setPreview, phase, progress, progressSteps, error,
     currentOperation: request?.draft.databaseOperation,
     requirementsChanged: Boolean(result && result.requirementsKey !== requirementsKey),

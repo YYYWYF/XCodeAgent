@@ -57,6 +57,8 @@ def _validate_generation_policy(after: Any) -> None:
 def validate_candidate(candidate: MappingCandidate, context: dict[str, Any]) -> Any:
     """逐项验证受限建议并返回当前契约的规范表示。"""
     area, key, value = candidate.area, candidate.key, candidate.value
+    if area == "request":
+        raise ValueError("数据库映射不支持外部入参建议。")
     operation = context["databaseOperation"]
     fields = context["endpointFields"]
     if area == "description":

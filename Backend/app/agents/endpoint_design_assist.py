@@ -8,6 +8,8 @@ from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.domain.endpoint_design_assist_steps import ASSIST_STEP_MODELS, AssistStep
 from app.services.endpoint_design_assist_steps import step_model_result
+from app.domain.endpoint_design_external_assist import ExternalRequestStepResult
+from app.services.endpoint_design_external_assist_validation import expand_external_step
 from app.utils.model_output import extract_json_object
 
 
@@ -22,8 +24,10 @@ async def invoke_mapping_assistant(
         config={"configurable": {"thread_id": thread_id}} if thread_id else None,
     )
     parsed = extract_json_object(_coerce_content_text(response.content))
-    result = ASSIST_STEP_MODELS[step].model_validate(parsed)
+    result = (ExternalRequestStepResult if step == "request" else ASSIST_STEP_MODELS[step]).model_validate(parsed)
     if step in {"rule", "operation"}:
         return result.model_dump(mode="json", by_alias=True)
+    if context.get("selection", {}).get("sourceType") == "external_api":
+        return expand_external_step(result, context).model_dump(mode="json", by_alias=True)
     # 模型只提供字段引用；来源、类型和快照均从本轮真实上下文补齐。
     return step_model_result(result, context).model_dump(mode="json", by_alias=True)

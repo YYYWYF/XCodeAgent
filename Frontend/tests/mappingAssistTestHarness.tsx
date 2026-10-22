@@ -13,13 +13,15 @@ export type AssistTestServer = {
 
 /** 用标准 AG-UI 事件响应真实客户端；可控网络延迟不模拟 React 状态或请求函数。 */
 function response(input: Input, threadId: string, runId: string, failed: boolean, operation: AssistTestServer['operation']): Response {
-  const mapping = operation ? { databaseOperation: operation, databaseQuery: null, databaseWrites: [], fieldMappings: [], implementationDescription: 'AI 生成说明' } : null
+  const external = input.selection.sourceType === 'external_api'
+  const mapping = external ? { externalApiBindings: [], fieldMappings: [], implementationDescription: 'AI 外部映射说明' }
+    : operation ? { databaseOperation: operation, databaseQuery: null, databaseWrites: [], fieldMappings: [], implementationDescription: 'AI 生成说明' } : null
   const draft = { ...input.draft, ...input.mapping }
   if (!draft.databaseQuery) delete draft.databaseQuery
   const value = { schemaVersion: 1, threadId, runId, action: input.action, status: failed ? 'failed' : 'completed',
     error: failed ? { message: '返回步骤生成失败' } : undefined,
     assistFailure: failed ? { retryToken: 'c'.repeat(32), failedStage: 'return', completedStages: ['operation', 'query'] } : undefined,
-    assistance: { baseline: { draftHash: 'a'.repeat(64), metadataHash: 'b'.repeat(64) }, mapping, operation, operationReason: '根据契约识别操作', questions: ['请核对业务规则'], reviews: [] },
+    assistance: { baseline: { draftHash: 'a'.repeat(64), metadataHash: 'b'.repeat(64) }, mapping, operation: external ? null : operation, operationReason: external ? '使用已绑定外部 API' : '根据契约识别操作', questions: ['请核对业务规则'], reviews: [] },
     applied: { draft, areas: ['return', 'description'], targets: [] },
     refinedRule: { description: '按用户要求保留两位小数', questions: [] } }
   const events = [{ type: 'RUN_STARTED', threadId, runId },

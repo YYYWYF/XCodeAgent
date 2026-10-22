@@ -8,6 +8,8 @@ from typing import Any, AsyncIterator
 from app.protocols.ag_ui_action_stream import AgUiActionResult, ProgressReporter, build_ag_ui_action_stream
 from app.domain.endpoint_design_assist import ReplaceMappingRequest, RefineRuleRequest, GenerateMappingRequest
 from app.services.endpoint_design_assist import replace_mapping, refine_rule, generate_mapping
+from app.domain.endpoint_design_external_assist import ExternalGenerateRequest, ExternalReplaceMappingRequest, ExternalRefineRequest
+from app.services.endpoint_design_external_assist import generate_external_mapping, replace_external_mapping, refine_external_rule
 from app.services.endpoint_design_assist_retry import MappingGenerationFailure
 from app.services.binding_workspace import BindingDraftRequest, save_binding_draft, clear_binding_draft
 from app.services.endpoint_design_detail import (
@@ -36,6 +38,8 @@ def endpoint_designs_capabilities() -> dict[str, Any]:
         "workflowIndependent": True,
         "readOnly": False,
         "mappingGenerationSteps": ["operation", "query", "write", "return", "description"],
+        "externalMappingGenerationSteps": ["request", "return", "description"],
+        "mappingAssistSourceTypes": ["database", "external_api"],
     }
 
 
@@ -77,14 +81,16 @@ def build_endpoint_designs_ag_ui_stream(
         action = str(request_input.get("action"))
         values = {key: value for key, value in request_input.items() if key != "action"}
         thread_id = str(payload.get("threadId") or "")
+        # 来源决定严格请求模型，未知来源仍由原数据库模型拒绝，不能混用生成结果。
+        external = isinstance(values.get("selection"), dict) and values["selection"].get("sourceType") == "external_api"
         if action == "generate_mapping":
-            result = await generate_mapping(GenerateMappingRequest.model_validate(values), report, thread_id)
+            result = await generate_external_mapping(ExternalGenerateRequest.model_validate(values), report, thread_id) if external else await generate_mapping(GenerateMappingRequest.model_validate(values), report, thread_id)
             message = "请先补充数据库操作的待明确信息，再继续生成。" if result["mapping"] is None else "完整映射已生成，请预览后替换当前草稿。"
             return AgUiActionResult(data={"action": action, "assistance": result}, message=message)
         if action == "refine_rule":
-            result = await refine_rule(RefineRuleRequest.model_validate(values), report, thread_id)
+            result = await refine_external_rule(ExternalRefineRequest.model_validate(values), report, thread_id) if external else await refine_rule(RefineRuleRequest.model_validate(values), report, thread_id)
             return AgUiActionResult(data={"action": action, "refinedRule": result}, message="业务规则建议已生成，采用后仍需应用规则。")
-        result = await asyncio.to_thread(replace_mapping, ReplaceMappingRequest.model_validate(values))
+        result = await asyncio.to_thread(replace_external_mapping, ExternalReplaceMappingRequest.model_validate(values)) if external else await asyncio.to_thread(replace_mapping, ReplaceMappingRequest.model_validate(values))
         return AgUiActionResult(data={"action": action, "applied": result}, message="完整映射已校验，请补全未配置项后保存并确认草稿。")
 
     return build_ag_ui_action_stream(

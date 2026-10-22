@@ -7,7 +7,7 @@ from pydantic import Field, model_validator
 from app.domain.api_design import DatabaseBinding
 from app.domain.api_design_fields import ApiDesignModel
 
-AssistArea = Literal["query", "write", "return", "description"]
+AssistArea = Literal["query", "write", "request", "return", "description"]
 AssistDatabaseOperation = Literal["create", "read", "update", "delete"]
 
 

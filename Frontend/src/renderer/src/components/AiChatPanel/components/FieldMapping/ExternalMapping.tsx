@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
 import type { WorkflowApiDesignDraft, WorkflowApiField, WorkflowApiSourceField, WorkflowApiValueRight } from '../../../../typings'
 import type { ApiDesignExternalOperationMetadata } from '../../../../service/dataSources'
+import type { MappingApplied } from '../../../../typings/endpointDesignAssist'
 import { apiDesignFieldKey } from '../WorkflowRunCard/apiDesignSerialization'
 import { mappingCandidates } from './model'
 import { externalTargetEnabled } from './externalRequestTargets'
@@ -22,6 +23,7 @@ type Props = {
   busy: boolean
   errors: Record<string, string>
   onChange: (draft: WorkflowApiDesignDraft) => void
+  applied?: MappingApplied & { serial: number }
 }
 type ExternalField = NonNullable<ApiDesignExternalOperationMetadata['fields']>[number]
 const REQUEST_SECTIONS = ['path', 'query', 'header', 'request_body']
@@ -31,10 +33,12 @@ const SECTION_LABELS: Record<string, string> = { path: 'Path', query: 'Query', h
 function fieldKey(field: { section: string; path: string }): string { return `${field.section}:${field.path}` }
 
 /** 按外部请求目标配置取值，同一应用入参可被任意目标复用。 */
-export default function ExternalMapping({ fields, metadata, selection, draft, editable, readOnly, busy, errors, onChange }: Props): ReactElement {
+export default function ExternalMapping({ fields, metadata, selection, draft, editable, readOnly, busy, errors, onChange, applied }: Props): ReactElement {
   const [collapsed, setCollapsed] = useState({ request: !readOnly, response: !readOnly })
   // 编辑态收起、详情态展开，仅在模式变化时恢复默认状态。
   useEffect(() => { setCollapsed({ request: !readOnly, response: !readOnly }) }, [readOnly])
+  // AI 回填后展开受影响卡片，后续编辑仍由用户控制折叠。
+  useEffect(() => { if (applied) setCollapsed({ request: false, response: false }) }, [applied?.serial])
   const targets = (metadata.fields || []).filter((field) => field.section !== 'response_body')
   const bindings = draft.externalApiBindings || []
   const responseFields = fields.filter((field) => field.side === 'response')
@@ -73,7 +77,7 @@ export default function ExternalMapping({ fields, metadata, selection, draft, ed
   }
   /** 统一映射卡片的标题与右侧折叠操作。 */
   const heading = (section: 'request' | 'response', title: string): ReactElement => <div className="database-section-heading">
-    <div className="database-section-title is-card"><h4>{title}</h4>{section === 'request' && !readOnly ? <span className="external-request-count">{visibleTargets.length} 个参数</span> : null}</div>
+    <div className="database-section-title is-card"><h4>{title}</h4>{applied && <span className="mapping-assist-mark">AI 已应用</span>}{section === 'request' && !readOnly ? <span className="external-request-count">{visibleTargets.length} 个参数</span> : null}</div>
     <div className="external-heading-actions">
     {section === 'request' && !readOnly && removedTargets.length > 0 ? <Dropdown overlayClassName="external-restore-menu" placement="bottomRight" trigger={['click']} disabled={disabled} menu={{
       items: REQUEST_SECTIONS.filter((group) => removedTargets.some((target) => target.section === group)).map((group) => ({
@@ -89,7 +93,7 @@ export default function ExternalMapping({ fields, metadata, selection, draft, ed
     </div>
   </div>
   return <div className={`external-mapping${readOnly ? ' is-readonly' : ''}`}>
-    <MappingDescription draft={draft} disabled={disabled} readOnly={readOnly} onChange={onChange} />
+    <MappingDescription draft={draft} disabled={disabled} readOnly={readOnly} onChange={onChange} expandSignal={applied?.serial} />
     <section className={`binding-section external-mapping-section${collapsed.request ? ' is-collapsed' : ''}`}>
       {heading('request', '入参映射')}
       {!collapsed.request ? <>
@@ -102,7 +106,7 @@ export default function ExternalMapping({ fields, metadata, selection, draft, ed
             return <div className="external-request-grid external-request-row" key={fieldKey(target)}>
               <span className="external-request-location">{SECTION_LABELS[target.section]}</span>
               <div className="external-request-field"><code title={target.path}>{target.path}</code><span className="field-response-type">{target.type}</span>{target.required ? <span className="external-request-required" aria-label="必填">*</span> : null}</div>
-              <ValueRuleEditor title={target.path} right={binding?.right} fields={fields} type={target.type} readOnly={readOnly} disabled={disabled} onChange={(right) => update(target, right)} />
+              <ValueRuleEditor title={target.path} right={binding?.right} fields={fields} type={target.type} readOnly={readOnly} disabled={disabled} ruleTarget={{ area: 'request', key: `external:${fieldKey(target)}` }} onChange={(right) => update(target, right)} />
               {!readOnly ? <Button className="external-request-remove" type="text" icon={<DeleteOutlined />} disabled={disabled || target.required} aria-label={target.required ? `${target.path} 是必填参数，不可移除` : `删除可选参数 ${target.path}`} onClick={() => remove(target)} /> : null}
               {error ? <small className="field-rule-error">{error}</small> : null}
             </div>

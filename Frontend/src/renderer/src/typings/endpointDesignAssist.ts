@@ -2,14 +2,19 @@ import type { BindingSelection } from './endpointDesign'
 import type { WorkflowApiDatabaseOperation, WorkflowApiDesignDraft } from './workflow'
 
 /** 当前单表编辑器可请求的辅助区域。 */
-export type MappingAssistArea = 'query' | 'write' | 'return' | 'description'
+export type MappingAssistArea = 'query' | 'write' | 'request' | 'return' | 'description'
 export type MappingAssistStep = 'operation' | MappingAssistArea
 export type MappingAssistAction = 'generate_mapping' | 'refine_rule' | 'replace_mapping'
 export type MappingAssistBaseline = { draftHash: string; metadataHash: string }
-export type GeneratedMapping = Pick<WorkflowApiDesignDraft, 'databaseWrites' | 'fieldMappings' | 'implementationDescription'> & {
+export type GeneratedMapping = Pick<WorkflowApiDesignDraft, 'fieldMappings' | 'implementationDescription'> & ({
   databaseOperation: WorkflowApiDatabaseOperation
   databaseQuery: WorkflowApiDesignDraft['databaseQuery'] | null
-}
+  databaseWrites: WorkflowApiDesignDraft['databaseWrites']
+  externalApiBindings?: never
+} | {
+  externalApiBindings: NonNullable<WorkflowApiDesignDraft['externalApiBindings']>
+  databaseOperation?: never; databaseQuery?: never; databaseWrites?: never
+})
 export type MappingAssistance = {
   baseline: MappingAssistBaseline; mapping: GeneratedMapping | null; questions: string[]
   operation: WorkflowApiDatabaseOperation | null; operationReason: string
@@ -22,11 +27,11 @@ export type MappingApplied = {
 export type MappingAssistProgress = { stage: string; message: string; percent: number }
 export type MappingAssistRequest = {
   workspaceRoot: string; apiContractId: string; endpointId: string; draft: WorkflowApiDesignDraft
-  selection: Extract<BindingSelection, { sourceType: 'database' }>
+  selection: Extract<BindingSelection, { sourceType: 'database' | 'external_api' }>
   baseRevision: string | null; technicalPlanHash: string
 }
 /** 首次需求必填，后续字段回答与其他补充单独传递。 */
 export type MappingGenerationInput = { instruction: string; clarification: string; retryToken?: string }
-export type RuleAssistTarget = { area: 'query' | 'write' | 'return'; key: string }
+export type RuleAssistTarget = { area: 'query' | 'write' | 'request' | 'return'; key: string }
 export type RuleAssistDependency = { kind: 'endpoint' | 'source' | 'builtin'; field: Record<string, unknown> }
 export type RefinedMappingRule = { description: string; questions: string[] }

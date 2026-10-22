@@ -8,7 +8,7 @@ import { MappingAssistSavedAnswers } from './MappingAssistIssues'
 import { MAPPING_REQUIREMENTS_LIMIT } from './mappingAssistModel'
 import './MappingAssist.less'
 
-const AREA_LABELS = { operation: '数据库操作', query: '查询条件', write: '写入字段', return: '返回字段', description: '映射说明' }
+const AREA_LABELS = { operation: '数据库操作', query: '查询条件', write: '写入字段', request: '外部入参', return: '返回字段', description: '映射说明' }
 
 /** 预览完整映射后整体替换草稿，不进行差异勾选或静默保留旧值。 */
 export default function MappingAssistPanel({ assist, disabled, context }: {
@@ -24,16 +24,16 @@ export default function MappingAssistPanel({ assist, disabled, context }: {
   return <section className="mapping-assist-panel" aria-label="AI 生成映射">
     <div className="mapping-assist-heading"><strong><BulbOutlined /> {result?.mapping ? 'AI 映射已生成' : 'AI 生成映射'} {result && <Tag>{result.mapping ? '尚未应用' : '操作待明确'}</Tag>}</strong><Button type="text" disabled={assist.phase === 'applying'} onClick={assist.close}>收起</Button></div>
     {context && <div className="mapping-assist-context">
-      <span>API 契约 · {context.endpointName} <code>{context.endpointPath}</code> ＋ 数据表 <strong>{context.table}</strong>
+      <span>API 契约 · {context.endpointName} <code>{context.endpointPath}</code> ＋ {assist.isExternal ? '外部 API' : '数据表'} <strong>{context.table}</strong>
         {result?.operation && <> · 操作 <strong className="mapping-assist-operation-value">{DATABASE_OPERATION_LABELS[result.operation]}</strong></>}</span>
       <details><summary>输入与判断依据</summary><div>{context.details}
         {result && <><p>{result.operationReason}</p>{result.operation && <p className="mapping-assist-secondary">{assist.currentOperation === result.operation ? '与当前草稿的操作一致。' : `当前草稿：${assist.currentOperation ? DATABASE_OPERATION_LABELS[assist.currentOperation] : '未选择'} → 生成操作：${DATABASE_OPERATION_LABELS[result.operation]}。`}</p>}</>}
-        <p className="mapping-assist-secondary">根据当前契约与表结构重新生成，已有映射内容不参与判断。</p></div></details>
+        <p className="mapping-assist-secondary">根据当前契约与{assist.isExternal ? '外部 API 结构' : '表结构'}重新生成，已有映射内容不参与判断。</p></div></details>
     </div>}
     {showInput && <div className="mapping-assist-input"><label>需求说明 <span className="mapping-assist-secondary">（必填）</span><Input.TextArea aria-label="AI 映射需求说明" required aria-required="true" maxLength={MAPPING_REQUIREMENTS_LIMIT} autoSize={{ minRows: 2, maxRows: 6 }} disabled={running || disabled}
-      value={assist.instruction} placeholder="请描述接口需要实现的业务，例如：查询商品列表，名称和编号模糊匹配，分类和状态精确匹配。" onChange={(event) => assist.setInstruction(event.target.value)} /></label>
+      value={assist.instruction} placeholder={assist.isExternal ? '请描述外部接口的入参取值和返回处理，例如：传递商品关键词，将外部商品列表返回给应用。' : '请描述接口需要实现的业务，例如：查询商品列表，名称和编号模糊匹配，分类和状态精确匹配。'} onChange={(event) => assist.setInstruction(event.target.value)} /></label>
       <MappingAssistSavedAnswers assist={assist} disabled={disabled} />
-      <div className="mapping-assist-toolbar"><span className="mapping-assist-secondary">AI 先识别数据库操作，再生成对应映射，完成后统一预览。</span>
+      <div className="mapping-assist-toolbar"><span className="mapping-assist-secondary">{assist.isExternal ? 'AI 依次生成外部入参、应用返回字段和说明，完成后统一预览。' : 'AI 先识别数据库操作，再生成对应映射，完成后统一预览。'}</span>
         <Button type="primary" disabled={disabled || running || !assist.instruction.trim() || assist.requirementsLength > MAPPING_REQUIREMENTS_LIMIT} onClick={() => void assist.generate()}>{result ? '重新生成' : '生成映射'}</Button>
       </div></div>}
     {assist.phase === 'generating' && <div className="mapping-assist-progress" aria-live="polite">

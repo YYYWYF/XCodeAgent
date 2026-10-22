@@ -10,7 +10,18 @@ type Props = { mapping: GeneratedMapping; area: MappingAssistArea; onShowIssues:
 
 /** 用独立只读视图审阅生成结果，保留原编辑表单的结构与交互。 */
 export default function MappingAssistPreview({ mapping, area, onShowIssues }: Props): ReactElement {
-  if (area === 'query') return <MappingAssistQueryPreview query={mapping.databaseQuery} />
+  if (area === 'query') return <MappingAssistQueryPreview query={mapping.databaseQuery || null} />
+  if (area === 'request') return <section aria-label="生成的外部入参映射">
+    <div className="mapping-review-return-head"><span>外部 API 入参</span><span>值来源</span><span>取值内容</span><span>状态</span></div>
+    {mapping.externalApiBindings?.length ? mapping.externalApiBindings.map((item) => {
+      const key = `external:${item.externalField.section}:${item.externalField.path}`
+      return <div className="mapping-review-return-row" key={key}>
+        <div><code>{item.externalField.path}</code><small className="mapping-assist-secondary">{item.externalField.section} · {item.externalField.type}</small><MappingAssistReview area="request" target={key} /></div>
+        <ReadOnlyValue title={item.externalField.path} right={item.right} />
+        {item.right ? <span className="mapping-assist-secondary">已映射</span> : <Button type="link" className="mapping-review-pending" onClick={() => onShowIssues(key)}>待明确</Button>}
+      </div>
+    }) : <p className="mapping-assist-secondary">外部 API 无请求参数</p>}
+  </section>
   if (area === 'write') return <section aria-label="生成的写入字段">
     <div className="mapping-review-write-head"><span>数据表字段</span><span>值来源</span><span>取值内容</span></div>
     {mapping.databaseWrites?.length ? mapping.databaseWrites.map((write, index) => <div className="mapping-review-write-row" key={`${write.column}:${index}`}>

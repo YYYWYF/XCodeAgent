@@ -8,7 +8,7 @@ from app.domain.api_design_database import DatabaseConditionOperator
 from app.domain.api_design_fields import ApiDesignModel
 from app.domain.endpoint_design_assist import AssistDatabaseOperation, RefinedRule
 
-AssistStep = Literal["operation", "query", "write", "return", "description", "rule"]
+AssistStep = Literal["operation", "query", "write", "request", "return", "description", "rule"]
 
 
 class StepValue(ApiDesignModel):
