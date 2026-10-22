@@ -65,6 +65,7 @@ from app.services.direct_modification import (
     validated_direct_stage_result,
     validated_dynamic_workspace_paths,
 )
+from app.services.application_config_prerequisite import ConfigPrerequisiteAnalysis
 from app.tools.execute import ExecuteInput
 
 
@@ -536,6 +537,24 @@ class DirectModificationNodeTests(unittest.TestCase):
         self.assertEqual(update["status"], "in_progress")
         self.assertEqual(update["clarification"], {})
         self.assertEqual(_route_classification(update), "execute_frontend")
+
+    def test_satisfied_pure_config_never_calls_generic_classifier(self) -> None:
+        """同值主题配置必须直接完成，不能回落到前端 Agent 路由。"""
+
+        analysis = ConfigPrerequisiteAnalysis(
+            original_request="将应用主题色修改为蓝色", expected_config_revision=3,
+            config_intents=(), config_prerequisites=(), suggested_changes={},
+            business_request_required=False,
+        )
+        with patch("app.graph.nodes.direct_modification.analyze_application_config_prerequisite", return_value=analysis), patch(
+            "app.graph.nodes.direct_modification.classify_direct_modification_intent"
+        ) as classify:
+            update = classify_direct_modification({"request": analysis.original_request, "workspace": "/tmp/workspace"})
+
+        classify.assert_not_called()
+        self.assertEqual(update["status"], "completed")
+        self.assertIn("已满足", update["message"])
+        self.assertEqual(_route_classification(update), "finalize")
 
     def test_dom_context_prioritizes_frontend_target_path(self) -> None:
         """DOM 定位文件应成为 Frontend Agent 的首选候选。"""

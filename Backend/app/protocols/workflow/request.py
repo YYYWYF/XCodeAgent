@@ -710,6 +710,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("retry_code_review 必须携带失败执行的 resumeExecutionRunId。")
     resume_values = {
         **resume_values_from_state,
+        "completed_development_analysis": workflow_action == "continue_revision_build",
         **project_plan_start_values,
         **pregraph_artifact_values(workspace, artifact_entry_node,
             lambda: _debug_resume_values(debug_state, workspace=workspace)),

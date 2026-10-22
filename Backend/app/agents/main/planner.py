@@ -227,10 +227,16 @@ def _technical_planning_prompt(
         ]
     }
     revision_context = (
-        "Revise the existing TechnicalPlan according to planning_adjustment_request and return the complete four-part object.\n"
-        "Treat the supplied Existing TechnicalPlan as the authoritative baseline. Preserve all valid unaffected "
-        "technical decisions. Change only facts explicitly required by planning_adjustment_request and consistency "
-        "changes directly caused by those edits. Do not rename, remove, or redesign unrelated entities, API Contracts, "
+        "Revise the existing TechnicalPlan to satisfy the latest confirmed ProductPlan and return the complete four-part object.\n"
+        "The latest confirmed ProductPlan takes precedence over the Existing TechnicalPlan. The existing plan is "
+        "a technical reuse baseline, not an authority that can override current product requirements. Preserve all valid unaffected technical decisions "
+        "only while they remain consistent with the latest confirmed ProductPlan. Compare current product goals, "
+        "information items, actions, and business flows against the existing plan and apply every required technical "
+        "change, including entity fields, API request/response Schemas, Endpoints, and page bindings as needed. "
+        "An upstream requirement change is itself a concrete dependency reason to update the plan, even when "
+        "planning_adjustment_request only says that upstream artifacts were updated and does not repeat the change. "
+        "Do not require the user to restate a requirement already present in the latest confirmed ProductPlan. "
+        "Do not rename, remove, or redesign unrelated entities, API Contracts, "
         "Endpoints, Schemas, architecture decisions, or page bindings without a concrete dependency reason. Preserve "
         "the Chinese name of every unchanged API Contract and Endpoint.\n"
         f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"

@@ -7,7 +7,7 @@ import {
 } from '@ant-design/icons'
 import { Button, Empty, Popconfirm, Spin } from 'antd'
 import type { ReactElement } from 'react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import freeChatIcon from '../../../../assets/icons/free-chat.svg'
 import type { ChatSessionSummary } from '../../../../service/chatSessions'
 import { cx } from '../../../../utils'
@@ -62,6 +62,11 @@ export default function FreeChatHistory({
   temporaryChatEnabled
 }: FreeChatHistoryProps): ReactElement | null {
   const [tab, setTab] = useState<'regular' | 'temporary'>(historyEnabled ? 'regular' : 'temporary')
+  // 面板根节点引用，给"点击外部关闭"判断用。
+  const rootRef = useRef<HTMLElement | null>(null)
+  // 用 ref 持有最新 onClose，避免监听器因 onClose 引用变化反复挂载/卸载。
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
   // 常规会话继续按原阶段门控，临时会话在当前 Renderer 生命周期内独立管理。
   useEffect(() => {
     setTab(historyEnabled ? 'regular' : 'temporary')
@@ -75,6 +80,39 @@ export default function FreeChatHistory({
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [onClose, open])
+
+  // 点击面板外部自动收起：与其他工作台抽屉（技能/文件/设置）行为一致。
+  // 用 mousedown 而非 click：click 在 mouseup 才触发，用户在面板内按下拖到外部松开
+  // （选择文本）不应被误判为"点击外部"。
+  // 排除 antd 浮层（Popconfirm 删除确认、Tooltip 等）：它们 portal 到 body，DOM 在
+  // 面板外但语义上属于面板内的交互，不应触发关闭。
+  useEffect(() => {
+    if (!open) return
+    const handleMouseDown = (event: MouseEvent): void => {
+      const root = rootRef.current
+      if (!root) return
+      const target = event.target as Node | null
+      if (!target) return
+      if (root.contains(target)) return
+      if (target instanceof Element) {
+        const floating = target.closest(
+          '.ant-modal-wrap, .ant-modal-mask, .ant-select-dropdown, ' +
+            '.ant-picker-dropdown, .ant-popover, .ant-tooltip, .ant-dropdown, ' +
+            '.ant-cascader-dropdown, .ant-tree-select-dropdown, .ant-message, ' +
+            '.ant-notification, .ant-popconfirm'
+        )
+        if (floating) return
+        // 侧栏"对话管理"按钮本身是 toggle：mousedown 关闭后 click 又会打开，导致闪烁。
+        // 跳过它，让 click 阶段的 toggle 逻辑独立决定打开/关闭。
+        if (target.closest('[data-history-toggle="true"]')) return
+      }
+      onCloseRef.current?.()
+    }
+    document.addEventListener('mousedown', handleMouseDown, true)
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown, true)
+    }
+  }, [open])
 
   /** 按当前标签分别创建持久常规会话或内存临时会话。 */
   const handleCreateSession = (): void => {
@@ -98,7 +136,7 @@ export default function FreeChatHistory({
   if (!open) return null
 
   return (
-    <section aria-label="对话管理" className={cx('free-chat-history-panel')}>
+    <section aria-label="对话管理" className={cx('free-chat-history-panel')} ref={rootRef}>
       <header className={cx('free-chat-history-header')}>
         <span aria-hidden="true" className={cx('temporary-chat-agent-icon')}>
           <span

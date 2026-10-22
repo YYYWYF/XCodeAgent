@@ -608,20 +608,39 @@
 
 .@{class-prefix}-ui-design-template-picker-modal {
   .ant-modal-body {
-    padding: 16px 20px;
+    padding: 20px 24px 0;
+    // 整个 body 滚动；底部说明文案用 sticky 粘在可视区底部。
+    max-height: 70vh;
+    overflow-y: auto;
   }
 }
 
 .@{class-prefix}-ui-design-template-picker-hint {
   display: block;
-  margin-top: 12px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(5, 5, 5, 0.06);
   font-size: 13px;
+  // 深一点的文字颜色：默认 secondary 灰色在淡紫底上偏淡，改用更深的中性色提升可读性。
+  color: rgba(0, 0, 0, 0.75);
+  // 粘在可视区底部：body 滚动时始终保持在底部可见，不随模板列表滚走。
+  position: sticky;
+  bottom: 0;
+  // 不透明淡紫灰背景：既能与上方白色内容区分，又能完全遮住滚动到下方的卡片内容。
+  // 不用 rgba 半透明——sticky 元素若半透明，滚动内容会透过来。
+  background: #ece6f5;
+  // 视觉贴底：负边距抵消 body 侧 padding，无圆角让背景贯通整个底部横条。
+  margin-left: -24px;
+  margin-right: -24px;
 }
 
 .@{class-prefix}-ui-design-template-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
+  // 底部留白 = hint 高度，确保 sticky hint 下方永远不会有"还能继续滚到的内容"。
+  // 这样用户滚到底时，最后一张卡片正好停在 hint 上方，视觉干净。
+  padding-bottom: 4px;
 }
 
 .@{class-prefix}-ui-design-template-card {
@@ -662,7 +681,8 @@
 .@{class-prefix}-ui-design-template-thumb {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  // 更扁的缩略图比例，降低单卡高度，让弹窗在不滚动时也能容纳更多模板。
+  aspect-ratio: 21 / 9;
   background: #f5f5f5;
   overflow: hidden;
 
@@ -682,19 +702,87 @@
   height: 100%;
 }
 
-.@{class-prefix}-ui-design-template-card-body {
-  padding: 8px 10px;
+// 缩略图默认蒙层：淡灰遮罩 + 中央眼睛图标 + 两行操作提示。
+// 鼠标移入缩略图时蒙层淡出（同时触发大图预览浮层），移出后淡入恢复。
+// pointer-events:none 让 hover 事件落在缩略图容器上，蒙层自身不拦截鼠标。
+.@{class-prefix}-ui-design-template-thumb-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.72);
+  opacity: 1;
+  transition: opacity 0.18s ease-out;
+  pointer-events: none;
+}
+
+.@{class-prefix}-ui-design-template-thumb:hover .@{class-prefix}-ui-design-template-thumb-mask {
+  opacity: 0;
+}
+
+.@{class-prefix}-ui-design-template-thumb-mask-icon {
+  font-size: 16px;
+  line-height: 1;
+  // 主题紫色：在淡紫底上清晰、不刺眼。
+  color: #722ed1;
+}
+
+.@{class-prefix}-ui-design-template-card-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.@{class-prefix}-ui-design-template-name {
+  font-size: 14px;
+  line-height: 1.4;
 }
 
 .@{class-prefix}-ui-design-template-desc {
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.6;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+// 悬浮缩略图时的大图预览浮层。
+// fixed 定位脱离卡片（卡片有 overflow:hidden 会裁剪）也脱离 Modal body（有 max-height+overflow 会裁剪）。
+// pointer-events:none 让鼠标穿透到下层的缩略图，避免浮层盖住鼠标造成 hover 闪烁；
+// 同时不影响卡片原有的点击=选模板行为（点击事件照常落在卡片上）。
+.@{class-prefix}-ui-design-template-image-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 1100; // antd Modal 默认 z-index 是 1000，浮层要更高才能盖住 Modal。
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  animation: ui-design-template-zoom-fade-in 0.15s ease-out;
+
+  img {
+    max-width: 80vw;
+    max-height: 80vh;
+    object-fit: contain;
+    border-radius: 6px;
+    background: #fff;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  }
+}
+
+@keyframes ui-design-template-zoom-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 // ---------- 单页动作（选模板/换一换）run 期间：渲染区显示加载态 ----------

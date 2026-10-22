@@ -32,7 +32,6 @@ export type SectionKey =
   | 'api-contracts'
   | 'page-bindings'
   | 'authorization'
-  | 'page-design-overview'
 
 type SectionProps = {
   sectionKey: SectionKey

@@ -21,8 +21,29 @@ import ApiOutlineGroup from '../src/renderer/src/components/AiChatPanel/componen
 import TestPhaseConfirmationCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/TestPhaseConfirmationCard'
 import PlanExecutionDock from '../src/renderer/src/components/AiChatPanel/components/PlanExecutionDock'
 import QuickTaskGuide from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide'
+import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
+import { developmentCompletedCount, developmentStatusText } from '../src/renderer/src/developmentArtifacts'
 import type { ApplicationLifecycle, TestEntryGate } from '../src/renderer/src/typings'
 import type { PlanExecutionMode } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
+
+test('修订变更状态保留首次完成事实，选择卡和目录圆点展示有变更及待检查', () => {
+  const changed = { initialDevelopmentStatus: 'completed' as const, changeStatus: 'changed' as const,
+    changeReason: '接口参数变化', completedRunId: 'first' }
+  const unknown = { ...changed, changeStatus: 'unavailable' as const }
+  assert.equal(developmentStatusText(changed), '有变更')
+  assert.equal(developmentStatusText(unknown), '待检查')
+  assert.equal(developmentCompletedCount([changed, unknown, { initialDevelopmentStatus: 'completed' }]), 1)
+  const dot = renderToStaticMarkup(createElement(DevelopmentStatusDot, { progress: changed }))
+  assert.match(dot, /data-status="changed"/)
+  assert.match(dot, /有变更：接口参数变化/)
+  const html = renderToStaticMarkup(createElement(QuickTaskGuide, {
+    developmentArtifacts: { pages: { orders: changed }, endpoints: {}, entities: {} },
+    pages: [{ pageId: 'orders', label: '订单', path: '/orders', hasDetailPlan: true }],
+    apiContracts: [], entities: [], disabled: false, loading: false, onStart: async () => undefined
+  }))
+  assert.match(html, /今天想从哪里开始/)
+  assert.match(html, /有变更/)
+})
 
 const blocked: TestEntryGate = {
   allowed: false,
@@ -88,6 +109,24 @@ test('新会话卡片只显示页面和接口，不提供实体设计入口', ()
     assert.match(html, new RegExp(`data-status="${status}">${label}</span>`))
   }
   assert.doesNotMatch(html, /实体|data-status="pending"/)
+})
+
+test('API 检测通过后的选择卡要求具体页面或接口，支持空目标清单', () => {
+  const html = renderToStaticMarkup(
+    <NextDevelopmentGuide
+      step={{ key: 'selection', reason: 'selection' }}
+      tasks={[]}
+      disabled={false}
+      loading={false}
+      onStart={async () => undefined}
+    />
+  )
+  assert.match(html, /你想开发哪个页面或 API？/)
+  assert.match(html, /API 配置检测已通过/)
+  assert.match(html, /暂无可开发任务/)
+  assert.match(html, /查看全部页面 \/ API/)
+  assert.doesNotMatch(html, /本轮开发已完成|本轮开发已结束|quick-task-grid/)
+  assert.doesNotMatch(html, /今天想从哪里开始|整个应用/)
 })
 
 test('开发产物接口树展示 Contract 和 Endpoint 名称并通过悬停提供路径', () => {

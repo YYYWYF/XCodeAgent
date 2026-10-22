@@ -15,7 +15,7 @@ import type {
   DevelopmentPlanningPageOption
 } from '../../../../typings'
 import { cx } from '../../../../utils'
-import { developmentStatusText } from '../../../../developmentArtifacts'
+import { developmentDisplayStatus, developmentStatusText } from '../../../../developmentArtifacts'
 import IterationBadge from '../../../IterationBadge'
 import { buildQuickTasks, type QuickTaskItem } from './quickTasks'
 import './QuickTaskGuide.less'
@@ -118,7 +118,7 @@ function QuickTaskSection({
                     <span className={cx('quick-task-item-status-row')}>
                       <span
                         className={cx('quick-task-item-status')}
-                        data-status={item.progress?.initialDevelopmentStatus || 'pending'}
+                        data-status={developmentDisplayStatus(item.progress)}
                       >
                         {developmentStatusText(item.progress)}
                       </span>

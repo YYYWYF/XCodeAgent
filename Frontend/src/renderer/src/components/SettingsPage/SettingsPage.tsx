@@ -8,16 +8,21 @@ import {
   SettingOutlined,
   CloseOutlined
 } from '@ant-design/icons'
-import { Anchor, Button, Form, Input, Typography, message } from 'antd'
+import { Anchor, Button, Form, Input, Modal, Typography, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
 import { DatasourceEnum, type ApplicationConfig, type ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from '../Welcome/ApplicationForm'
 import { saveApplication } from '../Welcome/applicationService'
-import type { ConfigOperation } from '../../service/applicationConfigOperation'
+import type { ConfigChanges, ConfigOperation } from '../../service/applicationConfigOperation'
 import { loadWorkspaceApplicationConfig } from '../../service/applicationStorage'
-import { applySettingsConfigChanges } from './settingsConfigChanges'
+import {
+  applySettingsConfigChanges,
+  configOperationFailureMessage,
+  settingsConfigChanges,
+  settingsSaveNoticeMessages
+} from './settingsConfigChanges'
 import { buildDatasourceConfig } from '../Welcome/utils'
 import '../Welcome/ApplicationFormModal.less'
 import './SettingsPage.less'
@@ -92,6 +97,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
   const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
   // 校验设置并通过统一应用保存入口加密数据库凭据。
   const handleSave = async (): Promise<void> => {
+    let submittedChanges: ConfigChanges = {}
     try {
       const values = await form.validateFields()
       setSaving(true)
@@ -120,6 +126,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         menus: application.menus,
         environment
       }
+      submittedChanges = settingsConfigChanges(application, updatedApplication)
       const applied: ConfigOperation | undefined = await applySettingsConfigChanges(application, updatedApplication)
       if (applied && applied.status !== 'APPLIED') throw new Error('应用配置尚未完成工程同步。')
       const disk = await loadWorkspaceApplicationConfig(application.workspaceRoot)
@@ -133,13 +140,15 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         configRevision: disk.configRevision
       })
       onSaved(persistedApplication)
-      message.success('应用配置已保存')
-      if (applied?.changedFiles?.includes('frontend/.env')) {
-        message.info('frontend/.env 已更新；请重新构建或重启前端服务以加载新配置。', 6)
-      }
-      if (applied?.changedFiles?.includes('backend/src/main/resources/application.yml')) {
-        message.info('application.yml 已更新；请重启后端服务以加载新配置。', 6)
-      }
+      const notices = settingsSaveNoticeMessages(applied)
+      Modal.success({
+        title: '应用设置已保存',
+        content: (
+          <ul>
+            {notices.map((notice) => <li key={notice}>{notice}</li>)}
+          </ul>
+        )
+      })
     } catch (error) {
       // antd validateFields 校验失败时返回 { errorFields, values }，非 Error 实例
       // errorFields 按字段注册顺序排列（静态字段先于 Form.List 动态字段），
@@ -171,7 +180,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
           if (firstErr) message.error(firstErr)
         }
       } else if (error instanceof Error) {
-        message.error(`保存失败：${error.message}`)
+        message.error(configOperationFailureMessage(error, submittedChanges))
       }
     } finally {
       setSaving(false)
@@ -254,6 +263,10 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
             initialValues={{
               ...settingsDraft,
               envVariables: safeEnvVariables
+            }}
+            lockedCapabilities={{
+              login: application.auth.enable,
+              authorization: application.authorization.enabled
             }}
             mode="settings"
           >

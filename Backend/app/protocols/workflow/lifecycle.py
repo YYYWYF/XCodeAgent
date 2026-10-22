@@ -343,6 +343,18 @@ def project_workflow_lifecycle_boundary(
     lifecycle = load_application_lifecycle(workspace) if workspace else None
     if lifecycle is None or run_id not in lifecycle.active_executions:
         return None
+    if (update.get("clarification") or {}).get("mode") == "development_target_selection":
+        # 只结束配置交接，不记录开发完成或验收通过，并释放本次修订占用。
+        ended = end_workbench_execution(workspace, run_id=run_id)
+        return application_lifecycle_payload(ended)
+    if (
+        node_name == "test_phase_confirmation"
+        and update.get("status") == "completed"
+        and update.get("integration_next_action") == "end"
+    ):
+        # 开发完成通知不是待确认交互；收口本轮 execution 并释放输入和资源占用。
+        completed = end_workbench_execution(workspace, run_id=run_id)
+        return application_lifecycle_payload(completed)
     if node_name == "finalize_project" and update.get("status") == "completed":
         complete_workbench_execution(workspace, run_id=run_id)
         change_id = complete_active_revision(workspace)

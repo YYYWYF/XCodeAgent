@@ -25,6 +25,7 @@ import type { WorkflowRevisionContinuationHandoff } from '../../../service/appli
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
 import { applyConfigChanges, type ConfigChanges } from '../../../service/applicationConfigOperation'
+import { configOperationEffectMessages } from '../../SettingsPage/settingsConfigChanges'
 import {
   beginConnectionRequest,
   completeConnectionRequest,
@@ -1949,7 +1950,10 @@ export function useWorkflowConversation({
       : workflowSelectedPageId(workflow) || selectedPageId
     const continuationEntityId = workflowSelectedEntityId(workflow) || selectedEntityId
     if (conversation && clarificationMode === 'application_config_prerequisite' && configPrerequisite) {
-      if (loading || workspaceBusy) return false
+      // 配置卡本身正是暂停在同一会话中的确认门；不能把该等待态误当作仍在生成而静默拒绝。
+      if (workspaceBusy) {
+        throw new Error('当前应用由其他会话持有，请切回发起此配置确认的会话后重试。')
+      }
       if (configPrerequisite.action === 'cancelled') {
         return sendWorkflowMessage('用户已取消本次应用配置与原业务请求。', {
           originalRequest,
@@ -1966,8 +1970,14 @@ export function useWorkflowConversation({
         undefined,
         configPrerequisite.requestId
       )
-      if (!operation.operationId || operation.status !== 'APPLIED') return false
-      return sendWorkflowMessage('应用配置已确认，继续处理原请求。', {
+      if (!operation.operationId || operation.status !== 'APPLIED') {
+        throw new Error('应用配置尚未完成提交，请根据提示修正后重试。')
+      }
+      const effects = configOperationEffectMessages(operation)
+      const confirmation = effects.length
+        ? `应用配置已确认。${effects.join('')}继续处理原请求。`
+        : '应用配置已确认，继续处理原请求。'
+      return sendWorkflowMessage(confirmation, {
         originalRequest,
         conversation: true,
         conversationConfigRequestId: configPrerequisite.requestId,

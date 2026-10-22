@@ -5,6 +5,7 @@ import { initialApplicationDraft } from '../src/renderer/src/components/Welcome/
 import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/utils'
 import {
   configPrerequisiteChanges,
+  mergeConversationConfigValues,
   type ConfigPrerequisite
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ApplicationConfigPrerequisiteCard'
 import { applyConfigChanges } from '../src/renderer/src/service/applicationConfigOperation'
@@ -49,6 +50,47 @@ test('配置卡片只在用户明确确认后追加推断依赖，且保留用�
     'auth.yht.privateKey': 'user-submitted-secret',
     'auth.enable': true,
     'authorization.enabled': true
+  })
+})
+
+test('配置卡片用完整应用配置补齐仅注册登录与权限字段的局部表单值', () => {
+  const current = application()
+  const partial = {
+    auth: {
+      enable: true,
+      yht: { clientId: 'client', privateKey: 'private', publicKey: 'public', centerPublicKey: 'center' }
+    },
+    authorization: { enabled: true, initialAdministratorSubjects: ['subject-001'] }
+  } as ApplicationDraft
+
+  const merged = mergeConversationConfigValues(current, partial)
+
+  assert.equal(merged.theme.primaryColor, current.theme.primaryColor)
+  assert.deepEqual(configPrerequisiteChanges(current, merged, [], false), {
+    'auth.enable': true,
+    'authorization.enabled': true,
+    'auth.yht.clientId': 'client',
+    'auth.yht.privateKey': 'private',
+    'auth.yht.publicKey': 'public',
+    'auth.yht.centerPublicKey': 'center',
+    'authorization.initialAdministratorSubjects': ['subject-001']
+  })
+})
+
+test('配置卡片将名称、图标和主题色的局部表单值合并为受管配置提案', () => {
+  const current = application()
+  const partial = {
+    appName: '客户中心',
+    appIcon: 'DashboardOutlined',
+    theme: { primaryColor: '#e60012' }
+  } as ApplicationDraft
+
+  const merged = mergeConversationConfigValues(current, partial)
+
+  assert.deepEqual(configPrerequisiteChanges(current, merged, [], false), {
+    appName: '客户中心',
+    appIcon: 'DashboardOutlined',
+    'theme.primaryColor': '#e60012'
   })
 })
 

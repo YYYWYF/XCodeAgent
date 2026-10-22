@@ -1,5 +1,5 @@
 import type { DevelopmentArtifactProgress } from '../../../../typings'
-import { developmentStatusLabel } from '../../../../developmentArtifacts'
+import { developmentDisplayStatus, developmentStatusLabel } from '../../../../developmentArtifacts'
 import { cx } from '../../../../utils'
 import './DevelopmentStatusDot.less'
 
@@ -14,7 +14,7 @@ export default function DevelopmentStatusDot({
     <span
       aria-label={label}
       className={cx('development-status-dot')}
-      data-status={progress?.initialDevelopmentStatus || 'pending'}
+      data-status={developmentDisplayStatus(progress)}
       role="img"
       title={label}
     />

@@ -89,6 +89,44 @@ class ConfigPrerequisiteTests(unittest.TestCase):
         self.assertFalse(result.requires_card)
         self.assertTrue(result.business_request_required)
 
+    def test_theme_blue_is_explicit_pure_config(self) -> None:
+        """全局主题蓝色映射到既有预设，且通用“修改”不再被当作业务任务。"""
+
+        result = analyze_application_config_prerequisite("将应用主题色修改为蓝色", self.root)
+        self.assertEqual(result.config_intents[0]["path"], "theme.primaryColor")
+        self.assertEqual(result.config_intents[0]["desiredValue"], "#1677ff")
+        self.assertFalse(result.business_request_required)
+        self.assertEqual(result.config_route, "awaiting_config_confirmation")
+
+    def test_theme_hex_and_local_page_style_are_distinct(self) -> None:
+        """HEX 全局主题可识别；页面卡片颜色继续属于局部前端修改。"""
+
+        theme = analyze_application_config_prerequisite("把应用主色设为 #1677ff", self.root)
+        local = analyze_application_config_prerequisite("将首页卡片背景改为蓝色", self.root)
+        self.assertEqual(theme.suggested_changes, {"theme.primaryColor": "#1677ff"})
+        self.assertEqual(local.config_route, "not_applicable")
+
+    def test_satisfied_theme_and_mixed_request_routes_correctly(self) -> None:
+        """同值纯配置短路；同值加页面需求仍保留业务路由。"""
+
+        config_path = self.root / ".devagentstudio/application.json"
+        config = json.loads(config_path.read_text())
+        config["theme"]["primaryColor"] = "#1677ff"
+        config_path.write_text(json.dumps(config, ensure_ascii=False))
+        self.assertEqual(analyze_application_config_prerequisite("主题色改为蓝色", self.root).config_route, "config_only_satisfied")
+        mixed = analyze_application_config_prerequisite("主题色改为蓝色，并新增员工管理页面", self.root)
+        self.assertTrue(mixed.business_request_required)
+        self.assertEqual(mixed.config_route, "business_continuation")
+
+    def test_unresolved_theme_and_dashboard_icon_need_card(self) -> None:
+        """模糊颜色不编造值，Dashboard 映射到现有合法图标标识。"""
+
+        theme = analyze_application_config_prerequisite("将应用主题色改为更稳重的颜色", self.root)
+        icon = analyze_application_config_prerequisite("将应用图标改为 Dashboard", self.root)
+        self.assertIsNone(theme.config_intents[0]["desiredValue"])
+        self.assertEqual(theme.config_intents[0]["valueStatus"], "needs_user_selection")
+        self.assertEqual(icon.suggested_changes, {"appIcon": "DashboardOutlined"})
+
 
 if __name__ == "__main__":
     unittest.main()

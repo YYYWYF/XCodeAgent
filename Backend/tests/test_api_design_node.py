@@ -58,18 +58,17 @@ class ApiDesignNodeTests(unittest.TestCase):
                 ["orders.list", "orders.create"],
             )
 
-    def test_endpoint_ready_shows_gate_before_refresh(self) -> None:
-        """接口自身映射有效时首次仍展示门禁，用户刷新检测后才继续。"""
+    def test_endpoint_ready_passes_without_refresh(self) -> None:
+        """接口自身映射有效时自动通过，显式刷新也保持相同结果。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = _plan()
             _write_plan(workspace, plan)
             write_endpoint_design(workspace, _empty_design(workspace, "orders.list"))
             waiting = api_design_readiness_gate(_endpoint_state(workspace, plan))
-            self.assertEqual(waiting["status"], "requires_user_input")
-            self.assertEqual(waiting["clarification"]["mode"], "api_design_required")
-            self.assertEqual(waiting["clarification"]["missingApiDesigns"], [])
-            self.assertEqual(waiting["clarification"]["apiDesigns"][0]["status"], "confirmed")
+            self.assertEqual(waiting["status"], "completed")
+            self.assertEqual(waiting["clarification"], {})
+            self.assertEqual(waiting["api_design_readiness"]["api_designs"][0]["status"], "confirmed")
             completed = api_design_readiness_gate(
                 {
                     **_endpoint_state(workspace, plan),
@@ -85,8 +84,8 @@ class ApiDesignNodeTests(unittest.TestCase):
             self.assertEqual(completed["clarification"], {})
             self.assertNotIn("api_design_result", completed)
 
-    def test_page_ready_shows_all_endpoint_states_before_refresh(self) -> None:
-        """页面全部接口已完成时仍展示完整列表，便于查看或修改。"""
+    def test_page_ready_passes_without_refresh(self) -> None:
+        """页面全部接口有效时自动通过，并保留校验后的完整状态。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = _plan()
@@ -100,10 +99,10 @@ class ApiDesignNodeTests(unittest.TestCase):
                     "selectedPageId": "orders",
                 }
             )
-            self.assertEqual(result["status"], "requires_user_input")
-            self.assertEqual(result["clarification"]["missingApiDesigns"], [])
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["clarification"], {})
             self.assertEqual(
-                [item["endpoint_id"] for item in result["clarification"]["apiDesigns"]],
+                [item["endpoint_id"] for item in result["api_design_readiness"]["api_designs"]],
                 ["orders.list", "orders.create"],
             )
 

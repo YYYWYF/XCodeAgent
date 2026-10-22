@@ -178,6 +178,8 @@ def route_build_result(state: ProjectState) -> str:
 def route_test_phase_confirmation(state: ProjectState) -> str:
     """根据测试阶段确认结果选择暂停或继续集成测试。"""
 
+    if state.get("status") == "completed" and state.get("integration_next_action") == "end":
+        return "completed"
     if state.get("status") == "in_progress" and state.get("integration_next_action") in {"build", "unit_test"}:
         return str(state["integration_next_action"])
     if state.get("status") == "requires_user_input":
@@ -243,8 +245,10 @@ def route_entity_source_binding(state: ProjectState) -> str:
 
 
 def route_api_design_readiness(state: ProjectState) -> str:
-    """API 设计齐备时进入工作区检查，否则等待用户逐个完成设计。"""
+    """具体目标就绪后继续开发，无具体目标则结束交接并等待选择。"""
 
+    if (state.get("clarification") or {}).get("mode") == "development_target_selection":
+        return "await_user_input"
     return "await_user_input" if state.get("status") == "requires_user_input" else "inspect_workspace"
 
 
@@ -267,6 +271,8 @@ def route_project_planning(state: ProjectState) -> str:
 def route_prepare_build_tasks(state: ProjectState) -> str:
     """任务 DAG 生成失败进入统一失败处理，成功才进入 Build 调度。"""
 
+    if (state.get("clarification") or {}).get("mode") == "development_target_selection":
+        return "await_user_input"
     if state.get("status") == "requires_user_input":
         return "await_user_input"
     if state.get("status") == "failed":
@@ -540,6 +546,7 @@ def build_graph(
         "test_phase_confirmation",
         route_test_phase_confirmation,
         {
+            "completed": END,
             "build": "build",
             "unit_test": "unit_test",
             "integration_test": "integration_test",

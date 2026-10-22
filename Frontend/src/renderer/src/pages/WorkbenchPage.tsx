@@ -189,7 +189,7 @@ function WorkbenchPage({
 
   // 入口失败只处理一次：提示原因、返回首页，并由顶层卸载损坏的工作台实例。
   const failWorkbenchEntry = useCallback(
-    (reason: string): void => {
+    (_reason: string): void => {
       if (entryStageRef.current !== 'loading' || entryFailureHandledRef.current) return
       entryFailureHandledRef.current = true
       message.error(`工作台加载失败，已返回首页。`)
@@ -262,14 +262,22 @@ function WorkbenchPage({
           console.warn('工作区规划产物不完整。', inspection)
           if (lifecycleReadyForWorkbench) {
             // 冷启动缓存可能仍是开发就绪，而正式修订已把磁盘产物转为待确认；以当前生命周期决定入口，避免误报损坏。
-            const currentLifecycle = await getApplicationLifecycle({
-              workspaceRoot: application.workspaceRoot,
-              id: application.id,
-              appName: application.appName
-            })
+            let currentLifecycle: ApplicationLifecycle | undefined
+            try {
+              currentLifecycle = await getApplicationLifecycle({
+                workspaceRoot: application.workspaceRoot,
+                id: application.id,
+                appName: application.appName
+              })
+            } catch (error) {
+              // 生命周期不可读时仍保留工作台入口；后续工作流会按后端当前状态返回可操作错误。
+              console.warn('无法同步应用生命周期，继续打开工作台。', error)
+            }
             if (!active) return
-            onApplicationLifecycleChange(currentLifecycle)
-            if (!isApplicationCreationComplete(currentLifecycle)) return
+            if (currentLifecycle) {
+              onApplicationLifecycleChange(currentLifecycle)
+              if (!isApplicationCreationComplete(currentLifecycle)) return
+            }
             const artifactNames: Record<string, string> = {
               'requirement-spec': '需求文档', 'product-plan': '产品计划', 'technical-plan': '技术规划'
             }
@@ -319,13 +327,13 @@ function WorkbenchPage({
       })
       .catch((error) => {
         if (!active) return
-        console.warn('读取工作台应用生命周期失败，终止本次工作台加载。', error)
-        failWorkbenchEntry(formatWorkbenchEntryError(error, '读取应用生命周期失败。'))
+        // 生命周期只用于恢复规划状态，不作为打开已有工作区的准入条件。
+        console.warn('读取工作台应用生命周期失败，继续保留工作台。', error)
       })
     return () => {
       active = false
     }
-  }, [application.id, application.workspaceRoot, failWorkbenchEntry, onApplicationLifecycleChange])
+  }, [application.id, application.appName, application.workspaceRoot, onApplicationLifecycleChange])
 
   // 应用首次进入工作台时初始化首条分支记录，分支名取自新建表单。
   // 已有 branches 的应用（如发起新迭代后重新进入）跳过，保留分支表。

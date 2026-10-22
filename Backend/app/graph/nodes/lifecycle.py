@@ -358,9 +358,24 @@ def test_phase_confirmation(state: ProjectState) -> dict:
         }
     lifecycle = complete_initial_development(
         workspace_root(state), run_id=str(state.get("active_run_id") or ""),
+        build_state=state,
     )
     gate = test_entry_gate(lifecycle)
     review_files = development_review_files(workspace_root(state))
+    # 单个目标完成即结束本轮开发；应用尚未具备测试资格时不创建不可操作的确认门。
+    if not gate.allowed:
+        return {
+            "phase": "test_phase_confirmation",
+            "status": "completed",
+            "message": "本轮开发已完成，可继续开发其他目标，或描述下一步修改。",
+            "development_review_files": review_files,
+            "build_summary": build_summary,
+            "test_phase_confirmation": {},
+            "clarification": {},
+            "test_target": target,
+            "integration_next_action": "end",
+            "timeline": ["test_phase_confirmation"],
+        }
     submission = state.get("test_phase_confirmation")
     confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
     if confirmed and gate.allowed:

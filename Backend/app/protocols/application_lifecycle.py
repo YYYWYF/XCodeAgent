@@ -141,6 +141,9 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "developmentArtifacts": {
             "targets": ["page", "endpoint"],
             "statuses": ["pending", "in_progress", "completed"],
+            "changeStatusField": "changeStatus",
+            "changeStatuses": ["unchanged", "changed", "unavailable"],
+            "revisionReturnAnalysis": "completed-targets-only",
             "completionBoundary": "test_phase_confirmation",
             "gateField": "testEntryGate",
             "secondaryModificationResetsCompletion": False,

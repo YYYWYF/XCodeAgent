@@ -1,6 +1,7 @@
 import type { QuickTaskItem } from '../QuickTaskGuide/quickTasks'
+import { developmentDisplayStatus } from '../../../../developmentArtifacts'
 
-export type TargetStatusFilter = 'all' | 'pending' | 'in_progress' | 'completed'
+export type TargetStatusFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'changed' | 'unavailable'
 export type TargetKindFilter = 'all' | 'page' | 'endpoint'
 
 /** 只有正式目录读取成功且非空的页面/API 全部完成时，才隐藏继续开发引导。 */
@@ -14,7 +15,7 @@ export function allDevelopmentTargetsCompleted(
     !loading &&
     !catalogError &&
     targets.length > 0 &&
-    targets.every((task) => task.progress?.initialDevelopmentStatus === 'completed')
+    targets.every((task) => developmentDisplayStatus(task.progress) === 'completed')
   )
 }
 
@@ -30,7 +31,7 @@ export function filterDevelopmentTargets(
     (task) =>
       task.kind !== 'entity' &&
       (kind === 'all' || task.kind === kind) &&
-      (status === 'all' || task.progress?.initialDevelopmentStatus === status) &&
+      (status === 'all' || (task.progress && developmentDisplayStatus(task.progress) === status)) &&
       (!query ||
         `${task.title} ${task.meta} ${task.kind === 'endpoint' ? task.endpointPath : ''} ${task.description}`
           .toLocaleLowerCase()

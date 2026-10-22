@@ -86,7 +86,7 @@ class DevelopmentCompletionResumeTests(unittest.TestCase):
                 self.assertEqual(len(final["testEntryGate"]["blockers"]), 1)
                 other_type = "endpoint" if scope["type"] == "page" else "page"
                 self.assertEqual(final["testEntryGate"]["blockers"][0]["type"], other_type)
-                self.assertEqual(final["activeExecutions"]["resumed"]["status"], "awaiting_user")
+                self.assertNotIn("resumed", final["activeExecutions"])
 
     def test_application_debug_resume_completes_page_only(self) -> None:
         """页面完成后为 1/2，接口保持未完成。"""

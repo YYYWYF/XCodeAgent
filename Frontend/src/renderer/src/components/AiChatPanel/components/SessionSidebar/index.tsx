@@ -129,7 +129,6 @@ export default function SessionSidebar({
   onShowDataSources,
   onShowExternalApis,
   onShowSettings,
-  onShowSkills,
   outlineLocked,
   pages,
   pageTree,
@@ -141,7 +140,6 @@ export default function SessionSidebar({
   sessionRunStates,
   sessions,
   settingsActive,
-  skillsActive,
   historyEnabled,
   theme,
   workspaceRoot
@@ -330,6 +328,7 @@ export default function SessionSidebar({
                 aria-expanded={historyOpen}
                 aria-label={historyOpen ? '关闭对话管理' : '打开对话管理'}
                 className={cx('free-chat-nav-main')}
+                data-history-toggle="true"
                 onClick={handleHistoryToggle}
                 title="对话管理"
                 type="button"
@@ -377,9 +376,9 @@ export default function SessionSidebar({
               <span>文件</span>
             </button>
             <button
-              className={cx(skillsActive && 'active')}
-              onClick={() => handleRailNavigation(onShowSkills)}
-              title="技能"
+              aria-disabled="true"
+              disabled
+              title="技能版块尚未完善，暂不可用"
               type="button"
             >
               <ThunderboltOutlined />

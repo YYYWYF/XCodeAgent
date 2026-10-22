@@ -3,7 +3,12 @@ import { test } from 'node:test'
 import type { ApplicationConfig, ApplicationDraft } from '../src/renderer/src/typings'
 import { initialApplicationDraft } from '../src/renderer/src/components/Welcome/constants'
 import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/utils'
-import { applySettingsConfigChanges } from '../src/renderer/src/components/SettingsPage/settingsConfigChanges'
+import {
+  applySettingsConfigChanges,
+  configOperationEffectMessages,
+  configOperationFailureMessage,
+  settingsSaveNoticeMessages
+} from '../src/renderer/src/components/SettingsPage/settingsConfigChanges'
 
 /** 构造设置页提交所需的当前应用配置。 */
 function application(): ApplicationConfig {
@@ -77,4 +82,40 @@ test('未启用登录时仅修改图标不会读取未注册的一号通字段',
     7,
     { appIcon: 'DesktopOutlined' }
   ]])
+})
+
+test('设置保存将工程同步提醒汇总为一个弹框内容', () => {
+  assert.deepEqual(
+    settingsSaveNoticeMessages({
+      status: 'APPLIED',
+      changedFiles: ['frontend/.env', 'backend/src/main/resources/application.yml']
+    }),
+    [
+      '应用配置已保存。',
+      '已更新 frontend/.env；请重新构建或重启前端服务以加载新配置。',
+      '已更新 application.yml；请重启后端服务以加载新配置。'
+    ]
+  )
+})
+
+test('配置操作明确说明代码注入、任意工程文件写入与未确认的失败变更', () => {
+  assert.deepEqual(
+    configOperationEffectMessages({
+      installedCapabilities: ['login', 'authorization'],
+      changedFiles: ['frontend/.env', 'backend/src/main/resources/application.yml', 'backend/pom.xml']
+    }),
+    [
+      '已向工程注入登录、权限能力相关代码。',
+      '已更新 frontend/.env；请重新构建或重启前端服务以加载新配置。',
+      '已更新 application.yml；请重启后端服务以加载新配置。',
+      '已更新工程文件：backend/pom.xml。'
+    ]
+  )
+  assert.match(
+    configOperationFailureMessage(new Error('工程配置未完全应用'), {
+      'auth.enable': true,
+      'authorization.enabled': true
+    }),
+    /登录相关工程配置、权限能力代码/
+  )
 })
