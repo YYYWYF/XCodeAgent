@@ -12,18 +12,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.services.application_parameter_updater.editors import ParameterUpdateError, edit_auth_yaml, edit_dotenv
+from app.services.application_parameter_updater.editors import ParameterUpdateError, edit_dotenv, edit_yht_yaml
 
 _FRONTEND = "frontend/.env"
-_BACKEND = "backend/src/main/resources/application.yml"
+_BACKEND = "backend/src/main/resources/application-dev.yml"
 _JOURNAL = ".devagentstudio/runtime/application-parameter-update-journal.json"
 _ENV_PATHS = {
     "PUBLIC_APP_NAME": "appName", "PUBLIC_APP_ICON": "appIcon",
     "PUBLIC_THEME_PRIMARY_COLOR": "theme.primaryColor", "PUBLIC_YHT_CLIENT_ID": "auth.yht.clientId",
+    "PUBLIC_YHT_AUTHORIZE_URI": "auth.yht.authorizeUri", "PUBLIC_YHT_END_URL": "auth.yht.endUrl",
+    "PUBLIC_YHT_LOGOUT_SHARE_JS": "auth.yht.logoutShareJs",
 }
 _YAML_PATHS = {
     "client-id": "auth.yht.clientId", "private-key": "auth.yht.privateKey",
     "public-key": "auth.yht.publicKey", "center-public-key": "auth.yht.centerPublicKey",
+    "center-uri": "auth.yht.centerUri", "authorize-uri": "auth.yht.authorizeUri",
+    "redirect-uri": "auth.yht.redirectUri", "base-url": "authorization.api.baseUrl", "view-id": "authorization.api.viewId",
 }
 
 
@@ -48,7 +52,7 @@ class ParameterUpdatePlan:
 class ApplicationParameterUpdater:
     """仅管理模板冻结的 dotenv 和 auth YAML 字段。"""
 
-    def preview(self, workspace: str | Path, desired_config: dict[str, Any], *, login_applied: bool) -> ParameterUpdatePlan:
+    def preview(self, workspace: str | Path, desired_config: dict[str, Any], *, login_applied: bool, authorization_applied: bool = False) -> ParameterUpdatePlan:
         """不写磁盘地验证目标文件并生成目标字节。"""
 
         root = Path(workspace).expanduser().resolve()
@@ -67,6 +71,9 @@ class ApplicationParameterUpdater:
             if not isinstance(yht, dict):
                 raise ParameterUpdateError("CONFIG_VALUE_INVALID：一号通配置缺失。")
             env["PUBLIC_YHT_CLIENT_ID"] = yht.get("clientId")
+            env["PUBLIC_YHT_AUTHORIZE_URI"] = yht.get("authorizeUri")
+            env["PUBLIC_YHT_END_URL"] = yht.get("endUrl")
+            env["PUBLIC_YHT_LOGOUT_SHARE_JS"] = yht.get("logoutShareJs")
         env_before = self._read(root, _FRONTEND)
         env_after = edit_dotenv(env_before, env)
         changes: list[_FileChange] = []
@@ -77,16 +84,22 @@ class ApplicationParameterUpdater:
         if login_applied:
             yht = auth["yht"]
             yaml_values = {
-                "client-id": yht.get("clientId"),
-                "private-key": yht.get("privateKey"),
-                "public-key": yht.get("publicKey"),
-                "center-public-key": yht.get("centerPublicKey"),
+                "yht.authentication.client-id": yht.get("clientId"),
+                "yht.authentication.private-key": yht.get("privateKey"),
+                "yht.authentication.public-key": yht.get("publicKey"),
+                "yht.authentication.center-public-key": yht.get("centerPublicKey"),
+                "yht.authentication.center-uri": yht.get("centerUri"),
+                "yht.authentication.authorize-uri": yht.get("authorizeUri"),
+                "yht.authentication.redirect-uri": yht.get("redirectUri"),
             }
+            if authorization_applied:
+                api = desired_config.get("authorization", {}).get("api", {})
+                yaml_values.update({"yht.api.base-url": api.get("baseUrl"), "yht.api.view-id": api.get("viewId")})
             yaml_before = self._read(root, _BACKEND)
-            yaml_after = edit_auth_yaml(yaml_before, yaml_values)
+            yaml_after = edit_yht_yaml(yaml_before, yaml_values)
             if yaml_after != yaml_before:
                 changes.append(_FileChange(_BACKEND, yaml_before, yaml_after))
-                keys.extend(_changed_leaf_keys(yaml_before, yaml_after, _YAML_PATHS, indent="  "))
+                keys.extend(_changed_leaf_keys(yaml_before, yaml_after, _YAML_PATHS, indent=" "))
         return ParameterUpdatePlan(tuple(change.path for change in changes), tuple(dict.fromkeys(keys)), tuple(changes))
 
     def apply(self, workspace: str | Path, plan: ParameterUpdatePlan) -> None:
@@ -230,7 +243,8 @@ def _changed_leaf_keys(before: bytes, after: bytes, mapping: dict[str, str], *, 
         for line in content.decode("utf-8").splitlines():
             for key in mapping:
                 separator = ":" if indent else "="
-                match = re.match(rf"^{re.escape(indent + key)}\s*{re.escape(separator)}(.*)$", line)
+                prefix = re.escape(indent) if indent else ""
+                match = re.match(rf"^{prefix}\s*{re.escape(key)}\s*{re.escape(separator)}(.*)$", line)
                 if match:
                     result[key] = match.group(1)
         return result

@@ -23,6 +23,17 @@ export const defaultApplicationIcon = applicationIconOptions[0].value
 /** 默认码云地址：平台提供的应用仓库；用户可在表单里改成自己的仓库地址。 */
 export const defaultRepoUrl = 'https://github.com/ruyue1/user-application'
 
+/** 与模板 1016 契约一致的登录和权限服务默认地址。 */
+export const LOGIN_AUTHORIZATION_DEFAULTS = {
+  centerUri: 'http://one-account-gateway.paasuat.cmbchina.cn/auth-server',
+  authorizeUri: 'https://one-account-gateway.paasuat.cmbchina.cn/auth-server/auth',
+  redirectUri: 'http://localhost',
+  endUrl: 'https://one-account-gateway.paasuat.cmbchina.cn/auth-server/endsession',
+  logoutShareJs: 'https://one-account-gateway.paasuat.cmbchina.cn/logout-share/js/logoutShare.js',
+  baseUrl: 'http://one-account-gateway.paasuat.cmbchina.cn/api-server',
+  viewId: '2c9f50c875c0dfce0175de6a4df1057e'
+} as const
+
 export const initialApplicationDraft: ApplicationDraft = {
   appName: '',
   appIcon: defaultApplicationIcon,
@@ -43,11 +54,15 @@ export const initialApplicationDraft: ApplicationDraft = {
   envText: '',
   auth: {
     enable: false,
-    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '' }
+    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '',
+      centerUri: LOGIN_AUTHORIZATION_DEFAULTS.centerUri, authorizeUri: LOGIN_AUTHORIZATION_DEFAULTS.authorizeUri,
+      redirectUri: LOGIN_AUTHORIZATION_DEFAULTS.redirectUri, endUrl: LOGIN_AUTHORIZATION_DEFAULTS.endUrl,
+      logoutShareJs: LOGIN_AUTHORIZATION_DEFAULTS.logoutShareJs }
   },
   authorization: {
     enabled: false,
-    initialAdministratorSubjects: []
+    initialAdministratorSubjects: [],
+    api: { baseUrl: LOGIN_AUTHORIZATION_DEFAULTS.baseUrl, viewId: LOGIN_AUTHORIZATION_DEFAULTS.viewId }
   },
   track: { enable: false, uploadId: '', apiHost: '', method: 'post' },
   apiTrack: { enable: false, businessId: '', traceBaggage: '', apiTrackHost: '' },

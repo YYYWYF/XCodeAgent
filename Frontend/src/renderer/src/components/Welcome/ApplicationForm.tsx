@@ -252,7 +252,9 @@ export default function ApplicationForm({
         mode={mode}
         visiblePaths={[
           'auth.enable', 'auth.yht.clientId', 'auth.yht.privateKey', 'auth.yht.publicKey',
-          'auth.yht.centerPublicKey', 'authorization.enabled', 'authorization.initialAdministratorSubjects'
+          'auth.yht.centerPublicKey', 'auth.yht.centerUri', 'auth.yht.authorizeUri', 'auth.yht.redirectUri',
+          'auth.yht.endUrl', 'auth.yht.logoutShareJs', 'authorization.enabled',
+          'authorization.initialAdministratorSubjects', 'authorization.api.baseUrl', 'authorization.api.viewId'
         ]}
       />
 

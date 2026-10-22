@@ -6,6 +6,9 @@ import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/u
 import {
   configPrerequisiteChanges,
   mergeConversationConfigValues,
+  mergeSuggested,
+  resolveConversationInitialChanges,
+  resolveConversationEditablePaths,
   type ConfigPrerequisite
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ApplicationConfigPrerequisiteCard'
 import { applyConfigChanges } from '../src/renderer/src/service/applicationConfigOperation'
@@ -92,6 +95,47 @@ test('配置卡片将名称、图标和主题色的局部表单值合并为受�
     appIcon: 'DashboardOutlined',
     'theme.primaryColor': '#e60012'
   })
+})
+
+test('配置卡片可为旧配置补齐登录和权限 API 的缺失对象层级', () => {
+  const current = application()
+  delete (current.auth as Partial<typeof current.auth>).yht
+  delete current.authorization.api
+
+  const merged = mergeSuggested(current, {
+    'auth.yht.centerUri': 'https://auth.example/center',
+    'authorization.api.baseUrl': 'https://authorization.example/api'
+  })
+
+  assert.equal(merged.auth.yht.centerUri, 'https://auth.example/center')
+  assert.equal(merged.authorization.api?.baseUrl, 'https://authorization.example/api')
+})
+
+test('配置卡片启用权限时展示完整登录和权限表单字段', () => {
+  const paths = resolveConversationEditablePaths(
+    [],
+    [{ path: 'authorization.enabled', desiredValue: true, source: 'inferred' }],
+    { 'authorization.enabled': true }
+  )
+
+  for (const path of [
+    'auth.enable', 'auth.yht.clientId', 'auth.yht.privateKey', 'auth.yht.publicKey', 'auth.yht.centerPublicKey',
+    'auth.yht.centerUri', 'auth.yht.authorizeUri', 'auth.yht.redirectUri', 'auth.yht.endUrl', 'auth.yht.logoutShareJs',
+    'authorization.enabled', 'authorization.initialAdministratorSubjects', 'authorization.api.baseUrl', 'authorization.api.viewId'
+  ]) {
+    assert.ok(paths.includes(path as typeof paths[number]))
+  }
+})
+
+test('配置卡片启用权限时同步开启登录初始值以显示凭据字段', () => {
+  assert.deepEqual(
+    resolveConversationInitialChanges(
+      [],
+      [{ path: 'authorization.enabled', desiredValue: true, source: 'inferred' }],
+      { 'authorization.enabled': true }
+    ),
+    { 'authorization.enabled': true, 'auth.enable': true }
+  )
 })
 
 /** 生成配置独立 AG-UI 流的最小成功响应。 */

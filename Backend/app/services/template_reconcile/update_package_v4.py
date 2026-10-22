@@ -9,7 +9,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import ValidationError
 
 from app.services.template_reconcile.protocol_v3 import AddFileOperationV3, ReplaceManagedFileOperationV3
-from app.services.template_reconcile.protocol_v4 import ExtensionUpdatePackageV4
+from app.services.template_reconcile.protocol_v4 import EnsureCapabilityConfigOperationV4, ExtensionUpdatePackageV4
 from app.services.workspace_bootstrap.archive_security import validate_archive_entries
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError
 
@@ -50,7 +50,7 @@ def validate_update_package_v4(archive_path: str | Path, limits: ArchiveLimits) 
                 parts = PurePosixPath(suffix)
                 if not suffix or parts.is_absolute() or any(part in {"", ".", ".."} for part in parts.parts):
                     raise TemplatePackageError("V4 payload 路径无效。")
-            refs = {item.payloadRef for item in package.operations if isinstance(item, (AddFileOperationV3, ReplaceManagedFileOperationV3))}
+            refs = {item.payloadRef for item in package.operations if isinstance(item, (AddFileOperationV3, ReplaceManagedFileOperationV3, EnsureCapabilityConfigOperationV4))}
             actual = {name for name in names if name.startswith("payload/")}
             if refs != set(package.payloadManifest) or refs != actual:
                 raise TemplatePackageError("V4 payloadRef、manifest 与 ZIP 条目不一致。")

@@ -15,11 +15,43 @@ from app.services.template_reconcile.protocol_v3 import (
     ReplaceManagedFileOperationV3,
     TemplateRevisionV3,
     TemplateStateV3,
+    OperationBaseV3,
 )
 
 
+class EnsureCapabilityConfigParametersV4(ProtocolV3Model):
+    """声明由新安装能力拥有的配置结构，实际值仍由本地 updater 写入。"""
+
+    format: Literal["dotenv", "yaml"]
+    capabilityIds: list[NonBlankStringV3] = Field(min_length=1)
+
+
+class EnsureCapabilityConfigOperationV4(OperationBaseV3):
+    """确保模板已创建受管 dotenv/YAML 叶子，禁止覆盖现有用户值。"""
+
+    type: Literal["ENSURE_CAPABILITY_CONFIG"]
+    target: Literal[
+        "frontend/.env",
+        "backend/src/main/resources/application.yml",
+        "backend/src/main/resources/application-dev.yml",
+    ]
+    parameters: EnsureCapabilityConfigParametersV4
+    payloadRef: NonBlankStringV3
+
+    @model_validator(mode="after")
+    def validate_surface(self) -> "EnsureCapabilityConfigOperationV4":
+        """校验配置格式与固定工程表面一一对应。"""
+
+        expected = "dotenv" if self.target == "frontend/.env" else "yaml"
+        if self.parameters.format != expected:
+            raise ValueError("ENSURE_CAPABILITY_CONFIG target 与 format 不匹配。")
+        if any(item not in {"login", "authorization"} for item in self.parameters.capabilityIds):
+            raise ValueError("ENSURE_CAPABILITY_CONFIG capabilityIds 非法。")
+        return self
+
+
 OperationV4 = Annotated[
-    Union[AddFileOperationV3, ReplaceManagedFileOperationV3, EnsureJavaAnnotationOperationV3, EnsureMavenDependencyOperationV3],
+    Union[AddFileOperationV3, ReplaceManagedFileOperationV3, EnsureJavaAnnotationOperationV3, EnsureMavenDependencyOperationV3, EnsureCapabilityConfigOperationV4],
     Field(discriminator="type"),
 ]
 

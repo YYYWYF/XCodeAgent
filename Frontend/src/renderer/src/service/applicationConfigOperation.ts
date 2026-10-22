@@ -15,6 +15,9 @@ export type ConfigOperation = {
   toInstall?: string[]
   generated?: boolean
   requiresConfirmation?: boolean
+  failureStage?: string
+  errorCode?: string
+  failureSummary?: string
 }
 
 type ConfigPayload = {

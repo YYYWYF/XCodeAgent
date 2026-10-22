@@ -10,6 +10,7 @@ from app.services.template_reconcile.protocol_v3 import TemplateStateV3
 from app.services.template_reconcile.state_v3 import load_template_state_v3, write_template_state_v3
 from app.services.template_reconcile.update_package_v3 import validate_update_package_v3
 from app.services.template_reconcile.update_package_v4 import validate_update_package_v4
+from app.services.template_reconcile.protocol_v4 import EnsureCapabilityConfigOperationV4
 from app.services.template_reconcile.transaction_v4 import apply_working_copy_v4, recover_v4_transaction
 from app.services.template_reconcile.desired import compile_template_capabilities
 from app.services.application_config import read_application_config
@@ -77,6 +78,12 @@ class TemplateReconcileService:
             }
             if next_state.stateSequence != current.stateSequence + 1 or next_applied != desired or installed - set(next_applied):
                 raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 能力或 State 序列无效。")
+            newly_installed = set(next_applied) - installed
+            ensure_operations = [item for item in package.operations if isinstance(item, EnsureCapabilityConfigOperationV4)]
+            # Login/Authorization 的参数 updater 只能编辑模板先创建的结构；缺少 Ensure 不能伪报安装成功。
+            for capability in newly_installed & {"login", "authorization"}:
+                if not any(capability in item.parameters.capabilityIds for item in ensure_operations):
+                    raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 包缺少能力配置结构 Ensure。")
             store = WorkingCopyStoreV3(root)
             UpdatePackageExecutorV3().execute(package, store, validated.payloads)
             state_entry = store.entry((WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix())

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.config import Settings
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
@@ -12,6 +12,21 @@ from app.services.application_config_orchestrator import ApplicationConfigOrches
 from app.services.application_config_orchestrator import ApplicationConfigOperationError
 
 _EVENT = "application-config"
+
+
+def _request_validation_message(error: Exception) -> str:
+    """将请求校验错误收敛为字段路径，避免把一号通密钥等提交值回显到 AG-UI。"""
+
+    if not isinstance(error, ValidationError):
+        return "配置请求字段无效。"
+    locations = []
+    for item in error.errors():
+        location = ".".join(str(part) for part in item.get("loc", ()) if part != "__root__")
+        if location:
+            locations.append(location)
+    if not locations:
+        return "配置请求字段无效。"
+    return f"配置请求字段无效：{', '.join(dict.fromkeys(locations))}。"
 
 
 class ApplicationConfigAction(BaseModel):
@@ -64,7 +79,7 @@ def build_application_config_ag_ui_stream(*, payload: dict[str, Any], settings: 
         try:
             action_input = ApplicationConfigAction.model_validate(raw)
         except Exception as exc:
-            raise ApplicationConfigOperationError("CONFIG_REQUEST_INVALID", "配置请求字段无效。") from exc
+            raise ApplicationConfigOperationError("CONFIG_REQUEST_INVALID", _request_validation_message(exc)) from exc
         if action_input.action == "preview":
             data = service.preview(action_input.workspace_root, expected_revision=action_input.expected_config_revision, changes=action_input.changes)
         elif action_input.action == "apply":
@@ -80,6 +95,11 @@ def build_application_config_ag_ui_stream(*, payload: dict[str, Any], settings: 
         run_id_prefix="application-config",
         operation=operation,
         error_message_prefix="应用配置操作失败",
-        error_data=lambda _exc: {"action": raw.get("action") if isinstance(raw, dict) else None},
+        error_data=lambda exc: {
+            "action": raw.get("action") if isinstance(raw, dict) else None,
+            # 配置错误仅投影已脱敏的阶段与错误码，便于 Electron 展示准确诊断。
+            **({"failureStage": exc.failure_stage} if isinstance(exc, ApplicationConfigOperationError) and exc.failure_stage else {}),
+            **({"failureCode": exc.failure_code} if isinstance(exc, ApplicationConfigOperationError) and exc.failure_code else {}),
+        },
         accept=accept,
     )
