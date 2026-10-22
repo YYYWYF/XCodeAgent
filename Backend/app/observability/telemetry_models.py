@@ -102,6 +102,7 @@ class TelemetryEventPayload(OptionalTelemetryModel):
     """容纳一期业务事件的可选 payload 字段并集。"""
 
     creation_source: str | None = None
+    conversation_type: Literal["regular", "temporary"] | None = None
     turn_kind: Literal["request", "clarification_answer", "confirmation", "feedback"] | None = None
     repo_id: str | None = None
     commit_sha: str | None = None

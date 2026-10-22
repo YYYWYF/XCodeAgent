@@ -111,6 +111,7 @@ export default function SessionSidebar({
   deletingSessionId,
   currentBranch,
   entities = [],
+  application,
   advancingSessionId,
   filesActive,
   dataSourcesActive,
@@ -149,7 +150,7 @@ export default function SessionSidebar({
   const [activeTemporaryChatId, setActiveTemporaryChatId] = useState<string | null>(null)
   const [resizing, setResizing] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
-  const temporaryChats = useTemporaryChats(workspaceRoot)
+  const temporaryChats = useTemporaryChats(workspaceRoot, application.id)
   const activeTemporaryChat = temporaryChats.sessions.find(
     (session) => session.id === activeTemporaryChatId
   )

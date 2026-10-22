@@ -1398,7 +1398,7 @@ async function readWorkspaceSessions(workspaceRoot: string): Promise<NormalizedC
 async function createChatSession(
   workspaceRootValue: unknown,
   inputValue: unknown
-): Promise<NormalizedChatSession> {
+): Promise<{ session: NormalizedChatSession; created: boolean }> {
   if (!isJsonRecord(inputValue)) throw new Error('session create input must be an object')
   const workspaceRoot = resolveWorkspaceRoot(workspaceRootValue)
   const editorMode = assertEditorMode(inputValue.editorMode)
@@ -1424,7 +1424,7 @@ async function createChatSession(
         const identityMatches =
           existing.editorMode === editorMode && existing.workbenchPhase === workbenchPhase
         if (!identityMatches) throw new Error('entryKey is already bound to another phase session')
-        return existing
+        return { session: existing, created: false }
       }
     }
     const sequence = stage
@@ -1449,7 +1449,7 @@ async function createChatSession(
       getSessionFile(workspaceRoot, editorMode, session.id),
       session
     )
-    return session
+    return { session, created: true }
   })
 }
 
@@ -1657,8 +1657,8 @@ function setupSessionStorageIpc(): void {
   })
 
   ipcMain.handle('sessions:create', async (_event, payload = {}) => {
-    const session = await createChatSession(payload.workspaceRoot, payload.session)
-    return { ok: true, session }
+    const result = await createChatSession(payload.workspaceRoot, payload.session)
+    return { ok: true, ...result }
   })
 
   ipcMain.handle('sessions:save', async (_event, payload = {}) => {

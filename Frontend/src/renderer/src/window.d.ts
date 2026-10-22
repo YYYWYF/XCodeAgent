@@ -129,7 +129,7 @@ declare global {
                 label: string
               }
           revisionContext?: unknown
-        }) => Promise<{ ok?: boolean; session?: unknown }>
+        }) => Promise<{ ok?: boolean; session?: unknown; created: boolean }>
         save: (payload: {
           workspaceRoot: string
           session: unknown

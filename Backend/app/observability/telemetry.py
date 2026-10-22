@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import BoundedSemaphore
 from typing import Any, Literal
@@ -31,10 +31,10 @@ def telemetry_post_url() -> str:
     return os.getenv("DEVAGENTSTUDIO_TELEMETRY_URL", "").strip()
 
 
-def _utc_now() -> str:
-    """为本次记录和请求生成 UTC RFC3339 时间。"""
+def _now() -> str:
+    """生成北京时间，格式为 YYYY-MM-DD HH:mm:ss，不依赖主机时区。"""
 
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _valid_url(url: str) -> bool:
@@ -76,7 +76,7 @@ def _request_body(
     return {
         "schema_version": 1,
         "batch_id": uuid4().hex,
-        "sent_at": _utc_now(),
+        "sent_at": _now(),
         "records": [payload],
     }
 
@@ -163,7 +163,7 @@ def _submit(
         return
     try:
         # 入口只捕获调用时刻；字段校验、默认值和发送留在专用工作线程。
-        future = _executor.submit(_emit, record, record_type, _utc_now())
+        future = _executor.submit(_emit, record, record_type, _now())
     except Exception as exc:
         _slots.release()
         logger.warning("telemetry.submit_failed errorType=%s", type(exc).__name__)

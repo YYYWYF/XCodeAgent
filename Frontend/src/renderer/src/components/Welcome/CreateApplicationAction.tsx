@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { createApplicationLifecycle, registerManagedDatabaseApplication } from '../../service/applicationLifecycle'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import { checkRemoteBranch } from '../../service/repositoryBranch'
+import { emitTelemetryEvent } from '../../service/telemetry'
 import { encryptSensitiveDatasourceFields } from '../../service/databaseCredentialCrypto'
 import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../../typings'
 import { cx } from '../../utils'
@@ -151,6 +152,12 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
       const registeredApplication = await registerManagedDatabaseApplication(
         persistedApplication, planningThreadId
       )
+      // 业务功能埋点：新建应用完成
+      emitTelemetryEvent({
+        record_id: `application_created:${persistedApplication.id}`,
+        identity: { project_id: persistedApplication.id },
+        data: { event_name: 'application_created', payload: { creation_source: 'new_app' } }
+      })
 
       setModalOpen(false)
       onStartPlanning(registeredApplication, planningThreadId, lifecycle)

@@ -8,12 +8,12 @@
 {
   "schema_version": 1, // integer；可选；上传结构版本，不是产品版本
   "batch_id": "string", // string；可选；本次单记录上报请求的批次 ID；记录去重仍使用 record_id
-  "sent_at": "string", // string；可选；本次发送时间，UTC RFC3339，Z 后缀
+  "sent_at": "string", // string；可选；本次发送时间，北京时间（UTC+8），格式 YYYY-MM-DD HH:mm:ss
   "records": [
     {
       "record_id": "string", // string；可选；事实记录的稳定唯一 ID，同一事实再次上报时保持不变
       "type": "execution_trace", // string；可选；当前记录为执行 Trace
-      "occurred_at": "string", // string；可选；执行终态记录形成时间，UTC；不使用上传时间代替
+      "occurred_at": "string", // string；可选；执行终态记录形成时间，北京时间（UTC+8），格式 YYYY-MM-DD HH:mm:ss；不使用上传时间代替
       "producer": {
         "source": "backend", // string；可选；frontend/backend/worker，实际产生记录的进程
         "environment": "development", // string；可选；development/test/production
@@ -45,13 +45,13 @@
         "parent_span_id": null, // string|null；可选；直接父 Span；根为 null，过滤包装后指向最近保留祖先
         "span_kind": "model", // string；可选；workflow/node/model/tool，本平台执行片段分类
         "run_name": "string", // string；可选；调用职责、工具名或实际节点名
-        "started_at": "string", // string；可选；真实执行开始时间，UTC；用于事后 QPS
-        "ended_at": null, // string|null；可选；真实执行结束时间，UTC；异常中断无法确定时 null
+        "started_at": "string", // string；可选；真实执行开始时间，北京时间（UTC+8），格式 YYYY-MM-DD HH:mm:ss；用于事后 QPS
+        "ended_at": null, // string|null；可选；真实执行结束时间，北京时间（UTC+8），格式 YYYY-MM-DD HH:mm:ss；异常中断无法确定时 null
         "duration_ms": null, // integer|null；可选；执行耗时，毫秒，优先单调时钟；未知为 null
         "status": "completed", // string；可选；completed/failed/cancelled/interrupted/awaiting_user，技术执行状态
         "active_intervals": [{ // array<object>|null；仅 workflow 根 Span 可选，其他类型省略
-          "started_at": "string", // string；可选；有效执行区间开始时间，UTC
-          "ended_at": "string", // string；可选；有效执行区间结束时间，UTC
+          "started_at": "string", // string；可选；有效执行区间开始时间，北京时间（UTC+8），格式 YYYY-MM-DD HH:mm:ss
+          "ended_at": "string", // string；可选；有效执行区间结束时间，北京时间（UTC+8），格式 YYYY-MM-DD HH:mm:ss
           "duration_ms": 0 // integer；可选；该区间实际执行毫秒数，不含等用户、暂停及未执行的排队时间
         }], // [] 表示确知无执行，null 表示未知；使用时长按用户/对话/应用合并重叠区间，不叠加父子或并行耗时
         "model": { // object；仅 span_kind=model 时可选，其他类型省略
@@ -75,7 +75,7 @@
     {
       "record_id": "string", // string；可选；同一业务事实的记录 ID 保持不变，再次上报时不要重新生成
       "type": "telemetry_event", // string；可选；当前记录为业务事实事件
-      "occurred_at": "string", // string；可选；业务事实实际发生时间，UTC RFC3339，Z 后缀
+      "occurred_at": "string", // string；可选；业务事实实际发生时间，北京时间（UTC+8），格式 YYYY-MM-DD HH:mm:ss
       "producer": {
         "source": "frontend", // string；可选；frontend/backend/worker
         "environment": "development", // string；可选；development/test/production
@@ -105,6 +105,7 @@
         "event_name": "string", // string；可选；application_created/conversation_created/user_turn_submitted/development_artifact_completed/application_version_created/code_generated/code_written/code_committed/workflow_failure
         "payload": { // object；可选；以下字段按 event_name 选填；开发完成事件传 {}，目标放在 context.target
           "creation_source": "string", // string；应用/对话创建事件可选；应用固定 new_app，对话为 automatic/user；打开或导入旧应用不发新建事件
+          "conversation_type": "regular", // string；对话创建事件可选；regular 常规对话、temporary 临时对话；页面/API 目标使用 context.target，无目标时省略
           "turn_kind": "string", // string；user_turn_submitted 可选；request/clarification_answer/confirmation/feedback
           "repo_id": "string", // string；版本创建、代码入库事件可选；稳定仓库标识，不上传含凭证的 URL
           "commit_sha": "string", // string；版本创建、代码入库事件可选；真实提交 SHA；版本事件只在提交并推送成功后记录，相同 SHA 重推不新增版本

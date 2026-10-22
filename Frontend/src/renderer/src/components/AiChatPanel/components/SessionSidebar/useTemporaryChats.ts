@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { randomUUID } from '@ag-ui/client'
+import { emitConversationCreated } from '../../../../service/telemetry'
 import {
   createTemporaryChatThreadId,
   sendTemporaryChatQuestion,
@@ -14,7 +15,7 @@ export type TemporaryChatSession = {
 }
 
 /** 管理仅驻留在当前 Renderer 内存中的临时对话及请求。 */
-export function useTemporaryChats(workspaceRoot: string): {
+export function useTemporaryChats(workspaceRoot: string, projectId: string): {
   sessions: TemporaryChatSession[]
   createSession: () => string
   deleteSession: (sessionId: string) => void
@@ -57,8 +58,15 @@ export function useTemporaryChats(workspaceRoot: string): {
     }
     nextNumberRef.current += 1
     commitSessions((current) => [session, ...current])
+    // 业务功能埋点：新建临时对话
+    emitConversationCreated({
+      projectId,
+      conversationId: id,
+      threadId: id,
+      conversationType: 'temporary'
+    })
     return id
-  }, [commitSessions])
+  }, [commitSessions, projectId])
 
   /** 关闭临时对话时取消其在途请求并清除全部内存消息。 */
   const deleteSession = useCallback(
