@@ -40,6 +40,11 @@ def include_grammar_binary(binary: tuple[str, str]) -> bool:
     return "bindings" not in Path(destination).parts or Path(source).name.split(".")[0] in builtin_grammars
 
 datas = [
+    # 埋点产品版本与 Electron 共用 package.json，避免维护第二份版本号。
+    (
+        str(backend_root.parent / "Frontend" / "package.json"),
+        "app/product_metadata",
+    ),
     (
         str(backend_root / "app" / "builtin_skills"),
         "app/builtin_skills",

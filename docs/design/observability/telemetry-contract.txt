@@ -1,5 +1,7 @@
 XCodeAgent Observability 上传合同 v1（2026-10-13）
 
+本文件描述完整版合同草案。当前一期后端实现以 telemetry-phase1-v1.jsonc 和 telemetry-usage.md 为准：每次业务触发异步 POST 一条记录，不使用这里的持久队列、自动重试或完整版 Schema 必填规则。
+
 这是 v1 字段设计，不表示全部需求均可按当前字段直接实施。严格实施审阅见 implementation-review-v1.md；文中列出的前置项必须在开发相应能力前补齐。
 telemetry-batch.schema.json 是接收端结构校验依据；telemetry-upload-v1.jsonc 按真实请求嵌套层级展示完整字段、类型和作用。
 telemetry-upload-v1.jsonc 是带中文注释的结构说明；没有 batch/record 等目录包装字段。最外层是对象，records 才是数组；producer/identity/context/data 都是对象。

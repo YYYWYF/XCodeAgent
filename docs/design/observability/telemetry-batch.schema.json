@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "XCodeAgent Observability 批量消息合同 v1",
-  "description": "已确定的 v1 接收合同，不代表采集已实现。原生 Trace 经采集器规范化，与手动业务事件共用本地持久队列及自有上传后端。LangSmith 仅为可选调试工具。",
+  "description": "完整版 v1 接收合同草案，不用于当前一期精简对象的校验。当前一期由后端在业务成功后直接异步 POST 单条记录；本文件中的本地持久队列和重试方案未实现。LangSmith 仅为可选调试工具。",
   "type": "object",
   "properties": {
     "schema_version": {
