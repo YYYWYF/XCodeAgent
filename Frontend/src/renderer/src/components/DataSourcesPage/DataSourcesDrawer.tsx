@@ -39,6 +39,12 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
   const listRequestId = useRef(0)
   const detailContentRef = useRef<HTMLDivElement>(null)
   const mounted = useRef(true)
+  // 抽屉根节点引用，给"点击外部自动收起"判断用。
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  // 用 ref 持有最新 onClose/guard，避免监听器因引用变化反复挂载/卸载。
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+  const guardRef = useRef<(action: () => void) => void>(() => {})
   const databases = catalog.sources.filter((source): source is DatabaseDataSource => source.type === 'database')
   const externals = catalog.sources.filter((source): source is ExternalApiDataSource => source.type === 'external_api')
   const activeExternal = externals.find((source) => source.id === tab) || externals[0]
@@ -84,8 +90,45 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
     if (!dirty) { action(); return }
     confirmWorkspaceAction({ title: '放弃未保存修改？', okText: '放弃修改', cancelText: '继续编辑', onOk: () => { closeDetail(); action() } })
   }
+  // 同步到 ref：供"点击外部自动收起"的 document 级 mousedown 监听使用（避免依赖闭包过期值）。
+  guardRef.current = guard
   // 左侧导航离开抽屉时沿用相同保护，避免卸载详情导致输入丢失。
   useEffect(() => { onNavigationGuard(guard); return () => onNavigationGuard(undefined) }, [dirty, saving, onNavigationGuard])
+
+  // 点击抽屉外部自动收起：与其他工作台抽屉（技能/文件/设置/对话管理）行为一致。
+  // 关键：走 guard(onClose) 而不是直接 onClose——未保存修改时弹确认框，不静默丢失数据。
+  // 用 mousedown 而非 click：click 在 mouseup 才触发，用户在抽屉内按下拖到外部松开
+  // （选择文本）不应被误判为"点击外部"。
+  // 排除 antd 浮层（Modal 确认框/Popconfirm/Select 下拉/Tooltip 等）：它们 portal 到 body，
+  // DOM 在抽屉外但语义上属于抽屉内的交互，不应触发关闭。
+  // 排除侧栏菜单按钮：菜单按钮本身有 toggle 逻辑，mousedown 关闭会让 click 又打开，导致闪烁。
+  useEffect(() => {
+    // 用 ref 持有最新 guard/onClose，避免监听器因 dirty/saving 变化反复挂载。
+    const handleMouseDown = (event: MouseEvent): void => {
+      const root = rootRef.current
+      if (!root) return
+      const target = event.target as Node | null
+      if (!target) return
+      if (root.contains(target)) return
+      if (target instanceof Element) {
+        const floating = target.closest(
+          '.ant-modal-wrap, .ant-modal-mask, .ant-select-dropdown, ' +
+            '.ant-picker-dropdown, .ant-popover, .ant-tooltip, .ant-dropdown, ' +
+            '.ant-cascader-dropdown, .ant-tree-select-dropdown, .ant-message, ' +
+            '.ant-notification, .ant-popconfirm'
+        )
+        if (floating) return
+        // 侧栏菜单按钮（数据源/外部API/文件/设置/技能）是 toggle：mousedown 关闭后
+        // click 又会打开，导致抽屉闪烁。跳过它们，让 click 阶段的 toggle 独立决定。
+        if (target.closest('[data-sidebar-menu="true"]')) return
+      }
+      guardRef.current(onCloseRef.current)
+    }
+    document.addEventListener('mousedown', handleMouseDown, true)
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown, true)
+    }
+  }, [])
   /** 收起详情时取消在途响应，保持一级列表位置。 */
   const closeDetail = (): void => { requestId.current += 1; setDetail(undefined); setFullSource(undefined); setDetailLoading(false); setDirty(false); setOperationEditing(false) }
 
@@ -236,7 +279,7 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
     } : current)
   }
 
-  return <div className={`source-drawer-stack ${detail ? 'with-detail' : ''}`} role="region" aria-label={mode === 'external_api' ? '外部 API' : '数据源'}>
+  return <div ref={rootRef} className={`source-drawer-stack ${detail ? 'with-detail' : ''}`} role="region" aria-label={mode === 'external_api' ? '外部 API' : '数据源'}>
     <section className={`source-drawer-list ${mode === 'database' && database?.mode === 'builtin' ? 'is-builtin-database-list' : ''}`}><header className="source-drawer-header">{mode === 'external_api' ? <ApiOutlined /> : <DatabaseOutlined />}<div><h3>{mode === 'external_api' ? '外部 API' : '数据源'}</h3><p>{mode === 'external_api' ? '已登记的接口域与外部接口，按出入参粒度绑定' : '已接入的数据库连接与数据表，按字段粒度绑定'}</p></div><Button type="text" aria-label="关闭数据来源" icon={<CloseOutlined />} onClick={() => guard(onClose)} /></header>
       {(mode === 'external_api' ? !externals.length : !databases.length) ? null : <nav className="source-drawer-tabs">{mode === 'external_api' ? <>{externals.map((source) => <button key={source.id} className={tab === source.id ? 'selected' : ''} onClick={() => guard(() => { closeDetail(); setTab(source.id) })}>{source.name}</button>)}<Tooltip title="新增接口域"><span><Button type="text" aria-label="新增接口域" icon={<PlusOutlined />} onClick={() => guard(() => setEditor({ createType: 'external_api', open: true }))} /></span></Tooltip></> : <>{databases.map((source) => <button key={source.id} className={tab === source.id ? 'selected' : ''} onClick={() => guard(() => { closeDetail(); setTab(source.id) })}>{source.name}</button>)}</>}</nav>}
       <div className={`source-drawer-tools ${mode === 'external_api' ? !activeExternal ? 'source-drawer-tools-empty' : '' : !database ? 'source-drawer-tools-empty' : ''}`}>{mode === 'external_api' ? activeExternal ? <div className="source-drawer-tool-row"><span className="source-drawer-static-hint">接口按出入参粒度与应用 API 适配。</span><div className="source-drawer-tool-actions"><Button onClick={() => guard(() => { void openDomain(activeExternal) })}>域设置</Button><Button disabled={!defaultDirectory} type="primary" onClick={() => guard(() => { if (defaultDirectory) void openOperation(activeExternal.id, defaultDirectory.id) })}>新增接口</Button></div></div> : <div className="source-drawer-empty-guide"><span className="source-empty-icon"><ApiOutlined /></span><strong>暂无接口域</strong><span>创建接口域后，可统一配置 Base URL 并管理域下的外部接口。</span><Button icon={<PlusOutlined />} type="primary" onClick={() => setEditor({ createType: 'external_api', open: true })}>新增接口域</Button></div> : database ? <div className="source-drawer-tool-row"><span className="source-drawer-static-hint">{database.mode === 'builtin' ? '数据表' : '数据表按字段粒度参与应用 API 绑定。'}</span><div className="source-drawer-tool-actions">{database.mode === 'builtin' ? <Button type="text" size="small" className="source-drawer-refresh" aria-label="刷新数据表" loading={loading} icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button> : <><Button disabled={loading} onClick={() => guard(() => { void openConnection(database) })}>连接设置</Button>

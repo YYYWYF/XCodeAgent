@@ -903,17 +903,32 @@ export default function AiChatPanel({
   const sourceNavigationGuard = useRef<(action: () => void) => void>()
   /** 登记数据来源详情的未保存保护，供左栏导航复用。 */
   const registerSourceNavigationGuard = useCallback((guard?: (action: () => void) => void): void => { sourceNavigationGuard.current = guard }, [])
-  /** 离开数据来源前保护输入，并确保辅助抽屉互斥。 */
-  const handleSidebarNavigation = (action: () => void): void => {
+  /** 离开数据来源前保护输入，并确保辅助抽屉互斥。
+   *
+   * 关键边界：如果本次导航目标是"toggle 当前已打开的抽屉"（例如已开数据源时再点数据源按钮），
+   * 不能先 setActiveView('chat') 再调 action()——action 里的 toggle 逻辑会把 'chat' 又设回
+   * 'dataSources'，导致点击不生效（看起来"重复点击无法收起"）。
+   *
+   * 解决：activeView 与目标相同时，直接走 dirty-guard 后设为 'chat'（收起），不调 action
+   * （action 的 toggle 会再打开）。不同时才先关当前抽屉再走 action。
+   */
+  const handleSidebarNavigation = (action: () => void, targetView?: 'dataSources' | 'externalApis'): void => {
+    const isToggleCurrent =
+      targetView !== undefined && activeView === targetView
     const navigate = (): void => {
       if (activeView === 'dataSources' || activeView === 'externalApis') setActiveView('chat')
       action()
+    }
+    const toggleCurrent = (): void => {
+      // 相同菜单 toggle：直接收起，不调 action（action 里的 toggle 会重新打开）。
+      setActiveView('chat')
     }
     if (
       (activeView === 'dataSources' || activeView === 'externalApis') &&
       sourceNavigationGuard.current
     )
-      sourceNavigationGuard.current(navigate)
+      sourceNavigationGuard.current(isToggleCurrent ? toggleCurrent : navigate)
+    else if (isToggleCurrent) toggleCurrent()
     else navigate()
   }
   const [activeDetailTarget, setActiveDetailTarget] = useState<ActiveDetailTarget>({ type: 'none' })
@@ -4257,21 +4272,18 @@ export default function AiChatPanel({
   }
 
   const handleShowSkills = (): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('skills')
+    // 已打开时再次点击 = 收起（与对话管理/数据源 toggle 行为一致）。
+    // 打开/关闭 drawer 都不动右侧 preview——drawer 是 absolute 覆盖，与右侧布局无冲突；
+    // 之前"打开时清空右侧"会让主区宽度瞬时从 66.67% → 100%，与 drawer 淡入叠加产生视觉闪烁。
+    setActiveView((current) => (current === 'skills' ? 'chat' : 'skills'))
   }
 
   const handleShowFiles = (): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('files')
+    setActiveView((current) => (current === 'files' ? 'chat' : 'files'))
   }
 
   const handleShowSettings = (): void => {
-    setPreviewError('')
-    setRightPanel(undefined)
-    setActiveView('settings')
+    setActiveView((current) => (current === 'settings' ? 'chat' : 'settings'))
   }
 
   /** 在当前对话之上打开数据来源抽屉，保留右侧映射与会话上下文。 */
@@ -5619,28 +5631,33 @@ export default function AiChatPanel({
 
       {/* 左下角三个入口改为抽屉：与临时对话/历史对话/数据源同一套浮层形态，
           对话区不再被整块替换。宽度按内容型页面放宽（设置是锚点+表单，用 wide）。
-          点击抽屉外部（对话区/右侧栏）自动收起，与各页面头部关闭按钮等价。 */}
-      {activeView === 'skills' ? (
-        <WorkbenchDrawer label="技能" onClose={() => setActiveView('chat')} size="wide">
-          <SkillsPage
-            onClose={() => setActiveView('chat')}
-            onSkillDisabled={handleSkillDisabled}
-            theme={theme}
-          />
-        </WorkbenchDrawer>
-      ) : null}
-      {activeView === 'files' ? (
-        <WorkbenchDrawer label="文件" onClose={() => setActiveView('chat')}>
-          <AgentFilesPage onClose={() => setActiveView('chat')} />
-        </WorkbenchDrawer>
-      ) : null}
-      {activeView === 'settings' ? (
-        <WorkbenchDrawer label="应用设置" onClose={() => setActiveView('chat')} size="wide">
-          <SettingsPage
-            application={application}
-            onClose={() => setActiveView('chat')}
-            onSaved={onApplicationUpdate}
-          />
+          点击抽屉外部（对话区/右侧栏）自动收起，与各页面头部关闭按钮等价。
+          关键：三个抽屉合并为一个 WorkbenchDrawer 实例 + 内部条件 children——避免
+          菜单间切换时 React 卸载旧 drawer 再挂新 drawer，中间空帧让下方 PageContextHeader
+          的"打开预览"按钮闪现。 */}
+      {activeView === 'skills' || activeView === 'files' || activeView === 'settings' ? (
+        <WorkbenchDrawer
+          label={
+            activeView === 'skills' ? '技能' : activeView === 'files' ? '文件' : '应用设置'
+          }
+          onClose={() => setActiveView('chat')}
+          size={activeView === 'files' ? 'medium' : 'wide'}
+        >
+          {activeView === 'skills' ? (
+            <SkillsPage
+              onClose={() => setActiveView('chat')}
+              onSkillDisabled={handleSkillDisabled}
+              theme={theme}
+            />
+          ) : activeView === 'files' ? (
+            <AgentFilesPage onClose={() => setActiveView('chat')} />
+          ) : (
+            <SettingsPage
+              application={application}
+              onClose={() => setActiveView('chat')}
+              onSaved={onApplicationUpdate}
+            />
+          )}
         </WorkbenchDrawer>
       ) : null}
 

@@ -47,6 +47,9 @@
   min-height: 0;
   flex-direction: row;
   background: var(--wb-canvas);
+  // 打开/关闭左侧抽屉时，主区宽度从 66.67% ↔ 100% 之间过渡。
+  // 没有这个 transition 时，宽度瞬时变化会被感知为"底部界面闪烁"。
+  transition: width 0.18s ease-out, flex-basis 0.18s ease-out;
 }
 
 .@{class-prefix}-ai-chat-panel:not(.@{class-prefix}-embedded-preview-open) {
