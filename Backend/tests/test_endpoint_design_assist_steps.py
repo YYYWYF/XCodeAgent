@@ -63,8 +63,8 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
         mapping = complete_mapping(candidates("query", {"query": {"items": [
             {"column": "id", "op": "eq", "inputs": ["request:path:id"]}]}}, context), context)
         context["generatedSummary"] = generated_summary(mapping, ["待明确写入规则"], completed=["query"])
-        human = build_assist_messages(context, "return")[1].content
-        for expected in ("id eq", "待明确写入规则", "主键：是", "自增：是", "可空：否", "默认值：无非空默认值", "主键：未知"):
+        human = build_assist_messages(context, "write")[1].content
+        for expected in ("id eq", "待明确写入规则", "PRIMARY KEY (`id`)", "AUTO_INCREMENT", "NOT NULL", "默认值：无非空默认值", "主键：未知"):
             self.assertIn(expected, human)
         self.assertNotIn("返回 response:", context["generatedSummary"])
         writes = ASSIST_STEP_MODELS["write"].model_validate({"writes": [{"column": "id", "inputs": ["request:path:id"]}]})

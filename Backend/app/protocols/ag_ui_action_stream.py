@@ -50,6 +50,14 @@ class AgUiActionTextDelta:
     delta: str
 
 
+@dataclass(frozen=True)
+class _QueuedActionEvent:
+    """为阶段进度保存发送回执，文本增量仍使用原来的非阻塞队列。"""
+
+    event: AgUiActionProgress | AgUiActionTextDelta
+    delivered: asyncio.Future[None] | None = None
+
+
 ActionOperation = Callable[[], Awaitable[AgUiActionResult]]
 ProgressReporter = Callable[[AgUiActionProgress], Awaitable[None]]
 TextDeltaReporter = Callable[[str], Awaitable[None]]
@@ -127,20 +135,20 @@ def build_ag_ui_action_stream(
                     thread_id=thread_id,
                 )
             if progress_operation or streaming_operation:
-                event_queue: asyncio.Queue[
-                    AgUiActionProgress | AgUiActionTextDelta
-                ] = asyncio.Queue()
+                event_queue: asyncio.Queue[_QueuedActionEvent] = asyncio.Queue()
 
                 async def report(progress: AgUiActionProgress) -> None:
-                    """把业务层报告的阶段进度放入当前 AG-UI 流队列。"""
+                    """等待阶段帧交给流消费者后再继续业务，避免显示落后于实际执行。"""
 
-                    await event_queue.put(progress)
+                    delivered = asyncio.get_running_loop().create_future()
+                    await event_queue.put(_QueuedActionEvent(progress, delivered))
+                    await delivered
 
                 async def report_text(delta: str) -> None:
                     """把模型文本增量放入当前 AG-UI 流队列。"""
 
                     if delta:
-                        await event_queue.put(AgUiActionTextDelta(delta=delta))
+                        await event_queue.put(_QueuedActionEvent(AgUiActionTextDelta(delta=delta)))
 
                 operation_task = asyncio.create_task(
                     streaming_operation(report, report_text)
@@ -159,10 +167,11 @@ def build_ag_ui_action_stream(
                             with suppress(asyncio.CancelledError):
                                 await progress_task
                             continue
-                        stream_event = progress_task.result()
+                        queued_event = progress_task.result()
                     else:
-                        stream_event = event_queue.get_nowait()
+                        queued_event = event_queue.get_nowait()
 
+                    stream_event = queued_event.event
                     if isinstance(stream_event, AgUiActionTextDelta):
                         yield encoder.encode(
                             TextMessageContentEvent(
@@ -197,6 +206,9 @@ def build_ag_ui_action_stream(
                                 delta=f"{stream_event.message}\n",
                             )
                         )
+                    # yield 恢复表示消费者已经处理上一帧；阶段帧发出前不进入模型调用。
+                    if queued_event.delivered is not None and not queued_event.delivered.done():
+                        queued_event.delivered.set_result(None)
                 result = await operation_task
             else:
                 result = await operation()  # type: ignore[misc]

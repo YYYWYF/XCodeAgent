@@ -18,6 +18,7 @@ from app.services.endpoint_design_assist_validation import (
     digest, field_key, complete_mapping, validate_generated_mapping, incomplete_mapping_questions,
 )
 from app.services.endpoint_design_assist_steps import generation_steps, generated_summary, mapping_reviews
+from app.services.endpoint_design_assist_ddl import load_mapping_table_ddl
 from app.services.endpoint_design_assist_retry import (
     MappingGenerationFailure, generation_identity, save_checkpoint, take_checkpoint,
 )
@@ -57,8 +58,10 @@ async def generate_mapping(request: GenerateMappingRequest, report: ProgressRepo
     """按区域自动串行生成，逐步校验，完成后一次返回整套映射。"""
     await report(AgUiActionProgress("context", "正在读取当前契约和数据表结构", 10))
     context = await asyncio.to_thread(load_assist_context, request)
+    table_ddl = await asyncio.to_thread(load_mapping_table_ddl, request.workspace_root, context["selection"])
     # 草稿仅用于平台的身份和过期校验，绝不进入映射生成提示词。
     model_context = {key: context[key] for key in ("endpoint", "endpointFields", "columns", "selection")}
+    model_context["tableDdl"] = table_ddl
     model_context["instruction"] = request.instruction
     model_context["clarification"] = request.clarification
     labels = {"query": "查询条件", "write": "写入字段", "return": "返回字段", "description": "映射说明"}

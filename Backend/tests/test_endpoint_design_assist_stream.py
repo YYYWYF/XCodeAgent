@@ -115,8 +115,8 @@ class EndpointDesignAssistStreamTests(unittest.IsolatedAsyncioTestCase):
 
         async def waiting(_request, report, _thread_id):
             """发送阶段后等待取消，用于检验真实公共流的任务收口。"""
-            await report(AgUiActionProgress("generating", "正在生成映射建议", 35))
             try:
+                await report(AgUiActionProgress("generating", "正在生成映射建议", 35))
                 await asyncio.Event().wait()
             finally:
                 cancelled.set()

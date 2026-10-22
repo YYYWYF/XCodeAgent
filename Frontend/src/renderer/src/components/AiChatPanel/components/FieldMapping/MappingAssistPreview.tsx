@@ -20,10 +20,9 @@ export default function MappingAssistPreview({ mapping, area, onShowIssues }: Pr
   </section>
   if (area === 'description') {
     const description = mapping.implementationDescription?.trim() || ''
-    const summary = description.match(/^[^。！？\n]+[。！？]?/)?.[0] || description
+    // 直接展示完整业务说明，避免重复呈现首句摘要与全文。
     return <section aria-label="生成的映射说明"><strong>接口映射说明</strong>
-      <p className="mapping-review-description">{summary || '尚未填写映射说明'}</p>
-      {description !== summary && <details><summary>展开完整说明</summary><p className="mapping-review-description">{description}</p></details>}
+      <p className="mapping-review-description">{description || '尚未填写映射说明'}</p>
       <MappingAssistReview area="description" target="implementationDescription" />
     </section>
   }

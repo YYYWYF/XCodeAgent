@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 
 from app.protocols.ag_ui_action_stream import (
@@ -131,6 +132,41 @@ class AgUiActionStreamTests(unittest.TestCase):
         self.assertIn('"delta":"[]}"', payload)
         self.assertLess(payload.index('{\\"pages\\":'), payload.index('"status":"completed"'))
         self.assertNotIn('"delta":"正在生成', payload)
+
+    def test_stage_frames_are_delivered_before_business_enters_each_stage(self) -> None:
+        """报告阶段后必须先交付进度及快照，不能提前执行本阶段或下一阶段业务。"""
+        entered: list[str] = []
+
+        async def operation(report) -> AgUiActionResult:
+            """模拟连续阶段，在报告返回后立即进入业务，复现断点前没有额外让出的情况。"""
+            for stage in ("operation", "query", "return"):
+                await report(AgUiActionProgress(stage, stage, 30))
+                entered.append(stage)
+            return AgUiActionResult(data={"value": 42}, message="完成。")
+
+        async def collect() -> None:
+            """逐帧消费真实公共流，验证阶段消息在对应业务开始前已经可见。"""
+            stream = build_ag_ui_action_stream(
+                payload={"threadId": "progress-thread", "runId": "progress-run"},
+                event_name="endpoint-designs", state_key="endpointDesigns", run_id_prefix="progress",
+                progress_operation=operation, error_message_prefix="失败",
+            )
+            self.assertEqual(json.loads(await anext(stream))["type"], "RUN_STARTED")
+            self.assertEqual(json.loads(await anext(stream))["type"], "TEXT_MESSAGE_START")
+            for index, stage in enumerate(("operation", "query", "return")):
+                event = json.loads(await anext(stream))
+                self.assertEqual(event["value"]["progress"]["stage"], stage)
+                self.assertEqual(entered, ["operation", "query", "return"][:index])
+                snapshot = json.loads(await anext(stream))
+                self.assertEqual(snapshot["snapshot"]["endpointDesigns"]["progress"]["stage"], stage)
+                self.assertEqual(entered, ["operation", "query", "return"][:index])
+                self.assertEqual(json.loads(await anext(stream))["type"], "TEXT_MESSAGE_CONTENT")
+            remaining = [json.loads(frame) async for frame in stream]
+            self.assertEqual(entered, ["operation", "query", "return"])
+            self.assertEqual(remaining[-1]["type"], "RUN_FINISHED")
+            self.assertEqual(remaining[-1]["result"]["endpointDesigns"]["status"], "completed")
+
+        asyncio.run(collect())
 
 
 if __name__ == "__main__":
