@@ -11,7 +11,7 @@ from app.services.application_config.change import (
     NATURAL_LANGUAGE_MUTABLE_APPLICATION_CONFIG,
 )
 from app.services.application_config.repository import ApplicationConfigRepository
-from app.services.application_config.schema import ApplicationConfigError, validate_application_configuration
+from app.services.application_config.schema import ApplicationConfigError, normalize_application_configuration, validate_application_configuration
 
 
 class ApplicationConfigService:
@@ -41,7 +41,7 @@ class ApplicationConfigService:
         self._validate_changes(current, normalized_changes, allow_existing_targets=allow_existing_targets)
         if not normalized_changes and initial_administrator_subjects is None:
             return current
-        updated = deepcopy(current)
+        updated = normalize_application_configuration(current)
         for change in normalized_changes:
             section, field = change.path.split(".")
             updated[section][field] = change.to_value
@@ -49,7 +49,7 @@ class ApplicationConfigService:
             updated["authorization"]["initialAdministratorSubjects"] = self._normalize_initial_administrator_subjects(
                 initial_administrator_subjects
             )
-        return validate_application_configuration(updated)
+        return validate_application_configuration(normalize_application_configuration(updated))
 
     def changes_for_targets(
         self,

@@ -40,9 +40,9 @@ export async function saveApplication(application: ApplicationConfig): Promise<A
       memoryBranches: schema.branches,
       memoryBranchName: schema.branchName
     })
-  } catch (error) {
-    // 读不到磁盘配置时按原样写回：不能因为合并失败就阻断保存。
-    console.warn('读取磁盘 application.json 失败，按内存状态写回。', error)
+  } catch {
+    // 新建入口已经通过 createProjectDirectory 完成首次写入；任何读盘失败都必须中止。
+    throw new Error('application.json 读取失败，已中止保存；请重新打开应用后重试。')
   }
   const savedSchema = await saveWorkspaceApplicationConfig(workspaceRoot, {
     ...schema,

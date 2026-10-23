@@ -1,6 +1,6 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
-import type { ApplicationConfig, ApplicationLifecycle, ManagedDatabaseRegistration } from '../typings'
+import type { ApplicationConfig, ApplicationSchemaConfig, ApplicationLifecycle, ManagedDatabaseRegistration } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 import type { RepositoryBranchOutcome } from './repositoryBranch'
 
@@ -11,6 +11,7 @@ type ApplicationLifecyclePayload = {
   status: 'completed' | 'failed'
   action?:
     | 'create'
+    | 'initialize_application'
     | 'get'
     | 'bootstrap_template_generation'
     | 'retry_bootstrap_template_generation'
@@ -22,6 +23,8 @@ type ApplicationLifecyclePayload = {
   lifecycle?: ApplicationLifecycle
   managedDatabase?: ManagedDatabaseRegistration
   configRevision?: number
+  configuration?: ApplicationSchemaConfig
+  workspaceRoot?: string
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
   repositoryBranch?: RepositoryBranchOutcome
   error?: { type?: string; message?: string }
@@ -63,6 +66,25 @@ function isLifecycleMissingError(error: unknown): boolean {
 
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
 const workspaceAttachRequests = new Map<string, Promise<ApplicationLifecycle>>()
+
+/** 通过 AG-UI 在隔离区完成创建，成功后才提交目标目录的配置和生命周期。 */
+export async function initializeApplication(
+  application: ApplicationConfig,
+  configuration: ApplicationSchemaConfig,
+  threadId: string
+): Promise<{ application: ApplicationConfig; lifecycle: ApplicationLifecycle }> {
+  const result = await runApplicationLifecycleRequest(threadId, {
+    action: 'initialize_application', workspaceRoot: application.workspaceRoot,
+    application: { id: application.id, appName: application.appName }, configuration
+  })
+  if (!result.configuration || !result.workspaceRoot) throw new Error('创建接口没有返回完整应用配置和目录。')
+  // 暂存事务续接可能来自上次窗口，由后端返回原应用和规划线程身份。
+  const lifecycle = result.lifecycle
+  return { application: {
+    ...application, ...result.configuration,
+    id: lifecycle.application.id, workspaceRoot: result.workspaceRoot
+  }, lifecycle }
+}
 
 // 校验生命周期快照只属于当前应用，禁止同目录或异步回包造成跨应用串态。
 // 注意：不校验 threadId。同一应用复用工作区时，后端 ensure 幂等返回旧 lifecycle

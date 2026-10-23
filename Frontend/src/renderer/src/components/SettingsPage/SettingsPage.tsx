@@ -15,7 +15,7 @@ import { type ApplicationConfig, type ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
 import ApplicationForm from '../Welcome/ApplicationForm'
 import { saveApplication } from '../Welcome/applicationService'
-import type { ConfigChanges, ConfigOperation } from '../../service/applicationConfigOperation'
+import { hasPendingConfigOperation, type ConfigChanges, type ConfigOperation } from '../../service/applicationConfigOperation'
 import { loadWorkspaceApplicationConfig } from '../../service/applicationStorage'
 import {
   applySettingsConfigChanges,
@@ -25,6 +25,7 @@ import {
 } from './settingsConfigChanges'
 import { buildDatasourceConfig } from '../Welcome/utils'
 import { createSettingsDraft } from './settingsDraft'
+import { useSettingsConfigRecovery } from './useSettingsConfigRecovery'
 import '../Welcome/ApplicationFormModal.less'
 import './SettingsPage.less'
 
@@ -52,6 +53,7 @@ type SettingsFormValues = ApplicationDraft & {
 export default function SettingsPage({ application, onClose, onSaved }: Props): ReactElement {
   const [form] = Form.useForm<SettingsFormValues>()
   const [saving, setSaving] = useState(false)
+  const { canResume, refreshPending, handleResume } = useSettingsConfigRecovery(application, form, setSaving, onSaved)
 
   const settingsDraft = useMemo(() => createSettingsDraft(application), [application])
   // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
@@ -100,6 +102,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         environment
       }
       submittedChanges = settingsConfigChanges(application, updatedApplication)
+      if (hasPendingConfigOperation(application.workspaceRoot) && Object.keys(submittedChanges).length === 0) throw new Error('原配置操作尚未完成，请点击恢复原配置操作。')
       const applied: ConfigOperation | undefined = await applySettingsConfigChanges(application, updatedApplication)
       if (applied && applied.status !== 'APPLIED') throw new Error('应用配置尚未完成工程同步。')
       const disk = await loadWorkspaceApplicationConfig(application.workspaceRoot)
@@ -112,6 +115,8 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         authorization: disk.authorization,
         configRevision: disk.configRevision
       })
+      // 保存成功后以最新磁盘配置刷新表单，避免再次保存时复用提交前的开关或 revision。
+      form.setFieldsValue({ ...createSettingsDraft(persistedApplication), envVariables })
       onSaved(persistedApplication)
       const notices = settingsSaveNoticeMessages(applied)
       Modal.success({
@@ -123,6 +128,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         )
       })
     } catch (error) {
+      refreshPending()
       // antd validateFields 校验失败时返回 { errorFields, values }，非 Error 实例
       // errorFields 按字段注册顺序排列（静态字段先于 Form.List 动态字段），
       // 需要按 DOM 视觉位置（从上到下）找出第一个可见的错误
@@ -170,6 +176,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
           </Title>
         </div>
         <div className={cx('settings-page-header-right')}>
+          {canResume ? <Button disabled={saving} onClick={() => void handleResume()}>恢复原配置操作</Button> : null}
           <Button
             className={cx('settings-save-btn')}
             icon={<SaveOutlined />}

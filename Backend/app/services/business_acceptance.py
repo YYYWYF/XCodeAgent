@@ -1281,6 +1281,9 @@ def _source(
 ) -> dict[str, Any]:
     """创建不含源码正文的可追溯正式来源引用。"""
 
+    if artifact == "api_design":
+        from app.services.api_design_fingerprint import api_design_content
+        payload = api_design_content(payload)
     return {
         "artifact": artifact,
         "target_id": target_id,

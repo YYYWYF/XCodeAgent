@@ -21,6 +21,9 @@ export function assertCurrentApplicationSchema(applicationRecord: Record<string,
     authorization && typeof authorization === 'object' && !Array.isArray(authorization)
       ? (authorization as Record<string, unknown>)
       : undefined
+  if (!authorizationRecord) throw new Error('CONFIG_SNAPSHOT_INVALID：application.json.authorization 必须是对象')
+  if (typeof authorizationRecord.enabled !== 'boolean') throw new Error('CONFIG_SNAPSHOT_INVALID：application.json.authorization.enabled 必须是布尔值')
+  if (!Array.isArray(authorizationRecord.initialAdministratorSubjects)) throw new Error('CONFIG_SNAPSHOT_INVALID：application.json.authorization.initialAdministratorSubjects 必须是数组')
   const administratorSubjectsValue = authorizationRecord?.initialAdministratorSubjects
   const authorizationKeys = authorizationRecord ? Object.keys(authorizationRecord) : []
   const authorizationApi = authorizationRecord?.api
@@ -60,6 +63,9 @@ export function assertCurrentApplicationSchema(applicationRecord: Record<string,
   ) {
     throw new Error('无法添加该项目：application.json 的 authorization.api 配置无效')
   }
+  if (authorizationApi && !validOptionalHttpUrl((authorizationApi as Record<string, unknown>).baseUrl)) {
+    throw new Error('CONFIG_SNAPSHOT_INVALID：application.json.authorization.api.baseUrl 必须是 http/https URL')
+  }
   if (
     authorizationEnabled &&
     administratorSubjects.some((subject) => subject.trim() === 'current-user')
@@ -75,6 +81,22 @@ export function assertCurrentApplicationSchema(applicationRecord: Record<string,
     typeof (auth as Record<string, unknown>).enable !== 'boolean'
   ) {
     throw new Error('无法添加该项目：application.json 缺少有效的 auth 配置')
+  }
+  const authRecord = auth as Record<string, unknown>
+  if (authRecord.yht !== undefined && (!authRecord.yht || typeof authRecord.yht !== 'object' || Array.isArray(authRecord.yht))) {
+    throw new Error('CONFIG_SNAPSHOT_INVALID：application.json.auth.yht 必须是对象')
+  }
+  const yht = authRecord.yht as Record<string, unknown> | undefined
+  for (const field of ['centerUri', 'authorizeUri', 'redirectUri', 'endUrl', 'logoutShareJs']) {
+    if (yht && field in yht && !validOptionalHttpUrl(yht[field])) throw new Error(`CONFIG_SNAPSHOT_INVALID：application.json.auth.yht.${field} 必须是 http/https URL`)
+  }
+  if (authRecord.enable === true) {
+    const yht = authRecord.yht as Record<string, unknown> | undefined
+    for (const field of ['clientId', 'privateKey', 'publicKey', 'centerPublicKey']) {
+      if (!yht || typeof yht[field] !== 'string' || !(yht[field] as string).trim()) {
+        throw new Error(`CONFIG_SNAPSHOT_INVALID：application.json.auth.yht.${field} 必须是非空字符串`)
+      }
+    }
   }
   if (authorizationEnabled && (auth as Record<string, unknown>).enable !== true) {
     throw new Error('无法添加该项目：启用权限时必须同时启用认证')
@@ -131,4 +153,17 @@ export async function readManagedWorkspaceApplication(
   assertCurrentApplicationSchema(applicationRecord)
 
   return applicationRecord
+}
+
+
+/** 与后端一致校验可选地址；显式空字符串保留，不代入默认值。 */
+function validOptionalHttpUrl(value: unknown): boolean {
+  if (value === '') return true
+  if (typeof value !== 'string' || /\s/.test(value)) return false
+  try {
+    const parsed = new URL(value)
+    return ['http:', 'https:'].includes(parsed.protocol) && Boolean(parsed.host)
+  } catch {
+    return false
+  }
 }

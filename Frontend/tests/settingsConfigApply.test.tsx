@@ -212,7 +212,7 @@ test('配置操作明确说明代码注入、任意工程文件写入与未确�
       'auth.enable': true,
       'authorization.enabled': true
     }),
-    /登录相关工程配置、权限能力代码/
+    /工程配置未完全应用/
   )
   assert.match(
     configOperationFailureMessage(new Error('CONFIG_APPLY_FAILED：模板能力代码安装失败：模板引擎不可用（内部错误码：TEMPLATE_ENGINE_UNAVAILABLE）'), {
@@ -230,4 +230,15 @@ test('版本冲突仅提示刷新，不伪报登录或权限工程变更失败',
 
   assert.match(message, /CONFIG_REVISION_CONFLICT/)
   assert.doesNotMatch(message, /登录相关工程配置|权限能力代码/)
+})
+
+
+test('实际参数失败阶段不被登录权限提案改写，且只显示安全结构化信息', () => {
+  const error = Object.assign(new Error('untrusted secret value'), {
+    failureStage: 'application_parameter_update', failureCode: 'CONFIG_STRUCTURE_MISSING',
+    failureTarget: 'yht.api.base-url'
+  })
+  const text = configOperationFailureMessage(error, { 'authorization.enabled': true })
+  assert.match(text, /工程参数写入失败.*CONFIG_STRUCTURE_MISSING.*yht.api.base-url/)
+  assert.doesNotMatch(text, /能力安装|能力代码|secret/)
 })

@@ -20,6 +20,12 @@ def retry_node_state(values: dict[str, Any], node: str, *, planning: bool) -> di
     # 失败证据属于上一轮运行；返修报告、候选和真实变更集仍完整保留。
     state.pop("failure_diagnostic", None)
     state.pop("failureDiagnostic", None)
+    if node in {"api_design_readiness_gate", "inspect_workspace", "prepare_build_tasks",
+                "requirements", "product_planning", "ui_confirmation", "technical_planning_begin"}:
+        from app.services.build_restart import restart_build_state_fields
+        state.update(restart_build_state_fields())
+        from app.graph.nodes.tasks import clear_planning_projection
+        state.update(clear_planning_projection())
     if node.endswith("_review") or node == "planning_stage_entry":
         # 原审阅门重新要求用户作答；展示载荷不等于已经提交的确认动作。
         state["clarification"] = deepcopy(values.get("clarification") or {})
@@ -44,6 +50,9 @@ def refresh_retry_node_inputs(state: dict[str, Any], node: str) -> dict[str, Any
         "technical_planning_review": "technical_planning_generate",
     }.get(node, node)
     state.update(load_stage_artifacts(state, input_node))
+    if node == "technical_planning_begin" and not state.get("application_planning_recovery_boundary"):
+        from app.services.technical_planning_retry import prepare_technical_planning_retry
+        state.update(prepare_technical_planning_retry(state))
     if node in {"technical_planning_begin", "technical_planning_generate"}:
         from app.domain.application_planning_recovery import application_planning_sha256
 

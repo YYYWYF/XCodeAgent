@@ -11,7 +11,6 @@ from typing import Any
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.application_config.schema import (
     ApplicationConfigError,
-    normalize_application_configuration,
     validate_application_configuration,
     validate_application_snapshot,
 )
@@ -34,7 +33,7 @@ class ApplicationConfigRepository:
             application = json.loads(self._target.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ApplicationConfigError("当前工作区 application.json 无法读取或格式无效。") from exc
-        return validate_application_snapshot(normalize_application_configuration(application))
+        return validate_application_snapshot(application)
 
     def save(self, application: dict[str, Any]) -> None:
         """校验后以 fsync 与同目录 replace 原子替换完整配置。"""

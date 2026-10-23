@@ -15,7 +15,8 @@ def _business_inputs(task):
         expected = dict(check.get("expected") or {})
         # 同模块其他 Endpoint 的实现归属不是本任务消费的接口合同。
         expected.pop("allowed_existing_endpoints", None)
-        result.append({"kind": check.get("kind"), "expected": expected})
+        # 与验收比较同一业务来源摘要，真正变化的合同不能继续声明可复用。
+        result.append({"kind": check.get("kind"), "expected": expected, "sources": check.get("sources", [])})
     return sha256(json.dumps(result, ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")).encode()).hexdigest()
 
@@ -29,10 +30,9 @@ def _page_endpoint_inputs(task, project_plan, build_context):
 
     def content(designs):
         """规范化所引用接口的输入正文，排除与业务输入无关的签名时间及全局依赖摘要。"""
-        return {f'{item["apiContractId"]}:{item["endpointId"]}': {
-            key: value for key, value in item.items()
-            if key not in {"artifactRevision", "confirmedAt", "basedOn", "status", "confirmationStatus"}
-        } for item in plain_json(designs) if item.get("endpointId") in required}
+        from app.services.api_design_fingerprint import api_design_content
+        return {f'{item["apiContractId"]}:{item["endpointId"]}': api_design_content(item)
+                for item in plain_json(designs) if item.get("endpointId") in required}
 
     return content(task.get("source_refs", {}).get("endpoint_designs", ())) == content(
         build_context.get("endpoint_designs", ()))

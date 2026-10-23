@@ -287,7 +287,13 @@ export async function saveWorkspaceApplicationConfig(
     application: {
       ...application,
       managedDatabase: disk.managedDatabase,
-      configRevision: Math.max(application.configRevision, disk.configRevision)
+      // 受管字段只由 AG-UI 操作提交；普通设置/规划保存以磁盘最新事实为准。
+      appName: disk.appName,
+      appIcon: disk.appIcon,
+      theme: disk.theme,
+      auth: disk.auth,
+      authorization: disk.authorization,
+      configRevision: disk.configRevision
     }
   })
   if (!isRecord(result.application)) {

@@ -590,11 +590,19 @@ def build_workflow_ag_ui_stream(
             application_planning_interaction = workflow_inputs.get(
                 "application_planning_interaction"
             )
+            regeneration_graph = None
+            if native_recovery_context is None:
+                from app.services.automatic_artifact_regeneration import prepare_automatic_regeneration
+                regeneration_graph = await prepare_automatic_regeneration(workflow_inputs, run_id=run_id, thread_id=thread_id)
+                workflow_scope = workflow_inputs.get("workflow_scope") or None
+                refreshed_values = dict(workflow_inputs.get("resume_values") or {})
+                resume_values.clear()
+                resume_values.update(refreshed_values)
             if native_recovery_context is None:
                 active_graph = (
-                    await graph(workspace=workspace, project_id=project_id)
+                    regeneration_graph or (await graph(workspace=workspace, project_id=project_id)
                     if callable(graph)
-                    else graph
+                    else graph)
                 )
             if workflow_scope == "application_planning":
                 # 同一 planning thread 的所有 Graph 写运行必须串行。无 interaction 的

@@ -207,17 +207,40 @@
   color: var(--wb-text-tertiary, #8b8199);
   font-size: 12px;
   line-height: 1.6;
-  white-space: pre-line;
+  // 最多两行：超出省略号截断，完整文案由 tsx 里的 title 悬浮展示。
+  // 之前用 pre-line 允许换行但不限高，长文案会把整个下拉撑得很高。
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .@{class-prefix}-version-menu-label {
   font-family: var(--ui-font-mono);
 }
 
+// 状态徽章：「当前版本」实心主题紫（可编辑，主动作态），「只读版本」灰底描边（不可编辑，
+// 次要态）。两个样式刻意不同——颜色+填充方式双重差异，色弱用户也能区分。
 .@{class-prefix}-version-menu-status {
   margin-left: auto;
-  color: var(--wb-text-tertiary, #8b8199);
-  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  flex-shrink: 0;
+
+  &.@{class-prefix}-is-current {
+    background: var(--wb-accent, #6b3cf0);
+    color: #fff;
+  }
+
+  &.@{class-prefix}-is-readonly {
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.04));
+    border: 1px solid var(--wb-border, rgba(0, 0, 0, 0.08));
+    color: var(--wb-text-secondary, #65666a);
+  }
 }
 
 /* —— 生成版本/迭代/回退弹框样式 —— */
@@ -478,15 +501,57 @@
     color: #ff4d4f;
   }
 
-  // 生成中的进行时提示：跟在"变更说明"标签后面，弱化处理，不跟标签抢注意力。
+  // 生成中的进行时提示：胶囊样式（淡紫底 + 主题紫文字），比纯文字更能传达"正在生成"的活力。
+  // 细微脉动动画让用户余光就能感知"后台在跑"，不需要盯着看。
   .@{class-prefix}-workbench-generate-field-hint {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     margin-left: 8px;
-    color: var(--wb-text-secondary, #5a5267);
-    font-size: 13px;
-    font-weight: 400;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(114, 46, 209, 0.08);
+    border: 1px solid rgba(114, 46, 209, 0.18);
+    color: #722ed1;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+    animation: workbench-generate-hint-pulse 1.6s ease-in-out infinite;
+
+    .anticon {
+      font-size: 12px;
+    }
+  }
+
+  @keyframes workbench-generate-hint-pulse {
+    0%,
+    100% {
+      background: rgba(114, 46, 209, 0.08);
+      border-color: rgba(114, 46, 209, 0.18);
+    }
+
+    50% {
+      background: rgba(114, 46, 209, 0.14);
+      border-color: rgba(114, 46, 209, 0.3);
+    }
+  }
+}
+
+// 深色模式：主题紫在暗底上需要更亮才能读清，背景/边框也调亮一档。
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  .@{class-prefix}-workbench-generate-field-hint {
+    background: rgba(167, 130, 255, 0.12);
+    border-color: rgba(167, 130, 255, 0.28);
+    color: #b89aff;
+  }
+
+  // 深色下"只读版本"徽章的灰底用亮一点的层级，避免陷进背景里。
+  .@{class-prefix}-version-menu-status {
+    &.@{class-prefix}-is-readonly {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.12);
+      color: rgba(255, 255, 255, 0.65);
+    }
   }
 }
 

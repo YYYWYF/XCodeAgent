@@ -51,7 +51,7 @@ class MavenDependencySpecV3(ProtocolV3Model):
     """描述 Maven 依赖受管资源。"""
     groupId: NonBlankStringV3
     artifactId: NonBlankStringV3
-    # Engine 对未指定版本或 scope 的依赖省略字段；None 才使它们成为真正可选字段。
+    # 未指定的 Maven 版本和 scope 值为 null；V4 State 往返必须保留这两个键，不能递归 exclude_none。
     version: StrictStr | None = None
     scope: StrictStr | None = None
 

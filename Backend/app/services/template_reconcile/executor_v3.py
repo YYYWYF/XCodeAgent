@@ -5,10 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from app.services.template_reconcile.protocol_v3 import AddFileOperationV3, EnsureJavaAnnotationOperationV3, EnsureMavenDependencyOperationV3, ExtensionUpdatePackageV3, RemoveJavaAnnotationOperationV3, RemoveMavenDependencyOperationV3, ReplaceManagedFileOperationV3
 from app.services.template_reconcile.protocol_v4 import EnsureCapabilityConfigOperationV4
+from app.services.template_reconcile.config_surfaces import dotenv_entries
 from app.services.template_reconcile.yaml_config_merge import CapabilityYamlMergeError, merge_capability_yaml
 
 class UpdateExecutionV3Error(ValueError):
     """表示当前 Workspace 不满足 V3 Operation 前置条件。"""
+
+    def __init__(self, message: str, *, target: str | None = None) -> None:
+        """保留受管路径供操作诊断使用，不携带目标文件内容。"""
+        super().__init__(message)
+        self.target = target
 
 @dataclass
 class WorkingCopyEntryV3:
@@ -90,15 +96,16 @@ class UpdatePackageExecutorV3:
 
         entry = store.entry(operation.target)
         if entry.working is None:
-            raise UpdateExecutionV3Error("MANAGED_SURFACE_CONFLICT：配置目标不存在。")
+            raise UpdateExecutionV3Error("MANAGED_SURFACE_CONFLICT：配置目标不存在。", target=operation.target)
         try:
             current = entry.working.decode("utf-8")
             addition = payload.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise UpdateExecutionV3Error("MANAGED_SURFACE_CONFLICT：配置 payload 非 UTF-8。") from exc
+            raise UpdateExecutionV3Error("MANAGED_SURFACE_CONFLICT：配置 payload 非 UTF-8。", target=operation.target) from exc
         if operation.parameters.format == "dotenv":
-            existing = {match.group(1) for match in re.finditer(r"(?m)^([A-Za-z_][A-Za-z0-9_]*)=", current)}
-            missing = [line for line in addition.splitlines() if line and line.split("=", 1)[0] not in existing]
+            existing = dotenv_entries(current, operation.target)
+            dotenv_entries(addition, operation.target, fragment=True)
+            missing = [line for line in addition.splitlines() if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", line) and line.split("=", 1)[0] not in existing]
             if missing:
                 entry.working = (current + ("" if not current or current.endswith("\n") else "\n") + "\n".join(missing) + "\n").encode("utf-8")
             return
@@ -106,7 +113,7 @@ class UpdatePackageExecutorV3:
         try:
             entry.working = merge_capability_yaml(current, addition).encode("utf-8")
         except CapabilityYamlMergeError as exc:
-            raise UpdateExecutionV3Error(str(exc)) from exc
+            raise UpdateExecutionV3Error(str(exc), target=operation.target) from exc
 
     def _maven(self, operation: EnsureMavenDependencyOperationV3 | RemoveMavenDependencyOperationV3, store: WorkingCopyStoreV3, remove: bool) -> None:
         """按完整坐标、version 与 scope 处理 Maven Dependency。"""

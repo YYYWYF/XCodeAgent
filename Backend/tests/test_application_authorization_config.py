@@ -26,7 +26,7 @@ def _write_current_config(workspace: str, datasource_type: str = "database") -> 
                 "configRevision": 1,
                 "appName": "权限测试应用",
                 "datasource": {"type": datasource_type},
-                "auth": {"enable": False},
+                "auth": {"enable": False, "yht": {"clientId": "test", "privateKey": "test", "publicKey": "test", "centerPublicKey": "test"}},
                 "authorization": {"enabled": False, "initialAdministratorSubjects": []},
             },
             ensure_ascii=False,
@@ -97,7 +97,7 @@ class ApplicationAuthorizationConfigTests(unittest.TestCase):
             content = json.loads(target.read_text(encoding="utf-8"))
             content["authorization"]["providerMode"] = "external"
             target.write_text(json.dumps(content, ensure_ascii=False), encoding="utf-8")
-            with self.assertRaisesRegex(ApplicationAuthorizationConfigError, "必须只包含"):
+            with self.assertRaisesRegex(ApplicationAuthorizationConfigError, "只能包含"):
                 persist_authorization_configuration(
                     workspace,
                     initial_administrator_subjects=["ops@example.com"],

@@ -1,3 +1,4 @@
+import { useApplicationConfigRefresh } from './useApplicationConfigRefresh'
 import { Layout, message, notification } from 'antd'
 import { randomUUID } from '@ag-ui/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -146,6 +147,8 @@ function WorkbenchPage({
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
+  useApplicationConfigRefresh(application.workspaceRoot, setWorkspaceApplication)
+
   const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false)
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<
     DevelopmentPlanningPageOption[]

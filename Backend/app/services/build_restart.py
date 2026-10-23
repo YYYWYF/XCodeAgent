@@ -26,12 +26,9 @@ def confirmed_plan_build_handoff(
     }
 
 
-def restart_build_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """清除上次 Build 的运行结果，并重新扫描当前磁盘作为本轮上下文。"""
-
-    # 保留已确认的执行范围和业务合同，旧进度、修复计划和审批不能授权新一轮。
-    restarted = {
-        **state,
+def restart_build_state_fields() -> dict[str, Any]:
+    """重生成时撤销旧执行绑定和衍生证据，保留源码与用户选定的目标。"""
+    return {
         "tasks": [], "ready_tasks": [], "pending_build_results": [],
         "build_task_plan": {}, "build_results": [], "build_summary": {},
         "build_run_id": "", "build_run_plan_path": "", "build_run_plan_sha256": "",
@@ -40,7 +37,14 @@ def restart_build_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str
         "repair_iteration": 0, "database_change_plan": {}, "database_approval_requests": [],
         "platform_projection_evidence": {}, "route_projection_evidence": {},
         "clarification": {}, "workspace_snapshot": {},
+        "workspace_revision": "", "workspace_snapshot_path": "",
+        "retry_source_run_id": "",
     }
+
+
+def restart_build_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """清除上次 Build 的运行结果，并重新扫描当前磁盘作为本轮上下文。"""
+    restarted = {**state, **restart_build_state_fields()}
     return refresh_build_workspace(restarted)
 
 

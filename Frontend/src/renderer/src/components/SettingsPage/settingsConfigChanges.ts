@@ -40,17 +40,18 @@ export function configOperationEffectMessages(operation: ConfigOperation | undef
 
 /** 在配置失败时说明哪些工程变更未能确认完成，避免将部分写入误报为成功。 */
 export function configOperationFailureMessage(error: unknown, changes: ConfigChanges): string {
-  const reason = error instanceof Error ? error.message : '应用配置提交失败，请重试。'
-  // CAS 在预检阶段即拒绝请求，尚未进入模板或参数写入，不能把提案范围渲染成工程失败范围。
-  if (reason.includes('CONFIG_REVISION_CONFLICT')) return `应用配置提交失败：${reason}`
-  const pending: string[] = []
-  if (Object.keys(changes).some((path) => path === 'auth.enable' || path.startsWith('auth.yht.'))) {
-    pending.push('登录相关工程配置')
+  void changes
+  const detail = error as { failureStage?: string; failureCode?: string; failureTarget?: string } | undefined
+  if (detail?.failureStage) {
+    const labels: Record<string, string> = {
+      desired_save: '应用配置保存失败', template_state_read: '工程模板状态读取失败',
+      template_capability_reconcile: '模板能力安装失败', application_parameter_update: '工程参数写入失败',
+      config_snapshot_read: '应用配置读取失败'
+    }
+    return `${labels[detail.failureStage] || '应用配置操作失败'}（${detail.failureCode || 'CONFIG_APPLY_FAILED'}${detail.failureTarget ? `；${detail.failureTarget}` : ''}）。请使用原操作重试。`
   }
-  if ('authorization.enabled' in changes) pending.push('权限能力代码')
-  return pending.length
-    ? `应用配置提交失败：${reason}。以下工程变更未能确认完成：${pending.join('、')}。`
-    : `应用配置提交失败：${reason}`
+  return error instanceof Error ? error.message : '应用配置提交失败，请重试。'
+
 }
 
 /** 汇总设置保存后的工程同步提醒，确保界面一次只显示一个反馈弹框。 */

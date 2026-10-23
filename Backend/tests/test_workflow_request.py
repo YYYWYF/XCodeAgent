@@ -65,6 +65,7 @@ class WorkflowRequestTests(unittest.TestCase):
         """application continuation 清空旧目标并进入共用映射门禁。"""
 
         active_revision = SimpleNamespace(
+            regeneration_target=None,
             request="调整全局技术方案",
             change_id="chg_application",
             continuation_source_run_id=None,
@@ -116,6 +117,7 @@ class WorkflowRequestTests(unittest.TestCase):
         """page continuation 由 lifecycle 锁定页面并进入映射门禁。"""
 
         active_revision = SimpleNamespace(
+            regeneration_target=None,
             request="修改订单页",
             change_id="chg_page",
             continuation_source_run_id=None,
@@ -157,6 +159,7 @@ class WorkflowRequestTests(unittest.TestCase):
         """endpoint continuation 由 lifecycle 锁定完整接口标识并保留门禁。"""
 
         active_revision = SimpleNamespace(
+            regeneration_target=None,
             request="修改订单查询接口",
             change_id="chg_endpoint",
             continuation_source_run_id=None,
@@ -205,6 +208,7 @@ class WorkflowRequestTests(unittest.TestCase):
         """lifecycle 页面目标不完整时必须失败，不得回退为 application。"""
 
         active_revision = SimpleNamespace(
+            regeneration_target=None,
             request="修改页面",
             change_id="chg_invalid",
             continuation_source_run_id=None,

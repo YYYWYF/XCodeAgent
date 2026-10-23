@@ -139,10 +139,19 @@ export default function VersionActions({
             <span className={cx('version-dropdown-item-head')}>
               {!isWorking ? <LockOutlined /> : null}
               <span className={cx('version-menu-label')}>{branch.name}</span>
-              <span className={cx('version-menu-status')}>{statusLabelFor(isWorking)}</span>
+              <span
+                className={cx(
+                  'version-menu-status',
+                  isWorking ? 'is-current' : 'is-readonly'
+                )}
+              >
+                {statusLabelFor(isWorking)}
+              </span>
             </span>
             {branch.description ? (
-              <span className={cx('version-dropdown-item-log')}>{branch.description}</span>
+              <span className={cx('version-dropdown-item-log')} title={branch.description}>
+                {branch.description}
+              </span>
             ) : null}
           </button>
         )

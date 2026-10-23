@@ -10,7 +10,7 @@ from app.services.template_reconcile.protocol_v3 import TemplateStateV3
 from app.services.template_reconcile.state_v3 import load_template_state_v3, write_template_state_v3
 from app.services.template_reconcile.update_package_v3 import validate_update_package_v3
 from app.services.template_reconcile.update_package_v4 import validate_update_package_v4
-from app.services.template_reconcile.protocol_v4 import EnsureCapabilityConfigOperationV4
+from app.services.template_reconcile.config_surfaces import validate_ensure_package, validate_working_surfaces
 from app.services.template_reconcile.transaction_v4 import apply_working_copy_v4, recover_v4_transaction
 from app.services.template_reconcile.desired import compile_template_capabilities
 from app.services.application_config import read_application_config
@@ -29,6 +29,7 @@ class TemplateReconcileService:
         """从 canonical application.json 安装缺失能力，不读取 TechnicalPlan 或计算摘要。"""
 
         root = Path(workspace).expanduser().resolve()
+        recover_v4_transaction(root)
         # 先以两个 canonical 文件做纯本地判定：已满足时不得创建 Client、访问网络或改写 State。
         desired = compile_template_capabilities(read_application_config(root))
         current = load_template_state_v3(root)
@@ -63,7 +64,7 @@ class TemplateReconcileService:
             read_timeout=self._settings.template_engine_read_timeout_seconds,
             max_package_bytes=self._settings.template_package_max_bytes,
         )
-        download = await client.update_v4(current.model_dump(mode="json", exclude_none=True, exclude={"managedConfiguration"}), requested)
+        download = await client.update_v4(current.model_dump(mode="json", exclude={"managedConfiguration"}), requested)
         if download is None:
             raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：缺失能力时 V4 返回无变更。")
         try:
@@ -79,15 +80,12 @@ class TemplateReconcileService:
             if next_state.stateSequence != current.stateSequence + 1 or next_applied != desired or installed - set(next_applied):
                 raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 能力或 State 序列无效。")
             newly_installed = set(next_applied) - installed
-            ensure_operations = [item for item in package.operations if isinstance(item, EnsureCapabilityConfigOperationV4)]
-            # Login/Authorization 的参数 updater 只能编辑模板先创建的结构；缺少 Ensure 不能伪报安装成功。
-            for capability in newly_installed & {"login", "authorization"}:
-                if not any(capability in item.parameters.capabilityIds for item in ensure_operations):
-                    raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 包缺少能力配置结构 Ensure。")
+            validate_ensure_package(package, validated.payloads, newly_installed)
             store = WorkingCopyStoreV3(root)
             UpdatePackageExecutorV3().execute(package, store, validated.payloads)
+            validate_working_surfaces(store, newly_installed)
             state_entry = store.entry((WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix())
-            state_entry.working = (json.dumps(next_state.model_dump(mode="json", exclude_none=True, exclude={"managedConfiguration"}), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            state_entry.working = (json.dumps(next_state.model_dump(mode="json", exclude={"managedConfiguration"}), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             apply_working_copy_v4(root, store)
             return "CHANGED"
         finally:

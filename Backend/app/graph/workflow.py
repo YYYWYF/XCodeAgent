@@ -160,6 +160,9 @@ def route_small_task_result(state: ProjectState) -> str:
 def route_build_result(state: ProjectState) -> str:
     """仅允许完整成功的构建进入开发阶段单元测试门禁，失败走失败处理。"""
 
+    from app.services.artifact_regeneration_handoff import needs_task_regeneration
+    if needs_task_regeneration(state):
+        return "api_design_readiness_gate"
     build_summary = state.get("build_summary")
     summary_status = (
         str(build_summary.get("status") or "")
@@ -327,7 +330,15 @@ def build_graph(
     builder.add_node("workflow_entry", workflow_entry)
 
     builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
-    builder.add_node("api_design_readiness_gate", nodes.api_design_readiness_gate)
+    def api_gate_with_regeneration(state: ProjectState) -> dict[str, Any]:
+        """来源变化后撤销旧执行合同，再通过原映射门禁重新生成任务计划。"""
+        from app.services.artifact_regeneration_handoff import needs_task_regeneration
+        from app.services.build_restart import restart_build_state_fields
+        from app.graph.nodes.tasks import clear_planning_projection
+        fields = {**restart_build_state_fields(), **clear_planning_projection()} if needs_task_regeneration(state) else {}
+        return {**fields, **nodes.api_design_readiness_gate({**state, **fields})}
+
+    builder.add_node("api_design_readiness_gate", api_gate_with_regeneration)
     builder.add_node("application_revision", nodes.start_application_revision)
     # TechnicalPlan 二次修改使用同一实现节点，但以真实 technical_planning
     # 入口暴露给运行时，避免把用户确认后的规划请求显示成未知的 revision 流程。
@@ -513,6 +524,7 @@ def build_graph(
         "build",
         route_build_result,
         {
+            "api_design_readiness_gate": "api_design_readiness_gate",
             "unit_test": "unit_test",
             "await_user_input": END,
             "handle_failure": "handle_failure",

@@ -5,13 +5,16 @@ import { initialApplicationDraft } from '../src/renderer/src/components/Welcome/
 import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/utils'
 import {
   configPrerequisiteChanges,
+  initializeConversationFields,
   mergeConversationConfigValues,
   mergeSuggested,
   resolveConversationInitialChanges,
   resolveConversationEditablePaths,
   type ConfigPrerequisite
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ApplicationConfigPrerequisiteCard'
-import { applyConfigChanges } from '../src/renderer/src/service/applicationConfigOperation'
+import { renderToStaticMarkup } from 'react-dom/server'
+import ApplicationConfigPrerequisiteCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ApplicationConfigPrerequisiteCard'
+import { applyConfigChanges, configChangesDigest } from '../src/renderer/src/service/applicationConfigOperation'
 
 /** 构造与聊天卡一致的已生成应用配置。 */
 function application(): ApplicationConfig {
@@ -52,7 +55,9 @@ test('配置卡片只在用户明确确认后追加推断依赖，且保留用�
   assert.deepEqual(configPrerequisiteChanges(current, values, inferred, true), {
     'auth.yht.privateKey': 'user-submitted-secret',
     'auth.enable': true,
-    'authorization.enabled': true
+    'authorization.enabled': true,
+    'authorization.api.baseUrl': initialApplicationDraft.authorization.api?.baseUrl,
+    'authorization.api.viewId': initialApplicationDraft.authorization.api?.viewId
   })
 })
 
@@ -76,7 +81,9 @@ test('配置卡片用完整应用配置补齐仅注册登录与权限字段的�
     'auth.yht.privateKey': 'private',
     'auth.yht.publicKey': 'public',
     'auth.yht.centerPublicKey': 'center',
-    'authorization.initialAdministratorSubjects': ['subject-001']
+    'authorization.initialAdministratorSubjects': ['subject-001'],
+    'authorization.api.baseUrl': initialApplicationDraft.authorization.api?.baseUrl,
+    'authorization.api.viewId': initialApplicationDraft.authorization.api?.viewId
   })
 })
 
@@ -171,11 +178,11 @@ test('刷新后的配置卡先读取原 operationId，已完成时不重复提�
   const storage = memoryStorage()
   const workspace = '/tmp/application-config-card-test'
   const requestId = 'request-0001'
-  const storageKey = `application-config-operation:${workspace}:7:${requestId}`
-  storage.setItem(storageKey, 'operation-0001')
+  const storageKey = `application-config-operation:${workspace}`
+  storage.setItem(storageKey, JSON.stringify({ version: 1, operationId: 'operation-0001', expectedConfigRevision: 7, requestId, digest: await configChangesDigest({ 'auth.enable': true }) }))
   const actions: string[] = []
   Object.assign(globalThis, {
-    window: { devAgentStudio: { agentBaseUrl: 'https://config.test' }, localStorage: storage },
+    window: { dispatchEvent: () => true, devAgentStudio: { agentBaseUrl: 'https://config.test', workspace: { readApplication: async () => ({ application: application() }) } }, localStorage: storage },
     fetch: async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body))
       const action = body.forwardedProps.applicationConfig.action
@@ -199,11 +206,11 @@ test('刷新后失败的配置卡复用 operationId 重试，不重新创建预�
   const storage = memoryStorage()
   const workspace = '/tmp/application-config-card-test'
   const requestId = 'request-0002'
-  const storageKey = `application-config-operation:${workspace}:7:${requestId}`
-  storage.setItem(storageKey, 'operation-0002')
+  const storageKey = `application-config-operation:${workspace}`
+  storage.setItem(storageKey, JSON.stringify({ version: 1, operationId: 'operation-0002', expectedConfigRevision: 7, requestId, digest: await configChangesDigest({ 'auth.enable': true }) }))
   const actions: string[] = []
   Object.assign(globalThis, {
-    window: { devAgentStudio: { agentBaseUrl: 'https://config.test' }, localStorage: storage },
+    window: { dispatchEvent: () => true, devAgentStudio: { agentBaseUrl: 'https://config.test', workspace: { readApplication: async () => ({ application: application() }) } }, localStorage: storage },
     fetch: async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body))
       const action = body.forwardedProps.applicationConfig.action
@@ -219,4 +226,44 @@ test('刷新后失败的配置卡复用 operationId 重试，不重新创建预�
   } finally {
     Object.assign(globalThis, { window: originalWindow, fetch: originalFetch })
   }
+})
+
+for (const section of ['auth', 'authorization'] as const) {
+  for (const invalid of [undefined, null, [], 'invalid']) {
+    test(`配置卡拒绝非法 ${section} 根并保持错误可见：${String(invalid)}`, () => {
+      const current = application()
+      Object.assign(current, { [section]: invalid })
+      const html = renderToStaticMarkup(<ApplicationConfigPrerequisiteCard application={current} pending={{}} onCancel={() => {}} onSubmit={async () => {}} />)
+      assert.match(html, /配置无法读取/)
+      assert.match(html, new RegExp(section))
+    })
+  }
+}
+
+test('确认推断依赖以完整配置合并局部表单且保留未提交凭据', () => {
+  const current = application()
+  const merged = mergeSuggested(mergeConversationConfigValues(current, {
+    auth: { yht: { privateKey: 'typed-secret' } }
+  } as ApplicationDraft), { 'auth.enable': true })
+  assert.equal(merged.auth.yht.privateKey, 'typed-secret')
+  assert.equal(merged.theme.primaryColor, current.theme.primaryColor)
+  assert.equal(current.auth.enable, false)
+})
+
+
+test('重复刷新与新增字段初始化保留已编辑值', () => {
+  const initialized = new Set<string>()
+  const store = new Map<string, unknown>([['auth.yht.privateKey', 'typed-secret']])
+  const form = {
+    isFieldTouched: (parts: unknown) => (parts as string[]).join('.') === 'auth.yht.privateKey',
+    setFieldValue: (parts: unknown, value: unknown) => { store.set((parts as string[]).join('.'), value) }
+  }
+  const current = mergeSuggested(application(), { 'auth.enable': true })
+  initializeConversationFields(form, current, ['auth.enable', 'auth.yht.privateKey'], initialized)
+  assert.equal(store.get('auth.enable'), true)
+  assert.equal(store.get('auth.yht.privateKey'), 'typed-secret')
+  store.set('auth.enable', false)
+  initializeConversationFields(form, current, ['auth.enable', 'auth.yht.privateKey', 'auth.yht.clientId'], initialized)
+  assert.equal(store.get('auth.enable'), false)
+  assert.equal(store.get('auth.yht.privateKey'), 'typed-secret')
 })

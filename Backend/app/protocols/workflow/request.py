@@ -564,7 +564,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         revision_continuation_replaces_run_id = str(
             active_revision.continuation_source_run_id or ""
         )
-        revision_build_target_type = active_revision.target.type
+        continuation_target = active_revision.regeneration_target or active_revision.target
+        revision_build_target_type = continuation_target.type
         # revision continuation 必须清空客户端与旧会话目标，再由 lifecycle
         # 唯一重建入口和构建范围，避免历史 page/endpoint/entity scope 回流。
         selectedPageId = ""
@@ -575,7 +576,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         if revision_build_target_type == "application":
             resume_from = "api_design_readiness_gate"
         elif revision_build_target_type == "page":
-            selectedPageId = str(active_revision.target.page_id or "").strip()
+            selectedPageId = str(continuation_target.page_id or "").strip()
             if not selectedPageId:
                 raise ValueError("revision lifecycle 页面目标缺少 pageId。")
             resume_from = "api_design_readiness_gate"
@@ -584,10 +585,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             detail_target_type = "page"
         elif revision_build_target_type == "endpoint":
             selected_api_contract_id = str(
-                active_revision.target.api_contract_id or ""
+                continuation_target.api_contract_id or ""
             ).strip()
             selected_endpoint_id = str(
-                active_revision.target.endpoint_id or ""
+                continuation_target.endpoint_id or ""
             ).strip()
             if not selected_api_contract_id or not selected_endpoint_id:
                 raise ValueError("revision lifecycle Endpoint 目标缺少完整接口标识。")
@@ -710,7 +711,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("retry_code_review 必须携带失败执行的 resumeExecutionRunId。")
     resume_values = {
         **resume_values_from_state,
-        "completed_development_analysis": workflow_action == "continue_revision_build",
+        "completed_development_analysis": workflow_action == "continue_revision_build" and active_revision.regeneration_target is None,
         **project_plan_start_values,
         **pregraph_artifact_values(workspace, artifact_entry_node,
             lambda: _debug_resume_values(debug_state, workspace=workspace)),

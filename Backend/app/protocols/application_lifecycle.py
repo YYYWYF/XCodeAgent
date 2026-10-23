@@ -58,6 +58,7 @@ class ApplicationLifecycleAction(BaseModel):
 
     action: Literal[
         "create",
+        "initialize_application",
         "get",
         "bootstrap_template_generation",
         "retry_bootstrap_template_generation",
@@ -72,6 +73,7 @@ class ApplicationLifecycleAction(BaseModel):
     ]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     application: ApplicationLifecycleApplication | None = None
+    configuration: dict[str, Any] | None = None
     session_id: str | None = Field(default=None, alias="sessionId", max_length=256)
     session_thread_id: str | None = Field(default=None, alias="sessionThreadId", max_length=256)
     entity_id: str | None = Field(default=None, alias="entityId", min_length=1, max_length=256)
@@ -85,6 +87,12 @@ class ApplicationLifecycleAction(BaseModel):
     def validate_release_session_id(self) -> "ApplicationLifecycleAction":
         """要求 Session Pending 收口动作携带合法的非空 sessionId。"""
 
+        if self.action == "initialize_application":
+            from app.services.application_config.schema import validate_application_configuration
+
+            if self.application is None or self.configuration is None:
+                raise ValueError("初始化应用必须提供应用身份和完整配置。")
+            validate_application_configuration(self.configuration)
         if self.action in {"release_session_pending", "cleanup_session_failed_executions", "prepare_session_deletion"}:
             if not str(self.session_id or "").strip():
                 raise ValueError(f"{self.action} 必须提供合法非空的 sessionId。")
@@ -110,6 +118,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "actionField": "forwardedProps.applicationLifecycle",
         "actions": [
             "create",
+            "initialize_application",
             "get",
             "bootstrap_template_generation",
             "retry_bootstrap_template_generation",
@@ -236,7 +245,24 @@ def build_application_lifecycle_ag_ui_stream(
         """校验动作并返回唯一权威 lifecycle 快照。"""
 
         request = ApplicationLifecycleAction.model_validate(resolved_input)
-        if request.action == "create":
+        if request.action == "initialize_application":
+            from pathlib import Path
+            from app.services.application_creation import initialize_application
+
+            state, configuration = await asyncio.to_thread(
+                initialize_application, request.workspace_root,
+                application_id=request.application.id,
+                application_name=request.application.app_name,
+                configuration=request.configuration,
+                thread_id=str(payload.get("threadId") or ""),
+            )
+            return AgUiActionResult(data={
+                "action": request.action,
+                "lifecycle": application_lifecycle_payload(state),
+                "configuration": configuration,
+                "workspaceRoot": str(Path(request.workspace_root).expanduser().resolve()),
+            }, message="应用已创建，可以开始规划。")
+        elif request.action == "create":
             application = request.application
             if application is None:
                 raise ValueError(

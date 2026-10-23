@@ -76,6 +76,10 @@ class TaskInputFreshnessTests(unittest.TestCase):
                           basedOn=[{"artifactKey": "technical-plan", "sha256": "f" * 64}])
         for task in self.baseline["task_registry"].values():
             self.assertTrue(task_covers_current_input(task, self.plan, context), task["id"])
+            from app.services.business_acceptance_verifier import _source_hash_errors
+            errors = [error for check in task.get("business_acceptance_checks", [])
+                      for error in _source_hash_errors(check, {**self.plan, "endpoint_designs": context["endpoint_designs"]})]
+            self.assertEqual(errors, [], task["id"])
 
     def test_changed_task_is_replaced_without_completed_status(self):
         """真实 Assembly 接纳固定 ID 新任务，旧完成事实与正式基线保持隔离。"""
@@ -106,3 +110,14 @@ class TaskInputFreshnessTests(unittest.TestCase):
         endpoint = current["business_acceptance_checks"][0]["expected"]["endpoints"][0]
         self.assertEqual(endpoint["parameters"][0]["schema"]["default"], 13)
         self.assertEqual(self.baseline, before)
+
+    def test_mapping_business_change_invalidates_reuse_and_acceptance(self):
+        """实际映射说明变化同时撤销复用及验收来源，不因去除确认签名而漏检。"""
+        from app.services.business_acceptance_verifier import _source_hash_errors
+        context = build_context(self.plan, self.scope)
+        context["endpoint_designs"][0]["implementationDescription"] = "新增业务过滤要求"
+        task = self.baseline["task_registry"]["orders:controller"]
+        self.assertFalse(task_covers_current_input(task, self.plan, context))
+        errors = [error for check in task["business_acceptance_checks"]
+                  for error in _source_hash_errors(check, {**self.plan, "endpoint_designs": context["endpoint_designs"]})]
+        self.assertTrue(any("哈希已变化" in error for error in errors))

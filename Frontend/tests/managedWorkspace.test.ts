@@ -56,7 +56,7 @@ test('根据已持久化权限开关确定唯一模板分支', () => {
   assert.equal(
     resolveApplicationTemplateBranch({
       ...base,
-      auth: { enable: true },
+      auth: { enable: true, yht: { clientId: 'client', privateKey: 'private', publicKey: 'public', centerPublicKey: 'center' } },
       authorization: {
         enabled: true,
         initialAdministratorSubjects: ['ops@example.com'],
@@ -78,7 +78,7 @@ test('允许读取带 authorization.api 的当前权限工作区', async () => {
         schemaVersion: 6,
         configRevision: 4,
         appName: '权限服务项目',
-        auth: { enable: true },
+        auth: { enable: true, yht: { clientId: 'client', privateKey: 'private', publicKey: 'public', centerPublicKey: 'center' } },
         authorization: {
           enabled: true,
           initialAdministratorSubjects: ['12345678'],
@@ -122,7 +122,7 @@ test('旧 schemaVersion 不得进入当前工作区', async () => {
       JSON.stringify({
         schemaVersion: 4,
         appName: '字段完整项目',
-        auth: { enable: true },
+        auth: { enable: true, yht: { clientId: 'client', privateKey: 'private', publicKey: 'public', centerPublicKey: 'center' } },
         authorization: {
           enabled: true,
           initialAdministratorSubjects: ['ops@example.com']
@@ -158,7 +158,7 @@ test('拒绝缺少认证或初始管理员的权限工作区', async () => {
       applicationPath,
       JSON.stringify({
         ...base,
-        auth: { enable: true },
+        auth: { enable: true, yht: { clientId: 'client', privateKey: 'private', publicKey: 'public', centerPublicKey: 'center' } },
         authorization: {
           ...base.authorization,
           initialAdministratorSubjects: ['ops@example.com'],
@@ -208,7 +208,7 @@ test('拒绝关闭权限后残留初始管理员种子', async () => {
         schemaVersion: 6,
         configRevision: 1,
         appName: '配置冲突项目',
-        auth: { enable: true },
+        auth: { enable: true, yht: { clientId: 'client', privateKey: 'private', publicKey: 'public', centerPublicKey: 'center' } },
         authorization: {
           enabled: false,
           initialAdministratorSubjects: ['ops@example.com']
