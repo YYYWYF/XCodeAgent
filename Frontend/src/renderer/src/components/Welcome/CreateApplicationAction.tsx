@@ -1,7 +1,7 @@
 import { PlusOutlined } from '@ant-design/icons'
 import { Form, message, Modal } from 'antd'
-import { useState } from 'react'
-import { createApplicationLifecycle, registerManagedDatabaseApplication } from '../../service/applicationLifecycle'
+import { useRef, useState } from 'react'
+import { initializeApplication } from '../../service/applicationLifecycle'
 import { createPagePlanningThreadId } from '../../service/applicationPagePlanning'
 import { checkRemoteBranch } from '../../service/repositoryBranch'
 import { encryptSensitiveDatasourceFields } from '../../service/databaseCredentialCrypto'
@@ -75,6 +75,7 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
   const [modalOpen, setModalOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [selectingParent, setSelectingParent] = useState(false)
+  const creationIdentity = useRef({ id: createApplicationId(), threadId: createPagePlanningThreadId() })
 
   // 打开应用基础配置弹窗。
   const openModal = (): void => {
@@ -102,13 +103,12 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
     }
   }
 
-  // 创建项目目录和应用索引，然后进入全屏页面规划。
+  // 完整创建成功后才保存首页索引，并进入规划页。
   const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
     try {
       const values = await form.validateFields()
-      const workspaceApi = window.devAgentStudio?.workspace
-      if (!workspaceApi?.createProjectDirectory) {
+      if (!window.devAgentStudio?.isElectron) {
         throw new Error('当前环境不能创建本地项目目录，请在桌面客户端中使用。')
       }
 
@@ -125,16 +125,12 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
         branchOverwriteConfirmed: branchDecision.overwriteConfirmed
       })
       const persistedSchema = await encryptSensitiveDatasourceFields(schema)
-      const planningThreadId = createPagePlanningThreadId()
-      const projectDirectory = await workspaceApi.createProjectDirectory({
-        workspacePath: projectPath,
-        applicationConfig: persistedSchema
-      })
+      const planningThreadId = creationIdentity.current.threadId
       const application: ApplicationConfig = {
         ...persistedSchema,
-        id: createApplicationId(),
+        id: creationIdentity.current.id,
         name: persistedSchema.appName,
-        workspaceRoot: projectDirectory.path,
+        workspaceRoot: projectPath,
         projectParentPath: '',
         projectDirectoryName: pathBasename(projectPath),
         source: 'new',
@@ -146,14 +142,12 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
         hasDynamicRoutes: false,
         lastOpenedAt: Date.now()
       }
-      const persistedApplication = await saveApplication(application)
-      const lifecycle = await createApplicationLifecycle(persistedApplication, planningThreadId)
-      const registeredApplication = await registerManagedDatabaseApplication(
-        persistedApplication, planningThreadId
-      )
+      const created = await initializeApplication(application, persistedSchema, planningThreadId)
+      const persistedApplication = await saveApplication(created.application)
 
       setModalOpen(false)
-      onStartPlanning(registeredApplication, planningThreadId, lifecycle)
+      onStartPlanning(persistedApplication, created.lifecycle.initialization.threadId || planningThreadId, created.lifecycle)
+      creationIdentity.current = { id: createApplicationId(), threadId: createPagePlanningThreadId() }
     } catch (error) {
       message.error(formatError(error, '创建应用失败'))
     } finally {
