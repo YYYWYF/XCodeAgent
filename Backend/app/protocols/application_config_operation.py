@@ -34,7 +34,7 @@ class ApplicationConfigAction(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
-    action: Literal["preview", "apply", "get"]
+    action: Literal["preview", "apply", "get", "resume"]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     expected_config_revision: int | None = Field(default=None, alias="expectedConfigRevision", ge=1)
     operation_id: str | None = Field(default=None, alias="operationId", min_length=8, max_length=128)
@@ -47,8 +47,10 @@ class ApplicationConfigAction(BaseModel):
 
         if self.action in {"preview", "apply"} and (self.expected_config_revision is None or not self.changes):
             raise ValueError("配置预览和提交需要 expectedConfigRevision 与 changes。")
-        if self.action in {"apply", "get"} and not self.operation_id:
+        if self.action in {"apply", "get", "resume"} and not self.operation_id:
             raise ValueError("配置提交和读取需要 operationId。")
+        if self.action == "resume" and (self.changes is not None or self.expected_config_revision is not None):
+            raise ValueError("恢复动作仅接受 operationId 和原 requestId。")
         return self
 
 
@@ -59,7 +61,7 @@ def application_config_capabilities() -> dict[str, Any]:
         "name": "application-config",
         "endpoint": "/application-config/run",
         "transport": "ag-ui-sse",
-        "actions": ["preview", "apply", "get"],
+        "actions": ["preview", "apply", "get", "resume"],
         "customEventName": _EVENT,
         "stateSnapshotKey": "applicationConfigOperation",
         "workflowIndependent": True,
@@ -84,6 +86,8 @@ def build_application_config_ag_ui_stream(*, payload: dict[str, Any], settings: 
             data = service.preview(action_input.workspace_root, expected_revision=action_input.expected_config_revision, changes=action_input.changes)
         elif action_input.action == "apply":
             data = await service.apply(action_input.workspace_root, operation_id=action_input.operation_id, expected_revision=action_input.expected_config_revision, changes=action_input.changes, request_id=action_input.request_id)
+        elif action_input.action == "resume":
+            data = await service.resume(action_input.workspace_root, operation_id=action_input.operation_id, request_id=action_input.request_id)
         else:
             data = service.get_operation(action_input.workspace_root, action_input.operation_id)
         return AgUiActionResult(data={"action": action_input.action, "operation": data}, message="应用配置操作已完成。")
@@ -99,6 +103,7 @@ def build_application_config_ag_ui_stream(*, payload: dict[str, Any], settings: 
             "action": raw.get("action") if isinstance(raw, dict) else None,
             # 配置错误仅投影已脱敏的阶段与错误码，便于 Electron 展示准确诊断。
             **({"failureStage": exc.failure_stage} if isinstance(exc, ApplicationConfigOperationError) and exc.failure_stage else {}),
+            **({"failureTarget": exc.failure_target} if isinstance(exc, ApplicationConfigOperationError) and exc.failure_target else {}),
             **({"failureCode": exc.failure_code} if isinstance(exc, ApplicationConfigOperationError) and exc.failure_code else {}),
         },
         accept=accept,

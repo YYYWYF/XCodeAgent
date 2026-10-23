@@ -24,7 +24,7 @@ import { ApplicationLifecycleActionError, getApplicationLifecycle } from '../../
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
-import { applyConfigChanges, type ConfigChanges } from '../../../service/applicationConfigOperation'
+import { applyConfigChanges, resumePendingConfigOperation, type ConfigChanges } from '../../../service/applicationConfigOperation'
 import { configOperationEffectMessages } from '../../SettingsPage/settingsConfigChanges'
 import {
   beginConnectionRequest,
@@ -1963,7 +1963,9 @@ export function useWorkflowConversation({
           titleFrom: originalRequest || '取消应用配置'
         })
       }
-      const operation = await applyConfigChanges(
+      const operation = configPrerequisite.action === 'resume'
+        ? await resumePendingConfigOperation(application.workspaceRoot, configPrerequisite.requestId)
+        : await applyConfigChanges(
         application.workspaceRoot,
         configPrerequisite.expectedConfigRevision,
         configPrerequisite.changes,
@@ -2733,7 +2735,7 @@ function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | unde
 function configPrerequisiteSubmission(
   workflow: WorkflowRunPayload,
   answers: ClarificationAnswers
-): { action: 'apply'; requestId: string; expectedConfigRevision: number; changes: ConfigChanges } | { action: 'cancelled'; requestId: string } | undefined {
+): { action: 'apply'; requestId: string; expectedConfigRevision: number; changes: ConfigChanges } | { action: 'resume'; requestId: string } | { action: 'cancelled'; requestId: string } | undefined {
   const answer = answers.application_config_prerequisite
   const clarification = workflowClarification(workflow) as Record<string, unknown> | undefined
   const pending = clarification?.configPrerequisite
@@ -2742,6 +2744,7 @@ function configPrerequisiteSubmission(
   const requestId = String((pending as Record<string, unknown>).requestId || '')
   if (!requestId) return undefined
   if (action === 'cancelled') return { action: 'cancelled', requestId }
+  if (action === 'resume') return { action: 'resume', requestId }
   const expectedConfigRevision = Number((pending as Record<string, unknown>).expectedConfigRevision)
   const changes = (answer as Record<string, unknown>).changes
   if (action !== 'apply' || !Number.isInteger(expectedConfigRevision) || expectedConfigRevision < 1 || !changes || typeof changes !== 'object' || Array.isArray(changes)) return undefined

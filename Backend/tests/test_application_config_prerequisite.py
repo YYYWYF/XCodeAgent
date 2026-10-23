@@ -77,8 +77,10 @@ class ConfigPrerequisiteTests(unittest.TestCase):
         config_path = self.root / ".devagentstudio/application.json"
         config = json.loads(config_path.read_text())
         config["auth"]["enable"] = True
+        config["auth"]["yht"].update(clientId="test", privateKey="test", publicKey="test", centerPublicKey="test")
         config["authorization"]["enabled"] = True
         config["authorization"]["initialAdministratorSubjects"] = ["admin-1"]
+        config["authorization"]["api"] = {"baseUrl": "", "viewId": ""}
         config_path.write_text(json.dumps(config, ensure_ascii=False))
         state = json.loads(self.state_path.read_text())
         capability = {"enabled": True, "config": {}}

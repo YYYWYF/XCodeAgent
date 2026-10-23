@@ -7,10 +7,18 @@ import re
 from typing import Mapping
 
 import yaml
+from yaml.nodes import ScalarNode
+from app.services.template_reconcile.config_surfaces import ConfigSurfaceError, yaml_nodes, dotenv_entries
 
 
 class ParameterUpdateError(ValueError):
     """表示目标文件与受管字段合同冲突；异常不携带配置值。"""
+
+    def __init__(self, message: str, *, target: str | None = None) -> None:
+        """保存安全错误码和显式目标路径，供阶段诊断使用。"""
+        super().__init__(message)
+        self.code = message.split("：", 1)[0]
+        self.target = target
 
 
 _AUTH_BEGIN = "# BEGIN DEVAGENTSTUDIO MANAGED: login-auth"
@@ -39,6 +47,10 @@ def edit_dotenv(original: bytes, values: Mapping[str, str]) -> bytes:
         content = original.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：frontend/.env 不是 UTF-8 文件。") from exc
+    try:
+        dotenv_entries(content, "frontend/.env")
+    except ConfigSurfaceError as exc:
+        raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：frontend/.env 存在重复键或非法行。", target="frontend/.env") from exc
     lines = content.splitlines(keepends=True)
     found: set[str] = set()
     updated: list[str] = []
@@ -54,47 +66,45 @@ def edit_dotenv(original: bytes, values: Mapping[str, str]) -> bytes:
             updated.append(line)
     missing = set(values) - found
     if missing:
-        raise ParameterUpdateError("CONFIG_STRUCTURE_MISSING：frontend/.env 缺少受管键。")
+        raise ParameterUpdateError("CONFIG_STRUCTURE_MISSING：frontend/.env 缺少受管键。", target="frontend/.env")
     return "".join(updated).encode("utf-8")
 
 
 def edit_yht_yaml(original: bytes, values: Mapping[str, str]) -> bytes:
     """只替换 application-dev.yml 已有的 yht 受管叶子，不创建任何节点。"""
 
+    target = "backend/src/main/resources/application-dev.yml"
     try:
         content = original.decode("utf-8")
-        parsed = yaml.safe_load(content)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 无法安全解析。") from exc
-    if not isinstance(parsed, dict):
-        raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 根必须是映射。")
+        _, nodes = yaml_nodes(content, target)
+    except (UnicodeError, ConfigSurfaceError) as exc:
+        raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{target} 无法安全定位 YAML。") from exc
+    replacements: list[tuple[int, int, str]] = []
     for path, value in values.items():
-        cursor: object = parsed
-        for part in path.split("."):
-            if not isinstance(cursor, dict) or part not in cursor:
-                raise ParameterUpdateError("CONFIG_STRUCTURE_MISSING：application-dev.yml 缺少受管配置结构。")
-            cursor = cursor[part]
-        if not isinstance(value, str):
-            raise ParameterUpdateError("CONFIG_VALUE_INVALID：配置值必须是字符串。")
+        node = nodes.get(path)
+        if node is None:
+            raise ParameterUpdateError(f"CONFIG_STRUCTURE_MISSING：{path} 缺少受管配置结构。", target=path)
+        # 仅允许唯一块式映射下的单行字符串标量，禁止多行、对象及猜测定位。
+        if not isinstance(node, ScalarNode) or node.tag != "tag:yaml.org,2002:str" or node.style in {"|", ">"} or node.start_mark.line != node.end_mark.line:
+            raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{path} 无法安全定位标量。", target=path)
+        quoted = _quoted(value)
+        if node.value != value:
+            replacements.append((node.start_mark.index, node.end_mark.index, quoted))
+    replacements.sort()
+    if any(left[1] > right[0] for left, right in zip(replacements, replacements[1:])):
+        raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{target} 文本区间重叠。")
     result = content
-    # 这些键在模板 1016 的 yht 树下唯一；保留原注释、缩进和其它行，只换值部分。
-    for path, value in values.items():
-        key = path.rsplit(".", 1)[-1]
-        matches = list(re.finditer(rf"(?m)^(\s*{re.escape(key)}\s*:\s*).*?(\r?\n|$)", result))
-        if len(matches) != 1:
-            raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 受管叶子重复或无法定位。")
-        match = matches[0]
-        result = result[:match.start()] + f"{match.group(1)}{_quoted(value)}{match.group(2)}" + result[match.end():]
+    # 仅替换标量 token，保留键、空格、CRLF 和行尾注释，倒序避免偏移失效。
+    for start, end, replacement in reversed(replacements):
+        result = result[:start] + replacement + result[end:]
     try:
-        projected = yaml.safe_load(result)
-    except yaml.YAMLError as exc:
-        raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：更新后 application-dev.yml 无效。") from exc
+        _, projected = yaml_nodes(result, target)
+    except ConfigSurfaceError as exc:
+        raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{target} 更新后结构无效。") from exc
     for path, value in values.items():
-        cursor: object = projected
-        for part in path.split("."):
-            cursor = cursor[part] if isinstance(cursor, dict) else None
-        if cursor != value:
-            raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：application-dev.yml 字段校验失败。")
+        node = projected.get(path)
+        if not isinstance(node, ScalarNode) or node.tag != "tag:yaml.org,2002:str" or node.value != value:
+            raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{path} 更新后校验失败。")
     return result.encode("utf-8")
 
 

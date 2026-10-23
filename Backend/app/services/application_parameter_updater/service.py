@@ -8,6 +8,7 @@ import stat
 import tempfile
 import base64
 import json
+import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,10 +25,10 @@ _ENV_PATHS = {
     "PUBLIC_YHT_LOGOUT_SHARE_JS": "auth.yht.logoutShareJs",
 }
 _YAML_PATHS = {
-    "client-id": "auth.yht.clientId", "private-key": "auth.yht.privateKey",
-    "public-key": "auth.yht.publicKey", "center-public-key": "auth.yht.centerPublicKey",
-    "center-uri": "auth.yht.centerUri", "authorize-uri": "auth.yht.authorizeUri",
-    "redirect-uri": "auth.yht.redirectUri", "base-url": "authorization.api.baseUrl", "view-id": "authorization.api.viewId",
+    "yht.authentication.client-id": "auth.yht.clientId", "yht.authentication.private-key": "auth.yht.privateKey",
+    "yht.authentication.public-key": "auth.yht.publicKey", "yht.authentication.center-public-key": "auth.yht.centerPublicKey",
+    "yht.authentication.center-uri": "auth.yht.centerUri", "yht.authentication.authorize-uri": "auth.yht.authorizeUri",
+    "yht.authentication.redirect-uri": "auth.yht.redirectUri", "yht.api.base-url": "authorization.api.baseUrl", "yht.api.view-id": "authorization.api.viewId",
 }
 
 
@@ -162,7 +163,7 @@ class ApplicationParameterUpdater:
         if target.is_symlink() or any(parent.is_symlink() for parent in target.parents if parent != root and root in parent.parents):
             raise ParameterUpdateError("CONFIG_TARGET_CONFLICT：参数目标路径包含符号链接。")
         if not target.is_file() or root not in target.resolve().parents:
-            raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{relative} 不是工作区内普通文件。")
+            raise ParameterUpdateError(f"CONFIG_STRUCTURE_MISSING：{relative} 不是工作区内普通文件。", target=relative)
         return target.read_bytes()
 
     def _replace(self, root: Path, relative: str, content: bytes) -> None:
@@ -240,6 +241,14 @@ def _changed_leaf_keys(before: bytes, after: bytes, mapping: dict[str, str], *, 
         """从本次编辑器已验证的文本中提取受管字段行。"""
 
         result: dict[str, str] = {}
+        if indent:
+            parsed = yaml.safe_load(content.decode("utf-8"))
+            for path in mapping:
+                cursor = parsed
+                for part in path.split('.'):
+                    cursor = cursor.get(part) if isinstance(cursor, dict) else None
+                result[path] = cursor
+            return result
         for line in content.decode("utf-8").splitlines():
             for key in mapping:
                 separator = ":" if indent else "="

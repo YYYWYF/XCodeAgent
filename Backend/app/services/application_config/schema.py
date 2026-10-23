@@ -13,7 +13,7 @@ from app.domain.managed_database import ManagedDatabaseRegistration
 
 CURRENT_APPLICATION_SCHEMA_VERSION = 6
 
-# 模板 1016 的固定默认值；读取旧 v6 快照时只补本期可选地址字段。
+# 模板 1016 的固定默认值；仅用于显式提交时的可选表单草稿。
 LOGIN_AUTHORIZATION_DEFAULTS = {
     "centerUri": "http://one-account-gateway.paasuat.cmbchina.cn/auth-server",
     "authorizeUri": "https://one-account-gateway.paasuat.cmbchina.cn/auth-server/auth",
@@ -30,7 +30,7 @@ class ApplicationConfigError(ValueError):
 
 
 def normalize_application_configuration(application: Any) -> dict[str, Any]:
-    """为旧 v6 快照补全本期地址默认值，不改变旧凭据或能力开关。"""
+    """为显式提交构造可选地址草稿，不用于持久配置读取。"""
 
     if not isinstance(application, dict):
         return application
@@ -72,6 +72,27 @@ def validate_application_snapshot(application: Any) -> dict[str, Any]:
         if type(value) is not bool:
             raise ApplicationConfigError(f"application.json 的 {path} 必须是布尔值。")
         values[path] = value
+    if set(application["authorization"]) not in ({"enabled", "initialAdministratorSubjects"}, {"enabled", "initialAdministratorSubjects", "api"}):
+        raise ApplicationConfigError("application.json.authorization 只能包含 enabled、initialAdministratorSubjects 和可选 api。")
+    subjects = application["authorization"].get("initialAdministratorSubjects")
+    if not isinstance(subjects, list) or any(not isinstance(item, str) or not item.strip() or item == "current-user" for item in subjects):
+        raise ApplicationConfigError("application.json.authorization.initialAdministratorSubjects 必须是真实 subjectId 数组。")
+    if values["authorization.enabled"] != bool(subjects):
+        raise ApplicationConfigError("application.json.authorization.initialAdministratorSubjects 初始管理员与 enabled 冲突。")
+    if values["authorization.enabled"] and not values["auth.enable"]:
+        raise ApplicationConfigError("application.json.auth.enable 必须与权限依赖一致。")
+    api = application["authorization"].get("api")
+    if values["authorization.enabled"] and not isinstance(api, dict):
+        raise ApplicationConfigError("application.json.authorization.api 必须是对象。")
+    if "api" in application["authorization"] and (not isinstance(api, dict) or set(api) != {"baseUrl", "viewId"} or not isinstance(api.get("baseUrl"), str) or not isinstance(api.get("viewId"), str) or (api["baseUrl"] and not _is_http_url(api["baseUrl"]))):
+        raise ApplicationConfigError("application.json.authorization.api.baseUrl/viewId 无效。")
+    yht = application["auth"].get("yht")
+    if "yht" in application["auth"] and not isinstance(yht, dict):
+        raise ApplicationConfigError("application.json.auth.yht 必须是对象。")
+    if values["auth.enable"]:
+        for field in ("clientId", "privateKey", "publicKey", "centerPublicKey"):
+            if not isinstance(yht, dict) or not isinstance(yht.get(field), str) or not yht[field].strip():
+                raise ApplicationConfigError(f"application.json.auth.yht.{field} 必须是非空字符串。")
     registration = application.get("managedDatabase")
     if registration is not None:
         try:

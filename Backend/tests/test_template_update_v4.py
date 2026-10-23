@@ -12,6 +12,7 @@ import yaml
 
 from app.services.template_reconcile.executor_v3 import UpdatePackageExecutorV3, WorkingCopyStoreV3
 from app.services.template_reconcile.protocol_v3 import EnsureMavenDependencyOperationV3
+from app.services.template_reconcile.protocol_v4 import EnsureCapabilityConfigOperationV4
 from app.services.template_reconcile.update_package_v4 import validate_update_package_v4
 from app.services.template_reconcile.yaml_config_merge import CapabilityYamlMergeError, merge_capability_yaml
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageError
@@ -158,6 +159,42 @@ class TemplateUpdateV4Tests(unittest.TestCase):
         self.assertEqual(merged.count("yht:"), 1)
         self.assertEqual(parsed["yht"]["authentication"]["client-id"], "custom")
         self.assertEqual(parsed["yht"]["api"]["base-url"], "http://example.test")
+
+    def test_deep_duplicates_aliases_and_type_conflicts_are_rejected(self) -> None:
+        """即使冲突位于非受管深层节点也不能静默接受。"""
+        for current, fragment in (
+            ("other:\n  nested:\n    key: a\n    key: b\n", "bee:\n  auth: value\n"),
+            ("other: &a value\ncopy: *a\n", "bee:\n  auth: value\n"),
+            ("bee:\n  auth: [user]\n", "bee:\n  auth: template\n"),
+        ):
+            with self.subTest(case=current), self.assertRaises(CapabilityYamlMergeError):
+                merge_capability_yaml(current, fragment)
+
+    def test_merge_without_trailing_newline_is_idempotent(self) -> None:
+        """没有 EOF 换行的片段与目标也能安全追加，不丢最后一个叶子。"""
+        current = "bee:\n  custom: user"
+        fragment = "bee:\n  auth:\n    client-id: template"
+        merged = merge_capability_yaml(current, fragment)
+        self.assertEqual(yaml.safe_load(merged), {'bee': {'custom': 'user', 'auth': {'client-id': 'template'}}})
+        self.assertEqual(merge_capability_yaml(merged, fragment), merged)
+
+    def test_dotenv_fragment_comments_do_not_break_idempotence(self) -> None:
+        """重复执行 Ensure 不重复追加片段注释，也不覆盖已有用户值。"""
+        root = Path(self.temporary.name)
+        target = root / 'frontend/.env'
+        target.parent.mkdir()
+        target.write_bytes(b'# user comment\r\nUSER_VALUE=keep\r\nPUBLIC_YHT_CLIENT_ID=custom\r\n')
+        operation = EnsureCapabilityConfigOperationV4.model_validate({
+            'schemaVersion': 1, 'operationId': 'dotenv-comment', 'index': 0, 'type': 'ENSURE_CAPABILITY_CONFIG',
+            'target': 'frontend/.env', 'parameters': {'format': 'dotenv', 'capabilityIds': ['login']}, 'payloadRef': 'payload/env'})
+        store = WorkingCopyStoreV3(root)
+        executor = UpdatePackageExecutorV3()
+        payload = b'# template comment\nPUBLIC_YHT_CLIENT_ID=default\nPUBLIC_YHT_AUTHORIZE_URI=default\n'
+        executor._ensure_capability_config(operation, store, payload)
+        first = store.entry('frontend/.env').working
+        executor._ensure_capability_config(operation, store, payload)
+        self.assertEqual(first, store.entry('frontend/.env').working)
+        self.assertTrue(first.startswith(target.read_bytes()))
 
     def test_maven_ensure_does_not_create_whitespace_only_line(self) -> None:
         """能力安装新增 Maven 依赖时不在结束标签前留下尾随空格。"""

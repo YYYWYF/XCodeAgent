@@ -39,6 +39,43 @@ class ParameterUpdaterTests(unittest.TestCase):
 
         self.temporary.cleanup()
 
+    def test_full_paths_preserve_unmanaged_names_and_inline_comments(self) -> None:
+        """同名叶子不影响其他树，CRLF 与行尾注释均保持原字节。"""
+        other = b'other:\r\n  client-id: user-client # keep\r\n  base-url: https://user.test\r\n'
+        self.yaml.write_bytes(self.yaml.read_bytes().replace(b'client-id: "old"', b'client-id: "old" # managed comment') + other)
+        plan = self.updater.preview(self.root, self.config, login_applied=True, authorization_applied=True)
+        self.updater.apply(self.root, plan)
+        self.assertTrue(self.yaml.read_bytes().endswith(other))
+        self.assertIn(b'client-id: "new" # managed comment\r\n', self.yaml.read_bytes())
+        self.assertIn('auth.yht.clientId', plan.changed_keys)
+        self.assertIn('authorization.api.baseUrl', plan.changed_keys)
+
+    def test_rejects_ambiguous_yaml_without_writing(self) -> None:
+        """重复键、别名、流式映射、多行标量均不得猜测更新。"""
+        original = self.yaml.read_bytes()
+        cases = [
+            original + b'other:\n  key: a\n  key: b\n',
+            original + b'other: &a value\ncopy: *a\n',
+            original.replace(b'client-id: "old"', b'client-id: |\r\n      old'),
+            b'yht: {authentication: {client-id: old}}\n',
+        ]
+        for content in cases:
+            with self.subTest(case=cases.index(content)):
+                self.yaml.write_bytes(content)
+                before = self.env.read_bytes()
+                with self.assertRaisesRegex(ParameterUpdateError, 'CONFIG_TARGET_CONFLICT'):
+                    self.updater.preview(self.root, self.config, login_applied=True)
+                self.assertEqual(self.env.read_bytes(), before)
+                self.assertEqual(self.yaml.read_bytes(), content)
+
+    def test_missing_path_does_not_create_nodes(self) -> None:
+        """受管叶子缺失时停止，不新增结构。"""
+        self.yaml.write_bytes(b'yht:\n  authentication:\n    client-id: "old"\n')
+        before = self.yaml.read_bytes()
+        with self.assertRaisesRegex(ParameterUpdateError, 'CONFIG_STRUCTURE_MISSING'):
+            self.updater.preview(self.root, self.config, login_applied=True)
+        self.assertEqual(self.yaml.read_bytes(), before)
+
     def test_theme_only_keeps_backend(self) -> None:
         """未安装 Login 时只修改前端文件，并保持幂等。"""
 

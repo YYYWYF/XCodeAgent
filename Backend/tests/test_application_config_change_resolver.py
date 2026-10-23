@@ -20,8 +20,8 @@ def _application(enabled: bool = False) -> dict:
     return {
         "schemaVersion": 6,
         "configRevision": 1,
-        "auth": {"enable": enabled},
-        "authorization": {"enabled": enabled},
+        "auth": {"enable": enabled, "yht": {"clientId": "test", "privateKey": "test", "publicKey": "test", "centerPublicKey": "test"}},
+        "authorization": {"enabled": enabled, "initialAdministratorSubjects": ["test-admin"] if enabled else [], "api": {"baseUrl": "", "viewId": ""}},
         "track": {"enable": enabled},
         "apiTrack": {"enable": enabled},
     }
@@ -134,9 +134,8 @@ class ApplicationConfigChangeResolverTests(unittest.TestCase):
         self.assertEqual([item.path for item in changes], ["authorization.enabled"])
         self.assertTrue(all(item.to_value for item in changes))
         self.current["datasource"] = {"type": "database"}
-        self.current["authorization"]["initialAdministratorSubjects"] = ["ops@example.com"]
         self._replace_current(self.current)
-        preview = ApplicationConfigService(self.workspace).preview(changes=changes)
+        preview = ApplicationConfigService(self.workspace).preview(changes=changes, initial_administrator_subjects=["ops@example.com"])
         self.assertTrue(preview["auth"]["enable"])
         self.assertTrue(preview["authorization"]["enabled"])
         self.current["auth"]["enable"] = True

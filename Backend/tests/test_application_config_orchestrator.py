@@ -70,6 +70,25 @@ class ApplicationConfigOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(self.config_path.read_text())["configRevision"], 2)
         self.assertEqual(first["changedFiles"], [])
 
+    async def test_noop_operation_id_is_still_bound_to_proposal(self) -> None:
+        """无变化操作也保留摘要，不能把同一 ID 随后改绑到另一份提案。"""
+        first = await self.service.apply(self.root, operation_id='noop-operation', expected_revision=1, changes={'appName': '原应用'})
+        self.assertEqual(first['configRevision'], 1)
+        with self.assertRaisesRegex(ApplicationConfigOperationError, 'CONFIG_OPERATION_CONFLICT'):
+            await self.service.apply(self.root, operation_id='noop-operation', expected_revision=1, changes={'appName': '其他应用'})
+
+    async def test_crash_after_desired_save_still_blocks_another_proposal(self) -> None:
+        """Desired 已写盘而阶段尚未记录的崩溃窗口不能被其他提案跨过。"""
+        await self.service.apply(self.root, operation_id='crash-window', expected_revision=1, changes={'appName': 'New'})
+        record = self.service.get_operation(self.root, 'crash-window')
+        record['status'] = 'APPLYING'
+        record.pop('progressStage')
+        self.service._write_operation(self.root, record)
+        with self.assertRaisesRegex(ApplicationConfigOperationError, 'CONFIG_OPERATION_PENDING'):
+            await self.service.apply(self.root, operation_id='after-crash-proposal', expected_revision=2, changes={'appName': 'Other'})
+        recovered = await self.service.apply(self.root, operation_id='crash-window', expected_revision=1, changes={'appName': 'New'})
+        self.assertEqual(recovered['status'], 'APPLIED')
+
     async def test_stale_revision_and_secret_not_logged(self) -> None:
         """过期版本被拒绝，操作记录不含用户密钥值。"""
 
@@ -88,6 +107,7 @@ class ApplicationConfigOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         operation_path.parent.mkdir(parents=True)
         operation_path.write_text(json.dumps({
             "operationId": "retry-operation",
+            "generated": False,
             "status": "FAILED",
             "expectedConfigRevision": 1,
             "targetConfigRevision": 2,
@@ -162,6 +182,56 @@ class ApplicationConfigOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["failureStage"], "template_capability_reconcile")
         self.assertEqual(record["errorCode"], "TEMPLATE_ENGINE_UNAVAILABLE")
         self.assertIn("模板引擎不可用", record["failureSummary"])
+
+    async def test_desired_write_failure_retains_original_operation(self) -> None:
+        """Desired 写盘失败保留阶段、错误码与原提案身份，重试不丢修订。"""
+        from unittest.mock import patch
+        from app.services.application_config.repository import ApplicationConfigRepository
+        with patch.object(ApplicationConfigRepository, 'save', side_effect=OSError('injected')):
+            with self.assertRaises(ApplicationConfigOperationError) as captured:
+                await self.service.apply(self.root, operation_id='desired-write-fault', expected_revision=1, changes={'appName': 'New'})
+        self.assertEqual(captured.exception.failure_stage, 'desired_save')
+        record = self.service.get_operation(self.root, 'desired-write-fault')
+        self.assertEqual(record['status'], 'FAILED')
+        self.assertEqual(record['failureCode'], 'CONFIG_SAVE_FAILED')
+        self.assertNotIn('progressStage', record)
+        result = await self.service.apply(self.root, operation_id='desired-write-fault', expected_revision=1, changes={'appName': 'New'})
+        self.assertEqual(result['status'], 'APPLIED')
+        self.assertEqual(result['configRevision'], 2)
+
+    def test_read_does_not_normalize_persistent_configuration(self) -> None:
+        """读取当前合法 Base 的可选字段时不创建配置或修改文件。"""
+        from app.services.application_config.repository import ApplicationConfigRepository
+        current = json.loads(self.config_path.read_text())
+        del current['auth']['yht']
+        self.config_path.write_text(json.dumps(current))
+        before = self.config_path.read_bytes()
+        loaded = ApplicationConfigRepository(self.root).load()
+        self.assertNotIn('yht', loaded['auth'])
+        self.assertNotIn('api', loaded['authorization'])
+        self.assertEqual(before, self.config_path.read_bytes())
+
+    async def test_resume_requires_original_request_and_persisted_desired(self) -> None:
+        """恢复只接受原请求身份和未变化的 Desired，不能采用编辑后的值。"""
+        await self.service.apply(self.root, operation_id='resume-request', expected_revision=1, changes={'appName': 'New'}, request_id='request-original')
+        with self.assertRaisesRegex(ApplicationConfigOperationError, 'CONFIG_OPERATION_CONFLICT'):
+            await self.service.resume(self.root, operation_id='resume-request', request_id='request-other')
+        record = self.service.get_operation(self.root, 'resume-request')
+        record['status'] = 'FAILED'
+        self.service._write_operation(self.root, record)
+        content = json.loads(self.config_path.read_text())
+        content['appName'] = 'external-change'
+        self.config_path.write_text(json.dumps(content))
+        with self.assertRaisesRegex(ApplicationConfigOperationError, 'CONFIG_OPERATION_CONFLICT'):
+            await self.service.resume(self.root, operation_id='resume-request', request_id='request-original')
+
+    def test_resume_protocol_rejects_values_and_revision(self) -> None:
+        """显式恢复动作不得携带旧密钥提案或客户端指定的修订。"""
+        action = {'action': 'resume', 'workspaceRoot': str(self.root), 'operationId': 'operation-resume'}
+        ApplicationConfigAction.model_validate(action)
+        for extra in ({'changes': {'auth.yht.privateKey': 'synthetic-secret'}}, {'expectedConfigRevision': 1}):
+            with self.subTest(field=list(extra)), self.assertRaises(ValidationError):
+                ApplicationConfigAction.model_validate({**action, **extra})
 
     async def test_optional_login_addresses_can_be_cleared(self) -> None:
         """可选地址允许显式留空，且仍参与正常的 revision 事务。"""

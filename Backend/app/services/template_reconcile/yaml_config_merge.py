@@ -6,6 +6,7 @@ from collections import defaultdict
 
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode
+from app.services.template_reconcile.config_surfaces import ConfigSurfaceError, yaml_nodes
 
 
 class CapabilityYamlMergeError(ValueError):
@@ -16,14 +17,17 @@ def merge_capability_yaml(current: str, addition: str) -> str:
     """只补缺失的映射键，不覆盖已有值或重写无关配置。"""
 
     try:
-        target = yaml.compose(current, Loader=yaml.SafeLoader)
-        fragment = yaml.compose(addition, Loader=yaml.SafeLoader)
-    except yaml.YAMLError as exc:
+        # 仅为 AST 补齐 EOF 行边界，原文件无实际插入时仍保持原字节。
+        target_text = current if current.endswith("\n") else current + "\n"
+        fragment_text = addition if addition.endswith("\n") else addition + "\n"
+        target, _ = yaml_nodes(target_text, "application.yml")
+        fragment, _ = yaml_nodes(fragment_text, "application.yml")
+    except (yaml.YAMLError, ConfigSurfaceError) as exc:
         raise CapabilityYamlMergeError("MANAGED_SURFACE_CONFLICT：YAML 配置无法安全解析。") from exc
     if not isinstance(target, MappingNode) or not isinstance(fragment, MappingNode):
         raise CapabilityYamlMergeError("MANAGED_SURFACE_CONFLICT：YAML 配置根必须是映射。")
     current_lines = current.splitlines(keepends=True)
-    fragment_lines = addition.splitlines(keepends=True)
+    fragment_lines = fragment_text.splitlines(keepends=True)
     inserts: dict[int, list[str]] = defaultdict(list)
     _collect_missing(target, fragment, fragment_lines, inserts)
     if not inserts:
@@ -37,8 +41,8 @@ def merge_capability_yaml(current: str, addition: str) -> str:
         current_lines[line_index:line_index] = blocks
     result = "".join(current_lines)
     try:
-        merged = yaml.compose(result, Loader=yaml.SafeLoader)
-    except yaml.YAMLError as exc:
+        merged, _ = yaml_nodes(result, "application.yml")
+    except (yaml.YAMLError, ConfigSurfaceError) as exc:
         raise CapabilityYamlMergeError("MANAGED_SURFACE_CONFLICT：合并后的 YAML 无效。") from exc
     if not isinstance(merged, MappingNode):
         raise CapabilityYamlMergeError("MANAGED_SURFACE_CONFLICT：合并后的 YAML 根无效。")
@@ -76,7 +80,7 @@ def _collect_missing(
             target_value = present[1]
             if isinstance(source_value, MappingNode) and isinstance(target_value, MappingNode):
                 _collect_missing(target_value, source_value, fragment_lines, inserts)
-            elif isinstance(source_value, MappingNode) != isinstance(target_value, MappingNode):
+            elif type(source_value) is not type(target_value) or source_value.tag != target_value.tag:
                 raise CapabilityYamlMergeError("MANAGED_SURFACE_CONFLICT：YAML 已有节点类型与模板片段冲突。")
             continue
         end_line = fragment_items[index + 1][1][0].start_mark.line if index + 1 < len(fragment_items) else fragment.end_mark.line
