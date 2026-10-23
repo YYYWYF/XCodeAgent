@@ -1,4 +1,4 @@
-import { CloseOutlined, NodeIndexOutlined } from '@ant-design/icons'
+import { CloseOutlined } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import type { WorkspaceDocKey } from '../../types'
@@ -58,9 +58,6 @@ export default function RightPanelTabs({ tabs, active, onChange, onClose }: Prop
               aria-label={tab.pending ? `${tab.label}，有待确认内容` : tab.label}
               onClick={() => onChange(tab.key)}
             >
-              {tab.key === 'field-mapping' ? (
-                <NodeIndexOutlined style={{ marginRight: 6 }} />
-              ) : null}
               {tab.label}
               {tab.pending ? (
                 <span className={cx('workspace-tab-pending-dot')} aria-hidden="true" />
