@@ -39,15 +39,30 @@ resolve annotation-processing order.
 
 ### Data Source Configuration
 
-Confirm that `application.yml` contains parseable `spring.datasource.url`, `username`,
-and `password` values. When configuration is missing, use the workspace-provided
-`get_mysql_config` tool to obtain the connection bound to the current application. Do
-not guess credentials, read the backend service's own `.env`, or expose real credentials
-in logs or task descriptions.
+Only tasks whose confirmed mappings use a database need this check. Use the
+workspace-provided `get_mysql_config` tool to read the runtime configuration policy
+bound by the platform to the task's confirmed source ID. The tool does not return
+credentials and does not let you select another database.
 
-A typical JDBC URL may include UTF-8, time-zone, SSL, and public-key-retrieval
-parameters, but prefer the existing project format and the `jdbc_url` returned by the
-tool.
+- `status=ok`, `mode=builtin`: the simulated database is platform-managed. The launcher
+  checks its resources and injects the SaaS runtime connection. Do not request a user
+  connection, retrieve passwords, create tables, or enable automatic schema creation,
+  Flyway, Liquibase, or SQL initialization.
+- `status=ok`, `mode=direct` or `dbid`: the launcher resolves the current database from
+  the application's data-source catalog and injects its connection at startup.
+- `status=not_required`: do not add database configuration for this task.
+- `status=not_configured` or `error`: if this task requires a database, report the
+  missing or invalid source and ask for configuration and mapping confirmation through
+  the existing workflow. Do not guess a connection or report successful completion.
+
+Spring accepts `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, and
+`SPRING_DATASOURCE_PASSWORD` directly from the process environment. Missing literal
+values in YAML are not a configuration error. If an in-scope configuration file needs
+explicit bindings, use exactly the `springDatasource` placeholders returned by the
+tool, without hard-coded defaults. Preserve an existing equivalent runtime binding;
+replace hard-coded connection values only within the approved write scope, otherwise
+report the scope conflict. Never write real credentials to project files, task results,
+or logs, and never read the Studio backend's own `.env`.
 
 ### MyBatis-Plus Pagination Configuration
 

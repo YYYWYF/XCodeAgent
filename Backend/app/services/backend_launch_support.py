@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from app.services.database_credentials import (
-    DatabaseCredentialError, build_mysql_jdbc_url, resolve_application_mysql_config,
+    DatabaseCredentialError, build_mysql_jdbc_url,
 )
+from app.services.database_runtime_source import select_runtime_database, resolve_runtime_mysql_config
 from app.services.workspace_process_registry import workspace_process_registry
 from app.utils.subprocess_output import subprocess_output_text
 
@@ -29,6 +30,11 @@ _BACKEND_DATABASE_ENV_KEYS = frozenset(
         "SPRING_DATASOURCE_URL",
         "SPRING_DATASOURCE_USERNAME",
         "SPRING_DATASOURCE_PASSWORD",
+        "XCODEAGENT_DB_URL",
+        "XCODEAGENT_DB_PORT",
+        "XCODEAGENT_DB_SCHEMA",
+        "XCODEAGENT_DB_USERNAME",
+        "XCODEAGENT_DB_PASSWORD",
     }
 )
 
@@ -140,7 +146,7 @@ def _is_auxiliary_snapshot_jar(path: Path) -> bool:
 def _backend_runtime_environment(
     root: Path, *, managed_snapshot=None, on_database_check: Callable[[dict], None] | None = None,
 ) -> tuple[dict[str, str], str | None]:
-    """构造后端子进程环境，清除全局数据库变量并绑定当前应用配置。"""
+    """清除全局数据库变量，仅在应用配置了连接时注入数据库环境。"""
 
     environment = os.environ.copy()
     for key in _BACKEND_DATABASE_ENV_KEYS:
@@ -157,32 +163,44 @@ def _backend_runtime_environment(
         snapshot = managed_snapshot or prepare_managed_startup(root, on_readiness=on_database_check)
         if snapshot is not None:
             connection = resolve_managed_runtime(root, snapshot, on_readiness=on_database_check)
+            environment.update(_database_runtime_variables(
+                host=connection.host, port=connection.port, schema=connection.database,
+                username=connection.username, password=connection.password.get_secret_value(),
+                jdbc_url=connection.jdbc_url(),
+            ))
             environment.update({
-                "MYSQL_HOST": connection.host, "MYSQL_PORT": str(connection.port),
-                "MYSQL_USER": connection.username, "MYSQL_PWD": connection.password.get_secret_value(),
-                "MYSQL_DATABASE": connection.database, "MYSQL_JDBC_URL": connection.jdbc_url(),
-                "SPRING_DATASOURCE_URL": connection.jdbc_url(), "SPRING_DATASOURCE_USERNAME": connection.username,
-                "SPRING_DATASOURCE_PASSWORD": connection.password.get_secret_value(),
                 "SPRING_SQL_INIT_MODE": "never", "SPRING_JPA_HIBERNATE_DDL_AUTO": "none",
                 "SPRING_FLYWAY_ENABLED": "false", "SPRING_LIQUIBASE_ENABLED": "false",
             })
             return environment, None
-        config = resolve_application_mysql_config(root)
+        # 外部连接只从应用内当前数据源目录获取，尚未新增数据库时不阻断启动。
+        source = select_runtime_database(root)
+        if source is None:
+            return environment, None
+        config = resolve_runtime_mysql_config(root, source)
     except DatabaseCredentialError as exc:
         return environment, str(exc)
 
     jdbc_url = build_mysql_jdbc_url(config)
-    environment.update(
-        {
-            "MYSQL_HOST": config.host,
-            "MYSQL_PORT": str(config.port),
-            "MYSQL_USER": config.user,
-            "MYSQL_PWD": config.password,
-            "MYSQL_DATABASE": config.database,
-            "MYSQL_JDBC_URL": jdbc_url,
-            "SPRING_DATASOURCE_URL": jdbc_url,
-            "SPRING_DATASOURCE_USERNAME": config.user,
-            "SPRING_DATASOURCE_PASSWORD": config.password,
-        }
-    )
+    environment.update(_database_runtime_variables(
+        host=config.host, port=config.port, schema=config.database,
+        username=config.user, password=config.password, jdbc_url=jdbc_url,
+    ))
     return environment, None
+
+
+def _database_runtime_variables(
+    *, host: str, port: int, schema: str, username: str, password: str, jdbc_url: str,
+) -> dict[str, str]:
+    """将同一连接投影为 MySQL、Spring 及 xcode-agent.db 的运行时环境变量。"""
+
+    return {
+        "MYSQL_HOST": host, "MYSQL_PORT": str(port), "MYSQL_DATABASE": schema,
+        "MYSQL_USER": username, "MYSQL_PWD": password, "MYSQL_JDBC_URL": jdbc_url,
+        "SPRING_DATASOURCE_URL": jdbc_url, "SPRING_DATASOURCE_USERNAME": username,
+        "SPRING_DATASOURCE_PASSWORD": password,
+        # Spring 环境变量绑定去掉配置名中的连字符；url 是地址，端口和 Schema 单独注入。
+        "XCODEAGENT_DB_URL": host, "XCODEAGENT_DB_PORT": str(port),
+        "XCODEAGENT_DB_SCHEMA": schema, "XCODEAGENT_DB_USERNAME": username,
+        "XCODEAGENT_DB_PASSWORD": password,
+    }

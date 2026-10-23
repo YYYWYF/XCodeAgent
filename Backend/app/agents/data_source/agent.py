@@ -10,7 +10,7 @@ from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
-from app.tools.mysql_info import create_get_mysql_config_tool
+from app.tools.mysql_config import create_get_mysql_config_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
@@ -21,6 +21,7 @@ def create_data_source_agent(
         user_skills_backend: BackendProtocol,
         agent_memory_backend: BackendProtocol,
         required_user_skills_prompt: str = "",
+        database_source_ids: tuple[str, ...] = (),
 ):
     """创建具备数据源工作区权限和必选技能指令的 Deep Agent。"""
 
@@ -43,7 +44,10 @@ def create_data_source_agent(
         "seed data. If a task cannot be completed within its contract and write scope, "
         "return the structured failure or change request required by the execution prompt; "
         "do not improvise or expand scope. Obey the task's verification policy and return "
-        "only its exact structured result contract. "
+        "only its exact structured result contract. Database connections are injected by the platform at runtime. "
+        "Only database bootstrap tasks may use get_mysql_config to inspect the bound source's configuration policy. "
+        "Never require literal credentials in YAML, retrieve managed database passwords, or configure a database "
+        "for tasks that do not use one. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting a file, use "
         "delete_file(file_path=\"/path\") with a virtual absolute path. If write_file "
         "reports that the exact target already exists, use edit_file for that target. "
@@ -54,7 +58,7 @@ def create_data_source_agent(
             workspace_root,
             path_guard=is_data_source_backend_path,
         ),
-        create_get_mysql_config_tool(workspace_root),
+        create_get_mysql_config_tool(workspace_root, source_ids=database_source_ids),
     ]
     return create_deep_agent(
         name="data-source-generation-agent",

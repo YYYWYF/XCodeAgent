@@ -92,11 +92,17 @@ class AgentRegistryWorkspaceTests(unittest.TestCase):
             first_bundle = registry.create_agent_bundle(first_workspace)
             first_bundle_again = registry.create_agent_bundle(first_workspace)
             second_bundle = registry.create_agent_bundle(second_workspace)
+            bound_bundle = registry.create_agent_bundle(first_workspace, database_source_ids=("orders-db",))
+            bound_bundle_again = registry.create_agent_bundle(first_workspace, database_source_ids=("orders-db",))
 
         self.assertIs(first_bundle, first_bundle_again)
         self.assertIsNot(first_bundle, second_bundle)
-        self.assertEqual(frontend_factory.call_count, 2)
-        self.assertEqual(repair_planner_factory.call_count, 2)
+        self.assertIsNot(first_bundle, bound_bundle)
+        self.assertIs(bound_bundle, bound_bundle_again)
+        self.assertEqual(bound_bundle.data_source[1]["database_source_ids"], ("orders-db",))
+        self.assertEqual(first_bundle.data_source[1]["database_source_ids"], ())
+        self.assertEqual(frontend_factory.call_count, 3)
+        self.assertEqual(repair_planner_factory.call_count, 3)
         self.assertEqual(
             first_bundle.frontend[1]["workspace_root"],
             str(Path(first_workspace).resolve()),
