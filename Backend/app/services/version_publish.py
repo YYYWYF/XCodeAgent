@@ -79,6 +79,11 @@ def publish_version(
         raise VersionPublishError("当前仓库还没有基线提交，不能直接发布版本。")
     # 移除 .git/info/exclude 中对 .devagentstudio 的排除，确保规划产物随版本提交。
     _ensure_devagentstudio_tracked(repository_root)
+    # 确保 .gitignore 排除 node_modules 等依赖/构建产物：旧工作区的 baseline .gitignore
+    # 只排了 .devagentstudio 运行时目录，没有排 node_modules；发布时 git add -A 会把
+    # 数万 node_modules 文件加进暂存区，stderr 同时被 LF/CRLF warning 塞满，导致整个
+    # add 超时或返回非零（用户看到"无法暂存工作区变更"+大量 warning）。
+    _ensure_dependencies_ignored(repository_root)
 
     # 2. 提交：git add -A + git commit。
     report("commit", "正在提交变更到本地仓库…", 30)
@@ -208,6 +213,49 @@ def _ensure_devagentstudio_tracked(repository_root: Path) -> None:
         exclude.write_text("\n".join(filtered) + ("\n" if filtered else ""), encoding="utf-8")
     except OSError as exc:
         raise VersionPublishError(f"无法更新 Git exclude 配置：{exc}") from exc
+
+
+# 发布时必须被 .gitignore 排除的依赖/构建产物。缺了 node_modules，git add -A 会把
+# 数万依赖文件加进暂存区，stderr 同时被 LF/CRLF warning 塞满，导致 add 超时或失败。
+_REQUIRED_GITIGNORE_PATTERNS = (
+    "node_modules/",
+    "dist/",
+    "build/",
+    "target/",
+    "__pycache__/",
+    ".venv/",
+    ".DS_Store",
+)
+
+
+def _ensure_dependencies_ignored(repository_root: Path) -> None:
+    """确保 .gitignore 包含依赖/构建产物排除项；缺失则追加，不动已有内容。
+
+    旧工作区 baseline 的 .gitignore 只排了 .devagentstudio 运行时目录，没排
+    node_modules 等。逐条检查所需 pattern 是否已存在（按行精确匹配），缺的追加
+    到文件末尾；已有则跳过保持幂等。
+    """
+
+    gitignore = repository_root / ".gitignore"
+    try:
+        existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    except OSError:
+        return
+    existing_lines = {line.strip() for line in existing.splitlines()}
+    missing = [pattern for pattern in _REQUIRED_GITIGNORE_PATTERNS if pattern not in existing_lines]
+    if not missing:
+        return
+    # 追加到文件末尾，保留原内容；若原文件非空且末行没换行，先补一个换行。
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    try:
+        with gitignore.open("a", encoding="utf-8") as handle:
+            handle.write(separator + "\n".join(missing) + "\n")
+    except OSError:
+        # 写不进去不阻塞发布——git add 仍会带 node_modules，可能慢但不至于失败。
+        # 只在 stderr 留一句提示，便于排查"为什么这次发布还是很慢"。
+        import sys
+
+        print(f"[version_publish] 无法更新 .gitignore 排除依赖目录：{gitignore}", file=sys.stderr)
 
 
 def _resolve_workspace_root(value: str) -> Path:
