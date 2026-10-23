@@ -244,7 +244,7 @@ function StartIterationModal({
               <Input
                 value={newBranchName}
                 onChange={(e) => onChoiceChange({ mode: 'new', branchName: e.target.value })}
-                placeholder="例如 v1.2"
+                placeholder="例如 v1_1"
                 status={invalidReason || duplicated ? 'error' : undefined}
               />
               <div className={cx('workbench-iteration-branch-hint')}>
