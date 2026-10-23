@@ -79,7 +79,7 @@ def required_artifacts(node: str) -> set[str]:
     return keys
 
 
-def regeneration_for_retry(workspace: str, node: str, graph=None) -> ArtifactRegeneration | None:
+def regeneration_for_retry(workspace: str, node: str, graph=None, *, state: dict | None = None) -> ArtifactRegeneration | None:
     """按上游顺序寻找最早不完整输入，递归前移时不依赖旧 State。"""
     from app.services.stage_artifacts import _ARTIFACTS, _REQUIREMENT_STAGES
     root = Path(workspace) / WORKSPACE_ARTIFACT_DIR
@@ -103,13 +103,23 @@ def regeneration_for_retry(workspace: str, node: str, graph=None) -> ArtifactReg
                 from app.workspace.plan_documents import load_project_plan_json
                 value = load_project_plan_json(path, hydrate_detail_designs=True) if path.is_file() else None
             valid = isinstance(value, dict) and bool(value)
+            if valid and key != "build_task_plan" and path == root / paths[key]:
+                from app.services.artifact_freshness import upstream_errors
+                errors = upstream_errors(root, key, value)
+                valid = not errors
+                detail = "；".join(errors)
+            if valid and key == "build_task_plan" and state:
+                from app.services.artifact_freshness import task_plan_errors
+                errors = task_plan_errors(state, value)
+                valid = not errors
+                detail = "任务直接输入已变化：" + "、".join(errors) if errors else ""
         except (OSError, ValueError) as exc:
             valid = False
             detail = str(exc)
         if not valid:
             issue = artifact_issue(key, path, detail)
             # 先修复生成该产物自身所需的上游，避免点击后才发现另一个缺失文件。
-            upstream = regeneration_for_retry(workspace, issue.node)
+            upstream = regeneration_for_retry(workspace, issue.node, state=state)
             return upstream or issue
     return None
 

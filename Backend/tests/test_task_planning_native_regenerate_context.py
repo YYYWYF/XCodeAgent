@@ -32,7 +32,8 @@ class TaskPlanningNativeRegenerateContextTests(unittest.IsolatedAsyncioTestCase)
     async def test_ordinary_interruption_selects_candidate_progress(self) -> None:
         """普通 DAG 中断重入向真实服务入口提供精确来源及独立证据类型。"""
 
-        state = {"active_run_id": "child", "active_thread_id": "thread"}
+        state = {"active_run_id": "child", "active_thread_id": "thread",
+                 "build_execution_scope": {"type": "page", "targetId": "orders"}}
         recovery = NodeRecoveryContext(source_run_id="source", execution_run_id="child",
             thread_id="thread", target_node="prepare_build_tasks", checkpoint_id="entry",
             reentry_reason=WorkflowReentryReason.INTERRUPTED_CONTINUE, entry_state=state)

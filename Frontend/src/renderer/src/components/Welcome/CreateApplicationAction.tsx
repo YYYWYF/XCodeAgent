@@ -107,7 +107,9 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
   const handleCreateApplication = async (): Promise<void> => {
     setCreating(true)
     try {
-      const values = await form.validateFields()
+      await form.validateFields()
+      // 关闭能力的字段未挂载，校验结果只含已注册字段；提交仍须保留完整初始化草稿。
+      const values = form.getFieldsValue(true) as ApplicationDraft
       if (!window.devAgentStudio?.isElectron) {
         throw new Error('当前环境不能创建本地项目目录，请在桌面客户端中使用。')
       }

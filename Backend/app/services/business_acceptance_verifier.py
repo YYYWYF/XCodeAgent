@@ -299,7 +299,8 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
             ),
             {},
         )
-        return _stable_hash(design) if design else ""
+        from app.services.api_design_fingerprint import api_design_content
+        return _stable_hash(api_design_content(design)) if design else ""
     if artifact == "entity_design":
         detail = next(
             (
