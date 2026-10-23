@@ -143,7 +143,10 @@ export function buildApplicationSchema(
   options?: { branchOverwriteConfirmed?: boolean }
 ): ApplicationSchemaConfig {
   const authorizationEnabled = values.authorization.enabled === true
-  const datasource = buildDatasourceConfig(values.datasource)
+  // 新建应用只接收模拟数据库开关，连接信息由应用内的数据源页面管理。
+  const datasource: ApplicationDatasourceConfig = values.datasource.db?.useBuiltin === true
+    ? { type: DatasourceEnum.DB, db: { useBuiltin: true } }
+    : { type: DatasourceEnum.DB }
   const initialAdministratorSubjects = authorizationEnabled
     ? Array.from(
         new Set(
@@ -156,9 +159,6 @@ export function buildApplicationSchema(
 
   if (authorizationEnabled && values.auth.enable !== true) {
     throw new Error('启用权限控制时必须同时启用认证。')
-  }
-  if (authorizationEnabled && datasource.type !== DatasourceEnum.DB) {
-    throw new Error('启用权限控制时必须使用数据库数据源。')
   }
   if (authorizationEnabled && initialAdministratorSubjects.length === 0) {
     throw new Error('启用权限控制时至少填写一个初始管理员 subjectId。')

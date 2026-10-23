@@ -1,5 +1,6 @@
 import {
   AppstoreOutlined,
+  DatabaseOutlined,
   FolderOpenOutlined,
   GithubOutlined,
   MenuOutlined
@@ -244,7 +245,21 @@ export default function ApplicationForm({
 
       <ApplicationConfigEditor form={form} mode={mode} visiblePaths={['theme.primaryColor']} />
 
-      <DatasourceConfigFields form={form} />
+      {isSettingsMode ? <DatasourceConfigFields form={form} /> : (
+        <section className={cx('application-form-section', 'application-form-section--full')}>
+          <SectionTitle icon={<DatabaseOutlined />}>模拟数据库</SectionTitle>
+          <Form.Item
+            label="是否使用模拟数据库"
+            name={['datasource', 'db', 'useBuiltin']}
+            extra="不使用模拟数据库时，可在创建应用后进入数据源页面新增数据库。"
+          >
+            <Radio.Group buttonStyle="solid">
+              <Radio.Button value={false}>不使用</Radio.Button>
+              <Radio.Button value={true}>使用</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+        </section>
+      )}
 
       <ApplicationConfigEditor
         form={form}

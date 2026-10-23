@@ -47,8 +47,7 @@ export const initialApplicationDraft: ApplicationDraft = {
   datasource: {
     type: DatasourceEnum.DB,
     db: {
-      useBuiltin: false,
-      connectionMode: 'plant'
+      useBuiltin: false
     }
   },
   envText: '',
