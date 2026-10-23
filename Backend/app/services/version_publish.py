@@ -86,6 +86,10 @@ def publish_version(
         repository_root,
         ["add", "-A"],
         "无法暂存工作区变更",
+        # 首次发布/大量变更时 15s 默认超时不够；与下方 commit 一致放宽到 60s。
+        # 超时被强杀后 git 可能来不及清理 .git/index.lock，导致下一次 add 报
+        # "Unable to create index.lock: File exists"——见 _run_git 的清理逻辑。
+        timeout=60,
     )
     # 运行时产物（日志、缓存、checkpoint）不得进入版本提交；
     # .gitignore 通常已排除，这里兜底从暂存区移除，避免大文件阻塞推送。
@@ -304,19 +308,41 @@ def _run_git(
     *,
     timeout: int = 15,
 ) -> subprocess.CompletedProcess[str]:
-    """以固定参数和超时执行无 shell 的 Git 子命令。"""
+    """以固定参数和超时执行无 shell 的 Git 子命令。
 
-    return workspace_process_registry.run(
-        ["git", *arguments],
-        workspace=repository_root,
-        cwd=str(repository_root),
-        # 禁用交互式提问：无 TTY 时等输入会把发布流程挂住（见 services/git_credentials）。
-        env=git_env(),
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
-    )
+    超时强杀后清理 `.git/index.lock`：`workspace_process_registry` 在超时时会
+    force-kill 子进程，git 来不及走 atexit 清理，残留 lock 会让下一次 add/commit
+    报 "Unable to create ... index.lock: File exists"。lock 只在进程活着时有意义，
+    进程已死则锁是死的，删掉安全。
+    """
+
+    try:
+        return workspace_process_registry.run(
+            ["git", *arguments],
+            workspace=repository_root,
+            cwd=str(repository_root),
+            # 禁用交互式提问：无 TTY 时等输入会把发布流程挂住（见 services/git_credentials）。
+            env=git_env(),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        _cleanup_stale_index_lock(repository_root)
+        raise
+
+
+def _cleanup_stale_index_lock(repository_root: Path) -> None:
+    """删除超时被杀的 git 进程留下的 `.git/index.lock`，让下一次 add/commit 不被阻塞。"""
+
+    lock_path = repository_root / ".git" / "index.lock"
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        # 删不掉也不掩盖原始 TimeoutExpired——下一次 git 自己会报"File exists"，
+        # 日志能看到原始超时，运维按 git 提示手动清理即可。
+        pass
 
 
 def _run_git_checked(

@@ -478,15 +478,48 @@
     color: #ff4d4f;
   }
 
-  // 生成中的进行时提示：跟在"变更说明"标签后面，弱化处理，不跟标签抢注意力。
+  // 生成中的进行时提示：胶囊样式（淡紫底 + 主题紫文字），比纯文字更能传达"正在生成"的活力。
+  // 细微脉动动画让用户余光就能感知"后台在跑"，不需要盯着看。
   .@{class-prefix}-workbench-generate-field-hint {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 6px;
     margin-left: 8px;
-    color: var(--wb-text-secondary, #5a5267);
-    font-size: 13px;
-    font-weight: 400;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(114, 46, 209, 0.08);
+    border: 1px solid rgba(114, 46, 209, 0.18);
+    color: #722ed1;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+    animation: workbench-generate-hint-pulse 1.6s ease-in-out infinite;
+
+    .anticon {
+      font-size: 12px;
+    }
+  }
+
+  @keyframes workbench-generate-hint-pulse {
+    0%,
+    100% {
+      background: rgba(114, 46, 209, 0.08);
+      border-color: rgba(114, 46, 209, 0.18);
+    }
+
+    50% {
+      background: rgba(114, 46, 209, 0.14);
+      border-color: rgba(114, 46, 209, 0.3);
+    }
+  }
+}
+
+// 深色模式：主题紫在暗底上需要更亮才能读清，背景/边框也调亮一档。
+.@{class-prefix}-workbench-shell[data-theme='dark'] {
+  .@{class-prefix}-workbench-generate-field-hint {
+    background: rgba(167, 130, 255, 0.12);
+    border-color: rgba(167, 130, 255, 0.28);
+    color: #b89aff;
   }
 }
 
