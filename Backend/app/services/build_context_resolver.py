@@ -14,6 +14,7 @@ from app.services.api_design import (
     api_design_source_types,
     load_confirmed_endpoint_designs,
 )
+from app.services.authorization_resource_catalog import authorization_resource_consumer_page_ids
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
 from app.services.page_identity import page_id_to_page_key
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
@@ -227,7 +228,7 @@ def _page_context(
     required_unit_ids = ["frontend:shell"]
     if endpoint_ids:
         required_unit_ids.append("frontend:api-client")
-    if _page_requires_auth(page):
+    if page_id in authorization_resource_consumer_page_ids(project_plan):
         required_unit_ids.append("frontend:auth-guard")
     if endpoint_ids:
         required_unit_ids.extend(
@@ -450,14 +451,6 @@ def _technical_plan_entity_ids(
     return result
 
 
-
-
-def _page_requires_auth(page: dict[str, Any]) -> bool:
-    """根据页面权限引用判断当前页面构建是否需要鉴权公共能力。"""
-
-    references = page.get("references") if isinstance(page.get("references"), dict) else {}
-    permissions = references.get("permissions") or page.get("permissions") or []
-    return bool(permissions) and list(permissions) != ["anonymous"]
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:

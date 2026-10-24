@@ -13,6 +13,28 @@ class AuthorizationFrontendProjectionError(ValueError):
     """表示前端资源常量或业务路由无法按确认权限事实安全生成。"""
 
 
+def authorization_resource_consumer_page_ids(project_plan: dict[str, Any]) -> set[str]:
+    """只按当前 manifest 的页面和操作绑定识别资源目录消费者，不读取页面权限旧字段。"""
+
+    manifest = project_plan.get("authorization_manifest")
+    if not isinstance(manifest, dict):
+        return set()
+    bindings = manifest.get("bindings")
+    if not isinstance(bindings, dict):
+        return set()
+    # 页面公开但内部操作受控时，同样需要当前完整资源目录 capability。
+    return {
+        item["pageId"]
+        for kind in ("pages", "actions")
+        for item in (bindings.get(kind) or [])
+        if isinstance(item, dict)
+        and isinstance(item.get("pageId"), str)
+        and item["pageId"].strip()
+        and isinstance(item.get("resourceKey"), str)
+        and item["resourceKey"].strip()
+    }
+
+
 @dataclass(frozen=True)
 class ResourceIdentity:
     """保留资源的精确源身份，避免常量名归一化吞掉目标变化。"""

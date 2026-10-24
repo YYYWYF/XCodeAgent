@@ -91,7 +91,7 @@ def _formal_contract_inputs(
     authorization_slices = []
     authorization_sources = {}
     manifest = plan.get("authorization_manifest")
-    if isinstance(manifest, dict) and manifest.get("enabled") is True:
+    if isinstance(manifest, dict) and manifest.get("resources"):
         bindings = manifest.get("bindings", {})
         for page in plan.get("page_implementation_contracts", []):
             page_id = page["pageId"]

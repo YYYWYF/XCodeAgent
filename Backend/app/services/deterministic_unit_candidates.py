@@ -38,6 +38,28 @@ def is_deterministic_auth_resource_task(task: Mapping[str, Any], paths: Sequence
     )
 
 
+def retained_auth_resource_task_ids(plan: Mapping[str, Any], tasks: Sequence[Mapping[str, Any]]) -> set[str]:
+    """结果汇总重建任务图时，仅延续已有注册表内合同未变的平台资源写入资格。"""
+
+    registry = plan.get("task_registry")
+    if not isinstance(registry, Mapping):
+        return set()
+    contract_fields = (
+        "unit_id", "owner", "execution_strategy", "platform_executor", "target_files",
+        "allowed_paths", "source_refs", "provides_capabilities", "deliverables",
+    )
+    result = set()
+    for task in tasks:
+        previous = registry.get(task.get("id"))
+        if (
+            isinstance(previous, Mapping)
+            and is_deterministic_auth_resource_task(task, task.get("target_files") or [])
+            and all(task.get(field) == previous.get(field) for field in contract_fields)
+        ):
+            result.add(task["id"])
+    return result
+
+
 def _invalid_input(message: str) -> None:
     """将确定性构造的输入冲突作为不可模型重试的前置问题返回。"""
 

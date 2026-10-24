@@ -1,5 +1,9 @@
 # DevAgent Studio Codebase Index
 
+页面资源目录前置能力由 `services/authorization_resource_catalog.py::authorization_resource_consumer_page_ids` 统一读取当前 `authorization_manifest.bindings.pages/actions`，不再消费页面 `permissions`。`build_context_resolver.py` 据此纳入 `frontend:auth-guard`，`build_unit_skeleton.py` 据此建立 Page 依赖并将消费者集合纳入骨架复用指纹；缺项仍由既有 `authorization.frontend_resources` 确定性任务物化完整目录，精确 capability 复用与确认门不变。`build_task_planner.py` 在执行状态重建图时仅延续已有注册表内合同未变的平台资源任务资格，避免成功执行后误判模型越界；新任务及合同漂移仍需原 Assembly 门禁。回归：`tests.test_page_auth_resource_planning`、`tests.test_auth_deterministic_execution_integration`、`tests.test_sequential_auth_boundary`、`tests.test_build_unit_skeleton`、`tests.test_page_build_context_resolver`。
+
+权限 Bootstrap 的唯一 SQL 合同由 `services/authorization_bootstrap.py::AUTHORIZATION_SCHEMA_RELATIVE_PATH` 固定为 `backend/sql/authorization/schema.sql`；旧 `migrations/001-schema.sql` 和 `docs/auth/sql/ddl.sql` 均不能满足预检，不复制 SQL 或修补已有 TemplateState。脚本选择、600 秒超时、环境隔离和指纹成功缓存保持原逻辑。回归：`tests.test_authorization_bootstrap`、`tests.test_authorization_template_delivery`；真实 Generate/V4 交付复测入口为 `tests/manual_authorization_sql_path_e2e.py`，当前模板端缺件与跨语言合同缺口见 `docs/template/authorization_sql_path_validation_2026_10_23.md`。
+
 Windows 预览进程存活探测统一由 `Backend/app/utils/process_liveness.py` 通过只申请 SYNCHRONIZE 的进程句柄和零等待状态读取实现，前后端 PID 停机及 `project_launcher.py` 的只读预览检查复用该适配器，禁止用 Windows `os.kill(pid, 0)` 探测。前端仅剩 PID 文件时同样通过 `taskkill /PID <pid> /T /F` 终止整树并确认退出，失败保留 PID 文件。回归：`tests.test_windows_preview_processes`、`tests.test_project_launcher`。
 
 Last updated: 2026-10-22

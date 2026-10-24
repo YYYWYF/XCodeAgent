@@ -18,6 +18,7 @@ from app.services.workspace_process_registry import workspace_process_registry
 
 
 AUTHORIZATION_BOOTSTRAP_TIMEOUT_SECONDS = 600
+AUTHORIZATION_SCHEMA_RELATIVE_PATH = Path("backend/sql/authorization/schema.sql")
 _WORKSPACE_LOCKS: dict[str, Lock] = {}
 _WORKSPACE_LOCKS_GUARD = Lock()
 
@@ -186,8 +187,9 @@ def _command_for_workspace(root: Path) -> tuple[list[str], str | None]:
         return [], f"权限 Bootstrap 模板脚本不存在：{script.relative_to(root)}。"
     if script.is_symlink() or not resolved_script.is_relative_to(resolved_backend):
         return [], "权限 Bootstrap 脚本必须是 backend 目录内的普通文件。"
-    if not (backend / "docs" / "auth" / "sql" / "ddl.sql").is_file():
-        return [], "权限 Bootstrap 缺少 backend/docs/auth/sql/ddl.sql。"
+    schema_path = root / AUTHORIZATION_SCHEMA_RELATIVE_PATH
+    if not schema_path.is_file():
+        return [], f"权限 Bootstrap 缺少 {AUTHORIZATION_SCHEMA_RELATIVE_PATH.as_posix()}。"
     return command, None
 
 

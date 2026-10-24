@@ -17,18 +17,22 @@ def _project_plan() -> dict:
             {
                 "pageId": "orders",
                 "references": {
-                    "permissions": ["admin"],
                     "endpoint_dependencies": [{"endpoint_id": "orders.list"}],
                 },
             },
             {
                 "pageId": "customers",
                 "references": {
-                    "permissions": ["anonymous"],
                     "endpoint_dependencies": [{"endpoint_id": "customers.list"}],
                 },
             },
         ],
+        "authorization_manifest": {
+            "bindings": {
+                "pages": [{"pageId": "orders", "resourceKey": "orders"}],
+                "actions": [], "endpoints": [],
+            },
+        },
         "entities": [
             {
                 "id": "Order",

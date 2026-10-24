@@ -33,6 +33,7 @@ from app.services.unit_generation_contracts import (
     CandidateAttempt,
 )
 from app.services.unit_generation_requirements import resolve_generation_requirements
+from tests.authorization_resource_test_utils import write_authorization_application
 from tests.dag_planning_baseline_fixtures import (
     build_context,
     confirmed_baseline,
@@ -225,6 +226,7 @@ class AuthDeterministicExecutionIntegrationTests(unittest.TestCase):
         snapshot = workspace_snapshot()
         scope = execution_scope(name="customers")
         context = build_context(plan, scope)
+        self.assertIn(AUTH_GUARD_UNIT_ID, context["required_unit_ids"])
         baseline = confirmed_plan or self._business_baseline(plan)
         skeleton = ensure_build_unit_skeleton(plan, snapshot, baseline)
         catalog = compile_frontend_resource_catalog(plan["authorization_manifest"])
@@ -242,7 +244,7 @@ class AuthDeterministicExecutionIntegrationTests(unittest.TestCase):
             auth_resource_inspection=inspection,
         )
         requirements = resolve_generation_requirements(
-            required_unit_ids=[AUTH_GUARD_UNIT_ID],
+            required_unit_ids=[unit for unit in context["required_unit_ids"] if unit == AUTH_GUARD_UNIT_ID],
             build_execution_scope=scope,
             unit_skeleton=skeleton,
             reuse_facts=reuse_facts,
@@ -288,6 +290,7 @@ class AuthDeterministicExecutionIntegrationTests(unittest.TestCase):
             base_confirmed_plan=cycle["confirmed_plan"],
             skeleton_plan=cycle["skeleton"],
             project_plan=cycle["plan"],
+            product_plan={"pages": cycle["plan"]["pages"]},
             build_context=cycle["context"],
             build_execution_scope=cycle["scope"],
             reuse_facts=cycle["reuse_facts"],
@@ -317,6 +320,7 @@ class AuthDeterministicExecutionIntegrationTests(unittest.TestCase):
         """经真实 ready selection、registry dispatch 和结果协调执行当前 auth provider。"""
 
         tasks = tasks_from_build_task_plan(assembled)
+        write_authorization_application(workspace)
         batch = select_ready_build_batch(tasks)
         auth_tasks = [task for task in batch["ready_tasks"] if task["id"] == expected_task_id]
         self.assertEqual([task["id"] for task in auth_tasks], [expected_task_id])
@@ -336,6 +340,7 @@ class AuthDeterministicExecutionIntegrationTests(unittest.TestCase):
             new_results=results,
             stage="build",
         )
+        self.assertEqual(applied["build_task_plan"]["task_graph"]["validation"], {"is_valid": True, "errors": []})
         return applied, results, change_sets
 
     def _confirm(
