@@ -488,6 +488,7 @@ export default function WorkflowRunCard({
           application={application}
           disabled={disabled || interactionAvailability !== 'active'}
           pending={(clarification as Record<string, unknown>).configPrerequisite as Record<string, unknown>}
+          onResume={async () => { await onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'resume' } }) }}
           onCancel={() => onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'cancelled' } })}
           onSubmit={async (changes) => {
             await onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'apply', changes } })

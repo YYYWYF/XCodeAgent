@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.domain.application_config_change import ApplicationConfigChange
 from app.services.application_config import ApplicationConfigService, apply_application_config_changes
-from app.services.application_config.schema import ApplicationConfigError
+from app.services.application_config.schema import ApplicationConfigError, normalize_application_configuration
 
 
 def _change(path: str, before: bool, after: bool) -> ApplicationConfigChange:
@@ -21,7 +21,7 @@ def _write_application(workspace: str, *, datasource: str = "static", subjects: 
 
     target = Path(workspace) / ".devagentstudio" / "application.json"
     target.parent.mkdir(parents=True)
-    target.write_text(json.dumps({"schemaVersion": 6, "configRevision": 1, "datasource": {"type": datasource}, "auth": {"enable": False}, "authorization": {"enabled": False, "initialAdministratorSubjects": subjects or []}, "track": {"enable": False}, "apiTrack": {"enable": False}}), encoding="utf-8")
+    target.write_text(json.dumps(normalize_application_configuration({"schemaVersion": 6, "configRevision": 1, "datasource": {"type": datasource}, "auth": {"enable": False, "yht": {"clientId": "client", "privateKey": "private", "publicKey": "public", "centerPublicKey": "center"}}, "authorization": {"enabled": False, "initialAdministratorSubjects": [], "api": {"baseUrl": "", "viewId": ""}}, "track": {"enable": False}, "apiTrack": {"enable": False}})), encoding="utf-8")
     return target
 
 
@@ -89,7 +89,7 @@ class ApplicationConfigMutationTests(unittest.TestCase):
             self.assertFalse(json.loads(target.read_text(encoding="utf-8"))["authorization"]["enabled"])
         with tempfile.TemporaryDirectory() as workspace:
             _write_application(workspace, datasource="database", subjects=["ops@example.com"])
-            updated = apply_application_config_changes(workspace, changes=[_change("auth.enable", False, True), _change("authorization.enabled", False, True)])
+            updated = apply_application_config_changes(workspace, changes=[_change("auth.enable", False, True), _change("authorization.enabled", False, True)], initial_administrator_subjects=["ops@example.com"])
             self.assertTrue(updated["authorization"]["enabled"])
 
     def test_service_expands_authorization_dependency_for_manual_target_entry(self) -> None:
@@ -104,6 +104,6 @@ class ApplicationConfigMutationTests(unittest.TestCase):
                 evidence="manual-settings",
             )
             self.assertEqual([change.path for change in changes], ["authorization.enabled"])
-            updated = service.apply(changes=changes)
+            updated = service.apply(changes=changes, initial_administrator_subjects=["ops@example.com"])
             self.assertTrue(updated["auth"]["enable"])
             self.assertTrue(updated["authorization"]["enabled"])

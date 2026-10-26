@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
+from copy import deepcopy
+from urllib.parse import urlparse
 
 from pydantic import ValidationError
 
@@ -11,9 +13,43 @@ from app.domain.managed_database import ManagedDatabaseRegistration
 
 CURRENT_APPLICATION_SCHEMA_VERSION = 6
 
+# 模板 1016 的固定默认值；仅用于显式提交时的可选表单草稿。
+LOGIN_AUTHORIZATION_DEFAULTS = {
+    "centerUri": "http://one-account-gateway.paasuat.cmbchina.cn/auth-server",
+    "authorizeUri": "https://one-account-gateway.paasuat.cmbchina.cn/auth-server/auth",
+    "redirectUri": "http://localhost",
+    "endUrl": "https://one-account-gateway.paasuat.cmbchina.cn/auth-server/endsession",
+    "logoutShareJs": "https://one-account-gateway.paasuat.cmbchina.cn/logout-share/js/logoutShare.js",
+    "baseUrl": "http://one-account-gateway.paasuat.cmbchina.cn/api-server",
+    "viewId": "2c9f50c875c0dfce0175de6a4df1057e",
+}
+
 
 class ApplicationConfigError(ValueError):
     """表示应用配置不符合当前唯一事实源契约。"""
+
+
+def normalize_application_configuration(application: Any) -> dict[str, Any]:
+    """为显式提交构造可选地址草稿，不用于持久配置读取。"""
+
+    if not isinstance(application, dict):
+        return application
+    result = deepcopy(application)
+    auth = result.get("auth")
+    if isinstance(auth, dict):
+        yht = auth.setdefault("yht", {})
+        if isinstance(yht, dict):
+            for field in ("clientId", "privateKey", "publicKey", "centerPublicKey"):
+                yht.setdefault(field, "")
+            for field in ("centerUri", "authorizeUri", "redirectUri", "endUrl", "logoutShareJs"):
+                yht.setdefault(field, LOGIN_AUTHORIZATION_DEFAULTS[field])
+    authorization = result.get("authorization")
+    if isinstance(authorization, dict) and authorization.get("enabled") is True:
+        api = authorization.setdefault("api", {})
+        if isinstance(api, dict):
+            api.setdefault("baseUrl", LOGIN_AUTHORIZATION_DEFAULTS["baseUrl"])
+            api.setdefault("viewId", LOGIN_AUTHORIZATION_DEFAULTS["viewId"])
+    return result
 
 
 def validate_application_snapshot(application: Any) -> dict[str, Any]:
@@ -36,6 +72,27 @@ def validate_application_snapshot(application: Any) -> dict[str, Any]:
         if type(value) is not bool:
             raise ApplicationConfigError(f"application.json 的 {path} 必须是布尔值。")
         values[path] = value
+    if set(application["authorization"]) not in ({"enabled", "initialAdministratorSubjects"}, {"enabled", "initialAdministratorSubjects", "api"}):
+        raise ApplicationConfigError("application.json.authorization 只能包含 enabled、initialAdministratorSubjects 和可选 api。")
+    subjects = application["authorization"].get("initialAdministratorSubjects")
+    if not isinstance(subjects, list) or any(not isinstance(item, str) or not item.strip() or item == "current-user" for item in subjects):
+        raise ApplicationConfigError("application.json.authorization.initialAdministratorSubjects 必须是真实 subjectId 数组。")
+    if values["authorization.enabled"] != bool(subjects):
+        raise ApplicationConfigError("application.json.authorization.initialAdministratorSubjects 初始管理员与 enabled 冲突。")
+    if values["authorization.enabled"] and not values["auth.enable"]:
+        raise ApplicationConfigError("application.json.auth.enable 必须与权限依赖一致。")
+    api = application["authorization"].get("api")
+    if values["authorization.enabled"] and not isinstance(api, dict):
+        raise ApplicationConfigError("application.json.authorization.api 必须是对象。")
+    if "api" in application["authorization"] and (not isinstance(api, dict) or set(api) != {"baseUrl", "viewId"} or not isinstance(api.get("baseUrl"), str) or not isinstance(api.get("viewId"), str) or (api["baseUrl"] and not _is_http_url(api["baseUrl"]))):
+        raise ApplicationConfigError("application.json.authorization.api.baseUrl/viewId 无效。")
+    yht = application["auth"].get("yht")
+    if "yht" in application["auth"] and not isinstance(yht, dict):
+        raise ApplicationConfigError("application.json.auth.yht 必须是对象。")
+    if values["auth.enable"]:
+        for field in ("clientId", "privateKey", "publicKey", "centerPublicKey"):
+            if not isinstance(yht, dict) or not isinstance(yht.get(field), str) or not yht[field].strip():
+                raise ApplicationConfigError(f"application.json.auth.yht.{field} 必须是非空字符串。")
     registration = application.get("managedDatabase")
     if registration is not None:
         try:
@@ -65,10 +122,35 @@ def validate_application_configuration(application: Any) -> dict[str, Any]:
             isinstance(item, str) and item.strip() and item != "current-user" for item in subjects
         ):
             raise ApplicationConfigError("启用权限控制时至少需要一个真实初始管理员 subjectId。")
+    auth = application.get("auth")
+    yht = auth.get("yht") if isinstance(auth, dict) else None
+    if not isinstance(yht, dict):
+        raise ApplicationConfigError("application.json.auth.yht 必须是对象。")
+    required_yht = ("clientId", "privateKey", "publicKey", "centerPublicKey")
+    url_yht = ("centerUri", "authorizeUri", "redirectUri", "endUrl", "logoutShareJs")
+    for field in required_yht:
+        value = yht.get(field)
+        if not isinstance(value, str) or (values["auth.enable"] and not value.strip()):
+            raise ApplicationConfigError(f"application.json.auth.yht.{field} 无效。")
+    for field in url_yht:
+        if not isinstance(yht.get(field), str) or (yht[field] and not _is_http_url(yht[field])):
+            raise ApplicationConfigError(f"application.json.auth.yht.{field} 必须是 http 或 https URL。")
     authorization = application.get("authorization")
-    if not isinstance(authorization, dict) or set(authorization) != {
-        "enabled",
-        "initialAdministratorSubjects",
-    }:
-        raise ApplicationConfigError("application.json authorization 必须只包含 enabled 和 initialAdministratorSubjects。")
+    if not isinstance(authorization, dict) or set(authorization) not in ({"enabled", "initialAdministratorSubjects"}, {"enabled", "initialAdministratorSubjects", "api"}):
+        raise ApplicationConfigError("application.json authorization 只能包含 enabled、initialAdministratorSubjects 和可选 api。")
+    api = authorization.get("api")
+    if api is not None:
+        if not isinstance(api, dict) or set(api) != {"baseUrl", "viewId"} or not isinstance(api.get("baseUrl"), str) or (api["baseUrl"] and not _is_http_url(api["baseUrl"])) or not isinstance(api.get("viewId"), str):
+            raise ApplicationConfigError("application.json authorization.api 无效。")
+    if values["authorization.enabled"] and api is None:
+        raise ApplicationConfigError("启用权限控制时必须填写 authorization.api。")
     return application
+
+
+def _is_http_url(value: Any) -> bool:
+    """允许模板服务使用的公网或内网 http/https URL。"""
+
+    if not isinstance(value, str) or not value.strip() or any(char.isspace() for char in value):
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)

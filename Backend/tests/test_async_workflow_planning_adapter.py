@@ -94,7 +94,15 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(directory.cleanup)
         self.workspace = Path(directory.name)
         self.plan = project_plan()
-        for key, payload in formal_artifacts(self.plan).items():
+        # Graph 按当前合同从 ProductPlan 物化页面，不能使用缺页的旧最小夹具。
+        for page in self.plan["pages"]:
+            page["references"]["endpoint_dependencies"] = [{"endpoint_id": f"{page['pageId']}.list"}]
+        artifacts = formal_artifacts(self.plan)
+        artifacts["product_plan"]["pages"] = deepcopy(self.plan["pages"])
+        from app.services.page_implementation_contract import materialize_technical_plan_runtime
+        self.plan = materialize_technical_plan_runtime(artifacts["technical_plan"], artifacts["requirement_spec"],
+            artifacts["product_plan"], artifacts["ui_designs"])
+        for key, payload in artifacts.items():
             write_json(self.workspace, ARTIFACT_PATHS[key], payload)
         write_confirmed_endpoint_designs(self.workspace, self.plan)
         self.snapshot_path = write_json(
@@ -218,6 +226,25 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             raw_response=json.dumps({"tasks": tasks}),
             tasks=tasks,
         )
+
+    async def test_changed_inputs_at_confirmation_regenerate_and_require_new_confirmation(self) -> None:
+        """审阅期间输入变化自动消费旧 Pending，重新生成后仍等待新确认。"""
+        state = self._state(execution_scope(name="orders"))
+        adapter = create_async_workflow_planning_adapter(policy=self.policy, generate_once=self._generate)
+        with patch("app.graph.nodes.task_planning_adapter.load_template_state", return_value=_ready_template(self.workspace)):
+            first = await adapter(state)
+            old_pending = load_pending_build_task_plan(state)
+            old_identity = validate_pending_self_digest(old_pending)
+            self.snapshot_path.write_text(json.dumps({**workspace_snapshot(), "workspace_revision": "new-source"}))
+            state["build_task_plan_confirmation"] = {"action": "confirm",
+                "planning_run_id": old_identity.planning_run_id, "draft_digest": old_identity.draft_digest}
+            second = await adapter(state)
+        new_pending = load_pending_build_task_plan(state)
+        self.assertNotEqual(first["planning_run_id"], second["planning_run_id"])
+        self.assertEqual(second["status"], "requires_user_input")
+        self.assertEqual(new_pending["confirmation_status"], "pending")
+        self.assertNotEqual(validate_pending_self_digest(new_pending).draft_digest, old_identity.draft_digest)
+        self.assertFalse((self.workspace / ".devagentstudio/plans/build-task-plan.json").exists())
 
     async def _native_regenerate_round(self, *, interrupted: bool, with_baseline: bool = True) -> None:
         """从真实 Pending 经过 Graph、Durable 记录和 Native fork 恢复 Regenerate。"""
@@ -704,7 +731,8 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
                     "confirmation_status": "draft",
                 },
             )
-            second = await graph.ainvoke(self._state(scope), config=thread)
+            # 正常 Runtime 已在 Graph 前自动交接；直接调用 Adapter 仍须清除旧投影。
+            second = await adapter({**first, **self._state(scope)})
 
         self.assertEqual(first["planning_run_id"], "planning-blocked-first")
         self.assertTrue(first["dag_generation_progress"])

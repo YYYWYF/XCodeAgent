@@ -187,6 +187,8 @@ async def _run_async_workflow_planning_adapter(
                 state,
                 action_payload,
                 confirm_service=confirm_service,
+                policy=policy, settings=settings, generate_once=generate_once,
+                regenerate_service=regenerate_service,
             )
         if action == "regenerate":
             return await _run_regenerate_branch(
@@ -236,6 +238,10 @@ async def _run_confirm_branch(
     action_payload: dict[str, Any],
     *,
     confirm_service: ConfirmService,
+    policy: UnitGenerationPolicy,
+    settings: Settings | None,
+    generate_once: UnitGenerationCallable | None,
+    regenerate_service: RegenerateService,
 ) -> dict[str, Any]:
     """只接受精确 DraftIdentity，并交给 lifecycle Confirm authority 提升 Formal。"""
 
@@ -248,6 +254,11 @@ async def _run_confirm_branch(
         draft_digest=str(action_payload.get("draft_digest") or ""),
         current_inputs=context.inputs.sequential_inputs(),
     )
+    if result.status in {"stale_inputs", "stale_base"}:
+        # 输入在审阅期间变化时，旧确认只授权重生成；新 Pending 仍必须再次确认。
+        return await _run_regenerate_branch(state, {**action_payload, "action": "regenerate"},
+            policy=policy, settings=settings, generate_once=generate_once,
+            regenerate_service=regenerate_service, automatic=True)
     return _project_confirm_result(result, state=state, context=context)
 
 
@@ -259,14 +270,15 @@ async def _run_regenerate_branch(
     settings: Settings | None,
     generate_once: UnitGenerationCallable | None,
     regenerate_service: RegenerateService,
+    automatic: bool = False,
 ) -> dict[str, Any]:
     """消费旧 Pending 后重建正式输入，并把新 PlanningRun 投影回确认门。"""
 
     workflow_run_id, thread_id = _workflow_identity(state)
     refreshed_context: list[_PlanningContext] = []
-    recovery = current_node_recovery_context()
+    recovery = None if automatic else current_node_recovery_context()
     recovery_source: str | None = None
-    reuse_recovery_candidate = True
+    reuse_recovery_candidate = not automatic
     if recovery is not None:
         source_action = recovery.entry_state.get("build_task_plan_confirmation")
         if not isinstance(source_action, dict) or any(

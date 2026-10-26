@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../context'
 import { reachedPhaseFromSessions } from '../../../workbenchPhaseNavigation'
 import { AgUiChatSession } from '../../../service/agUiAgent'
+import { emitConversationCreated } from '../../../service/telemetry'
 import {
   createChatSession,
   createChatSessionTitle,
@@ -493,12 +494,22 @@ export function useChatSessions({
     }
   }
 
+  /** 复用当前对话，或创建并统计用户首次发起的常规对话。 */
   const ensureActiveSession = async (): Promise<SessionIdentity> => {
     if (activeSession) {
       ensureAgent(activeSession)
       return activeSession
     }
-    return createNewSession()
+    const identity = await createNewSession()
+    // 业务功能埋点：新建常规对话（直接描述需求，未绑定页面/API 目标）
+    emitConversationCreated({
+      projectId: identity.workflowId,
+      conversationId: identity.sessionId,
+      threadId: identity.threadId,
+      conversationType: 'regular',
+      businessStage: identity.workbenchPhase
+    })
+    return identity
   }
 
   /** 确保页面/API 开发使用绑定目标的独立会话，目标变化时不改写旧会话。 */
@@ -513,7 +524,17 @@ export function useChatSessions({
       return activeSession
     }
     const title = target.type === 'page' ? `开发页面：${target.label}` : `开发接口：${target.label}`
-    return createNewSession({ developmentTarget: target, title })
+    const identity = await createNewSession({ developmentTarget: target, title })
+    // 业务功能埋点：新建常规对话（绑定页面/API 开发目标）
+    emitConversationCreated({
+      projectId: identity.workflowId,
+      conversationId: identity.sessionId,
+      threadId: identity.threadId,
+      conversationType: 'regular',
+      businessStage: identity.workbenchPhase,
+      target: identity.developmentTarget
+    })
+    return identity
   }
 
   /** 创建或恢复同一阶段入口的可见会话；Graph checkpoint 与该会话 Thread 始终分离。 */

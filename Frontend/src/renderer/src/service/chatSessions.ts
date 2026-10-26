@@ -12,6 +12,7 @@ import type {
 import type { WorkbenchPhase } from '../workbenchPhase';
 import { readDagGenerationSnapshot } from './agUiAgent';
 import type { ProcessStepRecord, ToolCallRecord } from './agUiAgent';
+import { emitPlanningConversationCreated } from './telemetry';
 
 export type ChatSessionMessage = {
   id: number;
@@ -787,6 +788,7 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
     const result = await sessionApi.create(input)
     const session = normalizeSession(result.session)
     if (!session) throw new Error('主进程返回的会话不符合当前契约。')
+    if (result.created) reportCreatedPlanningSession(input, session)
     return session
   }
 
@@ -839,7 +841,20 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
   if (!candidate) throw new Error('会话阶段身份不符合当前契约。')
   const sessions = readFallbackSessions(input.workspaceRoot, input.editorMode)
   writeFallbackSessions(input.workspaceRoot, input.editorMode, [candidate, ...sessions])
+  reportCreatedPlanningSession(input, candidate)
   return candidate
+}
+
+/** 仅对真正新建的阶段入口会话上报；普通对话沿用其业务入口埋点。 */
+function reportCreatedPlanningSession(input: CreateChatSessionInput, session: ChatSessionRecord): void {
+  if (!input.entryKey?.trim()) return
+  if (session.workbenchPhase === 'product') {
+    // 业务功能埋点：新建需求设计对话
+    emitPlanningConversationCreated(session.workflowId, session.id, session.threadId, 'requirements')
+  } else if (session.workbenchPhase === 'planning') {
+    // 业务功能埋点：新建技术规划对话
+    emitPlanningConversationCreated(session.workflowId, session.id, session.threadId, 'technical_planning')
+  }
 }
 
 export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {

@@ -77,8 +77,10 @@ class ConfigPrerequisiteTests(unittest.TestCase):
         config_path = self.root / ".devagentstudio/application.json"
         config = json.loads(config_path.read_text())
         config["auth"]["enable"] = True
+        config["auth"]["yht"].update(clientId="test", privateKey="test", publicKey="test", centerPublicKey="test")
         config["authorization"]["enabled"] = True
         config["authorization"]["initialAdministratorSubjects"] = ["admin-1"]
+        config["authorization"]["api"] = {"baseUrl": "", "viewId": ""}
         config_path.write_text(json.dumps(config, ensure_ascii=False))
         state = json.loads(self.state_path.read_text())
         capability = {"enabled": True, "config": {}}
@@ -97,6 +99,19 @@ class ConfigPrerequisiteTests(unittest.TestCase):
         self.assertEqual(result.config_intents[0]["desiredValue"], "#1677ff")
         self.assertFalse(result.business_request_required)
         self.assertEqual(result.config_route, "awaiting_config_confirmation")
+
+    def test_login_and_authorization_scalar_addresses_use_config_card(self) -> None:
+        """明确 URL 和 viewId 必须形成配置提案，且不会被路由为代码修改。"""
+
+        result = analyze_application_config_prerequisite(
+            "将登录授权地址改为 https://login.example/auth，将权限用户服务地址改为 http://api.internal，"
+            "将用户视图 ID 改为 view-9",
+            self.root,
+        )
+        self.assertEqual(result.suggested_changes["auth.yht.authorizeUri"], "https://login.example/auth")
+        self.assertEqual(result.suggested_changes["authorization.api.baseUrl"], "http://api.internal")
+        self.assertEqual(result.suggested_changes["authorization.api.viewId"], "view-9")
+        self.assertFalse(result.business_request_required)
 
     def test_theme_hex_and_local_page_style_are_distinct(self) -> None:
         """HEX 全局主题可识别；页面卡片颜色继续属于局部前端修改。"""

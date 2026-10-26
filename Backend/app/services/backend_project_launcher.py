@@ -141,7 +141,7 @@ def _launch_backend_project_locked(
     """在工作区锁内完成旧进程清理、Maven 构建和新 Java 进程启动。"""
 
     if on_progress:
-        on_progress("正在检查当前应用数据库配置与实体表结构…")
+        on_progress("正在准备后端启动环境…")
     try:
         managed_snapshot = prepare_managed_startup(root, on_readiness=lambda report: record_database_check(root, report))
     except DatabaseCredentialError as exc:
@@ -178,7 +178,7 @@ def _launch_backend_project_locked(
         )
 
     if on_progress:
-        on_progress("数据库预检通过，正在构建后端…")
+        on_progress("正在构建后端…")
     build_result = _run_backend_build(
         maven_command=maven_command,
         workspace=root,

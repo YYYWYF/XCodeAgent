@@ -1,6 +1,7 @@
 import {
   ApiOutlined,
   CheckCircleFilled,
+  CheckOutlined,
   CloudServerOutlined,
   CloseCircleFilled,
   CopyOutlined,
@@ -18,6 +19,7 @@ import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/p
 import { previewServiceActionAvailability, previewServiceLaunchLabel } from './serviceStatusPolicy'
 import DatabaseCheckPanel from './DatabaseCheckPanel'
 import ServiceLogContent from './ServiceLogContent'
+import { useServiceLogClipboard } from './useServiceLogClipboard'
 import './ServiceStatusDrawer.less'
 import './ServiceStatusDrawer.expanded.less'
 
@@ -83,7 +85,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   const { snapshot, blockedReason, busy } = props
   const [tab, setTab] = useState<ServiceLayer>('frontend')
   const [following, setFollowing] = useState(true)
-  const [copyError, setCopyError] = useState('')
+  const { copied, copyError, copyLogs } = useServiceLogClipboard()
   const [logsExpanded, setLogsExpanded] = useState(false)
   const runtime = snapshot?.runtime
   const logs = runtime?.logs?.[tab] || []
@@ -111,16 +113,6 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
   useEffect(() => {
     if (!props.open) setLogsExpanded(false)
   }, [props.open])
-
-  /** 复制当前端的脱敏日志，并反馈剪贴板错误。 */
-  const copyLogs = async (text = content): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopyError('')
-    } catch {
-      setCopyError('无法访问剪贴板，请选择日志文本复制。')
-    }
-  }
 
   /** 切换日志端并恢复跟随，确保新选择的日志从最新位置开始查看。 */
   const selectLogTab = (key: string): void => {
@@ -290,11 +282,11 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
             <div className="preview-log-toolbar__actions">
               <Button
                 size="small"
-                icon={<CopyOutlined />}
+                icon={copied ? <CheckOutlined /> : <CopyOutlined />}
                 disabled={!content}
-                onClick={() => void copyLogs()}
+                onClick={() => void copyLogs(content)}
               >
-                复制日志
+                {copied ? '已复制' : '复制日志'}
               </Button>
               <Button
                 size="small"
@@ -323,6 +315,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
             />
           )}
           <ServiceLogContent
+            key={`${runtime?.attemptId || ''}:${tab}`}
             content={content}
             label={`${tab === 'frontend' ? '前端' : '后端'}启动日志`}
             following={following}

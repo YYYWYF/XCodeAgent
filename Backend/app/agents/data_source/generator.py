@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 from app.agents.field_value_prompt_rules import FIELD_VALUE_IMPLEMENTATION_RULES
+from app.agents.data_source.database_context import task_database_source_ids
 
 from app.agents.data_source.prompt_context import (
     execution_task_packet as _execution_task_packet,
@@ -144,7 +145,9 @@ def _invoke_live_data_source_agent(
     from app.agents import create_agent_bundle
 
     return invoke_agent_with_tool_activity(
-        create_agent_bundle(workspace, selected_skill_names).data_source,
+        create_agent_bundle(
+            workspace, selected_skill_names, database_source_ids=task_database_source_ids(tasks),
+        ).data_source,
         {
             "messages": [
                 {

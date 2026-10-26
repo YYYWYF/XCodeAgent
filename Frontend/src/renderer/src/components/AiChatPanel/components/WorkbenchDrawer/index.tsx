@@ -52,6 +52,9 @@ export default function WorkbenchDrawer({ label, size = 'medium', onClose, child
             '.ant-notification, .ant-popconfirm'
         )
         if (floating) return
+        // 侧栏菜单按钮（技能/文件/设置/数据源/外部API）是 toggle：mousedown 关闭后
+        // click 又会打开，导致抽屉闪烁。跳过它们，让 click 阶段的 toggle 逻辑独立决定。
+        if (target.closest('[data-sidebar-menu="true"]')) return
       }
       onCloseRef.current?.()
     }

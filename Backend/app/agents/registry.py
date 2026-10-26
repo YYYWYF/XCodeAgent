@@ -52,8 +52,9 @@ class AgentBundle:
 def create_agent_bundle(
     workspace_root: str | None = None,
     selected_skill_names: Sequence[str] | None = None,
+    *, database_source_ids: tuple[str, ...] = (),
 ) -> AgentBundle:
-    """按工作区和用户技能白名单创建或复用一组 Deep Agent。"""
+    """按工作区、用户技能白名单及本轮数据库身份创建或复用 Deep Agent。"""
 
     root = resolve_workspace_root(workspace_root)
     workspace_key = str(root) if root else ""
@@ -67,6 +68,7 @@ def create_agent_bundle(
                 selected_skill_key,
                 user_skills_revision,
                 agent_memory_revision,
+                tuple(sorted(set(database_source_ids))),
             )
         except (UserSkillSnapshotChangedError, AgentMemorySnapshotChangedError):
             continue
@@ -84,8 +86,9 @@ def _create_agent_bundle_for_workspace(
     selected_skill_names: tuple[str, ...],
     user_skills_revision: str,
     agent_memory_revision: str,
+    database_source_ids: tuple[str, ...] = (),
 ) -> AgentBundle:
-    """使用不可变技能和记忆快照构建缓存中的 Agent bundle。"""
+    """使用不可变技能、记忆快照及数据库身份构建缓存，避免跨任务复用连接绑定。"""
 
     workspace_root = workspace_key or None
     user_skills = create_user_skill_runtime_snapshot(
@@ -133,6 +136,7 @@ def _create_agent_bundle_for_workspace(
     )
     data_source = create_data_source_agent(
         chat_model,
+        database_source_ids=database_source_ids,
         workspace_root=workspace_root,
         user_skills_backend=user_skills.backend,
         agent_memory_backend=agent_memory.backend,

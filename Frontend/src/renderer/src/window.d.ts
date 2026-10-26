@@ -13,6 +13,9 @@ declare global {
       isElectron: boolean
       agentBaseUrl: string
       platform: string
+      clipboard: {
+        writeText: (text: string) => Promise<void>
+      }
       auth: {
         login: () => Promise<{ ok: true }>
         status: () => Promise<{ authenticated: boolean }>
@@ -38,10 +41,6 @@ declare global {
         selectDirectory: (options?: {
           title?: string
         }) => Promise<{ canceled: boolean; path?: string }>
-        createProjectDirectory: (payload: {
-          workspacePath: string
-          applicationConfig: ApplicationSchemaConfig
-        }) => Promise<{ ok?: boolean; path: string }>
         readApplication: (payload: { workspaceRoot: string }) => Promise<{ application?: unknown }>
         readUiDesigns: (payload: { workspaceRoot: string }) => Promise<{ uiDesigns: unknown }>
         writeApplication: (payload: {
@@ -126,7 +125,7 @@ declare global {
                 label: string
               }
           revisionContext?: unknown
-        }) => Promise<{ ok?: boolean; session?: unknown }>
+        }) => Promise<{ ok?: boolean; session?: unknown; created: boolean }>
         save: (payload: {
           workspaceRoot: string
           session: unknown

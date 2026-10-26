@@ -130,7 +130,7 @@ def _run_backend_startup_check_locked(
     snapshot = None
     try:
         snapshot = prepare_managed_startup(root)
-        # 外置库仍在检查 Java/JAR 前解析连接配置，保持原有失败次序与诊断路径。
+        # 非模拟模式允许无数据库配置；已有连接仍通过共享环境构造器按需注入。
         if snapshot is None:
             environment, config_error = _backend_runtime_environment(root)
             if config_error:

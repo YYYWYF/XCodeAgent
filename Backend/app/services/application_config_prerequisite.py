@@ -63,6 +63,20 @@ def analyze_application_config_prerequisite(request: str, workspace: str | Path)
         if current != intent.enabled or (intent.enabled and capability not in installed and state_path.is_file()):
             explicit.append({"path": intent.path, "desiredValue": intent.enabled, "source": "explicit"})
             suggested[intent.path] = intent.enabled
+    # 标量地址只在用户给出完整值时生成建议；缺值保留卡片供用户选择，绝不猜测 URL。
+    for path, aliases in {
+        "auth.yht.centerUri": ("认证中心地址", "认证中心"),
+        "auth.yht.authorizeUri": ("登录授权地址", "授权地址"),
+        "auth.yht.endUrl": ("前端登出地址", "登出地址"),
+        "auth.yht.logoutShareJs": ("登出同步脚本", "同步脚本"),
+        "authorization.api.baseUrl": ("权限用户服务地址", "权限服务地址"),
+        "authorization.api.viewId": ("用户视图 ID", "用户视图ID", "viewId"),
+    }.items():
+        scalar = _scalar_config_intent(request, path, aliases)
+        if scalar is not None:
+            explicit.append(scalar)
+            if scalar["desiredValue"] is not None:
+                suggested[path] = scalar["desiredValue"]
     name_match = re.search(r"(?:把|将)?(?:应用|系统)?(?:名称|名字)(?:改为|修改为|设为|设置为|改成)\s*([^，,。；;\s]+)", request)
     rename_requested = name_match is not None or re.search(r"(?:应用|系统)?改名", request) is not None
     if rename_requested:
@@ -144,7 +158,20 @@ def _app_icon_intent(request: str) -> dict[str, Any] | None:
 def _has_config_request(request: str) -> bool:
     """判断文本是否包含本模块负责的应用配置语义，即使目标当前已满足。"""
 
-    return bool(_theme_color_intent(request) or _app_icon_intent(request) or re.search(r"(?:应用|系统)?(?:名称|名字)(?:改为|修改为|设为|设置为|改成)|(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", request))
+    return bool(_theme_color_intent(request) or _app_icon_intent(request) or _scalar_config_intent(request, "", ("认证中心地址", "登录授权地址", "权限用户服务地址", "用户视图 ID", "用户视图ID", "前端登出地址", "登出同步脚本")) or re.search(r"(?:应用|系统)?(?:名称|名字)(?:改为|修改为|设为|设置为|改成)|(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", request))
+
+
+def _scalar_config_intent(request: str, path: str, aliases: tuple[str, ...]) -> dict[str, Any] | None:
+    """解析明确的标量配置修改；URL 缺失或非法时要求用户在安全卡片填写。"""
+
+    names = "|".join(re.escape(alias) for alias in aliases)
+    match = re.search(rf"(?:把|将)?\s*(?:{names})\s*(?:改为|修改为|设为|设置为|改成)\s*([^，,。；;\s]+)?", request, re.IGNORECASE)
+    if match is None:
+        return None
+    value = match.group(1)
+    if path.endswith(("Uri", "Url")) and value is not None and not re.fullmatch(r"https?://[^\s]+", value, re.IGNORECASE):
+        value = None
+    return {"path": path, "desiredValue": value, "source": "explicit", "valueStatus": "resolved" if value else "needs_user_selection"}
 
 
 def _has_remaining_business_request(request: str) -> bool:
@@ -156,5 +183,5 @@ def _has_remaining_business_request(request: str) -> bool:
 def business_request_for_routing(request: str) -> str:
     """仅抽出混合请求中的非配置部分供分类，不改变 checkpoint 保存的原始请求。"""
 
-    text = re.sub(r"(?:把|将)?(?:应用|系统)?(?:主题色|主题颜色|主色|图标|名称|名字)(?:改为|修改为|设为|设置为|改成).*?(?=(?:，|,|。|；|;|并|同时|然后)|$)", "", request, flags=re.IGNORECASE)
+    text = re.sub(r"(?:把|将)?(?:应用|系统)?(?:主题色|主题颜色|主色|图标|名称|名字|认证中心地址|登录授权地址|权限用户服务地址|用户视图\s*ID|前端登出地址|登出同步脚本)(?:改为|修改为|设为|设置为|改成).*?(?=(?:，|,|。|；|;|并|同时|然后)|$)", "", request, flags=re.IGNORECASE)
     return re.sub(r"(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", "", text).strip(" ，,；;")

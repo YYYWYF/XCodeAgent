@@ -61,7 +61,7 @@ type SessionSidebarProps = {
   externalApisActive: boolean
   forceCollapsed?: boolean
   loadingSessions: boolean
-  onBeforeNavigate?: (action: () => void) => void
+  onBeforeNavigate?: (action: () => void, railTarget?: 'dataSources' | 'externalApis') => void
   onCreateFreeChatSession: () => void
   onDeleteSession: (sessionId: string) => Promise<void>
   onOpenSession: (sessionId: string) => Promise<void>
@@ -111,6 +111,7 @@ export default function SessionSidebar({
   deletingSessionId,
   currentBranch,
   entities = [],
+  application,
   advancingSessionId,
   filesActive,
   dataSourcesActive,
@@ -149,7 +150,7 @@ export default function SessionSidebar({
   const [activeTemporaryChatId, setActiveTemporaryChatId] = useState<string | null>(null)
   const [resizing, setResizing] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH)
-  const temporaryChats = useTemporaryChats(workspaceRoot)
+  const temporaryChats = useTemporaryChats(workspaceRoot, application.id)
   const activeTemporaryChat = temporaryChats.sessions.find(
     (session) => session.id === activeTemporaryChatId
   )
@@ -158,14 +159,26 @@ export default function SessionSidebar({
   // 小屏（compactLayout）与大屏共用 collapsed 状态：默认展开常驻左侧，仅手动折叠成图标栏。
   const effectiveCollapsed = forceCollapsed ? true : collapsed
 
-  /** 关闭历史侧栏并执行用户选择的左栏导航。 */
-  const handleRailNavigation = (navigate: () => void): void => {
+  /** 关闭历史侧栏并执行用户选择的左栏导航。
+   *
+   * `railTarget` 标识本次导航的侧栏目标（数据源/外部 API/文件/设置），供
+   * onBeforeNavigate 判断"是不是在 toggle 当前已打开的抽屉"——是则直接收起，
+   * 不能让 action() 里的 toggle 又把抽屉打开（导致"重复点击不收起"）。
+   */
+  const handleRailNavigation = (
+    navigate: () => void,
+    railTarget?: 'dataSources' | 'externalApis' | 'files' | 'settings'
+  ): void => {
     const action = (): void => {
       setHistoryOpen(false)
       setActiveTemporaryChatId(null)
       navigate()
     }
-    if (onBeforeNavigate) onBeforeNavigate(action)
+    // 仅数据源/外部API 两类目标需要传给 onBeforeNavigate 做 toggle-当前 判断；
+    // 文件/设置走 WorkbenchDrawer，其 toggle 在 handler 内自给自足，不需要 onBeforeNavigate 参与。
+    const mappedTarget =
+      railTarget === 'dataSources' || railTarget === 'externalApis' ? railTarget : undefined
+    if (onBeforeNavigate) onBeforeNavigate(action, mappedTarget)
     else action()
   }
 
@@ -340,7 +353,8 @@ export default function SessionSidebar({
             {dataSourcesEnabled ? (
               <button
                 className={cx(dataSourcesActive && 'active')}
-                onClick={() => handleRailNavigation(onShowDataSources)}
+                data-sidebar-menu="true"
+                onClick={() => handleRailNavigation(onShowDataSources, 'dataSources')}
                 title="数据源"
                 type="button"
               >
@@ -351,7 +365,8 @@ export default function SessionSidebar({
             {dataSourcesEnabled ? (
               <button
                 className={cx(externalApisActive && 'active')}
-                onClick={() => handleRailNavigation(onShowExternalApis)}
+                data-sidebar-menu="true"
+                onClick={() => handleRailNavigation(onShowExternalApis, 'externalApis')}
                 title="外部 API"
                 type="button"
               >
@@ -368,7 +383,8 @@ export default function SessionSidebar({
           <div className={cx('session-rail-secondary')}>
             <button
               className={cx(filesActive && 'active')}
-              onClick={() => handleRailNavigation(onShowFiles)}
+              data-sidebar-menu="true"
+              onClick={() => handleRailNavigation(onShowFiles, 'files')}
               title="文件"
               type="button"
             >
@@ -386,7 +402,8 @@ export default function SessionSidebar({
             </button>
             <button
               className={cx(settingsActive && 'active')}
-              onClick={() => handleRailNavigation(onShowSettings)}
+              data-sidebar-menu="true"
+              onClick={() => handleRailNavigation(onShowSettings, 'settings')}
               title="设置"
               type="button"
             >

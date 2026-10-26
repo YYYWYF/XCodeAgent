@@ -19,18 +19,18 @@ class ParameterUpdaterTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.env = self.root / "frontend/.env"
-        self.yaml = self.root / "backend/src/main/resources/application.yml"
+        self.yaml = self.root / "backend/src/main/resources/application-dev.yml"
         self.env.parent.mkdir(parents=True)
         self.yaml.parent.mkdir(parents=True)
-        self.env.write_bytes(b'OTHER=value\r\nPUBLIC_APP_NAME="Before"\r\n')
+        self.env.write_bytes(b'OTHER=value\r\nPUBLIC_APP_NAME="Before"\r\nPUBLIC_APP_ICON="old"\r\nPUBLIC_THEME_PRIMARY_COLOR="#000000"\r\nPUBLIC_YHT_CLIENT_ID="old"\r\nPUBLIC_YHT_AUTHORIZE_URI="old"\r\nPUBLIC_YHT_END_URL="old"\r\nPUBLIC_YHT_LOGOUT_SHARE_JS="old"\r\n')
         self.yaml.write_bytes(
-            b'server:\r\n  port: 8080\r\n# BEGIN DEVAGENTSTUDIO MANAGED: login-auth\r\nauth:\r\n'
-            b'  client-id: "old"\r\n  private-key: "old"\r\n  public-key: "old"\r\n'
-            b'  center-public-key: "old"\r\n# END DEVAGENTSTUDIO MANAGED: login-auth\r\n'
+            b'server:\r\n  port: 8080\r\nyht:\r\n  authentication:\r\n'
+            b'    client-id: "old"\r\n    private-key: "old"\r\n    public-key: "old"\r\n    center-public-key: "old"\r\n    center-uri: "old"\r\n    authorize-uri: "old"\r\n    redirect-uri: "old"\r\n  api:\r\n    base-url: "old"\r\n    view-id: "old"\r\n'
         )
         self.config = {
             "appName": "After", "appIcon": "app", "theme": {"primaryColor": "#123456"},
-            "auth": {"yht": {"clientId": "new", "privateKey": "secret-1", "publicKey": "pub", "centerPublicKey": "center"}},
+            "auth": {"yht": {"clientId": "new", "privateKey": "secret-1", "publicKey": "pub", "centerPublicKey": "center", "centerUri": "http://center", "authorizeUri": "http://authorize", "redirectUri": "http://redirect", "endUrl": "http://end", "logoutShareJs": "http://logout"}},
+            "authorization": {"api": {"baseUrl": "http://api", "viewId": "view"}},
         }
         self.updater = ApplicationParameterUpdater()
 
@@ -38,6 +38,43 @@ class ParameterUpdaterTests(unittest.TestCase):
         """释放临时工程。"""
 
         self.temporary.cleanup()
+
+    def test_full_paths_preserve_unmanaged_names_and_inline_comments(self) -> None:
+        """同名叶子不影响其他树，CRLF 与行尾注释均保持原字节。"""
+        other = b'other:\r\n  client-id: user-client # keep\r\n  base-url: https://user.test\r\n'
+        self.yaml.write_bytes(self.yaml.read_bytes().replace(b'client-id: "old"', b'client-id: "old" # managed comment') + other)
+        plan = self.updater.preview(self.root, self.config, login_applied=True, authorization_applied=True)
+        self.updater.apply(self.root, plan)
+        self.assertTrue(self.yaml.read_bytes().endswith(other))
+        self.assertIn(b'client-id: "new" # managed comment\r\n', self.yaml.read_bytes())
+        self.assertIn('auth.yht.clientId', plan.changed_keys)
+        self.assertIn('authorization.api.baseUrl', plan.changed_keys)
+
+    def test_rejects_ambiguous_yaml_without_writing(self) -> None:
+        """重复键、别名、流式映射、多行标量均不得猜测更新。"""
+        original = self.yaml.read_bytes()
+        cases = [
+            original + b'other:\n  key: a\n  key: b\n',
+            original + b'other: &a value\ncopy: *a\n',
+            original.replace(b'client-id: "old"', b'client-id: |\r\n      old'),
+            b'yht: {authentication: {client-id: old}}\n',
+        ]
+        for content in cases:
+            with self.subTest(case=cases.index(content)):
+                self.yaml.write_bytes(content)
+                before = self.env.read_bytes()
+                with self.assertRaisesRegex(ParameterUpdateError, 'CONFIG_TARGET_CONFLICT'):
+                    self.updater.preview(self.root, self.config, login_applied=True)
+                self.assertEqual(self.env.read_bytes(), before)
+                self.assertEqual(self.yaml.read_bytes(), content)
+
+    def test_missing_path_does_not_create_nodes(self) -> None:
+        """受管叶子缺失时停止，不新增结构。"""
+        self.yaml.write_bytes(b'yht:\n  authentication:\n    client-id: "old"\n')
+        before = self.yaml.read_bytes()
+        with self.assertRaisesRegex(ParameterUpdateError, 'CONFIG_STRUCTURE_MISSING'):
+            self.updater.preview(self.root, self.config, login_applied=True)
+        self.assertEqual(self.yaml.read_bytes(), before)
 
     def test_theme_only_keeps_backend(self) -> None:
         """未安装 Login 时只修改前端文件，并保持幂等。"""
@@ -54,13 +91,22 @@ class ParameterUpdaterTests(unittest.TestCase):
         """多文件更新保留其他 YAML，结果不回显密钥。"""
 
         plan = self.updater.preview(self.root, self.config, login_applied=True)
-        self.assertEqual(plan.changed_files, ("frontend/.env", "backend/src/main/resources/application.yml"))
+        self.assertEqual(plan.changed_files, ("frontend/.env", "backend/src/main/resources/application-dev.yml"))
         self.assertNotIn("secret-1", repr(plan))
         self.updater.apply(self.root, plan)
         content = self.yaml.read_bytes()
         self.assertTrue(content.startswith(b'server:\r\n  port: 8080\r\n'))
-        self.assertIn(b'  private-key: "secret-1"\r\n', content)
+        self.assertIn(b'    private-key: "secret-1"\r\n', content)
         self.assertEqual(self.updater.preview(self.root, self.config, login_applied=True).changed_files, ())
+
+    def test_optional_login_address_can_be_empty(self) -> None:
+        """用户清空可选地址时同时更新现有 env/YAML 叶子。"""
+
+        self.config["auth"]["yht"]["authorizeUri"] = ""
+        plan = self.updater.preview(self.root, self.config, login_applied=True)
+        self.updater.apply(self.root, plan)
+        self.assertIn(b'PUBLIC_YHT_AUTHORIZE_URI=""\r\n', self.env.read_bytes())
+        self.assertIn(b'    authorize-uri: ""\r\n', self.yaml.read_bytes())
 
     def test_rejects_duplicates_invalid_yaml_and_symlink(self) -> None:
         """在写入前拒绝重复 Key、重复 auth、非法 YAML 和符号链接。"""

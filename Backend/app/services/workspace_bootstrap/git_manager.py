@@ -20,9 +20,26 @@ class BootstrapGitError(WorkspaceBootstrapError):
 # .devagentstudio 下的运行时产物目录，不应进入版本控制。
 _RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints")
 
+# 依赖目录与构建产物：发布时 `git add -A` 会把工作区所有未忽略文件加进暂存区，
+# 不排除 node_modules 会导致数万文件被加入，git 同时输出大量 LF/CRLF warning 把
+# stderr 缓冲区塞满，最终让整个 add 命令超时/失败（用户看到"无法暂存工作区变更"）。
 _GITIGNORE_CONTENT = "\n".join(
-    f"{WORKSPACE_ARTIFACT_DIR_NAME}/{name}/"
-    for name in _RUNTIME_ARTIFACT_DIRS
+    [
+        # 运行时产物（日志、缓存、checkpoint sqlite）。
+        *(f"{WORKSPACE_ARTIFACT_DIR_NAME}/{name}/" for name in _RUNTIME_ARTIFACT_DIRS),
+        # 前端依赖与构建产物。
+        "node_modules/",
+        "dist/",
+        "build/",
+        # 后端依赖与构建产物（Java/Maven + Python）。
+        "target/",
+        "__pycache__/",
+        "*.pyc",
+        ".venv/",
+        # 操作系统/编辑器产物。
+        ".DS_Store",
+        "Thumbs.db",
+    ]
 ) + "\n"
 
 

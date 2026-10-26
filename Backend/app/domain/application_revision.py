@@ -259,6 +259,7 @@ class ActiveFormalRevision(RevisionModel):
     source_run_id: str = Field(alias="sourceRunId", min_length=1, max_length=512)
     request: str = Field(min_length=1, max_length=16_000)
     target: RevisionTarget
+    regeneration_target: RevisionTarget | None = Field(default=None, alias="regenerationTarget")
     impact_interaction_id: str = Field(
         alias="impactInteractionId",
         min_length=1,

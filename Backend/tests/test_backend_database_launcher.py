@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from app.persistence.data_sources import write_sources
 
 from app.services import backend_process_registry
 from app.services.backend_project_launcher import (
@@ -15,7 +16,7 @@ from app.services.backend_project_launcher import (
 
 
 def _write_application(workspace: Path, *, use_builtin: bool = False) -> None:
-    """写入启动器测试所需的应用数据库配置。"""
+    """写入模拟开关及应用内数据库目录，启动器不读取应用级外部连接。"""
 
     application_file = workspace / ".devagentstudio" / "application.json"
     application_file.parent.mkdir(parents=True)
@@ -23,26 +24,23 @@ def _write_application(workspace: Path, *, use_builtin: bool = False) -> None:
         json.dumps(
             {
                 "datasource": {
-                    "type": "DataBase",
+                    "type": "database",
                     "db": (
                         {"useBuiltin": True}
                         if use_builtin
-                        else {
-                            "useBuiltin": False,
-                            "plantMode": {
-                                "domain": "application.mysql.local",
-                                "port": 3313,
-                                "userName": "application_user",
-                                "pwd": "application-password",
-                                "schema": "application_schema",
-                            },
-                        }
+                        else {"useBuiltin": False}
                     ),
                 }
             }
         ),
         encoding="utf-8",
     )
+    if not use_builtin:
+        write_sources(workspace, [{
+            "id": "application-db", "name": "应用数据库", "type": "database", "mode": "dbid",
+            "domain": "application.mysql.local", "port": 3313, "userName": "application_user",
+            "dbid": "application-password", "schema": "application_schema", "managedTables": [],
+        }])
 
 
 class BackendDatabaseLauncherTests(unittest.TestCase):
@@ -115,6 +113,26 @@ class BackendDatabaseLauncherTests(unittest.TestCase):
         self.assertNotIn("MYSQL_DATABASE", environment)
         self.assertNotIn("SPRING_DATASOURCE_URL", environment)
 
+    def test_runtime_environment_without_connection_does_not_require_database(self) -> None:
+        """未使用模拟数据库且未填写连接时允许启动，并隔离 Studio 的数据库环境。"""
+
+        for datasource in ({"type": "database"}, {"type": "database", "db": {"useBuiltin": False}}):
+            with self.subTest(datasource=datasource), tempfile.TemporaryDirectory() as temporary_root:
+                workspace = Path(temporary_root)
+                application_file = workspace / ".devagentstudio" / "application.json"
+                application_file.parent.mkdir()
+                application_file.write_text(json.dumps({"datasource": datasource}), encoding="utf-8")
+                with (
+                    patch.dict("os.environ", {"MYSQL_HOST": "studio-only.local", "MYSQL_PWD": "studio-only"}),
+                    patch("app.services.backend_launch_support.resolve_runtime_mysql_config") as resolve,
+                ):
+                    environment, error = _backend_runtime_environment(workspace)
+
+                self.assertIsNone(error)
+                self.assertNotIn("MYSQL_HOST", environment)
+                self.assertNotIn("MYSQL_PWD", environment)
+                resolve.assert_not_called()
+
     def test_launch_rejects_invalid_application_database_config_before_maven(self) -> None:
         """应用数据库配置不可解析时，启动器必须在 Maven 前失败。"""
 
@@ -124,10 +142,10 @@ class BackendDatabaseLauncherTests(unittest.TestCase):
             backend.mkdir()
             (backend / "pom.xml").write_text("<project />", encoding="utf-8")
             _write_application(workspace)
-            application_file = workspace / ".devagentstudio/application.json"
-            application = json.loads(application_file.read_text(encoding="utf-8"))
-            application["datasource"]["db"]["plantMode"]["schema"] = ""
-            application_file.write_text(json.dumps(application), encoding="utf-8")
+            source_file = workspace / ".devagentstudio/datasource/databases/application-db.json"
+            source = json.loads(source_file.read_text(encoding="utf-8"))
+            source["schema"] = ""
+            source_file.write_text(json.dumps(source), encoding="utf-8")
             with (
                 patch(
                     "app.services.backend_project_launcher.shutil.which",

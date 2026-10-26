@@ -65,8 +65,17 @@ async def retry_action_plan(source: DurableExecutionRecord, graph: Any) -> Recov
     """用同一轻量节点定位为 Planning 和 Workbench 签发重试或可关闭提示。"""
     hint = await read_retry_hint(source, graph)
     from app.services.stage_prerequisites import regeneration_for_retry
-    issue = regeneration_for_retry(source.workspace, hint.node, graph) if hint else None
-    target = issue.node if issue else hint.node if hint else ""
+    from app.services.application_lifecycle import load_application_lifecycle
+    lifecycle = load_application_lifecycle(source.workspace)
+    execution = lifecycle.active_executions.get(source.run_id) if lifecycle else None
+    inputs = {"workspace": source.workspace}
+    if execution:
+        inputs["build_execution_scope"] = {"type": execution.scope, "targetId": execution.target_id,
+            **({"apiContractId": execution.development_target.api_contract_id}
+               if execution.development_target and execution.development_target.api_contract_id else {})}
+    issue = regeneration_for_retry(source.workspace, hint.node, graph,
+        state=inputs) if hint else None
+    target = ("api_design_readiness_gate" if issue.key == "build_task_plan" else issue.node) if issue else hint.node if hint else ""
     digest = hashlib.sha256(f"{source.run_id}:{source.updated_at}:{target}".encode()).hexdigest()
     action = RecoveryAction(actionId=f"retry:{digest}", kind=RecoveryActionKind.RETRY_BUSINESS_NODE,
                             targetNode=target, label=issue.label if issue else (
@@ -183,15 +192,17 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
         execution = lifecycle.active_executions.get(source.run_id) if lifecycle else None
         node = hint.node
         from app.services.stage_prerequisites import regeneration_for_retry
-        issue = regeneration_for_retry(source.workspace, node, graph)
+        issue = regeneration_for_retry(source.workspace, node, graph, state={**checkpoint.snapshot.values, "workspace": source.workspace})
         if issue:
-            node = issue.node
+            node = "api_design_readiness_gate" if issue.key == "build_task_plan" else issue.node
         planning_handoff = node not in graph.nodes and node in {"requirements", "product_planning", "ui_confirmation", "technical_planning_begin"}
         if planning_handoff:
             from app.graph.application_planning_workflow import application_planning_graph_for_request
             graph = await application_planning_graph_for_request(workspace=source.workspace, project_id=source.project_id)
         state = retry_node_state(checkpoint.snapshot.values, node,
                                  planning=source.execution_kind == "application_planning" or planning_handoff)
+        if issue and node == "technical_planning_begin":
+            state["application_planning_recovery_boundary"] = {}
         if _failed_test_retry(source) and node == "integration_test":
             from app.services.integration_test_reentry import fresh_integration_test_fields
 
@@ -200,7 +211,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
         state.update({"workspace": source.workspace, "project_id": source.project_id,
                                  "request": hint.request, "resume_from": node,
                                  "active_thread_id": source.thread_id,
-                                 "retry_source_run_id": source.run_id,
+                                 "retry_source_run_id": "" if issue else source.run_id,
                                  "owner_session_id": source.owner_session_id or "",
                                  "workflow_scope": source.workflow_scope or ""})
         if execution:

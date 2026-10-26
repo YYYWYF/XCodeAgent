@@ -58,8 +58,15 @@ export type ApplicationConfigFieldPath =
   | 'auth.yht.privateKey'
   | 'auth.yht.publicKey'
   | 'auth.yht.centerPublicKey'
+  | 'auth.yht.centerUri'
+  | 'auth.yht.authorizeUri'
+  | 'auth.yht.redirectUri'
+  | 'auth.yht.endUrl'
+  | 'auth.yht.logoutShareJs'
   | 'authorization.enabled'
   | 'authorization.initialAdministratorSubjects'
+  | 'authorization.api.baseUrl'
+  | 'authorization.api.viewId'
 
 /** 根据已持久化能力及权限对登录的依赖确定开关是否不可操作。 */
 export function capabilityToggleDisabled(locked: boolean | undefined, requiredByDependency = false): boolean {
@@ -101,7 +108,7 @@ export default function ApplicationConfigEditor({
         </Form.Item>
       ) : null}
       {show('theme.primaryColor') ? <section className={cx('application-form-section', 'application-form-section--full')}><div className={cx('application-form-section-title')}>应用主题色</div><ThemeColorField form={form} /></section> : null}
-      {show('auth.enable') || show('auth.yht.clientId') || show('auth.yht.privateKey') || show('auth.yht.publicKey') || show('auth.yht.centerPublicKey') ? (
+      {show('auth.enable') || show('auth.yht.clientId') || show('auth.yht.privateKey') || show('auth.yht.publicKey') || show('auth.yht.centerPublicKey') || show('auth.yht.centerUri') || show('auth.yht.authorizeUri') || show('auth.yht.redirectUri') || show('auth.yht.endUrl') || show('auth.yht.logoutShareJs') ? (
       <section
         id={mode === 'settings' ? 'settings-auth' : undefined}
         className={cx('application-form-section', 'application-form-section--full', 'application-form-section--toggle')}
@@ -124,6 +131,11 @@ export default function ApplicationConfigEditor({
             {show('auth.yht.privateKey') ? <Form.Item extra="请填写加密后的内容。" label="privateKey" name={['auth', 'yht', 'privateKey']} rules={[{ required: true, message: '启用一号通登录后请填写 privateKey' }]}><TextArea autoSize={{ minRows: 2, maxRows: 6 }} /></Form.Item> : null}
             {show('auth.yht.publicKey') ? <Form.Item label="publicKey" name={['auth', 'yht', 'publicKey']} rules={[{ required: true, message: '启用一号通登录后请填写 publicKey' }]}><TextArea autoSize={{ minRows: 2, maxRows: 6 }} /></Form.Item> : null}
             {show('auth.yht.centerPublicKey') ? <Form.Item label="centerPublicKey" name={['auth', 'yht', 'centerPublicKey']} rules={[{ required: true, message: '启用一号通登录后请填写 centerPublicKey' }]}><TextArea autoSize={{ minRows: 2, maxRows: 6 }} /></Form.Item> : null}
+            {show('auth.yht.centerUri') ? <Form.Item label="认证中心地址" name={['auth', 'yht', 'centerUri']} rules={[{ type: 'url', message: '请填写有效的认证中心 URL' }]}><Input /></Form.Item> : null}
+            {show('auth.yht.authorizeUri') ? <Form.Item label="登录授权地址" name={['auth', 'yht', 'authorizeUri']} rules={[{ type: 'url', message: '请填写有效的登录授权 URL' }]}><Input /></Form.Item> : null}
+            {show('auth.yht.redirectUri') ? <Form.Item label="后端回调地址" name={['auth', 'yht', 'redirectUri']} rules={[{ type: 'url', message: '请填写有效的回调 URL' }]}><Input /></Form.Item> : null}
+            {show('auth.yht.endUrl') ? <Form.Item label="前端登出地址" name={['auth', 'yht', 'endUrl']} rules={[{ type: 'url', message: '请填写有效的登出 URL' }]}><Input /></Form.Item> : null}
+            {show('auth.yht.logoutShareJs') ? <Form.Item label="登出同步脚本" name={['auth', 'yht', 'logoutShareJs']} rules={[{ type: 'url', message: '请填写有效的脚本 URL' }]}><Input /></Form.Item> : null}
           </>
         ) : null}
       </section>
@@ -170,6 +182,8 @@ export default function ApplicationConfigEditor({
         >
           <Select mode="tags" placeholder="8位工号，输入后按回车" tokenSeparators={[',', '，', '\n']} />
         </Form.Item> : null}
+        {authorizationEnabled && show('authorization.api.baseUrl') ? <Form.Item label="权限用户服务地址" name={['authorization', 'api', 'baseUrl']} rules={[{ type: 'url', message: '请填写有效的权限服务 URL' }]}><Input /></Form.Item> : null}
+        {authorizationEnabled && show('authorization.api.viewId') ? <Form.Item label="用户视图 ID" name={['authorization', 'api', 'viewId']}><Input /></Form.Item> : null}
       </section>
       ) : null}
     </>

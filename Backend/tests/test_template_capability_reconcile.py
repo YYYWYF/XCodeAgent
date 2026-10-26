@@ -25,8 +25,8 @@ def _application(login: bool, authorization: bool) -> dict[str, object]:
         "appName": "测试应用",
         "appIcon": "AppstoreOutlined",
         "theme": {"primaryColor": "#722ED1"},
-        "auth": {"enable": login, "yht": {"clientId": "", "privateKey": "", "publicKey": "", "centerPublicKey": ""}},
-        "authorization": {"enabled": authorization, "initialAdministratorSubjects": []},
+        "auth": {"enable": login, "yht": {"clientId": "test", "privateKey": "test", "publicKey": "test", "centerPublicKey": "test"}},
+        "authorization": {"enabled": authorization, "initialAdministratorSubjects": ["test-admin"] if authorization else [], "api": {"baseUrl": "", "viewId": ""}},
         "datasource": {"type": "database"},
     }
 

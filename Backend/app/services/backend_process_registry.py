@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
 
 
@@ -224,17 +225,9 @@ def _wait_for_pid_exit(pid: int, timeout_seconds: float) -> bool:
 
 
 def _pid_is_running(pid: int) -> bool:
-    """使用零信号检查 PID 是否仍存在且可被当前用户观察。"""
+    """只读检查 PID，避免 Windows 零信号调用意外终止进程。"""
 
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return pid_is_running(pid)
 
 
 def _query_process_command(pid: int) -> tuple[str, str | None]:

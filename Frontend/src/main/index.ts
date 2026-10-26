@@ -13,6 +13,7 @@ import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './des
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { writeSessionAtomically } from './sessionPersistence'
 import { setupApplicationSettingsIpc } from './applicationSettings'
+import { setupClipboardIpc } from './clipboard'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
 import { endpointDesignDocumentStatus, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
@@ -57,26 +58,6 @@ function getApplicationsFile(): string {
 /** 返回工作区元数据目录中的应用配置文件路径。 */
 function getWorkspaceApplicationFile(workspaceRoot: string): string {
   return path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'application.json')
-}
-
-/** 校验新应用目标目录未被已有应用或其他文件占用，避免创建失败后污染工作区。 */
-async function assertNewProjectDirectory(projectPath: string): Promise<void> {
-  const existing = await lstatIfPresent(projectPath)
-  if (!existing) return
-  if (!existing.isDirectory() || existing.isSymbolicLink()) {
-    throw new Error('新应用项目目录必须是非符号链接目录，请选择独立的项目目录。')
-  }
-
-  const applicationFile = getWorkspaceApplicationFile(projectPath)
-  const lifecycleFile = path.join(projectPath, WORKSPACE_ARTIFACT_DIR_NAME, 'application-lifecycle.json')
-  if ((await lstatIfPresent(applicationFile)) || (await lstatIfPresent(lifecycleFile))) {
-    throw new Error('当前工作区已属于另一个应用，请为新应用选择独立的项目目录。')
-  }
-
-  const entries = await fs.readdir(projectPath)
-  if (entries.length > 0) {
-    throw new Error('新应用项目目录必须是不存在或为空的独立目录。')
-  }
 }
 
 type WorkbenchPageOption = {
@@ -1397,7 +1378,7 @@ async function readWorkspaceSessions(workspaceRoot: string): Promise<NormalizedC
 async function createChatSession(
   workspaceRootValue: unknown,
   inputValue: unknown
-): Promise<NormalizedChatSession> {
+): Promise<{ session: NormalizedChatSession; created: boolean }> {
   if (!isJsonRecord(inputValue)) throw new Error('session create input must be an object')
   const workspaceRoot = resolveWorkspaceRoot(workspaceRootValue)
   const editorMode = assertEditorMode(inputValue.editorMode)
@@ -1423,7 +1404,7 @@ async function createChatSession(
         const identityMatches =
           existing.editorMode === editorMode && existing.workbenchPhase === workbenchPhase
         if (!identityMatches) throw new Error('entryKey is already bound to another phase session')
-        return existing
+        return { session: existing, created: false }
       }
     }
     const sequence = stage
@@ -1448,7 +1429,7 @@ async function createChatSession(
       getSessionFile(workspaceRoot, editorMode, session.id),
       session
     )
-    return session
+    return { session, created: true }
   })
 }
 
@@ -1590,36 +1571,7 @@ function setupWorkspaceIpc(): void {
     }
   })
 
-  ipcMain.handle('workspace:create-project-directory', async (_event, payload = {}) => {
-    if (typeof payload.workspacePath !== 'string' || !payload.workspacePath.trim()) {
-      throw new Error('workspacePath must be a non-empty string')
-    }
-    if (
-      !payload.applicationConfig ||
-      typeof payload.applicationConfig !== 'object' ||
-      Array.isArray(payload.applicationConfig)
-    ) {
-      throw new Error('applicationConfig must be an object')
-    }
-    assertCurrentApplicationSchema(payload.applicationConfig as Record<string, unknown>)
 
-    const projectPath = path.resolve(payload.workspacePath)
-    await assertNewProjectDirectory(projectPath)
-    if (!(await lstatIfPresent(projectPath))) {
-      await fs.mkdir(projectPath, { recursive: false })
-    }
-    const applicationFile = getWorkspaceApplicationFile(projectPath)
-    await fs.mkdir(path.dirname(applicationFile), { recursive: true })
-    await fs.writeFile(applicationFile, `${JSON.stringify(payload.applicationConfig, null, 2)}\n`, {
-      encoding: 'utf8',
-      flag: 'wx'
-    })
-
-    return {
-      ok: true,
-      path: projectPath
-    }
-  })
 }
 
 function setupSessionStorageIpc(): void {
@@ -1656,8 +1608,8 @@ function setupSessionStorageIpc(): void {
   })
 
   ipcMain.handle('sessions:create', async (_event, payload = {}) => {
-    const session = await createChatSession(payload.workspaceRoot, payload.session)
-    return { ok: true, session }
+    const result = await createChatSession(payload.workspaceRoot, payload.session)
+    return { ok: true, ...result }
   })
 
   ipcMain.handle('sessions:save', async (_event, payload = {}) => {
@@ -1943,6 +1895,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupApplicationSettingsIpc()
   setupAuthIpc()
   setupBrowserIpc()
+  setupClipboardIpc()
   setupProjectPreviewIpc()
   setupWorkspaceIpc()
   setupSessionStorageIpc()

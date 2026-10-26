@@ -79,6 +79,11 @@ def publish_version(
         raise VersionPublishError("当前仓库还没有基线提交，不能直接发布版本。")
     # 移除 .git/info/exclude 中对 .devagentstudio 的排除，确保规划产物随版本提交。
     _ensure_devagentstudio_tracked(repository_root)
+    # 确保 .gitignore 排除 node_modules 等依赖/构建产物：旧工作区的 baseline .gitignore
+    # 只排了 .devagentstudio 运行时目录，没有排 node_modules；发布时 git add -A 会把
+    # 数万 node_modules 文件加进暂存区，stderr 同时被 LF/CRLF warning 塞满，导致整个
+    # add 超时或返回非零（用户看到"无法暂存工作区变更"+大量 warning）。
+    _ensure_dependencies_ignored(repository_root)
 
     # 2. 提交：git add -A + git commit。
     report("commit", "正在提交变更到本地仓库…", 30)
@@ -86,6 +91,10 @@ def publish_version(
         repository_root,
         ["add", "-A"],
         "无法暂存工作区变更",
+        # 首次发布/大量变更时 15s 默认超时不够；与下方 commit 一致放宽到 60s。
+        # 超时被强杀后 git 可能来不及清理 .git/index.lock，导致下一次 add 报
+        # "Unable to create index.lock: File exists"——见 _run_git 的清理逻辑。
+        timeout=60,
     )
     # 运行时产物（日志、缓存、checkpoint）不得进入版本提交；
     # .gitignore 通常已排除，这里兜底从暂存区移除，避免大文件阻塞推送。
@@ -206,6 +215,49 @@ def _ensure_devagentstudio_tracked(repository_root: Path) -> None:
         raise VersionPublishError(f"无法更新 Git exclude 配置：{exc}") from exc
 
 
+# 发布时必须被 .gitignore 排除的依赖/构建产物。缺了 node_modules，git add -A 会把
+# 数万依赖文件加进暂存区，stderr 同时被 LF/CRLF warning 塞满，导致 add 超时或失败。
+_REQUIRED_GITIGNORE_PATTERNS = (
+    "node_modules/",
+    "dist/",
+    "build/",
+    "target/",
+    "__pycache__/",
+    ".venv/",
+    ".DS_Store",
+)
+
+
+def _ensure_dependencies_ignored(repository_root: Path) -> None:
+    """确保 .gitignore 包含依赖/构建产物排除项；缺失则追加，不动已有内容。
+
+    旧工作区 baseline 的 .gitignore 只排了 .devagentstudio 运行时目录，没排
+    node_modules 等。逐条检查所需 pattern 是否已存在（按行精确匹配），缺的追加
+    到文件末尾；已有则跳过保持幂等。
+    """
+
+    gitignore = repository_root / ".gitignore"
+    try:
+        existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    except OSError:
+        return
+    existing_lines = {line.strip() for line in existing.splitlines()}
+    missing = [pattern for pattern in _REQUIRED_GITIGNORE_PATTERNS if pattern not in existing_lines]
+    if not missing:
+        return
+    # 追加到文件末尾，保留原内容；若原文件非空且末行没换行，先补一个换行。
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    try:
+        with gitignore.open("a", encoding="utf-8") as handle:
+            handle.write(separator + "\n".join(missing) + "\n")
+    except OSError:
+        # 写不进去不阻塞发布——git add 仍会带 node_modules，可能慢但不至于失败。
+        # 只在 stderr 留一句提示，便于排查"为什么这次发布还是很慢"。
+        import sys
+
+        print(f"[version_publish] 无法更新 .gitignore 排除依赖目录：{gitignore}", file=sys.stderr)
+
+
 def _resolve_workspace_root(value: str) -> Path:
     """解析并校验版本发布指定的工作区根目录。"""
 
@@ -304,19 +356,41 @@ def _run_git(
     *,
     timeout: int = 15,
 ) -> subprocess.CompletedProcess[str]:
-    """以固定参数和超时执行无 shell 的 Git 子命令。"""
+    """以固定参数和超时执行无 shell 的 Git 子命令。
 
-    return workspace_process_registry.run(
-        ["git", *arguments],
-        workspace=repository_root,
-        cwd=str(repository_root),
-        # 禁用交互式提问：无 TTY 时等输入会把发布流程挂住（见 services/git_credentials）。
-        env=git_env(),
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=timeout,
-    )
+    超时强杀后清理 `.git/index.lock`：`workspace_process_registry` 在超时时会
+    force-kill 子进程，git 来不及走 atexit 清理，残留 lock 会让下一次 add/commit
+    报 "Unable to create ... index.lock: File exists"。lock 只在进程活着时有意义，
+    进程已死则锁是死的，删掉安全。
+    """
+
+    try:
+        return workspace_process_registry.run(
+            ["git", *arguments],
+            workspace=repository_root,
+            cwd=str(repository_root),
+            # 禁用交互式提问：无 TTY 时等输入会把发布流程挂住（见 services/git_credentials）。
+            env=git_env(),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        _cleanup_stale_index_lock(repository_root)
+        raise
+
+
+def _cleanup_stale_index_lock(repository_root: Path) -> None:
+    """删除超时被杀的 git 进程留下的 `.git/index.lock`，让下一次 add/commit 不被阻塞。"""
+
+    lock_path = repository_root / ".git" / "index.lock"
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        # 删不掉也不掩盖原始 TimeoutExpired——下一次 git 自己会报"File exists"，
+        # 日志能看到原始超时，运维按 git 提示手动清理即可。
+        pass
 
 
 def _run_git_checked(

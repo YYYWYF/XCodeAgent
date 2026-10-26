@@ -36,7 +36,10 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
         self.path = folder / "application.json"
         self.path.write_text(json.dumps({
             "schemaVersion": 6, "configRevision": 1, "appName": "注册测试",
-            "auth": {"enable": False},
+            "auth": {"enable": False, "yht": {
+                "clientId": "", "privateKey": "", "publicKey": "", "centerPublicKey": "",
+                "centerUri": "", "authorizeUri": "", "redirectUri": "", "endUrl": "", "logoutShareJs": "",
+            }},
             "authorization": {"enabled": False, "initialAdministratorSubjects": []},
             "datasource": {"type": "database", "db": {"useBuiltin": True}},
             "theme": {"primaryColor": "#6b3cf0"},
