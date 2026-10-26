@@ -4,6 +4,7 @@ import asyncio
 from deepagents import create_deep_agent as _create_deep_agent
 from langchain.agents.middleware import AgentMiddleware
 from app.services.run_workers import run_worker
+from app.services.inclusion_rate import bind_inclusion_identity
 
 
 async def _tracked_async(handler, request):
@@ -26,6 +27,10 @@ async def _tracked_async(handler, request):
 class RunCancellationMiddleware(AgentMiddleware):
     """所有 Agent 共用同一运行停止边界，不依赖各 Agent 的业务实现。"""
 
+    def __init__(self, model=None):
+        """保存当前 Agent 的模型，仅供成功文件操作上报使用。"""
+        self.model = model
+
     def wrap_model_call(self, request, handler):
         """登记同步模型调用并阻止停止后继续生成。"""
         with run_worker():
@@ -33,7 +38,7 @@ class RunCancellationMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         """登记同步工具调用，停止成功前等待文件或命令操作结束。"""
-        with run_worker():
+        with run_worker(), bind_inclusion_identity(self.model):
             return handler(request)
 
     async def awrap_model_call(self, request, handler):
@@ -42,10 +47,12 @@ class RunCancellationMiddleware(AgentMiddleware):
 
     async def awrap_tool_call(self, request, handler):
         """登记异步工具及其同步线程的真实生命周期。"""
-        return await _tracked_async(handler, request)
+        with bind_inclusion_identity(self.model):
+            return await _tracked_async(handler, request)
 
 
 def create_deep_agent(*args, **kwargs):
     """沿用官方 Agent 工厂，只增加产品统一的运行控制中间件。"""
-    kwargs["middleware"] = [RunCancellationMiddleware(), *kwargs.get("middleware", [])]
+    model = kwargs.get("model", args[0] if args else None)
+    kwargs["middleware"] = [RunCancellationMiddleware(model), *kwargs.get("middleware", [])]
     return _create_deep_agent(*args, **kwargs)

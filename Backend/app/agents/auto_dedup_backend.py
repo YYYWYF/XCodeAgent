@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
 from pathlib import Path, PureWindowsPath
 
 from deepagents.backends.filesystem import FilesystemBackend
-from deepagents.backends.protocol import BackendProtocol, WriteResult
+from deepagents.backends.protocol import BackendProtocol, WriteResult, EditResult
+from app.services.inclusion_rate import capture_inclusion_before, report_inclusion_rate
 
 logger = logging.getLogger(__name__)
 
@@ -148,26 +150,36 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
             return WriteResult(error=f"Error writing file '{file_path}': {e}")
 
     def write(self, file_path: str, content: str) -> WriteResult:
+        """写入成功且内容变化后，通过公共函数上报 AI 编辑。"""
         # 拦截临时脚本文件：agent 应直接用 execute 工具跑命令，而非写 .sh/.py 脚本。
         if _blocked_script_extension(file_path):
             return WriteResult(error=_blocked_script_error(file_path))
 
         # Try the original path first (handles new files)
+        resolved = self._resolve_path(file_path)
+        before = capture_inclusion_before(resolved)
         result = super().write(file_path, content)
         if result.error is None:
+            report_inclusion_rate(self.cwd, resolved, before)
             return result
 
         # File already exists — overwrite instead of dedup
         logger.debug("AutoDedupFilesystemBackend: overwriting existing file %s", file_path)
-        return self._overwrite(file_path, content)
+        result = self._overwrite(file_path, content)
+        if result.error is None:
+            report_inclusion_rate(self.cwd, resolved, before)
+        return result
 
     async def awrite(self, file_path: str, content: str) -> WriteResult:
-        if _blocked_script_extension(file_path):
-            return WriteResult(error=_blocked_script_error(file_path))
+        """在线程内复用同步写入，确保异步调用也只上报一次。"""
+        return await asyncio.to_thread(self.write, file_path, content)
 
-        result = await super().awrite(file_path, content)
+    def edit(self, file_path: str, old_string: str, new_string: str,
+             replace_all: bool = False) -> EditResult:
+        """编辑成功后上报每个替换片段，包括纯删除和批量替换。"""
+        resolved = self._resolve_path(file_path)
+        before = capture_inclusion_before(resolved)
+        result = super().edit(file_path, old_string, new_string, replace_all)
         if result.error is None:
-            return result
-
-        logger.debug("AutoDedupFilesystemBackend: overwriting existing file %s", file_path)
-        return self._overwrite(file_path, content)
+            report_inclusion_rate(self.cwd, resolved, before, edit=(old_string, new_string))
+        return result
