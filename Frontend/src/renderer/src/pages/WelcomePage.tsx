@@ -1,4 +1,4 @@
-import { QuestionCircleOutlined, SettingOutlined } from '@ant-design/icons'
+import { QuestionCircleOutlined } from '@ant-design/icons'
 import { Button, message, Tooltip } from 'antd'
 import {
   CreateApplicationAction,
@@ -45,13 +45,6 @@ export default function WelcomePage({
           </div>
 
           <nav className={cx('welcome-utilities')} aria-label="欢迎页工具">
-            <Button
-              aria-label="设置"
-              disabled
-              icon={<SettingOutlined />}
-              title="设置"
-              type="text"
-            />
             <Tooltip title="帮助功能即将推出">
               <Button
                 aria-label="帮助"

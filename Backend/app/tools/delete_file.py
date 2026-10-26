@@ -12,6 +12,7 @@ from app.services.builtin_skills import is_builtin_skill_virtual_path
 from app.services.user_skill_runtime import is_user_skill_virtual_path
 from app.workspace.virtual_paths import is_host_workspace_virtual_path
 from app.workspace.workspace import SENSITIVE_FILE_NAMES
+from app.services.inclusion_rate import capture_inclusion_before, report_inclusion_rate
 
 
 class DeleteFileInput(BaseModel):
@@ -62,7 +63,9 @@ def _delete_workspace_file(
             raise ValueError("当前 Agent 无权删除该路径。")
         target = _resolve_virtual_path(root, virtual_path)
         _validate_delete_target(root, target)
+        before = capture_inclusion_before(target)
         target.unlink()
+        report_inclusion_rate(root, target, before, deleted=True)
         return {
             "tool": "delete_file",
             "status": "deleted",

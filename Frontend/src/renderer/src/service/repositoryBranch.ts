@@ -122,11 +122,16 @@ const ALLOWED_REPO_PROTOCOLS = new Set(['http:', 'https:', 'ssh:'])
 
 /**
  * 校验码云地址。规则与后端 build_authenticated_remote_url 保持一致：
+/**
  * 必须是带协议与主机名的 URL，否则后端拼不出可推送的认证地址。
+ *
+ * 空值合法（返回 undefined）：码云地址非必填——用户可以只本地开发，先不填远端。
+ * 填写了才做格式校验。
  */
 export function validateRepoUrl(value: string): string | undefined {
   const repoUrl = (value ?? '').trim()
-  if (!repoUrl) return '请输入码云地址'
+  // 空 = 不填 = 跳过格式校验。必填约束由表单自身决定，这里不替它判。
+  if (!repoUrl) return undefined
   if (/\s/.test(repoUrl)) return '码云地址不能包含空格'
   let parsed: URL
   try {

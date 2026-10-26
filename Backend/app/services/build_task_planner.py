@@ -32,7 +32,10 @@ from app.services.build_unit_compiler import (
     apply_unit_compilation,
 )
 from app.services.task_scheduler import annotate_task_execution, build_execution_batches
-from app.services.deterministic_unit_candidates import is_deterministic_auth_resource_task
+from app.services.deterministic_unit_candidates import (
+    is_deterministic_auth_resource_task,
+    retained_auth_resource_task_ids,
+)
 from app.services.template_state import validate_template_context
 
 
@@ -1041,7 +1044,10 @@ def _task_semantic_errors(
             _template_boundary_errors(
                 task,
                 paths=paths,
-                allow_deterministic_auth_resources=build_context.get("_compile_auth_capability_dependencies") is True,
+                allow_deterministic_auth_resources=(
+                    build_context.get("_compile_auth_capability_dependencies") is True
+                    or task_id in build_context.get("_retained_auth_resource_task_ids", ())
+                ),
             )
         )
         if validate_task_scope and required_unit_ids and unit_id not in required_unit_ids:
@@ -1323,6 +1329,11 @@ def replace_build_task_plan_tasks(
         for task in tasks
     ]
     annotated_tasks, execution_batches = _annotate_parallelism(normalized_tasks)
+    # 执行期间只更新状态也会重建图；已有平台任务不能被误判为新的模型越界写入。
+    context = {
+        **(build_context or {}),
+        "_retained_auth_resource_task_ids": retained_auth_resource_task_ids(build_task_plan, annotated_tasks),
+    }
     build_units = deepcopy(
         build_task_plan.get("build_units")
         if isinstance(build_task_plan.get("build_units"), dict)
@@ -1340,7 +1351,7 @@ def replace_build_task_plan_tasks(
         "task_graph": _build_task_graph(
             annotated_tasks,
             execution_batches,
-            build_context or {},
+            context,
         ),
         "summary": {
             **(

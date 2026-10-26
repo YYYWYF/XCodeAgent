@@ -4,7 +4,7 @@ from copy import deepcopy
 import unittest
 
 from app.services.build_task_planner import _template_boundary_errors
-from app.services.deterministic_unit_candidates import is_deterministic_auth_resource_task
+from app.services.deterministic_unit_candidates import is_deterministic_auth_resource_task, retained_auth_resource_task_ids
 
 
 class SequentialAuthBoundaryTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class SequentialAuthBoundaryTests(unittest.TestCase):
         """同一合法平台身份仅在新 Assembly 标记下通过，旧入口仍执行原门禁。"""
 
         task = self._task()
-        args = {"paths": ["frontend/src/constants/resources.ts"], "template_variant": "auth"}
+        args = {"paths": ["frontend/src/constants/resources.ts"]}
         self.assertTrue(_template_boundary_errors(task, **args))
         self.assertEqual(_template_boundary_errors(task, **args, allow_deterministic_auth_resources=True), [])
 
@@ -34,11 +34,11 @@ class SequentialAuthBoundaryTests(unittest.TestCase):
             with self.subTest(change=change):
                 task = {**self._task(), **change}
                 self.assertTrue(_template_boundary_errors(task, paths=["frontend/src/constants/resources.ts"],
-                                template_variant="auth", allow_deterministic_auth_resources=True))
+                                allow_deterministic_auth_resources=True))
         for paths in (["frontend/src/constants/resources.ts", "frontend/src/constants/routes.tsx"],
                       ["frontend/src/constants/resources.ts", "frontend/src/apis/extra.ts"]):
             with self.subTest(paths=paths):
-                self.assertTrue(_template_boundary_errors(self._task(), paths=paths, template_variant="auth",
+                self.assertTrue(_template_boundary_errors(self._task(), paths=paths,
                                                         allow_deterministic_auth_resources=True))
 
     def test_retained_versioned_platform_tasks_are_recognized_without_mutation(self):
@@ -48,3 +48,19 @@ class SequentialAuthBoundaryTests(unittest.TestCase):
         old = deepcopy(task)
         self.assertTrue(is_deterministic_auth_resource_task(task, ["frontend/src/constants/resources.ts"]))
         self.assertEqual(task, old)
+
+    def test_result_updates_preserve_only_existing_unchanged_platform_contract(self):
+        """允许更新已有平台任务状态；新增或改动写入合同不能借结果重建获得资格。"""
+
+        task = {**self._task(), "target_files": ["frontend/src/constants/resources.ts"],
+                "allowed_paths": ["frontend/src/constants/resources.ts"], "source_refs": {}, "deliverables": []}
+        plan = {"task_registry": {task["id"]: deepcopy(task)}}
+        self.assertEqual(retained_auth_resource_task_ids(plan, [{**task, "status": "completed"}]), {task["id"]})
+        self.assertEqual(retained_auth_resource_task_ids({}, [task]), set())
+        for change in (
+            {"allowed_paths": ["frontend/src/constants/routes.tsx"]},
+            {"platform_executor": "other"}, {"source_refs": {"resource_catalog_fingerprint": "changed"}},
+            {"execution_strategy": "agent"}, {"provides_capabilities": []},
+        ):
+            with self.subTest(change=change):
+                self.assertEqual(retained_auth_resource_task_ids(plan, [{**task, **change}]), set())

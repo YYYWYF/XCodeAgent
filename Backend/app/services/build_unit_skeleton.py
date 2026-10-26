@@ -10,6 +10,7 @@ import json
 from typing import Any
 
 from app.services.frontend_page_tree import project_plan_page_records
+from app.services.authorization_resource_catalog import authorization_resource_consumer_page_ids
 
 
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
@@ -171,6 +172,7 @@ def _unit_graph(
             edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 
+    auth_resource_pages = authorization_resource_consumer_page_ids(project_plan)
     for page in project_plan_page_records(project_plan):
         page_id = str(page.get("pageId") or "")
         if not page_id:
@@ -182,7 +184,7 @@ def _unit_graph(
             "frontend:api-client",
         ):
             edges.append({"from": public_unit_id, "to": page_unit_id, "type": "depends_on"})
-        if _page_requires_auth(page):
+        if page_id in auth_resource_pages:
             edges.append(
                 {"from": "frontend:auth-guard", "to": page_unit_id, "type": "depends_on"}
             )
@@ -245,6 +247,8 @@ def _skeleton_fingerprint(
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),
         "pages": project_plan_page_records(project_plan),
+        # 绑定增删会改变 Page 前置依赖，必须参与骨架复用指纹。
+        "authorization_resource_pages": sorted(authorization_resource_consumer_page_ids(project_plan)),
         "endpoint_api_design_policy": API_DESIGN_SCHEMA_VERSION,
         "api_contracts": project_plan.get("api_contracts"),
         "workspace_revision": (workspace_snapshot or {}).get("workspace_revision"),
@@ -331,14 +335,6 @@ def _page_endpoint_unit_ids(
         for endpoint_id in dict.fromkeys(endpoint_ids)
         if endpoint_id in endpoint_to_contract
     ]
-
-
-def _page_requires_auth(page: dict[str, Any]) -> bool:
-    """根据页面权限引用判断是否需要应用级鉴权守卫。"""
-
-    references = page.get("references") if isinstance(page.get("references"), dict) else {}
-    permissions = references.get("permissions") or page.get("permissions") or []
-    return bool(permissions) and list(permissions) != ["anonymous"]
 
 
 def _unique_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:

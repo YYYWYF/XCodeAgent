@@ -30,13 +30,19 @@ def _project_plan(workspace: Path) -> tuple[dict, Path]:
         "frontend_pages": [
             {
                 "pageId": "orders",
-                "references": {"permissions": ["admin"]},
+                "references": {},
             },
             {
                 "pageId": "customers",
-                "references": {"permissions": ["admin"]},
+                "references": {},
             },
         ],
+        "authorization_manifest": {
+            "bindings": {
+                "pages": [{"pageId": name, "resourceKey": name} for name in ("orders", "customers")],
+                "actions": [], "endpoints": [],
+            },
+        },
         "page_implementation_contracts": [
             {
                 "schema_version": "page-implementation-contract.v1",

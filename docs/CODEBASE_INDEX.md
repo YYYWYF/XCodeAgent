@@ -1,5 +1,11 @@
 # DevAgent Studio Codebase Index
 
+AI 文件操作入库率上报由 `Backend/app/services/inclusion_rate.py` 统一负责；`agents/execution_control.py` 在模型工具调用中绑定 threadId/模型，`agents/auto_dedup_backend.py` 的 write/edit 和 `tools/delete_file.py` 在成功后调用。完整上报地址 `http://coding-agent-repo-rate-backend.paas.cmbchina.cn/report/inclusion-rate` 直接写在 `httpx.post(...)` 调用中，不设独立地址常量或环境变量；内网用户读取入口为 `get_inclusion_user()`（当前返回空身份）。文件工具固定本次内容快照及会话/模型后立即返回，独立双线程发送器在后台组装差异、读取 Git 并 POST `/report/inclusion-rate`；最多 16 个内存在途任务，满额直接丢弃，不等待统计服务。成功码为 `SUC0000`，失败静默忽略，不提示、不记录失败日志，不持久化或重试，不增加产品 API。每个编辑块一条 UUID 记录，同次操作合批；原文/new text、写后的一基行/零基 UTF-8 字节列、包含结束位置，整文件删除不带 range。现有工具没有独立重命名入口，按实际新增/删除分别上报，不推测重命名关系。回归：`Backend/tests/test_inclusion_rate.py`。
+
+页面资源目录前置能力由 `services/authorization_resource_catalog.py::authorization_resource_consumer_page_ids` 统一读取当前 `authorization_manifest.bindings.pages/actions`，不再消费页面 `permissions`。`build_context_resolver.py` 据此纳入 `frontend:auth-guard`，`build_unit_skeleton.py` 据此建立 Page 依赖并将消费者集合纳入骨架复用指纹；缺项仍由既有 `authorization.frontend_resources` 确定性任务物化完整目录，精确 capability 复用与确认门不变。`build_task_planner.py` 在执行状态重建图时仅延续已有注册表内合同未变的平台资源任务资格，避免成功执行后误判模型越界；新任务及合同漂移仍需原 Assembly 门禁。回归：`tests.test_page_auth_resource_planning`、`tests.test_auth_deterministic_execution_integration`、`tests.test_sequential_auth_boundary`、`tests.test_build_unit_skeleton`、`tests.test_page_build_context_resolver`。
+
+权限 Bootstrap 的唯一 SQL 合同由 `services/authorization_bootstrap.py::AUTHORIZATION_SCHEMA_RELATIVE_PATH` 固定为 `backend/sql/authorization/schema.sql`；旧 `migrations/001-schema.sql` 和 `docs/auth/sql/ddl.sql` 均不能满足预检，不复制 SQL 或修补已有 TemplateState。脚本选择、600 秒超时、环境隔离和指纹成功缓存保持原逻辑。回归：`tests.test_authorization_bootstrap`、`tests.test_authorization_template_delivery`；真实 Generate/V4 交付复测入口为 `tests/manual_authorization_sql_path_e2e.py`，当前模板端缺件与跨语言合同缺口见 `docs/template/authorization_sql_path_validation_2026_10_23.md`。
+
 Windows 预览进程存活探测统一由 `Backend/app/utils/process_liveness.py` 通过只申请 SYNCHRONIZE 的进程句柄和零等待状态读取实现，前后端 PID 停机及 `project_launcher.py` 的只读预览检查复用该适配器，禁止用 Windows `os.kill(pid, 0)` 探测。前端仅剩 PID 文件时同样通过 `taskkill /PID <pid> /T /F` 终止整树并确认退出，失败保留 PID 文件。回归：`tests.test_windows_preview_processes`、`tests.test_project_launcher`。
 
 Last updated: 2026-10-26

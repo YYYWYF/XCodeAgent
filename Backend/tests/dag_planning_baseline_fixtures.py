@@ -35,7 +35,7 @@ def project_plan(*, authorization: bool = False) -> dict:
     for name, entity in (("orders", "Order"), ("customers", "Customer")):
         plan["pages"].append({
             "pageId": name, "name": entity, "path": f"/{name}",
-            "references": {"permissions": ["admin" if authorization else "anonymous"]},
+            "references": {},
         })
         plan["page_implementation_contracts"].append({
             "schema_version": "page-implementation-contract.v1",
@@ -62,7 +62,7 @@ def project_plan(*, authorization: bool = False) -> dict:
         })
     if authorization:
         plan["authorization_manifest"] = {
-            "schema_version": "authorization-manifest.v2", "enabled": True,
+            "schema_version": "authorization-manifest.v3",
             "bindings": {
                 "pages": [{"pageId": name, "resourceKey": name} for name in ("orders", "customers")],
                 "actions": [{
