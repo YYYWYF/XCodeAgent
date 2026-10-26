@@ -45,7 +45,8 @@ class EndpointDesignAssistQueryTests(unittest.TestCase):
             write = build_assist_messages(context, "write")[0].content
             self.assertIn("GENERIC_POLICY", write)
             self.assertIn("GENERIC_VALUES", write)
-        self.assertLess(len(system), 1800)
+        # 独立查询提示含三种取值和 OR/AND 完整示例，不再沿用共享短提示的字数预算。
+        self.assertLess(len(system), 2400)
         self.assertIn("request:query:keyword", human)
         self.assertIn("request:query:pageSize", human)
         self.assertIn("column:category_id", human)

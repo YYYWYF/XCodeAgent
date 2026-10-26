@@ -1,0 +1,21 @@
+.static-mock-panel {
+  margin-bottom: 16px;
+  .static-mock-count { display: inline-flex; align-items: center; gap: 12px; color: var(--wb-text-secondary); }
+  .ant-input-number { width: 90px; border-color: var(--wb-border-strong); background: var(--wb-canvas); color: var(--wb-text); }
+  .ant-input-number:hover, .ant-input-number-focused { border-color: var(--wb-accent); }
+  .ant-input-number-focused { box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 15%, transparent); }
+  .ant-input-number-handler-wrap { background: var(--wb-surface-subtle); border-color: var(--wb-border); }
+  .ant-input-number-handler { color: var(--wb-text-secondary); border-color: var(--wb-border); }
+  .ant-input-number-handler:hover { color: var(--wb-accent); }
+  .ant-input-number-handler:hover .ant-input-number-handler-up-inner, .ant-input-number-handler:hover .ant-input-number-handler-down-inner { color: var(--wb-accent); }
+  .ant-input-number-disabled { background: var(--wb-control); color: var(--wb-text-tertiary); }
+  .ant-spin-dot-item { background-color: var(--wb-accent); }
+  pre { max-height: 360px; overflow: auto; padding: 14px; margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere;
+    border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-surface-subtle); color: var(--wb-text); font: 13px/1.7 ui-monospace, Consolas, monospace; }
+  .static-mock-result > .ant-alert { margin-top: 12px; }
+  .ant-alert { color: var(--wb-text); background: var(--wb-surface-subtle); border-color: var(--wb-border-strong); }
+  .ant-alert-message, .ant-alert-description { color: var(--wb-text); }
+  .ant-alert-error .ant-alert-icon { color: var(--wb-danger); }
+  .ant-alert-warning .ant-alert-icon { color: var(--wb-warning); }
+  @media (max-width: 575px) { .mapping-assist-toolbar > .ant-btn { width: 100%; } }
+}

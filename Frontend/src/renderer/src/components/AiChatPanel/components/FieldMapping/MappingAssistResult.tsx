@@ -48,12 +48,12 @@ export default function MappingAssistResult({ assist, result, disabled }: {
     <footer className="mapping-assist-replace">
       {result.mapping && confirming && <section className="mapping-review-confirm" role="alertdialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`}>
         <strong id={`${id}-title`}>确认整体替换当前草稿？</strong>
-        <p id={`${id}-description`}>{assist.isExternal ? '外部入参、返回字段和映射说明将一并替换。' : '数据库操作及全部映射将一并替换。'}{pending.length > 0 && <>以下返回字段将置为未配置：{pending.map((item) => item.endpointField.path).join('、')}。</>}{pendingRequests.length > 0 && <>以下外部入参将置为未配置：{pendingRequests.map((item) => `${item.externalField.section}.${item.externalField.path}`).join('、')}。</>}正式生效仍需保存并确认。</p>
+        <p id={`${id}-description`}>{assist.isStatic ? '全部返回映射将替换为本轮结果，静态内容沿用当前草稿。' : assist.isExternal ? '外部入参、返回字段和映射说明将一并替换。' : '数据库操作及全部映射将一并替换。'}{pending.length > 0 && <>以下返回字段将置为未配置：{pending.map((item) => item.endpointField.path).join('、')}。</>}{pendingRequests.length > 0 && <>以下外部入参将置为未配置：{pendingRequests.map((item) => `${item.externalField.section}.${item.externalField.path}`).join('、')}。</>}正式生效仍需保存并确认。</p>
         <div className="mapping-assist-preview-actions"><Button autoFocus type="primary" onClick={() => { setConfirmation(undefined); void assist.apply() }}>确认替换草稿</Button>
           <Button onClick={() => setConfirmation(undefined)}>返回预览</Button></div>
       </section>}
       <div className="mapping-assist-toolbar"><div><strong>{result.mapping ? '整体替换当前草稿' : '补充后继续生成'}</strong>
-        <p className="mapping-assist-secondary">{result.mapping ? `${assist.isExternal ? '入参、返回和说明' : '操作及全部映射'}一并回填，可撤销一次；正式生效仍需保存并确认。` : '请先明确数据库操作，重新生成后统一预览映射。'}</p></div>
+        <p className="mapping-assist-secondary">{result.mapping ? `${assist.isStatic ? '全部返回映射' : assist.isExternal ? '入参、返回和说明' : '操作及全部映射'}一并回填，可撤销一次；正式生效仍需保存并确认。` : '请先明确数据库操作，重新生成后统一预览映射。'}</p></div>
         <div className="mapping-review-footer-actions">
           {showRegenerate && <Button disabled={!canRegenerate} onClick={() => { setConfirmation(undefined); void assist.generate() }}>补充并重新生成</Button>}
           {result.mapping && <Button type="primary" loading={assist.phase === 'applying'} disabled={disabled || running || !assist.canApply}

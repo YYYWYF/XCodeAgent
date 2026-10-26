@@ -10,6 +10,12 @@ from app.domain.endpoint_design_assist import ReplaceMappingRequest, RefineRuleR
 from app.services.endpoint_design_assist import replace_mapping, refine_rule, generate_mapping
 from app.domain.endpoint_design_external_assist import ExternalGenerateRequest, ExternalReplaceMappingRequest, ExternalRefineRequest
 from app.services.endpoint_design_external_assist import generate_external_mapping, replace_external_mapping, refine_external_rule
+from app.domain.endpoint_design_static_assist import (
+    StaticGenerateRequest, StaticReplaceRequest, StaticRefineRequest, GenerateMockRequest, ApplyMockRequest,
+)
+from app.services.endpoint_design_static_assist import (
+    generate_static_mapping, replace_static_mapping, refine_static_rule, generate_mock_data, apply_mock_data,
+)
 from app.services.endpoint_design_assist_retry import MappingGenerationFailure
 from app.services.binding_workspace import BindingDraftRequest, save_binding_draft, clear_binding_draft
 from app.services.endpoint_design_detail import (
@@ -23,6 +29,7 @@ from app.services.endpoint_design_detail import (
 
 
 ENDPOINT_DESIGNS_EVENT_NAME = "endpoint-designs"
+_ASSIST_ACTIONS = {"generate_mapping", "refine_rule", "replace_mapping", "generate_mock_data", "apply_mock_data"}
 
 
 def endpoint_designs_capabilities() -> dict[str, Any]:
@@ -32,14 +39,17 @@ def endpoint_designs_capabilities() -> dict[str, Any]:
         "name": "endpoint-designs",
         "endpoint": "/endpoint-designs/run",
         "transport": "ag-ui-sse",
-        "actions": ["get", "prepare", "save", "save_draft", "discard_draft", "generate_mapping", "refine_rule", "replace_mapping"],
+        "actions": ["get", "prepare", "save", "save_draft", "discard_draft", "generate_mapping", "refine_rule", "replace_mapping", "generate_mock_data", "apply_mock_data"],
         "customEventName": ENDPOINT_DESIGNS_EVENT_NAME,
         "stateSnapshotKey": "endpointDesigns",
         "workflowIndependent": True,
         "readOnly": False,
         "mappingGenerationSteps": ["operation", "query", "write", "return", "description"],
         "externalMappingGenerationSteps": ["request", "return", "description"],
-        "mappingAssistSourceTypes": ["database", "external_api"],
+        "staticMappingGenerationSteps": ["return"],
+        "mockDataGenerationSteps": ["mock"],
+        "mockDataMaxRows": 20,
+        "mappingAssistSourceTypes": ["database", "external_api", "static"],
     }
 
 
@@ -81,16 +91,28 @@ def build_endpoint_designs_ag_ui_stream(
         action = str(request_input.get("action"))
         values = {key: value for key, value in request_input.items() if key != "action"}
         thread_id = str(payload.get("threadId") or "")
-        # 来源决定严格请求模型，未知来源仍由原数据库模型拒绝，不能混用生成结果。
-        external = isinstance(values.get("selection"), dict) and values["selection"].get("sourceType") == "external_api"
+        # 来源决定严格请求模型，未知来源仍由数据库模型拒绝，不能混用生成结果。
+        source_type = values["selection"].get("sourceType") if isinstance(values.get("selection"), dict) else None
+        if action == "generate_mock_data":
+            result = await generate_mock_data(GenerateMockRequest.model_validate(values), report, thread_id)
+            return AgUiActionResult(data={"action": action, "mockData": result}, message="Mock 样例已生成，请预览后应用到静态数据内容。")
+        if action == "apply_mock_data":
+            result = await asyncio.to_thread(apply_mock_data, ApplyMockRequest.model_validate(values))
+            return AgUiActionResult(data={"action": action, "applied": result}, message="Mock 数据已校验，请核对返回映射后保存并确认。")
         if action == "generate_mapping":
-            result = await generate_external_mapping(ExternalGenerateRequest.model_validate(values), report, thread_id) if external else await generate_mapping(GenerateMappingRequest.model_validate(values), report, thread_id)
+            request_type, handler = {"external_api": (ExternalGenerateRequest, generate_external_mapping),
+                                     "static": (StaticGenerateRequest, generate_static_mapping)}.get(source_type, (GenerateMappingRequest, generate_mapping))
+            result = await handler(request_type.model_validate(values), report, thread_id)
             message = "请先补充数据库操作的待明确信息，再继续生成。" if result["mapping"] is None else "完整映射已生成，请预览后替换当前草稿。"
             return AgUiActionResult(data={"action": action, "assistance": result}, message=message)
         if action == "refine_rule":
-            result = await refine_external_rule(ExternalRefineRequest.model_validate(values), report, thread_id) if external else await refine_rule(RefineRuleRequest.model_validate(values), report, thread_id)
+            request_type, handler = {"external_api": (ExternalRefineRequest, refine_external_rule),
+                                     "static": (StaticRefineRequest, refine_static_rule)}.get(source_type, (RefineRuleRequest, refine_rule))
+            result = await handler(request_type.model_validate(values), report, thread_id)
             return AgUiActionResult(data={"action": action, "refinedRule": result}, message="业务规则建议已生成，采用后仍需应用规则。")
-        result = await asyncio.to_thread(replace_external_mapping, ExternalReplaceMappingRequest.model_validate(values)) if external else await asyncio.to_thread(replace_mapping, ReplaceMappingRequest.model_validate(values))
+        request_type, handler = {"external_api": (ExternalReplaceMappingRequest, replace_external_mapping),
+                                 "static": (StaticReplaceRequest, replace_static_mapping)}.get(source_type, (ReplaceMappingRequest, replace_mapping))
+        result = await asyncio.to_thread(handler, request_type.model_validate(values))
         return AgUiActionResult(data={"action": action, "applied": result}, message="完整映射已校验，请补全未配置项后保存并确认草稿。")
 
     return build_ag_ui_action_stream(
@@ -98,8 +120,8 @@ def build_endpoint_designs_ag_ui_stream(
         event_name=ENDPOINT_DESIGNS_EVENT_NAME,
         state_key="endpointDesigns",
         run_id_prefix="endpoint-designs",
-        operation=operation if request_input.get("action") not in {"generate_mapping", "refine_rule", "replace_mapping"} else None,
-        progress_operation=assist_operation if request_input.get("action") in {"generate_mapping", "refine_rule", "replace_mapping"} else None,
+        operation=operation if request_input.get("action") not in _ASSIST_ACTIONS else None,
+        progress_operation=assist_operation if request_input.get("action") in _ASSIST_ACTIONS else None,
         error_message_prefix="Endpoint API 映射操作失败",
         error_data=lambda exc: {"action": str(request_input.get("action") or "get"),
                                 **({"assistFailure": exc.failure} if isinstance(exc, MappingGenerationFailure) else {})},

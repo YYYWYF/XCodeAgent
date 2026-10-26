@@ -17,7 +17,7 @@ def context_fixture(operation: str = "read") -> dict:
     request["draft"]["databaseOperation"] = operation
     return {"endpoint": preparation["payload"]["endpoint"], "endpointFields": preparation["payload"]["endpointFields"],
             "columns": metadata["columns"], "selection": request["selection"], "draft": request["draft"],
-            "databaseOperation": operation, "instruction": "根据商品 ID 查询商品售价"}
+            "databaseOperation": operation, "tableDdl": None, "instruction": "根据商品 ID 查询商品售价"}
 
 
 def candidates(step: str, raw: dict, context: dict):
@@ -199,10 +199,12 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
             messages = build_assist_messages(context, step)
             system, human = messages[0].content, messages[1].content
             with self.subTest(step=step):
-                self.assertLess(len(system), 1800)
+                # 查询独立包含三种取值与完整分组示例，仍限制提示规模而不删除已确认规则。
+                self.assertLess(len(system), 2400 if step == "query" else 1800)
                 for forbidden in ("$defs", "additionalProperties", "sourceFields", "endpointField", "PRIVATE_SOURCE_ID"):
                     self.assertNotIn(forbidden, system + human)
-                self.assertIn("接口：", human)
+                self.assertIn("【接口与操作对象】", human)
+                self.assertIn("接口路径：", human)
                 if step in {"query", "write"}:
                     self.assertNotIn("response:response_body:price", human)
                 if step == "return":
@@ -273,14 +275,14 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
         context["clarification"] = '返回字段 categoryName：固定值 "test"'
         minimal = {key: context[key] for key in ("endpoint", "selection", "instruction", "clarification")}
         human = build_assist_messages(minimal, "operation")[1].content
-        for label in ("接口：", "名称：", "接口说明：", "当前数据表：", "需求说明：", "后续补充说明："):
+        for label in ("接口名称：", "HTTP 方法：", "接口路径：", "接口说明：", "数据表：", "【需求说明】", "【补充说明】"):
             self.assertIn(label, human)
         for field_list in ("请求参数（", "返回字段（", "表字段（", "request:path:id", "column:price"):
             self.assertNotIn(field_list, human)
         mapped = build_assist_messages(context, "return")[1].content
         self.assertIn("request:path:id", mapped)
         self.assertIn("column:price", mapped)
-        self.assertIn("后续补充说明：", mapped)
+        self.assertIn("【补充说明】", mapped)
 
     def test_generation_requires_main_instruction_and_bounds_combined_input(self):
         """缺省、空白或只有补充均不能生成，分别传入的两段文本受同一上限约束。"""

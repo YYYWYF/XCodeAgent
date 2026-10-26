@@ -70,7 +70,7 @@ export function mappingAssistSections(result: MappingAssistance): MappingAssistS
   if (mapping.databaseOperation && mapping.databaseOperation !== 'create') sections.push({ key: 'query', label: '查询条件',
     count: mapping.databaseQuery?.items.reduce((count, item) => count + (item.kind === 'group' ? item.items.length : 1), 0) || 0 })
   if (mapping.databaseOperation === 'create' || mapping.databaseOperation === 'update') sections.push({ key: 'write', label: '写入字段', count: mapping.databaseWrites?.length || 0 })
-  sections.push({ key: 'return', label: '返回字段', count: mapping.fieldMappings.filter((item) => item.endpointField.side === 'response').length },
-    { key: 'description', label: '映射说明' })
+  sections.push({ key: 'return', label: '返回字段', count: mapping.fieldMappings.filter((item) => item.endpointField.side === 'response').length })
+  if (mapping.staticData === undefined) sections.push({ key: 'description', label: '映射说明' })
   return sections
 }

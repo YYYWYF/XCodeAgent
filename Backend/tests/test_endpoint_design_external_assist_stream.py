@@ -3,6 +3,7 @@
 import asyncio
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.domain.endpoint_design_assist import MappingModelResult
@@ -28,6 +29,29 @@ async def collect(action, values):
 
 class ExternalAssistStreamTests(unittest.IsolatedAsyncioTestCase):
     """在无网络、无真实模型的条件下验证阶段顺序和事务边界。"""
+
+    async def test_real_agent_converts_each_external_stage(self):
+        """只替换聊天模型输出，覆盖真实提示构造、JSON 解析和外部短引用转换。"""
+        request, preparation, metadata = fixture()
+        model = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
+            SimpleNamespace(content='{"requests":[{"field":"external:query:keyword","inputs":["request:query:keyword"]}],"questions":[]}'),
+            SimpleNamespace(content='{"returns":[{"field":"response:response_body:name","inputs":["external:response_body:name"]}],"questions":[]}'),
+            SimpleNamespace(content='{"description":"按关键词调用供应商商品查询，直接返回商品名称。","questions":[]}'),
+        ]))
+        p1, p2 = patches(preparation, metadata)
+        with p1, p2, patch("app.agents.endpoint_design_assist.Settings.from_env", return_value=object()), patch(
+            "app.agents.endpoint_design_assist.create_chat_model", return_value=model,
+        ):
+            result = await generate_external_mapping(ExternalGenerateRequest(**request, instruction="按关键词查询商品"), AsyncMock())
+        self.assertEqual(model.ainvoke.await_count, 3)
+        self.assertEqual(result["mapping"]["externalApiBindings"][0]["right"]["endpointField"]["path"], "keyword")
+        self.assertEqual(result["mapping"]["fieldMappings"][1]["sourceFields"][0]["operationId"], "products")
+        self.assertEqual(result["questions"], [])
+        for call in model.ainvoke.await_args_list:
+            prompt = str(call.args[0])
+            self.assertNotIn("OLD_DRAFT", prompt)
+            self.assertNotIn("CONNECTION_SECRET", prompt)
+            self.assertNotIn("$defs", prompt)
 
     async def test_generation_order_and_scope(self):
         """模型依次收到入参、返回、说明，既不接收旧草稿，也不识别数据库操作。"""

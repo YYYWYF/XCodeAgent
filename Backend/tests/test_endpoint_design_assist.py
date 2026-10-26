@@ -4,7 +4,7 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.domain.endpoint_design_assist import ReplaceMappingRequest, RefineRuleRequest, GenerateMappingRequest
 from app.services.endpoint_design_assist import replace_mapping, load_assist_context, refine_rule, generate_mapping
@@ -33,10 +33,12 @@ def generation_request(request: dict, **values) -> GenerateMappingRequest:
 
 
 def patches(preparation: dict, metadata: dict):
-    """在服务边界模拟契约和实时数据库元数据，不访问实际数据库。"""
+    """在服务边界模拟契约、列与内置 DDL 投影，禁止回归访问实际数据库。"""
     return (patch("app.services.endpoint_design_assist.prepare_endpoint_design", return_value=preparation),
             patch("app.services.endpoint_design_assist.selected_tables", return_value=[{"sourceId": "db", "schema": "shop", "table": "product"}]),
-            patch("app.services.endpoint_design_assist.load_database_columns", return_value=metadata))
+            patch.multiple("app.services.endpoint_design_assist",
+                           load_database_columns=Mock(return_value=metadata),
+                           load_mapping_table_ddl=Mock(return_value=None)))
 
 
 def price_candidate(request: dict, preparation: dict) -> dict:
@@ -260,7 +262,8 @@ class EndpointDesignAssistTests(unittest.IsolatedAsyncioTestCase):
         from app.agents.endpoint_design_assist import invoke_mapping_assistant
         request, preparation, metadata = fixture("E:/test")
         context = {"endpoint": preparation["payload"]["endpoint"], "endpointFields": preparation["payload"]["endpointFields"],
-                   "columns": metadata["columns"], "selection": request["selection"], "databaseOperation": "read"}
+                   "columns": metadata["columns"], "selection": request["selection"], "databaseOperation": "read",
+                   "tableDdl": None, "instruction": "根据商品 ID 查询售价"}
         model = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content='{"returns":[{"field":"response:response_body:price","inputs":["column:price"]}],"questions":[]}')))
         with patch("app.agents.endpoint_design_assist.Settings.from_env", return_value=object()), patch("app.agents.endpoint_design_assist.create_chat_model", return_value=model):
             result = await invoke_mapping_assistant(context, step="return", thread_id="assist-thread")

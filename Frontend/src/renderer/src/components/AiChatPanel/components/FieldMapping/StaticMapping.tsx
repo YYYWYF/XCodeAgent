@@ -1,5 +1,5 @@
 import { Alert, Button, Input, Space, Tag } from 'antd'
-import { DownOutlined, UpOutlined } from '@ant-design/icons'
+import { BulbOutlined, DownOutlined, UpOutlined } from '@ant-design/icons'
 import { useContext, useEffect, useMemo, useState, type ReactElement } from 'react'
 import type { WorkflowApiDesignDraft, WorkflowApiField } from '../../../../typings'
 import { apiDesignFieldKey, validateApiDesignDraft } from '../WorkflowRunCard/apiDesignSerialization'
@@ -9,17 +9,27 @@ import { staticFields, type StaticData } from './staticData'
 import './StaticMapping.less'
 import StaticPreviewParameters from './StaticPreviewParameters'
 import { staticPreviewInputs } from './staticPreviewInputs'
+import type { MappingApplied } from '../../../../typings/endpointDesignAssist'
+import type { MockDataAssistState } from './useMockDataAssist'
+import StaticMockDataPanel from './StaticMockDataPanel'
 
 type Props = { draft: WorkflowApiDesignDraft; readOnly: boolean; disabled: boolean; onChange: (draft: WorkflowApiDesignDraft) => void }
 
 /** 编辑静态 JSON；未应用修改阻止外层保存，避免确认旧数据。 */
 export function StaticDataEditor({ draft, readOnly, disabled, onChange }: Props): ReactElement {
   const saved = draft.staticData === undefined ? '' : JSON.stringify(draft.staticData, null, 2)
-  const [text, setText] = useState(saved)
+  const [input, setInput] = useState({ baseline: saved, text: saved })
+  // 外部回填在本次渲染立即采用新值，避免旧输入短暂形成 dirty 并误撤销 AI 回执。
+  const text = input.baseline === saved ? input.text : saved
+  /** 输入只绑定当前已应用内容，保留真正尚未应用的手工修改。 */
+  const setText = (value: string): void => setInput({ baseline: saved, text: value })
   const [error, setError] = useState('')
   const track = useContext(RuleEditingContext)
   const dirty = !readOnly && text !== saved
-  useEffect(() => { setText(saved); setError('') }, [saved])
+  useEffect(() => {
+    setInput((current) => current.baseline === saved ? current : { baseline: saved, text: saved })
+    setError('')
+  }, [saved])
   useEffect(() => { if (!dirty) return; track(1); return () => track(-1) }, [dirty, track])
   /** 显式校验后替换内容，已有映射保留并交由来源失效校验提示。 */
   const apply = (): void => {
@@ -40,29 +50,37 @@ export function StaticDataEditor({ draft, readOnly, disabled, onChange }: Props)
 }
 
 /** 独立展示数据内容，折叠时保留编辑器及未应用的输入。 */
-export function StaticDataCard({ errors, ...props }: Props & { errors: Record<string, string> }): ReactElement {
+export function StaticDataCard({ errors, mock, mockDisabled = false, ...props }: Props & {
+  errors: Record<string, string>; mock?: MockDataAssistState; mockDisabled?: boolean
+}): ReactElement {
   const [collapsed, setCollapsed] = useState(!props.readOnly)
   useEffect(() => { setCollapsed(!props.readOnly) }, [props.readOnly])
   useEffect(() => { if (!props.readOnly && errors.__staticData) setCollapsed(false) }, [errors, props.readOnly])
+  useEffect(() => { if (mock?.receipt) setCollapsed(false) }, [mock?.receipt?.serial])
   return <section className={`binding-section static-data-section${collapsed ? ' is-collapsed' : ''}`}>
-    <div className="database-section-heading"><div className="database-section-title is-card"><h4>数据内容</h4></div>
+    <div className="database-section-heading"><div className="database-section-title is-card"><h4>数据内容</h4>{mock?.receipt && <span className="mapping-assist-mark">Mock 已应用</span>}</div>
+      <Space>{!props.readOnly && mock && <Button icon={<BulbOutlined />} disabled={props.disabled || mockDisabled || mock.phase !== 'idle'} onClick={() => { setCollapsed(false); mock.show() }}>生成 Mock 数据</Button>}
       <Button className="database-section-toggle" type="text" aria-label={`${collapsed ? '展开' : '收起'}数据内容`} aria-expanded={!collapsed}
-        icon={collapsed ? <DownOutlined /> : <UpOutlined />} onClick={() => setCollapsed((value) => !value)} /></div>
+        icon={collapsed ? <DownOutlined /> : <UpOutlined />} onClick={() => setCollapsed((value) => !value)} /></Space></div>
     <div className="database-section-content" hidden={collapsed}>
-      <StaticDataEditor {...props} />
+      {!props.readOnly && mock && <StaticMockDataPanel assist={mock} disabled={mockDisabled} />}
+      <StaticDataEditor {...props} disabled={props.disabled || Boolean(mock?.blocking)} />
       {errors.__staticData && <Alert type="error" showIcon message={errors.__staticData} />}
     </div>
   </section>
 }
 
 /** 静态来源只提供返回映射和确定性预览，不展示操作、查询或映射说明。 */
-export default function StaticMapping({ draft, fields, readOnly, disabled, previewDisabled, errors, onChange }: Props & { fields: WorkflowApiField[]; previewDisabled: boolean; errors: Record<string, string> }): ReactElement {
+export default function StaticMapping({ draft, fields, readOnly, disabled, previewDisabled, errors, onChange, applied }: Props & {
+  fields: WorkflowApiField[]; previewDisabled: boolean; errors: Record<string, string>; applied?: MappingApplied & { serial: number }
+}): ReactElement {
   const [collapsed, setCollapsed] = useState(!readOnly)
   const [previewError, setPreviewError] = useState('')
   const [parameterOpen, setParameterOpen] = useState<WorkflowApiDesignDraft>()
   const [previewValidation, setPreviewValidation] = useState<{ draft: WorkflowApiDesignDraft; errors: Record<string, string> }>()
   const fieldErrors = { ...(previewValidation?.draft === draft ? previewValidation.errors : {}), ...errors }
   useEffect(() => { setCollapsed(!readOnly) }, [readOnly])
+  useEffect(() => { if (applied) setCollapsed(false) }, [applied?.serial])
   // 返回字段校验失败时展开；静态数据错误由数据内容卡片展示。
   useEffect(() => {
     if (!readOnly && fields.some((field) => field.side === 'response' && errors[apiDesignFieldKey(field)])) setCollapsed(false)
@@ -85,7 +103,7 @@ export default function StaticMapping({ draft, fields, readOnly, disabled, previ
     } catch (reason) { setPreviewError(reason instanceof Error ? reason.message : '无法预览。') }
   }
   return <section className={`binding-section static-mapping${collapsed ? ' is-collapsed' : ''}`}>
-    <div className="database-section-heading"><div className="database-section-title is-card"><h4>返回字段</h4></div><Button className="database-section-toggle" type="text" aria-label={`${collapsed ? '展开' : '收起'}返回字段`} aria-expanded={!collapsed} icon={collapsed ? <DownOutlined /> : <UpOutlined />} onClick={() => setCollapsed(!collapsed)} /></div>
+    <div className="database-section-heading"><div className="database-section-title is-card"><h4>返回字段</h4>{applied && <span className="mapping-assist-mark">AI 已应用</span>}</div><Button className="database-section-toggle" type="text" aria-label={`${collapsed ? '展开' : '收起'}返回字段`} aria-expanded={!collapsed} icon={collapsed ? <DownOutlined /> : <UpOutlined />} onClick={() => setCollapsed(!collapsed)} /></div>
     {!collapsed && <div className="database-section-content">
       <div className={`database-return-table${readOnly ? ' is-readonly' : ''}`}><ResponseFieldMappingHeader readOnly={readOnly} />{fields.filter((field) => field.side === 'response').map((field) => <ResponseFieldMapping key={apiDesignFieldKey(field)} draft={draft} field={field} fields={fields} sources={sources} readOnly={readOnly} disabled={disabled} error={fieldErrors[apiDesignFieldKey(field)]} onChange={onChange} />)}</div>
       <div className="static-preview-actions"><Button disabled={previewDisabled || disabled && !readOnly} onClick={showPreview}>预览返回结果</Button></div>

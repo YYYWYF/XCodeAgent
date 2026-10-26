@@ -159,7 +159,8 @@ async function runEndpointDesignAction(
 export async function requestMappingAssist(action: MappingAssistAction, request: MappingAssistRequest,
   extra: Record<string, unknown>, options: { signal?: AbortSignal; onProgress?: (progress: MappingAssistProgress) => void } = {}): Promise<EndpointDesignsPayload> {
   const { workspaceRoot, apiContractId, endpointId, ...input } = request
-  return runEndpointDesignAction(action, workspaceRoot, apiContractId, endpointId, { ...input, ...extra }, '请求字段映射 AI 辅助。', options)
+  return runEndpointDesignAction(action, workspaceRoot, apiContractId, endpointId, { ...input, ...extra },
+    action === 'generate_mock_data' || action === 'apply_mock_data' ? '请求静态 Mock 数据辅助。' : '请求字段映射 AI 辅助。', options)
 }
 
 /** 持久化未确认草稿，既不生成正式产物也不推进主工作流。 */

@@ -46,7 +46,7 @@ export default function MappingAssistIssues({ issues, assist, disabled, focusKey
       {issue.questions.length > 1 && <details><summary>其他待明确内容（{issue.questions.length - 1}）</summary><ul>{issue.questions.slice(1).map((question) => <li key={question}>{question}</li>)}</ul></details>}
       <MappingAssistAnswerInput target={issue.key} label={issue.path ? issue.label : `${issue.label}（${issue.questions.join('；')}）`}
         assist={assist} disabled={disabled} textareaRef={(input) => { inputs.current[issue.key] = input }} />
-      {issue.unconfigured && <p className="mapping-assist-secondary">可暂留未配置，替换后手动补全。只使用当前{assist.isExternal ? '外部 API' : '单表'}，不会自动引入其他来源或推测取值。</p>}
+      {issue.unconfigured && <p className="mapping-assist-secondary">可暂留未配置，替换后手动补全。只使用当前{assist.isStatic ? '静态数据' : assist.isExternal ? '外部 API' : '单表'}，不会自动引入其他来源或推测取值。</p>}
     </section>) : <p className="mapping-assist-secondary">当前没有待明确问题，可继续审阅其他区域。</p>}
     {previous.length > 0 && <details className="mapping-review-previous-answers"><summary>{assist.requirementsChanged ? '其他已填写的补充规则' : '已用于本轮生成的补充规则'}（{previous.length}）</summary>
       {previous.map(([key, answer]) => <div className="mapping-review-previous-answer" key={key}><strong>{answer.label}</strong><MappingAssistAnswerInput target={key} label={answer.label} assist={assist} disabled={disabled} /></div>)}
