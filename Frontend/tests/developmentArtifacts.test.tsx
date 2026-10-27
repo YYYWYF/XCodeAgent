@@ -336,7 +336,7 @@ test('底部阶段提示遵循全应用开发门禁，2/3 不声称可以进入�
   ] as const) {
     const html = renderPhaseDock(mode, partial)
     assert.match(html, /继续完成开发产物/)
-    assert.match(html, /开发进度 2\/3/)
+    assert.equal(html.match(/2\/3/g)?.length, 1)
     assert.doesNotMatch(html, /等待进入测试阶段|等待进入审查阶段|等待进入验收阶段/)
     assert.doesNotMatch(html, /开发已完成|测试已通过|代码审查已完成/)
   }
@@ -348,7 +348,7 @@ test('底部阶段提示遵循全应用开发门禁，2/3 不声称可以进入�
     'awaiting_review_phase_confirmation'
   ] as const) {
     const unsynced = renderPhaseDock(mode, allowed, { completed: 2, total: 3 })
-    assert.match(unsynced, /开发进度 2\/3/)
+    assert.equal(unsynced.match(/2\/3/g)?.length, 1)
     assert.doesNotMatch(unsynced, /等待进入测试阶段|等待进入审查阶段|开发已完成/)
   }
 })
