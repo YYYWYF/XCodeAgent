@@ -28,12 +28,13 @@ def get_inclusion_user() -> tuple[str, str]:
 
 
 @contextmanager
-def bind_inclusion_identity(model):
-    """仅在模型工具执行期间绑定会话和模型，避免平台写盘被误报。"""
+def bind_inclusion_identity(model, *, thread_id: str | None = None):
+    """在模型工具或生成文档保存期间绑定会话和模型，避免普通平台写盘被误报。"""
     model_name = model if isinstance(model, str) else (
         getattr(model, "model_name", None) or getattr(model, "model", "")
     )
-    thread_id = ensure_config().get("configurable", {}).get("thread_id", "")
+    if thread_id is None:
+        thread_id = ensure_config().get("configurable", {}).get("thread_id", "")
     token = _identity.set((str(thread_id), str(model_name)))
     try:
         yield

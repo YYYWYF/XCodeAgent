@@ -21,6 +21,7 @@ from app.domain.application_planning_recovery import (
 )
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
+from app.services.generated_document_inclusion import write_generated_documents
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -36,6 +37,7 @@ from app.services.application_revision_lifecycle import (
 )
 from app.workspace.plan_documents import (
     commit_technical_plan_document,
+    technical_plan_markdown_path,
 )
 
 
@@ -290,9 +292,9 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         and lifecycle.initialization.status is ApplicationLifecycleStatus.AWAITING_USER
     ):
         raise ValueError("TechnicalPlan commit 的 lifecycle 不在可确认状态。")
-    markdown_path, json_path = commit_technical_plan_document(
-        state,
-        candidate,
+    markdown_path, json_path = write_generated_documents(
+        state, [technical_plan_markdown_path(state)],
+        commit_technical_plan_document, state, candidate,
         expected_sha256=candidate_sha256,
     )
     if lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
