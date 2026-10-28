@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
+from pydantic.alias_generators import to_camel
 
 from app.observability.telemetry_models import ExecutionTraceRecord, TelemetryEventRecord
 
@@ -54,12 +55,22 @@ def _valid_url(url: str) -> bool:
         return False
 
 
+def _camel_case_fields(value: Any) -> Any:
+    """递归将 POST 字段名转为小驼峰，保留字段值、显式 null 和数组结构。"""
+
+    if isinstance(value, dict):
+        return {to_camel(key): _camel_case_fields(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_camel_case_fields(item) for item in value]
+    return value
+
+
 def _request_body(
     record: TelemetryEventRecord | ExecutionTraceRecord,
     record_type: Literal["telemetry_event", "execution_trace"],
     occurred_at: str,
 ) -> dict[str, Any]:
-    """保留显式 null，并将一条记录装入一期批次结构。"""
+    """保留显式 null，将记录装入批次并统一转换为第三方所需的小驼峰字段。"""
 
     payload = record.model_dump(mode="json", exclude_unset=True)
     payload.setdefault("type", record_type)
@@ -73,12 +84,12 @@ def _request_body(
     identity = payload.setdefault("identity", {})
     if identity is not None:
         identity.setdefault("user_id", "Hupy/test")
-    return {
+    return _camel_case_fields({
         "schema_version": 1,
         "batch_id": uuid4().hex,
         "sent_at": _now(),
         "records": [payload],
-    }
+    })
 
 
 def _producer_defaults() -> dict[str, str]:
