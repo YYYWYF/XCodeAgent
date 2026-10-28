@@ -20,6 +20,7 @@ from app.graph.nodes.confirmation import (
     user_requested_changes_text,
 )
 from app.graph.state import ProjectState
+from app.services.generated_document_inclusion import write_generated_documents
 from app.services.data_source_policy import (
     apply_authoritative_datasource_type,
     datasource_type_from_artifact,
@@ -377,7 +378,10 @@ def requirements(state: ProjectState) -> dict:
         }
 
     # 澄清已结束后才生成待确认草稿；用户确认时再由确认分支提升为正式文档。
-    spec_path = write_requirement_spec_draft_document(state, spec)
+    spec_path = write_generated_documents(
+        state, [requirement_spec_draft_markdown_path(state)],
+        write_requirement_spec_draft_document, state, spec,
+    )
     return {
         "phase": "requirements",
         "status": status,

@@ -31,7 +31,7 @@
 
 .@{class-prefix}-plan-execution-dock-copy {
   display: flex;
-  min-width: 180px;
+  min-width: 0;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 2px;
@@ -44,20 +44,21 @@
   }
 
   .ant-typography-secondary {
-    overflow: hidden;
     color: var(--wb-text-secondary);
     font-size: 12px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
 }
 
 .@{class-prefix}-plan-execution-dock-actions {
   display: flex;
+  max-width: 100%;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  margin-left: auto;
 
   .ant-btn {
     height: 32px;

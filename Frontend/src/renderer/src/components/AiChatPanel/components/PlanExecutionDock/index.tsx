@@ -133,44 +133,6 @@ export default function PlanExecutionDock({
                 </Button>
               </>
             )}
-            {mode === 'awaiting_unit_test_confirmation' && (
-              <div className={cx('plan-execution-dock-interaction')}>
-                请在上方确认卡选择执行单元测试或不执行单元测试。
-              </div>
-            )}
-            {mode === 'awaiting_frontend_performance_confirmation' && (
-              <div className={cx('plan-execution-dock-interaction')}>
-                构建检查已完成，请在上方选择执行或跳过前端性能测试。
-              </div>
-            )}
-            {developmentGateBlocked ? (
-              <div className={cx('plan-execution-dock-interaction')}>
-                {developmentTotals
-                  ? `开发进度 ${developmentTotals.completed}/${developmentTotals.total}`
-                  : testEntryGate
-                    ? `开发进度 ${testEntryGate.completed}/${testEntryGate.total}`
-                    : '正在读取开发产物状态'}
-              </div>
-            ) : mode === 'awaiting_test_phase_confirmation' ? (
-              <div className={cx('plan-execution-dock-interaction')}>
-                开发已完成，请在上方确认进入测试阶段。
-              </div>
-            ) : null}
-            {!developmentGateBlocked && mode === 'awaiting_review_phase_confirmation' && (
-              <div className={cx('plan-execution-dock-interaction')}>
-                请在上方选择审查范围，确认进入审查阶段。
-              </div>
-            )}
-            {!developmentGateBlocked && mode === 'awaiting_acceptance_phase_confirmation' && (
-              <div className={cx('plan-execution-dock-interaction')}>
-                代码审查已完成，请在上方确认进入验收阶段。
-              </div>
-            )}
-            {mode === 'awaiting_code_review_repair_confirmation' && (
-              <div className={cx('plan-execution-dock-interaction')}>
-                代码审查发现问题，请在上方执行一键修复。
-              </div>
-            )}
             {mode === 'awaiting_acceptance' && (
               <>
                 <Button onClick={onOpenPreview}>全屏预览</Button>

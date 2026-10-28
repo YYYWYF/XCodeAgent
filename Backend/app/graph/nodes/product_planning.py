@@ -15,6 +15,7 @@ from app.agents.main.document_sync import sync_product_plan_from_markdown
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.requirements import prepare_requirement_spec_confirmation
 from app.graph.state import ProjectState
+from app.services.generated_document_inclusion import write_generated_documents
 from app.services.data_source_policy import datasource_type_from_artifact
 from app.services.application_config import read_application_config
 from app.services.authorization_manifest import (
@@ -395,7 +396,10 @@ def _operation_coverage_update(
 ) -> dict[str, Any]:
     """保存无法自动修复的候选，并以原生 AG-UI 澄清等待用户选择。"""
 
-    markdown_path, json_path = write_product_plan_documents(state, candidate)
+    markdown_path, json_path = write_generated_documents(
+        state, [product_plan_draft_markdown_path(state)],
+        write_product_plan_documents, state, candidate,
+    )
     return {
         "phase": "product_planning",
         "status": "requires_user_input",
@@ -421,6 +425,8 @@ def _pending_product_plan_update(
     state: ProjectState,
     plan: dict[str, Any],
     requirement_spec: dict[str, Any],
+    *,
+    generated: bool = False,
 ) -> dict[str, Any]:
     """保存自动修复后的新版本，并保持正式产物必须重新确认的门禁。
 
@@ -431,6 +437,7 @@ def _pending_product_plan_update(
 
     这里只回写 state，**不重写需求草稿文件** —— 草稿持有用户的最新编辑，用这份 spec
     覆盖它会直接毁掉用户的修改。
+    generated 仅在调用模型修复后置为 True，用户选择后的确定性归并不算 AI 生成。
     """
 
     pending = {**plan, "confirmation_status": "pending_user_confirmation"}
@@ -438,7 +445,13 @@ def _pending_product_plan_update(
         **requirement_spec,
         "confirmation_status": "pending_user_confirmation",
     }
-    markdown_path, json_path = write_product_plan_documents(state, pending)
+    if generated:
+        markdown_path, json_path = write_generated_documents(
+            state, [product_plan_draft_markdown_path(state)],
+            write_product_plan_documents, state, pending,
+        )
+    else:
+        markdown_path, json_path = write_product_plan_documents(state, pending)
     return {
         "phase": "product_planning",
         "status": "requires_user_input",
@@ -564,7 +577,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                     )
                 except ProductPlanOperationCoverageError as exc:
                     return _operation_coverage_update(state, exc.candidate, exc.coverage)
-                return _pending_product_plan_update(state, repaired, requirement_spec)
+                return _pending_product_plan_update(state, repaired, requirement_spec, generated=True)
     if (
         isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
@@ -629,7 +642,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                 )
             except ProductPlanOperationCoverageError as exc:
                 return _operation_coverage_update(state, exc.candidate, exc.coverage)
-            return _pending_product_plan_update(state, repaired, confirmed_requirement_spec)
+            return _pending_product_plan_update(state, repaired, confirmed_requirement_spec, generated=True)
         application_file = Path(str(state.get("workspace") or "")) / WORKSPACE_ARTIFACT_DIR / "application.json"
         if application_planning_scope and application_file.is_file():
             # 正式修订进入规划前已提交配置，所有规划预检只读取唯一事实源。
@@ -729,7 +742,10 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     # 那会让上一轮按旧 ID 产出的设计稿对不上、继承被拒（见 product_plan_carryover）。
     # 未变的页面已在 _normalized_pages 里整份沿用，这里只兜"需求确实变了"的残余情况。
     reconcile_product_plan_ids(plan, read_product_plan_carryover(str(state.get("workspace") or "")))
-    markdown_path, json_path = write_product_plan_documents(state, plan)
+    markdown_path, json_path = write_generated_documents(
+        state, [product_plan_draft_markdown_path(state)],
+        write_product_plan_documents, state, plan,
+    )
     return {
         "phase": "product_planning",
         "status": "requires_user_input",
