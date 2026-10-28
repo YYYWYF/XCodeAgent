@@ -1,7 +1,9 @@
 """FastAPI 服务入口，所有模型产品动作采用官方 AG-UI。"""
 
 import secrets
+import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from ag_ui.core import CustomEvent, RunAgentInput, TextMessageContentEvent
@@ -14,6 +16,7 @@ from .config import Settings
 from .contracts import InferenceInput
 from .history import DuplicateRunError, HistoryStore
 from .inference import InferenceService
+from .observation_output import ObservationOutput
 from .protocol import end_events, start_events
 from .tracing import TraceRecorder
 from .upstream import Upstream, connection
@@ -56,20 +59,34 @@ def stream_events(events: AsyncIterator[Any], accept: str | None) -> StreamingRe
 
 
 def create_app(settings: Settings | None = None, upstream: Upstream | None = None,
-               tracing: TraceRecorder | None = None) -> FastAPI:
+               tracing: TraceRecorder | None = None,
+               observation_output: ObservationOutput | None = None) -> FastAPI:
     """创建独立服务；使用 uvicorn app.main:create_app --factory 启动。"""
     settings = settings or Settings()
     history = HistoryStore(settings.history_db_path)
-    service = InferenceService(settings, history, upstream or Upstream(settings), tracing or TraceRecorder(settings))
-    app = FastAPI(title="DevAgent Model Transmit", version="1.0.0")
+    output = observation_output if observation_output is not None else ObservationOutput(
+        enabled=settings.model_observation_output_enabled)
+    service = InferenceService(settings, history, upstream or Upstream(settings), tracing or TraceRecorder(settings), output)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """服务级启动共享输出池，正常停机在线程中排空，避免阻塞事件循环。"""
+        output.start()
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(output.close)
+
+    app = FastAPI(title="DevAgent Model Transmit", version="1.0.0", lifespan=lifespan)
     app.state.history, app.state.settings, app.state.service = history, settings, service
+    app.state.observation_output = output
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         """提供无秘密的进程健康及公开协议元数据，不访问上游。"""
         return {"status": "ok", "service": "model-transmit", "model": settings.active_model,
                 **settings.gateway_metadata,
-                "upstream": settings.model_upstream, "langsmithEnabled": settings.langsmith_enabled,
+                "upstream": settings.model_upstream, "langsmithEnabled": False, "langsmithMode": "local",
                 "protocol": "AG-UI", "endpoints": {"modelInfo": "/model-info/run", "modelInference": "/model-inference/run"}}
 
     @app.post("/model-info/run")

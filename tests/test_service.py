@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 from ag_ui.core import RunAgentInput
@@ -33,7 +33,10 @@ class ServiceTests(unittest.TestCase):
         """构建真实 OpenAI SDK 与离线 MockTransport 服务。"""
         config = settings(self.path, **overrides)
         app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
-        return app, TestClient(app)
+        self.addCleanup(app.state.observation_output.close)
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        return app, client
 
     def test_stream_text_tools_usage_and_history(self):
         """保留文本及工具参数分片，并把实际输入和完成结果落库。"""
@@ -196,7 +199,7 @@ class PersistenceAndTracingTests(unittest.IsolatedAsyncioTestCase):
             class FakeUpstream:
                 """仅产出一个模型增量的离线生成器。"""
 
-                async def invoke(self, call, thread_id, run_id):
+                async def invoke(self, call, thread_id, run_id, observation=None):
                     """在 finally 中记录连接关闭证据。"""
                     try:
                         yield chunk({"content": "部分"})
@@ -205,6 +208,7 @@ class PersistenceAndTracingTests(unittest.IsolatedAsyncioTestCase):
                         closed.append(True)
 
             app = create_app(config, FakeUpstream())
+            self.addCleanup(app.state.observation_output.close)
             raw = envelope()
             run = RunAgentInput.model_validate(raw)
             call = InferenceInput.model_validate(raw["forwardedProps"]["modelInference"])
@@ -233,45 +237,49 @@ class PersistenceAndTracingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(restarted.get("run-1")["langsmith_run_id"], "trace-id")
             self.assertEqual(restarted.get("run-1")["input_context"]["messages"], call.request["messages"])
 
-    async def test_tracing_disabled_and_client_failure_isolated(self):
-        """关闭追踪零客户端零网络，初始化失败也不阻断主服务。"""
+    async def test_local_tracing_needs_no_client_and_creation_failure_isolated(self):
+        """默认无需密钥也生成本地追踪，SDK 创建失败不阻断主服务。"""
         with tempfile.TemporaryDirectory() as directory:
-            with patch("app.tracing.Client") as client:
+            with patch("langsmith.run_trees.get_cached_client", side_effect=AssertionError("unexpected client")):
                 recorder = TraceRecorder(settings(Path(directory)))
-                self.assertEqual(await recorder.start({}, {}), (None, None))
-                client.assert_not_called()
-            with patch("app.tracing.Client", side_effect=RuntimeError("offline")):
-                recorder = TraceRecorder(settings(Path(directory), langsmith_enabled=True, langsmith_api_key="trace-key"))
+                span_id, tree = await recorder.start({}, {})
+                self.assertEqual(span_id, str(tree.id))
+                self.assertIsNone(tree.ls_client)
+            with patch("app.tracing.RunTree", side_effect=RuntimeError("local SDK failure")):
+                recorder = TraceRecorder(settings(Path(directory), langsmith_enabled=True))
                 self.assertEqual(await recorder.start({}, {}), (None, None))
 
     async def test_tracing_mock_records_input_output_and_faults(self):
-        """Mock 覆盖 LangSmith 生命周期及失败路径，全程不访问外网。"""
+        """Mock 覆盖本地追踪收尾及失败隔离，确认永远不调用上传方法。"""
         with tempfile.TemporaryDirectory() as directory:
-            recorder = TraceRecorder(settings(Path(directory), langsmith_enabled=True, langsmith_api_key="trace-key"), client=MagicMock())
+            recorder = TraceRecorder(settings(Path(directory)))
             with patch("app.tracing.RunTree") as factory:
                 trace_id, tree = await recorder.start({"messages": []}, {"thread_id": "s"})
                 await recorder.finish(tree, {"choices": []}, "completed", None)
                 self.assertIsNotNone(trace_id)
-                factory.return_value.post.assert_called_once()
-                factory.return_value.patch.assert_called_once()
+                factory.return_value.end.assert_called_once()
+                factory.return_value.post.assert_not_called()
+                factory.return_value.patch.assert_not_called()
                 self.assertEqual(factory.call_args.kwargs["inputs"], {"messages": []})
-                factory.return_value.post.side_effect = RuntimeError("offline")
-                self.assertIsNone((await recorder.start({}, {}))[1])
+                factory.return_value.end.side_effect = RuntimeError("local SDK failure")
+                with self.assertLogs("app.tracing", level="WARNING"):
+                    await recorder.finish(tree, {}, "failed", {"code": "UPSTREAM_TIMEOUT"})
 
-    async def test_real_trace_sdk_writes_only_to_injected_mock_client(self):
-        """使用真实 RunTree 校验 SDK 参数契约，客户端替身阻止任何外网请求。"""
+    async def test_real_trace_sdk_keeps_input_output_only_in_local_object(self):
+        """使用真实 RunTree 保存输入输出和状态，阻止所有上传与客户端创建。"""
         with tempfile.TemporaryDirectory() as directory:
-            client = MagicMock()
-            recorder = TraceRecorder(settings(Path(directory), langsmith_enabled=True,
-                                               langsmith_api_key="trace-key"), client=client)
-            trace_id, tree = await recorder.start({"messages": [{"role": "user", "content": "hello"}]},
-                                                  {"thread_id": "trace-session"})
-            self.assertIsNotNone(tree)
-            await recorder.finish(tree, {"choices": []}, "completed", None)
-            client.create_run.assert_called_once()
-            client.update_run.assert_called_once()
+            recorder = TraceRecorder(settings(Path(directory), langsmith_enabled=True))
+            with patch("langsmith.RunTree.post", side_effect=AssertionError("unexpected upload")), \
+                 patch("langsmith.RunTree.patch", side_effect=AssertionError("unexpected upload")), \
+                 patch("langsmith.run_trees.get_cached_client", side_effect=AssertionError("unexpected client")):
+                trace_id, tree = await recorder.start({"messages": [{"role": "user", "content": "hello"}]},
+                                                      {"thread_id": "trace-session"})
+                self.assertIsNotNone(tree)
+                await recorder.finish(tree, {"choices": []}, "completed", None)
+            self.assertIsNone(tree.ls_client)
             self.assertEqual(str(tree.id), trace_id)
             self.assertEqual(tree.metadata["status"], "completed")
+            self.assertEqual(tree.outputs, {"choices": []})
 
 
 if __name__ == "__main__":

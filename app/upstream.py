@@ -10,8 +10,17 @@ from openai.resources.chat.completions import AsyncCompletions
 
 from .config import Settings
 from .contracts import InferenceInput
+from .model_observation import ModelObservation, observe_safely
 
 KNOWN_PARAMETERS = set(inspect.signature(AsyncCompletions.create).parameters) - {"self"}
+
+
+def request_body(settings: Settings, call: InferenceInput) -> dict[str, Any]:
+    """统一生成实际请求，确保历史、追踪与上游的模型及用量开关一致。"""
+    body = {**call.request, "model": settings.active_model}
+    if body.get("stream", False):
+        body["stream_options"] = {**(body.get("stream_options") or {}), "include_usage": True}
+    return body
 
 
 def connection(settings: Settings, call: InferenceInput, thread_id: str, run_id: str) -> tuple[str, str, dict[str, str]]:
@@ -39,10 +48,12 @@ class Upstream:
         self.settings = settings
         self.transport = transport
 
-    async def invoke(self, call: InferenceInput, thread_id: str, run_id: str) -> AsyncIterator[dict[str, Any]]:
+    async def invoke(self, call: InferenceInput, thread_id: str, run_id: str,
+                     observation: ModelObservation | None = None) -> AsyncIterator[dict[str, Any]]:
         """在单次连接内生成原始响应，退出与取消时始终关闭上游。"""
         base_url, api_key, headers = connection(self.settings, call, thread_id, run_id)
-        body = {**call.request, "model": self.settings.active_model}
+        # 只补充统计开关；上游不支持时正常报告错误，不静默重放模型调用。
+        body = request_body(self.settings, call)
         kwargs = {key: value for key, value in body.items() if key in KNOWN_PARAMETERS}
         extensions = {key: value for key, value in body.items() if key not in KNOWN_PARAMETERS}
         if extensions:
@@ -52,10 +63,19 @@ class Upstream:
             async with AsyncOpenAI(base_url=base_url, api_key=api_key, default_headers=headers,
                                    timeout=min(call.timeout_seconds, self.settings.max_timeout_seconds),
                                    max_retries=min(call.max_retries, self.settings.max_retries), http_client=http_client) as client:
-                response = await client.chat.completions.create(**kwargs)
-                if body.get("stream", False):
-                    async with response:
-                        async for chunk in response:
-                            yield chunk.model_dump(mode="json", exclude_none=True)
-                else:
-                    yield response.model_dump(mode="json", exclude_none=True)
+                observe_safely(observation, "begin")
+                try:
+                    response = await client.chat.completions.create(**kwargs)
+                    if body.get("stream", False):
+                        async with response:
+                            async for chunk in response:
+                                raw = chunk.model_dump(mode="json", exclude_none=True)
+                                observe_safely(observation, "observe", raw)
+                                yield raw
+                    else:
+                        raw = response.model_dump(mode="json", exclude_none=True)
+                        observe_safely(observation, "observe", raw)
+                        observe_safely(observation, "end")
+                        yield raw
+                finally:
+                    observe_safely(observation, "end")

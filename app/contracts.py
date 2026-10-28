@@ -46,4 +46,6 @@ class InferenceInput(BaseModel):
             raise ValueError("request 不允许覆盖上游连接或认证参数")
         if "stream" in value and not isinstance(value["stream"], bool):
             raise ValueError("request.stream 必须为布尔值")
+        if value.get("stream_options") is not None and not isinstance(value["stream_options"], dict):
+            raise ValueError("request.stream_options 必须为对象或 null")
         return value

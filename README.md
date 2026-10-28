@@ -1,83 +1,73 @@
-# 模型转发服务
+# 模型转发与模型调用观测服务
 
-独立 Python 服务，集中保存上游连接配置，转发模型请求并保存本次实际调用历史。所有业务提示词、上下文构造、工具执行、正式聊天保存和会话恢复继续由 Studio 负责。
+code8 是以 code7.1 为基础的独立 Python 工程。保留 direct/gateway 转发、官方 AG-UI/SSE、取消、防重、SQLite 历史及 mock 分析，使用 LangSmith SDK 的本地追踪对象采集模型用量与时间。所有改动仅在 code8，Studio 与 code7.1 不需要源码变更。
 
-## 启动
+每次被接纳的模型推理在成功、失败或取消收尾时生成统计快照；输出开关开启后，交给共享线程池异步向控制台输出一行完整 JSON：
 
-建议 Python 3.12。首次部署创建虚拟环境并安装依赖：
+```text
+{"identity":{"user_id":null,"project_id":null,"conversation_id":null,"thread_id":"thread-1","run_id":"run-1","operation_id":null,"workflow_scope":null,"current_operation":"generate_technical_plan"},"data":{"trace_id":"019a267d-6000-7000-8000-000000000001","span_id":"019a267d-6000-7000-8000-000000000001","parent_span_id":null,"span_kind":"model","run_name":"model-inference","started_at":"2026-10-27T14:00:00+08:00","ended_at":"2026-10-27T14:00:01.500000+08:00","duration_ms":1500,"status":"completed","model":{"provider":"direct","name":"configured-model","input_tokens":284,"output_tokens":45,"total_tokens":329,"usage_source":null,"usage_status":null,"ttft_ms":250,"output_duration_ms":750},"error":null}}
+```
+
+ID、数字和时间为示例；运行时 ID 由本地 LangSmith SDK 创建，追踪对象创建失败时对应 ID 为 null。响应体只用于控制台与本地历史，不加入或替换原有 AG-UI 返回结果。`identity.current_operation` 使用英文 snake_case 标识，不再输出独立动作行；started_at/ended_at 使用北京时间（东八区 +08:00）的 ISO8601 字符串，时分秒和时区内部不插入空格。耗时仍由单调时钟计算，不受时区显示转换影响。
+
+服务只统计模型调用：`span_kind` 固定为 `model`，`run_name` 固定为 `model-inference`。工具定义、工具指令和工具结果保持原有转发协议，不识别或额外打印工具观察记录。
+
+## 异步输出与统一开关
+
+在 code8 的 `.env` 中设置：
+
+```dotenv
+MODEL_OBSERVATION_OUTPUT_ENABLED=true
+```
+
+默认开启，修改后重启服务生效。`false` 时不投递统计响应体输出任务；模型推理、本地 LangSmith 采集和 SQLite 的 `analysis.execution_trace` 继续正常保存，服务运行日志仍按原设置输出。
+
+应用使用单个工作线程的共享 `ThreadPoolExecutor`，最多接纳 256 个待处理任务（包含执行中的任务）。请求收尾先冻结完整 JSON，再非阻塞提交，主流程不等待 `write/flush`。排队不会修改已记录的北京时间、耗时、Token 或英文操作标识。队列满、序列化失败、关闭后提交和输出失败只记录计数，不阻塞或重试模型调用；运行计数可通过本地 `app.state.observation_output` 读取，不增加 HTTP 接口。
+
+统一输出入口是 `app/model_call_logging.py` 的 `deliver_record(payload_json)`。当前执行 `print_record_json(payload_json)`；`write_record_to_es` 方法骨架和调用行均以注释预留，没有 ES 依赖、客户端或网络请求。正式接入 ES 时补齐实现，再注释控制台调用、启用 ES 调用，仍由同一个开关控制任务投递。
+
+正常停止服务会等待已提交任务排空并关闭线程池。强制终止不能保证内存任务输出完成，同份快照已沿原流程保存在 SQLite；当前后台输出是尽力交付，不自动补发旧历史。
+
+## 安装与启动
+
+推荐 Python 3.12：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
-# 编辑 .env，填写 DIRECT_API_KEY 和独立 SERVICE_TOKEN。
+# 编辑 code8 自己的 .env，填写上游密钥及独立 SERVICE_TOKEN。
 .\scripts\start.ps1
 ```
 
-默认监听 `127.0.0.1:8100`。Studio 的 `MODEL_TRANSMIT_TOKEN` 必须与服务端 `SERVICE_TOKEN` 一致；该凭证与上游密钥独立。示例 token 仅供本机开发，部署时设置独立值。
+默认监听 `127.0.0.1:8100`，固定单 worker。如果 7.1 正占用该端口，先停止原服务，或使用 `.\scripts\start.ps1 -Port 8200`。不要对正在使用的数据库启动第二个实例。
 
-也可从本目录运行：
+本工程不复制私有 `.env`、真实密钥、原数据库或虚拟环境。默认数据库为 **code8 自己的** `data/model_history.sqlite3`。消费者的 Bearer token 必须与 code8 `SERVICE_TOKEN` 一致。若使用其他已有 Python 环境，可传 `-PythonPath <python.exe>`；运行时模块和配置仍来自 code8。
+
+已接入旧 AG-UI 转发合同的消费者可使用相同路径。仍然直接调用模型的 Studio 不会自动经过本服务，本工程不会修改 Studio 配置或代码、拦截其直连请求。
+
+## 无真实模型的控制台演示
 
 ```powershell
-.\.venv\Scripts\python.exe -B -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8100 --workers 1
+.\.venv\Scripts\python.exe -X utf8 -B scripts/demo_observation.py
 ```
 
-**当前 SQLite 运行形态只支持单服务进程、单 worker**，同一数据库不能被多个服务实例共用。启动时会将遗留 `running` 调用标记为 `interrupted`；不得使用多 worker 或在有活跃请求时启动第二个实例。变更配置需要停止并重新启动服务。
+演示使用真实 FastAPI 路由、OpenAI SDK 和本地 LangSmith RunTree，但 HTTP 被内存模拟传输拦截。无需 `.env`、真实模型、LangSmith 账号或常驻服务；临时数据库自动清理。输出的 identity.current_operation 为 generate_technical_plan，usage 为示例 284/45/329。
 
-`GET /health` 不需要凭证，不访问模型和 LangSmith，不返回地址、密钥或历史内容。所有模型产品接口要求 `Authorization: Bearer <SERVICE_TOKEN>`。API 文档位于 `/docs`。
+## 接口及现有请求合同
 
-## 上游配置
-
-默认 `MODEL_UPSTREAM=direct`，实际地址、模型名称和密钥由 `DIRECT_BASE_URL`、`DIRECT_MODEL_NAME`、`DIRECT_API_KEY` 配置。未启用的 `gateway` 凭证可以为空，也不校验其未完成地址。调用方不能选择上游、覆盖真实模型名称、认证头或连接地址。
-
-`MODEL_UPSTREAM=gateway` 支持 `fast / pro / ultra` 三档。档位由服务端 `GATEWAY_TIER` 统一选择，所有 Studio 场景共用所选档位，调用方不能选择或覆盖档位；错误不会触发自动换档。启用前填写所选档位的地址、模型标识，以及三档共用的 `GATEWAY_API_KEY` 和 `GATEWAY_KEY`：
-
-```dotenv
-MODEL_UPSTREAM=gateway
-GATEWAY_TIER=fast
-GATEWAY_FAST_BASE_URL=http://lt5404-agent-gateway.paas.cmbchina.cn/pattern/llm/fast/v1
-GATEWAY_FAST_MODEL_NAME=fast
-GATEWAY_PRO_BASE_URL=
-GATEWAY_PRO_MODEL_NAME=
-GATEWAY_ULTRA_BASE_URL=
-GATEWAY_ULTRA_MODEL_NAME=
-```
-
-pro、ultra 的真实地址和请求体 `model` 尚未提供，配置预留为空；不能通过替换 fast 路径来推断真实接口。拿到实际参数后，填写对应的 `GATEWAY_PRO_*` 或 `GATEWAY_ULTRA_*` 并切换 `GATEWAY_TIER` 即可。基础地址不包含 `/chat/completions`，SDK 会追加。所选档位缺地址、模型标识或共享凭据时，启动明确失败；未选档位可留空或保留未完成地址，direct 模式不校验网关地址和凭据。三档目前沿用共用凭据与请求头规则，真实联调时需要确认该前提。
-
-旧的单组 `GATEWAY_BASE_URL`、`GATEWAY_MODEL_NAME` 已由三组明确配置替代，运行时不读取旧字段。已有私有 `.env` 请保留原凭据，把原地址与模型名称填写到相应档位，再设置 `GATEWAY_TIER`，无需覆盖整个 `.env`。
-
-切换方式或档位后停止并重新启动本服务。Studio 无需修改代码或上游配置；建议同步重启 Studio 后端，刷新客户端缓存的公开模型信息。按所选网关配置发送：
-
-| 上游字段 | 来源 |
+| 路径 | 鉴权与行为 |
 | --- | --- |
-| `Authorization` | `GATEWAY_API_KEY`，服务端生成 Bearer 头 |
-| `x-gateway-key` | `GATEWAY_KEY` |
-| `x-spaid` | `GATEWAY_SPAID_SOURCE=request` 时取 `metadata.spaid`；`fixed` 时只取 `GATEWAY_SPAID` |
-| `x-session-id` | `metadata.sessionId`，缺省取 AG-UI `threadId` |
-| `x-request-id` | `metadata.requestId`，缺省取 AG-UI `runId` |
-| `model` | `GATEWAY_<选中档位>_MODEL_NAME`，覆盖调用方传入值 |
+| `GET /health` | 无需认证；不访问上游，不产生模型统计 |
+| `POST /model-info/run` | Bearer 认证，AG-UI 模型公开信息，不产生模型统计 |
+| `POST /model-inference/run` | Bearer 认证，AG-UI 单次推理与统一收尾统计 |
 
-网关目前通过模拟 HTTP 验证，真实网关凭证和 spaid 规则尚未提供，需要补齐后联调。服务默认不信任系统代理；只有设置 `UPSTREAM_TRUST_ENV=true` 才使用系统代理环境。上游请求不跟随重定向，避免向跳转目标发送认证信息。
-
-## AG-UI 合同
-
-两个产品接口均接收官方 `RunAgentInput`，使用官方编码器输出 SSE，并完整发送运行开始、助手消息、custom 结果或错误、最终状态与运行结束。输入校验、鉴权、请求大小和重复身份等流建立前错误分别返回 HTTP 422、401、413、409。
-
-`POST /model-info/run` 的 `model-info.result` 值为：
-
-```json
-{"model":"deepseek-v4p1-flash-w8a8","provider":"openai","upstream":"direct"}
-```
-
-gateway 模式额外返回服务端确定的 `gatewayTier`，例如 `{"model":"fast","provider":"openai","upstream":"gateway","gatewayTier":"fast"}`；真实 `model` 取所选档位的配置值，不要求与档位名称相同。`GET /health` 同样在 gateway 模式显示 `gatewayTier`，direct 模式不返回该字段；均不公开上游地址或凭据。
-
-`POST /model-inference/run` 输入示例：
+API 文档在 `/docs`。示例推理输入：
 
 ```json
 {
   "threadId": "studio-thread-id",
-  "runId": "unique-logical-call-id",
+  "runId": "unique-model-request-id",
   "messages": [],
   "tools": [],
   "context": [],
@@ -91,8 +81,10 @@ gateway 模式额外返回服务端确定的 `gatewayTier`，例如 `{"model":"f
       "timeoutSeconds": 300,
       "maxRetries": 0,
       "metadata": {
-        "sessionId": "studio-session-id",
-        "requestId": "request-id",
+        "sessionId": "optional-session",
+        "requestId": "optional-request",
+        "userId": null,
+        "projectId": null,
         "extensions": {}
       }
     }
@@ -100,39 +92,49 @@ gateway 模式额外返回服务端确定的 `gatewayTier`，例如 `{"model":"f
 }
 ```
 
-实际消息、工具定义和生成参数均放在 `request` 中。服务只替换 `model`，不追加、裁剪或总结消息，不添加业务默认参数。`thinking` 等 SDK 未知字段以 `extra_body` 发送给上游，是否支持由上游决定。
+输入中的原始模型消息在 `request.messages`。服务不补拼历史、不裁剪消息、不执行工具。实际模型固定取服务配置，禁止请求覆盖地址、密钥或认证头。SDK 未识别生成字段仍以 `extra_body` 传给上游。
 
-| 事件 | 载荷 |
-| --- | --- |
-| `model-inference.chunk` | 原始 OpenAI SDK chunk 字典；仅流式调用发送 |
-| `model-inference.result` | 非流式完整结果，或从 chunk 聚合的完整结果 |
-| `model-inference.error` | `code`、`message`、`retryable`，上游 HTTP 错误另含 `statusCode` |
+流式请求统一补充 `stream_options.include_usage=true`，保留其他 stream_options；历史和追踪记录同样保存实际发送的开关。上游不支持此选项时正常报告错误，不静默重放模型调用。
 
-同时发出标准 AG-UI 文本和工具调用事件，供可视化消费者使用。Studio 模型适配器只消费 custom 原始模型结果，避免重复拼接。工具调用只作为模型输出转发，不在服务执行工具。
+输出保留 `model-inference.chunk/result/error` 和标准 AG-UI 文本/工具事件。Studio 原有消费方式不变。流建立前错误返回 HTTP 401/413/422/409。
 
-`runId` 是全局唯一的逻辑模型调用身份。一经登记即不允许同 ID 重放，包括失败、取消和进程中断后的调用；重复请求返回 409，由 Studio 决定新调用身份。
+`runId` 保留既有全局唯一防重合同：登记后禁止重复执行，包括失败、取消和重启中断。输出 `identity.thread_id/run_id` **原样取请求 envelope 的 threadId/runId**，不使用 metadata.sessionId/requestId 替换，也不在服务中重新解释业务身份。
 
-服务端默认上限为每次网络操作 1800 秒、SDK 重试 2 次；超限请求直接拒绝。调用方可以传 0 次重试，SDK 是唯一执行网络重试的层；Studio 不自动重试同一 HTTP 调用。开始产生内容后，流读取故障不自动重播。结束原因缺失时标记失败并保留部分输出。客户端断开会关闭上游连接，并尽力终止上游执行。
+## 上游配置
 
-## 历史、追踪及扩展
+默认 `MODEL_UPSTREAM=direct`：配置 `DIRECT_BASE_URL`、`DIRECT_MODEL_NAME`、`DIRECT_API_KEY`。
 
-SQLite 默认保存到 `data/model_history.sqlite3`，也可通过 `HISTORY_DB_PATH` 指定绝对路径。`model_calls` 保存本次实际输入及完整或部分模型输出、状态、用量、结束原因、耗时、会话和请求身份；不保存认证请求头。支持 `completed`、`failed`、`cancelled`、`interrupted`。流式期间约每 0.5 秒提交部分输出，正常及异常结束时原子提交最终状态；强制结束进程可能丢失最后一个检查点之后的片段。
+`MODEL_UPSTREAM=gateway`：配置 `GATEWAY_TIER=fast/pro/ultra`，所选档位的 `GATEWAY_<TIER>_BASE_URL/MODEL_NAME`，以及共用 `GATEWAY_API_KEY/GATEWAY_KEY`。pro/ultra 的真实地址和模型未知时保持为空，不推测地址。只校验已启用配置，切换后重启；失败不自动换档。
 
-`attempt_id` 表示本次转发执行身份；SDK 内部自动网络重试归属于同一执行，不伪造逐次重试明细。预留 `user_id`、`project_id`、`studio_data_ref`、`analysis`、`extensions`，不采集项目文档、源码、附件或其他 Studio 业务数据。`extensions.gatewayTier` 是服务端保留字段：gateway 调用记录实际所选档位，direct 调用移除该字段，客户端不能伪造；其他扩展信息保留。不修改 SQLite 表结构。没有新增历史 HTTP 查询接口，开发分析可通过 SQLite 或 `HistoryStore.get(run_id)` 读取。服务不会从历史中补拼下一轮上下文。
+gateway 的 `x-spaid` 按 `GATEWAY_SPAID_SOURCE=request/fixed` 读取 metadata.spaid 或固定配置；`x-session-id/x-request-id` 取已有元数据，缺省取 envelope 身份。地址和认证头不进入埋点。上游禁止跟随重定向，默认忽略系统代理。
 
-`LANGSMITH_ENABLED=false` 时不创建客户端，也不会产生追踪网络请求。开启时填写专用 API Key、endpoint 和 project；按会话关联请求、输出与调用状态，gateway 调用的追踪 metadata 同时记录 `gatewayTier` 和实际 `model`，并将 `langsmith_run_id` 保存到 SQLite。追踪客户端初始化、开始和结束故障均隔离，不影响模型结果及本地历史；LangSmith 不是本服务历史的唯一存储。正式启用前应为追踪部署确认数据访问权限和保留期限。
+当前上游协议继承 7.1 的 OpenAI 兼容 Chat Completions。`model.provider` 表示 direct/gateway 模式，不能理解成原生 Anthropic 协议支持。本工程没有移植最新 Studio 的其他模型协议或修改它的模型工厂。
 
-`MOCK_ANALYTICS_ENABLED=false` 默认关闭。开启后调用 `app.tracing.mock_analytics(record)`，生成 `wouldInsert` 载荷和 `inserted=false` 回执，保存在该调用的 `analysis` 字段。载荷通过 runId 引用产出，`extensions` 保留历史中已确定的档位及扩展关联信息，不连接真实分析数据库。后续替换该独立入口即可接入具体埋点逻辑。
+## 观测数据
 
-历史包含完整提示词和模型产出，应将 `data/` 及 LangSmith 项目权限限制在授权开发人员范围。`.env`、运行数据库和虚拟环境已加入忽略规则。
+完整字段来源、时间定义、动作规则与限制见 [OBSERVABILITY.md](docs/OBSERVABILITY.md)。核心约定：
+
+- 全部埋点字段可省略或为 null；标准输出保留已定义字段，模型记录省略 active_intervals。
+- 除 span_kind/run_name 按模型服务合同固定外，data 优先读取本地 LangSmith RunTree 的字段与 metadata，缺失有效值时由本次真实观测补充；不读取远端追踪。
+- input/output/total_tokens 优先读取 RunTree.metadata.usage_metadata；该数据由真实上游 usage 写入，不是 LangSmith 自行计算。未知为 null，真实 0 保留，不估算、不补算、不逐片相加，也不跨快照拼接字段。
+- usage_source、usage_status 固定为 null。
+- 请求模式与模型来自服务配置；关联字段仅取现有请求，不要求 Studio 补参数。
+- identity.current_operation 优先归一化已有 metadata.extensions.current_operation，再匹配已核对的 Studio 提示词入口；覆盖主流程与权限判定、权限提取、UI 修复/续写、设计路由、文档同步等辅助调用。统一英文标识，未知/冲突为 unknown，不额外调用模型。
+- 每次调用始终尝试本地创建模型 RunTree，无需 LangSmith 账号或 API key；不创建上传 Client，不调用 post/patch，也不向 LangSmith 上报。SDK 对象缺失时追踪 ID 为 null，固定的 model/model-inference 标签与已取得的真实模型用量仍保留。
+- 首末输出计时发生在 SDK 接收边界；非流式的 ttft/output_duration 为 null。
+- 开关开启时通过共享线程池输出一行 UTF-8 JSON；请求仅非阻塞投递冻结快照，输出故障及排队不改变模型统计。
+
+埋点快照保存在同一条 SQLite 历史的 `analysis.execution_trace`，其中 identity.current_operation 和控制台保持一致；不增加表、不添加 HTTP 查询接口。原始模型历史仍可能包含完整提示词和回答，应限制本地数据目录访问权限。
+
+本地追踪先完成状态、输出、用量和时间的收尾，再组装快照、保存 SQLite，并在保存步骤的 finally 中提交后台输出。开关关闭只跳过输出投递。`LANGSMITH_PROJECT` 只标记本地追踪项目；旧 `LANGSMITH_ENABLED`、`LANGSMITH_API_KEY`、`LANGSMITH_ENDPOINT` 即使保留在私有配置中，也不参与本地追踪开关或远端上传。健康信息 `langsmithEnabled=false` 表示远端上报关闭，`langsmithMode=local` 表示本地 SDK 追踪。
+
+上游真实 Token 统计不等同于完整账单：响应丢失的 SDK 重试尝试可能无法取得用量。进程强杀无法保证输出最后日志；启动时仅将遗留 running 历史标记为 interrupted，不伪造其结束观测。
 
 ## 验证
 
 ```powershell
-.\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -X utf8 -B -m unittest discover -s tests -v
 Invoke-RestMethod http://127.0.0.1:8100/health
 ```
 
-离线测试覆盖官方 SDK 的流和非流响应、工具参数分片、两种认证头、三档网关地址与模型匹配、所选配置校验、失败不换档、档位历史与追踪、防重、鉴权、取消、重启中断、LangSmith 故障隔离和 mock 埋点。不使用真实模型密钥，也不访问外部服务。
-
-三档配置的实施结果与跨项目回归记录见 [网关档位验证记录](docs/GATEWAY_TIERS_VALIDATION.md)。
+测试使用隔离临时数据库、真实 SDK 与 MockTransport，不访问真实模型、LangSmith 远端或 ES。覆盖继承的转发合同、三档网关、用量尾帧、未知/部分/零值/冲突统计、时间边界、取消、并发、SDK 重试及日志故障，并验证本地追踪优先读取、输出开关、慢输出不阻塞收尾、队列容量、冻结快照和正常排空关闭。工程职责见 [CODEBASE_INDEX.md](docs/CODEBASE_INDEX.md)。

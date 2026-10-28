@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     default_timeout_seconds: float = 300
     max_retries: int = 2
     max_request_bytes: int = 16 * 1024 * 1024
+    model_observation_output_enabled: bool = True
+    # 旧远程配置只保留为已有部署的输入字段；不控制本地追踪，也不启用上报。
     langsmith_enabled: bool = False
     langsmith_api_key: SecretStr = SecretStr("")
     langsmith_endpoint: str = "https://api.smith.langchain.com"
@@ -87,10 +89,6 @@ class Settings(BaseSettings):
                 raise ValueError("当前 gateway 上游缺少 GATEWAY_API_KEY 或 GATEWAY_KEY")
         if self.model_upstream == "gateway" and self.gateway_spaid_source == "fixed" and not self.gateway_spaid.strip():
             raise ValueError("固定 spaid 模式缺少 GATEWAY_SPAID")
-        if self.langsmith_enabled and not self.langsmith_api_key.get_secret_value().strip():
-            raise ValueError("启用 LangSmith 时必须配置 LANGSMITH_API_KEY")
-        if self.langsmith_enabled:
-            self.langsmith_endpoint = self.validate_url(self.langsmith_endpoint)
         if not 0 < self.default_timeout_seconds <= self.max_timeout_seconds or self.max_retries < 0:
             raise ValueError("超时和重试配置无效")
         return self

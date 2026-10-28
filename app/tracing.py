@@ -1,56 +1,52 @@
-"""可选 LangSmith 追踪；任何追踪故障均不得改变模型结果。"""
+"""只在本地构建 LangSmith 追踪；不创建上传客户端，不执行远程上报。"""
 
-import asyncio
 import logging
 from typing import Any
 from uuid import uuid4
 
-from langsmith import Client, RunTree
+from langsmith import RunTree
 
 from .config import Settings
+from .model_observation import safe_error
 
 logger = logging.getLogger(__name__)
 
 
 class TraceRecorder:
-    """仅显式开启时建立客户端，关闭时不产生 LangSmith 网络请求。"""
+    """每次模型请求独立创建本地 SDK 对象，旧远程开关不影响采集或触发上传。"""
 
-    def __init__(self, settings: Settings, client: Any = None):
-        """接受离线测试客户端，真实客户端仅在启用追踪时创建。"""
+    def __init__(self, settings: Settings):
+        """只保留本地配置；不初始化、注入或访问 LangSmith Client。"""
         self.settings = settings
-        self.client = None
-        if settings.langsmith_enabled:
-            try:
-                self.client = client or Client(api_url=settings.langsmith_endpoint,
-                                              api_key=settings.langsmith_api_key.get_secret_value(),
-                                              timeout_ms=2000, auto_batch_tracing=False)
-            except Exception:
-                logger.warning("LangSmith 客户端初始化失败，推理与本地历史继续可用")
 
     async def start(self, request: dict[str, Any], metadata: dict[str, Any]) -> tuple[str | None, Any]:
-        """将实际模型请求关联会话追踪，捕获并隔离网络或 SDK 故障。"""
-        if self.client is None:
-            return None, None
-        run_id = str(uuid4())
+        """由 SDK 在内存生成独立根身份，不读取外层追踪或环境中的上传配置。"""
         try:
-            tree = RunTree(id=run_id, name="model-inference", run_type="llm", inputs=request,
-                           extra={"metadata": metadata}, project_name=self.settings.langsmith_project,
-                           ls_client=self.client)
-            await asyncio.to_thread(tree.post)
-            return run_id, tree
+            # 身份由 LangSmith SDK 本地生成，不把 AG-UI runId 当作 Span ID。
+            tree = RunTree(name="model-inference", run_type="llm", inputs=request,
+                           extra={"metadata": {**metadata, "model_started": False,
+                                               "ls_provider": self.settings.model_upstream,
+                                               "ls_model_name": self.settings.active_model}},
+                           project_name=self.settings.langsmith_project,
+                           parent_run=None, parent_run_id=None, replicas=[])
         except Exception:
-            logger.warning("LangSmith 调用开始追踪失败，推理继续")
-            return run_id, None
+            logger.warning("LangSmith 本地追踪创建失败，推理继续")
+            return None, None
+        span_id = str(tree.id)
+        return span_id, tree
 
     async def finish(self, tree: Any, output: dict[str, Any], status: str, error: dict[str, Any] | None) -> None:
-        """提交最终或部分输出，并把追踪失败限制在观测层。"""
+        """先在内存结束追踪，保存安全错误和状态，供打印读取；绝不调用 post/patch。"""
         if tree is None:
             return
         try:
-            tree.end(outputs=output, error=error.get("message") if error else None, metadata={"status": status})
-            await asyncio.to_thread(tree.patch)
+            execution_error = safe_error(error)
+            tree.end(outputs=output, end_time=tree.end_time,
+                     error=execution_error.message if execution_error is not None else None,
+                     metadata={"status": status,
+                               "execution_error": execution_error.model_dump() if execution_error is not None else None})
         except Exception:
-            logger.warning("LangSmith 调用结束追踪失败，历史已在本地保存")
+            logger.warning("本地追踪结束失败，继续使用本次观测和本地历史")
 
 
 def mock_analytics(record: dict[str, Any]) -> dict[str, Any]:

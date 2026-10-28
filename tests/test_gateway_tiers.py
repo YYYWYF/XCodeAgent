@@ -4,10 +4,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
+from langsmith import RunTree
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -193,27 +194,33 @@ class GatewayTierTests(unittest.TestCase):
         self.assertNotIn("x-gateway-key", captured[0].headers)
         self.assertEqual(app.state.history.get("run-1")["extensions"], {"future": 1})
 
-    def test_langsmith_receives_server_tier_and_keeps_it_after_finish(self):
-        """真实 RunTree 配合客户端替身，核对档位经过开始与结束追踪后仍保持一致。"""
-        client = MagicMock()
-        config = self.gateway_settings("ultra", langsmith_enabled=True, langsmith_api_key="fake-trace-secret")
-        tracing = TraceRecorder(config, client=client)
+    def test_local_langsmith_keeps_server_tier_after_finish_without_upload(self):
+        """真实本地 RunTree 在开始和收尾后保留服务端档位，不初始化上传客户端。"""
+        config = self.gateway_settings("ultra", langsmith_enabled=True)
+        tracing = TraceRecorder(config)
+        trees = []
+
+        def create_local_tree(**kwargs):
+            """保留真实本地对象，供请求收尾后核查元数据。"""
+            tree = RunTree(**kwargs)
+            trees.append(tree)
+            return tree
 
         def handler(request):
             """返回非流式模型响应，LangSmith 不访问任何外部服务。"""
             return httpx.Response(200, json=completion())
 
         app = create_app(config, Upstream(config, httpx.MockTransport(handler)), tracing)
-        with TestClient(app) as api:
+        with patch("app.tracing.RunTree", side_effect=create_local_tree), \
+             patch("langsmith.run_trees.get_cached_client", side_effect=AssertionError("unexpected client")), \
+             TestClient(app) as api:
             read_events(api, envelope(streaming=False, metadata={"spaid": "user123"}))
-        client.create_run.assert_called_once()
-        client.update_run.assert_called_once()
-        created = client.create_run.call_args.kwargs
-        updated = client.update_run.call_args.kwargs
-        self.assertEqual(created["extra"]["metadata"]["gatewayTier"], "ultra")
-        self.assertEqual(updated["extra"]["metadata"]["gatewayTier"], "ultra")
-        self.assertEqual(created["extra"]["metadata"]["model"], config.active_model)
-        self.assertEqual(updated["extra"]["metadata"]["status"], "completed")
+        self.assertEqual(len(trees), 1)
+        self.assertIsNone(trees[0].ls_client)
+        self.assertEqual(trees[0].metadata["gatewayTier"], "ultra")
+        self.assertEqual(trees[0].metadata["ls_model_name"], config.active_model)
+        self.assertEqual(trees[0].metadata["status"], "completed")
+        self.assertEqual(trees[0].metadata["usage_metadata"]["total_tokens"], 5)
 
 
 if __name__ == "__main__":

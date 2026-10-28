@@ -6,6 +6,9 @@
 
 # 以单工作进程启动，避免重复执行启动时的历史中断对账。
 $ErrorActionPreference = "Stop"
+# 控制台和重定向文件均使用 UTF-8，保留中文动作说明与错误摘要。
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 $ServiceRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($PythonPath)) {
     $PythonPath = Join-Path $ServiceRoot ".venv\Scripts\python.exe"
