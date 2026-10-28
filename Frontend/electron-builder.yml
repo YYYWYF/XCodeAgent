@@ -10,6 +10,8 @@ files:
 asarUnpack:
   - resources/**
 win:
+  target: nsis
+  verifyUpdateCodeSignature: false
   executableName: devagentstudio
   extraResources:
     - from: resources/backend/win32
@@ -23,6 +25,9 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  target:
+    - dmg
+    - zip
   extraResources:
     - from: resources/backend/darwin-${arch}
       to: backend
@@ -39,7 +44,7 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}-${arch}.${ext}
+  artifactName: ${name}-${version}-setup.${ext}
 linux:
   target:
     - AppImage
@@ -52,6 +57,6 @@ appImage:
 npmRebuild: false
 publish:
   provider: generic
-  url: https://example.com/auto-updates
+  url: http://127.0.0.1:18081/ # 本地测试时使用，发布时请改为实际的 CDN 地址
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/

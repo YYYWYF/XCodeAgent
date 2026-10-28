@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { AppUpdateApi } from '../shared/appUpdate'
 import type {
   ApplicationSchemaConfig,
   DevelopmentPlanningPageTreeNode
@@ -9,6 +10,7 @@ declare global {
     electron: ElectronAPI
     api: unknown
     devAgentStudio?: {
+      appUpdate: AppUpdateApi
       isElectron: boolean
       agentBaseUrl: string
       platform: string
