@@ -52,16 +52,8 @@ def initialize_application(
         if existing is not None and existing.application.id == application_id:
             return existing, ApplicationConfigRepository(target).load()
         _assert_empty_target(target)
-        database = configuration.get("datasource", {}).get("db") or {}
-        uses_managed_database = (
-            configuration.get("datasource", {}).get("type") == "database"
-            and database.get("useBuiltin") is True
-        )
         # 固定事务目录让进程重启后仍能识别未知的远端注册，避免重新申请。
         key = hashlib.sha256(str(target).encode()).hexdigest()
-        # 无模拟库创建不依赖远端注册，独立暂存以免被旧注册锁住，同时保留原注册证据。
-        if not uses_managed_database:
-            key += "-local"
         staging = Path(tempfile.gettempdir()) / f"devagentstudio-create-{key}"
         request_file = staging / "request.json"
         if request_file.exists():
@@ -86,7 +78,8 @@ def initialize_application(
                 staging, application_id=application_id,
                 application_name=application_name, initialization_thread_id=thread_id,
             )
-            if uses_managed_database:
+            database = configuration.get("datasource", {}).get("db") or {}
+            if configuration.get("datasource", {}).get("type") == "database" and database.get("useBuiltin") is True:
                 saved = ensure_managed_database_registration(staging)
             else:
                 saved = repository.load()

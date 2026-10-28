@@ -25,7 +25,6 @@ from app.agents.main.planner import (
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
-from app.services.generated_document_inclusion import write_generated_documents
 from app.services.api_contract_validation import (
     validate_api_contract_consistency,
     validate_api_contract_definitions,
@@ -88,9 +87,7 @@ from app.workspace.plan_documents import (
     edited_technical_plan_markdown,
     edited_project_plan_markdown,
     project_plan_json_path,
-    project_plan_markdown_path,
     technical_plan_json_path,
-    technical_plan_markdown_path,
     write_technical_plan_document,
     write_project_plan_document,
 )
@@ -494,11 +491,7 @@ def project_planning(state: ProjectState) -> dict:
                 state=state,
                 repair_attempts=_TECHNICAL_PLAN_GENERATION_ATTEMPTS,
             )
-            repaired_path = write_generated_documents(
-                state, [technical_plan_markdown_path(state) if phase == "technical_planning"
-                        else project_plan_markdown_path(state)],
-                write_project_plan_document, state, repaired_plan,
-            )
+            repaired_path = write_project_plan_document(state, repaired_plan)
             return {
                 "phase": phase,
                 "status": "requires_user_input",
@@ -587,11 +580,7 @@ def project_planning(state: ProjectState) -> dict:
                 state=state,
                 repair_attempts=1,
             )
-    project_plan_path = write_generated_documents(
-        state, [technical_plan_markdown_path(state) if phase == "technical_planning"
-                else project_plan_markdown_path(state)],
-        write_project_plan_document, state, project_plan,
-    )
+    project_plan_path = write_project_plan_document(state, project_plan)
     clarification = (
         _project_plan_dependency_error_payload(validation_errors)
         if validation_errors

@@ -1,6 +1,21 @@
 # DevAgent Studio Codebase Index
 
-模型生成的 RequirementSpec、ProductPlan 和 TechnicalPlan Markdown（含模型自动修复、重新生成及正式修订草稿）在对应节点的成功保存边界调用 `services/generated_document_inclusion.py::write_generated_documents`，复用入库率后台发送器；读取主模型及当前业务 thread，保存前后快照仅覆盖本次生成文档。人工编辑保存、确认提升、幂等重放和内部 JSON 状态保存不重复上报，原有联合确认和技术规划事务门禁不变。接入点为 `graph/nodes/{requirements,product_planning,planning,application_technical_planning,application_revision}.py`；回归 `tests.test_generated_document_inclusion`、需求/产品规划确认与技术规划恢复测试。
+## code8.1 Model Transmit Contract
+
+本副本以最新 Studio 为基线，只将模型连接改为相邻 code8 的 AG-UI 服务。前端、登录、工作流确认门、工具执行、业务预算、聊天与 checkpoint 存储不变。`model_factory.py` 返回 `TransmitChatModel`；`services/llm_client.py` 也使用同一工厂，不创建直连 SDK。
+
+| Entry | Ownership |
+| --- | --- |
+| `Backend/app/agents/transmit_chat_model.py` | 同步/异步、流式、工具绑定、原始消息透传；单模型调用 UUID 防重；保留 metadata.run_id 到 extensions.studio_run_id |
+| `Backend/app/agents/transmit_model_messages.py` | 官方消息转换；只消费模型 custom 事件，避免标准文本/工具和终态重复输出 |
+| `Backend/app/services/model_transmit_client.py` | 官方 AG-UI 类型及 httpx-sse；懒加载模型信息；复用最新原始字节流暂停 hooks；不新增网络重试 |
+| `Backend/app/config.py` | MODEL_TRANSMIT_*、可选 UI_DESIGN_MODEL_TRANSMIT_*；不再从环境读取上游连接或密钥 |
+| `Backend/app/services/unit_model_failure.py` | 将转发结构化错误映射到既有业务诊断，恢复门禁不变 |
+| `Backend/app/services/model_transport_retry.py` | 原有限定范围的网络重试识别转发异常，认证和内容错误不重试 |
+| `docs/MODEL_TRANSMIT.md` | 当前配置、范围、运行和 ID/协议支持边界 |
+| `docs/LOCAL_STARTUP.md` | 本机已安装环境、三窗口启动命令、健康与模型用量验证；scripts/start-local-*.ps1 为本机启动入口 |
+
+下面继承的原版目录说明仍描述最新业务职责；涉及原生 SDK 工厂、OpenCode 直连头及 UI 直连配置时，以本节转发合同为准。旧直连类保留供原有隔离测试使用，但不再由产品模型工厂选择。
 
 AI 文件操作入库率上报由 `Backend/app/services/inclusion_rate.py` 统一负责；`agents/execution_control.py` 在模型工具调用中绑定 threadId/模型，`agents/auto_dedup_backend.py` 的 write/edit 和 `tools/delete_file.py` 在成功后调用。完整上报地址 `http://coding-agent-repo-rate-backend.paas.cmbchina.cn/report/inclusion-rate` 直接写在 `httpx.post(...)` 调用中，不设独立地址常量或环境变量；内网用户读取入口为 `get_inclusion_user()`（当前返回空身份）。文件工具固定本次内容快照及会话/模型后立即返回，独立双线程发送器在后台组装差异、读取 Git 并 POST `/report/inclusion-rate`；最多 16 个内存在途任务，满额直接丢弃，不等待统计服务。成功码为 `SUC0000`，失败静默忽略，不提示、不记录失败日志，不持久化或重试，不增加产品 API。每个编辑块一条 UUID 记录，同次操作合批；原文/new text、写后的一基行/零基 UTF-8 字节列、包含结束位置，整文件删除不带 range。现有工具没有独立重命名入口，按实际新增/删除分别上报，不推测重命名关系。回归：`Backend/tests/test_inclusion_rate.py`。
 
@@ -14,7 +29,7 @@ Last updated: 2026-10-26
 
 开发入口与失败重试共用 `services/stage_prerequisites.py` 和 `artifact_freshness.py` 校验正式产物状态、直接依赖及原生摘要；可读 JSON 不再等于有效输入。`automatic_artifact_regeneration.py` 在工作台入场前把失效上游交给现有 Application Planning 图，`ActiveFormalRevision.regenerationTarget` 保存原页面/API，所有新产物沿原确认门，continuation 后恢复该目标而非批量分析。重规划通过 `build_restart.restart_build_state_fields` 撤销旧任务、Build 绑定、快照、修复证据及确认动作；Build 的 `replan_build_dag` 信号自动回到 API 门禁和任务规划，审阅期间输入变化消费旧 Pending 后生成新的待确认计划。`api_design_fingerprint.py` 统一映射业务摘要供复用和验收使用，确认元数据不改变业务摘要。回归：`tests.test_automatic_artifact_regeneration`、`tests.test_async_workflow_planning_adapter`、`tests.test_task_input_freshness`、`tests.test_business_node_retry`、`tests.test_planning_recovery`。
 
-新建应用通过 `/application-lifecycle/run` 的 `initialize_application` 动作提交身份及完整配置，由 `services/application_creation.py` 在目标目录外暂存配置、生命周期和内置数据库注册，全部成功后才原子提交目标 `.devagentstudio`，首页索引随后登记。明确失败清理本次暂存且不占用目标；远端注册未知/已成功但本地提交失败时保留独立创建事务，重试复用原身份并禁止重复申请。不使用模拟数据库的创建使用独立的 `-local` 暂存目录，允许注册失败后在原空目录关闭模拟数据库重新创建；不继承旧绑定、不再次请求 SaaS，也不删除原注册核对证据。旧 `workspace:create-project-directory` IPC 已移除；现有应用生命周期 `create` 仍用于新迭代。回归：`tests.test_application_creation`、`tests.test_managed_database_registration`。
+新建应用通过 `/application-lifecycle/run` 的 `initialize_application` 动作提交身份及完整配置，由 `services/application_creation.py` 在目标目录外暂存配置、生命周期和内置数据库注册，全部成功后才原子提交目标 `.devagentstudio`，首页索引随后登记。明确失败清理本次暂存且不占用目标；远端注册未知/已成功但本地提交失败时保留独立创建事务，重试复用原身份并禁止重复申请。旧 `workspace:create-project-directory` IPC 已移除；现有应用生命周期 `create` 仍用于新迭代。回归：`tests.test_application_creation`、`tests.test_managed_database_registration`。
 
 `application.json` v6 当前新建合同在 Electron 与 Python 共用测试夹具交叉验证：读取不迁移或补写持久配置；关闭能力时合法缺省的子对象只在表单草稿/显式提交中准备。普通保存以磁盘受管字段及 revision 为准，读取失败中止写入。配置卡通过根结构校验、`ConfigCardBoundary`、完整配置合并和首次字段初始化隔离异常、保留输入；成功后 `pages/useApplicationConfigRefresh.ts` 刷新当前工作区。V4 新装能力由 `template_reconcile/config_surfaces.py` 校验 Capability × 文件 × 实际片段路径，执行 WorkingCopy 后再验证结构及原有值，最后同事务提交 State；V4 State 往返保留 Maven spec 的 `version`/`scope` null 键，不能递归 `exclude_none`。`ApplicationParameterUpdater` 使用安全 YAML AST 完整路径和标量位置只改已有参数，拒绝重复键/alias/merge/多行标量。配置操作按 `DESIRED_SAVED → CAPABILITY_APPLIED → PARAMETERS_APPLIED` 持久化进度，`config_operation_state.py` 统一脱敏 stage/code/target；失败后只恢复原操作，工作区未完成 Desired 阻止其他提案入场。前端 pending 仅保存操作身份、修订和跨端一致的摘要，在工作区范围阻止修改提案复用旧 ID，读盘成功后才清除；显式 `resume` 只发送原操作身份，由后端核对 Desired 修订及提案摘要后恢复，不重传旧密钥。回归：`tests.test_config_surface_gate`、`tests.test_application_config_orchestrator`、`tests.test_application_parameter_updater`、`tests.test_template_update_v4`、`tests.test_template_update_v4_transaction`、`pnpm test:application-config`、`pnpm test:managed-workspace`；真实 AG-UI/Engine 联调入口为 `Backend/tests/manual_config_stability_e2e.py`，验收边界见 `docs/template/config_stability_validation_2026_10_23.md`。
 

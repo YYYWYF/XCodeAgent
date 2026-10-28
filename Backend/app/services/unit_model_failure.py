@@ -12,6 +12,7 @@ import openai
 
 from app.domain.execution_recovery import ExecutionFailureEvidence, ExecutionFailureOrigin
 from app.services.planning_issues import ValidationIssue
+from app.services.model_transmit_client import ModelTransmitError
 
 
 MODEL_SETUP_FAILED = "UNIT_GENERATION_MODEL_SETUP_FAILED"
@@ -67,6 +68,19 @@ def classify_unit_model_failure(
 
     if stage == "model_setup":
         return UnitModelFailure(MODEL_SETUP_FAILED, stage)
+    if isinstance(cause, ModelTransmitError):
+        # 只识别转发客户端结构化事实，不解析异常文本或改变业务恢复门禁。
+        if cause.code == "UPSTREAM_TIMEOUT":
+            return UnitModelFailure(MODEL_REQUEST_TIMEOUT, stage)
+        if cause.code in {"UPSTREAM_CONNECTION_ERROR", "MODEL_TRANSMIT_TRANSPORT_ERROR"}:
+            return UnitModelFailure(MODEL_CONNECTION_FAILED, stage)
+        if cause.code in {"UPSTREAM_PROTOCOL_ERROR", "INVALID_AGUI_EVENT", "INVALID_MODEL_RESULT",
+                          "INVALID_RUN_LIFECYCLE", "INCOMPLETE_MODEL_STREAM"}:
+            return UnitModelFailure(MODEL_RESPONSE_INVALID, stage)
+        status = cause.status_code
+        if isinstance(status, int) and not isinstance(status, bool) and 400 <= status <= 599:
+            return UnitModelFailure(MODEL_HTTP_ERROR, stage, http_status=status, provider_error_code=cause.code)
+        return UnitModelFailure(MODEL_CALL_FAILED, stage, provider_error_code=cause.code)
     if isinstance(cause, (openai.APITimeoutError, anthropic.APITimeoutError, httpx.TimeoutException)):
         return UnitModelFailure(MODEL_REQUEST_TIMEOUT, stage)
     if isinstance(cause, (openai.APIResponseValidationError, anthropic.APIResponseValidationError)):

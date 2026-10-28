@@ -164,7 +164,13 @@ async def health() -> dict[str, object]:
         "provider": settings.model_provider,
         "model": settings.model_api_name,
         "configured_model": settings.model_name,
-        "base_url": settings.model_base_url,
+        "base_url": settings.model_transmit_url,
+        "model_transmit": {
+            "url": settings.model_transmit_url,
+            "transport": "ag-ui-sse",
+            "modelInfoEndpoint": "/model-info/run",
+            "inferenceEndpoint": "/model-inference/run",
+        },
         "builtin_skills": available_builtin_skills(),
         "observability": {
             "langsmith": {

@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -24,10 +25,19 @@ _DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
 
 @dataclass(frozen=True)
 class Settings:
-    model_base_url: str
-    model_api_key: str
-    model_name: str
-    model_provider: str = "openai"
+    # 原有构造字段保留给当前业务配置视图；连接层不再使用或从环境加载上游凭据。
+    model_base_url: str = ""
+    model_api_key: str = field(default="", repr=False)
+    model_name: str = "studio-model"
+    model_provider: str = "transmit"
+    model_transmit_url: str = "http://127.0.0.1:8100"
+    model_transmit_token: str = field(default="", repr=False)
+    model_transmit_trust_env: bool = False
+    model_transmit_spaid: str = ""
+    ui_design_model_transmit_url: str = ""
+    ui_design_model_transmit_token: str = field(default="", repr=False)
+    ui_design_model_transmit_trust_env: bool | None = None
+    ui_design_model_transmit_spaid: str | None = None
     model_trust_env: bool = False
     model_output_log_enabled: bool = False
     model_timeout_seconds: float = 120.0
@@ -103,62 +113,33 @@ class Settings:
         return self.model_provider
 
     def for_ui_design_model(self) -> "Settings":
-        """返回 UI 设计稿节点应使用的模型配置视图。
-
-        独立配置（UI_DESIGN_MODEL_BASE_URL/API_KEY/NAME 三项齐全）生效时，返回
-        替换了模型字段的 Settings 副本（provider/custom_headers/trust_env 缺省
-        跟随全局值）；未配置时返回自身（回落全局模型）。
-        """
-
-        if not (
-            self.ui_design_model_base_url
-            and self.ui_design_model_api_key
-            and self.ui_design_model_name
-        ):
+        """保持原 UI 选择入口，独立转发未配置时复用全局连接，业务预算不变。"""
+        if not self.ui_design_model_transmit_url:
             return self
-        provider = self.ui_design_model_provider or self.model_provider
-        if provider == "openai-compatible":
-            provider = "openai"
-        if provider not in ("openai", "anthropic"):
-            raise RuntimeError(
-                "Only UI_DESIGN_MODEL_PROVIDER=openai or anthropic is supported."
-            )
         return dataclasses.replace(
             self,
-            model_base_url=self.ui_design_model_base_url,
-            model_api_key=self.ui_design_model_api_key,
-            model_name=self.ui_design_model_name,
-            model_provider=provider,
-            model_custom_headers=(
-                self.ui_design_model_custom_headers or self.model_custom_headers
-            ),
-            model_trust_env=(
-                self.ui_design_model_trust_env
-                if self.ui_design_model_trust_env is not None
-                else self.model_trust_env
-            ),
+            model_name="studio-ui-model",
+            model_transmit_url=self.ui_design_model_transmit_url,
+            model_transmit_token=self.ui_design_model_transmit_token or self.model_transmit_token,
+            model_transmit_trust_env=self.model_transmit_trust_env if self.ui_design_model_transmit_trust_env is None else self.ui_design_model_transmit_trust_env,
+            model_transmit_spaid=self.model_transmit_spaid if self.ui_design_model_transmit_spaid is None else self.ui_design_model_transmit_spaid,
         )
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """从环境变量加载模型、UI/DAG 专属生成和持久化配置。"""
-
-        base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
-        model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
-        if model_provider == "openai-compatible":
-            model_provider = "openai"
-        if model_provider not in ("openai", "anthropic"):
-            raise RuntimeError(
-                "Only MODEL_PROVIDER=openai or anthropic is supported."
-            )
-        custom_headers_raw = os.getenv("MODEL_CUSTOM_HEADERS", "")
-        custom_headers = _parse_custom_headers(custom_headers_raw)
+        """只加载转发连接及现有业务配置，不再要求原直连模型密钥。"""
         return cls(
-            model_base_url=base_url,
-            model_api_key=_required_any("MODEL_API_KEY", "OPENAI_API_KEY"),
-            model_name=_required_any("MODEL_NAME", "OPENAI_MODEL"),
-            model_provider=model_provider,
-            model_trust_env=_env_bool("MODEL_TRUST_ENV", default=False),
+            model_transmit_url=_service_url(os.getenv("MODEL_TRANSMIT_URL", "http://127.0.0.1:8100")),
+            model_transmit_token=os.getenv("MODEL_TRANSMIT_TOKEN", "").strip(),
+            model_transmit_trust_env=_env_bool("MODEL_TRANSMIT_TRUST_ENV", default=False),
+            model_transmit_spaid=os.getenv("MODEL_TRANSMIT_SPAID", "").strip(),
+            ui_design_model_transmit_url=_service_url(os.getenv("UI_DESIGN_MODEL_TRANSMIT_URL", ""), optional=True),
+            ui_design_model_transmit_token=os.getenv("UI_DESIGN_MODEL_TRANSMIT_TOKEN", "").strip(),
+            ui_design_model_transmit_trust_env=(
+                _env_bool("UI_DESIGN_MODEL_TRANSMIT_TRUST_ENV", default=False)
+                if os.getenv("UI_DESIGN_MODEL_TRANSMIT_TRUST_ENV") is not None else None
+            ),
+            ui_design_model_transmit_spaid=os.getenv("UI_DESIGN_MODEL_TRANSMIT_SPAID"),
             model_output_log_enabled=_env_bool(
                 "MODEL_OUTPUT_LOG_ENABLED", default=False
             ),
@@ -166,33 +147,12 @@ class Settings:
                 os.getenv("MODEL_TIMEOUT_SECONDS", "120.0")
             ),
             model_max_retries=int(os.getenv("MODEL_MAX_RETRIES", "2")),
-            anthropic_api_version=os.getenv(
-                "ANTHROPIC_API_VERSION", "2023-06-01"
-            ),
-            model_custom_headers=custom_headers,
-            model_opencode_go_headers_enabled=_env_bool(
-                "MODEL_OPENCODE_GO_HEADERS_ENABLED", default=False
-            ),
             default_system_prompt=os.getenv(
                 "AGENT_SYSTEM_PROMPT",
                 "You are a helpful local agent. Answer clearly and concisely.",
             ),
             default_temperature=float(os.getenv("AGENT_TEMPERATURE", "0.2")),
             default_max_tokens=int(os.getenv("AGENT_MAX_TOKENS", "32768")),
-            ui_design_model_base_url=os.getenv("UI_DESIGN_MODEL_BASE_URL", "").strip(),
-            ui_design_model_api_key=os.getenv("UI_DESIGN_MODEL_API_KEY", "").strip(),
-            ui_design_model_name=os.getenv("UI_DESIGN_MODEL_NAME", "").strip(),
-            ui_design_model_provider=(
-                os.getenv("UI_DESIGN_MODEL_PROVIDER", "").strip().lower()
-            ),
-            ui_design_model_custom_headers=_parse_custom_headers(
-                os.getenv("UI_DESIGN_MODEL_CUSTOM_HEADERS", "")
-            ),
-            ui_design_model_trust_env=(
-                _env_bool("UI_DESIGN_MODEL_TRUST_ENV", default=False)
-                if os.getenv("UI_DESIGN_MODEL_TRUST_ENV") is not None
-                else None
-            ),
             ui_design_max_tokens=int(
                 os.getenv("DEVAGENTSTUDIO_UI_DESIGN_MAX_TOKENS", "32768")
             ),
@@ -256,6 +216,25 @@ class Settings:
             git_username=os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", ""),
             git_token=os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", ""),
         )
+
+
+def _service_url(value: str, *, optional: bool = False) -> str:
+    """校验服务地址且不在错误中暴露 URL 内可能误填的凭证。"""
+    value = value.strip().rstrip("/")
+    if optional and not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        valid = parsed.scheme in {"http", "https"} and parsed.hostname and not (
+            parsed.username or parsed.password or parsed.query or parsed.fragment
+        )
+        if parsed.port is not None:
+            valid = valid and 1 <= parsed.port <= 65535
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError("模型转发地址必须为不含凭证、查询参数或片段的 HTTP(S) URL")
+    return value
 
 
 def _required(name: str) -> str:

@@ -13,7 +13,6 @@ from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import plan_project_with_chat_model
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
-from app.services.generated_document_inclusion import write_generated_documents
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
 from app.services.entity_table_binding import bind_plan_entity_tables
@@ -45,7 +44,7 @@ from app.workspace.plan_documents import (
     load_project_plan_json,
     render_project_plan_markdown,
 )
-from app.workspace.revision_draft_documents import load_revision_draft, revision_draft_directory
+from app.workspace.revision_draft_documents import load_revision_draft
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
 
 
@@ -286,11 +285,8 @@ def _create_technical_plan_draft(
         "product-plan": plans / "product-plan.json",
         "ui-design": specs / "ui-designs.json",
     }
-    draft_path = revision_draft_directory(
-        workspace, change_id=active.change_id, artifact_key="technical-plan",
-    ) / "artifact.md"
-    metadata = write_generated_documents(
-        {"workspace": str(workspace)}, [draft_path], create_revision_draft, workspace,
+    metadata = create_revision_draft(
+        workspace,
         change_id=active.change_id,
         artifact_key="technical-plan",
         kind="technical_plan",
