@@ -308,6 +308,8 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 
 ### TechnicalPlan 上下文预算
 
+用户原始修改要求固定保留在内部生成输入 `planning_adjustment_request`，每轮系统校验反馈单独放入 `technical_plan_validation_feedback`，只替换本轮诊断，不覆盖原始要求，也不累积历史修复全文。完整计划生成、API Contract 定向修复、动作绑定定向修复及其完整修复回落、中文说明修正均携带原始要求；确认时的校验修复沿用技术事务已冻结的业务要求。系统诊断不能撤销用户意见，修复仍须遵守已确认上游、应用配置及各自允许的修改范围，新版本继续等待正式确认。这两个输入仅用于模型上下文，不新增正式产物字段或公开 AG-UI 合同。
+
 - 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文。确认卡直接修订和 `workbench_plan_revision` 都以 checkpoint 中当前 TechnicalPlan 为 authoritative baseline，叠加本轮修改请求并返回完整新版本，同时保留未受影响事实及必要依赖闭合；RequirementSpec、ProductPlan 或 UiDesign 先变化时旧 baseline 失效并按新上游重建。数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
 
 ## Endpoint API 动态映射与工作台执行
