@@ -171,26 +171,53 @@ class TechnicalPlanRepairFeedbackTests(TestCase):
         for call in [*generate.call_args_list, *repair.call_args_list]:
             self.assertEqual(call.args[0]["planning_adjustment_request"], self.request)
 
-    def test_scoped_repair_fallback_preserves_request_in_full_plan_prompt(self) -> None:
-        """动作绑定定向修复拒绝或失败后，完整修复仍使用同一份原始意见。"""
+    def test_candidate_repair_preserves_request_and_current_diagnostics(self) -> None:
+        """有候选时统一局部修复，原始业务要求与本轮错误仍分别传递。"""
 
-        requirement = {**self.requirement, "technical_plan_validation_feedback": "修复缺失业务动作绑定。"}
-        for response in [
-            {"status": "requires_full_repair", "reason": "no_suitable_endpoint", "bindings": []},
-            ValueError("定向修复返回非法 JSON"),
-        ]:
-            with self.subTest(response=response):
+        with patch.object(planning, "plan_project_with_chat_model", return_value=deepcopy(self.plan)) as repair:
+            planning._repair_technical_plan_candidate(self.requirement, self.plan, ["绑定缺失"])
+
+        requirement = repair.call_args.args[0]
+        self.assertEqual(requirement["planning_adjustment_request"], self.request)
+        self.assertIn("绑定缺失", requirement["technical_plan_validation_feedback"])
+        self.assertEqual(repair.call_args.kwargs["existing_plan"], self.plan)
+
+    def test_compilation_failure_keeps_candidate_for_local_repair(self) -> None:
+        """首版编译失败或失败候选续修编译失败，都保留当前候选而不整份重生成。"""
+
+        for baseline in (None, deepcopy(self.plan)):
+            with self.subTest(existing_candidate=bool(baseline)):
                 with (
-                    patch.object(planning, "technical_action_binding_issues", return_value=[{"pageId": "orders", "actionId": "save"}]),
-                    patch.object(planning, "technical_action_binding_issue_messages", return_value=["绑定缺失"]),
-                    patch.object(planning, "repair_technical_plan_action_bindings_with_chat_model", side_effect=[response]) as scoped,
-                    patch.object(planning, "validate_technical_action_binding_patch", return_value=[]),
-                    patch.object(planning, "_technical_plan_contract_validation_errors", return_value=[]),
-                    patch.object(planning, "plan_project_with_chat_model", return_value=deepcopy(self.plan)) as full,
+                    patch.object(planning, "plan_project_with_chat_model", return_value=deepcopy(self.plan)) as generate,
+                    patch.object(planning, "_repair_technical_plan_candidate", return_value=deepcopy(self.plan)) as repair,
+                    patch.object(planning, "_attach_technical_plan_contracts", side_effect=[ValueError("绑定编译失败"), deepcopy(self.plan)]),
+                    patch.object(planning, "_project_plan_validation_errors", return_value=[]),
                 ):
-                    planning._repair_technical_plan_candidate(requirement, self.plan, ["绑定缺失"])
+                    plan, errors, failed = planning._generate_valid_technical_plan(
+                        {}, self.requirement, baseline,
+                        initial_errors=["原始错误"] if baseline else None,
+                    )
+                self.assertIsNotNone(plan)
+                self.assertEqual(errors, [])
+                self.assertIsNone(failed)
+                self.assertEqual(generate.call_count, 0 if baseline else 1)
+                repair.assert_called_once()
+                self.assertEqual(repair.call_args.args[1], self.plan)
+                self.assertIn("绑定编译失败", repair.call_args.args[0]["technical_plan_validation_feedback"])
 
-                self.assertEqual(scoped.call_args.args[0]["planning_adjustment_request"], self.request)
-                prompt = _technical_planning_prompt(full.call_args.args[0], self.plan)
-                self.assertIn(self.request, prompt)
-                self.assertIn(requirement["technical_plan_validation_feedback"], prompt)
+    def test_unmaterialized_candidate_cannot_skip_repair_on_checkpoint_reentry(self) -> None:
+        """尚未物化的四段候选不能因通用校验暂时为空就直接变成确认产物。"""
+
+        raw = {key: deepcopy(self.plan[key]) for key in ("architecture", "entities", "api_contracts", "pages")}
+        with (
+            patch.object(planning, "_repair_technical_plan_candidate", return_value=deepcopy(self.plan)) as repair,
+            patch.object(planning, "_attach_technical_plan_contracts", side_effect=lambda state, candidate: candidate),
+            patch.object(planning, "_project_plan_validation_errors", return_value=[]),
+        ):
+            plan, errors, _ = planning._generate_valid_technical_plan(
+                {}, self.requirement, raw, initial_errors=["平台拒绝模型权限字段"],
+            )
+        self.assertIsNotNone(plan)
+        self.assertEqual(errors, [])
+        repair.assert_called_once()
+        self.assertEqual(repair.call_args.args[1], raw)

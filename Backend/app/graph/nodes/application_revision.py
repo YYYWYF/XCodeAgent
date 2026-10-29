@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 
 import hashlib
 import json
@@ -397,6 +398,7 @@ def _validate_technical_plan(
         *validate_api_contract_consistency(runtime),
         *validate_project_plan_datasource_policy(runtime),
         *validate_technical_plan_api_contracts(artifact),
+        *validate_technical_plan_chinese_prose(artifact),
         *validate_entity_display_language(artifact, builtin=uses_builtin_database(application)),
         *validate_page_implementation_contracts(artifact, product_plan, ui_designs),
     ]

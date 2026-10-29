@@ -9,6 +9,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main.technical_plan_language import repair_technical_plan_chinese_prose
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
+from app.agents.main.technical_plan_editor import (
+    TechnicalPlanCandidateError,
+    edit_technical_plan_with_agent,
+    has_editable_technical_plan_candidate,
+)
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -882,6 +887,18 @@ def repair_technical_plan_api_contracts_with_chat_model(
     )
 
 
+def _materialize_technical_plan_candidate(
+    requirement_spec: dict[str, Any], agent_plan: dict[str, Any], *,
+    datasource_type: DatasourceType | None = None,
+) -> dict[str, Any]:
+    """物化当前候选；平台拒绝模型字段时仍保留已解析内容，不能从零重写。"""
+
+    try:
+        return create_technical_plan(requirement_spec, agent_plan=agent_plan, datasource_type=datasource_type)
+    except (TypeError, ValueError) as exc:
+        raise TechnicalPlanCandidateError(str(exc), agent_plan) from exc
+
+
 def plan_project_with_chat_model(
     requirement_spec: dict[str, Any],
     *,
@@ -892,6 +909,19 @@ def plan_project_with_chat_model(
     """直接调用聊天模型生成 ProjectPlan 或创建流程的 TechnicalPlan。"""
 
     settings = Settings.from_env()
+    if (
+        isinstance(requirement_spec.get("confirmed_product_plan"), dict)
+        and has_editable_technical_plan_candidate(existing_plan)
+    ):
+        # 首版修复和二次修改共用同一编辑器；已有完整候选后不再让模型重写整份计划。
+        agent_plan = _parse_technical_plan_model_output(json.dumps(
+            edit_technical_plan_with_agent(
+                requirement_spec, existing_plan, settings=settings, on_token=on_token,
+            ), ensure_ascii=False,
+        ))
+        return _materialize_technical_plan_candidate(
+            requirement_spec, agent_plan, datasource_type=datasource_type,
+        )
     agent_note = _invoke_live_chat_model(
         requirement_spec,
         existing_plan=existing_plan,
@@ -903,15 +933,10 @@ def plan_project_with_chat_model(
 
     if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
         agent_plan = _parse_technical_plan_model_output(agent_note)
-        technical_plan = create_technical_plan(
+        return _materialize_technical_plan_candidate(
             requirement_spec,
-            agent_plan=agent_plan,
+            agent_plan,
             datasource_type=datasource_type,
-        )
-        return repair_technical_plan_chinese_prose(
-            technical_plan,
-            invoke_model=lambda prompt: _invoke_prompt_with_chat_model(prompt, settings=settings),
-            planning_context=requirement_spec,
         )
     agent_plan = extract_json_object(agent_note)
     plan = create_project_plan(

@@ -88,6 +88,16 @@ def _has_chinese_text(value: str) -> bool:
     return any("\u3400" <= character <= "\u9fff" for character in value)
 
 
+def validate_technical_plan_chinese_prose(plan: dict[str, Any]) -> list[str]:
+    """把尚未中文化的说明交给统一候选校验，避免首版再启动独立翻译模型。"""
+
+    return [
+        f"TechnicalPlan 字段 {path} 的自然语言说明必须使用简体中文。"
+        for path, (_, _, value) in _technical_plan_chinese_prose_targets(plan).items()
+        if not _has_chinese_text(value)
+    ]
+
+
 def repair_technical_plan_chinese_prose(
     plan: dict[str, Any],
     *,
