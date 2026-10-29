@@ -246,6 +246,7 @@ export type WorkflowLaunchResult = {
   preview_url?: string
   server?: Record<string, unknown>
   backend?: WorkflowLaunchPart
+  agent_runtime?: WorkflowLaunchPart
   frontend?: WorkflowLaunchPart
   failed_stage?: string
   [key: string]: unknown
@@ -864,6 +865,7 @@ export type ApplicationPlanningAction =
   | 'revise'
   | 'ui_action'
   | 'enter_planning'
+  | 'select_topology'
   | 'design_change'
 
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer> & {
@@ -958,6 +960,14 @@ export type WorkflowApiDesignReadinessItem = {
 
 export type WorkflowClarification = {
   mode?: string
+  /** 应用架构选项及可用状态由后端签发，前端不自行推断。 */
+  topologyOptions?: Array<{
+    type: string
+    label: string
+    available: boolean
+    description: string
+    reason?: string
+  }>
   confirmScopeBeforeExecution?: boolean
   clarifiedRequest?: string
   reason?: string

@@ -133,6 +133,10 @@ def apply_project_plan_datasource_policy(
         else {}
     )
     if projected.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        from app.services.runtime_business_contract import serves_python_business, runtime_business_architecture
+        if serves_python_business(projected):
+            projected["architecture"] = runtime_business_architecture()
+            return projected
         effective_type = (
             ensure_enabled_datasource_type(datasource_type)
             if datasource_type is not None
@@ -1141,10 +1145,17 @@ def validate_project_plan_datasource_policy(
             errors.append("TechnicalPlan architecture 必须且只能包含 frontend、backend、data。")
         if not all(isinstance(architecture.get(key), str) and architecture[key].strip() for key in ("frontend", "backend", "data")):
             errors.append("TechnicalPlan architecture 的 frontend、backend、data 必须是非空字符串。")
-        if "java8" not in architecture_text or "springboot" not in architecture_text:
-            errors.append("TechnicalPlan backend 必须体现 Java8 和 Springboot。")
-        if "mysql8" not in architecture_text or "redis" not in architecture_text:
-            errors.append("TechnicalPlan data 必须体现 MySQL8 和 Redis。")
+        from app.services.runtime_business_contract import serves_python_business
+        if serves_python_business(project_plan):
+            if "python" not in architecture_text or "fastapi" not in architecture_text:
+                errors.append("Runtime TechnicalPlan backend 必须体现 Python 和 FastAPI。")
+            if "mysql8" not in architecture_text:
+                errors.append("Runtime TechnicalPlan data 必须体现 MySQL8 业务存储边界。")
+        else:
+            if "java8" not in architecture_text or "springboot" not in architecture_text:
+                errors.append("TechnicalPlan backend 必须体现 Java8 和 Springboot。")
+            if "mysql8" not in architecture_text or "redis" not in architecture_text:
+                errors.append("TechnicalPlan data 必须体现 MySQL8 和 Redis。")
         return errors
     source_types = {
         str(source.get("type") or "") for source in sources
@@ -1863,6 +1874,11 @@ def create_technical_plan(
         # 仅记录本产物消费的配置版本，不复制任何应用级开关。
         "sourceConfigRevision": int(application_config.get("configRevision") or 1),
     }
+    if isinstance(agent_plan, dict) and "agent_contracts" in agent_plan:
+        # 七模块定义属于同一份待确认 TechnicalPlan，不另建可绕过确认的 Agent 配置文件。
+        from app.services.runtime_agent_contracts import agent_contract_index
+        plan["agent_contracts"] = deepcopy(agent_plan["agent_contracts"])
+        agent_contract_index(plan, require_runtime=False)
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired
 

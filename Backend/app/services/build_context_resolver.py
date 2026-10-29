@@ -20,6 +20,8 @@ from app.services.page_identity import page_id_to_page_key
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
+from app.services.runtime_agent_contracts import agent_contract_index, scoped_agent_ids, page_agent_endpoint_keys
+from app.services.agent_runtime_template_policy import load_agent_runtime_template_policy
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
@@ -185,6 +187,16 @@ def resolve_target_build_context(
         raise ValueError(f"Unsupported build target type: {target_type}.")
     # 把平台预置的后端骨架文件清单传给 Agent，让它知道哪些文件已存在、只需补业务逻辑。
     context["prebuilt_files"] = prebuilt_files_for_plan(project_plan)
+    agent_ids = scoped_agent_ids(project_plan, target_type, target_id)
+    if agent_ids:
+        context["required_unit_ids"] = list(dict.fromkeys([
+            *context["required_unit_ids"], *(f"agent:{key}" for key in agent_ids),
+        ]))
+    if agent_contract_index(project_plan):
+        # 即使当前 Scope 不含 Agent，累计 DAG 的复用判断仍需同一模板策略事实。
+        context["runtime_agent_template_policy"] = load_agent_runtime_template_policy(
+            _workspace_root(project_plan_path) / "agent-runtime",
+        )
     return context
 
 
@@ -205,6 +217,10 @@ def _page_context(
     )
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _contract_endpoint_ids(page_contract)
+    # Tool 的业务实现也走当前 Endpoint Design 门禁及 Backend Unit；前端直接调用集保持独立。
+    endpoint_ids = list(dict.fromkeys([
+        *endpoint_ids, *(key[1] for key in page_agent_endpoint_keys(project_plan, page_id)),
+    ]))
     workspace_root = _workspace_root(project_plan_path)
     endpoint_unit_ids: list[str] = []
     for endpoint_id in endpoint_ids:

@@ -180,6 +180,8 @@ def _route_technical_planning_generate(state: ProjectState) -> str:
 def _route_technical_planning_confirm(state: ProjectState) -> str:
     """校验失败返回生成，正式修订进入模板收口，其余结束规划。"""
 
+    if state.get("status") == "requires_user_input":
+        return "technical_planning_review"
     if str(state.get("application_planning_review_route") or "").strip() == "technical_planning_begin":
         return "technical_planning_begin"
     return "template_reconcile" if state.get("template_reconcile_pending") else "completed"
@@ -920,6 +922,7 @@ def build_application_planning_graph(*, checkpointer):
         "technical_planning_confirm",
         _route_technical_planning_confirm,
         {
+            "technical_planning_review": "technical_planning_review",
             "technical_planning_begin": "technical_planning_begin",
             "template_reconcile": "template_reconcile",
             "completed": END,

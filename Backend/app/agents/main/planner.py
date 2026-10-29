@@ -245,7 +245,22 @@ def _technical_planning_prompt(
     )
     return (
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
-        "The object has exactly four sections: architecture, entities, api_contracts, and pages.\n\n"
+        "The object has architecture, entities, api_contracts, and pages. Only when confirmed "
+        "business requirements explicitly require an executable conversational Agent, also include "
+        "agent_contracts. Do not infer an Agent from an application name or generic CRUD behavior. "
+        "agent_contracts is an array, one record per business Agent, with exactly agentId "
+        "(unique lower_snake_case, never runtime), name, purpose, pageIds (existing page IDs), "
+        "and agentSettings. agentSettings has exactly seven object keys: prompt, model, memory, "
+        "tools, skills, knowledge, context. prompt.systemPrompt must be substantive Chinese "
+        "instructions; model.source must be project (inherit injected model, never credentials); "
+        "memory describes trusted Principal/thread isolation and template checkpoint reuse; "
+        "tools has enabled:boolean and bindings:[] with each binding containing exactly toolId, "
+        "apiContractId, endpointId from current API contracts. Tools reuse local ApplicationServices, "
+        "not a new public endpoint. skills and knowledge each have an explicit enabled:boolean "
+        "and only declared resource requirements; context describes required trusted inputs and "
+        "missing-input behavior. Disabled modules are still present. Never include any model or "
+        "database secret. These facts are reviewed in the same TechnicalPlan; do not choose a "
+        "topology or change application switches. Architecture is selected separately by the user.\n\n"
         f"{TECHNICAL_PLAN_LANGUAGE_REQUIREMENT}\n"
         "Field definitions:\n"
         "1. architecture is a technical summary. frontend describes the client form and communication style; "
@@ -870,6 +885,7 @@ def repair_technical_plan_api_contracts_with_chat_model(
             "entities": deepcopy(existing_plan.get("entities", [])),
             "api_contracts": merged_contracts,
             "pages": deepcopy(existing_plan.get("pages", [])),
+            **({"agent_contracts": deepcopy(existing_plan["agent_contracts"])} if "agent_contracts" in existing_plan else {}),
         },
     )
     return repair_technical_plan_chinese_prose(
@@ -960,6 +976,9 @@ def _parse_technical_plan_model_output(agent_note: str) -> dict[str, Any]:
         and any(not isinstance(item, dict) for item in result[key])
     ]
     invalid_sections = list(dict.fromkeys([*invalid_sections, *invalid_item_sections]))
+    if "agent_contracts" in result and (not isinstance(result["agent_contracts"], list)
+                                       or any(not isinstance(item, dict) for item in result["agent_contracts"])):
+        invalid_sections.append("agent_contracts")
     if invalid_sections:
         logger.warning(
             "technical_plan_json_root_incomplete missing_keys=[] invalid_sections=%s",

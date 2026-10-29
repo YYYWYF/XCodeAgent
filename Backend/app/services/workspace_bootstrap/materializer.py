@@ -18,6 +18,7 @@ from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import TemplatePackageError, WorkspaceBootstrapError
+from app.services.workspace_bootstrap.template_layout import ALL_SOURCE_ROOTS, template_roots, validate_template_layout_state
 
 BOOTSTRAP_STAGING_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "bootstrap-staging"
 _ROOTS = ("frontend", "backend")
@@ -29,6 +30,7 @@ _PLATFORM_RESERVED_PATHS = frozenset({Path(".git"), BOOTSTRAP_STAGING_RELATIVE_P
 BOOTSTRAP_MANAGED_RELATIVE_PATHS: tuple[Path, ...] = (
     Path(_ROOTS[0]),
     Path(_ROOTS[1]),
+    Path("agent-runtime"),
     Path(".git"),
     TEMPLATE_STATE_RELATIVE_PATH,
     BOOTSTRAP_STAGING_RELATIVE_PATH,
@@ -106,10 +108,12 @@ class WorkspaceMaterializer:
         """完整提交 ZIP 的安全文件、Git baseline 与唯一 TemplateState。"""
 
         root = Path(workspace).expanduser().resolve()
+        roots = template_roots(template_state.requested)
+        validate_template_layout_state(template_state, roots)
         self._preflight(root)
         journal = BootstrapJournal(workspace=root)
         try:
-            journal.staging = self._extract_to_staging(root, Path(archive_path))
+            journal.staging = self._extract_to_staging(root, Path(archive_path), roots=roots)
             manifest = _build_file_manifest(journal.staging)
             targets = _materialization_targets(journal.staging)
             _validate_materialization_targets_available(root, targets)
@@ -148,13 +152,13 @@ class WorkspaceMaterializer:
             raise WorkspaceBootstrapError("Workspace 必须是已存在且非符号链接的目录。")
         collisions = [
             name
-            for name in ("frontend", "backend", ".git", str(TEMPLATE_STATE_RELATIVE_PATH))
+            for name in (*sorted(ALL_SOURCE_ROOTS), ".git", str(TEMPLATE_STATE_RELATIVE_PATH))
             if (workspace / name).exists() or (workspace / name).is_symlink()
         ]
         if collisions:
             raise WorkspaceBootstrapError("Workspace 已存在 Bootstrap 受管产物：" + "、".join(collisions))
 
-    def _extract_to_staging(self, workspace: Path, archive_path: Path) -> Path:
+    def _extract_to_staging(self, workspace: Path, archive_path: Path, *, roots: tuple[str, ...] = _ROOTS) -> Path:
         """逐条写入已验证 ZIP，绝不使用 `extractall()`。"""
 
         staging = workspace / BOOTSTRAP_STAGING_RELATIVE_PATH / uuid.uuid4().hex
@@ -168,7 +172,7 @@ class WorkspaceMaterializer:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     with package.open(entry, "r") as source, target.open("xb") as destination:
                         shutil.copyfileobj(source, destination)
-            if not all((staging / name).is_dir() for name in _ROOTS):
+            if not all((staging / name).is_dir() for name in roots):
                 raise TemplatePackageError("模板 ZIP 解压后缺少受管根目录。")
             return staging
         except Exception:

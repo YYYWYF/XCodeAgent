@@ -13,6 +13,7 @@ import re
 import tempfile
 from pathlib import Path
 from typing import Any
+from app.services.runtime_business_contract import serves_python_business
 
 # 后端工程根在工作区中的相对位置
 _BACKEND_ROOT = Path("backend")
@@ -659,6 +660,8 @@ def inject_deterministic_backend_skeleton(
     返回写入文件清单和统计。
     """
 
+    if serves_python_business(technical_plan):
+        return {"status": "skipped", "reason": "python_runtime_owns_business_code", "files": []}
     workspace_path = Path(workspace).expanduser().resolve()
     backend_root = workspace_path / _BACKEND_ROOT
     if not backend_root.is_dir():
@@ -747,6 +750,8 @@ def prebuilt_files_for_plan(technical_plan: dict[str, Any]) -> list[str]:
     哪些文件已由平台预置。
     """
 
+    if serves_python_business(technical_plan):
+        return []
     entities = technical_plan.get("entities") or []
     if not isinstance(entities, list):
         return []

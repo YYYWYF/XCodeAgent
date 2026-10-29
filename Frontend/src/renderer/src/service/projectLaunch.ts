@@ -9,6 +9,7 @@ export type ProjectLaunchResult = {
   message: string
   preview_url?: string
   backend?: Record<string, unknown>
+  agent_runtime?: Record<string, unknown>
   frontend?: Record<string, unknown>
   failed_stage?: string
 }

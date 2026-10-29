@@ -260,6 +260,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "clarificationModes": {
             "planningStageEntry": "planning_stage_entry_confirmation",
             "technicalPlanConfirmation": "technical_plan_confirmation",
+            "technicalPlanTopologySelection": "technical_plan_topology_selection",
             "technicalPlanGenerationError": "technical_plan_generation_error",
         },
         "artifactSchemas": {

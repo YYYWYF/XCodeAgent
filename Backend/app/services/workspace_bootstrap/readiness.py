@@ -11,6 +11,8 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_state import effective_capabilities, load_template_state, requested_capabilities
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapReadinessError
+from app.services.workspace_bootstrap.template_layout import ALL_SOURCE_ROOTS, RUNTIME_ROOTS, STANDARD_ROOTS, template_roots, validate_template_layout_state, compile_workspace_template_capabilities
+from app.services.workspace_bootstrap.runtime_readiness import validate_runtime_entrypoints
 
 _STAGING_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "bootstrap-staging"
 _MANAGED_ROOT_NAMES = ("frontend", "backend", ".git")
@@ -51,9 +53,10 @@ def classify_workspace_template(
     """
 
     root = Path(workspace).expanduser().resolve()
+    roots = template_roots(requested_config["capabilities"])
     state = _load_template_state_or_none(root)
     present_roots = [
-        name for name in _MANAGED_ROOT_NAMES if (root / name).exists() or (root / name).is_symlink()
+        name for name in (*sorted(ALL_SOURCE_ROOTS), ".git") if (root / name).exists() or (root / name).is_symlink()
     ]
     if state is None or len(present_roots) < len(_MANAGED_ROOT_NAMES):
         # 完全没有工程痕迹才需要真正拉取；只留下一半痕迹属于状态不一致，
@@ -63,9 +66,10 @@ def classify_workspace_template(
         )
     try:
         _validate_formal_artifacts(root)
-        _validate_template_roots(root)
+        _validate_runtime_request(root, requested_config, roots)
+        _validate_template_roots(root, roots)
         _validate_requested_capabilities(state, requested_config)
-        _validate_entrypoints(root)
+        _validate_entrypoints(root, roots)
         _validate_staging_absent(root)
     except ValueError:
         # 正式产物未确认、入口缺失、能力不匹配、staging 残留等一律视为不可沿用。
@@ -94,12 +98,31 @@ def validate_workspace_bootstrap_readiness(
     if not root.is_dir() or root.is_symlink():
         raise WorkspaceBootstrapReadinessError("Workspace 必须是非符号链接目录。")
     _validate_formal_artifacts(root)
-    _validate_template_roots(root)
+    roots = template_roots(requested_config["capabilities"])
+    _validate_runtime_request(root, requested_config, roots)
+    _validate_template_roots(root, roots)
     state = load_template_state(root)
     _validate_requested_capabilities(state, requested_config)
-    _validate_entrypoints(root)
+    _validate_entrypoints(root, roots)
     _validate_staging_absent(root)
     (git_manager or BootstrapGitManager()).verify_baseline(root)
+
+
+def _validate_runtime_request(workspace: Path, requested_config: dict[str, Any], roots: tuple[str, ...]) -> None:
+    """Runtime 布局必须与当前正式技术规划和应用配置同时一致。"""
+
+    if roots != RUNTIME_ROOTS:
+        return
+    from app.services.application_config import read_application_config
+    from app.services.workspace_bootstrap.template_layout import load_template_plan
+
+    application = read_application_config(workspace)
+    plan = load_template_plan(workspace)
+    if plan.get("sourceConfigRevision") != application.get("configRevision"):
+        raise WorkspaceBootstrapReadinessError("Runtime 技术规划基于过期应用配置，不能完成 Bootstrap。")
+    expected = compile_workspace_template_capabilities(workspace, application, plan=plan)
+    if requested_config.get("capabilities") != expected:
+        raise WorkspaceBootstrapReadinessError("Runtime 模板请求与当前正式规划或应用配置不一致。")
 
 
 def _validate_formal_artifacts(workspace: Path) -> None:
@@ -123,10 +146,13 @@ def _validate_formal_artifacts(workspace: Path) -> None:
         raise WorkspaceBootstrapReadinessError("正式产物未确认，不能完成 Workspace Bootstrap。")
 
 
-def _validate_template_roots(workspace: Path) -> None:
-    """确认两个模板根与 Git 元数据是受管的真实目录。"""
+def _validate_template_roots(workspace: Path, roots: tuple[str, ...] = STANDARD_ROOTS) -> None:
+    """确认请求的根与 Git 元数据真实存在，不夹带其他拓扑的源码根。"""
 
-    for name in ("frontend", "backend", ".git"):
+    for name in (ALL_SOURCE_ROOTS - set(roots)):
+        if (workspace / name).exists() or (workspace / name).is_symlink():
+            raise WorkspaceBootstrapReadinessError(f"Bootstrap 包含其他拓扑的源码根：{name}。")
+    for name in (*roots, ".git"):
         path = workspace / name
         if not path.is_dir() or path.is_symlink():
             raise WorkspaceBootstrapReadinessError(f"Bootstrap 缺少有效 {name}。")
@@ -136,6 +162,11 @@ def _validate_requested_capabilities(state: dict[str, Any], requested_config: di
     """要求 Engine 原样回写的 requested 与应用编译请求完全一致。"""
 
     expected = _enabled_requested_capabilities(requested_config)
+    from app.services.template_reconcile.protocol_v3 import TemplateStateV3
+    try:
+        validate_template_layout_state(TemplateStateV3.model_validate(state), template_roots(expected))
+    except ValueError as exc:
+        raise WorkspaceBootstrapReadinessError(str(exc)) from exc
     requested = requested_capabilities(state)
     if requested != expected:
         raise WorkspaceBootstrapReadinessError("TemplateState.requested 与 Bootstrap 请求不一致。")
@@ -167,7 +198,7 @@ def _enabled_requested_capabilities(requested_config: dict[str, Any]) -> dict[st
     return {capability_id: enabled[capability_id] for capability_id in sorted(enabled)}
 
 
-def _validate_entrypoints(workspace: Path) -> None:
+def _validate_entrypoints(workspace: Path, roots: tuple[str, ...] = STANDARD_ROOTS) -> None:
     """验证前后端最小真实入口，避免空目录或仅占位文件成为 READY。"""
 
     package_json = workspace / "frontend/package.json"
@@ -175,6 +206,9 @@ def _validate_entrypoints(workspace: Path) -> None:
     java_root = workspace / "backend/src/main/java"
     if not package_json.is_file() or package_json.is_symlink():
         raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 frontend/package.json。")
+    if roots == RUNTIME_ROOTS:
+        validate_runtime_entrypoints(workspace)
+        return
     if not pom.is_file() or pom.is_symlink():
         raise WorkspaceBootstrapReadinessError("Bootstrap 缺少 backend/pom.xml。")
     if not java_root.is_dir() or java_root.is_symlink() or not any(

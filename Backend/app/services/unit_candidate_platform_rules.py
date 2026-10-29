@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.services.runtime_business_contract import python_backend_context
+
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 from typing import Any
@@ -20,7 +22,7 @@ from app.services.planning_frozen import plain_json
 from app.services.unit_generation_contracts import UnitGenerationContext
 
 
-_KIND_OWNER = {"page": "frontend", "frontend": "frontend", "backend": "backend", "database": "database"}
+_KIND_OWNER = {"page": "frontend", "frontend": "frontend", "backend": "backend", "database": "database", "agent": "agent"}
 _NON_MODEL_UNITS = {"application:root", "app:integration", "frontend:shell", "frontend:auth-guard", "frontend:route-registry"}
 _BUILTIN_STRONG_RULES = {
     "exact_unit_owner", "exact_file_scope", "no_platform_owned_fields",
@@ -120,6 +122,12 @@ def _context_contract_issues(context: UnitGenerationContext) -> list[ValidationI
 
     issues: list[ValidationIssue] = []
     unit_id = context.unit_id
+    try:
+        python_backend_context(context.constraints)
+    except ValueError as exc:
+        issues.append(_fatal_issue(
+            "UNIT_BACKEND_IMPLEMENTATION_INVALID", str(exc), category="input", unit_id=unit_id,
+        ))
     expected_owner = _KIND_OWNER.get(context.unit_kind)
     actual_owner = context.constraints.get("owner")
     if unit_id in _NON_MODEL_UNITS or expected_owner is None:

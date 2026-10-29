@@ -6,7 +6,7 @@ from typing import Any
 
 _REPAIR_HINTS = {
     "unauthorized_paths": "恢复测试范围外的写入，仅修改授权测试文件。",
-    "invalid_paths": "使用当前允许的平铺前端测试或后端 Test.java 路径。",
+    "invalid_paths": "使用当前允许的平铺前端测试、Java Test.java 或 Runtime tests/test_*.py 路径。",
     "missing_files": "生成缺失文件或修正实际测试文件路径。",
     "too_many_files": "合并测试，保持当前最多五个测试文件的约定。",
     "unaffected_layer_paths": "只修改本轮受影响端的测试。",
@@ -26,6 +26,9 @@ def generation_failure_diagnostics(workspace: str, validation: dict[str, Any]) -
         for relative in validation.get(key) or []:
             item = {"category": key, "path": str(relative), "repair": hint}
             if key == "invalid_contents":
+                error = (validation.get("content_errors") or {}).get(str(relative))
+                if error:
+                    item["content_error"] = str(error)
                 path = (root / str(relative)).resolve()
                 if path.is_relative_to(root) and path.is_file():
                     content = path.read_text(encoding="utf-8", errors="replace")
@@ -47,6 +50,8 @@ def generation_failure_diagnostics(workspace: str, validation: dict[str, Any]) -
     for item in details:
         hits = "、".join(f"{v['token']}（第 {v['line']} 行）" for v in item.get("violations", []))
         imports = "、".join(item.get("unavailable_imports", []))
+        error = item.get("content_error")
         lines.append(f"{item['path']}：{item['category']}" + (f"；禁止项 {hits}" if hits else "")
+                     + (f"；{error}" if error else "")
                      + (f"；不可用依赖 {imports}" if imports else "") + f"。{item['repair']}")
     return "生成检查失败：" + "\n".join(lines) if lines else "生成检查未通过，请检查生成结果及校验记录。", details

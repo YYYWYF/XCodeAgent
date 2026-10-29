@@ -9,6 +9,7 @@ from app.services.authorization_resource_catalog import (
     resource_catalog_fingerprint as fingerprint_catalog,
 )
 from app.services.unit_generation_contracts import GenerationRequirement
+from app.services.runtime_agent_contracts import page_agent_endpoint_keys
 from app.services.unit_generation_requirements_contracts import fail_requirement_input
 
 
@@ -73,6 +74,10 @@ def scoped_formal_targets(plan: dict, scope: Mapping) -> tuple[dict[str, dict], 
         if len(matches) != 1:
             fail_requirement_input("FORMAL_GENERATION_ENDPOINT_AMBIGUOUS", f"页面引用 Endpoint {endpoint_id} 缺失或无法唯一确定 API Contract。")
         selected[matches[0]] = endpoints[matches[0]]
+    for key in page_agent_endpoint_keys(plan, target_id):
+        if key not in endpoints:
+            fail_requirement_input("FORMAL_GENERATION_TARGET_MISSING", f"Agent Tool 引用的 Endpoint {key} 不存在。")
+        selected[key] = endpoints[key]
     return {target_id: pages[target_id]}, selected
 
 

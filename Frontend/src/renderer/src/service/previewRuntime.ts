@@ -62,11 +62,12 @@ export type PreviewRuntimePayload = {
     status: PreviewServiceState['status']
     frontend: PreviewServiceState
     backend: PreviewServiceState
+    agent_runtime?: PreviewServiceState
     previewUrl?: string
     failedStage?: string
     databaseCheck?: PreviewDatabaseCheck
     repairAvailable?: boolean
-    logs?: Record<'frontend' | 'backend', PreviewLog[]>
+    logs?: Partial<Record<'frontend' | 'backend' | 'agent_runtime', PreviewLog[]>>
     maintenance?: { threadId: string; action: string }
   }
   blockedBy?: { threadId?: string; runId?: string; message: string }

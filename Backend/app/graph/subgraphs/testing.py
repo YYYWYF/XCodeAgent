@@ -24,6 +24,8 @@ from app.services.frontend_performance_runner import (
 )
 from app.services.integration_test_runner import run_integration_checks
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
+from app.services.python_test_contract import is_runtime_source_path, is_runtime_test_path
+from app.services.python_runtime_checks import runtime_check_plan, runtime_source_fingerprint
 from app.services.test_validation import evaluate_quality_gate
 from app.services.test_generation_diagnostics import generation_failure_diagnostics
 from app.workspace.code_changes import code_change_state_update
@@ -55,6 +57,7 @@ _UNIT_TEST_CHECK_IDS = {
 _INTEGRATION_CHECK_ORDER = (
     "frontend_install",
     "frontend_build",
+    "backend_install",
     "backend_build",
     "backend_startup",
     "backend_static_check",
@@ -691,6 +694,10 @@ def validate_generated_unit_tests(
             "language": (
                 "typescript"
                 if layer == "frontend"
+                else "python"
+                if layer == "backend" and any(is_runtime_source_path(path) for path in (
+                    (state.get("unit_test_generation_context") or {}).get("source_files") or []
+                ))
                 else "java"
                 if layer == "backend"
                 else None
@@ -773,6 +780,10 @@ def _validate_generation_files(
             source_files=source_files,
         )
         merged = dict(validation)
+        merged["content_errors"] = {
+            **(merged.get("content_errors") or {}),
+            **(content_validation.get("content_errors") or {}),
+        }
         for key in ("invalid_paths", "invalid_contents", "missing_files"):
             values = _string_list(
                 [
@@ -893,6 +904,8 @@ def _skipped_generation_result(summary: str) -> dict[str, Any]:
 def _source_layer(path: str) -> str | None:
     """识别允许触发测试生成的前后端业务源码，排除测试、样式和配置文件。"""
 
+    if is_runtime_source_path(path):
+        return "backend"
     normalized = path.casefold()
     suffix = PurePosixPath(normalized).suffix
     parts = PurePosixPath(normalized).parts
@@ -1074,8 +1087,10 @@ def _startup_cache_is_current(state: ProjectState, checks: list[dict[str, Any]])
         return False
     try:
         from app.workspace.spec_documents import workspace_root
-        return check.get("source_fingerprint") == startup_source_fingerprint(workspace_root(state))
-    except OSError:
+        root = workspace_root(state)
+        fingerprint = runtime_source_fingerprint(root) if runtime_check_plan(root, state) else startup_source_fingerprint(root)
+        return check.get("source_fingerprint") == fingerprint
+    except (OSError, ValueError):
         return False
 
 
@@ -1764,6 +1779,9 @@ def _repair_config_hints_for(
         )
         if not owner_matches:
             continue
+        if owner == "backend" and result.get("language") == "python":
+            hints.extend(["agent-runtime/pyproject.toml", "agent-runtime/uv.lock"])
+            continue
         if check_id == "backend_startup":
             hints.extend(_string_list(result.get("repair_hints"), limit=20))
             continue
@@ -1794,6 +1812,8 @@ def _repair_scoped_tasks(state: ProjectState) -> list[dict[str, Any]]:
         config_hints = _repair_config_hints_for(state, owner)
         owner_failures = failed_by_owner.get(owner, [])
         repair_directory = _REPAIR_DIRECTORY_BY_OWNER[owner]
+        if owner == "backend" and any(item.get("language") == "python" for item in owner_failures):
+            repair_directory = "agent-runtime"
         if owner == "backend" and any(item.get("id") == "backend_startup" for item in owner_failures):
             # 启动检测提供真实目录大小写，避免 Backend 工程只能获准修改不存在的 backend。
             if any(path.startswith("Backend/") for path in config_hints):
@@ -1852,6 +1872,8 @@ def _generation_security_failure(state: ProjectState) -> str | None:
 def _test_file_layer(path: str) -> str | None:
     """根据约定测试目录识别测试文件所属层。"""
 
+    if is_runtime_test_path(path):
+        return "backend"
     normalized = path.casefold().replace("\\", "/").lstrip("/")
     if normalized.startswith("frontend/tests/") and normalized.endswith(
         (".test.ts", ".test.tsx")

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 from typing import Any
+from app.services.runtime_agent_contracts import agent_contract_index
+from app.services.agent_runtime_template_policy import load_agent_runtime_template_policy
 
 from app.services.api_design import (
     api_design_business_descriptions,
@@ -32,6 +34,8 @@ def application_endpoint_context(workspace: str | Path, project_plan: dict[str, 
     flows = api_design_mapping_flows(designs)
     descriptions = api_design_business_descriptions(designs)
     return {
+        **({"runtime_agent_template_policy": load_agent_runtime_template_policy(Path(workspace) / "agent-runtime")}
+           if agent_contract_index(project_plan) else {}),
         "endpoint_ids": list(dict.fromkeys(endpoint_ids)),
         "required_endpoint_ids": list(dict.fromkeys(endpoint_ids)),
         "entity_ids": list(dict.fromkeys(entity_ids)),

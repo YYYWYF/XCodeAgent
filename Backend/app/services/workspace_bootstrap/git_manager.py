@@ -9,6 +9,8 @@ from app.services.git_commit_message import template_baseline_commit_message
 from app.services.git_identity import apply_commit_identity
 from app.services.workspace_bootstrap.models import WorkspaceBootstrapError
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH, load_template_state
+from app.services.workspace_bootstrap.template_layout import STANDARD_ROOTS, template_roots
 
 
 class BootstrapGitError(WorkspaceBootstrapError):
@@ -59,7 +61,9 @@ class BootstrapGitManager:
         if not gitignore.exists():
             gitignore.write_text(_GITIGNORE_CONTENT, encoding="utf-8")
         # 提交 frontend/backend 和 .devagentstudio 规划产物（运行时目录已被 gitignore 排除）。
-        add_paths = ["frontend", "backend", ".gitignore"]
+        state_path = root / TEMPLATE_STATE_RELATIVE_PATH
+        roots = template_roots(load_template_state(root)["requested"]) if state_path.exists() else STANDARD_ROOTS
+        add_paths = [*roots, ".gitignore"]
         if (root / WORKSPACE_ARTIFACT_DIR_NAME).is_dir():
             add_paths.append(WORKSPACE_ARTIFACT_DIR_NAME)
         self._run(root, ["git", "add", "--", *add_paths])

@@ -16,7 +16,7 @@ REQUIRED_TEST_CHECKS = [
     ("backend_unit_tests", "后端单元测试通过"),
     ("joint_integration", "前后端集成测试通过"),
 ]
-_INTEGRATION_REPAIR_DIRECTORIES = {"frontend", "backend"}
+_INTEGRATION_REPAIR_DIRECTORIES = {"frontend", "backend", "agent-runtime"}
 
 
 def _check_result(

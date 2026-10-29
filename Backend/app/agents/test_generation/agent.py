@@ -78,6 +78,12 @@ def create_test_generation_agent(
         "do not include them in test_files or create other helper paths. "
         "Never introduce, request, or assume a new npm dependency for a generated test. "
         "Backend tests must mirror the Java package under backend/src/test/java and use "
+        "<Class>Test.java for Java only. Python Runtime sources instead use flat "
+        "agent-runtime/tests/test_*.py pytest tests, with assert or pytest.raises. "
+        "Use existing pytest and project dependencies, unittest.mock for external calls; "
+        "never connect a real model or database, install dependencies, skip/xfail tests, "
+        "or change conftest.py. Do not apply Java package or Spring rules to Python. "
+        "Java tests use "
         "<Class>Test.java. Use only testing libraries already available from the current "
         "backend build and existing tests; never add a build dependency for generated tests. "
         "When JUnit 5 and Mockito are available, use them for every Java unit test, "
@@ -105,6 +111,7 @@ def create_test_generation_agent(
             workspace_root,
             user_skills_backend=user_skills_backend,
             agent_memory_backend=agent_memory_backend,
+            runtime_test_files=True,
         )
     )
     return create_deep_agent(

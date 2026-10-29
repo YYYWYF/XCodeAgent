@@ -285,7 +285,7 @@ def _workflow_launch_progress(
         return None
     stage = str(candidate.get("stage") or "").strip()
     status = str(candidate.get("status") or "").strip()
-    if stage not in {"structure", "backend", "frontend", "ready"}:
+    if stage not in {"structure", "backend", "agent_runtime", "frontend", "ready"}:
         return None
     if status not in {"pending", "running", "completed", "skipped", "failed"}:
         return None
@@ -1585,6 +1585,7 @@ def _workflow_user_input_message(
         "requirement_document_confirmation": "需求文档草稿已生成，请确认后同时固化需求与页面操作规划。",
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
+        "technical_plan_topology_selection": "技术规划已生成，请先明确选择应用架构。",
         "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
         "ui_design_confirmation": "UI设计稿已生成，请逐页确认后继续。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
@@ -1765,6 +1766,12 @@ def _workflow_confirmation_artifact(
             "id": "project_plan",
             "name": "project-plan.md",
             "path_field": "project_plan_path",
+        },
+        "technical_plan_topology_selection": {
+            "phase": "technical_planning",
+            "id": "technical_plan",
+            "name": "technical-plan.md",
+            "path_field": "technical_plan_path",
         },
         "technical_plan_confirmation": {
             "phase": "technical_planning",

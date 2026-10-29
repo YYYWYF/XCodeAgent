@@ -54,6 +54,7 @@ def bind_unit_test_report(state: dict[str, Any], report: dict[str, Any]) -> dict
         "frontend/tests/setupTests.ts", "frontend/tests/__mocks__/styleMock.cjs",
         "frontend/tests/__mocks__/fileMock.cjs", "frontend/jest.config.cjs",
         "frontend/tsconfig.test.json", "frontend/package.json", "frontend/pnpm-lock.yaml",
+        "agent-runtime/pyproject.toml", "agent-runtime/uv.lock",
     ) if (root / path).is_file())
     return {**report, "artifact_context": {
         "build_execution_scope": state.get("build_execution_scope"),

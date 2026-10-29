@@ -18,6 +18,9 @@ from app.config import dag_business_self_check_enabled
 from app.agents.database.generator import generate_database_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
+from app.agents.agent_runtime.generator import generate_python_business_with_deep_agent
+from app.agents.agent_runtime.modules import generate_agent_modules_with_deep_agent
+from app.services.runtime_business_contract import serves_python_business
 from app.domain.models import (
     BuildTaskExecutionContractError,
     resolve_build_task_execution_contract,
@@ -121,6 +124,8 @@ def _runner_for_owner(owner: str) -> tuple[str, Runner] | None:
         return "backend.deep_agent", generate_data_sources_with_deep_agent
     if owner == "frontend":
         return "frontend.deep_agent", generate_frontend_with_deep_agent
+    if owner == "agent":
+        return "agent-runtime.deep_agent", generate_agent_modules_with_deep_agent
     return None
 
 
@@ -508,7 +513,12 @@ def _execute_owner_tasks(
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """在 agent 策略内按代码领域 owner 选择专业 Agent，并归属真实写入。"""
 
-    runner_entry = _runner_for_owner(owner)
+    # Backend 是业务领域 owner；只有正式 Runtime 服务图才交给 Python 实现器。
+    runner_entry = (
+        ("python-business.deep_agent", generate_python_business_with_deep_agent)
+        if owner == "backend" and serves_python_business(state["project_plan"])
+        else _runner_for_owner(owner)
+    )
     if runner_entry is None:
         return (
             normalize_task_results(
@@ -639,14 +649,7 @@ def _verify_business_results(
         for task in owner_tasks
         if task.get("id")
     }
-    if not dag_business_self_check_enabled():
-        return [
-            _skip_business_acceptance(
-                result,
-                tasks_by_id.get(str(result.get("task_id") or ""), {}),
-            )
-            for result in results
-        ]
+    business_self_check = dag_business_self_check_enabled()
 
     dependency_evidence = _completed_dependency_business_evidence(
         state.get("build_results"),
@@ -655,6 +658,12 @@ def _verify_business_results(
     verified: list[dict[str, Any]] = []
     for result in results:
         task = tasks_by_id.get(str(result.get("task_id") or ""), {})
+        # Runtime 业务验收是本次实现门禁；Java 保持原全局可选自检策略。
+        runtime_check = ((task.get("source_refs") or {}).get("backend_implementation") == "python_runtime"
+                         or task.get("owner") == "agent")
+        if not business_self_check and not runtime_check:
+            verified.append(_skip_business_acceptance(result, task))
+            continue
         if result.get("status") not in {"completed", "already_satisfied"}:
             verified.append(result)
             continue
@@ -781,6 +790,10 @@ def _mark_business_acceptance_failure(result: dict[str, Any], category: str) -> 
     result["status"] = "failed"
     result["failure_category"] = category
     result["failure_reason"] = f"业务验收未通过（{summary_text}）。"
+    details = [str(item.get("evidence") or "") for item in result.get("business_acceptance_evidence") or []
+               if item.get("status") in {"failed", "blocked"}]
+    if details:
+        result["failure_reason"] += "\n" + "\n".join(details)[:4000]
     original_note = str(result.get("agent_note") or "")
     message = f"BUSINESS VERIFICATION FAILED: {result['failure_reason']}"
     result["agent_note"] = f"{original_note}\n\n{message}" if original_note else message

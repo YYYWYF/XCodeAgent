@@ -28,7 +28,7 @@ type StepState = 'pending' | 'running' | 'completed' | 'failed'
 
 const LAUNCH_STEPS = [
   { key: 'detect', label: '识别工程结构' },
-  { key: 'backend', label: '启动后端服务' },
+  { key: 'backend', label: '启动应用服务' },
   { key: 'frontend', label: '启动前端服务' },
   { key: 'ready', label: '健康检查就绪' }
 ] as const
@@ -42,7 +42,14 @@ const FAILED_STEP_INDEX: Record<string, number> = {
   backend_jar: 1,
   backend_repackage: 1,
   backend_start: 1,
-  frontend_start: 2
+  frontend_start: 2,
+  frontend_runtime_proxy: 2,
+  agent_runtime_validation: 1,
+  agent_runtime_database_resource: 1,
+  agent_runtime_database_config: 1,
+  agent_runtime_configuration: 1,
+  agent_runtime_install: 1,
+  agent_runtime_start: 1
 }
 
 /** 后端失败阶段代码到中文阶段名的映射。 */
@@ -54,7 +61,14 @@ const FAILED_STAGE_LABELS: Record<string, string> = {
   backend_jar: '后端打包产物',
   backend_repackage: '后端补打包',
   backend_start: '后端启动',
-  frontend_start: '前端启动'
+  frontend_start: '前端启动',
+  frontend_runtime_proxy: '前端 Runtime 代理',
+  agent_runtime_validation: 'Runtime 模板检查',
+  agent_runtime_database_resource: 'Runtime 数据库资源',
+  agent_runtime_database_config: 'Runtime 数据库配置',
+  agent_runtime_configuration: 'Runtime 模型与会话配置',
+  agent_runtime_install: 'Runtime 依赖同步',
+  agent_runtime_start: 'Runtime 启动'
 }
 
 /** 展示项目启动节点的运行、完成与失败状态，包含预览入口和错误详情。 */
@@ -171,6 +185,8 @@ export default function ProjectLaunchCard({ workflow }: Props): ReactElement {
             launch.frontend.message ? (
               <Text type="secondary">{String(launch.frontend.message)}</Text>
             ) : null}
+            {launch?.agent_runtime?.status === 'failed' && launch.agent_runtime.message
+              ? <Text type="secondary">{String(launch.agent_runtime.message)}</Text> : null}
           </div>
         </div>
       )}

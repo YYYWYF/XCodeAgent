@@ -39,6 +39,7 @@ def launch_frontend_project(
     skip_install: bool = False,
     force_restart: bool = False,
     linked_dependencies: bool = False,
+    runtime_public_url: str | None = None,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -169,6 +170,7 @@ def launch_frontend_project(
         runtime_root=runtime_root,
         preview_url=preview_url,
         extra_argv=_dependency_check_bypass_argv(package_manager, linked_dependencies),
+        runtime_public_url=runtime_public_url,
     )
     if process is not None:
         _register_frontend_process(root, process, runtime_subdir=runtime_subdir)
@@ -438,6 +440,7 @@ def _start_dev_server(
     runtime_root: Path,
     preview_url: str,
     extra_argv: list[str] | None = None,
+    runtime_public_url: str | None = None,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
     # 额外参数要排在子命令之前：pnpm 只把 `run` 之前的参数当自己的选项。
@@ -448,6 +451,16 @@ def _start_dev_server(
     stderr = stderr_path.open("ab")
     stdout_offset = stdout.tell()
     env = _launch_environment(script_command)
+    if runtime_public_url is not None:
+        from urllib.parse import urlparse
+        from app.services.python_runtime_checks import runtime_verification_environment
+
+        parsed = urlparse(runtime_public_url)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port:
+            raise ValueError("Runtime 代理只能指向受控 loopback 服务。")
+        env = {**runtime_verification_environment(), **{
+            key: value for key, value in env.items() if key in {"HOST", "PORT", "BROWSER", "CI"}
+        }, "AGENT_RUNTIME_PUBLIC_URL": runtime_public_url}
     try:
         process = subprocess.Popen(
             argv,

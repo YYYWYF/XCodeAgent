@@ -112,7 +112,7 @@ def _output_contract(context: UnitGenerationContext) -> str:
                     "public_contracts": [],
                     "risks": [],
                 },
-                "can_run_in_parallel": True,
+                "can_run_in_parallel": context.unit_kind != "agent",
                 "parallel_reason": "并行判断依据",
                 "status": "pending",
             }

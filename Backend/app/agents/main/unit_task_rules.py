@@ -7,6 +7,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.agents.main.backend_unit_task_rules import resolve_backend_unit_task_rules
+from app.agents.main.python_unit_task_rules import resolve_python_unit_task_rules
+from app.services.runtime_business_contract import python_backend_context
+from app.agents.main.agent_unit_task_rules import resolve_agent_unit_task_rules
+from app.services.runtime_agent_dag import agent_task_manifest
 from app.services.business_acceptance import (
     DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND,
     frontend_api_task_id,
@@ -59,6 +63,8 @@ def expected_task_type(context: UnitGenerationContext) -> str:
         return "backend.code"
     if owner == "database":
         return "database.change"
+    if owner == "agent":
+        return "agent.code"
     raise ValueError(f"模型 Unit {context.unit_id} 没有受支持的 Task owner: {owner}")
 
 
@@ -97,6 +103,8 @@ def example_task_id(context: UnitGenerationContext) -> str:
 
     if context.unit_id.startswith("page:"):
         return f"{context.unit_id}::page"
+    if context.unit_kind == "agent":
+        return agent_task_manifest(context)[0]["task_id"]
     if context.unit_id == "frontend:data:static":
         return f"{context.unit_id}::data-module"
     if context.unit_id == "backend:bootstrap":
@@ -259,14 +267,18 @@ def resolve_unit_task_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     """为当前模型 Unit 自动选择完整规则，未知 Unit 不允许以空规则调用模型。"""
 
     frozen = UnitGenerationContext.model_validate(context)
-    if frozen.unit_id.startswith("page:") and frozen.unit_kind == "page":
+    if frozen.unit_kind == "agent":
+        specific = resolve_agent_unit_task_rules(frozen)
+    elif frozen.unit_id.startswith("page:") and frozen.unit_kind == "page":
         specific = _page_rules(frozen)
     elif frozen.unit_id == "frontend:api-client" and frozen.unit_kind == "frontend":
         specific = _frontend_api_rules(frozen)
     elif frozen.unit_id == "frontend:data:static" and frozen.unit_kind == "frontend":
         specific = _frontend_static_rules(frozen)
     elif frozen.unit_kind == "backend":
-        specific = resolve_backend_unit_task_rules(frozen)
+        specific = (resolve_python_unit_task_rules(frozen)
+                    if python_backend_context(frozen.constraints)
+                    else resolve_backend_unit_task_rules(frozen))
     else:
         raise ValueError(
             f"模型 Unit {frozen.unit_id} 没有可用的任务规划规则投影。"

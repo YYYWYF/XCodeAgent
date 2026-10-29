@@ -110,6 +110,17 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
     integration-test phase rather than an owner task.
     """
 
+    def __init__(self, *args, runtime_python_paths: tuple[str, ...] = (), runtime_test_files: bool = False, **kwargs):
+        """保持默认脚本禁写，仅允许平台明确授权的 Runtime Python 源文件。"""
+
+        super().__init__(*args, **kwargs)
+        self._runtime_test_files = runtime_test_files
+        self._runtime_python_paths = frozenset(
+            path for path in runtime_python_paths
+            if path.endswith(".py") and path.startswith(("agent-runtime/src/app/", "agent-runtime/tests/"))
+            and ".." not in path.split("/") and "\\" not in path
+        )
+
     def _resolve_path(self, file_path: str) -> Path:
         """解析虚拟路径，并兼容 Windows 对同一路径返回的扩展前缀形式。"""
 
@@ -152,7 +163,10 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
     def write(self, file_path: str, content: str) -> WriteResult:
         """写入成功且内容变化后，通过公共函数上报 AI 编辑。"""
         # 拦截临时脚本文件：agent 应直接用 execute 工具跑命令，而非写 .sh/.py 脚本。
-        if _blocked_script_extension(file_path):
+        from app.services.python_test_contract import is_runtime_test_path
+        runtime_test = self._runtime_test_files and is_runtime_test_path(file_path)
+        if (_blocked_script_extension(file_path) and not runtime_test
+                and file_path.lstrip("/") not in self._runtime_python_paths):
             return WriteResult(error=_blocked_script_error(file_path))
 
         # Try the original path first (handles new files)

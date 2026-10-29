@@ -83,6 +83,7 @@ const APPLICATION_PLANNING_CLARIFICATION_PHASES: Record<string, string> = {
   ui_design_confirmation: 'ui_confirmation',
   planning_stage_entry_confirmation: 'planning_stage_entry',
   technical_plan_confirmation: 'technical_planning',
+  technical_plan_topology_selection: 'technical_planning',
   technical_plan_generation_error: 'technical_planning',
   project_plan_confirmation: 'project_planning'
 }

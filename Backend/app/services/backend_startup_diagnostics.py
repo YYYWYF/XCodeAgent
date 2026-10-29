@@ -57,6 +57,15 @@ def redact_startup_text(text: str, environment: dict[str, str]) -> str:
         value for key, value in environment.items()
         if value and re.search(r"password|pwd|secret|token|api_?key", key, re.I)
     }
+    # 模型自定义 Header 可使用任意键名，整个 JSON 及各 Header 值均不得进入日志。
+    if environment.get("MODEL_CUSTOM_HEADERS"):
+        import json
+        try:
+            headers = json.loads(environment["MODEL_CUSTOM_HEADERS"])
+            if isinstance(headers, dict):
+                secrets.update(value for value in headers.values() if isinstance(value, str) and value)
+        except ValueError:
+            secrets.add(environment["MODEL_CUSTOM_HEADERS"])
     for secret in sorted(secrets, key=len, reverse=True):
         text = text.replace(secret, "[REDACTED]")
     text = re.sub(

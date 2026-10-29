@@ -16,6 +16,7 @@ import RequirementSpecSummary from './RequirementSpecSummary'
 import RequirementSpecEditor from './RequirementSpecEditor'
 import UiDesignConfirmationPanel from './UiDesignConfirmationPanel'
 import TechnicalPlanSummary from './TechnicalPlanSummary'
+import TechnicalPlanTopologySelector from './TechnicalPlanTopologySelector'
 import PlanningStageEntryCard from '../AiChatPanel/components/WorkflowRunCard/PlanningStageEntryCard'
 import { projectPlanReadingSections } from './ProjectPlanReadingSections'
 import { planningWorkflowClarification } from './planningWorkflowState'
@@ -486,6 +487,7 @@ export default function ApplicationPlanningQuestionPanel({
     'authorization_configuration_conflict',
     'requirement_document_confirmation',
     'technical_plan_confirmation',
+    'technical_plan_topology_selection',
     'technical_plan_generation_error',
     'planning_stage_entry_confirmation',
     'entity_source_binding'
@@ -541,6 +543,20 @@ export default function ApplicationPlanningQuestionPanel({
       },
       requirementDraft,
       feedbackText || undefined
+    )
+  }
+
+  if (clarification.mode === 'technical_plan_topology_selection') {
+    return (
+      <TechnicalPlanTopologySelector
+        key={workflow.runId}
+        disabled={disabled}
+        options={clarification.topologyOptions || []}
+        onSelect={(topologyType) => onSubmit(workflow, {
+          topologyType,
+          __applicationPlanningAction: 'select_topology'
+        })}
+      />
     )
   }
 

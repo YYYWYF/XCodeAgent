@@ -65,6 +65,7 @@ import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
+import TechnicalPlanTopologySelector from '../../../Welcome/TechnicalPlanTopologySelector'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import WorkspaceToolActivity from './WorkspaceToolActivity'
 import DirectModificationScopeReview from './DirectModificationScopeReview'
@@ -259,6 +260,8 @@ export default function WorkflowRunCard({
     ? ARTIFACT_CONFIRMATION_MAP[clarification.mode]
     : undefined
   const technicalPlanGenerationError = clarification?.mode === 'technical_plan_generation_error'
+  // 架构选择没有通用 questions，必须作为独立交互纳入卡片外层渲染条件。
+  const technicalPlanTopologySelection = clarification?.mode === 'technical_plan_topology_selection'
   const planningStageEntry = clarification?.mode === 'planning_stage_entry_confirmation'
   // UI 确认阶段：clarification.mode 或 summary.phase 判定。换一换/选模板期间流式快照
   // 可能短暂丢失 clarification.mode，用 phase=ui_confirmation 兜底，避免卡片闪烁切换。
@@ -439,6 +442,7 @@ export default function WorkflowRunCard({
         !entityDesignReview &&
         !uiDesignConfirmation &&
         !planningStageEntry &&
+        !technicalPlanTopologySelection &&
         !artifactConfirmation &&
         !unitTestConfirmation &&
         !projectLaunch &&
@@ -519,13 +523,14 @@ export default function WorkflowRunCard({
         unitTestConfirmation ||
         detailReview ||
         technicalPlanGenerationError ||
+        technicalPlanTopologySelection ||
         planningStageEntry ||
         dagConfirmation ||
         testPhaseConfirmation ||
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
         <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
-          {!artifactConfirmation && !reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+          {!artifactConfirmation && !reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && !technicalPlanTopologySelection && (
             <div className={cx('workflow-clarification-header')}>
               <div>
                 <Text strong>{staleConfirmation ? '原确认内容' : '待确认事项'}</Text>
@@ -597,6 +602,16 @@ export default function WorkflowRunCard({
                   revision_draft_interaction: interaction
                 })
               }
+            />
+          ) : technicalPlanTopologySelection ? (
+            <TechnicalPlanTopologySelector
+              key={workflow.runId}
+              disabled={disabled || interactionAvailability !== 'active' || !requiresConfirmation}
+              options={clarification?.topologyOptions || []}
+              onSelect={(topologyType) => onSubmitClarification?.(workflow, {
+                topologyType,
+                __applicationPlanningAction: 'select_topology'
+              })}
             />
           ) : planningStageEntry ? (
             <PlanningStageEntryCard

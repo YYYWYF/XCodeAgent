@@ -10,6 +10,7 @@ from app.services.frontend_page_tree import flatten_frontend_pages, is_menu_node
 from app.services.entity_definitions import data_source_type_label, plan_data_sources
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.workspace.spec_documents import workflow_artifact_root
+from app.workspace.runtime_agent_markdown import runtime_agents_markdown
 
 
 def _bullet_items(items: Any) -> str:
@@ -858,6 +859,7 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 
 ## 技术架构
 
+- 应用架构：{(plan.get('topology') or {}).get('type', '尚未选择')}
 - 前端：{architecture.get('frontend', '待补充')}
 - 后端：{architecture.get('backend', '待补充')}
 - 数据：{architecture.get('data', '待补充')}
@@ -873,6 +875,8 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 ## 页面技术引用
 
 {pages or '- 无'}
+
+{('## 智能体七模块设计' + chr(10) + chr(10) + runtime_agents_markdown(plan)) if plan.get('agent_contracts') else ''}
 
 ## 权限资源目录（系统编译，只读）
 

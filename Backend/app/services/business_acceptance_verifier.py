@@ -26,6 +26,14 @@ from app.services.business_acceptance_verifiers.frontend_static_data import (
     verify_static_data_contract_source,
 )
 from app.services.business_acceptance_verifiers.common import read_target_files, verification_result
+from app.services.business_acceptance_verifiers.python_shapes import verify_python_objects
+from app.services.business_acceptance_verifiers.python_endpoint import verify_python_endpoint
+from app.services.business_acceptance_verifiers.python_repository import verify_python_repository
+from app.services.business_acceptance_verifiers.python_service import verify_python_service
+from app.services.business_acceptance_verifiers.python_upstream import verify_python_upstream, verify_python_bootstrap
+from app.services.business_acceptance_verifiers.python_agent import verify_agent_module
+from app.services.business_acceptance_verifiers.python_ast import PythonEvidenceUnavailable
+from app.services.runtime_business_acceptance import RUNTIME_VERIFIER_NAMES
 
 
 Verifier = Callable[..., dict[str, Any]]
@@ -39,6 +47,13 @@ BUSINESS_VERIFIER_REGISTRY: dict[str, Verifier] = {
     "backend.application_service_contract": verify_application_service_source,
     "backend.endpoint_contract": verify_endpoint_source,
     "backend.upstream_contract": verify_upstream_source,
+    "python.objects_contract": verify_python_objects,
+    "python.repository_contract": verify_python_repository,
+    "python.application_service_contract": verify_python_service,
+    "python.endpoint_contract": verify_python_endpoint,
+    "python.upstream_contract": verify_python_upstream,
+    "python.bootstrap_contract": verify_python_bootstrap,
+    "agent.module_contract": verify_agent_module,
 }
 
 
@@ -67,6 +82,11 @@ class BusinessAcceptanceVerifier:
             if isinstance(item, dict)
         ]
         evidence: list[dict[str, Any]] = []
+        runtime_task = ((task.get("source_refs") or {}).get("backend_implementation") == "python_runtime"
+                        or task.get("owner") == "agent")
+        if runtime_task and not checks:
+            evidence.append({"check_id": "runtime:missing_contract", "kind": "runtime.contract", "duration_ms": 0,
+                             **verification_result("blocked", "Runtime 任务缺少平台编译的业务验收项，请重新规划并确认，不能以空检查通过。")})
         for check in checks:
             started_at = monotonic()
             evidence.append(
@@ -170,24 +190,36 @@ class BusinessAcceptanceVerifier:
                     facts={"reason_code": reason_code},
                 ),
             }
-        files, read_errors = read_target_files(check, workspace_root)
+        # Runtime 必须先检查全部路径段的链接，再读取源码；不能先经通用解析读到范围外文件。
+        if kind in RUNTIME_VERIFIER_NAMES:
+            files, read_errors = {}, []
+        else:
+            files, read_errors = read_target_files(check, workspace_root)
         if read_errors:
             return {
                 **base,
                 **verification_result("blocked", "；".join(read_errors)),
             }
         try:
+            expected = deepcopy(check.get("expected") or {})
+            if kind in RUNTIME_VERIFIER_NAMES:
+                from app.services.business_acceptance_verifiers.runtime_support import runtime_verification_files
+
+                files = runtime_verification_files(files, task, check, workspace_root)
+                expected["_target_paths"] = list(check["target_paths"])
             if kind == "frontend.page_endpoint_usage":
                 result = verifier(
                     files,
-                    check.get("expected") if isinstance(check.get("expected"), dict) else {},
+                    expected,
                     dependency_evidence=[*dependency_evidence, *prior_results],
                 )
             else:
                 result = verifier(
                     files,
-                    check.get("expected") if isinstance(check.get("expected"), dict) else {},
+                    expected,
                 )
+        except PythonEvidenceUnavailable as exc:
+            result = verification_result("blocked", str(exc), facts={"reason_code": "python_evidence_unavailable"})
         except Exception as exc:  # noqa: BLE001 - 验收异常必须结构化为 blocked
             result = verification_result(
                 "blocked",
@@ -290,6 +322,20 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
 
     artifact = str(source.get("artifact") or "")
     target_id = str(source.get("target_id") or "")
+    if artifact == "runtime_topology":
+        from app.services.runtime_business_acceptance import topology_facts
+
+        return _stable_hash(topology_facts(formal)) if formal.get("topology") else ""
+    if artifact == "runtime_entity":
+        entity = next((item for item in _formal_items(formal, "entities") if item.get("id") == target_id), None)
+        return _stable_hash(entity) if entity else ""
+    if artifact == "agent_module":
+        from app.services.runtime_agent_module_policy import agent_module_facts
+
+        try:
+            return _stable_hash(agent_module_facts(formal, target_id, str(source.get("pointer") or "").rsplit("/", 1)[-1]))
+        except ValueError:
+            return ""
     if artifact == "api_design":
         design = next(
             (

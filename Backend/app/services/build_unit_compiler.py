@@ -14,6 +14,9 @@ from app.services.authorization_capability_dependency import (
 from app.services.authorization_overlay import unit_authorization_slice
 from app.services.planning_issues import ValidationIssue
 from app.services.page_task_freshness import page_task_input_digest
+from app.services.runtime_business_contract import backend_generation_constraints
+from app.services.runtime_agent_module_policy import module_source_refs
+from app.services.runtime_agent_contracts import agent_contract_index, agent_fact_digest
 
 
 class BuildUnitCompilationError(ValueError):
@@ -104,6 +107,17 @@ def _with_task_unit_metadata(
         **canonical_source_refs,
         **provided_source_refs,
     }
+    if str(task.get("owner") or "") == "backend":
+        # 实现根由正式服务图提供，候选不能提交字段冒充另一种语言的复用证据。
+        source_refs.pop("backend_implementation", None)
+        source_refs.pop("backend_root", None)
+        source_refs.update(backend_generation_constraints(_dict_value(build_context.get("project_plan"))))
+    if unit_id.startswith("agent:"):
+        # 平台重编译模块来源，不信任模型自报的模块、摘要或另一个 Agent 的设置。
+        source_refs = module_source_refs(
+            _dict_value(build_context.get("project_plan")), task,
+            _dict_value(build_context.get("runtime_agent_template_policy")),
+        )
     # 覆盖声明绑定正式页面内容，不能用 Unit 已刷新的元数据替旧任务背书。
     if unit_id.startswith("page:"):
         source_refs["page_input_sha256"] = page_task_input_digest(
@@ -348,6 +362,12 @@ def _unit_source_refs(
     endpoint_designs = _endpoint_design_items(build_context.get("endpoint_designs"))
     source_types = _string_list(build_context.get("source_types"))
     entity_ids = _string_list(build_context.get("entity_ids"))
+    if unit_id.startswith("agent:"):
+        contracts = agent_contract_index(_dict_value(build_context.get("project_plan")))
+        agent_id = unit_id.removeprefix("agent:")
+        return {"type": "agent_contract", "agent_id": agent_id,
+                "agent_contract_sha256": agent_fact_digest(contracts[agent_id]),
+                "template_policy_sha256": _dict_value(build_context.get("runtime_agent_template_policy")).get("policySha256")}
     if unit_id.startswith("page:"):
         descriptions = _dict_items(build_context.get("business_descriptions"))
         return {

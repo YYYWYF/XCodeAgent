@@ -21,6 +21,10 @@ from app.domain.application_planning_recovery import (
 )
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
+from app.services.application_config import read_application_config
+from app.services.technical_plan_topology_selection import (
+    select_technical_plan_topology, topology_selection_payload, validate_selected_topology,
+)
 from app.services.generated_document_inclusion import write_generated_documents
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
@@ -239,6 +243,8 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "timeline": ["technical_planning_generate"],
         }
     candidate = deepcopy(plan)
+    # 模型或上一版产物不得替用户选择本版架构，选择仍沿当前原生审阅门提交。
+    candidate.pop("topology", None)
     candidate_sha256 = application_planning_sha256(candidate)
     return {
         "phase": "technical_planning_generate",
@@ -315,7 +321,7 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         "technical_plan_json_path": json_path,
         "project_plan_path": markdown_path,
         "project_plan_json_path": json_path,
-        "clarification": _planning_confirmation_payload(state, candidate),
+        "clarification": topology_selection_payload(),
         "application_planning_recovery_boundary": _boundary_payload_for_state(
             {**state, "technical_plan": candidate},
             boundary=ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED,
@@ -328,6 +334,25 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
     }
 
 
+def _topology_review_update(state: ProjectState, candidate: dict[str, Any], clarification: dict[str, Any]) -> dict[str, Any]:
+    """保存新的架构审阅版本并回到原生确认门，不推进模板或工作区生命周期。"""
+
+    markdown_path, json_path = commit_technical_plan_document(state, candidate)
+    return {
+        "phase": "technical_planning", "status": "requires_user_input",
+        "technical_plan": candidate, "project_plan": candidate,
+        "technical_plan_path": markdown_path, "technical_plan_json_path": json_path,
+        "project_plan_path": markdown_path, "project_plan_json_path": json_path,
+        "clarification": clarification,
+        "application_planning_interaction": {}, "application_planning_review_route": "",
+        "application_planning_recovery_boundary": _boundary_payload_for_state(
+            {**state, "technical_plan": candidate},
+            boundary=ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED, candidate=candidate,
+        ),
+        "timeline": ["technical_planning_confirm"],
+    }
+
+
 def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     """确认 TechnicalPlan Markdown 并执行既有 continuation/template 收口逻辑。"""
 
@@ -337,6 +362,15 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     plan = state.get("technical_plan")
     if not isinstance(plan, dict) or not plan:
         raise ValueError("TechnicalPlan 正式候选缺失，无法确认。")
+    interaction = state.get("application_planning_interaction") or {}
+    if interaction.get("action") == "select_topology":
+        workspace, _ = _ensure_technical_lifecycle(state)
+        answers = interaction.get("answers") or {}
+        selected = select_technical_plan_topology(plan, str(answers.get("topologyType") or ""), read_application_config(workspace))
+        from app.graph.nodes.planning import _planning_confirmation_payload
+
+        return _topology_review_update(state, selected, _planning_confirmation_payload(state, selected))
+    validate_selected_topology(plan, read_application_config(workspace_from_state(state)))
     from app.graph.nodes.planning import (
         _attach_technical_plan_contracts,
         _project_plan_dependency_error_payload,
@@ -360,9 +394,18 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     )
     confirmed_plan = {
         **apply_project_plan_feedback(synchronized, request),
+        # 隐藏拓扑事实沿服务端当前审阅版本保留，文档同步模型不能替换用户选择。
+        "topology": deepcopy(plan["topology"]),
         "confirmation_status": "confirmed",
     }
     confirmed_plan = _attach_technical_plan_contracts(state, confirmed_plan)
+    # Markdown 同步可能改变业务事实，重新选择与确认应覆盖新的正式版本。
+    try:
+        validate_selected_topology(confirmed_plan, read_application_config(workspace_from_state(state)))
+    except ValueError:
+        pending = {**confirmed_plan, "confirmation_status": "pending_user_confirmation"}
+        pending.pop("topology", None)
+        return _topology_review_update(state, pending, topology_selection_payload())
     validation_errors = _project_plan_validation_errors(confirmed_plan, state)
     if validation_errors:
         operation_id = f"technical-plan-repair-{uuid4().hex}"

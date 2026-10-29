@@ -129,6 +129,7 @@ class WorkspaceBootstrapService:
                     max_files=self._settings.template_package_max_files,
                     max_extracted_bytes=self._settings.template_package_max_extracted_bytes,
                 ),
+                requested_config=requested_config,
             )
             template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             template_mutation_coordinator.enter_commit_section(workspace)
