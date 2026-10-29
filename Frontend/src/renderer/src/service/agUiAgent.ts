@@ -42,7 +42,7 @@ export type SendWorkflowMessageOptions = {
   selectedApiContractId?: string
   selectedEndpointId?: string
   selectedEntityId?: string
-  detailTargetType?: 'page' | 'endpoint' | 'entity'
+  detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
   buildExecutionScope?: WorkflowBuildExecutionScope
   workflowAction?: WorkflowAction
   revisionRequest?: Record<string, unknown>

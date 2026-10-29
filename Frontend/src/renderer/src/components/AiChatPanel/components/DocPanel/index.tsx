@@ -31,6 +31,8 @@ function requirementStatusLabel(spec?: Record<string, unknown>): string {
 }
 
 type Props = {
+  workspaceRoot?: string
+  onAgentSurfaceChanged?: () => void
   content?: string
   title?: string
   generating?: boolean
@@ -46,6 +48,8 @@ type Props = {
 
 /** 右侧产物面板：需求文档与技术规划使用结构化审核视图，其余文档只读展示 Markdown。 */
 export default function DocPanel({
+  workspaceRoot,
+  onAgentSurfaceChanged,
   content,
   title,
   generating,
@@ -137,6 +141,8 @@ export default function DocPanel({
               )
             ) : requirementReady ? (
               <RequirementDocPanel
+                workspaceRoot={workspaceRoot}
+                onChanged={onAgentSurfaceChanged}
                 productPlan={productPlan || {}}
                 spec={requirementSpec || {}}
               />

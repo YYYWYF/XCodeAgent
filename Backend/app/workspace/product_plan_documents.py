@@ -62,6 +62,82 @@ def _action_behavior(item: dict[str, Any]) -> str:
     )
 
 
+def _agent_sections(value: Any) -> list[str]:
+    """把智能体产品契约渲染为可编辑、可确认的 Markdown 章节。"""
+
+    sections: list[str] = []
+    for agent in value if isinstance(value, list) else []:
+        if not isinstance(agent, dict):
+            continue
+        capabilities = [
+            f"- `{item.get('capabilityId', '')}` {item.get('name', '智能体能力')}："
+            f"{item.get('expectedResult', '')}"
+            for item in agent.get("capabilities", [])
+            if isinstance(item, dict)
+        ]
+        surface_labels = {
+            "standalone_page": "独立问答页面",
+            "floating_panel": "悬浮问答面板",
+        }
+        bindings = []
+        for item in agent.get("pageActionBindings", []):
+            if not isinstance(item, dict):
+                continue
+            surface = item.get("surface") if isinstance(item.get("surface"), dict) else {}
+            surface_type = str(surface.get("type") or "")
+            enabled_label = "开启" if surface.get("enabled") is True else "关闭"
+            context_items = "、".join(
+                f"`{item_id}`" for item_id in _text_items(surface.get("contextItemIds"))
+            ) or "无"
+            bindings.append(
+                f"- 页面 `{item.get('pageId', '')}`："
+                f"{'、'.join(f'`{action_id}`' for action_id in _text_items(item.get('actionIds'))) or '无操作'}；"
+                f"载体 {surface_labels.get(surface_type, surface_type or '未声明')}；"
+                f"集成状态 {enabled_label}；"
+                f"页面上下文 {context_items}"
+            )
+        interaction = agent.get("interaction") if isinstance(agent.get("interaction"), dict) else {}
+        states = (
+            interaction.get("stateRequirements")
+            if isinstance(interaction.get("stateRequirements"), dict)
+            else {}
+        )
+        state_lines = [
+            f"- {key}：{states.get(key, '')}"
+            for key in ("loading", "empty", "error", "success", "validation")
+        ]
+        sections.append(
+            "\n".join(
+                [
+                    f"### `{agent.get('agentId', '')}` {agent.get('name', '未命名智能体')}",
+                    "",
+                    f"- 职责：{agent.get('purpose', '')}",
+                    f"- 候选入口页面：{'、'.join(f'`{page_id}`' for page_id in _text_items(agent.get('entryPageIds'))) or '无'}",
+                    f"- 交互方式：{interaction.get('mode', '')}",
+                    f"- 连续多轮：{'支持' if interaction.get('supportsMultiTurn') else '不支持'}",
+                    f"- 输入：{interaction.get('inputDescription', '')}",
+                    f"- 输出：{interaction.get('outputDescription', '')}",
+                    "",
+                    "产品能力：",
+                    *(capabilities or ["- 无"]),
+                    "",
+                    "页面操作绑定：",
+                    *(bindings or ["- 无"]),
+                    "",
+                    "交互状态：",
+                    *state_lines,
+                    "",
+                    "业务边界：",
+                    _bullet_items(agent.get("boundaries")),
+                    "",
+                    "智能体验收标准：",
+                    _bullet_items(agent.get("acceptanceCriteria")),
+                ]
+            )
+        )
+    return sections
+
+
 def render_product_plan_markdown(plan: dict[str, Any]) -> str:
     """把 ProductPlan 渲染成供产品审核的 Markdown 文档。"""
 
@@ -108,6 +184,10 @@ def render_product_plan_markdown(plan: dict[str, Any]) -> str:
             "## 页面与用户操作",
             "",
             *(page_sections or ["- 暂无页面"]),
+            "",
+            "## 智能体产品规划",
+            "",
+            *(_agent_sections(plan.get("agents")) or ["- 暂无智能体"]),
             "",
             "## 产品级验收标准",
             "",

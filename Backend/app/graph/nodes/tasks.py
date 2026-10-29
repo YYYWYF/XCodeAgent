@@ -132,7 +132,7 @@ def _build_prerequisite_errors(
     scope = build_execution_scope if isinstance(build_execution_scope, dict) else {}
     target_type = str(scope.get("type") or "")
     target_id = str(scope.get("targetId") or "")
-    if target_type in {"application", "page", "endpoint"} and target_id:
+    if target_type in {"application", "page", "endpoint", "agent"} and target_id:
         try:
             readiness = api_design_readiness(
                 workspace or "",
@@ -530,7 +530,7 @@ def _build_execution_scope_from_state(state: ProjectState) -> dict[str, str]:
     if isinstance(scope, dict):
         target_type = str(scope.get("type") or "").strip()
         target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
-        if target_type in {"application", "page", "data_source", "endpoint"}:
+        if target_type in {"application", "page", "data_source", "endpoint", "agent"}:
             return {
                 "type": target_type,
                 "targetId": target_id or "application",

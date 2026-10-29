@@ -264,7 +264,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "technicalPlanGenerationError": "technical_plan_generation_error",
         },
         "artifactSchemas": {
-            "product_plan": "product-plan.v5",
+            "product_plan": "product-plan.v8",
             "ui_designs": "ui-manifest.v3",
             "technical_plan": "technical-plan",
         },
@@ -305,6 +305,12 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         ],
         "workspaceGate": "planning-artifacts",
         "mainWorkflowIndependent": True,
+        "agentSettingsRevision": {
+            "requestField": "forwardedProps.agentSettingsRevision",
+            "actions": ["get_agent_settings_revision", "prepare_agent_settings_revision", "confirm_agent_settings_revision", "abandon_agent_settings_revision"],
+            "formalRevision": True, "confirmationRequired": True,
+        },
+        "agentSurfaceSelection": {"requestField": "forwardedProps.agentSurfaceSelection", "actions": ["save"], "draftOnly": True},
         "technicalPlanningConversation": {
             "requestField": "forwardedProps.technicalPlanningConversation",
             "actions": ["classify", "revise"],
@@ -329,6 +335,12 @@ def build_application_page_planning_ag_ui_stream(
         **payload,
         "workflowScope": "application_planning",
     }
+    for kind in ("agentSettingsRevision", "agentSurfaceSelection"):
+        raw = (payload.get("forwardedProps") or {}).get(kind)
+        if raw is not None:
+            from app.protocols.agent_planning_actions import build_agent_planning_action_stream
+
+            return build_agent_planning_action_stream(normalized_payload, raw=raw, kind=kind, accept=accept)
     technical_message = (payload.get("forwardedProps") or {}).get("technicalPlanningConversation")
     if technical_message is not None:
         from app.protocols.technical_planning_conversation import build_technical_planning_conversation_stream

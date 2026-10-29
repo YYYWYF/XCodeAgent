@@ -12,6 +12,7 @@ import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
 import { authorizationDesignView } from './TechnicalPlanAuthorizationData'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
+import TechnicalPlanAgentSection from './TechnicalPlanAgentSection'
 
 type Props = {
   plan: JsonRecord
@@ -35,9 +36,12 @@ export default function TechnicalPlanDocPanel({
   const contracts = recordItems(plan.api_contracts)
   const pages = recordItems(plan.pages)
   const hasAuthorization = Boolean(authorizationDesignView(plan))
-  const sections = hasAuthorization
+  const authorizationSections = hasAuthorization
     ? [...technicalPlanSections, { key: 'authorization' as const, label: '权限' }]
     : technicalPlanSections
+  const sections = recordItems(plan.agent_contracts).length
+    ? [...authorizationSections, { key: 'agents' as const, label: '智能体' }]
+    : authorizationSections
   const [activeSection, setActiveSection] = useState<SectionKey>('api-contracts')
   const resolvedActiveSection = sections.some((section) => section.key === activeSection)
     ? activeSection
@@ -88,6 +92,7 @@ export default function TechnicalPlanDocPanel({
       {resolvedActiveSection === 'architecture' ? (
         <ArchitectureSection architecture={architecture} sectionKey="architecture" />
       ) : null}
+      {resolvedActiveSection === 'agents' ? <TechnicalPlanAgentSection plan={plan} /> : null}
       {resolvedActiveSection === 'entities' ? (
         <EntitiesSection entities={entities} sectionKey="entities" />
       ) : null}

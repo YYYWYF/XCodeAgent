@@ -58,19 +58,24 @@ class RevisionTarget(RevisionModel):
 
     model_config = ConfigDict(extra="allow")
 
-    type: Literal["application", "page", "endpoint"]
+    type: Literal["application", "page", "endpoint", "agent"]
     page_id: str | None = Field(default=None, alias="pageId", max_length=512)
     api_contract_id: str | None = Field(
         default=None,
         alias="apiContractId",
         max_length=512,
     )
+    agent_id: str | None = Field(default=None, alias="agentId", max_length=512)
     endpoint_id: str | None = Field(default=None, alias="endpointId", max_length=512)
 
     @model_validator(mode="after")
     def validate_identifiers(self) -> "RevisionTarget":
         """要求页面和接口目标携带完整稳定标识，禁止模糊目标进入正式流程。"""
 
+        if self.type == "agent" and (not self.agent_id or self.page_id or self.endpoint_id or self.api_contract_id):
+            raise ValueError("智能体修订目标必须且只能提供 agentId。")
+        if self.type != "agent" and self.agent_id:
+            raise ValueError("其他修订目标不能携带 agentId。")
         if self.type == "page" and not str(self.page_id or "").strip():
             raise ValueError("页面修订目标必须提供 pageId。")
         if self.type == "endpoint" and (

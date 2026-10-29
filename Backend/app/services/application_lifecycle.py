@@ -1501,6 +1501,7 @@ def _primary_resource_claim(scope: str, target_id: str) -> ExecutionResourceClai
     resource_type = {
         "page": ExecutionResourceType.PAGE,
         "data_source": ExecutionResourceType.DATA_SOURCE,
+        "agent": ExecutionResourceType.AGENT,
         "endpoint": ExecutionResourceType.ENDPOINT,
     }.get(scope, ExecutionResourceType.APPLICATION)
     return ExecutionResourceClaim(
@@ -1568,6 +1569,7 @@ def _resource_claims_for_run(
         (ExecutionResourceType.ENDPOINT, locks.endpoints),
         (ExecutionResourceType.API_CONTRACT, locks.api_contracts),
         (ExecutionResourceType.DATA_SOURCE, locks.data_sources),
+        (ExecutionResourceType.AGENT, locks.agents),
     )
     if locks.application is not None and locks.application.run_id == run_id:
         claims.append(
@@ -1616,6 +1618,7 @@ def _resource_locks_with_claims(
     endpoints = dict(locks.endpoints)
     api_contracts = dict(locks.api_contracts)
     data_sources = dict(locks.data_sources)
+    agents = dict(locks.agents)
     for claim in claims:
         lock = ExecutionResourceLock(
             runId=run_id,
@@ -1632,6 +1635,8 @@ def _resource_locks_with_claims(
             endpoints[claim.target_id] = lock
         elif claim.type == ExecutionResourceType.API_CONTRACT:
             api_contracts[claim.target_id] = lock
+        elif claim.type == ExecutionResourceType.AGENT:
+            agents[claim.target_id] = lock
         else:
             data_sources[claim.target_id] = lock
     return ExecutionResourceLocks(
@@ -1640,6 +1645,7 @@ def _resource_locks_with_claims(
         endpoints=endpoints,
         apiContracts=api_contracts,
         dataSources=data_sources,
+        agents=agents,
     )
 
 
@@ -1668,6 +1674,7 @@ def _resource_locks_without_run(
             for key, value in locks.api_contracts.items()
             if value.run_id != run_id
         },
+        agents={key: value for key, value in locks.agents.items() if value.run_id != run_id},
         dataSources={
             key: value
             for key, value in locks.data_sources.items()
@@ -1701,6 +1708,7 @@ def _transfer_resource_locks(
             key: transfer(value) for key, value in locks.api_contracts.items()
         },
         dataSources={key: transfer(value) for key, value in locks.data_sources.items()},
+        agents={key: transfer(value) for key, value in locks.agents.items()},
     )
 
 

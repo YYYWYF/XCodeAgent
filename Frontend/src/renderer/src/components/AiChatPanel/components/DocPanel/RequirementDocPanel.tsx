@@ -10,8 +10,11 @@ import {
 } from './RequirementDocSections'
 import type { JsonRecord } from './RequirementDocPanelData'
 import './RequirementDocPanel.less'
+import RequirementAgentSection from './RequirementAgentSection'
 
 type Props = {
+  workspaceRoot?: string
+  onChanged?: () => void
   productPlan: JsonRecord
   spec: JsonRecord
 }
@@ -27,14 +30,18 @@ const requirementDocSections: Array<{ key: RequirementSectionKey; label: string 
 
 /** 渲染右侧需求文档产物视图，所有交互仅改变本面板内的阅读位置。 */
 export default function RequirementDocPanel({
+  workspaceRoot,
+  onChanged,
   productPlan,
   spec
 }: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
+  const hasAgents = (Array.isArray(productPlan.agents) && productPlan.agents.length > 0) || (Array.isArray(spec.agent_requirements) && spec.agent_requirements.length > 0)
+  const sections = hasAgents ? [...requirementDocSections, { key: 'agents' as const, label: '智能体' }] : requirementDocSections
   return (
     <div className={cx('requirement-doc-panel')}>
       <div className={cx('requirement-doc-section-tabs')} role="tablist" aria-label="需求文档章节">
-        {requirementDocSections.map((section) => (
+        {sections.map((section) => (
           <button
             aria-controls={`requirement-doc-panel-${section.key}`}
             aria-selected={activeSection === section.key}
@@ -55,6 +62,7 @@ export default function RequirementDocPanel({
       {activeSection === 'overview' ? (
         <RequirementOverviewSection sectionKey="overview" spec={spec} />
       ) : null}
+      {activeSection === 'agents' && hasAgents ? <RequirementAgentSection spec={spec} productPlan={productPlan} workspaceRoot={workspaceRoot} onChanged={onChanged} /> : null}
       {activeSection === 'pages' ? (
         <RequirementPagesSection productPlan={productPlan} sectionKey="pages" spec={spec} />
       ) : null}

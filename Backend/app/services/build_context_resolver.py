@@ -20,7 +20,7 @@ from app.services.page_identity import page_id_to_page_key
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.services.template_scaffold_injection import prebuilt_files_for_plan
-from app.services.runtime_agent_contracts import agent_contract_index, scoped_agent_ids, page_agent_endpoint_keys
+from app.services.runtime_agent_contracts import agent_contract_index, scoped_agent_ids, page_agent_endpoint_keys, agent_endpoint_keys, agent_fact_digest
 from app.services.agent_runtime_template_policy import load_agent_runtime_template_policy
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import load_project_plan_json
@@ -46,7 +46,7 @@ def resolve_confirmation_context(
         or build_execution_scope.get("target_id")
         or ""
     ).strip()
-    if target_type not in {"page", "endpoint"} or not target_id:
+    if target_type not in {"page", "endpoint", "agent"} or not target_id:
         raise ValueError(f"不支持恢复确认详情的 Build Scope：{target_type or 'unknown'}。")
 
     workspace_root = Path(workspace).expanduser().resolve()
@@ -183,11 +183,19 @@ def resolve_target_build_context(
         context = _page_context(project_plan, target_id, project_plan_path)
     elif target_type == "endpoint":
         context = _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
+    elif target_type == "agent":
+        context = _agent_context(project_plan, target_id, project_plan_path)
     else:
         raise ValueError(f"Unsupported build target type: {target_type}.")
     # 把平台预置的后端骨架文件清单传给 Agent，让它知道哪些文件已存在、只需补业务逻辑。
     context["prebuilt_files"] = prebuilt_files_for_plan(project_plan)
     agent_ids = scoped_agent_ids(project_plan, target_type, target_id)
+    if agent_ids and target_type == "page":
+        from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
+        product = load_project_plan_json(_workspace_root(project_plan_path) / WORKSPACE_ARTIFACT_DIR / "plans/product-plan.json")
+        if product.get("confirmation_status") != "confirmed":
+            raise ValueError("Agent 页面 Build 必须读取已确认 ProductPlan。")
+        context["agent_ui_by_page"] = project_agent_ui_build_contracts(product, project_plan)
     if agent_ids:
         context["required_unit_ids"] = list(dict.fromkeys([
             *context["required_unit_ids"], *(f"agent:{key}" for key in agent_ids),
@@ -197,6 +205,30 @@ def resolve_target_build_context(
         context["runtime_agent_template_policy"] = load_agent_runtime_template_policy(
             _workspace_root(project_plan_path) / "agent-runtime",
         )
+    return context
+
+
+def _agent_context(project_plan: dict[str, Any], agent_id: str,
+                   project_plan_path: str | Path | None) -> dict[str, Any]:
+    """只加载当前智能体及其 Tool 依赖，不扩大为绑定页面或其他智能体的开发。"""
+
+    contract = agent_contract_index(project_plan).get(agent_id)
+    if contract is None:
+        raise ValueError(f"当前技术规划不包含智能体：{agent_id}。")
+    dependencies = [_endpoint_context(project_plan, endpoint_id, contract_id, project_plan_path)
+                    for contract_id, endpoint_id in agent_endpoint_keys(contract)]
+    context: dict[str, Any] = {"target": {"type": "agent", "id": agent_id},
+                               "agent_contract": contract, "contract_hash": agent_fact_digest(contract),
+                               "source_refs": {"agent_id": agent_id}}
+    for key in ("direct_endpoint_contracts", "endpoint_ids", "required_endpoint_ids", "entity_ids",
+                "endpoint_designs", "mapping_flows", "business_descriptions", "source_types", "required_unit_ids"):
+        context[key] = []
+        for dependency in dependencies:
+            for item in dependency.get(key, []):
+                if item not in context[key]:
+                    context[key].append(item)
+    # 独立 Agent 不生成前端模块，Tool 实现沿原 Backend Endpoint Units 进入同一确认计划。
+    context["required_unit_ids"] = [key for key in context["required_unit_ids"] if not key.startswith("frontend:")]
     return context
 
 

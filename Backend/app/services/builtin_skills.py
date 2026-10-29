@@ -15,6 +15,7 @@ REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
 SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME = "springboot-backend-generate"
 FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME = "frontend-static-data-generate"
+AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME = "agent-ui-surface-template"
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
 FRONTEND_CODE_SCAN_SKILL_NAME = "frontend-code-scan"
 BACKEND_CODE_SCAN_SKILL_NAME = "backend-code-scan"
@@ -56,6 +57,7 @@ _SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES = [
 ]
 
 REQUIRED_BUILTIN_SKILL_FILES = {
+    AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME: ["SKILL.md", "references/ui-design-stage.md", "references/frontend-mock-stage.md", "references/ag-ui-integration-stage.md"],
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
     SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME: [

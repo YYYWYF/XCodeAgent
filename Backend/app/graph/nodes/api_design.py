@@ -37,19 +37,22 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         raise ApiDesignError("缺少工作区或已确认 TechnicalPlan，无法检查 API 设计。")
     action = state.get("api_design_gate_action")
     action = action if isinstance(action, dict) else {}
+    scope = state.get("build_execution_scope") or {}
     state_target_type = (
-        "endpoint" if str(state.get("selected_endpoint_id") or "").strip()
+        "agent" if scope.get("type") == "agent"
+        else "endpoint" if str(state.get("selected_endpoint_id") or "").strip()
         else "page" if str(state.get("selectedPageId") or "").strip()
         else "application"
     )
     state_target_id = (
-        str(state.get("selected_endpoint_id") or "").strip()
+        str(scope.get("targetId") or "") if state_target_type == "agent"
+        else str(state.get("selected_endpoint_id") or "").strip()
         if state_target_type == "endpoint"
         else "application" if state_target_type == "application"
         else str(state.get("selectedPageId") or "").strip()
     )
     action_target_type = str(action.get("targetType") or "").strip()
-    target_type = action_target_type if action_target_type in {"application", "page", "endpoint"} else (
+    target_type = action_target_type if action_target_type in {"application", "page", "endpoint", "agent"} else (
         state_target_type
     )
     target_id = str(action.get("targetId") or "").strip() or state_target_id
@@ -150,6 +153,9 @@ def _development_target_label(
 ) -> str:
     """读取开发目标展示名称，缺失时回退到稳定 ID。"""
 
+    if target_type == "agent":
+        from app.services.runtime_agent_contracts import agent_contract_index
+        return agent_contract_index(project_plan)[target_id]["name"]
     if target_type == "application":
         return "整个应用"
     if target_type == "page":

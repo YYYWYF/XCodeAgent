@@ -392,6 +392,7 @@ def _validate_technical_plan(
         product_plan,
         ui_designs,
     )
+    from app.services.runtime_agent_settings import validate_technical_plan_agent_contracts
     errors = [
         *validate_project_plan_dependencies(runtime),
         *validate_api_contract_consistency(runtime),
@@ -399,6 +400,7 @@ def _validate_technical_plan(
         *validate_technical_plan_api_contracts(artifact),
         *validate_entity_display_language(artifact, builtin=uses_builtin_database(application)),
         *validate_page_implementation_contracts(artifact, product_plan, ui_designs),
+        *validate_technical_plan_agent_contracts(artifact, product_plan),
     ]
     if errors:
         raise ValueError("TechnicalPlan revision 校验失败：" + "；".join(errors[:12]))

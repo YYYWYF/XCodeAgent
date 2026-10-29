@@ -23,6 +23,7 @@ export function workflowDevelopmentTarget(
   const scope = workflow.summary.buildExecutionScope
   const target = workflowClarification(workflow)?.testTarget || workflow.summary.testTarget
   const label = target?.label || ''
+  if (scope?.type === 'agent' && scope.targetId) return { type: 'agent', agentId: scope.targetId, label: label || scope.targetId }
   if (scope?.type === 'page' && scope.targetId) {
     return { type: 'page', pageId: scope.targetId, label: label || scope.targetId }
   }
@@ -68,6 +69,7 @@ export function latestDevelopmentTarget(
 /** 把页面或 Endpoint 目标转换为快捷任务中的稳定身份。 */
 export function developmentTargetTaskId(target?: ChatSessionDevelopmentTarget): string | undefined {
   if (!target) return undefined
+  if (target.type === 'agent') return `agent:${target.agentId}`
   return target.type === 'page'
     ? `page:${target.pageId}`
     : `endpoint:${target.apiContractId}:${target.endpointId}`
@@ -177,7 +179,9 @@ export function developmentNextStep(
     const target = workflowDevelopmentTarget(workflow)
     if (!target) return undefined
     const progress =
-      target.type === 'page'
+      target.type === 'agent'
+        ? lifecycle?.developmentArtifacts?.agents?.[target.agentId]
+        : target.type === 'page'
         ? lifecycle?.developmentArtifacts?.pages[target.pageId]
         : lifecycle?.developmentArtifacts?.endpoints[target.apiContractId]?.[target.endpointId]
     const phase = workflow.summary.phase || workflow.result?.phase

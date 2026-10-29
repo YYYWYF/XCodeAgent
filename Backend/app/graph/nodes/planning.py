@@ -274,6 +274,8 @@ def _technical_plan_contract_errors(
         return ["TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。"]
     requirement_spec = state.get("requirement_spec")
     errors = validate_page_implementation_contracts(plan, product_plan, ui_designs)
+    from app.services.runtime_agent_settings import validate_technical_plan_agent_contracts
+    errors.extend(validate_technical_plan_agent_contracts(plan, product_plan))
     if isinstance(requirement_spec, dict):
         report = authorization_deliverability_report(
             plan.get("authorization_manifest"),

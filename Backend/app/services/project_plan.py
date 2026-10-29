@@ -1879,6 +1879,11 @@ def create_technical_plan(
         from app.services.runtime_agent_contracts import agent_contract_index
         plan["agent_contracts"] = deepcopy(agent_plan["agent_contracts"])
         agent_contract_index(plan, require_runtime=False)
+    from app.services.runtime_agent_settings import validate_technical_plan_agent_contracts
+    product_plan = spec.get("confirmed_product_plan")
+    errors = validate_technical_plan_agent_contracts(plan, product_plan) if isinstance(product_plan, dict) else []
+    if errors:
+        raise ValueError("；".join(errors))
     repaired, _ = repair_cross_contract_schema_refs(plan)
     return repaired
 

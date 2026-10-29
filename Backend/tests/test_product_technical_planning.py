@@ -166,7 +166,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
 
         page = product_plan["pages"][0]
-        self.assertEqual(product_plan["schema_version"], "product-plan.v5")
+        self.assertEqual(product_plan["schema_version"], "product-plan.v8")
         self.assertNotIn("frontend_pages", product_plan)
         self.assertEqual(page["information_items"][0]["itemId"], "inventory-summary")
         self.assertIsInstance(page["information_items"][0], dict)
@@ -1385,7 +1385,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         )
         self.assertEqual(
             set(example),
-            {"app", "business_flows", "pages", "product_acceptance_criteria"},
+            {"app", "agents", "business_flows", "pages", "product_acceptance_criteria"},
         )
         self.assertNotIn("frontend_pages", example)
 

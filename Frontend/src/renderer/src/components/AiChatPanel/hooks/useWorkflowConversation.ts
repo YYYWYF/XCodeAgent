@@ -324,6 +324,7 @@ type UseWorkflowConversationResult = {
     },
     reuseCurrentSession?: boolean
   ) => Promise<boolean>
+  handleStartAgentDevelopment: (agentId: string, label: string) => Promise<boolean>
   handleStartEndpointDevelopment: (target: {
     apiContractId?: string
     endpointId: string
@@ -1210,7 +1211,7 @@ export function useWorkflowConversation({
       selectedEntityId?: string
       selectedEntityLabel?: string
       endpointLabel?: string
-      detailTargetType?: 'page' | 'endpoint' | 'entity'
+      detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
       sessionIdentity?: SessionIdentity
       pageTemplate?: {
         id?: string
@@ -2434,6 +2435,18 @@ export function useWorkflowConversation({
     })
   }
 
+  /** 在通用历史会话中以独立线程启动当前智能体，范围由正式 Agent ID 绑定。 */
+  const handleStartAgentDevelopment = async (agentId: string, label: string): Promise<boolean> => {
+    if (!agentId || loading || workspaceBusy) return false
+    const identity = await ensureDevelopmentSession({ type: 'agent', agentId, label })
+    if (identity.workbenchPhase !== 'development') return false
+    return sendWorkflowMessage(`开始开发智能体：${label}`, {
+      conversation: false, executionThreadId: randomUUID(), sessionIdentity: identity,
+      selectedPageId: '', selectedApiContractId: '', selectedEndpointId: '',
+      buildExecutionScope: { type: 'agent', targetId: agentId }, titleFrom: `开发智能体：${label}`
+    })
+  }
+
   /** 以用户选择的具体 endpoint 作为开发就绪检查起点。 */
   const handleStartEndpointDevelopment = async (target: {
     apiContractId?: string
@@ -2703,6 +2716,7 @@ export function useWorkflowConversation({
     handleProductStageConversation,
     handleResumePlan,
     handleSend,
+    handleStartAgentDevelopment,
     handleStartEndpointDevelopment,
     handleStartEntityDetailConfirmation,
     handleStartDetailConfirmation,
