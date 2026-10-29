@@ -14,6 +14,8 @@ from threading import Lock
 from typing import Any
 
 from app.utils.subprocess_output import subprocess_output_text
+from app.services.backend_launch_support import _backend_runtime_environment
+from app.services.database_credentials import DatabaseCredentialError
 from app.services.workspace_process_registry import workspace_process_registry
 
 
@@ -101,6 +103,13 @@ def run_authorization_bootstrap(
         command, error = _command_for_workspace(root)
         if error:
             return _failed_result(fingerprint, "template_contract_invalid", error)
+        try:
+            environment = _bootstrap_environment(root)
+        except DatabaseCredentialError:
+            return _failed_result(
+                fingerprint, "database_configuration_invalid",
+                "权限数据库初始化无法解析当前应用的数据库连接，请检查工作台数据源配置。",
+            )
         runtime_root.mkdir(parents=True, exist_ok=True)
         started = time.monotonic()
         try:
@@ -108,7 +117,7 @@ def run_authorization_bootstrap(
                 command,
                 workspace=root,
                 cwd=root,
-                env=_bootstrap_environment(),
+                env=environment,
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=AUTHORIZATION_BOOTSTRAP_TIMEOUT_SECONDS,
@@ -193,14 +202,18 @@ def _command_for_workspace(root: Path) -> tuple[list[str], str | None]:
     return command, None
 
 
-def _bootstrap_environment() -> dict[str, str]:
-    """隔离宿主数据库变量，避免其他应用连接配置泄漏到当前项目。"""
+def _bootstrap_environment(root: Path) -> dict[str, str]:
+    """隔离宿主连接后，复用 Java 启动器解析并注入当前应用数据库凭据。"""
 
-    blocked_prefixes = ("DB_", "MYSQL_", "SPRING_DATASOURCE_")
+    environment, error = _backend_runtime_environment(root)
+    if error or not environment.get("SPRING_DATASOURCE_URL"):
+        # 初始化会产生数据库副作用，缺少连接时不能沿用模板默认值继续执行。
+        raise DatabaseCredentialError("权限初始化缺少有效的当前应用数据库连接。")
+    # 保留原有 DB_* 隔离；MYSQL_* 和 SPRING_DATASOURCE_* 已由启动器清理并重建。
     return {
         key: value
-        for key, value in os.environ.items()
-        if not key.upper().startswith(blocked_prefixes)
+        for key, value in environment.items()
+        if not key.upper().startswith("DB_")
     }
 
 

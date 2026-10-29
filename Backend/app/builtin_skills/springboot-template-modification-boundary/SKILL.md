@@ -69,7 +69,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 - 业务模块包名固定为 `com.cmbchina.backend.<module>`，`<module>` 取业务实体名的小写驼峰（如 `project`、`orderItem`）。
 - DDD 分层固定为：`domain/entity` → `infrastructure/po` → `infrastructure/mapper` → `domain/repository` → `infrastructure/repository/impl` + `infrastructure/repository/converter` → `application/dto` + `application/assembler` + `application/service` → `adapter/web`。
 - 框架骨架文件（启动类、公共模块、auth 模块、配置）**禁止修改**。
-- **预置代码**：平台在进入开发阶段前已根据 TechnicalPlan 确定性生成了部分骨架文件（Entity/PO/Mapper/Repository/DTO/Controller 声明），Agent 只需补充业务逻辑，不要重新生成这些文件。
+- **业务文件**：二次修改的 Template Reconcile 不提前生成业务 Java 文件。按已确认任务与 `allowed_paths/change_scope` 创建或最小修改当前职责文件。
 
 ## 文件修改边界总览
 
@@ -128,7 +128,7 @@ description: 后端 Spring Boot 模板工程文件修改边界规范（后端 sk
 
 ## 🟢 自由编写与 DDD 分层放置规则
 
-新增业务模块的代码在 `src/main/java/com/cmbchina/backend/<module>/` 下按 DDD 分层新建文件。**每个业务实体对应一个模块**，模块内分层目录如下：
+新增业务代码在 `src/main/java/com/cmbchina/backend/<module>/` 下按 DDD 分层放置。同一模块可包含多个实体；以下是按当前 Endpoint 职责选择的参考结构，不要求每个实体生成全部文件。数据库场景按确认操作及映射生成持久层；纯外部 API 场景不生成无关的 PO、Mapper、Repository。
 
 ### 领域实体：`domain/entity/<Entity>.java`
 
@@ -174,36 +174,19 @@ MapStruct `@Mapper(componentModel = "spring")` 接口，Entity ↔ PO 互转。
 
 `@RestController` + `@RequiredArgsConstructor` + `@RequestMapping("/api/<module>s")`，注入 ApplicationService，声明 REST 端点，返回 `ResponseEntity<T>`。
 
-## 预置代码说明（重要）
+## 业务文件创建与复用
 
-平台在**进入开发阶段前**已根据已确认的 TechnicalPlan，确定性生成了以下骨架文件：
+Backend Agent 只能按已批准的 Endpoint Task 与 `allowed_paths/change_scope` 创建或最小修改当前职责文件。执行前读取真实文件、相邻实现及 WorkspaceSnapshot：已有且满足契约则复用，缺失且本任务授权创建则生成，已存在但不满足则按约束修正，保留无关实现。路径存在本身不代表功能已满足。
 
-| 文件 | 预置内容 | Agent 需补充 |
-| --- | --- | --- |
-| `domain/entity/<Entity>.java` | 全部字段 + `@Data` | 无（已完整） |
-| `infrastructure/po/<Entity>PO.java` | `@TableName` + 全部字段注解 + 审计字段 | 无（已完整） |
-| `infrastructure/mapper/<Entity>Mapper.java` | `extends BaseMapper` + `@Mapper` | 需要时加自定义方法 |
-| `resources/mapper/<module>/<Entity>Mapper.xml` | namespace 声明的占位文件 | 达到自定义 SQL 门槛时才加语句，否则保持不变 |
-| `domain/repository/<Entity>Repository.java` | CRUD 方法签名 | 需要时加自定义方法 |
-| `infrastructure/repository/impl/<Entity>RepositoryImpl.java` | BaseMapper 调用实现 | 需要时加自定义实现 |
-| `infrastructure/repository/converter/<Entity>Converter.java` | MapStruct Entity↔PO | 无（已完整） |
-| `application/dto/<Entity>DTO.java` | 字段 + `@Data` | 需要时加校验注解 |
-| `adapter/web/<Entity>Controller.java` | 端点声明 + service 调用 | 补业务校验、补 service 方法体 |
+不得因为 TechnicalPlan 包含某实体就批量创建该实体全部 DDD 文件。真正由模板交付的 Base/Extension 文件仍遵守模板受管边界，不能将业务目录中的既有文件当作可覆盖的生成产物。
 
-**Agent 读取任务 `prebuilt_files` 字段**确认哪些文件已预置。对已预置的文件：
-- ✅ 只补充缺失的业务逻辑（service 方法体、controller 参数校验、自定义 SQL）
-- ✅ 只追加缺失的方法，不改已有方法签名
-- ❌ 不重新生成整个文件
-- ❌ 不改已有字段、注解、方法签名
-- ❌ 不删除已有内容
-
-如果预置文件已完整满足契约，返回 `already_satisfied`，不要做任何修改。
+只有当前任务契约已被实际实现完整满足时，才返回 `already_satisfied`。
 
 ## 生成后端代码的标准流程
 
-当需要为某个业务实体生成具体代码时，按以下步骤：
+根据当前 Endpoint 的数据源与阶段职责选择以下步骤；不跨任务生成其他层文件：
 
-1. **读取预置文件**：检查 `prebuilt_files` 列出的文件是否已存在且完整。
+1. **读取真实工程**：检查 WorkspaceSnapshot、当前文件和相邻实现，核对任务授权路径及 add/modify 分类。
 2. **补充 Repository 自定义方法**（如需）：在接口加方法签名，在 Impl 加实现。
 3. **实现持久化调用**：普通单表 CRUD、条件查询、排序、模糊查询、`IN` 和分页直接使用 `BaseMapper` + Lambda Wrapper，并保持 Mapper XML 为占位；只有达到上述自定义 SQL 门槛时才在 Mapper 接口和 XML 中补充方法与语句。
 4. **编写 ApplicationService 方法体**：补充 CRUD 方法体内的业务编排逻辑、校验、事务。
@@ -221,7 +204,7 @@ MapStruct `@Mapper(componentModel = "spring")` 接口，Entity ↔ PO 互转。
 - ❌ 修改 `common/` 下的任何文件（ResponseEntity/BizException/PageParam/MybatisPlusConfiguration 等）
 - ❌ 修改 `auth/` 下的任何已有文件（Controller/Service/Entity/PO/Mapper/Repository 等）
 - ❌ 修改 `resources/mapper/auth/` 下的已有 XML
-- ❌ 重新生成或覆盖已预置的文件（只补充缺失部分）
+- ❌ 因 TechnicalPlan 的实体清单批量重建业务文件，或覆盖与当前任务无关的已有实现
 - ❌ 在业务模块里重复定义 ResponseEntity/BizException/PageParam/PageResult
 - ❌ 使用 Java 9+ 语法（`record`、`var`、`List.of`、text blocks、`String.isBlank`）
 
@@ -243,4 +226,4 @@ Backend task 不自动安装依赖。即使任务被标记为 repair，依赖缺
 ## 与其他技能的关系
 
 - **springboot-backend-generate**：提供后端数据源实现规范（database/external_api 的 bootstrap 和 layer-implementation），本技能是后端模板工程特有的文件边界约束。
-- 生成后端代码时，**先遵守本技能的文件边界与预置代码规则**，再按 `springboot-backend-generate` 的规范编写具体实现。
+- 生成后端代码时，**先遵守本技能的文件边界与业务文件创建/复用规则**，再按 `springboot-backend-generate` 的规范编写具体实现。

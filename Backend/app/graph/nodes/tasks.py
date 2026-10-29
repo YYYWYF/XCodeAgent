@@ -24,7 +24,6 @@ from app.services.application_build_context import application_endpoint_context
 from app.services.build_task_confirmation import (
     build_task_confirmation_read_model,
 )
-from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.services.api_design import api_design_readiness
 from app.services.application_config import read_application_config
 from app.services.build_task_planner import tasks_from_build_task_plan
@@ -582,7 +581,6 @@ def _resolve_build_context(
         "direct_endpoint_contracts": [],
         "required_unit_ids": list((build_task_plan.get("build_units") or {}).keys()),
         **application_endpoint_context(workspace_root(state), project_plan),
-        "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }
 
 

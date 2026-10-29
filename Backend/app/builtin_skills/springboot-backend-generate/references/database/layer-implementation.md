@@ -40,9 +40,9 @@ configuration work here.
   conditional single/list queries, count, pagination, sorting, fuzzy matching, and `IN`
   predicates. Express their conditions with `LambdaQueryWrapper` or
   `LambdaUpdateWrapper`; do not declare a custom Mapper method or XML statement for them.
-- Keep the namespace-only Mapper XML placeholder created by the platform, even when no
-  custom statement is needed. Its existence is not evidence that custom SQL should be
-  added.
+- Create or reuse the namespace-only Mapper XML placeholder when the approved repository
+  task authorizes that file, even when no custom statement is needed. Its existence is not
+  evidence that custom SQL should be added.
 - Use a custom Mapper method and XML statement only when the confirmed endpoint concretely
   requires a join, aggregation/grouping, `UNION`, subquery, window function,
   database-specific SQL, or a documented performance-sensitive query that `BaseMapper`
@@ -107,8 +107,8 @@ callable from `RepositoryImpl`.
 
 ### Repository
 
-- Extend `BaseMapper<PO>` from the Mapper. Keep the platform-created namespace-only Mapper
-  XML as a placeholder, but leave it unchanged unless the endpoint meets the custom-SQL
+- Extend `BaseMapper<PO>` from the Mapper. Create or reuse the authorized namespace-only
+  Mapper XML placeholder, but add statements only when the endpoint meets the custom-SQL
   threshold above.
 - Call `selectById`, `selectOne`, `selectList`, `selectCount`, `selectPage`, `insert`,
   `updateById`, `update`, `deleteById`, or `delete` as appropriate instead of redeclaring

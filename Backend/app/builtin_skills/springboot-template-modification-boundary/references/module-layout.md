@@ -1,6 +1,6 @@
-# 新增业务模块完整目录结构
+# 业务模块参考目录结构
 
-本文件给大模型展示一个完整业务模块的目录布局，以 `project` 模块为例。平台在进入开发阶段前已确定性生成标注 ✅ 的文件，Agent 只需补充标注 🟡 的部分。
+本文件以 `project` 模块展示参考目录布局，不代表工作区已创建这些业务文件。仅按当前 Endpoint Task 与授权路径生成或复用所需文件，不按实体批量生成全部层。数据库场景按确认操作与映射选择持久层；纯外部 API 场景不强制生成 PO、Mapper、Repository。包名、路径与接口以确认的 Endpoint 契约及真实工作区为准。
 
 ## 完整目录树
 
@@ -34,42 +34,42 @@ backend/
 │   │   │   │   ├── domain/
 │   │   │   │   └── infrastructure/
 │   │   │   │
-│   │   │   └── project/                      🟢 业务模块（自由编写）
+│   │   │   └── project/                      🟢 业务模块（按任务授权）
 │   │   │       ├── domain/
 │   │   │       │   ├── entity/
-│   │   │       │   │   └── Project.java              ✅ 预置（字段完整）
+│   │   │       │   │   └── Project.java              按需生成或复用
 │   │   │       │   ├── repository/
-│   │   │       │   │   └── ProjectRepository.java   ✅ 预置（CRUD 方法签名）
+│   │   │       │   │   └── ProjectRepository.java   按需生成或复用
 │   │   │       │   └── exception/
-│   │   │       │       └── ProjectErrorCode.java    🟡 Agent 补充（错误码）
+│   │   │       │       └── ProjectErrorCode.java    按需生成或复用
 │   │   │       ├── infrastructure/
 │   │   │       │   ├── po/
-│   │   │       │   │   └── ProjectPO.java            ✅ 预置（注解完整）
+│   │   │       │   │   └── ProjectPO.java            按需生成或复用
 │   │   │       │   ├── mapper/
-│   │   │       │   │   └── ProjectMapper.java        ✅ 预置（BaseMapper）
+│   │   │       │   │   └── ProjectMapper.java        按需生成或复用
 │   │   │       │   └── repository/
 │   │   │       │       ├── impl/
-│   │   │       │       │   └── ProjectRepositoryImpl.java  ✅ 预置（BaseMapper 调用）
+│   │   │       │       │   └── ProjectRepositoryImpl.java  按需生成或复用
 │   │   │       │       └── converter/
-│   │   │       │           └── ProjectConverter.java      ✅ 预置（MapStruct）
+│   │   │       │           └── ProjectConverter.java      按需生成或复用
 │   │   │       ├── application/
 │   │   │       │   ├── dto/
-│   │   │       │   │   ├── ProjectDTO.java           ✅ 预置（字段）
-│   │   │       │   │   ├── ProjectUpsertDTO.java     ✅ 预置（字段）
-│   │   │       │   │   └── ProjectStatusDTO.java     ✅ 预置（字段）
+│   │   │       │   │   ├── ProjectDTO.java           按需生成或复用
+│   │   │       │   │   ├── ProjectUpsertDTO.java     按需生成或复用
+│   │   │       │   │   └── ProjectStatusDTO.java     按需生成或复用
 │   │   │       │   ├── assembler/
-│   │   │       │   │   └── ProjectAssembler.java     🟡 Agent 补充（DTO↔Entity 转换）
+│   │   │       │   │   └── ProjectAssembler.java     按需生成或复用
 │   │   │       │   └── service/
-│   │   │       │       └── ProjectApplicationService.java  🟡 Agent 补充（方法体）
+│   │   │       │       └── ProjectApplicationService.java  按需生成或复用
 │   │   │       └── adapter/web/
-│   │   │           └── ProjectController.java       ✅ 预置（端点声明）+ 🟡 Agent 补充（校验）
+│   │   │           └── ProjectController.java       按需生成或复用
 │   │   │
 │   │   └── resources/
 │   │       ├── application.yml               🔴 禁止修改
 │   │       └── mapper/
 │   │           ├── auth/                     🔴 禁止修改（已有 XML）
 │   │           └── project/                  🟢 业务模块
-│   │               └── ProjectMapper.xml          ✅ 预置（namespace）+ 🟡 Agent 补充（自定义 SQL）
+│   │               └── ProjectMapper.xml          按需生成或复用
 │   │
 │   └── test/java/com/cmbchina/backend/       🟡 Agent 按需补充测试
 │
@@ -121,21 +121,21 @@ infrastructure/repository/impl + infrastructure/mapper + infrastructure/po + inf
 
 ## 新增模块的文件清单
 
-每新增一个业务实体，需要（平台预置 + Agent 补充）以下文件：
+下表是可选文件职责参考，不是每个实体的强制产物清单。仅在当前 Endpoint 需要且任务授权时创建；已有实现按真实内容复用或最小修订。
 
-| # | 文件 | 预置/补充 | 说明 |
+| # | 文件 | 创建条件 | 说明 |
 | --- | --- | --- | --- |
-| 1 | `domain/entity/<Entity>.java` | ✅ 预置 | 领域实体 |
-| 2 | `infrastructure/po/<Entity>PO.java` | ✅ 预置 | 持久化对象 |
-| 3 | `infrastructure/mapper/<Entity>Mapper.java` | ✅ 预置 | Mapper 接口 |
-| 4 | `resources/mapper/<module>/<Entity>Mapper.xml` | ✅ 预置 | Mapper XML |
-| 5 | `domain/repository/<Entity>Repository.java` | ✅ 预置 | 仓储接口 |
-| 6 | `infrastructure/repository/impl/<Entity>RepositoryImpl.java` | ✅ 预置 | 仓储实现 |
-| 7 | `infrastructure/repository/converter/<Entity>Converter.java` | ✅ 预置 | PO 转换器 |
-| 8 | `application/dto/<Entity>DTO.java` | ✅ 预置 | 响应 DTO |
-| 9 | `application/dto/<Entity>UpsertDTO.java` | ✅ 预置 | 请求 DTO |
-| 10 | `application/dto/<Entity>StatusDTO.java` | ✅ 预置（如有状态操作） | 状态变更 DTO |
-| 11 | `application/assembler/<Entity>Assembler.java` | 🟡 Agent | DTO↔Entity 转换 |
-| 12 | `application/service/<Entity>ApplicationService.java` | 🟡 Agent | 应用服务（方法体） |
-| 13 | `adapter/web/<Entity>Controller.java` | ✅ 预置 + 🟡 Agent | Controller（端点+校验） |
-| 14 | `domain/exception/<Entity>ErrorCode.java` | 🟡 Agent | 错误码（按需） |
+| 1 | `domain/entity/<Entity>.java` | 当前任务需要 | 领域实体 |
+| 2 | `infrastructure/po/<Entity>PO.java` | 数据库职责需要 | 持久化对象 |
+| 3 | `infrastructure/mapper/<Entity>Mapper.java` | 数据库职责需要 | Mapper 接口 |
+| 4 | `resources/mapper/<module>/<Entity>Mapper.xml` | 数据库职责需要 | Mapper XML |
+| 5 | `domain/repository/<Entity>Repository.java` | 数据库职责需要 | 仓储接口 |
+| 6 | `infrastructure/repository/impl/<Entity>RepositoryImpl.java` | 数据库职责需要 | 仓储实现 |
+| 7 | `infrastructure/repository/converter/<Entity>Converter.java` | 数据库职责需要 | PO 转换器 |
+| 8 | `application/dto/<Entity>DTO.java` | 响应契约需要 | 响应 DTO |
+| 9 | `application/dto/<Entity>UpsertDTO.java` | 请求契约需要 | 请求 DTO |
+| 10 | `application/dto/<Entity>StatusDTO.java` | 状态操作契约需要 | 状态变更 DTO |
+| 11 | `application/assembler/<Entity>Assembler.java` | 当前任务需要 | DTO↔Entity 转换 |
+| 12 | `application/service/<Entity>ApplicationService.java` | 当前任务需要 | 应用服务 |
+| 13 | `adapter/web/<Entity>Controller.java` | 当前端点需要 | Controller（端点+校验） |
+| 14 | `domain/exception/<Entity>ErrorCode.java` | 当前任务需要 | 错误码 |

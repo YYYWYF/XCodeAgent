@@ -65,10 +65,6 @@ from app.services.template_reconcile.template_preparation import (
 )
 from app.services.execution_failure_classifier import classify_execution_failure
 from app.services.application_planning_generation_lifecycle import ensure_generation_running
-from app.services.template_scaffold_injection import (
-    inject_deterministic_backend_skeleton,
-)
-from app.workspace.plan_documents import technical_plan_json_path
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.workflow_reentry import workflow_entry
 from app.graph.nodes.application_technical_planning import (
@@ -516,11 +512,6 @@ def _reconcile_confirmed_revision(state: ProjectState) -> dict:
         )
         # 该节点只读取 canonical TechnicalPlan；确认节点已在前一 checkpoint 提交完成。
         _reconcile_revision_template_capabilities(workspace, active_revision.change_id)
-        _template_reconcile_progress(
-            workspace,
-            "模板能力已更新，正在生成后端骨架并校验工作区。",
-        )
-        _inject_revision_backend_skeleton(workspace, state, strict=True)
         token, issued = issue_revision_continuation(
             workspace,
             change_id=active_revision.change_id,
@@ -753,7 +744,7 @@ def _workspace(state: ProjectState) -> str:
 
 
 def _reconcile_revision_template_capabilities(workspace: str, change_id: str) -> None:
-    """在二次 TechnicalPlan 确认后、Skeleton 前执行一次受开关保护的模板能力补充。"""
+    """在二次 TechnicalPlan 确认后、续接签发前执行模板能力收敛。"""
 
     settings = Settings.from_env()
     plan_path = Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
@@ -765,7 +756,7 @@ def _reconcile_revision_template_capabilities(workspace: str, change_id: str) ->
     if not claim.acquired:
         raise ApplicationLifecycleConflictError("Template Reconcile 已在执行或等待后续收口，不能重复触发。")
     # V4 Ensure 只以 application.json Desired 和 template-state.json Applied 决定是否调用引擎。
-    # 因而 Skeleton 失败后的重试会得到 NO_CHANGE，不会重放 Capability 安装。
+    # 因而能力安装完成后收口失败的重试会得到 NO_CHANGE，不会重放 Capability 安装。
     asyncio.run(TemplateReconcileService(settings).reconcile_capabilities(workspace))
 
 
@@ -789,40 +780,6 @@ def _sync_design_revision_artifact(
         remaining_artifacts=remaining_artifacts,
     )
     return load_application_lifecycle(workspace) or lifecycle
-
-
-def _inject_revision_backend_skeleton(
-    workspace: str,
-    state: dict[str, Any],
-    *,
-    strict: bool = False,
-) -> None:
-    """二次修改确认 TechnicalPlan 后，仅注入确定性的后端骨架。
-
-    只在模板工程已存在时注入（首次创建由 Workspace Bootstrap 完成，不在此注入）。
-    旧流程注入失败不阻断主流程；当 `strict=True`（模板能力 Reconcile 已成功）时，
-    必须把失败上抛，使同一 changeId 可从已完成 Reconcile 结果重试。
-
-    前端页面、菜单、路由及权限资源均由确认 Build DAG 在页面任务完成后投影；
-    这里不得预创建或重写它们。后端骨架从 TechnicalPlan 的 entities 推导
-    Entity/PO/Mapper/Repository/DTO/Controller，并保持幂等。
-    """
-
-    try:
-        plan_path = technical_plan_json_path(state)
-        if not plan_path.is_file():
-            return
-        import json
-        with plan_path.open(encoding="utf-8") as handle:
-            technical_plan = json.load(handle)
-        if not isinstance(technical_plan, dict):
-            return
-        # 后端确定性注入：Entity/PO/Mapper/Repository/DTO/Controller 骨架
-        inject_deterministic_backend_skeleton(workspace, technical_plan)
-    except Exception:
-        # 后端骨架是优化项，失败不阻断二次修改主流程；Agent 仍可补生成。
-        if strict:
-            raise
 
 
 def build_application_planning_graph(*, checkpointer):

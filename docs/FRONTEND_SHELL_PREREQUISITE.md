@@ -92,7 +92,7 @@ Task 依赖隔离、workspace revision 缺失、ready=false 且 errors 为空、
 # R-PLAN
 .venv/bin/python -m unittest tests.test_build_task_planner tests.test_build_unit_skeleton tests.test_prepare_build_tasks_guard tests.test_build_dag_v3_contract tests.test_page_build_context_resolver
 # R-TEMPLATE
-.venv/bin/python -m unittest tests.test_application_template_generation tests.test_template_scaffold_injection tests.test_generation_workspace_paths
+.venv/bin/python -m unittest tests.test_application_template_generation tests.test_generation_workspace_paths
 # 新增测试与直接前置、正式门禁回归
 .venv/bin/python -m unittest tests.test_frontend_shell_prerequisite tests.test_confirmed_build_task_plan_loader tests.test_build_task_reuse tests.test_build_task_reuse_workspace tests.test_unit_generation_requirements tests.test_unit_generation_requirements_auth tests.test_dag_planning_baseline tests.test_dag_planning_baseline_gates
 ```

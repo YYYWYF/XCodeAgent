@@ -1,6 +1,6 @@
 # DTO + Assembler 模板
 
-本文件给大模型提供后端应用层 DTO 和 Assembler 的标准代码模板。平台已根据 TechnicalPlan 确定性生成 DTO 字段，Agent 只需在需要时补充校验注解和 Assembler 转换逻辑。
+本文件提供应用层 DTO 和 Assembler 的参考模板。Agent 根据已确认 Endpoint 请求/响应 Schema，在当前任务授权路径内生成或复用 DTO、校验注解和转换逻辑，不假定任何业务文件已经存在。
 
 ## 响应 DTO
 
