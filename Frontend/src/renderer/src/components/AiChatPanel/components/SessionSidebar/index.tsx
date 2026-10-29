@@ -27,6 +27,7 @@ import FreeChatHistory from './FreeChatHistory'
 import TemporaryChatOverlay from '../TemporaryChatOverlay'
 import { useTemporaryChats } from './useTemporaryChats'
 import './SessionSidebar.less'
+import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 
 const COLLAPSED_SIDEBAR_WIDTH = 68
 const DEFAULT_SIDEBAR_WIDTH = 300
@@ -50,6 +51,9 @@ function SidebarAssetIcon({ source }: SidebarAssetIconProps): ReactElement {
 }
 
 type SessionSidebarProps = {
+  agents?: BusinessAgentOption[]
+  onAgentSelect?: (agent: BusinessAgentOption | undefined) => void
+  selectedAgentId?: string
   activeSessionId?: string
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
@@ -106,6 +110,9 @@ type SessionSidebarProps = {
 
 /** 组织工作台左侧快捷入口，并在非折叠模式下复用应用大纲。 */
 export default function SessionSidebar({
+  agents,
+  onAgentSelect,
+  selectedAgentId,
   activeSessionId,
   apiContracts = [],
   deletingSessionId,
@@ -419,6 +426,9 @@ export default function SessionSidebar({
 
         {!effectiveCollapsed ? (
           <ApplicationOutline
+            agents={agents}
+            onAgentSelect={onAgentSelect}
+            selectedAgentId={selectedAgentId}
             currentBranch={currentBranch}
             apiContracts={apiContracts}
             entities={entities}

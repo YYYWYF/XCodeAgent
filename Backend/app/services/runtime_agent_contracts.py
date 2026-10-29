@@ -106,6 +106,10 @@ def scoped_agent_ids(plan: Mapping[str, Any], target_type: str, target_id: str) 
     contracts = agent_contract_index(plan)
     if target_type == "application":
         return tuple(contracts)
+    if target_type == "agent":
+        if target_id not in contracts:
+            raise ValueError(f"当前技术规划不包含智能体：{target_id}。")
+        return (target_id,)
     if target_type == "page":
         return tuple(key for key, contract in contracts.items() if target_id in contract["pageIds"])
     return ()

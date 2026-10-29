@@ -37,7 +37,7 @@ class TelemetryIdentity(OptionalTelemetryModel):
 class TelemetryTarget(OptionalTelemetryModel):
     """描述当前开发目标。"""
 
-    type: Literal["application", "page", "endpoint", "entity"] | None = None
+    type: Literal["application", "page", "endpoint", "entity", "agent"] | None = None
     id: str | None = None
     api_contract_id: str | None = None
 

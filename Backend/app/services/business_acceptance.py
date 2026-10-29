@@ -19,6 +19,7 @@ from app.services.runtime_business_acceptance import RUNTIME_VERIFIER_NAMES, com
 
 BUSINESS_ACCEPTANCE_KINDS = (
     "frontend.api_contract",
+    "frontend.agent_ui_mock_contract",
     "frontend.page_endpoint_usage",
     "frontend.static_data_contract",
     "backend.objects_contract",
@@ -31,6 +32,7 @@ BUSINESS_ACCEPTANCE_KINDS = (
 
 BUSINESS_VERIFIER_NAMES = {
     "frontend.api_contract": "frontend_api_contract",
+    "frontend.agent_ui_mock_contract": "frontend_agent_ui_mock_contract",
     "frontend.page_endpoint_usage": "frontend_page_endpoint_usage",
     "frontend.static_data_contract": "frontend_static_data_contract",
     "backend.objects_contract": "backend_objects_contract",
@@ -398,13 +400,29 @@ def _checks_for_deliverable(
             )
         ] if endpoints else []
     if kind == "frontend.page":
-        required = _required_endpoint_ids(formal)
-        if not required:
-            return []
+        agent_ui = _dict_value(_dict_value(formal.get("source_refs")).get("agent_ui"))
+        mock_exempt = set(_string_list(agent_ui.get("mockExemptEndpointIds")))
+        required = [
+            endpoint_id
+            for endpoint_id in _required_endpoint_ids(formal)
+            if endpoint_id not in mock_exempt
+        ]
         endpoints = [item for item in _endpoint_expectations(formal) if item.get("endpoint_id") in required]
         sources = _page_sources(formal, endpoints)
-        return [
-            _business_check(
+        checks: list[dict[str, Any]] = []
+        if agent_ui:
+            checks.append(
+                _business_check(
+                    task,
+                    deliverable,
+                    "frontend.agent_ui_mock_contract",
+                    "Agent 页面必须组合平台固定组件、精确配置和默认 Mock Adapter，且不得直连网络。",
+                    [*sources, _agent_ui_source(agent_ui)],
+                    {"agent_ui": agent_ui},
+                )
+            )
+        if required:
+            checks.append(_business_check(
                 task,
                 deliverable,
                 "frontend.page_endpoint_usage",
@@ -415,8 +433,8 @@ def _checks_for_deliverable(
                     "required_endpoint_ids": required,
                     "endpoints": endpoints,
                 },
-            )
-        ]
+            ))
+        return checks
     if kind == "frontend.static_data_module":
         entity = _primary_entity(formal)
         if not entity:
@@ -1278,6 +1296,18 @@ def _page_sources(formal: dict[str, Any], endpoints: list[dict[str, Any]]) -> li
     return sources + _api_sources(formal, endpoints)
 
 
+def _agent_ui_source(agent_ui: dict[str, Any]) -> dict[str, Any]:
+    """为平台编译的逐页 Agent UI 合同生成独立正式来源引用。"""
+
+    page_id = _text(agent_ui.get("pageId"))
+    return _source(
+        "agent_ui_build_contract",
+        page_id,
+        f"/product_plan/pages/{page_id}/agent_ui",
+        agent_ui,
+    )
+
+
 def _endpoint_detail_sources(formal: dict[str, Any]) -> list[dict[str, Any]]:
     """为当前 Endpoint API 设计生成正式来源引用。"""
 
@@ -1320,6 +1350,7 @@ def _expected_field_errors(check_id: str, kind: str, value: Any) -> list[str]:
     expected = _dict_value(value)
     required_fields = {
         "frontend.api_contract": ("endpoints",),
+        "frontend.agent_ui_mock_contract": ("agent_ui",),
         "frontend.page_endpoint_usage": ("required_endpoint_ids",),
         "frontend.static_data_contract": ("entity", "endpoints", "operations"),
         "backend.objects_contract": ("entities", "endpoints"),

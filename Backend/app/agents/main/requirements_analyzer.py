@@ -537,7 +537,11 @@ def _requirements_prompt(
         "The latest request contains answers to a previous clarification turn. Treat these answers as "
         "the user's confirmation for the asked dimensions. Merge them into a complete RequirementSpec "
         "now. Do not call ask_user again for the same dimensions, and do not ask optional 'any other "
-        "roles/pages/features' questions. Omit optional details that remain unspecified.\n"
+        "roles/pages/features' questions. If the previous pending question was the business-agent "
+        "suitability check, treat an affirmative answer as explicit permission to derive the proposed "
+        "product-level agent requirement from the confirmed application context; treat a negative answer "
+        "as a decision to keep agent_requirements empty. In both cases, do not ask the suitability question "
+        "again. Omit optional details that remain unspecified.\n"
         if existing_spec
         and existing_spec.get("confirmation_status") == "pending_user_input"
         else ""
@@ -595,6 +599,45 @@ def _requirements_prompt(
         "Databases, persistence, API contracts, schemas, and storage choices are technical "
         "planning concerns. Do not ask the product user about them, do not expose them for confirmation, "
         "and do not include data_sources in the returned RequirementSpec.\n"
+        "Business-agent requirements are user-facing AI assistants or autonomous task capabilities that the "
+        "user explicitly requests or explicitly accepts after an agent suitability check. Interpret intent from "
+        "the meaning of the full request and context; distinguish a stated business need from an explicit "
+        "request to include AI functionality. When the user has not "
+        "explicitly requested, accepted, or declined a business agent, perform that agent suitability check before "
+        "defaulting agent_requirements to an empty array. A plausible business-agent role grounded in the "
+        "application's stated business tasks is sufficient to suggest one. Do not require material value beyond "
+        "deterministic pages or fixed workflows, complex reasoning, multi-turn conversation, or cross-feature "
+        "execution. Ordinary business workflows are also eligible for a suggestion. Keep the proposed role within "
+        "the stated business scope and permissions; do not invent unrelated capabilities. If the application "
+        "is suitable, call ask_user with one focused yesno question that names a "
+        "concrete proposed agent role, explains the user-visible value in this application, and asks whether to "
+        "integrate it. This agent suitability check is an explicit exception to the all-five-required-fields return "
+        "rule, but it remains inside the same clarification-round limit and should be included in the current "
+        "ask_user call alongside any other required questions. Do not add an agent_requirements item until the user "
+        "accepts. If the user declines, return agent_requirements=[] and do not ask the suitability question again. "
+        "If the user explicitly requested or accepted an agent, populate agent_requirements without asking a generic "
+        "suitability question. If no plausible business-agent role is grounded in the stated business tasks, "
+        "return agent_requirements=[] without asking. Always return agent_requirements as an array. "
+        "Every agent_requirements item must contain exactly agentId, name, purpose, capabilities, entryPageIds, "
+        "interactionMode, and boundaries. agentId must be unique lower_snake_case. capabilities must contain the "
+        "explicit user-facing abilities. entryPageIds must include every page that is eligible to visibly expose "
+        "this agent, whether conversation is the page's main purpose or the agent may open from a launcher on an "
+        "ordinary business page, and every id must reference pages[].pageId. Pages omitted from entryPageIds remain "
+        "ordinary pages without an Agent entry. When the request names specific entry pages, include exactly those "
+        "applicable pages. "
+        "When the request says 'all pages' or 'other pages', limit 'all pages' or 'other pages' to pages used by the "
+        "agent's stated user roles and include every eligible page. Do not attach the agent to administrator-only, "
+        "system, or unrelated-role pages unless the user explicitly includes them. If the requested page-wide scope "
+        "conflicts with the agent's stated roles or boundaries, ask one focused clarification question instead of "
+        "attaching the agent broadly. An empty entryPageIds means that no visible page exposes the agent; use [] only "
+        "for an explicitly requested application-wide agent with no page entry, never as shorthand for all pages. "
+        "RequirementSpec records only these stable eligible page ids; the later ProductPlan decides each page's "
+        "Agent surface, defaults eligible surfaces to enabled, and lets the user disable eligible floating panels "
+        "before confirmation. A disabled floating panel does not turn unrelated page behavior into Agent behavior. "
+        "interactionMode describes the requested product interaction, such "
+        "as conversation. boundaries records explicit read/write or business-scope limits and may be empty. This is "
+        "still a product-requirements boundary: never put a model, model id, prompt, API endpoint, tool, skill, "
+        "knowledge source, storage choice, implementation class, or code path in agent_requirements.\n"
         f"{clarification_policy}"
         f"{followup_policy}"
         "When asking, questions can be choice, text, or yesno. For every choice question, first decide "
@@ -603,10 +646,12 @@ def _requirements_prompt(
         "do not turn their combinations into several single-choice options. Set multiSelect=false only "
         "for genuine either-or decisions. After calling ask_user, do not invent answers and do not "
         "continue planning until the user answers.\n"
-        "If the requirement is clear, do not call ask_user. Return only one complete JSON object "
+        "If the requirement is clear and no required clarification or agent suitability question remains, "
+        "do not call ask_user. Return only one complete JSON object "
         "without markdown fences or commentary. The JSON must contain exactly these top-level fields: "
         "version, status, generated_at, app_info, user_roles, feature_modules, pages, business_flows, "
-        "authentication_requirements, authorization_requirements. Do not include any other field. "
+        "authentication_requirements, agent_requirements, authorization_requirements. "
+        "Do not include any other field. "
         "app_info MUST include non-empty name and summary. Use summary as the only application-summary field; "
         "the field is named summary, not description. "
         "Do not return assumptions, product risks, or acceptance_criteria. "
@@ -909,6 +954,7 @@ def _validate_complete_requirement_spec(
             "feature_modules",
             "pages",
             "business_flows",
+            "agent_requirements",
         )
         if not isinstance(agent_spec.get(field_name), list)
     ]
@@ -946,8 +992,75 @@ def _validate_complete_requirement_spec(
         for field_name in ("restrictedPages", "restrictedOperations"):
             if not isinstance(authorization.get(field_name), list):
                 missing_fields.append(f"authorization_requirements.{field_name}")
+    agent_requirements = agent_spec.get("agent_requirements")
+    page_ids = {
+        str(page.get("pageId") or "").strip()
+        for page in agent_spec.get("pages", [])
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    }
+    agent_ids: set[str] = set()
+    expected_agent_fields = {
+        "agentId",
+        "name",
+        "purpose",
+        "capabilities",
+        "entryPageIds",
+        "interactionMode",
+        "boundaries",
+    }
+    if isinstance(agent_requirements, list):
+        for index, agent in enumerate(agent_requirements):
+            field_prefix = f"agent_requirements[{index}]"
+            if not isinstance(agent, dict) or set(agent) != expected_agent_fields:
+                missing_fields.append(f"{field_prefix}(complete-fields)")
+                continue
+            agent_id = str(agent.get("agentId") or "").strip()
+            if not _LOWER_SNAKE_CASE_PATTERN.fullmatch(agent_id):
+                missing_fields.append(f"{field_prefix}.agentId(lower_snake_case)")
+            elif agent_id in agent_ids:
+                missing_fields.append(f"{field_prefix}.agentId(unique)")
+            else:
+                agent_ids.add(agent_id)
+            for field_name in ("name", "purpose", "interactionMode"):
+                if not str(agent.get(field_name) or "").strip():
+                    missing_fields.append(f"{field_prefix}.{field_name}")
+            capabilities = agent.get("capabilities")
+            if not isinstance(capabilities, list) or not _string_list(capabilities):
+                missing_fields.append(f"{field_prefix}.capabilities(non-empty)")
+            entry_page_ids = agent.get("entryPageIds")
+            if not isinstance(entry_page_ids, list):
+                missing_fields.append(f"{field_prefix}.entryPageIds")
+            elif set(_string_list(entry_page_ids)) - page_ids:
+                missing_fields.append(f"{field_prefix}.entryPageIds(page-reference)")
+            if not isinstance(agent.get("boundaries"), list):
+                missing_fields.append(f"{field_prefix}.boundaries")
     if missing_fields:
         raise ValueError(
             "需求 AI 返回的新 RequirementSpec 缺少完整字段："
             + "、".join(missing_fields)
         )
+
+
+def _normalize_optional_agent_requirement_fields(
+    agent_spec: dict[str, Any],
+) -> dict[str, Any]:
+    """规范化可无损解释的智能体边界，同时保留其他字段的严格校验。"""
+
+    normalized = deepcopy(agent_spec)
+    agent_requirements = normalized.get("agent_requirements")
+    if not isinstance(agent_requirements, list):
+        return normalized
+    for agent in agent_requirements:
+        if not isinstance(agent, dict):
+            continue
+        boundaries = agent.get("boundaries")
+        if boundaries is None:
+            # boundaries 的空数组有明确契约语义，不需要模型或产品侧发明业务事实。
+            agent["boundaries"] = []
+        elif isinstance(boundaries, str):
+            # 单个字符串仍是明确的一条业务边界，无损收敛到正式数组契约。
+            normalized_boundary = boundaries.strip()
+            agent["boundaries"] = (
+                [normalized_boundary] if normalized_boundary else []
+            )
+    return normalized

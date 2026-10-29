@@ -22,10 +22,12 @@ import type { ApplicationPlanningCurrentState } from '../../service/activeApplic
 import { cx } from '../../utils'
 import AiChatPanel from '../AiChatPanel'
 import './LeftPanel.less'
+import type { BusinessAgentOption } from '../../../../shared/businessAgent'
 
 const { Sider } = Layout
 
 type Props = {
+  developmentPlanningAgents: BusinessAgentOption[]
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
@@ -96,6 +98,7 @@ export default function LeftPanel({
   developmentPlanningReady,
   developmentPlanningPages,
   developmentPlanningPageTree,
+  developmentPlanningAgents,
   developmentPlanningApiContracts,
   developmentPlanningEntities,
   editorMode,
@@ -136,6 +139,7 @@ export default function LeftPanel({
             developmentPlanningReady={developmentPlanningReady}
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
+            developmentPlanningAgents={developmentPlanningAgents}
             developmentPlanningApiContracts={developmentPlanningApiContracts}
             developmentPlanningEntities={developmentPlanningEntities}
             editorMode={editorMode}

@@ -44,7 +44,7 @@ def scoped_formal_targets(plan: dict, scope: Mapping) -> tuple[dict[str, dict], 
         fail_requirement_input("FORMAL_GENERATION_INPUT_UNCONFIRMED", "生成职责必须来自已确认的正式 TechnicalPlan。")
     scope_type = scope.get("type")
     target_id = exact_id(scope.get("targetId"), "BuildExecutionScope.targetId")
-    if scope_type not in {"application", "page", "endpoint"}:
+    if scope_type not in {"application", "page", "endpoint", "agent"}:
         fail_requirement_input("GENERATION_SCOPE_UNSUPPORTED", "当前生成职责仅支持 application/page/endpoint Scope。")
     pages = object_index(plan.get("page_implementation_contracts", []), "pageId", "PageImplementationContract")
     contracts = object_index(plan.get("api_contracts", []), "id", "API Contract")
@@ -62,6 +62,13 @@ def scoped_formal_targets(plan: dict, scope: Mapping) -> tuple[dict[str, dict], 
         if key not in endpoints:
             fail_requirement_input("FORMAL_GENERATION_TARGET_MISSING", f"正式目录缺少 Endpoint {key}。")
         return {}, {key: endpoints[key]}
+    if scope_type == "agent":
+        from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
+
+        contract = agent_contract_index(plan).get(target_id)
+        if contract is None:
+            fail_requirement_input("FORMAL_GENERATION_TARGET_MISSING", f"正式目录缺少智能体 {target_id}。")
+        return {}, {key: endpoints[key] for key in agent_endpoint_keys(contract)}
     if target_id not in pages:
         fail_requirement_input("FORMAL_GENERATION_TARGET_MISSING", f"正式目录缺少页面实现契约 {target_id}。")
     required_endpoints = pages[target_id].get("requiredEndpointIds")

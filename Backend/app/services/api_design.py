@@ -1580,6 +1580,14 @@ def _target_endpoints(
         ]
     if target_type == "endpoint":
         return [find_endpoint(project_plan, str(api_contract_id or ""), target_id)]
+    if target_type == "agent":
+        from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
+
+        agent = agent_contract_index(project_plan).get(target_id)
+        if agent is None:
+            raise ApiDesignError(f"TechnicalPlan 不包含智能体：{target_id}。")
+        return [find_endpoint(project_plan, contract_id, endpoint_id)
+                for contract_id, endpoint_id in agent_endpoint_keys(agent)]
     if target_type != "page":
         raise ApiDesignError(f"不支持的开发目标类型：{target_type}。")
     page = next(

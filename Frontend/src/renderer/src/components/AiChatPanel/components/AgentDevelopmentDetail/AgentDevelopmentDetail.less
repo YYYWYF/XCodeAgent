@@ -1,0 +1,84 @@
+.@{class-prefix}-agent-development-detail {
+  padding: 20px;
+  overflow-wrap: anywhere;
+  .ant-alert {
+    margin-bottom: 12px;
+  }
+  .ant-descriptions-item-content {
+    white-space: pre-wrap;
+  }
+}
+
+.@{class-prefix}-agent-development-detail,
+.@{class-prefix}-agent-review-section,
+.@{class-prefix}-agent-settings-modal {
+  color: var(--wb-text);
+  .ant-card,
+  .ant-modal-content,
+  .ant-modal-header,
+  .ant-descriptions-view,
+  .ant-input,
+  .ant-input-number {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+    border-color: var(--wb-border);
+  }
+  .ant-card-head,
+  .ant-modal-title,
+  .ant-modal-close,
+  .ant-form-item-label > label,
+  .ant-typography,
+  .ant-descriptions-item-content,
+  .ant-tabs-tab-btn,
+  .ant-input-number-input {
+    color: var(--wb-text);
+  }
+  .ant-card-head,
+  .ant-modal-footer,
+  .ant-descriptions-bordered .ant-descriptions-item-content,
+  .ant-descriptions-bordered .ant-descriptions-item-label,
+  .ant-descriptions-bordered .ant-descriptions-row {
+    border-color: var(--wb-border);
+  }
+  .ant-descriptions-item-label {
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+  }
+  .ant-tabs-tab-active .ant-tabs-tab-btn {
+    color: var(--wb-accent);
+  }
+  .ant-tabs-ink-bar,
+  .ant-switch-checked {
+    background: var(--wb-accent);
+  }
+  .ant-tabs-top > .ant-tabs-nav::before {
+    border-color: var(--wb-border);
+  }
+  .ant-input:focus,
+  .ant-input:hover,
+  .ant-input-number-focused,
+  .ant-input-number:hover {
+    border-color: var(--wb-accent-border);
+  }
+  .ant-btn:not(.ant-btn-primary) {
+    color: var(--wb-text);
+    background: var(--wb-control);
+    border-color: var(--wb-border);
+    &:hover,
+    &:focus-visible {
+      color: var(--wb-accent);
+      border-color: var(--wb-accent-border);
+    }
+  }
+  .ant-alert {
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+    .ant-alert-message,
+    .ant-alert-description {
+      color: var(--wb-text);
+    }
+  }
+  .ant-card {
+    margin-bottom: 12px;
+  }
+}

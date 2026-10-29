@@ -11,6 +11,7 @@ type ArtifactSelection = {
   apiContractId?: string
   endpointId?: string
   entityId?: string
+  agentId?: string
 }
 
 type Options = {
@@ -28,6 +29,8 @@ type DevelopmentArtifactDetail = {
     | 'onPageSelect'
     | 'onApiEndpointSelect'
     | 'onEntitySelect'
+    | 'onAgentSelect'
+    | 'selectedAgentId'
     | 'selectedPageId'
     | 'selectedApiEndpointKey'
     | 'selectedEntityId'
@@ -71,6 +74,12 @@ export function useDevelopmentArtifactDetail({
     openDetail({ entityId: entity.id, label: entity.label })
   }
 
+  /** 智能体浏览绑定当前应用，与页面/API 使用同一互斥选择，不复用上一应用的选择。 */
+  const onAgentSelect: NonNullable<ApplicationOutlineProps['onAgentSelect']> = (agent) => {
+    if (agent) openDetail({ agentId: agent.agentId, label: agent.label })
+    else setSelection(undefined)
+  }
+
   return {
     artifactDetailLabel: currentSelection?.label,
     apiTarget: currentSelection?.apiContractId && currentSelection.endpointId
@@ -80,6 +89,8 @@ export function useDevelopmentArtifactDetail({
       onPageSelect,
       onApiEndpointSelect,
       onEntitySelect,
+      onAgentSelect,
+      selectedAgentId: currentSelection?.agentId,
       selectedPageId: currentSelection?.pageId || '',
       selectedApiEndpointKey: currentSelection?.endpointKey || '',
       selectedEntityId: currentSelection?.entityId || ''

@@ -15,7 +15,8 @@ class DevelopmentArtifactModel(BaseModel):
 class DevelopmentArtifactTarget(DevelopmentArtifactModel):
     """用稳定标识绑定唯一产物，禁止索引和展示路径替代身份。"""
 
-    type: Literal["page", "endpoint", "entity"]
+    type: Literal["page", "endpoint", "entity", "agent"]
+    agent_id: str | None = Field(default=None, alias="agentId", min_length=1)
     entity_id: str | None = Field(default=None, alias="entityId", min_length=1)
     page_id: str | None = Field(default=None, alias="pageId", min_length=1)
     api_contract_id: str | None = Field(default=None, alias="apiContractId", min_length=1)
@@ -25,6 +26,12 @@ class DevelopmentArtifactTarget(DevelopmentArtifactModel):
     def validate_identity(self) -> "DevelopmentArtifactTarget":
         """确保三类目标只能携带各自完整的标识。"""
 
+        if self.type == "agent":
+            if not self.agent_id or self.entity_id or self.page_id or self.api_contract_id or self.endpoint_id:
+                raise ValueError("智能体目标必须且只能提供 agentId。")
+            return self
+        if self.agent_id:
+            raise ValueError("其他开发目标不能携带 agentId。")
         if self.type == "entity":
             if not self.entity_id or self.page_id or self.api_contract_id or self.endpoint_id:
                 raise ValueError("实体开发目标必须且只能提供 entityId。")
@@ -98,6 +105,7 @@ class EntityDevelopmentProgress(DevelopmentArtifactModel):
 class DevelopmentArtifacts(DevelopmentArtifactModel):
     """保存当前已确认目录及其开发状态；目录错误时禁止测试。"""
 
+    agents: dict[str, DevelopmentArtifactProgress] = Field(default_factory=dict)
     pages: dict[str, DevelopmentArtifactProgress] = Field(default_factory=dict)
     entities: dict[str, EntityDevelopmentProgress] = Field(default_factory=dict)
     endpoints: dict[str, dict[str, DevelopmentArtifactProgress]] = Field(default_factory=dict)

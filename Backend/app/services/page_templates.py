@@ -6,6 +6,11 @@ import json
 import sys
 from pathlib import Path
 
+from app.services.ui_design_agent_template import (
+    AGENT_UI_TEMPLATE_MODULE,
+    AGENT_UI_TEMPLATE_VERSION,
+    component_for_surface,
+)
 from app.workspace.spec_documents import REPOSITORY_ROOT
 
 
@@ -51,8 +56,8 @@ def validate_page_templates(root: Path | None = None) -> Path:
     return templates_dir
 
 
-def load_template_source(template_id: str) -> str:
-    """按 manifest.id 读取模板 TSX，供页面设计稿生成使用。"""
+def load_template_source(template_id: str, *, surface_type: str | None = None) -> str:
+    """按 manifest.id 读取模板，并在调用方提供 Surface 时校验兼容性。"""
 
     template_id = str(template_id or "").strip()
     if not template_id:
@@ -73,6 +78,35 @@ def load_template_source(template_id: str) -> str:
             continue
         if str(manifest.get("id") or "").strip() != template_id:
             continue
+        if surface_type is not None:
+            category = str(manifest.get("category") or "").strip()
+            supported_surfaces = manifest.get("supportedSurfaces")
+            expected_category = "agent" if surface_type == "standalone_page" else "business"
+            if (
+                surface_type not in {"standard_page", "floating_panel", "standalone_page"}
+                or category not in {"business", "agent"}
+                or category != expected_category
+                or not isinstance(supported_surfaces, list)
+                or surface_type not in supported_surfaces
+            ):
+                raise ValueError(
+                    f"load_template_source: 模板 {template_id} 与页面 Surface "
+                    f"{surface_type or 'missing'} 不兼容。"
+                )
+            agent_ui = manifest.get("agentUi")
+            if category == "agent" and (
+                not isinstance(agent_ui, dict)
+                or agent_ui.get("module") != AGENT_UI_TEMPLATE_MODULE
+                or agent_ui.get("component") != component_for_surface(surface_type)
+                or agent_ui.get("version") != AGENT_UI_TEMPLATE_VERSION
+            ):
+                raise ValueError(
+                    f"load_template_source: Agent 模板 {template_id} 缺少当前固定组件证据。"
+                )
+            if category == "business" and agent_ui is not None:
+                raise ValueError(
+                    f"load_template_source: 业务模板 {template_id} 不得声明 Agent UI 固定组件。"
+                )
         index_path = entry / "index.tsx"
         if not index_path.is_file():
             raise ValueError(

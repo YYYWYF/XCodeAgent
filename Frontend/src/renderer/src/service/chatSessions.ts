@@ -36,6 +36,7 @@ export type ChatSessionMessage = {
 };
 
 export type ChatSessionDevelopmentTarget =
+  | { type: 'agent'; agentId: string; label: string }
   | {
       type: 'page';
       pageId: string;
@@ -504,6 +505,10 @@ export function normalizeDevelopmentTarget(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const target = value as Record<string, unknown>
   const label = typeof target.label === 'string' ? target.label.trim() : ''
+  if (target.type === 'agent') {
+    const agentId = typeof target.agentId === 'string' ? target.agentId.trim() : ''
+    return agentId && label ? { type: 'agent', agentId, label } : undefined
+  }
   if (target.type === 'page') {
     const pageId = typeof target.pageId === 'string' ? target.pageId.trim() : ''
     return pageId && label ? { type: 'page', pageId, label } : undefined
@@ -526,6 +531,7 @@ function sameDevelopmentTarget(
 ): boolean {
   if (!left || !right) return !left && !right
   if (left.type !== right.type) return false
+  if (left.type === 'agent') return right.type === 'agent' && left.agentId === right.agentId
   return left.type === 'page'
     ? right.type === 'page' && left.pageId === right.pageId
     : right.type === 'endpoint' &&

@@ -1,3 +1,5 @@
+import { projectWorkbenchAgents } from './agentPlanningArtifactProjection'
+import type { BusinessAgentOption } from '../shared/businessAgent'
 import { stopProjectPreviewViaAgUi } from './projectPreviewControl'
 import { cancelStartupUpdate, focusStartupUpdate, runStartupUpdate } from './appUpdate/window'
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray, nativeImage } from 'electron'
@@ -580,6 +582,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   pages: WorkbenchPageOption[]
   pageTree: WorkbenchPageTreeNode[]
   apiContracts: WorkbenchApiContract[]
+  agents: BusinessAgentOption[]
   entities: WorkbenchEntityOption[]
 }> {
   const artifactRoot = path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME)
@@ -690,6 +693,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     pages,
     pageTree: mergeWorkbenchPageTreeStatus(pageTree, pagesById),
     apiContracts,
+    agents: productPlan && technicalPlan ? projectWorkbenchAgents(productPlan, technicalPlan) : [],
     entities
   }
 }
@@ -707,6 +711,7 @@ type ChatSessionRevisionContext = {
 }
 
 type ChatSessionDevelopmentTarget =
+  | { type: 'agent'; agentId: string; label: string }
   | { type: 'page'; pageId: string; label: string }
   | { type: 'endpoint'; apiContractId: string; endpointId: string; label: string }
 
@@ -1255,6 +1260,10 @@ function normalizeSession(session: unknown): NormalizedChatSession {
 function normalizeDevelopmentTarget(value: unknown): ChatSessionDevelopmentTarget | undefined {
   if (!isJsonRecord(value)) return undefined
   const label = normalizeSessionEndpointField(value.label)
+  if (value.type === 'agent') {
+    const agentId = normalizeSessionEndpointField(value.agentId)
+    return agentId && label ? { type: 'agent', agentId, label } : undefined
+  }
   if (value.type === 'page') {
     const pageId = normalizeSessionEndpointField(value.pageId)
     return pageId && label ? { type: 'page', pageId, label } : undefined
@@ -1276,6 +1285,7 @@ function sameDevelopmentTarget(
 ): boolean {
   if (!left || !right) return !left && !right
   if (left.type !== right.type) return false
+  if (left.type === 'agent') return right.type === 'agent' && left.agentId === right.agentId
   return left.type === 'page'
     ? left.pageId === (right.type === 'page' ? right.pageId : '')
     : right.type === 'endpoint' &&

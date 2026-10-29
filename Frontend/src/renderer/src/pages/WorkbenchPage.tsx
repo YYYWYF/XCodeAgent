@@ -1,3 +1,4 @@
+import type { BusinessAgentOption } from '../../../shared/businessAgent'
 import { useApplicationConfigRefresh } from './useApplicationConfigRefresh'
 import { Layout, message, notification } from 'antd'
 import { randomUUID } from '@ag-ui/client'
@@ -159,6 +160,7 @@ function WorkbenchPage({
   const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
     DevelopmentPlanningApiContract[]
   >([])
+  const [developmentPlanningAgents, setDevelopmentPlanningAgents] = useState<BusinessAgentOption[]>([])
   const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
     DevelopmentPlanningEntityOption[]
   >([])
@@ -251,6 +253,7 @@ function WorkbenchPage({
       try {
         const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot)
         if (!active) return
+        setDevelopmentPlanningAgents(inspection.agents)
         setDevelopmentPlanningPages(inspection.pages)
         setDevelopmentPlanningPageTree(
           Array.isArray(inspection.pageTree) ? inspection.pageTree : []
@@ -299,6 +302,7 @@ function WorkbenchPage({
         setDevelopmentPlanningPages([])
         setDevelopmentPlanningPageTree([])
         setDevelopmentPlanningApiContracts([])
+        setDevelopmentPlanningAgents([])
         setDevelopmentPlanningEntities([])
         console.warn('检查 specs/plans 规划产物失败。', error)
         failWorkbenchEntry(formatWorkbenchEntryError(error, '检查工作区规划产物失败。'))
@@ -418,7 +422,7 @@ function WorkbenchPage({
   const topBarDevelopmentTotals = isViewingActiveVersion
     ? developmentPlanningTotals(
       developmentPlanningPages, developmentPlanningApiContracts,
-      applicationLifecycle?.developmentArtifacts
+      applicationLifecycle?.developmentArtifacts, developmentPlanningAgents
     )
     : topBarLifecycle?.developmentArtifacts
       ? developmentArtifactTotals(topBarLifecycle.developmentArtifacts)
@@ -692,6 +696,7 @@ function WorkbenchPage({
       setDevelopmentPlanningPages([])
       setDevelopmentPlanningPageTree([])
       setDevelopmentPlanningApiContracts([])
+        setDevelopmentPlanningAgents([])
       setDevelopmentPlanningEntities([])
       setViewingBranchName('')
       autoPublishShownRef.current = false
@@ -776,6 +781,7 @@ function WorkbenchPage({
                   developmentPlanningReady={developmentPlanningPagesLoaded}
                   developmentPlanningPages={developmentPlanningPages}
                   developmentPlanningPageTree={developmentPlanningPageTree}
+                  developmentPlanningAgents={developmentPlanningAgents}
                   developmentPlanningApiContracts={developmentPlanningApiContracts}
                   developmentPlanningEntities={developmentPlanningEntities}
                   editorMode={editorMode}

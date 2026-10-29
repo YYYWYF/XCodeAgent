@@ -97,10 +97,10 @@ const OTHER_OPTION_VALUE = '__other__'
 /** 校验门禁卡片的应用、页面或 Endpoint 开发目标。 */
 function normalizeApiDesignDevelopmentTarget(
   value: unknown
-): { type: 'application' | 'page' | 'endpoint'; id: string; label?: string; apiContractId?: string } | undefined {
+): { type: 'application' | 'page' | 'endpoint' | 'agent'; id: string; label?: string; apiContractId?: string } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const target = value as Record<string, unknown>
-  const type = target.type === 'application' ? 'application' : target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : undefined
+  const type = target.type === 'application' ? 'application' : target.type === 'page' ? 'page' : target.type === 'endpoint' ? 'endpoint' : target.type === 'agent' ? 'agent' : undefined
   const id = String(target.id || '')
   if (!type || !id) return undefined
   return {
@@ -215,6 +215,7 @@ export default function WorkflowRunCard({
     ? []
     : clarification?.questions || []
   const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
+  const agentUiIntegrationPending = clarification?.mode === 'agent_ui_integration_pending'
   const apiDesignRequired = clarification?.mode === 'api_design_required'
   const apiDesignReadinessGate = apiDesignRequired
   const gateQuestion = clarification?.questions?.[0]
@@ -519,7 +520,7 @@ export default function WorkflowRunCard({
       ) : (clarificationQuestions.length > 0 ||
         artifactConfirmation ||
         uiDesignConfirmation ||
-        apiDesignRequired ||
+        apiDesignRequired || agentUiIntegrationPending ||
         unitTestConfirmation ||
         detailReview ||
         technicalPlanGenerationError ||
@@ -603,6 +604,8 @@ export default function WorkflowRunCard({
                 })
               }
             />
+          ) : agentUiIntegrationPending ? (
+            <Alert type="info" showIcon message="智能体页面 Mock 已完成" description="固定页面组件可预览；真实 Runtime 会话、身份和调用联调仍待完成，当前不能进入真实验收。" />
           ) : technicalPlanTopologySelection ? (
             <TechnicalPlanTopologySelector
               key={workflow.runId}

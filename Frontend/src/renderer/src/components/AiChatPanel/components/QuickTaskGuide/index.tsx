@@ -20,10 +20,12 @@ import IterationBadge from '../../../IterationBadge'
 import { buildQuickTasks, type QuickTaskItem } from './quickTasks'
 import './QuickTaskGuide.less'
 import './QuickTaskStatus.less'
+import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 
 const { Text, Title } = Typography
 
 type QuickTaskGuideProps = {
+  agents?: BusinessAgentOption[]
   developmentArtifacts?: DevelopmentArtifacts
   /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
   currentBranch?: string
@@ -147,6 +149,7 @@ function QuickTaskSection({
 
 /** 在空白对话区并排展示页面与接口快捷任务，并保留底部自由输入入口。 */
 export default function QuickTaskGuide({
+  agents = [],
   developmentArtifacts,
   currentBranch,
   apiContracts,
@@ -157,8 +160,8 @@ export default function QuickTaskGuide({
   pages
 }: QuickTaskGuideProps): ReactElement {
   const tasks = useMemo(
-    () => buildQuickTasks(pages, apiContracts, entities, developmentArtifacts),
-    [apiContracts, entities, pages, developmentArtifacts]
+    () => buildQuickTasks(pages, apiContracts, entities, developmentArtifacts, agents),
+    [apiContracts, entities, pages, developmentArtifacts, agents]
   )
   const pageTasks = tasks.filter((task) => task.kind === 'page')
   const endpointTasks = tasks.filter((task) => task.kind === 'endpoint')
@@ -183,6 +186,8 @@ export default function QuickTaskGuide({
         </div>
       ) : (
         <div className={cx('quick-task-grid')}>
+          {agents.length ? <QuickTaskSection currentBranch={currentBranch} disabled={disabled} emptyText="暂无智能体。"
+            items={tasks.filter((task) => task.kind === 'agent')} onStart={onStart} title="智能体" type="agent" /> : null}
           <QuickTaskSection
             currentBranch={currentBranch}
             disabled={disabled}
