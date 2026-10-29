@@ -102,6 +102,14 @@ cleanup, then hands control to the updater. **退出** quits without installing;
 check Java again before reusing a verified updater cache. A second instance focuses the update
 window instead of bypassing it.
 
+On Windows, **立即安装** runs NSIS silently and explicitly targets the directory containing the
+running EXE, including custom paths with spaces or non-ASCII characters. The installer restarts
+the application after updating; it does not show an installation-directory selection page.
+Manual installation keeps the existing installer UI settings. Windows may still request UAC
+approval when the existing installation requires administrator privileges. This behavior is
+controlled by the installed application's updater code: install a baseline containing this change
+before testing its next automatic update; an older running version retains its previous behavior.
+
 Run `pnpm test:app-update`, `pnpm test:auth`, `pnpm lint`, `pnpm typecheck`, and `pnpm build`.
 From `Backend`, also run `.venv/bin/python -m unittest tests.test_app_update` and check `/health`.
 Verify the UI in Electron, including light/dark themes, download progress, fail-open, and exit

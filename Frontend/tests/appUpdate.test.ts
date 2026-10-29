@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import './appUpdateProtocol.test'
 import './appUpdateFeed.test'
+import './appUpdateInstall.test'
 import { test } from 'node:test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
