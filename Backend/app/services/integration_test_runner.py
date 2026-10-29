@@ -17,6 +17,7 @@ from app.services.data_source_policy import read_application_datasource_type
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.backend_startup_check import run_backend_startup_check
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
+from app.services.python_runtime_checks import runtime_check_plan, run_python_runtime_checks
 from app.utils.subprocess_output import subprocess_output_text
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
@@ -65,6 +66,7 @@ def run_integration_checks(
         raise ValueError(f"不支持的集成检查阶段：{phase}")
 
     root = workspace_root(state).resolve()
+    runtime_plan = runtime_check_plan(root, state)
     safe_namespace = _safe_artifact_namespace(artifact_namespace)
     log_root = workflow_artifact_root(state).resolve() / "runtime" / safe_namespace
     log_root.mkdir(parents=True, exist_ok=True)
@@ -118,7 +120,19 @@ def run_integration_checks(
     no_backend_business = _application_has_no_backend_business(state)
     # 纯前端应用（无实体、无 API 契约）即使数据源为 database，也不启动 Maven/Java，
     # 避免后端骨架模板触发环境级阻塞（如 macOS 未注册 JRE）。
-    if no_backend_business:
+    if runtime_plan is not None and "backend" in selected_layers:
+        backend_results = run_python_runtime_checks(
+            root=root, log_root=log_root, phase=phase, include_unit_tests=phase == "all",
+            include_startup=include_backend_startup,
+            unit_tests_affected=backend_unit_tests_affected,
+            blocked=_has_blocking_failure(frontend_results), on_progress=on_progress,
+            command_result=_run_command_result, missing_result=_missing_tool_result,
+            skipped_result=_skipped_after_blocking_failure_result,
+        )
+        for result in backend_results:
+            results.append(result)
+            events.append(result["id"])
+    elif no_backend_business:
         backend_results = _backend_checks_skipped_for_frontend_only(
             phase=phase,
             include_backend_startup=include_backend_startup,
@@ -794,6 +808,7 @@ def _run_command_result(
     log_root: Path,
     required: bool,
     on_progress: CheckProgressCallback | None,
+    environment: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     report_check_progress(
         on_progress,
@@ -801,6 +816,8 @@ def _run_command_result(
         check={
             "id": check_id,
             "name": name,
+            "layer": layer,
+            "language": language,
             "required": required,
             "skipped": False,
             "evidence": "正在执行检查。",
@@ -821,6 +838,7 @@ def _run_command_result(
             capture_output=True,
             timeout=COMMAND_TIMEOUT_SECONDS,
             check=False,
+            **({"env": environment} if environment is not None else {}),
         )
         stdout = subprocess_output_text(completed.stdout)
         stderr = subprocess_output_text(completed.stderr)

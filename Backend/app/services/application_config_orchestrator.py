@@ -14,12 +14,13 @@ from app.services.application_config.repository import ApplicationConfigReposito
 from app.services.application_config.schema import ApplicationConfigError, normalize_application_configuration, validate_application_configuration
 from app.services.application_parameter_updater import ApplicationParameterUpdater
 from app.services.application_parameter_updater import ParameterUpdateError
-from app.services.template_reconcile.desired import compile_template_application_config, compile_template_capabilities
+from app.services.template_reconcile.desired import compile_template_application_config
 from app.services.template_reconcile.transaction_v4 import recover_v4_transaction
 from app.services.template_reconcile.executor_v3 import WorkingCopyStoreV3
 from app.services.template_reconcile.config_surfaces import validate_working_surfaces, ConfigSurfaceError
 from app.services.template_reconcile.service import TemplateReconcileService
 from app.services.template_reconcile.state_v3 import load_template_state_v3
+from app.services.workspace_bootstrap.template_layout import compile_workspace_template_capabilities
 from app.utils.atomic_json import atomic_write_json
 from app.workspace.run_lease import workspace_run_leases
 
@@ -62,11 +63,7 @@ class ApplicationConfigOrchestrator:
         installed: set[str] = set()
         if state_path.is_file():
             installed = set(load_template_state_v3(root).effective)
-        desired = set()
-        if proposed["auth"]["enable"]:
-            desired.add("login")
-        if proposed["authorization"]["enabled"]:
-            desired.add("authorization")
+        desired = set(compile_workspace_template_capabilities(root, proposed))
         if installed - desired:
             raise ApplicationConfigOperationError("CAPABILITY_REMOVAL_UNSUPPORTED", "已安装的登录或权限能力不能关闭。")
         parameter_files: list[str] = []
@@ -156,7 +153,7 @@ class ApplicationConfigOrchestrator:
                     before = set(applied)
                     desired_capabilities = _desired_capabilities(desired)
                     # 仅修改名称、主题或参数时不能触发模板更新包；能力差异才进入 V4 收敛。
-                    if applied != compile_template_capabilities(desired):
+                    if applied != compile_workspace_template_capabilities(root, desired):
                         failure_stage = "template_capability_reconcile"
                         await self._reconcile.reconcile_capabilities(root)
                     failure_stage = "template_state_read"

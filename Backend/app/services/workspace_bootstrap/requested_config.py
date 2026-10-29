@@ -11,6 +11,7 @@ from typing import Any
 from app.services.workspace_bootstrap.models import TemplateConfigError
 from app.services.application_config import read_application_config
 from app.services.template_reconcile.desired import TemplateCapabilityError, requested_config_from_application_config
+from app.services.workspace_bootstrap.template_layout import compile_workspace_template_capabilities
 
 
 def compile_template_requested_config(
@@ -33,6 +34,9 @@ def compile_template_requested_config(
                 "TechnicalPlan 基于过期 application.json 配置生成，必须先重新规划。"
             )
         requested = requested_config_from_application_config(application_config)
+        requested["capabilities"] = compile_workspace_template_capabilities(
+            root, application_config, plan=technical_plan,
+        )
         if not include_application_config:
             # 设置页变更只提示用户手工更新工程环境变量；后续 Reconcile 不能借由
             # applicationConfig 覆写用户已维护的 frontend/.env。

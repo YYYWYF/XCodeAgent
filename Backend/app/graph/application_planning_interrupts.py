@@ -153,6 +153,18 @@ def validate_application_planning_review_action(
             raise ValueError("需求澄清 action=answer 必须提供回答内容。")
         return
 
+    if mode == "technical_plan_topology_selection":
+        if artifact != "technical_plan" or submission.action != "select_topology":
+            raise ValueError("架构选择门禁只允许 select_topology 或设计变更，不能跳过选择直接确认。")
+        from app.services.technical_plan_topology_selection import topology_selection_payload
+
+        chosen = submission.answers.get("topologyType")
+        options = topology_selection_payload()["topologyOptions"]
+        option = next((item for item in options if item["type"] == chosen), None)
+        if option is None or not option["available"]:
+            raise ValueError(option["reason"] if option else "所选应用架构不受支持。")
+        return
+
     expected_mode = CONFIRMATION_MODE_BY_ARTIFACT.get(artifact)
     if submission.action == "revise" and mode in {
         "technical_plan_generation_error",

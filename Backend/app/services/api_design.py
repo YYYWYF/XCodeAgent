@@ -1609,6 +1609,8 @@ def _target_endpoints(
             for item in _dict_items(references.get("endpoint_dependencies"))
             if str(item.get("endpoint_id") or "").strip()
         }
+    from app.services.runtime_agent_contracts import page_agent_endpoint_keys
+    endpoint_ids.update(key[1] for key in page_agent_endpoint_keys(project_plan, target_id))
     matches = [
         (contract, endpoint)
         for contract in _dict_items(project_plan.get("api_contracts"))

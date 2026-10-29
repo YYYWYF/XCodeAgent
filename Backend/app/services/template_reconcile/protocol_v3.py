@@ -96,7 +96,11 @@ class TemplateStateV3(ProtocolV3Model):
                 raise ValueError("requested Capability 必须以同配置存在于 effective。")
         for artifact_id, artifact in self.installedArtifacts.items():
             parts = artifact_id.split(":", 2)
-            if len(parts) != 3 or parts[0] not in {"frontend", "backend"} or not parts[2]:
+            # Runtime 文件身份只在显式请求且实际安装了该能力时开放。
+            roots = {"frontend", "backend"}
+            if "python_application_runtime" in self.requested and "python_application_runtime" in self.effective:
+                roots = {"frontend", "agent-runtime"}
+            if len(parts) != 3 or parts[0] not in roots or not parts[2]:
                 raise ValueError("installedArtifacts key 必须是 V3 Artifact ID。")
             if artifact.capabilityId != parts[1] or artifact.target != f"{parts[0]}/{parts[2]}":
                 raise ValueError("installedArtifacts 身份与 target 不一致。")

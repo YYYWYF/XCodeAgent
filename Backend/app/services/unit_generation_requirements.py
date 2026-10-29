@@ -5,6 +5,7 @@ from typing import Any
 
 from app.services.build_task_reuse_contracts import ReuseFacts
 from app.services.planning_frozen import plain_json
+from app.services.runtime_agent_dag import agent_requirements
 from app.services.unit_generation_contracts import GenerationRequirement
 from app.services.unit_generation_requirement_targets import (
     ENDPOINT_PHYSICAL_SOURCE_TYPES, endpoint_source_types, exact_id,
@@ -85,6 +86,11 @@ def _unit_responsibilities(
 
     if unit_id in _STRUCTURAL_UNITS or unit_id == "frontend:shell":
         return []
+    if unit_id.startswith("agent:"):
+        try:
+            return agent_requirements(unit_id, plan)
+        except ValueError as exc:
+            fail_requirement_input("AGENT_FORMAL_CONTRACT_INVALID", str(exc), unit_ids=[unit_id])
     if unit_id.startswith("page:"):
         page_id = unit_id.removeprefix("page:")
         if page_id not in pages:
@@ -96,7 +102,11 @@ def _unit_responsibilities(
     if unit_id == "frontend:api-client":
         if not endpoints:
             return []
-        return _endpoint_requirements("frontend.api_module", list(endpoints))
+        # 页面作用域只生成页面直接调用的模块；Tool 的内部业务依赖不暴露给前端。
+        direct_ids = {key for page in pages.values() for key in page.get("requiredEndpointIds", ())}
+        return _endpoint_requirements("frontend.api_module", [
+            key for key in endpoints if not pages or key[1] in direct_ids
+        ])
     if unit_id.startswith("frontend:data:"):
         source_id = unit_id.removeprefix("frontend:data:")
         if source_id != "static":

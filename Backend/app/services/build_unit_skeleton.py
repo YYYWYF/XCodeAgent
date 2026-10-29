@@ -11,6 +11,7 @@ from typing import Any
 
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.authorization_resource_catalog import authorization_resource_consumer_page_ids
+from app.services.runtime_agent_dag import extend_agent_units, extend_agent_edges
 
 
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
@@ -89,13 +90,15 @@ def _build_units(
         f"page:{page_id}"
         for page_id in _ids(project_plan_page_records(project_plan), "pageId")
     )
-    return {
+    units = {
         unit_id: _unit_definition(
             unit_id,
             existing.get(unit_id),
         )
         for unit_id in unit_ids
     }
+    extend_agent_units(project_plan, units, existing)
+    return units
 
 
 def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
@@ -200,6 +203,7 @@ def _unit_graph(
             edges.append({"from": endpoint_unit_id, "to": page_unit_id, "type": "depends_on"})
         edges.append({"from": page_unit_id, "to": "app:integration", "type": "depends_on"})
 
+    extend_agent_edges(project_plan, build_units, edges, errors)
     return {
         "schema_version": "build-unit-graph.v3",
         "nodes": nodes,
@@ -245,6 +249,8 @@ def _skeleton_fingerprint(
         "skeleton_policy": "frontend-shell-prerequisite-only",
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
+        "topology": project_plan.get("topology"),
+        "agent_contracts": project_plan.get("agent_contracts"),
         "permission_model": project_plan.get("permission_model"),
         "pages": project_plan_page_records(project_plan),
         # 绑定增删会改变 Page 前置依赖，必须参与骨架复用指纹。

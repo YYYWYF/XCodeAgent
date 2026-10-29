@@ -6,6 +6,8 @@ import json
 
 from app.services.page_task_freshness import page_task_covers_current_input
 from app.services.planning_frozen import plain_json
+from app.services.runtime_business_contract import backend_generation_constraints
+from app.services.runtime_agent_module_policy import module_source_refs
 
 
 def _business_inputs(task):
@@ -15,6 +17,7 @@ def _business_inputs(task):
         expected = dict(check.get("expected") or {})
         # 同模块其他 Endpoint 的实现归属不是本任务消费的接口合同。
         expected.pop("allowed_existing_endpoints", None)
+        expected.pop("support_paths", None)
         # 与验收比较同一业务来源摘要，真正变化的合同不能继续声明可复用。
         result.append({"kind": check.get("kind"), "expected": expected, "sources": check.get("sources", [])})
     return sha256(json.dumps(result, ensure_ascii=False, sort_keys=True,
@@ -40,6 +43,16 @@ def _page_endpoint_inputs(task, project_plan, build_context):
 
 def task_covers_current_input(task: Mapping, project_plan: Mapping, build_context: Mapping, *, check_page=True) -> bool:
     """重编译同一交付物的直接输入并比较原冻结合同；不因无关上游变更递归失效。"""
+    if task.get("owner") == "agent":
+        expected = module_source_refs(project_plan, task, build_context.get("runtime_agent_template_policy") or {})
+        if plain_json(task.get("source_refs") or {}) != expected:
+            return False
+        return any(check.get("kind") == "agent.module_contract" for check in task.get("business_acceptance_checks") or [])
+    if task.get("owner") == "backend":
+        expected = backend_generation_constraints(project_plan)
+        stored = task.get("source_refs") or {}
+        if any(stored.get(key) != expected.get(key) for key in ("backend_implementation", "backend_root")):
+            return False
     if check_page and not page_task_covers_current_input(task, project_plan):
         return False
     # 复用原平台合同编译器选择精确 Endpoint、Schema、字段映射和页面依赖，不能用新 Unit 背书。

@@ -118,7 +118,7 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
             if repair.get("status") == "awaiting_confirmation":
                 return
             record = read_record(workspace)
-            starting_layer = next((layer for layer in ("frontend", "backend") if (record.get(layer) or {}).get("status") == "starting"), "")
+            starting_layer = next((layer for layer in ("frontend", "backend", "agent_runtime") if (record.get(layer) or {}).get("status") == "starting"), "")
             # 修复末尾可能已进入启动器，必须同时收口半启动进程，不能留下永久 starting。
             if starting_layer:
                 stop_project_preview(workspace)
@@ -135,13 +135,8 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
 
         # 启动器可能已经拉起一部分子进程；先按标准停止流程清理，再释放孤儿占用。
         record = read_record(workspace)
-        layer = (
-            "frontend"
-            if (record.get("frontend") or {}).get("status") == "starting"
-            else "backend"
-            if (record.get("backend") or {}).get("status") == "starting"
-            else ""
-        )
+        layer = next((item for item in ("frontend", "backend", "agent_runtime")
+                      if (record.get(item) or {}).get("status") == "starting"), "")
         stop_project_preview(workspace)
         if action == "restart":
             mark_interrupted_attempt(workspace, layer=layer)

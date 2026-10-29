@@ -388,7 +388,7 @@ def _normalize_agent_tasks(
         used_ids.add(task_id)
 
         owner = _text(item.get("owner"), "frontend")
-        if owner not in {"frontend", "backend", "database"}:
+        if owner not in {"frontend", "backend", "database", "agent"}:
             owner = (
                 "database"
                 if owner in {"data_source", "data-source", "data", "db"}
@@ -1058,6 +1058,8 @@ def _task_semantic_errors(
             errors.append(f"Task {task_id} is in database Unit {unit_id} but owner is {owner}.")
         if unit_id.startswith("backend:") and owner != "backend":
             errors.append(f"Task {task_id} is in backend Unit {unit_id} but owner is {owner}.")
+        if unit_id.startswith("agent:") and (owner != "agent" or task_type != "agent.code"):
+            errors.append(f"Task {task_id} 必须是 agent owner 的 agent.code 任务。")
         if unit_id.startswith(("page:", "frontend:")) and owner != "frontend":
             errors.append(f"Task {task_id} is in frontend/page Unit {unit_id} but owner is {owner}.")
         if owner == "database":
@@ -1296,6 +1298,8 @@ def _task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "frontend": len([task for task in tasks if task.get("owner") == "frontend"]),
         "backend": len([task for task in tasks if task.get("owner") == "backend"]),
         "database": len([task for task in tasks if task.get("owner") == "database"]),
+        **({"agent": sum(task.get("owner") == "agent" for task in tasks)}
+           if any(task.get("owner") == "agent" for task in tasks) else {}),
         "pending": len([task for task in tasks if task.get("status") == "pending"]),
         "running": len([task for task in tasks if task.get("status") == "running"]),
         "completed": len(
@@ -1406,6 +1410,8 @@ def _default_task_type(owner: str) -> str:
         return "database.change"
     if owner == "backend":
         return "backend.code"
+    if owner == "agent":
+        return "agent.code"
     return "frontend.code"
 
 

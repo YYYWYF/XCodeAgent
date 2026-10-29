@@ -18,6 +18,9 @@ from app.services.frontend_project_launcher import (
     stop_frontend_project,
 )
 from app.utils.process_liveness import pid_is_running
+from app.services.python_runtime_checks import runtime_check_plan
+from app.services.agent_runtime_launcher import launch_runtime
+from app.services.agent_runtime_process import stop_runtime
 
 
 LaunchProgressCallback = Callable[[str, str, str], None]
@@ -98,8 +101,9 @@ def launch_project_preview(
         if force_restart:
             frontend_stop = stop_frontend_project(root)
             backend_stop = stop_workspace_backend_project(root)
-            if any(part.get("status") == "failed" for part in (frontend_stop, backend_stop)):
-                result = {"status": "failed", "message": "旧服务停止失败，未启动新的服务。", "failed_stage": "stop", "frontend": frontend_stop, "backend": backend_stop}
+            runtime_stop = stop_runtime(root)
+            if any(part.get("status") == "failed" for part in (frontend_stop, backend_stop, runtime_stop)):
+                result = {"status": "failed", "message": "旧服务停止失败，未启动新的服务。", "failed_stage": "stop", "frontend": frontend_stop, "backend": backend_stop, "agent_runtime": runtime_stop}
                 finish_attempt(root, result)
                 return result
         begin_attempt(root)
@@ -113,7 +117,11 @@ def launch_project_preview(
         try:
             result = _launch_project_preview(root, on_progress=report, force_restart=force_restart)
         except Exception as exc:
-            result = {"status": "failed", "message": str(exc), "failed_stage": "launch"}
+            from app.services.preview_runtime_state import redact
+
+            cleanup = stop_runtime(root)
+            result = {"status": "failed", "message": redact(str(exc)), "failed_stage": "launch",
+                      "agent_runtime": cleanup}
         finish_attempt(root, result)
         return result
 
@@ -135,10 +143,25 @@ def _launch_project_preview(
     root = Path(workspace_path).expanduser().resolve()
     report("structure", "running", "正在识别工程结构…")
     backend_project_root = find_backend_project_root(root)
+    runtime_plan = runtime_check_plan(root, {})
     no_backend_business = _application_has_no_backend_business(root)
     report("structure", "completed", "工程结构识别完成")
     backend_process = None
-    if backend_project_root is None or no_backend_business:
+    agent_runtime = {"status": "skipped", "message": "当前技术规划没有 Agent Runtime 服务。"}
+    if runtime_plan is not None:
+        if backend_project_root is not None:
+            raise ValueError("Runtime Direct 工程包含 Java 后端，请先修正模板布局。")
+        backend = {"status": "skipped", "reason": "runtime_direct", "message": "业务由 Python Runtime 承载，无需启动 Java 后端。"}
+        report("backend", "skipped", backend["message"])
+        report("agent_runtime", "running", "正在准备并启动 Agent Runtime…")
+        agent_runtime = launch_runtime(root, on_progress=lambda message: report("agent_runtime", "running", message))
+        if agent_runtime.get("status") != "running":
+            report("agent_runtime", "failed", agent_runtime.get("message") or "Runtime 启动失败。")
+            return {"status": "failed", "message": agent_runtime.get("message"), "workspace": str(root),
+                    "preview_url": None, "backend": backend, "agent_runtime": agent_runtime,
+                    "frontend": None, "failed_stage": agent_runtime.get("failed_stage")}
+        report("agent_runtime", "completed", agent_runtime["message"])
+    elif backend_project_root is None or no_backend_business:
         backend = {
             "status": "skipped",
             "reason": (
@@ -185,13 +208,27 @@ def _launch_project_preview(
 
     report("frontend", "running", "正在启动前端服务并等待健康检查就绪…")
     frontend = (
+        launch_frontend_project(root, force_restart=True, runtime_public_url=agent_runtime["preview_url"])
+        if runtime_plan is not None
+        else
         launch_frontend_project(root, force_restart=True)
         if force_restart
         else launch_frontend_project(root)
     )
+    if runtime_plan is not None and frontend.get("status") == "running":
+        from app.services.agent_runtime_health import runtime_health
+
+        ready, reason = runtime_health(str(frontend.get("preview_url") or ""), agent_runtime["launch_id"],
+                                      database_required=agent_runtime["database_required"], health_path="/__runtime/health")
+        if not ready:
+            stop_frontend_project(root)
+            frontend = {**frontend, "status": "failed", "message": "前端到 Runtime 的代理未就绪：" + reason}
     if frontend.get("status") == "failed":
         if backend_process is not None:
             stop_backend_project(backend, backend_process)
+        if runtime_plan is not None:
+            cleanup = stop_runtime(root)
+            agent_runtime = {**agent_runtime, "status": cleanup["status"], "message": cleanup["message"]}
         report(
             "frontend",
             "failed",
@@ -204,8 +241,9 @@ def _launch_project_preview(
             "workspace": str(root),
             "datasource_type": None,
             "backend": backend,
+            "agent_runtime": agent_runtime,
             "frontend": frontend,
-            "failed_stage": "frontend_start",
+            "failed_stage": "frontend_runtime_proxy" if runtime_plan is not None else "frontend_start",
         }
 
     report(
@@ -213,12 +251,14 @@ def _launch_project_preview(
         "completed",
         str(frontend.get("message") or "前端服务已就绪。"),
     )
-    report("ready", "completed", "前后端服务均已就绪，可以开始预览。")
+    report("ready", "completed", "应用服务均已就绪，可以开始预览。")
     frontend_only = backend.get("status") == "skipped"
     return {
         **frontend,
         "status": "running",
         "message": (
+            "Agent Runtime 与前端均已就绪，可以开始会话调试。"
+            if runtime_plan is not None else
             "前端项目已启动并就绪，未识别到后端工程。"
             if frontend_only
             else "Java 后端与前端项目均已启动并就绪。"
@@ -226,6 +266,7 @@ def _launch_project_preview(
         "workspace": str(root),
         "datasource_type": None,
         "backend": backend,
+        "agent_runtime": agent_runtime,
         "frontend": frontend,
         "failed_stage": None,
     }
@@ -238,12 +279,14 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     frontend = stop_frontend_project(root)
     ui_design_frontend = stop_frontend_project(root, runtime_subdir="launch-ui-design")
     backend = stop_workspace_backend_project(root)
+    agent_runtime = stop_runtime(root)
     failed_parts = [
         name
         for name, result in (
             ("frontend", frontend),
             ("ui_design_frontend", ui_design_frontend),
             ("backend", backend),
+            ("agent_runtime", agent_runtime),
         )
         if result.get("status") == "failed"
     ]
@@ -258,6 +301,7 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         "frontend": frontend,
         "ui_design_frontend": ui_design_frontend,
         "backend": backend,
+        "agent_runtime": agent_runtime,
     }
     from app.services.preview_runtime_state import finish_attempt
 
@@ -273,9 +317,10 @@ def stop_standard_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     root = Path(workspace_path).expanduser().resolve()
     frontend = stop_frontend_project(root)
     backend = stop_workspace_backend_project(root)
+    agent_runtime = stop_runtime(root)
     failed_parts = [
         name
-        for name, result in (("frontend", frontend), ("backend", backend))
+        for name, result in (("frontend", frontend), ("backend", backend), ("agent_runtime", agent_runtime))
         if result.get("status") == "failed"
     ]
     result = {
@@ -284,6 +329,7 @@ def stop_standard_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         "workspace": str(root),
         "frontend": frontend,
         "backend": backend,
+        "agent_runtime": agent_runtime,
     }
     from app.services.preview_runtime_state import finish_attempt
 
@@ -298,11 +344,13 @@ def inspect_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
     backend = {"running": _pid_file_is_running(runtime_root / "backend.pid")}
     frontend = {"running": _pid_file_is_running(runtime_root / "frontend.pid")}
+    agent_runtime = {"running": _pid_file_is_running(runtime_root / "agent-runtime.pid")}
     return {
         "workspace": str(root),
         "backend": backend,
         "frontend": frontend,
-        "running": backend["running"] or frontend["running"],
+        "agent_runtime": agent_runtime,
+        "running": backend["running"] or frontend["running"] or agent_runtime["running"],
     }
 
 

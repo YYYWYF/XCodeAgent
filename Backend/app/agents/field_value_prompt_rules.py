@@ -56,7 +56,7 @@ FIELD_VALUE_PLANNING_RULES = (
     "in implementation steps without adding test, build, or acceptance Tasks.",
 )
 
-FIELD_VALUE_IMPLEMENTATION_RULES = (
+_FIELD_VALUE_IMPLEMENTATION_TEMPLATE = (
     FIELD_VALUE_SEMANTICS + "\n\n"
     "[Field-value execution order] Apply only the current stage's responsibilities. service first validates "
     "business inputs and resolves trusted server context, computes pre-call query/write/upstream values, "
@@ -72,8 +72,19 @@ FIELD_VALUE_IMPLEMENTATION_RULES = (
     "ordered two-value BETWEEN arrays. upstream binds resolved values into the exact "
     "path/query/header/request_body sections. omit means not sending the target, not substituting a literal "
     "null string or empty string. Do not repeat business rules in Client, Mapper, or Controller.\n"
-    "Implement confirmed rules as ordinary typed Java code, never as eval, a script engine, or a new runtime "
+    "Implement confirmed rules as ordinary typed {implementation_language} code, never as eval, a script engine, or a new runtime "
     "LLM call. Missing required semantics returns failed with failure_category=contract_mismatch; missing "
     "planned type boundaries or write authorization returns failed with failure_category=plan_mismatch. "
     "Both require a concrete change_request; never expand the write scope yourself.\n\n"
 )
+
+
+def field_value_implementation_rules(language: str) -> str:
+    """复用统一映射语义，只按平台选定的实现语言投射执行要求。"""
+
+    if language not in {"Java", "Python"}:
+        raise ValueError("字段取值执行语言必须为 Java 或 Python。")
+    return _FIELD_VALUE_IMPLEMENTATION_TEMPLATE.replace("{implementation_language}", language)
+
+
+FIELD_VALUE_IMPLEMENTATION_RULES = field_value_implementation_rules("Java")

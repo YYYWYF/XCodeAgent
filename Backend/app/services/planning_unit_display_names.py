@@ -63,6 +63,8 @@ def project_plan_unit_display_names(project_plan: dict | None) -> dict[str, str]
             )
             endpoints.append((unit_id, label))
     labels.update(_unique_business_labels(endpoints, kind="接口"))
+    for contract in project_plan.get("agent_contracts", []):
+        labels[f"agent:{contract['agentId']}"] = f"{contract['name']} · 智能体七模块"
     return labels
 
 

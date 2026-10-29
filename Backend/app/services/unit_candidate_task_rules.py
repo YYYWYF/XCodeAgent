@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.services.runtime_business_contract import python_backend_context
+
 from collections.abc import Mapping, Sequence
 from fnmatch import fnmatchcase
 import re
@@ -38,10 +40,11 @@ _FRONTEND_KINDS = {
     "frontend.page", "frontend.api_module", "frontend.static_data_module",
     "frontend.shared_capability",
 }
-_BACKEND_KINDS = set(DELIVERABLE_KINDS) - _FRONTEND_KINDS
+_BACKEND_KINDS = set(DELIVERABLE_KINDS) - _FRONTEND_KINDS - {"agent.runtime"}
 _OWNER_TASK_TYPES = {
     "frontend": {"frontend.code"},
     "backend": {"backend.code"},
+    "agent": {"agent.code"},
     "database": {"database.change", "database.seed"},
 }
 _DRIVE_PATH = re.compile(r"^[A-Za-z]:/")
@@ -338,7 +341,19 @@ def _scope_issues(task: Mapping[str, Any], context: UnitGenerationContext) -> tu
         ))
     scope_paths = set(target_files) | set(change_paths)
     owner = _identity(task.get("owner"))
-    expected_prefix = "frontend/" if owner == "frontend" else "backend/" if owner == "backend" else None
+    if owner == "backend" and python_backend_context(context.constraints):
+        from app.services.runtime_business_paths import runtime_business_path_error
+
+        for path in sorted(scope_paths | set(allowed_paths)):
+            error = runtime_business_path_error(path, bootstrap=context.unit_id == "backend:bootstrap")
+            if error:
+                issues.append(_issue(
+                    "CANDIDATE_RUNTIME_INFRASTRUCTURE_CONFLICT", error,
+                    context=context, task_ids=(task_id,), path=path,
+                ))
+    backend_prefix = "agent-runtime/" if python_backend_context(context.constraints) else "backend/"
+    expected_prefix = ("frontend/" if owner == "frontend" else backend_prefix if owner == "backend"
+                       else "agent-runtime/" if owner == "agent" else None)
     wrong_layer = sorted(path for path in scope_paths if expected_prefix and not path.startswith(expected_prefix))
     if wrong_layer:
         issues.append(_issue(
@@ -407,6 +422,7 @@ def _deliverable_issues(
         if (
             kind in _FRONTEND_KINDS and owner != "frontend"
             or kind in _BACKEND_KINDS and owner != "backend"
+            or kind == "agent.runtime" and owner != "agent"
         ):
             issues.append(_issue(
                 "CANDIDATE_DELIVERABLE_OWNER_MISMATCH", "deliverable kind 与 Task owner 不匹配。",

@@ -1,0 +1,57 @@
+.@{class-prefix}-technical-topology-selector {
+  padding: 20px;
+  color: var(--modal-text, var(--wb-text));
+  background: var(--modal-surface, var(--wb-surface));
+  border: 1px solid var(--modal-border, var(--wb-border));
+  border-radius: 12px;
+
+  .ant-radio-group {
+    display: grid;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .ant-typography,
+  .ant-alert-message {
+    color: var(--modal-text, var(--wb-text));
+  }
+
+  .ant-typography-secondary,
+  .ant-alert-description {
+    color: var(--modal-text-secondary, var(--wb-text-secondary));
+  }
+
+  .ant-radio-checked .ant-radio-inner,
+  .ant-radio-wrapper:hover .ant-radio-inner,
+  .ant-radio-input:focus + .ant-radio-inner {
+    border-color: var(--modal-accent, var(--wb-accent));
+  }
+
+  .ant-radio-checked .ant-radio-inner::after {
+    background-color: var(--modal-accent, var(--wb-accent));
+  }
+
+  .ant-alert {
+    background: var(--modal-surface, var(--wb-surface));
+    border-color: var(--modal-border, var(--wb-border));
+  }
+
+  .ant-alert-icon {
+    color: var(--modal-accent, var(--wb-accent));
+  }
+}
+
+.@{class-prefix}-technical-topology-option {
+  padding: 14px;
+  background: var(--modal-surface, var(--wb-surface));
+  border: 1px solid var(--modal-border, var(--wb-border));
+  border-radius: 10px;
+
+  &:focus-within {
+    border-color: var(--modal-accent, var(--wb-accent));
+  }
+
+  > .ant-typography {
+    margin: 8px 0;
+  }
+}

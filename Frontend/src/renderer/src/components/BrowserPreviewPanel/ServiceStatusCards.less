@@ -1,0 +1,22 @@
+.preview-service-grid .preview-service-card.is-runtime {
+  grid-column: 1 / -1;
+
+  > .ant-btn {
+    margin-top: 10px;
+    color: var(--wb-accent);
+    background: var(--wb-editor);
+    border-color: var(--wb-border-strong);
+
+    &:hover,
+    &:focus-visible {
+      background: var(--wb-accent-soft);
+      border-color: var(--wb-accent);
+    }
+
+    &:disabled {
+      color: var(--wb-text-secondary);
+      background: var(--wb-surface-subtle);
+      border-color: var(--wb-border);
+    }
+  }
+}

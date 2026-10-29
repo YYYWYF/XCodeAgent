@@ -22,6 +22,7 @@ ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 LOG_FILES = {
     "frontend": ("install.stdout.log", "install.stderr.log", "frontend.stdout.log", "frontend.stderr.log"),
     "backend": ("backend-build.stdout.log", "backend-build.stderr.log", "backend-repackage.stdout.log", "backend-repackage.stderr.log", "backend.stdout.log", "backend.stderr.log"),
+    "agent_runtime": ("agent-runtime-install.stdout.log", "agent-runtime-install.stderr.log", "agent-runtime.stdout.log", "agent-runtime.stderr.log"),
 }
 
 
@@ -93,7 +94,7 @@ def read_record(workspace: str | Path) -> dict[str, Any]:
     path = runtime_root(workspace) / "preview-runtime.json"
     with _lock:
         if not path.exists():
-            return {"attemptId": "", "status": "stopped", "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}}
+            return {"attemptId": "", "status": "stopped", "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}, "agent_runtime": {"status": "stopped"}}
         return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -118,7 +119,7 @@ def begin_attempt(workspace: str | Path) -> str:
                 if path.exists() and not path.is_symlink():
                     path.write_text("", encoding="utf-8")
         attempt = uuid4().hex
-        write_record(workspace, {"attemptId": attempt, "startedAt": datetime.now(UTC).isoformat(), "status": "starting", "frontend": {"status": "stopped"}, "backend": {"status": "starting"}})
+        write_record(workspace, {"attemptId": attempt, "startedAt": datetime.now(UTC).isoformat(), "status": "starting", "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}, "agent_runtime": {"status": "stopped"}})
         return attempt
 
 
@@ -126,7 +127,7 @@ def record_progress(workspace: str | Path, stage: str, status: str, message: str
     """记录启动阶段，供独立抽屉实时读取。"""
     with _lock:
         value = read_record(workspace)
-        if stage in {"frontend", "backend"}:
+        if stage in {"frontend", "backend", "agent_runtime"}:
             current = value.get(stage) if isinstance(value.get(stage), dict) else {}
             # 进度事件没有 PID 和就绪证据，完整启动结果落盘前必须保持 starting，
             # 否则 watch 会把缺少 PID 的临时 running 误判为服务异常退出。
@@ -171,7 +172,7 @@ def mark_interrupted_attempt(workspace: str | Path, *, layer: str) -> None:
             previewUrl=None,
             failedStage="launch_interrupted",
         )
-        if layer in {"frontend", "backend"}:
+        if layer in {"frontend", "backend", "agent_runtime"}:
             part = value.get(layer) if isinstance(value.get(layer), dict) else {}
             value[layer] = {**part, "status": "failed", "message": message}
         write_record(workspace, value)
@@ -182,10 +183,12 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
     with _lock:
         value = read_record(workspace)
         value.update({"status": result.get("status", "failed"), "message": redact(str(result.get("message") or "")), "previewUrl": result.get("preview_url") if result.get("status") == "running" else None, "failedStage": result.get("failed_stage")})
-        for layer in ("backend", "frontend"):
+        for layer in ("backend", "frontend", "agent_runtime"):
             part = result.get(layer) or {}
             server = part.get("server") or {}
             value[layer] = {"status": part.get("status", "stopped"), "message": redact(str(part.get("message") or ("未启动：后端启动失败" if layer == "frontend" and result.get("status") == "failed" else ""))), "pid": server.get("pid"), "port": _coerce_port(server.get("port") or part.get("port")) or _port_from_url(part.get("preview_url")), "url": part.get("preview_url"), "command": str(server.get("command") or ""), "ready": server.get("ready", False)}
+            if layer == "agent_runtime":
+                value[layer].update(launchId=part.get("launch_id"), databaseRequired=part.get("database_required", False))
         write_record(workspace, value)
 
 
@@ -202,7 +205,7 @@ def record_frontend_runtime(workspace: str | Path, result: dict[str, Any]) -> No
             "url": result.get("preview_url"),
             "ready": server.get("ready", False),
         }
-        states = {value["frontend"]["status"], value["backend"]["status"]}
+        states = {value["frontend"]["status"], value["backend"]["status"], (value.get("agent_runtime") or {}).get("status", "skipped")}
         value["status"] = "failed" if "failed" in states else "running" if states <= {"running", "skipped"} else "stopped"
         value["previewUrl"] = result.get("preview_url") if result.get("status") == "running" else None
         if result.get("status") == "failed":
@@ -260,18 +263,22 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
         if logs:
             value["logs"] = read_logs(workspace)
     root = runtime_root(workspace)
-    for layer in ("frontend", "backend"):
-        part = value[layer]
+    for layer in ("frontend", "backend", "agent_runtime"):
+        part = value.get(layer) or {"status": "stopped"}
+        value[layer] = part
         if _coerce_port(part.get("port")) is None:
             port = _service_port(root, layer, part)
             if port is not None:
                 part["port"] = port
         if part.get("status") == "running":
+            health_reason = None
             try:
                 pid = int(part.get("pid") or 0)
                 if pid <= 0:
                     raise ProcessLookupError()
-                os.kill(pid, 0)
+                from app.utils.process_liveness import pid_is_running
+                if not pid_is_running(pid):
+                    raise ProcessLookupError()
                 pid_path = root / f"{layer}.pid"
                 if not pid_path.is_file() or int(pid_path.read_text().strip()) != pid:
                     raise ProcessLookupError()
@@ -286,12 +293,24 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                             value["previewUrl"] = actual_url
                     if not _frontend_runtime_is_ready(root, part):
                         raise ProcessLookupError()
+                elif layer == "agent_runtime":
+                    from app.services.agent_runtime_health import runtime_health
+                    from app.services.agent_runtime_process import runtime_pid_is_current
+
+                    port = _coerce_port(part.get("port"))
+                    if not port or not runtime_pid_is_current(Path(workspace).resolve(), pid):
+                        raise ProcessLookupError()
+                    ready, reason = runtime_health(f"http://127.0.0.1:{port}", str(part.get("launchId") or ""),
+                                                   database_required=bool(part.get("databaseRequired")))
+                    if not ready:
+                        health_reason = reason
+                        raise ProcessLookupError()
                 else:
                     from app.services.backend_project_launcher import _backend_logs_are_ready
                     if not _backend_logs_are_ready(stdout_log=root / "backend.stdout.log", stdout_offset=0, stderr_log=root / "backend.stderr.log", stderr_offset=0):
                         raise ProcessLookupError()
             except (OSError, ValueError):
-                message = "服务进程已退出或就绪检测失败，请重启服务。"
+                message = health_reason or "服务进程已退出或就绪检测失败，请重启服务。"
                 part.update(status="failed", message=message)
                 value.update(status="failed", message=message, failedStage=f"{layer}_process", previewUrl=None)
     # 必须在实时健康校准之后计算；否则历史 running 在本轮变成 failed 时，
@@ -300,6 +319,7 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
         value.get("attemptId")
         and value.get("status") == "failed"
         and value.get("failedStage") not in {"stop", "launch_interrupted", "backend_database_resource"}
+        and not str(value.get("failedStage") or "").startswith("agent_runtime")
     )
     value["maintenance"] = maintenance_owner(workspace)
     return value

@@ -581,6 +581,8 @@ def _task_owner_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
             counts["backend"] += 1
         elif owner == "database":
             counts["database"] += 1
+        elif owner == "agent":
+            counts["agent"] = counts.get("agent", 0) + 1
     return counts
 
 

@@ -13,6 +13,7 @@ from app.services.unit_candidate_platform_rules import (
 )
 from app.services.unit_candidate_task_rules import validate_candidate_task_rules
 from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.runtime_agent_candidate_validation import validate_agent_module_candidate
 
 
 def _identity(value: Any) -> str | None:
@@ -337,6 +338,8 @@ def validate_unit_candidate(
         frozen_context,
         tasks,
     )
+    if frozen_context.unit_kind == "agent":
+        task_issues.extend(validate_agent_module_candidate(frozen_context, tasks))
     dependency_issues = validate_unit_candidate_dependencies(
         tasks,
         frozen_context.dependency_context,

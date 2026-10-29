@@ -26,6 +26,7 @@ from app.services.frozen_contract_manifest_index import (
 )
 from app.services.frozen_contract_store import FrozenContract, FrozenContractStore
 from app.services.planning_frozen import plain_json
+from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
 
 
 _ENDPOINT_REQUIREMENT_KINDS = {
@@ -139,6 +140,20 @@ def compile_expected_unit_formal_source_refs(
     for raw_requirement in generation_requirements:
         requirement_id, source_refs = requirement_record(raw_requirement)
         grant(requirement_id, technical, {"/architecture"})
+        if source_refs.get("kind") == "agent.runtime":
+            contracts = agent_contract_index(technical.content)
+            agent_id = source_refs.get("agent_id")
+            if unit_kind != "agent" or unit_id != f"agent:{agent_id}" or agent_id not in contracts:
+                raise ContractCatalogBindingError("Agent 职责与正式 Unit 身份不一致。")
+            index = list(contracts).index(agent_id)
+            grant(requirement_id, technical, {f"/agent_contracts/{index}", "/topology"})
+            for key in agent_endpoint_keys(contracts[agent_id]):
+                if key not in scoped_keys or key not in endpoints:
+                    raise ContractCatalogBindingError("Agent Tool 业务依赖不在当前冻结 Scope 中。")
+                api, endpoint_index = endpoints[key]
+                grant(requirement_id, api, api_selectors(api, {endpoint_index}))
+                grant(requirement_id, _required_endpoint_api_design(endpoint_api_designs, key), {"/"})
+            continue
         page_id, relevant_keys = _endpoint_keys_for_requirement(
             unit_id=unit_id,
             unit_kind=unit_kind,

@@ -1,21 +1,18 @@
 import {
-  ApiOutlined,
-  CheckCircleFilled,
   CheckOutlined,
   CloudServerOutlined,
-  CloseCircleFilled,
   CopyOutlined,
-  ExclamationCircleFilled,
   FullscreenExitOutlined,
   FullscreenOutlined,
-  LoadingOutlined,
   ReloadOutlined,
   ToolOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Drawer, Tabs, Typography } from 'antd'
+import { Alert, Button, Drawer, Tabs } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
+import type { PreviewRuntimePayload } from '../../service/previewRuntime'
+import ServiceStatusCards, { serviceLabel, serviceLayers, statusMeta } from './ServiceStatusCards'
+import type { ServiceLayer } from './ServiceStatusCards'
 import { previewServiceActionAvailability, previewServiceLaunchLabel } from './serviceStatusPolicy'
 import DatabaseCheckPanel from './DatabaseCheckPanel'
 import ServiceLogContent from './ServiceLogContent'
@@ -35,49 +32,6 @@ export type ServiceStatusControl = {
   onDiagnose: () => void
   showDatabaseCheck?: boolean
   onOpenEntity?: (entityId: string) => void
-}
-
-type ServiceLayer = 'frontend' | 'backend'
-
-const statusMeta: Record<
-  PreviewServiceState['status'],
-  { label: string; icon: ReactElement; tone: string }
-> = {
-  starting: { label: '启动中', icon: <LoadingOutlined spin />, tone: 'accent' },
-  running: { label: '运行中', icon: <CheckCircleFilled />, tone: 'accent' },
-  failed: { label: '启动失败', icon: <CloseCircleFilled />, tone: 'danger' },
-  stopped: { label: '未启动', icon: <ExclamationCircleFilled />, tone: 'neutral' },
-  skipped: { label: '无需启动', icon: <CheckCircleFilled />, tone: 'neutral' }
-}
-
-/** 返回服务层的中文名称，统一服务卡片和日志标签的用词。 */
-function serviceLabel(layer: ServiceLayer): string {
-  return layer === 'frontend' ? '前端服务' : '后端服务'
-}
-
-/** 返回服务层的说明，帮助用户在没有地址或失败时快速判断下一步。 */
-function serviceHint(layer: ServiceLayer, status: PreviewServiceState['status'], resourceFailure: boolean): string {
-  if (status === 'skipped')
-    return layer === 'backend' ? '当前项目无需启动后端进程' : '等待前端运行时就绪'
-  if (status === 'starting') return '正在执行依赖、构建与就绪检测'
-  if (status === 'running') return '进程已受控运行，可从预览地址访问'
-  if (status === 'failed') return resourceFailure
-    ? '请先处理实体表或内置数据库配置，再重新启动'
-    : '请查看本次启动日志，必要时诊断并修复'
-  return '尚未建立本次启动进程'
-}
-
-/** 返回服务实际端口，并兼容没有独立端口字段的旧运行快照。 */
-function servicePort(service?: PreviewServiceState): string {
-  if (service?.port && service.port > 0) return String(service.port)
-  if (!service?.url) return ''
-  try {
-    const parsed = new URL(service.url)
-    if (parsed.port) return parsed.port
-    return parsed.protocol === 'https:' ? '443' : '80'
-  } catch {
-    return ''
-  }
 }
 
 /** 展示主题化的服务状态、维护动作和前后端独立日志。 */
@@ -107,7 +61,8 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
 
   useEffect(() => {
     if (runtime?.failedStage)
-      setTab(runtime.failedStage.startsWith('backend') ? 'backend' : 'frontend')
+      setTab(runtime.failedStage.startsWith('agent_runtime') ? 'agent_runtime'
+        : runtime.failedStage.startsWith('backend') ? 'backend' : 'frontend')
   }, [runtime?.attemptId, runtime?.failedStage])
 
   useEffect(() => {
@@ -116,7 +71,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
 
   /** 切换日志端并恢复跟随，确保新选择的日志从最新位置开始查看。 */
   const selectLogTab = (key: string): void => {
-    if (key !== 'frontend' && key !== 'backend') return
+    if (key !== 'frontend' && key !== 'backend' && key !== 'agent_runtime') return
     setTab(key)
     setFollowing(true)
   }
@@ -144,62 +99,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
       className={`preview-service-drawer${logsExpanded ? ' is-log-expanded' : ''}`}
     >
       <div className="preview-service-drawer__body">
-        <section
-          className="preview-service-section"
-          aria-labelledby="preview-service-status-heading"
-        >
-          <div className="preview-section-heading">
-            <div>
-              <h3 id="preview-service-status-heading">服务状态</h3>
-            </div>
-            <span className="preview-section-caption">受控进程 · 就绪检测</span>
-          </div>
-          <div className="preview-service-grid">
-            {(['frontend', 'backend'] as const).map((layer) => {
-              const service = runtime?.[layer]
-              const status = service?.status || 'stopped'
-              const meta = statusMeta[status]
-              const LayerIcon = layer === 'frontend' ? ApiOutlined : CloudServerOutlined
-              const port = servicePort(service)
-              return (
-                <article key={layer} className={`preview-service-card is-${status}`}>
-                  <div className="preview-service-card__topline">
-                    <div className="preview-service-card__identity">
-                      <span className="preview-service-card__icon">
-                        <LayerIcon />
-                      </span>
-                      <strong>{serviceLabel(layer)}</strong>
-                    </div>
-                    <span className={`preview-service-status-pill is-${meta.tone}`}>
-                      <span>{meta.icon}</span>
-                      {meta.label}
-                    </span>
-                  </div>
-                  <div className="preview-service-card__meter" aria-hidden="true">
-                    <span />
-                  </div>
-                  <p className="preview-service-card__hint">{serviceHint(layer, status, layer === 'backend' && runtime?.failedStage === 'backend_database_resource')}</p>
-                  <div className="preview-service-card__endpoint">
-                    <span>服务端口</span>
-                    {port ? (
-                      <Typography.Text copyable={{ tooltips: ['复制端口', '已复制'] }}>
-                        {port}
-                      </Typography.Text>
-                    ) : (
-                      <span className="is-empty">等待端口</span>
-                    )}
-                  </div>
-                  {service?.message && (
-                    <div className={`preview-service-card__message is-${meta.tone}`}>
-                      <span>{meta.icon}</span>
-                      <span>{service.message}</span>
-                    </div>
-                  )}
-                </article>
-              )
-            })}
-          </div>
-        </section>
+        <ServiceStatusCards runtime={runtime} />
 
         <section
           className="preview-service-actions"
@@ -254,21 +154,21 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
               </div>
             </div>
             <span className="preview-log-count">
-              {logs.length} 个{tab === 'frontend' ? '前端' : '后端'}日志文件
+              {logs.length} 个{serviceLabel(tab)}日志文件
             </span>
           </div>
           <Tabs
             className="preview-log-tabs"
             activeKey={tab}
             onChange={selectLogTab}
-            items={(['frontend', 'backend'] as const).map((layer) => ({
+            items={serviceLayers.map((layer) => ({
               key: layer,
               label: (
                 <span className="preview-log-tab-label">
                   <span
                     className={`preview-log-tab-dot is-${statusMeta[runtime?.[layer]?.status || 'stopped'].tone}`}
                   />
-                  {layer === 'frontend' ? '前端' : '后端'}
+                  {serviceLabel(layer)}
                   <em>{runtime?.logs?.[layer]?.length || 0}</em>
                 </span>
               )

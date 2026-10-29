@@ -42,6 +42,7 @@ function statusText(value: unknown): string {
 /** 渲染 TechnicalPlan 的开发审核视图，不投射上游产品事实。 */
 export default function TechnicalPlanSummary({ plan, productPlan, spec }: Props): ReactElement {
   const architecture = asRecord(plan.architecture)
+  const topology = asRecord(plan.topology)
   const entities = recordItems(plan.entities)
   const contracts = recordItems(plan.api_contracts)
   const pages = recordItems(plan.pages)
@@ -81,6 +82,7 @@ export default function TechnicalPlanSummary({ plan, productPlan, spec }: Props)
             <div><Title level={4}>技术架构</Title><Text type="secondary">实现边界与固定技术栈</Text></div>
           </div>
           <dl className={cx('project-plan-summary-facts', 'is-architecture')}>
+            <div><dt>应用架构</dt><dd>{topology.type === 'backend_direct' ? 'Java 业务应用' : topology.type === 'agent_runtime_direct' ? 'Agent Runtime 应用' : '尚未选择'}</dd></div>
             <div><dt>前端</dt><dd>{String(architecture.frontend || '待补充')}</dd></div>
             <div><dt>后端</dt><dd>{String(architecture.backend || '待补充')}</dd></div>
             <div><dt>数据</dt><dd>{String(architecture.data || '待补充')}</dd></div>

@@ -194,6 +194,9 @@ def frontend_api_task_manifest(
 def unit_task_identity_manifest(context: UnitGenerationContext) -> dict[str, tuple[str, ...]]:
     """将当前全部增量职责分组到固定任务 ID，不读取模型内容或历史候选。"""
 
+    if context.unit_kind == "agent":
+        from app.services.runtime_agent_dag import agent_task_manifest
+        return {item["task_id"]: (item["requirement_id"],) for item in agent_task_manifest(context)}
     if context.unit_kind == "backend" and context.unit_id.startswith("backend:endpoint:"):
         return {item["task_id"]: (item["requirement_id"],) for item in backend_stage_manifest(context)}
     if context.unit_kind == "frontend" and context.unit_id == "frontend:api-client":

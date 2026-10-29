@@ -10,11 +10,12 @@ type ServiceRuntime = {
   status?: string
   frontend?: { status?: string }
   backend?: { status?: string }
+  agent_runtime?: { status?: string }
 }
 
 /** 任一端已有运行进程时显示重启，避免无需后端的项目被误判为尚未启动。 */
 export function previewServiceLaunchLabel(runtime?: ServiceRuntime): '启动服务' | '重启服务' {
-  return runtime?.frontend?.status === 'running' || runtime?.backend?.status === 'running'
+  return runtime?.frontend?.status === 'running' || runtime?.backend?.status === 'running' || runtime?.agent_runtime?.status === 'running'
     ? '重启服务'
     : '启动服务'
 }
@@ -29,18 +30,18 @@ export function previewServiceState(runtime?: ServiceRuntime): PreviewServiceSta
   if (
     runtime?.status === 'failed' ||
     runtime?.frontend?.status === 'failed' ||
-    runtime?.backend?.status === 'failed'
+    runtime?.backend?.status === 'failed' || runtime?.agent_runtime?.status === 'failed'
   ) {
     return 'failed'
   }
   if (
     runtime?.status === 'starting' ||
     runtime?.frontend?.status === 'starting' ||
-    runtime?.backend?.status === 'starting'
+    runtime?.backend?.status === 'starting' || runtime?.agent_runtime?.status === 'starting'
   ) {
     return 'starting'
   }
-  if (runtime?.frontend?.status === 'running' || runtime?.backend?.status === 'running') {
+  if (runtime?.frontend?.status === 'running' || runtime?.backend?.status === 'running' || runtime?.agent_runtime?.status === 'running') {
     return 'running'
   }
   return 'idle'

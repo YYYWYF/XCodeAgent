@@ -21,6 +21,7 @@ from app.workspace.workspace import DEFAULT_IGNORED_DIRS, SENSITIVE_FILE_NAMES
 AgentWorkspaceMode = Literal[
     "frontend",
     "data_source",
+    "agent_runtime",
     "database",
     "code_analyze",
     "code_analyze_diff",
@@ -82,12 +83,19 @@ def create_workspace_backend(
     include_builtin_skills: bool = False,
     user_skills_backend: BackendProtocol | None = None,
     agent_memory_backend: BackendProtocol | None = None,
+    runtime_python_paths: tuple[str, ...] = (),
+    runtime_test_files: bool = False,
 ) -> BackendProtocol:
+    """挂载工作区和只读技能，Runtime 仅按平台提供的精确清单开放 Python 创建。"""
     root = resolve_workspace_root(workspace_root)
     default_backend = (
         StateBackend()
         if root is None
-        else AutoDedupFilesystemBackend(root_dir=root, virtual_mode=True)
+        else AutoDedupFilesystemBackend(
+            root_dir=root, virtual_mode=True,
+            **({"runtime_python_paths": runtime_python_paths} if runtime_python_paths else {}),
+            **({"runtime_test_files": True} if runtime_test_files else {}),
+        )
     )
     routes: dict[str, BackendProtocol] = {}
     if include_builtin_skills:
@@ -152,6 +160,23 @@ def create_workspace_permissions(
             )
         )
     permissions.extend(skill_permissions)
+    if mode == "agent_runtime":
+        # Runtime 文件工具之外不开放命令执行；精确任务写边界由独立 backend 再次校验。
+        permissions.extend([
+            *skill_permissions,
+            FilesystemPermission(operations=["read", "write"], paths=[
+                "/agent-runtime/.venv", "/agent-runtime/.venv/**",
+                "/agent-runtime/**/__pycache__", "/agent-runtime/**/__pycache__/**",
+                "/agent-runtime/.git", "/agent-runtime/.git/**",
+            ], mode="deny"),
+            FilesystemPermission(operations=["read"], paths=["/agent-runtime", "/agent-runtime/**"], mode="allow"),
+            FilesystemPermission(operations=["write"], paths=[
+                "/agent-runtime/src/app/**", "/agent-runtime/tests/**", "/agent-runtime/pyproject.toml",
+            ], mode="allow"),
+            FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="deny"),
+        ])
+        return permissions
+
     if mode == "data_source":
         # DataSource Agent 只实现后端任务；平台技能与记忆已由前面的精确规则放行。
         permissions.extend(
@@ -222,6 +247,7 @@ def create_workspace_permissions(
                         "/backend/src/test/java/**",
                         "/Backend/src/test/java",
                         "/Backend/src/test/java/**",
+                        "/agent-runtime/tests/test_*.py",
                     ],
                     mode="allow",
                 ),

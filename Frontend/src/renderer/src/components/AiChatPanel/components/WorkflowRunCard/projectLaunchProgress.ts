@@ -7,6 +7,7 @@ import type {
 const LAUNCH_STAGE_INDEX: Record<string, number> = {
   structure: 0,
   backend: 1,
+  agent_runtime: 1,
   frontend: 2,
   ready: 3
 }

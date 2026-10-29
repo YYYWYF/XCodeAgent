@@ -14,6 +14,7 @@ from typing import Any
 
 from app.services.api_design_mapping_rules import mapping_business_description, mapping_sources
 from app.services.page_identity import canonical_page_entry_path
+from app.services.runtime_business_acceptance import RUNTIME_VERIFIER_NAMES, compile_runtime_check
 
 
 BUSINESS_ACCEPTANCE_KINDS = (
@@ -25,6 +26,7 @@ BUSINESS_ACCEPTANCE_KINDS = (
     "backend.application_service_contract",
     "backend.endpoint_contract",
     "backend.upstream_contract",
+    *RUNTIME_VERIFIER_NAMES,
 )
 
 BUSINESS_VERIFIER_NAMES = {
@@ -36,6 +38,7 @@ BUSINESS_VERIFIER_NAMES = {
     "backend.application_service_contract": "backend_application_service_contract",
     "backend.endpoint_contract": "backend_endpoint_contract",
     "backend.upstream_contract": "backend_upstream_contract",
+    **RUNTIME_VERIFIER_NAMES,
 }
 
 DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND = {
@@ -49,6 +52,7 @@ DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND = {
     "backend.endpoint_controller": "endpoint_id",
     "backend.upstream": "endpoint_id",
     "backend.bootstrap": "data_source_type",
+    "agent.runtime": "agent_id",
 }
 DELIVERABLE_KINDS = tuple(DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND)
 
@@ -58,7 +62,7 @@ _FRONTEND_DELIVERABLE_KINDS = {
     "frontend.static_data_module",
     "frontend.shared_capability",
 }
-_BACKEND_DELIVERABLE_KINDS = set(DELIVERABLE_KINDS) - _FRONTEND_DELIVERABLE_KINDS
+_BACKEND_DELIVERABLE_KINDS = set(DELIVERABLE_KINDS) - _FRONTEND_DELIVERABLE_KINDS - {"agent.runtime"}
 _CHECK_ORDER = {kind: index for index, kind in enumerate(BUSINESS_ACCEPTANCE_KINDS)}
 _MAX_ITEMS = 100
 _MAX_SCHEMA_DEPTH = 6
@@ -71,6 +75,9 @@ def compile_business_acceptance(
     """在任务完成归一化和 Unit 编译后生成业务验收检查。"""
 
     compile_context = context if isinstance(context, dict) else {}
+    from app.services.runtime_business_acceptance import dependency_paths
+
+    compile_context = {**compile_context, "runtime_dependency_paths": dependency_paths(tasks)}
     return [_compile_task(task, compile_context) for task in tasks]
 
 
@@ -155,6 +162,8 @@ def business_acceptance_contract_errors(
             errors.append(
                 f"Task {task_id} backend deliverable {deliverable_id} has invalid owner or Unit."
             )
+        if kind == "agent.runtime" and (owner != "agent" or unit_id != f"agent:{deliverable['target_id']}"):
+            errors.append(f"Task {task_id} 的 Agent 交付物与正式 Unit 身份不一致。")
         paths = deliverable["paths"]
         if not paths and kind != "frontend.shared_capability":
             errors.append(f"Deliverable {deliverable_id} must declare paths.")
@@ -242,6 +251,15 @@ def business_acceptance_contract_errors(
             errors.append(f"Business check {check_id or '<unknown>'} must run at build stage.")
         errors.extend(_expected_field_errors(check_id, kind, check.get("expected")))
     errors.extend(_frontend_api_deliverable_target_errors(task_id, deliverables, checks))
+    if source_refs.get("backend_implementation") == "python_runtime" or owner == "agent":
+        from app.services.runtime_business_acceptance import PYTHON_CHECK_KINDS
+
+        expected_kinds = {"agent.module_contract" if item["kind"] == "agent.runtime" else PYTHON_CHECK_KINDS.get(item["kind"])
+                          for item in deliverables}
+        expected_kinds.discard(None)
+        actual_kinds = {check.get("kind") for check in checks}
+        if expected_kinds != actual_kinds:
+            errors.append(f"Runtime 任务 {task_id} 的业务验收项与交付职责不一致，必须重新编译当前合同。")
     return _dedupe_strings(errors)
 
 
@@ -355,6 +373,9 @@ def _checks_for_deliverable(
     """把单个交付物映射到已实现的确定性检查类型。"""
 
     kind = deliverable["kind"]
+    runtime_checks = compile_runtime_check(task, deliverable, formal)
+    if runtime_checks is not None:
+        return runtime_checks
     if kind == "frontend.api_module":
         endpoints = _frontend_api_endpoint_expectations(formal, deliverable)
         allowed_existing_endpoints = _frontend_api_allowed_existing_endpoint_expectations(
@@ -668,6 +689,7 @@ def _formal_inputs(context: dict[str, Any], task: dict[str, Any]) -> dict[str, A
             context.get("frontend_endpoint_owner_constraints")
         ),
         "source_refs": source_refs,
+        "runtime_dependency_paths": (context.get("runtime_dependency_paths") or {}).get(str(task.get("id")), []),
     }
 
 
@@ -1305,6 +1327,13 @@ def _expected_field_errors(check_id: str, kind: str, value: Any) -> list[str]:
         "backend.application_service_contract": ("operations",),
         "backend.endpoint_contract": ("endpoints",),
         "backend.upstream_contract": ("external_apis",),
+        "python.objects_contract": ("entities", "endpoints"),
+        "python.repository_contract": ("entities", "operations", "endpoint_designs"),
+        "python.application_service_contract": ("operations", "endpoints", "endpoint_designs"),
+        "python.endpoint_contract": ("endpoints",),
+        "python.upstream_contract": ("external_apis",),
+        "python.bootstrap_contract": ("endpoint_designs",),
+        "agent.module_contract": ("agent_id", "module", "configuration"),
     }.get(kind, ())
     return [
         f"Business check {check_id or '<unknown>'} expected is missing {field}."
@@ -1380,7 +1409,7 @@ def _requires_business_deliverable(task: dict[str, Any]) -> bool:
         return False
     owner = _text(task.get("owner"))
     unit_id = _text(task.get("unit_id"))
-    if owner not in {"frontend", "backend"}:
+    if owner not in {"frontend", "backend", "agent"}:
         return False
     return unit_id not in {"frontend:shell", "frontend:api-client", "frontend:auth-guard", "backend:bootstrap"}
 

@@ -12,7 +12,7 @@ from app.services.template_reconcile.update_package_v3 import validate_update_pa
 from app.services.template_reconcile.update_package_v4 import validate_update_package_v4
 from app.services.template_reconcile.config_surfaces import validate_ensure_package, validate_working_surfaces
 from app.services.template_reconcile.transaction_v4 import apply_working_copy_v4, recover_v4_transaction
-from app.services.template_reconcile.desired import compile_template_capabilities
+from app.services.workspace_bootstrap.template_layout import compile_workspace_template_capabilities, template_roots, validate_template_layout_state, RUNTIME_ROOTS
 from app.services.application_config import read_application_config
 from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
@@ -26,12 +26,12 @@ class TemplateReconcileService:
         self._settings = settings
 
     async def reconcile_capabilities(self, workspace: str | Path) -> str:
-        """从 canonical application.json 安装缺失能力，不读取 TechnicalPlan 或计算摘要。"""
+        """从应用配置和明确确认的实现拓扑安装能力，保留当前 V4 事务合同。"""
 
         root = Path(workspace).expanduser().resolve()
         recover_v4_transaction(root)
         # 先以两个 canonical 文件做纯本地判定：已满足时不得创建 Client、访问网络或改写 State。
-        desired = compile_template_capabilities(read_application_config(root))
+        desired = compile_workspace_template_capabilities(root, read_application_config(root))
         current = load_template_state_v3(root)
         applied = {
             name: capability.model_dump(mode="json")
@@ -46,7 +46,7 @@ class TemplateReconcileService:
             raise TemplateStateError("TEMPLATE_RECONCILE_DISABLED：模板能力增量更新功能尚未开启。")
         recover_v4_transaction(root)
         # 恢复事务可能已完成上次安装；两个 canonical 输入都重新读取，不能沿用旧快照。
-        desired = compile_template_capabilities(read_application_config(root))
+        desired = compile_workspace_template_capabilities(root, read_application_config(root))
         current = load_template_state_v3(root)
         applied = {
             name: capability.model_dump(mode="json")
@@ -73,6 +73,12 @@ class TemplateReconcileService:
             if package.mode != "APPLY" or package.sourceRevision != current.templateRevision or package.expectedStateSequence != current.stateSequence:
                 raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 包未绑定当前 State。")
             next_state = package.nextTemplateState
+            roots = template_roots(desired)
+            validate_template_layout_state(next_state, roots)
+            if roots == RUNTIME_ROOTS and any(
+                operation.target.split("/", 1)[0] not in roots for operation in package.operations
+            ):
+                raise TemplateStateError("V4 Runtime 更新包包含其他拓扑或平台私有目标。")
             next_applied = {
                 name: capability.model_dump(mode="json")
                 for name, capability in next_state.effective.items()

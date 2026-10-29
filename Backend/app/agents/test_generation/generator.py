@@ -21,13 +21,14 @@ from app.agents.test_generation.capabilities import (
 )
 from app.agents.test_generation.runtime_artifacts import is_preview_runtime_artifact
 from app.agents.test_generation.scope import is_frontend_test_support_path
+from app.services.python_test_contract import is_runtime_test_path, python_test_content_error
 from app.utils.model_output import extract_json_object
 from app.workspace.code_changes import capture_workspace_changes
 from app.workspace.artifact_snapshot import internal_artifact_snapshot
 
 
 MAX_TEST_FILES = 5
-_SOURCE_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".java"}
+_SOURCE_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".java", ".py"}
 
 
 def generate_or_update_unit_tests_with_agent(
@@ -276,6 +277,10 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "that is absent from that list, never modify package.json or a lockfile, and never "
         "request installation of a new npm package. If a preferred interaction helper is "
         "unavailable, use capabilities already declared by the project or a native DOM API.\n\n"
+        "Python Runtime changes use pytest files flat under agent-runtime/tests/test_*.py. "
+        "Exercise changed service/Agent behavior, Principal isolation or HTTP contract boundaries "
+        "using existing libraries, unittest.mock and fixtures. Never contact a real LLM or database, "
+        "create conftest.py or dependencies, or skip/xfail cases. Java rules below apply only to Java.\n"
         "Do not generate tests for backend mapping-only classes such as *Assembler, "
         "*Converter or *Mapper, including MapStruct implementations; also exclude DTO, "
         "entity, configuration and getter/setter-only classes. Prefer Service tests and "
@@ -306,6 +311,7 @@ def _validate_test_files(
     root = Path(workspace).expanduser().resolve()
     invalid_paths: list[str] = []
     invalid_contents: list[str] = []
+    content_errors: dict[str, str] = {}
     unavailable_imports: dict[str, list[str]] = {}
     source_files = source_files or []
     frontend_capabilities = load_frontend_test_capabilities(workspace)
@@ -324,6 +330,8 @@ def _validate_test_files(
         elif normalized.startswith("backend/src/test/java/"):
             if not relative.endswith("Test.java"):
                 invalid_paths.append(relative)
+        elif is_runtime_test_path(relative):
+            pass
         else:
             invalid_paths.append(relative)
         try:
@@ -363,6 +371,11 @@ def _validate_test_files(
             if unavailable:
                 unavailable_imports[relative] = unavailable
                 invalid_contents.append(relative)
+        elif is_runtime_test_path(relative):
+            content_error = python_test_content_error(content)
+            if content_error:
+                invalid_contents.append(relative)
+                content_errors[relative] = content_error
         elif normalized.endswith("test.java"):
             if "@Test" not in content or "@Disabled" in content or "@Ignore" in content:
                 invalid_contents.append(relative)
@@ -388,6 +401,7 @@ def _validate_test_files(
         "valid": not invalid_paths and not invalid_contents and not missing_files,
         "invalid_paths": list(dict.fromkeys(invalid_paths)),
         "invalid_contents": list(dict.fromkeys(invalid_contents)),
+        "content_errors": content_errors,
         "unavailable_imports": unavailable_imports,
         "missing_files": missing_files,
         "changed_files": changed_files[:MAX_TEST_FILES],
@@ -424,7 +438,7 @@ def _persist_mapping(
                 test_path = root / test
                 entries.append(
                     {
-                        "layer": "backend" if "/src/test/java/" in test.casefold() else "frontend",
+                        "layer": "backend" if "/src/test/java/" in test.casefold() or is_runtime_test_path(test) else "frontend",
                         "moduleType": _module_type(source, test),
                         "featureId": _feature_id(source, test),
                         "sourcePaths": [source],
@@ -700,6 +714,7 @@ def _workspace_test_files(root: Path) -> list[str]:
     """列出两个项目约定目录中的候选单元测试文件。"""
 
     values = [
+        *(path.relative_to(root).as_posix() for path in (root / "agent-runtime/tests").glob("test_*.py") if path.is_file()),
         *(path.relative_to(root).as_posix() for path in (root / "frontend" / "tests").glob("*.test.ts") if path.is_file()),
         *(path.relative_to(root).as_posix() for path in (root / "frontend" / "tests").glob("*.test.tsx") if path.is_file()),
         *(path.relative_to(root).as_posix() for path in (root / "Frontend" / "tests").glob("*.test.ts") if path.is_file()),
@@ -769,6 +784,8 @@ def _allowed_test_path(path: str) -> bool:
     if ".." in Path(normalized).parts:
         return False
     lower = normalized.casefold()
+    if is_runtime_test_path(normalized):
+        return True
     if lower.startswith("frontend/tests/"):
         return "/" not in normalized[len("frontend/tests/") :] and lower.endswith(
             (".test.ts", ".test.tsx")
@@ -780,6 +797,8 @@ def _test_path_layer(path: str) -> str | None:
     """根据测试约定目录返回测试文件所属端。"""
 
     normalized = path.replace("\\", "/").lstrip("/").casefold()
+    if is_runtime_test_path(normalized):
+        return "backend"
     if normalized.startswith("frontend/tests/") and normalized.endswith(
         (".test.ts", ".test.tsx")
     ):
@@ -807,7 +826,7 @@ def _layers_for_sources(paths: list[str]) -> list[str]:
     layers: list[str] = []
     for path in paths:
         lower = path.casefold()
-        layer = "frontend" if lower.startswith("frontend/") else "backend" if lower.startswith("backend/") else ""
+        layer = "frontend" if lower.startswith("frontend/") else "backend" if lower.startswith(("backend/", "agent-runtime/src/app/")) else ""
         if layer and layer not in layers:
             layers.append(layer)
     return layers

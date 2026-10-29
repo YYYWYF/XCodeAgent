@@ -49,3 +49,11 @@ Backend 重启后，失去执行者的 `diagnose/confirm/revise` 占用在首次
 - Backend：`python -m unittest tests.test_preview_runtime tests.test_project_launcher tests.test_ag_ui_action_stream tests.test_application_lifecycle tests.test_application_lifecycle_protocol tests.test_workspace_run_lease`。
 - Frontend：`pnpm test:preview-runtime`、`pnpm test:stage-sessions`、`pnpm test:preview-inspector`、`pnpm test:workflow-preview`、`pnpm lint`、`pnpm build`（包含 typecheck）。
 - 运行时：检查 `/health`；在实际 Electron 中验证抽屉、明暗主题、日志滚动跟随、窄窗口和当前页面重启刷新。浏览器中的 Vite 页面不能替代此项。
+# Runtime Direct 的当前扩展
+
+当前显式已确认 `agent_runtime_direct` 服务图沿同一 preview-runtime AG-UI 的 restart/stop/leave、维护互斥和状态订阅运行，不新增 REST 维护入口。启动顺序为 Runtime → frontend → 本次 launchId 的同源代理检查；Java 标记 skipped。状态和日志增加独立 `agent_runtime`，Frontend 三卡片及聚合状态同步消费，退出/停止与孤儿维护回收覆盖 Runtime。
+
+普通预览只注入真实匿名会话及当前 Studio 主模型，不向 Renderer 返回任何运行密钥；数据库沿当前 SaaS 一次取密，仅给 Python 子进程。独立窗口的“打开接口调试”只打开普通 Runtime `/docs`，不代表独立 Debug Profile。Runtime 失败当前保留真实日志和资源错误，尚不进入 Java SmallTask 自动修复范围。
+
+模板要求和健康/代理合同见 `docs/topology/agent-runtime-direct/RUNTIME_LAUNCH_CONTRACT_1028.md`。此批仅代码接入，按用户要求未执行测试或实际 UI 验证。
+

@@ -256,6 +256,7 @@ def sync_project_plan_from_markdown(
                     "entities",
                     "api_contracts",
                     "pages",
+                    *( ("agent_contracts",) if "agent_contracts" in synced else () ),
                 )
             },
             datasource_type=datasource_type,
@@ -272,6 +273,11 @@ def sync_project_plan_from_markdown(
     )
     if not is_technical_plan and isinstance(synced.get("app"), dict):
         normalized["app"] = synced["app"]
+    if is_technical_plan:
+        from app.services.runtime_business_contract import serves_python_business, runtime_business_architecture
+        # 拓扑来自服务端当前审阅版本；Markdown 模型不能将 Runtime 改回默认 Java 栈。
+        if serves_python_business(existing_plan):
+            normalized["architecture"] = runtime_business_architecture()
     errors = validate_api_contract_consistency(normalized)
     if is_technical_plan:
         errors.extend(validate_technical_plan_api_contracts(normalized))

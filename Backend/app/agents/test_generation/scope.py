@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from pathlib import PurePosixPath
 from typing import Any
+from app.services.python_test_contract import is_runtime_test_path
 
 from deepagents.backends.protocol import (
     BackendProtocol,
@@ -64,6 +65,8 @@ def is_test_generation_path_allowed(path: str) -> bool:
     if not candidate:
         return False
     if is_frontend_test_support_path(candidate):
+        return True
+    if is_runtime_test_path(candidate):
         return True
     lowered = candidate.casefold()
     frontend_prefix = "frontend/tests/"

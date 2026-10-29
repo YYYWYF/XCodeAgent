@@ -28,6 +28,7 @@ from app.services.planning_unit_display_names import project_plan_unit_display_n
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_generation_requirement_targets import scoped_formal_targets
 from app.services.unit_generation_requirements import resolve_generation_requirements
+from app.services.runtime_business_contract import backend_generation_constraints
 from app.services.unit_generation_requirements_contracts import (
     UnitGenerationRequirements, fail_requirement_input,
 )
@@ -231,6 +232,9 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                                                if (owner.api_contract_id, owner.endpoint_id) in endpoint_keys],
             },
             constraints={"owner": "frontend" if unit.kind == "page" else unit.kind,
+                         **backend_generation_constraints(plan),
+                         **({"agent_template_policy": plain_json(self.build_context.get("runtime_agent_template_policy", {}))}
+                            if unit.kind == "agent" else {}),
                          "managed_files": [], "strong_rules": ["exact_unit_owner", "exact_file_scope",
                          "no_platform_owned_fields", "no_platform_owned_tasks", "no_repair_or_verification_tasks", "status_pending"]},
         )
