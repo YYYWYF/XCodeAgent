@@ -246,11 +246,10 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 平台规范化 TechnicalPlan 候选以及恢复失败 checkpoint 时，会把 `action_implementations` 和
 `stepBindings` 已明确选择且真实存在的 Endpoint 确定性并入同页 `endpoint_dependencies`。已有依赖的
 `usage`、`trigger` 和首屏标记保持不变；未知 Endpoint 不会被自动创建或掩盖，仍由一致性校验拒绝。
-当全部剩余错误仅为缺失或不完整的业务 `action_implementations` 时，规划节点先从 ProductPlan 权威行为中
-生成结构化 binding issue，再让专用模型只返回已存在 Endpoint 的选择 Patch；后端严格校验目标、字段、
-业务 step 集合和 Endpoint 身份，幂等合并后执行上述依赖闭合，并重新运行完整 TechnicalPlan 校验。Patch
-无效或没有合适的现有 Endpoint 时，本轮直接回落完整 TechnicalPlan 修订。Contract-only 自动修复仍仅适用于
-全部剩余错误都来自 API Contract 定义的情况；绑定与 Contract、Schema、页面或全局错误混合时必须走完整修订。
+存在完整候选后，缺失的业务 `action_implementations`、Contract、Schema、页面引用和混合错误统一通过
+`grep/read_file/edit_file` 局部修复。模型按需查阅已确认 ProductPlan，并编辑绑定及必要依赖；平台仍严格
+校验业务 action/step、Endpoint 身份和全量引用闭合。首版修复与二次修改使用同一入口，不再按错误类别
+要求重写整个 Contract 或回落整份规划；修复预算耗尽后返回原错误审阅门。
 
 ```json
 {
@@ -308,6 +307,10 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 
 ### TechnicalPlan 上下文预算
 
+TechnicalPlan 的二次修改和首版完整候选的自动修复复用 DeepAgents `grep`、`read_file`、`edit_file`：模型按需搜索和读取片段，再以唯一匹配的 `old_string/new_string` 修改内存候选，不再输出整个 Contract 或规划。候选只包含 architecture、entities、api_contracts、pages，已确认 ProductPlan 和脱敏应用约束只读；工具不能访问工作区、改上游或整文件写入。单次读取最多 120 行、搜索最多 40 项、每轮最多 8 次模型调用。模型回复不代替文件修改；最终 JSON、根字段、中文说明和完整技术合同仍须通过平台校验，编译或校验失败按原始意见与当前错误继续局部修复，原三轮预算保持不变。全部通过后沿原事务保存完整 Markdown/内部 JSON 并等待明确确认。首版尚无候选时使用完整生成器；截断、缺章节或根字段类型错误先沿既有 JSON 恢复，仍没有完整候选时才在剩余预算内重生成。拿到候选后不因编辑失败回退整份重写。内部工具文件不会作为可编辑用户产物或新的配置源。
+
+用户原始修改要求固定保留在内部生成输入 `planning_adjustment_request`，每轮系统校验反馈单独放入 `technical_plan_validation_feedback`，只替换本轮诊断，不覆盖原始要求，也不累积历史修复全文。无候选时的完整生成、有候选时的局部编辑和确认复验均携带原始要求；确认时的校验修复沿用技术事务已冻结的业务要求。中文说明错误进入同一完整校验与编辑流程，不另起首版翻译模型。系统诊断不能撤销用户意见，修复仍须遵守已确认上游与应用配置，新版本继续等待正式确认。这两个输入仅用于模型上下文，不新增正式产物字段或公开 AG-UI 合同。
+
 - 128k 上下文：TechnicalPlan 只注入实体上下文，以及拆分后的 ProductPlan 目标/验收、V1 页面与操作权限目标身份、业务流程、页面信息和业务动作上下文。确认卡直接修订和 `workbench_plan_revision` 都以 checkpoint 中当前 TechnicalPlan 为 authoritative baseline，叠加本轮修改请求并返回完整新版本，同时保留未受影响事实及必要依赖闭合；RequirementSpec、ProductPlan 或 UiDesign 先变化时旧 baseline 失效并按新上游重建。数据权限不进入第一阶段模型上下文；UiManifest 仍由运行时按页面/API 范围读取，不进入规划模型提示词。
 
 ## Endpoint API 动态映射与工作台执行
@@ -360,7 +363,7 @@ RequirementSpec 与 ProductPlan 只持久化用户提出或确认的产品事实
 - Endpoint API Design：单个 Endpoint 契约、场景 Entity 模板和按需加载的数据源有界元数据；
 - Build：当前 Unit 的 TechnicalPlan Endpoint、Endpoint 自包含字段映射/业务说明/来源快照、派生数据流表达式、页面实现契约、UI 设计文件路径和工作区快照。
 
-ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。TechnicalPlan 首次失败后优先只向模型投射报错 API Contract、绑定实体和关联产品动作，并将修复结果确定性合并回完整候选；无法定位具体 Contract 时才回退完整计划修订。三次预算耗尽时，最后一个可解析候选和精简错误只保留在 LangGraph checkpoint 的内部修复字段中，不作为 AG-UI 公开状态，也不写入正式 Markdown/JSON；用户授权“重新生成”后从该候选继续修复。只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
+ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 最多回灌十二条页面/API/数据源契约摘要；两者都不追加历史模型全文。TechnicalPlan 拿到完整候选后统一让模型按需搜索、读取和编辑报错片段及必要依赖，不因混合错误回退整份计划生成。三次预算耗尽时，最后一个可解析候选和精简错误只保留在 LangGraph checkpoint 的内部修复字段中，不作为 AG-UI 公开状态，也不写入正式 Markdown/JSON；用户授权“重新生成”后从该候选继续局部修复。只有通过校验的计划才进入确认产物，从而保持 128k 上下文预算与 checkpoint 可检查性。
 
 TechnicalPlan 的模型生成、JSON 解析和正式契约校验共用最多三次“生成 → 校验 → 错误反馈修复”总预算。三次仍失败时，节点停留在 `technical_planning` 并返回 `technical_plan_generation_error`，仅包含精简错误与重新生成操作，不写入 Markdown/JSON，也不发出确认产物。失败后的重新生成仍标记为 `repair`：当前 TechnicalPlan 缺失或为空且事务未声明基线摘要时，技术入口与统一兜底执行器允许重入，由节点使用内部候选和错误续修，候选缺失时重新生成；已有计划或已声明摘要必须严格匹配，`revise` 始终要求有效基线。修复或重新生成通过校验后仍必须等待用户确认。规划模型的 `llm.token` 原始 JSON 只用于内部生成过程，前端聊天和历史消息均不得展示；确认界面直接读取 Workflow `state/result.technical_plan` 的结构化计划。
 

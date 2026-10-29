@@ -19,7 +19,7 @@ def entity_tables_capabilities() -> dict[str, Any]:
     """发布实体 SQL 预览、明确创建、数据丢弃重建与只读刷新合同。"""
 
     return {"name": "entity-tables", "endpoint": "/entity-tables/run", "transport": "ag-ui-sse",
-            "actions": ["prepare", "execute", "rebuild", "refresh"], "customEventName": "entity-tables",
+            "actions": ["preview_ddl", "prepare", "execute", "rebuild", "refresh"], "customEventName": "entity-tables",
             "stateSnapshotKey": "entityTables", "workflowIndependent": True}
 
 
@@ -33,6 +33,7 @@ def build_entity_tables_stream(*, payload: dict[str, Any], accept: str | None = 
         request = EntityTableRequest.model_validate(forwarded.get("entityTables") or {})
         result = await asyncio.to_thread(run_entity_table_action, request)
         return AgUiActionResult(data=result, message={
+            "preview_ddl": "已生成建表 DDL，可复制到数据库工具执行。",
             "prepare": "已生成实体建表 SQL，请确认后执行。",
             "execute": "SaaS 已受理，请刷新查看执行结果。",
             "rebuild": "SaaS 已受理重建请求，请等待原操作完成；期间请勿启动应用。",
@@ -44,4 +45,6 @@ def build_entity_tables_stream(*, payload: dict[str, Any], accept: str | None = 
         run_id_prefix="entity-tables", operation=operation,
         error_message_prefix="实体建表操作失败", accept=accept,
         error_data=_entity_table_error_data,
+        # 查看 DDL 只有读盘和编译，不登记为会改变应用的工作区动作。
+        register_workspace_run=((payload.get("forwardedProps") or {}).get("entityTables") or {}).get("action") != "preview_ddl",
     )

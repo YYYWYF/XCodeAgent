@@ -1,5 +1,27 @@
 import { contextBridge,ipcRenderer} from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import type { AppUpdateApi, AppUpdateState } from '../shared/appUpdate'
+
+const appUpdate: AppUpdateApi = {
+  /** 补取启动更新的当前状态。 */
+  getState: () => ipcRenderer.invoke('app-update:state'),
+  /** 订阅主进程进度并在窗口卸载时释放订阅。 */
+  onStateChanged: (listener) => {
+    /** 隔离 Electron 事件对象，仅向页面传递更新快照。 */
+    const handler = (_event: Electron.IpcRendererEvent, state: AppUpdateState): void =>
+      listener(state)
+    ipcRenderer.on('app-update:changed', handler)
+    return () => {
+      ipcRenderer.removeListener('app-update:changed', handler)
+    }
+  },
+  /** 请求安装已校验的更新，不接受下载地址参数。 */
+  install: () => ipcRenderer.invoke('app-update:install'),
+  /** 源码模式继续进入登录，不执行安装。 */
+  continueDevelopment: () => ipcRenderer.invoke('app-update:continue'),
+  /** 退出整个应用且不安装更新。 */
+  quit: () => ipcRenderer.invoke('app-update:quit')
+}
 const AGENT_ARG_PREFIX = '--devagentstudio-base-url=';
 const agentBaseUrl =
   process.argv.find((argument) => argument.startsWith(AGENT_ARG_PREFIX))?.slice(AGENT_ARG_PREFIX.length) ||
@@ -13,6 +35,7 @@ type ProjectPreviewWorkspacePayload = {
 const api = {}
 
 const devAgentStudioApi = {
+  appUpdate,
   isElectron: true,
   agentBaseUrl,
   platform: process.platform,

@@ -15,7 +15,7 @@ PyYAML>=6.0.2
 urllib3<2
 uvicorn[standard]>=0.30.0
 cryptography==46.0.3
-deepagents>=0.5.3
+deepagents>=0.7.11
 pymysql>=1.1.0
 portalocker>=3.0.0
 code-review-graph==2.3.7
