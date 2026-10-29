@@ -6,8 +6,14 @@ import hashlib
 import re
 from typing import Any
 
+from app.services.ui_design_agent_surfaces import (
+    inspect_agent_surface_bindings,
+    manifest_agent_surface_bindings,
+    validate_agent_surface_bindings,
+)
 
-UI_MANIFEST_SCHEMA_VERSION = "ui-manifest.v3"
+
+UI_MANIFEST_SCHEMA_VERSION = "ui-manifest.v5"
 
 _STATIC_ATTRIBUTE_TEMPLATE = r"\b{attribute}\s*=\s*['\"]([^'\"]+)['\"]"
 # 表达式绑定的 data-* 属性（如 data-information-item-id={item.itemId}、
@@ -86,6 +92,19 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
     """从列表值中保留 JSON 对象项。"""
 
     return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _string_items(value: Any) -> list[str]:
+    """从数组值中提取去空白、去重且保序的字符串。"""
+
+    result: list[str] = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def _attribute(attrs: str, name: str) -> str:
@@ -313,7 +332,8 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
     # id 仍以字面量存在于数组定义，可静态解析后与 expected 精确匹配。
     source_item_ids = _extract_map_source_ids(code, "itemId")
     source_action_ids = _extract_map_source_ids(code, "actionId")
-    for tag, attrs, self_closing, is_closing in _jsx_opening_tags(code):
+    tags = _jsx_opening_tags(code)
+    for tag, attrs, self_closing, is_closing in tags:
         if is_closing:
             # 从栈顶向下找最近的同名标签，弹出它及之上的所有标签
             for i in range(len(ancestor_stack) - 1, -1, -1):
@@ -448,7 +468,14 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         cid = control_id.strip()
         if cid and cid not in controls:
             controls.append(cid)
-
+    agent_surfaces = inspect_agent_surface_bindings(tags, code)
+    for surface in _dict_items(agent_surfaces.get("surfaces")):
+        agent_id = str(surface.get("agentId") or "").strip()
+        action_part = "composer" if surface.get("type") == "standalone_page" else "launcher"
+        for action_id in _string_items(surface.get("actionIds")):
+            actions.setdefault(action_id, [f"{agent_id}-{action_part}"])
+        for item_id in _string_items(surface.get("contextItemIds")):
+            information_items.setdefault(item_id, [f"{agent_id}-context-{item_id}"])
     return {
         "actions": actions,
         "interaction_effects": interaction_effects,
@@ -456,6 +483,7 @@ def inspect_ui_code_bindings(code: str) -> dict[str, Any]:
         "information_items": information_items,
         "unowned_interactions": sorted(set(unowned_interactions)),
         "unowned_displays": sorted(set(unowned_displays)),
+        "agent_surfaces": agent_surfaces,
     }
 
 
@@ -478,7 +506,7 @@ def validate_ui_design_code(
     expected_items = _expected_ids(page, "information_items", "itemId")
     actual_actions = set(inspection["actions"])
     actual_items = set(inspection["information_items"])
-    errors: list[str] = []
+    errors: list[str] = list(validate_agent_surface_bindings(page, inspection.get("agent_surfaces", {}))["errors"])
     if actual_actions != set(expected_actions):
         missing = sorted(set(expected_actions) - actual_actions)
         unknown = sorted(actual_actions - set(expected_actions))
@@ -610,8 +638,17 @@ def build_ui_page_manifest(
         "information_items": {},
         "unowned_interactions": [],
         "unowned_displays": [],
+        "agent_surfaces": {
+            "surfaces": [],
+            "invalid_markers": [],
+            "duplicate_control_ids": [],
+            "template_inspection": {"usages": [], "errors": []},
+        },
     }
     errors = validate_ui_design_code(page, code) if code else []
+    surface_validation = validate_agent_surface_bindings(
+        page, inspection["agent_surfaces"]
+    )
     code_sha256 = hashlib.sha256(code.encode("utf-8")).hexdigest() if code else ""
     expected_actions = _expected_ids(page, "actions", "actionId")
     expected_items = _expected_ids(page, "information_items", "itemId")
@@ -662,6 +699,9 @@ def build_ui_page_manifest(
                 }
                 for item_id in expected_items
             ],
+            "agent_surfaces": manifest_agent_surface_bindings(
+                page, inspection.get("agent_surfaces", {})
+            ),
         },
         "verification": {
             "status": "passed" if code and not errors else ("failed" if code else "pending"),
@@ -678,6 +718,20 @@ def build_ui_page_manifest(
                 {
                     "id": "no-unowned-business-ui",
                     "status": "passed" if no_unowned_business_ui else "failed",
+                },
+                {
+                    "id": "product-agent-surface-bindings",
+                    "status": (
+                        "passed" if surface_validation["bindings_passed"] else "failed"
+                    ),
+                },
+                {
+                    "id": "agent-ui-fixed-template",
+                    "status": (
+                        "passed"
+                        if surface_validation["required_parts_passed"]
+                        else "failed"
+                    ),
                 },
             ],
             "errors": errors,
@@ -715,6 +769,7 @@ def persisted_ui_manifest(ui_designs: dict[str, Any]) -> dict[str, Any]:
         cleaned["bindings"] = {
             "actions": ui_action_bindings(page),
             "information_items": ui_information_bindings(page),
+            "agent_surfaces": _dict_items((page.get("bindings") or {}).get("agent_surfaces")),
         }
         if not cleaned.get("preview_path") and page.get("route_path"):
             cleaned["preview_path"] = page.get("route_path")

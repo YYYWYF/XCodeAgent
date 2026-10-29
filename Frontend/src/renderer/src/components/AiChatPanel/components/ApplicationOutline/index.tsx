@@ -21,6 +21,7 @@ import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
+import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 import {
   collectRelatedKeys,
   collectVisibleKeys,
@@ -31,6 +32,9 @@ import {
 const { Text } = Typography
 
 export type ApplicationOutlineProps = {
+  agents?: BusinessAgentOption[]
+  selectedAgentId?: string
+  onAgentSelect?: (agent: BusinessAgentOption | undefined) => void
   developmentArtifacts?: DevelopmentArtifacts
   /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
   currentBranch?: string
@@ -54,6 +58,9 @@ export type ApplicationOutlineProps = {
 
 /** 渲染开发产物列表，提供搜索、筛选、分组展开与产物浏览入口。 */
 export default function ApplicationOutline({
+  agents = [],
+  selectedAgentId,
+  onAgentSelect,
   developmentArtifacts,
   currentBranch,
   apiContracts = [],
@@ -170,6 +177,14 @@ export default function ApplicationOutline({
           </div>
 
           <div className={cx('session-outline-scroll')}>
+            {agents.length ? <section className={cx('outline-section')}>
+              <div className={cx('outline-section-heading')}>智能体 <span>{agents.length}</span></div>
+              {agents.filter((agent) => `${agent.label} ${agent.purpose}`.toLocaleLowerCase().includes(query)).map((agent) =>
+                <button key={agent.agentId} type="button" className={cx('api-endpoint', selectedAgentId === agent.agentId && 'active')}
+                  aria-pressed={selectedAgentId === agent.agentId} onClick={() => onAgentSelect?.(agent)}>
+                  <span className={cx('api-copy')}><strong>{agent.label}</strong><small>{agent.purpose}</small></span>
+                </button>)}
+            </section> : null}
             <section className={cx('outline-section')}>
               <button
                 aria-expanded={pagesExpanded}

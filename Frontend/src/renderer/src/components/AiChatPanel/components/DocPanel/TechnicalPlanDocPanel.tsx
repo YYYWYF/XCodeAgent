@@ -11,6 +11,8 @@ import {
 import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
+import TechnicalPlanAgentSection from './TechnicalPlanAgentSection'
+import { technicalPlanDisplayContracts } from './TechnicalPlanAgentContracts'
 
 type Props = {
   plan: JsonRecord
@@ -33,9 +35,12 @@ export default function TechnicalPlanDocPanel({
 }: Props): ReactElement {
   const architecture = asRecord(plan.architecture)
   const entities = recordItems(plan.entities)
-  const contracts = recordItems(plan.api_contracts)
+  const contracts = technicalPlanDisplayContracts(plan)
   const pages = recordItems(plan.pages)
-  const sections = [...technicalPlanSections, { key: 'authorization' as const, label: '接口权限绑定' }]
+  const authorizationSections = [...technicalPlanSections, { key: 'authorization' as const, label: '接口权限绑定' }]
+  const sections = recordItems(plan.agent_contracts).length
+    ? [...authorizationSections, { key: 'agents' as const, label: '智能体' }]
+    : authorizationSections
   const [activeSection, setActiveSection] = useState<SectionKey>('api-contracts')
   const resolvedActiveSection = sections.some((section) => section.key === activeSection)
     ? activeSection
@@ -86,6 +91,7 @@ export default function TechnicalPlanDocPanel({
       {resolvedActiveSection === 'architecture' ? (
         <ArchitectureSection architecture={architecture} sectionKey="architecture" />
       ) : null}
+      {resolvedActiveSection === 'agents' ? <TechnicalPlanAgentSection plan={plan} /> : null}
       {resolvedActiveSection === 'entities' ? (
         <EntitiesSection entities={entities} sectionKey="entities" />
       ) : null}
@@ -106,7 +112,7 @@ export default function TechnicalPlanDocPanel({
       ) : null}
       {resolvedActiveSection === 'page-bindings' ? (
         <PageBindingsSection
-          contracts={contracts}
+          contracts={recordItems(plan.api_contracts)}
           pages={pages}
           productPlan={productPlan}
           sectionKey="page-bindings"

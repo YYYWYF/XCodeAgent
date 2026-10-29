@@ -809,7 +809,7 @@ def _normalized_scope(scope: dict[str, Any] | None) -> dict[str, str]:
     api_contract_id = str(
         value.get("apiContractId") or value.get("api_contract_id") or ""
     ).strip()
-    if target_type not in {"application", "page", "data_source", "endpoint"}:
+    if target_type not in {"application", "page", "data_source", "endpoint", "agent"}:
         target_type = "application"
     if target_type == "application":
         target_id = target_id or "application"
@@ -827,6 +827,8 @@ def _normalized_scope(scope: dict[str, Any] | None) -> dict[str, str]:
 def _target_unit_ids(scope: dict[str, str]) -> list[str]:
     """将外部 scope 映射为目标 Unit ID。"""
 
+    if scope["type"] == "agent" and scope.get("targetId"):
+        return [f"agent:{scope['targetId']}"]
     if scope["type"] == "page" and scope.get("targetId"):
         return [f"page:{scope['targetId']}"]
     if scope["type"] == "data_source" and scope.get("targetId"):

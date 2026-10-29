@@ -686,6 +686,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
                   "apiContractId": selected_api_contract_id}
         )
     # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送 scope，也要补回门禁所需的显式 ID。
+    if build_execution_scope.get("type") == "agent":
+        selectedPageId = ""
+        selected_api_contract_id = ""
+        selected_endpoint_id = ""
+        detail_target_type = "agent"
     if build_execution_scope.get("type") == "endpoint":
         selected_api_contract_id = selected_api_contract_id or _optional_text(
             build_execution_scope.get("apiContractId")
@@ -961,8 +966,8 @@ def _build_execution_scope(
     api_contract_id = _optional_text(
         raw_scope.get("apiContractId") or raw_scope.get("api_contract_id")
     )
-    if target_type not in {"application", "page", "data_source", "endpoint"}:
-        raise ValueError("buildExecutionScope.type 必须是 application、page、data_source 或 endpoint。")
+    if target_type not in {"application", "page", "data_source", "endpoint", "agent"}:
+        raise ValueError("buildExecutionScope.type 必须是 application、page、data_source、endpoint 或 agent。")
     if target_type == "application":
         if selected_page_id and not explicit_scope:
             return {"type": "page", "targetId": selected_page_id}

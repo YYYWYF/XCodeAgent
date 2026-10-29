@@ -31,6 +31,8 @@ _BUILD_PLAN_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / 'plans/build-task-plan.json
 def development_artifact_key(target: DevelopmentArtifactTarget) -> str:
     """生成产物的稳定标识，用于记录当前 Build 范围。"""
 
+    if target.type == "agent":
+        return f"agent:{target.agent_id}"
     if target.type == "page":
         return f"page:{target.page_id}"
     if target.type == "entity":
@@ -41,6 +43,8 @@ def development_artifact_key(target: DevelopmentArtifactTarget) -> str:
 def _target_unit_id(target: DevelopmentArtifactTarget) -> str | None:
     """映射产物到它在构建计划里的 Unit 标识；实体没有独立 Unit。"""
 
+    if target.type == "agent":
+        return f"agent:{target.agent_id}"
     if target.type == "page":
         return f"page:{target.page_id}"
     if target.type == "endpoint":
@@ -151,6 +155,9 @@ def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
             ))
     for entity in _records(technical.get("entities", []), "TechnicalPlan.entities"):
         targets.append(DevelopmentArtifactTarget(type="entity", entityId=_identifier(entity.get("id"))))
+    from app.services.runtime_agent_contracts import agent_contract_index
+    for agent_id in agent_contract_index(technical):
+        targets.append(DevelopmentArtifactTarget(type="agent", agentId=agent_id))
     keys = [target.model_dump_json() for target in targets]
     if len(set(keys)) != len(keys):
         raise ValueError("开发产物标识重复。")
@@ -162,6 +169,8 @@ def artifact_progress(
 ) -> DevelopmentArtifactProgress | EntityDevelopmentProgress | None:
     """按完整目标身份读取状态，不把页面依赖接口视作同一产物。"""
 
+    if target.type == "agent":
+        return artifacts.agents.get(target.agent_id or "")
     if target.type == "page":
         return artifacts.pages.get(target.page_id or "")
     if target.type == "entity":
@@ -230,7 +239,9 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
                 for execution in state.active_executions.values()
             )
             progress = DevelopmentArtifactProgress(initialDevelopmentStatus="in_progress" if active else "pending")
-        if target.type == "page":
+        if target.type == "agent":
+            artifacts.agents[target.agent_id or ""] = progress
+        elif target.type == "page":
             artifacts.pages[target.page_id or ""] = progress
         else:
             artifacts.endpoints.setdefault(target.api_contract_id or "", {})[target.endpoint_id or ""] = progress
@@ -249,6 +260,8 @@ def test_entry_gate(state: ApplicationLifecycle) -> TestEntryGate:
         for contract, endpoints in artifacts.endpoints.items()
         for key, progress in endpoints.items()
     ]
+    records.extend((DevelopmentArtifactTarget(type="agent", agentId=key), progress)
+                   for key, progress in artifacts.agents.items())
     # Build 计划只描述当前目标的执行范围；不能据此跳过其他尚未初次完成的产物。
     completed = sum(progress.initial_development_status == "completed" and progress.change_status == "unchanged"
                     for _, progress in records)
@@ -378,17 +391,18 @@ def execution_development_metadata(
             scope == "endpoint" and target.endpoint_id == target_id
             and target.api_contract_id == api_contract_id
         )
+        matches = matches or (scope == "agent" and target.agent_id == target_id)
         if matches and phase in INITIAL_DEVELOPMENT_PHASES:
             return {
                 "development_purpose": "revision" if state.active_formal_revision else previous.development_purpose,
                 "development_target": target,
             }
-    if scope not in {"page", "endpoint"} or phase not in INITIAL_DEVELOPMENT_PHASES:
+    if scope not in {"page", "endpoint", "agent"} or phase not in INITIAL_DEVELOPMENT_PHASES:
         return {}
     if not initial_entry and not api_contract_id and scope == "endpoint":
         return {}
     target = DevelopmentArtifactTarget(
-        type=scope, pageId=target_id if scope == "page" else None,
+        type=scope, agentId=target_id if scope == "agent" else None, pageId=target_id if scope == "page" else None,
         apiContractId=api_contract_id if scope == "endpoint" else None,
         endpointId=target_id if scope == "endpoint" else None,
     )

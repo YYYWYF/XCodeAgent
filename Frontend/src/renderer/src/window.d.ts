@@ -52,6 +52,7 @@ declare global {
         }) => Promise<{ application?: unknown }>
         inspectPlanningArtifacts: (payload: { workspaceRoot: string }) => Promise<{
           ready: boolean
+          agents: import("../../../shared/businessAgent").BusinessAgentOption[]
           hasPageDesigns: boolean
           missing: string[]
           invalid: string[]
@@ -122,6 +123,7 @@ declare global {
           entryKey?: string
           title?: string
           developmentTarget?:
+            | { type: 'agent'; agentId: string; label: string }
             | { type: 'page'; pageId: string; label: string }
             | {
                 type: 'endpoint'

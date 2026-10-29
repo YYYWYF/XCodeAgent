@@ -5,6 +5,9 @@ import { RequirementPagesSection } from '../src/renderer/src/components/AiChatPa
 import type { JsonRecord } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocPanelData'
 import ProductPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/ProductPlanDocPanel'
 import TechnicalPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanDocPanel'
+import TechnicalPlanAgentSection from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanAgentSection'
+import { technicalPlanDisplayContracts } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanAgentContracts'
+import TechnicalPlanSummary from '../src/renderer/src/components/Welcome/TechnicalPlanSummary'
 import './sourcePlanningDocument.test'
 
 /** 一份包含所有可选区块的页面规划，用于确认重做后内容一条不少。 */
@@ -115,4 +118,62 @@ test('技术规划沿用计划阶段的章节导航与无接口空态', () => {
   for (const text of ['架构', '实体', 'API 契约', '页面绑定', 'technical-plan-doc-panel']) {
     assert.ok(html.includes(text), `技术规划缺少章节：${text}`)
   }
+})
+
+test('无业务实体的两个聊天入口展示同一个 AG-UI 接口，不修改正式业务契约', () => {
+  const plan = {
+    entities: [],
+    api_contracts: [],
+    agent_contracts: [
+      {
+        agentId: 'agent_general_chat',
+        name: '通用聊天助手',
+        purpose: '通用问答',
+        pageIds: ['page_home', 'page_agent_chat'],
+        agentSettings: {}
+      }
+    ]
+  }
+  const before = JSON.stringify(plan)
+  const html = renderToStaticMarkup(<TechnicalPlanDocPanel plan={plan} productPlan={{}} />)
+  for (const text of [
+    '通用聊天助手',
+    'POST',
+    '/agents/agent_general_chat/run',
+    'AG-UI',
+    'SSE',
+    'RunAgentInput',
+    'BaseEvent',
+    'agent-runtime',
+    'page_home',
+    'page_agent_chat'
+  ]) {
+    assert.ok(html.includes(text), `智能体公开接口缺少：${text}`)
+  }
+  assert.doesNotMatch(html, /暂无 API 契约|暂无接口|Schema 引用暂不可解析|Bearer/)
+  assert.equal((html.match(/technical-plan-contract-main/g) || []).length, 1)
+  assert.equal(JSON.stringify(plan), before)
+  const agentHtml = renderToStaticMarkup(<TechnicalPlanAgentSection plan={plan} />)
+  assert.match(agentHtml, /\/agents\/agent_general_chat\/run/)
+  const summaryHtml = renderToStaticMarkup(<TechnicalPlanSummary plan={plan} />)
+  assert.match(summaryHtml, /\/agents\/agent_general_chat\/run/)
+})
+
+test('混合应用保留普通业务契约，每个智能体只增加一个只读接口分组', () => {
+  const business = { id: 'order_api', entity_ids: ['Order'], endpoints: [{ id: 'order_api.list' }] }
+  const plan = {
+    api_contracts: [business],
+    agent_contracts: [
+      { agentId: 'assistant', name: '助手', pageIds: ['home', 'chat'] },
+      { agentId: 'reviewer', name: '审核助手', pageIds: ['review'] }
+    ]
+  }
+  const result = technicalPlanDisplayContracts(plan)
+  assert.equal(result.length, 3)
+  assert.equal(result[0], business)
+  assert.deepEqual(
+    result.map((item) => item.id),
+    ['order_api', 'agent.assistant.run', 'agent.reviewer.run']
+  )
+  assert.equal(plan.api_contracts.length, 1)
 })

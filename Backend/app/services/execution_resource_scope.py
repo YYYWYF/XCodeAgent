@@ -28,9 +28,23 @@ def resolve_execution_resource_claims(
 
     plan = project_plan if isinstance(project_plan, dict) else {}
     if target_type == "page":
-        return _page_claims(plan, target_id)
+        from app.services.runtime_agent_contracts import scoped_agent_ids
+        claims = _page_claims(plan, target_id)
+        for agent_id in scoped_agent_ids(plan, "page", target_id):
+            claims.extend(resolve_execution_resource_claims(plan, {"type": "agent", "targetId": agent_id}))
+        return _deduplicated_claims(claims)
     if target_type == "data_source":
         return _data_source_claims(plan, target_id)
+    if target_type == "agent":
+        from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
+        agent = agent_contract_index(project_plan).get(target_id)
+        if agent is None:
+            raise ValueError(f"当前技术规划不包含智能体：{target_id}。")
+        claims = [_claim(ExecutionResourceType.AGENT, target_id, primary=True)]
+        for contract_id, endpoint_id in agent_endpoint_keys(agent):
+            claims.extend(_endpoint_claims(project_plan, endpoint_id, contract_id))
+        claims.extend(_claim(ExecutionResourceType.PAGE, page_id) for page_id in agent["pageIds"])
+        return _deduplicated_claims(claims)
     if target_type == "endpoint":
         return _endpoint_claims(
             plan,

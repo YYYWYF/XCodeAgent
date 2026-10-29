@@ -23,6 +23,7 @@ const RUNTIME_MODULE_MAP: Record<string, string> = {
   antd5: 'antd',
   '@ant-design/icons': 'antdIcons',
   '@ant-design/pro-components': 'proComponents',
+  '@xcodeagent/agent-ui-design': 'agentUi',
   // dayjs 是 antd5 的传递依赖，页面模板（commonTable/tabsTable）用它做日期格式化。
   // 选模板作设计稿时模板代码原样渲染，需登记 dayjs 否则 require('dayjs') 白屏。
   dayjs: 'dayjs'

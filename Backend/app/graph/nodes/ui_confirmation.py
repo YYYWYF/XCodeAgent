@@ -75,8 +75,8 @@ def _page_list(state: ProjectState) -> list[dict[str, Any]]:
     product_plan = state.get("product_plan")
     if not isinstance(product_plan, dict):
         return []
-    pages = product_plan.get("pages")
-    return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
+    from app.services.ui_design_agent_surfaces import project_ui_design_pages
+    return project_ui_design_pages(product_plan)
 
 
 def _page_id(page: dict[str, Any]) -> str:

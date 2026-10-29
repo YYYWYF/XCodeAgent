@@ -1,0 +1,13 @@
+{
+  "id": "agentConversation",
+  "name": "智能体会话页",
+  "description": "提供会话历史、消息流、运行状态、工具摘要、审批与固定输入区的独立智能体页面",
+  "category": "agent",
+  "supportedSurfaces": ["standalone_page"],
+  "agentUi": {
+    "module": "@xcodeagent/agent-ui-design",
+    "component": "AgentConversationTemplate",
+    "version": "agent-ui.v1"
+  },
+  "previewImage": "./preview.svg"
+}

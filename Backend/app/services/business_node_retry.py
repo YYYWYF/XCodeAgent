@@ -13,6 +13,7 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord, DurableExecutionStatus, RecoveryAction, RecoveryActionKind,
     RecoveryActionPlan, RecoveryExecutionError, RecoveryIncidentStatus,
 )
+from app.services.planning_recovery_ownership import planning_source_is_current
 
 NO_RETRY_ENTRY = "找不到恢复入口，请手动发起流程。"
 _locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -67,6 +68,13 @@ async def retry_action_plan(source: DurableExecutionRecord, graph: Any) -> Recov
     from app.services.stage_prerequisites import regeneration_for_retry
     from app.services.application_lifecycle import load_application_lifecycle
     lifecycle = load_application_lifecycle(source.workspace)
+    if not await planning_source_is_current(source, graph, lifecycle):
+        return RecoveryActionPlan(
+            incidentId=hashlib.sha256(f"superseded:{source.run_id}:{source.updated_at}".encode()).hexdigest(),
+            sourceRunId=source.run_id, threadId=source.thread_id, executionKind=source.execution_kind,
+            status=RecoveryIncidentStatus.NEEDS_ATTENTION, reasonCode="RETRY_SOURCE_SUPERSEDED",
+            message="原任务已被新的执行替代，请查看当前流程。", updatedAt=source.updated_at,
+        )
     execution = lifecycle.active_executions.get(source.run_id) if lifecycle else None
     inputs = {"workspace": source.workspace}
     if execution:
@@ -175,7 +183,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
 
     async with _locks.setdefault((source.workspace, source.run_id), asyncio.Lock()):
         lifecycle = load_application_lifecycle(source.workspace)
-        if source.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, source.run_id}:
+        if not await planning_source_is_current(source, graph, lifecycle):
             raise RecoveryExecutionError("RETRY_SOURCE_SUPERSEDED", "原任务已被新的执行替代，请查看当前流程。")
         # 节点和完整输入必须来自同一份已提交现场，不拼接其他 Run 的历史状态。
         checkpoint = await read_checkpoint_execution(source, graph)
@@ -187,7 +195,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
         from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
         reconcile_failed_execution_lifecycle(source)
         lifecycle = load_application_lifecycle(source.workspace)
-        if source.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, source.run_id}:
+        if not await planning_source_is_current(source, graph, lifecycle):
             raise RecoveryExecutionError("RETRY_SOURCE_SUPERSEDED", "原任务已被新的执行替代，请查看当前流程。")
         execution = lifecycle.active_executions.get(source.run_id) if lifecycle else None
         node = hint.node
@@ -254,8 +262,9 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             elif source.execution_kind == "workbench":
                 lifecycle = handoff_workbench_execution_for_recovery(source.workspace, source_run_id=source.run_id,
                     new_run_id=new_run, thread_id=source.thread_id, phase=node, expected_lifecycle_revision=revision_number)
-            elif lifecycle and lifecycle.active_run_id == source.run_id:
-                lifecycle = handoff_application_planning_run_for_recovery(source.workspace, source_run_id=source.run_id,
+            elif lifecycle and lifecycle.active_run_id:
+                # 当前失败现场已核对同线程归属；用原 CAS 原子替换仍保留的旧 owner。
+                lifecycle = handoff_application_planning_run_for_recovery(source.workspace, source_run_id=lifecycle.active_run_id,
                     new_run_id=new_run, thread_id=source.thread_id, expected_lifecycle_revision=revision_number)
             else:
                 lifecycle = claim_application_planning_run_for_recovery(source.workspace, new_run_id=new_run,

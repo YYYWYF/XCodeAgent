@@ -1,3 +1,4 @@
+import type { BusinessAgentOption } from '../shared/businessAgent'
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { AppUpdateApi } from '../shared/appUpdate'
 import type {
@@ -76,6 +77,7 @@ declare global {
             }
           }>
           pageTree: DevelopmentPlanningPageTreeNode[]
+          agents: BusinessAgentOption[]
           apiContracts: Array<{
             id: string
             label: string
@@ -123,6 +125,7 @@ declare global {
           entryKey?: string
           title?: string
           developmentTarget?:
+            | { type: 'agent'; agentId: string; label: string }
             | { type: 'page'; pageId: string; label: string }
             | {
                 type: 'endpoint'

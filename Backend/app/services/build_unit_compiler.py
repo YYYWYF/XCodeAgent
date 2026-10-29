@@ -103,6 +103,8 @@ def _with_task_unit_metadata(
     provided_source_refs.pop("entity_designs", None)
     provided_source_refs.pop("endpoint_designs", None)
     provided_source_refs.pop("business_descriptions", None)
+    provided_source_refs.pop("agent_ui", None)
+    provided_source_refs.pop("agent_ui_by_page", None)
     source_refs = {
         **canonical_source_refs,
         **provided_source_refs,
@@ -369,10 +371,12 @@ def _unit_source_refs(
                 "agent_contract_sha256": agent_fact_digest(contracts[agent_id]),
                 "template_policy_sha256": _dict_value(build_context.get("runtime_agent_template_policy")).get("policySha256")}
     if unit_id.startswith("page:"):
+        agent_ui = _dict_value(build_context.get("agent_ui_by_page")).get(unit_id.removeprefix("page:"))
         descriptions = _dict_items(build_context.get("business_descriptions"))
         return {
             **existing,
             "type": "page_implementation_contract",
+            **({"agent_ui": deepcopy(agent_ui)} if agent_ui else {}),
             "target": target,
             "page_implementation_contract": _dict_value(
                 refs.get("page_implementation_contract")

@@ -10,7 +10,7 @@ from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_w
 from app.config import Settings
 from app.services.agent_runtime_template_policy import load_agent_runtime_template_policy
 from app.services.build_result_coordinator import create_agent_task_results
-from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
+from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys, agent_invocation
 from app.services.runtime_agent_module_policy import module_source_refs, module_task_errors
 
 
@@ -38,8 +38,7 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
         "configuration": deepcopy(contract["agentSettings"][module]),
         "description": task.get("description"), "target_files": targets,
         "change_scope": changes, "module_policy": policy["modulePaths"][module],
-        "invocation": {"protocol": "ag-ui", "path": f"/agents/{contract['agentId']}/run",
-                       "serviceId": "agent-runtime", "principalSource": "runtime_anonymous_session"},
+        "invocation": agent_invocation(contract["agentId"]),
         "tool_contracts": [{"id": api["id"], "schemas": api.get("schemas", {}),
                             "endpoints": [endpoint for endpoint in api.get("endpoints", ())
                                           if (api["id"], endpoint["id"]) in keys]}

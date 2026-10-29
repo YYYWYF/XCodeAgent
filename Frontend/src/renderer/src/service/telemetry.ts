@@ -12,7 +12,7 @@ type TelemetryEventRecord = {
   context?: {
     business_stage?: string
     node_name?: string
-    target?: { type: 'page' | 'endpoint'; id: string; api_contract_id?: string }
+    target?: { type: 'page' | 'endpoint' | 'agent'; id: string; api_contract_id?: string }
   }
   data?: {
     event_name?: string
@@ -103,7 +103,9 @@ export function emitConversationCreated(input: {
     context: {
       ...(input.businessStage ? { business_stage: input.businessStage } : {}),
       ...(target ? {
-        target: target.type === 'page'
+        target: target.type === 'agent'
+          ? { type: 'agent', id: target.agentId }
+          : target.type === 'page'
           ? { type: 'page', id: target.pageId }
           : { type: 'endpoint', id: target.endpointId, api_contract_id: target.apiContractId }
       } : {})

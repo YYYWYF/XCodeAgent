@@ -271,7 +271,7 @@ class ApiDesignGateAction(ApiDesignModel):
     """描述 API 开发门禁的重新检测动作。"""
 
     action: Literal["refresh"]
-    target_type: Literal["application", "page", "endpoint"] = Field(alias="targetType")
+    target_type: Literal["application", "page", "endpoint", "agent"] = Field(alias="targetType")
     target_id: str = Field(alias="targetId", min_length=1, max_length=256)
     api_contract_id: str | None = Field(
         default=None,

@@ -170,6 +170,7 @@ export type WorkflowRevisionContinuation = {
 }
 
 export type WorkflowDevelopmentTarget =
+  | { type: 'agent'; agentId: string; label: string }
   | { type: 'page'; pageId: string; label: string }
   | {
       type: 'endpoint'
@@ -729,7 +730,7 @@ export type WorkflowDetailReview = {
     selectedApiContractId?: string
     selectedEndpointId?: string
     selectedEntityId?: string
-    detailTargetType?: 'page' | 'endpoint' | 'entity'
+    detailTargetType?: 'page' | 'endpoint' | 'entity' | 'agent'
     entityDesign?: WorkflowEntityDesignSummary
   }
 }
@@ -891,7 +892,7 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
 
 export type WorkflowApiDesignGateAction = {
   action: 'refresh'
-  targetType: 'application' | 'page' | 'endpoint'
+  targetType: 'application' | 'page' | 'endpoint' | 'agent'
   targetId: string
   apiContractId?: string
 }
@@ -1226,7 +1227,7 @@ export type LifecycleError = {
 export type WorkbenchExecution = {
   developmentPurpose?: 'initial' | 'revision' | null
   developmentTarget?: DevelopmentArtifactTarget | null
-  scope: 'application' | 'page' | 'data_source' | 'endpoint'
+  scope: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId: string
   pageId?: string
   threadId: string
@@ -1295,6 +1296,7 @@ export type ExecutionResourceLock = {
 }
 
 export type DevelopmentArtifactTarget =
+  | { type: 'agent'; agentId: string }
   | { type: 'entity'; entityId: string }
   | { type: 'page'; pageId: string }
   | { type: 'endpoint'; apiContractId: string; endpointId: string }
@@ -1319,6 +1321,7 @@ export type DevelopmentArtifactProgress = {
 }
 
 export type DevelopmentArtifacts = {
+  agents?: Record<string, DevelopmentArtifactProgress>
   entities: Record<string, DevelopmentArtifactProgress>
   pages: Record<string, DevelopmentArtifactProgress>
   endpoints: Record<string, Record<string, DevelopmentArtifactProgress>>
@@ -1468,7 +1471,7 @@ export type WorkflowDebugStage = 'development' | 'design' | 'planning'
 export type ApplicationPlanningDebugStage = Exclude<WorkflowDebugStage, 'development'>
 
 export type WorkflowBuildExecutionScope = {
-  type: 'application' | 'page' | 'data_source' | 'endpoint'
+  type: 'application' | 'page' | 'data_source' | 'endpoint' | 'agent'
   targetId?: string
   apiContractId?: string
 }

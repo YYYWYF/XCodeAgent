@@ -439,8 +439,6 @@ async def _resolve_action_source_run(
             and record.run_id not in active_workbench_run_ids
         ):
             continue
-        if record.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, record.run_id}:
-            continue
         graph_factory = (
             application_planning_graph_for_request
             if record.execution_kind == "application_planning"

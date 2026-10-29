@@ -36,10 +36,13 @@ from app.services.business_acceptance_verifiers.python_ast import PythonEvidence
 from app.services.runtime_business_acceptance import RUNTIME_VERIFIER_NAMES
 
 
+from app.services.business_acceptance_verifiers.frontend_agent_ui import verify_agent_ui_mock_source
+
 Verifier = Callable[..., dict[str, Any]]
 
 BUSINESS_VERIFIER_REGISTRY: dict[str, Verifier] = {
     "frontend.api_contract": verify_api_contract_source,
+    "frontend.agent_ui_mock_contract": verify_agent_ui_mock_source,
     "frontend.page_endpoint_usage": verify_page_endpoint_usage_source,
     "frontend.static_data_contract": verify_static_data_contract_source,
     "backend.objects_contract": verify_objects_source,

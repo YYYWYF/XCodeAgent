@@ -466,7 +466,7 @@ class BusinessAcceptanceCompilationTests(unittest.TestCase):
             _formal_context(),
         )
         actual = {check["kind"] for task in compiled for check in task["business_acceptance_checks"]}
-        self.assertEqual(actual, set(BUSINESS_ACCEPTANCE_KINDS) - {"frontend.static_data_contract"})
+        self.assertEqual(actual, {"frontend.api_contract", "frontend.page_endpoint_usage", "backend.objects_contract", "backend.repository_contract", "backend.application_service_contract", "backend.endpoint_contract", "backend.upstream_contract"})
 
     def test_task_keeps_global_entity_semantics_separate_from_endpoint_sources(self) -> None:
         """后端任务保留 TechnicalPlan 实体语义，并通过 API Contract 追溯接口来源。"""

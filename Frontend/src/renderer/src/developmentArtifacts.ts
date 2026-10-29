@@ -3,6 +3,7 @@ import type {
   DevelopmentPlanningPageOption, DevelopmentPlanningApiContract
 } from './typings'
 import type { WorkbenchPhase } from './workbenchPhase'
+import type { BusinessAgentOption } from '../../shared/businessAgent'
 
 /** 根据权威门禁约束测试及后续视图，覆盖手动选择、冷启动恢复与自动阶段推导。 */
 export function gateWorkbenchPhase(phase: WorkbenchPhase, gate?: TestEntryGate): WorkbenchPhase {
@@ -50,13 +51,14 @@ export function developmentDisplayStatus(progress?: DevelopmentArtifactProgress)
     && progress.changeStatus !== 'unchanged' ? progress.changeStatus : progress?.initialDevelopmentStatus || 'pending'
 }
 
-/** 只统计页面与 Endpoint；规划实体不参与开发完成比例或阶段门禁。 */
+/** 统计页面、Endpoint 和业务智能体；规划实体不参与完成比例或阶段门禁。 */
 export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
   completed: number
   total: number
 } {
   const records = [
     ...Object.values(artifacts.pages),
+    ...Object.values(artifacts.agents || {}),
     ...Object.values(artifacts.endpoints).flatMap((endpoints) => Object.values(endpoints))
   ]
   const required = records.filter((record) => record.initialDevelopmentStatus !== 'skipped')
@@ -67,10 +69,12 @@ export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
 export function developmentPlanningTotals(
   pages: DevelopmentPlanningPageOption[],
   contracts: DevelopmentPlanningApiContract[],
-  artifacts?: DevelopmentArtifacts
+  artifacts?: DevelopmentArtifacts,
+  agents: BusinessAgentOption[] = []
 ): { completed: number; total: number } {
   const records = [
     ...pages.map((page) => artifacts?.pages[page.pageId]),
+    ...agents.map((agent) => artifacts?.agents?.[agent.agentId]),
     ...contracts.flatMap((contract) => contract.endpoints.map(
       (endpoint) => artifacts?.endpoints[endpoint.apiContractId || contract.id]?.[endpoint.id]
     ))

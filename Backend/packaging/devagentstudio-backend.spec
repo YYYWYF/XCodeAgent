@@ -49,6 +49,10 @@ datas = [
         str(backend_root / "app" / "builtin_skills"),
         "app/builtin_skills",
     ),
+    (
+        str(backend_root / "app" / "builtin_templates" / "agent-ui-frontend"),
+        "app/builtin_templates/agent-ui-frontend",
+    ),
     # 前端模板目录是唯一源码；后端选模板时仍需读取原始 TSX。
     (
         str(backend_root.parent / "Frontend" / "src" / "renderer" / "src" / "templates"),

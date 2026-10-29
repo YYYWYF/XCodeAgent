@@ -9,6 +9,7 @@ import {
   type JsonRecord
 } from '../AiChatPanel/components/DocPanel/RequirementDocPanelData'
 import './ProjectPlanSummary.less'
+import { technicalPlanDisplayContracts } from '../AiChatPanel/components/DocPanel/TechnicalPlanAgentContracts'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -44,7 +45,7 @@ export default function TechnicalPlanSummary({ plan, productPlan, spec }: Props)
   const architecture = asRecord(plan.architecture)
   const topology = asRecord(plan.topology)
   const entities = recordItems(plan.entities)
-  const contracts = recordItems(plan.api_contracts)
+  const contracts = technicalPlanDisplayContracts(plan)
   const pages = recordItems(plan.pages)
   // 页面概览：复用需求文档面板的拍平函数，从上游 productPlan/spec 提取交互/布局/风格。
   const interactions = requirementInteractionRows(productPlan || {})

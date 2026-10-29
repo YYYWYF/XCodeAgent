@@ -74,9 +74,9 @@ class UiDesignGeneratorTests(unittest.TestCase):
         """单页设计稿生成必须绑定 UI 设计专用输出上限。"""
 
         model = MagicMock()
-        model.bind.return_value.invoke.return_value = SimpleNamespace(
+        model.bind.return_value.stream.return_value = [SimpleNamespace(
             content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
-        )
+        )]
         settings = SimpleNamespace(
             ui_design_max_tokens=12288,
             ui_design_max_retries=2,
@@ -107,11 +107,11 @@ class UiDesignGeneratorTests(unittest.TestCase):
 
         model = MagicMock()
         bound_model = model.bind.return_value
-        bound_model.invoke.side_effect = [
+        bound_model.stream.side_effect = [
             RuntimeError("Connection error."),
-            SimpleNamespace(
+            [SimpleNamespace(
                 content="const MoviePage = () => <div>电影</div>; export default MoviePage;"
-            ),
+            )],
         ]
         settings = SimpleNamespace(
             ui_design_max_tokens=8192,
@@ -133,7 +133,7 @@ class UiDesignGeneratorTests(unittest.TestCase):
                 "MoviePage",
             )
 
-        self.assertEqual(bound_model.invoke.call_count, 2)
+        self.assertEqual(bound_model.stream.call_count, 2)
         self.assertIn("export default MoviePage", code)
 
     def test_truncated_output_is_continued_not_regenerated(self) -> None:
@@ -153,9 +153,9 @@ class UiDesignGeneratorTests(unittest.TestCase):
         continuation = " /></div>;\nexport default MoviePage;"
         model = MagicMock()
         bound_model = model.bind.return_value
-        bound_model.invoke.side_effect = [
-            SimpleNamespace(content=partial),       # 首次：截断，无 export default
-            SimpleNamespace(content=continuation),  # 续写：补全
+        bound_model.stream.side_effect = [
+            [SimpleNamespace(content=partial)],       # 首次：截断，无 export default
+            [SimpleNamespace(content=continuation)],  # 续写：补全
         ]
         settings = SimpleNamespace(ui_design_max_tokens=32768, ui_design_max_retries=1)
         settings.for_ui_design_model = lambda: settings
@@ -175,11 +175,11 @@ class UiDesignGeneratorTests(unittest.TestCase):
             )
 
         # 只调 2 次：首次生成 + 一次续写，不触发整页 repair。
-        self.assertEqual(bound_model.invoke.call_count, 2)
+        self.assertEqual(bound_model.stream.call_count, 2)
         self.assertIn("export default MoviePage", code)
         self.assertIn("<ProTable", code)
         # 续写的 prompt 必须带"从断点续写"指令与已生成的部分代码。
-        continuation_prompt = bound_model.invoke.call_args_list[1][0][0]
+        continuation_prompt = bound_model.stream.call_args_list[1][0][0]
         self.assertIn("CUT OFF", continuation_prompt)
         self.assertIn("MoviePage", continuation_prompt)
         # 续写成功后 validate 第二次收到的是拼接后的完整代码。

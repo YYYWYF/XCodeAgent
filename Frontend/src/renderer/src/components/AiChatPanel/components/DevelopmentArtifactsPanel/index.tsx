@@ -5,11 +5,16 @@ import ApplicationOutline from '../ApplicationOutline'
 import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import EndpointDesignResult from '../EndpointDesignResult'
 import EntityInfoPanel from '../EntityInfoPanel'
+import AgentDevelopmentDetail from '../AgentDevelopmentDetail'
+import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
 import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
+  onStartAgent?: (agent: BusinessAgentOption) => void
+  onAgentRefresh?: () => void
+  agentActionsDisabled?: boolean
   theme: 'light' | 'dark'
   useBuiltinDatabase?: boolean
   onEndpointRecovery?: EndpointRecoveryReporter
@@ -30,8 +35,12 @@ export default function DevelopmentArtifactsPanel({
   apiDesignRefreshKey,
   onConfigureApi,
   onEndpointRecovery,
+  onStartAgent,
+  onAgentRefresh,
+  agentActionsDisabled,
   ...outlineProps
 }: Props): ReactElement {
+  const selectedAgent = outlineProps.agents?.find((agent) => agent.agentId === outlineProps.selectedAgentId)
   const selectedEntity = outlineProps.entities.find(
     (entity) => entity.id === outlineProps.selectedEntityId
   )
@@ -44,7 +53,10 @@ export default function DevelopmentArtifactsPanel({
   return (
     <div className={cx('development-artifacts-panel')}>
       <aside aria-label="开发产物菜单" className={cx('development-artifacts-menu')}>
-        <ApplicationOutline {...outlineProps} />
+        <ApplicationOutline {...outlineProps}
+          onPageSelect={(page) => { outlineProps.onAgentSelect?.(undefined); outlineProps.onPageSelect(page) }}
+          onEntitySelect={(entity) => { outlineProps.onAgentSelect?.(undefined); outlineProps.onEntitySelect(entity) }}
+          onApiEndpointSelect={(target) => { outlineProps.onAgentSelect?.(undefined); outlineProps.onApiEndpointSelect(target) }} />
       </aside>
       <section
         aria-label={detailLabel ? `${detailLabel}详情` : '开发产物详情'}
@@ -55,7 +67,16 @@ export default function DevelopmentArtifactsPanel({
             打开字段映射
           </Button>
         ) : null}
-        {apiTarget ? (
+        {selectedAgent && workspaceRoot ? (
+          <AgentDevelopmentDetail
+            key={`${workspaceRoot}:${selectedAgent.agentId}`}
+            agent={selectedAgent}
+            workspaceRoot={workspaceRoot}
+            disabled={Boolean(agentActionsDisabled)}
+            onStart={() => onStartAgent?.(selectedAgent)}
+            onRefresh={() => onAgentRefresh?.()}
+          />
+        ) : apiTarget ? (
           loading ? (
             <div
               aria-atomic="true"

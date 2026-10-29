@@ -898,7 +898,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             current_kinds = [
                 kind
                 for kind in BUSINESS_ACCEPTANCE_KINDS
-                if kind != "frontend.static_data_contract"
+                if kind in task_inputs and kind != "frontend.static_data_contract"
             ]
             for check_kind in current_kinds:
                 deliverable_kind, _owner, unit_id = task_inputs[check_kind]

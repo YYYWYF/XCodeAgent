@@ -1,3 +1,4 @@
+import type { BusinessAgentOption } from '../../../shared/businessAgent'
 import type {
   ApplicationConfig,
   ApplicationIndex,
@@ -312,6 +313,7 @@ export async function inspectWorkspacePlanningArtifacts(
   invalid: string[];
   pages: DevelopmentPlanningPageOption[];
   pageTree: DevelopmentPlanningPageTreeNode[];
+  agents: BusinessAgentOption[];
   apiContracts: DevelopmentPlanningApiContract[];
   entities: DevelopmentPlanningEntityOption[];
 }> {

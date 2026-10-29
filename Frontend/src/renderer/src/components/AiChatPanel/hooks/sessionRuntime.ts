@@ -101,6 +101,7 @@ export function sameDevelopmentTarget(
 ): boolean {
   if (!left || !right) return !left && !right
   if (left.type !== right.type) return false
+  if (left.type === 'agent') return right.type === 'agent' && left.agentId === right.agentId
   return left.type === 'page'
     ? right.type === 'page' && left.pageId === right.pageId
     : right.type === 'endpoint' &&
@@ -115,14 +116,15 @@ export function developmentTargetWorkflowFields(
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint'
+  detailTargetType?: 'page' | 'endpoint' | 'agent'
   buildExecutionScope?: {
-    type: 'page' | 'endpoint'
+    type: 'page' | 'endpoint' | 'agent'
     targetId: string
     apiContractId?: string
   }
 } {
   if (!target) return {}
+  if (target.type === 'agent') return { detailTargetType: 'agent', buildExecutionScope: { type: 'agent', targetId: target.agentId } }
   if (target.type === 'page') {
     return {
       selectedPageId: target.pageId,

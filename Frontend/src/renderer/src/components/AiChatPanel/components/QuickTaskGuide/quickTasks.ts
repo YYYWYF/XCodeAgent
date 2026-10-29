@@ -5,6 +5,7 @@ import type {
   DevelopmentPlanningEntityOption,
   DevelopmentPlanningPageOption
 } from '../../../../typings'
+import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 
 type QuickTaskItemBase = {
   progress?: DevelopmentArtifactProgress
@@ -37,14 +38,16 @@ export type EntityQuickTaskItem = QuickTaskItemBase & {
   hasDetailPlan: boolean
 }
 
-export type QuickTaskItem = PageQuickTaskItem | EndpointQuickTaskItem | EntityQuickTaskItem
+export type AgentQuickTaskItem = QuickTaskItemBase & { kind: 'agent'; agentId: string }
+export type QuickTaskItem = PageQuickTaskItem | EndpointQuickTaskItem | EntityQuickTaskItem | AgentQuickTaskItem
 
 /** 将项目计划投影为携带一次性工作流目标、但不定义会话归属的页面与接口快捷任务，实体仅保留在技术规划中。 */
 export function buildQuickTasks(
   pages: DevelopmentPlanningPageOption[],
   apiContracts: DevelopmentPlanningApiContract[],
   _entities: DevelopmentPlanningEntityOption[],
-  artifacts?: DevelopmentArtifacts
+  artifacts?: DevelopmentArtifacts,
+  agents: BusinessAgentOption[] = []
 ): QuickTaskItem[] {
   const pageTasks: PageQuickTaskItem[] = pages.map((page) => ({
     progress: artifacts?.pages[page.pageId],
@@ -82,5 +85,7 @@ export function buildQuickTasks(
       }
     })
   )
-  return [...pageTasks, ...endpointTasks]
+  const agentTasks: AgentQuickTaskItem[] = agents.map((agent) => ({ kind: 'agent', agentId: agent.agentId,
+    id: `agent:${agent.agentId}`, title: agent.label, description: agent.purpose, meta: '智能体', progress: artifacts?.agents?.[agent.agentId] }))
+  return [...pageTasks, ...endpointTasks, ...agentTasks]
 }
