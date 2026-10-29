@@ -10,7 +10,7 @@
 | --- | --- |
 | 需求识别、适配建议、接受或拒绝后不重复询问 | 恢复 `requirements_analyzer.py` 和 `requirement_spec.py` 的 `agent_requirements`、页面 ID 同步、确认校验、概览编辑与 Markdown 同步；不改变应用配置权威 |
 | 产品智能体能力、页面操作、独立页面或浮窗载体 | ProductPlan 使用当前 `product-plan.v8`；`product_plan.py` 恢复能力、入口、交互状态与验收事实；前后端 schema 元数据同步更新，不添加历史读取 |
-| 候选浮窗启停 | `agent_surface_selection.py` 与 `agentSurfaceSelection.ts` 沿原应用规划 AG-UI 端点保存待确认草稿；递归排序 JSON 摘要进行 CAS 校验；保存不等于联合确认 |
+| 候选浮窗启停 | `agent_surface_selection.py` 与 `agentSurfaceSelection.ts` 沿原应用规划 AG-UI 端点读取和保存待确认草稿；`get` 同时返回磁盘草稿与 `productPlanHash`，`save` 使用该服务端摘要做 CAS 并返回下一次编辑基线；保存不等于联合确认 |
 | 技术规划七段配置与审阅 | 复用 1028 `runtime_agent_contracts.py`，通过 `runtime_agent_settings.py` 校验已启用产品入口与技术合同的对应关系；技术规划 Markdown/结构化阅读面板展示七模块 |
 | 同级智能体产物、详情与开发入口 | Electron `agentPlanningArtifactProjection.ts` 只读投影；大纲、快捷任务、详情、完成统计与下一步任务纳入业务 Agent；`src/shared/businessAgent.ts` 共享只读合同 |
 | 独立智能体开发 | Agent 目标贯通会话持久化、会话身份比较、AG-UI 请求、资源锁、生命周期、Build Context、正式职责、调度切片与结束释放；只开发所选 Agent 和 Tool 前置依赖，不扩大到绑定页面或整应用 |
@@ -20,6 +20,8 @@
 | Plan Control 会话隔离、Runtime DAG/启动日志 | 当前分支已有对应实现，沿用现状；没有因为旧文件名不同而重复迁入 |
 
 所有新增产品动作继续通过 `@ag-ui/client` / `@ag-ui/core` 与既有 `/application-page-planning/run` 或 `/workflow/run`；没有新增 REST 产品入口、自制 SSE 或第二套顶层 Workflow。
+
+2026-10-29 后续修复（本地未提交）：浮窗开关移回需求文档的“页面”卡片，“智能体”页签按需求文档样式只读展示职责、能力、边界及中文页面名。Electron 报“产品草稿已变化”时，对同一磁盘草稿的前后端摘要计算结果一致；现有面板优先消费 Workflow 内存快照，保存后的 `onPlanningArtifactsRefresh` 只刷新工作台大纲。新增 `useAgentSurfaceDraft.ts` 先读取原 AG-UI 端点的当前草稿和摘要，保存后直接回填服务端草稿及新摘要；工作区或上游规划变化时丢弃旧异步结果，失败可显式重新加载且不自动重放写入。按用户要求，本批仅更新代码及回归用例，未执行测试、lint、typecheck、build、health、Python 编译或修改后的 Electron 保存验证；下文验证结果属于原迁入提交。
 
 ## 明确不恢复的旧实现
 

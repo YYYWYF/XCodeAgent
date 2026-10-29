@@ -304,7 +304,9 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 - `external`：打开明确的外部目标；
 - `sequence`：由以上原子步骤组成的有序组合，例如提交成功后关闭弹窗并刷新。
 
-纯装饰控件和没有产品语义的 UI 内部控件不进入 ProductPlan actions，也不要求 TechnicalPlan 绑定。ProductPlan 决定导航、外部和组合业务结果，UiDesign 决定本地界面效果，TechnicalPlan 模型显式生成 `action_implementations`；确定性编译器合并三者且绝不根据按钮名称或 HTTP Method 猜测 endpoint。
+纯装饰控件和没有产品语义的 UI 内部控件不进入 ProductPlan actions，也不要求 TechnicalPlan 绑定。ProductPlan 决定导航、外部和组合业务结果，UiDesign 决定本地界面效果，TechnicalPlan 模型显式生成普通业务动作的 `action_implementations`；确定性编译器合并三者且绝不根据按钮名称或 HTTP Method 猜测 endpoint。
+
+Agent 会话动作由已确认 `ProductPlan.agents[].pageActionBindings` 明确标识，不参与普通业务 Endpoint 决策。规划模型接收完整 Agent 身份、职责、入口与边界上下文；平台仅对启用入口确定性编译 `{actionId, bindingType: "agent", agentId}`，并核验该 Agent 已在 TechnicalPlan 中声明且绑定当前页面。首页浮窗与独立聊天页可绑定同一个 Agent，复用同一 Runtime AG-UI 会话能力；禁用浮窗的动作不进入编译结果。不能为聊天动作另造 REST API、聊天业务实体或持久化表，也不能为其填入 `action_implementations`。Agent Tools 仍精确引用已有业务 Endpoint，但不因此成为页面直接调用依赖。开发配置、确认文档及前端类型保留 `agentId`，固定 UI 的 Mock/真实集成交付边界不变。
 
 ### TechnicalPlan 上下文预算
 

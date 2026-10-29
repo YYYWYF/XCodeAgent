@@ -1,6 +1,7 @@
 """在当前 Runtime 合同上重编译可编辑配置，不引入旧 Gateway 派生合同。"""
 
 from copy import deepcopy
+import json
 from math import isfinite
 from hashlib import sha256
 from typing import Any
@@ -19,7 +20,13 @@ def validate_technical_plan_agent_contracts(plan: dict[str, Any], product: dict[
                    for binding in item.get("pageActionBindings", []))
         }
         if set(contracts) != set(expected):
-            return ["TechnicalPlan.agent_contracts 必须覆盖且仅覆盖 ProductPlan 已启用的智能体。"]
+            missing_ids = json.dumps(sorted(set(expected) - set(contracts)), ensure_ascii=False)
+            unexpected_ids = json.dumps(sorted(set(contracts) - set(expected)), ensure_ascii=False)
+            return [
+                "TechnicalPlan.agent_contracts 必须覆盖且仅覆盖 ProductPlan 已启用的智能体。"
+                f"缺失 agentId：{missing_ids}；多出 agentId：{unexpected_ids}。"
+                "请使用已确认产品智能体的 agentId，不得重新命名。"
+            ]
         for agent_id, contract in contracts.items():
             item = expected[agent_id]
             page_ids = [binding["pageId"] for binding in item["pageActionBindings"]

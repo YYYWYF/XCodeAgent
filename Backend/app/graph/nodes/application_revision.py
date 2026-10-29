@@ -344,7 +344,12 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
             if markdown == generated_markdown
             else sync_project_plan_from_markdown(
                 artifact,
-                requirement_spec,
+                {
+                    **requirement_spec,
+                    "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
+                    "confirmed_product_plan": product_plan,
+                    "application_config": read_application_config(workspace),
+                },
                 markdown,
             )
         )

@@ -1,93 +1,109 @@
 import { cx } from '../../../../utils'
-import '../AgentDevelopmentDetail/AgentDevelopmentDetail.less'
-import { Alert, Card, Descriptions, Space, Switch, Tag } from 'antd'
-import { useState } from 'react'
+import { RobotOutlined } from '@ant-design/icons'
 import type { ReactElement } from 'react'
-import { saveAgentSurfaceSelection } from '../../../../service/agentSurfaceSelection'
-import { recordItems, textValue, asRecord, type JsonRecord } from './TechnicalPlanDocPanelData'
+import {
+  asRecord,
+  recordItems,
+  requirementPageRows,
+  stringItems,
+  textValue,
+  type JsonRecord
+} from './RequirementDocPanelData'
+import './RequirementAgents.less'
 
 type Props = {
   productPlan: JsonRecord
   spec: JsonRecord
-  workspaceRoot?: string
-  onChanged?: () => void
 }
 
-/** 展示已规划的业务智能体及候选入口，只允许修改待联合确认草稿中的浮窗开关。 */
-export default function RequirementAgentSection({
-  productPlan,
-  spec,
-  workspaceRoot,
-  onChanged
-}: Props): ReactElement {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const agents = recordItems(productPlan.agents)
+/** 以需求文档统一卡片只读展示智能体职责、能力、边界及关联页面。 */
+export default function RequirementAgentSection({ productPlan, spec }: Props): ReactElement {
+  const plannedAgents = recordItems(productPlan.agents)
   const requirements = recordItems(spec.agent_requirements)
-  const editable =
-    productPlan.confirmation_status === 'pending_user_confirmation' && Boolean(workspaceRoot)
-
-  /** 保存候选浮窗启停后刷新正式草稿，失败时保持原展示值。 */
-  const toggle = async (agentId: string, pageId: string, enabled: boolean): Promise<void> => {
-    if (!workspaceRoot || busy || !editable) return
-    setBusy(true)
-    setError('')
-    try {
-      await saveAgentSurfaceSelection(workspaceRoot, agentId, pageId, enabled, productPlan)
-      onChanged?.()
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : '保存失败')
-    } finally {
-      setBusy(false)
-    }
-  }
+  const agents = plannedAgents.length ? plannedAgents : requirements
+  const pageNames = new Map(
+    requirementPageRows(productPlan, recordItems(spec.pages)).map((page) => [
+      page.pageId,
+      page.name
+    ])
+  )
 
   return (
     <section
-      className={cx('agent-review-section')}
+      className={cx('requirement-doc-section')}
       role="tabpanel"
       id="requirement-doc-panel-agents"
       aria-labelledby="requirement-doc-tab-agents"
     >
-      {error ? <Alert type="error" showIcon message={error} /> : null}
-      {(agents.length ? agents : requirements).map((agent) => (
-        <Card key={textValue(agent.agentId)} title={textValue(agent.name)}>
-          <Descriptions column={1}>
-            <Descriptions.Item label="职责">{textValue(agent.purpose)}</Descriptions.Item>
-            <Descriptions.Item label="业务能力">
-              {Array.isArray(agent.capabilities)
-                ? agent.capabilities
-                    .map((item) =>
-                      typeof item === 'string' ? item : textValue(asRecord(item).name)
+      <div className={cx('requirement-doc-section-title')}>
+        <RobotOutlined /> <span>业务智能体</span>
+        <span className={cx('requirement-doc-section-count')}>{agents.length}</span>
+      </div>
+      <div className={cx('requirement-doc-card-list')}>
+        {agents.map((agent) => {
+          const capabilities = Array.isArray(agent.capabilities)
+            ? agent.capabilities
+                .map((item) => (typeof item === 'string' ? item : textValue(asRecord(item).name)))
+                .filter(Boolean)
+            : []
+          const boundaries = stringItems(agent.boundaries)
+          const bindings = recordItems(agent.pageActionBindings)
+          return (
+            <article
+              className={cx('requirement-doc-page-card', 'requirement-agent-card')}
+              key={textValue(agent.agentId)}
+            >
+              <header className={cx('requirement-doc-page-title')}>
+                <strong>{textValue(agent.name, '未命名智能体')}</strong>
+              </header>
+              <section className={cx('requirement-doc-page-zone')}>
+                <span className={cx('requirement-doc-page-zone-title')}>职责</span>
+                <p className={cx('requirement-doc-page-zone-body')}>
+                  {textValue(agent.purpose, '暂无职责说明')}
+                </p>
+              </section>
+              {[
+                { label: '业务能力', items: capabilities },
+                { label: '业务边界', items: boundaries }
+              ].map(({ label, items }) => (
+                <section className={cx('requirement-doc-page-zone')} key={label}>
+                  <span className={cx('requirement-doc-page-zone-title')}>{label}</span>
+                  {items.length ? (
+                    <ul className={cx('requirement-agent-list')}>
+                      {items.map((item, index) => (
+                        <li key={`${label}-${index}`}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className={cx('requirement-doc-page-desc')}>暂无{label}说明</p>
+                  )}
+                </section>
+              ))}
+              {bindings.length ? (
+                <section className={cx('requirement-doc-page-zone')}>
+                  <span className={cx('requirement-doc-page-zone-title')}>关联页面</span>
+                  {bindings.map((binding) => {
+                    const pageId = textValue(binding.pageId)
+                    const surface = asRecord(binding.surface)
+                    return (
+                      <div className={cx('requirement-agent-surface-row')} key={pageId}>
+                        <strong>{pageNames.get(pageId) || pageId}</strong>
+                        <span>
+                          {surface.type === 'standalone_page'
+                            ? '独立对话页面'
+                            : surface.enabled === true
+                              ? '浮窗已开启'
+                              : '浮窗已关闭'}
+                        </span>
+                      </div>
                     )
-                    .join('；')
-                : ''}
-            </Descriptions.Item>
-            <Descriptions.Item label="业务边界">
-              {Array.isArray(agent.boundaries) ? agent.boundaries.join('；') : ''}
-            </Descriptions.Item>
-          </Descriptions>
-          {recordItems(agent.pageActionBindings).map((binding) => {
-            const surface = asRecord(binding.surface)
-            return (
-              <Space key={textValue(binding.pageId)} style={{ display: 'flex', marginBottom: 8 }}>
-                <Tag color="purple">{textValue(binding.pageId)}</Tag>
-                <span>{surface.type === 'standalone_page' ? '独立对话页面' : '智能体浮窗'}</span>
-                {surface.type === 'floating_panel' ? (
-                  <Switch
-                    checked={surface.enabled === true}
-                    disabled={!editable || busy}
-                    aria-label={`${textValue(binding.pageId)}集成智能体浮窗`}
-                    onChange={(enabled) =>
-                      void toggle(textValue(agent.agentId), textValue(binding.pageId), enabled)
-                    }
-                  />
-                ) : null}
-              </Space>
-            )
-          })}
-        </Card>
-      ))}
+                  })}
+                </section>
+              ) : null}
+            </article>
+          )
+        })}
+      </div>
     </section>
   )
 }

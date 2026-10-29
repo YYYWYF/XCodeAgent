@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import Any
 
+from app.services.agent_action_bindings import agent_action_bindings
+from app.services.product_plan import project_active_agent_product_plan
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.services.ui_design_manifest import persisted_ui_manifest, ui_action_bindings
 
@@ -41,8 +43,8 @@ def _endpoint_catalog(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]
     return result
 
 
-_BINDING_TYPES = {"endpoint", "navigation", "local", "sequence", "external"}
-_STEP_TYPES = _BINDING_TYPES - {"sequence"}
+_BINDING_TYPES = {"endpoint", "agent", "navigation", "local", "sequence", "external"}
+_STEP_TYPES = _BINDING_TYPES - {"sequence", "agent"}
 
 
 def _technical_implementations(page: dict[str, Any]) -> list[dict[str, Any]]:
@@ -54,12 +56,16 @@ def _technical_implementations(page: dict[str, Any]) -> list[dict[str, Any]]:
 
 def expected_business_action_implementations(
     product_page: dict[str, Any],
+    *,
+    agent_action_ids: set[str] | None = None,
 ) -> dict[str, set[str] | None]:
     """从 ProductPlan 提取 TechnicalPlan 必须实现的直接业务动作与组合业务步骤。"""
 
     expected: dict[str, set[str] | None] = {}
     for action in _dict_items(product_page.get("actions")):
         action_id = str(action.get("actionId") or "").strip()
+        if action_id in (agent_action_ids or set()):
+            continue
         behavior = _product_behavior(action)
         behavior_type = str(behavior.get("type") or "business")
         if behavior_type == "business":
@@ -80,10 +86,11 @@ def _technical_action_binding_issues_for_page(
     product_page: dict[str, Any],
     *,
     page_id: str,
+    agent_action_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """以结构化 issue 表达单页缺失或不完整的业务 Action Endpoint 绑定。"""
 
-    expected = expected_business_action_implementations(product_page)
+    expected = expected_business_action_implementations(product_page, agent_action_ids=agent_action_ids)
     implementations = _implementation_index(page)
     issues: list[dict[str, Any]] = []
     for action_id, required_steps in expected.items():
@@ -127,6 +134,8 @@ def technical_action_binding_issues(
 ) -> list[dict[str, Any]]:
     """按 ProductPlan 权威行为规则汇总 TechnicalPlan 的结构化绑定缺口。"""
 
+    product_plan = project_active_agent_product_plan(product_plan)
+    agent_actions = agent_action_bindings(product_plan)
     technical_pages = {
         str(page.get("pageId") or "").strip(): page
         for page in _dict_items(technical_plan.get("pages"))
@@ -140,6 +149,7 @@ def technical_action_binding_issues(
                 technical_pages.get(page_id, {}),
                 product_page,
                 page_id=page_id,
+                agent_action_ids=set(agent_actions.get(page_id, {})),
             )
         )
     return issues
@@ -217,10 +227,13 @@ def _compile_product_action_binding(
     ui_effect: str,
     ui_step_effects: dict[str, str],
     ui_design_skipped: bool = False,
+    agent_id: str = "",
 ) -> dict[str, Any]:
     """合并产品、UI 与技术三层事实，生成 Build 使用的判别联合绑定。"""
 
     action_id = str(action.get("actionId") or "").strip()
+    if agent_id:
+        return {"actionId": action_id, "bindingType": "agent", "agentId": agent_id}
     behavior = _product_behavior(action)
     behavior_type = str(behavior.get("type") or "business")
     if behavior_type == "business":
@@ -280,6 +293,7 @@ def _validate_technical_action_implementations(
     endpoint_ids: set[str],
     required_endpoint_ids: set[str],
     errors: list[str],
+    agent_action_ids: set[str],
 ) -> None:
     """校验 TechnicalPlan 只覆盖产品业务动作及业务步骤的 endpoint 决策。"""
 
@@ -291,18 +305,26 @@ def _validate_technical_action_implementations(
     }
     if len(by_action) != len(implementations):
         errors.append(f"页面 {page_id} 的 action_implementations.actionId 必须非空且唯一。")
-    expected_actions = expected_business_action_implementations(product_page)
+    expected_actions = expected_business_action_implementations(product_page, agent_action_ids=agent_action_ids)
     binding_issues = _technical_action_binding_issues_for_page(
         page,
         product_page,
         page_id=page_id,
+        agent_action_ids=agent_action_ids,
     )
     errors.extend(technical_action_binding_issue_messages(binding_issues))
     extra_actions = sorted(set(by_action) - set(expected_actions))
-    if extra_actions:
+    extra_agent_actions = sorted(set(extra_actions) & agent_action_ids)
+    if extra_agent_actions:
+        errors.append(
+            f"页面 {page_id} 的智能体 action 由 ProductPlan 直接绑定 agentId，不得另选业务 endpoint："
+            + "、".join(extra_agent_actions) + "。"
+        )
+    extra_business_actions = sorted(set(extra_actions) - agent_action_ids)
+    if extra_business_actions:
         errors.append(
             f"页面 {page_id} 的 TechnicalPlan 不得为导航、界面或外部 action 重复决策："
-            + "、".join(extra_actions)
+            + "、".join(extra_business_actions)
             + "。"
         )
     for action_id, expected_steps in expected_actions.items():
@@ -388,6 +410,8 @@ def build_page_implementation_contracts(
 ) -> list[dict[str, Any]]:
     """把产品操作、真实 UI 稿和技术 API 绑定为非视觉页面实现契约。"""
 
+    product_plan = project_active_agent_product_plan(product_plan)
+    agent_actions = agent_action_bindings(product_plan)
     product_pages = {
         str(page.get("pageId") or "").strip(): page
         for page in _dict_items(product_plan.get("pages"))
@@ -432,6 +456,7 @@ def build_page_implementation_contracts(
                 ui_effect=effects.get(action_id, ""),
                 ui_step_effects=step_effects.get(action_id, {}),
                 ui_design_skipped=ui_design_skipped,
+                agent_id=agent_actions.get(page_id, {}).get(action_id, ""),
             )
             action_bindings.append(
                 {
@@ -586,6 +611,8 @@ def validate_page_implementation_contracts(
     if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
         raise ValueError("只接受当前 TechnicalPlan。")
 
+    product_plan = project_active_agent_product_plan(product_plan)
+    agent_actions = agent_action_bindings(product_plan)
     expected_pages = {
         str(page.get("pageId") or "").strip()
         for page in _dict_items(product_plan.get("pages"))
@@ -653,6 +680,7 @@ def validate_page_implementation_contracts(
                 endpoint_ids=endpoint_ids,
                 required_endpoint_ids=required_endpoint_ids,
                 errors=errors,
+                agent_action_ids=set(agent_actions.get(page_id, {})),
             )
         expected_action_ids = [
             str(action.get("actionId") or "").strip()
@@ -674,6 +702,11 @@ def validate_page_implementation_contracts(
                 required_endpoint_ids=required_endpoint_ids,
                 navigation_targets=allowed_navigation_targets,
                 validate_endpoint_references=not uses_current_product_contract,
+                agent_ids={
+                    str(agent.get("agentId") or "")
+                    for agent in _dict_items(technical_plan.get("agent_contracts"))
+                    if page_id in _text_items(agent.get("pageIds"))
+                },
                 errors=errors,
             )
         if ui_designs is not None and ui_designs.get("confirmation_status") != "skipped":
@@ -698,6 +731,7 @@ def _validate_action_binding(
     required_endpoint_ids: set[str],
     navigation_targets: set[str],
     validate_endpoint_references: bool,
+    agent_ids: set[str],
     errors: list[str],
 ) -> None:
     """按判别类型校验单个业务操作，拒绝未知或依赖不闭合的实现方式。"""
@@ -707,9 +741,10 @@ def _validate_action_binding(
     if binding_type not in _BINDING_TYPES:
         errors.append(f"页面 {page_id} 的操作 {action_id} 缺少合法 bindingType。")
         return
-    target_fields = {"endpointId", "targetPageId", "localEffect", "externalTarget"}
+    target_fields = {"endpointId", "agentId", "targetPageId", "localEffect", "externalTarget"}
     allowed_target_field = {
         "endpoint": "endpointId",
+        "agent": "agentId",
         "navigation": "targetPageId",
         "local": "localEffect",
         "external": "externalTarget",
@@ -725,6 +760,11 @@ def _validate_action_binding(
             + "、".join(unexpected_fields)
             + "。"
         )
+    if binding_type == "agent":
+        agent_id = str(binding.get("agentId") or "")
+        if agent_id not in agent_ids:
+            errors.append(f"页面 {page_id} 的操作 {action_id} 缺少绑定当前页面的智能体合同 {agent_id}。")
+        return
     steps = _dict_items(binding.get("steps")) if binding_type == "sequence" else [binding]
     if binding_type == "sequence" and not steps:
         errors.append(f"页面 {page_id} 的组合操作 {action_id} 必须包含 steps。")

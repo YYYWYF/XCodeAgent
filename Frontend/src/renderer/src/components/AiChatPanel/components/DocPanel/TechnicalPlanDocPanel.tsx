@@ -13,6 +13,7 @@ import { authorizationDesignView } from './TechnicalPlanAuthorizationData'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
 import TechnicalPlanAgentSection from './TechnicalPlanAgentSection'
+import { technicalPlanDisplayContracts } from './TechnicalPlanAgentContracts'
 
 type Props = {
   plan: JsonRecord
@@ -27,13 +28,10 @@ const technicalPlanSections: Array<{ key: SectionKey; label: string }> = [
 ]
 
 /** 渲染右侧技术规划产物视图，所有交互仅改变本面板内的阅读位置。 */
-export default function TechnicalPlanDocPanel({
-  plan,
-  productPlan
-}: Props): ReactElement {
+export default function TechnicalPlanDocPanel({ plan, productPlan }: Props): ReactElement {
   const architecture = asRecord(plan.architecture)
   const entities = recordItems(plan.entities)
-  const contracts = recordItems(plan.api_contracts)
+  const contracts = technicalPlanDisplayContracts(plan)
   const pages = recordItems(plan.pages)
   const hasAuthorization = Boolean(authorizationDesignView(plan))
   const authorizationSections = hasAuthorization
@@ -113,7 +111,7 @@ export default function TechnicalPlanDocPanel({
       ) : null}
       {resolvedActiveSection === 'page-bindings' ? (
         <PageBindingsSection
-          contracts={contracts}
+          contracts={recordItems(plan.api_contracts)}
           pages={pages}
           productPlan={productPlan}
           sectionKey="page-bindings"

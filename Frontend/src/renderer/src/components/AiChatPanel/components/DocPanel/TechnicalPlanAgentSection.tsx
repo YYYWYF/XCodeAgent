@@ -4,6 +4,7 @@ import { Card, Descriptions, Tabs } from 'antd'
 import type { ReactElement } from 'react'
 import { MODULES, FIELDS, settingText } from '../AgentDevelopmentDetail/agentSettingsDisplay'
 import { recordItems, textValue, asRecord, type JsonRecord } from './TechnicalPlanDocPanelData'
+import TechnicalPlanAgentInvocation from './TechnicalPlanAgentInvocation'
 
 /** 在原技术规划审阅面板展示当前 Runtime 的全部七模块，配置随技术规划共同确认。 */
 export default function TechnicalPlanAgentSection({ plan }: { plan: JsonRecord }): ReactElement {
@@ -18,6 +19,10 @@ export default function TechnicalPlanAgentSection({ plan }: { plan: JsonRecord }
         <Card key={textValue(agent.agentId)} title={textValue(agent.name)}>
           <p>{textValue(agent.purpose)}</p>
           <p>入口页面：{Array.isArray(agent.pageIds) ? agent.pageIds.join('、') : ''}</p>
+          <TechnicalPlanAgentInvocation
+            agentId={textValue(agent.agentId)}
+            pageIds={agent.pageIds}
+          />
           <Tabs
             items={Object.entries(MODULES).map(([key, label]) => ({
               key,

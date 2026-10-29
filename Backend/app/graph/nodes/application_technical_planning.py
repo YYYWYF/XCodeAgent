@@ -375,6 +375,7 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         _attach_technical_plan_contracts,
         _project_plan_dependency_error_payload,
         _project_plan_validation_errors,
+        _technical_planning_requirement_spec,
     )
     from app.graph.application_planning_revision import cleared_design_change_context
     from app.services.project_plan import apply_project_plan_feedback
@@ -386,7 +387,7 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     synchronized = (
         sync_project_plan_from_markdown(
             plan,
-            state.get("requirement_spec", {}),
+            _technical_planning_requirement_spec(state, state.get("requirement_spec", {})),
             edited_markdown,
         )
         if edited_markdown is not None

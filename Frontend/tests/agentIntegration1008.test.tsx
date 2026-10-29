@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import './agentSurfaceDraft.test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { projectWorkbenchAgents } from '../src/main/agentPlanningArtifactProjection'
 import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide/quickTasks'
@@ -9,6 +10,7 @@ import ApplicationOutline from '../src/renderer/src/components/AiChatPanel/compo
 import AgentDevelopmentDetail from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail'
 import TechnicalPlanAgentSection from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanAgentSection'
 import RequirementAgentSection from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementAgentSection'
+import { RequirementPagesSection } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocSections'
 
 const product = {
   agents: [{ agentId: 'assistant', capabilities: [{ name: '解释库存' }], boundaries: ['只读'] }]
@@ -49,10 +51,23 @@ test('快捷开发任务保留独立 Agent 身份，不伪造页面或 Endpoint'
 })
 
 test('智能体完成统计和设计稿运行时使用当前真实合同', () => {
-  assert.deepEqual(developmentArtifactTotals({ pages: {}, endpoints: {}, entities: {}, agents: {
-    assistant: { initialDevelopmentStatus: 'pending' }
-  } }), { total: 1, completed: 0 })
-  assert.match(compileTsx("import { AgentConversationTemplate } from '@xcodeagent/agent-ui-design'; export default AgentConversationTemplate"), /__DESIGN_RUNTIME__\.agentUi/)
+  assert.deepEqual(
+    developmentArtifactTotals({
+      pages: {},
+      endpoints: {},
+      entities: {},
+      agents: {
+        assistant: { initialDevelopmentStatus: 'pending' }
+      }
+    }),
+    { total: 1, completed: 0 }
+  )
+  assert.match(
+    compileTsx(
+      "import { AgentConversationTemplate } from '@xcodeagent/agent-ui-design'; export default AgentConversationTemplate"
+    ),
+    /__DESIGN_RUNTIME__\.agentUi/
+  )
 })
 
 test('工作台菜单显示智能体及其选中状态', () => {
@@ -109,12 +124,13 @@ test('技术规划审阅显示真实 Prompt，不把 JSON 作为用户编辑产�
   assert.doesNotMatch(markup, /&quot;systemPrompt&quot;:/)
 })
 
-test('产品浮窗已确认或无工作区时只读', () => {
+test('智能体页签只读展示中文页面名称，不再提供浮窗开关', () => {
   const markup = renderToStaticMarkup(
     <RequirementAgentSection
       spec={{}}
       productPlan={{
         confirmation_status: 'confirmed',
+        pages: [{ pageId: 'home', name: '库存首页' }],
         agents: [
           {
             agentId: 'assistant',
@@ -127,6 +143,67 @@ test('产品浮窗已确认或无工作区时只读', () => {
       }}
     />
   )
-  assert.match(markup, /aria-checked="true"/)
-  assert.match(markup, /disabled/)
+  assert.match(markup, /库存首页/)
+  assert.match(markup, /浮窗已开启/)
+  assert.doesNotMatch(markup, /role="switch"/)
+  assert.doesNotMatch(markup, /ant-descriptions/)
+})
+
+test('页面卡片按绑定显示浮窗开关，独立对话页面不提供开关', () => {
+  const markup = renderToStaticMarkup(
+    <RequirementPagesSection
+      sectionKey="pages"
+      spec={{}}
+      onToggleAgentSurface={() => undefined}
+      productPlan={{
+        pages: [
+          { pageId: 'home', name: '库存首页' },
+          { pageId: 'chat', name: '对话页面' },
+          { pageId: 'plain', name: '普通页面' }
+        ],
+        agents: [
+          {
+            agentId: 'assistant',
+            name: '库存助手',
+            pageActionBindings: [
+              { pageId: 'home', surface: { type: 'floating_panel', enabled: false } },
+              { pageId: 'chat', surface: { type: 'standalone_page', enabled: true } }
+            ]
+          }
+        ]
+      }}
+    />
+  )
+  assert.equal((markup.match(/role="switch"/g) || []).length, 1)
+  assert.match(markup, /aria-label="库存首页集成库存助手浮窗"/)
+  assert.match(markup, /aria-checked="false"/)
+  assert.match(markup, /独立对话页面/)
+  assert.doesNotMatch(markup, /disabled/)
+})
+
+test('页面浮窗没有编辑权限或保存中时不可操作', () => {
+  for (const busy of [false, true]) {
+    const markup = renderToStaticMarkup(
+      <RequirementPagesSection
+        sectionKey="pages"
+        spec={{}}
+        agentSurfaceBusy={busy}
+        onToggleAgentSurface={busy ? () => undefined : undefined}
+        productPlan={{
+          pages: [{ pageId: 'home', name: '首页' }],
+          agents: [
+            {
+              agentId: 'assistant',
+              name: '助手',
+              pageActionBindings: [
+                { pageId: 'home', surface: { type: 'floating_panel', enabled: true } }
+              ]
+            }
+          ]
+        }}
+      />
+    )
+    assert.match(markup, /aria-checked="true"/)
+    assert.match(markup, /disabled/)
+  }
 })

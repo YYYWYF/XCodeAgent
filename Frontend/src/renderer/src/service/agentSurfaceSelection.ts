@@ -3,17 +3,66 @@ import type { AgentSubscriber } from '@ag-ui/client'
 import { createAgUiHttpAgent } from './authentication'
 import { getApplicationPlanningUrl } from './applicationPagePlanning'
 
-/** 只保存待确认产品草稿的浮窗选择，正式联合确认仍沿原规划流程。 */
-export async function saveAgentSurfaceSelection(
+export type AgentSurfaceSelectionDraft = {
+  productPlan: Record<string, unknown>
+  productPlanHash: string
+}
+
+type SelectionRequest =
+  | { action: 'get'; workspaceRoot: string }
+  | {
+      action: 'save'
+      workspaceRoot: string
+      agentId: string
+      pageId: string
+      enabled: boolean
+      basedOnProductPlanHash: string
+    }
+
+type SelectionResult = {
+  status?: string
+  error?: { message?: string }
+  productPlan?: unknown
+  productPlanHash?: unknown
+}
+
+/** 通过原 AG-UI 端点读取同一版本的当前草稿及服务端摘要。 */
+export function getAgentSurfaceSelectionDraft(
+  workspaceRoot: string
+): Promise<AgentSurfaceSelectionDraft> {
+  return runAgentSurfaceSelection({ action: 'get', workspaceRoot })
+}
+
+/** 用当前已展示的服务端摘要保存浮窗选择，并返回下一次编辑基线。 */
+export function saveAgentSurfaceSelection(
   workspaceRoot: string,
   agentId: string,
   pageId: string,
   enabled: boolean,
-  productPlan: Record<string, unknown>
-): Promise<void> {
+  basedOnProductPlanHash: string
+): Promise<AgentSurfaceSelectionDraft> {
+  return runAgentSurfaceSelection({
+    action: 'save',
+    workspaceRoot,
+    agentId,
+    pageId,
+    enabled,
+    basedOnProductPlanHash
+  })
+}
+
+/** 消费标准客户端的动作结果，读取和保存共用完整生命周期及错误语义。 */
+async function runAgentSurfaceSelection(
+  input: SelectionRequest
+): Promise<AgentSurfaceSelectionDraft> {
   const agent = createAgUiHttpAgent({ url: getApplicationPlanningUrl(), threadId: randomUUID() })
-  agent.addMessage({ id: randomUUID(), role: 'user', content: '保存当前页面的智能体浮窗选择。' })
-  let result: { status?: string; error?: { message?: string } } | undefined
+  agent.addMessage({
+    id: randomUUID(),
+    role: 'user',
+    content:
+      input.action === 'get' ? '读取当前智能体浮窗选择草稿。' : '保存当前页面的智能体浮窗选择。'
+  })
+  let result: SelectionResult | undefined
   const subscriber: AgentSubscriber = {
     onCustomEvent: ({ event }) => {
       if (
@@ -24,38 +73,27 @@ export async function saveAgentSurfaceSelection(
         result = event.value
     }
   }
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(JSON.stringify(canonicalValue(productPlan)))
-  )
-  const basedOnProductPlanHash = `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
   await agent.runAgent(
     {
       forwardedProps: {
-        agentSurfaceSelection: {
-          action: 'save',
-          workspaceRoot,
-          agentId,
-          pageId,
-          enabled,
-          basedOnProductPlanHash
-        }
+        agentSurfaceSelection: input
       }
     },
     subscriber
   )
   if (result?.status !== 'completed')
-    throw new Error(result?.error?.message || '智能体浮窗选择保存失败')
-}
-
-/** 保留数组顺序并递归排序 JSON 对象键，与服务端草稿摘要使用同一规范。 */
-function canonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalValue)
-  if (value && typeof value === 'object')
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, item]) => [key, canonicalValue(item)])
-    )
-  return value
+    throw new Error(result?.error?.message || '智能体浮窗草稿操作失败')
+  if (
+    !result.productPlan ||
+    typeof result.productPlan !== 'object' ||
+    Array.isArray(result.productPlan) ||
+    typeof result.productPlanHash !== 'string' ||
+    !/^sha256:[0-9a-f]{64}$/.test(result.productPlanHash)
+  ) {
+    throw new Error('智能体浮窗操作未返回有效的当前草稿及版本摘要。')
+  }
+  return {
+    productPlan: result.productPlan as Record<string, unknown>,
+    productPlanHash: result.productPlanHash
+  }
 }
