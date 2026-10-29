@@ -25,6 +25,8 @@ TECHNICAL_PLAN_CANDIDATE_PATH = "/technical-plan.json"
 PRODUCT_CONTEXT_PATH = "/context/product-plan.json"
 CONSTRAINTS_CONTEXT_PATH = "/context/constraints.json"
 TECHNICAL_PLAN_EDIT_SECTIONS = ("architecture", "entities", "api_contracts", "pages")
+# Agent 合同是可选第五段：只在既有候选已包含时原样带入编辑器，避免二次修改丢失七模块定义。
+TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS = ("agent_contracts",)
 
 
 class TechnicalPlanCandidateError(ValueError):
@@ -181,9 +183,13 @@ class _PlanningTokenCallback(BaseCallbackHandler):
 
 
 def _candidate_files(requirement_spec: dict[str, Any], existing_plan: dict[str, Any]) -> dict:
-    """生成四段技术候选和只读上下文，不把应用连接配置或凭据交给模型。"""
+    """生成必选四段加已存在 Agent 合同的候选和只读上下文，不把应用连接配置或凭据交给模型。"""
 
     candidate = {key: deepcopy(existing_plan.get(key)) for key in TECHNICAL_PLAN_EDIT_SECTIONS}
+    # 已确认的 Agent 七模块定义属于同一份 TechnicalPlan，必须随候选一起进入编辑器并保持原样。
+    for key in TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS:
+        if key in existing_plan:
+            candidate[key] = deepcopy(existing_plan[key])
     config = requirement_spec.get("application_config") or {}
     constraints = {
         "backend_stack": "Java8 + Springboot; MySQL8 + Redis",
@@ -220,7 +226,10 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
         "编辑和读取回执会检查完整候选的 JSON 语法及四段根结构；不要靠反复搜索或遍历全文证明 JSON 有效。"
         "完成所有要求后读回受影响窗口一次，核对通过就立即最终回答并结束工具调用。"
         "不要为解决匹配失败重写整个文件。\n"
-        "候选根对象必须且只能包含 architecture、entities、api_contracts、pages。"
+        "候选根对象必须包含 architecture、entities、api_contracts、pages；"
+        "若候选已含 agent_contracts（已确认的业务 Agent 七模块定义），必须整段保留，"
+        "只在相关页面或接口变动时同步修改其中的 agentId、pageIds 和 tools 绑定，不能删除该段，"
+        "也不能在没有该段时自行新增。"
         "架构仅有 frontend/backend/data；所有用户可见说明使用简体中文。"
         "保持未涉及的稳定ID、接口、Schema、参数、页面绑定和字段原样。"
         "修改字段或接口后，搜索相关 entity_field_ref、$ref、endpointId、endpoint_id 并补齐必要引用；"
@@ -281,6 +290,14 @@ def edit_technical_plan_with_agent(
     if not backend.successful_edits:
         raise ValueError("技术规划模型没有应用任何局部修改；不能用回复文字冒充已修改候选。")
     candidate = json.loads(backend.candidate_text())
-    if not isinstance(candidate, dict) or set(candidate) != set(TECHNICAL_PLAN_EDIT_SECTIONS):
-        raise ValueError("局部修订候选必须且只能包含 architecture、entities、api_contracts、pages。")
+    # 期望根字段由既有候选决定：四段必选，Agent 合同随原候选一起保留，不允许模型增删该段。
+    expected_sections = set(TECHNICAL_PLAN_EDIT_SECTIONS) | {
+        key for key in TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS if key in existing_plan
+    }
+    if not isinstance(candidate, dict) or set(candidate) != expected_sections:
+        required = "、".join([
+            *TECHNICAL_PLAN_EDIT_SECTIONS,
+            *(key for key in TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS if key in existing_plan),
+        ])
+        raise ValueError(f"局部修订候选必须且只能包含 {required}。")
     return candidate

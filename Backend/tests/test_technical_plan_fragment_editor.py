@@ -320,3 +320,24 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         errors = [m for messages in model.seen_messages for m in messages if isinstance(m, ToolMessage) and m.status == "error"]
         self.assertTrue(any("原文片段可唯一匹配" in str(m.content) for m in errors))
         self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
+
+    def test_agent_contracts_are_preserved_when_editing_other_sections(self):
+        """既有候选包含 Agent 合同时，局部修订必须整段保留，不能被四段白名单剥离。"""
+
+        baseline = candidate_plan()
+        baseline["agent_contracts"] = [{
+            "agentId": "support_bot",
+            "name": "客服智能体",
+            "purpose": "解答订单查询问题。",
+            "pageIds": [],
+            "agentSettings": {"prompt": {"systemPrompt": "仅回答订单相关问题。"}},
+        }]
+        result, _ = self._run_editor([
+            tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
+                          old_string='"default": 20', new_string='"default": 8'),
+            AIMessage(content="已修改订单列表默认值。"),
+        ], baseline=baseline)
+        self.assertEqual(result["agent_contracts"], baseline["agent_contracts"])
+        self.assertEqual(
+            result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8,
+        )

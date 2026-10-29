@@ -54,6 +54,7 @@ from app.services.product_plan import create_product_plan
 from app.services.project_plan import create_technical_plan
 from app.services.page_implementation_contract import _artifact_hash
 from app.services.requirement_spec import create_requirement_spec
+from app.services.technical_plan_topology_selection import select_technical_plan_topology
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
@@ -107,23 +108,23 @@ class TechnicalPlanningRecoveryJourneyHarness:
         self.model_name = "DeepSeek"
         self.called_models: list[str] = []
         self.graph: Any | None = None
+        # 架构选择与后续确认共用同一份应用配置，避免测试夹具漏掉 configRevision 事实。
+        application_config = {
+            "schemaVersion": 6,
+            "configRevision": 1,
+            "appName": "天气预报应用",
+            "datasource": {"type": "database"},
+            "auth": {"enable": False},
+            "authorization": {
+                "enabled": False,
+                "initialAdministratorSubjects": [],
+            },
+        }
+        self.application_config = application_config
         application_file = self.workspace / ".devagentstudio" / "application.json"
         application_file.parent.mkdir(parents=True, exist_ok=True)
         application_file.write_text(
-            json.dumps(
-                {
-                    "schemaVersion": 6,
-                    "configRevision": 1,
-                    "appName": "天气预报应用",
-                    "datasource": {"type": "database"},
-                    "auth": {"enable": False},
-                    "authorization": {
-                        "enabled": False,
-                        "initialAdministratorSubjects": [],
-                    },
-                },
-                ensure_ascii=False,
-            ),
+            json.dumps(application_config, ensure_ascii=False),
             encoding="utf-8",
         )
         self._seed_formal_artifacts()
@@ -172,7 +173,10 @@ class TechnicalPlanningRecoveryJourneyHarness:
             },
             base_candidate,
         )
-        self.candidate["confirmation_status"] = "pending_user_confirmation"
+        # 技术规划确认前必须显式选择架构：测试按 Java 业务应用（backend_direct）走当前主链。
+        self.candidate = select_technical_plan_topology(
+            self.candidate, "backend_direct", self.application_config,
+        )
         self.requirement_spec = requirement_spec
         self.product_plan = product_plan
         self.ui_designs = ui_designs
