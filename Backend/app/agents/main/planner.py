@@ -8,6 +8,7 @@ from typing import Any, Callable
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main.technical_plan_language import repair_technical_plan_chinese_prose
+from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -326,7 +327,7 @@ def _technical_planning_prompt(
         "4. Every referenced endpointId exists in api_contracts and is also present in the same page's "
         "endpoint_dependencies. Do not return the TechnicalPlan until this audit passes.\n\n"
         f"{revision_context}"
-        f"planning_adjustment_request:\n{str(requirement_spec.get('planning_adjustment_request') or '').strip()}\n"
+        f"{technical_plan_feedback_prompt(requirement_spec)}"
         f"{TECHNICAL_PLAN_FINAL_LANGUAGE_REQUIREMENT}"
     )
 
@@ -666,6 +667,7 @@ def _technical_action_binding_repair_prompt(
         f"Affected confirmed ProductPlan actions:\n{json.dumps(affected_actions, ensure_ascii=False)}\n\n"
         f"Existing Endpoint catalog:\n{json.dumps(endpoint_catalog, ensure_ascii=False)}\n\n"
         f"Current bindings on affected pages:\n{json.dumps(current_bindings, ensure_ascii=False)}\n"
+        f"{technical_plan_feedback_prompt(requirement_spec)}"
     )
 
 
@@ -820,6 +822,7 @@ def _technical_contract_repair_prompt(
         f"Contracts to repair:\n{json.dumps(target_contracts, ensure_ascii=False)}\n\n"
         f"Bound entities:\n{json.dumps(entity_context, ensure_ascii=False)}\n\n"
         f"Related confirmed product actions:\n{json.dumps(product_actions, ensure_ascii=False)}\n"
+        f"{technical_plan_feedback_prompt(requirement_spec)}"
         f"{TECHNICAL_PLAN_CONTRACT_LANGUAGE_FINAL_REQUIREMENT}"
     )
 
@@ -875,6 +878,7 @@ def repair_technical_plan_api_contracts_with_chat_model(
     return repair_technical_plan_chinese_prose(
         repaired_plan,
         invoke_model=lambda prompt: _invoke_prompt_with_chat_model(prompt, settings=settings),
+        planning_context=requirement_spec,
     )
 
 
@@ -907,6 +911,7 @@ def plan_project_with_chat_model(
         return repair_technical_plan_chinese_prose(
             technical_plan,
             invoke_model=lambda prompt: _invoke_prompt_with_chat_model(prompt, settings=settings),
+            planning_context=requirement_spec,
         )
     agent_plan = extract_json_object(agent_note)
     plan = create_project_plan(

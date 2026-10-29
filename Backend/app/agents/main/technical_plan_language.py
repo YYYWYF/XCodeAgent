@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
+from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.utils.model_output import extract_json_object
 
 
@@ -91,6 +92,7 @@ def repair_technical_plan_chinese_prose(
     plan: dict[str, Any],
     *,
     invoke_model: Callable[[str], str],
+    planning_context: dict[str, Any],
 ) -> dict[str, Any]:
     """发现整段英文说明时调用模型翻译，并仅写回对应的说明字段。"""
 
@@ -108,7 +110,8 @@ def repair_technical_plan_chinese_prose(
         "技术名词、ID、字段名、类型、HTTP 方法、路径和 Schema 引用等词形保留。"
         "返回 JSON：{\"translations\": {原路径: 中文字符串}}。必须为每个给定路径返回一个值，"
         "不得增加、遗漏路径或返回其他内容。每个翻译后的值必须包含中文字符，并保留原意。\n"
-        f"待翻译字段：{json.dumps(untranslated, ensure_ascii=False)}"
+        f"待翻译字段：{json.dumps(untranslated, ensure_ascii=False)}\n"
+        f"{technical_plan_feedback_prompt(planning_context)}"
     )
     response = extract_json_object(response_text)
     translations = response.get("translations") if isinstance(response, dict) else None

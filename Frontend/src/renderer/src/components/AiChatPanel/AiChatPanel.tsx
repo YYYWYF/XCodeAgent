@@ -2554,12 +2554,10 @@ export default function AiChatPanel({
   const [stopGenerationPending, setStopGenerationPending] = useState(false)
   const stopGenerationPendingRef = useRef(false)
   const stopping = stopGenerationPending || localWorkflowStopping || (restoredRunRunning && ownedExecution?.status === 'stopping')
-  // 已结束任务也只读刷新工作区资格；切换会话或本地开始新运行后自动停止旧轮询。
-  const endedExecutionForSession = planEnded ? Object.values(applicationLifecycle?.endedExecutions || {})
-    .find((item) => item.execution.ownerSessionId === activeSession?.sessionId) : undefined
+  // 只跟进脱离本地流的运行中任务；任务结束即停止轮询，点击继续时再校验工作区资格。
   useWorkbenchRunRefresh(
     application,
-    !localWorkflowLoading ? restoredRunRunning ? ownedExecution?.runId : endedExecutionForSession?.execution.runId : undefined,
+    !localWorkflowLoading && restoredRunRunning ? ownedExecution?.runId : undefined,
     onApplicationLifecycleChange,
     workbenchRefreshConnection
   )

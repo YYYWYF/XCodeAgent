@@ -1861,7 +1861,8 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
     diagnostics = "\n".join(f"- {error}" for error in errors[:12])
     return (
         "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan 与 UiManifest，"
-        "在本次重新生成中返回完整 TechnicalPlan 并修复下列问题；不得猜测或省略业务 action/step，"
+        "在本轮允许的修复范围内修复下列问题，输出格式遵循本轮完整生成或定向修复约定；"
+        "不得猜测或省略业务 action/step，"
         "必须完整保留当前 TechnicalPlan 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
         "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
         "不要要求用户重试，也不要解释校验过程：\n"
@@ -2019,18 +2020,15 @@ def _generate_valid_technical_plan(
         if not remaining_errors:
             return current_plan, [], None
     for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
-        retry_feedback = (
+        validation_feedback = (
             _technical_plan_retry_feedback(remaining_errors)
             if remaining_errors
-            else base_feedback
+            else ""
         )
+        # 原始修改要求在整个生成预算内保持不变，系统诊断按轮替换，不能占用用户要求字段。
         current_requirement = {
             **requirement_spec,
-            **(
-                {"planning_adjustment_request": retry_feedback}
-                if retry_feedback
-                else {}
-            ),
+            "technical_plan_validation_feedback": validation_feedback,
         }
         try:
             candidate = (
@@ -2046,7 +2044,7 @@ def _generate_valid_technical_plan(
                     on_token=_planning_token_callback,
                 )
             )
-            candidate = apply_project_plan_feedback(candidate, retry_feedback)
+            candidate = apply_project_plan_feedback(candidate, base_feedback)
             candidate = _attach_technical_plan_contracts(state, candidate)
             candidate["confirmation_status"] = "pending_user_confirmation"
             remaining_errors = _project_plan_validation_errors(candidate, state)
@@ -2080,6 +2078,14 @@ def _repair_technical_plan_validation_errors(
         state,
         requirement_spec,
     )
+    # 确认动作本身不是修改意见，沿用技术事务已冻结的业务要求及其既有优先级。
+    from app.graph.nodes.application_technical_planning import _technical_request
+
+    original_request = _technical_request(state)
+    technical_requirement = {
+        **technical_requirement,
+        "planning_adjustment_request": original_request,
+    }
     current_plan = project_plan
     remaining_errors = errors
     for attempt in range(1, max(repair_attempts, 0) + 1):
@@ -2094,14 +2100,14 @@ def _repair_technical_plan_validation_errors(
             repaired = _repair_technical_plan_candidate(
                 {
                     **technical_requirement,
-                    "planning_adjustment_request": feedback,
+                    "technical_plan_validation_feedback": feedback,
                 },
                 current_plan,
                 remaining_errors,
             )
             repaired = apply_project_plan_feedback(
                 repaired,
-                feedback,
+                original_request,
             )
             current_plan = _attach_technical_plan_contracts(state, repaired)
             current_plan["confirmation_status"] = "pending_user_confirmation"

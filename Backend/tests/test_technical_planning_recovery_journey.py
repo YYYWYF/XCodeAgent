@@ -52,6 +52,7 @@ from app.services.application_lifecycle import (
 )
 from app.services.product_plan import create_product_plan
 from app.services.project_plan import create_technical_plan
+from app.services.page_implementation_contract import _artifact_hash
 from app.services.requirement_spec import create_requirement_spec
 from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
@@ -148,6 +149,8 @@ class TechnicalPlanningRecoveryJourneyHarness:
         ui_designs = {
             "schema_version": "ui-manifest.v3",
             "confirmation_status": "skipped",
+            # 跳过 UI 也必须绑定当前产品计划，确保恢复测试实际进入技术规划节点。
+            "product_plan_sha256": _artifact_hash(product_plan),
             "pages": [],
         }
         write_ui_designs_json(state, ui_designs)

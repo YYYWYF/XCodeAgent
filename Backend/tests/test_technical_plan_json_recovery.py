@@ -16,7 +16,7 @@ def _broken_movie_technical_plan() -> str:
 
     return """{
   "architecture": {
-    "frontend": "React",
+    "frontend": "React 前端",
     "backend": "Java8 Springboot",
     "data": "MySQL8 Redis"
   },

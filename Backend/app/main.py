@@ -58,6 +58,7 @@ from app.routes.endpoint_designs import endpoint_designs_router
 from app.routes.entity_tables import entity_tables_router
 from app.routes.telemetry import telemetry_router
 from app.protocols.telemetry import telemetry_capabilities
+from app.protocols.app_update import app_update_capabilities, build_app_update_ag_ui_stream
 from app.protocols.entity_tables import entity_tables_capabilities
 from app.protocols.revision_preview import (
     build_revision_preview_ag_ui_stream,
@@ -188,6 +189,7 @@ async def health() -> dict[str, object]:
             "endpoint_designs": endpoint_designs_capabilities(),
             "entity_tables": entity_tables_capabilities(),
             "telemetry": telemetry_capabilities(),
+            "app_update": app_update_capabilities(),
             "code_changes": code_changes_capabilities(),
             "revision_preview": revision_preview_capabilities(),
             "version_control": version_control_capabilities(),
@@ -200,6 +202,20 @@ async def health() -> dict[str, object]:
             "workspace": workspace_tools.capabilities(),
         },
     }
+
+
+@app.post("/app-update/run")
+async def run_app_update(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """登录前通过 AG-UI 检测版本，模板服务地址仅从后端配置读取。"""
+
+    return StreamingResponse(
+        build_app_update_ag_ui_stream(payload=input_data, settings=settings, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/application-page-planning/run")

@@ -1,0 +1,120 @@
+.@{class-prefix}-update-page {
+  --update-bg: #f8f6fc;
+  --update-panel: #fff;
+  --update-text: #292132;
+  --update-secondary: #756a83;
+  --update-border: #e8e0f2;
+  --update-soft: #eee7fa;
+  --update-accent: #6b3cf0;
+  --update-error: #c4384b;
+  height: 100%;
+  padding: 20px 24px;
+  overflow: auto;
+  color: var(--update-text);
+  background: var(--update-bg);
+
+  &[data-theme='dark'] {
+    --update-bg: #18131f;
+    --update-panel: #241c2e;
+    --update-text: #f2edf9;
+    --update-secondary: #bbafc9;
+    --update-border: #473651;
+    --update-soft: #352347;
+    --update-accent: #b495ff;
+    --update-error: #ff98a3;
+  }
+
+  h1 {
+    margin: 0 0 8px;
+    color: var(--update-text);
+    font-size: 17px;
+    font-weight: 600;
+  }
+  p {
+    margin: 8px 0;
+    font-size: 12px;
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+  }
+  small {
+    color: var(--update-secondary);
+    font-size: 12px;
+  }
+  .ant-progress-text {
+    color: var(--update-text);
+  }
+  .ant-progress-inner {
+    background: var(--update-border);
+  }
+  .ant-spin-dot-item {
+    background: var(--update-accent);
+  }
+  .ant-btn {
+    color: var(--update-text);
+    background: var(--update-panel);
+    border-color: var(--update-border);
+  }
+  .ant-btn:hover,
+  .ant-btn:focus-visible {
+    color: var(--update-accent);
+    border-color: var(--update-accent);
+  }
+  .ant-btn-primary {
+    color: #fff;
+    background: #6b3cf0;
+    border-color: #6b3cf0;
+  }
+  .ant-btn-primary:hover,
+  .ant-btn-primary:focus-visible {
+    color: #fff;
+    background: #8054f4;
+    border-color: #8054f4;
+  }
+  .ant-btn:focus-visible {
+    outline: 2px solid var(--update-accent);
+    outline-offset: 2px;
+  }
+}
+.@{class-prefix}-update-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  strong,
+  small {
+    display: block;
+  }
+  strong {
+    margin-bottom: 3px;
+    font-size: 15px;
+  }
+}
+.@{class-prefix}-update-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  color: var(--update-accent);
+  background: var(--update-soft);
+  font-size: 22px;
+}
+.@{class-prefix}-update-confirm {
+  padding: 13px 15px;
+  background: var(--update-panel);
+  border: 1px solid var(--update-border);
+  border-radius: 10px;
+  footer {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+  }
+}
+.@{class-prefix}-update-status {
+  p {
+    color: var(--update-secondary);
+  }
+}
+.@{class-prefix}-update-error {
+  color: var(--update-error);
+}
