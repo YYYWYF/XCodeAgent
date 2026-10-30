@@ -51,6 +51,9 @@ def api_design_readiness_gate(state: ProjectState) -> dict[str, Any]:
         else "application" if state_target_type == "application"
         else str(state.get("selectedPageId") or "").strip()
     )
+    scope = state.get("build_execution_scope") or {}
+    if scope.get("type") == "agent":
+        state_target_type, state_target_id = "agent", str(scope.get("targetId") or "")
     action_target_type = str(action.get("targetType") or "").strip()
     target_type = action_target_type if action_target_type in {"application", "page", "endpoint", "agent"} else (
         state_target_type

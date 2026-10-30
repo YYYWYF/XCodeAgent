@@ -2245,12 +2245,7 @@ def build(state: ProjectState) -> dict:
     """运行构建调度节点，并在 LangGraph 流中报告逐任务进度。"""
 
     from app.services.frontend_agent_ui_scaffold import inject_frontend_agent_ui_scaffold
-    from app.services.agent_ui_build_contract import apply_agent_ui_delivery_boundary, agent_ui_integration_pending_result
 
     if any((task.get("source_refs") or {}).get("agent_ui") for task in state.get("tasks", [])):
         inject_frontend_agent_ui_scaffold(workspace_from_state(state))
-    result = run_build_scheduler(state)
-    summary = apply_agent_ui_delivery_boundary(result.get("build_summary") or {}, result.get("tasks") or state.get("tasks") or [])
-    if summary.get("delivery_boundary", {}).get("real_integration") == "pending":
-        return {**result, **agent_ui_integration_pending_result(), "build_summary": summary}
-    return result
+    return run_build_scheduler(state)

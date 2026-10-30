@@ -1,8 +1,10 @@
 """规划确认更换 Run 后，最新 checkpoint 与旧生命周期 owner 的恢复一致性。"""
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from typing import Any
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -20,6 +22,7 @@ from app.services.application_lifecycle import (
     create_application_lifecycle, load_application_lifecycle, write_application_lifecycle,
 )
 from app.services.business_node_retry import prepare_business_node_retry, retry_action_plan
+from app.services.planning_recovery_ownership import planning_source_is_current
 from app.services.retry_preparation import abandon_prepared_retry
 
 
@@ -75,6 +78,30 @@ class PlanningRecoveryOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 "workflow_scope": "application_planning", "request": "创建聊天应用",
                 "application_planning_interaction": {"action": "confirm"},
             }, self.config)
+
+    async def test_ownership_timeout_preserves_source_and_allows_retry(self) -> None:
+        """归属读取超时取消底层任务，保留原 owner，并允许随后重新读取同一失败现场。"""
+
+        lifecycle = load_application_lifecycle(self.workspace)
+        cancelled = asyncio.Event()
+
+        async def blocked_read(_config: dict[str, Any]) -> None:
+            """模拟阻塞的 checkpoint 读取，并记录平台超时后的取消交付。"""
+
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        graph = SimpleNamespace(aget_state=blocked_read)
+        with patch("app.services.retry_preparation.CHECKPOINT_PREPARATION_SECONDS", 0.01):
+            with self.assertRaises(RecoveryExecutionError) as denied:
+                await planning_source_is_current(self.source, graph, lifecycle)
+        self.assertEqual(denied.exception.code, "RETRY_CHECKPOINT_UNAVAILABLE")
+        self.assertIsInstance(denied.exception.__cause__, TimeoutError)
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        self.assertEqual(load_application_lifecycle(self.workspace), lifecycle)
+        self.assertTrue(await planning_source_is_current(self.source, self.graph, lifecycle))
 
     async def test_projection_action_is_executable_with_a_stale_same_thread_owner(self) -> None:
         """投影签发的动作不能仅因旧生成 Run 尚在 lifecycle 中而立即过期。"""

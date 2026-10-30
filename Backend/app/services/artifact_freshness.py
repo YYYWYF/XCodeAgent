@@ -47,7 +47,7 @@ def task_plan_errors(state: dict[str, Any], plan: dict[str, Any]) -> list[str]:
     from app.services.task_input_freshness import task_covers_current_input
 
     scope = state.get("build_execution_scope") or {}
-    if scope.get("type") not in {"page", "endpoint"}:
+    if scope.get("type") not in {"page", "endpoint", "agent"}:
         return []
     resolved = resolve_confirmation_context(state["workspace"], scope)
     context = resolved["build_context"]

@@ -6,6 +6,9 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from app.services.application_config import read_application_config
+from app.services.agent_settings_commit import agent_settings_commit
+from app.services.technical_plan_topology_selection import rebind_selected_topology
 from app.services.runtime_agent_contracts import agent_fact_digest as agent_contract_sha256
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
@@ -105,6 +108,7 @@ def _prepare_revision(
         prompt=prompt,
         temperature=temperature,
     )
+    candidate_plan = rebind_selected_topology(candidate_plan, read_application_config(root))
     candidate_contract = agent_contract(candidate_plan, request.agent_id)
     if candidate_contract == old_contract:
         raise ValueError("Agent Settings 没有产生可保存的修改。")
@@ -168,6 +172,16 @@ def _prepare_revision(
 def _confirm_revision(
     request: ConfirmAgentSettingsRevisionRequest,
 ) -> tuple[dict[str, Any], str]:
+    """把正式文件、旧计划失效、生命周期与草稿清理纳入同一个可回滚确认事务。"""
+
+    root, _, _ = artifact_paths(request.workspace_root)
+    with agent_settings_commit(root, request.change_id, AGENT_SETTINGS_ARTIFACT_KEY):
+        return _confirm_revision_locked(request)
+
+
+def _confirm_revision_locked(
+    request: ConfirmAgentSettingsRevisionRequest,
+) -> tuple[dict[str, Any], str]:
     """复验 revision draft 并原子更新正式 TechnicalPlan Markdown 与 JSON。"""
 
     root, product_path, technical_path = artifact_paths(request.workspace_root)
@@ -202,9 +216,11 @@ def _confirm_revision(
         canonical_markdown_path=technical_path.with_suffix(".md"),
         canonical_json_path=technical_path,
         based_on_paths={"product-plan": product_path},
-        synchronize_markdown=lambda markdown, artifact: synchronize_settings_markdown(
-            artifact, markdown, product_plan, request.agent_id,
-            generated_markdown_sha256=metadata.hidden["generatedMarkdownSha256"]),
+        synchronize_markdown=lambda markdown, artifact: rebind_selected_topology(
+            synchronize_settings_markdown(
+                artifact, markdown, product_plan, request.agent_id,
+                generated_markdown_sha256=metadata.hidden["generatedMarkdownSha256"]),
+            read_application_config(root)),
         validate_artifact=validate_artifact,
     )
     confirmed_plan = result["artifact"]

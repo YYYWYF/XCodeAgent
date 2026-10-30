@@ -165,7 +165,7 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         """候选最终 JSON 不合法时拒绝返回，工作区基线不受失败编辑影响。"""
 
         original = deepcopy(self.baseline)
-        with self.assertRaises(json.JSONDecodeError):
+        with self.assertRaisesRegex(ValueError, "不是有效 JSON"):
             self._run_editor([
                 tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
                               old_string='"default": 20', new_string='"default": invalid'),

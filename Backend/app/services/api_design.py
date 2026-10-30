@@ -1572,6 +1572,13 @@ def _target_endpoints(
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """解析应用、页面或单 Endpoint 对应的当前 TechnicalPlan 接口集合。"""
 
+    if target_type == "agent":
+        from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
+
+        contract = agent_contract_index(project_plan).get(target_id)
+        if contract is None:
+            raise ApiDesignError(f"正式技术规划不存在智能体 {target_id}。")
+        return [find_endpoint(project_plan, api, endpoint) for api, endpoint in agent_endpoint_keys(contract)]
     if target_type == "application":
         return [
             (contract, endpoint)

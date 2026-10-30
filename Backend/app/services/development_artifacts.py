@@ -18,6 +18,7 @@ from app.domain.development_artifacts import (
 )
 from app.services.repository_branch import read_workspace_branch_name
 from app.workspace.detail_design_documents import hydrate_external_detail_designs
+from app.services.runtime_agent_contracts import agent_contract_index
 
 INITIAL_DEVELOPMENT_PHASES = frozenset({
     "api_design_readiness_gate", "inspect_workspace", "prepare_build_tasks",
@@ -155,9 +156,7 @@ def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
             ))
     for entity in _records(technical.get("entities", []), "TechnicalPlan.entities"):
         targets.append(DevelopmentArtifactTarget(type="entity", entityId=_identifier(entity.get("id"))))
-    from app.services.runtime_agent_contracts import agent_contract_index
-    for agent_id in agent_contract_index(technical):
-        targets.append(DevelopmentArtifactTarget(type="agent", agentId=agent_id))
+    targets.extend(DevelopmentArtifactTarget(type="agent", agentId=key) for key in agent_contract_index(technical))
     keys = [target.model_dump_json() for target in targets]
     if len(set(keys)) != len(keys):
         raise ValueError("开发产物标识重复。")
@@ -240,7 +239,9 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
             )
             progress = DevelopmentArtifactProgress(initialDevelopmentStatus="in_progress" if active else "pending")
         if target.type == "agent":
-            artifacts.agents[target.agent_id or ""] = progress
+            from app.services.runtime_agent_development import reconcile_agent_progress
+
+            artifacts.agents[target.agent_id or ""] = reconcile_agent_progress(technical, target.agent_id, progress)
         elif target.type == "page":
             artifacts.pages[target.page_id or ""] = progress
         else:
@@ -347,6 +348,12 @@ def complete_initial_development(
         if state.development_artifacts.catalog_error:
             raise ValueError(state.development_artifacts.catalog_error)
         targets = [execution.development_target]
+        from app.services.runtime_agent_development import completed_build_agents, module_inputs
+
+        verified_agents = completed_build_agents(workspace, build_state or {}, execution)
+        if execution.development_target.type == "agent" and execution.development_target not in verified_agents:
+            raise ValueError("当前智能体七模块、依赖或单测缺少同轮完成证据。")
+        targets.extend(target for target in verified_agents if target not in targets)
         if execution.development_target.type == "page" and build_state is not None:
             from app.services.development_completion_evidence import completed_page_endpoints
 
@@ -360,6 +367,9 @@ def complete_initial_development(
             current = artifact_progress(state.development_artifacts, target)
             if not isinstance(current, DevelopmentArtifactProgress):
                 continue
+            if target.type == "agent":
+                current.module_inputs = module_inputs(_confirmed_plan(workspace, "technical-plan"), target.agent_id)
+                changed = True
             if current.initial_development_status != "completed":
                 current.initial_development_status = "completed"
                 current.completed_at = completed_at
@@ -387,11 +397,10 @@ def execution_development_metadata(
     previous: WorkbenchExecution | None = state.active_executions.get(replaces_run_id or "")
     if previous and previous.development_target and not initial_entry:
         target = previous.development_target
-        matches = (scope == "page" and target.page_id == target_id) or (
+        matches = (scope == "agent" and target.agent_id == target_id) or (scope == "page" and target.page_id == target_id) or (
             scope == "endpoint" and target.endpoint_id == target_id
             and target.api_contract_id == api_contract_id
         )
-        matches = matches or (scope == "agent" and target.agent_id == target_id)
         if matches and phase in INITIAL_DEVELOPMENT_PHASES:
             return {
                 "development_purpose": "revision" if state.active_formal_revision else previous.development_purpose,
@@ -402,7 +411,8 @@ def execution_development_metadata(
     if not initial_entry and not api_contract_id and scope == "endpoint":
         return {}
     target = DevelopmentArtifactTarget(
-        type=scope, agentId=target_id if scope == "agent" else None, pageId=target_id if scope == "page" else None,
+        type=scope, pageId=target_id if scope == "page" else None,
+        agentId=target_id if scope == "agent" else None,
         apiContractId=api_contract_id if scope == "endpoint" else None,
         endpointId=target_id if scope == "endpoint" else None,
     )

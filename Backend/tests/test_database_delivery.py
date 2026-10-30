@@ -252,3 +252,21 @@ class DatabaseDeliveryTests(unittest.TestCase):
         self.write_inputs()
         self.assertEqual(export_database_scripts(self.root), [])
         self.assertFalse(self.history.exists())
+
+    def test_runtime_delivery_finishes_without_a_java_directory(self) -> None:
+        """Runtime 依照正式拓扑交付首版及增量，不创建或要求 Java backend。"""
+
+        (self.root / "backend").rmdir()
+        (self.root / "agent-runtime").mkdir()
+        self.plan["topology"] = {"type": "agent_runtime_direct", "serviceIds": ["agent-runtime"],
+            "publicEdgeServiceId": "agent-runtime", "authenticationTermination": "anonymous-session"}
+        self.write_inputs()
+        first = finalize_project({"workspace": str(self.root), "accepted": True})
+        self.assertEqual(first["status"], "completed", first)
+        self.assertIn("agent-runtime/db/v1_0/create.sql", first["message"])
+        self.assertFalse((self.root / "backend").exists())
+        self.plan["entities"][0]["fields"].append({"name": "reason", "label": "事由", "type": "text"})
+        self.next_version()
+        paths = export_database_scripts(self.root)
+        self.assertEqual(paths, ["agent-runtime/db/v1_1/create.sql", "agent-runtime/db/v1_1/alter.sql"])
+        self.assertIn("ADD COLUMN `reason`", (self.root / paths[1]).read_text())

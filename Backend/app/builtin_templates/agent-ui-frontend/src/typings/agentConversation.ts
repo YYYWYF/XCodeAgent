@@ -5,6 +5,7 @@ export type AgentRunStatus =
   | 'idle'
   | 'running'
   | 'waiting_approval'
+  | 'waiting_input'
   | 'stopped'
   | 'error'
   | 'completed'
@@ -50,6 +51,7 @@ export interface AgentUiTemplateConfig {
   suggestedQuestions: string[]
   features: AgentUiFeatureFlags
   mock: AgentUiMockContent
+  runtime?: { path: string; pageId: string }
 }
 
 export interface ConversationThread {
@@ -106,9 +108,27 @@ export interface AgentRunResult {
   status: AgentRunStatus
   messages: AgentMessage[]
   error?: string
+  pendingInteraction?: PendingAgentInteraction
+  requiresSync?: boolean
+}
+
+export interface PendingAgentInteraction {
+  schemaVersion: 1
+  interactionId: string
+  kind: 'clarification' | 'confirmation' | 'approval_required'
+  message: string
+  payload: Record<string, unknown>
 }
 
 export interface AgentConversationAdapter {
+  /** 只读同步 checkpoint 状态，结果未知时不得直接重放上一操作。 */
+  refreshRun?(threadId: string, runId: string): Promise<AgentRunResult>
+  /** 读取同一会话的完整运行快照，切换会话时恢复待交互事项。 */
+  loadRun?(threadId: string): Promise<AgentRunResult>
+  /** 订阅真实运行的消息及状态增量；离线设计适配器无需网络订阅。 */
+  subscribe?(listener: (result: AgentRunResult) => void): () => void
+  /** 回答当前服务端待交互项，恢复同一逻辑会话。 */
+  resolveInteraction?(input: { runId: string; interactionId: string; value: unknown; responseRunId?: string }): Promise<AgentRunResult>
   /** 列出当前适配器可见的会话。 */
   listThreads(): Promise<ConversationThread[]>
   /** 创建一个空白会话。 */

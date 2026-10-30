@@ -1,10 +1,10 @@
-# Generated Frontend Mock Stage
+# Offline Design Mock Stage
 
 ## Scope
 
 Use the shared Agent conversation components already present in the generated
-application frontend template. Implement page composition and confirmed business
-configuration only. The current delivery uses `MockAgentConversationAdapter`.
+application design fixture. This reference applies only to offline UiDesign.
+Formal Build consumes the Runtime contract and follows ag-ui-integration-stage.md.
 
 ## Adapter Boundary
 

@@ -6,7 +6,7 @@ import type {
   AgentUiTemplateConfig,
   ConversationThread
 } from '@/typings/agentConversation'
-import { AgentChatCore, createMockAgentConversationAdapter } from './AgentChatCore'
+import { AgentChatCore, createAgentConversationAdapter } from './AgentChatCore'
 import { agentIconCompatibilityProps } from './iconCompatibility'
 import { AgentMobileChatDrawer } from './AgentMobileChatDrawer'
 import { AGENT_CONVERSATION_STYLES, createAgentUiCssVariables } from './styles'
@@ -60,7 +60,7 @@ export function AgentConversationPage({
   adapter: providedAdapter
 }: AgentConversationPageProps): React.ReactElement {
   const adapter = useMemo(
-    () => providedAdapter ?? createMockAgentConversationAdapter(config),
+    () => providedAdapter ?? createAgentConversationAdapter(config),
     [config, providedAdapter]
   )
   const { token } = theme.useToken()
@@ -133,7 +133,7 @@ export function AgentConversationPage({
               </Text>
             </div>
           </Space>
-          <Tag color="processing">模拟运行</Tag>
+          <Tag color="processing">{config.runtime ? 'Agent Runtime' : '模拟运行'}</Tag>
         </header>
         <AgentChatCore
           adapter={adapter}

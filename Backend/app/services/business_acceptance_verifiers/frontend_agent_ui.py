@@ -1,4 +1,4 @@
-"""验证生成应用页面对固定 Agent UI Mock 组件的受控组合。"""
+"""验证生成应用页面对固定 Agent UI Runtime 组件的受控组合。"""
 
 from __future__ import annotations
 
@@ -101,11 +101,11 @@ def _floating_business_body_exists(source: str, component: str) -> bool:
     return bool(tags)
 
 
-def verify_agent_ui_mock_source(
+def verify_agent_ui_runtime_source(
     files: dict[str, str],
     expected: dict[str, Any],
 ) -> dict[str, Any]:
-    """验证页面精确组合固定组件，并拒绝 Adapter 覆盖和直连网络。"""
+    """验证页面精确绑定正式 Runtime，并拒绝覆盖平台适配器或另建网络传输。"""
 
     contract = expected.get("agent_ui")
     contract = contract if isinstance(contract, dict) else {}
@@ -114,7 +114,12 @@ def verify_agent_ui_mock_source(
     expected_config = contract.get("config")
     expected_config = expected_config if isinstance(expected_config, dict) else {}
     if not component or not module or not expected_config:
-        return verification_result("blocked", "Agent UI Mock 检查缺少固定组件或配置合同。")
+        return verification_result("blocked", "Agent UI Runtime 检查缺少固定组件或配置合同。")
+    runtime = expected_config.get("runtime")
+    if contract.get("mode") != "runtime" or runtime != {
+        "path": f"/agents/{contract.get('agentId')}/run", "pageId": contract.get("pageId"),
+    }:
+        return verification_result("blocked", "Agent UI 未绑定当前正式 Agent 的精确同源 Runtime 路径。")
     combined = "\n".join(files.values())
     clean = strip_comments(combined)
     errors: list[str] = []
@@ -152,7 +157,7 @@ def verify_agent_ui_mock_source(
         )
     return verification_result(
         "passed",
-        f"已验证 {component} 使用精确平台配置和默认 Mock Adapter，且页面无 Agent 网络直连。",
+        f"已验证 {component} 使用精确平台配置和官方 AG-UI 适配器；真实运行仍需后续测试与验收。",
         facts={
             "component": component,
             "page_id": str(contract.get("pageId") or ""),

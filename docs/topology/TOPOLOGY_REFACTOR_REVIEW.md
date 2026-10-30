@@ -2,7 +2,7 @@
 
 > 2026-10-28 搬运裁决：以 `dev_agent_integration_1028` 当前合同为准。应用配置、内置数据库、Template Engine、正式产物确认、恢复及资源锁均沿用新版；本文描述的 Runtime 扩展在完成对应阶段前不代表已经可用。
 
-> 状态：迁入 1028 的目标设计；功能交付进度以 [搬运记录](<AGENT_RUNTIME_PORT_1028.md>) 为准
+> 状态：迁入 1028 的目标设计；本文不作为功能交付完成证明。
 
 ## 1. 已确认结论
 
@@ -39,7 +39,7 @@
 
 ## 5. 实施顺序与风险
 
-具体阶段、依赖和完成证据见 [1028 搬运记录](AGENT_RUNTIME_PORT_1028.md)。Template Engine 当前只交付 frontend/backend，Python 模板和 capability 支持是后续接入的前置依赖。不得凭 UI 展示或 Python /health 成功宣称完整业务链路已通。
+Template Engine 当前只交付 frontend/backend，Python 模板和 capability 支持是后续接入的前置依赖。不得凭 UI 展示或 Python /health 成功宣称完整业务链路已通。
 
 ## 1028 实施补充：数据库、模板与传输
 

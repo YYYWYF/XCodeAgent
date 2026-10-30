@@ -523,7 +523,8 @@ export function useChatSessions({
       ensureAgent(activeSession)
       return activeSession
     }
-    const title = target.type === 'page' ? `开发页面：${target.label}` : `开发接口：${target.label}`
+    const title = target.type === 'agent' ? `开发智能体：${target.label}`
+      : target.type === 'page' ? `开发页面：${target.label}` : `开发接口：${target.label}`
     const identity = await createNewSession({ developmentTarget: target, title })
     // 业务功能埋点：新建常规对话（绑定页面/API 开发目标）
     emitConversationCreated({

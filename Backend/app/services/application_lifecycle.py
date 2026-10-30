@@ -196,7 +196,8 @@ def completed_development_artifacts(value: Any) -> DevelopmentArtifacts | None:
         for contract_id, endpoints in inherited.endpoints.items()
         if endpoints
     }
-    if not (inherited.pages or inherited.entities or inherited.endpoints):
+    inherited.agents = {key: item for key, item in source.agents.items() if completed(item)}
+    if not (inherited.pages or inherited.entities or inherited.endpoints or inherited.agents):
         return None
     return inherited
 
@@ -1566,6 +1567,7 @@ def _resource_claims_for_run(
     claims: list[ExecutionResourceClaim] = []
     groups = (
         (ExecutionResourceType.PAGE, locks.pages),
+        (ExecutionResourceType.AGENT, locks.agents),
         (ExecutionResourceType.ENDPOINT, locks.endpoints),
         (ExecutionResourceType.API_CONTRACT, locks.api_contracts),
         (ExecutionResourceType.DATA_SOURCE, locks.data_sources),

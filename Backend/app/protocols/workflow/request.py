@@ -687,9 +687,7 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         )
     # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送 scope，也要补回门禁所需的显式 ID。
     if build_execution_scope.get("type") == "agent":
-        selectedPageId = ""
-        selected_api_contract_id = ""
-        selected_endpoint_id = ""
+        selectedPageId = selected_api_contract_id = selected_endpoint_id = selected_entity_id = ""
         detail_target_type = "agent"
     if build_execution_scope.get("type") == "endpoint":
         selected_api_contract_id = selected_api_contract_id or _optional_text(
@@ -789,6 +787,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             if frontend_performance_decision
             else {}
         ),
+        **({"selectedPageId": "", "selected_api_contract_id": "", "selected_endpoint_id": "", "selected_entity_id": ""}
+           if build_execution_scope.get("type") == "agent" else {}),
         **({"selectedPageId": selectedPageId} if selectedPageId else {}),
         **({"selected_api_contract_id": selected_api_contract_id} if selected_api_contract_id else {}),
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
@@ -974,6 +974,11 @@ def _build_execution_scope(
         return {"type": "application", "targetId": "application"}
     if not target_id:
         raise ValueError("页面、数据源或 endpoint 构建必须提供 buildExecutionScope.targetId。")
+    if target_type == "agent":
+        from app.services.runtime_agent_contracts import scoped_agent_ids
+
+        scoped_agent_ids(project_plan or {}, "agent", target_id)
+        return {"type": "agent", "targetId": target_id}
     if target_type == "endpoint":
         api_contract_id = (
             api_contract_id
@@ -1329,7 +1334,7 @@ def _supported_editor_mode(value: str) -> str:
 def _supported_detail_target_type(value: str) -> str:
     """校验详细设计目标类型；页面、endpoint 与实体三种目标均可选。"""
 
-    return value if value in {"page", "endpoint", "entity"} else ""
+    return value if value in {"page", "endpoint", "entity", "agent"} else ""
 
 
 def _resume_from_state(

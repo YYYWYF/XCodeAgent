@@ -55,5 +55,5 @@ Backend 重启后，失去执行者的 `diagnose/confirm/revise` 占用在首次
 
 普通预览只注入真实匿名会话及当前 Studio 主模型，不向 Renderer 返回任何运行密钥；数据库沿当前 SaaS 一次取密，仅给 Python 子进程。独立窗口的“打开接口调试”只打开普通 Runtime `/docs`，不代表独立 Debug Profile。Runtime 失败当前保留真实日志和资源错误，尚不进入 Java SmallTask 自动修复范围。
 
-模板要求和健康/代理合同见 `docs/topology/agent-runtime-direct/RUNTIME_LAUNCH_CONTRACT_1028.md`。此批仅代码接入，按用户要求未执行测试或实际 UI 验证。
+此批仅代码接入，按用户要求未执行测试或实际 UI 验证。
 

@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
+from app.agents.frontend.runtime_instruction import runtime_frontend_instruction
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
@@ -264,7 +265,7 @@ def _frontend_generation_prompt(
         + data_source_instruction
         + service_response_instruction
         + incremental_api_module_instruction
-        + _agent_ui_mock_instruction(_task_agent_ui_contracts(tasks))
+        + _agent_ui_runtime_instruction(_task_agent_ui_contracts(tasks))
         + authorization_boundary
         + "For business APIs, import functions from `src/apis/` "
         "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "
@@ -314,7 +315,8 @@ def _frontend_generation_prompt(
         "or `npx tsc`. The outer integration-test phase performs the repository checks after "
         "all owner tasks complete. If a dependency or command appears to be missing, report "
         "it in the final JSON instead of installing dependencies or creating temporary scripts.\n\n"
-        f"Approved frontend tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
+        + runtime_frontend_instruction(project_plan, tasks)
+        + f"Approved frontend tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
         f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
     )
@@ -399,19 +401,19 @@ def generate_frontend_with_deep_agent(
 
 
 def _task_agent_ui_contracts(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """提取当前前端任务中由平台注入的 Agent UI Mock 合同。"""
+    """提取当前前端任务中由平台注入的正式 Agent UI Runtime 合同。"""
 
     result: list[dict[str, Any]] = []
     for task in tasks:
         source_refs = task.get("source_refs")
         source_refs = source_refs if isinstance(source_refs, dict) else {}
         contract = source_refs.get("agent_ui")
-        if isinstance(contract, dict) and contract.get("mode") == "mock":
+        if isinstance(contract, dict) and contract.get("mode") == "runtime":
             result.append({"taskId": str(task.get("id") or ""), **contract})
     return result
 
-def _agent_ui_mock_instruction(contracts: list[dict[str, Any]]) -> str:
-    """生成固定组件、默认 Mock Adapter 和无网络边界的条件式执行说明。"""
+def _agent_ui_runtime_instruction(contracts: list[dict[str, Any]]) -> str:
+    """要求页面组合固定组件及官方 Runtime 适配器，禁止生成另一套会话传输。"""
 
     if not contracts:
         return ""
@@ -419,29 +421,31 @@ def _agent_ui_mock_instruction(contracts: list[dict[str, Any]]) -> str:
     if not skill_content:
         raise RuntimeError("Agent UI Surface 内置 Skill 缺失，不能执行 Agent 页面 Build。")
     return (
-        "## Agent UI Mock composition boundary\n"
+        "## Agent UI Runtime composition boundary\n"
         "The platform has loaded the required built-in Skill below as authoritative input; "
         "follow it together with the fixed source reads.\n"
         "<agent-ui-surface-template-skill>\n"
         f"{skill_content}\n"
         "</agent-ui-surface-template-skill>\n"
-        "Apply this section only to the task IDs listed in AgentUiMockContracts. Before editing "
+        "Apply this section only to the task IDs listed in AgentUiRuntimeContracts. Before editing "
         "their page, read the exact fixed componentPath, "
         "`frontend/src/components/AgentConversation/AgentChatCore.tsx`, "
-        "`frontend/src/typings/agentConversation.ts`, and mockAdapterPath. These files are "
+        "`frontend/src/typings/agentConversation.ts`, and runtimeAdapterPath. These files are "
         "platform-injected read-only assets and are not task output paths. In the page entry, "
         "import the exact component from `@/components/AgentConversation`, import "
         "`AgentUiTemplateConfig` from `@/typings/agentConversation`, declare the exact object "
         "literal as `const AGENT_UI_CONFIG: AgentUiTemplateConfig = ...`, and pass it with "
-        "`config={AGENT_UI_CONFIG}`. The component's default adapter is the only allowed Mock "
-        "chain: you must not pass the `adapter` prop, JSX spreads, a wrapper, or a custom "
+        "`config={AGENT_UI_CONFIG}`. Preserve config.runtime exactly; it binds the official "
+        "AG-UI adapter to the current same-origin /agents/{agentId}/run endpoint. The default "
+        "adapter is the only allowed Runtime chain: do not pass the `adapter` prop, JSX spreads, a wrapper, or a custom "
         "AgentConversationAdapter. Do not create or copy AgentChatCore, chat bubbles, state "
         "machines, mock records, or transport code. Remove all `data-preview-only` review "
         "controls from production page composition. For the listed task, do not call fetch, "
         "axios, XMLHttpRequest, WebSocket, EventSource, sendBeacon, a Python sidecar, or the "
-        "future Gateway Endpoint. Ordinary business APIs declared outside mockExemptEndpointIds "
-        "remain governed by their existing page/API contracts. For floating_panel, preserve and "
+        "Java Gateway Endpoint. The fixed adapter performs real Runtime requests; do not reimplement "
+        "it in the page. All separately declared ordinary business APIs remain governed by their "
+        "existing page/API contracts. For floating_panel, preserve and "
         "render the ordinary business page body and compose AgentFloatingPanel alongside it.\n"
-        "AgentUiMockContracts:\n"
+        "AgentUiRuntimeContracts:\n"
         f"{json.dumps(contracts, ensure_ascii=False, indent=2)}\n\n"
     )

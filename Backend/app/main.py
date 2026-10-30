@@ -19,6 +19,7 @@ from app.graph.direct_modification_workflow import clear_direct_modification_gra
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
+from app.protocols.agent_runtime_workbench import runtime_workbench_capabilities, build_runtime_workbench_stream
 from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,
@@ -185,6 +186,7 @@ async def health() -> dict[str, object]:
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "preview_runtime": preview_runtime_capabilities(),
+            "agent_runtime_workbench": runtime_workbench_capabilities(),
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
             "entity_tables": entity_tables_capabilities(),
@@ -339,6 +341,19 @@ async def run_user_skills(
 ) -> StreamingResponse:
     return StreamingResponse(
         build_user_skills_ag_ui_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/agent-runtime-workbench/run")
+async def run_agent_runtime_workbench(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 生命周期管理正式 Agent 配置和受控调试。"""
+    return StreamingResponse(
+        build_runtime_workbench_stream(payload=input_data, accept=accept),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

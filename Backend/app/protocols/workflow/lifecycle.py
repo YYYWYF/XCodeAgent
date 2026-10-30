@@ -105,7 +105,7 @@ def begin_workflow_lifecycle(
         phase in {"unit_test", "unit_test_repair", "test_phase_confirmation"}
         and not lifecycle.active_formal_revision
         and isinstance(executed_scope, dict)
-        and executed_scope.get("type") in {"page", "endpoint"}
+        and executed_scope.get("type") in {"page", "endpoint", "agent"}
         and bool(executed_scope.get("targetId"))
     )
     if use_executed_scope:

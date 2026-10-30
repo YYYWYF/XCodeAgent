@@ -18,6 +18,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langgraph.errors import GraphRecursionError
 
 from app.agents.execution_control import RunCancellationMiddleware
+from app.agents.main.technical_plan_agent_contracts import TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -27,7 +28,7 @@ TECHNICAL_PLAN_CANDIDATE_PATH = "/technical-plan.json"
 PRODUCT_CONTEXT_PATH = "/context/product-plan.json"
 CONSTRAINTS_CONTEXT_PATH = "/context/constraints.json"
 TECHNICAL_PLAN_EDIT_SECTIONS = ("architecture", "entities", "api_contracts", "pages")
-# Agent 合同是可选第五段：只在既有候选已包含时原样带入编辑器，避免二次修改丢失七模块定义。
+# Agent 合同属于可选第五段，可按已确认产品事实补齐、修订或移除。
 TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS = ("agent_contracts",)
 TECHNICAL_PLAN_EDIT_MODEL_LIMIT = 8
 
@@ -40,6 +41,10 @@ class TechnicalPlanCandidateError(ValueError):
 
         super().__init__(message)
         self.candidate = deepcopy(candidate)
+
+
+class TechnicalPlanEditorError(TechnicalPlanCandidateError):
+    """编辑未完成时携带最后完整候选，并要求外层保留原始校验诊断。"""
 
 
 def has_editable_technical_plan_candidate(value: Any) -> bool:
@@ -67,6 +72,7 @@ class TechnicalPlanCandidateBackend(StateBackend):
         self.last_edit_error: str | None = None
         self._edit_lock = Lock()
         self._latest_candidate: dict | None = None
+        self._last_complete_candidate: dict | None = None
 
     def _read_files(self) -> dict[str, Any]:
         """向同批工具提供最新候选，避免各工具任务仍读取批次开始时的状态快照。"""
@@ -89,6 +95,13 @@ class TechnicalPlanCandidateBackend(StateBackend):
         if self._latest_candidate is None:
             raise ValueError("技术规划候选尚未经过局部编辑。")
         return file_data_to_string(self._latest_candidate)
+
+    def recover_candidate(self, fallback: dict[str, Any]) -> dict[str, Any]:
+        """恢复最后结构完整的编辑结果；不带物化标记，避免未完成修订直接通过确认。"""
+
+        sections = (*TECHNICAL_PLAN_EDIT_SECTIONS, *TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS)
+        candidate = self._last_complete_candidate if self._last_complete_candidate is not None else fallback
+        return {key: deepcopy(candidate[key]) for key in sections if key in candidate}
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """按有界窗口读取候选或只读上下文，避免一次回灌完整大规划。"""
@@ -142,6 +155,14 @@ class TechnicalPlanCandidateBackend(StateBackend):
         self.last_edit_error = result.error
         if result.error is None and old_string != new_string:
             self.successful_edits += 1
+            # 关联编辑允许中途 JSON 不完整；中断时只恢复最后可继续修订的完整快照。
+            try:
+                candidate = json.loads(self.candidate_text())
+            except (ValueError, TypeError):
+                candidate = None
+            allowed = {*TECHNICAL_PLAN_EDIT_SECTIONS, *TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS}
+            if has_editable_technical_plan_candidate(candidate) and set(candidate) <= allowed:
+                self._last_complete_candidate = candidate
         return result
 
     def write(self, file_path: str, content: str) -> WriteResult:
@@ -166,10 +187,10 @@ class _PlanningTokenCallback(BaseCallbackHandler):
 
 
 def _candidate_files(requirement_spec: dict[str, Any], existing_plan: dict[str, Any]) -> dict:
-    """生成必选四段加已存在 Agent 合同的候选和只读上下文，不把应用连接配置或凭据交给模型。"""
+    """生成可局部修订的业务候选和只读上下文，不向模型暴露连接凭据。"""
 
     candidate = {key: deepcopy(existing_plan.get(key)) for key in TECHNICAL_PLAN_EDIT_SECTIONS}
-    # 已确认的 Agent 七模块定义属于同一份 TechnicalPlan，必须随候选一起进入编辑器并保持原样。
+    # 既有 Agent 合同随候选带入，后续依据最新已确认产品事实修订。
     for key in TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS:
         if key in existing_plan:
             candidate[key] = deepcopy(existing_plan[key])
@@ -207,10 +228,10 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
         "允许在同一轮使用多次 edit_file 完成关联修改，也允许中间文件暂时不是有效 JSON；"
         "结束前必须读回改动并确保整个候选恢复为有效 JSON。不要为解决匹配失败重写整个文件。\n"
         "候选根对象必须包含 architecture、entities、api_contracts、pages；"
-        "若候选已含 agent_contracts（已确认的业务 Agent 七模块定义），必须整段保留，"
-        "只在相关页面或接口变动时同步修改其中的 agentId、pageIds 和 tools 绑定，不能删除该段，"
-        "也不能在没有该段时自行新增。"
-        "架构仅有 frontend/backend/data；所有用户可见说明使用简体中文。"
+        "agent_contracts 为可选第五段，依据已确认 ProductPlan 补齐或修订；"
+        "与本轮产品要求和校验错误无关的 Agent 及模块保持原样。"
+        + TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT
+        + "架构仅有 frontend/backend/data；所有用户可见说明使用简体中文。"
         "保持未涉及的稳定ID、接口、Schema、参数、页面绑定和字段原样。"
         "修改字段或接口后，搜索相关 entity_field_ref、$ref、endpointId、endpoint_id 并补齐必要引用；"
         "Schema 引用必须在所属 Contract 内闭合。分页参数使用 current/pageSize，分页响应同级字段"
@@ -227,6 +248,7 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
 def edit_technical_plan_with_agent(
     requirement_spec: dict[str, Any], existing_plan: dict[str, Any], *,
     settings: Settings, on_token: Callable[[str], None] | None = None,
+    allow_unchanged: bool = False,
 ) -> dict[str, Any]:
     """运行受控的原生工具循环，读取内存候选，始终不写工作区正式文件。"""
 
@@ -260,20 +282,34 @@ def edit_technical_plan_with_agent(
             config={"recursion_limit": 24, "callbacks": callbacks},
         )
     except (ModelCallLimitExceededError, GraphRecursionError) as exc:
-        raise ValueError("技术规划局部修订达到调用上限，未提交正式产物。") from exc
+        raise TechnicalPlanEditorError(
+            "技术规划局部修订达到调用上限，未提交正式产物。",
+            backend.recover_candidate(existing_plan),
+        ) from exc
     if backend.last_edit_error:
-        raise ValueError("技术规划局部修改尚有未解决的工具错误：" + backend.last_edit_error)
+        raise TechnicalPlanEditorError(
+            "技术规划局部修改尚有未解决的工具错误：" + backend.last_edit_error,
+            backend.recover_candidate(existing_plan),
+        )
     if not backend.successful_edits:
-        raise ValueError("技术规划模型没有应用任何局部修改；不能用回复文字冒充已修改候选。")
-    candidate = json.loads(backend.candidate_text())
-    # 期望根字段由既有候选决定：四段必选，Agent 合同随原候选一起保留，不允许模型增删该段。
-    expected_sections = set(TECHNICAL_PLAN_EDIT_SECTIONS) | {
-        key for key in TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS if key in existing_plan
-    }
-    if not isinstance(candidate, dict) or set(candidate) != expected_sections:
-        required = "、".join([
-            *TECHNICAL_PLAN_EDIT_SECTIONS,
-            *(key for key in TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS if key in existing_plan),
-        ])
-        raise ValueError(f"局部修订候选必须且只能包含 {required}。")
+        # 续修的最后完整快照可能已满足原诊断；只返回待全量校验的候选，不伪造修改或确认。
+        if allow_unchanged:
+            return backend.recover_candidate(existing_plan)
+        raise TechnicalPlanEditorError(
+            "技术规划模型没有应用任何局部修改；不能用回复文字冒充已修改候选。",
+            backend.recover_candidate(existing_plan),
+        )
+    try:
+        candidate = json.loads(backend.candidate_text())
+    except ValueError as exc:
+        raise TechnicalPlanEditorError(
+            "技术规划局部修订结果不是有效 JSON：" + str(exc), backend.recover_candidate(existing_plan),
+        ) from exc
+    # 四段业务结构必选，第五段的业务全集由后续 ProductPlan 合同校验约束。
+    allowed_sections = {*TECHNICAL_PLAN_EDIT_SECTIONS, *TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS}
+    if not has_editable_technical_plan_candidate(candidate) or set(candidate) - allowed_sections:
+        raise TechnicalPlanEditorError(
+            "局部修订候选必须且只能包含 architecture、entities、api_contracts、pages 和可选 agent_contracts。",
+            backend.recover_candidate(existing_plan),
+        )
     return candidate

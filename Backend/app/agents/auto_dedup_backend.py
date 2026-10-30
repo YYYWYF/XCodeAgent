@@ -164,9 +164,15 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
         """写入成功且内容变化后，通过公共函数上报 AI 编辑。"""
         # 拦截临时脚本文件：agent 应直接用 execute 工具跑命令，而非写 .sh/.py 脚本。
         from app.services.python_test_contract import is_runtime_test_path
+        from app.agents.small_task.scope import _CURRENT_SMALL_TASK_PATHS
+        from app.services.agent_runtime_repair_scope import runtime_repair_file
         runtime_test = self._runtime_test_files and is_runtime_test_path(file_path)
+        # 小任务只可覆盖已确认范围内的既有 Runtime 业务文件，不放开通用 Python 脚本。
+        relative = file_path.lstrip("/")
+        scope = _CURRENT_SMALL_TASK_PATHS.get()
+        runtime_repair = bool(scope and relative in scope and runtime_repair_file(Path(self.cwd), relative))
         if (_blocked_script_extension(file_path) and not runtime_test
-                and file_path.lstrip("/") not in self._runtime_python_paths):
+                and relative not in self._runtime_python_paths and not runtime_repair):
             return WriteResult(error=_blocked_script_error(file_path))
 
         # Try the original path first (handles new files)

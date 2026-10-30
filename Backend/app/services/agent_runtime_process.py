@@ -14,18 +14,20 @@ _processes: dict[str, subprocess.Popen] = {}
 _guard = RLock()
 
 
-def runtime_directory(root: Path) -> Path:
+def runtime_directory(root: Path, *, profile: str = "preview") -> Path:
     """返回当前标准预览目录，不创建历史状态或独立恢复协议。"""
 
-    return root / WORKSPACE_ARTIFACT_DIR / "runtime/launch"
+    if profile not in {"preview", "debug"}:
+        raise ValueError("Runtime Profile 无效。")
+    return root / WORKSPACE_ARTIFACT_DIR / ("runtime/debug" if profile == "debug" else "runtime/launch")
 
 
-def register_runtime(root: Path, process: subprocess.Popen) -> None:
+def register_runtime(root: Path, process: subprocess.Popen, *, profile: str = "preview") -> None:
     """保存本次进程和 PID，后端重启后仍可安全识别并停止。"""
 
     with _guard:
-        _processes[str(root)] = process
-    (runtime_directory(root) / "agent-runtime.pid").write_text(str(process.pid), encoding="utf-8")
+        _processes[str(root) + ":" + profile] = process
+    (runtime_directory(root, profile=profile) / "agent-runtime.pid").write_text(str(process.pid), encoding="utf-8")
 
 
 def _matches_runtime(command: str, root: Path) -> bool:
@@ -62,13 +64,18 @@ def terminate_runtime_process(root: Path, process: subprocess.Popen) -> None:
     workspace_process_registry.release(root, process)
 
 
-def stop_runtime(root: Path) -> dict:
+def stop_runtime(root: Path, *, profile: str = "preview") -> dict:
     """在已有工作区启动锁内终止 Runtime 进程树，退出失败时保留登记与 PID。"""
 
     with backend_launch_lock(root):
-        pid_path = runtime_directory(root) / "agent-runtime.pid"
+        # 标准停机同时撤销调试；单独停止调试不影响正在运行的预览。
+        if profile == "preview":
+            debug_result = stop_runtime(root, profile="debug")
+            if debug_result.get("status") == "failed":
+                return debug_result
+        pid_path = runtime_directory(root, profile=profile) / "agent-runtime.pid"
         with _guard:
-            process = _processes.get(str(root))
+            process = _processes.get(str(root) + ":" + profile)
         try:
             if process is not None:
                 terminate_runtime_process(root, process)
@@ -96,7 +103,7 @@ def stop_runtime(root: Path) -> dict:
                         raise RuntimeError(str(cleanup.get("error") or "Runtime 进程未退出。"))
             pid_path.unlink(missing_ok=True)
             with _guard:
-                _processes.pop(str(root), None)
+                _processes.pop(str(root) + ":" + profile, None)
             return {"status": "stopped", "message": "Agent Runtime 已停止。"}
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
             return {"status": "failed", "message": f"Agent Runtime 停止失败：{exc}"}
@@ -108,7 +115,7 @@ def runtime_pid_is_current(root: Path, pid: int) -> bool:
     if pid <= 0 or not pid_is_running(pid):
         return False
     with _guard:
-        process = _processes.get(str(root))
+        process = _processes.get(str(root) + ":preview")
     if process is not None:
         return process.pid == pid and process.poll() is None
     command, error = _query_process_command(pid)

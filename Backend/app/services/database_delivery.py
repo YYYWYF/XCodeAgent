@@ -15,6 +15,7 @@ from app.services.database_delivery_sql import full_schema_sql, incremental_sche
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.entity_table_sql import compile_entity_table
 from app.services.git_branch import validate_branch_name
+from app.services.runtime_business_contract import serves_python_business
 from app.workspace.endpoint_design_documents import technical_plan_path
 
 _lock = RLock()
@@ -35,12 +36,12 @@ def _safe_path(root: Path, *parts: str) -> Path:
     return target
 
 
-def _version_directory(root: Path, branch_name: str) -> Path:
+def _version_directory(root: Path, branch_name: str, implementation_root: str) -> Path:
     """以真实分支名组织版本目录，带斜杠的合法分支保留层级，不静默改名。"""
 
     if validate_branch_name(branch_name) != branch_name or any(part in {"", ".", ".."} for part in branch_name.split("/")):
         raise ValueError("数据库交付版本名不能包含首尾空白。")
-    return _safe_path(root, "backend", "db", branch_name)
+    return _safe_path(root, implementation_root, "db", branch_name)
 
 
 def _digest(content: bytes) -> str:
@@ -49,10 +50,10 @@ def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def _verify_files(root: Path, version: DeliveredDatabase) -> None:
+def _verify_files(root: Path, version: DeliveredDatabase, implementation_root: str) -> None:
     """核对基线结构和两个交付文件，缺失或被修改时明确停止。"""
 
-    directory = _version_directory(root, version.branchName)
+    directory = _version_directory(root, version.branchName, implementation_root)
     for name, expected in (("create.sql", version.createHash), ("alter.sql", version.alterHash)):
         path = _safe_path(root, str(directory.relative_to(root)), name)
         if not path.is_file() or _digest(path.read_bytes()) != expected:
@@ -140,30 +141,33 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
         datasource = application.get("datasource") or {}
         if datasource.get("type") != "database" or (datasource.get("db") or {}).get("useBuiltin") is not True:
             return []
-        if not _safe_path(root, "backend").is_dir():
-            raise ValueError("当前工程缺少 backend 目录，不能交付数据库脚本。")
+        plan_path = _safe_path(root, str(technical_plan_path(root).relative_to(root)))
+        original_plan = plan_path.read_bytes()
+        plan = json.loads(original_plan)
+        tables = _current_tables(application, plan)
+        # 仅消费正式拓扑确定输出工程根，Python 工程不要求存在 Java backend。
+        implementation_root = "agent-runtime" if serves_python_business(plan) else "backend"
+        if not _safe_path(root, implementation_root).is_dir():
+            raise ValueError(f"当前工程缺少 {implementation_root} 目录，不能交付数据库脚本。")
         binding = ManagedDatabaseRegistration.model_validate(application.get("managedDatabase") or {})
         if binding.status != "REGISTERED":
             raise ValueError("内置数据库尚未注册成功，不能交付数据库脚本。")
         branch = application.get("branchName")
         if not isinstance(branch, str):
             raise ValueError("当前应用缺少 branchName，不能确定脚本版本目录。")
-        directory = _version_directory(root, branch)
-        plan_path = _safe_path(root, str(technical_plan_path(root).relative_to(root)))
-        original_plan = plan_path.read_bytes()
-        tables = _current_tables(application, json.loads(original_plan))
+        directory = _version_directory(root, branch, implementation_root)
         history_path = _safe_path(root, str(WORKSPACE_ARTIFACT_DIR), _HISTORY_NAME)
         original_history = history_path.read_bytes() if history_path.exists() else None
         history = DatabaseDeliveries.model_validate_json(original_history) if original_history is not None else DatabaseDeliveries()
         # 版本由交付顺序决定，不按目录字典序或分支名大小猜测上一版。
-        if not history.versions and _safe_path(root, "backend", "db").exists() \
-                and any((root / "backend/db").rglob("create.sql")):
+        if not history.versions and _safe_path(root, implementation_root, "db").exists() \
+                and any((root / implementation_root / "db").rglob("create.sql")):
             raise ValueError("已有数据库交付脚本但缺少结构基线，不能按首版覆盖或生成空增量。")
         if any(version.datasourceKey != binding.datasource_key for version in history.versions):
             raise ValueError("数据库资源绑定与已交付版本不同，不能自动生成跨资源升级脚本。")
         existing = next((version for version in history.versions if version.branchName == branch), None)
         if existing is not None:
-            _verify_files(root, existing)
+            _verify_files(root, existing, implementation_root)
             if existing != history.versions[-1]:
                 if tables == existing.tables:
                     return [str((directory / name).relative_to(root)) for name in ("create.sql", "alter.sql")]
@@ -172,7 +176,7 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
         else:
             previous = history.versions[-1] if history.versions else None
         if previous is not None:
-            _verify_files(root, previous)
+            _verify_files(root, previous, implementation_root)
         create = full_schema_sql(tables)
         alter = incremental_schema_sql(previous.tables, tables) if previous else ""
         version = DeliveredDatabase(branchName=branch, baseBranchName=previous.branchName if previous else None,

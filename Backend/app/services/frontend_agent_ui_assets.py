@@ -11,6 +11,8 @@ from pathlib import Path
 AGENT_UI_FRONTEND_TEMPLATE_VERSION = "agent-ui.v1"
 AGENT_UI_FRONTEND_SOURCE_RELATIVE_PATHS = (
     "src/components/AgentConversation/AgentChatCore.tsx",
+    "src/components/AgentConversation/AgentInteraction.tsx",
+    "src/components/AgentConversation/AgentComposer.tsx",
     "src/components/AgentConversation/AgentMessageBubble.tsx",
     "src/components/AgentConversation/AgentConversationPage.tsx",
     "src/components/AgentConversation/AgentFloatingPanel.tsx",
@@ -19,6 +21,8 @@ AGENT_UI_FRONTEND_SOURCE_RELATIVE_PATHS = (
     "src/components/AgentConversation/styles.ts",
     "src/components/AgentConversation/index.ts",
     "src/apis/agentConversationMock.ts",
+    "src/apis/agentConversationAdapter.ts",
+    "src/apis/agentConversationRuntime.ts",
     "src/typings/agentConversation.ts",
     "tests/agentConversationMock.test.ts",
 )
@@ -99,6 +103,22 @@ def assert_safe_agent_ui_target(workspace: Path, target: Path) -> None:
             raise FrontendAgentUiAssetError(
                 f"Agent UI 注入目标不能经过符号链接：{relative.as_posix()}"
             )
+
+
+def validate_agent_ui_frontend_files(workspace: Path) -> list[str]:
+    """静态验收固定组件与官方适配器的真实文件，拒绝替换资产后仅靠配置声称已集成。"""
+
+    errors = []
+    try:
+        assets, _ = load_agent_ui_frontend_source_assets()
+        for source, relative in zip(AGENT_UI_FRONTEND_SOURCE_RELATIVE_PATHS, AGENT_UI_FRONTEND_TARGET_PATHS):
+            target = workspace / relative
+            assert_safe_agent_ui_target(workspace, target)
+            if not target.is_file() or target.read_bytes() != assets[source]:
+                errors.append(f"Agent UI 固定资产缺失或已被修改：{relative}")
+    except (OSError, FrontendAgentUiAssetError) as exc:
+        errors.append(str(exc))
+    return errors
 
 
 def write_missing_agent_ui_file_atomically(path: Path, content: bytes) -> None:

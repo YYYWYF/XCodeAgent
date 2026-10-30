@@ -155,7 +155,11 @@ def _test_target_record(state: ProjectState) -> dict[str, str]:
         return ""
 
     label = ""
-    if target_type == "page":
+    if target_type == "agent":
+        from app.services.runtime_agent_contracts import agent_contract_index
+
+        label = agent_contract_index(project_plan or {}).get(target_id, {}).get("name", target_id)
+    elif target_type == "page":
         label = next(
             (
                 record_label(item)

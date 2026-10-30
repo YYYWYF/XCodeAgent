@@ -5772,6 +5772,15 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              agentStateRevision={applicationLifecycle?.revision}
+              onStartAgentDevelopment={async (agent) => { await handleStartAgentDevelopment(agent.agentId, agent.name) }}
+              onOpenAgentExecution={(execution) => {
+                if (execution.ownerSessionId) void handleOpenSessionById(execution.ownerSessionId)
+              }}
+              onAgentSettingsSaved={(result) => {
+                if (result.lifecycle) onApplicationLifecycleChange(result.lifecycle)
+                setApiDesignRefreshKey((value) => value + 1)
+              }}
               theme={theme}
               useBuiltinDatabase={application.datasource.type === 'database' && application.datasource.db?.useBuiltin === true}
               onConfigureApi={(target) => handleOpenApiDesignConfig(target)}

@@ -3,25 +3,23 @@ import {
   Alert,
   Button,
   Empty,
-  Input,
   Skeleton,
   Tag,
   Typography
 } from 'antd'
-import {
-  PaperClipOutlined,
-  SendOutlined,
-  StopOutlined
-} from '@ant-design/icons'
-import { MockAgentConversationAdapter } from '@/apis/agentConversationMock'
+import { createAgentConversationAdapter } from '@/apis/agentConversationAdapter'
+export { createAgentConversationAdapter } from '@/apis/agentConversationAdapter'
 import { AgentMessageBubble } from './AgentMessageBubble'
-import { agentIconCompatibilityProps } from './iconCompatibility'
+import { AgentInteraction } from './AgentInteraction'
+import { AgentComposer } from './AgentComposer'
 import type {
   AgentConversationAdapter,
   AgentMessage,
+  AgentRunResult,
   AgentRunStatus,
   AgentUiTemplateConfig,
-  ConversationThread
+  ConversationThread,
+  PendingAgentInteraction
 } from '@/typings/agentConversation'
 
 const { Text } = Typography
@@ -38,33 +36,18 @@ function createRunId(): string {
   return `agent-run-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
 
-/** 把运行状态映射为用户可读的模拟状态。 */
+/** 把运行状态映射为用户可读的状态。 */
 function runStatusText(status: AgentRunStatus): string {
   const labels: Record<AgentRunStatus, string> = {
     idle: '等待提问',
-    running: '模拟运行中，可随时停止',
-    waiting_approval: '等待模拟审批',
-    stopped: '模拟运行已停止',
-    error: '模拟运行失败，可重试',
-    completed: '模拟运行已完成'
+    running: '运行中，可随时停止',
+    waiting_approval: '等待审批',
+    waiting_input: '等待用户处理',
+    stopped: '运行已停止，请核对业务状态',
+    error: '运行未完成',
+    completed: '运行已完成'
   }
   return labels[status]
-}
-
-/** 构造与固定配置绑定且不触发网络请求的 Mock Adapter。 */
-export function createMockAgentConversationAdapter(
-  config: AgentUiTemplateConfig
-): AgentConversationAdapter {
-  return new MockAgentConversationAdapter({
-    agentName: config.name,
-    assistantMessage: config.mock.assistantMessage,
-    toolTitle: config.mock.toolTitle,
-    toolDetail: config.mock.toolDetail,
-    approvalTitle: config.mock.approvalTitle,
-    approvalDetail: config.mock.approvalDetail,
-    successMessage: config.mock.successMessage,
-    errorMessage: config.mock.errorMessage
-  })
 }
 
 /** 渲染共享消息流、运行状态、审批、错误重试和 Composer。 */
@@ -75,7 +58,7 @@ export function AgentChatCore({
   onThreadCreated
 }: AgentChatCoreProps): React.ReactElement {
   const adapter = useMemo(
-    () => providedAdapter ?? createMockAgentConversationAdapter(config),
+    () => providedAdapter ?? createAgentConversationAdapter(config),
     [config, providedAdapter]
   )
   const [activeThreadId, setActiveThreadId] = useState(threadId)
@@ -83,36 +66,86 @@ export function AgentChatCore({
   const [status, setStatus] = useState<AgentRunStatus>('idle')
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
+  const [pending, setPending] = useState<PendingAgentInteraction>()
+  const [requiresSync, setRequiresSync] = useState(false)
   const activeRunId = useRef<string>()
   const lastRunId = useRef<string>()
   const mounted = useRef(true)
 
   useEffect(() => {
     mounted.current = true
+    const unsubscribe = adapter.subscribe?.((result) => {
+      if (mounted.current && activeRunId.current === result.runId) applyResult(result)
+    })
     return () => {
       mounted.current = false
+      unsubscribe?.()
+      const runId = activeRunId.current
+      activeRunId.current = undefined
+      if (runId) void adapter.stop(runId)
     }
-  }, [])
+  }, [adapter])
 
   useEffect(() => {
+    let current = true
     /** 切换会话时从 Adapter 重载权威消息快照。 */
     async function loadThreadMessages(): Promise<void> {
+      if (threadId && activeThreadId && threadId !== activeThreadId) {
+        const runId = activeRunId.current
+        activeRunId.current = undefined
+        if (runId) await adapter.stop(runId)
+      }
       setActiveThreadId(threadId)
       setError(undefined)
+      setPending(undefined)
+      setRequiresSync(false)
       if (!threadId) {
         setMessages([])
         setStatus('idle')
         return
       }
       try {
-        const nextMessages = await adapter.loadMessages(threadId)
-        if (mounted.current) setMessages(nextMessages)
+        if (adapter.loadRun) {
+          const result = await adapter.loadRun(threadId)
+          if (current && mounted.current) applyResult(result)
+        } else {
+          const nextMessages = await adapter.loadMessages(threadId)
+          if (current && mounted.current) setMessages(nextMessages)
+        }
       } catch (reason) {
-        if (mounted.current) setError(reason instanceof Error ? reason.message : '会话加载失败。')
+        if (current && mounted.current) setError(reason instanceof Error ? reason.message : '会话加载失败。')
       }
     }
     void loadThreadMessages()
+    return () => { current = false }
   }, [adapter, threadId])
+
+  /** 流式消息和最终响应共用一处状态更新，防止业务等待状态被协议结束覆盖。 */
+  function applyResult(result: AgentRunResult): void {
+    lastRunId.current = result.runId || undefined
+    setMessages(result.messages)
+    setStatus(result.status)
+    setError(result.error)
+    setPending(result.pendingInteraction)
+    setRequiresSync(result.requiresSync === true)
+  }
+
+  /** 结果未知时只读同步服务端状态，不重放提问、批准或拒绝。 */
+  async function refreshRun(): Promise<void> {
+    if (!activeThreadId || !adapter.refreshRun || activeRunId.current) return
+    const runId = createRunId()
+    activeRunId.current = runId
+    setStatus('running')
+    try {
+      const result = await adapter.refreshRun(activeThreadId, runId)
+      if (mounted.current && activeRunId.current === runId) applyResult(result)
+    } catch (reason) {
+      if (mounted.current && activeRunId.current === runId) {
+        setStatus('error')
+        setError(reason instanceof Error ? reason.message : '会话同步失败。')
+      }
+    } finally { if (activeRunId.current === runId) activeRunId.current = undefined }
+  }
 
   /** 确保提交前已经存在一个 Adapter 管理的会话。 */
   async function ensureThread(): Promise<string> {
@@ -126,7 +159,7 @@ export function AgentChatCore({
   /** 把页面允许的上下文白名单连同问题提交给 Adapter。 */
   async function submitMessage(content: string): Promise<void> {
     const normalized = content.trim()
-    if (!normalized || status === 'running') return
+    if (!normalized || status === 'running' || activeRunId.current || pending || requiresSync) return
     setError(undefined)
     setStatus('running')
     const runId = createRunId()
@@ -134,6 +167,7 @@ export function AgentChatCore({
     lastRunId.current = runId
     try {
       const nextThreadId = await ensureThread()
+      if (activeRunId.current !== runId) return
       const result = await adapter.sendMessage({
         runId,
         threadId: nextThreadId,
@@ -142,25 +176,25 @@ export function AgentChatCore({
         content: normalized,
         contextItems: config.contextItems.map((item) => ({ ...item }))
       })
-      if (!mounted.current) return
-      setMessages(result.messages)
-      setStatus(result.status)
-      setError(result.error)
+      if (!mounted.current || activeRunId.current !== runId) return
+      applyResult(result)
       setInput('')
     } catch (reason) {
       if (!mounted.current) return
       setStatus('error')
-      setError(reason instanceof Error ? reason.message : '模拟运行失败。')
+      setError(reason instanceof Error ? reason.message : '运行失败。')
     } finally {
       if (activeRunId.current === runId) activeRunId.current = undefined
     }
   }
 
-  /** 停止当前仍在等待的模拟运行。 */
+/** 停止当前仍在等待的运行。 */
   async function stopRun(): Promise<void> {
     if (!activeRunId.current) return
+    const runId = activeRunId.current
     try {
-      await adapter.stop(activeRunId.current)
+      await adapter.stop(runId)
+      if (activeRunId.current === runId) activeRunId.current = undefined
       if (mounted.current) setStatus('stopped')
     } catch (reason) {
       if (mounted.current) setError(reason instanceof Error ? reason.message : '停止失败。')
@@ -207,6 +241,23 @@ export function AgentChatCore({
     }
   }
 
+  /** 明确回答当前交互后，以新运行标识继续同一会话，失败时不自动重放。 */
+  async function respond(value: unknown): Promise<void> {
+    if (!pending || requiresSync || !adapter.resolveInteraction || !lastRunId.current || activeRunId.current || status === 'running') return
+    const runId = createRunId()
+    activeRunId.current = runId
+    setStatus('running')
+    try {
+      const result = await adapter.resolveInteraction({ runId: lastRunId.current,
+        interactionId: pending.interactionId, value, responseRunId: runId })
+      if (!mounted.current || activeRunId.current !== runId) return
+      lastRunId.current = result.runId
+      applyResult(result)
+    } catch (reason) {
+      if (mounted.current) { setStatus('error'); setError(reason instanceof Error ? reason.message : '交互提交失败。') }
+    } finally { if (activeRunId.current === runId) activeRunId.current = undefined }
+  }
+
   /** 处理 Composer 的 Enter 发送与 Shift+Enter 换行。 */
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
     if (event.key !== 'Enter' || event.shiftKey) return
@@ -227,26 +278,26 @@ export function AgentChatCore({
         ) : empty ? (
           <div className="x-agent-chat__state">
             <div className="x-agent-chat__empty">
-              <Empty description={`向${config.name}提问，当前仅使用本地模拟数据。`} />
+              <Empty description={config.runtime ? `向${config.name}提问` : `向${config.name}提问，当前仅使用本地模拟数据。`} />
               <div className="x-agent-chat__suggestions">
                 {config.suggestedQuestions.map((question) => (
                   <Button key={question} onClick={() => void submitMessage(question)}>
                     {question}
                   </Button>
                 ))}
-                {config.features.tools ? (
+                {!config.runtime && config.features.tools ? (
                   <Button onClick={() => void submitMessage('模拟工具：执行一次示例查询')}>
                     模拟工具调用
                   </Button>
                 ) : null}
-                {config.features.approvals ? (
+                {!config.runtime && config.features.approvals ? (
                   <Button onClick={() => void submitMessage('模拟审批：提交一项待确认操作')}>
                     模拟审批流程
                   </Button>
                 ) : null}
-                <Button danger onClick={() => void submitMessage('模拟失败：验证错误与重试')}>
+                {!config.runtime && <Button danger onClick={() => void submitMessage('模拟失败：验证错误与重试')}>
                   模拟失败重试
-                </Button>
+                </Button>}
               </div>
             </div>
           </div>
@@ -262,57 +313,27 @@ export function AgentChatCore({
             ))}
           </div>
         )}
+        {pending && <AgentInteraction key={pending.interactionId} pending={pending} disabled={status === 'running' || requiresSync} onRespond={(value) => void respond(value)} />}
+        {requiresSync && <Button disabled={status === 'running'} onClick={() => void refreshRun()}>同步会话状态</Button>}
         {error ? (
           <Alert
-            action={<Button onClick={() => void retryRun()}>重试</Button>}
+            action={!config.runtime ? <Button onClick={() => void retryRun()}>重试</Button> : undefined}
             description={error}
-            message="本次模拟运行未完成"
+            message={config.runtime ? '本次运行未完成，请核对业务状态' : '本次模拟运行未完成'}
             showIcon
             type="error"
           />
         ) : null}
       </div>
       <div className="x-agent-chat__status">
-        <span>模拟运行 · {runStatusText(status)}</span>
+        <span>{config.runtime ? 'Agent Runtime' : '模拟运行'} · {runStatusText(status)}</span>
         <div className="x-agent-context" aria-label="允许提交的页面上下文">
           {config.contextItems.map((item) => <Tag key={item.id}>{item.label}</Tag>)}
         </div>
       </div>
-      <div className="x-agent-composer">
-        {config.features.attachments ? (
-          <Button
-            aria-label="模拟附件入口"
-            disabled
-            icon={<PaperClipOutlined {...agentIconCompatibilityProps} />}
-          />
-        ) : null}
-        <Input.TextArea
-          aria-label={`向${config.name}提问`}
-          autoSize={{ minRows: 1, maxRows: 4 }}
-          disabled={status === 'running'}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleComposerKeyDown}
-          placeholder="输入问题，Enter 发送，Shift+Enter 换行"
-          value={input}
-        />
-        {status === 'running' ? (
-          <Button
-            icon={<StopOutlined {...agentIconCompatibilityProps} />}
-            onClick={() => void stopRun()}
-          >
-            停止
-          </Button>
-        ) : (
-          <Button
-            disabled={!input.trim()}
-            icon={<SendOutlined {...agentIconCompatibilityProps} />}
-            onClick={() => void submitMessage(input)}
-            type="primary"
-          >
-            发送
-          </Button>
-        )}
-      </div>
+      <AgentComposer name={config.name} attachments={config.features.attachments} running={status === 'running'}
+        blocked={Boolean(pending) || requiresSync} input={input} onInput={setInput} onKeyDown={handleComposerKeyDown}
+        onStop={() => void stopRun()} onSend={() => void submitMessage(input)} />
     </section>
   )
 }

@@ -930,7 +930,9 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             "app.agents.main.document_sync.validate_api_contract_consistency",
             return_value=[],
         ):
-            sync_project_plan_from_markdown(existing_plan, {}, "# TechnicalPlan")
+            sync_project_plan_from_markdown(existing_plan, {
+                "application_config": {"configRevision": 2}, "confirmed_product_plan": {},
+            }, "# TechnicalPlan")
 
         self.assertNotIn(
             "authorization_data_bindings",
@@ -977,7 +979,9 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             "app.agents.main.document_sync.validate_api_contract_consistency",
             return_value=[],
         ):
-            sync_project_plan_from_markdown(existing_plan, {}, "# TechnicalPlan")
+            sync_project_plan_from_markdown(existing_plan, {
+                "application_config": {"configRevision": 2}, "confirmed_product_plan": {},
+            }, "# TechnicalPlan")
 
         contract = create_plan.call_args.kwargs["agent_plan"]["api_contracts"][0]
         self.assertEqual(contract["name"], "订单管理")

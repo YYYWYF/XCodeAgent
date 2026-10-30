@@ -25,6 +25,10 @@ def runtime_verification_files(files: dict, task: dict, check: dict, workspace: 
         if errors:
             raise PythonEvidenceUnavailable("；".join(errors))
         module = check["expected"]["module"]
+        if module in {"skills", "knowledge"}:
+            from app.services.runtime_agent_resources import agent_resource_files
+
+            paths.update(agent_resource_files(module, check["expected"]["configuration"]))
         paths.update("agent-runtime/" + path for path in policy["modulePaths"][module]["readPaths"])
         if module in {"model", "memory", "context"}:
             paths.add("agent-runtime/src/app/server/agui.py")
@@ -33,7 +37,8 @@ def runtime_verification_files(files: dict, task: dict, check: dict, workspace: 
         if module in {"memory", "context"}:
             paths.update("agent-runtime/" + path for path in (
                 "src/app/agent/context.py", "src/app/persistence/checkpointer.py", "src/app/interaction/service.py",
-                "src/app/interaction/schemas.py", "src/app/security/service.py", "src/app/security/tokens.py",
+                "src/app/interaction/schemas.py", "src/app/interaction/page_context.py",
+                "src/app/security/service.py", "src/app/security/tokens.py",
             ))
         if module == "knowledge":
             paths.add("agent-runtime/src/app/tools/__init__.py")
@@ -57,6 +62,8 @@ def runtime_verification_files(files: dict, task: dict, check: dict, workspace: 
             result[relative] = target.read_text(encoding="utf-8")
         elif relative in check["target_paths"] or relative == "agent-runtime/pyproject.toml" and check["kind"] == "python.bootstrap_contract":
             # 资源可作为真实交付文件存在，但绝不交给 Python AST 冒充可执行实现。
-            if check["kind"] != "agent.module_contract":
+            if check["kind"] != "agent.module_contract" or relative.endswith(".md"):
                 result[relative] = target.read_text(encoding="utf-8")
+        elif check["kind"] == "agent.module_contract" and relative.endswith(".md"):
+            result[relative] = target.read_text(encoding="utf-8")
     return result

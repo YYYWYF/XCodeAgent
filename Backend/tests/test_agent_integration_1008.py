@@ -11,7 +11,7 @@ from hashlib import sha256
 from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
 from app.graph.nodes.api_design import api_design_readiness_gate
 from app.services.agent_settings_revision import execute_agent_settings_revision, parse_agent_settings_revision_request
-from app.services.agent_ui_build_contract import project_agent_ui_build_contracts, apply_agent_ui_delivery_boundary
+from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 from app.services.application_lifecycle import create_application_lifecycle, write_application_lifecycle, start_workbench_execution, end_workbench_execution, load_application_lifecycle
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.execution_resource_scope import resolve_execution_resource_claims, resource_claim_keys
@@ -21,6 +21,7 @@ from app.services.runtime_agent_settings import validate_technical_plan_agent_co
 from app.services.unit_generation_requirement_targets import scoped_formal_targets
 from app.services.build_scheduler import resolve_execution_slice
 from app.services.runtime_agent_settings import synchronize_settings_markdown
+from app.services.technical_plan_topology_selection import rebind_selected_topology, validate_selected_topology
 from tests.test_agent_runtime_template_policy import _write_runtime
 from app.observability.telemetry_models import TelemetryTarget
 
@@ -40,7 +41,7 @@ def fixture() -> tuple[dict, dict, dict]:
                      "publicEdgeServiceId": "agent-runtime", "authenticationTermination": "anonymous-session"},
         "agent_contracts": [{"agentId": "assistant", "name": "库存助手", "purpose": "解释库存状态。", "pageIds": [page_id],
             "agentSettings": {"prompt": {"systemPrompt": "请解释库存状态。", "persona": {"role": "库存助手", "tone": "简洁"},
-                                          "constraints": [], "hiddenBusinessFact": "保留"},
+                                          "constraints": ["保留原业务约束"]},
                 "model": {"source": "project", "generation": {"temperature": 0.2}}, "memory": {"isolation": "principal/thread"},
                 "tools": {"enabled": False, "bindings": []}, "skills": {"enabled": False},
                 "knowledge": {"enabled": False}, "context": {"trusted": True}}}]}
@@ -48,7 +49,7 @@ def fixture() -> tuple[dict, dict, dict]:
 
 
 class AgentIntegration1008Tests(unittest.TestCase):
-    """验证真实作用域、资源释放、配置正式确认与 Mock 交付边界。"""
+    """验证真实作用域、资源释放、配置正式确认与 Runtime 交付边界。"""
 
     def test_agent_session_telemetry_accepts_current_target_identity(self):
         """前端新会话的 Agent 身份必须由后端当前埋点合同接受。"""
@@ -73,12 +74,12 @@ class AgentIntegration1008Tests(unittest.TestCase):
         _, product, plan = fixture()
         candidate = deepcopy(plan)
         candidate["agent_contracts"][0]["agentSettings"]["prompt"]["systemPrompt"] = "请先核对库存范围。"
-        candidate["agent_contracts"][0]["agentSettings"]["prompt"].pop("hiddenBusinessFact")
+        candidate["agent_contracts"][0]["agentSettings"]["prompt"].pop("constraints")
         with patch("app.agents.main.document_sync._invoke_sync_model", return_value=candidate):
             result = synchronize_settings_markdown(plan, "用户编辑后的 Markdown", product, "assistant",
                 generated_markdown_sha256=sha256(b"original").hexdigest())
         prompt = result["agent_contracts"][0]["agentSettings"]["prompt"]
-        self.assertEqual(prompt["hiddenBusinessFact"], "保留")
+        self.assertEqual(prompt["constraints"], ["保留原业务约束"])
         self.assertEqual(prompt["systemPrompt"], "请先核对库存范围。")
 
     def test_agent_scope_does_not_generate_pages_or_frontend_modules(self):
@@ -137,16 +138,18 @@ class AgentIntegration1008Tests(unittest.TestCase):
         wrong["agent_contracts"][0]["purpose"] = "超出产品范围"
         self.assertTrue(validate_technical_plan_agent_contracts(wrong, product))
 
-    def test_mock_contract_uses_current_runtime_and_cannot_claim_real_integration(self):
-        """固定 UI Mock 无需虚构 Java Gateway，完成后仍明确阻断真实集成验收。"""
+    def test_runtime_contract_binds_real_endpoint_and_reaches_unit_test(self):
+        """正式 UI 消费当前 Runtime 路径，构建完成后继续原单测门禁。"""
 
         _, product, plan = fixture()
         contracts = project_agent_ui_build_contracts(product, plan)
         contract = next(iter(contracts.values()))
         self.assertEqual(contract["runtimeAgentId"], "assistant")
         self.assertNotIn("gatewayEndpointId", contract)
-        result = apply_agent_ui_delivery_boundary({"status": "completed"}, [{"source_refs": {"agent_ui": contract}}])
-        self.assertEqual(result["delivery_boundary"]["real_integration"], "pending")
+        self.assertEqual(contract["mode"], "runtime")
+        self.assertEqual(contract["config"]["runtime"]["path"], "/agents/assistant/run")
+        from app.graph.workflow import route_build_result
+        self.assertEqual(route_build_result({"build_summary": {"status": "completed"}}), "unit_test")
 
     def test_settings_revision_requires_confirmation_and_invalidates_only_its_plan(self):
         """草稿不写正式文件，确认后才更新 Prompt、失效原计划并释放修订租约。"""
@@ -156,6 +159,11 @@ class AgentIntegration1008Tests(unittest.TestCase):
             root = Path(directory)
             plans = root / ".devagentstudio/plans"
             plans.mkdir(parents=True)
+            application = {"schemaVersion": 6, "configRevision": 1, "appName": "测试应用",
+                "auth": {"enable": False}, "authorization": {"enabled": False, "initialAdministratorSubjects": []},
+                "datasource": {"type": "database"}}
+            (plans.parent / "application.json").write_text(json.dumps(application))
+            plan = rebind_selected_topology({**plan, "sourceConfigRevision": 1}, application)
             for name, value in [("technical-plan", plan), ("product-plan", product)]:
                 (plans / f"{name}.json").write_text(json.dumps(value, ensure_ascii=False))
             lifecycle = create_application_lifecycle(application_id="sample", application_name="样例", initialization_thread_id="planning")
@@ -170,13 +178,36 @@ class AgentIntegration1008Tests(unittest.TestCase):
                 "basedOnTechnicalPlanSha256": identity["technicalPlanSha256"], "changedSections": ["model"],
                 "settingsPatch": {"model": {"generation": {"temperature": 0.5}}}})
             self.assertEqual(json.loads((plans / "technical-plan.json").read_text()), plan)
-            confirmed = self._execute({"action": "confirm_agent_settings_revision", "workspaceRoot": directory,
+            confirmation = {"action": "confirm_agent_settings_revision", "workspaceRoot": directory,
                 "agentId": "assistant", "changeId": prepared["changeId"], "draftSha256": prepared["draftSha256"],
-                "basedOnLifecycleRevision": prepared["basedOnLifecycleRevision"]})
+                "basedOnLifecycleRevision": prepared["basedOnLifecycleRevision"]}
+            # 在正式文件已提交后模拟收尾失败，验证原字节、修订归属及草稿均可恢复。
+            from app.services.application_lifecycle import application_lifecycle_path
+            from app.workspace.revision_draft_documents import revision_draft_directory
+            draft = revision_draft_directory(root, change_id=prepared["changeId"], artifact_key="technical-plan")
+            paths = [plans / "technical-plan.json", plans / "technical-plan.md", plans / "build-task-plan.json",
+                     application_lifecycle_path(root), *(draft / name for name in ("artifact.md", "artifact.json", "metadata.json"))]
+            before = {path: path.read_bytes() if path.exists() else None for path in paths}
+            from app.services.agent_settings_revision import discard_active_revision as discard
+
+            def fail_after_release(*args, **kwargs):
+                """在真实计划失效与修订释放完成后注入失败，覆盖整个事务的回滚。"""
+                discard(*args, **kwargs)
+                raise OSError("模拟设置确认收尾失败")
+
+            with patch("app.services.agent_settings_revision.discard_active_revision", side_effect=fail_after_release):
+                with self.assertRaisesRegex(OSError, "收尾失败"):
+                    self._execute(confirmation)
+            self.assertEqual({path: path.read_bytes() if path.exists() else None for path in paths}, before)
+            self.assertTrue(self._execute({"action": "get_agent_settings_revision", "workspaceRoot": directory,
+                                           "agentId": "assistant"})["active"])
+            confirmed = self._execute(confirmation)
             self.assertFalse(confirmed["active"])
             saved = json.loads((plans / "technical-plan.json").read_text())
             self.assertEqual(saved["agent_contracts"][0]["agentSettings"]["model"]["generation"]["temperature"], 0.5)
-            self.assertEqual(saved["topology"], plan["topology"])
+            self.assertEqual(saved["topology"]["type"], plan["topology"]["type"])
+            self.assertNotEqual(saved["topology"]["sourceFactsSha256"], plan["topology"]["sourceFactsSha256"])
+            validate_selected_topology(saved, application)
             self.assertEqual(json.loads((plans / "build-task-plan.json").read_text())["confirmation_status"], "stale")
             self.assertIsNone(load_application_lifecycle(root).active_formal_revision)
 

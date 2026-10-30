@@ -486,9 +486,12 @@ function workflowFieldsFromBuildScope(scope?: WorkflowBuildExecutionScope): {
   selectedPageId?: string
   selectedApiContractId?: string
   selectedEndpointId?: string
-  detailTargetType?: 'page' | 'endpoint'
+  detailTargetType?: 'page' | 'endpoint' | 'agent'
 } {
   if (!scope) return {}
+  if (scope.type === 'agent') return {
+    selectedPageId: '', selectedApiContractId: '', selectedEndpointId: '', detailTargetType: 'agent'
+  }
   if (scope.type === 'page') {
     return {
       selectedPageId: String(scope.targetId || '').trim(),
@@ -2435,15 +2438,16 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 在通用历史会话中以独立线程启动当前智能体，范围由正式 Agent ID 绑定。 */
+  /** 独立智能体复用原规划、确认、构建和单测，隔离页面及其他智能体。 */
   const handleStartAgentDevelopment = async (agentId: string, label: string): Promise<boolean> => {
     if (!agentId || loading || workspaceBusy) return false
     const identity = await ensureDevelopmentSession({ type: 'agent', agentId, label })
     if (identity.workbenchPhase !== 'development') return false
     return sendWorkflowMessage(`开始开发智能体：${label}`, {
-      conversation: false, executionThreadId: randomUUID(), sessionIdentity: identity,
-      selectedPageId: '', selectedApiContractId: '', selectedEndpointId: '',
-      buildExecutionScope: { type: 'agent', targetId: agentId }, titleFrom: `开发智能体：${label}`
+      conversation: false, executionThreadId: randomUUID(), selectedPageId: '',
+      selectedApiContractId: '', selectedEndpointId: '', selectedEntityId: '', detailTargetType: 'agent',
+      buildExecutionScope: { type: 'agent', targetId: agentId }, sessionIdentity: identity,
+      titleFrom: `开发智能体：${label}`
     })
   }
 

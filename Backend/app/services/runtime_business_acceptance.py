@@ -65,7 +65,8 @@ def compile_runtime_check(task: dict, deliverable: dict, formal: dict) -> list[d
         facts = agent_module_facts(plan, agent_id, module)
         contract = agent_contract_index(plan)[agent_id]
         expected = {"agent_id": agent_id, "module": module, "configuration": deepcopy(contract["agentSettings"][module]),
-                    "agent_count": len(agent_contract_index(plan)), "identity": {key: contract[key] for key in ("name", "purpose")},
+                    "agent_count": len(agent_contract_index(plan)), "formal_agent_ids": sorted(agent_contract_index(plan)),
+                    "identity": {key: contract[key] for key in ("name", "purpose")},
                     "support_paths": formal["runtime_dependency_paths"]}
         source = _source("agent_module", agent_id, f"/agent_contracts/{agent_id}/agentSettings/{module}", facts)
         if module in {"tools", "knowledge"}:

@@ -7,7 +7,12 @@ import { openPreviewWindow } from '../../utils/previewUrl'
 import './ServiceStatusCards.less'
 
 export type ServiceLayer = 'frontend' | 'backend' | 'agent_runtime'
-export const serviceLayers: ServiceLayer[] = ['frontend', 'backend', 'agent_runtime']
+/** 按当前技术规划筛选服务；拓扑尚未明确时只展示公共前端服务。 */
+export function visibleServiceLayers(runtime?: PreviewRuntimePayload['runtime']): ServiceLayer[] {
+  if (runtime?.topologyType === 'backend_direct') return ['frontend', 'backend']
+  if (runtime?.topologyType === 'agent_runtime_direct') return ['frontend', 'agent_runtime']
+  return ['frontend']
+}
 export const statusMeta: Record<PreviewServiceState['status'], { label: string; icon: ReactElement; tone: string }> = {
   starting: { label: '启动中', icon: <LoadingOutlined spin />, tone: 'accent' },
   running: { label: '运行中', icon: <CheckCircleFilled />, tone: 'accent' },
@@ -18,7 +23,7 @@ export const statusMeta: Record<PreviewServiceState['status'], { label: string; 
 
 /** 统一三类服务在卡片及独立日志中的名称。 */
 export function serviceLabel(layer: ServiceLayer): string {
-  return layer === 'frontend' ? '前端服务' : layer === 'backend' ? 'Java 后端' : 'Agent Runtime'
+  return layer === 'frontend' ? '前端服务' : layer === 'backend' ? 'Java 服务' : 'Python 服务'
 }
 
 /** 返回真实服务状态说明，不把缺少 Java 等同于 Runtime 不需要启动。 */
@@ -41,7 +46,7 @@ function servicePort(service?: PreviewServiceState): string {
   }
 }
 
-/** 用现有主题样式展示三类服务，并在独立 Electron 窗口打开 Runtime 接口调试。 */
+/** 按拓扑用现有主题样式展示服务，并在独立 Electron 窗口打开 Python 接口调试。 */
 export default function ServiceStatusCards({ runtime }: { runtime?: PreviewRuntimePayload['runtime'] }): ReactElement {
   const [openError, setOpenError] = useState('')
 
@@ -51,10 +56,10 @@ export default function ServiceStatusCards({ runtime }: { runtime?: PreviewRunti
     try {
       const url = new URL(service.url || '')
       if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port)
-        throw new Error('Runtime 调试地址无效，请重新启动服务。')
+        throw new Error('Python 服务调试地址无效，请重新启动服务。')
       await openPreviewWindow(new URL('/docs', url.origin).toString())
     } catch (error) {
-      setOpenError(error instanceof Error ? error.message : '无法打开 Runtime 接口调试。')
+      setOpenError(error instanceof Error ? error.message : '无法打开 Python 服务接口调试。')
     }
   }
 
@@ -65,7 +70,7 @@ export default function ServiceStatusCards({ runtime }: { runtime?: PreviewRunti
         <span className="preview-section-caption">受控进程 · 就绪检测</span>
       </div>
       <div className="preview-service-grid">
-        {serviceLayers.map((layer) => {
+        {visibleServiceLayers(runtime).map((layer) => {
           const service = runtime?.[layer]
           const status = service?.status || 'stopped'
           const meta = statusMeta[status]

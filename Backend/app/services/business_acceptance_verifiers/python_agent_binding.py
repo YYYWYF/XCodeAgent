@@ -36,7 +36,9 @@ def registered_factory(program, expected):
     keys = [program.value(unit, key) for key in registry.keys]
     if any(not isinstance(key, str) for key in keys) or len(set(keys)) != len(keys):
         raise PythonEvidenceUnavailable("Agent 注册表有动态或重复身份。")
-    if len(keys) != expected["agent_count"] or expected["agent_id"] not in keys:
+    formal_ids = expected.get("formal_agent_ids")
+    invalid = bool(set(keys) - set(formal_ids)) if formal_ids is not None else len(keys) != expected["agent_count"]
+    if invalid or expected["agent_id"] not in keys:
         raise PythonEvidenceUnavailable("实际 Agent 注册表与当前正式 Agent 集合不一致。")
     for node in ast.walk(unit.tree):
         if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store) and isinstance(node.value, ast.Name) and node.value.id == "_AGENT_BUILDERS":

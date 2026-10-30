@@ -10,6 +10,8 @@ from typing import Any
 from app.services.agent_runtime_template_policy import AGENT_RUNTIME_MODULES
 from app.services.planning_frozen import plain_json
 from app.services.runtime_business_contract import serves_python_business
+from app.services.runtime_agent_editable_config import PromptSettings, ProjectModelSettings
+from app.services.runtime_agent_resources import agent_resource_files
 
 MODULE_LABELS = {"prompt": "提示词", "model": "模型", "memory": "记忆", "tools": "工具",
                  "skills": "技能", "knowledge": "知识", "context": "上下文"}
@@ -67,7 +69,7 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
         if not isinstance(contract, dict) or set(contract) != {"agentId", "name", "purpose", "pageIds", "agentSettings"}:
             raise ValueError("Agent 合同必须且只能包含 agentId/name/purpose/pageIds/agentSettings。")
         agent_id = contract["agentId"]
-        if not isinstance(agent_id, str) or re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None or agent_id == "runtime" or agent_id in result:
+        if not isinstance(agent_id, str) or len(agent_id) > 128 or re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None or agent_id == "runtime" or agent_id in result:
             raise ValueError("Agent 身份必须是唯一 lower_snake_case，且不能占用 runtime。")
         if any(not isinstance(contract[key], str) or not contract[key].strip() for key in ("name", "purpose")):
             raise ValueError(f"Agent {agent_id} 缺少名称或业务职责。")
@@ -83,6 +85,8 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
             raise ValueError(f"Agent {agent_id} 缺少正式 systemPrompt。")
         if settings["model"].get("source") != "project":
             raise ValueError(f"Agent {agent_id} 必须继承当前项目模型配置。")
+        PromptSettings.model_validate(settings["prompt"])
+        ProjectModelSettings.model_validate(settings["model"])
         for module in ("tools", "skills", "knowledge"):
             if not isinstance(settings[module].get("enabled"), bool):
                 raise ValueError(f"Agent {agent_id} 的 {module}.enabled 必须显式声明。")
@@ -103,6 +107,8 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
                 raise ValueError(f"Agent {agent_id} 的 Tool Endpoint 在页面范围内存在身份歧义。")
             tool_ids.add(tool_id)
         _reject_secrets(settings)
+        for module in ("skills", "knowledge"):
+            agent_resource_files(module, settings[module])
         result[agent_id] = deepcopy(contract)
     return result
 
@@ -118,12 +124,12 @@ def scoped_agent_ids(plan: Mapping[str, Any], target_type: str, target_id: str) 
     """页面带入其绑定 Agent，业务 Endpoint 开发不反向扩大为全部 Agent 开发。"""
 
     contracts = agent_contract_index(plan)
-    if target_type == "application":
-        return tuple(contracts)
     if target_type == "agent":
         if target_id not in contracts:
-            raise ValueError(f"当前技术规划不包含智能体：{target_id}。")
+            raise ValueError(f"正式技术规划不存在智能体 {target_id}。")
         return (target_id,)
+    if target_type == "application":
+        return tuple(contracts)
     if target_type == "page":
         return tuple(key for key, contract in contracts.items() if target_id in contract["pageIds"])
     return ()

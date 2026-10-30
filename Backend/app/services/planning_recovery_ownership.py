@@ -20,9 +20,15 @@ async def planning_source_is_current(
     get_state = getattr(graph, "aget_state", None)
     if get_state is None:
         return False
+    from app.services.retry_preparation import await_checkpoint_preparation
+
     try:
         # 只核对当前 root；历史中找到同 Run 失败不足以取得当前应用的运行归属。
-        snapshot = await get_state({"configurable": {"thread_id": source.thread_id, "checkpoint_ns": ""}})
+        # 沿用平台恢复准备期限及取消登记，超时仍保留原恢复入口。
+        snapshot = await await_checkpoint_preparation(
+            get_state({"configurable": {"thread_id": source.thread_id, "checkpoint_ns": ""}}),
+            source.run_id,
+        )
     except Exception as exc:
         raise RecoveryExecutionError(
             "RETRY_CHECKPOINT_UNAVAILABLE", "暂时无法读取执行进度，请稍后重试。原恢复入口已保留。",

@@ -58,6 +58,7 @@ export type PreviewDatabaseCheck = {
 export type PreviewRuntimePayload = {
   status: 'in_progress' | 'completed' | 'failed'
   runtime?: {
+    topologyType: 'backend_direct' | 'agent_runtime_direct' | null
     attemptId: string
     status: PreviewServiceState['status']
     frontend: PreviewServiceState

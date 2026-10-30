@@ -3,8 +3,8 @@ name: agent-ui-surface-template
 description: >-
   Compose business Agent conversation surfaces from XCodeAgent-owned fixed UI
   components and a constrained configuration. Use for standalone Agent pages,
-  floating Agent panels on business pages, generated-frontend Mock delivery,
-  and the later AG-UI adapter replacement.
+  floating Agent panels on business pages, offline UiDesign, and confirmed
+  generated-frontend Runtime integration.
 ---
 
 # Agent UI Surface Template
@@ -28,20 +28,19 @@ existing Build and acceptance flow.
   switches, and realistic Mock examples.
 - Use stable Agent, page, action, and information-item IDs. Never infer bindings
   from labels, routes, component names, or the DOM.
-- Design and Mock delivery are offline. They must not call HTTP, a Java Gateway,
-  a Python sidecar, or a handwritten event stream.
-- Mock or design evidence never proves AG-UI, Gateway, Runtime, Launch, or
+- UiDesign is offline. Formal Build uses the platform's fixed official AG-UI
+  adapter and exact config.runtime same-origin /agents/{agentId}/run binding.
+  Page code never creates transport, credentials, identity or another adapter.
+- Mock or design evidence never proves AG-UI, Runtime, Launch, or
   Acceptance completion.
 
 ## Stage Routing
 
 - For XCodeAgent UiDesign composition, read
   `references/ui-design-stage.md` before writing or adjusting the page.
-- For generated-frontend Mock implementation, read
-  `references/frontend-mock-stage.md` before changing generated application code.
-- For the future real transport replacement, read
-  `references/ag-ui-integration-stage.md`. This reference is informational until
-  the Gateway and Runtime delivery batch is explicitly authorized.
+- For generated application Build, read `references/ag-ui-integration-stage.md`.
+- `references/frontend-mock-stage.md` describes offline design fixtures only;
+  it cannot override a formal Runtime Build contract.
 
 Stop and request a contract decision if a page has an unknown Surface, multiple
 floating Agents, undeclared context, or would require changing the host route,

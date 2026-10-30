@@ -124,7 +124,10 @@ export function developmentTargetWorkflowFields(
   }
 } {
   if (!target) return {}
-  if (target.type === 'agent') return { detailTargetType: 'agent', buildExecutionScope: { type: 'agent', targetId: target.agentId } }
+  if (target.type === 'agent') return {
+    selectedPageId: '', selectedApiContractId: '', selectedEndpointId: '', detailTargetType: 'agent',
+    buildExecutionScope: { type: 'agent', targetId: target.agentId }
+  }
   if (target.type === 'page') {
     return {
       selectedPageId: target.pageId,
