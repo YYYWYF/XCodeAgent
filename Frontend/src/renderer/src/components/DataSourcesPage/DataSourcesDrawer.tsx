@@ -3,7 +3,7 @@ import { ApiOutlined, CloseOutlined, DatabaseOutlined, DeleteOutlined, EditOutli
 import { Alert, Button, Empty, Input, Spin, Tooltip, message } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { DataSourceCatalog, DataSourceOperation, DatabaseDataSource, DatabaseDataSourceInput, ExternalApiDataSource, ExternalApiDataSourceInput } from '../../typings'
+import type { DataSourceCatalog, DataSourceOperation, DatabaseDataSource, DatabaseDataSourceInput, DataSourceValidation, ExternalApiDataSource, ExternalApiDataSourceInput } from '../../typings'
 import { createDataSource, deleteDataSource, requestDataSources, requestDataSourceDetails, requestSelectedTables, requestSourceReferences, updateDataSource, validateDataSource } from '../../service/dataSources'
 import type { SelectedDataTable } from '../../service/dataSources'
 import { subscribeDataSourcesChanged } from '../../service/dataSourceEvents'
@@ -197,10 +197,10 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
       await load()
     } finally { setSaving(false) }
   }
-  /** 检测仅显示后端真实结果，静态校验不冒充连接成功。 */
-  const validate = async (source: DatabaseDataSourceInput | ExternalApiDataSourceInput): Promise<void> => {
+  /** 将 AG-UI 检测原始结果交给配置弹窗，静态校验不冒充连接成功。 */
+  const validate = async (source: DatabaseDataSourceInput | ExternalApiDataSourceInput): Promise<DataSourceValidation> => {
     setSaving(true)
-    try { const result = await validateDataSource(workspaceRoot, source); message.success(result.connection === 'ok' ? '连接检测通过' : '配置静态校验通过') }
+    try { return await validateDataSource(workspaceRoot, source) }
     finally { setSaving(false) }
   }
   /** 删除数据库连接前展示真实引用，不操作真实数据库。 */
@@ -208,7 +208,7 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
     if (!database) return
     try { const refs = await requestSourceReferences(workspaceRoot, database.id)
       confirmWorkspaceAction({ title: `删除连接 ${database.name}？`, content: `不会删除真实数据库或正式映射。${refs.length ? `关联接口：${refs.join('、')}` : '暂无正式映射引用。'}`, okText: '删除', cancelText: '取消', okButtonProps: { danger: true },
-        onOk: async () => { setCatalog(await deleteDataSource(workspaceRoot, database.id)); setTab(''); closeDetail(); await load() } })
+        onOk: async () => { setCatalog(await deleteDataSource(workspaceRoot, database.id)); setEditor({ open: false }); setTab(''); closeDetail(); await load() } })
     } catch (reason) { setError(reason instanceof Error ? reason.message : '读取引用失败。') }
   }
   /** 删除接口域前展示正式映射引用，删除不联动修改已确认映射。 */

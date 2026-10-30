@@ -1,0 +1,95 @@
+.@{class-prefix}-data-source-editor-modal-wrap .@{class-prefix}-database-connection-modal {
+  .ant-modal-content { border-radius: 14px; }
+  .ant-modal-header { padding: 22px 24px 20px; }
+  .ant-modal-body { padding: 22px 24px 20px; background: var(--data-source-modal-surface) !important; }
+  .ant-modal-footer { padding: 16px 24px; }
+  .ant-modal-close { top: 16px; right: 12px; color: var(--data-source-modal-text-secondary); }
+  .ant-modal-close:hover { color: var(--data-source-modal-text); }
+  .ant-modal-close-x { width: 40px; height: 40px; line-height: 40px; }
+  .ant-input, .ant-input-affix-wrapper, .ant-input-number { min-height: 39px; border-radius: 7px; font-size: 14px; }
+  .ant-input, .ant-input-affix-wrapper { padding: 8px 11px; }
+  .ant-input-number { width: 100%; }
+  .ant-input-number-input { height: 37px; }
+  .ant-input-affix-wrapper > .ant-input { min-height: 0; padding: 0; border-radius: 0; }
+  .ant-input::placeholder, .ant-input-number-input::placeholder { color: var(--data-source-modal-text-secondary); font-size: 12px; }
+  .ant-input-password-icon { color: var(--data-source-modal-text-secondary); }
+  .ant-btn { height: 36px; padding: 6px 14px; border-radius: 7px; font-size: 12px; }
+  .ant-btn:not(.ant-btn-primary):not(.ant-btn-dangerous) { color: var(--data-source-modal-text); background: var(--data-source-modal-surface); border-color: var(--data-source-modal-border); }
+  .ant-btn:not(:disabled):hover, .ant-btn:not(:disabled):focus-visible { color: var(--data-source-modal-accent); border-color: var(--data-source-modal-accent); }
+  .ant-btn-primary { padding-right: 20px; padding-left: 20px; color: var(--data-source-modal-surface); }
+  .ant-btn-primary:not(:disabled):hover, .ant-btn-primary:not(:disabled):focus-visible { color: var(--data-source-modal-surface); background: var(--data-source-modal-accent); }
+  .ant-btn:disabled, .ant-btn:disabled:hover { color: var(--data-source-modal-disabled-text); background: var(--data-source-modal-canvas); border-color: var(--data-source-modal-border); }
+  .ant-input[disabled], .ant-input-affix-wrapper-disabled, .ant-input-number-disabled { color: var(--data-source-modal-disabled-text); background: var(--data-source-modal-canvas) !important; }
+  .ant-input-status-error, .ant-input-affix-wrapper-status-error, .ant-input-number-status-error { border-color: var(--data-source-modal-danger); }
+  .ant-alert { margin: 16px 0 0; padding: 9px 11px; border: 0; border-radius: 7px; background: var(--data-source-modal-canvas); }
+  .ant-alert-message { color: var(--data-source-modal-text); font-size: 12px; }
+  .ant-alert-info .ant-alert-icon { color: var(--data-source-modal-accent); }
+  .ant-alert-success { background: var(--data-source-modal-response-soft); }
+  .ant-alert-success .ant-alert-icon { color: var(--data-source-modal-response); }
+  .ant-alert-error { background: var(--data-source-modal-danger-soft); }
+  .ant-alert-error .ant-alert-icon { color: var(--data-source-modal-danger); }
+  .@{class-prefix}-data-source-editor-error { margin-top: 0; margin-bottom: 16px; }
+  .@{class-prefix}-data-source-modal-footer { align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .@{class-prefix}-data-source-modal-delete { padding-left: 0; color: var(--data-source-modal-danger); }
+  .@{class-prefix}-data-source-modal-delete:not(:disabled):hover,
+  .@{class-prefix}-data-source-modal-delete:not(:disabled):focus-visible { color: var(--data-source-modal-danger); background: var(--data-source-modal-danger-soft); border-color: transparent; }
+  .@{class-prefix}-database-connection-actions { display: flex; gap: 8px; margin-left: auto; }
+  .@{class-prefix}-database-connection-actions .ant-btn + .ant-btn { margin-left: 0; }
+}
+
+.@{class-prefix}-database-connection-title { display: flex; align-items: center; gap: 12px; padding-right: 28px;
+  > .anticon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; color: var(--data-source-modal-accent); font-size: 21px; background: var(--data-source-modal-accent-soft); border-radius: 11px; }
+  strong { display: block; color: var(--data-source-modal-text); font-size: 19px; font-weight: 500; }
+  small { display: block; margin-top: 3px; color: var(--data-source-modal-text-secondary); font-size: 12px; font-weight: 400; }
+}
+
+.@{class-prefix}-database-connection-form { display: flex; flex-direction: column; gap: 20px; }
+.@{class-prefix}-database-connection-field { display: flex; min-width: 0; flex-direction: column; gap: 7px;
+  > label { display: flex; align-items: baseline; gap: 4px; color: var(--data-source-modal-text-secondary); font-size: 12px; }
+  em { color: var(--data-source-modal-danger); font-style: normal; }
+  small { margin-left: auto; font-size: 11px; }
+}
+.@{class-prefix}-database-connection-label { display: block; margin-bottom: 7px; color: var(--data-source-modal-text-secondary); font-size: 12px; }
+.@{class-prefix}-database-connection-help { color: var(--data-source-modal-text-secondary); font-size: 11px; }
+.@{class-prefix}-database-connection-field-error { color: var(--data-source-modal-danger); font-size: 11px; }
+.@{class-prefix}-database-connection-mode .ant-radio-group { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  .ant-radio-wrapper { display: flex; min-width: 0; flex-direction: row-reverse; align-items: center; justify-content: space-between; gap: 10px; margin: 0; padding: 12px; color: var(--data-source-modal-text); background: var(--data-source-modal-surface); border: 1px solid var(--data-source-modal-border); border-radius: 9px; }
+  .ant-radio-wrapper:hover { background: var(--data-source-modal-canvas); border-color: var(--data-source-modal-accent); }
+  .ant-radio-wrapper-checked, .ant-radio-wrapper-checked:hover { background: var(--data-source-modal-accent-soft); border-color: var(--data-source-modal-accent); }
+  .ant-radio { top: 0; }
+  .ant-radio + span { min-width: 0; flex: 1; padding: 0; }
+  .ant-radio-inner { background: var(--data-source-modal-surface); border-color: var(--data-source-modal-border); }
+  .ant-radio-checked .ant-radio-inner { border-color: var(--data-source-modal-accent); }
+  .ant-radio-checked::after { border-color: var(--data-source-modal-accent); }
+  .ant-radio-inner::after { background: var(--data-source-modal-accent); }
+  .ant-radio-input:focus-visible + .ant-radio-inner { box-shadow: 0 0 0 3px var(--data-source-modal-accent-soft); }
+  .ant-radio-wrapper-disabled { color: var(--data-source-modal-disabled-text); cursor: not-allowed; }
+  .ant-radio-wrapper-disabled .ant-radio-inner { opacity: .5; }
+}
+.@{class-prefix}-database-connection-mode-content { display: flex; align-items: center; gap: 10px;
+  > .anticon { color: var(--data-source-modal-accent); font-size: 18px; }
+  strong { display: block; font-size: 13px; font-weight: 500; }
+  small { display: block; margin-top: 3px; color: var(--data-source-modal-text-secondary); font-size: 11px; }
+}
+.@{class-prefix}-database-connection-section-title { display: flex; align-items: center; gap: 10px; margin-bottom: -6px; color: var(--data-source-modal-text); font-size: 12px; font-weight: 500;
+  &::after { height: 1px; flex: 1; background: var(--data-source-modal-border); content: ''; }
+}
+.@{class-prefix}-database-connection-fields { display: flex; flex-direction: column; gap: 15px; }
+.@{class-prefix}-database-connection-endpoint { display: grid; grid-template-columns: minmax(0, 1fr) 116px; gap: 14px; }
+.@{class-prefix}-database-connection-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+
+@media (max-width: 510px) {
+  .@{class-prefix}-data-source-editor-modal-wrap .@{class-prefix}-database-connection-modal {
+    .ant-modal-header, .ant-modal-body { padding: 18px 16px; }
+    .ant-modal-footer { padding: 14px 16px; }
+    .@{class-prefix}-database-connection-actions { width: 100%; justify-content: flex-end; }
+  }
+  .@{class-prefix}-database-connection-endpoint { grid-template-columns: minmax(0, 1fr) 86px; gap: 10px; }
+  .@{class-prefix}-database-connection-pair { grid-template-columns: 1fr; }
+  .@{class-prefix}-database-connection-mode .ant-radio-group .ant-radio-wrapper { gap: 7px; padding: 10px 8px; }
+  .@{class-prefix}-database-connection-mode-content { gap: 7px;
+    > .anticon { font-size: 15px; }
+    strong { font-size: 12px; }
+    small { display: none; }
+  }
+}

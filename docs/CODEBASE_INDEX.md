@@ -751,6 +751,8 @@ The product and technical brand is **DevAgent Studio**. User-visible labels use 
 - `service/dataSourceEvents.ts` 在来源/表清单成功增删改后按完整工作区通知读取者；`FieldMapping/bindingSources.ts` 通过现有 AG-UI 动作只读刷新目录和已添加表，丢弃旧请求及卸载后回执。右侧来源下拉展开也刷新候选；不重新读取或替换接口草稿，不推进确认门禁。更换来源期间旧映射表单保持挂载但隐藏，取消可恢复未应用输入。回归：`pnpm test:api-design` 的 `bindingSources.test.ts`。
 - The main development readiness gate still requires explicit refresh/confirmation. Saving a draft never marks an Endpoint configured; formal confirmation only updates local gate readiness and leaves Build/development completion unchanged. Regression: `tests.test_binding_workspace`, existing Endpoint/data-source/API-design suites; frontend static `pnpm typecheck:web`.
 
+- `DataSourcesPage/DataSourceEditorModal.tsx` 的数据库配置弹窗使用 `DatabaseConnectionForm.tsx` 和 `DatabaseConnectionForm.less` 展示紧凑分组表单，连接方式仅提供数据库直连与 DBID；已有内置来源保持受管身份，不转换连接类型。数据库弹窗宽度为 650px，独立设置标题、两列连接字段、密码保留提示和低强调删除入口，复用弹窗明暗主题令牌。检测结果直接消费现有 AG-UI `DataSourceValidation`，区分真实连通与静态校验；修改输入清除旧结果，检测和保存期间锁定表单，关闭或切换来源后丢弃迟到回执。外部 API 继续使用原表单，数据源存储与后端接口保持不变。
+
 ### Endpoint API design and readiness
 
 - AI 辅助各阶段及 Mock 的系统文案与输入编排均集中在 `agents/endpoint_design_assist_prompts.py`，不另设文案模块。系统提示按「角色与边界 / 本步任务 / 处理规则 / 取值方式（适用时）/ 待明确问题 / 输出要求」组织；用户输入按「本步任务 / 处理目标（适用时）/ 接口与操作对象 / 需求说明 / 补充说明 / 本轮前序结果 / 可用输入 / 当前表结构」按需投影。说明原文保留自然换行，返回清单前置，规则完善仅展示目标、当前说明和已选依赖；操作不传字段或 DDL，映射说明不重复传字段结构。Mock 单独使用返回目标、需求和生成条数，不继承映射提示的禁止虚构样例规则。当前步骤职责、JSON 输出、模型调用与校验合同不变；本次按用户要求不进行测试或运行验证。

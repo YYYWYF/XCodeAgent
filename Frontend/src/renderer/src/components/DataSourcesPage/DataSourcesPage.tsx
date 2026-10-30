@@ -14,7 +14,7 @@ import { Children, type KeyboardEvent, type ReactElement, type ReactNode } from 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isAuthenticationFailure } from '../../service/authentication'
 import { createDataSource, deleteDataSource, requestDataSourceDetails, requestDataSourceOperation, requestDataSources, updateDataSource, validateDataSource } from '../../service/dataSources'
-import type { DataSourceCatalog, DataSourceDirectory, DataSourceOperation, DatabaseDataSource, DatabaseDataSourceInput, ExternalApiDataSource, ExternalApiDataSourceInput } from '../../typings'
+import type { DataSourceCatalog, DataSourceDirectory, DataSourceOperation, DatabaseDataSource, DatabaseDataSourceInput, DataSourceValidation, ExternalApiDataSource, ExternalApiDataSourceInput } from '../../typings'
 import { cx } from '../../utils'
 import DataSourceDirectoryModal from './DataSourceDirectoryModal'
 import DataSourceEditorModal from './DataSourceEditorModal'
@@ -208,10 +208,10 @@ export default function DataSourcesPage({ theme, workspaceRoot, externalOnly = f
     } finally { setSaving(false) }
   }
 
-  /** 校验草稿或已保存数据源。 */
-  const handleValidate = async (source: DatabaseDataSourceInput | ExternalApiDataSourceInput | { sourceId: string }): Promise<void> => { setSaving(true); try { const result = await validateDataSource(workspaceRoot, source); message.success(result.connection === 'ok' ? '数据库连接检测通过' : '数据源静态校验通过') } finally { setSaving(false) } }
+  /** 返回草稿或已保存数据源的真实校验回执，由调用界面决定展示位置。 */
+  const handleValidate = async (source: DatabaseDataSourceInput | ExternalApiDataSourceInput | { sourceId: string }): Promise<DataSourceValidation> => { setSaving(true); try { return await validateDataSource(workspaceRoot, source) } finally { setSaving(false) } }
   /** 通过资源 ID 校验已保存数据源。 */
-  const handleValidateSaved = async (source: Source): Promise<void> => { try { await handleValidate({ sourceId: source.id }) } catch (caughtError) { message.error(caughtError instanceof Error ? caughtError.message : '数据源校验失败。') } }
+  const handleValidateSaved = async (source: Source): Promise<void> => { try { const result = await handleValidate({ sourceId: source.id }); message.success(result.connection === 'ok' ? '数据库连接检测通过' : '数据源静态校验通过') } catch (caughtError) { message.error(caughtError instanceof Error ? caughtError.message : '数据源校验失败。') } }
 
   /** 打开目录新增或编辑弹窗。 */
   const openDirectory = (source: ExternalApiDataSource, directory?: DataSourceDirectory): void => { setDirectorySourceId(source.id); setEditingDirectory(directory); setDirectoryModalOpen(true) }

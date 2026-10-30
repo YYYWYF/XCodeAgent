@@ -35,6 +35,11 @@ _BACKEND_DATABASE_ENV_KEYS = frozenset(
         "XCODEAGENT_DB_SCHEMA",
         "XCODEAGENT_DB_USERNAME",
         "XCODEAGENT_DB_PASSWORD",
+        "DATASOURCE_DS1_URL",
+        "DATASOURCE_DS1_PORT",
+        "DATASOURCE_DS1_SCHEMA",
+        "DATASOURCE_DS1_USERNAME",
+        "DATASOURCE_DS1_PASSWORD",
     }
 )
 
@@ -192,7 +197,7 @@ def _backend_runtime_environment(
 def _database_runtime_variables(
     *, host: str, port: int, schema: str, username: str, password: str, jdbc_url: str,
 ) -> dict[str, str]:
-    """将同一连接投影为 MySQL、Spring 及 xcode-agent.db 的运行时环境变量。"""
+    """将同一连接投影为 MySQL、Spring、xcode-agent.db 及 datasource.ds1 的运行时环境变量。"""
 
     return {
         "MYSQL_HOST": host, "MYSQL_PORT": str(port), "MYSQL_DATABASE": schema,
@@ -203,4 +208,7 @@ def _database_runtime_variables(
         "XCODEAGENT_DB_URL": host, "XCODEAGENT_DB_PORT": str(port),
         "XCODEAGENT_DB_SCHEMA": schema, "XCODEAGENT_DB_USERNAME": username,
         "XCODEAGENT_DB_PASSWORD": password,
+        "DATASOURCE_DS1_URL": host, "DATASOURCE_DS1_PORT": str(port),
+        "DATASOURCE_DS1_SCHEMA": schema, "DATASOURCE_DS1_USERNAME": username,
+        "DATASOURCE_DS1_PASSWORD": password,
     }
