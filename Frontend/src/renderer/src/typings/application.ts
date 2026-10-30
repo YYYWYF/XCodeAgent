@@ -313,8 +313,9 @@ export interface ApplicationPageInteraction {
   trigger: string
   userAction: string
   systemResponse: string
-  bindingType?: 'endpoint' | 'navigation' | 'local' | 'sequence' | 'external'
+  bindingType?: 'endpoint' | 'agent' | 'navigation' | 'local' | 'sequence' | 'external'
   endpointId?: string
+  agentId?: string
   targetMenuKey?: string
   localEffect?: string
   externalTarget?: string

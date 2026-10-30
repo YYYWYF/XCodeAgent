@@ -462,7 +462,7 @@ def project_planning(state: ProjectState) -> dict:
         synchronized_plan = (
             sync_project_plan_from_markdown(
                 existing_plan,
-                state.get("requirement_spec", {}),
+                _technical_planning_requirement_spec(state, state.get("requirement_spec", {})),
                 edited_markdown,
             )
             if edited_markdown is not None

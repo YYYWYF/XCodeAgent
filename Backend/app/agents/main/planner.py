@@ -18,6 +18,8 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.frontend_page_tree import flatten_frontend_pages
+from app.services.agent_action_bindings import agent_action_bindings
+from app.services.product_plan import project_active_agent_product_plan
 from app.services.data_source_policy import DatasourceType, uses_builtin_database
 from app.services.project_plan import (
     apply_project_plan_feedback,
@@ -94,7 +96,9 @@ def _technical_planning_prompt(
         if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
         else {}
     )
-    pages = [item for item in product_plan.get("pages", []) if isinstance(item, dict)]
+    active_product = project_active_agent_product_plan(product_plan)
+    agent_actions = agent_action_bindings(active_product)
+    pages = [item for item in active_product.get("pages", []) if isinstance(item, dict)]
     entity = {
         "id": "Order",
         "name": "订单",
@@ -211,6 +215,7 @@ def _technical_planning_prompt(
         "product_acceptance_criteria": product_plan.get("product_acceptance_criteria", []),
     }
     authorization_context = {"authorizationTargets": product_plan.get("authorizationTargets", {})}
+    agent_context = {"agents": product_plan.get("agents", [])}
     flow_context = {"business_flows": product_plan.get("business_flows", [])}
     page_context = {
         "pages": [
@@ -226,7 +231,10 @@ def _technical_planning_prompt(
         "page_actions": [
             {
                 "pageId": page.get("pageId"),
-                "actions": page.get("actions", []),
+                "actions": [
+                    action for action in page.get("actions", [])
+                    if action.get("actionId") not in agent_actions.get(page.get("pageId"), {})
+                ],
             }
             for page in pages
             if page.get("pageId")
@@ -336,13 +344,26 @@ def _technical_planning_prompt(
         f"{json.dumps(product_goal_context, ensure_ascii=False)}\n\n"
         "- Authorization context: confirmed ProductPlan target identities. Do not generate any authorization field; the system compiles all resources and bindings.\n"
         f"{json.dumps(authorization_context, ensure_ascii=False)}\n\n"
+        "- Confirmed Agent context: the agents array below is the authoritative confirmed_product_plan.agents. "
+        "Preserve agentId, name, and purpose exactly, and derive pageIds only from enabled pageActionBindings "
+        "in their declared order. Multiple entries for one Agent share one agent_contracts record. Preserve "
+        "capabilities, interaction requirements, boundaries, and acceptance criteria when designing its modules. "
+        "Never restore a disabled surface or infer another Agent from page actions, summaries, or an existing plan. "
+        "An empty agents array or an Agent with no enabled bindings produces no Agent contract.\n"
+        "Agent conversation actions reuse the Agent Runtime AG-UI session interface selected by agentId; "
+        "the platform compiles their bindings from pageActionBindings. Do not emit action_implementations "
+        "or ordinary API Contracts for those actions. Do not invent entities, database tables, or CRUD APIs "
+        "for conversation/session/message state. Business-action context below excludes Agent actions; "
+        "only those remaining business actions require ordinary Endpoint decisions.\n"
+        f"{json.dumps(agent_context, ensure_ascii=False)}\n\n"
         "- Business-flow context: confirmed business flows. Use it to preserve cross-page and multi-step behavior.\n"
         f"{json.dumps(flow_context, ensure_ascii=False)}\n\n"
         "- Page context: page goals and information items. Use it to determine read models and page dependencies.\n"
         f"{json.dumps(page_context, ensure_ascii=False)}\n\n"
         "- Business-action context: page-scoped ProductPlan actions. Use it to select endpoint implementations only for business actions and business steps.\n"
         f"{json.dumps(action_context, ensure_ascii=False)}\n\n"
-        "Before returning, audit every confirmed ProductPlan action page by page:\n"
+        "Before returning, audit the remaining non-Agent ProductPlan actions in Business-action context page by page. "
+        "Agent actions are already bound by the platform and are excluded from the Endpoint audit:\n"
         "1. behavior.type=business has exactly one action_implementations entry.\n"
         "2. behavior.type=sequence with business steps has exactly one action_implementations entry whose "
         "stepBindings covers every and only business stepId.\n"

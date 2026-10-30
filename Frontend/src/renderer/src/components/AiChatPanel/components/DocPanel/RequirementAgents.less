@@ -1,0 +1,94 @@
+.@{class-prefix}-requirement-agent-card {
+  overflow-wrap: anywhere;
+
+  .@{class-prefix}-requirement-doc-page-zone-body {
+    font-size: 13px;
+  }
+}
+
+.@{class-prefix}-requirement-agent-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--wb-text);
+  font-size: 13px;
+  line-height: 1.6;
+
+  > li::marker {
+    color: var(--wb-accent);
+  }
+}
+
+.@{class-prefix}-requirement-agent-surface-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 13px;
+
+  > span {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.@{class-prefix}-requirement-agent-surface-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+
+  > strong {
+    color: var(--wb-text);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  > span {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-requirement-page-agent-surfaces {
+  .ant-switch {
+    flex: 0 0 auto;
+    background: var(--wb-border-strong);
+
+    &.ant-switch-checked {
+      background: var(--wb-accent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--wb-accent-border);
+      outline-offset: 2px;
+    }
+  }
+}
+
+.@{class-prefix}-requirement-agent-surface-error {
+  border-color: var(--wb-danger);
+  background: var(--wb-surface-subtle);
+
+  .ant-alert-message {
+    color: var(--wb-text);
+  }
+
+  .ant-alert-icon {
+    color: var(--wb-danger);
+  }
+
+  .ant-btn {
+    color: var(--wb-text);
+    border-color: var(--wb-border);
+    background: var(--wb-control);
+
+    &:hover,
+    &:focus-visible {
+      color: var(--wb-accent);
+      border-color: var(--wb-accent-border);
+    }
+  }
+}

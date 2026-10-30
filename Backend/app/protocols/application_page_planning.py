@@ -310,7 +310,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "actions": ["get_agent_settings_revision", "prepare_agent_settings_revision", "confirm_agent_settings_revision", "abandon_agent_settings_revision"],
             "formalRevision": True, "confirmationRequired": True,
         },
-        "agentSurfaceSelection": {"requestField": "forwardedProps.agentSurfaceSelection", "actions": ["save"], "draftOnly": True},
+        "agentSurfaceSelection": {"requestField": "forwardedProps.agentSurfaceSelection", "actions": ["get", "save"], "draftOnly": True, "revisionField": "productPlanHash"},
         "technicalPlanningConversation": {
             "requestField": "forwardedProps.technicalPlanningConversation",
             "actions": ["classify", "revise"],

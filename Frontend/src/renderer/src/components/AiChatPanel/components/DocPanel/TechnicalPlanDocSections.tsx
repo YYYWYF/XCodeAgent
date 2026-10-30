@@ -23,6 +23,7 @@ import {
   type JsonRecord
 } from './TechnicalPlanDocPanelData'
 import { SchemaTree } from './TechnicalPlanSchemaTree'
+import TechnicalPlanAgentInvocation from './TechnicalPlanAgentInvocation'
 
 const { Text } = Typography
 
@@ -234,7 +235,11 @@ export function ContractSection({
                           {entityId}
                         </em>
                       ))}
-                      <em>{authenticationLabel(contract.authentication)}</em>
+                      <em>
+                        {contract.invocation
+                          ? 'AG-UI / SSE'
+                          : authenticationLabel(contract.authentication)}
+                      </em>
                     </span>
                   </button>
                 )
@@ -310,6 +315,14 @@ export function EndpointInspector({
   contract: JsonRecord
   endpoint: JsonRecord
 }): ReactElement {
+  if (contract.invocation) {
+    return (
+      <TechnicalPlanAgentInvocation
+        agentId={textValue(contract.agentId)}
+        pageIds={contract.pageIds}
+      />
+    )
+  }
   const responseRef = textValue(endpoint.response_schema_ref)
   const requestRef = textValue(endpoint.request_schema_ref)
   const schemaRef = responseRef || requestRef

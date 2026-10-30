@@ -5,9 +5,12 @@ import {
   FileTextOutlined,
   TeamOutlined
 } from '@ant-design/icons'
-import { Tag, Typography } from 'antd'
-import type { ReactElement } from 'react'
+import { Alert, Button, Tag, Typography } from 'antd'
+import type { ReactElement, ReactNode } from 'react'
 import { cx } from '../../../../utils'
+import RequirementPageAgentSurfaces, {
+  type ToggleAgentSurface
+} from './RequirementPageAgentSurfaces'
 import {
   asRecord,
   behaviorTypeLabel,
@@ -23,7 +26,12 @@ import {
 
 const { Text } = Typography
 
-export type RequirementSectionKey = 'overview' | 'pages' | 'flows' | 'page-design-overview' | 'agents'
+export type RequirementSectionKey =
+  | 'overview'
+  | 'pages'
+  | 'flows'
+  | 'page-design-overview'
+  | 'agents'
 
 type SectionProps = {
   sectionKey: RequirementSectionKey
@@ -69,7 +77,10 @@ export function RequirementOverviewSection({
       <div className={cx('requirement-doc-card-list')}>
         {roles.length ? (
           roles.map((role, index) => (
-            <article className={cx('requirement-doc-card')} key={textValue(role.id, `role-${index}`)}>
+            <article
+              className={cx('requirement-doc-card')}
+              key={textValue(role.id, `role-${index}`)}
+            >
               <div className={cx('requirement-doc-card-heading')}>
                 <strong>{textValue(role.name, `角色 ${index + 1}`)}</strong>
               </div>
@@ -117,7 +128,15 @@ export function RequirementOverviewSection({
 }
 
 /** 渲染单张页面卡：头部（序号 + 名称 + 路径）、主区（目标 / 业务信息 / 操作）与规则区。 */
-function PageCard({ page, index }: { page: RequirementPageRow; index: number }): ReactElement {
+function PageCard({
+  page,
+  index,
+  children
+}: {
+  page: RequirementPageRow
+  index: number
+  children?: ReactNode
+}): ReactElement {
   return (
     <article className={cx('requirement-doc-page-card')} key={page.key}>
       <header className={cx('requirement-doc-page-head')}>
@@ -131,6 +150,7 @@ function PageCard({ page, index }: { page: RequirementPageRow; index: number }):
           ) : null}
         </div>
       </header>
+      {children}
       {page.description ? (
         <p className={cx('requirement-doc-page-desc')}>{page.description}</p>
       ) : null}
@@ -233,8 +253,19 @@ function PageCard({ page, index }: { page: RequirementPageRow; index: number }):
 export function RequirementPagesSection({
   productPlan,
   spec,
-  sectionKey
-}: { productPlan: JsonRecord; spec: JsonRecord } & SectionProps): ReactElement {
+  sectionKey,
+  agentSurfaceBusy,
+  agentSurfaceError,
+  onReloadAgentSurface,
+  onToggleAgentSurface
+}: {
+  productPlan: JsonRecord
+  spec: JsonRecord
+  agentSurfaceBusy?: boolean
+  agentSurfaceError?: string
+  onReloadAgentSurface?: () => void
+  onToggleAgentSurface?: ToggleAgentSurface
+} & SectionProps): ReactElement {
   const pages = requirementPageRows(productPlan, recordItems(spec.pages))
   return (
     <section
@@ -247,9 +278,34 @@ export function RequirementPagesSection({
         <FileTextOutlined /> <span>页面与用户操作</span>
         <span className={cx('requirement-doc-section-count')}>{pages.length}</span>
       </div>
+      {agentSurfaceError ? (
+        <Alert
+          className={cx('requirement-agent-surface-error')}
+          type="error"
+          showIcon
+          message={agentSurfaceError}
+          action={
+            onReloadAgentSurface ? (
+              <Button size="small" onClick={onReloadAgentSurface} disabled={agentSurfaceBusy}>
+                重新加载
+              </Button>
+            ) : undefined
+          }
+        />
+      ) : null}
       <div className={cx('requirement-doc-page-list')}>
         {pages.length ? (
-          pages.map((page, index) => <PageCard index={index} key={page.key} page={page} />)
+          pages.map((page, index) => (
+            <PageCard index={index} key={page.key} page={page}>
+              <RequirementPageAgentSurfaces
+                productPlan={productPlan}
+                pageId={page.pageId}
+                pageName={page.name}
+                busy={agentSurfaceBusy}
+                onToggle={onToggleAgentSurface}
+              />
+            </PageCard>
+          ))
         ) : (
           <Text type="secondary">暂无页面规划</Text>
         )}

@@ -16,6 +16,20 @@ MODULE_LABELS = {"prompt": "提示词", "model": "模型", "memory": "记忆", "
 _SECRET_KEYS = {"apikey", "api_key", "password", "secret", "token", "credential", "credentials"}
 
 
+def agent_invocation(agent_id: str) -> dict[str, str]:
+    """从正式 Agent 身份派生公开调用契约，供文档和执行包共用而不新增存储来源。"""
+
+    if re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None or agent_id == "runtime":
+        raise ValueError("Agent 调用契约必须使用有效的正式 agentId。")
+    return {
+        "protocol": "ag-ui", "transport": "sse", "serviceId": "agent-runtime",
+        "endpointId": f"agent.{agent_id}.run", "method": "POST",
+        "path": f"/agents/{agent_id}/run", "exposure": "public",
+        "requestType": "RunAgentInput", "responseType": "BaseEvent",
+        "principalSource": "runtime_anonymous_session",
+    }
+
+
 def agent_fact_digest(value: Any) -> str:
     """对正式模块事实生成稳定摘要，不把生成时间或执行状态当成业务输入。"""
 

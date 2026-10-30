@@ -33,6 +33,42 @@ class SaveAgentSurfaceSelectionRequest(BaseModel):
     based_on_product_plan_hash: str = Field(alias="basedOnProductPlanHash", pattern=r"^sha256:[0-9a-f]{64}$")
 
 
+class GetAgentSurfaceSelectionRequest(BaseModel):
+    """读取当前浮窗选择草稿及其服务端版本摘要，不修改工作流。"""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    action: Literal["get"]
+    workspace_root: str = Field(alias="workspaceRoot", min_length=1)
+
+
+def _surface_selection_result(state: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    """把同一份草稿和版本摘要一起交付，供界面展示及下一次 CAS 保存。"""
+
+    return {
+        "productPlan": plan,
+        "productPlanHash": agent_fact_digest(plan),
+        "artifact": {
+            "id": "product_plan",
+            "name": product_plan_draft_markdown_path(state).name,
+            "path": str(product_plan_draft_markdown_path(state)),
+            "format": "markdown",
+            "content": render_product_plan_markdown(plan),
+        },
+        "jsonPath": str(product_plan_draft_json_path(state)),
+    }
+
+
+def get_agent_surface_selection_draft(request: GetAgentSurfaceSelectionRequest) -> dict[str, Any]:
+    """只读加载当前磁盘草稿，避免把工作流内存快照当作最新编辑基线。"""
+
+    workspace = Path(request.workspace_root).expanduser().resolve()
+    if not workspace.is_dir():
+        raise ValueError("ProductPlan 工作区不存在或不是目录。")
+    state: dict[str, Any] = {"workspace": str(workspace)}
+    return _surface_selection_result(state, _load_product_plan(product_plan_draft_json_path(state)))
+
+
 def _load_product_plan(path: Path) -> dict[str, Any]:
     """从固定草稿路径读取 ProductPlan JSON，并拒绝非对象内容。"""
 
@@ -99,15 +135,5 @@ def save_agent_surface_selection_draft(
     if errors:
         raise ValueError("智能体浮窗选择未通过 ProductPlan 校验：" + "；".join(errors))
 
-    markdown_path, json_path = write_product_plan_documents(state, plan)
-    return {
-        "productPlan": plan,
-        "artifact": {
-            "id": "product_plan",
-            "name": Path(markdown_path).name,
-            "path": str(product_plan_draft_markdown_path(state)),
-            "format": "markdown",
-            "content": render_product_plan_markdown(plan),
-        },
-        "jsonPath": json_path,
-    }
+    write_product_plan_documents(state, plan)
+    return _surface_selection_result(state, plan)
