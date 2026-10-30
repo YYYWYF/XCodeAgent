@@ -1700,6 +1700,9 @@ export default function AiChatPanel({
     onApplicationLifecycleChange
   })
 
+  const planningComposerDraftRef = useRef({ key: draftKey, value: draft })
+  planningComposerDraftRef.current = { key: draftKey, value: draft }
+
   const previewRuntime = usePreviewRuntime({
     workspace: application.workspaceRoot || '',
     activeSession,
@@ -2554,12 +2557,10 @@ export default function AiChatPanel({
   const [stopGenerationPending, setStopGenerationPending] = useState(false)
   const stopGenerationPendingRef = useRef(false)
   const stopping = stopGenerationPending || localWorkflowStopping || (restoredRunRunning && ownedExecution?.status === 'stopping')
-  // 已结束任务也只读刷新工作区资格；切换会话或本地开始新运行后自动停止旧轮询。
-  const endedExecutionForSession = planEnded ? Object.values(applicationLifecycle?.endedExecutions || {})
-    .find((item) => item.execution.ownerSessionId === activeSession?.sessionId) : undefined
+  // 只跟进脱离本地流的运行中任务；任务结束即停止轮询，点击继续时再校验工作区资格。
   useWorkbenchRunRefresh(
     application,
-    !localWorkflowLoading ? restoredRunRunning ? ownedExecution?.runId : endedExecutionForSession?.execution.runId : undefined,
+    !localWorkflowLoading && restoredRunRunning ? ownedExecution?.runId : undefined,
     onApplicationLifecycleChange,
     workbenchRefreshConnection
   )
@@ -4951,6 +4952,20 @@ export default function AiChatPanel({
     [application.workspaceRoot, onSavePlanningRequirementSpec]
   )
 
+  /** 规划消息提交时立即清空输入；失败仅恢复未被用户继续编辑的原会话草稿。 */
+  const clearPlanningComposerDraft = (): (() => void) => {
+    const submitted = { key: draftKey, value: draft }
+    planningComposerDraftRef.current = { key: draftKey, value: '' }
+    setDraftByKey(draftKey, '')
+    return () => {
+      const current = planningComposerDraftRef.current
+      if (current.key === submitted.key && !current.value) {
+        planningComposerDraftRef.current = submitted
+        setDraftByKey(submitted.key, submitted.value)
+      }
+    }
+  }
+
   /** 把自由输入交给原创建规划 Graph 先做意图识别，当前等待阶段不能决定变更目标。 */
   const handleInitialProductConversationSend = async (sourceRequest = draft): Promise<void> => {
     const trimmed = sourceRequest.trim()
@@ -4966,8 +4981,13 @@ export default function AiChatPanel({
       planningNewRoundRef.current = true
       lastUiDesignRunIdRef.current = undefined
       appendPlanningUserMessage({ design_change_request: trimmed })
-      await onStartIterationPlanning(trimmed)
-      setDraftByKey(draftKey, '')
+      const restoreDraft = clearPlanningComposerDraft()
+      try {
+        await onStartIterationPlanning(trimmed)
+      } catch (reason) {
+        restoreDraft()
+        throw reason
+      }
       return
     }
     // 设计阶段二次修改同样不能沿用开发阶段页面的临时生成状态。
@@ -4975,6 +4995,7 @@ export default function AiChatPanel({
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
     const submission = appendPlanningUserMessage({ design_change_request: trimmed })
+    const restoreDraft = clearPlanningComposerDraft()
     if (isTechnicalPlanningPhase) {
       // 只有本次输入触发的新设计执行才切阶段；浏览历史和只读问答不改变用户选择。
       const reentry = createPlanningStageReentry({
@@ -5006,8 +5027,8 @@ export default function AiChatPanel({
       try {
         await onSubmitPlanningClarification(currentPlanningWorkflow, {}, undefined, undefined, trimmed, true)
         await reentry.finish()
-        setDraftByKey(draftKey, '')
       } catch (reason) {
+        restoreDraft()
         await reentry.finish().catch(() => undefined)
         message.error(reason instanceof Error ? reason.message : '技术规划对话失败，请重试。')
       } finally {
@@ -5021,8 +5042,7 @@ export default function AiChatPanel({
       undefined,
       undefined,
       trimmed
-    ).catch(() => undefined)
-    setDraftByKey(draftKey, '')
+    ).catch(() => restoreDraft())
   }
 
   /** 在当前设计或计划会话中从所选节点继续，并保留本轮消息的乐观回滚。 */
@@ -5054,10 +5074,11 @@ export default function AiChatPanel({
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
     const transaction = appendPlanningUserMessage({ design_change_request: request })
+    const restoreDraft = clearPlanningComposerDraft()
     try {
       await onStartIterationPlanning(request, workflowDebug, debugStage)
-      setDraftByKey(draftKey, '')
     } catch (reason) {
+      restoreDraft()
       rollbackPlanningSubmission(transaction)
       if (!isAuthenticationFailure(reason)) {
         message.error(formatError(reason, '启动规划节点失败'))

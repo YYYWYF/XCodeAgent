@@ -6,10 +6,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class EntityTableRequest(BaseModel):
-    """只接受实体身份和当前 SQL 指纹，不允许前端指定库、表或任意 SQL。"""
+    """只接受实体身份和动作，DDL 只读预览不允许指定表名或任意 SQL。"""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", strict=True)
-    action: Literal["prepare", "execute", "rebuild", "refresh"]
+    action: Literal["preview_ddl", "prepare", "execute", "rebuild", "refresh"]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1, max_length=4096)
     entity_id: str = Field(alias="entityId", min_length=1, max_length=256)
     preview_hash: str | None = Field(default=None, alias="previewHash", pattern=r"^[0-9a-f]{64}$")

@@ -5,7 +5,6 @@ import ApplicationOutline from '../ApplicationOutline'
 import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import EndpointDesignResult from '../EndpointDesignResult'
 import EntityInfoPanel from '../EntityInfoPanel'
-import EntityTablePanel from '../EntityTablePanel'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
 import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
 import './DevelopmentArtifactsPanel.less'
@@ -51,20 +50,54 @@ export default function DevelopmentArtifactsPanel({
         aria-label={detailLabel ? `${detailLabel}详情` : '开发产物详情'}
         className={cx('development-artifacts-detail')}
       >
-        {apiTarget && onConfigureApi ? <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>打开字段映射</Button> : null}
+        {apiTarget && onConfigureApi ? (
+          <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>
+            打开字段映射
+          </Button>
+        ) : null}
         {apiTarget ? (
-          loading ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>正在读取映射结果…</h3></div>
-            : error ? <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status"><h3>读取失败</h3>{onEndpointRecovery ? <p>请使用下方重试入口同步映射结果。</p> : <><p>{error}</p><Button onClick={reload} type="primary">重试</Button></>}</div>
-              : <EndpointDesignResult detail={detail} />
+          loading ? (
+            <div
+              aria-atomic="true"
+              className={cx('development-artifacts-placeholder')}
+              role="status"
+            >
+              <h3>正在读取映射结果…</h3>
+            </div>
+          ) : error ? (
+            <div
+              aria-atomic="true"
+              className={cx('development-artifacts-placeholder')}
+              role="status"
+            >
+              <h3>读取失败</h3>
+              {onEndpointRecovery ? (
+                <p>请使用下方重试入口同步映射结果。</p>
+              ) : (
+                <>
+                  <p>{error}</p>
+                  <Button onClick={reload} type="primary">
+                    重试
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : (
+            <EndpointDesignResult detail={detail} />
+          )
         ) : selectedEntity ? (
-          useBuiltinDatabase && workspaceRoot ? (
-            <EntityTablePanel key={`${workspaceRoot}:${selectedEntity.id}`} workspaceRoot={workspaceRoot}
-              entityId={selectedEntity.id} label={selectedEntity.label} />
-          ) : <EntityInfoPanel entity={selectedEntity} theme={theme} />
-        ) : <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
-          <h3>{detailLabel || '请选择开发产物'}</h3>
-          <p>{detailLabel ? '详情内容待设计' : '点击左侧菜单查看详情'}</p>
-        </div>}
+          <EntityInfoPanel
+            entity={selectedEntity}
+            theme={theme}
+            workspaceRoot={workspaceRoot}
+            useBuiltinDatabase={useBuiltinDatabase}
+          />
+        ) : (
+          <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
+            <h3>{detailLabel || '请选择开发产物'}</h3>
+            <p>{detailLabel ? '详情内容待设计' : '点击左侧菜单查看详情'}</p>
+          </div>
+        )}
       </section>
     </div>
   )

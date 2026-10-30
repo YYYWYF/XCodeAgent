@@ -15,6 +15,7 @@ from app.domain.managed_database_operations import parse_database_operations
 from app.domain.managed_database import ManagedDatabaseRegistration
 from app.services.application_config.repository import ApplicationConfigRepository
 from app.services.entity_table_sql import compile_entity_table, create_table_sql
+from app.services.entity_ddl import preview_entity_ddl
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.managed_table_client import ManagedTableClient
 from app.services.backend_process_registry import backend_launch_lock
@@ -62,6 +63,9 @@ def prepare_entity_table(request: EntityTableRequest) -> dict[str, Any]:
 def run_entity_table_action(request: EntityTableRequest, *, client: ManagedTableClient | None = None) -> dict[str, Any]:
     """执行一次明确动作；查询只读，不自动重试、轮询或创建远端资源。"""
 
+    # 普通实体只读查看 DDL，不进入模拟数据库配置校验，也不创建远端客户端。
+    if request.action == "preview_ddl":
+        return {"action": request.action, "ddlPreview": preview_entity_ddl(request.workspace_root, request.entity_id)}
     preview = prepare_entity_table(request)
     result: dict[str, Any] = {"action": request.action, "preview": preview}
     if request.action == "prepare":

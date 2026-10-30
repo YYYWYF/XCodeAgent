@@ -1,4 +1,5 @@
 import { stopProjectPreviewViaAgUi } from './projectPreviewControl'
+import { cancelStartupUpdate, focusStartupUpdate, runStartupUpdate } from './appUpdate/window'
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import crypto from 'node:crypto'
@@ -1873,6 +1874,31 @@ async function initializePrimaryApplication(): Promise<boolean> {
 
   if (!(await clearAuthStateBeforeStartup())) return false
 
+  setupApplicationSettingsIpc()
+  let backendStartupPromise: Promise<string> | undefined
+  /** 复用同一个 Python 就绪请求，更新页异常也不能重复启动后端或跳过健康等待。 */
+  const ensureBackendReady = (): Promise<string> => {
+    backendStartupPromise ??= startBackendService()
+    return backendStartupPromise
+  }
+  const continueStartup = await runStartupUpdate(
+    ensureBackendReady,
+    async () => {
+      isQuitting = true
+      await cleanupBeforeQuit()
+      // 安装器接管前若失败，必须重新启动已被清理的 Python 后端。
+      backendStartupPromise = undefined
+      quitCleanupCompleted = true
+    }
+  )
+  if (!continueStartup) {
+    app.quit()
+    return false
+  }
+  // 安装器接管前失败时允许正常启动，后续退出仍执行原有清理。
+  isQuitting = false
+  quitCleanupCompleted = false
+
   // 仅非生产环境开放跨平台开发者工具快捷键。
   if (DEVAGENTSTUDIO_ENV.WORKING_DIR !== WORKSPACE_ARTIFACT_DIR_NAME) {
     app.on('browser-window-created', (_, window) => {
@@ -1889,10 +1915,9 @@ async function initializePrimaryApplication(): Promise<boolean> {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
-  const backendBaseUrl = await startBackendService()
+  const backendBaseUrl = await ensureBackendReady()
   console.log(`DevAgent Studio backend URL: ${backendBaseUrl}`)
   setupApplicationStorageIpc()
-  setupApplicationSettingsIpc()
   setupAuthIpc()
   setupBrowserIpc()
   setupClipboardIpc()
@@ -1921,6 +1946,7 @@ function handlePrimaryStartupFailure(error: unknown): boolean {
 
 /** 第二实例启动时等待主实例完成初始化，然后聚焦当前登录窗口或主窗口。 */
 async function focusPrimaryWindowAfterStartup(): Promise<void> {
+  if (focusStartupUpdate()) return
   const startupPromise = primaryStartupPromise
   if (!startupPromise || !(await startupPromise)) return
   await openAuthenticatedWindow()
@@ -1937,6 +1963,9 @@ if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', handleSecondInstance)
+  app.on('activate', () => {
+    focusStartupUpdate()
+  })
   primaryStartupPromise = app
     .whenReady()
     .then(initializePrimaryApplication)
@@ -1970,6 +1999,7 @@ async function cleanupBeforeQuit(): Promise<void> {
 if (hasSingleInstanceLock) {
   app.on('before-quit', (event) => {
     isQuitting = true
+    cancelStartupUpdate()
     if (quitCleanupCompleted) return
 
     event.preventDefault()

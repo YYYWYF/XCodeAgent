@@ -10,6 +10,8 @@ from typing import Any
 from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
+from app.agents.main.technical_plan_editor import TechnicalPlanCandidateError
+from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 from app.agents.database.generator import (
     entity_design_bindings_with_agent,
     entity_design_table_selection_with_agent,
@@ -17,17 +19,13 @@ from app.agents.database.generator import (
 )
 from app.agents.main.planner import (
     plan_project_with_chat_model,
-    repair_technical_plan_action_bindings_with_chat_model,
-    repair_technical_plan_api_contracts_with_chat_model,
     revise_project_plan_with_chat_model,
-    technical_plan_contract_repair_applicable,
 )
 from app.graph.nodes.confirmation import user_confirmed_text
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.services.api_contract_validation import (
     validate_api_contract_consistency,
-    validate_api_contract_definitions,
 )
 from app.services.development_artifacts import refresh_development_artifacts, test_entry_gate
 from app.services.entity_source_binding import (
@@ -73,14 +71,7 @@ from app.services.page_dependencies import (
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
     materialize_technical_plan_runtime,
-    technical_action_binding_issue_messages,
-    technical_action_binding_issues,
     validate_page_implementation_contracts,
-)
-from app.services.technical_action_binding_repair import (
-    action_binding_repair_requires_full_repair,
-    apply_technical_action_binding_patch,
-    validate_technical_action_binding_patch,
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
@@ -1824,23 +1815,12 @@ def _project_plan_validation_errors(
         and project_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
         and isinstance(state.get("requirement_spec"), dict)
     ):
+        errors.extend(validate_technical_plan_chinese_prose(project_plan))
         errors.extend(
             validate_technical_plan_api_contracts(project_plan)
         )
         # 4E 必须读取运行时物化的 PageImplementationContract；正式 TechnicalPlan 不持久化该派生字段。
         errors.extend(_technical_plan_contract_errors(state, validation_plan))
-    return list(dict.fromkeys(str(error).strip() for error in errors if str(error).strip()))
-
-
-def _technical_plan_contract_validation_errors(
-    project_plan: dict,
-) -> list[str]:
-    """汇总仅能通过替换 API Contract 修复的确定性错误。"""
-
-    errors = [
-        *validate_api_contract_definitions(project_plan),
-        *validate_technical_plan_api_contracts(project_plan),
-    ]
     return list(dict.fromkeys(str(error).strip() for error in errors if str(error).strip()))
 
 
@@ -1850,7 +1830,8 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
     diagnostics = "\n".join(f"- {error}" for error in errors[:12])
     return (
         "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan 与 UiManifest，"
-        "在本次重新生成中返回完整 TechnicalPlan 并修复下列问题；不得猜测或省略业务 action/step，"
+        "修复方式遵循当前入口约定：编辑工具可用时仅修改相关片段，保留未受影响的内容；"
+        "不得猜测或省略业务 action/step，"
         "必须完整保留当前 TechnicalPlan 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
         "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
         "不要要求用户重试，也不要解释校验过程：\n"
@@ -1863,125 +1844,13 @@ def _repair_technical_plan_candidate(
     current_plan: dict,
     errors: list[str],
 ) -> dict:
-    """保守路由 Action Binding、API Contract 或完整 TechnicalPlan 修复。"""
+    """首版和二次修改统一修复当前候选，不按错误类型重写 Contract 或整份规划。"""
 
-    product_plan = requirement_spec.get("confirmed_product_plan")
-    binding_issues = (
-        technical_action_binding_issues(current_plan, product_plan)
-        if isinstance(product_plan, dict)
-        else []
-    )
-    normalized_errors = {
-        str(error).strip() for error in errors if str(error).strip()
-    }
-    binding_error_messages = set(
-        technical_action_binding_issue_messages(binding_issues)
-    )
-    only_binding_errors = bool(binding_issues) and (
-        normalized_errors == binding_error_messages
-    )
-    action_repair_failed = False
-    if only_binding_errors:
-        page_ids = sorted(
-            {
-                str(issue.get("pageId") or "").strip()
-                for issue in binding_issues
-                if str(issue.get("pageId") or "").strip()
-            }
-        )
-        action_ids = [
-            str(issue.get("actionId") or "").strip()
-            for issue in binding_issues
-            if str(issue.get("actionId") or "").strip()
-        ]
-        logger.info(
-            "technical_plan_repair_route: route=action_binding issues=%s pages=%s actions=%s",
-            len(binding_issues),
-            page_ids,
-            action_ids,
-        )
-        repair_result: dict[str, Any] | None = None
-        repair_abstained = False
-        try:
-            repair_result = repair_technical_plan_action_bindings_with_chat_model(
-                requirement_spec,
-                current_plan,
-                binding_issues,
-                on_token=_planning_token_callback,
-            )
-            patch_errors = validate_technical_action_binding_patch(
-                repair_result,
-                binding_issues=binding_issues,
-                existing_plan=current_plan,
-            )
-            if patch_errors:
-                raise ValueError("；".join(patch_errors))
-            if action_binding_repair_requires_full_repair(repair_result):
-                repair_abstained = True
-                raise ValueError(
-                    "Action Binding Scoped Repair 未找到语义匹配的现有 Endpoint。"
-                )
-            repaired = apply_technical_action_binding_patch(
-                current_plan,
-                repair_result,
-            )
-            logger.info(
-                "technical_plan_action_binding_patch_applied: bindings=%s",
-                len(repair_result.get("bindings", [])),
-            )
-            return repaired
-        except ValueError as exc:
-            action_repair_failed = True
-            if repair_abstained:
-                logger.warning(
-                    "technical_plan_action_binding_repair_abstained: "
-                    "reason=no_suitable_endpoint fallback=full_plan"
-                )
-            else:
-                failure_reason = (
-                    "invalid_model_output"
-                    if repair_result is None
-                    else "invalid_patch_or_merge"
-                )
-                logger.warning(
-                    "technical_plan_action_binding_repair_failed: "
-                    "reason=%s detail=%s fallback=full_plan",
-                    failure_reason,
-                    exc,
-                )
-
-    contract_errors = _technical_plan_contract_validation_errors(
-        current_plan,
-    )
-    if technical_plan_contract_repair_applicable(
-        current_plan,
-        errors,
-        contract_errors,
-    ):
-        logger.info(
-            "technical_plan_repair_route: route=api_contract errors=%s",
-            len(errors),
-        )
-        return repair_technical_plan_api_contracts_with_chat_model(
-            requirement_spec,
-            current_plan,
-            errors,
-            on_token=_planning_token_callback,
-        )
-    reason = (
-        "action_binding_scoped_repair_failed"
-        if action_repair_failed
-        else "mixed_validation_errors"
-        if binding_issues
-        else "unscoped_validation_errors"
-    )
-    logger.warning(
-        "technical_plan_repair_route: route=full_plan reason=%s errors=%s",
-        reason,
-        errors,
-    )
     return plan_project_with_chat_model(
-        requirement_spec,
+        {
+            **requirement_spec,
+            "technical_plan_validation_feedback": _technical_plan_retry_feedback(errors),
+        },
         existing_plan=current_plan,
         on_token=_planning_token_callback,
     )
@@ -1996,30 +1865,31 @@ def _generate_valid_technical_plan(
 ) -> tuple[dict | None, list[str], dict | None]:
     """在统一的三次总预算内完成 TechnicalPlan 生成、规范化校验与错误反馈修复。"""
 
-    current_plan = existing_plan
+    current_plan = deepcopy(existing_plan)
     remaining_errors = list(initial_errors or [])
     base_feedback = str(
         requirement_spec.get("planning_adjustment_request") or ""
     ).strip()
-    if current_plan and remaining_errors:
-        current_plan = _attach_technical_plan_contracts(state, current_plan)
-        current_plan["confirmation_status"] = "pending_user_confirmation"
-        remaining_errors = _project_plan_validation_errors(current_plan, state)
-        if not remaining_errors:
-            return current_plan, [], None
+    if current_plan and remaining_errors and current_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        try:
+            current_plan = _attach_technical_plan_contracts(state, current_plan)
+            current_plan["confirmation_status"] = "pending_user_confirmation"
+            remaining_errors = _project_plan_validation_errors(current_plan, state)
+            if not remaining_errors:
+                return current_plan, [], None
+        except (TypeError, ValueError) as exc:
+            # 续修候选仍可能在运行时契约编译处失败；保留候选和当前错误交回编辑器。
+            remaining_errors = [str(exc)]
     for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
-        retry_feedback = (
+        validation_feedback = (
             _technical_plan_retry_feedback(remaining_errors)
             if remaining_errors
-            else base_feedback
+            else ""
         )
+        # 原始修改要求在整个生成预算内保持不变，系统诊断按轮替换，不能占用用户要求字段。
         current_requirement = {
             **requirement_spec,
-            **(
-                {"planning_adjustment_request": retry_feedback}
-                if retry_feedback
-                else {}
-            ),
+            "technical_plan_validation_feedback": validation_feedback,
         }
         try:
             candidate = (
@@ -2035,7 +1905,9 @@ def _generate_valid_technical_plan(
                     on_token=_planning_token_callback,
                 )
             )
-            candidate = apply_project_plan_feedback(candidate, retry_feedback)
+            candidate = apply_project_plan_feedback(candidate, base_feedback)
+            # 拿到完整候选后，即使后续编译或校验失败，也必须基于它继续局部修复。
+            current_plan = candidate
             candidate = _attach_technical_plan_contracts(state, candidate)
             candidate["confirmation_status"] = "pending_user_confirmation"
             remaining_errors = _project_plan_validation_errors(candidate, state)
@@ -2043,6 +1915,8 @@ def _generate_valid_technical_plan(
                 return candidate, [], None
             current_plan = candidate
         except (TypeError, ValueError) as exc:
+            if isinstance(exc, TechnicalPlanCandidateError):
+                current_plan = exc.candidate
             remaining_errors = [str(exc)]
         logger.warning(
             "technical_plan_generation_retry: attempt=%s/%s errors=%s",
@@ -2069,6 +1943,14 @@ def _repair_technical_plan_validation_errors(
         state,
         requirement_spec,
     )
+    # 确认动作本身不是修改意见，沿用技术事务已冻结的业务要求及其既有优先级。
+    from app.graph.nodes.application_technical_planning import _technical_request
+
+    original_request = _technical_request(state)
+    technical_requirement = {
+        **technical_requirement,
+        "planning_adjustment_request": original_request,
+    }
     current_plan = project_plan
     remaining_errors = errors
     for attempt in range(1, max(repair_attempts, 0) + 1):
@@ -2083,14 +1965,14 @@ def _repair_technical_plan_validation_errors(
             repaired = _repair_technical_plan_candidate(
                 {
                     **technical_requirement,
-                    "planning_adjustment_request": feedback,
+                    "technical_plan_validation_feedback": feedback,
                 },
                 current_plan,
                 remaining_errors,
             )
             repaired = apply_project_plan_feedback(
                 repaired,
-                feedback,
+                original_request,
             )
             current_plan = _attach_technical_plan_contracts(state, repaired)
             current_plan["confirmation_status"] = "pending_user_confirmation"
@@ -2099,6 +1981,8 @@ def _repair_technical_plan_validation_errors(
                 state,
             )
         except ValueError as exc:
+            if isinstance(exc, TechnicalPlanCandidateError):
+                current_plan = exc.candidate
             remaining_errors = [str(exc)]
         if not remaining_errors:
             return current_plan, []

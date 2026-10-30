@@ -26,7 +26,9 @@ def create_table_sql(table: dict[str, Any]) -> str:
 
     lines = ["  " + column_sql(column) for column in table["columns"]]
     lines.append("  PRIMARY KEY (`id`)")
-    return (f"CREATE TABLE `{table['name']}` (\n" + ",\n".join(lines)
+    # 外置库的正式表名允许反引号，输出时按 MySQL 标识符规则转义。
+    table_name = table["name"].replace("`", "``")
+    return (f"CREATE TABLE `{table_name}` (\n" + ",\n".join(lines)
             + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin"
             + f" COMMENT='{sql_text(table['comment'])}';")
 
