@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+登录页、欢迎页与工作台顶部品牌右侧共用 `Frontend/src/renderer/src/components/AppVersionBadge.tsx` 展示客户端版本及明暗主题标签；`service/appVersion.ts` 在每个渲染进程内缓存只读结果，统一小写 `v` 前缀并保留预发布标识，读取失败隐藏标签。`src/main/appVersion.ts` 注册应用生命周期内有效的 `app:get-version` IPC，经 preload 的 `getAppVersion()` 返回 `app.getVersion()`，与启动更新的版本来源一致，不依赖更新窗口的临时 IPC，也不读取项目分支或服务端最新版本。
+
 Windows 启动更新的安装交接由 `Frontend/src/main/appUpdate/installUpdate.ts` 负责：沿用当前 EXE 所在目录，使用 NSIS 静默安装并重启；macOS 保持原生安装调用，首次手动安装配置不变。`tests/appUpdateInstall.test.ts` 复用真实 NSIS 参数生成逻辑验证 `/S`、`--force-run` 与带空格/中文目录的 `/D` 参数，纳入 `pnpm test:app-update`。
 
 TechnicalPlan 的二次修改与首版候选修复统一由 `agents/main/technical_plan_editor.py` 使用 LangChain 工具循环和 DeepAgents `grep/read_file/edit_file` 完成；四段可编辑候选及只读产品上下文位于独立 `StateBackend`，不读写工作区或暴露连接凭据。`has_editable_technical_plan_candidate` 检查四段根结构；`agents/main/planner.py` 仅在没有完整候选时完整生成，已有候选后所有校验错误都通过编辑器修复，不再按动作绑定、Contract 或混合错误分流。候选后端串行编辑并提供本轮最新快照，防止同批工具互相覆盖。每次读取最多 120 行、搜索最多 40 项、每轮最多 8 次模型调用。`technical_plan_language.py` 的中文说明检查进入 `graph/nodes/planning.py` 和 `application_revision.py` 的完整校验，不另起首版翻译模型；编译失败也保留候选续修。原始要求、三轮总预算、begin/commit/review、JSON/Markdown 保存和正式确认门不变，局部修复耗尽不回退完整生成。截断或缺章节先沿既有 JSON 恢复，无完整候选时在原预算内重生成。回归：`tests.test_technical_plan_fragment_editor`、`tests.test_technical_plan_fragment_workflow`、`tests.test_product_planning_retry`。
