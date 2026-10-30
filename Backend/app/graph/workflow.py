@@ -1,3 +1,5 @@
+
+from app.agents.model_business_context import observe_model_node
 from collections.abc import Awaitable, Callable
 from inspect import isawaitable
 from typing import Any
@@ -327,9 +329,9 @@ def build_graph(
         prepare_build_tasks_node = create_async_workflow_planning_adapter()
 
     builder = StateGraph(ProjectState)
-    builder.add_node("workflow_entry", workflow_entry)
+    builder.add_node("workflow_entry", observe_model_node('workflow_entry', workflow_entry))
 
-    builder.add_node("development_readiness_gate", nodes.development_readiness_gate)
+    builder.add_node("development_readiness_gate", observe_model_node('development_readiness_gate', nodes.development_readiness_gate))
     def api_gate_with_regeneration(state: ProjectState) -> dict[str, Any]:
         """来源变化后撤销旧执行合同，再通过原映射门禁重新生成任务计划。"""
         from app.services.artifact_regeneration_handoff import needs_task_regeneration
@@ -338,14 +340,14 @@ def build_graph(
         fields = {**restart_build_state_fields(), **clear_planning_projection()} if needs_task_regeneration(state) else {}
         return {**fields, **nodes.api_design_readiness_gate({**state, **fields})}
 
-    builder.add_node("api_design_readiness_gate", api_gate_with_regeneration)
-    builder.add_node("application_revision", nodes.start_application_revision)
+    builder.add_node("api_design_readiness_gate", observe_model_node('api_design_readiness_gate', api_gate_with_regeneration))
+    builder.add_node("application_revision", observe_model_node('application_revision', nodes.start_application_revision))
     # TechnicalPlan 二次修改使用同一实现节点，但以真实 technical_planning
     # 入口暴露给运行时，避免把用户确认后的规划请求显示成未知的 revision 流程。
-    builder.add_node("technical_planning", nodes.start_application_revision)
-    builder.add_node("entity_source_binding", nodes.entity_source_binding)
-    builder.add_node("project_planning", nodes.project_planning)
-    builder.add_node("inspect_workspace", nodes.inspect_workspace)
+    builder.add_node("technical_planning", observe_model_node('technical_planning', nodes.start_application_revision))
+    builder.add_node("entity_source_binding", observe_model_node('entity_source_binding', nodes.entity_source_binding))
+    builder.add_node("project_planning", observe_model_node('project_planning', nodes.project_planning))
+    builder.add_node("inspect_workspace", observe_model_node('inspect_workspace', nodes.inspect_workspace))
     async def prepare_build_tasks_with_recovery(state: ProjectState) -> dict[str, Any]:
         """只在本次 Prepare 节点调用中绑定经验证的内部恢复来源。"""
 
@@ -368,9 +370,9 @@ def build_graph(
         with bind_node_recovery(state, "build"):
             return nodes.build(state)
 
-    builder.add_node("prepare_build_tasks", prepare_build_tasks_with_recovery)
-    builder.add_node("authorization_bootstrap", nodes.authorization_bootstrap)
-    builder.add_node("build", build_with_recovery)
+    builder.add_node("prepare_build_tasks", observe_model_node('prepare_build_tasks', prepare_build_tasks_with_recovery))
+    builder.add_node("authorization_bootstrap", observe_model_node('authorization_bootstrap', nodes.authorization_bootstrap))
+    builder.add_node("build", observe_model_node('build', build_with_recovery))
     def unit_test_with_recovery(state: ProjectState) -> dict[str, Any]:
         """从单测入口重进，交给测试映射缓存和复测机制处理当前文件。"""
 
@@ -389,10 +391,10 @@ def build_graph(
             prepared, fields = prepare_unit_test_reentry(state, "unit_test_repair")
             return {**nodes.unit_test_repair(prepared), **fields}
 
-    builder.add_node("unit_test", unit_test_with_recovery)
-    builder.add_node("unit_test_repair", unit_test_repair_with_recovery)
-    builder.add_node("test_phase_confirmation", nodes.test_phase_confirmation)
-    builder.add_node("review_phase_confirmation", nodes.review_phase_confirmation)
+    builder.add_node("unit_test", observe_model_node('unit_test', unit_test_with_recovery))
+    builder.add_node("unit_test_repair", observe_model_node('unit_test_repair', unit_test_repair_with_recovery))
+    builder.add_node("test_phase_confirmation", observe_model_node('test_phase_confirmation', nodes.test_phase_confirmation))
+    builder.add_node("review_phase_confirmation", observe_model_node('review_phase_confirmation', nodes.review_phase_confirmation))
     def code_review_with_recovery(state: ProjectState, config: RunnableConfig) -> dict[str, Any]:
         """审查重入刷新当前源码，再交回原扫描、修复和构建验证子图。"""
 
@@ -402,8 +404,8 @@ def build_graph(
             prepared, fields = prepare_code_review_reentry(state)
             return {**nodes.code_review(prepared, config), **fields}
 
-    builder.add_node("code_review", code_review_with_recovery)
-    builder.add_node("acceptance_phase_confirmation", nodes.acceptance_phase_confirmation)
+    builder.add_node("code_review", observe_model_node('code_review', code_review_with_recovery))
+    builder.add_node("acceptance_phase_confirmation", observe_model_node('acceptance_phase_confirmation', nodes.acceptance_phase_confirmation))
     def integration_test_with_recovery(state: ProjectState) -> dict[str, Any]:
         """刷新测试重入现场，再由原测试子图执行检查和内部修复。"""
 
@@ -423,13 +425,13 @@ def build_graph(
             prepared, fields = prepare_integration_test_reentry(state, "small_task_repair")
             return {**fields, **nodes.small_task_repair(prepared)}
 
-    builder.add_node("integration_test", integration_test_with_recovery)
-    builder.add_node("small_task_repair", small_task_repair_with_recovery)
+    builder.add_node("integration_test", observe_model_node('integration_test', integration_test_with_recovery))
+    builder.add_node("small_task_repair", observe_model_node('small_task_repair', small_task_repair_with_recovery))
     # 验收必须作为真实子图挂载，协议层才能在项目启动期间逐条收到 custom 进度，
     # 不能再由同步包装节点 invoke，否则子步骤会在启动完成后才一次性交付。
-    builder.add_node("acceptance", acceptance_subgraph)
-    builder.add_node("finalize_project", nodes.finalize_project)
-    builder.add_node("handle_failure", nodes.handle_failure)
+    builder.add_node("acceptance", observe_model_node('acceptance', acceptance_subgraph))
+    builder.add_node("finalize_project", observe_model_node('finalize_project', nodes.finalize_project))
+    builder.add_node("handle_failure", observe_model_node('handle_failure', nodes.handle_failure))
 
     builder.add_edge(START, "workflow_entry")
     builder.add_conditional_edges(

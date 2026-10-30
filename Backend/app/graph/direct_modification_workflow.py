@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.agents.model_business_context import observe_model_node
+
 from typing import Any, Literal
 
 from langgraph.graph import END, START
@@ -171,16 +173,16 @@ def build_direct_modification_graph(*, checkpointer: Any) -> Any:
 
     builder = WorkerStateGraph(ProjectState)
     builder.add_node(SYNTHETIC_WORKFLOW_ENTRY_NODE, workflow_entry)
-    builder.add_node("classify_intent", classify_direct_modification)
-    builder.add_node("scan_workspace_code", scan_workspace_code)
-    builder.add_node("scan_change_impact_code", scan_change_impact_code)
-    builder.add_node("respond_conversation", respond_to_casual_conversation)
-    builder.add_node("answer_workspace", respond_to_workspace_question)
-    builder.add_node("execute_frontend", execute_frontend_direct_modification)
-    builder.add_node("execute_backend", execute_backend_direct_modification)
-    builder.add_node("validate_direct_fix", validate_direct_fix)
-    builder.add_node("direct_modification_repair", direct_modification_repair)
-    builder.add_node("finalize_direct_modification", finalize_direct_modification)
+    builder.add_node("classify_intent", observe_model_node('classify_intent', classify_direct_modification))
+    builder.add_node("scan_workspace_code", observe_model_node('scan_workspace_code', scan_workspace_code))
+    builder.add_node("scan_change_impact_code", observe_model_node('scan_change_impact_code', scan_change_impact_code))
+    builder.add_node("respond_conversation", observe_model_node('respond_conversation', respond_to_casual_conversation))
+    builder.add_node("answer_workspace", observe_model_node('answer_workspace', respond_to_workspace_question))
+    builder.add_node("execute_frontend", observe_model_node('execute_frontend', execute_frontend_direct_modification))
+    builder.add_node("execute_backend", observe_model_node('execute_backend', execute_backend_direct_modification))
+    builder.add_node("validate_direct_fix", observe_model_node('validate_direct_fix', validate_direct_fix))
+    builder.add_node("direct_modification_repair", observe_model_node('direct_modification_repair', direct_modification_repair))
+    builder.add_node("finalize_direct_modification", observe_model_node('finalize_direct_modification', finalize_direct_modification))
 
     # 新请求先建立有界的工作区上下文，再由分类节点读取当前 JSON 契约。
     # 确认续跑由协议层从同一 thread 的服务端 checkpoint 写入首节点标记，

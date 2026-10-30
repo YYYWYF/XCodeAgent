@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agents.model_business_context import observe_model_node
+
 from typing import Any
 
 from langgraph.graph import END, START
@@ -112,8 +114,8 @@ def build_acceptance_subgraph():
     """构建启动与验收等待串联的验收子图。"""
 
     builder = StateGraph(ProjectState)
-    builder.add_node("launch_project", _launch_project)
-    builder.add_node("acceptance_review", acceptance_review)
+    builder.add_node("launch_project", observe_model_node('launch_project', _launch_project, business_stage="acceptance"))
+    builder.add_node("acceptance_review", observe_model_node('acceptance_review', acceptance_review, business_stage="acceptance"))
     builder.add_conditional_edges(
         START,
         _route_start,

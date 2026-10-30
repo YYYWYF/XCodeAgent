@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.agents.model_business_context import observe_model_node
+
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import asyncio
@@ -829,22 +831,22 @@ def build_application_planning_graph(*, checkpointer):
     """构建设计、规划分段且含显式入口门禁的创建规划 Graph。"""
 
     builder = StateGraph(ProjectState)
-    builder.add_node("workflow_entry", workflow_entry)
-    builder.add_node("design_intent_analysis", analyze_design_intent)
-    builder.add_node("design_chat_response", design_chat_response)
-    builder.add_node("requirements", _requirements)
-    builder.add_node("requirements_review", requirements_review)
-    builder.add_node("product_planning", _product_planning)
-    builder.add_node("requirement_document_review", requirement_document_review)
-    builder.add_node("ui_confirmation", _ui_confirmation)
-    builder.add_node("ui_confirmation_review", ui_confirmation_review)
-    builder.add_node("planning_stage_entry", planning_stage_entry)
-    builder.add_node("technical_planning_begin", technical_planning_begin)
-    builder.add_node("technical_planning_generate", technical_planning_generate)
-    builder.add_node("technical_planning_commit", technical_planning_commit)
-    builder.add_node("technical_planning_confirm", technical_planning_confirm)
-    builder.add_node("technical_planning_review", technical_planning_review)
-    builder.add_node("template_reconcile", _reconcile_confirmed_revision)
+    builder.add_node("workflow_entry", observe_model_node('workflow_entry', workflow_entry))
+    builder.add_node("design_intent_analysis", observe_model_node('design_intent_analysis', analyze_design_intent))
+    builder.add_node("design_chat_response", observe_model_node('design_chat_response', design_chat_response))
+    builder.add_node("requirements", observe_model_node('requirements', _requirements))
+    builder.add_node("requirements_review", observe_model_node('requirements_review', requirements_review))
+    builder.add_node("product_planning", observe_model_node('product_planning', _product_planning))
+    builder.add_node("requirement_document_review", observe_model_node('requirement_document_review', requirement_document_review))
+    builder.add_node("ui_confirmation", observe_model_node('ui_confirmation', _ui_confirmation))
+    builder.add_node("ui_confirmation_review", observe_model_node('ui_confirmation_review', ui_confirmation_review))
+    builder.add_node("planning_stage_entry", observe_model_node('planning_stage_entry', planning_stage_entry))
+    builder.add_node("technical_planning_begin", observe_model_node('technical_planning_begin', technical_planning_begin))
+    builder.add_node("technical_planning_generate", observe_model_node('technical_planning_generate', technical_planning_generate))
+    builder.add_node("technical_planning_commit", observe_model_node('technical_planning_commit', technical_planning_commit))
+    builder.add_node("technical_planning_confirm", observe_model_node('technical_planning_confirm', technical_planning_confirm))
+    builder.add_node("technical_planning_review", observe_model_node('technical_planning_review', technical_planning_review))
+    builder.add_node("template_reconcile", observe_model_node('template_reconcile', _reconcile_confirmed_revision))
     builder.add_edge(START, "workflow_entry")
     builder.add_conditional_edges("workflow_entry", _route_start, {
         "design_intent_analysis": "design_intent_analysis",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agents.model_business_context import current_model_context
+
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextvars import ContextVar
 from copy import deepcopy
@@ -70,6 +72,11 @@ class TransmitChatModel(BaseChatModel):
                 result[target] = deepcopy(metadata[source])
         # 单次模型请求 UUID 继续用于 code8 防重；前端业务轮次保留在扩展中，不能混用。
         extensions = result.setdefault("extensions", {})
+        business_context = current_model_context(metadata)
+        if business_context:
+            extensions["context"] = business_context
+        else:
+            extensions.pop("context", None)
         for key, target in (("run_id", "studio_run_id"), ("workflow_scope", "workflow_scope"),
                             ("operation_id", "operation_id"), ("conversation_id", "conversation_id")):
             if isinstance(metadata.get(key), str) and metadata[key]:

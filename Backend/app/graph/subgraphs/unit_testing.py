@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agents.model_business_context import observe_model_node
+
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -131,14 +133,14 @@ def build_unit_testing_subgraph():
     """构建开发阶段的单元测试确认、生成、执行和修复规划流程。"""
 
     builder = StateGraph(ProjectState)
-    builder.add_node("collect_unit_test_targets", collect_unit_test_targets)
-    builder.add_node("unit_test_confirmation", unit_test_confirmation)
-    builder.add_node("skip_unit_tests", skip_unit_tests)
-    builder.add_node("generate_unit_tests", generate_unit_tests)
-    builder.add_node("validate_generated_unit_tests", validate_generated_unit_tests)
-    builder.add_node("actual_project_checks", actual_project_checks)
-    builder.add_node("unit_test_quality_gate", unit_test_quality_gate)
-    builder.add_node("unit_repair_planning", unit_repair_planning)
+    builder.add_node("collect_unit_test_targets", observe_model_node('collect_unit_test_targets', collect_unit_test_targets, business_stage="unit_test"))
+    builder.add_node("unit_test_confirmation", observe_model_node('unit_test_confirmation', unit_test_confirmation, business_stage="unit_test"))
+    builder.add_node("skip_unit_tests", observe_model_node('skip_unit_tests', skip_unit_tests, business_stage="unit_test"))
+    builder.add_node("generate_unit_tests", observe_model_node('generate_unit_tests', generate_unit_tests, business_stage="unit_test"))
+    builder.add_node("validate_generated_unit_tests", observe_model_node('validate_generated_unit_tests', validate_generated_unit_tests, business_stage="unit_test"))
+    builder.add_node("actual_project_checks", observe_model_node('actual_project_checks', actual_project_checks, business_stage="unit_test"))
+    builder.add_node("unit_test_quality_gate", observe_model_node('unit_test_quality_gate', unit_test_quality_gate, business_stage="unit_test"))
+    builder.add_node("unit_repair_planning", observe_model_node('unit_repair_planning', unit_repair_planning, business_stage="unit_test"))
 
     builder.add_edge(START, "collect_unit_test_targets")
     builder.add_edge("collect_unit_test_targets", "unit_test_confirmation")

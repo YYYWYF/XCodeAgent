@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.agents.model_business_context import observe_model_node
+
 from collections.abc import Callable
 from pathlib import PurePosixPath
 from typing import Any
@@ -1869,15 +1871,15 @@ def build_testing_subgraph():
 
     builder = StateGraph(ProjectState)
 
-    builder.add_node("build_project_checks", build_project_checks)
+    builder.add_node("build_project_checks", observe_model_node('build_project_checks', build_project_checks, business_stage="integration_test"))
     builder.add_node(
         "frontend_performance_confirmation",
-        frontend_performance_confirmation,
+        observe_model_node('frontend_performance_confirmation', frontend_performance_confirmation, business_stage="integration_test"),
     )
-    builder.add_node("skip_frontend_performance", skip_frontend_performance)
-    builder.add_node("frontend_performance_test", frontend_performance_test)
-    builder.add_node("main_quality_gate", main_quality_gate)
-    builder.add_node("repair_planning", repair_planning)
+    builder.add_node("skip_frontend_performance", observe_model_node('skip_frontend_performance', skip_frontend_performance, business_stage="integration_test"))
+    builder.add_node("frontend_performance_test", observe_model_node('frontend_performance_test', frontend_performance_test, business_stage="integration_test"))
+    builder.add_node("main_quality_gate", observe_model_node('main_quality_gate', main_quality_gate, business_stage="integration_test"))
+    builder.add_node("repair_planning", observe_model_node('repair_planning', repair_planning, business_stage="integration_test"))
 
     builder.add_edge(START, "build_project_checks")
     builder.add_edge("build_project_checks", "frontend_performance_confirmation")

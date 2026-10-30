@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+模型业务上下文由 `agents/model_business_context.py` 在主工作流、规划、会话及测试/评审/验收子图节点执行期间绑定，读取当前执行范围和选择目标；`transmit_chat_model.py` 写入 `metadata.extensions.context`。独立 Endpoint 辅助在 `protocols/endpoint_designs.py` 绑定接口身份。阶段仅使用明确节点映射或所属子图阶段，未知字段省略；`mode` 暂不发送。上下文按任务隔离并在退出时恢复，不写入共享模型实例。
+
 ## code8.1 Model Transmit Contract
 
 本副本以最新 Studio 为基线，只将模型连接改为相邻 code8 的 AG-UI 服务。前端、登录、工作流确认门、工具执行、业务预算、聊天与 checkpoint 存储不变。`model_factory.py` 返回 `TransmitChatModel`；`services/llm_client.py` 也使用同一工厂，不创建直连 SDK。
