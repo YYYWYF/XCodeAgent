@@ -295,6 +295,10 @@ def _verified_ui_designs_for_confirmation(
         if verification.get("status") != "passed":
             detail = "；".join(str(item) for item in page_errors) or "设计稿代码或映射缺失"
             errors.append(f"页面 {page_id} 未通过产品事实一致性校验：{detail}")
+            if status == "confirmed":
+                # 复验失败的页面不能继续显示已确认，仍停在原 UI 审阅门等待重新生成。
+                verified["status"] = "generation_failed"
+                verified["error"] = f"设计稿未通过产品事实一致性校验：{detail}"
         verified_pages.append(verified)
     return (
         {
