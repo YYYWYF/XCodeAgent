@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import ssl
 import unittest
 from dataclasses import replace
 from unittest.mock import AsyncMock, patch
@@ -48,6 +49,9 @@ class AppUpdateTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(kwargs["trust_env"], False)
             self.assertEqual(kwargs["timeout"].read, 5.0)
+            context = kwargs["verify"]
+            self.assertIsInstance(context, ssl.SSLContext)
+            self.assertTrue(context.options & ssl.OP_LEGACY_SERVER_CONNECT)
             return httpx.AsyncClient(transport=httpx.MockTransport(respond), **kwargs)
 
         result = await check_app_update(self.settings, "1.0.0", client_factory=factory)

@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.services.template_engine_tls import build_template_engine_ssl_context
 from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload, UpdatePackageDownloadV4
 
 _CHUNK_BYTES = 64 * 1024
@@ -57,7 +58,7 @@ class TemplateEngineClient:
         try:
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
             # trust_env=False：模板引擎是本机直连的基础设施；httpx 在 Windows 会采用注册表系统代理但不执行其排除列表，回环请求会被代理拦截。
-            async with self._client_factory(timeout=timeout, trust_env=False) as client:
+            async with self._client_factory(timeout=timeout, trust_env=False, verify=build_template_engine_ssl_context()) as client:
                 async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
                     if response.status_code >= 400:
                         raise await _engine_response_error(response, "模板生成服务拒绝请求")
@@ -163,7 +164,7 @@ class TemplateEngineClient:
             )
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
             # trust_env=False：模板引擎是本机直连的基础设施；httpx 在 Windows 会采用注册表系统代理但不执行其排除列表，回环请求会被代理拦截。
-            async with self._client_factory(timeout=timeout, trust_env=False) as client:
+            async with self._client_factory(timeout=timeout, trust_env=False,verify=build_template_engine_ssl_context()) as client:
                 async with client.stream(
                     "POST",
                     f"{self._base_url}/v1/update",
@@ -239,7 +240,7 @@ class TemplateEngineClient:
         size = 0
         try:
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
-            async with self._client_factory(timeout=timeout, trust_env=False) as client:
+            async with self._client_factory(timeout=timeout, trust_env=False,verify=build_template_engine_ssl_context()) as client:
                 async with client.stream(
                     "POST", f"{self._base_url}/v1/update",
                     json={"protocolVersion": "4", "currentTemplateState": current_template_state, "requestedConfig": requested_config, "mode": mode},

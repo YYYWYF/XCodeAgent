@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import Settings
+from app.services.template_engine_tls import build_template_engine_ssl_context
 
 APP_UPDATE_TIMEOUT_SECONDS = 5.0
 MAX_RESPONSE_BYTES = 64 * 1024
@@ -57,7 +58,9 @@ async def check_app_update(
         """限量读取 Java JSON 响应，避免沿用模板生成的长超时和 ZIP 传输策略。"""
 
         async with client_factory(
-            timeout=httpx.Timeout(APP_UPDATE_TIMEOUT_SECONDS), trust_env=False
+            timeout=httpx.Timeout(APP_UPDATE_TIMEOUT_SECONDS),
+            trust_env=False,
+            verify=build_template_engine_ssl_context(),
         ) as client:
             async with client.stream(
                 "POST",
