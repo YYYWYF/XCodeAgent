@@ -10,7 +10,7 @@ from typing import Any
 from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
-from app.agents.main.technical_plan_editor import TechnicalPlanCandidateError
+from app.agents.main.technical_plan_editor import TechnicalPlanCandidateError, TechnicalPlanEditorError
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 from app.agents.database.generator import (
     entity_design_bindings_with_agent,
@@ -462,7 +462,8 @@ def project_planning(state: ProjectState) -> dict:
         synchronized_plan = (
             sync_project_plan_from_markdown(
                 existing_plan,
-                _technical_planning_requirement_spec(state, state.get("requirement_spec", {})),
+                _technical_planning_requirement_spec(state, state.get("requirement_spec", {}))
+                if phase == "technical_planning" else state.get("requirement_spec", {}),
                 edited_markdown,
             )
             if edited_markdown is not None
@@ -1863,6 +1864,7 @@ def _repair_technical_plan_candidate(
         {
             **requirement_spec,
             "technical_plan_validation_feedback": _technical_plan_retry_feedback(errors),
+            "technical_plan_validation_repair": True,
         },
         existing_plan=current_plan,
         on_token=_planning_token_callback,
@@ -1930,7 +1932,10 @@ def _generate_valid_technical_plan(
         except (TypeError, ValueError) as exc:
             if isinstance(exc, TechnicalPlanCandidateError):
                 current_plan = exc.candidate
-            remaining_errors = [str(exc)]
+            # 工具中断不是业务校验结论，保留原诊断和局部进展，避免下一轮只收到调用上限。
+            remaining_errors = list(dict.fromkeys([*remaining_errors, str(exc)])) if isinstance(
+                exc, TechnicalPlanEditorError,
+            ) else [str(exc)]
         logger.warning(
             "technical_plan_generation_retry: attempt=%s/%s errors=%s",
             attempt,
@@ -1996,7 +2001,10 @@ def _repair_technical_plan_validation_errors(
         except ValueError as exc:
             if isinstance(exc, TechnicalPlanCandidateError):
                 current_plan = exc.candidate
-            remaining_errors = [str(exc)]
+            # 确认复验沿用同一中断恢复规则，不能用工具错误覆盖正式合同诊断。
+            remaining_errors = list(dict.fromkeys([*remaining_errors, str(exc)])) if isinstance(
+                exc, TechnicalPlanEditorError,
+            ) else [str(exc)]
         if not remaining_errors:
             return current_plan, []
     return current_plan, remaining_errors

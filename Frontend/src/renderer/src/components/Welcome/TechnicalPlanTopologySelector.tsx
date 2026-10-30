@@ -17,6 +17,7 @@ export default function TechnicalPlanTopologySelector({ disabled, options, onSel
   const selectableOptions = options.map((option) => option.type === 'agent_runtime_direct'
     ? {
         ...option,
+        label: 'Agent 应用',
         available: true,
         reason: undefined,
         description: '前端 + Python Runtime，支持业务接口与七模块智能体。已接入数据库、模型注入和受控启动，需同步当前 Runtime 模板后验证。当前仅支持关闭登录和授权的应用。'

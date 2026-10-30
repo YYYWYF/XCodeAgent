@@ -1,4 +1,5 @@
-import { Button } from 'antd'
+import { Alert, Button } from 'antd'
+import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import ApplicationOutline from '../ApplicationOutline'
@@ -9,6 +10,10 @@ import AgentDevelopmentDetail from '../AgentDevelopmentDetail'
 import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
 import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
+import RuntimeAgentDetail from '../RuntimeAgentDetail'
+import { requestRuntimeWorkbench } from '../../../../service/runtimeWorkbench'
+import type { RuntimeAgent, RuntimeSettingsResult } from '../../../../service/runtimeWorkbench'
+import type { WorkbenchExecution } from '../../../../typings'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
@@ -23,6 +28,11 @@ type Props = ApplicationOutlineProps & {
   workspaceRoot?: string
   apiDesignRefreshKey?: number
   onConfigureApi?: (target: { apiContractId: string; endpointId: string; label?: string }) => void
+  onAgentSettingsSaved?: (result: RuntimeSettingsResult) => void
+  onStartAgentDevelopment?: (agent: RuntimeAgent) => Promise<void>
+  onOpenAgentExecution?: (execution: WorkbenchExecution) => void
+  agentDevelopmentDisabled?: boolean
+  agentStateRevision?: number
 }
 
 /** 并排展示产物菜单与接口、实体详情，菜单选择不改变开发工作流。 */
@@ -38,9 +48,30 @@ export default function DevelopmentArtifactsPanel({
   onStartAgent,
   onAgentRefresh,
   agentActionsDisabled,
+  onAgentSettingsSaved,
+  onStartAgentDevelopment,
+  onOpenAgentExecution,
+  agentDevelopmentDisabled,
+  agentStateRevision,
   ...outlineProps
 }: Props): ReactElement {
-  const selectedAgent = outlineProps.agents?.find((agent) => agent.agentId === outlineProps.selectedAgentId)
+  const [agents, setAgents] = useState<RuntimeAgent[]>([])
+  const [agentId, setAgentId] = useState('')
+  const [agentError, setAgentError] = useState('')
+  const [agentRefresh, setAgentRefresh] = useState(0)
+  const selectedAgent = outlineProps.agents?.find((item) => item.agentId === outlineProps.selectedAgentId)
+  const agent = agents.find((item) => item.agentId === (agentId || selectedAgent?.agentId))
+  useEffect(() => { setAgents([]); setAgentId('') }, [workspaceRoot])
+  useEffect(() => {
+    let active = true
+    setAgentError('')
+    if (workspaceRoot) void requestRuntimeWorkbench(workspaceRoot, 'list').then((result) => {
+      if (active) setAgents(result.agents || [])
+    }).catch((cause) => {
+      if (active) setAgentError(cause instanceof Error ? cause.message : 'Agent 目录读取失败。')
+    })
+    return () => { active = false }
+  }, [workspaceRoot, apiDesignRefreshKey, agentRefresh, agentStateRevision])
   const selectedEntity = outlineProps.entities.find(
     (entity) => entity.id === outlineProps.selectedEntityId
   )
@@ -54,27 +85,37 @@ export default function DevelopmentArtifactsPanel({
     <div className={cx('development-artifacts-panel')}>
       <aside aria-label="开发产物菜单" className={cx('development-artifacts-menu')}>
         <ApplicationOutline {...outlineProps}
-          onPageSelect={(page) => { outlineProps.onAgentSelect?.(undefined); outlineProps.onPageSelect(page) }}
-          onEntitySelect={(entity) => { outlineProps.onAgentSelect?.(undefined); outlineProps.onEntitySelect(entity) }}
-          onApiEndpointSelect={(target) => { outlineProps.onAgentSelect?.(undefined); outlineProps.onApiEndpointSelect(target) }} />
+          onAgentSelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(item) }}
+          onPageSelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(undefined); outlineProps.onPageSelect(item) }}
+          onEntitySelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(undefined); outlineProps.onEntitySelect(item) }}
+          onApiEndpointSelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(undefined); outlineProps.onApiEndpointSelect(item) }} />
+        <div className={cx('runtime-agent-outline')}>
+          <strong>智能体</strong>
+          <Button size="small" onClick={() => { setAgentRefresh((value) => value + 1); onAgentRefresh?.() }}>刷新</Button>
+          {agentError && <Alert type="error" message={agentError} />}
+          {!outlineProps.agents?.length && agents.map((item) => <Button key={item.agentId} type={item.agentId === agentId ? 'primary' : 'text'}
+            block onClick={() => setAgentId(item.agentId)}>{item.name}</Button>)}
+        </div>
       </aside>
       <section
         aria-label={detailLabel ? `${detailLabel}详情` : '开发产物详情'}
         className={cx('development-artifacts-detail')}
       >
-        {apiTarget && onConfigureApi ? (
+        {!agent && !selectedAgent && apiTarget && onConfigureApi ? (
           <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>
             打开字段映射
           </Button>
         ) : null}
-        {selectedAgent && workspaceRoot ? (
+        {agent && workspaceRoot ? <RuntimeAgentDetail key={`${workspaceRoot}:${agent.agentId}`} agent={agent} workspaceRoot={workspaceRoot}
+          disabled={agentDevelopmentDisabled || agentActionsDisabled} onStartDevelopment={onStartAgentDevelopment} onOpenExecution={onOpenAgentExecution}
+          onSaved={(result) => { onAgentSettingsSaved?.(result); onAgentRefresh?.(); setAgentRefresh((value) => value + 1) }} /> : selectedAgent && workspaceRoot ? (
           <AgentDevelopmentDetail
             key={`${workspaceRoot}:${selectedAgent.agentId}`}
             agent={selectedAgent}
             workspaceRoot={workspaceRoot}
             disabled={Boolean(agentActionsDisabled)}
             onStart={() => onStartAgent?.(selectedAgent)}
-            onRefresh={() => onAgentRefresh?.()}
+            onRefresh={() => { onAgentRefresh?.(); setAgentRefresh((value) => value + 1) }}
           />
         ) : apiTarget ? (
           loading ? (

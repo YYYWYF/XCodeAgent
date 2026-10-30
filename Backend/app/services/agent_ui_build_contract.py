@@ -1,4 +1,4 @@
-"""编译 Agent UI 开发阶段的固定组件、Mock 与交付边界合同。"""
+"""编译正式 Agent UI 的固定组件及当前 Runtime 会话合同。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app.services.ui_design_agent_template import build_agent_ui_template_config
 AGENT_UI_BUILD_CONTRACT_VERSION = "agent-ui-build.v1"
 AGENT_UI_COMPONENT_MODULE = "@/components/AgentConversation"
 AGENT_UI_CONFIG_TYPE_MODULE = "@/typings/agentConversation"
-AGENT_UI_MOCK_ADAPTER_PATH = "frontend/src/apis/agentConversationMock.ts"
+AGENT_UI_RUNTIME_ADAPTER_PATH = "frontend/src/apis/agentConversationRuntime.ts"
 AGENT_UI_SKILL_PATH = "/.devagentstudio/builtin-skills/agent-ui-surface-template/SKILL.md"
 
 _COMPONENTS = {
@@ -53,7 +53,7 @@ def project_agent_ui_build_contracts(
     product_plan: dict[str, Any],
     technical_plan: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    """从已确认 ProductPlan 与 TechnicalPlan 投影逐页 Mock 组合合同。"""
+    """从已确认产品及 Runtime 技术合同投影真实会话组件和精确同源路径。"""
 
     from app.services.runtime_agent_contracts import agent_contract_index
     contracts = agent_contract_index(technical_plan)
@@ -67,13 +67,14 @@ def project_agent_ui_build_contracts(
         agent_id = _text(config.get("agentId"))
         if agent_id not in contracts:
             raise ValueError(f"Agent {agent_id} 缺少当前 Runtime 合同。")
+        config["runtime"] = {"path": f"/agents/{agent_id}/run", "pageId": page_id}
         surface = _text(config.get("surface"))
         component = _COMPONENTS.get(surface)
         if component is None:
             raise ValueError(f"Agent UI Surface 类型无效：{surface}。")
         payload = {
             "version": AGENT_UI_BUILD_CONTRACT_VERSION,
-            "mode": "mock",
+            "mode": "runtime",
             "pageId": page_id,
             "agentId": agent_id,
             "surface": surface,
@@ -81,10 +82,9 @@ def project_agent_ui_build_contracts(
             "component": component[0],
             "componentPath": component[1],
             "configTypeModule": AGENT_UI_CONFIG_TYPE_MODULE,
-            "mockAdapterPath": AGENT_UI_MOCK_ADAPTER_PATH,
+            "runtimeAdapterPath": AGENT_UI_RUNTIME_ADAPTER_PATH,
             "skillPath": AGENT_UI_SKILL_PATH,
             "runtimeAgentId": agent_id,
-            "mockExemptEndpointIds": [],
             "config": config,
         }
         result[page_id] = {**payload, "sha256": _stable_hash(payload)}
@@ -111,67 +111,8 @@ def agent_ui_contract_from_source_refs(
 
 
 def task_agent_ui_contract(task: dict[str, Any]) -> dict[str, Any]:
-    """读取任务上由平台注入的 Agent UI Mock 合同。"""
+    """读取任务上由平台注入的正式 Agent UI 合同。"""
 
     return agent_ui_contract_from_source_refs(task.get("source_refs"))
 
 
-def apply_agent_ui_delivery_boundary(
-    build_summary: dict[str, Any],
-    tasks: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """把含 Agent UI Mock 的完成态收敛为真实集成待办态。"""
-
-    contracts = [task_agent_ui_contract(task) for task in tasks]
-    contracts = [contract for contract in contracts if contract.get("mode") == "mock"]
-    if not contracts or build_summary.get("status") != "completed":
-        return dict(build_summary)
-    gateway_endpoint_ids = list(
-        dict.fromkeys(
-            _text(contract.get("gatewayEndpointId"))
-            for contract in contracts
-            if _text(contract.get("gatewayEndpointId"))
-        )
-    )
-    return {
-        **build_summary,
-        "status": "mock_completed",
-        "delivery_boundary": {
-            "agent_ui": "mock_completed",
-            "real_integration": "pending",
-            "gateway_endpoint_ids": gateway_endpoint_ids,
-            "message": "Agent UI Mock 已完成，可用于页面预览；真实 Runtime 集成仍待完成。",
-        },
-    }
-
-
-def agent_ui_integration_pending(state: dict[str, Any]) -> bool:
-    """从服务端任务合同或构建摘要判断真实 Agent UI 集成是否仍待完成。"""
-
-    tasks = _dict_items(state.get("tasks"))
-    if any(task_agent_ui_contract(task).get("mode") == "mock" for task in tasks):
-        return True
-    summary = state.get("build_summary")
-    summary = summary if isinstance(summary, dict) else {}
-    boundary = summary.get("delivery_boundary")
-    return isinstance(boundary, dict) and boundary.get("real_integration") == "pending"
-
-
-def agent_ui_integration_pending_result() -> dict[str, Any]:
-    """生成无确认动作的真实集成待办状态，阻止继续进入 Launch/Acceptance。"""
-
-    message = "Agent UI Mock 已完成，可用于页面预览；真实 Runtime 集成仍待完成。"
-    return {
-        "phase": "build",
-        "status": "requires_user_input",
-        "accepted": False,
-        "message": message,
-        "clarification": {
-            "mode": "agent_ui_integration_pending",
-            "status": "requires_user_input",
-            "message": message,
-            "questions": [],
-            "actionValues": [],
-        },
-        "timeline": ["build"],
-    }

@@ -12,6 +12,7 @@ from app.services.agent_runtime_template_policy import load_agent_runtime_templa
 from app.services.build_result_coordinator import create_agent_task_results
 from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys, agent_invocation
 from app.services.runtime_agent_module_policy import module_source_refs, module_task_errors
+from app.services.runtime_agent_editable_config import compile_agent_prompt
 
 
 def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
@@ -35,7 +36,9 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
     return {
         "task_id": task["id"], "agentId": contract["agentId"], "module": module,
         "identity": {key: contract[key] for key in ("name", "purpose")},
+        "formalAgentIds": sorted(agent_contract_index(plan)),
         "configuration": deepcopy(contract["agentSettings"][module]),
+        "resolvedSystemPrompt": compile_agent_prompt(contract["agentSettings"]["prompt"]),
         "description": task.get("description"), "target_files": targets,
         "change_scope": changes, "module_policy": policy["modulePaths"][module],
         "invocation": agent_invocation(contract["agentId"]),
@@ -68,6 +71,11 @@ def generate_agent_modules_with_deep_agent(
         prompt = (
             "Implement only the approved Agent module packet. Read module_policy.readPaths and the "
             "actual target files first. Reuse the existing DeepAgents factory, injected project model, "
+            "Preserve existing implemented builders for other formalAgentIds. Register only actual implementations; "
+            "do not generate placeholders for other Agents. Remove the template chat registration when formal business Agents exist. "
+            "Use resolvedSystemPrompt exactly for the prompt module; it already composes persona, tone and constraints. "
+            "For model.generation.temperature, use a local model.model_copy(update={\"temperature\": value}); "
+            "otherwise pass the injected model unchanged. Never mutate the shared project model. "
             "trusted RuntimeContext, checkpoint and AG-UI lifecycle. Do not create a second model, "
             "server, workflow, database, user system or per-Agent wrapper. Memory must remain isolated "
             "by trusted Principal/thread. Tools import only the declared ApplicationService behind the "

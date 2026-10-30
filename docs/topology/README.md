@@ -2,14 +2,13 @@
 
 本目录从 `dev_agent_integration_0922_back@aa9e3375` 搬入，目标基线为 `dev_agent_integration_1028@43b1f11d`。与新版冲突时采用新版当前合同；基础类型迁入不等于功能可用。
 
-- [搬运顺序与状态](AGENT_RUNTIME_PORT_1028.md)：本次实施入口、裁决和未完成事项。
+- [Agent 流式接口与开发流程详细设计](agent-runtime-direct/AGENT_STREAMING_DEVELOPMENT_DESIGN.md)：待评审的目标设计，尚未实施。
 - [统一拓扑架构](APPLICATION_TOPOLOGY_DESIGN.md)：显式选择、正式事实和阶段边界。
 - [拓扑实现模板](TOPOLOGY_IMPLEMENTATION_TEMPLATE.md)：Definition 与交付顺序。
 - [重构决策记录](TOPOLOGY_REFACTOR_REVIEW.md)：保留和舍弃的旧设计。
 - [Runtime Direct 整体设计](agent-runtime-direct/AGENT_RUNTIME_DIRECT_DESIGN.md)。
 - [正式合同](agent-runtime-direct/AGENT_RUNTIME_DIRECT_CONTRACTS.md)。
 - [构建与运行](agent-runtime-direct/AGENT_RUNTIME_DIRECT_BUILD_RUNTIME.md)。
-- [1028 模板生产／消费端接入清单](agent-runtime-direct/AGENT_RUNTIME_TEMPLATE_ENGINE_1028.md)。
 - [安全与调试](agent-runtime-direct/AGENT_RUNTIME_DIRECT_SECURITY_DEBUG.md)。
 
 本次只搬运 Agent Runtime Direct 设计，不将 Gateway 或独立 Java 拓扑标记为已实现。内置数据库以 [现行整体方案](../BUILTIN_DATASOURCE_OVERALL_REVIEW.md) 为准；Runtime 接入复用其注册、建表、检查和取密合同。

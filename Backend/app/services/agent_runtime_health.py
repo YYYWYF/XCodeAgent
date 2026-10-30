@@ -17,7 +17,9 @@ def allocate_runtime_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def runtime_health(url: str, launch_id: str, *, database_required: bool, health_path: str = "/health") -> tuple[bool, str]:
+def runtime_health(url: str, launch_id: str, *, database_required: bool, health_path: str = "/health",
+                   expected_agent_ids: list[str] | None = None, profile: str = "preview",
+                   allowed_agent_ids: list[str] | None = None) -> tuple[bool, str]:
     """校验本轮启动身份和模板健康合同，拒绝其他服务占用端口时误判成功。"""
 
     if not launch_id:
@@ -33,6 +35,15 @@ def runtime_health(url: str, launch_id: str, *, database_required: bool, health_
     if not isinstance(payload, dict) or payload.get("service") != "agent-runtime" or payload.get("launchId") != launch_id:
         return False, "Runtime 健康响应缺少当前 launchId 或服务身份，请同步模板启动合同。"
     checks = payload.get("checks")
+    if payload.get("profile") != profile:
+        return False, "Runtime 健康响应的运行 Profile 与本次启动不一致。"
+    if expected_agent_ids is not None:
+        actual = payload.get("agentIds")
+        if not isinstance(actual, list) or any(not isinstance(item, str) for item in actual) or len(set(actual)) != len(actual):
+            return False, "Runtime 健康响应缺少有效的 Agent 注册集合。"
+        if (allowed_agent_ids is None and set(actual) != set(expected_agent_ids)
+                or allowed_agent_ids is not None and (not set(expected_agent_ids).issubset(actual) or set(actual) - set(allowed_agent_ids))):
+            return False, "Runtime 实际注册的 Agent 与当前正式合同不一致。"
     if not isinstance(checks, dict):
         return False, "Runtime 健康响应缺少 checks。"
     expected = {"businessApi": "ready", "agUi": "ready", "anonymousSession": "ready",
@@ -43,7 +54,9 @@ def runtime_health(url: str, launch_id: str, *, database_required: bool, health_
     return True, "Runtime 健康、业务路由、AG-UI、匿名会话及数据库检查通过。"
 
 
-def wait_runtime_ready(process: subprocess.Popen, url: str, launch_id: str, *, database_required: bool) -> tuple[bool, str, bool]:
+def wait_runtime_ready(process: subprocess.Popen, url: str, launch_id: str, *, database_required: bool,
+                       expected_agent_ids: list[str] | None = None, profile: str = "preview",
+                       allowed_agent_ids: list[str] | None = None) -> tuple[bool, str, bool]:
     """在固定时间内等本轮进程稳定就绪，取消或提前退出立即返回，不重新启动。"""
 
     from app.services.run_workers import current_run_id
@@ -55,7 +68,8 @@ def wait_runtime_ready(process: subprocess.Popen, url: str, launch_id: str, *, d
             return False, "本次 Runtime 启动已取消。", False
         if process.poll() is not None:
             return False, f"Runtime 提前退出，退出码 {process.returncode}，请查看完整启动日志。", False
-        ready, message = runtime_health(url, launch_id, database_required=database_required)
+        ready, message = runtime_health(url, launch_id, database_required=database_required,
+                                       expected_agent_ids=expected_agent_ids, profile=profile, allowed_agent_ids=allowed_agent_ids)
         now = time.monotonic()
         stable_since = (stable_since if stable_since is not None else now) if ready else None
         if stable_since is not None and now - stable_since >= 2:

@@ -1,11 +1,47 @@
 """验证真实 DeepAgents 工厂七模块参数，不将合同副本或模块禁用声明当作实现。"""
 
 import ast
+from pydantic import ValidationError
 
 from app.services.business_acceptance_verifiers.python_ast import PythonProgram, PythonEvidenceUnavailable, UNKNOWN, active_nodes, result_for
 from app.services.business_acceptance_verifiers.python_endpoint import trusted_context_names, call_receives_context, layer_call, route_records, service_identity
 from app.services.business_acceptance_verifiers.python_agent_context import verify_memory_wiring, verify_context_wiring
 from app.services.business_acceptance_verifiers.python_agent_binding import registered_factory, factory_input
+from app.services.business_acceptance_verifiers.python_tool_confirmation import tool_context_expressions, write_confirmation_errors
+from app.services.business_acceptance_verifiers.python_agent_resources import verify_agent_resources
+from app.services.runtime_agent_editable_config import compile_agent_prompt, ProjectModelSettings
+
+
+def _model_input(program, unit, function, factory, config, errors, blocked):
+    """追踪局部模型副本并验证 Temperature，只允许项目模型身份和凭据原样继承。"""
+
+    try:
+        settings = ProjectModelSettings.model_validate(config)
+    except ValidationError:
+        blocked.append("模型模块包含未支持的正式参数。")
+        return unit, function, None
+    expression = program.expand(unit, program.keyword(factory, "model"), function)
+    copied = isinstance(expression, ast.Call) and isinstance(expression.func, ast.Attribute) and expression.func.attr == "model_copy"
+    if copied:
+        updates = program.value(unit, program.keyword(expression, "update"), function)
+        if expression.args or len(expression.keywords) != 1 or not isinstance(updates, dict) or set(updates) != {"temperature"}:
+            blocked.append("Agent 模型副本只允许覆盖 Temperature。")
+            return unit, function, None
+        if settings.generation is None or updates["temperature"] != settings.generation.temperature:
+            errors.append("实际 Temperature 与正式 Agent 配置不一致。")
+        source = expression.func.value
+        # 同一共享实例的属性写入不能以随后创建副本掩盖。
+        source_name = source.id if isinstance(source, ast.Name) else None
+        if any(isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
+               and isinstance(node.value, ast.Name) and node.value.id == source_name for node in active_nodes(function)):
+            errors.append("Agent 直接修改了共享项目模型。")
+        expression = program.expand(unit, source, function)
+    elif settings.generation is not None:
+        errors.append("Agent 未通过模型副本应用正式 Temperature。")
+    if isinstance(expression, ast.Name) and expression.id == "model":
+        return factory_input(program, unit, function, ast.Call(func=factory.func, args=[],
+                             keywords=[ast.keyword(arg="model", value=expression)]), "model")
+    return unit, function, expression
 
 
 def _factory(program: PythonProgram, expected: dict) -> tuple:
@@ -32,7 +68,7 @@ def _factory(program: PythonProgram, expected: dict) -> tuple:
 def _model(program, unit, function, factory, config, errors, blocked) -> None:
     """检查返回模型的工厂调用实际读取项目 Settings，不允许模型名字符串绕过注入。"""
 
-    unit, function, node = factory_input(program, unit, function, factory, "model")
+    unit, function, node = _model_input(program, unit, function, factory, config, errors, blocked)
     if not isinstance(node, ast.Call):
         blocked.append("Agent 的 model 未绑定可解析的模型工厂调用。")
         return
@@ -63,8 +99,6 @@ def _model(program, unit, function, factory, config, errors, blocked) -> None:
         if not any(isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id in settings_names
                    for node in active_nodes(creator)):
             blocked.append("无法证明模型构造使用模板 app.settings 的项目注入配置。")
-    if set(config) != {"source"}:
-        blocked.append("模型模块包含额外正式参数，需逐参数装配适配后才能通过。")
 
 
 def _tools(program, unit, function, factory, expected, errors, blocked) -> None:
@@ -110,9 +144,10 @@ def _tools(program, unit, function, factory, expected, errors, blocked) -> None:
         if not record:
             continue
         owner, tool = record
-        contexts = trusted_context_names(program, owner, tool)
+        contexts = tool_context_expressions(program, owner, tool)
         service_calls = [call for call in program.return_calls(owner, tool) if layer_call(program, owner, tool, call, "service")]
-        if not any(call_receives_context(call, contexts) for call in service_calls):
+        if not any(any(ast.dump(value) in contexts for value in [*call.args, *(keyword.value for keyword in call.keywords)])
+                   for call in service_calls):
             blocked.append(f"Tool {tool.name} 无法证明沿可信 RuntimeContext 调用正式 ApplicationService。")
         endpoint = next((endpoint for endpoint in expected.get("tool_endpoints") or []
                          if (endpoint["api_contract_id"], endpoint["endpoint_id"]) == (binding["apiContractId"], binding["endpointId"])), None)
@@ -129,7 +164,7 @@ def _tools(program, unit, function, factory, expected, errors, blocked) -> None:
         if len(endpoint_services) != 1 or tool_services != endpoint_services:
             errors.append(f"Tool {tool.name} 未委托与正式 Endpoint 相同的唯一 ApplicationService 方法。")
         if endpoint["method"] not in {"GET", "HEAD", "OPTIONS"}:
-            blocked.append(f"写 Tool {tool.name} 需证明显式确认后的授权控制流，不能以出现 interrupt 调用作为证明。")
+            errors.extend(write_confirmation_errors(program, owner, tool, service_calls, binding["toolId"]))
 
 
 def verify_agent_module(files: dict, expected: dict) -> dict:
@@ -140,37 +175,21 @@ def verify_agent_module(files: dict, expected: dict) -> dict:
     module, config = expected["module"], expected["configuration"]
     errors, blocked = [], []
     if module == "prompt":
+        try:
+            expected_prompt = compile_agent_prompt(config)
+        except ValidationError:
+            return result_for([], ["提示词模块包含未支持的正式字段。"])
         prompt = program.value(unit, program.keyword(factory, "system_prompt"), function)
         if prompt is UNKNOWN:
             blocked.append("system_prompt 为动态值，无法证明正式提示词实际传入工厂。")
-        elif prompt != config["systemPrompt"]:
+        elif prompt != expected_prompt:
             errors.append("实际 system_prompt 与当前正式提示词不一致。")
-        if set(config) != {"systemPrompt"}:
-            blocked.append("提示词模块包含额外设置，尚无对应装配适配。")
     elif module == "model":
         _model(program, unit, function, factory, config, errors, blocked)
     elif module == "tools":
         _tools(program, unit, function, factory, expected, errors, blocked)
     elif module in {"skills", "knowledge"}:
-        key = "skills" if module == "skills" else "middleware"
-        node = program.keyword(factory, key)
-        value = program.value(unit, node, function) if node is not None else None
-        if config["enabled"]:
-            blocked.append(f"启用 {module} 需要证明文件/检索器可达和实际调用，当前动态资源装配不能静态放行。")
-        elif value not in (None, []):
-            if value is UNKNOWN:
-                blocked.append(f"无法证明禁用的 {module} 没有残留装配。")
-            else:
-                errors.append(f"{module}.enabled=false 但工厂仍有相关装配。")
-        if module == "knowledge" and not config["enabled"] and value in (None, []):
-            tools_expected = {**expected, "configuration": expected["tools_configuration"]}
-            _tools(program, unit, function, factory, tools_expected, errors, blocked)
-            # 所有实际工具必须属于正式业务 Tool 白名单；不能通过额外检索工具绕开禁用开关。
-            for call in program.calls(function):
-                if program.symbol(unit, call.func).startswith("app.knowledge."):
-                    errors.append("knowledge.enabled=false 但工厂仍调用知识模块。")
-        if set(config) != {"enabled"}:
-            blocked.append(f"{module} 模块包含额外设置，需逐项验收。")
+        errors, blocked = verify_agent_resources(program, files, unit, function, factory, module, config)
     elif module == "memory":
         errors, blocked = verify_memory_wiring(program, unit, function, factory, config)
     elif module == "context":

@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.main.technical_plan_language import repair_technical_plan_chinese_prose
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
+from app.agents.main.technical_plan_agent_contracts import TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT
 from app.agents.main.technical_plan_editor import (
     TechnicalPlanCandidateError,
     edit_technical_plan_with_agent,
@@ -259,25 +260,9 @@ def _technical_planning_prompt(
     )
     return (
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
-        "The object has architecture, entities, api_contracts, and pages. Only when confirmed "
-        "business requirements explicitly require an executable conversational Agent, also include "
-        "agent_contracts. Do not infer an Agent from an application name or generic CRUD behavior. "
-        "agent_contracts is an array, one record per business Agent, with exactly agentId "
-        "(unique lower_snake_case, never runtime), name, purpose, pageIds (existing page IDs), "
-        "and preserve agentId/name/purpose from confirmed_product_plan.agents exactly. pageIds must "
-        "equal the ordered pageActionBindings whose surface.enabled is true; never restore a disabled "
-        "floating panel. Omit agents whose non-empty candidate entryPageIds are all disabled. "
-        "and agentSettings. agentSettings has exactly seven object keys: prompt, model, memory, "
-        "tools, skills, knowledge, context. prompt.systemPrompt must be substantive Chinese "
-        "instructions; model.source must be project (inherit injected model, never credentials); "
-        "memory describes trusted Principal/thread isolation and template checkpoint reuse; "
-        "tools has enabled:boolean and bindings:[] with each binding containing exactly toolId, "
-        "apiContractId, endpointId from current API contracts. Tools reuse local ApplicationServices, "
-        "not a new public endpoint. skills and knowledge each have an explicit enabled:boolean "
-        "and only declared resource requirements; context describes required trusted inputs and "
-        "missing-input behavior. Disabled modules are still present. Never include any model or "
-        "database secret. These facts are reviewed in the same TechnicalPlan; do not choose a "
-        "topology or change application switches. Architecture is selected separately by the user.\n\n"
+        "The object has architecture, entities, api_contracts, and pages, plus optional agent_contracts. "
+        "Do not infer an Agent from an application name or generic CRUD behavior.\n"
+        f"{TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT}\n"
         f"{TECHNICAL_PLAN_LANGUAGE_REQUIREMENT}\n"
         "Field definitions:\n"
         "1. architecture is a technical summary. frontend describes the client form and communication style; "
@@ -957,6 +942,7 @@ def plan_project_with_chat_model(
         agent_plan = _parse_technical_plan_model_output(json.dumps(
             edit_technical_plan_with_agent(
                 requirement_spec, existing_plan, settings=settings, on_token=on_token,
+                allow_unchanged=bool(requirement_spec.get("technical_plan_validation_repair")),
             ), ensure_ascii=False,
         ))
         return _materialize_technical_plan_candidate(

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Button, Card, Grid, Space, Tag, theme } from 'antd'
 import { CloseOutlined, FullscreenOutlined, RobotOutlined } from '@ant-design/icons'
 import type { AgentConversationAdapter, AgentUiTemplateConfig } from '@/typings/agentConversation'
-import { AgentChatCore, createMockAgentConversationAdapter } from './AgentChatCore'
+import { AgentChatCore, createAgentConversationAdapter } from './AgentChatCore'
 import { agentIconCompatibilityProps } from './iconCompatibility'
 import { AGENT_CONVERSATION_STYLES, createAgentUiCssVariables } from './styles'
 
@@ -118,12 +118,13 @@ export function AgentFloatingPanel({
 }: AgentFloatingPanelProps): React.ReactElement {
   const { token } = theme.useToken()
   const activeAdapter = React.useMemo(
-    () => adapter ?? createMockAgentConversationAdapter(config),
+    () => adapter ?? createAgentConversationAdapter(config),
     [adapter, config]
   )
   const screens = Grid.useBreakpoint()
   const compact = !screens.md
   const [open, setOpen] = useState(false)
+  const [threadId, setThreadId] = useState<string>()
   const launcher = useRef<HTMLButtonElement>(null)
   const { position, dragHandlers, consumeSuppressedClick } = useFloatingPosition(compact)
 
@@ -148,7 +149,8 @@ export function AgentFloatingPanel({
     return () => window.removeEventListener('keydown', handleEscape)
   }, [closePanel, open])
 
-  const chat = <AgentChatCore adapter={activeAdapter} config={config} />
+  const chat = <AgentChatCore adapter={activeAdapter} config={config} threadId={threadId}
+    onThreadCreated={(thread) => setThreadId(thread.id)} />
   return (
     <div
       className="x-agent-ui x-agent-floating"
@@ -191,7 +193,7 @@ export function AgentFloatingPanel({
               />
             </Space>
           }
-          title={<Space><span>{config.name}</span><Tag color="processing">模拟运行</Tag></Space>}
+          title={<Space><span>{config.name}</span><Tag color="processing">{config.runtime ? 'Agent Runtime' : '模拟运行'}</Tag></Space>}
         >
           {chat}
         </Card>

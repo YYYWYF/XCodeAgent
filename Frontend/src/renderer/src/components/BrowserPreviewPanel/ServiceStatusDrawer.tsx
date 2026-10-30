@@ -11,7 +11,7 @@ import { Alert, Button, Drawer, Tabs } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload } from '../../service/previewRuntime'
-import ServiceStatusCards, { serviceLabel, serviceLayers, statusMeta } from './ServiceStatusCards'
+import ServiceStatusCards, { serviceLabel, visibleServiceLayers, statusMeta } from './ServiceStatusCards'
 import type { ServiceLayer } from './ServiceStatusCards'
 import { previewServiceActionAvailability, previewServiceLaunchLabel } from './serviceStatusPolicy'
 import DatabaseCheckPanel from './DatabaseCheckPanel'
@@ -37,11 +37,14 @@ export type ServiceStatusControl = {
 /** 展示主题化的服务状态、维护动作和前后端独立日志。 */
 export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactElement {
   const { snapshot, blockedReason, busy } = props
-  const [tab, setTab] = useState<ServiceLayer>('frontend')
+  const [selectedTab, setTab] = useState<ServiceLayer>('frontend')
   const [following, setFollowing] = useState(true)
   const { copied, copyError, copyLogs } = useServiceLogClipboard()
   const [logsExpanded, setLogsExpanded] = useState(false)
   const runtime = snapshot?.runtime
+  const serviceLayers = visibleServiceLayers(runtime)
+  // 切换应用或拓扑后立即回到可见页签，避免短暂展示另一类服务的旧日志。
+  const tab = serviceLayers.includes(selectedTab) ? selectedTab : 'frontend'
   const logs = runtime?.logs?.[tab] || []
   const content = logs
     .map(
@@ -217,7 +220,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
           <ServiceLogContent
             key={`${runtime?.attemptId || ''}:${tab}`}
             content={content}
-            label={`${tab === 'frontend' ? '前端' : '后端'}启动日志`}
+            label={`${serviceLabel(tab)}启动日志`}
             following={following}
             expanded={logsExpanded}
             onPauseFollowing={() => setFollowing(false)}

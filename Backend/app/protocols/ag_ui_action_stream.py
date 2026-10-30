@@ -30,6 +30,7 @@ class AgUiActionResult:
 
     data: dict[str, Any]
     message: str
+    transient_events: tuple[tuple[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ def build_ag_ui_action_stream(
 
         current_task = asyncio.current_task()
         operation_task: asyncio.Task[AgUiActionResult] | None = None
+        transient_events: tuple[tuple[str, Any], ...] = ()
         yield encoder.encode(RunStartedEvent(threadId=thread_id, runId=run_id))
         yield encoder.encode(
             TextMessageStartEvent(messageId=message_id, role="assistant")
@@ -226,6 +228,7 @@ def build_ag_ui_action_stream(
                 **result.data,
             }
             message = result.message
+            transient_events = result.transient_events
         except Exception as exc:
             response_payload = {
                 "schemaVersion": 1,
@@ -246,6 +249,9 @@ def build_ag_ui_action_stream(
                 workflow_run_registry.unregister(run_id, current_task)
 
         safe_payload = jsonable_encoder(response_payload)
+        # 一次性调试凭据只交给本次流消费者，不进入快照和运行结果。
+        for name, value in transient_events:
+            yield encoder.encode(CustomEvent(name=name, value=jsonable_encoder(value)))
         yield encoder.encode(CustomEvent(name=event_name, value=safe_payload))
         yield encoder.encode(StateSnapshotEvent(snapshot={state_key: safe_payload}))
         yield encoder.encode(

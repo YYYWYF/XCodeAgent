@@ -58,10 +58,12 @@ def launch_runtime(
 
 
 def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings: Settings | None,
-                           skip_install: bool, probe_root: Path | None = None) -> dict:
+                           skip_install: bool, probe_root: Path | None = None, debug: dict | None = None,
+                           target_agent_id: str | None = None) -> dict:
     """仅记录脱敏命令日志和进程事实，所有失败进入现有预览结果合同。"""
 
-    runtime_root = probe_root if probe_root is not None else runtime_directory(root)
+    profile = "probe" if probe_root is not None else "debug" if debug is not None else "preview"
+    runtime_root = probe_root if probe_root is not None else runtime_directory(root, profile=profile)
     runtime_root.mkdir(parents=True, exist_ok=True)
     environment, process, log_threads = {}, None, []
     category = "agent_runtime_validation"
@@ -71,7 +73,7 @@ def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings
     try:
         validate_runtime_launch(root)
         input_digest = runtime_source_fingerprint(root)
-        stopped = stop_runtime(root) if probe_root is None else {"status": "stopped"}
+        stopped = stop_runtime(root, profile=profile) if probe_root is None else {"status": "stopped"}
         if stopped.get("status") == "failed":
             raise RuntimeError(stopped["message"])
         uv = resolve_runtime_uv()
@@ -92,6 +94,15 @@ def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings
         launch_id = uuid4().hex
         port = allocate_runtime_port()
         environment = build_runtime_environment(root, port=port, launch_id=launch_id, snapshot=snapshot, settings=settings)
+        from app.services.runtime_agent_contracts import agent_contract_index
+
+        agent_ids = sorted(agent_contract_index(runtime_check_plan(root, {}))) or ["chat"]
+        if target_agent_id is not None and target_agent_id not in agent_ids:
+            raise ValueError("当前正式技术规划不存在所选 Agent。")
+        if debug is not None:
+            environment.update({"AGENT_RUNTIME_PROFILE": "debug", "AGENT_RUNTIME_NAMESPACE": "debug:" + launch_id,
+                "AGENT_RUNTIME_DEBUG_TOKEN": debug["token"], "AGENT_RUNTIME_DEBUG_EXPIRES_AT": str(debug["expiresAt"]),
+                "AGENT_RUNTIME_ALLOWED_ORIGINS": debug["origins"]})
         if input_digest != runtime_source_fingerprint(root):
             raise ValueError("Runtime 源码、依赖、模型或当前应用设计已变化，请重新启动。")
         if probe_root is not None:
@@ -111,15 +122,17 @@ def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings
         process = workspace_process_registry.start(root, argv, cwd=root / "agent-runtime", env=environment,
                                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if probe_root is None:
-            register_runtime(root, process)
+            register_runtime(root, process, profile=profile)
         log_threads = attach_redacted_logs(process, stdout, stderr, environment)
         url = f"http://127.0.0.1:{port}"
-        passed, message, timed_out = wait_runtime_ready(process, url, launch_id, database_required=database_required)
+        passed, message, timed_out = wait_runtime_ready(process, url, launch_id, database_required=database_required,
+                                                      expected_agent_ids=[target_agent_id] if target_agent_id else agent_ids, profile=profile,
+                                                      allowed_agent_ids=agent_ids if target_agent_id else None)
         execution["timed_out"] = timed_out
         if not passed:
             raise RuntimeError(message)
         result.update(status="running", message=message, preview_url=url, failed_stage=None,
-                      launch_id=launch_id, database_required=database_required,
+                      launch_id=launch_id, database_required=database_required, agent_ids=agent_ids,
                       server={"pid": process.pid, "port": port, "ready": True, "command": " ".join(argv)})
         if probe_root is not None:
             terminate_runtime_process(root, process)
@@ -142,7 +155,7 @@ def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings
             execution.update(returncode=exc.returncode, timed_out=exc.timed_out)
         if process is not None:
             if probe_root is None:
-                cleanup = stop_runtime(root)
+                cleanup = stop_runtime(root, profile=profile)
             else:
                 try:
                     terminate_runtime_process(root, process)
@@ -171,12 +184,12 @@ def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings
         return result
 
 
-def check_runtime_startup(root: Path, log_root: Path) -> dict:
+def check_runtime_startup(root: Path, log_root: Path, *, agent_id: str | None = None) -> dict:
     """用独立端口和 namespace 验收并回收临时进程，不替换正在运行的预览。"""
 
     with backend_launch_lock(root):
         return _launch_runtime_locked(root, on_progress=None, settings=None, skip_install=True,
-                                      probe_root=log_root / "backend_startup" / uuid4().hex)
+                                      probe_root=log_root / "backend_startup" / uuid4().hex, target_agent_id=agent_id)
 
 
 def _install(root: Path, runtime_root: Path, uv: str) -> None:

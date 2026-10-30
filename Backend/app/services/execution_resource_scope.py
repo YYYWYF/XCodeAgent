@@ -12,6 +12,7 @@ from app.domain.application_lifecycle import (
 )
 from app.services.entity_definitions import contract_data_source_id
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
+from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys, scoped_agent_ids
 
 
 def resolve_execution_resource_claims(
@@ -27,24 +28,23 @@ def resolve_execution_resource_claims(
         return [_claim(ExecutionResourceType.APPLICATION, "application", primary=True)]
 
     plan = project_plan if isinstance(project_plan, dict) else {}
+    if target_type == "agent":
+        scoped_agent_ids(plan, target_type, target_id)
+        claims = [_claim(ExecutionResourceType.AGENT, target_id, primary=True),
+                  _claim(ExecutionResourceType.AGENT, "runtime")]
+        for api_id, endpoint_id in agent_endpoint_keys(agent_contract_index(plan)[target_id]):
+            claims.extend(_endpoint_claims(plan, endpoint_id, api_id))
+        # 保留远端关联页面资源与本地共享 Runtime 工厂占用，避免两类开发相互覆盖。
+        claims.extend(_claim(ExecutionResourceType.PAGE, page_id)
+                      for page_id in agent_contract_index(plan)[target_id]["pageIds"])
+        return _deduplicated_claims(claims)
     if target_type == "page":
-        from app.services.runtime_agent_contracts import scoped_agent_ids
         claims = _page_claims(plan, target_id)
         for agent_id in scoped_agent_ids(plan, "page", target_id):
             claims.extend(resolve_execution_resource_claims(plan, {"type": "agent", "targetId": agent_id}))
         return _deduplicated_claims(claims)
     if target_type == "data_source":
         return _data_source_claims(plan, target_id)
-    if target_type == "agent":
-        from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
-        agent = agent_contract_index(project_plan).get(target_id)
-        if agent is None:
-            raise ValueError(f"当前技术规划不包含智能体：{target_id}。")
-        claims = [_claim(ExecutionResourceType.AGENT, target_id, primary=True)]
-        for contract_id, endpoint_id in agent_endpoint_keys(agent):
-            claims.extend(_endpoint_claims(project_plan, endpoint_id, contract_id))
-        claims.extend(_claim(ExecutionResourceType.PAGE, page_id) for page_id in agent["pageIds"])
-        return _deduplicated_claims(claims)
     if target_type == "endpoint":
         return _endpoint_claims(
             plan,

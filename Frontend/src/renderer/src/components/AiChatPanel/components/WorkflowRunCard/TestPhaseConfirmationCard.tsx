@@ -71,7 +71,7 @@ export default function TestPhaseConfirmationCard({
                   {item.type === 'page' ? '页面' : item.type === 'entity' ? '实体' : item.type === 'agent' ? '智能体' : '接口'}
                 </span>
                 <span className={cx('workflow-test-phase-confirmation-name')}>
-                  {item.type === 'page'
+                  {item.type === 'agent' ? item.agentId : item.type === 'page'
                     ? item.pageId
                     : item.type === 'entity'
                       ? item.entityId

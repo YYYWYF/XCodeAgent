@@ -122,6 +122,8 @@ def run_integration_checks(
     # 避免后端骨架模板触发环境级阻塞（如 macOS 未注册 JRE）。
     if runtime_plan is not None and "backend" in selected_layers:
         backend_results = run_python_runtime_checks(
+            agent_id=(state.get("build_execution_scope") or {}).get("targetId")
+                if (state.get("build_execution_scope") or {}).get("type") == "agent" else None,
             root=root, log_root=log_root, phase=phase, include_unit_tests=phase == "all",
             include_startup=include_backend_startup,
             unit_tests_affected=backend_unit_tests_affected,

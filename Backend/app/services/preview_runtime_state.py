@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from app.services.preview_runtime_guard import maintenance_owner
+from app.services.preview_runtime_topology import preview_topology_type
 
 
 _lock = RLock()
@@ -188,7 +189,8 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
             server = part.get("server") or {}
             value[layer] = {"status": part.get("status", "stopped"), "message": redact(str(part.get("message") or ("未启动：后端启动失败" if layer == "frontend" and result.get("status") == "failed" else ""))), "pid": server.get("pid"), "port": _coerce_port(server.get("port") or part.get("port")) or _port_from_url(part.get("preview_url")), "url": part.get("preview_url"), "command": str(server.get("command") or ""), "ready": server.get("ready", False)}
             if layer == "agent_runtime":
-                value[layer].update(launchId=part.get("launch_id"), databaseRequired=part.get("database_required", False))
+                value[layer].update(launchId=part.get("launch_id"), databaseRequired=part.get("database_required", False),
+                                    agentIds=part.get("agent_ids"))
         write_record(workspace, value)
 
 
@@ -263,6 +265,7 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
         if logs:
             value["logs"] = read_logs(workspace)
     root = runtime_root(workspace)
+    value["topologyType"] = preview_topology_type(workspace)
     for layer in ("frontend", "backend", "agent_runtime"):
         part = value.get(layer) or {"status": "stopped"}
         value[layer] = part
@@ -279,7 +282,8 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                 from app.utils.process_liveness import pid_is_running
                 if not pid_is_running(pid):
                     raise ProcessLookupError()
-                pid_path = root / f"{layer}.pid"
+                # Runtime 启动器写入连字符文件名，状态读取必须使用同一当前合同。
+                pid_path = root / ("agent-runtime.pid" if layer == "agent_runtime" else f"{layer}.pid")
                 if not pid_path.is_file() or int(pid_path.read_text().strip()) != pid:
                     raise ProcessLookupError()
                 if layer == "frontend":
@@ -301,7 +305,8 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                     if not port or not runtime_pid_is_current(Path(workspace).resolve(), pid):
                         raise ProcessLookupError()
                     ready, reason = runtime_health(f"http://127.0.0.1:{port}", str(part.get("launchId") or ""),
-                                                   database_required=bool(part.get("databaseRequired")))
+                                                   database_required=bool(part.get("databaseRequired")),
+                                                   expected_agent_ids=part.get("agentIds"))
                     if not ready:
                         health_reason = reason
                         raise ProcessLookupError()

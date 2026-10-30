@@ -13,7 +13,7 @@
   max-width: 55%;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   box-sizing: border-box;
   border-right: 1px solid var(--wb-border);
   // 目录侧用浅灰底与右侧内容区（--wb-canvas 白/深）拉开层次，与 prototype 的
@@ -51,6 +51,13 @@
       flex-shrink: 0;
     }
   }
+}
+
+.@{class-prefix}-runtime-agent-outline {
+  padding: 12px;
+  border-top: 1px solid var(--wb-border);
+  color: var(--wb-text);
+  > .ant-btn { margin-top: 8px; }
 }
 
 .@{class-prefix}-development-artifacts-detail {

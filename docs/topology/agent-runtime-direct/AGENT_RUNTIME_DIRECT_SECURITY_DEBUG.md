@@ -2,7 +2,7 @@
 
 > 2026-10-28 搬运裁决：以 `dev_agent_integration_1028` 当前合同为准。应用配置、内置数据库、Template Engine、正式产物确认、恢复及资源锁均沿用新版；本文描述的 Runtime 扩展在完成对应阶段前不代表已经可用。
 
-> 状态：迁入 1028 的目标设计；功能交付进度以 [搬运记录](<../AGENT_RUNTIME_PORT_1028.md>) 为准
+> 状态：迁入 1028 的目标设计；本文不作为功能交付完成证明。
 > 核心边界：业务 API、Agent 与运行状态共享可信 Principal；Authorization 只有在 Python 模板提供正式 capability 时才允许开启
 
 ## 1. 安全模型

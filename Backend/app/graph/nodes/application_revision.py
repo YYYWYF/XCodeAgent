@@ -7,6 +7,7 @@ from app.agents.main.technical_plan_language import validate_technical_plan_chin
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from app.graph.state import ProjectState
 from app.services.generated_document_inclusion import write_generated_documents
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
+from app.services.technical_plan_topology_selection import rebind_selected_topology, validate_selected_topology
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.application_revision_lifecycle import (
     discard_active_revision,
@@ -278,6 +280,9 @@ def _create_technical_plan_draft(
         technical_input,
         existing_plan=existing,
     )
+    # 正式修订延续已明确选择的架构，模型不能删除或替换隐藏服务边界。
+    artifact = rebind_selected_topology(
+        {**artifact, "topology": deepcopy(existing.get("topology"))}, technical_input["application_config"])
     artifact = bind_plan_entity_tables(artifact, technical_input["application_config"])
     artifact = attach_page_implementation_contracts(artifact, product_plan, ui_designs)
     artifact["confirmation_status"] = "pending_user_confirmation"
@@ -347,7 +352,7 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
                 artifact,
                 {
                     **requirement_spec,
-                    "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
+                    "pages": product_plan.get("pages", []),
                     "confirmed_product_plan": product_plan,
                     "application_config": read_application_config(workspace),
                 },
@@ -356,11 +361,14 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
         )
         synchronized.pop("basedOn", None)
         synchronized = bind_plan_entity_tables(synchronized, read_application_config(workspace))
-        return attach_page_implementation_contracts(
+        synchronized = attach_page_implementation_contracts(
             synchronized,
             product_plan,
             ui_designs,
         )
+        canonical = load_project_plan_json(plans / "technical-plan.json")
+        return rebind_selected_topology(
+            {**synchronized, "topology": deepcopy(canonical.get("topology"))}, read_application_config(workspace))
 
     confirm_revision_draft(
         workspace,
@@ -392,6 +400,7 @@ def _validate_technical_plan(
 ) -> None:
     """复用当前 TechnicalPlan/PIC 校验集合，任何错误都阻止 canonical 提交。"""
 
+    validate_selected_topology(artifact, application)
     runtime = materialize_technical_plan_runtime(
         artifact,
         requirement_spec,

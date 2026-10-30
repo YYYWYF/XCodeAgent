@@ -94,7 +94,7 @@ def run_python_runtime_checks(
     *, root: Path, log_root: Path, phase: str, include_unit_tests: bool,
     include_startup: bool, blocked: bool, on_progress: Callable | None,
     unit_tests_affected: bool,
-    command_result: Callable, missing_result: Callable, skipped_result: Callable,
+    command_result: Callable, missing_result: Callable, skipped_result: Callable, agent_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """顺序执行一次依赖同步、源码解析及 pytest，首个阻塞失败后不执行后续命令。"""
 
@@ -150,7 +150,7 @@ def run_python_runtime_checks(
             if on_progress:
                 on_progress({"status": "running", "check": {"id": "backend_startup", "name": common["name"],
                               "layer": "backend", "language": "python", "required": True}})
-            launch = check_runtime_startup(root, log_root)
+            launch = check_runtime_startup(root, log_root, **({"agent_id": agent_id} if agent_id else {}))
             passed = launch.get("status") == "completed"
             startup = {"id": "backend_startup", "name": common["name"], "layer": "backend", "language": "python",
                        "passed": passed, "skipped": False, "required": True, "blocking": True,

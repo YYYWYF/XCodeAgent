@@ -1375,6 +1375,7 @@ export type ApplicationLifecycle = {
   endedExecutionsCheckedAt?: string
   endedExecutions?: Record<string, { execution: WorkbenchExecution; workspaceUnchanged: boolean }>
   resourceLocks?: {
+    agents?: Record<string, ExecutionResourceLock>
     application?: ExecutionResourceLock
     pages: Record<string, ExecutionResourceLock>
     endpoints?: Record<string, ExecutionResourceLock>

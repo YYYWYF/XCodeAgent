@@ -183,6 +183,7 @@ class ExecutionResourceLocks(ApplicationLifecycleModel):
 
     application: ExecutionResourceLock | None = None
     pages: dict[str, ExecutionResourceLock] = Field(default_factory=dict)
+    agents: dict[str, ExecutionResourceLock] = Field(default_factory=dict)
     api_contracts: dict[str, ExecutionResourceLock] = Field(
         default_factory=dict,
         alias="apiContracts",

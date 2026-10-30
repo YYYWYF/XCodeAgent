@@ -265,6 +265,11 @@ def sync_project_plan_from_markdown(
     """同步 ProjectPlan/TechnicalPlan Markdown，并保留实体设计边界。"""
 
     is_technical_plan = existing_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
+    if is_technical_plan and (
+        not isinstance(requirement_spec.get("application_config"), dict)
+        or not isinstance(requirement_spec.get("confirmed_product_plan"), dict)
+    ):
+        raise ValueError("TechnicalPlan Markdown 同步必须提供当前应用配置和已确认 ProductPlan。")
     synced = _invoke_sync_model(
         artifact_name="TechnicalPlan" if is_technical_plan else "ProjectPlan",
         structured_document=existing_plan,

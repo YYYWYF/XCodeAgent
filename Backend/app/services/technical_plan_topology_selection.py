@@ -19,7 +19,7 @@ def topology_selection_payload() -> dict[str, Any]:
         "topologyOptions": [
             {"type": "backend_direct", "label": "Java 业务应用", "available": True,
              "description": "前端 + Java 后端，沿用当前内置数据库与开发流程。"},
-            {"type": "agent_runtime_direct", "label": "Agent Runtime 应用", "available": True,
+            {"type": "agent_runtime_direct", "label": "Agent 应用", "available": True,
              "description": "前端 + Python Runtime，支持业务接口与七模块智能体。已接入数据库、模型注入和受控启动，需同步当前 Runtime 模板后验证。当前仅支持关闭登录和授权的应用。"},
         ],
     }
@@ -77,3 +77,14 @@ def validate_selected_topology(plan: dict[str, Any], application_config: dict[st
     expected = select_technical_plan_topology(plan, topology["type"], application_config)["topology"]
     if topology != expected:
         raise ValueError("技术规划或应用配置已变化，请重新选择架构并确认新版技术规划。")
+
+
+def rebind_selected_topology(plan: dict[str, Any], application_config: dict[str, Any]) -> dict[str, Any]:
+    """在明确确认的局部配置修订中更新事实摘要，保留用户既选拓扑及产物确认状态。"""
+
+    topology = plan.get("topology")
+    if not isinstance(topology, dict) or not isinstance(topology.get("type"), str):
+        raise ValueError("局部配置修订缺少已明确选择的应用架构。")
+    result = select_technical_plan_topology(plan, topology["type"], application_config)
+    result["confirmation_status"] = plan.get("confirmation_status")
+    return result

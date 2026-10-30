@@ -220,10 +220,21 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         and state.get("technical_plan")
         else None
     )
+    # REPAIR 消费审阅门保留的失败候选，不能退回已过期基线或重新整份生成。
+    repair_candidate = state.get("technical_plan_repair_candidate")
+    repair_errors = state.get("technical_plan_repair_errors")
+    from app.agents.main.technical_plan_editor import has_editable_technical_plan_candidate
+
+    resume_candidate = (
+        boundary.operation is ApplicationPlanningOperation.REPAIR
+        and has_editable_technical_plan_candidate(repair_candidate)
+    )
     plan, errors, failed_candidate = _generate_valid_technical_plan(
         state,
         technical_requirement,
-        existing_plan,
+        deepcopy(repair_candidate) if resume_candidate else existing_plan,
+        **({"initial_errors": list(repair_errors) if isinstance(repair_errors, list) and repair_errors
+            else ["请完成本轮尚未完成的技术规划修订并复核全部合同。"]} if resume_candidate else {}),
     )
     if plan is None:
         # 生成失败不写磁盘、不改生命周期；审阅节点会把错误作为当前业务交互展示。
@@ -413,8 +424,9 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         return {
             "phase": "technical_planning_confirm",
             "status": "running",
-            "technical_plan": confirmed_plan,
-            "technical_plan_repair_candidate": confirmed_plan,
+            # 正式基线仍是磁盘中的待确认版本；同步后失败的候选另行保存，不能充当基线。
+            "technical_plan": plan,
+            "technical_plan_repair_candidate": {**confirmed_plan, "confirmation_status": "pending_user_confirmation"},
             "technical_plan_repair_errors": validation_errors[:12],
             "application_planning_recovery_boundary": application_planning_boundary_payload(
                 operation_id=operation_id,
@@ -423,7 +435,7 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
                 request=request,
                 gate_id=boundary.gate_id,
                 artifact_revision=boundary.artifact_revision,
-                baseline=confirmed_plan,
+                baseline=plan,
             ),
             "application_planning_review_route": "technical_planning_begin",
             "clarification": _project_plan_dependency_error_payload(validation_errors),
