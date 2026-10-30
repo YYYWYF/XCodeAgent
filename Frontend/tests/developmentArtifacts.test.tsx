@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import './agentIntegration1008.test'
+import './agentInterfaceNavigation.test'
 import { test } from 'node:test'
 import './workbenchPhaseNavigation.test'
 import './developmentNextStep.test'

@@ -60,3 +60,42 @@
     color: var(--color-warning, #d89614);
   }
 }
+
+.@{class-prefix}-agent-outline-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  > .@{class-prefix}-outline-section-heading {
+    flex: 1;
+    min-width: 0;
+  }
+
+  > .ant-btn {
+    flex: 0 0 auto;
+    color: var(--wb-text-secondary);
+    background: transparent;
+    border-color: var(--wb-border);
+
+    &:hover,
+    &:focus-visible {
+      color: var(--outline-accent);
+      border-color: var(--outline-accent);
+    }
+  }
+}
+
+.@{class-prefix}-api-row.@{class-prefix}-agent-outline-row {
+  min-width: 0;
+  padding-top: 4px;
+  padding-bottom: 4px;
+
+  .@{class-prefix}-api-copy small {
+    overflow: hidden;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
