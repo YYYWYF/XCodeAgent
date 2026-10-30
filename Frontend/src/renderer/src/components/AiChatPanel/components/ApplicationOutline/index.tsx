@@ -20,12 +20,15 @@ import { cx } from '../../../../utils'
 import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
+import AgentOutlineSection from './AgentOutlineSection'
+import AgentInterfaceRows from './AgentInterfaceRows'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 import {
   collectRelatedKeys,
   collectVisibleKeys,
   containsMenuKey,
+  matchingAgentInterfaces,
   pageTreeItems
 } from './outlineUtils'
 
@@ -34,7 +37,11 @@ const { Text } = Typography
 export type ApplicationOutlineProps = {
   agents?: BusinessAgentOption[]
   selectedAgentId?: string
+  selectedAgentInterfaceId?: string
+  onAgentInterfaceSelect?: (agent: BusinessAgentOption) => void
   onAgentSelect?: (agent: BusinessAgentOption | undefined) => void
+  onAgentRefresh?: () => void
+  agentError?: string
   developmentArtifacts?: DevelopmentArtifacts
   /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
   currentBranch?: string
@@ -60,7 +67,11 @@ export type ApplicationOutlineProps = {
 export default function ApplicationOutline({
   agents = [],
   selectedAgentId,
+  selectedAgentInterfaceId,
+  onAgentInterfaceSelect,
   onAgentSelect,
+  onAgentRefresh,
+  agentError,
   developmentArtifacts,
   currentBranch,
   apiContracts = [],
@@ -131,6 +142,7 @@ export default function ApplicationOutline({
     })
   }, [apiContracts, outlineQuery])
   const query = outlineQuery.trim().toLocaleLowerCase()
+  const visibleAgentInterfaces = matchingAgentInterfaces(agents, outlineQuery)
   const visibleEntities = entities.filter((entity) =>
     [entity.id, entity.label, entity.purpose].some((value) =>
       value.toLocaleLowerCase().includes(query)
@@ -177,14 +189,6 @@ export default function ApplicationOutline({
           </div>
 
           <div className={cx('session-outline-scroll')}>
-            {agents.length ? <section className={cx('outline-section')}>
-              <div className={cx('outline-section-heading')}>智能体 <span>{agents.length}</span></div>
-              {agents.filter((agent) => `${agent.label} ${agent.purpose}`.toLocaleLowerCase().includes(query)).map((agent) =>
-                <button key={agent.agentId} type="button" className={cx('api-endpoint', selectedAgentId === agent.agentId && 'active')}
-                  aria-pressed={selectedAgentId === agent.agentId} onClick={() => onAgentSelect?.(agent)}>
-                  <span className={cx('api-copy')}><strong>{agent.label}</strong><small>{agent.purpose}</small></span>
-                </button>)}
-            </section> : null}
             <section className={cx('outline-section')}>
               <button
                 aria-expanded={pagesExpanded}
@@ -238,8 +242,9 @@ export default function ApplicationOutline({
                 <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
                 <span>接口</span>
                 <span className={cx('development-count')}>
-                  {developmentCompletedCount(
-                    apiContracts.flatMap((contract) =>
+                  {developmentCompletedCount([
+                    ...agents.map((agent) => developmentArtifacts?.agents?.[agent.agentId]),
+                    ...apiContracts.flatMap((contract) =>
                       contract.endpoints.map(
                         (endpoint) =>
                           developmentArtifacts?.endpoints[endpoint.apiContractId || contract.id]?.[
@@ -247,12 +252,15 @@ export default function ApplicationOutline({
                           ]
                       )
                     )
-                  )}
-                  /{apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}
+                  ])}
+                  /{agents.length + apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}
                 </span>
               </button>
               {apiExpanded ? (
                 <div className={cx('api-group')}>
+                  <AgentInterfaceRows agents={visibleAgentInterfaces}
+                    selectedAgentId={selectedAgentInterfaceId} onSelect={onAgentInterfaceSelect}
+                    developmentArtifacts={developmentArtifacts} />
                   {visibleApiContracts.map((contract) => (
                     <ApiOutlineGroup
                       key={contract.id}
@@ -268,7 +276,7 @@ export default function ApplicationOutline({
                       selectedKey={selectedApiEndpointKey}
                     />
                   ))}
-                  {visibleApiContracts.length === 0 ? (
+                  {visibleApiContracts.length === 0 && visibleAgentInterfaces.length === 0 ? (
                     <div className={cx('outline-empty')}>
                       暂无接口
                     </div>
@@ -311,6 +319,14 @@ export default function ApplicationOutline({
                 </div>
               ) : null}
             </section>
+            <AgentOutlineSection
+              agents={agents}
+              query={query}
+              selectedAgentId={selectedAgentId}
+              onSelect={onAgentSelect}
+              onRefresh={onAgentRefresh}
+              error={agentError}
+            />
           </div>
         </div>
         {outlineLocked ? (

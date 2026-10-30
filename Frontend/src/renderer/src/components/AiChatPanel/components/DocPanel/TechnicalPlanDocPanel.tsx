@@ -5,7 +5,6 @@ import {
   ArchitectureSection,
   ContractSection,
   EntitiesSection,
-  PageBindingsSection,
   type SectionKey
 } from './TechnicalPlanDocSections'
 import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
@@ -13,6 +12,7 @@ import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPl
 import './TechnicalPlanDocPanel.less'
 import TechnicalPlanAgentSection from './TechnicalPlanAgentSection'
 import { technicalPlanDisplayContracts } from './TechnicalPlanAgentContracts'
+import { PageBindingsSection } from './TechnicalPlanPageBindings'
 
 type Props = {
   plan: JsonRecord
@@ -112,6 +112,7 @@ export default function TechnicalPlanDocPanel({
       ) : null}
       {resolvedActiveSection === 'page-bindings' ? (
         <PageBindingsSection
+          agents={recordItems(plan.agent_contracts)}
           contracts={recordItems(plan.api_contracts)}
           pages={pages}
           productPlan={productPlan}

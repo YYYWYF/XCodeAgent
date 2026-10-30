@@ -1,4 +1,4 @@
-import { Alert, Button } from 'antd'
+import { Button } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
@@ -11,6 +11,7 @@ import type { BusinessAgentOption } from '../../../../../../shared/businessAgent
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
 import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
 import RuntimeAgentDetail from '../RuntimeAgentDetail'
+import AgentInterfaceDetail from './AgentInterfaceDetail'
 import { requestRuntimeWorkbench } from '../../../../service/runtimeWorkbench'
 import type { RuntimeAgent, RuntimeSettingsResult } from '../../../../service/runtimeWorkbench'
 import type { WorkbenchExecution } from '../../../../typings'
@@ -18,7 +19,6 @@ import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
   onStartAgent?: (agent: BusinessAgentOption) => void
-  onAgentRefresh?: () => void
   agentActionsDisabled?: boolean
   theme: 'light' | 'dark'
   useBuiltinDatabase?: boolean
@@ -61,6 +61,35 @@ export default function DevelopmentArtifactsPanel({
   const [agentRefresh, setAgentRefresh] = useState(0)
   const selectedAgent = outlineProps.agents?.find((item) => item.agentId === outlineProps.selectedAgentId)
   const agent = agents.find((item) => item.agentId === (agentId || selectedAgent?.agentId))
+  // 正式规划和 Runtime 目录共用一个菜单分组，未加载规划投影时保留 Runtime 浏览入口。
+  const menuAgents: BusinessAgentOption[] = outlineProps.agents?.length
+    ? outlineProps.agents
+    : agents.map((item) => ({
+        agentId: item.agentId,
+        label: item.name,
+        purpose: item.purpose,
+        pageIds: item.pageIds,
+        agentSettings: item.agentSettings,
+        capabilities: [],
+        boundaries: [],
+        tools: []
+      }))
+  const interfaceAgent = menuAgents.find((item) => item.agentId === outlineProps.selectedAgentInterfaceId)
+  /** 刷新同一份智能体目录及规划投影，保持详情保存后的原有刷新行为。 */
+  const handleAgentRefresh = (): void => {
+    setAgentRefresh((value) => value + 1)
+    onAgentRefresh?.()
+  }
+  /** 按实际来源选择规划智能体或独立 Runtime 详情，不触发正式开发。 */
+  const handleAgentSelect = (item: BusinessAgentOption | undefined): void => {
+    if (outlineProps.agents?.length) {
+      setAgentId('')
+      outlineProps.onAgentSelect?.(item)
+    } else {
+      outlineProps.onAgentSelect?.(undefined)
+      setAgentId(item?.agentId || '')
+    }
+  }
   useEffect(() => { setAgents([]); setAgentId('') }, [workspaceRoot])
   useEffect(() => {
     let active = true
@@ -85,28 +114,28 @@ export default function DevelopmentArtifactsPanel({
     <div className={cx('development-artifacts-panel')}>
       <aside aria-label="开发产物菜单" className={cx('development-artifacts-menu')}>
         <ApplicationOutline {...outlineProps}
-          onAgentSelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(item) }}
+          agents={menuAgents}
+          selectedAgentId={agentId || outlineProps.selectedAgentId}
+          agentError={agentError}
+          onAgentRefresh={handleAgentRefresh}
+          onAgentSelect={handleAgentSelect}
+          onAgentInterfaceSelect={(item) => { setAgentId(''); outlineProps.onAgentInterfaceSelect?.(item) }}
           onPageSelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(undefined); outlineProps.onPageSelect(item) }}
           onEntitySelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(undefined); outlineProps.onEntitySelect(item) }}
           onApiEndpointSelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(undefined); outlineProps.onApiEndpointSelect(item) }} />
-        <div className={cx('runtime-agent-outline')}>
-          <strong>智能体</strong>
-          <Button size="small" onClick={() => { setAgentRefresh((value) => value + 1); onAgentRefresh?.() }}>刷新</Button>
-          {agentError && <Alert type="error" message={agentError} />}
-          {!outlineProps.agents?.length && agents.map((item) => <Button key={item.agentId} type={item.agentId === agentId ? 'primary' : 'text'}
-            block onClick={() => setAgentId(item.agentId)}>{item.name}</Button>)}
-        </div>
       </aside>
       <section
-        aria-label={detailLabel ? `${detailLabel}详情` : '开发产物详情'}
+        aria-label={interfaceAgent ? `${interfaceAgent.label} · 智能体接口详情` : detailLabel ? `${detailLabel}详情` : '开发产物详情'}
         className={cx('development-artifacts-detail')}
       >
-        {!agent && !selectedAgent && apiTarget && onConfigureApi ? (
+        {!interfaceAgent && !agent && !selectedAgent && apiTarget && onConfigureApi ? (
           <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>
             打开字段映射
           </Button>
         ) : null}
-        {agent && workspaceRoot ? <RuntimeAgentDetail key={`${workspaceRoot}:${agent.agentId}`} agent={agent} workspaceRoot={workspaceRoot}
+        {interfaceAgent ? <AgentInterfaceDetail agent={interfaceAgent}
+          progress={outlineProps.developmentArtifacts?.agents?.[interfaceAgent.agentId]}
+          onOpenAgent={() => handleAgentSelect(interfaceAgent)} /> : agent && workspaceRoot ? <RuntimeAgentDetail key={`${workspaceRoot}:${agent.agentId}`} agent={agent} workspaceRoot={workspaceRoot}
           disabled={agentDevelopmentDisabled || agentActionsDisabled} onStartDevelopment={onStartAgentDevelopment} onOpenExecution={onOpenAgentExecution}
           onSaved={(result) => { onAgentSettingsSaved?.(result); onAgentRefresh?.(); setAgentRefresh((value) => value + 1) }} /> : selectedAgent && workspaceRoot ? (
           <AgentDevelopmentDetail

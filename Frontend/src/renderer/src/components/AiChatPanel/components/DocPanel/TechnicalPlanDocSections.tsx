@@ -1,13 +1,6 @@
-import {
-  ApiOutlined,
-  ArrowRightOutlined,
-  BranchesOutlined,
-  DatabaseOutlined,
-  RightOutlined
-} from '@ant-design/icons'
+import { ApiOutlined, BranchesOutlined, DatabaseOutlined, RightOutlined } from '@ant-design/icons'
 import { Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { useMemo } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import {
@@ -380,107 +373,5 @@ export function EndpointInspector({
         </div>
       ) : null}
     </div>
-  )
-}
-
-type PageBindingItem = {
-  key: string
-  triggerLabel: string
-  endpointLabel: string
-}
-
-type PageBindingGroup = {
-  key: string
-  pageName: string
-  bindings: PageBindingItem[]
-}
-
-/** 按页面汇总触发条件与 Endpoint，并用 ProductPlan 中的中文页面名替换 pageId。 */
-function pageBindingGroups(
-  pages: JsonRecord[],
-  contracts: JsonRecord[],
-  productPlan: JsonRecord
-): PageBindingGroup[] {
-  const endpointMap = new Map<string, JsonRecord>()
-  const pageNameMap = new Map<string, string>()
-  contracts.forEach((contract) =>
-    recordItems(contract.endpoints).forEach((endpoint) => {
-      const endpointId = textValue(endpoint.id)
-      if (endpointId) endpointMap.set(endpointId, endpoint)
-    })
-  )
-  recordItems(productPlan.pages).forEach((page) => {
-    const pageId = textValue(page.pageId)
-    const pageName = textValue(page.name)
-    if (pageId && pageName) pageNameMap.set(pageId, pageName)
-  })
-
-  return pages.flatMap((page, pageIndex): PageBindingGroup[] => {
-    const pageId = textValue(page.pageId, `page-${pageIndex + 1}`)
-    const references = asRecord(page.references)
-    const bindings = recordItems(references.endpoint_dependencies).map(
-      (dependency, dependencyIndex): PageBindingItem => {
-        const endpointId = textValue(dependency.endpoint_id)
-        const endpoint = endpointMap.get(endpointId) || {}
-        return {
-          key: `${pageId}:${endpointId || dependencyIndex}`,
-          triggerLabel: textValue(dependency.trigger, '未声明触发条件'),
-          endpointLabel: `${textValue(endpoint.method, 'GET').toUpperCase()} ${textValue(endpoint.path, endpointId || '未解析')}`
-        }
-      }
-    )
-    return bindings.length
-      ? [{ key: pageId, pageName: pageNameMap.get(pageId) || pageId, bindings }]
-      : []
-  })
-}
-
-/** 按页面分组展示中文页面名、触发条件和 Endpoint 三段调用关系。 */
-export function PageBindingsSection({
-  pages,
-  contracts,
-  productPlan,
-  sectionKey
-}: {
-  pages: JsonRecord[]
-  contracts: JsonRecord[]
-  productPlan: JsonRecord
-} & SectionProps): ReactElement {
-  const groups = useMemo(
-    () => pageBindingGroups(pages, contracts, productPlan),
-    [contracts, pages, productPlan]
-  )
-
-  return (
-    <section
-      aria-label="页面绑定"
-      className={cx('technical-plan-section')}
-      id={`technical-plan-panel-${sectionKey}`}
-      role="tabpanel"
-    >
-      <div className={cx('technical-plan-section-title')}>
-        <BranchesOutlined /> <span>页面绑定</span>
-      </div>
-      <div className={cx('technical-plan-page-binding-list')}>
-        {groups.length ? (
-          groups.map((group) => (
-            <article className={cx('technical-plan-page-binding-group')} key={group.key}>
-              <strong className={cx('technical-plan-page-binding-name')}>{group.pageName}</strong>
-              <div className={cx('technical-plan-page-binding-rows')}>
-                {group.bindings.map((binding) => (
-                  <div className={cx('technical-plan-page-binding-row')} key={binding.key}>
-                    <span>{binding.triggerLabel}</span>
-                    <ArrowRightOutlined aria-hidden="true" />
-                    <code>{binding.endpointLabel}</code>
-                  </div>
-                ))}
-              </div>
-            </article>
-          ))
-        ) : (
-          <Text type="secondary">暂无页面绑定</Text>
-        )}
-      </div>
-    </section>
   )
 }

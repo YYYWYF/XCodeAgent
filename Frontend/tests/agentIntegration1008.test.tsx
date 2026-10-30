@@ -7,6 +7,7 @@ import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/comp
 import { developmentArtifactTotals } from '../src/renderer/src/developmentArtifacts'
 import { compileTsx } from '../src/renderer/src/components/DesignRenderer/compileTsx'
 import ApplicationOutline from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline'
+import AgentOutlineSection from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/AgentOutlineSection'
 import AgentDevelopmentDetail from '../src/renderer/src/components/AiChatPanel/components/AgentDevelopmentDetail'
 import TechnicalPlanAgentSection from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanAgentSection'
 import RequirementAgentSection from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementAgentSection'
@@ -70,7 +71,7 @@ test('智能体完成统计和设计稿运行时使用当前真实合同', () =>
   )
 })
 
-test('工作台菜单显示智能体及其选中状态', () => {
+test('工作台菜单将智能体放在实体之后并使用统一的选中行样式', () => {
   const markup = renderToStaticMarkup(
     <ApplicationOutline
       agents={agents}
@@ -90,6 +91,26 @@ test('工作台菜单显示智能体及其选中状态', () => {
   )
   assert.match(markup, /库存助手/)
   assert.match(markup, /aria-pressed="true"/)
+  assert.ok(markup.indexOf('>页面</span>') < markup.indexOf('>接口</span>'))
+  assert.ok(markup.indexOf('>接口</span>') < markup.indexOf('>实体</span>'))
+  assert.ok(markup.indexOf('>实体</span>') < markup.indexOf('>智能体</span>'))
+  assert.match(markup, /class="[^"]*api-row[^" ]* [^"]*selected"/)
+  assert.match(markup, /aria-expanded="true"[^>]*>.*?智能体/s)
+})
+
+test('智能体分组的搜索空态和读取失败保留同一个刷新入口', () => {
+  const empty = renderToStaticMarkup(
+    <AgentOutlineSection agents={agents} query="不存在的助手" onRefresh={() => undefined} />
+  )
+  assert.match(empty, /没有匹配的智能体/)
+  assert.doesNotMatch(empty, /库存助手/)
+  assert.equal((empty.match(/aria-label="刷新智能体"/g) || []).length, 1)
+  const failed = renderToStaticMarkup(
+    <AgentOutlineSection agents={[]} query="" error="目录读取失败" onRefresh={() => undefined} />
+  )
+  assert.match(failed, /目录读取失败/)
+  assert.doesNotMatch(failed, /当前计划中暂无智能体/)
+  assert.equal((failed.match(/aria-label="刷新智能体"/g) || []).length, 1)
 })
 
 test('智能体详情提供正式开发和配置入口并展示七模块', () => {

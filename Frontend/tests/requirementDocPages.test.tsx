@@ -8,7 +8,60 @@ import TechnicalPlanDocPanel from '../src/renderer/src/components/AiChatPanel/co
 import TechnicalPlanAgentSection from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanAgentSection'
 import { technicalPlanDisplayContracts } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanAgentContracts'
 import TechnicalPlanSummary from '../src/renderer/src/components/Welcome/TechnicalPlanSummary'
+import { PageBindingsSection } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanPageBindings'
 import './sourcePlanningDocument.test'
+
+test('纯聊天应用展示两个启用入口共用的智能体接口，忽略关闭的入口', () => {
+  const html = renderToStaticMarkup(
+    <PageBindingsSection
+      pages={['home', 'chat', 'disabled'].map((pageId) => ({ pageId, references: {} }))}
+      contracts={[]}
+      agents={[{ agentId: 'assistant', name: '通用聊天助手', pageIds: ['home', 'chat', 'disabled'] }]}
+      productPlan={{
+        pages: [
+          { pageId: 'home', name: '展示首页', actions: [{ actionId: 'open', name: '浮窗聊天' }] },
+          { pageId: 'chat', name: '独立聊天页', actions: [{ actionId: 'send', name: '发送消息' }] }
+        ],
+        agents: [
+          {
+            agentId: 'assistant',
+            pageActionBindings: [
+              { pageId: 'home', actionIds: ['open'], surface: { enabled: true } },
+              { pageId: 'chat', actionIds: ['send'], surface: { enabled: true } },
+            { pageId: 'disabled', actionIds: ['disabled_action'], surface: { enabled: false } }
+            ]
+          }
+        ]
+      }}
+      sectionKey="page-bindings"
+    />
+  )
+  for (const text of ['展示首页', '独立聊天页', '浮窗聊天', '发送消息', '通用聊天助手', 'AG-UI']) {
+    assert.ok(html.includes(text), `缺少智能体绑定：${text}`)
+  }
+  assert.equal(html.match(/>POST \/agents\/assistant\/run<\/code>/g)?.length, 2)
+  assert.ok(!html.includes('暂无页面绑定'))
+  assert.ok(!html.includes('disabled_action'))
+})
+
+test('无智能体应用仍展示原业务接口绑定，静态应用仍展示原空态', () => {
+  const props = {
+    pages: [
+      {
+        pageId: 'orders',
+        references: { endpoint_dependencies: [{ endpoint_id: 'list', trigger: '进入页面' }] }
+      }
+    ],
+    contracts: [{ endpoints: [{ id: 'list', method: 'POST', path: '/orders/search' }] }],
+    productPlan: { pages: [{ pageId: 'orders', name: '订单列表' }] },
+    sectionKey: 'page-bindings' as const
+  }
+  const html = renderToStaticMarkup(<PageBindingsSection {...props} />)
+  for (const text of ['订单列表', '进入页面', 'POST /orders/search']) assert.ok(html.includes(text))
+  assert.ok(!html.includes('AG-UI'))
+  const empty = renderToStaticMarkup(<PageBindingsSection {...props} pages={[]} />)
+  assert.ok(empty.includes('暂无页面绑定'))
+})
 
 /** 一份包含所有可选区块的页面规划，用于确认重做后内容一条不少。 */
 function productPlan(): JsonRecord {

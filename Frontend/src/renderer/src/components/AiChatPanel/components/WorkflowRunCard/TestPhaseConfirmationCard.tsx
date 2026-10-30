@@ -75,7 +75,6 @@ export default function TestPhaseConfirmationCard({
                     ? item.pageId
                     : item.type === 'entity'
                       ? item.entityId
-                      : item.type === 'agent' ? item.agentId
                       : `${item.apiContractId}/${item.endpointId}`}
                 </span>
               </li>

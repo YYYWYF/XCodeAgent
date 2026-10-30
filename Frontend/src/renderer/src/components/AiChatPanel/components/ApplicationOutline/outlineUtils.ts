@@ -1,4 +1,16 @@
 import type { ApplicationMenuItem, DevelopmentPlanningPageTreeNode } from '../../../../typings'
+import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
+import { agentInvocation } from '../DocPanel/TechnicalPlanAgentContracts'
+
+/** 使用名称、正式身份、固定路径及协议标签搜索智能体接口。 */
+export function matchingAgentInterfaces(agents: BusinessAgentOption[], query: string): BusinessAgentOption[] {
+  const search = query.trim().toLocaleLowerCase()
+  return agents.filter((agent) =>
+    [agent.label, agent.agentId, agent.purpose, agentInvocation(agent.agentId).path,
+      '智能体接口 POST AG-UI SSE'
+    ].some((value) => value.toLocaleLowerCase().includes(search))
+  )
+}
 
 /** 把页面树节点递归转换为大纲复用的菜单项结构。 */
 export function pageTreeItems(nodes: DevelopmentPlanningPageTreeNode[]): ApplicationMenuItem[] {
