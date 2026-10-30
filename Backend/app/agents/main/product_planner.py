@@ -103,7 +103,10 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
                     "description": f"从当前页面调用{str(requirement.get('name') or '智能体')}。",
                     "requiresConfirmation": False,
                     "behavior": {
-                        "type": "business",
+                        "type": "agent",
+                        "agentId": agent_id,
+                        "operation": "send_message",
+                        "message": "",
                         "expectedResult": "<填写用户完成智能体交互后可观察的产品结果>",
                     },
                 }
@@ -279,7 +282,7 @@ def _product_planning_prompt(
         "is NOT an action; express it in information_items or acceptance_criteria instead. A display-only page "
         "may therefore have an empty actions list.\n"
         "Every real action must have stable actionId, name, description, requiresConfirmation boolean, and "
-        "a product-readable behavior object. behavior.type is one of business, navigation, interface, external, "
+        "a product-readable behavior object. behavior.type is one of business, agent, navigation, interface, external, "
         "or sequence; behavior.expectedResult states the visible/business outcome in product language. "
         "navigation also requires targetPageId; external requires externalTarget; sequence requires ordered "
         "steps shaped {stepId,type,expectedResult,targetPageId? or externalTarget?}, where step type cannot be "
@@ -287,6 +290,16 @@ def _product_planning_prompt(
         "purely local presentation changes. Use business for querying, submitting, mutating, exporting, or "
         "other domain outcomes whose implementation is decided later. Actions must not contain endpoint ids, HTTP "
         "details, schemas, data sources, database operations, or implementation guesses.\n"
+        "Use agent for ALL assistant conversation entry, recommended-question, topic-question, and follow-up "
+        "actions, never business. Agent behavior has exactly type, expectedResult, agentId, operation, message. "
+        "operation=send_message sends message in the current conversation; message='' opens free input. "
+        "operation=clear_conversation with message='' starts an empty client conversation, preserving server history; "
+        "describe that accurately and retain requiresConfirmation when requested. Server-side deletion is a separate "
+        "business action, never implied by client clearing. Sequence steps may use the same agent fields in addition "
+        "to stepId; preserve every business/navigation/interface step. pageActionBindings must cover every direct "
+        "Agent action, not just the main entry. Never invent business endpoints for conversation UI operations. "
+        "Follow-up buttons use explicit product messages; do not promise model-generated suggestion lists without "
+        "a corresponding structured output contract.\n"
         "Every actionId must be lower_snake_case: it may contain only lowercase English letters, digits, and "
         "single underscores, must start with a letter, and must never use camelCase, PascalCase, hyphens, spaces, "
         "or Chinese. For example, use order_list_export rather than OrderListExport or order-list-export.\n"
@@ -304,7 +317,8 @@ def _product_planning_prompt(
         "a real action on that page that represents invoking or interacting with the agent. surface contains "
         "exactly type, enabled, and contextItemIds. Set enabled=true by default for every recognized surface; "
         "only a later explicit user choice may disable a floating_panel. Choose type=standalone_page only when conversation is the page's main "
-        "purpose; choose type=floating_panel when the Agent augments an ordinary business page. contextItemIds "
+        "purpose; choose type=floating_panel when the Agent augments the existing host page, which may also "
+        "contain another Agent's standalone conversation. Preserve that host body. contextItemIds "
         "must be a duplicate-free string array that references only information_items[].itemId from the same page; "
         "use [] when no page context is needed. A page may have at most one Agent of each surface type. interaction "
         "contains exactly mode, supportsMultiTurn, inputDescription, outputDescription, and stateRequirements "

@@ -107,19 +107,23 @@ def generate_page_entry(
                 template_code,
                 _TEMPLATE_ADAPT_INSTRUCTION,
                 should_cancel=should_cancel,
+                allow_missing=False,
             )
             if should_cancel and should_cancel():
                 raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")
-            code_path = persist_page_code(task.project_dir, task.page_key, code)
-            return build_ui_page_manifest(
+            # 选模板只改变视觉参考；先严格复验产品绑定，再覆盖工作区中的原设计稿。
+            entry = build_ui_page_manifest(
                 page,
                 page_key=task.page_key,
-                code_path=code_path,
                 code=code,
                 status="confirmed",
                 template_id=task.template_id,
                 template_source_path=f"src/renderer/src/templates/{task.template_id}",
             )
+            if entry["verification"]["status"] != "passed":
+                raise ValueError("模板适配未通过产品事实一致性校验：" + "；".join(entry["verification"]["errors"]))
+            entry["code_path"] = persist_page_code(task.project_dir, task.page_key, code)
+            return entry
         except UiDesignGenerationCancelled:
             raise
         except UiDesignStreamCancelled:

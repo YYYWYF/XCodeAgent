@@ -79,7 +79,7 @@ def annotate_unit_inputs(
             unit["input_fingerprint"] = _stable_fingerprint(
                 _unit_fingerprint_payload(unit_id, source_refs, build_context)
             )
-            unit["status"] = "prepared" if task_ids else "not_prepared"
+            unit["status"] = "prepared" if task_ids or unit.get("prerequisite_only") else "not_prepared"
         unit["task_ids"] = [
             task_id
             for task_id in task_ids
@@ -170,6 +170,15 @@ def _apply_unit_task_dependencies(
             str(task.get("unit_id") or "application:root"), []
         ).append(str(task.get("id")))
     dependency_units = _unit_dependency_map(unit_graph)
+    def task_dependencies_through_empty(unit_id: str, seen=()) -> list[str]:
+        """穿透无模型运行入口的空任务 Unit，保留真正 Agent 前置任务并拒绝环。"""
+        if unit_id in seen:
+            raise ValueError("Unit 依赖存在环：" + " -> ".join((*seen, unit_id)))
+        direct = tasks_by_unit.get(unit_id, [])
+        if direct:
+            return direct
+        return list(dict.fromkeys(task_id for dependency in dependency_units.get(unit_id, [])
+                                 for task_id in task_dependencies_through_empty(dependency, (*seen, unit_id))))
     auth_resolution = _auth_dependency_resolution(
         tasks,
         dependency_units,
@@ -196,6 +205,8 @@ def _apply_unit_task_dependencies(
             if dependency_unit_id == "frontend:shell" or not (
                 not page_frontend_only
                 or dependency_unit_id.startswith("frontend:")
+                or str((units.get(dependency_unit_id) or {}).get("agent_id") or "")
+                or dependency_unit_id.startswith("agent:")
                 or (
                     bool(tasks_by_unit.get(dependency_unit_id))
                     and all(
@@ -207,7 +218,7 @@ def _apply_unit_task_dependencies(
                 )
             ):
                 continue
-            dependency_task_ids = tasks_by_unit.get(dependency_unit_id, [])
+            dependency_task_ids = task_dependencies_through_empty(dependency_unit_id)
             if (
                 auth_resolution is not None
                 and unit_id in auth_consumer_units

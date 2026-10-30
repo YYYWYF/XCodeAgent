@@ -3,7 +3,10 @@ import { RuntimeAgentConversationAdapter } from '../../Backend/app/builtin_templ
 import type { AgentUiTemplateConfig } from '../../Backend/app/builtin_templates/agent-ui-frontend/src/typings/agentConversation'
 
 const config = { agentId: 'orders', name: '订单助手', actionId: 'ask_orders', contextItems: [],
-  runtime: { path: '/agents/orders/run', pageId: 'orders_page' } } as unknown as AgentUiTemplateConfig
+  actions: [{ actionId: 'ask_orders', operation: 'send_message', message: '', requiresConfirmation: false },
+    { actionId: 'follow_up', operation: 'send_message', message: '继续说明', requiresConfirmation: false },
+    { actionId: 'clear', operation: 'clear_conversation', message: '', requiresConfirmation: true }],
+  runtime: { path: '/agents/orders/run', pageId: 'orders_page', interactionKinds: ['clarification', 'confirmation'] } } as unknown as AgentUiTemplateConfig
 
 /** 构造由官方 SDK 实际解析的完整流，不以手工调用订阅回调代替传输验证。 */
 function events(body: { runId: string; threadId: string }, status: 'completed' | 'awaiting_user', includeResult = true,
@@ -18,7 +21,7 @@ function events(body: { runId: string; threadId: string }, status: 'completed' |
     { type: 'TEXT_MESSAGE_END', messageId: `assistant-${body.runId}` },
     ...(includeResult ? [{ type: 'CUSTOM', name: 'agent_runtime_result.v1', value: payload },
       { type: 'STATE_SNAPSHOT', snapshot: { agentRuntime: payload } }] : []),
-    { type: 'RUN_FINISHED', ...body }
+    { type: 'RUN_FINISHED', ...body, result: includeResult ? { agentRuntime: payload } : undefined }
   ]
   return new Response(rows.map((row) => `data: ${JSON.stringify(row)}\n\n`).join(''),
     { headers: { 'Content-Type': 'text/event-stream' } })
@@ -39,7 +42,7 @@ async function main(): Promise<void> {
     const statuses: string[] = []
     adapter.subscribe((result) => { statuses.push(result.status) })
     const waiting = await adapter.sendMessage({ runId: 'run-one', threadId: thread.id,
-      agentId: 'orders', actionId: 'ask_orders', content: '查询订单', contextItems: [] })
+      agentId: 'orders', actionId: 'follow_up', content: '查询订单', contextItems: [] })
     assert.equal(waiting.status, 'waiting_input')
     assert.ok(waiting.messages.some((message) => message.role === 'assistant' && message.content === '真实响应'))
     assert.ok(statuses.includes('running'))
@@ -50,10 +53,19 @@ async function main(): Promise<void> {
       value: 'ORDER-100', responseRunId: 'run-two' })
     assert.equal(completed.status, 'completed')
     assert.equal(requests[0].threadId, requests[1].threadId)
-    assert.deepEqual(requests[1].forwardedProps, { pageId: 'orders_page', actionId: 'ask_orders', contextItems: [],
+    assert.deepEqual(requests[1].forwardedProps, { pageId: 'orders_page', actionId: 'follow_up', contextItems: [],
       interactionResponse: { interactionId: 'clarify-1', value: 'ORDER-100' } })
     assert.equal(requests[1].messages.filter((message: { role: string }) => message.role === 'user').length, 1)
     await assert.rejects(adapter.retry('run-two', 'run-three'), /不会自动重放/)
+    assert.equal(requests.length, 2)
+    await assert.rejects(adapter.sendMessage({ runId: 'run-one', threadId: thread.id,
+      agentId: 'orders', actionId: 'follow_up', content: '不得重放', contextItems: [] }), /不会重复执行/)
+    await assert.rejects(adapter.sendMessage({ runId: 'clear-run', threadId: thread.id,
+      agentId: 'orders', actionId: 'clear', content: '不应发送', contextItems: [] }), /操作与当前页面/)
+    const blank = await adapter.createThread()
+    assert.notEqual(blank.id, thread.id)
+    assert.deepEqual(await adapter.loadMessages(blank.id), [])
+    assert.ok((await adapter.loadMessages(thread.id)).length > 0)
     assert.equal(requests.length, 2)
 
     let confirmationCalls = 0
@@ -91,7 +103,8 @@ async function main(): Promise<void> {
     }
     const synced = await interrupted.refreshRun(interruptedThread.id, 'pending-sync')
     assert.equal(syncCalls, 1)
-    assert.equal(synced.status, 'waiting_input')
+    assert.equal(synced.status, 'error')
+    assert.equal(synced.resultUnknown, true)
     assert.equal(synced.requiresSync, false)
     assert.equal(synced.pendingInteraction?.interactionId, 'clarify-1')
 

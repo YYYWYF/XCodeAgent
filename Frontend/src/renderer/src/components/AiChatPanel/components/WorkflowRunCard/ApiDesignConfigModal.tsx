@@ -2,11 +2,13 @@ import { Alert, Button, Modal, Spin } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
-  EndpointDesignPreparation,
   EndpointDesignSaveResult,
   WorkflowApiDesignAction
 } from '../../../../typings'
-import { requestEndpointDesignPreparation, saveEndpointDesign } from '../../../../service/endpointDesigns'
+import { requestEndpointPreparation, saveEndpointDesign } from '../../../../service/endpointDesigns'
+import { isRuntimeEndpointPreparation } from '../../../../typings/endpointDesign'
+import type { EndpointPreparation } from '../../../../typings/endpointDesign'
+import AgentEndpointReview from '../FieldMapping/AgentEndpointReview'
 import ApiDesignPanel from './ApiDesignPanel'
 import { AgUiBusinessError } from '../../../../service/agUiBusinessError'
 import { endpointRecoveryScope, type EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
@@ -36,7 +38,7 @@ export default function ApiDesignConfigModal({
   onSaved,
   onEndpointRecovery
 }: Props): ReactElement {
-  const [preparation, setPreparation] = useState<EndpointDesignPreparation>()
+  const [preparation, setPreparation] = useState<EndpointPreparation>()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -61,7 +63,7 @@ export default function ApiDesignConfigModal({
     setLoading(true)
     const requestGeneration = generation.current
     try {
-      const fresh = await requestEndpointDesignPreparation(workspaceRoot, target.apiContractId, target.endpointId)
+      const fresh = await requestEndpointPreparation(workspaceRoot, target.apiContractId, target.endpointId)
       if (activeScope.current !== scope || generation.current !== requestGeneration) return
       const current = preparationRef.current
       if (!current) setPreparation(fresh)
@@ -82,7 +84,7 @@ export default function ApiDesignConfigModal({
     setLoading(true)
     setError('')
     setPreparation(undefined)
-    requestEndpointDesignPreparation(workspaceRoot, target.apiContractId, target.endpointId)
+    requestEndpointPreparation(workspaceRoot, target.apiContractId, target.endpointId)
       .then((value) => {
         if (!disposed) { setPreparation(value); report('prepare') }
       })
@@ -102,13 +104,16 @@ export default function ApiDesignConfigModal({
   /** 保存当前弹窗草稿，保存完成后通知门禁刷新，但不自动确认继续开发。 */
   const handleAction = async (action: WorkflowApiDesignAction): Promise<void> => {
     if (!workspaceRoot || !target || locked.current) return
+    if (!preparation || preparation.apiContractId !== target.apiContractId || preparation.endpointId !== target.endpointId) return
+    if (preparation && isRuntimeEndpointPreparation(preparation)) return
     locked.current = true
     setSaving(true)
     setError('')
     const requestGeneration = generation.current
     let saved = false
     try {
-      const result = await saveEndpointDesign(workspaceRoot, action, preparation?.artifactRevision)
+      const result = await saveEndpointDesign(workspaceRoot, action, preparation?.artifactRevision,
+        preparation ? { technicalPlanHash: preparation.technicalPlanHash } : undefined)
       saved = true
       if (activeScope.current !== scope || generation.current !== requestGeneration) return
       report('*')
@@ -128,6 +133,7 @@ export default function ApiDesignConfigModal({
   /** 关闭弹窗前明确提示草稿不会被保存，避免误丢字段映射。 */
   const handleCancel = (): void => {
     if (locked.current) return
+    if (preparation && isRuntimeEndpointPreparation(preparation)) { onClose(); return }
     Modal.confirm({
       title: '放弃本次映射编辑？',
       content: '当前输入尚未保存，关闭后会丢失本次修改。',
@@ -144,12 +150,17 @@ export default function ApiDesignConfigModal({
       footer={null}
       onCancel={handleCancel}
       open={open}
-      title={target?.label ? `配置 API 映射：${target.label}` : '配置 API 字段映射'}
+      title={preparation && isRuntimeEndpointPreparation(preparation) ? '智能体流式接口接入设计'
+        : target?.label ? `配置 API 映射：${target.label}` : '配置 API 字段映射'}
       width={1120}
     >
       {loading ? <div className="api-design-config-modal-loading"><Spin /> 正在准备字段映射配置…</div> : null}
       {error ? <Alert className="api-design-config-modal-error" message={error} showIcon type="error" action={<Button loading={loading} disabled={saving} onClick={() => void recover().catch(() => {})}>同步状态</Button>} /> : null}
-      {preparation ? (
+      {preparation && isRuntimeEndpointPreparation(preparation) && target && workspaceRoot ? (
+        <AgentEndpointReview workspaceRoot={workspaceRoot} target={target} preparation={preparation}
+          key={JSON.stringify([workspaceRoot, target.apiContractId, target.endpointId])}
+          onSaved={async (current, result) => { report('*'); await onSaved?.(current, result); onClose() }} />
+      ) : preparation && !isRuntimeEndpointPreparation(preparation) ? (
         <ApiDesignPanel
           disabled={saving || loading}
           onAction={(action) => void handleAction(action)}

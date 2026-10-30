@@ -102,6 +102,8 @@ def endpoint_api_design_source_types(
 ) -> set[str]:
     """从冻结 Endpoint API Design 的映射、写入和查询派生物理数据源类型。"""
 
+    if contract.content.get("implementationKind") == "agent_runtime":
+        return set()
     source_types: set[str] = set()
     binding = contract.content.get("sourceBinding")
     if isinstance(binding, Mapping) and binding.get("sourceType") in {"database", "external_api", "static"}:

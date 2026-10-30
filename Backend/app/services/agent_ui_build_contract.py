@@ -52,6 +52,8 @@ def _stable_hash(value: Any) -> str:
 def project_agent_ui_build_contracts(
     product_plan: dict[str, Any],
     technical_plan: dict[str, Any],
+    *,
+    _surface_index: int = 0,
 ) -> dict[str, dict[str, Any]]:
     """从已确认产品及 Runtime 技术合同投影真实会话组件和精确同源路径。"""
 
@@ -63,11 +65,18 @@ def project_agent_ui_build_contracts(
         surfaces = _dict_items(page.get("agent_surfaces"))
         if not page_id or not surfaces:
             continue
-        config = build_agent_ui_template_config(page)
+        if _surface_index >= len(surfaces):
+            continue
+        config = build_agent_ui_template_config(page, _surface_index)
         agent_id = _text(config.get("agentId"))
         if agent_id not in contracts:
             raise ValueError(f"Agent {agent_id} 缺少当前 Runtime 合同。")
-        config["runtime"] = {"path": f"/agents/{agent_id}/run", "pageId": page_id}
+        if page_id not in contracts[agent_id]["pageIds"]:
+            raise ValueError("当前页面不属于所选 Agent 的正式入口。")
+        from app.services.runtime_endpoint_contracts import runtime_endpoint_capability_snapshot, runtime_endpoint_identity
+        snapshot = runtime_endpoint_capability_snapshot(technical_plan, *runtime_endpoint_identity(agent_id))
+        config["runtime"] = {"path": snapshot["invocation"]["path"], "pageId": page_id,
+            "interactionKinds": snapshot["interactionContract"]["interactionKinds"]}
         surface = _text(config.get("surface"))
         component = _COMPONENTS.get(surface)
         if component is None:
@@ -85,9 +94,20 @@ def project_agent_ui_build_contracts(
             "runtimeAdapterPath": AGENT_UI_RUNTIME_ADAPTER_PATH,
             "skillPath": AGENT_UI_SKILL_PATH,
             "runtimeAgentId": agent_id,
+            "runtimeEndpoint": snapshot,
             "config": config,
         }
         result[page_id] = {**payload, "sha256": _stable_hash(payload)}
+    # 同页不同 Surface 各自持有配置与适配器，主合同保留逐页来源身份。
+    if _surface_index == 0:
+        max_surfaces = max((len(_dict_items(page.get("agent_surfaces")))
+                            for page in project_ui_design_pages(product_plan)), default=0)
+        for index in range(1, max_surfaces):
+            for page_id, companion in project_agent_ui_build_contracts(
+                    product_plan, technical_plan, _surface_index=index).items():
+                result[page_id].setdefault("companions", []).append(companion)
+        for contract in result.values():
+            contract["sha256"] = _stable_hash({key: value for key, value in contract.items() if key != "sha256"})
     return result
 
 

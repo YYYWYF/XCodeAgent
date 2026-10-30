@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Empty,
+  Modal,
   Skeleton,
   Tag,
   Typography
@@ -12,6 +13,8 @@ export { createAgentConversationAdapter } from '@/apis/agentConversationAdapter'
 import { AgentMessageBubble } from './AgentMessageBubble'
 import { AgentInteraction } from './AgentInteraction'
 import { AgentComposer } from './AgentComposer'
+import { AgentActionControls } from './AgentActionControls'
+import { useAgentActionRequest } from './useAgentActionRequest'
 import type {
   AgentConversationAdapter,
   AgentMessage,
@@ -19,7 +22,8 @@ import type {
   AgentRunStatus,
   AgentUiTemplateConfig,
   ConversationThread,
-  PendingAgentInteraction
+  PendingAgentInteraction,
+  AgentActionRequest
 } from '@/typings/agentConversation'
 
 const { Text } = Typography
@@ -29,6 +33,8 @@ export interface AgentChatCoreProps {
   adapter?: AgentConversationAdapter
   threadId?: string
   onThreadCreated?: (thread: ConversationThread) => void
+  actionRequest?: AgentActionRequest
+  onActionResult?: (requestId: string, result: AgentRunResult) => void
 }
 
 /** 创建当前组件提交给 Adapter 的运行标识。 */
@@ -55,7 +61,9 @@ export function AgentChatCore({
   config,
   adapter: providedAdapter,
   threadId,
-  onThreadCreated
+  onThreadCreated,
+  actionRequest,
+  onActionResult
 }: AgentChatCoreProps): React.ReactElement {
   const adapter = useMemo(
     () => providedAdapter ?? createAgentConversationAdapter(config),
@@ -68,9 +76,11 @@ export function AgentChatCore({
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<PendingAgentInteraction>()
   const [requiresSync, setRequiresSync] = useState(false)
+  const [resultUnknown, setResultUnknown] = useState(false)
   const activeRunId = useRef<string>()
   const lastRunId = useRef<string>()
   const mounted = useRef(true)
+  const [actionModal, actionModalHolder] = Modal.useModal()
 
   useEffect(() => {
     mounted.current = true
@@ -98,6 +108,7 @@ export function AgentChatCore({
       setActiveThreadId(threadId)
       setError(undefined)
       setPending(undefined)
+      setResultUnknown(false)
       setRequiresSync(false)
       if (!threadId) {
         setMessages([])
@@ -128,6 +139,7 @@ export function AgentChatCore({
     setError(result.error)
     setPending(result.pendingInteraction)
     setRequiresSync(result.requiresSync === true)
+    setResultUnknown(result.resultUnknown === true)
   }
 
   /** 结果未知时只读同步服务端状态，不重放提问、批准或拒绝。 */
@@ -157,12 +169,20 @@ export function AgentChatCore({
   }
 
   /** 把页面允许的上下文白名单连同问题提交给 Adapter。 */
-  async function submitMessage(content: string): Promise<void> {
+  async function submitMessage(content: string, actionId = config.actionId, requestedRunId?: string,
+    confirmationGranted = false): Promise<AgentRunResult | undefined> {
     const normalized = content.trim()
-    if (!normalized || status === 'running' || activeRunId.current || pending || requiresSync) return
+    if (!normalized || status === 'running' || activeRunId.current || pending || requiresSync || resultUnknown) return
+    const action = config.actions?.find((item) => item.actionId === actionId && !item.stepId)
+    // 自由输入和默认推荐入口同样尊重产品确认；已由声明动作控件确认的点击不重复弹窗。
+    if (action?.requiresConfirmation && !confirmationGranted) {
+      return new Promise((resolve) => actionModal.confirm({ title: `确认${action.label}？`, okText: '确认', cancelText: '取消',
+        onOk: async () => { resolve(await submitMessage(content, actionId, requestedRunId, true)) },
+        onCancel: () => { resolve(undefined) } }))
+    }
     setError(undefined)
     setStatus('running')
-    const runId = createRunId()
+    const runId = requestedRunId || createRunId()
     activeRunId.current = runId
     lastRunId.current = runId
     try {
@@ -172,19 +192,42 @@ export function AgentChatCore({
         runId,
         threadId: nextThreadId,
         agentId: config.agentId,
-        actionId: config.actionId,
+        actionId,
         content: normalized,
         contextItems: config.contextItems.map((item) => ({ ...item }))
       })
       if (!mounted.current || activeRunId.current !== runId) return
       applyResult(result)
       setInput('')
+      return result
     } catch (reason) {
       if (!mounted.current) return
       setStatus('error')
       setError(reason instanceof Error ? reason.message : '运行失败。')
     } finally {
       if (activeRunId.current === runId) activeRunId.current = undefined
+    }
+  }
+
+  /** 清空客户端展示并启用新线程；不删除服务端历史，不重放或撤销旧操作。 */
+  async function clearConversation(): Promise<AgentRunResult | undefined> {
+    if (activeRunId.current) return
+    try {
+      const thread = await adapter.createThread()
+      if (!mounted.current) return
+      lastRunId.current = undefined
+      setActiveThreadId(thread.id)
+      setMessages([])
+      setInput('')
+      setStatus('idle')
+      setError(undefined)
+      setPending(undefined)
+      setRequiresSync(false)
+      setResultUnknown(false)
+      onThreadCreated?.(thread)
+      return { runId: '', threadId: thread.id, status: 'completed', messages: [] }
+    } catch (reason) {
+      if (mounted.current) setError(reason instanceof Error ? reason.message : '新会话创建失败。')
     }
   }
 
@@ -265,9 +308,13 @@ export function AgentChatCore({
     void submitMessage(input)
   }
 
+  const requestHolder = useAgentActionRequest(config, actionRequest, onActionResult,
+    (message, actionId, runId) => submitMessage(message, actionId, runId, true), clearConversation)
   const empty = messages.length === 0 && status !== 'running'
   return (
-    <section className="x-agent-chat" aria-label={`${config.name}会话`}>
+    <section className="x-agent-chat" data-agent-id={config.agentId} aria-label={`${config.name}会话`}>
+      {requestHolder}
+      {actionModalHolder}
       <div
         aria-busy={status === 'running'}
         aria-live="polite"
@@ -314,7 +361,17 @@ export function AgentChatCore({
           </div>
         )}
         {pending && <AgentInteraction key={pending.interactionId} pending={pending} disabled={status === 'running' || requiresSync} onRespond={(value) => void respond(value)} />}
+        <AgentActionControls actions={(config.actions || []).filter((action) =>
+          !action.stepId && (action.operation === 'clear_conversation' || Boolean(action.message)))}
+          disabled={status === 'running'} blocked={Boolean(pending) || requiresSync || resultUnknown} onAction={(action) => {
+            if (action.operation === 'clear_conversation') void clearConversation()
+            else void submitMessage(action.message, action.actionId, undefined, true)
+          }} />
         {requiresSync && <Button disabled={status === 'running'} onClick={() => void refreshRun()}>同步会话状态</Button>}
+        {resultUnknown && <Button disabled={status === 'running'} onClick={() => {
+          void adapter.createThread().then((thread) => { setActiveThreadId(thread.id); setMessages([]); setStatus('idle');
+            setError(undefined); setRequiresSync(false); setResultUnknown(false); setPending(undefined); onThreadCreated?.(thread) })
+        }}>明确新建会话</Button>}
         {error ? (
           <Alert
             action={!config.runtime ? <Button onClick={() => void retryRun()}>重试</Button> : undefined}
@@ -332,7 +389,7 @@ export function AgentChatCore({
         </div>
       </div>
       <AgentComposer name={config.name} attachments={config.features.attachments} running={status === 'running'}
-        blocked={Boolean(pending) || requiresSync} input={input} onInput={setInput} onKeyDown={handleComposerKeyDown}
+        blocked={Boolean(pending) || requiresSync || resultUnknown} input={input} onInput={setInput} onKeyDown={handleComposerKeyDown}
         onStop={() => void stopRun()} onSend={() => void submitMessage(input)} />
     </section>
   )

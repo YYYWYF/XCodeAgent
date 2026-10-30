@@ -93,19 +93,46 @@ class GeneratePageEntryTests(unittest.TestCase):
     def test_select_template_success_returns_confirmed(self) -> None:
         """select_template 成功应返回 confirmed 并记录 template_id。"""
 
+        code = FAKE_CODE.replace(
+            "<div>页面设计稿</div>",
+            '<div><div data-information-item-id="orders-list" data-control-id="orders-list-display" />'
+            '<button data-action-id="orders-action" data-control-id="orders-action-control">操作</button></div>',
+        )
         with patch(
             "app.services.ui_design_generation_pool.load_template_source",
             return_value=FAKE_CODE,
         ), patch(
             "app.services.ui_design_generation_pool.generate_adjusted_page_react_code",
-            return_value=FAKE_CODE,
-        ):
+            return_value=code,
+        ) as generate:
             entry = generate_page_entry(
                 _task(self.workspace, self.project_dir, action="select_template", template_id="template-dashboard")
             )
 
         self.assertEqual(entry["status"], "confirmed")
         self.assertEqual(entry["template_id"], "template-dashboard")
+        self.assertEqual(entry["verification"]["status"], "passed")
+        self.assertIs(generate.call_args.kwargs["allow_missing"], False)
+
+    def test_select_template_missing_bindings_keeps_previous_design(self) -> None:
+        """模板适配漏掉产品操作或信息项时必须失败，且不能覆盖工作区中的原稿。"""
+
+        target = Path(self.project_dir) / "pages" / "Orders" / "index.tsx"
+        target.parent.mkdir(parents=True)
+        target.write_text("previous design", encoding="utf-8")
+        with patch(
+            "app.services.ui_design_generation_pool.load_template_source", return_value=FAKE_CODE,
+        ), patch(
+            "app.services.ui_design_generation_pool.generate_adjusted_page_react_code", return_value=FAKE_CODE,
+        ):
+            entry = generate_page_entry(
+                _task(self.workspace, self.project_dir, action="select_template", template_id="agentConversation")
+            )
+
+        self.assertEqual(entry["status"], "generation_failed")
+        self.assertIn("orders-action", entry["error"])
+        self.assertIn("orders-list", entry["error"])
+        self.assertEqual(target.read_text(encoding="utf-8"), "previous design")
 
     def test_select_template_missing_template_returns_failed(self) -> None:
         """select_template 缺 template_id 应直接失败，不触发生成。"""

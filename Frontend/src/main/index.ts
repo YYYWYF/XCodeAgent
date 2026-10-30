@@ -1,4 +1,5 @@
 import { projectWorkbenchAgents } from './agentPlanningArtifactProjection'
+import { startRuntimeAcceptanceWorker } from './runtimeAcceptanceWorker'
 import type { BusinessAgentOption } from '../shared/businessAgent'
 import { stopProjectPreviewViaAgUi } from './projectPreviewControl'
 import { cancelStartupUpdate, focusStartupUpdate, runStartupUpdate } from './appUpdate/window'
@@ -110,6 +111,8 @@ type WorkbenchApiContract = {
   name: string
   entityIds: string[]
   endpoints: Array<{
+    kind: 'business' | 'agent_runtime'
+    agent_id?: string
     apiContractId: string
     id: string
     name: string
@@ -313,8 +316,8 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
     )
     const basePath = normalizeApiPath(record.base_path, `/${contractId}`)
     const endpoints = recordItems(record.endpoints)
-    const group = groupedContracts.get(basePath) || {
-      id: basePath,
+    const group = groupedContracts.get(contractId) || {
+      id: contractId,
       label: basePath,
       name: normalizeWorkbenchNodeLabel(record.name, '未命名接口分组'),
       entityIds: [],
@@ -331,8 +334,11 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
           .toUpperCase()
         const endpointPath = String(endpointRecord.path || '').trim()
         if (!endpointPath) return []
+        if (endpointRecord.kind !== 'business' && endpointRecord.kind !== 'agent_runtime') throw new Error('当前 Endpoint 缺少显式 kind，请重新确认技术规划。')
         return [
           {
+            kind: endpointRecord.kind as 'business' | 'agent_runtime',
+            agent_id: typeof endpointRecord.agent_id === 'string' ? endpointRecord.agent_id : undefined,
             apiContractId: contractId,
             id: String(endpointRecord.id || endpointIndex + 1),
             name: normalizeWorkbenchNodeLabel(endpointRecord.name, '未命名接口'),
@@ -346,7 +352,7 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
         ]
       })
     )
-    groupedContracts.set(basePath, group)
+    groupedContracts.set(contractId, group)
   })
   return [...groupedContracts.values()]
 }
@@ -1951,6 +1957,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
   const backendBaseUrl = await ensureBackendReady()
+  startRuntimeAcceptanceWorker(backendBaseUrl)
   console.log(`DevAgent Studio backend URL: ${backendBaseUrl}`)
   setupApplicationStorageIpc()
   setupAuthIpc()

@@ -184,13 +184,13 @@ def _strict_task_report_error(
 
 
 def _strict_result_condition_error(report: dict[str, Any]) -> str:
-    """按任务状态校验摘要、满足证据、失败原因和 change_request 条件。"""
+    """按任务状态校验执行事实字段；展示摘要缺失不影响协议有效性。"""
 
     status = str(report.get("status") or "").strip()
     if status not in {"completed", "already_satisfied", "failed"}:
         return f"has invalid status {report.get('status')!r}."
-    if not str(report.get("summary") or "").strip():
-        return "must include a non-empty summary."
+    # summary 仅供展示，不证明执行成功；缺失时由平台提供中性说明，
+    # 不因模型漏写说明而使整批任务失效或触发再次生成。
 
     failure_fields = {"failure_category", "failure_reason"}
     if status != "failed" and any(field in report for field in failure_fields):
@@ -258,7 +258,10 @@ def _task_result_from_report(
     else:
         failure_category = report.get("failure_category")
         failure_reason = report.get("failure_reason")
-    summary = str(report.get("summary") or report.get("agent_note") or "").strip()
+    raw_summary = report.get("summary") or report.get("agent_note")
+    summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
+    if not summary:
+        summary = str(failure_reason or f"执行器报告任务状态为 {status}，实际变更和验收由平台核对。")
     return {
         "task_id": task["id"],
         "owner": task["owner"],

@@ -10,8 +10,19 @@
   background: var(--wb-canvas);
   overflow-wrap: anywhere;
 
+  > .ant-tabs {
+    min-width: 0;
+    > .ant-tabs-nav::before { border-color: var(--wb-border); }
+    .ant-tabs-tab { color: var(--wb-text-secondary); }
+    .ant-tabs-tab:hover, .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+      color: var(--wb-accent);
+    }
+    .ant-tabs-tab-btn:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 3px; }
+    .ant-tabs-ink-bar { background: var(--wb-accent); }
+  }
+
   h2, h3, h4, dt { color: var(--wb-text); }
-  .agent-detail-hero, .agent-detail-section {
+  .agent-detail-section {
     border: 1px solid var(--wb-border);
     border-radius: 12px;
     background: var(--wb-surface);
@@ -20,23 +31,20 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    gap: 12px;
-    padding: 18px;
-    h2 { margin: 2px 0; font-size: 20px; line-height: 1.5; }
+    gap: 10px;
+    padding: 2px 0 6px;
+    h2 { margin: 0; font-size: 20px; line-height: 1.5; }
     code { color: var(--wb-text-secondary); font-size: 12px; }
   }
+  .agent-detail-identity { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; min-width: 0; }
   .agent-detail-avatar {
     display: grid;
-    width: 42px;
-    height: 42px;
+    width: 28px;
+    height: 28px;
     place-items: center;
     color: var(--wb-accent);
-    background: var(--wb-accent-soft);
-    border: 1px solid var(--wb-accent-border);
-    border-radius: 12px;
-    font-size: 20px;
+    font-size: 22px;
   }
-  .agent-detail-kicker { color: var(--wb-text-tertiary); font-size: 11px; letter-spacing: 0.08em; }
   .agent-detail-section { padding: 16px; margin-bottom: 14px; }
   .agent-detail-section-title {
     display: flex;
@@ -49,41 +57,17 @@
   }
   .agent-page-bindings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--wb-text-secondary); }
   .ant-tag { margin: 0; color: var(--wb-text-secondary); background: var(--wb-surface-subtle); border-color: var(--wb-border); }
+  .agent-debug-tab-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    > .ant-tag { color: var(--wb-accent); background: var(--wb-accent-soft); border-color: var(--wb-accent-border); font-size: 11px; line-height: 18px; }
+  }
   .ant-typography { color: var(--wb-text); }
   .ant-typography-secondary { color: var(--wb-text-secondary); }
-  .agent-settings-collapse {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    background: transparent;
-    > .ant-collapse-item {
-      overflow: hidden;
-      border: 1px solid var(--wb-border);
-      border-radius: 10px;
-      background: var(--wb-surface-subtle);
-      > .ant-collapse-header { align-items: center; padding: 12px 14px; color: var(--wb-text); }
-      > .ant-collapse-header:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
-      > .ant-collapse-content {
-        color: var(--wb-text);
-        background: var(--wb-surface);
-        border-top: 1px solid var(--wb-border);
-        > .ant-collapse-content-box { padding: 14px 16px 16px; }
-      }
-    }
-  }
   .agent-setting-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; width: 100%; }
   .agent-prompt-summary, .agent-prompt-editor, .agent-setting-list { display: flex; flex-direction: column; gap: 10px; }
-  .agent-prompt-meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; }
-  .agent-prompt-field, .agent-setting-card-grid article, .agent-setting-list article {
-    min-width: 0;
-    padding: 11px 12px;
-    background: var(--wb-surface-subtle);
-    border: 1px solid var(--wb-border);
-    border-radius: 8px;
-  }
   .agent-field-label { color: var(--wb-text-tertiary); font-size: 12px; }
-  .agent-prompt-field p { margin: 7px 0 0; white-space: pre-wrap; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
-  .agent-model-policy { display: inline-block; padding: 4px 10px; border: 1px solid var(--wb-border); background: var(--wb-surface-subtle); border-radius: 6px; }
   .agent-setting-card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 10px; }
   .agent-setting-card-grid article { display: flex; flex-direction: column; gap: 5px; }
   .ant-descriptions-item-label { color: var(--wb-text-tertiary); }

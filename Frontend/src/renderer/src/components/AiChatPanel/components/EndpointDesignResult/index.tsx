@@ -39,6 +39,17 @@ function queryText(value: unknown): string {
 /** 渲染 API 设计正式产物的共享只读视图。 */
 export default function EndpointDesignResult({ detail, compact = false, historyLayout = false }: Props): ReactElement {
   if (!detail) return <Empty description="尚未读取接口 API 映射结果" />
+  if (detail.design?.implementationKind === 'agent_runtime') return <div className={cx('endpoint-design-result')}>
+    <Typography.Title level={5}>智能体运行接口接入设计</Typography.Title>
+    <Descriptions bordered column={1} size="small">
+      <Descriptions.Item label="状态">{detail.status === 'confirmed' ? '已确认' : '需重新审阅'}</Descriptions.Item>
+      <Descriptions.Item label="API Contract">{detail.apiContractId}</Descriptions.Item>
+      <Descriptions.Item label="Endpoint">{detail.endpointId}</Descriptions.Item>
+      <Descriptions.Item label="协议">AG-UI / SSE，纯文本会话</Descriptions.Item>
+    </Descriptions>
+    {detail.reason ? <Alert type="warning" showIcon message={detail.reason} /> : null}
+    <Typography.Paragraph>接入合同已绑定正式 Agent。变更能力须正式修订；本确认不会立即调用模型或启动开发。</Typography.Paragraph>
+  </div>
   const summary = endpointDesignSummary(detail)
   const externalRows = projectExternalBindingRows(detail)
   const databaseWriteRows = projectDatabaseWriteRows(detail)

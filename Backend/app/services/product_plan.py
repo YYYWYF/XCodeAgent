@@ -9,6 +9,7 @@ from typing import Any
 
 from app.services.requirement_spec import product_acceptance_criteria
 from app.services.product_plan_carryover import carried_definition_for_page
+from app.services.agent_product_actions import agent_behavior_targets, agent_product_action_errors
 
 PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v8"
 _STATE_REQUIREMENT_KEYS = ("loading", "empty", "error", "success", "validation")
@@ -30,7 +31,7 @@ _FORBIDDEN_PRODUCT_KEYS = {
 }
 _REMOVED_PRODUCT_KEYS = {"assumptions", "risks"}
 _DUPLICATED_PRODUCT_KEYS = {"frontend_pages"}
-_PRODUCT_BEHAVIOR_TYPES = {"business", "navigation", "interface", "external", "sequence"}
+_PRODUCT_BEHAVIOR_TYPES = {"business", "agent", "navigation", "interface", "external", "sequence"}
 _PRODUCT_STEP_TYPES = _PRODUCT_BEHAVIOR_TYPES - {"sequence"}
 _MODEL_ROOT_KEYS = {
     "app",
@@ -148,6 +149,8 @@ def _model_behavior_errors(value: Any, location: str) -> list[str]:
     expected_keys = {"type", "expectedResult"}
     if behavior_type == "navigation":
         expected_keys.add("targetPageId")
+    elif behavior_type == "agent":
+        expected_keys.update({"agentId", "operation", "message"})
     elif behavior_type == "external":
         expected_keys.add("externalTarget")
     elif behavior_type == "sequence":
@@ -166,6 +169,8 @@ def _model_behavior_errors(value: Any, location: str) -> list[str]:
         step_keys = {"stepId", "type", "expectedResult"}
         if step_type == "navigation":
             step_keys.add("targetPageId")
+        elif step_type == "agent":
+            step_keys.update({"agentId", "operation", "message"})
         elif step_type == "external":
             step_keys.add("externalTarget")
         errors.extend(_exact_keys(step, step_keys, step_location))
@@ -370,6 +375,7 @@ def _agent_contract_errors(
                 f"页面 {page_id} 最多绑定一个 {surface_type} Agent Surface，"
                 f"当前绑定：{'、'.join(owners)}。"
             )
+    errors.extend(agent_product_action_errors(agents, _dict_items(pages)))
     return errors
 
 
@@ -475,9 +481,9 @@ def _normalized_behavior_step(
 ) -> dict[str, Any]:
     """规范单个产品可理解的行为步骤，不引入 endpoint 等技术字段。"""
 
-    step_type = str(value.get("type") or "business").strip().lower()
+    step_type = str(value.get("type") or "").strip().lower()
     if step_type not in _PRODUCT_STEP_TYPES:
-        step_type = "business"
+        raise ValueError(f"产品步骤必须显式声明合法 type，当前为 {step_type or '空'}。")
     expected_result = str(
         value.get("expectedResult")
         or value.get("expected_result")
@@ -490,7 +496,9 @@ def _normalized_behavior_step(
         "type": step_type,
         "expectedResult": expected_result,
     }
-    if step_type == "navigation":
+    if step_type == "agent":
+        step.update({key: value.get(key) for key in ("agentId", "operation", "message")})
+    elif step_type == "navigation":
         step["targetPageId"] = str(
             value.get("targetPageId") or value.get("target_page_id") or ""
         ).strip()
@@ -518,10 +526,8 @@ def _normalized_action_behavior(action_id: str, item: dict[str, Any]) -> dict[st
         or item.get("external_target")
         or ""
     ).strip()
-    if not behavior_type:
-        behavior_type = "navigation" if target_page_id else ("external" if external_target else "business")
     if behavior_type not in _PRODUCT_BEHAVIOR_TYPES:
-        behavior_type = "business"
+        raise ValueError(f"产品动作 {action_id} 必须显式声明合法 behavior.type，不能默认为业务接口。")
     expected_result = str(
         source.get("expectedResult")
         or item.get("expectedResult")
@@ -533,7 +539,9 @@ def _normalized_action_behavior(action_id: str, item: dict[str, Any]) -> dict[st
         "type": behavior_type,
         "expectedResult": expected_result,
     }
-    if behavior_type == "navigation":
+    if behavior_type == "agent":
+        behavior.update({key: source.get(key) for key in ("agentId", "operation", "message")})
+    elif behavior_type == "navigation":
         behavior["targetPageId"] = target_page_id
     elif behavior_type == "external":
         behavior["externalTarget"] = external_target
@@ -790,6 +798,7 @@ def _ensure_agent_entry_actions(
     pages: list[dict[str, Any]],
     requirement_spec: dict[str, Any],
     agent_plan: dict[str, Any] | None,
+    existing_plan: dict[str, Any] | None = None,
 ) -> None:
     """仅在模型未规划入口操作时补齐最小智能体交互动作。"""
 
@@ -802,9 +811,10 @@ def _ensure_agent_entry_actions(
         str(item.get("agentId") or "").strip(): item
         for item in _dict_items((agent_plan or {}).get("agents"))
     }
+    existing_agents = {item.get("agentId"): item for item in _dict_items((existing_plan or {}).get("agents"))}
     for requirement in _dict_items(requirement_spec.get("agent_requirements")):
         agent_id = str(requirement.get("agentId") or "").strip()
-        supplement = supplements.get(agent_id, {})
+        supplement = supplements.get(agent_id, existing_agents.get(agent_id, {}))
         bindings = {
             str(item.get("pageId") or "").strip(): _text_items(item.get("actionIds"))
             for item in _dict_items(supplement.get("pageActionBindings"))
@@ -827,7 +837,10 @@ def _ensure_agent_entry_actions(
                     "description": str(requirement.get("purpose") or "与业务智能体交互。"),
                     "requiresConfirmation": False,
                     "behavior": {
-                        "type": "business",
+                        "type": "agent",
+                        "agentId": agent_id,
+                        "operation": "send_message",
+                        "message": "",
                         "expectedResult": "用户获得符合智能体职责和业务边界的明确回复。",
                     },
                 }
@@ -838,6 +851,7 @@ def _normalized_agents(
     requirement_spec: dict[str, Any],
     agent_plan: dict[str, Any] | None,
     existing_plan: dict[str, Any] | None,
+    pages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """把需求智能体扩展为仅包含产品可见行为的 ProductPlan 契约。"""
 
@@ -892,7 +906,15 @@ def _normalized_agents(
         for page_id in _text_items(requirement.get("entryPageIds")):
             supplied = supplied_bindings.get(page_id, {})
             existing_binding = existing_bindings.get(page_id, {})
-            action_ids = _text_items(supplied.get("actionIds"))
+            # 未修改的绑定保持原全集；显式 Agent 行为的归属直接投影，不让模型重复维护两份清单。
+            action_ids = _text_items(supplied.get("actionIds")) if supplied else _text_items(existing_binding.get("actionIds"))
+            explicit_ids = [
+                str(action.get("actionId") or "")
+                for page in pages if page.get("pageId") == page_id
+                for action in _dict_items(page.get("actions"))
+                if any(target.get("agentId") == agent_id for target in agent_behavior_targets(action))
+            ]
+            action_ids = list(dict.fromkeys([*action_ids, *explicit_ids]))
             page_bindings.append(
                 {
                     "pageId": page_id,
@@ -1124,7 +1146,7 @@ def create_product_plan(
     app_info = requirement_spec.get("app_info")
     app_info = app_info if isinstance(app_info, dict) else {}
     pages = _normalized_pages(requirement_spec, agent_plan, carried_pages)
-    _ensure_agent_entry_actions(pages, requirement_spec, agent_plan)
+    _ensure_agent_entry_actions(pages, requirement_spec, agent_plan, existing_plan)
     plan = {
         "schema_version": PRODUCT_PLAN_SCHEMA_VERSION,
         "version": str((existing_plan or {}).get("version") or "0.1.0"),
@@ -1134,7 +1156,7 @@ def create_product_plan(
             "name": str(app_info.get("name") or "未命名应用"),
             "summary": str(app_info.get("summary") or requirement_spec.get("summary") or ""),
         },
-        "agents": _normalized_agents(requirement_spec, agent_plan, existing_plan),
+        "agents": _normalized_agents(requirement_spec, agent_plan, existing_plan, pages),
         "business_flows": _dict_items(requirement_spec.get("business_flows")),
         "pages": pages,
         # 映射只追踪已确认业务规则到产品稳定目标，不包含角色、资源键或策略键。

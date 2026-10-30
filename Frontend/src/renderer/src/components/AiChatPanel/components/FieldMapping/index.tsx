@@ -1,15 +1,13 @@
 import { confirmWorkspaceAction } from '../../../workspaceDialogs'
-import { ApiOutlined, BulbOutlined, CaretDownOutlined, DownOutlined, EditOutlined, FolderOpenOutlined, NodeIndexOutlined, UpOutlined } from '@ant-design/icons'
-import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag, Tooltip } from 'antd'
+import { BulbOutlined, DownOutlined, EditOutlined, NodeIndexOutlined, UpOutlined } from '@ant-design/icons'
+import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { DevelopmentPlanningApiContract, EndpointDesignSaveResult, WorkflowApiDesignDraft } from '../../../../typings'
+import type { DevelopmentPlanningApiContract, EndpointDesignPreparation, EndpointDesignSaveResult, WorkflowApiDesignDraft } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
-import { cx } from '../../../../utils'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import ApiDesignConfigModal from '../WorkflowRunCard/ApiDesignConfigModal'
 import { apiDesignFieldKey, createUnconfiguredFieldMapping, defaultDatabaseOperation, validateApiDesignDraft } from '../WorkflowRunCard/apiDesignSerialization'
-import { apiEndpointDisplayPath } from '../../utils'
 import ExternalMapping from './ExternalMapping'
 import DatabaseMapping from './DatabaseMapping'
 import StaticMapping, { StaticDataCard } from './StaticMapping'
@@ -17,6 +15,8 @@ import { mappingCandidates, resetDraftForDatabaseOperation, selectionKey, tableI
 import { useBindingWorkspace } from './useBindingWorkspace'
 import { RuleEditingContext } from './RuleEditor'
 import './index.less'
+import EndpointWorkspaceRouter from './EndpointWorkspaceRouter'
+import ApiContractDirectory from './ApiContractDirectory'
 import { endpointRecoveryScope, useEndpointDesignRecovery } from '../../hooks/useEndpointDesignRecovery'
 import { RuleAssistContext, useMappingAssist } from './useMappingAssist'
 import MappingAssistPanel from './MappingAssistPanel'
@@ -30,11 +30,17 @@ type Props = {
   onSaved: (target: ApiDesignConfigTarget, result: EndpointDesignSaveResult) => void | Promise<void>
 }
 
+/** 先读取正式准备结果再分派组件，禁止业务 Hook 提前处理运行接口。 */
+export default function FieldMappingWorkspace(props: Props): ReactElement {
+  return <EndpointWorkspaceRouter {...props} renderBusiness={(target, preparation) =>
+    <BusinessFieldMappingWorkspace {...props} target={target} preparation={preparation} />} />
+}
+
 /** 在常驻页签内编辑直接映射，复杂映射仍交给原有编辑器。 */
-export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved }: Props): ReactElement {
+function BusinessFieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved, preparation }: Props & { preparation?: EndpointDesignPreparation }): ReactElement {
   // 映射失败只归属当前工作台，不参与主工作流的错误与恢复投影。
   const recovery = useEndpointDesignRecovery(workspaceRoot, [endpointRecoveryScope(workspaceRoot), endpointRecoveryScope(workspaceRoot, target)], ['binding'])
-  const state = useBindingWorkspace(workspaceRoot, target, onSaved, recovery.report)
+  const state = useBindingWorkspace(workspaceRoot, target, onSaved, recovery.report, preparation)
   const { entry, catalog, tables, metadata, busy: workspaceBusy, loading, error, metadataLoading } = state
   const [editingRules, setEditingRules] = useState(0)
   /** 汇总尚未应用的规则编辑器，防止确认旧值。 */
@@ -184,13 +190,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const displayedSelection = sourceChanging ? pendingSelection : selection
 
   return <RuleEditingContext.Provider value={trackRuleEditing}><RuleAssistContext.Provider value={ruleContext}><div className="binding-workspace">
-    <nav className="binding-directory" aria-label="应用 API"><h4>应用 API</h4>{contracts.map((contract) => <section className="binding-contract" key={contract.id}>
-      <div className="binding-contract-heading"><CaretDownOutlined /><FolderOpenOutlined /><strong>{contract.name || '未命名接口分组'}</strong></div>
-      <div className="binding-endpoint-list">{contract.endpoints.map((endpoint) => {
-        const endpointPath = endpoint.path || '/'; const displayPath = apiEndpointDisplayPath(endpointPath, contract.label); const endpointName = endpoint.name || displayPath || '未命名接口'; const apiContractId = endpoint.apiContractId || contract.id; const selected = target?.apiContractId === apiContractId && target.endpointId === endpoint.id
-        return <Tooltip align={{ offset: [4, 0] }} key={endpoint.id} mouseEnterDelay={1} mouseLeaveDelay={0.08} overlayClassName={cx('api-hover-tooltip')} placement="right" title={<span className={cx('api-hover-tooltip-content')}><span className={cx('api-hover-tooltip-method')}>{endpoint.method}</span><code>{endpointPath}</code></span>}><span className={cx('api-tooltip-anchor')}><button aria-current={selected ? 'true' : undefined} aria-label={`${contract.name || '未命名接口分组'}，${endpointName}，${endpoint.method} ${endpointPath}`} className={selected ? 'selected' : ''} disabled={busy} onClick={() => onSelect({ apiContractId, endpointId: endpoint.id, label: endpointName })}><ApiOutlined className="binding-endpoint-icon" /><span className="binding-endpoint-copy"><strong>{endpointName}</strong></span></button></span></Tooltip>
-      })}</div>
-    </section>)}</nav>
+    <ApiContractDirectory contracts={contracts} target={target} disabled={busy} onSelect={onSelect} />
     <main className="binding-editor">
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
       {(recovery.issue || error) ? <Alert type="error" showIcon message={recovery.issue ? (recovery.issue.reason instanceof Error ? recovery.issue.reason.message : String(recovery.issue.reason)) : error} action={<Space><Button loading={recovery.retrying} disabled={busy} onClick={() => { if (recovery.issue) void recovery.retry(); else state.refreshSources() }}>同步状态</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}

@@ -1,11 +1,36 @@
 from __future__ import annotations
 
 import unittest
+import json
 
 from app.services.build_result_coordinator import create_agent_task_results
 
 
 class BuildResultCoordinatorTests(unittest.TestCase):
+    def test_missing_display_summary_does_not_invalidate_task_batch(self) -> None:
+        """缺失、空白及 null 摘要不能阻断 knowledge 或连带拒绝同批其他任务。"""
+        tasks = [{"id": "agent:it_assistant::knowledge", "owner": "agent"},
+                 {"id": "context", "owner": "agent"}]
+        for summary in ({}, {"summary": ""}, {"summary": "  "}, {"summary": None}):
+            with self.subTest(summary=summary):
+                note = json.dumps({"task_results": [
+                    {"task_id": tasks[0]["id"], "status": "completed", **summary},
+                    {"task_id": "context", "status": "already_satisfied"}]})
+                results = create_agent_task_results(tasks, note, require_structured=True, strict_schema=True)
+                self.assertEqual([item["status"] for item in results], ["completed", "already_satisfied"])
+                self.assertTrue(all(item["agent_note"].strip() for item in results))
+                self.assertTrue(all(not item["failure_category"] for item in results))
+
+    def test_missing_summary_does_not_hide_real_failure(self) -> None:
+        """不要求摘要仍须保留真实失败，缺少失败原因也不得伪造完成。"""
+        task = {"id": "knowledge", "owner": "agent"}
+        for extra, category in [({"failure_category": "tool_error", "failure_reason": "文件写入失败"}, "tool_error"),
+                                ({}, "invalid_structured_response")]:
+            note = json.dumps({"task_results": [{"task_id": "knowledge", "status": "failed", **extra}]})
+            result = create_agent_task_results([task], note, require_structured=True, strict_schema=True)[0]
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["failure_category"], category)
+
     def test_structured_task_reports_preserve_per_task_status_and_evidence(self) -> None:
         """同批 Agent 的结构化报告必须按任务 ID 分离状态和已满足证据。"""
 

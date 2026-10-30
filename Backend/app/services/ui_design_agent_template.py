@@ -72,13 +72,34 @@ def _surface_for_page(page: dict[str, Any]) -> dict[str, Any]:
     return surface
 
 
-def build_agent_ui_template_config(page: dict[str, Any]) -> dict[str, Any]:
+def build_agent_ui_template_config(page: dict[str, Any], surface_index: int = 0) -> dict[str, Any]:
     """从 ProductPlan 单页事实确定性投影固定 Agent UI 配置。"""
 
-    surface = _surface_for_page(page)
+    surfaces = _dict_items(page.get("agent_surfaces"))
+    surface = _surface_for_page({**page, "agent_surfaces": surfaces[surface_index:surface_index + 1]})
     action_ids = _string_items(surface.get("actionIds"))
-    if len(action_ids) != 1:
-        raise ValueError("每个 Agent Surface 必须且只能绑定一个 actionId。")
+    if not action_ids:
+        raise ValueError("Agent Surface 缺少会话入口动作。")
+    product_actions = {action.get("actionId"): action for action in _dict_items(page.get("actions"))}
+    actions = []
+    for action_id in action_ids:
+        action = product_actions.get(action_id, {})
+        behavior = action.get("behavior") or {}
+        if behavior.get("type") == "sequence":
+            for step in _dict_items(behavior.get("steps")):
+                if step.get("type") == "agent" and step.get("agentId") == surface.get("agentId"):
+                    actions.append({"actionId": action_id, "stepId": step["stepId"],
+                        "label": action.get("name") or action_id, "operation": step["operation"],
+                        "message": step["message"], "requiresConfirmation": action.get("requiresConfirmation") is True})
+            continue
+        if behavior.get("type") not in {"agent", "business"}:
+            continue
+        actions.append({"actionId": action_id, "label": action.get("name") or action_id,
+                        "operation": behavior.get("operation", "send_message"),
+                        "message": behavior.get("message", ""),
+                        "requiresConfirmation": action.get("requiresConfirmation") is True})
+    primary_action = next((action["actionId"] for action in actions
+                           if action["operation"] == "send_message" and not action["message"] and not action.get("stepId")), action_ids[0])
 
     item_by_id = {
         str(item.get("itemId") or "").strip(): item
@@ -114,7 +135,8 @@ def build_agent_ui_template_config(page: dict[str, Any]) -> dict[str, Any]:
         "surface": _required_text(surface.get("type"), "surface"),
         "name": name,
         "responsibility": responsibility.rstrip("。"),
-        "actionId": action_ids[0],
+        "actionId": primary_action,
+        "actions": actions,
         "contextItems": context_items,
         "capabilities": capabilities,
         "suggestedQuestions": [f"请帮我{capability_label}。", f"请说明{name}当前可以完成什么。"],
@@ -140,15 +162,17 @@ def build_agent_ui_template_config(page: dict[str, Any]) -> dict[str, Any]:
 def build_agent_ui_template_source_contract(page: dict[str, Any]) -> str:
     """生成可直接放入设计稿的固定组件静态源码契约。"""
 
-    config = build_agent_ui_template_config(page)
-    component = _SURFACE_COMPONENTS[str(config["surface"])]
-    config_json = html.escape(_canonical_config(config), quote=True)
+    configs = [build_agent_ui_template_config(page, index)
+               for index, _ in enumerate(_dict_items(page.get("agent_surfaces")))]
+    components = list(dict.fromkeys(_SURFACE_COMPONENTS[str(config["surface"])] for config in configs))
+    elements = [f'<{_SURFACE_COMPONENTS[str(config["surface"])]} configJson="{html.escape(_canonical_config(config), quote=True)}" />'
+                for config in configs]
     return (
         "import React from 'react'\n"
-        f"import {{ {component} }} from '{AGENT_UI_TEMPLATE_MODULE}'\n\n"
+        f"import {{ {', '.join(components)} }} from '{AGENT_UI_TEMPLATE_MODULE}'\n\n"
         "/** 使用平台固定 Agent UI 组件渲染当前页面。 */\n"
         "function Page(): React.ReactElement {\n"
-        f'  return <{component} configJson="{config_json}" />\n'
+        f"  return <>{''.join(elements)}</>\n"
         "}\n\n"
         "export default Page\n"
     )
@@ -258,27 +282,25 @@ def validate_agent_ui_template_usage(
         if usages:
             errors.append("当前页面不需要 Agent UI，不得加载固定 Agent UI 组件。")
         return {"errors": errors, "bindings_passed": not errors, "required_parts_passed": not errors}
-    if len(usages) != 1:
-        errors.append("包含 Agent Surface 的页面必须且只能使用一个固定 Agent UI 组件。")
+    if len(usages) != len(surfaces):
+        errors.append("页面固定 Agent UI 组件必须完整覆盖已声明的 Surface。")
         return {"errors": errors, "bindings_passed": False, "required_parts_passed": False}
-
-    try:
-        expected_config = build_agent_ui_template_config(page)
-    except ValueError as exc:
-        errors.append(str(exc))
-        return {"errors": errors, "bindings_passed": False, "required_parts_passed": False}
-    expected_component = _SURFACE_COMPONENTS[str(expected_config["surface"])]
-    usage = usages[0]
-    if usage.get("component") != expected_component:
-        errors.append(
-            f"Agent Surface 必须使用固定组件 {expected_component}，实际为 {usage.get('component') or 'missing'}。"
-        )
-    if usage.get("module") != AGENT_UI_TEMPLATE_MODULE:
-        errors.append(f"固定组件模块必须为 {AGENT_UI_TEMPLATE_MODULE}。")
-    if usage.get("version") != AGENT_UI_TEMPLATE_VERSION:
-        errors.append(f"固定组件版本必须为 {AGENT_UI_TEMPLATE_VERSION}。")
-    if usage.get("config") != expected_config:
-        errors.append("固定 Agent UI 的 configJson 必须与 ProductPlan 页面投影完全一致。")
+    remaining = list(usages)
+    for index, _ in enumerate(surfaces):
+        try:
+            config = build_agent_ui_template_config(page, index)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        usage = next((item for item in remaining if item.get("config") == config), None)
+        if usage is None:
+            errors.append(f"Agent {config['agentId']} 的固定组件配置与产品声明不一致。")
+            continue
+        remaining.remove(usage)
+        if (usage.get("component") != _SURFACE_COMPONENTS[str(config["surface"])]
+                or usage.get("module") != AGENT_UI_TEMPLATE_MODULE
+                or usage.get("version") != AGENT_UI_TEMPLATE_VERSION):
+            errors.append(f"Agent {config['agentId']} 必须使用对应的正式固定组件。")
     return {"errors": errors, "bindings_passed": not errors, "required_parts_passed": not errors}
 
 

@@ -39,7 +39,7 @@ def module_inputs(plan: dict, agent_id: str) -> dict:
     return {module: agent_module_facts(plan, agent_id, module) for module in AGENT_RUNTIME_MODULES}
 
 
-def reconcile_agent_progress(plan: dict, agent_id: str, progress):
+def reconcile_agent_progress(plan: dict, agent_id: str, progress, workspace: str | Path | None = None):
     """正式模块输入改变时标记需更新，保留首次开发完成事实。"""
 
     if progress.initial_development_status != "completed":
@@ -98,7 +98,7 @@ def agent_development_payload(root: Path, formal: dict, agent_id: str) -> dict:
     lifecycle = load_application_lifecycle(root)
     progress = lifecycle.development_artifacts.agents.get(agent_id) if lifecycle else None
     if progress:
-        progress = reconcile_agent_progress(formal, agent_id, progress)
+        progress = reconcile_agent_progress(formal, agent_id, progress, root)
     plan = load_confirmed_build_task_plan(root) or {}
     registry = plan.get("task_registry") or {}
     # 尚未生成 DAG 时只展示待开发，不因模板策略尚不存在而阻断整个目录。

@@ -52,7 +52,13 @@ def apply_platform_projections(
         """严格按确认 DAG 写入仍保留的权限共享投影。"""
 
         try:
+            from app.services.python_runtime_checks import runtime_check_plan
+            from app.services.runtime_execution_policy import publish_execution_policies
+            formal = runtime_check_plan(workspace_path, {})
+            runtime_evidence = publish_execution_policies(workspace_path, formal,
+                build_task_plan.get("runtime_execution_policy"), build_task_plan.get("build_execution_scope") or {}) if formal else {"status": "not_required"}
             return {
+                "runtime": runtime_evidence,
                 "frontend": apply_authorization_frontend_projection(
                     workspace_path,
                     frontend_projection,
@@ -84,6 +90,7 @@ def apply_platform_projections(
         "planSha256": actual_plan_sha256,
         "frontend": captured.value["frontend"],
         "authConstants": captured.value["authConstants"],
+        "runtime": captured.value["runtime"],
         "files": list(change_set.get("files") or []),
         "summary": dict(
             change_set.get("summary")

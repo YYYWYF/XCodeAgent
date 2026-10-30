@@ -105,7 +105,7 @@ def _unit_responsibilities(
         # 页面作用域只生成页面直接调用的模块；Tool 的内部业务依赖不暴露给前端。
         direct_ids = {key for page in pages.values() for key in page.get("requiredEndpointIds", ())}
         return _endpoint_requirements("frontend.api_module", [
-            key for key in endpoints if not pages or key[1] in direct_ids
+            key for key in endpoints if endpoints[key].get("kind") != "agent_runtime" and (not pages or key[1] in direct_ids)
         ])
     if unit_id.startswith("frontend:data:"):
         source_id = unit_id.removeprefix("frontend:data:")
@@ -113,7 +113,7 @@ def _unit_responsibilities(
             fail_requirement_input("GENERATION_UNIT_UNSUPPORTED", f"当前正式静态数据 Unit 身份必须为 frontend:data:static，收到 {unit_id}。", unit_ids=[unit_id])
         return _endpoint_requirements(
             "frontend.static_data_module",
-            [key for key in endpoints if not source_types_by_endpoint[key]],
+            [key for key in endpoints if endpoints[key].get("kind") != "agent_runtime" and not source_types_by_endpoint[key]],
         )
     if unit_id == "backend:bootstrap":
         source_types = {
@@ -131,6 +131,8 @@ def _unit_responsibilities(
         matches = [key for key in endpoints if unit_id == f"backend:endpoint:{key[0]}:{key[1]}"]
         if len(matches) != 1:
             fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"Endpoint Unit {unit_id} 不在 Scope 内或身份有歧义。", unit_ids=[unit_id])
+        if endpoints[matches[0]].get("kind") == "agent_runtime":
+            return []
         return _backend_requirements(matches[0], source_types_by_endpoint[matches[0]])
     if unit_id == "frontend:auth-guard":
         fingerprint = resource_catalog_fingerprint(plan)
@@ -215,6 +217,9 @@ def resolve_generation_requirements(
             strategy = "prerequisite_only"
             if not any(item.unit_id == unit_id and item.capability_id == "frontend.shell.ready" for item in facts.external_capabilities):
                 fail_requirement_input("SHELL_PREREQUISITE_MISSING", "frontend:shell 缺少平台已验证的模板前置能力。", unit_ids=[unit_id])
+        elif any(unit_id == f"backend:endpoint:{key[0]}:{key[1]}" and endpoint.get("kind") == "agent_runtime"
+                 for key, endpoint in endpoints.items()):
+            strategy = "prerequisite_only"
         elif not duties:
             strategy = "not_required"
         elif not missing:

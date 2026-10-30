@@ -150,6 +150,9 @@ def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
             raise ValueError("开发产物 API Contract 标识重复。")
         contracts.add(contract_id)
         for endpoint in _records(contract.get("endpoints"), "API Contract.endpoints"):
+            if endpoint.get("kind") == "agent_runtime":
+                # 运行入口状态聚合到 Agent；仍参与设计/验收，不重复统计应用完成数。
+                continue
             targets.append(DevelopmentArtifactTarget(
                 type="endpoint", apiContractId=contract_id,
                 endpointId=_identifier(endpoint.get("id")),
@@ -241,7 +244,7 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
         if target.type == "agent":
             from app.services.runtime_agent_development import reconcile_agent_progress
 
-            artifacts.agents[target.agent_id or ""] = reconcile_agent_progress(technical, target.agent_id, progress)
+            artifacts.agents[target.agent_id or ""] = reconcile_agent_progress(technical, target.agent_id, progress, workspace)
         elif target.type == "page":
             artifacts.pages[target.page_id or ""] = progress
         else:
@@ -335,7 +338,16 @@ def complete_initial_development(
             raise ValueError("初次开发完成缺少有效的服务端 execution。")
         if execution.development_target is None:
             return state
-        progress = artifact_progress(state.development_artifacts, execution.development_target)
+        # 运行接口与 Agent 共用实现及完成事实，接口目录不增加第二份完成计数。
+        target = execution.development_target
+        if target.type == "endpoint":
+            formal = _confirmed_plan(workspace, "technical-plan")
+            endpoint = next((entry for contract in formal.get("api_contracts", [])
+                if contract.get("id") == target.api_contract_id for entry in contract.get("endpoints", [])
+                if entry.get("id") == target.endpoint_id), {})
+            if endpoint.get("kind") == "agent_runtime":
+                target = DevelopmentArtifactTarget(type="agent", agentId=endpoint["agent_id"])
+        progress = artifact_progress(state.development_artifacts, target)
         if not isinstance(progress, DevelopmentArtifactProgress):
             return state
         completed = progress.initial_development_status == "completed"
@@ -347,13 +359,17 @@ def complete_initial_development(
             raise ValueError("已停止或失败的 execution 不能提交初次开发完成。")
         if state.development_artifacts.catalog_error:
             raise ValueError(state.development_artifacts.catalog_error)
-        targets = [execution.development_target]
+        targets = [target]
         from app.services.runtime_agent_development import completed_build_agents, module_inputs
 
         verified_agents = completed_build_agents(workspace, build_state or {}, execution)
-        if execution.development_target.type == "agent" and execution.development_target not in verified_agents:
+        if target.type == "agent" and target not in verified_agents:
             raise ValueError("当前智能体七模块、依赖或单测缺少同轮完成证据。")
         targets.extend(target for target in verified_agents if target not in targets)
+        if target.type == "agent" and build_state is not None:
+            from app.services.development_completion_evidence import completed_agent_endpoints
+
+            targets.extend(completed_agent_endpoints(build_state, agent_id=target.agent_id or "", run_id=run_id))
         if execution.development_target.type == "page" and build_state is not None:
             from app.services.development_completion_evidence import completed_page_endpoints
 
@@ -417,7 +433,10 @@ def execution_development_metadata(
         endpointId=target_id if scope == "endpoint" else None,
     )
     progress = artifact_progress(state.development_artifacts, target)
-    initial = initial_entry and not state.active_formal_revision and progress is not None and (
-        progress.initial_development_status != "completed"
-    )
+    if progress is None and scope == "endpoint":
+        from app.services.runtime_endpoint_contracts import runtime_endpoint_identity
+        runtime_id = next((agent_id for agent_id in state.development_artifacts.agents
+            if runtime_endpoint_identity(agent_id) == (api_contract_id, target_id)), None)
+        progress = state.development_artifacts.agents.get(runtime_id) if runtime_id else None
+    initial = initial_entry and not state.active_formal_revision and progress is not None and progress.initial_development_status != "completed"
     return {"development_purpose": "initial" if initial else "revision", "development_target": target}

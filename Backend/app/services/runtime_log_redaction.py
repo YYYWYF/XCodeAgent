@@ -3,29 +3,35 @@
 from pathlib import Path
 from threading import Thread
 from typing import BinaryIO
+from collections.abc import Callable
 
 from app.services.backend_startup_diagnostics import redact_startup_text
 
 
-def _copy_redacted(stream: BinaryIO, path: Path, environment: dict[str, str]) -> None:
+def _copy_redacted(stream: BinaryIO, path: Path, environment: dict[str, str],
+                   on_line: Callable[[str], None] | None = None) -> None:
     """持续消费单个输出管道，每行脱敏后落盘并及时供就绪检查读取。"""
 
     try:
         with path.open("a", encoding="utf-8") as output:
             for line in stream:
-                output.write(redact_startup_text(line.decode("utf-8", errors="replace"), environment))
+                text = redact_startup_text(line.decode("utf-8", errors="replace"), environment)
+                output.write(text)
                 output.flush()
+                if on_line is not None:
+                    on_line(text)
     finally:
         stream.close()
 
 
-def attach_redacted_logs(process, stdout_path: Path, stderr_path: Path, environment: dict[str, str]) -> list[Thread]:
+def attach_redacted_logs(process, stdout_path: Path, stderr_path: Path, environment: dict[str, str], *,
+                         on_line: Callable[[str], None] | None = None) -> list[Thread]:
     """为真实输出管道建立独立消费者，避免阻塞 Java 并只保留内存凭据。"""
 
     threads: list[Thread] = []
     for stream, path in ((process.stdout, stdout_path), (process.stderr, stderr_path)):
         if stream is not None:
-            thread = Thread(target=_copy_redacted, args=(stream, path, environment), daemon=True)
+            thread = Thread(target=_copy_redacted, args=(stream, path, environment, on_line), daemon=True)
             thread.start()
             threads.append(thread)
     return threads

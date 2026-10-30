@@ -46,6 +46,13 @@ def resolve_execution_resource_claims(
     if target_type == "data_source":
         return _data_source_claims(plan, target_id)
     if target_type == "endpoint":
+        api_id = str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
+        runtime_agents = scoped_agent_ids(plan, "endpoint", target_id, api_id)
+        if runtime_agents:
+            return _deduplicated_claims([
+                _claim(ExecutionResourceType.ENDPOINT, f"{api_id}:{target_id}", primary=True),
+                _claim(ExecutionResourceType.AGENT, runtime_agents[0]), _claim(ExecutionResourceType.AGENT, "runtime"),
+            ])
         return _endpoint_claims(
             plan,
             target_id,

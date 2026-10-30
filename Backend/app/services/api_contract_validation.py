@@ -9,6 +9,7 @@ from app.services.api_contracts import (
 )
 from app.services.api_schema_refs import normalize_local_schema_ref
 from app.services.entity_definitions import normalize_entities
+from app.services.page_endpoint_identity import page_endpoint_keys, resolve_endpoint_key
 
 
 def _string_items(value: Any) -> list[str]:
@@ -43,12 +44,12 @@ def validate_api_contract_definitions(project_plan: dict[str, Any]) -> list[str]
 
 def _validate_api_contract_definitions(
     project_plan: dict[str, Any],
-) -> tuple[list[str], dict[str, tuple[dict[str, Any], dict[str, Any]]]]:
+) -> tuple[list[str], dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]]]:
     """校验 Contract 定义并返回页面引用校验需要的 Endpoint 索引。"""
 
     contracts = dict_items(project_plan.get("api_contracts"))
     errors: list[str] = []
-    endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    endpoint_index: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]] = {}
     entity_ids_set = {
         str(entity.get("id") or "")
         for entity in normalize_entities(project_plan.get("entities"))
@@ -56,6 +57,18 @@ def _validate_api_contract_definitions(
     }
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
+        if any(item.get("kind") == "agent_runtime" for item in dict_items(contract.get("endpoints"))):
+            try:
+                from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
+                materialize_runtime_endpoints(project_plan)
+                for endpoint in contract["endpoints"]:
+                    key = (contract_id, endpoint["id"])
+                    if key in endpoint_index:
+                        errors.append(f"Endpoint 复合身份重复：{key}。")
+                    endpoint_index[key] = (contract, endpoint)
+            except ValueError as exc:
+                errors.append(str(exc))
+            continue
         entity_ids_list = _string_items(contract.get("entity_ids"))
         if not contract_id:
             errors.append("API contract does not define id.")
@@ -98,7 +111,7 @@ def _validate_contract_schemas(
 def _index_and_validate_endpoints(
     contract: dict[str, Any],
     *,
-    endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]],
+    endpoint_index: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]],
     errors: list[str],
 ) -> None:
     """建立 Endpoint 索引并校验单个契约的 Endpoint。"""
@@ -110,9 +123,10 @@ def _index_and_validate_endpoints(
         if not endpoint_id:
             errors.append(f"API contract {contract_id} contains an endpoint without id.")
             continue
-        if endpoint_id in endpoint_index:
-            errors.append(f"Duplicate endpoint id: {endpoint_id}.")
-        endpoint_index[endpoint_id] = (contract, endpoint)
+        key = (contract_id, endpoint_id)
+        if key in endpoint_index:
+            errors.append(f"Duplicate endpoint identity: {contract_id}/{endpoint_id}.")
+        endpoint_index[key] = (contract, endpoint)
         _validate_endpoint(
             contract_id,
             endpoint_id,
@@ -160,16 +174,15 @@ def _validate_endpoint(
 
 def _validate_page_api_dependencies(
     project_plan: dict[str, Any],
-    endpoint_index: dict[str, tuple[dict[str, Any], dict[str, Any]]],
+    endpoint_index: dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]],
     errors: list[str],
 ) -> None:
     page_contracts = project_plan.get("page_implementation_contracts") or []
     for page_contract in page_contracts:
-        for endpoint_id in _page_endpoint_ids(page_contract):
-            if endpoint_id not in endpoint_index:
-                errors.append(
-                    f"Page {page_contract.get('pageId')} references unknown endpoint {endpoint_id}."
-                )
+        try:
+            page_endpoint_keys(project_plan, page_contract)
+        except ValueError as exc:
+            errors.append(f"Page {page_contract.get('pageId')}: {exc}")
 
 
 def _validate_page_bindings(
@@ -179,18 +192,25 @@ def _validate_page_bindings(
 ) -> None:
     page_contracts = project_plan.get("page_implementation_contracts") or []
     for page_contract in page_contracts:
-        endpoint_ids = set(_page_endpoint_ids(page_contract))
+        try:
+            keys = page_endpoint_keys(project_plan, page_contract)
+        except ValueError:
+            continue
         bindings = page_contract.get("responseBindings") or []
         for binding in dict_items(bindings):
             endpoint_id = str(binding.get("endpoint_id") or "")
             source_path = normalize_response_path(binding.get("source_path"))
-            if endpoint_id not in endpoint_ids:
+            try:
+                key = resolve_endpoint_key(dict.fromkeys(keys), endpoint_id,
+                                           str(binding.get("api_contract_id") or ""))
+            except ValueError:
                 errors.append(
                     f"Page {page_contract.get('pageId')} binds undeclared endpoint {endpoint_id}."
                 )
-            elif source_path not in {
+                continue
+            if source_path not in {
                 normalize_response_path(path)
-                for path in response_field_paths(contracts, endpoint_id)
+                for path in response_field_paths([contract for contract in contracts if contract.get("id") == key[0]], endpoint_id)
             }:
                 errors.append(
                     f"Page {page_contract.get('pageId')} binds unknown response field {source_path}."

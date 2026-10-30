@@ -368,7 +368,9 @@ def _run_install(
     workspace: Path,
     cwd: Path,
     runtime_root: Path,
+    timeout_seconds: float = INSTALL_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    """执行一次受控依赖安装，允许调用方按当前阶段的剩余预算限制时长。"""
     argv = [package_manager_command, "install"]
     started_at = datetime.now(UTC).isoformat()
     try:
@@ -377,7 +379,7 @@ def _run_install(
             workspace=workspace,
             cwd=str(cwd),
             capture_output=True,
-            timeout=INSTALL_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             check=False,
         )
         stdout = subprocess_output_text(completed.stdout)

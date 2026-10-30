@@ -46,6 +46,19 @@ def failed_snapshot(code="RAW_CANDIDATE_TASK_ID_MISSING"):
 class PlanningFailureDiagnosticTests(unittest.IsolatedAsyncioTestCase):
     """覆盖实时、轻量投影、未知原因和身份隔离。"""
 
+    def test_blocked_compiled_plan_keeps_nested_platform_diagnostic(self):
+        """聚合失败没有 Unit 原因时仍展示平台编译器的实际范围冲突。"""
+        state = failed_snapshot()
+        nested = {"code": "GLOBAL_COMPILED_PLAN_INVALID", "details": {"validation": {
+            "errors": ["Business check bootstrap references API design agent.assistant.run outside the Unit."]}}}
+        failure = state.failure.model_copy(update={"code": "GLOBAL_REPAIR_BLOCKED", "unit_ids": (),
+                                                   "details": {"issues": [nested]}})
+        state = state.model_copy(update={"failure": failure})
+        evidence = planning_failure_evidence(state, source_run_id=state.workflow_run_id, source_thread_id=state.thread_id)
+        self.assertIn("来源范围冲突", evidence.user_message)
+        self.assertIn("agent.assistant.run outside the Unit", evidence.diagnostic_message)
+        self.assertNotIn("未能确定具体原因", evidence.user_message)
+
     def test_structured_round_reasons_and_identity(self):
         """实时和磁盘投影得到一致中文，并且拒绝其他 Run/Thread。"""
 

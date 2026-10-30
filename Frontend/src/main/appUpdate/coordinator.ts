@@ -1,4 +1,5 @@
 import type { AppUpdateState } from '../../shared/appUpdate'
+import { appUpdateErrorMessage } from './errorMessage'
 
 export type ReleaseCheck = {
   updateAvailable: boolean
@@ -179,7 +180,7 @@ export class AppUpdateCoordinator {
     this.driver?.dispose()
     this.update({
       phase: 'error',
-      message: `${error instanceof Error ? error.message : '更新失败'}，即将打开应用`
+      message: `${appUpdateErrorMessage(error)}，即将打开应用`
     })
     this.setTimer(() => this.finish(true), this.timings.notice)
   }

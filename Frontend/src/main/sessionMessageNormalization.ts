@@ -20,10 +20,10 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
     content: String(message.content || ''),
     createdAt: Number(message.createdAt || Date.now())
   }
-  const orchestration = cloneJsonRecord(message.orchestration)
-  const approval = cloneJsonRecord(message.approval)
-  const codeChanges = cloneJsonRecord(message.codeChanges)
-  const workflow = cloneJsonRecord(message.workflow)
+  const orchestration = persistentJsonRecord(message.orchestration)
+  const approval = persistentJsonRecord(message.approval)
+  const codeChanges = persistentJsonRecord(message.codeChanges)
+  const workflow = persistentJsonRecord(message.workflow)
   const workflowCardResult =
     message.workflowCardResult === 'confirmed' ||
     message.workflowCardResult === 'cancelled' ||
@@ -59,14 +59,10 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
   }
 }
 
-/** 深拷贝可序列化 JSON 对象，无法序列化时返回空值。 */
-function cloneJsonRecord(value: unknown): JsonRecord | undefined {
+/** IPC/JSON 读取已隔离输入；只复制外层记录，避免大型 Workflow/Diff 的重复序列化。 */
+function persistentJsonRecord(value: unknown): JsonRecord | undefined {
   if (!isJsonRecord(value)) return undefined
-  try {
-    return JSON.parse(JSON.stringify(value)) as JsonRecord
-  } catch {
-    return undefined
-  }
+  return { ...value }
 }
 
 /** 只保留来源会话跳转所需的本地 session/thread 与 impact 身份。 */

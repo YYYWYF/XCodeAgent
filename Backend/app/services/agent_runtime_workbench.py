@@ -12,7 +12,7 @@ from app.services.agent_runtime_health import runtime_health
 from app.services.agent_runtime_launcher import _launch_runtime_locked
 from app.services.agent_runtime_process import stop_runtime
 from app.services.backend_process_registry import backend_launch_lock
-from app.services.python_runtime_checks import runtime_check_plan
+from app.services.python_runtime_checks import runtime_check_plan, runtime_source_fingerprint
 from app.services.runtime_agent_contracts import agent_contract_index, agent_fact_digest
 
 
@@ -27,6 +27,7 @@ class DebugSession:
     database_required: bool
     agent_ids: list[str]
     allowed_agent_ids: list[str]
+    source_fingerprint: str
 
 
 _sessions: dict[str, DebugSession] = {}
@@ -61,7 +62,7 @@ def debug_origin(origin: str) -> str:
     return origin
 
 
-def debug_snapshot(workspace: str) -> dict:
+def debug_snapshot(workspace: str, thread_id: str = "") -> dict:
     """返回不含凭据的真实会话状态，过期后回收调试进程。"""
 
     root = Path(workspace).expanduser().resolve()
@@ -75,11 +76,14 @@ def debug_snapshot(workspace: str) -> dict:
             return {"active": False}
         ready, _ = runtime_health(current.url, current.launch_id, database_required=current.database_required,
                                   expected_agent_ids=current.agent_ids, allowed_agent_ids=current.allowed_agent_ids,
-                                  profile="debug")
+                                  profile="debug", expected_application=root / "agent-runtime",
+                                  expected_namespace="debug:" + current.launch_id)
         if not ready or time.time() >= current.expires_at:
             stop_debug(str(root), current.owner)
             return {"active": False}
-        return {"active": True, "launchId": current.launch_id, "expiresAt": current.expires_at}
+        return {"active": True, "launchId": current.launch_id, "expiresAt": current.expires_at,
+                "ownedByCaller": current.owner == thread_id, "agentIds": current.agent_ids,
+                "restartRequired": current.source_fingerprint != runtime_source_fingerprint(root)}
 
 
 def start_debug(workspace: str, thread_id: str, origin: str, agent_id: str) -> tuple[dict, dict]:
@@ -92,17 +96,27 @@ def start_debug(workspace: str, thread_id: str, origin: str, agent_id: str) -> t
         if agent_id not in contracts:
             raise ValueError("只能调试当前已确认的业务 Agent。")
         existing = _sessions.get(str(root))
-        if existing and existing.owner != thread_id and time.time() < existing.expires_at:
-            raise ValueError("当前应用已有其他会话正在调试，请先结束原调试。")
-        token, expires_at = secrets.token_urlsafe(48), int(time.time()) + 600
-        result = _launch_runtime_locked(root, on_progress=None, settings=None, skip_install=True,
-                                        debug={"token": token, "expiresAt": expires_at, "origins": json.dumps([origin])},
+        if existing and time.time() < existing.expires_at:
+            raise ValueError("当前应用已有调试进程，请先结束原调试，或等待其过期。")
+        token = secrets.token_urlsafe(48)
+        result = _launch_runtime_locked(root, on_progress=None, settings=None, skip_install=False,
+                                        debug={"token": token, "origins": json.dumps([origin])},
                                         target_agent_id=agent_id)
         if result.get("status") != "running":
             _sessions.pop(str(root), None)
             raise ValueError(str(result.get("message") or "调试 Runtime 启动失败。"))
-        session = DebugSession(thread_id, result["launch_id"], result["preview_url"], expires_at,
-                               result["database_required"], [agent_id], result["agent_ids"])
+        try:
+            expires_at = result["debug_expires_at"]
+            session = DebugSession(thread_id, result["launch_id"], result["preview_url"], expires_at,
+                                   result["database_required"], [agent_id], result["agent_ids"],
+                                   runtime_source_fingerprint(root))
+        except (OSError, ValueError, RuntimeError, KeyError):
+            # 进程已启动但登记失败时，由创建者回收，不等待无凭据的前端处理。
+            cleanup = stop_runtime(root, profile="debug")
+            _sessions.pop(str(root), None)
+            if cleanup.get("status") == "failed":
+                raise RuntimeError("调试启动后登记失败，进程回收失败，请同步状态后停止调试。") from None
+            raise
         _sessions[str(root)] = session
         # token 是随机能力凭据；绑定关系只存在当前进程，停止/重启后旧端口凭据无法复用。
         return ({"active": True, "launchId": session.launch_id, "expiresAt": expires_at},

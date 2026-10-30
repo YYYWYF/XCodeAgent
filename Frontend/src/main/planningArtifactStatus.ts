@@ -4,7 +4,15 @@ import { createHash } from 'node:crypto'
 import { WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
 
 export const PRODUCT_PLAN_SCHEMA_VERSION = 'product-plan.v8'
-export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-field-mapping.v7'
+export const ENDPOINT_API_DESIGN_SCHEMA_VERSION = 'endpoint-design.v8'
+
+/** 递归排序对象键，避免 JSON 字段顺序影响正式合同相等判断。 */
+function canonicalEndpointJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalEndpointJson).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalEndpointJson(item)}`).join(',')}}`
+  return JSON.stringify(value) ?? 'undefined'
+}
 
 /** 把 endpoint 业务标识转换为与规划产物约定一致的安全文件名。 */
 function endpointDocumentStem(apiContractId: string, endpointId: string): string {
@@ -288,7 +296,20 @@ export async function endpointDesignDocumentStatus(
       (item) => item.artifactKey === 'technical-plan'
     )
     const technicalSha256 = createHash('sha256').update(technicalPlan).digest('hex')
-    const mappingsValid = endpointFieldMappingsMatchCurrentContract(design)
+    const plan = JSON.parse(technicalPlan.toString()) as { api_contracts?: Array<{ id: string; endpoints?: Array<Record<string, unknown>> }> }
+    const currentEndpoint = plan.api_contracts?.find((item) => item.id === apiContractId)?.endpoints?.find((item) => item.id === endpointId)
+    const agentDesign = design.implementationKind === 'agent_runtime'
+    const capability = currentEndpoint ? { apiContractId, endpointId, agentId: currentEndpoint.agent_id,
+      invocation: currentEndpoint.invocation, interactionContract: currentEndpoint.interactionContract } : undefined
+    const mappingsValid = agentDesign ? currentEndpoint?.kind === 'agent_runtime'
+      && canonicalEndpointJson(design.endpointContract) === canonicalEndpointJson(currentEndpoint)
+      && canonicalEndpointJson(design.interactionContract) === canonicalEndpointJson(currentEndpoint.interactionContract)
+      && canonicalEndpointJson(design.invocation) === canonicalEndpointJson(currentEndpoint.invocation)
+      && canonicalEndpointJson(design.sourceBinding) === canonicalEndpointJson({ sourceType: 'agent', agentId: currentEndpoint.agent_id })
+      && canonicalEndpointJson(design.inputBindings) === '[]'
+      && design.capabilitySha256 === `sha256:${createHash('sha256').update(canonicalEndpointJson(capability)).digest('hex')}`
+      && !['fieldMappings', 'databaseWrites', 'databaseQuery', 'externalApiBindings', 'staticData'].some((key) => key in design)
+      : design.implementationKind === 'business' && endpointFieldMappingsMatchCurrentContract(design)
     // Endpoint 实现描述是可选指导；只有存在时才校验文本类型和长度。
     const implementationDescription = design.implementationDescription
     const implementationDescriptionValid =
@@ -297,7 +318,7 @@ export async function endpointDesignDocumentStatus(
       (typeof implementationDescription === 'string' && implementationDescription.length <= 4000)
     const valid =
       design.schemaVersion === ENDPOINT_API_DESIGN_SCHEMA_VERSION &&
-      design.artifactType === 'endpoint-field-mapping' &&
+      design.artifactType === 'endpoint-design' &&
       design.status === 'confirmed' &&
       design.confirmationStatus === 'confirmed' &&
       design.apiContractId === apiContractId &&
@@ -305,14 +326,15 @@ export async function endpointDesignDocumentStatus(
       typeof design.artifactRevision === 'string' &&
       /^[0-9a-f]{32}$/.test(design.artifactRevision) &&
       markdownRevision === design.artifactRevision &&
+      design.markdownSha256 === createHash('sha256').update(markdown, 'utf8').digest('hex') &&
       typeof design.confirmedAt === 'string' &&
       !('nodes' in design) &&
       !('mappings' in design) &&
       !('sceneEntities' in design) &&
-      Array.isArray(design.fieldMappings) &&
+      (agentDesign || Array.isArray(design.fieldMappings)) &&
       implementationDescriptionValid &&
       mappingsValid &&
-      technicalReference?.sha256 === technicalSha256
+      (agentDesign || technicalReference?.sha256 === technicalSha256)
     return valid
       ? { designed: true, status: 'confirmed', reason: '' }
       : {

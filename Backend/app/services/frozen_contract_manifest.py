@@ -27,6 +27,7 @@ from app.services.frozen_contract_manifest_index import (
 from app.services.frozen_contract_store import FrozenContract, FrozenContractStore
 from app.services.planning_frozen import plain_json
 from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
+from app.services.page_endpoint_identity import scoped_page_endpoint_keys
 
 
 _ENDPOINT_REQUIREMENT_KINDS = {
@@ -62,23 +63,10 @@ def _endpoint_keys_for_requirement(
         page_contract = page_contracts.get(page_id)
         if page_contract is None:
             raise ContractCatalogBindingError(f"Page {page_id} 缺少 page_contract。")
-        endpoint_ids = {
-            exact_manifest_id(item, f"Page {page_id}.requiredEndpointIds")
-            for item in manifest_sequence(
-                page_contract.content.get("requiredEndpointIds"),
-                f"Page {page_id}.requiredEndpointIds",
-            )
-        }
-        keys = {
-            key
-            for endpoint_id in endpoint_ids
-            for key in scoped_endpoint_keys
-            if key[1] == endpoint_id
-        }
-        if any(sum(key[1] == endpoint_id for key in keys) != 1 for endpoint_id in endpoint_ids):
-            raise ContractCatalogBindingError(
-                f"Page {page_id} 的 required Endpoint 缺失或 API 归属不唯一。"
-            )
+        try:
+            keys = set(scoped_page_endpoint_keys(dict.fromkeys(scoped_endpoint_keys), plain_json(page_contract.content)))
+        except ValueError as exc:
+            raise ContractCatalogBindingError(f"Page {page_id} 的 Endpoint 归属：{exc}") from exc
         if unit_kind != "page" or unit_id != f"page:{page_id}":
             raise ContractCatalogBindingError(
                 f"Page requirement {page_id} 与 Unit {unit_id} 身份不一致。"
@@ -147,7 +135,7 @@ def compile_expected_unit_formal_source_refs(
                 raise ContractCatalogBindingError("Agent 职责与正式 Unit 身份不一致。")
             index = list(contracts).index(agent_id)
             grant(requirement_id, technical, {f"/agent_contracts/{index}", "/topology"})
-            for key in agent_endpoint_keys(contracts[agent_id]):
+            for key in (*agent_endpoint_keys(contracts[agent_id]), (f"agent.{agent_id}", f"agent.{agent_id}.run")):
                 if key not in scoped_keys or key not in endpoints:
                     raise ContractCatalogBindingError("Agent Tool 业务依赖不在当前冻结 Scope 中。")
                 api, endpoint_index = endpoints[key]

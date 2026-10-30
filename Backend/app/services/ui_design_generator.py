@@ -200,7 +200,8 @@ def _page_brief(page: dict[str, Any]) -> str:
             if not isinstance(raw_action, dict):
                 continue
             action_id = str(raw_action.get("actionId") or "").strip()
-            if not action_id or action_id in surface_action_ids:
+            if not action_id or (action_id in surface_action_ids
+                                 and (raw_action.get("behavior") or {}).get("type") != "sequence"):
                 continue
             behavior = raw_action.get("behavior")
             behavior_type = (
@@ -1053,12 +1054,14 @@ def generate_adjusted_page_react_code(
     instruction: str,
     *,
     should_cancel: Callable[[], bool] | None = None,
+    allow_missing: bool = True,
 ) -> str:
     """基于现有设计稿 + 用户调整指令调 LLM 重新生成，并校验+自动修复。
 
     结构与 generate_page_react_code 一致，只是 prompt 换成调整版（前次代码 +
     调整指令）。校验失败时回喂错误定向修复，最多重试 ui_design_max_retries 次。
     全部失败抛 ValueError，由调用方标记 generation_failed。
+    模板适配传入 allow_missing=False，必须覆盖当前 ProductPlan 的全部操作与信息项。
     """
 
     settings = Settings.from_env()
@@ -1082,7 +1085,7 @@ def generate_adjusted_page_react_code(
         len(code),
     )
 
-    ok, err = validate_page_code(project_dir, code, page, allow_missing=True)
+    ok, err = validate_page_code(project_dir, code, page, allow_missing=allow_missing)
     attempt = 1
     while not ok and attempt <= max_retries:
         attempt += 1
@@ -1108,7 +1111,7 @@ def generate_adjusted_page_react_code(
             attempt,
             len(code),
         )
-        ok, err = validate_page_code(project_dir, code, page, allow_missing=True)
+        ok, err = validate_page_code(project_dir, code, page, allow_missing=allow_missing)
 
     if not ok:
         raise ValueError(

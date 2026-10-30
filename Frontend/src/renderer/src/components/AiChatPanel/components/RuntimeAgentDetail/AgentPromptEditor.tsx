@@ -103,20 +103,20 @@ export default function AgentPromptEditor({ agent, workspaceRoot, onSaved }: {
 
   return <section className="agent-detail-section agent-settings-view" aria-busy={busy}>
     <div className="agent-detail-section-title">
-      <h3>Agent Settings</h3>
+      <div><h3>智能体配置</h3><p className="agent-settings-description">修改配置后，需预览差异并确认应用。</p></div>
       {editing ? <Tag>正在编辑正式配置</Tag>
         : <Button size="small" disabled={busy || !identity} loading={busy} onClick={() => setEditing(true)}>编辑配置</Button>}
     </div>
     {!preview && errorAlert}
     {editing ? <div className="agent-prompt-editor">
-      <Alert showIcon type="info" message="可修改 Prompt 与 Temperature，其他模块保持只读。" />
+      <Alert showIcon type="info" message="可修改人设、系统提示词、业务约束和温度参数，其他模块为只读配置。" />
       <AgentSettingsFields value={value} disabled={busy || Boolean(preview)} onChange={setValue} />
       <Space wrap><Button type="primary" loading={busy} disabled={busy || Boolean(preview) || !value.prompt.systemPrompt.trim()
         || JSON.stringify(normalizedSettings(value)) === JSON.stringify(normalizedSettings(baseline))}
         onClick={() => void submit('preview_settings')}>生成修改预览</Button>
         <Button disabled={busy || Boolean(preview)} onClick={() => { setValue(baseline); setError(''); setEditing(false) }}>取消</Button></Space>
     </div> : <AgentSettingsSummary agent={agent} />}
-    <Modal className="agent-settings-modal" getContainer={false} open={Boolean(preview)} title="确认 Agent Settings 修改"
+    <Modal className="agent-settings-modal" getContainer={false} open={Boolean(preview)} title="确认智能体配置修改"
       width={760} closable={false} keyboard={false} maskClosable={false}
       footer={<Space wrap>
         <Button disabled={busy} onClick={() => void submit('cancel_settings')}>放弃修改</Button>

@@ -12,6 +12,34 @@ import type { BindingDraft, BindingSelection } from '../typings/endpointDesign'
 import type { MappingAssistAction, MappingAssistRequest, MappingAssistProgress, MappingAssistFailure } from '../typings/endpointDesignAssist'
 import { createAgUiHttpAgent } from './authentication'
 import { AgUiBusinessError } from './agUiBusinessError'
+import { isRuntimeEndpointPreparation } from '../typings/endpointDesign'
+import type { EndpointPreparation, RuntimeEndpointPreparation } from '../typings/endpointDesign'
+
+/** 沿既有 AG-UI 端点读取正式准备结果，在任何业务来源逻辑之前确定编辑器类型。 */
+export async function requestEndpointPreparation(workspace: string, api: string, endpoint: string): Promise<EndpointPreparation> {
+  const result = await runEndpointDesignAction('prepare', workspace, api, endpoint, undefined, '读取接口设计。')
+  const preparation = result.preparation
+  if (!preparation) throw new Error('接口未返回设计准备结果。')
+  if (preparation.apiContractId !== api || preparation.endpointId !== endpoint) throw new Error('接口设计结果与当前目标不一致，请重新读取。')
+  if (isRuntimeEndpointPreparation(preparation)) return preparation
+  if (preparation.payload.endpoint?.kind !== 'business') throw new Error('接口未返回明确的业务或智能体设计类型，请刷新当前技术规划。')
+  return preparation
+}
+
+/** 运行接口沿同一官方 AG-UI 动作读取专用分支，不进入 CRUD 工作台。 */
+export async function requestRuntimeEndpointPreparation(workspace: string, api: string, endpoint: string): Promise<RuntimeEndpointPreparation> {
+  const preparation = await requestEndpointPreparation(workspace, api, endpoint)
+  if (!isRuntimeEndpointPreparation(preparation)) throw new Error('接口未返回当前运行接入设计。')
+  return preparation
+}
+
+/** 只提交完整候选及版本，不触发 DAG 或运行调用。 */
+export async function confirmRuntimeEndpointDesign(workspace: string, preparation: RuntimeEndpointPreparation): Promise<EndpointDesignSaveResult> {
+  const result = await runEndpointDesignAction('save', workspace, preparation.apiContractId, preparation.endpointId,
+    { draft: preparation.payload.draft, baseRevision: preparation.artifactRevision || undefined, technicalPlanHash: preparation.technicalPlanHash }, '确认运行接口接入设计。')
+  if (!result.saved) throw new Error('接口未返回接入设计保存结果。')
+  return result.saved
+}
 
 /** 保留本轮失败阶段，仍按原 AG-UI 业务失败处理，不自动重放模型调用。 */
 export class MappingAssistError extends AgUiBusinessError {
@@ -70,16 +98,9 @@ export async function requestEndpointDesignPreparation(
   apiContractId: string,
   endpointId: string
 ): Promise<EndpointDesignPreparation> {
-  const payload = await runEndpointDesignAction(
-    'prepare',
-    workspaceRoot,
-    apiContractId,
-    endpointId,
-    undefined,
-    '准备 Endpoint API 映射配置。'
-  )
-  if (!payload.preparation) throw new Error('Endpoint 设计接口没有返回编辑数据。')
-  return payload.preparation
+  const preparation = await requestEndpointPreparation(workspaceRoot, apiContractId, endpointId)
+  if (isRuntimeEndpointPreparation(preparation)) throw new Error('当前为智能体流式接口，请使用智能体接入设计，不能配置业务字段映射。')
+  return preparation
 }
 
 /** 通过独立 AG-UI 接口保存字段映射配置，不触发主工作流。 */

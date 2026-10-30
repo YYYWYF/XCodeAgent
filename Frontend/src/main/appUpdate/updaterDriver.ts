@@ -6,6 +6,7 @@ import type { UpdateDriver, UpdateProgress } from './coordinator'
 import { assertUpdateFiles } from './manifest'
 import { configureUpdateFeed } from './configureFeed'
 import { quitAndInstallUpdate } from './installUpdate'
+import { appUpdateErrorMessage } from './errorMessage'
 
 /** 按平台创建 updater，使用 Java 返回的基础地址而非猜测安装包名称。 */
 export function createUpdaterDriver(baseUrl: string): UpdateDriver {
@@ -33,7 +34,7 @@ export function createUpdaterDriver(baseUrl: string): UpdateDriver {
   let progressListener: ((progress: ProgressInfo) => void) | undefined
   /** updater 的错误也可能来自原生安装阶段，始终保留一个消费入口。 */
   const consumeError = (error: Error): void => {
-    console.warn('应用更新失败：', error.message)
+    console.warn('应用更新失败：', appUpdateErrorMessage(error))
   }
   updater.on('error', consumeError)
 

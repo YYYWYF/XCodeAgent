@@ -10,7 +10,10 @@ from typing import Any
 from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
-from app.agents.main.technical_plan_editor import TechnicalPlanCandidateError, TechnicalPlanEditorError
+from app.agents.main.technical_plan_editor import (
+    TechnicalPlanCandidateError, TechnicalPlanEditorError, ProductPlanRevisionRequired,
+    PRODUCT_REVISION_PREFIX, product_revision_payload,
+)
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 from app.agents.database.generator import (
     entity_design_bindings_with_agent,
@@ -1777,7 +1780,7 @@ def _technical_plan_generation_error_payload(errors: list[str]) -> dict:
     return {
         "mode": "technical_plan_generation_error",
         "status": "requires_user_input",
-        "message": "技术规划自动修复后仍未通过校验。",
+        **product_revision_payload(errors),
         "errors": [str(error).strip() for error in errors if str(error).strip()][:8],
         "questions": [],
     }
@@ -1848,7 +1851,8 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
         "不得猜测或省略业务 action/step，"
         "必须完整保留当前 TechnicalPlan 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
         "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
-        "不要要求用户重试，也不要解释校验过程：\n"
+        "若需要改变上游动作归属，使用 request_product_revision 明确指出产品原文及修改建议后停止，"
+        "不能为解决客户端会话动作而虚构业务接口。其余可修复的技术缺口直接修复：\n"
         f"{diagnostics}"
     )
 
@@ -1882,6 +1886,8 @@ def _generate_valid_technical_plan(
 
     current_plan = deepcopy(existing_plan)
     remaining_errors = list(initial_errors or [])
+    if any(str(error).startswith(PRODUCT_REVISION_PREFIX) for error in remaining_errors):
+        return None, remaining_errors, current_plan
     base_feedback = str(
         requirement_spec.get("planning_adjustment_request") or ""
     ).strip()
@@ -1893,6 +1899,8 @@ def _generate_valid_technical_plan(
             if not remaining_errors:
                 return current_plan, [], None
         except (TypeError, ValueError) as exc:
+            if isinstance(exc, ProductPlanRevisionRequired):
+                return None, [str(exc)], exc.candidate
             # 续修候选仍可能在运行时契约编译处失败；保留候选和当前错误交回编辑器。
             remaining_errors = [str(exc)]
     for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
@@ -1930,6 +1938,8 @@ def _generate_valid_technical_plan(
                 return candidate, [], None
             current_plan = candidate
         except (TypeError, ValueError) as exc:
+            if isinstance(exc, ProductPlanRevisionRequired):
+                return None, [str(exc)], exc.candidate
             if isinstance(exc, TechnicalPlanCandidateError):
                 current_plan = exc.candidate
             # 工具中断不是业务校验结论，保留原诊断和局部进展，避免下一轮只收到调用上限。
@@ -1971,6 +1981,8 @@ def _repair_technical_plan_validation_errors(
     }
     current_plan = project_plan
     remaining_errors = errors
+    if any(str(error).startswith(PRODUCT_REVISION_PREFIX) for error in errors):
+        return current_plan, errors
     for attempt in range(1, max(repair_attempts, 0) + 1):
         feedback = _technical_plan_retry_feedback(remaining_errors)
         logger.warning(
@@ -1999,6 +2011,8 @@ def _repair_technical_plan_validation_errors(
                 state,
             )
         except ValueError as exc:
+            if isinstance(exc, ProductPlanRevisionRequired):
+                return exc.candidate, [str(exc)]
             if isinstance(exc, TechnicalPlanCandidateError):
                 current_plan = exc.candidate
             # 确认复验沿用同一中断恢复规则，不能用工具错误覆盖正式合同诊断。

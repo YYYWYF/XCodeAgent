@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
@@ -35,7 +35,23 @@ def _result_candidates(directory: Path) -> list[Path]:
 def _file_digest(root: Path, relative: str) -> str | None:
     """仅摘要工作区内实际源码和测试文件，拒绝链接、穿越及缺失文件。"""
     from app.services.development_review_files import current_review_file
-    if not current_review_file(root, relative):
+    from app.services.python_test_contract import is_runtime_source_path, is_runtime_test_path
+    if not isinstance(relative, str):
+        return None
+    parsed = PurePosixPath(relative)
+    if (parsed.is_absolute() or ".." in parsed.parts or "\\" in relative
+            or parsed.as_posix() != relative):
+        return None
+    runtime_input = (is_runtime_source_path(relative) or is_runtime_test_path(relative)
+                     or relative in {"agent-runtime/pyproject.toml", "agent-runtime/uv.lock"}
+                     or relative.startswith("agent-runtime/src/app/") and parsed.name == "__init__.py"
+                     and not any(part.startswith(".") or part == "__pycache__" for part in parsed.parts))
+    # 单测输入范围独立于 Java/Frontend 的审查过滤器；逐段检查链接后才读取 Runtime 文件。
+    if runtime_input:
+        if (any(root.joinpath(*parsed.parts[:index]).is_symlink() for index in range(1, len(parsed.parts) + 1))
+                or not (root / relative).is_file()):
+            return None
+    elif not current_review_file(root, relative):
         return None
     try:
         return hashlib.sha256((root / relative).read_bytes()).hexdigest()

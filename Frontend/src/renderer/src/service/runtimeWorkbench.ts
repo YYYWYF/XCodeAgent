@@ -38,6 +38,15 @@ type Payload = RuntimeSettingsResult & {
   schemaVersion: 1; runId: string; threadId: string; status: 'completed' | 'failed'
   agents?: RuntimeAgent[]; runtimeEnabled?: boolean
   error?: { message?: string }
+  debug?: { active: boolean; launchId?: string; expiresAt?: number; ownedByCaller?: boolean; restartRequired?: boolean; agentIds?: string[] }
+}
+export type DebugCredential = { launchId: string; url: string; token: string; expiresAt: number }
+type DebugInput = { workspaceRoot: string; action: 'get_debug' | 'start_debug' | 'stop_debug'; agentId: string; origin: string }
+
+/** 调试控制复用稳定拥有者身份；临时凭据只交给内存控制器，禁止写入会话。 */
+export function requestRuntimeDebug(input: DebugInput, threadId: string,
+  onCredential?: (credential: DebugCredential) => void): Promise<Payload> {
+  return runWorkbench(input, threadId, onCredential)
 }
 
 /** 校验业务信封，传输和事件解析全部交给官方 AG-UI 客户端。 */
@@ -61,15 +70,21 @@ export async function requestRuntimeSettings(workspaceRoot: string, input: Setti
 }
 
 /** 发出一次独立操作并读取完整业务终态，不向聊天输入框写入指令。 */
-async function runWorkbench(input: { workspaceRoot: string; action: 'list' } | (SettingsAction & { workspaceRoot: string })): Promise<Payload> {
+async function runWorkbench(input: { workspaceRoot: string; action: 'list' } | DebugInput | (SettingsAction & { workspaceRoot: string }),
+  threadId = randomUUID(), onCredential?: (credential: DebugCredential) => void): Promise<Payload> {
   const base = window.devAgentStudio?.agentBaseUrl
   const agent = createAgUiHttpAgent({ url: base ? `${base.replace(/\/$/, '')}/agent-runtime-workbench/run`
-    : '/api/agent/agent-runtime-workbench/run', threadId: randomUUID() })
+    : '/api/agent/agent-runtime-workbench/run', threadId })
   agent.addMessage({ id: randomUUID(), role: 'user', content: '读取或更新当前应用的 Agent 配置。' })
   let payload: Payload | undefined
   const subscriber: AgentSubscriber = {
     onCustomEvent: ({ event }) => {
       if (event.name === 'agent-runtime-workbench') payload = readPayload(event.value) ?? payload
+      if (event.name === 'agent-runtime-debug-credential') {
+        const value = event.value as DebugCredential
+        if (value && typeof value.url === 'string' && typeof value.token === 'string'
+          && typeof value.launchId === 'string' && typeof value.expiresAt === 'number') onCredential?.(value)
+      }
     },
     onStateSnapshotEvent: ({ event }) => {
       payload = readPayload((event.snapshot as { agentRuntimeWorkbench?: unknown }).agentRuntimeWorkbench) ?? payload

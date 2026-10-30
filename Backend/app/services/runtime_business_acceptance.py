@@ -89,6 +89,24 @@ def compile_runtime_check(task: dict, deliverable: dict, formal: dict) -> list[d
                                 sources, expected)]
     if kind not in PYTHON_CHECK_KINDS:
         return None
+    # Python 业务职责只消费自身业务 Endpoint。上下文同时包含 Agent 接入设计时，
+    # 不能将整份上下文挂到 bootstrap 等 Unit，造成平台自行生成越界验收来源。
+    endpoint_ids = set(formal.get("endpoint_ids") or [])
+    contract_ids = set(formal.get("api_contract_ids") or [])
+    scoped_contracts = []
+    for api in formal.get("contracts", []):
+        if contract_ids and api["id"] not in contract_ids:
+            continue
+        business_endpoints = [endpoint for endpoint in api.get("endpoints", [])
+                              if endpoint.get("kind") == "business"
+                              and (not endpoint_ids or endpoint["id"] in endpoint_ids)]
+        if business_endpoints:
+            scoped_contracts.append({**api, "endpoints": business_endpoints})
+    keys = {(api["id"], endpoint["id"]) for api in scoped_contracts for endpoint in api["endpoints"]}
+    formal = {**formal, "contracts": scoped_contracts,
+              "endpoint_designs": [design for design in formal.get("endpoint_designs", [])
+                  if design.get("implementationKind") == "business"
+                  and (design.get("apiContractId"), design.get("endpointId")) in keys]}
     endpoints = _endpoint_expectations(formal)
     entities = []
     sources = [topology, *_api_sources(formal, endpoints), *_endpoint_detail_sources(formal)]

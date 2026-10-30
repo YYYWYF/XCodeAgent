@@ -3,6 +3,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 """统一预览启动事实、分端日志及当前进程健康投影。"""
 
 import json
+import hashlib
 import os
 import re
 from copy import deepcopy
@@ -306,7 +307,10 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                         raise ProcessLookupError()
                     ready, reason = runtime_health(f"http://127.0.0.1:{port}", str(part.get("launchId") or ""),
                                                    database_required=bool(part.get("databaseRequired")),
-                                                   expected_agent_ids=part.get("agentIds"))
+                                                   expected_agent_ids=part.get("agentIds"),
+                                                   expected_application=Path(workspace).resolve() / "agent-runtime",
+                                                   expected_namespace="preview:" + hashlib.sha256(
+                                                       str(Path(workspace).resolve()).encode()).hexdigest()[:24])
                     if not ready:
                         health_reason = reason
                         raise ProcessLookupError()

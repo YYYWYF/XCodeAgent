@@ -352,6 +352,13 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "timeline": ["test_phase_confirmation"],
         }
     if state.get("unit_test_gate_passed") is not True:
+        # 单测刚完成却无法验证落盘报告时停止，避免确认节点与单测节点无进展地往返。
+        if state.get("unit_test_next_action") == "test_phase_confirmation":
+            return {
+                "phase": "test_phase_confirmation", "status": "failed",
+                "error": "单元测试已结束，但报告与当前文件或计划不一致。已停止重复执行，请检查单测报告后重试。",
+                "test_target": target, "timeline": ["test_phase_confirmation"],
+            }
         return {
             "phase": "test_phase_confirmation",
             "status": "in_progress",
@@ -360,6 +367,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
+    # 开发完成只消费 Build 与单测事实，不在测试确认之前启动真实页面或调用模型。
     lifecycle = complete_initial_development(
         workspace_root(state), run_id=str(state.get("active_run_id") or ""),
         build_state=state,

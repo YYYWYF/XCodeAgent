@@ -558,7 +558,7 @@ export default function WorkflowRunCard({
           )}
           {technicalPlanGenerationError && requiresConfirmation && (
             <Alert
-              action={
+              action={clarification?.repair_target === 'product_plan' ? undefined : (
                 <Button
                   disabled={disabled || interactionAvailability !== 'active'}
                   onClick={() =>
@@ -570,7 +570,7 @@ export default function WorkflowRunCard({
                 >
                   重新生成
                 </Button>
-              }
+              )}
               description={
                 Array.isArray(clarification?.errors)
                   ? clarification.errors.map(String).filter(Boolean).slice(0, 5).join('；')

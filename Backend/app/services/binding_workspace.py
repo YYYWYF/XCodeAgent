@@ -19,7 +19,8 @@ from app.domain.api_design import DraftFieldMapping, EndpointField, ExternalApiB
 from app.services.data_sources import change_selected_tables, selected_tables
 
 
-BINDING_STATE_LOCK = RLock()
+from app.workspace.endpoint_design_lock import ENDPOINT_DESIGN_LOCK
+BINDING_STATE_LOCK = ENDPOINT_DESIGN_LOCK
 
 
 class BindingTarget(BaseModel):
@@ -90,6 +91,10 @@ def _read(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("绑定工作台状态格式无效。")
+    if value.get("draftFormat") == "endpoint-design.v8":
+        markdown = path.with_suffix(".md")
+        if not markdown.is_file() or value.get("markdownSha256") != hashlib.sha256(markdown.read_bytes()).hexdigest():
+            raise ValueError("设计草稿双文件不一致或 Markdown 尚未同步，已阻止沿用草稿。")
     return value
 
 
@@ -99,6 +104,10 @@ def _write(path: Path, value: dict[str, Any]) -> None:
     directories = (path.parent.parent.parent, path.parent.parent, path.parent)
     if any(directory.is_symlink() for directory in directories) or path.is_symlink():
         raise ValueError("绑定草稿目录和文件不允许使用符号链接。")
+    if value.get("draftFormat") == "endpoint-design.v8":
+        from app.workspace.endpoint_draft_pair import publish_draft_pair
+        publish_draft_pair(path, value)
+        return
     fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -119,7 +128,7 @@ def read_binding_draft(workspace: str | Path, contract: str, endpoint: str) -> d
     """读取指定接口草稿，保持与正式状态分离。"""
     with BINDING_STATE_LOCK:
         value = _read(_draft_path(workspace, _draft_name(contract, endpoint)))
-        return value if value.get("draftFormat") == "endpoint-field-mapping.v7" else None
+        return value if value.get("draftFormat") == "endpoint-design.v8" else None
 
 
 def _draft_database_query(value: Any) -> dict[str, Any] | None:
@@ -229,12 +238,23 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
     from app.services.api_design import find_endpoint
 
     with BINDING_STATE_LOCK:
-        find_endpoint(_read_current_technical_plan(Path(request.workspace_root)), request.api_contract_id, request.endpoint_id)
+        plan = _read_current_technical_plan(Path(request.workspace_root))
+        contract, endpoint = find_endpoint(plan, request.api_contract_id, request.endpoint_id)
         current = read_endpoint_design(request.workspace_root, request.api_contract_id, request.endpoint_id, require_current=False)
         revision = (current or {}).get("artifactRevision")
         if revision != request.base_revision or technical_plan_sha256(request.workspace_root) != request.technical_plan_hash:
             raise ValueError("契约或正式映射已变化，请重新加载；当前输入仍保留。")
         draft = request.draft
+        if endpoint.get("kind") == "agent_runtime":
+            from app.services.agent_endpoint_design import validate_agent_endpoint_draft
+            if request.selection is not None:
+                raise ValueError("运行接口不接受数据库/外部 API 来源选择。")
+            clean = validate_agent_endpoint_draft(plan, contract["id"], endpoint["id"], draft)
+            value = {"draftFormat": "endpoint-design.v8", "draft": clean, "selection": None,
+                     "baseRevision": request.base_revision, "technicalPlanHash": request.technical_plan_hash,
+                     "savedAt": datetime.now(UTC).isoformat()}
+            _write(_draft_path(request.workspace_root, _draft_name(request.api_contract_id, request.endpoint_id)), value)
+            return value
         if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiBindings", "sourceBinding", "staticData", "databaseQuery", "fieldMappings"}:
             raise ValueError("草稿包含未支持字段。")
         if draft.get("apiContractId") != request.api_contract_id or draft.get("endpointId") != request.endpoint_id:
@@ -263,7 +283,7 @@ def save_binding_draft(request: BindingDraftRequest) -> dict[str, Any]:
             clean["implementationDescription"] = ""
         elif draft.get("staticData") is not None:
             raise ValueError("静态内容必须绑定静态数据来源。")
-        value = {"draftFormat": "endpoint-field-mapping.v7", "draft": clean, "selection": request.selection.model_dump(by_alias=True, exclude_none=True) if request.selection else None,
+        value = {"draftFormat": "endpoint-design.v8", "draft": clean, "selection": request.selection.model_dump(by_alias=True, exclude_none=True) if request.selection else None,
                  "baseRevision": request.base_revision, "technicalPlanHash": request.technical_plan_hash,
                  "savedAt": datetime.now(UTC).isoformat()}
         _write(_draft_path(request.workspace_root, _draft_name(request.api_contract_id, request.endpoint_id)), value)
@@ -373,6 +393,7 @@ def clear_binding_draft(workspace: str | Path, contract: str, endpoint: str) -> 
     with BINDING_STATE_LOCK:
         path = _draft_path(workspace, _draft_name(contract, endpoint))
         path.unlink(missing_ok=True)
+        path.with_suffix(".md").unlink(missing_ok=True)
         directory = path.parent
         if directory.is_dir() and not any(directory.iterdir()):
             directory.rmdir()
@@ -384,7 +405,7 @@ def source_references(workspace: str | Path, source_id: str, table: str | None =
     result = []
     for path in (Path(workspace) / WORKSPACE_ARTIFACT_DIR / "plans" / "endpoints").glob("*.json"):
         design = _read(path)
-        if design.get("schemaVersion") != "endpoint-field-mapping.v7":
+        if design.get("schemaVersion") != "endpoint-design.v8":
             continue
         fields = [source for mapping in design.get("fieldMappings", []) for source in mapping.get("sourceFields", [])]
         fields.extend(item.get("externalField", {}) for item in design.get("externalApiBindings", []) if isinstance(item, dict))

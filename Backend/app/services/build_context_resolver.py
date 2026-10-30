@@ -24,6 +24,7 @@ from app.services.agent_runtime_template_policy import load_agent_runtime_templa
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
+from app.services.page_endpoint_identity import endpoint_catalog, page_endpoint_keys, resolve_endpoint_key
 
 
 def resolve_confirmation_context(
@@ -186,7 +187,17 @@ def resolve_target_build_context(
         context = _agent_context(project_plan, target_id, project_plan_path)
     else:
         raise ValueError(f"Unsupported build target type: {target_type}.")
-    agent_ids = scoped_agent_ids(project_plan, target_type, target_id)
+    from app.services.runtime_endpoint_dependencies import resolve_runtime_target
+    resolved = resolve_runtime_target(project_plan, target_type, target_id, api_contract_id)
+    agent_ids = tuple(resolved["agent_ids"])
+    context["required_unit_ids"] = list(dict.fromkeys([*context["required_unit_ids"], *resolved["required_unit_ids"]]))
+    for contract, endpoint in resolved["endpoints"]:
+        key = (contract["id"], endpoint["id"])
+        if not any((design["apiContractId"], design["endpointId"]) == key for design in context["endpoint_designs"]):
+            context["endpoint_designs"].extend(load_confirmed_endpoint_designs(
+                _workspace_root(project_plan_path), project_plan, [key[1]], api_contract_id=key[0]))
+    context["source_refs"]["endpoint_designs"] = context["endpoint_designs"]
+    context["required_unit_ids"] = list(dict.fromkeys([*context["required_unit_ids"], "app:integration"]))
     if agent_ids and target_type == "page":
         from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
         product = load_project_plan_json(_workspace_root(project_plan_path) / WORKSPACE_ARTIFACT_DIR / "plans/product-plan.json")
@@ -244,29 +255,21 @@ def _page_context(
         page_id,
         project_plan_path,
     )
-    endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
-    endpoint_ids = _contract_endpoint_ids(page_contract)
+    catalog = endpoint_catalog(project_plan)
+    endpoint_keys = page_endpoint_keys(project_plan, page_contract)
     # Tool 的业务实现也走当前 Endpoint Design 门禁及 Backend Unit；前端直接调用集保持独立。
-    endpoint_ids = list(dict.fromkeys([
-        *endpoint_ids, *(key[1] for key in page_agent_endpoint_keys(project_plan, page_id)),
-    ]))
+    endpoint_keys = list(dict.fromkeys([*endpoint_keys, *page_agent_endpoint_keys(project_plan, page_id)]))
+    endpoint_ids = list(dict.fromkeys(key[1] for key in endpoint_keys))
     workspace_root = _workspace_root(project_plan_path)
     endpoint_unit_ids: list[str] = []
-    for endpoint_id in endpoint_ids:
-        endpoint = endpoint_index.get(endpoint_id)
-        if endpoint is None:
-            raise ValueError(f"Page {page_id} references unknown endpoint {endpoint_id}.")
-        contract_id = str(endpoint.get("api_contract_id") or "")
-        if contract_id:
-            endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
-
-    endpoint_contracts = [endpoint_index[endpoint_id] for endpoint_id in endpoint_ids]
-    endpoint_designs = load_confirmed_endpoint_designs(
-        workspace_root,
-        project_plan,
-        endpoint_ids,
-    )
-    entity_ids = _technical_plan_entity_ids(project_plan, endpoint_ids)
+    for contract_id, endpoint_id in endpoint_keys:
+        endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
+    endpoint_contracts = [{**catalog[key][1], "api_contract_id": key[0]} for key in endpoint_keys]
+    endpoint_designs = [design for contract_id, endpoint_id in endpoint_keys
+                        for design in load_confirmed_endpoint_designs(workspace_root, project_plan,
+                            [endpoint_id], api_contract_id=contract_id)]
+    entity_ids = _technical_plan_entity_ids(project_plan, endpoint_ids,
+                                           api_contract_ids=list(dict.fromkeys(key[0] for key in endpoint_keys)))
     source_types = api_design_source_types(endpoint_designs)
     mapping_flows = api_design_mapping_flows(endpoint_designs)
     business_descriptions = api_design_business_descriptions(endpoint_designs)
@@ -313,9 +316,9 @@ def _page_context(
             "technical_plan_endpoints": [
                 {
                     "id": endpoint_id,
-                    "api_contract_id": endpoint_index[endpoint_id].get("api_contract_id"),
+                    "api_contract_id": contract_id,
                 }
-                for endpoint_id in endpoint_ids
+                for contract_id, endpoint_id in endpoint_keys
             ],
             "endpoint_designs": endpoint_designs,
             "mapping_flows": mapping_flows,
@@ -332,17 +335,10 @@ def _endpoint_context(
 ) -> dict[str, Any]:
     """解析单个 TechnicalPlan Endpoint，只暴露其局部 API 设计与必要 Unit。"""
 
-    endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
-    contract_id = str(api_contract_id or "").strip()
-    endpoint = (
-        endpoint_index.get(f"{contract_id}\0{endpoint_id}")
-        if contract_id
-        else endpoint_index.get(endpoint_id)
-    )
-    if endpoint is None:
-        target_label = f"{contract_id}/{endpoint_id}" if contract_id else endpoint_id
-        raise ValueError(f"ProjectPlan does not contain endpoint {target_label}.")
-    contract_id = str(endpoint.get("api_contract_id") or "")
+    catalog = endpoint_catalog(project_plan)
+    key = resolve_endpoint_key(catalog, endpoint_id, str(api_contract_id or "").strip())
+    contract_id = key[0]
+    endpoint = {**catalog[key][1], "api_contract_id": contract_id}
     if not contract_id:
         raise ValueError(f"Endpoint {endpoint_id} does not declare an API contract.")
     endpoint_designs = load_confirmed_endpoint_designs(
@@ -359,7 +355,8 @@ def _endpoint_context(
     )
     mapping_flows = api_design_mapping_flows(endpoint_designs)
     business_descriptions = api_design_business_descriptions(endpoint_designs)
-    required_unit_ids = ["backend:bootstrap", _endpoint_unit_id(contract_id, endpoint_id)]
+    required_unit_ids = ([_endpoint_unit_id(contract_id, endpoint_id)] if endpoint.get("kind") == "agent_runtime"
+                         else ["backend:bootstrap", _endpoint_unit_id(contract_id, endpoint_id)])
     return {
         "target": {
             "type": "endpoint",
@@ -441,21 +438,6 @@ def _contract_endpoint_ids(contract: dict[str, Any]) -> list[str]:
         if normalized and normalized not in result:
             result.append(normalized)
     return result
-
-
-def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
-    """建立 endpoint 到 TechnicalPlan 完整接口契约的只读反向索引。"""
-
-    index: dict[str, dict[str, Any]] = {}
-    for contract in _dict_items(value):
-        contract_id = str(contract.get("id") or "")
-        for endpoint_index, endpoint in enumerate(_dict_items(contract.get("endpoints"))):
-            endpoint_id = str(endpoint.get("id") or endpoint_index + 1)
-            indexed_endpoint = {**endpoint, "api_contract_id": contract_id}
-            index.setdefault(endpoint_id, indexed_endpoint)
-            if contract_id:
-                index[f"{contract_id}\0{endpoint_id}"] = indexed_endpoint
-    return index
 
 
 def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:

@@ -40,6 +40,10 @@ def normalize_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]
 
     normalized: list[dict[str, Any]] = []
     for item in items:
+        if any(endpoint.get("kind") == "agent_runtime" for endpoint in dict_items(item.get("endpoints"))):
+            # 运行入口由确定性编译器复验，不套实体 Schema 或吞掉公开能力字段。
+            normalized.append(deepcopy(item))
+            continue
         contract_id = str(item.get("id") or "resource_api")
         schemas = _normalize_schemas(item.get("schemas"), contract_id=contract_id)
         authentication = _normalize_authentication(item.get("authentication"))
@@ -115,17 +119,17 @@ def normalize_page_api_dependencies(
     """Normalize page-level API usage while preserving model-supplied intent."""
 
     endpoint_index = {
-        str(endpoint.get("id")): (contract, endpoint)
+        (str(contract.get("id")), str(endpoint.get("id"))): (contract, endpoint)
         for contract in contracts
         for endpoint in dict_items(contract.get("endpoints"))
         if endpoint.get("id")
     }
     normalized: list[dict[str, Any]] = []
+    from app.services.page_endpoint_identity import resolve_endpoint_key
     for item in dict_items(api_dependencies):
         endpoint_id = str(item.get("endpoint_id") or "")
-        if endpoint_id not in endpoint_index:
-            continue
-        contract, endpoint = endpoint_index[endpoint_id]
+        key = resolve_endpoint_key(endpoint_index, endpoint_id, str(item.get("api_contract_id") or ""))
+        contract, endpoint = endpoint_index[key]
         normalized.append(
             _page_api_dependency_from_endpoint(
                 contract,
@@ -158,7 +162,7 @@ def normalize_page_api_dependencies(
             page_path=page_path,
             page_name=page_name,
         )
-        for contract, endpoint in [endpoint_index.get(str(dependency.get("endpoint_id")), ({}, {}))]
+        for contract, endpoint in [endpoint_index.get((str(dependency.get("api_contract_id")), str(dependency.get("endpoint_id"))), ({}, {}))]
         if endpoint
     ]
 
@@ -268,13 +272,15 @@ def _string_items(value: Any) -> list[str]:
 
 
 def _dedupe_page_api_dependencies(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """以复合身份去重页面接口依赖，保留不同契约的同名接口。"""
     result: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for item in items:
         endpoint_id = str(item.get("endpoint_id") or "")
-        if not endpoint_id or endpoint_id in seen:
+        key = (str(item.get("api_contract_id") or ""), endpoint_id)
+        if not endpoint_id or key in seen:
             continue
-        seen.add(endpoint_id)
+        seen.add(key)
         result.append(item)
     return result
 
@@ -463,6 +469,7 @@ def _normalize_endpoint(
     authentication = endpoint.get("authentication")
     return {
         **endpoint,
+        "kind": endpoint["kind"],
         "id": endpoint_id,
         "name": _normalize_display_name(endpoint.get("name")),
         "method": method,
@@ -524,8 +531,9 @@ def _optional_text(value: Any) -> str | None:
 def _find_endpoint(
     contracts: list[dict[str, Any]], endpoint_id: str
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    for contract in contracts:
-        for endpoint in dict_items(contract.get("endpoints")):
-            if endpoint.get("id") == endpoint_id:
-                return contract, endpoint
-    return None, None
+    """只解析给定契约作用域内唯一接口，避免跨契约取首项。"""
+    matches = [(contract, endpoint) for contract in contracts
+               for endpoint in dict_items(contract.get("endpoints")) if endpoint.get("id") == endpoint_id]
+    if len(matches) > 1:
+        raise ValueError(f"Endpoint {endpoint_id} 存在多个契约，请先限定 api_contract_id。")
+    return matches[0] if matches else (None, None)

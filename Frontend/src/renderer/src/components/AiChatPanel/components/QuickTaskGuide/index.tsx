@@ -182,7 +182,7 @@ export default function QuickTaskGuide({
     [apiContracts, entities, pages, developmentArtifacts, agents]
   )
   const pageTasks = tasks.filter((task) => task.kind === 'page')
-  const interfaceTasks = tasks.filter((task) => task.kind === 'endpoint' || task.kind === 'agent')
+  const interfaceTasks = tasks.filter((task) => task.kind === 'endpoint')
 
   return (
     <div className={cx('quick-task-guide')}>

@@ -20,7 +20,15 @@ interface RuntimeThread {
   info: ConversationThread
   agent: HttpAgent
   result: AgentRunResult
-  active?: { runId: string; stopped: boolean; pendingInteraction?: PendingAgentInteraction }
+  actionId?: string
+  active?: { runId: string; stopped: boolean; pendingInteraction?: PendingAgentInteraction; client: HttpAgent }
+}
+
+/** 只有平台临时验收入口设置此只读身份；普通页面不参与桌面验收观察。 */
+function acceptanceIdentity(agentId: string): { agentId: string; threadId: string; runId: string } | undefined {
+  if (typeof window === 'undefined') return undefined
+  const value = (window as unknown as { __dasRuntimeAcceptance?: { agentId: string; threadId: string; runId: string } }).__dasRuntimeAcceptance
+  return value?.agentId === agentId ? value : undefined
 }
 
 /** 校验当前业务载荷身份；AG-UI 事件、快照与 delta 的解析由官方 SDK 负责。 */
@@ -43,6 +51,7 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
   private readonly threads = new Map<string, RuntimeThread>()
   private readonly listeners = new Set<(result: AgentRunResult) => void>()
   private readonly messageTimes = new Map<string, string>()
+  private readonly submittedRuns = new Set<string>()
 
   /** 只接受当前 Agent 的精确相对路径，禁止端口、凭据或外部 URL。 */
   constructor(private readonly config: AgentUiTemplateConfig) {
@@ -63,7 +72,7 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
 
   /** 创建稳定 threadId；匿名身份只由同源 Runtime Cookie 提供。 */
   async createThread(): Promise<ConversationThread> {
-    const id = randomUUID()
+    const id = acceptanceIdentity(this.config.agentId)?.threadId || randomUUID()
     const now = new Date().toISOString()
     const info = { id, title: '新会话', createdAt: now, updatedAt: now }
     this.threads.set(id, { info, agent: new HttpAgent({ url: this.config.runtime!.path, threadId: id }),
@@ -86,19 +95,28 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
   async refreshRun(threadId: string, runId: string): Promise<AgentRunResult> {
     const thread = this.thread(threadId)
     if (thread.active) throw new Error('当前会话仍在运行。')
-    return this.execute(thread, runId, { inspectInteraction: true })
+    const unknown = thread.result.resultUnknown
+    const result = await this.execute(thread, runId, { inspectInteraction: true })
+    return unknown ? this.publish(thread, { ...result, status: 'error', resultUnknown: true, requiresSync: false,
+      error: '服务端当前状态已同步，但原运行结果仍未知；请明确新建会话，系统不会重发原消息。' }) : result
   }
 
   /** 普通提问只能使用当前配置声明的 Agent 与 action，等待交互时禁止开启另一轮。 */
   async sendMessage(input: SendMessageInput): Promise<AgentRunResult> {
     const thread = this.thread(input.threadId)
     if (thread.result.requiresSync) throw new Error('请先同步服务端会话状态。')
-    if (input.agentId !== this.config.agentId || input.actionId !== this.config.actionId) throw new Error('Agent 或操作与当前页面配置不一致。')
+    if (thread.result.resultUnknown) throw new Error('原运行结果未知，请明确新建会话；不会重发原消息。')
+    const declared = input.actionId === this.config.actionId || this.config.actions?.some((action) =>
+      action.actionId === input.actionId && action.operation === 'send_message')
+    if (input.agentId !== this.config.agentId || !declared) throw new Error('Agent 或操作与当前页面配置不一致。')
     if (thread.result.pendingInteraction) throw new Error('请先处理当前待确认或待回答事项。')
     if (thread.active) throw new Error('当前会话仍在运行。')
+    if (this.submittedRuns.has(input.runId)) throw new Error('该请求已提交，不会重复执行；请核对原运行结果。')
+    this.submittedRuns.add(input.runId)
+    thread.actionId = input.actionId
     thread.agent.addMessage({ id: randomUUID(), role: 'user', content: input.content })
     thread.info.title = input.content.slice(0, 30)
-    return this.execute(thread, input.runId, this.pageContext())
+    return this.execute(thread, acceptanceIdentity(this.config.agentId)?.runId || input.runId, this.pageContext(thread))
   }
 
   /** 中止当前网络流；已提交的业务操作不被当作撤销，也不会自动重发。 */
@@ -106,9 +124,9 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
     const thread = [...this.threads.values()].find((item) => item.active?.runId === runId)
     if (!thread?.active) return
     thread.active.stopped = true
-    thread.agent.abortRun()
+    thread.active.client.abortRun()
     this.publish(thread, { runId, threadId: thread.info.id, status: 'stopped', messages: this.messages(thread),
-      pendingInteraction: thread.active.pendingInteraction, requiresSync: true })
+      pendingInteraction: thread.active.pendingInteraction, requiresSync: true, resultUnknown: true })
   }
 
   /** 网络中断后的执行结果可能未知，禁止把写操作作为普通重试重放。 */
@@ -130,14 +148,14 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
       throw new Error('澄清必须填写回答，确认或审批必须明确选择同意或拒绝。')
     }
     return this.execute(thread, input.responseRunId || randomUUID(), {
-      ...this.pageContext(),
+      ...this.pageContext(thread),
       interactionResponse: { interactionId: pending.interactionId, value: input.value }
     })
   }
 
   /** 每次恢复都携带当前页面声明的上下文，不把用户输入当作身份或权限。 */
-  private pageContext(): Record<string, unknown> {
-    return { pageId: this.config.runtime!.pageId, actionId: this.config.actionId,
+  private pageContext(thread: RuntimeThread): Record<string, unknown> {
+    return { pageId: this.config.runtime!.pageId, actionId: thread.actionId || this.config.actionId,
       contextItems: this.config.contextItems.map((item) => ({ ...item })) }
   }
 
@@ -170,10 +188,17 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
 
   /** 执行一次完整 AG-UI 生命周期，只有匹配身份的业务结果和运行结束才构成终态。 */
   private async execute(thread: RuntimeThread, runId: string, forwardedProps: Record<string, unknown>): Promise<AgentRunResult> {
-    const active = { runId, stopped: false, pendingInteraction: thread.result.pendingInteraction }
+    // 只读同步使用独立官方客户端，查询助手文案不能混进真实会话的镜像历史。
+    const client = forwardedProps.inspectInteraction
+      ? new HttpAgent({ url: this.config.runtime!.path, threadId: thread.info.id }) : thread.agent
+    const active = { runId, stopped: false, pendingInteraction: thread.result.pendingInteraction, client }
     thread.active = active
     let payload: RuntimePayload | undefined
     let finished = false
+    let started = false
+    let custom: unknown
+    let snapshot: unknown
+    let terminal: unknown
     let protocolError: string | undefined
     /** 仅在当前运行仍有效时刷新流式正文。 */
     const progress = (): void => {
@@ -187,29 +212,48 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
       payload = runtimePayload(value, this.config.agentId, thread.info.id, runId) ?? payload
     }
     const subscriber: AgentSubscriber = {
+      onRunStartedEvent: ({ event }) => { started = event.threadId === thread.info.id && event.runId === runId },
       onMessagesChanged: progress,
       onCustomEvent: ({ event }) => {
-        if (event.name === 'agent_runtime_result.v1' || event.name === 'agent_runtime_error.v1') receive(event.value)
+        if (event.name === 'agent_runtime_result.v1' || event.name === 'agent_runtime_error.v1') {
+          custom = event.value; receive(event.value)
+        } else protocolError = 'Runtime 返回了未声明的事件能力。'
       },
-      onStateChanged: ({ state }) => { receive((state as { agentRuntime?: unknown }).agentRuntime) },
-      onRunFinishedEvent: () => { finished = true },
+      onStateChanged: ({ state }) => { snapshot = (state as { agentRuntime?: unknown }).agentRuntime; receive(snapshot) },
+      onRunFinishedEvent: ({ event }) => {
+        finished = event.threadId === thread.info.id && event.runId === runId
+        terminal = (event.result as { agentRuntime?: unknown } | undefined)?.agentRuntime
+      },
+      onToolCallStartEvent: () => { protocolError = '纯文本 Agent 不能请求工具调用。' },
       onRunErrorEvent: ({ event }) => { protocolError = event.message }
     }
     this.publish(thread, { runId, threadId: thread.info.id, status: 'running', messages: this.messages(thread),
       pendingInteraction: active.pendingInteraction })
     try {
-      await thread.agent.runAgent({ runId, forwardedProps }, subscriber)
+      client.setState({})
+      await client.runAgent({ runId, forwardedProps }, subscriber)
       if (active.stopped) return thread.result
-      if (!finished || !payload || protocolError) throw new Error(protocolError || 'Runtime 未返回完整业务结果，请核对业务状态。')
+      if (!started || !finished || !payload || protocolError || JSON.stringify(custom) !== JSON.stringify(snapshot)
+        || JSON.stringify(custom) !== JSON.stringify(terminal)) throw new Error(protocolError || 'Runtime 未返回完整业务结果，请核对业务状态。')
+      if (payload.pendingInteraction && !this.config.runtime!.interactionKinds.includes(payload.pendingInteraction.kind)) {
+        throw new Error('Agent 返回了正式合同未声明的交互。')
+      }
+      const text = this.messages(thread).filter((message) => message.role === 'assistant').map((message) => message.content).join('')
+      if (acceptanceIdentity(this.config.agentId)) window.dispatchEvent(new CustomEvent('das-runtime-acceptance', {
+        detail: { agentId: this.config.agentId, threadId: thread.info.id, runId, lifecycle: payload.status === 'completed', text }
+      }))
       const status = payload.status === 'failed' ? 'error' : payload.status === 'awaiting_user' ? 'waiting_input' : 'completed'
       return this.publish(thread, { runId, threadId: thread.info.id, status,
         messages: this.messages(thread), pendingInteraction: payload.pendingInteraction ?? (payload.status === 'failed' ? active.pendingInteraction : undefined),
-        requiresSync: payload.status === 'failed',
+        requiresSync: payload.status === 'failed', resultUnknown: payload.status === 'failed',
         error: payload.status === 'failed' ? payload.error?.message || 'Agent 运行失败。' : undefined })
     } catch (reason) {
       if (active.stopped) return thread.result
+      if (acceptanceIdentity(this.config.agentId)) window.dispatchEvent(new CustomEvent('das-runtime-acceptance', {
+        detail: { agentId: this.config.agentId, threadId: thread.info.id, runId, lifecycle: false, text: '' }
+      }))
       return this.publish(thread, { runId, threadId: thread.info.id, status: 'error', messages: this.messages(thread),
-        pendingInteraction: active.pendingInteraction, requiresSync: true,
+        pendingInteraction: active.pendingInteraction, requiresSync: true, resultUnknown: true,
         error: reason instanceof Error ? reason.message : 'Agent 连接中断，请核对业务状态。' })
     } finally {
       if (thread.active === active) thread.active = undefined

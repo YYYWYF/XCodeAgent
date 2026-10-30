@@ -15,6 +15,13 @@ from app.services.business_acceptance_verifiers.python_agent import verify_agent
 from app.services.runtime_agent_resources import agent_resource_files
 
 
+def deployment_facts(profile: str) -> dict:
+    """为健康合同提供当前启动事实，负例在独立测试中逐项破坏。"""
+
+    return {"workers": 1, "processId": 123, "profile": profile, "processLockHeld": True,
+            "acceptingRuns": True, "applicationSha256": "a" * 64, "namespaceSha256": "b" * 64}
+
+
 FACTORY = '''from deepagents import create_deep_agent
 from pathlib import Path
 from deepagents.backends.filesystem import FilesystemBackend
@@ -160,7 +167,9 @@ class RuntimeGapClosureTests(unittest.TestCase):
         """通用 chat 不能冒充正式业务 Agent，Debug 健康不能被普通预览复用。"""
 
         payload = {"service": "agent-runtime", "launchId": "current", "profile": "preview", "agentIds": ["leave"],
-                   "status": "ok", "checks": {"businessApi": "ready", "agUi": "ready", "anonymousSession": "ready", "database": "not_required"}}
+                   "status": "ok", "deployment": deployment_facts("preview"),
+                   "checks": {"businessApi": "ready", "agUi": "ready", "anonymousSession": "ready", "database": "not_required",
+                              "deployment": "ready", "execution": "ready"}}
         response = Mock(status_code=200)
         response.json.return_value = payload
         with patch("app.services.agent_runtime_health.httpx.Client") as client:
@@ -170,6 +179,66 @@ class RuntimeGapClosureTests(unittest.TestCase):
             self.assertFalse(runtime_health("http://127.0.0.1:1234", "current", database_required=False, expected_agent_ids=["leave"])[0])
             payload["agentIds"], payload["profile"] = ["leave"], "debug"
             self.assertFalse(runtime_health("http://127.0.0.1:1234", "current", database_required=False, expected_agent_ids=["leave"])[0])
+
+    def test_health_validates_profile_session_contract(self):
+        """Debug 必须同时满足专属会话与匿名跳过状态，预览和 Probe 不得借此跳过身份检查。"""
+
+        cases = [
+            ("debug", "not_required", "ready", True),
+            ("debug", "not_required", None, False),
+            ("debug", "not_required", "failed", False),
+            ("debug", "not_required", "not_required", False),
+            ("debug", "ready", "ready", False),
+            ("debug", None, "ready", False),
+            ("preview", "ready", None, True),
+            ("preview", "not_required", "ready", False),
+            ("probe", "ready", None, True),
+            ("probe", "not_required", "ready", False),
+        ]
+        with patch("app.services.agent_runtime_health.httpx.Client") as client:
+            response = client.return_value.__enter__.return_value.get.return_value
+            response.status_code = 200
+            for profile, anonymous_status, debug_status, accepted in cases:
+                with self.subTest(profile=profile, anonymous=anonymous_status, debug=debug_status):
+                    checks = {"businessApi": "ready", "agUi": "ready", "database": "not_required",
+                              "deployment": "ready", "execution": "ready"}
+                    if anonymous_status is not None:
+                        checks["anonymousSession"] = anonymous_status
+                    if debug_status is not None:
+                        checks["debugSession"] = debug_status
+                    response.json.return_value = {"service": "agent-runtime", "launchId": "current",
+                        "profile": profile, "agentIds": ["leave"], "status": "ok", "checks": checks,
+                        "deployment": deployment_facts(profile)}
+                    ready, message = runtime_health("http://127.0.0.1:1234", "current",
+                        database_required=False, expected_agent_ids=["leave"], profile=profile)
+                    self.assertEqual(ready, accepted)
+                    if accepted:
+                        self.assertIn("调试会话" if profile == "debug" else "匿名会话", message)
+
+    def test_debug_health_preserves_shared_guards(self):
+        """修复 Debug 身份检查后，启动身份、注册集合、业务路由和数据库仍须逐项符合合同。"""
+
+        with patch("app.services.agent_runtime_health.httpx.Client") as client:
+            response = client.return_value.__enter__.return_value.get.return_value
+            response.status_code = 200
+            for field, value in [("launchId", "old"), ("profile", "preview"),
+                                 ("agentIds", ["chat"]), ("service", "other"),
+                                 ("status", "error"), ("businessApi", "failed"),
+                                 ("agUi", "failed"), ("database", "not_required"),
+                                 ("database", "ready")]:
+                with self.subTest(field=field, value=value):
+                    payload = {"service": "agent-runtime", "launchId": "current", "profile": "debug",
+                        "agentIds": ["leave"], "status": "ok", "checks": {"businessApi": "ready",
+                            "agUi": "ready", "database": "ready", "anonymousSession": "not_required", "debugSession": "ready",
+                            "deployment": "ready", "execution": "ready"}, "deployment": deployment_facts("debug")}
+                    if field in {"businessApi", "agUi", "database"}:
+                        payload["checks"][field] = value
+                    else:
+                        payload[field] = value
+                    response.json.return_value = payload
+                    ready, _ = runtime_health("http://127.0.0.1:1234", "current",
+                        database_required=True, expected_agent_ids=["leave"], profile="debug")
+                    self.assertEqual(ready, field == "database" and value == "ready")
 
     def test_debug_credential_is_absent_from_snapshots_and_run_result(self):
         """临时凭据只出现一次 CUSTOM，不进入公共 AG-UI 快照、消息或持久结果。"""

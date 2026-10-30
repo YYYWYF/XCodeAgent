@@ -37,7 +37,8 @@ def extend_agent_edges(plan: dict, units: dict, edges: list[dict], errors: list[
             if f"page:{page_id}" not in units:
                 errors.append(f"Agent {agent_id} 的页面 {page_id} 没有 Unit。")
             else:
-                edges.append({"from": unit_id, "to": f"page:{page_id}", "type": "depends_on"})
+                endpoint_unit = f"backend:endpoint:agent.{agent_id}:agent.{agent_id}.run"
+                edges.append({"from": endpoint_unit, "to": f"page:{page_id}", "type": "depends_on"})
         edges.append({"from": unit_id, "to": "app:integration", "type": "depends_on"})
 
 

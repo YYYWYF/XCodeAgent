@@ -16,6 +16,7 @@ import {
 } from '../src/main/appUpdate/coordinator'
 import { parseReleaseCheck, checkAppRelease } from '../src/main/appUpdate/checkRelease'
 import { assertUpdateFiles } from '../src/main/appUpdate/manifest'
+import { appUpdateErrorMessage } from '../src/main/appUpdate/errorMessage'
 import { prepareCdn, createCdnServer, parseRange } from '../scripts/app-update-cdn.mjs'
 
 const release: ReleaseCheck = {
@@ -23,6 +24,14 @@ const release: ReleaseCheck = {
   latestAppVersion: '1.0.1',
   appDownloadUrl: 'http://127.0.0.1:18081/'
 }
+
+/** 清单未发布时明确提示发布配置，不让通用 SDK 鉴权提示误导用户。 */
+test('发布清单 404 提示保留真实原因', () => {
+  const result = appUpdateErrorMessage(new Error('Cannot find channel "latest-mac.yml" update info: HttpError: 404 Please double check token'))
+  assert.match(result, /latest-mac.yml.*404/)
+  assert.doesNotMatch(result, /token/)
+  assert.equal(appUpdateErrorMessage(new Error('network offline')), 'network offline')
+})
 
 /** 创建可控制的异步任务，用于验证退出与迟到响应的竞态。 */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

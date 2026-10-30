@@ -168,6 +168,7 @@ def _technical_planning_prompt(
                 "endpoints": [
                     {
                         "id": f"{contract_id}.list",
+                        "kind": "business",
                         "name": "查询订单列表",
                         "method": "GET",
                         "path": f"/api/{entity_id.lower()}",
@@ -191,6 +192,7 @@ def _technical_planning_prompt(
                     "endpoint_dependencies": [
                         {
                             "endpoint_id": f"{contract_id}.list",
+                            "api_contract_id": contract_id,
                             "usage": "page_load",
                             "trigger": "进入页面或提交筛选条件时",
                             "required_for_initial_load": True,
@@ -234,7 +236,8 @@ def _technical_planning_prompt(
                 "pageId": page.get("pageId"),
                 "actions": [
                     action for action in page.get("actions", [])
-                    if action.get("actionId") not in agent_actions.get(page.get("pageId"), {})
+                    if (action.get("behavior") or {}).get("type") == "sequence"
+                    or action.get("actionId") not in agent_actions.get(page.get("pageId"), {})
                 ],
             }
             for page in pages
@@ -260,7 +263,7 @@ def _technical_planning_prompt(
     )
     return (
         "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
-        "The object has architecture, entities, api_contracts, and pages, plus optional agent_contracts. "
+        "The object has architecture, entities, api_contracts, pages, and explicit agent_contracts (an empty array when no enabled product agent exists). "
         "Do not infer an Agent from an application name or generic CRUD behavior.\n"
         f"{TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT}\n"
         f"{TECHNICAL_PLAN_LANGUAGE_REQUIREMENT}\n"
@@ -287,7 +290,7 @@ def _technical_planning_prompt(
         "the mapping. Structural properties organize the response. A paginated list response object has exactly four "
         "same-level properties: total, pageSize, current, and list. It has no other sibling properties. Its query "
         "parameters use current and pageSize, while fields inside list items follow the item Schema. "
-        "Schema references resolve to names in the same contract. Each Endpoint contains id, name, method, path, summary, "
+        "Schema references resolve to names in the same contract. Each ordinary Endpoint explicitly contains kind=business, id, name, method, path, summary, "
         "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication. "
         "Endpoint name is a concise user-facing Chinese operation name such as 查询订单列表; summary remains the detailed "
         "interface description. Both name fields must be non-empty strings containing at least one Chinese character. "
@@ -307,11 +310,15 @@ def _technical_planning_prompt(
         "pageId and references. references contains endpoint_dependencies and action_implementations. Endpoint "
         "dependencies contain endpoint_id, usage, trigger, and required_for_initial_load. A direct business action "
         "uses {actionId, endpointId}; a business sequence uses {actionId, stepBindings:[{stepId, endpointId}]}. "
+        "Endpoint choices may also declare apiContractId; always provide it when the page uses same-named "
+        "Endpoints from different contracts. Preserve api_contract_id in endpoint_dependencies. "
+        "Agent steps are platform-bound from product agentId/operation/message, never ordinary business "
+        "Endpoints. A mixed sequence still requires ALL its business stepBindings. "
         "If a ProductPlan page contains one or more direct business actions, action_implementations MUST NOT be empty. "
         "Every direct business action has exactly one action_implementations entry shaped as {actionId, endpointId}. "
         "Every sequence containing business steps has exactly one action_implementations entry shaped as "
         "{actionId, stepBindings:[{stepId, endpointId}]} and covers every and only business stepId. Navigation, "
-        "interface, and external actions do not appear in action_implementations. "
+        "agent, interface, and external actions do not appear in action_implementations. "
         "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
         "The page set covers every upstream ProductPlan pageId.\n"
         "Do not emit authorization_manifest, resourceKey, roles, permission bindings, dataRules, policyKey, data-policy bindings, SQL, or executable authorization rules. The platform deterministically compiles all V1 page/action/system resources and Endpoint ANY-OF bindings after your output passes validation.\n\n"
@@ -352,7 +359,7 @@ def _technical_planning_prompt(
         "1. behavior.type=business has exactly one action_implementations entry.\n"
         "2. behavior.type=sequence with business steps has exactly one action_implementations entry whose "
         "stepBindings covers every and only business stepId.\n"
-        "3. behavior.type=navigation, interface, or external has no action_implementations entry.\n"
+        "3. behavior.type=agent, navigation, interface, or external has no action_implementations entry.\n"
         "4. Every referenced endpointId exists in api_contracts and is also present in the same page's "
         "endpoint_dependencies. Do not return the TechnicalPlan until this audit passes.\n\n"
         f"{revision_context}"
@@ -444,7 +451,7 @@ def _planning_prompt(
         "emit data_source_id: contracts bind entities only; later stages resolve each entity's "
         "confirmed EntityDesign when data-source context is required. Always use the key id, never "
         "contract_id or contractId. Each contract "
-        "contains compact JSON-Schema-like schemas and endpoints. Endpoints contain stable id, method, path, summary, "
+        "contains compact JSON-Schema-like schemas and endpoints. Ordinary Endpoints explicitly contain kind=business, stable id, method, path, summary, "
         "parameters [{name, in, required, schema}], request_schema_ref, response_schema_ref, "
         "error_codes, and authentication. CRITICAL schema placement rule: every schema referenced by "
         "an endpoint's request_schema_ref or response_schema_ref MUST be defined inside the SAME "
@@ -475,7 +482,7 @@ def _planning_prompt(
         "    }\n"
         "  },\n"
         '  "endpoints": [\n'
-        '    {"id": "inventory.list", "method": "GET", "path": "/api/inventory", "summary": "查询库存列表", '
+        '    {"id": "inventory.list", "kind": "business", "method": "GET", "path": "/api/inventory", "summary": "查询库存列表", '
         '"parameters": [], "request_schema_ref": null, "response_schema_ref": "InventoryListResponse", '
         '"error_codes": [], "authentication": {"required": true}}\n'
         "  ]\n"
@@ -690,7 +697,9 @@ def _technical_action_binding_repair_prompt(
         "Endpoint catalog; never create or rename an Endpoint. ProductPlan already decides whether an action or step "
         "is business, so do not reclassify behavior. For a resolved direct business action, return exactly {pageId, "
         "actionId, endpointId}. For a resolved sequence, return exactly {pageId, actionId, stepBindings:[{stepId, "
-        "endpointId}]} and cover every and only requiredStepIds. A resolved result must contain one binding for every "
+        "endpointId}]} and cover every and only requiredStepIds. Add apiContractId to each Endpoint choice when "
+        "needed to distinguish same-named Endpoints; endpoint_dependencies retain api_contract_id. "
+        "A resolved result must contain one binding for every "
         "issue and no unrelated binding. The backend will close endpoint_dependencies deterministically.\n\n"
         f"Structured binding issues:\n{json.dumps(binding_issues, ensure_ascii=False)}\n\n"
         f"Affected confirmed ProductPlan actions:\n{json.dumps(affected_actions, ensure_ascii=False)}\n\n"

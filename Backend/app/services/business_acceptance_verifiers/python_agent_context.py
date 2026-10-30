@@ -38,7 +38,8 @@ def _dict_field(program, unit, function, value, name):
     value = program.expand(unit, value, function)
     if not isinstance(value, ast.Dict) or any(key is None for key in value.keys):
         return None
-    return next((child for key, child in zip(value.keys, value.values()) if program.value(unit, key, function) == name), None)
+    # ast.Dict 的 values 是节点列表，不是 Python dict.values() 方法。
+    return next((child for key, child in zip(value.keys, value.values) if program.value(unit, key, function) == name), None)
 
 
 def graph_invocations(program) -> list[tuple]:

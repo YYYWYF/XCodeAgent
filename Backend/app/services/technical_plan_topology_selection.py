@@ -47,6 +47,12 @@ def select_technical_plan_topology(
                     or (application_config.get("authorization") or {}).get("enabled") is not False):
         raise ValueError("当前 Runtime 调试仅支持已关闭登录和授权的应用，请先在应用配置中明确关闭这两项。")
     candidate = deepcopy(plan)
+    if runtime:
+        from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
+        candidate["topology"] = {"type": topology_type, "serviceIds": ["agent-runtime"],
+            "publicEdgeServiceId": "agent-runtime", "authenticationTermination": "anonymous-session"}
+        candidate = materialize_runtime_endpoints(candidate, refresh_derived=True)
+        plan = candidate
     facts = {
         "type": topology_type, "configRevision": application_config.get("configRevision"),
         "authEnabled": (application_config.get("auth") or {}).get("enable"),
