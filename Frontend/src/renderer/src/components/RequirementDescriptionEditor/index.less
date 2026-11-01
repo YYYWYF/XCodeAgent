@@ -1,0 +1,179 @@
+// 新建弹窗优先继承弹窗变量，设置页继承工作台变量，避免浅色设置页回退到暗色。
+.@{class-prefix}-requirement-editor {
+  --req-bg: var(--modal-bg, var(--wb-canvas, #160d24));
+  --req-field: var(--modal-field, var(--wb-editor, #120a1d));
+  --req-text: var(--modal-text, var(--wb-text, #f7f1fc));
+  --req-secondary: var(--modal-text-secondary, var(--wb-text-secondary, #b2a0c2));
+  --req-border: var(--modal-border, var(--wb-border, #3f2b55));
+  --req-accent: var(--modal-accent, var(--wb-accent, #8b5cf6));
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--req-border);
+  border-radius: 8px;
+  background: var(--req-bg);
+
+  textarea.ant-input {
+    display: block;
+    color: var(--req-text);
+    background: var(--req-field);
+    border-color: var(--req-border);
+    resize: vertical;
+
+    &::placeholder { color: var(--req-secondary); }
+    &:hover, &:focus { border-color: var(--req-accent); }
+    &:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--req-accent) 18%, transparent); }
+    &[disabled] { opacity: 0.6; cursor: not-allowed; }
+  }
+
+  .ant-btn:not([disabled]) {
+    color: var(--req-accent);
+    border-color: var(--req-border);
+    background: var(--req-bg);
+
+    &:hover, &:focus { border-color: var(--req-accent); }
+    &.ant-btn-primary { color: #fff; background: var(--req-accent); }
+    &.ant-btn-link { border-color: transparent; background: transparent; }
+  }
+}
+
+// 独立复用时也可从宿主明亮主题类获得成对配色，不依赖新建应用表单。
+.@{class-prefix}-theme-light .@{class-prefix}-requirement-editor {
+  --req-bg: var(--modal-bg, var(--wb-canvas, #fff));
+  --req-field: var(--modal-field, var(--wb-editor, #fdfbfe));
+  --req-text: var(--modal-text, var(--wb-text, #2c1d3f));
+  --req-secondary: var(--modal-text-secondary, var(--wb-text-secondary, #766489));
+  --req-border: var(--modal-border, var(--wb-border, #e2d7ed));
+  --req-accent: var(--modal-accent, var(--wb-accent, #7c3aed));
+}
+
+// 设置页只读展示保留一层边框，可滚动与复制，不呈现可编辑输入框的边框和缩放手柄。
+.@{class-prefix}-requirement-editor--readonly {
+  &:focus-within { border-color: var(--req-accent); }
+
+  textarea.ant-input[readonly] {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    line-height: 1.7;
+    resize: none !important;
+    box-shadow: none;
+
+    &:hover, &:focus { border: 0; box-shadow: none; }
+  }
+}
+
+.@{class-prefix}-requirement-editor-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 8px;
+  // 对称内边距配合居中布局，保证文字与图标在按钮边框内水平、垂直对齐。
+  .ant-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 12px;
+  }
+}
+
+.@{class-prefix}-requirement-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+// 指引浮层以按钮自身的容器为坐标原点，不借用整行工具栏或外层弹窗定位。
+.@{class-prefix}-requirement-editor-guide-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+// 指引采用可滚动的悬浮卡片，长模板不遮满视口，颜色跟随编辑器主题。
+.@{class-prefix}-requirement-editor-popover {
+  max-width: calc(100vw - 48px);
+  .ant-popover-inner {
+    background: var(--req-bg);
+    border: 1px solid var(--req-border);
+  }
+  .ant-popover-title { color: var(--req-text); border-color: var(--req-border); }
+  .ant-popover-inner-content {
+    width: min(500px, calc(100vw - 48px));
+    max-height: min(560px, 60vh);
+    overflow: auto;
+  }
+  .ant-popover-arrow-content {
+    --antd-arrow-background-color: var(--req-bg);
+    &::before { background: var(--req-bg); }
+  }
+}
+
+// 操作说明使用与明暗主题一致的可读文字、背景及边框。
+.@{class-prefix}-requirement-editor-tooltip {
+  .ant-tooltip-inner {
+    color: var(--req-text);
+    background: var(--req-bg);
+    border: 1px solid var(--req-border);
+  }
+  // v4 的圆角箭头由伪元素绘制，外层背景不会覆盖默认黑色。
+  .ant-tooltip-arrow-content {
+    --antd-arrow-background-color: var(--req-bg);
+    background: transparent;
+    &::before { background: var(--req-bg); }
+  }
+}
+
+.@{class-prefix}-requirement-editor-guide {
+  margin: 0;
+  color: var(--req-text);
+  font: inherit;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+// 浮层留在组件 DOM 内继承宿主主题，但在视口内固定定位，避免挤压表单。
+.@{class-prefix}-requirement-editor-overlay {
+  color: var(--req-text);
+  .ant-modal-content, .ant-modal-header, .ant-modal-body, .ant-modal-footer {
+    color: var(--req-text);
+    background: var(--req-bg);
+    border-color: var(--req-border);
+  }
+  .ant-modal-title, .ant-modal-close { color: var(--req-text); }
+  .ant-modal-mask { background: color-mix(in srgb, var(--req-text) 20%, transparent); }
+}
+
+.@{class-prefix}-requirement-editor-expanded {
+  .ant-modal-body { max-height: calc(100vh - 220px); overflow: auto; }
+}
+
+.@{class-prefix}-requirement-editor-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(250px, 2fr);
+  gap: 20px;
+  min-height: 280px;
+  height: min(640px, calc(100vh - 260px));
+
+  aside { overflow: auto; padding: 12px; border: 1px solid var(--req-border); border-radius: 8px; }
+}
+
+.@{class-prefix}-requirement-editor-draft {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  textarea.ant-input { flex: 1; min-height: 200px; resize: none; }
+}
+
+@media (max-width: 760px) {
+  .@{class-prefix}-requirement-editor-columns {
+    grid-template-columns: 1fr;
+    height: auto;
+    .@{class-prefix}-requirement-editor-draft { min-height: 320px; }
+    aside { max-height: 220px; }
+  }
+}

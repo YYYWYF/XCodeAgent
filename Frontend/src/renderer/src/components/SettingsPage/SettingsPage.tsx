@@ -93,7 +93,6 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         ...application,
         appName: rest.appName,
         appIcon: rest.appIcon,
-        senario: rest.senario,
         theme: rest.theme,
         auth: rest.auth,
         authorization: rest.authorization,

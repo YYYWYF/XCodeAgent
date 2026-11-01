@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+新建应用的需求填写由公共受控组件 `Frontend/src/renderer/src/components/RequirementDescriptionEditor/` 负责：悬停或聚焦展示填写指引、非空插入模板的追加/替换确认、追加页面和可取消的放大编辑；操作按钮提供悬浮说明，临时草稿仅在弹窗确认后通过 `onChange` 回填。模板与指引集中在 `constants/applicationRequirements.ts`，组件不访问 Form 或持久化服务。`Welcome/ApplicationForm.tsx` 保持 `senario` 字段及必填校验，设置模式只读并隐藏全部辅助操作；`SettingsPage.tsx` 保存其他设置时保留原需求。回归入口：`pnpm test:requirement-editor`。
+
 登录页、欢迎页与工作台顶部品牌右侧共用 `Frontend/src/renderer/src/components/AppVersionBadge.tsx` 展示客户端版本及明暗主题标签；`service/appVersion.ts` 在每个渲染进程内缓存只读结果，统一小写 `v` 前缀并保留预发布标识，读取失败隐藏标签。`src/main/appVersion.ts` 注册应用生命周期内有效的 `app:get-version` IPC，经 preload 的 `getAppVersion()` 返回 `app.getVersion()`，与启动更新的版本来源一致，不依赖更新窗口的临时 IPC，也不读取项目分支或服务端最新版本。
 
 Windows 启动更新的安装交接由 `Frontend/src/main/appUpdate/installUpdate.ts` 负责：沿用当前 EXE 所在目录，使用 NSIS 静默安装并重启；macOS 保持原生安装调用，首次手动安装配置不变。`tests/appUpdateInstall.test.ts` 复用真实 NSIS 参数生成逻辑验证 `/S`、`--force-run` 与带空格/中文目录的 `/D` 参数，纳入 `pnpm test:app-update`。
