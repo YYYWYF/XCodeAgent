@@ -55,8 +55,11 @@ linux:
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
+# 各环境使用独立 CDN，固定清单名以匹配客户端的 latest 更新通道。
+detectUpdateChannel: false
 publish:
   provider: generic
+  channel: latest
   url: http://127.0.0.1:18081/ # 本地测试时使用，发布时请改为实际的 CDN 地址
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/
