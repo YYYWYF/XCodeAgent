@@ -9,7 +9,6 @@ from unittest.mock import patch
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 
 from app.agents.main import planner
 from app.agents.main.technical_plan_editor import (
@@ -243,27 +242,17 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         self.assertEqual(result, {"candidate": True})
         self.assertEqual(editor.call_args.args[0]["planning_adjustment_request"], self.request)
 
-    def test_editor_call_budget_is_bounded(self):
-        """无休止搜索在有限模型轮次内失败，不产生成功候选。"""
-
-        model = ScriptedEditorModel(responses=[tool_response("grep", pattern="orders") for _ in range(10)])
-        with patch("app.agents.main.technical_plan_editor.create_chat_model", return_value=model):
-            with self.assertRaisesRegex(ValueError, "达到调用上限") as raised:
-                edit_technical_plan_with_agent(self.requirement, self.baseline, settings=self.settings)
-        self.assertEqual(len(model.seen_messages), 8)
-        self.assertIsInstance(raised.exception.__cause__, ModelCallLimitExceededError)
-
-    def test_all_eight_model_calls_are_available_before_graph_step_limit(self):
-        """中间件的图节点不应提前耗尽八次模型预算，定位后仍能编辑并读回复核。"""
+    def test_editor_can_finish_after_extended_tool_exploration(self):
+        """超过原八次模型及关联图步数限制后，仍能完成编辑、读回并返回候选。"""
 
         result, model = self._run_editor([
-            *[tool_response("grep", pattern="orders.list", output_mode="content") for _ in range(5)],
+            *[tool_response("grep", pattern="orders.list", output_mode="content") for _ in range(40)],
             tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
                           old_string='"default": 20', new_string='"default": 8'),
             tool_response("read_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH),
             AIMessage(content="完成局部修复，等待确认。"),
         ])
-        self.assertEqual(len(model.seen_messages), 8)
+        self.assertEqual(len(model.seen_messages), 43)
         self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
 
     def test_generation_without_complete_candidate_uses_full_route(self):
