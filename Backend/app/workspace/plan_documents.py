@@ -785,53 +785,26 @@ def _technical_entity_markdown(entity: dict[str, Any]) -> str:
 
 
 def _authorization_manifest_markdown(plan: dict[str, Any]) -> str:
-    """把确定性权限资源目录渲染为只读开发核对信息。"""
+    """仅渲染本阶段的接口权限绑定，角色及资源授权在需求阶段确认。"""
 
     manifest = plan.get("authorization_manifest")
-    if not isinstance(manifest, dict) or not _dict_items(manifest.get("resources")):
-        return "- 未启用运行态权限管理。"
+    if not isinstance(manifest, dict):
+        return "- 暂无接口权限绑定。"
     bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
-    resources = _dict_items(manifest.get("resources"))
-    resource_lines = [
-        f"| {item.get('name', '')} | `{item.get('resourceKey', '')}` | {item.get('type', '')} | {item.get('targetResourceRef', '')} | {', '.join(_text_items(item.get('sourceRuleIds'))) or '系统固定'} |"
-        for item in resources
-    ]
-    action_lines = [
-        f"| `{item.get('pageId', '')}` | `{item.get('actionId', '')}` | `{item.get('resourceKey', '')}` |"
-        for item in _dict_items(bindings.get("actions"))
-    ]
     endpoint_lines = [
-        f"| `{item.get('endpointId', '')}` | {', '.join(f'`{key}`' for key in _text_items(item.get('operationResourceKeys'))) or '-'} | ANY-OF |"
+        f"| `{item.get('endpointId', '')}` | {', '.join(f'`{key}`' for key in _text_items(item.get('operationResourceKeys'))) or '-'} | {'ANY-OF' if _text_items(item.get('operationResourceKeys')) else '未设置资源权限控制'} |"
         for item in _dict_items(bindings.get("endpoints"))
     ]
-    default_authorization = manifest.get("defaultRoleAuthorization") if isinstance(manifest.get("defaultRoleAuthorization"), dict) else {}
-    grant_lines = [
-        f"| `{item.get('roleSeedKey', '')}` | {', '.join(f'`{key}`' for key in _text_items(item.get('resourceKeys'))) or '-'} |"
-        for item in _dict_items(default_authorization.get("roleResourceGrants"))
-    ]
     return "\n".join([
+        "- 角色、页面/操作资源及默认授权已在需求阶段确认；调整授权请返回需求阶段重新确认。",
+        "- 本阶段按业务操作调用的接口生成权限绑定，页面权限与接口权限独立。",
         f"- Manifest：`{manifest.get('schema_version', '')}`",
         f"- 指纹：`{manifest.get('fingerprint', '')}`",
-        "",
-        "页面、操作与系统资源：",
-        "| 名称 | 稳定 key | 类型 | 目标 | 来源规则 |",
-        "| --- | --- | --- | --- | --- |",
-        *(resource_lines or ["| 无 | - | - | - | - |"]),
-        "",
-        "顶层 action 资源：",
-        "| 页面 | action | 稳定 key |",
-        "| --- | --- | --- |",
-        *(action_lines or ["| 无 | - | - |"]),
         "",
         "Endpoint 操作资源绑定：",
         "| Endpoint | 操作资源 | 裁决 |",
         "| --- | --- | --- |",
         *(endpoint_lines or ["| 无 | - | - |"]),
-        "",
-        "默认角色授权：",
-        "| 角色 seed key | 默认资源 |",
-        "| --- | --- |",
-        *(grant_lines or ["| 无 | - |"]),
     ])
 
 
@@ -874,7 +847,7 @@ def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
 
 {pages or '- 无'}
 
-## 权限资源目录（系统编译，只读）
+## 接口权限绑定（系统编译，只读）
 
 {_authorization_manifest_markdown(plan)}
 """

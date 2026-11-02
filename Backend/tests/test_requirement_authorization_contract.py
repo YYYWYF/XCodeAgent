@@ -7,6 +7,7 @@ from app.agents.main.document_sync import sync_requirement_spec_from_markdown
 from app.agents.main.requirements_analyzer import (
     _authorization_evidence,
     _authorization_facts_for_requirement,
+    _extract_authorization_facts,
     _merge_authorization_facts,
     _remove_global_feature_availability_controls,
     _remove_unauthorized_authorization_candidates,
@@ -165,6 +166,43 @@ class RequirementAuthorizationContractTests(unittest.TestCase):
         self.assertEqual(
             sanitized["authorization_requirements"]["restrictedPages"], candidate["authorization_requirements"]["restrictedPages"]
         )
+
+    def test_mixed_evidence_keeps_only_verbatim_authorization_sources(self) -> None:
+        """真实模型混合返回原文和改写时保留合法证据，全部改写时仍关闭证据门。"""
+
+        request = "给人员管理员增加编辑人员权限，并说明为什么。保留编辑者原有权限。"
+        exact = "给人员管理员增加编辑人员权限"
+        paraphrase = "保留原先编辑者拥有的编辑权限"
+        evidence = _authorization_evidence(
+            {"hasAuthorizationRequirement": True, "evidence": [exact, paraphrase]}, request,
+        )
+        self.assertEqual(evidence, {"hasAuthorizationRequirement": True, "evidence": [exact]})
+        candidate = {"authorization_requirements": {"restrictedOperations": [{"name": "编辑人员"}]}}
+        self.assertEqual(_remove_unauthorized_authorization_candidates(candidate, evidence), candidate)
+        self.assertEqual(_authorization_evidence(
+            {"hasAuthorizationRequirement": True, "evidence": [paraphrase]}, request,
+        ), {"hasAuthorizationRequirement": False, "evidence": []})
+
+    def test_grant_revision_extractor_receives_existing_control_identity(self) -> None:
+        """授权调整必须把原有权限名称和授权传给提取器，避免同义改名后新增操作。"""
+
+        from types import SimpleNamespace
+        import json
+        controls = {"restrictedPages": [], "restrictedOperations": [{
+            "ruleId": "edit_person", "name": "编辑人员", "description": "维护人员资料。",
+            "sourceRefs": ["原始需求"], "defaultGrantedRoleIds": ["editor"],
+        }]}
+        existing = {"user_roles": [{"id": "editor", "name": "编辑者", "description": "维护人员。"}],
+                    "authorization_requirements": controls}
+        facts = {"user_roles": existing["user_roles"], "authorization_requirements": {
+            "restrictedPages": [], "restrictedOperations": [], "dataAuthorizationIssues": [],
+        }}
+        with patch("app.agents.main.requirements_analyzer.create_chat_model") as model:
+            model.return_value.invoke.return_value = SimpleNamespace(content=json.dumps(facts))
+            _extract_authorization_facts("给人员管理员增加编辑人员权限", existing, None, [])
+        prompt = model.return_value.invoke.call_args.args[0]
+        context = prompt.split("Existing authorization controls, if any:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(json.loads(context), controls)
 
     def test_authorization_fact_output_rejects_rule_without_role_grant(self) -> None:
         """缺少明确角色授权的候选不能被当成 RBAC 控制。"""

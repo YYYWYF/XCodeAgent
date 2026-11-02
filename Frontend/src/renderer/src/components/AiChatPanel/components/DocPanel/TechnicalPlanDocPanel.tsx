@@ -9,13 +9,13 @@ import {
   type SectionKey
 } from './TechnicalPlanDocSections'
 import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
-import { authorizationDesignView } from './TechnicalPlanAuthorizationData'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
 
 type Props = {
   plan: JsonRecord
   productPlan: JsonRecord
+  onReviseAuthorization?: () => void
 }
 
 const technicalPlanSections: Array<{ key: SectionKey; label: string }> = [
@@ -28,16 +28,14 @@ const technicalPlanSections: Array<{ key: SectionKey; label: string }> = [
 /** 渲染右侧技术规划产物视图，所有交互仅改变本面板内的阅读位置。 */
 export default function TechnicalPlanDocPanel({
   plan,
-  productPlan
+  productPlan,
+  onReviseAuthorization
 }: Props): ReactElement {
   const architecture = asRecord(plan.architecture)
   const entities = recordItems(plan.entities)
   const contracts = recordItems(plan.api_contracts)
   const pages = recordItems(plan.pages)
-  const hasAuthorization = Boolean(authorizationDesignView(plan))
-  const sections = hasAuthorization
-    ? [...technicalPlanSections, { key: 'authorization' as const, label: '权限' }]
-    : technicalPlanSections
+  const sections = [...technicalPlanSections, { key: 'authorization' as const, label: '接口权限绑定' }]
   const [activeSection, setActiveSection] = useState<SectionKey>('api-contracts')
   const resolvedActiveSection = sections.some((section) => section.key === activeSection)
     ? activeSection
@@ -115,7 +113,7 @@ export default function TechnicalPlanDocPanel({
         />
       ) : null}
       {resolvedActiveSection === 'authorization' ? (
-        <AuthorizationSection plan={plan} sectionKey="authorization" />
+        <AuthorizationSection plan={plan} productPlan={productPlan} sectionKey="authorization" onReviseAuthorization={onReviseAuthorization} />
       ) : null}
     </div>
   )

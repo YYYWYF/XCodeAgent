@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { UiReadVisibility } from './uiReadVisibility'
+import {
+  designPagesGenerating,
+  EMPTY_DESIGN_SOURCE,
+  subscribeDesignSource,
+  type DesignSourceSnapshot,
+  type UiDesignPageSource
+} from './uiDesignPageSource'
 
 /** 页面清单里本 hook 关心的字段。 */
 type UiDesignPageLike = {
@@ -19,7 +27,7 @@ export function mergeUiDesignPageSources<T extends UiDesignPageLike>(
   diskCode: Record<string, string>,
   diskStatus: Record<string, string>
 ): T[] {
-  return sourcePages.map((page) => {
+  const merged = sourcePages.map((page) => {
     const pageId = String(page.pageId || '')
     if (!pageId) return page
     const code = page.code ? undefined : diskCode[pageId]
@@ -31,6 +39,7 @@ export function mergeUiDesignPageSources<T extends UiDesignPageLike>(
       ...(status ? { status } : {})
     }
   })
+  return merged.every((page, index) => page === sourcePages[index]) ? sourcePages : merged
 }
 
 /**
@@ -51,48 +60,38 @@ export function useUiDesignPagesWithCode<T extends UiDesignPageLike>(
   workspaceRoot: string | undefined,
   sourcePages: T[] | undefined
 ): T[] {
-  // 磁盘上的源码与状态：按 pageId 索引。
-  const [diskCode, setDiskCode] = useState<Record<string, string>>({})
-  const [diskStatus, setDiskStatus] = useState<Record<string, string>>({})
+  const visible = useContext(UiReadVisibility)
+  const sourceRef = useRef<UiDesignPageSource>()
+  const [disk, setDisk] = useState<{ workspace?: string; value: DesignSourceSnapshot }>({
+    value: EMPTY_DESIGN_SOURCE
+  })
+  // 只对页面身份/生成状态变化校准磁盘，不把大段 TSX 序列化为依赖键。
+  const sourceKey = JSON.stringify((sourcePages || []).map((page) => [page.pageId, page.status]))
+  const generating = designPagesGenerating(sourcePages || [])
 
   useEffect(() => {
-    if (!workspaceRoot) return
-    let cancelled = false
-    const poll = async (): Promise<void> => {
-      try {
-        const result = await window.devAgentStudio?.workspace?.readUiDesigns({ workspaceRoot })
-        if (cancelled || !result?.uiDesigns) return
-        const pages = (result.uiDesigns as { pages?: unknown }).pages
-        if (!Array.isArray(pages)) return
-        const codes: Record<string, string> = {}
-        const statuses: Record<string, string> = {}
-        for (const page of pages) {
-          if (!page || typeof page !== 'object') continue
-          const pageId = String((page as UiDesignPageLike).pageId || '')
-          if (!pageId) continue
-          const code = String((page as UiDesignPageLike).code || '')
-          if (code) codes[pageId] = code
-          const status = String((page as UiDesignPageLike).status || '')
-          if (status) statuses[pageId] = status
-        }
-        if (!cancelled) {
-          setDiskCode(codes)
-          setDiskStatus(statuses)
-        }
-      } catch {
-        // 读取失败不阻塞，下次轮询重试。
-      }
-    }
-    void poll()
-    const timer = window.setInterval(() => void poll(), 2000)
+    if (!workspaceRoot || !visible) return
+    const subscription = subscribeDesignSource(workspaceRoot, (value) => {
+      setDisk((current) =>
+        current.workspace === workspaceRoot && current.value === value
+          ? current
+          : { workspace: workspaceRoot, value }
+      )
+    })
+    sourceRef.current = subscription.source
     return () => {
-      cancelled = true
-      window.clearInterval(timer)
+      sourceRef.current = undefined
+      subscription.release()
     }
-  }, [workspaceRoot])
+  }, [workspaceRoot, visible])
 
+  useEffect(() => {
+    sourceRef.current?.updateSource(sourceKey, generating)
+  }, [workspaceRoot, visible, sourceKey, generating])
+
+  const snapshot = disk.workspace === workspaceRoot ? disk.value : EMPTY_DESIGN_SOURCE
   return useMemo(
-    () => mergeUiDesignPageSources(sourcePages ?? [], diskCode, diskStatus),
-    [sourcePages, diskCode, diskStatus]
+    () => mergeUiDesignPageSources(sourcePages ?? [], snapshot.codes, snapshot.statuses),
+    [sourcePages, snapshot]
   )
 }

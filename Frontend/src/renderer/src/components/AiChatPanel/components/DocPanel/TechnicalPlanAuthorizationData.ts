@@ -1,126 +1,45 @@
-import {
-  asRecord,
-  recordItems,
-  stringItems,
-  textValue,
-  type JsonRecord
-} from './TechnicalPlanDocPanelData'
+import { asRecord, recordItems, stringItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 
-export type AuthorizationResourceView = {
-  description: string
-  endpointBindings: Array<{ endpointId: string; ownedResourceKeys: string[] }>
-  key: string
+export type EndpointAuthorizationView = {
+  id: string
   name: string
-  sourceRuleIds: string[]
-  target: string
-  type: 'system' | 'page' | 'operation' | 'unknown'
+  method: string
+  path: string
+  permissionsKnown: boolean
+  operations: string[]
+  resources: Array<{ key: string; name: string }>
 }
 
-export type AuthorizationRoleView = {
-  description: string
-  groups: Array<{ key: AuthorizationResourceView['type']; label: string; resources: AuthorizationResourceView[] }>
-  name: string
-  resourceCount: number
-  seedKey: string
-}
-
-export type AuthorizationDesignView = {
-  roles: AuthorizationRoleView[]
-}
-
-const GROUPS: Array<{ key: AuthorizationResourceView['type']; label: string }> = [
-  { key: 'system', label: '系统资源' },
-  { key: 'page', label: '页面资源' },
-  { key: 'operation', label: '操作资源' },
-  { key: 'unknown', label: '未解析资源' }
-]
-
-/** 将 manifest 资源类型限制为权限设计视图支持的固定分组。 */
-function resourceType(value: unknown): AuthorizationResourceView['type'] {
-  const type = textValue(value)
-  return type === 'system' || type === 'page' || type === 'operation' ? type : 'unknown'
-}
-
-/** 从权限 manifest 生成只读角色视角，绝不补写或推断权限事实。 */
-export function authorizationDesignView(plan: JsonRecord): AuthorizationDesignView | undefined {
+/** 只展示技术规划生成的操作、接口与资源绑定，不再重复上游角色授权。 */
+export function endpointAuthorizationView(plan: JsonRecord, productPlan: JsonRecord): EndpointAuthorizationView[] {
   const manifest = asRecord(plan.authorization_manifest)
-  if (textValue(manifest.schema_version) !== 'authorization-manifest.v3') return undefined
-
-  const resources = new Map(
-    recordItems(manifest.resources)
-      .map((resource) => [textValue(resource.resourceKey), resource] as const)
-      .filter(([key]) => Boolean(key))
-  )
-  const authorization = asRecord(manifest.defaultRoleAuthorization)
-  const grants = new Map(
-    recordItems(authorization.roleResourceGrants)
-      .map((grant) => [textValue(grant.roleSeedKey), stringItems(grant.resourceKeys)] as const)
-      .filter(([seedKey]) => Boolean(seedKey))
-  )
-  const allEndpointBindings = recordItems(asRecord(manifest.bindings).endpoints).map((binding) => ({
-    endpointId: textValue(binding.endpointId),
-    resourceKeys: stringItems(binding.operationResourceKeys)
+  const permissionsKnown = manifest.schema_version === 'authorization-manifest.v3' &&
+    Array.isArray(manifest.resources) && Array.isArray(asRecord(manifest.bindings).endpoints)
+  const resources = new Map(recordItems(manifest.resources).map((item) => [textValue(item.resourceKey), item]))
+  const bindings = new Map(recordItems(asRecord(manifest.bindings).endpoints).map((item) => [
+    textValue(item.endpointId), stringItems(item.operationResourceKeys)
+  ]))
+  const productPages = new Map(recordItems(productPlan.pages).map((page) => [textValue(page.pageId), page]))
+  const operations = new Map<string, Set<string>>()
+  for (const page of recordItems(plan.pages)) {
+    const productPage = productPages.get(textValue(page.pageId))
+    const actions = new Map(recordItems(productPage?.actions).map((action) => [textValue(action.actionId), action]))
+    for (const binding of recordItems(asRecord(page.references).action_implementations)) {
+      const label = `${textValue(productPage?.name, textValue(page.pageId))} / ${textValue(actions.get(textValue(binding.actionId))?.name, textValue(binding.actionId))}`
+      const endpoints = [textValue(binding.endpointId), ...recordItems(binding.stepBindings).map((step) => textValue(step.endpointId))]
+      for (const endpoint of endpoints.filter(Boolean)) {
+        const labels = operations.get(endpoint) || new Set<string>()
+        labels.add(label)
+        operations.set(endpoint, labels)
+      }
+    }
+  }
+  return recordItems(plan.api_contracts).flatMap((contract) => recordItems(contract.endpoints).map((endpoint) => {
+    const id = textValue(endpoint.id)
+    return {
+      id, name: textValue(endpoint.name, id), method: textValue(endpoint.method), path: textValue(endpoint.path), permissionsKnown,
+      operations: [...(operations.get(id) || [])],
+      resources: (bindings.get(id) || []).map((key) => ({ key, name: textValue(resources.get(key)?.name, '引用未解析') }))
+    }
   }))
-
-  const businessRoles = recordItems(authorization.roles).map((role) => {
-      const seedKey = textValue(role.roleSeedKey)
-      const grantedKeys = grants.get(seedKey) || []
-      const resourcesByGroup = new Map<AuthorizationResourceView['type'], AuthorizationResourceView[]>()
-      for (const resourceKey of grantedKeys) {
-        const resource = resources.get(resourceKey)
-        const type = resourceType(resource?.type)
-        const relatedEndpoints = allEndpointBindings
-          .filter((binding) => binding.resourceKeys.includes(resourceKey) && binding.endpointId)
-          .map((binding) => ({
-            endpointId: binding.endpointId,
-            ownedResourceKeys: binding.resourceKeys.filter((key) => grantedKeys.includes(key))
-          }))
-        const item: AuthorizationResourceView = {
-          description: textValue(resource?.description),
-          endpointBindings: relatedEndpoints,
-          key: resourceKey,
-          name: resource ? textValue(resource.name, resourceKey) : '引用未解析',
-          sourceRuleIds: resource ? stringItems(resource.sourceRuleIds) : [],
-          target: resource ? textValue(resource.targetResourceRef) : '',
-          type
-        }
-        resourcesByGroup.set(type, [...(resourcesByGroup.get(type) || []), item])
-      }
-      return {
-        description: textValue(role.description),
-        groups: GROUPS.map((group) => ({
-          ...group,
-          resources: (resourcesByGroup.get(group.key) || []).sort((left, right) => left.key.localeCompare(right.key))
-        })).filter((group) => group.resources.length),
-        name: textValue(role.name, seedKey || '未命名角色'),
-        resourceCount: grantedKeys.length,
-        seedKey
-      }
-    })
-  const systemAuthorization = asRecord(manifest.systemAuthorization)
-  const systemRoleSeedKey = textValue(systemAuthorization.adminRoleSeedKey)
-  const managementResourceKey = textValue(systemAuthorization.managementResourceKey)
-  const managementResource = resources.get(managementResourceKey)
-  const systemRole: AuthorizationRoleView | undefined = systemRoleSeedKey && managementResourceKey
-    ? {
-        description: '平台固定系统角色，仅用于权限管理控制面。',
-        groups: [{
-          key: 'system',
-          label: '系统资源',
-          resources: [{
-            description: textValue(managementResource?.description),
-            endpointBindings: [],
-            key: managementResourceKey,
-            name: textValue(managementResource?.name, managementResourceKey),
-            sourceRuleIds: [],
-            target: textValue(managementResource?.targetResourceRef),
-            type: 'system'
-          }]
-        }],
-        name: 'SYSTEM_ADMIN',
-        resourceCount: 1,
-        seedKey: systemRoleSeedKey
-      }
-    : undefined
-  return { roles: [...(systemRole ? [systemRole] : []), ...businessRoles] }
 }

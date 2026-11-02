@@ -19,6 +19,7 @@ from app.services.generated_document_inclusion import write_generated_documents
 from app.services.data_source_policy import datasource_type_from_artifact
 from app.services.application_config import read_application_config
 from app.services.authorization_manifest import (
+    compile_authorization_resources,
     validate_authorization_configuration_projection,
 )
 from app.services.model_transport_retry import run_with_transport_retry
@@ -646,14 +647,29 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         application_file = Path(str(state.get("workspace") or "")) / WORKSPACE_ARTIFACT_DIR / "application.json"
         if application_planning_scope and application_file.is_file():
             # 正式修订进入规划前已提交配置，所有规划预检只读取唯一事实源。
-            effective_application_config = read_application_config(
-                str(state.get("workspace") or ""),
-            )
+            try:
+                effective_application_config = read_application_config(
+                    str(state.get("workspace") or ""),
+                )
+            except ValueError as exc:
+                # 配置损坏也属于联合确认前的阻断，保留原草稿和修改入口，不能抛出门外。
+                return _configuration_alignment_update(
+                    state, confirmed_requirement_spec, confirmed,
+                    [f"应用配置校验未通过，请核对权限开关和初始管理员 subjectId：{exc}"],
+                )
             projection_errors = validate_authorization_configuration_projection(
                 effective_application_config,
                 confirmed_requirement_spec,
                 confirmed,
             )
+            if not projection_errors:
+                try:
+                    # 联合确认时重新编译与阅读视图相同的资源，禁止界面预览绕过正式校验。
+                    compile_authorization_resources(
+                        confirmed_requirement_spec, confirmed, application_config=effective_application_config,
+                    )
+                except ValueError as exc:
+                    projection_errors = [str(exc)]
             if projection_errors:
                 return _configuration_alignment_update(
                     state,

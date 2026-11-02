@@ -47,6 +47,12 @@ def _authorization_fact_extraction_prompt(
         and isinstance(existing_spec.get("user_roles"), list)
         else []
     )
+    existing_authorization = (
+        existing_spec.get("authorization_requirements")
+        if isinstance(existing_spec, dict)
+        and isinstance(existing_spec.get("authorization_requirements"), dict)
+        else {}
+    )
     page_candidates = [
         {
             "pageId": str(page.get("pageId") or "").strip(),
@@ -87,8 +93,12 @@ def _authorization_fact_extraction_prompt(
         "Never emit empty objects, placeholders, allowedRoles, resource keys, technical ids, routes, API fields, SQL, "
         "or initial-system-administrator fields.\n"
         "Do not ask the user to repeat facts already stated. If a fact is explicit, express it completely using the "
-        "required fields.\n"
+        "required fields. For revisions, apply the latest request to the existing authorization controls and preserve "
+        "unrelated controls and grants. When changing only default role grants, copy the existing control name exactly; "
+        "do not add page-name prefixes, rephrase it, or create another control for the same operation. Change or remove "
+        "a control name only when the user explicitly requests that change. Preserve existing role ids.\n"
         f"Existing business roles, if any:\n{json.dumps(existing_roles, ensure_ascii=False)}\n\n"
+        f"Existing authorization controls, if any:\n{json.dumps(existing_authorization, ensure_ascii=False)}\n\n"
         f"Confirmed page catalogue for restrictedPages.targetPageId:\n{json.dumps(page_candidates, ensure_ascii=False)}\n\n"
         f"Original requirement:\n{request}"
     )
@@ -178,10 +188,11 @@ def _authorization_evidence(value: Any, request: str) -> dict[str, Any]:
 
     if not isinstance(value, dict) or set(value) != {"hasAuthorizationRequirement", "evidence"}:
         return {"hasAuthorizationRequirement": False, "evidence": []}
-    evidence = _string_list(value.get("evidence"))
     request_text = str(request or "")
+    # 逐条核对原文引用；混入一条改写不能否定其余合法授权证据。
+    evidence = [item for item in _string_list(value.get("evidence")) if item in request_text]
     has_requirement = value.get("hasAuthorizationRequirement") is True
-    if not has_requirement or not evidence or any(item not in request_text for item in evidence):
+    if not has_requirement or not evidence:
         return {"hasAuthorizationRequirement": False, "evidence": []}
     return {"hasAuthorizationRequirement": True, "evidence": evidence}
 

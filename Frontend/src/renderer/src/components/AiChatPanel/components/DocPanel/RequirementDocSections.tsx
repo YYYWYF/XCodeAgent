@@ -2,8 +2,7 @@ import {
   ApartmentOutlined,
   ArrowRightOutlined,
   BranchesOutlined,
-  FileTextOutlined,
-  TeamOutlined
+  FileTextOutlined
 } from '@ant-design/icons'
 import { Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
@@ -23,13 +22,13 @@ import {
 
 const { Text } = Typography
 
-export type RequirementSectionKey = 'overview' | 'pages' | 'flows' | 'page-design-overview'
+export type RequirementSectionKey = 'overview' | 'pages' | 'flows' | 'page-design-overview' | 'authorization'
 
 type SectionProps = {
   sectionKey: RequirementSectionKey
 }
 
-/** 渲染应用摘要、用户角色与功能模块的总览，帮助用户先建立整体认识。 */
+/** 渲染应用摘要和功能模块；角色及默认授权统一放在角色与权限章节。 */
 export function RequirementOverviewSection({
   spec,
   sectionKey
@@ -37,7 +36,6 @@ export function RequirementOverviewSection({
   spec: JsonRecord
 } & SectionProps): ReactElement {
   const appInfo = asRecord(spec.app_info)
-  const roles = recordItems(spec.user_roles)
   const modules = recordItems(spec.feature_modules)
   return (
     <section
@@ -63,25 +61,6 @@ export function RequirementOverviewSection({
           ) : null}
         </div>
       </article>
-      <div className={cx('requirement-doc-section-title')}>
-        <TeamOutlined /> <span>用户角色</span>
-      </div>
-      <div className={cx('requirement-doc-card-list')}>
-        {roles.length ? (
-          roles.map((role, index) => (
-            <article className={cx('requirement-doc-card')} key={textValue(role.id, `role-${index}`)}>
-              <div className={cx('requirement-doc-card-heading')}>
-                <strong>{textValue(role.name, `角色 ${index + 1}`)}</strong>
-              </div>
-              {textValue(role.description) ? (
-                <Text type="secondary">{textValue(role.description)}</Text>
-              ) : null}
-            </article>
-          ))
-        ) : (
-          <Text type="secondary">暂无用户角色</Text>
-        )}
-      </div>
       <div className={cx('requirement-doc-section-title')}>
         <ApartmentOutlined /> <span>功能模块</span>
       </div>

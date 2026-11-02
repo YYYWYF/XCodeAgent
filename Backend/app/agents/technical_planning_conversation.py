@@ -10,6 +10,7 @@ from app.agents.messages import _coerce_content_text
 from app.agents.design_conversation import is_natural_language_confirmation
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
+from app.services.access_control_intent import has_explicit_business_access_control_change
 from app.utils.model_output import extract_json_object
 
 
@@ -30,6 +31,13 @@ def classify_technical_planning_conversation(
         return TechnicalPlanningConversationDecision(
             intent="reply", message="自由输入不会提交正式确认，请使用技术规划确认卡上的确认操作。",
         )
+    requirement = context.get("requirement_spec")
+    if has_explicit_business_access_control_change(
+        request, user_roles=requirement.get("user_roles") if isinstance(requirement, dict) else None,
+    ):
+        return TechnicalPlanningConversationDecision(
+            intent="design_change", message="角色与默认授权属于需求阶段，将返回修改并重新等待联合确认。",
+        )
     # @ 明确选择业务目标；上游仍由设计 Policy 选择最早产物并保留后续确认门。
     mentions = re.findall(r"@(技术规划|需求设计|UI设计)(?=$|[\s，。,.!！?？:：])", request, re.IGNORECASE)
     if mentions:
@@ -49,6 +57,9 @@ def classify_technical_planning_conversation(
         "Requests to retry without new changes are reply: direct the user to the existing recovery button. "
         "Explicit changes to product requirements, product behavior, UI design or application configuration "
         "are design_change: return to the existing design intent workflow to revise the earliest artifact. "
+        "Business role definitions, controlled pages/operations, resource membership and default role grants "
+        "belong to requirements and must use design_change, even when the user mentions technical planning. "
+        "Only changing which existing Endpoint implements an already confirmed business action is technical revise. "
         "Requests to execute code are reply: explain the appropriate stage. "
         "Ambiguous requests are reply: ask a clarification question. "
         "If no technical plan exists, technical modification/generation requests are reply and use the upper retry control; "

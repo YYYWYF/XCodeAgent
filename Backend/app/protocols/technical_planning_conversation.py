@@ -15,6 +15,7 @@ from app.services.execution_recovery_projection import recovery_failure_diagnost
 from app.services.technical_planning_retry import (
     TechnicalPlanningMessageRevision, prepare_technical_planning_retry,
 )
+from app.services.access_control_intent import has_explicit_business_access_control_change
 
 
 class TechnicalPlanningConversationRequest(BaseModel):
@@ -94,7 +95,12 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             if (not request.sourceRunId or request.sourceRunId != values.get("active_run_id")
                     or not request.checkpointId or request.checkpointId != checkpoint_id):
                 raise ValueError("技术规划状态已变化，请同步最新状态后重新提交修改要求。")
-            target_node = "design_intent_analysis" if request.action == "revise_design" else "technical_planning"
+            # 复验修改语义，不能通过直接提交 revise 或 @技术规划 绕过上游授权确认。
+            requirement = values.get("requirement_spec")
+            upstream = request.action == "revise_design" or has_explicit_business_access_control_change(
+                request.request, user_roles=requirement.get("user_roles") if isinstance(requirement, dict) else None,
+            )
+            target_node = "design_intent_analysis" if upstream else "technical_planning"
             if target_node == "technical_planning":
                 prepare_technical_planning_retry(values, new_request=request.request)
         except Exception as exc:

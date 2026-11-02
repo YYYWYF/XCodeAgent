@@ -1,6 +1,7 @@
 import { message as antdMessage } from 'antd'
 import type { MutableRefObject, SetStateAction } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { enqueueSessionSave } from './sessionSaveQueue'
 import { useWorkbenchPhase } from '../../../context'
 import { reachedPhaseFromSessions } from '../../../workbenchPhaseNavigation'
 import { AgUiChatSession } from '../../../service/agUiAgent'
@@ -181,6 +182,10 @@ export function useChatSessions({
     ensureAgent,
     getIdentity,
     getSessionMessages,
+    hasSessionMessages,
+    retainSession,
+    beginSessionSave,
+    finishSessionSave,
     messagesForKey,
     registerSession,
     removeSession,
@@ -208,6 +213,28 @@ export function useChatSessions({
   const activeKey = activeSessionId
     ? sessionRuntimeKey(workspaceRoot, editorMode, activeSessionId)
     : undefined
+  const retainSessionRef = useRef(retainSession)
+  retainSessionRef.current = retainSession
+  const pendingLoadRetentionRef = useRef<{ key: string; release: () => void }>()
+  // 保留当前选中会话；layout effect 先于 Provider 的回收 effect，避免大记录刚加载就被清走。
+  useLayoutEffect(() => {
+    const release = activeKey ? retainSessionRef.current(activeKey) : undefined
+    const pending = pendingLoadRetentionRef.current
+    if (pending && pending.key === activeKey) {
+      pendingLoadRetentionRef.current = undefined
+      pending.release()
+    }
+    return release
+  }, [activeKey])
+  useEffect(() => () => pendingLoadRetentionRef.current?.release(), [])
+
+  /** 异步读盘到选中提交之间也保护正文；交接预加载最多保留一个目标，下一目标接替时释放。 */
+  const retainLoadedSession = (key: string): void => {
+    if (key === activeKey || pendingLoadRetentionRef.current?.key === key) return
+    const previous = pendingLoadRetentionRef.current
+    pendingLoadRetentionRef.current = { key, release: retainSessionRef.current(key) }
+    previous?.release()
+  }
   const activeSession = activeKey
     ? getIdentity(activeKey) ||
       sessionIdentityFromSummary(
@@ -325,24 +352,33 @@ export function useChatSessions({
   ): Promise<SessionIdentity> => {
     if (!application.workspaceRoot) throw new Error('加载会话前需要选择工作目录。')
     const key = sessionRuntimeKey(application.workspaceRoot, mode, sessionId)
+    retainLoadedSession(key)
     const existingIdentity = getIdentity(key)
-    if (existingIdentity && agUiSessionsRef.current[key]) return existingIdentity
-    const session = await readChatSession(application.workspaceRoot, mode, sessionId)
-    const identity = createSessionIdentity({
-      workspaceRoot: application.workspaceRoot,
-      editorMode: mode,
-      sessionId: session.id,
-      threadId: session.threadId,
-      workflowId: session.workflowId,
-      workbenchPhase: session.workbenchPhase,
-      stage: session.stage,
-      sequence: session.sequence,
-      entryKey: session.entryKey,
-      developmentTarget: session.developmentTarget,
-      revisionContext: session.revisionContext
-    })
-    registerSession(identity, session.messages)
-    return identity
+    if (existingIdentity && hasSessionMessages(key)) {
+      ensureAgent(existingIdentity)
+      return existingIdentity
+    }
+    const release = retainSession(key)
+    try {
+      const session = await readChatSession(application.workspaceRoot, mode, sessionId)
+      const identity = createSessionIdentity({
+        workspaceRoot: application.workspaceRoot,
+        editorMode: mode,
+        sessionId: session.id,
+        threadId: session.threadId,
+        workflowId: session.workflowId,
+        workbenchPhase: session.workbenchPhase,
+        stage: session.stage,
+        sequence: session.sequence,
+        entryKey: session.entryKey,
+        developmentTarget: session.developmentTarget,
+        revisionContext: session.revisionContext
+      })
+      registerSession(identity, session.messages)
+      return identity
+    } finally {
+      release()
+    }
   }
 
   /** 打开当前阶段侧栏中的会话，禁止通过旧列表跨阶段切换。 */
@@ -847,8 +883,16 @@ export function useChatSessions({
       createdAt: existingSummary.createdAt,
       updatedAt: now
     }
-    const summary = await saveChatSession(session)
-    replaceSessionSummary(input.editorMode, summary)
+    const key = sessionRuntimeKey(application.workspaceRoot, input.editorMode, input.sessionId)
+    const token = beginSessionSave(key, input.messages)
+    let saved = false
+    try {
+      const summary = await enqueueSessionSave(key, () => saveChatSession(session))
+      saved = true
+      replaceSessionSummary(input.editorMode, summary)
+    } finally {
+      finishSessionSave(token, saved)
+    }
   }
 
   return {

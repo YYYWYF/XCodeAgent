@@ -248,7 +248,8 @@ def edit_technical_plan_with_agent(
         agent.invoke(
             {"messages": [{"role": "user", "content": "请按原始修改要求和本轮校验反馈局部编辑候选，然后读回复核。"}],
              "files": _candidate_files(requirement_spec, existing_plan)},
-            config={"recursion_limit": 24, "callbacks": callbacks},
+            # 一次模型循环还经过计数中间件和工具节点，图步数不能早于八次模型预算截断。
+            config={"recursion_limit": TECHNICAL_PLAN_EDIT_MODEL_LIMIT * 8, "callbacks": callbacks},
         )
     except (ModelCallLimitExceededError, GraphRecursionError) as exc:
         raise ValueError("技术规划局部修订达到调用上限，未提交正式产物。") from exc

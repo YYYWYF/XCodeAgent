@@ -14,6 +14,7 @@ import { useApplicationPlanningRuntimes } from '../hooks/useApplicationPlanningR
 import { useApplicationPlanningStreamingContent } from '../hooks/useApplicationPlanningStreamingContent'
 import { useApplicationPlanningWorkbenchBridge } from '../hooks/useApplicationPlanningWorkbenchBridge'
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
+import { UiReadVisibility } from '../hooks/uiReadVisibility'
 import {
   workflowApplicationLifecycle,
   type ApplicationPlanningCurrentEvent
@@ -351,53 +352,55 @@ function AppEntryContent(): JSX.Element {
           hidden={activeSurface !== 'workbench'}
           key={activeApplication.id}
         >
-          <WorkbenchPage
-            application={activeApplication}
-            applicationLifecycle={applicationLifecycle}
-            onApplicationLifecycleChange={mergeApplicationLifecycle}
-            onApplicationLifecycleReset={resetApplicationLifecycle}
-            onEntryLoadFailure={handleWorkbenchEntryFailure}
-            onReturnWelcome={handleReturnWelcome}
-            onSubmitPlanningClarification={(...args) =>
-              planningRuntimeController.submitClarification(activeApplication.id, ...args)
-            }
-            onStartDesignStageRevision={(input) =>
-              handleStartDesignStageRevision(activeApplication, input)
-            }
-            onIterationStarted={(application, threadId, lifecycle) => {
-              planningController.startPlanning(application, threadId, lifecycle, false, false)
-            }}
-            onStartIterationPlanning={(applicationId, request, workflowDebug, debugStage) =>
-              planningRuntimeController.startIterationPlanning(
-                applicationId,
-                request,
-                workflowDebug,
-                debugStage
-              )
-            }
-            onRevisionContinuationHandlerChange={(handler) =>
-              registerRevisionContinuation(activeApplication.id, handler)
-            }
-            onThemeChange={setTheme}
-            onPlanningStreamReady={handlePlanningStreamReady}
-            onSavePlanningRequirementSpec={(spec) =>
-              planningRuntimeController.saveRequirementSpec(activeApplication.id, spec)
-            }
-            onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
-            onRetryPlanning={() => void planningRuntimeController.retryCurrentFailure(activeApplication.id)}
-            onReconcilePlanning={() => {
-              void planningRuntimeController.reconcileCurrentState(activeApplication.id).catch(console.error)
-            }}
-            onRetryTemplateReconcile={() =>
-              void planningRuntimeController.retryTemplateReconcile(activeApplication.id)
-            }
-            onRetryTemplateGeneration={() => {
-              void planningController.retryTemplateGeneration(activeApplication.id)
-            }}
-            generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
-            planningState={activePlanning}
-            theme={theme}
-          />
+          <UiReadVisibility.Provider value={activeSurface === 'workbench'}>
+            <WorkbenchPage
+              application={activeApplication}
+              applicationLifecycle={applicationLifecycle}
+              onApplicationLifecycleChange={mergeApplicationLifecycle}
+              onApplicationLifecycleReset={resetApplicationLifecycle}
+              onEntryLoadFailure={handleWorkbenchEntryFailure}
+              onReturnWelcome={handleReturnWelcome}
+              onSubmitPlanningClarification={(...args) =>
+                planningRuntimeController.submitClarification(activeApplication.id, ...args)
+              }
+              onStartDesignStageRevision={(input) =>
+                handleStartDesignStageRevision(activeApplication, input)
+              }
+              onIterationStarted={(application, threadId, lifecycle) => {
+                planningController.startPlanning(application, threadId, lifecycle, false, false)
+              }}
+              onStartIterationPlanning={(applicationId, request, workflowDebug, debugStage) =>
+                planningRuntimeController.startIterationPlanning(
+                  applicationId,
+                  request,
+                  workflowDebug,
+                  debugStage
+                )
+              }
+              onRevisionContinuationHandlerChange={(handler) =>
+                registerRevisionContinuation(activeApplication.id, handler)
+              }
+              onThemeChange={setTheme}
+              onPlanningStreamReady={handlePlanningStreamReady}
+              onSavePlanningRequirementSpec={(spec) =>
+                planningRuntimeController.saveRequirementSpec(activeApplication.id, spec)
+              }
+              onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
+              onRetryPlanning={() => void planningRuntimeController.retryCurrentFailure(activeApplication.id)}
+              onReconcilePlanning={() => {
+                void planningRuntimeController.reconcileCurrentState(activeApplication.id).catch(console.error)
+              }}
+              onRetryTemplateReconcile={() =>
+                void planningRuntimeController.retryTemplateReconcile(activeApplication.id)
+              }
+              onRetryTemplateGeneration={() => {
+                void planningController.retryTemplateGeneration(activeApplication.id)
+              }}
+              generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
+              planningState={activePlanning}
+              theme={theme}
+            />
+          </UiReadVisibility.Provider>
         </div>
       ) : null}
     </>

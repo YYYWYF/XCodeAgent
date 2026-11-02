@@ -29,7 +29,9 @@ def classify_design_conversation(
 ) -> DesignConversationDecision:
     """调用独立 ChatModel 判断最早需要回退的真实设计节点。"""
 
-    if has_explicit_business_access_control_change(request):
+    if has_explicit_business_access_control_change(
+        request, user_roles=requirement_spec.get("user_roles") if isinstance(requirement_spec, dict) else None,
+    ):
         # 受控页面、操作或角色访问权属于 RequirementSpec 事实，不能交给路由模型猜测层级。
         return DesignConversationDecision(
             intent="requirement_change",
