@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 import subprocess
 from uuid import uuid4
-from time import monotonic
+from time import monotonic, time
 
 from app.config import Settings
 from app.services.agent_runtime_environment import build_runtime_environment
@@ -103,6 +103,8 @@ def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings
         if target_agent_id is not None and target_agent_id not in agent_ids:
             raise ValueError("当前正式技术规划不存在所选 Agent。")
         if debug is not None:
+            # 依赖安装完成后才签发有效期，避免准备环境耗尽可用调试时间。
+            debug["expiresAt"] = int(time()) + 600
             environment.update({"AGENT_RUNTIME_PROFILE": "debug", "AGENT_RUNTIME_NAMESPACE": "debug:" + launch_id,
                 "AGENT_RUNTIME_DEBUG_TOKEN": debug["token"], "AGENT_RUNTIME_DEBUG_EXPIRES_AT": str(debug["expiresAt"]),
                 "AGENT_RUNTIME_ALLOWED_ORIGINS": debug["origins"]})
@@ -142,6 +144,8 @@ def _launch_runtime_locked(root: Path, *, on_progress: Callable | None, settings
         result.update(status="running", message=message, preview_url=url, failed_stage=None,
                       launch_id=launch_id, database_required=database_required, agent_ids=agent_ids,
                       server={"pid": process.pid, "port": port, "ready": True, "command": " ".join(argv)})
+        if debug is not None:
+            result["debug_expires_at"] = debug["expiresAt"]
         if probe_action is not None:
             result["targetEvidence"] = probe_action(url)
         if probe_root is not None:
@@ -206,10 +210,13 @@ def check_runtime_target(root: Path, log_root: Path, *, case: dict, specificatio
                          before_dispatch: Callable[[], None] | None = None) -> dict:
     """启动独立 Runtime，由实际 Electron 官方客户端完成一次目标调用并回收全部进程。"""
     from app.services.runtime_acceptance_bridge import await_desktop_acceptance
-    from app.services.runtime_acceptance_frontend import prepare_acceptance_frontend
+    from app.services.runtime_acceptance_frontend import prepare_acceptance_dependencies, prepare_acceptance_frontend
     from app.services.frontend_project_launcher import launch_frontend_project, stop_frontend_project
     from app.services.runtime_target_acceptance import QUESTION
-    subdir = "acceptance-view/" + uuid4().hex
+    attempt_id = uuid4().hex
+    attempt_root = log_root / "attempts" / attempt_id
+    subdir = "acceptance-view/" + attempt_id
+    thread_id, run_id = uuid4().hex, uuid4().hex
 
     def probe(url: str) -> dict:
         """页面一次发送同时构成 Runtime 与页面证据，绝不另发第二次后台请求。"""
@@ -217,10 +224,7 @@ def check_runtime_target(root: Path, log_root: Path, *, case: dict, specificatio
         view_started = False
         try:
             page_url = ""
-            thread_id, run_id = uuid4().hex, uuid4().hex
             if page_mode:
-                view = prepare_acceptance_frontend(root, log_root, specification["scope"]["targetId"],
-                    {"agentId": case["agentId"], "threadId": thread_id, "runId": run_id})
                 view_started = True
                 frontend = launch_frontend_project(root, project_dir=view, runtime_subdir=subdir,
                     skip_install=True, linked_dependencies=True, runtime_public_url=url)
@@ -246,9 +250,16 @@ def check_runtime_target(root: Path, log_root: Path, *, case: dict, specificatio
                 raise RuntimeError("目标验收临时前端回收失败，禁止提交完成。")
 
     with backend_launch_lock(root):
+        if case["mode"] == "page":
+            # 单测仅控制测试生成与执行；页面运行所需依赖在验收入口自行准备。
+            prepare_acceptance_dependencies(root, attempt_root, timeout_seconds=min(90, deadline - monotonic()))
+            view = prepare_acceptance_frontend(root, attempt_root, specification["scope"]["targetId"],
+                {"agentId": case["agentId"], "threadId": thread_id, "runId": run_id})
+        if monotonic() >= deadline:
+            raise ValueError("目标验收准备已超时，尚未启动 Runtime 或发送提问。")
         # 用户可跳过单测，目标验收不能依赖单测阶段安装过解释器环境与控制台入口。
         result = _launch_runtime_locked(root, on_progress=None, settings=None, skip_install=False,
-            probe_root=log_root, target_agent_id=case["agentId"], probe_action=probe,
+            probe_root=attempt_root, target_agent_id=case["agentId"], probe_action=probe,
             probe_model_limit=case["modelRequestLimit"])
     if result.get("status") != "completed" or result.get("execution", {}).get("cleanup_succeeded") is not True:
         raise ValueError(result.get("message", "目标 Runtime 验收失败。"))

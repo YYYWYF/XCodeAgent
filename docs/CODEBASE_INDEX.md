@@ -1,5 +1,21 @@
 # DevAgent Studio Codebase Index
 
+调试防过度约束：工具详情改为最近 40 条滚动展示，超过展示条数不再中止业务运行；前端回归覆盖 42 次工具事件仍正常完成。保留累计响应字节限制、当前线程串行/交互身份、停止收口与进程清理。不改原有历史存储。
+
+调试异常收口：响应超限及网络读取失败由 `runtimeDebugConversation` 标记未知结果并关闭 SDK 输入流，不再用 ReadableStream.error 向 SDK 注入异常；`AgentDebugPanel` 的发送/停止各自释放占用，任一仍进行时保留忙碌状态；`agent_runtime_workbench.start_debug` 在启动成功但登记失败时回收独立进程，回收失败明确报错。不改历史存储或开发主流程。
+
+调试定向修复：`AgentDebugPanel` 的过期停止独立于发送忙碌状态，启动异常销毁孤立客户端/凭据并回收已签发进程，未就绪禁止发送；`agent_runtime_launcher` 在安装依赖后计算十分钟凭据有效期，并返回服务端实际到期时间。`runtimeDebugConversation` 在官方 HttpAgent fetch 扩展点按原始响应字节限制每会话累计 512 KB，再交给 SDK 解析，不手写 SSE；该限制不表示整个进程堆大小，消息/工具数量限制仍保留。修正完成状态测试夹具的时间/run/thread 必填证据。不改 dev_agent 历史存储。
+
+调试回检修复：每个 `RuntimeDebugConversation` 使用独立初始工具列表；`AgentDebugPanel` 在发送前状态查询至本轮结束期间串行保护提交与上下文切换，显式展示流错误及未知结果。回归 `Frontend/tests/runtimeDebugConversation.test.ts` 覆盖新会话不会继承旧工具记录。
+
+Python Endpoint 路由接入：当前模板 `app/api/router.py` 只自动加载 `app/api/endpoints/` 的直接模块，每个模块必须导出 `APIRouter router`。`agents/main/python_unit_task_rules.py` 要求 controller 任务包含独立发现入口；`agents/agent_runtime/generator.py` 要求执行时核对模板入口，缺少入口写权限应返回 contract_mismatch，不能仅生成业务包中的 router 就声明完成，也不能改公共装配文件。业务实现可留在各自包内，由发现入口显式导出，不新增接口或改变传输合同。
+
+开发阶段边界恢复为 `dev_agent` 的设计：`graph/nodes/lifecycle.py::test_phase_confirmation` 仅消费 Build 与单测通过/显式跳过事实，登记完成后等待进入测试确认，不启动真实页面或模型调用。`development_artifacts.py` 与 `runtime_agent_development.py` 保留 Agent 七模块、Tool 前置、同轮切片和正式输入校验，移除真实联调证据对完成登记和状态刷新的阻断。`scope_assembly.py`、`build_task_plan_lifecycle.py`、`graph/nodes/tasks.py` 不再生成、要求或展示 DAG 的 targetAcceptance 自动调用授权。依赖安装、编译和启动检查仍由现有测试阶段承担，完整应用预览与用户验收仍由审查后的验收阶段承担；本次未新增自动页面联调入口。原 runtime_target_acceptance / Electron 桥代码未接入开发完成链路。回归：`tests.test_development_artifacts`。
+
+智能体调试：`RuntimeAgentDetail/AgentDebugPanel.tsx/.less` 提供独立页签，显式启动/停止、状态同步、当前会话流式对话和交互响应；`service/runtimeDebugConversation.ts` 使用官方 AG-UI HttpAgent，凭据只在内存，断流标为未知且不重发，当前会话限制 60 条消息/512 KB 事件及 40 个工具详情。切换页签保留组件，离开智能体释放自身调试进程，过期禁止发送。`service/runtimeWorkbench.ts` 复用既有独立工作台 AG-UI 控制协议及 transient 凭据事件。后端 `agent_runtime_workbench.py` 显式启动按锁文件安装依赖，不覆盖活跃调试，状态提供所有权及源码变化提示；控制协议只读查询携带 threadId。当前外部模板公开文本/交互流未输出内部工具明细；前端可显示标准工具事件，但无事件时明确无法判断内部工具执行，不伪造日志。不会更改外部模板、开发 DAG 或验收授权；回归 `tests.test_runtime_debug_workbench`。
+
+`RuntimeAgentDetail/index.tsx` 将智能体详情分为“智能体设计”和“智能体开发”页签：概览与七模块配置编辑归设计，任务状态、模块实现文件及原开发入口归开发；调试页签由独立面板提供。切换页签不启动 Workflow，保留配置修订确认与开发任务合同；局部样式沿用明暗主题变量。
+
 TechnicalPlan 的二次修改与首版候选修复统一由 `agents/main/technical_plan_editor.py` 使用 LangChain 工具循环和 DeepAgents `grep/read_file/edit_file` 完成；四段可编辑候选（既有规划含 `agent_contracts` 时整段带入并原样保留，模型不得增删该段）及只读产品上下文位于独立 `StateBackend`，不读写工作区或暴露连接凭据。`has_editable_technical_plan_candidate` 检查四段根结构；`agents/main/planner.py` 仅在没有完整候选时完整生成，已有候选后所有校验错误都通过编辑器修复，不再按动作绑定、Contract 或混合错误分流。候选后端串行编辑并提供本轮最新快照，防止同批工具互相覆盖。每次读取最多 120 行、搜索最多 40 项、每轮最多 8 次模型调用。`technical_plan_language.py` 的中文说明检查进入 `graph/nodes/planning.py` 和 `application_revision.py` 的完整校验，不另起首版翻译模型；编译失败也保留候选续修。原始要求、三轮总预算、begin/commit/review、JSON/Markdown 保存和正式确认门不变，局部修复耗尽不回退完整生成。截断或缺章节先沿既有 JSON 恢复，无完整候选时在原预算内重生成。回归：`tests.test_technical_plan_fragment_editor`、`tests.test_technical_plan_fragment_workflow`、`tests.test_product_planning_retry`。
 
 桌面启动更新由 `Frontend/src/main/appUpdate/` 统一负责：先显示更新窗口并等待同一个 Python 后端就绪请求，再使用 `@ag-ui/client` 向该后端实际地址提交独立 `/app-update/run`；当前版本来自 `app.getVersion()`。`Backend/app/protocols/app_update.py` 复用标准 AG-UI 生命周期，`services/app_update.py` 使用主应用的 `Settings.template_engine_base_url` 拼接 Java `/v1/app-updates/check`，唯一配置为 Python 现有 `DEVAGENTSTUDIO_TEMPLATE_ENGINE_BASE_URL`，不在前端读取 `.env`、固化 Java 地址或新增独立更新地址配置。五秒检测预算不包含 Python 启动；Python 启动失败沿用启动故障处理，Java/协议/下载失败放行登录。更新与退出仍由主进程及 `electron-updater` 执行，CDN 根目录提供 `latest.yml` / `latest-mac.yml`。`src/shared/appUpdate.ts` 定义受控 preload IPC，`renderer/update.html` / `renderer/src/update.tsx` 展示明暗主题和安装确认。`pnpm mock:cdn` 提供已校验的 dist 发布产物；`pnpm test:app-update` 和 `Backend` 的 `tests.test_app_update` 覆盖 SDK、配置转发、标准生命周期、超时及下载。不调用模型、登记工作区或进入业务工作流；`/health.tools.app_update` 发布协议元数据。详见 `docs/CROSS_PLATFORM_SUPPORT.md`。

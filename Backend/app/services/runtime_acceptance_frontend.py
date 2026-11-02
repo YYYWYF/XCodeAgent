@@ -5,6 +5,30 @@ import shutil
 
 from app.services.page_identity import canonical_page_entry_path
 from app.services.agent_runtime_health import allocate_runtime_port
+from app.services.frontend_project_launcher import _run_install, _select_package_manager
+
+
+def prepare_acceptance_dependencies(root: Path, attempt_root: Path, *, timeout_seconds: float) -> None:
+    """验收独立同步原工程依赖，不以单测执行过或 node_modules 存在作为安装完成依据。"""
+    source = root / "frontend"
+    if not (source / "package.json").is_file():
+        raise ValueError("页面验收缺少 frontend/package.json，无法准备依赖。")
+    if timeout_seconds <= 0:
+        raise ValueError("页面验收依赖准备预算已耗尽，尚未发送提问。")
+    manager = _select_package_manager(source)
+    command = shutil.which(manager)
+    if not command:
+        raise ValueError(f"页面验收需要 {manager}，请确保 Studio 可以访问该命令。")
+    logs = attempt_root / "frontend-install"
+    logs.mkdir(parents=True, exist_ok=True)
+    # 始终让包管理器同步当前声明，残留目录或旧启动入口不能证明新增依赖已安装。
+    result = _run_install(package_manager_command=command, workspace=root, cwd=source,
+                          runtime_root=logs, timeout_seconds=timeout_seconds)
+    if result["returncode"] != 0:
+        reason = "超时" if result["timed_out"] else f"失败，退出码 {result['returncode']}"
+        raise ValueError(f"页面验收前端依赖安装{reason}；未启动 Runtime 或发送提问。日志：{logs.relative_to(root).as_posix()}")
+    if not (source / "node_modules").is_dir():
+        raise ValueError("前端依赖安装结束，但 node_modules 缺失；未启动 Runtime 或发送提问。")
 
 
 def prepare_acceptance_frontend(root: Path, attempt_root: Path, page_id: str, identity: dict) -> Path:
@@ -13,6 +37,9 @@ def prepare_acceptance_frontend(root: Path, attempt_root: Path, page_id: str, id
     entry = canonical_page_entry_path(page_id).removeprefix("frontend/")
     if not (source / entry).is_file() or target.exists():
         raise ValueError("目标页面入口缺失或验收临时目录已存在，不能覆盖或重放。")
+    dependencies = source / "node_modules"
+    if not dependencies.is_dir():
+        raise ValueError("页面验收前端依赖准备结果已失效，请检查安装日志。")
     count, size = 0, 0
 
     def copy_directory(directory: Path, destination: Path):
@@ -38,9 +65,6 @@ def prepare_acceptance_frontend(root: Path, attempt_root: Path, page_id: str, id
                 raise ValueError("页面验收只接受普通源码文件。")
 
     copy_directory(source, target)
-    dependencies = source / "node_modules"
-    if not dependencies.is_dir():
-        raise ValueError("页面验收需要已安装的前端依赖，不自动安装。")
     (target / "node_modules").symlink_to(dependencies.resolve(), target_is_directory=True)
     # 保留真实 bootstrap、AppProviders、明暗主题与样式，仅在副本中替换路由视图。
     # 直接裸渲染 Page 会丢失 Context，不能作为实际页面联调证据。

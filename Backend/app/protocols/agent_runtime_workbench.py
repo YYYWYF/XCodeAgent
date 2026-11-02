@@ -57,7 +57,7 @@ def build_runtime_workbench_stream(*, payload: dict, accept: str | None = None):
         if request.action == "list":
             data = await asyncio.to_thread(runtime_agents, request.workspaceRoot)
         elif request.action == "get_debug":
-            data = {"debug": await asyncio.to_thread(debug_snapshot, request.workspaceRoot)}
+            data = {"debug": await asyncio.to_thread(debug_snapshot, request.workspaceRoot, thread_id)}
         elif request.action == "stop_debug":
             data = {"debug": await asyncio.to_thread(stop_debug, request.workspaceRoot, thread_id)}
         else:

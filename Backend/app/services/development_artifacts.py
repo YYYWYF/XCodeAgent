@@ -331,9 +331,6 @@ def complete_initial_development(
         _application_lifecycle_lock, application_lifecycle_path, write_application_lifecycle,
     )
 
-    from app.services.runtime_target_acceptance import require_runtime_target_evidence
-    acceptance = require_runtime_target_evidence(Path(workspace).resolve(), build_state or {})
-
     with _application_lifecycle_lock(application_lifecycle_path(workspace)):
         state = refresh_development_artifacts(workspace)
         execution = state.active_executions.get(run_id)
@@ -388,7 +385,6 @@ def complete_initial_development(
                 continue
             if target.type == "agent":
                 current.module_inputs = module_inputs(_confirmed_plan(workspace, "technical-plan"), target.agent_id)
-                current.runtime_acceptance = acceptance
                 changed = True
             if current.initial_development_status != "completed":
                 current.initial_development_status = "completed"

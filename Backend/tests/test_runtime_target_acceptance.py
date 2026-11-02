@@ -2,6 +2,7 @@
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 import unittest
 from unittest.mock import patch
 
@@ -100,8 +101,8 @@ class RuntimeTargetAcceptanceTests(unittest.TestCase):
         from app.services.agent_runtime_launcher import check_runtime_target
         with TemporaryDirectory() as directory, patch("app.services.agent_runtime_launcher._launch_runtime_locked",
                 return_value={"status": "completed", "execution": {"cleanup_succeeded": True}, "targetEvidence": {"passed": True}}) as launch:
-            check_runtime_target(Path(directory), Path(directory) / "logs", case={"agentId": "assistant", "modelRequestLimit": 1},
-                                 specification={}, deadline=1000)
+            check_runtime_target(Path(directory), Path(directory) / "logs", case={"mode": "endpoint", "agentId": "assistant", "modelRequestLimit": 1},
+                                 specification={}, deadline=monotonic() + 300)
             self.assertFalse(launch.call_args.kwargs["skip_install"])
 
     def test_foreign_page_cannot_reference_unbound_agent(self):

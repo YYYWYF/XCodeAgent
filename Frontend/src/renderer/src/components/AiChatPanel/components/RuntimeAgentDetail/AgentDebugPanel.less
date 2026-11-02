@@ -1,0 +1,47 @@
+.agent-debug-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  .agent-debug-heading {
+    h3 { margin: 0 0 6px; font-size: 16px; }
+  }
+  .agent-debug-controls, .agent-debug-composer {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    padding: 16px;
+    background: var(--wb-surface);
+    border: 1px solid var(--wb-border);
+    border-radius: 10px;
+  }
+  .agent-debug-controls .ant-select { min-width: 160px; max-width: 100%; }
+  .agent-debug-composer > .ant-typography { font-size: 12px; }
+  .ant-alert, .ant-collapse, .agent-debug-messages {
+    color: var(--wb-text);
+    background: var(--wb-surface);
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+  }
+  .ant-alert-message, .ant-alert-description, .ant-collapse-header, .ant-collapse-content { color: var(--wb-text) !important; }
+  .ant-collapse-content { background: var(--wb-surface); border-color: var(--wb-border); }
+  .ant-alert-info .ant-alert-icon { color: var(--wb-accent); }
+  .agent-debug-messages {
+    min-height: 200px;
+    max-height: 420px;
+    overflow: auto;
+    padding: 16px;
+    &.is-empty { display: grid; place-items: center; }
+  }
+  .agent-debug-empty {
+    padding: 24px 12px;
+    text-align: center;
+    h4 { margin: 0 0 8px; font-size: 14px; font-weight: 500; }
+  }
+  article { padding: 10px 0; border-bottom: 1px solid var(--wb-border); }
+  p, pre { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  pre { max-height: 180px; overflow: auto; color: var(--wb-text-secondary); }
+  .ant-select-selector { color: var(--wb-text) !important; background: var(--wb-surface) !important; border-color: var(--wb-border) !important; }
+  .ant-select-arrow { color: var(--wb-text-secondary); }
+}

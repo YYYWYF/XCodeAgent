@@ -274,10 +274,6 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
         return ["Pending DAG 不得持久化已删除的 route_projection 页面正文。"]
     baseline = plain_json(inputs.base_confirmed_plan) or {}
     from app.services.runtime_execution_policy import execution_policy_operation
-    from app.services.runtime_target_acceptance import target_acceptance_plan
-    if plan.get("targetAcceptance") != target_acceptance_plan(
-            plain_json(inputs.project_plan), plan.get("build_execution_scope") or {}):
-        return ["Pending DAG 的真实目标验收范围、供应商预算或期限与当前输入不一致。"]
     if plan.get("runtime_execution_policy") != execution_policy_operation(
             plain_json(inputs.project_plan), plan.get("build_execution_scope") or {}):
         return ["Pending DAG 的执行策略装配路径、预算或来源与当前正式输入不一致。"]

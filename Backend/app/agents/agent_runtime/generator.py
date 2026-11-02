@@ -113,6 +113,13 @@ def generate_python_business_with_deep_agent(
             "and startup-injected credentials. Never create or alter tables, invent SQLite storage, "
             "initialize a new model or fetch secrets. Preserve trusted Principal ownership. "
             "Controller only adapts request/response; the service owns mapping and composition. "
+            "Business routes are discovered ONLY from direct modules in app/api/endpoints/, "
+            "each exporting an APIRouter named router. A controller task is not complete if "
+            "its router exists only outside that directory. Inspect app/api/router.py and "
+            "ensure the approved discovery entry actually exports the implemented router. "
+            "Never edit the shared router or endpoints/__init__.py. If the approved task "
+            "does not authorize a discovery entry, report contract_mismatch rather than "
+            "claiming completed or expanding the write scope. "
             "Missing inputs or unsupported behavior must return failed with contract_mismatch. "
             "Do not run commands or verification.\n"
             + field_value_implementation_rules("Python")

@@ -10,6 +10,17 @@
   background: var(--wb-canvas);
   overflow-wrap: anywhere;
 
+  > .ant-tabs {
+    min-width: 0;
+    > .ant-tabs-nav::before { border-color: var(--wb-border); }
+    .ant-tabs-tab { color: var(--wb-text-secondary); }
+    .ant-tabs-tab:hover, .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+      color: var(--wb-accent);
+    }
+    .ant-tabs-tab-btn:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 3px; }
+    .ant-tabs-ink-bar { background: var(--wb-accent); }
+  }
+
   h2, h3, h4, dt { color: var(--wb-text); }
   .agent-detail-hero, .agent-detail-section {
     border: 1px solid var(--wb-border);
@@ -49,6 +60,12 @@
   }
   .agent-page-bindings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--wb-text-secondary); }
   .ant-tag { margin: 0; color: var(--wb-text-secondary); background: var(--wb-surface-subtle); border-color: var(--wb-border); }
+  .agent-debug-tab-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    > .ant-tag { color: var(--wb-accent); background: var(--wb-accent-soft); border-color: var(--wb-accent-border); font-size: 11px; line-height: 18px; }
+  }
   .ant-typography { color: var(--wb-text); }
   .ant-typography-secondary { color: var(--wb-text-secondary); }
   .agent-settings-collapse {

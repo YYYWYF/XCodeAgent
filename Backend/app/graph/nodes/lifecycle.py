@@ -367,12 +367,7 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
-    from app.services.runtime_target_acceptance import ensure_runtime_target_acceptance
-    try:
-        ensure_runtime_target_acceptance(workspace_root(state), state)
-    except (ValueError, OSError, RuntimeError) as exc:
-        return {"phase": "test_phase_confirmation", "status": "failed",
-            "error": str(exc), "integration_next_action": "end", "timeline": ["test_phase_confirmation"]}
+    # 开发完成只消费 Build 与单测事实，不在测试确认之前启动真实页面或调用模型。
     lifecycle = complete_initial_development(
         workspace_root(state), run_id=str(state.get("active_run_id") or ""),
         build_state=state,

@@ -407,9 +407,7 @@ def _build_task_plan_confirmation_payload(
     payload: dict[str, Any] = {
         "mode": "build_task_plan_confirmation",
         "status": "requires_user_input",
-        "message": ("Build DAG 已生成，请确认任务规划后再进入 Build。" +
-            (" 本轮包含真实智能体连接验收：每个目标只发送一次固定问题“这是一次连接验收。请简短说明你能够提供的帮助。”，内部工具循环的模型请求上限按 targetAcceptance 声明，可能产生模型费用；失败或结果未知不自动重试。页面目标使用独立 Electron 视图验证同一次发送。"
-             if build_task_plan.get("targetAcceptance") else "")),
+        "message": "Build DAG 已生成，请确认任务规划后再进入 Build。",
         "actionValues": action_values,
         "confirmationStatus": build_task_plan.get("confirmation_status") or "pending",
         "buildExecutionScope": build_execution_scope or build_task_plan.get("build_execution_scope") or {},
@@ -421,7 +419,6 @@ def _build_task_plan_confirmation_payload(
             "summary": build_task_plan.get("summary") or {},
             "reviewTasks": read_model["reviewTasks"],
             "retainedTaskSummary": read_model["retainedTaskSummary"],
-            "targetAcceptance": build_task_plan.get("targetAcceptance"),
         },
         "targetReview": read_model["targetReview"],
     }

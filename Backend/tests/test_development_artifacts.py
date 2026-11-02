@@ -314,6 +314,46 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertEqual(result["integration_next_action"], "end")
         self.assertEqual(test_entry_gate(refresh_development_artifacts(self.workspace)).completed, 1)
 
+    def test_development_confirmation_needs_no_live_acceptance(self) -> None:
+        """桌面验收不可用时仍可登记开发完成并等待测试确认，确认后才进入测试。"""
+
+        self.finish("two")
+        self.finish("get")
+        run_id = self.start("one")
+        state = {"workspace": str(self.workspace), "active_run_id": run_id,
+                 "build_execution_scope": {"type": "page", "targetId": "one"},
+                 "build_summary": {"status": "completed"}, "unit_test_gate_passed": True,
+                 "unit_test_decision": "skip"}
+        with patch("app.services.runtime_target_acceptance.ensure_runtime_target_acceptance",
+                   side_effect=AssertionError("开发阶段禁止真实调用")) as dispatch, \
+                patch("app.services.runtime_target_acceptance.require_runtime_target_evidence",
+                      side_effect=AssertionError("开发完成不要求联调证据")) as evidence:
+            result = test_phase_confirmation(state)
+            self.assertEqual(result["status"], "requires_user_input")
+            self.assertEqual(result["integration_next_action"], "await_user_input")
+            self.assertTrue(test_entry_gate(refresh_development_artifacts(self.workspace)).allowed)
+            state["test_phase_confirmation"] = {"action": "confirm"}
+            confirmed = test_phase_confirmation(state)
+            self.assertEqual(confirmed["integration_next_action"], "integration_test")
+            dispatch.assert_not_called()
+            evidence.assert_not_called()
+
+    def test_agent_completion_does_not_require_acceptance_fingerprint(self) -> None:
+        """已完成 Agent 的正式模块输入未变化时，不因缺少页面验收记录而失效。"""
+
+        from app.domain.development_artifacts import DevelopmentArtifactProgress
+        from app.services.runtime_agent_development import reconcile_agent_progress
+
+        progress = DevelopmentArtifactProgress(initialDevelopmentStatus="completed",
+            completedAt="2026-11-02T00:00:00Z", completedRunId="run", completedThreadId="thread",
+            module_inputs={"agent": "current"})
+        with patch("app.services.runtime_agent_development.module_inputs", return_value={"agent": "current"}), \
+                patch("app.services.runtime_target_acceptance.acceptance_fingerprint",
+                      side_effect=AssertionError("状态刷新不应连接桌面验收")) as fingerprint:
+            result = reconcile_agent_progress({}, "assistant", progress, self.workspace)
+        self.assertEqual(result.change_status, "unchanged")
+        fingerprint.assert_not_called()
+
     def test_revision_and_late_failure_cannot_reset_completion(self) -> None:
         """二次修改与旧运行失败不能覆盖首次完成证据。"""
 
