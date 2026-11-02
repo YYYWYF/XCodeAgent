@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 打包仓库，保留 .git、其他隐藏文件和符号链接，排除各层依赖、测试缓存及本地工具配置目录。
+# 打包仓库，保留其他隐藏文件和符号链接，排除各层 Git 元数据、依赖、测试缓存及本地工具配置目录。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_NAME="$(basename "$REPO_ROOT")"
@@ -38,6 +38,6 @@ fi
 # 不读取 Git 忽略规则；-y 保存链接本身，排除模式覆盖任意深度的目标目录。
 cd "$REPO_PARENT"
 ZIPOPT= zip -q -r -y "$OUTPUT" "$REPO_NAME" \
-  -x '*/node_modules/*' '*/.venv/*' \
+  -x '*/.git' '*/.git/*' '*/node_modules/*' '*/.venv/*' \
      '*/.pytest_cache/*' '*/.superpowers/*' '*/.vscode/*'
 echo "打包完成：$OUTPUT"

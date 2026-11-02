@@ -58,7 +58,7 @@ export default function RecoveryIncidentCard({
 
   // 正常停止复用开发阶段的继续卡片，仍沿用服务端恢复动作与原确认要求。
   if (incident.kind === 'recoverable' && incident.presentation === 'stopped_generation') {
-    return <div data-testid={testId}>
+    return <div className={cx('stopped-generation-recovery')} data-testid={testId}>
       <EndedTaskNotice mode="stopped_generation" continuing={retrying}
         disabled={disabled || !onAction} onContinue={async () => handleAction()} />
       {error ? <Text type="danger">{error}</Text> : null}

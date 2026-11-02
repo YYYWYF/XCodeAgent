@@ -150,7 +150,7 @@ class CodeGraphAgentScopeTests(unittest.TestCase):
 
         prompt = _frontend_generation_prompt(
             project_plan={"app": {"name": "demo"}},
-            build_task_plan={"summary": {}, "template_context": {"state_path": ".devagentstudio/template-state.json", "template_revision": "r1", "effective_capabilities": {"authorization": {"enabled": True, "config": {}}}}},
+            build_task_plan={"summary": {}, "template_context": {"state_path": ".devagentstudio/template-state.json", "template_revision": "2026.11.02.1", "effective_capabilities": {"authorization": {"enabled": True, "config": {}}}}},
             tasks=[
                 {
                     "id": "page:assets",

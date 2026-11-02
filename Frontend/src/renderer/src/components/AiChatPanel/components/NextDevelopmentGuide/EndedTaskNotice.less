@@ -3,7 +3,10 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
+  box-sizing: border-box;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 16px 18px;
   margin-top: 6px;
   color: var(--wb-text);
@@ -49,6 +52,7 @@
   .ant-btn.@{class-prefix}-ended-task-notice-action {
     flex: 0 0 auto;
     width: auto;
+    max-width: 100%;
     height: 34px;
     margin-left: auto;
     padding: 0 13px;

@@ -16,6 +16,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from app.agents.execution_control import RunCancellationMiddleware
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
+from app.agents.main.technical_plan_file_tools import TechnicalPlanFileMiddleware
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 
@@ -84,6 +85,22 @@ class TechnicalPlanCandidateBackend(StateBackend):
             raise ValueError("技术规划候选尚未经过局部编辑。")
         return file_data_to_string(self._latest_candidate)
 
+    def candidate_feedback(self) -> str:
+        """确定性检查编辑后完整候选的语法，模型只需读回相关窗口核对业务改动。"""
+
+        if self._latest_candidate is None:
+            return ""
+        try:
+            candidate = json.loads(self.candidate_text())
+        except json.JSONDecodeError as exc:
+            return f"候选 JSON 语法尚未通过：第{exc.lineno}行，第{exc.colno}列，{exc.msg}。请继续局部修复。"
+        if not has_editable_technical_plan_candidate(candidate) or set(candidate) != set(TECHNICAL_PLAN_EDIT_SECTIONS):
+            return "候选根结构尚未通过：必须且只能包含 architecture、entities、api_contracts、pages 四段。请继续修复。"
+        return (
+            "完整候选 JSON 语法和四段根结构检查通过，尚未执行正式合同校验或用户确认。"
+            "只需读回受影响窗口核对用户要求；已核对的修改无需再次搜索，完成全部修改后直接最终回答。"
+        )
+
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """按有界窗口读取候选或只读上下文，避免一次回灌完整大规划。"""
 
@@ -95,7 +112,11 @@ class TechnicalPlanCandidateBackend(StateBackend):
     ) -> GrepResult:
         """复用原生搜索并限制匹配数量，模型可缩小搜索范围继续定位。"""
 
-        return super().grep(pattern, path, glob, max_count=min(max_count or 40, 40))
+        # 使用 0.6.12 与 0.7 的共有接口，结果上限由候选后端统一执行。
+        result = super().grep(pattern, path, glob)
+        if result.matches is not None:
+            result.matches = result.matches[:min(max_count or 40, 40)]
+        return result
 
     def edit(
         self, file_path: str, old_string: str, new_string: str,
@@ -131,7 +152,7 @@ class TechnicalPlanCandidateBackend(StateBackend):
                 result = EditResult(error=result.error + "\n去掉展示缩进后，下列原文片段可唯一匹配，请用它重新提交："
                                     + json.dumps(compact, ensure_ascii=False))
             else:
-                result = EditResult(error=result.error + "\n请核对 read_file 行号后的分隔空格；"
+                result = EditResult(error=result.error + "\n请复制 read_file 代码块内的原始文本和缩进；"
                                     "优先使用唯一的短键值片段，仍有多处匹配时再加入原文上下文。")
         self.last_edit_error = result.error
         if result.error is None and old_string != new_string:
@@ -189,13 +210,16 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
         f"可编辑文件：{TECHNICAL_PLAN_CANDIDATE_PATH}。"
         f"只读的已确认产品事实：{PRODUCT_CONTEXT_PATH}；应用约束：{CONSTRAINTS_CONTEXT_PATH}。\n"
         "先 grep 定位名称、ID、路径或字段，再 read_file 读取相关窗口（offset 从0开始，每次最多120行）。"
-        "grep 的 content 模式可以返回匹配行号，read_file 的行号前缀不属于原文，不能放入 old_string。"
+        "grep 按字面量搜索，不支持正则或 | 多词搜索；多个关键词要分别调用。"
+        "grep 的 content 模式返回定位行号；read_file 的代码块返回原始文本，不含行号或额外展示缩进。"
         "edit_file 的 old_string 必须精确且唯一匹配；若匹配不到或存在多处，补读上下文后再修改。"
         "只改唯一的键值或文字时，直接用不带前导缩进的最短唯一片段；例如将"
         "old_string 设为 '\"name\": \"旧名称\"'，new_string 设为 '\"name\": \"新名称\"'。"
-        "read_file 在行号后另加两个展示分隔空格，不属于原文缩进。不要重复提交已经失败的匹配片段。"
+        "多行片段必须逐字复制 read_file 代码块中的原文缩进。不要重复提交已经失败的匹配片段。"
         "允许在同一轮使用多次 edit_file 完成关联修改，也允许中间文件暂时不是有效 JSON；"
-        "结束前必须读回改动并确保整个候选恢复为有效 JSON。不要为解决匹配失败重写整个文件。\n"
+        "编辑和读取回执会检查完整候选的 JSON 语法及四段根结构；不要靠反复搜索或遍历全文证明 JSON 有效。"
+        "完成所有要求后读回受影响窗口一次，核对通过就立即最终回答并结束工具调用。"
+        "不要为解决匹配失败重写整个文件。\n"
         "候选根对象必须且只能包含 architecture、entities、api_contracts、pages。"
         "架构仅有 frontend/backend/data；所有用户可见说明使用简体中文。"
         "保持未涉及的稳定ID、接口、Schema、参数、页面绑定和字段原样。"
@@ -219,23 +243,30 @@ def edit_technical_plan_with_agent(
 
     model = create_chat_model(settings, extra_model_kwargs={"thinking": {"type": "disabled"}})
     backend = TechnicalPlanCandidateBackend()
+    filesystem = FilesystemMiddleware(
+        backend=backend,
+        # 编辑规则已由上面的专用提示完整提供，避免默认提示宣称拥有已移除的写入和执行工具。
+        system_prompt="",
+        custom_tool_descriptions={
+            "read_file": "读取候选或只读上下文的原始文本窗口。offset 从0开始，每次最多120行；"
+            "代码块不含行号或额外展示缩进，可直接复制给 edit_file。",
+            "edit_file": "精确替换内存候选中的唯一片段。先读取相关原文；优先提交最短唯一键值或文字，"
+            "多行片段保留 read_file 代码块中的原始缩进。old_string 不匹配时按错误反馈修正后再试，"
+            "多处匹配时扩大原文上下文。只允许 /technical-plan.json，replace_all 必须为 false。",
+        },
+        tool_token_limit_before_evict=None,
+        human_message_token_limit_before_evict=None,
+    )
+    # 0.6.12 尚无 tools 构造参数；注册 Agent 前裁剪工具，同时限制模型绑定和实际调度能力。
+    filesystem.tools = [tool for tool in filesystem.tools if tool.name in {"grep", "read_file", "edit_file"}]
     agent = create_agent(
         name="technical-plan-fragment-editor",
         model=model,
         system_prompt=_editor_system_prompt(requirement_spec),
         middleware=[
             RunCancellationMiddleware(model),
-            FilesystemMiddleware(
-                backend=backend,
-                tools=["grep", "read_file", "edit_file"],
-                custom_tool_descriptions={
-                    "edit_file": "精确替换内存候选中的唯一片段。先读取相关原文；优先提交最短唯一键值或文字，"
-                    "不要加入 read_file 的行号及其后两个展示分隔空格。old_string 不匹配时按错误反馈修正后再试，"
-                    "多处匹配时扩大原文上下文。只允许 /technical-plan.json，replace_all 必须为 false。",
-                },
-                tool_token_limit_before_evict=None,
-                human_message_token_limit_before_evict=None,
-            ),
+            TechnicalPlanFileMiddleware(backend, backend.candidate_feedback),
+            filesystem,
         ],
     )
     callbacks = [_PlanningTokenCallback(on_token)] if on_token else []
