@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { message } from 'antd'
 import { LeftOutlined, FolderOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
+import AppVersionBadge from './AppVersionBadge'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import VersionActions from './VersionActions'
 import { useWorkbenchPhase } from '../context'
@@ -104,7 +105,10 @@ export default function WorkbenchTopBar({
         aria-label="返回首页"
         type="button"
       >
-        <BrandLogo size={22} />
+        <span className={cx('app-version-brand')}>
+          <BrandLogo size={22} />
+          <AppVersionBadge />
+        </span>
       </button>
 
       <span className={cx('workbench-topbar-divider')} aria-hidden="true" />

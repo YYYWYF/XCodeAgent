@@ -560,6 +560,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         )
         context = task_implementation_contract(_project_plan(), task)
 
+        self.assertNotIn("prebuilt_files", context)
         self.assertEqual(context["kind"], "endpoint")
         self.assertEqual(context["api_contract"]["id"], "category_api")
         self.assertEqual(
@@ -716,6 +717,10 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         packet = execution_task_packet(_project_plan(), task)
 
         self.assertNotIn("acceptance_checks", packet)
+        self.assertNotIn("prebuilt_files", packet)
+        self.assertNotIn("prebuilt_files", packet["implementation_contract"])
+        self.assertEqual(packet["allowed_paths"], task["allowed_paths"])
+        self.assertEqual(packet["change_scope"], task["change_scope"])
         self.assertNotIn("impact_scope", packet)
         self.assertNotIn("status", packet)
         self.assertNotIn("target_files", packet)
@@ -745,6 +750,11 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         packet = execution_task_packet(_project_plan(), task)
 
         self.assertEqual(packet["kind"], "bootstrap")
+        self.assertNotIn("prebuilt_files", packet)
+        self.assertNotIn("prebuilt_files", packet["implementation_contract"])
+        self.assertEqual(
+            packet["implementation_contract"], task_implementation_contract(_project_plan(), task),
+        )
         self.assertEqual(packet["stage"], "bootstrap")
         self.assertIn(
             "/.devagentstudio/builtin-skills/springboot-backend-generate/"

@@ -130,8 +130,8 @@ def validate_authorization_configuration_projection(
     return errors
 
 
-def compile_authorization_manifest(requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]], *, application_config: dict[str, Any]) -> dict[str, Any]:
-    """从 application.json 开关及已确认业务规则确定性编译 V1 manifest。"""
+def compile_authorization_resources(requirement_spec: dict[str, Any], product_plan: dict[str, Any], *, application_config: dict[str, Any]) -> dict[str, Any]:
+    """在需求文档联合确认前编译角色、页面/操作资源及默认授权，不依赖技术接口。"""
 
     enabled = authorization_enabled_from_application_config(application_config)
     projection_errors = validate_authorization_configuration_projection(
@@ -181,6 +181,18 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
         resource["sourceRuleIds"] = _text_items([*resource["sourceRuleIds"], rule_id]); action_bindings[(page_id, action_id)] = {"pageId": page_id, "actionId": action_id, "resourceKey": resource_key, "mode": mode}
         for role_id in _text_items(rule.get("defaultGrantedRoleIds")): grants.setdefault(role_id, set()).add(resource_key)
     if any(not _LOWER_SNAKE_CASE.match(key) for key in resources): raise ValueError("权限资源键必须全局唯一且使用 lower_snake_case。")
+    roles = _dict_items(requirement_spec.get("user_roles"))
+    # 系统管理员固定创建；业务角色只得到需求规则明确授予的业务资源。
+    return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": list(resources.values()), "bindings": {"pages": list(page_bindings.values()), "actions": list(action_bindings.values()), "endpoints": []}, "systemAuthorization": {"adminRoleSeedKey": SYSTEM_ADMIN_ROLE_SEED_KEY, "managementResourceKey": SYSTEM_RESOURCE_KEY}, "defaultRoleAuthorization": {"roles": [{"roleSeedKey": str(role.get("id") or ""), "name": str(role.get("name") or ""), "description": str(role.get("description") or "")} for role in roles], "roleResourceGrants": [{"roleSeedKey": role_id, "resourceKeys": sorted(keys)} for role_id, keys in grants.items()]}})
+
+
+def compile_authorization_manifest(requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]], *, application_config: dict[str, Any]) -> dict[str, Any]:
+    """复用上游业务资源目录，仅追加技术规划操作到 Endpoint 的权限绑定。"""
+
+    manifest = compile_authorization_resources(requirement_spec, product_plan, application_config=application_config)
+    if not authorization_enabled_from_application_config(application_config):
+        return manifest
+    action_bindings = {(item["pageId"], item["actionId"]): item for item in manifest["bindings"]["actions"]}
     endpoint_resources: dict[str, set[str]] = {}; endpoint_control: dict[str, set[bool]] = {}
     for target, endpoint_ids in _action_endpoint_ids(pages).items():
         resource_key = action_bindings.get(target, {}).get("resourceKey")
@@ -190,9 +202,7 @@ def compile_authorization_manifest(requirement_spec: dict[str, Any], product_pla
     mixed = sorted(endpoint_id for endpoint_id, values in endpoint_control.items() if len(values) > 1)
     if mixed: raise ValueError("ENDPOINT_AUTHORIZATION_MIXED_CONTROL：Endpoint 同时被受控与未受控操作引用：" + "、".join(mixed))
     endpoint_bindings = [{"endpointId": endpoint_id, "operationResourceKeys": sorted(endpoint_resources.get(endpoint_id, set()))} for endpoint_id in sorted(endpoint_control)]
-    roles = _dict_items(requirement_spec.get("user_roles"))
-    # 系统管理员由平台固定创建；业务角色仅得到 RequirementSpec 明确授予的业务资源。
-    return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": list(resources.values()), "bindings": {"pages": list(page_bindings.values()), "actions": list(action_bindings.values()), "endpoints": endpoint_bindings}, "systemAuthorization": {"adminRoleSeedKey": SYSTEM_ADMIN_ROLE_SEED_KEY, "managementResourceKey": SYSTEM_RESOURCE_KEY}, "defaultRoleAuthorization": {"roles": [{"roleSeedKey": str(role.get("id") or ""), "name": str(role.get("name") or ""), "description": str(role.get("description") or "")} for role in roles], "roleResourceGrants": [{"roleSeedKey": role_id, "resourceKeys": sorted(keys)} for role_id, keys in grants.items()]}})
+    return _with_fingerprint({**manifest, "bindings": {**manifest["bindings"], "endpoints": endpoint_bindings}})
 
 
 def validate_authorization_manifest(manifest: Any, requirement_spec: dict[str, Any], product_plan: dict[str, Any], api_contracts: list[dict[str, Any]], pages: list[dict[str, Any]], *, application_config: dict[str, Any]) -> list[str]:

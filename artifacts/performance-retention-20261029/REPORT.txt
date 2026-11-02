@@ -1,0 +1,44 @@
+XCodeAgent 空闲轮询与会话缓存优化验证
+日期：2026-10-29（Asia/Shanghai）
+
+实现范围
+- 设计稿读取按工作区共享、串行执行，生成终态停止，无变化复用引用。
+- 隐藏工作台/窗口暂停展示读取，重新显示/聚焦补读；不操作后台 AG-UI 或生成任务。
+- 隐藏后快速重入也复用未完成 IPC，不重叠读盘。
+- 已保存的无保护历史最多 3 份、估算正文体积合计 32MiB；该预算不是进程内存硬上限。
+- 当前视图、加载/交接、运行、停止未收口、未保存/保存失败、待确认和暂停恢复记录受保护。
+- 保存按会话串行，并以准确消息版本确认落盘；旧回执不能清除新内容的脏状态。
+- 淘汰内存正文和闲置客户端，保留原会话身份、草稿、技能、历史文件和 checkpoint。
+- 完成后移除重复 liveWorkflows 引用，重新打开通过现有读盘路径恢复。
+
+自动化验证
+PASS pnpm test:performance-retention：13 个测试（含真实 React Provider/useChatSessions）。
+PASS pnpm test:connection-recovery：107 个测试。
+PASS pnpm test:stage-sessions：阶段身份、原子保存及交接测试。
+PASS pnpm test:ui-design-pages-with-code：7 个测试。
+PASS pnpm test:application-planning-runtime。
+PASS pnpm test:preview-runtime。
+PASS pnpm build（包含 node/web 类型检查与 Electron Vite 构建）。
+PASS 新增核心模块与缓存 Provider 的定向 ESLint；较宽文件扫描无错误，存在原有格式/Hook 警告，未批量改写。
+PASS git diff --check。
+PASS curl -sS http://127.0.0.1:8000/health：status=ok。
+PASS Vite URL 5173 HTTP 200（仅开发服务健康信号）。
+
+Electron 实测（运行中的 macOS Electron，未使用网页浏览器代替）
+- 用正式 Electron sessions:create/save IPC 在专用已有验收项目中创建“性能验证历史”记录，不修改原历史正文。
+- 连续打开 1、2、3、4、5、6 六份历史均显示各自已保存正文，再次打开第一份仍显示其原正文。
+- 临时模块计数器记录 4 次缓存淘汰；驻留 6 份包含其他受保护的待确认会话，并非预算失效。
+- 终态空闲 8 秒：设计稿读取计数 before=4, after=4。
+- 返回欢迎页隐藏工作台 3 秒：before=5, after=5。
+- 实际浅色与深色界面均显示恢复的正文；深色界面显示未发送草稿 KEEP-20261029。
+- 在 Electron 加载 tests/manualPerformanceRetention.ts，使用生产 Provider、AgUiChatSession 和标准 AG-UI 延迟流进行隔离验证：
+  status=PASS, requestCount=1, cancelled=0, backgroundCompleted=true,
+  originalThreadPreserved=true, unsavedPreserved=true, draftPreserved=true, retainedClients=4。
+- 该背景验证使用专用受控 AG-UI 响应，未调用真实模型，也未执行真实 Build。
+
+限制与现场状态
+- 用户解锁后补测通过：在角色权限分阶段 Electron 验证项目输入未发送草稿 KEEP-RESUME-20261029，返回欢迎页再打开同一工作区，草稿完整保留，需求文档仍停在原联合确认门；本次未发送消息、未推进工作流。补测后清除本次测试草稿，恢复原空输入区。
+- 已清理临时性能探针并关闭开发者工具，保留原待确认界面。
+- 受控 Electron 后台验证和自动化真实会话恢复已完成，不能据此宣称多小时/隔夜稳定性验收通过。
+- 本次未做 Windows、打包后安装运行或真实模型 Build 长时间压力验证。
+- 本次未提交、未推送；原有权限/技术规划未提交修改保留。

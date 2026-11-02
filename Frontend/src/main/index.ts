@@ -15,6 +15,7 @@ import { normalizePersistentSessionMessage } from './sessionMessageNormalization
 import { writeSessionAtomically } from './sessionPersistence'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { setupClipboardIpc } from './clipboard'
+import { setupAppVersionIpc } from './appVersion'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
 import { endpointDesignDocumentStatus, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
@@ -1921,6 +1922,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupAuthIpc()
   setupBrowserIpc()
   setupClipboardIpc()
+  setupAppVersionIpc()
   setupProjectPreviewIpc()
   setupWorkspaceIpc()
   setupSessionStorageIpc()

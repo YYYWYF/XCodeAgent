@@ -14,6 +14,7 @@ import { cx } from './utils'
 import { ApplicationThemeProvider, useApplicationTheme } from './hooks/useApplicationTheme'
 import { loadApplicationTheme } from './service/applicationSettings'
 import './login.less'
+import AppVersionBadge from './components/AppVersionBadge'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -71,7 +72,10 @@ export function LoginApp(): JSX.Element {
               <span className={cx('login-logo')}>
                 <CodeOutlined />
               </span>
-              <strong>DevAgent Studio</strong>
+              <span className={cx('app-version-brand')}>
+                <strong>DevAgent Studio</strong>
+                <AppVersionBadge />
+              </span>
             </div>
           </header>
 

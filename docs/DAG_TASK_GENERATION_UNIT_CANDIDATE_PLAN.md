@@ -905,7 +905,7 @@ traceability metadata
 | 身份 | `planning_run_id`、`scope_id`、`unit_id`、`unit_kind`、`base_confirmed_plan_digest` | Run／Scope 由平台创建，Unit 来自现有 Unit Skeleton；所有 Context 必填。首次没有 confirmed DAG 时，基线摘要为 null，并明确使用空基线，不拿失败或未确认计划替代。 |
 | 本轮生成范围 | `generation_scope`：本轮负责的正式目标引用、需要新增的职责、不得重复生成的保留职责 | 由平台生成前计算，所有待生成 Unit 必填。Endpoint 使用 `(api_contract_id, endpoint_id)`，Page 使用 `page_id`，共享 Unit 使用本轮所需职责；Unit 只生成该范围内的任务。此字段是对概念模型的补充建议。 |
 | 正式合同 | `formal_contracts`：适用的合同正文／有界结构化切片，以及对应正式来源引用；较大合同的受控读取方向见下文已确认规则 | 来自已确认正式产物，经现有运行时合同编译与绑定摘要逻辑组装。按下表条件必填；直接提供内容，或提供实际可查询读取的冻结输入引用，不能只给路径并假定模型已有文件工具。无关合同不下发。 |
-| 工作区事实 | `workspace_context`：同一份 WorkspaceSnapshot 的身份及 Unit 相关切片、template_context、适用的预置文件清单和架构事实 | 快照来自 `inspect_workspace`，模板绑定来自 TemplateState，预置清单来自 `prebuilt_files_for_plan`。提供真实路径、目录、入口、已有文件等规划事实，不将路径存在等同于代码功能已满足。 |
+| 工作区事实 | `workspace_context`：同一份 WorkspaceSnapshot 的身份及 Unit 相关切片、template_context 和架构事实 | 快照来自 `inspect_workspace`，模板绑定来自 TemplateState。提供真实路径、目录、入口、已有文件等规划事实，不根据 TechnicalPlan 推算文件已存在，不将路径存在等同于代码功能已满足。 |
 | 依赖与保留事实 | `dependency_context`：直接依赖 Unit、相关 Unit Graph 边、必要的保留任务摘要、已有职责和 Endpoint owner 约束 | 来自 Unit Skeleton／Unit Graph 及上一份 confirmed DAG。相关集合必填，无相关记录时为空。保留任务摘要只含 ID、Unit、职责、交付物、能力、文件范围及必要正式输入引用，不要求成功执行记录，不下发历史任务全集。 |
 | 约束 | `constraints`：owner、文件职责边界、适用权限切片、已有确定性唯一归属规则 | 来自现有规划规则、模板边界、权限 Overlay 和保留任务索引。仅传适用于该 Unit 的约束；不存在权限场景时明确不适用，不伪造权限事实。 |
 | 生成控制 | `generation_policy`：固定规则或模型生成、适用 Task 字段契约及阶段规则 | 由平台选择，属于控制参数。具体重试次数与反馈结构在重试议题确定，不在正式合同输入中混入执行状态或重试决策。 |
@@ -944,7 +944,7 @@ traceability metadata
 
 ### 可复用实现与必要新增
 
-- `build_context_resolver.py`：复用页面／Endpoint 定向解析、正式实体绑定检查和 `prebuilt_files` 提供逻辑。
+- `build_context_resolver.py`：复用页面／Endpoint 定向解析、正式实体绑定检查；文件事实由 WorkspaceSnapshot 提供，不附加推算的业务文件清单。
 - `entity_definitions.py::entity_design_summaries`：复用有界实体摘要及按 Endpoint 引用裁剪外部 API 操作。
 - `graph/nodes/tasks.py::_executable_details / _scoped_api_contract / _scoped_pages`：复用合同正文组织、所属 schema 保留及导航目标裁剪。
 - `agents/main/task_preparer_prompt.py::compact_workspace_snapshot`：复用前端／后端路径事实裁剪；该快照不承担依赖是否安装、代码能力是否实现的判断。

@@ -9,7 +9,6 @@ from app.services.builtin_skills import (
     SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME,
 )
 from app.services.api_design import api_design_business_descriptions
-from app.services.template_scaffold_injection import prebuilt_files_for_plan
 
 
 _SOURCE_REFERENCE_DIRECTORIES = {
@@ -94,7 +93,7 @@ def task_required_instruction_paths(task: dict[str, Any]) -> list[str]:
         for source_type in _SOURCE_SKILL_ORDER
         if source_type in source_types
     )
-    # 后端模板修改边界 skill 的参考文档：让 Agent 知道预置代码和修改边界。
+    # 加载现有模板工程及文件修改边界参考，业务文件按当前任务授权创建或修改。
     boundary_root = (
         f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
         f"{SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME}/references/"
@@ -183,7 +182,6 @@ def task_implementation_contract(
             ),
             "configuration_policy": "reuse_existing_then_fill_missing",
             "verification_policy": _OUTER_VERIFICATION_POLICY,
-            "prebuilt_files": prebuilt_files_for_plan(project_plan),
         }
 
     contract_ids, endpoint_ids, entity_ids = _task_scope_ids([task])
@@ -210,7 +208,6 @@ def task_implementation_contract(
         "authorization_constraints": _endpoint_authorization_constraints(task),
         "language": {"java_version": "8"},
         "verification_policy": _OUTER_VERIFICATION_POLICY,
-        "prebuilt_files": prebuilt_files_for_plan(project_plan),
     }
 
 

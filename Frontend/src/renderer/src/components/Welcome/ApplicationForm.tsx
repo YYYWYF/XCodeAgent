@@ -9,6 +9,7 @@ import { Button, Form, Input, Radio, Typography } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import type { ApplicationDraft } from '../../typings'
+import RequirementDescriptionEditor from '../RequirementDescriptionEditor'
 import { validateBranchName, validateRepoUrl } from '../../service/repositoryBranch'
 import { cx } from '../../utils'
 import {
@@ -20,7 +21,6 @@ import { TabHintInput } from './components/TabHintInput'
 import DatasourceConfigFields from './DatasourceConfigFields'
 import ApplicationConfigEditor from './ApplicationConfigEditor'
 
-const { TextArea } = Input
 const { Text } = Typography
 
 type Props = {
@@ -151,11 +151,11 @@ export default function ApplicationForm({
         <ApplicationConfigEditor form={form} mode={mode} visiblePaths={['appIcon']} />
         <Form.Item
           className={cx('application-form-scenario')}
-          label="应用场景"
+          label="应用需求描述"
           name="senario"
-          rules={[{ required: true, whitespace: true, message: '请输入应用场景' }]}
+          rules={isSettingsMode ? undefined : [{ required: true, whitespace: true, message: '请输入应用需求描述' }]}
         >
-          <TextArea rows={3} />
+          <RequirementDescriptionEditor readOnly={isSettingsMode} rows={18} />
         </Form.Item>
         <Form.Item label="码云地址">
           {isSettingsMode ? (

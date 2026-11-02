@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from app.domain.application_config_change import ApplicationConfigPath
 
@@ -87,12 +88,37 @@ def has_explicit_capability_change(request: str) -> bool:
     return bool(resolve_capability_intents(request))
 
 
-def has_explicit_business_access_control_change(request: str) -> bool:
+def has_explicit_business_access_control_change(request: str, *, user_roles: Any = None) -> bool:
     """识别明确改变角色、页面或操作可访问性的自然语言需求。"""
 
     text = str(request or "").strip().casefold()
-    if not text:
+    # 修改指令和附带解释分别判断，后面的“为什么”不能抹掉前面的授权修改。
+    clauses = re.split(r"[，,。；;！？!?\n]|(?:并|同时|顺便)(?:请)?(?:说明|解释|告诉我)", text)
+    # 保留修改句之间的关联，例如“添加权限，需要管理员才能看到列表”。
+    changes = "，".join(clause for clause in clauses if not re.search(
+        r"是否|能否|为什么|如何|怎么|会不会|请问|如果|假如|例如|比如", clause,
+    ))
+    return _business_access_control_clause_change(changes, user_roles=user_roles)
+
+
+def _business_access_control_clause_change(text: str, *, user_roles: Any) -> bool:
+    """逐句区分权限修改与只读问题；礼貌请求仍进入需重新确认的上游修改。"""
+
+    if not text.strip():
         return False
+    # “能不能给某角色增加权限”作为修改提案处理，不提交正式授权。
+    # 用户可能直接说“将审批员改为审核员”，以当前需求角色定位，不依赖“角色”关键词。
+    for role in user_roles if isinstance(user_roles, list) else []:
+        name = str(role.get("name") or "").strip() if isinstance(role, dict) else ""
+        if name and re.search(rf"{re.escape(name.casefold())}(?:角色)?\s*(?:改为|改成|更名为|重命名为)", text):
+            return True
+    if any(re.search(pattern, text) is not None for pattern in (
+        r"(?:给|为|向)[^，。；;]{1,40}(?:增加|添加|授予|赋予|开放|取消|移除|删除)[^，。；;]{0,40}(?:权限|授权)",
+        r"(?:将|把)[^，。；;]{1,40}(?:权限|资源点?)[^，。；;]{0,20}(?:授权给|授予|分配给)",
+        r"(?:新增|增加|添加|删除|移除|重命名|修改|调整)[^，。；;]{0,10}(?:业务角色|角色)",
+        r"(?:角色|默认授权|角色授权|授权角色)[^，。；;]{0,20}(?:改为|改成|修改|调整|增加|删除)",
+    )):
+        return True
     permission_terms = ("权限", "授权", "访问控制", "无权限")
     access_patterns = (
         r"才能看到",

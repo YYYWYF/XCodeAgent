@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import PageDesignOverviewSection from './PageDesignOverviewSection'
+import RequirementAuthorizationSection from './RequirementAuthorizationSection'
 import {
   RequirementFlowsSection,
   RequirementOverviewSection,
@@ -14,6 +15,7 @@ import './RequirementDocPanel.less'
 type Props = {
   productPlan: JsonRecord
   spec: JsonRecord
+  workspaceRoot?: string
 }
 
 const requirementDocSections: Array<{ key: RequirementSectionKey; label: string }> = [
@@ -22,13 +24,15 @@ const requirementDocSections: Array<{ key: RequirementSectionKey; label: string 
   { key: 'flows', label: '业务流程' },
   // 页面概览：从技术规划面板迁来（2026-10-21），数据全部来自上游 ProductPlan/RequirementSpec，
   // 与技术规划无关。放在设计阶段需求文档面板，让用户在确认需求时就能看到页面交互/布局/风格。
-  { key: 'page-design-overview', label: '页面概览' }
+  { key: 'page-design-overview', label: '页面概览' },
+  { key: 'authorization', label: '角色与权限' }
 ]
 
 /** 渲染右侧需求文档产物视图，所有交互仅改变本面板内的阅读位置。 */
 export default function RequirementDocPanel({
   productPlan,
-  spec
+  spec,
+  workspaceRoot
 }: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
   return (
@@ -57,6 +61,9 @@ export default function RequirementDocPanel({
       ) : null}
       {activeSection === 'pages' ? (
         <RequirementPagesSection productPlan={productPlan} sectionKey="pages" spec={spec} />
+      ) : null}
+      {activeSection === 'authorization' ? (
+        <RequirementAuthorizationSection spec={spec} productPlan={productPlan} workspaceRoot={workspaceRoot} />
       ) : null}
       {activeSection === 'flows' ? (
         <RequirementFlowsSection sectionKey="flows" spec={spec} />

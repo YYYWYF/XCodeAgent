@@ -5794,6 +5794,14 @@ export default function AiChatPanel({
             ) : isApplicationPlanningPhase ? (
               <DocPanel
                 content={designDocContent}
+                workspaceRoot={application.workspaceRoot}
+                onReviseAuthorization={() => {
+                  // 保留尚未发送的修改意见，只补充上游目标，避免点击入口覆盖用户草稿。
+                  setDraftByKey(draftKey, draft.trim()
+                    ? `@需求设计 ${draft.replace(/@(技术规划|需求设计|UI设计)\s*/g, '')}`
+                    : '@需求设计 请修改角色与权限：')
+                  message.info('请在输入框补充修改意见，发送后将返回需求阶段重新确认。')
+                }}
                 docName={designDocName}
                 generating={designDocGenerating}
                 productPlan={

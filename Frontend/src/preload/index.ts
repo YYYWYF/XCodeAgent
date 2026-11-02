@@ -36,6 +36,8 @@ const api = {}
 
 const devAgentStudioApi = {
   appUpdate,
+  /** 读取当前运行客户端的版本，不依赖启动更新窗口。 */
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
   isElectron: true,
   agentBaseUrl,
   platform: process.platform,

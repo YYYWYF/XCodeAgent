@@ -1,5 +1,6 @@
 import type { MutableRefObject, ReactNode, SetStateAction } from 'react'
-import { createContext, createElement, useContext, useRef, useState } from 'react'
+import { createContext, createElement, useContext, useEffect, useRef, useState } from 'react'
+import { SessionMessageCache, type SessionSaveToken } from './sessionMessageCache'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/EntityDesignPanels'
 import type { ChatMessageSkill } from '../../../typings'
@@ -26,6 +27,10 @@ export type SessionRuntimeStore = {
   ensureAgent: (identity: SessionIdentity) => AgUiChatSession
   getIdentity: (sessionKey: string) => SessionIdentity | undefined
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
+  hasSessionMessages: (sessionKey: string) => boolean
+  retainSession: (sessionKey: string) => () => void
+  beginSessionSave: (sessionKey: string, messages: AgentChatMessage[]) => SessionSaveToken
+  finishSessionSave: (token: SessionSaveToken, success: boolean) => void
   messagesForKey: (sessionKey: string) => AgentChatMessage[]
   selectedSkillsForKey: (sessionKey: string) => ChatMessageSkill[]
   registerSession: (
@@ -67,7 +72,8 @@ export function useSessionRuntimeStore(): SessionRuntimeStore {
 /** 创建会话运行态的具体状态容器，仅允许由应用级 Provider 持有。 */
 function useSessionRuntimeStoreState(): SessionRuntimeStore {
   const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [messagesBySession, setMessagesBySession] = useState<Record<string, AgentChatMessage[]>>({})
+  const [messagesRevision, notifyMessages] = useState(0)
+  const cacheRef = useRef(new SessionMessageCache())
   const [selectedSkillsBySession, setSelectedSkillsBySession] = useState<
     Record<string, ChatMessageSkill[]>
   >({})
@@ -78,7 +84,37 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     {}
   )
   const identitiesRef = useRef<Record<string, SessionIdentity>>({})
-  const messagesRef = useRef<Record<string, AgentChatMessage[]>>({})
+  const cache = cacheRef.current
+
+  // React 提交后再回收，让新选中会话的 layout effect 先登记保护；不新增空闲定时器。
+  useEffect(() => {
+    const evicted = cache.evict(
+      (key) =>
+        runningSessionsRef.current.has(key) ||
+        Boolean(sessionExecutionsRef.current[key]) ||
+        Boolean(agUiSessionsRef.current[key]?.hasActiveRun())
+    )
+    if (!evicted.length) return
+    evicted.forEach((key) => {
+      delete agUiSessionsRef.current[key]
+    })
+    notifyMessages((revision) => revision + 1)
+  }, [cache, messagesRevision, sessionExecutions])
+
+  /** 暂时保留当前视图或异步加载中的会话，释放后再按预算回收。 */
+  const retainSession = (key: string): (() => void) => {
+    const release = cache.retain(key)
+    return () => {
+      release()
+      notifyMessages((revision) => revision + 1)
+    }
+  }
+
+  /** 完成落盘后按精确版本更新可回收资格，失败仍保留内存内容。 */
+  const finishSessionSave = (token: SessionSaveToken, success: boolean): void => {
+    cache.finishSave(token, success)
+    notifyMessages((revision) => revision + 1)
+  }
 
   /** 更新指定会话的未发送输入草稿。 */
   const setDraftByKey = (sessionKey: string, value: string): void => {
@@ -95,13 +131,13 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     sessionKey: string,
     value: SetStateAction<AgentChatMessage[]>
   ): void => {
-    const currentMessages = messagesRef.current[sessionKey] || []
+    const currentMessages = cache.read(sessionKey)
     const nextMessages =
       typeof value === 'function'
         ? (value as (current: AgentChatMessage[]) => AgentChatMessage[])(currentMessages)
         : value
-    messagesRef.current[sessionKey] = nextMessages
-    setMessagesBySession((current) => ({ ...current, [sessionKey]: nextMessages }))
+    cache.update(sessionKey, nextMessages)
+    notifyMessages((revision) => revision + 1)
   }
 
   /** 返回指定会话的 AG-UI 客户端，不存在时按 threadId 创建。 */
@@ -122,7 +158,8 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     identitiesRef.current[identity.key] = identity
     if (agent) agUiSessionsRef.current[identity.key] = agent
     else ensureAgent(identity)
-    setSessionMessages(identity.key, messages)
+    cache.restore(identity.key, messages)
+    notifyMessages((revision) => revision + 1)
   }
 
   /** 原子登记本地 execution；只有 DAG Planning 才阻止其它会话跨阶段发送。 */
@@ -211,8 +248,8 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
   const removeSession = (sessionKey: string): void => {
     delete agUiSessionsRef.current[sessionKey]
     delete identitiesRef.current[sessionKey]
-    delete messagesRef.current[sessionKey]
-    setMessagesBySession((current) => omitKey(current, sessionKey))
+    cache.remove(sessionKey)
+    notifyMessages((revision) => revision + 1)
     setDrafts((current) => omitKey(current, sessionKey))
     setSelectedSkillsBySession((current) => omitKey(current, sessionKey))
   }
@@ -222,7 +259,7 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     const sessionKeys = new Set([
       ...Object.keys(agUiSessionsRef.current),
       ...Object.keys(identitiesRef.current),
-      ...Object.keys(messagesRef.current),
+      ...cache.keys(),
       ...runningSessionsRef.current.keys()
     ])
     const workspaceKeys = [...sessionKeys].filter((sessionKey) =>
@@ -236,7 +273,7 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     workspaceKeys.forEach((sessionKey) => {
       delete agUiSessionsRef.current[sessionKey]
       delete identitiesRef.current[sessionKey]
-      delete messagesRef.current[sessionKey]
+      cache.remove(sessionKey)
       runningSessionsRef.current.delete(sessionKey)
     })
     sessionExecutionsRef.current = omitWorkspaceExecutionEntries(
@@ -244,7 +281,7 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
       workspaceRoot
     )
     setSessionExecutions(sessionExecutionsRef.current)
-    setMessagesBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
+    notifyMessages((revision) => revision + 1)
     setDrafts((current) => omitWorkspaceKeys(current, workspaceRoot))
     setSelectedSkillsBySession((current) => omitWorkspaceKeys(current, workspaceRoot))
     // 项目删除后同时清理实体设计草稿缓存，避免残留跨会话状态。
@@ -258,8 +295,12 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     draftForKey: (sessionKey) => drafts[sessionKey] || '',
     ensureAgent,
     getIdentity: (sessionKey) => identitiesRef.current[sessionKey],
-    getSessionMessages: (sessionKey) => messagesRef.current[sessionKey] || [],
-    messagesForKey: (sessionKey) => messagesBySession[sessionKey] || [],
+    getSessionMessages: (sessionKey) => cache.read(sessionKey),
+    hasSessionMessages: (sessionKey) => cache.has(sessionKey),
+    retainSession,
+    beginSessionSave: (sessionKey, messages) => cache.beginSave(sessionKey, messages),
+    finishSessionSave,
+    messagesForKey: (sessionKey) => cache.read(sessionKey),
     runningSessionsRef,
     selectedSkillsForKey: (sessionKey) => selectedSkillsBySession[sessionKey] || [],
     registerSession,

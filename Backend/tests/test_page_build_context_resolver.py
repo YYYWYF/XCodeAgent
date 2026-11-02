@@ -10,7 +10,7 @@ from app.domain.api_design import EndpointApiDesign
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.page_dependencies import validate_project_plan_dependencies
-from app.graph.nodes.tasks import _scoped_contract_validation_plan
+from app.graph.nodes.tasks import _resolve_build_context, _scoped_contract_validation_plan
 from app.workspace.endpoint_design_documents import technical_plan_sha256, write_endpoint_design
 from tests.entity_design_test_utils import confirm_entity_designs
 
@@ -180,6 +180,7 @@ class PageBuildContextResolverTests(unittest.TestCase):
         """endpoint/page 上下文不得携带数据源类型或契约清单字段。"""
 
         for key in (
+            "prebuilt_files",
             "api_contract_ids",
             "data_source_ids",
             "entity_source_types",
@@ -187,6 +188,21 @@ class PageBuildContextResolverTests(unittest.TestCase):
             "database_endpoint_refs",
         ):
             self.assertNotIn(key, context)
+
+    def test_application_context_retains_endpoint_facts_without_prebuilt_files(self) -> None:
+        """应用级上下文保留全部正式接口映射，不再推算业务文件已存在。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan, _ = _project_plan(Path(workspace))
+            context = _resolve_build_context(
+                {"workspace": workspace}, plan,
+                {"type": "application", "id": "application"},
+                {"build_units": {"backend:bootstrap": {}}},
+            )
+        self.assertNotIn("prebuilt_files", context)
+        self.assertEqual(context["required_unit_ids"], ["backend:bootstrap"])
+        self.assertEqual(context["endpoint_ids"], ["orders.list", "customers.list"])
+        self.assertEqual(len(context["endpoint_designs"]), 2)
 
     def test_page_context_uses_implementation_contract_without_page_detail(self) -> None:
         """新版 TechnicalPlan 应直接用页面实现契约解析接口，不要求 PageDetail 文件。"""

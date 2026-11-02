@@ -5,6 +5,7 @@ import type { AppUpdater, ProgressInfo } from 'electron-updater'
 import type { UpdateDriver, UpdateProgress } from './coordinator'
 import { assertUpdateFiles } from './manifest'
 import { configureUpdateFeed } from './configureFeed'
+import { quitAndInstallUpdate } from './installUpdate'
 
 /** 按平台创建 updater，使用 Java 返回的基础地址而非猜测安装包名称。 */
 export function createUpdaterDriver(baseUrl: string): UpdateDriver {
@@ -85,7 +86,7 @@ export function createUpdaterDriver(baseUrl: string): UpdateDriver {
         updater.once('error', failed)
         nativeUpdater.once('before-quit-for-update', ready)
         try {
-          updater.quitAndInstall(false, true)
+          quitAndInstallUpdate(updater, process.platform, process.execPath)
         } catch (error) {
           failed(error instanceof Error ? error : new Error('无法启动安装器'))
         }

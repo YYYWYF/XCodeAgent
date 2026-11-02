@@ -1,6 +1,6 @@
 # Entity + PO + Mapper + MapperXML 模板
 
-本文件给大模型提供后端业务实体持久化层的标准代码模板。平台已根据 TechnicalPlan 确定性生成这些文件，Agent 只需在需要时补充自定义方法/SQL。
+本文件提供数据库职责需要时的业务实体与持久化层参考模板。Agent 按当前 Endpoint Task、确认的数据库操作及映射，在授权路径内新建或最小修改真实文件；纯外部 API 场景不强制生成持久层。
 
 ## 领域实体 Entity
 

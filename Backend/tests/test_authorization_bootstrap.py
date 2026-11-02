@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.persistence.data_sources import write_sources
 from app.graph.nodes.authorization_bootstrap import authorization_bootstrap
 from app.services.authorization_bootstrap import _command_for_workspace, run_authorization_bootstrap
 
@@ -41,7 +42,52 @@ class AuthorizationBootstrapTests(unittest.TestCase):
         script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         script.with_suffix(".ps1").write_text("exit 0\n", encoding="utf-8")
         ddl.write_text("create table role (id int);", encoding="utf-8")
+        application = root / ".devagentstudio/application.json"
+        application.parent.mkdir(parents=True)
+        application.write_text(json.dumps({"datasource": {"type": "database", "db": {"useBuiltin": False}}}), encoding="utf-8")
+        write_sources(root, [{
+            "id": "application-db", "name": "应用数据库", "type": "database", "mode": "dbid",
+            "domain": "application.mysql.local", "port": 3313, "schema": "application_schema",
+            "userName": "application_user", "dbid": "application-password", "managedTables": [],
+        }])
         return root
+
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
+    def test_bootstrap_injects_current_connection_and_isolates_host(self, run_mock) -> None:
+        """真实目录解析的连接必须进入脚本环境，宿主连接和平台密钥不得泄漏。"""
+
+        run_mock.return_value = SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            with patch.dict("os.environ", {
+                "DB_PASSWORD": "host-secret", "MYSQL_PWD": "host-secret",
+                "SPRING_DATASOURCE_PASSWORD": "host-secret", "XCODEAGENT_DB_PASSWORD": "host-secret",
+                "MANAGED_DATABASE_SERVICE_KEY": "platform-secret",
+            }):
+                result = run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())
+            self.assertEqual(result["status"], "executed")
+            environment = run_mock.call_args.kwargs["env"]
+            self.assertEqual(environment["MYSQL_HOST"], "application.mysql.local")
+            self.assertEqual(environment["MYSQL_PORT"], "3313")
+            self.assertEqual(environment["MYSQL_DATABASE"], "application_schema")
+            self.assertEqual(environment["SPRING_DATASOURCE_USERNAME"], "application_user")
+            for key in ("MYSQL_PWD", "SPRING_DATASOURCE_PASSWORD", "XCODEAGENT_DB_PASSWORD"):
+                self.assertEqual(environment[key], "application-password")
+            self.assertIn("application.mysql.local:3313/application_schema", environment["SPRING_DATASOURCE_URL"])
+            self.assertNotIn("DB_PASSWORD", environment)
+            self.assertNotIn("MANAGED_DATABASE_SERVICE_KEY", environment)
+            self.assertNotIn("application-password", json.dumps(result))
+
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
+    def test_missing_connection_blocks_bootstrap(self, run_mock) -> None:
+        """缺少数据库连接时不得让脚本使用 YAML 默认连接执行 SQL。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            write_sources(root, [])
+            result = run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())
+            self.assertEqual(result["failure_category"], "database_configuration_invalid")
+            run_mock.assert_not_called()
 
     @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
     def test_success_is_cached_by_manifest_fingerprint(self, run_mock) -> None:

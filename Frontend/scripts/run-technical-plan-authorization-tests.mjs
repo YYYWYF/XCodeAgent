@@ -16,6 +16,7 @@ try {
     logLevel: 'error',
     root: frontendRoot,
     ssr: { noExternal: true },
+    css: { preprocessorOptions: { less: { additionalData: '@class-prefix: test;' } } },
     build: {
       emptyOutDir: true,
       minify: false,

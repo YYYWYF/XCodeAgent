@@ -76,7 +76,7 @@ pending 输出文件名作新增断言。Build 入口测试对未确认内容的
 .venv/bin/python -m unittest tests.test_engineering_acceptance tests.test_business_acceptance tests.test_build_task_planner
 
 # R-TEMPLATE：全部现有测试
-.venv/bin/python -m unittest tests.test_application_template_generation tests.test_template_scaffold_injection tests.test_generation_workspace_paths
+.venv/bin/python -m unittest tests.test_application_template_generation tests.test_generation_workspace_paths
 ```
 
 测试通过只表示 T0.1 回归基线满足当前验收，不表示 legacy 冲突已解决或下一 Task 已开始。

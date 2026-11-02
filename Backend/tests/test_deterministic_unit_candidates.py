@@ -101,6 +101,7 @@ class DeterministicAuthCandidateTests(unittest.TestCase):
         candidate = build_auth_guard_candidate(**self._kwargs())
         task, = candidate["tasks"]
         self.assertEqual(set(candidate), {"tasks"})
+        self.assertEqual(task["title"], "生成前端权限资源配置")
         self.assertEqual(task["owner"], "frontend")
         self.assertEqual(task["unit_id"], UNIT)
         self.assertEqual(task["task_type"], "frontend.code")

@@ -1,6 +1,6 @@
 # Controller 骨架模板
 
-本文件给大模型提供后端 REST Controller 的标准代码模板。平台已根据 API Contract 确定性生成端点声明和 service 调用，Agent 只需补充参数校验和业务逻辑。
+本文件提供 REST Controller 的参考模板。Agent 按已确认 Endpoint 的 HTTP Method、Path、请求/响应 Schema，在当前任务授权路径内创建或最小调整 Controller，业务逻辑留在 ApplicationService。
 
 ## Controller 骨架
 
@@ -109,18 +109,14 @@ public class ProjectController {
 
 > `AuthConstants.PAGE_PROJECT_MANAGEMENT` 是平台权限基础设施定义的资源常量。仅当 TemplateState.effective 包含 authorization 且任务提供相应资源时，业务 Controller 才加此注解；资源 key 由平台授权投影从确认的 TechnicalPlan 派生。
 
-## Agent 需补充的部分
+## 当前任务需实现或复用的部分
 
-平台预置的 Controller 骨架已包含：
-- ✅ 类注解（`@RestController`/`@RequiredArgsConstructor`/`@RequestMapping`）
-- ✅ Service 注入
-- ✅ 所有端点方法声明（HTTP 方法 + 路径 + 参数 + 返回类型）
-- ✅ `ResponseEntity.success(service.xxx())` 调用
+先读取真实 Controller，保留不属于当前任务的端点和逻辑；不存在时仅在授权路径创建。根据确认契约实现或复用：
 
-Agent 需补充：
-- 🟡 `@Valid` 注解（如果预置时没加）
-- 🟡 `@ModelAttribute`/`@PathVariable`/`@RequestBody` 注解（如果预置时没加）
-- 🟡 权限注解 `@RequireAnyResource`（authorization effective 且任务要求时）
-- 🟡 Controller 层的参数预处理（如 trim）
+- 类注解（`@RestController`/`@RequiredArgsConstructor`/`@RequestMapping`）与 Service 注入。
+- 当前端点方法声明（HTTP 方法、路径、参数、返回类型）及 Service 调用。
+- 需要的 `@Valid`、`@ModelAttribute`、`@PathVariable`、`@RequestBody` 注解。
+- 权限注解 `@RequireAnyResource`（authorization effective 且任务要求时）。
+- Controller 层的参数预处理（如 trim）。
 
 **不要**在 Controller 里写业务逻辑——业务逻辑在 ApplicationService 里。Controller 只做参数接收和调用转发。

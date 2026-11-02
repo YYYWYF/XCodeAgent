@@ -120,6 +120,7 @@ def build_auth_guard_candidate(
     task_id = f"frontend-auth-resources-{current_fingerprint}"
     return {"tasks": [{
         "id": task_id,
+        "title": "生成前端权限资源配置",
         "unit_id": unit_id,
         "owner": "frontend",
         "task_type": "frontend.code",

@@ -25,7 +25,7 @@ from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
     ApplicationLifecycleStatus,
 )
-from app.domain.application_revision import RevisionImpact, RevisionTarget
+from app.domain.application_revision import ActiveFormalRevision, RevisionImpact, RevisionTarget
 from app.domain.execution_recovery import DurableExecutionRecord, DurableExecutionStatus
 from app.persistence.execution_recovery import insert_execution
 from app.protocols.application_page_planning import (
@@ -43,6 +43,7 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
 )
 from app.services.application_revision_lifecycle import (
+    consume_revision_continuation,
     register_revision_impact,
     submit_revision_impact,
 )
@@ -823,6 +824,74 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             assert lifecycle.active_formal_revision is not None
             self.assertEqual(lifecycle.active_formal_revision.status, "design_planning")
 
+    def test_revision_reconcile_preserves_business_sources_and_issues_continuation(self) -> None:
+        """两类修订在模板无变化或更新后均不生成业务文件，并可正常消费续接。"""
+
+        for branch in ("design_stage_revision", "workbench_plan_revision"):
+            for outcome in ("NO_CHANGE", "CHANGED"):
+                with self.subTest(branch=branch, outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                    workspace = Path(directory)
+                    state = _confirmed_state(workspace)
+                    plan_path = Path(state["technical_plan_path"]).with_suffix(".json")
+                    plan = state["technical_plan"]
+                    plan["entities"] = [
+                        {"id": name, "fields": [{"name": "id", "type": "string"}]}
+                        for name in ("Order", "Customer")
+                    ]
+                    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+                    lifecycle = create_application_lifecycle(
+                        application_id="app-no-scaffold", application_name="修订源码保护",
+                    )
+                    active = ActiveFormalRevision(
+                        changeId="chg-no-scaffold", formalBranch=branch,
+                        sourceThreadId="source-thread", sourceRunId="source-run",
+                        request="调整订单接口", target=RevisionTarget(type="application"),
+                        impactInteractionId="impact-no-scaffold", planningThreadId="planning-thread",
+                        status="design_planning" if branch == "design_stage_revision" else "awaiting_user",
+                        currentArtifact="technical-plan",
+                    )
+                    write_application_lifecycle(
+                        workspace,
+                        lifecycle.model_copy(update={"revision": 1, "active_formal_revision": active}),
+                        expected_revision=0,
+                    )
+                    backend = workspace / "backend"
+                    existing = backend / "src/main/java/com/cmbchina/backend/order/domain/entity/Order.java"
+                    existing.parent.mkdir(parents=True)
+                    existing.write_bytes(b"// custom business implementation\n")
+                    mapper = backend / "src/main/resources/mapper/order/OrderMapper.xml"
+                    mapper.parent.mkdir(parents=True)
+                    mapper.write_bytes(b"<!-- custom SQL -->\n")
+                    before = {str(path.relative_to(backend)): path.read_bytes()
+                              for path in backend.rglob("*") if path.is_file()}
+                    extension = backend / "src/main/java/com/cmbchina/backend/auth/extension/Capability.java"
+
+                    async def reconcile_capabilities(root: str) -> str:
+                        """隔离引擎授权的模板扩展写入，使业务文件副作用可独立比较。"""
+
+                        self.assertEqual(root, str(workspace))
+                        if outcome == "CHANGED":
+                            extension.parent.mkdir(parents=True)
+                            extension.write_bytes(b"// template-owned extension\n")
+                        return outcome
+
+                    ensure = AsyncMock(side_effect=reconcile_capabilities)
+                    with patch.object(TemplateReconcileService, "reconcile_capabilities", ensure):
+                        result = _reconcile_confirmed_revision(state)
+                    ensure.assert_awaited_once_with(str(workspace))
+                    after = {str(path.relative_to(backend)): path.read_bytes()
+                             for path in backend.rglob("*") if path.is_file() and path != extension}
+                    self.assertEqual(after, before)
+                    self.assertEqual(extension.exists(), outcome == "CHANGED")
+                    self.assertFalse(result["template_reconcile_pending"])
+                    continuation = result["revision_continuation"]
+                    self.assertEqual(continuation["action"], "continue_revision_build")
+                    consumed = consume_revision_continuation(
+                        workspace, change_id=active.change_id,
+                        token=continuation["token"], technical_plan_path=plan_path,
+                    )
+                    self.assertEqual(consumed.status, "building")
+
     def test_reconcile_retry_reuses_confirmed_plan_without_confirm_interaction(self) -> None:
         """模板收口失败后只能重试收口，不得重放已消费的 TechnicalPlan 确认。"""
 
@@ -956,8 +1025,6 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "app.graph.application_planning_workflow._reconcile_revision_template_capabilities",
                 side_effect=retry_reconcile,
             ) as reconcile, patch(
-                "app.graph.application_planning_workflow._inject_revision_backend_skeleton"
-            ), patch(
                 "app.graph.application_planning_workflow.issue_revision_continuation",
                 return_value=("continuation-token", issued),
             ):

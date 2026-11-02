@@ -1827,6 +1827,8 @@ export function useWorkflowConversation({
       return false
     } finally {
       finalizeSessionExecution()
+      // 终态快照已在消息正文中保留；释放重复的大对象引用，让历史缓存能真正回收。
+      setLiveWorkflows((current) => omitKey(current, identity.key))
     }
   }
 

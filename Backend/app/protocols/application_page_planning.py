@@ -210,6 +210,11 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "stateSnapshotKey": "workflow",
         "customEventName": "workflow-run",
         "recoveryActionField": "forwardedProps.applicationPlanningRecovery",
+        "requirementAuthorization": {
+            "requestField": "forwardedProps.requirementAuthorization",
+            "action": "preview", "customEventName": "requirement-authorization",
+            "stateSnapshotKey": "requirementAuthorization", "readOnly": True,
+        },
         "workflowActions": ["retry_template_reconcile"],
         "phases": [
             "requirements",
@@ -328,6 +333,11 @@ def build_application_page_planning_ag_ui_stream(
         **payload,
         "workflowScope": "application_planning",
     }
+    authorization_preview = (payload.get("forwardedProps") or {}).get("requirementAuthorization")
+    if authorization_preview is not None:
+        from app.protocols.requirement_authorization import build_requirement_authorization_stream
+
+        return build_requirement_authorization_stream(payload=normalized_payload, raw=authorization_preview, accept=accept)
     technical_message = (payload.get("forwardedProps") or {}).get("technicalPlanningConversation")
     if technical_message is not None:
         from app.protocols.technical_planning_conversation import build_technical_planning_conversation_stream

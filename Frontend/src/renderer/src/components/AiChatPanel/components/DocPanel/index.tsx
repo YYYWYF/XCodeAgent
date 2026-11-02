@@ -42,6 +42,8 @@ type Props = {
   technicalPlanStatus?: string
   structuredDocument?: 'requirement-doc' | 'technical-plan'
   structuredDocumentLoading?: boolean
+  workspaceRoot?: string
+  onReviseAuthorization?: () => void
 }
 
 /** 右侧产物面板：需求文档与技术规划使用结构化审核视图，其余文档只读展示 Markdown。 */
@@ -56,7 +58,9 @@ export default function DocPanel({
   technicalPlan,
   technicalPlanStatus,
   structuredDocument,
-  structuredDocumentLoading
+  structuredDocumentLoading,
+  workspaceRoot,
+  onReviseAuthorization
 }: Props): ReactElement {
   const isTechnicalPlan = structuredDocument === 'technical-plan'
   const isRequirementDoc = structuredDocument === 'requirement-doc'
@@ -128,6 +132,7 @@ export default function DocPanel({
                 <TechnicalPlanDocPanel
                   plan={technicalPlan}
                   productPlan={productPlan}
+                  onReviseAuthorization={onReviseAuthorization}
                 />
               ) : (
                 <div className={cx('doc-panel-empty')}>
@@ -139,6 +144,7 @@ export default function DocPanel({
               <RequirementDocPanel
                 productPlan={productPlan || {}}
                 spec={requirementSpec || {}}
+                workspaceRoot={workspaceRoot}
               />
             ) : (
               <MarkdownContent content={content ?? ''} />

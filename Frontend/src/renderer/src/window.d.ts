@@ -12,6 +12,7 @@ declare global {
     electron: ElectronAPI
     devAgentStudio?: {
       appUpdate: AppUpdateApi
+      getAppVersion: () => Promise<string>
       isElectron: boolean
       agentBaseUrl: string
       platform: string

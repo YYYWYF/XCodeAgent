@@ -19,7 +19,6 @@ from app.services.frontend_page_tree import find_frontend_page, project_plan_pag
 from app.services.page_identity import page_id_to_page_key
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
-from app.services.template_scaffold_injection import prebuilt_files_for_plan
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
@@ -183,8 +182,6 @@ def resolve_target_build_context(
         context = _endpoint_context(project_plan, target_id, api_contract_id, project_plan_path)
     else:
         raise ValueError(f"Unsupported build target type: {target_type}.")
-    # 把平台预置的后端骨架文件清单传给 Agent，让它知道哪些文件已存在、只需补业务逻辑。
-    context["prebuilt_files"] = prebuilt_files_for_plan(project_plan)
     return context
 
 

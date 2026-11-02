@@ -1,5 +1,6 @@
 import { QuestionCircleOutlined } from '@ant-design/icons'
 import { Button, message, Tooltip } from 'antd'
+import AppVersionBadge from '../components/AppVersionBadge'
 import {
   CreateApplicationAction,
   OpenWorkspaceAction,
@@ -41,7 +42,10 @@ export default function WelcomePage({
               <i />
               <i />
             </span>
-            <span>DevAgent Studio</span>
+            <span className={cx('app-version-brand')}>
+              <span>DevAgent Studio</span>
+              <AppVersionBadge />
+            </span>
           </div>
 
           <nav className={cx('welcome-utilities')} aria-label="欢迎页工具">

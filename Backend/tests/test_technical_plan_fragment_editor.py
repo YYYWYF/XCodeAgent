@@ -242,11 +242,18 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         self.assertEqual(result, {"candidate": True})
         self.assertEqual(editor.call_args.args[0]["planning_adjustment_request"], self.request)
 
-    def test_editor_call_budget_is_bounded(self):
-        """无休止搜索在有限模型轮次内失败，不产生成功候选。"""
+    def test_editor_can_finish_after_extended_tool_exploration(self):
+        """超过原八次模型及关联图步数限制后，仍能完成编辑、读回并返回候选。"""
 
-        with self.assertRaisesRegex(ValueError, "达到调用上限"):
-            self._run_editor([tool_response("grep", pattern="orders") for _ in range(10)])
+        result, model = self._run_editor([
+            *[tool_response("grep", pattern="orders.list", output_mode="content") for _ in range(40)],
+            tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
+                          old_string='"default": 20', new_string='"default": 8'),
+            tool_response("read_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH),
+            AIMessage(content="完成局部修复，等待确认。"),
+        ])
+        self.assertEqual(len(model.seen_messages), 43)
+        self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
 
     def test_generation_without_complete_candidate_uses_full_route(self):
         """没有完整候选时继续完整生成，不把缺失章节或类型错误的对象送入编辑器。"""

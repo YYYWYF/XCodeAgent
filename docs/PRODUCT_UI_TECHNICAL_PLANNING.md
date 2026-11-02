@@ -57,7 +57,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 正式 JSON 使用 `product-plan.v5`，页面事实只保留拍平的 `pages`，不生成、不存储也不兼容读取 `frontend_pages`。ProductPlan 不保存运行态角色、角色关系、`allowed_roles`、资源键、策略键或固定 `/roles` 页面。模型原始输出必须先通过精确 JSON 字段校验，再进入产品语义归一化和一致性校验。核心字段固定为：
 
-权限开启时，RequirementSpec 的每条 `restrictedPages` 都以已确认的 `targetPageId` 引用业务页面；服务端在模型输出校验后仅根据该稳定绑定确定性生成内部 `authorizationTargets.pageRules[{ruleId,pageId}]`，不得按页面展示名称匹配或猜测。操作规则必须为 `{ruleId,pageId,actionId}`。`actionId` 只在所属页面内唯一，不能脱离 `pageId` 作为权限目标；`stepId` 仅用于产品组合行为，绝不进入权限目标。自然语言中已经验证的受控页面或操作会自动启用需求层权限能力；若当前应用尚未启用权限，只补问真实初始管理员 `subjectId`，不要求用户重复选择开关。ProductPlan 不保存资源键或角色授权；联合确认前只校验受控页面 `pageId`、受控操作 `<pageId>_<actionId>` 与固定 `system_authorization_management` 的全局候选是否碰撞，实际资源目录仍由 TechnicalPlan 编译。
+权限开启时，RequirementSpec 的每条 `restrictedPages` 都以已确认的 `targetPageId` 引用业务页面；服务端在模型输出校验后仅根据该稳定绑定确定性生成内部 `authorizationTargets.pageRules[{ruleId,pageId}]`，不得按页面展示名称匹配或猜测。操作规则必须为 `{ruleId,pageId,actionId}`。`actionId` 只在所属页面内唯一，不能脱离 `pageId` 作为权限目标；`stepId` 仅用于产品组合行为，绝不进入权限目标。自然语言中已经验证的受控页面或操作会自动启用需求层权限能力；若当前应用尚未启用权限，只补问真实初始管理员 `subjectId`，不要求用户重复选择开关。ProductPlan 不另存资源键或角色授权。需求文档的“角色与权限”章节通过平台共享编译器展示业务角色、页面/操作资源及默认授权；联合确认前复验角色、目标映射和全局资源键碰撞。资源目录从当前 RequirementSpec、ProductPlan 与 application.json 派生，不保存第二份可编辑授权数据。技术规划仅追加操作到 Endpoint 的权限绑定，并以“接口权限绑定”展示本阶段结果。修改角色或默认授权必须返回需求修订并重新联合确认；页面权限不会自动继承为接口权限。
 
 ```json
 {
@@ -307,7 +307,7 @@ TechnicalPlan 模型不再生成 `navigation`、`local`、`external` 或产品�
 
 ### TechnicalPlan 上下文预算
 
-TechnicalPlan 的二次修改和首版完整候选的自动修复复用 DeepAgents `grep`、`read_file`、`edit_file`：模型按需搜索和读取片段，再以唯一匹配的 `old_string/new_string` 修改内存候选，不再输出整个 Contract 或规划。候选只包含 architecture、entities、api_contracts、pages，已确认 ProductPlan 和脱敏应用约束只读；工具不能访问工作区、改上游或整文件写入。单次读取最多 120 行、搜索最多 40 项、每轮最多 8 次模型调用。模型回复不代替文件修改；最终 JSON、根字段、中文说明和完整技术合同仍须通过平台校验，编译或校验失败按原始意见与当前错误继续局部修复，原三轮预算保持不变。全部通过后沿原事务保存完整 Markdown/内部 JSON 并等待明确确认。首版尚无候选时使用完整生成器；截断、缺章节或根字段类型错误先沿既有 JSON 恢复，仍没有完整候选时才在剩余预算内重生成。拿到候选后不因编辑失败回退整份重写。内部工具文件不会作为可编辑用户产物或新的配置源。
+TechnicalPlan 的二次修改和首版完整候选的自动修复复用 DeepAgents `grep`、`read_file`、`edit_file`：模型按需搜索和读取片段，再以唯一匹配的 `old_string/new_string` 修改内存候选，不再输出整个 Contract 或规划。候选只包含 architecture、entities、api_contracts、pages，已确认 ProductPlan 和脱敏应用约束只读；工具不能访问工作区、改上游或整文件写入。单次读取最多 120 行、搜索最多 40 项；不额外设置模型调用次数上限，图执行沿用框架默认配置。模型回复不代替文件修改；最终 JSON、根字段、中文说明和完整技术合同仍须通过平台校验，编译或校验失败按原始意见与当前错误继续局部修复，原三轮预算保持不变。全部通过后沿原事务保存完整 Markdown/内部 JSON 并等待明确确认。首版尚无候选时使用完整生成器；截断、缺章节或根字段类型错误先沿既有 JSON 恢复，仍没有完整候选时才在剩余预算内重生成。拿到候选后不因编辑失败回退整份重写。内部工具文件不会作为可编辑用户产物或新的配置源。
 
 用户原始修改要求固定保留在内部生成输入 `planning_adjustment_request`，每轮系统校验反馈单独放入 `technical_plan_validation_feedback`，只替换本轮诊断，不覆盖原始要求，也不累积历史修复全文。无候选时的完整生成、有候选时的局部编辑和确认复验均携带原始要求；确认时的校验修复沿用技术事务已冻结的业务要求。中文说明错误进入同一完整校验与编辑流程，不另起首版翻译模型。系统诊断不能撤销用户意见，修复仍须遵守已确认上游与应用配置，新版本继续等待正式确认。这两个输入仅用于模型上下文，不新增正式产物字段或公开 AG-UI 合同。
 
@@ -349,7 +349,7 @@ TechnicalPlan -> independent Endpoint mapping -> api_design_readiness_gate confi
 
 ProductPlan 或 UiDesign 变化时重新确认受影响 TechnicalPlan/运行时页面契约；TechnicalPlan API 或 Schema 变化时使相关 Endpoint 设计和 Build DAG 失效。纯代码实现错误进入 SmallTask 修复，不回到规划阶段。
 
-TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema 和页面。启用权限时，`authorization-manifest.v2` 必须完整覆盖 RequirementSpec 页面/操作规则及 ProductPlan 目标，确定性生成页面、顶层 action 和唯一系统资源，以及 Endpoint `operationResourceKeys` 的 ANY-OF 绑定；V1 出现数据权限字段必须拒绝确认。资源键、系统资源及 endpoint resource binding 均由确定性编译器生成。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
+TechnicalPlan 确认前执行确定性一致性检查：UI 中声明的每个业务操作、显示项和跳转必须能映射到 ProductPlan；每个 ProductPlan `business` action 和组合中的每个 `business` step 必须有且只有一个 endpoint 实现；TechnicalPlan 不得为 `navigation`、`interface` 或 `external` 行为重复作产品/UI 决策；每个技术绑定必须引用已存在的 action/step、endpoint、Schema 和页面。启用权限时，`authorization-manifest.v3` 必须完整覆盖 RequirementSpec 页面/操作规则及 ProductPlan 目标，确定性生成页面、顶层 action 和唯一系统资源，以及 Endpoint `operationResourceKeys` 的 ANY-OF 绑定；V1 出现数据权限字段必须拒绝确认。资源键、系统资源及 endpoint resource binding 均由确定性编译器生成。编译后的 `endpoint`、`navigation`、`local`、`external`、`sequence` 联合契约必须完整闭合，失败时不得进入工作台。
 
 ## 上下文预算
 

@@ -5,6 +5,7 @@ import unittest
 
 from app.services.authorization_manifest import (
     compile_authorization_manifest,
+    compile_authorization_resources,
     validate_authorization_configuration_projection,
     validate_authorization_manifest,
 )
@@ -88,6 +89,21 @@ class AuthorizationManifestTests(unittest.TestCase):
         )
         self.assertEqual(validate_authorization_manifest(manifest, requirement, product, contracts, pages, application_config=self._application_config()), [])
         self.assertEqual(manifest, compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config()))
+
+    def test_requirement_resources_are_identical_to_technical_plan_resources(self) -> None:
+        """上游无接口即可编译资源和授权，技术规划仅增加接口绑定，不重分配角色权限。"""
+
+        requirement, product, contracts, pages = self._inputs()
+        before = deepcopy((requirement, product))
+        resources = compile_authorization_resources(requirement, product, application_config=self._application_config())
+        manifest = compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
+        for key in ("resources", "defaultRoleAuthorization", "systemAuthorization"):
+            self.assertEqual(resources[key], manifest[key])
+        for key in ("pages", "actions"):
+            self.assertEqual(resources["bindings"][key], manifest["bindings"][key])
+        self.assertEqual(resources["bindings"]["endpoints"], [])
+        self.assertNotEqual(manifest["bindings"]["endpoints"], [])
+        self.assertEqual((requirement, product), before)
 
     def test_ignores_requirement_switch_when_compiling_manifest(self) -> None:
         """RequirementSpec 的历史开关不能覆盖 application.json。"""

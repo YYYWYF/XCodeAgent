@@ -12,10 +12,7 @@ from deepagents.backends.state import StateBackend
 from deepagents.backends.utils import create_file_data, file_data_to_string
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain_core.callbacks import BaseCallbackHandler
-from langgraph.errors import GraphRecursionError
 
 from app.agents.execution_control import RunCancellationMiddleware
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
@@ -27,7 +24,6 @@ TECHNICAL_PLAN_CANDIDATE_PATH = "/technical-plan.json"
 PRODUCT_CONTEXT_PATH = "/context/product-plan.json"
 CONSTRAINTS_CONTEXT_PATH = "/context/constraints.json"
 TECHNICAL_PLAN_EDIT_SECTIONS = ("architecture", "entities", "api_contracts", "pages")
-TECHNICAL_PLAN_EDIT_MODEL_LIMIT = 8
 
 
 class TechnicalPlanCandidateError(ValueError):
@@ -240,18 +236,15 @@ def edit_technical_plan_with_agent(
                 tool_token_limit_before_evict=None,
                 human_message_token_limit_before_evict=None,
             ),
-            ModelCallLimitMiddleware(run_limit=TECHNICAL_PLAN_EDIT_MODEL_LIMIT, exit_behavior="error"),
         ],
     )
     callbacks = [_PlanningTokenCallback(on_token)] if on_token else []
-    try:
-        agent.invoke(
-            {"messages": [{"role": "user", "content": "请按原始修改要求和本轮校验反馈局部编辑候选，然后读回复核。"}],
-             "files": _candidate_files(requirement_spec, existing_plan)},
-            config={"recursion_limit": 24, "callbacks": callbacks},
-        )
-    except (ModelCallLimitExceededError, GraphRecursionError) as exc:
-        raise ValueError("技术规划局部修订达到调用上限，未提交正式产物。") from exc
+    # 不额外限制模型调用次数或覆盖框架图步数，沿用正常收尾和运行取消机制。
+    agent.invoke(
+        {"messages": [{"role": "user", "content": "请按原始修改要求和本轮校验反馈局部编辑候选，然后读回复核。"}],
+         "files": _candidate_files(requirement_spec, existing_plan)},
+        config={"callbacks": callbacks},
+    )
     if backend.last_edit_error:
         raise ValueError("技术规划局部修改尚有未解决的工具错误：" + backend.last_edit_error)
     if not backend.successful_edits:

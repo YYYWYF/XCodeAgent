@@ -234,7 +234,61 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             })
             decision = classify_technical_planning_conversation("增加审核角色", {})
         self.assertEqual(decision.intent, "design_change")
-        self.assertIn("design_change", model.return_value.invoke.call_args.args[0])
+        model.assert_not_called()
+
+    def test_role_grants_override_technical_mention_but_binding_stays_technical(self):
+        """明确的角色授权不得被 @技术规划 覆盖，纯接口绑定仍留在技术规划。"""
+        with patch("app.agents.technical_planning_conversation.create_chat_model") as model:
+            for request in ("@技术规划 给审批员增加审批权限", "@技术规划 取消编辑者的删除权限", "@技术规划 新增角色：审核员"):
+                self.assertEqual(classify_technical_planning_conversation(request, {}).intent, "design_change")
+            self.assertEqual(classify_technical_planning_conversation(
+                "@技术规划 把审批操作绑定到 purchase_api.approve", {},
+            ).intent, "revise")
+            self.assertEqual(classify_technical_planning_conversation(
+                "@技术规划 将审批员改为审核员", {"requirement_spec": {"user_roles": [{"name": "审批员"}]}},
+            ).intent, "design_change")
+        model.assert_not_called()
+
+    def test_permission_changes_with_questions_still_return_upstream(self):
+        """附带解释和礼貌问法不抹掉权限修改，纯方法提问仍交给只读问答。"""
+        context = {"requirement_spec": {"user_roles": [{"name": "审批员"}]}}
+        with patch("app.agents.technical_planning_conversation.create_chat_model") as model:
+            for request in (
+                "@技术规划 给编辑者增加删除权限，并说明为什么",
+                "@技术规划 给编辑者增加删除权限并解释为什么",
+                "@技术规划 能不能给编辑者增加删除权限",
+                "@技术规划 将审批员改为审核员，同时说明为什么",
+                "如何管理权限？请给编辑者增加删除权限",
+                "我想添加权限功能，需要管理员才能看到列表页，并说明为什么",
+            ):
+                with self.subTest(request=request):
+                    self.assertEqual(classify_technical_planning_conversation(request, context).intent, "design_change")
+            model.assert_not_called()
+            model.return_value.invoke.return_value.content = json.dumps({"intent": "reply", "message": "只解释权限配置方法。"})
+            for request in ("如何给编辑者增加删除权限？", "为什么给编辑者增加删除权限？", "给编辑者增加删除权限会不会有风险？"):
+                self.assertEqual(classify_technical_planning_conversation(request, context).intent, "reply")
+            self.assertEqual(model.call_count, 3)
+
+    async def test_direct_technical_revision_cannot_bypass_upstream_grant_routing(self):
+        """直接发送 revise 也交回设计意图节点，保留 checkpoint 守卫和联合确认。"""
+        await self._seed_template_failure()
+        request = "@技术规划 给审批员增加审批权限，并说明为什么"
+        decision, _ = await self._send(request=request)
+        with (
+            patch("app.agents.design_conversation.router.create_chat_model") as classifier,
+            patch("app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                  return_value={"requirement_spec": deepcopy(self.h.requirement_spec), "clarification": clear_clarification(self.h.requirement_spec)}),
+            patch("app.graph.nodes.product_planning._generate_valid_product_plan", return_value=deepcopy(self.h.product_plan)),
+            patch("app.graph.nodes.planning.plan_project_with_chat_model") as technical,
+        ):
+            _, events = await self._send("revise", request, sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"])
+        technical.assert_not_called()
+        classifier.assert_not_called()
+        snapshot = await self.h.graph.aget_state(self.config)
+        self.assertEqual(snapshot.values.get("design_change_target"), "requirements")
+        self.assertEqual(load_application_lifecycle(self.h.workspace).initialization.stage,
+                         ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION)
+        self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events))
 
     async def test_design_change_keeps_checkpoint_version_guard(self):
         """上游回退和技术修改一样拒绝分类后已过期的 checkpoint。"""
