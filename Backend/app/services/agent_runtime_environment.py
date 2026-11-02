@@ -60,6 +60,7 @@ def build_runtime_environment(
     environment.update({
         "AGENT_RUNTIME_HOST": "127.0.0.1", "AGENT_RUNTIME_PORT": str(port),
         "AGENT_RUNTIME_LAUNCH_ID": launch_id, "AGENT_RUNTIME_PROFILE": "preview",
+        "AGENT_RUNTIME_WORKERS": "1",
         "AGENT_RUNTIME_AUTH_ENABLED": "false", "AGENT_RUNTIME_AUTH_MODE": "anonymous-session",
         "AGENT_RUNTIME_ANONYMOUS_SESSION_SECRET": secrets.token_urlsafe(48),
         "AGENT_RUNTIME_ANONYMOUS_COOKIE_NAME": "das_" + hashlib.sha256(str(root).encode()).hexdigest()[:16],
@@ -75,4 +76,10 @@ def build_runtime_environment(
         "AGENT_MAX_TOKENS": str(settings.default_max_tokens),
     })
     environment.update(runtime_database_environment(root, snapshot))
+    from app.services.python_runtime_checks import runtime_check_plan
+    from app.services.runtime_execution_policy import verify_execution_policy
+    formal = runtime_check_plan(root, {})
+    if formal is None:
+        raise ValueError("Runtime 启动缺少当前已确认的正式合同。")
+    environment["AGENT_RUNTIME_EXECUTION_POLICY_SHA256"] = verify_execution_policy(root, formal)
     return environment

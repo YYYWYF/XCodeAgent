@@ -46,12 +46,29 @@ export interface AgentUiTemplateConfig {
   name: string
   responsibility: string
   actionId: string
+  actions?: AgentUiAction[]
   contextItems: AgentContextItem[]
   capabilities: AgentCapability[]
   suggestedQuestions: string[]
   features: AgentUiFeatureFlags
   mock: AgentUiMockContent
-  runtime?: { path: string; pageId: string }
+  runtime?: { path: string; pageId: string; interactionKinds: Array<'clarification' | 'confirmation' | 'approval_required'> }
+}
+
+export interface AgentUiAction {
+  actionId: string
+  label: string
+  operation: 'send_message' | 'clear_conversation'
+  message: string
+  requiresConfirmation: boolean
+  stepId?: string
+}
+
+export interface AgentActionRequest {
+  requestId: string
+  actionId: string
+  stepId?: string
+  message?: string
 }
 
 export interface ConversationThread {
@@ -110,6 +127,7 @@ export interface AgentRunResult {
   error?: string
   pendingInteraction?: PendingAgentInteraction
   requiresSync?: boolean
+  resultUnknown?: boolean
 }
 
 export interface PendingAgentInteraction {

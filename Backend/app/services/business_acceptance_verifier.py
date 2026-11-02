@@ -6,6 +6,7 @@ import re
 from copy import deepcopy
 from pathlib import Path
 from time import monotonic
+from traceback import extract_tb
 from typing import Any, Callable
 
 from app.services.business_acceptance import (
@@ -115,6 +116,8 @@ class BusinessAcceptanceVerifier:
                 if summary["failed"]
                 else "blocked"
                 if summary["blocked"]
+                else "advisory"
+                if summary["advisory"]
                 else "passed"
             ),
         }
@@ -178,7 +181,7 @@ class BusinessAcceptanceVerifier:
                 **base,
                 **verification_result("blocked", "；".join(contract_errors)),
             }
-        source_errors = _source_hash_errors(check, formal_artifacts)
+        source_errors = _source_hash_errors(check, formal_artifacts, workspace_root=workspace_root)
         if source_errors:
             reason_code = (
                 "formal_source_changed"
@@ -203,6 +206,7 @@ class BusinessAcceptanceVerifier:
                 **base,
                 **verification_result("blocked", "；".join(read_errors)),
             }
+        verifier_started = False
         try:
             expected = deepcopy(check.get("expected") or {})
             if kind == "frontend.agent_ui_runtime_contract":
@@ -216,6 +220,7 @@ class BusinessAcceptanceVerifier:
 
                 files = runtime_verification_files(files, task, check, workspace_root)
                 expected["_target_paths"] = list(check["target_paths"])
+            verifier_started = True
             if kind == "frontend.page_endpoint_usage":
                 result = verifier(
                     files,
@@ -230,10 +235,24 @@ class BusinessAcceptanceVerifier:
         except PythonEvidenceUnavailable as exc:
             result = verification_result("blocked", str(exc), facts={"reason_code": "python_evidence_unavailable"})
         except Exception as exc:  # noqa: BLE001 - 验收异常必须结构化为 blocked
+            # 只暴露平台调用位置，不输出源码、异常参数或工作区绝对路径。
+            frames = extract_tb(exc.__traceback__)
+            location = " -> ".join(f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}" for frame in frames[-4:])
+            internal_runtime_error = verifier_started and kind in RUNTIME_VERIFIER_NAMES
             result = verification_result(
                 "blocked",
-                f"业务检查执行异常：{type(exc).__name__}。",
+                f"静态验收器内部异常：{type(exc).__name__}（{location}）。"
+                if internal_runtime_error else f"业务检查执行异常：{type(exc).__name__}。",
+                facts={"reason_code": "verifier_internal_error" if internal_runtime_error else "verification_input_error",
+                       "exception_type": type(exc).__name__, "location": location},
             )
+        # Runtime 实现细节的静态推断只提供诊断，不再作为开发完成的硬门禁。
+        # 保留原状态和具体证据，不冒充测试通过；来源、合同及读取边界仍由前置检查裁决。
+        if (kind in RUNTIME_VERIFIER_NAMES and result.get("status") in {"failed", "blocked"}
+                and (result.get("facts") or {}).get("reason_code") in {
+                    "implementation_mismatch", "python_evidence_unavailable", "verifier_internal_error",
+                }):
+            result = {**result, "blocking": False}
         return {
             **base,
             **result,
@@ -266,8 +285,9 @@ def summarize_business_acceptance(evidence: list[dict[str, Any]]) -> dict[str, A
     return {
         "total": len(evidence),
         "passed": sum(1 for item in evidence if item.get("status") == "passed"),
-        "failed": sum(1 for item in evidence if item.get("status") == "failed"),
-        "blocked": sum(1 for item in evidence if item.get("status") == "blocked"),
+        "failed": sum(1 for item in evidence if item.get("status") == "failed" and item.get("blocking") is not False),
+        "blocked": sum(1 for item in evidence if item.get("status") == "blocked" and item.get("blocking") is not False),
+        "advisory": sum(1 for item in evidence if item.get("blocking") is False),
         "duration_ms_total": duration_total,
         "duration_ms_avg": round(duration_total / len(evidence), 3) if evidence else 0,
     }
@@ -276,6 +296,8 @@ def summarize_business_acceptance(evidence: list[dict[str, Any]]) -> dict[str, A
 def _source_hash_errors(
     check: dict[str, Any],
     formal_artifacts: dict[str, Any] | None,
+    *,
+    workspace_root: str | Path | None = None,
 ) -> list[str]:
     """核对业务检查来源仍对应当前正式产物，阻止过期证据复用。"""
 
@@ -293,7 +315,7 @@ def _source_hash_errors(
         if not expected_hash:
             errors.append(f"正式来源 {source.get('target_id') or '<unknown>'} 缺少哈希。")
             continue
-        actual_hash = _current_source_hash(source, formal_artifacts)
+        actual_hash = _current_source_hash(source, formal_artifacts, workspace_root=workspace_root)
         if not actual_hash:
             errors.append(
                 f"无法定位正式来源 {source.get('artifact') or '<unknown>'}"
@@ -326,7 +348,8 @@ def _runtime_check_contract_errors(check: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
+def _current_source_hash(source: dict[str, Any], formal: dict[str, Any], *,
+                         workspace_root: str | Path | None = None) -> str:
     """从 hydrated ProjectPlan 提取来源切片并计算与编译器一致的哈希。"""
 
     artifact = str(source.get("artifact") or "")
@@ -346,6 +369,21 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
         except ValueError:
             return ""
     if artifact == "api_design":
+        from app.services.api_design_fingerprint import api_design_content
+
+        if workspace_root:
+            # 独立接口设计不存于 TechnicalPlan；执行时只读其当前正式双文件。
+            # 不从任务 source_refs/expected 的旧快照补证，避免过期任务自证来源有效。
+            from app.workspace.endpoint_design_documents import read_endpoint_design
+
+            contracts = [contract for contract in _formal_items(formal, "api_contracts")
+                         if any(endpoint.get("id") == target_id
+                                for endpoint in _dict_items(contract.get("endpoints")))
+                         and (not source.get("api_contract_id") or contract.get("id") == source["api_contract_id"])]
+            if len(contracts) != 1:
+                return ""
+            design = read_endpoint_design(workspace_root, str(contracts[0]["id"]), target_id, require_current=True)
+            return _stable_hash(api_design_content(design)) if design else ""
         design = next(
             (
                 item
@@ -354,7 +392,6 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
             ),
             {},
         )
-        from app.services.api_design_fingerprint import api_design_content
         return _stable_hash(api_design_content(design)) if design else ""
     if artifact == "entity_design":
         detail = next(

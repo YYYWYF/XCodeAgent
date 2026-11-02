@@ -15,6 +15,7 @@ from app.agents.main.technical_plan_editor import (
     TECHNICAL_PLAN_CANDIDATE_PATH,
     TechnicalPlanCandidateBackend,
     edit_technical_plan_with_agent,
+    ProductPlanRevisionRequired,
 )
 from app.config import Settings
 from app.services.run_workers import bind_run_workers
@@ -123,8 +124,18 @@ class TechnicalPlanFragmentEditorTests(TestCase):
             self.assertIn(self.request, messages[0].content)
             self.assertIn("本轮需复核 Schema 引用", messages[0].content)
             self.assertNotIn("SECRET_SENTINEL", str(messages))
-        self.assertEqual(set(model.seen_tools[0]), {"grep", "read_file", "edit_file"})
+        self.assertEqual(set(model.seen_tools[0]), {"grep", "read_file", "edit_file", "request_product_revision"})
         self.assertNotIn("orders.other", model.seen_messages[0][0].content)
+
+    def test_product_revision_exits_without_fabricating_endpoint_or_consuming_more_calls(self):
+        """真实工具发现上游归属错误后立即结束，保留候选并携带具体动作诊断。"""
+        original = deepcopy(self.baseline)
+        with self.assertRaises(ProductPlanRevisionRequired) as raised:
+            self._run_editor([tool_response("request_product_revision", page_id="home", action_id="ask_recommended",
+                reason="产品原文仅向助手发送推荐问题，应声明 Agent 动作而非业务接口。")])
+        self.assertIn("ask_recommended", str(raised.exception))
+        self.assertEqual(self.baseline, original)
+        self.assertEqual(raised.exception.candidate["api_contracts"], original["api_contracts"])
 
     def test_ambiguous_match_returns_error_then_can_retry_with_context(self):
         """原生 edit_file 拒绝重复匹配，模型可补充上下文后完成同一候选。"""

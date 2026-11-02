@@ -200,7 +200,8 @@ def _page_brief(page: dict[str, Any]) -> str:
             if not isinstance(raw_action, dict):
                 continue
             action_id = str(raw_action.get("actionId") or "").strip()
-            if not action_id or action_id in surface_action_ids:
+            if not action_id or (action_id in surface_action_ids
+                                 and (raw_action.get("behavior") or {}).get("type") != "sequence"):
                 continue
             behavior = raw_action.get("behavior")
             behavior_type = (

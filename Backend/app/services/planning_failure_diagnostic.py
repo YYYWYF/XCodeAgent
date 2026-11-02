@@ -30,6 +30,10 @@ def _issue_reason(code: str) -> str:
         return "任务校验所需的上下文或约束信息不符合要求。"
     if code == "GLOBAL_CANDIDATE_MISSING":
         return "部分任务未生成通过检查的执行计划。"
+    if code == "GLOBAL_COMPILED_PLAN_INVALID":
+        return "平台编译的累计执行计划存在契约或来源范围冲突。"
+    if code == "GLOBAL_REPAIR_BLOCKED":
+        return "全局检查发现不能通过模型重试修复的问题。"
     return "执行计划未通过检查，未能确定具体原因。"
 
 
@@ -62,6 +66,19 @@ def planning_failure_evidence(
     else:
         summary = "生成执行计划失败：" + _issue_reason(failure.code)
     reasons: list[str] = []
+    # 主失败是聚合码时，编译器诊断保存在 details 中，而不是 Unit.current_issues。
+    # 只消费已知平台编译错误的结构化 errors，不展示模型原文或任意 details。
+    for issue in failure.details.get("issues", ()):
+        if not isinstance(issue, Mapping) or issue.get("code") != "GLOBAL_COMPILED_PLAN_INVALID":
+            continue
+        reasons.append("GLOBAL_COMPILED_PLAN_INVALID：" + _issue_reason("GLOBAL_COMPILED_PLAN_INVALID"))
+        details = issue.get("details")
+        validation = details.get("validation") if isinstance(details, Mapping) else None
+        errors = validation.get("errors") if isinstance(validation, Mapping) else None
+        if isinstance(errors, (list, tuple)):
+            reasons.extend(str(error)[:500] for error in errors[:5] if isinstance(error, str))
+    if failure.code == "GLOBAL_REPAIR_BLOCKED" and reasons:
+        summary = "生成执行计划失败：" + _issue_reason("GLOBAL_COMPILED_PLAN_INVALID")
     for unit_id in failure.unit_ids:
         unit = snapshot.unit_states.get(unit_id)
         if unit is None:

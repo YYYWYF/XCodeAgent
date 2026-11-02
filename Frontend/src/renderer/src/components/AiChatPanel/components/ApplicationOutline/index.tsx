@@ -21,14 +21,12 @@ import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
 import AgentOutlineSection from './AgentOutlineSection'
-import AgentInterfaceRows from './AgentInterfaceRows'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 import {
   collectRelatedKeys,
   collectVisibleKeys,
   containsMenuKey,
-  matchingAgentInterfaces,
   pageTreeItems
 } from './outlineUtils'
 
@@ -67,8 +65,6 @@ export type ApplicationOutlineProps = {
 export default function ApplicationOutline({
   agents = [],
   selectedAgentId,
-  selectedAgentInterfaceId,
-  onAgentInterfaceSelect,
   onAgentSelect,
   onAgentRefresh,
   agentError,
@@ -142,7 +138,6 @@ export default function ApplicationOutline({
     })
   }, [apiContracts, outlineQuery])
   const query = outlineQuery.trim().toLocaleLowerCase()
-  const visibleAgentInterfaces = matchingAgentInterfaces(agents, outlineQuery)
   const visibleEntities = entities.filter((entity) =>
     [entity.id, entity.label, entity.purpose].some((value) =>
       value.toLocaleLowerCase().includes(query)
@@ -241,26 +236,15 @@ export default function ApplicationOutline({
               >
                 <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
                 <span>接口</span>
-                <span className={cx('development-count')}>
-                  {developmentCompletedCount([
-                    ...agents.map((agent) => developmentArtifacts?.agents?.[agent.agentId]),
-                    ...apiContracts.flatMap((contract) =>
-                      contract.endpoints.map(
-                        (endpoint) =>
-                          developmentArtifacts?.endpoints[endpoint.apiContractId || contract.id]?.[
-                            endpoint.id
-                          ]
-                      )
-                    )
-                  ])}
-                  /{agents.length + apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}
+                <span className={cx('development-count')} title="当前映射或接入设计已确认的接口数量">
+                  {apiContracts.reduce((total, contract) => total + contract.endpoints.filter(
+                    (endpoint) => endpoint.designed === true
+                  ).length, 0)}
+                  /{apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}
                 </span>
               </button>
               {apiExpanded ? (
                 <div className={cx('api-group')}>
-                  <AgentInterfaceRows agents={visibleAgentInterfaces}
-                    selectedAgentId={selectedAgentInterfaceId} onSelect={onAgentInterfaceSelect}
-                    developmentArtifacts={developmentArtifacts} />
                   {visibleApiContracts.map((contract) => (
                     <ApiOutlineGroup
                       key={contract.id}
@@ -276,7 +260,7 @@ export default function ApplicationOutline({
                       selectedKey={selectedApiEndpointKey}
                     />
                   ))}
-                  {visibleApiContracts.length === 0 && visibleAgentInterfaces.length === 0 ? (
+                  {visibleApiContracts.length === 0 ? (
                     <div className={cx('outline-empty')}>
                       暂无接口
                     </div>

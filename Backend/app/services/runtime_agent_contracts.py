@@ -66,8 +66,11 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
     result = {}
     for item in raw:
         contract = plain_json(item)
-        if not isinstance(contract, dict) or set(contract) != {"agentId", "name", "purpose", "pageIds", "agentSettings"}:
-            raise ValueError("Agent 合同必须且只能包含 agentId/name/purpose/pageIds/agentSettings。")
+        if not isinstance(contract, dict) or set(contract) != {"agentId", "name", "purpose", "pageIds", "agentSettings", "interactionContract"}:
+            raise ValueError("Agent 合同必须且只能包含 agentId/name/purpose/pageIds/agentSettings/interactionContract。")
+        from app.domain.runtime_endpoint_contract import TextConversationContract
+        contract["interactionContract"] = TextConversationContract.model_validate(
+            contract["interactionContract"]).model_dump(mode="json", by_alias=True)
         agent_id = contract["agentId"]
         if not isinstance(agent_id, str) or len(agent_id) > 128 or re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None or agent_id == "runtime" or agent_id in result:
             raise ValueError("Agent 身份必须是唯一 lower_snake_case，且不能占用 runtime。")
@@ -109,6 +112,15 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
         _reject_secrets(settings)
         for module in ("skills", "knowledge"):
             agent_resource_files(module, settings[module])
+        write_keys = {(api.get("id"), endpoint.get("id")) for api in plan.get("api_contracts", ())
+            for endpoint in api.get("endpoints", ()) if endpoint.get("method") not in {"GET", "HEAD", "OPTIONS"}}
+        if any((tool["apiContractId"], tool["endpointId"]) in write_keys for tool in tools) and not (
+                set(contract["interactionContract"]["interactionKinds"]) & {"confirmation", "approval_required"}):
+            raise ValueError(f"Agent {agent_id} 的写入 Tool 必须显式声明 confirmation 或 approval_required，不能绕过执行前确认。")
+        if any(endpoint.get("kind") == "agent_runtime" for api in plan.get("api_contracts", ())
+               for endpoint in api.get("endpoints", ()) if (api.get("id"), endpoint.get("id")) in {
+                   (tool["apiContractId"], tool["endpointId"]) for tool in tools}):
+            raise ValueError(f"Agent {agent_id} 的 Tool 必须引用业务 Endpoint，不能递归绑定 Agent 运行入口。")
         result[agent_id] = deepcopy(contract)
     return result
 
@@ -120,7 +132,8 @@ def agent_endpoint_keys(contract: Mapping[str, Any]) -> tuple[tuple[str, str], .
                               for tool in contract["agentSettings"]["tools"]["bindings"]))
 
 
-def scoped_agent_ids(plan: Mapping[str, Any], target_type: str, target_id: str) -> tuple[str, ...]:
+def scoped_agent_ids(plan: Mapping[str, Any], target_type: str, target_id: str,
+                     api_contract_id: str | None = None) -> tuple[str, ...]:
     """页面带入其绑定 Agent，业务 Endpoint 开发不反向扩大为全部 Agent 开发。"""
 
     contracts = agent_contract_index(plan)
@@ -132,6 +145,13 @@ def scoped_agent_ids(plan: Mapping[str, Any], target_type: str, target_id: str) 
         return tuple(contracts)
     if target_type == "page":
         return tuple(key for key, contract in contracts.items() if target_id in contract["pageIds"])
+    if target_type == "endpoint":
+        matches = [endpoint for api in plan.get("api_contracts", ())
+                   if api.get("id") == api_contract_id for endpoint in api.get("endpoints", ())
+                   if endpoint.get("id") == target_id]
+        if len(matches) != 1:
+            raise ValueError("Endpoint 目标必须提供唯一正式复合身份。")
+        return (matches[0]["agent_id"],) if matches[0].get("kind") == "agent_runtime" else ()
     return ()
 
 

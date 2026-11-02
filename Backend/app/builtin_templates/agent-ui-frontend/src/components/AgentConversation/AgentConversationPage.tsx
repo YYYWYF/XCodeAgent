@@ -4,7 +4,9 @@ import { MenuOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
 import type {
   AgentConversationAdapter,
   AgentUiTemplateConfig,
-  ConversationThread
+  ConversationThread,
+  AgentActionRequest,
+  AgentRunResult
 } from '@/typings/agentConversation'
 import { AgentChatCore, createAgentConversationAdapter } from './AgentChatCore'
 import { agentIconCompatibilityProps } from './iconCompatibility'
@@ -16,6 +18,8 @@ const { Text, Title } = Typography
 export interface AgentConversationPageProps {
   config: AgentUiTemplateConfig
   adapter?: AgentConversationAdapter
+  actionRequest?: AgentActionRequest
+  onActionResult?: (requestId: string, result: AgentRunResult) => void
 }
 
 /** 渲染桌面会话列表并保持假会话数据来自 Adapter。 */
@@ -57,7 +61,9 @@ function AgentConversationSidebar({
 /** 渲染生成应用的固定独立 Agent 会话页面。 */
 export function AgentConversationPage({
   config,
-  adapter: providedAdapter
+  adapter: providedAdapter,
+  actionRequest,
+  onActionResult
 }: AgentConversationPageProps): React.ReactElement {
   const adapter = useMemo(
     () => providedAdapter ?? createAgentConversationAdapter(config),
@@ -140,6 +146,8 @@ export function AgentConversationPage({
           config={config}
           onThreadCreated={registerCreatedThread}
           threadId={selectedThreadId}
+          actionRequest={actionRequest}
+          onActionResult={onActionResult}
         />
       </section>
       <AgentMobileChatDrawer

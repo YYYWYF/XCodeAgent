@@ -106,6 +106,13 @@ def _tools(program, unit, function, factory, expected, errors, blocked) -> None:
 
     config = expected["configuration"]
     expression = program.expand(unit, program.keyword(factory, "tools"), function)
+    if isinstance(expression, (ast.List, ast.Tuple)):
+        # 平台只读技能工具与正式业务 Tool 分别验收，不能误判为未声明业务工具。
+        expression = ast.List(elts=[item for item in expression.elts if not (
+            isinstance(item, ast.Starred) and isinstance(item.value, ast.Call)
+            and program.symbol(unit, item.value.func) == "app.agent.execution_guard.resource_tools"
+            and len(item.value.args) == 1 and isinstance(item.value.args[0], ast.Name)
+            and item.value.args[0].id == "execution_policy")], ctx=ast.Load())
     value = program.value(unit, expression, function) if expression is not None else None
     if not config["enabled"]:
         if value not in ([], None):

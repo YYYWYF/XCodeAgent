@@ -42,6 +42,8 @@ export type DevelopmentPlanningPageTreeNode = {
   children?: DevelopmentPlanningPageTreeNode[]
 }
 export type DevelopmentPlanningApiEndpoint = {
+  kind: 'business' | 'agent_runtime'
+  agent_id?: string
   apiContractId?: string
   id: string
   name?: string

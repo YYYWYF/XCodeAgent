@@ -597,6 +597,14 @@ def assemble_scope_build_task_plan(
     assembled = dict(assembled)
     # Plan root 的 scope 与 TemplateState 都只绑定当前 PlanningRun，不能继承旧 baseline。
     assembled["build_execution_scope"] = deepcopy(plain_json(build_execution_scope))
+    from app.services.runtime_execution_policy import execution_policy_operation
+    operation = execution_policy_operation(plain_json(project_plan), assembled["build_execution_scope"])
+    if operation is not None:
+        assembled["runtime_execution_policy"] = operation
+    from app.services.runtime_target_acceptance import target_acceptance_plan
+    acceptance = target_acceptance_plan(plain_json(project_plan), assembled["build_execution_scope"])
+    if acceptance is not None:
+        assembled["targetAcceptance"] = acceptance
     assembled["template_context"] = deepcopy(frozen_template_context)
     # Assembly 只产生等待 Global Validation 的内存草稿；正式 PendingPlan 生命周期
     # 由后续 Controller / persistence 在 Global success 后赋予，且不能继承 confirmed 基线。

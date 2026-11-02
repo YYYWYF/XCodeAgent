@@ -50,11 +50,15 @@ def registered_factory(program, expected):
         raise PythonEvidenceUnavailable("缺少实际 Agent 分派函数。")
     returns = [node for node in active_nodes(dispatcher[1]) if isinstance(node, ast.Return)]
     call = returns[0].value if len(returns) == 1 else None
+    if not (isinstance(call, ast.Call) and program.symbol(unit, call.func) == "app.agent.execution_guard.verify_text_graph"
+            and len(call.args) == 2 and isinstance(call.args[1], ast.Name) and call.args[1].id == "execution_policy"):
+        raise PythonEvidenceUnavailable("Agent 分派必须经过平台 verify_text_graph 复核实际装配。")
+    call = scoped_value(program, unit, dispatcher[1], call.args[0])
     if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Subscript)
             and isinstance(call.func.value, ast.Name) and call.func.value.id == "_AGENT_BUILDERS"
             and isinstance(call.func.slice, ast.Name) and call.func.slice.id == "agent_id"):
         raise PythonEvidenceUnavailable("Agent 分派没有返回正式注册表对应的 Builder。")
-    for name in ("model", "runtime_context", "checkpointer"):
+    for name in ("model", "runtime_context", "checkpointer", "execution_policy"):
         value = program.keyword(call, name)
         if not isinstance(value, ast.Name) or value.id != name:
             raise PythonEvidenceUnavailable(f"Agent 分派未原样传递 {name}。")

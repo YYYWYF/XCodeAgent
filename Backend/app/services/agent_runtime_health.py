@@ -3,6 +3,8 @@
 import socket
 import time
 import subprocess
+import hashlib
+from pathlib import Path
 
 import httpx
 
@@ -19,7 +21,8 @@ def allocate_runtime_port() -> int:
 
 def runtime_health(url: str, launch_id: str, *, database_required: bool, health_path: str = "/health",
                    expected_agent_ids: list[str] | None = None, profile: str = "preview",
-                   allowed_agent_ids: list[str] | None = None) -> tuple[bool, str]:
+                   allowed_agent_ids: list[str] | None = None, expected_application: Path | None = None,
+                   expected_namespace: str | None = None) -> tuple[bool, str]:
     """校验本轮启动身份和模板健康合同，拒绝其他服务占用端口时误判成功。"""
 
     if not launch_id:
@@ -37,6 +40,18 @@ def runtime_health(url: str, launch_id: str, *, database_required: bool, health_
     checks = payload.get("checks")
     if payload.get("profile") != profile:
         return False, "Runtime 健康响应的运行 Profile 与本次启动不一致。"
+    deployment = payload.get("deployment")
+    if (not isinstance(deployment, dict) or type(deployment.get("workers")) is not int
+            or deployment["workers"] != 1 or deployment.get("processLockHeld") is not True
+            or deployment.get("acceptingRuns") is not True or deployment.get("profile") != profile
+            or type(deployment.get("processId")) is not int or deployment["processId"] <= 0):
+        return False, "Runtime 缺少有效的单 worker、进程锁或执行就绪事实。"
+    for key, source in (("applicationSha256", str(expected_application.resolve()) if expected_application is not None else None),
+                        ("namespaceSha256", expected_namespace)):
+        value = deployment.get(key)
+        if (not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
+                or source is not None and value != hashlib.sha256(source.encode()).hexdigest()):
+            return False, "Runtime 启动事实的应用或命名空间与本次启动不一致。"
     if expected_agent_ids is not None:
         actual = payload.get("agentIds")
         if not isinstance(actual, list) or any(not isinstance(item, str) for item in actual) or len(set(actual)) != len(actual):
@@ -46,17 +61,24 @@ def runtime_health(url: str, launch_id: str, *, database_required: bool, health_
             return False, "Runtime 实际注册的 Agent 与当前正式合同不一致。"
     if not isinstance(checks, dict):
         return False, "Runtime 健康响应缺少 checks。"
-    expected = {"businessApi": "ready", "agUi": "ready", "anonymousSession": "ready",
+    expected = {"businessApi": "ready", "agUi": "ready", "deployment": "ready", "execution": "ready",
                 "database": "ready" if database_required else "not_required"}
+    # Debug 使用独立短期会话；普通预览和 Probe 仍必须证明匿名会话已就绪。
+    if profile == "debug":
+        expected.update(anonymousSession="not_required", debugSession="ready")
+    else:
+        expected["anonymousSession"] = "ready"
     failed = [key for key, value in expected.items() if checks.get(key) != value]
     if payload.get("status") != "ok" or failed:
         return False, "Runtime 就绪检查未通过：" + "、".join(failed or ["status"]) + "，请查看启动日志。"
-    return True, "Runtime 健康、业务路由、AG-UI、匿名会话及数据库检查通过。"
+    session_label = "调试会话" if profile == "debug" else "匿名会话"
+    return True, f"Runtime 健康、业务路由、AG-UI、{session_label}及数据库检查通过。"
 
 
 def wait_runtime_ready(process: subprocess.Popen, url: str, launch_id: str, *, database_required: bool,
                        expected_agent_ids: list[str] | None = None, profile: str = "preview",
-                       allowed_agent_ids: list[str] | None = None) -> tuple[bool, str, bool]:
+                       allowed_agent_ids: list[str] | None = None, expected_application: Path | None = None,
+                       expected_namespace: str | None = None) -> tuple[bool, str, bool]:
     """在固定时间内等本轮进程稳定就绪，取消或提前退出立即返回，不重新启动。"""
 
     from app.services.run_workers import current_run_id
@@ -69,7 +91,8 @@ def wait_runtime_ready(process: subprocess.Popen, url: str, launch_id: str, *, d
         if process.poll() is not None:
             return False, f"Runtime 提前退出，退出码 {process.returncode}，请查看完整启动日志。", False
         ready, message = runtime_health(url, launch_id, database_required=database_required,
-                                       expected_agent_ids=expected_agent_ids, profile=profile, allowed_agent_ids=allowed_agent_ids)
+                                       expected_agent_ids=expected_agent_ids, profile=profile, allowed_agent_ids=allowed_agent_ids,
+                                       expected_application=expected_application, expected_namespace=expected_namespace)
         now = time.monotonic()
         stable_since = (stable_since if stable_since is not None else now) if ready else None
         if stable_since is not None and now - stable_since >= 2:

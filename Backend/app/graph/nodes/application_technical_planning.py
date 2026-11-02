@@ -277,10 +277,12 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
 def _technical_generation_error_payload(errors: list[str]) -> dict[str, Any]:
     """把模型生成失败转换为仅供当前 TechnicalPlan 审阅门消费的错误载荷。"""
 
+    from app.agents.main.technical_plan_editor import product_revision_payload
+
     return {
         "mode": "technical_plan_generation_error",
         "status": "requires_user_input",
-        "message": "技术规划自动修复后仍未通过校验。",
+        **product_revision_payload(errors),
         "errors": [str(error).strip() for error in errors if str(error).strip()][:8],
         "questions": [],
     }

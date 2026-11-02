@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Button, Card, Grid, Space, Tag, theme } from 'antd'
 import { CloseOutlined, FullscreenOutlined, RobotOutlined } from '@ant-design/icons'
-import type { AgentConversationAdapter, AgentUiTemplateConfig } from '@/typings/agentConversation'
+import type { AgentConversationAdapter, AgentUiTemplateConfig, AgentActionRequest, AgentRunResult } from '@/typings/agentConversation'
 import { AgentChatCore, createAgentConversationAdapter } from './AgentChatCore'
 import { agentIconCompatibilityProps } from './iconCompatibility'
 import { AGENT_CONVERSATION_STYLES, createAgentUiCssVariables } from './styles'
@@ -15,6 +15,8 @@ export interface AgentFloatingPanelProps {
   config: AgentUiTemplateConfig
   adapter?: AgentConversationAdapter
   onOpenStandalone?: () => void
+  actionRequest?: AgentActionRequest
+  onActionResult?: (requestId: string, result: AgentRunResult) => void
 }
 
 const LAUNCHER_SIZE = 56
@@ -114,7 +116,9 @@ function useFloatingPosition(compact: boolean): {
 export function AgentFloatingPanel({
   config,
   adapter,
-  onOpenStandalone
+  onOpenStandalone,
+  actionRequest,
+  onActionResult
 }: AgentFloatingPanelProps): React.ReactElement {
   const { token } = theme.useToken()
   const activeAdapter = React.useMemo(
@@ -127,6 +131,9 @@ export function AgentFloatingPanel({
   const [threadId, setThreadId] = useState<string>()
   const launcher = useRef<HTMLButtonElement>(null)
   const { position, dragHandlers, consumeSuppressedClick } = useFloatingPosition(compact)
+  useEffect(() => {
+    if (actionRequest) setOpen(true)
+  }, [actionRequest])
 
   /** 关闭面板并把焦点还给浮动入口。 */
   const closePanel = React.useCallback((): void => {
@@ -150,10 +157,12 @@ export function AgentFloatingPanel({
   }, [closePanel, open])
 
   const chat = <AgentChatCore adapter={activeAdapter} config={config} threadId={threadId}
+    actionRequest={actionRequest} onActionResult={onActionResult}
     onThreadCreated={(thread) => setThreadId(thread.id)} />
   return (
     <div
       className="x-agent-ui x-agent-floating"
+      data-agent-id={config.agentId}
       data-agent-ui-template={config.templateVersion}
       data-agent-ui-surface="floating_panel"
       style={createAgentUiCssVariables(token)}

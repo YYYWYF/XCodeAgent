@@ -3,9 +3,15 @@
 
 TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT = (
     "Agent 合同规则：agent_contracts 必须且仅覆盖已确认 ProductPlan.agents 中存在 "
-    "surface.enabled=true 页面入口的 Agent；没有启用入口时省略或使用空数组。"
+    "surface.enabled=true 页面入口的 Agent；没有启用入口时显式使用空数组，不省略。"
     "允许补齐缺失合同、移除已停用合同和修复七模块配置，不能扩大已确认产品范围。"
-    "每项只能有 agentId、name、purpose、pageIds、agentSettings；"
+    "每项只能有 agentId、name、purpose、pageIds、agentSettings、interactionContract；"
+    'interactionContract 必须完整采用以下结构，其中 interactionKinds 按业务需要填写：{"mode":"conversation","inputSchema":{"type":"object",'
+    '"properties":{},"required":[],"additionalProperties":false},"textOutput":true,'
+    '"publicStateSchema":null,"outcomes":[],"interactionKinds":[]}。'
+    "文本会话是公开输入输出形式，不限制内部 Tool/Skill/Knowledge；按已确认业务需求规划 enabled 和 bindings/files，不得为通过校验删除或禁用已有能力。"
+    "interactionKinds 按业务需要显式声明 clarification/confirmation/approval_required 的不重复子集；写入 Tool 必须声明 confirmation 或 approval_required 并在实际执行前确认。"
+    "普通 Endpoint 必须显式 kind=business；首次规划由平台物化运行入口，修订时原样保留已有运行入口。"
     "agentId/name/purpose 原样采用产品事实，agentId 为 lower_snake_case 且不能为 runtime。"
     "pageIds 按 pageActionBindings 顺序只包含 surface.enabled=true 的 pageId。"
     "agentSettings 必须且只能有 prompt/model/memory/tools/skills/knowledge/context 七个对象。"

@@ -19,6 +19,11 @@ def python_shape(program: PythonProgram, unit, annotation, *, mode: str = "respo
         raise PythonEvidenceUnavailable("非空 Union 需要判别规则，不能静态选择其中一个响应形态。")
     name = program.symbol(unit, annotation)
     tail = name.rsplit(".", 1)[-1]
+    # 严格类型约束输入转换行为，基础 Schema 类型不变；按真实导入身份识别，
+    # 不能把项目内恰好同名的 StrictStr 等自定义类型当作 Pydantic 类型放行。
+    strict_types = {"StrictStr": "string", "StrictInt": "integer", "StrictFloat": "number", "StrictBool": "boolean"}
+    if name in {f"{module}.{kind}" for module in ("pydantic", "pydantic.types") for kind in strict_types}:
+        return {"type": strict_types[tail]}
     primitives = {"str": "string", "int": "integer", "float": "number", "Decimal": "number", "bool": "boolean",
                   "datetime": "string", "date": "string", "UUID": "string"}
     if tail in primitives:

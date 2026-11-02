@@ -165,6 +165,7 @@ function WorkbenchPage({
     DevelopmentPlanningEntityOption[]
   >([])
   const [chatSessionHistoryReady, setChatSessionHistoryReady] = useState(false)
+  const [sessionHistoryError, setSessionHistoryError] = useState<string>()
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   // —— 应用分支（提交并推送/发起新迭代/切换分支）状态 ——
@@ -189,15 +190,16 @@ function WorkbenchPage({
   const entryStartedAtRef = useRef(Date.now())
   const entryStageRef = useRef<WorkbenchEntryStage>('loading')
   const entryFailureHandledRef = useRef(false)
+  const workspaceConfigReadyRef = useRef(false)
   // 模板是否就绪（lifecycle=ready_for_workbench），用于校准正式规划产物。
   const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
 
   // 入口失败只处理一次：提示原因、返回首页，并由顶层卸载损坏的工作台实例。
   const failWorkbenchEntry = useCallback(
-    (_reason: string): void => {
+    (reason: string): void => {
       if (entryStageRef.current !== 'loading' || entryFailureHandledRef.current) return
       entryFailureHandledRef.current = true
-      message.error(`工作台加载失败，已返回首页。`)
+      message.error(`工作台加载失败：${reason} 已返回首页。`)
       onEntryLoadFailure()
     },
     [onEntryLoadFailure]
@@ -209,10 +211,16 @@ function WorkbenchPage({
 
   useEffect(() => {
     if (entryStage !== 'loading') return
-    const timer = window.setTimeout(
-      () => failWorkbenchEntry('同步项目配置、规划产物或历史会话超时。'),
-      WORKBENCH_ENTRY_TIMEOUT_MS
-    )
+    const timer = window.setTimeout(() => {
+      if (!workspaceConfigReadyRef.current) {
+        failWorkbenchEntry('读取项目配置超时。')
+        return
+      }
+      // 已验证项目配置时，历史/规划读取慢不能卸载工作台；其原加载与错误入口继续工作。
+      message.warning('项目已打开，规划或历史会话加载较慢，正在继续读取。')
+      entryStageRef.current = 'ready'
+      setEntryStage('ready')
+    }, WORKBENCH_ENTRY_TIMEOUT_MS)
     return () => window.clearTimeout(timer)
   }, [entryStage, failWorkbenchEntry])
 
@@ -228,6 +236,7 @@ function WorkbenchPage({
       try {
         const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot)
         if (!active) return
+        workspaceConfigReadyRef.current = true
         // application.json 只保存工作区配置，不拥有首页索引中的页面元数据；合并时保留索引字段，避免进入工作台后把 pages/defaultPage 覆盖成 undefined。
         setWorkspaceApplication((prev) => {
           const pages = Array.isArray(prev.pages) && prev.pages.length > 0 ? prev.pages : ['页面']
@@ -246,6 +255,7 @@ function WorkbenchPage({
           }
         })
       } catch (error) {
+        if (!active) return
         console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)
         failWorkbenchEntry(formatWorkbenchEntryError(error, '读取工作区 application.json 失败。'))
         return
@@ -305,7 +315,7 @@ function WorkbenchPage({
         setDevelopmentPlanningAgents([])
         setDevelopmentPlanningEntities([])
         console.warn('检查 specs/plans 规划产物失败。', error)
-        failWorkbenchEntry(formatWorkbenchEntryError(error, '检查工作区规划产物失败。'))
+        message.warning(formatWorkbenchEntryError(error, '检查工作区规划产物失败，可在工作台重试。'))
       } finally {
         if (active) setDevelopmentPlanningPagesLoaded(true)
       }
@@ -356,17 +366,17 @@ function WorkbenchPage({
     })
   }, [applicationLifecycle])
 
-  // 会话恢复失败时终止入口等待；普通的未就绪状态仍交给恢复流程或超时兜底。
+  // 历史读取失败交给会话面板展示和重试，不能把整个工作台及恢复入口卸载。
   const handleSessionHistoryReadyChange = useCallback(
     (ready: boolean, error?: string): void => {
       setChatSessionHistoryReady(ready)
-      if (error) failWorkbenchEntry(error)
+      setSessionHistoryError(error)
     },
-    [failWorkbenchEntry]
+    []
   )
 
   useEffect(() => {
-    if (!developmentPlanningPagesLoaded || !chatSessionHistoryReady || entryStage !== 'loading') {
+    if (!developmentPlanningPagesLoaded || (!chatSessionHistoryReady && !sessionHistoryError) || entryStage !== 'loading') {
       return
     }
     const remainingVisibleTime = Math.max(
@@ -375,7 +385,7 @@ function WorkbenchPage({
     )
     const timer = window.setTimeout(() => setEntryStage('leaving'), remainingVisibleTime)
     return () => window.clearTimeout(timer)
-  }, [chatSessionHistoryReady, developmentPlanningPagesLoaded, entryStage])
+  }, [chatSessionHistoryReady, sessionHistoryError, developmentPlanningPagesLoaded, entryStage])
 
   useEffect(() => {
     if (entryStage !== 'leaving') return

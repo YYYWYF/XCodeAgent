@@ -157,6 +157,11 @@ export function modulePriorityLabel(value: unknown): string {
 /** 操作行为类型的中文标签，未知类型原样展示。 */
 export function behaviorTypeLabel(value: string): string {
   const labels: Record<string, string> = {
+    agent: '智能体交互',
+    business: '业务操作',
+    interface: '界面操作',
+    sequence: '组合操作',
+    external: '外部目标',
     navigation: '页面跳转',
     submit: '提交',
     mutation: '数据变更',

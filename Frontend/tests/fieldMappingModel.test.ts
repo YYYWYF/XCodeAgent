@@ -5,6 +5,13 @@ import { allowedFilterOperators, defaultDatabaseOperation, defaultDatabaseUsageF
 import { inferSelection, resetDraftForDatabaseOperation } from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/model'
 import { valueSummary } from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/valueRules'
 
+/** Agent 来源误入业务分支时应在读取元数据之前拒绝，不能恢复成空身份的外部 API。 */
+test('agent source never becomes an external operation selection', () => {
+  const draft = { apiContractId: 'agent.assistant', endpointId: 'agent.assistant.run', fieldMappings: [],
+    sourceBinding: { sourceType: 'agent', agentId: 'assistant' } } as unknown as WorkflowApiDesignDraft
+  assert.throws(() => inferSelection(draft), /不属于业务字段映射/)
+})
+
 /** 内置表使用完整物理表名和空 Schema，写入选择仍能恢复并通过字段身份校验。 */
 test('builtin table writes preserve empty schema without losing selection', () => {
   const body = field('request_body', 'name')

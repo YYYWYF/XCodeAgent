@@ -39,19 +39,23 @@ def _action_behavior(item: dict[str, Any]) -> str:
     behavior_type = str(behavior.get("type") or "business")
     labels = {
         "business": "业务结果",
+        "agent": "智能体交互",
         "navigation": "页面跳转",
         "interface": "界面行为",
         "external": "外部目标",
         "sequence": "组合行为",
     }
     target = ""
-    if behavior_type == "navigation":
+    if behavior_type == "agent":
+        operation = "切换到空白客户端会话（保留服务端历史）" if behavior.get("operation") == "clear_conversation" else "发送问题"
+        target = f"；智能体 `{behavior.get('agentId', '')}`；操作 {operation}；提问 {behavior.get('message') or '用户自由输入'}"
+    elif behavior_type == "navigation":
         target = f"；目标页面 `{behavior.get('targetPageId', '')}`"
     elif behavior_type == "external":
         target = f"；外部目标 {behavior.get('externalTarget', '')}"
     elif behavior_type == "sequence":
         steps = [
-            f"`{step.get('stepId', '')}` {step.get('expectedResult', '')}"
+            f"`{step.get('stepId', '')}` {_action_behavior({'behavior': step})}"
             for step in behavior.get("steps", [])
             if isinstance(step, dict)
         ]

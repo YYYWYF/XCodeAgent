@@ -868,7 +868,7 @@ def _api_contracts(
                     "base_path": f"/api/{route_base}",
                     "authentication": {"required": True},
                     "schemas": schemas,
-                    "endpoints": endpoints,
+                    "endpoints": [{**endpoint, "kind": "business"} for endpoint in endpoints],
                 }
             )
     return contracts
@@ -1308,6 +1308,7 @@ def _technical_plan_pages(
                 "endpoint_dependencies": [
                     {
                         "endpoint_id": str(item.get("endpoint_id") or ""),
+                        "api_contract_id": str(item.get("api_contract_id") or ""),
                         "usage": str(item.get("usage") or "read"),
                         "trigger": str(item.get("trigger") or "页面交互触发"),
                         "required_for_initial_load": bool(
@@ -1341,6 +1342,7 @@ def _technical_action_implementations(value: Any) -> list[dict[str, Any]]:
             {
                 "stepId": str(binding.get("stepId") or ""),
                 "endpointId": str(binding.get("endpointId") or ""),
+                **({"apiContractId": str(binding["apiContractId"])} if binding.get("apiContractId") else {}),
             }
             for binding in _dict_items(item.get("stepBindings"))
             if binding.get("stepId") and binding.get("endpointId")
@@ -1349,7 +1351,8 @@ def _technical_action_implementations(value: Any) -> list[dict[str, Any]]:
         if step_bindings:
             result.append({"actionId": action_id, "stepBindings": step_bindings})
         elif endpoint_id:
-            result.append({"actionId": action_id, "endpointId": endpoint_id})
+            result.append({"actionId": action_id, "endpointId": endpoint_id,
+                           **({"apiContractId": str(item["apiContractId"])} if item.get("apiContractId") else {})})
         else:
             continue
         seen.add(action_id)
@@ -1370,6 +1373,7 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
         "endpoints",
     )
     endpoint_keys = (
+        "kind",
         "id",
         "name",
         "method",
@@ -1397,7 +1401,9 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
             for key in contract_keys
         }
         for contract in normalized
-    ]
+        if not any(endpoint.get("kind") == "agent_runtime" for endpoint in contract.get("endpoints", []))
+    ] + [deepcopy(contract) for contract in normalized
+         if any(endpoint.get("kind") == "agent_runtime" for endpoint in contract.get("endpoints", []))]
 
 
 def validate_technical_plan_model_authentication(agent_plan: Any) -> list[str]:
@@ -1695,6 +1701,15 @@ def validate_technical_plan_api_contracts(
     errors: list[str] = []
     for contract in _dict_items(plan.get("api_contracts")):
         contract_id = str(contract.get("id") or "unknown")
+        runtime_endpoints = [endpoint for endpoint in _dict_items(contract.get("endpoints"))
+                             if endpoint.get("kind") == "agent_runtime"]
+        if runtime_endpoints:
+            try:
+                from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
+                materialize_runtime_endpoints(plan)
+            except ValueError as exc:
+                errors.append(str(exc))
+            continue
         allowed_keys = {
             "authentication",
             "base_path",

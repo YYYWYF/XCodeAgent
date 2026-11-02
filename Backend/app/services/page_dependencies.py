@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.api_contracts import dict_items, endpoint_dependencies_for_contracts
+from app.services.page_endpoint_identity import resolve_endpoint_key
 from app.services.frontend_page_tree import (
     find_frontend_page,
     frontend_page_menu_paths,
@@ -84,15 +85,22 @@ def close_page_action_endpoint_dependencies(
         dependencies = [
             dict(item) for item in dict_items(references.get("endpoint_dependencies"))
         ]
-        known_dependency_ids = {
-            str(item.get("endpoint_id") or "").strip()
-            for item in dependencies
-            if str(item.get("endpoint_id") or "").strip()
-        }
-        for action_id, step_id, endpoint_id in _action_endpoint_references(
+        known_dependency_ids = set()
+        for item in dependencies:
+            try:
+                known_dependency_ids.add(resolve_endpoint_key(endpoint_index, str(item.get("endpoint_id") or ""),
+                    str(item.get("api_contract_id") or "")))
+            except ValueError:
+                continue
+        for action_id, step_id, endpoint_id, contract_id in _action_endpoint_references(
             references.get("action_implementations")
         ):
-            if endpoint_id not in endpoint_index or endpoint_id in known_dependency_ids:
+            try:
+                scope = {key: endpoint_index[key] for key in known_dependency_ids if key[1] == endpoint_id}
+                key = resolve_endpoint_key(endpoint_index if contract_id or not scope else scope, endpoint_id, contract_id)
+            except ValueError:
+                continue
+            if key in known_dependency_ids:
                 continue
             trigger = (
                 f"业务步骤 {action_id}/{step_id}"
@@ -102,32 +110,33 @@ def close_page_action_endpoint_dependencies(
             dependencies.append(
                 {
                     "endpoint_id": endpoint_id,
+                    "api_contract_id": key[0],
                     "usage": "business_action",
                     "trigger": trigger,
                     "required_for_initial_load": False,
                 }
             )
-            known_dependency_ids.add(endpoint_id)
+            known_dependency_ids.add(key)
         references["endpoint_dependencies"] = dependencies
         normalized_page["references"] = references
         result.append(normalized_page)
     return result
 
 
-def _action_endpoint_references(value: Any) -> list[tuple[str, str, str]]:
+def _action_endpoint_references(value: Any) -> list[tuple[str, str, str, str]]:
     """按 action/step 身份提取 TechnicalPlan 已明确选择的 Endpoint。"""
 
-    result: list[tuple[str, str, str]] = []
+    result: list[tuple[str, str, str, str]] = []
     for implementation in dict_items(value):
         action_id = str(implementation.get("actionId") or "").strip()
         endpoint_id = str(implementation.get("endpointId") or "").strip()
         if action_id and endpoint_id:
-            result.append((action_id, "", endpoint_id))
+            result.append((action_id, "", endpoint_id, str(implementation.get("apiContractId") or "")))
         for binding in dict_items(implementation.get("stepBindings")):
             step_id = str(binding.get("stepId") or "").strip()
             endpoint_id = str(binding.get("endpointId") or "").strip()
             if action_id and step_id and endpoint_id:
-                result.append((action_id, step_id, endpoint_id))
+                result.append((action_id, step_id, endpoint_id, str(binding.get("apiContractId") or "")))
     return result
 
 
@@ -162,10 +171,11 @@ def validate_project_plan_dependencies(project_plan: dict[str, Any]) -> list[str
                 errors.append(
                     f"Page {pageId} contains an endpoint dependency without endpoint_id."
                 )
-            elif endpoint_id not in endpoint_index:
-                errors.append(
-                    f"Page {pageId} references unknown endpoint {endpoint_id}."
-                )
+            else:
+                try:
+                    resolve_endpoint_key(endpoint_index, endpoint_id, str(dependency.get("api_contract_id") or ""))
+                except ValueError as exc:
+                    errors.append(f"Page {pageId}: {exc}")
         for target in dict_items(references.get("navigation_targets") or page.get("navigation_targets")):
             targetPageId = str(target.get("targetPageId") or "")
             if not targetPageId or targetPageId not in pageIds:
@@ -241,11 +251,11 @@ def _string_items(value: Any) -> list[str]:
     return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
 
 
-def _endpoint_index(api_contracts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _endpoint_index(api_contracts: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
     """建立 endpoint 到所属契约和数据源的确定性反向索引。"""
 
     return {
-        str(endpoint.get("id")): {
+        (str(contract.get("id") or ""), str(endpoint.get("id"))): {
             "api_contract_id": str(contract.get("id") or ""),
             "endpoint": endpoint,
         }
@@ -258,7 +268,7 @@ def _endpoint_index(api_contracts: list[dict[str, Any]]) -> dict[str, dict[str, 
 def _normalize_endpoint_dependencies(
     page: dict[str, Any],
     *,
-    endpoint_index: dict[str, dict[str, Any]],
+    endpoint_index: dict[tuple[str, str], dict[str, Any]],
     api_contracts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """接受规划模型的 endpoint 引用；缺失时仅按页面数据源生成保守读取默认值。"""
@@ -272,15 +282,19 @@ def _normalize_endpoint_dependencies(
             page_name=str(page.get("name") or ""),
         )
     result: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for item in supplied:
         endpoint_id = str(item.get("endpoint_id") or "")
-        if not endpoint_id or endpoint_id in seen:
+        if not endpoint_id:
             continue
-        seen.add(endpoint_id)
+        key = resolve_endpoint_key(endpoint_index, endpoint_id, str(item.get("api_contract_id") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
         result.append(
             {
                 "endpoint_id": endpoint_id,
+                "api_contract_id": key[0],
                 "usage": str(item.get("usage") or "read"),
                 "trigger": str(item.get("trigger") or "页面交互触发"),
                 "required_for_initial_load": bool(

@@ -2,7 +2,7 @@
 
 本目录从 `dev_agent_integration_0922_back@aa9e3375` 搬入，目标基线为 `dev_agent_integration_1028@43b1f11d`。与新版冲突时采用新版当前合同；基础类型迁入不等于功能可用。
 
-- [Agent 流式接口与开发流程详细设计](agent-runtime-direct/AGENT_STREAMING_DEVELOPMENT_DESIGN.md)：待评审的目标设计，尚未实施。
+- [Agent Runtime 流式接口设计改造方案](agent-runtime-direct/AGENT_STREAMING_DEVELOPMENT_DESIGN.md)：唯一方案入口。2026-10-31 已接入正式运行 Endpoint、v8 接入设计、平台执行策略、三目标依赖、官方客户端目标验收及完成登记；本轮按用户要求未运行验证，不能宣称 R5 已通过。模板源码 revision 为 `2026.10.31.1`，交付及人工测试顺序见该文实施记录。
 - [统一拓扑架构](APPLICATION_TOPOLOGY_DESIGN.md)：显式选择、正式事实和阶段边界。
 - [拓扑实现模板](TOPOLOGY_IMPLEMENTATION_TEMPLATE.md)：Definition 与交付顺序。
 - [重构决策记录](TOPOLOGY_REFACTOR_REVIEW.md)：保留和舍弃的旧设计。

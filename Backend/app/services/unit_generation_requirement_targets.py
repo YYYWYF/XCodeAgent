@@ -53,6 +53,11 @@ def scoped_formal_targets(plan: dict, scope: Mapping) -> tuple[dict[str, dict], 
         for contract_id, contract in contracts.items()
         for endpoint_id, endpoint in object_index(contract.get("endpoints"), "id", "Endpoint").items()
     }
+    from app.services.runtime_endpoint_dependencies import resolve_runtime_target
+    resolved = resolve_runtime_target(plan, scope_type, target_id, scope.get("apiContractId"))
+    if scope_type in {"agent", "endpoint", "page"}:
+        selected_pages = {target_id: pages[target_id]} if scope_type == "page" and target_id in pages else {}
+        return selected_pages, {key: endpoints[key] for key in resolved["endpoint_keys"]}
     if scope_type == "agent":
         from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
 
@@ -127,6 +132,11 @@ def endpoint_source_types(
                 "GENERATION_ENDPOINT_API_DESIGN_MISSING",
                 f"Endpoint {key[0]}/{key[1]} 缺少当前 Endpoint API Design。",
             )
+        if endpoints[key].get("kind") == "agent_runtime":
+            if design.get("implementationKind") != "agent_runtime":
+                fail_requirement_input("FORMAL_GENERATION_INPUT_INVALID", "运行 Endpoint 必须使用对应接入设计。")
+            result[key] = frozenset()
+            continue
         field_mappings = design.get("fieldMappings")
         if not isinstance(field_mappings, (list, tuple)):
             fail_requirement_input(

@@ -46,6 +46,10 @@ export function selectionKey(value?: BindingSelection | null): string {
 
 /** 从现有正式字段映射恢复单一来源，复杂映射由既有编辑器承担。 */
 export function inferSelection(draft: WorkflowApiDesignDraft): { selection: BindingSelection | null; complex: boolean } {
+  // 来源为平台判别联合，未知类型不能兜底转换为外部 API 后发起缺失身份的请求。
+  if (draft.sourceBinding && !['database', 'external_api', 'static'].includes(draft.sourceBinding.sourceType)) {
+    throw new Error('当前来源不属于业务字段映射，请使用对应的接口接入设计。')
+  }
   const selections = new Map<string, BindingSelection>()
   const complex = false
   if (draft.sourceBinding) selections.set(selectionKey(draft.sourceBinding), draft.sourceBinding)

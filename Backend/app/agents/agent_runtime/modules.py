@@ -42,6 +42,7 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
         "description": task.get("description"), "target_files": targets,
         "change_scope": changes, "module_policy": policy["modulePaths"][module],
         "invocation": agent_invocation(contract["agentId"]),
+        "interactionContract": deepcopy(contract["interactionContract"]),
         "tool_contracts": [{"id": api["id"], "schemas": api.get("schemas", {}),
                             "endpoints": [endpoint for endpoint in api.get("endpoints", ())
                                           if (api["id"], endpoint["id"]) in keys]}
@@ -71,6 +72,14 @@ def generate_agent_modules_with_deep_agent(
         prompt = (
             "Implement only the approved Agent module packet. Read module_policy.readPaths and the "
             "actual target files first. Reuse the existing DeepAgents factory, injected project model, "
+            "Every builder accepts immutable execution_policy and installs text_only_middleware(execution_policy) "
+            "from app.agent.execution_guard. Preserve create_agent forwarding and verify_text_graph; never write "
+            "execution_policy.py or execution_guard.py. Public text conversation does not disable internal modules. "
+            "Use an explicit tools=[declared business tools, *resource_tools(execution_policy)] list; import resource_tools "
+            "from app.agent.execution_guard. Middleware must be an explicit list starting with *text_only_middleware(execution_policy), "
+            "followed only by enabled SkillsMiddleware/MemoryMiddleware with independent virtual_mode FilesystemBackend "
+            "roots Path(__file__).resolve().parents[1] / 'skills' or 'knowledge' and exact formal sources. "
+            "Do not expose default filesystem, task, Todo or shell tools. Native interrupts require a declared interactionKind. "
             "Preserve existing implemented builders for other formalAgentIds. Register only actual implementations; "
             "do not generate placeholders for other Agents. Remove the template chat registration when formal business Agents exist. "
             "Use resolvedSystemPrompt exactly for the prompt module; it already composes persona, tone and constraints. "
@@ -87,6 +96,7 @@ def generate_agent_modules_with_deep_agent(
             "start services, run commands, change environment or planning artifacts. A contract gap "
             "must return a structured failure and change_request instead of an invented behavior.\n"
             "Return only {\"task_results\":[{\"task_id\":...,\"status\":...,\"summary\":...}]}. "
+            "summary is optional display text; task_id and a valid status are mandatory. "
             "Use completed after actual writes; already_satisfied only with non-empty "
             "satisfaction_evidence describing inspected files and concrete findings; failed requires "
             "failure_category and failure_reason. A contract_mismatch or plan_mismatch also requires "

@@ -15,6 +15,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.tools import tool
 from langgraph.errors import GraphRecursionError
 
 from app.agents.execution_control import RunCancellationMiddleware
@@ -45,6 +46,21 @@ class TechnicalPlanCandidateError(ValueError):
 
 class TechnicalPlanEditorError(TechnicalPlanCandidateError):
     """编辑未完成时携带最后完整候选，并要求外层保留原始校验诊断。"""
+
+
+class ProductPlanRevisionRequired(TechnicalPlanCandidateError):
+    """产品事实需要正式修订时停止技术补丁，不伪造接口或修改已确认上游。"""
+
+
+PRODUCT_REVISION_PREFIX = "[product_plan_revision_required]"
+
+
+def product_revision_payload(errors: list[str]) -> dict[str, Any]:
+    """从明确的产品修订诊断构造当前工作流可消费的阶段提示。"""
+    upstream = any(str(error).startswith(PRODUCT_REVISION_PREFIX) for error in errors)
+    return {"repair_target": "product_plan" if upstream else "technical_plan",
+            "message": "产品动作归属需要修订；请在对话中发起产品规划修改，确认新版后继续技术规划。"
+            if upstream else "技术规划自动修复后仍未通过校验。"}
 
 
 def has_editable_technical_plan_candidate(value: Any) -> bool:
@@ -215,10 +231,14 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
     """提供局部编辑规则和持续有效的原始修改要求，不注入完整规划正文。"""
 
     return (
-        "你负责修订当前 TechnicalPlan。只使用 grep、read_file、edit_file 工具在内存候选上"
+        "你负责修订当前 TechnicalPlan。正常技术修改使用 grep、read_file、edit_file 工具在内存候选上"
         "修改相关片段，保留其他全部内容。不要在最终回答中输出整份规划、Contract 或 JSON。\n"
         f"可编辑文件：{TECHNICAL_PLAN_CANDIDATE_PATH}。"
         f"只读的已确认产品事实：{PRODUCT_CONTEXT_PATH}；应用约束：{CONSTRAINTS_CONTEXT_PATH}。\n"
+        "若诊断中的业务 action 实际只描述 Agent 提问、推荐问题、追问或客户端清空，"
+        "先核对已确认产品原文和绑定。属于上游动作分类/归属错误时，调用 request_product_revision，"
+        "提供 pageId/actionId、原文依据和建议归属后停止。不要为聊天虚构 CRUD Endpoint，"
+        "也不要试图通过技术编辑修改只读 ProductPlan。组合动作只修复业务步骤，保留 Agent 步骤。\n"
         "先 grep 定位名称、ID、路径或字段，再 read_file 读取相关窗口（offset 从0开始，每次最多120行）。"
         "grep 的 content 模式可以返回匹配行号，read_file 的行号前缀不属于原文，不能放入 old_string。"
         "edit_file 的 old_string 必须精确且唯一匹配；若匹配不到或存在多处，补读上下文后再修改。"
@@ -254,9 +274,18 @@ def edit_technical_plan_with_agent(
 
     model = create_chat_model(settings, extra_model_kwargs={"thinking": {"type": "disabled"}})
     backend = TechnicalPlanCandidateBackend()
+    revision_reasons: list[str] = []
+
+    @tool(return_direct=True)
+    def request_product_revision(page_id: str, action_id: str, reason: str) -> str:
+        """记录具体产品动作的上游修订建议并结束本轮；不修改正式文档，也不代表用户确认。"""
+        revision_reasons.append(f"{PRODUCT_REVISION_PREFIX} 页面 {page_id}，动作 {action_id}：{reason}")
+        return "已记录产品规划修订建议，当前技术候选保留；必须走正式修订和确认后继续。"
+
     agent = create_agent(
         name="technical-plan-fragment-editor",
         model=model,
+        tools=[request_product_revision],
         system_prompt=_editor_system_prompt(requirement_spec),
         middleware=[
             RunCancellationMiddleware(model),
@@ -282,10 +311,14 @@ def edit_technical_plan_with_agent(
             config={"recursion_limit": 24, "callbacks": callbacks},
         )
     except (ModelCallLimitExceededError, GraphRecursionError) as exc:
+        if revision_reasons:
+            raise ProductPlanRevisionRequired("；".join(revision_reasons), backend.recover_candidate(existing_plan)) from exc
         raise TechnicalPlanEditorError(
             "技术规划局部修订达到调用上限，未提交正式产物。",
             backend.recover_candidate(existing_plan),
         ) from exc
+    if revision_reasons:
+        raise ProductPlanRevisionRequired("；".join(revision_reasons), backend.recover_candidate(existing_plan))
     if backend.last_edit_error:
         raise TechnicalPlanEditorError(
             "技术规划局部修改尚有未解决的工具错误：" + backend.last_edit_error,

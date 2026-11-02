@@ -52,6 +52,7 @@ from app.services.authorization_platform_projection import (
 )
 from app.services.authorization_edd import verify_authorization_edd
 from app.services.business_acceptance_verifier import verify_business_acceptance
+from app.services.build_business_retry import restored_source_task_ids
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
@@ -658,7 +659,7 @@ def _verify_business_results(
     verified: list[dict[str, Any]] = []
     for result in results:
         task = tasks_by_id.get(str(result.get("task_id") or ""), {})
-        # Runtime 业务验收是本次实现门禁；Java 保持原全局可选自检策略。
+        # Runtime 保留来源/合同检查，静态实现诊断按 advisory 提示；Java 保持原开关。
         runtime_check = ((task.get("source_refs") or {}).get("backend_implementation") == "python_runtime"
                          or task.get("owner") == "agent")
         if not business_self_check and not runtime_check:
@@ -1817,6 +1818,13 @@ def run_build_scheduler(
         retry_task_ids = retryable_failed_task_ids(
             retry_slice["tasks"],
             list(state.get("build_results", [])),
+        )
+        # 来源缺失原本属于终止失败；用户主动重试时按当前正式文件重新判断，
+        # 恢复后重走 Runner 和全部验收，不能直接把旧 blocked 改成通过。
+        retry_task_ids |= restored_source_task_ids(
+            retry_slice["tasks"],
+            formal_artifacts=state.get("project_plan"),
+            workspace_root=workspace_from_state(state),
         )
         if retry_task_ids:
             tasks = reset_failed_tasks_for_retry(tasks, retry_task_ids)

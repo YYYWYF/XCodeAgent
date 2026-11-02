@@ -5,6 +5,24 @@ import type { MappingApplied, MappingAssistance, MappingAssistAction, MappingAss
 export type BindingSelection = { sourceType: 'database'; sourceId: string; schema: string; table: string } |
   { sourceType: 'external_api'; sourceId: string; directoryId: string; operationId: string } | { sourceType: 'static' }
 
+export type RuntimeEndpointDraft = {
+  apiContractId: string; endpointId: string; implementationKind: 'agent_runtime'
+  sourceBinding: { sourceType: 'agent'; agentId: string }; inputBindings: []
+  invocation: { path: string; method: 'POST' }; interactionContract: Record<string, unknown>; capabilitySha256: string
+}
+export type RuntimeEndpointPreparation = {
+  apiContractId: string; endpointId: string; artifactRevision?: string | null; technicalPlanHash: string
+  payload: { implementationKind: 'agent_runtime'; draft: RuntimeEndpointDraft }
+}
+
+/** 正式准备结果决定编辑器分支，目录快照不承担接口类型判定。 */
+export type EndpointPreparation = EndpointDesignPreparation | RuntimeEndpointPreparation
+
+/** 以服务端显式实现类型区分运行接入设计，禁止按路由名称猜测。 */
+export function isRuntimeEndpointPreparation(value: EndpointPreparation): value is RuntimeEndpointPreparation {
+  return 'implementationKind' in value.payload && value.payload.implementationKind === 'agent_runtime'
+}
+
 /** 与正式映射分离的可恢复草稿。 */
 export type BindingDraft = {
   draft: WorkflowApiDesignDraft
@@ -64,7 +82,7 @@ export type EndpointDesignsPayload = {
   applied?: MappingApplied
   draft?: BindingDraft
   detail?: EndpointDesignDetail
-  preparation?: EndpointDesignPreparation
+  preparation?: EndpointPreparation
   saved?: EndpointDesignSaveResult
   error?: { type?: string; message?: string }
 }

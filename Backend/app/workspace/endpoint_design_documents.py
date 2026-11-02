@@ -7,9 +7,12 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 import hashlib
 import json
 import re
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from pydantic import TypeAdapter
+from app.workspace.endpoint_design_lock import endpoint_design_locked
 
 from app.domain.api_design import API_DESIGN_SCHEMA_VERSION, EndpointApiDesign
 from app.services.artifact_invalidation import canonical_sha256
@@ -54,6 +57,7 @@ def technical_plan_sha256(workspace_root: str | Path) -> str:
     return canonical_sha256(path)
 
 
+@endpoint_design_locked
 def write_endpoint_design(
     workspace_root: str | Path,
     design: EndpointApiDesign,
@@ -67,8 +71,9 @@ def write_endpoint_design(
     )
     json_path.parent.mkdir(parents=True, exist_ok=True)
     payload = design.model_dump(mode="json", by_alias=True, exclude_none=True)
-    json_content = f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
     markdown_content = render_endpoint_design_markdown(payload)
+    payload["markdownSha256"] = hashlib.sha256(markdown_content.encode("utf-8")).hexdigest()
+    json_content = f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
     previous_json = json_path.read_bytes() if json_path.is_file() else None
     previous_markdown = markdown_path.read_bytes() if markdown_path.is_file() else None
     temporary_paths: list[Path] = []
@@ -81,6 +86,7 @@ def write_endpoint_design(
         # 两份临时文件均准备完成后再协调替换；第二次替换失败由下方回滚旧文件。
         _publish_temporary_file(temporary_markdown, markdown_path)
         _publish_temporary_file(temporary_json, json_path)
+        _sync_directory(json_path.parent)
     except Exception:
         # 任一文件替换失败都恢复上一版，避免破坏已有的正式设计。
         _restore_file(json_path, previous_json)
@@ -96,6 +102,7 @@ def write_endpoint_design(
     }
 
 
+@endpoint_design_locked
 def read_endpoint_design(
     workspace_root: str | Path,
     api_contract_id: str,
@@ -117,7 +124,7 @@ def read_endpoint_design(
         markdown = markdown_path.read_text(encoding="utf-8")
         if not markdown.strip():
             return None
-        design = EndpointApiDesign.model_validate(raw)
+        design = TypeAdapter(EndpointApiDesign).validate_python(raw)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return None
     if (
@@ -128,12 +135,24 @@ def read_endpoint_design(
         return None
     if _markdown_artifact_revision(markdown) != design.artifact_revision:
         return None
-    if require_current:
+    if design.markdown_sha256 != hashlib.sha256(markdown_path.read_bytes()).hexdigest():
+        return None
+    if require_current and design.implementation_kind == "agent_runtime":
+        # Prompt/模型属于实现输入；运行接入设计只因公开能力或 Endpoint 改变而失效。
+        from app.services.agent_endpoint_design import validate_agent_endpoint_design
+        try:
+            plan = json.loads(technical_plan_path(workspace_root).read_text(encoding="utf-8"))
+            contract = next(item for item in plan["api_contracts"] if item["id"] == api_contract_id)
+            endpoint = next(item for item in contract["endpoints"] if item["id"] == endpoint_id)
+            validate_agent_endpoint_design(plan, contract, endpoint, raw)
+        except (OSError, ValueError, KeyError, StopIteration):
+            return None
+    elif require_current:
         expected = next(
             (
-                item.sha256
+                item["sha256"] if isinstance(item, dict) else item.sha256
                 for item in design.based_on
-                if item.artifact_key == "technical-plan"
+                if (item.get("artifactKey") if isinstance(item, dict) else item.artifact_key) == "technical-plan"
             ),
             "",
         )
@@ -185,6 +204,9 @@ def endpoint_design_status(
 def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
     """把字段映射、数据库写入、外部 API 固定值和查询配置渲染为 Markdown 正式产物。"""
 
+    if design.get("implementationKind") == "agent_runtime":
+        from app.services.agent_endpoint_design import render_agent_endpoint_markdown
+        return render_agent_endpoint_markdown(design)
     endpoint = design.get("endpointContract") if isinstance(design.get("endpointContract"), dict) else {}
     lines = [
         f"# Endpoint 字段映射：{endpoint.get('method') or 'API'} {endpoint.get('path') or design.get('endpointId')}",
@@ -401,7 +423,10 @@ def _prepare_text_file(path: Path, content: str) -> Path:
 
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
-        temporary.write_text(content, encoding="utf-8")
+        with temporary.open("w", encoding="utf-8", newline="") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
@@ -412,6 +437,16 @@ def _publish_temporary_file(temporary: Path, path: Path) -> None:
     """将已准备完成的临时文件原子替换到正式路径。"""
 
     temporary.replace(path)
+
+
+def _sync_directory(directory: Path) -> None:
+    """在支持目录 fsync 的平台持久化最后提交点；Windows 保留 replace 语义。"""
+    if os.name != "nt":
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def _write_text_atomically(path: Path, content: str) -> None:

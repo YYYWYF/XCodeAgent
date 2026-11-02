@@ -20,6 +20,7 @@ from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
 from app.protocols.agent_runtime_workbench import runtime_workbench_capabilities, build_runtime_workbench_stream
+from app.protocols.runtime_acceptance import acceptance_capabilities, build_acceptance_stream
 from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,
@@ -187,6 +188,7 @@ async def health() -> dict[str, object]:
             "agent_files": agent_files_capabilities(),
             "preview_runtime": preview_runtime_capabilities(),
             "agent_runtime_workbench": runtime_workbench_capabilities(),
+            "runtime_acceptance": acceptance_capabilities(),
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
             "entity_tables": entity_tables_capabilities(),
@@ -357,6 +359,14 @@ async def run_agent_runtime_workbench(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/agent-runtime-acceptance/run")
+async def run_runtime_acceptance(input_data: dict[str, Any] = Body(...),
+                                 accept: Optional[str] = Header(default="text/event-stream")) -> StreamingResponse:
+    """只传递已确认流程签发的一次性桌面验收任务及脱敏证据。"""
+    return StreamingResponse(build_acceptance_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/preview-runtime/run")

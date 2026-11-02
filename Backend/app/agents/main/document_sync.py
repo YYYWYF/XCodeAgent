@@ -122,6 +122,9 @@ def _sync_prompt(
             "and boundaries. Synchronize capability expected results, pageActionBindings, interaction product "
             "states, and acceptanceCriteria from the edited Markdown while preserving stable capabilityId, "
             "pageId, actionId, surface type, and same-page contextItemIds references for unchanged content. "
+            "Preserve explicit action behavior.type=agent with agentId, operation, message, expectedResult; "
+            "send_message covers free input/recommendations/follow-ups, clear_conversation starts an empty client "
+            "conversation without server deletion. Preserve requiresConfirmation and all mixed sequence steps. "
             "Surface type must be standalone_page or floating_panel. Preserve the explicit enabled boolean; "
             "standalone_page must remain enabled, while floating_panel may be disabled by the user. contextItemIds may only reference "
             "information_items on the bound page. Never add model/modelId, prompt, API or "
@@ -137,7 +140,9 @@ def _sync_prompt(
             "data_sources field, or entity data_source; source selection belongs to EntityDesign. "
             "module_boundaries describes code/service ownership and must not define entities or fields. "
             "Preserve agent_contracts and all seven agentSettings modules. Each Runtime contract contains "
-            "exactly agentId, name, purpose, pageIds, and agentSettings. Preserve hidden details and "
+            "exactly agentId, name, purpose, pageIds, agentSettings and interactionContract. "
+            "Preserve all derived agent_runtime Endpoints verbatim; changing derived IDs, routes or Agent targets is invalid. "
+            "Ordinary Endpoints explicitly declare kind=business. Preserve hidden details and "
             "unrelated agents; never invent Gateway contracts, credentials, topology changes or application switches. "
             "Preserve the complete ProductPlan-derived agent_contracts for every confirmed Agent, including "
             "identity, capabilities, interaction, seven-part agentSettings, Gateway Endpoint, runtime, security, "
@@ -310,6 +315,9 @@ def sync_project_plan_from_markdown(
         # 拓扑来自服务端当前审阅版本；Markdown 模型不能将 Runtime 改回默认 Java 栈。
         if serves_python_business(existing_plan):
             normalized["architecture"] = runtime_business_architecture()
+            from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
+            normalized["topology"] = existing_plan["topology"]
+            normalized = materialize_runtime_endpoints(normalized, refresh_derived=True)
     errors = validate_api_contract_consistency(normalized)
     if is_technical_plan:
         errors.extend(validate_technical_plan_api_contracts(normalized))

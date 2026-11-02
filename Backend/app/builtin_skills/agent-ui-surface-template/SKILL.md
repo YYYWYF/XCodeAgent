@@ -17,8 +17,9 @@ existing Build and acceptance flow.
 ## Core Invariants
 
 - `standalone_page` is a dedicated conversation-page template.
-- `floating_panel` is an enhancement mounted on a complete business page. It is
-  not a second page template and must not replace the business page body.
+- `floating_panel` is an enhancement mounted beside the complete host page,
+  including a declared standalone conversation owned by another Agent. It must
+  preserve the host body and owns its own configuration and adapter.
 - Both surfaces share the fixed message, run-status, Tool, approval, error, and
   Composer semantics supplied by XCodeAgent-owned components.
 - In UiDesign, import the fixed components only from

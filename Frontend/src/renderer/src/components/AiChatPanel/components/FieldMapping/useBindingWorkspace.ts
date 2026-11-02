@@ -40,7 +40,7 @@ type BindingWorkspaceState = {
 /** 为工作台缓存每个接口的编辑状态，切页签与异步返回均不覆盖其他接口。 */
 export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConfigTarget | undefined,
   onSaved: (target: ApiDesignConfigTarget, result: EndpointDesignSaveResult) => void | Promise<void>,
-  onRecovery?: EndpointRecoveryReporter): BindingWorkspaceState {
+  onRecovery?: EndpointRecoveryReporter, initialPreparation?: EndpointDesignPreparation): BindingWorkspaceState {
   const [entries, setEntries] = useState<Record<string, BindingEntry>>({})
   const [catalog, setCatalog] = useState<DataSourceCatalog>({ sources: [] })
   const [tables, setTables] = useState<SelectedDataTable[]>([])
@@ -102,8 +102,12 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
     if (!target || entries[key]) return
     let disposed = false
     setLoading(true); setError('')
-    requestEndpointDesignPreparation(workspaceRoot, target.apiContractId, target.endpointId).then((preparation) => {
+    const request = refresh === 0 && initialPreparation
+      && initialPreparation.apiContractId === target.apiContractId && initialPreparation.endpointId === target.endpointId
+      ? Promise.resolve(initialPreparation) : requestEndpointDesignPreparation(workspaceRoot, target.apiContractId, target.endpointId)
+    request.then((preparation) => {
       if (disposed) return
+      if (preparation.payload.endpoint.kind !== 'business') throw new Error('智能体接口不能进入业务字段映射，请重新读取接入设计。')
       publish('prepare')
       let draft = normalizeApiDesignDraft(preparation.payload)
       const inferred = inferSelection(draft)
@@ -119,7 +123,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
     }).catch((reason) => { if (!disposed) failRead(reason, 'prepare') })
       .finally(() => { if (!disposed) setLoading(false) })
     return () => { disposed = true }
-  }, [key, workspaceRoot, target?.apiContractId, target?.endpointId, refresh])
+  }, [key, workspaceRoot, target?.apiContractId, target?.endpointId, refresh, initialPreparation])
 
   useEffect(() => {
     const selection = entry?.value.selection

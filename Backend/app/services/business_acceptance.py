@@ -1246,7 +1246,8 @@ def _entity_sources(formal: dict[str, Any], entity: dict[str, Any]) -> list[dict
     endpoint_design = _dict_value(entity.get("endpoint_api_design"))
     endpoint_id = _text(endpoint_design.get("endpointId"))
     if endpoint_id:
-        return [_source("api_design", endpoint_id, f"/endpoint_designs/{endpoint_id}", endpoint_design)]
+        return [{**_source("api_design", endpoint_id, f"/endpoint_designs/{endpoint_id}", endpoint_design),
+                 "api_contract_id": _text(endpoint_design.get("apiContractId"))}]
     return _api_sources(formal, _endpoint_expectations(formal))
 
 
@@ -1307,12 +1308,12 @@ def _endpoint_detail_sources(formal: dict[str, Any]) -> list[dict[str, Any]]:
     """为当前 Endpoint API 设计生成正式来源引用。"""
 
     return [
-        _source(
+        {**_source(
             "api_design",
             _text(design.get("endpointId")),
             f"/endpoint_designs/{_text(design.get('endpointId'))}",
             design,
-        )
+        ), "api_contract_id": _text(design.get("apiContractId"))}
         for design in _dict_items(formal.get("endpoint_designs"))
         if _text(design.get("endpointId"))
     ]

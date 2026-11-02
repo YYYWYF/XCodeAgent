@@ -8,6 +8,7 @@ from app.services.agent_action_bindings import agent_action_bindings
 from app.services.product_plan import project_active_agent_product_plan
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 from app.services.ui_design_manifest import persisted_ui_manifest, ui_action_bindings
+from app.services.page_endpoint_identity import endpoint_catalog, page_endpoint_keys, resolve_endpoint_key
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
@@ -30,21 +31,21 @@ def _artifact_hash(value: Any) -> str:
     ).hexdigest()
 
 
-def _endpoint_catalog(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _endpoint_catalog(project_plan: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     """把 TechnicalPlan API Contract 展开为 endpoint 索引。"""
 
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[tuple[str, str], dict[str, Any]] = {}
     for contract in _dict_items(project_plan.get("api_contracts")):
         contract_id = str(contract.get("id") or "").strip()
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "").strip()
             if endpoint_id:
-                result[endpoint_id] = {**endpoint, "api_contract_id": contract_id}
+                result[(contract_id, endpoint_id)] = {**endpoint, "api_contract_id": contract_id}
     return result
 
 
 _BINDING_TYPES = {"endpoint", "agent", "navigation", "local", "sequence", "external"}
-_STEP_TYPES = _BINDING_TYPES - {"sequence", "agent"}
+_STEP_TYPES = _BINDING_TYPES - {"sequence"}
 
 
 def _technical_implementations(page: dict[str, Any]) -> list[dict[str, Any]]:
@@ -64,10 +65,10 @@ def expected_business_action_implementations(
     expected: dict[str, set[str] | None] = {}
     for action in _dict_items(product_page.get("actions")):
         action_id = str(action.get("actionId") or "").strip()
-        if action_id in (agent_action_ids or set()):
-            continue
         behavior = _product_behavior(action)
         behavior_type = str(behavior.get("type") or "business")
+        if behavior_type != "sequence" and action_id in (agent_action_ids or set()):
+            continue
         if behavior_type == "business":
             expected[action_id] = None
         elif behavior_type == "sequence":
@@ -232,15 +233,18 @@ def _compile_product_action_binding(
     """合并产品、UI 与技术三层事实，生成 Build 使用的判别联合绑定。"""
 
     action_id = str(action.get("actionId") or "").strip()
-    if agent_id:
-        return {"actionId": action_id, "bindingType": "agent", "agentId": agent_id}
     behavior = _product_behavior(action)
     behavior_type = str(behavior.get("type") or "business")
+    if behavior_type == "agent" or (agent_id and behavior_type == "business"):
+        return {"actionId": action_id, "bindingType": "agent", "agentId": behavior.get("agentId") or agent_id,
+                "operation": behavior.get("operation", "send_message"), "message": behavior.get("message", ""),
+                "requiresConfirmation": action.get("requiresConfirmation") is True}
     if behavior_type == "business":
         return {
             "actionId": action_id,
             "bindingType": "endpoint",
             "endpointId": str(implementation.get("endpointId") or "").strip(),
+            "apiContractId": str(implementation.get("apiContractId") or "").strip(),
         }
     if behavior_type == "navigation":
         return {
@@ -264,7 +268,7 @@ def _compile_product_action_binding(
             "externalTarget": str(behavior.get("externalTarget") or "").strip(),
         }
     step_bindings = {
-        str(step.get("stepId") or "").strip(): str(step.get("endpointId") or "").strip()
+        str(step.get("stepId") or "").strip(): step
         for step in _dict_items(implementation.get("stepBindings"))
     }
     steps: list[dict[str, Any]] = []
@@ -272,7 +276,12 @@ def _compile_product_action_binding(
         step_id = str(step.get("stepId") or "").strip()
         step_type = str(step.get("type") or "business")
         if step_type == "business":
-            steps.append({"type": "endpoint", "endpointId": step_bindings.get(step_id, "")})
+            binding = step_bindings.get(step_id, {})
+            steps.append({"type": "endpoint", "endpointId": binding.get("endpointId", ""),
+                          "apiContractId": binding.get("apiContractId", "")})
+        elif step_type == "agent":
+            steps.append({"type": "agent", "agentId": step.get("agentId", ""),
+                          "operation": step.get("operation"), "message": step.get("message")})
         elif step_type == "navigation":
             steps.append({"type": "navigation", "targetPageId": str(step.get("targetPageId") or "")})
         elif step_type == "interface":
@@ -367,6 +376,20 @@ def _required_endpoint_ids(page: dict[str, Any]) -> list[str]:
     return result
 
 
+def _qualified_implementation(item: dict, dependencies: list[tuple[str, str]]) -> dict:
+    """在页面作用域补齐接口契约，保留歧义供校验报告，不选择碰巧先出现的接口。"""
+    result = dict(item)
+    if item.get("endpointId"):
+        try:
+            key = resolve_endpoint_key(dict.fromkeys(dependencies), item["endpointId"], item.get("apiContractId", ""))
+            result["apiContractId"] = key[0]
+        except ValueError:
+            pass
+    if item.get("stepBindings"):
+        result["stepBindings"] = [_qualified_implementation(step, dependencies) for step in item["stepBindings"]]
+    return result
+
+
 def technical_plan_pages(technical_plan: dict[str, Any]) -> list[dict[str, Any]]:
     """读取当前 TechnicalPlan 的紧凑 pages。"""
 
@@ -447,6 +470,11 @@ def build_page_implementation_contracts(
                     {"controlId": control_id, "label": ""}
                 )
         implementations = _implementation_index(page)
+        try:
+            dependencies = page_endpoint_keys(technical_plan, page)
+        except ValueError:
+            dependencies = []
+        implementations = {key: _qualified_implementation(item, dependencies) for key, item in implementations.items()}
         effects, step_effects = _ui_effects(ui_page)
         action_bindings = []
         for action_id, action in product_actions.items():
@@ -627,7 +655,7 @@ def validate_page_implementation_contracts(
     errors: list[str] = []
     if set(actual_pages) != expected_pages or len(actual_pages) != len(set(actual_pages)):
         errors.append("TechnicalPlan 必须为每个 ProductPlan 页面生成唯一 PageImplementationContract。")
-    endpoint_ids = set(_endpoint_catalog(technical_plan))
+    endpoint_ids = {key[1] for key in _endpoint_catalog(technical_plan)}
     product_pages = {
         str(page.get("pageId") or "").strip(): page
         for page in _dict_items(product_plan.get("pages"))
@@ -662,6 +690,16 @@ def validate_page_implementation_contracts(
             if isinstance(source_page.get("references"), dict)
             else {}
         )
+        try:
+            dependency_keys = page_endpoint_keys(technical_plan, source_page)
+            for implementation in _technical_implementations(source_page):
+                targets = _dict_items(implementation.get("stepBindings")) or [implementation]
+                for target in targets:
+                    if target.get("endpointId"):
+                        resolve_endpoint_key(dict.fromkeys(dependency_keys), target["endpointId"],
+                                             str(target.get("apiContractId") or ""))
+        except ValueError as exc:
+            errors.append(f"页面 {page_id} 的接口依赖：{exc}")
         product_actions = _dict_items(product_page.get("actions"))
         uses_current_product_contract = product_actions and all(
             isinstance(action.get("behavior"), dict) and action["behavior"].get("type")
@@ -776,6 +814,7 @@ def _validate_action_binding(
             continue
         step_allowed_field = {
             "endpoint": "endpointId",
+            "agent": "agentId",
             "navigation": "targetPageId",
             "local": "localEffect",
             "external": "externalTarget",
@@ -791,7 +830,10 @@ def _validate_action_binding(
                 + "、".join(unexpected_step_fields)
                 + "。"
             )
-        if step_type == "endpoint":
+        if step_type == "agent":
+            if str(step.get("agentId") or "") not in agent_ids:
+                errors.append(f"页面 {page_id} 的组合动作 {action_id} 引用了未绑定该页的 Agent。")
+        elif step_type == "endpoint":
             endpoint_id = str(step.get("endpointId") or "")
             if not validate_endpoint_references:
                 continue

@@ -50,6 +50,12 @@ def _execution_retry_hint(execution, graph, source) -> RetryHint | None:
         node = "technical_planning_review" if execution.node == "technical_planning_confirm" else execution.node
         if (_failed_test_retry(source) and node == "small_task_repair"):
             node = "integration_test"
+        if _failed_test_retry(source) and node == "test_phase_confirmation":
+            values = getattr(execution.snapshot, "values", {}) or {}
+            # 报告失效应重做单测，不能再次进入只负责核对报告的确认节点。
+            if (values.get("unit_test_gate_passed") is not True
+                    and values.get("unit_test_next_action") == "test_phase_confirmation"):
+                node = "unit_test"
         if node in graph.nodes and node not in {"workflow_entry", "handle_failure", "await_user_input", "__end__"}:
             return RetryHint(node=node, request=execution.request)
     return None

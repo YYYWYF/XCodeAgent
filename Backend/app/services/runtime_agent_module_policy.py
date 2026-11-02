@@ -54,7 +54,7 @@ def agent_module_facts(plan: Mapping, agent_id: str, module: str) -> dict:
     contract = contracts[agent_id]
     topology = plan.get("topology") or {}
     facts = {"agentId": agent_id, "module": module, "configuration": contract["agentSettings"][module],
-             "factoryAgentIds": sorted(contracts),
+             "interactionContract": plain_json(contract["interactionContract"]),
              "topology": {key: plain_json(topology.get(key)) for key in
                           ("type", "serviceIds", "publicEdgeServiceId", "authenticationTermination")}}
     if module in {"prompt", "context"}:

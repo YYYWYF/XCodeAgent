@@ -204,6 +204,11 @@ def initial_api_design_payload(
     """
 
     contract, endpoint = find_endpoint(project_plan, api_contract_id, endpoint_id)
+    if endpoint.get("kind") == "agent_runtime":
+        from app.services.agent_endpoint_design import agent_endpoint_draft
+        return {"endpoint": {**endpoint, "apiContractId": api_contract_id}, "endpointFields": [],
+                "implementationKind": "agent_runtime", "draft": agent_endpoint_draft(project_plan, api_contract_id, endpoint_id),
+                "existingStatus": endpoint_design_status(workspace_root, api_contract_id, endpoint_id)}
     endpoint_nodes = endpoint_field_nodes(contract, endpoint)
     existing = read_endpoint_design(workspace_root, api_contract_id, endpoint_id, require_current=False)
     if isinstance(existing, dict) and existing.get("schemaVersion") == API_DESIGN_SCHEMA_VERSION and isinstance(existing.get("fieldMappings"), list):
@@ -371,6 +376,9 @@ def confirm_api_design(
     if parsed.action != "confirm":
         raise ApiDesignError("当前动作不是 API 设计确认。")
     contract, endpoint = find_endpoint(project_plan, parsed.api_contract_id, parsed.endpoint_id)
+    if endpoint.get("kind") == "agent_runtime":
+        from app.services.agent_endpoint_design import confirm_agent_endpoint
+        return confirm_agent_endpoint(workspace_root, project_plan, contract, endpoint, parsed.draft)
     draft = parsed.draft
     if not isinstance(draft, dict):
         raise ApiDesignError("API 设计草稿必须是对象。")
@@ -507,6 +515,8 @@ def api_design_source_types(designs: list[dict[str, Any]]) -> list[str]:
 
     result: list[str] = []
     for design in designs:
+        if design.get("implementationKind") == "agent_runtime":
+            continue
         binding = design.get("sourceBinding") or {}
         if binding.get("sourceType") and binding["sourceType"] not in result:
             result.append(binding["sourceType"])
@@ -982,6 +992,10 @@ def _validate_persisted_design(
 ) -> None:
     """重新校验已确认产物的当前字段映射，防止手工残缺产物进入 Build。"""
 
+    if endpoint.get("kind") == "agent_runtime":
+        from app.services.agent_endpoint_design import validate_agent_endpoint_design
+        validate_agent_endpoint_design(project_plan, contract, endpoint, design)
+        return
     validate_static_design(design)
     persisted_endpoint = design.get("endpointContract")
     if not isinstance(persisted_endpoint, dict) or persisted_endpoint != endpoint:
@@ -1564,79 +1578,12 @@ def _json_structure_leaf_fields(schema: Any, *, section: str, prefix: str = "") 
 
 
 def _target_endpoints(
-    project_plan: dict[str, Any],
-    *,
-    target_type: str,
-    target_id: str,
+    project_plan: dict[str, Any], *, target_type: str, target_id: str,
     api_contract_id: str | None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """解析应用、页面或单 Endpoint 对应的当前 TechnicalPlan 接口集合。"""
-
-    if target_type == "agent":
-        from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
-
-        contract = agent_contract_index(project_plan).get(target_id)
-        if contract is None:
-            raise ApiDesignError(f"正式技术规划不存在智能体 {target_id}。")
-        return [find_endpoint(project_plan, api, endpoint) for api, endpoint in agent_endpoint_keys(contract)]
-    if target_type == "application":
-        return [
-            (contract, endpoint)
-            for contract in _dict_items(project_plan.get("api_contracts"))
-            for endpoint in _dict_items(contract.get("endpoints"))
-        ]
-    if target_type == "endpoint":
-        return [find_endpoint(project_plan, str(api_contract_id or ""), target_id)]
-    if target_type == "agent":
-        from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys
-
-        agent = agent_contract_index(project_plan).get(target_id)
-        if agent is None:
-            raise ApiDesignError(f"TechnicalPlan 不包含智能体：{target_id}。")
-        return [find_endpoint(project_plan, contract_id, endpoint_id)
-                for contract_id, endpoint_id in agent_endpoint_keys(agent)]
-    if target_type != "page":
-        raise ApiDesignError(f"不支持的开发目标类型：{target_type}。")
-    page = next(
-        (
-            item
-            for item in project_plan_page_records(project_plan)
-            if str(item.get("pageId") or item.get("id") or "") == target_id
-        ),
-        None,
-    )
-    if page is None:
-        raise ApiDesignError(f"TechnicalPlan 不包含页面：{target_id}。")
-    implementation = next(
-        (
-            item
-            for item in _dict_items(project_plan.get("page_implementation_contracts"))
-            if str(item.get("pageId") or "") == target_id
-        ),
-        None,
-    )
-    if implementation is not None:
-        endpoint_ids = {str(item).strip() for item in implementation.get("requiredEndpointIds") or [] if str(item).strip()}
-    else:
-        references = page.get("references") if isinstance(page.get("references"), dict) else {}
-        endpoint_ids = {
-            str(item.get("endpoint_id") or "")
-            for item in _dict_items(references.get("endpoint_dependencies"))
-            if str(item.get("endpoint_id") or "").strip()
-        }
-    from app.services.runtime_agent_contracts import page_agent_endpoint_keys
-    endpoint_ids.update(key[1] for key in page_agent_endpoint_keys(project_plan, target_id))
-    matches = [
-        (contract, endpoint)
-        for contract in _dict_items(project_plan.get("api_contracts"))
-        for endpoint in _dict_items(contract.get("endpoints"))
-        if str(endpoint.get("id") or "") in endpoint_ids
-    ]
-    found = {str(endpoint.get("id") or "") for _, endpoint in matches}
-    missing = sorted(endpoint_ids - found)
-    if missing:
-        raise ApiDesignError(f"页面引用了不存在的 Endpoint：{', '.join(missing)}。")
-    return matches
+    """设计门禁复用同一目标解析，Agent 本身也必须确认正式运行接口。"""
+    from app.services.runtime_endpoint_dependencies import resolve_runtime_target
+    return resolve_runtime_target(project_plan, target_type, target_id, api_contract_id)["endpoints"]
 
 
 def _endpoint_node_id(side: str, location: str, path: str) -> str:

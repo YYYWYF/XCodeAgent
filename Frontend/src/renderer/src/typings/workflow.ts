@@ -960,6 +960,7 @@ export type WorkflowApiDesignReadinessItem = {
 }
 
 export type WorkflowClarification = {
+  repair_target?: 'product_plan' | 'technical_plan'
   mode?: string
   /** 应用架构选项及可用状态由后端签发，前端不自行推断。 */
   topologyOptions?: Array<{

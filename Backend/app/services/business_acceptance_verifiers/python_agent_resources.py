@@ -41,7 +41,13 @@ def verify_agent_resources(program, files, unit, function, factory, module, conf
     if middleware is None:
         calls = []
     elif isinstance(middleware, (ast.List, ast.Tuple)):
-        calls = [program.expand(unit, item, function) for item in middleware.elts]
+        calls = [program.expand(unit, item, function) for item in middleware.elts if not (
+            isinstance(item, ast.Starred) and isinstance(item.value, ast.Call)
+            and program.symbol(unit, item.value.func) == "app.agent.execution_guard.text_only_middleware"
+            and len(item.value.args) == 1 and isinstance(item.value.args[0], ast.Name)
+            and item.value.args[0].id == "execution_policy")]
+    elif isinstance(middleware, ast.Call) and program.symbol(unit, middleware.func) == "app.agent.execution_guard.text_only_middleware":
+        calls = []
     else:
         return [], ["资源中间件必须使用显式列表，无法证明动态装配。"]
     symbol = "deepagents.middleware.skills.SkillsMiddleware" if module == "skills" else "deepagents.middleware.memory.MemoryMiddleware"

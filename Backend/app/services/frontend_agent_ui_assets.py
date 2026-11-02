@@ -13,6 +13,8 @@ AGENT_UI_FRONTEND_SOURCE_RELATIVE_PATHS = (
     "src/components/AgentConversation/AgentChatCore.tsx",
     "src/components/AgentConversation/AgentInteraction.tsx",
     "src/components/AgentConversation/AgentComposer.tsx",
+    "src/components/AgentConversation/AgentActionControls.tsx",
+    "src/components/AgentConversation/useAgentActionRequest.ts",
     "src/components/AgentConversation/AgentMessageBubble.tsx",
     "src/components/AgentConversation/AgentConversationPage.tsx",
     "src/components/AgentConversation/AgentFloatingPanel.tsx",

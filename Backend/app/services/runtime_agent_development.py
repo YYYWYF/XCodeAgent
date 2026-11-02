@@ -39,7 +39,7 @@ def module_inputs(plan: dict, agent_id: str) -> dict:
     return {module: agent_module_facts(plan, agent_id, module) for module in AGENT_RUNTIME_MODULES}
 
 
-def reconcile_agent_progress(plan: dict, agent_id: str, progress):
+def reconcile_agent_progress(plan: dict, agent_id: str, progress, workspace: str | Path | None = None):
     """正式模块输入改变时标记需更新，保留首次开发完成事实。"""
 
     if progress.initial_development_status != "completed":
@@ -47,6 +47,17 @@ def reconcile_agent_progress(plan: dict, agent_id: str, progress):
     previous = (progress.model_extra or {}).get("module_inputs")
     if previous != module_inputs(plan, agent_id):
         return progress.model_copy(update={"change_status": "changed", "change_reason": "智能体正式输入已变化，请更新实现。"})
+    if workspace is not None:
+        from app.services.runtime_target_acceptance import acceptance_fingerprint, target_acceptance_plan
+        record = (progress.model_extra or {}).get("runtime_acceptance") or {}
+        specification = target_acceptance_plan(plan, {"type": "agent", "targetId": agent_id})
+        try:
+            valid = (record.get("agentFingerprints") or {}).get(agent_id) == acceptance_fingerprint(
+                Path(workspace).resolve(), plan, specification, cached_desktop=record.get("desktopVerifierSha256"))
+        except (ValueError, OSError, KeyError, SyntaxError):
+            valid = False
+        if not valid:
+            return progress.model_copy(update={"change_status": "changed", "change_reason": "智能体实现或目标验收输入已变化，需要重新验收。"})
     return progress
 
 
@@ -85,6 +96,10 @@ def completed_build_agents(workspace, state: dict, execution) -> list[Developmen
         # 同一切片的 Tool 前置任务也必须成功，不能用单独模块结果冒充完整 Agent。
         if any(current.get(key, {}).get("status") not in {"completed", "already_satisfied"} for key in selected_ids):
             continue
+        from app.services.runtime_target_acceptance import require_runtime_target_evidence
+        evidence = require_runtime_target_evidence(root, state)
+        if evidence is None or agent_id not in {item["agentId"] for item in evidence["cases"]}:
+            continue
         result.append(DevelopmentArtifactTarget(type="agent", agentId=agent_id))
     return result
 
@@ -98,7 +113,7 @@ def agent_development_payload(root: Path, formal: dict, agent_id: str) -> dict:
     lifecycle = load_application_lifecycle(root)
     progress = lifecycle.development_artifacts.agents.get(agent_id) if lifecycle else None
     if progress:
-        progress = reconcile_agent_progress(formal, agent_id, progress)
+        progress = reconcile_agent_progress(formal, agent_id, progress, root)
     plan = load_confirmed_build_task_plan(root) or {}
     registry = plan.get("task_registry") or {}
     # 尚未生成 DAG 时只展示待开发，不因模板策略尚不存在而阻断整个目录。

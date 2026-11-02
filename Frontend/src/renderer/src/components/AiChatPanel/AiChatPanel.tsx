@@ -3256,7 +3256,8 @@ export default function AiChatPanel({
     ? WORKBENCH_PHASE_AGENTS[applicationOwnership.owner.workbenchPhase].label
     : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
   // 输入只沿用现有任务控制，不因应用级规划错误或同步状态禁用。
-  const workflowInputLocked = workspaceBusy || pendingPlanActionable
+  // 本会话可以修改自己的待确认计划；跨会话占用仍由 workspaceBusy 保护。
+  const workflowInputLocked = workspaceBusy || pendingPlanOwnedByOtherSession
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }
@@ -5772,6 +5773,8 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              onStartPageDevelopment={(page) => { void handleStartPageDesign(page.pageId, page.label, Boolean(page.hasDetailPlan)) }}
+              pageDevelopmentDisabled={loading || workflowInputLocked || activeWorkbenchPhase !== 'development'}
               agentStateRevision={applicationLifecycle?.revision}
               onStartAgentDevelopment={async (agent) => { await handleStartAgentDevelopment(agent.agentId, agent.name) }}
               onOpenAgentExecution={(execution) => {

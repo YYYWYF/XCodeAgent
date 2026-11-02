@@ -14,10 +14,12 @@ import RuntimeAgentDetail from '../RuntimeAgentDetail'
 import AgentInterfaceDetail from './AgentInterfaceDetail'
 import { requestRuntimeWorkbench } from '../../../../service/runtimeWorkbench'
 import type { RuntimeAgent, RuntimeSettingsResult } from '../../../../service/runtimeWorkbench'
-import type { WorkbenchExecution } from '../../../../typings'
+import type { WorkbenchExecution, DevelopmentPlanningPageOption } from '../../../../typings'
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
+  onStartPageDevelopment?: (page: DevelopmentPlanningPageOption) => void
+  pageDevelopmentDisabled?: boolean
   onStartAgent?: (agent: BusinessAgentOption) => void
   agentActionsDisabled?: boolean
   theme: 'light' | 'dark'
@@ -37,6 +39,8 @@ type Props = ApplicationOutlineProps & {
 
 /** 并排展示产物菜单与接口、实体详情，菜单选择不改变开发工作流。 */
 export default function DevelopmentArtifactsPanel({
+  onStartPageDevelopment,
+  pageDevelopmentDisabled,
   theme,
   useBuiltinDatabase,
   detailLabel,
@@ -56,6 +60,7 @@ export default function DevelopmentArtifactsPanel({
   ...outlineProps
 }: Props): ReactElement {
   const [agents, setAgents] = useState<RuntimeAgent[]>([])
+  const selectedPage = outlineProps.pages.find((page) => page.pageId === outlineProps.selectedPageId)
   const [agentId, setAgentId] = useState('')
   const [agentError, setAgentError] = useState('')
   const [agentRefresh, setAgentRefresh] = useState(0)
@@ -187,6 +192,11 @@ export default function DevelopmentArtifactsPanel({
           <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
             <h3>{detailLabel || '请选择开发产物'}</h3>
             <p>{detailLabel ? '详情内容待设计' : '点击左侧菜单查看详情'}</p>
+            {selectedPage && onStartPageDevelopment ? (
+              <Button type="primary" disabled={pageDevelopmentDisabled} onClick={() => onStartPageDevelopment(selectedPage)}>
+                {selectedPage.hasDetailPlan ? '开始页面开发' : '设计并开发页面'}
+              </Button>
+            ) : null}
           </div>
         )}
       </section>

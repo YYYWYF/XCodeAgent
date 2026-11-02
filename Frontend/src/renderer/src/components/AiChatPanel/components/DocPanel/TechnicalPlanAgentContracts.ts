@@ -1,4 +1,4 @@
-import { recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
+import { recordItems, type JsonRecord } from './TechnicalPlanDocPanelData'
 
 export type AgentInvocation = {
   protocol: 'ag-ui'
@@ -29,27 +29,7 @@ export function agentInvocation(agentId: string): AgentInvocation {
   }
 }
 
-/** 仅合并阅读视图，每个正式 Agent 对应一个接口，不写入普通业务 API 或实体。 */
+/** 只读取正式接口集合，运行入口已由规划编译，不额外派生或重复计数。 */
 export function technicalPlanDisplayContracts(plan: JsonRecord): JsonRecord[] {
-  const agentContracts = recordItems(plan.agent_contracts).map((agent): JsonRecord => {
-    const invocation = agentInvocation(textValue(agent.agentId))
-    return {
-      id: invocation.endpointId,
-      name: `${textValue(agent.name)} · 智能体接口`,
-      base_path: invocation.path,
-      invocation,
-      agentId: agent.agentId,
-      pageIds: agent.pageIds,
-      endpoints: [
-        {
-          id: invocation.endpointId,
-          name: '智能体会话',
-          method: invocation.method,
-          path: invocation.path,
-          summary: 'AG-UI SSE 会话接口，所有关联页面共用。'
-        }
-      ]
-    }
-  })
-  return [...recordItems(plan.api_contracts), ...agentContracts]
+  return recordItems(plan.api_contracts)
 }

@@ -11,6 +11,9 @@ let saving = true
 let reads = 0
 
 try {
+  const structured = { id: 'original', messages: [{ role: 'assistant', content }, { role: 'user', content: '继续' }] }
+  await writeSessionAtomically(sessionFile, structured)
+  assert.deepEqual(JSON.parse(await fs.readFile(sessionFile, 'utf8')), structured)
   await writeSessionAtomically(sessionFile, { id: 'original', revision: 0, content })
   // 模拟同一会话落交接消息时，阶段切换及会话列表同时读取；不启动第二个业务执行。
   await Promise.all([

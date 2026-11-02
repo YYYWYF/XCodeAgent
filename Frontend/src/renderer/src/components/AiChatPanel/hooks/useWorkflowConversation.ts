@@ -1809,6 +1809,9 @@ export function useWorkflowConversation({
           [identity.key]: failedContent
         }))
       }
+      // 原请求已退出并归档；恢复投影是独立的只读查询，不能继续占住运行锁。
+      // 先收口再同步，避免查询超时期间界面同时显示失败、运行中及不可点击的调试入口。
+      finalizeSessionExecution()
       if (options?.executionRecovery) {
         // Recovery endpoint 的内部错误码不写入历史错误卡，避免 stale action 形成第二控制面。
         if (staleRecoveryAction) {

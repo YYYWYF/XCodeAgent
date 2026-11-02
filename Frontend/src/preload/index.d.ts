@@ -82,6 +82,8 @@ declare global {
             label: string
             entityIds?: string[]
             endpoints: Array<{
+              kind: 'business' | 'agent_runtime'
+              agent_id?: string
               apiContractId?: string
               id: string
               method: string

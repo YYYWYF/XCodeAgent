@@ -28,11 +28,11 @@ _CUSTOM_CHAT_PATTERNS = (
 )
 
 
-def _extract_json_config(source: str) -> dict[str, Any] | None:
+def _extract_json_config(source: str, name: str = "AGENT_UI_CONFIG") -> dict[str, Any] | None:
     """读取固定名称 AGENT_UI_CONFIG 后的纯 JSON 对象字面量。"""
 
     match = re.search(
-        r"\bconst\s+AGENT_UI_CONFIG(?:\s*:\s*AgentUiTemplateConfig)?\s*=\s*\{",
+        rf"\bconst\s+{re.escape(name)}(?:\s*:\s*AgentUiTemplateConfig)?\s*=\s*\{{",
         source,
     )
     if not match:
@@ -104,6 +104,8 @@ def _floating_business_body_exists(source: str, component: str) -> bool:
 def verify_agent_ui_runtime_source(
     files: dict[str, str],
     expected: dict[str, Any],
+    *,
+    _config_name: str = "AGENT_UI_CONFIG",
 ) -> dict[str, Any]:
     """验证页面精确绑定正式 Runtime，并拒绝覆盖平台适配器或另建网络传输。"""
 
@@ -118,6 +120,7 @@ def verify_agent_ui_runtime_source(
     runtime = expected_config.get("runtime")
     if contract.get("mode") != "runtime" or runtime != {
         "path": f"/agents/{contract.get('agentId')}/run", "pageId": contract.get("pageId"),
+        "interactionKinds": ((contract.get("runtimeEndpoint") or {}).get("interactionContract") or {}).get("interactionKinds"),
     }:
         return verification_result("blocked", "Agent UI 未绑定当前正式 Agent 的精确同源 Runtime 路径。")
     combined = "\n".join(files.values())
@@ -125,17 +128,19 @@ def verify_agent_ui_runtime_source(
     errors: list[str] = []
     if not _component_imported(clean, component, module):
         errors.append(f"页面未从 {module} 精确导入 {component}。")
-    attrs = _component_attributes(clean, component)
+    attrs = next((match.group("attrs") for match in re.finditer(
+        rf"<{re.escape(component)}\b(?P<attrs>[^>]*)/?>", clean, re.DOTALL)
+        if re.search(rf"\bconfig\s*=\s*\{{\s*{re.escape(_config_name)}\s*\}}", match.group("attrs"))), "")
     if not attrs:
         errors.append(f"页面未渲染固定组件 {component}。")
-    elif not re.search(r"\bconfig\s*=\s*\{\s*AGENT_UI_CONFIG\s*\}", attrs):
+    elif not re.search(rf"\bconfig\s*=\s*\{{\s*{re.escape(_config_name)}\s*\}}", attrs):
         errors.append("固定组件必须使用 config={AGENT_UI_CONFIG}。")
     if attrs and (
         re.search(r"\badapter\s*=", attrs)
         or re.search(r"\{\s*\.\.\.", attrs)
     ):
         errors.append("固定组件不得传入 adapter 或 JSX spread。")
-    actual_config = _extract_json_config(clean)
+    actual_config = _extract_json_config(clean, _config_name)
     if actual_config != expected_config:
         errors.append("AGENT_UI_CONFIG 与平台投影配置不完全一致。")
     if "data-preview-only" in clean:
@@ -149,6 +154,11 @@ def verify_agent_ui_runtime_source(
         clean, component
     ):
         errors.append("floating_panel 页面必须保留并渲染普通业务页面主体。")
+    for index, companion in enumerate(contract.get("companions", []), start=1):
+        result = verify_agent_ui_runtime_source(files, {"agent_ui": companion},
+                                               _config_name=f"AGENT_UI_CONFIG_{index}")
+        if result.get("status") != "passed":
+            errors.append(f"同页 Agent Surface {index} 校验未通过：{result}")
     if errors:
         return verification_result(
             "failed",

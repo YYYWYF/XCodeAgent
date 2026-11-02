@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from app.services.product_plan import project_active_agent_product_plan
+from app.services.agent_action_bindings import agent_action_bindings
 from app.services.ui_design_agent_template import (
     inspect_agent_ui_template_usage,
     validate_agent_ui_template_usage,
@@ -54,6 +55,7 @@ def project_ui_design_pages(product_plan: dict[str, Any]) -> list[dict[str, Any]
     """按 pageId 把 Agent 事实与页面绑定投影为 UiDesign 单页输入。"""
 
     product_plan = project_active_agent_product_plan(product_plan)
+    action_owners = agent_action_bindings(product_plan)
     surfaces_by_page: dict[str, list[dict[str, Any]]] = {}
     for agent in _dict_items(product_plan.get("agents")):
         agent_id = str(agent.get("agentId") or "").strip()
@@ -70,7 +72,8 @@ def project_ui_design_pages(product_plan: dict[str, Any]) -> list[dict[str, Any]
                 {
                     "agentId": agent_id,
                     "type": str(surface.get("type") or "").strip(),
-                    "actionIds": _string_items(binding.get("actionIds")),
+                    "actionIds": list(dict.fromkeys([*_string_items(binding.get("actionIds")),
+                        *(action_id for action_id, owner in action_owners.get(page_id, {}).items() if owner == agent_id)])),
                     "contextItemIds": _string_items(surface.get("contextItemIds")),
                     "name": agent_name,
                     "purpose": purpose,
@@ -105,7 +108,7 @@ def inspect_agent_surface_bindings(
             {
                 "agentId": agent_id,
                 "type": surface_type,
-                "actionIds": [str(config.get("actionId") or "").strip()],
+                "actionIds": [item["actionId"] for item in _dict_items(config.get("actions"))],
                 "contextItemIds": [
                     str(item.get("id") or "").strip()
                     for item in _dict_items(config.get("contextItems"))

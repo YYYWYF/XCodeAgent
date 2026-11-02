@@ -12,13 +12,27 @@ def completed_page_endpoints(
 ) -> list[DevelopmentArtifactTarget]:
     """只接受同轮已绑定计划中全部任务成功、且通过单测门的接口 Unit。"""
 
+    return _completed_scope_endpoints(state, scope_type="page", target_id=page_id, run_id=run_id)
+
+
+def completed_agent_endpoints(
+    state: dict[str, Any], *, agent_id: str, run_id: str,
+) -> list[DevelopmentArtifactTarget]:
+    """登记同轮 Agent 实际依赖且已完成的业务接口，不关联未执行的其他接口。"""
+    return _completed_scope_endpoints(state, scope_type="agent", target_id=agent_id, run_id=run_id)
+
+
+def _completed_scope_endpoints(
+    state: dict[str, Any], *, scope_type: str, target_id: str, run_id: str,
+) -> list[DevelopmentArtifactTarget]:
+    """沿同一执行切片核对接口成功事实，不以设计保存或 Agent 自报代替完成。"""
     scope = state.get("build_execution_scope")
     plan = state.get("build_task_plan")
     execution_slice = state.get("build_execution_slice")
     if (state.get("active_run_id") != run_id
             or state.get("unit_test_gate_passed") is not True
             or not isinstance(scope, dict)
-            or scope.get("type") != "page" or scope.get("targetId") != page_id
+            or scope.get("type") != scope_type or scope.get("targetId") != target_id
             or not isinstance(plan, dict)
             or plan.get("confirmation_status") != "confirmed"
             or plan.get("build_execution_scope") != scope

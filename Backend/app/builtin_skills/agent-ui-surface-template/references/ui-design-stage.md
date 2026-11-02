@@ -10,12 +10,12 @@ an imported platform component rather than generated page-local code.
 ## Required Composition
 
 1. Read the projected Agent Surface before choosing the page composition.
-2. For `standalone_page`, render exactly one `AgentConversationTemplate` as the
-   page body.
+2. For `standalone_page`, render the declared `AgentConversationTemplate` as the
+   page body. A separately declared floating Surface may coexist on that page.
 3. For `floating_panel`, preserve the complete business page and render exactly
    one `AgentFloatingPanelTemplate` beside that body.
-4. Pass only the platform-projected `AgentUiTemplateConfig`. Keep Agent ID,
-   Surface, action ID, and context item IDs exact.
+4. Pass every platform-projected `AgentUiTemplateConfig`. Keep Agent ID,
+   Surface, the complete actions list, confirmation flags, and context item IDs exact.
 5. Keep ProductPlan action and information-item evidence on the business controls
    that implement those facts. Mock preview controls remain explicitly marked as
    preview-only and are not product actions.

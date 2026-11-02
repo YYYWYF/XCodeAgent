@@ -85,6 +85,13 @@ def read_endpoint_design_detail(request: EndpointDesignDetailRequest) -> dict[st
 def prepare_endpoint_design(request: EndpointDesignPrepareRequest) -> dict[str, Any]:
     """读取 TechnicalPlan 并构造独立 API 映射编辑器的完整输入。"""
 
+    with BINDING_STATE_LOCK:
+        return _prepare_endpoint_design_locked(request)
+
+
+def _prepare_endpoint_design_locked(request: EndpointDesignPrepareRequest) -> dict[str, Any]:
+    """准备结果与保存共用锁，保证候选、版本和已保存状态来自同一读取窗口。"""
+
     workspace = Path(request.workspace_root).expanduser().resolve()
     project_plan = _read_current_technical_plan(workspace)
     payload = initial_api_design_payload(
@@ -123,6 +130,10 @@ def _save_endpoint_design_locked(request: EndpointDesignSaveRequest) -> dict[str
     project_plan = _read_current_technical_plan(workspace)
     if request.technical_plan_hash is not None and request.technical_plan_hash != technical_plan_sha256(workspace):
         raise ApiDesignError("TechnicalPlan 已变化，请重新加载后再确认。")
+    from app.services.api_design import find_endpoint
+    contract, endpoint = find_endpoint(project_plan, request.api_contract_id, request.endpoint_id)
+    if endpoint.get("kind") == "agent_runtime" and request.technical_plan_hash is None:
+        raise ApiDesignError("确认运行接口必须携带当前 TechnicalPlan 指纹。")
     if request.binding_selection is not None:
         if request.technical_plan_hash is None:
             raise ApiDesignError("简化绑定确认必须提供 TechnicalPlan 指纹。")
@@ -135,19 +146,26 @@ def _save_endpoint_design_locked(request: EndpointDesignSaveRequest) -> dict[str
     )
     current_revision = str(existing.get("artifactRevision") or "") if existing else ""
     requested_revision = str(request.base_revision or "")
+    result = None
     if requested_revision != current_revision:
-        raise ApiDesignError("Endpoint 映射已被其他操作修改，请重新加载后再保存。")
-    result = confirm_api_design(
-        workspace,
-        project_plan,
-        {
-            "action": "confirm",
-            "apiContractId": request.api_contract_id,
-            "endpointId": request.endpoint_id,
-            "draft": {**request.draft, **({"sourceBinding": request.binding_selection.model_dump(by_alias=True, exclude_none=True)} if request.binding_selection is not None else {})},
-        },
-    )
-    clear_binding_draft(workspace, request.api_contract_id, request.endpoint_id)
+        if endpoint.get("kind") == "agent_runtime" and request.binding_selection is None:
+            from app.services.agent_endpoint_design import reuse_confirmed_agent_endpoint
+            result = reuse_confirmed_agent_endpoint(workspace, project_plan, contract, endpoint, request.draft, existing)
+        if result is None:
+            raise ApiDesignError("Endpoint 映射已被其他操作修改，请重新加载后再保存。")
+    if result is None:
+        result = confirm_api_design(
+            workspace,
+            project_plan,
+            {
+                "action": "confirm",
+                "apiContractId": request.api_contract_id,
+                "endpointId": request.endpoint_id,
+                "draft": {**request.draft, **({"sourceBinding": request.binding_selection.model_dump(by_alias=True, exclude_none=True)} if request.binding_selection is not None else {})},
+            },
+        )
+    if not result.get("reusedExisting"):
+        clear_binding_draft(workspace, request.api_contract_id, request.endpoint_id)
     return {
         "status": "saved",
         "apiContractId": request.api_contract_id,
@@ -171,4 +189,6 @@ def _read_current_technical_plan(workspace: Path) -> dict[str, Any]:
         raise ApiDesignError("当前 technical-plan.json 无法读取。") from exc
     if not isinstance(value, dict):
         raise ApiDesignError("当前 technical-plan.json 格式无效。")
+    if value.get("confirmation_status") != "confirmed":
+        raise ApiDesignError("请先正式确认当前技术规划，再审阅接口接入设计。")
     return value

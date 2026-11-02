@@ -75,7 +75,8 @@ def debug_snapshot(workspace: str) -> dict:
             return {"active": False}
         ready, _ = runtime_health(current.url, current.launch_id, database_required=current.database_required,
                                   expected_agent_ids=current.agent_ids, allowed_agent_ids=current.allowed_agent_ids,
-                                  profile="debug")
+                                  profile="debug", expected_application=root / "agent-runtime",
+                                  expected_namespace="debug:" + current.launch_id)
         if not ready or time.time() >= current.expires_at:
             stop_debug(str(root), current.owner)
             return {"active": False}

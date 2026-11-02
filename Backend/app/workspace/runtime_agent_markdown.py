@@ -49,5 +49,6 @@ def runtime_agents_markdown(plan: dict) -> str:
         for module in AGENT_RUNTIME_MODULES:
             lines.extend([f"#### {MODULE_LABELS[module]}（{module}）", "",
                           *_setting_lines(contract["agentSettings"][module]), ""])
+        lines.extend(["#### 公开交互能力", "", *_setting_lines(contract["interactionContract"]), ""])
         sections.append("\n".join(lines))
     return "\n\n".join(sections) or "- 无可执行 Agent"

@@ -98,6 +98,12 @@ def _build_units(
         for unit_id in unit_ids
     }
     extend_agent_units(project_plan, units, existing)
+    for contract in _dict_items(project_plan.get("api_contracts")):
+        for endpoint in _dict_items(contract.get("endpoints")):
+            if endpoint.get("kind") == "agent_runtime":
+                units[_endpoint_unit_id(contract["id"], endpoint["id"])].update(
+                    generation_strategy="prerequisite_only", participation="prerequisite_only",
+                    generation_status="not_required", agent_id=endpoint["agent_id"])
     return units
 
 
@@ -172,7 +178,8 @@ def _unit_graph(
                 errors.append(f"API contract {contract_id} endpoint {endpoint_id} has no Unit.")
                 continue
             edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
-            edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
+            dependency = f"agent:{endpoint['agent_id']}" if endpoint.get("kind") == "agent_runtime" else "backend:bootstrap"
+            edges.append({"from": dependency, "to": endpoint_unit_id, "type": "depends_on"})
             edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
 
     auth_resource_pages = authorization_resource_consumer_page_ids(project_plan)

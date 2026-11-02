@@ -261,12 +261,20 @@ def merge_code_change_sets(
     if not sets:
         return None
 
-    files = [
-        dict(file_item)
-        for change_set in sets
-        for file_item in change_set.get("files", [])
-        if isinstance(file_item, dict)
-    ]
+    # 同一原始 Diff 会同时出现于 Build 集合和阶段汇总中；只统计一次叶子记录，
+    # 不按路径去重，避免丢掉同文件后续真实修改。
+    files = []
+    seen = set()
+    for change_set in sets:
+        for file_item in change_set.get("files", []):
+            if not isinstance(file_item, dict):
+                continue
+            identity = (str(file_item.get("workspaceRoot") or change_set.get("workspaceRoot") or ""),
+                        str(file_item.get("path") or ""),
+                        str(file_item.get("id") or json.dumps(file_item, sort_keys=True, ensure_ascii=False)))
+            if identity not in seen:
+                seen.add(identity)
+                files.append(dict(file_item))
     if not files:
         return None
 

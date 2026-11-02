@@ -34,6 +34,8 @@ import ApiFieldMappingTable from './ApiFieldMappingTable'
 import { API_SOURCE_METADATA_ACTIONS } from './apiSourceSelectorModel'
 import type { ApiSourceMetadataAction, ApiSourceMetadataContext, ApiSourceMetadataRequestState } from './apiSourceSelectorModel'
 import './ApiDesignPanel.less'
+import { AgentEndpointContract } from '../FieldMapping/AgentEndpointReview'
+import type { RuntimeEndpointDraft } from '../../../../typings/endpointDesign'
 
 const { Text, Title } = Typography
 
@@ -47,7 +49,18 @@ type ApiDesignPanelProps = {
 }
 
 /** 渲染 Endpoint API 设计容器，并把字段绑定交互交给表格工作台。 */
-export default function ApiDesignPanel({
+export default function ApiDesignPanel(props: ApiDesignPanelProps): ReactElement {
+  if (props.payload.endpoint.kind === 'agent_runtime') {
+    const draft = props.payload.draft as unknown as RuntimeEndpointDraft
+    return <div><AgentEndpointContract draft={draft} /><Button type="primary" disabled={props.disabled}
+      onClick={() => props.onAction({ action: 'confirm', apiContractId: draft.apiContractId, endpointId: draft.endpointId,
+        draft: draft as unknown as WorkflowApiDesignAction['draft'] })}>审阅并确认接入设计</Button></div>
+  }
+  return <BusinessApiDesignPanel {...props} />
+}
+
+/** 普通业务分支才挂载字段取值和数据源元数据 Hook。 */
+function BusinessApiDesignPanel({
   disabled,
   payload,
   workspaceRoot,

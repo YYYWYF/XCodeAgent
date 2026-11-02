@@ -12,8 +12,8 @@ from app.domain.api_design_values import BusinessQueryRight, EndpointQueryRight,
 from app.domain.api_design_database import DatabaseSourceField, DatabaseConditionOperator, DatabaseWriteMapping, DatabaseQueryCondition, DatabaseQuerySubgroup, DatabaseQuery
 
 
-API_DESIGN_SCHEMA_VERSION = "endpoint-field-mapping.v7"
-API_DESIGN_ARTIFACT_TYPE = "endpoint-field-mapping"
+API_DESIGN_SCHEMA_VERSION = "endpoint-design.v8"
+API_DESIGN_ARTIFACT_TYPE = "endpoint-design"
 
 
 class EndpointFieldNode(ApiDesignModel):
@@ -201,8 +201,10 @@ class ArtifactLineageReference(ApiDesignModel):
 class EndpointFieldMappingDesign(ApiDesignModel):
     """描述已确认的 Endpoint 自包含字段映射正式产物。"""
 
-    schema_version: Literal["endpoint-field-mapping.v7"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
-    artifact_type: Literal["endpoint-field-mapping"] = Field(default=API_DESIGN_ARTIFACT_TYPE, alias="artifactType")
+    schema_version: Literal["endpoint-design.v8"] = Field(default=API_DESIGN_SCHEMA_VERSION, alias="schemaVersion")
+    artifact_type: Literal["endpoint-design"] = Field(default=API_DESIGN_ARTIFACT_TYPE, alias="artifactType")
+    implementation_kind: Literal["business"] = Field(default="business", alias="implementationKind")
+    markdown_sha256: str | None = Field(default=None, alias="markdownSha256", pattern=r"^[0-9a-f]{64}$")
     status: Literal["confirmed"] = "confirmed"
     confirmation_status: Literal["confirmed"] = Field(default="confirmed", alias="confirmationStatus")
     artifact_revision: str = Field(alias="artifactRevision", pattern=r"^[0-9a-f]{32}$")
@@ -291,4 +293,5 @@ class ApiDesignGateAction(ApiDesignModel):
         return self
 
 
-EndpointApiDesign = EndpointFieldMappingDesign
+from app.domain.agent_endpoint_design import AgentEndpointDesign
+EndpointApiDesign = Annotated[EndpointFieldMappingDesign | AgentEndpointDesign, Field(discriminator="implementation_kind")]

@@ -179,7 +179,9 @@ async def read_checkpoint_execution(source, graph) -> CheckpointExecution | None
             if current is not None and (current.status != DurableExecutionStatus.FAILED or current.node):
                 return current
         latest = None
-        async for snapshot in graph.aget_state_history(config):
+        # SQLite saver 会先批量载入历史；必须在查询边界限制数量，
+        # 否则即使循环很快 return，也已解码数百份包含 Diff 的大型状态。
+        async for snapshot in graph.aget_state_history(config, limit=8):
             result = interpret_checkpoint(source, snapshot, graph)
             if result is not None:
                 if latest is None:
@@ -189,6 +191,8 @@ async def read_checkpoint_execution(source, graph) -> CheckpointExecution | None
                 elif result.node and result.node not in {"handle_failure", "await_user_input", "workflow_entry"}:
                     # handle_failure 的终态不再保留业务 phase；只在同次失败内找最近业务现场。
                     return replace(latest, node=result.node, request=latest.request or result.request)
+        if latest is not None and latest.status is DurableExecutionStatus.FAILED and not latest.node:
+            raise RecoveryExecutionError("RETRY_CHECKPOINT_UNAVAILABLE", "最近执行记录尚不能定位失败节点，原恢复入口已保留。")
         return latest
 
     try:

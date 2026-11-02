@@ -69,7 +69,7 @@ export function buildQuickTasks(
         .toUpperCase()
       const path = String(endpoint.path || '/').trim()
       return {
-        progress: artifacts?.endpoints[apiContractId]?.[endpointId],
+        progress: endpoint.kind === 'agent_runtime' ? artifacts?.agents?.[endpoint.agent_id || ''] : artifacts?.endpoints[apiContractId]?.[endpointId],
         description: String(
           endpoint.summary || `来自 ${contract.label || contract.id || '当前接口契约'}`
         ).trim(),
@@ -80,7 +80,7 @@ export function buildQuickTasks(
         endpointLabel: `${method} ${path}`,
         endpointPath: path,
         hasDetailPlan: Boolean(endpoint.hasDetailPlan),
-        meta: method,
+        meta: endpoint.kind === 'agent_runtime' ? '智能体接口 · AG-UI / SSE' : method,
         title: String(endpoint.name || path).trim() || path
       }
     })
