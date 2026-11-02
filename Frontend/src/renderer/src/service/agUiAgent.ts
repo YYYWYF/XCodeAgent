@@ -1,3 +1,6 @@
+import { readAuthorizationBootstrap } from './authorizationBootstrap'
+export type { WorkflowAuthorizationBootstrap } from './authorizationBootstrap'
+export { readAuthorizationBootstrap } from './authorizationBootstrap'
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
@@ -448,6 +451,7 @@ export type WorkspaceInspectionProgress = {
 }
 
 export type ProcessStepRecord = {
+  authorizationBootstrap?: import('./authorizationBootstrap').WorkflowAuthorizationBootstrap
   id: string
   kind: 'reasoning' | 'tool' | 'command' | 'workflow'
   status: 'running' | 'completed' | 'failed' | 'requires_user_input'
@@ -920,6 +924,10 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
     buildExecutionSlice:
       step.buildExecutionSlice && typeof step.buildExecutionSlice === 'object'
         ? (step.buildExecutionSlice as import('../typings').WorkflowBuildExecutionSlice)
+        : undefined,
+    authorizationBootstrap:
+      step.nodeName === 'authorization_bootstrap'
+        ? readAuthorizationBootstrap(step.authorizationBootstrap)
         : undefined,
     ...(checks ? { checks } : {}),
     ...(dagGeneration ? { dagGeneration } : {}),

@@ -16,11 +16,16 @@ from typing import Any
 from app.utils.subprocess_output import subprocess_output_text
 from app.services.backend_launch_support import _backend_runtime_environment
 from app.services.database_credentials import DatabaseCredentialError
+from app.services.authorization_bootstrap_policy import (
+    AUTHORIZATION_SCHEMA_RELATIVE_PATH,
+    resolve_bootstrap_mode as _resolve_bootstrap_mode,
+    read_authorization_ddl as _read_authorization_ddl,
+    manual_result as _manual_result,
+)
 from app.services.workspace_process_registry import workspace_process_registry
 
 
 AUTHORIZATION_BOOTSTRAP_TIMEOUT_SECONDS = 600
-AUTHORIZATION_SCHEMA_RELATIVE_PATH = Path("backend/sql/authorization/schema.sql")
 _WORKSPACE_LOCKS: dict[str, Lock] = {}
 _WORKSPACE_LOCKS_GUARD = Lock()
 
@@ -80,10 +85,26 @@ def run_authorization_bootstrap(
     ):
         return {"status": "skipped", "reason": "authorization_disabled"}
     if not root.is_dir():
-        return _failed_result(fingerprint, "workspace_invalid", "工作区不存在或不是目录。")
+        return _manual_result(root, fingerprint, "unknown", "failed", "workspace_invalid", "工作区不存在或不是目录。")
+
+    # 仅捕获预期的文件及配置错误，编程错误继续上抛。
+    try:
+        return _run_bootstrap(root, fingerprint)
+    except (OSError, UnicodeError):
+        return _manual_result(root, fingerprint, "unknown", "failed", "local_io_failed",
+                              "权限初始化本地文件访问失败，请检查工作区权限。")
+
+
+def _run_bootstrap(root: Path, fingerprint: str) -> dict[str, Any]:
+    """在同一工作区锁内分流数据源，再执行、缓存或返回人工 DDL。"""
 
     lock = _workspace_lock(root)
     with lock:
+        mode, identity = _resolve_bootstrap_mode(root)
+        if mode not in {"direct", "builtin"}:
+            return _manual_result(root, fingerprint, mode, "manual_required",
+                                  "database_configuration_invalid" if mode == "unknown" else "manual_only_datasource",
+                                  "数据源配置异常，请检查当前应用配置。" if mode == "unknown" else "当前数据源需手动执行权限 DDL。")
         runtime_root = (
             root
             / WORKSPACE_ARTIFACT_DIR
@@ -92,22 +113,28 @@ def run_authorization_bootstrap(
             / _fingerprint_key(fingerprint)
         )
         marker_path = runtime_root / "result.json"
-        if _successful_marker(marker_path, fingerprint):
+        if _successful_marker(marker_path, fingerprint, identity):
             return {
                 "status": "reused",
+                "datasource_mode": mode,
+                "execution_attempted": False,
+                "requires_manual_action": False,
                 "manifest_fingerprint": fingerprint,
                 "message": "当前权限 manifest 已成功初始化，复用已有结果。",
                 "log_directory": _relative_path(runtime_root, root),
             }
 
+        ddl = _read_authorization_ddl(root)
         command, error = _command_for_workspace(root)
+        if not ddl["ddl_available"]:
+            error = str(ddl["ddl_error"])
         if error:
-            return _failed_result(fingerprint, "template_contract_invalid", error)
+            return _manual_result(root, fingerprint, mode, "failed", "template_contract_invalid", error)
         try:
             environment = _bootstrap_environment(root)
         except DatabaseCredentialError:
-            return _failed_result(
-                fingerprint, "database_configuration_invalid",
+            return _manual_result(
+                root, fingerprint, mode, "failed", "database_configuration_invalid",
                 "权限数据库初始化无法解析当前应用的数据库连接，请检查工作台数据源配置。",
             )
         runtime_root.mkdir(parents=True, exist_ok=True)
@@ -141,9 +168,17 @@ def run_authorization_bootstrap(
         duration_ms = round((time.monotonic() - started) * 1000)
         stdout_path = runtime_root / "stdout.log"
         stderr_path = runtime_root / "stderr.log"
-        stdout_path.write_text(stdout, encoding="utf-8")
-        stderr_path.write_text(stderr, encoding="utf-8")
+        try:
+            stdout_path.write_text(stdout, encoding="utf-8")
+            stderr_path.write_text(stderr, encoding="utf-8")
+        except OSError:
+            return _manual_result(root, fingerprint, mode, "failed", "local_io_failed",
+                                  "权限脚本日志保存失败，无法记录完整初始化结果。", execution_attempted=True)
         base = {
+            "datasource_mode": mode,
+            "datasource_identity_fingerprint": identity,
+            "execution_attempted": True,
+            "requires_manual_action": False,
             "manifest_fingerprint": fingerprint,
             "duration_ms": duration_ms,
             "exit_code": exit_code,
@@ -157,20 +192,21 @@ def run_authorization_bootstrap(
                 if failure_category == "timeout"
                 else "权限数据库初始化脚本执行失败，请检查本地 Bootstrap 日志。"
             )
-            return {
-                "status": "failed",
-                "failure_category": failure_category,
-                "message": message,
-                **base,
-            }
+            return {**base, **_manual_result(root, fingerprint, mode, "failed",
+                                              failure_category, message, execution_attempted=True)}
         result = {"status": "executed", "message": "权限数据库初始化完成。", **base}
-        _write_json_atomically(marker_path, result)
+        try:
+            _write_json_atomically(marker_path, result)
+        except OSError:
+            # 数据库已真实成功，缓存失败仅导致下次重试，不伪造脚本失败。
+            result["message"] += "成功缓存未保存。"
         return result
 
 
 def _command_for_workspace(root: Path) -> tuple[list[str], str | None]:
     """按宿主系统返回唯一允许的模板脚本调用命令。"""
 
+    root = root.resolve()
     backend = root / "backend"
     if not backend.is_dir():
         return [], "生成项目缺少 backend 目录。"
@@ -194,7 +230,9 @@ def _command_for_workspace(root: Path) -> tuple[list[str], str | None]:
         resolved_backend = backend.resolve(strict=True)
     except OSError:
         return [], f"权限 Bootstrap 模板脚本不存在：{script.relative_to(root)}。"
-    if script.is_symlink() or not resolved_script.is_relative_to(resolved_backend):
+    if (not resolved_script.is_file() or script.is_symlink()
+            or not resolved_backend.is_relative_to(root)
+            or not resolved_script.is_relative_to(resolved_backend)):
         return [], "权限 Bootstrap 脚本必须是 backend 目录内的普通文件。"
     schema_path = root / AUTHORIZATION_SCHEMA_RELATIVE_PATH
     if not schema_path.is_file():
@@ -231,7 +269,7 @@ def _authorization_workspace_key(workspace: str | Path) -> str:
     return os.path.normcase(str(Path(workspace).expanduser().resolve(strict=False)))
 
 
-def _successful_marker(path: Path, fingerprint: str) -> bool:
+def _successful_marker(path: Path, fingerprint: str, identity: str) -> bool:
     """只把同一权限指纹的完整成功记录视为可复用结果。"""
 
     try:
@@ -242,6 +280,8 @@ def _successful_marker(path: Path, fingerprint: str) -> bool:
         isinstance(value, dict)
         and value.get("status") == "executed"
         and value.get("manifest_fingerprint") == fingerprint
+        and bool(identity)
+        and value.get("datasource_identity_fingerprint") == identity
     )
 
 
@@ -255,17 +295,6 @@ def _relative_path(path: Path, root: Path) -> str:
     """返回仅限当前工作区的相对日志引用。"""
 
     return path.resolve().relative_to(root).as_posix()
-
-
-def _failed_result(fingerprint: str, category: str, message: str) -> dict[str, Any]:
-    """构造不泄露环境或数据库细节的失败结果。"""
-
-    return {
-        "status": "failed",
-        "manifest_fingerprint": fingerprint,
-        "failure_category": category,
-        "message": message,
-    }
 
 
 def _write_json_atomically(path: Path, value: dict[str, Any]) -> None:

@@ -14,7 +14,7 @@ from app.workspace.task_documents import load_build_task_plan_json
 
 
 def authorization_bootstrap(state: ProjectState) -> dict:
-    """执行当前确认权限 manifest 的 Bootstrap，失败时阻断 Build。"""
+    """严格校验 DAG，并让权限初始化的结构化失败降级后继续 Build。"""
 
     workspace = workspace_from_state(state) or ""
     gate_error = _build_plan_gate_error(workspace, state)
@@ -33,13 +33,16 @@ def authorization_bootstrap(state: ProjectState) -> dict:
             application_config=read_application_config(workspace),
         )
     )
-    succeeded = result.get("status") in {"executed", "reused", "skipped"}
+    # 只有已知 Bootstrap 子状态可降级；未知执行器结果仍按失败处理。
+    can_build = not gate_error and result.get("status") in {
+        "executed", "reused", "skipped", "manual_required", "failed",
+    }
     return {
         "phase": "authorization_bootstrap",
-        "status": "completed" if succeeded else "failed",
+        "status": "completed" if can_build else "failed",
         "authorization_bootstrap_result": result,
         "message": str(result.get("message") or "权限数据库初始化完成。"),
-        "error": "" if succeeded else str(result.get("message") or "权限数据库初始化失败。"),
+        "error": "" if can_build else str(result.get("message") or "权限数据库初始化失败。"),
         "timeline": ["authorization_bootstrap"],
     }
 

@@ -1,3 +1,4 @@
+import { currentBuildFailureMessage } from '../../service/buildFailureMessage'
 import type { PlanExecutionMode } from './planExecutionMode'
 import type { AgentChatMessage } from './types'
 import { parseRecoveryFailureDiagnostic } from '../../service/recoveryActionPlan'
@@ -16,7 +17,7 @@ export function latestConversationFailure(messages: AgentChatMessage[]): string 
   const workflow = latest.workflow
   const diagnostic = parseRecoveryFailureDiagnostic(workflow?.summary.failureDiagnostic)
   if (workflow?.summary.status === 'failed') {
-    return (diagnostic?.sourceRunId === workflow.runId ? recoveryFailureMessage(diagnostic) : undefined) ||
+    return currentBuildFailureMessage(workflow) || (diagnostic?.sourceRunId === workflow.runId ? recoveryFailureMessage(diagnostic) : undefined) ||
       latest.error?.trim() || workflow.summary.message?.trim() || '任务执行失败，请查看执行记录后重试。'
   }
   return latest.error?.trim() || undefined

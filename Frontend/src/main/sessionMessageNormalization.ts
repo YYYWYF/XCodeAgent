@@ -1,3 +1,4 @@
+import { readAuthorizationBootstrap } from '../shared/authorizationBootstrap'
 type JsonRecord = Record<string, unknown>
 
 const MESSAGE_APPROVAL_STATUSES = new Set([
@@ -202,6 +203,8 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
     const status = stringValue(valueItem.status)
     const id = stringValue(valueItem.id)
     if (!id || !PROCESS_STEP_KINDS.has(kind) || !PROCESS_STEP_STATUSES.has(status)) continue
+    const authorizationBootstrap = valueItem.nodeName === 'authorization_bootstrap'
+      ? readAuthorizationBootstrap(valueItem.authorizationBootstrap) : undefined
     const checks = normalizeSessionChecks(valueItem.checks)
     const dagGeneration = normalizeSessionDagGeneration(valueItem.dagGeneration)
     const workspaceInspection = normalizeSessionWorkspaceInspection(valueItem.workspaceInspection)
@@ -214,6 +217,9 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
       ...(typeof valueItem.result === 'string' ? { result: valueItem.result.slice(-24_000) } : {}),
       sequence: typeof valueItem.sequence === 'number' ? valueItem.sequence : 0,
       appendDetail: valueItem.appendDetail === true,
+      ...(typeof valueItem.nodeName === 'string' ? { nodeName: valueItem.nodeName.slice(0, 128) } : {}),
+      ...(Number.isInteger(valueItem.attempt) && Number(valueItem.attempt) > 0 ? { attempt: valueItem.attempt } : {}),
+      ...(authorizationBootstrap ? { authorizationBootstrap } : {}),
       ...(checks.length > 0 ? { checks } : {}),
       ...(dagGeneration ? { dagGeneration } : {}),
       ...(workspaceInspection ? { workspaceInspection } : {})

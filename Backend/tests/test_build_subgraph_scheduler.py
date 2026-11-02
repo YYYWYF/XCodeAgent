@@ -134,6 +134,28 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
             self.assertEqual(calls, [["A"]])
             self.assertEqual(result["build_summary"]["status"], "completed")
 
+    def test_runner_failure_overwrites_upstream_authorization_message(self) -> None:
+        """真实调度器在失败边界发布自己的错误，不能把权限提示遗留给收尾节点。"""
+        task = {"id": "A", "owner": "backend", "status": "pending", "dependencies": [],
+                "change_scope": [{"operation": "add", "path": "Backend/app/A.py"}]}
+        with tempfile.TemporaryDirectory() as workspace:
+            entry = _ready_build_state(workspace, {
+                "workspace": workspace, "project_plan": {"version": "1.0.0"},
+                "message": "权限数据库初始化脚本执行失败，请检查本地 Bootstrap 日志。",
+                "error": "", "build_execution_scope": {"type": "application", "targetId": "application"},
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["A"]}},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, [task]), "tasks": [task],
+            })
+            with patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=RuntimeError("当前运行已停止")):
+                result = run_build_scheduler(entry)
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("当前运行已停止", result["error"])
+            self.assertEqual(result["message"], result["error"])
+            self.assertNotIn("权限数据库初始化", result["error"])
+
     def test_native_build_recovery_keeps_completed_task_and_retries_network_failure(self) -> None:
         """节点入口旧任务为 pending 时，可信 source 运行态仍阻止 A 重跑并派发 B。"""
 

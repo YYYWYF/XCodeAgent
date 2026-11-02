@@ -18,6 +18,7 @@ try {
       logLevel: 'error',
       root: frontendRoot,
       css: {
+        preprocessorMaxWorkers: 0,
         preprocessorOptions: {
           less: { additionalData: '@class-prefix: xa;', javascriptEnabled: true }
         }

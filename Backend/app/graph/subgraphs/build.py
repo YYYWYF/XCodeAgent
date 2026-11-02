@@ -2218,6 +2218,13 @@ def run_build_scheduler(
         **code_change_state_update(merged_code_changes),
         "timeline": ["build"],
     }
+    # 在节点边界显式覆盖共享摘要，防止后续收尾或恢复卡借用权限初始化等上游提示。
+    from app.services.workflow_failure_message import workflow_failure_message
+
+    result["error"] = workflow_failure_message(result) if workflow_status == "failed" else ""
+    result["message"] = result["error"] or (
+        "Build 已完成。" if workflow_status == "completed" else "Build 等待确认。"
+    )
     # 任务批次完成不等于 Build 完成；模板路由/授权等收尾结果也必须先落盘。
     if state.get("active_run_id") and state.get("active_thread_id"):
         progress = _build_runtime_progress({**current_state, **result})

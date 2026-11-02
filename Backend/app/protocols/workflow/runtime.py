@@ -418,6 +418,18 @@ def _runtime_terminal_process_title(
 ) -> str:
     """按步骤终态和动态节点名生成流程标题。"""
 
+    if node_name == "authorization_bootstrap":
+        result = state.get("authorization_bootstrap_result")
+        if isinstance(result, dict) and result.get("failure_category") != "build_plan_invalid":
+            title = {
+                "executed": "权限数据库初始化成功",
+                "reused": "权限数据库初始化成功（复用已有结果）",
+                "manual_required": "权限数据库待手动初始化",
+                "failed": "权限数据库初始化未完成",
+                "skipped": "权限数据库初始化已跳过",
+            }.get(result.get("status"))
+            if title:
+                return title
     prefix = {
         "completed": "已完成",
         "failed": "执行失败",
@@ -2181,6 +2193,10 @@ def build_workflow_ag_ui_stream(
                         ),
                         detail=process_detail,
                         sequence=process_sequence,
+                        authorization_bootstrap=(
+                            detail.get("data", {}).get("authorizationBootstrap")
+                            if node_name == "authorization_bootstrap" else None
+                        ),
                         checks=checks,
                         node_name=node_name,
                         attempt=node_attempt,

@@ -1,3 +1,5 @@
+import { buildFailureMessageForDisplay } from '../../service/buildFailureMessage'
+import { AuthorizationBootstrapRetryNotice } from './authorizationBootstrapRecovery'
 import type { ReactElement } from 'react'
 import { Modal } from 'antd'
 import type { ApplicationPlanningCurrentState } from '../../service/activeApplicationPlanning'
@@ -20,6 +22,7 @@ export type RecoverySurfaceProps = {
   currentWorkflow?: WorkflowRunPayload
   recoveryError?: string
   recoveryRunning: boolean
+  inlineAuthorizationBootstrap?: boolean
   actionDisabled?: boolean
   onExecuteRecoveryAction: (candidate: ExecutionRecoveryCandidate) => void
   onRetryCurrentRecovery?: () => void
@@ -34,6 +37,7 @@ export default function RecoverySurface({
   currentWorkflow,
   recoveryError,
   recoveryRunning,
+  inlineAuthorizationBootstrap = false,
   actionDisabled = false,
   onExecuteRecoveryAction,
   onRetryCurrentRecovery
@@ -42,34 +46,63 @@ export default function RecoverySurface({
     ? applicationPlanningRecoveryIncident(planningState)
     : workbenchRecoveryIncident(activeExecutionRecovery, currentWorkflow)
   if (!incident) return null
+  recoveryError = buildFailureMessageForDisplay(recoveryError, currentWorkflow)
+
+  /** 重试前保留后端动作的确认要求，并沿用统一先对账再恢复的调用。 */
+  const retry = (): void => {
+    if (actionDisabled || recoveryRunning) return
+    const execute =
+      onRetryCurrentRecovery ??
+      (activeExecutionRecovery ? () => onExecuteRecoveryAction(activeExecutionRecovery) : undefined)
+    const action = incident.kind === 'recoverable' ? incident.action : undefined
+    if (action?.requiresConfirmation) {
+      Modal.confirm({
+        title: '确定执行此恢复操作？',
+        content: action.description,
+        cancelText: '取消',
+        okText: '重试',
+        onOk: execute
+      })
+    } else execute?.()
+  }
+  if (inlineAuthorizationBootstrap) {
+    return (
+      <AuthorizationBootstrapRetryNotice
+        message={
+          recoveryError ||
+          recoveryFailureMessage(incident.failureDiagnostic) ||
+          incident.failureMessage ||
+          incident.recoveryMessage
+        }
+        onRetry={retry}
+        retrying={recoveryRunning}
+        disabled={actionDisabled}
+      />
+    )
+  }
 
   // 仅二次修改复用普通错误重试入口，其他阶段保留原恢复卡和操作。
-  if (!(incident.kind === 'needs_attention' && incident.reasonCode === 'RETRY_ENTRY_NOT_FOUND') && !isApplicationPlanningPhase && (activeExecutionRecovery
-    ? activeExecutionRecovery.workflowScope === 'conversation'
-    : isConversationWorkflow(currentWorkflow))) {
+  if (
+    !(incident.kind === 'needs_attention' && incident.reasonCode === 'RETRY_ENTRY_NOT_FOUND') &&
+    !isApplicationPlanningPhase &&
+    (activeExecutionRecovery
+      ? activeExecutionRecovery.workflowScope === 'conversation'
+      : isConversationWorkflow(currentWorkflow))
+  ) {
     const denialMessage = recoveryError || incident.failureMessage || incident.recoveryMessage
     const scopeDenied = isDirectModificationScopeDenied(currentWorkflow, denialMessage)
-    /** 重试前保留后端动作的确认要求，并沿用统一先对账再恢复的调用。 */
-    const retry = (): void => {
-      if (actionDisabled || recoveryRunning) return
-      const execute = onRetryCurrentRecovery ?? (activeExecutionRecovery
-        ? () => onExecuteRecoveryAction(activeExecutionRecovery) : undefined)
-      const action = incident.kind === 'recoverable' ? incident.action : undefined
-      if (action?.requiresConfirmation) {
-        Modal.confirm({
-          title: '确定执行此恢复操作？', content: action.description,
-          cancelText: '取消', okText: '重试', onOk: execute
-        })
-      } else execute?.()
-    }
     return (
       <div data-testid="workbench-recovery-incident">
         <AgentErrorCard
           title={scopeDenied ? '无权修改该路径' : '任务执行异常'}
-          error={recoveryError || recoveryFailureMessage(incident.failureDiagnostic) ||
-            incident.failureMessage || (activeExecutionRecovery?.executionStatus === 'interrupted'
+          error={
+            recoveryError ||
+            recoveryFailureMessage(incident.failureDiagnostic) ||
+            incident.failureMessage ||
+            (activeExecutionRecovery?.executionStatus === 'interrupted'
               ? '执行已中断，未收到完成结果。请重试同步当前节点状态。'
-              : incident.recoveryMessage)}
+              : incident.recoveryMessage)
+          }
           onRetry={scopeDenied ? undefined : retry}
           retryDisabled={actionDisabled}
           retrying={recoveryRunning}
@@ -87,7 +120,7 @@ export default function RecoverySurface({
         isApplicationPlanningPhase
           ? onRetryPlanning
           : activeExecutionRecovery
-            ? onRetryCurrentRecovery ?? (() => onExecuteRecoveryAction(activeExecutionRecovery))
+            ? (onRetryCurrentRecovery ?? (() => onExecuteRecoveryAction(activeExecutionRecovery)))
             : undefined
       }
       retrying={recoveryRunning}

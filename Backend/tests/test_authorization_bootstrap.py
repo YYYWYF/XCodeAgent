@@ -31,10 +31,17 @@ def _technical_plan(fingerprint: str = "sha256:abc") -> dict:
 class AuthorizationBootstrapTests(unittest.TestCase):
     """验证权限 Bootstrap 的平台调用、缓存和失败边界。"""
 
+    def setUp(self) -> None:
+        """隔离平台解密服务，目录选择和运行环境仍走真实实现。"""
+
+        decrypt = patch("app.services.database_credentials.decrypt_password", return_value="application-password")
+        decrypt.start()
+        self.addCleanup(decrypt.stop)
+
     def _workspace(self, directory: str) -> Path:
         """创建模板脚本执行器要求的最小生成项目目录。"""
 
-        root = Path(directory)
+        root = Path(directory).resolve()
         script = root / "backend" / "scripts" / "bootstrap-authorization.sh"
         ddl = root / "backend/sql/authorization/schema.sql"
         script.parent.mkdir(parents=True)
@@ -46,9 +53,9 @@ class AuthorizationBootstrapTests(unittest.TestCase):
         application.parent.mkdir(parents=True)
         application.write_text(json.dumps({"datasource": {"type": "database", "db": {"useBuiltin": False}}}), encoding="utf-8")
         write_sources(root, [{
-            "id": "application-db", "name": "应用数据库", "type": "database", "mode": "dbid",
+            "id": "application-db", "name": "应用数据库", "type": "database", "mode": "direct",
             "domain": "application.mysql.local", "port": 3313, "schema": "application_schema",
-            "userName": "application_user", "dbid": "application-password", "managedTables": [],
+            "userName": "application_user", "passwordCiphertext": "devagentstudio-secret:v1:rsa-oaep-256:key:cipher", "managedTables": [],
         }])
         return root
 
@@ -116,7 +123,7 @@ class AuthorizationBootstrapTests(unittest.TestCase):
 
     @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
     def test_failed_run_is_not_cached(self, run_mock) -> None:
-        """脚本失败必须阻断 Build，且不能写入可复用成功标记。"""
+        """脚本失败保留真实结果，且不能写入可复用成功标记。"""
 
         run_mock.return_value.returncode = 2
         run_mock.return_value.stdout = b""
@@ -142,7 +149,7 @@ class AuthorizationBootstrapTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["failure_category"], "template_contract_invalid")
-            self.assertEqual(result["message"], "权限 Bootstrap 缺少 backend/sql/authorization/schema.sql。")
+            self.assertFalse(result["ddl_available"])
             run_mock.assert_not_called()
 
     @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
@@ -163,7 +170,7 @@ class AuthorizationBootstrapTests(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "failed")
                 self.assertEqual(result["failure_category"], "template_contract_invalid")
-                self.assertEqual(result["message"], "权限 Bootstrap 缺少 backend/sql/authorization/schema.sql。")
+                self.assertFalse(result["ddl_available"])
                 run_mock.assert_not_called()
 
     def test_both_platforms_require_same_schema(self) -> None:
@@ -236,3 +243,196 @@ class AuthorizationBootstrapTests(unittest.TestCase):
                 result["authorization_bootstrap_result"]["failure_category"],
                 "build_plan_invalid",
             )
+
+    @patch("app.services.authorization_bootstrap._bootstrap_environment")
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
+    def test_manual_modes_never_execute(self, run, environment) -> None:
+        """人工模式在脚本校验、取密及进程执行之前返回完整 DDL。"""
+
+        for mode in ("dbid", "static", "external_api", "unknown", "inconsistent"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = self._workspace(directory)
+                application = root / ".devagentstudio/application.json"
+                if mode in {"static", "external_api", "unknown"}:
+                    application.write_text(json.dumps({"datasource": {"type": mode}}))
+                elif mode == "dbid":
+                    write_sources(root, [{"id": "db", "name": "DB", "type": "database", "mode": "dbid",
+                                         "domain": "db.local", "port": 3306, "schema": "app", "userName": "app",
+                                         "dbid": "private-token", "managedTables": []}])
+                else:
+                    application.write_text(json.dumps({"datasource": {"type": "database", "db": {"useBuiltin": True}}}))
+                for script in (root / "backend/scripts").iterdir():
+                    script.unlink()
+                result = run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())
+                self.assertEqual(result["status"], "manual_required")
+                self.assertEqual(result["ddl"], "create table role (id int);")
+                self.assertFalse(result["execution_attempted"])
+                self.assertNotIn("private-token", json.dumps(result))
+        run.assert_not_called()
+        environment.assert_not_called()
+
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
+    def test_switching_database_invalidates_success(self, run) -> None:
+        """同一 Manifest 切库必须重新执行，切换 DBID 后不得复用旧成功。"""
+
+        from app.persistence.data_sources import read_sources
+        run.return_value = SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            first = run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())
+            sources = read_sources(root)
+            sources[0]["schema"] = "another_database"
+            write_sources(root, sources)
+            second = run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())
+            self.assertEqual(second["status"], "executed")
+            self.assertNotEqual(first["datasource_identity_fingerprint"], second["datasource_identity_fingerprint"])
+            sources[0].pop("passwordCiphertext")
+            sources[0].update(mode="dbid", dbid="private-token")
+            write_sources(root, sources)
+            self.assertEqual(run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())["status"], "manual_required")
+            self.assertEqual(run.call_count, 2)
+
+    @patch("app.services.authorization_bootstrap._bootstrap_environment")
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
+    def test_builtin_keeps_runtime_gate(self, run, environment) -> None:
+        """内置模式调用现有运行时连接流程，失败时禁止换库重试。"""
+
+        from app.services.database_credentials import DatabaseCredentialError
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            (root / ".devagentstudio/application.json").write_text(json.dumps({
+                "datasource": {"type": "database", "db": {"useBuiltin": True}},
+                "managedDatabase": {"status": "REGISTERED", "datasourceKey": "012345abcdef", "datasourceId": 1},
+            }))
+            write_sources(root, [{"id": "builtin", "name": "内置", "type": "database", "mode": "builtin", "managedTables": []}])
+            run.return_value = SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            environment.return_value = {"SPRING_DATASOURCE_URL": "jdbc:mysql://managed/app"}
+            self.assertEqual(run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())["status"], "executed")
+            environment.assert_called_once()
+            environment.side_effect = DatabaseCredentialError("secret")
+            result = run_authorization_bootstrap(root, _technical_plan("sha256:new"), application_config=_application_config())
+            self.assertEqual(result["status"], "failed")
+            self.assertTrue(result["ddl_available"])
+            self.assertEqual(run.call_count, 1)
+            self.assertNotIn("secret", json.dumps(result))
+
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
+    def test_process_failures_continue_build(self, run) -> None:
+        """脚本非零、超时及启动异常保留真实子状态，Graph 完成后路由 Build。"""
+
+        import subprocess
+        from app.graph.workflow import route_authorization_bootstrap
+        outcomes = (("script_failed", SimpleNamespace(returncode=1, stdout=b"private", stderr=b"secret")),
+                    ("timeout", subprocess.TimeoutExpired("script", 600, stderr=b"secret")),
+                    ("process_start_failed", OSError("private")))
+        for category, outcome in outcomes:
+            with self.subTest(category=category), tempfile.TemporaryDirectory() as directory:
+                root = self._workspace(directory)
+                run.side_effect = outcome if isinstance(outcome, Exception) else None
+                run.return_value = outcome
+                result = run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["failure_category"], category)
+                self.assertTrue(result["execution_attempted"])
+                self.assertIn("ddl", result)
+                self.assertNotIn("secret", json.dumps(result))
+                self.assertFalse((root / ".devagentstudio/runtime/authorization-bootstrap/abc/result.json").exists())
+                with patch("app.graph.nodes.authorization_bootstrap._build_plan_gate_error", return_value=""), patch(
+                    "app.graph.nodes.authorization_bootstrap.read_application_config", return_value=_application_config()
+                ), patch("app.graph.nodes.authorization_bootstrap.run_authorization_bootstrap", return_value=result):
+                    node = authorization_bootstrap({"workspace": str(root)})
+                self.assertEqual(node["status"], "completed")
+                self.assertEqual(node["error"], "")
+                self.assertEqual(node["authorization_bootstrap_result"]["status"], "failed")
+                self.assertEqual(route_authorization_bootstrap(node), "build")
+
+    def test_ddl_safety_limits(self) -> None:
+        """拒绝超限、非法文本、外部符号链接及目录，不返回伪造 SQL。"""
+
+        from app.services.authorization_bootstrap_policy import read_authorization_ddl
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            root = self._workspace(directory)
+            ddl = root / "backend/sql/authorization/schema.sql"
+            for content in (b"x" * (256 * 1024 + 1), b"\xff", b"", b"\x00"):
+                ddl.write_bytes(content)
+                self.assertFalse(read_authorization_ddl(root)["ddl_available"])
+            ddl.unlink()
+            target = Path(outside) / "secret.sql"
+            target.write_text("outside secret")
+            ddl.symlink_to(target)
+            self.assertFalse(read_authorization_ddl(root)["ddl_available"])
+            ddl.unlink()
+            ddl.mkdir()
+            self.assertFalse(read_authorization_ddl(root)["ddl_available"])
+
+    def test_agui_projection_and_process_frame_share_safe_detail(self) -> None:
+        """完成事件与实时步骤携带同一 DDL，状态摘要不复制 SQL 或原始日志。"""
+
+        from ag_ui.encoder import EventEncoder
+        from app.protocols.workflow.projection import _public_workflow_state, _workflow_node_detail
+        from app.protocols.workflow.stream_events import _process_frame
+        raw = {"status": "manual_required", "datasource_mode": "dbid", "execution_attempted": False,
+               "requires_manual_action": True, "ddl_available": True, "ddl": "create table roles(id int);",
+               "ddl_path": "backend/sql/authorization/schema.sql", "message": "需人工执行 DDL，Build 已继续。",
+               "stderr": "private-secret"}
+        update = {"status": "completed", "authorization_bootstrap_result": raw}
+        detail = _workflow_node_detail("authorization_bootstrap", update)["data"]["authorizationBootstrap"]
+        self.assertEqual(detail["ddl"], raw["ddl"])
+        frame = _process_frame(EventEncoder(), id="bootstrap", kind="workflow", status="completed",
+                               title="权限初始化", sequence=1, authorization_bootstrap=detail)
+        payload = json.loads(frame.removeprefix("data: ").strip())
+        self.assertEqual(payload["name"], "agent-process")
+        self.assertEqual(payload["value"]["authorizationBootstrap"], detail)
+        summary = _public_workflow_state(update)
+        self.assertNotIn("ddl", summary["authorizationBootstrap"])
+        self.assertNotIn("private-secret", json.dumps([summary, detail, payload]))
+
+    @patch("app.graph.nodes.authorization_bootstrap.run_authorization_bootstrap")
+    def test_invalid_dag_never_attempts_bootstrap(self, run) -> None:
+        """DAG 未确认、版本错误、校验失败及范围不符均保持强阻断。"""
+
+        from app.graph.workflow import route_authorization_bootstrap
+        base = {"schema_version": "build-dag.v4", "status": "ready", "confirmation_status": "confirmed",
+                "task_graph": {"validation": {"is_valid": True}},
+                "build_execution_scope": {"type": "page", "targetId": "orders"}}
+        for delta in ({"schema_version": "bad"}, {"confirmation_status": "draft"},
+                      {"task_graph": {"validation": {"is_valid": False}}},
+                      {"build_execution_scope": {"type": "page", "targetId": "other"}}):
+            with self.subTest(delta=delta), patch("app.graph.nodes.authorization_bootstrap.load_build_task_plan_json", return_value={**base, **delta}):
+                node = authorization_bootstrap({"workspace": "/workspace", "build_execution_scope": base["build_execution_scope"]})
+                self.assertEqual(node["authorization_bootstrap_result"]["failure_category"], "build_plan_invalid")
+                self.assertEqual(route_authorization_bootstrap(node), "handle_failure")
+        run.assert_not_called()
+
+    @patch("app.services.authorization_bootstrap.workspace_process_registry.run")
+    def test_direct_index_cannot_authorize_dbid_detail(self, run) -> None:
+        """索引与详情模式矛盾时禁止以 direct 索引启动实际 DBID 连接。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._workspace(directory)
+            source_path = root / ".devagentstudio/datasource/databases/application-db.json"
+            source = json.loads(source_path.read_text())
+            source.pop("passwordCiphertext")
+            source.update(mode="dbid", dbid="private-token")
+            source_path.write_text(json.dumps(source))
+            result = run_authorization_bootstrap(root, _technical_plan(), application_config=_application_config())
+            self.assertEqual(result["status"], "manual_required")
+            self.assertEqual(result["datasource_mode"], "unknown")
+            run.assert_not_called()
+
+    def test_completed_node_title_uses_real_bootstrap_result(self) -> None:
+        """AG-UI 步骤标题按真实初始化子状态展示，不把节点放行误称为初始化成功。"""
+
+        from app.protocols.workflow.runtime import _runtime_terminal_process_title
+        for status, expected in (("executed", "权限数据库初始化成功"),
+                                 ("reused", "权限数据库初始化成功（复用已有结果）"),
+                                 ("manual_required", "权限数据库待手动初始化"),
+                                 ("failed", "权限数据库初始化未完成"),
+                                 ("skipped", "权限数据库初始化已跳过")):
+            with self.subTest(status=status):
+                self.assertEqual(_runtime_terminal_process_title("authorization_bootstrap", "completed", {
+                    "authorization_bootstrap_result": {"status": status}
+                }), expected)
+        self.assertIn("执行失败", _runtime_terminal_process_title("authorization_bootstrap", "failed", {
+            "authorization_bootstrap_result": {"status": "failed", "failure_category": "build_plan_invalid"}
+        }))

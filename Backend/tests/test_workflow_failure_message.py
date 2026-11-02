@@ -27,6 +27,31 @@ class WorkflowFailureMessageTests(unittest.TestCase):
             project_workflow_lifecycle_boundary("/workspace", run_id="run", node_name="build", update=state)
         self.assertEqual(persist.call_args.kwargs["error"].message, result["error"])
 
+    def test_build_task_failure_does_not_reuse_bootstrap_notice(self):
+        """复现真实会话：权限节点完成放行，Build 失败时不得复用其共享 message。"""
+        notice = "权限数据库初始化脚本执行失败，请检查本地 Bootstrap 日志。"
+        state = {"phase": "build", "status": "failed", "message": notice, "error": "",
+                 "authorization_bootstrap_result": {"status": "failed", "message": notice},
+                 "build_summary": {"status": "failed", "failed": 2},
+                 "build_execution_slice": {"tasks": [
+                     {"id": "backend:bootstrap::bootstrap", "status": "failed", "failure_reason": "任务执行器异常退出：当前运行已停止。"},
+                     {"id": "page:target", "status": "failed", "failure_reason": "任务执行器异常退出：拒绝继续执行 Agent。"}]}}
+        result = handle_failure(state)
+        self.assertNotIn(notice, result["message"])
+        self.assertIn("当前运行已停止", result["message"])
+        self.assertEqual(_workflow_summary({**state, **result}, [])["message"], result["message"])
+        lifecycle = MagicMock()
+        lifecycle.active_executions = {"run": MagicMock()}
+        with patch("app.protocols.workflow.lifecycle.load_application_lifecycle", return_value=lifecycle), patch("app.protocols.workflow.lifecycle.update_workbench_execution", return_value=lifecycle) as persist, patch("app.protocols.workflow.lifecycle.application_lifecycle_payload", return_value={}):
+            project_workflow_lifecycle_boundary("/workspace", run_id="run", node_name="build", update=state)
+        self.assertEqual(persist.call_args.kwargs["error"].message, result["message"])
+
+    def test_build_without_task_reason_never_falls_back_to_upstream_message(self):
+        """无可用任务诊断时诚实报告 Build 缺少细节，不冒用上游提示。"""
+        result = handle_failure({"phase": "build", "status": "failed", "message": "权限初始化提示。",
+                                 "build_summary": {"status": "failed"}})
+        self.assertEqual(result["message"], "代码构建失败，请查看构建任务详情后重试。")
+
     def test_other_nodes_do_not_inherit_old_build_finalization_error(self):
         """单测等后续节点的真实错误不能被历史 Build 摘要覆盖。"""
         result = handle_failure({"phase": "unit_test", "status": "failed", "error": "测试生成失败。", "build_summary": {"status": "failed", "finalization_error": "旧模板错误。"}})

@@ -1,0 +1,493 @@
+import { normalizePersistentSessionMessage } from '../src/main/sessionMessageNormalization'
+import { latestConversationFailure } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { Children, createElement, isValidElement, type ReactNode } from 'react'
+import { Button, message, Modal } from 'antd'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { AgUiChatSession, type ProcessStepRecord } from '../src/renderer/src/service/agUiAgent'
+import { readAuthorizationBootstrap } from '../src/renderer/src/service/authorizationBootstrap'
+import { processStepsForDisplay } from '../src/renderer/src/service/processStepHistory'
+import type { WorkflowRunPayload } from '../src/renderer/src/typings'
+import {
+  AuthorizationBootstrapRecoveryContext,
+  AuthorizationBootstrapRetryNotice,
+  authorizationBootstrapRecoveryOwner
+} from '../src/renderer/src/components/AiChatPanel/authorizationBootstrapRecovery'
+import ProcessSteps from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import RecoverySurface from '../src/renderer/src/components/AiChatPanel/recoverySurface'
+import type { ExecutionRecoveryCandidate } from '../src/renderer/src/typings'
+import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
+import { ProcessStep } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps'
+import Panel from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/AuthorizationBootstrapPanel'
+
+const ddl =
+  'CREATE TABLE role (id int);\n-- <script>alert("unsafe")</script>\n' + 'SELECT 1;\n'.repeat(4000)
+const result = {
+  status: 'manual_required' as const,
+  datasourceMode: 'dbid' as const,
+  ddlAvailable: true,
+  ddlPath: 'backend/sql/authorization/schema.sql',
+  ddl,
+  message: '当前数据源需手动执行权限 DDL。',
+  requiresManualAction: true,
+  executionAttempted: false
+}
+
+/** 构造带节点轮次的持久化完成事件，测试恢复合并边界。 */
+function workflow(): WorkflowRunPayload {
+  return {
+    runId: 'run',
+    threadId: 'thread',
+    summary: { status: 'completed' },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'authorization_bootstrap',
+        attempt: 1,
+        status: 'completed',
+        data: { detail: { authorizationBootstrap: result } }
+      },
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'authorization_bootstrap',
+        attempt: 2,
+        status: 'completed',
+        data: { detail: { authorizationBootstrap: { status: 'executed' } } }
+      }
+    ]
+  } as WorkflowRunPayload
+}
+
+test('有界解析拒绝超长 SQL，剔除未知字段及成功状态的 DDL', () => {
+  assert.equal(
+    readAuthorizationBootstrap({ ...result, ddl: '中'.repeat(100000) })?.ddlAvailable,
+    false
+  )
+  assert.equal(readAuthorizationBootstrap({ ...result, status: 'executed' })?.ddl, undefined)
+  assert.equal(
+    (
+      readAuthorizationBootstrap({ ...result, password: 'secret' }) as unknown as Record<
+        string,
+        unknown
+      >
+    ).password,
+    undefined
+  )
+  assert.equal(readAuthorizationBootstrap({ status: 'unexpected' }), undefined)
+  assert.equal(readAuthorizationBootstrap(result)?.ddl, ddl)
+})
+
+test('历史步骤与实时步骤按节点轮次合并，不重复且新成功不继承旧 SQL', () => {
+  const steps = processStepsForDisplay(undefined, workflow())!
+  assert.equal(steps.length, 2)
+  assert.equal(steps[0].authorizationBootstrap?.ddl, ddl)
+  assert.equal(steps[1].authorizationBootstrap?.ddl, undefined)
+  const recovered = processStepsForDisplay(
+    steps.map(({ authorizationBootstrap: _, ...step }) => step),
+    workflow()
+  )!
+  assert.equal(recovered.length, 2)
+  assert.equal(recovered[0].authorizationBootstrap?.ddl, ddl)
+  assert.equal(recovered[1].authorizationBootstrap?.status, 'executed')
+})
+
+test('警告显示完整 SQL 并转义，缺少 DDL 和成功状态不提供复制按钮', () => {
+  const markup = renderToStaticMarkup(createElement(Panel, { result }))
+  assert.match(markup, /复制完整 DDL/)
+  assert.match(markup, /<details[^>]*><summary>查看完整 DDL<\/summary>/)
+  assert.doesNotMatch(markup, /<details[^>]*\bopen=/)
+  assert.equal(markup.split(result.message).length - 1, 1)
+  assert.match(markup, /Build 已继续/)
+  assert.match(markup, /&lt;script&gt;/)
+  assert.ok(!markup.includes('<script>'))
+  assert.equal((markup.match(/SELECT 1;/g) || []).length, 4000)
+  for (const state of [
+    { ...result, ddl: undefined, ddlAvailable: false },
+    { status: 'executed' as const }
+  ]) {
+    assert.ok(
+      !renderToStaticMarkup(createElement(Panel, { result: state })).includes('复制完整 DDL')
+    )
+  }
+})
+
+test('AG-UI SDK 实时帧与历史恢复保留同一完整 DDL', async () => {
+  const savedFetch = globalThis.fetch
+  const frames = [
+    { type: 'RUN_STARTED', threadId: 'thread', runId: 'run' },
+    {
+      type: 'CUSTOM',
+      name: 'agent-process',
+      value: {
+        id: 'workflow:authorization_bootstrap',
+        kind: 'workflow',
+        status: 'completed',
+        title: '权限数据库初始化',
+        detail: 'Build 已继续',
+        sequence: 1,
+        nodeName: 'authorization_bootstrap',
+        attempt: 1,
+        authorizationBootstrap: result
+      }
+    },
+    { type: 'RUN_FINISHED', threadId: 'thread', runId: 'run' }
+  ]
+  globalThis.fetch = async () =>
+    new Response(frames.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), {
+      headers: { 'Content-Type': 'text/event-stream' }
+    })
+  let steps: ProcessStepRecord[] = []
+  try {
+    const session = new AgUiChatSession('thread', 'https://example.invalid/workflow/run')
+    await session.sendMessage('继续', {
+      editorMode: 'frontend',
+      onProcessSteps: (value) => {
+        steps = value
+      }
+    })
+    assert.equal(steps[0].authorizationBootstrap?.ddl, ddl)
+    const recovered = processStepsForDisplay(steps, workflow())!
+    assert.equal(recovered.length, 2)
+    assert.equal(recovered[0].authorizationBootstrap?.ddl, ddl)
+  } finally {
+    globalThis.fetch = savedFetch
+  }
+})
+
+test('复制按钮只写入完整 SQL，不改变初始化状态', async () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  const copied: string[] = []
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      clipboard: {
+        writeText: async (text: string) => {
+          copied.push(text)
+        }
+      }
+    }
+  })
+  const savedSuccess = message.success
+  message.success = (() => undefined) as unknown as typeof message.success
+  /** 从无状态组件返回的元素树定位复制按钮，执行真实事件闭包。 */
+  function copyAction(node: ReactNode): (() => Promise<void>) | undefined {
+    for (const child of Children.toArray(node)) {
+      if (!isValidElement<{ children?: ReactNode; onClick?: () => Promise<void> }>(child)) continue
+      if (child.type === Button) return child.props.onClick
+      const action = copyAction(child.props.children)
+      if (action) return action
+    }
+    return undefined
+  }
+  try {
+    const action = copyAction(Panel({ result }))
+    assert.ok(action)
+    await action()
+    assert.deepEqual(copied, [ddl])
+    assert.equal(result.status, 'manual_required')
+  } finally {
+    message.success = savedSuccess
+    if (saved) Object.defineProperty(globalThis, 'navigator', saved)
+    else Reflect.deleteProperty(globalThis, 'navigator')
+  }
+})
+
+test('权限结果仅在动作详情呈现一次', () => {
+  const current = workflow()
+  current.events = [current.events[0]]
+  const step = processStepsForDisplay(undefined, current)![0]
+  const markup = renderToStaticMarkup(
+    createElement(ProcessStep, {
+      step: { ...step, detail: result.message, result: result.message },
+      conversation: false,
+      isLast: true,
+      settled: true,
+      waitingForInput: false,
+      waitingPrompt: ''
+    })
+  )
+  assert.equal(markup.split(result.message).length - 1, 1)
+  assert.match(markup, /动作详情/)
+  assert.doesNotMatch(markup, /执行结果/)
+})
+
+/** 创建后端已签发的权限恢复动作，模拟截图所示工作台恢复卡。 */
+function recoveryCandidate(): ExecutionRecoveryCandidate {
+  return {
+    sourceRunId: 'run',
+    threadId: 'thread',
+    ownerSessionId: 'session',
+    executionKind: 'workbench',
+    workflowScope: 'conversation',
+    executionStatus: 'failed',
+    currentNode: 'authorization_bootstrap',
+    availability: 'ready',
+    canContinue: true,
+    reasonCode: 'RETRY_FAILED_NODE',
+    message: result.message,
+    updatedAt: '2026-11-02T00:00:00Z',
+    recoveryActionPlan: {
+      schemaVersion: 'recovery-action-plan.v1',
+      incidentId: 'incident',
+      sourceRunId: 'run',
+      threadId: 'thread',
+      executionKind: 'workbench',
+      status: 'recoverable',
+      reasonCode: 'RETRY_FAILED_NODE',
+      message: result.message,
+      primaryAction: {
+        actionId: 'retry',
+        kind: 'retry_business_node',
+        targetNode: 'authorization_bootstrap',
+        label: '重试',
+        description: '重试权限初始化',
+        requiresConfirmation: false
+      },
+      alternateActions: []
+    }
+  }
+}
+
+test('权限恢复卡移入同一 Run 最后一个权限节点，不串会话且保留 DAG/Build 全局故障', () => {
+  const current = workflow()
+  current.summary = {
+    ...current.summary,
+    phase: 'authorization_bootstrap',
+    status: 'failed',
+    message: result.message
+  }
+  current.events[1] = {
+    ...current.events[1],
+    data: { detail: { authorizationBootstrap: { ...result, status: 'failed' } } }
+  }
+  const messages: AgentChatMessage[] = [
+    { id: 1, role: 'assistant', content: '', workflow: current }
+  ]
+  const candidate = recoveryCandidate()
+  const owner = authorizationBootstrapRecoveryOwner({ candidate, messages })
+  assert.deepEqual(owner, { runId: 'run', threadId: 'thread' })
+  assert.equal(
+    authorizationBootstrapRecoveryOwner({
+      candidate: { ...candidate, threadId: 'other' },
+      messages
+    }),
+    undefined
+  )
+  assert.equal(
+    authorizationBootstrapRecoveryOwner({
+      candidate: { ...candidate, currentNode: 'build' },
+      messages
+    }),
+    undefined
+  )
+  const invalid = workflow()
+  invalid.events = [
+    {
+      ...invalid.events[0],
+      data: {
+        detail: {
+          authorizationBootstrap: { status: 'failed', failureCategory: 'build_plan_invalid' }
+        }
+      }
+    }
+  ]
+  assert.equal(
+    authorizationBootstrapRecoveryOwner({
+      candidate,
+      messages: [{ ...messages[0], workflow: invalid }]
+    }),
+    undefined
+  )
+  const notice = createElement(AuthorizationBootstrapRetryNotice, {
+    message: result.message,
+    onRetry: () => undefined
+  })
+  const steps = processStepsForDisplay(undefined, current)!
+  const markup = renderToStaticMarkup(
+    createElement(
+      AuthorizationBootstrapRecoveryContext.Provider,
+      { value: { ...owner!, notice } },
+      createElement(ProcessSteps, { steps, workflow: current, loading: false })
+    )
+  )
+  assert.equal((markup.match(/ant-btn-sm/g) || []).length, 1)
+  assert.ok(markup.indexOf('动作详情') < markup.indexOf('authorization-bootstrap-recovery'))
+  assert.doesNotMatch(markup, /任务执行异常|agent-error-card/)
+})
+
+test('内联恢复复用原重试回调与确认门，不显示红色异常卡', async () => {
+  let retries = 0
+  const candidate = recoveryCandidate()
+  const element = RecoverySurface({
+    inlineAuthorizationBootstrap: true,
+    isApplicationPlanningPhase: false,
+    activeExecutionRecovery: candidate,
+    currentWorkflow: workflow(),
+    recoveryRunning: false,
+    onExecuteRecoveryAction: () => {
+      throw new Error('应优先使用原对账重试入口')
+    },
+    onRetryCurrentRecovery: () => {
+      retries += 1
+    }
+  })!
+  const notice = element.props as { onRetry: () => void }
+  notice.onRetry()
+  assert.equal(retries, 1)
+  const markup = renderToStaticMarkup(element)
+  assert.match(markup, /重试/)
+  assert.doesNotMatch(markup, /任务执行异常|agent-error-card/)
+  const saved = Modal.confirm
+  let confirmed: (() => void) | undefined
+  Modal.confirm = ((props) => {
+    confirmed = props.onOk as () => void
+    return { destroy: () => {}, update: () => {} }
+  }) as typeof Modal.confirm
+  try {
+    candidate.recoveryActionPlan.primaryAction!.requiresConfirmation = true
+    const gated = RecoverySurface({
+      inlineAuthorizationBootstrap: true,
+      isApplicationPlanningPhase: false,
+      activeExecutionRecovery: candidate,
+      recoveryRunning: false,
+      onExecuteRecoveryAction: () => {},
+      onRetryCurrentRecovery: () => {
+        retries += 1
+      }
+    })!
+    gated.props.onRetry()
+    assert.equal(retries, 1)
+    assert.ok(confirmed)
+    confirmed()
+    assert.equal(retries, 2)
+  } finally {
+    Modal.confirm = saved
+  }
+})
+
+test('Electron 落盘往返保留权限节点身份与完整 DDL，事件恢复也补齐节点身份', () => {
+  const current = workflow()
+  current.events = [current.events[0]]
+  const step = processStepsForDisplay(undefined, current)![0]
+  const saved = normalizePersistentSessionMessage({
+    id: 1,
+    role: 'assistant',
+    content: '',
+    workflow: current,
+    processSteps: [step]
+  })
+  const restored = saved as unknown as AgentChatMessage
+  assert.equal(restored.processSteps![0].nodeName, 'authorization_bootstrap')
+  assert.equal(restored.processSteps![0].attempt, 1)
+  assert.equal(restored.processSteps![0].authorizationBootstrap?.ddl, ddl)
+  const { nodeName: _, attempt: __, authorizationBootstrap: ___, ...persistedShape } = step
+  const recovered = processStepsForDisplay([persistedShape], current)!
+  assert.equal(recovered.length, 1)
+  assert.equal(recovered[0].nodeName, 'authorization_bootstrap')
+  assert.equal(recovered[0].authorizationBootstrap?.ddl, ddl)
+})
+
+test('真实会话路径：权限已放行，Build 任务停止失败时恢复卡展示 Build 原因而非权限旧文案', () => {
+  const notice = '权限数据库初始化脚本执行失败，请检查本地 Bootstrap 日志。'
+  const current = workflow()
+  current.summary = {
+    ...current.summary,
+    status: 'failed',
+    phase: 'failed',
+    message: notice,
+    buildSummary: { status: 'failed', total: 8, failed: 2 }
+  }
+  current.events = [
+    current.events[0],
+    {
+      type: 'workflow.node.completed',
+      nodeName: 'build',
+      status: 'failed',
+      data: {
+        detail: {
+          buildSummary: { status: 'failed' },
+          buildExecutionSlice: {
+            tasks: [
+              {
+                id: 'backend:bootstrap::bootstrap',
+                status: 'failed',
+                failure_reason: '任务执行器异常退出：当前运行已停止。'
+              },
+              {
+                id: 'page:target',
+                status: 'failed',
+                failure_reason: '任务执行器异常退出：拒绝继续执行 Agent。'
+              }
+            ]
+          }
+        }
+      }
+    },
+    { type: 'workflow.node.completed', nodeName: 'handle_failure', status: 'failed' }
+  ] as WorkflowRunPayload['events']
+  const candidate = recoveryCandidate()
+  candidate.failureDiagnostic = {
+    sourceRunId: 'run',
+    origin: 'workflow',
+    code: 'WORKBENCH_EXECUTION_FAILED',
+    message: notice
+  }
+  candidate.currentNode = 'build'
+  candidate.recoveryActionPlan.primaryAction!.targetNode = 'build'
+  const messages: AgentChatMessage[] = [
+    { id: 1, role: 'assistant', content: '', workflow: current }
+  ]
+  assert.equal(
+    authorizationBootstrapRecoveryOwner({ candidate, workflow: current, messages }),
+    undefined
+  )
+  assert.match(latestConversationFailure(messages)!, /当前运行已停止/)
+  assert.doesNotMatch(latestConversationFailure(messages)!, /权限数据库初始化/)
+  const markup = renderToStaticMarkup(
+    createElement(RecoverySurface, {
+      isApplicationPlanningPhase: false,
+      activeExecutionRecovery: candidate,
+      currentWorkflow: current,
+      recoveryRunning: false,
+      onExecuteRecoveryAction: () => {},
+      onRetryCurrentRecovery: () => {}
+    })
+  )
+  assert.match(markup, /当前运行已停止/)
+  assert.doesNotMatch(markup, /权限数据库初始化/)
+  assert.match(markup, /重试/)
+})
+
+test('节点 completed 仅放行流程，标题与动作详情使用真实权限初始化子状态', () => {
+  for (const [status, label] of [
+    ['failed', '权限数据库初始化未完成'],
+    ['manual_required', '权限数据库待手动初始化'],
+    ['executed', '权限数据库初始化成功'],
+    ['reused', '权限数据库初始化成功（复用已有结果）']
+  ] as const) {
+    const current = workflow()
+    current.events = [
+      {
+        ...current.events[0],
+        status: 'completed',
+        data: { detail: { authorizationBootstrap: { ...result, status } } }
+      }
+    ]
+    const step = processStepsForDisplay(undefined, current)![0]
+    assert.equal(step.status, 'completed')
+    assert.equal(step.title, label)
+    const markup = renderToStaticMarkup(
+      createElement(ProcessStep, {
+        step,
+        conversation: false,
+        isLast: true,
+        settled: true,
+        waitingForInput: false,
+        waitingPrompt: ''
+      })
+    )
+    assert.equal(markup.split(label).length - 1, 2)
+    assert.doesNotMatch(markup, /已完成\s*权限数据库初始化/)
+  }
+})

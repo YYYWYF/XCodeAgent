@@ -1,3 +1,5 @@
+import { buildFailureMessageForDisplay } from '../../service/buildFailureMessage'
+import { AuthorizationBootstrapRecoveryContext, AuthorizationBootstrapRetryNotice, authorizationBootstrapRecoveryOwner } from './authorizationBootstrapRecovery'
 import { Alert, Button, Modal, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -4051,16 +4053,35 @@ export default function AiChatPanel({
       Boolean(currentTemplateRetry) ||
       Boolean(currentPreviewRetry)
         ? undefined
-        : recoveryError,
-    globalFallbackError
+        : buildFailureMessageForDisplay(recoveryError, latestWorkflowForDisplay),
+    globalFallbackError: buildFailureMessageForDisplay(globalFallbackError, latestWorkflowForDisplay)
   })
   const globalFallbackScopeDenied = isDirectModificationScopeDenied(
     latestWorkflowForDisplay,
     globalFallback.error
   )
+  const authorizationRecoveryOwner = !isApplicationPlanningPhase &&
+    activeConnectionState.status === 'healthy' && !recoveryProjectionError &&
+    !pendingRevisionStart && !currentPreviewRetry && !currentTemplateRetry &&
+    !revisionHandoffFailure && !previewFallbackError && !templateFallbackError &&
+    !pendingRevisionStartError && (currentRecoveryIncident || globalFallback.error)
+    ? authorizationBootstrapRecoveryOwner({ candidate: activeExecutionRecovery,
+        workflow: latestWorkflowForDisplay, incident: currentRecoveryIncident, messages: displayedMessages })
+    : undefined
+  const authorizationRecoveryNotice = authorizationRecoveryOwner ? {
+    ...authorizationRecoveryOwner,
+    notice: currentRecoveryIncident ? <RecoverySurface
+      inlineAuthorizationBootstrap isApplicationPlanningPhase={false}
+      activeExecutionRecovery={activeExecutionRecovery} currentWorkflow={latestWorkflowForDisplay}
+      onExecuteRecoveryAction={(candidate) => { void handleExecuteRecoveryAction(candidate) }}
+      onRetryCurrentRecovery={() => { void retryCurrentRecovery() }}
+      recoveryError={recoveryError} recoveryRunning={recoveryRunning}
+    /> : <AuthorizationBootstrapRetryNotice message={globalFallback.error}
+      onRetry={() => { void retryCurrentRecovery() }} retrying={recoveryRunning} />
+  } : undefined
   // 无当前执行所属会话时，不把共享规划、预览或投影错误转交给其他会话和阶段。
   const showGlobalFallback =
-    globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
+    !authorizationRecoveryNotice && globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
       !isApplicationPlanningPhase || Boolean(pendingRevisionStartError) || Boolean(sessionPlanningFailureState))
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
@@ -5241,6 +5262,7 @@ export default function AiChatPanel({
                 />
               )}
 
+              <AuthorizationBootstrapRecoveryContext.Provider value={authorizationRecoveryNotice}>
               <MessageList
                 developmentNextStepContent={
                   !isApplicationPlanningPhase &&
@@ -5372,6 +5394,7 @@ export default function AiChatPanel({
                 templateReconcileRetryable={templateReconcileRetryable}
                 planningState={planningState}
               />
+              </AuthorizationBootstrapRecoveryContext.Provider>
 
               {milestoneCommitReminderProps && (
                 <MilestoneCommitReminder

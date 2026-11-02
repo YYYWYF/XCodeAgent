@@ -1,3 +1,4 @@
+import { currentBuildFailureMessage } from './buildFailureMessage'
 import type { ApplicationPlanningCurrentState } from './activeApplicationPlanning'
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../typings'
 import type {
@@ -68,6 +69,12 @@ function currentWorkbenchFailureDiagnostic(
   workflow?: WorkflowRunPayload
 ): RecoveryFailureDiagnostic | undefined {
   if (candidate.executionStatus !== 'failed') return undefined
+  const buildMessage = workflow?.runId === candidate.sourceRunId && workflow.threadId === candidate.threadId &&
+    candidate.recoveryActionPlan.primaryAction?.targetNode === 'build' ? currentBuildFailureMessage(workflow) : undefined
+  if (buildMessage) {
+    const diagnostic = parseRecoveryFailureDiagnostic(workflow?.summary.failureDiagnostic) || candidate.failureDiagnostic
+    if (diagnostic?.sourceRunId === candidate.sourceRunId) return { ...diagnostic, userMessage: buildMessage }
+  }
   const persisted = candidate.failureDiagnostic
   if (
     persisted?.sourceRunId === candidate.sourceRunId &&
@@ -184,7 +191,8 @@ export function workbenchRecoveryIncident(
   const completedMessage = typeof completed === 'number' && Number.isInteger(completed) && completed >= 0
     ? `已完成 ${completed} 个任务，` : ''
   const failureDiagnostic = currentWorkbenchFailureDiagnostic(candidate, workflow)
-  const rawFailureMessage = failureDiagnostic?.message?.trim() || (
+  const rawFailureMessage = (buildRetry && workflow?.runId === candidate.sourceRunId && workflow.threadId === candidate.threadId
+    ? currentBuildFailureMessage(workflow) : undefined) || failureDiagnostic?.message?.trim() || (
     workflow?.runId === candidate.sourceRunId &&
     workflow.threadId === candidate.threadId &&
     workflow.summary.status === 'failed'

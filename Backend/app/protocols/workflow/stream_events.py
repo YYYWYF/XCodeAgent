@@ -71,6 +71,7 @@ def _process_frame(
     dag_generation: dict[str, Any] | None = None,
     workspace_inspection: dict[str, Any] | None = None,
     workspace_inspection_progress: dict[str, Any] | None = None,
+    authorization_bootstrap: dict[str, Any] | None = None,
 ) -> str:
     value: dict[str, Any] = {
         "id": id,
@@ -82,6 +83,8 @@ def _process_frame(
         "appendDetail": append_detail,
         "sequence": sequence,
     }
+    if authorization_bootstrap is not None:
+        value["authorizationBootstrap"] = authorization_bootstrap
     if checks is not None:
         value["checks"] = checks
     if node_name:

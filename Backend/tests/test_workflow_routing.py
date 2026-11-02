@@ -183,13 +183,15 @@ class WorkflowRoutingTests(unittest.TestCase):
             "build",
         )
 
-    def test_prepare_build_tasks_enters_authorization_bootstrap_when_enabled(self) -> None:
+    @patch("app.graph.workflow.read_application_config", return_value={"authorization": {"enabled": True}})
+    def test_prepare_build_tasks_enters_authorization_bootstrap_when_enabled(self, _config) -> None:
         """权限开启的已确认技术规划必须在 Build 前经过平台 Bootstrap。"""
 
         self.assertEqual(
             route_prepare_build_tasks(
                 {
                     "status": "completed",
+                    "workspace": "/test/workspace",
                     "technical_plan": {
                         "artifact_type": "technical-plan",
                         "confirmation_status": "confirmed",
@@ -310,7 +312,7 @@ class WorkflowRoutingTests(unittest.TestCase):
             {"build_summary": {"status": "running"}, "application_name": "测试应用"}
         )
 
-        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["status"], "in_progress")
         self.assertNotIn("clarification", result)
 
     def test_test_phase_confirmation_projects_stable_page_target(self) -> None:

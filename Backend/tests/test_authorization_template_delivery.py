@@ -58,7 +58,8 @@ class AuthorizationTemplateDeliveryTests(unittest.TestCase):
                 self.assertEqual((root / name).read_bytes(), content)
             # 仅在物化完成后替换 Bootstrap 进程，保留 Git baseline 的真实执行。
             with patch("app.services.authorization_bootstrap.workspace_process_registry.run") as run_mock, \
-                    patch("app.services.authorization_bootstrap._bootstrap_environment", return_value={}):
+                    patch("app.services.authorization_bootstrap._bootstrap_environment", return_value={}), \
+                    patch("app.services.authorization_bootstrap._resolve_bootstrap_mode", return_value=("direct", "sha256:target")):
                 run_mock.return_value.returncode = 0
                 run_mock.return_value.stdout = b"ok"
                 run_mock.return_value.stderr = b""

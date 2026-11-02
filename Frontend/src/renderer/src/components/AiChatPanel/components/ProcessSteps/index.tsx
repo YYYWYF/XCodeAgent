@@ -1,3 +1,5 @@
+import { authorizationBootstrapTitle } from '../../../../service/authorizationBootstrap'
+import { AuthorizationBootstrapRecoveryContext } from '../../authorizationBootstrapRecovery'
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -9,11 +11,12 @@ import {
   RobotOutlined,
   SafetyCertificateOutlined,
   ToolOutlined,
-  UpOutlined
+  UpOutlined,
+  WarningOutlined
 } from '@ant-design/icons'
 import { Button, Typography, message } from 'antd'
-import { useEffect, useState } from 'react'
-import type { ReactElement } from 'react'
+import { useContext, useEffect, useState } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import type {
   IntegrationTestCheckRecord,
   ProcessStepRecord,
@@ -35,6 +38,7 @@ import ConversationProgressSummary from './ConversationProgressSummary'
 import { integrationTestCheckReportPath } from './reportAction'
 import ToolActivityChain from './ToolActivityChain'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
+import AuthorizationBootstrapPanel from './AuthorizationBootstrapPanel'
 import './ProcessSteps.less'
 
 const { Text } = Typography
@@ -63,6 +67,18 @@ export default function ProcessSteps({
   waitingPrompt = '',
   waitingForInput = false
 }: Props): ReactElement {
+  const recovery = useContext(AuthorizationBootstrapRecoveryContext)
+  const recoveryStepId =
+    recovery && workflow?.runId === recovery.runId && workflow.threadId === recovery.threadId
+      ? [...steps].reverse().find((step) => step.nodeName === 'authorization_bootstrap')?.id
+      : undefined
+  const hasAuthorizationWarning =
+    Boolean(recoveryStepId) ||
+    steps.some(
+      (step) =>
+        step.nodeName === 'authorization_bootstrap' &&
+        step.authorizationBootstrap?.requiresManualAction
+    )
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
   const hasProjectPlanUpdate = steps.some((step) => Boolean(step.projectPlanUpdate))
   const hasWorkspaceInspection = steps.some((step) => Boolean(step.workspaceInspection))
@@ -79,7 +95,8 @@ export default function ProcessSteps({
       waitingForInput ||
       hasProjectPlanUpdate ||
       hasWorkspaceInspection ||
-      hasPendingDagCompletion
+      hasPendingDagCompletion ||
+      hasAuthorizationWarning
   )
 
   useEffect(() => {
@@ -89,12 +106,14 @@ export default function ProcessSteps({
       hasTestChecklist ||
       hasProjectPlanUpdate ||
       hasWorkspaceInspection ||
-      hasPendingDagCompletion
+      hasPendingDagCompletion ||
+      hasAuthorizationWarning
     ) {
       setOpen(true)
     }
   }, [
     hasPendingDagCompletion,
+    hasAuthorizationWarning,
     hasProjectPlanUpdate,
     hasTestChecklist,
     hasWorkspaceInspection,
@@ -167,6 +186,9 @@ export default function ProcessSteps({
               >
                 {item.steps.map((step, toolIndex) => (
                   <ProcessStep
+                    authorizationRecoveryNotice={
+                      step.id === recoveryStepId ? recovery?.notice : undefined
+                    }
                     conversation={conversation}
                     isLast={toolIndex === item.steps.length - 1}
                     key={step.id}
@@ -182,6 +204,9 @@ export default function ProcessSteps({
 
           return (
             <ProcessStep
+              authorizationRecoveryNotice={
+                item.step.id === recoveryStepId ? recovery?.notice : undefined
+              }
               conversation={conversation}
               isLast={index === displayItems.length - 1}
               key={item.step.id}
@@ -202,6 +227,7 @@ export default function ProcessSteps({
 
 /** 渲染单个 Agent 步骤，仅让包含实际详情的步骤具备展开交互。 */
 export function ProcessStep({
+  authorizationRecoveryNotice,
   conversation,
   dagPendingPlanCompletion,
   isLast,
@@ -212,6 +238,7 @@ export function ProcessStep({
   waitingForInput,
   waitingPrompt
 }: {
+  authorizationRecoveryNotice?: ReactNode
   conversation: boolean
   dagPendingPlanCompletion?: DagPendingPlanCompletion
   isLast: boolean
@@ -222,6 +249,9 @@ export function ProcessStep({
   waitingForInput: boolean
   waitingPrompt: string
 }): ReactElement {
+  const hasAuthorizationBootstrap =
+    step.nodeName === 'authorization_bootstrap' &&
+    (Boolean(step.authorizationBootstrap) || Boolean(authorizationRecoveryNotice))
   const hasChecks = Boolean(step.checks?.length)
   const hasBuildRun = Boolean(step.buildExecutionSlice)
   const hasDagGeneration = Boolean(step.dagGeneration)
@@ -266,7 +296,8 @@ export function ProcessStep({
       hasProjectPlanUpdate ||
       hasWorkspaceInspection ||
       hasWorkspaceInspectionProgress ||
-      hasRepairPanel)
+      hasRepairPanel ||
+      hasAuthorizationBootstrap)
   const awaitingInput = !titleOnly && waitingForInput && step.status === 'requires_user_input'
   // 二次修改的普通动作详情默认收起，流式更新不自动展开；结构化进度和确认提示沿用原展示规则。
   const collapseConversationDetail =
@@ -278,6 +309,7 @@ export function ProcessStep({
     !hasWorkspaceInspection &&
     !hasWorkspaceInspectionProgress &&
     !hasRepairPanel &&
+    !hasAuthorizationBootstrap &&
     !awaitingInput
   const [open, setOpen] = useState(
     expandable &&
@@ -292,6 +324,7 @@ export function ProcessStep({
         hasWorkspaceInspection ||
         hasWorkspaceInspectionProgress ||
         hasRepairPanel ||
+        hasAuthorizationBootstrap ||
         hasToolActivity)
   )
 
@@ -307,7 +340,8 @@ export function ProcessStep({
         hasProjectPlanUpdate ||
         hasWorkspaceInspection ||
         hasWorkspaceInspectionProgress ||
-        hasRepairPanel)
+        hasRepairPanel ||
+        hasAuthorizationBootstrap)
     ) {
       setOpen(true)
     }
@@ -322,6 +356,7 @@ export function ProcessStep({
     hasWorkspaceInspection,
     hasWorkspaceInspectionProgress,
     hasRepairPanel,
+    hasAuthorizationBootstrap,
     hasToolActivity,
     isDefaultCollapsedNode,
     step.status
@@ -332,6 +367,7 @@ export function ProcessStep({
     step.kind,
     step.status,
     !expandable && 'static',
+    Boolean(authorizationRecoveryNotice) && 'authorization-recovery',
     hasChecks && 'has-checks',
     hasBuildRun && 'has-build-run',
     hasDagGeneration && 'has-dag-generation',
@@ -344,7 +380,9 @@ export function ProcessStep({
   )
   const summaryContent = (
     <>
-      <span className={cx('process-step-icon')}>{stepIcon(step, settled)}</span>
+      <span className={cx('process-step-icon')}>
+        {authorizationRecoveryNotice ? <WarningOutlined /> : stepIcon(step, settled)}
+      </span>
       <Text>{processStepTitle(step, conversation, settled)}</Text>
     </>
   )
@@ -407,12 +445,26 @@ export function ProcessStep({
           !hasWorkspaceInspection &&
           !hasWorkspaceInspectionProgress &&
           !hasRepairPanel &&
+          !hasAuthorizationBootstrap &&
           step.detail && (
             <DetailBlock
               label={step.kind === 'reasoning' ? '思考内容' : '动作详情'}
               value={step.detail}
             />
           )}
+        {hasAuthorizationBootstrap && (
+          <section>
+            <Text className={cx('process-step-detail-label')}>动作详情</Text>
+            {step.authorizationBootstrap ? (
+              <AuthorizationBootstrapPanel
+                result={step.authorizationBootstrap}
+                recoveryNotice={authorizationRecoveryNotice}
+              />
+            ) : (
+              authorizationRecoveryNotice
+            )}
+          </section>
+        )}
         {hasRepairPanel && (
           <RepairInProgressPanel
             completed={hasRepairCompletion}
@@ -453,7 +505,9 @@ export function ProcessStep({
         {step.buildExecutionSlice && (
           <BuildExecutionRunCard executionSlice={step.buildExecutionSlice} status={step.status} />
         )}
-        {step.result && <DetailBlock label="执行结果" value={step.result} />}
+        {!hasAuthorizationBootstrap && step.result && (
+          <DetailBlock label="执行结果" value={step.result} />
+        )}
       </div>
     </details>
   )
@@ -665,6 +719,14 @@ function processStepTitle(
   conversation: boolean,
   settled: boolean
 ): string {
+  if (
+    step.nodeName === 'authorization_bootstrap' &&
+    step.authorizationBootstrap &&
+    step.status !== 'running' &&
+    step.authorizationBootstrap.failureCategory !== 'build_plan_invalid'
+  ) {
+    return authorizationBootstrapTitle(step.authorizationBootstrap.status)
+  }
   if (!conversation) return settled ? settledTitle(step.title) : step.title
   if (isToolActivityStep(step)) {
     const action = step.kind === 'command' ? '执行' : '调用'
@@ -761,6 +823,11 @@ function testCheckCountLabel(check: IntegrationTestCheckRecord): string | undefi
 function stepIcon(step: ProcessStepRecord, settled: boolean): ReactElement {
   if (step.status === 'running' && !settled) return <LoadingOutlined spin />
   if (step.status === 'failed') return <CloseCircleOutlined />
+  if (
+    step.nodeName === 'authorization_bootstrap' &&
+    step.authorizationBootstrap?.requiresManualAction
+  )
+    return <WarningOutlined />
   if (step.status === 'requires_user_input') return <PauseCircleOutlined />
   if (step.kind === 'reasoning') return <RobotOutlined />
   if (step.kind === 'command') return <CodeOutlined />

@@ -679,6 +679,8 @@ def _public_workflow_state(
     if isinstance(bootstrap, dict):
         public_state["authorizationBootstrap"] = {
             "status": bootstrap.get("status"),
+            "requiresManualAction": bootstrap.get("requires_manual_action"),
+            "ddlAvailable": bootstrap.get("ddl_available"),
             "manifestFingerprint": bootstrap.get("manifest_fingerprint"),
             "durationMs": bootstrap.get("duration_ms"),
             "exitCode": bootstrap.get("exit_code"),
@@ -1019,12 +1021,17 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
             "message": str(update.get("message") or "权限数据库初始化完成。"),
             "data": {
                 "authorizationBootstrap": {
-                    "status": result.get("status"),
-                    "manifestFingerprint": result.get("manifest_fingerprint"),
-                    "durationMs": result.get("duration_ms"),
-                    "exitCode": result.get("exit_code"),
-                    "failureCategory": result.get("failure_category"),
-                    "logDirectory": result.get("log_directory"),
+                    public: result.get(internal)
+                    for public, internal in {
+                        "status": "status", "datasourceMode": "datasource_mode",
+                        "executionAttempted": "execution_attempted",
+                        "requiresManualAction": "requires_manual_action",
+                        "ddlAvailable": "ddl_available", "ddlPath": "ddl_path", "ddl": "ddl",
+                        "message": "message", "failureCategory": "failure_category",
+                        "exitCode": "exit_code", "logDirectory": "log_directory",
+                        "manifestFingerprint": "manifest_fingerprint", "durationMs": "duration_ms",
+                    }.items()
+                    if internal in result
                 }
             },
         }

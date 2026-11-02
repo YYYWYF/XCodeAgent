@@ -1,3 +1,4 @@
+import { readAuthorizationBootstrap, authorizationBootstrapTitle } from './authorizationBootstrap'
 import type { WorkflowRunPayload } from '../typings'
 import { isConversationWorkflow } from '../components/AiChatPanel/conversationMode'
 import {
@@ -139,8 +140,17 @@ function mergeRecoveredWorkflowSteps(
       existingStep.dagGeneration,
       recoveredStep.dagGeneration
     )
-    if (dagGeneration === existingStep.dagGeneration) continue
-    mergedSteps[existingIndex] = { ...existingStep, dagGeneration }
+    if (dagGeneration === existingStep.dagGeneration && !recoveredStep.authorizationBootstrap)
+      continue
+    mergedSteps[existingIndex] = {
+      ...existingStep,
+      nodeName: recoveredStep.nodeName,
+      attempt: recoveredStep.attempt,
+      dagGeneration,
+      ...(recoveredStep.authorizationBootstrap
+        ? { authorizationBootstrap: recoveredStep.authorizationBootstrap }
+        : {})
+    }
   }
   return mergedSteps
 }
@@ -342,16 +352,24 @@ function completedWorkflowProcessSteps(
       event.nodeName === 'entity_source_binding'
         ? readProjectPlanUpdate(detail.projectPlanUpdate)
         : undefined
+    const authorizationBootstrap =
+      event.nodeName === 'authorization_bootstrap'
+        ? readAuthorizationBootstrap(detail.authorizationBootstrap)
+        : undefined
     const step: ProcessStepRecord = {
       id: stepId,
       kind: 'workflow',
       status,
-      title: `${processStepTitlePrefix(status)} ${label}`,
+      title:
+        authorizationBootstrap && authorizationBootstrap.failureCategory !== 'build_plan_invalid'
+          ? authorizationBootstrapTitle(authorizationBootstrap.status)
+          : `${processStepTitlePrefix(status)} ${label}`,
       detail: event.message || '',
       sequence: index + 1,
       nodeName: event.nodeName,
       attempt,
       iterationKind: event.iterationKind,
+      authorizationBootstrap,
       ...(checks ? { checks } : {}),
       ...(buildExecutionSlice ? { buildExecutionSlice } : {}),
       ...(dagGeneration ? { dagGeneration } : {}),
