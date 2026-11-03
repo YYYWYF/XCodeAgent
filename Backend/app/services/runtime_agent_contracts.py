@@ -7,6 +7,9 @@ import json
 import re
 from typing import Any
 
+from pydantic import ValidationError
+
+from app.domain.runtime_endpoint_contract import TextConversationContract
 from app.services.agent_runtime_template_policy import AGENT_RUNTIME_MODULES
 from app.services.planning_frozen import plain_json
 from app.services.runtime_business_contract import serves_python_business
@@ -52,6 +55,47 @@ def _reject_secrets(value: Any) -> None:
             _reject_secrets(item)
 
 
+def validate_agent_interaction_contract(
+    value: Any, *, agent_id: str, field_path: str,
+) -> dict[str, Any]:
+    """严格复用会话模型，将错误转换为带正式身份、候选路径及预期值的修复诊断。"""
+
+    try:
+        return TextConversationContract.model_validate(value).model_dump(mode="json", by_alias=True)
+    except ValidationError as exc:
+        expected: dict[tuple[str, ...], str] = {
+            ("inputSchema", "properties"): "必须为 {}",
+            ("inputSchema", "required"): "必须为 []",
+            ("outcomes",): "必须为 []",
+        }
+        diagnostics: list[str] = []
+        for error in exc.errors(include_url=False):
+            location = tuple(error["loc"])
+            # outcomes 子项报错仍定位到整个空数组约束，不能误导模型改成业务结果对象。
+            if location and location[0] == "outcomes":
+                location = ("outcomes",)
+            current: Any = value
+            path = field_path
+            for part in location:
+                path += f"[{part}]" if isinstance(part, int) else f".{part}"
+                if isinstance(current, Mapping) and part in current:
+                    current = current[part]
+                elif isinstance(current, (list, tuple)) and isinstance(part, int) and 0 <= part < len(current):
+                    current = current[part]
+                else:
+                    current = "（缺失）"
+            rendered = json.dumps(plain_json(current), ensure_ascii=False, default=str)
+            if len(rendered) > 200:
+                rendered = rendered[:200] + "…"
+            requirement = expected.get(location, str(error["msg"]))
+            diagnostics.append(f"Agent {agent_id}：{path} 当前值 {rendered}；{requirement}。")
+        raise ValueError(
+            "\n".join(dict.fromkeys(diagnostics))
+            + "\n用户文本通过 AG-UI messages 传递；普通文本回复由 textOutput=true 声明，"
+            "不是结构化业务输入或 outcomes。仅局部修复上述字段，保留其他 Agent 配置。"
+        ) from exc
+
+
 def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = True) -> dict[str, dict]:
     """校验七模块完整性、页面和 Tool 的精确引用；无 Agent 的 Java 应用保持原流程。"""
 
@@ -64,16 +108,17 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
     endpoints = {(contract.get("id"), endpoint.get("id"))
                  for contract in plan.get("api_contracts", ()) for endpoint in contract.get("endpoints", ())}
     result = {}
-    for item in raw:
+    for index, item in enumerate(raw):
         contract = plain_json(item)
         if not isinstance(contract, dict) or set(contract) != {"agentId", "name", "purpose", "pageIds", "agentSettings", "interactionContract"}:
             raise ValueError("Agent 合同必须且只能包含 agentId/name/purpose/pageIds/agentSettings/interactionContract。")
-        from app.domain.runtime_endpoint_contract import TextConversationContract
-        contract["interactionContract"] = TextConversationContract.model_validate(
-            contract["interactionContract"]).model_dump(mode="json", by_alias=True)
         agent_id = contract["agentId"]
         if not isinstance(agent_id, str) or len(agent_id) > 128 or re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None or agent_id == "runtime" or agent_id in result:
             raise ValueError("Agent 身份必须是唯一 lower_snake_case，且不能占用 runtime。")
+        contract["interactionContract"] = validate_agent_interaction_contract(
+            contract["interactionContract"], agent_id=agent_id,
+            field_path=f"agent_contracts[{index}].interactionContract",
+        )
         if any(not isinstance(contract[key], str) or not contract[key].strip() for key in ("name", "purpose")):
             raise ValueError(f"Agent {agent_id} 缺少名称或业务职责。")
         bindings = contract["pageIds"]

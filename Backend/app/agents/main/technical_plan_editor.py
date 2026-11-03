@@ -313,8 +313,11 @@ def edit_technical_plan_with_agent(
     except (ModelCallLimitExceededError, GraphRecursionError) as exc:
         if revision_reasons:
             raise ProductPlanRevisionRequired("；".join(revision_reasons), backend.recover_candidate(existing_plan)) from exc
+        failure = "技术规划局部修订达到调用上限，未提交正式产物。"
+        if backend.last_edit_error:
+            failure += "最后一次编辑失败：" + backend.last_edit_error
         raise TechnicalPlanEditorError(
-            "技术规划局部修订达到调用上限，未提交正式产物。",
+            failure,
             backend.recover_candidate(existing_plan),
         ) from exc
     if revision_reasons:

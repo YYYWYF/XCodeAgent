@@ -9,6 +9,9 @@ TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT = (
     'interactionContract 必须完整采用以下结构，其中 interactionKinds 按业务需要填写：{"mode":"conversation","inputSchema":{"type":"object",'
     '"properties":{},"required":[],"additionalProperties":false},"textOutput":true,'
     '"publicStateSchema":null,"outcomes":[],"interactionKinds":[]}。'
+    "用户提问只通过 AG-UI messages 传递，不是业务输入字段；不能在 inputSchema.properties 或 required 中添加 message、prompt 或 question。"
+    "普通文本回复由 textOutput=true 声明，不是业务 outcomes；不能把回复说明或验收标准放入 outcomes。"
+    "properties 必须为 {}，required 和 outcomes 必须为 []，不是待补充的示例占位。"
     "文本会话是公开输入输出形式，不限制内部 Tool/Skill/Knowledge；按已确认业务需求规划 enabled 和 bindings/files，不得为通过校验删除或禁用已有能力。"
     "interactionKinds 按业务需要显式声明 clarification/confirmation/approval_required 的不重复子集；写入 Tool 必须声明 confirmation 或 approval_required 并在实际执行前确认。"
     "普通 Endpoint 必须显式 kind=business；首次规划由平台物化运行入口，修订时原样保留已有运行入口。"
