@@ -1,3 +1,4 @@
+import { SESSION_HISTORY_PAGE_SIZE, type SessionHistoryPage } from '../../../shared/sessionHistory'
 import type {
   AgentApprovalRequest,
   AgentApprovalStatus,
@@ -101,6 +102,7 @@ export type ChatSessionRecord = {
   revisionContext?: ChatSessionRevisionContext;
   workspaceRoot: string;
   messages: ChatSessionMessage[];
+  history?: SessionHistoryPage;
   createdAt: number;
   updatedAt: number;
 };
@@ -549,7 +551,7 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     revisionContext: session.revisionContext,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    messageCount: session.messages.length
+    messageCount: session.history?.total ?? session.messages.length
   }
 }
 
@@ -763,17 +765,14 @@ export async function readChatSession(
   workspaceRoot: string,
   editorMode: EditorMode,
   sessionId: string,
+  before?: number,
 ): Promise<ChatSessionRecord> {
   const sessionApi = window.devAgentStudio?.sessions;
   if (sessionApi) {
-    try {
-      const result = await sessionApi.read({ workspaceRoot, editorMode, sessionId });
-      const session = normalizeSession(result.session);
-      if (!session) throw new Error('会话文件格式不正确。');
-      return session;
-    } catch (error) {
-      console.warn(error);
-    }
+    const result = await sessionApi.read({ workspaceRoot, editorMode, sessionId, before, limit: SESSION_HISTORY_PAGE_SIZE });
+    const session = normalizeSession(result.session);
+    if (!session) throw new Error('会话文件格式不正确。');
+    return { ...session, history: result.history };
   }
 
   const session = readFallbackSessions(workspaceRoot, editorMode).find((item) => item.id === sessionId);
@@ -789,7 +788,7 @@ export async function createChatSession(input: CreateChatSessionInput): Promise<
     const session = normalizeSession(result.session)
     if (!session) throw new Error('主进程返回的会话不符合当前契约。')
     if (result.created) reportCreatedPlanningSession(input, session)
-    return session
+    return { ...session, history: result.history }
   }
 
   const now = Date.now()
@@ -857,12 +856,13 @@ function reportCreatedPlanningSession(input: CreateChatSessionInput, session: Ch
   }
 }
 
-export async function saveChatSession(session: ChatSessionRecord): Promise<ChatSessionSummary> {
+export async function saveChatSession(session: ChatSessionRecord, loadedMessageIds?: number[]): Promise<ChatSessionSummary> {
   const sessionApi = window.devAgentStudio?.sessions
   if (sessionApi) {
     const result = await sessionApi.save({
       workspaceRoot: session.workspaceRoot,
-      session
+      session,
+      loadedMessageIds
     })
     const summary = normalizeSummaries([result.session])[0]
     if (!summary) throw new Error('主进程返回的会话摘要不符合当前契约。')

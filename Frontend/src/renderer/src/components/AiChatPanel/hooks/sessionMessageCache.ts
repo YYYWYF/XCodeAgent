@@ -1,4 +1,5 @@
 import type { AgentChatMessage } from '../types'
+import type { SessionHistoryPage } from '../../../../../shared/sessionHistory'
 
 type CacheEntry = {
   generation: object
@@ -8,8 +9,15 @@ type CacheEntry = {
   pending: number
   bytes: number
   used: number
+  history?: SessionHistoryPage
 }
-export type SessionSaveToken = { key: string; entry?: CacheEntry; revision: number }
+export type SessionSaveToken = {
+  key: string
+  entry?: CacheEntry
+  revision: number
+  loadedMessageIds?: number[]
+  savedMessageIds: number[]
+}
 const EMPTY_MESSAGES: AgentChatMessage[] = []
 const BYTE_BUDGET = 32 * 1024 * 1024
 
@@ -77,11 +85,12 @@ export class SessionMessageCache {
   }
 
   /** 从磁盘注册干净正文；迟到的读取不能覆盖已有内存内容。 */
-  restore(key: string, messages: AgentChatMessage[]): void {
+  restore(key: string, messages: AgentChatMessage[], history?: SessionHistoryPage): void {
     if (this.entries.has(key)) return
     this.entries.set(key, {
       generation: {},
       messages,
+      history,
       revision: 0,
       savedRevision: 0,
       pending: 0,
@@ -90,14 +99,55 @@ export class SessionMessageCache {
     })
   }
 
+  /** 获取分页游标；完整正文与仅加载尾页的会话不能混用覆盖保存。 */
+  history(key: string): SessionHistoryPage | undefined {
+    return this.entries.get(key)?.history
+  }
+
+  /** 合并较早历史，不覆盖流式更新，也不把读盘操作标为用户修改。 */
+  prepend(key: string, messages: AgentChatMessage[], page: SessionHistoryPage): void {
+    const entry = this.entries.get(key)
+    if (!entry?.history) return
+    const current = new Map(entry.messages.map((message) => [message.id, message]))
+    const known = new Set(entry.history.loadedMessageIds)
+    for (const message of messages) {
+      // 已加载后被本地移除的占位/交接消息不能被迟到的历史页重新添加。
+      if (!current.has(message.id) && !known.has(message.id)) current.set(message.id, message)
+    }
+    const positions = { ...entry.history.messagePositions, ...page.messagePositions }
+    // 磁盘顺序由索引决定，不把时间戳式消息 ID 当作排序合同；未落盘的新回复保持追加顺序。
+    entry.messages = [...current.values()].sort(
+      (left, right) => (positions[left.id] ?? Infinity) - (positions[right.id] ?? Infinity)
+    )
+    const visible = new Set(messages.map((message) => message.id))
+    entry.history = {
+      ...page,
+      messagePositions: positions,
+      contextMessageIds: entry.history.contextMessageIds.filter((id) => !visible.has(id)),
+      loadedMessageIds: [...new Set([...entry.history.loadedMessageIds, ...page.loadedMessageIds])]
+    }
+    entry.bytes = estimateBytes(entry.messages)
+  }
+
   /** 消息变化立即标脏，直至对应版本得到成功落盘回执。 */
   update(key: string, messages: AgentChatMessage[]): void {
     const entry = this.entries.get(key)
     if (entry?.messages === messages) return
+    let history = entry?.history
+    if (
+      history?.before !== undefined &&
+      !messages.some((message) => message.id === history!.before)
+    ) {
+      const hidden = new Set(history.contextMessageIds)
+      const next = messages.find(
+        (message) => !hidden.has(message.id) && history!.messagePositions[message.id] !== undefined
+      )
+      if (next) history = { ...history, before: next.id }
+    }
     this.entries.set(
       key,
       entry
-        ? { ...entry, messages, revision: entry.revision + 1, used: ++this.clock }
+        ? { ...entry, messages, history, revision: entry.revision + 1, used: ++this.clock }
         : {
             generation: {},
             messages,
@@ -130,6 +180,8 @@ export class SessionMessageCache {
     return {
       key,
       entry,
+      loadedMessageIds: entry?.history ? [...entry.history.loadedMessageIds] : undefined,
+      savedMessageIds: messages.map((message) => message.id),
       revision: entry && sameMessages(entry.messages, messages) ? entry.revision : -1
     }
   }
@@ -140,6 +192,14 @@ export class SessionMessageCache {
     // update 使用新外壳但保留 pending，因此用版本与当前条目共同判断，删除重建则单独隔离。
     if (!current || current.generation !== token.entry?.generation || current.pending === 0) return
     current.pending--
+    if (success && current.history) {
+      current.history = {
+        ...current.history,
+        loadedMessageIds: [
+          ...new Set([...current.history.loadedMessageIds, ...token.savedMessageIds])
+        ]
+      }
+    }
     if (success && token.revision >= 0 && current.revision === token.revision) {
       current.savedRevision = token.revision
       current.bytes = estimateBytes(current.messages)

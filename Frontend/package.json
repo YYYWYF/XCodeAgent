@@ -78,6 +78,7 @@
     "build:linux": "pnpm build && electron-builder --linux",
     "test:ui-design-page-code": "node scripts/run-ui-design-page-code-tests.mjs",
     "test:ui-design-pages-with-code": "node scripts/run-ui-design-pages-with-code-tests.mjs",
+    "test:session-history": "node scripts/run-session-history-tests.mjs",
     "test:performance-retention": "node scripts/run-performance-retention-tests.mjs",
     "test:ui-design-adjust-settlement": "node scripts/run-ui-design-adjust-settlement-tests.mjs",
     "test:design-mention": "node scripts/run-design-mention-tests.mjs",

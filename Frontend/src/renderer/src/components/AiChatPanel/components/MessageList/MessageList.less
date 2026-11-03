@@ -16,6 +16,8 @@
   width: 100%;
   min-height: 0;
   overflow: auto;
+  // 虚拟历史由 useHistoryScroll 保持消息锚点，避免浏览器再次自动补偿造成跳动。
+  overflow-anchor: none;
   background: var(--wb-canvas);
   scrollbar-width: thin;
 }

@@ -12,7 +12,7 @@ import { DEVAGENTSTUDIO_ENV } from './env'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
-import { writeSessionAtomically } from './sessionPersistence'
+import { readStoredSession, readStoredSessionSummary, saveStoredSession } from './sessionStorage'
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { setupClipboardIpc } from './clipboard'
 import { setupAppVersionIpc } from './appVersion'
@@ -1325,6 +1325,21 @@ function normalizeSessionRevisionContext(value: unknown): ChatSessionRevisionCon
   }
 }
 
+/** Worker 已规范化正文；主进程只校验身份，避免再次深复制工作流快照。 */
+function normalizeStoredSessionPage(value: Record<string, unknown>): NormalizedChatSession {
+  const session = normalizeSession({ ...value, messages: [] })
+  session.messages = value.messages as JsonRecord[]
+  return session
+}
+
+/** 校验派生摘要的当前身份字段，不为列表读取消息正文。 */
+async function readValidatedSessionSummary(file: string): Promise<ChatSessionSummary> {
+  const stored = await readStoredSessionSummary(file)
+  const normalized = normalizeSession({ ...stored, messages: [] })
+  return { ...sessionSummary(normalized), messageCount: Number(stored.messageCount) }
+}
+
+/** 从目录读取轻量摘要，损坏单份记录不遮蔽其他会话。 */
 async function readSessionSummariesFromDir(
   sessionsDir: string,
   editorMode: EditorMode
@@ -1340,10 +1355,9 @@ async function readSessionSummariesFromDir(
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue
     try {
-      const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8')
-      const session = normalizeSession(JSON.parse(rawValue || '{}'))
-      if (session.editorMode !== editorMode) continue
-      sessions.push(sessionSummary(session))
+      const summary = await readValidatedSessionSummary(path.join(sessionsDir, entry.name))
+      if (summary.editorMode !== editorMode) continue
+      sessions.push(summary)
     } catch {
       // Ignore malformed session files so one bad record does not hide the workspace.
     }
@@ -1352,8 +1366,8 @@ async function readSessionSummariesFromDir(
 }
 
 /** 读取工作区当前契约下的全部会话，供阶段幂等与 sequence 分配使用。 */
-async function readWorkspaceSessions(workspaceRoot: string): Promise<NormalizedChatSession[]> {
-  const sessions: NormalizedChatSession[] = []
+async function readWorkspaceSessions(workspaceRoot: string): Promise<ChatSessionSummary[]> {
+  const sessions: ChatSessionSummary[] = []
   for (const editorMode of ['frontend', 'backend'] as const) {
     const sessionsDir = getSessionsDir(workspaceRoot, editorMode)
     let entries
@@ -1365,8 +1379,7 @@ async function readWorkspaceSessions(workspaceRoot: string): Promise<NormalizedC
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
       try {
-        const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8')
-        const session = normalizeSession(JSON.parse(rawValue || '{}'))
+        const session = await readValidatedSessionSummary(path.join(sessionsDir, entry.name))
         if (session.editorMode === editorMode) sessions.push(session)
       } catch {
         // 当前契约不读取旧格式或损坏记录。
@@ -1380,7 +1393,7 @@ async function readWorkspaceSessions(workspaceRoot: string): Promise<NormalizedC
 async function createChatSession(
   workspaceRootValue: unknown,
   inputValue: unknown
-): Promise<{ session: NormalizedChatSession; created: boolean }> {
+): Promise<{ session: NormalizedChatSession; created: boolean; history?: import('../shared/sessionHistory').SessionHistoryPage }> {
   if (!isJsonRecord(inputValue)) throw new Error('session create input must be an object')
   const workspaceRoot = resolveWorkspaceRoot(workspaceRootValue)
   const editorMode = assertEditorMode(inputValue.editorMode)
@@ -1406,7 +1419,8 @@ async function createChatSession(
         const identityMatches =
           existing.editorMode === editorMode && existing.workbenchPhase === workbenchPhase
         if (!identityMatches) throw new Error('entryKey is already bound to another phase session')
-        return { session: existing, created: false }
+        const restored = await readStoredSession(getSessionFile(workspaceRoot, editorMode, existing.id))
+        return { session: normalizeStoredSessionPage(restored.session), created: false, history: restored.history }
       }
     }
     const sequence = stage
@@ -1427,7 +1441,7 @@ async function createChatSession(
       updatedAt: now
     })
     await ensureSessionsDir(workspaceRoot, editorMode)
-    await writeSessionAtomically(
+    await saveStoredSession(
       getSessionFile(workspaceRoot, editorMode, session.id),
       session
     )
@@ -1591,9 +1605,7 @@ function setupSessionStorageIpc(): void {
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue
       try {
-        const rawValue = await fs.readFile(path.join(sessionsDir, entry.name), 'utf8')
-        const session = normalizeSession(JSON.parse(rawValue || '{}'))
-        sessions.push(sessionSummary(session))
+        sessions.push(await readValidatedSessionSummary(path.join(sessionsDir, entry.name)))
       } catch {
         // Ignore malformed session files so one bad record does not hide the full history.
       }
@@ -1605,8 +1617,11 @@ function setupSessionStorageIpc(): void {
 
   ipcMain.handle('sessions:read', async (_event, payload = {}) => {
     const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId)
-    const rawValue = await fs.readFile(sessionFile, 'utf8')
-    return { session: normalizeSession(JSON.parse(rawValue || '{}')) }
+    if (payload.before !== undefined && (!Number.isSafeInteger(payload.before) || payload.before < 0)) {
+      throw new Error('invalid history cursor')
+    }
+    const result = await readStoredSession(sessionFile, payload.before, payload.limit)
+    return { ...result, session: normalizeStoredSessionPage(result.session) }
   })
 
   ipcMain.handle('sessions:create', async (_event, payload = {}) => {
@@ -1618,10 +1633,14 @@ function setupSessionStorageIpc(): void {
     const workspaceRoot = resolveWorkspaceRoot(payload.workspaceRoot)
     const session = normalizeSession({
       ...payload.session,
-      workspaceRoot
+      workspaceRoot,
+      messages: []
     })
+    // 这里只校验消息对象边界，深层规范化由 Worker 执行，避免大快照阻塞主进程。
+    session.messages = Array.isArray(payload.session?.messages)
+      ? payload.session.messages.filter(isJsonRecord) : []
     const sessionFile = getSessionFile(workspaceRoot, session.editorMode, session.id)
-    const existing = normalizeSession(JSON.parse(await fs.readFile(sessionFile, 'utf8')))
+    const existing = await readValidatedSessionSummary(sessionFile)
     const immutableIdentityChanged =
       existing.workflowId !== session.workflowId ||
       existing.workbenchPhase !== session.workbenchPhase ||
@@ -1633,13 +1652,18 @@ function setupSessionStorageIpc(): void {
     if (immutableIdentityChanged) {
       throw new Error('session phase identity is immutable')
     }
-    await writeSessionAtomically(sessionFile, session)
-    return { ok: true, session: sessionSummary(session) }
+    const loaded = payload.loadedMessageIds
+    if (loaded !== undefined && (!Array.isArray(loaded) || loaded.some((id) => !Number.isSafeInteger(id)))) {
+      throw new Error('invalid loaded message identities')
+    }
+    const summary = await saveStoredSession(sessionFile, session, loaded)
+    return { ok: true, session: summary }
   })
 
   ipcMain.handle('sessions:delete', async (_event, payload = {}) => {
     const sessionFile = getSessionFile(payload.workspaceRoot, payload.editorMode, payload.sessionId)
     await fs.rm(sessionFile, { force: true })
+    await fs.rm(`${sessionFile}.index`, { force: true })
     return { ok: true }
   })
 

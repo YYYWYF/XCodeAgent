@@ -1681,6 +1681,7 @@ export default function AiChatPanel({
     openSessionForPhase,
     loadSessionIdentity,
     loadingSessions,
+    history, loadingHistory, historyError, loadOlderMessages,
     messages,
     persistSession,
     selectedSkills,
@@ -5264,6 +5265,10 @@ export default function AiChatPanel({
 
               <AuthorizationBootstrapRecoveryContext.Provider value={authorizationRecoveryNotice}>
               <MessageList
+                history={history}
+                loadingHistory={loadingHistory}
+                historyError={historyError}
+                onLoadOlderMessages={loadOlderMessages}
                 developmentNextStepContent={
                   !isApplicationPlanningPhase &&
                   latestWorkflowForDisplay &&

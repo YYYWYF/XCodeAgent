@@ -111,7 +111,9 @@ declare global {
           workspaceRoot: string
           editorMode: 'frontend' | 'backend'
           sessionId: string
-        }) => Promise<{ session?: unknown }>
+          before?: number
+          limit?: number
+        }) => Promise<{ session?: unknown; history?: import('../../shared/sessionHistory').SessionHistoryPage }>
         create: (payload: {
           workspaceRoot: string
           workflowId: string
@@ -128,10 +130,11 @@ declare global {
                 label: string
               }
           revisionContext?: unknown
-        }) => Promise<{ ok?: boolean; session?: unknown; created: boolean }>
+        }) => Promise<{ ok?: boolean; session?: unknown; created: boolean; history?: import('../../shared/sessionHistory').SessionHistoryPage }>
         save: (payload: {
           workspaceRoot: string
           session: unknown
+          loadedMessageIds?: number[]
         }) => Promise<{ ok?: boolean; session?: unknown }>
         delete: (payload: {
           workspaceRoot: string

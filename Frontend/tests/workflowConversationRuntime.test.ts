@@ -137,6 +137,46 @@ test('规划来源只读时，正式续接按显式开发 owner 判断；其他�
   }
 })
 
+test('运行中前插历史后，最终回复保存包含新读入的历史而不回退到开跑快照', async () => {
+  const oldWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  const identity = buildSessionIdentity()
+  let messages: AgentChatMessage[] = [{ id: 20, role: 'assistant', content: '尾页', createdAt: 20 }]
+  const saved: AgentChatMessage[][] = []
+  const historical = { id: 1, role: 'user' as const, content: '运行期间读入的旧历史', createdAt: 1 }
+  const session = { threadId: identity.threadId, endpointUrl: 'http://agent.test/workflow/run',
+    /** 在流式回调前模拟上滚完成，保存不得漏掉这条后来读入的历史。 */
+    sendMessage: async (_message: string, options: { onContent?: (content: string) => void }) => {
+      messages = [historical, ...messages]
+      options.onContent?.('流式回复')
+      return { answer: '已完成', toolCalls: [], workflow: {
+        runId: 'history-run', threadId: identity.threadId, events: [], summary: { status: 'completed' }
+      } }
+    }
+  } as unknown as AgUiChatSession
+  const params = buildRuntimeParams({ activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: buildIdleLifecycle(), agUiSessionsRef: { current: { [identity.key]: session } },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined,
+    persistSession: async (input) => { saved.push(input.messages) } })
+  params.getSessionMessages = () => messages
+  params.setSessionMessages = (_key, value) => { messages = typeof value === 'function' ? value(messages) : value }
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  /** 使用生产发送和完成路径，保留同步 cache 更新契约。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  try {
+    renderToStaticMarkup(createElement(Probe))
+    assert.equal(await runtime.handleContinueRevisionBuild({ action: 'continue_revision_build',
+      formalBranch: 'workbench_plan_revision', changeId: 'change', token: 't'.repeat(48),
+      technicalPlanSha256: 'a'.repeat(64) }, identity), true)
+    assert.equal(saved.at(-1)?.find((message) => message.id === 1)?.content, historical.content)
+    assert.equal(messages.find((message) => message.id === 1)?.content, historical.content)
+    assert.equal(saved.at(-1)?.at(-1)?.content, '已完成')
+  } finally { Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow }) }
+})
+
 test('正式修订确认沿用卡片目标并交给应用 Planning Runtime，不另发聊天请求', async () => {
  for (const branch of ['design_stage_revision', 'workbench_plan_revision']) {
   for (const target of [{ type: 'page', pageId: 'bound-page' }, { type: 'application' }]) {

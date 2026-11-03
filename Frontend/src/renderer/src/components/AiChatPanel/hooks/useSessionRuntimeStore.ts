@@ -1,6 +1,7 @@
 import type { MutableRefObject, ReactNode, SetStateAction } from 'react'
 import { createContext, createElement, useContext, useEffect, useRef, useState } from 'react'
 import { SessionMessageCache, type SessionSaveToken } from './sessionMessageCache'
+import type { SessionHistoryPage } from '../../../../../shared/sessionHistory'
 import { AgUiChatSession } from '../../../service/agUiAgent'
 import { clearEntityDesignDraftStore } from '../components/WorkflowRunCard/EntityDesignPanels'
 import type { ChatMessageSkill } from '../../../typings'
@@ -28,6 +29,12 @@ export type SessionRuntimeStore = {
   getIdentity: (sessionKey: string) => SessionIdentity | undefined
   getSessionMessages: (sessionKey: string) => AgentChatMessage[]
   hasSessionMessages: (sessionKey: string) => boolean
+  sessionHistory: (sessionKey: string) => SessionHistoryPage | undefined
+  prependSessionHistory: (
+    sessionKey: string,
+    messages: AgentChatMessage[],
+    page: SessionHistoryPage
+  ) => void
   retainSession: (sessionKey: string) => () => void
   beginSessionSave: (sessionKey: string, messages: AgentChatMessage[]) => SessionSaveToken
   finishSessionSave: (token: SessionSaveToken, success: boolean) => void
@@ -36,7 +43,8 @@ export type SessionRuntimeStore = {
   registerSession: (
     identity: SessionIdentity,
     messages: AgentChatMessage[],
-    agent?: AgUiChatSession
+    agent?: AgUiChatSession,
+    history?: SessionHistoryPage
   ) => void
   removeSession: (sessionKey: string) => void
   releaseSessionExecution: (sessionKey: string) => void
@@ -153,12 +161,13 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
   const registerSession = (
     identity: SessionIdentity,
     messages: AgentChatMessage[],
-    agent?: AgUiChatSession
+    agent?: AgUiChatSession,
+    history?: SessionHistoryPage
   ): void => {
     identitiesRef.current[identity.key] = identity
     if (agent) agUiSessionsRef.current[identity.key] = agent
     else ensureAgent(identity)
-    cache.restore(identity.key, messages)
+    cache.restore(identity.key, messages, history)
     notifyMessages((revision) => revision + 1)
   }
 
@@ -297,6 +306,11 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
     getIdentity: (sessionKey) => identitiesRef.current[sessionKey],
     getSessionMessages: (sessionKey) => cache.read(sessionKey),
     hasSessionMessages: (sessionKey) => cache.has(sessionKey),
+    sessionHistory: (sessionKey) => cache.history(sessionKey),
+    prependSessionHistory: (sessionKey, messages, page) => {
+      cache.prepend(sessionKey, messages, page)
+      notifyMessages((revision) => revision + 1)
+    },
     retainSession,
     beginSessionSave: (sessionKey, messages) => cache.beginSave(sessionKey, messages),
     finishSessionSave,

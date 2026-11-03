@@ -1461,7 +1461,11 @@ export function useWorkflowConversation({
             : currentMessage
         )
       latestMessages = updateMessages(latestMessages)
-      setSessionMessages(identity.key, updateMessages)
+      setSessionMessages(identity.key, (currentMessages) => {
+        // 运行期间上滚可能前插历史；最终保存必须包含当前缓存，不能使用开跑时的旧数组。
+        latestMessages = updateMessages(currentMessages)
+        return latestMessages
+      })
       return latestMessages
     }
 
@@ -1693,14 +1697,18 @@ export function useWorkflowConversation({
         }
       }
       if (isAuthenticationFailure(caughtError)) {
-        setSessionMessages(identity.key, previousMessages)
+        // 只撤销本次乐观发送；期间读入的历史与其它本地内容仍然保留。
+        const rollbackMessages = getSessionMessages(identity.key).filter(
+          (item) => item.id !== userMessageId && item.id !== assistantMessageId
+        )
+        setSessionMessages(identity.key, rollbackMessages)
         if (options?.clearDraft) setDraftByKey(identity.key, trimmedMessage)
         if (options?.clearDraft) {
           setSelectedSkillsByKey(identity.key, rollbackSkillSelection(options.selectedSkills))
         }
         await persistSession({
           editorMode: identity.editorMode,
-          messages: previousMessages,
+          messages: rollbackMessages,
           sessionId: identity.sessionId,
           threadId: identity.threadId
         })

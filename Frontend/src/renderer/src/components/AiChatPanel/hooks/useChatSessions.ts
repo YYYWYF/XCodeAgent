@@ -1,6 +1,8 @@
 import { message as antdMessage } from 'antd'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { SessionHistoryPage } from '../../../../../shared/sessionHistory'
+import { useSessionHistory } from './useSessionHistory'
 import { enqueueSessionSave } from './sessionSaveQueue'
 import { useWorkbenchPhase } from '../../../context'
 import { reachedPhaseFromSessions } from '../../../workbenchPhaseNavigation'
@@ -133,6 +135,10 @@ type UseChatSessionsResult = {
   handleOpenSession: (sessionId: string) => Promise<void>
   handleOpenSessionById: (sessionId: string) => Promise<void>
   openSessionForPhase: (handoff: ChatSessionRevisionHandoff, phase: WorkbenchPhase) => Promise<void>
+  history?: SessionHistoryPage
+  loadingHistory: boolean
+  historyError?: string
+  loadOlderMessages: () => Promise<void>
   loadingSessions: boolean
   messages: AgentChatMessage[]
   selectedSkills: ChatMessageSkill[]
@@ -250,6 +256,8 @@ export function useChatSessions({
   const loadingSessions = Boolean(sessionLoadingModes[editorMode])
   const deletingSessionId = deletingSessionIds[editorMode]
   const sessionError = sessionErrors[editorMode]
+
+  const { history, loadingHistory, historyError, loadOlderMessages } = useSessionHistory(activeSession)
 
   /** 更新指定编辑模式下的会话摘要，同时保持更新时间倒序。 */
   const replaceSessionSummary = (mode: EditorMode, summary: ChatSessionSummary): void => {
@@ -374,7 +382,7 @@ export function useChatSessions({
         developmentTarget: session.developmentTarget,
         revisionContext: session.revisionContext
       })
-      registerSession(identity, session.messages)
+      registerSession(identity, session.messages, undefined, session.history)
       return identity
     } finally {
       release()
@@ -508,7 +516,7 @@ export function useChatSessions({
     })
     const agUiSession = new AgUiChatSession(session.threadId)
 
-    registerSession(identity, session.messages, agUiSession)
+    registerSession(identity, session.messages, agUiSession, session.history)
     setDraftByKey(identity.key, '')
     if (options?.activate !== false) {
       setActiveSessionIds((current) =>
@@ -521,7 +529,7 @@ export function useChatSessions({
     try {
       replaceSessionSummary(editorMode, {
         ...session,
-        messageCount: session.messages.length
+        messageCount: session.history?.total ?? session.messages.length
       })
       return identity
     } catch (error) {
@@ -618,7 +626,7 @@ export function useChatSessions({
               editorMode,
               best.id
             )
-            registerSession(identity, session.messages)
+            registerSession(identity, session.messages, undefined, session.history)
           } catch {
             // 读取失败不阻塞，后续流式 chunk 仍可注入。
           }
@@ -887,7 +895,7 @@ export function useChatSessions({
     const token = beginSessionSave(key, input.messages)
     let saved = false
     try {
-      const summary = await enqueueSessionSave(key, () => saveChatSession(session))
+      const summary = await enqueueSessionSave(key, () => saveChatSession(session, token.loadedMessageIds))
       saved = true
       replaceSessionSummary(input.editorMode, summary)
     } finally {
@@ -896,6 +904,7 @@ export function useChatSessions({
   }
 
   return {
+    history, loadingHistory, historyError, loadOlderMessages,
     activeSession,
     activeSessionId,
     agUiSessionsRef,

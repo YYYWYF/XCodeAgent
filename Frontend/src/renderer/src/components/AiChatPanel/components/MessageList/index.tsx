@@ -1,3 +1,6 @@
+import type { SessionHistoryPage } from '../../../../../../shared/sessionHistory'
+import { HistoryMessageRow } from './HistoryMessageRow'
+import { useHistoryScroll } from './useHistoryScroll'
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -296,6 +299,11 @@ function messageAgentPhase(
 }
 
 type MessageListProps = {
+  history?: SessionHistoryPage
+  loadingHistory?: boolean
+  historyError?: string
+  onLoadOlderMessages?: () => Promise<void>
+
   applicationLifecycle?: ApplicationLifecycle
   /** 仅首次新建且尚未进入开发的应用允许展示模板准备卡。 */
   applicationTemplatePreparationEligible: boolean
@@ -388,6 +396,7 @@ type MessageListProps = {
 
 /** 渲染聊天消息、Workflow 最终状态、历史卡片结果和代码变更操作。 */
 export default function MessageList({
+  history, loadingHistory = false, historyError, onLoadOlderMessages,
   applicationLifecycle,
   applicationTemplatePreparationEligible,
   codeChangeActionsDisabled,
@@ -466,6 +475,18 @@ export default function MessageList({
   const restoringFollowRef = useRef(false)
   const scrollUpdateFrameRef = useRef<number>()
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const hiddenContext = new Set(history?.contextMessageIds || [])
+  const firstVisibleId = messages.find((message) => !hiddenContext.has(message.id))?.id
+  const rememberHistoryAnchor = useHistoryScroll(scrollContainerRef, firstVisibleId, followLatestContentRef)
+  /** 读取历史只改变阅读窗口，禁止触发底部跟随或后台任务控制。 */
+  const requestOlderHistory = (): void => {
+    if (loadingHistory || !onLoadOlderMessages || history?.before === undefined) return
+    followLatestContentRef.current = false
+    restoringFollowRef.current = false
+    rememberHistoryAnchor()
+    void onLoadOlderMessages()
+  }
+
   const activeAssistantMessageId = loading ? findLastAssistantMessageId(messages) : undefined
   const latestAssistantMessageId = findLastAssistantMessageId(messages)
   const visibleError = error?.trim() || ''
@@ -601,10 +622,21 @@ export default function MessageList({
       <div
         className={cx('ai-message-list')}
         aria-live="polite"
-        onScroll={handleScroll}
+        onScroll={() => {
+          handleScroll()
+          if ((scrollContainerRef.current?.scrollTop || 0) < 160 && !historyError) requestOlderHistory()
+        }}
         ref={scrollContainerRef}
       >
+
+
         <div className={cx('ai-message-column')} ref={messageColumnRef}>
+        {history?.before !== undefined ? <div style={{ textAlign: 'center', padding: '8px 0' }}>
+          <Button type="link" size="small" loading={loadingHistory} onClick={requestOlderHistory}>
+            {historyError ? '加载失败，点击重试' : '加载更早的消息'}
+          </Button>
+          {historyError ? <div role="alert"><Text type="secondary">{historyError}</Text></div> : null}
+        </div> : null}
           {/* 全是残留占位时按"空"处理：那条占位不会再有 chunk 到达，
               却会让列表非空、把只在空态渲染的需求输入卡永久挡住。 */}
           {showingEmptyState ? (
@@ -633,6 +665,11 @@ export default function MessageList({
             )
           ) : (
             messages.map((message, messageIndex) => {
+              const protectedRow = Boolean(message.planningLoading || (message.workflow &&
+                !['completed', 'failed', 'cancelled', 'ended'].includes(message.workflow.summary.status || '')))
+              if (hiddenContext.has(message.id) && !protectedRow) return null
+              return <HistoryMessageRow key={message.id} id={message.id}
+                initiallyVisible={messageIndex >= messages.length - 8} protectedRow={protectedRow} render={() => {
               // 模板已开始准备后，空的 planning loading 已被更具体的模板卡取代；
               // 已完成的 TechnicalPlan 消息不满足此条件，仍作为历史保留。
               if (
@@ -1192,6 +1229,7 @@ export default function MessageList({
                   </div>
                 </article>
               )
+              }} />
             })
           )}
           {dagPendingPlanCompletion && !hasMatchingPendingDagProgress ? (
