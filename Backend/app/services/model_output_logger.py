@@ -4,10 +4,11 @@ import json
 import re
 import threading
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
+from app.observability.backend_logs import model_log_record
 
 # UI 设计稿生成池会并发（默认 3 个 worker）调用模型，各自的 handler 同时向 stdout
 # 打印流式 token，会字符级交错成乱码。用一把进程级锁把每次 print 原子化。
@@ -26,9 +27,11 @@ _THINKING_CLOSE_RE = re.compile(
 )
 
 
-def _print(*args: Any, **kwargs: Any) -> None:
+def _print(*args: Any, record_id: str | None = None, **kwargs: Any) -> None:
+    """原子输出模型文本，并为并发 token 绑定独立日志条目。"""
     with _print_lock:
-        print(*args, **kwargs)
+        with model_log_record(record_id or f"model:{uuid4().hex}"):
+            print(*args, **kwargs)
 
 
 class ModelOutputLogHandler(BaseCallbackHandler):
@@ -60,6 +63,7 @@ class ModelOutputLogHandler(BaseCallbackHandler):
         self._start_run(kwargs.get("run_id"))
 
     def on_llm_new_token(self, token: Any, **kwargs: Any) -> None:
+        """实时输出正文与推理文本，并按运行身份隔离并发日志。"""
         if not token:
             return
         run_id = kwargs.get("run_id")
@@ -90,7 +94,7 @@ class ModelOutputLogHandler(BaseCallbackHandler):
             if isinstance(run_id, UUID):
                 self._streamed_runs.add(run_id)
             if printable:
-                _print(printable, end="", flush=True)
+                _print(printable, end="", flush=True, record_id=f"model:{run_id}")
             return
         if not isinstance(token, str):
             return
@@ -98,7 +102,7 @@ class ModelOutputLogHandler(BaseCallbackHandler):
         if isinstance(run_id, UUID):
             self._streamed_runs.add(run_id)
         if printable:
-            _print(printable, end="", flush=True)
+            _print(printable, end="", flush=True, record_id=f"model:{run_id}")
 
     def _filter_thinking_token(self, run_id: Any, token: str) -> str:
         """把流式 token 里的 thinking repr 碎片转成 `[thinking] 文本` 打印，正文透传。
@@ -154,10 +158,11 @@ class ModelOutputLogHandler(BaseCallbackHandler):
         return pending if key is not None and pending != token else token
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        """结束正文条目，并以单行紧凑 JSON 输出完整工具调用。"""
         run_id = kwargs.get("run_id")
         streamed = isinstance(run_id, UUID) and run_id in self._streamed_runs
         if streamed:
-            _print(flush=True)
+            _print(flush=True, record_id=f"model:{run_id}")
 
         for generations in response.generations:
             for generation in generations:
@@ -168,8 +173,7 @@ class ModelOutputLogHandler(BaseCallbackHandler):
                     content = getattr(generation, "text", "")
                 if streamed:
                     if tool_calls:
-                        _print("[model-tool-calls]")
-                        _print(_stringify_content(tool_calls), flush=True)
+                        _print(f"[model-tool-calls] {_stringify_content(tool_calls, compact=True)}", flush=True)
                 else:
                     log_model_output(content=content, tool_calls=tool_calls)
 
@@ -179,9 +183,10 @@ class ModelOutputLogHandler(BaseCallbackHandler):
             self._pending_tokens.pop(run_id, None)
 
     def _start_run(self, run_id: Any) -> None:
+        """标记新模型输出并复用其流式日志身份。"""
         if isinstance(run_id, UUID):
             self._streamed_runs.discard(run_id)
-        _print("[model-output]", flush=True)
+        _print("[model-output]", flush=True, record_id=f"model:{run_id}")
 
 
 def log_model_output(
@@ -190,21 +195,18 @@ def log_model_output(
     tool_calls: Any = None,
     prefix: str = "[model-output]",
 ) -> None:
-    _print(prefix, flush=True)
+    """输出非流式模型内容，工具参数保留原值但移除排版缩进。"""
     text = _stringify_content(content)
-    if text:
-        _print(text, flush=True)
-    else:
-        _print("(empty content)", flush=True)
+    _print(f"{prefix}\n{text or '(empty content)'}", flush=True)
     if tool_calls:
-        _print("[model-tool-calls]", flush=True)
-        _print(_stringify_content(tool_calls), flush=True)
+        _print(f"[model-tool-calls] {_stringify_content(tool_calls, compact=True)}", flush=True)
 
 
-def _stringify_content(value: Any) -> str:
+def _stringify_content(value: Any, *, compact: bool = False) -> str:
+    """序列化模型内容；仅工具调用采用单行 JSON，正文保持原格式。"""
     if isinstance(value, str):
         return value
     try:
-        return json.dumps(value, ensure_ascii=False, indent=2)
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":")) if compact else json.dumps(value, ensure_ascii=False, indent=2)
     except TypeError:
         return str(value)

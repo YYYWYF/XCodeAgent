@@ -1,0 +1,270 @@
+.backend-log-settings-menu .ant-dropdown-menu {
+  min-width: 140px;
+  color: var(--wb-text);
+  background: var(--wb-editor);
+  border: 1px solid var(--wb-border-strong);
+
+  .ant-dropdown-menu-item {
+    color: var(--wb-text);
+    &:hover,
+    &-active {
+      color: var(--wb-accent);
+      background: var(--wb-accent-soft);
+    }
+  }
+}
+
+.backend-log-drawer {
+  .ant-drawer-content,
+  .ant-drawer-header {
+    background: var(--wb-canvas);
+    color: var(--wb-text);
+  }
+  .ant-drawer-header {
+    border-color: var(--wb-border);
+  }
+  .ant-drawer-close {
+    color: var(--wb-text-secondary);
+  }
+  .ant-drawer-close:hover {
+    color: var(--wb-accent);
+  }
+  .ant-drawer-body {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    overflow: hidden;
+    padding: 20px 24px 24px;
+  }
+  .ant-drawer-mask {
+    background: color-mix(in srgb, var(--wb-text) 16%, transparent);
+  }
+  .ant-switch {
+    background: var(--wb-control-hover);
+  }
+  .ant-switch-checked {
+    background: var(--wb-accent);
+  }
+  .ant-switch:focus-visible,
+  button:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+  .ant-input-affix-wrapper,
+  .ant-input,
+  .ant-btn {
+    background: var(--wb-canvas);
+    color: var(--wb-text);
+    border-color: var(--wb-border-strong);
+  }
+  .ant-input::placeholder,
+  .ant-input-clear-icon {
+    color: var(--wb-text-tertiary);
+  }
+  .ant-input-search-button .anticon {
+    color: var(--wb-text-secondary);
+  }
+  .ant-input-affix-wrapper:hover,
+  .ant-input-affix-wrapper-focused,
+  .ant-btn:hover,
+  .ant-btn:focus {
+    border-color: var(--wb-accent);
+  }
+  .ant-input-affix-wrapper-focused {
+    box-shadow: 0 0 0 2px var(--wb-accent-soft);
+  }
+  .ant-btn:hover,
+  .ant-btn:focus,
+  .ant-input-clear-icon:hover {
+    color: var(--wb-accent);
+  }
+  .ant-input-search-button:hover .anticon,
+  .ant-input-search-button:focus .anticon {
+    color: var(--wb-accent);
+  }
+  .ant-btn[disabled] {
+    background: var(--wb-surface-subtle);
+    color: var(--wb-text-tertiary);
+    border-color: var(--wb-border);
+  }
+  .ant-alert {
+    color: var(--wb-text);
+    border-color: var(--wb-accent-border);
+    background: var(--wb-accent-soft);
+  }
+  .ant-alert-message {
+    color: var(--wb-text);
+  }
+  .ant-alert-info .ant-alert-icon,
+  .ant-spin {
+    color: var(--wb-accent);
+  }
+  .ant-spin-dot-item {
+    background: var(--wb-accent);
+  }
+  .ant-alert-error {
+    border-color: var(--wb-danger);
+    background: color-mix(in srgb, var(--wb-danger) 8%, var(--wb-canvas));
+  }
+  .ant-alert-error .ant-alert-icon {
+    color: var(--wb-danger);
+  }
+  .ant-empty-description {
+    color: var(--wb-text-secondary);
+  }
+}
+
+.backend-log-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--wb-text-secondary);
+  strong {
+    color: var(--wb-text);
+  }
+}
+.backend-log-notice {
+  flex: 0 0 auto;
+}
+.backend-log-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 16px;
+}
+.backend-log-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--wb-border);
+  h3 {
+    margin: 0;
+    color: var(--wb-text);
+    font-size: 16px;
+  }
+}
+.backend-log-switches {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  label {
+    cursor: pointer;
+  }
+}
+.backend-log-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  .ant-input-search {
+    flex: 1 1 180px;
+    max-width: 320px;
+  }
+}
+.backend-log-updated {
+  font-size: 12px;
+  color: var(--wb-text-tertiary);
+}
+.backend-log-buttons {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.backend-log-path {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  code {
+    padding: 3px 6px;
+    background: var(--wb-surface-subtle);
+    color: var(--wb-text-secondary);
+    overflow-wrap: anywhere;
+    user-select: text;
+  }
+}
+.backend-log-window-hint {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+}
+.backend-log-viewport {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: scroll;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 4px;
+  background: var(--wb-editor);
+  color: var(--wb-text);
+  user-select: text;
+  overflow-anchor: none;
+  // 显式绘制滚动条，避免 macOS 的自动隐藏滚动条让长日志难以横向查看。
+  scrollbar-color: auto;
+
+  &::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-corner {
+    background: var(--wb-editor);
+  }
+
+  &::-webkit-scrollbar-thumb {
+    border: 3px solid var(--wb-editor);
+    border-radius: 6px;
+    background: var(--wb-text-tertiary);
+
+    &:hover {
+      background: var(--wb-text-secondary);
+    }
+  }
+}
+.backend-log-entry {
+  margin: 0;
+  padding: 0 0 4px;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  overflow: visible;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  background: transparent;
+  color: inherit;
+  mark {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    border-bottom: 1px solid var(--wb-accent-border);
+  }
+}
+.backend-log-empty {
+  display: grid;
+  height: 100%;
+  min-height: 160px;
+  place-items: center;
+}
+
+@media (max-width: 1000px) {
+  .backend-log-drawer .ant-drawer-body {
+    padding: 16px;
+    gap: 16px;
+  }
+  .backend-log-heading {
+    flex-wrap: wrap;
+  }
+  .backend-log-buttons {
+    margin-left: 0;
+  }
+}

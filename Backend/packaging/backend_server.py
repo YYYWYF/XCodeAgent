@@ -12,6 +12,7 @@ DEFAULT_PORT = 8000
 
 
 def main() -> None:
+    """尽早安装日志采集，再启动冻结的 Python HTTP 服务。"""
     load_backend_env()
 
     import uvicorn
@@ -29,6 +30,10 @@ def load_backend_env() -> None:
     env_file = resolve_env_file()
     if env_file:
         load_dotenv(env_file, override=False)
+
+    from app.observability.backend_logs import install_backend_log_capture
+
+    install_backend_log_capture()
 
     from app.services.builtin_skills import validate_required_builtin_skills
     from app.services.page_templates import validate_page_templates

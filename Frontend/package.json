@@ -5,6 +5,7 @@
   "main": "./out/main/index.js",
   "author": "80303865",
   "scripts": {
+    "test:backend-logs": "node scripts/run-backend-log-tests.mjs",
     "test:requirement-editor": "node scripts/run-requirement-editor-tests.mjs",
     "format": "prettier --write .",
     "lint": "eslint --cache .",

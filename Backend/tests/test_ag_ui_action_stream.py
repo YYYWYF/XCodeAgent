@@ -146,22 +146,26 @@ class AgUiActionStreamTests(unittest.TestCase):
 
         async def collect() -> None:
             """逐帧消费真实公共流，验证阶段消息在对应业务开始前已经可见。"""
+            def decode(frame: str) -> dict:
+                """按当前公共编码器的 SSE 合同解析事件，而非将整帧当成 JSON。"""
+                return json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+
             stream = build_ag_ui_action_stream(
                 payload={"threadId": "progress-thread", "runId": "progress-run"},
                 event_name="endpoint-designs", state_key="endpointDesigns", run_id_prefix="progress",
                 progress_operation=operation, error_message_prefix="失败",
             )
-            self.assertEqual(json.loads(await anext(stream))["type"], "RUN_STARTED")
-            self.assertEqual(json.loads(await anext(stream))["type"], "TEXT_MESSAGE_START")
+            self.assertEqual(decode(await anext(stream))["type"], "RUN_STARTED")
+            self.assertEqual(decode(await anext(stream))["type"], "TEXT_MESSAGE_START")
             for index, stage in enumerate(("operation", "query", "return")):
-                event = json.loads(await anext(stream))
+                event = decode(await anext(stream))
                 self.assertEqual(event["value"]["progress"]["stage"], stage)
                 self.assertEqual(entered, ["operation", "query", "return"][:index])
-                snapshot = json.loads(await anext(stream))
+                snapshot = decode(await anext(stream))
                 self.assertEqual(snapshot["snapshot"]["endpointDesigns"]["progress"]["stage"], stage)
                 self.assertEqual(entered, ["operation", "query", "return"][:index])
-                self.assertEqual(json.loads(await anext(stream))["type"], "TEXT_MESSAGE_CONTENT")
-            remaining = [json.loads(frame) async for frame in stream]
+                self.assertEqual(decode(await anext(stream))["type"], "TEXT_MESSAGE_CONTENT")
+            remaining = [decode(frame) async for frame in stream]
             self.assertEqual(entered, ["operation", "query", "return"])
             self.assertEqual(remaining[-1]["type"], "RUN_FINISHED")
             self.assertEqual(remaining[-1]["result"]["endpointDesigns"]["status"], "completed")

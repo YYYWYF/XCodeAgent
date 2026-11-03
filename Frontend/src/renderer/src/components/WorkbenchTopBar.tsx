@@ -3,6 +3,7 @@ import { message } from 'antd'
 import { LeftOutlined, FolderOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import AppVersionBadge from './AppVersionBadge'
+import WorkbenchSettings from './BackendLogDrawer'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import VersionActions from './VersionActions'
 import { useWorkbenchPhase } from '../context'
@@ -223,6 +224,7 @@ export default function WorkbenchTopBar({
         >
           {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
         </button>
+        <WorkbenchSettings />
       </div>
 
       <PhaseSwitchConfirmModal

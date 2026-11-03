@@ -10,6 +10,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
+from app.observability.backend_logs import install_backend_log_capture
+
+# 在加载业务模块前接入开发服务和冻结后端的统一日志窗口。
+install_backend_log_capture()
+
 from app.graph import clear_workflow_graph_cache, workflow_graph_for_request
 from app.graph.application_planning_workflow import (
     application_planning_graph_for_request,
@@ -57,6 +62,8 @@ from app.routes.data_sources import data_sources_router
 from app.routes.endpoint_designs import endpoint_designs_router
 from app.routes.entity_tables import entity_tables_router
 from app.routes.telemetry import telemetry_router
+from app.routes.backend_logs import backend_logs_router
+from app.protocols.backend_logs import backend_logs_capabilities
 from app.protocols.telemetry import telemetry_capabilities
 from app.protocols.app_update import app_update_capabilities, build_app_update_ag_ui_stream
 from app.protocols.entity_tables import entity_tables_capabilities
@@ -148,6 +155,7 @@ app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
 app.include_router(entity_tables_router)
 app.include_router(telemetry_router)
+app.include_router(backend_logs_router)
 
 
 class ApprovalActionRequest(BaseModel):
@@ -190,6 +198,7 @@ async def health() -> dict[str, object]:
             "entity_tables": entity_tables_capabilities(),
             "telemetry": telemetry_capabilities(),
             "app_update": app_update_capabilities(),
+            "backend_logs": backend_logs_capabilities(),
             "code_changes": code_changes_capabilities(),
             "revision_preview": revision_preview_capabilities(),
             "version_control": version_control_capabilities(),
