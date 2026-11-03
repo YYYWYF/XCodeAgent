@@ -1,4 +1,4 @@
-"""控制台模型埋点合同；全部字段允许省略或为 null。"""
+"""模型埋点合同；全部字段允许省略或为 null。"""
 
 from typing import Literal
 
@@ -21,7 +21,24 @@ class Identity(OptionalRecord):
     run_id: str | None = None
     operation_id: str | None = None
     workflow_scope: str | None = None
-    current_operation: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]*$", max_length=80)
+
+
+class DevelopmentTarget(OptionalRecord):
+    """当前开发目标；类型、稳定 ID 和接口契约 ID 均可独立省略或为空。"""
+
+    type: Literal["application", "page", "endpoint", "entity"] | None = None
+    id: str | None = None
+    api_contract_id: str | None = None
+
+
+class ExecutionContext(OptionalRecord):
+    """调用方提供的可选业务上下文，字段值原样保留，缺失时不推断或补齐。"""
+
+    business_stage: str | None = None
+    business_operation: str | None = None
+    node_name: str | None = None
+    mode: Literal["ultra", "pro", "fast"] | None = None
+    target: DevelopmentTarget | None = None
 
 
 class ModelUsage(OptionalRecord):
@@ -72,7 +89,11 @@ class ExecutionData(OptionalRecord):
 
 
 class ExecutionRecord(OptionalRecord):
-    """独立于 AG-UI 模型结果的控制台和本地历史摘要。"""
+    """独立于 AG-UI 模型结果的统计快照。"""
 
+    record_id: str | None = None
+    type: Literal["execution_trace"] | None = None
+    occurred_at: str | None = None
     identity: Identity | None = None
+    context: ExecutionContext | None = None
     data: ExecutionData | None = None

@@ -14,8 +14,8 @@ from pydantic import ValidationError
 
 from .config import Settings
 from .contracts import InferenceInput
-from .history import DuplicateRunError, HistoryStore
 from .inference import InferenceService
+from .model_call_logging import ModelCallWriter
 from .observation_output import ObservationOutput
 from .protocol import end_events, start_events
 from .tracing import TraceRecorder
@@ -47,7 +47,7 @@ def stream_events(events: AsyncIterator[Any], accept: str | None) -> StreamingRe
     encoder = EventEncoder(accept=accept)
 
     async def encoded() -> AsyncIterator[str]:
-        """保持迭代器关闭传播，保证客户端取消能触发历史收尾。"""
+        """保持迭代器关闭传播，保证客户端取消能触发上游关闭和观测收尾。"""
         try:
             async for event in events:
                 yield encoder.encode(event)
@@ -63,22 +63,26 @@ def create_app(settings: Settings | None = None, upstream: Upstream | None = Non
                observation_output: ObservationOutput | None = None) -> FastAPI:
     """创建独立服务；使用 uvicorn app.main:create_app --factory 启动。"""
     settings = settings or Settings()
-    history = HistoryStore(settings.history_db_path)
+    writer = ModelCallWriter(settings) if observation_output is None else None
     output = observation_output if observation_output is not None else ObservationOutput(
-        enabled=settings.model_observation_output_enabled)
-    service = InferenceService(settings, history, upstream or Upstream(settings), tracing or TraceRecorder(settings), output)
+        enabled=settings.model_observation_output_enabled, writer=writer)
+    service = InferenceService(settings, upstream or Upstream(settings), tracing or TraceRecorder(settings), output)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        """服务级启动共享输出池，正常停机在线程中排空，避免阻塞事件循环。"""
+        """正常停机在线程中排空输出，再释放 ES 连接，避免阻塞事件循环。"""
         output.start()
         try:
             yield
         finally:
-            await asyncio.to_thread(output.close)
+            try:
+                await asyncio.to_thread(output.close)
+            finally:
+                if writer is not None:
+                    await asyncio.to_thread(writer.close)
 
     app = FastAPI(title="DevAgent Model Transmit", version="1.0.0", lifespan=lifespan)
-    app.state.history, app.state.settings, app.state.service = history, settings, service
+    app.state.settings, app.state.service = settings, service
     app.state.observation_output = output
 
     @app.get("/health")
@@ -108,7 +112,7 @@ def create_app(settings: Settings | None = None, upstream: Upstream | None = Non
 
     @app.post("/model-inference/run")
     async def model_inference(request: Request) -> StreamingResponse:
-        """校验纯模型输入、防重登记并建立可取消的模型事件流。"""
+        """校验本次完整模型输入，并建立独立、可取消的模型事件流。"""
         envelope = await read_envelope(request, settings)
         try:
             props = envelope.forwarded_props or {}
@@ -122,10 +126,6 @@ def create_app(settings: Settings | None = None, upstream: Upstream | None = Non
         except (ValidationError, ValueError, AttributeError) as exc:
             message = exc.errors()[0]["msg"] if isinstance(exc, ValidationError) else str(exc)
             raise HTTPException(422, settings.redact(message)) from exc
-        try:
-            record = service.reserve(envelope, call)
-        except DuplicateRunError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        return stream_events(service.events(envelope, call, record), request.headers.get("accept"))
+        return stream_events(service.events(envelope, call), request.headers.get("accept"))
 
     return app

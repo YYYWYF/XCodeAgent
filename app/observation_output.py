@@ -93,7 +93,7 @@ class ObservationOutput:
         pool.shutdown(wait=False, cancel_futures=True)
 
     def submit(self, record: dict[str, Any]) -> bool:
-        """只冻结小型摘要并非阻塞投递，不等待控制台或未来 ES 的任何 I/O。"""
+        """只冻结小型摘要并非阻塞投递，不等待控制台或 ES 的任何 I/O。"""
         if not self.enabled:
             return False
         with self._condition:
@@ -145,8 +145,8 @@ class ObservationOutput:
             writer = self._writer if self._writer is not None else model_call_logging.deliver_record
             writer(payload)
             success = True
-        except Exception:
-            # 不回显异常原文，避免未来 ES 异常包含地址、认证或完整文档。
+        except Exception as exc:
+            # 保留 exc 供调试器查看，不向日志回显地址、认证或完整文档。
             pass
         finally:
             with self._condition:

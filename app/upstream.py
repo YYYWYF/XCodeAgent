@@ -16,7 +16,7 @@ KNOWN_PARAMETERS = set(inspect.signature(AsyncCompletions.create).parameters) - 
 
 
 def request_body(settings: Settings, call: InferenceInput) -> dict[str, Any]:
-    """统一生成实际请求，确保历史、追踪与上游的模型及用量开关一致。"""
+    """统一生成实际请求，确保追踪与上游的模型及用量开关一致。"""
     body = {**call.request, "model": settings.active_model}
     if body.get("stream", False):
         body["stream_options"] = {**(body.get("stream_options") or {}), "include_usage": True}

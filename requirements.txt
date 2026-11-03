@@ -3,7 +3,10 @@ uvicorn>=0.34,<1
 openai>=2.0,<3
 httpx>=0.28,<1
 httpx-sse>=0.4.3,<1
+urllib3>=1.26,<3
 ag-ui-protocol==1.0.0
 pydantic>=2.10,<3
 pydantic-settings>=2.7,<3
 langsmith>=0.14.5,<1
+# ES 7.6.0 集群使用同一主版本的官方客户端。
+elasticsearch>=7.17.9,<8

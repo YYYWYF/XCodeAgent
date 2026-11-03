@@ -3,22 +3,30 @@
 import logging
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from ag_ui.core import RunAgentInput
+from pydantic import ValidationError
 
 from .config import Settings
 from .contracts import InferenceInput
-from .history import utc_now
-from .observation_models import ExecutionData, ExecutionError, ExecutionRecord, Identity, ModelUsage
-from .operation_detection import detect_operation
+from .observation_models import (
+    ExecutionContext, ExecutionData, ExecutionError, ExecutionRecord, Identity, ModelUsage,
+)
 from .trace_projection import (
-    optional_identity, token_count, trace_duration, trace_metadata, trace_metric,
+    BEIJING_TIMEZONE, optional_identity, token_count, trace_duration, trace_metadata, trace_metric,
     trace_status, trace_time, trace_usage, utc_datetime,
 )
 
 logger = logging.getLogger(__name__)
 TOKEN_FIELDS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def utc_now() -> str:
+    """生成带时区的 UTC 观测时间。"""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def nonempty_text(value: Any) -> bool:
@@ -64,28 +72,37 @@ def safe_error(error: dict[str, Any] | None) -> ExecutionError | None:
     return ExecutionError(layer=layer, code=optional_identity(code), message=message)
 
 
+def build_observation_context(value: Any) -> ExecutionContext | None:
+    """只接收调用方提供的业务上下文，保留原值且不根据提示词补充字段。"""
+    if value is None:
+        return None
+    try:
+        return ExecutionContext.model_validate(value)
+    except ValidationError:
+        logger.warning("模型调用 context 格式无效，忽略本次业务上下文")
+        return None
+
+
 class ModelObservation:
     """保存单次上游调用的实际事实；日志响应体与 AG-UI 结果完全独立。"""
 
     def __init__(self, envelope: RunAgentInput, call: InferenceInput, settings: Settings,
                  clock: Callable[[], float] | None = None, wall_clock: Callable[[], str] | None = None):
-        """冻结收到的身份和实际模型配置，为测试允许注入确定性时钟。"""
+        """冻结收到的身份、业务上下文和实际模型配置，允许注入确定性时钟。"""
         metadata, extensions = call.metadata, call.metadata.extensions
-        operation_extensions = dict(extensions)
-        explicit = operation_extensions.get("current_operation")
-        if isinstance(explicit, str) and settings.redact(explicit) != explicit:
-            operation_extensions.pop("current_operation")
         self.identity = Identity(
             user_id=metadata.user_id, project_id=metadata.project_id,
             conversation_id=optional_identity(extensions.get("conversation_id")),
             thread_id=envelope.thread_id, run_id=envelope.run_id,
             operation_id=optional_identity(extensions.get("operation_id")),
             workflow_scope=optional_identity(extensions.get("workflow_scope")),
-            current_operation=detect_operation(call.request, operation_extensions),
         )
+        self.context = build_observation_context(extensions.get("context"))
         self.provider, self.model = settings.model_upstream, settings.active_model
         self.streaming = bool(call.request.get("stream", False))
         self._clock, self._wall_clock = clock or time.perf_counter, wall_clock or utc_now
+        self.record_id = uuid4().hex
+        self.occurred_at: str | None = None
         self.started_at = self.ended_at = None
         self.started_tick = self.ended_tick = self.first_output = self.last_output = None
         self.output_count = 0
@@ -93,7 +110,7 @@ class ModelObservation:
         self.trace_tree = None
 
     def begin(self) -> None:
-        """在实际 SDK 请求之前记录起点，不包括鉴权、登记和追踪准备。"""
+        """在实际 SDK 请求之前记录起点，不包括鉴权和追踪准备。"""
         if self.started_tick is None:
             self.started_at, self.started_tick = self._wall_clock(), self._clock()
             self._sync_trace()
@@ -198,7 +215,15 @@ class ModelObservation:
             ttft_ms=trace_metric(metadata, "ttft_ms", ttft) if self.streaming else None,
             output_duration_ms=trace_metric(metadata, "output_duration_ms", output_duration) if self.streaming else None,
         )
-        record = ExecutionRecord(identity=self.identity, data=data)
+        # 形成终态快照时冻结北京时间，后台排队和 ES 重试不重新生成记录身份或时间。
+        if self.occurred_at is None:
+            self.occurred_at = datetime.now(BEIJING_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+        record = ExecutionRecord(
+            record_id=self.record_id, type="execution_trace", occurred_at=self.occurred_at,
+            identity=self.identity, data=data,
+        )
+        if self.context is not None:
+            record.context = self.context
         return record.model_dump(mode="json", exclude_unset=True)
 
 

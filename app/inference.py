@@ -1,13 +1,10 @@
-"""一次模型调用的防重、历史、追踪及 AG-UI 输出编排。"""
+"""逐请求转发模型调用，编排本地追踪、观测及 AG-UI 输出。"""
 
 import asyncio
-import json
 import logging
-import time
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Any
-from uuid import uuid4
 
 from ag_ui.core import CustomEvent, RunAgentInput
 from openai import APIConnectionError, APIStatusError, APITimeoutError
@@ -16,11 +13,10 @@ import httpx
 from .aggregation import CompletionAccumulator
 from .config import Settings
 from .contracts import InferenceInput
-from .history import HistoryStore, json_text, utc_now
 from .model_observation import ModelObservation, observe_safely
 from .observation_output import ObservationOutput
 from .protocol import ResponseProjection, end_events, start_events
-from .tracing import TraceRecorder, mock_analytics
+from .tracing import TraceRecorder
 from .upstream import Upstream, request_body
 
 logger = logging.getLogger(__name__)
@@ -44,41 +40,20 @@ def inference_error(exc: Exception, settings: Settings) -> dict[str, Any]:
 
 
 class InferenceService:
-    """只保存本次实际上下文，不读取旧上下文参与新的模型请求。"""
+    """直接使用本次请求的完整上下文，各次调用独立执行和观测。"""
 
-    def __init__(self, settings: Settings, history: HistoryStore, upstream: Upstream, tracing: TraceRecorder,
+    def __init__(self, settings: Settings, upstream: Upstream, tracing: TraceRecorder,
                  observation_output: ObservationOutput):
-        """显式注入网络、存储和追踪组件以便离线验证。"""
-        self.settings, self.history, self.upstream, self.tracing = settings, history, upstream, tracing
+        """显式注入网络、追踪和输出组件以便离线验证。"""
+        self.settings, self.upstream, self.tracing = settings, upstream, tracing
         self.observation_output = observation_output
 
-    def reserve(self, envelope: RunAgentInput, call: InferenceInput) -> dict[str, Any]:
-        """原子登记实际请求与服务端档位，重复 runId 明确冲突且调用方不能伪造档位。"""
-        metadata = call.metadata
-        request = request_body(self.settings, call)
-        extensions = dict(metadata.extensions)
-        extensions.pop("gatewayTier", None)
-        extensions.update(self.settings.gateway_metadata)
-        record = {
-            "run_id": envelope.run_id, "thread_id": envelope.thread_id,
-            "request_id": metadata.request_id or envelope.run_id, "attempt_id": str(uuid4()),
-            "session_id": metadata.session_id or envelope.thread_id, "upstream_type": self.settings.model_upstream,
-            "model_name": self.settings.active_model, "input_context": json_text(request),
-            "status": "running", "started_at": utc_now(), "analysis": "{}",
-            "extensions": json_text(extensions), "user_id": metadata.user_id,
-            "project_id": metadata.project_id, "studio_data_ref": metadata.studio_data_ref,
-        }
-        self.history.reserve(record)
-        return record
-
-    async def events(self, envelope: RunAgentInput, call: InferenceInput, record: dict[str, Any]) -> AsyncIterator[Any]:
-        """转发原始结果，统一完成成功、失败及取消的历史终结。"""
+    async def events(self, envelope: RunAgentInput, call: InferenceInput) -> AsyncIterator[Any]:
+        """转发原始结果，统一完成成功、失败及取消的观测收尾。"""
         run_id, thread_id = envelope.run_id, envelope.thread_id
-        started = time.monotonic()
-        last_checkpoint = started
         accumulator = CompletionAccumulator(self.settings.active_model)
         projection = ResponseProjection(run_id)
-        status, error, span_id, tree = "failed", None, None, None
+        status, error, tree = "failed", None, None
         observation = None
         try:
             observation = ModelObservation(envelope, call, self.settings)
@@ -87,18 +62,14 @@ class InferenceService:
         try:
             for event in start_events(thread_id, run_id):
                 yield event
-            metadata = {"thread_id": record["session_id"], "run_id": run_id,
-                        "request_id": record["request_id"], "upstream": record["upstream_type"],
-                        "model": record["model_name"], **self.settings.gateway_metadata}
-            span_id, tree = await self.tracing.start(json.loads(record["input_context"]), metadata)
+            metadata = {"thread_id": call.metadata.session_id or thread_id, "run_id": run_id,
+                        "request_id": call.metadata.request_id or run_id, "upstream": self.settings.model_upstream,
+                        "model": self.settings.active_model, **self.settings.gateway_metadata}
+            _, tree = await self.tracing.start(request_body(self.settings, call), metadata)
             observe_safely(observation, "set_trace", tree)
-            self.history.checkpoint(run_id, accumulator.output, span_id)
             async with aclosing(self.upstream.invoke(call, thread_id, run_id, observation=observation)) as responses:
                 async for response in responses:
                     accumulator.add(response)
-                    if time.monotonic() - last_checkpoint >= 0.5:
-                        self.history.checkpoint(run_id, accumulator.output, span_id)
-                        last_checkpoint = time.monotonic()
                     if call.request.get("stream", False):
                         for event in projection.chunk_events(response, accumulator):
                             yield event
@@ -119,32 +90,19 @@ class InferenceService:
                 yield event
             yield CustomEvent(name="model-inference.error", value=error)
         finally:
-            duration_ms = int((time.monotonic() - started) * 1000)
             # 本地 SDK 对象先收尾，data 才能读取最终输出、状态和错误；此处没有远程上传。
             try:
                 await self.tracing.finish(tree, accumulator.output, status, error)
             except Exception:
-                logger.warning("本地追踪收尾失败，继续打印与保存当前观测")
+                logger.warning("本地追踪收尾失败，继续输出当前观测")
             summary = self.build_observation(observation, status, error)
-            analysis = {}
-            if self.settings.mock_analytics_enabled:
-                analysis = mock_analytics({**record, "extensions": json.loads(record["extensions"]),
-                                           "status": status, "duration_ms": duration_ms, "usage": accumulator.output.get("usage")})
+            # 开关及容量检查都在统一入口；主请求不等待打印/ES，不改已冻结的时间。
             if summary is not None:
-                # 同份快照包含 identity.current_operation，复用既有 JSON 字段而不改表结构。
-                analysis["execution_trace"] = summary
-            # 本地历史保存与控制台完全相同的摘要，不向 LangSmith 发送数据。
-            try:
-                self.history.finish(run_id, status=status, output=accumulator.output, duration_ms=duration_ms,
-                                    error=error, analysis=analysis, langsmith_run_id=span_id)
-            finally:
-                # 开关及容量检查都在统一入口；主请求不等待打印/ES，不改已冻结的时间。
-                if summary is not None:
-                    try:
-                        self.observation_output.submit(summary)
-                    except Exception:
-                        # 输出组件故障也不得改写模型结果或历史保存的原有错误语义。
-                        pass
+                try:
+                    self.observation_output.submit(summary)
+                except Exception:
+                    # 输出组件故障也不得改写模型结果。
+                    pass
         for event in end_events(thread_id, run_id, status):
             yield event
 

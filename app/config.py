@@ -5,16 +5,27 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from urllib3.util import parse_url
 
 ROOT = Path(__file__).resolve().parents[1]
 GatewayTier = Literal["fast", "pro", "ultra"]
 
 
+def _prepare_es_node_url(value: str) -> str:
+    """清理单节点地址、校验无效字符，并为省略协议的地址补充 HTTP。"""
+    node = value.strip()
+    if not node or "\\" in node or any(character.isspace() for character in node):
+        raise ValueError("ES 节点地址为空或含有无效字符")
+    if "://" not in node:
+        node = "http://" + node
+    return node
+
+
 @dataclass(frozen=True)
 class GatewayProfile:
-    """将选中档位的地址与模型标识绑定，供请求、目录和历史统一读取。"""
+    """将选中档位的地址与模型标识绑定，供请求、目录和观测统一读取。"""
 
     tier: GatewayTier
     base_url: str
@@ -41,19 +52,23 @@ class Settings(BaseSettings):
     gateway_key: SecretStr = SecretStr("")
     gateway_spaid_source: Literal["request", "fixed"] = "request"
     gateway_spaid: str = ""
-    history_db_path: Path = ROOT / "data" / "model_history.sqlite3"
     upstream_trust_env: bool = False
     max_timeout_seconds: float = 1800
     default_timeout_seconds: float = 300
     max_retries: int = 2
     max_request_bytes: int = 16 * 1024 * 1024
     model_observation_output_enabled: bool = True
+    # ES 支持单节点或逗号分隔的多个节点；留空保持控制台输出。
+    es_url: str = ""
+    es_index: str = Field(default="model-call-observations", pattern=r"^[a-z0-9][a-z0-9._-]*$", max_length=255)
+    es_username: str = ""
+    es_password: SecretStr = SecretStr("")
+    es_request_timeout_seconds: float = Field(default=5, gt=0, allow_inf_nan=False)
     # 旧远程配置只保留为已有部署的输入字段；不控制本地追踪，也不启用上报。
     langsmith_enabled: bool = False
     langsmith_api_key: SecretStr = SecretStr("")
     langsmith_endpoint: str = "https://api.smith.langchain.com"
     langsmith_project: str = "devagent-model-transmit"
-    mock_analytics_enabled: bool = False
 
     @staticmethod
     def validate_url(value: str) -> str:
@@ -65,13 +80,59 @@ class Settings(BaseSettings):
             raise ValueError("服务地址不能包含凭证、查询参数或片段")
         return value.rstrip("/")
 
+    @staticmethod
+    def parse_es_node(value: str) -> tuple[str, dict[str, str | int | bool]]:
+        """只解析一个 ES 节点，返回规范地址及官方客户端接收的节点配置。"""
+        parsed = parse_url(_prepare_es_node_url(value))
+        if parsed.scheme not in {"http", "https"} or not parsed.host:
+            raise ValueError("ES 节点缺少有效地址")
+        if parsed.auth is not None or parsed.query is not None or parsed.fragment is not None:
+            raise ValueError("ES 节点地址不能包含凭证、查询参数或片段")
+        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 9200)
+        if not 1 <= port <= 65535:
+            raise ValueError("ES 节点端口必须在 1 到 65535 之间")
+        prefix = (parsed.path or "").rstrip("/")
+        host: dict[str, str | int | bool] = {
+            "host": parsed.host.strip("[]"),
+            "port": port,
+            "use_ssl": parsed.scheme == "https",
+        }
+        if prefix:
+            host["url_prefix"] = prefix
+        normalized = parsed._replace(port=port, path=prefix or None).url
+        return normalized, host
+
+    @field_validator("es_url", mode="before")
+    @classmethod
+    def normalize_es_nodes(cls, value: str) -> str:
+        """先拆分多节点，再逐个解析；整份节点列表不传给 URL 解析器。"""
+        if not isinstance(value, str):
+            raise ValueError("ES_URL 必须为 IP、IP:端口或逗号分隔的节点地址")
+        if not value.strip():
+            return ""
+        nodes = []
+        for position, node in enumerate(value.replace("，", ",").split(","), start=1):
+            try:
+                normalized, _ = cls.parse_es_node(node)
+            except ValueError:
+                raise ValueError(
+                    f"ES_URL 第 {position} 个节点格式无效：支持 IP、IP:端口或 HTTP(S) 地址；"
+                    "多个节点用逗号分隔，不能包含空节点、账号密码、内部空白、查询参数或片段"
+                ) from None
+            if normalized not in nodes:
+                nodes.append(normalized)
+        return ",".join(nodes)
+
     @model_validator(mode="after")
     def validate_active(self) -> "Settings":
         """只校验已启用上游及所选网关档位，其他档位允许暂未配置。"""
         if not self.service_token.get_secret_value().strip():
             raise ValueError("SERVICE_TOKEN 必须非空")
         if self.model_upstream == "direct":
-            self.direct_base_url = self.validate_url(self.direct_base_url)
+            try:
+                self.direct_base_url = self.validate_url(self.direct_base_url)
+            except ValueError:
+                raise ValueError("DIRECT_BASE_URL 必须为有效 HTTP(S) 地址，且不包含凭证、查询参数或片段") from None
             if not self.direct_api_key.get_secret_value().strip():
                 raise ValueError("当前 direct 上游缺少 DIRECT_API_KEY")
         else:
@@ -91,7 +152,19 @@ class Settings(BaseSettings):
             raise ValueError("固定 spaid 模式缺少 GATEWAY_SPAID")
         if not 0 < self.default_timeout_seconds <= self.max_timeout_seconds or self.max_retries < 0:
             raise ValueError("超时和重试配置无效")
+        if bool(self.es_username) != bool(self.es_password.get_secret_value()):
+            raise ValueError("ES_USERNAME 和 ES_PASSWORD 必须同时配置")
         return self
+
+    @property
+    def es_urls(self) -> list[str]:
+        """返回已经校验、补齐协议并去重的集群节点，供官方客户端建连接池。"""
+        return self.es_url.split(",") if self.es_url else []
+
+    @property
+    def es_hosts(self) -> list[dict[str, str | int | bool]]:
+        """直接提供节点配置列表，避免客户端再次把多 IP 字符串作为一个 URL 解析。"""
+        return [self.parse_es_node(node)[1] for node in self.es_urls]
 
     @property
     def gateway_profile(self) -> GatewayProfile:
@@ -114,7 +187,8 @@ class Settings(BaseSettings):
 
     def redact(self, text: str) -> str:
         """在对外错误与日志中移除服务持有的凭证。"""
-        for secret in (self.service_token, self.direct_api_key, self.gateway_api_key, self.gateway_key, self.langsmith_api_key):
+        for secret in (self.service_token, self.direct_api_key, self.gateway_api_key, self.gateway_key,
+                       self.langsmith_api_key, self.es_password):
             value = secret.get_secret_value()
             if value:
                 text = text.replace(value, "[REDACTED]")

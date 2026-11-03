@@ -1,20 +1,18 @@
 """验证统计输出异步投递、冻结快照、容量限制及统一开关。"""
 
 import json
-import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.model_call_logging import deliver_record
+from app.model_call_logging import ModelCallWriter, deliver_record
 from app.observation_output import ObservationOutput
 from app.upstream import Upstream
 from tests.helpers import completion, envelope, read_events, settings
@@ -174,67 +172,111 @@ class ObservationOutputTests(unittest.TestCase):
 
 
 class ObservationOutputIntegrationTests(unittest.TestCase):
-    """验证共享线程池与真实 AG-UI/历史收尾的行为边界。"""
+    """验证共享线程池与真实 AG-UI/观测收尾的行为边界。"""
 
-    def test_model_finishes_and_history_is_saved_while_output_writer_is_blocked(self):
-        """打印未完成时，模型请求仍返回 RUN_FINISHED，且 SQLite 已保存同份快照。"""
-        with tempfile.TemporaryDirectory() as directory:
-            config = settings(Path(directory))
-            entered, release = threading.Event(), threading.Event()
-            delivered = []
+    def test_es_output_observes_repeated_run_id_calls_and_isolates_write_failure(self):
+        """重复调用分别写入独立 Span 文档，ES 故障也不影响模型完成。"""
+        for status_code in (200, 503):
+            with self.subTest(status_code=status_code):
+                config = settings(es_url="https://stats.example.test")
+                es_requests, model_requests = [], []
 
-            def writer(payload):
-                """阻塞输出目标，以检查请求路径没有等待此任务。"""
-                entered.set()
-                release.wait(5)
-                delivered.append(json.loads(payload))
+                def es_handler(request):
+                    es_requests.append(request)
+                    return httpx.Response(status_code, json={"result": "created"})
 
-            def handler(request):
-                """让真实 SDK 仅访问内存上游，不发起真实模型请求。"""
-                return httpx.Response(200, json=completion())
+                def model_handler(request):
+                    model_requests.append(request)
+                    return httpx.Response(200, json=completion())
 
-            output = ObservationOutput(writer=writer)
-            app = create_app(config, Upstream(config, httpx.MockTransport(handler)), observation_output=output)
-            try:
-                with TestClient(app) as client, ThreadPoolExecutor(max_workers=1) as callers:
-                    request = callers.submit(read_events, client, envelope(streaming=False))
-                    try:
-                        self.assertTrue(entered.wait(3), "后台输出没有启动")
-                        events = request.result(timeout=1)
+                writer = ModelCallWriter(config, httpx.MockTransport(es_handler))
+                with patch("app.main.ModelCallWriter", return_value=writer):
+                    app = create_app(config, Upstream(config, httpx.MockTransport(model_handler)))
+                with patch("app.model_call_logging.print_record_json") as printer, TestClient(app) as client:
+                    for _ in range(2):
+                        events = read_events(client, envelope(streaming=False))
                         self.assertEqual(events[-1]["type"], "RUN_FINISHED")
-                        saved = app.state.history.get("run-1")
-                        self.assertEqual(saved["status"], "completed")
-                        self.assertEqual(saved["analysis"]["execution_trace"]["data"]["model"]["total_tokens"], 5)
-                        self.assertEqual(delivered, [])
-                    finally:
-                        release.set()
-            finally:
-                release.set()
-                output.close()
-            self.assertEqual(delivered, [app.state.history.get("run-1")["analysis"]["execution_trace"]])
+                        result = next(event["value"] for event in events if event.get("name") == "model-inference.result")
+                        self.assertEqual(result["usage"]["total_tokens"], 5)
+                printer.assert_not_called()
+                self.assertEqual(len(model_requests), 2)
+                self.assertEqual(len(es_requests), 2)
+                self.assertNotEqual(es_requests[0].url.path, es_requests[1].url.path)
+                records = [json.loads(request.content) for request in es_requests]
+                self.assertTrue(all(record["identity"]["run_id"] == "run-1" for record in records))
+                self.assertTrue(all(record["data"]["status"] == "completed" for record in records))
+                outcome = "completed" if status_code == 200 else "failed"
+                self.assertEqual(app.state.observation_output.stats()[outcome], 2)
+                self.assertIsNone(writer._client)
 
-    def test_disabled_service_keeps_model_trace_and_history_without_output(self):
-        """关闭统一输出不改变推理结果、本地追踪、北京时间或数据库快照。"""
-        with tempfile.TemporaryDirectory() as directory:
-            config = settings(Path(directory), model_observation_output_enabled=False)
+    def test_model_finishes_while_output_writer_is_blocked(self):
+        """打印未完成时，模型请求仍返回完整结果和 RUN_FINISHED。"""
+        config = settings()
+        entered, release = threading.Event(), threading.Event()
+        delivered = []
 
-            def handler(request):
-                """提供完整离线模型响应，避免任何真实上游连接。"""
-                return httpx.Response(200, json=completion())
+        def writer(payload):
+            """阻塞输出目标，以检查请求路径没有等待此任务。"""
+            entered.set()
+            release.wait(5)
+            delivered.append(json.loads(payload))
 
-            app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
-            console = StringIO()
-            with patch("app.model_call_logging.print_record_json") as printer, \
-                    redirect_stdout(console), TestClient(app) as client:
-                events = read_events(client, envelope(streaming=False))
-            self.assertEqual(events[-1]["type"], "RUN_FINISHED")
-            printer.assert_not_called()
-            self.assertEqual(console.getvalue(), "")
-            snapshot = app.state.history.get("run-1")["analysis"]["execution_trace"]
-            self.assertEqual(snapshot["data"]["model"]["total_tokens"], 5)
-            self.assertTrue(snapshot["data"]["started_at"].endswith("+08:00"))
-            self.assertIsInstance(snapshot["data"]["span_id"], str)
-            self.assertEqual(app.state.observation_output.stats()["submitted"], 0)
+        def handler(request):
+            """让真实 SDK 仅访问内存上游，不发起真实模型请求。"""
+            return httpx.Response(200, json=completion())
+
+        output = ObservationOutput(writer=writer)
+        app = create_app(config, Upstream(config, httpx.MockTransport(handler)), observation_output=output)
+        try:
+            with TestClient(app) as client, ThreadPoolExecutor(max_workers=1) as callers:
+                request = callers.submit(read_events, client, envelope(streaming=False))
+                try:
+                    self.assertTrue(entered.wait(3), "后台输出没有启动")
+                    events = request.result(timeout=1)
+                    self.assertEqual(events[-1]["type"], "RUN_FINISHED")
+                    result = next(event["value"] for event in events if event.get("name") == "model-inference.result")
+                    self.assertEqual(result["usage"]["total_tokens"], 5)
+                    self.assertEqual(delivered, [])
+                finally:
+                    release.set()
+        finally:
+            release.set()
+            output.close()
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]["data"]["status"], "completed")
+        self.assertEqual(delivered[0]["data"]["model"]["total_tokens"], 5)
+
+    def test_disabled_service_keeps_model_trace_and_observation_without_output(self):
+        """关闭统一输出不改变推理结果、本地追踪、北京时间或观测快照。"""
+        config = settings(model_observation_output_enabled=False)
+
+        def handler(request):
+            """提供完整离线模型响应，避免任何真实上游连接。"""
+            return httpx.Response(200, json=completion())
+
+        app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
+        snapshots = []
+        build = app.state.service.build_observation
+
+        def build_snapshot(*args):
+            snapshot = build(*args)
+            snapshots.append(snapshot)
+            return snapshot
+
+        console = StringIO()
+        with patch("app.model_call_logging.print_record_json") as printer, \
+                patch.object(app.state.service, "build_observation", side_effect=build_snapshot), \
+                redirect_stdout(console), TestClient(app) as client:
+            events = read_events(client, envelope(streaming=False))
+        self.assertEqual(events[-1]["type"], "RUN_FINISHED")
+        printer.assert_not_called()
+        self.assertEqual(console.getvalue(), "")
+        self.assertEqual(len(snapshots), 1)
+        snapshot = snapshots[0]
+        self.assertEqual(snapshot["data"]["model"]["total_tokens"], 5)
+        self.assertTrue(snapshot["data"]["started_at"].endswith("+08:00"))
+        self.assertIsInstance(snapshot["data"]["span_id"], str)
+        self.assertEqual(app.state.observation_output.stats()["submitted"], 0)
 
 
 if __name__ == "__main__":

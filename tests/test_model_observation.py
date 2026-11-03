@@ -1,13 +1,11 @@
-"""使用确定性时钟验证埋点合同和操作识别，不访问外部服务。"""
+"""使用确定性时钟验证埋点合同与并发输出，不访问外部服务。"""
 
 import json
-import tempfile
 import unittest
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 from ag_ui.core import RunAgentInput
@@ -17,7 +15,6 @@ from app.contracts import InferenceInput
 from app.model_call_logging import print_record_json
 from app.model_observation import ModelObservation
 from app.observation_models import ExecutionRecord, ModelUsage
-from app.operation_detection import detect_operation
 from tests.helpers import chunk, envelope, settings
 
 
@@ -26,9 +23,7 @@ class ObservationTests(unittest.TestCase):
 
     def setUp(self):
         """创建隔离配置与可独立推进的本地观测时钟。"""
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.config = settings(Path(self.temporary.name))
+        self.config = settings()
         self.tick = 0.0
 
     def clock(self):
@@ -64,20 +59,11 @@ class ObservationTests(unittest.TestCase):
         identity = observation.snapshot("completed", None)["identity"]
         self.assertEqual(identity, {"user_id": "u1", "project_id": "app1", "conversation_id": "c1",
                                     "operation_id": "o1", "workflow_scope": "conversation",
-                                    "thread_id": "thread-1", "run_id": "run-1", "current_operation": "unknown"})
+                                    "thread_id": "thread-1", "run_id": "run-1"})
         empty = self.observation().snapshot("completed", None)
         self.assertIsNone(empty["identity"]["conversation_id"])
         self.assertIsNone(empty["data"]["trace_id"])
         self.assertNotIn("active_intervals", empty["data"])
-
-    def test_operation_metadata_does_not_expose_service_credentials(self):
-        """明确操作说明误填凭证时不复制或变形输出该凭证，改用安全识别结果。"""
-        for secret in (self.config.service_token.get_secret_value(), self.config.direct_api_key.get_secret_value()):
-            with self.subTest(secret_kind="configured credential"):
-                observation = self.observation(metadata={"extensions": {"current_operation": secret}})
-                record = observation.snapshot("completed", None)
-                self.assertEqual(record["identity"]["current_operation"], "unknown")
-                self.assertNotIn(secret, json.dumps(record))
 
     def test_stream_timing_excludes_role_finish_usage_and_late_delivery(self):
         """独立尾部用量帧不拉长首末生成间隔，结束后再次 end 不延长耗时。"""
@@ -204,27 +190,8 @@ class ObservationTests(unittest.TestCase):
         self.assertIsNone(observation.snapshot("cancelled", {"code": "REQUEST_CANCELLED"})["data"]["error"])
 
 
-class OperationAndConsoleTests(unittest.TestCase):
-    """验证英文操作标识位于 identity，并发输出保持每次一行。"""
-
-    def test_operation_uses_current_role_or_explicit_string(self):
-        """优先明确扩展，否则使用固定角色开头，不猜测普通业务关键词。"""
-        request = {"messages": [{"role": "system", "content": "You are the technical-planning model for an app-generation workflow.\n规则"}]}
-        self.assertEqual(detect_operation(request, {}), "generate_technical_plan")
-        self.assertEqual(detect_operation(request, {"current_operation": "校验后修复\n代码"}), "modify_code")
-        self.assertEqual(detect_operation({"messages": [{"role": "user", "content": "修复技术规划"}]}, {}), "unknown")
-
-    def test_operation_ignores_history_quotes_tool_results_and_conflicts(self):
-        """历史引用和工具内容不得成为当前动作，冲突的系统角色返回未知。"""
-        signature = "You are the Frontend Coding Agent."
-        for messages in (
-            [{"role": "user", "content": "历史说明：" + signature}],
-            [{"role": "tool", "content": signature}],
-            [{"role": "user", "content": "你好"}, {"role": "assistant", "content": signature}],
-            [{"role": "system", "content": signature}, {"role": "system", "content": "You are the Java Backend Coding Agent."}],
-        ):
-            with self.subTest(messages=messages):
-                self.assertEqual(detect_operation({"messages": messages}, {}), "unknown")
+class ConsoleTests(unittest.TestCase):
+    """验证并发控制台输出保持每次一行。"""
 
     def test_console_keeps_concurrent_records_single_line_and_escapes_newlines(self):
         """多线程每条只输出一行 JSON，身份中的换行不能破坏记录边界。"""

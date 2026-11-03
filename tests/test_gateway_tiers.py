@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import create_app
+from app.observation_output import ObservationOutput
 from app.tracing import TraceRecorder
 from app.upstream import Upstream
 from tests.helpers import chunk, completion, envelope, read_events, settings, sse_response
@@ -22,7 +23,7 @@ class GatewayTierTests(unittest.TestCase):
     """验证服务端选档、地址与模型配对、配置失败和调用观测。"""
 
     def setUp(self):
-        """为每项测试准备独立目录，不读取或改写真实部署配置和数据库。"""
+        """为环境文件测试准备独立目录，不读取或改写真实部署配置。"""
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.path = Path(self.temporary.name)
@@ -37,10 +38,10 @@ class GatewayTierTests(unittest.TestCase):
             values[f"gateway_{level}_base_url"] = f"https://gateway.example.test/routes/{level}/v1/"
             values[f"gateway_{level}_model_name"] = f"route-{level}-model"
         values.update(overrides)
-        return settings(self.path, **values)
+        return settings(**values)
 
     def test_all_tiers_stream_and_nonstream_end_to_end(self):
-        """三档均走真实 SDK，核对地址、认证头、事件、历史及埋点中的实际档位。"""
+        """三档均走真实 SDK，核对地址、认证头、事件及埋点中的实际模型。"""
         for tier in ("fast", "pro", "ultra"):
             for streaming in (False, True):
                 with self.subTest(tier=tier, streaming=streaming):
@@ -58,8 +59,10 @@ class GatewayTierTests(unittest.TestCase):
                             chunk(finish_reason="tool_calls", usage={"total_tokens": 5}),
                         ])
 
-                    config = self.gateway_settings(tier, mock_analytics_enabled=True)
-                    app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
+                    config = self.gateway_settings(tier)
+                    records = []
+                    output = ObservationOutput(writer=lambda payload: records.append(json.loads(payload)))
+                    app = create_app(config, Upstream(config, httpx.MockTransport(handler)), observation_output=output)
                     with TestClient(app) as client:
                         public = client.get("/health").json()
                         run_id = f"run-{tier}-{streaming}"
@@ -88,15 +91,12 @@ class GatewayTierTests(unittest.TestCase):
                     self.assertEqual(events[-1]["type"], "RUN_FINISHED")
                     self.assertTrue(any(event["type"] == "TOOL_CALL_START" for event in events))
                     self.assertTrue(any(event.get("name") == "model-inference.result" for event in events))
-                    record = app.state.history.get(run_id)
-                    self.assertEqual(record["status"], "completed")
-                    self.assertEqual(record["model_name"], public["model"])
-                    self.assertEqual(record["input_context"]["model"], public["model"])
-                    self.assertEqual(record["extensions"], {"gatewayTier": tier, "future": 1})
-                    payload = record["analysis"]["wouldInsert"]["payload"]
-                    self.assertEqual(payload["extensions"], record["extensions"])
-                    self.assertEqual(payload["model"], public["model"])
-                    self.assertFalse(record["analysis"]["receipt"]["inserted"])
+                    self.assertEqual(len(records), 1)
+                    record = records[0]
+                    self.assertEqual(record["data"]["status"], "completed")
+                    self.assertEqual(record["data"]["model"]["name"], public["model"])
+                    self.assertEqual(record["data"]["model"]["provider"], "gateway")
+                    self.assertNotIn("forged", json.dumps(record))
                     self.assertNotIn("test-gateway-secret", json.dumps(record))
 
     def test_only_selected_profile_requires_complete_configuration(self):
@@ -126,7 +126,7 @@ class GatewayTierTests(unittest.TestCase):
                 self.assertEqual(self.gateway_settings(tier, **inactive).gateway_profile.tier, tier)
         for tier in ("pro", "ultra"):
             with self.subTest(tier=tier, unconfigured=True), self.assertRaisesRegex(ValidationError, f"GATEWAY_{tier.upper()}_BASE_URL"):
-                settings(self.path, model_upstream="gateway", gateway_tier=tier)
+                settings(model_upstream="gateway", gateway_tier=tier)
 
     def test_invalid_tier_and_missing_credentials_are_rejected(self):
         """拒绝拼错的档位及缺失共享凭据，避免静默使用默认模型。"""
@@ -153,7 +153,7 @@ class GatewayTierTests(unittest.TestCase):
         self.assertEqual(config.active_model, "enterprise-ultra")
         self.assertEqual(config.gateway_metadata, {"gatewayTier": "ultra"})
 
-    def test_failure_does_not_switch_tier_and_preserves_history(self):
+    def test_failure_does_not_switch_tier_and_observes_selected_model(self):
         """pro 失败时只返回该档位错误，绝不重路由 fast 或 ultra。"""
         captured = []
 
@@ -162,8 +162,10 @@ class GatewayTierTests(unittest.TestCase):
             captured.append(request)
             return httpx.Response(401, json={"error": {"message": "denied test-gateway-secret"}})
 
-        config = self.gateway_settings("pro", mock_analytics_enabled=True)
-        app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
+        config = self.gateway_settings("pro")
+        records = []
+        output = ObservationOutput(writer=lambda payload: records.append(json.loads(payload)))
+        app = create_app(config, Upstream(config, httpx.MockTransport(handler)), observation_output=output)
         with TestClient(app) as client:
             events = read_events(client, envelope(metadata={"spaid": "user123"}))
         self.assertEqual(len(captured), 1)
@@ -171,10 +173,9 @@ class GatewayTierTests(unittest.TestCase):
         error = next(event["value"] for event in events if event.get("name") == "model-inference.error")
         self.assertEqual(error["code"], "UPSTREAM_AUTH_ERROR")
         self.assertNotIn("test-gateway-secret", json.dumps(events))
-        record = app.state.history.get("run-1")
-        self.assertEqual(record["status"], "failed")
-        self.assertEqual(record["extensions"]["gatewayTier"], "pro")
-        self.assertEqual(record["analysis"]["wouldInsert"]["payload"]["extensions"]["gatewayTier"], "pro")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["data"]["status"], "failed")
+        self.assertEqual(records[0]["data"]["model"]["name"], config.gateway_pro_model_name)
 
     def test_direct_ignores_gateway_profiles_and_removes_forged_tier(self):
         """direct 无需网关凭据或有效档位地址，并清除调用方伪造的网关观测字段。"""
@@ -185,14 +186,18 @@ class GatewayTierTests(unittest.TestCase):
             captured.append(request)
             return httpx.Response(200, json=completion())
 
-        config = settings(self.path, gateway_tier="ultra", gateway_ultra_base_url="not-configured")
-        app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
+        config = settings(gateway_tier="ultra", gateway_ultra_base_url="not-configured")
+        records = []
+        output = ObservationOutput(writer=lambda payload: records.append(json.loads(payload)))
+        app = create_app(config, Upstream(config, httpx.MockTransport(handler)), observation_output=output)
         with TestClient(app) as client:
             self.assertNotIn("gatewayTier", client.get("/health").json())
             read_events(client, envelope(streaming=False, metadata={"extensions": {"gatewayTier": "forged", "future": 1}}))
         self.assertEqual(json.loads(captured[0].content)["model"], config.direct_model_name)
         self.assertNotIn("x-gateway-key", captured[0].headers)
-        self.assertEqual(app.state.history.get("run-1")["extensions"], {"future": 1})
+        self.assertEqual(records[0]["data"]["model"]["provider"], "direct")
+        self.assertNotIn("gatewayTier", json.dumps(records))
+        self.assertNotIn("forged", json.dumps(records))
 
     def test_local_langsmith_keeps_server_tier_after_finish_without_upload(self):
         """真实本地 RunTree 在开始和收尾后保留服务端档位，不初始化上传客户端。"""

@@ -1,8 +1,7 @@
-"""离线展示含英文 current_operation 的模型 JSON；无需真实模型或追踪账号。"""
+"""离线展示调用方明确传入业务操作的模型 JSON；无需真实模型或追踪账号。"""
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 import httpx
@@ -29,28 +28,32 @@ def mock_model(request: httpx.Request) -> httpx.Response:
 
 
 def main() -> None:
-    """通过完整本地 AG-UI 路由输出真实格式，临时历史在结束后自动清理。"""
-    with tempfile.TemporaryDirectory() as directory:
-        settings = Settings(_env_file=None, model_upstream="direct", direct_base_url="https://offline.example.test/v1",
-                            direct_model_name="demo-model", direct_api_key="offline-fake-key",
-                            service_token="offline-demo-token",
-                            history_db_path=Path(directory) / "history.sqlite3")
-        app = create_app(settings, Upstream(settings, httpx.MockTransport(mock_model)))
-        payload = {
-            "threadId": "demo-thread", "runId": "demo-run", "messages": [], "tools": [], "context": [],
-            "forwardedProps": {"modelInference": {"request": {
-                "messages": [{"role": "system", "content": "You are the technical-planning model for an app-generation workflow."},
-                             {"role": "user", "content": "离线测试"}], "stream": True,
-            }, "maxRetries": 0, "metadata": {"projectId": "demo-application"}}},
-        }
-        with TestClient(app) as client:
-            assert client.get("/health").json()["status"] == "ok"
-            with connect_sse(client, "POST", "/model-inference/run", json=payload,
-                             headers={"Authorization": "Bearer offline-demo-token"}) as source:
-                source.response.raise_for_status()
-                events = [json.loads(event.data) for event in source.iter_sse()]
-            assert events[-1]["type"] == "RUN_FINISHED"
-            assert app.state.history.get("demo-run")["status"] == "completed"
+    """通过完整本地 AG-UI 路由输出真实格式的观测摘要。"""
+    settings = Settings(_env_file=None, model_upstream="direct", direct_base_url="https://offline.example.test/v1",
+                        direct_model_name="demo-model", direct_api_key="offline-fake-key",
+                        service_token="offline-demo-token", es_url="")
+    app = create_app(settings, Upstream(settings, httpx.MockTransport(mock_model)))
+    payload = {
+        "threadId": "demo-thread", "runId": "demo-run", "messages": [], "tools": [], "context": [],
+        "forwardedProps": {"modelInference": {"request": {
+            "messages": [{"role": "system", "content": "You are the technical-planning model for an app-generation workflow."},
+                         {"role": "user", "content": "离线测试"}], "stream": True,
+        }, "maxRetries": 0, "metadata": {
+            "projectId": "demo-application",
+            "extensions": {"context": {
+                "business_stage": "technical_planning",
+                "business_operation": "generate_technical_plan",
+            }},
+        }}},
+    }
+    with TestClient(app) as client:
+        assert client.get("/health").json()["status"] == "ok"
+        with connect_sse(client, "POST", "/model-inference/run", json=payload,
+                         headers={"Authorization": "Bearer offline-demo-token"}) as source:
+            source.response.raise_for_status()
+            events = [json.loads(event.data) for event in source.iter_sse()]
+        assert events[-1]["type"] == "RUN_FINISHED"
+        assert next(event["snapshot"]["status"] for event in events if event["type"] == "STATE_SNAPSHOT") == "completed"
 
 
 if __name__ == "__main__":

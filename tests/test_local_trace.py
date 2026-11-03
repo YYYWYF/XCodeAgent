@@ -3,12 +3,10 @@
 import asyncio
 import json
 import os
-import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -29,9 +27,7 @@ class LocalTraceTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         """准备隔离配置和可控制的本地时钟。"""
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.config = settings(Path(self.temporary.name))
+        self.config = settings()
         self.tick = 0.0
 
     def clock(self):
@@ -87,7 +83,7 @@ class LocalTraceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_local_root_does_not_inherit_ambient_parent_or_remote_switch(self):
         """外层追踪已开启也保持独立本地根，旧开关开启无需凭证。"""
-        config = settings(Path(self.temporary.name), langsmith_enabled=True)
+        config = settings(langsmith_enabled=True)
         with self.prohibit_uploads():
             parent = RunTree(name="external-parent", run_type="chain", replicas=[])
             with tracing_context(parent=parent, enabled=True):
@@ -168,7 +164,7 @@ class LocalTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["model"]["total_tokens"], 5)
 
     async def test_finish_updates_trace_before_console_snapshot(self):
-        """本地收尾后才打印，日志与 SQLite 使用收尾对象的最新内容。"""
+        """本地收尾后才打印，摘要使用收尾对象的最新内容。"""
         class FinishedRecorder(TraceRecorder):
             """在正常本地收尾后添加可识别的最终追踪事实。"""
 
@@ -191,7 +187,6 @@ class LocalTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["type"], "RUN_FINISHED")
         self.assertEqual(record["data"]["run_name"], "model-inference")
         self.assertEqual(record["data"]["model"]["total_tokens"], 11)
-        self.assertEqual(app.state.history.get("run-1")["analysis"]["execution_trace"], record)
 
     async def test_failed_call_retains_local_ids_and_sanitized_error(self):
         """上游认证失败也能打印真实本地追踪身份，错误不泄露响应原文。"""
@@ -278,7 +273,7 @@ class LocalTraceTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(app.state.observation_output.close)
         run = RunAgentInput.model_validate(raw)
         call = InferenceInput.model_validate(raw["forwardedProps"]["modelInference"])
-        events = app.state.service.events(run, call, app.state.service.reserve(run, call))
+        events = app.state.service.events(run, call)
         output = StringIO()
         with self.prohibit_uploads(), redirect_stdout(output):
             async for event in events:

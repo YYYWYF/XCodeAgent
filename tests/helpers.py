@@ -1,7 +1,6 @@
 """不连接真实模型或 LangSmith 的测试夹具。"""
 
 import json
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -10,10 +9,9 @@ from httpx_sse import connect_sse
 from app.config import Settings
 
 
-def settings(path: Path, **overrides: Any) -> Settings:
-    """创建隔离 SQLite 与假凭证配置，忽略部署环境文件。"""
-    return Settings(_env_file=None, direct_api_key="test-direct-secret",
-                    history_db_path=path / "history.sqlite3", **overrides)
+def settings(**overrides: Any) -> Settings:
+    """创建假凭证配置，忽略部署环境文件并默认禁用真实 ES 连接。"""
+    return Settings(_env_file=None, direct_api_key="test-direct-secret", **{"es_url": "", **overrides})
 
 
 def envelope(run_id: str = "run-1", streaming: bool = True, metadata: dict | None = None) -> dict:

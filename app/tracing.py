@@ -2,7 +2,6 @@
 
 import logging
 from typing import Any
-from uuid import uuid4
 
 from langsmith import RunTree
 
@@ -46,18 +45,4 @@ class TraceRecorder:
                      metadata={"status": status,
                                "execution_error": execution_error.model_dump() if execution_error is not None else None})
         except Exception:
-            logger.warning("本地追踪结束失败，继续使用本次观测和本地历史")
-
-
-def mock_analytics(record: dict[str, Any]) -> dict[str, Any]:
-    """模拟埋点载荷与回执，保留服务端档位及扩展关联信息，不执行真实落库。"""
-    return {
-        "mode": "mock", "receipt": {"id": str(uuid4()), "inserted": False},
-        "wouldInsert": {"table": "model_output_analysis", "payload": {
-            "requestId": record["request_id"], "runId": record["run_id"],
-            "sessionId": record["session_id"], "status": record["status"],
-            "model": record["model_name"], "durationMs": record["duration_ms"],
-            "usage": record["usage"], "outputReference": {"runId": record["run_id"]},
-            "analysis": {}, "extensions": record["extensions"],
-        }},
-    }
+            logger.warning("本地追踪结束失败，继续使用本次观测")

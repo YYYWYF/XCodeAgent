@@ -38,11 +38,11 @@ def utc_datetime(value: Any) -> datetime | None:
 
 
 def trace_time(tree: Any, metadata: dict[str, Any], attribute: str, fallback: str | None) -> str | None:
-    """优先 SDK 实际边界并统一显示北京时间；只转换时区，不改变时刻或耗时。"""
+    """优先 SDK 实际边界，按北京时间输出到秒；内部时刻和耗时保持原始精度。"""
     value = utc_datetime(fallback)
     if metadata.get("model_started") is not False:
         value = utc_datetime(getattr(tree, attribute, None)) or value
-    return value.astimezone(BEIJING_TIMEZONE).isoformat() if value is not None else None
+    return value.astimezone(BEIJING_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S") if value is not None else None
 
 
 def trace_usage(tree: Any, metadata: dict[str, Any], fallback: dict[str, Any]) -> tuple[int | None, ...]:

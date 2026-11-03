@@ -2,14 +2,13 @@
 
 import asyncio
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
-from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+from httpx_sse import aconnect_sse
 from ag_ui.core import RunAgentInput
 from fastapi.testclient import TestClient
 
@@ -24,23 +23,17 @@ from tests.helpers import chunk, completion, envelope, read_events, settings, ss
 class ObservationServiceTests(unittest.TestCase):
     """验证响应合同不变、打印唯一性以及真实 SDK 的统计边界。"""
 
-    def setUp(self):
-        """使用临时数据库，所有 SDK HTTP 请求由离线传输拦截。"""
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.path = Path(self.temporary.name)
-
     def app(self, handler, **overrides):
         """创建注入 MockTransport 的完整服务。"""
-        config = settings(self.path, **overrides)
+        config = settings(**overrides)
         return create_app(config, Upstream(config, httpx.MockTransport(handler)))
 
     def summaries(self, output):
         """解析每次调用唯一的控制台 JSON，动作说明已包含在 identity。"""
         return [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{"identity":')]
 
-    def test_tail_usage_printed_once_saved_and_not_added_to_agui(self):
-        """等待独立用量尾帧，日志不重复、不改变模型协议，并保存同份摘要。"""
+    def test_tail_usage_printed_once_and_not_added_to_agui(self):
+        """等待独立用量尾帧，日志不重复且不改变模型协议。"""
         captured = []
 
         def handler(request):
@@ -86,10 +79,8 @@ class ObservationServiceTests(unittest.TestCase):
         self.assertNotIn("current_operation", record["data"])
         self.assertEqual(events[-1]["type"], "RUN_FINISHED")
         self.assertFalse(any(event.get("name") == "execution_trace" for event in events))
-        self.assertEqual(app.state.history.get("incoming-run")["analysis"]["execution_trace"], record)
         self.assertTrue(record["data"]["started_at"].endswith("+08:00"))
         self.assertTrue(record["data"]["ended_at"].endswith("+08:00"))
-        self.assertEqual(app.state.history.get("incoming-run")["input_context"], captured[0])
 
     def test_nonstream_uses_requested_model_and_null_stream_timing(self):
         """模型名取实际发送的配置，而非上游可能返回的别名。"""
@@ -136,7 +127,7 @@ class ObservationServiceTests(unittest.TestCase):
         self.assertEqual(captured[0]["tools"], request["tools"])
         result = next(event["value"] for event in events if event.get("name") == "model-inference.result")
         self.assertEqual(result["choices"][0]["message"]["tool_calls"], completion()["choices"][0]["message"]["tool_calls"])
-        self.assertNotIn("tool_observations", app.state.history.get("run-1")["analysis"])
+        self.assertNotIn("tool_observations", data)
         self.assertNotIn("TOOL_RESULT_PRIVATE", output.getvalue())
 
     def test_rejections_and_information_calls_do_not_print_summaries(self):
@@ -155,8 +146,8 @@ class ObservationServiceTests(unittest.TestCase):
             self.assertEqual(client.post("/model-inference/run", json=raw, headers={"Authorization": "Bearer local-model-transmit-dev-token"}).status_code, 422)
         self.assertEqual(output.getvalue(), "")
 
-    def test_sdk_retry_prints_one_summary_and_duplicate_does_not_print(self):
-        """SDK 连接重试归属同次推理，重复 runId 被拒绝后不重复打印。"""
+    def test_sdk_retry_and_repeated_run_id_each_print_one_summary(self):
+        """SDK 重试归属同次推理，同 runId 再次提交则独立执行和输出。"""
         attempts = []
 
         def handler(request):
@@ -171,11 +162,13 @@ class ObservationServiceTests(unittest.TestCase):
         raw["forwardedProps"]["modelInference"]["maxRetries"] = 1
         with redirect_stdout(output), TestClient(app) as client:
             read_events(client, raw)
-            duplicate = client.post("/model-inference/run", json=raw, headers={"Authorization": "Bearer local-model-transmit-dev-token"})
-        self.assertEqual(duplicate.status_code, 409)
-        self.assertEqual(len(attempts), 2)
-        self.assertEqual(len(self.summaries(output)), 1)
-        self.assertEqual(self.summaries(output)[0]["data"]["model"]["total_tokens"], 5)
+            repeated_events = read_events(client, raw)
+        self.assertEqual(repeated_events[-1]["type"], "RUN_FINISHED")
+        self.assertEqual(len(attempts), 3)
+        summaries = self.summaries(output)
+        self.assertEqual(len(summaries), 2)
+        self.assertEqual(len({record["data"]["span_id"] for record in summaries}), 2)
+        self.assertTrue(all(record["data"]["model"]["total_tokens"] == 5 for record in summaries))
 
     def test_http_timeout_and_incomplete_response_all_print_failure(self):
         """认证失败、超时和缺失结束原因均输出失败，且不泄露错误原文。"""
@@ -198,8 +191,8 @@ class ObservationServiceTests(unittest.TestCase):
                 self.assertNotIn("SECRET_PROMPT", output.getvalue())
                 self.assertNotIn("test-direct-secret", output.getvalue())
 
-    def test_print_failure_does_not_change_result_or_local_history(self):
-        """日志模块故障时推理与既有 SQLite 历史继续完成。"""
+    def test_print_failure_does_not_change_result(self):
+        """日志模块故障时模型推理仍正常完成。"""
         def handler(request):
             """提供正常模型结果。"""
             return httpx.Response(200, json=completion())
@@ -209,12 +202,11 @@ class ObservationServiceTests(unittest.TestCase):
             events = read_events(client, envelope(streaming=False))
         self.assertEqual(events[-1]["type"], "RUN_FINISHED")
         self.assertEqual(app.state.observation_output.stats()["failed"], 1)
-        self.assertEqual(app.state.history.get("run-1")["status"], "completed")
-        self.assertEqual(app.state.history.get("run-1")["analysis"]["execution_trace"]["data"]["status"], "completed")
+        self.assertEqual(next(event["snapshot"]["status"] for event in events if event["type"] == "STATE_SNAPSHOT"), "completed")
 
     def test_langsmith_sdk_ids_exist_without_upload_or_credentials(self):
         """真实 SDK 无凭证本地生成身份，不上传也保留根关系和模型成功结果。"""
-        config = settings(self.path)
+        config = settings()
 
         def handler(request):
             """模型请求仍然由离线 HTTP 正常完成。"""
@@ -233,7 +225,6 @@ class ObservationServiceTests(unittest.TestCase):
         self.assertEqual(data["trace_id"], data["span_id"])
         self.assertIsNone(data["parent_span_id"])
         self.assertEqual(data["status"], "completed")
-        self.assertEqual(app.state.history.get("run-1")["langsmith_run_id"], data["span_id"])
 
 
 class AsyncObservationServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -241,85 +232,123 @@ class AsyncObservationServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancelled_stream_closes_and_prints_partial_observation(self):
         """关闭消费者时关闭实际 SDK 流，并保存已取得的时间和未知用量。"""
-        with tempfile.TemporaryDirectory() as directory:
-            config = settings(Path(directory))
-            closed = []
+        config = settings()
+        closed = []
 
-            class Stream(httpx.AsyncByteStream):
-                """阻塞尾部输出，允许测试显式关闭消费方。"""
+        class Stream(httpx.AsyncByteStream):
+            """阻塞尾部输出，允许测试显式关闭消费方。"""
 
-                async def __aiter__(self):
-                    """只产生一个有效文本分片。"""
-                    yield ("data: " + json.dumps(chunk({"content": "partial"})) + "\n\n").encode()
-                    await asyncio.Event().wait()
+            async def __aiter__(self):
+                """只产生一个有效文本分片。"""
+                yield ("data: " + json.dumps(chunk({"content": "partial"})) + "\n\n").encode()
+                await asyncio.Event().wait()
 
-                async def aclose(self):
-                    """记录真实网络流释放。"""
-                    closed.append(True)
+            async def aclose(self):
+                """记录真实网络流释放。"""
+                closed.append(True)
 
-            def handler(request):
-                """将官方 SDK 连接到测试流。"""
-                return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Stream())
+        def handler(request):
+            """将官方 SDK 连接到测试流。"""
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Stream())
 
-            app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
-            self.addCleanup(app.state.observation_output.close)
-            raw = envelope()
-            run = RunAgentInput.model_validate(raw)
-            call = InferenceInput.model_validate(raw["forwardedProps"]["modelInference"])
-            events = app.state.service.events(run, call, app.state.service.reserve(run, call))
-            output = StringIO()
-            with redirect_stdout(output):
-                async for event in events:
-                    if getattr(event, "name", None) == "model-inference.chunk":
-                        break
-                await events.aclose()
-                await asyncio.to_thread(app.state.observation_output.close)
-            record = json.loads(output.getvalue().splitlines()[0])
-            self.assertTrue(closed)
-            self.assertEqual(record["data"]["status"], "cancelled")
-            self.assertIsNotNone(record["data"]["ended_at"])
-            self.assertIsNotNone(record["data"]["model"]["ttft_ms"])
-            self.assertIsNone(record["data"]["model"]["total_tokens"])
-            self.assertIsNone(record["data"]["error"])
-            self.assertEqual(app.state.history.get("run-1")["status"], "cancelled")
+        app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
+        self.addCleanup(app.state.observation_output.close)
+        raw = envelope()
+        run = RunAgentInput.model_validate(raw)
+        call = InferenceInput.model_validate(raw["forwardedProps"]["modelInference"])
+        events = app.state.service.events(run, call)
+        output = StringIO()
+        with redirect_stdout(output):
+            async for event in events:
+                if getattr(event, "name", None) == "model-inference.chunk":
+                    break
+            await events.aclose()
+            await asyncio.to_thread(app.state.observation_output.close)
+        record = json.loads(output.getvalue().splitlines()[0])
+        self.assertTrue(closed)
+        self.assertEqual(record["data"]["status"], "cancelled")
+        self.assertIsNotNone(record["data"]["ended_at"])
+        self.assertIsNotNone(record["data"]["model"]["ttft_ms"])
+        self.assertIsNone(record["data"]["model"]["total_tokens"])
+        self.assertIsNone(record["data"]["error"])
+
+    async def test_parallel_requests_with_same_run_id_execute_and_observe_independently(self):
+        """同 runId 的并发 HTTP 请求都调用上游，各自生成真实 Span 与用量。"""
+        config = settings()
+        entered = asyncio.Event()
+        requests = []
+
+        async def handler(request):
+            requests.append(json.loads(request.content))
+            if len(requests) == 2:
+                entered.set()
+            await asyncio.wait_for(entered.wait(), timeout=3)
+            response = completion()
+            count = int(json.loads(request.content)["messages"][0]["content"])
+            response["usage"] = {"prompt_tokens": count, "completion_tokens": 1, "total_tokens": count + 1}
+            return httpx.Response(200, json=response)
+
+        app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
+        self.addCleanup(app.state.observation_output.close)
+
+        async def invoke(client, count):
+            raw = envelope("same-run", streaming=False)
+            raw["forwardedProps"]["modelInference"]["request"]["messages"] = [{"role": "user", "content": str(count)}]
+            async with aconnect_sse(client, "POST", "/model-inference/run", json=raw,
+                                   headers={"Authorization": "Bearer local-model-transmit-dev-token"}) as source:
+                self.assertEqual(source.response.status_code, 200)
+                return [json.loads(event.data) async for event in source.aiter_sse()]
+
+        output = StringIO()
+        with redirect_stdout(output):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                results = await asyncio.wait_for(asyncio.gather(invoke(client, 2), invoke(client, 7)), timeout=5)
+            await asyncio.to_thread(app.state.observation_output.close)
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(all(events[-1]["type"] == "RUN_FINISHED" for events in results))
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(len(records), 2)
+        self.assertEqual({record["identity"]["run_id"] for record in records}, {"same-run"})
+        self.assertEqual(len({record["data"]["span_id"] for record in records}), 2)
+        self.assertEqual({record["data"]["model"]["total_tokens"] for record in records}, {3, 8})
+        self.assertTrue(all(record["data"]["status"] == "completed" for record in records))
 
     async def test_parallel_calls_do_not_share_identity_operation_or_usage(self):
         """多个真实异步模型请求交错时，各自用量、身份、动作仍准确关联。"""
-        with tempfile.TemporaryDirectory() as directory:
-            config = settings(Path(directory))
+        config = settings()
 
-            async def handler(request):
-                """按本次请求返回不同用量，模拟并行响应。"""
-                body = json.loads(request.content)
-                index = int(body["messages"][0]["content"])
-                await asyncio.sleep(0.001)
-                response = completion()
-                response["usage"] = {"prompt_tokens": index, "completion_tokens": 1, "total_tokens": index + 1}
-                return httpx.Response(200, json=response)
+        async def handler(request):
+            """按本次请求返回不同用量，模拟并行响应。"""
+            body = json.loads(request.content)
+            index = int(body["messages"][0]["content"])
+            await asyncio.sleep(0.001)
+            response = completion()
+            response["usage"] = {"prompt_tokens": index, "completion_tokens": 1, "total_tokens": index + 1}
+            return httpx.Response(200, json=response)
 
-            app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
-            self.addCleanup(app.state.observation_output.close)
+        app = create_app(config, Upstream(config, httpx.MockTransport(handler)))
+        self.addCleanup(app.state.observation_output.close)
 
-            async def invoke(index):
-                """每个任务构造独立请求，不设置进程级当前会话。"""
-                raw = envelope(f"run-{index}", False, {"extensions": {"current_operation": f"operation_{index}"}})
-                raw["threadId"] = f"thread-{index}"
-                raw["forwardedProps"]["modelInference"]["request"]["messages"] = [{"role": "user", "content": str(index)}]
-                run = RunAgentInput.model_validate(raw)
-                call = InferenceInput.model_validate(raw["forwardedProps"]["modelInference"])
-                async for _ in app.state.service.events(run, call, app.state.service.reserve(run, call)):
-                    pass
+        async def invoke(index):
+            """每个任务构造独立请求，不设置进程级当前会话。"""
+            raw = envelope(f"run-{index}", False, {"extensions": {"current_operation": f"operation_{index}"}})
+            raw["threadId"] = f"thread-{index}"
+            raw["forwardedProps"]["modelInference"]["request"]["messages"] = [{"role": "user", "content": str(index)}]
+            run = RunAgentInput.model_validate(raw)
+            call = InferenceInput.model_validate(raw["forwardedProps"]["modelInference"])
+            async for _ in app.state.service.events(run, call):
+                pass
 
-            output = StringIO()
-            with redirect_stdout(output):
-                await asyncio.gather(*(invoke(index) for index in range(1, 9)))
-                await asyncio.to_thread(app.state.observation_output.close)
-            lines = output.getvalue().splitlines()
-            self.assertEqual(len(lines), 8)
-            for line in lines:
-                record = json.loads(line)
-                index = int(record["identity"]["run_id"].split("-")[1])
-                self.assertEqual(record["identity"]["thread_id"], f"thread-{index}")
-                self.assertEqual(record["data"]["model"]["total_tokens"], index + 1)
-                self.assertEqual((record["data"]["span_kind"], record["data"]["run_name"]), ("model", "model-inference"))
-                self.assertEqual(record["identity"]["current_operation"], f"operation_{index}")
+        output = StringIO()
+        with redirect_stdout(output):
+            await asyncio.gather(*(invoke(index) for index in range(1, 9)))
+            await asyncio.to_thread(app.state.observation_output.close)
+        lines = output.getvalue().splitlines()
+        self.assertEqual(len(lines), 8)
+        for line in lines:
+            record = json.loads(line)
+            index = int(record["identity"]["run_id"].split("-")[1])
+            self.assertEqual(record["identity"]["thread_id"], f"thread-{index}")
+            self.assertEqual(record["data"]["model"]["total_tokens"], index + 1)
+            self.assertEqual((record["data"]["span_kind"], record["data"]["run_name"]), ("model", "model-inference"))
+            self.assertEqual(record["identity"]["current_operation"], f"operation_{index}")
