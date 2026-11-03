@@ -76,6 +76,7 @@ def runtime_source_fingerprint(root: Path) -> str:
     settings = Settings.from_env()
     digest.update(json.dumps([settings.model_provider, settings.model_base_url, settings.model_api_name,
                               settings.model_api_key, settings.model_custom_headers,
+                              settings.model_opencode_go_headers_enabled,
                               settings.model_timeout_seconds, settings.model_max_retries,
                               settings.default_temperature, settings.default_max_tokens], sort_keys=True).encode())
     return digest.hexdigest()

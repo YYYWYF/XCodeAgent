@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+独立 Agent Runtime 的 OpenCode Go 请求头沿用 `MODEL_OPENCODE_GO_HEADERS_ENABLED`：`agent_runtime_environment.py` 显式传递开关，`python_runtime_checks.py` 将其纳入配置摘要；外部 `springboot-template` 的 Runtime `settings.py` 与 `models/request_headers.py` / `factory.py` 在开启时为 OpenAI/Anthropic 的同步、异步及流式调用按当前 LangGraph thread 发送 `x-opencode-session` 和 `User-Agent`，默认关闭。不修改共享模型默认请求头或增加重试；无会话调用使用模型实例内稳定 UUID。回归：`tests.test_runtime_model_headers` 及模板 `tests/test_model_request_headers.py`。
+
 调试防过度约束：工具详情改为最近 40 条滚动展示，超过展示条数不再中止业务运行；前端回归覆盖 42 次工具事件仍正常完成。保留累计响应字节限制、当前线程串行/交互身份、停止收口与进程清理。不改原有历史存储。
 
 调试异常收口：响应超限及网络读取失败由 `runtimeDebugConversation` 标记未知结果并关闭 SDK 输入流，不再用 ReadableStream.error 向 SDK 注入异常；`AgentDebugPanel` 的发送/停止各自释放占用，任一仍进行时保留忙碌状态；`agent_runtime_workbench.start_debug` 在启动成功但登记失败时回收独立进程，回收失败明确报错。不改历史存储或开发主流程。
