@@ -1,0 +1,111 @@
+.runtime-agent-detail .agent-development-status {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  color: var(--wb-text);
+  container-type: inline-size;
+
+  // 产物汇总和任务结果分开命名，避免“已完成开发”被理解为本次任务成功。
+  .agent-development-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    h3 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.5; }
+    p { margin: 4px 0 0; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.6; }
+  }
+  .agent-development-summary {
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--wb-surface-subtle);
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 20px;
+    &[data-changed='true'] { color: var(--wb-warning); }
+  }
+  .agent-development-execution {
+    padding: 14px;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-surface-subtle);
+    .ant-alert-message { color: var(--wb-text); font-size: 14px; font-weight: 500; }
+    .ant-alert-description { color: var(--wb-text); font-size: 13px; line-height: 1.7; }
+    .ant-alert-content { min-width: 0; }
+    .ant-alert-icon { margin-right: 10px; font-size: 18px; }
+    &.ant-alert-error .ant-alert-icon, &.ant-alert-error .ant-alert-message { color: var(--wb-danger); }
+    &.ant-alert-info .ant-alert-icon { color: var(--wb-accent); }
+    .ant-alert-action { margin-left: 16px; }
+    p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .agent-development-execution-note { margin-top: 6px; color: var(--wb-text-secondary); font-size: 12px; }
+  }
+  .agent-development-change { margin: 0; color: var(--wb-warning); font-size: 13px; line-height: 1.7; }
+
+  .agent-development-modules { min-width: 0; }
+  .agent-development-modules-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+    h4 { margin: 0; font-size: 14px; font-weight: 600; }
+    > span { color: var(--wb-text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+  }
+  // 文件采用连续文本行，取消路径外的重复灰色标签与段落间距。
+  .agent-development-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 13px;
+    line-height: 1.7;
+    th, td { padding: 12px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--wb-border); }
+    thead th { padding-top: 6px; padding-bottom: 8px; color: var(--wb-text-secondary); font-size: 12px; font-weight: 400; }
+    th:first-child { width: 70px; padding-left: 0; }
+    th:nth-child(2) { width: 80px; }
+    th:last-child, td:last-child { padding-right: 0; }
+    tbody th { font-weight: 500; }
+    ul { padding: 0; margin: 0; list-style: none; }
+    li + li { margin-top: 4px; }
+    code { color: var(--wb-text); font-size: 12px; overflow-wrap: anywhere; }
+    p { margin: 4px 0 0; color: var(--wb-text-secondary); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  }
+  .agent-development-module-status {
+    color: var(--wb-text-secondary);
+    &[data-status='failed'], &[data-status='blocked'] { color: var(--wb-danger); }
+    &[data-status='running'], &[data-status='stopping'] { color: var(--wb-accent); }
+    &[data-status='awaiting_user'] { color: var(--wb-warning); }
+  }
+  .agent-development-no-files { color: var(--wb-text-secondary); font-size: 12px; }
+  .agent-development-empty {
+    padding: 28px 16px;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-surface-subtle);
+    text-align: center;
+    strong { font-size: 14px; font-weight: 500; }
+    p { margin: 6px 0 0; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
+  }
+  .agent-development-footer {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    p { margin: 0; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.7; }
+  }
+  .ant-btn { height: 32px; border-radius: 6px; font-size: 13px; box-shadow: none; }
+  .ant-btn[disabled] { opacity: 1; color: var(--wb-text-secondary); background: var(--wb-surface-subtle); border-color: var(--wb-border); }
+}
+
+@container (max-width: 520px) {
+  .agent-development-status .agent-development-execution {
+    flex-wrap: wrap;
+    .ant-alert-action { width: 100%; margin: 12px 0 0 28px; }
+  }
+  .agent-development-status .agent-development-table {
+    th:first-child { width: 48px; }
+    th:nth-child(2) { width: 60px; }
+    th, td { padding-right: 6px; padding-left: 6px; }
+  }
+}

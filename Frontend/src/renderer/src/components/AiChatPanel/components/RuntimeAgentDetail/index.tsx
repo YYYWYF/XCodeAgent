@@ -18,14 +18,15 @@ export default function RuntimeAgentDetail({ agent, workspaceRoot, onSaved, onSt
   return <div className="runtime-agent-detail">
     <header className="agent-detail-hero">
       <span className="agent-detail-avatar"><RobotOutlined /></span>
-      <div><span className="agent-detail-kicker">AGENT CONTRACT</span><h2>{agent.name}</h2><code>{agent.agentId}</code></div>
+      <div className="agent-detail-identity"><h2>{agent.name}</h2><code>{agent.agentId}</code></div>
     </header>
     <Tabs defaultActiveKey="design" items={[
       { key: 'design', label: '智能体设计', children: <>
-        <section className="agent-detail-section">
-          <div className="agent-detail-section-title"><h3>概览</h3><Tag>已确认的技术规划</Tag></div>
-          <Typography.Paragraph type="secondary">{agent.purpose}</Typography.Paragraph>
-          <div className="agent-page-bindings"><span>关联页面</span>{agent.pageIds.map((pageId) => <Tag key={pageId}>{pageId}</Tag>)}</div>
+        <section className="agent-design-overview">
+          <div className="agent-detail-section-title"><h3>用途与范围</h3><span className="agent-design-source">来源：已确认的技术规划</span></div>
+          <Typography.Paragraph>{agent.purpose || '尚未提供用途说明'}</Typography.Paragraph>
+          <div className="agent-page-bindings"><span>关联页面</span>{agent.pageIds.length
+            ? agent.pageIds.map((pageId) => <code key={pageId}>{pageId}</code>) : <span>未关联页面</span>}</div>
         </section>
         <AgentPromptEditor agent={agent} workspaceRoot={workspaceRoot} onSaved={onSaved} />
       </> },

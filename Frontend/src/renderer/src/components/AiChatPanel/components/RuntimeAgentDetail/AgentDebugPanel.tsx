@@ -1,4 +1,5 @@
-import { Alert, Button, Collapse, Input, Select, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Collapse, Input, Select, Space, Typography } from 'antd'
+import { InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { randomUUID } from '@ag-ui/client'
 import { useEffect, useRef, useState } from 'react'
 import type { RuntimeAgent, DebugCredential } from '../../../../service/runtimeWorkbench'
@@ -31,6 +32,8 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
   const running = view.status === 'running'
   const building = ['running', 'stopping'].includes(agent.development?.execution?.status || '')
   const expired = Boolean(credential && Date.now() >= credential.expiresAt * 1000)
+  const statusLabel = busy ? '正在处理…' : credential ? expired ? '已过期' : labels[view.status]
+    : external ? '其他窗口调试中' : active ? '等待同步' : '未启动'
 
   /** 所有控制动作共用拥有者，其他窗口不能使用本面板的停止权限。 */
   const control = (action: 'get_debug' | 'start_debug' | 'stop_debug', receive?: (value: DebugCredential) => void) =>
@@ -163,53 +166,78 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
 
   return <div className="agent-debug-panel">
     <header className="agent-debug-heading">
-      <h3>调试工作台</h3>
-      <Typography.Text type="secondary">当前为开发中版本，整体调试流程仍在梳理。</Typography.Text>
+      <div className="agent-debug-identity">
+        <h3>{agent.name} · 调试</h3>
+        <span className="agent-debug-status" role="status" data-active={Boolean(credential && !expired)}>{statusLabel}</span>
+      </div>
+      <Space size={8} wrap>
+        <Button type="text" icon={<ReloadOutlined />} disabled={busy || running} onClick={() => void sync()}>同步状态</Button>
+        {(active || credential || external) ? <Button disabled={busy || external} onClick={() => void stop()}>停止调试</Button>
+          : <Button type="primary" loading={busy} disabled={busy || building} onClick={() => void start()}>启动调试</Button>}
+      </Space>
     </header>
     <section className="agent-debug-controls" aria-label="调试环境">
-      <Space wrap>
-      <Tag>{busy ? '正在处理…' : credential ? expired ? '已过期' : labels[view.status] : external ? '其他窗口调试中' : '未启动'}</Tag>
-      <Button type="primary" loading={busy} disabled={busy || building || Boolean(credential) || active || external} onClick={() => void start()}>启动调试</Button>
-      <Button disabled={busy || external} onClick={() => void stop()}>停止调试</Button>
-      <Button disabled={busy || running} onClick={() => void sync()}>同步状态</Button>
-      </Space>
-      <Space wrap><Typography.Text type="secondary">模型：{String(agent.agentSettings.model?.model || agent.agentSettings.model?.provider || '当前应用模型配置')}</Typography.Text>
-        <Typography.Text type="secondary">页面上下文</Typography.Text>
+      <div className="agent-debug-model"><span>模型</span><strong>{String(agent.agentSettings.model?.model || agent.agentSettings.model?.provider || '跟随应用配置')}</strong></div>
+      <div className="agent-debug-context"><span>页面上下文</span>
+        {/* 页面选项留在当前面板中，继承明暗主题变量。 */}
         <Select aria-label="调试页面上下文" value={pageId} disabled={busy || running || view.messages.length > 0}
+          getPopupContainer={(trigger) => trigger.parentElement || trigger}
           options={(agent.pageIds.length ? agent.pageIds : ['debug']).map((id) => ({ label: id, value: id }))} onChange={setPageId} />
-        <Button disabled={!credential || busy || expired || running} onClick={() => { if (credential) newConversation(credential) }}>新建会话</Button>
-      </Space>
+      </div>
     </section>
-    <Alert type="info" showIcon message="调试使用真实模型、工具和当前数据源，可能产生业务写入；结果不计入开发或正式验收。" />
+    <p className="agent-debug-notice"><InfoCircleOutlined /><span>使用真实模型、工具和当前数据源，可能写入业务数据；结果不计入开发或正式验收。</span></p>
     {building && <Alert type="info" message="当前智能体正在生成或停止开发任务，请等待代码写入结束后启动调试。" />}
     {error && <Alert type="error" showIcon message={error} />}
     {view.error && <Alert type="error" showIcon message={view.error} />}
     {external && <Alert type="warning" showIcon message="当前工作区由其他调试窗口占用，请在原窗口停止或等待十分钟凭据过期。" />}
     {restartRequired && <Alert type="warning" showIcon message="代码或配置已变化，请停止并重新启动以加载最新内容。" />}
-    <div className={`agent-debug-messages${!view.messages.length ? ' is-empty' : ''}`} aria-live="polite">
+    <div className="agent-debug-workspace">
+    <section className="agent-debug-conversation" aria-label="调试对话">
+    <div className="agent-debug-section-heading"><h4>调试对话</h4>
+      <Button type="text" size="small" disabled={!credential || busy || expired || running} onClick={() => { if (credential) newConversation(credential) }}>新建会话</Button>
+    </div>
+    <div className={`agent-debug-messages${!view.messages.length ? ' is-empty' : ''}`} role="log" aria-live="polite" aria-relevant="additions text">
       {!view.messages.length && <div className="agent-debug-empty">
         <h4>{credential ? '发送第一条调试消息' : '开始一次调试'}</h4>
-        <Typography.Text type="secondary">{credential ? '在下方输入问题，查看智能体的流式回复。' : '点击「启动调试」准备环境，再发送问题。'}</Typography.Text>
+        <p>{credential ? '环境已就绪，输入问题查看智能体回复。' : '启动环境后，即可发送问题并查看回复与工具调用。'}</p>
       </div>}
-      {view.messages.map((item) => <article key={item.id}><strong>{item.role === 'user' ? '我' : agent.name}</strong><p>{item.content}</p></article>)}
+      {view.messages.map((item) => <article className={`agent-debug-message is-${item.role === 'user' ? 'user' : 'assistant'}`} key={item.id}>
+        <strong>{item.role === 'user' ? '我' : agent.name}</strong><p>{item.content}</p></article>)}
     </div>
     <section className="agent-debug-composer" aria-label="调试消息输入">
     {view.pending && <Alert type="warning" showIcon message={view.pending.message} description={view.pending.kind === 'clarification'
       ? '请在下方输入回答并提交。' : <Space><Button disabled={running || busy || expired || restartRequired} onClick={() => void send(true)}>同意</Button>
         <Button disabled={running || busy || expired || restartRequired} onClick={() => void send(false)}>拒绝</Button></Space>} />}
-    <Input.TextArea aria-label="调试消息" rows={3} maxLength={8000} value={draft} onChange={(event) => setDraft(event.target.value)}
+    <Input.TextArea aria-label="调试消息" autoSize={{ minRows: 2, maxRows: 5 }} maxLength={8000} value={draft} onChange={(event) => setDraft(event.target.value)}
       disabled={!credential || busy || expired || running || restartRequired || view.status === 'unknown' || Boolean(view.pending && view.pending.kind !== 'clarification')}
-      placeholder="输入调试问题或澄清回答" />
-    <Space><Button type="primary" disabled={!credential || busy || expired || running || restartRequired || !draft.trim() || view.status === 'unknown'
+      placeholder={credential ? '输入调试问题或澄清回答…' : '启动调试后，在这里输入问题…'} />
+    <div className="agent-debug-composer-footer">
+    <Typography.Text type="secondary">仅保留当前面板内的对话</Typography.Text>
+    <Space size={8}>
+      {running && <Button onClick={() => conversation.current?.stop()}>停止接收</Button>}
+      <Button type="primary" disabled={!credential || busy || expired || running || restartRequired || !draft.trim() || view.status === 'unknown'
       || Boolean(view.pending && view.pending.kind !== 'clarification')}
-      onClick={() => void send(view.pending ? draft : undefined)}>{view.pending ? '提交回答' : '发送'}</Button>
-      <Button disabled={!running} onClick={() => conversation.current?.stop()}>停止接收</Button></Space>
-    <Typography.Text type="secondary">对话仅保留在当前面板内存中。</Typography.Text>
+      onClick={() => void send(view.pending ? draft : undefined)}>{view.pending ? '提交回答' : '发送'}</Button></Space>
+    </div>
     </section>
-    {view.tools.length === 0 && <Typography.Text type="secondary">尚未收到工具明细事件。当前 Runtime 若未公开工具事件，此处不能判断内部是否调用过工具。</Typography.Text>}
-    {view.tools.length > 0 && <Collapse><Collapse.Panel key="tools" header={`最近工具执行详情（${view.tools.length}/40，参数和结果最多展示 4096 字符）`}>
-      {view.tools.map((tool) => <article key={tool.id}><strong>{tool.name} · {tool.elapsed === undefined ? '运行中／未收到结果' : `${tool.elapsed} ms`}</strong>
-        <pre>{tool.args}</pre><pre>{tool.result}</pre></article>)}
-    </Collapse.Panel></Collapse>}
+    </section>
+    <aside className="agent-debug-tools" aria-label="工具调用">
+      <div className="agent-debug-section-heading"><h4>工具调用</h4><span>{view.tools.length ? `最近 ${view.tools.length} 条` : '暂无事件'}</span></div>
+      {view.tools.length === 0 ? <div className="agent-debug-tools-empty">
+        <strong>等待工具调用事件</strong>
+        <p>对话中的工具参数与结果会显示在这里。</p>
+        <p>尚未收到事件时，无法判断内部是否调用过工具。</p>
+      </div> : <>
+        <p className="agent-debug-tools-caption">保留最近 40 条，参数和结果各最多展示 4096 字符。</p>
+        <Collapse ghost>
+          {view.tools.map((tool) => <Collapse.Panel key={tool.id} header={<span className="agent-debug-tool-title"><strong>{tool.name}</strong>
+            <span>{tool.elapsed === undefined ? '运行中／未收到结果' : `${tool.elapsed} ms`}</span></span>}>
+            <span className="agent-debug-tool-label">参数</span><pre>{tool.args || '暂无参数'}</pre>
+            <span className="agent-debug-tool-label">结果</span><pre>{tool.result || '尚未收到结果'}</pre>
+          </Collapse.Panel>)}
+        </Collapse>
+      </>}
+    </aside>
+    </div>
   </div>
 }
