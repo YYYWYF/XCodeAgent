@@ -628,6 +628,7 @@ def _requirements_prompt(
         "for example role项目经理 becomes role_project_manager. "
         "Every page must have a stable lower_snake_case pageId, a Chinese user-facing name (页面中文名，例如「案件风险查询页」「订单详情页」，绝不是 page_case_risk_inquiry 这类英文标识符), "
         "a unique path, module_id, and description. The pageId is the stable technical identifier; the name is the display label shown to users and must always be Chinese. "
+        "Never use 'welcome' or 'authorization_management' as a pageId: these two identifiers are reserved by the application template for its built-in system pages, and any business page using them will be rejected at code-generation time. Even when the user explicitly asks for a '欢迎页' or '权限管理页', pick a distinct business pageId such as 'home', 'hello_world', 'main', or 'access_control' instead. "
         "Use '/' only for the single home/dashboard page; all other pages must have business routes. "
         "When the user explicitly specifies page paths, preserve them as-is. "
         "Never return multiple pages with path '/'. "

@@ -35,6 +35,9 @@ class RepositoryBranchAction(BaseModel):
     workspace_root: str | None = Field(default=None, alias="workspaceRoot", max_length=4096)
     # 用户在新建分支时是否已确认覆盖远端同名分支。
     allow_overwrite: bool = Field(default=False, alias="allowOverwrite")
+    # create 动作的可选起点（历史分支名 / 提交 sha）。「基于历史版本继续开发」用：
+    # 新分支从这条历史 ref 建出，而不是从当前 HEAD。仅 create 接受该字段。
+    start_point: str | None = Field(default=None, alias="startPoint", max_length=255)
 
     @model_validator(mode="after")
     def validate_required_fields(self) -> "RepositoryBranchAction":
@@ -48,6 +51,9 @@ class RepositoryBranchAction(BaseModel):
             raise ValueError(f"{self.action} 必须提供 repoUrl。")
         if self.action in {"create", "push"} and not str(self.workspace_root or "").strip():
             raise ValueError(f"{self.action} 必须提供 workspaceRoot。")
+        # startPoint 是「基于历史版本继续开发」的语义，只在 create 上有意义。
+        if self.start_point is not None and self.action != "create":
+            raise ValueError("startPoint 仅在 create 动作上有效。")
         return self
 
 
@@ -100,6 +106,7 @@ def build_repository_branch_ag_ui_stream(
                 request.workspace_root or "",
                 branch,
                 allow_overwrite=request.allow_overwrite,
+                start_point=request.start_point,
             )
             message = (
                 f"已创建并推送到版本 {branch}。"

@@ -33,6 +33,8 @@ type Props = {
   onStartIteration?: () => void
   /** 切换查看分支。 */
   onBranchSelect?: (branchName: string) => void
+  /** 「基于此版本迭代」：以历史分支为起点新建分支继续开发。 */
+  onStartHistoricalIteration?: (sourceBranchName: string) => void
   /** 当前查看的分支名。 */
   viewingBranchName?: string
 }
@@ -52,6 +54,7 @@ export default function WorkbenchTopBar({
   onPublishBranch,
   onStartIteration,
   onBranchSelect,
+  onStartHistoricalIteration,
   viewingBranchName
 }: Props): JSX.Element {
   const { phase, derivedPhase, reachedPhase, manualOverride, switchPhase, testEntryGate, locked } =
@@ -202,6 +205,7 @@ export default function WorkbenchTopBar({
             onPublish={onPublishBranch || (() => {})}
             onStartIteration={onStartIteration || (() => {})}
             onBranchSelect={onBranchSelect || (() => {})}
+            onStartHistoricalIteration={onStartHistoricalIteration}
             part="terminal"
           />
         </>

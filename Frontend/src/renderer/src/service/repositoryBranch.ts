@@ -152,6 +152,11 @@ export async function createRepositoryBranch(input: {
   branchName: string
   /** 用户是否已确认覆盖远端同名分支。 */
   allowOverwrite?: boolean
+  /**
+   * 可选起点：传入历史分支名时，新分支从那条历史分支的 HEAD 建出，
+   * 而不是从当前 HEAD。仅在「基于历史版本继续开发」流程使用。
+   */
+  startPoint?: string
   threadId?: string
 }): Promise<RepositoryBranchOutcome> {
   const agent = createAgUiHttpAgent({
@@ -185,7 +190,9 @@ export async function createRepositoryBranch(input: {
           action: 'create',
           workspaceRoot: input.workspaceRoot,
           branchName: input.branchName,
-          allowOverwrite: input.allowOverwrite === true
+          allowOverwrite: input.allowOverwrite === true,
+          // startPoint 仅在调用方明确给出时透传；空串按未传处理（后端也校验非空）。
+          ...(input.startPoint ? { startPoint: input.startPoint } : {})
         }
       }
     },

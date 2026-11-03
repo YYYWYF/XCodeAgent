@@ -4,7 +4,7 @@ import type { Message } from '@ag-ui/core'
 import type { VersionControlCommitResult, VersionControlSnapshot } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
-type VersionControlAction = 'inspect' | 'inspect_all' | 'commit' | 'summarize'
+type VersionControlAction = 'inspect' | 'inspect_all' | 'commit' | 'summarize' | 'discard'
 
 type VersionControlAgUiPayload = {
   schemaVersion: 1
@@ -21,6 +21,8 @@ type VersionControlAgUiPayload = {
   remainingDirty?: boolean
   /** summarize 动作生成的业务变更说明；生成不出来时是空串。 */
   changeSummary?: string
+  /** discard 动作返回的被丢弃路径（用于提示）。 */
+  discardedPaths?: string[]
   error?: { type?: string; message?: string }
 }
 
@@ -155,6 +157,33 @@ export async function summarizeVersionControl(workspaceRoot: string): Promise<st
     '根据本次改动生成变更说明。'
   )
   return typeof response.changeSummary === 'string' ? response.changeSummary : ''
+}
+
+/**
+ * 丢弃工作区全部未提交改动（含暂存区与未跟踪文件）。
+ *
+ * 用于「基于历史版本继续开发」流程：切换起点的 checkout 需要工作区干净，用户
+ * 在弹框里明确选择「丢掉」后由这里把仓库重置回 HEAD。返回重置后的最新快照
+ * 与被丢弃的路径列表（用于结果提示）。
+ */
+export async function discardVersionControl(input: {
+  workspaceRoot: string
+}): Promise<{ snapshot: VersionControlSnapshot; discardedPaths: string[] }> {
+  const response = await runVersionControl(
+    { action: 'discard', confirmed: true, workspaceRoot: input.workspaceRoot },
+    '丢弃当前工作区的全部未提交改动。'
+  )
+  if (
+    response.action !== 'discard' ||
+    !isVersionControlSnapshot(response.snapshot) ||
+    !Array.isArray(response.discardedPaths)
+  ) {
+    throw new Error('版本控制接口没有返回完整的丢弃结果。')
+  }
+  return {
+    snapshot: response.snapshot,
+    discardedPaths: response.discardedPaths
+  }
 }
 
 /** 在用户确认后提交精确选择的二次修改文件。 */

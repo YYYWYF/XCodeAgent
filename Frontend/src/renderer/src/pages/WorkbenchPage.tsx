@@ -4,7 +4,10 @@ import { randomUUID } from '@ag-ui/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LeftPanel, WorkbenchTopBar } from '../components'
 import WorkbenchVersionModals from '../components/WorkbenchVersionModals'
-import type { IterationBranchChoice } from '../components/WorkbenchVersionModals'
+import type {
+  HistoricalIterationDirtyChoice,
+  IterationBranchChoice
+} from '../components/WorkbenchVersionModals'
 import { UncommittedChangesProvider, WorkbenchPhaseProvider } from '../context'
 import {
   inspectWorkspacePlanningArtifacts,
@@ -28,7 +31,11 @@ import {
   resolveBranchChain
 } from '../service/applicationBranches'
 import { publishVersion } from '../service/versionPublish'
-import { summarizeVersionControl } from '../service/versionControl'
+import {
+  discardVersionControl,
+  inspectAllVersionControl,
+  summarizeVersionControl
+} from '../service/versionControl'
 import { startIteration } from '../service/iterationService'
 import { asMessageClause, createRepositoryBranch } from '../service/repositoryBranch'
 import type {
@@ -182,6 +189,16 @@ function WorkbenchPage({
   const [iterationChoice, setIterationChoice] = useState<IterationBranchChoice>({
     mode: 'current'
   })
+  // 「基于此版本迭代」弹框：起点历史分支名；为空串表示弹框关闭。
+  const [historicalIterationSource, setHistoricalIterationSource] = useState<string>('')
+  // 「基于此版本迭代」弹框：新分支名草稿。
+  const [historicalIterationBranchName, setHistoricalIterationBranchName] = useState<string>('')
+  // 「基于此版本迭代」弹框：未提交改动数；打开弹框时一次性拉取。
+  const [historicalIterationUncommittedCount, setHistoricalIterationUncommittedCount] =
+    useState<number>(0)
+  // 「基于此版本迭代」弹框：未提交改动处理方式（commit = 审阅并提交 / discard = 丢掉）。
+  const [historicalIterationDirtyChoice, setHistoricalIterationDirtyChoice] =
+    useState<HistoricalIterationDirtyChoice>('discard')
   // 分支切换全屏加载的目标名；为空时不显示。
   const [switchingTargetLabel, setSwitchingTargetLabel] = useState<string | undefined>(undefined)
   const entryStartedAtRef = useRef(Date.now())
@@ -730,6 +747,169 @@ function WorkbenchPage({
     [workspaceApplication]
   )
 
+  // 打开「基于此版本迭代」弹框：先一次性拉取最新未提交改动数，决定是否需要
+  // 用户选 commit / discard。读取失败按 0 处理 —— 让用户至少能开弹框，而不是
+  // 被一次状态检查挡在功能外。
+  const handleOpenHistoricalIteration = useCallback(
+    (sourceBranchName: string): void => {
+      setHistoricalIterationSource(sourceBranchName)
+      setHistoricalIterationBranchName('')
+      setHistoricalIterationDirtyChoice('discard')
+      setHistoricalIterationUncommittedCount(0)
+      const workspaceRoot = workspaceApplication.workspaceRoot
+      if (!workspaceRoot) return
+      void inspectAllVersionControl(workspaceRoot)
+        .then((snapshot) => {
+          setHistoricalIterationUncommittedCount(snapshot.codePaths.length)
+        })
+        .catch((error) => {
+          console.warn('读取未提交改动数失败，按 0 处理。', error)
+        })
+    },
+    [workspaceApplication.workspaceRoot]
+  )
+
+  // 关闭「基于此版本迭代」弹框：清掉所有相关草稿。
+  const handleCancelHistoricalIteration = useCallback((): void => {
+    setHistoricalIterationSource('')
+    setHistoricalIterationBranchName('')
+    setHistoricalIterationUncommittedCount(0)
+    setHistoricalIterationDirtyChoice('discard')
+  }, [])
+
+  // 确认「基于此版本迭代」：在工作区干净（无未提交改动，或用户选了 discard）时
+  // 以历史分支为起点创建新分支，清空规划产物，重置 lifecycle，把新分支写盘。
+  // 与 handleConfirmIteration 的关键差异：起点不是当前 HEAD，而是历史分支的 HEAD。
+  // 选 commit 的情况不进入这里 —— 弹框已经把那种选择路由到 handleGoToCommitHistoricalIteration。
+  const handleConfirmHistoricalIteration = useCallback(async (): Promise<void> => {
+    if (!historicalIterationSource || !applicationLifecycle) return
+    const sourceBranchName = historicalIterationSource
+    const targetBranchName = historicalIterationBranchName.trim()
+    const workspaceRoot = workspaceApplication.workspaceRoot
+    if (!workspaceRoot || !targetBranchName) return
+    // 起点分支记录：新分支的"上一代"分支（保留它的描述用于分支表新增记录的描述兜底）。
+    const sourceBranch = findBranch(workspaceApplication, sourceBranchName)
+    const shouldDiscard =
+      historicalIterationUncommittedCount > 0 &&
+      historicalIterationDirtyChoice === 'discard'
+    handleCancelHistoricalIteration()
+    setSwitchingTargetLabel(targetBranchName)
+    try {
+      // 1. 用户选 discard 时先调后端重置工作区（git reset --hard HEAD + git clean -fd）。
+      //    这是「丢掉」的语义：未提交改动被永久丢弃，不可恢复。
+      if (shouldDiscard) {
+        await discardVersionControl({ workspaceRoot })
+      }
+      // 2. 以历史分支为起点创建新分支并推送到远端。后端 create_local_branch 在
+      //    startPoint 不为空时执行 `git checkout -b <branch> <startPoint>`。
+      const created = await createRepositoryBranch({
+        workspaceRoot,
+        branchName: targetBranchName,
+        startPoint: sourceBranchName
+      })
+      const branchCreationFailed = created.status !== 'pushed'
+      if (branchCreationFailed) {
+        // 后端消息是完整句子（自带句号），嵌进本句前先去掉句末标点，否则会出现「。。」。
+        message.warning(
+          `版本 ${targetBranchName} 未提交到远端：${asMessageClause(created.message, '原因未知')}。已切换到该版本，稍后可重试提交。`
+        )
+      }
+      // 3. 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md + application.json），
+      //    回到设计阶段。语义与 handleConfirmIteration 一致。
+      await startIteration({
+        workspaceRoot,
+        branchName: targetBranchName,
+        description: sourceBranch?.description || ''
+      })
+      // 3.5 清空该工作区的会话历史，避免上一轮对话串入新迭代。
+      await window.devAgentStudio?.sessions?.clearWorkspace({ workspaceRoot })
+      // 4. 创建全新的 lifecycle（collecting_requirement），继承上一轮**已完成**的产物
+      //    进度（与 handleConfirmIteration 同一口径）。
+      const inheritedArtifacts =
+        sourceBranch?.lifecycle?.developmentArtifacts ??
+        applicationLifecycle.developmentArtifacts
+      const newLifecycle = await createApplicationLifecycle(
+        workspaceApplication,
+        randomUUID(),
+        inheritedArtifacts
+      )
+      const awaitingLifecycle: ApplicationLifecycle = {
+        ...newLifecycle,
+        initialization: { ...newLifecycle.initialization, status: 'awaiting_user' }
+      }
+      onApplicationLifecycleReset(awaitingLifecycle)
+      const newThreadId = awaitingLifecycle.initialization?.threadId
+      if (newThreadId) {
+        onIterationStarted(workspaceApplication, newThreadId, awaitingLifecycle)
+      }
+      // 5. 更新分支表：追加新分支记录，并把当前分支指针移过去。
+      const existingBranches = workspaceApplication.branches || []
+      const nextBranches = [
+        ...existingBranches,
+        createBranchRecord(targetBranchName, awaitingLifecycle, Date.now())
+      ]
+      const nextApp: ApplicationConfig = {
+        ...workspaceApplication,
+        branches: nextBranches,
+        branchName: targetBranchName
+      }
+      setWorkspaceApplication(nextApp)
+      await persistApplicationConfig(nextApp)
+      // 6. 重置前端规划状态，新迭代从空白开始；viewingBranchName 清空让界面落在
+      //    新的当前分支上。
+      setDevelopmentPlanningPages([])
+      setDevelopmentPlanningPageTree([])
+      setDevelopmentPlanningApiContracts([])
+      setDevelopmentPlanningEntities([])
+      setViewingBranchName('')
+      autoPublishShownRef.current = false
+      setSwitchingTargetLabel(undefined)
+      message.success(
+        branchCreationFailed
+          ? `已基于版本 ${sourceBranchName} 创建新版本 ${targetBranchName}，但未提交到远端。`
+          : `已基于版本 ${sourceBranchName} 创建新版本 ${targetBranchName}，开启新的旅程。`
+      )
+    } catch (error) {
+      setSwitchingTargetLabel(undefined)
+      message.error(error instanceof Error ? error.message : '基于此版本迭代失败')
+    }
+  }, [
+    applicationLifecycle,
+    handleCancelHistoricalIteration,
+    historicalIterationBranchName,
+    historicalIterationDirtyChoice,
+    historicalIterationSource,
+    historicalIterationUncommittedCount,
+    onApplicationLifecycleReset,
+    onIterationStarted,
+    persistApplicationConfig,
+    workspaceApplication
+  ])
+
+  // 「审阅并提交」分支：关闭历史迭代弹框，切回当前可编辑分支，再打开提交推送弹框。
+  // 用户提交完后回到当前分支，那时 dirty=0，再次点击「基于此版本迭代」会直接进入
+  // 建分支流程。
+  const handleGoToCommitHistoricalIteration = useCallback((): void => {
+    // 当前可编辑分支名：弹框打开时是基于历史分支查看，所以需要主动切回去。
+    const activeName = workspaceApplication.branchName || ''
+    handleCancelHistoricalIteration()
+    if (activeName) {
+      setViewingBranchName(activeName)
+    }
+    // 与 handleOpenPublish 同一入口：重置描述并触发模型预填。
+    setPublishDescription('')
+    setVersionGenerating(null)
+    setPublishModalOpen(true)
+    descriptionEditedRef.current = false
+    requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
+    message.info('请先提交当前版本的改动，提交完成后再回来「基于此版本迭代」。')
+  }, [
+    handleCancelHistoricalIteration,
+    requestDescriptionDraft,
+    workspaceApplication.branchName,
+    workspaceApplication.workspaceRoot
+  ])
+
   return (
     <Layout className={cx('workbench-shell')} data-theme={theme}>
       {developmentPlanningPagesLoaded ? (
@@ -766,6 +946,7 @@ function WorkbenchPage({
                   setIterationModalOpen(true)
                 }}
                 onBranchSelect={handleBranchSelect}
+                onStartHistoricalIteration={handleOpenHistoricalIteration}
                 viewingBranchName={viewingBranchName}
               />
               <div className={cx('workbench-shell-body')}>
@@ -840,6 +1021,15 @@ function WorkbenchPage({
               onIterationChoiceChange={setIterationChoice}
               onCancelIteration={() => setIterationModalOpen(false)}
               onConfirmIteration={handleConfirmIteration}
+              historicalIterationSourceBranch={historicalIterationSource || undefined}
+              historicalIterationBranchName={historicalIterationBranchName}
+              onHistoricalIterationBranchNameChange={setHistoricalIterationBranchName}
+              historicalIterationUncommittedCount={historicalIterationUncommittedCount}
+              historicalIterationDirtyChoice={historicalIterationDirtyChoice}
+              onHistoricalIterationDirtyChoiceChange={setHistoricalIterationDirtyChoice}
+              onCancelHistoricalIteration={handleCancelHistoricalIteration}
+              onConfirmHistoricalIteration={handleConfirmHistoricalIteration}
+              onGoToCommitHistoricalIteration={handleGoToCommitHistoricalIteration}
               switchingTargetLabel={switchingTargetLabel}
             />
           </UncommittedChangesProvider>

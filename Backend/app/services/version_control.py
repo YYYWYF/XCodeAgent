@@ -128,6 +128,31 @@ class CommitVersionControlRequest(BaseModel):
         return normalized
 
 
+class DiscardVersionControlRequest(BaseModel):
+    """校验一次"丢弃工作区全部未提交改动"的请求。
+
+    使用场景是「基于历史版本继续开发」：切换起点的 git checkout 需要工作区干净，
+    用户明确选择"丢掉"时由这里把仓库重置回 HEAD。`confirmed` 必须由前端在弹框
+    确认后才置 True，否则拒绝执行 —— 与 commit 同一套"显式确认才生效"的纪律。
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["discard"]
+    confirmed: bool
+    workspace_root: str = Field(alias="workspaceRoot", min_length=1)
+
+
+class DiscardVersionControlResult(BaseModel):
+    """返回丢弃完成后的最新 Git 快照与被丢弃的路径列表（用于提示）。"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["discard"] = "discard"
+    snapshot: VersionControlSnapshot
+    discarded_paths: list[str] = Field(alias="discardedPaths")
+
+
 class VersionControlCommitResult(BaseModel):
     """返回成功提交及提交后的剩余工作区状态。"""
 
@@ -291,6 +316,68 @@ def commit_version_control(
         committedPaths=selected_paths,
         remainingDirty=after_snapshot.dirty,
         snapshot=after_snapshot,
+    )
+
+
+def discard_version_control(
+    request: DiscardVersionControlRequest,
+) -> DiscardVersionControlResult:
+    """把工作区重置回 HEAD，丢弃全部未提交改动（含暂存区与未跟踪文件）。
+
+    实现选择 `git reset --hard HEAD` + `git clean -fd` 而不是逐文件 restore：
+    - rename / delete / staged / unstaged / untracked 全部一种语义覆盖，不需要
+      解析 porcelain 的 rename 双记录（"R  new\\0old\\0"）做特殊处理；
+    - 与「审阅并提交 / 丢掉」的产品语义一致 —— 用户选"丢掉"就是放弃整个工作区
+      改动，而不是"挑几个文件丢掉"。
+
+    `.devagentstudio/application.json` 会被一并重置：它本就是 tracked 文件、当前
+    内容也已写进 HEAD；调用方（基于历史版本迭代流程）会在重置后用内存里的最新
+    分支表重新写盘，所以这里不需要特殊保护。其他 `.devagentstudio` 运行时产物
+    （runtime/、cache/、checkpoints/）原本就被 `_read_status` 过滤，不进版本，
+    `git clean -fd`（不带 -x）也不会去碰 ignore 文件。
+    """
+
+    if not request.confirmed:
+        raise VersionControlError("丢弃工作区改动前需要用户明确确认。")
+
+    workspace_root = _resolve_workspace_root(request.workspace_root)
+    repository_root = _resolve_independent_repository_root(workspace_root)
+
+    # 先记录丢弃前的变更清单，用于结果回显"丢掉了什么"。
+    _status_bytes, before_files = _read_status(repository_root)
+    discarded_paths = [item.path for item in before_files]
+
+    if not discarded_paths:
+        # 没有可丢弃内容时直接返回当前快照，避免无谓的 git 写操作。
+        snapshot = inspect_all_version_control(
+            InspectAllVersionControlRequest(
+                action="inspect_all", workspaceRoot=str(workspace_root)
+            )
+        )
+        return DiscardVersionControlResult(snapshot=snapshot, discardedPaths=[])
+
+    # reset --hard 覆盖 staged + worktree 的 tracked 改动；clean -fd 清掉未跟踪文件。
+    # 两步都走 _run_git_checked：失败抛 VersionControlError，由协议层转成 failed 结果。
+    _run_git_checked(
+        repository_root,
+        ["reset", "--hard", "HEAD"],
+        "无法丢弃已跟踪文件的改动",
+        timeout=30,
+    )
+    _run_git_checked(
+        repository_root,
+        ["clean", "-fd"],
+        "无法清理未跟踪文件",
+        timeout=30,
+    )
+
+    after_snapshot = inspect_all_version_control(
+        InspectAllVersionControlRequest(
+            action="inspect_all", workspaceRoot=str(workspace_root)
+        )
+    )
+    return DiscardVersionControlResult(
+        snapshot=after_snapshot, discardedPaths=discarded_paths
     )
 
 

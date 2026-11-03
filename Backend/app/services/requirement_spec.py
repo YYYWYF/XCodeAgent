@@ -30,6 +30,17 @@ from app.workspace.spec_documents import (
 
 _LOWER_SNAKE_CASE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 
+# 模板 Route Projector 的保留 pageId：模板自己占用这些 ID 渲染系统页
+# （欢迎页 / 权限管理页），业务页面再使用会让 Route Projector 在开发阶段
+# 直接拒绝（"业务 pageId 与模板保留 pageId 冲突"）。在设计阶段就把它们拦下，
+# 让模型重新选一个，而不是拖到开发阶段才暴露。
+#
+# 当前清单与 模板_后端/springboot-template/.../route-projector.mjs 的
+# RESERVED_PAGE_IDS 保持一致。模板将来要扩展保留字时，**优先**让模板契约
+# （route-projector.json）新增 reservedPageIds 字段，这里再读它，而不是继续
+# 在后端硬编码 —— 那是这份清单的最终归属。
+_RESERVED_PAGE_IDS: frozenset[str] = frozenset({"welcome", "authorization_management"})
+
 
 def _default_authorization_requirements() -> dict[str, Any]:
     """构造当前 RequirementSpec 使用的权限需求默认结构。"""
@@ -507,6 +518,11 @@ def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> li
                 errors.append(f"页面清单第 {index + 1} 项缺少 pageId")
             elif not _is_lower_snake_case(page_id):
                 errors.append(f"页面清单第 {index + 1} 项的 pageId 必须为 lower_snake_case")
+            elif page_id in _RESERVED_PAGE_IDS:
+                errors.append(
+                    f"页面清单第 {index + 1} 项的 pageId「{page_id}」与模板保留 pageId 冲突，"
+                    "请改用其他名称（模板已占用该 ID 渲染系统页）"
+                )
             for field_name in ("name", "path", "module_id", "description"):
                 if not str(page.get(field_name) or "").strip():
                     errors.append(f"页面清单第 {index + 1} 项缺少 {field_name}")

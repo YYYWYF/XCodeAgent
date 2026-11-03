@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Button, Dropdown } from 'antd'
-import { DownOutlined, HistoryOutlined, LockOutlined } from '@ant-design/icons'
+import { DownOutlined, HistoryOutlined, LockOutlined, RollbackOutlined } from '@ant-design/icons'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import {
   currentBranch,
@@ -22,6 +22,11 @@ type Props = {
   onPublish: () => void
   onStartIteration: () => void
   onBranchSelect: (branchName: string) => void
+  /**
+   * 「基于此版本迭代」入口：当前查看的是历史分支时显示，点击后由父组件
+   * 决定如何处理未提交改动（审阅并提交 / 丢掉）并发起新分支。
+   */
+  onStartHistoricalIteration?: (sourceBranchName: string) => void
   /** 顶栏布局需要把分支选择和审查后的终态动作拆到阶段条两侧。 */
   part?: 'all' | 'selector' | 'terminal'
 }
@@ -52,6 +57,7 @@ export default function VersionActions({
   onPublish,
   onStartIteration,
   onBranchSelect,
+  onStartHistoricalIteration,
   part = 'all'
 }: Props): JSX.Element | null {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -203,14 +209,32 @@ export default function VersionActions({
   const terminalAction = (
     <>
       {!isViewingCurrentBranch ? (
-        <Button
-          className={cx('workbench-rollback-button')}
-          icon={<HistoryOutlined />}
-          onClick={() => onBranchSelect(currentBranchName || '')}
-          size="small"
-        >
-          回到当前版本
-        </Button>
+        <>
+          <Button
+            className={cx('workbench-rollback-button')}
+            icon={<HistoryOutlined />}
+            onClick={() => onBranchSelect(currentBranchName || '')}
+            size="small"
+          >
+            回到当前版本
+          </Button>
+          {/* 历史分支只读回看时给出"基于此版本迭代"入口。点击后由父组件决定如何处理
+              未提交改动（审阅并提交 / 丢掉），然后基于这条历史分支新建一条分支继续开发。 */}
+          {onStartHistoricalIteration ? (
+            <Button
+              className={cx(
+                'workbench-terminal-action-button',
+                'workbench-historical-iteration-button'
+              )}
+              icon={<RollbackOutlined />}
+              size="small"
+              type="primary"
+              onClick={() => onStartHistoricalIteration(viewedBranch.name)}
+            >
+              基于此版本迭代
+            </Button>
+          ) : null}
+        </>
       ) : null}
 
       {/* 两个动作互斥，一轮迭代只出现一个：

@@ -1,8 +1,10 @@
 import {
   CheckCircleFilled,
   CloudUploadOutlined,
+  DeleteOutlined,
   LoadingOutlined,
-  PlusOutlined
+  PlusOutlined,
+  RollbackOutlined
 } from '@ant-design/icons'
 import { Input, Modal, Progress, Radio, Steps } from 'antd'
 import RichLoading from './AiChatPanel/components/DesignProgress/RichLoading'
@@ -14,6 +16,21 @@ type VersionGenerateState = { stepIndex: number } | null
 
 /** 发起新迭代时用户对分支的选择。 */
 export type IterationBranchChoice = { mode: 'current' } | { mode: 'new'; branchName: string }
+
+/** 「基于历史版本迭代」流程对工作区未提交改动的处理方式。 */
+export type HistoricalIterationDirtyChoice = 'commit' | 'discard'
+
+/** 「基于历史版本迭代」弹框的输入参数。 */
+export type HistoricalIterationRequest = {
+  /** 起点历史分支名（从这条分支的 HEAD 建出新分支）。 */
+  sourceBranchName: string
+  /** 用户输入的新分支名。 */
+  newBranchName: string
+  /** 工作区当前是否有未提交改动；为 true 时要求用户选择 commit / discard。 */
+  hasUncommittedChanges: boolean
+  /** hasUncommittedChanges 为 true 时用户选定的处理方式。 */
+  dirtyChoice?: HistoricalIterationDirtyChoice
+}
 
 type PublishModalProps = {
   /** 当前正在开发的分支名：提交与推送的落点。 */
@@ -278,6 +295,171 @@ function StartIterationModal({
   )
 }
 
+type HistoricalIterationModalProps = {
+  /** 起点历史分支名（新分支将从这条分支的 HEAD 建出）。 */
+  sourceBranchName: string
+  /** 当前可编辑（活动）分支名：「审阅并提交」时切回这条分支用。 */
+  activeBranchName: string
+  /** 应用已有的分支名，用于即时提示"这个名字已经有了"。 */
+  existingBranchNames: string[]
+  /** 工作区当前是否有未提交改动（决定是否要求选 commit / discard）。 */
+  hasUncommittedChanges: boolean
+  /** 工作区未提交改动数（提示用）。 */
+  uncommittedCount: number
+  /** 新分支名草稿。 */
+  newBranchName: string
+  onNewBranchNameChange: (value: string) => void
+  /** 未提交改动处理方式。 */
+  dirtyChoice: HistoricalIterationDirtyChoice
+  onDirtyChoiceChange: (value: HistoricalIterationDirtyChoice) => void
+  onCancel: () => void
+  /** 选 discard 或没有未提交改动时的确认（直接进入建分支流程）。 */
+  onConfirm: () => void
+  /** 选 commit 时的引导：切回当前可编辑分支并打开提交推送弹框。 */
+  onGoToCommit: () => void
+}
+
+/**
+ * 「基于历史版本迭代」确认弹框：以历史分支为起点新建一条分支继续开发。
+ *
+ * 与「发起新迭代」（从当前 HEAD 出发）的区别：
+ * - 起点是历史分支的 HEAD（回滚到那个时刻的代码），不是当前 HEAD。
+ * - 工作区必须干净：有未提交改动时强制用户二选一 ——
+ *   - 「审阅并提交」：关闭本弹框，切回当前可编辑分支并打开提交推送弹框，
+ *     等用户提交完后再回来重新发起（此时 dirty 已为 0）。
+ *   - 「丢掉」：直接调后端把未提交改动重置掉，立即进入建分支流程。
+ */
+function HistoricalIterationModal({
+  sourceBranchName,
+  activeBranchName,
+  existingBranchNames,
+  hasUncommittedChanges,
+  uncommittedCount,
+  newBranchName,
+  onNewBranchNameChange,
+  dirtyChoice,
+  onDirtyChoiceChange,
+  onCancel,
+  onConfirm,
+  onGoToCommit
+}: HistoricalIterationModalProps): JSX.Element {
+  const invalidReason = validateBranchName(newBranchName)
+  const trimmedName = newBranchName.trim()
+  const duplicated = trimmedName.length > 0 && existingBranchNames.includes(trimmedName)
+  const sameAsSource = trimmedName.length > 0 && trimmedName === sourceBranchName
+  const nameReady = !invalidReason && !duplicated && !sameAsSource && trimmedName.length > 0
+  // 选 commit 时确认按钮的语义变成「去提交」，不要求分支名（提交完回来再填）；
+  // 选 discard 或没有未提交改动时才校验分支名。
+  const goingToCommit = hasUncommittedChanges && dirtyChoice === 'commit'
+  const canConfirm = goingToCommit ? true : nameReady
+
+  return (
+    <Modal
+      centered
+      className={cx('workbench-publish-modal')}
+      closable
+      footer={null}
+      onCancel={onCancel}
+      open
+      width={460}
+    >
+      <div className={cx('workbench-publish-modal-inner')}>
+        <header className={cx('workbench-publish-modal-header')}>
+          <span className={cx('workbench-publish-modal-icon', 'is-iteration')} aria-hidden="true">
+            <RollbackOutlined />
+          </span>
+          <span className={cx('workbench-publish-modal-title')}>
+            <strong>基于此版本迭代</strong>
+            <small>从 {sourceBranchName} 创建新分支继续开发</small>
+          </span>
+        </header>
+        <div className={cx('workbench-publish-modal-body')}>
+          <p className={cx('workbench-publish-modal-lead')}>
+            将以版本 <strong>{sourceBranchName}</strong> 的代码为起点，新建一条分支继续开发。
+            原版本的代码与历史保持不变，仍可随时切回查看。
+          </p>
+          {hasUncommittedChanges ? (
+            <div className={cx('workbench-generate-field')}>
+              <label className={cx('workbench-generate-field-label')}>
+                <span className={cx('workbench-generate-required')}>*</span>
+                当前版本还有 {uncommittedCount} 个未提交改动，如何处理？
+              </label>
+              <Radio.Group
+                className={cx('workbench-iteration-branch-choice')}
+                onChange={(e) => onDirtyChoiceChange(e.target.value as HistoricalIterationDirtyChoice)}
+                value={dirtyChoice}
+              >
+                <Radio value="commit">
+                  <strong>审阅并提交</strong> — 先回到 {activeBranchName} 提交这些改动，
+                  再回来开新分支
+                </Radio>
+                <Radio value="discard">
+                  <DeleteOutlined aria-hidden="true" /> <strong>丢掉</strong> — 放弃这些改动，
+                  直接以 {sourceBranchName} 的代码继续
+                </Radio>
+              </Radio.Group>
+              <div className={cx('workbench-iteration-branch-hint')}>
+                {dirtyChoice === 'discard'
+                  ? '未提交改动会被永久丢弃，不可恢复。'
+                  : '会切回当前版本并打开提交推送弹框，提交完后回到这里继续。'}
+              </div>
+            </div>
+          ) : null}
+          {!goingToCommit ? (
+            <div className={cx('workbench-generate-field')}>
+              <label className={cx('workbench-generate-field-label')}>
+                <span className={cx('workbench-generate-required')}>*</span>
+                新版本号
+              </label>
+              <Input
+                value={newBranchName}
+                onChange={(e) => onNewBranchNameChange(e.target.value)}
+                placeholder="例如 v1_1"
+                status={invalidReason || duplicated || sameAsSource ? 'error' : undefined}
+              />
+              <div className={cx('workbench-iteration-branch-hint')}>
+                {invalidReason
+                  ? invalidReason
+                  : duplicated
+                    ? '这个版本号应用里已经用过了，换一个吧。'
+                    : sameAsSource
+                      ? '新版本号不能与起点版本相同。'
+                      : '新版本会立刻创建并推送到远端仓库。'}
+              </div>
+            </div>
+          ) : null}
+          <div className={cx('workbench-publish-modal-meta')}>
+            <CheckCircleFilled aria-hidden="true" /> 历史版本保持只读，新分支与历史互不干扰
+          </div>
+        </div>
+        <footer className={cx('workbench-publish-modal-footer')}>
+          <button className={cx('workbench-publish-modal-cancel')} type="button" onClick={onCancel}>
+            取消
+          </button>
+          {goingToCommit ? (
+            <button
+              className={cx('workbench-publish-modal-confirm')}
+              type="button"
+              onClick={onGoToCommit}
+            >
+              <CloudUploadOutlined aria-hidden="true" /> 去提交
+            </button>
+          ) : (
+            <button
+              className={cx('workbench-publish-modal-confirm')}
+              type="button"
+              disabled={!canConfirm}
+              onClick={onConfirm}
+            >
+              <RollbackOutlined aria-hidden="true" /> 确认创建并迭代
+            </button>
+          )}
+        </footer>
+      </div>
+    </Modal>
+  )
+}
+
 type WorkbenchVersionModalsProps = {
   application: ApplicationConfig
   /** 提交推送弹框：当前分支名（仅在可提交且弹框开启时传入）。 */
@@ -297,6 +479,21 @@ type WorkbenchVersionModalsProps = {
   onIterationChoiceChange: (choice: IterationBranchChoice) => void
   onCancelIteration: () => void
   onConfirmIteration: () => void
+  /** 「基于此版本迭代」弹框：开启时传入起点分支名。 */
+  historicalIterationSourceBranch?: string
+  /** 「基于此版本迭代」弹框：新分支名草稿。 */
+  historicalIterationBranchName: string
+  onHistoricalIterationBranchNameChange: (value: string) => void
+  /** 「基于此版本迭代」弹框：当前未提交改动数（> 0 时强制用户选 commit/discard）。 */
+  historicalIterationUncommittedCount: number
+  /** 「基于此版本迭代」弹框：未提交改动处理方式。 */
+  historicalIterationDirtyChoice: HistoricalIterationDirtyChoice
+  onHistoricalIterationDirtyChoiceChange: (value: HistoricalIterationDirtyChoice) => void
+  onCancelHistoricalIteration: () => void
+  /** 选 discard 或无未提交改动时的确认（直接走建分支流程）。 */
+  onConfirmHistoricalIteration: () => void
+  /** 选 commit 时的引导：切回当前可编辑分支并打开提交推送弹框。 */
+  onGoToCommitHistoricalIteration: () => void
   /** 分支切换全屏加载的目标名；为空时不显示。 */
   switchingTargetLabel?: string
 }
@@ -317,6 +514,15 @@ export default function WorkbenchVersionModals({
   onIterationChoiceChange,
   onCancelIteration,
   onConfirmIteration,
+  historicalIterationSourceBranch,
+  historicalIterationBranchName,
+  onHistoricalIterationBranchNameChange,
+  historicalIterationUncommittedCount,
+  historicalIterationDirtyChoice,
+  onHistoricalIterationDirtyChoiceChange,
+  onCancelHistoricalIteration,
+  onConfirmHistoricalIteration,
+  onGoToCommitHistoricalIteration,
   switchingTargetLabel
 }: WorkbenchVersionModalsProps): JSX.Element {
   const allBranches = application.branches || []
@@ -345,6 +551,23 @@ export default function WorkbenchVersionModals({
           onCancel={onCancelIteration}
           onChoiceChange={onIterationChoiceChange}
           onConfirm={onConfirmIteration}
+        />
+      ) : null}
+
+      {historicalIterationSourceBranch ? (
+        <HistoricalIterationModal
+          sourceBranchName={historicalIterationSourceBranch}
+          activeBranchName={currentBranchName}
+          existingBranchNames={allBranches.map((branch) => branch.name)}
+          hasUncommittedChanges={historicalIterationUncommittedCount > 0}
+          uncommittedCount={historicalIterationUncommittedCount}
+          newBranchName={historicalIterationBranchName}
+          onNewBranchNameChange={onHistoricalIterationBranchNameChange}
+          dirtyChoice={historicalIterationDirtyChoice}
+          onDirtyChoiceChange={onHistoricalIterationDirtyChoiceChange}
+          onCancel={onCancelHistoricalIteration}
+          onConfirm={onConfirmHistoricalIteration}
+          onGoToCommit={onGoToCommitHistoricalIteration}
         />
       ) : null}
 

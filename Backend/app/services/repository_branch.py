@@ -223,11 +223,16 @@ def create_local_branch(
     branch_name: str,
     *,
     allow_overwrite: bool,
+    start_point: str | None = None,
 ) -> dict[str, Any]:
     """在工作区建出分支并切过去，随即把该分支推到远端。
 
     发起新迭代选择「新建分支」时调用。**必须在清空规划产物之前执行** —— 新分支要指向
     当前这次已提交的代码，晚于清空就会把新分支建在残缺的树上。
+
+    `start_point` 用于「基于历史版本继续开发」：传入历史分支名时，新分支从那条历史
+    分支的 HEAD 建出（`git checkout -b <branch> <start_point>`），而不是从当前 HEAD。
+    调用方必须先保证工作区干净（无未提交改动），否则 checkout 会失败或被拒绝。
 
     与 `push_baseline_to_branch` 一样**永不抛异常**：分支建不出来时只报告结果，由调用方
     决定是否继续（当前调用方会继续，并提示用户）。
@@ -239,20 +244,51 @@ def create_local_branch(
     except GitBranchError as exc:
         return _branch_result(branch_name, "failed", "", str(exc))
 
+    # start_point 校验：必须在本地能解析成一个 revision，否则 checkout -b 会失败。
+    # 在历史分支场景下这是历史分支名（如 "v1_0"）；调用方传 None 时落到当前 HEAD。
+    resolved_start_point = ""
+    if start_point:
+        candidate = start_point.strip()
+        if not candidate:
+            return _branch_result(branch, "failed", "", "startPoint 不能为空字符串。")
+        resolved = _run_git(
+            root, ["rev-parse", "--verify", f"{candidate}^{{commit}}"], timeout=15
+        )
+        if resolved.returncode != 0 or not resolved.stdout.strip():
+            return _branch_result(
+                branch,
+                "failed",
+                "",
+                f"起点 {candidate} 在本地仓库中不存在，无法基于此版本创建。",
+            )
+        resolved_start_point = candidate
+
     commit_sha = _read_head(root)
     if not commit_sha:
         return _branch_result(
             branch, "failed", "", "当前工作区还没有基线提交，不能创建版本。"
         )
+    # 历史分支起点时，结果里的 commitSha 应该是新分支指向的 sha，而不是切分支前的 HEAD。
+    if resolved_start_point:
+        start_sha = _run_git(
+            root,
+            ["rev-parse", f"{resolved_start_point}^{{commit}}"],
+            timeout=15,
+        )
+        if start_sha.returncode == 0 and start_sha.stdout.strip():
+            commit_sha = start_sha.stdout.strip()
 
-    # 已存在同名本地分支时切过去（不重建），否则从当前 HEAD 建出并切过去。
+    # 已存在同名本地分支时切过去（不重建），否则从 start_point（默认 HEAD）建出并切过去。
     existing = _run_git(
         root, ["branch", "--list", "--format=%(refname:short)", branch], timeout=15
     )
     if existing.returncode == 0 and branch in existing.stdout.split():
         switch = _run_git(root, ["checkout", branch], timeout=60)
     else:
-        switch = _run_git(root, ["checkout", "-b", branch], timeout=60)
+        create_args = ["checkout", "-b", branch]
+        if resolved_start_point:
+            create_args.append(resolved_start_point)
+        switch = _run_git(root, create_args, timeout=60)
     if switch.returncode != 0:
         return _branch_result(branch, "failed", commit_sha, _failure_detail(switch))
 

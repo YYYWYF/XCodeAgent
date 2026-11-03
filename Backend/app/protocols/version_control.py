@@ -7,10 +7,12 @@ from typing import Any, AsyncIterator
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.services.version_control import (
     CommitVersionControlRequest,
+    DiscardVersionControlRequest,
     InspectAllVersionControlRequest,
     InspectVersionControlRequest,
     SummarizeVersionControlRequest,
     commit_version_control,
+    discard_version_control,
     inspect_all_version_control,
     inspect_version_control,
     summarize_version_control,
@@ -27,7 +29,7 @@ def version_control_capabilities() -> dict[str, Any]:
         "name": "version-control",
         "endpoint": "/version-control/run",
         "transport": "ag-ui-sse",
-        "actions": ["inspect", "inspect_all", "commit", "summarize"],
+        "actions": ["inspect", "inspect_all", "commit", "summarize", "discard"],
         "customEventName": VERSION_CONTROL_EVENT_NAME,
         "stateSnapshotKey": "versionControl",
         "workflowIndependent": True,
@@ -69,9 +71,18 @@ def build_version_control_ag_ui_stream(
                 if result.change_summary
                 else "暂未能生成变更说明，请手动填写。"
             )
+        elif action == "discard":
+            request = DiscardVersionControlRequest.model_validate(version_control_input)
+            result = discard_version_control(request)
+            data = result.model_dump(by_alias=True)
+            message = (
+                f"已丢弃 {len(result.discarded_paths)} 个未提交改动。"
+                if result.discarded_paths
+                else "当前没有需要丢弃的未提交改动。"
+            )
         else:
             raise ValueError(
-                "versionControl.action 必须是 inspect、inspect_all、commit 或 summarize。"
+                "versionControl.action 必须是 inspect、inspect_all、commit、summarize 或 discard。"
             )
         return AgUiActionResult(data=data, message=message)
 
