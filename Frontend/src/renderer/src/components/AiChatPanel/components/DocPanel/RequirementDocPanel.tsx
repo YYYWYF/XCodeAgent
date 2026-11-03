@@ -19,7 +19,6 @@ type Props = {
   onChanged?: () => void
   productPlan: JsonRecord
   spec: JsonRecord
-  workspaceRoot?: string
 }
 
 const requirementDocSections: Array<{ key: RequirementSectionKey; label: string }> = [
@@ -37,8 +36,7 @@ export default function RequirementDocPanel({
   workspaceRoot,
   onChanged,
   productPlan,
-  spec,
-  workspaceRoot
+  spec
 }: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
   const surfaceDraft = useAgentSurfaceDraft(productPlan, workspaceRoot, onChanged)

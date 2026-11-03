@@ -44,7 +44,6 @@ type Props = {
   technicalPlanStatus?: string
   structuredDocument?: 'requirement-doc' | 'technical-plan'
   structuredDocumentLoading?: boolean
-  workspaceRoot?: string
   onReviseAuthorization?: () => void
 }
 
@@ -63,7 +62,6 @@ export default function DocPanel({
   technicalPlanStatus,
   structuredDocument,
   structuredDocumentLoading,
-  workspaceRoot,
   onReviseAuthorization
 }: Props): ReactElement {
   const isTechnicalPlan = structuredDocument === 'technical-plan'
@@ -150,7 +148,6 @@ export default function DocPanel({
                 onChanged={onAgentSurfaceChanged}
                 productPlan={productPlan || {}}
                 spec={requirementSpec || {}}
-                workspaceRoot={workspaceRoot}
               />
             ) : (
               <MarkdownContent content={content ?? ''} />

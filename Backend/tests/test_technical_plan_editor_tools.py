@@ -86,7 +86,7 @@ class TechnicalPlanEditorToolsTests(TestCase):
         rejected = [m for m in model.seen_messages[-1] if isinstance(m, ToolMessage) and m.status == "error"]
         self.assertEqual({m.name for m in rejected}, {"write_file", "delete", "execute"})
         self.assertTrue(all("not a valid tool" in m.content for m in rejected))
-        self.assertTrue(all(set(tools) == {"grep", "read_file", "edit_file"} for tools in model.seen_tools))
+        self.assertTrue(all(set(tools) == {"grep", "read_file", "edit_file", "request_product_revision"} for tools in model.seen_tools))
         self.assertEqual(baseline, original)
         expected = {key: deepcopy(original[key]) for key in ("architecture", "entities", "api_contracts", "pages")}
         expected["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"] = 8
