@@ -7,9 +7,11 @@ from copy import deepcopy
 from typing import Any
 from starlette.routing import compile_path
 
-from app.domain.runtime_endpoint_contract import RuntimeInvocation, TextConversationContract
+from app.domain.runtime_endpoint_contract import RuntimeInvocation
 from app.services.planning_frozen import plain_json
-from app.services.runtime_agent_contracts import agent_contract_index, agent_fact_digest, agent_invocation
+from app.services.runtime_agent_contracts import (
+    agent_contract_index, agent_fact_digest, agent_invocation, validate_agent_interaction_contract,
+)
 from app.services.runtime_business_contract import serves_python_business
 from app.workspace.endpoint_design_documents import endpoint_design_stem
 
@@ -31,16 +33,18 @@ def _current_agent_contracts(plan: Mapping[str, Any]) -> dict[str, dict]:
     if not isinstance(agents, list):
         raise ValueError("当前合同必须显式提供 agent_contracts 数组。")
     technical_agents, capabilities = [], {}
-    for agent in agents:
+    for index, agent in enumerate(agents):
         required = {"agentId", "name", "purpose", "pageIds", "agentSettings", "interactionContract"}
         if not isinstance(agent, dict) or set(agent) != required:
             raise ValueError("当前 Agent 合同必须包含完整七模块及显式 interactionContract。")
-        capability = TextConversationContract.model_validate(agent["interactionContract"])
-        technical_agents.append(deepcopy(agent))
         agent_id = agent["agentId"]
         if not isinstance(agent_id, str):
             raise ValueError("Agent 身份必须是字符串。")
-        capabilities[agent_id] = capability.model_dump(mode="json", by_alias=True)
+        capabilities[agent_id] = validate_agent_interaction_contract(
+            agent["interactionContract"], agent_id=agent_id,
+            field_path=f"agent_contracts[{index}].interactionContract",
+        )
+        technical_agents.append(deepcopy(agent))
     # 复用既有校验的是七模块事实，并非为缺失的新合同提供兼容读取。
     contracts = agent_contract_index({**raw, "agent_contracts": technical_agents})
     for agent_id, agent in contracts.items():
@@ -131,7 +135,7 @@ def materialize_runtime_endpoints(plan: Mapping[str, Any], *, refresh_derived: b
     _validate_identities(contracts)
     expected = {runtime_endpoint_identity(agent_id)[0]: _runtime_contract(agent) for agent_id, agent in agents.items()}
     retained, published = [], set()
-    for contract in contracts:
+    for index, contract in enumerate(contracts):
         contract_id = contract.get("id")
         if not isinstance(contract_id, str) or not contract_id.strip():
             raise ValueError("API Contract 身份必须是非空字符串。")
@@ -147,7 +151,10 @@ def materialize_runtime_endpoints(plan: Mapping[str, Any], *, refresh_derived: b
             name, purpose, identity = contract.get("name"), previous.get("summary"), previous.get("agent_id")
             if not isinstance(name, str) or not name.endswith("运行接口") or not isinstance(purpose, str):
                 raise ValueError("旧运行入口不是当前合法派生形状，不能重编译。")
-            capability = TextConversationContract.model_validate(previous.get("interactionContract")).model_dump(mode="json", by_alias=True)
+            capability = validate_agent_interaction_contract(
+                previous.get("interactionContract"), agent_id=str(identity),
+                field_path=f"api_contracts[{index}].endpoints[0].interactionContract",
+            )
             expected_previous = _runtime_contract({"agentId": identity, "name": name.removesuffix("运行接口"),
                 "purpose": purpose, "interactionContract": capability})
             if contract != expected_previous:

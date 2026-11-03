@@ -71,6 +71,7 @@ def build_runtime_environment(
         "MODEL_TIMEOUT_SECONDS": str(settings.model_timeout_seconds),
         "MODEL_MAX_RETRIES": str(settings.model_max_retries), "MODEL_TRUST_ENV": str(settings.model_trust_env).lower(),
         "MODEL_CUSTOM_HEADERS": json.dumps(settings.model_custom_headers),
+        "MODEL_OPENCODE_GO_HEADERS_ENABLED": str(settings.model_opencode_go_headers_enabled).lower(),
         "ANTHROPIC_API_VERSION": settings.anthropic_api_version,
         "AGENT_TEMPERATURE": str(settings.default_temperature),
         "AGENT_MAX_TOKENS": str(settings.default_max_tokens),
