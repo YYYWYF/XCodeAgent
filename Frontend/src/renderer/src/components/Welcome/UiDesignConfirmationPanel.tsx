@@ -212,10 +212,23 @@ export default function UiDesignConfirmationPanel({
 
   // 确认状态以后端 page.status 为权威源：选模板或换一换成功后后端置 confirmed。
   // 不强制要求 page.code：manifest 落盘时剥离 code，no-op resume 回填 code 有延迟，
+  // 确认状态以后端 page.status 为权威源：选模板或换一换成功后后端置 confirmed。
+  // 不强制要求 page.code：manifest 落盘时剥离 code，no-op resume 回填 code 有延迟，
   // 若要求 code 非空才算确认，生成成功的页会短暂显示「未生成」。code 仅用于
   // 「查看设计稿」按钮的 disabled 判断（各自检查 page.code），不影响确认状态。
   const isPageConfirmed = useCallback(
     (page: PageDesign): boolean => page.status === 'confirmed',
+    []
+  )
+  // 展示口径的「已确认」：除权威 status 外，还把"已有 code 但 status 滞后"（典型
+  // 场景：重新打开本卡片，磁盘 manifest 已落盘但快照还没追上）也按已确认渲染——
+  // 让绿色对勾、「已确认」标签与刚生成完的页面视觉一致，避免用户对着已有设计稿
+  // 找一个并不存在的「确认」按钮。
+  // 仅用于渲染，不参与 confirmedCount / generateAll 等状态语义。
+  const isPageConfirmedForDisplay = useCallback(
+    (page: PageDesign): boolean =>
+      page.status === 'confirmed' ||
+      (typeof page.code === 'string' && page.code.length > 0),
     []
   )
   // 后台生成池处理中：入队（queued）或已领取（generating），尚未产出设计稿。
@@ -226,8 +239,8 @@ export default function UiDesignConfirmationPanel({
       page.status === 'queued' || page.status === 'generating',
     []
   )
+  // 已确认（生成成功）的页面数；不再要求全部确认才能进入下一步。
   const confirmedCount = pages.filter((page) => isPageConfirmed(page)).length
-  const allConfirmed = pages.length > 0 && confirmedCount === pages.length
   // 当前处于后台生成池处理中的 pageId 列表（queued / generating），用于轮询与加载态。
   const generatingPageIds = useMemo(
     () =>
@@ -320,15 +333,6 @@ export default function UiDesignConfirmationPanel({
         ? { pageId: batch[0].pageId, action: batch[0].action }
         : { action: 'multi', actions: batch }
     onSubmit(workflow, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
-  }
-
-  // 用户明确选择跳过 UI 设计时，只提交跳过动作并等待计划阶段入口卡。
-  const skipUiDesign = (): void => {
-    if (disabled) return
-    onSubmit(
-      workflow,
-      { ui_design_action: { action: 'skip' }, __applicationPlanningAction: 'ui_action' }
-    )
   }
 
   // 把队列中所有待处理 action 取出，提交一个 run。单 action 仍发单 action dict
@@ -731,7 +735,7 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-header-copy')}>
           <h4>UI设计稿</h4>
           <p>
-            如需视觉参考可选择模板或换一换生成设计稿，也可以跳过；完成后需手动进入计划阶段。
+            如需视觉参考可选择模板或换一换生成设计稿。对于已确认的UI设计稿，将作为后续还原页面时的参考内容。
           </p>
           {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
             <span className={cx('ui-design-processing-hint')}>
@@ -791,15 +795,13 @@ export default function UiDesignConfirmationPanel({
             <aside className={cx('ui-design-anchor')}>
               <div className={cx('ui-design-anchor-actions')}>
                 <Text className={cx('ui-design-anchor-summary')} type="secondary">
-                  {allConfirmed
-                    ? '全部已确认'
-                    : `待确认 ${pages.length - confirmedCount} 个页面`}
+                  {`已生成 ${confirmedCount}/${pages.length} 个页面`}
                 </Text>
               </div>
               <nav className={cx('ui-design-anchor-list')}>
                 {pages.map((page, index) => {
                   const pageId = page.pageId || `page-${index + 1}`
-                  const confirmed = isPageConfirmed(page)
+                  const confirmed = isPageConfirmedForDisplay(page)
                   const active = activePageId === pageId
                   return (
                     <button
@@ -834,7 +836,7 @@ export default function UiDesignConfirmationPanel({
                 if (!page) return null
                 const index = activeIndex >= 0 ? activeIndex : 0
                 const pageId = page.pageId || `page-${index + 1}`
-                const confirmed = isPageConfirmed(page)
+                const confirmed = isPageConfirmedForDisplay(page)
                 const generating = actingSet.has(pageId) || isPageGenerating(page)
                 return (
                   <div
@@ -990,7 +992,7 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-page-list')}>
           {pages.map((page, index) => {
             const pageId = page.pageId || `page-${index + 1}`
-            const confirmed = isPageConfirmed(page)
+            const confirmed = isPageConfirmedForDisplay(page)
             // acting 同时覆盖本地瞬时处理（actingSet）与后台生成池状态（queued/generating），
             // 二者都表示该页尚未产出设计稿、正在生成中。
             const acting = actingSet.has(pageId) || isPageGenerating(page)
@@ -1039,13 +1041,15 @@ export default function UiDesignConfirmationPanel({
                   {generating ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-generating')}>生成中</Tag>
                   ) : confirmed ? (
+                    // confirmed 走 isPageConfirmedForDisplay：除权威 status === 'confirmed'
+                    // 外，"已有 code 但 status 滞后"（典型场景：重新打开本卡片，磁盘
+                    // manifest 已落盘但快照还没追上）也按已确认渲染，与刚生成完的页面
+                    // 视觉一致——避免用户对着已有设计稿找一个并不存在的「确认」按钮。
                     <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已确认</Tag>
                   ) : page.status === 'generation_failed' ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-failed')} color="error">生成失败</Tag>
                   ) : page.status === 'cancelled' ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-cancelled')} color="warning">已停止</Tag>
-                  ) : page.code ? (
-                    <Tag className={cx('ui-design-page-row-status', 'is-pending')}>待确认</Tag>
                   ) : (
                     // 本轮还没有设计稿：区分"从来没做过"和"上一轮做过、本轮待重做"。
                     // 后者若也显示「未生成」，会与旁边的「v1.0 已设计过」徽章自相矛盾。
@@ -1169,22 +1173,14 @@ export default function UiDesignConfirmationPanel({
           <Text className={cx('ui-design-confirm-hint')} type="secondary">
             {adjustingHint
               ? adjustingHint
-              : allConfirmed
-                ? '所有页面设计稿已确认，可以进入技术规划。'
-                : `可为每个页面选模板或换一换生成设计稿，也可以直接跳过（已完成 ${confirmedCount}/${pages.length}）。`}
+              : confirmedCount > 0
+                ? `已生成 ${confirmedCount}/${pages.length} 个页面设计稿，可直接进入技术规划；未生成的页面将由后续步骤依据需求文档与产品规划实现。`
+                : ''}
           </Text>
           <div className={cx('ui-design-confirm-actions')}>
             <Button
-              className={cx('ui-design-skip-btn')}
-              disabled={disabled || uiGenerationInProgress}
-              onClick={skipUiDesign}
-              size="large"
-            >
-              跳过 UI 设计
-            </Button>
-            <Button
               className={cx('ui-design-confirm-all-btn')}
-              disabled={disabled || uiGenerationInProgress || !allConfirmed}
+              disabled={disabled || uiGenerationInProgress}
               onClick={confirmAll}
               size="large"
               type="primary"

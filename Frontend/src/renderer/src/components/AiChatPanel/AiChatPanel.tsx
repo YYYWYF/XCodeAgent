@@ -73,7 +73,6 @@ import {
   planningWorkflowRequiresUserInput,
   workflowCardRequiresUserInput,
   planningWorkflowSettlesLoading,
-  planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
   shouldSuppressConfirmedTechnicalPlanTransitionChunk
 } from '../Welcome/planningWorkflowState'
@@ -275,10 +274,8 @@ function planningUserMessageText(answers: WorkflowClarificationAnswers): string 
   const entries = Object.entries(answers)
   if (entries.length === 0) return ''
   // UI 设计稿单页动作（换一换/选模板/调整）：不作为用户消息留痕（卡片内已体现操作）。
-  // “跳过”只结束 UI 设计，不会越过独立计划阶段入口。
   if ('ui_design_action' in answers) {
-    const action = (answers as { ui_design_action?: { action?: string } }).ui_design_action
-    return action?.action === 'skip' ? '跳过 UI 设计稿，等待进入计划阶段' : ''
+    return ''
   }
   // 入口卡片本身就是用户操作记录，不再追加同文案的 user 消息。
   if (answers.__applicationPlanningAction === 'enter_planning') return ''
@@ -1370,7 +1367,6 @@ export default function AiChatPanel({
     : undefined
   const planningPhaseRunning = planningWorkflowIsActivelyRunning(currentPlanningWorkflow)
   const planningPhase = planningWorkflowPhase(currentPlanningWorkflow)
-  const planningUiDesignSkipped = planningWorkflowUiDesignSkipped(currentPlanningWorkflow)
   const requirementSpecPath =
     workflowArtifactPath(currentPlanningWorkflow, 'requirement-spec') ||
     designDocFilePath['requirement-spec']
@@ -1384,9 +1380,8 @@ export default function AiChatPanel({
     : Array.isArray(localUiDesigns?.pages)
       ? localUiDesigns.pages
       : undefined
-  const planningUiDesignPagesSource: unknown[] | undefined = planningUiDesignSkipped
-    ? undefined
-    : Array.isArray(planningClarification?.pages) && planningClarification.pages.length > 0
+  const planningUiDesignPagesSource: unknown[] | undefined =
+    Array.isArray(planningClarification?.pages) && planningClarification.pages.length > 0
       ? planningClarification.pages
       : ((currentPlanningWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
         (
@@ -1463,15 +1458,13 @@ export default function AiChatPanel({
           available: requirementDocAvailable
         }
       ]
-      if (!planningUiDesignSkipped) {
-        documents.push({
-          key: 'ui-design' as WorkspaceDocKey,
-          title: 'UI设计稿',
-          path: 'specs/ui-designs',
-          content: uiDesignDocContent,
-          available: uiDesignAvailable
-        })
-      }
+      documents.push({
+        key: 'ui-design' as WorkspaceDocKey,
+        title: 'UI设计稿',
+        path: 'specs/ui-designs',
+        content: uiDesignDocContent,
+        available: uiDesignAvailable
+      })
       return documents
     }
     return [
@@ -1489,7 +1482,6 @@ export default function AiChatPanel({
     requirementDocAvailable,
     requirementDocContent,
     requirementsConfirmed,
-    planningUiDesignSkipped,
     technicalPlanDocAvailable,
     technicalPlanDocContent,
     uiDesignAvailable,
@@ -4736,16 +4728,13 @@ export default function AiChatPanel({
         (revisionDraftAction === 'confirm' ||
           technicalPlanConfirmed)
       // UI 设计稿的单页动作（换一换/选模板/调整）是同一轮内的更新，不新增消息卡片，
-      // 只更新现有卡片；跳过与确认全部等推进到下一阶段的操作才新增卡片并留痕。
+      // 只更新现有卡片；确认全部与进入规划等推进到下一阶段的操作才新增卡片并留痕。
       const isUiDesignPageAction =
         planningAnswers && 'ui_design_action' in planningAnswers
-          ? (planningAnswers as { ui_design_action?: { action?: string } }).ui_design_action
-            ?.action !== 'skip'
-          : false
       let planningSubmission: PlanningSubmissionTransaction | undefined
       if (!isUiDesignPageAction) {
         planningNewRoundRef.current = true
-        // 离开 UI 确认阶段（确认全部/跳过/进入规划）：清空 UI 确认阶段标记，
+        // 离开 UI 确认阶段（确认全部/进入规划）：清空 UI 确认阶段标记，
         // 避免后续阶段的纯 content 被误当作 UI 轮询 content 丢弃。
         lastUiDesignRunIdRef.current = undefined
         if (planningAnswers.__applicationPlanningAction === 'enter_planning') {

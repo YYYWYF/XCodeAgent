@@ -166,62 +166,6 @@ def _ui_design_confirmed_payload(
     }
 
 
-def _ui_design_skipped_payload() -> dict[str, Any]:
-    """构造跳过 UI 设计后等待进入计划阶段的清晰状态载荷。"""
-
-    return {
-        "mode": "ui_design_confirmation",
-        "status": "clear",
-        "question_schema": "gemini_cli.ask_user.v1",
-        "questions": [],
-        "assumptions": [],
-        "message": "已跳过 UI 设计稿生成，等待用户确认进入计划阶段。",
-        "skipped": True,
-        "pages": [],
-    }
-
-
-def _build_skipped_ui_designs(state: ProjectState) -> dict[str, Any]:
-    """构造并持久化用户主动跳过后的 UI Manifest。
-
-    跳过只表示"不再继续生成、不进入设计稿确认"，**不销毁已生成的设计稿**：pages
-    原样保留（含 confirmed / cancelled / generation_failed 等终态），只把
-    confirmation_status 置为 skipped。
-
-    为什么必须保留 pages：落盘的 ui-designs.json 同时是前端的磁盘权威事实 ——
-    useUiDesignPagesWithCode 每 2 秒轮询它，用来纠正 workflow 快照里陈旧的
-    queued/generating。若在此清空 pages，该页在磁盘上随之消失，前端两个纠正来源
-    （磁盘 status 与本地 override）会同时失效，已停止的卡片回退显示"生成中"。
-    保留 pages 后，跳过既不影响历史卡片的真实状态，也不丢已生成的设计稿。
-
-    build 阶段不会因此误用设计稿：`_ui_design_reference_instruction` 按
-    confirmation_status == "skipped" 返回"无视觉参考"指令。
-    """
-
-    # 优先读磁盘：池刚写下的 cancelled/confirmed 比 state 快照新。这里刻意不调
-    # _latest_ui_designs —— 它会把 queued/generating 的页重新入队自愈，而用户刚
-    # 跳过，重新拉起生成与跳过意图相悖。
-    manifest = load_ui_designs_json(ui_designs_json_path(state))
-    if not isinstance(manifest, dict):
-        manifest = {}
-    pages = manifest.get("pages")
-    if not isinstance(pages, list):
-        existing = state.get("ui_designs")
-        pages = existing.get("pages") if isinstance(existing, dict) else None
-        if not isinstance(pages, list):
-            pages = []
-
-    ui_designs = {
-        **manifest,
-        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
-        "confirmation_status": "skipped",
-        "product_plan_sha256": _product_plan_hash(state),
-        "pages": pages,
-    }
-    _persist_ui_designs(state, ui_designs)
-    return ui_designs
-
-
 def _user_confirmed_all_designs(request: str) -> bool:
     """判断用户本轮是否明确确认全部设计稿。"""
 
@@ -256,7 +200,12 @@ def _verified_ui_designs_for_confirmation(
     state: ProjectState,
     ui_designs: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """按当前 ProductPlan 和真实 TSX 重新校验全部页面后返回 v2 清单。"""
+    """按当前 ProductPlan 和真实 TSX 重新校验全部页面后返回 v2 清单。
+
+    校验只对已确认（confirmed）的页面强制：未生成 / 生成失败 / 已取消的页面**不再**
+    阻断进入技术规划，它们在 build 阶段会被自动跳过（generator 只对 confirmed 页
+    发出设计稿参考）。
+    """
 
     product_pages = {_page_id(page): page for page in _page_list(state) if _page_id(page)}
     existing_pages = {
@@ -290,9 +239,8 @@ def _verified_ui_designs_for_confirmation(
         )
         verification = verified.get("verification", {})
         page_errors = verification.get("errors") if isinstance(verification, dict) else []
-        if status != "confirmed":
-            errors.append(f"页面 {page_id} 尚未确认。")
-        if verification.get("status") != "passed":
+        # 只校验已确认页：未生成/失败/取消页保留状态但不阻塞。
+        if status == "confirmed" and verification.get("status") != "passed":
             detail = "；".join(str(item) for item in page_errors) or "设计稿代码或映射缺失"
             errors.append(f"页面 {page_id} 未通过产品事实一致性校验：{detail}")
         verified_pages.append(verified)
@@ -835,7 +783,7 @@ def _adjust_base_pages(
 
 
 async def ui_confirmation(state: ProjectState) -> dict:
-    """生成各页 React 设计稿、处理跳过动作并等待用户逐页确认。"""
+    """生成各页 React 设计稿并等待用户确认；不再支持「跳过 UI 设计」入口。"""
 
     requirement_spec = state.get("requirement_spec")
     if not isinstance(requirement_spec, dict):
@@ -848,35 +796,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     interaction_action = str(interaction.get("action") or "")
     request = str(state.get("request") or "")
-
-    # 跳过动作是显式结构化提交，不生成设计稿、不创建设计目录，直接放行技术规划。
     action = state.get("ui_design_action")
-    if (
-        isinstance(action, dict)
-        and action.get("action") == "skip"
-        and (
-            interaction_action == "ui_action"
-            if application_planning_scope
-            else _has_explicit_user_submission(state)
-        )
-    ):
-        # 跳过前先取消在途生成：否则 worker 会继续跑完并把结果写进 ui-designs.json，
-        # 让已跳过的确认区仍显示"生成中"，落盘结果也与跳过态矛盾。必须排在
-        # _build_skipped_ui_designs 之前 —— 它读磁盘 manifest，先取消才能把
-        # cancelled 终态一并带进跳过态。只取消在途任务，不封锁工作区
-        # （区别于删除应用用的 cancel_workspace）。
-        await get_ui_design_generation_pool().cancel_pending_pages(
-            str(workspace_root(state))
-        )
-        ui_designs = _build_skipped_ui_designs(state)
-        return {
-            "phase": "ui_confirmation",
-            "status": "completed",
-            "ui_designs": ui_designs,
-            "ui_design_action": None,
-            "clarification": _ui_design_skipped_payload(),
-            "timeline": ["ui_confirmation"],
-        }
 
     # 恢复路径：已有待确认设计稿且本轮无新提交，直接重放确认卡。
     # 前端用「无操作 resume」轮询生成进度：这里读工作区最新 ui-designs.json（池在
@@ -997,12 +917,12 @@ def _record_iteration_ui_pages(state: ProjectState, ui_designs: dict[str, Any]) 
     """把本轮的"计划页面"与"已产出设计稿的页面"记进迭代产物记录。
 
     这是**唯一**的 UI 设计写盘点（`_persist_ui_designs`），所以放在这里能一次覆盖
-    全部路径：首次进入、逐页换一换、确认、以及用户主动跳过。
+    全部路径：首次进入、逐页换一换、确认。
 
     - plannedPageIds：来自当前 ProductPlan（`_page_list`）—— 本轮计划要设计哪些页面
     - designedPageIds：本轮真正产出设计稿的页面（有 code 的）
 
-    跳过时 designedPageIds 为空，于是后续迭代就能算出"这一轮该设计却没设计"。
+    用户从未触发生成时 designedPageIds 为空，后续迭代就能算出"这一轮该设计却没设计"。
     写失败不影响设计流程（见 `record_iteration_artifacts`）。
     """
 

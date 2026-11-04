@@ -95,35 +95,14 @@
   }
 }
 
-// 底部两个按钮并排容器：一键全部确认 + 进入项目规划。
+// 底部按钮容器：把「下一步」推到卡片右下角。
 .@{class-prefix}-ui-design-confirm-actions {
   display: flex;
   flex-shrink: 0;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-// 跳过按钮使用现有主题变量，保证浅色与深色主题下都保持清晰可读。
-.@{class-prefix}-ui-design-skip-btn.ant-btn {
-  height: 42px;
-  padding: 0 18px;
-  border-radius: 10px;
-  color: var(--modal-text, var(--wb-text, inherit));
-  border-color: var(--modal-border-strong, var(--wb-border, #d9d9d9));
-  background: transparent;
-
-  &:hover:not(:disabled) {
-    color: var(--wb-accent, var(--modal-accent, #6b3cf0));
-    border-color: var(--wb-accent, var(--modal-accent, #6b3cf0));
-    background: var(--modal-surface-hover, var(--wb-surface-hover, rgba(107, 60, 240, 0.08)));
-  }
-
-  &:disabled {
-    color: var(--modal-text-secondary, var(--wb-text-secondary, rgba(0, 0, 0, 0.45)));
-    border-color: var(--modal-border-strong, var(--wb-border, #d9d9d9));
-    background: transparent;
-  }
+  margin-left: auto;
 }
 
 .@{class-prefix}-ui-design-anchor-summary.ant-typography {
@@ -501,6 +480,10 @@
 .@{class-prefix}-ui-design-confirm-hint.ant-typography {
   color: var(--modal-text-secondary, var(--wb-text-secondary, rgba(0, 0, 0, 0.45)));
   font-size: 13px;
+  // 提示文案占满左侧剩余空间，把「下一步」按钮推到卡片右下角。
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
 }
 
 // 「确认全部」大按钮：圆角、阴影、主色。

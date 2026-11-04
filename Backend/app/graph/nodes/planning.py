@@ -197,13 +197,8 @@ def _technical_planning_requirement_spec(
         or product_plan.get("confirmation_status") != "confirmed"
     ):
         raise ValueError("TechnicalPlan 必须基于已确认 ProductPlan 生成。")
-    if not isinstance(ui_designs, dict) or ui_designs.get(
-        "confirmation_status"
-    ) not in {
-        "confirmed",
-        "skipped",
-    }:
-        raise ValueError("TechnicalPlan 必须基于已确认或已跳过的 UI 设计阶段生成。")
+    if not isinstance(ui_designs, dict) or ui_designs.get("confirmation_status") != "confirmed":
+        raise ValueError("TechnicalPlan 必须基于已确认的 UI 设计阶段生成。")
     technical_input = {
         key: value
         for key, value in requirement_spec.items()

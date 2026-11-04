@@ -73,20 +73,13 @@ def application_planning_review_payload(
     )
     clarification = state.get("clarification")
     if node_name == "planning_stage_entry":
-        ui_designs = artifact_value if isinstance(artifact_value, dict) else {}
-        skipped = ui_designs.get("confirmation_status") == "skipped"
         clarification = {
             "mode": "planning_stage_entry_confirmation",
             "status": "requires_user_input",
             "question_schema": "devagentstudio.planning-stage-entry.v1",
             "questions": [],
             "assumptions": [],
-            "message": (
-                "UI 设计已跳过。请确认是否进入计划阶段并开始生成技术规划。"
-                if skipped
-                else "UI 设计已确认。请确认是否进入计划阶段并开始生成技术规划。"
-            ),
-            "ui_design_skipped": skipped,
+            "message": "UI 设计已确认。请确认是否进入计划阶段并开始生成技术规划。",
         }
     revision_source = {
         "artifact": artifact_value,

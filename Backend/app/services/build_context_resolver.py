@@ -128,8 +128,8 @@ def _materialize_page_confirmation_plan(
         raise ValueError("当前正式 RequirementSpec 未确认。")
     if product_plan.get("confirmation_status") != "confirmed":
         raise ValueError("当前正式 ProductPlan 未确认。")
-    if ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}:
-        raise ValueError("当前正式 UiManifest 未确认或未明确跳过。")
+    if ui_designs.get("confirmation_status") != "confirmed":
+        raise ValueError("当前正式 UiManifest 未确认。")
     return materialize_technical_plan_runtime(
         technical_plan,
         requirement_spec,

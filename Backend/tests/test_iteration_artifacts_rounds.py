@@ -1,9 +1,9 @@
 """迭代产物记录按**轮次**保留，同一分支上的多轮各记各的。
 
 用户选「继续当前版本」时分支名不变。若记录以分支名为 key，本轮事实会写进同一条、
-把上一轮抹掉；归属标注又靠"排除当前分支"来算，于是上一轮的产出**永远**标不出来。
-这里验证改成轮次列表后，两种情况（继续当前版本 / 新建版本）都能正确回答
-"这个页面上次是哪个版本做的"。
+把上一轮抹掉。改成轮次列表后，记录本身保留同名分支的多轮事实；
+但归属标注在「继续当前版本」时**不再**把同名历史轮次标出（用户对"继续 v1_0"的
+心智是"在 v1_0 上继续补做"，而不是"v1_0 已经做过"）。
 """
 
 from __future__ import annotations
@@ -81,11 +81,11 @@ class IterationRoundsTests(unittest.TestCase):
             self.assertEqual(len(rounds), 1)
             self.assertEqual(rounds[0]["plannedPageIds"], ["a"])
 
-    def test_origins_exclude_current_round_not_current_branch(self) -> None:
-        """核心回归：「继续当前版本」时，上一轮的产出仍要标得出来。
+    def test_origins_exclude_same_branch_history(self) -> None:
+        """「继续当前版本」时，同名分支历史轮次的设计事实**不再**标注。
 
-        旧实现按"分支名 != 当前分支"排除，同一分支的上一轮会被一起排掉，
-        于是界面永远不显示"已设计过"。
+        用户对"继续 v1_0"的心智是"在 v1_0 上继续补做"，而不是"v1_0 已经做过"。
+        把同名历史标成「v1_0 已设计过」会让用户误以为进错了版本。
         """
 
         with tempfile.TemporaryDirectory() as raw:
@@ -109,10 +109,10 @@ class IterationRoundsTests(unittest.TestCase):
 
             origins = iteration_origins_for_pages(workspace, ["welcome_home", "greeting_display"])
 
-            self.assertEqual(
-                origins.get("welcome_home"),
-                {"designedIn": "v1.1"},
-                "同一分支上一轮设计过的页面必须标出归属",
+            self.assertNotIn(
+                "welcome_home",
+                origins,
+                "继续当前版本时，同名分支的上一轮设计事实不应标注",
             )
             self.assertNotIn("greeting_display", origins, "本轮新增的页面不该有归属")
 

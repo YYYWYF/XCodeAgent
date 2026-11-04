@@ -440,26 +440,6 @@ class UiDesignGenerationPool:
         self._pending_ids.discard(key)
         return True
 
-    async def cancel_pending_pages(self, workspace: str) -> list[str]:
-        """取消工作区当前排队/生成中的所有页面，返回实际取消的 page_id。
-
-        与 `cancel_workspace` 的区别是这里**不封锁工作区**：`cancel_workspace` 是
-        应用删除语义，会把工作区永久加入 `_deleting_workspaces` 黑名单、拒绝之后
-        任何生成；而这里只取消"此刻在途"的任务，工作区仍可正常继续生成（用户跳过
-        UI 设计后仍可能回来调整页面）。
-
-        用于「跳过 UI 设计」：跳过表示不再等待生成，若放任 worker 跑完，它会继续把
-        结果写进 ui-designs.json，让已跳过的确认区仍显示"生成中"，落盘结果也与跳过
-        态相互矛盾。逐页走 `cancel_page` 复用同一套取消语义（queued 惰性出队、
-        generating 由 should_cancel 在返回后拦截落盘），无需重建队列。
-        """
-
-        cancelled: list[str] = []
-        for page_id in sorted(self.pending_page_ids(workspace)):
-            if await self.cancel_page(workspace, page_id):
-                cancelled.append(page_id)
-        return cancelled
-
     async def _write_result(
         self, task: UiDesignGenerationTask, entry: dict[str, Any]
     ) -> None:

@@ -157,6 +157,11 @@ def iteration_origins_for_pages(
     判据是"**末轮之外**的全部轮次"，不是"分支名不等于当前分支"：用户选「继续当前版本」时
     上一轮的产出正记在**同一个分支名**下，按分支名排除会把它们一起排掉，标注就永远出不来。
 
+    但**继续当前版本**（分支名等于当前分支）时，把同名历史轮次的归属从结果里剔除 ——
+    用户对"继续 v1_0"的心智是"在 v1_0 上继续补做"，而不是"v1_0 已经做过"。把同名历史
+    标成「v1_0 已设计过」会让用户以为进错了版本（明明选了继续，怎么显示已做过），
+    造成困惑。属于当前分支的历史轮次不再标注，UI 上等同"本轮新增"。
+
     历史为空（老工作区、或首轮）时返回空字典 —— 调用方据此退化成"本轮新增"，
     不会误标成旧迭代。
     """
@@ -167,12 +172,17 @@ def iteration_origins_for_pages(
 
     # 末轮即本轮（由 begin_iteration_round 追加），算归属时排除。
     history = read_iteration_artifacts(workspace)[:-1]
+    current_branch = read_workspace_branch_name(workspace)
 
     designed_in: dict[str, str] = {}
     undesigned_in: dict[str, str] = {}
     # 由旧到新遍历，后者覆盖前者 → 最终留下的是**最近**那一轮。
     for record in history:
         branch_name = record["branch"]
+        # 继续当前版本时，同名历史轮次不算"历史迭代"——它们是同一版本内的延续，
+        # 用户对"在 v1_0 上继续做"的心智不容许把上一轮的 v1_0 标成「已设计过」。
+        if branch_name == current_branch:
+            continue
         for page_id in record["designedPageIds"]:
             if page_id in wanted:
                 designed_in[page_id] = branch_name

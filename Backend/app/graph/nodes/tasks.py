@@ -107,8 +107,8 @@ def _build_prerequisite_errors(
         errors.append("RequirementSpec 未确认。")
     if not product_plan or product_plan.get("confirmation_status") != "confirmed":
         errors.append("ProductPlan 未确认。")
-    if not ui_designs or ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}:
-        errors.append("UiManifest 未确认或未明确跳过。")
+    if not ui_designs or ui_designs.get("confirmation_status") != "confirmed":
+        errors.append("UiManifest 未确认。")
     if (
         not technical_plan
         or technical_plan.get("artifact_type") != "technical-plan"

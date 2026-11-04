@@ -216,7 +216,6 @@ def _compile_product_action_binding(
     implementation: dict[str, Any],
     ui_effect: str,
     ui_step_effects: dict[str, str],
-    ui_design_skipped: bool = False,
 ) -> dict[str, Any]:
     """合并产品、UI 与技术三层事实，生成 Build 使用的判别联合绑定。"""
 
@@ -236,13 +235,10 @@ def _compile_product_action_binding(
             "targetPageId": str(behavior.get("targetPageId") or "").strip(),
         }
     if behavior_type == "interface":
-        local_effect = ui_effect
-        if ui_design_skipped and not local_effect:
-            local_effect = str(behavior.get("expectedResult") or "").strip()
         return {
             "actionId": action_id,
             "bindingType": "local",
-            "localEffect": local_effect,
+            "localEffect": ui_effect,
         }
     if behavior_type == "external":
         return {
@@ -263,10 +259,7 @@ def _compile_product_action_binding(
         elif step_type == "navigation":
             steps.append({"type": "navigation", "targetPageId": str(step.get("targetPageId") or "")})
         elif step_type == "interface":
-            local_effect = ui_step_effects.get(step_id, "")
-            if ui_design_skipped and not local_effect:
-                local_effect = str(step.get("expectedResult") or "").strip()
-            steps.append({"type": "local", "localEffect": local_effect})
+            steps.append({"type": "local", "localEffect": ui_step_effects.get(step_id, "")})
         elif step_type == "external":
             steps.append({"type": "external", "externalTarget": str(step.get("externalTarget") or "")})
     return {"actionId": action_id, "bindingType": "sequence", "steps": steps}
@@ -398,7 +391,6 @@ def build_page_implementation_contracts(
         for page in _dict_items(ui_designs.get("pages"))
         if page.get("pageId")
     }
-    ui_design_skipped = ui_designs.get("confirmation_status") == "skipped"
     contracts: list[dict[str, Any]] = []
     for page in technical_plan_pages(technical_plan):
         page_id = str(page.get("pageId") or page.get("id") or "").strip()
@@ -431,7 +423,6 @@ def build_page_implementation_contracts(
                 implementation=implementations.get(action_id, {}),
                 ui_effect=effects.get(action_id, ""),
                 ui_step_effects=step_effects.get(action_id, {}),
-                ui_design_skipped=ui_design_skipped,
             )
             action_bindings.append(
                 {
@@ -440,15 +431,18 @@ def build_page_implementation_contracts(
                     "uiControlRefs": ui_controls.get(action_id, []),
                 }
             )
+        # 只有生成了已确认设计稿的页才需要"还原设计稿"约束；未生成/失败页走
+        # ProductPlan + TechnicalPlan 的实现验收口径。
+        has_ui_reference = str(ui_page.get("status") or "").strip() == "confirmed"
         engineering_acceptance = (
             [
-                "页面实现应依据 ProductPlan 与 TechnicalPlan 生成，不依赖 UI 设计稿。",
+                "页面实现必须还原已确认 UI 设计稿。",
                 "页面只能调用 requiredEndpointIds 中声明的接口。",
                 "页面权限、跳转和状态处理必须与 ProductPlan 保持一致。",
             ]
-            if ui_design_skipped
+            if has_ui_reference
             else [
-                "页面实现必须还原已确认 UI 设计稿。",
+                "页面实现应依据 ProductPlan 与 TechnicalPlan 生成，不依赖 UI 设计稿。",
                 "页面只能调用 requiredEndpointIds 中声明的接口。",
                 "页面权限、跳转和状态处理必须与 ProductPlan 保持一致。",
             ]
@@ -676,7 +670,7 @@ def validate_page_implementation_contracts(
                 validate_endpoint_references=not uses_current_product_contract,
                 errors=errors,
             )
-        if ui_designs is not None and ui_designs.get("confirmation_status") != "skipped":
+        if ui_designs is not None:
             control_action_ids = [
                 str(control.get("actionId") or "").strip()
                 for control in ui_action_bindings(ui_pages.get(page_id, {}))

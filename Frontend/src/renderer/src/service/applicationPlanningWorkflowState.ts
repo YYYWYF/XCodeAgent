@@ -277,7 +277,7 @@ export function shouldBackfillPlanningWorkflow(
   workflow: WorkflowRunPayload | undefined,
   newRoundPending: boolean
 ): boolean {
-  // 入口门禁是跳过 UI 后的唯一权威结果，即使本地仍保留 skip 轮次标记，
+  // 入口门禁是 UI 确认后的权威结果，即使本地仍保留确认轮次标记，
   // 也必须把入口卡补回聊天会话，避免旧技术规划 loading 占据最后一条消息。
   if (planningWorkflowPhase(workflow) === 'planning_stage_entry') return true
   return !newRoundPending && planningWorkflowSettlesLoading(workflow)
@@ -327,32 +327,6 @@ export function planningWorkflowPhase(workflow?: WorkflowRunPayload): string {
   // TechnicalPlan 的事务子节点都属于同一个可见规划阶段；首帧尚无 lifecycle 时也要显示生成进度。
   return phase.startsWith('technical_planning_') ? 'technical_planning' : phase
 }
-
-/** 判断当前 UI Manifest 是否已由用户明确跳过，避免继续展示旧 UI 设计稿。 */
-export function planningWorkflowUiDesignSkipped(workflow?: WorkflowRunPayload): boolean {
-  if (!workflow) return false
-  for (const source of [workflow.state, workflow.result, workflow.summary]) {
-    const clarification = source?.clarification
-    if (
-      clarification &&
-      typeof clarification === 'object' &&
-      (clarification as Record<string, unknown>).ui_design_skipped === true
-    ) {
-      return true
-    }
-    const uiDesigns = source?.ui_designs
-    if (
-      uiDesigns &&
-      typeof uiDesigns === 'object' &&
-      !Array.isArray(uiDesigns) &&
-      (uiDesigns as Record<string, unknown>).confirmation_status === 'skipped'
-    ) {
-      return true
-    }
-  }
-  return false
-}
-
 // 从 Workflow 或生命周期快照读取当前需求是否已通过用户确认门禁。
 export function planningRequirementsConfirmed(
   workflow?: WorkflowRunPayload,

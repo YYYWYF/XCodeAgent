@@ -2413,7 +2413,6 @@ def _ui_design_action(value: Any) -> dict[str, Any] | None:
         "select_template",
         "regenerate",
         "adjust_pages",
-        "skip",
         "multi",
         "refresh",
     }:
@@ -2422,10 +2421,6 @@ def _ui_design_action(value: Any) -> dict[str, Any] | None:
     # 显式恢复不携带旧页面动作，节点只恢复当前孤立任务并保留确认门。
     if action_type == "refresh":
         return {"action": "refresh"}
-
-    # 跳过 UI 设计不绑定具体页面，直接把当前创建规划推进到技术规划。
-    if action_type == "skip":
-        return {"action": "skip"}
 
     # 多页并发：前端攒多页"换一换/选模板"成一个 run 提交。每项是合法单页动作，
     # 同 pageId 去重（保留最后一个）。截断上限 12（覆盖绝大多数应用的页面数），

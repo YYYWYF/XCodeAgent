@@ -469,9 +469,9 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
         raise ValueError("产品规划必须经产品角色确认后才能进入工作区。")
     if (
         not isinstance(ui_designs, dict)
-        or ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}
+        or ui_designs.get("confirmation_status") != "confirmed"
     ):
-        raise ValueError("UI 设计稿必须经产品角色确认或明确跳过后才能进入工作区。")
+        raise ValueError("UI 设计稿必须经产品角色确认后才能进入工作区。")
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
     product_plan_markdown = Path(str(state.get("product_plan_path") or ""))
     technical_plan_markdown = Path(str(state.get("technical_plan_path") or ""))
@@ -508,7 +508,6 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
                 "UI 设计索引",
                 "json",
                 ".devagentstudio/specs",
-                accepted_confirmation_statuses=("confirmed", "skipped"),
             ),
         },
         "technicalPlan": {

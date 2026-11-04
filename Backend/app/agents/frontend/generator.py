@@ -52,29 +52,24 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
 
     仿照 _page_template_instruction 的"read_file 读参考代码再生成"模式。设计稿是
     UI确认阶段生成并经用户确认的纯视觉 React+antd+pro-components mockup，落盘在
-    /.devagentstudio/ui-design/pages/<page_key>/index.tsx；若 UI 阶段被明确跳过，则返回
-    基于 ProductPlan、TechnicalPlan 和模板技能的无设计稿实现指令。前端 agent 处理某个
-    page task 时（unit_id = page:<pageId>），按映射 read_file 对应设计稿，高保真
-    还原其视觉结构，再把静态数据/无交互换成真实 API/数据层。
+    /.devagentstudio/ui-design/pages/<page_key>/index.tsx。**只有 status == "confirmed"
+    的页才会进入参考清单**——未生成 / 生成失败 / 已取消的页面对前端 agent 完全透明，
+    让它基于 ProductPlan / TechnicalPlan / 模板技能直接实现，不去 read 一份不存在或
+    未通过校验的设计稿。
     """
 
     if not isinstance(ui_designs, dict):
         return ""
-    if ui_designs.get("confirmation_status") == "skipped":
-        return (
-            "## UI Design Reference\n"
-            "The user explicitly skipped UI design generation. No React visual reference is "
-            "available. Generate each page from the ProductPlan, TechnicalPlan, compiled page "
-            "implementation contract, and the code-block-template skill. Do not block or fail "
-            "the task because a design file is absent; preserve the declared product actions, "
-            "routes, permissions, endpoint bindings, and local behavior.\n\n"
-        )
     pages = ui_designs.get("pages")
     if not isinstance(pages, list) or not pages:
         return ""
     entries: list[dict[str, str]] = []
     for page in pages:
         if not isinstance(page, dict):
+            continue
+        # 只引用已确认的设计稿；其它状态（pending / generating / generation_failed /
+        # cancelled）一律不进入参考清单。
+        if str(page.get("status") or "").strip() != "confirmed":
             continue
         page_id = str(page.get("pageId") or "").strip()
         page_key = str(page.get("page_key") or "").strip()

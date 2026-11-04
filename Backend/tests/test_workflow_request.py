@@ -653,8 +653,8 @@ class WorkflowRequestTests(unittest.TestCase):
             {"pageId": "dashboard_page", "action": "regenerate"},
         )
 
-    def test_application_planning_extracts_ui_design_skip_action(self) -> None:
-        """跳过 UI 设计动作应通过当前 Workflow 输入解析器保留下来。"""
+    def test_application_planning_rejects_ui_design_skip_action(self) -> None:
+        """「跳过 UI 设计」入口已下线，skip 不再被识别为合法的 ui_action。"""
 
         inputs = workflow_run_inputs(
             {
@@ -671,9 +671,8 @@ class WorkflowRequestTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(
-            inputs["application_planning_interaction"]["ui_action"],
-            {"action": "skip"},
+        self.assertIsNone(
+            inputs["application_planning_interaction"].get("ui_action"),
         )
 
     def test_application_planning_rejects_invalid_ui_design_action(self) -> None:

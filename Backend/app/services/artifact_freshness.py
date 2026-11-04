@@ -36,7 +36,7 @@ def upstream_errors(root: Path, key: str, value: dict[str, Any]) -> list[str]:
             if value[field] != digest(current):
                 errors.append(f"{upstream} 已变化")
     status = value.get("confirmation_status")
-    if status is not None and status not in ({"confirmed", "skipped"} if key == "ui_designs" else {"confirmed"}):
+    if status is not None and status != "confirmed":
         errors.append("当前版本尚未确认")
     return errors
 

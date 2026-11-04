@@ -601,7 +601,6 @@ export default function WorkflowRunCard({
                   __applicationPlanningAction: 'enter_planning'
                 })
               }
-              skippedUiDesign={clarification?.ui_design_skipped === true}
             />
           ) : testPhaseConfirmation && requiresConfirmation ? (
             <TestPhaseConfirmationCard

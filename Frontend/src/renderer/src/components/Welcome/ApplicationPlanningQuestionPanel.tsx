@@ -554,7 +554,6 @@ export default function ApplicationPlanningQuestionPanel({
             __applicationPlanningAction: 'enter_planning'
           })
         }
-        skippedUiDesign={clarification.ui_design_skipped === true}
       />
     )
   }
