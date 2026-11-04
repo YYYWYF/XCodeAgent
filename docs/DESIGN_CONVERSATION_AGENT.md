@@ -22,7 +22,7 @@ POST /application-page-planning/run
   -> design_intent_analysis
 ~~~
 
-不得新建产品对话 endpoint、第二个规划 Graph 或第二个 planning checkpoint thread。前端提交 forwardedProps.applicationPlanningInteraction，保留服务端最新中断给出的 gateId、artifact 和 artifactRevision，自由输入固定使用 action=design_change。当前卡片的 answer、confirm、revise、ui_action 和 enter_planning 仍是独立结构化语义，不能由自然语言猜测或替代。
+使用同一个规划 Graph 定义和既有 endpoint，DESIGN 与 PLAN 分别持有独立 thread/checkpoint。跨阶段实际修改前，通过 `forwardedProps.planningStageHandoff` 交接服务端产物与当前确认门；单纯浏览不创建会话，跨阶段只读提问不交接当前业务执行。前端提交 forwardedProps.applicationPlanningInteraction，保留服务端最新中断给出的 gateId、artifact 和 artifactRevision，自由输入固定使用 action=design_change。当前卡片的 answer、confirm、revise、ui_action 和 enter_planning 仍是独立结构化语义，不能由自然语言猜测或替代。
 
 ## Coordinator 与确定性 Policy
 
@@ -97,4 +97,6 @@ planning run 执行期间输入框仍可编辑，但发送按钮和回车发送�
 
 计划阶段和开发阶段继续使用各自原有对话路径；产品专用自由输入仅在 workbenchPhase=product 时进入 /application-page-planning/run。
 
-应用已 `ready_for_workbench` 后，用户手动切回 product 阶段仍使用同一 Product Coordinator 和 `/application-page-planning/run`，不回落 `/conversation/run`。服务端固定恢复原 planning thread 的 `design_intent_analysis`：chat/read_only/clarification/out_of_scope 直接回复且零写入；识别到产品修改时也只提示进入既有 formal revision 影响确认，不复用历史审阅门、不直接改正式产物。
+进入计划阶段后，手动回看需求阶段只能查看历史；进入开发及后续任何阶段后，需求和计划阶段都只能查看历史，底部不显示输入框、禁用历史确认/修改操作，后续需求统一在开发阶段提出。阶段历史列表可以浏览，不能由用户新建规划会话。服务端拒绝 `conversationPhase=product` 借技术规划入口提问，也拒绝完成态 `product_stage_conversation` 自由对话，不调用模型或写规划状态。
+
+可操作权限由当前 lifecycle 的业务阶段和 `initialization.threadId` 决定，手动浏览位置与最远到达记录不能授予权限。系统因正式修改返回需求/计划后，仅当前阶段的权威会话恢复对话、修改和确认；同阶段的旧会话继续只读。计划阶段提出上游修改仍可由系统受控交接回需求，不允许用户通过浏览历史自行回退。首次模板就绪的计划卡保留“进入开发阶段”操作。

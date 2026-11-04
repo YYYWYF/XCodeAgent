@@ -1,16 +1,16 @@
 """在原规划 AG-UI 端点提供问答、技术修改与上游设计回退。"""
 
-import asyncio
 from typing import Any, AsyncIterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from langchain_core.runnables import RunnableLambda
 
 from app.agents.technical_planning_conversation import classify_technical_planning_conversation
 from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.persistence.execution_recovery import get_execution
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.protocols.application_planning_run_lock import application_planning_run_lock
-from app.services.application_lifecycle import APPLICATION_PLANNING_ACTIVE_STAGES, load_application_lifecycle
+from app.services.application_lifecycle import load_application_lifecycle
 from app.services.execution_recovery_projection import recovery_failure_diagnostic
 from app.services.technical_planning_retry import (
     TechnicalPlanningMessageRevision, prepare_technical_planning_retry,
@@ -22,25 +22,28 @@ class TechnicalPlanningConversationRequest(BaseModel):
     """验证自由输入的动作和原规划身份，禁止客户端选择任意节点。"""
 
     model_config = ConfigDict(extra="forbid")
-    action: Literal["classify", "revise", "revise_design"]
+    action: Literal["classify", "prepare_revision", "revise", "revise_design"]
     workspaceRoot: str = Field(min_length=1)
     applicationId: str = Field(min_length=1)
     planningThreadId: str = Field(min_length=1)
     request: str = Field(min_length=1, max_length=16000)
     sourceRunId: str | None = None
     checkpointId: str | None = None
+    conversationPhase: Literal["product", "planning"] = "planning"
 
 
 async def _current_context(graph, request: TechnicalPlanningConversationRequest):
     """只读原规划 checkpoint 与失败证据，不改变原 Run、确认门或恢复资格。"""
 
+    if request.conversationPhase != "planning":
+        raise ValueError("需求阶段已完成，仅供查看历史会话。如需调整需求，请在当前计划阶段提出。")
     lifecycle = load_application_lifecycle(request.workspaceRoot)
     if (lifecycle is None or lifecycle.application.id != request.applicationId
             or lifecycle.initialization.thread_id != request.planningThreadId):
         raise ValueError("技术规划对话与当前应用或规划线程不匹配。")
     if lifecycle.initialization.stage not in {
-        # 计划对话回退上游后仍使用同一线程；不能把当前产物阶段当成对话入口阶段。
-        *APPLICATION_PLANNING_ACTIVE_STAGES,
+        ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+        ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
         # 模板失败仍属于原计划会话，允许提问和发起新的规划修改。
         ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
     }:
@@ -51,6 +54,8 @@ async def _current_context(graph, request: TechnicalPlanningConversationRequest)
     values = dict(snapshot.values)
     if not values:
         raise ValueError("技术规划状态不可用，请先同步或使用上方重试入口。")
+    if request.action != "revise_design" and values.get("planning_stage_handoff", {}).get("targetPhase") == "product":
+        raise ValueError("当前会话已返回需求阶段，请完成上游确认后重新进入技术规划。")
     source = await get_execution(request.workspaceRoot, str(values.get("active_run_id") or ""))
     return snapshot, values, lifecycle, source
 
@@ -64,6 +69,15 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
         snapshot, values, lifecycle, source = await _current_context(graph, request)
         # 问答允许没有计划；分类不得把失败候选当成已有技术规划。
         prepared = prepare_technical_planning_retry(values)
+        if request.action == "prepare_revision":
+            # 卡片已经明确是技术修改，只校验已有计划并签发当前版本，不运行意图分类模型。
+            prepare_technical_planning_retry(values, new_request=request.request)
+            return AgUiActionResult(message="提交技术规划修改。", data={
+                "intent": "revise", "message": "提交技术规划修改。",
+                "planningThreadId": request.planningThreadId,
+                "sourceRunId": values.get("active_run_id"),
+                "checkpointId": snapshot.config["configurable"]["checkpoint_id"],
+            })
         context = {
             "technical_plan": prepared["technical_plan"],
             "requirement_spec": values.get("requirement_spec"),
@@ -73,7 +87,13 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             "failure": recovery_failure_diagnostic(source) if source else None,
             "lifecycle_error": lifecycle.error.model_dump(mode="json") if lifecycle.error else None,
         }
-        decision = await asyncio.to_thread(classify_technical_planning_conversation, request.request, context)
+        def classify_context(current: dict):
+            """分类模型也绑定当前阶段会话，不能复用共享模型实例的独立调用身份。"""
+
+            return classify_technical_planning_conversation(request.request, current)
+
+        decision = await RunnableLambda(classify_context).ainvoke(context,
+            config={"configurable": {"thread_id": str(payload.get("threadId") or request.planningThreadId)}})
         intent, message = decision.intent, decision.message
         if intent == "revise" and not prepared["technical_plan"]:
             intent, message = "reply", "当前尚无技术规划，请使用上方重试入口重新生成；生成后可以在这里提出修改要求。"
@@ -100,6 +120,8 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             upstream = request.action == "revise_design" or has_explicit_business_access_control_change(
                 request.request, user_roles=requirement.get("user_roles") if isinstance(requirement, dict) else None,
             )
+            if upstream and values.get("planning_stage_handoff", {}).get("targetPhase") != "product":
+                raise ValueError("上游修改必须先交接到独立需求会话，不能在技术线程中回退。")
             target_node = "design_intent_analysis" if upstream else "technical_planning"
             if target_node == "technical_planning":
                 prepare_technical_planning_retry(values, new_request=request.request)

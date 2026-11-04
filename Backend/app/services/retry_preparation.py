@@ -72,6 +72,10 @@ def restore_retry_source(workspace: str, source, before, new_run_id: str) -> Non
                     resource_locks=lifecycle_service._resource_locks_without_run(current.resource_locks, new_run_id))
         elif current.active_run_id == new_run_id:
             updates["active_run_id"] = before.active_run_id
+            if before.ended_planning_execution and before.ended_planning_execution.run_id == source.run_id:
+                updates.update(initialization=before.initialization,
+                    active_formal_revision=before.active_formal_revision,
+                    ended_planning_execution=before.ended_planning_execution)
         else:
             return
         lifecycle_service.write_application_lifecycle(workspace, current.model_copy(update={

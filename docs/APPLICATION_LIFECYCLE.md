@@ -11,9 +11,11 @@
 
 生命周期文件只承担冷启动、断线重连和显式校准，不作为渲染进程的实时轮询源。后端每次原子写入成功后，必须先通过主 Workflow AG-UI 流发送独立的 `application-lifecycle` 自定义事件，再继续投影对应节点或控制动作。工作台顶层 application store 按应用标识与单调 `revision` 合并冷启动读取、重连校准和实时事件；页面控制栏、应用大纲及 API 大纲只消费这一个 store。较旧的文件读取结果不得覆盖更新的实时 revision。
 
+开发续接的 Run 可能已经完成并释放 active execution，但其“你想开发哪个页面或 API？”选择结果仍需恢复。`/application-lifecycle/run` 的 `get` 可同时携带 `sessionId`、`sessionThreadId`（缺一拒绝），仅在本次响应 `extensions.workbenchResult` 返回该会话最新已完成 Run 的标准 Workflow。投影由最新执行索引与当前 checkpoint 的 Run/Thread/owner/workspace/完成状态共同证明，只公开 `development_target_selection`；不扫描历史 checkpoint，不调用 Graph、不消费 continuation，不把该投影写入 lifecycle 文件。前端按会话隔离并发读取，断连收口、冷进入和显式状态同步时合并到原 assistant 回复并保存历史；新一轮正在执行、较新本地输入和跨会话迟到响应不能被旧结果覆盖。选择卡的可见性必须实际验收，后台 completed 不能代替前端完成。验收见 [结果恢复验证](WORKBENCH_RESULT_RECOVERY_VALIDATION_2026_11_03.md)。
+
 ## Schema 与一致性
 
-顶层只保存 application 标识、UTC `updatedAt`、单调递增 `revision`、`initialization`、活动 run 引用、按 runId 索引的 `activeExecutions`、按稳定业务标识索引的 `resourceLocks`、当前 revision impact/formal revision、错误和扩展容器，不保存 schema 版本字段。应用标识同时作为当前工作区业务身份，不再重复保存同值的 project 标识。`initialization.threadId` 定位原 application-planning checkpoint；进入 `ready_for_workbench` 后继续保留，但只能由 lifecycle 绑定且经用户确认的 `design_stage_revision` 恢复，不能重新打开初始化状态。工作台待交互与错误只嵌入各自 execution，避免一个页面的确认覆盖另一个页面。
+顶层只保存 application 标识、UTC `updatedAt`、单调递增 `revision`、`initialization`、活动 run 引用、按 runId 索引的 `activeExecutions`、按稳定业务标识索引的 `resourceLocks`、当前 revision impact/formal revision、错误和扩展容器，不保存 schema 版本字段。应用标识同时作为当前工作区业务身份，不再重复保存同值的 project 标识。`initialization.threadId` 定位当前阶段的 application-planning checkpoint；阶段交接成功后指向新的 DESIGN/PLAN thread。`initialization.iterationId` 定位稳定迭代身份，创建新迭代时分配，阶段交接不改变它。进入 `ready_for_workbench` 后继续保留当前线程，正式修订先校验影响确认，再把服务端上下文交给新阶段线程，不能重新打开旧线程的初始化状态。工作台待交互与错误只嵌入各自 execution，避免一个页面的确认覆盖另一个页面。
 
 写入使用同目录临时文件、文件 fsync、原子替换和目录 fsync。损坏或不符合当前结构的文件会显式拒绝读取，不根据旧索引、localStorage、checkpoint 或正式文档反向生成状态文件。所有状态文件和动作输入先经过 Pydantic 校验。
 
@@ -39,7 +41,7 @@ collecting_requirement
        └─ failure -> application_template_generation_failed（终止）
 ```
 
-UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不会自动执行 TechnicalPlan。只有原创建规划 checkpoint 上通过 `gateId + artifactRevision` 校验的 `enter_planning` 动作才能进入 `generating_technical_plan`。模板生成只由用户确认 TechnicalPlan 后的确认回调启动；模板失败后，用户可通过独立的模板重试动作重新打开模板阶段，不能回到任何上游规划阶段。失败、应用重启、再次打开和进入工作台都不会自动重新启动模板生成。
+UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不会自动执行 TechnicalPlan。只有交接到当前 PLAN 线程、通过 `gateId + artifactRevision` 校验的 `enter_planning` 动作才能进入 `generating_technical_plan`。模板生成只由用户确认 TechnicalPlan 后的确认回调启动；模板失败后，用户可通过独立的模板重试动作重新打开模板阶段，不能回到任何上游规划阶段。失败、应用重启、再次打开和进入工作台都不会自动重新启动模板生成。
 
 ## 全应用生命周期与计划执行模式
 
@@ -54,6 +56,8 @@ UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不
 主 Workflow 获取范围登记时在 `activeExecutions` 中创建运行，并由后端从正式 ProjectPlan 计算资源集合。页面主目标、导航关联页、直接使用的 API 契约及其数据源，以及共享这些 API/数据源的其他页面和契约会原子写入 `resourceLocks`。当前阶段普通任务的 `resourceLocks` 作为可观测、可持久化的资源元数据，不参与普通启动门禁；同一资源键以最近一次运行记录为准。等待授权、修复确认、验收和停止仍保留登记；`finalize_project` 成功或用户明确“结束计划”清理该 run 当前拥有的登记。明确“结束计划”按当前 workspace、Workbench 类型与精确 runId 校验目标并清理 execution，不以原始 thread/session 拒绝；暂停仍保留 thread/session 归属校验。已停止的执行继续运行时，前端只提交旧 runId 作为同一执行的恢复令牌；后端仍验证同一 thread、scope 和 target，并在一次写入中转移旧 run 当前可见的资源记录。结构化测试阶段确认与审查阶段确认是仅有可跨 thread 转交 execution 的恢复动作，分别用于进入空白测试会话和审查会话；scope 与 target 校验不放宽。该令牌不参与 Graph 状态重建。
 
 主 Workflow、创建规划与自由对话的异常或终止性业务失败，先按精确 Run 封锁后续 Agent/工具调用并终止受控命令及启动验收进程，再等待真实后台线程（含写盘和回滚）退出。清理不因 AG-UI 连接取消而中止；在途线程尚未退出时继续保留运行占用。退出后停止心跳、注销活动任务、释放工作区运行租约与规划线程锁。Workbench 的 `FAILED` execution、原始诊断、完整 `resourceKeys` 和 LangGraph checkpoint 保留用于显式重试，仅清除该 Run 当前拥有的 `resourceLocks`，不影响其他运行。Native Recovery 重试从失败记录的完整资源键重新申请恢复集合；若被后来的任务占用则拒绝覆盖，仍保留原失败与 checkpoint。重新生成的正式产物继续经过原确认门，不自动重试或确认。
+
+用户点击停止统一表示结束本轮任务。规划阶段通过 `end_planning_execution` 等待真实退出后标记执行 cancelled/ended，释放修订和占用并保留文件；二次修改结束恢复开发准入，同时在 `endedPlanningExecution` 保存原 Run、initialization、正式修订和已有工作区指纹，供显式继续使用。公开投影只返回 Run/Thread、阶段与 `workspaceUnchanged`，不暴露内部修订凭据。原会话复用“已停止生成 / 继续生成”卡，历史输入与旧确认仍只读。点击继续先只读校准，再走现有 `/execution-recovery/execute` 的 Backend ActionPlan 与原业务节点重执行；在原 lifecycle CAS 中复验无新任务和工作区未变后恢复修订并消费凭据，准备失败则退回结束态。新的产物仍需原确认门，不自动生成、确认或增加恢复策略。首次创建未完成则保留原业务阶段及 cancelled 状态，不绕过确认门。开发阶段沿现有结束计划动作处理。后台尚未退出时保留占用，只提供重试结束；网络中断与真实失败仍使用独立的故障恢复规则。
 
 普通启动不执行业务资源集合互斥，不放宽文件、命令、敏感操作或 Agent 工具权限。失败重试的资源重获单独检查后来 owner，防止旧恢复覆盖新任务；它不改变普通启动规则。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复全面业务互斥前应重新引入显式策略开关和冲突 UX。
 
@@ -79,7 +83,8 @@ Build 完成后，工作台 execution 会以 `pendingInteraction.type=test_phase
   "initialization": {
     "stage": "ready_for_workbench",
     "status": "completed",
-    "threadId": "planning-thread-original"
+    "threadId": "planning-thread-current-stage",
+    "iterationId": "iteration-stable-id"
   },
   "activeExecutions": {
     "run-orders-7": {

@@ -1,11 +1,11 @@
 import { randomUUID } from '@ag-ui/client'
 import type { AgentSubscriber } from '@ag-ui/client'
-import type { ApplicationConfig } from '../typings'
+import type { ApplicationConfig, WorkflowRunPayload } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 import { getApplicationPlanningUrl } from './applicationPagePlanning'
 
 export type TechnicalPlanningMessage = {
-  action: 'classify' | 'revise' | 'revise_design'
+  action: 'classify' | 'prepare_revision' | 'revise' | 'revise_design'
   workspaceRoot: string
   applicationId: string
   planningThreadId: string
@@ -22,11 +22,31 @@ export type TechnicalPlanningReply = {
   checkpointId: string
 }
 
-/** 独立只读 AG-UI 分类不覆盖原 Graph；所有状态校验由后端签发的版本身份决定。 */
-export async function readTechnicalPlanningReply(
-  application: ApplicationConfig, planningThreadId: string, request: string, signal: AbortSignal
+/** 把已完成的只读答复投射为历史消息，绝不替换 Canonical Workflow 或构造确认门。 */
+export function technicalPlanningReplyPresentation(reply: TechnicalPlanningReply): WorkflowRunPayload {
+  return {
+    runId: reply.sourceRunId, threadId: reply.planningThreadId, events: [],
+    summary: { status: 'completed', phase: 'technical_planning_reply', message: reply.message,
+      productConversationResult: { kind: 'read_only', mutating: false, response: reply.message,
+        presentation: { artifactPresentation: 'preserve' } } },
+    state: {}, result: {}
+  }
+}
+
+/** 冷绑定或 transport 收尾重投同一审阅快照时，保留已展示的只读答复和独立确认卡。 */
+export function shouldPreserveTechnicalPlanningReply(previous: WorkflowRunPayload | undefined, incoming: WorkflowRunPayload): boolean {
+  return previous?.summary.phase === 'technical_planning_reply' &&
+    previous.summary.productConversationResult?.mutating === false &&
+    ['requires_user_input', 'failed', 'completed'].includes(String(incoming.summary.status)) &&
+    incoming.threadId === previous.threadId && incoming.runId === previous.runId
+}
+
+/** 独立 AG-UI 读取对话分类或卡片修改版本，均不覆盖原 Graph。 */
+async function runTechnicalPlanningPreparation(
+  application: ApplicationConfig, planningThreadId: string, request: string, signal: AbortSignal,
+  action: 'classify' | 'prepare_revision'
 ): Promise<TechnicalPlanningReply> {
-  const agent = createAgUiHttpAgent({ url: getApplicationPlanningUrl(), threadId: randomUUID() })
+  const agent = createAgUiHttpAgent({ url: getApplicationPlanningUrl(), threadId: planningThreadId })
   agent.addMessage({ id: randomUUID(), role: 'user', content: request })
   let result: Record<string, unknown> | undefined
   const subscriber: AgentSubscriber = {
@@ -41,7 +61,7 @@ export async function readTechnicalPlanningReply(
   try {
     if (signal.aborted) throw new Error('技术规划提问已取消。')
     await agent.runAgent({ forwardedProps: { technicalPlanningConversation: {
-      action: 'classify', workspaceRoot: application.workspaceRoot,
+      action, workspaceRoot: application.workspaceRoot,
       applicationId: application.id, planningThreadId, request
     } } }, subscriber)
     if (signal.aborted) throw new Error('技术规划提问已取消。')
@@ -58,4 +78,18 @@ export async function readTechnicalPlanningReply(
   } finally {
     signal.removeEventListener('abort', abort)
   }
+}
+
+/** 自由输入通过只读分类区分问答、技术修改和上游变更。 */
+export function readTechnicalPlanningReply(
+  application: ApplicationConfig, planningThreadId: string, request: string, signal: AbortSignal
+): Promise<TechnicalPlanningReply> {
+  return runTechnicalPlanningPreparation(application, planningThreadId, request, signal, 'classify')
+}
+
+/** 卡片修改已明确目标，仅确定性读取当前版本，不调用聊天意图模型。 */
+export function prepareTechnicalPlanningRevision(
+  application: ApplicationConfig, planningThreadId: string, request: string, signal: AbortSignal
+): Promise<TechnicalPlanningReply> {
+  return runTechnicalPlanningPreparation(application, planningThreadId, request, signal, 'prepare_revision')
 }

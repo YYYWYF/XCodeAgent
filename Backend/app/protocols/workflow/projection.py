@@ -646,6 +646,7 @@ def _public_workflow_state(
             # Native Recovery 的审阅路由是后端 Durable Graph State，不能成为公开协议事实。
             "application_planning_review_route",
             "design_revision_intent",
+            "design_interaction_context",
             "application_planning_recovery_boundary",
             "technical_plan_candidate",
             "technical_plan_candidate_sha256",

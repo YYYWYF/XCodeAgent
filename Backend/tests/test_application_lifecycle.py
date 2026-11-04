@@ -472,7 +472,7 @@ class ApplicationLifecycleTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ApplicationLifecycleConflictError,
-                "尚未完成创建规划",
+                "需求阶段正在运行，请先完成或结束当前需求任务",
             ):
                 start_workbench_execution(
                     directory,

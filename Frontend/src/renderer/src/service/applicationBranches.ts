@@ -62,7 +62,7 @@ export function isBranchPublishable(lifecycle?: ApplicationLifecycle): boolean {
  * 迭代作用域键：标识"哪条分支的第几轮迭代"。
  *
  * 同一条分支上可以继续迭代多轮，所以分支名单独不足以标识一轮 —— 必须带上**迭代令牌**
- * （lifecycle 的 threadId，每次发起迭代都是新的 randomUUID）。
+ * （lifecycle 的 iterationId，每次发起迭代分配，阶段线程交接时保持不变）。
  *
  * 用途之一是阶段 Provider 的 React key：只用分支名的话，在当前分支继续迭代时 key 不变、
  * Provider 不会重挂载，它会一直沿用内存里上一轮的手动阶段覆盖（例如"验收"），于是发起
@@ -72,7 +72,7 @@ export function branchIterationScope(
   branchName: string,
   lifecycle?: ApplicationLifecycle
 ): string {
-  const token = String(lifecycle?.initialization?.threadId || '')
+  const token = String(lifecycle?.initialization?.iterationId || '')
   return token ? `${branchName}:${token}` : branchName
 }
 

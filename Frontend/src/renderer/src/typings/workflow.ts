@@ -1345,6 +1345,7 @@ export type ApplicationLifecycle = {
   updatedAt: string
   revision: number
   initialization: {
+    iterationId?: string | null
     stage: ApplicationLifecycleStage
     threadId?: string
     status:
@@ -1361,6 +1362,12 @@ export type ApplicationLifecycle = {
   activeExecutions: Record<string, WorkbenchExecution>
   endedExecutionsCheckedAt?: string
   endedExecutions?: Record<string, { execution: WorkbenchExecution; workspaceUnchanged: boolean }>
+  endedPlanningExecution?: {
+    runId: string
+    threadId: string
+    stage: ApplicationLifecycleStage
+    workspaceUnchanged: boolean
+  } | null
   resourceLocks?: {
     application?: ExecutionResourceLock
     pages: Record<string, ExecutionResourceLock>
@@ -1395,6 +1402,14 @@ export type ApplicationLifecycle = {
   }
   recovery?: Record<string, unknown>
   extensions: Record<string, unknown> & {
+    /** 仅当前会话 Get 返回的已完成选择结果，不作为新的持久化业务状态。 */
+    workbenchResult?: {
+      runId: string
+      threadId: string
+      ownerSessionId: string
+      startedAt: string
+      workflow: WorkflowRunPayload
+    } | null
     planningRefresh?: PlanningRefreshState
     executionRecovery?: ExecutionRecoveryProjection
     workbenchProgress?: Record<string, WorkbenchExecution & {
@@ -1419,7 +1434,6 @@ export type WorkflowAction =
   | 'retry_code_review'
   | 'retry_template_reconcile'
   | 'start_design_revision'
-  | 'product_stage_conversation'
   | 'start_technical_revision'
   | 'start_revision'
   | 'submit_revision_interaction'

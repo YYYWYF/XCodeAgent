@@ -197,9 +197,16 @@ export function initialFormalRevisionPhase(
 /** 后端已接纳或读取结果未知时保留正式修订展示会话，只有确定未入场才允许撤销。 */
 export function retainFormalRevisionSessionAfterStart(
   input: WorkflowDesignStageRevisionStart,
-  lifecycle: ApplicationLifecycle | undefined
+  lifecycle: ApplicationLifecycle | undefined,
+  targetThreadId?: string
 ): boolean {
   if (!lifecycle) return true
+  const pending = lifecycle.pendingRevisionImpact
+  // 线程已交接但影响批准请求尚未送达时，目标 checkpoint 已真实存在，必须保留原会话供重试。
+  if (targetThreadId && lifecycle.initialization.threadId === targetThreadId && pending &&
+      pending.interactionId === input.impact.interactionId &&
+      pending.sourceThreadId === input.sourceConversationThreadId && pending.sourceRunId === input.sourceRunId &&
+      (pending.impact as { formalBranch?: string } | undefined)?.formalBranch === input.impact.formalBranch) return true
   const active = lifecycle.activeFormalRevision
   return Boolean(active && active.formalBranch === input.impact.formalBranch &&
     active.impactInteractionId === input.impact.interactionId &&

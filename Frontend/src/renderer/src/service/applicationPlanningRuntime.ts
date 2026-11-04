@@ -26,7 +26,7 @@ import {
   type WorkflowRevisionContinuationHandoff
 } from './applicationPagePlanning'
 import { isAuthenticationFailure } from './authentication'
-import { endApplicationPlanningExecution, stopApplicationPlanningExecution } from './applicationLifecycle'
+import { endApplicationPlanningExecution } from './applicationLifecycle'
 import { planningWorkflowCanPublishDuringRun, planningWorkflowPhase } from './applicationPlanningWorkflowState'
 import {
   readApplicationPlanningAuthoritativeSnapshot,
@@ -40,22 +40,23 @@ import {
   planningInterruptIdentity,
   planningResumeFrom,
   planningRuntimeError,
-  waitForStoppedPlanningLifecycle,
-  withAuthoritativeLifecycle,
   withSavedRequirementSpec,
   workflowConfirmation
 } from './applicationPlanningRuntimeHelpers'
 import { productConversationSubmissionError } from './applicationPlanningProductConversation'
-import { readTechnicalPlanningReply } from './technicalPlanningConversation'
+import { readTechnicalPlanningReply, prepareTechnicalPlanningRevision, type TechnicalPlanningReply } from './technicalPlanningConversation'
+import { workflowEndedPlanControl } from '../components/AiChatPanel/planExecutionMode'
 import { isWorkflowDebugNodeForStage } from './workflowDebugNodes'
 
 export type ApplicationPlanningRuntimeDependencies = {
   readTechnicalPlanningReply?: typeof readTechnicalPlanningReply
+  prepareTechnicalPlanningRevision?: typeof prepareTechnicalPlanningRevision
   applicationId: string
   threadId: string
   getCurrentState: () => ApplicationPlanningCurrentState | undefined
   dispatchCurrentEvent: (event: ApplicationPlanningCurrentEvent) => void
   publishContent: (content: string) => void
+  publishReply: (reply: TechnicalPlanningReply) => void
   publishWorkflow: (workflow: WorkflowRunPayload) => void
   onTechnicalPlanConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
   onRevisionContinuation: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
@@ -68,8 +69,6 @@ export type ApplicationPlanningRuntimeDependencies = {
   saveRequirementSpecDraft?: typeof saveRequirementSpecDraft
   /** 结束控制测试可替换 AG-UI 调用，生产必须完成后端修订收口。 */
   endPlanningExecution?: typeof endApplicationPlanningExecution
-  /** 停止生成保留正式修订，并在读取原 checkpoint 后提供继续动作。 */
-  stopPlanningExecution?: typeof stopApplicationPlanningExecution
   /** 测试可替换权威读取；生产使用独立 applicationPlanningRecovery client。 */
   readAuthoritativeSnapshot?: (
     application: ApplicationPlanningCurrentState['application'],
@@ -116,6 +115,13 @@ export class ApplicationPlanningRuntime {
     this.applicationId = dependencies.applicationId
     this.threadId = dependencies.threadId
     this.session = dependencies.session ?? createApplicationPlanningSession(this.threadId)
+  }
+
+  /** 交接响应已包含权威 checkpoint，目标实例无需再执行冷启动读取或自动启动。 */
+  acceptStageHandoff(): void {
+    const current = this.requireCurrentState()
+    if (current.workflow?.threadId !== this.threadId) throw new Error('阶段交接缺少目标线程快照。')
+    this.started = true
   }
 
   /** 在每次动作时检查当前身份，已删除或换线程的 Runtime 不得继续执行。 */
@@ -345,14 +351,23 @@ export class ApplicationPlanningRuntime {
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
     designChangeRequest?: string,
-    technicalPlanningConversation = false
+    technicalPlanningConversation = false,
+    designThreadHandoff?: () => Promise<void>
   ): Promise<void> {
     if (technicalPlanningConversation && designChangeRequest?.trim()) {
-      await this.submitTechnicalPlanningMessage(designChangeRequest.trim())
+      await this.submitTechnicalPlanningMessage(designChangeRequest.trim(), designThreadHandoff)
       return
     }
     let current = this.requireCurrentState()
     if (workflow.threadId !== current.threadId) throw new Error('当前规划确认卡已经失效。')
+    const cardRevision = answers.__applicationPlanningAction === 'revise' &&
+      typeof answers.technical_plan_confirmation === 'string'
+      ? answers.technical_plan_confirmation.trim() : ''
+    if (cardRevision && workflowEndedPlanControl(current.workflow)) {
+      // 停止卡与正常卡提交相同的明确技术修改；旧确认已结束，先读取当前版本再进入原生成链路。
+      await this.submitTechnicalPlanningMessage(cardRevision, undefined, true)
+      return
+    }
     if ((this.runActive || this.session.hasActiveRun()) && designChangeRequest?.trim()) {
       throw new Error('当前设计正在生成，完成后即可发送新的调整。')
     }
@@ -395,7 +410,12 @@ export class ApplicationPlanningRuntime {
         }
       )
     } catch (reason) {
-      if (submitToken === undefined || !this.isCurrentRun(submitToken)) throw reason
+      if (submitToken === undefined || !this.isCurrentRun(submitToken)) {
+        const acknowledgement = this.planningEndAcknowledgement
+        // 已确认的主动停止/结束属于正常收口，不把原确认请求的传输取消误报为交接失败。
+        if (submitToken !== undefined && acknowledgement?.sourceToken === submitToken && await acknowledgement.result) return
+        throw reason
+      }
       const outcome = await this.handleExecutionFailure(
         reason,
         designChangeRequest
@@ -435,136 +455,100 @@ export class ApplicationPlanningRuntime {
     return saved
   }
 
-  /** 停止生成只中断执行，保留原会话、修订和 checkpoint，继续动作由后端签发。 */
+  /** 用户停止即结束本轮任务，后端确认退出和清锁后才发布结束回执。 */
   async stop(): Promise<void> {
     const current = this.requireCurrentState()
     this.technicalMessageAbort?.abort()
-    let acknowledge!: (stopped: boolean) => void
+    let acknowledgeEnd!: (ended: boolean) => void
     this.planningEndAcknowledgement = {
       sourceToken: this.runToken,
-      result: new Promise<boolean>((resolve) => { acknowledge = resolve })
+      result: new Promise<boolean>((resolve) => { acknowledgeEnd = resolve })
     }
-    ++this.runToken
-    this.dispatch({ type: 'planning_stop_started', applicationId: this.applicationId, threadId: this.threadId })
+    // 先使旧流失效，后台取消引起的迟到帧不能覆盖结束回执。
+    const token = ++this.runToken
+    this.dispatch({ type: 'planning_end_started', applicationId: this.applicationId, threadId: this.threadId })
     try {
-      const stop = this.dependencies.stopPlanningExecution ?? stopApplicationPlanningExecution
-      const lifecycle = await stop(current.application, this.threadId)
+      const end = this.dependencies.endPlanningExecution ?? endApplicationPlanningExecution
+      const lifecycle = await end(current.application, this.threadId)
+      // 服务端已确认真实退出；旧 transport 的收口异常不撤销成功的结束。
       await this.session.stop().catch(() => undefined)
+      if (!this.isCurrentRun(token)) return
+      const message = '本轮任务已结束，已有文件已保留。'
+      const workflow: WorkflowRunPayload = {
+        runId: current.workflow?.runId || current.lifecycle.activeRunId || 'planning-ended',
+        threadId: this.threadId, events: [], state: { workflow_scope: 'application_planning' },
+        summary: { status: 'completed', phase: 'plan_control', message, lifecycle,
+          planControl: { action: 'end', status: 'ended', targetRunId: current.workflow?.runId || current.lifecycle.activeRunId } }
+      }
       this.runActive = false
-      this.dispatch({ type: 'planning_stopped', applicationId: this.applicationId, threadId: this.threadId, lifecycle })
-      acknowledge(true)
-      const outcome = await this.reconcileCurrentState()
-      if (outcome.status === 'uncertain') throw new Error(outcome.error)
+      this.dispatch({ type: 'planning_ended', applicationId: this.applicationId, threadId: this.threadId, lifecycle, workflow })
+      this.dependencies.publishWorkflow(workflow)
+      acknowledgeEnd(true)
     } catch (reason) {
-      this.reportRecoveryActionFailure(reason, '停止生成失败，请重试停止生成。')
+      this.reportRecoveryActionFailure(reason, '结束任务失败，请重试结束任务。')
       throw reason
     } finally {
-      acknowledge(false)
-      this.runActive = false
-      this.dispatch({ type: 'run_settled', applicationId: this.applicationId, threadId: this.threadId })
-    }
-  }
-
-  /** 显式结束本轮修订时才释放修订身份，停止生成不调用此入口。 */
-  async end(): Promise<void> {
-    const current = this.requireCurrentState()
-    this.technicalMessageAbort?.abort()
-    if (current.lifecycle.activeFormalRevision) {
-      // 旧请求可能先于 End 回执断开；等服务端确认后再决定是否向来源会话报错。
-      let acknowledgeEnd!: (ended: boolean) => void
-      this.planningEndAcknowledgement = {
-        sourceToken: this.runToken,
-        result: new Promise<boolean>((resolve) => { acknowledgeEnd = resolve })
-      }
-      // 结束正式修订时先令旧流回调失效，迟到的取消/失败不能覆盖结束回执。
-      const token = ++this.runToken
-      this.dispatch({ type: 'planning_end_started', applicationId: this.applicationId, threadId: this.threadId })
-      try {
-        const end = this.dependencies.endPlanningExecution ?? endApplicationPlanningExecution
-        const lifecycle = await end(current.application, this.threadId)
-        // Backend 已确认真实退出及清锁；旧 transport 的收口异常不能撤销成功的 End。
-        await this.session.stop().catch(() => undefined)
-        if (!this.isCurrentRun(token)) return
-        const message = '本轮设计任务已结束，已有文件已保留，可以新建会话继续修改。'
-        const workflow: WorkflowRunPayload = {
-          runId: current.workflow?.runId || current.lifecycle.activeRunId || 'planning-ended',
-          threadId: this.threadId, events: [], state: { workflow_scope: 'application_planning' },
-          summary: { status: 'completed', phase: 'plan_control', lifecycle,
-            planControl: { action: 'end', status: 'ended', targetRunId: current.workflow?.runId || current.lifecycle.activeRunId } }
-        }
+      acknowledgeEnd(false)
+      if (this.isCurrentRun(token)) {
         this.runActive = false
-        this.dispatch({ type: 'planning_ended', applicationId: this.applicationId, threadId: this.threadId, lifecycle, workflow })
-        this.dependencies.publishContent(message)
-        this.dependencies.publishWorkflow(workflow)
-        acknowledgeEnd(true)
-      } catch (reason) {
-        this.reportRecoveryActionFailure(reason, '结束设计任务失败，请重试结束任务。')
-        throw reason
-      } finally {
-        acknowledgeEnd(false)
-        if (this.isCurrentRun(token)) {
-          this.runActive = false
-          this.dispatch({ type: 'run_settled', applicationId: this.applicationId, threadId: this.threadId })
-        }
+        this.dispatch({ type: 'run_settled', applicationId: this.applicationId, threadId: this.threadId })
       }
-      return
-    }
-    try {
-      await this.session.stop()
-      const lifecycle = await waitForStoppedPlanningLifecycle(
-        () => this.requireCurrentState().application,
-        this.threadId
-      )
-      this.dispatch({
-        type: 'lifecycle_received',
-        applicationId: this.applicationId,
-        threadId: this.threadId,
-        lifecycle
-      })
-      const workflow = this.requireCurrentState().workflow
-      if (workflow) this.applyWorkflow(withAuthoritativeLifecycle(workflow, lifecycle))
-    } catch (reason) {
-      if (isAuthenticationFailure(reason)) throw reason
-      // stop 结果不确定时让旧回调失效，由共享后端 barrier 等待真实 writer 收口。
-      this.runActive = false
-      const outcome = await this.reconcileAfterTransportFailure(reason)
-      if (outcome !== 'recovered') throw reason
     }
   }
 
   /** 提问只发布回复；技术修改复用原生成，上游变更回到原设计意图链路。 */
-  private async submitTechnicalPlanningMessage(request: string): Promise<void> {
+  private async submitTechnicalPlanningMessage(
+    request: string, designThreadHandoff?: () => Promise<void>, explicitRevision = false
+  ): Promise<void> {
     const abort = new AbortController()
     let revised = false
+    let returnToDesign = false
+    let submissionToken: number | undefined
     this.technicalMessageAbort = abort
     try {
       await this.withExclusiveTransport(async (token) => {
         const current = this.requireCurrentState()
         this.dispatch({ type: 'recovery_action_started', applicationId: this.applicationId, threadId: this.threadId })
-        const read = this.dependencies.readTechnicalPlanningReply ?? readTechnicalPlanningReply
+        const read = explicitRevision
+          ? this.dependencies.prepareTechnicalPlanningRevision ?? prepareTechnicalPlanningRevision
+          : this.dependencies.readTechnicalPlanningReply ?? readTechnicalPlanningReply
         const reply = await read(current.application, this.threadId, request, abort.signal)
         if (abort.signal.aborted || !this.isCurrentRun(token)) return
         this.technicalMessageAbort = undefined
         if (reply.intent === 'reply') {
           this.setStreamingContent(reply.message)
           this.dependencies.publishContent(reply.message)
+          this.dependencies.publishReply(reply)
+          return
+        }
+        if (reply.intent === 'design_change') {
+          if (!designThreadHandoff) throw new Error('返回需求阶段需要先建立独立会话。')
+          // 分类结束并释放原 transport 后再交接，避免旧 Runtime 的 finally 覆盖新线程状态。
+          returnToDesign = true
           return
         }
         revised = true
         const merged = await this.sendMessageWithinTransport(token, request, {
           editorMode: 'frontend', workspaceRoot: current.application.workspaceRoot,
           technicalPlanningConversation: {
-            action: reply.intent === 'design_change' ? 'revise_design' : 'revise', workspaceRoot: current.application.workspaceRoot || '',
+            action: 'revise', workspaceRoot: current.application.workspaceRoot || '',
             applicationId: this.applicationId, planningThreadId: this.threadId, request,
             sourceRunId: reply.sourceRunId, checkpointId: reply.checkpointId
           }
         })
         await this.handlePlanningResult(token, merged)
-      })
+      }, { onToken: (token) => { submissionToken = token } })
+      // End 或线程切换已经接管后，旧请求即使正常返回也不能再发起对账抢走新的代次。
+      if (submissionToken !== undefined && !this.isCurrentRun(submissionToken)) return
+      if (returnToDesign && designThreadHandoff) {
+        await designThreadHandoff()
+        return
+      }
       // 新生成已替换原执行，必须读取 durable truth 撤下旧恢复入口；只读问答不对账。
       if (revised && !this.disposed) await this.reconcileCurrentState()
     } catch (reason) {
-      if (abort.signal.aborted) return
+      // 服务端停止旧生成流通常表现为 network error；仅当前请求可以发布失败或启动恢复。
+      if (abort.signal.aborted || (submissionToken !== undefined && !this.isCurrentRun(submissionToken))) return
       if (revised && !this.disposed) await this.handleExecutionFailure(reason, '技术规划修改失败')
       this.reportRecoveryActionFailure(reason, '技术规划对话失败')
       throw reason

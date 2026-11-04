@@ -5,6 +5,8 @@ import {
   type ApplicationPlanningRuntimeDependencies
 } from '../service/applicationPlanningRuntime'
 import type { WorkflowRevisionContinuationHandoff } from '../service/applicationPagePlanning'
+import { handoffPlanningStage, type PlanningStageEntry, type PlanningStageTarget } from '../service/planningStageHandoff'
+import type { TechnicalPlanningReply } from '../service/technicalPlanningConversation'
 import type {
   ApplicationPlanningDebugStage,
   ApplicationPlanningConfirmation,
@@ -17,6 +19,7 @@ export type ApplicationPlanningRuntimesOptions = {
   getPlanningState: (applicationId: string) => ApplicationPlanningCurrentState | undefined
   dispatchPlanningEvent: (event: ApplicationPlanningCurrentEvent) => void
   publishContent: (applicationId: string, content: string) => void
+  publishReply: (applicationId: string, reply: TechnicalPlanningReply) => void
   publishWorkflow: (applicationId: string, workflow: WorkflowRunPayload) => void
   onTechnicalPlanConfirmed: (applicationId: string, confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
   onRevisionContinuation: (applicationId: string, handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
@@ -27,9 +30,12 @@ export type ApplicationPlanningRuntimesOptions = {
 export type ApplicationPlanningRuntimesController = {
   ensureRuntime: (planning: ApplicationPlanningCurrentState) => ApplicationPlanningRuntime
   getRuntime: (applicationId: string) => ApplicationPlanningRuntime | undefined
-  submitClarification: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['submitClarification']>) => Promise<void>
+  submitClarification: (applicationId: string, workflow: WorkflowRunPayload,
+    answers: Parameters<ApplicationPlanningRuntime['submitClarification']>[1],
+    editedRequirementSpec?: Record<string, unknown>, requirementSpecFeedback?: string,
+    designChangeRequest?: string, technicalPlanningConversation?: boolean, stageEntry?: PlanningStageEntry) => Promise<void>
   saveRequirementSpec: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['saveRequirementSpec']>) => ReturnType<ApplicationPlanningRuntime['saveRequirementSpec']>
-  startDesignRevision: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['startDesignRevision']>) => Promise<void>
+  startDesignRevision: (applicationId: string, input: Parameters<ApplicationPlanningRuntime['startDesignRevision']>[0], target?: PlanningStageTarget) => Promise<void>
   retryCurrentFailure: (applicationId: string) => Promise<void>
   startIterationPlanning: (
     applicationId: string,
@@ -76,6 +82,7 @@ export function useApplicationPlanningRuntimes(
       getCurrentState: () => optionsRef.current.getPlanningState(applicationId),
       dispatchCurrentEvent: (event) => optionsRef.current.dispatchPlanningEvent(event),
       publishContent: (content) => optionsRef.current.publishContent(applicationId, content),
+      publishReply: (reply) => optionsRef.current.publishReply(applicationId, reply),
       publishWorkflow: (workflow) => optionsRef.current.publishWorkflow(applicationId, workflow),
       onTechnicalPlanConfirmed: (confirmation) => optionsRef.current.onTechnicalPlanConfirmed(applicationId, confirmation),
       onRevisionContinuation: (handoff) => optionsRef.current.onRevisionContinuation(applicationId, handoff),
@@ -96,6 +103,20 @@ export function useApplicationPlanningRuntimes(
     const current = optionsRef.current.getPlanningState(applicationId)
     if (!current) throw new Error('当前 Planning Runtime 已失效。')
     return ensureRuntime(current)
+  }, [ensureRuntime])
+
+  /** 服务端交接成功后原子替换当前线程，再创建目标 Runtime；旧帧被身份检查丢弃。 */
+  const handoffStage = useCallback(async (applicationId: string, target: PlanningStageTarget): Promise<WorkflowRunPayload> => {
+    const current = optionsRef.current.getPlanningState(applicationId)
+    if (!current) throw new Error('当前规划状态已失效。')
+    if (current.threadId === target.threadId && current.workflow) return current.workflow
+    const workflow = await handoffPlanningStage(current, target)
+    optionsRef.current.dispatchPlanningEvent({ type: 'stage_thread_handed_off', applicationId,
+      threadId: current.threadId, workflow })
+    const next = optionsRef.current.getPlanningState(applicationId)
+    if (next?.threadId !== target.threadId) throw new Error('阶段交接状态已被其他请求替换，请同步后重试。')
+    ensureRuntime(next).acceptStageHandoff()
+    return workflow
   }, [ensureRuntime])
 
   // 同步前端对象的存在性；脱离本地执行流的 running 由下方只读校准跟进。
@@ -156,11 +177,29 @@ export function useApplicationPlanningRuntimes(
     ensureRuntime,
     getRuntime,
     /** 转交当前确认卡操作。 */
-    submitClarification: (applicationId, ...args) => requireRuntime(applicationId).submitClarification(...args),
+    submitClarification: async (applicationId, workflow, answers, edited, feedback, request, technical, stageEntry) => {
+      if (typeof stageEntry === 'function' || (technical && stageEntry)) {
+        await requireRuntime(applicationId).submitClarification(workflow, answers, edited, feedback, request, technical,
+          async () => {
+            const target = typeof stageEntry === 'function' ? await stageEntry() : stageEntry!
+            const transferred = await handoffStage(applicationId, target)
+            await requireRuntime(applicationId).submitClarification(transferred, {}, undefined, undefined, request)
+          })
+        return
+      }
+      const currentWorkflow = stageEntry ? await handoffStage(applicationId, stageEntry) : workflow
+      await requireRuntime(applicationId).submitClarification(currentWorkflow, answers, edited, feedback, request, technical)
+    },
     /** 转交需求草稿保存。 */
     saveRequirementSpec: (applicationId, ...args) => requireRuntime(applicationId).saveRequirementSpec(...args),
     /** 转交正式设计修订。 */
-    startDesignRevision: (applicationId, ...args) => requireRuntime(applicationId).startDesignRevision(...args),
+    startDesignRevision: async (applicationId, input, target) => {
+      if (target) {
+        await requireRuntime(applicationId).reconcileCurrentState()
+        await handoffStage(applicationId, target)
+      }
+      await requireRuntime(applicationId).startDesignRevision(input)
+    },
     /** 使用调用时的当前状态重试。 */
     retryCurrentFailure: (applicationId) => requireRuntime(applicationId).retryCurrentFailure(),
     /** 新迭代发起后用户输入需求，启动 planning workflow。 */
@@ -170,9 +209,9 @@ export function useApplicationPlanningRuntimes(
     retryTemplateReconcile: (applicationId) => requireRuntime(applicationId).retryTemplateReconcile(),
     /** 只读同步指定应用当前权威状态。 */
     reconcileCurrentState: (applicationId) => requireRuntime(applicationId).reconcileCurrentState(),
-    /** 停止指定应用的会话。 */
+    /** 停止即结束指定应用的当前规划任务并释放占用。 */
     stop: (applicationId) => requireRuntime(applicationId).stop(),
     /** 订阅指定应用临时正文。 */
     subscribeStreamingContent: (applicationId, listener) => requireRuntime(applicationId).subscribeStreamingContent(listener)
-  }), [ensureRuntime, getRuntime, requireRuntime])
+  }), [ensureRuntime, getRuntime, requireRuntime, handoffStage])
 }

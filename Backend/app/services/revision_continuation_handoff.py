@@ -38,6 +38,7 @@ def consumed_continuation_state(current, **identity):
         "initialization": ApplicationInitialization(
             stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
             status=ApplicationLifecycleStatus.COMPLETED, threadId=active.planning_thread_id,
+            iterationId=current.initialization.iteration_id,
         ),
     })
 

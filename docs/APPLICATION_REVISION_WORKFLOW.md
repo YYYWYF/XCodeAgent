@@ -8,14 +8,14 @@
 2. `Workbench Conversation Coordinator` 负责只读分类和确定性路由，但它不是拥有全部工具的万能 Agent。
 3. 不改变已确认产品或技术语义的修改走 `implementation_fix`；普通工作区文件可由现有 SmallTask 路径直接修改。代码范围确认开关默认开启；系统先识别意图并整理需求、修改归属和候选路径，等待用户确认后才执行。关闭开关时，需求明确后直接执行；无论开关状态如何，只有“前端需求”这类缺少具体修改结果的请求都必须先澄清；用户可在确认前继续补充，系统会重新整理需求和范围。
 4. 改变正式产品/技术语义的请求走 `formal_revision`，再确定是 `design_stage_revision` 还是 `workbench_plan_revision`。
-5. 改变 RequirementSpec 或 ProductPlan 语义的请求走 `design_stage_revision`：用户确认影响范围后返回现有设计阶段，复用原 `application_planning_workflow`、原 thread/checkpoint、最早节点路由和逐层确认逻辑；既有页面的 UI 小改动不走该分支。
-6. 不需要重跑需求、产品或 UI 的 TechnicalPlan、API 契约或数据约束修改走 `workbench_plan_revision`：用户确认影响范围后创建独立计划阶段会话，并通过原 planning checkpoint 的 `technical_planning` 节点重新生成 `technical-plan.json`。
+5. 改变 RequirementSpec 或 ProductPlan 语义的请求走 `design_stage_revision`：用户确认影响范围后返回现有设计阶段，复用原 `application_planning_workflow`、阶段独立 thread/checkpoint、最早节点路由和逐层确认逻辑；既有页面的 UI 小改动不走该分支。
+6. 不需要重跑需求、产品或 UI 的 TechnicalPlan、API 契约或数据约束修改走 `workbench_plan_revision`：用户确认影响范围后创建独立计划阶段会话，并通过交接后的阶段 checkpoint 的 `technical_planning` 节点重新生成 `technical-plan.json`。
 7. 工作台草稿和当前已确认 canonical 产物隔离。用户放弃时只删除当前草稿，canonical 产物不变。
 8. 用户确认工作台草稿后，服务端先同步 Markdown 编辑到内部 JSON，再校验并原子覆盖 canonical；从这一刻起，新产物就是唯一正确版本。
 9. 不引入 RevisionManifest、历史版本仓库、promotion、正式产物回滚或 Change 级代码自动撤销。
 10. TechnicalPlan 草稿记录直接上游 canonical 的 SHA-256；确认和 Build 前都会拒绝上游哈希已经变化的草稿或正式产物。
 11. Build 只消费 `confirmation_status=confirmed` 且直接上游哈希匹配的当前 TechnicalPlan。
-12. `ready_for_workbench` 后仍保留原设计规划 thread 引用；只有用户确认 RequirementSpec/ProductPlan 语义变化的 `design_stage_revision` 影响范围后，才允许受控返回现有设计阶段。既有页面 UI 小改动直接走当前前端实现修复。
+12. `ready_for_workbench` 后仍保留当前阶段规划 thread 引用；只有用户确认 RequirementSpec/ProductPlan 语义变化的 `design_stage_revision` 影响范围后，才允许受控返回现有设计阶段。既有页面 UI 小改动直接走当前前端实现修复。
 13. branch 只决定正式修改从哪里开始，不决定修改是否落实到代码。两个 formal branch 在全部受影响正式产物确认且非 stale 后，都必须切回开发阶段，汇合到工作区扫描、Build DAG 确认、Build、Test、Preview 和 Acceptance；用户不需要再次描述或手动发起开发。
 14. 所有产品动作继续使用 AG-UI；不增加普通 REST、手写 SSE 或前端拼装 Graph State。
 
@@ -29,7 +29,7 @@
 
 当前仓库已有以下基础，实施时直接复用：
 
-- `design_intent_analysis` 已能在原 planning Graph/thread/checkpoint 中选择最早受影响的 RequirementSpec、ProductPlan 或 UiDesign 节点，并重新经过后续确认门；这套稳定逻辑直接作为 `design_stage_revision` 的执行基础。
+- `design_intent_analysis` 已能在同一 planning Graph 定义的阶段独立 thread/checkpoint 中选择最早受影响的 RequirementSpec、ProductPlan 或 UiDesign 节点，并重新经过后续确认门；这套稳定逻辑直接作为 `design_stage_revision` 的执行基础。
 - 当前正式规划链是 RequirementSpec -> ProductPlan -> UiDesign -> TechnicalPlan，PageDetail 不再是当前权威。
 - `/conversation/run` 已有工作区扫描、闲聊、只读问答，以及 frontend/backend/fullstack 写入归属；没有独立 Workspace 写入 Agent。
 - SmallTask 已有精确路径限制、真实 before/after diff、集成测试和 RepairPlanner 有界修复。
@@ -38,7 +38,7 @@
 
 ### 1.2 当前实现边界
 
-当前合同已经接入统一五类路由、两条 formal branch、原 planning thread 保留、独立可见 revision 会话、隔离草稿、直接上游哈希校验、一次性 formal continuation、SmallTask 动态重新路由和自然语言验收反馈。Build 前置门禁会从工作区重读当前正式产物，并拒绝未确认或 `basedOn` 不匹配的 TechnicalPlan。最终 Acceptance 通过后释放 active formal revision，停止、失败和继续执行同步其生命周期状态。
+当前合同已经接入统一五类路由、两条 formal branch、当前阶段 thread 绑定、独立可见 revision 会话、隔离草稿、直接上游哈希校验、一次性 formal continuation、SmallTask 动态重新路由和自然语言验收反馈。Build 前置门禁会从工作区重读当前正式产物，并拒绝未确认或 `basedOn` 不匹配的 TechnicalPlan。最终 Acceptance 通过后释放 active formal revision，停止、失败和继续执行同步其生命周期状态。
 
 本次不解决历史版本浏览、正式计划回滚、多分支 candidate promotion、Change 级 Git 撤销或多个正式修订并行写入。
 
@@ -82,7 +82,7 @@ SmallTask 禁止通过该路径：
 
 ```text
 原 application_planning_workflow
--> 原 planning thread/checkpoint
+-> 当前阶段 planning thread/checkpoint
 -> design_intent_analysis
 -> 最早受影响节点
 -> 原节点增量修订
@@ -97,7 +97,7 @@ SmallTask 禁止通过该路径：
 这里的“返回现有设计阶段”同时包含两个不同层面的身份，二者不能混用：
 
 - 前端为二次修改的 DESIGN、PLAN 两个设计阶段分别创建独立 StageSession 和独立 conversation thread；TechnicalPlan 确认后返回发起本次修改的原 DEVELOPMENT StageSession，并用其既有 conversation thread 承接后续扫描、DAG 和执行内容。设计阶段不复制聊天上下文，开发阶段保留原会话历史。
-- 后端不创建第二个设计 Graph，仍以 lifecycle 中的原 `planningThreadId` 恢复原 `application_planning_workflow` checkpoint；新的 conversation thread 只承接前端消息展示和流式投影，不作为 Graph 恢复依据。
+- 后端复用同一 `application_planning_workflow` 定义，通过服务端版本校验把当前产物与未消费确认门交给新 StageSession 的真实 threadId；该身份同时用于 AG-UI、Graph checkpoint 和模型会话。lifecycle 的当前线程和 active revision 的 `planningThreadId` 在交接 CAS 中同步更新；旧线程不再可写。迭代身份独立保存在 `initialization.iterationId`。
 - 二次修改的 DESIGN/PLAN session 持久化绑定 `impactInteractionId + sourceSessionId + sourceConversationThreadId + sourceRunId + planningThreadId + changeId`。其中 `sourceSessionId + sourceConversationThreadId` 唯一指向发起修改的原 DEVELOPMENT 会话，`changeId` 由审批后的 lifecycle 补齐；冷恢复必须按完整身份匹配，不能按标题猜测或补建开发会话。
 - 发起二次修改的来源会话保留一条交接回执，记录目标 session/thread 和原始请求，并提供“打开二次修改会话”入口；交接回执不是新的审批，也不改变原 checkpoint 的权威性。
 - DESIGN 启动请求在后端断线时，不能仅凭 transport 失败撤销回执或删除 StageSession。已收到匹配的 active formal revision，或暂时无法只读确认是否入场时，保留展示会话并在重连后对账；只有明确未入场的业务拒绝才回滚准备。当前生命周期证明修订已批准时，按 change/impact/source/planning 身份恢复并定位当前设计阶段；展示会话缺失且原 DEVELOPMENT 来源会话精确存在时，可补同一当前修订的 StageSession 与交接回执，不新建 Graph/Run 或再次批准。来源确认门在对应 source Run/Thread 交接后立即失效，节点重试仍由原 Planning Runtime 执行服务端签发的恢复动作。
@@ -372,7 +372,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     A["用户确认 design_stage_revision 影响范围"] --> B["切回现有设计阶段界面"]
-    B --> C["恢复原 planning thread/checkpoint"]
+    B --> C["恢复当前阶段 planning thread/checkpoint"]
     C --> D["服务端进入 design_intent_analysis"]
     D --> E["选择最早受影响节点"]
     E --> F["复用原节点增量修订"]
@@ -390,7 +390,7 @@ flowchart TD
 该 branch 直接参考并复用当前稳定设计节点二次修改逻辑：
 
 - 使用原 `application_planning_workflow`，不创建 `Application Revision Graph` 的设计节点副本；
-- 使用原 planning thread/checkpoint，并继续以服务端 checkpoint 为权威；
+- 使用当前阶段 planning thread/checkpoint，并继续以服务端 checkpoint 为权威；
 - 使用现有 `design_intent_analysis`、`earliest_available_design_target` 和 generation cursor；
 - 使用现有 `gateId + artifactRevision + artifact`、原生 interrupt、同 thread 恢复锁和逐层确认门；
 - RequirementSpec/ProductPlan/设计阶段修改完成后，继续沿原 Graph 生成并确认下游直到 TechnicalPlan；
@@ -404,7 +404,7 @@ flowchart TD
 `/conversation/run` 高置信识别到 `formal_revision` 时，返回带 `formalBranch` 的 `revision_impact_confirmation` 结构化交互。前端只展示分类 JSON 的 `reason` 和确认动作，用户确认后按 branch handoff：
 
 - `design_stage_revision`：调用 `/application-page-planning/run` 的受控 `start_design_revision`，随后切回现有设计阶段界面；
-- `workbench_plan_revision`：先创建新的用户可见规划会话，再由该会话调用 `/application-page-planning/run` 的 `start_technical_revision`；服务端恢复原 planning checkpoint 的 `technical_planning` 节点，以 checkpoint 中当前正式 TechnicalPlan 和原始修改请求生成完整新版本。只有 RequirementSpec、ProductPlan 或 UiDesign 先变化时才淘汰旧 TechnicalPlan 并按新上游重建。
+- `workbench_plan_revision`：先创建新的用户可见规划会话，再由该会话调用 `/application-page-planning/run` 的 `start_technical_revision`；服务端恢复交接后的阶段 checkpoint 的 `technical_planning` 节点，以 checkpoint 中当前正式 TechnicalPlan 和原始修改请求生成完整新版本。只有 RequirementSpec、ProductPlan 或 UiDesign 先变化时才淘汰旧 TechnicalPlan 并按新上游重建。
 
 低置信或目标有实质歧义时先进入 `clarification`，不展示不可靠的影响范围。
 
@@ -412,16 +412,16 @@ flowchart TD
 - page/endpoint target 必须保留；
 - 确认卡只展示服务端 `reason`，前端不自行推导或展示影响范围证据；
 - 取消确认只结束当前 conversation handoff，不进入设计阶段也不创建 formal revision；
-- 设计 branch 使用新的 `runId` 恢复原 planning thread；工作台 branch 使用新的规划会话 thread/run 生成草稿，并在确认后由原开发会话开启新的开发 run；
+- 设计 branch 在交接后的 DESIGN thread 使用新的 `runId`，进入 PLAN 时再交接到独立线程；工作台 branch 使用新的规划会话 thread/run 生成草稿，并在确认后由原开发会话开启新的开发 run；
 - 两个 branch 从影响范围 approved 开始共享同一个 `changeId`、原始请求和 target，直到 Acceptance 完成；Graph 切换不能丢失这些字段；
 - 前端不回传 WorkspaceSnapshot、模型 messages 或 Graph State；
 - branch 接收端重新执行确定性分类和安全升级校验，不能直接信任模型输出。
 
 ### 5.5 创建规划期、设计返回与工作台期
 
-- 初始化尚未进入 `ready_for_workbench`：继续使用 `application_planning_workflow` 原 thread/checkpoint 的 `design_intent_analysis`。
+- 初始化尚未进入 `ready_for_workbench`：继续使用 `application_planning_workflow` 阶段独立 thread/checkpoint 的 `design_intent_analysis`。
 - 进入 `ready_for_workbench` 时不再删除原 planning thread 引用；它作为后续返回设计阶段的唯一服务端定位，不表示当前仍在初始化。
-- 已进入 `ready_for_workbench` 且选择 `design_stage_revision`：通过显式 `start_design_revision` 受控恢复原 planning thread/checkpoint，并把界面切回现有设计阶段。
+- 已进入 `ready_for_workbench` 且选择 `design_stage_revision`：通过显式 `start_design_revision` 受控恢复当前阶段 planning thread/checkpoint，并把界面切回现有设计阶段。
 - 已进入 `ready_for_workbench` 且选择 `workbench_plan_revision`：不重跑需求/产品/UI 节点，但显式切到独立计划阶段会话生成和确认 TechnicalPlan 草稿。
 - 任一 formal revision 完成 TechnicalPlan 确认后，服务端生成一次性 continuation token；前端按 revisionContext 中的来源 session/thread 返回发起修改的原开发会话，在其历史末尾追加前置产物完成卡，并依据 AG-UI 结果自动调用 `/workflow/run` 的 `continue_revision_build`。原会话成功激活后即切回开发阶段，不要求用户再次输入。
 - `/workflow/run` 校验 token、changeId、原 planning thread、TechnicalPlan confirmed hash、lifecycle revision 和 target 后，重新投影 application/workbench 数据并生成 Build DAG。独立 `application_planning` continuation 不依赖规划 execution；只有主 Workflow continuation 携带有效来源 execution 时才执行原子替换。
@@ -538,7 +538,7 @@ stop_revision
 start_design_revision
 ```
 
-该动作只接受已确认的影响范围 interactionId、原始请求和 target；服务端据此恢复原 planning thread 并进入 `design_intent_analysis`，不接受前端指定任意节点。
+该动作只接受已确认的影响范围 interactionId、原始请求和 target；服务端据此恢复交接后 lifecycle 当前绑定的 DESIGN thread 并进入 `design_intent_analysis`，不接受前端指定任意节点。
 
 `continue_revision_build` 不是用户按钮动作。它只接受任一 formal branch 在 TechnicalPlan 确认后签发的一次性 token；服务端消费 token 后切回开发阶段，先执行 `development_readiness_gate`，通过后进入 `inspect_workspace -> prepare_build_tasks`，并停在 Build DAG 用户确认门。
 
@@ -641,7 +641,7 @@ discard
 - 不读取 RevisionManifest、candidate object store 或旧 PageDetail。
 - 不探测旧字段、不转换旧 adjustment、不双写旧路径。
 - 工作台 branch 缺少当前正式产物时由对应正式节点重新生成，不从历史 checkpoint 恢复旧格式。
-- 设计 branch 只恢复 current-contract 的原 planning checkpoint；缺失原 planning thread 时明确失败并要求重新进入设计规划，不能猜测或从前端状态重建。
+- 设计 branch 只恢复 current-contract 的交接后的阶段 checkpoint；缺失原 planning thread 时明确失败并要求重新进入设计规划，不能猜测或从前端状态重建。
 
 ---
 
@@ -688,7 +688,7 @@ SmallTask 只执行有界实现任务：
 | UiDesign | 直接复用现有 ui_confirmation 节点 | 本次不修改内部增量/重建逻辑 |
 | TechnicalPlan/PIC | technical planner/compiler | 记录直接上游哈希；校验 `$ref` 和 action/API binding |
 
-设计 branch 恢复原 planning checkpoint 并复用完整节点链；工作台 branch 只复用专业 Agent、validator 和 document service，不复制设计节点或 revision 专用模型。
+设计 branch 恢复交接后的阶段 checkpoint 并复用完整节点链；工作台 branch 只复用专业 Agent、validator 和 document service，不复制设计节点或 revision 专用模型。
 
 ### 8.4 128k 上下文边界
 
@@ -887,7 +887,7 @@ RUN_STARTED
 首版每个 application 同时只允许一个 active formal revision，包括设计 branch 和工作台 branch：
 
 - 用户确认影响范围后，对应 branch 获取同一个 application 级 planning lease；
-- 设计 branch 还继续使用现有原 planning thread 恢复锁；
+- 设计 branch 还继续使用当前阶段 planning thread 恢复锁；
 - lease 存续期间允许闲聊和只读问答；
 - 新的正式修订或代码写请求返回“当前有计划修改正在进行”；
 - formal revision 只有在 Acceptance 完成后才算 completed；放弃当前未确认草稿或用户明确结束时也可以提前终止并释放对应锁；
@@ -910,7 +910,7 @@ RUN_STARTED
 
 ### 10.3 停止与恢复
 
-- 设计 branch：使用原 planning thread/checkpoint、原生 interrupt 和现有冷启动恢复；TechnicalPlan 确认后先把 active formal revision 和锁受控交给共同 continuation，不能在 Build handoff 前释放 planning lease。
+- 设计 branch：使用当前阶段 planning thread/checkpoint、原生 interrupt 和现有冷启动恢复；TechnicalPlan 确认后先把 active formal revision 和锁受控交给共同 continuation，不能在 Build handoff 前释放 planning lease。
 - 共同 continuation 成功获取主 Workflow execution lock 后释放 planning lease；active formal revision 继续存在，直到 Acceptance 完成、放弃当前未确认草稿或用户明确结束。
 - `stop_revision`：停止模型/工具运行，保留当前草稿和 checkpoint，可继续审阅或恢复。
 - `discard`：只删除当前草稿并结束 formal revision。
@@ -1053,7 +1053,7 @@ safe revert service
 
 | 文件 | 修改 |
 | --- | --- |
-| `useWorkflowConversation.ts` | 提交影响范围确认；按 branch 调用 start_design_revision 或在独立规划会话调用 start_technical_revision 恢复原 planning checkpoint；收到 TechnicalPlan continuation 后切回开发会话并自动调用 continue_revision_build；处理工作台草稿 interaction；删除五类 adjustment |
+| `useWorkflowConversation.ts` | 提交影响范围确认；按 branch 调用 start_design_revision 或在独立规划会话调用 start_technical_revision 恢复交接后的阶段 checkpoint；收到 TechnicalPlan continuation 后切回开发会话并自动调用 continue_revision_build；处理工作台草稿 interaction；删除五类 adjustment |
 | `ApplicationPagePlanningModal.tsx` | design branch approved 后恢复原 planning session，并展示现有设计阶段流程 |
 | `PlanExecutionDock` | 展示 revision running/HITL/stopped；不显示内部节点类型 |
 | `ChatComposer` | 统一输入和 target |
@@ -1091,7 +1091,7 @@ safe revert service
 2. 将 direct classifier 收敛为五类 route，并输出 formalBranch/revisionType/earliestArtifact。
 3. 新增确定性 `RevisionRoutingService` 及分类/branch/升级测试。
 4. ready 后保留原 planning thread 引用，并增加受控 `start_design_revision`。
-5. approved design branch 恢复原 thread/checkpoint，进入现有 `design_intent_analysis`；禁止前端指定节点。
+5. approved design branch 恢复阶段独立 thread/checkpoint，进入现有 `design_intent_analysis`；禁止前端指定节点。
 6. 复用现有 gateId/artifactRevision/interrupt/恢复锁/逐层确认测试，不修改 UiDesign 内部实现。
 7. TechnicalPlan 确认后签发一次性 continuation token，自动调用 `/workflow/run` 的 `continue_revision_build`；服务端校验并保留同一 changeId/request/target。
 
@@ -1145,7 +1145,7 @@ safe revert service
 - `design_stage_revision` / `workbench_plan_revision` 的确定性 branch 选择；
 - 影响范围 interactionId 与原始请求/target 的绑定和一次性消费；
 - rejected/expired 影响范围确认不能恢复设计 Graph、创建 draft/changeId 或获取 planning lease；
-- ready 后原 planning thread 引用保留，`start_design_revision` 只能恢复该 thread；
+- ready 后原 planning thread 引用保留，`start_design_revision` 只能使用交接后 lifecycle 当前绑定的 thread；
 - design branch 不能接受客户端节点名或任意 `resume_from`；
 - design completion token 绑定 application/changeId/thread/TechnicalPlan hash/lifecycle revision，且只能消费一次；
 - `continue_revision_build` 必须从 lifecycle 读取原始 request/target，不能接受客户端覆盖影响范围或指定 DAG 节点；
@@ -1217,7 +1217,7 @@ safe revert service
 - 路由能稳定区分问答、实现修复、返回设计阶段和工作台正式草稿；
 - formal revision 在进入任何 branch 前都经过影响范围确认；
 - 影响范围确认取消或过期时不恢复设计 Graph、不创建 draft/changeId，也不获取 planning lease；
-- design branch 复用原 application_planning_workflow/thread/checkpoint、最早节点路由和全部原确认门；
+- design branch 复用原 application_planning_workflow 定义、最早节点路由和全部原确认门，thread/checkpoint 按阶段独立并由服务端交接；
 - design branch 不创建第二套设计 Graph，也不修改 UiDesign 内部逻辑；
 - design branch 的设计阶段产物继续使用原确认机制；TechnicalPlan 确认后的工作台下游与直接 workbench branch 共用隔离草稿和 stale 服务；
 - 两个 formal branch 都在全部受影响正式产物 confirmed 且非 stale 后生成并确认 Build DAG，并最终落实到代码、测试、预览和验收；

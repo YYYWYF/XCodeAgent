@@ -17,10 +17,10 @@ type Props = {
 export default function EndedTaskNotice({
   mode = 'ended', unchanged, continuing, disabled, onContinue, onRestart
 }: Props): ReactElement {
-  // 规划停止已由服务端签发继续动作，无需开发任务的工作区变化资格检查。
+  // 普通中断沿用服务端动作；已结束正式修订可传入同一工作区基线的校验结果。
   const generationStopped = mode === 'stopped_generation'
   const checking = !generationStopped && unchanged === undefined
-  const canContinue = generationStopped || unchanged
+  const canContinue = (generationStopped && unchanged === undefined) || unchanged
   return (
     <section className={cx('ended-task-notice')} aria-label={generationStopped ? '停止生成后续操作' : '结束任务后续操作'}
       aria-live="polite" aria-busy={continuing || checking}>
@@ -30,7 +30,8 @@ export default function EndedTaskNotice({
       <div className={cx('ended-task-notice-copy')}>
         <Typography.Text strong>{generationStopped ? '已停止生成' : '任务已结束'}</Typography.Text>
         <Typography.Text type="secondary">
-          {generationStopped ? '本轮修改已保留，可基于最新文件继续生成。' : checking ? '正在检查工作区状态…' : unchanged
+          {generationStopped && unchanged === true ? '工作区未变化，可以继续原任务的生成。'
+            : generationStopped && unchanged === undefined ? '本轮修改已保留，可基于最新文件继续生成。' : checking ? '正在检查工作区状态…' : unchanged
             ? '工作区未变化，可以继续原任务。' : '工作区已变化，请重新选择开发任务。'}
         </Typography.Text>
       </div>

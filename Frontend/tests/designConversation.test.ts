@@ -493,22 +493,8 @@ assert.equal(productConversationSendBlocked(true, true), true)
 assert.equal(productConversationSendBlocked(true, false), false)
 assert.equal(productConversationSendBlocked(false, true), false)
 assert.equal(productConversationRoute(true, false), 'initial_planning')
-assert.equal(productConversationRoute(true, true), 'completed_product')
+assert.equal(productConversationRoute(true, true), 'historical_product')
 assert.equal(productConversationRoute(false, true), 'development_conversation')
-const completedProductForwardedProps = buildWorkflowForwardedProps({
-  editorMode: 'frontend',
-  productStageConversation: {
-    request: '修改 OrderPage.tsx'
-  },
-  workflowAction: 'product_stage_conversation',
-  workflowScope: 'application_planning'
-})
-assert.equal(completedProductForwardedProps.workflowAction, 'product_stage_conversation')
-assert.equal(completedProductForwardedProps.workflowScope, 'application_planning')
-assert.equal(completedProductForwardedProps.conversation, undefined)
-assert.deepEqual(completedProductForwardedProps.productStageConversation, {
-  request: '修改 OrderPage.tsx'
-})
 assert.match(
   productConversationSubmissionError(new Error('待确认产物已经更新，请基于最新版本重新提交。')),
   /刷新到最新产品设计状态/

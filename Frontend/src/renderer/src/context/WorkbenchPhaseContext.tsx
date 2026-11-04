@@ -37,10 +37,10 @@ export function WorkbenchPhaseProvider({
 }): JSX.Element {
   const testEntryGate = lifecycle?.testEntryGate
   const derivedPhase = gateWorkbenchPhase(deriveWorkbenchPhase(lifecycle), testEntryGate)
-  // 迭代作用域：版本自带的 lifecycle threadId 每次发起迭代都是新的 randomUUID。
+  // 迭代作用域：版本自带的 lifecycle iterationId 每次发起迭代都是新的 randomUUID。
   // 版本 id 是确定性的（`${applicationId}-v${major}-${minor}`），重建同名版本会复用，
   // 所以"按版本隔离"必须再带上它，否则新迭代会继承同名旧版本的阶段覆盖。
-  const iterationToken = String(lifecycle?.initialization?.threadId || '')
+  const iterationToken = String(lifecycle?.initialization?.iterationId || '')
   // 恢复用户在当前迭代里手动选择的阶段；未覆盖时始终跟随后端生命周期。
   const [overrides, setOverrides] = useState<Record<string, WorkbenchPhase | null>>(() => {
     const persistedPhase = getPersistedWorkbenchPhase(applicationId, versionId, iterationToken)

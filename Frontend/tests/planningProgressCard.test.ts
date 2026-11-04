@@ -10,6 +10,28 @@ import type { ApplicationPlanningCurrentState } from '../src/renderer/src/servic
 import type { ApplicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 
+import { appendPlanningEndMessage } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningEndMessage'
+
+test('停止回执追加在历史卡后，保留正文、提交结果并在冷绑定时去重', () => {
+  const workflow: WorkflowRunPayload = {
+    runId: 'stopped-run', threadId: 'planning-thread', events: [],
+    summary: { status: 'completed', phase: 'plan_control', message: '本轮任务已结束，已有文件已保留。',
+      planControl: { action: 'end', status: 'ended', targetRunId: 'stopped-run' } }
+  }
+  const history: AgentChatMessage[] = [{
+    id: 1, role: 'assistant', createdAt: 1, content: '原技术规划说明',
+    workflow: { ...workflow, summary: { status: 'requires_user_input' } }, workflowCardResult: 'submitted'
+  }, { id: 2, role: 'assistant', createdAt: 2, content: '', planningLoading: true }]
+  const next = appendPlanningEndMessage(history, workflow, 3)
+  assert.equal(next.length, 3)
+  assert.equal(next[0], history[0])
+  assert.equal(next[1].planningLoading, false)
+  assert.equal(history[1].planningLoading, true)
+  assert.equal(next[2].content, workflow.summary.message)
+  assert.equal(appendPlanningEndMessage(next, workflow, 4), next)
+  assert.equal(appendPlanningEndMessage(next, { ...workflow, runId: 'other-run' }, 5).length, 4)
+})
+
 /** 渲染测试不执行任何用户动作。 */
 function ignoreAction(): void {}
 
@@ -59,7 +81,8 @@ function renderPlanningMessage(
       messages: history ?? (withoutHistory ? [] : [{ id: 1, role: 'assistant', content: '', createdAt: 1, workflow, revisionHandoff }]),
       revertingCodeChangeIds: new Set<string>(),
       onRevertCodeChanges: ignoreAction, onOpenCodeChangeFile: ignoreAction,
-      onSubmitClarification: ignoreConfirmation
+      onSubmitClarification: ignoreConfirmation,
+      onReviseConfirmedTechnicalPlan: ignoreAction
     })
   ))
 }
@@ -83,6 +106,41 @@ test('模板重试显示真实模板阶段，保留已确认规划的生命周�
   const markup = renderPlanningMessage(workflow)
   assert.match(markup, /正在更新应用模板/)
   assert.doesNotMatch(markup, /正在生成技术规划/)
+})
+
+/** 结束修订恢复开发准入，不代表本次候选已确认或模板已重新生成。 */
+test('规划结束回执不展示模板成功卡或继续生成入口', () => {
+  const workflow = planningProgress('plan_control', 'completed')
+  workflow.summary.planControl = { action: 'end', status: 'ended', targetRunId: workflow.runId }
+  workflow.summary.lifecycle = { application: { id: 'app', name: 'app' }, revision: 2,
+    updatedAt: '2026-11-03T00:00:00Z', activeExecutions: {}, extensions: {},
+    initialization: { stage: 'ready_for_workbench', status: 'completed', threadId: workflow.threadId } }
+  const markup = renderPlanningMessage(workflow)
+  assert.doesNotMatch(markup, /应用模板已就绪|技术规划已确认|继续生成/)
+})
+
+/** 已提交卡保持说明和锁定按钮，停止回执单独提供新的修改入口。 */
+test('停止后保留已提交技术规划卡并新增可修改卡', () => {
+  const historical = planningProgress('technical_planning', 'requires_user_input')
+  historical.summary.clarification = {
+    mode: 'technical_plan_confirmation', status: 'requires_user_input', questions: []
+  }
+  const ended = planningProgress('plan_control', 'completed')
+  ended.summary.message = '本轮任务已结束，已有文件已保留。'
+  ended.summary.planControl = { action: 'end', status: 'ended', targetRunId: ended.runId }
+  const markup = renderPlanningMessage(ended, undefined, undefined, false, false, [
+    { id: 1, role: 'assistant', content: '', createdAt: 1, workflow: historical, workflowCardResult: 'submitted' },
+    { id: 2, role: 'user', content: '技术规划确认：保留记录时间', createdAt: 2 },
+    { id: 3, role: 'assistant', content: ended.summary.message, createdAt: 3, workflow: ended }
+  ])
+  assert.match(markup, /已提交/)
+  assert.match(markup, /技术规划已生成，已展示在右侧/)
+  assert.match(markup, /本轮任务已结束/)
+  assert.match(markup, /已有技术规划已保留/)
+  assert.match(markup, /可继续修改/)
+  // 历史修改按钮锁定；结束回执只有新的修改入口，没有新的确认保存按钮。
+  assert.match(markup, /disabled=""[^>]*><span>修\s*改/)
+  assert.match(markup, /<button type="button" class="ant-btn ant-btn-default xa-requirement-spec-edit-btn"><span>修\s*改/)
 })
 
 /** 规划中断由底部恢复区域承载，空进度消息连同 Agent 头像一起隐藏。 */

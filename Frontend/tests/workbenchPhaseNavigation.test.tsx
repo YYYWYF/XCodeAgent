@@ -2,6 +2,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import WorkbenchTopBar from '../src/renderer/src/components/WorkbenchTopBar'
+import { planningStageAccess, stoppedPlanningForSession } from '../src/renderer/src/components/AiChatPanel/planningStageAccess'
+import EndedTaskNotice from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide/EndedTaskNotice'
+import { latestApplicationLifecycle } from '../src/renderer/src/service/activeApplicationPlanning'
+import PlanningHistoryNotice from '../src/renderer/src/components/AiChatPanel/components/PlanningHistoryNotice'
 import { WorkbenchPhaseProvider } from '../src/renderer/src/context/WorkbenchPhaseContext'
 import {
   useWorkbenchPhase,
@@ -25,6 +29,34 @@ const allowed: TestEntryGate = {
 
 /** 阶段覆盖与浏览进度都按「应用 + 版本」作用域，测试统一用这个版本。 */
 const VERSION = 'v1'
+
+test('正式修订停止只在原需求会话显示继续卡，历史确认仍只读', () => {
+  const lifecycle: ApplicationLifecycle = {
+    application: { id: 'app', name: 'app' }, revision: 3, updatedAt: '',
+    initialization: { stage: 'ready_for_workbench', status: 'completed', threadId: 'design' },
+    activeExecutions: {}, extensions: {}, endedPlanningExecution: {
+      runId: 'stopped', threadId: 'design', stage: 'generating_requirement_document', workspaceUnchanged: true
+    }
+  }
+  const session = { threadId: 'design' }
+  assert.ok(stoppedPlanningForSession({ phase: 'product', lifecycle, session }))
+  assert.equal(stoppedPlanningForSession({ phase: 'planning', lifecycle, session }), undefined)
+  assert.equal(stoppedPlanningForSession({ phase: 'product', lifecycle, session: { threadId: 'old' } }), undefined)
+  assert.equal(planningStageAccess({ phase: 'product', lifecycle, enteredDevelopment: true,
+    sessionThreadId: 'design' }).historyOnly, true)
+  const html = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged
+    continuing={false} disabled={false} onContinue={async () => undefined} />)
+  assert.ok(html.includes('继续生成'))
+  const changed = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged={false}
+    continuing={false} disabled={false} onContinue={async () => undefined} />)
+  assert.ok(changed.includes('工作区已变化'))
+  assert.ok(!changed.includes('继续生成'))
+  const refreshed = latestApplicationLifecycle(lifecycle, {
+    ...lifecycle, endedExecutionsCheckedAt: '2026-11-04T00:00:01Z',
+    endedPlanningExecution: { ...lifecycle.endedPlanningExecution!, workspaceUnchanged: false }
+  })
+  assert.equal(refreshed.endedPlanningExecution?.workspaceUnchanged, false)
+})
 
 /** 隔离本地存储，覆盖多个应用与组件重新挂载时的真实持久化行为。 */
 function withStorage(run: () => void): void {
@@ -274,3 +306,73 @@ test('顶部快捷区只保留主题切换，当前版本与只读版本都不�
       assert.ok(!view.html.includes('workbench-topbar-preview-toggle'))
     }
   }))
+
+/** 构造真实生命周期形状，验证可操作阶段不由手动浏览位置决定。 */
+function planningLifecycle(stage: ApplicationLifecycle['initialization']['stage']): ApplicationLifecycle {
+  return { application: { id: 'history-test', name: '阶段只读验证' }, revision: 1, updatedAt: '',
+    initialization: { stage, status: 'awaiting_user', threadId: 'current-stage', iterationId: 'same-iteration' },
+    activeExecutions: {} }
+}
+
+test('进入计划后需求仅可回看，当前计划可对话，旧计划会话不能操作当前确认', () => {
+  const lifecycle = planningLifecycle('awaiting_technical_plan_confirmation')
+  const input = { lifecycle, enteredDevelopment: false, sessionThreadId: 'current-stage' }
+  const product = planningStageAccess({ ...input, phase: 'product' })
+  assert.equal(product.historyOnly, true)
+  assert.equal(product.destination, 'planning')
+  assert.equal(planningStageAccess({ ...input, phase: 'planning' }).historyOnly, false)
+  assert.equal(planningStageAccess({ ...input, phase: 'planning', sessionThreadId: 'old-plan' }).historyOnly, true)
+  const html = renderToStaticMarkup(<PlanningHistoryNotice access={product} onReturn={() => undefined} />)
+  assert.ok(html.includes('历史会话只读'))
+  assert.ok(html.includes('当前计划阶段提出'))
+  assert.ok(!html.includes('textarea'))
+})
+
+test('开发及后续阶段始终关闭需求和计划自由输入，开发入口不随最远阶段关闭', () => {
+  for (const executionPhase of ['build', 'integration_test', 'code_review', 'acceptance_review']) {
+    const lifecycle = planningLifecycle('ready_for_workbench')
+    lifecycle.activeExecutions = { run: { runId: 'run', threadId: 'development-thread',
+      scope: 'application', targetId: 'history-test', phase: executionPhase, status: 'awaiting_user', startedAt: '', updatedAt: '' } }
+    for (const phase of ['product', 'planning'] as const) {
+      const access = planningStageAccess({ phase, lifecycle, enteredDevelopment: true })
+      assert.equal(access.historyOnly, true)
+      assert.equal(access.destination, 'development')
+    }
+    assert.equal(planningStageAccess({ phase: 'development', lifecycle, enteredDevelopment: true }).historyOnly, false)
+  }
+})
+
+test('正式修改返回需求或计划时只重新开放当前阶段及权威线程', () => {
+  for (const [stage, phase] of [['awaiting_requirement_document_confirmation', 'product'],
+    ['awaiting_technical_plan_confirmation', 'planning']] as const) {
+    const lifecycle = planningLifecycle(stage)
+    const access = planningStageAccess({ phase, lifecycle, enteredDevelopment: true, sessionThreadId: 'current-stage' })
+    assert.equal(access.stageActive, true)
+    assert.equal(access.historyOnly, false)
+    assert.equal(planningStageAccess({ phase, lifecycle, enteredDevelopment: true, sessionThreadId: 'old-stage' }).historyOnly, true)
+    assert.equal(planningStageAccess({ phase: phase === 'product' ? 'planning' : 'product', lifecycle, enteredDevelopment: true }).historyOnly, true)
+  }
+})
+
+test('模板首次就绪保留进入开发卡，进入开发后该计划阶段变成只读', () => {
+  const lifecycle = planningLifecycle('ready_for_workbench')
+  assert.equal(planningStageAccess({ phase: 'planning', lifecycle, enteredDevelopment: false }).historyOnly, false)
+  assert.equal(planningStageAccess({ phase: 'planning', lifecycle, enteredDevelopment: true }).historyOnly, true)
+})
+
+test('首次需求会话沿明确入口绑定当前 Graph，不把初始展示线程误判成历史', () => {
+  const lifecycle = planningLifecycle('awaiting_requirement_document_confirmation')
+  const input = { phase: 'product' as const, lifecycle, enteredDevelopment: false,
+    sessionThreadId: 'initial-visible-session', sessionEntryKey: 'current-stage' }
+  assert.equal(planningStageAccess(input).historyOnly, false)
+  assert.equal(planningStageAccess({ ...input, sessionEntryKey: 'previous-stage' }).historyOnly, true)
+})
+
+test('后端已有开发完成事实时不因本地进入标记缺失而重新开放计划阶段', () => {
+  const lifecycle = planningLifecycle('ready_for_workbench')
+  lifecycle.developmentArtifacts = { pages: { notice: { initialDevelopmentStatus: 'completed' } },
+    endpoints: {}, entities: {} }
+  const access = planningStageAccess({ phase: 'planning', lifecycle, enteredDevelopment: false })
+  assert.equal(access.historyOnly, true)
+  assert.equal(access.destination, 'development')
+})

@@ -143,6 +143,7 @@ class ApplicationInitialization(ApplicationLifecycleModel):
     stage: ApplicationLifecycleStage
     status: ApplicationLifecycleStatus
     thread_id: str | None = Field(default=None, alias="threadId", max_length=512)
+    iteration_id: str | None = Field(default=None, alias="iterationId", max_length=512)
 
 
 class ApplicationLifecycleError(ApplicationLifecycleModel):
@@ -290,6 +291,16 @@ class EndedWorkbenchExecution(ApplicationLifecycleModel):
     formal_revision: ActiveFormalRevision | None = Field(default=None, alias="formalRevision")
 
 
+class EndedPlanningExecution(ApplicationLifecycleModel):
+    """保留已结束规划的原修订与工作区基线，继续时复用原业务节点恢复。"""
+
+    run_id: str = Field(alias="runId")
+    initialization: ApplicationInitialization
+    formal_revision: ActiveFormalRevision = Field(alias="formalRevision")
+    fingerprint: str
+    workspace: str
+
+
 class ApplicationLifecycle(ApplicationLifecycleModel):
     """表示 application-lifecycle.json 的完整业务快照。"""
 
@@ -306,6 +317,7 @@ class ApplicationLifecycle(ApplicationLifecycleModel):
         alias="activeExecutions",
     )
     ended_executions: dict[str, EndedWorkbenchExecution] = Field(default_factory=dict, alias="endedExecutions")
+    ended_planning_execution: EndedPlanningExecution | None = Field(default=None, alias="endedPlanningExecution")
     development_continuations: dict[str, DevelopmentContinuation] = Field(
         default_factory=dict,
         alias="developmentContinuations",

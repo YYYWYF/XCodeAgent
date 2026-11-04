@@ -11,6 +11,7 @@ import {
   useApplicationLifecycleStore
 } from '../hooks/useApplicationLifecycleStore'
 import { useApplicationPlanningRuntimes } from '../hooks/useApplicationPlanningRuntimes'
+import { technicalPlanningReplyPresentation } from '../service/technicalPlanningConversation'
 import { useApplicationPlanningStreamingContent } from '../hooks/useApplicationPlanningStreamingContent'
 import { useApplicationPlanningWorkbenchBridge } from '../hooks/useApplicationPlanningWorkbenchBridge'
 import { useApplicationTheme } from '../hooks/useApplicationTheme'
@@ -109,7 +110,7 @@ function AppEntryContent(): JSX.Element {
           ? event.lifecycle
           : event.type === 'lifecycle_received' || event.type === 'planning_ended'
             ? event.lifecycle
-            : event.type === 'workflow_received'
+            : event.type === 'workflow_received' || event.type === 'stage_thread_handed_off'
               ? workflowApplicationLifecycle(event.workflow)
               : event.type === 'run_failed' && event.workflow
                 ? workflowApplicationLifecycle(event.workflow)
@@ -139,6 +140,10 @@ function AppEntryContent(): JSX.Element {
       const current = planningController.getPlanningState(applicationId)
       if (current) deliverPlanningChunk(current.threadId, { content })
     },
+    /** 只读答复只写可见历史，不作为当前 checkpoint 的状态快照。 */
+    publishReply: (_applicationId, reply) => {
+      deliverPlanningChunk(reply.planningThreadId, { workflow: technicalPlanningReplyPresentation(reply) })
+    },
     /** 历史投递只消费 Runtime 发布的快照，不承担当前状态写入。 */
     publishWorkflow: (_applicationId, workflow) => {
       deliverPlanningChunk(workflow.threadId, { workflow })
@@ -153,17 +158,18 @@ function AppEntryContent(): JSX.Element {
   const handleStartDesignStageRevision = useCallback(
     async (
       application: ApplicationConfig,
-      input: WorkflowDesignStageRevisionStart
+      input: WorkflowDesignStageRevisionStart,
+      target?: import('../service/planningStageHandoff').PlanningStageTarget
     ): Promise<void> => {
       let planning = planningController.getPlanningState(application.id)
       if (!planning) {
         const lifecycle = await getApplicationLifecycle(application)
-        const threadId = application.planningThreadId || lifecycle.initialization.threadId
+        const threadId = lifecycle.initialization.threadId
         if (!threadId) throw new Error('当前应用缺少原 planning thread，无法返回设计阶段。')
         planning = planningController.startPlanning(application, threadId, lifecycle, false)
       }
       planningRuntimeController.ensureRuntime(planning)
-      await planningRuntimeController.startDesignRevision(application.id, input)
+      await planningRuntimeController.startDesignRevision(application.id, input, target)
     },
     [
       planningController.getPlanningState,
@@ -269,6 +275,7 @@ function AppEntryContent(): JSX.Element {
         // 不能跳过规划状态恢复，否则就绪卡与"进入开发阶段"入口都不会出现。
         if (
           readyForWorkbench &&
+          !lifecycle.endedPlanningExecution &&
           hasApplicationEnteredDevelopment(
             application.id,
             application.branchName || application.id
@@ -363,8 +370,8 @@ function AppEntryContent(): JSX.Element {
               onSubmitPlanningClarification={(...args) =>
                 planningRuntimeController.submitClarification(activeApplication.id, ...args)
               }
-              onStartDesignStageRevision={(input) =>
-                handleStartDesignStageRevision(activeApplication, input)
+              onStartDesignStageRevision={(input, target) =>
+                handleStartDesignStageRevision(activeApplication, input, target)
               }
               onIterationStarted={(application, threadId, lifecycle) => {
                 planningController.startPlanning(application, threadId, lifecycle, false, false)
@@ -386,7 +393,7 @@ function AppEntryContent(): JSX.Element {
                 planningRuntimeController.saveRequirementSpec(activeApplication.id, spec)
               }
               onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
-              onRetryPlanning={() => void planningRuntimeController.retryCurrentFailure(activeApplication.id)}
+              onRetryPlanning={() => planningRuntimeController.retryCurrentFailure(activeApplication.id)}
               onReconcilePlanning={() => {
                 void planningRuntimeController.reconcileCurrentState(activeApplication.id).catch(console.error)
               }}

@@ -219,6 +219,12 @@ def prepare_application_planning_review_resume(
                 "resume_from": "",
                 "request": submission.request.strip(),
                 "design_interaction_origin": effective_node_name,
+                # 问答可能返回同一审阅门，暂存其完整确认语义，不能只恢复节点名。
+                "design_interaction_context": {
+                    "clarification": dict(payload.get("clarification") or {}),
+                    "request": str(state.get("request") or ""),
+                    "requirement_revision_id": str(state.get("requirement_revision_id") or ""),
+                },
                 "application_planning_interaction": {},
                 "requirement_revision_id": uuid4().hex,
                 "clarification": {},

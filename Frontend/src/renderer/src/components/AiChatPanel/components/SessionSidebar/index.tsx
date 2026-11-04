@@ -90,15 +90,12 @@ type SessionSidebarProps = {
   selectedPageId: string
   sessionError?: string
   sessionCreationDisabled: boolean
+  historyReadOnly?: boolean
   sessionRunStates: Record<string, SessionRunStatus>
   sessions: ChatSessionSummary[]
   settingsActive: boolean
   skillsActive: boolean
-  /**
-   * 是否展示「历史对话 / 新建自由对话」这一组。该能力目前只在开发阶段开放：
-   * 会话创建与导航还依赖开发阶段的运行态，其他阶段展示需要一并改这些逻辑，
-   * 所以这里单独按阶段门控，不影响文件/技能/设置等其他快捷入口。
-   */
+  /** 是否展示当前阶段历史；新建权限由 sessionCreationDisabled 独立控制。 */
   historyEnabled: boolean
   theme: 'light' | 'dark'
   workspaceRoot: string
@@ -138,6 +135,7 @@ export default function SessionSidebar({
   selectedPageId,
   sessionError,
   sessionCreationDisabled,
+  historyReadOnly = false,
   sessionRunStates,
   sessions,
   settingsActive,
@@ -202,7 +200,7 @@ export default function SessionSidebar({
 
   /** 新建内存临时对话并直接打开只读聊天浮层。 */
   const handleCreateTemporaryChat = (): void => {
-    if (!workspaceRoot) return
+    if (!workspaceRoot || historyReadOnly) return
     const sessionId = temporaryChats.createSession()
     setHistoryOpen(false)
     setActiveTemporaryChatId(sessionId)
@@ -210,7 +208,7 @@ export default function SessionSidebar({
 
   /** 从临时对话列表重新打开当前 Renderer 中保留的会话。 */
   const handleOpenTemporaryChat = (sessionId: string): void => {
-    if (!temporaryChats.sessions.some((session) => session.id === sessionId)) return
+    if (historyReadOnly || !temporaryChats.sessions.some((session) => session.id === sessionId)) return
     setHistoryOpen(false)
     setActiveTemporaryChatId(sessionId)
   }
@@ -438,6 +436,7 @@ export default function SessionSidebar({
         key={workspaceRoot}
         open={historyOpen}
         historyEnabled={historyEnabled}
+        historyReadOnly={historyReadOnly}
         advancingSessionId={advancingSessionId}
         activeSessionId={activeSessionId}
         deletingSessionId={deletingSessionId}
@@ -454,10 +453,10 @@ export default function SessionSidebar({
         sessionRunStates={sessionRunStates}
         sessions={sessions}
         temporaryChats={temporaryChats.sessions}
-        temporaryChatEnabled={Boolean(workspaceRoot)}
+        temporaryChatEnabled={Boolean(workspaceRoot) && !historyReadOnly}
         theme={theme}
       />
-      {activeTemporaryChat ? (
+      {activeTemporaryChat && !historyReadOnly ? (
         <TemporaryChatOverlay
           key={activeTemporaryChat.id}
           onBack={handleBackFromTemporaryChat}

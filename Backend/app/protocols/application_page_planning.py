@@ -87,14 +87,6 @@ class ApplicationPlanningRecoveryRequest(BaseModel):
     applicationId: str | None = None
 
 
-class ProductStageConversationRequest(BaseModel):
-    """校验已完成应用回到产品阶段后的受限 Coordinator 请求。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    request: str = Field(min_length=1, max_length=16_000)
-
-
 async def _build_application_planning_recovery_projection(
     *,
     workspace: str,
@@ -107,6 +99,35 @@ async def _build_application_planning_recovery_projection(
     """在公开 Workflow 边界调用 Generic Recovery authority 并生成 Planning DTO。"""
 
     input_committed = application_planning_input_committed(source, snapshot)
+    # 只有取消记录与已清锁的结束 lifecycle 同时成立，才是用户主动 End；断连取消不能冒充。
+    lifecycle = load_application_lifecycle(workspace)
+    from app.services.ended_planning import ended_planning_available
+    if (source is not None and source.status is DurableExecutionStatus.CANCELLED
+            and source.ended_at is not None
+            and ended_planning_available(workspace, lifecycle, run_id=source.run_id, thread_id=thread_id)):
+        from app.services.business_node_retry import retry_action_plan
+
+        # 正常停止仍使用原节点重试签发动作，不恢复停止前的旧确认门。
+        plan = await retry_action_plan(source.model_copy(update={"status": DurableExecutionStatus.INTERRUPTED}), graph)
+        return build_application_planning_recovery_projection(
+            classification="ready_to_continue" if plan.primary_action else "blocked",
+            source=source, thread_id=thread_id, input_committed=input_committed,
+            reason_code="APPLICATION_PLANNING_ENDED", message="本轮任务已结束，已有文件已保留。",
+            can_continue=plan.primary_action is not None,
+            recovery_action_plan=plan.model_dump(mode="json", by_alias=True),
+        )
+    if (source is not None and source.status is DurableExecutionStatus.CANCELLED
+            and source.ended_at is not None and lifecycle is not None
+            and lifecycle.initialization.thread_id == thread_id
+            and lifecycle.active_run_id is None and lifecycle.active_formal_revision is None
+            and lifecycle.initialization.status in {
+                ApplicationLifecycleStatus.CANCELLED, ApplicationLifecycleStatus.COMPLETED,
+            }):
+        return build_application_planning_recovery_projection(
+            classification="completed", source=source, thread_id=thread_id,
+            input_committed=input_committed, reason_code="APPLICATION_PLANNING_ENDED",
+            message="本轮任务已结束，已有文件已保留。",
+        )
     from app.services.checkpoint_execution import checkpoint_source, interpret_checkpoint
     if source is not None:
         source = checkpoint_source(source, interpret_checkpoint(source, snapshot, graph))
@@ -210,6 +231,12 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "stateSnapshotKey": "workflow",
         "customEventName": "workflow-run",
         "recoveryActionField": "forwardedProps.applicationPlanningRecovery",
+        "stageHandoff": {
+            "requestField": "forwardedProps.planningStageHandoff", "customEventName": "planning-stage-handoff",
+            "stateSnapshotKey": "planningStageHandoff", "distinctThreadRequired": True,
+            "currentThreadField": "initialization.threadId", "iterationField": "initialization.iterationId",
+            "sourceVersionRequired": True, "preservesConfirmationGates": True,
+        },
         "requirementAuthorization": {
             "requestField": "forwardedProps.requirementAuthorization",
             "action": "preview", "customEventName": "requirement-authorization",
@@ -226,7 +253,6 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         ],
         "designChange": {
             "requestField": "forwardedProps.applicationPlanningInteraction",
-            "completedProductRequestField": "forwardedProps.productStageConversation",
             "intentNode": "design_intent_analysis",
             "intents": [
                 "chat",
@@ -245,14 +271,15 @@ def application_page_planning_capabilities() -> dict[str, Any]:
                 "out_of_scope",
             ],
             "suggestedPhases": ["planning", "development", "test", "none"],
-            "usesOriginalThread": True,
+            "stageThreads": "independent",
             "incrementalArtifacts": True,
             "existingArtifactsStateField": "design_change_existing_artifacts",
             "conversationResultStateField": "productConversationResult",
             "nonMutatingArtifactPresentation": "preserve",
             "resumePrimitive": "langgraph-interrupt-command",
             "formalRevisionAction": "start_design_revision",
-            "completedProductConversationAction": "product_stage_conversation",
+            "historicalStagesReadOnly": True,
+            "completedApplicationChangeEntry": "development",
             "technicalRevisionAction": "start_technical_revision",
             "clientNodeSelectionAllowed": False,
         },
@@ -311,7 +338,10 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "mainWorkflowIndependent": True,
         "technicalPlanningConversation": {
             "requestField": "forwardedProps.technicalPlanningConversation",
-            "actions": ["classify", "revise"],
+            "actions": ["classify", "prepare_revision", "revise", "revise_design"],
+            "conversationPhases": ["product", "planning"],
+            "modelThreadSource": "threadId",
+            "upstreamRevisionRequiresStageHandoff": True,
             "readOnlyClassification": True,
             "revisionRequiresExistingPlan": True,
             "revisionRequiresCurrentSourceRunAndCheckpoint": True,
@@ -333,6 +363,11 @@ def build_application_page_planning_ag_ui_stream(
         **payload,
         "workflowScope": "application_planning",
     }
+    stage_handoff = (payload.get("forwardedProps") or {}).get("planningStageHandoff")
+    if stage_handoff is not None:
+        from app.protocols.planning_stage_handoff import build_planning_stage_handoff_stream
+
+        return build_planning_stage_handoff_stream(graph=graph, payload=normalized_payload, raw=stage_handoff, accept=accept)
     authorization_preview = (payload.get("forwardedProps") or {}).get("requirementAuthorization")
     if authorization_preview is not None:
         from app.protocols.requirement_authorization import build_requirement_authorization_stream
@@ -345,19 +380,16 @@ def build_application_page_planning_ag_ui_stream(
         return build_technical_planning_conversation_stream(
             graph=graph, payload=normalized_payload, raw=technical_message, accept=accept,
         )
-    product_stage_input = _product_stage_conversation_input(normalized_payload)
-    if product_stage_input is not None:
-        try:
-            normalized_payload = _prepare_product_stage_conversation_payload(
-                normalized_payload,
-                product_stage_input,
-            )
-        except Exception as exc:
-            return _build_product_stage_conversation_error_stream(
-                payload=normalized_payload,
-                error=exc,
-                accept=accept,
-            )
+    forwarded = normalized_payload.get("forwardedProps") or {}
+    if forwarded.get("workflowAction") == "product_stage_conversation":
+        async def reject_historical_conversation() -> AgUiActionResult:
+            """历史需求阶段仅可查看，正式修改必须由开发会话的影响确认进入。"""
+
+            raise ValueError("需求阶段仅供查看历史会话。如需新增或调整需求，请在开发阶段提出。")
+
+        return build_ag_ui_action_stream(payload=normalized_payload, event_name="workflow-run", state_key="workflow",
+            run_id_prefix="historical-planning", operation=reject_historical_conversation, accept=accept,
+            error_message_prefix="历史阶段不可发起对话", register_workspace_run=False)
     start_design_revision = _start_design_revision_input(normalized_payload)
     if start_design_revision is not None:
         try:
@@ -537,6 +569,12 @@ def _build_application_planning_recovery_ag_ui_stream(
         recovery_run_id = str(result.get("active_run_id") or f"recovery:{thread_id}")
         summary = _workflow_summary(result, [])
         summary["message"] = projection.message
+        if projection.reason_code == "APPLICATION_PLANNING_ENDED":
+            # 只发布独立结束回执；修改必须发起新请求，不能消费停止前的旧确认。
+            summary.update(status="completed", phase="plan_control", planControl={
+                "action": "end", "status": "ended", "targetRunId": recovery_run_id,
+            })
+            summary.pop("error", None)
         visual_payload = _workflow_visual_payload(
             run_id=recovery_run_id,
             thread_id=thread_id,
@@ -670,91 +708,6 @@ def _application_planning_recovery_input(
         return None
     value = forwarded_props.get("applicationPlanningRecovery")
     return value if isinstance(value, dict) else None
-
-
-def _product_stage_conversation_input(
-    payload: dict[str, Any],
-) -> dict[str, Any] | None:
-    """读取已完成应用在产品阶段提交的 Coordinator 请求。"""
-
-    forwarded_props = payload.get("forwardedProps")
-    if not isinstance(forwarded_props, dict):
-        return None
-    if str(forwarded_props.get("workflowAction") or "").strip() != (
-        "product_stage_conversation"
-    ):
-        return None
-    for key in ("resumeFrom", "resume_from", "node"):
-        if key in forwarded_props or key in payload:
-            raise ValueError("产品阶段对话不接受客户端节点或 resume_from。")
-    value = forwarded_props.get("productStageConversation")
-    if not isinstance(value, dict):
-        raise ValueError("产品阶段对话必须提供 productStageConversation。")
-    return value
-
-
-def _prepare_product_stage_conversation_payload(
-    payload: dict[str, Any],
-    raw_request: dict[str, Any],
-) -> dict[str, Any]:
-    """固定复用原 planning thread，并把完成态产品输入限制为只回复轮次。"""
-
-    request = ProductStageConversationRequest.model_validate(raw_request)
-    forwarded_props = dict(payload.get("forwardedProps") or {})
-    workspace = str(forwarded_props.get("workspaceRoot") or "").strip()
-    if not workspace:
-        application = forwarded_props.get("application")
-        application = application if isinstance(application, dict) else {}
-        workspace = str(application.get("workspaceRoot") or "").strip()
-    lifecycle = load_application_lifecycle(workspace)
-    if (
-        lifecycle is None
-        or lifecycle.initialization.stage
-        != ApplicationLifecycleStage.READY_FOR_WORKBENCH
-    ):
-        raise ValueError("只有已 ready_for_workbench 的应用可使用完成态产品对话。")
-    planning_thread_id = str(lifecycle.initialization.thread_id or "").strip()
-    if not planning_thread_id:
-        raise ValueError("已完成应用缺少原 application planning thread。")
-    next_forwarded = {
-        **forwarded_props,
-        "workflowAction": None,
-        "productStageConversation": None,
-        "applicationPlanningInteraction": None,
-        "resumeState": {"state": {"product_stage_conversation": True}},
-    }
-    return {
-        **payload,
-        "threadId": planning_thread_id,
-        "request": request.request,
-        "resumeFrom": "design_intent_analysis",
-        "forwardedProps": next_forwarded,
-    }
-
-
-def _build_product_stage_conversation_error_stream(
-    *,
-    payload: dict[str, Any],
-    error: Exception,
-    accept: str | None,
-) -> AsyncIterator[str]:
-    """把完成态产品对话边界错误投射为完整 AG-UI 失败生命周期。"""
-
-    async def operation() -> AgUiActionResult:
-        """在标准 action stream 内重新抛出已校验的业务错误。"""
-
-        raise error
-
-    return build_ag_ui_action_stream(
-        payload=payload,
-        event_name="workflow-run",
-        state_key="workflow",
-        run_id_prefix="product-stage-conversation",
-        operation=operation,
-        error_message_prefix="产品阶段对话失败",
-        error_data=lambda _exc: {"action": "product_stage_conversation"},
-        accept=accept,
-    )
 
 
 def _start_design_revision_input(payload: dict[str, Any]) -> dict[str, Any] | None:

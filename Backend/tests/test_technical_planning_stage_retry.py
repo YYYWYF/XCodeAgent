@@ -256,12 +256,12 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
         """设计修订在技术 begin 失败后仍可沿真实 Native Recovery 生成并回到确认门。"""
         await self._revise_formal_plan(native=True, design=True)
 
-    async def test_pause_generation_can_continue_through_recovery(self) -> None:
-        """真实取消控制把技术规划暂停落为中断，并沿原恢复动作重新生成、等待确认。"""
+    async def test_stop_generation_ends_without_recovery(self) -> None:
+        """用户停止技术规划后结束当前执行，不再签发原任务继续生成动作。"""
         harness = self.harness
         started = asyncio.Event()
 
-        async def generate_with_pause(state):
+        async def generate_until_stopped(state):
             """仅首轮阻塞原生成节点，为真实取消请求提供确定的执行窗口。"""
             if not started.is_set():
                 started.set()
@@ -270,14 +270,14 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.config.Settings.from_env", side_effect=harness.current_settings),
-            patch("app.graph.application_planning_workflow.technical_planning_generate", new=generate_with_pause),
+            patch("app.graph.application_planning_workflow.technical_planning_generate", new=generate_until_stopped),
         ):
             await harness.initialize_graph()
             task = asyncio.create_task(harness.run_initial())
             try:
                 await asyncio.wait_for(started.wait(), timeout=5)
-                from app.services.planning_execution_end import stop_planning_execution
-                await stop_planning_execution(str(harness.workspace), harness.thread_id)
+                from app.services.planning_execution_end import end_planning_execution
+                await end_planning_execution(str(harness.workspace), harness.thread_id)
                 with self.assertRaises(asyncio.CancelledError):
                     await task
             finally:
@@ -285,25 +285,11 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
             source = await get_execution(harness.workspace, harness.source_run_id)
-            self.assertEqual(source.status, DurableExecutionStatus.INTERRUPTED)
-            # aget_state 可叠加未提交的模型返回并呈现空 next；恢复仍应读取
-            # history 中已提交的 generate 入口，不能把展示快照当成完成事实。
+            self.assertEqual(source.status, DurableExecutionStatus.CANCELLED)
+            self.assertIsNotNone(source.ended_at)
             committed = await harness.graph.aget_state({"configurable": {"thread_id": harness.thread_id}})
             projected = await _build_application_planning_recovery_projection(
                 workspace=str(harness.workspace), thread_id=harness.thread_id,
-                graph=harness.graph, source=source,
-                snapshot=committed._replace(next=(), tasks=()),
+                graph=harness.graph, source=source, snapshot=committed,
             )
-            self.assertEqual(projected.classification, "ready_to_continue")
-            self.assertEqual((await get_execution(harness.workspace, harness.source_run_id)).status,
-                             DurableExecutionStatus.INTERRUPTED)
-            _, projection, action = await harness.resolve_action()
-            self.assertEqual(projection.classification, "ready_to_continue")
-            self.assertEqual(action["primaryAction"]["label"], "继续生成")
-            with (
-                patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as generate,
-                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
-            ):
-                child = await harness.execute_action(action)
-            generate.assert_called_once()
-            self.assertEqual(child.status, DurableExecutionStatus.AWAITING_USER)
+            self.assertIsNone(projected.recovery_action_plan)

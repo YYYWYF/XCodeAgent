@@ -10,5 +10,6 @@ export function mergeEndedTaskAvailability(
   const latestCheck = current.endedExecutionsCheckedAt || ''
   if (incoming.endedExecutionsCheckedAt <= latestCheck) return base
   return { ...base, endedExecutions: incoming.endedExecutions,
+    endedPlanningExecution: incoming.endedPlanningExecution,
     endedExecutionsCheckedAt: incoming.endedExecutionsCheckedAt }
 }

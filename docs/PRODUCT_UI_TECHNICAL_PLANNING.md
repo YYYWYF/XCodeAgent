@@ -2,9 +2,11 @@
 
 ## 目标
 
+阶段回看只改变浏览位置。进入计划后需求阶段只读；进入开发及后续任何阶段后，需求和计划都只读，新增或调整需求统一从开发阶段提出。系统通过正式修订返回需求/计划时，当前业务阶段的权威会话重新允许对话、修改和确认，旧会话仍只读；规划会话只能由流程创建。
+
 应用创建流程把产品设计、技术规划和开发执行拆成三个独立阶段，避免 UI 设计稿与页面详细设计重复定义布局、组件和交互，也避免 UI 确认或跳过后自动越过阶段入口生成 TechnicalPlan。
 
-四个正式产物均采用 LangGraph 原生人工审阅门：需求澄清期间只更新 checkpoint 中的未完成事实，不生成或写入 RequirementSpec 草稿；模型判定没有重要缺口后才写入待确认 Markdown/内部 JSON，再进入独立 review 节点调用 `interrupt()`。用户操作通过同一 thread 的 `Command(resume=...)` 恢复。创建规划的 SQLite checkpoint 是上下文权威，前端只提交包含 `gateId`、产物摘要和显式 action 的 `applicationPlanningInteraction`，不回传 Workflow 状态来推断恢复节点。`confirm`、`revise`、需求澄清 `answer`、UI `ui_action` 和底部 `design_change` 具有不同类型；前端按按钮/表单的明确意图产生 action，产物节点直接消费 action，用户文本只作为回答或修订内容。服务端按 thread 串行完成中断读取、版本校验和恢复，旧卡片、摘要不匹配或并发重复提交必须在节点执行前拒绝。
+四个正式产物均采用 LangGraph 原生人工审阅门：需求澄清期间只更新 checkpoint 中的未完成事实，不生成或写入 RequirementSpec 草稿；模型判定没有重要缺口后才写入待确认 Markdown/内部 JSON，再进入独立 review 节点调用 `interrupt()`。阶段内用户操作通过同一 thread 的 `Command(resume=...)` 恢复；DESIGN 与 PLAN 使用独立 thread，通过受校验的服务端交接承接当前产物和未消费确认门。创建规划的 SQLite checkpoint 是上下文权威，前端只提交包含 `gateId`、产物摘要和显式 action 的 `applicationPlanningInteraction`，不回传 Workflow 状态来推断恢复节点。`confirm`、`revise`、需求澄清 `answer`、UI `ui_action` 和底部 `design_change` 具有不同类型；前端按按钮/表单的明确意图产生 action，产物节点直接消费 action，用户文本只作为回答或修订内容。服务端按 thread 串行完成中断读取、版本校验和恢复，旧卡片、摘要不匹配或并发重复提交必须在节点执行前拒绝。
 
 ```text
 RequirementSpec
@@ -114,7 +116,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 负责人：产品。
 
-生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`。确认或跳过都只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，当前工作台为该应用创建或恢复独立的 PLAN StageSession，并原地切换到 Planning 阶段。后端继续使用 lifecycle 中的原初始化 Graph checkpoint，规划 Agent 使用独立的 conversation thread；只有当前工作台提交一次 `enter_planning`，避免复制或丢失已确认的 RequirementSpec、ProductPlan 与 UiDesign 状态。
+生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。用户也可以明确跳过 UI 设计；此时不生成页面 TSX，Manifest 使用 `confirmation_status: skipped` 和空 `pages`。确认或跳过都只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，当前工作台为该应用创建或恢复独立的 PLAN StageSession，并原地切换到 Planning 阶段。先以 `forwardedProps.planningStageHandoff` 校验当前来源 Run/lifecycle revision 并在 PLAN 会话的独立线程重建原审阅门，再在该线程提交 `enter_planning`。交接不运行产物模型、不消费用户确认；旧 DESIGN 线程不再有权推进。RequirementSpec、ProductPlan 与 UiDesign 从服务端当前 checkpoint 传递，不使用前端快照。`initialization.iterationId` 保持不变，`initialization.threadId` 指向新阶段线程。
 
 `ui-designs.json` 使用 `ui-manifest.v3`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。核心结构为：
 

@@ -42,6 +42,7 @@ from app.protocols.workflow.stream_events import (
     integration_test_checks,
 )
 from app.services.application_lifecycle import (
+    ApplicationPlanningInProgressError,
     application_lifecycle_payload,
     load_application_lifecycle,
 )
@@ -931,11 +932,13 @@ def build_conversation_ag_ui_stream(
         run_id_prefix="conversation",
         streaming_operation=operation,
         error_message_prefix="自由对话执行失败",
-        error_data=lambda _exc: {
+        error_data=lambda exc: {
             "summary": {
                 "status": "failed",
                 "phase": "conversation",
-                "message": "自由对话执行失败。",
+                "message": str(exc) if isinstance(exc, ApplicationPlanningInProgressError) else "自由对话执行失败。",
+                **({"errorCode": exc.code, "lifecycle": application_lifecycle_payload(exc.lifecycle)}
+                   if isinstance(exc, ApplicationPlanningInProgressError) else {}),
             },
             "events": [],
             "state": {"status": "failed", "phase": "conversation"},

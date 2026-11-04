@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import uuid4
 
+from app.domain.application_lifecycle import ApplicationLifecycle, ApplicationLifecycleStage, ApplicationLifecycleStatus
 from app.domain.application_planning_recovery import (
     ApplicationPlanningOperation,
     ApplicationPlanningRecoveryBoundary,
@@ -12,6 +13,10 @@ from app.domain.application_planning_recovery import (
     parse_application_planning_boundary,
 )
 from app.workspace.plan_documents import load_project_plan_json, technical_plan_json_path
+from app.services.application_lifecycle import (
+    ApplicationLifecycleConflictError, _application_lifecycle_lock, application_lifecycle_path,
+    load_application_lifecycle, restart_application_planning_lifecycle,
+)
 
 TECHNICAL_PLANNING_RETRY_NODES = frozenset({
     "technical_planning_begin", "technical_planning_generate", "technical_planning_commit",
@@ -25,6 +30,31 @@ class TechnicalPlanningMessageRevision:
     request: str
     checkpoint_id: str
     target_node: Literal["technical_planning", "design_intent_analysis"] = "technical_planning"
+
+
+def restart_stopped_technical_plan_revision(
+    workspace: str, *, lifecycle: ApplicationLifecycle, thread_id: str, new_run_id: str,
+) -> ApplicationLifecycle:
+    """仅为已验证 checkpoint 的明确新修改接管停止态，不恢复旧执行或签发确认。"""
+
+    with _application_lifecycle_lock(application_lifecycle_path(workspace)):
+        current = load_application_lifecycle(workspace)
+        # Graph 写锁之外还需 lifecycle CAS，阻止分类后阶段切换、正式修订或其他 owner 的竞争。
+        if (current is None or current.revision != lifecycle.revision
+                or current.initialization.thread_id != thread_id
+                or current.initialization.status is not ApplicationLifecycleStatus.CANCELLED
+                or current.initialization.stage not in {
+                    ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                    ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+                }
+                or current.active_run_id or current.active_formal_revision
+                or current.active_executions
+                or any(current.resource_locks.model_dump().values()) or not new_run_id.strip()):
+            raise ApplicationLifecycleConflictError("当前停止的技术规划状态已变化，请同步后重新提交修改要求。")
+        return restart_application_planning_lifecycle(
+            workspace, stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            active_run_id=new_run_id,
+        )
 
 
 def prepare_technical_planning_retry(

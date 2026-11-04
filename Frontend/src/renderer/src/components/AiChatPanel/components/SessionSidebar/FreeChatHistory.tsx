@@ -19,6 +19,7 @@ import './FreeChatHistory.less'
 type FreeChatHistoryProps = {
   open: boolean
   historyEnabled: boolean
+  historyReadOnly?: boolean
   activeSessionId?: string
   advancingSessionId?: string
   deletingSessionId?: string
@@ -43,6 +44,7 @@ type FreeChatHistoryProps = {
 export default function FreeChatHistory({
   open,
   historyEnabled,
+  historyReadOnly = false,
   activeSessionId,
   advancingSessionId,
   deletingSessionId,
@@ -70,7 +72,7 @@ export default function FreeChatHistory({
   // 常规会话继续按原阶段门控，临时会话在当前 Renderer 生命周期内独立管理。
   useEffect(() => {
     setTab(historyEnabled ? 'regular' : 'temporary')
-  }, [historyEnabled])
+  }, [historyEnabled, temporaryChatEnabled])
 
   useEffect(() => {
     /** 对话管理打开期间响应 Escape 关闭列表。 */
@@ -148,7 +150,7 @@ export default function FreeChatHistory({
         </span>
         <span className={cx('temporary-chat-heading')}>
           <strong>对话管理</strong>
-          <span>按需拆分上下文，当前阶段仅一条对话可继续推进</span>
+          <span>{historyReadOnly ? '当前阶段仅供查看历史会话' : '按需拆分上下文，当前阶段仅一条对话可继续推进'}</span>
         </span>
         <button
           aria-label="关闭对话管理"
@@ -174,6 +176,7 @@ export default function FreeChatHistory({
           <button
             role="tab"
             aria-selected={tab === 'temporary'}
+            disabled={!temporaryChatEnabled}
             className={cx(tab === 'temporary' && 'active')}
             onClick={() => setTab('temporary')}
             type="button"
@@ -201,7 +204,7 @@ export default function FreeChatHistory({
       >
         <p className={cx('conversation-management-hint')}>
           <InfoCircleOutlined />
-          {tab === 'regular'
+          {historyReadOnly ? '此阶段已完成，历史会话不能发起对话或执行确认。' : tab === 'regular'
             ? '仅「当前推进」的对话可执行工作流，其余对话仅供查看。'
             : '临时对话可查阅和讨论当前工程；不会修改文件或发起工作流，关闭后清除。'}
         </p>

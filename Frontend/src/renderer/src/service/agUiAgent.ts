@@ -34,9 +34,6 @@ export type SendWorkflowMessageOptions = {
   clarificationAnswers?: WorkflowClarificationAnswers
   applicationPlanningInteraction?: ApplicationPlanningInteraction
   technicalPlanningConversation?: import('./technicalPlanningConversation').TechnicalPlanningMessage
-  productStageConversation?: {
-    request: string
-  }
   editedRequirementSpec?: Record<string, unknown>
   requirementSpecFeedback?: string
   originalRequest?: string
@@ -123,7 +120,6 @@ export function buildWorkflowForwardedProps(
     clarificationAnswers: options.clarificationAnswers,
     applicationPlanningInteraction: options.applicationPlanningInteraction,
     technicalPlanningConversation: options.technicalPlanningConversation,
-    productStageConversation: options.productStageConversation,
     editedRequirementSpec: options.editedRequirementSpec,
     requirementSpecFeedback: options.requirementSpecFeedback,
     originalRequest: options.originalRequest,
@@ -823,8 +819,9 @@ export class AgUiChatSession {
         processSteps
       })
     }
-    // 提前 EOF 检查仅用于本次二次修改接入，主 Workflow（含 Build）保持原行为。
-    if (!runFinished && (options.conversation || workflow?.state?.workflow_scope === 'conversation')) {
+    // 对话及一次性续接必须收到结束回执；响应丢失只能同步后端事实，不能伪装为成功。
+    if (!runFinished && (options.conversation || options.workflowAction === 'continue_revision_build' ||
+      workflow?.state?.workflow_scope === 'conversation')) {
       throw new Error('Backend 连接中断，未收到运行结束回执。请重试同步当前节点状态。')
     }
     const assistantMessage = result.newMessages.find(

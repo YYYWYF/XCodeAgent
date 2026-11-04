@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './planningTaskAdmission.test'
 import { test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -31,8 +32,8 @@ test('规划冷重入无本地流时仍能停止，后台待确认及终态不�
     onDraftChange: () => undefined, onSelectedSkillsChange: () => undefined,
     onSend: async () => undefined, onStopGenerating: () => undefined
   }))
-  assert.match(html, /<button[^>]*aria-label="停止生成"/)
-  assert.doesNotMatch(html, /<button[^>]*aria-label="停止生成"[^>]*disabled/)
+  assert.match(html, /<button[^>]*aria-label="结束任务"/)
+  assert.doesNotMatch(html, /<button[^>]*aria-label="结束任务"[^>]*disabled/)
   for (const classification of ['awaiting_user', 'completed', 'failed', 'stopped', 'cancelled'] as const) {
     assert.equal(planningGenerationRunning({ ...state,
       recovery: { ...state.recovery!, classification } }), false)
@@ -88,7 +89,7 @@ test('重入恢复运行状态和已有任务进度，重复读取不增加消�
   assert.equal(second.messages[0].processSteps?.[0].dagGeneration?.revision, 2)
 })
 
-test('二次修改重开后无本地流，恢复的真实执行仍显示可用停止生成按钮', () => {
+test('二次修改重开后无本地流，恢复的真实执行仍显示可用结束任务按钮', () => {
   const lifecycle = fixture()
   const messages = [{ id: 1, role: 'assistant', content: '', workflow: {
     runId: 'run-1', threadId: 'graph-thread', events: [],
@@ -108,8 +109,8 @@ test('二次修改重开后无本地流，恢复的真实执行仍显示可用�
     onDraftChange: () => undefined, onSelectedSkillsChange: () => undefined,
     onSend: async () => undefined, onStopGenerating: () => undefined
   }))
-  assert.match(html, /<button[^>]*aria-label="停止生成"/)
-  assert.doesNotMatch(html, /<button[^>]*aria-label="停止生成"[^>]*disabled/)
+  assert.match(html, /<button[^>]*aria-label="结束任务"/)
+  assert.doesNotMatch(html, /<button[^>]*aria-label="结束任务"[^>]*disabled/)
   assert.doesNotMatch(html, /暂停执行|aria-label="发送给 Workflow"/)
   lifecycle.activeExecutions = {}
   assert.equal(generationControlOwner(false,

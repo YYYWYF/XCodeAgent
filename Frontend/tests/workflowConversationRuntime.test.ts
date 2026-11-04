@@ -21,6 +21,8 @@ import {
   type SessionIdentity
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { useWorkflowConversation } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
+import { mergeWorkbenchResult } from '../src/renderer/src/components/AiChatPanel/workbenchResultRecovery'
+import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
 import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../src/renderer/src/components/AiChatPanel/pendingWorkflowInput'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
 import type {
@@ -93,6 +95,7 @@ test('无生命周期冷启动收口连接：业务失败展示真实错误，�
 
 test('规划来源只读时，正式续接按显式开发 owner 判断；其他目标仍被阻止', async () => {
   const previousWindow = globalThis.window
+  const restoreFetch = mockReadyContinuationReads()
   Object.defineProperty(globalThis, 'window', { configurable: true,
     value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
   try {
@@ -133,12 +136,14 @@ test('规划来源只读时，正式续接按显式开发 owner 判断；其他�
     assert.equal(await runtime!.handleContinueRevisionBuild(continuation, source), false)
     assert.equal(sent, 1)
   } finally {
+    restoreFetch()
     Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow })
   }
 })
 
 test('运行中前插历史后，最终回复保存包含新读入的历史而不回退到开跑快照', async () => {
   const oldWindow = globalThis.window
+  const restoreFetch = mockReadyContinuationReads()
   Object.defineProperty(globalThis, 'window', { configurable: true,
     value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
   const identity = buildSessionIdentity()
@@ -174,7 +179,113 @@ test('运行中前插历史后，最终回复保存包含新读入的历史而�
     assert.equal(saved.at(-1)?.find((message) => message.id === 1)?.content, historical.content)
     assert.equal(messages.find((message) => message.id === 1)?.content, historical.content)
     assert.equal(saved.at(-1)?.at(-1)?.content, '已完成')
-  } finally { Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow }) }
+  } finally {
+    restoreFetch()
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow })
+  }
+})
+
+/** 正式续接测试必须提供真实 AG-UI 生命周期读取，不能跳过当前凭据资格的网络边界。 */
+function mockReadyContinuationReads(): () => void {
+  const previous = globalThis.fetch
+  globalThis.fetch = async (input, init) => {
+    assert.ok(String(input).endsWith('/application-lifecycle/run'))
+    const request = JSON.parse(String(init?.body))
+    const lifecycle = { ...buildIdleLifecycle(), activeFormalRevision: {
+      changeId: 'change', formalBranch: 'workbench_plan_revision', status: 'continuation_ready',
+      technicalPlanSha256: 'a'.repeat(64)
+    } } as ApplicationLifecycle
+    return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+  }
+  return () => { globalThis.fetch = previous }
+}
+
+test('断连续接完成后 scoped Get 恢复并保存页面选择，重新挂载不重复回复或续接', async () => {
+  const oldFetch = globalThis.fetch
+  const oldWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }) })
+  const identity = buildSessionIdentity()
+  const workflow = { runId: 'completed-selection', threadId: identity.threadId, events: [],
+    summary: { status: 'completed', phase: 'api_design_readiness_gate', message: '你想开发哪个页面或 API？',
+      clarification: { mode: 'development_target_selection', message: '你想开发哪个页面或 API？' } }
+  } as WorkflowRunPayload
+  const lifecycle = buildIdleLifecycle()
+  lifecycle.extensions.workbenchResult = { runId: workflow.runId, threadId: identity.threadId,
+    ownerSessionId: identity.sessionId, startedAt: '2026-11-03T00:00:01Z', workflow }
+  const runningLifecycle = { ...buildIdleLifecycle(), activeExecutions: {
+    [workflow.runId]: { runId: workflow.runId, threadId: identity.threadId, ownerSessionId: identity.sessionId,
+      phase: 'api_design_readiness_gate', status: 'running', startedAt: '2026-11-03T00:00:01Z' }
+  } } as unknown as ApplicationLifecycle
+  let responseLifecycle = runningLifecycle
+  let messages: AgentChatMessage[] = [
+    { id: 1, role: 'user', content: '技术规划已确认，正在衔接开发流程。', createdAt: 1 },
+    { id: 2, role: 'assistant', content: '', createdAt: 2 }
+  ]
+  let saves = 0
+  let root: ReactTestRenderer | undefined
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  const actions: string[] = []
+  const params = buildRuntimeParams({ activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: runningLifecycle, agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined,
+    persistSession: async (input) => { saves++; assert.equal(input.messages.at(-1)?.workflow?.runId, workflow.runId) }
+  })
+  params.getSessionMessages = () => messages
+  params.setSessionMessages = (_key, value) => { messages = typeof value === 'function' ? value(messages) : value }
+  /** 使用真实 Hook 的挂载 effect 和重入读取，不能直接调用 merge 冒充恢复成功。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (input, init) => {
+    assert.ok(String(input).endsWith('/application-lifecycle/run'), '恢复不能发送任何 Workflow 或 continuation')
+    const request = JSON.parse(String(init?.body))
+    const action = request.forwardedProps.applicationLifecycle
+    actions.push(action.action)
+    if (action.action === 'get') {
+      assert.equal(action.sessionId, identity.sessionId)
+      assert.equal(action.sessionThreadId, identity.threadId)
+    }
+    return sseResponse(request.threadId, request.runId, { applicationLifecycle: responseLifecycle })
+  }
+  try {
+    await act(async () => { root = create(createElement(Probe)) })
+    assert.equal(saves, 0, '后台仍运行时不能提前伪造选择结果')
+    // 模拟已有状态轮询证明 Run 已收口：真实 effect 应补读最终结果，不能永久停在无卡片状态。
+    responseLifecycle = lifecycle
+    params.applicationLifecycle = buildIdleLifecycle()
+    await act(async () => { root?.update(createElement(Probe)) })
+    assert.equal(messages.length, 2)
+    assert.equal(messages[1].id, 2)
+    assert.equal(runtime.activeWorkflow?.runId, workflow.runId)
+    const html = renderToStaticMarkup(createElement(NextDevelopmentGuide, {
+      step: { key: workflow.runId, reason: 'selection', message: workflow.summary.message },
+      tasks: [{ id: 'page:notice', kind: 'page', pageId: 'notice', pageLabel: '公告页',
+        title: '公告页', description: '静态公告', meta: '/page/notice', hasDetailPlan: false,
+        progress: { initialDevelopmentStatus: 'pending', changeStatus: 'unchanged' } }],
+      disabled: false, loading: false, onStart: async () => undefined
+    }))
+    assert.match(html, /你想开发哪个页面或 API/)
+    assert.match(html, /等待选择开发目标/)
+    assert.doesNotMatch(html, /API 设计前置检查已完成/)
+    assert.match(html, /开发「公告页」/)
+    assert.equal(saves, 1)
+    await act(async () => { await runtime.refreshExecutionRecoveryLifecycle() })
+    await act(async () => { root?.unmount() })
+    await act(async () => { root = create(createElement(Probe)) })
+    assert.equal(messages.length, 2)
+    assert.equal(saves, 1)
+    assert.ok(actions.every((action) => ['get', 'workspace_attach'].includes(action)))
+    assert.equal(mergeWorkbenchResult(messages, { ...lifecycle, extensions: {
+      ...lifecycle.extensions, workbenchResult: { ...lifecycle.extensions.workbenchResult!, ownerSessionId: 'other' }
+    } }, identity), messages)
+    const newerInput = [...messages, { id: 3, role: 'user' as const, content: '新的修改', createdAt: Date.now() }]
+    assert.equal(mergeWorkbenchResult(newerInput, lifecycle, identity), newerInput)
+  } finally {
+    await act(async () => { root?.unmount() })
+    globalThis.fetch = oldFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow })
+  }
 })
 
 test('正式修订确认沿用卡片目标并交给应用 Planning Runtime，不另发聊天请求', async () => {

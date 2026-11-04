@@ -101,6 +101,49 @@ class ApplicationPlanningRecoveryProjectionTests(unittest.IsolatedAsyncioTestCas
         self.assertIn('"checkpointAvailable":false', "".join(frames))
         self.assertNotIn('"type":"RUN_ERROR"', "".join(frames))
 
+    async def test_user_ended_execution_reopens_as_separate_end_receipt(self) -> None:
+        """主动结束后只读恢复保持结束语义，不重放 Graph 或再次签发旧确认门。"""
+        source = self.source.model_copy(update={"status": DurableExecutionStatus.CANCELLED, "failure": None})
+        lifecycle = create_application_lifecycle(application_id="planning-app", application_name="结束恢复",
+            initialization_thread_id=source.thread_id)
+        write_application_lifecycle(self.workspace, lifecycle.model_copy(update={
+            "initialization": lifecycle.initialization.model_copy(update={
+                "stage": ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                "status": ApplicationLifecycleStatus.CANCELLED,
+            }),
+        }))
+        graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(
+            values={"active_run_id": source.run_id, "phase": "technical_planning",
+                    "status": "running", "clarification": {
+                        "mode": "technical_plan_confirmation", "status": "requires_user_input"}},
+            config={}, next=(), tasks=(),
+        )))
+        with (patch("app.protocols.application_page_planning.reconcile_workspace_recovery", new=AsyncMock()),
+              patch("app.persistence.execution_recovery.get_execution", new=AsyncMock(return_value=source))):
+            frames = [frame async for frame in _build_application_planning_recovery_ag_ui_stream(
+                graph=graph, payload={"threadId": source.thread_id, "runId": "reopen-ended"},
+                recovery_input={"action": "get", "workspaceRoot": str(self.workspace),
+                                "applicationId": "planning-app"}, accept=None)]
+        events = [json.loads(line[6:]) for frame in frames for line in frame.splitlines()
+                  if line.startswith("data: ")]
+        result = next(event["value"] for event in events if event["type"] == "CUSTOM")
+        self.assertEqual(result["summary"]["status"], "completed")
+        self.assertEqual(result["summary"]["phase"], "plan_control")
+        self.assertEqual(result["summary"]["planControl"]["status"], "ended")
+        self.assertIn("已有文件已保留", result["summary"]["message"])
+        self.assertFalse(result["summary"].get("clarification"))
+        self.assertEqual(events[-1]["type"], "RUN_FINISHED")
+
+    async def test_transport_cancellation_without_end_is_not_user_end(self) -> None:
+        """普通断连取消没有主动结束凭据，不能冒充成功结束或开放旧确认。"""
+        projection = await _build_application_planning_recovery_projection(
+            workspace=str(self.workspace), thread_id=self.source.thread_id, graph=object(),
+            snapshot=SimpleNamespace(values={}, tasks=(), next=()),
+            source=self.source.model_copy(update={"status": DurableExecutionStatus.CANCELLED}),
+        )
+        self.assertEqual(projection.classification, "cancelled")
+        self.assertNotEqual(projection.reason_code, "APPLICATION_PLANNING_ENDED")
+
     async def test_released_failed_owner_still_gets_missing_entry_notice(self) -> None:
         """先读 lifecycle 释放 owner 后，同一失败 thread 仍显示无入口提示。"""
         lifecycle = create_application_lifecycle(application_id="planning-app", application_name="验收",

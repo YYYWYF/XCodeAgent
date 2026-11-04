@@ -1,0 +1,12 @@
+// 历史确认及空修改意见使用工作台禁用色，避免深色主题出现白底白字。
+.@{class-prefix}-project-plan-confirmation-card .ant-btn-primary {
+  &:disabled,
+  &:disabled:hover,
+  &:disabled:focus {
+    color: var(--wb-text-secondary) !important;
+    border-color: var(--wb-border) !important;
+    background: var(--wb-surface-hover) !important;
+    box-shadow: none;
+    opacity: 1;
+  }
+}

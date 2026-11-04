@@ -1,6 +1,7 @@
 import { readAuthorizationBootstrap, authorizationBootstrapTitle } from './authorizationBootstrap'
 import type { WorkflowRunPayload } from '../typings'
 import { isConversationWorkflow } from '../components/AiChatPanel/conversationMode'
+import { planningAdmissionFailureMessage } from '../components/AiChatPanel/planningTaskAdmission'
 import {
   newerDagGenerationSnapshot,
   readDagGenerationSnapshot,
@@ -289,6 +290,9 @@ export function workflowMessageContentForDisplay(
 ): string {
   const normalizedContent = content.trim()
   if (!normalizedContent) return content
+
+  const planningBlockMessage = planningAdmissionFailureMessage(workflow)
+  if (planningBlockMessage) return planningBlockMessage
 
   // 自由对话的摘要就是助手正文，必须始终保留，避免过程步骤在结束时吞掉回复。
   if (isConversationWorkflow(workflow)) return content

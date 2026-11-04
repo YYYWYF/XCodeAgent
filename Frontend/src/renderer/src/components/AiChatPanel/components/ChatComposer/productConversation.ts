@@ -69,16 +69,16 @@ export function productDesignStageMentionFromText(
 
 export type ProductConversationRoute =
   | 'initial_planning'
-  | 'completed_product'
+  | 'historical_product'
   | 'development_conversation'
 
-/** 阶段决定 Agent 能力边界，应用完成态只决定产品修改的执行入口。 */
+/** 已完成需求阶段只保留历史路由，后续正式修改由开发阶段提出。 */
 export function productConversationRoute(
   productPhaseSelected: boolean,
   lifecycleReadyForWorkbench: boolean
 ): ProductConversationRoute {
   if (!productPhaseSelected) return 'development_conversation'
-  return lifecycleReadyForWorkbench ? 'completed_product' : 'initial_planning'
+  return lifecycleReadyForWorkbench ? 'historical_product' : 'initial_planning'
 }
 
 /** 只在产品对话绑定的 planning run 正在执行时阻止发送，输入内容仍可继续编辑。 */

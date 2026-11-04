@@ -54,8 +54,10 @@ class ProjectState(TypedDict, total=False):
     design_change_generation_request: str
     design_change_existing_artifacts: dict[str, bool]
     design_interaction_origin: str
+    design_interaction_context: dict[str, Any]
     product_stage_conversation: bool
     application_planning_interaction: dict[str, Any]
+    planning_stage_handoff: dict[str, Any]
     application_planning_review_route: str
     requirement_revision_id: str
     direct_modification_owner: str

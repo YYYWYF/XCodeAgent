@@ -71,7 +71,8 @@ class DesignRevisionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             claim_application_planning_run_for_recovery(workspace, new_run_id='child', thread_id='thread', expected_lifecycle_revision=current.revision)
             first = approve_design_revision_from_checkpoint(workspace, intent, 'thread')
             approved = load_application_lifecycle(workspace)
-            self.assertEqual(approve_design_revision_from_checkpoint(workspace, intent, 'thread'), first)
+            # writer 会补齐 planning_run_id；幂等重入应返回第一次写入后的完整权威记录。
+            self.assertEqual(approve_design_revision_from_checkpoint(workspace, intent, 'thread'), approved.active_formal_revision)
             self.assertEqual(first.change_id, pending.change_id)
             self.assertEqual(load_application_lifecycle(workspace).revision, approved.revision)
             self.assertIsNone(approved.pending_revision_impact)

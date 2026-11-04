@@ -137,7 +137,12 @@ def build_execution_recovery_ag_ui_stream(
             from app.services.checkpoint_execution import resolve_checkpoint_source
             source = await resolve_checkpoint_source(source, graph)
             allow_stopped = action == "continue" and source.status is DurableExecutionStatus.CANCELLED
-            if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not allow_stopped:
+            from app.services.ended_planning import ended_planning_available
+            stopped_planning = (source.execution_kind == "application_planning"
+                and source.status is DurableExecutionStatus.CANCELLED and source.ended_at is not None
+                and ended_planning_available(workspace, load_application_lifecycle(workspace),
+                    run_id=source.run_id, thread_id=source.thread_id))
+            if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not allow_stopped and not stopped_planning:
                 raise RecoveryExecutionError("RECOVERY_SOURCE_NOT_ACTIONABLE", "原执行未失败或中断，请同步当前状态。")
             from app.services.business_node_retry import prepare_business_node_retry
             context = await prepare_business_node_retry(source, graph, allow_stopped=allow_stopped)
@@ -433,6 +438,10 @@ async def _resolve_action_source_run(
     lifecycle = load_application_lifecycle(workspace)
     active_workbench_run_ids = set(lifecycle.active_executions) if lifecycle else set()
     records = await list_recovery_projection_candidates(workspace, limit=128)
+    if lifecycle and lifecycle.ended_planning_execution:
+        archived_source = await get_execution(workspace, lifecycle.ended_planning_execution.run_id)
+        if archived_source is not None:
+            records = [archived_source, *records]
     for record in records:
         if (
             record.execution_kind == "workbench"
@@ -449,6 +458,11 @@ async def _resolve_action_source_run(
         graph = await recovery_graph_for_execution(record) if record.workflow_scope == "conversation" else await graph_factory(workspace=workspace, project_id=record.project_id)
         from app.services.checkpoint_execution import resolve_checkpoint_source
         record = await resolve_checkpoint_source(record, graph)
+        from app.services.ended_planning import ended_planning_available
+        if (record.execution_kind == "application_planning" and record.status is DurableExecutionStatus.CANCELLED
+                and record.ended_at is not None and ended_planning_available(workspace, lifecycle,
+                    run_id=record.run_id, thread_id=record.thread_id)):
+            record = record.model_copy(update={"status": DurableExecutionStatus.INTERRUPTED})
         if record.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
             continue
         from app.services.business_node_retry import retry_action_plan

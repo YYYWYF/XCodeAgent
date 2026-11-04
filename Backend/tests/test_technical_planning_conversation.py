@@ -14,6 +14,7 @@ from app.services.application_revision_lifecycle import ensure_technical_plan_ge
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.persistence.execution_recovery import get_execution
 from app.protocols.application_page_planning import build_application_page_planning_ag_ui_stream
+from app.protocols.planning_stage_handoff import PlanningStageHandoffRequest, handoff_planning_stage
 from app.services.application_lifecycle import load_application_lifecycle, persist_application_lifecycle_transition
 from app.services.product_plan import create_product_plan
 from app.tools.ask_user import clear_clarification
@@ -69,6 +70,22 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         commit_technical_plan_document({"workspace": str(self.h.workspace)}, plan)
         return plan
 
+    async def _return_to_design(self, request):
+        """先交接独立 DESIGN 线程，再使用目标 checkpoint 的精确版本执行上游修改。"""
+
+        lifecycle = load_application_lifecycle(self.h.workspace)
+        snapshot = await self.h.graph.aget_state(self.config)
+        target = f"{self.h.thread_id}-design"
+        await handoff_planning_stage(self.h.graph, PlanningStageHandoffRequest(
+            workspaceRoot=str(self.h.workspace), applicationId=self.h.project_id,
+            sourceThreadId=self.h.thread_id, sourceRunId=snapshot.values["active_run_id"],
+            lifecycleRevision=lifecycle.revision, targetPhase="product"), target)
+        self.h.thread_id = target
+        self.config = {"configurable": {"thread_id": target}}
+        transferred = await self.h.graph.aget_state(self.config)
+        return await self._send("revise_design", request,
+            sourceRunId=transferred.values["active_run_id"], checkpointId=transferred.config["configurable"]["checkpoint_id"])
+
     async def _seed_template_failure(self):
         """复现截图：TechnicalPlan 已确认，原规划线程停在模板生成失败。"""
         plan = self._seed_plan()
@@ -102,8 +119,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             patch("app.graph.nodes.product_planning._generate_valid_product_plan", return_value=product),
             patch("app.graph.nodes.planning.plan_project_with_chat_model") as technical,
         ):
-            _, events = await self._send("revise_design", request, sourceRunId=decision["sourceRunId"],
-                                         checkpointId=decision["checkpointId"])
+            _, events = await self._return_to_design(request)
         self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events))
         analyze.assert_called_once()
         technical.assert_not_called()
@@ -113,9 +129,9 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
         self.assertEqual(load_application_lifecycle(self.h.workspace).initialization.stage,
                          ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION)
-        # 计划页仍显示同一会话输入框时，上游审阅门也能继续接收对话，不再误报阶段错误。
+        # 已进入需求阶段后不再允许技术入口消费新设计线程；后续沿需求对话入口提交。
         followup, _ = await self._send(request="@需求设计 调整新页面名称")
-        self.assertEqual(followup.get("intent"), "design_change")
+        self.assertEqual(followup.get("status"), "failed")
         self.assertEqual(snapshot.config, (await self.h.graph.aget_state(self.config)).config)
 
     async def test_template_failure_accepts_technical_revision(self):
@@ -216,10 +232,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             decision, _ = await self._send(request="@UI设计 重新调整页面布局")
         model.assert_not_called()
         self.assertEqual(decision["intent"], "design_change")
-        _, events = await self._send(
-            "revise_design", "@UI设计 重新调整页面布局",
-            sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"],
-        )
+        _, events = await self._return_to_design("@UI设计 重新调整页面布局")
         snapshot = await self.h.graph.aget_state(self.config)
         self.assertEqual(snapshot.values.get("design_change_target"), "ui_confirmation")
         self.assertTrue(snapshot.tasks)
@@ -270,7 +283,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(model.call_count, 3)
 
     async def test_direct_technical_revision_cannot_bypass_upstream_grant_routing(self):
-        """直接发送 revise 也交回设计意图节点，保留 checkpoint 守卫和联合确认。"""
+        """直接发送 revise 不得绕过独立需求线程交接，也不能修改旧技术执行。"""
         await self._seed_template_failure()
         request = "@技术规划 给审批员增加审批权限，并说明为什么"
         decision, _ = await self._send(request=request)
@@ -281,13 +294,14 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             patch("app.graph.nodes.product_planning._generate_valid_product_plan", return_value=deepcopy(self.h.product_plan)),
             patch("app.graph.nodes.planning.plan_project_with_chat_model") as technical,
         ):
-            _, events = await self._send("revise", request, sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"])
+            rejected, events = await self._send("revise", request, sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"])
         technical.assert_not_called()
         classifier.assert_not_called()
         snapshot = await self.h.graph.aget_state(self.config)
-        self.assertEqual(snapshot.values.get("design_change_target"), "requirements")
+        self.assertEqual(rejected["status"], "failed")
+        self.assertIn("独立需求会话", rejected["error"]["message"])
         self.assertEqual(load_application_lifecycle(self.h.workspace).initialization.stage,
-                         ApplicationLifecycleStage.AWAITING_REQUIREMENT_DOCUMENT_CONFIRMATION)
+                         ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED)
         self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events))
 
     async def test_design_change_keeps_checkpoint_version_guard(self):

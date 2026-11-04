@@ -70,6 +70,26 @@ class ApplicationLifecycleConflictError(ApplicationLifecyclePersistenceError):
     """表示 revision、交互 ID 或状态转换发生冲突。"""
 
 
+class ApplicationPlanningInProgressError(ApplicationLifecycleConflictError):
+    """携带阻止开发入场的当前规划阶段，供 AG-UI 返回明确提示和权威状态。"""
+
+    def __init__(self, lifecycle: ApplicationLifecycle):
+        """按实际创建阶段区分需求与计划，不以用户当前浏览的界面判断。"""
+        self.lifecycle = lifecycle
+        planning = lifecycle.initialization.stage in {
+            ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION,
+            ApplicationLifecycleStage.GENERATING_APPLICATION_TEMPLATE_FILES,
+            ApplicationLifecycleStage.APPLICATION_TEMPLATE_GENERATION_FAILED,
+        }
+        self.code = "APPLICATION_PLAN_IN_PROGRESS" if planning else "APPLICATION_REQUIREMENT_IN_PROGRESS"
+        label, task = ("计划", "计划") if planning else ("需求", "需求任务")
+        state = "尚未完成" if lifecycle.initialization.status in {
+            ApplicationLifecycleStatus.CANCELLED, ApplicationLifecycleStatus.FAILED,
+        } else "正在运行"
+        super().__init__(f"{label}阶段{state}，请先完成或结束当前{task}")
+
+
 class ApplicationLifecycleMissingError(ApplicationLifecyclePersistenceError):
     """表示工作区尚未建立生命周期状态（文件不存在）。
 
@@ -225,6 +245,7 @@ def create_application_lifecycle(
             stage=ApplicationLifecycleStage.COLLECTING_REQUIREMENT,
             status=ApplicationLifecycleStatus.PENDING,
             threadId=initialization_thread_id,
+            iterationId=initialization_thread_id,
         ),
         activeRunId=active_run_id,
     )
@@ -421,6 +442,7 @@ def restart_application_planning_lifecycle(
                 stage=stage,
                 status=ApplicationLifecycleStatus.RUNNING,
                 threadId=current.initialization.thread_id,
+                iterationId=current.initialization.iteration_id,
             ),
             "active_run_id": active_run_id or current.active_run_id,
             "error": None,
@@ -495,10 +517,7 @@ def start_workbench_execution(
             current.initialization.stage
             != ApplicationLifecycleStage.READY_FOR_WORKBENCH
         ):
-            raise ApplicationLifecycleConflictError(
-                "应用尚未完成创建规划，当前阶段 "
-                f"{current.initialization.stage.value} 不能启动工作台计划执行。"
-            )
+            raise ApplicationPlanningInProgressError(current)
         archived = current.ended_executions.get(replaces_run_id or "")
         if archived is not None:
             original = archived.execution
@@ -869,6 +888,7 @@ def claim_application_planning_run_for_recovery(
     new_run_id: str,
     thread_id: str,
     expected_lifecycle_revision: int | None,
+    source_run_id: str | None = None,
 ) -> ApplicationLifecycle:
     """以 lifecycle revision CAS 让 pre-ownership child 取得运行时 ownership。"""
 
@@ -892,6 +912,10 @@ def claim_application_planning_run_for_recovery(
             )
         if current.active_run_id == new_run_id:
             return current
+        if source_run_id is not None:
+            from app.services.ended_planning import restore_ended_planning
+
+            current = restore_ended_planning(workspace, current, source_run_id=source_run_id, thread_id=thread_id)
         if not str(new_run_id or "").strip():
             raise ApplicationLifecycleConflictError(
                 "RECOVERY_STATE_DRIFT: child activeRunId 不能为空。"
@@ -1444,6 +1468,7 @@ def _persist_workbench_execution_snapshot(
                 stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
                 status=ApplicationLifecycleStatus.COMPLETED,
                 threadId=current.initialization.thread_id,
+                iterationId=current.initialization.iteration_id,
             ),
             "active_run_id": execution.run_id,
             "active_executions": executions,
@@ -1481,6 +1506,7 @@ def _persist_workbench_execution_removal(
                 stage=ApplicationLifecycleStage.READY_FOR_WORKBENCH,
                 status=ApplicationLifecycleStatus.COMPLETED,
                 threadId=current.initialization.thread_id,
+                iterationId=current.initialization.iteration_id,
             ),
             "active_run_id": latest.run_id if latest else None,
             "active_executions": executions,
@@ -1716,7 +1742,18 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
     # continuation 的原请求和 token 哈希只属于服务端控制面；公开运行结果通过
     # developmentContinuation 单独投射当前可执行动作，生命周期快照不暴露内部登记表。
     payload.pop("developmentContinuations", None)
-    if state.ended_executions:
+    archived_planning = state.ended_planning_execution
+    if archived_planning is not None:
+        from app.services.ended_planning import ended_planning_available
+
+        # 公开控制面只提供原身份与可继续性，不泄漏修订内部凭据和文件摘要。
+        payload["endedPlanningExecution"] = {
+            "runId": archived_planning.run_id,
+            "threadId": archived_planning.initialization.thread_id,
+            "stage": archived_planning.initialization.stage.value,
+            "workspaceUnchanged": ended_planning_available(archived_planning.workspace, state),
+        }
+    if state.ended_executions or state.ended_planning_execution:
         payload["endedExecutionsCheckedAt"] = utc_now().isoformat()
     payload["endedExecutions"] = {
         run_id: {
@@ -1756,6 +1793,7 @@ def transition_application_lifecycle(
                 stage=stage,
                 status=status,
                 threadId=state.initialization.thread_id,
+                iterationId=state.initialization.iteration_id,
             ),
             "active_run_id": active_run_id or state.active_run_id,
             "error": error,

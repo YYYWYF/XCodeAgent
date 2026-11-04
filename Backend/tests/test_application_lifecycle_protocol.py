@@ -49,6 +49,7 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
             capability["actions"],
             [
                 "create",
+                "initialize_application",
                 "get",
                 "bootstrap_template_generation",
                 "retry_bootstrap_template_generation",
@@ -59,7 +60,6 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 "skip_entity_development",
                 "register_managed_database",
                 "end_planning_execution",
-                "stop_planning_execution",
             ],
         )
 

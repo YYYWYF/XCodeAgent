@@ -124,11 +124,16 @@ test('会话列表保护当前查看和当前推进的会话，历史会话仍�
         loadingSessions: false,
         onClose: () => undefined,
         onCreateSession: () => undefined,
+        onCreateTemporaryChat: () => undefined,
+        onDeleteTemporaryChat: () => undefined,
+        onOpenTemporaryChat: () => undefined,
         onDeleteSession: async () => { throw new Error('渲染列表不能执行删除') },
         onOpenSession: async () => undefined,
         sessionCreationDisabled: false,
         sessionRunStates: { advancing: 'running' },
         sessions,
+        temporaryChats: [],
+        temporaryChatEnabled: false,
         theme
       }))
       for (const session of sessions) {
@@ -1156,6 +1161,22 @@ test('二次修改流提前结束必须报连接中断，不能把 EOF 当作运
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+test('正式续接响应提前结束时必须进入状态同步，不能当作成功或重发凭据', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body))
+    const started = { type: 'RUN_STARTED', threadId: request.threadId, runId: request.runId }
+    return new Response(`data: ${JSON.stringify(started)}\n\n`, {
+      headers: { 'content-type': 'text/event-stream' }
+    })
+  }
+  try {
+    const session = new AgUiChatSession('continuation-thread', 'http://agent.test/workflow/run')
+    await assert.rejects(session.sendMessage('继续开发', { workflowAction: 'continue_revision_build',
+      revisionContinuation: { changeId: 'change', token: 't'.repeat(48) } }), /未收到运行结束回执/)
+  } finally { globalThis.fetch = originalFetch }
 })
 
 test('AG-UI 暂停等待服务端 cancelled 后主动收口旧 transport', async () => {

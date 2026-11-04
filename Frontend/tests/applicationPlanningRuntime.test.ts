@@ -24,6 +24,7 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 import { initialConnectionState } from '../src/renderer/src/service/connectionState'
+import { technicalPlanningReplyPresentation, shouldPreserveTechnicalPlanningReply, type TechnicalPlanningReply } from '../src/renderer/src/service/technicalPlanningConversation'
 import { applicationPlanningRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 
 /** 构造带稳定身份的最小 Planning 当前状态，不挂载任何 React 视图。 */
@@ -139,6 +140,7 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
   const calls: { message: string; options: SendWorkflowMessageOptions }[] = []
   const published: WorkflowRunPayload[] = []
   const contents: string[] = []
+  const replies: TechnicalPlanningReply[] = []
   const order: string[] = []
   const runtime = new ApplicationPlanningRuntime({
     applicationId: initial.application.id, threadId: initial.threadId,
@@ -152,6 +154,8 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
     },
     /** 记录进入聊天历史的内容。 */
     publishContent: (content) => { contents.push(content) },
+    /** 只读答复独立进入历史，不能作为 Canonical Workflow 发布。 */
+    publishReply: (reply) => { replies.push(reply) },
     /** 记录发布时已经可读的 Canonical 快照。 */
     publishWorkflow: (workflow) => {
       assert.equal(current?.workflow, workflow)
@@ -184,6 +188,7 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
   return {
     runtime, events, calls, published, contents, order,
     /** 读取测试 Canonical 事实。 */
+    replies,
     current: () => current,
     /** 模拟权威 store 更新或删除规划。 */
     setCurrent: (next: ApplicationPlanningCurrentState | undefined) => { current = next },
@@ -930,7 +935,7 @@ async function waitForCondition<T>(
     endPlanningExecution: async () => { order.push('backend-end'); return completed }
   })
   h.onStop(async () => { order.push('transport-stop'); throw new Error('旧连接已退出') })
-  await h.runtime.end()
+  await h.runtime.stop()
   assert.deepEqual(order, ['backend-end', 'transport-stop'])
   assert.equal(h.current()?.lifecycle.activeFormalRevision, undefined)
   assert.equal(h.current()?.recovery, undefined)
@@ -938,7 +943,9 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.transportState, 'idle')
   assert.equal(h.current()?.workflow?.summary.planControl?.status, 'ended')
   assert.equal(h.current()?.workflow?.state?.workflow_scope, 'application_planning')
-  assert.match(h.contents.at(-1) || '', /任务已结束/)
+  // 结束提示随独立 Workflow 一起发布，不能先用纯正文覆盖原审阅卡。
+  assert.equal(h.contents.length, 0)
+  assert.match(h.published.at(-1)?.summary.message || '', /任务已结束/)
 }
 
 // 生成期间主动 End 导致旧交接请求先断开时，等 End 成功后正常返回来源会话。
@@ -960,7 +967,7 @@ async function waitForCondition<T>(
   const input = { request: '新增说明页面', target: { type: 'application' }, impact: { formalBranch: 'design_stage_revision', interactionId: 'impact-end' }, sourceSessionId: 'session', sourceConversationThreadId: 'conversation', sourceRunId: 'source-run' } as WorkflowDesignStageRevisionStart
   const starting = h.runtime.startDesignRevision(input)
   await waitForCondition(() => rejectGeneration, '交接请求已进入生成')
-  await h.runtime.end()
+  await h.runtime.stop()
   await starting
   assert.equal(h.current()?.workflow?.summary.planControl?.status, 'ended')
   assert.equal(h.current()?.lifecycle.activeFormalRevision, undefined)
@@ -982,30 +989,29 @@ async function waitForCondition<T>(
       return lifecycle
     }
   })
-  await assert.rejects(h.runtime.end(), /后台仍在退出/)
+  await assert.rejects(h.runtime.stop(), /后台仍在退出/)
   assert.ok(h.current()?.lifecycle.activeFormalRevision)
   assert.equal(h.current()?.endRequested, true)
-  await h.runtime.end()
+  await h.runtime.stop()
   assert.equal(attempts, 2)
   assert.equal(h.current()?.lifecycle.activeFormalRevision, undefined)
   assert.equal(h.current()?.recoveryActionError, undefined)
   assert.equal(h.current()?.endRequested, false)
 }
 
-// W：stop transport 失败后以权威 stopped lifecycle 收敛，不虚构本地停止结果。
+// 首次规划的停止也调用后端结束，旧 transport 失败不会恢复已结束执行。
 {
   const current = planningState()
   current.workflow = confirmationWorkflow()
-  const h = harness(current)
+  const cancelled = authoritativeLifecycle(current, { status: 'cancelled' })
+  cancelled.revision += 1
+  const h = harness(current, { endPlanningExecution: async () => cancelled })
   h.onStop(async () => { throw new Error('cancel timeout') })
-  h.onRead(async () => ({
-    workflow: confirmationWorkflow(),
-    lifecycle: authoritativeLifecycle(current, { status: 'stopped' }),
-    recovery: recoveryProjection()
-  }))
-  await h.runtime.end()
-  assert.equal(h.readCalls(), 1)
-  assert.equal(h.current()?.lifecycle.initialization.status, 'stopped')
+  await h.runtime.stop()
+  assert.equal(h.readCalls(), 0)
+  assert.equal(h.current()?.lifecycle.initialization.status, 'cancelled')
+  assert.equal(h.current()?.workflow?.summary.planControl?.status, 'ended')
+  assert.equal(h.current()?.recovery, undefined)
   assert.equal(h.current()?.transportState, 'idle')
 }
 
@@ -1461,6 +1467,28 @@ async function waitForCondition<T>(
   assert.equal(h.calls.length, 0)
 }
 
+// 规划 checkpoint 保留旧凭据而最新 lifecycle 已收口：显式重试仅同步，不再交付或报身份错误。
+{
+  const initial = planningState()
+  const lifecycle = authoritativeLifecycle(initial, { stage: 'ready_for_workbench', status: 'completed' })
+  const workflow: WorkflowRunPayload = { runId: 'consumed-template', threadId: initial.threadId, events: [],
+    summary: { status: 'completed', phase: 'template_reconcile', revisionContinuation: {
+      action: 'continue_revision_build', changeId: 'old-change', formalBranch: 'workbench_plan_revision',
+      token: 'c'.repeat(48), technicalPlanSha256: 'a'.repeat(64)
+    } }, state: { lifecycle }, result: { lifecycle } }
+  let handoffs = 0
+  const h = harness(initial, {
+    /** 已消费凭据不允许再交给工作台。 */
+    onRevisionContinuation: async () => { handoffs++ }
+  })
+  h.onRead(async () => ({ workflow, lifecycle,
+    recovery: recoveryProjection(initial.threadId, { classification: 'completed', sourceRunId: workflow.runId }) }))
+  await h.runtime.retryCurrentFailure()
+  assert.equal(handoffs, 0)
+  assert.equal(h.calls.length, 0)
+  assert.equal(h.current()?.recoveryActionError, undefined)
+}
+
 // 技术规划报错后的问题只发布答复，不能把原恢复源替换成一次普通对话。
 {
   const initial = planningState()
@@ -1477,6 +1505,12 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.recovery, initial.recovery)
   assert.equal(h.contents.at(-1), '原修改要求仍已保存，可以使用上方重试。')
   assert.equal(h.current()?.recoveryActionError, undefined)
+  assert.equal(h.replies.at(-1)?.message, h.contents.at(-1))
+  const replyMessage = technicalPlanningReplyPresentation(h.replies.at(-1)!)
+  assert.equal(replyMessage.summary.productConversationResult?.mutating, false)
+  assert.equal(replyMessage.summary.productConversationResult?.response, h.contents.at(-1))
+  assert.equal(shouldPreserveTechnicalPlanningReply(replyMessage, { ...initial.workflow, runId: replyMessage.runId }), true)
+  assert.equal(shouldPreserveTechnicalPlanningReply(replyMessage, { ...initial.workflow, runId: 'new-generation' }), false)
 }
 
 // 明确的新技术修改使用原 Planning 会话，携带后端分类时的当前版本身份。
@@ -1500,7 +1534,7 @@ async function waitForCondition<T>(
   assert.equal(h.current()?.recovery, latestRecovery)
 }
 
-// 上游变更沿原规划线程发起设计意图流程，不用技术节点调试绕过生成与确认链。
+// 上游变更必须在原 transport 收口后交接独立需求线程，不能在旧技术线程生成。
 {
   const initial = planningState()
   initial.workflow = confirmationWorkflow()
@@ -1508,14 +1542,30 @@ async function waitForCondition<T>(
     intent: 'design_change', message: '返回需求设计。',
     planningThreadId: initial.threadId, sourceRunId: 'source-design', checkpointId: 'checkpoint-design'
   }) })
-  h.onRead(async () => ({ workflow: confirmationWorkflow(initial.threadId), lifecycle: initial.lifecycle!, recovery: recoveryProjection() }))
-  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '@需求设计 增加角色', true)
-  assert.equal(h.calls.length, 1)
-  assert.deepEqual(h.calls[0].options.technicalPlanningConversation, {
-    action: 'revise_design', workspaceRoot: initial.application.workspaceRoot,
-    applicationId: initial.application.id, planningThreadId: initial.threadId,
-    request: '@需求设计 增加角色', sourceRunId: 'source-design', checkpointId: 'checkpoint-design'
-  })
+  let handoffs = 0
+  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '@需求设计 增加角色', true,
+    async () => { handoffs++; assert.equal(h.current()?.transportState, 'idle') })
+  assert.equal(handoffs, 1)
+  assert.equal(h.calls.length, 0)
+  await assert.rejects(h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '@需求设计 增加角色', true), /独立会话/)
+}
+
+// 线程交接只接受同应用、更新版本、生命周期明确指向的新线程；旧线程迟到帧不得回滚它。
+{
+  const initial = planningState()
+  initial.workflow = confirmationWorkflow()
+  const lifecycle = authoritativeLifecycle(initial, { threadId: 'plan-thread' })
+  const workflow = { ...confirmationWorkflow('plan-thread'), state: { lifecycle }, result: { lifecycle } }
+  const next = reduceApplicationPlanningCurrentState(initial, { type: 'stage_thread_handed_off',
+    applicationId: initial.application.id, threadId: initial.threadId, workflow })
+  assert.equal(next.threadId, 'plan-thread')
+  assert.equal(next.recovery, undefined)
+  assert.equal(next.restoreArtifactsFromDisk, true)
+  assert.equal(reduceApplicationPlanningCurrentState(next, { type: 'workflow_received',
+    applicationId: initial.application.id, threadId: initial.threadId, workflow: confirmationWorkflow() }), next)
+  assert.equal(reduceApplicationPlanningCurrentState(initial, { type: 'stage_thread_handed_off',
+    applicationId: initial.application.id, threadId: initial.threadId,
+    workflow: { ...workflow, state: { lifecycle: initial.lifecycle }, result: {} } }), initial)
 }
 
 // 停止只读提问后，晚到的修改分类不能自动触发生成。
@@ -1529,6 +1579,27 @@ async function waitForCondition<T>(
   complete({ intent: 'revise', message: '修改', planningThreadId: initial.threadId, sourceRunId: 'old', checkpointId: 'old' })
   await pending
   assert.equal(h.calls.length, 0)
+}
+
+// 阶段入口已进入新线程后主动停止，原确认流的网络取消不得再次向 UI 抛出失败。
+{
+  const initial = planningState()
+  initial.workflow = confirmationWorkflow()
+  let cancel!: (error: Error) => void
+  const h = harness(initial, {
+    /** 服务端先证明停止完成，再模拟原传输断开。 */
+    endPlanningExecution: async () => {
+      cancel(new Error('network error'))
+      return authoritativeLifecycle(initial, { status: 'cancelled' })
+    }
+  })
+  h.onSend(async () => new Promise((_resolve, reject) => { cancel = reject }))
+  const submission = h.runtime.submitClarification(initial.workflow, { __applicationPlanningAction: 'confirm' })
+  await waitForCondition(() => cancel, '确认请求已发送')
+  await h.runtime.stop()
+  await submission
+  assert.equal(h.events.some(event => event.type === 'run_failed'), false)
+  assert.equal(h.calls.length, 1)
 }
 
 // 首次生成尚无 checkpoint 时，只有用户显式重试才重新提交一次生成。
@@ -1554,38 +1625,120 @@ async function waitForCondition<T>(
 
 console.log('application planning runtime tests passed')
 
-// 停止生成保留当前正式修订，原线程读取后端继续生成动作，不发布结束回执。
+// 停止卡复用技术规划确认答案，直接准备明确修改，不调用聊天意图分类或要求 @。
+{
+  const initial = planningState()
+  initial.workflow = { runId: 'ended-run', threadId: initial.threadId, events: [],
+    summary: { status: 'completed', phase: 'plan_control', planControl: { action: 'end', status: 'ended' } } }
+  initial.lifecycle.initialization.status = 'cancelled'
+  let preparationCalls = 0
+  let classificationCalls = 0
+  const request = 'WorkLogListItem需要contentSummary'
+  const h = harness(initial, {
+    /** 卡片修改只读取当前权威版本，原始修改文本完整传递。 */
+    prepareTechnicalPlanningRevision: async (_application, thread, value) => {
+      preparationCalls += 1
+      assert.equal(thread, initial.threadId)
+      assert.equal(value, request)
+      return { intent: 'revise', message: '提交技术规划修改', planningThreadId: thread,
+        sourceRunId: 'ended-run', checkpointId: 'current-checkpoint' }
+    },
+    /** 若误走自由对话分类则立即失败。 */
+    readTechnicalPlanningReply: async () => {
+      classificationCalls += 1
+      throw new Error('卡片修改不能调用意图分类')
+    }
+  })
+  await h.runtime.submitClarification(initial.workflow, {
+    technical_plan_confirmation: request, __applicationPlanningAction: 'revise'
+  })
+  assert.equal(preparationCalls, 1)
+  assert.equal(classificationCalls, 0)
+  assert.equal(h.calls.length, 1)
+  assert.deepEqual(h.calls[0].options.technicalPlanningConversation, {
+    action: 'revise', workspaceRoot: initial.application.workspaceRoot,
+    applicationId: initial.application.id, planningThreadId: initial.threadId, request,
+    sourceRunId: 'ended-run', checkpointId: 'current-checkpoint'
+  })
+}
+
+// 技术自由修改生成中的旧连接取消，不能抢先对账使 End token 失效或覆盖结束回执。
+{
+  for (const transportRejects of [true, false]) {
+    const initial = planningState()
+    initial.workflow = confirmationWorkflow()
+    let cancelGeneration!: () => void
+    let finishEnd!: () => void
+    let endStarted = false
+    const cancelled = authoritativeLifecycle(initial, { status: 'cancelled' })
+    const h = harness(initial, {
+      /** 跳过分类模型，复现截图中已经进入技术生成的自由修改。 */
+      readTechnicalPlanningReply: async () => ({ intent: 'revise', message: '修改技术规划',
+        planningThreadId: initial.threadId, sourceRunId: 'run-A', checkpointId: 'checkpoint-A' }),
+      /** 后端先取消原连接，稍后才送达 End 的权威回执。 */
+      endPlanningExecution: async () => {
+        endStarted = true
+        cancelGeneration()
+        await new Promise<void>((resolve) => { finishEnd = resolve })
+        return cancelled
+      }
+    })
+    h.onSend(async () => new Promise<AgUiChatResult>((resolve, reject) => {
+      cancelGeneration = () => transportRejects ? reject(new Error('network error')) : resolve(result())
+    }))
+    const submission = h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, 'WorkLogListItem需要contentSummary', true)
+    // 立即接住旧请求的拒绝，让测试可以检查真实收口结果而不产生未处理拒绝。
+    const submissionResult = submission.then(() => undefined, (error) => error)
+    await waitForCondition(() => cancelGeneration, '技术修改生成已开始')
+    const stopping = h.runtime.stop()
+    await waitForCondition(() => endStarted && finishEnd, '后端结束请求已开始')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    finishEnd()
+    await stopping
+    const submissionError = await submissionResult
+    assert.equal(submissionError, undefined)
+    assert.equal(h.readCalls(), 0)
+    assert.equal(h.current()?.workflow?.summary.planControl?.status, 'ended')
+    assert.equal(h.current()?.endRequested, false)
+    assert.equal(h.current()?.transportState, 'idle')
+    assert.equal(h.current()?.error, undefined)
+    assert.equal(h.current()?.recoveryActionError, undefined)
+  }
+}
+
+// 计划生成中点击停止即完整结束修订，释放开发准入，不再读取继续生成动作。
 {
   const current = planningState()
-  current.lifecycle.activeFormalRevision = { changeId: 'keep-change', planningThreadId: current.threadId } as any
+  current.lifecycle.activeFormalRevision = { changeId: 'end-change', planningThreadId: current.threadId } as any
   current.workflow = { runId: 'run-A', threadId: current.threadId, events: [], state: { workflow_scope: 'application_planning' }, summary: { status: 'running', phase: 'technical_planning_generate' } }
+  current.recovery = recoveryProjection(current.threadId, { classification: 'ready_to_continue' })
+  const completed = authoritativeLifecycle(current, { stage: 'ready_for_workbench', status: 'completed' })
+  completed.activeFormalRevision = undefined
+  completed.revision += 1
   const order: string[] = []
   const h = harness(current, {
-    /** 后端停止仅返回原修订，不释放它。 */
-    stopPlanningExecution: async () => { order.push('backend-stop'); return current.lifecycle },
-    /** 停止生成不得调用结束修订动作。 */
-    endPlanningExecution: async () => { throw new Error('不能结束本轮修订') }
+    /** 停止必须完成服务端修订收口，才能释放前端开发入口。 */
+    endPlanningExecution: async () => { order.push('backend-end'); return completed }
   })
   h.onStop(async () => { order.push('transport-stop') })
-  h.onRead(async () => ({ lifecycle: current.lifecycle, workflow: { ...current.workflow!, summary: { status: 'failed', phase: 'technical_planning_generate' } },
-    recovery: recoveryProjection(current.threadId, { classification: 'ready_to_continue' }) }))
   await h.runtime.stop()
-  assert.deepEqual(order, ['backend-stop', 'transport-stop'])
-  assert.equal(h.current()?.lifecycle.activeFormalRevision?.changeId, 'keep-change')
-  assert.equal(h.current()?.recovery?.classification, 'ready_to_continue')
-  assert.ok(h.current()?.recovery?.recoveryActionPlan?.primaryAction)
-  assert.equal(h.current()?.workflow?.summary.planControl, undefined)
-  assert.equal(h.current()?.stopRequested, false)
+  assert.deepEqual(order, ['backend-end', 'transport-stop'])
+  assert.equal(h.current()?.lifecycle.activeFormalRevision, undefined)
+  assert.equal(h.current()?.lifecycle.initialization.stage, 'ready_for_workbench')
+  assert.equal(h.current()?.recovery, undefined)
+  assert.equal(h.readCalls(), 0)
+  assert.equal(h.current()?.workflow?.summary.planControl?.status, 'ended')
+  assert.equal(h.current()?.endRequested, false)
   assert.equal(h.current()?.transportState, 'idle')
 }
 
-// 停止尚未退出时保留重试停止入口，不能提前显示业务继续。
+// 停止尚未真实退出时只允许重试结束，不能提前清锁或提供继续生成。
 {
   const current = planningState()
   current.lifecycle.activeFormalRevision = { changeId: 'keep-change', planningThreadId: current.threadId } as any
-  const h = harness(current, { stopPlanningExecution: async () => { throw new Error('后台仍在退出') } })
+  const h = harness(current, { endPlanningExecution: async () => { throw new Error('后台仍在退出') } })
   await assert.rejects(h.runtime.stop(), /后台仍在退出/)
-  assert.equal(h.current()?.stopRequested, true)
+  assert.equal(h.current()?.endRequested, true)
   assert.equal(h.current()?.lifecycle.activeFormalRevision?.changeId, 'keep-change')
   assert.equal(h.current()?.transportState, 'idle')
 }

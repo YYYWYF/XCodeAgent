@@ -160,7 +160,13 @@ def _stopped_workbench_source(source: DurableExecutionRecord) -> bool:
 
 async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any, *, allow_stopped: bool = False):
     """读取完整失败现场、刷新磁盘输入，再串行交接运行归属并重新执行一次。"""
-    if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not (allow_stopped and _stopped_workbench_source(source)):
+    from app.services.ended_planning import ended_planning_available
+    from app.services.application_lifecycle import load_application_lifecycle
+    stopped_planning = (source.execution_kind == "application_planning"
+        and source.status is DurableExecutionStatus.CANCELLED and source.ended_at is not None
+        and ended_planning_available(source.workspace, load_application_lifecycle(source.workspace),
+            run_id=source.run_id, thread_id=source.thread_id))
+    if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not stopped_planning and not (allow_stopped and _stopped_workbench_source(source)):
         raise RecoveryExecutionError("RETRY_SOURCE_ACTIVE", "当前执行不是失败或中断状态。")
     from app.services.application_lifecycle import (
         application_lifecycle_payload, load_application_lifecycle,
@@ -219,8 +225,10 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             if execution.development_target and execution.development_target.api_contract_id:
                 scope["apiContractId"] = execution.development_target.api_contract_id
             state.update(build_execution_scope=scope, selectedPageId=execution.page_id or "")
-        if lifecycle and lifecycle.active_formal_revision:
-            revision = lifecycle.active_formal_revision
+        revision = lifecycle.active_formal_revision if lifecycle else None
+        if stopped_planning and lifecycle and lifecycle.ended_planning_execution:
+            revision = lifecycle.ended_planning_execution.formal_revision
+        if revision:
             state.update(change_id=revision.change_id, change_target=revision.target.model_dump(mode="json", by_alias=True))
             if source.execution_kind == "application_planning" and revision.planning_thread_id == source.thread_id:
                 generation_target = "technical_planning" if node.startswith("technical_planning_") else node
@@ -259,7 +267,8 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
                     new_run_id=new_run, thread_id=source.thread_id, expected_lifecycle_revision=revision_number)
             else:
                 lifecycle = claim_application_planning_run_for_recovery(source.workspace, new_run_id=new_run,
-                    thread_id=source.thread_id, expected_lifecycle_revision=revision_number)
+                    thread_id=source.thread_id, expected_lifecycle_revision=revision_number,
+                    **({"source_run_id": source.run_id} if stopped_planning else {}))
             lease = None if planning_handoff else _acquire_workspace_lease(
                 workspace=source.workspace, source=source, new_run_id=new_run, lifecycle=lifecycle)
             child = await observe_execution_started(workspace=source.workspace, project_id=source.project_id,

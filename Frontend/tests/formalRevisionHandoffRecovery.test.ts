@@ -109,6 +109,12 @@ assert.equal(workflowMessageInteractionAvailability(handedOffConversation, activ
   assert.equal(retainFormalRevisionSessionAfterStart(input, lifecycle), true)
   assert.equal(retainFormalRevisionSessionAfterStart(input, { ...lifecycle, activeFormalRevision: undefined }), false)
   assert.equal(retainFormalRevisionSessionAfterStart({ ...input, sourceRunId: 'other-run' }, lifecycle), false)
+  const handedOffPending = { ...lifecycle, activeFormalRevision: undefined, pendingRevisionImpact: {
+    interactionId: 'impact-1', sourceThreadId: 'source-thread', sourceRunId: 'source-run',
+    impact: { formalBranch: 'workbench_plan_revision' }
+  } } as ApplicationLifecycle
+  assert.equal(retainFormalRevisionSessionAfterStart(input, handedOffPending, 'planning-graph-thread'), true)
+  assert.equal(retainFormalRevisionSessionAfterStart(input, handedOffPending, 'unentered-thread'), false)
   assert.equal(formalRevisionHandoffRestorable(lifecycle, 'planning'), true)
   assert.equal(formalRevisionHandoffRestorable(lifecycle, 'product'), false)
   assert.equal(formalRevisionHandoffRestorable(lifecycle, 'development'), false)

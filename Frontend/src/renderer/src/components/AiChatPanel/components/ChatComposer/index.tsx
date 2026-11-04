@@ -422,7 +422,7 @@ export default function ChatComposer({
               )}
               {(loading || stopping) && !debugOnly ? (
                 <Button
-                  aria-label={stopping ? '正在停止生成' : '停止生成'}
+                  aria-label={stopping ? '正在结束任务' : '结束任务'}
                   aria-busy={stopping}
                   className={cx('composer-send-button')}
                   danger
@@ -431,7 +431,7 @@ export default function ChatComposer({
                   icon={<StopOutlined />}
                   onClick={onStopGenerating}
                   shape="circle"
-                  title={stopping ? '正在停止生成…' : '停止生成'}
+                  title={stopping ? '正在结束任务…' : '结束任务'}
                 />
               ) : (
                 <Button

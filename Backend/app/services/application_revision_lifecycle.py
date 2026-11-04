@@ -305,6 +305,7 @@ def begin_technical_plan_revision_generation(
                     stage=ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
                     status=ApplicationLifecycleStatus.RUNNING,
                     threadId=expected_thread_id,
+                    iterationId=current.initialization.iteration_id,
                 ),
                 "active_run_id": expected_run_id,
                 "pending_revision_impact": None,

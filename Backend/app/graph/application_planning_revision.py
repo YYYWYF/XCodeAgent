@@ -93,7 +93,8 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
     """识别产品语义；只有确定性 Policy 允许的修改才回退正式生命周期。"""
 
     intent = state.get("design_revision_intent")
-    if isinstance(intent, dict) and intent:
+    formal_entry = isinstance(intent, dict) and bool(intent)
+    if formal_entry:
         # 当前节点已有 durable 输入；批准后即使在需求节点前退出，也能从本节点幂等恢复。
         approve_design_revision_from_checkpoint(
             _workspace(state), intent, str(state.get("active_thread_id") or ""),
@@ -101,7 +102,9 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
     request = str(state.get("request") or "").strip()
     if not request:
         raise ValueError("设计变更必须提供用户输入。")
-    authoritative_target, authoritative_page_ids = _formal_revision_context(state)
+    # 影响确认只决定首次 START 的生成起点；后续对话必须重新识别问答/修改，
+    # 不能因为同一 formal revision 仍活动，就把只读提问或自然语言确认当成重生成。
+    authoritative_target, authoritative_page_ids = _formal_revision_context(state) if formal_entry else (None, [])
     if authoritative_target is not None:
         # 正式二次修改已经在影响确认阶段固定最早产物和目标资源；用户点击
         # “确认并返回设计阶段”后必须立即进入真实生成节点，不能再调用一次
@@ -207,6 +210,7 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
     update: dict[str, Any] = {
         "workflow_scope": "application_planning",
         "design_revision_intent": {},
+        "design_interaction_context": {},
         # design_intent_analysis 已消费本次 START 指令；即使下游生成中断，
         # checkpoint 也不能继续携带旧入口污染下一次恢复。
         "resume_from": "",
@@ -322,11 +326,18 @@ def product_conversation_result(
 def design_chat_response(state: ProjectState) -> dict[str, Any]:
     """无需修改正式产物时回复用户，并返回原正式产物审阅门。"""
 
+    context = dict(state.get("design_interaction_context") or {})
     return {
         **cleared_design_change_context(),
         "workflow_scope": "application_planning",
         "phase": "design_chat_response",
         "status": "completed",
+        # 意图分析前已消费原 interrupt；只读回复须恢复该门的 mode/status/questions，
+        # 才能继续提问或显式确认，不能生成一个 clarification 为空的假确认门。
+        "clarification": dict(context.get("clarification") or {}),
+        "request": str(context.get("request") or state.get("request") or ""),
+        "requirement_revision_id": str(context.get("requirement_revision_id") or ""),
+        "design_interaction_context": {},
         "conversation_response": str(state.get("conversation_response") or "").strip(),
         "design_interaction_origin": str(
             state.get("design_interaction_origin") or "requirements"

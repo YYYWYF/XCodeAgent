@@ -266,26 +266,27 @@ test('写回合并时指针也走不变式', () => {
  *
  * 同一条分支上继续迭代时分支名不变，阶段 Provider 的 React key 如果只用分支名就
  * 不会重挂载，它会一直沿用内存里上一轮的手动阶段覆盖（例如"验收"），于是用户点了
- * 「发起新迭代」却发现还停在验收阶段。迭代令牌（lifecycle threadId，每次发起迭代
+ * 「发起新迭代」却发现还停在验收阶段。迭代令牌（lifecycle iterationId，每次发起迭代
  * 都是新的 randomUUID）必须进 key。
  */
 test('同一分支的新一轮迭代要产生不同的作用域键', () => {
   const firstRound = branchIterationScope('dev', {
-    initialization: { threadId: 'thread-round-1' }
+    initialization: { iterationId: 'thread-round-1', threadId: 'design-thread' }
   } as never)
   const secondRound = branchIterationScope('dev', {
-    initialization: { threadId: 'thread-round-2' }
+    initialization: { iterationId: 'thread-round-2', threadId: 'another-design-thread' }
   } as never)
 
   assert.notEqual(firstRound, secondRound, '同一分支的不同轮必须区分开，否则 Provider 不重挂载')
   assert.equal(firstRound, 'dev:thread-round-1')
   // 同一轮内重复计算要稳定，否则 Provider 会被无谓地重挂载。
   assert.equal(
-    branchIterationScope('dev', { initialization: { threadId: 'thread-round-1' } } as never),
+    branchIterationScope('dev', { initialization: { iterationId: 'thread-round-1', threadId: 'design-thread' } } as never),
     firstRound
   )
+  assert.equal(branchIterationScope('dev', { initialization: { iterationId: 'thread-round-1', threadId: 'plan-thread' } } as never), firstRound, '同一迭代换阶段线程不能重挂载工作台')
   // 换分支同样产生新作用域。
-  assert.notEqual(branchIterationScope('feature-x', { initialization: { threadId: 'thread-round-1' } } as never), firstRound)
+  assert.notEqual(branchIterationScope('feature-x', { initialization: { iterationId: 'thread-round-1', threadId: 'design-thread' } } as never), firstRound)
   // 没有迭代令牌时退回分支名，保持可用。
   assert.equal(branchIterationScope('dev', undefined), 'dev')
 })

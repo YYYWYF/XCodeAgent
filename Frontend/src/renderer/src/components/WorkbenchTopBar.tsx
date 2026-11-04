@@ -77,11 +77,12 @@ export default function WorkbenchTopBar({
     previousPhaseRef.current = phase
   }, [lifecycle, manualOverride, phase])
 
-  // 回退切阶段（切到旅程上游 = 增量迭代）需二次确认；向前推进 / 同级直接切。
+  // 回看需求/计划仅改变浏览位置，不进入增量修改，也不展示允许编辑上游的确认文案。
   const [confirmPhase, setConfirmPhase] = useState<WorkbenchPhase | null>(null)
   const handlePhaseClick = (phaseKey: WorkbenchPhase): void => {
     if (locked) return
-    if (PHASE_ORDER.indexOf(phaseKey) < PHASE_ORDER.indexOf(derivedPhase)) {
+    if (!['product', 'planning'].includes(phaseKey) &&
+      PHASE_ORDER.indexOf(phaseKey) < PHASE_ORDER.indexOf(derivedPhase)) {
       setConfirmPhase(phaseKey)
       return
     }
@@ -91,8 +92,8 @@ export default function WorkbenchTopBar({
       markApplicationEnteredDevelopment(
         application.id,
         application.branchName || application.id,
-        // 与 AiChatPanel 同一作用域口径：同一条分支上会有多轮迭代，需再带 lifecycle threadId。
-        String(lifecycle?.initialization?.threadId || '')
+        // 与 AiChatPanel 同一作用域口径：同一条分支上会有多轮迭代，需再带 lifecycle iterationId。
+        String(lifecycle?.initialization?.iterationId || '')
       )
     }
     switchPhase(phaseKey)

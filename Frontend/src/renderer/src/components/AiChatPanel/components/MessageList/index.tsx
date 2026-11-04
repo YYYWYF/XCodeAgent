@@ -44,6 +44,7 @@ import ProcessSteps from '../ProcessSteps'
 import DagGenerationProgress from '../ProcessSteps/DagGenerationProgress'
 import VersionCommitReminder from '../VersionCommitReminder'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
+import { PlanConfirmationCard } from '../WorkflowRunCard/PlanConfirmationCard'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
@@ -76,7 +77,7 @@ import {
   workflowShouldShowCodeReview,
   workflowShouldShowProjectLaunch
 } from '../../utils'
-import { workflowMessageInteractionAvailability } from '../../planExecutionMode'
+import { workflowEndedPlanControl, workflowMessageInteractionAvailability } from '../../planExecutionMode'
 import { isMessageListNearBottom, shouldShowScrollToBottom } from './scrollState'
 import PlanningWorkflowActivity from './PlanningWorkflowActivity'
 import { isTemplateEngineFailure } from '../../../../service/recoveryFailureMessage'
@@ -101,6 +102,9 @@ import {
 import './MessageList.less'
 
 const { Text } = Typography
+
+/** 停止回执只接收修改意见，不从旧产物签发确认或放弃动作。 */
+function ignoreStoppedPlanAction(): void {}
 
 /** 实体设计消息只保留正文：去掉“页面与数据源设计已生成”等工作流摘要；
  *  正文是模板话术时，从载荷合成真实设计内容（澄清说明、AI 建议文本）。 */
@@ -508,19 +512,21 @@ export default function MessageList({
   // 失败态（首次 Bootstrap 失败 / 模板增量更新失败）不再依赖阶段与资格门禁：它会阻断整个
   // 应用，恢复入口若被门禁挡掉，用户就只能靠重建工作区脱困。只读回看（已发布/非活跃版本）
   // 仍不显示，避免把活跃迭代的失败卡带进历史版本的视图。
+  // 用户结束任务仅释放占用，不能据此宣称技术规划已确认或模板生成成功。
+  const planningTaskEnded = workflowEndedPlanControl(planningWorkflow || latestAssistantMessage?.workflow)
   const templatePreparationVisible =
-    (templatePreparationFailed && !phaseLocked) ||
+    !planningTaskEnded && ((templatePreparationFailed && !phaseLocked) ||
     (designPhasePlanning &&
       ((applicationTemplatePreparationEligible &&
         (generatingTemplate || isTemplatePreparing(applicationLifecycle))) ||
         // 回到计划阶段时仍展示已就绪模板，方便用户看见当前结果并重新进入开发。
         (currentPhase === 'planning' &&
           applicationLifecycle?.initialization?.stage === 'ready_for_workbench') ||
-        templatePreparation?.status === 'RUNNING'))
-  const templateReadyActionsDisabled =
+        templatePreparation?.status === 'RUNNING')))
+  const templateReadyActionsDisabled = mutationDisabled || (
     currentPhase === 'planning' &&
     applicationLifecycle?.initialization?.stage === 'ready_for_workbench' &&
-    !applicationTemplatePreparationEligible
+    !applicationTemplatePreparationEligible)
 
   /** 根据滚动事件同步用户的跟随意图与悬浮按钮状态。 */
   const handleScroll = useCallback((): void => {
@@ -644,6 +650,7 @@ export default function MessageList({
             // 的职责。计划阶段做的是技术规划，在需求收集之后，不该出现这张卡
             // （原判据用 designPhasePlanning，它同时覆盖设计与计划两个阶段）。
             currentPhase === 'product' &&
+            !mutationDisabled &&
             applicationLifecycle?.initialization?.stage === 'collecting_requirement' ? (
               // 新迭代 collecting_requirement 阶段（pending 或 awaiting_user）：显示需求输入卡片，
               // 用户提交后启动 planning workflow。
@@ -891,7 +898,9 @@ export default function MessageList({
                 messageClarification?.questions?.length
                   ? parseAnsweredClarificationTrace(messages, messageIndex)
                   : undefined
-              const visibleAssistantContent = hideEntityWorkflowChrome
+              const visibleAssistantContent = workflowEndedPlanControl(message.workflow)
+                ? message.content || message.workflow?.summary.message || ''
+                : hideEntityWorkflowChrome
                 ? entityDesignMessageContent(message.content, message.workflow)
                 : workflowMessageContentForDisplay(
                     message.content,
@@ -1089,6 +1098,25 @@ export default function MessageList({
                             )}
                           </div>
                         )}
+                        {/* 结束提示独立承载新的修改入口；历史卡只展示原内容，不重用旧确认权限。 */}
+                        {messageIndex === messages.length - 1 && currentPhase === 'planning' &&
+                          designPhasePlanning && !phaseLocked &&
+                          workflowEndedPlanControl(message.workflow) &&
+                          messages.some((item) => item.workflow && workflowClarification(item.workflow)?.mode === 'technical_plan_confirmation') ? (
+                          <PlanConfirmationCard
+                            disabled={mutationDisabled || reviseConfirmedTechnicalPlanDisabled}
+                            onAbandon={ignoreStoppedPlanAction}
+                            onConfirm={ignoreStoppedPlanAction}
+                            onRevise={(request) => { void onSubmitClarification(message.workflow!, {
+                              technical_plan_confirmation: request,
+                              __applicationPlanningAction: 'revise'
+                            }) }}
+                            planType="technical"
+                            requiresConfirmation={false}
+                            revisionOnly
+                            title="技术规划"
+                          />
+                        ) : null}
                         {!messageLoading && visibleCodeChanges && codeChangesBeforeConfirmation && (
                           <CodeChangeCard
                             codeChanges={visibleCodeChanges}

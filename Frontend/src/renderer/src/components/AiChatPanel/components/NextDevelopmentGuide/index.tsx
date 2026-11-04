@@ -66,7 +66,7 @@ export default function NextDevelopmentGuide({
   const pendingApis = remaining.filter((task) => task.kind === 'endpoint').length
   const statusLabel =
     step.reason === 'selection'
-      ? 'API 设计前置检查已完成'
+      ? '等待选择开发目标'
       : step.reason === 'completed'
       ? `${currentTask?.title || step.target?.label || '当前产物'}初次开发已完成`
       : '本次开发已结束'

@@ -42,7 +42,10 @@ from app.protocols.workflow.projection import (
     _workflow_visual_payload,
 )
 from app.protocols.workflow.request import workflow_run_inputs
-from app.services.technical_planning_retry import TechnicalPlanningMessageRevision, prepare_technical_planning_retry
+from app.services.technical_planning_retry import (
+    TechnicalPlanningMessageRevision, prepare_technical_planning_retry,
+    restart_stopped_technical_plan_revision,
+)
 from app.protocols.workflow.lifecycle import (
     begin_workflow_lifecycle,
     fail_workflow_lifecycle,
@@ -628,6 +631,9 @@ def build_workflow_ag_ui_stream(
                 )
                 await application_planning_run_lock_instance.acquire()
                 application_planning_run_lock_acquired = True
+                if workspace:
+                    from app.protocols.planning_stage_handoff import assert_current_planning_thread
+                    assert_current_planning_thread(workspace, thread_id)
             if native_recovery_context is None:
                 from app.services.execution_cleanup import best_effort_checkpoint_housekeeping
                 await best_effort_checkpoint_housekeeping(workspace, project_id)
@@ -866,6 +872,12 @@ def build_workflow_ag_ui_stream(
                      "active_run_id": current_lifecycle.active_run_id if current_lifecycle else ""},
                     new_request=technical_planning_revision.request if technical_planning_revision else None,
                 ))
+                if (technical_planning_revision is not None and current_lifecycle is not None
+                        and current_lifecycle.initialization.status == "cancelled"):
+                    # 明确的新修改已经通过版本与已有计划校验；重新登记本轮运行，旧 End 保持终态。
+                    restart_stopped_technical_plan_revision(
+                        workspace, lifecycle=current_lifecycle, thread_id=thread_id, new_run_id=run_id,
+                    )
             if entity_test_entry_id:
                 initial_state["entity_test_entry_id"] = entity_test_entry_id
                 initial_state["selected_entity_id"] = entity_test_entry_id

@@ -1131,6 +1131,7 @@ export default function UiDesignConfirmationPanel({
               }
             }}
             placeholder="描述要调整的设计稿，如「概览页改成卡片布局」。输入 / 可指定目标页面。Enter 发送，Shift+Enter 换行。"
+            disabled={disabled}
             ref={feedbackRef}
             value={feedback}
           />

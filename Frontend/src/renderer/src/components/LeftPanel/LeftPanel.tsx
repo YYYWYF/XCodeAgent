@@ -50,9 +50,10 @@ type Props = {
     editedRequirementSpec?: Record<string, unknown>,
     requirementSpecFeedback?: string,
     designChangeRequest?: string,
-    technicalPlanningConversation?: boolean
+    technicalPlanningConversation?: boolean,
+    stageEntry?: import('../../service/planningStageHandoff').PlanningStageEntry
   ) => Promise<void>
-  onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart) => Promise<void>
+  onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart, target?: import('../../service/planningStageHandoff').PlanningStageTarget) => Promise<void>
   onStartIterationPlanning: (
     request: string,
     workflowDebug?: WorkflowDebugOptions,

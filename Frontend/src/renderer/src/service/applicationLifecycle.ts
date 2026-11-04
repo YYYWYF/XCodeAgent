@@ -19,7 +19,6 @@ type ApplicationLifecyclePayload = {
     | 'prepare_session_deletion'
     | 'register_managed_database'
     | 'end_planning_execution'
-    | 'stop_planning_execution'
   lifecycle?: ApplicationLifecycle
   managedDatabase?: ManagedDatabaseRegistration
   configRevision?: number
@@ -237,17 +236,6 @@ export async function registerManagedDatabaseApplication(
   }
 }
 
-/** 通过既有 AG-UI 控制端点停止生成，保留修订及原任务继续资格。 */
-export async function stopApplicationPlanningExecution(
-  application: Pick<ApplicationConfig, 'workspaceRoot' | 'id'>,
-  threadId: string
-): Promise<ApplicationLifecycle> {
-  if (!application.workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  return assertApplicationLifecycleOwnership(await runApplicationLifecycleAction(threadId, {
-    action: 'stop_planning_execution', workspaceRoot: application.workspaceRoot
-  }), application.id)
-}
-
 /** 通过既有 AG-UI 控制端点完整结束当前规划修订，保留文件并释放执行占用。 */
 export async function endApplicationPlanningExecution(
   application: Pick<ApplicationConfig, 'workspaceRoot' | 'id'>,
@@ -263,12 +251,15 @@ export async function endApplicationPlanningExecution(
 export async function getApplicationLifecycle(
   application: Pick<ApplicationConfig, 'workspaceRoot'> &
     Partial<Pick<ApplicationConfig, 'id' | 'appName'>>,
-  threadId = randomUUID()
+  threadId = randomUUID(),
+  resultSession?: { sessionId: string; threadId: string; fresh?: boolean }
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
   if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  const currentRequest = lifecycleReadRequests.get(workspaceRoot)
-  if (currentRequest) {
+  // 会话结果具有 owner/thread 边界，不能与应用级读取或其他会话共享响应。
+  const requestKey = JSON.stringify([workspaceRoot, resultSession?.sessionId, resultSession?.threadId])
+  const currentRequest = lifecycleReadRequests.get(requestKey)
+  if (currentRequest && !resultSession?.fresh) {
     return assertApplicationLifecycleOwnership(await currentRequest, application.id)
   }
 
@@ -278,7 +269,8 @@ export async function getApplicationLifecycle(
       await attachApplicationWorkspace(application, threadId)
       return await runApplicationLifecycleAction(threadId, {
         action: 'get',
-        workspaceRoot
+        workspaceRoot,
+        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId } : {})
       })
     } catch (error) {
       // 发起新迭代会先删掉 lifecycle 文件再由前端重建；这一步中途失败（或文件被外部清理）
@@ -289,15 +281,16 @@ export async function getApplicationLifecycle(
         { workspaceRoot, id: application.id, appName: application.appName },
         threadId
       )
-      return runApplicationLifecycleAction(threadId, { action: 'get', workspaceRoot })
+      return runApplicationLifecycleAction(threadId, { action: 'get', workspaceRoot,
+        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId } : {}) })
     }
   })()
-  lifecycleReadRequests.set(workspaceRoot, request)
+  lifecycleReadRequests.set(requestKey, request)
   try {
     return assertApplicationLifecycleOwnership(await request, application.id)
   } finally {
-    if (lifecycleReadRequests.get(workspaceRoot) === request) {
-      lifecycleReadRequests.delete(workspaceRoot)
+    if (lifecycleReadRequests.get(requestKey) === request) {
+      lifecycleReadRequests.delete(requestKey)
     }
   }
 }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import './sessionPersistence.test'
+import './revisionContinuationGuard.test'
 import {
   nextStageSessionSequence,
   stageForWorkbenchPhase,

@@ -371,6 +371,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         settings = type("Settings", (), {"model_name": "test-model"})()
         with (
             patch.object(requirements_analyzer.Settings, "from_env", return_value=settings),
+            patch.object(requirements_analyzer, "_classify_authorization_evidence", return_value={"hasAuthorizationRequirement": False, "evidence": []}),
             patch.object(requirements_analyzer, "create_chat_model", return_value=model),
         ):
             result = requirements_analyzer.analyze_requirements_with_chat_model(
@@ -379,7 +380,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
         self.assertTrue(model.bound)
         self.assertNotIn("Do not call ask_user", model.prompt)
-        self.assertIn("name and a broad scenario alone are not sufficient", model.prompt)
+        self.assertIn("If any required field is missing or empty", model.prompt)
         self.assertEqual(result["clarification"]["status"], "requires_user_input")
         self.assertEqual(result["clarification"]["questions"][0]["header"], "用户角色")
         self.assertEqual(result["requirement_spec"]["pages"], [])
@@ -423,6 +424,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         settings = type("Settings", (), {"model_name": "test-model"})()
         with (
             patch.object(requirements_analyzer.Settings, "from_env", return_value=settings),
+            patch.object(requirements_analyzer, "_classify_authorization_evidence", return_value={"hasAuthorizationRequirement": False, "evidence": []}),
             patch.object(requirements_analyzer, "create_chat_model", return_value=FakeStreamingModel()),
         ):
             result = requirements_analyzer.analyze_requirements_with_chat_model(
@@ -461,6 +463,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(
             _route_requirements(
                 {
+                    "requirement_spec": {"confirmation_status": "pending_user_input"},
                     "clarification": {
                         "status": "requires_user_input",
                         "mode": "ask_user_question",
@@ -503,8 +506,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             ):
                 _route_start({"workspace": directory, "resume_from": ""})
 
-    def test_stale_requirements_resume_is_rejected_during_technical_planning(self) -> None:
-        """TechnicalPlan 阶段即使显式携带旧 requirements 入口也必须拒绝。"""
+    def test_explicit_node_reentry_is_not_blocked_by_lifecycle_stage(self) -> None:
+        """显式节点重入由当前线程和入口合同控制，生命周期阶段不代替线程归属校验。"""
 
         with tempfile.TemporaryDirectory() as directory:
             lifecycle = create_application_lifecycle(
@@ -541,13 +544,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 )
             write_application_lifecycle(directory, lifecycle)
 
-            with self.assertRaisesRegex(
-                ApplicationLifecycleConflictError,
-                "恢复入口与 lifecycle 不匹配",
-            ):
-                _route_start(
-                    {"workspace": directory, "resume_from": "requirements"}
-                )
+            self.assertEqual(_route_start({"workspace": directory, "resume_from": "requirements"}), "requirements")
 
     def test_requirement_failure_and_retry_update_lifecycle(self) -> None:
         """需求生成失败应持久化错误，同一阶段重试后可恢复到待澄清。"""
@@ -594,7 +591,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             self.assertIsNone(retried["lifecycle"]["error"])
 
     def test_requirement_confirmation_status_drives_lifecycle_mapping(self) -> None:
-        """只有 RequirementSpec 待确认时才能展示需求文档已生成。"""
+        """RequirementSpec 草稿完成后仍需生成 ProductPlan，再进入联合文档确认门。"""
 
         with tempfile.TemporaryDirectory() as directory:
             state = {
@@ -621,7 +618,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
 
             self.assertEqual(
                 result["lifecycle"]["initialization"]["stage"],
-                "awaiting_requirement_document_confirmation",
+                "generating_requirement_document",
             )
             self.assertNotIn("pendingInteraction", result["lifecycle"])
 
@@ -1043,7 +1040,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             with patch(
                 "app.graph.application_planning_workflow.nodes.project_planning"
             ) as project_planning:
-                with self.assertRaisesRegex(ValueError, "明确进入规划阶段"):
+                with self.assertRaisesRegex(ValueError, "明确进入计划阶段"):
                     _technical_planning({**state, "workflow_scope": "application_planning"})
             project_planning.assert_not_called()
 
@@ -1137,17 +1134,17 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertEqual(capability["workspaceGate"], "planning-artifacts")
         self.assertNotIn("lifecycle", capability)
 
-    def test_product_confirmation_projects_only_draft_markdown(self) -> None:
-        """产品规划待确认时只允许把 drafts/plans 下的 Markdown 投影给前端。"""
+    def test_joint_requirement_confirmation_projects_only_draft_markdown(self) -> None:
+        """联合需求文档待确认时只投影 drafts/specs 下的 Markdown，不暴露内部 JSON。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            draft_path = Path(directory) / ".devagentstudio/drafts/plans/product-plan.md"
+            draft_path = Path(directory) / ".devagentstudio/drafts/specs/requirement-spec.md"
             draft_path.parent.mkdir(parents=True, exist_ok=True)
             draft_path.write_text("# 产品规划草稿\n", encoding="utf-8")
             result = {
-                "phase": "product_planning",
+                "phase": "requirements",
                 "status": "requires_user_input",
-                "product_plan_path": str(draft_path),
+                "requirement_spec_path": str(draft_path),
                 "clarification": {
                     "status": "requires_user_input",
                     "mode": "requirement_document_confirmation",
@@ -1155,8 +1152,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             }
 
             artifact = _workflow_confirmation_artifact(result)
-            result["product_plan_path"] = str(
-                Path(directory) / ".devagentstudio/plans/product-plan.md"
+            result["requirement_spec_path"] = str(
+                Path(directory) / ".devagentstudio/specs/requirement-spec.md"
             )
 
         self.assertIsNotNone(artifact)
