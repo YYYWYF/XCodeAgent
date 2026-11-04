@@ -76,6 +76,7 @@ import {
 } from '../Welcome/planningWorkflowState'
 import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import PreviewRepairControls from '../BrowserPreviewPanel/PreviewRepairControls'
+import { previewRepairExecutionBlocks } from '../BrowserPreviewPanel/serviceStatusPolicy'
 import { usePreviewRuntime } from './hooks/usePreviewRuntime'
 import ChatComposer from './components/ChatComposer'
 import {
@@ -1714,7 +1715,7 @@ export default function AiChatPanel({
         (entry) => entry.identity.workspaceRoot === application.workspaceRoot
       ) ||
       Object.values(applicationLifecycle?.activeExecutions || {}).some((entry) =>
-        ['running', 'stopping', 'awaiting_user'].includes(entry.status)
+        previewRepairExecutionBlocks(entry.status)
       ),
     createSession: async () => {
       const identity = await createDevelopmentConversation(

@@ -72,7 +72,7 @@ def preview_runtime_capabilities() -> dict[str, Any]:
 
 
 def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:
-    """合并真实运行与等待确认记录，不用旧健康记录推断任务状态。"""
+    """合并真实执行与维护占用，已暂停的开发工作流不阻塞启动修复。"""
     owner = maintenance_owner(workspace)
     if owner and owner["threadId"] != thread_id:
         return {**owner, "message": "当前应用有预览维护任务，请完成或停止后再操作。"}
@@ -82,8 +82,10 @@ def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:
         if initialization and str(initialization.status) in {"running", "stopping", "awaiting_user"}:
             return {"threadId": initialization.thread_id, "message": "当前应用的规划或模板任务尚未结束，请完成或明确停止后再操作。"}
         for execution in lifecycle.active_executions.values():
-            if execution.thread_id != thread_id and str(execution.status) in {"running", "stopping", "awaiting_user"}:
-                return {"threadId": execution.thread_id, "runId": execution.run_id, "message": "当前应用有会话执行中或等待确认，请完成或明确停止后再操作。"}
+            # 等待单元测试等用户确认时没有代码执行，允许另开预览修复会话。
+            # 原工作流确认状态保持不变；实际运行、规划初始化和预览维护仍互斥。
+            if execution.thread_id != thread_id and str(execution.status) in {"running", "stopping"}:
+                return {"threadId": execution.thread_id, "runId": execution.run_id, "message": "当前应用有会话正在执行，请完成或明确停止后再操作。"}
     pending = pending_product_interaction(workspace)
     if pending:
         return pending

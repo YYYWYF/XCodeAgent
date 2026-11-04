@@ -387,7 +387,7 @@ export function usePreviewRuntime(options: Options): {
     }
   }
   const blockedReason = options.localBlocked
-    ? '当前应用有会话执行中或等待确认，请完成或明确停止后再操作。'
+    ? '当前应用有会话正在执行，请完成或明确停止后再操作。'
     : snapshot?.blockedBy?.message ||
       (snapshot?.runtime?.maintenance ? '当前应用有预览维护任务，请完成或停止后再操作。' : '')
   /** 底部重试先校准事实，只有明确安全的原动作才重新派发；确认修复从不自动重放。 */

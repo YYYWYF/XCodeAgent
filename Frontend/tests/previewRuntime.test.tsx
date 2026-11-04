@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import './databaseCheckPanel.test'
 import './databaseTableTabs.test'
 import { createElement } from 'react'
+import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PreviewRuntimeBusinessError, leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
 import { previewRecoveryAction } from '../src/renderer/src/components/AiChatPanel/previewRuntimeRecovery'
@@ -11,6 +12,7 @@ import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
 import {
   previewServiceActionAvailability,
+  previewRepairExecutionBlocks,
   previewServiceLaunchLabel,
   previewServiceState,
   shouldAutoStartPreviewService,
@@ -107,7 +109,7 @@ try {
     const threads: string[] = []
     let discarded = 0
     /** 捕获真实维护编排；SSR 不启动后台订阅，使点击重试的请求边界可验证。 */
-    function Probe() {
+    function Probe(): ReactElement {
       controller = usePreviewRuntime({ workspace: '/workspace', activeSession: identity, localBlocked: false,
         createSession: async () => { throw new Error('不应创建另一个会话') },
         discardSession: async () => { discarded++ }, persistSession: async () => {},
@@ -161,6 +163,38 @@ try {
     '应用任务占用期间仍应允许手动重启服务'
   )
 
+  for (const status of ['awaiting_user', 'completed', 'failed', 'stopped']) {
+    assert.equal(previewRepairExecutionBlocks(status), false, `${status} 不应阻塞启动故障修复`)
+    assert.equal(
+      previewServiceActionAvailability({
+        busy: false,
+        blockedReason: previewRepairExecutionBlocks(status) ? '会话执行中' : '',
+        repairAvailable: true
+      }).canDiagnose,
+      true
+    )
+  }
+  for (const status of ['starting', 'running', 'stopping']) {
+    assert.equal(previewRepairExecutionBlocks(status), true, `${status} 仍应阻止并发修复`)
+    assert.equal(
+      previewServiceActionAvailability({
+        busy: false,
+        blockedReason: previewRepairExecutionBlocks(status) ? '会话执行中' : '',
+        repairAvailable: true
+      }).canDiagnose,
+      false
+    )
+  }
+  assert.equal(
+    previewServiceActionAvailability({
+      busy: true,
+      blockedReason: '',
+      repairAvailable: true
+    }).canDiagnose,
+    false,
+    '预览操作进行中不能重复发起诊断'
+  )
+
   // 服务状态收敛：它同时驱动面板状态标签与"切到预览 tab 是否要自动启动"，
   // 判错会导致要么该启动不启动（白屏），要么把正在跑的服务重复拉起。
   assert.equal(previewServiceState(undefined), 'idle', '无快照时视为未启动')
@@ -211,7 +245,9 @@ try {
   )
 
   // 切到预览 tab 的自动启动判断：漏判会让历史版本预览白屏，误判会重复拉起正在跑的服务。
-  const autoStart = (over: Partial<Parameters<typeof shouldAutoStartPreviewService>[0]> = {}) =>
+  const autoStart = (
+    over: Partial<Parameters<typeof shouldAutoStartPreviewService>[0]> = {}
+  ): boolean =>
     shouldAutoStartPreviewService({
       activeTabIsPreview: true,
       hasSnapshot: true,

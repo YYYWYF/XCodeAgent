@@ -55,7 +55,12 @@ export function shouldShowPreviewServiceEmptyState(input: {
   return input.externalStatus === undefined && input.hasSnapshot && input.status !== 'running'
 }
 
-/** 允许服务重启与应用任务并行，仅让诊断修复继续遵守任务占用。 */
+/** 只有实际执行中的任务阻塞修复；等待用户确认的工作流已暂停。 */
+export function previewRepairExecutionBlocks(status: string): boolean {
+  return ['starting', 'running', 'stopping'].includes(status)
+}
+
+/** 允许服务重启与应用任务并行，仅让诊断修复继续遵守实际执行占用。 */
 export function previewServiceActionAvailability(input: {
   busy: boolean
   blockedReason: string

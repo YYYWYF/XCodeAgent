@@ -103,7 +103,61 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.result(await self.request("restart"))["status"], "completed")
             value = self.result(await self.request("get"))
         launch.assert_called_once()
-        self.assertEqual(value["blockedBy"]["threadId"], "other")
+        self.assertIsNone(value["blockedBy"])
+
+    async def test_waiting_execution_allows_startup_diagnosis_and_confirmation(self) -> None:
+        """前后端启动失败均可在开发工作流暂停时诊断，修复仍须单独确认。"""
+        execution = SimpleNamespace(thread_id="other", run_id="other-run", status="awaiting_user")
+        lifecycle = SimpleNamespace(active_executions={"task": execution})
+        for layer in ("frontend", "backend"):
+            with self.subTest(layer=layer):
+                self.thread = f"preview-{layer}"
+                attempt = begin_attempt(self.workspace)
+                finish_attempt(self.workspace, {
+                    "status": "failed", "failed_stage": f"{layer}_start",
+                    layer: {"status": "failed", "message": "启动失败"},
+                })
+                plan = {"decision": "repair", "strategy": "修复启动错误", "repair_tasks": [{
+                    "title": "修复入口", "description": "修正启动配置",
+                    "change_scope": [{"path": "frontend/main.ts", "operation": "modify"}],
+                }]}
+                with patch("app.protocols.preview_runtime.load_application_lifecycle", return_value=lifecycle), patch(
+                    "app.agents.repair_planner.plan_build_failure_repair_with_repair_planner_agent", return_value=plan,
+                ), patch("app.protocols.preview_runtime.execute_repair", return_value={
+                    "status": "completed", "iteration": 1,
+                }) as execute:
+                    current = self.result(await self.request("get"))
+                    self.assertTrue(current["runtime"]["repairAvailable"])
+                    self.assertIsNone(current["blockedBy"])
+                    prepared = self.result(await self.request("diagnose", attemptId=attempt))
+                    self.assertEqual(prepared["repair"]["status"], "awaiting_confirmation")
+                    self.assertEqual(prepared["repair"]["iteration"], 0)
+                    execute.assert_not_called()
+                    self.assertEqual((Path(self.workspace) / "frontend/main.ts").read_text(), "broken")
+                    result = self.result(await self.request("confirm", planId=prepared["repair"]["planId"]))
+                    self.assertEqual(result["repair"]["status"], "completed")
+                    execute.assert_called_once()
+                    self.assertEqual(execute.call_args.args[1]["iteration"], 1)
+                self.assertEqual(execution.status, "awaiting_user")
+                self.assertIsNone(maintenance_owner(self.workspace))
+
+    async def test_active_execution_still_blocks_startup_repair(self) -> None:
+        """实际运行或正在停止的任务仍阻止诊断，避免并发修改源码。"""
+        attempt = self.fail_launch()
+        for status in ("running", "stopping"):
+            with self.subTest(status=status):
+                lifecycle = SimpleNamespace(active_executions={"task": SimpleNamespace(
+                    thread_id="other", run_id="other-run", status=status,
+                )})
+                with patch("app.protocols.preview_runtime.load_application_lifecycle", return_value=lifecycle), patch(
+                    "app.protocols.preview_runtime.prepare_repair",
+                ) as prepare:
+                    current = self.result(await self.request("get"))
+                    self.assertEqual(current["blockedBy"]["threadId"], "other")
+                    result = self.result(await self.request("diagnose", attemptId=attempt))
+                    self.assertEqual(result["status"], "failed")
+                    prepare.assert_not_called()
+                self.assertIsNone(maintenance_owner(self.workspace))
 
     async def test_waiting_execution_allows_exit_stop(self) -> None:
         """应用任务占用期间仍允许退出清理停止前后端服务。"""
