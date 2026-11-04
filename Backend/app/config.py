@@ -93,6 +93,12 @@ class Settings:
     managed_database_timeout_seconds: float = 15.0
     git_username: str = ""
     git_token: str = ""
+    # 部署目标操作系统：用于给诊断/修复 Agent 选择对应平台的命令参考。
+    # 取值 "macos" 或 "windows"；留空时由 Agent 按 sys.platform 自行识别（开发期 fallback）。
+    deployment_platform: str = ""
+    # 前端依赖安装时使用的 npm registry。公司外部默认 npmmirror，公司内部
+    # 是 artifactory 代理。留空时按 npmmirror 处理（保持外部默认）。
+    npm_registry: str = ""
 
     @property
     def model_api_name(self) -> str:
@@ -255,6 +261,8 @@ class Settings:
             ),
             git_username=os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", ""),
             git_token=os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", ""),
+            deployment_platform=os.getenv("DEVAGENTSTUDIO_PLATFORM", "").strip().lower(),
+            npm_registry=os.getenv("DEVAGENTSTUDIO_NPM_REGISTRY", "").strip().rstrip("/"),
         )
 
 

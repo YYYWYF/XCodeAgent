@@ -42,10 +42,15 @@ def safe_file(workspace: str, path: str) -> str:
     parts = PurePosixPath(relative_path).parts
     normalized = "/".join(parts)
     sensitive_names = {name.casefold() for name in SENSITIVE_FILE_NAMES}
+    # `.npmrc` 是 frontend-pnpm-install-repair SKILL 允许修改的唯一一个隐藏文件：
+    # 它承载工作区 npm registry / 镜像源配置，不写凭据（SKILL 禁止 _authToken /
+    # password / 内部 host 凭据进入），所以在预览修复场景下放行。其他 SENSITIVE_FILE_NAMES
+    # （.env / .pem / id_rsa 等）仍按原规则拒绝。
+    is_allowed_npmrc = parts == ("frontend", ".npmrc") or parts == ("Frontend", ".npmrc")
     invalid_path = (
         not parts
         or any(marker in virtual_path for marker in "*?[]{}")
-        or any(part.casefold() in sensitive_names for part in parts)
+        or (not is_allowed_npmrc and any(part.casefold() in sensitive_names for part in parts))
         or parts[0] not in {"frontend", "Frontend", "backend", "Backend"}
         or ".." in parts
         or _is_forbidden_path(normalized)
@@ -76,6 +81,7 @@ def source_digest(workspace: str, paths: list[str]) -> str:
 def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], feedback: str = "") -> dict[str, Any]:
     """仅诊断并生成精确修复计划，停在用户确认边界。"""
     from app.agents.repair_planner import plan_build_failure_repair_with_repair_planner_agent
+    from app.config import Settings
     # 诊断使用实时校准后的失败事实，避免持久记录仍为 running 时把成功摘要交给模型。
     record = runtime_snapshot(workspace, logs=False)
     if record.get("failedStage") == "backend_database_resource":
@@ -85,9 +91,23 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
     if iteration >= 3:
         return {**previous, "status": "failed", "message": "已达到 3 轮修复上限，请查看日志并手动处理。"}
     roots = [name for name in ("frontend", "Frontend", "backend", "Backend") if (Path(workspace) / name).is_dir()]
+    # 部署平台与 npm registry 显式注入到 repair_input，让 RepairPlanner 在 prompt 里看到
+    # 当前部署目标和应使用的镜像源，进而能指引 SmallTask Agent 选择 macOS/Windows 平台参考、
+    # 写入正确的工作区 .npmrc registry。两者都是部署级配置，与工作区状态无关。
+    settings = Settings.from_env()
     plan = plan_build_failure_repair_with_repair_planner_agent(
         workspace=workspace,
-        repair_input={"source": "preview_startup", "failure": evidence, "feedback": feedback[:4000], "change_scope": {"allowed_paths": roots}, "policy": "Repair startup failures only. Missing credentials, missing system tools or unavailable external services require user action; do not invent credentials. Do not change formal contracts or application.json. Return exact files; do not run tests or edit during planning."},
+        repair_input={
+            "source": "preview_startup",
+            "failure": evidence,
+            "feedback": feedback[:4000],
+            "change_scope": {"allowed_paths": roots},
+            "deployment": {
+                "platform": settings.deployment_platform,
+                "npm_registry": settings.npm_registry,
+            },
+            "policy": "Repair startup failures only. Missing credentials, missing system tools or unavailable external services require user action; do not invent credentials. Do not change formal contracts or application.json. Return exact files; do not run tests or edit during planning. When the failure is a frontend `pnpm install` failure (detectable from the install stderr/stdout containing `engines.node`, `ERR_PNPM_*`, `ETIMEDOUT`, `ECONNRESET`, `ENOTFOUND`, `fetch failed`, `command not found: pnpm`, `node-gyp`, `ENOSPC`, `EACCES`, `lockfile version`, `peer dep`, or a 120s install timeout), first read the built-in skill `frontend-pnpm-install-repair` at `/.devagentstudio/builtin-skills/frontend-pnpm-install-repair/SKILL.md`, classify the failure into one of its modes (A/B/C/D/F/G/H/I/J/K/L/M), and emit repair_tasks whose change_scope stays within that skill's allowed writes (`/frontend/.npmrc` add/modify, `/frontend/node_modules/` delete). When the SKILL says to write `registry=<DEVAGENTSTUDIO_NPM_REGISTRY 注入值>` or `<MIRROR>`, the actual value is `deployment.npm_registry` from this repair_input. When the SKILL says to pick platform-specific commands, prefer `deployment.platform` (\"macos\" or \"windows\") from this repair_input; if it is empty, the execution agent will detect at runtime.",
+        },
     )
     if plan.get("decision") != "repair":
         return {**previous, "iteration": iteration, "status": "requires_revision" if plan.get("decision") == "requires_user_confirmation" else "failed", "message": redact(str(plan.get("reason") or "无法根据启动日志生成安全修复计划，请手动检查环境。"))}
@@ -122,7 +142,16 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
                             for item in normalized_changes
                             if item["path"] in owner_paths
                         ],
-                        "failure_evidence": evidence,
+                        # deployment 与 launch/logs 一并交给执行 Agent：让它能在不调
+                        # Settings.from_env() 的前提下拿到当前部署平台与镜像源，
+                        # 选择 macOS/Windows 命令参考并写入正确的工作区 .npmrc registry。
+                        "failure_evidence": {
+                            **evidence,
+                            "deployment": {
+                                "platform": settings.deployment_platform,
+                                "npm_registry": settings.npm_registry,
+                            },
+                        },
                     }
                 )
     if not tasks:

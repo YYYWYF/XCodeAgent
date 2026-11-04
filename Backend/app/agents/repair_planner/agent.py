@@ -6,6 +6,7 @@ from app.agents.workspace_scope import (
     create_workspace_permissions,
 )
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
+from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 from app.middleware.preview_diagnosis_scope import PreviewDiagnosisScopeMiddleware
@@ -47,18 +48,20 @@ def create_repair_planner_agent(
         system_prompt="\n\n".join(
             part for part in (base_system_prompt, required_user_skills_prompt) if part
         ),
-        skills=[USER_SKILLS_VIRTUAL_ROOT],
+        skills=[USER_SKILLS_VIRTUAL_ROOT, BUILTIN_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=[],
         middleware=[PreviewDiagnosisScopeMiddleware()],
         backend=create_workspace_backend(
             workspace_root,
+            include_builtin_skills=True,
             user_skills_backend=user_skills_backend,
             agent_memory_backend=agent_memory_backend,
         ),
         permissions=create_workspace_permissions(
             workspace_root,
             mode="repair_planner",
+            include_builtin_skills=True,
             include_user_skills=True,
             include_agent_memory=True,
         ),
