@@ -3,6 +3,19 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { build } from 'vite'
+import { createRequire } from 'node:module'
+
+// Hook 回归复用 Node 的 React 调度，确保 act 可执行且不遗留 MessagePort。
+process.env.NODE_ENV = 'test'
+const require = createRequire(import.meta.url)
+const reactModules = [
+  'react',
+  'react/jsx-runtime',
+  'react/jsx-dev-runtime',
+  'react-dom',
+  'react-dom/server',
+  'react-test-renderer'
+]
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const entryFile = path.join(frontendRoot, 'tests', 'previewRuntime.test.tsx')
@@ -16,6 +29,7 @@ try {
     configFile: false,
     logLevel: 'error',
     root: frontendRoot,
+    define: { 'process.env.NODE_ENV': JSON.stringify('test') },
     ssr: { noExternal: true },
     // 表详情测试复用生产样式变量，避免独立 SSR 测试缺失 Less 品牌前缀。
     css: {
@@ -33,7 +47,11 @@ try {
       outDir: outputDirectory,
       ssr: entryFile,
       rollupOptions: {
-        output: { entryFileNames: path.basename(outputFile) }
+        external: reactModules,
+        output: {
+          entryFileNames: path.basename(outputFile),
+          paths: (id) => (reactModules.includes(id) ? pathToFileURL(require.resolve(id)).href : id)
+        }
       }
     }
   })

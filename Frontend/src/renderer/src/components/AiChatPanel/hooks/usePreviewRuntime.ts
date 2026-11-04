@@ -55,7 +55,6 @@ export function usePreviewRuntime(options: Options): {
   const [repairs, setRepairs] = useState<Record<string, PreviewRuntimePayload['repair']>>({})
   const busyRef = useRef(false)
   const activeRunControllerRef = useRef<AbortController | null>(null)
-  const cancelRequestedRef = useRef(false)
   const optimisticallyCancelledThreadsRef = useRef<Set<string>>(new Set())
   const optionsRef = useRef(options)
   const failedActionRef = useRef<{ action: PreviewAction; identity?: SessionIdentity; workspace: string }>()
@@ -93,7 +92,16 @@ export function usePreviewRuntime(options: Options): {
       lastReadyUrlRef.current = ''
     }
     if (threadId && value.repair) {
-      setRepairs((previous) => ({ ...previous, [threadId]: value.repair }))
+      setRepairs((previous) => {
+        // 停止请求发出后，旧订阅迟到的运行/待确认快照不能重新开放确认按钮。
+        if (
+          optimisticallyCancelledThreadsRef.current.has(threadId) &&
+          previous[threadId]?.status === 'stopping' &&
+          ['running', 'awaiting_confirmation'].includes(value.repair?.status || '')
+        )
+          return previous
+        return { ...previous, [threadId]: value.repair }
+      })
       const identity = optionsRef.current.activeSession
       if (identity?.threadId === threadId) {
         const optimisticallyCancelled = optimisticallyCancelledThreadsRef.current.has(threadId)
@@ -114,6 +122,10 @@ export function usePreviewRuntime(options: Options): {
         const current = optionsRef.current.getMessages(identity.key)
         if (
           !busyRef.current &&
+          !(
+            optimisticallyCancelled &&
+            ['running', 'awaiting_confirmation'].includes(value.repair.status || '')
+          ) &&
           content &&
           !current.some(
             (message) => message.role === 'assistant' && message.content.includes(content)
@@ -147,14 +159,14 @@ export function usePreviewRuntime(options: Options): {
     const workspace = captured.workspace
     const threadId = identity?.threadId || activeThread
     const activeController = activeRunControllerRef.current
-    const hadActiveRun = Boolean(activeController)
+    const previousRepair = threadId ? repairs[threadId] : undefined
     const serverThreadId = threadId || randomUUID()
 
-    cancelRequestedRef.current = hadActiveRun
     activeController?.abort()
     activeRunControllerRef.current = null
     busyRef.current = false
     setBusy(false)
+    setBusyLaunchLabel(undefined)
     setError('')
 
     if (threadId) {
@@ -184,18 +196,22 @@ export function usePreviewRuntime(options: Options): {
           if (workspaceRef.current === workspace) receive(value, threadId)
         }
       }
-    )
-      .catch((reason) => {
-        if (workspaceRef.current === workspace) {
-          previewConnection.reportFailure(reason)
-          failedActionRef.current = { action: 'cancel', identity, workspace }
-          setError(reason instanceof Error ? reason.message : '停止修复失败')
+    ).catch((reason) => {
+      if (workspaceRef.current === workspace) {
+        if (threadId) {
+          optimisticallyCancelledThreadsRef.current.delete(threadId)
+          // 请求失败不代表已经停止；恢复停止入口，允许用户重试同一会话。
+          setRepairs((previous) =>
+            previous[threadId]?.status === 'stopping'
+              ? { ...previous, [threadId]: previousRepair || { status: 'running' } }
+              : previous
+          )
         }
-      })
-      .finally(() => {
-        // 有正在等待的 AG-UI 运行时由其 catch 分支清理标记；没有运行时则在后台请求结束后清理。
-        if (!hadActiveRun) cancelRequestedRef.current = false
-      })
+        previewConnection.reportFailure(reason)
+        failedActionRef.current = { action: 'cancel', identity, workspace }
+        setError(reason instanceof Error ? reason.message : '停止修复失败')
+      }
+    })
   }
 
   /** 把本轮进度和结果保存到既有历史对话记录。 */
@@ -215,7 +231,6 @@ export function usePreviewRuntime(options: Options): {
     if (action === 'restart' && workspace) {
       void window.devAgentStudio?.projectPreview?.registerWorkspace({ workspaceRoot: workspace })
     }
-    cancelRequestedRef.current = false
     busyRef.current = true
     setBusyLaunchLabel(action === 'restart' ? previewServiceLaunchLabel(snapshot?.runtime) : undefined)
     setBusy(true)
@@ -276,9 +291,8 @@ export function usePreviewRuntime(options: Options): {
           threadId: identity?.threadId || randomUUID(),
           signal: operationController.signal,
           onUpdate: (value) => {
-            if (workspaceRef.current !== workspace) return
+            if (workspaceRef.current !== workspace || operationController.signal.aborted) return
             receive(value, identity?.threadId)
-            if (cancelRequestedRef.current) return
             if (value.status !== 'failed') accepted = true
             const progress = value.progress?.message
             if (progress && progress !== lastProgress) {
@@ -302,7 +316,7 @@ export function usePreviewRuntime(options: Options): {
           }
         }
       )
-      if (cancelRequestedRef.current) return
+      if (operationController.signal.aborted) return
       if (value.launchResult?.status === 'failed') {
         failedActionRef.current = { action, identity, workspace }
         setError(value.launchResult.message || '预览服务启动失败。')
@@ -338,10 +352,7 @@ export function usePreviewRuntime(options: Options): {
       )
         captured.onReady(value.runtime.previewUrl)
     } catch (reason) {
-      if (cancelRequestedRef.current) {
-        cancelRequestedRef.current = false
-        return
-      }
+      if (operationController.signal.aborted) return
       const message = reason instanceof Error ? reason.message : '预览服务操作失败'
       if (workspaceRef.current !== workspace) return
       previewConnection.reportFailure(reason)
@@ -357,12 +368,14 @@ export function usePreviewRuntime(options: Options): {
         return
       }
     } finally {
-      if (activeRunControllerRef.current === operationController)
+      // 只由当前请求清理运行态，已取消请求的迟到收尾不能覆盖后续操作。
+      if (activeRunControllerRef.current === operationController) {
         activeRunControllerRef.current = null
-      busyRef.current = false
-      setBusy(false)
-      setBusyLaunchLabel(undefined)
-      if (identity && !awaitingConfirmation) releaseSessionExecution(identity.key)
+        busyRef.current = false
+        setBusy(false)
+        setBusyLaunchLabel(undefined)
+        if (identity && !awaitingConfirmation) releaseSessionExecution(identity.key)
+      }
     }
     if (identity) {
       updateMessages()

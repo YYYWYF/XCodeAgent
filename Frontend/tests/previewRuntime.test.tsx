@@ -320,3 +320,5 @@ try {
 } finally {
   globalThis.fetch = originalFetch
 }
+
+await import('./previewRuntimeCancellation.test')

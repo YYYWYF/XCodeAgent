@@ -22,6 +22,8 @@ from app.services.preview_runtime_state import (
     runtime_snapshot,
 )
 from app.services.project_launcher import launch_project_preview, stop_project_preview
+from app.services.preview_runtime_worker import run_preview_worker
+from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.run_lease import workspace_run_leases
 
 
@@ -168,13 +170,7 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
 
     async def synchronous(function: Any, *args: Any, **kwargs: Any) -> Any:
         """停止时等待同步执行真正退出，再释放互斥与删除栅栏。"""
-        worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
-        try:
-            return await asyncio.shield(worker)
-        except asyncio.CancelledError:
-            cancel.set()
-            await asyncio.shield(worker)
-            raise
+        return await run_preview_worker(run_id, workspace, cancel, function, *args, **kwargs)
 
     def progress(stage: str, message: str) -> None:
         """把同步启动器和 Agent 进度安全投递到事件循环。"""
@@ -185,6 +181,9 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
     try:
         if task is not None:
             workflow_run_registry.register(run_id, task, workspace=workspace, maintenance_thread_id=thread_id, thread_id=thread_id)
+        repair = load_repair(workspace, thread_id)
+        if cancel.is_set():
+            raise RuntimeError("预览维护已请求停止。")
         if request.action in {"restart", "stop"}:
             progress("restart", "正在停止旧服务并启动预览…" if request.action == "restart" else "正在更新预览服务…")
             if request.action == "stop":
@@ -193,7 +192,6 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
             else:
                 result = await synchronous(launch_project_preview, workspace, force_restart=True, on_progress=lambda stage, status, message: progress(stage, message))
             return {**snapshot(workspace, thread_id), "launchResult": result}
-        repair = load_repair(workspace, thread_id)
         if request.action == "confirm":
             if repair.get("status") != "awaiting_confirmation" or repair.get("planId") != request.planId:
                 raise ValueError("修复确认已失效，请读取当前会话。")
@@ -207,6 +205,8 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
             progress("repair", f"正在执行第 {repair['iteration']}/3 轮修复…")
             repair = await synchronous(execute_repair, workspace, repair, progress, cancel)
         if not cancel.is_set() and (request.action in {"diagnose", "revise"} or repair.get("status") == "retry"):
+            repair = {**repair, "status": "running", "iteration": int(repair.get("iteration", 0))}
+            save_repair(workspace, thread_id, repair)
             progress("diagnose", "正在结合本次启动日志诊断，并生成修复计划…")
             repair = await synchronous(prepare_repair, workspace, thread_id, repair, request.feedback)
         if cancel.is_set():
@@ -220,8 +220,11 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
         raise
     except Exception as exc:
         if request.action in {"diagnose", "confirm", "revise"}:
-            repair = {**repair, "status": "failed", "message": str(exc)}
+            # 模型或工具观察到主动取消后会抛异常，这是正常停止而非新的业务失败。
+            repair = {**repair, "status": "stopped" if cancel.is_set() else "failed", "message": "修复已停止，已产生的修改保留。" if cancel.is_set() else str(exc)}
             save_repair(workspace, thread_id, repair)
+            if cancel.is_set():
+                return snapshot(workspace, thread_id)
         raise
     finally:
         if repair.get("status") != "awaiting_confirmation":
@@ -297,6 +300,7 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             event = _cancellations.get(key)
             if event:
                 event.set()
+                workspace_process_registry.cancel_run(f"preview-runtime:{thread_id}")
                 repair = load_repair(request.workspace, thread_id)
                 save_repair(request.workspace, thread_id, {**repair, "status": "stopping", "message": "已请求停止，等待当前操作安全结束。"})
                 return AgUiActionResult(data=snapshot(request.workspace, thread_id), message="已请求停止，正在等待当前操作安全结束。")
