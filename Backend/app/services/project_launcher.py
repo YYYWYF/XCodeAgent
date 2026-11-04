@@ -113,7 +113,9 @@ def launch_project_preview(
         try:
             result = _launch_project_preview(root, on_progress=report, force_restart=force_restart)
         except Exception as exc:
-            result = {"status": "failed", "message": str(exc), "failed_stage": "launch"}
+            from app.services.preview_diagnostics import diagnostic_from_exception
+
+            result = {"status": "failed", "message": str(exc), "failed_stage": "launch", "diagnostics": [diagnostic_from_exception(root, "launch", exc)]}
         finish_attempt(root, result)
         return result
 
@@ -176,6 +178,7 @@ def _launch_project_preview(
                 "backend": backend,
                 "frontend": None,
                 "failed_stage": backend.get("failed_stage") or "backend_start",
+                "diagnostics": backend.get("diagnostics", []),
             }
         report(
             "backend",

@@ -19,6 +19,16 @@ export type PreviewServiceState = {
   port?: number
   url?: string
 }
+export type PreviewDiagnostic = {
+  stage: string
+  category: 'parse' | 'dependency' | 'compile' | 'process' | 'readiness'
+  message: string
+  code: string | null
+  location: { path: string; line: number | null; column: number | null } | null
+  command: { argv: string[]; cwd: string | null; exitCode: number | null; timedOut: boolean } | null
+  logPaths: string[]
+  excerpt: string
+}
 export type PreviewLog = {
   name: string
   stage: string
@@ -66,6 +76,7 @@ export type PreviewRuntimePayload = {
     failedStage?: string
     databaseCheck?: PreviewDatabaseCheck
     repairAvailable?: boolean
+    diagnostics?: PreviewDiagnostic[]
     logs?: Record<'frontend' | 'backend', PreviewLog[]>
     maintenance?: { threadId: string; action: string }
   }

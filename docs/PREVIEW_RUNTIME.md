@@ -16,6 +16,10 @@
 
 所有响应均使用标准 AG-UI 生命周期、助手消息、`preview-runtime` CustomEvent、`previewRuntime` StateSnapshot 和 RunFinished，包括业务失败。`runtime.frontend` 与 `runtime.backend` 各自包含状态、可选 `port`、兼容保留的 URL 及失败摘要；操作失败含结构化 error。状态包含 runtime、blockedBy、当前会话 repair。`/health` 发布该能力。旧预览 REST 启停路由已移除；renderer 和 Electron 退出清理均通过 AG-UI 客户端调用。
 
+`runtime.diagnostics` 保存本轮失败的结构化证据：`stage`、`category`（parse/dependency/compile/process/readiness）、原始 `message` 和错误 `code`，可选的文件 `location`（path/line/column）、真实 `command`（argv/cwd/exitCode/timedOut）、当前 `logPaths` 及有界脱敏 `excerpt`。`/health.tools.preview_runtime` 发布 `diagnosticsField` 和 `diagnosticCategories`，与服务端模型共用定义。异常按类型适配，命令按实际退出和输出适配，不按某个文件名写修复规则。成功或停止清除旧证据；原始读取错误和解析错误不会被合并成一个无法定位的摘要。
+
+诊断输入优先提供真实错误位置、相关源码窗口和候选文件，证据充分后要求直接返回原因、策略和精确任务。预览诊断只能读取明确列出的当前运行日志，不能读取自身状态或旧修复文档寻找根因；仍可按证据扩大到相关工程源码。空日志不等于缺少全部证据，也不应导致反复搜索平台报错文案。同一查询重复获得完全相同内容时，以明确的无新证据错误结束诊断；查询或内容变化仍可继续，不设置新的固定模型调用次数。比较只保存本次调用内的摘要，不跨会话共享。无法安全诊断时返回明确的缺失信息。计划 Markdown 展示确定性故障证据，源码修改仍须用户确认。修复验证失败后，同一启动尝试的最新失败检查取代旧启动错误进入下一轮；用户已产生新启动尝试时不沿用旧验证。SmallTask 接收同一候选文件和规划策略，后续验证、重启、取消及预算规则不变。
+
 工作台挂载时前端先通过 `get` 读取当前快照，再进入 `watch` 增量订阅，避免长连接首包延迟让未启动服务显示为不可操作。初始快照尚未返回且没有本地占用时仍可提交重启，最终由服务端原子维护栅栏校验是否允许执行。`watch` 在一次有界订阅内仅在状态变化时发布快照；抽屉关闭时保持无日志的轻量订阅，打开后才附带日志，连接失败按一秒间隔重试并重新执行 `get` 校准。服务端维护任务不随状态订阅结束而取消。日志只读取标准运行目录的白名单文件、有界尾部，显示截断标记，并脱敏连接凭据、授权令牌和私钥。安装、构建、启动及 stdout/stderr 都有明确标识。
 
 ## 确认与修复

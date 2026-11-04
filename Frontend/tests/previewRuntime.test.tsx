@@ -35,7 +35,23 @@ function mockStream(failed = false): void {
     const value = {
       status: failed ? 'failed' : 'completed',
       error: failed ? { message: '当前应用有任务等待确认' } : undefined,
-      runtime: { attemptId: 'attempt-1', status: 'failed', repairAvailable: true },
+      runtime: {
+        attemptId: 'attempt-1',
+        status: 'failed',
+        repairAvailable: true,
+        diagnostics: [
+          {
+            stage: 'frontend_config',
+            category: 'parse',
+            code: 'JSONDecodeError',
+            message: 'Expecting property name enclosed in double quotes',
+            location: { path: 'frontend/settings.json', line: 10, column: 5 },
+            command: null,
+            logPaths: [],
+            excerpt: 'invalid source'
+          }
+        ]
+      },
       repair: { status: 'awaiting_confirmation', planId: 'plan-1', message: '请确认计划' }
     }
     const events = [
@@ -66,6 +82,15 @@ try {
     { threadId: 'repair-session', onUpdate: (event) => updates.push(event.status) }
   )
   assert.equal(value.repair?.planId, 'plan-1')
+  assert.deepEqual(
+    value.runtime?.diagnostics?.[0].location,
+    {
+      path: 'frontend/settings.json',
+      line: 10,
+      column: 5
+    },
+    '结构化诊断必须经标准客户端完整传递，不得退化为摘要'
+  )
   assert.ok(updates.includes('completed'))
   assert.deepEqual(forwarded, {
     workspace: '/workspace',

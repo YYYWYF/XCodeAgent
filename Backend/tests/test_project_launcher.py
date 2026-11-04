@@ -1323,7 +1323,7 @@ class ProjectLauncherTests(unittest.TestCase):
                 ),
                 patch(
                     "app.services.project_launcher.launch_backend_project",
-                    side_effect=lambda _root: calls.append("backend") or {
+                    side_effect=lambda _root, **_kwargs: calls.append("backend") or {
                         "status": "running",
                         "_process": backend_process,
                     },

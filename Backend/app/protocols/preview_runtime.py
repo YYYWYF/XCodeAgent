@@ -25,6 +25,7 @@ from app.services.project_launcher import launch_project_preview, stop_project_p
 from app.services.preview_runtime_worker import run_preview_worker
 from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.run_lease import workspace_run_leases
+from app.domain.preview_diagnostics import PreviewDiagnostic
 
 
 class PreviewRuntimeInput(BaseModel):
@@ -70,7 +71,7 @@ async def _finish_leave_cleanup(workspace: str, job: asyncio.Task[Any] | None) -
 
 def preview_runtime_capabilities() -> dict[str, Any]:
     """发布当前独立预览协议。"""
-    return {"name": "preview-runtime", "endpoint": "/preview-runtime/run", "transport": "ag-ui-sse", "actions": list(PreviewRuntimeInput.model_fields["action"].annotation.__args__), "customEventName": "preview-runtime", "stateSnapshotKey": "previewRuntime", "workflowIndependent": True}
+    return {"name": "preview-runtime", "endpoint": "/preview-runtime/run", "transport": "ag-ui-sse", "actions": list(PreviewRuntimeInput.model_fields["action"].annotation.__args__), "customEventName": "preview-runtime", "stateSnapshotKey": "previewRuntime", "workflowIndependent": True, "diagnosticsField": "runtime.diagnostics", "diagnosticCategories": list(PreviewDiagnostic.model_fields["category"].annotation.__args__)}
 
 
 def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:

@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.preview_diagnostics import launch_diagnostics, make_diagnostic, read_json_object
 from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
 from app.utils.subprocess_platform import preview_process_creation_options
@@ -69,11 +70,13 @@ def launch_frontend_project(
         if package_path is None:
             return _failed_launch("未找到前端 package.json。", root=root)
 
-    package_json = _read_package_json(package_path)
+    package_json, diagnostics = read_json_object(root, package_path, "frontend_config")
     if package_json is None:
         return _failed_launch(
             f"无法读取或解析 package.json：{_relative(package_path, root)}",
             root=root,
+            package_json_path=package_path,
+            diagnostics=diagnostics,
         )
 
     scripts = package_json.get("scripts") if isinstance(package_json.get("scripts"), dict) else {}
@@ -120,6 +123,7 @@ def launch_frontend_project(
             f"未找到包管理器命令：{package_manager}",
             root=root,
             package_json_path=package_path,
+            category="dependency",
         )
 
     if skip_install:
@@ -144,7 +148,7 @@ def launch_frontend_project(
             runtime_root=runtime_root,
         )
     if install_result["returncode"] != 0:
-        return {
+        result = {
             **_base_launch_payload(
                 root=root,
                 package_json_path=package_path,
@@ -160,6 +164,8 @@ def launch_frontend_project(
             ),
             "install": install_result,
         }
+        result["diagnostics"] = launch_diagnostics(root, "frontend", result)
+        return result
 
     launch_result, process = _start_dev_server(
         package_manager_command=package_manager_command,
@@ -203,7 +209,7 @@ def launch_frontend_project(
     else:
         message = "前端服务健康检查超时。"
 
-    return {
+    result = {
         **_base_launch_payload(
             root=root,
             package_json_path=package_path,
@@ -222,6 +228,8 @@ def launch_frontend_project(
             "ready_checked_at": datetime.now(UTC).isoformat(),
         },
     }
+    result["diagnostics"] = launch_diagnostics(root, "frontend", result)
+    return result
 
 
 def stop_frontend_project(
@@ -968,13 +976,19 @@ def _failed_launch(
     *,
     root: Path,
     package_json_path: Path | None = None,
+    diagnostics: list[dict[str, Any]] | None = None,
+    category: str = "process",
 ) -> dict[str, Any]:
-    return {
+    """统一返回启动失败摘要及可进入后续诊断的结构化证据。"""
+    result = {
         "status": "failed",
         "message": message,
         "workspace": str(root),
         "package_json_path": str(package_json_path) if package_json_path else None,
+        "diagnostics": diagnostics or [make_diagnostic(stage="frontend_validation", category=category, message=message)],
     }
+    result["diagnostics"] = launch_diagnostics(root, "frontend", result)
+    return result
 
 
 def _relative(path: Path, root: Path) -> str:

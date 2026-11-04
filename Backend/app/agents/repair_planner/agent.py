@@ -8,6 +8,7 @@ from app.agents.workspace_scope import (
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
+from app.middleware.preview_diagnosis_scope import PreviewDiagnosisScopeMiddleware
 
 
 def create_repair_planner_agent(
@@ -49,6 +50,7 @@ def create_repair_planner_agent(
         skills=[USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=[],
+        middleware=[PreviewDiagnosisScopeMiddleware()],
         backend=create_workspace_backend(
             workspace_root,
             user_skills_backend=user_skills_backend,

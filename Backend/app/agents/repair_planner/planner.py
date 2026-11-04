@@ -69,6 +69,20 @@ def _test_repair_planning_prompt(
 def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
     """构造包含结构化业务资源扩展协议的构建失败修复提示。"""
 
+    preview_guidance = ""
+    if repair_input.get("source") == "preview_startup":
+        preview_guidance = (
+            "Preview startup diagnosis: failure.diagnostics contains the actual parser/command/process evidence. "
+            "Read failure.sourceContext and candidateFiles first; inspect a focused additional window only if needed. "
+            "A parser location or compiler location is direct evidence, not a reason to search for the platform's "
+            "error-message implementation. Empty logs mean that stage produced no output; do not repeatedly search "
+            "empty logs. Use only this attempt's logPaths. Never inspect old repair documents or your own runtime "
+            "state for the root cause. Expand to related project files only when current evidence requires it. "
+            "Once evidence supports a bounded fix, immediately return the RepairPlan with reason, strategy, exact "
+            "files and concrete task descriptions. Do not keep exploring without new evidence. If evidence is "
+            "insufficient, return terminal_failure and specify the missing information. Environmental failures "
+            "must report the actual missing tool/service/credential, never invent configuration or secrets.\n\n"
+        )
     return (
         "You are the RepairPlanner Agent for a build scheduler.\n"
         "This is a planning-only DeepAgent node. Do not edit files, do not run code, "
@@ -113,7 +127,7 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         "return acceptance_criteria, acceptance_checks, business_acceptance_checks, "
         "verification_commands, or evidence: the platform recompiles attempt-specific "
         "engineering checks and inherits the parent task's business checks exactly.\n\n"
-        f"RepairPlannerInput:\n{json.dumps(repair_input, ensure_ascii=False, indent=2)}"
+        f"{preview_guidance}RepairPlannerInput:\n{json.dumps(repair_input, ensure_ascii=False, indent=2)}"
     )
 
 
@@ -122,14 +136,19 @@ def _invoke_repair_planner_agent(
     prompt: str,
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
+    diagnostic_scope: dict[str, Any] | None = None,
 ) -> str:
     """使用本次工作流的技能白名单调用修复规划 Deep Agent。"""
 
     from app.agents import create_agent_bundle
 
-    result = create_agent_bundle(workspace, selected_skill_names).repair_planner.invoke(
-        {"messages": [{"role": "user", "content": prompt}]}
-    )
+    agent = create_agent_bundle(workspace, selected_skill_names).repair_planner
+    payload = {"messages": [{"role": "user", "content": prompt}]}
+    if diagnostic_scope is not None:
+        # 每次诊断单独记录证据摘要，不复用缓存 Agent 上次调用的探索进度。
+        result = agent.invoke(payload, config={"metadata": {"preview_diagnosis": {**diagnostic_scope, "observations": {}}}})
+    else:
+        result = agent.invoke(payload)
     return last_agent_text(result)
 
 
@@ -146,6 +165,7 @@ def plan_build_failure_repair_with_repair_planner_agent(
         prompt=_build_failure_repair_prompt(repair_input=repair_input),
         workspace=workspace,
         selected_skill_names=selected_skill_names,
+        diagnostic_scope={"logPaths": repair_input.get("failure", {}).get("logPaths", [])} if repair_input.get("source") == "preview_startup" else None,
     )
     parsed = extract_json_object(agent_note)
     if not parsed:

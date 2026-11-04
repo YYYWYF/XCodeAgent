@@ -68,6 +68,7 @@ def launch_backend_project(workspace_path: str | Path, *, on_progress: Callable[
             pom_path=pom_path,
             runtime_root=runtime_root,
             failed_stage="backend_validation",
+            category="dependency",
         )
     java_command = shutil.which("java")
     if not java_command:
@@ -78,6 +79,7 @@ def launch_backend_project(workspace_path: str | Path, *, on_progress: Callable[
             pom_path=pom_path,
             runtime_root=runtime_root,
             failed_stage="backend_validation",
+            category="dependency",
         )
 
     runtime_root.mkdir(parents=True, exist_ok=True)
@@ -683,10 +685,13 @@ def _failed_backend_launch(
     jar_candidates: list[Path] | None = None,
     server: dict[str, Any] | None = None,
     prebuild_cleanup: dict[str, Any] | None = None,
+    category: str = "process",
 ) -> dict[str, Any]:
     """构造包含失败阶段和可审计证据的 Java 后端失败结果。"""
 
-    return {
+    from app.services.preview_diagnostics import launch_diagnostics, make_diagnostic
+
+    result = {
         **_base_backend_launch_payload(
             root=root,
             backend_root=backend_root,
@@ -704,6 +709,10 @@ def _failed_backend_launch(
         "jar_candidates": [str(path) for path in (jar_candidates or [])],
         "server": server,
     }
+    result["diagnostics"] = launch_diagnostics(root, "backend", result)
+    if category != "process" and not any((build, repackage, server)):
+        result["diagnostics"] = [make_diagnostic(stage=failed_stage, category=category, message=message)]
+    return result
 
 
 def _relative(path: Path, root: Path) -> str:

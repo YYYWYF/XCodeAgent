@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from app.services.preview_runtime_guard import maintenance_owner
+from app.services.preview_diagnostics import diagnostics_from_command, launch_diagnostics
 
 
 _lock = RLock()
@@ -93,7 +94,7 @@ def read_record(workspace: str | Path) -> dict[str, Any]:
     path = runtime_root(workspace) / "preview-runtime.json"
     with _lock:
         if not path.exists():
-            return {"attemptId": "", "status": "stopped", "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}}
+            return {"attemptId": "", "status": "stopped", "diagnostics": [], "frontend": {"status": "stopped"}, "backend": {"status": "stopped"}}
         return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -118,7 +119,7 @@ def begin_attempt(workspace: str | Path) -> str:
                 if path.exists() and not path.is_symlink():
                     path.write_text("", encoding="utf-8")
         attempt = uuid4().hex
-        write_record(workspace, {"attemptId": attempt, "startedAt": datetime.now(UTC).isoformat(), "status": "starting", "frontend": {"status": "stopped"}, "backend": {"status": "starting"}})
+        write_record(workspace, {"attemptId": attempt, "startedAt": datetime.now(UTC).isoformat(), "status": "starting", "diagnostics": [], "frontend": {"status": "stopped"}, "backend": {"status": "starting"}})
         return attempt
 
 
@@ -170,6 +171,7 @@ def mark_interrupted_attempt(workspace: str | Path, *, layer: str) -> None:
             message=message,
             previewUrl=None,
             failedStage="launch_interrupted",
+            diagnostics=diagnostics_from_command(workspace, "launch_interrupted", "process", message),
         )
         if layer in {"frontend", "backend"}:
             part = value.get(layer) if isinstance(value.get(layer), dict) else {}
@@ -186,6 +188,10 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
             part = result.get(layer) or {}
             server = part.get("server") or {}
             value[layer] = {"status": part.get("status", "stopped"), "message": redact(str(part.get("message") or ("未启动：后端启动失败" if layer == "frontend" and result.get("status") == "failed" else ""))), "pid": server.get("pid"), "port": _coerce_port(server.get("port") or part.get("port")) or _port_from_url(part.get("preview_url")), "url": part.get("preview_url"), "command": str(server.get("command") or ""), "ready": server.get("ready", False)}
+        # 只保留本轮失败证据，成功或主动停止不得带入旧故障。
+        value["diagnostics"] = result.get("diagnostics", []) if result.get("status") == "failed" else []
+        if result.get("status") == "failed" and not value["diagnostics"]:
+            value["diagnostics"] = [item for layer in ("backend", "frontend") for item in launch_diagnostics(workspace, layer, result.get(layer) or {})]
         write_record(workspace, value)
 
 
@@ -207,6 +213,9 @@ def record_frontend_runtime(workspace: str | Path, result: dict[str, Any]) -> No
         value["previewUrl"] = result.get("preview_url") if result.get("status") == "running" else None
         if result.get("status") == "failed":
             value["failedStage"] = "frontend_start"
+            value["diagnostics"] = launch_diagnostics(workspace, "frontend", result)
+        elif value["status"] != "failed":
+            value["diagnostics"] = []
         write_record(workspace, value)
 
 
@@ -294,6 +303,10 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                 message = "服务进程已退出或就绪检测失败，请重启服务。"
                 part.update(status="failed", message=message)
                 value.update(status="failed", message=message, failedStage=f"{layer}_process", previewUrl=None)
+                value["diagnostics"] = diagnostics_from_command(workspace, f"{layer}_process", "readiness", message, {
+                    "stdout_log": str(root / f"{layer}.stdout.log"),
+                    "stderr_log": str(root / f"{layer}.stderr.log"),
+                })
     # 必须在实时健康校准之后计算；否则历史 running 在本轮变成 failed 时，
     # UI 会显示失败却仍把诊断按钮禁用。
     value["repairAvailable"] = bool(

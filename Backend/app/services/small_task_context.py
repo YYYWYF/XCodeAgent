@@ -28,6 +28,15 @@ def repair_candidate_files(task: dict[str, Any], workspace: str | None) -> list[
         execution.get("stdout_tail"), execution.get("stderr_tail"), evidence.get("evidence"),
     ))
     candidates: list[str] = []
+    # 独立预览与命令失败共用诊断位置，不再让执行 Agent 丢失规划器已定位的文件。
+    if root is not None:
+        from app.services.preview_diagnostics import safe_diagnostic_path
+
+        for diagnostic in evidence.get("diagnostics", []):
+            location = diagnostic.get("location") or {}
+            relative = safe_diagnostic_path(root, str(location.get("path") or ""))
+            if relative and (root / relative).is_file() and _path_matches_task(relative, task):
+                candidates.append(relative)
     for match in _COMPILER_PATH.finditer(text[:24_000]):
         reported = match.group(1).strip().replace("\\", "/")
         # 诊断相对路径按真实命令 cwd 解析；绝对宿主路径必须仍位于工作区。

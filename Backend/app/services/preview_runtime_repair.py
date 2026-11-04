@@ -6,7 +6,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
-from app.services.preview_runtime_state import read_logs, redact, runtime_root, runtime_snapshot
+from app.services.preview_runtime_state import redact, runtime_root, runtime_snapshot
+from app.services.preview_repair_evidence import evidence_markdown, repair_evidence
 
 
 def repair_path(workspace: str, thread_id: str) -> Path:
@@ -79,7 +80,7 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
     record = runtime_snapshot(workspace, logs=False)
     if record.get("failedStage") == "backend_database_resource":
         return {**previous, "status": "failed", "message": "当前失败来自数据库资源，请先处理实体表、SaaS 或连接配置，再重新启动；无需修改业务代码。"}
-    evidence = {"launch": record, "logs": read_logs(workspace), "validation": previous.get("validation")}
+    evidence = repair_evidence(workspace, record, previous)
     iteration = int(previous.get("iteration", 0))
     if iteration >= 3:
         return {**previous, "status": "failed", "message": "已达到 3 轮修复上限，请查看日志并手动处理。"}
@@ -128,8 +129,10 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
         raise ValueError("诊断没有产生可执行的修复任务。")
     if len(tasks) > 10 or len(set(paths)) > 100:
         raise ValueError("修复范围过大，请拆分问题或进入正式修订。")
-    markdown = "# 预览服务修复计划\n\n" + str(plan.get("strategy") or "修复当前启动失败") + "\n\n" + "\n".join(f"- {task['title']}：{task['description']}\n  文件：{', '.join(task['allowed_paths'])}" for task in tasks)
-    return {"status": "awaiting_confirmation", "planId": uuid4().hex, "attemptId": record.get("attemptId"), "iteration": iteration, "tasks": tasks, "paths": paths, "digest": source_digest(workspace, paths), "markdown": markdown, "message": "诊断完成，请确认本轮修复计划。", "codeChangeSets": previous.get("codeChangeSets", [])}
+    strategy = str(plan.get("strategy") or "修复当前启动失败")
+    reason = str(plan.get("reason") or strategy)
+    markdown = "# 预览服务修复计划\n\n" + reason + "\n\n" + strategy + "\n\n## 故障证据\n\n" + evidence_markdown(evidence) + "\n\n## 修复任务\n\n" + "\n".join(f"- {task['title']}：{task['description']}\n  文件：{', '.join(task['allowed_paths'])}" for task in tasks)
+    return {"status": "awaiting_confirmation", "planId": uuid4().hex, "attemptId": record.get("attemptId"), "iteration": iteration, "strategy": strategy, "reason": reason, "tasks": tasks, "paths": paths, "digest": source_digest(workspace, paths), "markdown": redact(markdown), "message": "诊断完成，请确认本轮修复计划。", "codeChangeSets": previous.get("codeChangeSets", [])}
 
 
 def execute_repair(workspace: str, repair: dict[str, Any], report: Any, cancelled: Any) -> dict[str, Any]:
@@ -139,7 +142,7 @@ def execute_repair(workspace: str, repair: dict[str, Any], report: Any, cancelle
     from app.services.project_launcher import launch_project_preview
     if source_digest(workspace, repair["paths"]) != repair["digest"]:
         raise ValueError("待确认文件已发生变化，请重新诊断。")
-    state = {"workspace": workspace}
+    state = {"workspace": workspace, "repair_task_plan": {"strategy": repair.get("strategy", "")}}
     result = execute_small_task_batch(state=state, tasks=repair["tasks"], source="preview_runtime", on_tool_activity=lambda activity: report("tool", str(activity.get("tool_name") or activity.get("name") or "正在执行修复工具")))
     updated = {**repair, "iteration": repair["iteration"], "codeChangeSets": [*repair.get("codeChangeSets", []), *result.get("codeChangeSets", [])]}
     if cancelled.is_set():
