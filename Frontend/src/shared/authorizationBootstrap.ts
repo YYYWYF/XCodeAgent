@@ -12,6 +12,12 @@ export type WorkflowAuthorizationBootstrap = {
   logDirectory?: string
   manifestFingerprint?: string
   durationMs?: number
+  executor?: 'builtin_saas'
+  schemaReady?: boolean
+  seedReady?: boolean
+  operationId?: string
+  operationStatus?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN' | 'SCHEMA_READY'
+  initializedTables?: string[]
 }
 
 /** 实时和历史共用严格白名单，只保留有界文本与合法结果字段。 */
@@ -27,6 +33,19 @@ export function readAuthorizationBootstrap(
   }
   const result: WorkflowAuthorizationBootstrap = {
     status: raw.status as WorkflowAuthorizationBootstrap['status']
+  }
+  if (raw.executor === 'builtin_saas') result.executor = 'builtin_saas'
+  if (['RUNNING', 'SUCCEEDED', 'FAILED', 'UNKNOWN', 'SCHEMA_READY'].includes(String(raw.operationStatus))) {
+    result.operationStatus = raw.operationStatus as WorkflowAuthorizationBootstrap['operationStatus']
+  }
+  if (typeof raw.schemaReady === 'boolean') result.schemaReady = raw.schemaReady
+  if (raw.schemaReady === true && Array.isArray(raw.initializedTables) && raw.initializedTables.length === 4 &&
+      new Set(raw.initializedTables).size === 4 && raw.initializedTables.every((name) => typeof name === 'string' && /^[a-zA-Z0-9_]{1,64}$/.test(name))) {
+    result.initializedTables = [...raw.initializedTables] as string[]
+  }
+  if (typeof raw.seedReady === 'boolean') result.seedReady = raw.seedReady
+  if (typeof raw.operationId === 'string' && /^[1-9][0-9]*$/.test(raw.operationId)) {
+    result.operationId = raw.operationId.slice(0, 128)
   }
   if (
     ['direct', 'builtin', 'dbid', 'static', 'external_api', 'unknown'].includes(
@@ -76,8 +95,16 @@ export function readAuthorizationBootstrap(
 
 /** 按真实初始化结果生成节点与详情共用标题，节点 completed 不代表数据库成功。 */
 export function authorizationBootstrapTitle(
-  status: WorkflowAuthorizationBootstrap['status']
+  status: WorkflowAuthorizationBootstrap['status'],
+  result?: WorkflowAuthorizationBootstrap
 ): string {
+  if (result?.executor === 'builtin_saas') {
+    return result.schemaReady
+      ? '权限数据库初始化已就绪'
+      : result.operationStatus === 'RUNNING'
+        ? '权限表初始化执行中'
+        : '权限表初始化未完成／待核对'
+  }
   return {
     executed: '权限数据库初始化成功',
     reused: '权限数据库初始化成功（复用已有结果）',

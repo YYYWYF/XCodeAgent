@@ -19,8 +19,8 @@ class DatabaseTableOperation(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="ignore")
     operationId: str = Field(pattern=r"^[1-9][0-9]*$")
-    mode: Literal["CREATE", "REBUILD", "DROP", "RELEASE"]
-    tableName: str = Field(max_length=64)
+    mode: Literal["CREATE", "CREATE_BATCH", "REBUILD", "DROP", "RELEASE"]
+    tableName: str = Field(default="", max_length=64)
     tableNames: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(max_length=200)
     status: Literal["RUNNING", "SUCCEEDED", "FAILED", "UNKNOWN"]
     createdAt: str = Field(max_length=64)
@@ -30,8 +30,10 @@ class DatabaseTableOperation(BaseModel):
     def validate_single_table(self) -> "DatabaseTableOperation":
         """单表动作必须声明目标，整份资源回收由目标清单表达范围。"""
 
-        if self.mode != "RELEASE" and not self.tableName:
+        if self.mode not in {"RELEASE", "CREATE_BATCH"} and not self.tableName:
             raise ValueError("单表操作缺少目标表名。")
+        if self.mode == "CREATE_BATCH" and (not self.tableNames or len(set(self.tableNames)) != len(self.tableNames)):
+            raise ValueError("批量建表必须提供唯一目标表清单。")
         return self
 
     def targets_table(self, table: str) -> bool:

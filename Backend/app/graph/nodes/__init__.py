@@ -2,6 +2,7 @@ from app.graph.nodes.task_planning_adapter import (
     create_async_workflow_planning_adapter,
 )
 from app.graph.nodes.authorization_bootstrap import authorization_bootstrap
+from app.graph.nodes.builtin_authorization_bootstrap import builtin_authorization_bootstrap
 from app.graph.nodes.application_revision import start_application_revision
 from app.graph.nodes.application_technical_planning import (
     technical_planning_begin,
@@ -37,6 +38,7 @@ from app.graph.subgraphs import build
 __all__ = [
     "acceptance",
     "authorization_bootstrap",
+    "builtin_authorization_bootstrap",
     "build",
     "classify_request_complexity",
     "development_readiness_gate",

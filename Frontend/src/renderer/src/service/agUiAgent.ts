@@ -925,10 +925,11 @@ function readProcessStep(value: unknown): ProcessStepRecord | undefined {
       step.buildExecutionSlice && typeof step.buildExecutionSlice === 'object'
         ? (step.buildExecutionSlice as import('../typings').WorkflowBuildExecutionSlice)
         : undefined,
-    authorizationBootstrap:
-      step.nodeName === 'authorization_bootstrap'
-        ? readAuthorizationBootstrap(step.authorizationBootstrap)
-        : undefined,
+    authorizationBootstrap: ['authorization_bootstrap', 'builtin_authorization_bootstrap'].includes(
+      String(step.nodeName || '')
+    )
+      ? readAuthorizationBootstrap(step.authorizationBootstrap)
+      : undefined,
     ...(checks ? { checks } : {}),
     ...(dagGeneration ? { dagGeneration } : {}),
     ...(workspaceInspection ? { workspaceInspection } : {}),

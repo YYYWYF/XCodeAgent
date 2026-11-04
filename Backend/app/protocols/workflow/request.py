@@ -1399,6 +1399,7 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
             "inspect_workspace",
             "prepare_build_tasks",
             "authorization_bootstrap",
+            "builtin_authorization_bootstrap",
             "build",
             "unit_test",
             "unit_test_repair",
@@ -1898,7 +1899,7 @@ def _debug_resume_values(
         build_task_plan = load_build_task_plan_json(build_task_plan_path)
         values["build_task_plan_path"] = str(build_task_plan_path)
         values["build_task_plan"] = build_task_plan
-        if debug_resume_from in {"build", "authorization_bootstrap"}:
+        if debug_resume_from in {"build", "authorization_bootstrap", "builtin_authorization_bootstrap"}:
             # 只有 Build 入口需要从权威 DAG 初始化任务；下游节点必须沿用
             # checkpoint 中已经执行过的任务状态，不能重新注入 pending 任务。
             values["tasks"] = tasks_from_build_task_plan(build_task_plan)

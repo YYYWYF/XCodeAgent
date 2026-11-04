@@ -14,6 +14,7 @@ const WORKFLOW_DEBUG_NODES_BY_STAGE: Record<WorkflowDebugStage, readonly Workflo
     { value: 'inspect_workspace', title: '检查工作区' },
     { value: 'prepare_build_tasks', title: '生成构建任务' },
     { value: 'authorization_bootstrap', title: '初始化权限配置' },
+    { value: 'builtin_authorization_bootstrap', title: '初始化 Builtin 权限表 Schema' },
     { value: 'build', title: '代码生成与构建' },
     { value: 'unit_test', title: '运行单元测试' },
     { value: 'unit_test_repair', title: '修复单元测试' },

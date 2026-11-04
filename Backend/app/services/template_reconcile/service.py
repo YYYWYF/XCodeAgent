@@ -86,6 +86,8 @@ class TemplateReconcileService:
             validate_working_surfaces(store, newly_installed)
             state_entry = store.entry((WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix())
             state_entry.working = (json.dumps(next_state.model_dump(mode="json", exclude={"managedConfiguration"}), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            from app.services.authorization_projection_sources import stage_authorization_sources
+            stage_authorization_sources(store, next_state)
             apply_working_copy_v4(root, store)
             return "CHANGED"
         finally:
@@ -120,6 +122,8 @@ class TemplateReconcileService:
                 raise TemplateStateError("CAPABILITY_REMOVAL_UNSUPPORTED：V3 第一版不支持卸载已生效 Capability。")
             store = WorkingCopyStoreV3(root)
             UpdatePackageExecutorV3().execute(package, store, validated.payloads)
+            from app.services.authorization_projection_sources import stage_authorization_sources
+            stage_authorization_sources(store, package.nextTemplateState)
             apply_working_copy_v3(root, store)
             if mode == "APPLY":
                 write_template_state_v3(root, package.nextTemplateState)

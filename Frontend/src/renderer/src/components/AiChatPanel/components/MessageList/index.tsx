@@ -1022,6 +1022,7 @@ export default function MessageList({
                           visibleProcessSteps.length > 0 &&
                           !designPhasePlanning && (
                             <ProcessSteps
+                              workspaceRoot={workspaceRoot}
                               conversation={conversation}
                               dagPendingPlanCompletion={dagPendingPlanCompletion}
                               loading={messageLoading}

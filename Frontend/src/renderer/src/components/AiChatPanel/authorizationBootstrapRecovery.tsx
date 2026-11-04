@@ -42,7 +42,9 @@ export function authorizationBootstrapRecoveryOwner(input: {
     .reverse()
     .find(
       (item) =>
-        item.nodeName === 'authorization_bootstrap' && item.type === 'workflow.node.completed'
+        ['authorization_bootstrap', 'builtin_authorization_bootstrap'].includes(
+          item.nodeName || ''
+        ) && item.type === 'workflow.node.completed'
     )
   const raw = (event?.data?.detail as Record<string, unknown> | undefined)?.authorizationBootstrap
   const bootstrap = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : undefined
@@ -50,12 +52,18 @@ export function authorizationBootstrapRecoveryOwner(input: {
   const target = incident?.kind === 'recoverable' ? incident.action.targetNode : undefined
   const currentNode = candidate?.currentNode || workflow.summary.phase
   if (
-    (target && target !== 'authorization_bootstrap') ||
-    (!target && currentNode !== 'authorization_bootstrap')
+    (target && !['authorization_bootstrap', 'builtin_authorization_bootstrap'].includes(target)) ||
+    (!target &&
+      !['authorization_bootstrap', 'builtin_authorization_bootstrap'].includes(currentNode || ''))
   )
     return undefined
   // 只有确认存在承载节点才撤去底部卡，避免错误与重试入口一起消失。
-  if (!event && !message.processSteps?.some((step) => step.nodeName === 'authorization_bootstrap'))
+  if (
+    !event &&
+    !message.processSteps?.some((step) =>
+      ['authorization_bootstrap', 'builtin_authorization_bootstrap'].includes(step.nodeName || '')
+    )
+  )
     return undefined
   return { runId, threadId }
 }

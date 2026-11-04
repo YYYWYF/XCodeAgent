@@ -544,22 +544,12 @@ def _workflow_next_nodes(node_name: str, update: dict[str, Any]) -> list[str]:
     if node_name == "inspect_workspace":
         return ["prepare_build_tasks"]
     if node_name == "prepare_build_tasks":
-        if update.get("status") == "requires_user_input":
-            return []
-        if update.get("status") == "failed":
-            return ["handle_failure"]
-        technical_plan = update.get("technical_plan")
-        manifest = (
-            technical_plan.get("authorization_manifest")
-            if isinstance(technical_plan, dict)
-            else None
-        )
-        return (
-            ["authorization_bootstrap"]
-            if isinstance(manifest, dict) and manifest.get("resources")
-            else ["build"]
-        )
-    if node_name == "authorization_bootstrap":
+        # 与 Graph 共用只读分流，不能仅凭 Manifest 资源预测权限初始化。
+        from app.graph.workflow import route_prepare_build_tasks
+
+        target = route_prepare_build_tasks(update)
+        return [] if target == "await_user_input" else [target]
+    if node_name in {"authorization_bootstrap", "builtin_authorization_bootstrap"}:
         return ["build"] if update.get("status") == "completed" else ["handle_failure"]
     if node_name == "build":
         build_summary = update.get("build_summary")
@@ -676,6 +666,7 @@ def _public_workflow_state(
             public_state["productConversationResult"] = product_result
     bootstrap = value.get("authorization_bootstrap_result")
     public_state.pop("authorization_bootstrap_result", None)
+    public_state.pop("builtin_authorization_bootstrap_result", None)
     if isinstance(bootstrap, dict):
         public_state["authorizationBootstrap"] = {
             "status": bootstrap.get("status"),
@@ -686,6 +677,12 @@ def _public_workflow_state(
             "exitCode": bootstrap.get("exit_code"),
             "failureCategory": bootstrap.get("failure_category"),
             "logDirectory": bootstrap.get("log_directory"),
+            "executor": bootstrap.get("executor"),
+            "schemaReady": bootstrap.get("schema_ready"),
+            "seedReady": bootstrap.get("seed_ready"),
+            "operationId": bootstrap.get("operation_id"),
+            "operationStatus": bootstrap.get("operation_status"),
+            "initializedTables": bootstrap.get("initialized_tables"),
         }
     retry = _workflow_code_review_retry(value.get("code_review_retry"))
     public_state.pop("code_review_retry", None)
@@ -1014,7 +1011,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                 "buildResults": update.get("build_results", []),
             },
         }
-    if node_name == "authorization_bootstrap":
+    if node_name in {"authorization_bootstrap", "builtin_authorization_bootstrap"}:
         result = update.get("authorization_bootstrap_result")
         result = result if isinstance(result, dict) else {}
         return {
@@ -1030,6 +1027,9 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                         "message": "message", "failureCategory": "failure_category",
                         "exitCode": "exit_code", "logDirectory": "log_directory",
                         "manifestFingerprint": "manifest_fingerprint", "durationMs": "duration_ms",
+                        "executor": "executor", "schemaReady": "schema_ready",
+                        "seedReady": "seed_ready", "operationId": "operation_id", "operationStatus": "operation_status",
+                        "initializedTables": "initialized_tables",
                     }.items()
                     if internal in result
                 }

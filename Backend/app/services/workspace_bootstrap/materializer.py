@@ -18,6 +18,7 @@ from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import TemplatePackageError, WorkspaceBootstrapError
+from app.services.authorization_projection_sources import SOURCE_RECEIPT
 
 BOOTSTRAP_STAGING_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "bootstrap-staging"
 _ROOTS = ("frontend", "backend")
@@ -31,6 +32,7 @@ BOOTSTRAP_MANAGED_RELATIVE_PATHS: tuple[Path, ...] = (
     Path(_ROOTS[1]),
     Path(".git"),
     TEMPLATE_STATE_RELATIVE_PATH,
+    SOURCE_RECEIPT,
     BOOTSTRAP_STAGING_RELATIVE_PATH,
 )
 
@@ -110,6 +112,9 @@ class WorkspaceMaterializer:
         journal = BootstrapJournal(workspace=root)
         try:
             journal.staging = self._extract_to_staging(root, Path(archive_path))
+            # 来源摘要在隔离 ZIP 内容上生成，不能在首次投影时信任可编辑工程当前值。
+            from app.services.authorization_projection_sources import record_materialized_authorization_sources
+            record_materialized_authorization_sources(journal.staging, template_state)
             manifest = _build_file_manifest(journal.staging)
             targets = _materialization_targets(journal.staging)
             _validate_materialization_targets_available(root, targets)

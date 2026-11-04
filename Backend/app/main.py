@@ -24,6 +24,7 @@ from app.graph.direct_modification_workflow import clear_direct_modification_gra
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
+from app.protocols.builtin_authorization import router as builtin_authorization_router, builtin_authorization_capabilities
 from app.protocols.agent_files import (
     agent_files_capabilities,
     build_agent_files_ag_ui_stream,
@@ -154,6 +155,7 @@ app = FastAPI(
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
 app.include_router(entity_tables_router)
+app.include_router(builtin_authorization_router)
 app.include_router(telemetry_router)
 app.include_router(backend_logs_router)
 
@@ -192,6 +194,7 @@ async def health() -> dict[str, object]:
             "application_deletion": application_deletion_capabilities(),
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
+            "builtin_authorization": builtin_authorization_capabilities(),
             "preview_runtime": preview_runtime_capabilities(),
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),

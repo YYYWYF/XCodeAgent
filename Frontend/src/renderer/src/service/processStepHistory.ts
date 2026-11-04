@@ -19,6 +19,7 @@ const WORKFLOW_NODE_LABELS: Record<string, string> = {
   inspect_database_context: '数据库上下文检查',
   prepare_build_tasks: '生成开发任务计划',
   authorization_bootstrap: '权限数据库初始化',
+  builtin_authorization_bootstrap: 'Builtin 权限表 Schema 初始化',
   build: '代码生成与构建协调',
   unit_test: '开发阶段单元测试',
   unit_test_repair: '单元测试局部修复',
@@ -352,17 +353,19 @@ function completedWorkflowProcessSteps(
       event.nodeName === 'entity_source_binding'
         ? readProjectPlanUpdate(detail.projectPlanUpdate)
         : undefined
-    const authorizationBootstrap =
-      event.nodeName === 'authorization_bootstrap'
-        ? readAuthorizationBootstrap(detail.authorizationBootstrap)
-        : undefined
+    const authorizationBootstrap = [
+      'authorization_bootstrap',
+      'builtin_authorization_bootstrap'
+    ].includes(event.nodeName || '')
+      ? readAuthorizationBootstrap(detail.authorizationBootstrap)
+      : undefined
     const step: ProcessStepRecord = {
       id: stepId,
       kind: 'workflow',
       status,
       title:
         authorizationBootstrap && authorizationBootstrap.failureCategory !== 'build_plan_invalid'
-          ? authorizationBootstrapTitle(authorizationBootstrap.status)
+          ? authorizationBootstrapTitle(authorizationBootstrap.status, authorizationBootstrap)
           : `${processStepTitlePrefix(status)} ${label}`,
       detail: event.message || '',
       sequence: index + 1,

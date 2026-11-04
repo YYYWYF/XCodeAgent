@@ -18,7 +18,7 @@ _STAGES = {
     "technical_planning_begin", "technical_planning_generate", "technical_planning_commit",
     "technical_planning_confirm", "template_reconcile",
     "api_design_readiness_gate", "project_planning", "inspect_workspace", "prepare_build_tasks",
-    "authorization_bootstrap", "build", "unit_test", "unit_test_repair",
+    "authorization_bootstrap", "builtin_authorization_bootstrap", "build", "unit_test", "unit_test_repair",
     "integration_test", "small_task_repair", "code_review", "acceptance",
     "test_phase_confirmation", "review_phase_confirmation", "acceptance_phase_confirmation",
     "scan_workspace_code", "scan_change_impact_code", "classify_intent", "execute_frontend",
@@ -27,7 +27,7 @@ _STAGES = {
 }
 _REQUIREMENT_STAGES = {"requirements", "product_planning"}
 _RUNTIME_STAGES = {
-    "api_design_readiness_gate", "prepare_build_tasks", "authorization_bootstrap",
+    "api_design_readiness_gate", "prepare_build_tasks", "authorization_bootstrap", "builtin_authorization_bootstrap",
     "build", "unit_test", "unit_test_repair", "integration_test", "small_task_repair", "code_review",
     "acceptance", "test_phase_confirmation", "review_phase_confirmation", "acceptance_phase_confirmation", "finalize_project",
 }
@@ -47,7 +47,7 @@ _TECHNICAL_STAGES = {
     "technical_planning_begin", "technical_planning_generate", "technical_planning_commit",
     "technical_planning_confirm", "template_reconcile", "project_planning",
 }
-_TASK_PLAN_STAGES = _RUNTIME_STAGES - {"api_design_readiness_gate", "authorization_bootstrap"}
+_TASK_PLAN_STAGES = _RUNTIME_STAGES - {"api_design_readiness_gate", "authorization_bootstrap", "builtin_authorization_bootstrap"}
 _REVIEW_FILE_STAGES = _TASK_PLAN_STAGES - {"prepare_build_tasks", "build"}
 # 仅生成节点的自身旧输出是可选基线，确认及下游执行仍严格读取必需输入。
 _GENERATED_BASELINES = {

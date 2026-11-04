@@ -203,8 +203,12 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
     const status = stringValue(valueItem.status)
     const id = stringValue(valueItem.id)
     if (!id || !PROCESS_STEP_KINDS.has(kind) || !PROCESS_STEP_STATUSES.has(status)) continue
-    const authorizationBootstrap = valueItem.nodeName === 'authorization_bootstrap'
-      ? readAuthorizationBootstrap(valueItem.authorizationBootstrap) : undefined
+    const authorizationBootstrap = [
+      'authorization_bootstrap',
+      'builtin_authorization_bootstrap'
+    ].includes(String(valueItem.nodeName || ''))
+      ? readAuthorizationBootstrap(valueItem.authorizationBootstrap)
+      : undefined
     const checks = normalizeSessionChecks(valueItem.checks)
     const dagGeneration = normalizeSessionDagGeneration(valueItem.dagGeneration)
     const workspaceInspection = normalizeSessionWorkspaceInspection(valueItem.workspaceInspection)

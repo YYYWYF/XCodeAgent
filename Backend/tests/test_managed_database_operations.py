@@ -28,9 +28,9 @@ class ManagedDatabaseOperationTests(unittest.TestCase):
         self.assertNotIn("private-user", str(operation.model_dump()))
 
     def test_all_current_statuses_and_modes_are_readable(self) -> None:
-        """四种模式和四种状态均能独立读取，不将成功记录当作结构通过。"""
+        """当前模式和四种状态均能独立读取，不将成功记录当作结构通过。"""
 
-        for mode in ["CREATE", "REBUILD", "DROP", "RELEASE"]:
+        for mode in ["CREATE", "CREATE_BATCH", "REBUILD", "DROP", "RELEASE"]:
             for status in ["RUNNING", "SUCCEEDED", "FAILED", "UNKNOWN"]:
                 with self.subTest(mode=mode, status=status):
                     operation = parse_database_operations([self.entry(mode=mode, status=status)])[0]

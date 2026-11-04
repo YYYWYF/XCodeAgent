@@ -1660,6 +1660,12 @@ def run_build_scheduler(
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
+    # 模板安装完成且 DAG 门通过后，Builtin 仅恢复本地表名投影，不触发远程初始化。
+    from app.services.builtin_authorization_bootstrap import ensure_builtin_build_projection
+    try:
+        ensure_builtin_build_projection(state)
+    except (OSError, ValueError):
+        return _build_gate_result(state, build_task_plan, ["Builtin 权限工程投影冲突，请核对模板受管文件、绑定及 DDL。"])
     # 绑定先于任何任务派发落盘；恢复时沿用原 Run，避免入口旧 pending 覆盖完成事实。
     if state.get("active_run_id") and state.get("active_thread_id"):
         existing = load_build_execution_record(state, str(state["active_run_id"]))

@@ -1,6 +1,7 @@
 import { authorizationBootstrapTitle } from '../../../../service/authorizationBootstrap'
-import { CheckCircleOutlined, WarningOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, ClockCircleOutlined, WarningOutlined } from '@ant-design/icons'
 import { Button, message } from 'antd'
+import AuthorizationBootstrapRefreshButton from './AuthorizationBootstrapRefreshButton'
 import type { ReactElement, ReactNode } from 'react'
 import type { WorkflowAuthorizationBootstrap } from '../../../../service/authorizationBootstrap'
 import { cx } from '../../../../utils'
@@ -9,13 +10,18 @@ import './AuthorizationBootstrapPanel.less'
 /** 展示权限初始化真实结果及工程原始 DDL，复制操作不改变数据库状态。 */
 export default function AuthorizationBootstrapPanel({
   result,
-  recoveryNotice
+  recoveryNotice,
+  workspaceRoot,
+  onRefreshed
 }: {
+  workspaceRoot?: string
+  onRefreshed?: (result: WorkflowAuthorizationBootstrap) => void
   recoveryNotice?: ReactNode
   result: WorkflowAuthorizationBootstrap
 }): ReactElement | null {
   if (result.status === 'skipped') return null
-  const warning = result.status === 'failed' || result.status === 'manual_required'
+  const running = result.operationStatus === 'RUNNING'
+  const warning = !running && (result.status === 'failed' || result.status === 'manual_required')
   /** 只复制已校验的完整 SQL，并提供明确的复制结果。 */
   async function copyDdl(): Promise<void> {
     if (!result.ddlAvailable || !result.ddl) return
@@ -29,10 +35,27 @@ export default function AuthorizationBootstrapPanel({
   return (
     <section className={cx('authorization-bootstrap-panel')} aria-label="权限数据库初始化结果">
       <p role={warning ? 'status' : undefined}>
-        {warning ? <WarningOutlined /> : <CheckCircleOutlined />}{' '}
-        {authorizationBootstrapTitle(result.status)}
+        {running ? <ClockCircleOutlined /> : warning ? <WarningOutlined /> : <CheckCircleOutlined />}{' '}
+        {authorizationBootstrapTitle(result.status, result)}
       </p>
-      {warning && (
+      {result.executor === 'builtin_saas' && (
+        <>
+          {result.message && <p>{result.message}</p>}
+          {result.schemaReady && result.initializedTables?.length === 4 && (
+            <>
+              <p>以下四张权限表已初始化完成：</p>
+              <ul>{result.initializedTables.map((name) => <li key={name}><code>{name}</code></li>)}</ul>
+            </>
+          )}
+          {result.operationId && <p>操作 ID：{result.operationId}</p>}
+          {result.operationStatus && <p>执行状态：{{ RUNNING: '执行中', SUCCEEDED: '执行成功，待结构核验', FAILED: '执行失败', UNKNOWN: '结果未知', SCHEMA_READY: '四表结构已核验' }[result.operationStatus]}</p>}
+          {result.operationId && (
+            <AuthorizationBootstrapRefreshButton workspaceRoot={workspaceRoot} operationId={result.operationId} onRefreshed={onRefreshed} />
+          )}
+          {!result.schemaReady && recoveryNotice}
+        </>
+      )}
+      {warning && result.executor !== 'builtin_saas' && (
         <>
           {recoveryNotice || (result.message && <p>{result.message}</p>)}
           <p>

@@ -160,6 +160,7 @@ class ProjectState(TypedDict, total=False):
     build_results: list[dict[str, Any]]
     build_summary: dict[str, Any]
     authorization_bootstrap_result: dict[str, Any]
+    builtin_authorization_bootstrap_result: dict[str, Any]
     platform_projection_evidence: dict[str, Any]
     route_projection_evidence: dict[str, Any]
     build_events: Annotated[list[str], add]

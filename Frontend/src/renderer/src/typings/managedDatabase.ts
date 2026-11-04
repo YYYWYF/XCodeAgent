@@ -4,7 +4,15 @@ export type DatabaseDataPage = {
   status: 'SUCCEEDED'
   datasourceKey: string
   tableName: string
-  columns: Array<{ name: string; type: string; nullable: boolean; primaryKey: boolean; autoIncrement: boolean; defaultValue: string | null; description: string }>
+  columns: Array<{
+    name: string
+    type: string
+    nullable: boolean
+    primaryKey: boolean
+    autoIncrement: boolean
+    defaultValue: string | null
+    description: string
+  }>
   rows: Array<Record<string, string | null>>
   pageNumber: number
   pageSize: number
@@ -17,7 +25,7 @@ export type DatabaseDataPage = {
 /** 当前表最近资源操作摘要，编号使用文本，不含 SQL 或管理账号。 */
 export type DatabaseTableOperation = {
   operationId: string
-  mode: 'CREATE' | 'REBUILD' | 'DROP' | 'RELEASE'
+  mode: 'CREATE' | 'CREATE_BATCH' | 'REBUILD' | 'DROP' | 'RELEASE'
   tableName: string
   tableNames: string[]
   status: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'

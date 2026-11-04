@@ -418,8 +418,11 @@ def _runtime_terminal_process_title(
 ) -> str:
     """按步骤终态和动态节点名生成流程标题。"""
 
-    if node_name == "authorization_bootstrap":
+    if node_name in {"authorization_bootstrap", "builtin_authorization_bootstrap"}:
         result = state.get("authorization_bootstrap_result")
+        if isinstance(result, dict) and result.get("executor") == "builtin_saas":
+            return ("权限数据库初始化已就绪" if result.get("schema_ready") else
+                    "权限表初始化执行中" if result.get("operation_status") == "RUNNING" else "权限表初始化未完成／待核对")
         if isinstance(result, dict) and result.get("failure_category") != "build_plan_invalid":
             title = {
                 "executed": "权限数据库初始化成功",
@@ -2195,7 +2198,7 @@ def build_workflow_ag_ui_stream(
                         sequence=process_sequence,
                         authorization_bootstrap=(
                             detail.get("data", {}).get("authorizationBootstrap")
-                            if node_name == "authorization_bootstrap" else None
+                            if node_name in {"authorization_bootstrap", "builtin_authorization_bootstrap"} else None
                         ),
                         checks=checks,
                         node_name=node_name,
@@ -2225,7 +2228,12 @@ def build_workflow_ag_ui_stream(
                     ):
                         yield frame
 
-                    next_nodes = _workflow_next_nodes(node_name, update)
+                    # DAG 仅返回增量时，分流仍需完整工作区、确认规划与最新状态。
+                    # 其他节点保留既有增量投影，避免继承无关的上游控制字段。
+                    next_nodes = _workflow_next_nodes(
+                        node_name,
+                        stream_state if node_name == "prepare_build_tasks" else update,
+                    )
                     if (
                         node_name == "integration_test"
                         and repair_preparation_attempt is not None

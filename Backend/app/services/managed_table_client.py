@@ -56,6 +56,11 @@ def _response_error(response: httpx.Response, *, creating: bool) -> ManagedTable
 class ManagedTableClient(ManagedDatabaseClient):
     """复用注册客户端的地址、密钥和超时约束。"""
 
+    def batch_create_tables(self, datasource_key: str, sqls: list[str]) -> Any:
+        """一次提交完整 CREATE 列表，不复用单表请求体或自动重试。"""
+
+        return self.request(datasource_key, "table-operations/batch", body={"mode": "CREATE", "sqls": sqls})
+
     def request(self, datasource_key: str, path: str, *, body: dict | None = None) -> Any:
         """发送一次请求；错误脱敏，提交结果未知时提示先查询原记录。"""
 
@@ -74,7 +79,7 @@ class ManagedTableClient(ManagedDatabaseClient):
                 "SaaS 请求未取得确认结果。若已提交执行，请刷新原操作记录，不要重复提交。",
                 uncertain=body is not None,
             ) from None
-        expected = 202 if path == "table-operations" and body is not None else 200
+        expected = 202 if path in {"table-operations", "table-operations/batch"} and body is not None else 200
         if response.status_code != expected:
             raise _response_error(response, creating=path == "table-operations" and body is not None and body.get("mode") == "CREATE")
         try:

@@ -15,6 +15,8 @@ from app.graph.subgraphs import acceptance_subgraph
 from app.graph.state import ProjectState
 from app.services.authorization_bootstrap import authorization_bootstrap_enabled
 from app.services.application_config import read_application_config
+from pathlib import Path
+from app.services.builtin_authorization_state import schema_ready, uses_builtin_database
 from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
@@ -63,13 +65,12 @@ def route_workflow_start(state: ProjectState) -> str:
     if state.get("resume_from") == "prepare_build_tasks":
         return _route_prepare_build_tasks_resume(state)
     if state.get("resume_from") == "build":
-        return (
-            "authorization_bootstrap"
-            if _authorization_bootstrap_required(state)
-            else "build"
-        )
+        return select_authorization_bootstrap_node(state)
     if state.get("resume_from") == "authorization_bootstrap":
-        return "authorization_bootstrap"
+        application = read_application_config(str(state.get("workspace") or ""))
+        return select_authorization_bootstrap_node(state) if uses_builtin_database(application) else "authorization_bootstrap"
+    if state.get("resume_from") == "builtin_authorization_bootstrap":
+        return "builtin_authorization_bootstrap"
     if state.get("resume_from") == "unit_test":
         return "unit_test"
     if state.get("resume_from") == "unit_test_repair":
@@ -280,11 +281,19 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
         return "await_user_input"
     if state.get("status") == "failed":
         return "handle_failure"
-    return (
-        "authorization_bootstrap"
-        if _authorization_bootstrap_required(state)
-        else "build"
-    )
+    return select_authorization_bootstrap_node(state)
+
+
+def select_authorization_bootstrap_node(state: ProjectState) -> str:
+    """仅按权威应用模式和本地 Schema 成功事实互斥分流，无任何副作用。"""
+
+    workspace = str(state.get("workspace") or "").strip()
+    if not _authorization_bootstrap_required(state):
+        return "build"
+    application = read_application_config(workspace)
+    if not uses_builtin_database(application):
+        return "authorization_bootstrap"
+    return "build" if schema_ready(Path(workspace).expanduser().resolve(), application) else "builtin_authorization_bootstrap"
 
 
 def _authorization_bootstrap_required(state: ProjectState) -> bool:
@@ -370,6 +379,7 @@ def build_graph(
 
     builder.add_node("prepare_build_tasks", prepare_build_tasks_with_recovery)
     builder.add_node("authorization_bootstrap", nodes.authorization_bootstrap)
+    builder.add_node("builtin_authorization_bootstrap", nodes.builtin_authorization_bootstrap)
     builder.add_node("build", build_with_recovery)
     def unit_test_with_recovery(state: ProjectState) -> dict[str, Any]:
         """从单测入口重进，交给测试映射缓存和复测机制处理当前文件。"""
@@ -445,6 +455,7 @@ def build_graph(
             "inspect_workspace": "inspect_workspace",
             "prepare_build_tasks": "prepare_build_tasks",
             "authorization_bootstrap": "authorization_bootstrap",
+            "builtin_authorization_bootstrap": "builtin_authorization_bootstrap",
             "build": "build",
             "unit_test": "unit_test",
             "unit_test_repair": "unit_test_repair",
@@ -511,12 +522,18 @@ def build_graph(
         {
             "build": "build",
             "authorization_bootstrap": "authorization_bootstrap",
+            "builtin_authorization_bootstrap": "builtin_authorization_bootstrap",
             "await_user_input": END,
             "handle_failure": "handle_failure",
         },
     )
     builder.add_conditional_edges(
         "authorization_bootstrap",
+        route_authorization_bootstrap,
+        {"build": "build", "handle_failure": "handle_failure"},
+    )
+    builder.add_conditional_edges(
+        "builtin_authorization_bootstrap",
         route_authorization_bootstrap,
         {"build": "build", "handle_failure": "handle_failure"},
     )
