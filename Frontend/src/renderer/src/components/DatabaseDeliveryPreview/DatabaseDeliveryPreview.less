@@ -1,0 +1,189 @@
+.@{class-prefix}-database-delivery-preview {
+  margin: 18px 0;
+  padding: 12px 14px;
+  min-width: 0;
+  color: var(--wb-text);
+  background: var(--wb-surface-hover);
+  border: 1px solid color-mix(in srgb, var(--wb-accent) 22%, var(--wb-border));
+  border-radius: 10px;
+  h3 {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 0 12px;
+    color: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    > .anticon {
+      color: var(--wb-accent);
+      font-size: 16px;
+    }
+  }
+  .@{class-prefix}-database-delivery-paths {
+    margin-bottom: 14px;
+  }
+  .@{class-prefix}-database-delivery-path {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin-top: 6px;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    > span {
+      flex-shrink: 0;
+    }
+    code {
+      min-width: 0;
+      padding: 1px 5px;
+      color: var(--wb-text);
+      background: var(--wb-surface-subtle);
+      border-radius: 4px;
+      font-family: var(--ui-font-mono);
+      overflow-wrap: anywhere;
+    }
+  }
+  .@{class-prefix}-database-delivery-card {
+    padding: 16px;
+    margin-top: 12px;
+    background: var(--wb-canvas);
+    border: 1px solid var(--wb-border-strong);
+    border-radius: 12px;
+  }
+  .@{class-prefix}-database-delivery-card-header,
+  .@{class-prefix}-database-delivery-card-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .@{class-prefix}-database-delivery-card-header {
+    justify-content: space-between;
+  }
+  .@{class-prefix}-database-delivery-card-title {
+    min-width: 0;
+    > .anticon {
+      color: var(--wb-text-secondary);
+      font-size: 16px;
+    }
+    h4 {
+      margin: 0;
+      color: var(--wb-text);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    > span:last-child {
+      color: var(--wb-text-secondary);
+      font-size: 12px;
+    }
+  }
+  .@{class-prefix}-database-delivery-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    &.@{class-prefix}-is-ready {
+      color: var(--wb-accent);
+    }
+    &.@{class-prefix}-is-error {
+      color: var(--wb-danger);
+    }
+  }
+  .@{class-prefix}-database-delivery-description {
+    margin: 10px 0 12px;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .@{class-prefix}-database-delivery-card-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    .ant-btn {
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 14px;
+      font-size: 12px;
+    }
+    .@{class-prefix}-database-delivery-expand {
+      margin-left: auto;
+      border-color: transparent;
+      background: transparent;
+      color: var(--wb-accent);
+    }
+  }
+  .ant-btn {
+    color: var(--wb-text-secondary);
+    background: var(--wb-canvas);
+    border-color: var(--wb-border-strong);
+    &:hover:not(:disabled),
+    &:focus-visible:not(:disabled) {
+      color: var(--wb-accent);
+      background: var(--wb-accent-soft);
+      border-color: var(--wb-accent-border);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--wb-accent-border);
+      outline-offset: 2px;
+    }
+    &:disabled,
+    &:disabled:hover {
+      color: var(--wb-text-tertiary);
+      background: var(--wb-surface-subtle);
+      border-color: var(--wb-border);
+    }
+  }
+  .@{class-prefix}-database-delivery-code {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--wb-border);
+    > p {
+      margin: 0;
+      color: var(--wb-text-secondary);
+      font-size: 12px;
+    }
+  }
+  pre {
+    max-height: 280px;
+    overflow: auto;
+    margin: 0;
+    padding: 12px;
+    white-space: pre;
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    code {
+      font-family: var(--ui-font-mono);
+      font-size: 12px;
+    }
+    .hljs-keyword {
+      color: var(--wb-accent);
+    }
+    .hljs-string,
+    .hljs-type,
+    .hljs-comment {
+      color: var(--wb-text-secondary);
+    }
+  }
+  .@{class-prefix}-database-delivery-error {
+    color: var(--wb-danger);
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    p {
+      margin: 0 0 8px;
+    }
+  }
+  .@{class-prefix}-database-delivery-copy-status {
+    margin-top: 8px;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+  }
+  .ant-spin {
+    color: var(--wb-accent);
+  }
+  .ant-spin-dot-item {
+    background: var(--wb-accent);
+  }
+}

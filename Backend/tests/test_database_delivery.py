@@ -10,6 +10,8 @@ from unittest.mock import patch
 from app.domain.entity_tables import EntityTableRequest
 from app.graph.nodes.lifecycle import finalize_project
 from app.services.database_delivery import export_database_scripts
+from app.services.database_delivery_sql import full_delivery_sql, full_schema_sql, incremental_delivery_sql, incremental_schema_sql
+from app.domain.database_delivery import DatabaseDeliveries
 from app.services.entity_tables import prepare_entity_table
 
 
@@ -120,6 +122,21 @@ class DatabaseDeliveryTests(unittest.TestCase):
         self.assertEqual(self.script("release/v1_1", "alter.sql").read_bytes(), b"")
         self.assertEqual(self.script("release/v1_1", "create.sql").read_bytes(),
                          self.script("v1_0", "create.sql").read_bytes())
+
+    def test_disabled_authorization_preserves_existing_sql_bytes(self) -> None:
+        """关闭权限时组合入口与原业务编译器逐字节一致，包含有业务变更的增量。"""
+
+        export_database_scripts(self.root)
+        previous = DatabaseDeliveries.model_validate_json(self.history.read_bytes()).versions[0]
+        self.plan["entities"][0]["fields"].append({"name": "status", "label": "状态", "type": "enum"})
+        self.next_version()
+        export_database_scripts(self.root)
+        current = DatabaseDeliveries.model_validate_json(self.history.read_bytes()).versions[-1]
+        self.assertEqual(full_delivery_sql(current.tables, None).encode(), full_schema_sql(current.tables).encode())
+        self.assertEqual(incremental_delivery_sql(previous, current.tables, None).encode(),
+                         incremental_schema_sql(previous.tables, current.tables).encode())
+        self.assertEqual(self.script("v1_1", "create.sql").read_bytes(), full_schema_sql(current.tables).encode())
+        self.assertEqual(self.script("v1_1", "alter.sql").read_bytes(), incremental_schema_sql(previous.tables, current.tables).encode())
 
     def test_deleted_entity_generates_explicit_drop(self) -> None:
         """实体删除生成带丢数提示的 DROP，当前完整结构中不再包含旧表。"""

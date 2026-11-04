@@ -8,10 +8,15 @@ from pathlib import Path
 from threading import RLock
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.domain.database_delivery import DatabaseDeliveries, DeliveredDatabase, DeliveryTable
+from app.domain.database_delivery import AuthorizationDeliverySchema, DatabaseDeliveries, DeliveredDatabase, DeliveryTable
 from app.domain.managed_database import ManagedDatabaseRegistration
 from app.services.application_config.repository import ApplicationConfigRepository
-from app.services.database_delivery_sql import full_schema_sql, incremental_schema_sql
+from app.services.database_delivery_sql import full_delivery_sql, incremental_delivery_sql
+from app.services.authorization_bootstrap import authorization_bootstrap_enabled
+from app.services.authorization_manifest import SYSTEM_RESOURCE_KEY
+from app.services.authorization_table_projection import compile_authorization_tables
+from app.services.authorization_workspace_projector import RUNTIME, read_record, verify_projection
+from app.services.builtin_authorization_state import builtin_binding, schema_ready
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.entity_table_sql import compile_entity_table
 from app.services.git_branch import validate_branch_name
@@ -57,7 +62,7 @@ def _verify_files(root: Path, version: DeliveredDatabase) -> None:
         path = _safe_path(root, str(directory.relative_to(root)), name)
         if not path.is_file() or _digest(path.read_bytes()) != expected:
             raise ValueError(f"数据库交付文件 {path.relative_to(root)} 缺失或已被修改，未覆盖文件。")
-    if _digest(full_schema_sql(version.tables).encode("utf-8")) != version.createHash:
+    if _digest(full_delivery_sql(version.tables, version.authorizationSchema).encode("utf-8")) != version.createHash:
         raise ValueError("数据库交付结构快照与完整建表脚本不一致。")
 
 
@@ -127,6 +132,45 @@ def _current_tables(application: dict, plan: dict) -> list[DeliveryTable]:
     return sorted(tables, key=lambda table: table.name)
 
 
+def _current_authorization_schema(root: Path, application: dict, plan: dict,
+                                  tables: list[DeliveryTable]) -> AuthorizationDeliverySchema | None:
+    """只从当前应用开关及既有四表投影编译交付结构，不执行任何数据库操作。"""
+
+    if (application.get("authorization") or {}).get("enabled") is not True:
+        return None
+    manifest = plan.get("authorization_manifest") or {}
+    system = manifest.get("systemAuthorization") if isinstance(manifest, dict) else None
+    if (not authorization_bootstrap_enabled(plan, application_config=application)
+            or not isinstance(system, dict) or system.get("managementResourceKey") != SYSTEM_RESOURCE_KEY):
+        raise ValueError("当前权限配置与已确认技术规划不一致，请重新确认技术规划。")
+    binding = builtin_binding(application)
+    compiled = compile_authorization_tables(root, binding["datasourceKey"])
+    schema = AuthorizationDeliverySchema(tableNames=compiled["tables"], sqls=compiled["sqls"],
+                                        ddlFingerprint=compiled["ddlFingerprint"])
+    if set(schema.tableNames) & {table.name for table in tables}:
+        raise ValueError("权限表与业务实体存在物理表名冲突，不能交付。")
+    verify_projection(root, binding["datasourceKey"])
+    return schema
+
+
+def _verify_authorization_readiness(root: Path, application: dict, schema: AuthorizationDeliverySchema | None,
+                                    delivered: list[DeliveredDatabase]) -> None:
+    """核对现存运行事实；首次加入权限必须有成功证据，历史快照不依赖 runtime 发布。"""
+
+    if schema is None:
+        return
+    binding = builtin_binding(application)
+    record = read_record(root, "state.json")
+    if record or _safe_path(root, str(RUNTIME), "state.json").exists():
+        if (any(record.get(key) != value for key, value in binding.items())
+                or record.get("ddlFingerprint") != schema.ddlFingerprint):
+            raise ValueError("Builtin 权限初始化绑定或 DDL 与交付不一致，请人工核对。")
+        if not schema_ready(root, application):
+            raise ValueError("权限 Schema 尚未确认就绪，请刷新原权限初始化操作后再交付。")
+    elif not any(version.authorizationSchema == schema for version in delivered):
+        raise ValueError("首次交付权限 Schema 缺少本地成功证据，待核验；不会重新执行权限初始化。")
+
+
 def export_database_scripts(workspace: str | Path) -> list[str]:
     """输出当前内置数据库版本的两个脚本；其他应用不改变既有交付流程。"""
 
@@ -151,7 +195,9 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
         directory = _version_directory(root, branch)
         plan_path = _safe_path(root, str(technical_plan_path(root).relative_to(root)))
         original_plan = plan_path.read_bytes()
-        tables = _current_tables(application, json.loads(original_plan))
+        plan = json.loads(original_plan)
+        tables = _current_tables(application, plan)
+        authorization_schema = _current_authorization_schema(root, application, plan, tables)
         history_path = _safe_path(root, str(WORKSPACE_ARTIFACT_DIR), _HISTORY_NAME)
         original_history = history_path.read_bytes() if history_path.exists() else None
         history = DatabaseDeliveries.model_validate_json(original_history) if original_history is not None else DatabaseDeliveries()
@@ -165,7 +211,8 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
         if existing is not None:
             _verify_files(root, existing)
             if existing != history.versions[-1]:
-                if tables == existing.tables:
+                if tables == existing.tables and authorization_schema == existing.authorizationSchema:
+                    _verify_authorization_readiness(root, application, authorization_schema, [existing])
                     return [str((directory / name).relative_to(root)) for name in ("create.sql", "alter.sql")]
                 raise ValueError("不能覆盖后续版本已依赖的旧版脚本，请在新版本中交付变更。")
             previous = history.versions[-2] if len(history.versions) > 1 else None
@@ -173,10 +220,16 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
             previous = history.versions[-1] if history.versions else None
         if previous is not None:
             _verify_files(root, previous)
-        create = full_schema_sql(tables)
-        alter = incremental_schema_sql(previous.tables, tables) if previous else ""
+        # 同版已交付权限结构也不能静默改变或删除；首次从关闭改为开启仍允许重算。
+        if existing and existing.authorizationSchema is not None and existing.authorizationSchema != authorization_schema:
+            raise ValueError("同版权限 DDL 已变化或权限已关闭，需要明确迁移，未覆盖脚本。")
+        create = full_delivery_sql(tables, authorization_schema)
+        alter = incremental_delivery_sql(previous, tables, authorization_schema)
+        _verify_authorization_readiness(root, application, authorization_schema,
+                                        [version for version in (existing, previous) if version is not None])
         version = DeliveredDatabase(branchName=branch, baseBranchName=previous.branchName if previous else None,
                                     datasourceKey=binding.datasource_key, tables=tables,
+                                    authorizationSchema=authorization_schema,
                                     createHash=_digest(create.encode("utf-8")), alterHash=_digest(alter.encode("utf-8")))
         if existing is not None:
             history.versions[-1] = version
@@ -190,6 +243,12 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
         if application_path.read_bytes() != original_application or plan_path.read_bytes() != original_plan \
                 or (history_path.read_bytes() if history_path.exists() else None) != original_history:
             raise ValueError("交付期间应用配置、实体设计或基线发生变化，请重新交付。")
+        if authorization_schema is not None:
+            # SQL、受管文件或初始化状态在准备期间改变时，不能提交过期核验结果。
+            if _current_authorization_schema(root, application, plan, tables) != authorization_schema:
+                raise ValueError("交付期间权限 DDL 发生变化，请重新交付。")
+            _verify_authorization_readiness(root, application, authorization_schema,
+                                            [item for item in (existing, previous) if item is not None])
         files[history_path] = (history.model_dump_json(indent=2) + "\n").encode("utf-8")
         _write_files(files)
         return [str(path.relative_to(root)) for path in files if path != history_path]

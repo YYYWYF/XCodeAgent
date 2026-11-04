@@ -3,6 +3,7 @@
 import json
 import re
 from pathlib import Path
+from xml.etree import ElementTree
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.authorization_table_projection import sql_tokens, table_mapping
@@ -29,13 +30,19 @@ def read_record(root: Path, name: str) -> dict:
     return value
 
 
+def _xml_sql_tokens(text: str) -> list[tuple[str, int, int]]:
+    """屏蔽 XML 标记后共用 SQL 词法器，保留原始位置供投影和只读核验。"""
+
+    # 保留 XML 原字节排版；标签与注释不能作为 SQL 关键字参与匹配。
+    masked = re.sub(r'''<!--[\s\S]*?-->|<!\[CDATA\[|\]\]>|</?[A-Za-z](?:[^>"']|"[^"]*"|'[^']*')*>|<\?[^>]*>''', lambda m: " " * len(m.group()), text)
+    return sql_tokens(masked)
+
+
 def _project_xml(text: str, mapping: dict[str, str]) -> str:
     """仅在 XML 文本中的 SQL 表引用锚点改写，跳过标签、注释和字符串。"""
 
     edits = []
-    # 保留 XML 原字节排版；标签与注释不能作为 SQL 关键字参与匹配。
-    masked = re.sub(r'''<!--[\s\S]*?-->|<!\[CDATA\[|\]\]>|</?[A-Za-z](?:[^>"']|"[^"]*"|'[^']*')*>|<\?[^>]*>''', lambda m: " " * len(m.group()), text)
-    tokens = sql_tokens(masked)
+    tokens = _xml_sql_tokens(text)
     count = 0
     depth, from_clause = 0, False
     for index, (token, _, _) in enumerate(tokens[:-1]):
@@ -64,6 +71,73 @@ def _project_xml(text: str, mapping: dict[str, str]) -> str:
     for begin, end, replacement in reversed(edits):
         text = text[:begin] + replacement + text[end:]
     return text
+
+
+def verify_projection(root: Path, datasource_key: str) -> None:
+    """只读核验七文件及安装来源；无 runtime 收据也可用精确反向摘要验证。"""
+
+    mapping = table_mapping(datasource_key)
+    store = WorkingCopyStoreV3(root)
+    # 先经过现有安全路径读取器，不让模板状态或来源收据绕过工作区边界。
+    store.entry((WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix())
+    template = load_template_state_v3(root)
+    owners = {artifact.target: artifact for artifact in template.installedArtifacts.values()}
+    receipt = store.entry(SOURCE_RECEIPT.as_posix()).original
+    if receipt is None:
+        raise ValueError("权限交付缺少模板安装来源摘要。")
+    source_record = json.loads(receipt)
+    if not isinstance(source_record, dict):
+        raise ValueError("权限模板安装来源摘要损坏。")
+    sources = source_record.get("files", {})
+    if not isinstance(sources, dict):
+        raise ValueError("权限模板安装来源摘要损坏。")
+    for relative in (*PO_FILES, *XML_FILES):
+        owner, source = owners.get(relative), sources.get(relative)
+        if (owner is None or owner.capabilityId != "authorization" or not isinstance(source, dict)
+                or source.get("installedRevision") != owner.installedRevision):
+            raise ValueError("权限交付文件缺少当前模板受管来源。")
+        content = store.entry(relative).original
+        if content is None or len(content) > 256 * 1024:
+            raise ValueError("权限交付受管文件缺失或超过大小上限。")
+        text = content.decode("utf-8")
+        if relative in PO_FILES:
+            logical = PO_FILES[relative]
+            matches = list(re.finditer(r'@TableName\(\s*"([^"\n]+)"\s*\)', text))
+            if len(matches) != 1 or matches[0][1] != mapping[logical]:
+                raise ValueError("权限 PO 的 TableName 与交付物理表名不一致。")
+            match = matches[0]
+            canonical = text[:match.start(1)] + logical + text[match.end(1):]
+        else:
+            try:
+                xml = ElementTree.fromstring(text)
+            except ElementTree.ParseError as exc:
+                raise ValueError("权限 Mapper XML 无效，无法核验表引用。") from exc
+            if any(element.tag == "include" for element in xml.iter()):
+                raise ValueError("权限 Mapper 包含间接 SQL 引用，需明确核验模板。")
+            tokens = _xml_sql_tokens(text)
+            depth, from_depths = 0, set()
+            for index, (token, _, _) in enumerate(tokens):
+                # 子查询内的逗号多表同样无法由现有投影器可靠识别，交付时拒绝猜测。
+                if token == "(":
+                    depth += 1
+                elif token == ")":
+                    from_depths.discard(depth)
+                    depth -= 1
+                elif token.upper() == "FROM":
+                    from_depths.add(depth)
+                elif token.upper() in {"WHERE", "GROUP", "ORDER", "HAVING", "UNION", "SET", "VALUES", ";"}:
+                    from_depths.discard(depth)
+                elif token == "," and depth in from_depths:
+                    raise ValueError("权限 Mapper 包含无法确定的逗号多表引用。")
+                if token.upper() in {"FROM", "JOIN", "UPDATE", "INTO"}:
+                    if (index + 1 >= len(tokens) or tokens[index + 1][0].strip("`") not in mapping.values()
+                            or index + 2 < len(tokens) and tokens[index + 2][0] in {".", "$", "{"}):
+                        raise ValueError("权限 Mapper 表引用与交付物理表名不一致。")
+            if _project_xml(text, mapping) != text:
+                raise ValueError("权限 Mapper 仍引用无前缀权限表。")
+            canonical = _project_xml(text, {physical: logical for logical, physical in mapping.items()})
+        if source_digest(canonical.encode("utf-8")) != source.get("digest"):
+            raise ValueError("权限交付文件存在未知修改或模板变更，请人工核对。")
 
 
 def ensure_projection(root: Path, key: str) -> None:

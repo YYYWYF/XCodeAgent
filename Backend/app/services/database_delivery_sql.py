@@ -1,6 +1,6 @@
 """比较两个已确认结构，生成版本升级 SQL，不读取数据库或推断字段重命名。"""
 
-from app.domain.database_delivery import DeliveryTable
+from app.domain.database_delivery import AuthorizationDeliverySchema, DeliveredDatabase, DeliveryTable
 from app.services.entity_table_sql import column_sql, create_table_sql, sql_text
 
 
@@ -9,6 +9,34 @@ def full_schema_sql(tables: list[DeliveryTable]) -> str:
 
     statements = [create_table_sql(table.model_dump()) for table in sorted(tables, key=lambda table: table.name)]
     return "\n\n".join(statements) + ("\n" if statements else "")
+
+
+def _append_authorization_sql(business: str, schema: AuthorizationDeliverySchema | None) -> str:
+    """只添加语句间隔，完整保留 SaaS 投影返回的每条 SQL 原文字节。"""
+
+    if schema is None:
+        return business
+    authorization = "\n\n".join(schema.sqls)
+    return business + ("\n" if business else "") + authorization
+
+
+def full_delivery_sql(tables: list[DeliveryTable], authorization_schema: AuthorizationDeliverySchema | None) -> str:
+    """权限关闭时逐字节沿用业务脚本，开启时在其后追加四表投影。"""
+
+    return _append_authorization_sql(full_schema_sql(tables), authorization_schema)
+
+
+def incremental_delivery_sql(previous: DeliveredDatabase | None, tables: list[DeliveryTable],
+                             authorization_schema: AuthorizationDeliverySchema | None) -> str:
+    """首版增量为空，后续只支持首次加入权限表，不猜测修改或删除迁移。"""
+
+    if previous is None:
+        return ""
+    before = previous.authorizationSchema
+    if before is not None and before != authorization_schema:
+        raise ValueError("权限 DDL 已变化或权限已关闭，需要明确迁移；不会自动修改或删除权限表。")
+    business = incremental_schema_sql(previous.tables, tables)
+    return _append_authorization_sql(business, authorization_schema if before is None else None)
 
 
 def _table_changes(before: DeliveryTable, after: DeliveryTable) -> list[str]:

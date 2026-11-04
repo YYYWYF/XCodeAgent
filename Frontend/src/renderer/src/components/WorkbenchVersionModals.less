@@ -1,0 +1,22 @@
+.@{class-prefix}-workbench-publish-modal.@{class-prefix}-is-generate {
+  .@{class-prefix}-workbench-generate-reminder-title,
+  .@{class-prefix}-workbench-generate-field-label {
+    color: var(--wb-text);
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-workbench-publish-modal.@{class-prefix}-has-database-delivery {
+  .@{class-prefix}-workbench-publish-modal-inner {
+    max-height: calc(100vh - 64px);
+  }
+  .@{class-prefix}-workbench-publish-modal-header,
+  .@{class-prefix}-workbench-publish-modal-footer {
+    flex-shrink: 0;
+  }
+  .@{class-prefix}-workbench-publish-modal-body {
+    min-height: 0;
+    overflow-y: auto;
+  }
+}

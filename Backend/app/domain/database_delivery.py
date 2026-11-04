@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.services.authorization_table_projection import fingerprint, sql_tokens, table_mapping
+
 
 class DeliveryColumn(BaseModel):
     """保存当前实体编译器支持的列定义，未知类型不能进入增量脚本。"""
@@ -37,6 +39,31 @@ class DeliveryTable(BaseModel):
         return self
 
 
+class AuthorizationDeliverySchema(BaseModel):
+    """原样保存四表投影 SQL，不将权限结构降级为业务实体列模型。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    tableNames: list[str] = Field(min_length=4, max_length=4)
+    sqls: list[str] = Field(min_length=4, max_length=4)
+    ddlFingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def validate_schema(self) -> "AuthorizationDeliverySchema":
+        """复用词法器和前缀合同，拒绝重复表、额外语句及损坏摘要。"""
+
+        key = self.tableNames[0].split("_", 1)[0]
+        if self.tableNames != list(table_mapping(key).values()) or fingerprint(self.sqls) != self.ddlFingerprint:
+            raise ValueError("权限交付快照的表名或 DDL 摘要无效。")
+        for name, sql in zip(self.tableNames, self.sqls):
+            words = [token for token, _, _ in sql_tokens(sql)]
+            index = 5 if [word.upper() for word in words[2:5]] == ["IF", "NOT", "EXISTS"] else 2
+            if (len(words) <= index + 2 or [word.upper() for word in words[:2]] != ["CREATE", "TABLE"]
+                    or words[index].strip("`") != name or words[index + 1] != "("
+                    or words[-1] != ";" or words.count(";") != 1):
+                raise ValueError("权限交付快照必须逐表保存唯一的完整 CREATE TABLE。")
+        return self
+
+
 class DeliveredDatabase(BaseModel):
     """记录一个版本的完整结构、固定升级来源及两个脚本的完整性摘要。"""
 
@@ -45,6 +72,7 @@ class DeliveredDatabase(BaseModel):
     baseBranchName: str | None
     datasourceKey: str = Field(pattern=r"^[0-9a-f]{12}$")
     tables: list[DeliveryTable]
+    authorizationSchema: AuthorizationDeliverySchema | None = None
     createHash: str = Field(pattern=r"^[0-9a-f]{64}$")
     alterHash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -64,6 +92,10 @@ class DatabaseDeliveries(BaseModel):
         previous = None
         for version in self.versions:
             names = [table.name for table in version.tables]
+            if version.authorizationSchema is not None:
+                if version.authorizationSchema.tableNames != list(table_mapping(version.datasourceKey).values()):
+                    raise ValueError("权限交付快照与版本数据库前缀不一致。")
+                names += version.authorizationSchema.tableNames
             if version.branchName in seen or version.baseBranchName != previous or len(names) != len(set(names)) \
                     or any(not name.startswith(version.datasourceKey + "_") for name in names):
                 raise ValueError("数据库交付版本链或表归属无效。")
