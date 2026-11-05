@@ -2999,9 +2999,33 @@ export default function AiChatPanel({
         setSessionMessagesRef.current(sessionKey, (prev) => {
           const updated = [...prev]
           const prevMessage = updated[updated.length - 1]
+          const mergedWorkflow = retainApplicationPlanningInterrupt(prevMessage.workflow, incomingWorkflow)
+          // UI 确认阶段 adjust 期间，节点运行中的流式帧 clarification 常投影成空壳（无 mode、
+          // 无 pages）。retainApplicationPlanningInterrupt 在 !sameRun / 无 prev interrupt 时
+          // 直接采用 incoming，空壳 clarification 覆盖原卡，卡片闪烁「暂无可展示的页面设计稿」。
+          // 这里只在 ui_confirmation 阶段、合并后 clarification 缺 pages 时，从原卡补回 pages，
+          // 不影响其它阶段（产品对话等新 run 不会被带进旧 UI clarification）。
+          const prevClarPages = (prevMessage?.workflow?.summary?.clarification as { pages?: unknown[] } | undefined)?.pages
+          const mergedClar = mergedWorkflow?.summary?.clarification as { pages?: unknown[]; mode?: string } | undefined
+          const mergedPagesEmpty = !mergedClar?.pages || !Array.isArray(mergedClar.pages) || mergedClar.pages.length === 0
+          const prevPagesAvailable = Array.isArray(prevClarPages) && prevClarPages.length > 0
+          const inUiConfirmation = mergedWorkflow?.summary?.phase === 'ui_confirmation'
+          const finalWorkflow = (inUiConfirmation && mergedPagesEmpty && prevPagesAvailable && prevMessage?.workflow?.summary?.clarification)
+            ? {
+                ...mergedWorkflow,
+                summary: {
+                  ...mergedWorkflow.summary,
+                  clarification: prevMessage.workflow.summary.clarification
+                },
+                result: {
+                  ...mergedWorkflow.result,
+                  clarification: prevMessage.workflow.summary.clarification
+                }
+              }
+            : mergedWorkflow
           updated[updated.length - 1] = {
             ...prevMessage,
-            workflow: retainApplicationPlanningInterrupt(prevMessage.workflow, incomingWorkflow),
+            workflow: finalWorkflow,
             content: chunk.content ?? prevMessage.content,
             planningLoading: hasSubstantiveWorkflow ? false : prevMessage.planningLoading
           }
