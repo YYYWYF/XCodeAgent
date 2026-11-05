@@ -215,7 +215,7 @@ import {
   wasPendingDagPlanAutoGuided
 } from './dagPendingPlanPresentation'
 import type { DagPendingPlanCompletion } from './dagPendingPlanPresentation'
-import { executionRecoveryForSession, executionRecoveryReadError } from './executionRecoveryState'
+import { executionRecoveryForSession, executionRecoveryReadError, executionRecoveryReadDiagnostic } from './executionRecoveryState'
 import {
   acceptancePreviewCanFocus,
   conversationUsesWorkflowRecovery,
@@ -1193,6 +1193,7 @@ export default function AiChatPanel({
   // 因此本轮沿用已有工程、不重新拉取模板，就绪卡文案需要说明这一点。
   const reusingExistingTemplate = (application.branches?.length ?? 0) > 1
   const [retryingRepositoryBranch, setRetryingRepositoryBranch] = useState(false)
+  const [recoveryProjectionSyncing, setRecoveryProjectionSyncing] = useState(false)
   // 重试把当前分支推到远端（上次因网络等原因失败）。结果要落盘：卡片文案由它驱动，
   // 不落盘的话刷新后又变回"已自动提交到版本 X"。
   const handleRetryRepositoryBranch = useCallback(async (): Promise<void> => {
@@ -4042,7 +4043,9 @@ export default function AiChatPanel({
   // 恢复投影失败只重新读取该投影，不误派发到另一个独立节点或执行旧动作。
   const retryRecoveryProjection = recoveryProjectionError
     ? () => {
-        void refreshExecutionRecoveryLifecycle()
+        if (recoveryProjectionSyncing) return
+        setRecoveryProjectionSyncing(true)
+        void refreshExecutionRecoveryLifecycle().finally(() => setRecoveryProjectionSyncing(false))
       }
     : undefined
   const currentRecoveryIncident =
@@ -5509,15 +5512,17 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
-                      title={lifecycleSyncError ? '工作区状态读取失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
-                      retryLabel={lifecycleSyncError ? '重新同步' : undefined}
+                      title={lifecycleSyncError ? '工作区状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      retryLabel={recoveryProjectionError ? '重新同步' : undefined}
+                      diagnostic={recoveryProjectionError && !lifecycleSyncError
+                        ? executionRecoveryReadDiagnostic(applicationLifecycle) : undefined}
                       error={globalFallback.error}
                       onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
                         ? handleRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
                           : () => { void retryCurrentRecovery() })}
-                      retrying={recoveryRunning || revisionStartRetrying}
+                      retrying={recoveryRunning || revisionStartRetrying || recoveryProjectionSyncing}
                     />
                   ) : null}
                 </div>

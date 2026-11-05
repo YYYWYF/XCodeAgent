@@ -78,6 +78,10 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                        new=AsyncMock(side_effect=OSError("unavailable"))):
                 frames = asyncio.run(collect())
         self.assertIn("RECOVERY_PROJECTION_READ_FAILED", frames)
+        self.assertIn('"exceptionType":"OSError"', frames)
+        self.assertIn('"reason":"unavailable"', frames)
+        self.assertIn('"diagnosticId":', frames)
+        self.assertNotIn('"traceback":', frames)
         self.assertIn('"status":"completed"', frames)
         self.assertIn('"type":"RUN_FINISHED"', frames)
 

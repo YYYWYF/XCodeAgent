@@ -254,3 +254,22 @@ test('恢复读取错误提供底部兜底且禁止旧候选执行', () => {
   assert.equal(executionRecoveryForSession(lifecycle, 'session-A'), undefined)
   assert.equal(globalFallbackState({ connectionStatus: 'healthy', hasRecoveryIncident: false, globalFallbackError: message }).visible, true)
 })
+
+/** 诊断只保留白名单，不能携带代码位置或改变原有恢复禁用规则。 */
+test('恢复查询诊断拒绝无效字段并隔离失效候选', async () => {
+  const { executionRecoveryReadDiagnostic } = await import('../src/renderer/src/components/AiChatPanel/executionRecoveryState')
+  const diagnostic = { diagnosticId: 'diagnostic-A', operation: '构建任务工作流',
+    exceptionType: 'ValueError', reason: 'unknown node', sourceRunId: 'run-A', threadId: 'thread-A',
+    file: '/private/backend.py', line: 42, traceback: 'private stack' }
+  const lifecycle = { extensions: { executionRecovery: {
+    error: { code: 'RECOVERY_PROJECTION_READ_FAILED', message: '工作流配置错误', diagnostic }
+  } } } as unknown as ApplicationLifecycle
+  assert.deepEqual(executionRecoveryReadDiagnostic(lifecycle), {
+    diagnosticId: 'diagnostic-A', operation: '构建任务工作流', exceptionType: 'ValueError',
+    reason: 'unknown node', sourceRunId: 'run-A', threadId: 'thread-A'
+  })
+  assert.equal(executionRecoveryForSession(lifecycle, 'session-A'), undefined)
+  diagnostic.reason = ''
+  assert.equal(executionRecoveryReadDiagnostic(lifecycle), undefined)
+  assert.equal(executionRecoveryReadError(lifecycle), '工作流配置错误')
+})

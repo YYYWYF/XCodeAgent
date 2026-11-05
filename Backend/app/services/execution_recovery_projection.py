@@ -9,7 +9,6 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,
     ExecutionRecoveryProjection,
-    ExecutionRecoveryProjectionError,
     ExecutionRecoveryProjectionCandidate,
 )
 from app.graph.application_planning_workflow import application_planning_graph_for_request
@@ -20,6 +19,7 @@ from app.persistence.execution_recovery import (
 from app.services.execution_failure_classifier import public_failure_diagnostic
 from app.services.execution_recovery import recovery_graph_for_execution
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.recovery_read_diagnostic import recovery_read_error, recovery_read_operation
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -72,16 +72,19 @@ async def resolve_execution_recovery_projection(
     generated_at = datetime.now(timezone.utc)
     try:
         from app.services.checkpoint_execution import index_missing_checkpoint_executions
-        await index_missing_checkpoint_executions(workspace)
-        records = await list_recovery_projection_candidates(workspace, limit=16)
+        with recovery_read_operation("补建任务恢复索引"):
+            await index_missing_checkpoint_executions(workspace)
+        with recovery_read_operation("查询任务恢复记录"):
+            records = await list_recovery_projection_candidates(workspace, limit=16)
     except Exception as exc:
+        error = recovery_read_error(exc, operation="查询任务恢复状态")
         logger.warning(
-            "recovery.projection.candidates_failed workspace=%s error=%s",
-            workspace,
-            exc,
+            "recovery.projection.candidates_failed workspace=%s diagnosticId=%s error=%s",
+            workspace, error.diagnostic.diagnostic_id,
+            error.diagnostic.reason,
             exc_info=True,
         )
-        return ExecutionRecoveryProjection(generated_at=generated_at, error=ExecutionRecoveryProjectionError())
+        return ExecutionRecoveryProjection(generated_at=generated_at, error=error)
 
     candidates: list[ExecutionRecoveryProjectionCandidate] = []
     projection_error = None
@@ -97,14 +100,21 @@ async def resolve_execution_recovery_projection(
         try:
             candidate = await _resolve_candidate(record)
         except Exception as exc:
+            error = recovery_read_error(
+                exc, operation="解析任务恢复状态",
+                source_run_id=record.run_id, thread_id=record.thread_id,
+            )
             logger.warning(
-                "recovery.projection.candidate_failed workspace=%s runId=%s error=%s",
+                "recovery.projection.candidate_failed workspace=%s runId=%s diagnosticId=%s error=%s",
                 workspace,
                 record.run_id,
-                exc,
+                error.diagnostic.diagnostic_id,
+                error.diagnostic.reason,
                 exc_info=True,
             )
-            projection_error = ExecutionRecoveryProjectionError()
+            # 多条失败保留第一条诊断；其他异常仍以各自编号完整写入日志。
+            if projection_error is None:
+                projection_error = error
             continue
         if candidate is not None:
             candidates.append(candidate)
@@ -125,12 +135,14 @@ async def _resolve_candidate(
         if record.execution_kind == "application_planning"
         else workflow_graph_for_request
     )
-    graph = await recovery_graph_for_execution(record) if record.workflow_scope == "conversation" else await graph_factory(
-        workspace=record.workspace,
-        project_id=record.project_id,
-    )
+    with recovery_read_operation("构建任务工作流"):
+        graph = await recovery_graph_for_execution(record) if record.workflow_scope == "conversation" else await graph_factory(
+            workspace=record.workspace,
+            project_id=record.project_id,
+        )
     from app.services.checkpoint_execution import resolve_checkpoint_source
-    record = await resolve_checkpoint_source(record, graph)
+    with recovery_read_operation("读取任务执行进度"):
+        record = await resolve_checkpoint_source(record, graph)
     if record.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
         return None
     from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle

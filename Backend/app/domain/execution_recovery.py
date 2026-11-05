@@ -448,11 +448,23 @@ class ExecutionRecoveryProjectionCandidate(ExecutionRecoveryModel):
     )
 
 
+class RecoveryReadDiagnostic(ExecutionRecoveryModel):
+    """保存恢复查询的安全诊断，不公开代码位置或完整堆栈。"""
+
+    diagnostic_id: str = Field(alias="diagnosticId", min_length=1, max_length=128)
+    operation: str = Field(min_length=1, max_length=128)
+    exception_type: str = Field(alias="exceptionType", min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=2048)
+    source_run_id: str | None = Field(default=None, alias="sourceRunId", max_length=512)
+    thread_id: str | None = Field(default=None, alias="threadId", max_length=512)
+
+
 class ExecutionRecoveryProjectionError(ExecutionRecoveryModel):
     """明确区分恢复信息读取失败与成功读取后的空候选。"""
 
     code: Literal["RECOVERY_PROJECTION_READ_FAILED"] = "RECOVERY_PROJECTION_READ_FAILED"
     message: str = "恢复状态读取失败，请重试同步；尚不能确认没有可恢复任务。"
+    diagnostic: RecoveryReadDiagnostic | None = None
 
 
 class ExecutionRecoveryProjection(ExecutionRecoveryModel):

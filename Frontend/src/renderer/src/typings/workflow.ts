@@ -1271,11 +1271,24 @@ export type ExecutionRecoveryCandidate = {
   updatedAt: string
 }
 
+export type RecoveryReadDiagnostic = {
+  diagnosticId: string
+  operation: string
+  exceptionType: string
+  reason: string
+  sourceRunId?: string | null
+  threadId?: string | null
+}
+
 export type ExecutionRecoveryProjection = {
   schemaVersion: 'execution-recovery.v1'
   generatedAt: string
   candidates: ExecutionRecoveryCandidate[]
-  error?: { code: 'RECOVERY_PROJECTION_READ_FAILED'; message: string } | null
+  error?: {
+    code: 'RECOVERY_PROJECTION_READ_FAILED'
+    message: string
+    diagnostic?: RecoveryReadDiagnostic | null
+  } | null
 }
 
 export type ExecutionResourceLock = {

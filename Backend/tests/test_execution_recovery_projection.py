@@ -84,6 +84,46 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
         self.assertEqual(projection.error.code, "RECOVERY_PROJECTION_READ_FAILED")
 
+    async def test_graph_failure_preserves_safe_reason_and_log_identity(self) -> None:
+        """真实图构建失败向界面传递原因和关联任务，编号可匹配完整日志。"""
+        with (
+            patch("app.services.execution_recovery_projection.list_recovery_projection_candidates",
+                  AsyncMock(return_value=[self._record("broken-graph")])),
+            patch("app.services.execution_recovery_projection.workflow_graph_for_request",
+                  AsyncMock(side_effect=ValueError("Found edge starting at unknown node 'builtin_authorization_bootstrap'"))),
+            self.assertLogs("uvicorn.error", level="WARNING") as captured,
+        ):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+        error = projection.error
+        self.assertIn("未注册的节点 builtin_authorization_bootstrap", error.message)
+        self.assertEqual(error.diagnostic.operation, "构建任务工作流")
+        self.assertEqual(error.diagnostic.exception_type, "ValueError")
+        self.assertEqual(error.diagnostic.source_run_id, "broken-graph")
+        self.assertEqual(error.diagnostic.thread_id, "thread-A")
+        self.assertIn(error.diagnostic.diagnostic_id, "\n".join(captured.output))
+        self.assertNotIn("traceback", error.model_dump_json().lower())
+        self.assertNotIn("execution_recovery_projection.py", error.model_dump_json())
+
+    async def test_index_failure_exposes_redacted_explicit_root_cause(self) -> None:
+        """补建索引失败保留底层原因并清理凭据，未知状态仍阻止恢复动作。"""
+        from app.services.recovery_read_diagnostic import recovery_read_error
+        try:
+            try:
+                raise OSError("database is locked; password=secret-test; Bearer hidden-test")
+            except OSError as cause:
+                raise RuntimeError("读取进度失败") from cause
+        except RuntimeError as exc:
+            error = recovery_read_error(exc, operation="读取任务执行进度")
+        self.assertEqual(error.diagnostic.exception_type, "OSError")
+        self.assertIn("database is locked", error.message)
+        self.assertNotIn("secret-test", error.model_dump_json())
+        self.assertNotIn("hidden-test", error.model_dump_json())
+        with patch("app.services.checkpoint_execution.index_missing_checkpoint_executions",
+                   AsyncMock(side_effect=OSError("index unavailable"))):
+            projection = await resolve_execution_recovery_projection(str(self.workspace))
+        self.assertEqual(projection.candidates, [])
+        self.assertEqual(projection.error.diagnostic.operation, "补建任务恢复索引")
+
     async def test_current_retry_only_exposes_public_fields(self) -> None:
         """当前重试只公开节点动作，不泄漏 checkpoint 或旧恢复 authority。"""
         from app.services.business_node_retry import RetryHint
