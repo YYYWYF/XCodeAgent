@@ -66,13 +66,6 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
                     }
                 ],
                 "navigation_targets": [],
-                "state_requirements": {
-                    "loading": "<填写加载状态要求>",
-                    "empty": "<填写空状态要求>",
-                    "error": "<填写错误状态要求>",
-                    "success": "<填写成功状态要求>",
-                    "validation": "<填写校验状态要求>",
-                },
                 "acceptance_criteria": ["<填写页面级产品验收标准>"],
             }
         )
@@ -181,7 +174,7 @@ def _product_planning_prompt(
         "or integration tests, quality gates, or conditions for entering user acceptance.\n"
         "The page set is immutable: pages must match RequirementSpec.pages one-to-one by pageId, name, "
         "path, module_id, and description. For each page add: goal, information_items, actions, "
-        "navigation_targets, state_requirements, and acceptance_criteria.\n"
+        "navigation_targets, and acceptance_criteria.\n"
         "information_items MUST be JSON objects shaped exactly as "
         "{itemId, label, description}; never serialize objects as strings. itemId is stable within its page.\n"
         "An action is an explicit user-triggered intent that changes visible UI state, changes a result set, "
@@ -205,8 +198,9 @@ def _product_planning_prompt(
         "permissions, allowed_roles, role IDs, role assignments, resource keys, policy keys, or the fixed /roles "
         "system page. Every navigation behavior targetPageId must also appear "
         "in that page's navigation_targets, including a targetPageId equal to the current pageId. "
-        "state_requirements should cover loading, empty, error, "
-        "success, and validation.\n"
+        "Do not generate state_requirements: page states (loading/empty/error/success/validation) "
+        "are an implementation concern decided during UI design, not a product-plan field. "
+        "If a page genuinely needs a product-level state requirement, express it in acceptance_criteria.\n"
         "Follow this complete JSON response structure exactly. Replace angle-bracket placeholders with "
         "product facts; do not add keys. For navigation/external/sequence behavior, replace the behavior "
         "object with the exact type-specific fields described above.\n"
@@ -228,7 +222,7 @@ def _invoke_product_planner(
     """调用产品规划 ChatModel，并可选透传流式文本。
 
     GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens。ProductPlan JSON
-    体量大（多页 information_items/actions/state_requirements），thinking 会挤占
+    体量大（多页 information_items/actions），thinking 会挤占
     输出预算，常在写完闭合括号前被截断，流式投到前端的原始 JSON 也随之截断、
     解析校验失败。与 UI 设计稿生成一致，关闭 thinking 释放输出预算。
     """

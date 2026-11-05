@@ -10,7 +10,6 @@ from app.services.requirement_spec import product_acceptance_criteria
 from app.services.product_plan_carryover import carried_definition_for_page
 
 PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v5"
-_STATE_REQUIREMENT_KEYS = ("loading", "empty", "error", "success", "validation")
 _FORBIDDEN_PRODUCT_KEYS = {
     "api_contracts",
     "data_sources",
@@ -59,9 +58,11 @@ _MODEL_PAGE_KEYS = {
     "information_items",
     "actions",
     "navigation_targets",
-    "state_requirements",
     "acceptance_criteria",
 }
+# state_requirements 不再是必需字段：纯展示页等无状态场景可省略。
+# 模型若仍提供（旧习惯或有状态页面），作为可选字段容忍，不报"未声明字段"。
+_OPTIONAL_PAGE_KEYS = {"state_requirements"}
 _MODEL_INFORMATION_ITEM_KEYS = {"itemId", "label", "description"}
 _MODEL_APP_KEYS = {"name", "summary"}
 _MODEL_ACTION_KEYS = {
@@ -177,7 +178,13 @@ def validate_product_plan_model_output(
         errors.append("ProductPlan 模型输出.pageId 必须全部为 lower_snake_case。")
     for page_index, page in enumerate(pages):
         location = f"ProductPlan 模型输出.pages[{page_index}]"
-        errors.extend(_exact_keys(page, _MODEL_PAGE_KEYS, location))
+        # state_requirements 作为可选字段容忍：校验前剥离，避免"未声明字段"误报。
+        page_for_check = (
+            {k: v for k, v in page.items() if k not in _OPTIONAL_PAGE_KEYS}
+            if isinstance(page, dict)
+            else page
+        )
+        errors.extend(_exact_keys(page_for_check, _MODEL_PAGE_KEYS, location))
         if not isinstance(page, dict):
             continue
         information_items = page.get("information_items")
@@ -205,10 +212,8 @@ def validate_product_plan_model_output(
                     errors.extend(
                         _model_behavior_errors(action.get("behavior"), f"{action_location}.behavior")
                     )
-        state_requirements = page.get("state_requirements")
-        errors.extend(
-            _exact_keys(state_requirements, set(_STATE_REQUIREMENT_KEYS), f"{location}.state_requirements")
-        )
+        # state_requirements 不再强制：纯展示页等无状态场景可省略，
+        # 模型若提供则保留（兼容旧数据），但不校验其 key 是否完整覆盖五种状态。
         for field in ("navigation_targets", "acceptance_criteria"):
             if not isinstance(page.get(field), list):
                 errors.append(f"{location}.{field} 必须是 JSON 数组。")
@@ -460,7 +465,6 @@ def _normalized_pages(
             for target in [*_text_items(supplement.get("navigation_targets")), *action_targets]
             if target in page_ids
         ]))
-        state_requirements = supplement.get("state_requirements")
         pages.append(
             {
                 "pageId": page_id,
@@ -478,16 +482,12 @@ def _normalized_pages(
                 "information_items": information,
                 "actions": actions,
                 "navigation_targets": navigation,
-                "state_requirements": (
-                    dict(state_requirements)
-                    if isinstance(state_requirements, dict)
-                    else {
-                        "loading": "加载业务数据时展示明确进度。",
-                        "empty": "无数据时解释当前状态并提供下一步入口。",
-                        "error": "失败时展示原因和重试入口。",
-                        "success": "成功操作提供结果反馈。",
-                        "validation": "提交前指出缺失或无效输入。",
-                    }
+                # state_requirements 不再默认填充：纯展示页等无状态场景不需要。
+                # 模型若提供了则保留（兼容旧数据/有状态页面），否则省略。
+                **(
+                    {"state_requirements": dict(supplement.get("state_requirements"))}
+                    if isinstance(supplement.get("state_requirements"), dict)
+                    else {}
                 ),
                 "acceptance_criteria": product_acceptance_criteria(
                     supplement.get("acceptance_criteria")
@@ -775,7 +775,13 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
             errors.append(f"ProductPlan.authorizationTargets.{field_name} 必须是 JSON 数组。")
     for page in _dict_items(product_plan.get("pages")):
         page_id = str(page.get("pageId") or "")
-        errors.extend(_exact_keys(page, _MODEL_PAGE_KEYS, f"ProductPlan.pages[{page_id or 'unknown'}]"))
+        # state_requirements 作为可选字段容忍：校验前剥离，避免"未声明字段"误报。
+        page_for_check = (
+            {k: v for k, v in page.items() if k not in _OPTIONAL_PAGE_KEYS}
+            if isinstance(page, dict)
+            else page
+        )
+        errors.extend(_exact_keys(page_for_check, _MODEL_PAGE_KEYS, f"ProductPlan.pages[{page_id or 'unknown'}]"))
         if page_id == "system_authorization_management" or str(page.get("path") or "") == "/roles":
             errors.append("ProductPlan.pages 不得包含固定权限管理页面 /roles。")
         for key in ("name", "path", "module_id", "description", "goal"):
@@ -843,11 +849,7 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
             errors.append(
                 f"页面 {page_id} 不得包含角色或授权字段：" + "、".join(sorted(forbidden_page_keys)) + "。"
             )
-        state_requirements = page.get("state_requirements")
-        if not isinstance(state_requirements, dict) or any(
-            not str(state_requirements.get(key) or "").strip() for key in _STATE_REQUIREMENT_KEYS
-        ):
-            errors.append(f"页面 {page_id} 的 state_requirements 必须完整覆盖五种产品状态。")
+        # state_requirements 不再强制完整覆盖五种状态；模型可省略或部分提供。
     target_specs = (("restrictedPages", "pageRules", {"ruleId", "pageId"}),
                     ("restrictedOperations", "operationRules", {"ruleId", "pageId", "actionId"}))
     action_targets = {

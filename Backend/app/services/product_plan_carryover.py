@@ -9,8 +9,8 @@
 与上一轮**逐字段相同**，就说明用户没要求改这一页 —— 于是整份沿用上一轮 ProductPlan 里
 这一页的定义，模型这一轮给的内容直接丢弃。
 
-**只沿用 supplement 类字段**（goal / information_items / actions / navigation_targets /
-state_requirements），`path` / `name` / `module_id` / `description` 仍取当前 RequirementSpec ——
+**只沿用 supplement 类字段**（goal / information_items / actions / navigation_targets），
+`path` / `name` / `module_id` / `description` 仍取当前 RequirementSpec ——
 否则修好的路由会被旧值覆盖回去。
 
 本文件（`.devagentstudio/product-plan-carryover.json`）与 `ui_design_carryover.json` 同理，
@@ -45,12 +45,12 @@ _STRUCTURAL_REQUIREMENT_FIELDS = ("pageId", "name", "path")
 
 # 沿用的字段：模型在 ProductPlan 页面里补充、而 RequirementSpec 不提供的那部分。
 # 与 `product_plan._normalized_pages` 读取的 `supplement` 完全对应。
+# state_requirements 不再沿用：页面状态由 UI 设计按需决定，不作为产品规划沿用字段。
 DEFINITION_FIELDS = (
     "goal",
     "information_items",
     "actions",
     "navigation_targets",
-    "state_requirements",
 )
 
 # 页面里需要保持稳定的 ID 字段：(ProductPlan 页面字段, 条目上的 ID 键)

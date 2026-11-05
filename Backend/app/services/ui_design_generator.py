@@ -153,12 +153,8 @@ def _page_brief(page: dict[str, Any]) -> str:
     actions = page.get("actions")
     if isinstance(actions, list) and actions:
         lines.append("- approved product actions: " + json.dumps(actions, ensure_ascii=False))
-    state_requirements = page.get("state_requirements")
-    if isinstance(state_requirements, dict) and state_requirements:
-        lines.append(
-            "- required product states: "
-            + json.dumps(state_requirements, ensure_ascii=False)
-        )
+    # state_requirements 不再传入 UI 设计稿 prompt：页面状态（loading/empty/error/success/
+    # validation）应由 UI 设计根据页面实际交互按需呈现，而非产品规划强制要求。
     for key, label in (
         ("navigation_targets", "approved navigation target pageIds"),
         ("acceptance_criteria", "product acceptance criteria"),
@@ -194,8 +190,19 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
         "- Implement declared local interactions with React state and Mock data: filters update visible "
         "results, dialogs/drawers open and close, tabs switch, forms validate, and confirmation flows can "
         "complete locally. Cross-page controls may remain non-navigating in the isolated preview.\n"
-        "- Render success, loading, empty, error, and validation states with a compact in-page preview "
-        "switcher when those states cannot naturally be reached from the main interaction.\n"
+        "- Render page states ON DEMAND, not by default. Only include loading/empty/error/success/validation "
+        "states when the page actually has data fetching, list rendering, form submission, or other "
+        "interactions that produce those states, OR when acceptance_criteria explicitly requires a state "
+        "(e.g. an error state with specific copy). A static display page (e.g. showing a fixed string) "
+        "must NOT add empty/error/loading states — render only its real content. Never invent a compact "
+        "in-page state preview switcher just to show states that do not exist for this page.\n"
+        "- When a state preview switcher IS needed (the page has multiple states to show), place it as a "
+        "STANDALONE TOOLBAR ABOVE the page content, clearly separated from the page itself: wrap it in a "
+        "div with light gray background (rgba(0,0,0,0.04) in light / rgba(255,255,255,0.06) in dark), 8px "
+        "padding, 8px border-radius, and 16px bottom margin. Put a small muted text '预览状态' before the "
+        "switcher. The switcher and the page content below must be visually distinct — the switcher is a "
+        "preview affordance, NOT part of the designed page. Mark the switcher container with "
+        "data-preview-only=\"true\" so it can be distinguished from real page content.\n"
         "- Use Ant Design theme tokens and responsive layout rules; the page must remain readable in light "
         "and dark themes and at wide/compact PC widths. Do not introduce standalone hard-coded brand colors.\n"
         "- Infer the page type from the page name and description (no components "
