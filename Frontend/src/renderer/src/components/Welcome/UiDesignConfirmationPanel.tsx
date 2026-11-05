@@ -19,6 +19,7 @@ import type {
 import { cx } from '../../utils'
 import { useUiDesignPagesWithCode } from '../../hooks/useUiDesignPagesWithCode'
 import { shouldSettleAdjust } from '../../service/uiDesignAdjustSettlement'
+import { planningWorkflowPhase } from '../../service/applicationPlanningWorkflowState'
 import { parseDesignMentions } from '../../service/designMention'
 import { uiDesignGenerationProgress } from '../../service/uiDesignGenerationProgress'
 import {
@@ -79,6 +80,10 @@ type Props = {
   iterationOrigins?: Record<string, UiDesignIterationOrigin>
   /** 工作区根路径，用于直接读 ui-designs.json 轮询后台生成池进度（绕过 Graph run 并发约束）。 */
   workspaceRoot?: string
+  /** 用户在调整输入框里提出了页面级新增/删除（结构性变更），超出 UI 调整范畴；
+   *  点击「转交产品 Agent」按钮时，把该指令作为 design_change_request 提交到产品
+   *  意图识别路径。不传则按钮不显示。 */
+  onTransferToProductAgent?: (instruction: string) => void | Promise<void>
 }
 
 // 从公开 Workflow 载荷中读取当前计划阶段的待确认内容。
@@ -116,10 +121,34 @@ export default function UiDesignConfirmationPanel({
   onActingPageIdsChange,
   showPreview = true,
   iterationOrigins,
-  workspaceRoot
+  workspaceRoot,
+  onTransferToProductAgent
 }: Props): ReactElement | null {
   const clarification = planningClarification(workflow)
-  const rawPages = useMemo(() => readPages(clarification), [clarification])
+  const freshPages = useMemo(() => readPages(clarification), [clarification])
+  // 结构性变更触发自动转交产品意图识别后，clarification 会在若干帧内切到
+  // design_intent_analysis 的中间态（pages 拿空），导致卡片闪过「暂无可展示的
+  // 页面设计稿」。这里记录「上一次确实有页面 + 上一帧处于 structural_change」，
+  // 在转交期间用缓存的旧 pages 兜底；一旦 clarification 重新给出非空 pages，
+  // 立刻回到实时数据。
+  const lastNonEmptyPagesRef = useRef<PageDesign[]>([])
+  const wasStructuralChangeRef = useRef<boolean>(false)
+  const isStructuralChange = Boolean(
+    (clarification as unknown as Record<string, unknown> | undefined)?.structural_change
+  )
+  useEffect(() => {
+    if (freshPages.length > 0) {
+      lastNonEmptyPagesRef.current = freshPages
+    }
+    if (isStructuralChange) {
+      wasStructuralChangeRef.current = true
+    }
+  }, [freshPages, isStructuralChange])
+  const inTransferTransition =
+    freshPages.length === 0 &&
+    wasStructuralChangeRef.current &&
+    lastNonEmptyPagesRef.current.length > 0
+  const rawPages = inTransferTransition ? lastNonEmptyPagesRef.current : freshPages
   // 后台生成池完成（confirmed/generation_failed）后 workflow 快照可能仍停留在
   // queued/generating。直接读 ui-designs.json 拿到最新 status 覆盖快照，避免卡片
   // 一直显示「生成中」。override 只在本地 acting/generating 页存在时由轮询填充。
@@ -141,6 +170,33 @@ export default function UiDesignConfirmationPanel({
     const value = clarification?.validation_errors
     return Array.isArray(value) ? value.map(String).filter(Boolean) : []
   }, [clarification])
+  // 用户在调整输入框里提出了结构性变更（新增/删除整个页面），后端识别后通过
+  // clarification.structural_change 透传；前端据此弹出「转交产品 Agent」按钮，
+  // 点击后把同一段指令作为 design_change_request 提交到下方产品意图识别路径。
+  const structuralChangeInstruction = useMemo(() => {
+    const raw = clarification as unknown as Record<string, unknown> | undefined
+    if (!raw?.structural_change) return ''
+    return typeof raw.structural_change_instruction === 'string'
+      ? raw.structural_change_instruction
+      : ''
+  }, [clarification])
+  // 结构性变更（新增/删除整个页面）超出 UI 调整范畴。后端识别后通过 clarification
+  // 透传指令；前端**自动**把它提交到产品意图识别路径，不需要用户再点一次按钮——
+  // 用户输入指令 → 卡片短暂显示「正在分析需要调整的页面…」→ 直接进入产品意图
+  // 识别流程，与在下方产品输入框输入同一段指令的体验完全一致。
+  const transferFiredRef = useRef<string>('')
+  useEffect(() => {
+    if (!structuralChangeInstruction) {
+      transferFiredRef.current = ''
+      return
+    }
+    if (!onTransferToProductAgent) return
+    // 同一段指令只触发一次：clarification 在 polling 期间会被多次重放，
+    // 没这层去重会把同一请求发给后端 N 次。
+    if (transferFiredRef.current === structuralChangeInstruction) return
+    transferFiredRef.current = structuralChangeInstruction
+    void onTransferToProductAgent(structuralChangeInstruction)
+  }, [structuralChangeInstruction, onTransferToProductAgent])
   const [feedback, setFeedback] = useState('')
   const [internalActivePageId, setInternalActivePageId] = useState<string>('')
   // 受控模式（外部传入 activePageId）优先，否则用内部状态。
@@ -292,6 +348,28 @@ export default function UiDesignConfirmationPanel({
     setRefreshing(false)
     setActingPageIds([])
   }, [workflow.runId, workflow.summary?.status, actingSet, setActingPageIds])
+
+  // 结构性变更（新增/删除整页）触发的 adjust 不换代 runId：后端在**同一 run** 回落
+  // requires_user_input 并回传 structural_change，随后本面板 effect 自动转交产品意图识别
+  // （onTransferToProductAgent → 新 run phase=design_intent_analysis）。新 run 因
+  // planningNewRoundRef=true 让快照合并走「新一轮」分支另建消息卡，本卡从此冻结不再收帧 ——
+  // 上面那个靠「runId 换代 + 落回待输入」的 settle 永远凑不齐条件，'adjust' 哨兵与
+  // runInFlightRef 永久残留，卡片底部常挂「正在调整设计稿…」。
+  //
+  // 这里补一条针对该场景的 settle：本卡仍处于 adjust 态、clarification 已读不到 pages
+  // （被 design_intent_analysis 中间态覆盖）、且 workflow 阶段已离开 ui_confirmation 时，
+  // 说明本卡已被意图识别接管，立即本地收尾。旧卡凭 lastNonEmptyPagesRef 缓存继续显示旧
+  // 设计稿，「正在调整设计稿…」消失，由意图识别进度卡无缝接替。
+  const phase = planningWorkflowPhase(workflow)
+  useEffect(() => {
+    if (!actingSet.has('adjust')) return
+    if (freshPages.length > 0) return
+    if (!phase || phase === 'ui_confirmation') return
+    runInFlightRef.current = false
+    observedRunningRef.current = false
+    setRefreshing(false)
+    setActingPageIds([])
+  }, [phase, freshPages.length, actingSet, setActingPageIds])
 
   const confirmAll = (): void => {
     const feedbackText = feedback.trim()
@@ -1169,6 +1247,7 @@ export default function UiDesignConfirmationPanel({
             </div>
           ) : null}
         </div>
+
         <div className={cx('ui-design-confirm-footer-row')}>
           <Text className={cx('ui-design-confirm-hint')} type="secondary">
             {adjustingHint

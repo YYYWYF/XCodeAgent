@@ -5403,6 +5403,34 @@ export default function AiChatPanel({
                 onReviseConfirmedTechnicalPlan={
                   isTechnicalPlanningPhase ? handleInitialProductConversationSend : undefined
                 }
+                onTransferToProductAgent={
+                  planningHistoryOnly || !currentPlanningWorkflow
+                    ? undefined
+                    : async (instruction: string): Promise<void> => {
+                        // 把 UI 调整输入框里的结构性变更请求（新增/删除整个页面）
+                        // 转给产品意图识别路径。复用下方 ChatComposer 同款提交流程：
+                        // 创建 DESIGN 线程并提交 design_change_request。
+                        const trimmed = instruction.trim()
+                        if (!trimmed) return
+                        setGeneratingDetailTargetKey('')
+                        planningNewRoundRef.current = true
+                        lastUiDesignRunIdRef.current = undefined
+                        appendPlanningUserMessage({ design_change_request: trimmed })
+                        try {
+                          await onSubmitPlanningClarification(
+                            currentPlanningWorkflow,
+                            {},
+                            undefined,
+                            undefined,
+                            trimmed
+                          )
+                        } catch (reason) {
+                          message.error(
+                            reason instanceof Error ? reason.message : '转交产品 Agent 失败，请重试。'
+                          )
+                        }
+                      }
+                }
                 reviseConfirmedTechnicalPlanDisabled={
                   productConversationSendDisabled || workflowInputLocked
                 }

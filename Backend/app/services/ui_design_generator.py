@@ -906,6 +906,11 @@ def _build_adjust_prompt(
     仿 _build_repair_prompt 的"前次代码 + 修改要求"模式，但替换错误清单为
     用户的自然语言调整指令。强调保留页面整体结构、仅按指令调整，仍遵循
     antd-ui-design skill 规范（纯视觉、内联 Mock、Pro 组件）。
+
+    **关键**：用户指令优先级**高于** PRODUCT FACT BOUNDARY 的"渲染所有声明
+    action"约束 —— 当用户明确说"删除/去掉/移除"某个按钮/板块时，模型必须
+    真的删，而不是用"暂不考虑"等变通方式保留。否则下一轮调整时模型又会被
+    "Render every declared action"规则把删掉的部分加回来。
     """
 
     return (
@@ -925,6 +930,24 @@ def _build_adjust_prompt(
         "@ant-design/pro-components, inline static Mock data (8-15 rows), "
         "ProTable uses `dataSource` not `request`, no API/useEffect/fetch, "
         "local-state handlers only, no layout shell.\n\n"
+        "**USER INSTRUCTION TAKES PRECEDENCE OVER PRODUCT FACT BOUNDARY**: "
+        "When the user's instruction explicitly asks to REMOVE / DELETE / 去掉 "
+        "a button, section, action, or information item, you MUST completely "
+        "remove the JSX element from the rendered output. This means the element "
+        "must NOT appear in the returned .tsx file at all — no `disabled` button, "
+        "no grayed-out placeholder, no `暂未开放` tag, no `actionId: null` "
+        "fallback, no visually-hidden element, no commented-out code, no "
+        "conditional rendering that could still produce the element. "
+        "If you find yourself writing a Button/ProCard/div that still displays "
+        "the label the user asked to remove (e.g. still rendering '出差卡借用' "
+        "as a disabled button), STOP — that is NOT a deletion. Delete the "
+        "array entry / JSX element entirely so the label never appears in the "
+        "rendered page.\n\n"
+        "Do NOT reinterpret a removal request as 'show but disable'. Do NOT "
+        "preserve the element 'just in case the user changes their mind'. The "
+        "user has authority to remove declared product facts; the PRODUCT FACT "
+        "BOUNDARY below only applies to facts the user did NOT explicitly ask "
+        "to remove.\n\n"
         + _product_fact_boundary_rules()
         + "--- PAGE TO DESIGN ---\n"
         f"{_page_brief(page)}\n"

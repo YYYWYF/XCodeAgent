@@ -46,6 +46,7 @@ from app.services.ui_design_generator import (
 from app.services.ui_design_manifest import (
     UI_MANIFEST_SCHEMA_VERSION,
     build_ui_page_manifest,
+    inspect_ui_code_bindings,
     present_ui_pages,
     validate_ui_design_code,
 )
@@ -59,6 +60,10 @@ from app.services.ui_design_project_setup import (
     ui_design_project_dir,
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
+from app.workspace.product_plan_documents import (
+    render_product_plan_markdown,
+    write_confirmed_product_plan_documents,
+)
 from app.workspace.spec_documents import (
     load_ui_designs_json,
     ui_designs_json_path,
@@ -100,10 +105,20 @@ def _product_plan_hash(state: ProjectState) -> str:
 def _ui_design_confirmation_payload(
     state: ProjectState,
     ui_designs: dict[str, Any],
+    product_plan_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """构造 UI确认待确认交互载荷，附带页面设计稿摘要供前端渲染。"""
+    """构造 UI确认待确认交互载荷，附带页面设计稿摘要供前端渲染。
 
-    product_plan = state.get("product_plan")
+    `product_plan_override` 用于 adjust 路径：本函数被调用时新 ProductPlan 还没
+    写回 state（state 的写入发生在返回值里），但渲染 clarification.pages 必须用
+    新 plan，否则产品事实（页面 actions/items）与 ui_designs 引用的哈希不一致。
+    """
+
+    product_plan = (
+        product_plan_override
+        if isinstance(product_plan_override, dict)
+        else state.get("product_plan")
+    )
     product_plan = product_plan if isinstance(product_plan, dict) else {}
     pages = present_ui_pages(ui_designs, product_plan)
     pending_count = sum(
@@ -131,6 +146,15 @@ def _ui_design_confirmation_payload(
     payload["pages"] = pages
     # 每页在历史迭代里的归属（designedIn / plannedButUndesignedIn），供界面标注。
     payload["iteration_origins"] = _with_iteration_origins(state, pages)
+    # 结构性变更（新增/删除整个页面）超出 UI 调整范畴，需要走产品意图识别路径。
+    # 透传 structural_change / structural_change_instruction 让前端弹出「转交产品
+    # Agent」按钮，把同一段指令作为 design_change_request 提交到下方输入框对应的
+    # 意图识别路径。
+    if ui_designs.get("structural_change"):
+        payload["structural_change"] = True
+        payload["structural_change_instruction"] = str(
+            ui_designs.get("structural_change_instruction") or ""
+        )
     return payload
 
 
@@ -389,18 +413,111 @@ def _carried_ui_page_manifest(
         template_source_path=record["templateSourcePath"],
     )
 
+def _diff_adjusted_page_product_facts(
+    spec_page: dict[str, Any],
+    new_code: str,
+) -> tuple[list[str], list[str]]:
+    """从调整后的 TSX 静态标记里反推"哪些 ProductPlan 声明的 action/item 已不在代码里"。
+
+    用户在调整指令里主动删除某个按钮/板块时，代码里对应的 data-action-id /
+    data-information-item-id 会消失；但 ProductPlan 仍声明它们，下一次调整会被
+    「Render every declared action」规则带回去（用户已报告的 bug）。这里把这些
+    "ProductPlan 声明了但代码里没了"的 id 提取出来，调用方据此同步 ProductPlan。
+
+    返回 (removed_action_ids, removed_information_item_ids)。
+    """
+
+    inspection = inspect_ui_code_bindings(new_code)
+    actual_actions = set(inspection.get("actions") or {})
+    actual_items = set(inspection.get("information_items") or {})
+
+    declared_actions = {
+        str(item.get("actionId") or "").strip()
+        for item in spec_page.get("actions") or []
+        if isinstance(item, dict) and str(item.get("actionId") or "").strip()
+    }
+    declared_items = {
+        str(item.get("itemId") or "").strip()
+        for item in spec_page.get("information_items") or []
+        if isinstance(item, dict) and str(item.get("itemId") or "").strip()
+    }
+    removed_actions = sorted(declared_actions - actual_actions)
+    removed_items = sorted(declared_items - actual_items)
+    return removed_actions, removed_items
+
+
+def _remove_page_product_facts(
+    product_plan: dict[str, Any],
+    page_id: str,
+    removed_action_ids: list[str],
+    removed_item_ids: list[str],
+) -> dict[str, Any]:
+    """返回从指定页面里删掉一组 action / information_item 后的新 ProductPlan。
+
+    只动目标 pageId 的 actions / information_items 两个字段，其它字段（含
+    confirmation_status / version / app 等）原样保留 —— ProductPlan 仍是
+    已确认产物，只是页面粒度的子集被收缩。调用方负责落盘与哈希刷新。
+    """
+
+    if not removed_action_ids and not removed_item_ids:
+        return product_plan
+    removed_actions_set = set(removed_action_ids)
+    removed_items_set = set(removed_item_ids)
+    pages = product_plan.get("pages") if isinstance(product_plan.get("pages"), list) else []
+    new_pages: list[dict[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            new_pages.append(page)
+            continue
+        pid = str(page.get("pageId") or page.get("id") or "").strip()
+        if pid != page_id:
+            new_pages.append(page)
+            continue
+        actions = [
+            item
+            for item in page.get("actions") or []
+            if isinstance(item, dict)
+            and str(item.get("actionId") or "").strip() not in removed_actions_set
+        ]
+        items = [
+            item
+            for item in page.get("information_items") or []
+            if isinstance(item, dict)
+            and str(item.get("itemId") or "").strip() not in removed_items_set
+        ]
+        new_pages.append({**page, "actions": actions, "information_items": items})
+    return {**product_plan, "pages": new_pages}
+
+
+def _product_plan_hash_for(plan: dict[str, Any]) -> str:
+    """与 _product_plan_hash 同一口径，但接受显式 plan（调整路径里 state 还没刷新）。"""
+
+    if not isinstance(plan, dict):
+        return ""
+    return hashlib.sha256(
+        json.dumps(plan, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
 
 async def _apply_adjust_pages(
     state: ProjectState,
     pages: list[dict[str, Any]],
     project_dir: str,
     action: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
 
     一个 run 内顺序处理（不并发，避免 LLM 限流/写冲突），每页完成推送流式进度，
     前端显示"正在调整第 X/N 页"。失败的页标记 generation_failed，继续处理其他页。
-    返回更新后的 ui_designs（所有选中页都已调整，其余页原样保留）。
+
+    返回 `(ui_designs, product_plan)`：
+    - `ui_designs` 是调整后的页面清单（含每页最新 status / code_path / code）。
+    - `product_plan` 是同步后的 ProductPlan：把"调整后的 TSX 已不再渲染"的 action /
+      information_item 从对应页面里删掉。这是必须的 —— ProductPlan 是 UI 生成 prompt
+      的产品事实来源，如果不同步，下一轮调整会被「Render every declared action」
+      规则把用户上一轮删掉的按钮又带回去。删除采用最小收缩：只动目标 pageId 的
+      actions / information_items，其它字段（含 confirmation_status / version / app）
+      原样保留。
     """
 
     raw_ids = action.get("pageIds")
@@ -410,17 +527,63 @@ async def _apply_adjust_pages(
         else []
     )
     instruction = str(action.get("instruction") or "").strip()
+    product_plan = state.get("product_plan") if isinstance(state.get("product_plan"), dict) else {}
     if not instruction:
-        return {
-            "schema_version": UI_MANIFEST_SCHEMA_VERSION,
-            "confirmation_status": "pending_user_confirmation",
-            "product_plan_sha256": _product_plan_hash(state),
-            "pages": pages,
-        }
+        return (
+            {
+                "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+                "confirmation_status": "pending_user_confirmation",
+                "product_plan_sha256": _product_plan_hash_for(product_plan),
+                "pages": pages,
+            },
+            product_plan,
+        )
 
     # 用户未通过 @页面名 指定目标时，让大模型根据 instruction + 所有页面信息
     # 自行判断需要调整哪些页面。
     if not page_ids:
+        # 用现成的产品意图分类模型识别"这条请求是不是页面级新增/删除"。比硬编码
+        # 关键词鲁棒得多——能处理「删掉」「把某页拿掉」「我要新增一个 XX 页」等
+        # 各种自然语言表达。判定为「不是 ui_change + ui 层级」时（例如
+        # requirement_change + product_behavior/requirement），就说明这条请求
+        # 超出 UI 调整范畴，必须走产品意图识别路径（design_intent_analysis）。
+        from app.agents.design_conversation.router import classify_design_conversation
+
+        decision = await asyncio.to_thread(
+            classify_design_conversation,
+            instruction,
+            requirement_spec=state.get("requirement_spec")
+            if isinstance(state.get("requirement_spec"), dict)
+            else None,
+            product_plan=product_plan,
+            ui_designs={"pages": pages} if isinstance(pages, list) else None,
+        )
+        is_pure_ui_adjust = (
+            decision.intent == "ui_change" and decision.change_level == "ui"
+        )
+        if not is_pure_ui_adjust:
+            _emit_progress(
+                "检测到页面级新增/删除请求，需要走产品意图识别",
+                ready=0,
+                total=0,
+                pages=list(pages),
+                adjust_total=0,
+                adjust_ready=0,
+            )
+            return (
+                {
+                    "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+                    "confirmation_status": "pending_user_confirmation",
+                    "product_plan_sha256": _product_plan_hash_for(product_plan),
+                    "pages": pages,
+                    # 告知前端：这条请求超出 UI 调整范围，应转交产品 Agent。
+                    # 前端据此弹出「转交产品 Agent」按钮，把同一段指令作为
+                    # design_change_request 提交到产品意图识别路径。
+                    "structural_change": True,
+                    "structural_change_instruction": instruction,
+                },
+                product_plan,
+            )
         _emit_progress(
             "正在分析需要调整的页面…",
             ready=0,
@@ -442,12 +605,15 @@ async def _apply_adjust_pages(
                 adjust_total=0,
                 adjust_ready=0,
             )
-            return {
-                "schema_version": UI_MANIFEST_SCHEMA_VERSION,
-                "confirmation_status": "pending_user_confirmation",
-                "product_plan_sha256": _product_plan_hash(state),
-                "pages": pages,
-            }
+            return (
+                {
+                    "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+                    "confirmation_status": "pending_user_confirmation",
+                    "product_plan_sha256": _product_plan_hash_for(product_plan),
+                    "pages": pages,
+                },
+                product_plan,
+            )
 
     total = len(page_ids)
 
@@ -532,6 +698,25 @@ async def _apply_adjust_pages(
                 code=code,
                 status="confirmed",
             )
+            # 同步 ProductPlan：删掉"调整后的 TSX 已不再渲染"的 action/item。
+            # 否则下一轮调整的 prompt 仍把它们列为「必须渲染的产品事实」，
+            # 模型会把用户上一轮删掉的按钮/板块又加回来。
+            removed_action_ids, removed_item_ids = _diff_adjusted_page_product_facts(
+                spec_page, code
+            )
+            if removed_action_ids or removed_item_ids:
+                product_plan = _remove_page_product_facts(
+                    product_plan, page_id, removed_action_ids, removed_item_ids
+                )
+                _emit_progress(
+                    f"已同步产品规划：{name} 移除 {len(removed_action_ids)} 个操作、"
+                    f"{len(removed_item_ids)} 个信息项",
+                    ready=seq + 1,
+                    total=total,
+                    pages=list(pages),
+                    adjust_total=total,
+                    adjust_ready=seq + 1,
+                )
             _emit_progress(
                 f"设计稿已调整：{name}（第 {seq + 1}/{total} 页完成）",
                 ready=seq + 1,
@@ -559,12 +744,15 @@ async def _apply_adjust_pages(
                 adjust_ready=seq + 1,
             )
 
-    return {
-        "schema_version": UI_MANIFEST_SCHEMA_VERSION,
-        "confirmation_status": "pending_user_confirmation",
-        "product_plan_sha256": _product_plan_hash(state),
-        "pages": pages,
-    }
+    return (
+        {
+            "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+            "confirmation_status": "pending_user_confirmation",
+            "product_plan_sha256": _product_plan_hash_for(product_plan),
+            "pages": pages,
+        },
+        product_plan,
+    )
 
 
 async def _latest_ui_designs(
@@ -734,12 +922,18 @@ async def _enqueue_ui_design_generation(
 
 async def _apply_ui_design_action(
     state: ProjectState, existing: dict[str, Any], action: dict[str, Any]
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """把用户逐页「选模板 / 重新生成 / 多页调整」动作交给后台生成池或顺序调整。
 
     regenerate/select_template（单页与 multi）走后台并发生成池：登记即返回，不再
     阻塞在 Graph run 内同步调 LLM。adjust_pages 保持一个 run 内顺序处理（基于现有
     设计稿 + 指令逐页改写），因为它是显式的多页调整请求而非并发生成。
+
+    返回 `(ui_designs, product_plan_or_none)`：
+    - adjust_pages 路径会同步 ProductPlan（删掉用户在新代码里删除的 action /
+      information_item），并把新 plan 一并返回 —— 调用方负责把它写回 state 并
+      落盘。
+    - 其它路径返回 None，调用方保留原 state.product_plan。
     """
 
     workspace = str(workspace_root(state))
@@ -750,19 +944,19 @@ async def _apply_ui_design_action(
 
     # 显式恢复只进入既有孤立任务自愈；不重做活跃页，不确认产物或推进下游。
     if action_type == "refresh":
-        return await _latest_ui_designs(state, existing)
+        return (await _latest_ui_designs(state, existing), None)
 
     # 多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
     # adjust_pages 不落盘，需在此持久化；换一换/选模板由池落盘，这里不重复写。
     if action_type == "adjust_pages":
-        adjusted = await _apply_adjust_pages(
+        adjusted, product_plan = await _apply_adjust_pages(
             state, _adjust_base_pages(state, pages), project_dir, action
         )
         _persist_ui_designs(state, adjusted)
-        return adjusted
+        return (adjusted, product_plan)
 
     # 单页 / multi「换一换 / 选模板」：登记到后台并发池。
-    return await _enqueue_ui_design_generation(state, pages, action)
+    return (await _enqueue_ui_design_generation(state, pages, action), None)
 
 
 def _adjust_base_pages(
@@ -840,15 +1034,32 @@ async def ui_confirmation(state: ProjectState) -> dict:
             else _has_explicit_user_submission(state)
         )
     ):
-        ui_designs = await _apply_ui_design_action(state, existing, action)
-        return {
+        ui_designs, updated_product_plan = await _apply_ui_design_action(
+            state, existing, action
+        )
+        result: dict[str, Any] = {
             "phase": "ui_confirmation",
             "status": "requires_user_input",
             "ui_designs": ui_designs,
             "ui_design_action": None,
-            "clarification": _ui_design_confirmation_payload(state, ui_designs),
+            "clarification": _ui_design_confirmation_payload(
+                state, ui_designs, product_plan_override=updated_product_plan
+            ),
             "timeline": ["ui_confirmation"],
         }
+        # adjust_pages 可能收缩了 ProductPlan：把新 plan 写回 state 并落盘正式目录，
+        # 让后续 adjust 的 prompt 看到的 product facts 与当前代码一致；同时刷新
+        # markdown 让用户能看到产品规划里那些按钮/板块已被删除。
+        if updated_product_plan is not None and updated_product_plan != state.get(
+            "product_plan"
+        ):
+            write_confirmed_product_plan_documents(
+                state,
+                updated_product_plan,
+                markdown=render_product_plan_markdown(updated_product_plan),
+            )
+            result["product_plan"] = updated_product_plan
+        return result
 
     # 用户确认路径：检测到全部确认信号且无页面仍待确认。
     # 先读最新文件（池可能刚完成最后一页），再按当前 ProductPlan 校验。

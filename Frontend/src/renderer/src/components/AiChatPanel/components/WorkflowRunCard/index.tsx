@@ -146,6 +146,9 @@ type WorkflowRunCardProps = {
     answers: ClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>
   ) => void | Promise<void>
+  /** 用户在 UI 调整输入框里提出了页面级新增/删除，需要转交产品意图识别路径处理；
+   *  参数是用户的原始指令文本。 */
+  onTransferToProductAgent?: (instruction: string) => void | Promise<void>
   /** UI 设计稿确认：当前选中页 id（与右侧预览面板联动）。 */
   uiDesignActivePageId?: string
   /** UI 设计稿确认：选中页变化时通知外部（联动右侧预览）。 */
@@ -179,6 +182,7 @@ export default function WorkflowRunCard({
   onReviseConfirmedTechnicalPlan,
   reviseConfirmedTechnicalPlanDisabled,
   onSubmitClarification,
+  onTransferToProductAgent,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
   uiDesignActingPageIds,
@@ -775,6 +779,11 @@ export default function WorkflowRunCard({
                 if (disabled || interactionAvailability !== 'active') return
                 return onSubmitClarification?.(currentWorkflow, answers)
               }}
+              onTransferToProductAgent={
+                disabled || interactionAvailability !== 'active'
+                  ? undefined
+                  : onTransferToProductAgent
+              }
               showPreview={false}
               iterationOrigins={uiDesignIterationOrigins}
               activePageId={uiDesignActivePageId}
