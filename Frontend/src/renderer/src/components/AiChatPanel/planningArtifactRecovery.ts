@@ -18,7 +18,7 @@ export function technicalPlanBaselineStatus(
 export function technicalPlanFromWorkflow(
   workflow: WorkflowRunPayload | undefined
 ): Record<string, unknown> | undefined {
-  for (const source of [workflow?.state, workflow?.result]) {
+  for (const source of [workflow?.state]) {
     const value = source?.technical_plan
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue
     const plan = value as Record<string, unknown>

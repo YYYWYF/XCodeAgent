@@ -7,8 +7,8 @@ export function workflowProductConversationResult(
 ): WorkflowProductConversationResult | undefined {
   const candidates = [
     workflow?.summary?.productConversationResult,
-    workflow?.result?.productConversationResult,
-    workflow?.result?.product_conversation_result,
+    workflow?.state?.productConversationResult,
+    workflow?.state?.product_conversation_result,
     workflow?.state?.productConversationResult,
     workflow?.state?.product_conversation_result
   ]
@@ -33,8 +33,8 @@ export function isNonMutatingProductConversation(workflow?: WorkflowRunPayload):
 /** 按产物、门禁和 revision 生成稳定审阅卡身份，不使用 runId 或消息 id。 */
 export function planningReviewIdentity(workflow?: WorkflowRunPayload): string | undefined {
   const candidates = [
-    workflow?.result?.application_planning_interrupt,
-    workflow?.result?.applicationPlanningInterrupt,
+    workflow?.state?.application_planning_interrupt,
+    workflow?.state?.applicationPlanningInterrupt,
     workflow?.state?.application_planning_interrupt,
     workflow?.state?.applicationPlanningInterrupt
   ]

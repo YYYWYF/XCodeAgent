@@ -34,7 +34,7 @@ type Props = {
 
 // 从 workflow state/result 的 ui_designs.pages 读取已生成的页面快照。
 function readStreamingPages(workflow: WorkflowRunPayload): PageDesign[] {
-  for (const source of [workflow.state, workflow.result]) {
+  for (const source of [workflow.state]) {
     const uiDesigns = source?.ui_designs
     if (!uiDesigns || typeof uiDesigns !== 'object') continue
     const pages = (uiDesigns as Record<string, unknown>).pages

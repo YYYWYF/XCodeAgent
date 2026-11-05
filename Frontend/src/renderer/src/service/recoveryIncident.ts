@@ -41,7 +41,7 @@ export function isDirectModificationScopeDenied(
   workflow?: WorkflowRunPayload,
   message?: string
 ): boolean {
-  const result = workflow?.result
+  const result = workflow?.state
   const stateResult = workflow?.state?.direct_modification_result
   const resultErrorCode = result && typeof result === 'object'
     ? (result as Record<string, unknown>).errorCode : undefined

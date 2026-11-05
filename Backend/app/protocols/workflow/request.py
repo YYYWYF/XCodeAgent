@@ -80,7 +80,7 @@ _CLARIFICATION_QUESTION_LABELS = {
 }
 
 
-def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
+def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any] | None = None) -> dict[str, Any]:
     """应用兼容性回退规则并返回统一的运行时输入。
 
     显式顶层字段优先于 forwardedProps；只有 `request` 和 `message` 都不存在时，
@@ -88,8 +88,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     """
 
     forwarded_props = _optional_dict(payload.get("forwardedProps")) or {}
+    from app.protocols.workflow.resume_source import resume_reference
+    reference = resume_reference(payload)
     application = _optional_dict(forwarded_props.get("application")) or {}
-    state = _optional_dict(payload.get("state")) or {}
+    state: dict[str, Any] = {}  # SDK 展示状态不能作为执行输入。
     workspace = (
         _optional_text(payload.get("workspace"))
         or _optional_text(payload.get("workspaceRoot"))
@@ -103,6 +105,10 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("resumeExecutionRunId"))
         or _optional_text(forwarded_props.get("resume_execution_run_id"))
     )
+    if reference is not None:
+        if explicit_resume_execution_run_id and explicit_resume_execution_run_id != reference.runId:
+            raise ValueError("继续执行身份与原执行 Run 不一致。")
+        explicit_resume_execution_run_id = reference.runId
     clarification_answers = (
         payload.get("clarificationAnswers")
         or forwarded_props.get("clarificationAnswers")
@@ -154,18 +160,16 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         _optional_text(payload.get("originalRequest"))
         or _optional_text(forwarded_props.get("originalRequest"))
     )
+    if server_state is not None:
+        original_request = str(server_state.get("request") or "")
     request = _merge_clarification_answers(
         request=request,
         original_request=original_request,
         clarification_answers=clarification_answers,
     )
-    resume_state = (
-        _optional_dict(payload.get("resumeState"))
-        or _optional_dict(payload.get("resume_state"))
-        or _optional_dict(forwarded_props.get("resumeState"))
-        or _optional_dict(forwarded_props.get("resume_state"))
-    )
-    resume_values_from_state = _resume_values(resume_state)
+    # 业务状态只能由 Runtime 读取的服务端 checkpoint 注入，不解析客户端快照。
+    resume_state = server_state
+    resume_values_from_state = _server_resume_values(server_state)
     debug_state = (
         _optional_dict(payload.get("workflowDebug"))
         or _optional_dict(payload.get("debugState"))
@@ -204,6 +208,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         _optional_text(payload.get("workflowScope"))
         or _optional_text(forwarded_props.get("workflowScope"))
     )
+    if server_state is not None:
+        workflow_scope = _optional_text(server_state.get("workflow_scope"))
     application_planning_interaction = _application_planning_interaction(
         payload,
         forwarded_props=forwarded_props,
@@ -440,6 +446,13 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _optional_text(forwarded_props.get("detail_target_type"))
         or _optional_text(resume_values_from_state.get("detail_target_type"))
     )
+    if resume_state is not None and not api_design_gate_action:
+        # 普通继续及跨阶段确认沿用后端目标，不能被当前 UI 的选择覆盖。
+        selectedPageId = _optional_text(server_state.get("selectedPageId"))
+        selected_api_contract_id = _optional_text(server_state.get("selected_api_contract_id"))
+        selected_endpoint_id = _optional_text(server_state.get("selected_endpoint_id"))
+        selected_entity_id = _optional_text(server_state.get("selected_entity_id"))
+        detail_target_type = _optional_text(server_state.get("detail_target_type"))
     if api_design_gate_target_type == "application":
         selectedPageId = ""
         selected_api_contract_id = ""
@@ -677,6 +690,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             selected_endpoint_id=selected_endpoint_id,
             project_plan=project_plan_start_values.get("project_plan"),
         )
+    if resume_state is not None and not api_design_gate_action and isinstance(server_state.get("build_execution_scope"), dict):
+        build_execution_scope = dict(server_state["build_execution_scope"])
     # 续接的目标和作用域只由后端登记决定，不能被客户端旧实体 scope 覆盖。
     if workflow_action == "continue_after_entity_binding":
         build_execution_scope = (
@@ -1005,29 +1020,19 @@ def _infer_endpoint_api_contract_id(
 def _lifecycle_interaction_submission(
     resume_state: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """只从客户端恢复快照提取交互并发令牌，不接受其 lifecycle 阶段。"""
+    """只从后端 checkpoint 的 lifecycle 提取原 Run 的交互并发令牌。"""
 
     if not resume_state:
         return None
-    for source_name in ("state", "result"):
-        source = _optional_dict(resume_state.get(source_name)) or {}
-        lifecycle = _optional_dict(source.get("lifecycle")) or {}
-        active_executions = _optional_dict(lifecycle.get("activeExecutions")) or {}
-        previous_run_id = _optional_text(resume_state.get("runId"))
-        execution = (
-            _optional_dict(active_executions.get(previous_run_id))
-            if previous_run_id
-            else None
-        ) or {}
-        pending = _optional_dict(execution.get("pendingInteraction")) or {}
-        interaction_id = _optional_text(pending.get("id"))
-        based_on_revision = pending.get("basedOnRevision")
-        if interaction_id and isinstance(based_on_revision, int) and based_on_revision >= 1:
-            return {
-                "id": interaction_id,
-                "basedOnRevision": based_on_revision,
-                **({"runId": previous_run_id} if execution and previous_run_id else {}),
-            }
+    lifecycle = _optional_dict(resume_state.get("lifecycle")) or {}
+    active_executions = _optional_dict(lifecycle.get("activeExecutions")) or {}
+    previous_run_id = _optional_text(resume_state.get("active_run_id"))
+    execution = _optional_dict(active_executions.get(previous_run_id)) or {}
+    pending = _optional_dict(execution.get("pendingInteraction")) or {}
+    interaction_id = _optional_text(pending.get("id"))
+    revision = pending.get("basedOnRevision")
+    if interaction_id and isinstance(revision, int) and revision >= 1:
+        return {"id": interaction_id, "basedOnRevision": revision, "runId": previous_run_id}
     return None
 
 
@@ -1107,13 +1112,11 @@ def _selected_skill_names_from_sources(
 def _selected_skill_names_from_resume(
     resume_state: dict[str, Any] | None,
 ) -> tuple[bool, tuple[str, ...]]:
-    """从公开 state 或 result 中恢复初始技能集合。"""
+    """从后端 checkpoint 恢复初始技能集合。"""
 
     if not resume_state:
         return False, ()
-    state = _optional_dict(resume_state.get("state")) or {}
-    result = _optional_dict(resume_state.get("result")) or {}
-    return _selected_skill_names_from_sources(state, result)
+    return _selected_skill_names_from_sources(resume_state)
 
 
 def _normalize_selected_skill_names(value: Any) -> tuple[str, ...]:
@@ -1196,25 +1199,13 @@ def _supported_workflow_action(value: str) -> str:
 
 
 def _code_review_retry_target(value: dict[str, Any] | None) -> str:
-    """从公开失败快照读取后端签发的审查模型重试目标。"""
+    """从服务端失败 checkpoint 核对审查重试资格和目标。"""
 
-    if not value:
+    if not value or value.get("status") != "failed":
         return ""
-    state = _optional_dict(value.get("state")) or {}
-    result = _optional_dict(value.get("result")) or {}
-    summary = _optional_dict(value.get("summary")) or {}
-    if not any(source.get("status") == "failed" for source in (state, result, summary, value)):
-        return ""
-    for source in (state, result, summary, value):
-        retry = _optional_dict(
-            source.get("codeReviewRetry") or source.get("code_review_retry")
-        )
-        if not retry or retry.get("available") is not True:
-            continue
-        target = _optional_text(retry.get("target"))
-        if target in {"scan", "repair"}:
-            return target
-    return ""
+    retry = _optional_dict(value.get("code_review_retry")) or {}
+    target = _optional_text(retry.get("target"))
+    return target if retry.get("available") is True and target in {"scan", "repair"} else ""
 
 
 def _code_review_retry_values(
@@ -1327,48 +1318,11 @@ def _supported_detail_target_type(value: str) -> str:
     return value if value in {"page", "endpoint", "entity"} else ""
 
 
-def _resume_from_state(
-    value: dict[str, Any] | None,
-    *,
-    workflow_scope: str = "",
-) -> str:
-    """根据当前 Graph 范围从公开状态推断可恢复节点。"""
+def _resume_from_state(value: dict[str, Any] | None, *, workflow_scope: str = "") -> str:
+    """仅依据服务端 checkpoint 的待确认阶段确定继续节点。"""
 
-    if not value:
-        return ""
-
-    events = value.get("events")
-    if isinstance(events, list):
-        for event in reversed(events):
-            if not isinstance(event, dict):
-                continue
-            if event.get("status") != "requires_user_input":
-                continue
-            node_name = _optional_text(event.get("nodeName"))
-            if node_name:
-                return _supported_resume_node(
-                    node_name,
-                    workflow_scope=workflow_scope,
-                )
-            node = _optional_dict(event.get("node"))
-            node_id = _optional_text(node.get("id")) if node else ""
-            if node_id:
-                return _supported_resume_node(
-                    node_id,
-                    workflow_scope=workflow_scope,
-                )
-
-    state = _optional_dict(value.get("state")) or {}
-    summary = _optional_dict(value.get("summary")) or {}
-    for source in (state, summary, value):
-        if source.get("status") == "requires_user_input":
-            phase = _optional_text(source.get("phase"))
-            if phase:
-                return _supported_resume_node(
-                    phase,
-                    workflow_scope=workflow_scope,
-                )
-
+    if value and value.get("status") == "requires_user_input":
+        return _supported_resume_node(_optional_text(value.get("phase")), workflow_scope=workflow_scope)
     return ""
 
 
@@ -1416,247 +1370,119 @@ def _supported_resume_node(node_name: str, *, workflow_scope: str = "") -> str:
     return node_name if node_name in supported else ""
 
 
-def _resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
-    """从前端 Workflow 快照恢复主流程允许公开往返的紧凑状态。"""
+def _server_resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
+    """仅从服务端 checkpoint 取当前允许继续的内部字段，不接收前端投影别名。"""
 
-    if not value:
-        return {}
-
-    state = _optional_dict(value.get("state")) or {}
-    result = _optional_dict(value.get("result")) or {}
-    merged = {**state, **result}
     allowed_keys = {
-        "product_plan",
-        "product_plan_path",
-        "product_plan_json_path",
-        "technical_plan",
-        "technical_plan_path",
-        "technical_plan_json_path",
-        "project_plan",
-        "pages",
-        "frontend_pages",
-        "pending_project_plan",
-        "project_plan_path",
-        "project_plan_json_path",
-        "detail_selection",
-        "selectedPageId",
-        "selected_api_contract_id",
-        "selected_endpoint_id",
-        "selected_entity_id",
-        "detail_target_type",
-        "page_spec_draft",
-        "data_source_spec_draft",
-        "detail_plans",
-        "entity_source_binding_submission",
+        "acceptance_decision",
+        "acceptance_phase_confirmation",
+        "acceptance_request",
+        "accepted",
         "api_design_gate_action",
         "api_design_readiness",
-        "workspace_snapshot_summary",
-        "workspace_snapshot_path",
-        "workspace_snapshot_hash",
-        "workspace_revision",
-        "requirement_spec",
-        "requirement_spec_path",
-        "requirement_spec_json_path",
-        "build_task_plan",
-        "build_task_plan_path",
-        "build_task_plan_confirmation",
-        "test_phase_confirmation",
-        "review_phase_confirmation",
-        "acceptance_phase_confirmation",
-        "code_review_result",
-        "code_review_retry",
-        "code_review_report_path",
-        "code_review_repair_confirmation",
-        "code_review_repair_status",
-        "code_review_repair_result",
-        "code_review_build_results",
-        "code_review_repair_iteration",
-        "code_review_max_repair_iterations",
-        "quality_gate_passed",
-        "test_report",
-        "test_report_path",
-        "build_execution_scope",
-        "last_persisted_build_execution_scope",
-        "build_task_plan_persisted",
         "build_context",
-        "execution_resource_claims",
-        "tasks",
+        "build_execution_scope",
         "build_results",
         "build_summary",
+        "build_task_plan",
+        "build_task_plan_confirmation",
+        "build_task_plan_path",
+        "build_task_plan_persisted",
+        "clarification",
         "code_changes",
-        "repair_task_plan",
-        "repair_tasks",
-        "repair_iteration",
-        "max_repair_iterations",
-        "small_task_tasks",
-        "small_task_results",
-        "small_task_code_change_sets",
-        "small_task_handoff",
-        "small_task_handoff_submission",
-        "small_task_route",
-        "small_task_max_concurrency",
-        "repair_return_node",
-        "integration_next_action",
-        "unit_test_decision",
-        "unit_test_gate_passed",
-        "unit_test_build_code_changes",
-        "unit_test_build_code_change_sets",
-        "unit_test_build_diff_captured",
-        "unit_test_results",
-        "unit_test_report",
-        "unit_test_report_path",
-        "unit_test_quality_gate_passed",
-        "unit_test_next_action",
-        "unit_test_generation",
-        "unit_test_mapping_path",
-        "unit_test_code_change_sets",
-        "unit_test_generation_code_change_sets",
-        "unit_test_repair_enabled",
-        "unit_test_repair_task_plan",
-        "unit_test_repair_task_plan_path",
-        "unit_test_repair_iteration",
-        "unit_test_max_repair_iterations",
+        "code_review_build_results",
+        "code_review_max_repair_iterations",
+        "code_review_repair_confirmation",
+        "code_review_repair_iteration",
+        "code_review_repair_result",
+        "code_review_repair_status",
+        "code_review_report_path",
+        "code_review_result",
+        "code_review_retry",
+        "conversation_response",
+        "data_source_spec_draft",
+        "detail_plans",
+        "detail_selection",
+        "detail_target_type",
+        "entity_source_binding_submission",
+        "execution_resource_claims",
+        "frontend_pages",
         "frontend_performance_decision",
         "frontend_performance_test_enabled",
         "integration_build_checks_completed",
         "integration_build_results",
-        "unit_test_generation_context",
-        "unit_test_affected_layers",
-        "clarification",
-        "selected_skill_names",
-        "workflow_scope",
-        "preview_url",
+        "integration_next_action",
+        "last_persisted_build_execution_scope",
         "launch_result",
-        "acceptance_request",
-        "acceptance_decision",
-        "accepted",
-        "ui_designs",
-        "conversation_response",
+        "max_repair_iterations",
+        "page_spec_draft",
+        "pages",
+        "pending_project_plan",
+        "preview_url",
+        "product_plan",
+        "product_plan_json_path",
+        "product_plan_path",
         "product_stage_conversation",
+        "project_plan",
+        "project_plan_json_path",
+        "project_plan_path",
+        "quality_gate_passed",
+        "repair_iteration",
+        "repair_return_node",
+        "repair_task_plan",
+        "repair_tasks",
+        "requirement_spec",
+        "requirement_spec_json_path",
+        "requirement_spec_path",
+        "review_phase_confirmation",
+        "selectedPageId",
+        "selected_api_contract_id",
+        "selected_endpoint_id",
+        "selected_entity_id",
+        "selected_skill_names",
+        "small_task_code_change_sets",
+        "small_task_handoff",
+        "small_task_handoff_submission",
+        "small_task_max_concurrency",
+        "small_task_results",
+        "small_task_route",
+        "small_task_tasks",
+        "tasks",
+        "technical_plan",
+        "technical_plan_json_path",
+        "technical_plan_path",
+        "test_phase_confirmation",
+        "test_report",
+        "test_report_path",
+        "ui_designs",
+        "unit_test_affected_layers",
+        "unit_test_build_code_change_sets",
+        "unit_test_build_code_changes",
+        "unit_test_build_diff_captured",
+        "unit_test_code_change_sets",
+        "unit_test_decision",
+        "unit_test_gate_passed",
+        "unit_test_generation",
+        "unit_test_generation_code_change_sets",
+        "unit_test_generation_context",
+        "unit_test_mapping_path",
+        "unit_test_max_repair_iterations",
+        "unit_test_next_action",
+        "unit_test_quality_gate_passed",
+        "unit_test_repair_enabled",
+        "unit_test_repair_iteration",
+        "unit_test_repair_task_plan",
+        "unit_test_repair_task_plan_path",
+        "unit_test_report",
+        "unit_test_report_path",
+        "unit_test_results",
+        "workflow_scope",
+        "workspace_revision",
+        "workspace_snapshot_hash",
+        "workspace_snapshot_path",
+        "workspace_snapshot_summary",
     }
-    resumed_values = {
-        key: merged[key]
-        for key in allowed_keys
-        if key in merged and merged[key] is not None
-    }
-    # 前端 StateSnapshot 使用 camelCase；恢复失败任务时必须把修复计划和构建结果
-    # 归一化回 Graph State，否则按钮虽然显示，点击后后端会丢失实际恢复候选。
-    camel_aliases = {
-        "build_task_plan": "buildTaskPlan",
-        "build_execution_scope": "buildExecutionScope",
-        "last_persisted_build_execution_scope": "lastPersistedBuildExecutionScope",
-        "build_task_plan_persisted": "buildTaskPlanPersisted",
-        "build_task_plan_confirmation": "buildTaskPlanConfirmation",
-        "test_phase_confirmation": "testPhaseConfirmation",
-        "review_phase_confirmation": "reviewPhaseConfirmation",
-        "acceptance_phase_confirmation": "acceptancePhaseConfirmation",
-        "preview_url": "previewUrl",
-        "launch_result": "launchResult",
-        "acceptance_request": "acceptanceRequest",
-        "acceptance_decision": "acceptanceDecision",
-        "code_review_result": "codeReviewResult",
-        "code_review_retry": "codeReviewRetry",
-        "code_review_report_path": "codeReviewReportPath",
-        "code_review_repair_result": "codeReviewRepair",
-        "code_review_build_results": "codeReviewBuildResults",
-        "code_review_repair_status": "codeReviewRepairStatus",
-        "code_review_repair_iteration": "codeReviewRepairIteration",
-        "code_review_max_repair_iterations": "codeReviewMaxRepairIterations",
-        "code_review_repair_confirmation": "codeReviewRepairConfirmation",
-        "quality_gate_passed": "qualityGatePassed",
-        "test_report": "testReport",
-        "test_report_path": "testReportPath",
-        "build_results": "buildResults",
-        "build_summary": "buildSummary",
-        "code_changes": "codeChanges",
-        "repair_task_plan": "repairTaskPlan",
-        "repair_tasks": "repairTasks",
-        "repair_return_node": "repairReturnNode",
-        "integration_next_action": "integrationNextAction",
-        "unit_test_decision": "unitTestDecision",
-        "unit_test_gate_passed": "unitTestGatePassed",
-        "unit_test_build_code_changes": "unitTestBuildCodeChanges",
-        "unit_test_build_code_change_sets": "unitTestBuildCodeChangeSets",
-        "unit_test_build_diff_captured": "unitTestBuildDiffCaptured",
-        "unit_test_results": "unitTestResults",
-        "unit_test_report": "unitTestReport",
-        "unit_test_report_path": "unitTestReportPath",
-        "unit_test_quality_gate_passed": "unitTestQualityGatePassed",
-        "unit_test_next_action": "unitTestNextAction",
-        "unit_test_generation": "unitTestGeneration",
-        "unit_test_mapping_path": "unitTestMappingPath",
-        "unit_test_code_change_sets": "unitTestCodeChangeSets",
-        "unit_test_generation_code_change_sets": "unitTestGenerationCodeChangeSets",
-        "unit_test_repair_enabled": "unitTestRepairEnabled",
-        "unit_test_repair_task_plan": "unitTestRepairTaskPlan",
-        "unit_test_repair_task_plan_path": "unitTestRepairTaskPlanPath",
-        "unit_test_repair_iteration": "unitTestRepairIteration",
-        "unit_test_max_repair_iterations": "unitTestMaxRepairIterations",
-        "frontend_performance_decision": "frontendPerformanceDecision",
-        "frontend_performance_test_enabled": "frontendPerformanceTestEnabled",
-        "integration_build_checks_completed": "integrationBuildChecksCompleted",
-        "integration_build_results": "integrationBuildResults",
-        "unit_test_generation_context": "unitTestGenerationContext",
-        "unit_test_affected_layers": "unitTestAffectedLayers",
-    }
-    for snake_key, camel_key in camel_aliases.items():
-        if snake_key not in resumed_values and merged.get(camel_key) is not None:
-            resumed_values[snake_key] = merged[camel_key]
-    # Build 执行摘要由服务端 checkpoint 持有；公开投影的空对象不能覆盖已完成状态。
-    build_summary = resumed_values.get("build_summary")
-    public_build_summary = merged.get("buildSummary")
-    if not isinstance(build_summary, dict) or not build_summary:
-        if isinstance(public_build_summary, dict) and public_build_summary:
-            resumed_values["build_summary"] = public_build_summary
-        else:
-            resumed_values.pop("build_summary", None)
-    normalized_test_report_path = str(
-        resumed_values.get("test_report_path") or ""
-    ).replace("\\", "/").strip()
-    if normalized_test_report_path == ".devagentstudio/reports/test-report.md":
-        resumed_values["test_report_path"] = normalized_test_report_path
-    else:
-        resumed_values.pop("test_report_path", None)
-    review_result = resumed_values.get("code_review_result")
-    if (
-        "code_review_report_path" not in resumed_values
-        and isinstance(review_result, dict)
-        and review_result.get("reportPath")
-    ):
-        resumed_values["code_review_report_path"] = review_result["reportPath"]
-    test_report_result = merged.get("testReportResult")
-    test_report_path = (
-        str(test_report_result.get("reportPath") or "").replace("\\", "/").strip()
-        if isinstance(test_report_result, dict)
-        else ""
-    )
-    if (
-        "test_report_path" not in resumed_values
-        and test_report_path == ".devagentstudio/reports/test-report.md"
-    ):
-        resumed_values["test_report_path"] = test_report_path
-    # 前端快照使用 camelCase；Graph State 只保留 snake_case，避免同一语义双字段流转。
-    selected_api_contract_id = _optional_text(
-        merged.get("selected_api_contract_id") or merged.get("selectedApiContractId")
-    )
-    selected_endpoint_id = _optional_text(
-        merged.get("selected_endpoint_id") or merged.get("selectedEndpointId")
-    )
-    selected_entity_id = _optional_text(
-        merged.get("selected_entity_id") or merged.get("selectedEntityId")
-    )
-    detail_target_type = _supported_detail_target_type(
-        _optional_text(merged.get("detail_target_type") or merged.get("detailTargetType"))
-    )
-    if selected_api_contract_id:
-        resumed_values["selected_api_contract_id"] = selected_api_contract_id
-    if selected_endpoint_id:
-        resumed_values["selected_endpoint_id"] = selected_endpoint_id
-    if selected_entity_id:
-        resumed_values["selected_entity_id"] = selected_entity_id
-    if detail_target_type:
-        resumed_values["detail_target_type"] = detail_target_type
-    return resumed_values
+    return {key: item for key, item in (value or {}).items() if key in allowed_keys and item is not None}
 
 
 def _validated_technical_revision_intent(
@@ -1720,7 +1546,9 @@ def _validated_technical_revision_intent(
         gate_id=pending.interaction_id,
         baseline=baseline,
     )
+    from app.graph.application_planning_revision import technical_plan_revision_reset_state
     return {
+        **technical_plan_revision_reset_state(),
         "change_id": pending.change_id,
         "change_target": pending.target.model_dump(mode="python", by_alias=False),
         "revision_impact": pending.impact.model_dump(mode="python", by_alias=False),
@@ -2184,15 +2012,9 @@ def _code_review_repair_confirmation_submission(value: Any) -> dict[str, str]:
 
 
 def _clarification_mode(value: dict[str, Any] | None) -> str:
-    """读取恢复快照中的 clarification 模式，用于识别过期的修复交互。"""
+    """读取服务端 checkpoint 的当前交互模式。"""
 
-    if not isinstance(value, dict):
-        return ""
-    state = _optional_dict(value.get("state")) or {}
-    result = _optional_dict(value.get("result")) or {}
-    clarification = _optional_dict(state.get("clarification")) or _optional_dict(
-        result.get("clarification")
-    ) or {}
+    clarification = _optional_dict((value or {}).get("clarification")) or {}
     return _optional_text(clarification.get("mode"))
 
 

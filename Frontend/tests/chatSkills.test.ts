@@ -729,8 +729,8 @@ test('快速修改自定义事件复用 Workflow 展示和流程步骤回调', a
         owner: 'frontend'
       },
       events: [],
-      state: { status: 'completed' },
-      result: { status: 'completed' },
+      state: { ...({ status: 'completed' }), ...({ status: 'completed' }) },
+
       processStep: {
         id: 'direct:execute_frontend',
         kind: 'workflow',
@@ -2181,9 +2181,7 @@ test('重启后继续测试修复，不从 checkpoint timeline 补入开发阶�
         attempt: 1
       }
     ],
-    state: { timeline: checkpointTimeline },
-    result: { timeline: checkpointTimeline }
-  }
+    state: { ...({ timeline: checkpointTimeline }), ...({ timeline: checkpointTimeline }) }}
   // 持久化再加载仍使用当前 Run 的边界，不能把来源 checkpoint 的完成记录带进新消息。
   const restoredWorkflow: WorkflowRunPayload = JSON.parse(JSON.stringify(workflow))
   for (const currentWorkflow of [workflow, restoredWorkflow]) {
@@ -2533,7 +2531,7 @@ test('构建完成后按执行和不执行顺序展示单元测试确认按钮',
         message: '项目预览已就绪，请确认是否符合预期。 预览地址：http://127.0.0.1:3000。',
         clarification: {}
       },
-      result: {
+      state: {
         clarification: {
           mode: 'unit_test_confirmation',
           status: 'requires_user_input',
@@ -2708,9 +2706,7 @@ test('UI 确认过渡帧缺少 clarification 时仍可正常渲染', () => {
             message: '正在跳过 UI 设计并进入技术规划。'
           },
           events: [],
-          state: {},
-          result: {}
-        }
+          state: { ...({}), ...({}) }}
     })
   )
 })
@@ -2868,9 +2864,7 @@ test('结构化步骤存在时隐藏重复 Workflow 摘要并保留真实回复'
       timeline: []
     },
     events: [],
-    state: {},
-    result: {}
-  }
+    state: { ...({}), ...({}) }}
 
   assert.equal(
     workflowMessageContentForDisplay(`${workflow.summary.message}\n`, workflow, true),
@@ -2901,9 +2895,7 @@ test('自由对话完成后仍保留与摘要相同的助手正文', () => {
       message: '我是 DevAgent Studio。'
     },
     events: [],
-    state: {},
-    result: {}
-  }
+    state: { ...({}), ...({}) }}
 
   assert.equal(
     workflowMessageContentForDisplay('我是 DevAgent Studio。', workflow, true),
@@ -2927,9 +2919,7 @@ test('失败的技术规划历史隐藏模型 JSON 并保留结构化错误卡',
       }
     },
     events: [],
-    state: {},
-    result: {}
-  }
+    state: { ...({}), ...({}) }}
 
   assert.equal(isStructuredPlanningWorkflow(workflow), true)
   assert.equal(
@@ -2948,9 +2938,7 @@ test('失败终态仍可根据技术规划节点识别并隐藏历史 JSON', () 
     threadId: 'legacy-technical-plan-error-thread',
     summary: { status: 'failed', phase: 'failed' },
     events: [{ type: 'workflow.node.failed', nodeName: 'technical_planning' }],
-    state: {},
-    result: {}
-  }
+    state: { ...({}), ...({}) }}
 
   assert.equal(isStructuredPlanningWorkflow(workflow), true)
   assert.equal(workflowMessageContentForDisplay('{"entities":[]}', workflow, true), '')
@@ -2970,7 +2958,7 @@ test('技术规划确认不依赖 Markdown confirmationArtifact 也能展示结�
       }
     },
     events: [],
-    state: {
+    state: { ...({}), ...({
       technical_plan: {
         artifact_type: 'technical-plan',
         architecture: { frontend: 'React', backend: 'Spring Boot', data: 'MySQL' },
@@ -2978,9 +2966,7 @@ test('技术规划确认不依赖 Markdown confirmationArtifact 也能展示结�
         api_contracts: [],
         pages: []
       }
-    },
-    result: {}
-  }
+    }) }}
   const markup = renderToStaticMarkup(
     createElement(ApplicationPlanningQuestionPanel, {
       onReturnHome: () => undefined,
@@ -3090,15 +3076,13 @@ test('技术规划修改意见映射为 revise 并保留原始请求', () => {
     threadId: 'technical-plan-revision-submission-thread',
     summary: { status: 'requires_user_input' },
     events: [],
-    state: {
+    state: { ...({}), ...({
       application_planning_interrupt: {
         gateId: 'technical_plan:current-revision',
         artifactRevision: 'current-revision',
         clarification: { mode: 'technical_plan_confirmation' }
       }
-    },
-    result: {}
-  }
+    }) }}
 
   const submission = technicalPlanConfirmationSubmission(
     workflow,
@@ -3505,7 +3489,7 @@ test('更早的 session 可从 timeline 和 snake_case 测试报告恢复步骤'
     threadId: 'thread-legacy',
     summary: { status: 'requires_user_input' },
     events: [],
-    result: {
+    state: {
       timeline: ['integration_test', 'launch_project', 'integration_test'],
       test_report: {
         checks: [

@@ -30,7 +30,7 @@ export function createPlanningStageReentry(options: Options): {
   const publish = (chunk: PlanningStreamChunk): void => {
     pending.push(chunk)
     const workflow = chunk.workflow
-    const phase = workflow?.summary.phase || workflow?.state?.phase || workflow?.result?.phase
+    const phase = workflow?.summary.phase || workflow?.state?.phase || workflow?.state?.phase
     if (!decided && workflow && phase) {
       decided = true
       if (['design_intent_analysis', 'requirements', 'product_planning', 'ui_confirmation'].includes(String(phase))) {

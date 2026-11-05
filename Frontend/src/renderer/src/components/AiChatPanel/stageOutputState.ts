@@ -190,12 +190,6 @@ export function pendingDagConfirmationWorkflow(
         phase: 'prepare_build_tasks',
         clarification: recovery.confirmation,
         lifecycle
-      },
-      result: {
-        status: 'requires_user_input',
-        phase: 'prepare_build_tasks',
-        clarification: recovery.confirmation,
-        lifecycle
       }
     }
   }
@@ -319,7 +313,7 @@ function currentDagConfirmationPayload(
   const currentClarifications = [
     workflow.summary.clarification,
     workflow.state?.clarification,
-    workflow.result?.clarification
+    workflow.state?.clarification
   ]
   const currentClarification = currentClarifications.find(
     (value) => value && typeof value === 'object' && !Array.isArray(value)
@@ -342,7 +336,7 @@ export function stageOutputPhase(
 ): StageOutputPhase {
   if (confirmationPlan) return 'confirmation'
   const phase = String(
-    workflow?.summary.phase || workflow?.result?.phase || workflow?.state?.phase || ''
+    workflow?.summary.phase || workflow?.state?.phase || workflow?.state?.phase || ''
   )
   if (phase === 'prepare_build_tasks') return 'generation'
   if (snapshot?.status === 'active') return 'generation'

@@ -47,7 +47,7 @@ function readWorkflowTestReportResult(
   const candidates: unknown[] = [
     workflow.summary.testReportResult,
     workflow.state?.testReportResult,
-    workflow.result?.testReportResult
+    workflow.state?.testReportResult
   ]
   return candidates.find(
     (value): value is WorkflowTestReportResult =>
@@ -76,7 +76,7 @@ export function workflowTestReportCompleted(
   return [
     workflow.summary.phase,
     workflow.state?.phase,
-    workflow.result?.phase,
+    workflow.state?.phase,
     activeWorkflowPhase
   ].includes('review_phase_confirmation')
 }

@@ -30,7 +30,7 @@ export function technicalPlanningReplyPresentation(reply: TechnicalPlanningReply
     summary: { status: 'completed', phase: 'technical_planning_reply', message: reply.message,
       productConversationResult: { kind: 'read_only', mutating: false, response: reply.message,
         presentation: { artifactPresentation: 'preserve' } } },
-    state: {}, result: {}
+    state: {}
   }
 }
 

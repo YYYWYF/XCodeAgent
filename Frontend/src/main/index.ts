@@ -735,7 +735,7 @@ type ChatSessionSummary = {
   revisionContext?: ChatSessionRevisionContext
   createdAt: number
   updatedAt: number
-  messageCount: number
+  messageCount: number | null
 }
 
 type JsonRecord = Record<string, unknown>
@@ -1336,7 +1336,7 @@ function normalizeStoredSessionPage(value: Record<string, unknown>): NormalizedC
 async function readValidatedSessionSummary(file: string): Promise<ChatSessionSummary> {
   const stored = await readStoredSessionSummary(file)
   const normalized = normalizeSession({ ...stored, messages: [] })
-  return { ...sessionSummary(normalized), messageCount: Number(stored.messageCount) }
+  return { ...sessionSummary(normalized), messageCount: stored.messageCount === null ? null : Number(stored.messageCount) }
 }
 
 /** 从目录读取轻量摘要，损坏单份记录不遮蔽其他会话。 */

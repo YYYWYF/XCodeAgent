@@ -3,14 +3,13 @@ import { test } from 'node:test'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import {
-  readIndexedPage,
-  readIndexedSummary,
-  saveIndexedSession
-} from '../src/main/sessionHistoryIndex'
+import { readSessionPage, readSessionSummary, saveSession } from '../src/main/sessionHistory'
 import { SessionMessageCache } from '../src/renderer/src/components/AiChatPanel/hooks/sessionMessageCache'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import './sessionHistoryRuntime.test'
+import './sessionTailLargeFile.test'
+import './workflowEventProjection.test'
+import './sessionWorkflowArtifacts.test'
 
 /** 用临时当前格式记录覆盖 Unicode、转义符及嵌套工作流，不访问真实用户历史。 */
 async function fixture(
@@ -46,16 +45,16 @@ async function fixture(
   }
 }
 
-test('首次仅返回最近 20 条，按稳定消息 ID 上翻到完整历史，不重复遗漏', async () => {
+test('首次仅返回最近 10 条，按稳定消息 ID 上翻到完整历史，不重复遗漏', async () => {
   await fixture(async (file, record) => {
     const received: number[] = []
     let before: number | undefined
     do {
-      const page = await readIndexedPage(file, before)
-      assert.ok(page.session.messages.length <= 20)
+      const page = await readSessionPage(file, before)
+      assert.ok(page.session.messages.length <= 10)
       received.unshift(...page.session.messages.map((message: AgentChatMessage) => message.id))
       assert.equal(page.session.threadId, 'original-thread')
-      assert.equal(page.history.total, 65)
+      assert.equal(page.history.total, page.history.before === undefined ? 65 : null)
       before = page.history.before
     } while (before !== undefined)
     assert.deepEqual(
@@ -65,11 +64,11 @@ test('首次仅返回最近 20 条，按稳定消息 ID 上翻到完整历史，
   })
 })
 
-test('摘要不含正文；索引命中后列表和历史页都不再全量读取原 JSON', async () => {
+test('摘要不含正文；无索引时列表和历史页也不全量读取原 JSON', async () => {
   await fixture(async (file) => {
-    const summary = await readIndexedSummary(file)
+    const summary = await readSessionSummary(file)
     assert.equal(summary.messages, undefined)
-    assert.equal(summary.messageCount, 65)
+    assert.equal(summary.messageCount, null)
     const original = fs.readFile
     let fullReads = 0
     fs.readFile = ((...args: Parameters<typeof fs.readFile>) => {
@@ -77,9 +76,9 @@ test('摘要不含正文；索引命中后列表和历史页都不再全量读�
       return original(...args)
     }) as typeof fs.readFile
     try {
-      await readIndexedSummary(file)
-      await readIndexedPage(file)
-      await readIndexedPage(file, 46)
+      await readSessionSummary(file)
+      await readSessionPage(file)
+      await readSessionPage(file, 56)
       assert.equal(fullReads, 0)
     } finally {
       fs.readFile = original
@@ -87,7 +86,7 @@ test('摘要不含正文；索引命中后列表和历史页都不再全量读�
   })
 })
 
-test('较早的待确认快照及其原提问可恢复，但不冒充最近消息页', async () => {
+test('展示分页只返回最近十条，不为较早控制消息扫描或回填正文', async () => {
   await fixture(async (file, record) => {
     record.messages[1].workflow = {
       runId: 'pending-run',
@@ -99,37 +98,40 @@ test('较早的待确认快照及其原提问可恢复，但不冒充最近消�
       }
     }
     await fs.writeFile(file, JSON.stringify(record))
-    const page = await readIndexedPage(file)
-    assert.deepEqual(page.history.contextMessageIds, [1, 2])
-    assert.equal(page.session.messages[1].workflow.runId, 'pending-run')
+    const page = await readSessionPage(file)
+    assert.deepEqual(page.history.contextMessageIds, [])
+    assert.equal(
+      page.session.messages.some((message: AgentChatMessage) => message.workflow),
+      false
+    )
     assert.equal(
       page.session.messages.filter(
         (message: AgentChatMessage) => !page.history.contextMessageIds.includes(message.id)
       ).length,
-      20
+      10
     )
   })
 })
 
 test('分页保存保留未加载前缀、更新已加载消息并追加新消息，显式删除仅限已加载范围', async () => {
   await fixture(async (file, record) => {
-    const page = await readIndexedPage(file)
+    const page = await readSessionPage(file)
     const messages = page.session.messages.slice(1)
     messages[0] = { ...messages[0], content: '已编辑' }
     messages.push({ id: 66, role: 'assistant', createdAt: 66, content: '后台新回复' })
-    const summary = await saveIndexedSession(
+    const summary = await saveSession(
       file,
       { ...page.session, messages },
       page.history.loadedMessageIds
     )
     const saved = JSON.parse(await fs.readFile(file, 'utf8'))
-    assert.deepEqual(saved.messages.slice(0, 45), record.messages.slice(0, 45))
+    assert.deepEqual(saved.messages.slice(0, 55), record.messages.slice(0, 55))
     assert.equal(
-      saved.messages.some((message: AgentChatMessage) => message.id === 46),
+      saved.messages.some((message: AgentChatMessage) => message.id === 56),
       false
     )
     assert.equal(
-      saved.messages.find((message: AgentChatMessage) => message.id === 47).content,
+      saved.messages.find((message: AgentChatMessage) => message.id === 57).content,
       '已编辑'
     )
     assert.equal(saved.messages.at(-1).content, '后台新回复')
@@ -137,25 +139,25 @@ test('分页保存保留未加载前缀、更新已加载消息并追加新消�
   })
 })
 
-test('派生索引丢失或损坏时重建，原文件保持逐字节不变', async () => {
+test('派生索引缺失或损坏不影响尾读，原文件保持逐字节不变', async () => {
   await fixture(async (file) => {
     const original = await fs.readFile(file)
-    await readIndexedSummary(file)
+    await readSessionSummary(file)
     await fs.writeFile(`${file}.index`, 'broken cache')
-    const page = await readIndexedPage(file)
-    assert.equal(page.session.messages.length, 20)
+    const page = await readSessionPage(file)
+    assert.equal(page.session.messages.length, 10)
     assert.deepEqual(await fs.readFile(file), original)
   })
 })
 
-test('索引在正文原子更新后失效；非法游标和超限页请求明确失败', async () => {
+test('正文变化后读取当前尾页；非法游标和超限页请求明确失败', async () => {
   await fixture(async (file, record) => {
-    await readIndexedSummary(file)
+    await readSessionSummary(file)
     record.messages.push({ id: 66, role: 'user', createdAt: 66, content: '新增' })
     await fs.writeFile(file, JSON.stringify(record))
-    assert.equal((await readIndexedSummary(file)).messageCount, 66)
-    await assert.rejects(readIndexedPage(file, 999), /历史位置/)
-    await assert.rejects(readIndexedPage(file, undefined, 101), /limit/)
+    assert.equal((await readSessionSummary(file)).messageCount, null)
+    await assert.rejects(readSessionPage(file, 999), /历史位置/)
+    await assert.rejects(readSessionPage(file, undefined, 11), /limit/)
   })
 })
 
@@ -185,6 +187,93 @@ test('翻历史与流式更新交错时保留新内容，旧保存回执不清�
     []
   )
   assert.deepEqual(new Set(cache.history('session')!.loadedMessageIds), new Set([2, 3]))
+})
+
+test('完整加载的大消息正常参与多轮保存回执', () => {
+  const cache = new SessionMessageCache()
+  const large: AgentChatMessage = {
+    id: 1,
+    role: 'assistant',
+    content: 'x'.repeat(2 * 1024 * 1024),
+    createdAt: 1
+  }
+  cache.restore('large', [large], {
+    total: 1,
+    contextMessageIds: [],
+    loadedMessageIds: [1],
+    messagePositions: { 1: 0 }
+  })
+  for (let index = 0; index < 2; index++) {
+    const token = cache.beginSave('large', cache.read('large'))
+    assert.deepEqual(token.loadedMessageIds, [1])
+    cache.finishSave(token, true)
+    assert.deepEqual(cache.history('large')?.loadedMessageIds, [1])
+  }
+})
+
+test('读取期间源文件被原子替换时拒绝混合快照，下一次读取使用新文件', async () => {
+  await fixture(async (file, record) => {
+    const originalOpen = fs.open
+    let replaced = false
+    fs.open = (async (...args: Parameters<typeof fs.open>) => {
+      const handle = await originalOpen(...args)
+      if (String(args[0]) === file && !replaced) {
+        const read = handle.read.bind(handle)
+        handle.read = (async (...readArgs: any[]) => {
+          const result = await (read as any)(...readArgs)
+          if (!replaced) {
+            replaced = true
+            await fs.writeFile(
+              `${file}.replacement`,
+              JSON.stringify({ ...record, title: '新的原子版本' })
+            )
+            await fs.rename(`${file}.replacement`, file)
+          }
+          return result
+        }) as typeof handle.read
+      }
+      return handle
+    }) as typeof fs.open
+    try {
+      await assert.rejects(readSessionPage(file), /读取期间已变化/)
+    } finally {
+      fs.open = originalOpen
+    }
+    assert.equal((await readSessionPage(file)).session.title, '新的原子版本')
+  })
+})
+
+test('保存处理短写；保存失败保留原文件并清理临时文件', async () => {
+  await fixture(async (file) => {
+    const page = await readSessionPage(file)
+    const originalOpen = fs.open
+    let failWrite = false
+    fs.open = (async (...args: Parameters<typeof fs.open>) => {
+      const handle = await originalOpen(...args)
+      if (String(args[0]).endsWith('.tmp')) {
+        const write = handle.write.bind(handle)
+        handle.write = (async (bytes: Buffer, offset: number, length: number) => {
+          if (failWrite) throw new Error('模拟磁盘写入失败')
+          return write(bytes, offset, Math.min(length, 13))
+        }) as typeof handle.write
+      }
+      return handle
+    }) as typeof fs.open
+    try {
+      await saveSession(file, page.session, page.history.loadedMessageIds)
+      assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).messages.length, 65)
+      const original = await fs.readFile(file)
+      failWrite = true
+      await assert.rejects(
+        saveSession(file, page.session, page.history.loadedMessageIds),
+        /磁盘写入失败/
+      )
+      assert.deepEqual(await fs.readFile(file), original)
+      assert.deepEqual(await fs.readdir(path.dirname(file)), ['session.json'])
+    } finally {
+      fs.open = originalOpen
+    }
+  })
 })
 
 test('历史依磁盘位置合并，消息 ID 不要求单调；迟到页不能复活本地已移除消息', () => {

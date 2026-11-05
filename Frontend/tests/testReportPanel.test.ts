@@ -18,8 +18,8 @@ function reportWorkflow(runId: string, completed: boolean): WorkflowRunPayload {
     runId,
     threadId: 'test-thread',
     summary: { phase, status: completed ? 'requires_user_input' : 'running', testReportResult },
-    state: { phase, testReportResult },
-    result: { phase, testReportResult },
+    state: { ...({ phase, testReportResult }), ...({ phase, testReportResult }) },
+
     events: [
       { type: 'workflow.node.started', node: { id: 'integration_test' } },
       ...(completed ? [{ type: 'workflow.node.completed', node: { id: 'integration_test' } }] : [])

@@ -554,7 +554,7 @@ function workflowArtifactPath(
     workflow.summary?.artifacts,
     workflow.summary,
     workflow.state,
-    workflow.result
+    workflow.state
   ]
   for (const source of currentSources) {
     const path = artifactPathFromRecord(source, key)
@@ -776,7 +776,7 @@ function productPlanFromWorkflow(
   workflow: WorkflowRunPayload | undefined
 ): Record<string, unknown> | undefined {
   if (!workflow) return undefined
-  for (const source of [workflow.state, workflow.result]) {
+  for (const source of [workflow.state]) {
     const value = source?.product_plan
     if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length) {
       return value as Record<string, unknown>
@@ -790,7 +790,7 @@ function requirementSpecFromWorkflow(
   workflow: WorkflowRunPayload | undefined
 ): Record<string, unknown> | undefined {
   if (!workflow) return undefined
-  for (const source of [workflow.state, workflow.result]) {
+  for (const source of [workflow.state]) {
     const value = source?.requirement_spec
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
@@ -1388,7 +1388,7 @@ export default function AiChatPanel({
       ? planningClarification.pages
       : ((currentPlanningWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
         (
-          currentPlanningWorkflow?.result?.ui_designs as
+          currentPlanningWorkflow?.state?.ui_designs as
           | { pages?: unknown[] | undefined }
           | undefined
         )?.pages ??
@@ -3017,8 +3017,8 @@ export default function AiChatPanel({
                   ...mergedWorkflow.summary,
                   clarification: prevMessage.workflow.summary.clarification
                 },
-                result: {
-                  ...mergedWorkflow.result,
+                state: {
+                  ...mergedWorkflow.state,
                   clarification: prevMessage.workflow.summary.clarification
                 }
               }
@@ -3556,7 +3556,7 @@ export default function AiChatPanel({
     applicationLifecycle,
     (latestWorkflowForDisplay?.summary?.templatePreparation ||
       latestWorkflowForDisplay?.state?.templatePreparation ||
-      latestWorkflowForDisplay?.result?.templatePreparation) as
+      latestWorkflowForDisplay?.state?.templatePreparation) as
     | WorkflowTemplatePreparation
     | undefined
   )
@@ -3782,7 +3782,7 @@ export default function AiChatPanel({
   ])
   const activeWorkflowPhase = String(
     activeWorkflow?.summary?.phase ||
-    activeWorkflow?.result?.phase ||
+    activeWorkflow?.state?.phase ||
     activeWorkflow?.state?.phase ||
     ''
   )
@@ -4787,7 +4787,7 @@ export default function AiChatPanel({
             sourceIdentity?.revisionContext,
             applicationLifecycle
           )
-          const planningInterrupt = [workflow.result, workflow.state]
+          const planningInterrupt = [workflow.state]
             .map((value) => value?.application_planning_interrupt)
             .find((value) => value && typeof value === 'object' && !Array.isArray(value)) as
             | Record<string, unknown>

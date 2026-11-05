@@ -24,7 +24,7 @@ from app.services.application_revision_lifecycle import register_revision_impact
 from app.protocols.workflow.request import (
     _build_execution_scope,
     _frontend_performance_decision,
-    _resume_values,
+    _server_resume_values,
     workflow_run_inputs,
 )
 
@@ -38,11 +38,9 @@ class WorkflowRequestTests(unittest.TestCase):
             "forwardedProps": {
                 "workflowAction": "start_modified_testing",
                 "selectedPageId": "journey",
-                "resumeState": {"summary": {"phase": "acceptance", "status": "completed"},
-                                "state": {"quality_gate_passed": True, "accepted": True,
-                                          "frontend_performance_decision": "skip"}},
+
             },
-        })
+        },server_state={'phase':"acceptance",'status':"completed",'quality_gate_passed':True,'accepted':True,'frontend_performance_decision':"skip"})
         self.assertEqual(inputs["request"], request)
         self.assertEqual(inputs["resume_from"], "integration_test")
         self.assertEqual(inputs["resume_values"]["selectedPageId"], "journey")
@@ -235,32 +233,12 @@ class WorkflowRequestTests(unittest.TestCase):
                 }
             )
 
-    def test_resume_values_restore_test_report_from_public_result(self) -> None:
+    def test_server_resume_values_accept_only_internal_state(self) -> None:
         """恢复公开快照时应把 Markdown 测试报告路径写回内部状态字段。"""
 
-        values = _resume_values(
-            {
-                "state": {
-                    "testReportResult": {
-                        "reportPath": ".devagentstudio/reports/test-report.md"
-                    }
-                }
-            }
-        )
-
-        self.assertEqual(
-            values["test_report_path"], ".devagentstudio/reports/test-report.md"
-        )
-        self.assertNotIn("test_report_json_path", values)
-
-        rejected = _resume_values(
-            {
-                "state": {
-                    "testReportResult": {"reportPath": "/tmp/untrusted-report.md"}
-                }
-            }
-        )
-        self.assertNotIn("test_report_path", rejected)
+        values = _server_resume_values({"test_report_path": ".devagentstudio/reports/test-report.md"})
+        self.assertEqual(values["test_report_path"], ".devagentstudio/reports/test-report.md")
+        self.assertEqual(_server_resume_values({"state": {"testReportResult": {"reportPath": "/tmp/untrusted"}}}), {})
 
     def test_endpoint_selection_derives_endpoint_build_scope(self) -> None:
         """选择单个 endpoint 时，执行计划范围应锁定到该 endpoint 而非整应用。"""
@@ -319,14 +297,9 @@ class WorkflowRequestTests(unittest.TestCase):
                         "targetId": "orders",
                     }
                 },
-                "resumeState": {
-                    "state": {
-                        "selectedPageId": "orders",
-                        "detailTargetType": "page",
-                    }
-                },
+
             }
-        )
+        ,server_state={'selectedPageId':"orders",'detail_target_type':"page"})
         values = result["resume_values"]
         self.assertEqual(result["resume_from"], "api_design_readiness_gate")
         self.assertEqual(values["selectedPageId"], "orders")
@@ -346,41 +319,28 @@ class WorkflowRequestTests(unittest.TestCase):
                         "apiContractId": "orders-api",
                     }
                 },
-                "resumeState": {
-                    "state": {
-                        "selectedApiContractId": "orders-api",
-                        "selectedEndpointId": "orders.list",
-                        "detailTargetType": "endpoint",
-                    }
-                },
+
             }
-        )
+        ,server_state={'selected_api_contract_id':"orders-api",'selected_endpoint_id':"orders.list",'detail_target_type':"endpoint"})
         values = result["resume_values"]
         self.assertEqual(result["resume_from"], "api_design_readiness_gate")
         self.assertEqual(values["selected_api_contract_id"], "orders-api")
         self.assertEqual(values["selected_endpoint_id"], "orders.list")
         self.assertEqual(values["detail_target_type"], "endpoint")
 
-    def test_resume_state_restores_camel_case_endpoint_scope(self) -> None:
+    def test_server_checkpoint_restores_endpoint_scope(self) -> None:
         """从公开 StateSnapshot 重新执行时，应恢复 camelCase endpoint scope。"""
 
         result = workflow_run_inputs(
             {
                 "request": "重新执行 prepare_build_tasks",
-                "forwardedProps": {
-                    "resumeState": {
-                        "state": {
-                            "phase": "prepare_build_tasks",
-                            "buildExecutionScope": {
+                "forwardedProps": {},
+            }
+        ,server_state={'phase':"prepare_build_tasks",'build_execution_scope':{
                                 "type": "endpoint",
                                 "targetId": "orders.list",
                                 "apiContractId": "orders-api",
-                            },
-                        }
-                    }
-                },
-            }
-        )
+                            }})
 
         self.assertEqual(
             result["resume_values"]["build_execution_scope"],
@@ -442,10 +402,9 @@ class WorkflowRequestTests(unittest.TestCase):
         result = workflow_run_inputs(
             {
                 "message": "验收通过",
-                "resumeState": {
-                    "runId": "run-page-a",
-                    "state": {
-                        "lifecycle": {
+
+            }
+        ,server_state={'lifecycle':{
                             "activeExecutions": {
                                 "run-page-a": {
                                     "pendingInteraction": {
@@ -460,11 +419,7 @@ class WorkflowRequestTests(unittest.TestCase):
                                     }
                                 },
                             }
-                        }
-                    },
-                },
-            }
-        )
+                        },'active_run_id':"run-page-a"})
 
         self.assertEqual(
             result["resume_values"]["lifecycle_interaction_submission"],
@@ -481,19 +436,14 @@ class WorkflowRequestTests(unittest.TestCase):
         result = workflow_run_inputs({
             "message": "确认并继续",
             "workflowScope": "application_planning",
-            "resumeState": {
-                "state": {
-                    "phase": "requirements",
-                    "lifecycle": {
+
+        },server_state={'phase':"requirements",'lifecycle':{
                         "initialization": {"stage": "ready_for_workbench"},
                         "pendingInteraction": {
                             "id": "interaction-1",
                             "basedOnRevision": 7,
                         },
-                    },
-                }
-            },
-        })
+                    }})
 
         self.assertNotIn("lifecycle_interaction_submission", result["resume_values"])
         self.assertNotIn("lifecycle", result["resume_values"])
@@ -654,26 +604,22 @@ class WorkflowRequestTests(unittest.TestCase):
         )
 
     def test_application_planning_rejects_ui_design_skip_action(self) -> None:
-        """「跳过 UI 设计」入口已下线，skip 不再被识别为合法的 ui_action。"""
-
-        inputs = workflow_run_inputs(
-            {
-                "forwardedProps": {
-                    "workflowScope": "application_planning",
-                    "applicationPlanningInteraction": {
-                        "gateId": "ui_designs:revision-1",
-                        "artifact": "ui_designs",
-                        "artifactRevision": "revision-1",
-                        "action": "ui_action",
-                        "uiAction": {"action": "skip"},
-                    },
-                }
-            }
-        )
-
-        self.assertIsNone(
-            inputs["application_planning_interaction"].get("ui_action"),
-        )
+        """已经下线的 UI skip 动作必须明确失败。"""
+        with self.assertRaisesRegex(ValueError, "无效的 uiAction"):
+            workflow_run_inputs(
+                        {
+                            "forwardedProps": {
+                                "workflowScope": "application_planning",
+                                "applicationPlanningInteraction": {
+                                    "gateId": "ui_designs:revision-1",
+                                    "artifact": "ui_designs",
+                                    "artifactRevision": "revision-1",
+                                    "action": "ui_action",
+                                    "uiAction": {"action": "skip"},
+                                },
+                            }
+                        }
+                    )
 
     def test_application_planning_rejects_invalid_ui_design_action(self) -> None:
         # select_template 缺 templateId、未知 action、缺 pageId 均视为无动作
@@ -738,20 +684,18 @@ class WorkflowRequestTests(unittest.TestCase):
         preserved = workflow_run_inputs(
             {
                 "request": "继续",
-                "forwardedProps": {
-                    "resumeState": {"state": {"selectedSkillNames": ["alpha"]}}
-                },
+                "forwardedProps": {},
             }
-        )
+        ,server_state={'selected_skill_names':["alpha"]})
         conflict = workflow_run_inputs(
             {
                 "request": "继续",
                 "forwardedProps": {
                     "selectedSkillNames": ["beta"],
-                    "resumeState": {"state": {"selectedSkillNames": ["alpha"]}},
+
                 },
             }
-        )
+        ,server_state={'selected_skill_names':["alpha"]})
 
         self.assertEqual(preserved["selected_skill_names"], ["alpha"])
         self.assertEqual(conflict["selected_skills_error"].code, "selected_skill_conflict")
@@ -849,14 +793,9 @@ class WorkflowRequestTests(unittest.TestCase):
                         "selected": "skip",
                     }
                 },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "unit_test",
-                    }
-                },
+
             }
-        )
+        ,server_state={'status':"requires_user_input",'phase':"unit_test"})
 
         self.assertEqual(inputs["resume_from"], "unit_test")
         self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
@@ -873,14 +812,9 @@ class WorkflowRequestTests(unittest.TestCase):
                         "action": "confirm",
                     }
                 },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "test_phase_confirmation",
-                    }
-                },
+
             }
-        )
+        ,server_state={'status':"requires_user_input",'phase':"test_phase_confirmation"})
 
         self.assertEqual(inputs["resume_from"], "test_phase_confirmation")
         self.assertEqual(
@@ -921,18 +855,9 @@ class WorkflowRequestTests(unittest.TestCase):
                 "clarificationAnswers": {
                     "test_phase_confirmation": {"action": "confirm"}
                 },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "test_phase_confirmation",
-                    },
-                    "state": {
-                        "phase": "test_phase_confirmation",
-                        "codeChanges": code_changes,
-                    },
-                },
+
             }
-        )
+        ,server_state={'status':"requires_user_input",'phase':"test_phase_confirmation",'code_changes':code_changes})
 
         self.assertEqual(inputs["resume_from"], "test_phase_confirmation")
         self.assertEqual(inputs["resume_values"]["code_changes"], code_changes)
@@ -977,14 +902,9 @@ class WorkflowRequestTests(unittest.TestCase):
             workflow_run_inputs(
                 {
                     "request": "进入审查",
-                    "resumeState": {
-                        "summary": {
-                            "status": "requires_user_input",
-                            "phase": "review_phase_confirmation",
-                        }
-                    },
+
                 }
-            )
+            ,server_state={'status':"requires_user_input",'phase':"review_phase_confirmation"})
 
     def test_review_phase_confirmation_is_forwarded_as_structured_resume(self) -> None:
         """进入审查阶段按钮必须恢复确认节点并保留 confirm 动作。"""
@@ -995,14 +915,9 @@ class WorkflowRequestTests(unittest.TestCase):
                 "clarificationAnswers": {
                     "review_phase_confirmation": {"action": "confirm", "reviewMode": "diff"}
                 },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "review_phase_confirmation",
-                    }
-                },
+
             }
-        )
+        ,server_state={'status':"requires_user_input",'phase':"review_phase_confirmation"})
 
         self.assertEqual(inputs["resume_from"], "review_phase_confirmation")
         self.assertEqual(
@@ -1056,21 +971,12 @@ class WorkflowRequestTests(unittest.TestCase):
                 "clarificationAnswers": {
                     "acceptance_phase_confirmation": {"action": "confirm"}
                 },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "acceptance_phase_confirmation",
-                    },
-                    "state": {
-                        "acceptancePhaseConfirmation": {
+
+            }
+        ,server_state={'status':"requires_user_input",'phase':"acceptance_phase_confirmation",'acceptance_phase_confirmation':{
                             "mode": "acceptance_phase_confirmation",
                             "status": "requires_user_input",
-                        },
-                        "codeReviewResult": {"status": "completed", "issues": []},
-                    },
-                },
-            }
-        )
+                        },'code_review_result':{"status": "completed", "issues": []}})
 
         self.assertEqual(inputs["resume_from"], "acceptance_phase_confirmation")
         self.assertEqual(
@@ -1098,19 +1004,11 @@ class WorkflowRequestTests(unittest.TestCase):
             workflow_run_inputs(
                 {
                     "request": "进入验收",
-                    "resumeState": {
-                        "summary": {
-                            "status": "requires_user_input",
-                            "phase": "acceptance_phase_confirmation",
-                        },
-                        "state": {
-                            "clarification": {
-                                "mode": "acceptance_phase_confirmation"
-                            }
-                        },
-                    },
+
                 }
-            )
+            ,server_state={'status':"requires_user_input",'phase':"acceptance_phase_confirmation",'clarification':{
+                                "mode": "acceptance_phase_confirmation"
+                            }})
 
     def test_code_review_repair_confirmation_is_forwarded_as_structured_resume(self) -> None:
         """一键修复按钮必须恢复同一代码审查节点并携带 repair_all 动作。"""
@@ -1121,25 +1019,16 @@ class WorkflowRequestTests(unittest.TestCase):
                 "clarificationAnswers": {
                     "code_review_repair_confirmation": {"action": "repair_all"}
                 },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "code_review",
-                    },
-                    "state": {
-                        "clarification": {
+
+            }
+        ,server_state={'status':"requires_user_input",'phase':"code_review",'clarification':{
                             "mode": "code_review_repair_confirmation",
                             "status": "requires_user_input",
-                        },
-                        "codeReviewResult": {
+                        },'code_review_report_path':'.devagentstudio/reports/code-review.md','code_review_result':{
                             "status": "completed",
                             "reportPath": ".devagentstudio/reports/code-review.md",
                             "issues": [{"id": "CKR6002-1"}],
-                        },
-                    },
-                },
-            }
-        )
+                        }})
 
         self.assertEqual(inputs["resume_from"], "code_review")
         self.assertEqual(
@@ -1166,20 +1055,10 @@ class WorkflowRequestTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "只能通过 clarificationAnswers"):
             workflow_run_inputs(
-                {
-                    "resumeState": {
-                        "summary": {
-                            "status": "requires_user_input",
-                            "phase": "code_review",
-                        },
-                        "state": {
-                            "clarification": {
+                {}
+            ,server_state={'status':"requires_user_input",'phase':"code_review",'clarification':{
                                 "mode": "code_review_repair_confirmation"
-                            },
-                        },
-                    }
-                }
-            )
+                            }})
 
     def test_frontend_performance_confirmation_is_forwarded_as_resume_decision(self) -> None:
         """前端性能测试确认按钮必须转换为主 Workflow 可消费的 skip/run 状态。"""
@@ -1192,14 +1071,9 @@ class WorkflowRequestTests(unittest.TestCase):
                             "clarificationAnswers": {
                                 "frontend_performance_confirmation": answer
                             },
-                            "resumeState": {
-                                "summary": {
-                                    "status": "requires_user_input",
-                                    "phase": "integration_test",
-                                }
-                            },
+
                         }
-                    )
+                    ,server_state={'status':"requires_user_input",'phase':"integration_test"})
                     self.assertEqual(inputs["resume_from"], "integration_test")
                     self.assertEqual(
                         inputs["resume_values"]["frontend_performance_decision"],
@@ -1229,26 +1103,13 @@ class WorkflowRequestTests(unittest.TestCase):
                         "selected": "run",
                     }
                 },
-                "resumeState": {
-                    "summary": {
-                        "status": "requires_user_input",
-                        "phase": "integration_test",
-                    },
-                    "result": {
-                        "phase": "integration_test",
-                        "status": "requires_user_input",
-                        "clarification": {
-                            "mode": "frontend_performance_confirmation"
-                        },
-                        "unit_test_decision": "skip",
-                        "integration_build_checks_completed": True,
-                        "integration_build_results": [
-                            {"id": "frontend_build", "passed": True}
-                        ],
-                    }
-                },
+
             }
-        )
+        ,server_state={'status':"requires_user_input",'phase':"integration_test",'clarification':{
+                            "mode": "frontend_performance_confirmation"
+                        },'unit_test_decision':"skip",'integration_build_checks_completed':True,'integration_build_results':[
+                            {"id": "frontend_build", "passed": True}
+                        ]})
 
         self.assertEqual(inputs["resume_from"], "integration_test")
         self.assertEqual(inputs["resume_values"]["unit_test_decision"], "skip")
@@ -1266,19 +1127,9 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "request": "补充后的需求",
-                "forwardedProps": {
-                    "resumeState": {
-                        "events": [
-                            {
-                                "type": "workflow.node.completed",
-                                "nodeName": "requirements",
-                                "status": "requires_user_input",
-                            }
-                        ]
-                    }
-                },
+                "forwardedProps": {},
             }
-        )
+        ,server_state={})
 
         self.assertEqual(inputs["resume_from"], "")
 
@@ -1344,17 +1195,10 @@ class WorkflowRequestTests(unittest.TestCase):
                 "request": "正确，继续",
                 "forwardedProps": {
                     "workflowScope": "application_planning",
-                    "resumeState": {
-                        "events": [
-                            {
-                                "nodeName": "technical_planning",
-                                "status": "requires_user_input",
-                            }
-                        ]
-                    },
+
                 },
             }
-        )
+        ,server_state={"workflow_scope":"application_planning", "status":"requires_user_input", "phase":"technical_planning"})
 
         self.assertEqual(inputs["resume_from"], "technical_planning")
 
@@ -1432,21 +1276,14 @@ class WorkflowRequestTests(unittest.TestCase):
             {
                 "request": "从指定节点继续执行 workflow 调试。",
                 "forwardedProps": {
-                    "resumeState": {
-                        "events": [
-                            {
-                                "nodeName": "build",
-                                "status": "requires_user_input",
-                            }
-                        ]
-                    },
+
                     "workflowDebug": {
                         "enabled": True,
                         "resumeFrom": "prepare_build_tasks",
                     },
                 },
             }
-        )
+        ,server_state={})
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
         self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
@@ -1514,20 +1351,13 @@ class WorkflowRequestTests(unittest.TestCase):
                         "enabled": True,
                         "resumeFrom": "prepare_build_tasks",
                     },
-                    "resumeState": {
-                        "runId": "previous-run",
-                        "state": {
-                            "retiredProductField": {},
-                            "selectedPageId": "pet_list_page",
-                            "buildExecutionScope": {
-                                "type": "page",
-                                "targetId": "pet_list_page",
-                            },
-                        },
-                    },
+
                 }
             }
-        )
+        ,server_state={'retired_product_field':{},'selectedPageId':"pet_list_page",'build_execution_scope':{
+                                "type": "page",
+                                "targetId": "pet_list_page",
+                            },'active_run_id':"previous-run"})
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
         self.assertFalse(inputs["resume_values"]["retry_failed_tasks"])
@@ -1558,22 +1388,12 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "request": "补充角色和页面信息",
-                "forwardedProps": {
-                    "resumeState": {
-                        "state": {
-                            "status": "requires_user_input",
-                            "phase": "requirements",
-                            "requirement_spec": {
+                "forwardedProps": {},
+            }
+        ,server_state={'status':"requires_user_input",'phase':"requirements",'requirement_spec':{
                                 "confirmation_status": "pending_user_input",
                                 "clarification_status": "requires_user_input",
-                            },
-                            "requirement_spec_path": "var/specs/requirement-spec.md",
-                            "requirement_spec_json_path": "var/specs/requirement-spec.json",
-                        }
-                    }
-                },
-            }
-        )
+                            },'requirement_spec_path':"var/specs/requirement-spec.md",'requirement_spec_json_path':"var/specs/requirement-spec.json"})
 
         self.assertEqual(inputs["resume_from"], "")
         self.assertEqual(
@@ -1599,22 +1419,9 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "clarificationAnswers": {"entity_source_binding": submission},
-                "forwardedProps": {
-                    "resumeState": {
-                        "events": [
-                            {
-                                "type": "workflow.node.completed",
-                                "node": {"id": "entity_source_binding"},
-                                "status": "requires_user_input",
-                            }
-                        ],
-                        "result": {
-                            "pending_project_plan": {"confirmation_status": "pending_user_confirmation"}
-                        },
-                    }
-                },
+                "forwardedProps": {},
             }
-        )
+        ,server_state={'pending_project_plan':{"confirmation_status": "pending_user_confirmation"}})
 
         self.assertEqual(inputs["resume_from"], "entity_source_binding")
         self.assertEqual(
@@ -1646,14 +1453,12 @@ class WorkflowRequestTests(unittest.TestCase):
                     "clarificationAnswers": {"entity_design": action},
                     "selectedEntityId": "entity_category",
                     "detailTargetType": "entity",
-                    "resumeState": {
-                        "runId": "run-entity-binding",
-                        "state": {
-                            "selected_entity_id": "entity_category",
-                            "pending_project_plan": {
+
+                },
+            }
+        ,server_state={'phase':"entity_source_binding",'status':"requires_user_input",'selected_entity_id':"entity_category",'pending_project_plan':{
                                 "confirmation_status": "pending_user_confirmation"
-                            },
-                            "lifecycle": {
+                            },'lifecycle':{
                                 "activeExecutions": {
                                     "run-entity-binding": {
                                         "pendingInteraction": {
@@ -1662,16 +1467,7 @@ class WorkflowRequestTests(unittest.TestCase):
                                         }
                                     }
                                 }
-                            },
-                        },
-                        "summary": {
-                            "phase": "entity_source_binding",
-                            "status": "requires_user_input",
-                        },
-                    },
-                },
-            }
-        )
+                            },'active_run_id':"run-entity-binding"})
 
         self.assertEqual(inputs["resume_from"], "entity_source_binding")
         self.assertEqual(inputs["resume_values"]["entity_design_action"], action)
@@ -1692,23 +1488,9 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
-                "forwardedProps": {
-                    "resumeState": {
-                        "events": [
-                            {
-                                "type": "workflow.node.completed",
-                                "node": {"id": "project_planning"},
-                                "status": "requires_user_input",
-                            }
-                        ],
-                        "result": {
-                            "requirement_spec": {"version": "0.1.0"},
-                            "project_plan": {"version": "0.1.0"},
-                        },
-                    }
-                },
+                "forwardedProps": {},
             }
-        )
+        ,server_state={'status':'requires_user_input','phase':'project_planning','requirement_spec':{"version": "0.1.0"},'project_plan':{"version": "0.1.0"}})
 
         self.assertEqual(inputs["resume_from"], "project_planning")
         self.assertEqual(inputs["resume_values"]["project_plan"], {"version": "0.1.0"})
@@ -1896,17 +1678,9 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
-                "forwardedProps": {
-                    "resumeState": {
-                        "state": {
-                            "phase": "development_readiness_gate",
-                            "status": "requires_user_input",
-                            "selectedPageId": "page_1",
-                        }
-                    }
-                },
+                "forwardedProps": {},
             }
-        )
+        ,server_state={'phase':"development_readiness_gate",'status':"requires_user_input",'selectedPageId':"page_1"})
 
         self.assertEqual(inputs["resume_from"], "development_readiness_gate")
         self.assertEqual(inputs["resume_values"]["selectedPageId"], "page_1")
@@ -1924,12 +1698,10 @@ class WorkflowRequestTests(unittest.TestCase):
                     "forwardedProps": {
                         "workflowAction": "retry_failed_tasks",
                         "resumeExecutionRunId": "old-run",
-                        "resumeState": {
-                            "events": [{"status": "failed", "nodeName": "build"}]
-                        },
+
                     }
                 }
-            )
+            ,server_state={})
 
     def test_non_retry_does_not_inject_failure_state_reset(self) -> None:
         """普通 Workflow 不应在没有 Retry 边界时注入失败状态清理字段。"""
@@ -1937,14 +1709,9 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "request": "继续当前 Workflow",
-                "resumeState": {
-                    "state": {
-                        "message": "旧失败消息",
-                        "error": "旧错误",
-                    }
-                },
+
             }
-        )
+        ,server_state={'message':"旧失败消息",'error':"旧错误"})
 
         self.assertNotIn("message", inputs["resume_values"])
         self.assertNotIn("error", inputs["resume_values"])
@@ -1966,60 +1733,44 @@ class WorkflowRequestTests(unittest.TestCase):
             {"type": "data_source", "targetId": "orders"},
         )
 
-    def test_selected_page_overrides_stale_resumed_application_scope(self) -> None:
-        """恢复态存在旧 application 范围时，选中页面应纠正为页面范围。"""
+    def test_server_application_scope_is_authoritative(self) -> None:
+        """继续执行沿用后端 application 范围，不能由展示选中项覆盖。"""
 
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
-                "forwardedProps": {
-                    "resumeState": {
-                        "state": {
-                            "phase": "development_readiness_gate",
-                            "status": "requires_user_input",
-                            "selectedPageId": "page_1",
-                            "build_execution_scope": {
+                "forwardedProps": {},
+            }
+        ,server_state={'phase':"development_readiness_gate",'status':"requires_user_input",'selectedPageId':"page_1",'build_execution_scope':{
                                 "type": "application",
                                 "targetId": "application",
-                            },
-                        }
-                    }
-                },
-            }
-        )
+                            }})
 
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
-            {"type": "page", "targetId": "page_1"},
+            {"type": "application", "targetId": "application"},
         )
 
-    def test_selected_page_overrides_stale_resumed_page_scope(self) -> None:
-        """用户重新选择页面后，应以本次选择覆盖恢复态中的旧页面范围。"""
+    def test_server_page_scope_cannot_be_retargeted_by_ui(self) -> None:
+        """普通继续不能通过当前 UI 的页面选择重新指定后端目标。"""
 
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
                 "forwardedProps": {
                     "selectedPageId": "personnel-list",
-                    "resumeState": {
-                        "state": {
-                            "phase": "development_readiness_gate",
-                            "status": "requires_user_input",
-                            "selectedPageId": "page_1",
-                            "build_execution_scope": {
-                                "type": "page",
-                                "targetId": "page_1",
-                            },
-                        }
-                    },
+
                 },
             }
-        )
+        ,server_state={'phase':"development_readiness_gate",'status':"requires_user_input",'selectedPageId':"page_1",'build_execution_scope':{
+                                "type": "page",
+                                "targetId": "page_1",
+                            }})
 
-        self.assertEqual(inputs["resume_values"]["selectedPageId"], "personnel-list")
+        self.assertEqual(inputs["resume_values"]["selectedPageId"], "page_1")
         self.assertEqual(
             inputs["resume_values"]["build_execution_scope"],
-            {"type": "page", "targetId": "personnel-list"},
+            {"type": "page", "targetId": "page_1"},
         )
 
     def test_selected_page_does_not_read_project_plan_fallback(self) -> None:
@@ -2052,20 +1803,13 @@ class WorkflowRequestTests(unittest.TestCase):
                     "forwardedProps": {
                         "workspaceRoot": str(workspace),
                         "selectedPageId": "personnel-list",
-                        "resumeState": {
-                            "state": {
-                                "phase": "development_readiness_gate",
-                                "status": "requires_user_input",
-                                "selectedPageId": "page_1",
-                                "build_execution_scope": {
-                                    "type": "page",
-                                    "targetId": "page_1",
-                                },
-                            }
-                        },
+
                     },
                 }
-            )
+            ,server_state={'phase':"development_readiness_gate",'status':"requires_user_input",'selectedPageId':"page_1",'build_execution_scope':{
+                                    "type": "page",
+                                    "targetId": "page_1",
+                                }})
 
         self.assertNotIn("project_plan", inputs.get("resume_values", {}))
         self.assertNotIn("frontend_pages", inputs.get("resume_values", {}))
@@ -2074,25 +1818,12 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "request": "正确，继续",
-                "forwardedProps": {
-                    "resumeState": {
-                        "events": [
-                            {
-                                "type": "workflow.node.completed",
-                                "node": {"id": "prepare_build_tasks"},
-                                "status": "requires_user_input",
-                            }
-                        ],
-                        "result": {
-                            "project_plan": {
+                "forwardedProps": {},
+            }
+        ,server_state={'status':'requires_user_input','phase':'prepare_build_tasks','project_plan':{
                                 "version": "0.1.0",
                                 "confirmation_status": "pending_user_confirmation",
-                            },
-                        },
-                    }
-                },
-            }
-        )
+                            }})
 
         self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
         self.assertEqual(
@@ -2104,20 +1835,11 @@ class WorkflowRequestTests(unittest.TestCase):
         inputs = workflow_run_inputs(
             {
                 "request": "从任务拆分继续",
-                "forwardedProps": {
-                    "resumeState": {
-                        "state": {
-                            "workspace_snapshot_summary": {
-                                "workspace_revision": "rev-123"
-                            },
-                            "workspace_snapshot_path": "/tmp/snapshot.json",
-                            "workspace_snapshot_hash": "hash-123",
-                            "workspace_revision": "rev-123",
-                        }
-                    }
-                },
+                "forwardedProps": {},
             }
-        )
+        ,server_state={'workspace_snapshot_summary':{
+                                "workspace_revision": "rev-123"
+                            },'workspace_snapshot_path':"/tmp/snapshot.json",'workspace_snapshot_hash':"hash-123",'workspace_revision':"rev-123"})
 
         self.assertEqual(
             inputs["resume_values"]["workspace_snapshot_path"],
@@ -2162,26 +1884,14 @@ class WorkflowRequestTests(unittest.TestCase):
             ["FastAPI", "React"],
         )
 
-    def test_legacy_database_context_resume_maps_to_task_preparation(self) -> None:
-        """旧快照节点兼容重定向，并丢弃已退役的数据库规划状态。"""
+    def test_retired_database_context_is_not_a_resume_source(self) -> None:
+        """已退役字段不能推断继续入口，也不能进入当前后端状态。"""
 
         inputs = workflow_run_inputs(
-            {
-                "resumeState": {
-                    "events": [
-                        {
-                            "status": "requires_user_input",
-                            "nodeName": "inspect_database_context",
-                        }
-                    ],
-                    "state": {
-                        "database_planning_context": {"status": "completed"},
-                    },
-                }
-            }
-        )
+            {}
+        ,server_state={'database_planning_context':{"status": "completed"}})
 
-        self.assertEqual(inputs["resume_from"], "prepare_build_tasks")
+        self.assertEqual(inputs["resume_from"], "")
         self.assertNotIn("database_planning_context", inputs["resume_values"])
 
     def test_workflow_debug_auto_loads_fixed_workspace_artifacts(self) -> None:
@@ -2270,19 +1980,10 @@ class WorkflowRequestTests(unittest.TestCase):
                 "forwardedProps": {
                     "workflowAction": "retry_code_review",
                     "resumeExecutionRunId": "review-run-1",
-                    "resumeState": {
-                        "summary": {
-                            "status": "failed",
-                            "codeReviewRetry": {"available": True, "target": "scan"},
-                        },
-                        "state": {
-                            "codeReviewResult": {"issues": [{"id": "stale"}]},
-                            "codeReviewRepair": {"status": "failed", "iteration": 2},
-                        },
-                    },
+
                 }
             }
-        )
+        ,server_state={'status':"failed",'code_review_retry':{"available": True, "target": "scan"},'code_review_result':{"issues": [{"id": "stale"}]},'code_review_repair_result':{"status": "failed", "iteration": 2}})
 
         self.assertEqual(inputs["workflow_action"], "retry_code_review")
         self.assertEqual(inputs["resume_from"], "code_review")
@@ -2300,19 +2001,10 @@ class WorkflowRequestTests(unittest.TestCase):
                 "forwardedProps": {
                     "workflowAction": "retry_code_review",
                     "resumeExecutionRunId": "review-run-2",
-                    "resumeState": {
-                        "summary": {
-                            "status": "failed",
-                            "codeReviewRetry": {"available": True, "target": "repair"},
-                        },
-                        "state": {
-                            "codeReviewResult": {"issues": [issue]},
-                            "codeReviewRepair": {"status": "failed", "iteration": 2},
-                        },
-                    },
+
                 }
             }
-        )
+        ,server_state={'status':"failed",'code_review_retry':{"available": True, "target": "repair"},'code_review_result':{"issues": [issue]},'code_review_repair_result':{"status": "failed", "iteration": 2}})
 
         self.assertEqual(inputs["resume_from"], "code_review")
         self.assertEqual(inputs["resume_values"]["code_review_result"]["issues"], [issue])
@@ -2351,15 +2043,10 @@ class WorkflowRequestTests(unittest.TestCase):
                 {
                     "forwardedProps": {
                         "workflowAction": "retry_code_review",
-                        "resumeState": {
-                            "summary": {
-                                "status": "failed",
-                                "codeReviewRetry": {
-                                    "available": True,
-                                    "target": "scan",
-                                },
-                            }
-                        },
+
                     }
                 }
-            )
+            ,server_state={'status':"failed",'code_review_retry':{
+                                    "available": True,
+                                    "target": "scan",
+                                }})

@@ -1,3 +1,4 @@
+import { useWorkflowDocuments } from './useWorkflowDocuments'
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -190,10 +191,12 @@ export default function WorkflowRunCard({
   apiDesignSavedMappingKeys,
   onSaveRequirementSpec,
   rootPath,
-  workflow,
+  workflow: sourceWorkflow,
   workspaceRoot,
   application
 }: WorkflowRunCardProps): ReactElement {
+  const documents = useWorkflowDocuments(sourceWorkflow, workspaceRoot, !disabled)
+  const workflow = documents.workflow
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
   const status = String(workflow.summary.status || 'unknown')
   const clarification = workflowClarification(workflow)
@@ -379,6 +382,8 @@ export default function WorkflowRunCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.threadId, clarificationFingerprint])
 
+  if (documents.loading) return <Alert type="info" showIcon message="正在读取确认资料…" />
+  if (documents.error) return <Alert type="error" showIcon message={documents.error} />
   return (
     <div
       className={cx(
@@ -883,7 +888,7 @@ function workflowRevisionImpact(
     clarificationImpact,
     workflow.summary.revisionImpact,
     workflow.state?.revision_impact,
-    workflow.result?.revision_impact
+    workflow.state?.revision_impact
   ]
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== 'object') continue
@@ -914,7 +919,7 @@ function workflowRevisionDraftBinding(
     clarificationDraft,
     workflow.summary.revisionDraft,
     workflow.state?.revision_draft,
-    workflow.result?.revision_draft
+    workflow.state?.revision_draft
   ]
   const draft = candidates.find(
     (candidate) =>
@@ -953,8 +958,8 @@ function readCodeReviewResult(workflow: WorkflowRunPayload): WorkflowCodeReviewR
     workflow.summary.codeReviewResult,
     workflow.state?.codeReviewResult,
     workflow.state?.code_review_result,
-    workflow.result?.codeReviewResult,
-    workflow.result?.code_review_result
+    workflow.state?.codeReviewResult,
+    workflow.state?.code_review_result
   ]
   const candidate = candidates.find(
     (value) =>
@@ -968,7 +973,7 @@ function readCodeReviewScan(workflow: WorkflowRunPayload): WorkflowCodeReviewSca
   const candidates: unknown[] = [
     workflow.summary.codeReviewScan,
     workflow.state?.codeReviewScan,
-    workflow.result?.codeReviewScan
+    workflow.state?.codeReviewScan
   ]
   return candidates.find(
     (value): value is WorkflowCodeReviewScan =>
@@ -993,8 +998,8 @@ function readCodeReviewRepair(workflow: WorkflowRunPayload): WorkflowCodeReviewR
     completed: 6
   }
   const candidates: unknown[] = [
-    workflow.result?.codeReviewRepair,
-    workflow.result?.code_review_repair_result,
+    workflow.state?.codeReviewRepair,
+    workflow.state?.code_review_repair_result,
     workflow.state?.codeReviewRepair,
     workflow.state?.code_review_repair_result,
     workflow.summary.codeReviewRepair
@@ -1016,7 +1021,7 @@ function readCodeReviewRepair(workflow: WorkflowRunPayload): WorkflowCodeReviewR
 
 /** 从 Workflow 公开状态中读取 RequirementSpec 结构化数据。 */
 function readRequirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const value = source?.requirement_spec
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
@@ -1156,7 +1161,7 @@ function RequirementSpecConfirmationCard({
 // 从公开 Workflow 快照读取需求确认门禁，禁止把结构化草稿误称为正式文档。
 function readRequirementsConfirmed(workflow: WorkflowRunPayload): boolean {
   // 修订首帧的 false 必须覆盖旧快照里的 true，禁止过期文档进入确认卡或编辑入口。
-  for (const source of [workflow.state, workflow.result, workflow.summary]) {
+  for (const source of [workflow.state, workflow.state, workflow.summary]) {
     const value = source?.requirementsConfirmed ?? source?.requirements_confirmed
     if (typeof value === 'boolean') return value
   }
@@ -2395,13 +2400,13 @@ export function workflowOriginalRequest(workflow: WorkflowRunPayload): string {
     return summaryRequest.trim()
   }
 
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const requirementSpec = objectValue(source?.requirement_spec)
     const sourceRequest = requirementSpec.source_request
     if (typeof sourceRequest === 'string' && sourceRequest.trim()) return sourceRequest.trim()
   }
 
-  const resultRequest = workflow.result?.request
+  const resultRequest = workflow.state?.request
   if (typeof resultRequest === 'string' && resultRequest.trim()) return resultRequest.trim()
 
   const stateRequest = workflow.state?.request
@@ -2481,7 +2486,7 @@ function clarificationAnswerText(
 // 从 Workflow payload 的多个位置读取待确认载荷，兼容流式快照、最终结果和自定义事件。
 // 从 workflow.state/result.project_plan 读取结构化项目计划，供 ProjectPlanSummary 展示。
 function readProjectPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const value = source?.project_plan
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
@@ -2492,7 +2497,7 @@ function readProjectPlan(workflow: WorkflowRunPayload): Record<string, unknown> 
 
 /** 从 Workflow 公开状态中读取 ProductPlan 结构化数据。 */
 function readProductPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const value = source?.product_plan
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
@@ -2503,7 +2508,7 @@ function readProductPlan(workflow: WorkflowRunPayload): Record<string, unknown> 
 
 /** 从 Workflow 公开状态中读取 TechnicalPlan 结构化数据。 */
 function readTechnicalPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const value = source?.technical_plan
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
@@ -2552,7 +2557,7 @@ function workflowConfirmationArtifact(
     !artifact ||
     artifact.id !== expectedArtifactId ||
     artifact.format !== 'markdown' ||
-    !artifact.content.trim()
+    !artifact.content?.trim()
   ) {
     return undefined
   }

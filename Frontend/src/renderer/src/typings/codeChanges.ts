@@ -13,6 +13,7 @@ export type WorkspaceCodeChangeFile = {
   additions: number
   deletions: number
   diff: string
+  diffRef?: import("../service/workflowArtifacts").ArtifactReference
   truncated?: boolean
   binary?: boolean
   approvalId?: string

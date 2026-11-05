@@ -109,6 +109,18 @@ def workflow_capabilities() -> dict[str, Any]:
         "name": "workflow-run",
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
+        "eventStorage": {
+            "stateDelta": "changed-presentation-fields-only",
+            "graphStateAuthority": "checkpoint",
+            "documentsInEvents": "summary-only",
+            "retains": ["sequence", "node", "attempt", "status", "message", "diagnostics"],
+        },
+        "storage": {
+            "workflowStateField": "state", "duplicateResult": False,
+            "resumeRequestField": "forwardedProps.resumeReference",
+            "resumeAuthority": "backend-checkpoint", "materialAddressing": "sha256",
+            "artifactReadEndpoint": "/workflow-artifacts/run", "historicalCompatibility": False,
+        },
         "unitTestRepairBudget": {
             "scope": "check-id", "maxRepairsPerCheck": UNIT_TEST_REPAIRS_PER_CHECK,
             "attemptsField": "unitTestRepairAttempts",

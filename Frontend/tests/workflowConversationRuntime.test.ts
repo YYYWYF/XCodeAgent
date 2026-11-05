@@ -1313,7 +1313,7 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
     }
 
     assert.equal(workflowRequestCount, 4)
-    // Regenerate/Confirm/Abandon 使用 resumeState.threadId 作为真实 Graph execution thread，
+    // Regenerate/Confirm/Abandon 使用 resumeReference.threadId 作为真实 Graph execution thread，
     // 不得把当前可见会话的 threadId 写入本地 DAG execution。
     assert.deepEqual(acquiredExecutionThreadIds.slice(1, 4), [
       OWNER_THREAD_ID,

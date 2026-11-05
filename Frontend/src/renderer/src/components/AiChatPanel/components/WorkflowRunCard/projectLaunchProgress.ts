@@ -35,8 +35,8 @@ export function projectLaunchProgress(
   })
   append(workflow.state?.launchProgress)
   append(workflow.state?.launch_progress)
-  append(workflow.result?.launchProgress)
-  append(workflow.result?.launch_progress)
+  append(workflow.state?.launchProgress)
+  append(workflow.state?.launch_progress)
   append(workflow.summary.launchProgress)
   return candidates.reduce<WorkflowLaunchProgress | undefined>((latest, candidate) => {
     if (!latest) return candidate

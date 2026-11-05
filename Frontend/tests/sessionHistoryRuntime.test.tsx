@@ -5,11 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createElement, type ReactElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
-import {
-  readIndexedPage,
-  readIndexedSummary,
-  saveIndexedSession
-} from '../src/main/sessionHistoryIndex'
+import { readSessionPage, readSessionSummary, saveSession } from '../src/main/sessionHistory'
 import { useChatSessions } from '../src/renderer/src/components/AiChatPanel/hooks/useChatSessions'
 import {
   SessionRuntimeProvider,
@@ -57,7 +53,7 @@ test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分
     held: Promise<void> | undefined,
     failRead = false
   const native = {
-    list: async () => ({ sessions: await Promise.all(files.map(readIndexedSummary)) }),
+    list: async () => ({ sessions: await Promise.all(files.map(readSessionSummary)) }),
     read: async ({
       sessionId,
       before,
@@ -69,7 +65,7 @@ test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分
     }) => {
       if (before !== undefined && held) await held
       if (failRead) throw new Error('history read failed')
-      return structuredClone(await readIndexedPage(files[sessionId === 'a' ? 0 : 1], before, limit))
+      return structuredClone(await readSessionPage(files[sessionId === 'a' ? 0 : 1], before, limit))
     },
     save: async ({
       session,
@@ -78,11 +74,7 @@ test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分
       session: Record<string, any>
       loadedMessageIds?: number[]
     }) => ({
-      session: await saveIndexedSession(
-        files[session.id === 'a' ? 0 : 1],
-        session,
-        loadedMessageIds
-      )
+      session: await saveSession(files[session.id === 'a' ? 0 : 1], session, loadedMessageIds)
     })
   }
   Object.defineProperty(globalThis, 'localStorage', {
@@ -140,8 +132,8 @@ test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分
       })
     }
     await act(async () => chat.handleOpenSession('a'))
-    assert.equal(chat.messages.length, 20)
-    assert.equal(chat.messages[0].id, 46)
+    assert.equal(chat.messages.length, 10)
+    assert.equal(chat.messages[0].id, 56)
     assert.equal(chat.activeSession!.threadId, 'thread-a')
     const key = chat.activeSession!.key
     held = new Promise((resolve) => {
@@ -165,7 +157,7 @@ test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分
       await pending
     })
     held = undefined
-    assert.equal(chat.messages[0].id, 26)
+    assert.equal(chat.messages[0].id, 46)
     assert.equal(chat.messages.find((message) => message.id === 65)?.content, '流式新回复')
     assert.equal(chat.messages.at(-1)?.id, 66)
     assert.equal(chat.draft, '尚未发送的草稿')
@@ -183,7 +175,7 @@ test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分
     failRead = true
     await act(async () => chat.loadOlderMessages())
     assert.match(chat.historyError || '', /history read failed/)
-    assert.equal(chat.messages[0].id, 26)
+    assert.equal(chat.messages[0].id, 46)
     failRead = false
     held = new Promise((resolve) => {
       release = resolve
@@ -197,8 +189,8 @@ test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分
       await pending
     })
     assert.equal(chat.activeSession!.threadId, 'thread-b')
-    assert.equal(chat.messages.length, 20)
-    assert.equal(chat.messages[0].content, 'b 46')
+    assert.equal(chat.messages.length, 10)
+    assert.equal(chat.messages[0].content, 'b 56')
   } finally {
     await act(async () => root?.unmount())
     Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow })

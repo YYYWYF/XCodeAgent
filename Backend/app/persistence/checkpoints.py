@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import aiosqlite
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.config import Settings
 from app.workspace.spec_documents import workflow_artifact_root
+from app.persistence.artifact_serializer import ArtifactCheckpointSerializer
 
 _CHECKPOINT_EXIT_STACK = AsyncExitStack()
 _CHECKPOINT_SAVERS: dict[str, AsyncSqliteSaver] = {}
@@ -49,10 +51,11 @@ async def workflow_checkpointer(
     workspace: str | None = None,
     project_id: str | None = None,
 ) -> AsyncSqliteSaver:
-    """Return a SQLite checkpointer scoped to the workflow workspace."""
+    """返回工作区绑定的 SQLite checkpoint 与资料序列化器，隔离共享数据库的内容引用。"""
 
     db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
-    cache_key = str(db_path)
+    artifact_workspace = str(workflow_artifact_root({"workspace": workspace, "project_id": project_id}).parent)
+    cache_key = f"{db_path}|{artifact_workspace}"
     async with _CHECKPOINT_LOCK:
         saver = _CHECKPOINT_SAVERS.get(cache_key)
         current_identity = _checkpoint_file_identity(db_path)
@@ -64,9 +67,8 @@ async def workflow_checkpointer(
             _CHECKPOINT_SAVERS.pop(cache_key, None)
             _CHECKPOINT_IDENTITIES.pop(cache_key, None)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        saver = await _CHECKPOINT_EXIT_STACK.enter_async_context(
-            AsyncSqliteSaver.from_conn_string(str(db_path))
-        )
+        connection = await _CHECKPOINT_EXIT_STACK.enter_async_context(aiosqlite.connect(str(db_path)))
+        saver = AsyncSqliteSaver(connection, serde=ArtifactCheckpointSerializer(artifact_workspace))
         await saver.setup()
         _CHECKPOINT_SAVERS[cache_key] = saver
         identity = _checkpoint_file_identity(db_path)
@@ -257,7 +259,8 @@ async def close_workflow_checkpointer_for_workspace(
     if settings.checkpoint_db_path:
         return False
     db_path = workflow_checkpoint_db_path(workspace=workspace, project_id=project_id)
-    cache_key = str(db_path)
+    artifact_workspace = str(workflow_artifact_root({"workspace": workspace, "project_id": project_id}).parent)
+    cache_key = f"{db_path}|{artifact_workspace}"
     async with _CHECKPOINT_LOCK:
         saver = _CHECKPOINT_SAVERS.pop(cache_key, None)
         _CHECKPOINT_IDENTITIES.pop(cache_key, None)

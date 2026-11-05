@@ -108,17 +108,11 @@ export class SessionMessageCache {
   prepend(key: string, messages: AgentChatMessage[], page: SessionHistoryPage): void {
     const entry = this.entries.get(key)
     if (!entry?.history) return
-    const current = new Map(entry.messages.map((message) => [message.id, message]))
     const known = new Set(entry.history.loadedMessageIds)
-    for (const message of messages) {
-      // 已加载后被本地移除的占位/交接消息不能被迟到的历史页重新添加。
-      if (!current.has(message.id) && !known.has(message.id)) current.set(message.id, message)
-    }
     const positions = { ...entry.history.messagePositions, ...page.messagePositions }
-    // 磁盘顺序由索引决定，不把时间戳式消息 ID 当作排序合同；未落盘的新回复保持追加顺序。
-    entry.messages = [...current.values()].sort(
-      (left, right) => (positions[left.id] ?? Infinity) - (positions[right.id] ?? Infinity)
-    )
+    // 上翻页天然早于当前窗口；保存会改变字节偏移，不用两次文件版本的偏移混合排序。
+    const older = messages.filter((message) => !entry.messages.some((item) => item.id === message.id) && !known.has(message.id))
+    entry.messages = [...older, ...entry.messages]
     const visible = new Set(messages.map((message) => message.id))
     entry.history = {
       ...page,

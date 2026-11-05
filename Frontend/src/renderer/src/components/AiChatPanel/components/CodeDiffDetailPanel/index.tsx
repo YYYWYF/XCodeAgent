@@ -1,5 +1,6 @@
+import { readWorkflowArtifact } from '../../../../service/workflowArtifacts'
 import { CloseOutlined, CodeOutlined } from '@ant-design/icons'
-import { Button, Empty, Typography } from 'antd'
+import { Alert, Button, Empty, Typography } from 'antd'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import css from 'highlight.js/lib/languages/css'
@@ -10,7 +11,7 @@ import python from 'highlight.js/lib/languages/python'
 import sql from 'highlight.js/lib/languages/sql'
 import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
-import { useEffect, useMemo, useRef, type ReactElement, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { Diff, parseDiff, type FileData, type GutterOptions } from 'react-diff-view'
 import 'react-diff-view/style/index.css'
 import type { WorkspaceCodeChangeFile, WorkspaceCodeChangeSet } from '../../../../typings'
@@ -47,11 +48,27 @@ export default function CodeDiffDetailPanel({
   selectedPath,
   onClose
 }: Props): ReactElement {
+  const [diffs, setDiffs] = useState<Record<string, string>>({})
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [loadingDiff, setLoadingDiff] = useState<string>()
+  /** 仅用户选中的 patch 才读取正文，资料不回写会话状态。 */
+  const loadDiff = async (change: WorkspaceCodeChangeFile): Promise<void> => {
+    if (!change.diffRef || loadingDiff) return
+    setLoadingDiff(change.id)
+    try {
+      const text = await readWorkflowArtifact(codeChanges.workspaceRoot, change.diffRef)
+      if (typeof text !== 'string') throw new Error('代码差异格式无效。')
+      setDiffs((current) => ({ ...current, [change.diffRef!.artifactId]: text }))
+      setErrors((current) => ({ ...current, [change.id]: '' }))
+    } catch (reason) { setErrors((current) => ({ ...current, [change.id]: reason instanceof Error ? reason.message : '读取失败。' })) }
+    finally { setLoadingDiff(undefined) }
+  }
   const bodyRef = useRef<HTMLDivElement>(null)
   const fileRefs = useRef<Map<string, HTMLElement>>(new Map())
   const groupedFiles = useMemo(
-    () => groupWorkspaceCodeChanges(codeChanges.files),
-    [codeChanges.files]
+    () => groupWorkspaceCodeChanges(codeChanges.files.map((file) => ({ ...file,
+      diff: file.diff || (file.diffRef ? diffs[file.diffRef.artifactId] : '') || '' }))),
+    [codeChanges.files, diffs]
   )
   const summary = useMemo(() => summarizeWorkspaceCodeChanges(groupedFiles), [groupedFiles])
   const parsedFiles = useMemo(
@@ -147,7 +164,12 @@ export default function CodeDiffDetailPanel({
                             <Text type="secondary">PATCH {changeIndex + 1}</Text>
                           </div>
                         )}
-                        {change.binary ? (
+                        {change.diffRef && !change.diff ? (
+                          <div>
+                            <Button loading={loadingDiff === change.id} disabled={Boolean(loadingDiff)} onClick={() => void loadDiff(change)}>读取代码差异</Button>
+                            {errors[change.id] && <Alert type="error" showIcon message={errors[change.id]} />}
+                          </div>
+                        ) : change.binary ? (
                           <div className={cx('code-diff-empty')}>
                             <Text type="secondary">二进制文件不展示文本 Diff。</Text>
                           </div>

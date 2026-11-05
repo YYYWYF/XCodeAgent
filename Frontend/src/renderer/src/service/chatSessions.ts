@@ -1,3 +1,4 @@
+import { readWorkflowPayload } from "./agUiAgent"
 import { SESSION_HISTORY_PAGE_SIZE, type SessionHistoryPage } from '../../../shared/sessionHistory'
 import type {
   AgentApprovalRequest,
@@ -122,7 +123,7 @@ export type ChatSessionSummary = {
   revisionContext?: ChatSessionRevisionContext;
   createdAt: number;
   updatedAt: number;
-  messageCount: number;
+  messageCount: number | null;
 };
 
 export type CreateChatSessionInput = {
@@ -242,10 +243,7 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
         item.codeChanges && typeof item.codeChanges === 'object'
           ? (item.codeChanges as WorkspaceCodeChangeSet)
           : undefined,
-      workflow:
-        item.workflow && typeof item.workflow === 'object'
-          ? (item.workflow as WorkflowRunPayload)
-          : undefined,
+      workflow: readWorkflowPayload(item.workflow),
       workflowCardResult:
         item.workflowCardResult === 'confirmed' ||
         item.workflowCardResult === 'cancelled' ||
@@ -551,7 +549,7 @@ function toSummary(session: ChatSessionRecord): ChatSessionSummary {
     revisionContext: session.revisionContext,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    messageCount: session.history?.total ?? session.messages.length
+    messageCount: session.history ? session.history.total : session.messages.length
   }
 }
 
@@ -600,7 +598,7 @@ function normalizeSummary(item: Partial<ChatSessionSummary>): ChatSessionSummary
     revisionContext: normalizeRevisionSessionContext(item.revisionContext),
     createdAt: Number(item.createdAt || Date.now()),
     updatedAt: Number(item.updatedAt || Date.now()),
-    messageCount: Number(item.messageCount || 0)
+    messageCount: item.messageCount === null ? null : Number(item.messageCount || 0)
   }
 }
 

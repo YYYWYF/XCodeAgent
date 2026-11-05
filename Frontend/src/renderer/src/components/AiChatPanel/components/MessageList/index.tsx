@@ -293,7 +293,7 @@ function messageAgentPhase(
   if (!workflow) return fallback
   const phase =
     String(workflow.summary?.phase || '').trim() ||
-    String(workflow.result?.phase || '').trim() ||
+    String(workflow.state?.phase || '').trim() ||
     [...(workflow.events || [])]
       .reverse()
       .map((event) => String(event.nodeName || event.node?.id || '').trim())
@@ -1344,7 +1344,7 @@ function readTemplatePreparation(
   const candidates = [
     workflow?.summary?.templatePreparation,
     workflow?.state?.templatePreparation,
-    workflow?.result?.templatePreparation
+    workflow?.state?.templatePreparation
   ]
   return candidates.find((value) => Boolean(value && typeof value === 'object')) as
     | import('../../../../typings').WorkflowTemplatePreparation

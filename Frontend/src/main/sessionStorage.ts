@@ -7,7 +7,7 @@ let worker: ReturnType<typeof createWorker> | undefined
 let sequence = 0
 const pending = new Map<number, Pending>()
 
-/** 索引构建、JSON 处理与磁盘保存移入独立 Worker，避免阻塞 Electron 主进程。 */
+/** 有界尾读与流式保存移入独立 Worker，避免阻塞 Electron 主进程。 */
 function request<T>(payload: RecordValue): Promise<T> {
   if (!worker) {
     const current = createWorker({})
@@ -45,7 +45,7 @@ export function readStoredSessionSummary(file: string): Promise<RecordValue> {
   return request({ operation: 'summary', file })
 }
 
-/** 从本地历史读取一页，首次额外携带当前业务所需的控制上下文。 */
+/** 从本地历史尾部读取一页，不扫描或回填窗口外的控制消息。 */
 export function readStoredSession(
   file: string,
   before?: number,

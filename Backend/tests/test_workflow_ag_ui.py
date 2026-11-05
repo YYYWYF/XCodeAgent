@@ -38,7 +38,7 @@ from app.protocols.workflow.stream_events import (
     integration_test_check_summary,
     integration_test_checks,
 )
-from app.protocols.workflow_visualization import (
+from app.protocols.workflow.projection import (
     _workflow_summary,
     _workflow_visual_payload,
 )
@@ -1367,9 +1367,9 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             workflow_frames = _decode_workflow_run_frames(asyncio.run(collect()))
 
         progresses = [
-            frame.get("summary", {}).get("launchProgress")
+            frame.get("state", {}).get("launchProgress")
             for frame in workflow_frames
-            if frame.get("summary", {}).get("launchProgress")
+            if frame.get("state", {}).get("launchProgress")
         ]
         observed = [
             (progress.get("stage"), progress.get("status"))
@@ -1428,7 +1428,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     workflow_frames = _decode_workflow_run_frames([frame])
                     if any(
                         (
-                            item.get("summary", {}).get("launchProgress") or {}
+                            item.get("state", {}).get("launchProgress") or {}
                         ).get("stage") == "structure"
                         for item in workflow_frames
                     ):
@@ -2573,28 +2573,13 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                         "clarificationAnswers": {
                             "code_review_repair_confirmation": {"action": "repair_all"}
                         },
-                        "resumeState": {
-                            "summary": {
-                                "phase": "code_review",
-                                "status": "requires_user_input",
-                                "clarification": {
+
+                    },
+                _server_resume_state={'phase':"code_review",'status':"requires_user_input",'clarification':{
                                     "mode": "code_review_repair_confirmation",
                                     "status": "requires_user_input",
-                                },
-                            },
-                            "state": {
-                                "phase": "code_review",
-                                "codeReviewResult": review_result,
-                                "codeReviewRepair": repair_result,
-                            },
-                            "result": {
-                                "phase": "code_review",
-                                "codeReviewResult": review_result,
-                                "codeReviewRepair": repair_result,
-                            },
-                        },
-                    },
-                )
+                                },'code_review_result':review_result,'code_review_repair_result':repair_result},
+)
                 return [frame async for frame in stream]
 
             frames = asyncio.run(collect())
@@ -2611,13 +2596,13 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             frame
             for frame in workflow_frames
             if frame.get("summary", {}).get("phase") == "code_review"
-            and frame.get("summary", {}).get("codeReviewRepair", {}).get("status")
+            and frame.get("state", {}).get("codeReviewRepair", {}).get("status")
             == "building"
         ]
         self.assertTrue(building_progresses)
         building_progress = building_progresses[-1]
         self.assertEqual(
-            [check["id"] for check in building_progress["summary"]["codeReviewRepair"]["buildChecks"]],
+            [check["id"] for check in building_progress["state"]["codeReviewRepair"]["buildChecks"]],
             ["frontend_install", "frontend_build", "backend_build"],
         )
         launch_progress = next(
@@ -2626,7 +2611,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             if frame.get("summary", {}).get("phase") == "launch_project"
             and frame.get("summary", {}).get("status") == "running"
         )
-        repair = launch_progress["summary"]["codeReviewRepair"]
+        repair = launch_progress["state"]["codeReviewRepair"]
         self.assertEqual(repair["status"], "completed")
         self.assertEqual(
             [check["id"] for check in repair["buildChecks"]],
@@ -2655,11 +2640,11 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         scan_frames = [
             frame
             for frame in workflow_frames
-            if frame.get("summary", {}).get("codeReviewScan", {}).get("currentFile")
+            if frame.get("state", {}).get("codeReviewScan", {}).get("currentFile")
         ]
 
         self.assertEqual(
-            [frame["summary"]["codeReviewScan"]["currentFile"] for frame in scan_frames],
+            [frame["state"]["codeReviewScan"]["currentFile"] for frame in scan_frames],
             [
                 "frontend/src/App.tsx",
                 "backend/src/main/java/example/App.java",
@@ -2674,7 +2659,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             {"workflow:code_review"},
         )
         final_frame = workflow_frames[-1]
-        self.assertFalse(final_frame.get("summary", {}).get("codeReviewScan"))
+        self.assertFalse(final_frame.get("state", {}).get("codeReviewScan"))
         self.assertFalse(final_frame.get("state", {}).get("codeReviewScan"))
 
     def test_stream_exposes_project_planning_confirmation(self) -> None:
@@ -2921,31 +2906,12 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "forwardedProps": {
                         "workflowScope": "application_planning",
                         "resumeFrom": "ui_confirmation",
-                        "resumeState": {
-                            "runId": "run-prev",
-                            "threadId": "thread-ui-progress",
-                            "summary": {
-                                "status": "requires_user_input",
-                                "phase": "ui_confirmation",
-                                "clarification": checkpoint_clarification,
-                            },
-                            "state": {
-                                "status": "requires_user_input",
-                                "phase": "ui_confirmation",
-                                "clarification": checkpoint_clarification,
-                            },
-                            "events": [
-                                {
-                                    "type": "workflow.node.completed",
-                                    "nodeName": "ui_confirmation",
-                                    "status": "requires_user_input",
-                                }
-                            ],
-                        },
+
                     },
                 },
                 accept="text/event-stream",
-            )
+            _server_resume_state={'workflow_scope':'application_planning','status':"requires_user_input",'phase':"ui_confirmation",'clarification':checkpoint_clarification},
+)
             return [frame async for frame in stream]
 
         frames = asyncio.run(collect())
@@ -2959,7 +2925,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         ]
         self.assertTrue(progress_frames, "应至少有一个 ui_confirmation 进度帧")
         progress = progress_frames[0]
-        clarification = progress.get("summary", {}).get("clarification", {})
+        clarification = progress.get("state", {}).get("clarification", {})
         self.assertEqual(
             clarification.get("mode"),
             "ui_design_confirmation",
@@ -3022,17 +2988,12 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "forwardedProps": {
                         "workflowScope": "application_planning",
                         "resumeFrom": "ui_confirmation",
-                        "resumeState": {
-                            "runId": "run-prev",
-                            "threadId": "thread-ui-adjust",
-                            "summary": {"status": "requires_user_input", "phase": "ui_confirmation"},
-                            "state": {"status": "requires_user_input", "phase": "ui_confirmation"},
-                            "events": [],
-                        },
+
                     },
                 },
                 accept="text/event-stream",
-            )
+            _server_resume_state={'workflow_scope':'application_planning','status':"requires_user_input",'phase':"ui_confirmation"},
+)
             return [frame async for frame in stream]
 
         workflow_frames = _decode_workflow_run_frames(asyncio.run(collect()))
@@ -3079,31 +3040,12 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
                     "forwardedProps": {
                         "workflowScope": "application_planning",
                         "resumeFrom": "requirements",
-                        "resumeState": {
-                            "runId": "run-prev",
-                            "threadId": "thread-req-start",
-                            "summary": {
-                                "status": "requires_user_input",
-                                "phase": "requirements",
-                                "clarification": checkpoint_clarification,
-                            },
-                            "state": {
-                                "status": "requires_user_input",
-                                "phase": "requirements",
-                                "clarification": checkpoint_clarification,
-                            },
-                            "events": [
-                                {
-                                    "type": "workflow.node.completed",
-                                    "nodeName": "requirements",
-                                    "status": "requires_user_input",
-                                }
-                            ],
-                        },
+
                     },
                 },
                 accept="text/event-stream",
-            )
+            _server_resume_state={'workflow_scope':'application_planning','status':"requires_user_input",'phase':"requirements",'clarification':checkpoint_clarification},
+)
             return [frame async for frame in stream]
 
         frames = asyncio.run(collect())
@@ -3116,7 +3058,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         ]
         self.assertTrue(started_frames, "应至少有一个 node.started 起始帧")
         for started in started_frames:
-            clarification = started.get("summary", {}).get("clarification", {})
+            clarification = started.get("state", {}).get("clarification", {})
             self.assertNotEqual(
                 clarification.get("status"),
                 "requires_user_input",

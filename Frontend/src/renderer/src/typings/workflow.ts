@@ -1131,6 +1131,7 @@ export type WorkflowConfirmationArtifact = {
   path: string
   format: 'markdown'
   content: string
+  contentRef?: import('../service/workflowArtifacts').ArtifactReference
 }
 
 export type WorkflowProjectPlanUpdateSection = {
@@ -1442,7 +1443,6 @@ export type WorkflowRunPayload = {
   confirmationArtifact?: WorkflowConfirmationArtifact
   codeChanges?: WorkspaceCodeChangeSet
   state?: Record<string, unknown>
-  result?: Record<string, unknown>
 }
 
 export type WorkflowAction =

@@ -93,7 +93,7 @@ function planningClarification(
   const candidates = [
     workflow.summary.clarification,
     workflow.state?.clarification,
-    workflow.result?.clarification
+    workflow.state?.clarification
   ]
   return candidates.find(
     (value): value is WorkflowClarification =>

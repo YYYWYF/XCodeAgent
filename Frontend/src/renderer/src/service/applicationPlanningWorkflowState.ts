@@ -101,7 +101,7 @@ function applicationPlanningClarificationMatchesPhase(
 function applicationPlanningInterrupt(
   workflow?: WorkflowRunPayload
 ): Record<string, unknown> | undefined {
-  for (const source of [workflow?.result, workflow?.state]) {
+  for (const source of [workflow?.state]) {
     const interrupt = source?.application_planning_interrupt
     if (interrupt && typeof interrupt === 'object' && !Array.isArray(interrupt)) {
       return interrupt as Record<string, unknown>
@@ -145,8 +145,8 @@ export function retainApplicationPlanningInterrupt(
   }
   return {
     ...incoming,
-    result: {
-      ...incoming.result,
+    state: {
+      ...incoming.state,
       application_planning_interrupt: retainedInterrupt
     }
   }
@@ -159,7 +159,7 @@ export function planningWorkflowClarification(
   for (const value of [
     workflow.summary.clarification,
     workflow.state?.clarification,
-    workflow.result?.clarification
+    workflow.state?.clarification
   ]) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const clarification = value as WorkflowClarification
@@ -221,7 +221,7 @@ export function workflowCardRequiresUserInput(workflow?: WorkflowRunPayload): bo
   if (!workflow) return false
   const clarificationCandidates = [
     workflow.summary.clarification,
-    workflow.result?.clarification,
+    workflow.state?.clarification,
     workflow.state?.clarification
   ]
   if (workflow.summary.status === 'requires_user_input') {
@@ -338,7 +338,7 @@ export function planningRequirementsConfirmed(
   // 需要同时有 Workflow 的 phase/node 投影，避免把“正在整理需求”误标为正式需求文档。
   const projectedPhase =
     String(
-      workflow?.summary?.phase || workflow?.result?.phase || workflow?.state?.phase || ''
+      workflow?.summary?.phase || workflow?.state?.phase || workflow?.state?.phase || ''
     ) ||
     [...(workflow?.events || [])]
       .reverse()
@@ -354,7 +354,7 @@ export function planningRequirementsConfirmed(
     return true
   }
   // 以当前 state/result 中第一个明确布尔值为准；修订首帧的 false 必须覆盖旧快照里的 true。
-  for (const source of [workflow?.state, workflow?.result, workflow?.summary]) {
+  for (const source of [workflow?.state, workflow?.state, workflow?.summary]) {
     const value = source?.requirementsConfirmed ?? source?.requirements_confirmed
     if (typeof value === 'boolean') return value
   }
@@ -364,7 +364,7 @@ export function planningRequirementsConfirmed(
 
 // 从公开 Workflow 状态读取应用规划生命周期的当前阶段。
 export function planningWorkflowLifecycleStage(workflow?: WorkflowRunPayload): string {
-  for (const source of [workflow?.state, workflow?.result, workflow?.summary]) {
+  for (const source of [workflow?.state, workflow?.state, workflow?.summary]) {
     const lifecycle = source?.lifecycle
     if (!lifecycle || typeof lifecycle !== 'object') continue
     const initialization = (lifecycle as Record<string, unknown>).initialization
@@ -385,7 +385,7 @@ export function planningTechnicalPlanConfirmed(workflow?: WorkflowRunPayload): b
     return false
   }
   // 以当前 state 的第一个明确状态为准，避免旧 result 中的 confirmed 覆盖新一轮 pending 状态。
-  for (const source of [workflow?.state, workflow?.result]) {
+  for (const source of [workflow?.state]) {
     const technicalPlan = source?.technical_plan
     if (!technicalPlan || typeof technicalPlan !== 'object' || Array.isArray(technicalPlan))
       continue
@@ -400,7 +400,7 @@ export function planningRequirementsDocumentGenerating(
   workflow?: WorkflowRunPayload,
   lifecycleStage?: string
 ): boolean {
-  for (const source of [workflow?.state, workflow?.result]) {
+  for (const source of [workflow?.state]) {
     const interaction = source?.application_planning_interaction
     if (
       interaction &&
@@ -428,7 +428,7 @@ export function planningWorkflowActivity(
   const intent = readDesignIntent(workflow)
   const designChangeSubmission =
     workflow.state?.design_change_submission === true ||
-    workflow.result?.design_change_submission === true
+    workflow.state?.design_change_submission === true
 
   if (phase === 'design_intent_analysis') {
     if (status === 'failed') {
@@ -470,7 +470,7 @@ export function planningWorkflowActivity(
       status: status === 'failed' ? 'failed' : 'completed',
       title: '这次输入无需修改正式设计产物',
       detail:
-        readText(workflow.result?.conversation_response) ||
+        readText(workflow.state?.conversation_response) ||
         readText(workflow.state?.conversation_response) ||
         intent.reason ||
         '已按设计对话处理。',
@@ -522,7 +522,7 @@ export function planningWorkflowActivity(
 
 // 只读取服务端创建修订事务时冻结的产物状态；缺少快照一律按首次生成展示。
 function hasExistingPlanningArtifact(workflow: WorkflowRunPayload, phase: string): boolean {
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const presence = readRecord(source?.design_change_existing_artifacts)
     if (typeof presence[phase] === 'boolean') return presence[phase] === true
   }
@@ -533,10 +533,10 @@ function hasExistingPlanningArtifact(workflow: WorkflowRunPayload, phase: string
 // 从公开 Workflow 状态或意图节点完成事件中读取设计变更路由结果。
 function readDesignIntent(workflow: WorkflowRunPayload): { target: string; reason: string } {
   const stateTarget = readText(
-    workflow.result?.design_change_target ?? workflow.state?.design_change_target
+    workflow.state?.design_change_target ?? workflow.state?.design_change_target
   )
   const stateReason = readText(
-    workflow.result?.design_change_reason ?? workflow.state?.design_change_reason
+    workflow.state?.design_change_reason ?? workflow.state?.design_change_reason
   )
   if (stateTarget) return { target: stateTarget, reason: stateReason }
 

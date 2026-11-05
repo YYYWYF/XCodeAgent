@@ -1,7 +1,9 @@
+import { displayWorkflowSummary } from "../../../shared/workflowPresentation"
 import { readAuthorizationBootstrap } from './authorizationBootstrap'
 export type { WorkflowAuthorizationBootstrap } from './authorizationBootstrap'
 export { readAuthorizationBootstrap } from './authorizationBootstrap'
 import { randomUUID } from '@ag-ui/client'
+import { compactWorkflowEvents } from '../../../shared/workflowEventProjection'
 import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
@@ -56,7 +58,7 @@ export type SendWorkflowMessageOptions = {
   }
   revisionInteraction?: WorkflowRevisionDraftInteraction
   workflowDebug?: WorkflowDebugOptions
-  resumeState?: WorkflowRunPayload
+  resumeReference?: { runId: string; threadId: string }
   workflowScope?: string
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
@@ -139,7 +141,7 @@ export function buildWorkflowForwardedProps(
     buildExecutionScope:
       options.buildExecutionScope ||
       (options.workflowDebug?.enabled ? options.workflowDebug.buildExecutionScope : undefined),
-    resumeState: options.resumeState,
+    resumeReference: options.resumeReference,
     workflowScope: options.workflowScope,
     executionRecovery: options.executionRecovery,
     planControlAction: options.planControlAction,
@@ -1494,21 +1496,14 @@ export function readWorkflowPayload(value: unknown): WorkflowRunPayload | undefi
   return {
     runId: payload.runId,
     threadId: payload.threadId,
-    summary:
-      payload.summary && typeof payload.summary === 'object'
-        ? payload.summary
-        : { status: 'unknown' },
-    events: Array.isArray(payload.events) ? payload.events.map(readWorkflowEvent) : [],
+    summary: displayWorkflowSummary(state, payload.summary || { status: 'unknown' }),
+    events: compactWorkflowEvents(payload.events).map(readWorkflowEvent),
     confirmationArtifact: readConfirmationArtifact(payload.confirmationArtifact),
     codeChanges,
     state:
       payload.state && typeof payload.state === 'object'
         ? (payload.state as Record<string, unknown>)
         : undefined,
-    result:
-      payload.result && typeof payload.result === 'object'
-        ? (payload.result as Record<string, unknown>)
-        : undefined
   }
 }
 
@@ -1538,7 +1533,7 @@ function emitWorkflowLifecycle(
   const lifecycle =
     readApplicationLifecycle(workflow.summary.lifecycle) ??
     readApplicationLifecycle(workflow.state?.lifecycle) ??
-    readApplicationLifecycle(workflow.result?.lifecycle)
+    readApplicationLifecycle(workflow.state?.lifecycle)
   if (lifecycle) listener?.(lifecycle)
 }
 
@@ -1555,11 +1550,11 @@ function readConfirmationArtifact(value: unknown): WorkflowConfirmationArtifact 
   if (
     typeof artifact.name !== 'string' ||
     typeof artifact.path !== 'string' ||
-    typeof artifact.content !== 'string'
+    (typeof artifact.content !== 'string' && !artifact.contentRef)
   ) {
     return undefined
   }
-  return artifact as WorkflowConfirmationArtifact
+  return { ...artifact, content: typeof artifact.content === 'string' ? artifact.content : '' } as WorkflowConfirmationArtifact
 }
 
 function readCodeChangesPayload(value: unknown): WorkspaceCodeChangeSet | undefined {

@@ -530,7 +530,7 @@ export function useChatSessions({
     try {
       replaceSessionSummary(editorMode, {
         ...session,
-        messageCount: session.history?.total ?? session.messages.length
+        messageCount: session.history ? session.history.total : session.messages.length
       })
       return identity
     } catch (error) {
@@ -610,8 +610,8 @@ export function useChatSessions({
         const pickedKey = sessionRuntimeKey(application.workspaceRoot || '', editorMode, picked.id)
         const pickedMemCount = getSessionMessages(pickedKey).length
         // 优先比内存消息数（未落盘的规划对话），再比磁盘 messageCount。
-        const candidateScore = candidateMemCount * 1000 + candidate.messageCount
-        const pickedScore = pickedMemCount * 1000 + picked.messageCount
+        const candidateScore = candidateMemCount * 1000 + (candidate.messageCount ?? 0)
+        const pickedScore = pickedMemCount * 1000 + (picked.messageCount ?? 0)
         return candidateScore > pickedScore ? candidate : picked
       })
       const identity = sessionIdentityFromSummary(best, editorMode, application.workspaceRoot || '')
@@ -620,7 +620,7 @@ export function useChatSessions({
         // 内存中没有历史消息但磁盘有（应用重启后重新进入）：从磁盘加载消息，
         // 避免规划对话历史丢失。内存已有消息（同一进程内切换工作区）则直接复用。
         const memMessages = getSessionMessages(identity.key)
-        if (memMessages.length === 0 && best.messageCount > 0) {
+        if (memMessages.length === 0 && best.messageCount !== 0) {
           try {
             const session = await readChatSession(
               application.workspaceRoot || '',

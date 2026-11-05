@@ -15,6 +15,8 @@ from app.protocols.workflow.definition import (
     WORKFLOW_STATIC_NEXT_NODES,
 )
 from app.workspace.code_changes import merge_code_change_sets
+from app.protocols.workflow.event_projection import compact_event_data, event_state_context
+from app.protocols.workflow.presentation import workflow_presentation
 
 
 _CODE_REVIEW_VISIBLE_PHASES = {
@@ -726,6 +728,18 @@ def _public_workflow_state(
     return public_state
 
 
+def _workflow_event_state(value: dict[str, Any]) -> dict[str, Any]:
+    """为事件投影少量展示上下文，避免先生成整份公开 Graph 状态。"""
+
+    context = event_state_context(value)
+    inspection = _workspace_inspection_snapshot(value)
+    if inspection is not None:
+        context["workspaceInspection"] = inspection
+    if "requirements_confirmed" in value:
+        context["requirementsConfirmed"] = value.get("requirements_confirmed") is True
+    return context
+
+
 def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, Any]:
     """把节点内部更新投射为前端可展示的摘要和结构化数据。"""
 
@@ -1397,6 +1411,8 @@ def _workflow_event(
     iteration_kind: str | None = None,
     node_label: str | None = None,
 ) -> dict[str, Any]:
+    """追加保留节点轮次与诊断的轻量事件，不把整份执行状态写进历史。"""
+
     event = {
         "id": f"workflow-event-{len(events) + 1:04d}",
         "protocol": WORKFLOW_EVENT_PROTOCOL,
@@ -1412,7 +1428,7 @@ def _workflow_event(
             if node_name
             else None
         ),
-        "data": data or {},
+        "data": compact_event_data(events, data, run_id=run_id),
     }
     if attempt is not None:
         event["attempt"] = attempt
@@ -1625,6 +1641,7 @@ def _workflow_visual_payload(
     summary: dict[str, Any],
     events: list[dict[str, Any]],
     result: dict[str, Any],
+    workspace: str | None = None,
 ) -> dict[str, Any]:
     """构建 CustomEvent 与 StateSnapshot 共用的标准可视化数据。"""
 
@@ -1744,7 +1761,7 @@ def _workflow_visual_payload(
         state_payload["codeChanges"] = code_changes
     if confirmation_artifact:
         payload["confirmationArtifact"] = confirmation_artifact
-    return payload
+    return workflow_presentation(payload, workspace=workspace or result.get("workspace"))
 
 
 def _workflow_confirmation_artifact(

@@ -197,8 +197,8 @@ function completedWorkspaceInspection(
       stateDelta.workspace_snapshot_summary ??
       workflow.state?.workspaceInspection ??
       workflow.state?.workspace_snapshot_summary ??
-      workflow.result?.workspaceInspection ??
-      workflow.result?.workspace_snapshot_summary
+      workflow.state?.workspaceInspection ??
+      workflow.state?.workspace_snapshot_summary
   )
   if (!snapshot) return undefined
   const eventTimeline = Array.isArray(stateDelta.timeline)
@@ -259,7 +259,7 @@ export function isStructuredPlanningWorkflow(workflow: WorkflowRunPayload | unde
   const clarificationCandidates = [
     workflow.summary.clarification,
     workflow.state?.clarification,
-    workflow.result?.clarification
+    workflow.state?.clarification
   ]
   if (
     clarificationCandidates.some((value) => {
@@ -426,8 +426,8 @@ function completedDagGenerationSnapshot(
     stateDelta.dag_generation_progress,
     workflow.state?.dagGeneration,
     workflow.state?.dag_generation_progress,
-    workflow.result?.dagGeneration,
-    workflow.result?.dag_generation_progress
+    workflow.state?.dagGeneration,
+    workflow.state?.dag_generation_progress
   ]
     .map((candidate) => readDagGenerationSnapshot(candidate))
     .filter((candidate): candidate is DagGenerationSnapshot => Boolean(candidate))
@@ -506,7 +506,7 @@ function workflowEventDetail(event: WorkflowRunPayload['events'][number]): Recor
 /** 从新旧 Workflow 快照字段读取节点时间线。 */
 function workflowTimeline(workflow: WorkflowRunPayload): string[] {
   const stateTimeline = workflow.state?.timeline
-  const resultTimeline = workflow.result?.timeline
+  const resultTimeline = workflow.state?.timeline
   const value = Array.isArray(stateTimeline)
     ? stateTimeline
     : Array.isArray(resultTimeline)
@@ -537,8 +537,8 @@ function completedIntegrationTestChecks(
   const fallbackChecks = readIntegrationTestChecks(
     workflow.state?.testReport ??
       workflow.state?.test_report ??
-      workflow.result?.testReport ??
-      workflow.result?.test_report
+      workflow.state?.testReport ??
+      workflow.state?.test_report
   )
   return fallbackChecks?.length
     ? {

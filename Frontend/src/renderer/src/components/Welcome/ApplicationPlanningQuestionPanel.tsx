@@ -373,7 +373,7 @@ function ProjectPlanConfirmationLayout({
 
 // 从公开 Workflow 结果中读取 RequirementSpec 结构化状态，供默认概览视图使用。
 function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const value = source?.requirement_spec
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
@@ -384,7 +384,7 @@ function requirementSpec(workflow: WorkflowRunPayload): Record<string, unknown> 
 
 // 从公开 Workflow 结果中读取 TechnicalPlan 结构化状态，供开发审核视图使用。
 function technicalPlan(workflow: WorkflowRunPayload): Record<string, unknown> | undefined {
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const value = source?.technical_plan
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>

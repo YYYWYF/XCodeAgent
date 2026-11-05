@@ -1,4 +1,6 @@
+import { persistentWorkflowView } from '../shared/workflowPresentation'
 import { readAuthorizationBootstrap } from '../shared/authorizationBootstrap'
+import { compactWorkflowEvents } from '../shared/workflowEventProjection'
 type JsonRecord = Record<string, unknown>
 
 const MESSAGE_APPROVAL_STATUSES = new Set([
@@ -23,7 +25,11 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
   const orchestration = cloneJsonRecord(message.orchestration)
   const approval = cloneJsonRecord(message.approval)
   const codeChanges = cloneJsonRecord(message.codeChanges)
-  const workflow = cloneJsonRecord(message.workflow)
+  const rawWorkflow = isJsonRecord(message.workflow) ? message.workflow : undefined
+  // 先裁剪事件再深拷贝，避免落盘规范化先复制整份重复状态。
+  const workflow = rawWorkflow
+    ? cloneJsonRecord(persistentWorkflowView({ ...rawWorkflow, events: compactWorkflowEvents(rawWorkflow.events) }))
+    : undefined
   const workflowCardResult =
     message.workflowCardResult === 'confirmed' ||
     message.workflowCardResult === 'cancelled' ||

@@ -33,6 +33,7 @@ def _workflow_ag_ui_frames(
     events: list[dict[str, Any]],
     result: dict[str, Any],
     visual_payload: dict[str, Any] | None = None,
+    workspace: str | None = None,
 ) -> Iterable[str]:
     """同时发送最新的完整自定义事件和可视化状态。
 
@@ -45,6 +46,7 @@ def _workflow_ag_ui_frames(
         summary=_workflow_progress_summary(result, events),
         events=events,
         result=result,
+        workspace=workspace,
     )
     safe_payload = jsonable_encoder(payload)
 

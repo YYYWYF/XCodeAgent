@@ -228,12 +228,10 @@ const canonicalTechnicalPlanWorkflow = {
     }
   },
   events: [],
-  state: {
+  state: { ...({}), ...({
     lifecycle: canonicalPlanningLifecycle(10),
     technical_plan: { architecture: { style: 'modular' } }
-  },
-  result: {}
-} as WorkflowRunPayload
+  }) }} as WorkflowRunPayload
 
 const canonicalPlanningBaseState: ApplicationPlanningCurrentState = {
   application: canonicalPlanningApplication,
@@ -522,7 +520,7 @@ const reviewWorkflow = (
       }
     }
   },
-  result: {
+  state: {
     application_planning_interrupt: {
       artifact: 'requirement_document',
       gateId: `requirement_document:${revision}`,
@@ -837,7 +835,7 @@ const continuationWorkflow = {
       technicalPlanSha256: 'a'.repeat(64)
     }
   },
-  result: { lifecycle: continuationLifecycle }
+  state: { lifecycle: continuationLifecycle }
 } as WorkflowRunPayload
 assert.deepEqual(revisionContinuationHandoffFromWorkflow(continuationWorkflow), {
   continuation: continuationWorkflow.summary.revisionContinuation,
@@ -1058,17 +1056,15 @@ const regeneratedRequirementWithStaleTerminalConfirmation = {
     phase: 'requirements'
   },
   events: [],
-  state: {
+  state: { ...({
+    application_planning_confirmation: { confirmedAt: 'stale' },
+    technical_plan: { confirmation_status: 'confirmed' }
+  }), ...({
     lifecycle: {
       initialization: { stage: 'awaiting_requirement_document_confirmation' }
     },
     technical_plan: { confirmation_status: 'pending_user_confirmation' }
-  },
-  result: {
-    application_planning_confirmation: { confirmedAt: 'stale' },
-    technical_plan: { confirmation_status: 'confirmed' }
-  }
-} as WorkflowRunPayload
+  }) }} as WorkflowRunPayload
 
 assert.equal(
   planningTechnicalPlanConfirmed(regeneratedRequirementWithStaleTerminalConfirmation),
@@ -1151,9 +1147,7 @@ const summaryOnlyQuestionsWorkflow = {
     }
   },
   events: [],
-  state: {},
-  result: {}
-} as WorkflowRunPayload
+  state: { ...({}), ...({}) }} as WorkflowRunPayload
 
 assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), false)
 const apiDesignRequiredWorkflow = {
@@ -1174,9 +1168,7 @@ const apiDesignRequiredWorkflow = {
     }
   },
   events: [],
-  state: {},
-  result: {}
-} as WorkflowRunPayload
+  state: { ...({}), ...({}) }} as WorkflowRunPayload
 assert.equal(planningWorkflowRequiresUserInput(apiDesignRequiredWorkflow), false)
 assert.equal(workflowCardRequiresUserInput(apiDesignRequiredWorkflow), true)
 assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), true)
@@ -1715,9 +1707,7 @@ const analyzingDesignIntentWorkflow = {
       status: 'running'
     }
   ],
-  state: {},
-  result: {}
-} as WorkflowRunPayload
+  state: { ...({}), ...({}) }} as WorkflowRunPayload
 
 assert.deepEqual(planningWorkflowActivity(analyzingDesignIntentWorkflow), {
   status: 'running',

@@ -197,8 +197,7 @@ function planningStateFromRecovery(options: {
     threadId: 'thread-A',
     summary: { status: 'failed', message: options.diagnosticMessage },
     events: [],
-    state: {},
-    result: {
+    state: { ...({
       applicationPlanningRecovery: {
         schemaVersion: 'application-planning-recovery.v1',
         classification: status === 'recoverable' ? 'ready_to_continue' : 'blocked',
@@ -251,8 +250,7 @@ function planningStateFromRecovery(options: {
           alternateActions: []
         }
       }
-    }
-  } as WorkflowRunPayload
+    }), ...({}) }} as WorkflowRunPayload
   const recovery = applicationPlanningRecoveryProjection(workflow)
   if (!recovery) throw new Error('测试 Workflow 缺少有效的 Recovery Projection。')
   return {
