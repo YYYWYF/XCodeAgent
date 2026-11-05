@@ -173,25 +173,12 @@ function PageCard({ page, index }: { page: RequirementPageRow; index: number }):
         </section>
       ) : null}
 
-      {/* 规则区：状态要求与验收标准是长尾细节，合并成一个弱化区（分隔线而非面板底），
-          不与目标 / 操作抢注意力，但内容一条不少、不折叠。 */}
-      {page.stateRequirements.length || page.acceptanceCriteria.length ? (
+      {/* 规则区：验收标准是长尾细节，合并成一个弱化区（分隔线而非面板底），
+          不与目标 / 操作抢注意力，但内容一条不少、不折叠。
+          state_requirements（状态要求）不再渲染：页面状态属于 UI 设计实现细节，
+          不该出现在产品规划文档中。 */}
+      {page.acceptanceCriteria.length ? (
         <section className={cx('requirement-doc-page-zone', 'is-muted')}>
-          {page.stateRequirements.length ? (
-            <>
-              <span className={cx('requirement-doc-page-zone-title')}>状态要求</span>
-              <ul className={cx('requirement-doc-page-rules')}>
-                {page.stateRequirements.map((state) => (
-                  <li key={state.key}>
-                    <strong className={cx('requirement-doc-state-label', `is-${state.key}`)}>
-                      {state.label}
-                    </strong>
-                    {state.description ? <span>{state.description}</span> : null}
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
           {page.acceptanceCriteria.length ? (
             <>
               <span className={cx('requirement-doc-page-zone-title')}>产品验收标准</span>

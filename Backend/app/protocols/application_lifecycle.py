@@ -9,7 +9,8 @@ from typing import Any, AsyncIterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.domain.execution_recovery import ExecutionRecoveryProjection, ExecutionRecoveryProjectionError
+from app.domain.execution_recovery import ExecutionRecoveryProjection
+from app.services.recovery_read_diagnostic import recovery_read_error
 from app.protocols.ag_ui_action_stream import (
     AgUiActionResult,
     build_ag_ui_action_stream,
@@ -34,6 +35,7 @@ from app.services.planning_refresh_recovery import resolve_planning_refresh_stat
 from app.services.planning_confirmation_projection import prioritize_checkpoint_confirmation
 from app.services.workbench_progress_projection import project_workbench_progress
 from app.services.workbench_result_projection import project_workbench_result
+from app.services.session_workflow_projection import project_session_workflow
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.execution_recovery_projection import resolve_execution_recovery_projection
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
@@ -400,6 +402,8 @@ def build_application_lifecycle_ag_ui_stream(
             }
         if request.action == "get":
             if request.session_id and request.session_thread_id:
+                data["lifecycle"]["extensions"]["sessionWorkflow"] = await project_session_workflow(
+                    request.workspace_root, session_id=request.session_id, thread_id=request.session_thread_id)
                 data["lifecycle"]["extensions"]["workbenchResult"] = await project_workbench_result(
                     request.workspace_root, state,
                     session_id=request.session_id, thread_id=request.session_thread_id,
@@ -416,14 +420,15 @@ def build_application_lifecycle_ag_ui_stream(
                 )
             except Exception as exc:
                 # 投影读取失败保留基础 GET，但必须明确标记失败，不能冒充成功空候选。
+                recovery_error = recovery_read_error(exc, operation="读取应用恢复状态")
                 logger.warning(
-                    "recovery.projection.failed workspace=%s error=%s",
-                    request.workspace_root,
+                    "recovery.projection.failed workspace=%s diagnosticId=%s error=%s",
+                    request.workspace_root, recovery_error.diagnostic.diagnostic_id,
                     exc,
                     exc_info=True,
                 )
                 recovery_projection = ExecutionRecoveryProjection(
-                    generated_at=datetime.now(timezone.utc), error=ExecutionRecoveryProjectionError(),
+                    generated_at=datetime.now(timezone.utc), error=recovery_error,
                 )
             # 无重试节点的执行已在退出后释放；同一 GET 必须立即返回新的 owner/资源状态。
             refreshed = load_application_lifecycle(request.workspace_root)

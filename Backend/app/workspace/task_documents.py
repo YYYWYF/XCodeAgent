@@ -14,8 +14,20 @@ from threading import Lock, RLock
 
 from app.services.build_task_plan_lifecycle import DraftIdentity
 from app.services.planning_frozen import plain_json
-from app.workspace.json_documents import write_json_atomic
+from app.workspace.json_documents import write_json_atomic as _write_json_atomic
 from app.workspace.spec_documents import workflow_artifact_root, workspace_root
+from app.workspace.content_artifacts import pack_materials, expand_materials
+from app.branding import WORKSPACE_ARTIFACT_DIR
+
+
+def _artifact_workspace(path: Path) -> Path:
+    """从当前正式资料路径确定其工作区，不允许引用解析越过产物根目录。"""
+    return next(parent.parent for parent in path.resolve().parents if parent.name == str(WORKSPACE_ARTIFACT_DIR))
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    """DAG、Pending 和 Build Run 使用同一内容引用存储，并保持原子发布边界。"""
+    _write_json_atomic(path, pack_materials(_artifact_workspace(path), payload))
 
 
 _TASK_RUNTIME_FIELDS = {
@@ -394,10 +406,7 @@ def write_build_run_task_plan_json(
 
     path = build_run_task_plan_json_path(state, build_run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(build_task_plan, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json_atomic(path, build_task_plan)
     return str(path)
 
 
@@ -416,10 +425,7 @@ def write_build_task_plan_json(
 ) -> str:
     path = build_task_plan_json_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(build_task_plan, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json_atomic(path, build_task_plan)
     return str(path)
 
 
@@ -497,7 +503,7 @@ def write_build_task_plan_execution_state(
 def load_build_task_plan_json(path: str | Path) -> dict[str, Any]:
     """读取指定路径中的 Build Task Plan JSON。"""
 
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    return expand_materials(_artifact_workspace(Path(path)), json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def load_pending_build_task_plan(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -634,12 +640,10 @@ def write_repair_task_plan_json(
 ) -> str:
     path = repair_task_plan_json_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(repair_task_plan, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json_atomic(path, repair_task_plan)
     return str(path)
 
 
 def load_repair_task_plan_json(path: str | Path) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """读取当前修复计划并在后端解析所需的执行材料。"""
+    return expand_materials(_artifact_workspace(Path(path)), json.loads(Path(path).read_text(encoding="utf-8")))

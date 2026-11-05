@@ -83,11 +83,11 @@ export function clearReachedWorkbenchPhase(applicationId: string): void {
 
 /** 从当前会话目录恢复可回访范围，忽略尚未开始的空会话，不扫描消息正文。 */
 export function reachedPhaseFromSessions(
-  sessions: readonly { workbenchPhase: WorkbenchPhase; messageCount: number }[]
+  sessions: readonly { workbenchPhase: WorkbenchPhase; messageCount: number | null }[]
 ): WorkbenchPhase {
   return furthestWorkbenchPhase(
     ...sessions
-      .filter((session) => session.messageCount > 0)
+      .filter((session) => session.messageCount !== 0)
       .map((session) => session.workbenchPhase)
   )
 }

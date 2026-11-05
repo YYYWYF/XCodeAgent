@@ -148,7 +148,8 @@ test('二次修改职责范围拒绝显示专属标题和无重试说明', () =>
   assert.match(markup, /无权修改该路径/)
   assert.match(markup, /只允许写入 frontend\/ 或 backend\//)
   assert.match(markup, /请求已在执行前拒绝，未写入文件/)
-  assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试|<button/)
+  assert.doesNotMatch(markup, /请查看错误详情和相关执行记录后重试|>重试</)
+  assert.match(markup, /复制诊断信息/)
 })
 
 test('单测恢复仅在同 Run 正在执行且无待确认交互时隐藏旧确认', () => {
@@ -196,8 +197,7 @@ function planningStateFromRecovery(options: {
     threadId: 'thread-A',
     summary: { status: 'failed', message: options.diagnosticMessage },
     events: [],
-    state: {},
-    result: {
+    state: { ...({
       applicationPlanningRecovery: {
         schemaVersion: 'application-planning-recovery.v1',
         classification: status === 'recoverable' ? 'ready_to_continue' : 'blocked',
@@ -250,8 +250,7 @@ function planningStateFromRecovery(options: {
           alternateActions: []
         }
       }
-    }
-  } as WorkflowRunPayload
+    }), ...({}) }} as WorkflowRunPayload
   const recovery = applicationPlanningRecoveryProjection(workflow)
   if (!recovery) throw new Error('测试 Workflow 缺少有效的 Recovery Projection。')
   return {

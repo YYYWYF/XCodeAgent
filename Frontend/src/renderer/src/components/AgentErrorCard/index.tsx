@@ -1,7 +1,10 @@
 import { CloseCircleOutlined, RedoOutlined } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
+import type { RecoveryReadDiagnostic } from '../../typings'
 import { cx } from '../../utils'
+import ErrorDiagnostics from './ErrorDiagnostics'
+import { errorDiagnosticText } from './diagnosticText'
 import './AgentErrorCard.less'
 
 const { Text } = Typography
@@ -13,6 +16,7 @@ type AgentErrorCardProps = {
   retryDisabled?: boolean
   retryLabel?: string
   title?: string
+  diagnostic?: RecoveryReadDiagnostic
 }
 
 /** 按真实错误类型区分模型连接异常和普通任务失败，避免把所有失败误报为模型问题。 */
@@ -22,10 +26,18 @@ export default function AgentErrorCard({
   retrying,
   retryDisabled = false,
   retryLabel = '重试',
-  title
+  title,
+  diagnostic
 }: AgentErrorCardProps): ReactElement {
-  const copy = readableAgentError(error)
+  const copy = diagnostic
+    ? {
+        message: error?.trim() || diagnostic.reason,
+        hint: '可复制诊断信息联系维护人员，或重新同步状态。',
+        modelServiceError: false
+      }
+    : readableAgentError(error)
   const resolvedTitle = title || (copy?.modelServiceError ? '模型服务异常' : '任务执行异常')
+  const diagnosticText = errorDiagnosticText(error?.trim() || copy.message, diagnostic)
 
   return (
     <section
@@ -47,14 +59,7 @@ export default function AgentErrorCard({
             {copy.hint}
           </Text>
         ) : null}
-        {copy?.detail ? (
-          <details className={cx('agent-error-card-details')}>
-            <summary>错误详情</summary>
-            <Text className={cx('agent-error-card-detail')} type="secondary">
-              {copy.detail}
-            </Text>
-          </details>
-        ) : null}
+        <ErrorDiagnostics text={diagnosticText} showDetails={Boolean(diagnostic || copy.detail)} />
         {onRetry ? (
           <Button
             className={cx('agent-error-card-retry')}
@@ -73,9 +78,7 @@ export default function AgentErrorCard({
 }
 
 /** 将连接异常和普通运行异常分别翻译成可操作提示，并保留原始详情。 */
-function readableAgentError(
-  error?: string
-): {
+function readableAgentError(error?: string): {
   message: string
   hint: string
   modelServiceError: boolean
@@ -103,7 +106,7 @@ function readableAgentError(
   }
   return {
     message: normalized || '任务没有返回有效结果。',
-    hint: '请查看错误详情和相关执行记录后重试。',
+    hint: '可复制诊断信息联系维护人员，或查看相关执行记录。',
     modelServiceError: false
   }
 }

@@ -2,7 +2,8 @@ import type {
   ApplicationLifecycle,
   ExecutionRecoveryAvailability,
   ExecutionRecoveryCandidate,
-  ExecutionRecoveryProjection
+  ExecutionRecoveryProjection,
+  RecoveryReadDiagnostic
 } from '../../typings'
 import {
   parseRecoveryFailureDiagnostic,
@@ -132,4 +133,23 @@ export function executionRecoveryReadError(lifecycle?: ApplicationLifecycle): st
   const error = recordValue(recordValue(lifecycle?.extensions?.executionRecovery)?.error)
   return error?.code === 'RECOVERY_PROJECTION_READ_FAILED'
     ? requiredText(error.message) || '恢复状态读取失败，请重试同步。' : undefined
+}
+
+/** 只提取当前失败的诊断白名单；无效诊断不影响原错误门禁，也不携带代码位置。 */
+export function executionRecoveryReadDiagnostic(lifecycle?: ApplicationLifecycle): RecoveryReadDiagnostic | undefined {
+  if (!executionRecoveryReadError(lifecycle)) return undefined
+  const error = recordValue(recordValue(lifecycle?.extensions?.executionRecovery)?.error)
+  const diagnostic = recordValue(error?.diagnostic)
+  if (!diagnostic) return undefined
+  const diagnosticId = requiredText(diagnostic.diagnosticId)
+  const operation = requiredText(diagnostic.operation)
+  const exceptionType = requiredText(diagnostic.exceptionType)
+  const reason = requiredText(diagnostic.reason)
+  if (!diagnosticId || !operation || !exceptionType || !reason ||
+    diagnosticId.length > 128 || operation.length > 128 || exceptionType.length > 256 || reason.length > 2048) return undefined
+  const sourceRunId = requiredText(diagnostic.sourceRunId)
+  const threadId = requiredText(diagnostic.threadId)
+  return { diagnosticId, operation, exceptionType, reason,
+    ...(sourceRunId && sourceRunId.length <= 512 ? { sourceRunId } : {}),
+    ...(threadId && threadId.length <= 512 ? { threadId } : {}) }
 }

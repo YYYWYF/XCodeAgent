@@ -1,6 +1,8 @@
 from operator import add
 from typing import Annotated, Any, Literal, TypedDict
 
+from app.domain.application_planning_interaction import PlanningConversationTarget
+
 
 class ProjectState(TypedDict, total=False):
     request: str
@@ -47,6 +49,7 @@ class ProjectState(TypedDict, total=False):
     design_change_submission: bool
     design_revision_intent: dict[str, Any]
     design_change_request: str
+    design_conversation_target: PlanningConversationTarget | None
     design_change_target: str
     design_change_reason: str
     design_change_affected_page_ids: list[str]

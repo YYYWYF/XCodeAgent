@@ -34,7 +34,7 @@ export default function ConfirmationArtifact({
         {artifact.path}
       </Text>
       <div className={cx('workflow-confirmation-artifact-content')}>
-        <MarkdownContent content={artifact.content} />
+        <MarkdownContent content={artifact.content || ""} />
       </div>
     </section>
   )

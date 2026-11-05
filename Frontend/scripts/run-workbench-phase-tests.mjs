@@ -2,8 +2,13 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 import { build } from 'vite'
 
+// Hook 时序测试使用 Node 的 React 测试入口，保留 act 的原生计时器处理。
+process.env.NODE_ENV = 'test'
+const require = createRequire(import.meta.url)
+const reactModules = ['react', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-dom', 'react-dom/server', 'react-test-renderer']
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'devagentstudio-workbench-phase-'))
 const outputFile = path.join(outputDirectory, 'workbenchPhaseNavigation.test.mjs')
@@ -14,6 +19,7 @@ try {
     configFile: false,
     logLevel: 'error',
     root: frontendRoot,
+    define: { 'process.env.NODE_ENV': JSON.stringify('test') },
     esbuild: { jsx: 'automatic' },
     css: { preprocessorOptions: { less: { additionalData: '@class-prefix: test;' } } },
     ssr: { noExternal: true },
@@ -22,7 +28,13 @@ try {
       minify: false,
       outDir: outputDirectory,
       ssr: path.join(frontendRoot, 'tests/workbenchPhaseNavigation.test.tsx'),
-      rollupOptions: { output: { entryFileNames: path.basename(outputFile) } }
+      rollupOptions: {
+        external: reactModules,
+        output: {
+          entryFileNames: path.basename(outputFile),
+          paths: (id) => reactModules.includes(id) ? require.resolve(id) : id
+        }
+      }
     }
   })
   await import(pathToFileURL(outputFile).href)

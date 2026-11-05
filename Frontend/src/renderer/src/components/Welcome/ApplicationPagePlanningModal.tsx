@@ -89,7 +89,7 @@ export default function ApplicationPagePlanningModal({
     Boolean(
       workflow?.summary?.clarification ||
         workflow?.state?.clarification ||
-        workflow?.result?.clarification
+        workflow?.state?.clarification
     )
   ) {
     enteredUiConfirmationRef.current = true
@@ -112,7 +112,7 @@ export default function ApplicationPagePlanningModal({
     Boolean(
       workflow?.summary?.clarification ||
         workflow?.state?.clarification ||
-        workflow?.result?.clarification
+        workflow?.state?.clarification
     )
   // UI确认节点生成期间，流式展示已就绪的设计稿，避免干等到最后一次性出现。
   // 排除 ui_confirmation 已完成（用户确认或跳过后同 run 流转到规划入口，

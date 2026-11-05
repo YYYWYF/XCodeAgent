@@ -6,6 +6,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from app.domain.application_lifecycle import ApplicationLifecycle, ApplicationLifecycleStage, ApplicationLifecycleStatus
+from app.domain.application_planning_interaction import PlanningConversationTarget
 from app.domain.application_planning_recovery import (
     ApplicationPlanningOperation,
     ApplicationPlanningRecoveryBoundary,
@@ -25,11 +26,12 @@ TECHNICAL_PLANNING_RETRY_NODES = frozenset({
 
 @dataclass(frozen=True)
 class TechnicalPlanningMessageRevision:
-    """绑定只读分类后仍未变化的规划 checkpoint 与用户明确的新修改要求。"""
+    """绑定节点选择后仍未变化的规划 checkpoint 与用户本轮执行要求。"""
 
     request: str
     checkpoint_id: str
     target_node: Literal["technical_planning", "design_intent_analysis"] = "technical_planning"
+    conversation_target: PlanningConversationTarget | None = None
 
 
 def restart_stopped_technical_plan_revision(
@@ -59,7 +61,7 @@ def restart_stopped_technical_plan_revision(
 
 def prepare_technical_planning_retry(
     state: dict[str, Any], *, target_node: str = "technical_planning_begin",
-    new_request: str | None = None,
+    new_request: str | None = None, allow_initial_generation: bool = False,
 ) -> dict[str, Any]:
     """保留上次业务要求，以当前已有技术规划为基线重新进入原生成链路。"""
 
@@ -79,7 +81,8 @@ def prepare_technical_planning_retry(
     baseline = load_project_plan_json(path, hydrate_detail_designs=True) if path.is_file() else state.get("technical_plan")
     baseline = deepcopy(baseline) if isinstance(baseline, dict) and baseline else {}
     if new_request is not None:
-        if not baseline:
+        # 显式 @技术规划可重新发起首次生成，旧计划只是可选基线；普通修订仍要求已有计划。
+        if not baseline and not allow_initial_generation:
             raise ValueError("当前尚无技术规划，请使用上方重试入口重新生成。")
         request = new_request.strip()
         if not request:

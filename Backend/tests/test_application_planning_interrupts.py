@@ -357,6 +357,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
                         "artifactRevision": pending["artifactRevision"],
                         "action": "design_change",
                         "request": "我想添加登录功能",
+                        "conversationTarget": "requirements",
                     }
                 ),
                 config=config,
@@ -366,6 +367,7 @@ class ApplicationPlanningInterruptTests(unittest.IsolatedAsyncioTestCase):
 
         updated = await graph.aget_state(config)
         self.assertNotIn("authorization_config_conflict", updated.values)
+        self.assertEqual(updated.values["design_conversation_target"], "requirements")
 
     async def test_same_artifact_can_be_revised_twice_before_confirmation(self) -> None:
         """同一产物连续二次修订时应生成新门禁，并只确认最后一个版本。"""

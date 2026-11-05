@@ -34,10 +34,10 @@ export function workflowDevelopmentTarget(
       label: label || scope.targetId
     }
   }
-  const pageId = workflow.state?.selectedPageId || workflow.result?.selectedPageId
-  const endpointId = workflow.state?.selectedEndpointId || workflow.result?.selectedEndpointId
+  const pageId = workflow.state?.selectedPageId || workflow.state?.selectedPageId
+  const endpointId = workflow.state?.selectedEndpointId || workflow.state?.selectedEndpointId
   const apiContractId =
-    workflow.state?.selectedApiContractId || workflow.result?.selectedApiContractId
+    workflow.state?.selectedApiContractId || workflow.state?.selectedApiContractId
   if (
     typeof endpointId === 'string' &&
     endpointId &&
@@ -126,7 +126,7 @@ export function developmentNextStep(
     }
     if (workflowEndedPlanControl(workflow) && workflow.summary.status === 'completed') {
       const control =
-        workflow.summary.planControl || workflow.state?.planControl || workflow.result?.planControl
+        workflow.summary.planControl || workflow.state?.planControl || workflow.state?.planControl
       const targetRunId = (control as { targetRunId?: string }).targetRunId
       const source = messages
         .slice(0, index)
@@ -180,7 +180,7 @@ export function developmentNextStep(
       target.type === 'page'
         ? lifecycle?.developmentArtifacts?.pages[target.pageId]
         : lifecycle?.developmentArtifacts?.endpoints[target.apiContractId]?.[target.endpointId]
-    const phase = workflow.summary.phase || workflow.result?.phase
+    const phase = workflow.summary.phase || workflow.state?.phase
     const complete =
       progress?.initialDevelopmentStatus === 'completed' &&
       ['requires_user_input', 'completed'].includes(workflow.summary.status || '') &&

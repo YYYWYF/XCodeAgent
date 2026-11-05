@@ -1,3 +1,4 @@
+import { readWorkflowPayload } from '../../../service/agUiAgent'
 import { useEffect, useRef, useState } from 'react'
 import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import type { MutableRefObject, SetStateAction } from 'react'
@@ -224,7 +225,7 @@ function conversationTargetFromSelection(
 /** 从当前 Workflow 读取后端 execution 节点，只有 prepare_build_tasks 可成为 DAG 锁。 */
 function workflowExecutionPhase(workflow?: WorkflowRunPayload): string | undefined {
   if (!workflow) return undefined
-  const candidates = [workflow.summary.phase, workflow.state?.phase, workflow.result?.phase]
+  const candidates = [workflow.summary.phase, workflow.state?.phase, workflow.state?.phase]
   return candidates.map((value) => String(value || '').trim()).find(Boolean)
 }
 
@@ -358,7 +359,7 @@ type UseWorkflowConversationResult = {
 /** 从 Workflow 快照中读取最近一次页面选择，作为确认继续时的兜底上下文。 */
 function workflowSelectedPageId(workflow: WorkflowRunPayload): string | undefined {
   const stateValue = workflow.state?.selectedPageId
-  const resultValue = workflow.result?.selectedPageId
+  const resultValue = workflow.state?.selectedPageId
   const statePageId = typeof stateValue === 'string' ? stateValue.trim() : ''
   const resultPageId = typeof resultValue === 'string' ? resultValue.trim() : ''
   return statePageId || resultPageId || undefined
@@ -406,7 +407,7 @@ function testPhaseConfirmationTarget(workflow: WorkflowRunPayload): WorkflowTest
     clarification?.testTarget,
     workflow.summary?.testTarget,
     workflow.state?.testTarget,
-    workflow.result?.testTarget
+    workflow.state?.testTarget
   ]
   return candidates.find((value): value is WorkflowTestTarget =>
     Boolean(
@@ -434,7 +435,7 @@ function testPhaseConfirmationMessage(workflow: WorkflowRunPayload): string {
 /** 从 Workflow 快照中读取最近一次实体选择，作为实体设计确认继续时的兜底上下文。 */
 function workflowSelectedEntityId(workflow: WorkflowRunPayload): string | undefined {
   const stateValue = workflow.state?.selectedEntityId ?? workflow.state?.selected_entity_id
-  const resultValue = workflow.result?.selectedEntityId ?? workflow.result?.selected_entity_id
+  const resultValue = workflow.state?.selectedEntityId ?? workflow.state?.selected_entity_id
   const stateEntityId = typeof stateValue === 'string' ? stateValue.trim() : ''
   const resultEntityId = typeof resultValue === 'string' ? resultValue.trim() : ''
   return stateEntityId || resultEntityId || undefined
@@ -447,10 +448,10 @@ function workflowEndpointExecutionScope(
   const stateApiContractId =
     workflow.state?.selected_api_contract_id || workflow.state?.selectedApiContractId
   const resultApiContractId =
-    workflow.result?.selected_api_contract_id || workflow.result?.selectedApiContractId
+    workflow.state?.selected_api_contract_id || workflow.state?.selectedApiContractId
   const stateEndpointId = workflow.state?.selected_endpoint_id || workflow.state?.selectedEndpointId
   const resultEndpointId =
-    workflow.result?.selected_endpoint_id || workflow.result?.selectedEndpointId
+    workflow.state?.selected_endpoint_id || workflow.state?.selectedEndpointId
   const apiContractId = String(stateApiContractId || resultApiContractId || '').trim()
   const endpointId = String(stateEndpointId || resultEndpointId || '').trim()
   return apiContractId && endpointId
@@ -584,7 +585,7 @@ export function technicalPlanConfirmationSubmission(
 ): ApplicationPlanningInteraction | undefined {
   // TechnicalPlan 的 gateId/artifactRevision 只存在服务端原生 interrupt 中；
   // clarification 只是展示文案，不能作为恢复信封的唯一来源。
-  const interrupt = [workflow.result, workflow.state]
+  const interrupt = [workflow.state]
     .map((source) => source?.application_planning_interrupt)
     .find((value) => value && typeof value === 'object' && !Array.isArray(value)) as
     | Record<string, unknown>
@@ -1054,8 +1055,7 @@ export function useWorkflowConversation({
   const refreshExecutionRecoveryLifecycle = async (fresh = false): Promise<boolean> => {
     const requestGeneration = ++connectionRequestGenerationRef.current
     const sessionKey = activeInputRef.current.key
-    const resultSession = activeSessionRef.current?.workbenchPhase === 'development'
-      ? activeSessionRef.current : undefined
+    const resultSession = activeSessionRef.current
     /** 查询只允许回写发起时的会话和当前代次，切换会话后丢弃迟到结果。 */
     const isCurrent = (): boolean => requestGeneration === connectionRequestGenerationRef.current &&
       sessionKey === activeInputRef.current.key
@@ -1067,6 +1067,10 @@ export function useWorkflowConversation({
       setLifecycleSyncError(undefined)
       applicationLifecycleRef.current = lifecycle
       onApplicationLifecycleChange(lifecycle)
+      const serverWorkflow = readWorkflowPayload(lifecycle.extensions.sessionWorkflow)
+      if (serverWorkflow && resultSession && !runFinalizationRef.current[sessionKey]) {
+        setLiveWorkflows((current) => ({ ...current, [sessionKey]: serverWorkflow }))
+      }
       connectionStateRef.current = completeConnectionRequest(
         connectionStateRef.current,
         requestGeneration
@@ -1224,7 +1228,7 @@ export function useWorkflowConversation({
       applicationPlanningInteraction?: ApplicationPlanningInteraction
       originalRequest?: string
       selectedSkills?: ChatMessageSkill[]
-      resumeState?: WorkflowRunPayload
+      resumeReference?: { runId: string; threadId: string }
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
       workflowAction?: WorkflowAction
@@ -1298,12 +1302,12 @@ export function useWorkflowConversation({
     }
 
     const identity = options?.sessionIdentity || (await ensureActiveSession())
-    // 可见会话 threadId 用于消息归属；resumeState/显式参数的 threadId 才是本次 Graph 执行线程。
+    // 可见会话 threadId 用于消息归属；resumeReference/显式参数的 threadId 才是本次 Graph 执行线程。
     const executionThreadId =
-      options?.executionThreadId || options?.resumeState?.threadId || identity.threadId
+      options?.executionThreadId || options?.resumeReference?.threadId || identity.threadId
     const initialExecutionPhase =
       String(options?.workflowDebug?.resumeFrom || '').trim() ||
-      workflowExecutionPhase(options?.resumeState)
+      (options?.resumeReference ? workflowExecutionPhase(activeWorkflow) : undefined)
     const blockingExecution = acquireSessionExecution(
       identity,
       Boolean(options?.conversation),
@@ -1585,7 +1589,7 @@ export function useWorkflowConversation({
         planningRunId: options?.planningRunId,
         draftDigest: options?.draftDigest,
         resumeExecutionRunId: options?.resumeExecutionRunId,
-        resumeState: options?.resumeState,
+        resumeReference: options?.resumeReference,
         pageTemplate: options?.pageTemplate,
         conversation: options?.conversation,
         conversationTarget:
@@ -1792,7 +1796,7 @@ export function useWorkflowConversation({
         !options.clarificationAnswers && !options.applicationPlanningInteraction && !options.revisionInteraction &&
         !options.revisionContinuation && !options.developmentContinuation && !options.conversationHandoffDecision &&
         !options.conversationImpactInteractionId &&
-        !options.resumeState && !options.workflowDebug?.enabled && !streamedContent &&
+        !options.resumeReference && !options.workflowDebug?.enabled && !streamedContent &&
         streamedToolCalls.length === 0 && streamedProcessSteps.length === 0) {
         const originalDraft = options.titleFrom || trimmedMessage
         const frozenOptions = { ...options, sessionIdentity: identity,
@@ -2168,7 +2172,7 @@ export function useWorkflowConversation({
           sendWorkflowMessage(buildTaskPlanConfirmationMessage(action.action), {
             clarificationAnswers: answers,
             originalRequest,
-            resumeState: workflow,
+            resumeReference: { runId: workflow.runId, threadId: workflow.threadId },
             buildExecutionScope: workflowBuildScope,
             resumeExecutionRunId: workflow.runId,
             onExecutionStarted: options?.onExecutionStarted,
@@ -2220,7 +2224,7 @@ export function useWorkflowConversation({
         },
         clarificationAnswers: answers,
         originalRequest,
-        resumeState: workflow,
+        resumeReference: { runId: workflow.runId, threadId: workflow.threadId },
         buildExecutionScope: workflowBuildScope,
         resumeExecutionRunId: workflow.runId,
         sessionIdentity: testSession,
@@ -2277,7 +2281,7 @@ export function useWorkflowConversation({
         {
           clarificationAnswers: answers,
           originalRequest,
-          resumeState: workflow,
+          resumeReference: { runId: workflow.runId, threadId: workflow.threadId },
           buildExecutionScope: workflowBuildScope,
           resumeExecutionRunId: workflow.runId,
           sessionIdentity: reviewSession,
@@ -2328,7 +2332,7 @@ export function useWorkflowConversation({
       const started = await sendWorkflowMessage('正在启动项目准备验收', {
         clarificationAnswers: answers,
         originalRequest,
-        resumeState: workflow,
+        resumeReference: { runId: workflow.runId, threadId: workflow.threadId },
         buildExecutionScope: workflowBuildScope,
         resumeExecutionRunId: workflow.runId,
         sessionIdentity: acceptanceSession,
@@ -2356,7 +2360,7 @@ export function useWorkflowConversation({
       const started = await sendWorkflowMessage('开始一键修复扫描出的代码问题', {
         clarificationAnswers: answers,
         originalRequest,
-        resumeState: workflow,
+        resumeReference: { runId: workflow.runId, threadId: workflow.threadId },
         buildExecutionScope: workflowBuildScope,
         resumeExecutionRunId: workflow.runId,
         titleFrom: '一键修复代码审查问题',
@@ -2376,7 +2380,7 @@ export function useWorkflowConversation({
       return sendWorkflowMessage(actionMessage, {
         clarificationAnswers: answers,
         originalRequest,
-        resumeState: workflow,
+        resumeReference: { runId: workflow.runId, threadId: workflow.threadId },
         selectedPageId: action.targetType === 'page' ? action.targetId : '',
         selectedApiContractId:
           action.targetType === 'endpoint' ? action.apiContractId : undefined,
@@ -2392,7 +2396,7 @@ export function useWorkflowConversation({
     return sendWorkflowMessage(continuationMessage, {
       clarificationAnswers: answers,
       originalRequest,
-      resumeState: workflow,
+      resumeReference: { runId: workflow.runId, threadId: workflow.threadId },
       selectedPageId: continuationEntityId ? '' : continuationPageId,
       selectedApiContractId: endpointScope?.apiContractId,
       selectedEndpointId: endpointScope?.targetId,
@@ -2578,7 +2582,7 @@ export function useWorkflowConversation({
       threadId: activeWorkflow.threadId
     })
     await sendWorkflowMessage('重试当前代码审查请求。', {
-      resumeState: activeWorkflow,
+      resumeReference: { runId: activeWorkflow.runId, threadId: activeWorkflow.threadId },
       resumeExecutionRunId: execution?.runId || activeWorkflow.runId,
       selectedPageId: workflowSelectedPageId(activeWorkflow) || selectedPageId,
       buildExecutionScope: activeWorkflow.summary.buildExecutionScope,
@@ -2608,7 +2612,7 @@ export function useWorkflowConversation({
       // 节点恢复由输入框提交时也要消费已发送草稿，避免 @ 阶段入口留在编辑区。
       clearDraft: true,
       // 已成功 End 的执行没有续接令牌；显式调试建立新 Run，只复用原业务 Graph 线程。
-      resumeState: ended ? undefined : source,
+      resumeReference: ended ? undefined : { runId: source.runId, threadId: source.threadId },
       executionThreadId: source.threadId,
       // 仅当前 lifecycle 登记的执行能提供续接令牌，控制/失败消息的 Run ID 不能代替。
       resumeExecutionRunId: ended ? undefined : execution?.runId,

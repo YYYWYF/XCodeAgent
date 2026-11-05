@@ -10,6 +10,7 @@ export type TechnicalPlanningMessage = {
   applicationId: string
   planningThreadId: string
   request: string
+  conversationTarget?: import('../typings').PlanningConversationTarget
   sourceRunId?: string
   checkpointId?: string
 }
@@ -29,7 +30,7 @@ export function technicalPlanningReplyPresentation(reply: TechnicalPlanningReply
     summary: { status: 'completed', phase: 'technical_planning_reply', message: reply.message,
       productConversationResult: { kind: 'read_only', mutating: false, response: reply.message,
         presentation: { artifactPresentation: 'preserve' } } },
-    state: {}, result: {}
+    state: {}
   }
 }
 
@@ -44,7 +45,8 @@ export function shouldPreserveTechnicalPlanningReply(previous: WorkflowRunPayloa
 /** 独立 AG-UI 读取对话分类或卡片修改版本，均不覆盖原 Graph。 */
 async function runTechnicalPlanningPreparation(
   application: ApplicationConfig, planningThreadId: string, request: string, signal: AbortSignal,
-  action: 'classify' | 'prepare_revision'
+  action: 'classify' | 'prepare_revision',
+  conversationTarget?: TechnicalPlanningMessage['conversationTarget']
 ): Promise<TechnicalPlanningReply> {
   const agent = createAgUiHttpAgent({ url: getApplicationPlanningUrl(), threadId: planningThreadId })
   agent.addMessage({ id: randomUUID(), role: 'user', content: request })
@@ -62,7 +64,8 @@ async function runTechnicalPlanningPreparation(
     if (signal.aborted) throw new Error('技术规划提问已取消。')
     await agent.runAgent({ forwardedProps: { technicalPlanningConversation: {
       action, workspaceRoot: application.workspaceRoot,
-      applicationId: application.id, planningThreadId, request
+      applicationId: application.id, planningThreadId, request,
+      ...(conversationTarget ? { conversationTarget } : {})
     } } }, subscriber)
     if (signal.aborted) throw new Error('技术规划提问已取消。')
     if (result?.status === 'failed') {
@@ -80,11 +83,12 @@ async function runTechnicalPlanningPreparation(
   }
 }
 
-/** 自由输入通过只读分类区分问答、技术修改和上游变更。 */
+/** 指定目标时确定性准备执行；无目标时由后端识别问答、技术修改和上游变更。 */
 export function readTechnicalPlanningReply(
-  application: ApplicationConfig, planningThreadId: string, request: string, signal: AbortSignal
+  application: ApplicationConfig, planningThreadId: string, request: string, signal: AbortSignal,
+  conversationTarget?: TechnicalPlanningMessage['conversationTarget']
 ): Promise<TechnicalPlanningReply> {
-  return runTechnicalPlanningPreparation(application, planningThreadId, request, signal, 'classify')
+  return runTechnicalPlanningPreparation(application, planningThreadId, request, signal, 'classify', conversationTarget)
 }
 
 /** 卡片修改已明确目标，仅确定性读取当前版本，不调用聊天意图模型。 */

@@ -293,7 +293,7 @@ function messageAgentPhase(
   if (!workflow) return fallback
   const phase =
     String(workflow.summary?.phase || '').trim() ||
-    String(workflow.result?.phase || '').trim() ||
+    String(workflow.state?.phase || '').trim() ||
     [...(workflow.events || [])]
       .reverse()
       .map((event) => String(event.nodeName || event.node?.id || '').trim())
@@ -381,6 +381,9 @@ type MessageListProps = {
     answers: ClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>
   ) => Promise<void>
+  /** UI 设计稿待确认卡里点「转交产品 Agent」：把用户的页面级新增/删除指令
+   *  作为 design_change_request 提交到产品意图识别路径。 */
+  onTransferToProductAgent?: (instruction: string) => void | Promise<void>
   /** 已确认的技术规划通过当前技术规划对话发起修订。 */
   onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
   /** 技术规划生成、消息发送或工作区写入期间禁用已确认卡的修改入口。 */
@@ -444,6 +447,7 @@ export default function MessageList({
   reviseConfirmedTechnicalPlanDisabled = false,
   revertingCodeChangeIds,
   onSubmitClarification,
+  onTransferToProductAgent,
   application,
   workspaceRoot,
   commitDisabled = false
@@ -1153,6 +1157,7 @@ export default function MessageList({
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
                               onSubmitClarification={onSubmitClarification}
+                              onTransferToProductAgent={onTransferToProductAgent}
                               onReviseConfirmedTechnicalPlan={
                                 messageIndex === latestConfirmedTechnicalPlanMessageIndex &&
                                 currentPhase === 'planning' &&
@@ -1281,6 +1286,7 @@ export default function MessageList({
                 workflow={currentPlanningConfirmation}
                 application={application}
                 onSubmitClarification={onSubmitClarification}
+                onTransferToProductAgent={onTransferToProductAgent}
                 onSaveRequirementSpec={onSaveRequirementSpec}
                 uiDesignActivePageId={uiDesignActivePageId}
                 onUiDesignActivePageChange={onUiDesignActivePageChange}
@@ -1338,7 +1344,7 @@ function readTemplatePreparation(
   const candidates = [
     workflow?.summary?.templatePreparation,
     workflow?.state?.templatePreparation,
-    workflow?.result?.templatePreparation
+    workflow?.state?.templatePreparation
   ]
   return candidates.find((value) => Boolean(value && typeof value === 'object')) as
     | import('../../../../typings').WorkflowTemplatePreparation

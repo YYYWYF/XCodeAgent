@@ -9,6 +9,7 @@ from app.protocols.workflow.stream_events import (
 )
 from app.protocols.workflow.projection import _workspace_inspection_snapshot
 from app.services.direct_modification import direct_state_message
+from app.protocols.workflow.presentation import workflow_presentation
 
 
 DIRECT_NODE_LABELS = {
@@ -46,14 +47,14 @@ def direct_progress_payload(
     """构造可被现有会话组件消费的快速修改增量投影。"""
 
     status = str(state.get("status") or "in_progress")
-    return {
+    return workflow_presentation({
         "summary": direct_summary(state, status=status),
         "events": events,
         "state": public_direct_state(state),
         "result": state.get("direct_modification_result", {}),
         "codeChanges": state.get("code_changes", {}),
         **({"processStep": process_step} if process_step is not None else {}),
-    }
+    }, workspace=state.get("workspace"))
 
 
 def direct_final_payload(
@@ -64,14 +65,14 @@ def direct_final_payload(
     """构造自定义事件、快照和 RunFinished 共用结果。"""
 
     status = str(state.get("status") or "failed")
-    return {
+    return workflow_presentation({
         "status": status,
         "summary": direct_summary(state, status=status),
         "events": events,
         "state": public_direct_state(state),
         "result": state.get("direct_modification_result", {}),
         "codeChanges": state.get("code_changes", {}),
-    }
+    }, workspace=state.get("workspace"))
 
 
 def direct_summary(state: dict[str, Any], *, status: str) -> dict[str, Any]:

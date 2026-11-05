@@ -3,6 +3,8 @@ import { test } from 'node:test'
 import { parseDesignMentions } from '../src/renderer/src/service/designMention'
 import {
   productDesignStageMentionFromText,
+  planningConversationInput,
+  replacePlanningConversationMention,
   workflowStageMentions
 } from '../src/renderer/src/components/AiChatPanel/components/ChatComposer/productConversation'
 
@@ -12,11 +14,42 @@ test('计划阶段提供技术规划、需求设计与 UI 设计三个对话目�
     'technical_planning', 'requirements', 'ui_confirmation'
   ])
   assert.deepEqual(productDesignStageMentionFromText('@技术规划 调整接口方案', 'planning'), {
-    node: 'technical_planning', label: '技术规划', description: '返回技术规划节点',
+    node: 'technical_planning', label: '技术规划', description: '携带正文执行技术规划，生成后需确认',
     request: '调整接口方案'
   })
   assert.equal(productDesignStageMentionFromText('@需求设计 调整需求', 'planning')?.node, 'requirements')
   assert.equal(productDesignStageMentionFromText('@技术规划 调整方案', 'design'), undefined)
+})
+
+test('执行目标与正文分别提交，只有标签时没有可发送正文', () => {
+  assert.deepEqual(planningConversationInput('@技术规划 recordTime 是什么意思？', 'planning'), {
+    request: 'recordTime 是什么意思？', conversationTarget: 'technical_planning'
+  })
+  for (const mention of workflowStageMentions('planning')) {
+    assert.equal(planningConversationInput(`@${mention.label} `, 'planning').request, '')
+  }
+  assert.deepEqual(planningConversationInput('普通问题', 'planning'), { request: '普通问题' })
+})
+
+test('重新选择目标会替换旧标签，保留问题和光标后的正文', () => {
+  const text = '@技术规划 解释字段 @需求 后续正文'
+  const replacement = replacePlanningConversationMention(text, text.lastIndexOf('@'),
+    text.indexOf(' 后续'), workflowStageMentions('planning')[2], 'planning')
+  assert.equal(replacement.value, '解释字段 @UI设计 后续正文')
+  assert.equal(replacement.caret, '解释字段 @UI设计 '.length)
+  assert.deepEqual(planningConversationInput(replacement.value, 'planning'), {
+    request: '解释字段 后续正文', conversationTarget: 'ui_confirmation'
+  })
+  assert.deepEqual(planningConversationInput('@需求设计 @技术规划 修改接口', 'planning'), {
+    request: '修改接口', conversationTarget: 'technical_planning'
+  })
+})
+
+test('替换标签保留多段正文的换行与缩进', () => {
+  const text = '@需求设计 第一段\n\n  第二段\n@UI'
+  const replaced = replacePlanningConversationMention(text, text.lastIndexOf('@'), text.length,
+    workflowStageMentions('planning')[0], 'planning')
+  assert.equal(replaced.value, '第一段\n\n  第二段\n@技术规划 ')
 })
 
 /** 复刻出问题的那份页面清单：展示名带空格，pageId 是下划线形式。 */

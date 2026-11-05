@@ -1,14 +1,14 @@
 import { workflowDebugNodesForStage } from '../../../../service/workflowDebugNodes'
-import type { WorkflowDebugStage } from '../../../../typings'
+import type { PlanningConversationTarget, WorkflowDebugStage } from '../../../../typings'
 
 export const PRODUCT_CONVERSATION_PLACEHOLDER =
-  '告诉产品 Agent 你想调整的需求、页面或 UI，也可以直接提问…'
+  '可以提问或描述修改意见，输入 @ 指定要执行的节点…'
 
 export const PRODUCT_CONVERSATION_RUNNING_HINT =
   '当前设计正在生成，完成后即可发送新的调整。'
 
 export type ProductDesignStageMention = {
-  node: string
+  node: PlanningConversationTarget
   label: string
   description: string
 }
@@ -16,15 +16,15 @@ export type ProductDesignStageMention = {
 const DESIGN_STAGE_MENTION_LABELS: Record<string, Omit<ProductDesignStageMention, 'node'>> = {
   requirements: {
     label: '需求设计',
-    description: '返回需求与产品规划节点'
+    description: '携带正文返回需求设计并执行，生成后需确认'
   },
   ui_confirmation: {
     label: 'UI设计',
-    description: '返回 UI 设计稿节点'
+    description: '携带正文返回 UI 设计并执行，生成后需确认'
   },
   technical_planning: {
     label: '技术规划',
-    description: '返回技术规划节点'
+    description: '携带正文执行技术规划，生成后需确认'
   }
 }
 
@@ -35,19 +35,18 @@ export function workflowStageMentions(stage: WorkflowDebugStage): ProductDesignS
     : workflowDebugNodesForStage(stage)
   return options.flatMap((option) => {
     const copy = DESIGN_STAGE_MENTION_LABELS[option.value]
-    return copy ? [{ node: option.value, ...copy }] : []
+    return copy ? [{ node: option.value as PlanningConversationTarget, ...copy }] : []
   })
 }
 
-/** 解析当前阶段的节点提及，并从实际指令里移除路由标记。 */
-export function productDesignStageMentionFromText(
-  text: string,
-  stage: WorkflowDebugStage
-): (ProductDesignStageMention & { request: string }) | undefined {
-  const matches = workflowStageMentions(stage).flatMap((mention) => {
+type StageMentionMatch = { mention: ProductDesignStageMention; start: number; length: number }
+
+/** 收集已完成的目标标签位置，供发送解析与标签替换共用。 */
+function stageMentionMatches(text: string, stage: WorkflowDebugStage): StageMentionMatch[] {
+  return workflowStageMentions(stage).flatMap((mention) => {
     const escapedLabel = mention.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     const expression = new RegExp(`@${escapedLabel}(?=$|[\\s，。,.!！?？:：])`, 'ig')
-    const mentionMatches: Array<{ mention: ProductDesignStageMention; start: number; length: number }> = []
+    const mentionMatches: StageMentionMatch[] = []
     let match = expression.exec(text)
     while (match) {
       mentionMatches.push({ mention, start: match.index, length: match[0].length })
@@ -55,16 +54,57 @@ export function productDesignStageMentionFromText(
     }
     return mentionMatches
   }).sort((left, right) => left.start - right.start)
-  const selected = matches[matches.length - 1]
-  if (!selected) return undefined
+}
 
+/** 只移除标签及其一个分隔空格，保留正文中的换行、缩进和标点。 */
+function removeStageMentions(text: string, matches: StageMentionMatch[]): string {
   let request = text
-  matches.reverse().forEach((match) => {
+  matches.slice().reverse().forEach((match) => {
     let end = match.start + match.length
     if (request[end] === ' ') end += 1
     request = `${request.slice(0, match.start)}${request.slice(end)}`
   })
-  return { ...selected.mention, request: request.trim() }
+  return request
+}
+
+/** 解析当前阶段的执行目标，并从实际正文中移除标签。 */
+export function productDesignStageMentionFromText(
+  text: string, stage: WorkflowDebugStage
+): (ProductDesignStageMention & { request: string }) | undefined {
+  const matches = stageMentionMatches(text, stage)
+  const selected = matches[matches.length - 1]
+  return selected ? { ...selected.mention, request: removeStageMentions(text, matches).trim() } : undefined
+}
+
+export type PlanningConversationInput = {
+  request: string
+  conversationTarget?: PlanningConversationTarget
+}
+
+/** 历史消息展示执行目标，但发送给后端的正文始终不携带路由标签。 */
+export function planningConversationText(input: PlanningConversationInput): string {
+  return input.conversationTarget
+    ? `@${DESIGN_STAGE_MENTION_LABELS[input.conversationTarget].label} ${input.request}`
+    : input.request
+}
+
+/** 在输入边界分离执行目标与正文；只选标签时保留空正文供发送门禁提示。 */
+export function planningConversationInput(text: string, stage: WorkflowDebugStage): PlanningConversationInput {
+  const mention = productDesignStageMentionFromText(text, stage)
+  return mention
+    ? { request: mention.request, conversationTarget: mention.node }
+    : { request: text.trim() }
+}
+
+/** 选择新目标时移除已选标签，正文和光标两侧内容保持完整。 */
+export function replacePlanningConversationMention(
+  text: string, start: number, caret: number, mention: ProductDesignStageMention, stage: WorkflowDebugStage
+): { value: string; caret: number } {
+  const before = text.slice(0, start)
+  const after = text.slice(caret)
+  const selected = `${removeStageMentions(before, stageMentionMatches(before, stage))}@${mention.label} `
+  const suffix = removeStageMentions(after, stageMentionMatches(after, stage))
+  return { value: selected + (suffix.startsWith(' ') ? suffix.slice(1) : suffix), caret: selected.length }
 }
 
 export type ProductConversationRoute =

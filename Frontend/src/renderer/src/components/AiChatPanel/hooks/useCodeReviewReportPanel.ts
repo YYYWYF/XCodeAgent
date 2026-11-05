@@ -46,7 +46,7 @@ function readWorkflowCodeReviewResult(
   const candidates: unknown[] = [
     workflow.summary.codeReviewResult,
     workflow.state?.codeReviewResult,
-    workflow.result?.codeReviewResult
+    workflow.state?.codeReviewResult
   ]
   const validCandidates = candidates.filter(
     (value): value is WorkflowCodeReviewResult =>

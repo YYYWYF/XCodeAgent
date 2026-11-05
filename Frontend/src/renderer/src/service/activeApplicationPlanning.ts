@@ -537,7 +537,7 @@ export async function loadActiveApplicationPlannings(): Promise<ApplicationPlann
 export function workflowApplicationLifecycle(
   workflow?: WorkflowRunPayload
 ): ApplicationLifecycle | undefined {
-  for (const source of [workflow?.result, workflow?.state]) {
+  for (const source of [workflow?.state]) {
     const lifecycle = source?.lifecycle
     if (lifecycle && typeof lifecycle === 'object') {
       return lifecycle as ApplicationLifecycle

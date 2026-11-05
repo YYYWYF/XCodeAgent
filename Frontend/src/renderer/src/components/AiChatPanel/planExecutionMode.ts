@@ -44,7 +44,7 @@ export function workflowEndedPlanControl(workflow?: WorkflowRunPayload): boolean
   const candidates = [
     workflow.summary.planControl,
     workflow.state?.planControl,
-    workflow.result?.planControl
+    workflow.state?.planControl
   ]
   return candidates.some((candidate) => {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false
@@ -252,7 +252,7 @@ function workflowLifecycleSnapshot(workflow: WorkflowRunPayload): ApplicationLif
   const candidates = [
     workflow.summary.lifecycle,
     workflow.state?.lifecycle,
-    workflow.result?.lifecycle
+    workflow.state?.lifecycle
   ]
   return candidates.find((candidate): candidate is ApplicationLifecycle =>
     Boolean(candidate && typeof candidate === 'object')
@@ -356,8 +356,7 @@ export function withWorkflowExecutionStatus(
   return {
     ...workflow,
     summary: { ...workflow.summary, status, lifecycle: nextLifecycle },
-    state: nextLifecycle ? { ...workflow.state, lifecycle: nextLifecycle } : workflow.state,
-    result: nextLifecycle ? { ...workflow.result, lifecycle: nextLifecycle } : workflow.result
+    state: nextLifecycle ? { ...workflow.state, lifecycle: nextLifecycle } : workflow.state
   }
 }
 
@@ -566,8 +565,8 @@ export function workflowCodeReviewRetry(
     workflow?.summary?.code_review_retry,
     workflow?.state?.codeReviewRetry,
     workflow?.state?.code_review_retry,
-    workflow?.result?.codeReviewRetry,
-    workflow?.result?.code_review_retry
+    workflow?.state?.codeReviewRetry,
+    workflow?.state?.code_review_retry
   ]
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== 'object') continue

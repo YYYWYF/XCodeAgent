@@ -34,6 +34,7 @@ from app.protocols.workflow.projection import (
     _workflow_code_review_repair,
     _workflow_code_review_scan,
     _workflow_event,
+    _workflow_event_state,
     _workflow_next_nodes,
     _workflow_node_detail,
     _workflow_node_label,
@@ -42,6 +43,7 @@ from app.protocols.workflow.projection import (
     _workflow_visual_payload,
 )
 from app.protocols.workflow.request import workflow_run_inputs
+from app.protocols.workflow.resume_source import resume_reference, read_resume_source
 from app.services.technical_planning_retry import (
     TechnicalPlanningMessageRevision, prepare_technical_planning_retry,
     restart_stopped_technical_plan_revision,
@@ -451,16 +453,38 @@ def build_workflow_ag_ui_stream(
     accept: str | None = None,
     native_recovery_context: NativeRecoveryRuntimeContext | None = None,
     technical_planning_revision: TechnicalPlanningMessageRevision | None = None,
+    _server_resume_state: dict[str, Any] | None = None,
+    _source_error: Exception | None = None,
 ) -> AsyncIterator[str]:
     """以 AG-UI SSE 事件流运行或取消一次主工作流请求。"""
 
     encoder = EventEncoder(accept or "text/event-stream")
-    input_error: ValueError | None = None
+    reference = None
+    if native_recovery_context is None and _source_error is None:
+        try:
+            reference = resume_reference(payload)
+        except ValueError as exc:
+            _source_error = exc
+    if reference is not None and _server_resume_state is None and _source_error is None:
+        async def sourced_stream() -> AsyncIterator[str]:
+            """在业务解析前取得权威输入；读取失败也经原 AG-UI 完整失败生命周期返回。"""
+            try:
+                source_graph, server_state = await read_resume_source(graph, payload, reference)
+            except Exception as exc:
+                delegate = build_workflow_ag_ui_stream(graph=graph, payload=payload, accept=accept, _source_error=exc)
+            else:
+                delegate = build_workflow_ag_ui_stream(graph=source_graph, payload=payload, accept=accept,
+                    technical_planning_revision=technical_planning_revision, _server_resume_state=server_state)
+            async for frame in delegate:
+                yield frame
+        return sourced_stream()
+    input_error: Exception | None = _source_error
     try:
         workflow_inputs = (
-            native_recovery_context.workflow_inputs()
+            {"thread_id": payload.get("threadId"), "run_id": payload.get("runId"), "cancel_run_id": ""}
+            if _source_error is not None else native_recovery_context.workflow_inputs()
             if native_recovery_context is not None
-            else workflow_run_inputs(payload)
+            else workflow_run_inputs(payload, server_state=_server_resume_state)
         )
     except ValueError as exc:
         # 确认门等输入校验错误也在 AG-UI 生命周期内收口，不能误报 Backend 不可用。
@@ -501,6 +525,7 @@ def build_workflow_ag_ui_stream(
     message_id = str(uuid4())
 
     async def stream() -> AsyncIterator[str]:
+        """运行当前请求的完整生命周期，并将唯一展示状态与后端执行状态分离。"""
         events: list[dict[str, Any]] = []
         result: dict[str, Any] = {}
         failed_run = False
@@ -768,6 +793,7 @@ def build_workflow_ag_ui_stream(
                     summary=summary,
                     events=events,
                     result=result,
+                    workspace=workspace,
                 )
                 for frame in _workflow_ag_ui_frames(
                     encoder,
@@ -776,6 +802,7 @@ def build_workflow_ag_ui_stream(
                     events=events,
                     result=result,
                     visual_payload=final_payload,
+                    workspace=workspace,
                 ):
                     yield frame
                 for frame in _text_delta_frames(
@@ -871,6 +898,8 @@ def build_workflow_ag_ui_stream(
                      "request": checkpoint_values.get("request") or initial_state["request"],
                      "active_run_id": current_lifecycle.active_run_id if current_lifecycle else ""},
                     new_request=technical_planning_revision.request if technical_planning_revision else None,
+                    allow_initial_generation=bool(technical_planning_revision and
+                        technical_planning_revision.conversation_target == "technical_planning"),
                 ))
                 if (technical_planning_revision is not None and current_lifecycle is not None
                         and current_lifecycle.initialization.status == "cancelled"):
@@ -913,6 +942,7 @@ def build_workflow_ag_ui_stream(
                     # 新的技术修改替代旧生成要求；后续失败重试继续沿用这次明确输入。
                     initial_state["design_change_request"] = technical_planning_revision.request
                     initial_state["design_change_generation_request"] = technical_planning_revision.request
+                    initial_state["design_conversation_target"] = technical_planning_revision.conversation_target
             first_node_name = _application_planning_resume_node(
                 application_planning_interaction
             ) or _workflow_start_node(resume_from, workflow_scope)
@@ -1095,6 +1125,7 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 events=events,
                 result=result,
+                workspace=workspace,
             ):
                 yield frame
             first_node_attempt = _next_node_attempt(node_attempts, first_node_name)
@@ -1223,6 +1254,7 @@ def build_workflow_ag_ui_stream(
                 thread_id=thread_id,
                 events=events,
                 result=started_result,
+                workspace=workspace,
             ):
                 yield frame
             process_sequence = 1
@@ -1361,6 +1393,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=progress_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         yield _process_frame(
@@ -1408,7 +1441,7 @@ def build_workflow_ag_ui_stream(
                             data={
                                 "phase": progress_node,
                                 "workspaceInspectionProgress": progress_detail,
-                                "stateDelta": _public_workflow_state(progress_state),
+                                "stateDelta": _workflow_event_state(progress_state),
                             },
                             attempt=progress_attempt,
                             iteration_kind=_iteration_kind(progress_node, progress_attempt),
@@ -1420,6 +1453,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=progress_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         yield _process_frame(
@@ -1470,7 +1504,7 @@ def build_workflow_ag_ui_stream(
                             data={
                                 "phase": progress_node,
                                 "launchProgress": launch_progress,
-                                "stateDelta": _public_workflow_state(progress_state),
+                                "stateDelta": _workflow_event_state(progress_state),
                             },
                             attempt=progress_attempt,
                             iteration_kind=_iteration_kind(progress_node, progress_attempt),
@@ -1482,6 +1516,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=progress_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         yield _process_frame(
@@ -1594,6 +1629,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=progress_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         yield _process_frame(
@@ -1701,6 +1737,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=progress_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         process_sequence += 1
@@ -1743,7 +1780,7 @@ def build_workflow_ag_ui_stream(
                                 message=progress_message,
                                 data={
                                     "phase": progress_state.get("phase", progress_node),
-                                    "stateDelta": _public_workflow_state(progress_state),
+                                    "stateDelta": _workflow_event_state(progress_state),
                                     "detail": {
                                         "buildSummary": progress_state.get("build_summary", {}),
                                         "buildExecutionSlice": progress_state.get(
@@ -1761,6 +1798,7 @@ def build_workflow_ag_ui_stream(
                                 thread_id=thread_id,
                                 events=events,
                                 result=progress_state,
+                                workspace=workspace,
                             ):
                                 yield frame
                         yield _process_frame(
@@ -1830,6 +1868,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=progress_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         yield _process_frame(
@@ -1935,6 +1974,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=progress_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         yield _process_frame(
@@ -2073,6 +2113,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=resumed_state,
+                            workspace=workspace,
                         ):
                             yield frame
                         review_next_nodes = _workflow_next_nodes(node_name, update)
@@ -2152,7 +2193,7 @@ def build_workflow_ag_ui_stream(
                     terminal_status = _terminal_process_status(node_name, update)
                     node_payload = {
                         "phase": update.get("phase", node_name),
-                        "stateDelta": _public_workflow_state(update),
+                        "stateDelta": _workflow_event_state(update),
                         "detail": detail.get("data", {}),
                         "artifacts": _workflow_artifacts(update),
                     }
@@ -2176,6 +2217,7 @@ def build_workflow_ag_ui_stream(
                         thread_id=thread_id,
                         events=events,
                         result=update,
+                        workspace=workspace,
                     ):
                         yield frame
                     process_sequence += 1
@@ -2338,6 +2380,7 @@ def build_workflow_ag_ui_stream(
                             thread_id=thread_id,
                             events=events,
                             result=next_started_result,
+                            workspace=workspace,
                         ):
                             yield frame
                         process_sequence += 1
@@ -2407,6 +2450,7 @@ def build_workflow_ag_ui_stream(
                 summary=summary,
                 events=events,
                 result=result,
+                workspace=workspace,
             )
             for frame in _workflow_ag_ui_frames(
                 encoder,
@@ -2415,6 +2459,7 @@ def build_workflow_ag_ui_stream(
                 events=events,
                 result=result,
                 visual_payload=final_payload,
+                workspace=workspace,
             ):
                 yield frame
             for frame in _text_delta_frames(
@@ -2690,6 +2735,7 @@ def build_workflow_ag_ui_stream(
                 summary=summary,
                 events=events,
                 result=result,
+                workspace=workspace,
             )
             for frame in _workflow_ag_ui_frames(
                 encoder,
@@ -2698,6 +2744,7 @@ def build_workflow_ag_ui_stream(
                 events=events,
                 result=result,
                 visual_payload=failed_payload,
+                workspace=workspace,
             ):
                 yield frame
             if gate_blocked or input_error is not None:

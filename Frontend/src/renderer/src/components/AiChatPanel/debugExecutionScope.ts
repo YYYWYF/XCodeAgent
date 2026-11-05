@@ -43,7 +43,7 @@ export function workflowDebugBuildScope(
   if (stateScope) return stateScope
 
   const resultScope = scopeFromState(
-    workflow?.result?.buildExecutionScope || workflow?.result?.build_execution_scope
+    workflow?.state?.buildExecutionScope || workflow?.state?.build_execution_scope
   )
   if (resultScope) return resultScope
 
@@ -52,7 +52,7 @@ export function workflowDebugBuildScope(
   const stateApiContractId =
     workflow?.state?.selectedApiContractId || workflow?.state?.selected_api_contract_id
   const resultApiContractId =
-    workflow?.result?.selectedApiContractId || workflow?.result?.selected_api_contract_id
+    workflow?.state?.selectedApiContractId || workflow?.state?.selected_api_contract_id
   const apiContractId = String(stateApiContractId || resultApiContractId || '').trim()
   return execution.scope === 'application'
     ? { type: 'application' }

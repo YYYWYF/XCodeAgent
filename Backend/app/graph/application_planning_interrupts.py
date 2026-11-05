@@ -211,6 +211,7 @@ def prepare_application_planning_review_resume(
                 # 指令，避免意图分析失败时 checkpoint 继续保留错误入口。
                 "resume_from": "",
                 "request": submission.request.strip(),
+                "design_conversation_target": submission.conversation_target,
                 "design_interaction_origin": effective_node_name,
                 # 问答可能返回同一审阅门，暂存其完整确认语义，不能只恢复节点名。
                 "design_interaction_context": {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './workbenchEntry.test'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import WorkbenchTopBar from '../src/renderer/src/components/WorkbenchTopBar'

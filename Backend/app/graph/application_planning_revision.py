@@ -126,8 +126,10 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             affected_page_ids=authoritative_page_ids,
             response="",
         )
-    elif is_natural_language_confirmation(request) and not state.get(
-        "product_stage_conversation"
+    elif (
+        not state.get("design_conversation_target")
+        and is_natural_language_confirmation(request)
+        and not state.get("product_stage_conversation")
     ):
         # 底部输入只是产品对话通道，不是正式确认信封。这类话术必须零写入，
         # 并引导用户回到当前审阅卡，禁止分类模型误报“已确认”或启动产物修订。
@@ -147,6 +149,7 @@ def analyze_design_intent(state: ProjectState) -> dict[str, Any]:
             requirement_spec=_dict_value(state.get("requirement_spec")),
             product_plan=_dict_value(state.get("product_plan")),
             ui_designs=_dict_value(state.get("ui_designs")),
+            conversation_target=state.get("design_conversation_target"),
         )
     target = (
         authoritative_target
@@ -376,6 +379,7 @@ def cleared_design_change_context() -> dict[str, Any]:
     return {
         "design_change_submission": False,
         "design_change_request": "",
+        "design_conversation_target": None,
         "design_change_target": "",
         "design_change_reason": "",
         "design_change_affected_page_ids": [],
@@ -531,6 +535,17 @@ def prepare_ui_revision_state(state: ProjectState) -> ProjectState:
         if isinstance(page, dict) and str(page.get("pageId") or "").strip()
     }
     if not existing_pages or expected_ids != existing_ids:
+        if state.get("design_conversation_target") == "ui_confirmation":
+            # @UI设计 是明确执行要求；无旧稿时也把正文带入首次生成，不能只展示空骨架。
+            return {
+                **state, "ui_designs": None,
+                "ui_design_action": {
+                    "action": "adjust_pages",
+                    "pageIds": sorted(expected_ids),
+                    "instruction": str(state.get("design_change_request") or "").strip(),
+                },
+                "application_planning_interaction": {"action": "ui_action"},
+            }
         return {**state, "ui_designs": None, "ui_design_action": None}
     return {
         **state,

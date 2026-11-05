@@ -352,10 +352,11 @@ export class ApplicationPlanningRuntime {
     requirementSpecFeedback?: string,
     designChangeRequest?: string,
     technicalPlanningConversation = false,
-    designThreadHandoff?: () => Promise<void>
+    designThreadHandoff?: () => Promise<void>,
+    conversationTarget?: ApplicationPlanningInteraction['conversationTarget']
   ): Promise<void> {
     if (technicalPlanningConversation && designChangeRequest?.trim()) {
-      await this.submitTechnicalPlanningMessage(designChangeRequest.trim(), designThreadHandoff)
+      await this.submitTechnicalPlanningMessage(designChangeRequest.trim(), designThreadHandoff, false, conversationTarget)
       return
     }
     let current = this.requireCurrentState()
@@ -392,7 +393,8 @@ export class ApplicationPlanningRuntime {
             answers,
             editedRequirementSpec,
             requirementSpecFeedback,
-            designChangeRequest
+            designChangeRequest,
+            conversationTarget
           )
           const latest = this.requireCurrentState()
           const merged = await this.sendMessageWithinTransport(
@@ -496,9 +498,10 @@ export class ApplicationPlanningRuntime {
     }
   }
 
-  /** 提问只发布回复；技术修改复用原生成，上游变更回到原设计意图链路。 */
+  /** 显式目标沿指定节点执行；无目标时识别问答或修改，保留原生成与确认链路。 */
   private async submitTechnicalPlanningMessage(
-    request: string, designThreadHandoff?: () => Promise<void>, explicitRevision = false
+    request: string, designThreadHandoff?: () => Promise<void>, explicitRevision = false,
+    conversationTarget?: ApplicationPlanningInteraction['conversationTarget']
   ): Promise<void> {
     const abort = new AbortController()
     let revised = false
@@ -509,10 +512,11 @@ export class ApplicationPlanningRuntime {
       await this.withExclusiveTransport(async (token) => {
         const current = this.requireCurrentState()
         this.dispatch({ type: 'recovery_action_started', applicationId: this.applicationId, threadId: this.threadId })
-        const read = explicitRevision
-          ? this.dependencies.prepareTechnicalPlanningRevision ?? prepareTechnicalPlanningRevision
-          : this.dependencies.readTechnicalPlanningReply ?? readTechnicalPlanningReply
-        const reply = await read(current.application, this.threadId, request, abort.signal)
+        const reply = explicitRevision
+          ? await (this.dependencies.prepareTechnicalPlanningRevision ?? prepareTechnicalPlanningRevision)(
+            current.application, this.threadId, request, abort.signal)
+          : await (this.dependencies.readTechnicalPlanningReply ?? readTechnicalPlanningReply)(
+            current.application, this.threadId, request, abort.signal, conversationTarget)
         if (abort.signal.aborted || !this.isCurrentRun(token)) return
         this.technicalMessageAbort = undefined
         if (reply.intent === 'reply') {
@@ -533,7 +537,8 @@ export class ApplicationPlanningRuntime {
           technicalPlanningConversation: {
             action: 'revise', workspaceRoot: current.application.workspaceRoot || '',
             applicationId: this.applicationId, planningThreadId: this.threadId, request,
-            sourceRunId: reply.sourceRunId, checkpointId: reply.checkpointId
+            sourceRunId: reply.sourceRunId, checkpointId: reply.checkpointId,
+            ...(conversationTarget ? { conversationTarget } : {})
           }
         })
         await this.handlePlanningResult(token, merged)

@@ -53,7 +53,7 @@ const phaseProgress: Record<
 // 优先读取已确认 ProductPlan 的页面数，用于 UI 生成期间渲染未就绪骨架。
 export function planningUiDesignPageTotal(workflow?: WorkflowRunPayload): number {
   if (!workflow) return 0
-  for (const source of [workflow.result, workflow.state]) {
+  for (const source of [workflow.state]) {
     const productPlan = source?.product_plan
     if (productPlan && typeof productPlan === 'object' && !Array.isArray(productPlan)) {
       const productPages = (productPlan as Record<string, unknown>).pages
@@ -80,7 +80,7 @@ export function technicalPlanConfirmationReady(workflow?: WorkflowRunPayload): b
   const clarifications = [
     workflow?.summary.clarification,
     workflow?.state?.clarification,
-    workflow?.result?.clarification
+    workflow?.state?.clarification
   ]
   return clarifications.some((clarification) => {
     if (!clarification || typeof clarification !== 'object') return false

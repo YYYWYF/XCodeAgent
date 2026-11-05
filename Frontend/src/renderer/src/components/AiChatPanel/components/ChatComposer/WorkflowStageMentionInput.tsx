@@ -11,6 +11,7 @@ import { useId, useMemo, useRef, useState } from 'react'
 import { cx } from '../../../../utils'
 import type { WorkflowDebugStage } from '../../../../typings'
 import {
+  replacePlanningConversationMention,
   workflowStageMentions,
   type ProductDesignStageMention
 } from './productConversation'
@@ -93,17 +94,15 @@ export default function WorkflowStageMentionInput({
     if (mentionStart === null) return
     const textarea = textareaRef.current?.resizableTextArea?.textArea
     const caret = textarea?.selectionStart ?? value.length
-    const insertedText = `@${mention.label} `
-    const nextValue = value.slice(0, mentionStart) + insertedText + value.slice(caret)
-    const nextCaret = mentionStart + insertedText.length
-    onChange(nextValue)
+    const replacement = replacePlanningConversationMention(value, mentionStart, caret, mention, stage)
+    onChange(replacement.value)
     setMentionOpen(false)
     setMentionStart(null)
     setMentionQuery('')
     setTimeout(() => {
       const currentTextarea = textareaRef.current?.resizableTextArea?.textArea
       textareaRef.current?.focus()
-      currentTextarea?.setSelectionRange(nextCaret, nextCaret)
+      currentTextarea?.setSelectionRange(replacement.caret, replacement.caret)
     }, 0)
   }
 
@@ -130,6 +129,10 @@ export default function WorkflowStageMentionInput({
       }
     }
     onKeyDown?.(event)
+    // Ant Design 的 onPressEnter 早于 onKeyDown；在这里统一调度，避免选中候选的 Enter 同时发送。
+    if (event.key === 'Enter' && !event.nativeEvent.isComposing && !event.defaultPrevented) {
+      onPressEnter(event)
+    }
   }
 
   // 鼠标选择时保持文本框焦点，让插入位置仍使用原光标。
@@ -155,9 +158,6 @@ export default function WorkflowStageMentionInput({
         bordered={false}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        onPressEnter={(event) => {
-          if (!event.defaultPrevented) onPressEnter(event)
-        }}
         placeholder={placeholder}
         ref={textareaRef}
         value={value}

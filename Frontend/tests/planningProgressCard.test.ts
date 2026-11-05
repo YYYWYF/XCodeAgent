@@ -50,8 +50,8 @@ function planningProgress(phase: string, status: string): WorkflowRunPayload {
       runId: 'planning-run', threadId: 'planning-thread', message: '',
       node: { id: phase, label: '技术规划' }
     }],
-    result: { status, phase },
-    state: { status, phase }
+
+    state: { ...({ status, phase }), ...({ status, phase }) }
   }
 }
 

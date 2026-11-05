@@ -300,8 +300,8 @@ export function workflowShouldShowCodeReview(workflow: WorkflowRunPayload | unde
     workflow.summary.codeReviewResult,
     workflow.state?.codeReviewResult,
     workflow.state?.code_review_result,
-    workflow.result?.codeReviewResult,
-    workflow.result?.code_review_result
+    workflow.state?.codeReviewResult,
+    workflow.state?.code_review_result
   ]
   return candidates.some(
     (value) =>
@@ -397,7 +397,7 @@ export function isEntityDesignWorkflow(workflow: WorkflowRunPayload | undefined)
   if (workflow.summary.clarification?.review?.summary?.entityDesign) return true
   if (workflow.summary.clarification?.review?.summary?.detailTargetType === 'entity') return true
   const state = workflow.state || {}
-  const result = workflow.result || {}
+  const result = workflow.state || {}
   const entityId = String(
     state.selectedEntityId ||
       state.selected_entity_id ||

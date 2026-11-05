@@ -1,7 +1,7 @@
 import { parentPort } from 'node:worker_threads'
-import { readIndexedPage, readIndexedSummary, saveIndexedSession } from './sessionHistoryIndex'
+import { readSessionPage, readSessionSummary, saveSession } from './sessionHistory'
 
-// 单 Worker 顺序执行读写，原子发布的正文与派生索引不会被自身并发请求交错使用。
+// 单 Worker 顺序执行尾读与流式保存，避免自身并发写入改变正在读取的正文。
 let queue = Promise.resolve()
 parentPort!.on('message', (request) => {
   queue = queue.then(async () => {
@@ -9,10 +9,10 @@ parentPort!.on('message', (request) => {
       const { operation, file, before, limit, session, loadedMessageIds } = request
       const result =
         operation === 'summary'
-          ? await readIndexedSummary(file)
+          ? await readSessionSummary(file)
           : operation === 'read'
-            ? await readIndexedPage(file, before, limit)
-            : await saveIndexedSession(file, session, loadedMessageIds)
+            ? await readSessionPage(file, before, limit)
+            : await saveSession(file, session, loadedMessageIds)
       parentPort!.postMessage({ id: request.id, result })
     } catch (error) {
       parentPort!.postMessage({

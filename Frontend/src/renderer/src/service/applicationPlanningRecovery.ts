@@ -151,7 +151,7 @@ function parsePlanningRecoveryActionPlan(
 export function applicationPlanningRecoveryProjection(
   workflow?: WorkflowRunPayload
 ): ApplicationPlanningRecoveryProjection | undefined {
-  for (const source of [workflow?.result, workflow?.state]) {
+  for (const source of [workflow?.state]) {
     const raw = source?.applicationPlanningRecovery
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const value = raw as Record<string, unknown>

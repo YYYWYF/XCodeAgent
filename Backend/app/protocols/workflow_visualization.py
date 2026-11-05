@@ -26,7 +26,9 @@ from app.protocols.workflow.projection import (
     _workflow_code_review_repair,
     _workflow_code_review_result,
     _workflow_code_review_result_for_phase,
+    _workflow_event_state,
 )
+from app.protocols.workflow.event_projection import compact_event_data
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.run_lease import (
     WorkspaceRunLease,
@@ -204,7 +206,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "clarificationAnswers": "Optional structured user answers that are merged with originalRequest before rerunning workflow.",
             "forwardedProps.originalRequest": "Preferred AG-UI requirement context for clarification continuation.",
             "forwardedProps.clarificationAnswers": "Preferred AG-UI structured answers for the latest clarification round.",
-            "resumeState": "Optional previous workflow payload/state used by the backend to infer which waiting phase to resume.",
+            "resumeReference": "Run/thread identity only; state is read from backend checkpoints.",
             "resumeFrom": "Optional backend/debug override for the workflow phase to resume from.",
             "forwardedProps.workflowDebug": "Optional frontend debug resume settings with resumeFrom, requirementSpecPath, projectPlanPath, workspaceSnapshotPath, and buildTaskPlanPath.",
         },
@@ -390,7 +392,7 @@ def build_workflow_ag_ui_stream(
                     detail = _workflow_node_detail(node_name, update)
                     node_payload = {
                         "phase": update.get("phase", node_name),
-                        "stateDelta": _public_workflow_state(update),
+                        "stateDelta": _workflow_event_state(update),
                         "detail": detail.get("data", {}),
                         "artifacts": _workflow_artifacts(update),
                     }
@@ -663,7 +665,7 @@ async def build_workflow_response(
                 detail = _workflow_node_detail(node_name, update)
                 node_payload = {
                     "phase": update.get("phase", node_name),
-                    "stateDelta": _public_workflow_state(update),
+                    "stateDelta": _workflow_event_state(update),
                     "detail": detail.get("data", {}),
                     "artifacts": _workflow_artifacts(update),
                 }
@@ -1682,6 +1684,8 @@ def _workflow_event(
     message: str = "",
     data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """可视化入口与正式 Runtime 共用轻量事件内容约束。"""
+
     event = {
         "id": f"workflow-event-{len(events) + 1:04d}",
         "protocol": WORKFLOW_EVENT_PROTOCOL,
@@ -1697,7 +1701,7 @@ def _workflow_event(
             if node_name
             else None
         ),
-        "data": data or {},
+        "data": compact_event_data(events, data, run_id=run_id),
         "agUi": {
             "customEventName": event_type.replace(".", "-"),
             "stateSnapshotKey": "workflow",
@@ -1793,70 +1797,10 @@ def _workflow_summary(
     }
 
 
-def _workflow_visual_payload(
-    *,
-    run_id: str,
-    thread_id: str,
-    summary: dict[str, Any],
-    events: list[dict[str, Any]],
-    result: dict[str, Any],
-) -> dict[str, Any]:
-    code_changes = _workflow_code_changes(result)
-    confirmation_artifact = _workflow_confirmation_artifact(result)
-    state_payload = {
-        "status": summary.get("status"),
-        "request": result.get("request"),
-        "phase": summary.get("phase"),
-        "timeline": summary.get("timeline", []),
-        "artifacts": summary.get("artifacts", {}),
-        "qualityGatePassed": summary.get("qualityGatePassed"),
-        "needsRevision": summary.get("needsRevision"),
-        "previewUrl": summary.get("previewUrl"),
-        "launchResult": summary.get("launchResult"),
-        "acceptanceRequest": summary.get("acceptanceRequest"),
-        "tasks": result.get("tasks", []),
-        "buildSummary": result.get("build_summary", {}),
-        "buildExecutionSlice": result.get("build_execution_slice"),
-        "testReport": result.get("test_report", {}),
-        "repairTaskPlan": result.get("repair_task_plan"),
-        "clarification": result.get("clarification", {}),
-        "requirementsConfirmed": result.get("requirements_confirmed") is True,
-        "requirement_spec": result.get("requirement_spec"),
-        "requirement_spec_path": result.get("requirement_spec_path"),
-        "requirement_spec_json_path": result.get("requirement_spec_json_path"),
-        "project_plan": result.get("project_plan"),
-        "pending_project_plan": result.get("pending_project_plan"),
-        "project_plan_path": result.get("project_plan_path"),
-        "detail_selection": result.get("detail_selection"),
-        "selectedPageId": result.get("selectedPageId"),
-        "selectedApiContractId": result.get("selected_api_contract_id"),
-        "selectedEndpointId": result.get("selected_endpoint_id"),
-        "selectedEntityId": result.get("selected_entity_id"),
-        "detailTargetType": result.get("detail_target_type"),
-        "buildExecutionScope": result.get("build_execution_scope"),
-        "testTarget": _workflow_test_target(result),
-        "lastPersistedBuildExecutionScope": result.get(
-            "last_persisted_build_execution_scope"
-        ),
-        "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
-        "acceptancePhaseConfirmation": summary.get(
-            "acceptancePhaseConfirmation", {}
-        ),
-    }
-    payload = {
-        "runId": run_id,
-        "threadId": thread_id,
-        "summary": summary,
-        "events": events,
-        "state": state_payload,
-        "result": _public_workflow_state(result),
-    }
-    if code_changes:
-        payload["codeChanges"] = code_changes
-        state_payload["codeChanges"] = code_changes
-    if confirmation_artifact:
-        payload["confirmationArtifact"] = confirmation_artifact
-    return payload
+def _workflow_visual_payload(**kwargs: Any) -> dict[str, Any]:
+    """统一委托当前 Workflow 展示契约，避免另一套投影重复保存状态。"""
+    from app.protocols.workflow.projection import _workflow_visual_payload as project
+    return project(**kwargs)
 
 
 def _workflow_confirmation_artifact(

@@ -86,7 +86,8 @@ import {
   PRODUCT_CONVERSATION_RUNNING_HINT,
   productConversationRoute,
   productConversationSendBlocked,
-  productDesignStageMentionFromText
+  planningConversationText,
+  type PlanningConversationInput
 } from './components/ChatComposer/productConversation'
 import AcceptanceCommitDock from './components/AcceptanceCommitDock'
 import AcceptanceDecisionDock from './components/AcceptanceDecisionDock'
@@ -214,7 +215,7 @@ import {
   wasPendingDagPlanAutoGuided
 } from './dagPendingPlanPresentation'
 import type { DagPendingPlanCompletion } from './dagPendingPlanPresentation'
-import { executionRecoveryForSession, executionRecoveryReadError } from './executionRecoveryState'
+import { executionRecoveryForSession, executionRecoveryReadError, executionRecoveryReadDiagnostic } from './executionRecoveryState'
 import {
   acceptancePreviewCanFocus,
   conversationUsesWorkflowRecovery,
@@ -397,7 +398,8 @@ type Props = {
     requirementSpecFeedback?: string,
     designChangeRequest?: string,
     technicalPlanningConversation?: boolean,
-    stageEntry?: import('../../service/planningStageHandoff').PlanningStageEntry
+    stageEntry?: import('../../service/planningStageHandoff').PlanningStageEntry,
+    conversationTarget?: import('../../typings').PlanningConversationTarget
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart, target?: import('../../service/planningStageHandoff').PlanningStageTarget) => Promise<void>
   onStartIterationPlanning: (
@@ -552,7 +554,7 @@ function workflowArtifactPath(
     workflow.summary?.artifacts,
     workflow.summary,
     workflow.state,
-    workflow.result
+    workflow.state
   ]
   for (const source of currentSources) {
     const path = artifactPathFromRecord(source, key)
@@ -774,7 +776,7 @@ function productPlanFromWorkflow(
   workflow: WorkflowRunPayload | undefined
 ): Record<string, unknown> | undefined {
   if (!workflow) return undefined
-  for (const source of [workflow.state, workflow.result]) {
+  for (const source of [workflow.state]) {
     const value = source?.product_plan
     if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length) {
       return value as Record<string, unknown>
@@ -788,7 +790,7 @@ function requirementSpecFromWorkflow(
   workflow: WorkflowRunPayload | undefined
 ): Record<string, unknown> | undefined {
   if (!workflow) return undefined
-  for (const source of [workflow.state, workflow.result]) {
+  for (const source of [workflow.state]) {
     const value = source?.requirement_spec
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
@@ -1191,6 +1193,7 @@ export default function AiChatPanel({
   // 因此本轮沿用已有工程、不重新拉取模板，就绪卡文案需要说明这一点。
   const reusingExistingTemplate = (application.branches?.length ?? 0) > 1
   const [retryingRepositoryBranch, setRetryingRepositoryBranch] = useState(false)
+  const [recoveryProjectionSyncing, setRecoveryProjectionSyncing] = useState(false)
   // 重试把当前分支推到远端（上次因网络等原因失败）。结果要落盘：卡片文案由它驱动，
   // 不落盘的话刷新后又变回"已自动提交到版本 X"。
   const handleRetryRepositoryBranch = useCallback(async (): Promise<void> => {
@@ -1385,7 +1388,7 @@ export default function AiChatPanel({
       ? planningClarification.pages
       : ((currentPlanningWorkflow?.state?.ui_designs as { pages?: unknown[] } | undefined)?.pages ??
         (
-          currentPlanningWorkflow?.result?.ui_designs as
+          currentPlanningWorkflow?.state?.ui_designs as
           | { pages?: unknown[] | undefined }
           | undefined
         )?.pages ??
@@ -2996,9 +2999,33 @@ export default function AiChatPanel({
         setSessionMessagesRef.current(sessionKey, (prev) => {
           const updated = [...prev]
           const prevMessage = updated[updated.length - 1]
+          const mergedWorkflow = retainApplicationPlanningInterrupt(prevMessage.workflow, incomingWorkflow)
+          // UI 确认阶段 adjust 期间，节点运行中的流式帧 clarification 常投影成空壳（无 mode、
+          // 无 pages）。retainApplicationPlanningInterrupt 在 !sameRun / 无 prev interrupt 时
+          // 直接采用 incoming，空壳 clarification 覆盖原卡，卡片闪烁「暂无可展示的页面设计稿」。
+          // 这里只在 ui_confirmation 阶段、合并后 clarification 缺 pages 时，从原卡补回 pages，
+          // 不影响其它阶段（产品对话等新 run 不会被带进旧 UI clarification）。
+          const prevClarPages = (prevMessage?.workflow?.summary?.clarification as { pages?: unknown[] } | undefined)?.pages
+          const mergedClar = mergedWorkflow?.summary?.clarification as { pages?: unknown[]; mode?: string } | undefined
+          const mergedPagesEmpty = !mergedClar?.pages || !Array.isArray(mergedClar.pages) || mergedClar.pages.length === 0
+          const prevPagesAvailable = Array.isArray(prevClarPages) && prevClarPages.length > 0
+          const inUiConfirmation = mergedWorkflow?.summary?.phase === 'ui_confirmation'
+          const finalWorkflow = (inUiConfirmation && mergedPagesEmpty && prevPagesAvailable && prevMessage?.workflow?.summary?.clarification)
+            ? {
+                ...mergedWorkflow,
+                summary: {
+                  ...mergedWorkflow.summary,
+                  clarification: prevMessage.workflow.summary.clarification
+                },
+                state: {
+                  ...mergedWorkflow.state,
+                  clarification: prevMessage.workflow.summary.clarification
+                }
+              }
+            : mergedWorkflow
           updated[updated.length - 1] = {
             ...prevMessage,
-            workflow: retainApplicationPlanningInterrupt(prevMessage.workflow, incomingWorkflow),
+            workflow: finalWorkflow,
             content: chunk.content ?? prevMessage.content,
             planningLoading: hasSubstantiveWorkflow ? false : prevMessage.planningLoading
           }
@@ -3529,7 +3556,7 @@ export default function AiChatPanel({
     applicationLifecycle,
     (latestWorkflowForDisplay?.summary?.templatePreparation ||
       latestWorkflowForDisplay?.state?.templatePreparation ||
-      latestWorkflowForDisplay?.result?.templatePreparation) as
+      latestWorkflowForDisplay?.state?.templatePreparation) as
     | WorkflowTemplatePreparation
     | undefined
   )
@@ -3755,7 +3782,7 @@ export default function AiChatPanel({
   ])
   const activeWorkflowPhase = String(
     activeWorkflow?.summary?.phase ||
-    activeWorkflow?.result?.phase ||
+    activeWorkflow?.state?.phase ||
     activeWorkflow?.state?.phase ||
     ''
   )
@@ -4040,7 +4067,9 @@ export default function AiChatPanel({
   // 恢复投影失败只重新读取该投影，不误派发到另一个独立节点或执行旧动作。
   const retryRecoveryProjection = recoveryProjectionError
     ? () => {
-        void refreshExecutionRecoveryLifecycle()
+        if (recoveryProjectionSyncing) return
+        setRecoveryProjectionSyncing(true)
+        void refreshExecutionRecoveryLifecycle().finally(() => setRecoveryProjectionSyncing(false))
       }
     : undefined
   const currentRecoveryIncident =
@@ -4758,7 +4787,7 @@ export default function AiChatPanel({
             sourceIdentity?.revisionContext,
             applicationLifecycle
           )
-          const planningInterrupt = [workflow.result, workflow.state]
+          const planningInterrupt = [workflow.state]
             .map((value) => value?.application_planning_interrupt)
             .find((value) => value && typeof value === 'object' && !Array.isArray(value)) as
             | Record<string, unknown>
@@ -5051,9 +5080,12 @@ export default function AiChatPanel({
     return identity
   }
 
-  /** 自由输入使用当前服务端事实；跨阶段先交接独立线程，再识别并执行修改意图。 */
-  const handleInitialProductConversationSend = async (sourceRequest = draft): Promise<void> => {
+  /** 自由输入分离正文与执行目标；指定上游节点或识别出上游修改后交接独立线程。 */
+  const handleInitialProductConversationSend = async (
+    sourceRequest = draft, conversationTarget?: PlanningConversationInput['conversationTarget']
+  ): Promise<void> => {
     const trimmed = sourceRequest.trim()
+    const displayRequest = planningConversationText({ request: trimmed, conversationTarget })
     if (!trimmed || productConversationSendDisabled || workflowInputLocked) {
       return
     }
@@ -5065,7 +5097,7 @@ export default function AiChatPanel({
       setGeneratingDetailTargetKey('')
       planningNewRoundRef.current = true
       lastUiDesignRunIdRef.current = undefined
-      appendPlanningUserMessage({ design_change_request: trimmed })
+      appendPlanningUserMessage({ design_change_request: displayRequest })
       const restoreDraft = clearPlanningComposerDraft()
       try {
         await onStartIterationPlanning(trimmed)
@@ -5079,13 +5111,13 @@ export default function AiChatPanel({
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
-    const submission = appendPlanningUserMessage({ design_change_request: trimmed })
+    const submission = appendPlanningUserMessage({ design_change_request: displayRequest })
     const restoreDraft = clearPlanningComposerDraft()
     if (isTechnicalPlanningPhase) {
       try {
         await onSubmitPlanningClarification(currentPlanningWorkflow, {}, undefined, undefined, trimmed, true,
           async () => {
-            // 只有分类结果要求修改上游时才创建新 DESIGN 线程；问答仍留在 PLAN 会话。
+            // 指定上游节点或无目标时识别为上游修改，才创建独立 DESIGN 线程。
             const identity = await prepareDesignThread()
             if (submission) {
               setSessionMessagesRef.current(submission.sessionKey, (messages) =>
@@ -5094,12 +5126,12 @@ export default function AiChatPanel({
             }
             planningSessionKeyRef.current = identity.key
             planningNewRoundRef.current = true
-            appendPlanningUserMessage({ design_change_request: trimmed })
+            appendPlanningUserMessage({ design_change_request: displayRequest })
             setActiveView('chat')
             setActiveDetailTarget({ type: 'none' })
             switchPhase('product', 'auto')
             return { threadId: identity.threadId, phase: 'product' }
-          })
+          }, conversationTarget)
       } catch (reason) {
         restoreDraft()
         message.error(reason instanceof Error ? reason.message : '技术规划对话失败，请重试。')
@@ -5108,7 +5140,7 @@ export default function AiChatPanel({
     }
     try {
       // 只有当前业务需求会话能提交；浏览历史不再创建独立提问会话或转移执行。
-      await onSubmitPlanningClarification(currentPlanningWorkflow, {}, undefined, undefined, trimmed)
+      await onSubmitPlanningClarification(currentPlanningWorkflow, {}, undefined, undefined, trimmed, false, undefined, conversationTarget)
     } catch (reason) {
       restoreDraft()
       message.error(formatError(reason, '需求对话失败'))
@@ -5122,27 +5154,7 @@ export default function AiChatPanel({
   ): Promise<void> => {
     if (planningHistoryOnly) return
     const node = workflowDebug.resumeFrom || ''
-    const stageMention = productDesignStageMentionFromText(draft, debugStage)
-    const request =
-      (stageMention?.node === node ? stageMention.request : draft.trim()) ||
-      `从节点 ${node} 开始执行。`
-    if (stageMention && planningWorkflowRequiresUserInput(currentPlanningWorkflow)) {
-      const currentNode = planningWorkflowPhase(currentPlanningWorkflow)
-      const requestTargetsCurrentStage =
-        stageMention.node === 'requirements'
-          ? ['design_intent_analysis', 'requirements', 'product_planning', 'requirement_document_review']
-            .includes(currentNode)
-          : currentNode === stageMention.node
-      // 上游 @ 目标属于受校验的设计修订对话，不是跳过当前门禁的节点调试。
-      // 技术目标仍须等待上游确认；需求/UI 修改交给意图分析重新生成并再次确认。
-      if (!requestTargetsCurrentStage && !['requirements', 'ui_confirmation'].includes(stageMention.node)) {
-        message.error('当前规划节点有待确认事项，请先完成确认后再切换节点。')
-        return
-      }
-      // 当前节点仍在等待用户输入时，沿原中断续接提交，不能用节点重入越过确认门。
-      await handleInitialProductConversationSend(stageMention.request)
-      return
-    }
+    const request = draft.trim() || `从节点 ${node} 开始执行。`
     setGeneratingDetailTargetKey('')
     planningNewRoundRef.current = true
     lastUiDesignRunIdRef.current = undefined
@@ -5160,10 +5172,10 @@ export default function AiChatPanel({
   }
 
   /** 仅让当前业务阶段沿原审阅门提交，完成后的历史阶段不再提供自由对话入口。 */
-  const handleProductConversationSend = async (): Promise<void> => {
+  const handleProductConversationSend = async (conversation?: PlanningConversationInput): Promise<void> => {
     if (planningHistoryOnly) return
     if (initialProductPlanningAvailable) {
-      await handleInitialProductConversationSend()
+      await handleInitialProductConversationSend(conversation?.request ?? draft, conversation?.conversationTarget)
     }
   }
 
@@ -5415,6 +5427,34 @@ export default function AiChatPanel({
                 onReviseConfirmedTechnicalPlan={
                   isTechnicalPlanningPhase ? handleInitialProductConversationSend : undefined
                 }
+                onTransferToProductAgent={
+                  planningHistoryOnly || !currentPlanningWorkflow
+                    ? undefined
+                    : async (instruction: string): Promise<void> => {
+                        // 把 UI 调整输入框里的结构性变更请求（新增/删除整个页面）
+                        // 转给产品意图识别路径。复用下方 ChatComposer 同款提交流程：
+                        // 创建 DESIGN 线程并提交 design_change_request。
+                        const trimmed = instruction.trim()
+                        if (!trimmed) return
+                        setGeneratingDetailTargetKey('')
+                        planningNewRoundRef.current = true
+                        lastUiDesignRunIdRef.current = undefined
+                        appendPlanningUserMessage({ design_change_request: trimmed })
+                        try {
+                          await onSubmitPlanningClarification(
+                            currentPlanningWorkflow,
+                            {},
+                            undefined,
+                            undefined,
+                            trimmed
+                          )
+                        } catch (reason) {
+                          message.error(
+                            reason instanceof Error ? reason.message : '转交产品 Agent 失败，请重试。'
+                          )
+                        }
+                      }
+                }
                 reviseConfirmedTechnicalPlanDisabled={
                   productConversationSendDisabled || workflowInputLocked
                 }
@@ -5524,15 +5564,17 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
-                      title={lifecycleSyncError ? '工作区状态读取失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
-                      retryLabel={lifecycleSyncError ? '重新同步' : undefined}
+                      title={lifecycleSyncError ? '工作区状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      retryLabel={recoveryProjectionError ? '重新同步' : undefined}
+                      diagnostic={recoveryProjectionError && !lifecycleSyncError
+                        ? executionRecoveryReadDiagnostic(applicationLifecycle) : undefined}
                       error={globalFallback.error}
                       onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
                         ? handleRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
                           : () => { void retryCurrentRecovery() })}
-                      retrying={recoveryRunning || revisionStartRetrying}
+                      retrying={recoveryRunning || revisionStartRetrying || recoveryProjectionSyncing}
                     />
                   ) : null}
                 </div>
@@ -5647,7 +5689,7 @@ export default function AiChatPanel({
                     onSelectedSkillsChange={(value) => setSelectedSkillsByKey(draftKey, value)}
                     placeholder={
                       isTechnicalPlanningPhase
-                        ? '可以询问技术规划或描述修改意见，输入 @ 选择要调整的节点…'
+                        ? '可以询问方案或提出修改意见，输入 @ 指定要执行的节点…'
                         : productConversationAvailable ? PRODUCT_CONVERSATION_PLACEHOLDER : undefined
                     }
                     showScopeConfirmationToggle={
@@ -5678,7 +5720,7 @@ export default function AiChatPanel({
                     // 也一定会先落到「正式修改确认」卡上，由上面的 onSubmitClarification 拦。
                     onSend={
                       productConversationAvailable
-                        ? async (workflowDebug) => {
+                        ? async (workflowDebug, _confirmScope, conversation) => {
                           if (workflowDebug?.enabled && (isDesignPhase || isTechnicalPlanningPhase)) {
                             const debugStage = isDesignPhase ? 'design' : 'planning'
                             commitBeforeSend.requestAdvance(() =>
@@ -5686,7 +5728,7 @@ export default function AiChatPanel({
                             )
                             return
                           }
-                          commitBeforeSend.requestAdvance(handleProductConversationSend)
+                          commitBeforeSend.requestAdvance(() => handleProductConversationSend(conversation))
                         }
                         : handleConversationSend
                     }

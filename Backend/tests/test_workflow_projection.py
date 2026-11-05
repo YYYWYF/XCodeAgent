@@ -315,7 +315,7 @@ class WorkflowProjectionTests(unittest.TestCase):
 
         self.assertEqual(summary["codeReviewResult"], {})
         self.assertEqual(payload["state"]["codeReviewResult"], {})
-        self.assertEqual(payload["result"]["codeReviewResult"], {})
+        self.assertEqual(payload["state"]["codeReviewResult"], {})
 
     def test_test_report_projects_relative_markdown_and_hides_internal_json(self) -> None:
         """测试报告只公开固定 Markdown 相对路径并隐藏内部 JSON 路径。"""
@@ -345,7 +345,7 @@ class WorkflowProjectionTests(unittest.TestCase):
         self.assertNotIn("test_report_path", public_state)
         self.assertNotIn("test_report_json_path", public_state)
         self.assertEqual(payload["state"]["testReportResult"], expected)
-        self.assertEqual(payload["result"]["testReportResult"], expected)
+        self.assertEqual(payload["state"]["testReportResult"], expected)
 
     def test_code_review_repair_projects_status_and_build_checks(self) -> None:
         """代码审查修复状态和独立构建检查应持续投影为 camelCase。"""

@@ -65,7 +65,7 @@ class WorkbenchResultProjectionTests(unittest.IsolatedAsyncioTestCase):
         config = {"configurable": {"thread_id": "thread"}}
         snapshot = await self.graph.aget_state(config)
         first = await project_workbench_result(self.workspace, self.state, session_id="owner", thread_id="thread")
-        self.assertEqual(first["workflow"]["summary"]["clarification"]["mode"], "development_target_selection")
+        self.assertEqual(first["workflow"]["state"]["clarification"]["mode"], "development_target_selection")
         self.assertEqual(first["runId"], "run")
         self.assertNotIn("must-not-be-published", json.dumps(first))
         self.assertEqual(first, await project_workbench_result(self.workspace, self.state,

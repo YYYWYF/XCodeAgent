@@ -34,7 +34,7 @@ function clarificationMode(workflow: WorkflowRunPayload): string {
   const candidates = [
     workflow.summary?.clarification,
     workflow.state?.clarification,
-    workflow.result?.clarification
+    workflow.state?.clarification
   ]
   const clarification = candidates.find((value): value is WorkflowClarification =>
     Boolean(value && typeof value === 'object')

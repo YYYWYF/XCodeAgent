@@ -153,12 +153,8 @@ def _page_brief(page: dict[str, Any]) -> str:
     actions = page.get("actions")
     if isinstance(actions, list) and actions:
         lines.append("- approved product actions: " + json.dumps(actions, ensure_ascii=False))
-    state_requirements = page.get("state_requirements")
-    if isinstance(state_requirements, dict) and state_requirements:
-        lines.append(
-            "- required product states: "
-            + json.dumps(state_requirements, ensure_ascii=False)
-        )
+    # state_requirements 不再传入 UI 设计稿 prompt：页面状态（loading/empty/error/success/
+    # validation）应由 UI 设计根据页面实际交互按需呈现，而非产品规划强制要求。
     for key, label in (
         ("navigation_targets", "approved navigation target pageIds"),
         ("acceptance_criteria", "product acceptance criteria"),
@@ -194,8 +190,19 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
         "- Implement declared local interactions with React state and Mock data: filters update visible "
         "results, dialogs/drawers open and close, tabs switch, forms validate, and confirmation flows can "
         "complete locally. Cross-page controls may remain non-navigating in the isolated preview.\n"
-        "- Render success, loading, empty, error, and validation states with a compact in-page preview "
-        "switcher when those states cannot naturally be reached from the main interaction.\n"
+        "- Render page states ON DEMAND, not by default. Only include loading/empty/error/success/validation "
+        "states when the page actually has data fetching, list rendering, form submission, or other "
+        "interactions that produce those states, OR when acceptance_criteria explicitly requires a state "
+        "(e.g. an error state with specific copy). A static display page (e.g. showing a fixed string) "
+        "must NOT add empty/error/loading states — render only its real content. Never invent a compact "
+        "in-page state preview switcher just to show states that do not exist for this page.\n"
+        "- When a state preview switcher IS needed (the page has multiple states to show), place it as a "
+        "STANDALONE TOOLBAR ABOVE the page content, clearly separated from the page itself: wrap it in a "
+        "div with light gray background (rgba(0,0,0,0.04) in light / rgba(255,255,255,0.06) in dark), 8px "
+        "padding, 8px border-radius, and 16px bottom margin. Put a small muted text '预览状态' before the "
+        "switcher. The switcher and the page content below must be visually distinct — the switcher is a "
+        "preview affordance, NOT part of the designed page. Mark the switcher container with "
+        "data-preview-only=\"true\" so it can be distinguished from real page content.\n"
         "- Use Ant Design theme tokens and responsive layout rules; the page must remain readable in light "
         "and dark themes and at wide/compact PC widths. Do not introduce standalone hard-coded brand colors.\n"
         "- Infer the page type from the page name and description (no components "
@@ -906,6 +913,11 @@ def _build_adjust_prompt(
     仿 _build_repair_prompt 的"前次代码 + 修改要求"模式，但替换错误清单为
     用户的自然语言调整指令。强调保留页面整体结构、仅按指令调整，仍遵循
     antd-ui-design skill 规范（纯视觉、内联 Mock、Pro 组件）。
+
+    **关键**：用户指令优先级**高于** PRODUCT FACT BOUNDARY 的"渲染所有声明
+    action"约束 —— 当用户明确说"删除/去掉/移除"某个按钮/板块时，模型必须
+    真的删，而不是用"暂不考虑"等变通方式保留。否则下一轮调整时模型又会被
+    "Render every declared action"规则把删掉的部分加回来。
     """
 
     return (
@@ -925,6 +937,24 @@ def _build_adjust_prompt(
         "@ant-design/pro-components, inline static Mock data (8-15 rows), "
         "ProTable uses `dataSource` not `request`, no API/useEffect/fetch, "
         "local-state handlers only, no layout shell.\n\n"
+        "**USER INSTRUCTION TAKES PRECEDENCE OVER PRODUCT FACT BOUNDARY**: "
+        "When the user's instruction explicitly asks to REMOVE / DELETE / 去掉 "
+        "a button, section, action, or information item, you MUST completely "
+        "remove the JSX element from the rendered output. This means the element "
+        "must NOT appear in the returned .tsx file at all — no `disabled` button, "
+        "no grayed-out placeholder, no `暂未开放` tag, no `actionId: null` "
+        "fallback, no visually-hidden element, no commented-out code, no "
+        "conditional rendering that could still produce the element. "
+        "If you find yourself writing a Button/ProCard/div that still displays "
+        "the label the user asked to remove (e.g. still rendering '出差卡借用' "
+        "as a disabled button), STOP — that is NOT a deletion. Delete the "
+        "array entry / JSX element entirely so the label never appears in the "
+        "rendered page.\n\n"
+        "Do NOT reinterpret a removal request as 'show but disable'. Do NOT "
+        "preserve the element 'just in case the user changes their mind'. The "
+        "user has authority to remove declared product facts; the PRODUCT FACT "
+        "BOUNDARY below only applies to facts the user did NOT explicitly ask "
+        "to remove.\n\n"
         + _product_fact_boundary_rules()
         + "--- PAGE TO DESIGN ---\n"
         f"{_page_brief(page)}\n"
@@ -1080,6 +1110,7 @@ def generate_page_react_code(
     page: dict[str, Any], page_key: str, project_dir: str = "",
     *,
     should_cancel: Callable[[], bool] | None = None,
+    instruction: str = "",
 ) -> str:
     """调用 LLM 为单个页面生成 React 设计稿 .tsx 代码，并校验+自动修复。
 
@@ -1099,6 +1130,9 @@ def generate_page_react_code(
 
     # 首次生成
     prompt = _build_ui_design_prompt(page, page_key)
+    if instruction.strip():
+        # 显式节点回退的正文只约束本页视觉生成，ProductPlan 仍是唯一业务事实来源。
+        prompt += f"\n\n--- USER DESIGN INSTRUCTION ---\n{instruction.strip()}\n--- END INSTRUCTION ---\n"
     result = _invoke_ui_design_model(
         model,
         prompt,

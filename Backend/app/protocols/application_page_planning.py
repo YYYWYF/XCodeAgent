@@ -21,9 +21,6 @@ from app.domain.execution_recovery import (
     RecoveryExecutionError,
 )
 from app.domain.application_lifecycle import ApplicationLifecycleStatus
-from app.graph.application_planning_revision import (
-    technical_plan_revision_reset_state,
-)
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.protocols.application_planning_interrupt import (
     application_planning_interrupt_from_snapshot,
@@ -253,6 +250,9 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         ],
         "designChange": {
             "requestField": "forwardedProps.applicationPlanningInteraction",
+            "conversationTargetField": "conversationTarget",
+            "conversationTargets": ["requirements", "ui_confirmation"],
+            "targetStartsExecution": True,
             "intentNode": "design_intent_analysis",
             "intents": [
                 "chat",
@@ -339,11 +339,15 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "technicalPlanningConversation": {
             "requestField": "forwardedProps.technicalPlanningConversation",
             "actions": ["classify", "prepare_revision", "revise", "revise_design"],
+            "conversationTargetField": "conversationTarget",
+            "conversationTargets": ["technical_planning", "requirements", "ui_confirmation"],
+            "targetStartsExecution": True,
             "conversationPhases": ["product", "planning"],
             "modelThreadSource": "threadId",
             "upstreamRevisionRequiresStageHandoff": True,
             "readOnlyClassification": True,
             "revisionRequiresExistingPlan": True,
+            "explicitTechnicalTargetAllowsInitialGeneration": True,
             "revisionRequiresCurrentSourceRunAndCheckpoint": True,
             "generationNode": "technical_planning_generate",
         },
@@ -811,9 +815,6 @@ def _prepare_start_design_revision_payload(
     }
     if action == "start_design_revision":
         # 完成态产品对话标记只约束单次只回复轮次，正式修订恢复时必须消费。
-        next_forwarded["resumeState"] = {
-            "state": {"product_stage_conversation": False}
-        }
         planning_thread_id = str(lifecycle.initialization.thread_id or "").strip()
         if not planning_thread_id:
             raise ValueError("设计修订缺少原 application planning thread。")
@@ -821,9 +822,6 @@ def _prepare_start_design_revision_payload(
         next_forwarded["_designRevisionIntent"] = {
             "changeId": pending.change_id,
             "interactionId": pending.interaction_id,
-        }
-        next_forwarded["resumeState"] = {
-            "state": {"product_stage_conversation": False}
         }
         return {
             **payload,
@@ -841,9 +839,6 @@ def _prepare_start_design_revision_payload(
         next_forwarded["_technicalRevisionIntent"] = {
             "changeId": pending.change_id,
             "interactionId": request.confirmed_impact.interaction_id,
-        }
-        next_forwarded["resumeState"] = {
-            "state": technical_plan_revision_reset_state()
         }
         logger.info(
             "technical_plan_revision_started source=workbench_plan_revision "

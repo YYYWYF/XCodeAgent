@@ -1,4 +1,5 @@
 import { useApplicationConfigRefresh } from './useApplicationConfigRefresh'
+import { useWorkbenchEntry } from './useWorkbenchEntry'
 import { Layout, message, notification } from 'antd'
 import { randomUUID } from '@ag-ui/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -76,7 +77,8 @@ type Props = {
     requirementSpecFeedback?: string,
     designChangeRequest?: string,
     technicalPlanningConversation?: boolean,
-    stageEntry?: import('../service/planningStageHandoff').PlanningStageEntry
+    stageEntry?: import('../service/planningStageHandoff').PlanningStageEntry,
+    conversationTarget?: import('../typings').PlanningConversationTarget
   ) => Promise<void>
   onStartDesignStageRevision: (input: WorkflowDesignStageRevisionStart, target?: import('../service/planningStageHandoff').PlanningStageTarget) => Promise<void>
   onIterationStarted: (
@@ -117,16 +119,6 @@ type Props = {
 }
 
 type Theme = 'light' | 'dark'
-type WorkbenchEntryStage = 'loading' | 'leaving' | 'ready'
-
-const WORKBENCH_ENTRY_MIN_VISIBLE_MS = 520
-const WORKBENCH_ENTRY_FADE_MS = 280
-const WORKBENCH_ENTRY_TIMEOUT_MS = 15_000
-
-// 将未知加载异常转换为可展示的工作台入口错误。
-function formatWorkbenchEntryError(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message.trim() ? error.message.trim() : fallback
-}
 
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({
@@ -157,7 +149,14 @@ function WorkbenchPage({
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
   useApplicationConfigRefresh(application.workspaceRoot, setWorkspaceApplication)
 
-  const [developmentPlanningPagesLoaded, setDevelopmentPlanningPagesLoaded] = useState(false)
+  const {
+    entryStage,
+    developmentPlanningPagesLoaded,
+    failWorkbenchEntry,
+    markConfigurationLoaded,
+    markPlanningArtifactsLoaded,
+    handleSessionHistoryReadyChange
+  } = useWorkbenchEntry(onEntryLoadFailure)
   const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<
     DevelopmentPlanningPageOption[]
   >([])
@@ -170,9 +169,7 @@ function WorkbenchPage({
   const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
     DevelopmentPlanningEntityOption[]
   >([])
-  const [chatSessionHistoryReady, setChatSessionHistoryReady] = useState(false)
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
-  const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   // —— 应用分支（提交并推送/发起新迭代/切换分支）状态 ——
   // 当前查看的分支名；为空时取当前分支（branchName）。
   const [viewingBranchName, setViewingBranchName] = useState<string>('')
@@ -202,35 +199,8 @@ function WorkbenchPage({
     useState<HistoricalIterationDirtyChoice>('discard')
   // 分支切换全屏加载的目标名；为空时不显示。
   const [switchingTargetLabel, setSwitchingTargetLabel] = useState<string | undefined>(undefined)
-  const entryStartedAtRef = useRef(Date.now())
-  const entryStageRef = useRef<WorkbenchEntryStage>('loading')
-  const entryFailureHandledRef = useRef(false)
   // 模板是否就绪（lifecycle=ready_for_workbench），用于校准正式规划产物。
   const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
-
-  // 入口失败只处理一次：提示原因、返回首页，并由顶层卸载损坏的工作台实例。
-  const failWorkbenchEntry = useCallback(
-    (_reason: string): void => {
-      if (entryStageRef.current !== 'loading' || entryFailureHandledRef.current) return
-      entryFailureHandledRef.current = true
-      message.error(`工作台加载失败，已返回首页。`)
-      onEntryLoadFailure()
-    },
-    [onEntryLoadFailure]
-  )
-
-  useEffect(() => {
-    entryStageRef.current = entryStage
-  }, [entryStage])
-
-  useEffect(() => {
-    if (entryStage !== 'loading') return
-    const timer = window.setTimeout(
-      () => failWorkbenchEntry('同步项目配置、规划产物或历史会话超时。'),
-      WORKBENCH_ENTRY_TIMEOUT_MS
-    )
-    return () => window.clearTimeout(timer)
-  }, [entryStage, failWorkbenchEntry])
 
   useEffect(() => {
     let active = true
@@ -238,12 +208,13 @@ function WorkbenchPage({
     // 同步可选的应用配置和规划产物；窗口重新聚焦时只校准可能被外部修改的文件。
     const syncWorkspaceFiles = async (): Promise<void> => {
       if (!application.workspaceRoot) {
-        failWorkbenchEntry('应用缺少有效的工作区路径。')
+        failWorkbenchEntry('workspace_missing')
         return
       }
       try {
         const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot)
         if (!active) return
+        markConfigurationLoaded()
         // application.json 只保存工作区配置，不拥有首页索引中的页面元数据；合并时保留索引字段，避免进入工作台后把 pages/defaultPage 覆盖成 undefined。
         setWorkspaceApplication((prev) => {
           const pages = Array.isArray(prev.pages) && prev.pages.length > 0 ? prev.pages : ['页面']
@@ -262,8 +233,9 @@ function WorkbenchPage({
           }
         })
       } catch (error) {
+        if (!active) return
         console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)
-        failWorkbenchEntry(formatWorkbenchEntryError(error, '读取工作区 application.json 失败。'))
+        failWorkbenchEntry('configuration')
         return
       }
       try {
@@ -319,9 +291,9 @@ function WorkbenchPage({
         setDevelopmentPlanningApiContracts([])
         setDevelopmentPlanningEntities([])
         console.warn('检查 specs/plans 规划产物失败。', error)
-        failWorkbenchEntry(formatWorkbenchEntryError(error, '检查工作区规划产物失败。'))
+        failWorkbenchEntry('planning')
       } finally {
-        if (active) setDevelopmentPlanningPagesLoaded(true)
+        if (active) markPlanningArtifactsLoaded()
       }
     }
 
@@ -334,7 +306,7 @@ function WorkbenchPage({
       active = false
       window.removeEventListener('focus', syncWorkspaceFiles)
     }
-  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, onApplicationLifecycleChange, planningRefreshRevision])
+  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, onApplicationLifecycleChange, planningRefreshRevision, markConfigurationLoaded, markPlanningArtifactsLoaded])
 
   useEffect(() => {
     let active = true
@@ -369,33 +341,6 @@ function WorkbenchPage({
       return { ...prev, branches: [initialBranch], branchName: initialBranch.name }
     })
   }, [applicationLifecycle])
-
-  // 会话恢复失败时终止入口等待；普通的未就绪状态仍交给恢复流程或超时兜底。
-  const handleSessionHistoryReadyChange = useCallback(
-    (ready: boolean, error?: string): void => {
-      setChatSessionHistoryReady(ready)
-      if (error) failWorkbenchEntry(error)
-    },
-    [failWorkbenchEntry]
-  )
-
-  useEffect(() => {
-    if (!developmentPlanningPagesLoaded || !chatSessionHistoryReady || entryStage !== 'loading') {
-      return
-    }
-    const remainingVisibleTime = Math.max(
-      0,
-      WORKBENCH_ENTRY_MIN_VISIBLE_MS - (Date.now() - entryStartedAtRef.current)
-    )
-    const timer = window.setTimeout(() => setEntryStage('leaving'), remainingVisibleTime)
-    return () => window.clearTimeout(timer)
-  }, [chatSessionHistoryReady, developmentPlanningPagesLoaded, entryStage])
-
-  useEffect(() => {
-    if (entryStage !== 'leaving') return
-    const timer = window.setTimeout(() => setEntryStage('ready'), WORKBENCH_ENTRY_FADE_MS)
-    return () => window.clearTimeout(timer)
-  }, [entryStage])
 
   const handleThemeChange = (nextTheme: Theme): void => {
     onThemeChange(nextTheme)

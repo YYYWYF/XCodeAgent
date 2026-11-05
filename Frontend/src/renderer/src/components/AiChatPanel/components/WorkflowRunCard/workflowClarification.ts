@@ -3,7 +3,7 @@ import { isConversationWorkflow } from '../../conversationMode'
 
 /** 同 Run/Thread 生命周期确认单测正在执行，扫描进度的临时 phase 不改变业务阶段。 */
 export function workflowUnitTestRunning(workflow: WorkflowRunPayload): boolean {
-  const lifecycle = workflow.summary.lifecycle || workflow.state?.lifecycle || workflow.result?.lifecycle
+  const lifecycle = workflow.summary.lifecycle || workflow.state?.lifecycle || workflow.state?.lifecycle
   const execution = lifecycle && typeof lifecycle === 'object' && 'activeExecutions' in lifecycle
     ? (lifecycle as ApplicationLifecycle).activeExecutions?.[workflow.runId] : undefined
   return workflow.summary.status === 'running' && execution?.status === 'running' &&
@@ -27,7 +27,7 @@ export function workflowClarification(
   const candidates: unknown[] = [
     workflow.summary.clarification,
     workflow.state?.clarification,
-    workflow.result?.clarification,
+    workflow.state?.clarification,
     workflow.summary.reviewPhaseConfirmation,
     workflow.summary.acceptancePhaseConfirmation
   ]
@@ -50,7 +50,7 @@ export function workflowClarification(
   // 当前节点是确认卡的权威来源：流式合并可能短暂保留上一阶段 clarification，
   // 必须先选择与 phase 匹配的载荷，避免验收确认仍显示“进入审查阶段”。
   const phase = String(
-    workflow.summary.phase || workflow.state?.phase || workflow.result?.phase || ''
+    workflow.summary.phase || workflow.state?.phase || workflow.state?.phase || ''
   )
   const expectedMode = WORKFLOW_PHASE_CONFIRMATION_MODES[phase]
   if (expectedMode) {

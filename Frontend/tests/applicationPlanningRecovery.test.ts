@@ -12,9 +12,7 @@ function recoveryWorkflow(value: Record<string, unknown>): WorkflowRunPayload {
     threadId: 'planning-thread',
     summary: { status: 'failed', message: '规划中断' },
     events: [],
-    state: {},
-    result: { applicationPlanningRecovery: value }
-  } as WorkflowRunPayload
+    state: { ...({ applicationPlanningRecovery: value }), ...({}) }} as WorkflowRunPayload
 }
 
 const ready = applicationPlanningRecoveryProjection(

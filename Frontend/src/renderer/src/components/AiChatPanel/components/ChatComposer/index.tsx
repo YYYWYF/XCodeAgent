@@ -23,7 +23,7 @@ import type { ChatCopy } from '../../types'
 import { workflowDebugNodesForStage } from '../../../../service/workflowDebugNodes'
 import ResourceSkillMenu from './ResourceSkillMenu'
 import { workflowDebugBuildScope } from '../../debugExecutionScope'
-import { productDesignStageMentionFromText } from './productConversation'
+import { planningConversationInput, type PlanningConversationInput } from './productConversation'
 import WorkflowStageMentionInput from './WorkflowStageMentionInput'
 import './ChatComposer.less'
 
@@ -51,7 +51,8 @@ type ChatComposerProps = {
   onSelectedSkillsChange: (skills: ChatMessageSkill[]) => void
   onSend: (
     workflowDebug?: WorkflowDebugOptions,
-    confirmScopeBeforeExecution?: boolean
+    confirmScopeBeforeExecution?: boolean,
+    conversation?: PlanningConversationInput
   ) => Promise<void>
   onStopGenerating: () => void
   placeholder?: string
@@ -121,9 +122,12 @@ export default function ChatComposer({
     buildScopeType === 'application' ||
     (Boolean(buildScopeTargetId.trim()) &&
       (buildScopeType !== 'endpoint' || Boolean(buildScopeApiContractId.trim())))
+  const conversation = debugStage === 'design' || debugStage === 'planning'
+    ? planningConversationInput(draft, debugStage) : undefined
+  const mentionNeedsRequest = Boolean(conversation?.conversationTarget && !conversation.request)
   const canSend = debugEnabled
     ? hasDebugNode && (!isBuildTaskDebug || hasBuildScopeTarget)
-    : Boolean(draft.trim())
+    : Boolean(draft.trim()) && !mentionNeedsRequest
 
   /** 根据调试开关生成 Workflow 调试参数，并在任务拆分节点附带分层 DAG 范围。 */
   const currentDebugOptions = (): WorkflowDebugOptions | undefined =>
@@ -151,17 +155,12 @@ export default function ChatComposer({
 
   /** 校验当前状态并提交对话内容。 */
   const handleSend = (): void => {
-    if (!hasDebugNode || workspaceBusy || sendDisabled || (debugOnly && loading)) return
-    // 计划阶段的 @ 是对话意图提示，保留原文交给技术规划路由，不伪装成调试重入。
-    const stageMention = debugStage === 'design'
-      ? productDesignStageMentionFromText(draft, debugStage) : undefined
+    if (!canSend || workspaceBusy || sendDisabled || (debugOnly && loading)) return
+    // @ 指定业务执行目标，仍通过原有正式交互及确认门；未指定时才识别正文意图。
     onSend(
-      stageMention
-        ? { enabled: true, resumeFrom: stageMention.node }
-        : debugStage === 'planning' && productDesignStageMentionFromText(draft, debugStage)
-          ? undefined
-          : currentDebugOptions(),
-      confirmScopeBeforeExecution
+      currentDebugOptions(),
+      confirmScopeBeforeExecution,
+      debugEnabled ? undefined : conversation
     )
   }
 
@@ -395,6 +394,11 @@ export default function ChatComposer({
             {!workspaceBusy && sendDisabled && sendDisabledHint && (
               <Text className={cx('workspace-busy-label')} type="warning">
                 {sendDisabledHint}
+              </Text>
+            )}
+            {!workspaceBusy && !sendDisabled && mentionNeedsRequest && (
+              <Text className={cx('workspace-busy-label')} type="warning">
+                请补充问题或修改意见
               </Text>
             )}
             {debugOnly && loading && (

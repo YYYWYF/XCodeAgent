@@ -35,7 +35,7 @@ def design_revision_input(
             or pending.request != request.strip()
             or pending.based_on_lifecycle_revision != lifecycle.revision):
         raise ValueError('设计修订凭据与当前待批准影响不匹配。')
-    return {'design_revision_intent': dict(marker), 'change_id': pending.change_id,
+    return {'product_stage_conversation': False, 'design_revision_intent': dict(marker), 'change_id': pending.change_id,
             'change_target': pending.target.model_dump(mode='python', by_alias=False)}
 
 

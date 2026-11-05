@@ -922,12 +922,15 @@ export type WorkflowBuildTaskPlanConfirmation = {
   draftDigest?: string
 }
 
+export type PlanningConversationTarget = 'technical_planning' | 'requirements' | 'ui_confirmation'
+
 export type ApplicationPlanningInteraction = {
   gateId: string
   artifact: 'requirement_spec' | 'requirement_document' | 'ui_designs' | 'technical_plan'
   artifactRevision: string
   action: ApplicationPlanningAction
   request?: string
+  conversationTarget?: PlanningConversationTarget
   answers?: WorkflowClarificationAnswers
   editedRequirementSpec?: Record<string, unknown>
   requirementSpecFeedback?: string
@@ -1128,6 +1131,7 @@ export type WorkflowConfirmationArtifact = {
   path: string
   format: 'markdown'
   content: string
+  contentRef?: import('../service/workflowArtifacts').ArtifactReference
 }
 
 export type WorkflowProjectPlanUpdateSection = {
@@ -1268,11 +1272,24 @@ export type ExecutionRecoveryCandidate = {
   updatedAt: string
 }
 
+export type RecoveryReadDiagnostic = {
+  diagnosticId: string
+  operation: string
+  exceptionType: string
+  reason: string
+  sourceRunId?: string | null
+  threadId?: string | null
+}
+
 export type ExecutionRecoveryProjection = {
   schemaVersion: 'execution-recovery.v1'
   generatedAt: string
   candidates: ExecutionRecoveryCandidate[]
-  error?: { code: 'RECOVERY_PROJECTION_READ_FAILED'; message: string } | null
+  error?: {
+    code: 'RECOVERY_PROJECTION_READ_FAILED'
+    message: string
+    diagnostic?: RecoveryReadDiagnostic | null
+  } | null
 }
 
 export type ExecutionResourceLock = {
@@ -1426,7 +1443,6 @@ export type WorkflowRunPayload = {
   confirmationArtifact?: WorkflowConfirmationArtifact
   codeChanges?: WorkspaceCodeChangeSet
   state?: Record<string, unknown>
-  result?: Record<string, unknown>
 }
 
 export type WorkflowAction =

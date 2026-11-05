@@ -61,6 +61,7 @@ from app.protocols.data_sources import data_sources_capabilities
 from app.protocols.endpoint_designs import endpoint_designs_capabilities
 from app.routes.data_sources import data_sources_router
 from app.routes.endpoint_designs import endpoint_designs_router
+from app.routes.workflow_artifacts import workflow_artifacts_router, artifact_capabilities
 from app.routes.entity_tables import entity_tables_router
 from app.routes.telemetry import telemetry_router
 from app.routes.backend_logs import backend_logs_router
@@ -154,6 +155,7 @@ app = FastAPI(
 )
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
+app.include_router(workflow_artifacts_router)
 app.include_router(entity_tables_router)
 app.include_router(builtin_authorization_router)
 app.include_router(telemetry_router)
@@ -187,6 +189,7 @@ async def health() -> dict[str, object]:
         "database_encryption": database_encryption_metadata(),
         "tools": {
             "workflow_run": workflow_capabilities(),
+            "workflow_artifacts": artifact_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
             "application_lifecycle": application_lifecycle_capabilities(),
             "application_config": application_config_capabilities(),

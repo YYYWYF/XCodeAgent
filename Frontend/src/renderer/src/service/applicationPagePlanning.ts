@@ -61,8 +61,8 @@ export function revisionContinuationFromWorkflow(
     workflow.summary.revisionContinuation,
     workflow.state?.revisionContinuation,
     workflow.state?.revision_continuation,
-    workflow.result?.revisionContinuation,
-    workflow.result?.revision_continuation
+    workflow.state?.revisionContinuation,
+    workflow.state?.revision_continuation
   ]
   return candidates.find((candidate): candidate is WorkflowRevisionContinuation => {
     if (!candidate || typeof candidate !== 'object') return false

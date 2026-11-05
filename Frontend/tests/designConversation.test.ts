@@ -228,12 +228,10 @@ const canonicalTechnicalPlanWorkflow = {
     }
   },
   events: [],
-  state: {
+  state: { ...({}), ...({
     lifecycle: canonicalPlanningLifecycle(10),
     technical_plan: { architecture: { style: 'modular' } }
-  },
-  result: {}
-} as WorkflowRunPayload
+  }) }} as WorkflowRunPayload
 
 const canonicalPlanningBaseState: ApplicationPlanningCurrentState = {
   application: canonicalPlanningApplication,
@@ -469,7 +467,7 @@ assert.equal(forwardedProps.resumeState, undefined)
 
 assert.equal(
   PRODUCT_CONVERSATION_PLACEHOLDER,
-  '告诉产品 Agent 你想调整的需求、页面或 UI，也可以直接提问…'
+  '可以提问或描述修改意见，输入 @ 指定要执行的节点…'
 )
 assert.equal(PRODUCT_CONVERSATION_PLACEHOLDER.includes('暂停并自由输入'), false)
 assert.deepEqual(
@@ -522,7 +520,7 @@ const reviewWorkflow = (
       }
     }
   },
-  result: {
+  state: {
     application_planning_interrupt: {
       artifact: 'requirement_document',
       gateId: `requirement_document:${revision}`,
@@ -837,7 +835,7 @@ const continuationWorkflow = {
       technicalPlanSha256: 'a'.repeat(64)
     }
   },
-  result: { lifecycle: continuationLifecycle }
+  state: { lifecycle: continuationLifecycle }
 } as WorkflowRunPayload
 assert.deepEqual(revisionContinuationHandoffFromWorkflow(continuationWorkflow), {
   continuation: continuationWorkflow.summary.revisionContinuation,
@@ -1058,17 +1056,15 @@ const regeneratedRequirementWithStaleTerminalConfirmation = {
     phase: 'requirements'
   },
   events: [],
-  state: {
+  state: { ...({
+    application_planning_confirmation: { confirmedAt: 'stale' },
+    technical_plan: { confirmation_status: 'confirmed' }
+  }), ...({
     lifecycle: {
       initialization: { stage: 'awaiting_requirement_document_confirmation' }
     },
     technical_plan: { confirmation_status: 'pending_user_confirmation' }
-  },
-  result: {
-    application_planning_confirmation: { confirmedAt: 'stale' },
-    technical_plan: { confirmation_status: 'confirmed' }
-  }
-} as WorkflowRunPayload
+  }) }} as WorkflowRunPayload
 
 assert.equal(
   planningTechnicalPlanConfirmed(regeneratedRequirementWithStaleTerminalConfirmation),
@@ -1088,14 +1084,15 @@ const completedTechnicalPlanWorkflow = {
 } as WorkflowRunPayload
 
 assert.equal(planningTechnicalPlanConfirmed(completedTechnicalPlanWorkflow), true)
-assert.equal(planningWorkflowPhase(completedTechnicalPlanWorkflow), 'template_preparation')
+assert.equal(planningWorkflowPhase(completedTechnicalPlanWorkflow), 'technical_planning')
 assert.deepEqual(planningWorkflowActivity({
   ...completedTechnicalPlanWorkflow,
-  summary: { status: 'running', phase: 'technical_planning' }
+  // 当前协议直接发布模板节点阶段，不能继续用旧技术阶段模拟模板执行。
+  summary: { status: 'running', phase: 'template_preparation' }
 } as WorkflowRunPayload), {
   status: 'running',
   title: '正在准备应用模板',
-  detail: '正在下载模板代码、生成应用骨架并校验工作区就绪状态。',
+  detail: '正在执行 Workspace Bootstrap 并校验工作区就绪状态。',
   intentLabel: undefined
 })
 assert.equal(
@@ -1150,9 +1147,7 @@ const summaryOnlyQuestionsWorkflow = {
     }
   },
   events: [],
-  state: {},
-  result: {}
-} as WorkflowRunPayload
+  state: { ...({}), ...({}) }} as WorkflowRunPayload
 
 assert.equal(planningWorkflowRequiresUserInput(summaryOnlyQuestionsWorkflow), false)
 const apiDesignRequiredWorkflow = {
@@ -1173,9 +1168,7 @@ const apiDesignRequiredWorkflow = {
     }
   },
   events: [],
-  state: {},
-  result: {}
-} as WorkflowRunPayload
+  state: { ...({}), ...({}) }} as WorkflowRunPayload
 assert.equal(planningWorkflowRequiresUserInput(apiDesignRequiredWorkflow), false)
 assert.equal(workflowCardRequiresUserInput(apiDesignRequiredWorkflow), true)
 assert.equal(planningWorkflowCanPublishDuringRun(summaryOnlyQuestionsWorkflow), true)
@@ -1398,7 +1391,8 @@ assert.deepEqual(
   ),
   [12]
 )
-assert.equal(planningWorkflowSettlesLoading(summaryOnlyQuestionsWorkflow), true)
+// 只有历史 summary 澄清但没有原生 interrupt 时，仍不能把运行态当成已收尾。
+assert.equal(planningWorkflowSettlesLoading(summaryOnlyQuestionsWorkflow), false)
 // TechnicalPlan 二次修改确认后的主 Workflow 已进入开发前置门禁，
 // 规划会话不应再显示“恢复计划阶段”的 loading 占位。
 assert.equal(shouldSuppressConfirmedTechnicalPlanTransitionChunk(undefined, true), true)
@@ -1713,9 +1707,7 @@ const analyzingDesignIntentWorkflow = {
       status: 'running'
     }
   ],
-  state: {},
-  result: {}
-} as WorkflowRunPayload
+  state: { ...({}), ...({}) }} as WorkflowRunPayload
 
 assert.deepEqual(planningWorkflowActivity(analyzingDesignIntentWorkflow), {
   status: 'running',

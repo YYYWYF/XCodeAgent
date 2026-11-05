@@ -469,9 +469,7 @@ function dagConfirmationWorkflow(lifecycle: ApplicationLifecycle): WorkflowRunPa
       clarification,
       lifecycle: snapshotLifecycle
     },
-    state: { clarification, lifecycle: snapshotLifecycle },
-    result: { clarification, lifecycle: snapshotLifecycle }
-  } as unknown as WorkflowRunPayload
+    state: { ...({ clarification, lifecycle: snapshotLifecycle }), ...({ clarification, lifecycle: snapshotLifecycle }) }} as unknown as WorkflowRunPayload
 }
 
 /** 构造 DAG 已确认后进入 Unit Test 的交互，保留历史 DAG 投影以覆盖回归。 */
@@ -529,9 +527,7 @@ function unitTestConfirmationTransition(): {
         buildTaskPlanConfirmation: historicalDagConfirmation,
         lifecycle
       },
-      state: { clarification, lifecycle },
-      result: { clarification, lifecycle }
-    } as unknown as WorkflowRunPayload
+      state: { ...({ clarification, lifecycle }), ...({ clarification, lifecycle }) }} as unknown as WorkflowRunPayload
   }
 }
 
@@ -559,9 +555,7 @@ test('Confirm completed 的 clear confirmation 即使带旧 taskPlan 也不可�
         taskPlan: { confirmationStatus: 'confirmed', reviewTasks: [] }
       }
     },
-    state: { clarification: {} },
-    result: { clarification: {} }
-  } as unknown as WorkflowRunPayload
+    state: { ...({ clarification: {} }), ...({ clarification: {} }) }} as unknown as WorkflowRunPayload
 
   assert.equal(currentDagConfirmationPlan(workflow), undefined)
 })
@@ -630,9 +624,7 @@ test('当前 clarification 缺失时，PendingPlan recovery 仍使用历史 DAG 
       buildTaskPlanConfirmation: confirmation,
       lifecycle
     },
-    state: { lifecycle },
-    result: { lifecycle }
-  } as unknown as WorkflowRunPayload
+    state: { ...({ lifecycle }), ...({ lifecycle }) }} as unknown as WorkflowRunPayload
 
   assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
   assert.equal(workflowMessageInteractionAvailability(workflow, lifecycle, false, false), 'active')
