@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from app.agents.auto_dedup_backend import repair_write_policy
 from app.services.builtin_skills import is_builtin_skill_virtual_path
 from app.services.user_skill_runtime import is_user_skill_virtual_path
 from app.workspace.virtual_paths import is_host_workspace_virtual_path
@@ -62,6 +63,8 @@ def _delete_workspace_file(
         if path_guard is not None and not path_guard(virtual_path):
             raise ValueError("当前 Agent 无权删除该路径。")
         target = _resolve_virtual_path(root, virtual_path)
+        if repair_write_policy(root, virtual_path, target) != "normal":
+            raise ValueError("当前修复无权删除该文件。")
         _validate_delete_target(root, target)
         before = capture_inclusion_before(target)
         target.unlink()

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from app.services.engineering_acceptance import (
     compile_engineering_acceptance,
@@ -19,6 +21,27 @@ from app.agents.data_source.prompt_context import task_implementation_contract
 
 
 class BuildRepairPlannerTests(unittest.TestCase):
+    def test_backend_addition_cannot_claim_another_tasks_source(self) -> None:
+        """文件归属检查覆盖整个 DAG，路径尚未生成也不能授权给第二个任务。"""
+        path = "backend/src/main/java/cards/domain/Admin.java"
+        result = {"task_id": "repository", "status": "failed", "failure_category": "plan_mismatch",
+                  "scheduler_decision": {"action": "repair"}}
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            (root / "backend/src/main/java").mkdir(parents=True)
+            plan = create_build_failure_repair_plan(
+                failed_results=[result], workspace=root,
+                tasks=[{"id": "repository", "owner": "backend", "unit_id": "backend:endpoint:cards:admins"},
+                       {"id": "objects", "allowed_paths": ["backend/src/main/java/cards/domain/**"]}],
+                repair_planner=lambda _: {
+                    "decision": "requires_user_confirmation",
+                    "boundaries": {"requested_add": {"path": path, "description": "新增领域类型。"}},
+                },
+            )
+        self.assertEqual(plan["decision"], "terminal_failure")
+        self.assertEqual(plan["tasks"], [])
+        self.assertIn("已由任务 objects 声明", plan["reason"])
+
     def test_creates_bounded_repair_task_from_failed_result(self) -> None:
         task = {
             "id": "page",

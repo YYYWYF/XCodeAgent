@@ -34,6 +34,8 @@ from app.graph.state import ProjectState
 from app.domain.execution_recovery import RecoveryExecutionError, WorkflowReentryReason
 from app.services.build_restart import fresh_build_tasks, refresh_build_workspace, restart_build_state
 from app.services.node_recovery_context import current_node_recovery_context
+from app.agents.auto_dedup_backend import repair_create_only_scope
+from app.services.build_repair_addition import validate_repair_addition
 from app.services.build_repair_planner import (
     approve_repair_scope_confirmation,
     append_repair_tasks_to_build_plan,
@@ -87,6 +89,7 @@ from app.workspace.code_changes import (
     code_change_state_update,
     merge_code_change_sets,
 )
+from app.workspace.spec_documents import workspace_root
 from app.workspace.task_documents import (
     _TASK_RUNTIME_FIELDS,
     build_run_task_plan_json_path,
@@ -403,6 +406,28 @@ def _execute_task(
             task,
             str(contract.platform_executor or ""),
         )
+    approved_add = task.get("approved_add_path")
+    if approved_add:
+        root = workspace_root(state).resolve()
+        try:
+            validate_repair_addition(approved_add, root, state["tasks"], repair_id=task["id"])
+        except ValueError as exc:
+            return normalize_task_results(dispatched_tasks=[task], raw_results=[
+                {"task_id": task["id"], "status": "failed", "failure_category": "repair_scope_stale",
+                 "failure_reason": str(exc)},
+            ]), None
+        scope = frozenset(root / change["path"] for change in task["change_scope"])
+        with repair_create_only_scope(root / approved_add, scope) as creation:
+            results, change_set = _execute_owner_tasks(
+                state, "backend", [task], on_batch_tool_activity=on_batch_tool_activity,
+            )
+        if not creation.written:
+            for result in results:
+                if result.get("status") in {"completed", "already_satisfied"}:
+                    result.update(status="failed", failure_category="repair_addition_missing",
+                                  failure_reason=f"本轮修复未实际新增 {approved_add}。")
+                    result["scheduler_decision"] = classify_task_result(result)
+        return results, change_set
     return _execute_owner_tasks(
         state,
         str(task.get("owner") or ""),
@@ -1011,21 +1036,30 @@ def _repair_scope_confirmation_payload(repair_task_plan: dict[str, Any]) -> dict
         for item in repair_task_plan.get("requires_user_confirmation", [])
         if isinstance(item, dict) and item.get("reason")
     ]
+    additions = [item["addition"]["path"] for item in repair_task_plan.get("requires_user_confirmation", [])
+                 if isinstance(item, dict) and isinstance(item.get("addition"), dict)]
     path_text = "、".join(requested_paths) or "未提供额外路径"
     reason_text = "；".join(reasons) or "修复需要用户批准范围。"
+    if additions:
+        scope_text = f"请求新增文件：{'、'.join(additions)}"
+        other_paths = [path for path in requested_paths if path not in additions]
+        if other_paths:
+            scope_text += f"。其他修复范围：{'、'.join(other_paths)}"
+    else:
+        scope_text = f"请求修改：{path_text}"
     return {
         "mode": "repair_scope_confirmation",
         "status": "requires_user_input",
-        "message": "修复计划请求扩大或确认代码修改范围。",
+        "message": f"修复计划{scope_text}。" if additions else "修复计划请求扩大或确认代码修改范围。",
         "planId": plan_id,
         "requestedPaths": requested_paths,
         "requestedResources": requested_resources,
-        "reason": reason_text,
+        "reason": f"{scope_text}。{reason_text}" if additions else reason_text,
         "questions": [
             {
                 "id": "repair_scope_confirmation",
                 "header": "修复范围",
-                "question": f"计划 {plan_id} 请求修改：{path_text}。原因：{reason_text}。是否批准？",
+                "question": f"计划 {plan_id} {scope_text}。原因：{reason_text}。是否批准？",
                 "type": "text",
                 "placeholder": "回复“批准修复范围”或“拒绝修复范围”。",
             }
@@ -1740,18 +1774,24 @@ def run_build_scheduler(
         signal in extract_confirmation_answer(request).replace(" ", "")
         for signal in ("拒绝", "不同意", "不批准")
     )
-    if (
-        scope_confirmation_pending
-        and user_confirmed_text(
+    has_requested_add = any(isinstance(item, dict) and item.get("addition")
+                            for item in incoming_repair_task_plan.get("requires_user_confirmation", []))
+    approved_scope = scope_confirmation_pending and (
+        extract_confirmation_answer(request).replace(" ", "").strip() == "批准修复范围"
+        if has_requested_add else user_confirmed_text(
             request,
             positive_signals=("批准", "同意", "确认"),
             negative_signals=("拒绝", "不同意", "不批准"),
         )
-    ):
+    )
+    if approved_scope:
         incoming_repair_task_plan = approve_repair_scope_confirmation(
-            incoming_repair_task_plan
+            incoming_repair_task_plan, workspace=workspace_root(state), current_tasks=canonical_tasks,
         )
-        scope_confirmation_pending = False
+        scope_confirmation_rejected = scope_confirmation_pending = incoming_repair_task_plan["decision"] != "repair"
+        retry_requested = False
+        state = {**state, "repair_task_plan": incoming_repair_task_plan,
+                 "repair_task_plan_path": write_repair_task_plan_json(state, incoming_repair_task_plan)}
     if scope_confirmation_pending:
         tasks = tasks_from_build_task_plan(build_task_plan)
         execution_slice = resolve_execution_slice(
@@ -1783,6 +1823,7 @@ def run_build_scheduler(
                 else incoming_repair_task_plan
             ),
             "repair_tasks": [],
+            **({"error": incoming_repair_task_plan.get("reason")} if approved_scope else {}),
             "clarification": (
                 {}
                 if scope_confirmation_rejected
@@ -1838,7 +1879,7 @@ def run_build_scheduler(
         "build_task_plan": replace_build_task_plan_tasks(build_task_plan, tasks),
         "build_results": list(state.get("build_results", [])),
     }
-    if retry_requested and (retry_task_ids or recovery_task_ids) and current_state.get("active_run_id"):
+    if (approved_scope or retry_requested and (retry_task_ids or recovery_task_ids)) and current_state.get("active_run_id"):
         # 重试选择与 pending/retry_count 必须先于 Runner 原子落盘；继续执行直接领取
         # 准备后的任务状态，不重新计数或把旧 failed 结果覆盖回 pending 任务。
         prepared_progress = _build_runtime_progress(current_state)
@@ -2051,6 +2092,7 @@ def run_build_scheduler(
                     task for task in current_state["tasks"] if task.get("kind") == "repair"
                 ],
                 workspace_snapshot=current_state.get("workspace_snapshot"),
+                workspace=workspace_root(current_state),
                 repair_planner=lambda repair_input: _plan_build_repair_with_repair_planner(
                     current_state,
                     repair_input,

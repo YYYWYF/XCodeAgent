@@ -61,7 +61,9 @@ def _data_source_generation_prompt(
         "confirmed implementation contract still requires that target. When the live state still "
         "matches the plan, follow the already-classified add or modify action. Leave a fully "
         "satisfying target unchanged; when it is only partially satisfying, add or correct only "
-        "the missing behavior and preserve the rest.\n\n"
+        "the missing behavior and preserve the rest. If approved_add_path is set, use write_file "
+        "once to create that file. If it already exists, stop and report repair_scope_stale "
+        "for the task.\n\n"
         + FIELD_VALUE_IMPLEMENTATION_RULES
         + "[API boundary] implementation_contract.api_design is the confirmed field-mapping contract "
         "for one internal Endpoint. The internal api_contract remains authoritative for the Controller "

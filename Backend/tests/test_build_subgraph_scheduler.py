@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.graph.subgraphs.build import (
@@ -17,6 +18,9 @@ from app.graph.subgraphs.build import (
     build,
     run_build_scheduler,
 )
+from app.agents.auto_dedup_backend import AutoDedupFilesystemBackend
+from app.agents.data_source.prompt_context import execution_task_packet
+from app.tools.delete_file import create_delete_file_tool
 from app.domain.execution_recovery import WorkflowReentryReason
 from app.services.node_recovery_context import NodeRecoveryContext, bind_node_recovery, bind_recovery_runtime
 from app.services.build_task_planner import replace_build_task_plan_tasks, tasks_from_build_task_plan
@@ -91,6 +95,85 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_plan_mismatch_confirms_one_create_only_java_file(self) -> None:
+        """真实调度器暂停并复验新增权限，批准后的修复保留仓储任务身份。"""
+        unit_id = "backend:endpoint:cards:admins"
+        task_id = f"{unit_id}::repository"
+        repository = "backend/src/main/java/cards/domain/repository/AdminRepository.java"
+        addition = "backend/src/main/java/cards/domain/entity/Admin.java"
+        task = {
+            "id": task_id, "unit_id": unit_id, "owner": "backend", "status": "pending", "dependencies": [],
+            "target_files": [repository], "allowed_paths": [repository],
+            "change_scope": [{"operation": "modify", "path": repository}],
+            "description": "1. 返回 ID 为 Long 的查询结果。",
+        }
+        proposal = {
+            "decision": "requires_user_confirmation", "reason": "缺少类型化查询结果。",
+            "boundaries": {"requested_add": {"path": addition, "description": "新增包含 Long id 的领域结果。"}},
+            "repair_tasks": [{"change_scope": [{"operation": "modify", "path": repository}]}],
+        }
+
+        for outcome in ("created", "stale", "no_write"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as workspace:
+                _write_workspace_file(workspace, repository)
+                filesystem = AutoDedupFilesystemBackend(root_dir=workspace, virtual_mode=True)
+
+                def runner(**kwargs):
+                    """模拟 Java Agent 首次报告缺口，修复时走真实文件工具。"""
+                    dispatched = kwargs["tasks"][0]
+                    if dispatched["id"] == task_id:
+                        return [{"task_id": task_id, "status": "failed", "failure_category": "plan_mismatch",
+                                 "change_request": {"reason": "缺少领域结果类型。"}}]
+                    self.assertEqual(dispatched["allowed_paths"], [repository, addition])
+                    with patch("app.agents.data_source.prompt_context.task_implementation_contract", return_value={}):
+                        self.assertEqual(execution_task_packet({}, dispatched)["stage"], "repository")
+                    if outcome == "no_write":
+                        return [{"task_id": dispatched["id"], "status": "already_satisfied"}]
+                    self.assertIsNone(filesystem.write(f"/{addition}", "class Admin {}").error)
+                    self.assertIsNotNone(filesystem.write(f"/{addition}", "overwritten").error)
+                    self.assertIsNotNone(filesystem.edit(f"/{addition}", "Admin", "Edited").error)
+                    self.assertIsNotNone(filesystem.write("/backend/src/main/java/Unrelated.java", "class Unrelated {}").error)
+                    delete = create_delete_file_tool(workspace)
+                    self.assertEqual(json.loads(delete.invoke({"file_path": f"/{addition}"}))["status"], "error")
+                    self.assertIsNone(filesystem.write(f"/{repository}", "interface AdminRepository {}").error)
+                    return [{"task_id": dispatched["id"], "status": "completed"}]
+
+                state = _ready_build_state(workspace, {
+                    "workspace": workspace, "project_plan": {},
+                    "build_task_plan": replace_build_task_plan_tasks({
+                        "schema_version": "build-dag.v4", "build_units": {unit_id: {"id": unit_id, "kind": "backend"}},
+                        "unit_graph": {"nodes": [unit_id], "edges": []},
+                    }, [task]),
+                })
+                with (
+                    patch("app.graph.subgraphs.build.generate_data_sources_with_deep_agent", side_effect=runner) as owner,
+                    patch("app.graph.subgraphs.build.plan_build_failure_repair_with_repair_planner_agent", return_value=proposal),
+                    patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
+                ):
+                    paused = build(state)
+                    self.assertEqual(paused["status"], "requires_user_input")
+                    self.assertEqual(paused["clarification"]["requestedPaths"], [addition])
+                    self.assertIn(f"请求新增文件：{addition}", paused["clarification"]["questions"][0]["question"])
+                    self.assertIn(addition, paused["clarification"]["reason"])
+                    self.assertEqual(owner.call_count, 1)
+                    still_paused = build({**state, **paused, "request": "为什么要批准修复范围？"})
+                    self.assertEqual(still_paused["status"], "requires_user_input")
+                    if outcome == "stale":
+                        _write_workspace_file(workspace, addition)
+                    result = build({**state, **paused, "request": "批准修复范围"})
+
+                if outcome == "stale":
+                    self.assertEqual(result["status"], "failed")
+                    self.assertIn("新增目标已存在", result["error"])
+                    self.assertEqual(owner.call_count, 1)
+                elif outcome == "created":
+                    self.assertEqual(result["status"], "completed", result.get("build_results"))
+                    self.assertEqual(owner.call_count, 2)
+                    self.assertEqual((Path(workspace) / addition).read_text(encoding="utf-8"), "class Admin {}")
+                else:
+                    self.assertEqual(result["status"], "failed")
+                    self.assertEqual(result["build_results"][-1]["failure_category"], "repair_addition_missing")
+
     def test_native_build_without_internal_progress_executes_original_node(self) -> None:
         """可信入口没有业务失败快照时，Build 仍派发原计划任务。"""
 

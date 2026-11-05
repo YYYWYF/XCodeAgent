@@ -102,6 +102,7 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         '    "change_scope_policy": "must stay within input.change_scope",\n'
         '    "allowed_paths_policy": "must stay within input.change_scope.allowed_paths",\n'
         '    "contract_policy": "do not change confirmed requirements, ProjectPlan, or API contracts",\n'
+        '    "requested_add": {"path": "exact workspace-relative Java file", "description": "what type to create and why"} | null,\n'
         '    "requested_resources": [{"type": "page|endpoint|api_contract|data_source", "targetId": "stable-id"}]\n'
         "  },\n"
         '  "repair_tasks": [\n'
@@ -114,6 +115,14 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         '  "reason": "required when confirmation or terminal failure is selected",\n'
         '  "failure_handling": "how the scheduler should treat this failure"\n'
         "}\n\n"
+        "For a backend Endpoint plan_mismatch where the failed task can complete its own responsibility "
+        "by creating exactly one missing Java source file, choose requires_user_confirmation and put "
+        "only the new file in boundaries.requested_add. Use the exact backend/src/main/java/... path "
+        "from workspace evidence, specify the type, field types and responsibility in description, "
+        "and provide one repair_tasks item with only the necessary parent-authorized operations. "
+        "Leave requested_resources empty for this file-only repair. Set requested_add to null otherwise. "
+        "If another Task owns the missing file or a dependency must change, choose terminal_failure "
+        "and explain which task dependency or ownership needs correction.\n\n"
         "Choose requires_user_confirmation when repair requires expanding "
         "change_scope, changing confirmed product/API contracts, or making a "
         "user-visible product decision. Choose terminal_failure when the failure "

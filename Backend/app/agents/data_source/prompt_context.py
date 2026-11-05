@@ -124,6 +124,7 @@ def execution_task_packet(
         "stage": _task_stage(task),
         "execution_steps": _task_execution_steps(task),
         "allowed_paths": list(task.get("allowed_paths") or []),
+        **({"approved_add_path": task["approved_add_path"]} if task.get("approved_add_path") else {}),
         "change_scope": [
             dict(item)
             for item in task.get("change_scope") or []
@@ -271,7 +272,8 @@ def _task_stage(task: dict[str, Any]) -> str:
 
     if _task_kind(task) == "bootstrap":
         return "bootstrap"
-    task_id = str(task.get("id") or "").strip()
+    parent_id = (task.get("repairs") or {}).get("task_id") if task.get("approved_add_path") else None
+    task_id = str(parent_id or task.get("id") or "").strip()
     stage = task_id.rsplit("::", 1)[-1] if "::" in task_id else ""
     allowed = {
         "objects",

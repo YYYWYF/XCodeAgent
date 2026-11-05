@@ -5,8 +5,10 @@ from datetime import UTC, datetime
 from hashlib import sha256
 import json
 from fnmatch import fnmatch
+from pathlib import Path
 from typing import Any
 
+from app.services.build_repair_addition import validate_repair_addition
 from app.services.engineering_acceptance import compile_repair_engineering_acceptance
 from app.services.business_acceptance import compile_repair_business_acceptance
 from app.services.build_task_planner import (
@@ -28,6 +30,7 @@ def create_build_failure_repair_plan(
     workspace_snapshot: dict[str, Any] | None = None,
     targeted_snapshot: dict[str, Any] | None = None,
     repair_planner: RepairPlanner | None = None,
+    workspace: Path | None = None,
 ) -> dict[str, Any]:
     """为可修复构建失败生成受调度器边界约束的修复计划。"""
 
@@ -108,6 +111,8 @@ def create_build_failure_repair_plan(
             result=result,
             source_ref=source_ref,
         )
+        if normalized["decision"] == "requires_user_confirmation":
+            _prepare_repair_addition(normalized, parent_task, result, workspace, tasks, confirmations)
         planner_outputs.append(normalized)
 
         if normalized["decision"] == "requires_user_confirmation":
@@ -121,6 +126,9 @@ def create_build_failure_repair_plan(
             repair_tasks.append(task)
             existing_keys.add(key)
 
+    # 多个失败任务申请同一路径时，所有相关申请均失效，不按调度顺序选归属。
+    terminal_failures.extend(item for item in confirmations if item["decision"] == "terminal_failure")
+    confirmations = [item for item in confirmations if item["decision"] == "requires_user_confirmation"]
     decision_text = _overall_repair_decision(
         repair_tasks=repair_tasks,
         confirmations=confirmations,
@@ -166,6 +174,7 @@ def create_build_failure_repair_plan(
         "repair_tasks": repair_tasks if decision_text == "repair" else [],
         "requires_user_confirmation": confirmations,
         "terminal_failures": terminal_failures,
+        "reason": str(terminal_failures[0].get("reason") or "") if terminal_failures else "",
         "skipped": skipped,
         "planner_inputs": planner_inputs,
         "planner_outputs": planner_outputs,
@@ -295,10 +304,53 @@ def normalize_repair_plan(
     return {**normalized, "tasks": tasks}
 
 
+def _prepare_repair_addition(
+    confirmation: dict[str, Any],
+    parent: dict[str, Any],
+    result: dict[str, Any],
+    workspace: Path | None,
+    tasks: list[dict[str, Any]],
+    pending: list[dict[str, Any]],
+) -> None:
+    """将可独立修复的后端计划缺口绑定为待批准的单个新增文件。"""
+    requested = confirmation["boundaries"].pop("requested_add", None)
+    endpoint_mismatch = (
+        result.get("failure_category") == "plan_mismatch"
+        and parent.get("owner") == "backend"
+        and str(parent.get("unit_id") or "").startswith("backend:endpoint:")
+    )
+    if requested is None and not endpoint_mismatch:
+        return
+    try:
+        if not endpoint_mismatch or confirmation["requestedResources"]:
+            raise ValueError("此修复需要调整任务或业务范围，请更新任务计划后继续。")
+        if not isinstance(requested, dict) or set(requested) != {"path", "description"}:
+            raise ValueError("修复计划未指定一个可由当前任务独立新增的 Java 文件，请调整任务计划后继续。")
+        path, description = requested["path"], requested["description"]
+        if not isinstance(path, str) or not isinstance(description, str) or not description.strip():
+            raise ValueError("修复新增文件缺少精确路径或用途说明。")
+        validate_repair_addition(path, workspace, tasks)
+        previous = next((item for item in pending if item.get("addition", {}).get("path", "").casefold() == path.casefold()), None)
+        if previous is not None:
+            reason = f"多个修复任务申请新增 {path}，请先明确文件归属。"
+            previous.update(decision="terminal_failure", reason=reason, failure_handling="stop_build")
+            raise ValueError(reason)
+    except ValueError as exc:
+        confirmation.update(decision="terminal_failure", reason=str(exc), failure_handling="stop_build")
+        return
+
+    confirmation["addition"] = {"path": path, "operation": "add", "description": description.strip()[:1000]}
+    confirmation["requestedPaths"] = [path]
+    confirmation["planId"] = _stable_repair_plan_id([confirmation["repair_input_ref"]], [path])
+
+
 def approve_repair_scope_confirmation(
     repair_task_plan: dict[str, Any],
+    *,
+    workspace: Path | None = None,
+    current_tasks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """将已获用户批准的范围确认计划编译为原任务授权内的修复任务。"""
+    """复验当前 DAG 和磁盘后，将确认范围编译为一次局部修复任务。"""
 
     inputs = [
         item
@@ -321,6 +373,27 @@ def approve_repair_scope_confirmation(
         failed_attempt = repair_input.get("failed_attempt")
         source_ref = repair_input.get("source_ref")
         if not all(isinstance(item, dict) for item in (parent_task, failed_attempt, source_ref)):
+            continue
+        addition = confirmation.get("addition")
+        if isinstance(addition, dict):
+            try:
+                path = addition["path"]
+                current_parent = next((task for task in current_tasks or [] if task.get("id") == task_id), None)
+                if current_parent is None or current_parent.get("status") != "failed":
+                    raise ValueError("原任务已变化，当前修复授权已失效。")
+                validate_repair_addition(path, workspace, [*(current_tasks or []), *tasks])
+            except ValueError as exc:
+                return {**repair_task_plan, "status": "terminal_failure", "decision": "terminal_failure",
+                        "reason": str(exc), "tasks": [], "repair_tasks": []}
+
+            raw_plan = confirmation["raw_plan"]
+            proposals = raw_plan.get("repair_tasks")
+            raw_task = proposals[0] if isinstance(proposals, list) and len(proposals) == 1 else None
+            raw_task = dict(raw_task) if isinstance(raw_task, dict) else {}
+            # 保留原任务的编号步骤，新增一步明确领域类型用途，并沿原任务层级执行。
+            raw_task["description"] = f"1. {addition['description']}\n{parent_task.get('description') or ''}"
+            tasks.append(_repair_task(parent_task, failed_attempt, source_ref, raw_task=raw_task,
+                                      strategy=confirmation["strategy"], addition=addition))
             continue
         approved = normalize_repair_plan(
             repair_input=repair_input,
@@ -533,6 +606,7 @@ def _repair_task(
     raw_task: dict[str, Any] | None = None,
     strategy: str = "",
     boundaries: dict[str, Any] | None = None,
+    addition: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """基于失败父任务创建受限修复任务，并继承 Unit 与来源引用。"""
 
@@ -548,7 +622,11 @@ def _repair_task(
         parent_task,
         raw_task,
         strategy=strategy,
+        require_parent_operations=addition is not None,
     )
+    extra_paths = [addition["path"]] if addition else []
+    if addition:
+        repair_change_scope.append(addition)
     # 修复任务仅继承父任务的结果型工程契约，文件差异必须按本轮修复范围重新编译。
     repair_task = {
         "id": repair_id,
@@ -600,8 +678,9 @@ def _repair_task(
             "task_id": parent_id,
             "result_task_id": result.get("task_id"),
         },
-        "allowed_paths": _string_list(parent_task.get("allowed_paths")),
-        "target_files": _string_list(parent_task.get("target_files")),
+        "allowed_paths": [*_string_list(parent_task.get("allowed_paths")), *extra_paths],
+        "target_files": [*_string_list(parent_task.get("target_files")), *extra_paths],
+        **({"approved_add_path": addition["path"]} if addition else {}),
         "change_scope": repair_change_scope,
         "database_scope": parent_task.get("database_scope", {}),
         "approval": parent_task.get("approval", {}),
@@ -635,15 +714,17 @@ def _repair_change_scope(
     raw_task: dict[str, Any],
     *,
     strategy: str,
+    require_parent_operations: bool = False,
 ) -> list[dict[str, str]]:
     """提取 RepairPlanner 的精确修复范围，并拒绝越过父任务授权的路径。"""
 
     allowed_paths = _string_list(parent_task.get("allowed_paths"))
-    parent_paths = [
-        normalize_repo_path(item.get("path"))
+    parent_operations = {
+        normalize_repo_path(item.get("path")): item.get("operation")
         for item in parent_task.get("change_scope", [])
         if isinstance(item, dict) and normalize_repo_path(item.get("path"))
-    ]
+    }
+    parent_paths = list(parent_operations)
     raw_scope = raw_task.get("change_scope")
     result: list[dict[str, str]] = []
     if isinstance(raw_scope, list):
@@ -654,6 +735,8 @@ def _repair_change_scope(
             if not path or not _repair_path_allowed(path, allowed_paths, parent_paths):
                 continue
             operation = str(item.get("operation") or "modify").lower()
+            if require_parent_operations and operation != parent_operations.get(path):
+                continue
             if operation not in {"add", "modify", "delete"}:
                 operation = "modify"
             result.append(
@@ -663,7 +746,7 @@ def _repair_change_scope(
                     "description": str(item.get("description") or "执行受限修复。"),
                 }
             )
-    if result:
+    if result or require_parent_operations:
         return result
 
     # 兼容旧 RepairPlanner：只在描述明确提到某个父任务精确路径时推导 modify。
