@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import './agentDevelopmentStatus.test'
+import './agentDevelopmentPanel.test'
 import './agentIntegration1008.test'
 import './agentInterfaceNavigation.test'
 import { test } from 'node:test'
@@ -9,7 +11,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   developmentArtifactTotals,
   developmentPlanningTotals,
-  developmentCompletedCount,
+  endpointDevelopmentProgress,
   developmentStatusLabel,
   gateWorkbenchPhase,
   testEntryGateReason
@@ -160,6 +162,40 @@ test('开发产物接口树展示 Contract 和 Endpoint 名称并通过悬停提
   assert.match(html, /商品管理，\/api\/product/)
   assert.match(html, /查询商品列表/)
   assert.match(html, /查询商品列表，GET \/api\/product/)
+})
+
+test('接口目录按开发完成而非映射确认显示绿色和分组计数', () => {
+  const endpoints = [
+    { id: 'balance.query', name: '余额查询', method: 'POST', path: '/balance', designed: false },
+    { id: 'policy.query', name: '政策查询', method: 'POST', path: '/policy', designed: true }
+  ]
+  const html = renderToStaticMarkup(<ApiOutlineGroup
+    allEndpoints={endpoints}
+    contract={{ id: 'tools', name: '智能体工具', label: '/tools', endpoints }}
+    developmentArtifacts={{ pages: {}, entities: {}, endpoints: {
+      tools: { 'balance.query': { initialDevelopmentStatus: 'completed', changeStatus: 'unchanged' } }
+    } }}
+    expanded onSelect={() => undefined} onToggle={() => undefined} selectedKey=""
+  />)
+  assert.equal((html.match(/data-status="completed"/g) || []).length, 1)
+  assert.equal((html.match(/data-status="pending"/g) || []).length, 1)
+  assert.match(html, /初次开发已完成/)
+  assert.match(html, />1\/2<\/span>/)
+})
+
+test('Agent 运行接口的圆点与计数沿用 Agent 完成事实', () => {
+  const endpoint = { id: 'agent.helper.run', kind: 'agent_runtime' as const, agent_id: 'helper',
+    name: '智能体会话', method: 'POST', path: '/agents/helper/run', summary: '', designed: false }
+  const artifacts = { pages: {}, entities: {}, endpoints: {}, agents: {
+    helper: { initialDevelopmentStatus: 'completed' as const, changeStatus: 'unchanged' as const }
+  } }
+  assert.equal(endpointDevelopmentProgress(artifacts, 'agent.helper', endpoint), artifacts.agents.helper)
+  assert.equal(endpointDevelopmentProgress(artifacts, 'business', { ...endpoint, kind: 'business' }), undefined)
+  const html = renderToStaticMarkup(<ApiOutlineGroup allEndpoints={[endpoint]}
+    contract={{ id: 'agent.helper', label: '/agents/helper', endpoints: [endpoint] }}
+    developmentArtifacts={artifacts} expanded onSelect={() => undefined} onToggle={() => undefined} selectedKey="" />)
+  assert.match(html, /data-status="completed"/)
+  assert.match(html, />1\/1<\/span>/)
 })
 
 test('开发目录展示实体浏览入口并标记当前选中的实体', () => {

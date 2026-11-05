@@ -3,7 +3,7 @@
 from copy import deepcopy
 import unittest
 
-from app.domain.runtime_endpoint_contract import TextConversationContract
+from app.domain.runtime_endpoint_contract import AgentExecutionContract
 from app.services.runtime_endpoint_contracts import (
     materialize_runtime_endpoints, runtime_endpoint_capability_snapshot, runtime_endpoint_identity,
 )
@@ -20,7 +20,7 @@ def capability() -> dict:
 def agent(agent_id: str, page: str) -> dict:
     """提供正式七模块事实和页面归属，测试不借空对象冒充整个 Agent。"""
 
-    return {"agentId": agent_id, "name": "问答助手", "purpose": "解答业务问题", "pageIds": [page],
+    return {"agentId": agent_id, "name": "问答助手", "purpose": "解答业务问题", "publicEndpoint": True, "pageIds": [page],
             "agentSettings": {"prompt": {"systemPrompt": "依据当前业务说明回答。"}, "model": {"source": "project"},
                 "memory": {}, "context": {}, "tools": {"enabled": False, "bindings": []},
                 "skills": {"enabled": False}, "knowledge": {"enabled": False}}, "interactionContract": capability()}
@@ -154,25 +154,24 @@ class RuntimeEndpointContractTests(unittest.TestCase):
 
         cases = [("textOutput", False), ("textOutput", 1), ("textOutput", "true"),
                  ("publicStateSchema", {}), ("interactionKinds", ["unknown"]),
-                 ("outcomes", [{"id": "success"}]), ("mode", "task"), ("tools", [])]
+                 ("outcomes", [{"id": "success"}]), ("mode", "unknown"), ("tools", [])]
         for key, value in cases:
             with self.subTest(key=key, value=value):
                 candidate = capability()
                 candidate[key] = value
                 with self.assertRaises(ValueError):
-                    TextConversationContract.model_validate(candidate)
-        for key, value in [("properties", {"question": {"type": "string"}}), ("required", ["question"]),
-                           ("additionalProperties", True), ("additionalProperties", 0)]:
+                    AgentExecutionContract.model_validate(candidate)
+        for key, value in [("properties", []), ("required", "question"), ("additionalProperties", 0)]:
             with self.subTest(input_key=key):
                 candidate = capability()
                 candidate["inputSchema"][key] = value
                 with self.assertRaises(ValueError):
-                    TextConversationContract.model_validate(candidate)
+                    AgentExecutionContract.model_validate(candidate)
         for key in capability():
             candidate = capability()
             del candidate[key]
             with self.assertRaises(ValueError):
-                TextConversationContract.model_validate(candidate)
+                AgentExecutionContract.model_validate(candidate)
 
     def test_enabled_internal_module_preserves_text_conversation_without_downgrade(self):
         """文本会话保留用户 Tool/Skill/Knowledge，不能擅自删除或全局禁止。"""
@@ -197,8 +196,10 @@ class RuntimeEndpointContractTests(unittest.TestCase):
         candidate["api_contracts"] = [business(method="POST")]
         candidate["agent_contracts"][0]["agentSettings"]["tools"] = {"enabled": True,
             "bindings": [{"toolId": "submit", "apiContractId": "order_api", "endpointId": "order.list"}]}
-        with self.assertRaisesRegex(ValueError, "执行前确认"):
+        with self.assertRaisesRegex(ValueError, "执行前确认") as raised:
             materialize_runtime_endpoints(candidate)
+        self.assertIn("agent_contracts[0].interactionContract.interactionKinds", str(raised.exception))
+        self.assertIn("submit → order_api/order.list", str(raised.exception))
         candidate["agent_contracts"][0]["interactionContract"]["interactionKinds"] = ["confirmation"]
         compiled = materialize_runtime_endpoints(candidate)
         self.assertEqual(compiled["agent_contracts"][0]["agentSettings"]["tools"]["enabled"], True)
@@ -206,13 +207,13 @@ class RuntimeEndpointContractTests(unittest.TestCase):
     def test_validated_capability_is_deeply_immutable_and_cannot_be_copied_with_expansion(self):
         """字段冻结不能只保护外层属性，嵌套结构与复制更新同样不可绕过校验。"""
 
-        model = TextConversationContract.model_validate(capability())
+        model = AgentExecutionContract.model_validate(capability())
         with self.assertRaises(TypeError):
-            model.input_schema.properties["question"] = {}
+            model.input_schema["properties"]["question"] = {}
         self.assertIsInstance(model.interaction_kinds, tuple)
         with self.assertRaises(ValueError):
             model.model_copy(update={"interactionKinds": ["unknown"]})
-        self.assertEqual(model.model_dump(mode="json", by_alias=True), capability())
+        self.assertEqual(model.model_dump(mode="json", by_alias=True), {**capability(), "resultSchema": None})
 
     def test_java_topology_and_invalid_agent_identity_cannot_get_runtime_endpoints(self):
         """不凭名称猜测 Runtime，非法 ID 不得拼进公开路由。"""

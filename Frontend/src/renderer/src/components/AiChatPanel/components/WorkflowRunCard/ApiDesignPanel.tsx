@@ -34,7 +34,7 @@ import ApiFieldMappingTable from './ApiFieldMappingTable'
 import { API_SOURCE_METADATA_ACTIONS } from './apiSourceSelectorModel'
 import type { ApiSourceMetadataAction, ApiSourceMetadataContext, ApiSourceMetadataRequestState } from './apiSourceSelectorModel'
 import './ApiDesignPanel.less'
-import { AgentEndpointContract } from '../FieldMapping/AgentEndpointReview'
+import { AgentEndpointContract, AgentCallContract } from '../FieldMapping/AgentEndpointReview'
 import type { RuntimeEndpointDraft } from '../../../../typings/endpointDesign'
 
 const { Text, Title } = Typography
@@ -50,6 +50,12 @@ type ApiDesignPanelProps = {
 
 /** 渲染 Endpoint API 设计容器，并把字段绑定交互交给表格工作台。 */
 export default function ApiDesignPanel(props: ApiDesignPanelProps): ReactElement {
+  if (props.payload.draft.agentCall) {
+    const draft = props.payload.draft
+    return <div><AgentCallContract draft={draft} /><Button type="primary" disabled={props.disabled}
+      onClick={() => props.onAction({ action: 'confirm', apiContractId: draft.apiContractId,
+        endpointId: draft.endpointId, draft })}>审阅并确认调用设计</Button></div>
+  }
   if (props.payload.endpoint.kind === 'agent_runtime') {
     const draft = props.payload.draft as unknown as RuntimeEndpointDraft
     return <div><AgentEndpointContract draft={draft} /><Button type="primary" disabled={props.disabled}

@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 from app.domain.api_design_fields import ApiDesignModel, EndpointField
+from app.domain.agent_call import AgentCallBinding
 from app.domain.api_design_static import StaticBinding, StaticSourceField, validate_static_design
 from app.domain.api_design_values import BusinessQueryRight, EndpointQueryRight, FixedQueryRight, QueryRight
 from app.domain.api_design_database import DatabaseSourceField, DatabaseConditionOperator, DatabaseWriteMapping, DatabaseQueryCondition, DatabaseQuerySubgroup, DatabaseQuery
@@ -212,6 +213,8 @@ class EndpointFieldMappingDesign(ApiDesignModel):
     endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
     endpoint_contract: dict[str, Any] = Field(alias="endpointContract")
     implementation_description: str | None = Field(default=None, alias="implementationDescription", max_length=4000)
+    agent_call: AgentCallBinding | None = Field(default=None, alias="agentCall")
+    agent_capability_sha256: str | None = Field(default=None, alias="agentCapabilitySha256", pattern=r"^sha256:[0-9a-f]{64}$")
     database_operation: Literal["create", "read", "update", "delete"] | None = Field(default=None, alias="databaseOperation")
     source_binding: SourceBinding | None = Field(default=None, alias="sourceBinding")
     static_data: dict[str, Any] | list[dict[str, Any]] | None = Field(default=None, alias="staticData")

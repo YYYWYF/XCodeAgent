@@ -6,7 +6,9 @@ const config = { agentId: 'orders', name: '订单助手', actionId: 'ask_orders'
   actions: [{ actionId: 'ask_orders', operation: 'send_message', message: '', requiresConfirmation: false },
     { actionId: 'follow_up', operation: 'send_message', message: '继续说明', requiresConfirmation: false },
     { actionId: 'clear', operation: 'clear_conversation', message: '', requiresConfirmation: true }],
-  runtime: { path: '/agents/orders/run', pageId: 'orders_page', interactionKinds: ['clarification', 'confirmation'] } } as unknown as AgentUiTemplateConfig
+  runtime: { path: '/agents/orders/run', pageId: 'orders_page', mode: 'conversation',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }, resultSchema: null,
+    interactionKinds: ['clarification', 'confirmation'] } } as unknown as AgentUiTemplateConfig
 
 /** 构造由官方 SDK 实际解析的完整流，不以手工调用订阅回调代替传输验证。 */
 function events(body: { runId: string; threadId: string }, status: 'completed' | 'awaiting_user', includeResult = true,

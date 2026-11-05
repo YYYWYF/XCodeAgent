@@ -32,6 +32,8 @@ def runtime_verification_files(files: dict, task: dict, check: dict, workspace: 
         paths.update("agent-runtime/" + path for path in policy["modulePaths"][module]["readPaths"])
         if module in {"model", "memory", "context"}:
             paths.add("agent-runtime/src/app/server/agui.py")
+            paths.add("agent-runtime/src/app/agent/invocation.py")
+            paths.add("agent-runtime/src/app/agent/contracts.py")
             paths.add("agent-runtime/src/app/agent/execution_guard.py")
             paths.add("agent-runtime/src/app/agent/execution_policy.py")
         if module == "model":

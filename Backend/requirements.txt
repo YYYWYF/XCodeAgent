@@ -10,6 +10,7 @@ langgraph>=1.2.8,<2.0.0
 langgraph-checkpoint-sqlite>=2.0.0
 langsmith>=0.1.39
 json-repair==0.*
+jsonschema>=4.23,<5
 python-dotenv>=1.0.1
 PyYAML>=6.0.2
 urllib3<2

@@ -127,7 +127,8 @@ def load_agent_runtime_template_policy(runtime_root: str | Path) -> dict[str, An
         for path in config[field]
     }
     # 平台策略和执行保护只能作为所有模块的只读依赖，不能被模块生成器改写。
-    required_paths.update({"src/app/agent/execution_policy.py", "src/app/agent/execution_guard.py"})
+    required_paths.update({"src/app/agent/execution_policy.py", "src/app/agent/execution_guard.py",
+                           "src/app/agent/invocation.py", "src/app/agent/contracts.py"})
     invalid: list[str] = []
     test_roots = {
         path for config in _MODULE_PATH_POLICY.values() for path in config["testRoots"]
@@ -165,7 +166,8 @@ def load_agent_runtime_template_policy(runtime_root: str | Path) -> dict[str, An
         "modulePaths": deepcopy(_MODULE_PATH_POLICY),
     }
     for config in policy["modulePaths"].values():
-        config["readPaths"].extend(["src/app/agent/execution_policy.py", "src/app/agent/execution_guard.py"])
+        config["readPaths"].extend(["src/app/agent/execution_policy.py", "src/app/agent/execution_guard.py",
+                                    "src/app/agent/invocation.py", "src/app/agent/contracts.py"])
     return {**policy, "policySha256": _canonical_sha256(policy)}
 
 

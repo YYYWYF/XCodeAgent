@@ -1,14 +1,19 @@
-import { Alert, Button, Collapse, Input, Select, Space, Typography } from 'antd'
+import { Alert, Button, Select, Space } from 'antd'
 import { InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { randomUUID } from '@ag-ui/client'
-import { useEffect, useRef, useState } from 'react'
-import type { RuntimeAgent, DebugCredential } from '../../../../service/runtimeWorkbench'
-import { requestRuntimeDebug } from '../../../../service/runtimeWorkbench'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { RuntimeAgent, DebugCredential, DebugHttpResponse } from '../../../../service/runtimeWorkbench'
+import { requestRuntimeDebug, requestRuntimeDebugHttp } from '../../../../service/runtimeWorkbench'
 import { RuntimeDebugConversation } from '../../../../service/runtimeDebugConversation'
 import type { DebugConversation } from '../../../../service/runtimeDebugConversation'
+import { debugRequestPath } from '../../../../service/runtimeDebugRequest'
+import AgentDebugRequestEditor, { debugRequestIssues, initialDebugFields, readDebugFields } from './AgentDebugRequestEditor'
+import AgentDebugResponse from './AgentDebugResponse'
+import AgentDebugStreamView from './AgentDebugStreamView'
 import './AgentDebugPanel.less'
 
 const labels = { idle: '就绪', running: '运行中', completed: '已完成', awaiting_user: '等待交互', unknown: '结果未知' }
+const relationLabels = { agent_entry: '智能体运行入口', agent_call: '调用智能体的接口', tool: '智能体使用的工具接口' }
 
 /** 显式启动独立 Debug Profile，通过官方 SDK 调试；凭据及对话不进入开发历史。 */
 export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: RuntimeAgent; workspaceRoot: string }): JSX.Element {
@@ -26,14 +31,34 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
   const [active, setActive] = useState(false)
   const ownsProcess = useRef(false)
   const [restartRequired, setRestartRequired] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [pageId, setPageId] = useState(agent.pageIds[0] || 'debug')
+  const endpoints = agent.debugEndpoints || []
+  const [targetKey, setTargetKey] = useState(endpoints[0] ? JSON.stringify([endpoints[0].apiContractId, endpoints[0].endpointId]) : '')
+  const endpoint = endpoints.find((item) => JSON.stringify([item.apiContractId, item.endpointId]) === targetKey)
+  const [fields, setFields] = useState(() => initialDebugFields(endpoint))
+  const [draft, setDraft] = useState(endpoint?.responseMode === 'json' || agent.interactionContract.mode === 'task' || endpoint?.kind === 'business' ? '{}' : '')
+  const [jsonResponse, setJsonResponse] = useState<DebugHttpResponse>()
   const [view, setView] = useState<DebugConversation>({ status: 'idle', messages: [], tools: [] })
   const running = view.status === 'running'
   const building = ['running', 'stopping'].includes(agent.development?.execution?.status || '')
   const expired = Boolean(credential && Date.now() >= credential.expiresAt * 1000)
-  const statusLabel = busy ? '正在处理…' : credential ? expired ? '已过期' : labels[view.status]
+  const taskMode = agent.interactionContract.mode === 'task' || endpoint?.kind === 'business'
+  const validationErrors = useMemo(() => endpoint ? debugRequestIssues(endpoint, fields, draft,
+    endpoint.responseMode === 'json' ? !['GET', 'HEAD'].includes(endpoint.method) : taskMode && !view.pending) : [],
+  [endpoint, fields, draft, taskMode, view.pending])
+  const statusLabel = busy ? '正在处理…' : credential ? expired ? '已过期' : jsonResponse ? '已收到响应' : labels[view.status]
     : external ? '其他窗口调试中' : active ? '等待同步' : '未启动'
+
+  // 目录更新移除未完成或已变更接口时，清理旧输入和响应并选择当前可用入口。
+  useEffect(() => {
+    if (endpoint) return
+    const target = endpoints[0]
+    const key = target ? JSON.stringify([target.apiContractId, target.endpointId]) : ''
+    if (targetKey === key) return
+    conversation.current?.dispose(); conversation.current = undefined
+    setTargetKey(key); setFields(initialDebugFields(target)); setError(''); setJsonResponse(undefined)
+    setView({ status: 'idle', messages: [], tools: [] })
+    setDraft(target?.responseMode === 'json' || target?.kind === 'business' || agent.interactionContract.mode === 'task' ? '{}' : '')
+  }, [endpoints, endpoint, targetKey, agent.interactionContract.mode])
 
   /** 所有控制动作共用拥有者，其他窗口不能使用本面板的停止权限。 */
   const control = (action: 'get_debug' | 'start_debug' | 'stop_debug', receive?: (value: DebugCredential) => void) =>
@@ -62,8 +87,11 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
   /** 新会话使用独立 threadId，不清除服务端旧线程，也不重新执行旧消息。 */
   const newConversation = (value: DebugCredential): void => {
     conversation.current?.dispose()
-    conversation.current = new RuntimeDebugConversation(value, agent.agentId, (next) => { if (alive.current) setView(next) })
-    setView({ status: 'idle', messages: [], tools: [] }); setDraft('')
+    conversation.current = undefined
+    if (!endpoint) throw new Error('尚未读取到当前智能体的调用入口。')
+    if (endpoint.responseMode === 'ag-ui') conversation.current = new RuntimeDebugConversation(value, agent.agentId,
+      (next) => { if (alive.current) setView(next) }, { endpoint, values: readDebugFields(fields) })
+    setView({ status: 'idle', messages: [], tools: [] }); setJsonResponse(undefined)
   }
 
   /** 启动只准备进程和依赖，收到短期凭据后才开放发送。 */
@@ -120,7 +148,8 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
     busyRef.current = true; setBusy(true)
     try {
       setError('')
-      if (!conversation.current) throw new Error('调试客户端尚未就绪，请停止后重新启动。')
+      if (!endpoint) throw new Error('请选择当前智能体的正式调用入口。')
+      if (validationErrors.length) throw new Error(validationErrors[0])
       const state = await control('get_debug')
       if (!alive.current) return
       if (stoppingRef.current) return
@@ -131,11 +160,30 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
         setRestartRequired(true)
         throw new Error('代码或配置已变化，请停止并重新启动；本次未发送模型请求。')
       }
-      if (!conversation.current || !credentialRef.current || Date.now() >= credentialRef.current.expiresAt * 1000) {
+      if (!credentialRef.current || Date.now() >= credentialRef.current.expiresAt * 1000) {
         throw new Error('调试会话已停止或过期，请重新启动。')
       }
-      await conversation.current.send(draft, pageId, answer)
-      if (alive.current) setDraft('')
+      const values = readDebugFields(fields)
+      debugRequestPath(endpoint, values)
+      if (endpoint.responseMode === 'json') {
+        setJsonResponse(undefined)
+        const body = ['GET', 'HEAD'].includes(endpoint.method) ? null : JSON.parse(draft || '{}')
+        const result = await requestRuntimeDebugHttp({ workspaceRoot, action: 'request_debug', agentId: agent.agentId,
+          launchId: credentialRef.current.launchId, apiContractId: endpoint.apiContractId, endpointId: endpoint.endpointId,
+          pathParameters: values.pathParameters, query: values.query, headers: values.headers, body }, owner)
+        if (alive.current) setJsonResponse(result)
+        return
+      }
+      let input: Record<string, unknown> | undefined
+      if (taskMode && !view.pending) {
+        const parsed: unknown = JSON.parse(draft)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('任务输入必须是 JSON 对象。')
+        input = parsed as Record<string, unknown>
+        if (view.status === 'completed') newConversation(credentialRef.current)
+      }
+      if (!conversation.current || !view.messages.length) newConversation(credentialRef.current)
+      await conversation.current!.send(taskMode && !view.pending ? '执行本次业务任务。' : draft, values.context, answer, input)
+      if (alive.current) setDraft(taskMode ? '{}' : '')
     } catch (reason) { if (alive.current) setError(reason instanceof Error ? reason.message : '发送失败') }
     finally {
       // 发送与停止分别收口，不能由先完成的一方释放另一方仍持有的忙碌状态。
@@ -164,80 +212,74 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
     return () => clearTimeout(timer)
   }, [credential])
 
-  return <div className="agent-debug-panel">
+  return <div className="agent-debug-panel" data-mode={endpoint?.responseMode}>
     <header className="agent-debug-heading">
       <div className="agent-debug-identity">
-        <h3>{agent.name} · 调试</h3>
+        <h3>接口调试</h3>
         <span className="agent-debug-status" role="status" data-active={Boolean(credential && !expired)}>{statusLabel}</span>
       </div>
       <Space size={8} wrap>
         <Button type="text" icon={<ReloadOutlined />} disabled={busy || running} onClick={() => void sync()}>同步状态</Button>
         {(active || credential || external) ? <Button disabled={busy || external} onClick={() => void stop()}>停止调试</Button>
-          : <Button type="primary" loading={busy} disabled={busy || building} onClick={() => void start()}>启动调试</Button>}
+          : <Button loading={busy} disabled={busy || building || !endpoint} onClick={() => void start()}>启动调试</Button>}
       </Space>
     </header>
     <section className="agent-debug-controls" aria-label="调试环境">
-      <div className="agent-debug-model"><span>模型</span><strong>{String(agent.agentSettings.model?.model || agent.agentSettings.model?.provider || '跟随应用配置')}</strong></div>
-      <div className="agent-debug-context"><span>页面上下文</span>
-        {/* 页面选项留在当前面板中，继承明暗主题变量。 */}
-        <Select aria-label="调试页面上下文" value={pageId} disabled={busy || running || view.messages.length > 0}
+      <div className="agent-debug-context"><span>调试接口</span>
+        <Select aria-label="调试调用接口" value={targetKey || undefined} disabled={busy || running || external || !endpoints.length}
+          placeholder="选择与当前智能体相关的接口"
+          optionLabelProp="title" virtual={false}
           getPopupContainer={(trigger) => trigger.parentElement || trigger}
-          options={(agent.pageIds.length ? agent.pageIds : ['debug']).map((id) => ({ label: id, value: id }))} onChange={setPageId} />
+          options={endpoints.map((item) => ({ title: item.label,
+            label: <div className="agent-debug-endpoint-option">
+              <span className="agent-debug-endpoint-option-name">{item.label}</span>
+              <span className="agent-debug-endpoint-option-address"><span>{item.method}</span><code>{item.path}</code></span>
+            </div>,
+            value: JSON.stringify([item.apiContractId, item.endpointId]) }))} onChange={(key) => {
+              const target = endpoints.find((item) => JSON.stringify([item.apiContractId, item.endpointId]) === key)
+              // 同一受管进程可调试多个相关接口；切换只清理本地会话，不重复启动服务或发送请求。
+              conversation.current?.dispose(); conversation.current = undefined
+              setTargetKey(key); setFields(initialDebugFields(target)); setError(''); setJsonResponse(undefined)
+              setView({ status: 'idle', messages: [], tools: [] })
+              setDraft(target?.responseMode === 'json' || target?.kind === 'business' || agent.interactionContract.mode === 'task' ? '{}' : '')
+            }} />
       </div>
+      <span className="agent-debug-protocol">{endpoint?.responseMode === 'json' ? '非流式 JSON' : '流式 AG-UI'}</span>
     </section>
+    {endpoint && <div className="agent-debug-endpoint"><code>{endpoint.method} {endpoint.path}</code>
+      <span>{relationLabels[endpoint.relation]}{endpoint.responseMode === 'ag-ui' ? ` · ${taskMode ? '单次任务' : '多轮对话'}` : ' · 一次性响应'}</span></div>}
+    <div className="agent-debug-model"><span>模型</span><strong>{String(agent.agentSettings.model?.model || agent.agentSettings.model?.provider || '跟随应用配置')}</strong></div>
     <p className="agent-debug-notice"><InfoCircleOutlined /><span>使用真实模型、工具和当前数据源，可能写入业务数据；结果不计入开发或正式验收。</span></p>
     {building && <Alert type="info" message="当前智能体正在生成或停止开发任务，请等待代码写入结束后启动调试。" />}
+    {!endpoints.length && <Alert type="info" message="暂无可调试接口，请先完成接口开发。" />}
     {error && <Alert type="error" showIcon message={error} />}
-    {view.error && <Alert type="error" showIcon message={view.error} />}
+    {!building && view.error && <Alert type="error" showIcon message={view.error} />}
     {external && <Alert type="warning" showIcon message="当前工作区由其他调试窗口占用，请在原窗口停止或等待十分钟凭据过期。" />}
-    {restartRequired && <Alert type="warning" showIcon message="代码或配置已变化，请停止并重新启动以加载最新内容。" />}
-    <div className="agent-debug-workspace">
-    <section className="agent-debug-conversation" aria-label="调试对话">
-    <div className="agent-debug-section-heading"><h4>调试对话</h4>
-      <Button type="text" size="small" disabled={!credential || busy || expired || running} onClick={() => { if (credential) newConversation(credential) }}>新建会话</Button>
-    </div>
-    <div className={`agent-debug-messages${!view.messages.length ? ' is-empty' : ''}`} role="log" aria-live="polite" aria-relevant="additions text">
-      {!view.messages.length && <div className="agent-debug-empty">
-        <h4>{credential ? '发送第一条调试消息' : '开始一次调试'}</h4>
-        <p>{credential ? '环境已就绪，输入问题查看智能体回复。' : '启动环境后，即可发送问题并查看回复与工具调用。'}</p>
-      </div>}
-      {view.messages.map((item) => <article className={`agent-debug-message is-${item.role === 'user' ? 'user' : 'assistant'}`} key={item.id}>
-        <strong>{item.role === 'user' ? '我' : agent.name}</strong><p>{item.content}</p></article>)}
-    </div>
-    <section className="agent-debug-composer" aria-label="调试消息输入">
-    {view.pending && <Alert type="warning" showIcon message={view.pending.message} description={view.pending.kind === 'clarification'
-      ? '请在下方输入回答并提交。' : <Space><Button disabled={running || busy || expired || restartRequired} onClick={() => void send(true)}>同意</Button>
-        <Button disabled={running || busy || expired || restartRequired} onClick={() => void send(false)}>拒绝</Button></Space>} />}
-    <Input.TextArea aria-label="调试消息" autoSize={{ minRows: 2, maxRows: 5 }} maxLength={8000} value={draft} onChange={(event) => setDraft(event.target.value)}
-      disabled={!credential || busy || expired || running || restartRequired || view.status === 'unknown' || Boolean(view.pending && view.pending.kind !== 'clarification')}
-      placeholder={credential ? '输入调试问题或澄清回答…' : '启动调试后，在这里输入问题…'} />
-    <div className="agent-debug-composer-footer">
-    <Typography.Text type="secondary">仅保留当前面板内的对话</Typography.Text>
-    <Space size={8}>
-      {running && <Button onClick={() => conversation.current?.stop()}>停止接收</Button>}
-      <Button type="primary" disabled={!credential || busy || expired || running || restartRequired || !draft.trim() || view.status === 'unknown'
-      || Boolean(view.pending && view.pending.kind !== 'clarification')}
-      onClick={() => void send(view.pending ? draft : undefined)}>{view.pending ? '提交回答' : '发送'}</Button></Space>
-    </div>
-    </section>
-    </section>
-    <aside className="agent-debug-tools" aria-label="工具调用">
-      <div className="agent-debug-section-heading"><h4>工具调用</h4><span>{view.tools.length ? `最近 ${view.tools.length} 条` : '暂无事件'}</span></div>
-      {view.tools.length === 0 ? <div className="agent-debug-tools-empty">
-        <strong>等待工具调用事件</strong>
-        <p>对话中的工具参数与结果会显示在这里。</p>
-        <p>尚未收到事件时，无法判断内部是否调用过工具。</p>
-      </div> : <>
-        <p className="agent-debug-tools-caption">保留最近 40 条，参数和结果各最多展示 4096 字符。</p>
-        <Collapse ghost>
-          {view.tools.map((tool) => <Collapse.Panel key={tool.id} header={<span className="agent-debug-tool-title"><strong>{tool.name}</strong>
-            <span>{tool.elapsed === undefined ? '运行中／未收到结果' : `${tool.elapsed} ms`}</span></span>}>
-            <span className="agent-debug-tool-label">参数</span><pre>{tool.args || '暂无参数'}</pre>
-            <span className="agent-debug-tool-label">结果</span><pre>{tool.result || '尚未收到结果'}</pre>
-          </Collapse.Panel>)}
-        </Collapse>
-      </>}
-    </aside>
-    </div>
+    {!building && restartRequired && <Alert type="warning" showIcon message="代码或配置已变化，请停止并重新启动以加载最新内容。" />}
+    {/* 开发写入期间不挂载输入与结果区域，避免暴露尚不能使用的调试表单和校验信息。 */}
+    {!building && (endpoint?.responseMode === 'json' ? <div className="agent-debug-http-workspace">
+      <section className="agent-debug-http-request" aria-label="非流式请求">
+        <div className="agent-debug-section-heading"><h4>请求</h4>
+          <Button type="primary" disabled={!credential || busy || expired || restartRequired || Boolean(validationErrors.length)}
+            loading={busy} onClick={() => void send()}>发送请求</Button></div>
+        <AgentDebugRequestEditor key={targetKey} endpoint={endpoint} value={fields} onChange={setFields}
+          disabled={busy || running} body={draft} onBodyChange={setDraft} />
+        <p className="agent-debug-validation-hint" data-invalid={Boolean(validationErrors.length)} role="status">
+          {validationErrors.length ? `请求有 ${validationErrors.length} 项问题：${validationErrors[0]}` : '请求输入校验通过'}
+        </p>
+      </section>
+      <AgentDebugResponse response={jsonResponse} loading={busy && sendingRef.current} />
+    </div> : endpoint && <>
+      <details className="agent-debug-advanced"><summary>请求参数与上下文<span>可选</span></summary>
+        <AgentDebugRequestEditor key={targetKey} endpoint={endpoint} value={fields} onChange={setFields}
+          disabled={busy || running || view.messages.length > 0} body={draft} onBodyChange={setDraft} />
+      </details>
+      <AgentDebugStreamView name={agent.name} view={view} taskMode={taskMode} ready={Boolean(credential)} busy={busy}
+        expired={expired} restartRequired={restartRequired} draft={draft} onDraftChange={setDraft}
+        inputSchema={endpoint.requestSchema} inputInvalid={Boolean(validationErrors.length)}
+        onSend={(answer) => void send(answer)} onStop={() => conversation.current?.stop()}
+        onNew={() => { if (credential) { newConversation(credential); setDraft(taskMode ? '{}' : '') } }} />
+      <AgentDebugResponse stream={view} />
+    </>)}
   </div>
 }

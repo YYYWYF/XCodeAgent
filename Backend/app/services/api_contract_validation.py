@@ -57,10 +57,15 @@ def _validate_api_contract_definitions(
     }
     for contract in contracts:
         contract_id = str(contract.get("id") or "")
+        invalid = [item for item in dict_items(contract.get("endpoints"))
+                   if item.get("kind") is not None and item.get("kind") not in {"business", "agent_runtime"}]
+        if invalid:
+            errors.extend(f"Endpoint {item.get('id')} 的 kind={item.get('kind')!r} 无效；只能是 business 或 agent_runtime，不能使用架构类型。" for item in invalid)
+            continue
         if any(item.get("kind") == "agent_runtime" for item in dict_items(contract.get("endpoints"))):
             try:
                 from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
-                materialize_runtime_endpoints(project_plan)
+                materialize_runtime_endpoints(project_plan, require_topology=False)
                 for endpoint in contract["endpoints"]:
                     key = (contract_id, endpoint["id"])
                     if key in endpoint_index:

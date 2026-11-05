@@ -30,8 +30,8 @@ from tests.test_technical_planning_recovery_journey import TechnicalPlanningReco
 def agent_contract() -> dict:
     """提供满足当前七模块合同的业务 Agent，不引入模板占位注册。"""
 
-    return {
-        "agentId": "orders", "name": "订单助手", "purpose": "解答订单问题", "pageIds": ["orders_page"],
+    return {"interactionContract": {"mode": "conversation", "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, "resultSchema": None, "textOutput": True, "publicStateSchema": None, "outcomes": [], "interactionKinds": []},
+        "agentId": "orders", "name": "订单助手", "purpose": "解答订单问题", "publicEndpoint": True, "pageIds": ["orders_page"],
         "agentSettings": {"prompt": {"systemPrompt": "仅回答订单问题。"}, "model": {"source": "project"},
             "memory": {}, "context": {}, "tools": {"enabled": False, "bindings": []},
             "skills": {"enabled": False}, "knowledge": {"enabled": False}},
@@ -73,17 +73,18 @@ class TechnicalPlanRuntimeRecoveryTests(TestCase):
         self.assertEqual(validate_technical_plan_agent_contracts(candidate, self.requirement["confirmed_product_plan"]), [])
         self.assertNotIn("agent_contracts", self.baseline)
 
-    def test_disabled_product_agent_can_be_removed_from_candidate(self):
-        """产品入口全部停用后允许清空技术合同，不能强制保留过期 Agent。"""
+    def test_disabled_surface_preserves_internal_agent(self):
+        """关闭页面入口后保留后台能力，仅清空页面绑定并关闭公开入口。"""
 
         baseline = {**self.baseline, "agent_contracts": [self.contract]}
         self.requirement["confirmed_product_plan"]["agents"][0]["pageActionBindings"][0]["surface"]["enabled"] = False
-        # 内存文件按根对象缩进，直接替换唯一身份所在的完整数组片段。
+        # 修改入口投影而非删除业务能力，候选仍沿正式产品事实复验。
+        internal = {**self.contract, "pageIds": [], "publicEndpoint": False}
         old = json.dumps({"agent_contracts": [self.contract]}, ensure_ascii=False, indent=2)[2:-2].strip()
         candidate = self.edit([
             tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
-                old_string=old, new_string='"agent_contracts": []'),
-            AIMessage(content="已移除停用入口对应的技术合同。"),
+                old_string=old, new_string=json.dumps({"agent_contracts": [internal]}, ensure_ascii=False, indent=2)[2:-2].strip()),
+            AIMessage(content="已保留后台能力并移除页面入口。"),
         ], baseline=baseline)
         self.assertEqual(validate_technical_plan_agent_contracts(candidate, self.requirement["confirmed_product_plan"]), [])
 
@@ -120,18 +121,27 @@ class TechnicalPlanRuntimeRecoveryTests(TestCase):
         self.assertNotIn("artifact_type", candidate)
         self.assertEqual(candidate["api_contracts"], self.baseline["api_contracts"])
 
-    def test_budget_exhaustion_preserves_last_complete_edit_before_invalid_json(self):
-        """超限前发生不完整关联编辑时，仍恢复此前成功修改，且不带已物化身份。"""
+    def test_framework_interruption_preserves_last_complete_edit_before_invalid_json(self):
+        """框架中断前发生不完整关联编辑时，仍恢复此前成功修改。"""
 
         responses = [
             tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
                 old_string='"default": 20', new_string='"default": 8'),
             tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
                 old_string='"default": 30', new_string='"default": PENDING'),
-            *[tool_response("grep", pattern="orders") for _ in range(8)],
         ]
-        with self.assertRaisesRegex(TechnicalPlanEditorError, "达到调用上限") as raised:
-            self.edit(responses)
+        original = ScriptedEditorModel._generate
+
+        def interrupt_after_responses(model, messages, **kwargs):
+            """只在受控工具编辑完成后模拟框架中断，不新增产品调用预算。"""
+            from langgraph.errors import GraphRecursionError
+            if not model.responses:
+                raise GraphRecursionError('模拟框架步数耗尽')
+            return original(model, messages, **kwargs)
+
+        with patch.object(ScriptedEditorModel, '_generate', new=interrupt_after_responses):
+            with self.assertRaisesRegex(TechnicalPlanEditorError, "框架图步数上限") as raised:
+                self.edit(responses)
         recovered = raised.exception.candidate
         values = [item["parameters"][0]["schema"]["default"] for item in recovered["api_contracts"][0]["endpoints"]]
         self.assertEqual(values, [8, 30])
@@ -184,7 +194,7 @@ class TechnicalPlanRuntimeRecoveryTests(TestCase):
                     "technical_plan_repair_candidate": partial, "technical_plan_repair_errors": ["具体合同错误"],
                     "application_planning_recovery_boundary": application_planning_boundary_payload(
                         operation_id="recovery", operation=operation,
-                        boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY, request="继续规划"),
+                        boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY, request="继续规划", baseline=self.baseline),
                 }
                 with (
                     patch.object(planning, "_technical_planning_requirement_spec", return_value=self.requirement),
@@ -233,7 +243,7 @@ class TechnicalPlanRecoveryStreamTests(IsolatedAsyncioTestCase):
                 patch("app.agents.main.planner._invoke_live_chat_model", side_effect=AssertionError("不能从零重生成")),
             ):
                 frames = [frame async for frame in build_workflow_ag_ui_stream(graph=h.graph, payload={
-                    "threadId": h.thread_id, "runId": h.source_run_id, "request": h.request,
+                    "threadId": h.thread_id, "runId": h.source_run_id, "projectId": h.project_id, "request": h.request,
                     "resume_from": "technical_planning_begin", "forwardedProps": {
                         "workspaceRoot": str(h.workspace), "workflowScope": "application_planning"}})]
             state = await h.graph.aget_state({"configurable": {"thread_id": h.thread_id}})

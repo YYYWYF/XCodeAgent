@@ -76,7 +76,7 @@ def project_agent_ui_build_contracts(
         from app.services.runtime_endpoint_contracts import runtime_endpoint_capability_snapshot, runtime_endpoint_identity
         snapshot = runtime_endpoint_capability_snapshot(technical_plan, *runtime_endpoint_identity(agent_id))
         config["runtime"] = {"path": snapshot["invocation"]["path"], "pageId": page_id,
-            "interactionKinds": snapshot["interactionContract"]["interactionKinds"]}
+            **{key: snapshot["interactionContract"][key] for key in ("mode", "inputSchema", "resultSchema", "interactionKinds")}}
         surface = _text(config.get("surface"))
         component = _COMPONENTS.get(surface)
         if component is None:

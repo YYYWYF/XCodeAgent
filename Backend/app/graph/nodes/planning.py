@@ -232,6 +232,11 @@ def _attach_technical_plan_contracts(
 ) -> dict:
     """为当前 TechnicalPlan 写入上游哈希；实现契约只在运行时编译。"""
 
+    from app.services.agent_confirmation_contract import complete_tool_confirmation
+    from app.services.technical_pagination import complete_technical_pagination
+    plan = complete_technical_pagination(complete_tool_confirmation(plan))
+    from app.services.runtime_endpoint_candidates import rebuild_candidate_runtime_endpoints
+    plan = rebuild_candidate_runtime_endpoints(plan)
     if state.get("workflow_scope") != "application_planning":
         return plan
     product_plan = state.get("product_plan")
@@ -1851,7 +1856,8 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
         "修复方式遵循当前入口约定：编辑工具可用时仅修改相关片段，保留未受影响的内容；"
         "优先按诊断中的完整候选字段路径定位，并按明确预期值修复；先核对当前值，已满足约束的字段保持原样。"
         "不得猜测或省略业务 action/step，"
-        "必须完整保留当前 TechnicalPlan 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"
+        "必须保留当前业务需要的 TechnicalPlan 实体；API Contract 通过 entity_ids 绑定实际关联实体，"
+        "无实体的服务/检索/计算接口使用 entity_ids=[]，不得为通过校验虚构或强绑无关实体，禁止 data_source_id；"
         "每个 endpointId 必须同时存在于 api_contracts 和对应页面 endpoint_dependencies。"
         "若需要改变上游动作归属，使用 request_product_revision 明确指出产品原文及修改建议后停止，"
         "不能为解决客户端会话动作而虚构业务接口。其余可修复的技术缺口直接修复：\n"

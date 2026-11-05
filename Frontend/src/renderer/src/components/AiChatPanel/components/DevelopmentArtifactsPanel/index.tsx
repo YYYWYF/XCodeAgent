@@ -1,4 +1,5 @@
-import { Button } from 'antd'
+import { Alert, Button } from 'antd'
+import { endpointDevelopmentStatusLabel } from '../../../../developmentArtifacts'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
@@ -18,6 +19,7 @@ import type { WorkbenchExecution, DevelopmentPlanningPageOption } from '../../..
 import './DevelopmentArtifactsPanel.less'
 
 type Props = ApplicationOutlineProps & {
+  onAgentRefresh?: () => void
   onStartPageDevelopment?: (page: DevelopmentPlanningPageOption) => void
   pageDevelopmentDisabled?: boolean
   onStartAgent?: (agent: BusinessAgentOption) => void
@@ -35,6 +37,7 @@ type Props = ApplicationOutlineProps & {
   onOpenAgentExecution?: (execution: WorkbenchExecution) => void
   agentDevelopmentDisabled?: boolean
   agentStateRevision?: number
+  onOpenFile?: (path: string) => void
 }
 
 /** 并排展示产物菜单与接口、实体详情，菜单选择不改变开发工作流。 */
@@ -57,6 +60,7 @@ export default function DevelopmentArtifactsPanel({
   onOpenAgentExecution,
   agentDevelopmentDisabled,
   agentStateRevision,
+  onOpenFile,
   ...outlineProps
 }: Props): ReactElement {
   const [agents, setAgents] = useState<RuntimeAgent[]>([])
@@ -74,17 +78,14 @@ export default function DevelopmentArtifactsPanel({
         label: item.name,
         purpose: item.purpose,
         pageIds: item.pageIds,
+        executionMode: item.interactionContract.mode,
+        publicEndpoint: item.publicEndpoint,
         agentSettings: item.agentSettings,
         capabilities: [],
         boundaries: [],
         tools: []
       }))
   const interfaceAgent = menuAgents.find((item) => item.agentId === outlineProps.selectedAgentInterfaceId)
-  /** 刷新同一份智能体目录及规划投影，保持详情保存后的原有刷新行为。 */
-  const handleAgentRefresh = (): void => {
-    setAgentRefresh((value) => value + 1)
-    onAgentRefresh?.()
-  }
   /** 按实际来源选择规划智能体或独立 Runtime 详情，不触发正式开发。 */
   const handleAgentSelect = (item: BusinessAgentOption | undefined): void => {
     if (outlineProps.agents?.length) {
@@ -109,6 +110,10 @@ export default function DevelopmentArtifactsPanel({
   const selectedEntity = outlineProps.entities.find(
     (entity) => entity.id === outlineProps.selectedEntityId
   )
+  const selectedEndpoint = outlineProps.apiContracts.find((item) => item.id === apiTarget?.apiContractId)
+    ?.endpoints.find((item) => item.id === apiTarget?.endpointId)
+  const endpointStatus = selectedEndpoint && apiTarget
+    ? endpointDevelopmentStatusLabel(outlineProps.developmentArtifacts, apiTarget.apiContractId, selectedEndpoint) : ''
   const { detail, error, loading, reload } = useEndpointDesignDetail(
     workspaceRoot,
     apiTarget,
@@ -122,7 +127,6 @@ export default function DevelopmentArtifactsPanel({
           agents={menuAgents}
           selectedAgentId={agentId || outlineProps.selectedAgentId}
           agentError={agentError}
-          onAgentRefresh={handleAgentRefresh}
           onAgentSelect={handleAgentSelect}
           onAgentInterfaceSelect={(item) => { setAgentId(''); outlineProps.onAgentInterfaceSelect?.(item) }}
           onPageSelect={(item) => { setAgentId(''); outlineProps.onAgentSelect?.(undefined); outlineProps.onPageSelect(item) }}
@@ -135,13 +139,15 @@ export default function DevelopmentArtifactsPanel({
       >
         {!interfaceAgent && !agent && !selectedAgent && apiTarget && onConfigureApi ? (
           <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>
-            打开字段映射
+            {selectedEndpoint?.agentCall || selectedEndpoint?.kind === 'agent_runtime' ? '查看调用设计' : '打开字段映射'}
           </Button>
         ) : null}
         {interfaceAgent ? <AgentInterfaceDetail agent={interfaceAgent}
           progress={outlineProps.developmentArtifacts?.agents?.[interfaceAgent.agentId]}
           onOpenAgent={() => handleAgentSelect(interfaceAgent)} /> : agent && workspaceRoot ? <RuntimeAgentDetail key={`${workspaceRoot}:${agent.agentId}`} agent={agent} workspaceRoot={workspaceRoot}
           disabled={agentDevelopmentDisabled || agentActionsDisabled} onStartDevelopment={onStartAgentDevelopment} onOpenExecution={onOpenAgentExecution}
+          apiContracts={outlineProps.apiContracts}
+          onOpenFile={onOpenFile}
           onSaved={(result) => { onAgentSettingsSaved?.(result); onAgentRefresh?.(); setAgentRefresh((value) => value + 1) }} /> : selectedAgent && workspaceRoot ? (
           <AgentDevelopmentDetail
             key={`${workspaceRoot}:${selectedAgent.agentId}`}
@@ -179,7 +185,11 @@ export default function DevelopmentArtifactsPanel({
               )}
             </div>
           ) : (
-            <EndpointDesignResult detail={detail} />
+            <>
+              {endpointStatus === '智能体已完成，接口待开发' ? <Alert type="info" showIcon
+                message={endpointStatus} description="业务接口仍需实现请求参数、调用适配与响应转换；接口开发完成后将显示绿色。" /> : null}
+              <EndpointDesignResult detail={detail} />
+            </>
           )
         ) : selectedEntity ? (
           <EntityInfoPanel

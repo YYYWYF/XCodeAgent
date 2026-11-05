@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 
 from app.services.workspace_process_registry import workspace_process_registry
+from app.utils.process_liveness import pid_is_running
 
 
 def allocate_runtime_port() -> int:
@@ -73,6 +74,29 @@ def runtime_health(url: str, launch_id: str, *, database_required: bool, health_
         return False, "Runtime 就绪检查未通过：" + "、".join(failed or ["status"]) + "，请查看启动日志。"
     session_label = "调试会话" if profile == "debug" else "匿名会话"
     return True, f"Runtime 健康、业务路由、AG-UI、{session_label}及数据库检查通过。"
+
+
+def wait_runtime_proxy_ready(url: str, launch_id: str, *, database_required: bool,
+                             frontend_pid: int, runtime_pid: int, expected_agent_ids: list[str],
+                             timeout_seconds: float = 20) -> tuple[bool, str]:
+    """等待本轮前端代理就绪；只做有界健康探测，进程退出或取消立即停止，不重启服务。"""
+    from app.services.run_workers import current_run_id
+
+    deadline = time.monotonic() + timeout_seconds
+    message = "前端代理尚未就绪。"
+    while time.monotonic() < deadline:
+        if workspace_process_registry.is_run_cancelled(current_run_id()):
+            return False, "本次代理就绪检查已取消。"
+        if not pid_is_running(frontend_pid):
+            return False, "前端进程已退出，请查看前端启动日志。"
+        if not pid_is_running(runtime_pid):
+            return False, "Runtime 进程已退出，请查看 Runtime 启动日志。"
+        ready, message = runtime_health(url, launch_id, database_required=database_required,
+                                        health_path="/__runtime/health", expected_agent_ids=expected_agent_ids)
+        if ready:
+            return True, message
+        time.sleep(0.3)
+    return False, f"等待前端到 Runtime 的代理就绪超时（{timeout_seconds:g} 秒）：{message}"
 
 
 def wait_runtime_ready(process: subprocess.Popen, url: str, launch_id: str, *, database_required: bool,

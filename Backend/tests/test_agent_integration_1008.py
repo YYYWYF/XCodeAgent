@@ -39,7 +39,7 @@ def fixture() -> tuple[dict, dict, dict]:
         "entities": [], "api_contracts": [], "pages": [{"pageId": page_id}],
         "topology": {"type": "agent_runtime_direct", "serviceIds": ["agent-runtime"],
                      "publicEdgeServiceId": "agent-runtime", "authenticationTermination": "anonymous-session"},
-        "agent_contracts": [{"agentId": "assistant", "name": "库存助手", "purpose": "解释库存状态。", "pageIds": [page_id],
+        "agent_contracts": [{"interactionContract": {"mode": "conversation", "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, "resultSchema": None, "textOutput": True, "publicStateSchema": None, "outcomes": [], "interactionKinds": []}, "agentId": "assistant", "name": "库存助手", "purpose": "解释库存状态。", "publicEndpoint": True, "pageIds": [page_id],
             "agentSettings": {"prompt": {"systemPrompt": "请解释库存状态。", "persona": {"role": "库存助手", "tone": "简洁"},
                                           "constraints": ["保留原业务约束"]},
                 "model": {"source": "project", "generation": {"temperature": 0.2}}, "memory": {"isolation": "principal/thread"},

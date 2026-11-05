@@ -17,6 +17,11 @@ PYTHON_CHECK_KINDS = {
 RUNTIME_VERIFIER_NAMES = {kind: kind.replace(".", "_") for kind in (*PYTHON_CHECK_KINDS.values(), "agent.module_contract")}
 
 
+def endpoint_entity_ids(contracts: list[dict]) -> set[str]:
+    """以当前接口契约声明的实体界定业务输入，避免 Agent 的其他工具污染复用判断。"""
+    return {entity_id for api in contracts for entity_id in api.get("entity_ids", [])}
+
+
 def dependency_paths(tasks: list[dict]) -> dict[str, list[str]]:
     """仅纳入当前 DAG 显式依赖交付文件，供只读类型/调用追踪，不沿目录递归扫描。"""
 
@@ -103,7 +108,10 @@ def compile_runtime_check(task: dict, deliverable: dict, formal: dict) -> list[d
         if business_endpoints:
             scoped_contracts.append({**api, "endpoints": business_endpoints})
     keys = {(api["id"], endpoint["id"]) for api in scoped_contracts for endpoint in api["endpoints"]}
+    entity_ids = endpoint_entity_ids(scoped_contracts)
     formal = {**formal, "contracts": scoped_contracts,
+              "entity_details": [entity for entity in formal.get("entity_details", [])
+                                 if entity["entity_id"] in entity_ids],
               "endpoint_designs": [design for design in formal.get("endpoint_designs", [])
                   if design.get("implementationKind") == "business"
                   and (design.get("apiContractId"), design.get("endpointId")) in keys]}
@@ -120,6 +128,10 @@ def compile_runtime_check(task: dict, deliverable: dict, formal: dict) -> list[d
         sources.append(_source("runtime_entity", raw["id"], f"/entities/{raw['id']}", raw))
     expected = {"entities": entities, "endpoints": endpoints, "operations": _operation_expectations(formal),
                 "endpoint_designs": deepcopy(formal["endpoint_designs"]), "support_paths": formal["runtime_dependency_paths"]}
+    from app.services.runtime_agent_calls import agent_call_response_schema
+    expected["agent_calls"] = [{"binding": endpoint["agentCall"], "responseSchema": agent_call_response_schema(api, endpoint),
+                                "apiContractId": api["id"], "endpointId": endpoint["id"]}
+                               for api in scoped_contracts for endpoint in api["endpoints"] if endpoint.get("agentCall")]
     if kind == "backend.upstream":
         expected["external_apis"] = [item for design in _external_designs(formal)
                                      for item in _external_api_expectations(design, endpoints)]

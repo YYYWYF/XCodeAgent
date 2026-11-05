@@ -1,8 +1,53 @@
 # DevAgent Studio Codebase Index
 
+智能体调试目录 `services/runtime_debug_endpoints.py` 按生命周期中接口自身的 completed/unchanged 状态过滤业务调用入口和工具接口，不以 Agent 完成代替 Endpoint 完成；目录读取、设置确认返回及 JSON 请求发送前共用该规则。`AgentDebugPanel` 在目录移除当前接口时清理旧选择、输入及响应，转到可用入口。回归：`tests.test_runtime_debug_endpoints`。
+
+接口目录投影 `Frontend/src/main/index.ts` 保留正式 `agentCall`，`ApiOutlineGroup` 与 `ApiContractDirectory` 将调用 Agent 的业务入口和派生运行入口统一显示为机器人图标。业务入口仍按自身 Endpoint 开发记录显示绿色，不以内部 Agent 完成代替调用适配完成；待开发时目录及详情解释“智能体已完成，接口待开发”。`EndpointDesignResult` 复用 `AgentCallContract` 展示调用映射和显式返回协议，不再展示空数据库映射。回归：`Frontend/tests/agentDevelopmentStatus.test.tsx`。
+
+内部 Agent 开发的 `frozen_contract_manifest.py` 仅冻结真实 Tool 和显式公开的运行入口，不为 `publicEndpoint=false` 虚构 SSE 依赖；业务接口的后端职责可读取其 `agentCall` 精确指向的冻结能力定义。`unit_generation_requirement_targets.py` 移除统一闭包后的不可达旧分支；`execution_resource_scope.py` 按同一接口→Agent→Tool 闭包锁定间接实现、API 契约和共享 Runtime，保留原主目标。回归：`tests.test_agent_frozen_manifest`。
+
+需求生成返回校验与可选 `responseMode` 同步，接受 json/ag-ui 并明确报告缺失/多余字段，避免将合法非流式需求报为 complete-fields。`graph/nodes/requirements.py` 在澄清问题全部过滤且草稿不完整时补齐一次需求产物；`requirements_analyzer.py` 此次不绑定 ask_user、不进入内容重试，仍走原需求/产品联合确认门。回归：`tests.test_requirement_response_mode_recovery`。
+
+Agent 显式返回方式：需求 `agent_requirements[].responseMode` 可按用户明确要求声明 json/ag-ui（不从 task 或结构化结果推断）；需求归一化、编辑、Markdown 同步与产品 `agents[].interaction.responseMode` 保留该事实。非流式能力使用内部 Agent 与普通表单业务动作，技术规划生成 `agentCall.responseMode=json` 的业务请求/响应及映射；`runtime_agent_settings.py` 防止仅有 CRUD 或固定 SSE 入口冒充已确认的非流式接口。原正式修订确认门不变，不自动改写已有应用产物。`debugJsonValidation.ts` 对字段校验输出中文必填、类型及格式提示，保留字段路径，不暴露校验库英文。回归：`tests.test_agent_response_mode`、`Frontend/tests/debugJsonValidation.test.tsx`。
+
+Runtime Direct 预览启动等待 Rsbuild 本轮 `ready Built in` 后才视为前端就绪，避免 Local 地址提前输出时误放行。`agent_runtime_health.py::wait_runtime_proxy_ready` 在 20 秒内探测前端 `/__runtime/health` 并校验本轮 launchId/Agent 集合，监听两端 PID 和取消状态，超时或进程退出仍沿原流程清理；只等待现有进程，不重新启动。`project_launcher.py` 替换原单次代理探测。回归：`tests.test_runtime_proxy_readiness`。
+
+Runtime 本地启动的 `runtime_execution_policy.py::verify_execution_policy` 只比较正式能力、注册集合、工具/资源及预算，`implementationSha256` 和 `symbols` 保留为构建记录，不再要求当前源码与上次 Build 相同；返回磁盘策略文件实际 SHA256 供模板加载器绑定本次启动，不重写或自动批准策略。源码指纹仍使验收缓存失效，导入/装配/健康检查沿原启动流程执行。回归：`tests.test_runtime_execution_policy_startup`。
+
+智能体目录 `ApplicationOutline/AgentOutlineSection.tsx` 与页面/接口共用 `DevelopmentStatusDot`、`IterationBadge` 及完成/总数计数，移除目录手动刷新按钮，保留现有状态修订、映射更新及设置保存后的目录刷新。顶部 `developmentPlanningTotals` 对 Agent 派生运行接口同样调用 `endpointDevelopmentProgress`，避免能力与接口目录绿色但顶部仍少一项。明暗主题沿用原状态组件。回归：`Frontend/tests/agentDevelopmentStatus.test.tsx`（开发产物测试入口包含此用例）。
+
+接口任务复用按自身 Contract/Endpoint 的直接输入判断：`runtime_business_acceptance.py` 收窄 Python 实体验收范围，`task_input_freshness.py` 比较同一实体切片，避免 Agent 的其他工具污染页面复用。`dag_planning_inputs.py` 将原后端交付路径冻结进 Unit Context，`unit_candidate_task_rules.py` 禁止同一职责另建文件；契约变更在原实现更新。PlanningRun 的 `reuse_reason` 随原 AG-UI DAG 进度投影为 `reuseReason`，开发计划明细使用既有主题文字展示复用/重新生成原因。确认门及 completed 任务调度语义保持。回归：`tests.test_runtime_endpoint_reuse`、`tests.test_task_input_freshness`、`tests.test_runtime_acceptance_source_scope`、前端 DAG generation 测试。
+
+接口开发显示统一通过 `developmentArtifacts.ts::endpointDevelopmentProgress`：kind=agent_runtime 按显式 agent_id 读取 agents 记录，普通业务接口读取 endpoints 记录；圆点、分组/总计数和首次完成迭代同源，避免智能体完成但派生入口灰色。Runtime 目录投影补齐 executionMode/publicEndpoint 类型字段。
+
+ApplicationOutline 接口圆点、分组及总计数统一读取 developmentArtifacts.endpoints 的开发状态，与工作流已初次完成列表同源；不再以 endpoint.designed（映射确认）冒充开发完成。无开发记录仍灰色，有变更不计入完成数。沿用既有明暗主题及状态工具函数。
+
+技术规划编辑对齐 origin/dev_agent 的原始文本窗口与 candidate_feedback 机制：`technical_plan_file_tools.py` 移除 read_file 展示行号/分隔缩进，编辑和读取后反馈完整候选 JSON 语法；FilesystemMiddleware 不注入宽泛默认提示。取消额外八次模型调用/24图步骤限制，沿用框架默认与运行取消。保留 Agent 第五段、派生入口隔离、最后完整候选恢复及正式确认门。外层三轮编译/复验预算保持。回归：tests.test_technical_plan_fragment_editor、tests.test_technical_plan_json_match 及 runtime recovery 的框架中断候选保存用例。
+
+TechnicalPlan 普通 API 的 entity_ids 必须显式为数组，但无实体服务/检索/计算接口允许 []。已有实体及 entity_field_ref 的未知、未绑定、非法字段和重复身份校验保留；生成和续修提示同步，不要求虚构数据库实体。回归：tests.test_entity_free_api_contracts。
+
+技术规划局部编辑的 `technical_plan_json_match.py` 在精确原文不匹配时，仅接受唯一且 JSON 词元完全相同的片段（忽略字符串外缩进/换行），转换为实际原文后沿 DeepAgents edit_file 应用。保留字符串内空格、重复匹配、变化的旧值和整文件替换限制，避免修排版耗尽模型调用预算。回归：tests.test_technical_plan_json_match。
+
+`services/runtime_endpoint_candidates.py` 按当前 agentId 的精确 Contract/Endpoint 身份，将派生运行入口排除在技术编辑候选外，并在 create_technical_plan 和候选装配阶段重新编译；不按路径或错误 kind 猜测，不吞掉混入的业务接口。API 两条校验链先报告非法 kind，禁止把架构类型误作接口类型后再误报业务 Schema。通用 API 校验同样支持未选架构的候选，正式执行仍要求服务图。回归：tests.test_runtime_endpoint_candidates。
+
+技术规划候选 API 校验允许未选择架构时独立复验 Agent 运行接口，避免局部修订剥离 topology 后反复报服务图错误。`runtime_endpoint_contracts.py` 的 require_topology 默认为 true，正式编译保持严格；候选显式携带错误架构仍拒绝。业务 GET→POST 修订不改变 Agent 固定运行入口协议。
+
+`services/technical_pagination.py` 在技术规划生成及续修候选装配时按当前 .list 分页合同补齐缺失 current/pageSize 参数和简单 list 对象的分页字段及 required；不覆盖现有类型、过滤条件、额外业务字段或共享响应，正式确认及严格校验保持不变。避免通过模型精确文本替换补标准结构时因缩进不匹配耗尽修复预算。回归：tests.test_technical_pagination。
+
 独立 Agent Runtime 的 OpenCode Go 请求头沿用 `MODEL_OPENCODE_GO_HEADERS_ENABLED`：`agent_runtime_environment.py` 显式传递开关，`python_runtime_checks.py` 将其纳入配置摘要；外部 `springboot-template` 的 Runtime `settings.py` 与 `models/request_headers.py` / `factory.py` 在开启时为 OpenAI/Anthropic 的同步、异步及流式调用按当前 LangGraph thread 发送 `x-opencode-session` 和 `User-Agent`，默认关闭。不修改共享模型默认请求头或增加重试；无会话调用使用模型实例内稳定 UUID。回归：`tests.test_runtime_model_headers` 及模板 `tests/test_model_request_headers.py`。
+独立 Agent 能力重构：`runtime_agent_contracts.py` 的 `publicEndpoint` 显式控制公开入口，页面可空且不决定能力生命周期；`domain/runtime_endpoint_contract.py::AgentExecutionContract` 支持 task/conversation、自包含 inputSchema/resultSchema，允许纯文本任务，业务接口调用必须有结构化结果且严格校验。`domain/agent_call.py` 与 `services/runtime_agent_calls.py` 定义业务 Endpoint 的 agentCall、JSON Pointer 映射、能力摘要和调用环检查；`api_design.py` 沿原 AG-UI 确认该调用设计，Markdown 为用户产物。`runtime_endpoint_dependencies.py` 按接口→Agent→Tool 闭包进入原 DAG，`runtime_agent_dag.py` 增加调用 Agent 的业务接口前置关系；接口实现仍唯一复用。`runtime_execution_policy.py` 使用 execution.policy.v2，对内部和公开 Agent 都签发策略。外部 Runtime 的 `app.agent.invocation` 为两种入口共用执行器；生成应用的普通 JSON 业务接口按用户本次方案授权，Studio 平台流程仍必须 AG-UI。工作台审阅、任务调试和固定前端资产贯通任务输入与结构化结果。完整合同及边界见 `docs/AGENT_CAPABILITY_RUNTIME.md`。本次覆盖当前合同，不读历史格式，不启用自动真实目标验收。
+
+`services/agent_confirmation_contract.py` 在 create_technical_plan 及规划候选附加契约前补齐写 Tool 的 confirmation 声明，保留已有交互和工具；候选仍等待正式确认，运行时写入仍逐次确认。严格读取/验收不自动补齐。
+
+写入 Tool 缺少确认能力时，`runtime_agent_contracts.py` 诊断包含具体 Tool/Endpoint、Agent 数组位置及 interactionKinds 修改建议；技术规划生成与局部修复共享补充声明规则，保留原 Tool 和运行时确认门。
+
+Agent 设置修订使用正式 `RevisionTarget(type=agent, agentId=...)`，预览和提交读取显式 agent_id 字段，避免把身份当作 application 附加字段而失效。
+
+调试轨迹 UI：`RuntimeAgentDetail/AgentDebugTrace.tsx/.less` 替代流式面板的工具折叠列表，使用现有 Ant Design Tree 展示调用节点、状态、耗时及可展开输入/结果。当前仅消费既有工具记录；没有模型 span 或父子关系数据时不虚构调用层级。空态说明后续可观测数据接入用途，本次不新增事件协议或采集逻辑。
 
 调试防过度约束：工具详情改为最近 40 条滚动展示，超过展示条数不再中止业务运行；前端回归覆盖 42 次工具事件仍正常完成。保留累计响应字节限制、当前线程串行/交互身份、停止收口与进程清理。不改原有历史存储。
+
+调试执行事件：`RuntimeAgentDetail/AgentDebugEvents.tsx/.less` 使用 Ant Design 表格逐行展示本次请求的标准 AG-UI 事件，含顺序、类型、单行 JSON 预览与完整 JSON 展开。`runtimeDebugConversation` 保留本轮全部事件，不再截取最近 40 条；发布时复制事件列表，新请求清空事件。原会话累计 512 KB 响应字节限制及 40 个工具详情限制不变。回归：`runtimeDebugConversation.test.ts`、`runtimeDebugEndpoints.test.tsx`。
 
 调试异常收口：响应超限及网络读取失败由 `runtimeDebugConversation` 标记未知结果并关闭 SDK 输入流，不再用 ReadableStream.error 向 SDK 注入异常；`AgentDebugPanel` 的发送/停止各自释放占用，任一仍进行时保留忙碌状态；`agent_runtime_workbench.start_debug` 在启动成功但登记失败时回收独立进程，回收失败明确报错。不改历史存储或开发主流程。
 
@@ -16,7 +61,13 @@ Python Endpoint 路由接入：当前模板 `app/api/router.py` 只自动加载 
 
 智能体调试：`RuntimeAgentDetail/AgentDebugPanel.tsx/.less` 提供独立页签，显式启动/停止、状态同步、当前会话流式对话和交互响应；`service/runtimeDebugConversation.ts` 使用官方 AG-UI HttpAgent，凭据只在内存，断流标为未知且不重发，当前会话限制 60 条消息/512 KB 事件及 40 个工具详情。切换页签保留组件，离开智能体释放自身调试进程，过期禁止发送。`service/runtimeWorkbench.ts` 复用既有独立工作台 AG-UI 控制协议及 transient 凭据事件。后端 `agent_runtime_workbench.py` 显式启动按锁文件安装依赖，不覆盖活跃调试，状态提供所有权及源码变化提示；控制协议只读查询携带 threadId。当前外部模板公开文本/交互流未输出内部工具明细；前端可显示标准工具事件，但无事件时明确无法判断内部工具执行，不伪造日志。不会更改外部模板、开发 DAG 或验收授权；回归 `tests.test_runtime_debug_workbench`。
 
-`RuntimeAgentDetail/index.tsx` 将智能体详情分为“智能体设计”和“智能体开发”页签：概览与七模块配置编辑归设计，任务状态、模块实现文件及原开发入口归开发；调试页签由独立面板提供。切换页签不启动 Workflow，保留配置修订确认与开发任务合同；局部样式沿用明暗主题变量。
+智能体调试按正式入口而非页面选择：`services/runtime_debug_endpoints.py` 将当前 Agent 的独立 AG-UI 入口（含内部 Debug 入口）和显式 `agentCall` 业务接口投影为 Runtime 目录的 `debugEndpoints`。`AgentDebugRequestEditor` 编辑路径/查询/Header及可选上下文，`AgentDebugStreamView` 区分会话与任务输入，`AgentDebugResponse` 展示 HTTP、最终结果和标准事件。AG-UI 使用官方 SDK；JSON 被测接口通过原 `/agent-runtime-workbench/run` 的 `request_debug` 动作转发，`runtime_debug_request.py` 在 Pydantic 边界校验，按正式复合身份、拥有者、launchId、有效期和源码状态绑定本机受管进程，凭据仅服务端内存使用，不提供任意 URL、不跟随重定向、不自动重试。返回真实状态/响应正文及协议不一致信息；新增控制动作仍完整 AG-UI 生命周期。页面默认不发送，仅可显式模拟上下文，不要求页面完成。回归：`tests.test_runtime_debug_endpoints`、`Frontend/tests/runtimeDebugConversation.test.ts`、`runtimeDebugEndpoints.test.tsx`。
+
+调试接口列表进一步按双向正式关系覆盖同一 Agent 的多个业务接口：`agentCall.agentId` 表示调用智能体，`agentSettings.tools.bindings` 表示智能体使用的工具，`debugEndpoints.relation` 明确区分两者与能力运行入口；按 Contract/Endpoint 去重并优先列业务接口。调试面板始终提供选择器，同一 Agent 的进程空闲时可切换接口，清空本地会话并以所选路径/协议创建客户端，无需停止和重新启动进程。JSON 默认展开 Body 编辑器，AG-UI 沿用会话/任务区域，不展示无内容的 `null` 结构化结果。
+
+调试工作区 UI：`AgentDebugPanel.less` 按面板宽度组织非流式请求/响应（宽屏并排、窄屏上下），流式会话占主区，工具/事件按需折叠；回复复用现有 `MarkdownContent`。`DebugJsonEditor.tsx/.less` 使用现成 `@uiw/react-codemirror` 和 CodeMirror JSON/lint 扩展提供 Body、任务输入及高级上下文编辑；`service/debugJsonValidation.ts` 使用 `@cfworker/json-schema` 解释执行 Draft 2020-12，无 eval/new Function，替换 Ajv 且保持 CSP 不变，校验器异常与输入错误分开。参数与 Headers 使用 `DebugKeyValueTable.tsx/.less`（现有 Ant Design Table），`service/debugKeyValue.ts` 将仅存在面板内的启用/停用行投影成原请求 Map，拒绝重复 Key，保留停用行内容；不改变后端协议。`AgentDebugRequestEditor.tsx::debugRequestIssues` 同时供按钮禁用和发送前校验，非法输入不发送。流式消息上限只计可见用户/助手消息，工具仍由独立缓存/字节预算管理。回归：`tests/debugJsonValidation.test.tsx`、`tests/debugKeyValue.test.tsx` 与 `pnpm test:runtime-debug`（子进程禁用字符串代码生成，覆盖 CSP 关键限制）。
+
+`RuntimeAgentDetail/index.tsx` 将智能体详情分为设计、开发和调试页签。`AgentDevelopmentStatus.tsx` 以开发结论、下一步、开发事项和已配置业务工具为首屏；`agentDevelopmentPresentation.ts` 从真实模块/产物/任务记录派生状态，未启用工具、技能和知识不计入事项进度，当前任务异常不被历史完成覆盖。业务工具名称按现有 API 目录的精确 Contract/Endpoint 引用展示，不推测接口复用或实际验证结果。七模块源码记录默认折叠到“实现详情”；完成后“开始调试”只切换现有页签，不自动启动服务。配置修订确认与开发任务合同不变，样式沿用明暗主题变量。回归：`Frontend/tests/agentDevelopmentPanel.test.tsx`。
 
 文本 Agent 的 `interactionContract` 校验继续复用 `domain/runtime_endpoint_contract.py::TextConversationContract`，由 `services/runtime_agent_contracts.py::validate_agent_interaction_contract` 为技术规划编译与 Runtime Endpoint 物化统一生成带 Agent 身份、精确候选路径、当前值及预期值的诊断；不自动改写候选，不放宽契约。`agents/main/technical_plan_agent_contracts.py` 的共享提示明确用户提问通过 AG-UI messages 传递，普通文本回复不属于业务 outcomes，`properties={}`、`required=[]` 和 `outcomes=[]` 均为固定约束。`graph/nodes/planning.py` 将字段诊断沿既有有界局部编辑和正式确认门反馈；回归 `tests.test_technical_plan_interaction_repair` 覆盖真实三字段失败、原生工具修复、完整复验及待确认状态。
 
@@ -113,6 +164,8 @@ UI 后台生成池所在的 `ui_confirmation` 审阅门由现有 Runtime 五秒�
 开发阶段二次修改的前端验收由 `services/direct_validation.py` 依次执行 `pnpm exec tsc -b`、`pnpm exec vite build` 和原项目重启检查，编译失败短路后续检查，保留受控命令的退出码、cwd 和完整日志。`nodes/direct_modification.py` 不再把工程级前端编译失败降为 advisory；自动修复时整轮保持 in_progress，`direct_modification_projection.py` 保留失败步骤和检查项展示。`services/direct_repair.py` 合并真实 diff 与前端编译诊断中已存在的源码精确路径（含 Vite importer），复用单测的 `repair_candidate_files`；原 RepairPlanner/SmallTask 三轮闭环每次回到完整验收，当前计划策略传入 SmallTask。源码既有错误可自动修复，依赖目录、缺失文件、越界路径不能获得诊断授权；重启失败保持原语义。回归：`tests.test_direct_validation`（真实 tsc/Vite + 生产 SmallTask 调度闭环）、`tests.test_direct_modification`、`tests.test_conversation_native_recovery`、`pnpm test:chat-skills`。
 
 应用文件目录树由 `Frontend/.../SourcePanel/useSourceTree.ts` 读取初始快照并在首次展开目录时按需补读子树，保持工作区与 Git revision 一致；`sourceTreeModel.ts` 合并子树时保留已加载后代，`SourceTree.tsx` 展示目录加载与失败重试。初始读取深度不限制后续可浏览的 Java 包层级，异步回执不能污染已切换或卸载的工作区。回归：`pnpm test:source-tree`；实际 UI 验证使用 Electron。
+
+智能体开发模块将 `completed`/`already_satisfied` 统一显示“已完成”，内部状态与统计不变。实现详情每条路径提供“查看文件”，经 `RuntimeAgentDetail`、`DevelopmentArtifactsPanel` 回调到 `AiChatPanel` 的 `RightPanelState.source.filePath`，在当前应用的“应用文件”页签查看。`SourcePanel/useSourceFileNavigation.ts` 优先选中显式目标、按需展开深层祖先；不依赖初始树已包含目标，不退回默认页面文件，读取失败由原文件面板呈现。无新接口或存储。回归：`agentDevelopmentPanel.test.tsx`、`sourceFileNavigation.test.tsx`。
 
 单元测试生成进度沿原 `unit_test.checks` → `agent-process.checks` 投影可选 `activeToolActivity`：`graph/subgraphs/testing.py` 将 TestGeneration Agent 已脱敏的文件工具回调发布到本轮各端生成检查，同次调用按 `callId` 更新最新状态，生成检查收口即清除；不写入 Graph State、测试报告或持久化检查历史。`protocols/workflow/stream_events.py` 与 `Frontend/.../service/workspaceToolActivity.ts` 只保留可展示文件工具与必要字段。`ProcessSteps` 在“正在调用 TestGeneration Agent…”下方复用开发任务的 `WorkflowRunCard/WorkspaceToolActivity.tsx` 和主题样式，显示最新操作及运行/成功/失败图标，不增加独立顶层步骤。回归：`tests.test_testing_subgraph_events`、`tests.test_workflow_ag_ui`、`pnpm test:chat-skills`。
 

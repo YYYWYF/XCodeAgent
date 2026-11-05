@@ -76,17 +76,10 @@ def registered_factory(program, expected):
 def agui_assembly(program):
     """定位实际返回的 AG-UI 内层 stream，不把未使用的嵌套示例当成装配证据。"""
 
-    record = program.functions.get("app.server.agui.build_agent_runtime_stream")
+    record = program.functions.get("app.agent.invocation.stream_agent")
     if record is None:
-        raise PythonEvidenceUnavailable("缺少当前 AG-UI 装配入口源码。")
-    unit, outer = record
-    returned = [node.value for node in outer.body if isinstance(node, ast.Return)]
-    if len(returned) != 1 or not isinstance(returned[0], ast.Call) or not isinstance(returned[0].func, ast.Name):
-        raise PythonEvidenceUnavailable("无法绑定 AG-UI 实际返回的 stream。")
-    inner = [node for node in outer.body if isinstance(node, FUNCTIONS) and node.name == returned[0].func.id]
-    if len(inner) != 1:
-        raise PythonEvidenceUnavailable("AG-UI stream 身份不唯一。")
-    function = inner[0]
+        raise PythonEvidenceUnavailable("缺少当前共享 Agent 执行入口源码。")
+    unit, function = record
     creators = [node for node in program.calls(function) if program.symbol(unit, node.func) == "app.agent.factory.create_agent"]
     if len(creators) != 1:
         raise PythonEvidenceUnavailable("AG-UI 必须唯一装配当前 Agent。")

@@ -113,7 +113,8 @@ def _unit_responsibilities(
             fail_requirement_input("GENERATION_UNIT_UNSUPPORTED", f"当前正式静态数据 Unit 身份必须为 frontend:data:static，收到 {unit_id}。", unit_ids=[unit_id])
         return _endpoint_requirements(
             "frontend.static_data_module",
-            [key for key in endpoints if endpoints[key].get("kind") != "agent_runtime" and not source_types_by_endpoint[key]],
+            [key for key in endpoints if endpoints[key].get("kind") != "agent_runtime"
+             and not endpoints[key].get("agentCall") and not source_types_by_endpoint[key]],
         )
     if unit_id == "backend:bootstrap":
         source_types = {

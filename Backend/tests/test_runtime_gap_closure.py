@@ -81,8 +81,8 @@ class RuntimeGapClosureTests(unittest.TestCase):
         self.assertEqual(runtime_frontend_instruction({"agent_contracts": "不属于 Java 的字段"}, []), "")
         plan = {"topology": {"type": "agent_runtime_direct", "serviceIds": ["agent-runtime"],
                              "publicEdgeServiceId": "agent-runtime", "authenticationTermination": "anonymous-session"},
-                "pages": [{"pageId": "leave_page"}], "agent_contracts": [{"agentId": "leave", "name": "请假助手", "purpose": "协助请假",
-                "pageIds": ["leave_page"], "agentSettings": {"prompt": {"systemPrompt": "请假助手"}, "model": {"source": "project"},
+                "pages": [{"pageId": "leave_page"}], "agent_contracts": [{"interactionContract": {"mode": "conversation", "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, "resultSchema": None, "textOutput": True, "publicStateSchema": None, "outcomes": [], "interactionKinds": []}, "agentId": "leave", "name": "请假助手", "purpose": "协助请假",
+                "publicEndpoint": True, "pageIds": ["leave_page"], "agentSettings": {"prompt": {"systemPrompt": "请假助手"}, "model": {"source": "project"},
                 "memory": {}, "context": {}, "tools": {"enabled": False, "bindings": []}, "skills": {"enabled": False}, "knowledge": {"enabled": False}}}]}
         instruction = runtime_frontend_instruction(plan, [{"unit_id": "page:leave_page"}])
         self.assertIn("/agents/leave/run", instruction)

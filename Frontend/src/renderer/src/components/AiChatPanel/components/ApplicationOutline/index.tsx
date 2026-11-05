@@ -21,7 +21,7 @@ import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
 import AgentOutlineSection from './AgentOutlineSection'
-import { developmentCompletedCount } from '../../../../developmentArtifacts'
+import { developmentCompletedCount, endpointDevelopmentProgress } from '../../../../developmentArtifacts'
 import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 import {
   collectRelatedKeys,
@@ -38,7 +38,6 @@ export type ApplicationOutlineProps = {
   selectedAgentInterfaceId?: string
   onAgentInterfaceSelect?: (agent: BusinessAgentOption) => void
   onAgentSelect?: (agent: BusinessAgentOption | undefined) => void
-  onAgentRefresh?: () => void
   agentError?: string
   developmentArtifacts?: DevelopmentArtifacts
   /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
@@ -66,7 +65,6 @@ export default function ApplicationOutline({
   agents = [],
   selectedAgentId,
   onAgentSelect,
-  onAgentRefresh,
   agentError,
   developmentArtifacts,
   currentBranch,
@@ -227,6 +225,16 @@ export default function ApplicationOutline({
               ) : null}
             </section>
 
+            <AgentOutlineSection
+              agents={agents}
+              query={query}
+              selectedAgentId={selectedAgentId}
+              onSelect={onAgentSelect}
+              developmentArtifacts={developmentArtifacts}
+              currentBranch={currentBranch}
+              error={agentError}
+            />
+
             <section className={cx('outline-section', 'api-section')}>
               <button
                 aria-expanded={apiExpanded}
@@ -236,10 +244,10 @@ export default function ApplicationOutline({
               >
                 <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
                 <span>接口</span>
-                <span className={cx('development-count')} title="当前映射或接入设计已确认的接口数量">
-                  {apiContracts.reduce((total, contract) => total + contract.endpoints.filter(
-                    (endpoint) => endpoint.designed === true
-                  ).length, 0)}
+                <span className={cx('development-count')} title="当前开发已完成且无变更的接口数量">
+                  {apiContracts.reduce((total, contract) => total + developmentCompletedCount(contract.endpoints.map(
+                    (endpoint) => endpointDevelopmentProgress(developmentArtifacts, contract.id, endpoint)
+                  )), 0)}
                   /{apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}
                 </span>
               </button>
@@ -303,14 +311,6 @@ export default function ApplicationOutline({
                 </div>
               ) : null}
             </section>
-            <AgentOutlineSection
-              agents={agents}
-              query={query}
-              selectedAgentId={selectedAgentId}
-              onSelect={onAgentSelect}
-              onRefresh={onAgentRefresh}
-              error={agentError}
-            />
           </div>
         </div>
         {outlineLocked ? (

@@ -5773,6 +5773,11 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              onOpenFile={(filePath) => {
+                // 在当前应用的文件面板定位实现文件，读取仍使用既有工作区工具。
+                ensureRightPanelVisible()
+                setRightPanel({ type: 'source', filePath })
+              }}
               onStartPageDevelopment={(page) => { void handleStartPageDesign(page.pageId, page.label, Boolean(page.hasDetailPlan)) }}
               pageDevelopmentDisabled={loading || workflowInputLocked || activeWorkbenchPhase !== 'development'}
               agentStateRevision={applicationLifecycle?.revision}
@@ -6012,6 +6017,7 @@ export default function AiChatPanel({
           <div className={cx('workspace-content')}>
             <SourcePanel
               workspaceRoot={application.workspaceRoot || ''}
+              requestedFilePath={rightPanel.filePath}
               initialFilePath={
                 activePageOption
                   ? `frontend/src/pages/${activePageOption.key || activePageOption.pageId}/index.tsx`

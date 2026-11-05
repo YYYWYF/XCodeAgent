@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.domain.runtime_endpoint_contract import TextConversationContract
+from app.domain.runtime_endpoint_contract import AgentExecutionContract
 from app.services.agent_runtime_template_policy import AGENT_RUNTIME_MODULES
 from app.services.planning_frozen import plain_json
 from app.services.runtime_business_contract import serves_python_business
@@ -21,7 +21,7 @@ MODULE_LABELS = {"prompt": "提示词", "model": "模型", "memory": "记忆", "
 _SECRET_KEYS = {"apikey", "api_key", "password", "secret", "token", "credential", "credentials"}
 
 
-def agent_invocation(agent_id: str) -> dict[str, str]:
+def agent_invocation(agent_id: str, *, public: bool = True) -> dict[str, str]:
     """从正式 Agent 身份派生公开调用契约，供文档和执行包共用而不新增存储来源。"""
 
     if re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None or agent_id == "runtime":
@@ -29,7 +29,7 @@ def agent_invocation(agent_id: str) -> dict[str, str]:
     return {
         "protocol": "ag-ui", "transport": "sse", "serviceId": "agent-runtime",
         "endpointId": f"agent.{agent_id}.run", "method": "POST",
-        "path": f"/agents/{agent_id}/run", "exposure": "public",
+        "path": f"/agents/{agent_id}/run", "exposure": "public" if public else "internal",
         "requestType": "RunAgentInput", "responseType": "BaseEvent",
         "principalSource": "runtime_anonymous_session",
     }
@@ -61,11 +61,9 @@ def validate_agent_interaction_contract(
     """严格复用会话模型，将错误转换为带正式身份、候选路径及预期值的修复诊断。"""
 
     try:
-        return TextConversationContract.model_validate(value).model_dump(mode="json", by_alias=True)
+        return AgentExecutionContract.model_validate(value).model_dump(mode="json", by_alias=True)
     except ValidationError as exc:
         expected: dict[tuple[str, ...], str] = {
-            ("inputSchema", "properties"): "必须为 {}",
-            ("inputSchema", "required"): "必须为 []",
             ("outcomes",): "必须为 []",
         }
         diagnostics: list[str] = []
@@ -108,23 +106,27 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
     endpoints = {(contract.get("id"), endpoint.get("id"))
                  for contract in plan.get("api_contracts", ()) for endpoint in contract.get("endpoints", ())}
     result = {}
-    for index, item in enumerate(raw):
+    for agent_position, item in enumerate(raw):
         contract = plain_json(item)
-        if not isinstance(contract, dict) or set(contract) != {"agentId", "name", "purpose", "pageIds", "agentSettings", "interactionContract"}:
-            raise ValueError("Agent 合同必须且只能包含 agentId/name/purpose/pageIds/agentSettings/interactionContract。")
+        if not isinstance(contract, dict) or set(contract) != {"agentId", "name", "purpose", "pageIds", "publicEndpoint", "agentSettings", "interactionContract"}:
+            raise ValueError("Agent 合同必须包含 agentId/name/purpose/pageIds/publicEndpoint/agentSettings/interactionContract。")
+        if type(contract["publicEndpoint"]) is not bool:
+            raise ValueError("Agent publicEndpoint 必须显式声明为 boolean。")
         agent_id = contract["agentId"]
         if not isinstance(agent_id, str) or len(agent_id) > 128 or re.fullmatch(r"[a-z][a-z0-9_]*", agent_id) is None or agent_id == "runtime" or agent_id in result:
             raise ValueError("Agent 身份必须是唯一 lower_snake_case，且不能占用 runtime。")
         contract["interactionContract"] = validate_agent_interaction_contract(
             contract["interactionContract"], agent_id=agent_id,
-            field_path=f"agent_contracts[{index}].interactionContract",
+            field_path=f"agent_contracts[{agent_position}].interactionContract",
         )
         if any(not isinstance(contract[key], str) or not contract[key].strip() for key in ("name", "purpose")):
             raise ValueError(f"Agent {agent_id} 缺少名称或业务职责。")
         bindings = contract["pageIds"]
-        if (not isinstance(bindings, list) or not bindings or any(not isinstance(key, str) for key in bindings)
+        if (not isinstance(bindings, list) or any(not isinstance(key, str) for key in bindings)
                 or len(set(bindings)) != len(bindings) or set(bindings) - pages):
-            raise ValueError(f"Agent {agent_id} 必须绑定明确且存在的页面。")
+            raise ValueError(f"Agent {agent_id} 的页面绑定必须唯一且引用存在的页面；后台 Agent 使用空数组。")
+        if bindings and not contract["publicEndpoint"]:
+            raise ValueError(f"Agent {agent_id} 有直接页面入口，必须启用 publicEndpoint。")
         settings = contract["agentSettings"]
         if (not isinstance(settings, dict) or set(settings) != set(AGENT_RUNTIME_MODULES)
                 or any(not isinstance(settings[module], dict) for module in AGENT_RUNTIME_MODULES)):
@@ -161,12 +163,23 @@ def agent_contract_index(plan: Mapping[str, Any], *, require_runtime: bool = Tru
             for endpoint in api.get("endpoints", ()) if endpoint.get("method") not in {"GET", "HEAD", "OPTIONS"}}
         if any((tool["apiContractId"], tool["endpointId"]) in write_keys for tool in tools) and not (
                 set(contract["interactionContract"]["interactionKinds"]) & {"confirmation", "approval_required"}):
-            raise ValueError(f"Agent {agent_id} 的写入 Tool 必须显式声明 confirmation 或 approval_required，不能绕过执行前确认。")
+            affected = [f"{tool['toolId']} → {tool['apiContractId']}/{tool['endpointId']}"
+                        for tool in tools if (tool["apiContractId"], tool["endpointId"]) in write_keys]
+            kinds = list(contract["interactionContract"]["interactionKinds"])
+            raise ValueError(
+                f"Agent {agent_id} 的写入 Tool 必须显式声明 confirmation 或 approval_required，不能绕过执行前确认。"
+                f"涉及 Tool：{'；'.join(affected)}。"
+                f"请局部修改 agent_contracts[{agent_position}].interactionContract.interactionKinds："
+                f"当前为 {json.dumps(kinds, ensure_ascii=False)}，可补充为 {json.dumps([*kinds, 'confirmation'], ensure_ascii=False)}；"
+                "保留现有交互及 Tool 绑定，不要删除工具、禁用能力或篡改接口 method 来绕过校验。"
+            )
         if any(endpoint.get("kind") == "agent_runtime" for api in plan.get("api_contracts", ())
                for endpoint in api.get("endpoints", ()) if (api.get("id"), endpoint.get("id")) in {
                    (tool["apiContractId"], tool["endpointId"]) for tool in tools}):
             raise ValueError(f"Agent {agent_id} 的 Tool 必须引用业务 Endpoint，不能递归绑定 Agent 运行入口。")
         result[agent_id] = deepcopy(contract)
+    from app.services.runtime_agent_calls import validate_agent_calls
+    validate_agent_calls(plan, result)
     return result
 
 
@@ -196,7 +209,9 @@ def scoped_agent_ids(plan: Mapping[str, Any], target_type: str, target_id: str,
                    if endpoint.get("id") == target_id]
         if len(matches) != 1:
             raise ValueError("Endpoint 目标必须提供唯一正式复合身份。")
-        return (matches[0]["agent_id"],) if matches[0].get("kind") == "agent_runtime" else ()
+        from app.services.runtime_agent_calls import endpoint_agent_call
+        call = endpoint_agent_call(matches[0])
+        return (matches[0]["agent_id"],) if matches[0].get("kind") == "agent_runtime" else ((call["agentId"],) if call else ())
     return ()
 
 

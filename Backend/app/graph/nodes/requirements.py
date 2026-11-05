@@ -278,6 +278,18 @@ def requirements(state: ProjectState) -> dict:
         clarification,
         spec,
     )
+    if (analysis["clarification"].get("status") == "requires_user_input"
+            and clarification.get("status") == "clear"
+            and validate_requirement_spec_confirmation_readiness(spec)):
+        # 过滤掉技术或泛化问题不等于已生成需求；只补齐一次完整产物，再走原确认门。
+        analysis = analyze_requirements_with_chat_model(
+            analysis_request, existing_spec=existing_spec, datasource_type=datasource_type,
+            clarification_round=clarification_round, on_token=_llm_token_callback,
+            allow_clarification=False,
+        )
+        spec = apply_authoritative_datasource_type(analysis["requirement_spec"], datasource_type)
+        _apply_menus_root_path_to_pages(spec, state)
+        clarification = analysis["clarification"]
     answered_authorization_questions = _apply_authorization_business_answers(
         spec,
         interaction,

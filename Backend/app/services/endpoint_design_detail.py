@@ -132,7 +132,7 @@ def _save_endpoint_design_locked(request: EndpointDesignSaveRequest) -> dict[str
         raise ApiDesignError("TechnicalPlan 已变化，请重新加载后再确认。")
     from app.services.api_design import find_endpoint
     contract, endpoint = find_endpoint(project_plan, request.api_contract_id, request.endpoint_id)
-    if endpoint.get("kind") == "agent_runtime" and request.technical_plan_hash is None:
+    if (endpoint.get("kind") == "agent_runtime" or endpoint.get("agentCall")) and request.technical_plan_hash is None:
         raise ApiDesignError("确认运行接口必须携带当前 TechnicalPlan 指纹。")
     if request.binding_selection is not None:
         if request.technical_plan_hash is None:

@@ -12,8 +12,6 @@ from deepagents.backends.state import StateBackend
 from deepagents.backends.utils import create_file_data, file_data_to_string
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelCallLimitMiddleware
-from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.tools import tool
 from langgraph.errors import GraphRecursionError
@@ -21,6 +19,7 @@ from langgraph.errors import GraphRecursionError
 from app.agents.execution_control import RunCancellationMiddleware
 from app.agents.main.technical_plan_agent_contracts import TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
+from app.agents.main.technical_plan_file_tools import TechnicalPlanFileMiddleware
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 
@@ -31,7 +30,6 @@ CONSTRAINTS_CONTEXT_PATH = "/context/constraints.json"
 TECHNICAL_PLAN_EDIT_SECTIONS = ("architecture", "entities", "api_contracts", "pages")
 # Agent 合同属于可选第五段，可按已确认产品事实补齐、修订或移除。
 TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS = ("agent_contracts",)
-TECHNICAL_PLAN_EDIT_MODEL_LIMIT = 8
 
 
 class TechnicalPlanCandidateError(ValueError):
@@ -119,6 +117,19 @@ class TechnicalPlanCandidateBackend(StateBackend):
         candidate = self._last_complete_candidate if self._last_complete_candidate is not None else fallback
         return {key: deepcopy(candidate[key]) for key in sections if key in candidate}
 
+    def candidate_feedback(self) -> str:
+        """沿 dev_agent 提供完整 JSON 语法反馈，保留当前可选 Agent 合同章节。"""
+        if self._latest_candidate is None:
+            return ""
+        try:
+            candidate = json.loads(self.candidate_text())
+        except json.JSONDecodeError as exc:
+            return f"候选 JSON 语法尚未通过：第{exc.lineno}行，第{exc.colno}列，{exc.msg}。请继续局部修复。"
+        allowed = {*TECHNICAL_PLAN_EDIT_SECTIONS, *TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS}
+        if not has_editable_technical_plan_candidate(candidate) or set(candidate) - allowed:
+            return "候选根结构无效：必须有 architecture、entities、api_contracts、pages，可选 agent_contracts。"
+        return "完整候选 JSON 语法和根结构检查通过，尚未正式校验或确认。只需读回受影响窗口核对，完成后直接最终回答。"
+
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         """按有界窗口读取候选或只读上下文，避免一次回灌完整大规划。"""
 
@@ -157,9 +168,17 @@ class TechnicalPlanCandidateBackend(StateBackend):
             current = self._read_files().get(file_path)
             if current and old_string.strip() == file_data_to_string(current).strip():
                 error = "不能替换整份候选，请只提交需要修改的局部片段。"
+            elif current:
+                source = file_data_to_string(current)
+                if old_string not in source:
+                    from app.agents.main.technical_plan_json_match import unique_json_fragment
+                    matched = unique_json_fragment(source, old_string)
+                    if matched is not None:
+                        # JSON 内容完全相同且唯一时直接采用实际原文，不额外消耗模型调用修缩进。
+                        old_string = matched
         result = EditResult(error=error) if error else super().edit(file_path, old_string, new_string, replace_all=False)
         if result.error and not error:
-            # 精确匹配仍由 DeepAgents 执行；只在失败反馈中提示可唯一定位的短片段，不自动模糊替换。
+            # 内容变化或多处匹配仍拒绝，不以模糊匹配覆盖模型未核对的业务数据。
             compact = old_string.strip()
             source = file_data_to_string(self._read_files()[file_path])
             if compact and compact != old_string and source.count(compact) == 1:
@@ -210,6 +229,8 @@ def _candidate_files(requirement_spec: dict[str, Any], existing_plan: dict[str, 
     for key in TECHNICAL_PLAN_EDIT_OPTIONAL_SECTIONS:
         if key in existing_plan:
             candidate[key] = deepcopy(existing_plan[key])
+    from app.services.runtime_endpoint_candidates import editable_runtime_candidate
+    candidate = editable_runtime_candidate(candidate)
     config = requirement_spec.get("application_config") or {}
     constraints = {
         "backend_stack": "Java8 + Springboot; MySQL8 + Redis",
@@ -240,15 +261,18 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
         "提供 pageId/actionId、原文依据和建议归属后停止。不要为聊天虚构 CRUD Endpoint，"
         "也不要试图通过技术编辑修改只读 ProductPlan。组合动作只修复业务步骤，保留 Agent 步骤。\n"
         "先 grep 定位名称、ID、路径或字段，再 read_file 读取相关窗口（offset 从0开始，每次最多120行）。"
-        "grep 的 content 模式可以返回匹配行号，read_file 的行号前缀不属于原文，不能放入 old_string。"
+        "grep 按字面量搜索，不支持正则或 | 多词搜索；多个关键词分别调用。"
+        "grep 返回定位行号；read_file 代码块返回原始文本，不含行号或额外展示缩进。"
         "edit_file 的 old_string 必须精确且唯一匹配；若匹配不到或存在多处，补读上下文后再修改。"
         "只改唯一的键值或文字时，直接用不带前导缩进的最短唯一片段；例如将"
         "old_string 设为 '\"name\": \"旧名称\"'，new_string 设为 '\"name\": \"新名称\"'。"
-        "read_file 在行号后另加两个展示分隔空格，不属于原文缩进。不要重复提交已经失败的匹配片段。"
+        "多行片段保留 read_file 代码块中的原始缩进。不要重复提交已经失败的匹配片段。"
         "允许在同一轮使用多次 edit_file 完成关联修改，也允许中间文件暂时不是有效 JSON；"
-        "结束前必须读回改动并确保整个候选恢复为有效 JSON。不要为解决匹配失败重写整个文件。\n"
+        "编辑和读取回执检查完整候选 JSON 语法，不要靠反复搜索遍历全文证明语法正确。"
+        "结束前读回受影响窗口一次，核对完成就立即最终回答。不要为解决匹配失败重写整个文件。\n"
         "候选根对象必须包含 architecture、entities、api_contracts、pages；"
         "agent_contracts 为可选第五段，依据已确认 ProductPlan 补齐或修订；"
+        "api_contracts 只编辑业务接口；Agent 运行入口由平台派生，不要创建或编辑 agent.<agentId> Contract。"
         "与本轮产品要求和校验错误无关的 Agent 及模块保持原样。"
         + TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT
         + "架构仅有 frontend/backend/data；所有用户可见说明使用简体中文。"
@@ -289,18 +313,20 @@ def edit_technical_plan_with_agent(
         system_prompt=_editor_system_prompt(requirement_spec),
         middleware=[
             RunCancellationMiddleware(model),
+            TechnicalPlanFileMiddleware(backend, backend.candidate_feedback),
             FilesystemMiddleware(
                 backend=backend,
+                system_prompt="",
                 tools=["grep", "read_file", "edit_file"],
                 custom_tool_descriptions={
+                    "read_file": "读取原始文本窗口，offset 从0开始、每次最多120行；代码块无行号或额外展示缩进，可直接复制。",
                     "edit_file": "精确替换内存候选中的唯一片段。先读取相关原文；优先提交最短唯一键值或文字，"
-                    "不要加入 read_file 的行号及其后两个展示分隔空格。old_string 不匹配时按错误反馈修正后再试，"
+                    "多行片段保留 read_file 代码块中的原始缩进。old_string 不匹配时按错误反馈修正后再试，"
                     "多处匹配时扩大原文上下文。只允许 /technical-plan.json，replace_all 必须为 false。",
                 },
                 tool_token_limit_before_evict=None,
                 human_message_token_limit_before_evict=None,
             ),
-            ModelCallLimitMiddleware(run_limit=TECHNICAL_PLAN_EDIT_MODEL_LIMIT, exit_behavior="error"),
         ],
     )
     callbacks = [_PlanningTokenCallback(on_token)] if on_token else []
@@ -308,12 +334,12 @@ def edit_technical_plan_with_agent(
         agent.invoke(
             {"messages": [{"role": "user", "content": "请按原始修改要求和本轮校验反馈局部编辑候选，然后读回复核。"}],
              "files": _candidate_files(requirement_spec, existing_plan)},
-            config={"recursion_limit": 24, "callbacks": callbacks},
+            config={"callbacks": callbacks},
         )
-    except (ModelCallLimitExceededError, GraphRecursionError) as exc:
+    except GraphRecursionError as exc:
         if revision_reasons:
             raise ProductPlanRevisionRequired("；".join(revision_reasons), backend.recover_candidate(existing_plan)) from exc
-        failure = "技术规划局部修订达到调用上限，未提交正式产物。"
+        failure = "技术规划局部修订达到框架图步数上限，已保留最后完整候选，未提交正式产物。"
         if backend.last_edit_error:
             failure += "最后一次编辑失败：" + backend.last_edit_error
         raise TechnicalPlanEditorError(

@@ -29,7 +29,7 @@ export default function EndpointWorkspaceRouter(props: Props): ReactElement {
     let disposed = false
     requestEndpointPreparation(workspaceRoot, target.apiContractId, target.endpointId).then((preparation) => {
       if (disposed) return
-      if (!isRuntimeEndpointPreparation(preparation)) setHasBusiness(true)
+      if (!isRuntimeEndpointPreparation(preparation) && !preparation.payload.draft.agentCall) setHasBusiness(true)
       setResolved({ key, generation, preparation })
     }).catch((reason: unknown) => {
       if (!disposed) setResolved({ key, generation,
@@ -41,13 +41,14 @@ export default function EndpointWorkspaceRouter(props: Props): ReactElement {
   const route = resolved?.key === key && resolved.generation === generation ? resolved : undefined
   const preparation = route?.preparation
   const runtime = preparation && isRuntimeEndpointPreparation(preparation) ? preparation : undefined
-  const business = preparation && !isRuntimeEndpointPreparation(preparation) ? preparation : undefined
+  const call = preparation && !isRuntimeEndpointPreparation(preparation) && preparation.payload.draft.agentCall ? preparation : undefined
+  const business = preparation && !isRuntimeEndpointPreparation(preparation) && !call ? preparation : undefined
   return <>
     {!business && <div className="binding-workspace">
       <ApiContractDirectory contracts={contracts} target={target} onSelect={onSelect} />
       <main className="binding-editor">
-        {!target ? <Empty description="请选择应用 API" /> : runtime ? <AgentEndpointReview
-          key={key} workspaceRoot={workspaceRoot} target={target} preparation={runtime} onSaved={onSaved} />
+        {!target ? <Empty description="请选择应用 API" /> : runtime || call ? <AgentEndpointReview
+          key={key} workspaceRoot={workspaceRoot} target={target} preparation={runtime || call} onSaved={onSaved} />
           : route?.error ? <Alert type="error" showIcon message={route.error}
             action={<Button onClick={() => setGeneration((value) => value + 1)}>重新读取</Button>} />
             : <Spin tip="正在读取接口设计…" />}

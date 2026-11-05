@@ -101,8 +101,8 @@ def build_agent_runtime_stream(settings, runtime_context, checkpointer):
 
         plan = {"topology": {"type": "agent_runtime_direct", "serviceIds": ["agent-runtime"],
             "publicEdgeServiceId": "agent-runtime", "authenticationTermination": "anonymous-session"},
-            "pages": [{"pageId": "policy_page"}], "api_contracts": [], "agent_contracts": [{
-                "agentId": "policy", "name": "政策助手", "purpose": "政策问答", "pageIds": ["policy_page"],
+            "pages": [{"pageId": "policy_page"}], "api_contracts": [], "agent_contracts": [{"interactionContract": {"mode": "conversation", "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, "resultSchema": None, "textOutput": True, "publicStateSchema": None, "outcomes": [], "interactionKinds": []},
+                "agentId": "policy", "name": "政策助手", "purpose": "政策问答", "publicEndpoint": True, "pageIds": ["policy_page"],
                 "agentSettings": {"prompt": self.prompt, "model": {"source": "project"}, "memory": {}, "context": {},
                     "tools": {"enabled": False, "bindings": []}, "skills": {"enabled": False}, "knowledge": {"enabled": False}}}]}
         path = "agent-runtime/src/app/agent/factory.py"

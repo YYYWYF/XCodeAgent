@@ -1,5 +1,6 @@
 """从已确认正式输入交付模板拥有的执行策略，模型任务不能写入该文件。"""
 from __future__ import annotations
+import ast
 from hashlib import sha256
 import json
 import os
@@ -7,12 +8,12 @@ from pathlib import Path
 
 from app.services.runtime_agent_contracts import agent_contract_index, agent_fact_digest
 from app.services.runtime_agent_implementation import agent_implementation_facts
-from app.services.runtime_endpoint_contracts import runtime_endpoint_capability_snapshot, runtime_endpoint_identity
+from app.services.runtime_endpoint_contracts import agent_execution_capability_snapshot
 
 POLICY_PATH = "agent-runtime/src/app/agent/execution_policy.py"
 BEGIN = "# BEGIN PLATFORM EXECUTION POLICIES\n"
 END = "# END PLATFORM EXECUTION POLICIES"
-RULE = "conversation.policy.v1"
+RULE = "execution.policy.v2"
 BUDGETS = {"requestBytes": 262144, "messages": 128, "userTextBytes": 16384, "textBytes": 131072,
            "threadRuns": 1, "identityRuns": 2, "processRuns": 4, "runSeconds": 120, "cleanupSeconds": 10}
 
@@ -57,7 +58,7 @@ def compile_execution_policies(root: Path, plan: dict) -> dict:
     for agent_id, implementation in sorted(implementations.items()):
         capabilities = execution_capabilities(contracts[agent_id])
         result[agent_id] = {"agentId": agent_id, "rule": RULE,
-            **runtime_endpoint_capability_snapshot(plan, *runtime_endpoint_identity(agent_id)), **implementation,
+            **agent_execution_capability_snapshot(plan, agent_id), **implementation,
             "executionCapabilities": capabilities, "resourceSha256": resource_digests(root, capabilities),
             "budgets": dict(BUDGETS)}
     return result
@@ -106,9 +107,30 @@ def publish_execution_policies(root: Path, plan: dict, operation: dict | None, s
     return {"status": "applied", "path": POLICY_PATH, "sha256": sha256(content).hexdigest()}
 
 
+def _startup_capabilities(content: bytes) -> dict:
+    """只读平台策略常量，源码摘要和符号清单作为构建记录，不参与启动准入。"""
+    try:
+        region = content.decode().split(BEGIN, 1)[1].split(END, 1)[0]
+        statements = ast.parse(region).body
+        if (len(statements) != 1 or not isinstance(statements[0], ast.Assign)
+                or len(statements[0].targets) != 1 or not isinstance(statements[0].targets[0], ast.Name)
+                or statements[0].targets[0].id != "POLICIES_JSON"):
+            raise ValueError("平台区域必须是唯一 POLICIES_JSON 常量。")
+        entries = json.loads(ast.literal_eval(statements[0].value))
+        if not isinstance(entries, dict) or any(not isinstance(entry, dict) for entry in entries.values()):
+            raise ValueError("执行策略必须为 Agent 策略对象集合。")
+    except (IndexError, UnicodeDecodeError, SyntaxError, TypeError, ValueError) as exc:
+        raise ValueError("Runtime 执行策略平台常量无效。") from exc
+    return {agent_id: {key: value for key, value in entry.items()
+                       if key not in {"implementationSha256", "symbols"}}
+            for agent_id, entry in entries.items()}
+
+
 def verify_execution_policy(root: Path, plan: dict) -> str:
-    """启动前重算正式能力和真实实现，不为过期或缺失策略提供默认 chat。"""
+    """启动校验当前正式能力，允许修改实现源码；交付文件摘要仍绑定本次启动。"""
     expected = policy_content(root, plan)
-    if (root / POLICY_PATH).read_bytes() != expected:
-        raise ValueError("Runtime 执行策略与当前正式能力/实现不一致，请重新构建确认。")
-    return sha256(expected).hexdigest()
+    actual = (root / POLICY_PATH).read_bytes()
+    if _startup_capabilities(actual) != _startup_capabilities(expected):
+        raise ValueError("Runtime 执行策略与当前正式能力不一致，请重新构建确认。")
+    # Runtime 加载器校验的是磁盘上实际交付文件，不能传入含新源码摘要的重编译文件哈希。
+    return sha256(actual).hexdigest()

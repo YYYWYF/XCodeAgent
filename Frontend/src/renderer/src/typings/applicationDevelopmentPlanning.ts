@@ -44,6 +44,7 @@ export type DevelopmentPlanningPageTreeNode = {
 export type DevelopmentPlanningApiEndpoint = {
   kind: 'business' | 'agent_runtime'
   agent_id?: string
+  agentCall?: { agentId: string; responseMode: 'json' | 'ag-ui' }
   apiContractId?: string
   id: string
   name?: string

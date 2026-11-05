@@ -10,7 +10,8 @@ def trusted_context_names(program, unit, function) -> set[str]:
     """仅信任模板 RuntimeContext 注解，不把请求中的 owner/principal 字段当成可信身份。"""
 
     return {arg.arg for arg in (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs)
-            if program.receiver_type(unit, function, ast.Name(id=arg.arg)) == "app.agent.context.RuntimeContext"}
+            if program.receiver_type(unit, function, ast.Name(id=arg.arg)) in {
+                "app.agent.context.RuntimeContext", "app.application.context.ApplicationServiceContext"}}
 
 
 def call_receives_context(call: ast.Call, names: set[str]) -> bool:
@@ -142,10 +143,15 @@ def verify_python_endpoint(files: dict, expected: dict) -> dict:
             if sum(isinstance(node, ast.Return) for node in active_nodes(function)) != 1:
                 raise PythonEvidenceUnavailable(f"{unit.path}:{function.lineno} handler 存在多返回分支，需逐分支返回链适配。")
             errors.extend(_parameter_errors(program, unit, function, endpoint))
+            streaming = any(item["binding"]["responseMode"] == "ag-ui" and item["endpointId"] == endpoint["endpoint_id"]
+                            and item["apiContractId"] == endpoint["api_contract_id"] for item in expected.get("agent_calls", []))
+            if streaming:
+                from app.services.business_acceptance_verifiers.python_agent_call import verify_agent_stream_handler
+                errors.extend(verify_agent_stream_handler(program, unit, function, endpoint))
             response_type = program.keyword(decorator, "response_model") or function.returns
-            if endpoint.get("response_schema"):
+            if endpoint.get("response_schema") and not streaming:
                 errors.extend(shape_errors(endpoint["response_schema"], python_shape(program, unit, response_type), "response"))
-            if endpoint.get("request_schema"):
+            if endpoint.get("request_schema") and not streaming:
                 shapes = []
                 for arg in (*function.args.args, *function.args.kwonlyargs):
                     if program.symbol(unit, arg.annotation) in program.classes:

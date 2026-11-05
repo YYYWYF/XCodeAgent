@@ -128,6 +128,9 @@ def verify_python_service(files: dict, expected: dict) -> dict:
         return result_for([], ["服务操作无法唯一绑定到当前 Endpoint；请声明精确服务文件或补充调用适配，不能按名称猜测。"])
     unit, function = methods[0]
     contexts = trusted_context_names(program, unit, function)
+    if expected.get("agent_calls"):
+        from app.services.business_acceptance_verifiers.python_agent_call import verify_agent_service_call
+        return verify_agent_service_call(program, unit, function, contexts, expected)
     errors, blocked = [], []
     if not contexts:
         blocked.append(f"{unit.path}:{function.lineno} 缺少可证明的 RuntimeContext 输入。")

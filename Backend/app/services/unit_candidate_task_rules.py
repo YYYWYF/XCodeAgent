@@ -436,6 +436,15 @@ def _deliverable_issues(
         )
         issues.extend(path_issues)
         issues.extend(provides_issues)
+        for existing in context.constraints.get("existing_backend_deliverables", ()):
+            if (existing.get("kind") == kind and existing.get("target_id") == target_id
+                    and set(existing.get("provides", ())).intersection(provides)
+                    and set(existing.get("paths", ())) != set(paths)):
+                issues.append(_issue(
+                    "CANDIDATE_EXISTING_IMPLEMENTATION_PATH_CHANGED",
+                    "同一接口职责已有实现，必须在原文件中更新，禁止另建重复实现。",
+                    context=context, task_ids=(task_id,), expected_paths=list(existing["paths"]),
+                ))
         outside = sorted(set(paths) - scope_paths)
         if outside:
             issues.append(_issue(

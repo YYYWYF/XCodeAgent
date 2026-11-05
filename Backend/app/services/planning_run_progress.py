@@ -45,6 +45,7 @@ class DagGenerationUnit(TypedDict):
 
     id: str
     displayName: NotRequired[str]
+    reuseReason: NotRequired[str]
     kind: BuildUnitKind
     participation: Participation
     generationStrategy: GenerationStrategy
@@ -126,6 +127,7 @@ def _project_unit(unit: UnitRunState, *, display_name: str | None = None) -> Dag
     return {
         "id": unit.unit_id,
         **({"displayName": display_name} if display_name else {}),
+        **({"reuseReason": unit.reuse_reason} if unit.reuse_reason else {}),
         "kind": unit.kind,
         "participation": unit.participation,
         "generationStrategy": unit.generation_strategy,

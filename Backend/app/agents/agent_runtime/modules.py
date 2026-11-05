@@ -41,7 +41,7 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
         "resolvedSystemPrompt": compile_agent_prompt(contract["agentSettings"]["prompt"]),
         "description": task.get("description"), "target_files": targets,
         "change_scope": changes, "module_policy": policy["modulePaths"][module],
-        "invocation": agent_invocation(contract["agentId"]),
+        "invocation": agent_invocation(contract["agentId"], public=contract["publicEndpoint"]),
         "interactionContract": deepcopy(contract["interactionContract"]),
         "tool_contracts": [{"id": api["id"], "schemas": api.get("schemas", {}),
                             "endpoints": [endpoint for endpoint in api.get("endpoints", ())

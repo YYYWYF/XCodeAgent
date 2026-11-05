@@ -207,6 +207,19 @@ def render_endpoint_design_markdown(design: dict[str, Any]) -> str:
     if design.get("implementationKind") == "agent_runtime":
         from app.services.agent_endpoint_design import render_agent_endpoint_markdown
         return render_agent_endpoint_markdown(design)
+    if design.get("agentCall"):
+        call = design["agentCall"]
+        lines = ["# 业务接口 Agent 调用设计", "", f"- API Contract：`{design['apiContractId']}`",
+                 f"- Endpoint：`{design['endpointId']}`", f"- Agent：`{call['agentId']}`",
+                 f"- 返回方式：{'一次性 JSON 业务响应' if call['responseMode'] == 'json' else 'AG-UI 事件流'}",
+                 f"- 能力摘要：`{design['agentCapabilitySha256']}`",
+                 f"<!-- devagentstudio-artifact-revision: {design.get('artifactRevision') or ''} -->", ""]
+        for label, key in (("业务参数 → Agent 输入", "inputBindings"), ("Agent 结果 → 业务响应", "resultBindings")):
+            lines.extend([f"## {label}", "", *[f"- `{target or '整个对象'}` ← `{source or '整个对象'}`"
+                          for target, source in call[key].items()], ""])
+        lines.extend(["- 调用复用当前 Runtime 内部执行入口，不经 HTTP，不重复生成 Agent。",
+                      "- 待交互不表示成功；继续执行必须提交当前交互身份，禁止自动批准。", ""])
+        return "\n".join(lines)
     endpoint = design.get("endpointContract") if isinstance(design.get("endpointContract"), dict) else {}
     lines = [
         f"# Endpoint 字段映射：{endpoint.get('method') or 'API'} {endpoint.get('path') or design.get('endpointId')}",

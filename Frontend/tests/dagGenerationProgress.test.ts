@@ -68,6 +68,15 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 
+test('接口规划通过现有快照展示无法复用原因', () => {
+  const reason = '接口契约已变化，需在原实现文件上重新生成。'
+  const value = snapshot({}, [unit({ reuseReason: reason })])
+  const parsed = readDagGenerationSnapshot(value)
+  assert.equal(parsed?.units[0].reuseReason, reason)
+  const markup = renderToStaticMarkup(createElement(DagGenerationProgress, { snapshot: value }))
+  assert.ok(markup.includes(reason))
+})
+
 test('统一 DAG 任务列表为新增和复用任务显示对应 Tag', () => {
   const markup = renderToStaticMarkup(
     createElement(

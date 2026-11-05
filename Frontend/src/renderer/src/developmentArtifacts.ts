@@ -51,6 +51,33 @@ export function developmentDisplayStatus(progress?: DevelopmentArtifactProgress)
     && progress.changeStatus !== 'unchanged' ? progress.changeStatus : progress?.initialDevelopmentStatus || 'pending'
 }
 
+/** Agent 运行入口沿用显式 agent_id 的开发状态，普通接口读取自身 Endpoint 状态。 */
+export function endpointDevelopmentProgress(
+  artifacts: import('./typings').DevelopmentArtifacts | undefined,
+  contractId: string,
+  endpoint: { id: string; apiContractId?: string; kind?: string; agent_id?: string }
+): DevelopmentArtifactProgress | undefined {
+  if (endpoint.kind === 'agent_runtime') return endpoint.agent_id ? artifacts?.agents?.[endpoint.agent_id] : undefined
+  return artifacts?.endpoints[endpoint.apiContractId || contractId]?.[endpoint.id]
+}
+
+/** 调用智能体的业务入口与派生入口使用机器人图标，普通 Tool 保留业务接口身份。 */
+export function isAgentInvocationEndpoint(endpoint: { kind?: string; agentCall?: { agentId: string } }): boolean {
+  return endpoint.kind === 'agent_runtime' || Boolean(endpoint.agentCall)
+}
+
+/** 区分能力完成与业务入口待开发，避免将尚未实现的调用适配显示为绿色。 */
+export function endpointDevelopmentStatusLabel(
+  artifacts: DevelopmentArtifacts | undefined,
+  contractId: string,
+  endpoint: DevelopmentPlanningApiContract['endpoints'][number]
+): string {
+  const progress = endpointDevelopmentProgress(artifacts, contractId, endpoint)
+  if (endpoint.agentCall && developmentCompletedCount([artifacts?.agents?.[endpoint.agentCall.agentId]])
+    && developmentDisplayStatus(progress) === 'pending') return '智能体已完成，接口待开发'
+  return developmentStatusLabel(progress)
+}
+
 /** 统计页面、Endpoint 和业务智能体；规划实体不参与完成比例或阶段门禁。 */
 export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
   completed: number
@@ -65,7 +92,7 @@ export function developmentArtifactTotals(artifacts: DevelopmentArtifacts): {
   return { completed: developmentCompletedCount(required), total: required.length }
 }
 
-/** 按当前正式目录统计页面和 Endpoint，清空迭代目录时不沿用旧完成事实，也不计入规划实体。 */
+/** 按当前正式目录统计页面、接口及智能体，运行入口与目录圆点读取同一开发记录。 */
 export function developmentPlanningTotals(
   pages: DevelopmentPlanningPageOption[],
   contracts: DevelopmentPlanningApiContract[],
@@ -76,7 +103,7 @@ export function developmentPlanningTotals(
     ...pages.map((page) => artifacts?.pages[page.pageId]),
     ...agents.map((agent) => artifacts?.agents?.[agent.agentId]),
     ...contracts.flatMap((contract) => contract.endpoints.map(
-      (endpoint) => artifacts?.endpoints[endpoint.apiContractId || contract.id]?.[endpoint.id]
+      (endpoint) => endpointDevelopmentProgress(artifacts, contract.id, endpoint)
     ))
   ]
   return { completed: developmentCompletedCount(records), total: records.length }

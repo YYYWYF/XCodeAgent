@@ -13,6 +13,7 @@ interface RuntimePayload {
   runId: string
   status: 'completed' | 'awaiting_user' | 'failed'
   pendingInteraction?: PendingAgentInteraction | null
+  result?: unknown
   error?: { message?: string }
 }
 
@@ -56,6 +57,7 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
   /** 只接受当前 Agent 的精确相对路径，禁止端口、凭据或外部 URL。 */
   constructor(private readonly config: AgentUiTemplateConfig) {
     if (!config.runtime || config.runtime.path !== `/agents/${config.agentId}/run`
+      || !['task', 'conversation'].includes(config.runtime.mode) || !config.runtime.inputSchema
       || !/^[a-z][a-z0-9_]*$/.test(config.agentId)) throw new Error('Agent Runtime 配置无效。')
   }
 
@@ -116,7 +118,8 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
     thread.actionId = input.actionId
     thread.agent.addMessage({ id: randomUUID(), role: 'user', content: input.content })
     thread.info.title = input.content.slice(0, 30)
-    return this.execute(thread, acceptanceIdentity(this.config.agentId)?.runId || input.runId, this.pageContext(thread))
+    return this.execute(thread, acceptanceIdentity(this.config.agentId)?.runId || input.runId,
+      { ...this.pageContext(thread), ...(input.input ? { input: input.input } : {}) })
   }
 
   /** 中止当前网络流；已提交的业务操作不被当作撤销，也不会自动重发。 */
@@ -244,6 +247,7 @@ export class RuntimeAgentConversationAdapter implements AgentConversationAdapter
       }))
       const status = payload.status === 'failed' ? 'error' : payload.status === 'awaiting_user' ? 'waiting_input' : 'completed'
       return this.publish(thread, { runId, threadId: thread.info.id, status,
+        result: payload.result,
         messages: this.messages(thread), pendingInteraction: payload.pendingInteraction ?? (payload.status === 'failed' ? active.pendingInteraction : undefined),
         requiresSync: payload.status === 'failed', resultUnknown: payload.status === 'failed',
         error: payload.status === 'failed' ? payload.error?.message || 'Agent 运行失败。' : undefined })

@@ -8,8 +8,24 @@ export const runtimeModuleLabels = {
   prompt: '提示词', model: '模型', memory: '记忆', tools: '工具',
   skills: '技能', knowledge: '知识', context: '上下文'
 } as const
+export type DebugEndpoint = {
+  apiContractId: string; endpointId: string; label: string; method: string; path: string
+  responseMode: 'json' | 'ag-ui'; kind: 'business' | 'agent_runtime'
+  relation: 'agent_entry' | 'agent_call' | 'tool'
+  parameters: { name: string; in: string; required?: boolean; schema?: Record<string, unknown> }[]
+  requestSchema: Record<string, unknown> | null; responseSchema: Record<string, unknown> | null
+}
+export type DebugHttpResponse = { statusCode: number; elapsedMs: number; headers: Record<string, string>; body: string; protocolMismatch?: boolean }
+export type DebugHttpInput = {
+  workspaceRoot: string; action: 'request_debug'; agentId: string; launchId: string
+  apiContractId: string; endpointId: string; pathParameters: Record<string, string>
+  query: Record<string, string>; headers: Record<string, string>; body: unknown
+}
 export type RuntimeAgent = {
   agentId: string; name: string; purpose: string; pageIds: string[]; contractHash: string
+  publicEndpoint: boolean
+  debugEndpoints: DebugEndpoint[]
+  interactionContract: { mode: 'task' | 'conversation'; inputSchema: Record<string, unknown>; resultSchema?: Record<string, unknown> | null }
   agentSettings: Record<keyof typeof runtimeModuleLabels, Record<string, unknown>>
   development?: {
     progress?: DevelopmentArtifactProgress | null
@@ -38,6 +54,7 @@ type Payload = RuntimeSettingsResult & {
   schemaVersion: 1; runId: string; threadId: string; status: 'completed' | 'failed'
   agents?: RuntimeAgent[]; runtimeEnabled?: boolean
   error?: { message?: string }
+  debugResponse?: DebugHttpResponse
   debug?: { active: boolean; launchId?: string; expiresAt?: number; ownedByCaller?: boolean; restartRequired?: boolean; agentIds?: string[] }
 }
 export type DebugCredential = { launchId: string; url: string; token: string; expiresAt: number }
@@ -47,6 +64,13 @@ type DebugInput = { workspaceRoot: string; action: 'get_debug' | 'start_debug' |
 export function requestRuntimeDebug(input: DebugInput, threadId: string,
   onCredential?: (credential: DebugCredential) => void): Promise<Payload> {
   return runWorkbench(input, threadId, onCredential)
+}
+
+/** JSON 被测接口通过既有 AG-UI 控制流执行，地址与调试凭据由服务端绑定。 */
+export async function requestRuntimeDebugHttp(input: DebugHttpInput, threadId: string): Promise<DebugHttpResponse> {
+  const payload = await runWorkbench(input, threadId)
+  if (!payload.debugResponse) throw new Error('未收到接口响应，业务结果可能未知，请先核对。')
+  return payload.debugResponse
 }
 
 /** 校验业务信封，传输和事件解析全部交给官方 AG-UI 客户端。 */
@@ -70,7 +94,7 @@ export async function requestRuntimeSettings(workspaceRoot: string, input: Setti
 }
 
 /** 发出一次独立操作并读取完整业务终态，不向聊天输入框写入指令。 */
-async function runWorkbench(input: { workspaceRoot: string; action: 'list' } | DebugInput | (SettingsAction & { workspaceRoot: string }),
+async function runWorkbench(input: { workspaceRoot: string; action: 'list' } | DebugInput | DebugHttpInput | (SettingsAction & { workspaceRoot: string }),
   threadId = randomUUID(), onCredential?: (credential: DebugCredential) => void): Promise<Payload> {
   const base = window.devAgentStudio?.agentBaseUrl
   const agent = createAgUiHttpAgent({ url: base ? `${base.replace(/\/$/, '')}/agent-runtime-workbench/run`

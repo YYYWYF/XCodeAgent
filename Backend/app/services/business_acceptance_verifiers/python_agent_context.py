@@ -121,6 +121,15 @@ def verify_memory_wiring(program, unit, function, factory, config: dict) -> tupl
     unit, function, checkpointer = factory_input(program, unit, function, factory, "checkpointer")
     if checkpointer is None:
         return ["Agent memory 未传入模板 checkpointer。"], []
+    if isinstance(checkpointer, ast.IfExp):
+        # 只识别模板的明确分支：会话或可交互任务持久化，其他单次任务不建立长期记忆。
+        predicate = program.assignment(unit, "persistent", function)
+        expected = ast.parse("contract['mode'] == 'conversation' or bool(contract['interactionKinds'])", mode="eval").body
+        if (not isinstance(checkpointer.test, ast.Name) or checkpointer.test.id != "persistent"
+                or not isinstance(checkpointer.orelse, ast.Constant) or checkpointer.orelse.value is not None
+                or predicate is None or ast.dump(predicate) != ast.dump(expected)):
+            return [], ["无法证明任务/会话的 checkpoint 生命周期与正式执行方式一致。"]
+        checkpointer = checkpointer.body
     if isinstance(checkpointer, ast.Await):
         checkpointer = checkpointer.value
     creator = program.symbol(unit, checkpointer.func) if isinstance(checkpointer, ast.Call) else ""

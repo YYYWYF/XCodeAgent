@@ -210,6 +210,15 @@ def initial_api_design_payload(
                 "implementationKind": "agent_runtime", "draft": agent_endpoint_draft(project_plan, api_contract_id, endpoint_id),
                 "existingStatus": endpoint_design_status(workspace_root, api_contract_id, endpoint_id)}
     endpoint_nodes = endpoint_field_nodes(contract, endpoint)
+    if endpoint.get("agentCall") is not None:
+        from app.services.runtime_agent_calls import endpoint_agent_call
+        from app.services.runtime_endpoint_contracts import agent_execution_capability_snapshot
+        call = endpoint_agent_call(endpoint)
+        snapshot = agent_execution_capability_snapshot(project_plan, call["agentId"])
+        return {"endpoint": {**endpoint, "apiContractId": api_contract_id}, "endpointFields": endpoint_nodes,
+                "draft": {"apiContractId": api_contract_id, "endpointId": endpoint_id, "fieldMappings": [],
+                          "agentCall": call, "agentCapabilitySha256": snapshot["capabilitySha256"]},
+                "existingStatus": endpoint_design_status(workspace_root, api_contract_id, endpoint_id)}
     existing = read_endpoint_design(workspace_root, api_contract_id, endpoint_id, require_current=False)
     if isinstance(existing, dict) and existing.get("schemaVersion") == API_DESIGN_SCHEMA_VERSION and isinstance(existing.get("fieldMappings"), list):
         draft = {
@@ -456,6 +465,7 @@ def api_design_readiness(
         item = {
             "api_contract_id": contract_id,
             "endpoint_id": endpoint_id,
+            "kind": endpoint.get("kind"),
             "method": str(endpoint.get("method") or "API"),
             "path": str(endpoint.get("path") or endpoint_id),
             "status": status["status"],
@@ -668,6 +678,9 @@ def _validate_design(
 ) -> dict[str, Any]:
     """校验自包含字段映射、来源真实性和必填 Endpoint 字段覆盖。"""
 
+    if endpoint.get("agentCall") is not None or draft.get("agentCall") is not None:
+        from app.services.runtime_agent_calls import validate_agent_call_design
+        return validate_agent_call_design(project_plan, endpoint, draft)
     if set(draft) - {"apiContractId", "endpointId", "implementationDescription", "databaseOperation", "databaseWrites", "externalApiBindings", "sourceBinding", "staticData", "databaseQuery", "fieldMappings"}:
         raise ApiDesignError("API 设计草稿必须使用当前 fieldMappings 结构。")
     validate_static_design(draft)
@@ -1000,6 +1013,10 @@ def _validate_persisted_design(
     persisted_endpoint = design.get("endpointContract")
     if not isinstance(persisted_endpoint, dict) or persisted_endpoint != endpoint:
         raise ApiDesignError("已确认产物中的 Endpoint 定义已被修改。")
+    if endpoint.get("agentCall") is not None or design.get("agentCall") is not None:
+        from app.services.runtime_agent_calls import validate_agent_call_design
+        validate_agent_call_design(project_plan, endpoint, design, persisted=True)
+        return
     field_mappings = _parse_confirmed_field_mappings(design.get("fieldMappings"))
     database_writes = _parse_database_writes(design.get("databaseWrites"))
     external_api_bindings = _parse_external_api_bindings(design.get("externalApiBindings", []))

@@ -50,6 +50,7 @@ class UnitRunState(FrozenPlanningModel):
     total_attempts: Annotated[int, Field(ge=0, le=9)] = 0
     retained_task_ids: Ids = ()
     reusable_capabilities: Ids = ()
+    reuse_reason: str | None = None
     latest_candidate_id: Id | None = None
     candidate_task_count: Annotated[int, Field(ge=0)] = 0
     current_issues: Issues = ()
@@ -60,6 +61,7 @@ class UnitRunState(FrozenPlanningModel):
     def create(
         cls, *, unit_id: str, kind: BuildUnitKind, generation_strategy: GenerationStrategy,
         retained_task_ids: tuple[str, ...] = (), reusable_capabilities: tuple[str, ...] = (),
+        reuse_reason: str | None = None,
     ) -> UnitRunState:
         """从已确定的生成策略创建初态，不重新计算 ReuseFacts 或职责缺项。"""
 
@@ -69,6 +71,7 @@ class UnitRunState(FrozenPlanningModel):
             unit_id=unit_id, kind=kind, generation_strategy=generation_strategy,
             participation=participation, generation_status="pending" if generates else "not_required",
             retained_task_ids=retained_task_ids, reusable_capabilities=reusable_capabilities,
+            reuse_reason=reuse_reason,
         )
 
     @model_validator(mode="after")

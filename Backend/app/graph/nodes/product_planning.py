@@ -156,7 +156,7 @@ def _validation_retry_feedback(user_feedback: str, errors: list[str]) -> str:
     diagnostics = "\n".join(f"- {error}" for error in errors[:8])
     repair_instruction = (
         "系统 ProductPlan 一致性校验未通过。请自行修复下列问题并返回完整 ProductPlan；"
-        "原始模型 JSON 的根对象只能包含 app、business_flows、pages、product_acceptance_criteria。"
+        "原始模型 JSON 的根对象只能包含 app、agents、business_flows、pages、product_acceptance_criteria。"
         "authorizationTargets 是服务端在原始 JSON 格式校验通过后确定性生成的内部字段，"
         "即使需求包含权限规则也必须从你的 JSON 中完全删除；"
         "对于每条“缺少受限操作 action”诊断，必须补充一个 name 完全相同的唯一普通产品 action；"

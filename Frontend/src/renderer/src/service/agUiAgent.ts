@@ -308,6 +308,7 @@ export type DagGenerationIssueRecord = {
 export type DagGenerationUnitRecord = {
   id: string
   displayName?: string
+  reuseReason?: string
   kind: string
   participation: DagGenerationParticipation
   generationStrategy: DagGenerationStrategy
@@ -1112,6 +1113,7 @@ function readDagGenerationProgressUnits(value: unknown): DagGenerationUnitRecord
       units.push({
         id,
         ...(displayName && displayName !== id ? { displayName } : {}),
+        ...(boundedString(unit.reuseReason, 500) ? { reuseReason: boundedString(unit.reuseReason, 500) } : {}),
         kind: boundedString(unit.kind, 80) || 'unknown',
         participation: participation as DagGenerationParticipation,
         generationStrategy: generationStrategy as DagGenerationStrategy,

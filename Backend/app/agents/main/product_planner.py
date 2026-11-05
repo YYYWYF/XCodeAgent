@@ -146,6 +146,7 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
                 ],
                 "pageActionBindings": page_action_bindings,
                 "interaction": {
+                    **({"responseMode": requirement["responseMode"]} if "responseMode" in requirement else {}),
                     "mode": str(requirement.get("interactionMode") or "conversation"),
                     "supportsMultiTurn": str(
                         requirement.get("interactionMode") or "conversation"
@@ -310,7 +311,11 @@ def _product_planning_prompt(
         "state_requirements should cover loading, empty, error, "
         "success, and validation.\n"
         "agents must match RequirementSpec.agent_requirements one-to-one and in the same order. Preserve "
-        "agentId, name, purpose, entryPageIds, interaction mode, and boundaries exactly. Expand every "
+        "agentId, name, purpose, entryPageIds, interaction mode, and boundaries exactly. "
+        "When RequirementSpec declares responseMode, preserve it in interaction.responseMode. "
+        "For json, plan a business form submit action (behavior.type=business) returning the complete result once, "
+        "not a send_message action or floating chat surface. Keep pageActionBindings=[] for these internal capabilities. "
+        "Do not infer responseMode from task mode or structured results alone. Expand every "
         "confirmed capability into {capabilityId,name,expectedResult}; capabilityId must be stable "
         "lower_snake_case and names must preserve RequirementSpec capability order. Every entryPageId must "
         "have exactly one pageActionBindings item shaped {pageId,actionIds,surface}; every actionId must reference "
@@ -320,8 +325,12 @@ def _product_planning_prompt(
         "purpose; choose type=floating_panel when the Agent augments the existing host page, which may also "
         "contain another Agent's standalone conversation. Preserve that host body. contextItemIds "
         "must be a duplicate-free string array that references only information_items[].itemId from the same page; "
+        "A navigation button to another Agent page uses behavior.type=navigation and is not an Agent "
+        "surface on the current page. Backend-only Agents keep entryPageIds=[] and pageActionBindings=[]; "
+        "preserve their business capabilities without inventing pages or chat launchers. "
         "use [] when no page context is needed. A page may have at most one Agent of each surface type. interaction "
-        "contains exactly mode, supportsMultiTurn, inputDescription, outputDescription, and stateRequirements "
+        "contains mode, supportsMultiTurn, inputDescription, outputDescription, and stateRequirements, "
+        "plus responseMode only if declared in RequirementSpec, "
         "covering loading, empty, error, success, and validation. acceptanceCriteria must contain observable "
         "product outcomes. Return agents=[] when RequirementSpec.agent_requirements is empty. Never return model "
         "or modelId, prompt, API endpoint or schema, tool, skill, knowledge source, storage, runtime, code path, "

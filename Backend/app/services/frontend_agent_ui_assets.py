@@ -11,6 +11,7 @@ from pathlib import Path
 AGENT_UI_FRONTEND_TEMPLATE_VERSION = "agent-ui.v1"
 AGENT_UI_FRONTEND_SOURCE_RELATIVE_PATHS = (
     "src/components/AgentConversation/AgentChatCore.tsx",
+    "src/components/AgentConversation/AgentTaskFields.tsx",
     "src/components/AgentConversation/AgentInteraction.tsx",
     "src/components/AgentConversation/AgentComposer.tsx",
     "src/components/AgentConversation/AgentActionControls.tsx",

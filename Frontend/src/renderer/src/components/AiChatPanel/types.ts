@@ -52,7 +52,7 @@ export type RightPanelState =
   | { type: 'doc'; docKey?: WorkspaceDocKey }
   | { type: 'test-report' }
   | { type: 'review-report' }
-  | { type: 'source' }
+  | { type: 'source'; filePath?: string }
   | { type: 'outline' }
   | { type: 'process' }
   | {

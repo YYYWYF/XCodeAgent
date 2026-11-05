@@ -58,7 +58,7 @@ def agent_module_facts(plan: Mapping, agent_id: str, module: str) -> dict:
              "topology": {key: plain_json(topology.get(key)) for key in
                           ("type", "serviceIds", "publicEdgeServiceId", "authenticationTermination")}}
     if module in {"prompt", "context"}:
-        facts["identity"] = {key: contract[key] for key in ("name", "purpose", "pageIds")}
+        facts["identity"] = {key: contract[key] for key in ("name", "purpose", "pageIds", "publicEndpoint")}
     if module in {"tools", "knowledge"}:
         if module == "knowledge":
             facts["toolsConfiguration"] = plain_json(contract["agentSettings"]["tools"])

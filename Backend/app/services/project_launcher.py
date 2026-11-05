@@ -216,10 +216,14 @@ def _launch_project_preview(
         else launch_frontend_project(root)
     )
     if runtime_plan is not None and frontend.get("status") == "running":
-        from app.services.agent_runtime_health import runtime_health
+        from app.services.agent_runtime_health import wait_runtime_proxy_ready
 
-        ready, reason = runtime_health(str(frontend.get("preview_url") or ""), agent_runtime["launch_id"],
-                                      database_required=agent_runtime["database_required"], health_path="/__runtime/health")
+        ready, reason = wait_runtime_proxy_ready(
+            str(frontend.get("preview_url") or ""), agent_runtime["launch_id"],
+            database_required=agent_runtime["database_required"],
+            frontend_pid=frontend["server"]["pid"], runtime_pid=agent_runtime["server"]["pid"],
+            expected_agent_ids=agent_runtime["agent_ids"],
+        )
         if not ready:
             stop_frontend_project(root)
             frontend = {**frontend, "status": "failed", "message": "前端到 Runtime 的代理未就绪：" + reason}

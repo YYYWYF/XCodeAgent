@@ -56,7 +56,8 @@ def python_business_task_packet(plan: dict[str, Any], task: dict[str, Any]) -> d
         snapshots = [snapshot for design in task_endpoint_designs(task)
                      for snapshot in design.get("sourceSnapshots") or [] if isinstance(snapshot, dict)]
         source_types = sorted({item.get("sourceType") for item in snapshots if item.get("sourceType")})
-        if not source_types or set(source_types) - {"database", "external_api"}:
+        agent_only = any(design.get("agentCall") for design in task_endpoint_designs(task))
+        if (not source_types and not agent_only) or set(source_types) - {"database", "external_api"}:
             raise ValueError("Python Bootstrap 缺少明确的 Endpoint 数据源事实。")
         contract = {"kind": "bootstrap", "source_types": source_types}
     else:
@@ -77,6 +78,12 @@ def python_business_task_packet(plan: dict[str, Any], task: dict[str, Any]) -> d
         if (contract.get("api_contract", {}).get("id") != target.get("api_contract_id")
                 or len(contract.get("api_contract", {}).get("endpoints") or []) != 1):
             raise ValueError("Python Endpoint 任务必须精确绑定一个正式接口。")
+        if design.get("agentCall"):
+            from app.services.runtime_agent_calls import validate_agent_call_design, agent_call_response_schema
+            api = contract["api_contract"]
+            endpoint = api["endpoints"][0]
+            validate_agent_call_design(plan, endpoint, design, persisted=True)
+            contract["agent_call"] = {"binding": design["agentCall"], "responseSchema": agent_call_response_schema(api, endpoint)}
     return {
         "id": task["id"], "unit_id": task["unit_id"],
         "stage": "bootstrap" if bootstrap else str(task["id"]).rsplit("::", 1)[-1],
@@ -113,6 +120,19 @@ def generate_python_business_with_deep_agent(
             "and startup-injected credentials. Never create or alter tables, invent SQLite storage, "
             "initialize a new model or fetch secrets. Preserve trusted Principal ownership. "
             "Controller only adapts request/response; the service owns mapping and composition. "
+            "For implementation_contract.agent_call, the service MUST delegate once to "
+            "context.agents.invoke_agent (responseMode=json) or context.agents.stream_agent "
+            "(responseMode=ag-ui), passing binding and response_schema exactly from the frozen packet. "
+            "Normalize payload as {body,path,query,header}; Pydantic validates request fields before invocation. "
+            "Never construct a second model, call a loopback Agent endpoint or duplicate its detection logic. "
+            "Return the helper's result directly; streaming controllers return its RuntimeStreamingResponse. "
+            "An ag-ui business controller parses the official RunAgentInput using the template parse_run_request; "
+            "validate its forwardedProps.input against the business request DTO, normalize that as payload.body, "
+            "and pass the original thread_id, run_id and interaction_response to stream_agent. Do not invent "
+            "another SSE encoder, change correlation IDs or validate the AG-UI envelope as a business DTO. "
+            "If declared interactions require continuation, expose explicit thread_id and interaction_response "
+            "inputs in the confirmed request contract and forward them; otherwise report a contract mismatch. "
+            "A waiting interaction is never success or automatic approval. "
             "Business routes are discovered ONLY from direct modules in app/api/endpoints/, "
             "each exporting an APIRouter named router. A controller task is not complete if "
             "its router exists only outside that directory. Inspect app/api/router.py and "

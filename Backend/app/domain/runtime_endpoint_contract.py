@@ -1,11 +1,12 @@
-"""首批纯文本 Agent 的公开能力与确定性运行 Endpoint，禁止扩权字段。"""
+"""任务与会话共用的正式 Agent 能力，以及独立的公开运行入口合同。"""
 
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BeforeValidator, ConfigDict, Field, StrictBool, field_validator
-from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, tuple_input
+from pydantic import BeforeValidator, ConfigDict, Field, StrictBool, field_validator, model_validator
+from app.services.planning_frozen import FrozenJsonObject, FrozenPlanningModel, tuple_input, plain_json
+from app.domain.agent_execution_schema import validate_execution_schema
 
 
 class RuntimeContractModel(FrozenPlanningModel):
@@ -14,29 +15,12 @@ class RuntimeContractModel(FrozenPlanningModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True, frozen=True, strict=True)
 
 
-class EmptyAgentInputSchema(RuntimeContractModel):
-    """首批没有结构化业务输入，用户提问只通过 AG-UI messages 传递。"""
+class AgentExecutionContract(RuntimeContractModel):
+    """独立声明任务或会话能力，结构化结果与页面及接口传输无关。"""
 
-    type: Literal["object"]
-    properties: FrozenJsonObject = Field(max_length=0)
-    required: Annotated[tuple[str, ...], BeforeValidator(tuple_input)] = Field(max_length=0)
-    additional_properties: StrictBool = Field(alias="additionalProperties")
-
-    @field_validator("additional_properties")
-    @classmethod
-    def forbid_additional_properties(cls, value: bool) -> bool:
-        """禁止通过额外业务输入字段扩大首批能力。"""
-
-        if value is not False:
-            raise ValueError("首批 Agent inputSchema.additionalProperties 必须为 false。")
-        return value
-
-
-class TextConversationContract(RuntimeContractModel):
-    """只声明文本会话，不以默认值悄悄开放审批、结构化状态或业务结果。"""
-
-    mode: Literal["conversation"]
-    input_schema: EmptyAgentInputSchema = Field(alias="inputSchema")
+    mode: Literal["task", "conversation"]
+    input_schema: FrozenJsonObject = Field(alias="inputSchema")
+    result_schema: FrozenJsonObject | None = Field(default=None, alias="resultSchema")
     text_output: StrictBool = Field(alias="textOutput")
     public_state_schema: None = Field(alias="publicStateSchema")
     outcomes: Annotated[tuple[dict[str, Any], ...], BeforeValidator(tuple_input)] = Field(max_length=0)
@@ -50,18 +34,31 @@ class TextConversationContract(RuntimeContractModel):
             raise ValueError("interactionKinds 不能重复。")
         return value
 
-    @field_validator("text_output")
+    @field_validator("input_schema")
     @classmethod
-    def require_text_output(cls, value: bool) -> bool:
-        """首批必须提供文本输出，不能把空能力声明当成支持。"""
-
-        if value is not True:
-            raise ValueError("首批 Agent textOutput 必须为 true。")
+    def validate_input(cls, value: Any) -> Any:
+        """输入 Schema 必须是自包含的业务对象合同。"""
+        validate_execution_schema(plain_json(value), object_input=True)
         return value
+
+    @field_validator("result_schema")
+    @classmethod
+    def validate_result(cls, value: Any) -> Any:
+        """结果 Schema 独立校验，文本说明不能冒充结构化结果。"""
+        if value is not None:
+            validate_execution_schema(plain_json(value))
+        return value
+
+    @model_validator(mode="after")
+    def validate_output(self) -> "AgentExecutionContract":
+        """任务与会话至少交付一种输出；声明结果时仍严格校验。"""
+        if self.result_schema is None and not self.text_output:
+            raise ValueError("关闭文本输出时必须提供 resultSchema。")
+        return self
 
 
 class RuntimeInvocation(RuntimeContractModel):
-    """复用既有确定性 AG-UI 调用描述，正式身份由编译器复核。"""
+    """公开入口采用 AG-UI；内部能力只保留确定性身份，不因此发布 HTTP 接口。"""
 
     protocol: Literal["ag-ui"]
     transport: Literal["sse"]
@@ -69,7 +66,7 @@ class RuntimeInvocation(RuntimeContractModel):
     endpoint_id: str = Field(alias="endpointId", min_length=1, max_length=256)
     method: Literal["POST"]
     path: str = Field(min_length=1, max_length=512)
-    exposure: Literal["public"]
+    exposure: Literal["public", "internal"]
     request_type: Literal["RunAgentInput"] = Field(alias="requestType")
     response_type: Literal["BaseEvent"] = Field(alias="responseType")
     principal_source: Literal["runtime_anonymous_session"] = Field(alias="principalSource")

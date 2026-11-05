@@ -4,6 +4,8 @@ export type BusinessAgentOption = {
   label: string
   purpose: string
   pageIds: string[]
+  executionMode: 'task' | 'conversation'
+  publicEndpoint: boolean
   capabilities: string[]
   boundaries: string[]
   agentSettings: Record<string, Record<string, unknown>>

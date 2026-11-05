@@ -52,7 +52,8 @@ export interface AgentUiTemplateConfig {
   suggestedQuestions: string[]
   features: AgentUiFeatureFlags
   mock: AgentUiMockContent
-  runtime?: { path: string; pageId: string; interactionKinds: Array<'clarification' | 'confirmation' | 'approval_required'> }
+  runtime?: { path: string; pageId: string; mode: 'task' | 'conversation'; inputSchema: Record<string, unknown>;
+    resultSchema: Record<string, unknown> | null; interactionKinds: Array<'clarification' | 'confirmation' | 'approval_required'> }
 }
 
 export interface AgentUiAction {
@@ -110,6 +111,7 @@ export interface SendMessageInput {
   agentId: string
   actionId: string
   content: string
+  input?: Record<string, unknown>
   contextItems: AgentContextItem[]
 }
 
@@ -128,6 +130,7 @@ export interface AgentRunResult {
   pendingInteraction?: PendingAgentInteraction
   requiresSync?: boolean
   resultUnknown?: boolean
+  result?: unknown
 }
 
 export interface PendingAgentInteraction {

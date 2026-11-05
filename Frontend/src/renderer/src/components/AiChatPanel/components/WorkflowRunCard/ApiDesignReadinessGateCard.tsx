@@ -1,4 +1,4 @@
-import { ApiOutlined, CheckOutlined } from '@ant-design/icons'
+import { ApiOutlined, CheckOutlined, RobotOutlined } from '@ant-design/icons'
 import { Alert, Button, Tag } from 'antd'
 import type { ReactElement } from 'react'
 import type { WorkflowApiDesignGateAction, WorkflowApiDesignReadinessItem } from '../../../../typings'
@@ -14,6 +14,7 @@ type DevelopmentTarget = {
 }
 
 type ApiDesignItem = ApiDesignConfigTarget & {
+  kind?: WorkflowApiDesignReadinessItem['kind']
   designed?: boolean
   method?: string
   path?: string
@@ -80,7 +81,9 @@ export default function ApiDesignReadinessGateCard({
               )}
               key={`${item.apiContractId}:${item.endpointId}`}
             >
-              <span className="api-design-readiness-icon" aria-hidden="true"><ApiOutlined /></span>
+              <span className="api-design-readiness-icon" aria-hidden="true">
+                {item.kind === 'agent_runtime' ? <RobotOutlined /> : <ApiOutlined />}
+              </span>
               <div className="api-design-readiness-copy">
                 <div className="api-design-readiness-endpoint">
                   <Tag className="api-design-readiness-method">{item.method}</Tag>
@@ -150,6 +153,7 @@ function normalizeApiDesign(value: WorkflowApiDesignReadinessItem):
   return {
     apiContractId,
     endpointId,
+    kind: value.kind,
     label: `${method} ${path}`,
     method,
     path,

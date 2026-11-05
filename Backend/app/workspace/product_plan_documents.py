@@ -118,6 +118,7 @@ def _agent_sections(value: Any) -> list[str]:
                     f"- 职责：{agent.get('purpose', '')}",
                     f"- 候选入口页面：{'、'.join(f'`{page_id}`' for page_id in _text_items(agent.get('entryPageIds'))) or '无'}",
                     f"- 交互方式：{interaction.get('mode', '')}",
+                    *([f"- 接口返回方式：{'非流式 JSON' if interaction['responseMode'] == 'json' else '流式 AG-UI'}"] if 'responseMode' in interaction else []),
                     f"- 连续多轮：{'支持' if interaction.get('supportsMultiTurn') else '不支持'}",
                     f"- 输入：{interaction.get('inputDescription', '')}",
                     f"- 输出：{interaction.get('outputDescription', '')}",
