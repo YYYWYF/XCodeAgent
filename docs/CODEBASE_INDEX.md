@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+工作台入口的加载门禁与动画时序由 `Frontend/src/renderer/src/pages/useWorkbenchEntry.ts` 管理，整体等待 60 秒；`workbenchEntryMessages.ts` 按项目位置、应用配置、规划内容、历史对话和会话不存在等原因提供固定业务提示，超时只列出尚未完成的资源，不展示底层异常或“已返回首页”。`WorkbenchPage.tsx` 在配置读取及规划检查完成后登记状态，历史会话通过原回调登记；会话为空、规划文档缺失或待确认仍沿用原有放行规则。技术原因保留在日志，失败仍执行原首页导航。
+
 工作台顶栏主题按钮右侧的 `components/BackendLogDrawer/` 提供“设置 → 实时日志”，以 75vw 右侧抽屉展示平台 Python 日志；搜索、条目倒序、实时订阅、刷新和原生剪贴板复制都保留多行正文内部顺序，浅深主题沿用 `--wb-*`。`service/backendLogs.ts` 使用现有 AG-UI SDK 消费独立 `/backend-logs/run` 的 `get/watch`、`backend-logs` Custom 和 `backendLogs` 快照，不进入主 Workflow、登记业务执行或读取任意路径。打开先读快照，再续订约 20 秒的流，每秒检查变化；关闭、暂停或刷新取消旧流，断线保留快照并重试。后端 `observability/backend_logs.py` 幂等接入 logging/stdout/stderr，打包入口及 `app.main` 在业务模块加载前初始化；按模型 run 合并 token、独立保留完整异常、排除调试接口自身访问日志。`backend_log_store.py` 保存脱敏 UTF-8 JSONL 片段到 `~/<DEVAGENTSTUDIO_WORKING_DIR>/logs/backend.log`，10 MiB 轮转并保留五份归档，恢复/界面窗口最多 1 MiB/5000 行，文件不可写不阻断业务并显式投影错误。模型日志仍受原 `MODEL_OUTPUT_LOG_ENABLED` 控制，工具调用改为完整单行紧凑 JSON，字符串内部换行保留转义，不扩展原调用路径的记录字段。回归：`tests.test_backend_logs`、`tests.test_model_output_logger`、`tests.test_ag_ui_action_stream`、`pnpm test:backend-logs`；协议和使用说明见 `docs/BACKEND_LOGS.md`。
 
 Build DAG 完成后的 AG-UI 下一步展示由 `protocols/workflow/projection.py` 复用 `workflow.py::route_prepare_build_tasks`，与真实 Graph 的权限关闭、Builtin 首次/已就绪、旧数据源和用户确认门分流一致；`protocols/workflow/runtime.py` 在该边界传入累计状态，避免 DAG 稀疏增量丢失工作区/TechnicalPlan。已就绪应用开发后续页面不再发出虚假的权限节点 started，也不误登记恢复节点。回归：`tests.test_authorization_bootstrap_projection`，覆盖真实 AG-UI 流及 started 观察。

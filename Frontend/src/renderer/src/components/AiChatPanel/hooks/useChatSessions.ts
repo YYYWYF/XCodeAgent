@@ -3,6 +3,7 @@ import type { MutableRefObject, SetStateAction } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SessionHistoryPage } from '../../../../../shared/sessionHistory'
 import { useSessionHistory } from './useSessionHistory'
+import { MISSING_RESTORE_SESSION_MESSAGE } from '../../../pages/workbenchEntryMessages'
 import { enqueueSessionSave } from './sessionSaveQueue'
 import { useWorkbenchPhase } from '../../../context'
 import { reachedPhaseFromSessions } from '../../../workbenchPhaseNavigation'
@@ -322,7 +323,7 @@ export function useChatSessions({
         if (explicitSessionId) {
           setSessionErrors((current) => ({
             ...current,
-            [mode]: '显式交接的目标会话不存在或已被删除，已停止旧会话恢复。'
+            [mode]: MISSING_RESTORE_SESSION_MESSAGE
           }))
         }
       }
