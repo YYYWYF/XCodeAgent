@@ -33,7 +33,8 @@ export type ApplicationPlanningRuntimesController = {
   submitClarification: (applicationId: string, workflow: WorkflowRunPayload,
     answers: Parameters<ApplicationPlanningRuntime['submitClarification']>[1],
     editedRequirementSpec?: Record<string, unknown>, requirementSpecFeedback?: string,
-    designChangeRequest?: string, technicalPlanningConversation?: boolean, stageEntry?: PlanningStageEntry) => Promise<void>
+    designChangeRequest?: string, technicalPlanningConversation?: boolean, stageEntry?: PlanningStageEntry,
+    conversationTarget?: import('../typings').PlanningConversationTarget) => Promise<void>
   saveRequirementSpec: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['saveRequirementSpec']>) => ReturnType<ApplicationPlanningRuntime['saveRequirementSpec']>
   startDesignRevision: (applicationId: string, input: Parameters<ApplicationPlanningRuntime['startDesignRevision']>[0], target?: PlanningStageTarget) => Promise<void>
   retryCurrentFailure: (applicationId: string) => Promise<void>
@@ -177,18 +178,18 @@ export function useApplicationPlanningRuntimes(
     ensureRuntime,
     getRuntime,
     /** 转交当前确认卡操作。 */
-    submitClarification: async (applicationId, workflow, answers, edited, feedback, request, technical, stageEntry) => {
+    submitClarification: async (applicationId, workflow, answers, edited, feedback, request, technical, stageEntry, conversationTarget) => {
       if (typeof stageEntry === 'function' || (technical && stageEntry)) {
         await requireRuntime(applicationId).submitClarification(workflow, answers, edited, feedback, request, technical,
           async () => {
             const target = typeof stageEntry === 'function' ? await stageEntry() : stageEntry!
             const transferred = await handoffStage(applicationId, target)
-            await requireRuntime(applicationId).submitClarification(transferred, {}, undefined, undefined, request)
-          })
+            await requireRuntime(applicationId).submitClarification(transferred, {}, undefined, undefined, request, false, undefined, conversationTarget)
+          }, conversationTarget)
         return
       }
       const currentWorkflow = stageEntry ? await handoffStage(applicationId, stageEntry) : workflow
-      await requireRuntime(applicationId).submitClarification(currentWorkflow, answers, edited, feedback, request, technical)
+      await requireRuntime(applicationId).submitClarification(currentWorkflow, answers, edited, feedback, request, technical, undefined, conversationTarget)
     },
     /** 转交需求草稿保存。 */
     saveRequirementSpec: (applicationId, ...args) => requireRuntime(applicationId).saveRequirementSpec(...args),

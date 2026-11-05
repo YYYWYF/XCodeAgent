@@ -13,6 +13,7 @@ from app.agents.design_conversation.fallback import (
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
+from app.domain.application_planning_interaction import PlanningConversationTarget
 from app.services.access_control_intent import (
     has_explicit_business_access_control_change,
 )
@@ -25,9 +26,22 @@ def classify_design_conversation(
     requirement_spec: dict[str, Any] | None,
     product_plan: dict[str, Any] | None,
     ui_designs: dict[str, Any] | None,
+    conversation_target: PlanningConversationTarget | None = None,
     settings: Settings | None = None,
 ) -> DesignConversationDecision:
-    """调用独立 ChatModel 判断最早需要回退的真实设计节点。"""
+    """显式目标直接选择节点；未指定目标时调用模型判断设计修改语义。"""
+
+    if conversation_target is not None:
+        # @ 已表达执行授权；正文原样交给指定生成节点，不再用模型重判问答或修改。
+        if conversation_target not in {"requirements", "ui_confirmation"}:
+            raise ValueError("请先完成上游确认并进入计划阶段，再执行技术规划。")
+        return DesignConversationDecision(
+            intent="requirement_change" if conversation_target == "requirements" else "ui_change",
+            change_level="requirement" if conversation_target == "requirements" else "ui",
+            reason="按用户指定的节点执行。",
+            affected_page_ids=_mentioned_page_ids(request, product_plan),
+            response="",
+        )
 
     if has_explicit_business_access_control_change(
         request, user_roles=requirement_spec.get("user_roles") if isinstance(requirement_spec, dict) else None,
@@ -37,17 +51,6 @@ def classify_design_conversation(
             intent="requirement_change",
             change_level="requirement",
             reason="输入明确调整角色访问控制，必须先修订需求权限规则。",
-            affected_page_ids=_mentioned_page_ids(request, product_plan),
-            response="",
-        )
-    # 显式 @ 上游目标仍进入既有 Policy；UI 前置产物与访问控制优先级保持原规则。
-    mentions = re.findall(r"@(需求设计|UI设计)(?=$|[\s，。,.!！?？:：])", request, re.IGNORECASE)
-    if mentions:
-        requirement_target = mentions[-1] == "需求设计"
-        return DesignConversationDecision(
-            intent="requirement_change" if requirement_target else "ui_change",
-            change_level="requirement" if requirement_target else "ui",
-            reason="用户明确指定重新执行的上游设计目标。",
             affected_page_ids=_mentioned_page_ids(request, product_plan),
             response="",
         )

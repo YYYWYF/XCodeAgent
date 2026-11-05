@@ -253,6 +253,9 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         ],
         "designChange": {
             "requestField": "forwardedProps.applicationPlanningInteraction",
+            "conversationTargetField": "conversationTarget",
+            "conversationTargets": ["requirements", "ui_confirmation"],
+            "targetStartsExecution": True,
             "intentNode": "design_intent_analysis",
             "intents": [
                 "chat",
@@ -339,11 +342,15 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "technicalPlanningConversation": {
             "requestField": "forwardedProps.technicalPlanningConversation",
             "actions": ["classify", "prepare_revision", "revise", "revise_design"],
+            "conversationTargetField": "conversationTarget",
+            "conversationTargets": ["technical_planning", "requirements", "ui_confirmation"],
+            "targetStartsExecution": True,
             "conversationPhases": ["product", "planning"],
             "modelThreadSource": "threadId",
             "upstreamRevisionRequiresStageHandoff": True,
             "readOnlyClassification": True,
             "revisionRequiresExistingPlan": True,
+            "explicitTechnicalTargetAllowsInitialGeneration": True,
             "revisionRequiresCurrentSourceRunAndCheckpoint": True,
             "generationNode": "technical_planning_generate",
         },

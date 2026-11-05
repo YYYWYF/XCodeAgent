@@ -469,7 +469,7 @@ assert.equal(forwardedProps.resumeState, undefined)
 
 assert.equal(
   PRODUCT_CONVERSATION_PLACEHOLDER,
-  '告诉产品 Agent 你想调整的需求、页面或 UI，也可以直接提问…'
+  '可以提问或描述修改意见，输入 @ 指定要执行的节点…'
 )
 assert.equal(PRODUCT_CONVERSATION_PLACEHOLDER.includes('暂停并自由输入'), false)
 assert.deepEqual(
@@ -1088,14 +1088,15 @@ const completedTechnicalPlanWorkflow = {
 } as WorkflowRunPayload
 
 assert.equal(planningTechnicalPlanConfirmed(completedTechnicalPlanWorkflow), true)
-assert.equal(planningWorkflowPhase(completedTechnicalPlanWorkflow), 'template_preparation')
+assert.equal(planningWorkflowPhase(completedTechnicalPlanWorkflow), 'technical_planning')
 assert.deepEqual(planningWorkflowActivity({
   ...completedTechnicalPlanWorkflow,
-  summary: { status: 'running', phase: 'technical_planning' }
+  // 当前协议直接发布模板节点阶段，不能继续用旧技术阶段模拟模板执行。
+  summary: { status: 'running', phase: 'template_preparation' }
 } as WorkflowRunPayload), {
   status: 'running',
   title: '正在准备应用模板',
-  detail: '正在下载模板代码、生成应用骨架并校验工作区就绪状态。',
+  detail: '正在执行 Workspace Bootstrap 并校验工作区就绪状态。',
   intentLabel: undefined
 })
 assert.equal(
@@ -1398,7 +1399,8 @@ assert.deepEqual(
   ),
   [12]
 )
-assert.equal(planningWorkflowSettlesLoading(summaryOnlyQuestionsWorkflow), true)
+// 只有历史 summary 澄清但没有原生 interrupt 时，仍不能把运行态当成已收尾。
+assert.equal(planningWorkflowSettlesLoading(summaryOnlyQuestionsWorkflow), false)
 // TechnicalPlan 二次修改确认后的主 Workflow 已进入开发前置门禁，
 // 规划会话不应再显示“恢复计划阶段”的 loading 占位。
 assert.equal(shouldSuppressConfirmedTechnicalPlanTransitionChunk(undefined, true), true)

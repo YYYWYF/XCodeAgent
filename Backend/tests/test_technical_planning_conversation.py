@@ -70,7 +70,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         commit_technical_plan_document({"workspace": str(self.h.workspace)}, plan)
         return plan
 
-    async def _return_to_design(self, request):
+    async def _return_to_design(self, request, conversation_target=None):
         """先交接独立 DESIGN 线程，再使用目标 checkpoint 的精确版本执行上游修改。"""
 
         lifecycle = load_application_lifecycle(self.h.workspace)
@@ -84,6 +84,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         self.config = {"configurable": {"thread_id": target}}
         transferred = await self.h.graph.aget_state(self.config)
         return await self._send("revise_design", request,
+            conversationTarget=conversation_target,
             sourceRunId=transferred.values["active_run_id"], checkpointId=transferred.config["configurable"]["checkpoint_id"])
 
     async def _seed_template_failure(self):
@@ -106,8 +107,10 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
     async def test_template_failure_accepts_requirement_revision_and_waits_for_confirmation(self):
         """模板失败后按截图增加页面，真实 Graph 回到需求并停在联合文档确认门。"""
         await self._seed_template_failure()
-        request = "@需求设计 我还加一个页面，叫随机生成名字"
-        decision, _ = await self._send(request=request)
+        request = "我还加一个页面，叫随机生成名字"
+        with patch("app.agents.technical_planning_conversation.create_chat_model") as model:
+            model.return_value.invoke.return_value.content = json.dumps({"intent": "design_change", "message": "修改需求。"})
+            decision, _ = await self._send(request=request, conversationTarget="requirements")
         self.assertEqual(decision.get("intent"), "design_change")
         spec = deepcopy(self.h.requirement_spec)
         spec["pages"].append({"pageId": "random_name", "name": "随机生成名字", "path": "/random-name",
@@ -118,8 +121,12 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
                   return_value={"requirement_spec": spec, "clarification": clear_clarification(spec)}) as analyze,
             patch("app.graph.nodes.product_planning._generate_valid_product_plan", return_value=product),
             patch("app.graph.nodes.planning.plan_project_with_chat_model") as technical,
+            patch("app.agents.design_conversation.router.create_chat_model") as router,
         ):
-            _, events = await self._return_to_design(request)
+            router.return_value.invoke.return_value.content = json.dumps({
+                "intent": "requirement_change", "change_level": "requirement", "reason": "增加页面",
+            })
+            _, events = await self._return_to_design(request, "requirements")
         self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events))
         analyze.assert_called_once()
         technical.assert_not_called()
@@ -137,8 +144,10 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
     async def test_template_failure_accepts_technical_revision(self):
         """模板失败后的 @技术规划仍复用已确认计划，生成后重新等待确认。"""
         await self._seed_template_failure()
-        request = "@技术规划 修改前端架构说明"
-        decision, _ = await self._send(request=request)
+        request = "修改前端架构说明"
+        with patch("app.agents.technical_planning_conversation.create_chat_model") as model:
+            model.return_value.invoke.return_value.content = json.dumps({"intent": "revise", "message": "修改技术方案。"})
+            decision, _ = await self._send(request=request, conversationTarget="technical_planning")
         self.assertEqual(decision.get("intent"), "revise")
         with (
             patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(self.h.candidate)) as generate,
@@ -168,6 +177,68 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         _, _, recovery_after = await self.h.resolve_action()
         self.assertEqual(recovery_before["sourceRunId"], recovery_after["sourceRunId"])
         self.assertEqual((await get_execution(self.h.workspace, self.h.source_run_id)).status.value, "failed")
+
+    async def test_selected_targets_prepare_execution_without_model(self):
+        """三个显式目标均跳过模型准备执行，准备阶段仍只读当前版本。"""
+        before = await self.h.graph.aget_state(self.config)
+        lifecycle = load_application_lifecycle(self.h.workspace)
+        for target in ("technical_planning", "requirements", "ui_confirmation"):
+            with self.subTest(target=target), patch("app.agents.technical_planning_conversation.create_chat_model") as model:
+                model.return_value.invoke.return_value.content = json.dumps({"intent": "reply", "message": "这里仅解释已有方案。"})
+                reply, _ = await self._send(request="这里的设计是什么意思？", conversationTarget=target)
+                self.assertEqual(reply["intent"], "revise" if target == "technical_planning" else "design_change", reply)
+                model.assert_not_called()
+                after = await self.h.graph.aget_state(self.config)
+                self.assertEqual(before.config, after.config)
+                self.assertEqual(before.values, after.values)
+                self.assertEqual(lifecycle, load_application_lifecycle(self.h.workspace))
+                self.assertEqual((await get_execution(self.h.workspace, self.h.source_run_id)).status.value, "failed")
+
+    async def test_invalid_or_empty_topic_request_has_complete_error_lifecycle(self):
+        """空白正文与未知目标在协议边界拒绝，且不调用模型或破坏 AG-UI 收尾。"""
+        for identity in ({"request": "   ", "conversationTarget": "requirements"},
+                         {"request": "解释方案", "conversationTarget": "unknown"}):
+            with patch("app.agents.technical_planning_conversation.create_chat_model") as model:
+                reply, events = await self._send(**identity)
+            model.assert_not_called()
+            self.assertEqual(reply["status"], "failed")
+            self.assertEqual(events[-1]["type"], "RUN_FINISHED")
+
+    async def test_explicit_technical_target_generates_without_baseline_and_waits_for_confirmation(self):
+        """首次技术生成失败后，@技术规划携带本轮正文直接执行并重新等待确认。"""
+        request = "请把时间字段改为日期类型"
+        with patch("app.agents.technical_planning_conversation.create_chat_model") as classifier:
+            decision, _ = await self._send(request=request, conversationTarget="technical_planning")
+        classifier.assert_not_called()
+        self.assertEqual(decision["intent"], "revise")
+        with (
+            patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(self.h.candidate)) as generate,
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+        ):
+            _, events = await self._send("revise", request, conversationTarget="technical_planning",
+                sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"])
+        self.assertFalse(any(e["type"] == "RUN_ERROR" for e in events))
+        generate.assert_called_once()
+        self.assertEqual(generate.call_args.args[0]["planning_adjustment_request"], request)
+        final = await self.h.graph.aget_state(self.config)
+        self.assertEqual(final.values["request"], request)
+        self.assertEqual(tuple(final.next), ("technical_planning_review",))
+        self.assertTrue(any(task.interrupts for task in final.tasks))
+        self.assertEqual(load_application_lifecycle(self.h.workspace).initialization.stage,
+            ApplicationLifecycleStage.AWAITING_TECHNICAL_PLAN_CONFIRMATION)
+
+    async def test_explicit_target_rejects_stale_version_and_mismatched_branch(self):
+        """@ 不授予跨分支或旧版本执行权限，拒绝时不改变原 checkpoint。"""
+        before = await self.h.graph.aget_state(self.config)
+        decision, _ = await self._send(request="执行这个节点", conversationTarget="technical_planning")
+        for identity in (
+            {"conversationTarget": "technical_planning", "checkpointId": "stale"},
+            {"conversationTarget": "ui_confirmation", "checkpointId": decision["checkpointId"]},
+        ):
+            rejected, _ = await self._send("revise", "执行这个节点",
+                sourceRunId=decision["sourceRunId"], **identity)
+            self.assertEqual(rejected["status"], "failed")
+            self.assertEqual(before.config, (await self.h.graph.aget_state(self.config)).config)
 
     async def test_revision_uses_original_generator_with_new_request_and_existing_plan(self):
         """失败后输入新修改要求，携带已有计划调用原生成器并停回正式确认门。"""
@@ -229,12 +300,26 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
     async def test_ui_mention_returns_to_design_graph_without_a_technical_plan(self):
         """无技术计划的失败现场也能按 @UI设计回到上游，重新停在设计确认门。"""
         with patch("app.agents.technical_planning_conversation.create_chat_model") as model:
-            decision, _ = await self._send(request="@UI设计 重新调整页面布局")
+            model.return_value.invoke.return_value.content = json.dumps({"intent": "design_change", "message": "修改布局。"})
+            decision, _ = await self._send(request="重新调整页面布局", conversationTarget="ui_confirmation")
         model.assert_not_called()
         self.assertEqual(decision["intent"], "design_change")
-        _, events = await self._return_to_design("@UI设计 重新调整页面布局")
+        with (
+            patch("app.agents.design_conversation.router.create_chat_model") as router,
+            patch("app.graph.nodes.ui_confirmation.generate_page_react_code",
+                return_value="const NoticePage = () => <div>公告</div>; export default NoticePage;") as generate,
+        ):
+            router.return_value.invoke.return_value.content = json.dumps({
+                "intent": "ui_change", "change_level": "ui", "reason": "修改布局",
+            })
+            _, events = await self._return_to_design("重新调整页面布局", "ui_confirmation")
+        router.assert_not_called()
+        generate.assert_called()
+        for call in generate.call_args_list:
+            self.assertEqual(call.kwargs["instruction"], "重新调整页面布局")
         snapshot = await self.h.graph.aget_state(self.config)
         self.assertEqual(snapshot.values.get("design_change_target"), "ui_confirmation")
+        self.assertEqual(snapshot.values["ui_designs"]["confirmation_status"], "pending_user_confirmation")
         self.assertTrue(snapshot.tasks)
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
         self.assertEqual(events[-1]["type"], "RUN_FINISHED")
@@ -254,13 +339,15 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.agents.technical_planning_conversation.create_chat_model") as model:
             for request in ("@技术规划 给审批员增加审批权限", "@技术规划 取消编辑者的删除权限", "@技术规划 新增角色：审核员"):
                 self.assertEqual(classify_technical_planning_conversation(request, {}).intent, "design_change")
+            model.assert_not_called()
+            model.return_value.invoke.return_value.content = json.dumps({"intent": "revise", "message": "仅修改接口绑定。"})
             self.assertEqual(classify_technical_planning_conversation(
                 "@技术规划 把审批操作绑定到 purchase_api.approve", {},
             ).intent, "revise")
             self.assertEqual(classify_technical_planning_conversation(
                 "@技术规划 将审批员改为审核员", {"requirement_spec": {"user_roles": [{"name": "审批员"}]}},
             ).intent, "design_change")
-        model.assert_not_called()
+        model.assert_called_once()
 
     def test_permission_changes_with_questions_still_return_upstream(self):
         """附带解释和礼貌问法不抹掉权限修改，纯方法提问仍交给只读问答。"""

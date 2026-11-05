@@ -21,6 +21,7 @@ ApplicationPlanningAction = Literal[
     "enter_planning",
     "design_change",
 ]
+PlanningConversationTarget = Literal["technical_planning", "requirements", "ui_confirmation"]
 
 
 class ApplicationPlanningInteraction(BaseModel):
@@ -37,6 +38,7 @@ class ApplicationPlanningInteraction(BaseModel):
     )
     action: ApplicationPlanningAction
     request: str = Field(default="", max_length=20000)
+    conversation_target: PlanningConversationTarget | None = Field(default=None, alias="conversationTarget")
     answers: dict[str, Any] = Field(default_factory=dict)
     edited_requirement_spec: dict[str, Any] | None = Field(
         default=None,
@@ -55,6 +57,10 @@ class ApplicationPlanningInteraction(BaseModel):
 
         if self.action in {"revise", "design_change"} and not self.request.strip():
             raise ValueError("修改动作必须提供明确的修改要求。")
+        if self.conversation_target is not None and self.action != "design_change":
+            raise ValueError("执行目标只能用于自由输入，不能代替确认卡动作。")
+        if self.conversation_target == "technical_planning":
+            raise ValueError("请先完成上游确认并进入计划阶段，再执行技术规划。")
         if self.action == "ui_action":
             if self.artifact != "ui_designs" or not isinstance(self.ui_action, dict):
                 raise ValueError("UI 动作必须绑定 ui_designs 并提供 uiAction。")

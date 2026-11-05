@@ -1513,6 +1513,41 @@ async function waitForCondition<T>(
   assert.equal(shouldPreserveTechnicalPlanningReply(replyMessage, { ...initial.workflow, runId: 'new-generation' }), false)
 }
 
+// 需求阶段使用原生审阅门，并把结构化讨论目标随 AG-UI 交互传到底层。
+{
+  const initial = planningState()
+  initial.workflow = confirmationWorkflow()
+  const h = harness(initial)
+  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '说明页面布局', false,
+    undefined, 'ui_confirmation')
+  assert.deepEqual(h.calls[0].options.applicationPlanningInteraction, {
+    gateId: 'current-gate', artifact: 'technical_plan', artifactRevision: 'revision-current',
+    action: 'design_change', request: '说明页面布局', conversationTarget: 'ui_confirmation'
+  })
+}
+
+// 指定 @ 后按后端确定性准备结果执行；技术节点原线程运行，上游节点在释放 transport 后交接。
+for (const target of ['technical_planning', 'requirements', 'ui_confirmation'] as const) {
+  const initial = planningState()
+  initial.workflow = confirmationWorkflow()
+  let handoffs = 0
+  const h = harness(initial, { readTechnicalPlanningReply: async (_app, _thread, request, _signal, topic) => {
+    assert.equal(request, '这个设计是什么意思？')
+    assert.equal(topic, target)
+    return { intent: target === 'technical_planning' ? 'revise' : 'design_change', message: '按指定节点执行。', planningThreadId: initial.threadId,
+      sourceRunId: 'run-A', checkpointId: 'checkpoint-A' }
+  } })
+  h.onRead(async () => ({ workflow: confirmationWorkflow(initial.threadId), lifecycle: initial.lifecycle!, recovery: initial.recovery }))
+  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '这个设计是什么意思？', true,
+    async () => { handoffs++; assert.equal(h.current()?.transportState, 'idle') }, target)
+  assert.equal(handoffs, target === 'technical_planning' ? 0 : 1)
+  assert.equal(h.calls.length, target === 'technical_planning' ? 1 : 0)
+  if (target === 'technical_planning') {
+    assert.equal(h.calls[0].options.technicalPlanningConversation?.conversationTarget, target)
+    assert.equal(h.calls[0].options.technicalPlanningConversation?.request, '这个设计是什么意思？')
+  }
+}
+
 // 明确的新技术修改使用原 Planning 会话，携带后端分类时的当前版本身份。
 {
   const initial = planningState()
@@ -1523,13 +1558,14 @@ async function waitForCondition<T>(
   }) })
   const latestRecovery = recoveryProjection(initial.threadId, { sourceRunId: 'new-generation-run', recoveryActionPlan: null })
   h.onRead(async () => ({ workflow: confirmationWorkflow(initial.threadId), lifecycle: initial.lifecycle!, recovery: latestRecovery }))
-  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '修改前端架构说明', true)
+  await h.runtime.submitClarification(initial.workflow, {}, undefined, undefined, '修改前端架构说明', true, undefined, 'technical_planning')
   assert.equal(h.calls.length, 1)
   assert.equal(h.calls[0].options.conversation, undefined)
   assert.deepEqual(h.calls[0].options.technicalPlanningConversation, {
     action: 'revise', workspaceRoot: initial.application.workspaceRoot,
     applicationId: initial.application.id, planningThreadId: initial.threadId,
-    request: '修改前端架构说明', sourceRunId: 'source-run', checkpointId: 'checkpoint-B'
+    request: '修改前端架构说明', sourceRunId: 'source-run', checkpointId: 'checkpoint-B',
+    conversationTarget: 'technical_planning'
   })
   assert.equal(h.current()?.recovery, latestRecovery)
 }

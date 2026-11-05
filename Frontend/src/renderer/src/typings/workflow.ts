@@ -922,12 +922,15 @@ export type WorkflowBuildTaskPlanConfirmation = {
   draftDigest?: string
 }
 
+export type PlanningConversationTarget = 'technical_planning' | 'requirements' | 'ui_confirmation'
+
 export type ApplicationPlanningInteraction = {
   gateId: string
   artifact: 'requirement_spec' | 'requirement_document' | 'ui_designs' | 'technical_plan'
   artifactRevision: string
   action: ApplicationPlanningAction
   request?: string
+  conversationTarget?: PlanningConversationTarget
   answers?: WorkflowClarificationAnswers
   editedRequirementSpec?: Record<string, unknown>
   requirementSpecFeedback?: string

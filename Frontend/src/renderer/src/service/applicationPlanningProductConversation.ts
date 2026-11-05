@@ -8,7 +8,8 @@ type ProductConversationGate = Pick<
 /** 用服务端最新审阅门身份构造自由输入，禁止把自然语言伪装成当前卡片回答。 */
 export function buildProductConversationInteraction(
   gate: ProductConversationGate,
-  request: string
+  request: string,
+  conversationTarget?: ApplicationPlanningInteraction['conversationTarget']
 ): ApplicationPlanningInteraction {
   const trimmed = request.trim()
   if (!gate.gateId || !gate.artifactRevision) {
@@ -20,7 +21,8 @@ export function buildProductConversationInteraction(
   return {
     ...gate,
     action: 'design_change',
-    request: trimmed
+    request: trimmed,
+    ...(conversationTarget ? { conversationTarget } : {})
   }
 }
 

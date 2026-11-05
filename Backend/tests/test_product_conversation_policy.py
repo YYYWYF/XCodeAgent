@@ -18,13 +18,19 @@ class ProductConversationPolicyTests(unittest.TestCase):
     """验证产品自由输入的语义分类和确定性能力门禁。"""
 
     def test_explicit_upstream_mentions_keep_formal_prerequisites(self) -> None:
-        """明确目标不再交给模型猜测，但 UI 目标仍须满足上游确认。"""
-        for request, expected in (("@需求设计 重新生成", "requirements"), ("@UI设计 调整布局", "ui_confirmation")):
+        """显式目标跳过模型选择节点，但保留原有上游正式确认条件。"""
+        for request, expected in (("重新生成", "requirements"), ("调整布局", "ui_confirmation")):
             with self.subTest(request=request):
                 with patch("app.agents.design_conversation.router.create_chat_model") as model:
+                    model.return_value.invoke.return_value.content = json.dumps({
+                        "intent": "requirement_change" if expected == "requirements" else "ui_change",
+                        "change_level": "requirement" if expected == "requirements" else "ui",
+                        "reason": "用户明确修改正文",
+                    })
                     decision = classify_design_conversation(
                         request, requirement_spec={"confirmation_status": "confirmed"},
                         product_plan={"confirmation_status": "confirmed"}, ui_designs={},
+                        conversation_target=expected,
                     )
                 model.assert_not_called()
                 self.assertEqual(resolve_design_target(
@@ -35,6 +41,33 @@ class ProductConversationPolicyTests(unittest.TestCase):
                     decision, requirement_spec={"confirmation_status": "pending_user_confirmation"},
                     product_plan={"confirmation_status": "confirmed"},
                 ), "requirements")
+
+    def test_selected_targets_execute_even_when_body_is_question(self):
+        """指定 @ 已表达执行意图，即使正文是疑问句也不再分类为只读。"""
+        for target in ("requirements", "ui_confirmation"):
+            with patch("app.agents.design_conversation.router.create_chat_model") as model:
+                model.return_value.invoke.return_value.content = json.dumps({
+                    "intent": "read_only", "reason": "解释已有设计", "response": "设计说明",
+                })
+                decision = classify_design_conversation("当前方案是什么意思？",
+                    requirement_spec={"confirmation_status": "confirmed"},
+                    product_plan={"confirmation_status": "confirmed"}, ui_designs={}, conversation_target=target)
+            model.assert_not_called()
+            self.assertEqual(resolve_design_target(decision,
+                requirement_spec={"confirmation_status": "confirmed"},
+                product_plan={"confirmation_status": "confirmed"}), target)
+
+    def test_unselected_question_still_uses_model(self):
+        """没有 @ 的问题仍由模型识别并只读回答。"""
+        with patch("app.agents.design_conversation.router.create_chat_model") as model:
+            model.return_value.invoke.return_value.content = json.dumps({
+                "intent": "read_only", "reason": "解释设计", "response": "设计说明",
+            })
+            decision = classify_design_conversation("当前方案是什么意思？",
+                requirement_spec={}, product_plan={}, ui_designs={})
+        model.assert_called_once()
+        self.assertEqual(decision.intent, "read_only")
+        self.assertIsNone(resolve_design_target(decision, requirement_spec={}, product_plan={}))
 
     def _fallback(self, request: str) -> DesignConversationDecision:
         """强制模型调用失败，读取不依赖外部服务的保守分类结果。"""

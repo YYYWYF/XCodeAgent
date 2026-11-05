@@ -871,6 +871,8 @@ def build_workflow_ag_ui_stream(
                      "request": checkpoint_values.get("request") or initial_state["request"],
                      "active_run_id": current_lifecycle.active_run_id if current_lifecycle else ""},
                     new_request=technical_planning_revision.request if technical_planning_revision else None,
+                    allow_initial_generation=bool(technical_planning_revision and
+                        technical_planning_revision.conversation_target == "technical_planning"),
                 ))
                 if (technical_planning_revision is not None and current_lifecycle is not None
                         and current_lifecycle.initialization.status == "cancelled"):
@@ -913,6 +915,7 @@ def build_workflow_ag_ui_stream(
                     # 新的技术修改替代旧生成要求；后续失败重试继续沿用这次明确输入。
                     initial_state["design_change_request"] = technical_planning_revision.request
                     initial_state["design_change_generation_request"] = technical_planning_revision.request
+                    initial_state["design_conversation_target"] = technical_planning_revision.conversation_target
             first_node_name = _application_planning_resume_node(
                 application_planning_interaction
             ) or _workflow_start_node(resume_from, workflow_scope)

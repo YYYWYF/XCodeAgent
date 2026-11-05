@@ -38,6 +38,7 @@ from app.services.ui_design_generation_pool import (
 from app.services.ui_design_generator import (
     derive_page_key,
     generate_adjusted_page_react_code,
+    generate_page_react_code,
     load_page_code,
     persist_page_code,
     resolve_adjust_target_pages,
@@ -491,7 +492,7 @@ async def _apply_adjust_pages(
             prev_code = load_page_code(project_dir, page_key) or ""
         if not prev_code:
             prev_code = str(target.get("code") or "")
-        if not prev_code:
+        if not prev_code and state.get("design_conversation_target") != "ui_confirmation":
             _emit_progress(
                 f"跳过无设计稿的页面：{name}（第 {seq + 1}/{total} 页）",
                 ready=seq,
@@ -512,14 +513,17 @@ async def _apply_adjust_pages(
             adjust_current=page_id,
         )
         try:
-            code = await asyncio.to_thread(
-                generate_adjusted_page_react_code,
-                spec_page,
-                page_key,
-                project_dir,
-                prev_code,
-                instruction,
-            )
+            # 显式回退遇到未生成/已跳过的页面时，正文进入初次生成；已有稿仍增量调整。
+            if prev_code:
+                code = await asyncio.to_thread(
+                    generate_adjusted_page_react_code,
+                    spec_page, page_key, project_dir, prev_code, instruction,
+                )
+            else:
+                code = await asyncio.to_thread(
+                    generate_page_react_code,
+                    spec_page, page_key, project_dir, instruction=instruction,
+                )
             code_path = persist_page_code(project_dir, page_key, code)
             pages[idx] = build_ui_page_manifest(
                 spec_page,
@@ -888,10 +892,16 @@ async def ui_confirmation(state: ProjectState) -> dict:
     # "换一换"后才产生设计稿（经 ui_design_action 单页动作路径回填）。
     ui_designs = await _build_pending_ui_designs(state)
     _persist_ui_designs(state, ui_designs)
+    if (state.get("design_conversation_target") == "ui_confirmation"
+            and interaction_action == "ui_action" and isinstance(action, dict)
+            and action.get("action") == "adjust_pages"):
+        # 首次骨架落盘后执行 @ 携带的正文，返回仍是 UI 审阅门，不能直接放行计划阶段。
+        ui_designs = await _apply_ui_design_action(state, ui_designs, action)
     return {
         "phase": "ui_confirmation",
         "status": "requires_user_input",
         "ui_designs": ui_designs,
+        "ui_design_action": None,
         "clarification": _ui_design_confirmation_payload(state, ui_designs),
         "timeline": ["ui_confirmation"],
     }

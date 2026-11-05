@@ -87,7 +87,8 @@ export function buildPlanningInteraction(
   answers: WorkflowClarificationAnswers,
   editedRequirementSpec?: Record<string, unknown>,
   requirementSpecFeedback?: string,
-  designChangeRequest?: string
+  designChangeRequest?: string,
+  conversationTarget?: ApplicationPlanningInteraction['conversationTarget']
 ): ApplicationPlanningInteraction {
   const pending = planningInterrupt(workflow)
   const gateId = String(pending.gateId || '')
@@ -97,7 +98,7 @@ export function buildPlanningInteraction(
     throw new Error('当前规划确认卡版本信息不完整，请刷新后重试。')
   }
   if (designChangeRequest?.trim()) {
-    return buildProductConversationInteraction({ gateId, artifact, artifactRevision }, designChangeRequest)
+    return buildProductConversationInteraction({ gateId, artifact, artifactRevision }, designChangeRequest, conversationTarget)
   }
   const action = answers.__applicationPlanningAction
   if (!action) throw new Error('当前规划提交缺少明确的交互动作，请从确认卡重新提交。')

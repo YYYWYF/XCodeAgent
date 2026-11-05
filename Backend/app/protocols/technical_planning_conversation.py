@@ -2,11 +2,12 @@
 
 from typing import Any, AsyncIterator, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from langchain_core.runnables import RunnableLambda
 
 from app.agents.technical_planning_conversation import classify_technical_planning_conversation
 from app.domain.application_lifecycle import ApplicationLifecycleStage
+from app.domain.application_planning_interaction import PlanningConversationTarget
 from app.persistence.execution_recovery import get_execution
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.protocols.application_planning_run_lock import application_planning_run_lock
@@ -21,15 +22,27 @@ from app.services.access_control_intent import has_explicit_business_access_cont
 class TechnicalPlanningConversationRequest(BaseModel):
     """验证自由输入的动作和原规划身份，禁止客户端选择任意节点。"""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     action: Literal["classify", "prepare_revision", "revise", "revise_design"]
     workspaceRoot: str = Field(min_length=1)
     applicationId: str = Field(min_length=1)
     planningThreadId: str = Field(min_length=1)
     request: str = Field(min_length=1, max_length=16000)
+    conversationTarget: PlanningConversationTarget | None = None
     sourceRunId: str | None = None
     checkpointId: str | None = None
     conversationPhase: Literal["product", "planning"] = "planning"
+
+    @model_validator(mode="after")
+    def validate_target_action(self) -> "TechnicalPlanningConversationRequest":
+        """显式目标必须与执行分支一致，卡片准备动作不接受外部切换目标。"""
+        if self.action == "revise" and self.conversationTarget not in {None, "technical_planning"}:
+            raise ValueError("指定上游节点时，请返回对应设计阶段执行。")
+        if self.action == "revise_design" and self.conversationTarget == "technical_planning":
+            raise ValueError("技术规划请在计划阶段执行。")
+        if self.action == "prepare_revision" and self.conversationTarget is not None:
+            raise ValueError("卡片修改不能切换执行目标。")
+        return self
 
 
 async def _current_context(graph, request: TechnicalPlanningConversationRequest):
@@ -82,6 +95,8 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             "technical_plan": prepared["technical_plan"],
             "requirement_spec": values.get("requirement_spec"),
             "product_plan": values.get("product_plan"),
+            "ui_designs": values.get("ui_designs"),
+            "conversation_target": request.conversationTarget,
             "last_generation_request": prepared["request"],
             "execution_status": source.status.value if source else None,
             "failure": recovery_failure_diagnostic(source) if source else None,
@@ -95,7 +110,7 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
         decision = await RunnableLambda(classify_context).ainvoke(context,
             config={"configurable": {"thread_id": str(payload.get("threadId") or request.planningThreadId)}})
         intent, message = decision.intent, decision.message
-        if intent == "revise" and not prepared["technical_plan"]:
+        if intent == "revise" and not prepared["technical_plan"] and request.conversationTarget is None:
             intent, message = "reply", "当前尚无技术规划，请使用上方重试入口重新生成；生成后可以在这里提出修改要求。"
         return AgUiActionResult(message=message, data={
             "intent": intent, "message": message,
@@ -115,16 +130,22 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             if (not request.sourceRunId or request.sourceRunId != values.get("active_run_id")
                     or not request.checkpointId or request.checkpointId != checkpoint_id):
                 raise ValueError("技术规划状态已变化，请同步最新状态后重新提交修改要求。")
-            # 复验修改语义，不能通过直接提交 revise 或 @技术规划 绕过上游授权确认。
+            # 显式 @ 按指定分支执行；未指定目标时保留原有权限语义路由，不跳过确认门。
             requirement = values.get("requirement_spec")
-            upstream = request.action == "revise_design" or has_explicit_business_access_control_change(
-                request.request, user_roles=requirement.get("user_roles") if isinstance(requirement, dict) else None,
+            upstream = request.action == "revise_design" or (
+                request.conversationTarget is None and has_explicit_business_access_control_change(
+                    request.request,
+                    user_roles=requirement.get("user_roles") if isinstance(requirement, dict) else None,
+                )
             )
             if upstream and values.get("planning_stage_handoff", {}).get("targetPhase") != "product":
                 raise ValueError("上游修改必须先交接到独立需求会话，不能在技术线程中回退。")
             target_node = "design_intent_analysis" if upstream else "technical_planning"
             if target_node == "technical_planning":
-                prepare_technical_planning_retry(values, new_request=request.request)
+                prepare_technical_planning_retry(
+                    values, new_request=request.request,
+                    allow_initial_generation=request.conversationTarget == "technical_planning",
+                )
         except Exception as exc:
             error = exc
 
@@ -147,7 +168,9 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
         }
         async for frame in build_workflow_ag_ui_stream(
             graph=graph, payload=normalized, accept=accept,
-            technical_planning_revision=TechnicalPlanningMessageRevision(request.request, checkpoint_id, target_node),
+            technical_planning_revision=TechnicalPlanningMessageRevision(
+                request.request, checkpoint_id, target_node, request.conversationTarget,
+            ),
         ):
             yield frame
 

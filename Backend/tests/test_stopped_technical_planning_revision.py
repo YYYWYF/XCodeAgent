@@ -41,7 +41,7 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
         self.h.close()
         self.settings.stop()
 
-    async def _send(self, action="classify", request="@技术规划 调整架构说明", **identity):
+    async def _send(self, action="classify", request="调整架构说明", **identity):
         """通过生产 AG-UI 端点分类或提交修改，并保留完整帧供失败定位。"""
         frames = [frame async for frame in build_application_page_planning_ag_ui_stream(
             graph=self.h.graph, payload={
@@ -64,10 +64,12 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
         """停止保留原记录，新修改生成真实文件并停回原生确认门，绝不自动确认。"""
         before = load_application_lifecycle(self.h.workspace)
         self.assertEqual(before.initialization.status, "cancelled")
-        request = "调整架构说明" if from_card else "@技术规划 调整架构说明"
-        with patch("app.protocols.technical_planning_conversation.classify_technical_planning_conversation",
+        request = "调整架构说明"
+        with patch("app.agents.technical_planning_conversation.create_chat_model") as model, patch("app.protocols.technical_planning_conversation.classify_technical_planning_conversation",
                    wraps=classify_technical_planning_conversation) as classify:
-            decision, _ = await self._send("prepare_revision" if from_card else "classify", request)
+            model.return_value.invoke.return_value.content = json.dumps({"intent": "revise", "message": "修改架构说明。"})
+            decision, _ = await self._send("prepare_revision" if from_card else "classify", request,
+                **({} if from_card else {"conversationTarget": "technical_planning"}))
         if from_card:
             classify.assert_not_called()
         self.assertIn("intent", decision, decision)
@@ -138,7 +140,7 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stale_modification_does_not_reopen_stopped_lifecycle(self):
         """分类后的版本失效保持停止状态，不能借新输入覆盖最新规划。"""
-        decision, _ = await self._send()
+        decision, _ = await self._send("prepare_revision")
         before = load_application_lifecycle(self.h.workspace)
         await self.h.graph.aupdate_state(self.config, {"request": "新版本", "resume_from": "technical_planning"}, as_node="workflow_entry")
         rejected, _ = await self._send("revise", sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"])

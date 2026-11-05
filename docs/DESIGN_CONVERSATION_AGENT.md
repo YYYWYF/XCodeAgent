@@ -12,6 +12,10 @@
 
 TechnicalPlan、API/Schema、数据库和数据源实现、源码、Build、命令与测试均不属于产品阶段。
 
+输入 `@` 可以指定执行节点：设计阶段提供需求设计、UI设计，计划阶段还提供技术规划。每条消息只选择一个目标，重新选择会替换原标签并保留正文；只有标签时提示“请补充问题或修改意见”并禁用发送。选择目标后携带正文直接进入对应生成流程，生成后仍需正式确认；没有指定目标时才按正文识别问答或修改。
+
+前端在发送边界把标签拆成 `conversationTarget`（`requirements`、`ui_confirmation` 或 `technical_planning`），`request` 仅包含正文。需求阶段通过既有 `applicationPlanningInteraction` 提交，计划阶段通过 `technicalPlanningConversation` 提交；后端按结构化目标确定性选择执行分支，不调用意图分类模型，也不从正文解析标签。指定上游节点时先交接独立 DESIGN 线程，再携带正文执行；指定技术规划时复用原技术生成链路，没有基线时也可在上游条件满足后生成。指定 UI 时，即使此前跳过或尚无设计稿，也会把正文传给单页生成器，而非只返回空的设计稿骨架；已有设计稿仍按原方式增量调整。未指定目标时保留现有语义识别和业务权限路由。所有路径保留当前 Run/checkpoint、阶段和归属校验；上游未确认时仍由原 Policy 回到最早未确认产物，RequirementSpec/ProductPlan 仍联合确认，UI 和新技术规划仍须确认。卡片“修改”继续使用原显式修订动作。
+
 ## 唯一正式链路
 
 产品自由输入继续复用：
@@ -26,7 +30,7 @@ POST /application-page-planning/run
 
 ## Coordinator 与确定性 Policy
 
-Backend/app/agents/design_conversation/router.py 中的 Coordinator 只返回语义：
+未指定 `@` 时，Backend/app/agents/design_conversation/router.py 中的 Coordinator 只返回语义：
 
 ~~~
 intent:

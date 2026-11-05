@@ -1,7 +1,6 @@
 """技术规划自由输入的只读问答与修改意图识别。"""
 
 import json
-import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,7 +24,17 @@ class TechnicalPlanningConversationDecision(BaseModel):
 def classify_technical_planning_conversation(
     request: str, context: dict[str, Any],
 ) -> TechnicalPlanningConversationDecision:
-    """使用当前规划回答问题，并把明确的上游修改交回原设计意图节点。"""
+    """显式目标直接选择执行分支；没有目标时再识别问答与修改。"""
+
+    target = context.get("conversation_target")
+    if target is not None:
+        # 协议已校验目标白名单；@ 选择的是执行节点，不受正文疑问句或分类模型影响。
+        if target not in {"technical_planning", "requirements", "ui_confirmation"}:
+            raise ValueError("请选择有效的执行目标。")
+        return TechnicalPlanningConversationDecision(
+            intent="revise" if target == "technical_planning" else "design_change",
+            message="按指定节点执行，生成后仍需确认。",
+        )
 
     if is_natural_language_confirmation(request):
         return TechnicalPlanningConversationDecision(
@@ -38,13 +47,7 @@ def classify_technical_planning_conversation(
         return TechnicalPlanningConversationDecision(
             intent="design_change", message="角色与默认授权属于需求阶段，将返回修改并重新等待联合确认。",
         )
-    # @ 明确选择业务目标；上游仍由设计 Policy 选择最早产物并保留后续确认门。
-    mentions = re.findall(r"@(技术规划|需求设计|UI设计)(?=$|[\s，。,.!！?？:：])", request, re.IGNORECASE)
-    if mentions:
-        return TechnicalPlanningConversationDecision(
-            intent="revise" if mentions[-1] == "技术规划" else "design_change",
-            message="按指定目标重新规划，生成后仍需正式确认。",
-        )
+    # 未指定 @ 时才根据正文和当前产物识别问答、技术修改或上游修改。
     prompt = (
         "You handle conversation in the Technical Planning stage of DevAgent Studio. "
         "Return exactly JSON {\"intent\":\"reply\"|\"revise\"|\"design_change\",\"message\":\"Chinese response\"}. "

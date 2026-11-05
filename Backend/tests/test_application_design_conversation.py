@@ -48,6 +48,9 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             capabilities["designChange"]["existingArtifactsStateField"],
             "design_change_existing_artifacts",
         )
+        self.assertTrue(capabilities["designChange"]["targetStartsExecution"])
+        self.assertTrue(capabilities["technicalPlanningConversation"]["targetStartsExecution"])
+        self.assertEqual(capabilities["designChange"]["conversationTargets"], ["requirements", "ui_confirmation"])
 
     def test_design_change_request_starts_original_graph_intent_node(self) -> None:
         """设计变更必须以类型化交互恢复当前原生中断。"""
@@ -433,6 +436,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             "design_change_submission": True,
             "design_change_request": "新增报表页",
             "design_change_target": "requirements",
+            "design_conversation_target": "requirements",
             "design_change_reason": "页面清单发生变化",
             "design_change_affected_page_ids": ["reports"],
             "design_change_generation_target": "requirements",
@@ -444,6 +448,7 @@ class ApplicationDesignConversationTests(unittest.TestCase):
 
         self.assertFalse(is_design_change(cleared_state))
         self.assertFalse(cleared_state["design_change_submission"])
+        self.assertIsNone(cleared_state["design_conversation_target"])
         self.assertEqual(cleared_state["design_change_generation_target"], "")
         self.assertEqual(cleared_state["design_change_generation_request"], "")
         self.assertEqual(cleared_state["design_change_existing_artifacts"], {})
@@ -556,6 +561,20 @@ class ApplicationDesignConversationTests(unittest.TestCase):
             state["ui_designs"]["confirmation_status"],
             "pending_user_confirmation",
         )
+
+    def test_explicit_ui_revision_keeps_instruction_without_existing_designs(self) -> None:
+        """已跳过 UI 的显式节点执行仍准备首次生成动作，不丢弃正文。"""
+        result = prepare_ui_revision_state({
+            "design_conversation_target": "ui_confirmation",
+            "design_change_request": "使用紫色边框",
+            "product_plan": {"pages": [{"pageId": "notice"}]},
+            "ui_designs": {"confirmation_status": "skipped", "pages": []},
+        })
+        self.assertIsNone(result["ui_designs"])
+        self.assertEqual(result["ui_design_action"], {
+            "action": "adjust_pages", "pageIds": ["notice"], "instruction": "使用紫色边框",
+        })
+        self.assertEqual(result["application_planning_interaction"], {"action": "ui_action"})
 
     def test_ui_revision_rebuilds_when_page_set_changes(self) -> None:
         """需求变更导致页面集合变化时必须让原 UI 节点重建设计稿。"""

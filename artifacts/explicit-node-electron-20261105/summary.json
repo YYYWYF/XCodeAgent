@@ -1,0 +1,15 @@
+{
+  "uiCode": "/Users/yifei/Coding/xcodeagent_test/explicit-node-electron-20261105/.devagentstudio/ui-design/pages/Notice/index.tsx",
+  "sha256": "f836af7e301823ee1d804a69a104f6a00a621e518c02e85d67bb5e603f386fef",
+  "instructionMarkerPresent": true,
+  "finalStage": {
+    "stage": "awaiting_requirement_document_confirmation",
+    "status": "awaiting_user",
+    "threadId": "a43233b5-228c-4515-9835-70608019b5c8",
+    "iterationId": "f82c21a8-ce0e-4655-9a43-d01ac3840da2"
+  },
+  "finalGate": "awaiting_requirement_document_confirmation",
+  "plainDesignQuestionControlPassed": true,
+  "plainDesignReplyContentAccurate": false,
+  "note": "需求侧回复称正文未填写，但右侧文档和草稿中已有 E2E-REQ-1105。现有紧凑问答上下文未投影正文，属于问答事实覆盖限制，未计作内容准确性通过。"
+}

@@ -1080,6 +1080,7 @@ def generate_page_react_code(
     page: dict[str, Any], page_key: str, project_dir: str = "",
     *,
     should_cancel: Callable[[], bool] | None = None,
+    instruction: str = "",
 ) -> str:
     """调用 LLM 为单个页面生成 React 设计稿 .tsx 代码，并校验+自动修复。
 
@@ -1099,6 +1100,9 @@ def generate_page_react_code(
 
     # 首次生成
     prompt = _build_ui_design_prompt(page, page_key)
+    if instruction.strip():
+        # 显式节点回退的正文只约束本页视觉生成，ProductPlan 仍是唯一业务事实来源。
+        prompt += f"\n\n--- USER DESIGN INSTRUCTION ---\n{instruction.strip()}\n--- END INSTRUCTION ---\n"
     result = _invoke_ui_design_model(
         model,
         prompt,
