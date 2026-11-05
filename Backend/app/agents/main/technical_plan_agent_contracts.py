@@ -2,19 +2,33 @@
 
 
 TECHNICAL_PLAN_AGENT_CONTRACT_REQUIREMENT = (
-    "Agent 合同规则：agent_contracts 必须且仅覆盖已确认 ProductPlan.agents 中存在 "
-    "surface.enabled=true 页面入口的 Agent；没有启用入口时显式使用空数组，不省略。"
+    "Agent 合同规则：agent_contracts 必须且仅覆盖已确认 ProductPlan.agents 的全部业务能力，"
+    "包括没有页面入口的后台 Agent；仅在没有任何 Agent 定义时使用空数组。"
     "允许补齐缺失合同、移除已停用合同和修复七模块配置，不能扩大已确认产品范围。"
-    "每项只能有 agentId、name、purpose、pageIds、agentSettings、interactionContract；"
+    "每项只能有 agentId、name、purpose、pageIds、publicEndpoint、agentSettings、interactionContract；"
+    "pageIds 可以为空；publicEndpoint 显式为 boolean，页面直接交互要求 true，纯内部能力使用 false。"
     'interactionContract 必须完整采用以下结构，其中 interactionKinds 按业务需要填写：{"mode":"conversation","inputSchema":{"type":"object",'
-    '"properties":{},"required":[],"additionalProperties":false},"textOutput":true,'
+    '"properties":{},"required":[],"additionalProperties":false},"resultSchema":null,"textOutput":true,'
     '"publicStateSchema":null,"outcomes":[],"interactionKinds":[]}。'
-    "用户提问只通过 AG-UI messages 传递，不是业务输入字段；不能在 inputSchema.properties 或 required 中添加 message、prompt 或 question。"
-    "普通文本回复由 textOutput=true 声明，不是业务 outcomes；不能把回复说明或验收标准放入 outcomes。"
-    "properties 必须为 {}，required 和 outcomes 必须为 []，不是待补充的示例占位。"
+    "普通聊天文本通过 messages 传递；业务参数按 inputSchema 声明，outcomes 固定为空数组。"
+    "单次任务使用 mode=task；纯文本报告允许 resultSchema=null 且 textOutput=true；业务接口调用的 Agent 必须提供非空 resultSchema；"
+    "多轮对话使用 mode=conversation，也可声明结构化结果；Schema 必须自包含，只允许本地片段引用。"
+    "textOutput 关闭时必须有 resultSchema；publicStateSchema 保持 null、outcomes 保持空数组。"
+    "业务 Endpoint 可声明 agentCall={agentId,inputBindings,resultBindings,responseMode}，"
+    "responseMode 为 json 或 ag-ui；映射为 JSON Pointer 字符串字典，目标指针映射到来源指针。"
+    "若 ProductPlan.agents[].interaction.responseMode 显式为 json，必须生成调用该 Agent 的 kind=business 接口，"
+    "agentCall.responseMode=json，并完整声明请求/响应 Schema 及 inputBindings/resultBindings；"
+    "表单提交动作绑定该业务接口，不得仅生成检测记录 CRUD 后让页面调用固定 AG-UI 入口。"
+    "此时 Agent 为内部能力，pageIds=[]、publicEndpoint=false；页面仍通过业务接口使用该能力。"
+    "task、resultSchema 或结果为 JSON 均不能单独决定传输方式；只有显式 responseMode 决定接口返回协议。"
+    "inputBindings 将请求的 path/query/header/body 映射至 Agent 输入，resultBindings 将 Agent 结果映射至完整业务响应。"
+    "内部调用复用 ApplicationServiceContext.agents.invoke_agent/stream_agent，不经 HTTP。"
+    "AG-UI 业务入口的业务请求在 forwardedProps.input 内，由标准 RunAgentInput 信封传输；JSON 入口直接使用业务 DTO。"
+    "可交互 Agent 的业务接口必须在请求 Schema 明确提供可选 _agent={threadId,interactionResponse} 续接字段，"
+    "或 AG-UI 标准 threadId/forwardedProps.interactionResponse；禁止自动批准或把待交互写成成功。"
     "文本会话是公开输入输出形式，不限制内部 Tool/Skill/Knowledge；按已确认业务需求规划 enabled 和 bindings/files，不得为通过校验删除或禁用已有能力。"
-    "interactionKinds 按业务需要显式声明 clarification/confirmation/approval_required 的不重复子集；写入 Tool 必须声明 confirmation 或 approval_required 并在实际执行前确认。"
-    "普通 Endpoint 必须显式 kind=business；首次规划由平台物化运行入口，修订时原样保留已有运行入口。"
+    "interactionKinds 按业务需要显式声明 clarification/confirmation/approval_required 的不重复子集；写入 Tool 必须声明 confirmation 或 approval_required 并在实际执行前确认。若校验报告缺少确认能力，定位该 agentId 的 interactionContract.interactionKinds，保留现有值并补充 confirmation；这只是声明交互能力，不代表用户已批准执行。不得仅修改 Prompt 代替结构化声明，也不得删除 Tool 或改变接口 method 来规避。"
+    "普通 Endpoint 必须显式 kind=business；Agent 运行入口由平台派生重建，不进入模型可编辑 api_contracts。"
     "agentId/name/purpose 原样采用产品事实，agentId 为 lower_snake_case 且不能为 runtime。"
     "pageIds 按 pageActionBindings 顺序只包含 surface.enabled=true 的 pageId。"
     "agentSettings 必须且只能有 prompt/model/memory/tools/skills/knowledge/context 七个对象。"

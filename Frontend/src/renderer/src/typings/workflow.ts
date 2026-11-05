@@ -655,6 +655,8 @@ export type WorkflowApiFieldMapping = {
 export type WorkflowApiDesignDraft = {
   apiContractId: string
   endpointId: string
+  agentCall?: { agentId: string; inputBindings: Record<string, string>; resultBindings: Record<string, string>; responseMode: 'json' | 'ag-ui' }
+  agentCapabilitySha256?: string
   /** Endpoint 级可选实现指导，不参与字段映射完整性判断。 */
   implementationDescription?: string
   databaseOperation?: WorkflowApiDatabaseOperation
@@ -952,6 +954,7 @@ export type WorkflowClarificationSelectionGroup = {
 export type WorkflowApiDesignReadinessItem = {
   api_contract_id?: string
   endpoint_id?: string
+  kind?: 'business' | 'agent_runtime'
   method?: string
   path?: string
   status?: 'confirmed' | 'pending' | 'stale' | string

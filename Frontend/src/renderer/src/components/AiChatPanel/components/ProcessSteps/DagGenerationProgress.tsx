@@ -219,6 +219,7 @@ function DagGenerationUnit({
         <Text type="secondary">
           {dagGenerationUnitKindLabel(unit.kind)} · {dagGenerationStrategyLabel(unit)}
         </Text>
+        {unit.reuseReason ? <Text type="secondary">{unit.reuseReason}</Text> : null}
         {unit.issues.length > 0 ? (
           <Text className={cx('dag-generation-unit-issue')}>
             {unit.issues.map((issue) => dagGenerationIssueMessage(issue.message, units)).join('；')}

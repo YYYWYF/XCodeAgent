@@ -466,6 +466,9 @@ def _normalize_endpoint(
     method = str(endpoint.get("method") or "GET").upper()
     path = str(endpoint.get("path") or endpoint.get("url") or base_path)
     endpoint_id = str(endpoint.get("id") or f"{contract_id}.{method.lower()}")
+    # 模型候选缺少类型时返回可继续修订的合同诊断，不能以 KeyError 中断恢复流程。
+    if "kind" not in endpoint:
+        raise ValueError(f"接口 {contract_id}/{endpoint_id} 缺少 kind，业务接口必须显式声明 kind=business。")
     authentication = endpoint.get("authentication")
     return {
         **endpoint,

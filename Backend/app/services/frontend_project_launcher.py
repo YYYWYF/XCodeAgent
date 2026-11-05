@@ -646,6 +646,9 @@ def _dev_server_log_is_ready(stdout_log: Path, stdout_offset: int) -> bool:
             content = stream.read().decode("utf-8", errors="replace").lower()
     except OSError:
         return False
+    # Rsbuild 在编译前就打印 Local 地址，必须同时看到本轮编译完成再放行。
+    if re.search(r"\brsbuild v[\d.]+", content):
+        return bool(_DEV_SERVER_URL_PATTERN.search(content)) and bool(re.search(r"\bready\s+built in\b", content))
     ready_markers = (
         "compiled successfully",
         "compiled with warnings",

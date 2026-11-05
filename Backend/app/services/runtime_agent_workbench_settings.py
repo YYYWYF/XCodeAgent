@@ -21,6 +21,7 @@ from app.services.revision_drafts import create_revision_draft, discard_current_
 from app.services.runtime_agent_contracts import agent_contract_index, agent_fact_digest
 from app.services.runtime_agent_editable_config import SettingsPatch, apply_settings_patch, editable_settings, settings_diffs
 from app.services.runtime_agent_settings_requests import GetSettingsRequest, PreviewSettingsRequest, SubmitSettingsRequest
+from app.services.runtime_debug_endpoints import debug_endpoints
 from app.services.workflow_quality_results import pending_quality_results
 from app.services.technical_plan_topology_selection import rebind_selected_topology
 from app.workspace.plan_documents import _write_text_atomically, render_project_plan_markdown
@@ -84,7 +85,7 @@ def _preview(root: Path, current, agent_id: str) -> dict | None:
     """从同一个 Formal Revision 草稿恢复修改前后内容，不保存第二份正式配置。"""
 
     active = current.active_formal_revision
-    if active is None or active.current_artifact != ARTIFACT_KEY or (active.target.model_extra or {}).get("agentId") != agent_id:
+    if active is None or active.current_artifact != ARTIFACT_KEY or active.target.agent_id != agent_id:
         return None
     metadata, markdown, candidate = load_revision_draft(root, change_id=active.change_id, artifact_key=ARTIFACT_KEY)
     contract = agent_contract_index(candidate)[agent_id]
@@ -133,7 +134,7 @@ def _prepare(root: Path, current, plan: dict, contract: dict, path: Path,
     change_id = f"chg_{uuid4().hex}"
     active = ActiveFormalRevision(changeId=change_id, formalBranch=FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
         sourceThreadId=thread_id, sourceRunId=run_id, request=f"修改智能体 {request.agentId} 的 Prompt／Temperature",
-        target=RevisionTarget(type="application", agentId=request.agentId), impactInteractionId=change_id,
+        target=RevisionTarget(type="agent", agentId=request.agentId), impactInteractionId=change_id,
         planningThreadId=current.initialization.thread_id or thread_id, planningRunId=run_id,
         status="awaiting_user", currentArtifact=ARTIFACT_KEY)
     markdown = render_project_plan_markdown({**candidate, "confirmation_status": "pending_user_confirmation"})
@@ -161,7 +162,7 @@ def _submit(root: Path, current, request: SubmitSettingsRequest) -> dict:
 
     active = current.active_formal_revision
     if (active is None or active.change_id != request.changeId or active.current_artifact != ARTIFACT_KEY
-            or (active.target.model_extra or {}).get("agentId") != request.agentId):
+            or active.target.agent_id != request.agentId):
         raise ValueError("配置修改预览已失效或不属于当前 Agent，请重新加载。")
     preview = _preview(root, current, request.agentId)
     if preview["draftSha256"] != request.draftSha256 or current.revision != request.lifecycleRevision:
@@ -200,6 +201,7 @@ def _submit(root: Path, current, request: SubmitSettingsRequest) -> dict:
     updated = _commit(root, path, candidate, current, updated)
     discard_current_revision_draft(root, change_id=request.changeId, artifact_key=ARTIFACT_KEY)
     return {"saved": True, "agent": {**agent_contract_index(candidate)[request.agentId],
+            "debugEndpoints": debug_endpoints(candidate, agent_contract_index(candidate)[request.agentId], updated.development_artifacts),
             "contractHash": agent_fact_digest(agent_contract_index(candidate)[request.agentId])},
             "lifecycle": application_lifecycle_payload(updated)}
 

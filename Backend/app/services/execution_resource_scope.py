@@ -12,7 +12,8 @@ from app.domain.application_lifecycle import (
 )
 from app.services.entity_definitions import contract_data_source_id
 from app.services.frontend_page_tree import find_frontend_page, project_plan_page_records
-from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys, scoped_agent_ids
+from app.services.runtime_agent_contracts import agent_contract_index
+from app.services.runtime_endpoint_dependencies import resolve_runtime_target
 
 
 def resolve_execution_resource_claims(
@@ -28,37 +29,43 @@ def resolve_execution_resource_claims(
         return [_claim(ExecutionResourceType.APPLICATION, "application", primary=True)]
 
     plan = project_plan if isinstance(project_plan, dict) else {}
-    if target_type == "agent":
-        scoped_agent_ids(plan, target_type, target_id)
-        claims = [_claim(ExecutionResourceType.AGENT, target_id, primary=True),
-                  _claim(ExecutionResourceType.AGENT, "runtime")]
-        for api_id, endpoint_id in agent_endpoint_keys(agent_contract_index(plan)[target_id]):
-            claims.extend(_endpoint_claims(plan, endpoint_id, api_id))
-        # 保留远端关联页面资源与本地共享 Runtime 工厂占用，避免两类开发相互覆盖。
-        claims.extend(_claim(ExecutionResourceType.PAGE, page_id)
-                      for page_id in agent_contract_index(plan)[target_id]["pageIds"])
-        return _deduplicated_claims(claims)
+    if target_type in {"agent", "page", "endpoint"} and (target_type == "agent" or plan.get("agent_contracts")):
+        return _runtime_dependency_claims(plan, scope, target_type, target_id)
     if target_type == "page":
-        claims = _page_claims(plan, target_id)
-        for agent_id in scoped_agent_ids(plan, "page", target_id):
-            claims.extend(resolve_execution_resource_claims(plan, {"type": "agent", "targetId": agent_id}))
-        return _deduplicated_claims(claims)
+        return _page_claims(plan, target_id)
     if target_type == "data_source":
         return _data_source_claims(plan, target_id)
     if target_type == "endpoint":
         api_id = str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
-        runtime_agents = scoped_agent_ids(plan, "endpoint", target_id, api_id)
-        if runtime_agents:
-            return _deduplicated_claims([
-                _claim(ExecutionResourceType.ENDPOINT, f"{api_id}:{target_id}", primary=True),
-                _claim(ExecutionResourceType.AGENT, runtime_agents[0]), _claim(ExecutionResourceType.AGENT, "runtime"),
-            ])
         return _endpoint_claims(
             plan,
             target_id,
             str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip(),
         )
     raise ValueError(f"不支持的计划执行资源范围：{target_type}。")
+
+
+def _runtime_dependency_claims(plan: dict, scope: dict, target_type: str, target_id: str) -> list[ExecutionResourceClaim]:
+    """资源锁沿开发实际使用的接口→能力→工具闭包展开，避免漏锁间接依赖。"""
+    api_id = str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
+    resolved = resolve_runtime_target(plan, target_type, target_id, api_id)
+    agents = agent_contract_index(plan)
+    if target_type == "agent":
+        claims = [_claim(ExecutionResourceType.AGENT, target_id, primary=True)]
+    elif target_type == "page":
+        claims = _page_claims(plan, target_id)
+    else:
+        claims = _endpoint_claims(plan, target_id, api_id)
+    for agent_id in resolved["agent_ids"]:
+        claims.append(_claim(ExecutionResourceType.AGENT, agent_id))
+        claims.extend(_claim(ExecutionResourceType.PAGE, page_id) for page_id in agents[agent_id]["pageIds"])
+    if resolved["agent_ids"]:
+        claims.append(_claim(ExecutionResourceType.AGENT, "runtime"))
+    for contract_id, endpoint_id in resolved["endpoint_keys"]:
+        # 闭包成员均标记为依赖，去重时保留上方明确指定的主目标角色。
+        claims.extend(_claim(claim.type, claim.target_id)
+                      for claim in _endpoint_claims(plan, endpoint_id, contract_id))
+    return _deduplicated_claims(claims)
 
 
 def resource_claim_keys(claims: list[ExecutionResourceClaim]) -> tuple[str, ...]:

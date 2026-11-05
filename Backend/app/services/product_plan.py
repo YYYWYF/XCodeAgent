@@ -343,9 +343,11 @@ def _agent_contract_errors(
 
         interaction = agent.get("interaction")
         errors.extend(
-            _exact_keys(interaction, _MODEL_AGENT_INTERACTION_KEYS, f"{agent_location}.interaction")
+            _exact_keys(interaction, _MODEL_AGENT_INTERACTION_KEYS | ({"responseMode"} if "responseMode" in requirement else set()), f"{agent_location}.interaction")
         )
         if isinstance(interaction, dict):
+            if "responseMode" in requirement and interaction.get("responseMode") != requirement["responseMode"]:
+                errors.append(f"{agent_location}.interaction.responseMode 必须保留已确认的返回方式。")
             if not isinstance(interaction.get("supportsMultiTurn"), bool):
                 errors.append(f"{agent_location}.interaction.supportsMultiTurn 必须是 boolean。")
             for field in ("inputDescription", "outputDescription"):
@@ -943,6 +945,7 @@ def _normalized_agents(
                 "entryPageIds": _text_items(requirement.get("entryPageIds")),
                 "pageActionBindings": page_bindings,
                 "interaction": {
+                    **({"responseMode": requirement["responseMode"]} if "responseMode" in requirement else {}),
                     "mode": interaction_mode,
                     "supportsMultiTurn": bool(
                         supplied_interaction.get(

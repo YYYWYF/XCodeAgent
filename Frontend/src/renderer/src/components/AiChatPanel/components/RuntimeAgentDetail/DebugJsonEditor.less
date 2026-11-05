@@ -1,0 +1,30 @@
+.agent-debug-panel .debug-json-editor {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+  background: var(--wb-canvas);
+  &:focus-within { border-color: var(--wb-accent); }
+  &[data-invalid='true'] { border-color: var(--wb-danger); }
+  &[data-validator-error='true'] { border-color: var(--wb-warning); }
+  .debug-json-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    min-height: 36px;
+    padding: 4px 10px;
+    background: var(--wb-surface-subtle);
+    font-size: 12px;
+    > div { display: flex; align-items: center; gap: 8px; }
+    .ant-btn { height: 26px; padding: 0 6px; font-size: 12px; }
+  }
+  .debug-json-state { color: var(--wb-danger); font-size: 11px; }
+  .debug-json-state[data-valid='true'] { color: var(--wb-development-completed); }
+  .cm-editor { min-width: 0; }
+  .cm-scroller { overflow: auto; }
+  .debug-json-feedback { min-height: 28px; padding: 6px 10px; border-top: 1px solid var(--wb-border); color: var(--wb-text-secondary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+  .debug-json-feedback ul { margin: 0; padding: 0; list-style: none; color: var(--wb-danger); }
+  .debug-json-validator-error { margin: 0; color: var(--wb-warning); }
+}

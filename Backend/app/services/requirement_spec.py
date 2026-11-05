@@ -227,6 +227,7 @@ def normalize_agent_requirements(value: Any) -> list[dict[str, Any]]:
                 "capabilities": _string_list(item.get("capabilities")),
                 "entryPageIds": _string_list(item.get("entryPageIds")),
                 "interactionMode": str(item.get("interactionMode") or "").strip(),
+                **({"responseMode": item["responseMode"]} if "responseMode" in item else {}),
                 "boundaries": _string_list(item.get("boundaries")),
             }
         )
@@ -594,6 +595,8 @@ def validate_requirement_spec_confirmation_readiness(spec: dict[str, Any]) -> li
                     )
             if not isinstance(agent.get("boundaries"), list):
                 errors.append(f"{label}的 boundaries 必须是数组")
+            if "responseMode" in agent and agent["responseMode"] not in ("json", "ag-ui"):
+                errors.append(f"{label}的 responseMode 必须为 json 或 ag-ui")
 
     return _dedupe(errors)
 
@@ -1333,6 +1336,7 @@ _EDITOR_ITEM_FIELDS: dict[str, tuple[str, ...]] = {
         "capabilities",
         "entryPageIds",
         "interactionMode",
+        "responseMode",
         "boundaries",
     ),
 }

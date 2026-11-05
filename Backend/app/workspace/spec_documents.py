@@ -195,8 +195,9 @@ def _agent_requirements_markdown(spec: dict[str, Any]) -> str:
                 f"- `{agent.get('agentId', '')}` {agent.get('name', '未命名智能体')}",
                 f"  - 职责：{agent.get('purpose', '待补充')}",
                 f"  - 核心能力：{capability_text}",
-                f"  - 候选入口页面：{entry_page_text}",
+                f"  - 当前页直接交互入口（无入口时为后台能力）：{entry_page_text}",
                 f"  - 交互方式：{agent.get('interactionMode', '待补充')}",
+                *([f"  - 接口返回方式：{'非流式 JSON' if agent['responseMode'] == 'json' else '流式 AG-UI'}"] if 'responseMode' in agent else []),
                 f"  - 业务边界：{boundary_text}",
             ]
         )

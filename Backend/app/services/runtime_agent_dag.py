@@ -24,6 +24,13 @@ def extend_agent_units(plan: dict, units: dict, existing: dict) -> None:
 def extend_agent_edges(plan: dict, units: dict, edges: list[dict], errors: list[str]) -> None:
     """Tool 依赖现有 Endpoint Unit，绑定页面依赖 Agent；不增加网关或 SQL Unit。"""
 
+    from app.services.runtime_agent_calls import endpoint_agent_call
+    for api in plan.get("api_contracts", []):
+        for endpoint in api.get("endpoints", []):
+            call = endpoint_agent_call(endpoint)
+            if call:
+                edges.append({"from": f"agent:{call['agentId']}",
+                              "to": f"backend:endpoint:{api['id']}:{endpoint['id']}", "type": "depends_on"})
     for agent_id, contract in agent_contract_index(plan).items():
         unit_id = f"agent:{agent_id}"
         edges.append({"from": "application:root", "to": unit_id, "type": "contains"})

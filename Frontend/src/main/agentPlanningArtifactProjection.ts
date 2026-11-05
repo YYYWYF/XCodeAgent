@@ -27,6 +27,8 @@ export function projectWorkbenchAgents(
       label: String(contract.name),
       purpose: String(contract.purpose),
       pageIds: contract.pageIds.map(String),
+      executionMode: (contract.interactionContract as { mode: 'task' | 'conversation' }).mode,
+      publicEndpoint: contract.publicEndpoint === true,
       capabilities: records(item.capabilities).map((entry) => String(entry.name)),
       boundaries: Array.isArray(item.boundaries) ? item.boundaries.map(String) : [],
       agentSettings: settings,

@@ -44,26 +44,42 @@ def resolve_runtime_target(plan: Mapping, target_type: str, target_id: str,
         agent_ids = [key for key, agent in agents.items() if target_id in agent["pageIds"]]
     else:
         raise ValueError(f"不支持的开发目标：{target_type}。")
-    for key in selected:
+    # 按调用关系闭包扩展：业务接口可调用 Agent，Agent 可依赖另一业务接口；正式合同已拒绝环。
+    from app.services.runtime_agent_calls import endpoint_agent_call
+    pending_endpoints, pending_agents = list(selected), list(agent_ids)
+    seen_endpoints, seen_agents = set(), set()
+    while pending_endpoints or pending_agents:
+        if pending_agents:
+            agent_id = pending_agents.pop()
+            if agent_id in seen_agents:
+                continue
+            if agent_id not in agents:
+                raise ValueError(f"运行接口引用未知 Agent：{agent_id}。")
+            seen_agents.add(agent_id)
+            if agent_id not in agent_ids:
+                agent_ids.append(agent_id)
+            agent = agents[agent_id]
+            if agent["publicEndpoint"]:
+                pending_endpoints.append((f"agent.{agent_id}", f"agent.{agent_id}.run"))
+            pending_endpoints.extend((binding["apiContractId"], binding["endpointId"])
+                                     for binding in agent["agentSettings"]["tools"]["bindings"])
+            continue
+        key = pending_endpoints.pop()
+        if key in seen_endpoints:
+            continue
+        if key not in endpoints:
+            raise ValueError(f"Agent 调用依赖缺少正式 Endpoint：{key}。")
+        seen_endpoints.add(key)
+        selected.add(key)
         endpoint = endpoints[key][1]
         if endpoint.get("kind") == "agent_runtime":
             identity = endpoint["agent_id"]
             if target_type == "page" and (identity not in agents or target_id not in agents[identity]["pageIds"]):
                 raise ValueError(f"页面 {target_id} 不能消费未绑定自身的 Agent {identity}。")
-            if identity not in agent_ids:
-                agent_ids.append(identity)
-    for agent_id in agent_ids:
-        if agent_id not in agents:
-            raise ValueError(f"运行接口引用未知 Agent：{agent_id}。")
-        key = (f"agent.{agent_id}", f"agent.{agent_id}.run")
-        if key not in endpoints or endpoints[key][1].get("agent_id") != agent_id:
-            raise ValueError(f"Agent {agent_id} 缺少唯一正式运行 Endpoint。")
-        selected.add(key)
-        for binding in agents[agent_id]["agentSettings"]["tools"]["bindings"]:
-            dependency = (binding["apiContractId"], binding["endpointId"])
-            if dependency not in endpoints or endpoints[dependency][1].get("kind") != "business":
-                raise ValueError(f"Agent {agent_id} 的 Tool 缺少业务 Endpoint 前置实现。")
-            selected.add(dependency)
+            pending_agents.append(identity)
+        call = endpoint_agent_call(endpoint)
+        if call:
+            pending_agents.append(call["agentId"])
     targets = [endpoints[key] for key in sorted(selected)]
     return {"agent_ids": agent_ids, "endpoint_keys": sorted(selected), "endpoints": targets,
             "required_unit_ids": [*(f"agent:{key}" for key in agent_ids),

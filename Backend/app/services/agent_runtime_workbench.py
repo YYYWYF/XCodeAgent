@@ -1,6 +1,6 @@
 """Runtime 工作台只读正式合同及独立调试进程，不接管 Java 或正式规划确认。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import secrets
@@ -28,6 +28,7 @@ class DebugSession:
     agent_ids: list[str]
     allowed_agent_ids: list[str]
     source_fingerprint: str
+    token: str = field(default="", repr=False)
 
 
 _sessions: dict[str, DebugSession] = {}
@@ -42,9 +43,13 @@ def runtime_agents(workspace: str) -> dict:
     if plan is None:
         return {"agents": [], "runtimeEnabled": False}
     from app.services.runtime_agent_development import agent_development_payload
+    from app.services.runtime_debug_endpoints import debug_endpoints
+    from app.services.application_lifecycle import load_application_lifecycle
 
+    lifecycle = load_application_lifecycle(root)
     return {"runtimeEnabled": True, "agents": [
         {**contract, "contractHash": agent_fact_digest(contract),
+         "debugEndpoints": debug_endpoints(plan, contract, lifecycle.development_artifacts if lifecycle else None),
          "development": agent_development_payload(root, plan, contract["agentId"])}
         for contract in agent_contract_index(plan).values()
     ]}
@@ -109,7 +114,7 @@ def start_debug(workspace: str, thread_id: str, origin: str, agent_id: str) -> t
             expires_at = result["debug_expires_at"]
             session = DebugSession(thread_id, result["launch_id"], result["preview_url"], expires_at,
                                    result["database_required"], [agent_id], result["agent_ids"],
-                                   runtime_source_fingerprint(root))
+                                   runtime_source_fingerprint(root), token=token)
         except (OSError, ValueError, RuntimeError, KeyError):
             # 进程已启动但登记失败时，由创建者回收，不等待无凭据的前端处理。
             cleanup = stop_runtime(root, profile="debug")

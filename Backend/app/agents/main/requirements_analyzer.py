@@ -630,18 +630,26 @@ def _requirements_prompt(
         "suitability question. If no plausible business-agent role is grounded in the stated business tasks, "
         "return agent_requirements=[] without asking. Always return agent_requirements as an array. "
         "Every agent_requirements item must contain exactly agentId, name, purpose, capabilities, entryPageIds, "
-        "interactionMode, and boundaries. agentId must be unique lower_snake_case. capabilities must contain the "
-        "explicit user-facing abilities. entryPageIds must include every page that is eligible to visibly expose "
-        "this agent, whether conversation is the page's main purpose or the agent may open from a launcher on an "
-        "ordinary business page, and every id must reference pages[].pageId. Pages omitted from entryPageIds remain "
+        "interactionMode, and boundaries; optionally responseMode only when explicitly requested. "
+        "responseMode=json means a non-streaming interface returning one JSON response; responseMode=ag-ui means streaming. "
+        "Recognize 非流式 and the common typo 非流失 as non-streaming. Preserve this explicit choice even when it appears "
+        "in the supplied application name. Structured JSON results and task mode alone do not imply non-streaming. "
+        "For responseMode=json, entryPageIds=[]: the Agent is an internal capability invoked by a business API; "
+        "the requested form page still belongs in pages and submits business inputs, without a chat launcher. "
+        "agentId must be unique lower_snake_case. capabilities must contain the "
+        "explicit business abilities. entryPageIds includes only pages where users directly interact with "
+        "this Agent on that page. A dashboard button navigating to a dedicated Agent page is navigation "
+        "and MUST NOT add the dashboard to entryPageIds. Every id must reference pages[].pageId. "
+        "Agents used only inside business services use entryPageIds=[]. Pages omitted from entryPageIds remain "
         "ordinary pages without an Agent entry. When the request names specific entry pages, include exactly those "
         "applicable pages. "
         "When the request says 'all pages' or 'other pages', limit 'all pages' or 'other pages' to pages used by the "
         "agent's stated user roles and include every eligible page. Do not attach the agent to administrator-only, "
         "system, or unrelated-role pages unless the user explicitly includes them. If the requested page-wide scope "
         "conflicts with the agent's stated roles or boundaries, ask one focused clarification question instead of "
-        "attaching the agent broadly. An empty entryPageIds means that no visible page exposes the agent; use [] only "
-        "for an explicitly requested application-wide agent with no page entry, never as shorthand for all pages. "
+        "attaching the agent broadly. An empty entryPageIds means a backend capability without a direct "
+        "page entry, never shorthand for all pages. interactionMode is task for one-shot business detection "
+        "or conversation for a user-facing multi-turn dialogue. "
         "RequirementSpec records only these stable eligible page ids; the later ProductPlan decides each page's "
         "Agent surface, defaults eligible surfaces to enabled, and lets the user disable eligible floating panels "
         "before confirmation. A disabled floating panel does not turn unrelated page behavior into Agent behavior. "
@@ -700,6 +708,7 @@ def _invoke_live_chat_model(
     clarification_round: int = 0,
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
+    allow_clarification: bool = True,
 ) -> dict[str, Any]:
     """调用绑定澄清工具的需求模型，可选流式吐词。"""
 
@@ -707,28 +716,20 @@ def _invoke_live_chat_model(
 
     def _call_once() -> dict[str, Any]:
         # 每次重试必须重建 runnable 与流式迭代器：已中断的流不能续读。
-        runnable = create_chat_model(active_settings).bind_tools([ask_user])
+        runnable = create_chat_model(active_settings)
+        if allow_clarification:
+            runnable = runnable.bind_tools([ask_user])
+        prompt = _requirements_prompt(request, existing_spec, datasource_type, clarification_round)
+        if not allow_clarification:
+            # 上一轮只产生了已被平台过滤的问题，本次只补齐产物，不再次发起澄清。
+            prompt += "\n本轮无需用户补充信息。请根据原始需求生成完整 RequirementSpec JSON，不调用 ask_user，不返回确认问题。"
         if on_token is None:
-            result = runnable.invoke(
-                _requirements_prompt(
-                    request,
-                    existing_spec,
-                    datasource_type,
-                    clarification_round,
-                )
-            )
+            result = runnable.invoke(prompt)
             return {"messages": [result]}
 
         accumulated_text = ""
         merged_chunk: AIMessageChunk | None = None
-        for chunk in runnable.stream(
-            _requirements_prompt(
-                request,
-                existing_spec,
-                datasource_type,
-                clarification_round,
-            )
-        ):
+        for chunk in runnable.stream(prompt):
             if isinstance(chunk, AIMessageChunk):
                 # glm-5.2 流式 chunk.content 是 content block 列表（如
                 # [{"text": "...", "type": "text", "index": 0}]），不是纯字符串。
@@ -761,6 +762,7 @@ def analyze_requirements_with_chat_model(
     datasource_type: DatasourceType = "database",
     clarification_round: int = 0,
     on_token: Callable[[str], None] | None = None,
+    allow_clarification: bool = True,
 ) -> dict[str, Any]:
     """直接调用需求模型生成 RequirementSpec，并在关键需求不足时请求澄清。"""
 
@@ -774,8 +776,11 @@ def analyze_requirements_with_chat_model(
             clarification_round=clarification_round,
             settings=settings,
             on_token=on_token,
+            allow_clarification=allow_clarification,
         )
 
+    if not allow_clarification:
+        return _analyze_once()
     try:
         return _analyze_once()
     except ValueError as exc:
@@ -807,6 +812,7 @@ def _analyze_requirements_once(
     clarification_round: int,
     settings: Settings,
     on_token: Callable[[str], None] | None,
+    allow_clarification: bool = True,
 ) -> dict[str, Any]:
     """单次需求分析：调用模型、解析 RequirementSpec、合并澄清上下文。"""
 
@@ -817,6 +823,7 @@ def _analyze_requirements_once(
         clarification_round=clarification_round,
         settings=settings,
         on_token=on_token,
+        allow_clarification=allow_clarification,
     )
     messages = agent_result.get("messages", [])
     content = getattr(messages[-1], "content", "") if messages else ""
@@ -1023,9 +1030,19 @@ def _validate_complete_requirement_spec(
     if isinstance(agent_requirements, list):
         for index, agent in enumerate(agent_requirements):
             field_prefix = f"agent_requirements[{index}]"
-            if not isinstance(agent, dict) or set(agent) != expected_agent_fields:
-                missing_fields.append(f"{field_prefix}(complete-fields)")
+            if not isinstance(agent, dict):
+                missing_fields.append(f"{field_prefix} 必须是对象")
                 continue
+            missing = expected_agent_fields - set(agent)
+            unexpected = set(agent) - expected_agent_fields - {"responseMode"}
+            if missing or unexpected:
+                if missing:
+                    missing_fields.append(f"{field_prefix} 缺少字段：{'、'.join(sorted(missing))}")
+                if unexpected:
+                    missing_fields.append(f"{field_prefix} 包含未声明字段：{'、'.join(sorted(unexpected))}")
+                continue
+            if "responseMode" in agent and agent["responseMode"] not in ("json", "ag-ui"):
+                missing_fields.append(f"{field_prefix}.responseMode 必须为 json 或 ag-ui")
             agent_id = str(agent.get("agentId") or "").strip()
             if not _LOWER_SNAKE_CASE_PATTERN.fullmatch(agent_id):
                 missing_fields.append(f"{field_prefix}.agentId(lower_snake_case)")

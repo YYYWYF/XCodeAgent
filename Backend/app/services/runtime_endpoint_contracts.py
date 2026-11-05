@@ -1,4 +1,4 @@
-"""运行 Endpoint 的无副作用内部编译器；待完整合同切换时接入生产入口。"""
+"""从独立 Agent 能力物化显式公开入口，内部业务调用不要求公开聊天路由。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 from starlette.routing import compile_path
 
-from app.domain.runtime_endpoint_contract import RuntimeInvocation
+from app.domain.runtime_endpoint_contract import RuntimeInvocation, AgentExecutionContract
 from app.services.planning_frozen import plain_json
 from app.services.runtime_agent_contracts import (
     agent_contract_index, agent_fact_digest, agent_invocation, validate_agent_interaction_contract,
@@ -25,7 +25,7 @@ def runtime_endpoint_identity(agent_id: str) -> tuple[str, str]:
     return f"agent.{agent_id}", invocation["endpointId"]
 
 
-def _current_agent_contracts(plan: Mapping[str, Any]) -> dict[str, dict]:
+def _current_agent_contracts(plan: Mapping[str, Any], *, require_topology: bool = True) -> dict[str, dict]:
     """严格要求新能力声明，并复用七模块校验；不读取或升级缺声明的旧合同。"""
 
     raw = plain_json(plan)
@@ -34,7 +34,7 @@ def _current_agent_contracts(plan: Mapping[str, Any]) -> dict[str, dict]:
         raise ValueError("当前合同必须显式提供 agent_contracts 数组。")
     technical_agents, capabilities = [], {}
     for index, agent in enumerate(agents):
-        required = {"agentId", "name", "purpose", "pageIds", "agentSettings", "interactionContract"}
+        required = {"agentId", "name", "purpose", "pageIds", "publicEndpoint", "agentSettings", "interactionContract"}
         if not isinstance(agent, dict) or set(agent) != required:
             raise ValueError("当前 Agent 合同必须包含完整七模块及显式 interactionContract。")
         agent_id = agent["agentId"]
@@ -46,7 +46,7 @@ def _current_agent_contracts(plan: Mapping[str, Any]) -> dict[str, dict]:
         )
         technical_agents.append(deepcopy(agent))
     # 复用既有校验的是七模块事实，并非为缺失的新合同提供兼容读取。
-    contracts = agent_contract_index({**raw, "agent_contracts": technical_agents})
+    contracts = agent_contract_index({**raw, "agent_contracts": technical_agents}, require_runtime=require_topology)
     for agent_id, agent in contracts.items():
         agent["interactionContract"] = capabilities[agent_id]
     return contracts
@@ -122,18 +122,22 @@ def _validate_identities(contracts: list[dict]) -> None:
             raise ValueError(f"业务参数路由会截获 Agent 运行入口：{method} {path}。")
 
 
-def materialize_runtime_endpoints(plan: Mapping[str, Any], *, refresh_derived: bool = False) -> dict:
+def materialize_runtime_endpoints(plan: Mapping[str, Any], *, refresh_derived: bool = False,
+                                  require_topology: bool = True) -> dict:
     """编译显式当前合同并验证已有派生值，重复调用稳定且不修改传入对象。"""
 
-    if not serves_python_business(plan):
+    # 候选接口可先独立复验；正式编译及已声明架构仍必须遵守服务图边界。
+    check_topology = require_topology or plan.get("topology") is not None
+    if check_topology and not serves_python_business(plan):
         raise ValueError("运行 Endpoint 只能编译到显式 agent_runtime_direct 技术规划。")
     result = plain_json(plan)
-    agents = _current_agent_contracts(result)
+    agents = _current_agent_contracts(result, require_topology=check_topology)
     contracts = result.get("api_contracts")
     if not isinstance(contracts, list) or any(not isinstance(item, dict) for item in contracts):
         raise ValueError("当前 api_contracts 必须显式提供数组。")
     _validate_identities(contracts)
-    expected = {runtime_endpoint_identity(agent_id)[0]: _runtime_contract(agent) for agent_id, agent in agents.items()}
+    expected = {runtime_endpoint_identity(agent_id)[0]: _runtime_contract(agent) for agent_id, agent in agents.items()
+                if agent["publicEndpoint"]}
     retained, published = [], set()
     for index, contract in enumerate(contracts):
         contract_id = contract.get("id")
@@ -151,10 +155,7 @@ def materialize_runtime_endpoints(plan: Mapping[str, Any], *, refresh_derived: b
             name, purpose, identity = contract.get("name"), previous.get("summary"), previous.get("agent_id")
             if not isinstance(name, str) or not name.endswith("运行接口") or not isinstance(purpose, str):
                 raise ValueError("旧运行入口不是当前合法派生形状，不能重编译。")
-            capability = validate_agent_interaction_contract(
-                previous.get("interactionContract"), agent_id=str(identity),
-                field_path=f"api_contracts[{index}].endpoints[0].interactionContract",
-            )
+            capability = AgentExecutionContract.model_validate(previous.get("interactionContract")).model_dump(mode="json", by_alias=True)
             expected_previous = _runtime_contract({"agentId": identity, "name": name.removesuffix("运行接口"),
                 "purpose": purpose, "interactionContract": capability})
             if contract != expected_previous:
@@ -175,6 +176,19 @@ def materialize_runtime_endpoints(plan: Mapping[str, Any], *, refresh_derived: b
     result["api_contracts"] = retained + [deepcopy(expected[key]) for key in sorted(expected)]
     _validate_identities(result["api_contracts"])
     return result
+
+
+def agent_execution_capability_snapshot(plan: Mapping[str, Any], agent_id: str) -> dict:
+    """为内部和公开 Agent 共用执行快照，不要求存在公开运行 Endpoint。"""
+    contracts = _current_agent_contracts(plan)
+    if agent_id not in contracts:
+        raise ValueError("执行目标不是当前正式 Agent。")
+    agent = contracts[agent_id]
+    contract_id, endpoint_id = runtime_endpoint_identity(agent_id)
+    capability = {"apiContractId": contract_id, "endpointId": endpoint_id, "agentId": agent_id,
+                  "invocation": agent_invocation(agent_id, public=agent["publicEndpoint"]),
+                  "interactionContract": deepcopy(agent["interactionContract"])}
+    return {**capability, "capabilitySha256": agent_fact_digest(capability)}
 
 
 def runtime_endpoint_capability_snapshot(plan: Mapping[str, Any], api_contract_id: str, endpoint_id: str) -> dict:

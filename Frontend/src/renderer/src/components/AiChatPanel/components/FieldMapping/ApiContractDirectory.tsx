@@ -5,6 +5,7 @@ import type { DevelopmentPlanningApiContract } from '../../../../typings'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import { apiEndpointDisplayPath } from '../../utils'
 import { cx } from '../../../../utils'
+import { isAgentInvocationEndpoint } from '../../../../developmentArtifacts'
 
 /** 为业务映射和 Agent 接入设计共用目录，切换分支后仍可选择其他接口。 */
 export default function ApiContractDirectory({ contracts, target, disabled, onSelect }: {
@@ -20,7 +21,7 @@ export default function ApiContractDirectory({ contracts, target, disabled, onSe
         const name = endpoint.name || apiEndpointDisplayPath(path, contract.label) || '未命名接口'
         const apiContractId = endpoint.apiContractId || contract.id
         const selected = target?.apiContractId === apiContractId && target.endpointId === endpoint.id
-        const Icon = endpoint.kind === 'agent_runtime' ? RobotOutlined : ApiOutlined
+        const Icon = isAgentInvocationEndpoint(endpoint) ? RobotOutlined : ApiOutlined
         return <Tooltip key={`${apiContractId}:${endpoint.id}`} placement="right" mouseEnterDelay={1}
           mouseLeaveDelay={0.08} align={{ offset: [4, 0] }} overlayClassName={cx('api-hover-tooltip')}
           title={<span className={cx('api-hover-tooltip-content')}><span className={cx('api-hover-tooltip-method')}>

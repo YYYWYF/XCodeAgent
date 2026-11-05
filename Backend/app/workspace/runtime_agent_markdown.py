@@ -25,7 +25,9 @@ def runtime_agent_invocations_markdown(plan: dict) -> str:
 
     lines = []
     for contract in plan.get("agent_contracts", []):
-        invocation = agent_invocation(contract["agentId"])
+        if not contract["publicEndpoint"]:
+            continue
+        invocation = agent_invocation(contract["agentId"], public=contract["publicEndpoint"])
         lines.append(f"- {contract['name']}：`{invocation['method']} {invocation['path']}`"
                      "（AG-UI / SSE；详细调用契约见智能体章节）")
     return "\n".join(lines)
@@ -36,11 +38,13 @@ def runtime_agents_markdown(plan: dict) -> str:
 
     sections = []
     for contract in plan.get("agent_contracts", []):
-        invocation = agent_invocation(contract["agentId"])
+        invocation = agent_invocation(contract["agentId"], public=contract["publicEndpoint"])
         lines = [f"### {contract['name']}（`{contract['agentId']}`）", "",
-                 f"- 职责：{contract['purpose']}", f"- 页面：{'、'.join(contract['pageIds'])}", "",
-                 "#### 公开调用接口", "",
-                 f"- 接口：`{invocation['method']} {invocation['path']}`",
+                 f"- 职责：{contract['purpose']}", f"- 页面：{'、'.join(contract['pageIds']) or '无，后台业务能力'}",
+                 f"- 公开运行入口：{'启用' if contract['publicEndpoint'] else '关闭，仅供内部业务服务调用'}", "",
+                 "#### 执行接入", "",
+                 (f"- 接口：`{invocation['method']} {invocation['path']}`" if contract["publicEndpoint"]
+                  else "- 调用：`ApplicationServiceContext.agents` 内部执行，不发布 HTTP 运行入口。"),
                  f"- 接口标识：`{invocation['endpointId']}`",
                  f"- 协议：AG-UI；传输：SSE；服务：`{invocation['serviceId']}`",
                  f"- 请求：`{invocation['requestType']}`；响应：`{invocation['responseType']}` 事件流",

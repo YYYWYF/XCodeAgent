@@ -34,8 +34,8 @@ class RuntimeAgentSettingsTests(unittest.TestCase):
         base = self.root / WORKSPACE_ARTIFACT_DIR
         (base / "plans").mkdir(parents=True)
         self.path = base / "plans/technical-plan.json"
-        self.agent = {
-            "agentId": "policy", "name": "政策助手", "purpose": "解答政策问题", "pageIds": ["policy_page"],
+        self.agent = {"interactionContract": {"mode": "conversation", "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, "resultSchema": None, "textOutput": True, "publicStateSchema": None, "outcomes": [], "interactionKinds": []},
+            "agentId": "policy", "name": "政策助手", "purpose": "解答政策问题", "publicEndpoint": True, "pageIds": ["policy_page"],
             "agentSettings": {"prompt": {"systemPrompt": "依据公司政策回答。"}, "model": {"source": "project"},
                 "memory": {}, "context": {}, "tools": {"enabled": False, "bindings": []},
                 "skills": {"enabled": False}, "knowledge": {"enabled": False}},

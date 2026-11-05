@@ -67,9 +67,9 @@ def candidate_plan() -> dict:
             "id": "orders_api", "name": "订单管理", "entity_ids": ["Order"],
             "base_path": "/api/orders", "schemas": {},
             "endpoints": [
-                {"id": "orders.list", "name": "订单列表", "method": "GET", "path": "/api/orders",
+                {"id": "orders.list", "kind": "business", "name": "订单列表", "method": "GET", "path": "/api/orders",
                  "parameters": [{"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 20}}]},
-                {"id": "orders.other", "name": "其他列表", "method": "GET", "path": "/api/other",
+                {"id": "orders.other", "kind": "business", "name": "其他列表", "method": "GET", "path": "/api/other",
                  "parameters": [{"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 30}}]},
             ],
         }],
@@ -266,6 +266,22 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         self.assertEqual(len(model.seen_messages), 43)
         self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
 
+    def test_editor_can_finish_after_more_than_eight_model_calls(self):
+        """与 dev_agent 一致，正常搜索编辑不被额外八次调用限制截断。"""
+        result, model = self._run_editor([
+            *[tool_response("grep", pattern="orders") for _ in range(10)],
+            tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
+                          old_string='"default": 20', new_string='"default": 8'),
+            tool_response("read_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH, offset=0, limit=100),
+            AIMessage(content="已修改并核对。"),
+        ])
+        self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
+        reads = [m for messages in model.seen_messages for m in messages
+                 if isinstance(m, ToolMessage) and m.name == 'read_file']
+        self.assertTrue(any('原始文本（代码块内可直接复制）' in str(m.content) for m in reads))
+        self.assertTrue(any('完整候选 JSON 语法和四段根结构检查通过' in str(m.content) for m in reads))
+        self.assertTrue(any('agent_contracts 为可选章节' in str(m.content) for m in reads))
+
     def test_generation_without_complete_candidate_uses_full_route(self):
         """没有完整候选时继续完整生成，不把缺失章节或类型错误的对象送入编辑器。"""
 
@@ -318,29 +334,27 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         finally:
             workspace_process_registry.allow_run(run_id)
 
-    def test_indentation_error_returns_exact_suggestion_without_fuzzy_edit(self):
-        """模型带错展示缩进时仅返回唯一短片段建议，随后仍由原生工具精确替换。"""
+    def test_indentation_only_difference_is_applied_without_model_retry(self):
+        """唯一 JSON 内容相同的排版差异不再浪费一次模型重试。"""
 
         result, model = self._run_editor([
             tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
                           old_string=' ' * 40 + '"default": 20', new_string=' ' * 40 + '"default": 8'),
-            tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
-                          old_string='"default": 20', new_string='"default": 8'),
             AIMessage(content="已按原文片段修改。"),
         ])
         errors = [m for messages in model.seen_messages for m in messages if isinstance(m, ToolMessage) and m.status == "error"]
-        self.assertTrue(any("原文片段可唯一匹配" in str(m.content) for m in errors))
+        self.assertEqual(errors, [])
         self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
 
     def test_agent_contracts_are_preserved_when_editing_other_sections(self):
         """既有候选包含 Agent 合同时，局部修订必须整段保留，不能被四段白名单剥离。"""
 
         baseline = candidate_plan()
-        baseline["agent_contracts"] = [{
+        baseline["agent_contracts"] = [{"interactionContract": {"mode": "conversation", "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, "resultSchema": None, "textOutput": True, "publicStateSchema": None, "outcomes": [], "interactionKinds": []},
             "agentId": "support_bot",
             "name": "客服智能体",
             "purpose": "解答订单查询问题。",
-            "pageIds": [],
+            "publicEndpoint": True, "pageIds": [],
             "agentSettings": {"prompt": {"systemPrompt": "仅回答订单相关问题。"}},
         }]
         result, _ = self._run_editor([

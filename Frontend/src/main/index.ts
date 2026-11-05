@@ -113,6 +113,7 @@ type WorkbenchApiContract = {
   endpoints: Array<{
     kind: 'business' | 'agent_runtime'
     agent_id?: string
+    agentCall?: { agentId: string; responseMode: 'json' | 'ag-ui' }
     apiContractId: string
     id: string
     name: string
@@ -339,6 +340,7 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
           {
             kind: endpointRecord.kind as 'business' | 'agent_runtime',
             agent_id: typeof endpointRecord.agent_id === 'string' ? endpointRecord.agent_id : undefined,
+            agentCall: endpointRecord.agentCall as WorkbenchApiContract['endpoints'][number]['agentCall'],
             apiContractId: contractId,
             id: String(endpointRecord.id || endpointIndex + 1),
             name: normalizeWorkbenchNodeLabel(endpointRecord.name, '未命名接口'),

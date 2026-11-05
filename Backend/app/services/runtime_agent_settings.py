@@ -16,14 +16,12 @@ def validate_technical_plan_agent_contracts(plan: dict[str, Any], product: dict[
         contracts = agent_contract_index(plan, require_runtime=False)
         expected = {
             item["agentId"]: item for item in product.get("agents", [])
-            if any(binding.get("surface", {}).get("enabled") is True
-                   for binding in item.get("pageActionBindings", []))
         }
         if set(contracts) != set(expected):
             missing_ids = json.dumps(sorted(set(expected) - set(contracts)), ensure_ascii=False)
             unexpected_ids = json.dumps(sorted(set(contracts) - set(expected)), ensure_ascii=False)
             return [
-                "TechnicalPlan.agent_contracts 必须覆盖且仅覆盖 ProductPlan 已启用的智能体。"
+                "TechnicalPlan.agent_contracts 必须覆盖且仅覆盖 ProductPlan 定义的全部智能体，与页面入口是否启用无关。"
                 f"缺失 agentId：{missing_ids}；多出 agentId：{unexpected_ids}。"
                 "请使用已确认产品智能体的 agentId，不得重新命名。"
             ]
@@ -34,6 +32,17 @@ def validate_technical_plan_agent_contracts(plan: dict[str, Any], product: dict[
             if (contract["name"] != item["name"] or contract["purpose"] != item["purpose"]
                     or contract["pageIds"] != page_ids):
                 return [f"智能体 {agent_id} 的身份、职责和页面入口必须保持已确认产品事实。"]
+            mode = item.get("interaction", {}).get("mode")
+            if mode is not None and mode != contract["interactionContract"]["mode"]:
+                return [f"智能体 {agent_id} 的任务/会话执行方式必须保持已确认产品事实。"]
+            response_mode = item.get("interaction", {}).get("responseMode")
+            if response_mode == "json" and not any(
+                endpoint.get("kind") == "business"
+                and (endpoint.get("agentCall") or {}).get("agentId") == agent_id
+                and endpoint["agentCall"].get("responseMode") == response_mode
+                for api in plan.get("api_contracts", []) for endpoint in api.get("endpoints", [])
+            ):
+                return [f"智能体 {agent_id} 已要求非流式 JSON，请生成绑定该能力的业务接口并声明 agentCall.responseMode=json；固定 AG-UI 入口不能代替该接口。"]
     except (KeyError, TypeError, ValueError) as exc:
         return [f"智能体正式合同无效：{exc}"]
     return []

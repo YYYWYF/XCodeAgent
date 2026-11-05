@@ -17,7 +17,9 @@ def runtime_frontend_instruction(plan: dict, tasks: list[dict]) -> str:
     bindings = [{"agentId": agent_id, "name": contract["name"], "purpose": contract["purpose"],
                  "pageIds": sorted(set(contract["pageIds"]) & pages), "path": f"/agents/{agent_id}/run"}
                 for agent_id, contract in contracts.items() if set(contract["pageIds"]) & pages]
-    if not bindings:
+    business_calls = [{"apiContractId": api["id"], "endpoint": endpoint} for api in plan.get("api_contracts", [])
+                      for endpoint in api.get("endpoints", []) if endpoint.get("agentCall")]
+    if not bindings and not business_calls:
         return ""
     return (
         "## Confirmed Runtime Agent surfaces\n"
@@ -35,5 +37,11 @@ def runtime_frontend_instruction(plan: dict, tasks: list[dict]) -> str:
         "namespace, debug credential, model key, database key or fixed Runtime port. Agent Tools already call their "
         "ApplicationService locally; the page must not invoke those Tool endpoints to simulate Agent behavior. "
         "Preserve separately declared ordinary page business actions.\n"
+        "A business endpoint declaring agentCall.responseMode=json uses the normal confirmed business request/response. "
+        "For agentCall.responseMode=ag-ui use @ag-ui/client HttpAgent and @ag-ui/core, put the declared business "
+        "request in forwardedProps.input and consume the structured result from the final business event. "
+        "Never parse SSE manually or infer success from RUN_FINISHED alone. Task surfaces use schema-driven "
+        "business inputs, not a free-text conversation pretending to be a typed request.\n"
+        + json.dumps(business_calls, ensure_ascii=False, indent=2) + "\n"
         + json.dumps(bindings, ensure_ascii=False, indent=2) + "\n\n"
     )

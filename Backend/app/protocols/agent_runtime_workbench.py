@@ -10,6 +10,7 @@ from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_acti
 from app.services.agent_runtime_workbench import runtime_agents, debug_snapshot, start_debug, stop_debug
 from app.services.runtime_agent_workbench_settings import execute_settings
 from app.services.runtime_agent_settings_requests import SETTINGS_ACTIONS, settings_request_adapter
+from app.services.runtime_debug_request import DebugRequest, execute_debug_request
 
 
 class RuntimeWorkbenchInput(BaseModel):
@@ -26,7 +27,7 @@ def runtime_workbench_capabilities() -> dict:
     """发布当前 Runtime 独立产品协议及一次性凭据事件。"""
 
     return {"endpoint": "/agent-runtime-workbench/run", "transport": "ag-ui-sse",
-            "actions": ["list", "get_debug", "start_debug", "stop_debug", *sorted(SETTINGS_ACTIONS)], "workflowIndependent": True,
+            "actions": ["list", "get_debug", "start_debug", "stop_debug", "request_debug", *sorted(SETTINGS_ACTIONS)], "workflowIndependent": True,
             "customEventName": "agent-runtime-workbench", "stateSnapshotKey": "agentRuntimeWorkbench",
             "transientCredentialEvent": "agent-runtime-debug-credential"}
 
@@ -46,6 +47,11 @@ def build_runtime_workbench_stream(*, payload: dict, accept: str | None = None):
             raise ValueError("Runtime 工作台操作缺少 threadId。")
         if not isinstance(raw, dict):
             raise ValueError("Runtime 工作台操作必须是对象。")
+        if raw.get("action") == "request_debug":
+            request = DebugRequest.model_validate(raw)
+            response = await asyncio.to_thread(execute_debug_request, request, thread_id=thread_id)
+            return AgUiActionResult(data={"action": request.action, "debugResponse": response},
+                                    message="接口调试请求已完成，请查看 HTTP 状态与响应。")
         if raw.get("action") in SETTINGS_ACTIONS:
             request = settings_request_adapter.validate_python(raw)
             data = await asyncio.to_thread(execute_settings, request, thread_id=thread_id,

@@ -1,9 +1,13 @@
 import { CaretDownOutlined, RobotOutlined } from '@ant-design/icons'
-import { Alert, Button } from 'antd'
+import { Alert } from 'antd'
 import { useState } from 'react'
 import type { ReactElement } from 'react'
 import type { BusinessAgentOption } from '../../../../../../shared/businessAgent'
 import { cx } from '../../../../utils'
+import type { DevelopmentArtifacts } from '../../../../typings'
+import { developmentCompletedCount } from '../../../../developmentArtifacts'
+import DevelopmentStatusDot from './DevelopmentStatusDot'
+import IterationBadge from '../../../../components/IterationBadge'
 
 type Props = {
   agents: BusinessAgentOption[]
@@ -11,23 +15,26 @@ type Props = {
   selectedAgentId?: string
   error?: string
   onSelect?: (agent: BusinessAgentOption) => void
-  onRefresh?: () => void
+  developmentArtifacts?: DevelopmentArtifacts
+  currentBranch?: string
 }
 
-/** 在目录底部以统一分组和行样式展示智能体，保留搜索、刷新和折叠入口。 */
+/** 智能体沿用页面和接口的完成圆点、分组计数与迭代标记，目录由现有状态事件刷新。 */
 export default function AgentOutlineSection({
   agents,
   query,
   selectedAgentId,
   error,
   onSelect,
-  onRefresh
+  developmentArtifacts,
+  currentBranch
 }: Props): ReactElement | null {
   const [expanded, setExpanded] = useState(true)
   const visibleAgents = agents.filter((agent) =>
     `${agent.label} ${agent.purpose}`.toLocaleLowerCase().includes(query)
   )
-  if (!agents.length && !onRefresh && !error) return null
+  const completed = developmentCompletedCount(agents.map((agent) => developmentArtifacts?.agents?.[agent.agentId]))
+  if (!agents.length && !error) return null
 
   return (
     <section aria-label="智能体分组" className={cx('outline-section')}>
@@ -40,13 +47,8 @@ export default function AgentOutlineSection({
         >
           <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
           <span>智能体</span>
-          <span className={cx('development-count')}>{agents.length}</span>
+          <span className={cx('development-count')}>{completed}/{agents.length}</span>
         </button>
-        {onRefresh ? (
-          <Button aria-label="刷新智能体" size="small" onClick={onRefresh}>
-            刷新
-          </Button>
-        ) : null}
       </div>
       {expanded ? (
         <div className={cx('api-list')}>
@@ -69,6 +71,11 @@ export default function AgentOutlineSection({
                 <strong>{agent.label}</strong>
                 <small>{agent.purpose}</small>
               </span>
+              <DevelopmentStatusDot progress={developmentArtifacts?.agents?.[agent.agentId]} />
+              <IterationBadge
+                artifactBranch={developmentArtifacts?.agents?.[agent.agentId]?.completedBranchName}
+                currentBranch={currentBranch}
+              />
             </button>
           ))}
           {!visibleAgents.length && !error ? (

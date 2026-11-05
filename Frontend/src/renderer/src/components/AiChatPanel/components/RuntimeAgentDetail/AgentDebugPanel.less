@@ -1,7 +1,7 @@
 .agent-debug-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
   color: var(--wb-text);
   container-type: inline-size;
@@ -13,7 +13,7 @@
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 12px;
-    h3 { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.5; }
+    h3 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.5; }
   }
   .agent-debug-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-width: 0; }
   .agent-debug-status {
@@ -29,23 +29,22 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 12px 24px;
+    gap: 12px;
     min-width: 0;
-    padding: 10px 12px;
-    background: var(--wb-surface-subtle);
-    border-radius: 6px;
+    padding: 0;
   }
   .agent-debug-model, .agent-debug-context { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
   .agent-debug-model {
-    flex: 1 1 180px;
+    color: var(--wb-text-secondary);
     > span { flex-shrink: 0; color: var(--wb-text-secondary); }
     strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
   }
   .agent-debug-context {
-    flex: 0 1 340px;
+    flex: 1 1 320px;
     > span { flex-shrink: 0; color: var(--wb-text-secondary); }
     .ant-select { flex: 1; min-width: 100px; max-width: 100%; font-size: 13px; }
   }
+  .agent-debug-protocol { flex-shrink: 0; font-size: 12px; color: var(--wb-accent); }
   .agent-debug-notice {
     display: flex;
     align-items: baseline;
@@ -56,9 +55,39 @@
     line-height: 1.7;
     > .anticon { flex-shrink: 0; color: var(--wb-accent); }
   }
+  .agent-debug-endpoint {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 16px;
+    code { color: var(--wb-text); font-size: 14px; overflow-wrap: anywhere; }
+    span { color: var(--wb-text-secondary); font-size: 12px; }
+  }
+  .agent-debug-request-config {
+    min-width: 0;
+    padding: 0 14px 14px;
+    p { margin: 8px 0; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.7; }
+  }
+  .agent-debug-request-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 12px 0;
+    color: var(--wb-text);
+    font-size: 13px;
+  }
+  .agent-debug-response {
+    min-width: 0;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-surface);
+    > .ant-tabs { padding: 0 14px; }
+    pre { max-height: 360px; margin-top: 0; font-size: 13px; line-height: 1.7; }
+    .ant-empty-description { color: var(--wb-text-secondary); }
+  }
 
-  // 对话与工具共用工作区：宽面板并排，窄面板下工具区自然换行。
-  .agent-debug-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 12px; min-width: 0; }
+  // 会话占据主要阅读区域，工具和事件成为按需展开的连续详情。
+  .agent-debug-workspace { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .agent-debug-conversation, .agent-debug-tools {
     min-width: 0;
     border: 1px solid var(--wb-border);
@@ -66,7 +95,7 @@
     background: var(--wb-surface);
     overflow: hidden;
   }
-  .agent-debug-conversation { display: flex; flex-direction: column; height: clamp(360px, 52vh, 600px); }
+  .agent-debug-conversation { display: flex; flex-direction: column; height: clamp(380px, 52vh, 600px); }
   .agent-debug-section-heading {
     display: flex;
     flex: 0 0 auto;
@@ -85,7 +114,7 @@
     min-height: 100px;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 14px;
+    padding: 18px;
     &.is-empty { display: grid; place-items: center; }
   }
   .agent-debug-empty {
@@ -96,12 +125,22 @@
     p { margin: 0; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
   }
   .agent-debug-message {
-    padding: 12px;
-    border-radius: 6px;
-    & + .agent-debug-message { margin-top: 8px; }
-    &.is-user { background: var(--wb-surface-subtle); }
-    strong { color: var(--wb-text-secondary); font-size: 12px; font-weight: 500; }
-    p { margin: 6px 0 0; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+    min-width: 0;
+    padding: 0;
+    & + .agent-debug-message { margin-top: 22px; }
+    &.is-user {
+      width: fit-content;
+      max-width: 85%;
+      margin-left: auto;
+      padding: 10px 14px;
+      border-radius: 10px 10px 2px 10px;
+      background: var(--wb-surface-subtle);
+    }
+    > .agent-debug-message-author { display: block; margin-bottom: 6px; color: var(--wb-text-secondary); font-size: 12px; font-weight: 500; }
+    > p { margin: 0; font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .agent-debug-markdown { color: var(--wb-text); font-size: 14px; line-height: 1.7; }
+    .agent-debug-markdown > :first-child { margin-top: 0; }
+    .agent-debug-markdown > :last-child { margin-bottom: 0; }
   }
 
   // 输入区是对话面板的底部，不再另套卡片；正文独立滚动。
@@ -111,8 +150,17 @@
     flex-direction: column;
     gap: 10px;
     padding: 12px;
-    border-top: 1px solid var(--wb-border);
-    .ant-input { border-radius: 6px; font-size: 13px; line-height: 1.6; }
+    .ant-input { border: 0; border-radius: 0; background: transparent; font-size: 13px; line-height: 1.6; box-shadow: none; resize: none; }
+    textarea.ant-input { padding: 12px 12px 4px; }
+  }
+  .agent-debug-input-shell {
+    min-width: 0;
+    padding: 0 0 8px;
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+    background: var(--wb-surface);
+    &:focus-within { border-color: var(--wb-accent); }
+    .debug-json-editor { margin: 8px; }
   }
   .agent-debug-composer-footer {
     display: flex;
@@ -120,9 +168,10 @@
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 8px;
+    padding: 4px 8px 0 12px;
     > .ant-typography { font-size: 12px; }
   }
-  .agent-debug-tools { height: clamp(360px, 52vh, 600px); box-sizing: content-box; overflow: auto; background: var(--wb-surface-subtle); }
+  .agent-debug-tools { height: auto; max-height: 320px; overflow: auto; background: var(--wb-surface); }
   .agent-debug-tools-empty {
     padding: 20px 14px;
     font-size: 12px;
@@ -162,6 +211,26 @@
   .ant-select-item { color: var(--wb-text); }
   .ant-select-item-option-active:not(.ant-select-item-option-disabled) { background: var(--wb-surface-subtle); }
   .ant-select-item-option-selected:not(.ant-select-item-option-disabled) { color: var(--wb-accent); background: var(--wb-accent-soft); }
+  .agent-debug-endpoint-option {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 5px 0;
+    min-width: 0;
+    font-weight: 400;
+    white-space: normal;
+  }
+  .agent-debug-endpoint-option-name { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+  .agent-debug-endpoint-option-address {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    > span { flex-shrink: 0; }
+    code { font-size: inherit; overflow-wrap: anywhere; }
+  }
   .ant-btn.ant-btn { height: 32px; border-radius: 6px; font-size: 13px; box-shadow: none; }
   .ant-btn.ant-btn-text { background: transparent; border-color: transparent; }
   .ant-btn.ant-btn-text:not([disabled]):hover { background: var(--wb-surface-subtle); }
@@ -179,11 +248,34 @@
   .ant-btn:focus-visible, .ant-collapse-header:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
 }
 
-// 按实际面板宽度适配分栏，避免桌面窗口里的窄详情区被挤压。
-@container (max-width: 760px) {
-  .agent-debug-panel .agent-debug-workspace { grid-template-columns: minmax(0, 1fr); }
-  .agent-debug-panel .agent-debug-tools { height: auto; max-height: 220px; }
-  .agent-debug-panel .agent-debug-tools-empty { padding: 12px 14px; }
+.agent-debug-panel {
+  .agent-debug-http-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+  .agent-debug-http-request { min-width: 0; border: 1px solid var(--wb-border); border-radius: 6px; background: var(--wb-surface); }
+  .agent-debug-validation-hint { margin: 0; padding: 0 14px 12px; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.7; }
+  .agent-debug-validation-hint[data-invalid='true'] { color: var(--wb-danger); }
+  .agent-debug-inline-empty { padding: 24px 0; color: var(--wb-text-secondary); font-size: 13px; }
+  .agent-debug-response-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 200px; padding: 20px; text-align: center; }
+  .agent-debug-response-empty strong { font-size: 14px; font-weight: 500; }
+  .agent-debug-response-empty p { margin: 0; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
+  .agent-debug-http-status { font-variant-numeric: tabular-nums; color: var(--wb-text-secondary); font-size: 12px; }
+  .agent-debug-http-status[data-error='true'] { color: var(--wb-danger); }
+  .agent-debug-advanced, .agent-debug-tools, .agent-debug-response.is-stream {
+    min-width: 0;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-surface);
+    > summary { padding: 12px 14px; cursor: pointer; color: var(--wb-text); font-size: 13px; }
+    > summary span { margin-left: 12px; color: var(--wb-text-secondary); font-size: 12px; }
+    > summary:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+  }
+  .agent-debug-markdown { font-size: 14px; line-height: 1.8; color: var(--wb-text); }
+  .agent-debug-markdown p { margin: 6px 0; }
+  .agent-debug-markdown ul, .agent-debug-markdown ol { padding-left: 22px; }
+}
+
+// 按面板自身宽度决定请求/响应是否并排，避免详情栏内窄屏溢出。
+@container (min-width: 980px) {
+  .agent-debug-panel .agent-debug-http-workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 @container (max-width: 460px) {
   .agent-debug-panel .agent-debug-context { flex-basis: 100%; }

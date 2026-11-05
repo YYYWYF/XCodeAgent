@@ -1,5 +1,6 @@
 import { valueSummary } from '../FieldMapping/valueRules'
-import type { WorkflowApiValueRight } from '../../../../typings'
+import type { WorkflowApiValueRight, WorkflowApiDesignDraft } from '../../../../typings'
+import { AgentCallContract } from '../FieldMapping/AgentEndpointReview'
 import { Alert, Collapse, Descriptions, Empty, Table, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { EndpointDesignDetail } from '../../../../typings'
@@ -39,6 +40,13 @@ function queryText(value: unknown): string {
 /** 渲染 API 设计正式产物的共享只读视图。 */
 export default function EndpointDesignResult({ detail, compact = false, historyLayout = false }: Props): ReactElement {
   if (!detail) return <Empty description="尚未读取接口 API 映射结果" />
+  if (detail.design?.agentCall) return <div className={cx('endpoint-design-result')}>
+    <Tag color={detail.status === 'confirmed' ? 'success' : 'warning'}>
+      {detail.status === 'confirmed' ? '调用设计已确认' : '调用设计待确认'}
+    </Tag>
+    <AgentCallContract draft={{ agentCall: detail.design.agentCall as WorkflowApiDesignDraft['agentCall'] }} />
+    {detail.reason ? <Alert type="warning" showIcon message={detail.reason} /> : null}
+  </div>
   if (detail.design?.implementationKind === 'agent_runtime') return <div className={cx('endpoint-design-result')}>
     <Typography.Title level={5}>智能体运行接口接入设计</Typography.Title>
     <Descriptions bordered column={1} size="small">

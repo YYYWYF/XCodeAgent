@@ -5,6 +5,7 @@ import {
   Empty,
   Modal,
   Skeleton,
+  Space,
   Tag,
   Typography
 } from 'antd'
@@ -13,6 +14,7 @@ export { createAgentConversationAdapter } from '@/apis/agentConversationAdapter'
 import { AgentMessageBubble } from './AgentMessageBubble'
 import { AgentInteraction } from './AgentInteraction'
 import { AgentComposer } from './AgentComposer'
+import { AgentTaskFields, AgentTaskResult, taskInputValues } from './AgentTaskFields'
 import { AgentActionControls } from './AgentActionControls'
 import { useAgentActionRequest } from './useAgentActionRequest'
 import type {
@@ -73,6 +75,9 @@ export function AgentChatCore({
   const [messages, setMessages] = useState<AgentMessage[]>([])
   const [status, setStatus] = useState<AgentRunStatus>('idle')
   const [input, setInput] = useState('')
+  const [taskValues, setTaskValues] = useState<Record<string, unknown>>({})
+  const [taskResult, setTaskResult] = useState<unknown>()
+  const taskMode = config.runtime?.mode === 'task'
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState<PendingAgentInteraction>()
   const [requiresSync, setRequiresSync] = useState(false)
@@ -133,6 +138,7 @@ export function AgentChatCore({
 
   /** 流式消息和最终响应共用一处状态更新，防止业务等待状态被协议结束覆盖。 */
   function applyResult(result: AgentRunResult): void {
+    setTaskResult(result.result)
     lastRunId.current = result.runId || undefined
     setMessages(result.messages)
     setStatus(result.status)
@@ -160,8 +166,8 @@ export function AgentChatCore({
   }
 
   /** 确保提交前已经存在一个 Adapter 管理的会话。 */
-  async function ensureThread(): Promise<string> {
-    if (activeThreadId) return activeThreadId
+  async function ensureThread(forceNew = false): Promise<string> {
+    if (activeThreadId && !forceNew) return activeThreadId
     const thread = await adapter.createThread()
     if (mounted.current) setActiveThreadId(thread.id)
     onThreadCreated?.(thread)
@@ -186,7 +192,7 @@ export function AgentChatCore({
     activeRunId.current = runId
     lastRunId.current = runId
     try {
-      const nextThreadId = await ensureThread()
+      const nextThreadId = await ensureThread(taskMode)
       if (activeRunId.current !== runId) return
       const result = await adapter.sendMessage({
         runId,
@@ -194,6 +200,7 @@ export function AgentChatCore({
         agentId: config.agentId,
         actionId,
         content: normalized,
+        input: taskMode ? taskInputValues(config.runtime!.inputSchema, taskValues) : undefined,
         contextItems: config.contextItems.map((item) => ({ ...item }))
       })
       if (!mounted.current || activeRunId.current !== runId) return
@@ -325,9 +332,9 @@ export function AgentChatCore({
         ) : empty ? (
           <div className="x-agent-chat__state">
             <div className="x-agent-chat__empty">
-              <Empty description={config.runtime ? `向${config.name}提问` : `向${config.name}提问，当前仅使用本地模拟数据。`} />
+              <Empty description={taskMode ? '填写下方业务参数后开始检测。' : config.runtime ? `向${config.name}提问` : `向${config.name}提问，当前仅使用本地模拟数据。`} />
               <div className="x-agent-chat__suggestions">
-                {config.suggestedQuestions.map((question) => (
+                {!taskMode && config.suggestedQuestions.map((question) => (
                   <Button key={question} onClick={() => void submitMessage(question)}>
                     {question}
                   </Button>
@@ -388,9 +395,16 @@ export function AgentChatCore({
           {config.contextItems.map((item) => <Tag key={item.id}>{item.label}</Tag>)}
         </div>
       </div>
-      <AgentComposer name={config.name} attachments={config.features.attachments} running={status === 'running'}
+      {taskResult !== undefined && <AgentTaskResult result={taskResult} />}
+      {taskMode ? <Space direction="vertical" style={{ width: '100%' }}>
+        <AgentTaskFields schema={config.runtime!.inputSchema} value={taskValues} onChange={setTaskValues}
+          disabled={status === 'running' || Boolean(pending) || requiresSync || resultUnknown} />
+        <Button type="primary" disabled={status === 'running' || Boolean(pending) || requiresSync || resultUnknown}
+          onClick={() => void submitMessage('执行检测')}>开始检测</Button>
+        {status === 'running' && <Button onClick={() => void stopRun()}>停止接收</Button>}
+      </Space> : <AgentComposer name={config.name} attachments={config.features.attachments} running={status === 'running'}
         blocked={Boolean(pending) || requiresSync || resultUnknown} input={input} onInput={setInput} onKeyDown={handleComposerKeyDown}
-        onStop={() => void stopRun()} onSend={() => void submitMessage(input)} />
+        onStop={() => void stopRun()} onSend={() => void submitMessage(input)} />}
     </section>
   )
 }

@@ -7,6 +7,7 @@ import type { ApplicationOutlineProps } from './index'
 import { apiEndpointSelectionKey } from './outlineUtils'
 import DevelopmentStatusDot from './DevelopmentStatusDot'
 import IterationBadge from '../../../../components/IterationBadge'
+import { developmentCompletedCount, endpointDevelopmentProgress, endpointDevelopmentStatusLabel, isAgentInvocationEndpoint } from '../../../../developmentArtifacts'
 
 type Props = {
   contract: DevelopmentPlanningApiContract
@@ -20,7 +21,7 @@ type Props = {
   selectedKey: string
 }
 
-/** 展示接口分组与当前映射确认状态，分组计数始终包含被搜索条件隐藏的接口。 */
+/** 展示接口实际开发状态，分组计数始终包含被搜索条件隐藏的接口。 */
 export default function ApiOutlineGroup({
   contract,
   allEndpoints,
@@ -31,7 +32,8 @@ export default function ApiOutlineGroup({
   onSelect,
   selectedKey
 }: Props): JSX.Element {
-  const completed = allEndpoints.filter((endpoint) => endpoint.designed === true).length
+  const completed = developmentCompletedCount(allEndpoints.map((endpoint) =>
+    endpointDevelopmentProgress(developmentArtifacts, contract.id, endpoint)))
   return (
     <div>
       <button
@@ -46,7 +48,7 @@ export default function ApiOutlineGroup({
         <span className={cx('api-group-label')}>
           <strong>{contract.name || '未命名接口分组'}</strong>
         </span>
-        <span className={cx('development-count')} title="当前映射或接入设计已确认的接口数量">
+        <span className={cx('development-count')} title="当前开发已完成且无变更的接口数量">
           {completed}/{allEndpoints.length}
         </span>
       </button>
@@ -87,16 +89,17 @@ export default function ApiOutlineGroup({
                       }
                       type="button"
                     >
-                      {endpoint.kind === 'agent_runtime' ? <RobotOutlined className={cx('api-endpoint-icon')} /> : <ApiOutlined className={cx('api-endpoint-icon')} />}
+                      {isAgentInvocationEndpoint(endpoint) ? <RobotOutlined className={cx('api-endpoint-icon')} /> : <ApiOutlined className={cx('api-endpoint-icon')} />}
                       <span className={cx('api-copy')}>
                         <strong>{endpoint.name || displayPath}</strong>
                       </span>
                       <DevelopmentStatusDot
-                        designConfirmed={endpoint.designed === true}
+                        statusLabel={endpointDevelopmentStatusLabel(developmentArtifacts, contract.id, endpoint)}
+                        progress={endpointDevelopmentProgress(developmentArtifacts, contract.id, endpoint)}
                       />
                       <IterationBadge
                         artifactBranch={
-                          developmentArtifacts?.endpoints[apiContractId]?.[endpointId]
+                          endpointDevelopmentProgress(developmentArtifacts, contract.id, endpoint)
                             ?.completedBranchName
                         }
                         currentBranch={currentBranch}

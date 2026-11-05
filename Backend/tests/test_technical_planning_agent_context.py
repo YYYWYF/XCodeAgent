@@ -36,9 +36,9 @@ def _planning_inputs() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     candidate = {
         "architecture": {}, "entities": [], "api_contracts": [],
         "pages": [{"pageId": page_id} for page_id in page_ids],
-        "agent_contracts": [{
+        "agent_contracts": [{"interactionContract": {"mode": "conversation", "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False}, "resultSchema": None, "textOutput": True, "publicStateSchema": None, "outcomes": [], "interactionKinds": []},
             "agentId": agent["agentId"], "name": agent["name"], "purpose": agent["purpose"],
-            "pageIds": page_ids,
+            "publicEndpoint": True, "pageIds": page_ids,
             "agentSettings": {
                 "prompt": {"systemPrompt": "请用简体中文回答用户的问题。"},
                 "model": {"source": "project"}, "memory": {"isolation": "principal/thread"},
@@ -140,15 +140,14 @@ class TechnicalPlanningAgentContextTests(unittest.TestCase):
         plan = create_technical_plan(spec, agent_plan=candidate)
         self.assertEqual(plan["agent_contracts"][0]["pageIds"], [bindings[1]["pageId"]])
 
-    def test_all_disabled_agent_cannot_be_reintroduced(self) -> None:
-        """没有启用入口的 Agent 不进入技术合同，已有校验门不能被修复绕开。"""
+    def test_disabled_surfaces_keep_backend_agent_capability(self) -> None:
+        """关闭页面入口不删除后台能力，技术合同只移除对应页面绑定。"""
 
         spec, product, candidate = _planning_inputs()
         for binding in product["agents"][0]["pageActionBindings"]:
             binding["surface"]["enabled"] = False
-        errors = validate_technical_plan_agent_contracts(candidate, product)
-        self.assertIn("缺失 agentId：[]", errors[0])
-        self.assertIn('多出 agentId：["agent_general_chat"]', errors[0])
-        candidate["agent_contracts"] = []
+        candidate["agent_contracts"][0]["pageIds"] = []
+        candidate["agent_contracts"][0]["publicEndpoint"] = False
+        self.assertEqual(validate_technical_plan_agent_contracts(candidate, product), [])
         plan = create_technical_plan(spec, agent_plan=candidate)
         self.assertEqual(validate_technical_plan_agent_contracts(plan, product), [])

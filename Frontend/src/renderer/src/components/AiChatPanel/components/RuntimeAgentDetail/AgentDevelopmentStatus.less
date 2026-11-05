@@ -1,30 +1,34 @@
 .runtime-agent-detail .agent-development-status {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 24px;
   min-width: 0;
   color: var(--wb-text);
   container-type: inline-size;
 
-  // 产物汇总和任务结果分开命名，避免“已完成开发”被理解为本次任务成功。
+  // 首屏以进展结论与下一步操作为主，沿用明暗主题的工作台变量。
   .agent-development-heading {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 12px;
-    h3 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.5; }
-    p { margin: 4px 0 0; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.6; }
+    h3 { margin: 8px 0; font-size: 22px; font-weight: 600; line-height: 1.45; }
+    p { margin: 0; max-width: 42em; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
   }
-  .agent-development-summary {
-    padding: 4px 8px;
-    border-radius: 4px;
-    background: var(--wb-surface-subtle);
+  .agent-development-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     color: var(--wb-text-secondary);
     font-size: 12px;
-    line-height: 20px;
-    &[data-changed='true'] { color: var(--wb-warning); }
+    &::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    &[data-status='completed'] { color: var(--wb-development-completed); }
+    &[data-status='failed'] { color: var(--wb-danger); }
+    &[data-status='changed'], &[data-status='unavailable'], &[data-status='awaiting_user'] { color: var(--wb-warning); }
+    &[data-status='running'], &[data-status='stopping'] { color: var(--wb-accent); }
   }
+  .agent-development-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
   .agent-development-execution {
     padding: 14px;
     border: 1px solid var(--wb-border);
@@ -36,11 +40,67 @@
     .ant-alert-icon { margin-right: 10px; font-size: 18px; }
     &.ant-alert-error .ant-alert-icon, &.ant-alert-error .ant-alert-message { color: var(--wb-danger); }
     &.ant-alert-info .ant-alert-icon { color: var(--wb-accent); }
-    .ant-alert-action { margin-left: 16px; }
     p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
     .agent-development-execution-note { margin-top: 6px; color: var(--wb-text-secondary); font-size: 12px; }
   }
   .agent-development-change { margin: 0; color: var(--wb-warning); font-size: 13px; line-height: 1.7; }
+
+  .agent-development-track {
+    height: 4px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--wb-border);
+    > span { display: block; height: 100%; background: var(--wb-accent); }
+  }
+  // 连续列表让标题、说明与状态共享对齐线；窄面板自然换行，不挤压文字。
+  .agent-development-items, .agent-development-tools { margin: 0; padding: 0; list-style: none; }
+  .agent-development-items > li {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--wb-border);
+    > div { min-width: 0; }
+    strong { color: var(--wb-text); font-size: 14px; font-weight: 500; }
+    p { margin: 4px 0 0; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.6; }
+    > span { flex-shrink: 0; font-size: 12px; line-height: 22px; }
+  }
+  .agent-development-caption { margin: 0 0 8px; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
+  .agent-development-tools > li {
+    padding: 12px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-bottom: 1px solid var(--wb-border);
+    strong { color: var(--wb-text); font-size: 14px; font-weight: 500; }
+    span { color: var(--wb-text-secondary); font-size: 12px; line-height: 1.7; }
+  }
+  .agent-development-validation {
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    border-radius: 6px;
+    background: var(--wb-surface-subtle);
+    strong { font-size: 13px; font-weight: 500; }
+    p { margin: 4px 0 0; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.7; }
+  }
+  .agent-development-implementation {
+    border-top: 1px solid var(--wb-border);
+    > summary {
+      padding: 14px 0;
+      color: var(--wb-text);
+      font-size: 13px;
+      cursor: pointer;
+      > span { margin-left: 12px; color: var(--wb-text-secondary); font-size: 12px; }
+      &:hover { color: var(--wb-accent); }
+      &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+    }
+  }
 
   .agent-development-modules { min-width: 0; }
   .agent-development-modules-heading {
@@ -73,11 +133,22 @@
   }
   .agent-development-module-status {
     color: var(--wb-text-secondary);
+    &[data-status='completed'], &[data-status='already_satisfied'] { color: var(--wb-development-completed); }
     &[data-status='failed'], &[data-status='blocked'] { color: var(--wb-danger); }
     &[data-status='running'], &[data-status='stopping'] { color: var(--wb-accent); }
     &[data-status='awaiting_user'] { color: var(--wb-warning); }
   }
   .agent-development-no-files { color: var(--wb-text-secondary); font-size: 12px; }
+  .agent-development-file {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    > code { flex: 1 1 220px; min-width: 0; }
+    .ant-btn-link { flex-shrink: 0; padding: 0; height: auto; color: var(--wb-accent); background: transparent; border: 0; }
+    .ant-btn-link:hover { color: var(--wb-accent-hover); }
+    .ant-btn-link[disabled] { color: var(--wb-text-secondary); background: transparent; }
+  }
   .agent-development-empty {
     padding: 28px 16px;
     border: 1px solid var(--wb-border);
@@ -87,22 +158,12 @@
     strong { font-size: 14px; font-weight: 500; }
     p { margin: 6px 0 0; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
   }
-  .agent-development-footer {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    p { margin: 0; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.7; }
-  }
   .ant-btn { height: 32px; border-radius: 6px; font-size: 13px; box-shadow: none; }
   .ant-btn[disabled] { opacity: 1; color: var(--wb-text-secondary); background: var(--wb-surface-subtle); border-color: var(--wb-border); }
 }
 
 @container (max-width: 520px) {
-  .agent-development-status .agent-development-execution {
-    flex-wrap: wrap;
-    .ant-alert-action { width: 100%; margin: 12px 0 0 28px; }
-  }
+  .agent-development-status .agent-development-heading { flex-direction: column; }
   .agent-development-status .agent-development-table {
     th:first-child { width: 48px; }
     th:nth-child(2) { width: 60px; }

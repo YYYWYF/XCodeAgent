@@ -17,7 +17,7 @@ import python from 'highlight.js/lib/languages/python'
 import sql from 'highlight.js/lib/languages/sql'
 import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react'
 import { readWorkspaceFile, type WorkspaceTreeNode } from '../../../../service/workspaceTools'
 import { cx } from '../../../../utils'
 import { BROWSABLE_DESIGN_DOCS } from '../../designArtifacts'
@@ -25,6 +25,7 @@ import SourcePlanningDoc from './SourcePlanningDoc'
 import SourceTree from './SourceTree'
 import { ancestorDirPaths } from './sourceTreeModel'
 import { useSourceTree } from './useSourceTree'
+import { useSourceFileNavigation } from './useSourceFileNavigation'
 import './SourcePanel.less'
 
 hljs.registerLanguage('bash', bash)
@@ -42,6 +43,8 @@ const { Text } = Typography
 type Props = {
   workspaceRoot: string
   initialFilePath?: string
+  /** 从开发记录显式跳转的文件，优先于页面默认文件，读取失败时直接展示原因。 */
+  requestedFilePath?: string
   /** 回看历史版本时传入该版本的 Git tag：目录树、文件内容与文档探测都按该版本读取。 */
   revision?: string
 }
@@ -110,6 +113,7 @@ function escapeHtml(text: string): string {
 export default function SourcePanel({
   workspaceRoot,
   initialFilePath,
+  requestedFilePath,
   revision
 }: Props): ReactElement {
   const {
@@ -134,6 +138,18 @@ export default function SourcePanel({
   // 规划文档的可用路径：key -> 实际存在的路径。探测完成前不下"缺失"结论，避免置灰闪烁。
   const [docPaths, setDocPaths] = useState<Record<string, string>>({})
   const [docsProbed, setDocsProbed] = useState(false)
+  /** 选择文件并清空上一个文件的展示状态，避免切换时闪现旧内容。 */
+  const loadFile = useCallback((filePath: string): void => {
+    if (!workspaceRoot || !filePath) return
+    setSelectedPath(filePath)
+    setFileReadSequence((current) => current + 1)
+    setFileLoading(false)
+    setFileError('')
+    setFileContent('')
+    setFileTruncated(false)
+  }, [workspaceRoot])
+  useSourceFileNavigation({ workspaceRoot, revision, requestedFilePath, treeReady: Boolean(tree),
+    onSelect: loadFile, loadDirectory, setExpanded })
   const selectedDoc = BROWSABLE_DESIGN_DOCS.find((doc) => doc.markdownPaths.includes(selectedPath))
   const selectedDocumentKey =
     selectedDoc?.key === 'requirement-spec' ||
@@ -190,7 +206,7 @@ export default function SourcePanel({
   //
   // 等 tree 与 docsProbed 都就绪再决定，才能判断 initialFilePath 是否真的可选中。
   useEffect(() => {
-    if (initialTried || !tree || !docsProbed) return
+    if (requestedFilePath || initialTried || !tree || !docsProbed) return
     setInitialTried(true)
     if (initialFilePath) {
       const ancestors = ancestorDirPaths(tree, initialFilePath)
@@ -205,7 +221,7 @@ export default function SourcePanel({
     const requirementPath = docPaths['requirement-spec']
     if (requirementPath) void loadFile(requirementPath)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree, docsProbed, docPaths, initialFilePath, initialTried])
+  }, [tree, docsProbed, docPaths, initialFilePath, initialTried, requestedFilePath])
 
   // 规划文档由独立组件读取结构化数据；工程文件沿用现有读取和高亮方式。
   useEffect(() => {
@@ -237,17 +253,6 @@ export default function SourcePanel({
       cancelled = true
     }
   }, [workspaceRoot, selectedPath, selectedDocumentKey, revision, fileReadSequence])
-
-  /** 选择文件并清空上一个文件的展示状态，避免切换时闪现旧内容。 */
-  const loadFile = (filePath: string): void => {
-    if (!workspaceRoot || !filePath) return
-    setSelectedPath(filePath)
-    setFileReadSequence((current) => current + 1)
-    setFileLoading(false)
-    setFileError('')
-    setFileContent('')
-    setFileTruncated(false)
-  }
 
   const handleSelectFile = (node: WorkspaceTreeNode): void => {
     loadFile(node.path)

@@ -11,6 +11,10 @@ def resolve_python_unit_task_rules(context: UnitGenerationContext) -> tuple[str,
     """按已确认映射规划 Python 任务，不增加 Entity/SQL 第二套开发流程。"""
 
     common = (
+        "When constraints.existing_backend_deliverables identifies an existing implementation "
+        "of the same kind, target_id and requirement capability, keep its exact paths. "
+        "Update that implementation in place; never create a second controller, repository or service "
+        "for a changed contract. Reuse existing shared implementation files.",
         "The implementation is Python 3.12 + FastAPI inside agent-runtime. The logical "
         "owner=backend and backend Unit IDs describe business responsibility, not Java. "
         "Never emit Java, Maven, Spring, MyBatis, DDL, migrations, seed data, or SQLite "
@@ -58,6 +62,9 @@ def resolve_python_unit_task_rules(context: UnitGenerationContext) -> tuple[str,
             "only in app/api/*.py or a business package is not mounted. Do not edit the shared "
             "app/api/router.py or endpoints/__init__.py to register routes. "
             "REST and Agent Tools must delegate to the same service. Preserve trusted Principal "
+            "When an Endpoint declares agentCall, its service uses the template ApplicationServiceContext.agents "
+            "invoker and the exact formal inputBindings/resultBindings; its DAG dependency is the declared Agent. "
+            "Do not generate another Agent, model client or duplicate business Tool service. "
             "ownership; never accept an owner identity from client request fields. Return a "
             "contract mismatch for unspecified behavior rather than inventing a model call.\n"
             + json.dumps(manifest, ensure_ascii=False, indent=2))

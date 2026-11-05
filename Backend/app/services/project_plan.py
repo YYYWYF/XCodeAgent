@@ -1374,6 +1374,7 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     )
     endpoint_keys = (
         "kind",
+        "agentCall",
         "id",
         "name",
         "method",
@@ -1392,6 +1393,7 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
                     {
                         endpoint_key: deepcopy(endpoint.get(endpoint_key))
                         for endpoint_key in endpoint_keys
+                        if endpoint_key != "agentCall" or endpoint.get("agentCall") is not None
                     }
                     for endpoint in _dict_items(contract.get("endpoints"))
                 ]
@@ -1701,12 +1703,18 @@ def validate_technical_plan_api_contracts(
     errors: list[str] = []
     for contract in _dict_items(plan.get("api_contracts")):
         contract_id = str(contract.get("id") or "unknown")
+        invalid = [endpoint for endpoint in _dict_items(contract.get("endpoints"))
+                   if endpoint.get("kind") is not None and endpoint.get("kind") not in {"business", "agent_runtime"}]
+        if invalid:
+            errors.extend(f"Endpoint {endpoint.get('id')} 的 kind={endpoint.get('kind')!r} 无效；只能是 business 或 agent_runtime，不能使用架构类型。" for endpoint in invalid)
+            continue
         runtime_endpoints = [endpoint for endpoint in _dict_items(contract.get("endpoints"))
                              if endpoint.get("kind") == "agent_runtime"]
         if runtime_endpoints:
             try:
                 from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
-                materialize_runtime_endpoints(plan)
+                # 技术候选尚待架构选择；先验证接口本身，正式编译仍要求显式服务图。
+                materialize_runtime_endpoints(plan, require_topology=False)
             except ValueError as exc:
                 errors.append(str(exc))
             continue
@@ -1742,12 +1750,15 @@ def validate_technical_plan_api_contracts(
                 f"TechnicalPlan API Contract {contract_id} 的 authentication 只能包含 boolean required。"
             )
         raw_ids = contract.get("entity_ids")
-        ids = [str(value).strip() for value in raw_ids if str(value).strip()] if isinstance(raw_ids, list) else []
-        if not ids:
-            errors.append(f"TechnicalPlan API Contract {contract_id} 必须声明非空 entity_ids。")
+        if not isinstance(raw_ids, list):
+            errors.append(f"TechnicalPlan API Contract {contract_id} 必须显式声明 entity_ids 数组；无实体接口使用 []。")
             continue
-        if len(ids) != len(raw_ids) or len(ids) != len(set(ids)):
-            errors.append(f"TechnicalPlan API Contract {contract_id} 的 entity_ids 必须非空且不重复。")
+        if any(not isinstance(value, str) or not value.strip() for value in raw_ids):
+            errors.append(f"TechnicalPlan API Contract {contract_id} 的 entity_ids 只能包含非空实体标识。")
+            continue
+        ids = [value.strip() for value in raw_ids]
+        if len(ids) != len(set(ids)):
+            errors.append(f"TechnicalPlan API Contract {contract_id} 的 entity_ids 不能重复。")
         unknown = sorted(set(ids) - known_entity_ids)
         if unknown:
             errors.append(f"TechnicalPlan API Contract {contract_id} 引用了未知实体：{'、'.join(unknown)}。")
@@ -1804,6 +1815,10 @@ def create_technical_plan(
     datasource_type: DatasourceType | None = None,
 ) -> dict[str, Any]:
     """生成只包含开发新增事实的 TechnicalPlan。"""
+
+    if isinstance(agent_plan, dict):
+        from app.services.runtime_endpoint_candidates import editable_runtime_candidate
+        agent_plan = editable_runtime_candidate(agent_plan)
 
     authentication_errors = validate_technical_plan_model_authentication(agent_plan)
     authorization_errors = validate_technical_plan_model_authorization(agent_plan)
@@ -1893,7 +1908,13 @@ def create_technical_plan(
         # 七模块定义属于同一份待确认 TechnicalPlan，不另建可绕过确认的 Agent 配置文件。
         from app.services.runtime_agent_contracts import agent_contract_index
         plan["agent_contracts"] = deepcopy(agent_plan["agent_contracts"])
+        from app.services.agent_confirmation_contract import complete_tool_confirmation
+        plan = complete_tool_confirmation(plan)
         agent_contract_index(plan, require_runtime=False)
+    from app.services.technical_pagination import complete_technical_pagination
+    plan = complete_technical_pagination(plan)
+    from app.services.runtime_endpoint_candidates import rebuild_candidate_runtime_endpoints
+    plan = rebuild_candidate_runtime_endpoints(plan)
     from app.services.runtime_agent_settings import validate_technical_plan_agent_contracts
     product_plan = spec.get("confirmed_product_plan")
     errors = validate_technical_plan_agent_contracts(plan, product_plan) if isinstance(product_plan, dict) else []

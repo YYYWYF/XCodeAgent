@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from app.domain.api_design import EndpointApiDesign
+from app.domain.api_design import API_DESIGN_ARTIFACT_TYPE, API_DESIGN_SCHEMA_VERSION, EndpointFieldMappingDesign
 from app.services.authorization_overlay import compile_authorization_overlay
 from app.services.build_context_resolver import resolve_target_build_context
 from app.services.build_task_planner import create_build_task_plan
@@ -55,7 +55,7 @@ def project_plan(*, authorization: bool = False) -> dict:
                 "properties": {"id": {"type": "string"}},
             }},
             "endpoints": [{
-                "id": f"{name}.list", "method": "GET", "path": f"/{name}",
+                "id": f"{name}.list", "kind": "business", "method": "GET", "path": f"/{name}",
                 "response_schema_ref": f"#/schemas/{entity}", "parameters": [],
                 "operation_semantics": {"operation_kind": "list"},
             }],
@@ -164,9 +164,10 @@ def write_confirmed_endpoint_designs(
                     "type": "string",
                     "usage": "read",
                 }
-            design = EndpointApiDesign.model_validate({
-                "schemaVersion": "endpoint-field-mapping.v7",
-                "artifactType": "endpoint-field-mapping",
+            design = EndpointFieldMappingDesign.model_validate({
+                "schemaVersion": API_DESIGN_SCHEMA_VERSION,
+                "artifactType": API_DESIGN_ARTIFACT_TYPE,
+                "implementationKind": "business",
                 "status": "confirmed",
                 "confirmationStatus": "confirmed",
                 "artifactRevision": "0123456789abcdef0123456789abcdef",

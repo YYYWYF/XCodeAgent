@@ -8,7 +8,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
 from app.services.build_task_reuse_contracts import ReuseFacts
-from app.services.task_input_freshness import task_covers_current_input
+from app.services.task_input_freshness import task_input_change_reason
 from app.services.frozen_contract_catalog import (
     ContractCatalogBindingError,
     FormalContractSourceRef,
@@ -142,14 +142,26 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             if strategy in {"model", "deterministic"} and not requirements.generation_requirements_by_unit[key]:
                 fail_requirement_input("PLANNING_EMPTY_GENERATION_STRATEGY", "空职责的生成策略不能创建可调度 Unit。", unit_ids=(key,))
             # 本轮生成会替换直接输入过期的任务，不能向模型或进度声明这些旧任务仍被复用。
-            retained = tuple(task_id for task_id in self.reuse_facts.retained_task_ids_by_unit.get(key, ())
-                             if not (strategy in {"model", "deterministic"}
-                                     and not task_covers_current_input(registry[task_id], self.project_plan, self.build_context)))
+            prior_ids = self.reuse_facts.retained_task_ids_by_unit.get(key, ())
+            changes = {task_id: task_input_change_reason(registry[task_id], self.project_plan, self.build_context)
+                       for task_id in prior_ids} if strategy in {"model", "deterministic"} else {}
+            retained = tuple(task_id for task_id in prior_ids if not changes.get(task_id))
+            change_reasons = sorted({reason for reason in changes.values() if reason})
             units[key] = UnitRunState.create(
                 unit_id=key, kind=self.skeleton_plan["build_units"][key]["kind"],
                 generation_strategy=strategy,
                 retained_task_ids=retained,
                 reusable_capabilities=tuple(self.reuse_facts.reusable_capabilities_by_unit.get(key, {})),
+                reuse_reason=(
+                    "接口契约及实现输入未变化，直接复用已有任务；已完成任务不重复执行。"
+                    if strategy == "reuse_only" else
+                    "；".join(change_reasons) + "，需在原实现文件上重新生成。"
+                    if change_reasons else
+                    "已有任务未覆盖本次全部职责，保留可复用任务，仅补齐缺失实现。"
+                    if retained and strategy in {"model", "deterministic"} else
+                    "尚无可复用的已确认接口实现任务，需要首次生成。"
+                    if strategy == "model" else None
+                ),
             )
         # 同一冻结输入只在新 Run 创建时派生名称，后续发布和重连均读取 Run。
         display_names = project_plan_unit_display_names(plain_json(self.project_plan))
@@ -232,6 +244,11 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                                                if (owner.api_contract_id, owner.endpoint_id) in endpoint_keys],
             },
             constraints={"owner": "frontend" if unit.kind == "page" else unit.kind,
+                         "existing_backend_deliverables": [plain_json(deliverable)
+                             for task in registry.values() if task.get("unit_id") == unit_id and task.get("owner") == "backend"
+                             and all((task.get("source_refs") or {}).get(field) == backend_generation_constraints(plan).get(field)
+                                     for field in ("backend_implementation", "backend_root"))
+                             for deliverable in task.get("deliverables", ())],
                          **backend_generation_constraints(plan),
                          **({"agent_template_policy": plain_json(self.build_context.get("runtime_agent_template_policy", {}))}
                             if unit.kind == "agent" else {}),

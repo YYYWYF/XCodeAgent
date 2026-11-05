@@ -135,9 +135,16 @@ def compile_expected_unit_formal_source_refs(
                 raise ContractCatalogBindingError("Agent 职责与正式 Unit 身份不一致。")
             index = list(contracts).index(agent_id)
             grant(requirement_id, technical, {f"/agent_contracts/{index}", "/topology"})
-            for key in (*agent_endpoint_keys(contracts[agent_id]), (f"agent.{agent_id}", f"agent.{agent_id}.run")):
+            contract = contracts[agent_id]
+            tool_keys = agent_endpoint_keys(contract)
+            # 内部能力没有公开运行接口；仅冻结真实 Tool 和显式启用的公开入口。
+            entry_keys = ((f"agent.{agent_id}", f"agent.{agent_id}.run"),) if contract["publicEndpoint"] else ()
+            for key in (*tool_keys, *entry_keys):
                 if key not in scoped_keys or key not in endpoints:
-                    raise ContractCatalogBindingError("Agent Tool 业务依赖不在当前冻结 Scope 中。")
+                    relation = "Tool 业务依赖" if key in tool_keys else "公开运行入口"
+                    raise ContractCatalogBindingError(
+                        f"Agent {agent_id} 的{relation} {key[0]}/{key[1]} 不在当前冻结 Scope 中。"
+                    )
                 api, endpoint_index = endpoints[key]
                 grant(requirement_id, api, api_selectors(api, {endpoint_index}))
                 grant(requirement_id, _required_endpoint_api_design(endpoint_api_designs, key), {"/"})
@@ -169,6 +176,15 @@ def compile_expected_unit_formal_source_refs(
         for key in relevant_keys:
             contract, endpoint_index = endpoints[key]
             indexes_by_contract.setdefault(contract.ref_id, set()).add(endpoint_index)
+            # 业务接口消费 Agent 的输入/结果协议，必须可读取同一份已冻结能力定义。
+            endpoint = contract.content["endpoints"][endpoint_index]
+            call = endpoint.get("agentCall")
+            if call and requirement_kind in _ENDPOINT_REQUIREMENT_KINDS and requirement_kind.startswith("backend."):
+                agent_id = call["agentId"]
+                contracts = agent_contract_index(technical.content)
+                if agent_id not in contracts:
+                    raise ContractCatalogBindingError(f"Endpoint {key[0]}/{key[1]} 引用未知 Agent {agent_id}。")
+                grant(requirement_id, technical, {f"/agent_contracts/{list(contracts).index(agent_id)}", "/topology"})
         for ref_id, endpoint_indexes in indexes_by_contract.items():
             contract = store[ref_id]
             grant(requirement_id, contract, api_selectors(contract, endpoint_indexes))
