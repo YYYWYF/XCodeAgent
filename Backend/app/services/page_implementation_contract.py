@@ -235,10 +235,15 @@ def _compile_product_action_binding(
             "targetPageId": str(behavior.get("targetPageId") or "").strip(),
         }
     if behavior_type == "interface":
+        # localEffect 优先取 UI 设计稿的 uiEffect（已确认设计稿时的权威本地交互描述）；
+        # UI 设计稿未生成时用 ProductPlan behavior.expectedResult 兜底——它是产品语义
+        # 对该界面操作的可见结果描述，足以作为 localEffect 的合理回退，避免未生成设计稿
+        # 的页面因 localEffect 为空被校验拦截（UI 阶段允许未生成设计稿的页面继续）。
+        local_effect = ui_effect or str(behavior.get("expectedResult") or "").strip()
         return {
             "actionId": action_id,
             "bindingType": "local",
-            "localEffect": ui_effect,
+            "localEffect": local_effect,
         }
     if behavior_type == "external":
         return {
@@ -259,7 +264,9 @@ def _compile_product_action_binding(
         elif step_type == "navigation":
             steps.append({"type": "navigation", "targetPageId": str(step.get("targetPageId") or "")})
         elif step_type == "interface":
-            steps.append({"type": "local", "localEffect": ui_step_effects.get(step_id, "")})
+            # 同 interface action：UI 设计稿未生成时用 step.expectedResult 兜底 localEffect。
+            step_local_effect = ui_step_effects.get(step_id, "") or str(step.get("expectedResult") or "").strip()
+            steps.append({"type": "local", "localEffect": step_local_effect})
         elif step_type == "external":
             steps.append({"type": "external", "externalTarget": str(step.get("externalTarget") or "")})
     return {"actionId": action_id, "bindingType": "sequence", "steps": steps}
