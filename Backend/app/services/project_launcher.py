@@ -82,6 +82,26 @@ def _application_has_no_backend_business(root: Path) -> bool:
     return _lifecycle_declares_no_backend_business(root) is True
 
 
+def _require_preview_authorization_ready(root: Path) -> None:
+    """Builtin 权限预览必须使用已核验 Seed 的当前输入。"""
+
+    from app.services.application_config import read_application_config
+    from app.services.builtin_authorization_seed import read_confirmed_seed_plan
+    from app.services.builtin_authorization_state import seed_ready, uses_builtin_database
+
+    if not (root / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
+        return
+    application = read_application_config(root)
+    if not uses_builtin_database(application) or application["authorization"]["enabled"] is not True:
+        return
+    try:
+        if seed_ready(root, application, read_confirmed_seed_plan(root)):
+            return
+    except (OSError, ValueError):
+        pass
+    raise ValueError("Builtin 权限数据尚未核验就绪，请继续权限初始化或刷新原操作后再启动预览。")
+
+
 def launch_project_preview(
     workspace_path: str | Path,
     *,
@@ -94,6 +114,12 @@ def launch_project_preview(
 
     root = Path(workspace_path).expanduser().resolve()
     with backend_launch_lock(root):
+        try:
+            _require_preview_authorization_ready(root)
+        except (OSError, ValueError) as exc:
+            result = {"status": "failed", "message": str(exc), "failed_stage": "authorization_readiness"}
+            finish_attempt(root, result)
+            return result
         # 在清空本轮日志前停止旧进程，避免旧输出污染新的诊断证据。
         if force_restart:
             frontend_stop = stop_frontend_project(root)

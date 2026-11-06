@@ -60,6 +60,12 @@ def begin_workflow_lifecycle(
         return None
     resume_values = workflow_inputs.get("resume_values")
     resume_values = resume_values if isinstance(resume_values, dict) else {}
+    api_design_action = resume_values.get("api_design_gate_action")
+    api_design_refresh_requested = (
+        phase == "api_design_readiness_gate"
+        and isinstance(api_design_action, dict)
+        and api_design_action.get("action") == "refresh"
+    )
     owner_session_id = str(resume_values.get("owner_session_id") or "").strip() or None
     requires_test_entry = phase == "integration_test" or bool(resume_values.get("test_phase_confirmation"))
     if requires_test_entry:
@@ -70,18 +76,13 @@ def begin_workflow_lifecycle(
     test_submission: dict[str, Any] | None = None
     task_plan_submission: dict[str, Any] | None = None
     api_design_submission: dict[str, Any] | None = None
-    api_design_action = resume_values.get("api_design_gate_action")
-    api_design_action = (
-        api_design_action if phase == "api_design_readiness_gate"
-        and isinstance(api_design_action, dict) else None
-    )
     approved_repair_claims: list[ExecutionResourceClaim] = []
     if isinstance(submission, dict):
         submission_run_id = str(submission.get("runId") or "")
         if submission_run_id:
             submitted_execution = lifecycle.active_executions.get(submission_run_id)
             pending = submitted_execution.pending_interaction if submitted_execution else None
-            if api_design_action and pending is not None and pending.type != PendingInteractionType.API_DESIGN:
+            if api_design_refresh_requested and pending is not None and pending.type != PendingInteractionType.API_DESIGN:
                 raise ApplicationLifecycleConflictError("API 映射检测不属于当前等待确认的门禁。")
             if (
                 pending is not None
@@ -89,14 +90,14 @@ def begin_workflow_lifecycle(
                 and _repair_scope_approved(str(workflow_inputs.get("request") or ""))
             ):
                 approved_repair_claims = _repair_resource_claims(pending.payload)
-            if pending is not None and pending.type == PendingInteractionType.TEST_PHASE_CONFIRMATION:
+            if api_design_refresh_requested or (pending is not None and pending.type == PendingInteractionType.API_DESIGN):
+                # 映射确认的凭据随原执行接替一次性提交，入场失败仍可检测。
+                api_design_submission = submission
+            elif pending is not None and pending.type == PendingInteractionType.TEST_PHASE_CONFIRMATION:
                 test_submission = submission
             elif pending is not None and pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION:
                 # DAG 确认交互沿用测试确认的原子接管路径，不能先写 submittedAt。
                 task_plan_submission = submission
-            elif pending is not None and pending.type == PendingInteractionType.API_DESIGN:
-                # 映射检测与旧 execution 接管一起提交，入场失败不能提前消费确认门。
-                api_design_submission = submission
             else:
                 persist_workbench_interaction_submission(
                     workspace,
@@ -156,16 +157,19 @@ def begin_workflow_lifecycle(
                 workflow_inputs.get("workflow_action")
                 == "continue_after_entity_binding"
             ),
-            api_design_gate_action=api_design_action,
+            api_design_refresh=api_design_action if api_design_refresh_requested else None,
+            api_contract_id=scope.get("apiContractId"),
+            owner_session_id=owner_session_id,
         )
+        pending = previous.pending_interaction if previous is not None else None
         if (
-            api_design_action and previous is not None
+            api_design_refresh_requested
+            and previous is not None
             and previous.status == WorkbenchExecutionStatus.AWAITING_USER
-            and previous.pending_interaction is not None
-            and previous.pending_interaction.type == PendingInteractionType.API_DESIGN
+            and pending is not None
+            and pending.type == PendingInteractionType.API_DESIGN
         ):
-            # checkpoint 未携带最新 lifecycle 时，从当前服务端确认门绑定并发凭据。
-            pending = previous.pending_interaction
+            # checkpoint 可能早于待确认投影。用当前交互补足凭据并在写锁内复验。
             api_design_submission = api_design_submission or {
                 "runId": explicit_resume_run_id,
                 "id": pending.id,
@@ -261,7 +265,9 @@ def _validate_resumable_execution(
     target_id: str,
     allow_debug_reentry: bool = False,
     allow_entity_binding_continuation: bool = False,
-    api_design_gate_action: dict[str, Any] | None = None,
+    api_design_refresh: dict[str, Any] | None = None,
+    api_contract_id: str | None = None,
+    owner_session_id: str | None = None,
 ) -> None:
     """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
 
@@ -347,20 +353,35 @@ def _validate_resumable_execution(
     )
     # API 映射保存不推进 Workflow；只有原目标的显式 refresh 可以接管该等待门。
     pending = execution.pending_interaction
-    pending_target = pending.payload.get("developmentTarget") if pending is not None else None
-    api_design_confirmation = (
-        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+    api_design_continuation = (
+        api_design_refresh is not None
+        and run_id in lifecycle.active_executions
         and execution.phase == "api_design_readiness_gate"
+        and execution.status == WorkbenchExecutionStatus.AWAITING_USER
         and pending is not None
         and pending.type == PendingInteractionType.API_DESIGN
         and pending.submitted_at is None
-        and isinstance(pending_target, dict)
-        and isinstance(api_design_gate_action, dict)
-        and api_design_gate_action.get("action") == "refresh"
-        and api_design_gate_action.get("targetType") == pending_target.get("type") == scope
-        and api_design_gate_action.get("targetId") == pending_target.get("id") == target_id
-        and (scope != "endpoint" or api_design_gate_action.get("apiContractId") == pending_target.get("apiContractId"))
     )
+    if api_design_continuation and api_design_refresh is not None and pending is not None:
+        if execution.owner_session_id and execution.owner_session_id != owner_session_id:
+            raise ApplicationLifecycleConflictError("不能从其他会话接替 API 映射检测。")
+        pending_target = pending.payload.get("developmentTarget")
+        if (
+            not isinstance(pending_target, dict)
+            or api_design_refresh.get("targetType") != scope
+            or api_design_refresh.get("targetId") != target_id
+            or pending_target.get("type") != scope
+            or pending_target.get("id") != target_id
+        ):
+            raise ApplicationLifecycleConflictError("恢复目标与原 API 映射等待确认的目标不一致。")
+        if scope == "endpoint" and (
+            execution.development_target is None
+            or not api_contract_id
+            or execution.development_target.api_contract_id != api_contract_id
+            or pending_target.get("apiContractId") != api_contract_id
+            or api_design_refresh.get("apiContractId") != api_contract_id
+        ):
+            raise ApplicationLifecycleConflictError("API 映射检测与原 API Contract 不一致。")
     if (
         not resumable_status
         and not debug_waiting
@@ -375,7 +396,7 @@ def _validate_resumable_execution(
         and not page_acceptance_confirmation
         and not agent_approval_confirmation
         and not entity_binding_continuation
-        and not api_design_confirmation
+        and not api_design_continuation
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
     # 阶段确认是显式的新对话边界：只有结构化测试/审查确认允许把 execution 所有权

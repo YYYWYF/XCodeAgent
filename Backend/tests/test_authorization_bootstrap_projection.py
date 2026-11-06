@@ -12,6 +12,9 @@ from app.graph.workflow import route_prepare_build_tasks
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_next_nodes
 from app.services.authorization_workspace_projector import RUNTIME
+from app.services.authorization_table_projection import compile_authorization_tables
+from app.services.builtin_authorization_seed import compile_builtin_authorization_seed
+from tests.authorization_seed_fixture import KEY, SUBJECT, save_plan, seed_plan, write_schema
 from app.utils.atomic_json import atomic_write_json
 
 
@@ -56,23 +59,28 @@ class AuthorizationBootstrapProjectionTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.application = {
             "datasource": {"type": "database", "db": {"useBuiltin": True}},
-            "authorization": {"enabled": True},
+            "authorization": {"enabled": True, "initialAdministratorSubjects": [SUBJECT]},
             "managedDatabase": {"status": "REGISTERED", "datasourceKey": "12ab34cd56ef", "datasourceId": 2},
         }
-        self.state = {"workspace": str(self.root), "status": "completed", "technical_plan": {
-            "artifact_type": "technical-plan", "confirmation_status": "confirmed",
-            "authorization_manifest": {"fingerprint": "sha256:test", "resources": [{"id": "second-page"}]},
-        }}
+        self.state = {"workspace": str(self.root), "status": "completed", "technical_plan": seed_plan()}
+        save_plan(self.root, self.state["technical_plan"])
+        write_schema(self.root)
         config = patch("app.graph.workflow.read_application_config", return_value=self.application)
         config.start()
         self.addCleanup(config.stop)
 
-    def mark_ready(self) -> None:
+    def mark_ready(self, *, seed_ready: bool = True) -> None:
         """写入与当前绑定一致的已核验成功事实，不按页面或 Manifest 缓存。"""
+        compiled = compile_builtin_authorization_seed(self.application, self.state["technical_plan"], datasource_key=KEY)
+        ddl = compile_authorization_tables(self.root, KEY)
         atomic_write_json(self.root / RUNTIME / "state.json", {
             "schemaVersion": 1, "datasourceMode": "builtin", "status": "schema_ready",
             "datasourceKey": "12ab34cd56ef", "datasourceId": 2, "schemaReady": True,
-            "ddlFingerprint": "sha256:test", "verifiedAt": "2026-11-03T12:45:05+00:00",
+            "ddlFingerprint": ddl["ddlFingerprint"], "verifiedAt": "2026-11-03T12:45:05+00:00",
+            **({"seed": {"status": "seed_ready", "operationStatus": "SUCCEEDED", "operationId": "456",
+                         "ready": True, "verifiedAt": "2026-11-03T12:46:05+00:00",
+                         "seedFingerprint": compiled["seedFingerprint"], "idempotencyKey": compiled["idempotencyKey"]}}
+               if seed_ready else {}),
         })
 
     def assert_projection(self, expected: str, **updates) -> None:
@@ -90,6 +98,8 @@ class AuthorizationBootstrapProjectionTests(unittest.TestCase):
 
     def test_first_builtin_and_changed_binding_use_builtin_node(self) -> None:
         """首次或绑定变化时展示独立 Builtin 节点，不能显示旧脚本节点。"""
+        self.assert_projection("builtin_authorization_bootstrap")
+        self.mark_ready(seed_ready=False)
         self.assert_projection("builtin_authorization_bootstrap")
         self.mark_ready()
         self.application["managedDatabase"]["datasourceId"] = 3

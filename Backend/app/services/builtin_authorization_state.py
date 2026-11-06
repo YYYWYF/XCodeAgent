@@ -1,6 +1,7 @@
 """Builtin 权限初始化的本地身份、互斥锁和只读成功判定。"""
 
 from pathlib import Path
+import re
 from threading import Lock, RLock
 
 from app.domain.managed_database import ManagedDatabaseRegistration
@@ -57,3 +58,38 @@ def save_state(root: Path, record: dict) -> None:
 
     read_record(root, "state.json")
     atomic_write_json(root / RUNTIME / "state.json", record)
+
+
+def verified_seed(seed: object, compiled: dict) -> bool:
+    """只接受已核验原操作及精确匹配的本地 Seed 身份。"""
+
+    return (isinstance(seed, dict) and seed.get("status") == "seed_ready"
+            and seed.get("operationStatus") == "SUCCEEDED" and seed.get("ready") is True
+            and isinstance(seed.get("operationId"), str)
+            and bool(re.fullmatch(r"[1-9][0-9]{0,18}", seed["operationId"]))
+            and isinstance(seed.get("verifiedAt"), str) and bool(seed["verifiedAt"])
+            and seed.get("seedFingerprint") == compiled["seedFingerprint"]
+            and seed.get("idempotencyKey") == compiled["idempotencyKey"])
+
+
+def seed_ready(root: Path, application: dict, technical_plan: dict) -> bool:
+    """只读复核绑定、DDL 和本次实际行数据，失败时不推导权限运行态就绪。"""
+
+    from app.services.authorization_table_projection import compile_authorization_tables
+    from app.services.builtin_authorization_seed import compile_builtin_authorization_seed, read_confirmed_seed_plan
+
+    try:
+        if not schema_ready(root, application):
+            return False
+        record = read_record(root, "state.json")
+        key = builtin_binding(application)["datasourceKey"]
+        current_plan = read_confirmed_seed_plan(root)
+        if (technical_plan.get("artifact_type") != "technical-plan"
+                or technical_plan.get("confirmation_status") != "confirmed"
+                or technical_plan.get("authorization_manifest") != current_plan.get("authorization_manifest")):
+            return False
+        compiled = compile_builtin_authorization_seed(application, current_plan, datasource_key=key)
+        return (record.get("ddlFingerprint") == compile_authorization_tables(root, key)["ddlFingerprint"]
+                and verified_seed(record.get("seed"), compiled))
+    except (OSError, ValueError, TypeError):
+        return False

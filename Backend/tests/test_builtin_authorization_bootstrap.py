@@ -21,9 +21,11 @@ from app.services.template_reconcile.state_v3 import load_template_state_v3
 from app.protocols.workflow.projection import _public_workflow_state, _workflow_node_detail
 from app.protocols.workflow.runtime import _runtime_terminal_process_title
 from app.protocols.builtin_authorization import build_builtin_authorization_stream
+from app.protocols.workflow.request import workflow_run_inputs
 
 KEY = "12ab34cd56ef"
 PLAN = {"artifact_type": "technical-plan", "confirmation_status": "confirmed", "authorization_manifest": {"fingerprint": "sha256:test"}}
+from tests.managed_database_http_fixture import saas_success
 
 
 class BuiltinAuthorizationTests(unittest.TestCase):
@@ -81,18 +83,18 @@ class BuiltinAuthorizationTests(unittest.TestCase):
 
         self.calls.append(request)
         if request.url.path.endswith('/tables/check'):
-            return httpx.Response(200, json={"datasourceId": 2, "ready": self.ready,
+            return saas_success(200, {"datasourceId": 2, "ready": self.ready,
                 "tables": [{"tableName": KEY + '_' + name, "status": 'SYNCED' if self.ready else 'NOT_CREATED', "differences": []} for name in TABLES]})
         if request.url.path.endswith('/batch'):
             if self.drop_response:
                 raise httpx.ReadTimeout('sensitive driver data', request=request)
-            return httpx.Response(202, json={"operationId": "123", "status": "RUNNING"})
+            return saas_success(202, {"operationId": "123", "status": "RUNNING"})
         if request.url.query:
-            return httpx.Response(200, json=self.history)
+            return saas_success(200, self.history)
         if request.url.path.endswith('/123'):
             if self.operation_status == 'SUCCEEDED' and self.synced_after_success:
                 self.ready = True
-            return httpx.Response(200, json=self.operation())
+            return saas_success(200, self.operation())
         raise AssertionError(request.url)
 
     def operation(self) -> dict:
@@ -116,6 +118,50 @@ class BuiltinAuthorizationTests(unittest.TestCase):
         """通过用户刷新入口读取既有批次，不调用初始化入口。"""
 
         return refresh_builtin_authorization(str(self.root), '123', client=self.client)
+
+    def test_patch_reports_progress_and_refresh_does_not_write_seed(self) -> None:
+        """独立补丁按阶段运行，建表刷新只核验原操作，查询失败明确说明未写入。"""
+
+        async def collect(action: str) -> str:
+            """收集独立动作的 AG-UI 事件。"""
+
+            payload = {"threadId": "patch-thread", "forwardedProps": {"builtinAuthorization": {
+                "action": action, "workspaceRoot": str(self.root)}}}
+            return "".join([frame async for frame in build_builtin_authorization_stream(payload)]).replace(" ", "")
+
+        service = "app.services.builtin_authorization_patch"
+        with (
+            patch(f"{service}.read_confirmed_seed_plan", return_value=PLAN),
+            patch(f"{service}.load_confirmed_build_task_plan", return_value={"status": "ready"}),
+            patch(f"{service}.read_application_config", return_value=self.application),
+            patch("app.services.builtin_authorization_bootstrap.ManagedTableClient", return_value=self.client),
+            patch(f"{service}.run_builtin_authorization_seed") as write,
+        ):
+            initial = asyncio.run(collect("get"))
+            self.assertIn('"patch":null', initial)
+            self.assertFalse(self.calls)
+            first = asyncio.run(collect("run_patch"))
+            self.assertIn('"status":"in_progress"', first)
+            self.assertIn('"status":"waiting"', first)
+            self.assertIn('"schemaOperationId":"123"', first)
+            self.assertEqual(len(self.batch_calls()), 1)
+            write.assert_not_called()
+            refreshed = asyncio.run(collect("refresh_patch"))
+            self.assertIn('"status":"continue"', refreshed)
+            self.assertIn('"nextAction":"run"', refreshed)
+            write.assert_not_called()
+            write.return_value = {"schema_ready": True, "seed_ready": False, "operation_id": "123",
+                                  "failure_category": "seed_http_500", "failure_phase": "seed_query_unconfirmed"}
+            failed = asyncio.run(collect("run_patch"))
+            self.assertIn('"stage":"write"', failed)
+            self.assertIn("查询原写入记录失败（HTTP500），本次未提交写入", failed)
+            self.assertIn("STATE_SNAPSHOT", failed)
+            self.assertIn("RUN_FINISHED", failed)
+            write.assert_called_once()
+            self.assertEqual(len(self.batch_calls()), 1)
+            self.assertFalse((self.root / ".devagentstudio/application-lifecycle.json").exists())
+        with self.assertRaisesRegex(ValueError, "独立的 /builtin-authorization/run"):
+            workflow_run_inputs({"workflowDebug": {"enabled": True, "resumeFrom": "builtin_authorization_patch"}})
 
     def test_refresh_ag_ui_lifecycle_for_success_and_validation_failure(self) -> None:
         """刷新成功和业务失败均输出完整生命周期，不进入工作流图。"""
@@ -161,7 +207,7 @@ class BuiltinAuthorizationTests(unittest.TestCase):
         compiled = compile_authorization_tables(self.root, KEY)
         for ready, status in ((False, 'RUNNING'), (False, 'UNKNOWN'), (True, 'SUCCEEDED')):
             remote = ManagedTableClient(Settings(model_base_url='', model_api_key='', model_name='', managed_database_base_url='https://saas.example', managed_database_service_key='test'),
-                transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"datasourceId": 2, "ready": ready, "operationStatus": status, "tables": []})))
+                transport=httpx.MockTransport(lambda request: saas_success(200, {"datasourceId": 2, "ready": ready, "operationStatus": status, "tables": []})))
             if ready:
                 with self.assertRaises(ValueError):
                     _check(remote, {"datasourceKey": KEY, "datasourceId": 2}, compiled)
@@ -195,11 +241,11 @@ class BuiltinAuthorizationTests(unittest.TestCase):
         self.assertEqual(body['mode'], 'CREATE')
         self.assertEqual(len(body['sqls']), 4)
         self.assertTrue(all('PRIMARY KEY' in sql for sql in body['sqls']))
-        self.assertEqual(self.run_bootstrap()['status'], 'reused')
+        self.assertEqual(self.run_bootstrap()['status'], 'manual_required')
         self.assertEqual(len(self.batch_calls()), 1)
         state = {"workspace": str(self.root), "technical_plan": {**PLAN, 'authorization_manifest': {'fingerprint': 'new'}}}
-        self.assertEqual(route_prepare_build_tasks(state), 'build')
-        self.assertEqual(route_workflow_start({**state, 'resume_from': 'build'}), 'build')
+        self.assertEqual(route_prepare_build_tasks(state), 'builtin_authorization_bootstrap')
+        self.assertEqual(route_workflow_start({**state, 'resume_from': 'build'}), 'builtin_authorization_bootstrap')
 
     def test_shared_key_ready_never_posts(self) -> None:
         """无本地状态时以 SaaS 归属和结构核验建立成功事实。"""
@@ -385,7 +431,7 @@ class BuiltinAuthorizationTests(unittest.TestCase):
         self.assertNotIn('authorization_bootstrap_result', public)
         self.assertNotIn('test-secret', json.dumps(public))
         title = _runtime_terminal_process_title('builtin_authorization_bootstrap', 'completed', update)
-        self.assertEqual(title, '权限数据库初始化已就绪')
+        self.assertEqual(title, '权限表已就绪，权限数据待初始化')
         self.assertNotIn('Seed', result['message'])
 
     def test_failed_recovery_lost_receipt_cannot_reuse_old_failed_id(self) -> None:

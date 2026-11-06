@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from app.services.application_parameter_updater import ApplicationParameterUpdater, ParameterUpdateError
+from app.services.application_parameter_updater import service
 
 
 class ParameterUpdaterTests(unittest.TestCase):
@@ -98,6 +100,18 @@ class ParameterUpdaterTests(unittest.TestCase):
         self.assertTrue(content.startswith(b'server:\r\n  port: 8080\r\n'))
         self.assertIn(b'    private-key: "secret-1"\r\n', content)
         self.assertEqual(self.updater.preview(self.root, self.config, login_applied=True).changed_files, ())
+
+    def test_apply_without_fchmod_updates_both_files_and_clears_journal(self) -> None:
+        """模拟 Windows Python 3.12，验证恢复记录和两个参数文件均能写入。"""
+
+        plan = self.updater.preview(self.root, self.config, login_applied=True)
+        with patch.object(service, "os", wraps=os) as platform_os:
+            del platform_os.fchmod
+            self.updater.apply(self.root, plan)
+
+        self.assertIn(b'PUBLIC_APP_NAME="After"', self.env.read_bytes())
+        self.assertIn(b'client-id: "new"', self.yaml.read_bytes())
+        self.assertFalse((self.root / ".devagentstudio/runtime/application-parameter-update-journal.json").exists())
 
     def test_optional_login_address_can_be_empty(self) -> None:
         """用户清空可选地址时同时更新现有 env/YAML 叶子。"""

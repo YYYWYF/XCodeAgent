@@ -20,15 +20,10 @@ class ManagedTableError(ManagedDatabaseRegistrationError):
         self.issue = {"code": code, "title": title, "message": message, "action": action}
 
 
-def _response_error(response: httpx.Response, *, creating: bool) -> ManagedTableError:
+def _response_error(status: int, code: str | None, *, creating: bool) -> ManagedTableError:
     """按当前 HTTP 状态与错误码共同映射，不能仅凭 409 建议删除重建。"""
 
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = None
-    code = payload.get("code") if isinstance(payload, dict) else None
-    if response.status_code == 409 and code == "STRUCTURE_MISMATCH":
+    if status == 409 and code == "STRUCTURE_MISMATCH":
         if creating:
             return ManagedTableError(
                 code, "表结构已变更",
@@ -37,12 +32,12 @@ def _response_error(response: httpx.Response, *, creating: bool) -> ManagedTable
                 "rebuild",
             )
         return ManagedTableError(code, "表结构与当前设计不一致", "请刷新执行结果查看当前结构差异，再决定后续操作。")
-    if response.status_code == 409 and code == "RESOURCE_BUSY":
+    if status == 409 and code == "RESOURCE_BUSY":
         return ManagedTableError(
             code, "数据库资源暂忙",
             "请稍后点击“刷新执行结果”，确认没有执行中或待核对的操作后再提交。",
         )
-    if response.status_code == 409 and code == "TABLE_BINDING_CONFLICT":
+    if status == 409 and code == "TABLE_BINDING_CONFLICT":
         return ManagedTableError(
             code, "目标表暂时无法使用",
             "表名已被占用或表归属不可用，请联系管理员核对当前应用的表归属。",
@@ -80,12 +75,21 @@ class ManagedTableClient(ManagedDatabaseClient):
                 uncertain=body is not None,
             ) from None
         expected = 202 if path in {"table-operations", "table-operations/batch"} and body is not None else 200
-        if response.status_code != expected:
-            raise _response_error(response, creating=path == "table-operations" and body is not None and body.get("mode") == "CREATE")
         try:
-            return response.json()
+            payload = response.json()
         except ValueError:
+            payload = None
+        # SaaS 的 JSON 接口统一包装结果；业务模型仍由各调用方校验。
+        wrapped = isinstance(payload, dict) and set(payload) == {"returnCode", "errorMsg", "body"}
+        if response.status_code != expected:
+            code = payload["returnCode"] if wrapped and isinstance(payload["errorMsg"], str) else None
+            raise _response_error(
+                response.status_code, code if isinstance(code, str) else None,
+                creating=path == "table-operations" and body is not None and body.get("mode") == "CREATE",
+            )
+        if not wrapped or payload["returnCode"] != "SUC0000" or payload["errorMsg"] is not None:
             raise ManagedDatabaseRegistrationError(
-                "SaaS 响应无法读取，请先核对原操作记录，不要重复提交。",
+                "SaaS 响应不符合当前接口合同，请先核对原操作记录，不要重复提交。",
                 uncertain=body is not None,
-            ) from None
+            )
+        return payload["body"]

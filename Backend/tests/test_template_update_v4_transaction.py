@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import tempfile
 import json
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.services.template_reconcile import transaction_v4
 from app.services.template_reconcile.executor_v3 import WorkingCopyStoreV3
 from app.services.template_reconcile.transaction_v4 import apply_working_copy_v4, recover_v4_transaction
 from app.services.workspace_bootstrap.models import TemplateStateError
@@ -49,10 +51,37 @@ class TemplateUpdateV4TransactionTests(unittest.TestCase):
         self.assertEqual(self.second.read_bytes(), b"after-state")
         self.assertFalse((self.root / ".devagentstudio/runtime/template-update-v4-journal").exists())
 
+    def test_retry_commits_without_fchmod_after_interrupted_backup(self) -> None:
+        """模拟 Windows Python 3.12，从现场的零字节备份临时文件恢复后完成提交。"""
+
+        journal = self.root / ".devagentstudio/runtime/template-update-v4-journal"
+        journal.mkdir(parents=True)
+        (journal / ".0.after.v4.jx3r8i51").touch()
+
+        with patch.object(transaction_v4, "os", wraps=os) as platform_os:
+            del platform_os.fchmod
+            apply_working_copy_v4(self.root, self._store())
+
+        self.assertEqual(self.first.read_bytes(), b"after-front")
+        self.assertEqual(self.second.read_bytes(), b"after-state")
+        self.assertFalse(journal.exists())
+
+    def test_recovery_preserves_backups_when_an_unknown_file_exists(self) -> None:
+        """未发布的事务包含未知文件时拒绝恢复，保留所有现场文件。"""
+
+        journal = self.root / ".devagentstudio/runtime/template-update-v4-journal"
+        journal.mkdir(parents=True)
+        names = ("0.before", ".0.after.v4.jx3r8i51", "unrelated.txt")
+        for name in names:
+            (journal / name).touch()
+
+        with self.assertRaisesRegex(TemplateStateError, "V4 备份目录含未知文件"):
+            recover_v4_transaction(self.root)
+
+        self.assertCountEqual((entry.name for entry in journal.iterdir()), names)
+
     def test_write_failure_restores_before_images(self) -> None:
         """第二文件故障时两个文件回到原始字节。"""
-
-        from app.services.template_reconcile import transaction_v4
 
         original = transaction_v4._atomic_replace
 

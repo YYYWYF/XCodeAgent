@@ -34,6 +34,8 @@ SaaS 拒绝请求时，根据 HTTP 状态与当前错误码共同生成安全提
 
 单实体检查不代表应用可以启动。启动流程另行提交全应用实体 SQL 检查，并在 Java 启动前复核和注入运行时连接，见 [整体方案](BUILTIN_DATASOURCE_OVERALL_REVIEW.md)。前端沿用现有 Ant Design、工作台主题 token、紫色操作按钮及明暗模式。
 
+建表回执、操作历史和详情、结构检查及表元数据使用 SaaS 的统一 JSON 响应。后端先核对接口预期的 HTTP 状态及 `returnCode: "SUC0000"`、`errorMsg: null`，再将 `body` 交给各业务模型校验。历史数组为空时正常返回空历史。非成功响应按 HTTP 状态和 `returnCode` 映射提示。
+
 ## 版本交付 SQL
 
 用户明确通过项目验收后，既有 `finalize_project` 节点为内置数据库应用生成：

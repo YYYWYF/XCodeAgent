@@ -16,18 +16,22 @@ Studio 产品动作继续使用标准 AG-UI 生命周期、消息、结果、状
 
 后端发送 `POST /managed-database/datasources`，从权威 application.json 读取应用名称，仅提交 `{"appName":"应用名称"}`，请求头携带固定 Bearer 服务密钥。当前 Studio 不生成或提交 appKey。SaaS 接口允许调用方提供可选 appKey，作为独立应用关联信息；缺省时 app_key 保持 NULL，不用名称或 datasourceKey 补填。
 
-appName 为 1～255 个字符的非空文本，appKey 提供时为 1～64 个字符的非空文本，均不接受首尾空白或错误 JSON 类型。SaaS 资源注册表保存 app_key、app_name；表目录与操作记录继续通过 datasource_key 关联资源，不重复保存应用信息。注册响应保持原资源绑定字段，SaaS 同步返回 HTTP 201：
+appName 为 1～255 个字符的非空文本，appKey 提供时为 1～64 个字符的非空文本，均不接受首尾空白或错误 JSON 类型。SaaS 资源注册表保存 app_key、app_name；表目录与操作记录继续通过 datasource_key 关联资源，不重复保存应用信息。注册成功时，SaaS 同步返回 HTTP 201，资源绑定字段位于统一响应的 `body` 中：
 
 ```json
 {
-  "datasourceKey": "12ab34cd56ef",
-  "datasourceId": 2,
-  "status": "REGISTERED",
-  "isDeleted": false
+  "returnCode": "SUC0000",
+  "errorMsg": null,
+  "body": {
+    "datasourceKey": "12ab34cd56ef",
+    "datasourceId": 2,
+    "status": "REGISTERED",
+    "isDeleted": false
+  }
 }
 ```
 
-datasourceKey 由 SaaS 生成，固定为 12 位小写十六进制编码，可以数字开头。Studio 不预生成 datasourceKey，也不在请求中指定挂载。每次 POST 都创建新记录，没有上游幂等键，禁止为失败或超时自动重发创建。
+Studio 同时校验 HTTP 状态、成功码、空错误字段和资源绑定；HTTP 201 响应不符合合同或资源已删除时，将结果记为 `UNKNOWN`，等待人工核对。datasourceKey 由 SaaS 生成，固定为 12 位小写十六进制编码，可以数字开头。Studio 不预生成 datasourceKey，也不在请求中指定挂载。每次 POST 都创建新记录，没有上游幂等键，禁止为失败或超时自动重发创建。
 
 ## 唯一持久化位置
 

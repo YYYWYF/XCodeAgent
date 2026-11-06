@@ -426,8 +426,16 @@ def _runtime_terminal_process_title(
     if node_name in {"authorization_bootstrap", "builtin_authorization_bootstrap"}:
         result = state.get("authorization_bootstrap_result")
         if isinstance(result, dict) and result.get("executor") == "builtin_saas":
-            return ("权限数据库初始化已就绪" if result.get("schema_ready") else
-                    "权限表初始化执行中" if result.get("operation_status") == "RUNNING" else "权限表初始化未完成／待核对")
+            if result.get("schema_ready"):
+                if result.get("seed_ready"):
+                    return "权限表和权限数据已就绪"
+                if result.get("seed_operation_status") == "RUNNING" and result.get("next_action") == "refresh_seed":
+                    return "权限表已就绪，权限数据写入中"
+                if result.get("next_action") == "continue":
+                    return "权限表已就绪，权限数据待初始化"
+                return "权限表已就绪，权限数据待核对"
+            return ("权限表初始化执行中" if result.get("operation_status") == "RUNNING"
+                    else "权限表初始化未完成／待核对")
         if isinstance(result, dict) and result.get("failure_category") != "build_plan_invalid":
             title = {
                 "executed": "权限数据库初始化成功",

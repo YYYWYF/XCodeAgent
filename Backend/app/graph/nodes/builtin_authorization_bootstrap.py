@@ -1,4 +1,4 @@
-"""Builtin 独立权限 Schema 初始化节点，不执行模板 Java Bootstrap。"""
+"""Builtin 独立权限 Schema 与 Seed 初始化节点，不执行模板 Java Bootstrap。"""
 
 from app.graph.nodes.authorization_bootstrap import _build_plan_gate_error
 from app.graph.nodes.common import workspace_from_state

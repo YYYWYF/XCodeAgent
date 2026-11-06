@@ -17,7 +17,7 @@ from app.graph.state import ProjectState
 from app.services.authorization_bootstrap import authorization_bootstrap_enabled
 from app.services.application_config import read_application_config
 from pathlib import Path
-from app.services.builtin_authorization_state import schema_ready, uses_builtin_database
+from app.services.builtin_authorization_state import seed_ready, uses_builtin_database
 from app.persistence.checkpoints import (
     workflow_checkpoint_db_path,
     workflow_checkpointer,
@@ -71,7 +71,7 @@ def route_workflow_start(state: ProjectState) -> str:
         application = read_application_config(str(state.get("workspace") or ""))
         return select_authorization_bootstrap_node(state) if uses_builtin_database(application) else "authorization_bootstrap"
     if state.get("resume_from") == "builtin_authorization_bootstrap":
-        return "builtin_authorization_bootstrap"
+        return select_authorization_bootstrap_node(state)
     if state.get("resume_from") == "unit_test":
         return "unit_test"
     if state.get("resume_from") == "unit_test_repair":
@@ -286,7 +286,7 @@ def route_prepare_build_tasks(state: ProjectState) -> str:
 
 
 def select_authorization_bootstrap_node(state: ProjectState) -> str:
-    """仅按权威应用模式和本地 Schema 成功事实互斥分流，无任何副作用。"""
+    """仅按权威应用模式和本地 Schema 和 Seed 成功事实互斥分流，无任何副作用。"""
 
     workspace = str(state.get("workspace") or "").strip()
     if not _authorization_bootstrap_required(state):
@@ -294,7 +294,8 @@ def select_authorization_bootstrap_node(state: ProjectState) -> str:
     application = read_application_config(workspace)
     if not uses_builtin_database(application):
         return "authorization_bootstrap"
-    return "build" if schema_ready(Path(workspace).expanduser().resolve(), application) else "builtin_authorization_bootstrap"
+    return ("build" if seed_ready(Path(workspace).expanduser().resolve(), application, state.get("technical_plan") or {})
+            else "builtin_authorization_bootstrap")
 
 
 def _authorization_bootstrap_required(state: ProjectState) -> bool:

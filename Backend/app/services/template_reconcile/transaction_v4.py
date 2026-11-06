@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import tempfile
 from pathlib import Path
@@ -14,22 +15,24 @@ from app.services.workspace_bootstrap.models import TemplateStateError
 from app.utils.atomic_json import atomic_write_json
 
 _JOURNAL = WORKSPACE_ARTIFACT_DIR / "runtime/template-update-v4-journal"
+_BACKUP_NAME = re.compile(r"[0-9]+\.(?:before|after)|\.[0-9]+\.(?:before|after)\.v4\.[a-z0-9_]{8}")
 
 
 def recover_v4_transaction(workspace: str | Path) -> None:
     """在新请求前恢复未提交事务，或清除已提交的残留备份。"""
 
     root = Path(workspace).expanduser().resolve()
-    journal = root / _JOURNAL
+    journal = _target(root, _JOURNAL.as_posix())
     if not journal.exists():
         return
     manifest = journal / "manifest.json"
     if not manifest.exists():
-        # 清单只有在全部备份落盘后才创建；缺清单意味着尚未触碰工程文件。
-        for backup in journal.iterdir():
-            suffix = backup.suffix
-            if backup.is_symlink() or suffix not in {".before", ".after"} or not backup.stem.isdigit():
+        # 清单落盘前尚未修改工程文件，允许清理正式备份及中断遗留的备份临时文件。
+        backups = list(journal.iterdir())
+        for backup in backups:
+            if backup.is_symlink() or not backup.is_file() or not _BACKUP_NAME.fullmatch(backup.name):
                 raise TemplateStateError("TEMPLATE_UPDATE_RECOVERY_REQUIRED：V4 备份目录含未知文件。")
+        for backup in backups:
             backup.unlink()
         journal.rmdir()
         return
@@ -110,9 +113,10 @@ def _atomic_replace(target: Path, content: bytes, *, mode: int | None) -> None:
 
     descriptor, name = tempfile.mkstemp(prefix=f".{target.name}.v4.", dir=target.parent)
     try:
-        if mode is not None:
-            os.fchmod(descriptor, mode)
         with os.fdopen(descriptor, "wb") as handle:
+            # Windows Python 3.12 不提供 fchmod。权限设置失败时也要先关闭句柄再清理临时文件。
+            if mode is not None and hasattr(os, "fchmod"):
+                os.fchmod(handle.fileno(), mode)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())

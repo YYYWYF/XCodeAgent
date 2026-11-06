@@ -15,6 +15,8 @@ from app.config import Settings
 from app.protocols.data_sources import DataSourceRequest, data_sources_capabilities
 from app.services.managed_database_agui import ManagedDatabaseAgUiClient
 from app.services.managed_database_table_data import read_table_page, read_table_operations
+from app.services.managed_table_client import ManagedTableClient
+from tests.managed_database_http_fixture import saas_success
 
 
 class ManagedDatabaseTableDataTests(unittest.TestCase):
@@ -126,8 +128,15 @@ class ManagedDatabaseTableDataTests(unittest.TestCase):
                  "executionResult": {"errorCode": None, "errorSummary": None, "recoveryState": "NOT_REQUESTED", "sql": "private-sql"}}
         unrelated = {**entry, "operationId": "102", "mode": "DROP", "tableName": "other", "tableNames": ["other"]}
         bulk = {**entry, "operationId": "103", "mode": "RELEASE", "tableName": ""}
-        with patch("app.services.managed_database_table_data.ManagedTableClient") as remote:
-            remote.return_value.request.return_value = [entry, unrelated, bulk]
+        def reply(request: httpx.Request) -> httpx.Response:
+            """模拟包含操作数组的 SaaS 成功响应，确保历史只发起 GET。"""
+
+            self.assertEqual(request.method, "GET")
+            self.assertTrue(request.url.path.endswith("/table-operations"))
+            return saas_success(200, [entry, unrelated, bulk])
+
+        client = ManagedTableClient(Settings.from_env(), transport=httpx.MockTransport(reply))
+        with patch("app.services.managed_database_table_data.ManagedTableClient", return_value=client):
             result = read_table_operations(str(self.root), "database", self.table)
         self.assertEqual([item["operationId"] for item in result["operations"]], ["101", "103"])
         self.assertEqual(result["historyLimit"], 100)

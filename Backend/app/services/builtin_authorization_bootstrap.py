@@ -11,7 +11,10 @@ from app.services.application_config import read_application_config
 from app.services.authorization_bootstrap import authorization_bootstrap_enabled
 from app.services.authorization_table_projection import compile_authorization_tables
 from app.services.authorization_workspace_projector import ensure_projection, read_record
-from app.services.builtin_authorization_state import builtin_binding, builtin_lock, save_state, schema_ready
+from app.services.builtin_authorization_state import builtin_binding, builtin_lock, save_state, schema_ready, seed_ready
+from app.services.builtin_authorization_seed import read_confirmed_seed_plan
+from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient
+from app.services.builtin_authorization_seed_runtime import run_builtin_authorization_seed
 from app.services.managed_database_client import ManagedDatabaseRegistrationError
 from app.services.managed_table_client import ManagedTableClient
 
@@ -65,17 +68,34 @@ def _operation(raw: object, targets: list[str], operation_id: str | None = None)
 def _ready(root: Path, record: dict) -> dict:
     """只有远端完整结构核验后记录 Schema 就绪，明确 Seed 未执行。"""
 
-    binding = builtin_binding(read_application_config(root))
+    application = read_application_config(root)
+    if (application.get("authorization") or {}).get("enabled") is not True:
+        raise ValueError("权限已关闭，不能记录权限 Schema 就绪。")
+    binding = builtin_binding(application)
     compiled = compile_authorization_tables(root, binding["datasourceKey"])
     if (any(record.get(key) != value for key, value in binding.items())
             or compiled["ddlFingerprint"] != record["ddlFingerprint"]):
         raise ValueError("权限表检查期间数据库绑定或 DDL 已变化。")
-    record.update(status="schema_ready", schemaReady=True, seedReady=False, verifiedAt=datetime.now(UTC).isoformat())
+    record.update(status="schema_ready", schemaReady=True, verifiedAt=datetime.now(UTC).isoformat())
     save_state(root, record)
-    return _result(record, "executed", "权限数据库初始化已就绪。", initialized_tables=compiled["tables"])
+    if "seed" in record:
+        try:
+            ready = seed_ready(root, application, read_confirmed_seed_plan(root))
+        except (OSError, ValueError):
+            ready = False
+        if ready:
+            return _result(record, "executed", "权限表和权限数据已核验就绪。",
+                           initialized_tables=compiled["tables"], seed_ready=True, next_action="none",
+                           seed_operation_id=record["seed"]["operationId"], seed_operation_status="SUCCEEDED")
+        return _result(record, "executed", "权限表已核验就绪，请查看权限数据原操作。",
+                       initialized_tables=compiled["tables"], next_action="review")
+    return _result(record, "executed", "权限表已核验就绪，请继续初始化权限数据。",
+                   initialized_tables=compiled["tables"], next_action="continue", requires_manual_action=True)
 
 
-def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *, client: ManagedTableClient | None = None, explicit_recovery: bool = False) -> dict:
+def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *, client: ManagedTableClient | None = None,
+                                        seed_client: ManagedAuthorizationSeedClient | None = None,
+                                        explicit_recovery: bool = False, schema_only: bool = False) -> dict:
     """读取权威配置并串行执行；普通 Build 仅自动提交一次，显式恢复才允许明确失败重试。"""
 
     root = Path(workspace).expanduser().resolve()
@@ -98,9 +118,13 @@ def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *,
             stage = "projection"
             ensure_projection(root, binding["datasourceKey"])
             if schema_ready(root, application):
-                return _result(record, "reused", "权限数据库初始化已就绪（复用已有结果）。", initialized_tables=compiled["tables"])
+                if schema_only:
+                    return _result(record, "reused", "四张权限表已核验，复用已有表。",
+                                   initialized_tables=compiled["tables"], next_action="continue",
+                                   operation_status="SCHEMA_READY")
+                return run_builtin_authorization_seed(root, record, compiled["tables"], technical_plan, client=seed_client)
             record = record or {"schemaVersion": 1, "datasourceMode": "builtin", **binding,
-                                "ddlFingerprint": compiled["ddlFingerprint"], "schemaReady": False, "seedReady": False}
+                                "ddlFingerprint": compiled["ddlFingerprint"], "schemaReady": False}
             remote = client or ManagedTableClient(Settings.from_env())
             stage = "remote"
             return _run_remote(root, record, binding, compiled, remote, explicit_recovery)
@@ -178,11 +202,22 @@ def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote:
     return _result(record, "manual_required", "权限建表请求已受理，请点击“刷新执行状态”查看结果。", requires_manual_action=False)
 
 
+def _verify_schema_inputs(root: Path, binding: dict, compiled: dict) -> None:
+    """拒绝将延迟的 Schema 回执写入已关闭权限、换库或修改 DDL 的工作区。"""
+
+    application = read_application_config(root)
+    if ((application.get("authorization") or {}).get("enabled") is not True
+            or builtin_binding(application) != binding
+            or compile_authorization_tables(root, binding["datasourceKey"])["ddlFingerprint"] != compiled["ddlFingerprint"]):
+        raise ValueError("权限 Schema 查询期间当前应用输入已变化。")
+
+
 def _query_operation(root: Path, record: dict, binding: dict, compiled: dict, remote: ManagedTableClient) -> dict:
     """仅查询原批次一次，成功后核验结构；不会轮询或提交 SQL。"""
 
     operation_id = record["operationId"]
     operation = _operation(remote.request(binding["datasourceKey"], f"table-operations/{operation_id}"), compiled["tables"], operation_id)
+    _verify_schema_inputs(root, binding, compiled)
     record.update(status=operation["status"].lower(), steps=operation["steps"])
     save_state(root, record)
     if operation["status"] == "SUCCEEDED":
@@ -200,7 +235,10 @@ def refresh_builtin_authorization(workspace: str, operation_id: str, *, client: 
 
     root = Path(workspace).expanduser().resolve()
     with builtin_lock(root):
-        binding = builtin_binding(read_application_config(root))
+        application = read_application_config(root)
+        if (application.get("authorization") or {}).get("enabled") is not True:
+            raise ValueError("权限已关闭，不能刷新旧操作。")
+        binding = builtin_binding(application)
         compiled = compile_authorization_tables(root, binding["datasourceKey"])
         record = read_record(root, "state.json")
         if (record.get("operationId") != operation_id

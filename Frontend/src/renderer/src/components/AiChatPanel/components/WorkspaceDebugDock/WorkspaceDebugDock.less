@@ -26,6 +26,45 @@
   gap: 4px;
 }
 
+.@{class-prefix}-builtin-patch-card {
+  display: flex;
+  width: auto;
+  max-height: min(36vh, 290px);
+  overflow: auto;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 11px;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-builtin-patch-heading,
+.@{class-prefix}-builtin-patch-steps,
+.@{class-prefix}-builtin-patch-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.@{class-prefix}-builtin-patch-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li[aria-current='step'] {
+    padding: 0 5px;
+    color: var(--wb-text);
+    background: var(--wb-accent-soft);
+    border-radius: 4px;
+  }
+}
+
 .@{class-prefix}-workspace-debug-panel-header {
   display: flex;
   min-width: 0;
@@ -85,6 +124,10 @@
   .@{class-prefix}-ai-chat-composer-column {
     width: 100%;
     gap: 0;
+  }
+
+  .@{class-prefix}-builtin-patch-card {
+    margin: 4px 7px 7px;
   }
 
   .@{class-prefix}-ai-chat-composer-frame {

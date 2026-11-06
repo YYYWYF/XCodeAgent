@@ -1,6 +1,6 @@
 import { BugOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import type { EditorMode, WorkflowDebugOptions, WorkflowRunPayload } from '../../../../typings'
 import { cx } from '../../../../utils'
 import ChatComposer from '../ChatComposer'
@@ -12,6 +12,7 @@ const { Text } = Typography
 type Props = {
   controlsOnly?: boolean
   activeWorkflow?: WorkflowRunPayload
+  builtinPatchContent?: ReactNode
   copy: ChatCopy[EditorMode]
   initialResumeFrom: string
   loading: boolean
@@ -30,6 +31,7 @@ const ignoreSelectedSkillsChange = (): void => undefined
 export default function WorkspaceDebugDock({
   controlsOnly = false,
   activeWorkflow,
+  builtinPatchContent,
   copy,
   initialResumeFrom,
   loading,
@@ -60,6 +62,7 @@ export default function WorkspaceDebugDock({
         <div className={cx('workspace-debug-composer')}>
           <ChatComposer
             activeWorkflow={activeWorkflow}
+            builtinPatchContent={builtinPatchContent}
             copy={copy}
             debugOnly
             draft=""
