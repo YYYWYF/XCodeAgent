@@ -17,6 +17,8 @@ from app.domain.development_artifacts import (
     TestEntryGate,
 )
 from app.services.repository_branch import read_workspace_branch_name
+from app.services.backend_module_scope import scope_endpoint_keys
+from app.services.unit_task_manifest import backend_module_unit_id
 from app.workspace.detail_design_documents import hydrate_external_detail_designs
 
 INITIAL_DEVELOPMENT_PHASES = frozenset({
@@ -44,7 +46,7 @@ def _target_unit_id(target: DevelopmentArtifactTarget) -> str | None:
     if target.type == "page":
         return f"page:{target.page_id}"
     if target.type == "endpoint":
-        return f"backend:endpoint:{target.api_contract_id}:{target.endpoint_id}"
+        return backend_module_unit_id(target.api_contract_id or "")
     return None
 
 
@@ -58,13 +60,24 @@ def in_scope_unit_ids(workspace: str | Path) -> set[str] | None:
     计划缺失或不可解析时返回 None，调用方不记录范围外目标。
     """
 
+    plan = _build_plan_for_scope(workspace)
+    return _scoped_unit_ids(plan) if plan is not None else None
+
+
+def _build_plan_for_scope(workspace: str | Path) -> dict[str, Any] | None:
+    """读取一次正式计划，供 Unit 和接口范围诊断使用同一份数据。"""
+
     plan_path = Path(workspace).expanduser().resolve() / _BUILD_PLAN_RELATIVE_PATH
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    if not isinstance(plan, dict):
-        return None
+    return plan if isinstance(plan, dict) else None
+
+
+def _scoped_unit_ids(plan: dict[str, Any]) -> set[str] | None:
+    """提取当前计划中本轮写入了输入指纹的 Unit。"""
+
     units = plan.get("build_units")
     if not isinstance(units, dict):
         return None
@@ -80,15 +93,26 @@ def out_of_scope_keys(
 ) -> list[str]:
     """列出本次迭代范围之外的产物键；无法判定范围时返回空列表。"""
 
-    scope = in_scope_unit_ids(workspace)
-    if scope is None:
+    plan = _build_plan_for_scope(workspace)
+    units = _scoped_unit_ids(plan) if plan is not None else None
+    if plan is None or units is None:
         return []
+    scope = plan.get("build_execution_scope")
+    scoped_endpoints = isinstance(scope, dict) and scope.get("type") in {"page", "endpoint"} and bool(scope.get("targetId"))
+    registry = plan.get("task_registry")
+    tasks = [task for task in registry.values() if isinstance(task, dict)] if isinstance(registry, dict) else []
+    endpoint_keys = scope_endpoint_keys(tasks, scope) if scoped_endpoints else set()
     keys: list[str] = []
     for target in targets:
         unit_id = _target_unit_id(target)
-        if unit_id is None or unit_id in scope:
+        if unit_id is None:
             continue
-        keys.append(development_artifact_key(target))
+        endpoint_outside = (
+            target.type == "endpoint" and scoped_endpoints
+            and (target.api_contract_id, target.endpoint_id) not in endpoint_keys
+        )
+        if unit_id not in units or endpoint_outside:
+            keys.append(development_artifact_key(target))
     return keys
 
 

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from hashlib import sha256
+import json
 from typing import Any
+from urllib.parse import quote
 
 from app.services.business_acceptance import canonical_frontend_api_module_path, frontend_api_task_id
-from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.unit_generation_contracts import GenerationRequirement, UnitGenerationContext
 
 
 def _text(value: Any) -> str:
@@ -15,139 +18,71 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) and value and value == value.strip() else ""
 
 
-_ENDPOINT_STAGE_BY_KIND = {
-    "backend.objects": "objects",
-    "backend.repository": "repository",
-    "backend.upstream": "upstream",
-    "backend.application_service": "service",
-    "backend.endpoint_controller": "controller",
-}
-_REQUIREMENT_PREFIX_BY_KIND = {
-    "backend.objects": "backend.endpoint.objects",
-    "backend.repository": "backend.repository",
-    "backend.upstream": "backend.upstream",
-    "backend.application_service": "backend.application_service",
-    "backend.endpoint_controller": "backend.endpoint_controller",
-}
-_STAGE_ORDER = {
-    "objects": 0,
-    "repository": 1,
-    "upstream": 1,
-    "service": 2,
-    "controller": 3,
-}
+_BUSINESS_KINDS = frozenset({
+    "backend.objects", "backend.repository", "backend.upstream", "backend.application_service",
+})
 PHYSICAL_SOURCE_TYPES = frozenset({"database", "external_api"})
+BACKEND_MODULE_PREFIX = "backend:module:"
+BACKEND_STAGE_LABELS = {
+    "foundation": "模块基础骨架",
+    "business": "接口业务实现",
+    "controller": "模块 Controller",
+}
 
 
-def _source_types(refs: Mapping[str, Any]) -> tuple[str, ...] | None:
-    """读取 Endpoint responsibility 携带的完整有序物理来源集合。"""
-
-    values = refs.get("data_source_types")
-    if not isinstance(values, (list, tuple)):
-        return None
-    result = tuple(value for value in values if _text(value))
-    if (
-        len(result) != len(values)
-        or len(set(result)) != len(result)
-        or tuple(sorted(result)) != result
-        or set(result) - PHYSICAL_SOURCE_TYPES
-    ):
-        return None
-    return result
+def backend_module_unit_id(contract_id: str) -> str:
+    """为 API Contract 派生稳定的后端模块 Unit 身份。"""
+    return f"{BACKEND_MODULE_PREFIX}{contract_id}"
 
 
-def _endpoint_task_id(unit_id: str, stage: str) -> str:
-    """使用已含 Endpoint 身份的 Unit ID 生成唯一阶段 Task ID。"""
+def backend_bootstrap_task_id(context: UnitGenerationContext) -> str:
+    """按新增来源集合生成基础设施任务身份，避免后续接入另一来源时冲突。"""
+    sources = sorted({_text(item.source_refs.get("data_source_type")) for item in context.generation_requirements})
+    if not sources or set(sources) - PHYSICAL_SOURCE_TYPES:
+        raise ValueError("Bootstrap 缺少有效的物理来源。")
+    return f"backend:bootstrap::{'+'.join(sources)}::bootstrap"
 
-    return f"{unit_id}::{stage}"
 
-
-def backend_stage_manifest(
-    context: UnitGenerationContext,
-) -> tuple[dict[str, Any], ...]:
-    """把 Endpoint responsibilities 编译为不含实体身份的固定阶段清单。"""
-
-    result: list[dict[str, Any]] = []
+def backend_stage_manifest(context: UnitGenerationContext) -> tuple[dict[str, Any], ...]:
+    """将模块职责编译为基础骨架、串行单接口业务和统一 Controller 清单。"""
+    groups: dict[tuple[str, str], list[GenerationRequirement]] = {}
     for requirement in context.generation_requirements:
         refs = requirement.source_refs
-        kind = _text(refs.get("kind"))
-        stage = _ENDPOINT_STAGE_BY_KIND.get(kind, "")
-        api_contract_id = _text(refs.get("api_contract_id"))
-        endpoint_id = _text(refs.get("endpoint_id"))
-        target_id = _text(refs.get("target_id"))
-        source_types = _source_types(refs)
-        expected_unit_id = f"backend:endpoint:{api_contract_id}:{endpoint_id}"
-        expected_requirement_id = (
-            f"{_REQUIREMENT_PREFIX_BY_KIND.get(kind, '')}:{api_contract_id}:{endpoint_id}"
-        )
-        if (
-            not stage
-            or not api_contract_id
-            or not endpoint_id
-            or target_id != endpoint_id
-            or source_types is None
-            or expected_unit_id != context.unit_id
-            or requirement.requirement_id != expected_requirement_id
-            or refs.get("artifact") != "endpoint-api-design"
-            or "entity_id" in refs
-        ):
-            raise ValueError(
-                f"Backend Endpoint Unit {context.unit_id} 含无法绑定到当前 Endpoint 的职责。"
-            )
-        result.append({
-            "requirement_id": requirement.requirement_id,
-            "api_contract_id": api_contract_id,
-            "endpoint_id": endpoint_id,
-            "data_source_types": list(source_types),
-            "stage": stage,
-            "task_id": _endpoint_task_id(context.unit_id, stage),
-            "deliverable_kind": kind,
-        })
-    stages = [item["stage"] for item in result]
-    if len(stages) != len(set(stages)):
-        raise ValueError(f"Backend Endpoint Unit {context.unit_id} 含重复 Endpoint responsibility。")
-    retained_task_ids = {
-        task_id
-        for summary in context.dependency_context.get("retained_task_summaries", ())
-        if isinstance(summary, Mapping)
-        and (task_id := _text(summary.get("id")))
-        and summary.get("unit_id") in {None, context.unit_id}
-    }
-    available_task_ids = {
-        item["task_id"] for item in result
-    } | retained_task_ids
-    for item in result:
-        source_types = set(item["data_source_types"])
-        objects_id = _endpoint_task_id(context.unit_id, "objects")
-        branch_ids = [
-            _endpoint_task_id(context.unit_id, stage)
-            for source_type, stage in (
-                ("database", "repository"),
-                ("external_api", "upstream"),
-            )
-            if source_type in source_types
-            and _endpoint_task_id(context.unit_id, stage) in available_task_ids
-        ]
-        service_id = _endpoint_task_id(context.unit_id, "service")
-        if item["stage"] == "objects":
-            dependencies: list[str] = []
-        elif item["stage"] in {"repository", "upstream"}:
-            dependencies = [objects_id] if objects_id in available_task_ids else []
-        elif item["stage"] == "service":
-            dependencies = branch_ids or (
-                [objects_id] if objects_id in available_task_ids else []
-            )
+        kind = refs.get("kind")
+        endpoint = _text(refs.get("endpoint_id"))
+        contract = _text(refs.get("api_contract_id"))
+        if not endpoint or not contract or context.unit_id != backend_module_unit_id(contract):
+            raise ValueError(f"模块 {context.unit_id} 的职责缺少精确接口身份。")
+        if refs.get("artifact") != "endpoint-api-design" or refs.get("target_id") != endpoint:
+            raise ValueError("模块职责必须绑定已确认 Endpoint 设计。")
+        if kind == "backend.foundation":
+            stage, group = "foundation", ""
+        elif kind == "backend.endpoint_controller":
+            stage, group = "controller", ""
+        elif kind in _BUSINESS_KINDS:
+            stage, group = "business", endpoint
         else:
-            dependencies = (
-                [service_id]
-                if service_id in available_task_ids
-                else branch_ids or ([objects_id] if objects_id in available_task_ids else [])
-            )
-        item["dependencies"] = dependencies
-    return tuple(sorted(
-        result,
-        key=lambda item: (_STAGE_ORDER[item["stage"]], item["requirement_id"]),
-    ))
+            raise ValueError(f"未知后端职责：{kind}")
+        groups.setdefault((stage, group), []).append(requirement)
+    result: list[dict[str, Any]] = []
+    order = {stage: index for index, stage in enumerate(BACKEND_STAGE_LABELS)}
+    for (stage, endpoint), requirements in sorted(groups.items(), key=lambda item: (order[item[0][0]], item[0][1])):
+        requirements = sorted(requirements, key=lambda item: item.requirement_id)
+        requirement_ids = [item.requirement_id for item in requirements]
+        suffix = quote(endpoint, safe="") if stage == "business" else sha256(
+            json.dumps(requirement_ids, ensure_ascii=False).encode()).hexdigest()[:16]
+        result.append({
+            "key": f"business:{endpoint}" if stage == "business" else stage,
+            "task_id": f"{context.unit_id}::{suffix}::{stage}",
+            "stage": stage,
+            "api_contract_id": context.unit_id.removeprefix(BACKEND_MODULE_PREFIX),
+            "endpoint_ids": sorted({item.source_refs["endpoint_id"] for item in requirements}),
+            "requirement_ids": requirement_ids,
+            "data_source_types": sorted({value for item in requirements for value in item.source_refs.get("data_source_types", ())}),
+            "deliverables": [{"kind": item.source_refs["kind"], "target_id": item.source_refs["endpoint_id"],
+                              "provides": [item.requirement_id]} for item in requirements],
+        })
+    return tuple(result)
 
 
 def frontend_api_task_manifest(
@@ -194,8 +129,8 @@ def frontend_api_task_manifest(
 def unit_task_identity_manifest(context: UnitGenerationContext) -> dict[str, tuple[str, ...]]:
     """将当前全部增量职责分组到固定任务 ID，不读取模型内容或历史候选。"""
 
-    if context.unit_kind == "backend" and context.unit_id.startswith("backend:endpoint:"):
-        return {item["task_id"]: (item["requirement_id"],) for item in backend_stage_manifest(context)}
+    if context.unit_kind == "backend" and context.unit_id.startswith(BACKEND_MODULE_PREFIX):
+        return {item["task_id"]: tuple(item["requirement_ids"]) for item in backend_stage_manifest(context)}
     if context.unit_kind == "frontend" and context.unit_id == "frontend:api-client":
         return {item["task_id"]: tuple(item["requirement_ids"]) for item in frontend_api_task_manifest(context)}
     if context.unit_kind == "page" and context.unit_id.startswith("page:"):
@@ -203,7 +138,7 @@ def unit_task_identity_manifest(context: UnitGenerationContext) -> dict[str, tup
     elif context.unit_kind == "frontend" and context.unit_id == "frontend:data:static":
         task_id, expected_kind = f"{context.unit_id}::data-module", "frontend.static_data_module"
     elif context.unit_kind == "backend" and context.unit_id == "backend:bootstrap":
-        task_id, expected_kind = "backend:bootstrap::bootstrap", "backend.bootstrap"
+        task_id, expected_kind = backend_bootstrap_task_id(context), "backend.bootstrap"
     else:
         raise ValueError(f"Unit {context.unit_id} 没有确定性任务身份清单。")
     if any(item.source_refs.get("kind") != expected_kind for item in context.generation_requirements):

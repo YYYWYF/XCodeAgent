@@ -11,6 +11,7 @@ from typing import Any
 
 from app.services.frontend_page_tree import project_plan_page_records
 from app.services.authorization_resource_catalog import authorization_resource_consumer_page_ids
+from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX, backend_module_unit_id
 
 
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
@@ -80,11 +81,11 @@ def _build_units(
     project_plan: dict[str, Any],
     existing_units: Any,
 ) -> dict[str, dict[str, Any]]:
-    """从确认计划构造公共、静态数据、endpoint 和页面 Unit，并保留已有状态。"""
+    """从确认计划构造公共、后端模块和页面 Unit，并保留同一 Unit 的状态。"""
 
     existing = existing_units if isinstance(existing_units, dict) else {}
     unit_ids = ["application:root", *_public_unit_ids(project_plan)]
-    unit_ids.extend(_endpoint_unit_ids(project_plan.get("api_contracts")))
+    unit_ids.extend(_backend_module_unit_ids(project_plan.get("api_contracts")))
     unit_ids.extend(
         f"page:{page_id}"
         for page_id in _ids(project_plan_page_records(project_plan), "pageId")
@@ -112,14 +113,7 @@ def _unit_definition(unit_id: str, existing_unit: Any) -> dict[str, Any]:
             if target_id.startswith("data:")
             else {}
         ),
-        **(
-            {
-                "api_contract_id": target_id.split(":", 1)[0],
-                "endpoint_id": target_id.split(":", 1)[1],
-            }
-            if kind == "backend" and ":" in target_id
-            else {}
-        ),
+        **({"api_contract_id": target_id} if unit_id.startswith(BACKEND_MODULE_PREFIX) else {}),
         "status": existing.get("status", "not_prepared"),
         "task_ids": list(existing.get("task_ids") or []),
         "depends_on_unit_ids": list(existing.get("depends_on_unit_ids") or []),
@@ -158,19 +152,13 @@ def _unit_graph(
         for contract in _dict_items(project_plan.get("page_implementation_contracts"))
         if contract.get("pageId") or contract.get("id")
     }
-    for contract in contracts:
-        contract_id = str(contract.get("id") or "")
-        for endpoint in _dict_items(contract.get("endpoints")):
-            endpoint_id = str(endpoint.get("id") or "")
-            if not contract_id or not endpoint_id:
-                continue
-            endpoint_unit_id = _endpoint_unit_id(contract_id, endpoint_id)
-            if endpoint_unit_id not in build_units:
-                errors.append(f"API contract {contract_id} endpoint {endpoint_id} has no Unit.")
-                continue
-            edges.append({"from": "application:root", "to": endpoint_unit_id, "type": "contains"})
-            edges.append({"from": "backend:bootstrap", "to": endpoint_unit_id, "type": "depends_on"})
-            edges.append({"from": endpoint_unit_id, "to": "app:integration", "type": "depends_on"})
+    for module_unit_id in _backend_module_unit_ids(contracts):
+        if module_unit_id not in build_units:
+            errors.append(f"API contract backend module {module_unit_id} has no Unit.")
+            continue
+        edges.append({"from": "application:root", "to": module_unit_id, "type": "contains"})
+        edges.append({"from": "backend:bootstrap", "to": module_unit_id, "type": "depends_on"})
+        edges.append({"from": module_unit_id, "to": "app:integration", "type": "depends_on"})
 
     auth_resource_pages = authorization_resource_consumer_page_ids(project_plan)
     for page in project_plan_page_records(project_plan):
@@ -192,12 +180,11 @@ def _unit_graph(
             page,
             page_contracts_by_id.get(page_id),
         )
-        endpoint_unit_ids = _page_endpoint_unit_ids(dependency_source, contracts)
-        for endpoint_unit_id in endpoint_unit_ids:
-            if endpoint_unit_id not in build_units:
-                errors.append(f"Page {page_id} references unknown endpoint Unit {endpoint_unit_id}.")
+        for module_unit_id in _page_backend_module_unit_ids(dependency_source, contracts):
+            if module_unit_id not in build_units:
+                errors.append(f"Page {page_id} references unknown backend module Unit {module_unit_id}.")
                 continue
-            edges.append({"from": endpoint_unit_id, "to": page_unit_id, "type": "depends_on"})
+            edges.append({"from": module_unit_id, "to": page_unit_id, "type": "depends_on"})
         edges.append({"from": page_unit_id, "to": "app:integration", "type": "depends_on"})
 
     return {
@@ -242,7 +229,7 @@ def _skeleton_fingerprint(
     """为 Unit 骨架输入生成稳定指纹，供后续页面请求复用。"""
 
     payload = {
-        "skeleton_policy": "frontend-shell-prerequisite-only",
+        "skeleton_policy": "backend-module-units-and-shell-prerequisite",
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),
@@ -271,27 +258,16 @@ def _ids(value: Any, key: str) -> list[str]:
     )
 
 
-def _endpoint_unit_ids(
-    value: Any,
-) -> list[str]:
-    """从 API 契约清单中为每个 Endpoint 生成后端 Unit ID。"""
+def _backend_module_unit_ids(value: Any) -> list[str]:
+    """每个包含正式 Endpoint 的 API Contract 只注册一个后端模块 Unit。"""
 
-    result: list[str] = []
-    for contract in _dict_items(value):
-        contract_id = str(contract.get("id") or "")
-        if not contract_id:
-            continue
-        for endpoint in _dict_items(contract.get("endpoints")):
-            endpoint_id = str(endpoint.get("id") or "")
-            if endpoint_id:
-                result.append(_endpoint_unit_id(contract_id, endpoint_id))
-    return list(dict.fromkeys(result))
-
-
-def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
-    """生成 backend endpoint Unit 的稳定复合标识。"""
-
-    return f"backend:endpoint:{api_contract_id}:{endpoint_id}"
+    return list(dict.fromkeys(
+        backend_module_unit_id(str(contract["id"]))
+        for contract in _dict_items(value)
+        if contract.get("id") and any(
+            endpoint.get("id") for endpoint in _dict_items(contract.get("endpoints"))
+        )
+    ))
 
 
 def _unit_identity(unit_id: str) -> tuple[str, str]:
@@ -299,8 +275,8 @@ def _unit_identity(unit_id: str) -> tuple[str, str]:
 
     if unit_id.startswith("page:"):
         return "page", unit_id.removeprefix("page:")
-    if unit_id.startswith("backend:endpoint:"):
-        return "backend", unit_id.removeprefix("backend:endpoint:")
+    if unit_id.startswith(BACKEND_MODULE_PREFIX):
+        return "backend", unit_id.removeprefix(BACKEND_MODULE_PREFIX)
     if unit_id.startswith("backend:"):
         return "backend", unit_id.removeprefix("backend:")
     if unit_id.startswith("frontend:"):
@@ -308,11 +284,11 @@ def _unit_identity(unit_id: str) -> tuple[str, str]:
     return "application", ""
 
 
-def _page_endpoint_unit_ids(
+def _page_backend_module_unit_ids(
     page: dict[str, Any],
     api_contracts: list[dict[str, Any]],
 ) -> list[str]:
-    """根据页面 endpoint 依赖生成精确 endpoint Unit 引用。"""
+    """将页面依赖的 Endpoint 映射到去重的后端模块 Unit。"""
 
     references = page.get("references") if isinstance(page.get("references"), dict) else {}
     dependencies = references.get("endpoint_dependencies") or page.get("endpoint_dependencies") or []
@@ -330,11 +306,11 @@ def _page_endpoint_unit_ids(
             endpoint_id = str(endpoint.get("id") or "")
             if contract_id and endpoint_id:
                 endpoint_to_contract.setdefault(endpoint_id, contract_id)
-    return [
-        _endpoint_unit_id(endpoint_to_contract[endpoint_id], endpoint_id)
-        for endpoint_id in dict.fromkeys(endpoint_ids)
+    return list(dict.fromkeys(
+        backend_module_unit_id(endpoint_to_contract[endpoint_id])
+        for endpoint_id in endpoint_ids
         if endpoint_id in endpoint_to_contract
-    ]
+    ))
 
 
 def _unique_edges(edges: list[dict[str, str]]) -> list[dict[str, str]]:

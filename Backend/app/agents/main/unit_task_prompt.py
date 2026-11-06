@@ -17,6 +17,7 @@ from app.services.business_acceptance import DELIVERABLE_KINDS
 from app.services.planning_frozen import plain_json
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX
 
 
 def _stable_json(value: Any) -> str:
@@ -57,7 +58,21 @@ def _retained_task_summaries(context: UnitGenerationContext) -> list[dict[str, A
 
 
 def _output_contract(context: UnitGenerationContext) -> str:
-    """声明严格 Raw Candidate envelope 与后续 Local Validator 所需 Task 字段。"""
+    """按 Unit 声明精简文件计划或完整 Candidate 的输出格式。"""
+
+    if context.unit_id.startswith(BACKEND_MODULE_PREFIX):
+        return (
+            "## 2. Strict Output Contract\n"
+            "Return only one JSON object with the single top-level key `tasks`. "
+            "Each task contains exactly `key`, `title`, and `files`. Each file contains "
+            "exactly `path`, `operation` (add or modify), `description`, and `covers` "
+            "(a list of 1-based deliverable indices). Use the exact task keys and "
+            "deliverable indices in the module manifest. Include no IDs, dependencies, "
+            "deliverable objects, or other platform fields. Example file plan shape:\n"
+            '{"tasks":[{"key":"<manifest key>","title":"简体中文标题","files":'
+            '[{"path":"<workspace-relative path>","operation":"add",'
+            '"description":"该文件的精确变更","covers":[1]}]}]}'
+        )
 
     deliverable_kinds = ", ".join(f"`{kind}`" for kind in DELIVERABLE_KINDS)
     requirement_contracts = requirement_output_contracts(
@@ -198,6 +213,15 @@ def build_unit_generation_prompt(
         for requirement in frozen_context.generation_requirements
     ]
     retained_summaries = _retained_task_summaries(frozen_context)
+    dependency_rules = (
+        "The platform sets module task dependencies. Use retained summaries to reuse existing "
+        "work without recreating responsibilities.\n"
+        if frozen_context.unit_id.startswith(BACKEND_MODULE_PREFIX)
+        else "A Task dependency may reference only (a) another Task ID returned in this same "
+        "Candidate or (b) an ID in the current Unit retained summaries below. Never "
+        "reference a Task from another Candidate, a cross-Unit Task, an unknown Task, "
+        "or a Unit ID. The platform compiles cross-Unit dependencies later.\n"
+    )
     sections = [
         (
             "## 1. Single Unit Role & Boundary\n"
@@ -228,11 +252,8 @@ def build_unit_generation_prompt(
         ),
         (
             "## 5. Dependency Allowlist\n"
-            "A Task dependency may reference only (a) another Task ID returned in this same "
-            "Candidate or (b) an ID in the current Unit retained summaries below. Never "
-            "reference a Task from another Candidate, a cross-Unit Task, an unknown Task, "
-            "or a Unit ID. The platform compiles cross-Unit dependencies later.\n"
-            "Current Unit retained task summaries:\n"
+            + dependency_rules
+            + "Current Unit retained task summaries:\n"
             + _stable_json(retained_summaries)
         ),
         (

@@ -4,7 +4,8 @@
 
 ## 仓储接口
 
-定义业务需要的持久化方法签名。方法用领域实体（Entity），不用 PO。
+基础骨架阶段只创建接口、实现类和 Mapper 注入。以下示例展示业务任务完成后的形态。
+单接口业务任务按需增加方法和转换。仓储边界使用标量、必要的领域对象或内部投影，PO 留在持久层。
 
 ```java
 package com.cmbchina.backend.project.domain.repository;

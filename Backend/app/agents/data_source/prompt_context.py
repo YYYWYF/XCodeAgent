@@ -9,6 +9,7 @@ from app.services.builtin_skills import (
     SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME,
 )
 from app.services.api_design import api_design_business_descriptions
+from app.services.unit_task_manifest import BACKEND_STAGE_LABELS
 
 
 _SOURCE_REFERENCE_DIRECTORIES = {
@@ -139,7 +140,7 @@ def task_implementation_contract(
     project_plan: dict[str, Any],
     task: dict[str, Any],
 ) -> dict[str, Any]:
-    """按 bootstrap 或 endpoint 边界生成唯一且不混入全局计划的实现契约。"""
+    """按基础环境、骨架、单接口业务和共享 Controller 编译各自的只读契约。"""
 
     if _task_kind(task) == "bootstrap":
         source_types = task_data_source_types([task])
@@ -185,6 +186,7 @@ def task_implementation_contract(
             "verification_policy": _OUTER_VERIFICATION_POLICY,
         }
 
+    stage = _task_stage(task)
     contract_ids, endpoint_ids, entity_ids = _task_scope_ids([task])
     api_contracts = _scoped_api_contracts(
         project_plan,
@@ -193,41 +195,77 @@ def task_implementation_contract(
         entity_ids,
     )
     endpoint_designs = task_endpoint_designs(task)
-    if len(endpoint_designs) != 1:
-        raise ValueError("Backend Endpoint Task 必须且只能携带一个已确认 Endpoint API 设计。")
-    source_refs = task.get("source_refs")
-    source_refs = source_refs if isinstance(source_refs, dict) else {}
-    return {
+    if len(api_contracts) != 1 or {item["id"] for item in api_contracts[0]["endpoints"]} != endpoint_ids:
+        raise ValueError("后端模块任务的接口范围必须来自同一个已确认 API Contract。")
+    design_ids = {
+        item.get("endpointId") for item in endpoint_designs
+        if item.get("apiContractId") == api_contracts[0]["id"]
+    }
+    if not endpoint_ids or design_ids != endpoint_ids or len(endpoint_designs) != len(design_ids):
+        raise ValueError("后端模块任务必须为每个范围内的 Endpoint 携带一个已确认 API 设计。")
+    contract = {
         "kind": "endpoint",
-        "api_contract": api_contracts[0] if api_contracts else {},
+        "language": {"java_version": "8"},
+        "verification_policy": _OUTER_VERIFICATION_POLICY,
+    }
+    if stage == "foundation":
+        return {**contract, "source_snapshots": _foundation_source_snapshots(endpoint_designs)}
+    contract["api_contract"] = api_contracts[0]
+    if stage == "controller":
+        return {**contract, "authorization_constraints": _endpoint_authorization_constraints(task)}
+    if len(endpoint_designs) != 1:
+        raise ValueError("后端业务任务必须且只能携带一个已确认 Endpoint API 设计。")
+    source_refs = task["source_refs"]
+    return {
+        **contract,
         "api_design": endpoint_designs[0],
         "business_descriptions": [
             dict(item)
             for item in source_refs.get("business_descriptions") or api_design_business_descriptions(endpoint_designs)
             if isinstance(item, dict)
         ],
-        "authorization_constraints": _endpoint_authorization_constraints(task),
-        "language": {"java_version": "8"},
-        "verification_policy": _OUTER_VERIFICATION_POLICY,
     }
 
 
-def _endpoint_authorization_constraints(task: dict[str, Any]) -> dict[str, Any] | None:
-    """把平台注入的单 Endpoint 权限切片收敛为只读 Java 实现契约。"""
+def _foundation_source_snapshots(endpoint_designs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为基础阶段保留表结构和上游连接，去掉外部 Operation 的业务合同。"""
 
-    source_refs = task.get("source_refs")
-    source_refs = source_refs if isinstance(source_refs, dict) else {}
-    authorization = source_refs.get("authorization")
+    snapshots: list[dict[str, Any]] = []
+    for design in endpoint_designs:
+        for snapshot in _dict_items(design.get("sourceSnapshots")):
+            source_type = snapshot.get("sourceType")
+            if source_type == "external_api":
+                snapshot = {
+                    **snapshot,
+                    "details": {"connection": snapshot.get("details", {}).get("connection")},
+                }
+            if source_type in _SOURCE_REFERENCE_DIRECTORIES and snapshot not in snapshots:
+                snapshots.append(snapshot)
+    return snapshots
+
+
+def _endpoint_authorization_constraints(task: dict[str, Any]) -> list[dict[str, Any]]:
+    """将共享 Controller 的权限切片按 Endpoint 拆分为独立的只读契约。"""
+
+    authorization = task["source_refs"].get("authorization")
     if not isinstance(authorization, dict):
-        return None
-    endpoints = [
-        dict(item)
-        for item in authorization.get("endpoints") or []
-        if isinstance(item, dict)
+        return []
+    constant_by_key = {
+        str(item["resourceKey"]): str(item["name"])
+        for item in _dict_items(authorization.get("authConstants"))
+        if item.get("resourceKey") and item.get("name")
+    }
+    return [
+        _endpoint_authorization_contract(endpoint, constant_by_key)
+        for endpoint in _dict_items(authorization.get("endpoints"))
     ]
-    if len(endpoints) != 1:
-        raise ValueError("Backend Endpoint Task 的平台权限切片必须恰好包含一个 Endpoint。")
-    endpoint = endpoints[0]
+
+
+def _endpoint_authorization_contract(
+    endpoint: dict[str, Any], constant_by_key: dict[str, str],
+) -> dict[str, Any]:
+    """核对路由和资源常量，只为该 Endpoint 下发相关权限。"""
+
     contract_id = str(endpoint.get("apiContractId") or "").strip()
     endpoint_id = str(endpoint.get("endpointId") or "").strip()
     http_method = str(endpoint.get("httpMethod") or "").strip().upper()
@@ -237,13 +275,7 @@ def _endpoint_authorization_constraints(task: dict[str, Any]) -> dict[str, Any] 
         raise ValueError("Backend Endpoint Task 的平台权限切片缺少唯一 Endpoint HTTP 身份。")
     if str(endpoint.get("semantics") or "") != "ANY_OF":
         raise ValueError("Backend Endpoint Task 的权限语义必须是 ANY_OF。")
-    constants = [
-        {"name": str(item.get("name") or "").strip(), "resourceKey": str(item.get("resourceKey") or "").strip()}
-        for item in authorization.get("authConstants") or []
-        if isinstance(item, dict)
-    ]
-    constant_by_key = {item["resourceKey"]: item["name"] for item in constants if item["name"] and item["resourceKey"]}
-    if resource_keys and set(constant_by_key) != set(resource_keys):
+    if any(key not in constant_by_key for key in resource_keys):
         raise ValueError("Backend Endpoint Task 的 AuthConstants 符号与操作资源集合不一致。")
     return {
         "endpointIdentity": {
@@ -268,21 +300,14 @@ def _task_kind(task: dict[str, Any]) -> str:
 
 
 def _task_stage(task: dict[str, Any]) -> str:
-    """从当前稳定任务 ID 提取执行阶段，避免 Agent 根据文件名猜测职责。"""
+    """读取平台编译的阶段，修复任务沿用父任务阶段。"""
 
     if _task_kind(task) == "bootstrap":
         return "bootstrap"
-    parent_id = (task.get("repairs") or {}).get("task_id") if task.get("approved_add_path") else None
-    task_id = str(parent_id or task.get("id") or "").strip()
-    stage = task_id.rsplit("::", 1)[-1] if "::" in task_id else ""
-    allowed = {
-        "objects",
-        "repository",
-        "upstream",
-        "service",
-        "controller",
-    }
-    return stage if stage in allowed else "endpoint"
+    stage = (task.get("source_refs") or {}).get("backend_stage")
+    if stage not in BACKEND_STAGE_LABELS:
+        raise ValueError(f"后端模块任务 {task.get('id', '<unknown>')} 缺少有效阶段。")
+    return stage
 
 
 def _task_execution_steps(task: dict[str, Any]) -> list[str]:
@@ -364,12 +389,14 @@ def _scoped_api_contracts(
     result: list[dict[str, Any]] = []
     for contract in _dict_items(project_plan.get("api_contracts")):
         contract_id = str(contract.get("id") or "")
+        if contract_id not in contract_ids:
+            continue
         endpoints = [
             dict(endpoint)
             for endpoint in _dict_items(contract.get("endpoints"))
             if str(endpoint.get("id") or "") in endpoint_ids
         ]
-        if contract_id not in contract_ids and not endpoints:
+        if not endpoints:
             continue
         result.append(
             {

@@ -39,8 +39,8 @@ def _verify_domain_source(files: dict[str, str], expected: dict[str, Any]) -> di
     entities = _dict_items(expected.get("entities"))
     if not entities:
         return verification_result("blocked", "没有可验证的 Endpoint API 动态映射输入。")
-    data_types = [item for item in model.types if type_role(item) != "conversion"]
-    conversion_types = [item for item in model.types if type_role(item) == "conversion"]
+    data_types = [item for item in model.types if item.kind == "class" and type_role(item) != "conversion"]
+    conversion_types = [item for item in model.types if item.methods]
     errors: list[str] = []
     blockers: list[str] = []
     checked: list[dict[str, Any]] = []
@@ -83,7 +83,9 @@ def _verify_entity(
     roles = {role: [item for item in related if type_role(item) == role] for role in ("entity", "po", "dto")}
     errors: list[str] = []
     blockers: list[str] = []
-    required_roles = [("entity", "Entity"), ("dto", "DTO")]
+    field_expectations = {str(item.get("name") or ""): item for item in expected_fields}
+    dto_schema_types = schema_entity_fields(endpoints, set(field_expectations))
+    required_roles = [("dto", "DTO")] if dto_schema_types else []
     if bindings:
         required_roles.insert(1, ("po", "PO"))
     for role, label in required_roles:
@@ -92,7 +94,6 @@ def _verify_entity(
     if errors:
         return errors, blockers, entity_facts(entity_id, roles, [], expected_fields, bindings)
 
-    field_expectations = {str(item.get("name") or ""): item for item in expected_fields}
     source_annotated = any(item.get("source_types") for item in expected_fields)
     database_fields = {
         name
@@ -105,11 +106,10 @@ def _verify_entity(
     missing = sorted(database_fields - bound_fields)
     if missing:
         blockers.append(f"实体 {entity_id} 的当前 Endpoint 数据库绑定缺少字段：{', '.join(missing)}。")
-    dto_schema_types = schema_entity_fields(endpoints, set(field_expectations))
     entity_properties: dict[str, str] = {}
     po_properties: dict[str, str] = {}
     dto_properties: dict[str, str] = {}
-    for name, field in field_expectations.items():
+    for name, field in (field_expectations.items() if roles["entity"] else []):
         match = find_role_field(roles["entity"], [name])
         if match is None:
             errors.append(f"实体 {entity_id} 的 Entity 缺少字段 {name}。")
@@ -133,10 +133,7 @@ def _verify_entity(
         )
         if not column_mapping_present(roles["po"], match, column):
             errors.append(f"实体 {entity_id} 的 PO 字段 {match.name} 缺少数据库列映射 {column}。")
-    dto_expected = dto_schema_types or {
-        name: str(field.get("type") or "") for name, field in field_expectations.items()
-    }
-    for name, expected_type in dto_expected.items():
+    for name, expected_type in dto_schema_types.items():
         match = find_role_field(roles["dto"], [name])
         if match is None:
             errors.append(f"实体 {entity_id} 的 DTO 缺少 API Schema 字段 {name}。")
@@ -147,6 +144,9 @@ def _verify_entity(
     if table and not any(annotation_value(item.annotations, "TableName") == table for item in roles["po"]):
         errors.append(f"实体 {entity_id} 的 PO 缺少表映射 {table}。")
 
+    # 普通接口可以在 Service 内转换，正式合同不要求额外 Entity 或独立 Converter。
+    if not bindings:
+        return errors, blockers, entity_facts(entity_id, roles, [], expected_fields, bindings)
     related_names = {item.name for values in roles.values() for item in values}
     converters = [item for item in conversion_types if conversion_mentions_types(item, related_names)]
     if not converters:
@@ -165,6 +165,11 @@ def _verify_entity(
         entity_property = entity_properties.get(name)
         po_property = po_properties.get(name)
         dto_property = dto_properties.get(name)
+        if not roles["entity"]:
+            if read_required and po_property and dto_property:
+                require_edge(errors, entity_id, edges, "po", "dto", po_property, dto_property, name)
+            if write_required and dto_property and po_property:
+                require_edge(errors, entity_id, edges, "dto", "po", dto_property, po_property, name)
         if read_required and po_property and entity_property:
             require_edge(errors, entity_id, edges, "po", "entity", po_property, entity_property, name)
         if read_required and entity_property and dto_property:

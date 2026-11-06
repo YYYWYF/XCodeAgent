@@ -16,6 +16,7 @@ _STRICT_REPORT_FIELDS = {
     "status",
     "summary",
     "satisfaction_evidence",
+    "implementation_notes",
     "failure_category",
     "failure_reason",
     "change_request",
@@ -267,6 +268,8 @@ def _task_result_from_report(
         "commands": [],
         "agent_note": summary or agent_note,
         "satisfaction_evidence": report.get("satisfaction_evidence"),
+        **({"implementation_notes": report.get("implementation_notes")}
+           if task.get("owner") == "backend" and (task.get("source_refs") or {}).get("backend_stage") else {}),
         "failure_category": failure_category,
         "failure_reason": failure_reason,
         "executed_by": executed_by
@@ -401,12 +404,14 @@ def apply_agent_results_with_scheduler(
             status = "failed"
         else:
             status = "completed"
+        document = result.get("implementation_document")
         updated_tasks.append(
             {
                 **task,
                 "status": status,
                 "last_result_status": result.get("status"),
                 **_failure_summary_from_result(result),
+                **({"implementation_document": document} if isinstance(document, dict) else {}),
                 "updated_by": "build-scheduler",
                 "updated_at": now,
             }

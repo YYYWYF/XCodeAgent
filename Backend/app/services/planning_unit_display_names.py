@@ -1,6 +1,7 @@
 """从冻结正式计划派生 Unit 名称，不读取磁盘或参与规划决策。"""
 
 from app.services.frontend_page_tree import project_plan_page_records
+from app.services.unit_task_manifest import backend_module_unit_id
 
 
 _BUILTIN_UNIT_DISPLAY_NAMES = {
@@ -38,31 +39,21 @@ def project_plan_unit_display_names(project_plan: dict | None) -> dict[str, str]
         )
     labels.update(_unique_business_labels(pages, kind="页面"))
 
-    endpoints: list[tuple[str, str]] = []
-    endpoint_index = 0
+    modules: list[tuple[str, str]] = []
     for contract in project_plan.get("api_contracts", []):
         if not isinstance(contract, dict):
             continue
         contract_id = str(contract.get("id") or "").strip()
-        for endpoint in contract.get("endpoints", []):
-            if not isinstance(endpoint, dict):
-                continue
-            endpoint_id = str(endpoint.get("id") or "").strip()
-            if not contract_id or not endpoint_id:
-                continue
-            endpoint_index += 1
-            unit_id = f"backend:endpoint:{contract_id}:{endpoint_id}"
-            name = _business_name(
-                endpoint.get("name"),
-                excluded={endpoint_id, contract_id, unit_id},
-            )
-            label = (
-                _append_business_suffix(name, "接口")
-                if name
-                else f"未命名接口（第 {endpoint_index} 项）"
-            )
-            endpoints.append((unit_id, label))
-    labels.update(_unique_business_labels(endpoints, kind="接口"))
+        if not contract_id or not any(
+            isinstance(endpoint, dict) and endpoint.get("id")
+            for endpoint in contract.get("endpoints", [])
+        ):
+            continue
+        unit_id = backend_module_unit_id(contract_id)
+        name = _business_name(contract.get("name"), excluded={contract_id, unit_id})
+        label = _append_business_suffix(name, "模块") if name else f"未命名模块（第 {len(modules) + 1} 项）"
+        modules.append((unit_id, label))
+    labels.update(_unique_business_labels(modules, kind="模块"))
     return labels
 
 

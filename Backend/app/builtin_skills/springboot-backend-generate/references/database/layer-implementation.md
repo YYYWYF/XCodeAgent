@@ -8,10 +8,11 @@ configuration work here.
 
 ## Authoritative Inputs and Scope
 
-- Treat `implementation_contract.entities[].source_binding`,
-  `database_design.bindings`, and `implementation_contract.api_contract` as the business
-  authority for entity fields, target tables, column bindings, endpoint behavior, and
-  schemas. Do not rely only on matching names.
+- In foundation, read database entries in `implementation_contract.source_snapshots`
+  for confirmed tables and columns. In business, read `implementation_contract.api_design`
+  for the Endpoint's source snapshots, `databaseQuery`, `databaseWrites`, and
+  `fieldMappings`. Use `implementation_contract.api_contract` for the confirmed internal
+  Endpoint behavior and schemas. Do not rely only on matching names.
 - Preserve the REST path from the confirmed API Contract. Do not rederive or override it
   from the table name.
 - Convert a table such as `product_category` to the class name `ProductCategory` and module
@@ -22,13 +23,13 @@ configuration work here.
 
 ## Required Implementation Sequence
 
-1. Read the confirmed source binding, field bindings, API Contract, current target files,
-   and nearest implementation for the current layer.
+1. Read the confirmed inputs for the current stage, target files, and nearest implementation.
 2. Locate the injected `common` infrastructure and reuse its actual classes and packages.
 3. Determine whether the current stage is already complete; leave it unchanged when it
    fully satisfies the contract.
-4. Implement only the minimum missing work for the current objects, repository, service, or
-   Controller stage. The objects stage also owns its Converter files.
+4. Respect the current stage: foundation owns PO, BaseMapper and injected Repository skeletons
+   without business methods; business owns one endpoint DTOs, optional Domain, converters,
+   Service and concrete Repository/Mapper methods; controller exposes the scoped endpoints last.
 5. Return the exact structured completion, failure, or change-request result required by
    the outer Build flow.
 
@@ -40,9 +41,7 @@ configuration work here.
   conditional single/list queries, count, pagination, sorting, fuzzy matching, and `IN`
   predicates. Express their conditions with `LambdaQueryWrapper` or
   `LambdaUpdateWrapper`; do not declare a custom Mapper method or XML statement for them.
-- Create or reuse the namespace-only Mapper XML placeholder when the approved repository
-  task authorizes that file, even when no custom statement is needed. Its existence is not
-  evidence that custom SQL should be added.
+- Do not create a placeholder Mapper XML. Create XML only for a confirmed custom SQL need.
 - Use a custom Mapper method and XML statement only when the confirmed endpoint concretely
   requires a join, aggregation/grouping, `UNION`, subquery, window function,
   database-specific SQL, or a documented performance-sensitive query that `BaseMapper`
@@ -99,17 +98,15 @@ callable from `RepositoryImpl`.
 
 - Include only fields genuinely required by the current API Contract and application
   service.
-- Keep PO, Entity, DTO, and their Converter in the same objects task. The Converter owns
-  both PO/Entity and Entity/DTO conversion; do not emit a separate Converter stage or
-  duplicate conversion logic in Controllers. Organize the object work as PO -> Entity ->
-  DTO before completing the typed conversion edges.
+- Foundation creates PO. The single-endpoint business task creates public DTOs, necessary
+  Domain/value objects and conversions together with Service and Repository methods.
+  Simple CRUD does not require an artificial Domain entity. Reuse existing shared types.
 - Prefer the project's existing MapStruct configuration and component model.
 
 ### Repository
 
-- Extend `BaseMapper<PO>` from the Mapper. Create or reuse the authorized namespace-only
-  Mapper XML placeholder, but add statements only when the endpoint meets the custom-SQL
-  threshold above.
+- Extend `BaseMapper<PO>` from the Mapper. Add XML only when the endpoint meets the
+  custom-SQL threshold above. Foundation leaves the Repository without business methods.
 - Call `selectById`, `selectOne`, `selectList`, `selectCount`, `selectPage`, `insert`,
   `updateById`, `update`, `deleteById`, or `delete` as appropriate instead of redeclaring
   equivalent Mapper methods. Use lambda wrappers for ordinary conditions and updates.
@@ -127,7 +124,7 @@ callable from `RepositoryImpl`.
 
 - Let `ApplicationService` coordinate DTOs/Entities, the Repository, and business
   decisions. It must not access the Mapper directly.
-- Prefer letting the service task create or extend the module-level
+- Prefer letting the business task create or extend the module-level
   `domain/exception/<Module>ErrorCode.java` from confirmed `api_contract.error_codes`, and
   prefer throwing endpoint-facing `BizException` from ApplicationService. This is a
   recommended ownership pattern; preserve an explicit existing module convention and never
@@ -170,7 +167,7 @@ normally provides these stable responsibilities:
 - A `WebMvcConfigurer`-based CORS configuration: the template-level cross-origin policy.
 
 These files are read-only infrastructure owned by the template. Endpoint objects,
-repository, service, and Controller tasks must not copy, rename, or modify them, and must
+foundation, business, and Controller tasks must not copy, rename, or modify them, and must
 not create a second implementation with the same responsibility:
 
 - The confirmed Endpoint `response_schema_ref` describes the business body type `T`, not

@@ -9,6 +9,7 @@ from typing import Any, NoReturn
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_candidate_id_binding import bind_missing_task_ids
 from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX
 from app.utils.model_output import extract_json_root_object_with_repair
 
 
@@ -203,7 +204,18 @@ def parse_raw_unit_candidate(
             ]
         )
 
-    if task_identity_context is not None and all(isinstance(task, dict) for task in raw_tasks):
+    if task_identity_context is not None and unit_id.startswith(BACKEND_MODULE_PREFIX):
+        from app.services.backend_module_candidate import materialize_backend_candidate
+
+        if task_identity_context.unit_id != unit_id:
+            raise ValueError("后端模块 Context 与 Parser Unit 不一致。")
+        try:
+            raw_tasks = materialize_backend_candidate(task_identity_context, raw_tasks)
+        except ValueError as exc:
+            raise RawUnitCandidateParseError([
+                _generation_issue("BACKEND_MODULE_CANDIDATE_INVALID", str(exc), unit_id=unit_id)
+            ]) from exc
+    elif task_identity_context is not None and all(isinstance(task, dict) for task in raw_tasks):
         if task_identity_context.unit_id != unit_id:
             raise ValueError("任务身份绑定 Context 与 Parser Unit 不一致。")
         raw_tasks, binding_issues = bind_missing_task_ids(task_identity_context, raw_tasks)

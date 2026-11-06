@@ -347,7 +347,7 @@ def _repair_scope(build_execution_scope: dict[str, Any] | None) -> dict[str, str
         api_contract_id = str(
             scope.get("apiContractId") or scope.get("api_contract_id") or ""
         ).strip()
-        unit_id = f"backend:endpoint:{api_contract_id}:{target_id}" if api_contract_id else ""
+        unit_id = f"backend:module:{api_contract_id}" if api_contract_id else ""
         if not unit_id:
             scope_type = "application"
             unit_id = "application:root"
@@ -378,7 +378,7 @@ def _repair_task_unit_id(
             return database_unit
     if owner == "backend":
         endpoint_unit = next(
-            (unit_id for unit_id in owner_unit_ids if unit_id.startswith("backend:endpoint:")),
+            (unit_id for unit_id in owner_unit_ids if unit_id.startswith("backend:module:")),
             "",
         )
         if endpoint_unit:

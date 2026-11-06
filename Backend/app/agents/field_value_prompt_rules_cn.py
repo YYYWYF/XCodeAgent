@@ -76,7 +76,7 @@ SERVICE_STAGE_REFERENCE = (
 )
 
 API_BOUNDARY_REFERENCE = (
-        "【接口边界】implementation_contract.api_design 是一个内部 Endpoint 已确认的字段映射契约。"
+        "【接口边界】业务任务从 implementation_contract.api_designs 读取其唯一内部接口的已确认字段映射。"
         "Controller 的方法、路径、请求和响应仍以内部 api_contract 为准；字段规则不能修改这些事实。"
         "按 databaseOperation 执行既定操作，仅消费已确认的来源及映射。\n\n"
 )

@@ -1067,7 +1067,12 @@ export type WorkflowBuildTargetReview = {
   relatedEndpoints?: WorkflowBuildTargetReviewEndpoint[]
 }
 
-export type WorkflowBuildTaskPlanTask = {
+export type WorkflowBackendTaskScope = {
+  backendStage?: 'foundation' | 'business' | 'controller'
+  coveredEndpoints?: Array<{ id: string; method: string; path: string }>
+}
+
+export type WorkflowBuildTaskPlanTask = WorkflowBackendTaskScope & {
   id: string
   title: string
   description: string
@@ -1502,7 +1507,7 @@ export type WorkflowBuildToolActivity = {
   path?: string
 }
 
-export type WorkflowBuildExecutionTask = {
+export type WorkflowBuildExecutionTask = WorkflowBackendTaskScope & {
   id?: string
   task_id?: string
   unit_id?: string
@@ -1530,6 +1535,11 @@ export type WorkflowBuildExecutionTask = {
   failure_category?: string | null
   failure_reason?: string | null
   failure_detail?: Record<string, unknown> | null
+  implementation_document?: {
+    status: 'updated' | 'unavailable'
+    path?: string
+    summary: string
+  }
   activeToolActivity?: WorkflowBuildToolActivity
 }
 

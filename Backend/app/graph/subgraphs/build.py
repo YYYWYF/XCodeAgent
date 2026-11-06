@@ -369,6 +369,13 @@ def _execute_ready_tasks(
             all_results.extend(owner_results)
             if owner_change_set:
                 code_change_sets.append(owner_change_set)
+    workspace = workspace_from_state(state)
+    if workspace and any("implementation_notes" in result for result in all_results):
+        from app.services.backend_notes_sync import sync_backend_notes
+
+        all_results, notes_changes = sync_backend_notes(str(workspace), ready_tasks, all_results)
+        if notes_changes:
+            code_change_sets.append(notes_changes)
     # Build Agent 可能执行编译或生成代码，target、generated-sources 等工程产物
     # 会自然出现在批次快照中；这些差异不再作为任务失败条件。
     return all_results, code_change_sets
@@ -649,6 +656,25 @@ def _execute_owner_tasks(
         sanitized_results,
         workspace_root=str(workspace) if workspace else None,
     )
+    if owner == "backend" and workspace:
+        from app.services.backend_stage_verification import backend_stage_errors
+
+        added_paths = frozenset(
+            item["path"] for item in (owner_change_set or {}).get("files", [])
+            if item.get("changeType") == "added"
+        )
+        by_id = {task["id"]: task for task in owner_tasks}
+        for result in sanitized_results:
+            if result.get("status") not in {"completed", "already_satisfied"}:
+                continue
+            try:
+                errors = backend_stage_errors(by_id[result["task_id"]], str(workspace), added_paths)
+            except (OSError, ValueError, KeyError) as exc:
+                errors = [f"无法核对后端阶段产物：{exc}"]
+            if errors:
+                result.update(status="failed", failure_category="acceptance_verification_failed",
+                              failure_reason="；".join(errors))
+                result["scheduler_decision"] = classify_task_result(result)
     return sanitized_results, owner_change_set
 
 
@@ -2210,6 +2236,16 @@ def run_build_scheduler(
     )
     route_projection_evidence: dict[str, Any] = {}
     if workflow_status == "completed":
+        workspace = workspace_from_state(current_state)
+        if workspace:
+            from app.services.backend_notes_sync import retry_backend_documents
+
+            documents, notes_changes = retry_backend_documents(str(workspace), execution_slice["tasks"])
+            if documents:
+                build_summary["implementationDocuments"] = documents
+            if notes_changes:
+                all_code_change_sets.append(notes_changes)
+                merged_code_changes = merge_code_change_sets(all_code_change_sets)
         route_projection_evidence, platform_projection_evidence, route_change_set, finalization_events, finalization_error = _finalize_build(
             state=current_state,
             confirmed_build_task_plan=confirmed_build_task_plan,

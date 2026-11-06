@@ -3,6 +3,7 @@
 from typing import Any
 
 from app.domain.development_artifacts import DevelopmentArtifactTarget
+from app.services.backend_module_scope import scope_endpoint_keys, task_endpoint_keys
 from app.services.build_scheduler import resolve_execution_slice
 from app.workspace.task_documents import build_task_plan_sha256
 
@@ -10,7 +11,7 @@ from app.workspace.task_documents import build_task_plan_sha256
 def completed_page_endpoints(
     state: dict[str, Any], *, page_id: str, run_id: str,
 ) -> list[DevelopmentArtifactTarget]:
-    """只接受同轮已绑定计划中全部任务成功、且通过单测门的接口 Unit。"""
+    """按接口汇总共享模块任务，记录同轮执行且通过单测门的完成事实。"""
 
     scope = state.get("build_execution_scope")
     plan = state.get("build_task_plan")
@@ -41,24 +42,22 @@ def completed_page_endpoints(
         tasks=[task for task in registry.values() if isinstance(task, dict)],
         build_execution_scope=scope,
     )
-    by_unit: dict[str, list[dict[str, Any]]] = {}
+    endpoint_keys = scope_endpoint_keys(scoped["tasks"], scope)
+    by_endpoint: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for task in scoped["tasks"]:
-        unit_id = task.get("unit_id")
-        if isinstance(unit_id, str) and unit_id.startswith("backend:endpoint:"):
-            by_unit.setdefault(unit_id, []).append(task)
+        for key in task_endpoint_keys(task) & endpoint_keys:
+            by_endpoint.setdefault(key, []).append(task)
     targets: list[DevelopmentArtifactTarget] = []
-    for unit_id, unit_tasks in by_unit.items():
+    for (contract_id, endpoint_id), endpoint_tasks in sorted(by_endpoint.items()):
         # 与 Build 汇总一致：修复关闭的任务和已满足任务均属于成功终态。
         if not all(
             task.get("id") in slice_ids
-            and runtime.get(task["id"], {}).get("unit_id") == unit_id
+            and runtime.get(task["id"], {}).get("unit_id") == task["unit_id"]
             and runtime.get(task["id"], {}).get("status") in {"completed", "already_satisfied"}
-            for task in unit_tasks
+            for task in endpoint_tasks
         ):
             continue
-        identity = unit_id.removeprefix("backend:endpoint:").split(":", 1)
-        if len(identity) == 2 and all(identity):
-            targets.append(DevelopmentArtifactTarget(
-                type="endpoint", apiContractId=identity[0], endpointId=identity[1],
-            ))
+        targets.append(DevelopmentArtifactTarget(
+            type="endpoint", apiContractId=contract_id, endpointId=endpoint_id,
+        ))
     return targets

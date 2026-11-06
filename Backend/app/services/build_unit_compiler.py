@@ -12,8 +12,10 @@ from app.services.authorization_capability_dependency import (
     resolve_auth_capability_dependency,
 )
 from app.services.authorization_overlay import unit_authorization_slice
+from app.services.backend_module_scope import design_endpoint_keys, module_task_dependencies
 from app.services.planning_issues import ValidationIssue
 from app.services.page_task_freshness import page_task_input_digest
+from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX
 
 
 class BuildUnitCompilationError(ValueError):
@@ -116,10 +118,42 @@ def _with_task_unit_metadata(
     else:
         source_refs.pop("authorization", None)
     # Endpoint 设计是平台确认的确定性来源，模型候选不得覆盖或扩展其字段映射记录。
-    if unit_id.startswith("backend:endpoint:") or unit_id == "backend:bootstrap":
+    if unit_id == "backend:bootstrap":
+        source_types = {item["target_id"] for item in _dict_items(task.get("deliverables"))
+                        if item.get("kind") == "backend.bootstrap"}
         source_refs["endpoint_designs"] = _endpoint_design_items(
             canonical_source_refs.get("endpoint_designs")
         )
+        source_refs["endpoint_designs"] = [
+            {**design, "sourceSnapshots": snapshots}
+            for design in source_refs["endpoint_designs"]
+            if (snapshots := [item for item in _dict_items(design.get("sourceSnapshots"))
+                              if item.get("sourceType") in source_types])
+        ]
+    if unit_id.startswith(BACKEND_MODULE_PREFIX):
+        # 用交付职责裁剪模块上下文，业务任务不会收到其他接口的设计或权限。
+        endpoint_ids = sorted({item.get("target_id") for item in _dict_items(task.get("deliverables"))
+                               if item.get("target_id")})
+        kinds = {item.get("kind") for item in _dict_items(task.get("deliverables"))}
+        stage = ("foundation" if kinds == {"backend.foundation"} else
+                 "controller" if kinds == {"backend.endpoint_controller"} else "business")
+        source_refs["backend_stage"] = stage
+        source_refs["endpoint_ids"] = endpoint_ids
+        source_refs["target"] = canonical_source_refs["target"]
+        source_refs["endpoint_designs"] = [item for item in canonical_source_refs.get("endpoint_designs", [])
+                                           if item.get("endpointId") in endpoint_ids]
+        source_refs["source_types"] = sorted({item["sourceType"] for design in source_refs["endpoint_designs"]
+                                              for item in _dict_items(design.get("sourceSnapshots"))
+                                              if item.get("sourceType")})
+        source_refs["business_descriptions"] = [item for item in canonical_source_refs.get("business_descriptions", [])
+                                                if item.get("endpoint_id") in endpoint_ids]
+        if authorization is not None and stage == "controller":
+            endpoints = [item for item in authorization.get("endpoints", []) if item.get("endpointId") in endpoint_ids]
+            keys = {key for item in endpoints for key in item.get("operationResourceKeys", [])}
+            source_refs["authorization"] = {"endpoints": endpoints, "authConstants": [
+                item for item in authorization.get("authConstants", []) if item.get("resourceKey") in keys]}
+        else:
+            source_refs.pop("authorization", None)
     task_with_refs = {
         **task,
         "unit_id": unit_id,
@@ -149,11 +183,20 @@ def _apply_unit_task_dependencies(
         for task in tasks
         if task.get("id")
     }
+    bootstrap_types = {
+        task["id"]: {item.get("target_id") for item in _dict_items(task.get("deliverables"))
+                     if item.get("kind") == "backend.bootstrap"}
+        for task in tasks if task.get("unit_id") == "backend:bootstrap" and task.get("id")
+    }
     for task in tasks:
         tasks_by_unit.setdefault(
             str(task.get("unit_id") or "application:root"), []
         ).append(str(task.get("id")))
     dependency_units = _unit_dependency_map(unit_graph)
+    module_dependencies = module_task_dependencies(
+        tasks, _dict_value(build_context.get("_backend_foundation_providers")),
+        design_endpoint_keys(build_context.get("endpoint_designs", ())),
+    )
     auth_resolution = _auth_dependency_resolution(
         tasks,
         dependency_units,
@@ -170,7 +213,7 @@ def _apply_unit_task_dependencies(
     for task in tasks:
         unit_id = str(task.get("unit_id") or "application:root")
         # 前端页面 Unit 只继承同 frontend 域的依赖（如 frontend:api-client），
-        # 不继承 backend:endpoint:* / database:* 的任务依赖，使前端页面可与后端
+        # 不继承 backend:module:* / database:* 的任务依赖，使前端页面可与后端
         # 接口并行生成：前端通过 api-client（已封装 service.get + 契约 schema）
         # 调接口，无需等后端实现。前后端契约一致性由 app:integration 集成测试兜底。
         page_frontend_only = unit_id.startswith("page:")
@@ -192,6 +235,12 @@ def _apply_unit_task_dependencies(
             ):
                 continue
             dependency_task_ids = tasks_by_unit.get(dependency_unit_id, [])
+            if unit_id.startswith(BACKEND_MODULE_PREFIX) and dependency_unit_id == "backend:bootstrap":
+                source_types = set(_string_list((task.get("source_refs") or {}).get("source_types")))
+                dependency_task_ids = [
+                    provider for provider in dependency_task_ids
+                    if source_types & bootstrap_types.get(provider, set())
+                ]
             if (
                 auth_resolution is not None
                 and unit_id in auth_consumer_units
@@ -203,7 +252,7 @@ def _apply_unit_task_dependencies(
                 for dependency_task_id in dependency_task_ids
                 if dependency_task_id and dependency_task_id != task.get("id")
             )
-        explicit_dependencies = _task_dependencies(task)
+        explicit_dependencies = module_dependencies.get(task.get("id"), _task_dependencies(task))
         removed_cross_unit_dependencies = [
             dependency
             for dependency in explicit_dependencies
@@ -364,42 +413,19 @@ def _unit_source_refs(
             **({"source_types": source_types} if source_types else {}),
             **({"business_descriptions": descriptions} if descriptions else {}),
         }
-    if unit_id.startswith("backend:endpoint:"):
-        contract_id, endpoint_id = _backend_endpoint_identity(unit_id)
-        endpoint_ids = [endpoint_id]
-        endpoint_refs = _matching_endpoint_refs(
-            refs.get("technical_plan_endpoints"),
-            endpoint_ids,
-        )
-        descriptions = _scope_business_descriptions_to_endpoint(
-            _dict_items(build_context.get("business_descriptions")),
-            contract_id=contract_id,
-            endpoint_id=endpoint_id,
-        )
+    if unit_id.startswith(BACKEND_MODULE_PREFIX):
+        contract_id = unit_id.removeprefix(BACKEND_MODULE_PREFIX)
+        designs = [item for item in endpoint_designs if item.get("apiContractId") == contract_id]
+        endpoint_ids = [item["endpointId"] for item in designs]
         return {
-            **existing,
-            "type": "technical_plan_endpoint",
-            "target": {
-                "type": "endpoint",
-                "id": endpoint_id,
-                "api_contract_id": contract_id,
-            },
-            "technical_plan_endpoint": (
-                endpoint_refs[0]
-                if endpoint_refs
-                else _dict_value(refs.get("technical_plan_endpoint"))
-            ),
-            "technical_plan_endpoints": endpoint_refs,
-            "endpoint_ids": endpoint_ids,
-            "entity_ids": entity_ids,
-            "endpoint_designs": _scope_endpoint_designs_to_endpoint(
-                endpoint_designs,
-                contract_id=contract_id,
-                endpoint_id=endpoint_id,
-            ),
+            **existing, "type": "technical_plan_module",
+            "target": {"type": "module", "id": contract_id, "api_contract_id": contract_id},
+            "technical_plan_endpoints": _matching_endpoint_refs(refs.get("technical_plan_endpoints"), endpoint_ids),
+            "endpoint_ids": endpoint_ids, "entity_ids": entity_ids, "endpoint_designs": designs,
             "mapping_flows": _string_list(build_context.get("mapping_flows")),
-            **({"source_types": source_types} if source_types else {}),
-            **({"business_descriptions": descriptions} if descriptions else {}),
+            "source_types": source_types,
+            "business_descriptions": [item for item in _dict_items(build_context.get("business_descriptions"))
+                                      if item.get("api_contract_id") == contract_id],
         }
     if unit_id == "backend:bootstrap":
         descriptions = _dict_items(build_context.get("business_descriptions"))
@@ -438,7 +464,7 @@ def _unit_fingerprint_payload(
             "mapping_flows": _string_list(build_context.get("mapping_flows")),
             "business_descriptions": _dict_items(build_context.get("business_descriptions")),
         }
-    if unit_id.startswith("backend:endpoint:"):
+    if unit_id.startswith(BACKEND_MODULE_PREFIX):
         return {
             "unit_id": unit_id,
             "source_refs": source_refs,
@@ -452,47 +478,6 @@ def _unit_fingerprint_payload(
         "unit_id": unit_id,
         "source_refs": source_refs,
     }
-
-
-def _backend_endpoint_identity(unit_id: str) -> tuple[str, str]:
-    """从当前 backend:endpoint Unit 标识提取稳定契约与 Endpoint 身份。"""
-
-    parts = str(unit_id or "").split(":", 3)
-    if len(parts) != 4 or parts[:2] != ["backend", "endpoint"]:
-        return "", ""
-    return parts[2].strip(), parts[3].strip()
-
-
-def _scope_endpoint_designs_to_endpoint(
-    endpoint_designs: list[dict[str, Any]],
-    *,
-    contract_id: str,
-    endpoint_id: str,
-) -> list[dict[str, Any]]:
-    """按 Unit 的复合 Endpoint 标识筛选已确认 API 设计。"""
-
-    return [
-        deepcopy(design)
-        for design in endpoint_designs
-        if str(design.get("apiContractId") or "") == contract_id
-        and str(design.get("endpointId") or "") == endpoint_id
-    ]
-
-
-def _scope_business_descriptions_to_endpoint(
-    descriptions: list[dict[str, Any]],
-    *,
-    contract_id: str,
-    endpoint_id: str,
-) -> list[dict[str, Any]]:
-    """按复合 Endpoint 标识筛选字段业务说明。"""
-
-    return [
-        deepcopy(description)
-        for description in descriptions
-        if str(description.get("api_contract_id") or "") == contract_id
-        and str(description.get("endpoint_id") or "") == endpoint_id
-    ]
 
 
 def _matching_endpoint_refs(

@@ -215,7 +215,7 @@ def _behavior_token_present(identifiers: set[str], value: Any) -> bool:
 def verify_external_client_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
     """通过 AST 验证外部 API Client 的连接配置、method/path 和调用事实。"""
 
-    model = _inspect_or_block(files)
+    model = _inspect_or_block({path: text for path, text in files.items() if path.endswith(".java")})
     if isinstance(model, dict):
         return model
     clients = [item for item in model.types if _type_has_suffix(item, "Client", "Gateway", "Adapter")]
@@ -234,7 +234,7 @@ def verify_external_client_source(files: dict[str, str], expected: dict[str, Any
             parameter_name = str(parameter.get("name") or "").strip()
             if parameter_name and not _contract_name_present(model, parameter_name):
                 errors.append(f"外部 API Client 未实现请求参数 {parameter_name}。")
-    if any(_type_has_suffix(item, "Repository", "Mapper") for item in model.types):
+    if any(_name_has_suffix(field.type_name, "Repository", "Mapper") for item in clients for field in item.fields):
         errors.append("外部 API Client 不得引入持久化 Repository/Mapper。")
     if errors:
         return verification_result("failed", "；".join(errors))
@@ -248,13 +248,13 @@ def verify_external_client_source(files: dict[str, str], expected: dict[str, Any
 def verify_external_mapping_source(files: dict[str, str], expected: dict[str, Any]) -> dict[str, Any]:
     """通过 AST 验证 API 设计中外部字段到内部语义字段的同方法映射。"""
 
-    model = _inspect_or_block(files)
+    model = _inspect_or_block({path: text for path, text in files.items() if path.endswith(".java")})
     if isinstance(model, dict):
         return model
     mapping_methods = [
         method
         for item in model.types
-        if _type_has_suffix(item, "Mapper", "Converter", "Assembler", "Adapter")
+        if _type_has_suffix(item, "Service", "ServiceImpl", "Converter", "Assembler", "Adapter")
         for method in item.methods
     ]
     all_methods = [method for item in model.types for method in item.methods]

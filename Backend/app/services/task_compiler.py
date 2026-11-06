@@ -18,7 +18,7 @@ def compile_demo_tasks() -> list[BuildTask]:
             owner="backend",
             description="Create the demo backend API.",
             dependencies=["database"],
-            unit_id="backend:endpoint:demo-api:demo.list",
+            unit_id="backend:module:demo-api",
             task_type="backend.code",
             requires_capabilities=["database:demo:ready"],
         ),

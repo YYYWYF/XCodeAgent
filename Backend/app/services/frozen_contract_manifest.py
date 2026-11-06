@@ -31,6 +31,7 @@ from app.services.planning_frozen import plain_json
 _ENDPOINT_REQUIREMENT_KINDS = {
     "frontend.api_module",
     "frontend.static_data_module",
+    "backend.foundation",
     "backend.objects",
     "backend.repository",
     "backend.upstream",

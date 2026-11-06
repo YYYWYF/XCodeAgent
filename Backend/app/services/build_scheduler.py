@@ -5,8 +5,10 @@ from fnmatch import fnmatch
 from datetime import UTC, datetime
 from typing import Any
 
+from app.services.backend_module_scope import scoped_task_ids
 from app.services.engineering_acceptance import ensure_engineering_acceptance
 from app.services.engineering_acceptance_verifier import verify_engineering_acceptance
+from app.services.unit_task_manifest import backend_module_unit_id
 
 TERMINAL_STATUSES = {"completed", "failed", "already_satisfied"}
 RUNNABLE_STATUS = "pending"
@@ -605,17 +607,13 @@ def resolve_execution_slice(
     tasks: list[dict[str, Any]],
     build_execution_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """按应用、页面或数据源范围裁剪 BuildScheduler 的可执行任务视图。"""
+    """在 Unit 依赖闭包内按当前 Endpoint 职责裁剪共享模块任务。"""
 
     scope = _normalized_scope(build_execution_scope)
     unit_ids = _execution_unit_ids(build_task_plan, scope)
-    task_ids = [
-        str(task.get("id"))
-        for task in tasks
-        if task.get("id") and str(task.get("unit_id") or "application:root") in unit_ids
-    ]
-    task_id_set = set(task_ids)
+    task_id_set = scoped_task_ids(tasks, scope, set(unit_ids))
     sliced_tasks = [task for task in tasks if str(task.get("id") or "") in task_id_set]
+    task_ids = [str(task["id"]) for task in sliced_tasks]
     reusable_task_ids = [
         str(task.get("id"))
         for task in sliced_tasks
@@ -833,7 +831,7 @@ def _target_unit_ids(scope: dict[str, str]) -> list[str]:
         return [f"database:{scope['targetId']}"]
     if scope["type"] == "endpoint" and scope.get("targetId"):
         api_contract_id = str(scope.get("apiContractId") or scope.get("api_contract_id") or "").strip()
-        return [f"backend:endpoint:{api_contract_id}:{scope['targetId']}"] if api_contract_id else []
+        return [backend_module_unit_id(api_contract_id)] if api_contract_id else []
     return ["application:root"]
 
 

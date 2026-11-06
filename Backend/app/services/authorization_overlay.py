@@ -89,7 +89,7 @@ def compile_authorization_overlay(
 
 
 def unit_authorization_slice(unit_id: str, build_context: dict[str, Any]) -> dict[str, Any] | None:
-    """仅向页面或后端 Endpoint Unit 投射其实际需要的权限切片。"""
+    """投射页面或后端模块当前范围内的权限事实。"""
 
     constraints = build_context.get("authorization_constraints")
     if not isinstance(constraints, dict):
@@ -108,17 +108,13 @@ def unit_authorization_slice(unit_id: str, build_context: dict[str, Any]) -> dic
                 if str(item.get("pageId") or "") == page_id
             ],
         }
-    if unit_id.startswith("backend:endpoint:"):
-        identity = unit_id.removeprefix("backend:endpoint:").split(":", 1)
-        if len(identity) != 2:
-            raise ValueError(f"Endpoint Unit 标识无效，无法投射权限切片：{unit_id}。")
-        api_contract_id, endpoint_id = identity
+    if unit_id.startswith("backend:module:"):
+        api_contract_id = unit_id.removeprefix("backend:module:")
         endpoints = [
-                dict(item)
-                for item in _dict_items(constraints.get("endpoints"))
-                if str(item.get("apiContractId") or "") == api_contract_id
-                and str(item.get("endpointId") or "") == endpoint_id
-            ]
+            dict(item)
+            for item in _dict_items(constraints.get("endpoints"))
+            if str(item.get("apiContractId") or "") == api_contract_id
+        ]
         resource_keys = {
             str(resource_key)
             for endpoint in endpoints
@@ -155,19 +151,13 @@ def _page_ids_in_scope(build_context: dict[str, Any]) -> set[str]:
 def _endpoint_refs_in_scope(
     project_plan: dict[str, Any], build_context: dict[str, Any]
 ) -> list[tuple[str, str]]:
-    """按当前上下文或 Endpoint Unit 解析唯一的接口身份。"""
+    """仅按当前正式接口范围解析权限目标，模块身份不扩大范围。"""
 
     endpoint_ids = {
         str(endpoint_id).strip()
         for endpoint_id in build_context.get("endpoint_ids") or []
         if str(endpoint_id).strip()
     }
-    for unit_id in build_context.get("required_unit_ids") or []:
-        text = str(unit_id)
-        if text.startswith("backend:endpoint:"):
-            identity = text.removeprefix("backend:endpoint:").split(":", 1)
-            if len(identity) == 2:
-                endpoint_ids.add(identity[1])
     required_contract_id = ""
     target = build_context.get("target")
     if isinstance(target, dict) and target.get("type") == "endpoint":

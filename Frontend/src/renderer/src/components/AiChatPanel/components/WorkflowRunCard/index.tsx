@@ -1571,6 +1571,25 @@ function BuildExecutionTaskDetails({ task }: { task: WorkflowBuildExecutionTask 
           </div>
         </div>
       )}
+      {task.coveredEndpoints && task.coveredEndpoints.length > 0 && (
+        <div className={cx('workflow-build-task-detail-block')}>
+          <Text type="secondary">覆盖接口（{task.coveredEndpoints.length}）</Text>
+          <ul className={cx('workflow-build-task-detail-list')}>
+            {task.coveredEndpoints.map((endpoint) => (
+              <li key={endpoint.id}>
+                <Text code>{endpoint.path ? `${endpoint.method} ${endpoint.path}` : endpoint.id}</Text>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {task.implementation_document && (
+        <div className={cx('workflow-build-task-detail-block')}>
+          <Text type="secondary">本任务的实现说明同步</Text>
+          <Text>{task.implementation_document.summary}</Text>
+          {task.implementation_document.path && <Text code>{task.implementation_document.path}</Text>}
+        </div>
+      )}
       {engineeringChecks.length > 0 && (
         <div className={cx('workflow-build-task-detail-block')}>
           <Text type="secondary">工程检查</Text>

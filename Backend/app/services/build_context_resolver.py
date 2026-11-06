@@ -19,6 +19,7 @@ from app.services.frontend_page_tree import find_frontend_page, project_plan_pag
 from app.services.page_identity import page_id_to_page_key
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
+from app.services.unit_task_manifest import backend_module_unit_id
 from app.workspace.endpoint_design_documents import technical_plan_path
 from app.workspace.plan_documents import load_project_plan_json
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
@@ -203,14 +204,14 @@ def _page_context(
     endpoint_index = _endpoint_index(project_plan.get("api_contracts"))
     endpoint_ids = _contract_endpoint_ids(page_contract)
     workspace_root = _workspace_root(project_plan_path)
-    endpoint_unit_ids: list[str] = []
+    module_unit_ids: list[str] = []
     for endpoint_id in endpoint_ids:
         endpoint = endpoint_index.get(endpoint_id)
         if endpoint is None:
             raise ValueError(f"Page {page_id} references unknown endpoint {endpoint_id}.")
         contract_id = str(endpoint.get("api_contract_id") or "")
         if contract_id:
-            endpoint_unit_ids.append(_endpoint_unit_id(contract_id, endpoint_id))
+            module_unit_ids.append(backend_module_unit_id(contract_id))
 
     endpoint_contracts = [endpoint_index[endpoint_id] for endpoint_id in endpoint_ids]
     endpoint_designs = load_confirmed_endpoint_designs(
@@ -229,7 +230,7 @@ def _page_context(
         required_unit_ids.append("frontend:auth-guard")
     if endpoint_ids:
         required_unit_ids.extend(
-            ["backend:bootstrap", *list(dict.fromkeys(endpoint_unit_ids))]
+            ["backend:bootstrap", *list(dict.fromkeys(module_unit_ids))]
         )
     return {
         "target": {
@@ -311,7 +312,7 @@ def _endpoint_context(
     )
     mapping_flows = api_design_mapping_flows(endpoint_designs)
     business_descriptions = api_design_business_descriptions(endpoint_designs)
-    required_unit_ids = ["backend:bootstrap", _endpoint_unit_id(contract_id, endpoint_id)]
+    required_unit_ids = ["backend:bootstrap", backend_module_unit_id(contract_id)]
     return {
         "target": {
             "type": "endpoint",
@@ -408,12 +409,6 @@ def _endpoint_index(value: Any) -> dict[str, dict[str, Any]]:
             if contract_id:
                 index[f"{contract_id}\0{endpoint_id}"] = indexed_endpoint
     return index
-
-
-def _endpoint_unit_id(api_contract_id: str, endpoint_id: str) -> str:
-    """生成 endpoint Unit 的稳定复合标识，避免不同契约下接口 ID 冲突。"""
-
-    return f"backend:endpoint:{api_contract_id}:{endpoint_id}"
 
 
 def _technical_plan_entity_ids(

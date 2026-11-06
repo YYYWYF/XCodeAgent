@@ -16,6 +16,7 @@ from app.services.business_acceptance import (
 from app.services.business_acceptance_verifiers.backend_domain import verify_objects_source
 from app.services.business_acceptance_verifiers.backend_external_api import verify_upstream_source
 from app.services.business_acceptance_verifiers.backend_endpoint import verify_endpoint_source
+from app.services.business_acceptance_verifiers.backend_foundation import verify_foundation_source
 from app.services.business_acceptance_verifiers.backend_application_service import (
     verify_application_service_source,
 )
@@ -34,6 +35,7 @@ BUSINESS_VERIFIER_REGISTRY: dict[str, Verifier] = {
     "frontend.api_contract": verify_api_contract_source,
     "frontend.page_endpoint_usage": verify_page_endpoint_usage_source,
     "frontend.static_data_contract": verify_static_data_contract_source,
+    "backend.foundation_contract": verify_foundation_source,
     "backend.objects_contract": verify_objects_source,
     "backend.repository_contract": verify_repository_source,
     "backend.application_service_contract": verify_application_service_source,

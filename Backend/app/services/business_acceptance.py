@@ -20,6 +20,7 @@ BUSINESS_ACCEPTANCE_KINDS = (
     "frontend.api_contract",
     "frontend.page_endpoint_usage",
     "frontend.static_data_contract",
+    "backend.foundation_contract",
     "backend.objects_contract",
     "backend.repository_contract",
     "backend.application_service_contract",
@@ -31,6 +32,7 @@ BUSINESS_VERIFIER_NAMES = {
     "frontend.api_contract": "frontend_api_contract",
     "frontend.page_endpoint_usage": "frontend_page_endpoint_usage",
     "frontend.static_data_contract": "frontend_static_data_contract",
+    "backend.foundation_contract": "backend_foundation_contract",
     "backend.objects_contract": "backend_objects_contract",
     "backend.repository_contract": "backend_repository_contract",
     "backend.application_service_contract": "backend_application_service_contract",
@@ -43,6 +45,7 @@ DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND = {
     "frontend.api_module": "endpoint_id",
     "frontend.static_data_module": "endpoint_id",
     "frontend.shared_capability": "target_id",
+    "backend.foundation": "endpoint_id",
     "backend.objects": "endpoint_id",
     "backend.repository": "endpoint_id",
     "backend.application_service": "endpoint_id",
@@ -418,6 +421,25 @@ def _checks_for_deliverable(
                 },
             )
         ]
+    if kind == "backend.foundation":
+        from app.services.backend_foundation_inputs import foundation_expectations
+
+        sources = _endpoint_detail_sources(formal)
+        if not sources:
+            return []
+        expectations = [foundation_expectations(design) for design in formal["endpoint_designs"]]
+        return [_business_check(
+            task,
+            deliverable,
+            "backend.foundation_contract",
+            "模块基础任务必须落实已确认的数据库骨架或外部 API 连接配置。",
+            sources,
+            {
+                "source_types": sorted({kind for item in expectations for kind in item["source_types"]}),
+                "tables": [table for item in expectations for table in item["tables"]],
+                "config_keys": sorted({key for item in expectations for key in item["config_keys"]}),
+            },
+        )]
     if kind == "backend.objects":
         entities = _selected_entities(formal)
         if not entities:
@@ -1300,6 +1322,7 @@ def _expected_field_errors(check_id: str, kind: str, value: Any) -> list[str]:
         "frontend.api_contract": ("endpoints",),
         "frontend.page_endpoint_usage": ("required_endpoint_ids",),
         "frontend.static_data_contract": ("entity", "endpoints", "operations"),
+        "backend.foundation_contract": ("source_types", "tables", "config_keys"),
         "backend.objects_contract": ("entities", "endpoints"),
         "backend.repository_contract": ("entities", "operations"),
         "backend.application_service_contract": ("operations",),

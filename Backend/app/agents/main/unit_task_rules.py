@@ -11,21 +11,14 @@ from app.services.business_acceptance import (
     DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND,
     frontend_api_task_id,
 )
-from app.services.unit_task_manifest import frontend_api_task_manifest
+from app.services.unit_task_manifest import (
+    BACKEND_MODULE_PREFIX, backend_bootstrap_task_id, frontend_api_task_manifest,
+)
 from app.services.page_identity import canonical_page_entry_path, page_id_to_page_key
 from app.services.unit_generation_contracts import (
     GenerationRequirement,
     UnitGenerationContext,
 )
-
-
-_BACKEND_STAGE_BY_KIND = {
-    "backend.objects": "objects",
-    "backend.repository": "repository",
-    "backend.upstream": "upstream",
-    "backend.application_service": "service",
-    "backend.endpoint_controller": "controller",
-}
 
 
 def _stable_json(value: Any) -> str:
@@ -100,23 +93,17 @@ def example_task_id(context: UnitGenerationContext) -> str:
     if context.unit_id == "frontend:data:static":
         return f"{context.unit_id}::data-module"
     if context.unit_id == "backend:bootstrap":
-        return "backend:bootstrap::bootstrap"
+        return backend_bootstrap_task_id(context)
     requirements = context.generation_requirements
     first = requirements[0] if requirements else None
     refs = first.source_refs if first is not None else {}
-    kind = _text(refs.get("kind"))
     if context.unit_id == "frontend:api-client":
         manifest = frontend_api_task_manifest(context)
         if manifest:
             return str(manifest[0]["task_id"])
         contract_id = _text(refs.get("api_contract_id")) or "api-contract-id"
         return frontend_api_task_id(context.unit_id, contract_id, ("endpoint-id",))
-    stage = _BACKEND_STAGE_BY_KIND.get(kind)
-    if stage is None:
-        raise ValueError(
-            f"Backend Unit {context.unit_id} 的职责 kind 未定义 Task stage：{kind or '<missing>'}。"
-        )
-    return f"{context.unit_id}::{stage}"
+    raise ValueError(f"Unit {context.unit_id} 缺少标准 Task 输出示例。")
 
 
 def _common_rules(context: UnitGenerationContext) -> tuple[str, ...]:
@@ -267,6 +254,8 @@ def resolve_unit_task_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         specific = _frontend_static_rules(frozen)
     elif frozen.unit_kind == "backend":
         specific = resolve_backend_unit_task_rules(frozen)
+        if frozen.unit_id.startswith(BACKEND_MODULE_PREFIX):
+            return specific
     else:
         raise ValueError(
             f"模型 Unit {frozen.unit_id} 没有可用的任务规划规则投影。"

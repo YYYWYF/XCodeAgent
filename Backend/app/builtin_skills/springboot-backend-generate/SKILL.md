@@ -9,11 +9,8 @@ description: >-
 
 # springboot-backend-generate
 
-Use this Skill only during Build execution for backend tasks whose referenced entity
-designs include `data_source_type: database` or `data_source_type: external_api`. One or
-more entity designs may be referenced, and their source types form the task's source-type
-set. The platform has already selected the task, dependencies, write scope, and stage;
-this Skill governs implementation only and must not redesign the task plan.
+Use this Skill for the Build Java backend tasks that list it in instruction_paths.
+The platform selects the stage, source types, dependencies, and exact write scope.
 
 ## Execution Boundaries
 
@@ -41,75 +38,24 @@ and return `already_satisfied` with concrete evidence. Make only the minimum in-
 correction when the target is partial. Return `change_request` when the confirmed contract
 cannot fit the authorized scope; never expand scope autonomously.
 
-## Data Source and Mode Routing
+## Stages and References
 
-Derive the set of source types from all entity designs referenced by the current task. Do
-not collapse a mixed task into a single source type.
+Read the files in the task's instruction_paths, using the current stage to select the
+relevant sections. Source types come from confirmed Endpoint API Design snapshots.
+A mixed business task implements both confirmed physical branches for one endpoint.
 
-Classify each referenced entity design from its confirmed `data_source_type`; do not infer
-or override that value from the files, dependencies, annotations, or client libraries
-found in the workspace:
+- **Bootstrap** prepares Maven and global runtime capabilities for its declared
+  source types.
+- **Foundation** creates or reuses the module's PO, BaseMapper interfaces and injected
+  Repository skeletons without business methods. For external sources it prepares
+  configured FeignClient interfaces without operation methods.
+- **Business** completes one endpoint's Service, contract DTOs, necessary Domain
+  types, concrete Repository methods or upstream call. Reuse shared methods from
+  prior tasks. Keep PO and upstream transport types internal.
+- **Controller** adapts the scoped endpoints to HTTP after their Services exist.
+  Apply each endpoint's own route, validation, response wrapper and authorization.
 
-- **Database** means the entity's business data is read from or written to the
-  application's bound database. Its `database_design`, including the confirmed table and
-  field bindings, must be consistent with that classification when the current operation
-  requires persistence.
-- **External API** means the entity's business data is obtained from or changed through
-  an outbound call to a confirmed upstream operation in `external_api_design`. The fact
-  that this application exposes an HTTP Controller or Endpoint does not make the source
-  an external API.
-- **Mixed** means the referenced entity-design set contains at least one `database` source
-  and at least one `external_api` source. Route each member by its own source type and load
-  both selected references in the required stable order.
-
-Return `contract_mismatch` instead of guessing when `data_source_type` is missing, unknown,
-or inconsistent with its source-specific design or the current Endpoint operation.
-
-The `implementation_contract.kind` field accepts the following values:
-
-Choose the mode by its responsibility, not by the `implementation_contract.kind` value
-alone; the declared kind must also agree with the task purpose and write scope.
-
-- **Bootstrap** is a project-level dependency and shared-capability check. It verifies the
-  Maven dependencies and global configuration required by the selected source types,
-  injects only genuinely missing authorized infrastructure, and never implements an
-  endpoint operation or generates endpoint-specific business code.
-- **Endpoint Implementation** implements one confirmed endpoint operation through the
-  task's current layer or stage. It may generate or update operation-specific persistence
-  or external transport code, mappings, services, and Controllers, but it must consume
-  bootstrap capabilities without changing Maven dependencies or global configuration.
-
-The declared `implementation_contract.kind`, task purpose, `allowed_paths`, and
-`change_scope` must agree with this boundary. Return `contract_mismatch` before loading a
-mode reference or writing when they conflict. When they agree, use
-`implementation_contract.kind` to choose the reference for each source type in the set.
-Every Endpoint task must first read the shared
-[error handling guide](references/error-handling.md), then read the selected source
-references in stable `database` then `external_api` order. Bootstrap tasks do not read the
-error handling guide. A mixed task reads each selected reference once and reads this
-`SKILL.md` only once. Reject `static` or any unknown source type before writing.
-
-### Database
-
-- For `implementation_contract.kind=bootstrap`, read
-  [database/bootstrap.md](references/database/bootstrap.md).
-- For `implementation_contract.kind=endpoint`, read
-  [error-handling.md](references/error-handling.md), then
-  [database/layer-implementation.md](references/database/layer-implementation.md), and
-  apply only the section for the current `stage`.
-
-Prefer existing MyBatis-Plus conventions. Endpoint tasks must not edit Maven dependencies,
-data source configuration, or global MyBatis-Plus configuration.
-
-### External API
-
-- For `implementation_contract.kind=bootstrap`, read
-  [external-api/bootstrap.md](references/external-api/bootstrap.md).
-- For `implementation_contract.kind=endpoint`, read
-  [error-handling.md](references/error-handling.md), then
-  [external-api/layer-implementation.md](references/external-api/layer-implementation.md),
-  and apply only the section for the current `stage`.
-
-Prefer Spring Cloud OpenFeign for a new Client, but preserve an already satisfying
-RestTemplate, WebClient, or project-approved abstraction. Endpoint tasks must not edit
-Maven dependencies, the application entrypoint, or global OpenFeign activation.
+For database or external API work use the corresponding bootstrap or layer reference
+listed in instruction_paths. Use the shared error handling guide for business tasks.
+Use the Controller template for the final route task. See the execution packet for
+the verified input scope, source paths, and structured result contract.

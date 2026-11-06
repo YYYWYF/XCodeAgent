@@ -239,10 +239,22 @@ def resource_catalog_fingerprint(plan: dict) -> str | None:
     return fingerprint_catalog(catalog)
 
 
+def _requirement_id(responsibility_kind: str, *identities: str) -> str:
+    """按职责类型拼接独立编码的正式身份，避免分隔符造成冲突。"""
+
+    return ":".join([responsibility_kind, *(quote(item, safe="") for item in identities)])
+
+
+def backend_foundation_requirement_id(api_contract_id: str, endpoint_id: str) -> str:
+    """返回基础骨架的职责 ID，供依赖绑定和骨架复用查询。"""
+
+    return _requirement_id("backend.foundation", api_contract_id, endpoint_id)
+
+
 def responsibility(responsibility_kind: str, *identities: str, description: str, **source_refs: Any) -> GenerationRequirement:
     """按正式职责类型和精确目标构造稳定 ID，并声明后续 Candidate 必须提供的能力身份。"""
 
-    requirement_id = ":".join([responsibility_kind, *(quote(item, safe="") for item in identities)])
+    requirement_id = _requirement_id(responsibility_kind, *identities)
     artifact = source_refs.pop("artifact", "technical-plan")
     return GenerationRequirement(
         requirement_id=requirement_id, description=description,

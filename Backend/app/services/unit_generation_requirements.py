@@ -13,6 +13,7 @@ from app.services.unit_generation_requirement_targets import (
 from app.services.unit_generation_requirements_contracts import (
     GenerationRequirementsError, UnitGenerationRequirements, fail_requirement_input,
 )
+from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX, backend_module_unit_id
 
 
 _STRUCTURAL_UNITS = {"application:root", "app:integration"}
@@ -43,10 +44,15 @@ def _backend_requirements(
         "data_source_types": list(physical_types),
     }
     result = [responsibility(
+        "backend.foundation", *key,
+        description=f"准备 {key[0]}/{key[1]} 所需 PO、基础 Mapper、无业务方法 Repository 或 FeignClient 骨架。",
+        kind="backend.foundation", **shared_refs,
+    )] if physical_types else []
+    result.append(responsibility(
         "backend.endpoint.objects", *key,
         description=f"实现 Endpoint {key[0]}/{key[1]} 的请求、响应及内部对象职责。",
         kind="backend.objects", **shared_refs,
-    )]
+    ))
     if "database" in physical_types:
         result.append(responsibility(
             "backend.repository", *key,
@@ -117,11 +123,12 @@ def _unit_responsibilities(
             description=f"提供 {source_type} 数据源所需的后端公共基础能力。",
             kind="backend.bootstrap", data_source_type=source_type,
         ) for source_type in sorted(source_types)]
-    if unit_id.startswith("backend:endpoint:"):
-        matches = [key for key in endpoints if unit_id == f"backend:endpoint:{key[0]}:{key[1]}"]
-        if len(matches) != 1:
-            fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"Endpoint Unit {unit_id} 不在 Scope 内或身份有歧义。", unit_ids=[unit_id])
-        return _backend_requirements(matches[0], source_types_by_endpoint[matches[0]])
+    if unit_id.startswith(BACKEND_MODULE_PREFIX):
+        matches = [key for key in endpoints if unit_id == backend_module_unit_id(key[0])]
+        if not matches:
+            fail_requirement_input("GENERATION_UNIT_OUTSIDE_SCOPE", f"后端模块 Unit {unit_id} 不在当前 Scope 内。", unit_ids=[unit_id])
+        return [requirement for key in sorted(matches)
+                for requirement in _backend_requirements(key, source_types_by_endpoint[key])]
     if unit_id == "frontend:auth-guard":
         fingerprint = resource_catalog_fingerprint(plan)
         return [] if fingerprint is None else [responsibility(
@@ -156,7 +163,7 @@ def _requires_endpoint_source_types(required_unit_ids: Sequence[str], endpoints:
         return False
     return any(
         unit_id in {"frontend:api-client", "frontend:data:static", "backend:bootstrap"}
-        or unit_id.startswith("backend:endpoint:")
+        or unit_id.startswith(BACKEND_MODULE_PREFIX)
         for unit_id in required_unit_ids
     )
 
@@ -180,8 +187,11 @@ def resolve_generation_requirements(
         fail_requirement_input("REQUIRED_UNITS_INVALID", "required_unit_ids 必须为明确的 ID 数组。")
     required = sorted({exact_id(unit_id, "required_unit_ids") for unit_id in required_unit_ids})
     units = unit_skeleton.get("build_units")
-    if not isinstance(units, Mapping) or any(unit_id not in units for unit_id in required):
-        fail_requirement_input("REQUIRED_UNIT_MISSING", "required Unit 必须存在于当前 Unit Skeleton。", unit_ids=required)
+    if not isinstance(units, Mapping):
+        fail_requirement_input("REQUIRED_UNIT_MISSING", "当前 Unit Skeleton 缺少有效的 build_units。", unit_ids=required)
+    missing = [unit_id for unit_id in required if unit_id not in units]
+    if missing:
+        fail_requirement_input("REQUIRED_UNIT_MISSING", f"当前 Unit Skeleton 缺少必需 Unit：{', '.join(missing)}。", unit_ids=missing)
     for unit_id in required:
         if not isinstance(units[unit_id], Mapping) or units[unit_id].get("id") != unit_id:
             fail_requirement_input("GENERATION_UNIT_IDENTITY_INVALID", "Unit Skeleton 的 key 与节点身份必须一致。", unit_ids=[unit_id], category="platform")

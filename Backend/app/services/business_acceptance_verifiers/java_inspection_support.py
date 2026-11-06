@@ -32,8 +32,9 @@ def _inspect_or_block(files: dict[str, str]) -> JavaAstModel | dict[str, Any]:
 def _find_controller_method(
     controllers: list[JavaType], method: str, path: str
 ) -> tuple[JavaType, JavaMethod] | None:
-    """按类型级与方法级 Mapping 组合匹配具体 Controller 方法。"""
+    """按类型级与方法级 Mapping 唯一匹配具体 Controller 方法。"""
 
+    matched = None
     for controller in controllers:
         base_paths = _mapping_paths(controller.annotations) or [""]
         for handler in controller.methods:
@@ -41,8 +42,10 @@ def _find_controller_method(
                 continue
             method_paths = _mapping_paths(handler.annotations) or [""]
             if any(_join_paths(base, leaf) == path for base in base_paths for leaf in method_paths):
-                return controller, handler
-    return None
+                if matched is not None:
+                    return None
+                matched = (controller, handler)
+    return matched
 
 
 def _mapping_http_method(annotations: list[JavaAnnotation]) -> str:

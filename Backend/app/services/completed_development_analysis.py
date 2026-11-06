@@ -23,6 +23,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 
 def analyze_completed_target(
     *, project_plan: dict, baseline: dict, context: dict, target: DevelopmentArtifactTarget,
+    workspace: Path | None = None,
 ) -> tuple[str, str]:
     """复用正式 DAG 的覆盖与缺项规则，只返回当前目标状态，不调模型或组装 DAG。"""
 
@@ -39,6 +40,7 @@ def analyze_completed_target(
     facts = resolve_reuse_facts(
         confirmed_plan=baseline, unit_skeleton=skeleton, build_context=build_context,
         workspace_snapshot={}, formal_plan=project_plan,
+        workspace_root=workspace,
     )
     # 已确认但尚未执行的任务不能证明旧实现已经满足当前职责。
     completed = tuple(key for key, task in baseline["task_registry"].items()
@@ -68,7 +70,7 @@ def _target_analysis(workspace: Path, target: DevelopmentArtifactTarget, plan: d
     context = resolve_confirmation_context(workspace, scope, project_plan=plan)["build_context"]
     context = compile_authorization_overlay(plan, {**context, "scope": scope},
                                             application_config=read_application_config(workspace))
-    return analyze_completed_target(project_plan=plan, baseline=baseline, context=context, target=target)
+    return analyze_completed_target(project_plan=plan, baseline=baseline, context=context, target=target, workspace=workspace)
 
 
 def analyze_completed_development(workspace: str, *, change_id: str) -> dict[str, int]:

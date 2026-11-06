@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from functools import wraps
 
 from app.agents.model_business_context import current_model_context, model_business_context
+from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX
 
 
 @contextmanager
@@ -79,8 +80,8 @@ def unit_planning_operation(context, *, repairing: bool = False) -> str | None:
     identifier = context.unit_id
     if identifier == "backend:bootstrap":
         kind = "backend_bootstrap"
-    elif identifier.startswith("backend:endpoint:"):
-        kind = "backend_endpoint"
+    elif identifier.startswith(BACKEND_MODULE_PREFIX):
+        kind = "backend_module"
     elif identifier == "frontend:api-client":
         kind = "frontend_api"
     elif identifier == "frontend:data:static":

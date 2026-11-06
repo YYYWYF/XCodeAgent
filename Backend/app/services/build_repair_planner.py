@@ -317,7 +317,7 @@ def _prepare_repair_addition(
     endpoint_mismatch = (
         result.get("failure_category") == "plan_mismatch"
         and parent.get("owner") == "backend"
-        and str(parent.get("unit_id") or "").startswith("backend:endpoint:")
+        and str(parent.get("unit_id") or "").startswith("backend:module:")
     )
     if requested is None and not endpoint_mismatch:
         return
@@ -640,12 +640,15 @@ def _repair_task(
         "dependencies": [],
         "status": "pending",
         "source_refs": {
+            # 后端模块修复继承精确阶段和接口范围，不能从修复 ID 猜测原任务边界。
+            **{key: value for key, value in (parent_task.get("source_refs") or {}).items()
+               if key in {"backend_stage", "target", "endpoint_ids", "entity_ids", "foundation_paths"}},
             "parent": (
                 parent_task.get("source_refs")
                 if isinstance(parent_task.get("source_refs"), dict)
                 else {}
             ),
-            # Java 执行器从任务直接来源读取唯一 Endpoint 设计，修复任务必须继承它。
+            # Java 执行器读取原任务绑定的设计，公共阶段可以覆盖多个接口。
             **(
                 {
                     "endpoint_designs": [

@@ -3,7 +3,7 @@
 ## Execution Scope
 
 Read this file only when the current task is explicitly `backend:bootstrap` and its
-modification scope includes the relevant project files. Normal `backend:endpoint:*`
+modification scope includes the relevant project files. Normal `backend:module:*`
 tasks must not perform the checks or modifications described here.
 
 Read the existing `pom.xml`, `application.yml`, and configuration classes first. Keep

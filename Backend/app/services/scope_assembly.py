@@ -440,43 +440,12 @@ def _scope_review_task_ids(
         if isinstance(task, Mapping) and _identity(task.get("id")) is not None
     }
     platform_ids = {str(task_id) for task_id in platform_task_ids}
-    # required Unit 是当前 Scope 的直接范围；Candidate 即使没有被 Unit 元数据回写也必须纳入 review。
-    seed_ids = {
-        task_id
-        for task_id, task in tasks_by_id.items()
-        if task_id not in platform_ids
-        and str(task.get("unit_id") or "") in current_unit_ids
-    }
-    seed_ids.update(
-        str(task_id)
-        for task_id in candidate_task_ids
-        if str(task_id) not in platform_ids
-    )
-    ancestors: set[str] = set()
-    pending = [
-        str(dependency)
-        for task_id in seed_ids
-        for dependency in tasks_by_id.get(task_id, {}).get("dependencies") or []
-        if str(dependency) and str(dependency) not in platform_ids
-    ]
-    while pending:
-        task_id = pending.pop()
-        if task_id in ancestors or task_id in platform_ids:
-            continue
-        task = tasks_by_id.get(task_id)
-        if task is None:
-            continue
-        ancestors.add(task_id)
-        pending.extend(
-            str(dependency)
-            for dependency in task.get("dependencies") or []
-            if (
-                str(dependency)
-                and str(dependency) not in ancestors
-                and str(dependency) not in platform_ids
-            )
-        )
-    review_ids = (seed_ids | ancestors) - platform_ids
+    from app.services.backend_module_scope import scoped_task_ids
+
+    review_ids = scoped_task_ids(
+        list(tasks_by_id.values()), assembled_plan["build_execution_scope"], current_unit_ids,
+        extra_task_ids=candidate_task_ids,
+    ) - platform_ids
     retained_ids = set(str(task_id) for task_id in retained_task_ids)
     reused_ids = review_ids & retained_ids
     ordered_ids = _stable_plan_task_ids(assembled_plan)
@@ -540,10 +509,19 @@ def assemble_scope_build_task_plan(
         candidates_by_unit, required_units
     )
     # 固定 ID 的新任务替换过期合同，不能继承 completed；旧文件及不可变 Build Run 仍保留。
-    retained = [task for task in retained if not (
-        task["unit_id"] in required_units
-        and not task_covers_current_input(task, project_plan, build_context)
-    )]
+    from app.services.backend_module_freshness import project_current_backend_task
+    projected_retained = []
+    for task in retained:
+        if task["unit_id"].startswith("backend:module:"):
+            projected = project_current_backend_task(
+                task, project_plan, build_context,
+                facts.reusable_capabilities_by_unit.get(task["unit_id"], {}),
+            )
+            if projected is not None:
+                projected_retained.append(projected)
+        elif task["unit_id"] not in required_units or task_covers_current_input(task, project_plan, build_context):
+            projected_retained.append(task)
+    retained = projected_retained
     collision_issues = _collision_issues(
         retained, candidates, candidate_unit_by_task_id
     )
@@ -568,6 +546,11 @@ def assemble_scope_build_task_plan(
         ),
         "_allow_missing_business_deliverable_task_ids": sorted(retained_id_set),
         "_compile_auth_capability_dependencies": True,
+        "_backend_foundation_providers": {
+            capability: list(providers)
+            for by_capability in facts.reusable_capabilities_by_unit.values()
+            for capability, providers in by_capability.items() if capability.startswith("backend.foundation:")
+        },
         # retained owner 是当前正式基线的唯一事实；验收据此允许旧 Endpoint
         # 继续存在于同一个 canonical API module，但不创建第二个 owner。
         "frontend_endpoint_owner_constraints": [

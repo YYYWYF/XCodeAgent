@@ -37,6 +37,7 @@ from app.services.deterministic_unit_candidates import (
     retained_auth_resource_task_ids,
 )
 from app.services.template_state import validate_template_context
+from app.services.unit_task_manifest import backend_module_unit_id
 
 
 logger = logging.getLogger(__name__)
@@ -1108,15 +1109,13 @@ def _authorization_coverage_errors(
         page_id = _text(page.get("pageId"))
         if page_id and f"page:{page_id}" not in units:
             errors.append(f"Authorization page {page_id} is missing its page Unit task.")
-    # 权限不是独立 Build Unit。仅当当前范围本来就要求实现某个后端 endpoint
-    # Unit 时，才要求该 Unit 中存在 Controller 交付物；纯静态及范围外接口不应
-    # 因携带 operationResourceKeys 被误判为缺少后端 Controller。
+    # 权限仍逐接口校验，共享 Controller 任务必须精确覆盖当前授权 Endpoint。
     required_unit_ids = set(_string_list(build_context.get("required_unit_ids")))
     for endpoint in _dict_items(constraints.get("endpoints")):
         keys = _string_list(endpoint.get("operationResourceKeys"))
         contract_id = _text(endpoint.get("apiContractId"))
         endpoint_id = _text(endpoint.get("endpointId"))
-        unit_id = f"backend:endpoint:{contract_id}:{endpoint_id}"
+        unit_id = backend_module_unit_id(contract_id)
         if not keys or unit_id not in required_unit_ids:
             continue
         has_controller_task = any(
@@ -1124,6 +1123,7 @@ def _authorization_coverage_errors(
             and str(task.get("owner") or "") == "backend"
             and any(
                 str(deliverable.get("kind") or "") == "backend.endpoint_controller"
+                and deliverable.get("target_id") == endpoint_id
                 for deliverable in _dict_items(task.get("deliverables"))
             )
             for task in tasks
