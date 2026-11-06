@@ -14,17 +14,39 @@ with the checked-in lockfile.
 
 ## Development
 
-- Windows backend: `powershell -ExecutionPolicy Bypass -File scripts/start-backend.ps1`
-- macOS backend: `bash scripts/start-backend.sh`
-- Frontend on either platform: run `pnpm dev` from `Frontend`.
+- Windows backend: `powershell -ExecutionPolicy Bypass -File scripts/start-backend.ps1 -Env st`
+- macOS backend: `bash scripts/start-backend.sh --env st`
+- Frontend on either platform: run `pnpm dev:st` from `Frontend`.
+
+Use matching `dev`, `st`, `uat` or `prd` values on both sides. Local startup defaults to `dev`
+when neither the script argument nor process `APP_ENV` is supplied. Backend files are `.env`
+for dev and `.env.st`, `.env.uat`, `.env.prd` for the other environments. Copy the corresponding
+`.example` file and supply actual company configuration; populated files are ignored by Git.
+Only the selected file is loaded. Missing files and invalid environments fail without falling back
+to dev. File-defined business values override process variables; undeclared values retain the existing
+process/default rules. Startup controls (environment, file path, host/port, working directory and
+`PYTHONUTF8`) cannot be overridden by the file. Environment selection also fixes the user data
+directory to `.devagentstudio_dev`, `.devagentstudio_st`, `.devagentstudio_uat` or `.devagentstudio`.
+Electron checks `/health.app_env` before proceeding, including source runs; a mismatch is fatal.
+See `Backend/README.md` for direct Uvicorn and PowerShell examples.
 
 ## Packaging
 
-From the repository root, use the matching one-command development package entry:
+From the repository root, use the matching one-command package entry with an explicit environment:
 
-- Windows x64: `powershell -ExecutionPolicy Bypass -File scripts/win_pack.ps1`
-- macOS Intel: `bash scripts/mac_pack_x64.sh`
-- macOS Apple Silicon: `bash scripts/mac_pack_arm64.sh`
+- Windows x64: `powershell -ExecutionPolicy Bypass -File scripts/win_pack.ps1 -Env st`
+- macOS Intel: `bash scripts/mac_pack_x64.sh --env prd`
+- macOS Apple Silicon: `bash scripts/mac_pack_arm64.sh --env st`
+
+All package entries, including standalone backend builders, require an explicit `dev`, `st`, `uat`
+or `prd` argument even when the shell has `APP_ENV`. The backend builders accept
+`bash scripts/build-backend-mac.sh arm64 --env st` or
+`powershell -ExecutionPolicy Bypass -File scripts/build-backend-win.ps1 -Env st`.
+Only the selected environment file is staged, keeping its filename. Frontend package commands such as
+`pnpm build:win:st`, `pnpm build:mac:arm64:st` and `pnpm build:unpack:st` verify that the selected file
+exists and reject any additional environment files before building. Generic `build:mac` and
+`build:unpack` require choosing an environment-specific command. Existing artifact names and
+update publishing rules are unchanged; use separate company release destinations for each environment.
 
 Each entry builds and stages the backend first, then builds the matching Electron package in
 `Frontend/dist`. Run the macOS entry only on a host with the matching architecture. Install the
@@ -62,9 +84,10 @@ Python reads its existing `Settings.template_engine_base_url` and calls Java
 custom event `app-update` and snapshot key `appUpdate`. No model or workspace workflow is started.
 
 `DEVAGENTSTUDIO_TEMPLATE_ENGINE_BASE_URL` in the Python backend `.env` is the sole Java address
-configuration, shared with Bootstrap and template updates. Python retains its existing environment
-loading rules; packaged apps load the staged `resources/backend/.env` through
-`DEVAGENTSTUDIO_BACKEND_ENV_FILE`. Restart the backend/app after changing the setting; rebuilding
+configuration, shared with Bootstrap and template updates. Packaged apps load the selected
+`resources/backend/.env[.st|.uat|.prd]` through `DEVAGENTSTUDIO_BACKEND_ENV_FILE`;
+Electron passes its compiled `APP_ENV` to Python and verifies the returned health identity.
+Restart the backend/app after changing the setting; rebuilding
 the frontend is unnecessary. Electron never reads or exposes the `.env` contents and has no separate
 Java update URL or build-time Java address injection.
 

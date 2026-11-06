@@ -1,6 +1,6 @@
 # Local LangGraph Agent
 
-一个 `Python + FastAPI + LangGraph` 本地后端。通过 `MODEL_TRANSPORT=direct/transmit` 选择模型直连或 AG-UI 转发，共用业务代码，并通过 `/workflow/run` 暴露 AG-UI 流式接口。默认直连，修改配置后重启后端。配置及边界见 [模型接入说明](../docs/MODEL_TRANSPORT.md)。
+一个 `Python + FastAPI + LangGraph` 本地后端。它按 `APP_ENV` 读取对应环境文件中的模型 Provider 配置,通过 `MODEL_TRANSPORT=direct/transmit` 选择模型直连或 AG-UI 转发，共用业务代码，并通过 `/workflow/run` 暴露 AG-UI 流式接口。默认直连，修改配置后重启后端。配置及边界见 [模型接入说明](../docs/MODEL_TRANSPORT.md)。
 
 当前后端还内置了：
 
@@ -10,19 +10,57 @@
 
 ## 启动
 
+先在 `Backend` 目录创建虚拟环境并安装依赖（推荐 Python 3.12）：
+
 ```bash
-# windows
+# windows bash
 python -m venv .venv
 .venv/Scripts/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+APP_ENV=dev uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 # macOS
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+APP_ENV=dev uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+```powershell
+# Windows PowerShell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt 
+$env:APP_ENV = "dev"
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 # 使用.env开发环境配置启动后端
+```
+
+创建所需环境配置后，推荐从**项目根目录**使用脚本启动。参数优先于进程 `APP_ENV`；均未设置时默认为 dev：
+
+```bash
+bash scripts/start-backend.sh                 # dev，读取 Backend/.env
+bash scripts/start-backend.sh --env st        # 读取 Backend/.env.st
+bash scripts/start-backend.sh --env uat       # 读取 Backend/.env.uat
+bash scripts/start-backend.sh --env prd       # 读取 Backend/.env.prd
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start-backend.ps1 -Env st
+```
+
+也可以在已激活虚拟环境的 **Backend 目录**直接启动，未设置 `APP_ENV` 时默认 dev：
+
+```bash
+APP_ENV=st python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+```powershell
+$env:APP_ENV = "st"
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+前端分别使用 `pnpm dev`、`pnpm dev:st`、`pnpm dev:uat`、`pnpm dev:prd`，必须与后端一致。
+`/health.app_env` 返回后端实际环境；Electron 在启动更新检查前核对，错配时拒绝继续启动。
 
 Workflow 调试入口在前端 Chat Composer 的“Workflow 调试”面板中，提供主工作流可调试节点，并可传入已落盘的 RequirementSpec、ProjectPlan、WorkspaceSnapshot 或 BuildTaskPlan 路径。选择 `launch_project` 会进入验收子图并强制重跑项目启动；审查和最终验收确认仍通过各自的结构化确认动作提交。
 
@@ -130,7 +168,24 @@ curl -X POST http://127.0.0.1:8000/tools/terminal/exec \
 
 ## 配置
 
-实际密钥放在本地 `.env`，并已被 `.gitignore` 忽略。提交或分享代码时使用 `.env.example` 作为模板。
+| APP_ENV | 实际文件 | 脱敏模板 | 用户数据目录 |
+| --- | --- | --- | --- |
+| dev | `.env` | `.env.example` | `~/.devagentstudio_dev` |
+| st | `.env.st` | `.env.st.example` | `~/.devagentstudio_st` |
+| uat | `.env.uat` | `.env.uat.example` | `~/.devagentstudio_uat` |
+| prd | `.env.prd` | `.env.prd.example` | `~/.devagentstudio` |
+
+复制对应模板并填写实际模型、服务地址和凭据。例如 `cp .env.st.example .env.st`。
+实际文件均被 Git 忽略，必须由开发机或公司 CI 提供；不要提交、打印或分享真实凭据。
+
+每次仅加载选中的文件，不叠加 `.env`，不搜索父目录。环境非法或文件缺失时立即报错。
+文件中声明的业务配置优先于系统环境变量；未声明的项仍使用系统变量及现有代码默认值。
+`APP_ENV`、`DEVAGENTSTUDIO_BACKEND_ENV_FILE`、`DEVAGENTSTUDIO_BACKEND_HOST/PORT`、
+`DEVAGENTSTUDIO_WORKING_DIR`、`PYTHONUTF8` 属于启动控制项，文件内设置不生效。
+工作目录由所选环境固定映射。需要自定义文件位置时，在启动进程设置
+`DEVAGENTSTUDIO_BACKEND_ENV_FILE`（推荐绝对路径），此时只加载该文件。
+
+完整打包命令和环境参数见 [跨平台启动与打包](../docs/CROSS_PLATFORM_SUPPORT.md)。
 
 OpenAI-compatible 服务示例：
 

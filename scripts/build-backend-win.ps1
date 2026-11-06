@@ -1,17 +1,17 @@
 # Windows x64 后端打包步骤：
 # 1. 打开powershell,在 64 位 Windows 机器的项目根目录执行本脚本：
-#    powershell -ExecutionPolicy Bypass -File scripts/build-backend-win.ps1
-# 2. 执行前请确保 Backend\.env 已存在。
+#    powershell -ExecutionPolicy Bypass -File scripts/build-backend-win.ps1 -Env st
+# 2. 执行前请确保 Backend\.env.st 等对应环境文件已存在。
 # 3. 默认使用 64 位 Python 3.12；也可通过 -Python 指定 64 位 Python 3.14。
 # 4. 打包后的后端产物会被拷贝到 Frontend\resources\backend\win32。
 # 5. 本脚本成功后，再构建 Electron Windows 安装包：
 #    cd Frontend
-#    pnpm build:win:dev
-
-# 注意：后端需要有一个.env文件，存放密钥，这个后续要上传到git，也要参与打包
+#    pnpm build:win:st
+# 实际配置参与安装包构建，但不得提交到 Git。
 
 [CmdletBinding()]
 param(
+  [string]$Env = "",
   [string]$Python = "",
   [string]$BackendRoot = "",
   [string]$FrontendRoot = ""
@@ -38,7 +38,8 @@ if ([string]::IsNullOrWhiteSpace($FrontendRoot)) {
 
 $BackendRoot = (Resolve-Path $BackendRoot).Path
 $FrontendRoot = (Resolve-Path $FrontendRoot).Path
-$EnvFile = Join-Path $BackendRoot ".env"
+. (Join-Path $PSScriptRoot "BackendEnvironment.ps1")
+$EnvFile = Set-BackendEnvironment -AppEnvironment $Env -BackendRoot $BackendRoot -Required
 $SpecFile = Join-Path $BackendRoot "packaging\devagentstudio-backend.spec"
 $DistDir = Join-Path $BackendRoot "dist\devagentstudio-backend"
 $TargetDir = Join-Path $FrontendRoot "resources\backend\win32"
@@ -46,10 +47,6 @@ $TargetExe = Join-Path $TargetDir "devagentstudio-backend.exe"
 
 if (-not [Environment]::Is64BitOperatingSystem) {
   throw "Windows 64-bit is required to build the packaged backend."
-}
-
-if (-not (Test-Path $EnvFile -PathType Leaf)) {
-  throw "Missing Backend\.env. Create it before building the packaged backend."
 }
 
 Push-Location $BackendRoot
@@ -99,7 +96,7 @@ if (Test-Path $TargetDir) {
 
 New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
 Copy-Item (Join-Path $DistDir "*") $TargetDir -Recurse -Force
-Copy-Item $EnvFile (Join-Path $TargetDir ".env") -Force
+Copy-Item $EnvFile (Join-Path $TargetDir (Split-Path $EnvFile -Leaf)) -Force
 
 if (-not (Test-Path $TargetExe -PathType Leaf)) {
   throw "Staged backend executable not found: $TargetExe"

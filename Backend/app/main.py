@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.config import Settings
+from app.environment import load_backend_environment
 from app.observability.backend_logs import install_backend_log_capture
 
 # 在加载业务模块前接入开发服务和冻结后端的统一日志窗口。
@@ -173,6 +174,7 @@ async def health() -> dict[str, object]:
 
     return {
         "status": "ok",
+        "app_env": load_backend_environment().app_env,
         "backendInstanceId": current_backend_instance().instance_id,
         "provider": settings.provider_api_name,
         "model_transport": settings.model_transport,

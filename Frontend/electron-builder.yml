@@ -18,6 +18,9 @@ win:
       to: backend
       filter:
         - .env
+        - .env.st
+        - .env.uat
+        - .env.prd
         - '**/*'
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
@@ -33,6 +36,9 @@ mac:
       to: backend
       filter:
         - .env
+        - .env.st
+        - .env.uat
+        - .env.prd
         - '**/*'
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist

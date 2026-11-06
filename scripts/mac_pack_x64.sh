@@ -10,18 +10,12 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--slim" ]; }; then
-  echo "Usage: bash scripts/mac_pack_x64.sh [--slim]" >&2
-  exit 1
-fi
+source "$SCRIPT_DIR/backend-environment.sh"
+parse_backend_environment_arguments true true "$@"
+configure_backend_environment "$REPO_ROOT/Backend" false
 
-GRAMMAR_PROFILE="full"
-if [ "${1:-}" = "--slim" ]; then
-  GRAMMAR_PROFILE="builtin"
-fi
-
-DEVAGENTSTUDIO_BACKEND_GRAMMARS="$GRAMMAR_PROFILE" bash "$SCRIPT_DIR/build-backend-mac.sh" x64
+DEVAGENTSTUDIO_BACKEND_GRAMMARS="$GRAMMAR_PROFILE" bash "$SCRIPT_DIR/build-backend-mac.sh" x64 --env "$SELECTED_ENV"
 cd "$REPO_ROOT/Frontend"
-pnpm build:mac:x64:dev
+pnpm "build:mac:x64:$SELECTED_ENV"
 
 echo "macOS x64 package created in $REPO_ROOT/Frontend/dist"
