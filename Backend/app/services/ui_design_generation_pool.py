@@ -107,6 +107,7 @@ def generate_page_entry(
                 template_code,
                 _TEMPLATE_ADAPT_INSTRUCTION,
                 should_cancel=should_cancel,
+                business_operation="adapt_ui_design_template",
             )
             if should_cancel and should_cancel():
                 raise UiDesignGenerationCancelled("应用正在删除，页面设计生成已取消。")

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
+from app.model_connection_config import load_transmit_settings, validate_model_transport
 
 
 def _load_environment() -> None:
@@ -24,9 +25,14 @@ _DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
 
 @dataclass(frozen=True)
 class Settings:
-    model_base_url: str
-    model_api_key: str
-    model_name: str
+    model_base_url: str = ""
+    model_api_key: str = field(default="", repr=False)
+    model_name: str = "studio-model"
+    model_transport: str = "direct"
+    model_transmit_url: str = "http://127.0.0.1:8100"
+    model_transmit_token: str = field(default="", repr=False)
+    model_transmit_trust_env: bool = False
+    model_transmit_spaid: str = ""
     model_provider: str = "openai"
     model_trust_env: bool = False
     model_output_log_enabled: bool = False
@@ -106,16 +112,21 @@ class Settings:
 
     @property
     def provider_api_name(self) -> str:
-        return self.model_provider
+        """返回当前接入方式的公开提供方，不暴露未启用的直连配置。"""
+        return "transmit" if self.model_transport == "transmit" else self.model_provider
 
     def for_ui_design_model(self) -> "Settings":
         """返回 UI 设计稿节点应使用的模型配置视图。
 
-        独立配置（UI_DESIGN_MODEL_BASE_URL/API_KEY/NAME 三项齐全）生效时，返回
+        转发模式始终返回全局服务配置。直连模式下独立配置
+        （UI_DESIGN_MODEL_BASE_URL/API_KEY/NAME 三项齐全）生效时，返回
         替换了模型字段的 Settings 副本（provider/custom_headers/trust_env 缺省
         跟随全局值）；未配置时返回自身（回落全局模型）。
         """
 
+        if self.model_transport == "transmit":
+            # 转发是全局模式，UI 同样使用唯一服务连接，不读取独立模型配置。
+            return self
         if not (
             self.ui_design_model_base_url
             and self.ui_design_model_api_key
@@ -149,8 +160,10 @@ class Settings:
     def from_env(cls) -> "Settings":
         """从环境变量加载模型、UI/DAG 专属生成和持久化配置。"""
 
-        base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL")
-        model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
+        transport = validate_model_transport(os.getenv("MODEL_TRANSPORT", "direct"))
+        direct = transport == "direct"
+        base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL") if direct else ""
+        model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai") if direct else "openai"
         if model_provider == "openai-compatible":
             model_provider = "openai"
         if model_provider not in ("openai", "anthropic"):
@@ -160,9 +173,11 @@ class Settings:
         custom_headers_raw = os.getenv("MODEL_CUSTOM_HEADERS", "")
         custom_headers = _parse_custom_headers(custom_headers_raw)
         return cls(
+            model_transport=transport,
+            **load_transmit_settings(transport),
             model_base_url=base_url,
-            model_api_key=_required_any("MODEL_API_KEY", "OPENAI_API_KEY"),
-            model_name=_required_any("MODEL_NAME", "OPENAI_MODEL"),
+            model_api_key=_required_any("MODEL_API_KEY", "OPENAI_API_KEY") if direct else "",
+            model_name=_required_any("MODEL_NAME", "OPENAI_MODEL") if direct else "studio-model",
             model_provider=model_provider,
             model_trust_env=_env_bool("MODEL_TRUST_ENV", default=False),
             model_output_log_enabled=_env_bool(

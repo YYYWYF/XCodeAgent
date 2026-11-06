@@ -16,6 +16,9 @@ from __future__ import annotations
 import logging
 import os
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
 from deepagents.backends.filesystem import FilesystemBackend
@@ -23,6 +26,40 @@ from deepagents.backends.protocol import BackendProtocol, WriteResult, EditResul
 from app.services.inclusion_rate import capture_inclusion_before, report_inclusion_rate
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RepairCreation:
+    """记录当前修复工具是否实际完成了已批准的排他创建。"""
+
+    path: Path
+    scope: frozenset[Path]
+    written: bool = False
+
+
+_REPAIR_CREATION: ContextVar[RepairCreation | None] = ContextVar("repair_creation", default=None)
+
+
+@contextmanager
+def repair_create_only_scope(path: Path, scope: frozenset[Path]):
+    """在一次批准后的修复调用内绑定文件范围和只能创建的目标。"""
+    creation = RepairCreation(path, scope)
+    token = _REPAIR_CREATION.set(creation)
+    try:
+        yield creation
+    finally:
+        _REPAIR_CREATION.reset(token)
+
+
+def repair_write_policy(root: Path, file_path: str, resolved: Path) -> str:
+    """按真实路径限制本轮修复的写入，拒绝通过链接切换写入目标。"""
+    creation = _REPAIR_CREATION.get()
+    if creation is None:
+        return "normal"
+    declared = root / file_path.lstrip("/\\")
+    if declared != resolved or declared not in creation.scope:
+        return "denied"
+    return "create_only" if declared == creation.path else "normal"
 
 # 禁止代码生成 agent 在工作区创建的临时脚本扩展名。
 # 这类脚本（run_tsc.sh / run_check.py / run_tsc.js 等）是 agent 为了跑 tsc/build 验证而违规创建的，
@@ -134,12 +171,11 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
                 raise
             return resolved
 
-    def _overwrite(self, file_path: str, content: str) -> WriteResult:
-        """Overwrite *file_path* with *content*, creating it if necessary."""
+    def _write_file(self, file_path: str, resolved: Path, content: str, *, exclusive: bool = False) -> WriteResult:
+        """写入普通文件，受限新增使用原子排他创建避免覆盖。"""
         try:
-            resolved = self._resolve_path(file_path)
             resolved.parent.mkdir(parents=True, exist_ok=True)
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
             if hasattr(os, "O_NOFOLLOW"):
                 flags |= os.O_NOFOLLOW
             fd = os.open(resolved, flags, 0o644)
@@ -157,7 +193,17 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
 
         # Try the original path first (handles new files)
         resolved = self._resolve_path(file_path)
+        policy = repair_write_policy(self.cwd, file_path, resolved)
+        if policy == "denied":
+            return WriteResult(error="该文件不在当前修复的授权范围内。")
         before = capture_inclusion_before(resolved)
+        if policy == "create_only":
+            creation = _REPAIR_CREATION.get()
+            result = self._write_file(file_path, resolved, content, exclusive=True)
+            if result.error is None and creation is not None:
+                creation.written = True
+                report_inclusion_rate(self.cwd, resolved, before)
+            return result
         result = super().write(file_path, content)
         if result.error is None:
             report_inclusion_rate(self.cwd, resolved, before)
@@ -165,7 +211,7 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
 
         # File already exists — overwrite instead of dedup
         logger.debug("AutoDedupFilesystemBackend: overwriting existing file %s", file_path)
-        result = self._overwrite(file_path, content)
+        result = self._write_file(file_path, resolved, content)
         if result.error is None:
             report_inclusion_rate(self.cwd, resolved, before)
         return result
@@ -178,6 +224,8 @@ class AutoDedupFilesystemBackend(FilesystemBackend):
              replace_all: bool = False) -> EditResult:
         """编辑成功后上报每个替换片段，包括纯删除和批量替换。"""
         resolved = self._resolve_path(file_path)
+        if repair_write_policy(self.cwd, file_path, resolved) != "normal":
+            return EditResult(error="当前修复无权编辑该文件。")
         before = capture_inclusion_before(resolved)
         result = super().edit(file_path, old_string, new_string, replace_all)
         if result.error is None:

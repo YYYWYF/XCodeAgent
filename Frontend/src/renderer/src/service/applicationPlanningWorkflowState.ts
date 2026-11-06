@@ -384,15 +384,15 @@ export function planningTechnicalPlanConfirmed(workflow?: WorkflowRunPayload): b
   ) {
     return false
   }
-  // 以当前 state 的第一个明确状态为准，避免旧 result 中的 confirmed 覆盖新一轮 pending 状态。
-  for (const source of [workflow?.state]) {
-    const technicalPlan = source?.technical_plan
-    if (!technicalPlan || typeof technicalPlan !== 'object' || Array.isArray(technicalPlan))
-      continue
-    const confirmationStatus = (technicalPlan as Record<string, unknown>).confirmation_status
-    if (typeof confirmationStatus === 'string') return confirmationStatus === 'confirmed'
-  }
-  return false
+  // 正式正文已通过 artifactRefs 外置；模板交接只读取后端确认后签发的产物回执，
+  // 不等待右侧文档加载，也不把资料引用本身当作已确认事实。
+  const confirmation = readRecord(workflow?.state?.application_planning_confirmation)
+  const technicalPlan = readRecord(readRecord(confirmation.artifacts).technicalPlan)
+  return Boolean(
+    readText(confirmation.confirmedAt) &&
+    readText(readRecord(technicalPlan.markdown).sha256) &&
+    readText(readRecord(technicalPlan.json).sha256)
+  )
 }
 
 // 判断当前是否正在生成由需求事实与产品规划共同组成的需求文档。

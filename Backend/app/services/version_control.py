@@ -452,6 +452,8 @@ async def _generate_summary_text(prompt: str) -> str:
     表现为"模型明明答了，摘要却是空的"。
     """
 
+    from app.agents.model_operations import model_operation
+
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from app.agents.messages import _coerce_content_text
@@ -459,9 +461,10 @@ async def _generate_summary_text(prompt: str) -> str:
     from app.config import Settings
 
     model = create_chat_model(Settings.from_env())
-    response = await model.ainvoke(
-        [SystemMessage(content=_SUMMARY_SYSTEM_PROMPT), HumanMessage(content=prompt)]
-    )
+    with model_operation("generate_change_summary", business_stage="delivery"):
+        response = await model.ainvoke(
+            [SystemMessage(content=_SUMMARY_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+        )
     return _coerce_content_text(getattr(response, "content", response))
 
 

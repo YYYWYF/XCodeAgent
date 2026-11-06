@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import httpx
 import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Protocol
 
-from openai import AsyncOpenAI
-
+from app.agents.model_factory import create_chat_model
+from app.agents.messages import _coerce_content_text
 from app.config import Settings
-from app.services.model_output_logger import log_model_output
 
 
 @dataclass(frozen=True)
@@ -37,14 +35,11 @@ class ModelProvider(Protocol):
     ) -> ModelResponse: ...
 
 
-class OpenAIProvider:
+class ChatModelProvider:
     def __init__(self, settings: Settings) -> None:
-        self.output_log_enabled = settings.model_output_log_enabled
-        self.client = AsyncOpenAI(
-            api_key=settings.model_api_key,
-            base_url=settings.model_base_url,
-            http_client=httpx.AsyncClient(trust_env=settings.model_trust_env),
-        )
+        """内部消息辅助接口复用统一工厂，由配置选择直连或转发。"""
+        self.client = create_chat_model(settings)
+        self.model_transport = settings.model_transport
 
     async def complete(
         self,
@@ -56,43 +51,35 @@ class OpenAIProvider:
         temperature: float,
         tools: List[Dict[str, Any]] | None = None,
     ) -> ModelResponse:
+        """经统一模型生成结果，工具格式转换不改变上下文保存逻辑。"""
         openai_messages = [
             {"role": "system", "content": system},
             *_openai_messages(messages),
         ]
         request: Dict[str, Any] = {
-            "model": model,
-            "messages": openai_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        if tools:
-            request["tools"] = [_openai_tool(tool) for tool in tools]
-        response = await self.client.chat.completions.create(**request)
-        message = response.choices[0].message
+        # 直连保持调用级模型选择；转发的真实模型始终由服务配置决定。
+        if self.model_transport == "direct":
+            request["model"] = model
+        runnable = self.client.bind_tools([_openai_tool(tool) for tool in tools]) if tools else self.client
+        message = await runnable.ainvoke(openai_messages, **request)
         tool_calls = [
             ModelToolCall(
-                id=str(tool_call.id),
-                name=str(tool_call.function.name),
-                input=_json_object(tool_call.function.arguments),
+                id=str(tool_call["id"]),
+                name=str(tool_call["name"]),
+                input=tool_call["args"],
             )
             for tool_call in (message.tool_calls or [])
         ]
-        if self.output_log_enabled:
-            log_model_output(
-                content=message.content or "",
-                tool_calls=[
-                    {"id": tool_call.id, "name": tool_call.function.name}
-                    for tool_call in (message.tool_calls or [])
-                ],
-            )
-        return ModelResponse(text=message.content or "", tool_calls=tool_calls)
+        # 模型工厂已配置日志回调，这里只归一化正文，避免重复记录输出。
+        return ModelResponse(text=_coerce_content_text(message.content) or "", tool_calls=tool_calls)
 
 
 def create_model_provider(settings: Settings) -> ModelProvider:
-    if settings.model_provider == "openai":
-        return OpenAIProvider(settings)
-    raise ValueError(f"Unsupported MODEL_PROVIDER: {settings.model_provider}")
+    """创建共用模型提供方，使所有辅助调用遵守同一接入方式。"""
+    return ChatModelProvider(settings)
 
 
 def _openai_tool(tool: Dict[str, Any]) -> Dict[str, Any]:

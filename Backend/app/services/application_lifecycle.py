@@ -474,6 +474,7 @@ def start_workbench_execution(
     requires_test_entry: bool = False,
     test_interaction_submission: dict[str, Any] | None = None,
     task_plan_interaction_submission: dict[str, Any] | None = None,
+    api_design_interaction_submission: dict[str, Any] | None = None,
 ) -> ApplicationLifecycle:
     """原子登记计划执行及全部资源锁，并保持初始化完成状态不变。"""
 
@@ -598,6 +599,15 @@ def start_workbench_execution(
                 replaces_run_id=replaces_run_id,
                 expected_type=PendingInteractionType.TASK_PLAN_CONFIRMATION,
                 error_message="任务规划确认已过期或不属于原 DAG 运行。",
+            )
+        if api_design_interaction_submission is not None:
+            # API 门禁凭据与 execution/资源锁的接管共用原子写盘，重复提交不能复用旧门。
+            _validate_interaction_submission(
+                current,
+                submission=api_design_interaction_submission,
+                replaces_run_id=replaces_run_id,
+                expected_type=PendingInteractionType.API_DESIGN,
+                error_message="API 映射检测确认已过期或不属于原工作台运行。",
             )
         if development_continuation_consume is not None:
             # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。

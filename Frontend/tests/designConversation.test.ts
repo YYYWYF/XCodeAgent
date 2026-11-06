@@ -24,7 +24,6 @@ import {
   planningWorkflowPhase,
   planningWorkflowRequiresUserInput,
   planningWorkflowSettlesLoading,
-  planningWorkflowUiDesignSkipped,
   retainApplicationPlanningInterrupt,
   shouldBackfillPlanningWorkflow,
   shouldSuppressConfirmedTechnicalPlanTransitionChunk,
@@ -556,7 +555,7 @@ for (const kind of ['out_of_scope', 'read_only', 'clarification'] as const) {
 }
 const nonMutatingWorkflowWithoutInterrupt = {
   ...reviewWorkflow('out_of_scope', 'revision-a', false),
-  result: {}
+  state: {}
 } as WorkflowRunPayload
 assert.equal(planningReviewIdentity(nonMutatingWorkflowWithoutInterrupt), undefined)
 // 自由问答的回复帧不是确认权威；前端必须继续使用当前 planningWorkflow 的门禁身份。
@@ -571,8 +570,8 @@ const originalUiReviewWorkflow = {
 } as WorkflowRunPayload
 const nonMutatingUiWorkflow = {
   ...reviewWorkflow('out_of_scope', 'revision-a', false),
-  result: {
-    ...reviewWorkflow('out_of_scope', 'revision-a', false).result,
+  state: {
+    ...reviewWorkflow('out_of_scope', 'revision-a', false).state,
     clarification: { mode: 'ui_design_confirmation', status: 'requires_user_input' }
   }
 } as WorkflowRunPayload
@@ -844,7 +843,7 @@ assert.deepEqual(revisionContinuationHandoffFromWorkflow(continuationWorkflow), 
 assert.equal(
   revisionContinuationHandoffFromWorkflow({
     ...continuationWorkflow,
-    result: {
+    state: {
       lifecycle: {
         ...continuationLifecycle,
         activeFormalRevision: {
@@ -862,7 +861,7 @@ assert.throws(
   () =>
     revisionContinuationHandoffFromWorkflow({
       ...continuationWorkflow,
-      result: {
+      state: {
         lifecycle: {
           ...continuationLifecycle,
           activeFormalRevision: {
@@ -1079,11 +1078,32 @@ const completedTechnicalPlanWorkflow = {
   },
   state: {
     lifecycle: { initialization: { stage: 'generating_application_template_files' } },
-    technical_plan: { confirmation_status: 'confirmed' }
+    application_planning_confirmation: {
+      confirmedAt: '2026-11-06T05:19:58Z',
+      artifacts: { technicalPlan: {
+        markdown: { sha256: 'a'.repeat(64) },
+        json: { sha256: 'b'.repeat(64) }
+      } }
+    },
+    artifactRefs: { technical_plan: { artifactId: 'c'.repeat(64), byteLength: 8000, mediaType: 'application/json' } }
   }
 } as WorkflowRunPayload
 
 assert.equal(planningTechnicalPlanConfirmed(completedTechnicalPlanWorkflow), true)
+assert.equal(planningTechnicalPlanConfirmed({
+  ...completedTechnicalPlanWorkflow,
+  state: { ...completedTechnicalPlanWorkflow.state, application_planning_confirmation: {} }
+}), false)
+assert.equal(planningTechnicalPlanConfirmed({
+  ...completedTechnicalPlanWorkflow,
+  summary: { status: 'requires_user_input', phase: 'technical_planning' }
+}), false)
+assert.equal(planningTechnicalPlanConfirmed({
+  ...completedTechnicalPlanWorkflow,
+  state: { ...completedTechnicalPlanWorkflow.state, lifecycle: {
+    initialization: { stage: 'awaiting_technical_plan_confirmation' }
+  } }
+}), false)
 assert.equal(planningWorkflowPhase(completedTechnicalPlanWorkflow), 'technical_planning')
 assert.deepEqual(planningWorkflowActivity({
   ...completedTechnicalPlanWorkflow,
@@ -1513,7 +1533,7 @@ assert.equal(shouldBackfillPlanningWorkflow(summaryOnlyQuestionsWorkflow, true),
 const previousRunWithInterrupt = {
   ...summaryOnlyQuestionsWorkflow,
   runId: 'previous-run',
-  result: {
+  state: {
     application_planning_interrupt: {
       gateId: 'requirement_spec:previous',
       artifact: 'requirement_spec',
@@ -1525,10 +1545,10 @@ const nextRunWithoutInterrupt = {
   ...summaryOnlyQuestionsWorkflow,
   runId: 'next-run',
   summary: { status: 'running', phase: 'requirements' },
-  result: {}
+  state: {}
 } as WorkflowRunPayload
 assert.equal(
-  retainApplicationPlanningInterrupt(previousRunWithInterrupt, nextRunWithoutInterrupt).result
+  retainApplicationPlanningInterrupt(previousRunWithInterrupt, nextRunWithoutInterrupt).state
     ?.application_planning_interrupt,
   undefined
 )
@@ -1630,7 +1650,7 @@ assert.equal(
   true
 )
 assert.equal(
-  planningWorkflowUiDesignSkipped({
+  planningWorkflowPhase({
     ...awaitingPlanningEntryWithStaleTechnicalProjection,
     state: {
       ...awaitingPlanningEntryWithStaleTechnicalProjection.state,
@@ -1638,7 +1658,7 @@ assert.equal(
       ui_designs: { confirmation_status: 'skipped', pages: [{ pageId: 'old-page' }] }
     }
   } as WorkflowRunPayload),
-  true
+  'planning_stage_entry'
 )
 const entryAuthoritativeWorkflow = {
   ...summaryOnlyQuestionsWorkflow,

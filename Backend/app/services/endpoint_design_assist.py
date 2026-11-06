@@ -139,7 +139,7 @@ def replace_mapping(request: ReplaceMappingRequest) -> dict[str, Any]:
 
 
 def rule_context(request: RefineRuleRequest, context: dict[str, Any]) -> dict[str, Any]:
-    """验证规则目标和每项输入身份，保留用户已选依赖不增删。"""
+    """验证目标与依赖身份，按统一格式保留来源选择和已选输入。"""
     target = request.target
     operation = request.draft.get("databaseOperation")
     if operation is None:
@@ -175,7 +175,8 @@ def rule_context(request: RefineRuleRequest, context: dict[str, Any]) -> dict[st
             raise ValueError("业务规则输入重复。")
         seen.add(identity)
         dependencies.append(item.model_dump(by_alias=True))
-    return {"target": {**target.model_dump(), "type": field["type"]}, "dependencies": dependencies, "description": request.description}
+    return {"selection": context["selection"], "target": {**target.model_dump(), "type": field["type"]},
+            "dependencies": dependencies, "description": request.description}
 
 
 async def refine_rule(request: RefineRuleRequest, report: ProgressReporter, thread_id: str | None = None) -> dict[str, Any]:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agents.model_business_context import model_business_context
+
 import asyncio
 from typing import Any, AsyncIterator
 
@@ -88,32 +90,37 @@ def build_endpoint_designs_ag_ui_stream(
 
     async def assist_operation(report: ProgressReporter) -> AgUiActionResult:
         """辅助动作复用标准生命周期与取消边界，建议和应用均不落盘。"""
-        action = str(request_input.get("action"))
-        values = {key: value for key, value in request_input.items() if key != "action"}
-        thread_id = str(payload.get("threadId") or "")
-        # 来源决定严格请求模型，未知来源仍由数据库模型拒绝，不能混用生成结果。
-        source_type = values["selection"].get("sourceType") if isinstance(values.get("selection"), dict) else None
-        if action == "generate_mock_data":
-            result = await generate_mock_data(GenerateMockRequest.model_validate(values), report, thread_id)
-            return AgUiActionResult(data={"action": action, "mockData": result}, message="Mock 样例已生成，请预览后应用到静态数据内容。")
-        if action == "apply_mock_data":
-            result = await asyncio.to_thread(apply_mock_data, ApplyMockRequest.model_validate(values))
-            return AgUiActionResult(data={"action": action, "applied": result}, message="Mock 数据已校验，请核对返回映射后保存并确认。")
-        if action == "generate_mapping":
-            request_type, handler = {"external_api": (ExternalGenerateRequest, generate_external_mapping),
-                                     "static": (StaticGenerateRequest, generate_static_mapping)}.get(source_type, (GenerateMappingRequest, generate_mapping))
-            result = await handler(request_type.model_validate(values), report, thread_id)
-            message = "请先补充数据库操作的待明确信息，再继续生成。" if result["mapping"] is None else "完整映射已生成，请预览后替换当前草稿。"
-            return AgUiActionResult(data={"action": action, "assistance": result}, message=message)
-        if action == "refine_rule":
-            request_type, handler = {"external_api": (ExternalRefineRequest, refine_external_rule),
-                                     "static": (StaticRefineRequest, refine_static_rule)}.get(source_type, (RefineRuleRequest, refine_rule))
-            result = await handler(request_type.model_validate(values), report, thread_id)
-            return AgUiActionResult(data={"action": action, "refinedRule": result}, message="业务规则建议已生成，采用后仍需应用规则。")
-        request_type, handler = {"external_api": (ExternalReplaceMappingRequest, replace_external_mapping),
-                                 "static": (StaticReplaceRequest, replace_static_mapping)}.get(source_type, (ReplaceMappingRequest, replace_mapping))
-        result = await asyncio.to_thread(handler, request_type.model_validate(values))
-        return AgUiActionResult(data={"action": action, "applied": result}, message="完整映射已校验，请补全未配置项后保存并确认草稿。")
+        business_context = {"business_stage": "api_design", "target": {"type": "endpoint"}}
+        for source, target in (("endpointId", "id"), ("apiContractId", "api_contract_id")):
+            if request_input.get(source):
+                business_context["target"][target] = request_input[source]
+        with model_business_context(business_context):
+            action = str(request_input.get("action"))
+            values = {key: value for key, value in request_input.items() if key != "action"}
+            thread_id = str(payload.get("threadId") or "")
+            # 来源决定严格请求模型，未知来源仍由数据库模型拒绝，不能混用生成结果。
+            source_type = values["selection"].get("sourceType") if isinstance(values.get("selection"), dict) else None
+            if action == "generate_mock_data":
+                result = await generate_mock_data(GenerateMockRequest.model_validate(values), report, thread_id)
+                return AgUiActionResult(data={"action": action, "mockData": result}, message="Mock 样例已生成，请预览后应用到静态数据内容。")
+            if action == "apply_mock_data":
+                result = await asyncio.to_thread(apply_mock_data, ApplyMockRequest.model_validate(values))
+                return AgUiActionResult(data={"action": action, "applied": result}, message="Mock 数据已校验，请核对返回映射后保存并确认。")
+            if action == "generate_mapping":
+                request_type, handler = {"external_api": (ExternalGenerateRequest, generate_external_mapping),
+                                         "static": (StaticGenerateRequest, generate_static_mapping)}.get(source_type, (GenerateMappingRequest, generate_mapping))
+                result = await handler(request_type.model_validate(values), report, thread_id)
+                message = "请先补充数据库操作的待明确信息，再继续生成。" if result["mapping"] is None else "完整映射已生成，请预览后替换当前草稿。"
+                return AgUiActionResult(data={"action": action, "assistance": result}, message=message)
+            if action == "refine_rule":
+                request_type, handler = {"external_api": (ExternalRefineRequest, refine_external_rule),
+                                         "static": (StaticRefineRequest, refine_static_rule)}.get(source_type, (RefineRuleRequest, refine_rule))
+                result = await handler(request_type.model_validate(values), report, thread_id)
+                return AgUiActionResult(data={"action": action, "refinedRule": result}, message="业务规则建议已生成，采用后仍需应用规则。")
+            request_type, handler = {"external_api": (ExternalReplaceMappingRequest, replace_external_mapping),
+                                     "static": (StaticReplaceRequest, replace_static_mapping)}.get(source_type, (ReplaceMappingRequest, replace_mapping))
+            result = await asyncio.to_thread(handler, request_type.model_validate(values))
+            return AgUiActionResult(data={"action": action, "applied": result}, message="完整映射已校验，请补全未配置项后保存并确认草稿。")
 
     return build_ag_ui_action_stream(
         payload=payload,

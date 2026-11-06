@@ -247,6 +247,7 @@ import {
 } from './utils'
 import { isConversationWorkflow } from './conversationMode'
 import { LOCAL_DESIGN_ARTIFACTS } from './designArtifacts'
+import { usePlanningDocumentView } from './hooks/usePlanningDocumentView'
 import {
   planningArtifactRecoveryKeys,
   technicalPlanBaselineStatus,
@@ -1362,6 +1363,18 @@ export default function AiChatPanel({
   })
 
   // ---- 创建计划阶段：设计阶段展示产品产物，计划阶段只展示 TechnicalPlan。 ----
+  const planningDocumentView = usePlanningDocumentView(
+    currentPlanningWorkflow,
+    application.workspaceRoot,
+    showRightPanel && rightPanel?.type === 'doc'
+      ? isDesignPhase && rightPanel.docKey === 'requirement-spec'
+        ? 'requirement-doc'
+        : isTechnicalPlanningPhase && rightPanel.docKey === 'technical-plan'
+          ? 'technical-plan'
+          : undefined
+      : undefined
+  )
+  const planningDocumentWorkflow = planningDocumentView.workflow
   // 需求文档在模型生成后即可展示；确认状态只决定它是草稿还是正式文档。
   // UI 设计稿：从规划 workflow 的 clarification（ui_design_confirmation 模式）或
   // state/result 的 ui_designs 读取页面列表。设计稿生成中或已就绪都算可用。
@@ -1432,17 +1445,17 @@ export default function AiChatPanel({
   }, [uiDesignPagesWithCode, planningPhaseRunning])
   const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
-    currentPlanningWorkflow
+    planningDocumentWorkflow
   )
   const technicalPlanDocContent = designDocContentFor(
     designDocFileContent,
-    currentPlanningWorkflow,
+    planningDocumentWorkflow,
     'technical-plan'
   )
   const uiDesignDocContent = designDocFileContent['ui-design'] || ''
-  const requirementSpecMemory = requirementSpecFromWorkflow(currentPlanningWorkflow)
-  const productPlanMemory = productPlanFromWorkflow(currentPlanningWorkflow)
-  const technicalPlanMemory = technicalPlanFromWorkflow(currentPlanningWorkflow)
+  const requirementSpecMemory = requirementSpecFromWorkflow(planningDocumentWorkflow)
+  const productPlanMemory = productPlanFromWorkflow(planningDocumentWorkflow)
+  const technicalPlanMemory = technicalPlanFromWorkflow(planningDocumentWorkflow)
   const requirementDocAvailable = Boolean(
     requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
   )
@@ -1525,7 +1538,10 @@ export default function AiChatPanel({
   // 查看已有产物不依赖冷恢复标记；历史会话缺少结构化快照时读取当前正式文件。
   useEffect(() => {
     const workspaceRoot = application.workspaceRoot
-    if (!technicalPlanViewActive || !workspaceRoot || technicalPlanMemory) return
+    if (
+      !technicalPlanViewActive || !workspaceRoot || technicalPlanMemory ||
+      currentPlanningWorkflow?.state?.artifactRefs
+    ) return
     let cancelled = false
     setTechnicalPlanFileLoading(true)
     void Promise.all([
@@ -1540,7 +1556,7 @@ export default function AiChatPanel({
     return () => {
       cancelled = true
     }
-  }, [technicalPlanViewActive, application.workspaceRoot, technicalPlanMemory])
+  }, [technicalPlanViewActive, application.workspaceRoot, technicalPlanMemory, currentPlanningWorkflow?.state?.artifactRefs])
 
   // 只有明确的冷恢复入口才读本地产物；同一 renderer 内缓存 Promise，阶段、事件和 tab 均不会重读。
   useEffect(() => {
@@ -5924,6 +5940,8 @@ export default function AiChatPanel({
                   message.info('请在输入框补充修改意见，发送后将返回需求阶段重新确认。')
                 }}
                 docName={designDocName}
+                error={planningDocumentView.error}
+                onRetry={planningDocumentView.retry}
                 generating={designDocGenerating}
                 productPlan={
                   requirementDocViewActive ? requirementProductPlanForDoc : productPlanForDoc
@@ -5943,7 +5961,7 @@ export default function AiChatPanel({
                       : undefined
                 }
                 structuredDocumentLoading={
-                  technicalPlanViewActive ? technicalPlanViewLoading : false
+                  planningDocumentView.loading || (technicalPlanViewActive && technicalPlanViewLoading)
                 }
                 title={designDocTitle}
               />

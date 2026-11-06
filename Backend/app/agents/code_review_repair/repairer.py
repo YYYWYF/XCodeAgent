@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.model_operations import observe_model_operation
 from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_with_tool_activity
 from app.tools.code_review_pnpm import (
     PNPM_INSTALL_TOOL_NAME,
@@ -65,6 +66,7 @@ def build_code_review_repair_prompt(
     )
 
 
+@observe_model_operation("repair_code_review", business_stage="code_review")
 def invoke_code_review_repair_agent(
     *,
     issues: list[dict[str, Any]],

@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 from app.protocols.preview_runtime import build_preview_runtime_stream, blocking_task
@@ -46,7 +47,7 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
             release_maintenance(self.workspace, owner["threadId"])
         self.temp.cleanup()
 
-    async def request(self, action: str, **fields: str) -> list[dict]:
+    async def request(self, action: str, **fields: Any) -> list[dict]:
         """消费实际 AG-UI 流，验证所有业务结果均有完整终态。"""
         payload = {"threadId": self.thread, "runId": "preview-test-run", "forwardedProps": {"previewRuntime": {"workspace": self.workspace, "action": action, **fields}}}
         events = []
@@ -421,6 +422,37 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["status"], "starting")
         self.assertEqual(value["backend"]["status"], "starting")
         self.assertNotEqual(value.get("failedStage"), "backend_process")
+
+    async def test_backend_port_conflict_replaces_running_state_in_ag_ui_snapshot(self) -> None:
+        """Java 尚未退出时，端口冲突也必须经现有 AG-UI 投影为失败并开放诊断。"""
+        import os
+
+        begin_attempt(self.workspace)
+        root = runtime_root(self.workspace)
+        root.joinpath("backend.pid").write_text(str(os.getpid()))
+        stdout = root / "backend.stdout.log"
+        stdout.write_text("Spring Boot Version 3.5\nStarted Application in 3.5 seconds\n")
+        finish_attempt(self.workspace, {
+            "status": "running", "preview_url": "http://localhost:3000",
+            "frontend": {"status": "skipped"},
+            "backend": {"status": "running", "server": {"pid": os.getpid(), "ready": True, "port": 8080}},
+        })
+        self.assertEqual(runtime_snapshot(self.workspace, logs=False)["backend"]["status"], "running")
+
+        with stdout.open("a") as stream:
+            stream.write("APPLICATION FAILED TO START\nWeb server failed to start. Port 8080 was already in use.\n")
+
+        for include_logs in (False, True):
+            with self.subTest(include_logs=include_logs):
+                value = self.result(await self.request("get", includeLogs=include_logs))["runtime"]
+                self.assertEqual(value["status"], "failed")
+                self.assertEqual(value["backend"]["status"], "failed")
+                self.assertFalse(value["backend"]["ready"])
+                self.assertEqual(value["backend"]["port"], 8080)
+                self.assertEqual(value["failedStage"], "backend_process")
+                self.assertIsNone(value["previewUrl"])
+                self.assertTrue(value["repairAvailable"])
+                self.assertTrue(value["diagnostics"])
 
     def test_live_vite_process_uses_current_ready_log_when_http_probe_is_unavailable(self) -> None:
         """HTTP 探测受限时，本轮存活 PID 和 Vite 就绪日志不会被误判为启动失败。"""

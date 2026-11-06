@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from app.agents.model_operations import observe_model_operation
 from app.agents.design_conversation.models import DesignConversationDecision
 from app.agents.design_conversation.fallback import (
     fallback_design_conversation_decision,
@@ -20,6 +21,7 @@ from app.services.access_control_intent import (
 from app.utils.model_output import extract_json_object
 
 
+@observe_model_operation("classify_design_intent")
 def classify_design_conversation(
     request: str,
     *,

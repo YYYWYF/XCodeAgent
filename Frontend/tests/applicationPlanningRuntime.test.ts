@@ -378,7 +378,7 @@ async function waitForCondition<T>(
   assert.equal(returned, saved)
   assert.equal(h.current()?.workflow?.state?.newestField, true)
   assert.equal(h.current()?.workflow?.confirmationArtifact, saved.artifact)
-  assert.deepEqual(h.current()?.workflow?.result?.requirement_spec, saved.requirementSpec)
+  assert.deepEqual(h.current()?.workflow?.state?.requirement_spec, saved.requirementSpec)
 }
 
 // H：未挂 Modal 的正式设计修订直接发送原用户请求和 revision 信封。
@@ -390,6 +390,48 @@ async function waitForCondition<T>(
   assert.equal(h.calls[0].options.workflowAction, 'start_design_revision')
   assert.equal(h.calls[0].options.workflowDebug, undefined)
   assert.deepEqual(h.calls[0].options.revisionRequest?.confirmedImpact, { interactionId: 'impact-1' })
+}
+
+// 正常确认返回精简状态时，凭服务端确认回执启动一次模板，不依赖已外置的技术规划正文。
+{
+  const initial = planningState()
+  initial.workflow = confirmationWorkflow()
+  const lifecycle = authoritativeLifecycle(initial, {
+    stage: 'generating_application_template_files', status: 'running'
+  })
+  const confirmation = {
+    confirmedAt: '2026-11-06T05:19:58Z',
+    directories: { specs: '.devagentstudio/specs', plans: '.devagentstudio/plans' },
+    artifacts: { technicalPlan: {
+      markdown: { format: 'markdown', path: '.devagentstudio/plans/technical-plan.md', sha256: 'a'.repeat(64) },
+      json: { format: 'json', path: '.devagentstudio/plans/technical-plan.json', sha256: 'b'.repeat(64) }
+    } }
+  }
+  const completed: WorkflowRunPayload = {
+    runId: 'confirmed-plan-run', threadId: initial.threadId, events: [],
+    summary: { status: 'completed', phase: 'technical_planning_confirm' },
+    state: {
+      lifecycle, application_planning_confirmation: confirmation,
+      artifactRefs: { technical_plan: { artifactId: 'c'.repeat(64), byteLength: 8000, mediaType: 'application/json' } }
+    }
+  }
+  let bootstrapCalls = 0
+  const h = harness(initial, {
+    /** 确认回调必须在 Canonical 已更新后执行，且只接收后端签发的原回执。 */
+    onTechnicalPlanConfirmed: async (received) => {
+      bootstrapCalls += 1
+      assert.deepEqual(received, confirmation)
+      assert.equal(h.current()?.lifecycle.initialization.stage, 'generating_application_template_files')
+      assert.equal(h.current()?.workflow?.state?.technical_plan, undefined)
+      return true
+    }
+  })
+  h.onSend(async (options) => {
+    options.onWorkflow?.(completed)
+    return result(completed)
+  })
+  await h.runtime.submitClarification(initial.workflow, { __applicationPlanningAction: 'confirm' })
+  assert.equal(bootstrapCalls, 1, '首次确认必须自动启动 Bootstrap，不能等待用户再点继续准备模板')
 }
 
 // I：transport settled 不代表业务完成，待确认状态保持原样。

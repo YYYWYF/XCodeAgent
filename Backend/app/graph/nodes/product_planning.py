@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.agents.model_operations import model_operation
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import logging
@@ -177,8 +178,13 @@ def _generate_valid_product_plan(
     existing_plan: dict[str, Any] | None,
     user_feedback: str,
     carried_pages: dict[str, Any] | None = None,
+    business_operation: str | None = None,
 ) -> dict[str, Any]:
     """执行生成、校验、反馈修复的有界循环，只向下游返回合格计划。"""
+
+    initial_operation = business_operation or (
+        "revise_product_plan" if existing_plan and user_feedback else "generate_product_plan"
+    )
 
     retry_feedback = user_feedback
     retry_base = existing_plan
@@ -187,16 +193,20 @@ def _generate_valid_product_plan(
     last_coverage: list[dict[str, Any]] = []
     for attempt in range(1, _PRODUCT_PLAN_GENERATION_ATTEMPTS + 1):
         try:
-            candidate = run_with_transport_retry(
-                lambda: plan_product_with_chat_model(
-                    requirement_spec,
-                    existing_plan=retry_base,
-                    user_feedback=retry_feedback,
-                    on_token=_product_planning_token,
-                    carried_pages=carried_pages,
-                ),
-                operation_name="产品规划模型调用",
-            )
+            with model_operation(
+                "repair_product_plan" if attempt > 1 else initial_operation,
+                business_stage="requirements",
+            ):
+                candidate = run_with_transport_retry(
+                    lambda: plan_product_with_chat_model(
+                        requirement_spec,
+                        existing_plan=retry_base,
+                        user_feedback=retry_feedback,
+                        on_token=_product_planning_token,
+                        carried_pages=carried_pages,
+                    ),
+                    operation_name="产品规划模型调用",
+                )
             last_coverage = authorization_operation_action_coverage(
                 requirement_spec,
                 candidate,
@@ -259,6 +269,7 @@ def _repair_existing_product_plan(
         requirement_spec,
         existing_plan=canonical,
         user_feedback=_validation_retry_feedback("", errors),
+        business_operation="repair_product_plan",
     )
 
 

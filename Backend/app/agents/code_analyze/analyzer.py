@@ -8,6 +8,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from app.agents.model_operations import model_operation
 from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_with_tool_activity
 from app.agents.code_analyze.scope import (
     is_code_analyze_read_path,
@@ -97,12 +98,13 @@ def analyze_workspace_code(
                 on_tool_activity(activity)
 
         try:
-            raw = invoke_agent_with_tool_activity(
-                agent,
-                {"messages": [{"role": "user", "content": prompt}]},
-                workspace=workspace,
-                on_tool_activity=observe,
-            )
+            with model_operation("review_changed_code" if review_mode == "diff" else "review_code", business_stage="code_review"):
+                raw = invoke_agent_with_tool_activity(
+                    agent,
+                    {"messages": [{"role": "user", "content": prompt}]},
+                    workspace=workspace,
+                    on_tool_activity=observe,
+                )
             observed_skill_reads = current_skill_reads
             observed_source_reads = current_source_reads
             break

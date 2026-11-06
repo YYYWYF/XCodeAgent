@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.model_operations import model_operation, observe_model_operation
 from app.agents.messages import last_agent_text
 from app.config import Settings
 from app.services.test_validation import create_repair_task_plan
@@ -102,6 +103,7 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         '    "change_scope_policy": "must stay within input.change_scope",\n'
         '    "allowed_paths_policy": "must stay within input.change_scope.allowed_paths",\n'
         '    "contract_policy": "do not change confirmed requirements, ProjectPlan, or API contracts",\n'
+        '    "requested_add": {"path": "exact workspace-relative Java file", "description": "what type to create and why"} | null,\n'
         '    "requested_resources": [{"type": "page|endpoint|api_contract|data_source", "targetId": "stable-id"}]\n'
         "  },\n"
         '  "repair_tasks": [\n'
@@ -114,6 +116,14 @@ def _build_failure_repair_prompt(*, repair_input: dict[str, Any]) -> str:
         '  "reason": "required when confirmation or terminal failure is selected",\n'
         '  "failure_handling": "how the scheduler should treat this failure"\n'
         "}\n\n"
+        "For a backend Endpoint plan_mismatch where the failed task can complete its own responsibility "
+        "by creating exactly one missing Java source file, choose requires_user_confirmation and put "
+        "only the new file in boundaries.requested_add. Use the exact backend/src/main/java/... path "
+        "from workspace evidence, specify the type, field types and responsibility in description, "
+        "and provide one repair_tasks item with only the necessary parent-authorized operations. "
+        "Leave requested_resources empty for this file-only repair. Set requested_add to null otherwise. "
+        "If another Task owns the missing file or a dependency must change, choose terminal_failure "
+        "and explain which task dependency or ownership needs correction.\n\n"
         "Choose requires_user_confirmation when repair requires expanding "
         "change_scope, changing confirmed product/API contracts, or making a "
         "user-visible product decision. Choose terminal_failure when the failure "
@@ -152,6 +162,7 @@ def _invoke_repair_planner_agent(
     return last_agent_text(result)
 
 
+@observe_model_operation("plan_build_repairs", business_stage="build")
 def plan_build_failure_repair_with_repair_planner_agent(
     *,
     repair_input: dict[str, Any],
@@ -198,6 +209,7 @@ def plan_repairs_with_repair_planner_agent(
     repair_attempt: int = 1,
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
+    business_stage: str = "integration_test",
 ) -> dict[str, Any]:
     """在相同技能集合下为集成测试失败生成修复任务。"""
 
@@ -206,15 +218,19 @@ def plan_repairs_with_repair_planner_agent(
         agent_note = "No repair required because all quality gate checks passed."
         planner_decision: dict[str, Any] = {"decision": "terminal_failure"}
     else:
-        agent_note = _invoke_repair_planner_agent(
-            prompt=_test_repair_planning_prompt(
-                test_report=test_report,
-                revision_requests=revision_requests,
-                build_task_plan=build_task_plan,
-            ),
-            workspace=workspace,
-            selected_skill_names=selected_skill_names,
-        )
+        with model_operation(
+            "plan_unit_test_repairs" if business_stage == "unit_test" else "plan_integration_repairs",
+            business_stage=business_stage,
+        ):
+            agent_note = _invoke_repair_planner_agent(
+                prompt=_test_repair_planning_prompt(
+                    test_report=test_report,
+                    revision_requests=revision_requests,
+                    build_task_plan=build_task_plan,
+                ),
+                workspace=workspace,
+                selected_skill_names=selected_skill_names,
+            )
         planner_decision = extract_json_object(agent_note) or {
             "decision": "repair",
             "strategy": agent_note,

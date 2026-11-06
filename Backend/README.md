@@ -1,6 +1,6 @@
 # Local LangGraph Agent
 
-一个最小可运行的 `Python + FastAPI + LangGraph` 本地后端。它会读取 `.env` 中的模型 Provider 配置，使用 OpenAI-compatible Chat Completions API，并通过 `/workflow/run` 暴露 AG-UI 流式接口。
+一个 `Python + FastAPI + LangGraph` 本地后端。通过 `MODEL_TRANSPORT=direct/transmit` 选择模型直连或 AG-UI 转发，共用业务代码，并通过 `/workflow/run` 暴露 AG-UI 流式接口。默认直连，修改配置后重启后端。配置及边界见 [模型接入说明](../docs/MODEL_TRANSPORT.md)。
 
 当前后端还内置了：
 

@@ -174,10 +174,17 @@ async def health() -> dict[str, object]:
     return {
         "status": "ok",
         "backendInstanceId": current_backend_instance().instance_id,
-        "provider": settings.model_provider,
+        "provider": settings.provider_api_name,
+        "model_transport": settings.model_transport,
         "model": settings.model_api_name,
         "configured_model": settings.model_name,
-        "base_url": settings.model_base_url,
+        "base_url": settings.model_transmit_url if settings.model_transport == "transmit" else settings.model_base_url,
+        "model_transmit": ({
+            "url": settings.model_transmit_url,
+            "transport": "ag-ui-sse",
+            "modelInfoEndpoint": "/model-info/run",
+            "inferenceEndpoint": "/model-inference/run",
+        } if settings.model_transport == "transmit" else None),
         "builtin_skills": available_builtin_skills(),
         "observability": {
             "langsmith": {

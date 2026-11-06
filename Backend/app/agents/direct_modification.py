@@ -7,6 +7,7 @@ from typing import Any, Callable, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents.model_operations import observe_model_operation
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.agents.small_task import invoke_small_task_agent
@@ -258,6 +259,7 @@ def _direct_modification_classifier_prompt(
     )
 
 
+@observe_model_operation("classify_workbench_intent", business_stage="conversation")
 def classify_direct_modification_intent(
     *,
     user_request: str,
@@ -614,6 +616,7 @@ def _safe_target_paths(value: Any) -> list[str]:
     return result
 
 
+@observe_model_operation("answer_conversation", business_stage="conversation")
 def answer_casual_conversation(
     *, user_request: str, conversation_summary: str = ""
 ) -> str:
@@ -641,6 +644,7 @@ def answer_casual_conversation(
     return (_coerce_content_text(getattr(response, "content", "")) or "").strip()
 
 
+@observe_model_operation("answer_workspace_question", business_stage="conversation")
 def answer_workspace_question(
     *,
     user_request: str,
@@ -758,6 +762,7 @@ def _data_source_direct_modification_prompt(
     )
 
 
+@observe_model_operation("modify_frontend_code", business_stage="conversation")
 def invoke_frontend_direct_modification(
     *,
     user_request: str,
@@ -802,6 +807,7 @@ def invoke_frontend_direct_modification(
     )
 
 
+@observe_model_operation("modify_backend_code", business_stage="conversation")
 def invoke_data_source_direct_modification(
     *,
     user_request: str,

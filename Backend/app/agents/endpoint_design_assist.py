@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from app.agents.model_operations import mapping_operation, model_operation
 from app.agents.endpoint_design_assist_prompts import build_assist_messages
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
@@ -21,10 +22,11 @@ async def invoke_mapping_assistant(
     """每次只调用一个区域的模型，使用简洁输出再确定性补齐正式配置。"""
     messages = build_assist_messages(context, step)
     model = create_chat_model(Settings.from_env())
-    response = await model.ainvoke(
-        messages,
-        config={"configurable": {"thread_id": thread_id}} if thread_id else None,
-    )
+    with model_operation(mapping_operation(context, step), business_stage="api_design"):
+        response = await model.ainvoke(
+            messages,
+            config={"configurable": {"thread_id": thread_id}} if thread_id else None,
+        )
     parsed = extract_json_object(_coerce_content_text(response.content))
     result_type = MockStepResult if step == "mock" else ExternalRequestStepResult if step == "request" else ASSIST_STEP_MODELS[step]
     result = result_type.model_validate(parsed)

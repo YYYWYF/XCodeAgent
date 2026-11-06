@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents.model_operations import observe_model_operation
 from app.agents.messages import _coerce_content_text
 from app.agents.design_conversation import is_natural_language_confirmation
 from app.agents.model_factory import create_chat_model
@@ -21,6 +22,7 @@ class TechnicalPlanningConversationDecision(BaseModel):
     message: str = Field(min_length=1)
 
 
+@observe_model_operation("classify_technical_planning_intent", business_stage="technical_planning")
 def classify_technical_planning_conversation(
     request: str, context: dict[str, Any],
 ) -> TechnicalPlanningConversationDecision:

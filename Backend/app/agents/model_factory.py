@@ -1,8 +1,11 @@
 from typing import Any
+from copy import deepcopy
 
 import httpx
 from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
+from app.agents.transmit_chat_model import TransmitChatModel
 
 from app.config import Settings
 from app.agents.model_request_headers import OpenCodeGoChatAnthropic, OpenCodeGoChatOpenAI
@@ -20,10 +23,11 @@ def create_chat_model(
     max_retries_override: int | None = None,
     timeout_seconds_override: float | None = None,
     extra_model_kwargs: dict | None = None,
-) -> ChatOpenAI | ChatAnthropic:
+) -> BaseChatModel:
     """根据 provider 和调用级覆盖创建聊天模型，不回写全局 Settings。
 
-    支持 openai（OpenAI 兼容协议）与 anthropic（Anthropic 原生协议）两种 provider。
+    MODEL_TRANSPORT 选择直连或 AG-UI 转发；直连支持 openai 与 anthropic。
+    转发分支只使用服务连接，不读取直连凭据，也不在失败时回退直连。
     override 为 None 时沿用全局值；max_retries_override 直接作为 SDK 的
     max_retries，0 表示显式关闭 SDK retry。
     OpenAI 兼容协议的 timeout 同步作用于模型与两个 HTTP 客户端，连接超时仍
@@ -37,6 +41,23 @@ def create_chat_model(
     其内容会被合并进 HTTP 请求体，不被 SDK 方法签名校验。网关不认识时被忽略。
     """
 
+    if settings.model_transport == "transmit":
+        return TransmitChatModel(
+            transmit_url=settings.model_transmit_url,
+            transmit_token=settings.model_transmit_token,
+            trust_env=settings.model_transmit_trust_env,
+            spaid=settings.model_transmit_spaid,
+            temperature=settings.default_temperature,
+            max_tokens=settings.default_max_tokens if max_tokens_override is None else max_tokens_override,
+            max_retries=settings.model_max_retries if max_retries_override is None else max_retries_override,
+            timeout_seconds=settings.model_timeout_seconds if timeout_seconds_override is None else timeout_seconds_override,
+            extra_body=deepcopy(extra_model_kwargs) if extra_model_kwargs else None,
+            callbacks=[ModelOutputLogHandler()] if settings.model_output_log_enabled else None,
+        )
+    if settings.model_transport != "direct":
+        raise ValueError("MODEL_TRANSPORT must be direct or transmit")
+    if settings.model_provider not in {"openai", "anthropic"}:
+        raise ValueError("MODEL_PROVIDER must be openai or anthropic")
     if not settings.model_api_key:
         raise RuntimeError(
             "Missing model API key. Set MODEL_API_KEY, or OPENAI_API_KEY for compatibility."
