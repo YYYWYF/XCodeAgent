@@ -306,7 +306,10 @@ type UseWorkflowConversationResult = {
     recovery: ExecutionRecoveryCandidate
   ) => Promise<boolean>
   handleEndPlan: (runId?: string) => Promise<boolean>
-  handleResumePlan: (workflowDebug?: WorkflowDebugOptions) => Promise<void>
+  handleResumePlan: (
+    workflowDebug?: WorkflowDebugOptions,
+    authorizationAction?: string
+  ) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
   handleSend: (
     workflowDebug?: WorkflowDebugOptions,
@@ -2591,35 +2594,37 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 按暂停态调试面板选择的节点恢复当前计划，并保留原执行身份与状态快照。 */
-  const handleResumePlan = async (workflowDebug?: WorkflowDebugOptions): Promise<void> => {
+  /** 按指定节点恢复当前计划，保留原执行引用，并支持权限续接使用独立文案。 */
+  const handleResumePlan = async (
+    workflowDebug?: WorkflowDebugOptions,
+    authorizationAction?: string
+  ): Promise<void> => {
     if (!activeWorkflow || !workflowDebug?.resumeFrom || loading || workspaceBusy) return
     const messages = getSessionMessages(activeRuntimeKey || draftKey)
     const lifecycle = applicationLifecycleRef.current
     const source =
-      workflowDebugResumeSource(
-        activeWorkflow,
-        messages,
-        lifecycle,
-        workflowDebug.resumeFrom
-      ) || activeWorkflow
+      workflowDebugResumeSource(activeWorkflow, messages, lifecycle, workflowDebug.resumeFrom) ||
+      activeWorkflow
     const execution = planExecutionContextForRun(lifecycle, {
       runId: source.runId,
       threadId: source.threadId
     }).execution
     const ended = Boolean(workflowDebugEndedControl(activeWorkflow, messages, lifecycle))
-    await sendWorkflowMessage(`从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`, {
-      // 节点恢复由输入框提交时也要消费已发送草稿，避免 @ 阶段入口留在编辑区。
-      clearDraft: true,
-      // 已成功 End 的执行没有续接令牌；显式调试建立新 Run，只复用原业务 Graph 线程。
-      resumeReference: ended ? undefined : { runId: source.runId, threadId: source.threadId },
-      executionThreadId: source.threadId,
-      // 仅当前 lifecycle 登记的执行能提供续接令牌，控制/失败消息的 Run ID 不能代替。
-      resumeExecutionRunId: ended ? undefined : execution?.runId,
-      selectedPageId: workflowSelectedPageId(source) || selectedPageId,
-      titleFrom: '从指定节点继续执行',
-      workflowDebug
-    })
+    await sendWorkflowMessage(
+      authorizationAction || `从 ${workflowDebug.resumeFrom} 节点继续执行 workflow 调试。`,
+      {
+        // 输入框发起的节点调试会消费草稿，权限续接按钮保留用户正在编辑的内容。
+        clearDraft: !authorizationAction,
+        // 已成功 End 的执行没有续接令牌；显式调试建立新 Run，只复用原业务 Graph 线程。
+        resumeReference: ended ? undefined : { runId: source.runId, threadId: source.threadId },
+        executionThreadId: source.threadId,
+        // 仅当前 lifecycle 登记的执行能提供续接令牌，控制/失败消息的 Run ID 不能代替。
+        resumeExecutionRunId: ended ? undefined : execution?.runId,
+        selectedPageId: workflowSelectedPageId(source) || selectedPageId,
+        titleFrom: authorizationAction || '从指定节点继续执行',
+        workflowDebug
+      }
+    )
   }
 
   /** 通过同一 AG-UI 端点结束计划并释放生命周期中的工作区锁。 */

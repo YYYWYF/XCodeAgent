@@ -16,6 +16,7 @@ from app.protocols.workflow.lifecycle import (
     begin_workflow_lifecycle,
     project_workflow_lifecycle_boundary,
 )
+from app.protocols.workflow.request import workflow_run_inputs
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError,
     create_application_lifecycle,
@@ -455,6 +456,72 @@ class ExecutionResourceLockTests(unittest.TestCase):
             assert payload is not None
             self.assertNotIn("run-old", payload["activeExecutions"])
             self.assertEqual(payload["activeExecutions"]["run-debug"]["status"], "running")
+
+    def test_api_design_refresh_replaces_only_matching_waiting_execution(self) -> None:
+        """真实确认请求接替原 API 映射等待态，错误身份不消耗原执行。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_lifecycle(directory)
+            start_workbench_execution(
+                directory, scope="page", target_id="orders", page_id="orders",
+                thread_id="thread-orders", owner_session_id="session-orders",
+                run_id="run-old", phase="api_design_readiness_gate",
+            )
+            update_workbench_execution(
+                directory, run_id="run-old", phase="api_design_readiness_gate",
+                status=WorkbenchExecutionStatus.AWAITING_USER,
+                pending_type=PendingInteractionType.API_DESIGN,
+                pending_payload={
+                    "mode": "api_design_required",
+                    "developmentTarget": {"type": "page", "id": "orders"},
+                },
+            )
+
+            def inputs(target: str = "orders", owner: str = "session-orders") -> dict:
+                """从现有 AG-UI 请求合同解析检测动作与来源 Run。"""
+
+                return workflow_run_inputs(
+                    {"threadId": "thread-orders", "forwardedProps": {
+                        "workspaceRoot": directory, "sessionId": owner,
+                        "resumeReference": {"runId": "run-old", "threadId": "thread-orders"},
+                        "clarificationAnswers": {"api_design_gate": {
+                            "action": "refresh", "targetType": "page", "targetId": target,
+                        }},
+                    }},
+                    server_state={"selectedPageId": "orders", "detail_target_type": "page"},
+                )
+
+            for invalid, thread, error in (
+                (inputs(), "thread-other", "其他对话"),
+                (inputs(owner="session-other"), "thread-orders", "其他会话"),
+                (inputs(target="other"), "thread-orders", "恢复目标"),
+            ):
+                with self.assertRaisesRegex(ApplicationLifecycleConflictError, error):
+                    begin_workflow_lifecycle(
+                        invalid, thread_id=thread, run_id="run-rejected",
+                        phase="api_design_readiness_gate",
+                    )
+
+            request = inputs()
+            stale_request = {**request, "resume_values": {
+                **request["resume_values"],
+                "lifecycle_interaction_submission": {
+                    "runId": "run-old", "id": "stale-interaction", "basedOnRevision": 1,
+                },
+            }}
+            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "API 映射确认已过期"):
+                begin_workflow_lifecycle(
+                    stale_request, thread_id="thread-orders", run_id="run-stale",
+                    phase=request["resume_from"],
+                )
+            payload = begin_workflow_lifecycle(
+                request, thread_id="thread-orders", run_id="run-refresh",
+                phase=request["resume_from"],
+            )
+            assert payload is not None
+            self.assertNotIn("run-old", payload["activeExecutions"])
+            self.assertEqual(payload["activeExecutions"]["run-refresh"]["status"], "running")
+            self.assertEqual(payload["resourceLocks"]["pages"]["orders"]["runId"], "run-refresh")
 
     def test_task_plan_action_replaces_awaiting_execution_in_same_thread(self) -> None:
         """Confirm 或 Regenerate 应原子接管原 DAG 待确认 execution。"""

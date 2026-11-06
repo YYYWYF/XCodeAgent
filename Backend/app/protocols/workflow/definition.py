@@ -32,7 +32,7 @@ WORKFLOW_NODE_LABELS = {
     "inspect_workspace": "扫描工作区代码",
     "prepare_build_tasks": "生成开发任务计划",
     "authorization_bootstrap": "权限数据库初始化",
-    "builtin_authorization_bootstrap": "Builtin 权限表 Schema 初始化",
+    "builtin_authorization_bootstrap": "Builtin 权限表与数据初始化",
     "build": "代码生成与构建协调",
     "unit_test": "开发阶段单元测试",
     "unit_test_repair": "单元测试局部修复",

@@ -15,6 +15,7 @@ from app.protocols.entity_tables import build_entity_tables_stream
 from app.services.entity_tables import prepare_entity_table, run_entity_table_action
 from app.services.managed_database_client import ManagedDatabaseRegistrationError
 from app.services.managed_table_client import ManagedTableClient
+from tests.managed_database_http_fixture import saas_success
 
 
 class EntityTableTests(unittest.TestCase):
@@ -82,7 +83,7 @@ class EntityTableTests(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             """记录唯一请求并返回 SaaS 真实受理结构。"""
             self.calls.append(request)
-            return httpx.Response(202, json={"operationId": "123", "status": "RUNNING"})
+            return saas_success(202, {"operationId": "123", "status": "RUNNING"})
 
         client = self.client(handler)
         preview = prepare_entity_table(self.request())
@@ -121,7 +122,7 @@ class EntityTableTests(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             """记录重建请求，不实际删除或创建任何表。"""
             self.calls.append(request)
-            return httpx.Response(202, json={"operationId": "456", "status": "RUNNING"})
+            return saas_success(202, {"operationId": "456", "status": "RUNNING"})
 
         preview = prepare_entity_table(self.request())
         request = self.request("rebuild", previewHash=preview["previewHash"], confirmed=True, allowDataLoss=True)
@@ -140,7 +141,7 @@ class EntityTableTests(unittest.TestCase):
 
         preview = prepare_entity_table(self.request())
         request = self.request("rebuild", previewHash=preview["previewHash"], confirmed=True, allowDataLoss=True)
-        client = self.client(lambda _request: httpx.Response(202, json={}))
+        client = self.client(lambda _request: saas_success(202, {}))
         with patch("app.services.entity_tables.inspect_project_preview", return_value={"running": True}), \
                 patch.object(client, "request") as remote:
             with self.assertRaisesRegex(ValueError, "先停止预览"):
@@ -217,12 +218,12 @@ class EntityTableTests(unittest.TestCase):
             """仅接受只读查询和单实体检查，其他调用立即失败。"""
             self.calls.append(request)
             if request.method == "GET":
-                return httpx.Response(200, json=[{"operationId": "123", "tableName": "12ab34cd56ef_order",
+                return saas_success(200, [{"operationId": "123", "tableName": "12ab34cd56ef_order",
                     "tableNames": ["12ab34cd56ef_order"], "createdAt": "2026-10-15T02:00:00Z",
                     "mode": "CREATE", "status": "SUCCEEDED", "executionResult": {"steps": [], "recoveryState": "NOT_REQUESTED"}}])
             self.assertTrue(request.url.path.endswith("/tables/check"))
             self.assertEqual(len(json.loads(request.content)["sqls"]), 1)
-            return httpx.Response(200, json={"ready": False, "datasourceId": 2, "tables": [{
+            return saas_success(200, {"ready": False, "datasourceId": 2, "tables": [{
                 "tableName": "12ab34cd56ef_order", "status": "STRUCTURE_MISMATCH", "differences": [{
                     "category": "COLUMN", "target": "amount", "expected": "DECIMAL(12,2)", "actual": "BIGINT"}]}]})
 
@@ -261,11 +262,11 @@ class EntityTableTests(unittest.TestCase):
                     self.calls.append(request)
                     if request.method == "GET":
                         self.assertTrue(request.url.path.endswith("/table-operations"))
-                        return httpx.Response(200, json=history)
+                        return saas_success(200, history)
                     self.assertEqual(request.method, "POST")
                     self.assertTrue(request.url.path.endswith("/tables/check"))
                     status = "NOT_CREATED" if mode in {"DROP", "RELEASE"} else "SYNCED"
-                    return httpx.Response(200, json={"ready": status == "SYNCED", "datasourceId": 2,
+                    return saas_success(200, {"ready": status == "SYNCED", "datasourceId": 2,
                         "tables": [{"tableName": table, "status": status, "differences": []}]})
 
                 result = run_entity_table_action(self.request("refresh"), client=self.client(handler))
@@ -307,7 +308,7 @@ class EntityTableTests(unittest.TestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             """为历史与结构检查分别提供可控响应。"""
-            return httpx.Response(200, json=[] if request.method == "GET" else response)
+            return saas_success(200, [] if request.method == "GET" else response)
 
         with self.assertRaisesRegex(ValueError, "完整确认"):
             run_entity_table_action(self.request("refresh"), client=self.client(handler))

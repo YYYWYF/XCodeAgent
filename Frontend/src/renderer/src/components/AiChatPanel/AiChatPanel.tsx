@@ -1,5 +1,5 @@
 import { buildFailureMessageForDisplay } from '../../service/buildFailureMessage'
-import { AuthorizationBootstrapRecoveryContext, AuthorizationBootstrapRetryNotice, authorizationBootstrapRecoveryOwner } from './authorizationBootstrapRecovery'
+import { BuiltinAuthorizationActionsContext, AuthorizationBootstrapRecoveryContext, AuthorizationBootstrapRetryNotice, authorizationBootstrapRecoveryOwner } from './authorizationBootstrapRecovery'
 import { Alert, Button, Modal, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -141,6 +141,8 @@ import { buildQuickTasks } from './components/QuickTaskGuide/quickTasks'
 import NextDevelopmentGuide from './components/NextDevelopmentGuide'
 import { developmentNextStep, latestDevelopmentTarget } from './developmentNextStep'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
+import BuiltinPatchCard, { useBuiltinPatchCard } from './components/WorkspaceDebugDock/BuiltinPatchCard'
+import { BUILTIN_AUTHORIZATION_PATCH_NODE } from '../../service/workflowDebugNodes'
 import type { ClarificationAnswers } from './components/WorkflowRunCard'
 import AgentFilesPage from '../AgentFilesPage/AgentFilesPage'
 import DataSourcesDrawer from '../DataSourcesPage/DataSourcesDrawer'
@@ -3330,6 +3332,23 @@ export default function AiChatPanel({
     : WORKBENCH_PHASE_AGENTS[activeWorkbenchPhase].label
   // 输入只沿用现有任务控制，不因应用级规划错误或同步状态禁用。
   const workflowInputLocked = workspaceBusy || pendingPlanActionable || Boolean(developmentPlanningBlock)
+  const builtinPatch = useBuiltinPatchCard(application.workspaceRoot || '', !isApplicationPlanningPhase)
+  const builtinPatchDisabled = workflowInputLocked || loading || currentGenerationLoading || endingPlan
+  const builtinPatchContent = builtinPatch.card && (
+    <BuiltinPatchCard card={builtinPatch.card} disabled={builtinPatchDisabled}
+      onAction={(action) => { void builtinPatch.execute(action) }} />
+  )
+  /** 仅将权限补丁发往独立动作，其他调试项仍由原工作流处理。 */
+  async function sendWithBuiltinPatch(
+    options: WorkflowDebugOptions | undefined,
+    fallback: () => Promise<void>
+  ): Promise<void> {
+    if (options?.enabled && options.resumeFrom === BUILTIN_AUTHORIZATION_PATCH_NODE) {
+      if (!builtinPatchDisabled) await builtinPatch.execute('run_patch')
+      return
+    }
+    await fallback()
+  }
   const displayedSessionRunStates =
     planningSessionRunActive && existingPlanningSession
       ? { ...sessionRunStates, [existingPlanningSession.id]: 'running' as const }
@@ -4152,6 +4171,21 @@ export default function AiChatPanel({
     /> : <AuthorizationBootstrapRetryNotice message={globalFallback.error}
       onRetry={() => { void retryCurrentRecovery() }} retrying={recoveryRunning} />
   } : undefined
+  const builtinAuthorizationActions = !isApplicationPlanningPhase && activeWorkflow &&
+    activeWorkflow.runId === latestWorkflowForDisplay?.runId
+    ? {
+        runId: activeWorkflow.runId,
+        threadId: activeWorkflow.threadId,
+        continueDisabled: loading || workspaceBusy || workbenchExecutionInProgress ||
+          activeConnectionState.status !== 'healthy',
+        /** 使用原节点恢复路径，保持当前应用、会话和正式 Build DAG 的校验。 */
+        onContinue: (lookup: boolean) => {
+          void handleResumePlan({ enabled: true, resumeFrom: 'builtin_authorization_bootstrap',
+            buildExecutionScope: activeWorkflow.summary.buildExecutionScope },
+            lookup ? '查询原权限数据受理记录' : '继续初始化权限数据')
+        }
+      }
+    : undefined
   // 无当前执行所属会话时，不把共享规划、预览或投影错误转交给其他会话和阶段。
   const showGlobalFallback =
     !authorizationRecoveryNotice && globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
@@ -5330,6 +5364,7 @@ export default function AiChatPanel({
               )}
 
               <AuthorizationBootstrapRecoveryContext.Provider value={authorizationRecoveryNotice}>
+                <BuiltinAuthorizationActionsContext.Provider value={builtinAuthorizationActions}>
               <MessageList
                 history={history}
                 loadingHistory={loadingHistory}
@@ -5495,6 +5530,7 @@ export default function AiChatPanel({
                 templateReconcileRetryable={templateReconcileRetryable}
                 planningState={businessPlanningSessionActive && !planningHistoryOnly ? planningState : undefined}
               />
+                </BuiltinAuthorizationActionsContext.Provider>
               </AuthorizationBootstrapRecoveryContext.Provider>
 
               {milestoneCommitReminderProps && (
@@ -5649,14 +5685,14 @@ export default function AiChatPanel({
                 <WorkspaceDebugDock
                   controlsOnly={conversationActive}
                   activeWorkflow={activeWorkflow}
+                  builtinPatchContent={builtinPatchContent}
                   copy={copy}
                   initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
                   loading={loading}
-                  onSend={
+                  onSend={(options) => sendWithBuiltinPatch(options, () =>
                     planExecutionShowsDebugResume(displayedPlanExecutionMode) && activeWorkflow
-                      ? handleResumePlan
-                      : handleSend
-                  }
+                      ? handleResumePlan(options)
+                      : handleSend(options))}
                   onStopGenerating={handleStopCurrentGeneration}
                   rightContent={
                     <PlanExecutionDock
@@ -5682,6 +5718,7 @@ export default function AiChatPanel({
                 <>
                   <ChatComposer
                     activeWorkflow={activeWorkflow}
+                    builtinPatchContent={builtinPatchContent}
                     copy={copy}
                     debugStage={
                       isDesignPhase
@@ -5746,7 +5783,8 @@ export default function AiChatPanel({
                           }
                           commitBeforeSend.requestAdvance(() => handleProductConversationSend(conversation))
                         }
-                        : handleConversationSend
+                        : (options, confirmScope) => sendWithBuiltinPatch(options, () =>
+                          handleConversationSend(options, confirmScope))
                     }
                     onStopGenerating={handleStopCurrentGeneration}
                     stopping={stopping}
@@ -5759,10 +5797,11 @@ export default function AiChatPanel({
                     !conversationActive ? (
                     <WorkspaceDebugDock
                       activeWorkflow={activeWorkflow}
+                      builtinPatchContent={builtinPatchContent}
                       copy={copy}
                       initialResumeFrom={workflowResumeNode(activeWorkflow, scopedExecution?.phase)}
                       loading={currentGenerationLoading}
-                      onSend={handleSend}
+                      onSend={(options) => sendWithBuiltinPatch(options, () => handleSend(options))}
                       onStopGenerating={handleStopCurrentGeneration}
                       stopping={stopping}
                       workspaceBusy={workflowInputLocked}

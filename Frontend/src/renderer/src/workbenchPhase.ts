@@ -493,7 +493,7 @@ const EXECUTION_PHASE_LABELS: Record<string, string> = {
   inspect_database_context: '获取数据库信息',
   prepare_build_tasks: '生成执行计划',
   authorization_bootstrap: '权限数据库初始化',
-  builtin_authorization_bootstrap: 'Builtin 权限表 Schema 初始化',
+  builtin_authorization_bootstrap: 'Builtin 权限表与数据初始化',
   build: '开发实现',
   unit_test: '开发阶段单元测试',
   unit_test_repair: '单元测试局部修复',

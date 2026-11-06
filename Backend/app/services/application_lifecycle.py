@@ -607,7 +607,7 @@ def start_workbench_execution(
                 submission=api_design_interaction_submission,
                 replaces_run_id=replaces_run_id,
                 expected_type=PendingInteractionType.API_DESIGN,
-                error_message="API 映射检测确认已过期或不属于原工作台运行。",
+                error_message="API 映射确认已过期或不属于原工作台运行。",
             )
         if development_continuation_consume is not None:
             # 同一把生命周期锁内复验 token，并把消费状态与 execution 原子写入。

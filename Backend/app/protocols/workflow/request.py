@@ -177,6 +177,9 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         or _optional_dict(forwarded_props.get("debugState"))
         or {}
     )
+    # 独立补丁请求不能退回主工作流的默认开发入口。
+    if debug_state.get("resumeFrom") == "builtin_authorization_patch":
+        raise ValueError("内置权限补丁必须通过独立的 /builtin-authorization/run 调试动作执行。")
     workflow_action = _supported_workflow_action(
         _optional_text(payload.get("workflowAction"))
         or _optional_text(payload.get("workflow_action"))

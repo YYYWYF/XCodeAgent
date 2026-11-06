@@ -1,5 +1,12 @@
 import { authorizationBootstrapTitle } from '../../../../service/authorizationBootstrap'
-import { CheckCircleOutlined, ClockCircleOutlined, WarningOutlined } from '@ant-design/icons'
+import {
+  ArrowRightOutlined,
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  CopyOutlined,
+  SearchOutlined,
+  WarningOutlined
+} from '@ant-design/icons'
 import { Button, message } from 'antd'
 import AuthorizationBootstrapRefreshButton from './AuthorizationBootstrapRefreshButton'
 import type { ReactElement, ReactNode } from 'react'
@@ -12,16 +19,26 @@ export default function AuthorizationBootstrapPanel({
   result,
   recoveryNotice,
   workspaceRoot,
-  onRefreshed
+  onRefreshed,
+  onContinue,
+  continueDisabled = false
 }: {
   workspaceRoot?: string
+  onContinue?: (lookup: boolean) => void
+  continueDisabled?: boolean
   onRefreshed?: (result: WorkflowAuthorizationBootstrap) => void
   recoveryNotice?: ReactNode
   result: WorkflowAuthorizationBootstrap
 }): ReactElement | null {
   if (result.status === 'skipped') return null
-  const running = result.operationStatus === 'RUNNING'
-  const warning = !running && (result.status === 'failed' || result.status === 'manual_required')
+  const running = result.schemaReady
+    ? result.nextAction === 'refresh_seed' && result.seedOperationStatus === 'RUNNING'
+    : result.operationStatus === 'RUNNING'
+  const lookupSeed = result.nextAction === 'lookup_seed'
+  const needsContinue = result.nextAction === 'continue' || lookupSeed
+  const warning = !running && (result.executor === 'builtin_saas'
+    ? !result.seedReady
+    : result.status === 'failed' || result.status === 'manual_required')
   /** 只复制已校验的完整 SQL，并提供明确的复制结果。 */
   async function copyDdl(): Promise<void> {
     if (!result.ddlAvailable || !result.ddl) return
@@ -48,9 +65,23 @@ export default function AuthorizationBootstrapPanel({
             </>
           )}
           {result.operationId && <p>操作 ID：{result.operationId}</p>}
-          {result.operationStatus && <p>执行状态：{{ RUNNING: '执行中', SUCCEEDED: '执行成功，待结构核验', FAILED: '执行失败', UNKNOWN: '结果未知', SCHEMA_READY: '四表结构已核验' }[result.operationStatus]}</p>}
-          {result.operationId && (
+          {result.operationStatus && <p>建表状态：{{ RUNNING: '执行中', SUCCEEDED: '执行成功，待结构核验', FAILED: '执行失败', UNKNOWN: '结果未知', SCHEMA_READY: '四表结构已核验' }[result.operationStatus]}</p>}
+          {result.operationId && !result.schemaReady && (
             <AuthorizationBootstrapRefreshButton workspaceRoot={workspaceRoot} operationId={result.operationId} onRefreshed={onRefreshed} />
+          )}
+          {result.seedOperationId && <p>权限数据操作 ID：{result.seedOperationId}</p>}
+          {result.seedOperationId && result.nextAction === 'refresh_seed' && (
+            <AuthorizationBootstrapRefreshButton workspaceRoot={workspaceRoot} operationId={result.seedOperationId} operationKind="seed" onRefreshed={onRefreshed} />
+          )}
+          {needsContinue && onContinue && (
+            <Button
+              type="primary"
+              icon={lookupSeed ? <SearchOutlined /> : <ArrowRightOutlined />}
+              disabled={continueDisabled}
+              onClick={() => onContinue(lookupSeed)}
+            >
+              {lookupSeed ? '查询原受理记录' : '继续初始化权限数据'}
+            </Button>
           )}
           {!result.schemaReady && recoveryNotice}
         </>
@@ -65,7 +96,7 @@ export default function AuthorizationBootstrapPanel({
           <p>工程路径：{result.ddlPath}</p>
           {result.ddlAvailable && result.ddl ? (
             <>
-              <Button onClick={copyDdl}>复制完整 DDL</Button>
+              <Button icon={<CopyOutlined />} onClick={copyDdl}>复制完整 DDL</Button>
               <details className={cx('authorization-bootstrap-ddl')}>
                 <summary>查看完整 DDL</summary>
                 <pre tabIndex={0} aria-label="完整权限 DDL">

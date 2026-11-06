@@ -15,6 +15,9 @@ export type WorkflowAuthorizationBootstrap = {
   executor?: 'builtin_saas'
   schemaReady?: boolean
   seedReady?: boolean
+  seedOperationId?: string
+  seedOperationStatus?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
+  nextAction?: 'continue' | 'lookup_seed' | 'refresh_seed' | 'review' | 'none'
   operationId?: string
   operationStatus?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN' | 'SCHEMA_READY'
   initializedTables?: string[]
@@ -43,7 +46,18 @@ export function readAuthorizationBootstrap(
       new Set(raw.initializedTables).size === 4 && raw.initializedTables.every((name) => typeof name === 'string' && /^[a-zA-Z0-9_]{1,64}$/.test(name))) {
     result.initializedTables = [...raw.initializedTables] as string[]
   }
-  if (typeof raw.seedReady === 'boolean') result.seedReady = raw.seedReady
+  if (typeof raw.seedReady === 'boolean') result.seedReady = result.schemaReady === true && raw.seedReady
+  if (result.executor === 'builtin_saas' && result.schemaReady) {
+    if (typeof raw.seedOperationId === 'string' && /^[1-9][0-9]{0,18}$/.test(raw.seedOperationId)) {
+      result.seedOperationId = raw.seedOperationId
+    }
+    if (['RUNNING', 'SUCCEEDED', 'FAILED', 'UNKNOWN'].includes(String(raw.seedOperationStatus))) {
+      result.seedOperationStatus = raw.seedOperationStatus as WorkflowAuthorizationBootstrap['seedOperationStatus']
+    }
+    if (['continue', 'lookup_seed', 'refresh_seed', 'review', 'none'].includes(String(raw.nextAction))) {
+      result.nextAction = raw.nextAction as WorkflowAuthorizationBootstrap['nextAction']
+    }
+  }
   if (typeof raw.operationId === 'string' && /^[1-9][0-9]*$/.test(raw.operationId)) {
     result.operationId = raw.operationId.slice(0, 128)
   }
@@ -70,7 +84,7 @@ export function readAuthorizationBootstrap(
   if (result.status === 'failed' || result.status === 'manual_required') {
     const ddl = raw.ddl
     result.ddlAvailable =
-      raw.ddlAvailable === true &&
+      result.executor !== 'builtin_saas' && raw.ddlAvailable === true &&
       typeof ddl === 'string' &&
       Boolean(ddl.trim()) &&
       ddl.length <= 256 * 1024 &&
@@ -99,11 +113,13 @@ export function authorizationBootstrapTitle(
   result?: WorkflowAuthorizationBootstrap
 ): string {
   if (result?.executor === 'builtin_saas') {
-    return result.schemaReady
-      ? '权限数据库初始化已就绪'
-      : result.operationStatus === 'RUNNING'
-        ? '权限表初始化执行中'
-        : '权限表初始化未完成／待核对'
+    if (result.schemaReady) {
+      if (result.seedReady) return '权限表和权限数据已就绪'
+      if (result.seedOperationStatus === 'RUNNING' && result.nextAction === 'refresh_seed') return '权限表已就绪，权限数据写入中'
+      if (result.nextAction === 'continue') return '权限表已就绪，权限数据待初始化'
+      return '权限表已就绪，权限数据待核对'
+    }
+    return result.operationStatus === 'RUNNING' ? '权限表初始化执行中' : '权限表初始化未完成／待核对'
   }
   return {
     executed: '权限数据库初始化成功',

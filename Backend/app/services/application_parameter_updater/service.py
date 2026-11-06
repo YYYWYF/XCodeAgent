@@ -172,8 +172,10 @@ class ApplicationParameterUpdater:
         target = root / relative
         descriptor, name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
         try:
-            os.fchmod(descriptor, stat.S_IMODE(target.stat().st_mode))
             with os.fdopen(descriptor, "wb") as handle:
+                # 支持 fchmod 时保留目标权限。即使设置失败，也会先关闭句柄再清理临时文件。
+                if hasattr(os, "fchmod"):
+                    os.fchmod(handle.fileno(), stat.S_IMODE(target.stat().st_mode))
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -205,8 +207,10 @@ class ApplicationParameterUpdater:
         }
         descriptor, name = tempfile.mkstemp(prefix=".application-parameter-", suffix=".tmp", dir=journal.parent)
         try:
-            os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                # Windows Python 3.12 没有 fchmod，使用系统为临时文件分配的权限。
+                if hasattr(os, "fchmod"):
+                    os.fchmod(handle.fileno(), 0o600)
                 json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
                 handle.flush()
                 os.fsync(handle.fileno())

@@ -18,6 +18,7 @@ from app.services.data_sources import change_selected_tables, public_catalog, se
 from app.services.endpoint_design_detail import EndpointDesignPrepareRequest, EndpointDesignSaveRequest, prepare_endpoint_design, save_endpoint_design
 from app.services.managed_table_client import ManagedTableClient
 from app.workspace.endpoint_design_documents import technical_plan_sha256
+from tests.managed_database_http_fixture import saas_success
 
 
 class ManagedDatabaseMetadataTests(unittest.TestCase):
@@ -64,10 +65,10 @@ class ManagedDatabaseMetadataTests(unittest.TestCase):
         self.assertEqual(request.method, "GET")
         self.assertIn(f"/datasources/{self.datasource_key}/tables", request.url.path)
         if self.busy:
-            return httpx.Response(409, json={"code": "RESOURCE_BUSY", "message": "not-for-public"})
+            return httpx.Response(409, json={"returnCode": "RESOURCE_BUSY", "errorMsg": "not-for-public", "body": {}})
         if request.url.path.endswith("/columns"):
-            return httpx.Response(200, json={"datasourceKey": self.response_datasource_key, "tableName": self.table, "description": "订单表", "columns": self.columns})
-        return httpx.Response(200, json={"datasourceKey": self.response_datasource_key, "tables": [{"tableName": self.table, "description": "订单表", "columnCount": len(self.columns)}]})
+            return saas_success(200, {"datasourceKey": self.response_datasource_key, "tableName": self.table, "description": "订单表", "columns": self.columns})
+        return saas_success(200, {"datasourceKey": self.response_datasource_key, "tables": [{"tableName": self.table, "description": "订单表", "columnCount": len(self.columns)}]})
 
     def test_catalog_and_tables_are_automatic_and_do_not_persist_metadata(self) -> None:
         """来源统一命名，SaaS 表自动可选，真实表清单和字段不复制到本地目录。"""

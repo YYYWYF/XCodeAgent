@@ -7,7 +7,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import Settings
 
@@ -22,15 +22,25 @@ class ManagedDatabaseRegistrationError(ValueError):
         self.uncertain = uncertain
 
 
-class RegistrationResponse(BaseModel):
-    """严格校验当前 SaaS HTTP 201 合同，不接受软删或无效挂载。"""
+class RegistrationBody(BaseModel):
+    """校验 SaaS 注册响应中的资源身份、状态和删除标记类型。"""
 
-    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     datasource_key: str = Field(alias="datasourceKey", pattern=r"^[0-9a-f]{12}$")
     datasource_id: int = Field(alias="datasourceId", gt=0, le=9007199254740991)
     status: Literal["REGISTERED"]
-    is_deleted: Literal[False] = Field(alias="isDeleted")
+    is_deleted: bool = Field(alias="isDeleted")
+
+
+class RegistrationResponse(BaseModel):
+    """校验 SaaS HTTP 201 的统一成功响应。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    return_code: Literal["SUC0000"] = Field(alias="returnCode")
+    error_msg: None = Field(alias="errorMsg")
+    body: RegistrationBody
 
 
 class ManagedDatabaseClient:
@@ -98,8 +108,10 @@ class ManagedDatabaseClient:
                 "SaaS 未返回确认成功的注册结果，请先人工核对，不能重新提交创建。", uncertain=True
             )
         try:
-            registration = RegistrationResponse.model_validate(response.json())
-        except (ValueError, ValidationError):
+            registration = RegistrationResponse.model_validate(response.json()).body
+            if registration.is_deleted:
+                raise ValueError("SaaS 返回的注册资源已删除。")
+        except ValueError:
             raise ManagedDatabaseRegistrationError(
                 "SaaS 已响应但注册结果不符合合同，请先人工核对，不能重新提交创建。", uncertain=True
             ) from None

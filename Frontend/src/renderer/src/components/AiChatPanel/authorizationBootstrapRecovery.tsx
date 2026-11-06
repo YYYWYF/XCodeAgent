@@ -1,3 +1,4 @@
+import { ReloadOutlined } from '@ant-design/icons'
 import { createContext, type ReactNode, type ReactElement } from 'react'
 import { Button, Typography } from 'antd'
 import type { ExecutionRecoveryCandidate, WorkflowRunPayload } from '../../typings'
@@ -15,6 +16,14 @@ export type AuthorizationBootstrapRecovery = {
 export const AuthorizationBootstrapRecoveryContext = createContext<
   AuthorizationBootstrapRecovery | undefined
 >(undefined)
+
+/** 当前工作流的 Builtin 操作入口，历史节点只展示已记录的事实。 */
+export const BuiltinAuthorizationActionsContext = createContext<{
+  runId: string
+  threadId: string
+  continueDisabled: boolean
+  onContinue: (lookup: boolean) => void
+} | undefined>(undefined)
 
 /** 只把属于当前可见 Run 的权限恢复入口移入节点；DAG 和其他阶段失败保留全局入口。 */
 export function authorizationBootstrapRecoveryOwner(input: {
@@ -68,7 +77,7 @@ export function authorizationBootstrapRecoveryOwner(input: {
   return { runId, threadId }
 }
 
-/** 以普通正文和次要按钮展示权限初始化恢复，不使用红色错误卡。 */
+/** 在权限初始化节点内显示恢复说明和重试入口。 */
 export function AuthorizationBootstrapRetryNotice({
   message,
   onRetry,
@@ -86,7 +95,13 @@ export function AuthorizationBootstrapRetryNotice({
         {message || '权限初始化尚未完成，可重试。'}
       </Typography.Text>
       {onRetry && (
-        <Button size="small" loading={retrying} disabled={disabled} onClick={onRetry}>
+        <Button
+          type="primary"
+          icon={<ReloadOutlined />}
+          loading={retrying}
+          disabled={disabled}
+          onClick={onRetry}
+        >
           重试
         </Button>
       )}

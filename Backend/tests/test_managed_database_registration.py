@@ -50,10 +50,13 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
         )
         self.calls: list[httpx.Request] = []
 
-    def binding(self) -> dict[str, object]:
-        """返回 SaaS 当前 HTTP 201 合同，包含可能以数字开头的真实 datasourceKey。"""
+    def registration_response(self) -> dict[str, object]:
+        """返回 SaaS 当前 HTTP 201 响应，包含以数字开头的 datasourceKey。"""
 
-        return {"datasourceKey": "12ab34cd56ef", "datasourceId": 2, "status": "REGISTERED", "isDeleted": False}
+        return {
+            "returnCode": "SUC0000", "errorMsg": None,
+            "body": {"datasourceKey": "12ab34cd56ef", "datasourceId": 2, "status": "REGISTERED", "isDeleted": False},
+        }
 
     def client(self, handler=None) -> ManagedDatabaseClient:
         """创建不重试、不重定向的真实 HTTP 适配器，传输交由测试处理。"""
@@ -64,7 +67,7 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
             self.calls.append(request)
             if handler is not None:
                 return handler(request)
-            return httpx.Response(201, json=self.binding())
+            return httpx.Response(201, json=self.registration_response())
 
         return ManagedDatabaseClient(self.settings, transport=httpx.MockTransport(handle))
 
@@ -151,10 +154,22 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
     def test_invalid_success_and_server_error_preserve_unknown(self) -> None:
         """成功体无效或服务端失败均不能当成确定未创建，也不透传响应秘密。"""
 
-        for code in [201, 500]:
-            with self.subTest(status=code):
+        success = self.registration_response()
+        body = success["body"]
+        assert isinstance(body, dict)
+        for name, code, payload in [
+            ("裸资源", 201, body),
+            ("业务码非成功", 201, {**success, "returnCode": "INTERNAL_ERROR", "errorMsg": "private-secret"}),
+            ("成功码附带错误", 201, {**success, "errorMsg": "private-secret"}),
+            ("缺少资源", 201, {**success, "body": None}),
+            ("无效挂载", 201, {**success, "body": {**body, "datasourceId": "2"}}),
+            ("已删除", 201, {**success, "body": {**body, "isDeleted": True}}),
+            ("删除标记不是布尔值", 201, {**success, "body": {**body, "isDeleted": 0}}),
+            ("服务端失败", 500, {"message": "private-secret"}),
+        ]:
+            with self.subTest(case=name):
                 self.setUp()
-                client = self.client(lambda _request: httpx.Response(code, json={"message": "private-secret"}))
+                client = self.client(lambda _request: httpx.Response(code, json=payload))
                 with self.assertRaises(ManagedDatabaseRegistrationError) as captured:
                     ensure_managed_database_registration(self.workspace, client=client)
                 self.assertTrue(captured.exception.uncertain)
@@ -198,7 +213,7 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
             entered.set()
             if not release.wait(3):
                 raise AssertionError("测试同步超时")
-            return httpx.Response(201, json=self.binding())
+            return httpx.Response(201, json=self.registration_response())
 
         client = self.client(blocked)
         with ThreadPoolExecutor(max_workers=2) as pool:

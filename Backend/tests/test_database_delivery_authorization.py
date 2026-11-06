@@ -19,6 +19,7 @@ from app.services.database_delivery import export_database_scripts
 from app.services.builtin_authorization_bootstrap import refresh_builtin_authorization, run_builtin_authorization_bootstrap
 from app.services.managed_table_client import ManagedTableClient
 from tests.authorization_delivery_fixture import install_authorization
+from tests.managed_database_http_fixture import saas_success
 
 
 class AuthorizationDeliveryTests(unittest.TestCase):
@@ -319,18 +320,18 @@ class AuthorizationDeliveryTests(unittest.TestCase):
             calls.append(request)
             path = request.url.path
             if path.endswith("/tables/check"):
-                return httpx.Response(200, json={"datasourceId": 1, "ready": ready, "tables": [
+                return saas_success(200, {"datasourceId": 1, "ready": ready, "tables": [
                     {"tableName": name, "status": "SYNCED" if ready else "NOT_CREATED", "differences": []}
                     for name in names]})
             if path.endswith("/batch"):
                 batches.append(json.loads(request.content)["sqls"])
-                return httpx.Response(202, json={"operationId": "123", "status": "RUNNING"})
+                return saas_success(202, {"operationId": "123", "status": "RUNNING"})
             if path.endswith("/123"):
                 ready = True
-                return httpx.Response(200, json={"operationId": "123", "status": "SUCCEEDED", "mode": "CREATE_BATCH",
+                return saas_success(200, {"operationId": "123", "status": "SUCCEEDED", "mode": "CREATE_BATCH",
                                                "tableNames": names, "executionResult": {"steps": []}})
             if path.endswith("/table-operations"):
-                return httpx.Response(200, json=[])
+                return saas_success(200, [])
             raise AssertionError(request.url)
 
         client = ManagedTableClient(Settings(model_base_url="", model_api_key="", model_name="",

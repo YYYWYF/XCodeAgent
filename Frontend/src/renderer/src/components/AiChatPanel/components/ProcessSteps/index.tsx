@@ -1,5 +1,5 @@
 import { authorizationBootstrapTitle } from '../../../../service/authorizationBootstrap'
-import { AuthorizationBootstrapRecoveryContext } from '../../authorizationBootstrapRecovery'
+import { AuthorizationBootstrapRecoveryContext, BuiltinAuthorizationActionsContext } from '../../authorizationBootstrapRecovery'
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -70,6 +70,10 @@ export default function ProcessSteps({
   waitingForInput = false
 }: Props): ReactElement {
   const recovery = useContext(AuthorizationBootstrapRecoveryContext)
+  const actions = useContext(BuiltinAuthorizationActionsContext)
+  const builtinStepId = actions && workflow?.runId === actions.runId && workflow.threadId === actions.threadId
+    ? [...steps].reverse().find((step) => step.nodeName === 'builtin_authorization_bootstrap')?.id
+    : undefined
   const recoveryStepId =
     recovery && workflow?.runId === recovery.runId && workflow.threadId === recovery.threadId
       ? [...steps]
@@ -86,7 +90,7 @@ export default function ProcessSteps({
       (step) =>
         ['authorization_bootstrap', 'builtin_authorization_bootstrap'].includes(
           step.nodeName || ''
-        ) && step.authorizationBootstrap?.requiresManualAction
+        ) && (step.authorizationBootstrap?.requiresManualAction || step.authorizationBootstrap?.nextAction === 'refresh_seed')
     )
   const hasTestChecklist = steps.some((step) => Boolean(step.checks?.length))
   const hasProjectPlanUpdate = steps.some((step) => Boolean(step.projectPlanUpdate))
@@ -214,7 +218,9 @@ export default function ProcessSteps({
 
           return (
             <ProcessStep
-              workspaceRoot={workspaceRoot}
+              workspaceRoot={item.step.nodeName === 'builtin_authorization_bootstrap' && item.step.id !== builtinStepId ? undefined : workspaceRoot}
+              onContinueAuthorization={item.step.id === builtinStepId ? actions?.onContinue : undefined}
+              continueAuthorizationDisabled={actions?.continueDisabled}
               authorizationRecoveryNotice={
                 item.step.id === recoveryStepId ? recovery?.notice : undefined
               }
@@ -243,6 +249,8 @@ export function ProcessStep({
   conversation,
   dagPendingPlanCompletion,
   isLast,
+  onContinueAuthorization,
+  continueAuthorizationDisabled,
   onOpenPendingDagConfirmation,
   settled,
   step: originalStep,
@@ -252,6 +260,8 @@ export function ProcessStep({
 }: {
   workspaceRoot?: string
   authorizationRecoveryNotice?: ReactNode
+  onContinueAuthorization?: (lookup: boolean) => void
+  continueAuthorizationDisabled?: boolean
   conversation: boolean
   dagPendingPlanCompletion?: DagPendingPlanCompletion
   isLast: boolean
@@ -263,7 +273,7 @@ export function ProcessStep({
   waitingPrompt: string
 }): ReactElement {
   const [refreshed, setRefreshed] = useState<{ identity: string; result: NonNullable<ProcessStepRecord['authorizationBootstrap']> }>()
-  const identity = `${workspaceRoot}:${originalStep.id}:${originalStep.authorizationBootstrap?.operationId}`
+  const identity = `${workspaceRoot}:${originalStep.id}:${originalStep.authorizationBootstrap?.operationId}:${originalStep.authorizationBootstrap?.seedOperationId}`
   const step = refreshed?.identity === identity
     ? { ...originalStep, authorizationBootstrap: refreshed.result }
     : originalStep
@@ -479,6 +489,8 @@ export function ProcessStep({
                 onRefreshed={(result) => setRefreshed({ identity, result })}
                 result={step.authorizationBootstrap}
                 recoveryNotice={authorizationRecoveryNotice}
+                onContinue={onContinueAuthorization}
+                continueDisabled={continueAuthorizationDisabled}
               />
             ) : (
               authorizationRecoveryNotice

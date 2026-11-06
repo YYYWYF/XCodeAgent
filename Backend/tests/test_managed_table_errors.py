@@ -8,6 +8,7 @@ import httpx
 
 from app.config import Settings
 from app.protocols.entity_tables import build_entity_tables_stream
+from app.services.managed_database_client import ManagedDatabaseRegistrationError
 from app.services.managed_table_client import ManagedTableClient, ManagedTableError
 
 
@@ -22,7 +23,7 @@ class ManagedTableErrorTests(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             """原始服务错误放入敏感示例，验证界面不会透传正文。"""
             calls.append(request)
-            return httpx.Response(status, json={"code": code, "message": "secret=do-not-expose"})
+            return httpx.Response(status, json={"returnCode": code, "errorMsg": "secret=do-not-expose", "body": {}})
 
         client = ManagedTableClient(Settings(model_base_url="http://model.invalid", model_api_key="test",
             model_name="test", managed_database_service_key="test-service-key"),
@@ -62,6 +63,20 @@ class ManagedTableErrorTests(unittest.TestCase):
                 self.assertEqual(error.issue["action"], "refresh")
                 self.assertTrue(error.uncertain)
         self.assertEqual(self.failure(409, "STRUCTURE_MISMATCH", mode="REBUILD").issue["action"], "refresh")
+
+    def test_http_success_requires_current_saas_success_envelope(self) -> None:
+        """HTTP 成功不能掩盖业务失败，旧格式也不能当成成功结果。"""
+
+        settings = Settings(model_base_url="", model_api_key="", model_name="",
+                            managed_database_service_key="test-service-key")
+        for payload in ([], {"returnCode": "RESOURCE_BUSY", "errorMsg": "private", "body": []},
+                        {"returnCode": "SUC0000", "errorMsg": None}):
+            with self.subTest(payload=payload):
+                transport = httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
+                client = ManagedTableClient(settings, transport=transport)
+                with self.assertRaisesRegex(ManagedDatabaseRegistrationError, "不符合当前接口合同") as caught:
+                    client.request("12ab34cd56ef", "table-operations?limit=100")
+                self.assertNotIn("private", str(caught.exception))
 
     def test_structured_issue_uses_complete_ag_ui_failure_lifecycle(self) -> None:
         """产品提示经现有 AG-UI 失败结果和快照返回，不新增传输合同。"""

@@ -6,7 +6,7 @@ import {
   ToolOutlined
 } from '@ant-design/icons'
 import { Button, Input, Select, Switch, Tag, Tooltip, Typography } from 'antd'
-import type { KeyboardEvent, ReactElement } from 'react'
+import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import type {
   ChatMessageSkill,
@@ -20,7 +20,7 @@ import type {
 import { cx } from '../../../../utils'
 import { skillsAfterEmptyBackspace } from '../../skillSelection'
 import type { ChatCopy } from '../../types'
-import { workflowDebugNodesForStage } from '../../../../service/workflowDebugNodes'
+import { BUILTIN_AUTHORIZATION_PATCH_NODE, workflowDebugNodesForStage } from '../../../../service/workflowDebugNodes'
 import ResourceSkillMenu from './ResourceSkillMenu'
 import { workflowDebugBuildScope } from '../../debugExecutionScope'
 import { planningConversationInput, type PlanningConversationInput } from './productConversation'
@@ -39,6 +39,7 @@ const buildScopeOptions: Array<{ value: WorkflowBuildExecutionScope['type']; lab
 
 type ChatComposerProps = {
   activeWorkflow?: WorkflowRunPayload
+  builtinPatchContent?: ReactNode
   copy: ChatCopy[EditorMode]
   debugOnly?: boolean
   debugStage?: WorkflowDebugStage
@@ -69,6 +70,7 @@ type ChatComposerProps = {
 /** 按当前工作阶段展示专属调试节点，并处理工作流输入与节点启动参数。 */
 export default function ChatComposer({
   activeWorkflow,
+  builtinPatchContent,
   copy,
   debugOnly = false,
   debugStage = 'development',
@@ -452,6 +454,7 @@ export default function ChatComposer({
             </div>
           </div>
         </div>
+        {debugEnabled && selectedResumeFrom === BUILTIN_AUTHORIZATION_PATCH_NODE && builtinPatchContent}
       </div>
     </div>
   )
