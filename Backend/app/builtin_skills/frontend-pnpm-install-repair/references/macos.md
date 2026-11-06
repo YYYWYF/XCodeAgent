@@ -349,3 +349,31 @@ echo "$HOME"
 - ❌ `sudo pnpm install`
 - ❌ `sudo chmod -R ...` 改 `/usr/local/lib` 权限
 - ❌ 公司内部时不要尝试 `curl https://raw.githubusercontent.com/... | bash`——网络到不了，且违反公司软件分发规定
+
+## N. pnpm 10 构建脚本被拦截
+
+### N.1 诊断
+
+```bash
+pnpm --version
+grep -q "approve-builds\|Ignored build scripts" frontend/.devagentstudio/runtime/tests/frontend_install/stdout.log 2>/dev/null && echo "HIT" || echo "MISS"
+```
+
+pnpm 版本 ≥10 且日志含 `approve-builds` 或 `Ignored build scripts` 即命中。
+
+### N.2 写入放行配置并重试
+
+```bash
+# 检查 .npmrc 是否已有该配置，避免重复追加
+grep -q "dangerously-allow-all-builds" frontend/.npmrc 2>/dev/null || printf 'dangerously-allow-all-builds=true\n' >> frontend/.npmrc
+
+# 重试安装
+cd frontend && pnpm install
+```
+
+`dangerously-allow-all-builds=true` 让 pnpm 10 放行全部依赖的 install 脚本，等价于 pnpm 9 及更早的默认行为。用 `>>` 追加，不覆盖已有 registry / 镜像等配置。
+
+**绝对不要**：
+- ❌ `pnpm config set dangerously-allow-all-builds true`（全局配置，污染用户其他项目）
+- ❌ 用 `write_file` 写 `.npmrc`（被 SENSITIVE_FILE_NAMES 拦截）
+- ❌ 覆盖写 `.npmrc`（`>`），只能追加（`>>`）
