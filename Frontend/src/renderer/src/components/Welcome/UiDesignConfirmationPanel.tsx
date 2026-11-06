@@ -813,7 +813,7 @@ export default function UiDesignConfirmationPanel({
         <div className={cx('ui-design-header-copy')}>
           <h4>UI设计稿</h4>
           <p>
-            如需视觉参考可选择模板或换一换生成设计稿。对于已确认的UI设计稿，将作为后续还原页面时的参考内容。
+            如需视觉参考可选择模板或换一换生成UI设计稿。对于已生成的UI设计稿，将作为后续生成页面时的参考内容。
           </p>
           {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
             <span className={cx('ui-design-processing-hint')}>
@@ -1123,7 +1123,7 @@ export default function UiDesignConfirmationPanel({
                     // 外，"已有 code 但 status 滞后"（典型场景：重新打开本卡片，磁盘
                     // manifest 已落盘但快照还没追上）也按已确认渲染，与刚生成完的页面
                     // 视觉一致——避免用户对着已有设计稿找一个并不存在的「确认」按钮。
-                    <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已确认</Tag>
+                    <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已生成</Tag>
                   ) : page.status === 'generation_failed' ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-failed')} color="error">生成失败</Tag>
                   ) : page.status === 'cancelled' ? (
@@ -1212,7 +1212,8 @@ export default function UiDesignConfirmationPanel({
                 if (canSubmitAdjust) submitAdjustPages()
               }
             }}
-            placeholder="描述要调整的设计稿，如「概览页改成卡片布局」。输入 / 可指定目标页面。Enter 发送，Shift+Enter 换行。"
+            placeholder="输入 / 可唤起页面列表，并描述要调整的内容。
+按Enter 发送，Shift+Enter 换行。"
             disabled={disabled}
             ref={feedbackRef}
             value={feedback}
@@ -1253,7 +1254,7 @@ export default function UiDesignConfirmationPanel({
             {adjustingHint
               ? adjustingHint
               : confirmedCount > 0
-                ? `已生成 ${confirmedCount}/${pages.length} 个页面设计稿，可直接进入技术规划；未生成的页面将由后续步骤依据需求文档与产品规划实现。`
+                ? `已生成 ${confirmedCount}/${pages.length} 个页面设计稿；未生成UI设计稿的页面将在后续直接生成页面。`
                 : ''}
           </Text>
           <div className={cx('ui-design-confirm-actions')}>
