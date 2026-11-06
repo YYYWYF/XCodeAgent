@@ -1780,10 +1780,10 @@ def _workflow_confirmation_artifact(
 
     artifact_contracts = {
         "requirement_document_confirmation": {
-            "phase": "requirements",
-            "id": "requirement_spec",
-            "name": "requirement-spec.md",
-            "path_field": "requirement_spec_path",
+            "phase": "requirement_document",
+            "id": "product_plan",
+            "name": "product-plan.md",
+            "path_field": "product_plan_path",
         },
         "project_plan_confirmation": {
             "phase": "project_planning",
@@ -1805,12 +1805,6 @@ def _workflow_confirmation_artifact(
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
     path = Path(raw_path)
-    if (
-        contract["id"] == "requirement_spec"
-        and result.get("requirements_confirmed") is not True
-        and "drafts" not in path.parts
-    ):
-        return None
     if contract["id"] == "product_plan" and "drafts" not in path.parts:
         return None
     if path.name != contract["name"] or not path.is_file():

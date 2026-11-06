@@ -69,12 +69,20 @@ def begin_workflow_lifecycle(
     submission = resume_values.get("lifecycle_interaction_submission")
     test_submission: dict[str, Any] | None = None
     task_plan_submission: dict[str, Any] | None = None
+    api_design_submission: dict[str, Any] | None = None
+    api_design_action = resume_values.get("api_design_gate_action")
+    api_design_action = (
+        api_design_action if phase == "api_design_readiness_gate"
+        and isinstance(api_design_action, dict) else None
+    )
     approved_repair_claims: list[ExecutionResourceClaim] = []
     if isinstance(submission, dict):
         submission_run_id = str(submission.get("runId") or "")
         if submission_run_id:
             submitted_execution = lifecycle.active_executions.get(submission_run_id)
             pending = submitted_execution.pending_interaction if submitted_execution else None
+            if api_design_action and pending is not None and pending.type != PendingInteractionType.API_DESIGN:
+                raise ApplicationLifecycleConflictError("API 映射检测不属于当前等待确认的门禁。")
             if (
                 pending is not None
                 and pending.type == PendingInteractionType.REPAIR_SCOPE_CONFIRMATION
@@ -86,6 +94,9 @@ def begin_workflow_lifecycle(
             elif pending is not None and pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION:
                 # DAG 确认交互沿用测试确认的原子接管路径，不能先写 submittedAt。
                 task_plan_submission = submission
+            elif pending is not None and pending.type == PendingInteractionType.API_DESIGN:
+                # 映射检测与旧 execution 接管一起提交，入场失败不能提前消费确认门。
+                api_design_submission = submission
             else:
                 persist_workbench_interaction_submission(
                     workspace,
@@ -145,7 +156,21 @@ def begin_workflow_lifecycle(
                 workflow_inputs.get("workflow_action")
                 == "continue_after_entity_binding"
             ),
+            api_design_gate_action=api_design_action,
         )
+        if (
+            api_design_action and previous is not None
+            and previous.status == WorkbenchExecutionStatus.AWAITING_USER
+            and previous.pending_interaction is not None
+            and previous.pending_interaction.type == PendingInteractionType.API_DESIGN
+        ):
+            # checkpoint 未携带最新 lifecycle 时，从当前服务端确认门绑定并发凭据。
+            pending = previous.pending_interaction
+            api_design_submission = api_design_submission or {
+                "runId": explicit_resume_run_id,
+                "id": pending.id,
+                "basedOnRevision": pending.based_on_revision,
+            }
     revision_continuation_replaces_run_id = (
         str(resume_values.get("revision_continuation_replaces_run_id") or "").strip()
         if workflow_inputs.get("workflow_action") == "continue_revision_build"
@@ -164,6 +189,8 @@ def begin_workflow_lifecycle(
         if isinstance(submission, dict)
         else ""
     )
+    if api_design_submission is not None and not explicit_resume_run_id:
+        raise ApplicationLifecycleConflictError("API 映射检测必须绑定原工作台执行引用。")
     state = start_workbench_execution(
         workspace,
         scope=scope_type,
@@ -190,6 +217,7 @@ def begin_workflow_lifecycle(
         requires_test_entry=requires_test_entry,
         test_interaction_submission=test_submission,
         task_plan_interaction_submission=task_plan_submission,
+        api_design_interaction_submission=api_design_submission,
     )
     # application_revision 仍可能停在草稿确认门，只有节点确认全部正式产物后
     # 才能把 formal revision 切成 building，避免运行登记提前改变业务事实。
@@ -233,6 +261,7 @@ def _validate_resumable_execution(
     target_id: str,
     allow_debug_reentry: bool = False,
     allow_entity_binding_continuation: bool = False,
+    api_design_gate_action: dict[str, Any] | None = None,
 ) -> None:
     """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
 
@@ -298,11 +327,39 @@ def _validate_resumable_execution(
         and execution.pending_interaction.type
         == PendingInteractionType.ACCEPTANCE_PHASE_CONFIRMATION
     )
+    # 最终验收与进入验收阶段是不同确认门；验收结果仍由原节点消费结构化答案。
+    page_acceptance_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type == PendingInteractionType.PAGE_ACCEPTANCE
+    )
+    # 这里只允许审批等待态继续，批准、拒绝及数据库执行仍由既有审批逻辑处理。
+    agent_approval_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type == PendingInteractionType.AGENT_APPROVAL
+    )
     entity_binding_continuation = (
         allow_entity_binding_continuation
         and execution.status == WorkbenchExecutionStatus.AWAITING_USER
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.ENTITY_SOURCE_BINDING
+    )
+    # API 映射保存不推进 Workflow；只有原目标的显式 refresh 可以接管该等待门。
+    pending = execution.pending_interaction
+    pending_target = pending.payload.get("developmentTarget") if pending is not None else None
+    api_design_confirmation = (
+        execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.phase == "api_design_readiness_gate"
+        and pending is not None
+        and pending.type == PendingInteractionType.API_DESIGN
+        and pending.submitted_at is None
+        and isinstance(pending_target, dict)
+        and isinstance(api_design_gate_action, dict)
+        and api_design_gate_action.get("action") == "refresh"
+        and api_design_gate_action.get("targetType") == pending_target.get("type") == scope
+        and api_design_gate_action.get("targetId") == pending_target.get("id") == target_id
+        and (scope != "endpoint" or api_design_gate_action.get("apiContractId") == pending_target.get("apiContractId"))
     )
     if (
         not resumable_status
@@ -315,7 +372,10 @@ def _validate_resumable_execution(
         and not review_phase_confirmation
         and not code_review_repair_confirmation
         and not acceptance_phase_confirmation
+        and not page_acceptance_confirmation
+        and not agent_approval_confirmation
         and not entity_binding_continuation
+        and not api_design_confirmation
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
     # 阶段确认是显式的新对话边界：只有结构化测试/审查确认允许把 execution 所有权

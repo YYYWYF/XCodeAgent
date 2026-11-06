@@ -2698,18 +2698,24 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertNotIn("project-plan.json", payload)
 
     def test_confirmation_artifact_is_limited_to_the_active_gate(self) -> None:
+        """联合需求确认只展示当前两份草稿，其他确认门不借用需求正文。"""
         with tempfile.TemporaryDirectory() as workspace:
-            requirement_path = Path(workspace) / "requirement-spec.md"
+            requirement_path = Path(workspace) / "drafts/specs/requirement-spec.md"
+            product_plan_path = Path(workspace) / "drafts/plans/product-plan.md"
+            requirement_path.parent.mkdir(parents=True)
+            product_plan_path.parent.mkdir(parents=True)
             project_plan_path = Path(workspace) / "project-plan.md"
             requirement_path.write_text("# 需求文档\n\n需求确认正文。", encoding="utf-8")
+            product_plan_path.write_text("# 产品规划\n\n产品确认正文。", encoding="utf-8")
             project_plan_path.write_text("# 项目计划\n\n计划确认正文。", encoding="utf-8")
 
             requirement_artifact = _workflow_confirmation_artifact(
                 {
-                    "phase": "requirements",
+                    "phase": "requirement_document",
                     "status": "requires_user_input",
-                    "requirements_confirmed": True,
+                    "requirements_confirmed": False,
                     "requirement_spec_path": str(requirement_path),
+                    "product_plan_path": str(product_plan_path),
                     "project_plan_path": str(project_plan_path),
                     "clarification": {
                         "mode": "requirement_document_confirmation",
@@ -2734,8 +2740,9 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         self.assertIsNotNone(project_plan_artifact)
         assert requirement_artifact is not None
         assert project_plan_artifact is not None
-        self.assertEqual(requirement_artifact["id"], "requirement_spec")
+        self.assertEqual(requirement_artifact["id"], "product_plan")
         self.assertIn("需求确认正文", requirement_artifact["content"])
+        self.assertIn("产品确认正文", requirement_artifact["content"])
         self.assertNotIn("计划确认正文", requirement_artifact["content"])
         self.assertEqual(project_plan_artifact["id"], "project_plan")
         self.assertIn("计划确认正文", project_plan_artifact["content"])
@@ -2769,7 +2776,7 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
         )
 
     def test_unconfirmed_requirement_projects_draft_markdown_artifact(self) -> None:
-        """需求分析草稿未确认时应投射为右侧可见的草稿工件。"""
+        """联合确认前两份草稿投射为右侧可见的完整需求文档。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             requirement_path = (
@@ -2781,12 +2788,16 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
             )
             requirement_path.parent.mkdir(parents=True, exist_ok=True)
             requirement_path.write_text("# 当前需求草稿\n", encoding="utf-8")
+            product_plan_path = Path(workspace) / ".devagentstudio/drafts/plans/product-plan.md"
+            product_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            product_plan_path.write_text("# 当前产品规划草稿\n", encoding="utf-8")
             artifact = _workflow_confirmation_artifact(
                 {
-                    "phase": "requirements",
+                    "phase": "requirement_document",
                     "status": "requires_user_input",
                     "requirements_confirmed": False,
                     "requirement_spec_path": str(requirement_path),
+                    "product_plan_path": str(product_plan_path),
                     "clarification": {
                         "mode": "requirement_document_confirmation",
                         "status": "requires_user_input",
@@ -2796,8 +2807,9 @@ class WorkflowAgUiStreamTests(unittest.TestCase):
 
         self.assertIsNotNone(artifact)
         assert artifact is not None
-        self.assertEqual(artifact["id"], "requirement_spec")
+        self.assertEqual(artifact["id"], "product_plan")
         self.assertIn("当前需求草稿", artifact["content"])
+        self.assertIn("当前产品规划草稿", artifact["content"])
 
     def test_stream_passes_forwarded_workspace_and_editor_mode_to_graph_state(self) -> None:
         graph = FakeWorkflowGraph()

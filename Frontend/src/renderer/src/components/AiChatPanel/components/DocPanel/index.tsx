@@ -1,5 +1,5 @@
 import { FileTextOutlined } from '@ant-design/icons'
-import { Alert, Tag, Typography } from 'antd'
+import { Alert, Button, Tag, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
@@ -35,6 +35,7 @@ type Props = {
   title?: string
   generating?: boolean
   error?: string
+  onRetry?: () => void
   docName?: string
   productPlan?: Record<string, unknown>
   requirementSpec?: Record<string, unknown>
@@ -52,6 +53,7 @@ export default function DocPanel({
   title,
   generating,
   error,
+  onRetry,
   docName,
   productPlan,
   requirementSpec,
@@ -66,7 +68,14 @@ export default function DocPanel({
   const isRequirementDoc = structuredDocument === 'requirement-doc'
   const requirementReady =
     isRequirementDoc && Boolean(requirementSpec && Object.keys(requirementSpec).length)
-  const ready = Boolean(content || technicalPlan || isTechnicalPlan || requirementReady || error)
+  const ready = Boolean(
+    content ||
+      technicalPlan ||
+      isTechnicalPlan ||
+      requirementReady ||
+      error ||
+      structuredDocumentLoading
+  )
 
   return (
     <div className={cx('doc-panel')}>
@@ -108,13 +117,22 @@ export default function DocPanel({
         )}
       </header>
       <div className={cx('doc-panel-stage', ready && 'editor')}>
-        {generating ? (
+        {generating || structuredDocumentLoading ? (
           <div className={cx('doc-panel-generating')}>
-            <RichLoading bare title={`正在生成${docName || '文档'}…`} />
+            <RichLoading
+              bare
+              title={structuredDocumentLoading ? '正在读取文档…' : `正在生成${docName || '文档'}…`}
+            />
           </div>
         ) : error ? (
           <div className={cx('doc-panel-empty', 'doc-panel-error')}>
-            <Alert message="文档读取失败" description={error} showIcon type="error" />
+            <Alert
+              message="文档读取失败"
+              description={error}
+              showIcon
+              type="error"
+              action={onRetry ? <Button onClick={onRetry}>重新读取</Button> : undefined}
+            />
           </div>
         ) : ready ? (
           <div
@@ -123,11 +141,7 @@ export default function DocPanel({
               isTechnicalPlan || requirementReady ? 'doc-panel-structured' : 'doc-panel-markdown'
             )}
           >
-            {structuredDocumentLoading ? (
-              <div className={cx('doc-panel-generating')}>
-                <RichLoading bare title="正在读取结构化文档…" />
-              </div>
-            ) : isTechnicalPlan ? (
+            {isTechnicalPlan ? (
               technicalPlan && productPlan ? (
                 <TechnicalPlanDocPanel
                   plan={technicalPlan}
@@ -156,7 +170,7 @@ export default function DocPanel({
               <FileTextOutlined />
             </span>
             <Text strong>{docName ? `${docName}待生成` : '文档将在此生成'}</Text>
-            <Text type="secondary">完成当前阶段确认后，文档会生成在这里</Text>
+            <Text type="secondary">文档生成后会展示在这里</Text>
           </div>
         )}
       </div>
