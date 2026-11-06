@@ -1,177 +1,88 @@
-"""验证生成应用页面对固定 Agent UI Runtime 组件的受控组合。"""
+"""共享 Agent 页面静态验收：当前磁盘来源、公开入口和唯一 Runtime 所有权。"""
 
 from __future__ import annotations
 
 import json
-import re
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 from typing import Any
+from uuid import uuid4
 
-from app.services.business_acceptance_verifiers.common import (
-    strip_comments,
-    verification_result,
-)
-
-
-_NETWORK_PATTERNS = (
-    r"\bfetch\s*\(",
-    r"\baxios\b",
-    r"\bXMLHttpRequest\b",
-    r"\bWebSocket\b",
-    r"\bEventSource\b",
-    r"\bsendBeacon\s*\(",
-)
-_CUSTOM_CHAT_PATTERNS = (
-    r"\b(?:function|class)\s+AgentChatCore\b",
-    r"\bconst\s+AgentChatCore\s*=",
-    r"\bAgentConversationAdapter\b",
-    r"\bagentConversationMock\b",
-)
-
-
-def _extract_json_config(source: str, name: str = "AGENT_UI_CONFIG") -> dict[str, Any] | None:
-    """读取固定名称 AGENT_UI_CONFIG 后的纯 JSON 对象字面量。"""
-
-    match = re.search(
-        rf"\bconst\s+{re.escape(name)}(?:\s*:\s*AgentUiTemplateConfig)?\s*=\s*\{{",
-        source,
-    )
-    if not match:
-        return None
-    start = source.find("{", match.start())
-    depth = 0
-    quote = ""
-    escaped = False
-    for index in range(start, len(source)):
-        char = source[index]
-        if quote:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = ""
-            continue
-        if char in {'"', "'"}:
-            quote = char
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    value = json.loads(source[start : index + 1])
-                except json.JSONDecodeError:
-                    return None
-                return value if isinstance(value, dict) else None
-    return None
-
-
-def _component_imported(source: str, component: str, module: str) -> bool:
-    """确认固定组件通过唯一模块的具名导入进入页面。"""
-
-    for match in re.finditer(
-        rf"import\s*\{{(?P<names>[^}}]+)\}}\s*from\s*['\"]{re.escape(module)}['\"]",
-        source,
-        re.DOTALL,
-    ):
-        names = {
-            item.strip().split(" as ", 1)[0].strip()
-            for item in match.group("names").split(",")
-        }
-        if component in names:
-            return True
-    return False
-
-
-def _component_attributes(source: str, component: str) -> str:
-    """提取固定组件首个 JSX 用法的属性文本。"""
-
-    match = re.search(rf"<{re.escape(component)}\b(?P<attrs>[^>]*)/?>", source, re.DOTALL)
-    return match.group("attrs") if match else ""
-
-
-def _floating_business_body_exists(source: str, component: str) -> bool:
-    """确认浮窗页面除固定组件外仍渲染至少一个真实业务 JSX 元素。"""
-
-    tags = [
-        tag
-        for tag in re.findall(r"<([A-Za-z][A-Za-z0-9.]*)\b", source)
-        if tag not in {component, "React.Fragment"}
-    ]
-    return bool(tags)
+from app.services.agent_ui_dependency_plan import REPOSITORY, safe_path, target_snapshot
+from app.services.agent_ui_design_project import command_environment
+from app.services.business_acceptance_verifiers.common import verification_result
+from app.services.workspace_process_registry import workspace_process_registry
 
 
 def verify_agent_ui_runtime_source(
-    files: dict[str, str],
-    expected: dict[str, Any],
-    *,
-    _config_name: str = "AGENT_UI_CONFIG",
+    files: dict[str, str], expected: dict[str, Any], *,
+    workspace_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    """验证页面精确绑定正式 Runtime，并拒绝覆盖平台适配器或另建网络传输。"""
-
+    """重新投影正式来源后检查当前页面依赖图；不代替真实连接或业务结果验收。"""
+    from app.services.agent_ui_build_contract import current_agent_ui_build_contract
+    if workspace_root is None:
+        return verification_result("blocked", "缺少当前工作区，无法复核共享 Agent UI 来源。")
     contract = expected.get("agent_ui")
-    contract = contract if isinstance(contract, dict) else {}
-    component = str(contract.get("component") or "").strip()
-    module = str(contract.get("componentModule") or "").strip()
-    expected_config = contract.get("config")
-    expected_config = expected_config if isinstance(expected_config, dict) else {}
-    if not component or not module or not expected_config:
-        return verification_result("blocked", "Agent UI Runtime 检查缺少固定组件或配置合同。")
-    runtime = expected_config.get("runtime")
-    if contract.get("mode") != "runtime" or runtime != {
-        "path": f"/agents/{contract.get('agentId')}/run", "pageId": contract.get("pageId"),
-        "interactionKinds": ((contract.get("runtimeEndpoint") or {}).get("interactionContract") or {}).get("interactionKinds"),
-    }:
-        return verification_result("blocked", "Agent UI 未绑定当前正式 Agent 的精确同源 Runtime 路径。")
-    combined = "\n".join(files.values())
-    clean = strip_comments(combined)
-    errors: list[str] = []
-    if not _component_imported(clean, component, module):
-        errors.append(f"页面未从 {module} 精确导入 {component}。")
-    attrs = next((match.group("attrs") for match in re.finditer(
-        rf"<{re.escape(component)}\b(?P<attrs>[^>]*)/?>", clean, re.DOTALL)
-        if re.search(rf"\bconfig\s*=\s*\{{\s*{re.escape(_config_name)}\s*\}}", match.group("attrs"))), "")
-    if not attrs:
-        errors.append(f"页面未渲染固定组件 {component}。")
-    elif not re.search(rf"\bconfig\s*=\s*\{{\s*{re.escape(_config_name)}\s*\}}", attrs):
-        errors.append("固定组件必须使用 config={AGENT_UI_CONFIG}。")
-    if attrs and (
-        re.search(r"\badapter\s*=", attrs)
-        or re.search(r"\{\s*\.\.\.", attrs)
-    ):
-        errors.append("固定组件不得传入 adapter 或 JSX spread。")
-    actual_config = _extract_json_config(clean, _config_name)
-    if actual_config != expected_config:
-        errors.append("AGENT_UI_CONFIG 与平台投影配置不完全一致。")
-    if "data-preview-only" in clean:
-        errors.append("生成应用页面不得保留 data-preview-only 评审控制器。")
-    if any(re.search(pattern, clean) for pattern in _CUSTOM_CHAT_PATTERNS):
-        errors.append("页面不得自制 AgentChatCore、Adapter 或 Mock 数据层。")
-    network_hits = [pattern for pattern in _NETWORK_PATTERNS if re.search(pattern, clean)]
-    if network_hits:
-        errors.append("Agent UI 页面不得直连 fetch、axios、SSE、WebSocket 或 sidecar。")
-    if contract.get("surface") == "floating_panel" and not _floating_business_body_exists(
-        clean, component
-    ):
-        errors.append("floating_panel 页面必须保留并渲染普通业务页面主体。")
-    for index, companion in enumerate(contract.get("companions", []), start=1):
-        result = verify_agent_ui_runtime_source(files, {"agent_ui": companion},
-                                               _config_name=f"AGENT_UI_CONFIG_{index}")
-        if result.get("status") != "passed":
-            errors.append(f"同页 Agent Surface {index} 校验未通过：{result}")
-    if errors:
-        return verification_result(
-            "failed",
-            "；".join(errors),
-            facts={"component": component, "network_pattern_count": len(network_hits)},
-        )
-    return verification_result(
-        "passed",
-        f"已验证 {component} 使用精确平台配置和官方 AG-UI 适配器；真实运行仍需后续测试与验收。",
-        facts={
-            "component": component,
-            "page_id": str(contract.get("pageId") or ""),
-            "agent_id": str(contract.get("agentId") or ""),
-            "gateway_endpoint_id": str(contract.get("gatewayEndpointId") or ""),
-        },
-    )
+    if not isinstance(contract, dict) or contract.get("mode") != "shared_host":
+        return verification_result("blocked", "页面需要当前共享 Agent UI 构建合同。")
+    try:
+        root = Path(workspace_root)
+        current = current_agent_ui_build_contract(root, str(contract.get("pageId") or ""))
+        if contract != current:
+            return verification_result("blocked", "Agent UI 正式来源、包、展示或接线已变化，请重新生成任务。")
+        target = safe_path(root, "frontend")
+        snapshot = target_snapshot(target)
+        entries: list[str] = []
+        for name, content in files.items():
+            path = safe_path(root, name)
+            if not name.startswith("frontend/src/") or path.read_text(encoding="utf-8") != content:
+                return verification_result("blocked", "页面读取内容与当前磁盘不一致。")
+            if path.suffix in {".ts", ".tsx", ".js", ".jsx", ".mjs"}:
+                entries.append(name)
+        if not entries:
+            return verification_result("blocked", "缺少当前页面源码。")
+        sources: dict[str, str] = {}
+        size = 0
+        for name in snapshot:
+            if not name.startswith("src/") or Path(name).suffix not in {".ts", ".tsx", ".js", ".jsx", ".mjs"}:
+                continue
+            path = safe_path(target, name)
+            size += path.stat().st_size
+            if len(sources) >= 1500 or size > 8_000_000 or path.stat().st_size > 512_000:
+                return verification_result("blocked", "源码范围超过静态验收限制，请缩小工程。")
+            sources["frontend/" + name] = path.read_text(encoding="utf-8")
+        node = shutil.which("node")
+        if not node:
+            return verification_result("blocked", "共享页面分析需要已有 Node 与 TypeScript。")
+        # 取消轮询会分段 communicate；大管道输入可能在第一次超时后停止写入。
+        # 使用本次调用私有的临时文件交付完整快照，继续保留进程 owner 与取消机制。
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stream:
+            json.dump({"files": sources, "entries": entries, "contract": current,
+                       "toolRoot": str(REPOSITORY / "Frontend")}, stream)
+            stream.seek(0)
+            result = workspace_process_registry.run(
+                [node, str(Path(__file__).parents[1] / "agent_ui_page_inspection.mjs")],
+                workspace=root, run_id="agent-ui-build-inspection:" + uuid4().hex,
+                cwd=REPOSITORY / "Frontend", env=command_environment(), stdin=stream,
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        if result.returncode:
+            return verification_result("blocked", "共享页面 TypeScript 分析未完成。")
+        inspected = json.loads(result.stdout)
+        # 只在同一磁盘快照上出具结果；构建命令和模型回执不参与本检查。
+        if target_snapshot(target) != snapshot or current_agent_ui_build_contract(root, contract["pageId"]) != current:
+            return verification_result("blocked", "来源或页面在验收期间变化，请重新检查。")
+        errors = inspected["errors"]
+        if errors:
+            return verification_result("failed", "；".join(errors))
+        return verification_result("passed", "已验证当前包/来源/ownership 和共享页面静态接入；真实连接与业务仍待验收。",
+            facts={"verification_scope": "static_source", "real_connection": current["connection"],
+                   "business_acceptance": "not_run", "runtime_behavior": "not_run",
+                   "page_id": current["pageId"], "agent_id": current["agentId"],
+                   "contract_sha256": current["sha256"], "reachable_files": inspected["files"]})
+    except subprocess.TimeoutExpired:
+        return verification_result("blocked", "共享页面 TypeScript 分析超时，请重试验收；本轮未记录通过。")
+    except (OSError, ValueError, KeyError, TypeError):
+        return verification_result("blocked", "当前共享来源或页面不可验证，请重新审阅设计转入及构建合同。")

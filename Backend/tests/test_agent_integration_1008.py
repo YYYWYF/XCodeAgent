@@ -138,16 +138,11 @@ class AgentIntegration1008Tests(unittest.TestCase):
         wrong["agent_contracts"][0]["purpose"] = "超出产品范围"
         self.assertTrue(validate_technical_plan_agent_contracts(wrong, product))
 
-    def test_runtime_contract_binds_real_endpoint_and_reaches_unit_test(self):
-        """正式 UI 消费当前 Runtime 路径，构建完成后继续原单测门禁。"""
-
+    def test_shared_contract_requires_transfer_and_build_keeps_unit_test_gate(self):
+        """共享设计必须有当前转入，Build 完成仍继续原单测门而不隐式调用模型。"""
         _, product, plan = fixture()
-        contracts = project_agent_ui_build_contracts(product, plan)
-        contract = next(iter(contracts.values()))
-        self.assertEqual(contract["runtimeAgentId"], "assistant")
-        self.assertNotIn("gatewayEndpointId", contract)
-        self.assertEqual(contract["mode"], "runtime")
-        self.assertEqual(contract["config"]["runtime"]["path"], "/agents/assistant/run")
+        with self.assertRaisesRegex(ValueError, "工作区|转入"):
+            project_agent_ui_build_contracts(product, plan)
         from app.graph.workflow import route_build_result
         self.assertEqual(route_build_result({"build_summary": {"status": "completed"}}), "unit_test")
 

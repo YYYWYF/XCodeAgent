@@ -23,7 +23,6 @@ const RUNTIME_MODULE_MAP: Record<string, string> = {
   antd5: 'antd',
   '@ant-design/icons': 'antdIcons',
   '@ant-design/pro-components': 'proComponents',
-  '@xcodeagent/agent-ui-design': 'agentUi',
   // dayjs 是 antd5 的传递依赖，页面模板（commonTable/tabsTable）用它做日期格式化。
   // 选模板作设计稿时模板代码原样渲染，需登记 dayjs 否则 require('dayjs') 白屏。
   dayjs: 'dayjs'
@@ -42,17 +41,13 @@ const RUNTIME_MODULE_MAP: Record<string, string> = {
  */
 function rewriteRequire(code: string): string {
   // 匹配 require('xxx') 或 require("xxx")
-  return code.replace(
-    /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
-    (full, spec: string) => {
-      const nsKey = RUNTIME_MODULE_MAP[spec]
-      if (!nsKey) {
-        // 未知来源：保留原样，运行时 require 未定义会报错（设计稿规范禁用未登记的 import）。
-        return full
-      }
-      return `window.__DESIGN_RUNTIME__.${nsKey}`
+  return code.replace(/\brequire\(\s*['"]([^'"]+)['"]\s*\)/g, (_full, spec: string) => {
+    const nsKey = RUNTIME_MODULE_MAP[spec]
+    if (!nsKey) {
+      throw new Error(`单文件设计不支持模块 ${spec}，请检查当前设计依赖。`)
     }
-  )
+    return `window.__DESIGN_RUNTIME__.${nsKey}`
+  })
 }
 
 /**
@@ -63,6 +58,9 @@ function rewriteRequire(code: string): string {
  * 调用方包一层 exports 对象执行，即可拿到默认导出组件。
  */
 export function compileTsx(source: string): string {
+  if (source.includes('@xcodeagent/agent-ui-design')) {
+    throw new Error('旧 Agent UI 设计已停用，请重新生成当前包消费工程。')
+  }
   // sucrase 转 TS/JSX/ESM→CJS。production 去除 dev-only 检查。
   // jsxRuntime: automatic 需要引入 jsx-runtime，但运行时对象里没有，
   // 这里改用 classic 运行时（React.createElement），与设计稿代码里
@@ -92,4 +90,3 @@ export function compileTsx(source: string): string {
   `
   return wrapped
 }
-

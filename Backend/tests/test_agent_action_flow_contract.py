@@ -17,9 +17,6 @@ from app.services.project_plan import _technical_plan_pages
 from app.services.runtime_endpoint_dependencies import resolve_runtime_target
 from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
 from app.services.ui_design_agent_surfaces import project_ui_design_pages
-from app.services.ui_design_agent_template import (
-    build_agent_ui_template_source_contract, inspect_agent_ui_template_usage, validate_agent_ui_template_usage,
-)
 from tests.test_runtime_endpoint_contracts import plan, business
 
 
@@ -47,32 +44,17 @@ def product() -> dict:
 class AgentActionFlowContractTests(TestCase):
     """验证合法产品变化能贯穿下游，真正缺失的业务实现仍能被发现。"""
 
-    def test_multiple_actions_and_surfaces_survive_design_and_runtime_build(self):
-        """同页两种载体及全部动作贯穿 UI 源码、正式合同和正式验收器。"""
+    def test_multiple_agent_design_cannot_become_single_shared_runtime(self):
+        """保留设计动作事实，但共享首版不能默默吞掉另一个 Agent。"""
         source_product = product()
         page = project_ui_design_pages(source_product)[0]
-        design = build_agent_ui_template_source_contract(page)
-        self.assertEqual(validate_agent_ui_template_usage(page, inspect_agent_ui_template_usage(design))["errors"], [])
+        self.assertEqual(len(page["agent_surfaces"]), 2)
         technical = plan()
         for agent in technical["agent_contracts"]:
             agent["pageIds"] = ["orders"]
         technical = materialize_runtime_endpoints(technical)
-        compiled = project_agent_ui_build_contracts(source_product, technical)["orders"]
-        self.assertEqual(len(compiled["config"]["actions"]), 4)
-        self.assertTrue(compiled["config"]["actions"][3]["requiresConfirmation"])
-        self.assertEqual(len(compiled["companions"]), 1)
-        contracts = [compiled, *compiled["companions"]]
-        imports = ", ".join(item["component"] for item in contracts)
-        declarations, elements = [], []
-        for index, contract in enumerate(contracts):
-            name = "AGENT_UI_CONFIG" if not index else f"AGENT_UI_CONFIG_{index}"
-            declarations.append(f"const {name} = {json.dumps(contract['config'])};")
-            elements.append(f"<{contract['component']} config={{{name}}} />")
-        source = f"import {{ {imports} }} from '@/components/AgentConversation';\n" + "\n".join(declarations)
-        source += "\nexport default function Page() { return <>" + "".join(elements) + "</>; }"
-        self.assertEqual(verify_agent_ui_runtime_source({"page.tsx": source}, {"agent_ui": compiled})["status"], "passed")
-        missing = source.replace(elements[1], "")
-        self.assertEqual(verify_agent_ui_runtime_source({"page.tsx": missing}, {"agent_ui": compiled})["status"], "failed")
+        with self.assertRaisesRegex(ValueError, "唯一正式 Agent"):
+            project_agent_ui_build_contracts(source_product, technical)
 
     def test_explicit_secondary_action_needs_no_duplicate_binding_decision(self):
         """增加显式推荐动作即可获得 Agent 归属，不因遗漏重复清单要求业务接口。"""

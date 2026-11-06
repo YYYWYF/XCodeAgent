@@ -1594,6 +1594,22 @@ def build_workflow_ag_ui_stream(
                             iteration_kind=_iteration_kind(progress_node, progress_attempt),
                         )
                         continue
+                    if event_type == "agent_ui_preparation.progress":
+                        process_sequence += 1
+                        preparation_attempt = _current_node_attempt(node_attempts, "prepare_build_tasks")
+                        yield _process_frame(
+                            encoder,
+                            id=_process_step_id("prepare_build_tasks", preparation_attempt),
+                            kind="workflow",
+                            status="running",
+                            title="正在准备智能体页面",
+                            detail=str(progress.get("message") or "正在执行已确认的页面准备。"),
+                            sequence=process_sequence,
+                            node_name="prepare_build_tasks",
+                            attempt=preparation_attempt,
+                            iteration_kind=_iteration_kind("prepare_build_tasks", preparation_attempt),
+                        )
+                        continue
                     if event_type == "prepare_build_tasks.progress":
                         dag_generation = (
                             progress.get("dag_generation")

@@ -19,6 +19,8 @@ from app.graph.direct_modification_workflow import clear_direct_modification_gra
 from app.middleware.approvals import approval_store
 from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.preview_runtime import preview_runtime_capabilities, build_preview_runtime_stream
+from app.protocols.agent_ui_dependencies import dependency_capabilities, build_dependency_stream
+from app.protocols.agent_ui_design_transfer import transfer_capabilities, build_transfer_stream
 from app.protocols.agent_runtime_workbench import runtime_workbench_capabilities, build_runtime_workbench_stream
 from app.protocols.runtime_acceptance import acceptance_capabilities, build_acceptance_stream
 from app.protocols.agent_files import (
@@ -109,6 +111,8 @@ from app.services.database_crypto import (
     ensure_database_platform_key,
 )
 from app.services.backend_instance import current_backend_instance, initialize_backend_instance
+from app.services.agent_ui_tool_lifecycle import shutdown_agent_ui_tool_hosts
+from app.services.agent_ui_design_preview import shutdown_agent_ui_design_previews
 from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_bootstrap.service import workspace_bootstrap_service
 from app.tools import database_tools
@@ -134,10 +138,16 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        clear_workflow_graph_cache()
-        clear_application_planning_graph_cache()
-        clear_direct_modification_graph_cache()
-        await close_workflow_checkpointer()
+        try:
+            await shutdown_agent_ui_design_previews()
+        finally:
+            try:
+                await shutdown_agent_ui_tool_hosts()
+            finally:
+                clear_workflow_graph_cache()
+                clear_application_planning_graph_cache()
+                clear_direct_modification_graph_cache()
+                await close_workflow_checkpointer()
 
 
 app = FastAPI(
@@ -187,6 +197,8 @@ async def health() -> dict[str, object]:
             "user_skills": user_skills_capabilities(),
             "agent_files": agent_files_capabilities(),
             "preview_runtime": preview_runtime_capabilities(),
+            "agent_ui_dependencies": dependency_capabilities(),
+            "agent_ui_design_transfer": transfer_capabilities(),
             "agent_runtime_workbench": runtime_workbench_capabilities(),
             "runtime_acceptance": acceptance_capabilities(),
             "data_sources": data_sources_capabilities(),
@@ -367,6 +379,26 @@ async def run_runtime_acceptance(input_data: dict[str, Any] = Body(...),
     """只传递已确认流程签发的一次性桌面验收任务及脱敏证据。"""
     return StreamingResponse(build_acceptance_stream(payload=input_data, accept=accept),
         media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/agent-ui-dependencies/run")
+async def run_agent_ui_dependencies(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """以独立 AG-UI 流审阅、安装、查询或停止正式目标依赖准备。"""
+    return StreamingResponse(build_dependency_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/agent-ui-design-transfer/run")
+async def run_agent_ui_design_transfer(
+    input_data: dict[str, Any] = Body(...),
+    accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """以独立 AG-UI 流读取已确认设计到当前目标的逐文件差异，不执行转入。"""
+    return StreamingResponse(build_transfer_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 @app.post("/preview-runtime/run")

@@ -46,9 +46,11 @@ from app.services.ui_design_manifest import (
     UI_MANIFEST_SCHEMA_VERSION,
     build_ui_page_manifest,
     present_ui_pages,
+    persisted_ui_manifest,
     validate_ui_design_code,
 )
 from app.services.ui_design_carryover import read_ui_design_carryover
+from app.services.agent_ui_design_adjustment import adjust_agent_pages
 from app.services.iteration_artifacts import (
     iteration_origins_for_pages,
     record_iteration_artifacts,
@@ -128,6 +130,10 @@ def _ui_design_confirmation_payload(
     payload["message"] = "请逐页确认设计稿后再继续项目规划。"
     payload["pending_count"] = pending_count
     payload["pages"] = pages
+    from app.workspace.ui_design_documents import ui_designs_markdown_path
+    path = ui_designs_markdown_path(state)
+    if path.is_file() and not path.is_symlink():
+        payload["design_document"] = {"path": str(path), "markdown": path.read_text(encoding="utf-8")}
     # 每页在历史迭代里的归属（designedIn / plannedButUndesignedIn），供界面标注。
     payload["iteration_origins"] = _with_iteration_origins(state, pages)
     return payload
@@ -256,8 +262,7 @@ def _verified_ui_designs_for_confirmation(
     state: ProjectState,
     ui_designs: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """按当前 ProductPlan 和真实 TSX 重新校验全部页面后返回 v2 清单。"""
-
+    """按当前产品事实复核单页源码或多文件资产，不以预览就绪代替正式确认。"""
     product_pages = {_page_id(page): page for page in _page_list(state) if _page_id(page)}
     existing_pages = {
         _page_id(page): page
@@ -269,9 +274,34 @@ def _verified_ui_designs_for_confirmation(
         errors.append("UI Manifest 引用的 ProductPlan 哈希已过期，请重新生成受影响页面。")
     if set(existing_pages) != set(product_pages):
         errors.append("UI Manifest 页面集合必须与 ProductPlan pages 完全一致。")
+    if len(existing_pages) != len(ui_designs.get("pages", [])):
+        errors.append("UI Manifest 页面身份不能重复或缺失。")
+    agent_ids = {page_id for page_id, page in product_pages.items() if page.get("agent_surfaces")}
+    assets = [page.get("design_asset") for page in existing_pages.values() if page.get("design_asset")]
+    asset_ids = assets[0].get("pageIds") if assets and isinstance(assets[0], dict) else None
+    if assets and (any(asset != assets[0] for asset in assets)
+                   or not isinstance(asset_ids, list) or any(not isinstance(item, str) for item in asset_ids)
+                   or len(asset_ids) != len(set(asset_ids)) or set(asset_ids) != agent_ids):
+        errors.append("Agent UI 页面必须引用当前同一共享工程及完整页面集合。")
     verified_pages: list[dict[str, Any]] = []
     for page_id, product_page in product_pages.items():
         existing = existing_pages.get(page_id, {})
+        if product_page.get("agent_surfaces") or existing.get("design_asset"):
+            try:
+                from app.services.agent_ui_design_confirmation import verify_agent_design_page
+                if not product_page.get("agent_surfaces"):
+                    raise ValueError("当前产品页面已不包含 Agent UI，旧工程不能继续确认。")
+                verified_pages.append(verify_agent_design_page(state, existing))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                errors.append(f"页面 {page_id} 的 Agent UI 资产未通过校验：{exc}")
+                # 旧稿与过期共享资产不能在拒绝确认后仍显示 confirmed，也不删除磁盘稿件。
+                failed = existing or build_ui_page_manifest(product_page, page_key=derive_page_key(product_page))
+                verified_pages.append({
+                    **{key: value for key, value in failed.items() if key != 'asset_confirmation'},
+                    'status': 'generation_failed', 'error': f'Agent UI 设计需要重新生成或审阅：{exc}',
+                    'verification': {'status': 'failed', 'checks': [], 'errors': [str(exc)]},
+                })
+            continue
         page_key = str(existing.get("page_key") or derive_page_key(product_page)).strip()
         code = load_page_code(
             str(workspace_root(state) / WORKSPACE_ARTIFACT_DIR / "ui-design"),
@@ -288,6 +318,8 @@ def _verified_ui_designs_for_confirmation(
             template_source_path=str(existing.get("template_source_path") or ""),
             error=str(existing.get("error") or ""),
         )
+        if "design_notes" in existing:
+            verified["design_notes"] = existing["design_notes"]
         verification = verified.get("verification", {})
         page_errors = verification.get("errors") if isinstance(verification, dict) else []
         if status != "confirmed":
@@ -423,6 +455,8 @@ def _carried_ui_page_manifest(
     返回 None 表示不继承，调用方按常规 pending 处理。
     """
 
+    if page.get("agent_surfaces"):
+        return None
     record = carried.get(_page_id(page))
     if not record:
         return None
@@ -497,6 +531,30 @@ async def _apply_adjust_pages(
                 adjust_total=0,
                 adjust_ready=0,
             )
+            return {
+                "schema_version": UI_MANIFEST_SCHEMA_VERSION,
+                "confirmation_status": "pending_user_confirmation",
+                "product_plan_sha256": _product_plan_hash(state),
+                "pages": pages,
+            }
+
+    agent_ids = [page_id for page_id in page_ids if any(
+        _page_id(page) == page_id and page.get("design_asset") for page in pages)]
+    if agent_ids:
+        _emit_progress("正在等待智能体设计任务…", ready=0, total=len(agent_ids),
+                       pages=list(pages), adjust_total=len(page_ids), adjust_ready=0,
+                       adjust_current=agent_ids[0])
+        def report_agent_progress(message: str, page_id: str) -> None:
+            """复用当前 AG-UI 进度流展示 Creator 阶段，不将心跳当成页面完成。"""
+            _emit_progress(message, ready=0, total=len(agent_ids), pages=list(pages),
+                           adjust_total=len(page_ids), adjust_ready=0, adjust_current=page_id)
+
+        pages = await adjust_agent_pages(state, pages, agent_ids, instruction, on_progress=report_agent_progress)
+        _emit_progress("智能体设计稿调整已结束，请检查页面结果。", ready=len(agent_ids),
+                       total=len(agent_ids), pages=list(pages), adjust_total=len(page_ids),
+                       adjust_ready=len(agent_ids))
+        page_ids = [page_id for page_id in page_ids if page_id not in agent_ids]
+        if not page_ids:
             return {
                 "schema_version": UI_MANIFEST_SCHEMA_VERSION,
                 "confirmation_status": "pending_user_confirmation",
@@ -584,6 +642,8 @@ async def _apply_adjust_pages(
                 code=code,
                 status="confirmed",
             )
+            if "design_notes" in target:
+                pages[idx]["design_notes"] = target["design_notes"]
             _emit_progress(
                 f"设计稿已调整：{name}（第 {seq + 1}/{total} 页完成）",
                 ready=seq + 1,
@@ -666,6 +726,8 @@ async def _latest_ui_designs(
                 page_key=page_key,
                 action="select_template" if template_id else "regenerate",
                 template_id=template_id,
+                requirement_spec=state.get("requirement_spec") or {},
+                product_plan=state.get("product_plan") or {},
             )
         )
     if stale:
@@ -757,6 +819,8 @@ async def _enqueue_ui_design_generation(
                 page_key=page_key,
                 action=sub_type,
                 template_id=str(item.get("templateId") or "").strip(),
+                requirement_spec=state.get("requirement_spec") or {},
+                product_plan=state.get("product_plan") or {},
             )
         )
 
@@ -802,6 +866,24 @@ async def _apply_ui_design_action(
 
     # 显式恢复只进入既有孤立任务自愈；不重做活跃页，不确认产物或推进下游。
     if action_type == "refresh":
+        async with get_ui_design_generation_pool().agent_project_lock(workspace):
+            latest = await _latest_ui_designs(state, existing)
+            # 显式刷新可重建丢失的派生说明；保留用户尚未提交的页面修改文字。
+            if any(page.get("design_asset") for page in latest.get("pages", []) if isinstance(page, dict)):
+                write_ui_designs_json(state, latest)
+            return latest
+
+    if action_type == "preview":
+        from app.services.agent_ui_design_projection import reopen_agent_preview
+        try:
+            return await asyncio.to_thread(reopen_agent_preview, state, existing, str(action.get("pageId") or ""))
+        except (ValueError, OSError) as exc:
+            return {**existing, "pages": [
+                {**page, "project_preview": None, "preview_error": str(exc)}
+                if page.get("pageId") == action.get("pageId") else page for page in pages]}
+
+    if action_type == "cancel":
+        await get_ui_design_generation_pool().cancel_page(workspace, str(action.get("pageId") or ""))
         return await _latest_ui_designs(state, existing)
 
     # 多页调整：顺序遍历 pageIds，对每页基于现有设计稿 + 调整指令重新生成。
@@ -941,32 +1023,52 @@ async def ui_confirmation(state: ProjectState) -> dict:
             else _user_confirmed_all_designs(request)
         )
     ):
-        latest = await _latest_ui_designs(state, existing)
-        verified, validation_errors = _verified_ui_designs_for_confirmation(state, latest)
-        if validation_errors:
-            clarification = _ui_design_confirmation_payload(state, verified)
-            clarification["message"] = "设计稿尚未通过产品事实一致性校验，请修正后再确认。"
-            clarification["validation_errors"] = validation_errors
-            _persist_ui_designs(state, verified)
+        # 与 Creator 和后台生成共用工程锁，校验及落盘之间不允许其他写入切换资产。
+        async with get_ui_design_generation_pool().agent_project_lock(str(workspace_root(state))):
+            latest = await _latest_ui_designs(state, existing)
+            verified, validation_errors = _verified_ui_designs_for_confirmation(state, latest)
+            if any(page.get("design_asset") for page in latest.get("pages", [])):
+                from app.workspace.ui_design_documents import prepare_ui_markdown_revision
+                try:
+                    _candidate, markdown_request = prepare_ui_markdown_revision(state, latest)
+                    if markdown_request:
+                        validation_errors.append("设计说明有尚未同步的修改，请从当前审阅卡提交修订后重新确认。")
+                except (OSError, ValueError) as exc:
+                    validation_errors.append(str(exc))
+            # 后台生成可先于 checkpoint 完成；旧卡片不能批准用户尚未审阅的新版本。
+            if any(page.get("design_asset") for page in latest.get("pages", [])) and (
+                persisted_ui_manifest(existing) != persisted_ui_manifest(latest)
+            ):
+                validation_errors.append("设计稿已更新，请刷新审阅当前版本后重新确认。")
+            if validation_errors:
+                # 失败只保存已有工程记录；候选校验证据不能冒充已提交的正式确认。
+                original_pages = {_page_id(page): page for page in latest.get("pages", []) if isinstance(page, dict)}
+                verified = {**verified, "pages": [original_pages.get(_page_id(page), page)
+                    if page.get("design_asset") else page for page in verified["pages"]]}
+                clarification = _ui_design_confirmation_payload(state, verified)
+                clarification["message"] = "设计稿尚未通过产品事实一致性校验，请修正后再确认。"
+                clarification["validation_errors"] = validation_errors
+                _persist_ui_designs(state, verified)
+                return {
+                    "phase": "ui_confirmation",
+                    "status": "requires_user_input",
+                    "ui_designs": verified,
+                    "clarification": clarification,
+                    "timeline": ["ui_confirmation"],
+                }
+            ui_designs = {
+                **verified,
+                "confirmation_status": "confirmed",
+                "pages": [{**page, "status": "confirmed"} for page in verified["pages"]],
+            }
+            _persist_ui_designs(state, ui_designs, strict=True)
             return {
                 "phase": "ui_confirmation",
-                "status": "requires_user_input",
-                "ui_designs": verified,
-                "clarification": clarification,
+                "status": "completed",
+                "ui_designs": ui_designs,
+                "clarification": _ui_design_confirmed_payload(state, ui_designs),
                 "timeline": ["ui_confirmation"],
             }
-        ui_designs = {
-            **verified,
-            "confirmation_status": "confirmed",
-        }
-        _persist_ui_designs(state, ui_designs)
-        return {
-            "phase": "ui_confirmation",
-            "status": "completed",
-            "ui_designs": ui_designs,
-            "clarification": _ui_design_confirmed_payload(state, ui_designs),
-            "timeline": ["ui_confirmation"],
-        }
 
     # 首次进入：只准备页面骨架，不生成设计稿。用户在前端逐页"选模板"或
     # "换一换"后才产生设计稿（经 ui_design_action 单页动作路径回填）。
@@ -981,11 +1083,10 @@ async def ui_confirmation(state: ProjectState) -> dict:
     }
 
 
-def _persist_ui_designs(state: ProjectState, ui_designs: dict[str, Any]) -> None:
+def _persist_ui_designs(state: ProjectState, ui_designs: dict[str, Any], *, strict: bool = False) -> None:
     """把 ui_designs 落盘到工作区 specs/ui-designs.json，供主 workflow build 阶段读取。
 
-    写盘失败只记日志不中断节点：设计稿代码文件已落盘，索引缺失时 build 阶段降级
-    为不读设计稿，不影响主流程。
+    草稿写入失败保留诊断；正式确认使用 strict，只有真实落盘成功才能放行。
     """
 
     if not isinstance(ui_designs, dict) or not ui_designs:
@@ -994,6 +1095,8 @@ def _persist_ui_designs(state: ProjectState, ui_designs: dict[str, Any]) -> None
         write_ui_designs_json(state, ui_designs)
     except Exception:
         logger.exception("ui_designs_persist_failed")
+        if strict:
+            raise
     _record_iteration_ui_pages(state, ui_designs)
 
 

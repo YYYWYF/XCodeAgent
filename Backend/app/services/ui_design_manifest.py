@@ -642,7 +642,6 @@ def build_ui_page_manifest(
             "surfaces": [],
             "invalid_markers": [],
             "duplicate_control_ids": [],
-            "template_inspection": {"usages": [], "errors": []},
         },
     }
     errors = validate_ui_design_code(page, code) if code else []
@@ -726,7 +725,7 @@ def build_ui_page_manifest(
                     ),
                 },
                 {
-                    "id": "agent-ui-fixed-template",
+                    "id": "agent-ui-source-boundary",
                     "status": (
                         "passed"
                         if surface_validation["required_parts_passed"]
@@ -764,7 +763,7 @@ def persisted_ui_manifest(ui_designs: dict[str, Any]) -> dict[str, Any]:
         cleaned = {
             key: value
             for key, value in page.items()
-            if key not in _LEGACY_PRODUCT_FACT_KEYS and key != "code"
+            if key not in _LEGACY_PRODUCT_FACT_KEYS and key not in {"code", "project_preview", "preview_error"}
         }
         cleaned["bindings"] = {
             "actions": ui_action_bindings(page),

@@ -40,6 +40,41 @@ def include_grammar_binary(binary: tuple[str, str]) -> bool:
     return "bindings" not in Path(destination).parts or Path(source).name.split(".")[0] in builtin_grammars
 
 datas = [
+    # 标准开发预览进程托管官方 Mock，资源不进入目标应用生产构建。
+    (str(backend_root / "app/services/agent_ui_managed_preview.mjs"), "app/services"),
+    (str(backend_root / "app/services/agent_ui_preview_endpoint.cjs"), "app/services"),
+    # 转入分析和目标 Rsbuild 资源适配共用同一受审阅编译边界。
+    (
+        str(backend_root / "app" / "services" / "agent_ui_rsbuild_loader.cjs"),
+        "app/services",
+    ),
+    # T17 只解析模型源码的 AST 校验器，不执行候选或暴露新产品端点。
+    (
+        str(backend_root / "app" / "services" / "agent_ui_design_validate.mjs"),
+        "app/services",
+    ),
+    # 设计预览只服务已构建静态快照，不依赖工具源码目录或 Vite 开发文件服务。
+    (
+        str(backend_root / "app" / "services" / "agent_ui_design_static.mjs"),
+        "app/services",
+    ),
+    (
+        str(backend_root / "app" / "services" / "agent_ui_design_mock.mjs"),
+        "app/services",
+    ),
+    # 公开 Creator SDK 的 Node 控制包装不作为 Python 模块收集，显式随后端分发。
+    (
+        str(backend_root / "app" / "services" / "agent_ui_tool_bridge.mjs"),
+        "app/services",
+    ),
+    (
+        str(backend_root / "app" / "services" / "agent_ui_design_creator.mjs"),
+        "app/services",
+    ),
+    (
+        str(backend_root / "app" / "services" / "agent_ui_design_creator_source.mjs"),
+        "app/services",
+    ),
     # 埋点产品版本与 Electron 共用 package.json，避免维护第二份版本号。
     (
         str(backend_root.parent / "Frontend" / "package.json"),
@@ -48,10 +83,6 @@ datas = [
     (
         str(backend_root / "app" / "builtin_skills"),
         "app/builtin_skills",
-    ),
-    (
-        str(backend_root / "app" / "builtin_templates" / "agent-ui-frontend"),
-        "app/builtin_templates/agent-ui-frontend",
     ),
     # 前端模板目录是唯一源码；后端选模板时仍需读取原始 TSX。
     (

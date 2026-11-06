@@ -3,7 +3,7 @@
 from copy import deepcopy
 
 from app.services.runtime_agent_contracts import agent_contract_index
-from app.services.runtime_agent_module_policy import agent_module_facts
+from app.services.runtime_agent_module_policy import agent_module_facts, module_task_source
 from app.services.runtime_business_contract import serves_python_business
 
 PYTHON_CHECK_KINDS = {
@@ -66,7 +66,7 @@ def compile_runtime_check(task: dict, deliverable: dict, formal: dict) -> list[d
     topology = _source("runtime_topology", "agent-runtime", "/topology", topology_facts(plan))
     if kind == "agent.runtime":
         agent_id = deliverable["target_id"]
-        module = (task.get("source_refs") or {}).get("agent_module")
+        _, module, _ = module_task_source(task)
         facts = agent_module_facts(plan, agent_id, module)
         contract = agent_contract_index(plan)[agent_id]
         expected = {"agent_id": agent_id, "module": module, "configuration": deepcopy(contract["agentSettings"][module]),

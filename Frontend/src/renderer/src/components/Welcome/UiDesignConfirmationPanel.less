@@ -929,6 +929,18 @@
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(2px);
   z-index: 5;
+
+  &.@{class-prefix}-is-retaining-preview {
+    inset: auto 12px 12px auto;
+    max-width: calc(100% - 24px);
+    flex-direction: row;
+    padding: 8px 12px;
+    background: var(--wb-surface);
+    color: var(--wb-text);
+    border: 1px solid var(--wb-border);
+    border-radius: 4px;
+    backdrop-filter: none;
+  }
 }
 
 // ---------- 工作台 MessageList 卡片模式：页面列表 ----------
@@ -944,6 +956,7 @@
 
 .@{class-prefix}-ui-design-page-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -967,6 +980,12 @@
     border-color: var(--primary-color-4, rgba(22, 119, 255, 0.4));
     background: var(--primary-color-1, rgba(22, 119, 255, 0.06));
   }
+}
+
+.@{class-prefix}-ui-design-page-row-error {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .@{class-prefix}-ui-design-page-row-meta {

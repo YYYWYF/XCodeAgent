@@ -52,14 +52,17 @@ def begin_workflow_lifecycle(
 
     workspace = str(workflow_inputs.get("workspace") or "").strip()
     lifecycle = load_application_lifecycle(workspace) if workspace else None
+    resume_values = workflow_inputs.get("resume_values")
+    resume_values = resume_values if isinstance(resume_values, dict) else {}
+    preparation_action = bool(resume_values.get("agent_ui_preparation_action"))
     if lifecycle is None:
+        if preparation_action:
+            raise ApplicationLifecycleConflictError("Agent UI 准备缺少原页面开发执行。")
         return None
     if workflow_inputs.get("workflow_scope") == "application_planning":
         # 创建规划有独立的 lifecycle/Graph 边界，不属于工作台执行；即使
         # 未来调用方误用本适配器，也不能登记 execution 或资源锁。
         return None
-    resume_values = workflow_inputs.get("resume_values")
-    resume_values = resume_values if isinstance(resume_values, dict) else {}
     owner_session_id = str(resume_values.get("owner_session_id") or "").strip() or None
     requires_test_entry = phase == "integration_test" or bool(resume_values.get("test_phase_confirmation"))
     if requires_test_entry:
@@ -69,7 +72,18 @@ def begin_workflow_lifecycle(
     submission = resume_values.get("lifecycle_interaction_submission")
     test_submission: dict[str, Any] | None = None
     task_plan_submission: dict[str, Any] | None = None
+    preparation_submission: dict[str, Any] | None = None
     approved_repair_claims: list[ExecutionResourceClaim] = []
+    if preparation_action:
+        source_run_id = str(resume_values.get("resume_execution_run_id") or "")
+        source = lifecycle.active_executions.get(source_run_id)
+        pending = source.pending_interaction if source else None
+        if (
+            not source_run_id or not isinstance(submission, dict)
+            or submission.get("runId") != source_run_id or pending is None
+            or pending.type != PendingInteractionType.AGENT_UI_INTEGRATION_PENDING
+        ):
+            raise ApplicationLifecycleConflictError("Agent UI 准备必须提交原页面开发的当前确认交互。")
     if isinstance(submission, dict):
         submission_run_id = str(submission.get("runId") or "")
         if submission_run_id:
@@ -86,6 +100,9 @@ def begin_workflow_lifecycle(
             elif pending is not None and pending.type == PendingInteractionType.TASK_PLAN_CONFIRMATION:
                 # DAG 确认交互沿用测试确认的原子接管路径，不能先写 submittedAt。
                 task_plan_submission = submission
+            elif preparation_action:
+                # 等待原thread和目标校验后再消费交互，不能修改其他执行的确认状态。
+                preparation_submission = submission
             else:
                 persist_workbench_interaction_submission(
                     workspace,
@@ -145,6 +162,7 @@ def begin_workflow_lifecycle(
                 workflow_inputs.get("workflow_action")
                 == "continue_after_entity_binding"
             ),
+            allow_agent_ui_preparation=bool(resume_values.get("agent_ui_preparation_action")),
         )
     revision_continuation_replaces_run_id = (
         str(resume_values.get("revision_continuation_replaces_run_id") or "").strip()
@@ -190,6 +208,7 @@ def begin_workflow_lifecycle(
         requires_test_entry=requires_test_entry,
         test_interaction_submission=test_submission,
         task_plan_interaction_submission=task_plan_submission,
+        agent_ui_preparation_submission=preparation_submission,
     )
     # application_revision 仍可能停在草稿确认门，只有节点确认全部正式产物后
     # 才能把 formal revision 切成 building，避免运行登记提前改变业务事实。
@@ -233,6 +252,7 @@ def _validate_resumable_execution(
     target_id: str,
     allow_debug_reentry: bool = False,
     allow_entity_binding_continuation: bool = False,
+    allow_agent_ui_preparation: bool = False,
 ) -> None:
     """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
 
@@ -304,6 +324,12 @@ def _validate_resumable_execution(
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.ENTITY_SOURCE_BINDING
     )
+    agent_ui_preparation = (
+        allow_agent_ui_preparation
+        and execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type == PendingInteractionType.AGENT_UI_INTEGRATION_PENDING
+    )
     if (
         not resumable_status
         and not debug_waiting
@@ -316,6 +342,7 @@ def _validate_resumable_execution(
         and not code_review_repair_confirmation
         and not acceptance_phase_confirmation
         and not entity_binding_continuation
+        and not agent_ui_preparation
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
     # 阶段确认是显式的新对话边界：只有结构化测试/审查确认允许把 execution 所有权

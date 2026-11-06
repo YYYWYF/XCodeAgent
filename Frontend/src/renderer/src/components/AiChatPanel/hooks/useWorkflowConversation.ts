@@ -2128,6 +2128,28 @@ export function useWorkflowConversation({
         }
       )
     }
+    if (!conversation && clarificationMode === 'agent_ui_integration_pending') {
+      const action = answers.agent_ui_preparation
+      if (!action || !['confirm', 'refresh'].includes(action.action) || loading || workspaceBusy)
+        return false
+      return sendWorkflowMessage(
+        action.action === 'confirm'
+          ? '确认本轮 Agent UI 准备差异，继续原页面开发。'
+          : '重新检查当前页面的 Agent UI 准备状态。',
+        {
+          clarificationAnswers: answers,
+          originalRequest,
+          resumeState: workflow,
+          buildExecutionScope: workflowBuildScope,
+          resumeExecutionRunId: workflow.runId,
+          selectedPageId: continuationPageId,
+          onExecutionStarted: options?.onExecutionStarted,
+          sessionIdentity: options?.sessionIdentity,
+          titleFrom: '页面 Agent UI 准备',
+          conversation: false
+        }
+      )
+    }
     if (!conversation && clarificationMode === 'build_task_plan_confirmation') {
       const action = buildTaskPlanConfirmationAction(answers)
       if (!action || loading || workspaceBusy) return false

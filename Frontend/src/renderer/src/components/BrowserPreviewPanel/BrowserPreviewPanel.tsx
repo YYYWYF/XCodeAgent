@@ -23,9 +23,11 @@ import {
   normalizePreviewUrl,
   openExternalPreviewUrl
 } from '../../utils'
+import { previewPagePath, sameSiteLoopbackPreview } from '../../utils/previewUrl'
 import './BrowserPreviewPanel.less'
 import { useElementInspector } from './useElementInspector'
 import ServiceStatusDrawer from './ServiceStatusDrawer'
+import AgentUiTransfer from '../AgentUiTransfer'
 import type { ServiceStatusControl } from './ServiceStatusDrawer'
 import type { PreviewServiceState } from './serviceStatusPolicy'
 import {
@@ -60,12 +62,14 @@ type Props = {
 type PreviewPageOption = {
   label: string
   value: string
+  sourcePath: string
 }
 
 /** 递归提取应用菜单中的页面名称和路由，用于没有 ProjectPlan 页面清单的预览入口。 */
 function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
   return items.flatMap((item) => [
-    ...(item.type === 'page' ? [{ label: item.label, value: item.path }] : []),
+    ...(item.type === 'page' && previewPagePath(item.key)
+      ? [{ label: item.label, value: previewPagePath(item.key), sourcePath: item.path }] : []),
     ...menuPreviewPages(item.children || [])
   ])
 }
@@ -87,11 +91,13 @@ export default function BrowserPreviewPanel({
 }: Props): ReactElement {
   const pageOptions = useMemo<PreviewPageOption[]>(() => {
     if (pages.length > 0) {
-      return pages.map((page) => ({ label: page.label, value: page.path }))
+      return pages
+        .map((page) => ({ label: page.label, value: previewPagePath(page.pageId), sourcePath: page.path }))
+        .filter((page) => Boolean(page.value))
     }
     const menuPages = menuPreviewPages(application.menus.items)
     if (menuPages.length > 0) return menuPages
-    return application.pages.map((page) => ({ label: page, value: '/' }))
+    return application.pages.map((page) => ({ label: page, value: '/', sourcePath: '/' }))
   }, [application.menus.items, application.pages, pages])
   const serviceRuntime = serviceControl?.snapshot?.runtime
   const runtimeServiceState = previewServiceState(serviceRuntime)
@@ -100,7 +106,9 @@ export default function BrowserPreviewPanel({
     status: runtimeServiceState,
     externalStatus: externalServiceStatus
   })
-  const initialPagePath = selectedPagePath || pageOptions[0]?.value || '/'
+  const selectedPreviewPath = pageOptions.find((page) => page.sourcePath === selectedPagePath)?.value
+    || selectedPagePath
+  const initialPagePath = selectedPreviewPath || pageOptions[0]?.value || '/'
   const initialUrl =
     (showServiceEmptyState
       ? 'about:blank'
@@ -112,7 +120,9 @@ export default function BrowserPreviewPanel({
   const [refreshKey, setRefreshKey] = useState(0)
   const [openError, setOpenError] = useState('')
   const [launchError, setLaunchError] = useState(externalError || '')
-  const previewUrl = navigation.history[navigation.index]
+  const rawPreviewUrl = navigation.history[navigation.index]
+  const previewUrl = serviceRuntime?.agentUiConnection?.plainTextPreview
+    ? sameSiteLoopbackPreview(rawPreviewUrl, window.location.href) : rawPreviewUrl
   const frameKey = `${previewUrl}-${refreshKey}`
   const elementInspector = useElementInspector({
     disabled: inspectionDisabled,
@@ -174,9 +184,9 @@ export default function BrowserPreviewPanel({
   }, [externalError])
 
   useEffect(() => {
-    if (!selectedPagePath) return
-    setSelectedPage(selectedPagePath)
-  }, [selectedPagePath])
+    if (!selectedPreviewPath) return
+    setSelectedPage(selectedPreviewPath)
+  }, [selectedPreviewPath])
 
   /** 将手动输入的地址加入预览导航历史。 */
   const navigateTo = (rawUrl: string): void => {
@@ -243,6 +253,8 @@ export default function BrowserPreviewPanel({
               </Button>
             </span>
           </Tooltip>
+          {!externalServiceStatus && application.workspaceRoot && !inspectionDisabled && <AgentUiTransfer
+            key={application.workspaceRoot} workspaceRoot={application.workspaceRoot} />}
           <div className={cx('browser-navigation')}>
             <Tooltip title="后退">
               <Button

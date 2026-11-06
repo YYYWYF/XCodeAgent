@@ -162,6 +162,15 @@ def launch_frontend_project(
             "install": install_result,
         }
 
+    preview_argv = None
+    if runtime_subdir == "launch" and project_dir is None:
+        from app.services.agent_ui_managed_preview import managed_preview_command
+
+        try:
+            preview_argv = managed_preview_command(root, package_path.parent, str(scripts.get(script_name, "")),
+                                                   runtime_public_url=runtime_public_url)
+        except (OSError, ValueError, KeyError) as exc:
+            return _failed_launch(f"Agent UI 开发预览准备失败：{exc}", root=root, package_json_path=package_path)
     launch_result, process = _start_dev_server(
         package_manager_command=package_manager_command,
         script_name=script_name,
@@ -171,6 +180,7 @@ def launch_frontend_project(
         preview_url=preview_url,
         extra_argv=_dependency_check_bypass_argv(package_manager, linked_dependencies),
         runtime_public_url=runtime_public_url,
+        preview_argv=preview_argv,
     )
     if process is not None:
         _register_frontend_process(root, process, runtime_subdir=runtime_subdir)
@@ -214,6 +224,8 @@ def launch_frontend_project(
             runtime_root=runtime_root,
         ),
         "status": launch_status,
+        "agent_ui_preview": ({key: json.loads(preview_argv[-1])[key] for key in ('mode', 'agentId')}
+                             if preview_argv else None),
         "message": message,
         "preview_url": preview_url,
         "install": install_result,
@@ -443,10 +455,11 @@ def _start_dev_server(
     preview_url: str,
     extra_argv: list[str] | None = None,
     runtime_public_url: str | None = None,
+    preview_argv: list[str] | None = None,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
     # 额外参数要排在子命令之前：pnpm 只把 `run` 之前的参数当自己的选项。
-    argv = [package_manager_command, *(extra_argv or []), "run", script_name]
+    argv = preview_argv or [package_manager_command, *(extra_argv or []), "run", script_name]
     stdout_path = runtime_root / "frontend.stdout.log"
     stderr_path = runtime_root / "frontend.stderr.log"
     stdout = stdout_path.open("ab")

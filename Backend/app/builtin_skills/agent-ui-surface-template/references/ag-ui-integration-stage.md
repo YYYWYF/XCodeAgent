@@ -1,37 +1,52 @@
 # AG-UI Integration Stage
 
-## Status
+## Current Build Contract
 
-Formal Runtime Build uses the platform-injected official AG-UI adapter. UiDesign
-remains offline. These are distinct current stages, with no network-to-Mock fallback.
+Formal Build consumes `agent-ui-shared-build.v1`, `mode=shared_host`.
+The platform rechecks confirmed formal documents, shared source, target ownership,
+actual installed package/catalog/types/lock identity and Host wiring from disk.
+Missing or changed evidence blocks Build before scheduling; it never initializes,
+installs, copies fixed assets, confirms documents or falls back to old templates.
 
-## Replacement Boundary
+## Page Boundary
 
-- Use the fixed components' default Runtime adapter implemented using
-  `@ag-ui/client` and `@ag-ui/core`; preserve config.runtime exactly.
-- Keep the same page components, configuration, Surface ownership, action IDs,
-  context whitelist, and view state semantics.
-- Render the primary page contract with AGENT_UI_CONFIG and every companion
-  with AGENT_UI_CONFIG_1, AGENT_UI_CONFIG_2 in order. Each owns an independent
-  fixed component and Runtime adapter. Preserve config.actions: question and
-  follow-up buttons submit their declared actionId/message in the current thread;
-  clear_conversation starts a new client thread, retains server history, and
-  honors the declared confirmation. Do not replace those operations with REST APIs.
-- Compose mixed business/Agent sequences through the fixed component's
-  `actionRequest` and `onActionResult` props. Use a unique requestId and the
-  declared actionId/stepId, clear the consumed request and advance only after a
-  completed result. A waiting, failed, cancelled or unknown result stops the
-  sequence; do not auto-resubmit it or bypass pending interaction handling.
-- The browser calls the confirmed same-origin /agents/{agentId}/run path through
-  the template proxy to Python Runtime. Do not introduce a Java Gateway.
-- Preserve the complete AG-UI lifecycle: run start, assistant message, structured
-  result or error, state snapshot or delta, and exactly one run finish event.
-- Runtime supplies trusted anonymous identity through its same-origin Cookie;
-  never send a Principal, namespace, credential, host port or model key from the page.
-- Submit pendingInteraction responses with the exact interactionId. Confirmation
-  requires strict true/false; clarification supplies text and never grants approval.
-- Do not implement a custom SSE parser, a parallel thread store, compatibility
-  aliases, dual writes, or Mock-and-real fallback behavior.
+- Import only `SharedAgentPage` and `useSharedAgentPanel` from the exact module
+  supplied in the current contract. Preserve the exact pageId.
+- Standalone pages render the shared placeholder. Floating pages retain their
+  business body and use the shared Host visibility hook for user open/close actions.
+- For `standalone_page`, the conversation is the page, not a card embedded in a
+  second page. Use the existing application navigation and the official thread
+  sidebar. Do not enclose the slot in ProCard/Card/PageContainer, a centered
+  max-width frame, rounded/shadowed panels, duplicate hero text or a technical footer.
+  Keep confirmed non-Agent actions in a compact toolbar. Fill the actual Shell
+  content area with a flat full-width flex layout.
+  Remove the Shell content padding and contrasting outer background only for this
+  mounted standalone page, using a page-scoped parent selector such as
+  `.ant-pro-layout-content:has(> .your-page-class)`. Do not edit the global Shell
+  or remove spacing from ordinary business pages.
+  Give the remaining-space region min-width/min-height zero and its direct `.shared-agent-page-slot` height 100%
+  in page-scoped CSS. Measure or inherit actual available height instead of nesting
+  a 100vh page or hard-coding a large minimum height. Use inherited theme tokens.
+  This overrides generic page-card advice only around a standalone conversation;
+  it does not flatten ordinary business cards or change floating-panel pages.
+- The Host is mounted once inside the template identity boundary, outside routing.
+  Page changes and visibility changes preserve the same Agent, thread and draft;
+  logout or a user change destroys the old session.
+- Do not modify the shared application, Provider registration, sourceRoot, BASE,
+  package declarations or wiring from a page task. Changes require a new reviewed
+  design/transfer through their owning flows.
+- Do not create a page-local Agent, Runtime, Adapter, transport, credentials or
+  conversation store. Old fixed components, virtual modules and AGENT_UI_CONFIG
+  contracts are not supported.
+- `blocked_T27` means the formal Host has no usable endpoint and sending remains
+  disabled. A declared same-origin Agent route is not public package admission.
+  Never connect it through an old Adapter or inject design Mock as a substitute.
+- Ordinary business AG-UI flows keep their own confirmed static business URLs
+  and official SDK. They cannot create a second Agent session.
 
-Integration is complete only after the existing Build, testing, code review,
-launch, and acceptance stages hold real runtime evidence.
+## Evidence
+
+Shared static source checks do not prove runtime behavior, real connectivity or
+business success. Mock and Electron design evidence remain separate. Preserve all
+formal confirmation gates; a revised design needs confirmation and reviewed transfer
+again. Declared real Runtime capabilities require T27 and subsequent validation.

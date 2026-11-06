@@ -1,0 +1,147 @@
+.@{class-prefix}-agent-ui-transfer-modal {
+  .ant-modal-content,
+  .ant-modal-header {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+  }
+  .ant-modal-header {
+    border-color: var(--wb-border);
+  }
+  .ant-modal-title,
+  .ant-modal-close {
+    color: var(--wb-text);
+  }
+  .ant-modal-close:hover,
+  .ant-modal-close:focus-visible {
+    color: var(--wb-accent);
+  }
+  .ant-modal-body {
+    max-height: 78vh;
+    overflow: auto;
+  }
+}
+.@{class-prefix}-agent-ui-transfer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--wb-text);
+  overflow-wrap: anywhere;
+  .ant-btn-default {
+    color: var(--wb-text);
+    background: var(--wb-control);
+    border-color: var(--wb-border-strong);
+    &:hover,
+    &:focus-visible {
+      background: var(--wb-control-hover);
+      border-color: var(--wb-accent);
+    }
+  }
+  .ant-btn-dangerous {
+    color: var(--wb-danger);
+  }
+  .ant-btn-primary {
+    color: var(--wb-canvas);
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    &:hover,
+    &:focus-visible {
+      color: var(--wb-canvas);
+      background: var(--wb-accent-hover);
+      border-color: var(--wb-accent-hover);
+    }
+  }
+  .ant-btn[disabled],
+  .ant-btn[disabled]:hover {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+  .ant-btn:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+  .ant-checkbox-inner {
+    background: var(--wb-canvas);
+    border-color: var(--wb-border-strong);
+  }
+  .ant-checkbox-wrapper:hover .ant-checkbox-inner,
+  .ant-checkbox-input:focus-visible + .ant-checkbox-inner {
+    border-color: var(--wb-accent);
+  }
+  .ant-checkbox-input:focus-visible + .ant-checkbox-inner {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+  .ant-checkbox-checked .ant-checkbox-inner {
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    &::after {
+      border-color: var(--wb-canvas);
+    }
+  }
+  .ant-checkbox-disabled .ant-checkbox-inner {
+    background: var(--wb-control);
+    border-color: var(--wb-border);
+  }
+  .ant-checkbox-disabled + span {
+    color: var(--wb-text-tertiary);
+  }
+  .ant-alert {
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+  .ant-alert-message,
+  .ant-alert-description {
+    color: var(--wb-text);
+  }
+  .ant-alert-info .ant-alert-icon {
+    color: var(--wb-accent);
+  }
+  .ant-alert-warning .ant-alert-icon {
+    color: var(--wb-warning);
+  }
+  .ant-alert-error .ant-alert-icon {
+    color: var(--wb-danger);
+  }
+  .ant-typography,
+  .ant-checkbox-wrapper {
+    color: var(--wb-text);
+  }
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+  }
+  .ant-typography code {
+    color: var(--wb-text);
+    background: var(--wb-editor);
+    border-color: var(--wb-border);
+  }
+  .ant-collapse,
+  .ant-collapse-content {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+    border-color: var(--wb-border);
+  }
+  .ant-collapse > .ant-collapse-item {
+    border-color: var(--wb-border);
+  }
+  .ant-collapse > .ant-collapse-item > .ant-collapse-header {
+    color: var(--wb-text);
+  }
+  .ant-collapse-header:hover {
+    background: var(--wb-surface-hover);
+  }
+  pre {
+    max-height: 280px;
+    overflow: auto;
+    padding: 12px;
+    color: var(--wb-text);
+    background: var(--wb-editor);
+    border: 1px solid var(--wb-border);
+    white-space: pre;
+  }
+  pre:focus-visible,
+  .ant-collapse-header:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+}

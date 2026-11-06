@@ -549,6 +549,9 @@ def _repair_task(
         raw_task,
         strategy=strategy,
     )
+    # Agent 模块执行器以精确 target_files 授权，多文件父模块的修复只开放本次修复文件。
+    module_repair_paths = list(dict.fromkeys(item["path"] for item in repair_change_scope))
+    agent_repair = parent_task.get("owner") == "agent"
     # 修复任务仅继承父任务的结果型工程契约，文件差异必须按本轮修复范围重新编译。
     repair_task = {
         "id": repair_id,
@@ -600,8 +603,8 @@ def _repair_task(
             "task_id": parent_id,
             "result_task_id": result.get("task_id"),
         },
-        "allowed_paths": _string_list(parent_task.get("allowed_paths")),
-        "target_files": _string_list(parent_task.get("target_files")),
+        "allowed_paths": module_repair_paths if agent_repair else _string_list(parent_task.get("allowed_paths")),
+        "target_files": module_repair_paths if agent_repair else _string_list(parent_task.get("target_files")),
         "change_scope": repair_change_scope,
         "database_scope": parent_task.get("database_scope", {}),
         "approval": parent_task.get("approval", {}),
@@ -611,7 +614,8 @@ def _repair_task(
         "repair_strategy": strategy,
         "repair_boundaries": boundaries or _repair_boundaries(parent_task, {}),
         "deliverables": [
-            dict(item)
+            {**item, **({"paths": [path for path in item.get("paths", []) if path in module_repair_paths]}
+                       if agent_repair else {})}
             for item in parent_task.get("deliverables", [])
             if isinstance(item, dict)
         ],

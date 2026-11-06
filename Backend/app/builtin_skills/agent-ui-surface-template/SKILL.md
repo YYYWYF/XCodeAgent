@@ -1,10 +1,9 @@
 ---
 name: agent-ui-surface-template
 description: >-
-  Compose business Agent conversation surfaces from XCodeAgent-owned fixed UI
-  components and a constrained configuration. Use for standalone Agent pages,
-  floating Agent panels on business pages, offline UiDesign, and confirmed
-  generated-frontend Runtime integration.
+  Compose confirmed Agent surfaces using installed public Agent UI packages for
+  multi-file UiDesign. Route formal generated-frontend Build separately to its
+  current integration contract.
 ---
 
 # Agent UI Surface Template
@@ -16,22 +15,37 @@ existing Build and acceptance flow.
 
 ## Core Invariants
 
-- `standalone_page` is a dedicated conversation-page template.
+- In UiDesign, `standalone_page` contains one package-consumer conversation and
+  retains confirmed navigation or other non-Agent page controls beside it.
 - `floating_panel` is an enhancement mounted beside the complete host page,
   including a declared standalone conversation owned by another Agent. It must
-  preserve the host body and owns its own configuration and adapter.
-- Both surfaces share the fixed message, run-status, Tool, approval, error, and
-  Composer semantics supplied by XCodeAgent-owned components.
-- In UiDesign, import the fixed components only from
-  `@xcodeagent/agent-ui-design`; never recreate the chat DOM or styles locally.
+  preserve the host body. The current UiDesign pilot supports one Agent and one
+  Surface per page; reject unsupported combinations explicitly.
+- Both design surfaces share one mounted official Agent and canonical Runtime;
+  closing the panel or selecting a page must not create a second conversation owner.
+- UiDesign uses the installed public production packages and the project application
+  layer created through Creator's public initialization SDK. Do not use the old
+  virtual-module templates, internal package imports, test factories or copied framework code.
+- Initial generation uses the initialized official application layer and preserves
+  accepted shared customizations. Explicit design revisions delegate composition
+  and presentation changes to Creator. Do not automatically start a Creator task
+  during initial generation or add demonstration controls.
 - Only configure the confirmed Agent identity, responsibility, capabilities,
   suggested questions, action binding, context whitelist, declared feature
   switches, and realistic Mock examples.
 - Use stable Agent, page, action, and information-item IDs. Never infer bindings
   from labels, routes, component names, or the DOM.
-- UiDesign is offline. Formal Build uses the platform's fixed official AG-UI
-  adapter and exact config.runtime same-origin /agents/{agentId}/run binding.
-  Page code never creates transport, credentials, identity or another adapter.
+- UiDesign connection is supplied explicitly by its controlled preview owner.
+  Missing connection is a pending state, never an assumed endpoint or fake success.
+  Mock integration is a separate task; do not implement a page-local Mock adapter.
+- Formal Build consumes the current `agent-ui-shared-build.v1` contract from
+  confirmed design and reviewed T21/T23 transfer evidence. Pages use only
+  `SharedAgentPage` / `useSharedAgentPanel` from the supplied public module.
+  The unique Host owns the installed public Agent and Runtime. Page code never
+  creates transport, credentials, identity, another Provider or an adapter.
+- Formal connectivity remains `blocked_T27` until public package admission and
+  X Runtime mapping are verified. Keep sending disabled; never inject Mock into
+  the formal Host or infer an endpoint from the page.
 - Mock or design evidence never proves AG-UI, Runtime, Launch, or
   Acceptance completion.
 
@@ -43,6 +57,6 @@ existing Build and acceptance flow.
 - `references/frontend-mock-stage.md` describes offline design fixtures only;
   it cannot override a formal Runtime Build contract.
 
-Stop and request a contract decision if a page has an unknown Surface, multiple
-floating Agents, undeclared context, or would require changing the host route,
-global Provider, request layer, dependencies, or real acceptance gates.
+Reject unknown Surfaces, multiple design Agents and undeclared context. Do not
+change Host routing, dependencies, formal Runtime contracts or acceptance gates
+while generating a design prototype.

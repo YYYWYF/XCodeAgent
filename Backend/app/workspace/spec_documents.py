@@ -518,13 +518,24 @@ def write_ui_designs_json(state: dict[str, Any], ui_designs: dict[str, Any]) -> 
     """把不含 TSX 正文和 ProductPlan 事实副本的 UI Manifest 落盘。"""
 
     from app.services.ui_design_manifest import persisted_ui_manifest
+    from app.utils.atomic_json import atomic_write_json
+    from app.workspace.ui_design_documents import _write_markdown, write_ui_designs_markdown
 
     path = ui_designs_json_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(persisted_ui_manifest(ui_designs), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    markdown = path.with_suffix(".md")
+    original = markdown.read_text(encoding="utf-8") if markdown.is_file() else None
+    written = write_ui_designs_markdown(state, ui_designs)
+    try:
+        atomic_write_json(path, persisted_ui_manifest(ui_designs))
+    except Exception:
+        # JSON 提交失败时只恢复本次仍拥有的 Markdown，不能覆盖并发的人工作业。
+        if markdown.read_text(encoding="utf-8") == written:
+            if original is None:
+                markdown.unlink()
+            else:
+                _write_markdown(markdown, original)
+        raise
     return str(path)
 
 

@@ -1,9 +1,12 @@
 """回归需求返回方式字段与澄清过滤后的完整产物补齐。"""
 
 from copy import deepcopy
+import json
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+from langchain_core.messages import AIMessage
 
 from app.agents.main.requirements_analyzer import (
     _validate_complete_requirement_spec, analyze_requirements_with_chat_model,
@@ -44,6 +47,51 @@ class RequirementResponseModeRecoveryTests(unittest.TestCase):
         spec["agent_requirements"][0]["responseMode"] = "invalid"
         with self.assertRaisesRegex(ValueError, "responseMode 必须为 json 或 ag-ui"):
             _validate_complete_requirement_spec(spec)
+
+    def test_model_boundaries_are_normalized_before_validation(self) -> None:
+        """真实生成入口应无损接收空边界或单条边界，保持正式数组合同。"""
+        for raw, expected in ((None, []), ("", []), ("  只读业务数据  ", ["只读业务数据"]),
+                              (["只读业务数据"], ["只读业务数据"])):
+            with self.subTest(boundaries=raw):
+                candidate = deepcopy(self.spec)
+                candidate["agent_requirements"][0]["boundaries"] = raw
+                with patch("app.agents.main.requirements_analyzer._invoke_live_chat_model",
+                           return_value={"messages": [AIMessage(content=json.dumps(candidate))]}) as invoke, patch(
+                        "app.agents.main.requirements_analyzer._authorization_facts_for_requirement",
+                        return_value=({}, {})):
+                    result = analyze_requirements_with_chat_model("创建库房系统及只读助手")
+                self.assertEqual(invoke.call_count, 1)
+                self.assertEqual(result["requirement_spec"]["agent_requirements"][0]["boundaries"], expected)
+                self.assertNotEqual(result["requirement_spec"].get("confirmation_status"), "confirmed")
+                self.assertEqual(candidate["agent_requirements"][0]["boundaries"], raw)
+
+    def test_content_retry_receives_diagnostics_without_changing_request(self) -> None:
+        """重试提示含具体错误，原需求与权限提取上下文不混入平台诊断。"""
+        candidate = deepcopy(self.spec)
+        candidate["agent_requirements"][0]["capabilities"] = []
+        model = Mock()
+        model.bind_tools.return_value = model
+        model.invoke.side_effect = [AIMessage(content=json.dumps(candidate)), AIMessage(content=json.dumps(self.spec))]
+        request = "创建库房系统及只读助手"
+        with patch("app.agents.main.requirements_analyzer.create_chat_model", return_value=model), patch(
+                "app.agents.main.requirements_analyzer._authorization_facts_for_requirement",
+                return_value=({}, {})) as authorization:
+            result = analyze_requirements_with_chat_model(request)
+        self.assertEqual(model.invoke.call_count, 2)
+        first, second = [call.args[0] for call in model.invoke.call_args_list]
+        self.assertNotIn("agent_requirements[0].capabilities(non-empty)", first)
+        self.assertIn("agent_requirements[0].capabilities(non-empty)", second)
+        self.assertEqual(result["requirement_spec"]["source_request"], request)
+        self.assertEqual(authorization.call_args.args[0], request)
+
+    def test_invalid_boundaries_exhaust_only_existing_retry_budget(self) -> None:
+        """无法无损解释的对象仍被拒绝，内容修复只重试一次且不生成确认产物。"""
+        self.spec["agent_requirements"][0]["boundaries"] = {"read": True}
+        with patch("app.agents.main.requirements_analyzer._invoke_live_chat_model",
+                   return_value={"messages": [AIMessage(content=json.dumps(self.spec))]}) as invoke:
+            with self.assertRaisesRegex(ValueError, r"agent_requirements\[0\].boundaries"):
+                analyze_requirements_with_chat_model("创建库房系统及只读助手")
+        self.assertEqual(invoke.call_count, 2)
 
     def test_filtered_questions_complete_empty_draft_once(self):
         """泛化问题被删除后，先补齐空草稿，再显示原来的正式确认卡。"""

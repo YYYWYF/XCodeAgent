@@ -1,5 +1,7 @@
 """覆盖 Rsbuild 编译期及前端 Runtime 代理的短暂未就绪，不实际启动服务。"""
 
+from copy import deepcopy
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -26,6 +28,7 @@ class RuntimeProxyReadinessTests(TestCase):
     def wait(self, **kwargs):
         """用固定双端进程及能力身份调用实际代理等待器。"""
         return wait_runtime_proxy_ready('http://127.0.0.1:3000', 'current-launch', database_required=True,
+            workspace=Path('/tmp/runtime-proxy-test'),
             frontend_pid=101, runtime_pid=102, expected_agent_ids=['assistant'], **kwargs)
 
     def test_rsbuild_waits_for_build_completion_in_current_log_slice(self):
@@ -49,7 +52,9 @@ class RuntimeProxyReadinessTests(TestCase):
             self.assertEqual(self.wait(), (True, '就绪'))
         self.assertEqual(health.call_count, 2)
         health.assert_called_with('http://127.0.0.1:3000', 'current-launch', database_required=True,
-            health_path='/__runtime/health', expected_agent_ids=['assistant'])
+            health_path='/__runtime/health', expected_agent_ids=['assistant'],
+            expected_application=Path('/tmp/runtime-proxy-test').resolve() / 'agent-runtime',
+            expected_namespace='preview:' + hashlib.sha256(str(Path('/tmp/runtime-proxy-test').resolve()).encode()).hexdigest()[:24])
         self.assertEqual(self.process.call_args_list, [call(101), call(102)] * 2)
 
     def test_proxy_timeout_retains_last_failure_reason(self):
@@ -59,6 +64,39 @@ class RuntimeProxyReadinessTests(TestCase):
         self.assertFalse(ready)
         self.assertIn('超时', message)
         self.assertIn('HTTP 503', message)
+
+    def test_proxy_validates_current_application_and_namespace(self) -> None:
+        """当前身份可以放行；即使 launchId 相同，其他应用或命名空间仍不可放行。"""
+        workspace = Path('/tmp/runtime-proxy-test').resolve()
+        namespace = 'preview:' + hashlib.sha256(str(workspace).encode()).hexdigest()[:24]
+        payload = {
+            'status': 'ok', 'service': 'agent-runtime', 'launchId': 'current-launch',
+            'profile': 'preview', 'agentIds': ['assistant'],
+            'deployment': {'workers': 1, 'processLockHeld': True, 'acceptingRuns': True,
+                'profile': 'preview', 'processId': 102,
+                'applicationSha256': hashlib.sha256(str(workspace / 'agent-runtime').encode()).hexdigest(),
+                'namespaceSha256': hashlib.sha256(namespace.encode()).hexdigest()},
+            'checks': dict.fromkeys(('businessApi', 'agUi', 'deployment', 'execution',
+                                    'database', 'anonymousSession'), 'ready'),
+        }
+        with patch('app.services.agent_runtime_health.httpx.Client') as client:
+            response = client.return_value.__enter__.return_value.get.return_value
+            response.status_code = 200
+            response.json.return_value = payload
+            self.assertTrue(self.wait(timeout_seconds=3)[0])
+            client.return_value.__enter__.return_value.get.assert_called_once_with(
+                'http://127.0.0.1:3000/__runtime/health')
+        for key in ('applicationSha256', 'namespaceSha256'):
+            with self.subTest(key=key), patch('app.services.agent_runtime_health.httpx.Client') as client:
+                self.clock.side_effect = range(100)
+                wrong = deepcopy(payload)
+                wrong['deployment'][key] = '0' * 64
+                response = client.return_value.__enter__.return_value.get.return_value
+                response.status_code = 200
+                response.json.return_value = wrong
+                ready, message = self.wait(timeout_seconds=3)
+                self.assertFalse(ready)
+                self.assertIn('应用或命名空间', message)
 
     def test_cancelled_or_exited_process_stops_probing(self):
         """取消及任一端退出时立即失败，不再继续发起探测。"""
@@ -88,5 +126,7 @@ class RuntimeProxyReadinessTests(TestCase):
             result = _launch_project_preview('/tmp/runtime-proxy-test')
         self.assertEqual(result['status'], 'running')
         wait.assert_called_once()
+        self.assertEqual(wait.call_args.kwargs['workspace'], Path('/tmp/runtime-proxy-test').resolve())
+        self.assertIn('真实对话尚未验收', result['frontend']['message'])
         stop_runtime.assert_not_called()
         stop_frontend.assert_not_called()

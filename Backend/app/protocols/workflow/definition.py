@@ -217,6 +217,14 @@ def workflow_capabilities() -> dict[str, Any]:
             "stopSemantics": "保留当前 execution 的 thread/session 持有校验，只暂停并保留恢复所需的 lifecycle 记录。",
         },
         "clarificationModes": {
+            "agent_ui_integration_pending": {
+                "answerField": "clarificationAnswers.agent_ui_preparation",
+                "actions": ["confirm", "refresh"],
+                "stages": ["dependency", "initialize", "transfer", "blocked"],
+                "identityFields": ["planId", "reviewId", "installationPlanId", "targetSourceRoot"],
+                "lifecycleInteraction": "agent_ui_integration_pending",
+                "semantics": "原页面开发对话中复算T21/T23当前差异；确认只批准具体准备写入，不批准正式设计或任务DAG；刷新只读。",
+            },
             "api_design_required": {
                 "answerField": "clarificationAnswers.api_design_gate",
                 "actions": ["refresh"],

@@ -38,6 +38,14 @@ def upstream_errors(root: Path, key: str, value: dict[str, Any]) -> list[str]:
     status = value.get("confirmation_status")
     if status is not None and status not in ({"confirmed", "skipped"} if key == "ui_designs" else {"confirmed"}):
         errors.append("当前版本尚未确认")
+    if key == "ui_designs":
+        from app.services.agent_ui_design_confirmation import require_confirmed_agent_designs
+        try:
+            require_confirmed_agent_designs({"workspace": str(root.parent),
+                "requirement_spec": load_project_plan_json(root / _ARTIFACTS["requirement_spec"]),
+                "product_plan": load_project_plan_json(root / _ARTIFACTS["product_plan"])}, value)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            errors.append(str(exc))
     return errors
 
 

@@ -75,22 +75,24 @@ class RuntimeAgentSettingsAcceptanceTests(unittest.TestCase):
         """多 Agent 模板模式下同样追踪 Builder→分派→AG-UI 的模型来源。"""
 
         source = '''from deepagents import create_deep_agent
-def build_policy(model, runtime_context, checkpointer):
+from app.agent.execution_guard import verify_text_graph
+def build_policy(model, runtime_context, checkpointer, execution_policy):
     return create_deep_agent(model=model.model_copy(update={"temperature": 0.7}), system_prompt="提示词", tools=[])
 _AGENT_BUILDERS = {"policy": build_policy}
-def create_agent(agent_id, model, runtime_context, checkpointer):
-    return _AGENT_BUILDERS[agent_id](model=model, runtime_context=runtime_context, checkpointer=checkpointer)
+def create_agent(agent_id, model, runtime_context, checkpointer, execution_policy):
+    graph = _AGENT_BUILDERS[agent_id](model=model, runtime_context=runtime_context,
+        checkpointer=checkpointer, execution_policy=execution_policy)
+    return verify_text_graph(graph, execution_policy)
 '''
         assembly = '''from app.agent.factory import create_agent
 from app.models.factory import project_model
-def build_agent_runtime_stream(settings, runtime_context, checkpointer):
-    def stream():
-        agent = create_agent(agent_id="policy", model=project_model(settings), runtime_context=runtime_context, checkpointer=checkpointer)
-        return agent
-    return stream()
+def stream_agent(settings, runtime_context, checkpointer, execution_policy):
+    agent = create_agent(agent_id="policy", model=project_model(settings), runtime_context=runtime_context,
+        checkpointer=checkpointer, execution_policy=execution_policy)
+    return agent
 '''
         result = self.verify("model", {"source": "project", "generation": {"temperature": 0.7}}, source,
-            {"agent-runtime/src/app/server/agui.py": assembly})
+            {"agent-runtime/src/app/agent/invocation.py": assembly})
         self.assertEqual(result["status"], "passed")
 
     def test_module_packet_contains_compiled_prompt_without_changing_other_modules(self):

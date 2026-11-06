@@ -24,10 +24,23 @@ class PageTemplatePackagingTests(unittest.TestCase):
             if not entry.is_dir():
                 continue
             manifest = json.loads((entry / "manifest.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(manifest.get('category'), 'agent')
             self.assertEqual(
                 load_template_source(manifest["id"]),
                 (entry / "index.tsx").read_text(encoding="utf-8"),
             )
+
+    def test_retired_agent_template_is_not_loadable(self) -> None:
+        """即使残留旧模板清单，直接调用加载器也不能绕过工程设计入口。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entry = root / 'retired'
+            entry.mkdir()
+            (entry / 'manifest.json').write_text('{"id":"retired","category":"agent"}')
+            (entry / 'index.tsx').write_text('export default () => null')
+            with patch('app.services.page_templates.resolve_page_templates_dir', return_value=root):
+                with self.assertRaisesRegex(ValueError, '包消费工程'):
+                    load_template_source('retired')
 
     def test_frozen_loader_uses_packaged_templates(self) -> None:
         """冻结模式只读取 _MEIPASS 中的模板，而不依赖仓库目录。"""

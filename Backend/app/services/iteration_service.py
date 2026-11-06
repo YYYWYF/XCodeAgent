@@ -252,6 +252,9 @@ def _register_ui_design_carryover(workspace_root: Path, devagentstudio_dir: Path
     for page in raw_pages if isinstance(raw_pages, list) else []:
         if not isinstance(page, dict) or str(page.get("status") or "") != "confirmed":
             continue
+        if page.get("design_asset"):
+            # 多文件工程不能伪装成 PageKey 单页来源；正式工程交接由独立资产计划负责。
+            continue
         page_id = str(page.get("pageId") or "").strip()
         page_key = str(page.get("page_key") or "").strip()
         if not page_id or not page_key:

@@ -2,16 +2,16 @@
 
 ## Scope
 
-Use the shared Agent conversation components already present in the generated
-application design fixture. This reference applies only to offline UiDesign.
+Use the installed official Agent UI application layer in the isolated design
+project. This reference applies only to design preview.
 Formal Build consumes the Runtime contract and follows ag-ui-integration-stage.md.
 
 ## Adapter Boundary
 
-- Conversation history, messages, simulated delays, stop, retry, Tool summaries,
-  approvals, errors, and success results belong in the Mock adapter.
-- Pages consume the stable `AgentConversationAdapter` interface and must not know
-  whether a later implementation uses AG-UI.
+- Canonical Runtime remains the sole conversation owner. Use Creator's published
+  official HTTP Mock or supported JSONL through the tool/preview owner in T18.
+- Do not generate `AgentConversationAdapter`, local message state or fake approval
+  callbacks. Missing official support is explicitly unsupported, not a successful fixture.
 - Mock data must be realistic, deterministic, and clearly labelled as simulated
   in the rendered UI.
 - Context input must contain only the confirmed page ID, action ID, and declared
@@ -19,11 +19,12 @@ Formal Build consumes the Runtime contract and follows ag-ui-integration-stage.m
 
 ## Prohibitions
 
-Mock delivery must not call HTTP, `fetch`, `axios`, a Java Gateway, a Python
-sidecar, WebSocket, SSE, or any handwritten event parser. It must not add secrets,
+Page code must not implement HTTP, `fetch`, `axios`, WebSocket, SSE, or any
+handwritten event parser. The official Mock is a separate developer process and
+its endpoint is explicitly bound by the preview owner. It must not add secrets,
 tokens, persistent conversation storage, another global Provider, or another
 copy of the shared chat core.
 
-Remove XCodeAgent-only preview controls when composing production pages, but keep
-the visible simulated-runtime notice until real integration replaces the Mock
-adapter in an independently authorized batch.
+Do not add user-facing scenario/state/theme demonstration controls. Keep a visible
+simulated-source notice during Mock preview; exclude Mock dependencies, recordings
+and connection configuration when transferring to a formal production application.

@@ -65,6 +65,7 @@ import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
 import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
+import AgentUiPreparationReview from './AgentUiPreparationReview'
 import TechnicalPlanTopologySelector from '../../../Welcome/TechnicalPlanTopologySelector'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
 import WorkspaceToolActivity from './WorkspaceToolActivity'
@@ -605,7 +606,12 @@ export default function WorkflowRunCard({
               }
             />
           ) : agentUiIntegrationPending ? (
-            <Alert type="info" showIcon message="智能体页面 Mock 已完成" description="固定页面组件可预览；真实 Runtime 会话、身份和调用联调仍待完成，当前不能进入真实验收。" />
+            <AgentUiPreparationReview
+              key={`${clarification?.agentUiPreparation?.stage}:${clarification?.agentUiPreparation?.plan?.planId || workflow.runId}`}
+              preparation={clarification?.agentUiPreparation}
+              disabled={disabled || interactionAvailability !== 'active' || !requiresConfirmation}
+              onAction={(answer) => { void onSubmitClarification?.(workflow, { agent_ui_preparation: answer }) }}
+            />
           ) : technicalPlanTopologySelection ? (
             <TechnicalPlanTopologySelector
               key={workflow.runId}

@@ -9,6 +9,8 @@ import { usePreviewRuntime } from '../src/renderer/src/components/AiChatPanel/ho
 import { SessionRuntimeProvider } from '../src/renderer/src/components/AiChatPanel/hooks/useSessionRuntimeStore'
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
+import AgentUiConnectionStatus from '../src/renderer/src/components/BrowserPreviewPanel/AgentUiConnectionStatus'
+import { sameSiteLoopbackPreview } from '../src/renderer/src/utils/previewUrl'
 import {
   previewServiceActionAvailability,
   previewServiceLaunchLabel,
@@ -256,6 +258,33 @@ try {
     { history: ['about:blank', 'http://localhost:3000/welcome'], index: 1 },
     '停服后即使恢复到相同端口，也应从 about:blank 重新进入当前页面'
   )
+
+  const connection = renderToStaticMarkup(createElement(AgentUiConnectionStatus, { connection: {
+    agentId: 'assistant', endpoint: '/agents/assistant/run', verificationScope: 'live_proxy_health',
+    sendEnabled: false, plainTextPreview: false, proxyHealth: { status: 'ready', reason: '当前应用身份核验通过' },
+    checks: [{ id: 'run_identity', status: 'blocked', reason: '当前缺少可信运行身份' }]
+  } }))
+  assert.match(connection, /同源健康：已通过/)
+  assert.match(connection, /浏览器会话与真实对话：未验证/)
+  assert.match(connection, /真实发送保持禁用/)
+  assert.match(connection, /当前缺少可信运行身份/)
+  assert.doesNotMatch(connection, /<button|连接成功|业务成功/)
+  assert.equal(renderToStaticMarkup(createElement(AgentUiConnectionStatus)), '')
+  assert.equal(sameSiteLoopbackPreview('http://127.0.0.1:3000/page/chat?q=1#panel', 'http://localhost:5173/'),
+    'http://localhost:3000/page/chat?q=1#panel')
+  for (const [preview, renderer] of [
+    ['https://example.com/chat', 'http://localhost:5173/'],
+    ['http://127.0.0.1:3000/chat', 'file:///app/index.html'],
+    ['http://127.0.0.1:3000/chat', 'https://example.com/'],
+    ['http://user:pass@127.0.0.1:3000/chat', 'http://localhost:5173/']
+  ]) assert.equal(sameSiteLoopbackPreview(preview, renderer), preview)
+  const realTextConnection = renderToStaticMarkup(createElement(AgentUiConnectionStatus, { connection: {
+    agentId: 'assistant', endpoint: '/agents/assistant/run', verificationScope: 'live_proxy_health',
+    sendEnabled: false, plainTextPreview: true, proxyHealth: { status: 'ready', reason: '当前应用身份核验通过' }, checks: []
+  } }))
+  assert.match(realTextConnection, /真实文本对话预览已启用/)
+  assert.match(realTextConnection, /回复来自当前 Python 智能体/)
+  assert.doesNotMatch(realTextConnection, /真实发送保持禁用/)
 
   const awaiting = renderToStaticMarkup(
     createElement(PreviewRepairControls, {

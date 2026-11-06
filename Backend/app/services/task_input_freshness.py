@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from app.services.page_task_freshness import page_task_covers_current_input
 from app.services.planning_frozen import plain_json
 from app.services.runtime_business_contract import backend_generation_constraints
-from app.services.runtime_agent_module_policy import module_source_refs
+from app.services.runtime_agent_module_policy import module_source_refs, module_task_source
 
 
 def _business_inputs(task, project_plan):
@@ -59,7 +59,7 @@ def task_input_change_reason(task: Mapping, project_plan: Mapping, build_context
     """复用判断和用户原因共用同一次正式输入比较，不让展示自行猜测失效原因。"""
     if task.get("owner") == "agent":
         expected = module_source_refs(project_plan, task, build_context.get("runtime_agent_template_policy") or {})
-        if plain_json(task.get("source_refs") or {}) != expected:
+        if plain_json(module_task_source(task)[2]) != expected:
             return "智能体模块配置或依赖已变化"
         return None if any(check.get("kind") == "agent.module_contract" for check in task.get("business_acceptance_checks") or []) else "缺少智能体模块验收合同"
     if task.get("owner") == "backend":

@@ -709,6 +709,7 @@ def _invoke_live_chat_model(
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
     allow_clarification: bool = True,
+    validation_feedback: str = "",
 ) -> dict[str, Any]:
     """调用绑定澄清工具的需求模型，可选流式吐词。"""
 
@@ -720,6 +721,13 @@ def _invoke_live_chat_model(
         if allow_clarification:
             runnable = runnable.bind_tools([ask_user])
         prompt = _requirements_prompt(request, existing_spec, datasource_type, clarification_round)
+        if validation_feedback:
+            # 诊断只进入模型提示，不改变原始需求、权限事实提取或持久化的业务上下文。
+            prompt += (
+                "\n平台校验反馈（不是新增业务需求）：\n" + validation_feedback[:4000]
+                + "\n请按当前字段合同修复并返回完整 RequirementSpec JSON；"
+                "不得为修复格式而新增业务事实，也不要要求用户解释内部字段或重试。"
+            )
         if not allow_clarification:
             # 上一轮只产生了已被平台过滤的问题，本次只补齐产物，不再次发起澄清。
             prompt += "\n本轮无需用户补充信息。请根据原始需求生成完整 RequirementSpec JSON，不调用 ask_user，不返回确认问题。"
@@ -768,7 +776,8 @@ def analyze_requirements_with_chat_model(
 
     settings = Settings.from_env()
 
-    def _analyze_once() -> dict[str, Any]:
+    def _analyze_once(validation_feedback: str = "") -> dict[str, Any]:
+        """复用原需求上下文，仅把本轮格式诊断传给模型。"""
         return _analyze_requirements_once(
             request,
             existing_spec=existing_spec,
@@ -777,6 +786,7 @@ def analyze_requirements_with_chat_model(
             settings=settings,
             on_token=on_token,
             allow_clarification=allow_clarification,
+            validation_feedback=validation_feedback,
         )
 
     if not allow_clarification:
@@ -792,7 +802,7 @@ def analyze_requirements_with_chat_model(
             "requirement_spec_content_retry: 模型返回的需求 JSON 不完整，重试一次：%s",
             exc,
         )
-        return _analyze_once()
+        return _analyze_once(str(exc))
 
 
 def _is_malformed_spec_json_error(exc: ValueError) -> bool:
@@ -813,6 +823,7 @@ def _analyze_requirements_once(
     settings: Settings,
     on_token: Callable[[str], None] | None,
     allow_clarification: bool = True,
+    validation_feedback: str = "",
 ) -> dict[str, Any]:
     """单次需求分析：调用模型、解析 RequirementSpec、合并澄清上下文。"""
 
@@ -824,6 +835,7 @@ def _analyze_requirements_once(
         settings=settings,
         on_token=on_token,
         allow_clarification=allow_clarification,
+        validation_feedback=validation_feedback,
     )
     messages = agent_result.get("messages", [])
     content = getattr(messages[-1], "content", "") if messages else ""
@@ -841,7 +853,7 @@ def _analyze_requirements_once(
         raise ValueError("需求 AI 未返回完整 RequirementSpec JSON。")
     # ask_user 不采用并行 JSON；权限角色和规则由独立事实提取步骤写入草稿。
     effective_agent_spec = (
-        deepcopy(agent_spec)
+        _normalize_optional_agent_requirement_fields(agent_spec)
         if not asks_for_clarification and isinstance(agent_spec, dict)
         else None
     )

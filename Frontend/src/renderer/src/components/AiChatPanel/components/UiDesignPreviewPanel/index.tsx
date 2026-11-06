@@ -2,10 +2,12 @@ import { CheckOutlined, InboxOutlined } from '@ant-design/icons'
 import { Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useMemo } from 'react'
-import DesignRenderer from '../../../DesignRenderer/DesignRenderer'
+import DesignPagePreview from '../../../DesignRenderer/DesignPagePreview'
+import { designPageGenerationLabel, hasDesignPreview, type DesignPreviewPage } from '../../../DesignRenderer/projectPreview'
 import RichLoading from '../DesignProgress/RichLoading'
 import { cx } from '../../../../utils'
 import './index.less'
+import AgentUiTransfer from '../../../AgentUiTransfer'
 
 const { Text } = Typography
 
@@ -14,7 +16,7 @@ function isPoolGenerating(status?: string): boolean {
   return status === 'queued' || status === 'generating'
 }
 
-type UiDesignPage = {
+type UiDesignPage = DesignPreviewPage & {
   pageId?: string
   name?: string
   path?: string
@@ -35,6 +37,8 @@ type Props = {
   onPageChange: (pageId: string) => void
   /** 全部页面（含未生成）。 */
   pages: UiDesignPage[]
+  workspaceRoot?: string
+  onOpenPreview?: (pageId: string) => void
 }
 
 /** 右侧「UI设计稿」面板：左侧页面列表 + 右侧 DesignRenderer 预览。
@@ -45,7 +49,9 @@ export default function UiDesignPreviewPanel({
   generating,
   actingPageIds,
   onPageChange,
-  pages
+  pages,
+  workspaceRoot,
+  onOpenPreview
 }: Props): ReactElement {
   const actingSet = useMemo(() => new Set(actingPageIds || []), [actingPageIds])
   // 当前选中页对象 + 是否正在生成（本地 acting 或后台 queued/generating）。
@@ -60,6 +66,7 @@ export default function UiDesignPreviewPanel({
         : false,
     [activePage, activePageId, actingSet]
   )
+  const activeProgress = activePage ? designPageGenerationLabel(activePage, actingSet.has(activePageId)) : undefined
   // 首次进入或选中页失效时，默认选第一页。
   useEffect(() => {
     if (pages.length === 0) return
@@ -72,13 +79,19 @@ export default function UiDesignPreviewPanel({
 
   return (
     <div className={cx('ui-design-preview-panel')}>
+      {workspaceRoot && pages.some(page => page.design_asset) && (
+        <div className={cx('ui-design-preview-stage-header')}>
+          <AgentUiTransfer key={workspaceRoot} workspaceRoot={workspaceRoot} />
+        </div>
+      )}
       <aside className={cx('ui-design-preview-anchor')}>
         <nav className={cx('ui-design-preview-list')}>
           {pages.map((page, index) => {
             const pageId = page.pageId || `page-${index + 1}`
-            const confirmed = Boolean(page.code) && page.status === 'confirmed'
+            const confirmed = hasDesignPreview(page) && page.status === 'confirmed'
             const active = activePageId === pageId
             const generatingPage = actingSet.has(pageId) || isPoolGenerating(page.status)
+            const progress = designPageGenerationLabel(page, actingSet.has(pageId))
             return (
               <button
                 className={cx(
@@ -93,7 +106,7 @@ export default function UiDesignPreviewPanel({
               >
                 <span className={cx('ui-design-preview-index')}>
                   {generatingPage ? (
-                    <span className={cx('ui-design-preview-dots')} aria-label="正在生成设计稿">
+                    <span className={cx('ui-design-preview-dots')} aria-label={progress}>
                       <span />
                       <span />
                       <span />
@@ -102,6 +115,7 @@ export default function UiDesignPreviewPanel({
                 </span>
                 <span className={cx('ui-design-preview-label')}>
                   {page.name || pageId}
+                  {progress ? ` · ${progress}` : ''}
                 </span>
               </button>
             )
@@ -110,20 +124,28 @@ export default function UiDesignPreviewPanel({
       </aside>
       <div className={cx('ui-design-preview-stage')}>
         <div className={cx('ui-design-preview-stage-body')}>
-          {activePageGenerating || (generating && !code && actingSet.size === 0) ? (
+          {activePage && hasDesignPreview(activePage) ? (
+            <DesignPagePreview page={activePage} workspaceRoot={workspaceRoot} onOpenPreview={onOpenPreview} />
+          ) : activePageGenerating || (generating && !code && actingSet.size === 0) ? (
             <div className={cx('ui-design-preview-loading')}>
-              <RichLoading bare title="正在生成设计稿…" />
+              <RichLoading bare title={activeProgress === '排队中' ? '排队中，等待上一项完成…'
+                : activeProgress === '提交中' ? '正在提交生成任务…' : '正在生成设计稿…'} />
             </div>
-          ) : code ? (
-            <DesignRenderer
-              code={code}
-              title={`设计稿-${activePage?.name || activePageId}`}
-            />
+          ) : activePage?.error ? (
+            <div className={cx('ui-design-preview-empty')} role="alert">
+              <Text strong>{activePage.status === 'cancelled' ? '已停止生成' : '设计稿生成失败'}</Text>
+              <Text type="secondary">{activePage.error}</Text>
+            </div>
           ) : (
             <div className={cx('ui-design-preview-empty')}>
               <InboxOutlined className={cx('ui-design-preview-empty-icon')} />
               <Text strong>本页尚未生成设计稿</Text>
               <Text type="secondary">在中间区点击「换一换」或「选模板」生成</Text>
+            </div>
+          )}
+          {activePageGenerating && activePage && hasDesignPreview(activePage) && (
+            <div className={cx('ui-design-preview-progress')} role="status">
+              {activeProgress}，暂时展示上一版设计稿
             </div>
           )}
         </div>

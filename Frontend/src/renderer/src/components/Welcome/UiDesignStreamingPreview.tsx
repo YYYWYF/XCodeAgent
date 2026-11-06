@@ -4,12 +4,13 @@ import { Button, Modal, Typography } from 'antd'
 import { FullscreenOutlined } from '@ant-design/icons'
 import type { WorkflowRunPayload } from '../../typings'
 import { cx } from '../../utils'
-import DesignRenderer from '../DesignRenderer/DesignRenderer'
+import DesignPagePreview from '../DesignRenderer/DesignPagePreview'
+import { hasDesignPreview, type DesignPreviewPage } from '../DesignRenderer/projectPreview'
 import './UiDesignConfirmationPanel.less'
 
 const { Paragraph, Text } = Typography
 
-type PageDesign = {
+type PageDesign = DesignPreviewPage & {
   pageId?: string
   name?: string
   path?: string
@@ -30,6 +31,7 @@ type Props = {
   workflow: WorkflowRunPayload
   /** 需求文档里登记的页面总数，用于渲染未就绪骨架。 */
   total?: number
+  workspaceRoot?: string
 }
 
 // 从 workflow state/result 的 ui_designs.pages 读取已生成的页面快照。
@@ -49,10 +51,12 @@ function readStreamingPages(workflow: WorkflowRunPayload): PageDesign[] {
 // 让用户边等边看到逐页完成的设计稿，而不是干等到最后一次性出现。
 export default function UiDesignStreamingPreview({
   workflow,
-  total
+  total,
+  workspaceRoot
 }: Props): ReactElement | null {
   const pages = useMemo(() => readStreamingPages(workflow), [workflow])
   const [fullscreenPage, setFullscreenPage] = useState<PageDesign | null>(null)
+  const currentFullscreenPage = fullscreenPage ? pages.find((page) => page.pageId === fullscreenPage.pageId) : undefined
   const readyCount = pages.length
   const totalCount = Math.max(total ?? 0, readyCount)
   const pendingCount = Math.max(totalCount - readyCount, 0)
@@ -96,7 +100,7 @@ export default function UiDesignStreamingPreview({
                     <div className={cx('ui-design-card-actions')}>
                       <Button
                         className={cx('ui-design-action-btn')}
-                        disabled={!page.code}
+                        disabled={!hasDesignPreview(page)}
                         icon={<FullscreenOutlined />}
                         onClick={() => setFullscreenPage(page)}
                         title="全屏查看"
@@ -111,11 +115,8 @@ export default function UiDesignStreamingPreview({
                     </Paragraph>
                   ) : null}
                   <div className={cx('ui-design-card-preview')}>
-                    {page.code ? (
-                      <DesignRenderer
-                        code={page.code}
-                        title={`设计稿-${page.name || pageId}`}
-                      />
+                    {hasDesignPreview(page) ? (
+                      <DesignPagePreview page={page} workspaceRoot={workspaceRoot || String(workflow.state?.workspace || workflow.result?.workspace || '')} />
                     ) : (
                       <Paragraph type="secondary">设计稿生成中或加载失败。</Paragraph>
                     )}
@@ -152,17 +153,14 @@ export default function UiDesignStreamingPreview({
         bodyStyle={{ padding: 0 }}
         footer={null}
         onCancel={() => setFullscreenPage(null)}
-        open={Boolean(fullscreenPage)}
-        title={fullscreenPage?.name || '设计稿预览'}
+        open={Boolean(currentFullscreenPage)}
+        title={currentFullscreenPage?.name || '设计稿预览'}
         width="90vw"
         wrapClassName={cx('ui-design-fullscreen-modal')}
       >
-        {fullscreenPage && fullscreenPage.code ? (
-          <DesignRenderer
-            code={fullscreenPage.code}
-            fullscreen
-            title={`设计稿-${fullscreenPage.name || fullscreenPage.pageId}`}
-          />
+        {currentFullscreenPage && hasDesignPreview(currentFullscreenPage) ? (
+          <DesignPagePreview page={currentFullscreenPage} fullscreen
+            workspaceRoot={workspaceRoot || String(workflow.state?.workspace || workflow.result?.workspace || '')} />
         ) : null}
       </Modal>
     </section>

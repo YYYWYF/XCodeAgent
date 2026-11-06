@@ -14,8 +14,7 @@ from app.domain.application_planning_recovery import (
 from app.graph.nodes.application_technical_planning import technical_planning_confirm, technical_planning_begin
 from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 from app.services.business_acceptance_verifiers.frontend_agent_ui import verify_agent_ui_runtime_source
-from app.services.frontend_agent_ui_assets import validate_agent_ui_frontend_files
-from app.services.frontend_agent_ui_scaffold import inject_frontend_agent_ui_scaffold
+from app.services.frontend_agent_ui_scaffold import verify_frontend_agent_ui_build
 from app.services.stage_artifacts import load_stage_artifacts
 from app.services.technical_plan_topology_selection import select_technical_plan_topology
 from app.workspace.plan_documents import commit_technical_plan_document
@@ -82,33 +81,22 @@ class MainFlowClosureTests(TestCase):
         with self.assertRaisesRegex(ValueError, "当前应用配置"):
             sync_project_plan_from_markdown(plan, h.requirement_spec, "缺少实际配置的调用")
 
-    def test_formal_agent_ui_is_runtime_and_rejects_mock_or_foreign_endpoint(self):
-        """正式页面要求精确 Runtime 路径及默认组件，不能通过配置伪装为真实会话。"""
-
+    def test_formal_agent_ui_requires_current_shared_transfer(self):
+        """未转入共享应用层时不能用旧组件配置冒充正式页面。"""
         _, product, plan = fixture()
-        contract = next(iter(project_agent_ui_build_contracts(product, plan).values()))
-        self.assertEqual(contract["mode"], "runtime")
-        source = (
-            f"import {{ {contract['component']} }} from '{contract['componentModule']}';\n"
-            f"const AGENT_UI_CONFIG = {json.dumps(contract['config'], ensure_ascii=False)};\n"
-            f"export default function Page() {{ return <{contract['component']} config={{AGENT_UI_CONFIG}} />; }}"
-        )
-        self.assertEqual(verify_agent_ui_runtime_source({"page.tsx": source}, {"agent_ui": contract})["status"], "passed")
-        fake = deepcopy(contract)
-        fake["config"].pop("runtime")
-        self.assertEqual(verify_agent_ui_runtime_source({"page.tsx": source}, {"agent_ui": fake})["status"], "blocked")
-        foreign = source.replace("/agents/assistant/run", "https://foreign.invalid/run")
-        self.assertEqual(verify_agent_ui_runtime_source({"page.tsx": foreign}, {"agent_ui": contract})["status"], "failed")
+        with self.assertRaisesRegex(ValueError, "工作区|转入"):
+            project_agent_ui_build_contracts(product, plan)
+        legacy = {"mode": "runtime", "component": "AgentConversationPage"}
+        self.assertEqual(verify_agent_ui_runtime_source(
+            {"page.tsx": "export {}"}, {"agent_ui": legacy})["status"], "blocked")
 
-    def test_runtime_asset_validation_rejects_modified_adapter(self):
-        """真实传输资产必须实际存在且未被替换，页面声明正确也不能掩盖 Mock 适配器。"""
+    def test_runtime_asset_validation_rejects_missing_shared_transfer(self):
+        """有正式 Surface 却缺少共享转入时，Build 不注入或沿用旧 Adapter。"""
 
         _, product, _ = fixture()
         h = self.h
         (h.workspace / "frontend").mkdir()
         (h.workspace / ".devagentstudio/plans/product-plan.json").write_text(json.dumps(product))
-        inject_frontend_agent_ui_scaffold(h.workspace)
-        self.assertEqual(validate_agent_ui_frontend_files(h.workspace), [])
-        target = h.workspace / "frontend/src/apis/agentConversationRuntime.ts"
-        target.write_text("export const fakeSuccess = true")
-        self.assertTrue(validate_agent_ui_frontend_files(h.workspace))
+        with self.assertRaises((ValueError, OSError)):
+            verify_frontend_agent_ui_build(h.workspace, [])
+        self.assertFalse((h.workspace / "frontend/src/apis/agentConversationRuntime.ts").exists())

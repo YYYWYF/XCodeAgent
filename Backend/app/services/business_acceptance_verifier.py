@@ -209,19 +209,15 @@ class BusinessAcceptanceVerifier:
         verifier_started = False
         try:
             expected = deepcopy(check.get("expected") or {})
-            if kind == "frontend.agent_ui_runtime_contract":
-                from app.services.frontend_agent_ui_assets import validate_agent_ui_frontend_files
-
-                asset_errors = validate_agent_ui_frontend_files(Path(workspace_root))
-                if asset_errors:
-                    return {**base, **verification_result("blocked", "；".join(asset_errors))}
             if kind in RUNTIME_VERIFIER_NAMES:
                 from app.services.business_acceptance_verifiers.runtime_support import runtime_verification_files
 
                 files = runtime_verification_files(files, task, check, workspace_root)
                 expected["_target_paths"] = list(check["target_paths"])
             verifier_started = True
-            if kind == "frontend.page_endpoint_usage":
+            if kind == "frontend.agent_ui_runtime_contract":
+                result = verifier(files, expected, workspace_root=workspace_root)
+            elif kind == "frontend.page_endpoint_usage":
                 result = verifier(
                     files,
                     expected,
@@ -354,6 +350,14 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any], *,
 
     artifact = str(source.get("artifact") or "")
     target_id = str(source.get("target_id") or "")
+    if artifact == "agent_ui_build_contract":
+        if not workspace_root:
+            return ""
+        from app.services.agent_ui_build_contract import current_agent_ui_build_contract
+        try:
+            return _stable_hash(current_agent_ui_build_contract(workspace_root, target_id))
+        except (OSError, ValueError, KeyError, TypeError):
+            return ""
     if artifact == "runtime_topology":
         from app.services.runtime_business_acceptance import topology_facts
 

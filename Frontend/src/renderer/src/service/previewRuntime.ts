@@ -26,6 +26,15 @@ export type PreviewLog = {
   content: string
   truncated: boolean
 }
+export type AgentUiRuntimeConnection = {
+  agentId: string | null
+  endpoint: string | null
+  verificationScope: 'live_proxy_health'
+  sendEnabled: false
+  plainTextPreview: boolean
+  proxyHealth: { status: 'ready' | 'blocked' | 'not_verified'; reason: string }
+  checks: Array<{ id: string; status: 'supported' | 'blocked' | 'not_verified' | 'not_required'; reason: string }>
+}
 export type PreviewRepair = {
   interrupted?: boolean
   status?:
@@ -64,6 +73,7 @@ export type PreviewRuntimePayload = {
     frontend: PreviewServiceState
     backend: PreviewServiceState
     agent_runtime?: PreviewServiceState
+    agentUiConnection?: AgentUiRuntimeConnection
     previewUrl?: string
     failedStage?: string
     databaseCheck?: PreviewDatabaseCheck

@@ -4,6 +4,8 @@ export interface PageTemplateManifest {
   name: string;
   /** 场景描述，建议不超过两行；卡片中超出部分省略，hover 显示完整内容 */
   description: string;
+  category?: 'business' | 'agent';
+  agentUi?: unknown;
   /** 渲染后的页面预览图 URL，用于在模板卡片中展示并支持 hover 放大 */
   previewImage?: string;
 }
@@ -25,6 +27,7 @@ const manifestModules = import.meta.glob<{ default: PageTemplateManifest }>(
   { eager: true },
 );
 
+/** 从模板清单路径提取目录名。 */
 function extractDirName(path: string): string {
   return path.split('/').slice(-2, -1)[0];
 }
@@ -36,6 +39,8 @@ export function getAvailableTemplates(): PageTemplate[] {
   for (const [manifestPath, mod] of Object.entries(manifestModules)) {
     const dirName = extractDirName(manifestPath);
     const manifest = mod.default;
+    // Agent 设计只经包消费工程生成，旧静态模板不再进入可选列表。
+    if (manifest.category === 'agent' || manifest.agentUi !== undefined) continue;
 
     templates.push({
       manifest,

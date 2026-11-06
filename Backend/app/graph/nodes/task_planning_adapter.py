@@ -179,6 +179,14 @@ async def _run_async_workflow_planning_adapter(
             "api_design_gate_action": {},
         })
 
+    # 页面共享 UI 的具体安装/初始化/转入差异必须先在本开发对话确认。
+    # 此门位于 BuildContext 组装及旧 DAG 确认之前，不能被客户端选择的节点绕过。
+    from app.services.agent_ui_workflow_preparation import prepare_agent_ui_workflow
+
+    preparation = await prepare_agent_ui_workflow(state)
+    if preparation is not None:
+        return preparation
+
     action_payload = state.get("build_task_plan_confirmation")
     if isinstance(action_payload, dict) and action_payload.get("action"):
         action = action_payload.get("action")

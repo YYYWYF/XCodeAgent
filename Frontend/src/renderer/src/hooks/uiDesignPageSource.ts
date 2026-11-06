@@ -1,7 +1,10 @@
-export type DesignPageSource = { pageId?: string; status?: string; code?: string }
+import { isAgentProjectPage, type DesignPreviewPage } from '../components/DesignRenderer/projectPreview'
+
+export type DesignPageSource = DesignPreviewPage
 export type DesignSourceSnapshot = {
   codes: Record<string, string>
   statuses: Record<string, string>
+  projects?: Record<string, DesignPageSource>
 }
 export const EMPTY_DESIGN_SOURCE: DesignSourceSnapshot = { codes: {}, statuses: {} }
 const sources = new Map<string, UiDesignPageSource>()
@@ -110,10 +113,15 @@ export class UiDesignPageSource {
           if (!page.pageId) continue
           if (page.code) next.codes[page.pageId] = page.code
           if (page.status) next.statuses[page.pageId] = page.status
+          if (isAgentProjectPage(page)) {
+            next.projects ??= {}
+            next.projects[page.pageId] = page
+          }
         }
         if (
           !sameRecord(next.codes, this.snapshot.codes) ||
-          !sameRecord(next.statuses, this.snapshot.statuses)
+          !sameRecord(next.statuses, this.snapshot.statuses) ||
+          JSON.stringify(next.projects) !== JSON.stringify(this.snapshot.projects)
         ) {
           this.snapshot = next
           this.listeners.forEach((listener) => listener(next))

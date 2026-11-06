@@ -474,6 +474,8 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
         or ui_designs.get("confirmation_status") not in {"confirmed", "skipped"}
     ):
         raise ValueError("UI 设计稿必须经产品角色确认或明确跳过后才能进入工作区。")
+    from app.services.agent_ui_design_confirmation import require_confirmed_agent_designs
+    require_confirmed_agent_designs(state, ui_designs)
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
     product_plan_markdown = Path(str(state.get("product_plan_path") or ""))
     technical_plan_markdown = Path(str(state.get("technical_plan_path") or ""))
@@ -504,6 +506,9 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
             ),
         },
         "uiDesigns": {
+            "markdown": _document_descriptor(
+                workspace, ui_design_json.with_suffix(".md"), "UI 设计说明", "markdown", ".devagentstudio/specs"
+            ),
             "json": _document_descriptor(
                 workspace,
                 ui_design_json,

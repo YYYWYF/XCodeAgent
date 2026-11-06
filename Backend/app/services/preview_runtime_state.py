@@ -192,6 +192,8 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
             if layer == "agent_runtime":
                 value[layer].update(launchId=part.get("launch_id"), databaseRequired=part.get("database_required", False),
                                     agentIds=part.get("agent_ids"))
+            if layer == "frontend":
+                value[layer]['agentUiPreview'] = part.get('agent_ui_preview')
         write_record(workspace, value)
 
 
@@ -330,5 +332,10 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
         and value.get("failedStage") not in {"stop", "launch_interrupted", "backend_database_resource"}
         and not str(value.get("failedStage") or "").startswith("agent_runtime")
     )
+    if value["topologyType"] == "agent_runtime_direct":
+        from app.services.agent_ui_runtime_connection import connection_snapshot
+
+        value["agentUiConnection"] = connection_snapshot(
+            Path(workspace), value["frontend"], value["agent_runtime"])
     value["maintenance"] = maintenance_owner(workspace)
     return value

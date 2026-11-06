@@ -24,6 +24,11 @@ export async function attachUiDesignPageCode(
   const enriched = await Promise.all(
     pages.map(async (page) => {
       if (!page || typeof page !== 'object') return page
+      // Agent 工程只由 AG-UI 投影当前受管 URL，不能从同名旧文件补回单页源码。
+      const design = page as { design_asset?: unknown; bindings?: { agent_surfaces?: unknown[] } }
+      if (design.design_asset || design.bindings?.agent_surfaces?.length) {
+        return { ...(page as Record<string, unknown>), code: undefined }
+      }
       // 已经带 code 的条目（生成池刚写完）保持原样，不做多余的磁盘读取。
       if ((page as { code?: unknown }).code) return page
       const pageKey = String((page as { page_key?: unknown }).page_key || '').trim()

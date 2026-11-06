@@ -9,6 +9,32 @@ from app.services.runtime_agent_contracts import agent_contract_index, agent_end
 from app.services.planning_frozen import plain_json
 
 
+def module_task_source(task: Mapping) -> tuple[str, str, Mapping[str, Any]]:
+    """从固定任务或原 Build Repair 的结构化父来源读取模块，拒绝身份错配。"""
+
+    unit_id = str(task.get("unit_id", ""))
+    task_id = str(task.get("id", ""))
+    refs = task.get("source_refs") or {}
+    if not isinstance(refs, Mapping):
+        raise ValueError("Agent 模块缺少正式来源。")
+    if task.get("kind") == "repair":
+        repair = refs.get("repair") or {}
+        parent = refs.get("parent")
+        repairs = task.get("repairs")
+        parent_id = repairs.get("task_id") if isinstance(repairs, Mapping) else None
+        if (not isinstance(repair, Mapping) or not isinstance(parent, Mapping)
+                or repair.get("type") != "build_task_failure" or not parent_id
+                or repair.get("parent_task_id") != parent_id or repair.get("failed_task_id") != parent_id
+                or parent.get("type") != "agent_module"):
+            raise ValueError("Agent 修复任务与原模块来源不一致。")
+        task_id, refs = str(parent_id), parent
+    agent_id = unit_id.removeprefix("agent:")
+    module = task_id.removeprefix(f"{unit_id}::")
+    if not unit_id.startswith("agent:") or not agent_id or module not in AGENT_RUNTIME_MODULES:
+        raise ValueError("Agent 任务必须使用正式 Agent/模块固定身份。")
+    return agent_id, module, refs
+
+
 def module_path_allowed(path: str, policy: Mapping[str, Any]) -> bool:
     """只授权模块固定文件或新增/测试根内的普通源码及资源，拒绝脚本、SQL和隐藏路径。"""
 
@@ -30,11 +56,9 @@ def module_path_allowed(path: str, policy: Mapping[str, Any]) -> bool:
 def module_source_refs(plan: Mapping, task: Mapping, template_policy: Mapping) -> dict:
     """从固定任务身份编译来源，模型不能自报另一模块或另一个 Agent 的合同。"""
 
-    unit_id = task.get("unit_id", "")
-    agent_id = unit_id.removeprefix("agent:")
-    module = str(task.get("id", "")).removeprefix(f"{unit_id}::")
+    agent_id, module, _ = module_task_source(task)
     contracts = agent_contract_index(plan)
-    if not unit_id.startswith("agent:") or agent_id not in contracts or module not in AGENT_RUNTIME_MODULES:
+    if agent_id not in contracts:
         raise ValueError("Agent 任务必须使用正式 Agent/模块固定身份。")
     paths = template_policy.get("modulePaths", {})
     if module not in paths or not template_policy.get("policySha256"):
@@ -72,7 +96,10 @@ def agent_module_facts(plan: Mapping, agent_id: str, module: str) -> dict:
 def module_task_errors(task: Mapping, policy: Mapping) -> list[str]:
     """检查候选目标、允许路径和串行策略，不能通过声明更大目录突破模板策略。"""
 
-    module = str(task.get("id", "")).rsplit("::", 1)[-1]
+    try:
+        _, module, _ = module_task_source(task)
+    except ValueError as exc:
+        return [str(exc)]
     paths = policy.get("modulePaths", {}).get(module)
     if not isinstance(paths, Mapping):
         return ["Agent 模块缺少平台模板路径策略。"]

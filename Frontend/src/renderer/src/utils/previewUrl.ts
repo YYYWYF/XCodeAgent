@@ -3,6 +3,28 @@ export type PreviewNavigationState = {
   index: number
 }
 
+/** 本机 HTTP 嵌入预览沿宿主的 loopback 主机名，保持 Lax Cookie 同站，不改变端口或远端地址。 */
+export function sameSiteLoopbackPreview(value: string, rendererUrl: string): string {
+  try {
+    const preview = new URL(value)
+    const renderer = new URL(rendererUrl)
+    const loopback = new Set(['localhost', '127.0.0.1'])
+    if (preview.protocol !== 'http:' || renderer.protocol !== 'http:' ||
+      !loopback.has(preview.hostname) || !loopback.has(renderer.hostname) ||
+      preview.username || preview.password) return value
+    preview.hostname = renderer.hostname
+    return preview.toString()
+  } catch {
+    return value
+  }
+}
+
+/** 与当前模板 Route Projector 一致，从正式页面身份派生业务入口。 */
+export function previewPagePath(pageId: string): string {
+  if (!/^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(pageId)) return ''
+  return `/page/${pageId.replace(/_/g, '-')}`
+}
+
 /** 规范化用户或 Workflow 提供的预览地址。 */
 export function normalizePreviewUrl(value: string): string {
   const trimmedValue = value.trim()

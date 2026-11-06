@@ -216,6 +216,16 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "stateSnapshotKey": "requirementAuthorization", "readOnly": True,
         },
         "workflowActions": ["retry_template_reconcile"],
+        "agentUiDesignPreview": {
+            "interactionAction": "ui_action", "actions": ["regenerate", "adjust_pages", "preview", "cancel"],
+            "assetField": "ui_designs.pages[].design_asset",
+            "runtimeField": "ui_designs.pages[].project_preview",
+            "source": "official-mock", "generatedStatus": "ready",
+            "urlPersistence": "ephemeral", "formalConfirmation": "explicit-current-asset",
+            "confirmationEvidenceField": "ui_designs.pages[].asset_confirmation",
+            "reviewDocument": "specs/ui-designs.md",
+            "adjustmentExecutor": "creator", "adjustmentBaseline": "current-page-application",
+        },
         "phases": [
             "requirements",
             "product_planning",
@@ -598,6 +608,9 @@ def _with_page_code(manifest: dict[str, Any], state_values: dict[str, Any]) -> d
     project_dir = str(ui_design_project_dir(workspace_root(state_values)))
     enriched: list[dict[str, Any]] = []
     for page in pages:
+        if isinstance(page, dict) and (page.get("design_asset") or (page.get("bindings") or {}).get("agent_surfaces")):
+            enriched.append({key: value for key, value in page.items() if key != "code"})
+            continue
         if not isinstance(page, dict) or page.get("code"):
             enriched.append(page)
             continue

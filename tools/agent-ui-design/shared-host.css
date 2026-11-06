@@ -1,0 +1,14 @@
+.shared-agent-host { min-height: 100dvh; }
+.shared-agent-page-slot { width: 100%; height: max(24rem, calc(100dvh - 10rem)); }
+.shared-agent-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: CanvasText; background: Canvas; color-scheme: inherit; }
+.shared-agent-conversation:has([data-agent-ui-root][data-color-scheme="light"]) { color-scheme: light; }
+.shared-agent-conversation:has([data-agent-ui-root][data-color-scheme="dark"]) { color-scheme: dark; }
+.shared-agent-conversation.is-standalone { height: 100dvh; }
+.shared-agent-conversation.is-floating { position: fixed; z-index: 100; bottom: 1rem; right: 1rem; width: min(48rem, calc(100vw - 2rem)); height: min(42rem, calc(100dvh - 2rem)); border: 1px solid currentColor; border-radius: .75rem; }
+.shared-agent-conversation > .agent-ui-platform-shell { flex: 1; min-height: 0; }
+.shared-agent-conversation[hidden] { display: none; }
+.shared-agent-launchers { position: fixed; bottom: 1rem; right: 1rem; display: flex; gap: .5rem; }
+.shared-agent-launchers button, .shared-agent-close { color-scheme: inherit; color: CanvasText; background: Canvas; padding: .5rem 1rem; border: 1px solid currentColor; border-radius: .5rem; cursor: pointer; }
+.shared-agent-close { align-self: flex-end; margin: .5rem; }
+.shared-agent-launchers button:hover, .shared-agent-close:hover { text-decoration: underline; }
+.shared-agent-launchers button:focus-visible, .shared-agent-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

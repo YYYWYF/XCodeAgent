@@ -5,6 +5,7 @@ import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
 import { openPreviewWindow } from '../../utils/previewUrl'
 import './ServiceStatusCards.less'
+import AgentUiConnectionStatus from './AgentUiConnectionStatus'
 
 export type ServiceLayer = 'frontend' | 'backend' | 'agent_runtime'
 /** 按当前技术规划筛选服务；拓扑尚未明确时只展示公共前端服务。 */
@@ -99,6 +100,7 @@ export default function ServiceStatusCards({ runtime }: { runtime?: PreviewRunti
           )
         })}
       </div>
+      <AgentUiConnectionStatus connection={runtime?.agentUiConnection} />
       {openError && <Alert type="error" showIcon message={openError} className="preview-service-callout is-error" />}
     </section>
   )

@@ -1,31 +1,18 @@
-"""编译正式 Agent UI 的固定组件及当前 Runtime 会话合同。"""
+"""从已确认共享应用层和当前转入证据编译页面构建合同。"""
 
 from __future__ import annotations
 
 from hashlib import sha256
+from copy import deepcopy
 import json
+from pathlib import Path
 from typing import Any
 
 from app.services.ui_design_agent_surfaces import project_ui_design_pages
-from app.services.ui_design_agent_template import build_agent_ui_template_config
+from app.services.agent_ui_build_evidence import load_build_evidence
 
 
-AGENT_UI_BUILD_CONTRACT_VERSION = "agent-ui-build.v1"
-AGENT_UI_COMPONENT_MODULE = "@/components/AgentConversation"
-AGENT_UI_CONFIG_TYPE_MODULE = "@/typings/agentConversation"
-AGENT_UI_RUNTIME_ADAPTER_PATH = "frontend/src/apis/agentConversationRuntime.ts"
-AGENT_UI_SKILL_PATH = "/.devagentstudio/builtin-skills/agent-ui-surface-template/SKILL.md"
-
-_COMPONENTS = {
-    "standalone_page": (
-        "AgentConversationPage",
-        "frontend/src/components/AgentConversation/AgentConversationPage.tsx",
-    ),
-    "floating_panel": (
-        "AgentFloatingPanel",
-        "frontend/src/components/AgentConversation/AgentFloatingPanel.tsx",
-    ),
-}
+AGENT_UI_BUILD_CONTRACT_VERSION = "agent-ui-shared-build.v1"
 
 
 def _dict_items(value: Any) -> list[dict[str, Any]]:
@@ -53,61 +40,55 @@ def project_agent_ui_build_contracts(
     product_plan: dict[str, Any],
     technical_plan: dict[str, Any],
     *,
-    _surface_index: int = 0,
+    workspace: str | Path | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """从已确认产品及 Runtime 技术合同投影真实会话组件和精确同源路径。"""
+    """只为唯一正式 Agent 投影共享入口，未转入或过期时拒绝生成旧模板合同。"""
 
     from app.services.runtime_agent_contracts import agent_contract_index
+    pages = [page for page in project_ui_design_pages(product_plan) if page.get('agent_surfaces')]
+    if not pages:
+        return {}
     contracts = agent_contract_index(technical_plan)
+    if len(contracts) != 1:
+        raise ValueError('共享 Agent UI 仅支持唯一正式 Agent。')
+    if workspace is None:
+        raise ValueError('Agent 页面 Build 需要工作区及当前已确认转入证据。')
+    evidence = load_build_evidence(workspace)
+    host = evidence['host']
+    agent_id, runtime = next(iter(contracts.items()))
+    from app.services.runtime_endpoint_contracts import runtime_endpoint_capability_snapshot, runtime_endpoint_identity
+    endpoint = runtime_endpoint_capability_snapshot(technical_plan, *runtime_endpoint_identity(agent_id))
+    if (host['agentId'] != agent_id or host.get('connection') not in {'blocked_T27', 'plain_text'}
+            or host.get('endpoint') != endpoint['invocation']['path']):
+        raise ValueError('共享 Host 与当前正式 Agent 或连接准入不一致。')
     result: dict[str, dict[str, Any]] = {}
-    for page in project_ui_design_pages(product_plan):
+    for page in pages:
         page_id = _text(page.get("pageId"))
         surfaces = _dict_items(page.get("agent_surfaces"))
-        if not page_id or not surfaces:
-            continue
-        if _surface_index >= len(surfaces):
-            continue
-        config = build_agent_ui_template_config(page, _surface_index)
-        agent_id = _text(config.get("agentId"))
-        if agent_id not in contracts:
-            raise ValueError(f"Agent {agent_id} 缺少当前 Runtime 合同。")
-        if page_id not in contracts[agent_id]["pageIds"]:
-            raise ValueError("当前页面不属于所选 Agent 的正式入口。")
-        from app.services.runtime_endpoint_contracts import runtime_endpoint_capability_snapshot, runtime_endpoint_identity
-        snapshot = runtime_endpoint_capability_snapshot(technical_plan, *runtime_endpoint_identity(agent_id))
-        config["runtime"] = {"path": snapshot["invocation"]["path"], "pageId": page_id,
-            **{key: snapshot["interactionContract"][key] for key in ("mode", "inputSchema", "resultSchema", "interactionKinds")}}
-        surface = _text(config.get("surface"))
-        component = _COMPONENTS.get(surface)
-        if component is None:
-            raise ValueError(f"Agent UI Surface 类型无效：{surface}。")
+        if (not page_id or len(surfaces) != 1 or surfaces[0].get('agentId') != agent_id
+                or page_id not in runtime['pageIds'] or page_id not in host['pageIds']
+                or page_id not in evidence['confirmations']):
+            raise ValueError('当前 Agent 页面未纳入唯一共享 Host 及正式设计确认。')
+        surface = _text(surfaces[0].get('type'))
+        if surface not in {'standalone_page', 'floating_panel'}:
+            raise ValueError('当前页面的共享展示载体无效。')
         payload = {
             "version": AGENT_UI_BUILD_CONTRACT_VERSION,
-            "mode": "runtime",
+            "mode": "shared_host",
             "pageId": page_id,
             "agentId": agent_id,
             "surface": surface,
-            "componentModule": AGENT_UI_COMPONENT_MODULE,
-            "component": component[0],
-            "componentPath": component[1],
-            "configTypeModule": AGENT_UI_CONFIG_TYPE_MODULE,
-            "runtimeAdapterPath": AGENT_UI_RUNTIME_ADAPTER_PATH,
-            "skillPath": AGENT_UI_SKILL_PATH,
-            "runtimeAgentId": agent_id,
-            "runtimeEndpoint": snapshot,
-            "config": config,
+            "host": deepcopy(host),
+            "runtimeEndpoint": endpoint,
+            "businessAguiPaths": sorted({item['path'] for api in technical_plan.get('api_contracts', [])
+                for item in api.get('endpoints', []) if item.get('kind') == 'business'
+                and (item.get('agentCall') or {}).get('responseMode') == 'ag-ui'}),
+            "presentation": deepcopy(evidence['presentations'].get(page_id, {'props': {}, 'styles': []})),
+            "evidence": deepcopy(evidence),
+            "connection": host['connection'],
+            "verificationScope": "static_source",
         }
         result[page_id] = {**payload, "sha256": _stable_hash(payload)}
-    # 同页不同 Surface 各自持有配置与适配器，主合同保留逐页来源身份。
-    if _surface_index == 0:
-        max_surfaces = max((len(_dict_items(page.get("agent_surfaces")))
-                            for page in project_ui_design_pages(product_plan)), default=0)
-        for index in range(1, max_surfaces):
-            for page_id, companion in project_agent_ui_build_contracts(
-                    product_plan, technical_plan, _surface_index=index).items():
-                result[page_id].setdefault("companions", []).append(companion)
-        for contract in result.values():
-            contract["sha256"] = _stable_hash({key: value for key, value in contract.items() if key != "sha256"})
     return result
 
 
@@ -128,6 +109,20 @@ def agent_ui_contract_from_source_refs(
         if isinstance(selected, dict):
             return dict(selected)
     return {}
+
+
+def current_agent_ui_build_contract(workspace: str | Path, page_id: str) -> dict[str, Any]:
+    """验收从磁盘正式产物重新投影，禁止任务携带的旧快照自证来源。"""
+    from app.services.agent_ui_dependency_plan import read_object, safe_path, target_root
+    from app.workspace.plan_documents import load_project_plan_json
+    root, _ = target_root(workspace)
+    product = read_object(safe_path(root, '.devagentstudio/plans/product-plan.json'))
+    technical = load_project_plan_json(safe_path(root, '.devagentstudio/plans/technical-plan.json'),
+                                       hydrate_detail_designs=True)
+    contract = project_agent_ui_build_contracts(product, technical, workspace=root).get(page_id)
+    if not contract:
+        raise ValueError('当前正式页面没有共享 Agent UI 构建合同。')
+    return contract
 
 
 def task_agent_ui_contract(task: dict[str, Any]) -> dict[str, Any]:

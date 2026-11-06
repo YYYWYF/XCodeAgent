@@ -411,7 +411,7 @@ def _checks_for_deliverable(
                     task,
                     deliverable,
                     "frontend.agent_ui_runtime_contract",
-                    "Agent 页面必须组合平台固定组件、精确同源 Runtime 配置和官方 AG-UI 适配器。",
+                    "Agent 页面必须复核当前包与设计来源，使用共享 Host 公开入口；静态通过不代表真实连接或业务验收。",
                     [*sources, _agent_ui_source(agent_ui)],
                     {"agent_ui": agent_ui},
                 )

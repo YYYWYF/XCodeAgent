@@ -53,6 +53,14 @@ class UiDesignSettingsTests(unittest.TestCase):
 
 
 class UiDesignGeneratorTests(unittest.TestCase):
+    def test_agent_surface_cannot_enter_single_file_generation(self) -> None:
+        """Agent 页面不能再调用旧虚拟模块模板或单文件模型。"""
+        page = {"pageId": "chat", "agent_surfaces": [{"agentId": "assistant", "type": "standalone_page"}]}
+        with patch("app.services.ui_design_generator._create_ui_design_model") as model:
+            with self.assertRaisesRegex(ValueError, "多文件"):
+                generate_page_react_code(page, "Chat")
+            model.assert_not_called()
+
     def test_prompt_declares_product_plan_as_only_product_fact_source(self) -> None:
         """UI 提示词必须明确禁止新增业务字段、操作、指标和正式路由。"""
 

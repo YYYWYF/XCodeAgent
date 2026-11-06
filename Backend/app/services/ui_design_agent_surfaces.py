@@ -1,15 +1,11 @@
-"""投影并校验 UiDesign 中的固定 Agent UI Surface 证据。"""
+"""投影当前产品 Surface，并隔离单文件与共享工程的设计来源。"""
 
 from __future__ import annotations
 
 from typing import Any, Iterable
 
-from app.services.product_plan import project_active_agent_product_plan
+from app.services.product_plan import project_active_agent_product_plan, requirement_spec_sha256
 from app.services.agent_action_bindings import agent_action_bindings
-from app.services.ui_design_agent_template import (
-    inspect_agent_ui_template_usage,
-    validate_agent_ui_template_usage,
-)
 
 
 _REQUIRED_PARTS = {
@@ -92,100 +88,62 @@ def project_ui_design_pages(product_plan: dict[str, Any]) -> list[dict[str, Any]
     ]
 
 
+def project_agent_design_pages(
+    requirement_spec: dict[str, Any], product_plan: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """为包消费原型读取已联合确认的单 Agent 页面事实，不消费历史设计稿。"""
+    if any(document.get("confirmation_status") != "confirmed"
+           for document in (requirement_spec, product_plan)):
+        raise ValueError("请先联合确认当前 RequirementSpec 和 ProductPlan。")
+    if product_plan.get("requirement_spec_sha256") != requirement_spec_sha256(requirement_spec):
+        raise ValueError("ProductPlan 与当前已确认 RequirementSpec 摘要不一致。")
+    # 普通页面仍由原生成池处理；独立生产者只拥有含 Agent Surface 的页面。
+    pages = [page for page in project_ui_design_pages(product_plan) if page.get("agent_surfaces")]
+    page_ids = [str(page.get("pageId") or "").strip() for page in pages]
+    if not pages or any(not value for value in page_ids) or len(set(page_ids)) != len(pages):
+        raise ValueError("包消费设计需要非空且唯一的正式页面身份。")
+    agent_ids: set[str] = set()
+    for page in pages:
+        surfaces = expected_agent_surfaces(page)
+        if len(surfaces) > 1:
+            raise ValueError("当前包消费试点每页最多支持一个 Agent Surface。")
+        actions = {str(action.get("actionId") or "") for action in _dict_items(page.get("actions"))}
+        items = {str(item.get("itemId") or "") for item in _dict_items(page.get("information_items"))}
+        for surface in surfaces:
+            if (not surface["agentId"] or surface["type"] not in _REQUIRED_PARTS
+                    or not surface["actionIds"] or not set(surface["actionIds"]) <= actions
+                    or not set(surface["contextItemIds"]) <= items):
+                raise ValueError("Agent Surface 身份、类型或页面绑定与正式产品事实不一致。")
+            agent_ids.add(surface["agentId"])
+    if len(agent_ids) != 1:
+        raise ValueError("当前包消费试点必须且只能包含一个启用的 Agent。")
+    return pages
+
+
 def inspect_agent_surface_bindings(
     _tags: Iterable[tuple[str, str, bool, bool]], code: str = ""
 ) -> dict[str, Any]:
-    """从 TSX 固定组件和静态配置提取 Surface 与模板证据。"""
-
-    template_inspection = inspect_agent_ui_template_usage(code)
-    surfaces: list[dict[str, Any]] = []
-    for usage in _dict_items(template_inspection.get("usages")):
-        config = usage.get("config") if isinstance(usage.get("config"), dict) else {}
-        agent_id = str(config.get("agentId") or "").strip()
-        surface_type = str(config.get("surface") or "").strip()
-        parts = _REQUIRED_PARTS.get(surface_type, ())
-        surfaces.append(
-            {
-                "agentId": agent_id,
-                "type": surface_type,
-                "actionIds": [item["actionId"] for item in _dict_items(config.get("actions"))],
-                "contextItemIds": [
-                    str(item.get("id") or "").strip()
-                    for item in _dict_items(config.get("contextItems"))
-                    if str(item.get("id") or "").strip()
-                ],
-                "controlIds": [f"{agent_id}-{part}" for part in parts],
-                "parts": [
-                    {"part": part, "controlId": f"{agent_id}-{part}"} for part in parts
-                ],
-                "template": {
-                    "module": str(usage.get("module") or ""),
-                    "component": str(usage.get("component") or ""),
-                    "version": str(usage.get("version") or ""),
-                    "configSha256": str(usage.get("configSha256") or ""),
-                },
-            }
-        )
-    return {
-        "surfaces": surfaces,
-        "invalid_markers": list(template_inspection.get("errors") or []),
-        "duplicate_control_ids": [],
-        "template_inspection": template_inspection,
-    }
+    """单文件稿只检查源码边界，不从旧组件或配置推导会话证据。"""
+    forbidden = ("@xcodeagent/agent-ui-design", "AgentConversationTemplate",
+                 "AgentFloatingPanelTemplate", "AgentConversationAdapter", "AgentChatCore",
+                 "data-agent-part")
+    errors = ["旧 Agent UI 固定模板已退出当前设计，请重新生成包消费工程。"] if any(
+        marker in code for marker in forbidden) else []
+    return {"surfaces": [], "invalid_markers": errors}
 
 
 def validate_agent_surface_bindings(
     page: dict[str, Any], inspection: dict[str, Any]
 ) -> dict[str, Any]:
-    """校验固定组件用法及其 action、上下文与 ProductPlan 完全一致。"""
-
-    template_inspection = (
-        inspection.get("template_inspection")
-        if isinstance(inspection.get("template_inspection"), dict)
-        else {"usages": [], "errors": list(inspection.get("invalid_markers") or [])}
-    )
-    return validate_agent_ui_template_usage(page, template_inspection)
+    """含 Agent 的正式页面必须由多文件 owner 确认，单文件不能自证共享来源。"""
+    errors = list(inspection.get("invalid_markers") or [])
+    if expected_agent_surfaces(page):
+        errors.append("Agent UI 页面必须使用隔离多文件设计工程并重新确认。")
+    return {"errors": errors, "bindings_passed": not errors, "required_parts_passed": not errors}
 
 
 def manifest_agent_surface_bindings(
-    page: dict[str, Any], inspection: dict[str, Any]
+    page: dict[str, Any], _inspection: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """按 ProductPlan 顺序构造 UiManifest v5 的固定模板证据。"""
-
-    actual_by_key = {
-        (str(item.get("agentId") or ""), str(item.get("type") or "")): item
-        for item in _dict_items(inspection.get("surfaces"))
-    }
-    result: list[dict[str, Any]] = []
-    for expected in expected_agent_surfaces(page):
-        key = (str(expected.get("agentId") or ""), str(expected.get("type") or ""))
-        actual = actual_by_key.get(key, {})
-        parts = _REQUIRED_PARTS.get(key[1], ())
-        result.append(
-            {
-                "agentId": key[0],
-                "type": key[1],
-                "actionIds": _string_items(expected.get("actionIds")),
-                "contextItemIds": _string_items(expected.get("contextItemIds")),
-                "controlIds": _string_items(actual.get("controlIds")),
-                "parts": [
-                    {"part": part, "controlId": f"{key[0]}-{part}"} for part in parts
-                ] if actual else [],
-                "template": actual.get(
-                    "template",
-                    {
-                        "module": "",
-                        "component": (
-                            "AgentConversationTemplate"
-                            if key[1] == "standalone_page"
-                            else "AgentFloatingPanelTemplate"
-                            if key[1] == "floating_panel"
-                            else ""
-                        ),
-                        "version": "",
-                        "configSha256": "",
-                    },
-                ),
-            }
-        )
-    return result
+    """只投影产品绑定；共享源码、实际包和确认凭据由多文件 owner 持有。"""
+    return expected_agent_surfaces(page)

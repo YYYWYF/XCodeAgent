@@ -1,4 +1,4 @@
-"""固定聊天模板适配必须覆盖全部产品事实，失败不能冒充已确认设计稿。"""
+"""旧聊天稿退出当前生成与确认，不删除用户保存的源文件。"""
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,16 +8,15 @@ from unittest.mock import patch
 
 from app.graph.nodes.ui_confirmation import _product_plan_hash, _verified_ui_designs_for_confirmation
 from app.services.ui_design_agent_surfaces import project_ui_design_pages
-from app.services.ui_design_agent_template import build_agent_ui_template_source_contract
 from app.services.ui_design_generator import generate_adjusted_page_react_code
 from app.services.ui_design_manifest import build_ui_page_manifest
 
 
 class UiDesignTemplateAdaptationTests(unittest.TestCase):
-    """复现独立聊天组件只绑定 Agent 入口，却遗漏原有发送操作及三个信息项。"""
+    """单文件生成、调整与正式确认均不能恢复旧固定聊天组件。"""
 
     def setUp(self) -> None:
-        """构造已确认产品事实和缺少页面产品标记的真实固定组件源码。"""
+        """构造产品事实和已退出当前合同的固定组件源码。"""
 
         self.product = {
             "pages": [{
@@ -38,10 +37,10 @@ class UiDesignTemplateAdaptationTests(unittest.TestCase):
             }],
         }
         self.page = project_ui_design_pages(self.product)[0]
-        self.code = build_agent_ui_template_source_contract(self.page)
+        self.code = "import { AgentConversationTemplate } from '@xcodeagent/agent-ui-design'; export default AgentConversationTemplate"
 
     def test_template_adaptation_rejects_missing_product_bindings(self) -> None:
-        """选模板沿真实产品校验拒绝漏项，错误保留发送操作与信息项的稳定标识。"""
+        """Agent 页面在调用单文件模型前就明确要求包消费工程。"""
 
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
@@ -54,11 +53,10 @@ class UiDesignTemplateAdaptationTests(unittest.TestCase):
                 generate_adjusted_page_react_code(
                     self.page, "Chat", "", self.code, "适配当前产品页面", allow_missing=False,
                 )
-        self.assertIn("send_question", str(failure.exception))
-        self.assertIn("information_items", str(failure.exception))
+        self.assertIn("多文件设计工程", str(failure.exception))
 
     def test_explicit_adjustment_retains_its_missing_binding_policy(self) -> None:
-        """用户明确调整设计时继续使用原宽松策略，模板适配不改变该入口语义。"""
+        """明确调整也不能授权单文件模型复活旧 Agent 模板。"""
 
         with patch(
             "app.services.ui_design_generator.Settings.from_env",
@@ -67,10 +65,10 @@ class UiDesignTemplateAdaptationTests(unittest.TestCase):
             "app.services.ui_design_generator._invoke_ui_design_model",
             return_value=SimpleNamespace(content=self.code),
         ), patch("app.services.ui_design_generator.validate_tsx", return_value=(True, "")):
-            result = generate_adjusted_page_react_code(
-                self.page, "Chat", "", self.code, "删除已指定的视觉区域",
-            )
-        self.assertEqual(result, self.code)
+            with self.assertRaisesRegex(ValueError, "多文件设计工程"):
+                generate_adjusted_page_react_code(
+                    self.page, "Chat", "", self.code, "删除已指定的视觉区域",
+                )
 
     def test_failed_confirmation_clears_the_page_confirmed_status(self) -> None:
         """最终复验发现缺项时回显生成失败，不能在错误提示下继续展示已确认页面。"""
@@ -86,5 +84,5 @@ class UiDesignTemplateAdaptationTests(unittest.TestCase):
             verified, errors = _verified_ui_designs_for_confirmation(state, manifest)
         self.assertTrue(errors)
         self.assertEqual(verified["pages"][0]["status"], "generation_failed")
-        self.assertIn("send_question", verified["pages"][0]["error"])
+        self.assertIn("重新生成或审阅", verified["pages"][0]["error"])
         self.assertEqual(verified["confirmation_status"], "pending_user_confirmation")

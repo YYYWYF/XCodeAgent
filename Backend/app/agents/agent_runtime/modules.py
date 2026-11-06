@@ -11,7 +11,7 @@ from app.config import Settings
 from app.services.agent_runtime_template_policy import load_agent_runtime_template_policy
 from app.services.build_result_coordinator import create_agent_task_results
 from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys, agent_invocation
-from app.services.runtime_agent_module_policy import module_source_refs, module_task_errors
+from app.services.runtime_agent_module_policy import module_source_refs, module_task_errors, module_task_source
 from app.services.runtime_agent_editable_config import compile_agent_prompt
 
 
@@ -21,7 +21,7 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
     if task.get("owner") != "agent" or task.get("task_type") != "agent.code":
         raise ValueError("Agent 模块执行器只接受正式 agent.code 任务。")
     expected = module_source_refs(plan, task, policy)
-    if task.get("source_refs") != expected:
+    if module_task_source(task)[2] != expected:
         raise ValueError("Agent 合同或模板路径策略已变化，请重新规划并确认任务。")
     errors = module_task_errors(task, policy)
     changes = task.get("change_scope") or []
@@ -38,7 +38,8 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
         "identity": {key: contract[key] for key in ("name", "purpose")},
         "formalAgentIds": sorted(agent_contract_index(plan)),
         "configuration": deepcopy(contract["agentSettings"][module]),
-        "resolvedSystemPrompt": compile_agent_prompt(contract["agentSettings"]["prompt"]),
+        **({"resolvedSystemPrompt": compile_agent_prompt(contract["agentSettings"]["prompt"])}
+           if module == "prompt" else {}),
         "description": task.get("description"), "target_files": targets,
         "change_scope": changes, "module_policy": policy["modulePaths"][module],
         "invocation": agent_invocation(contract["agentId"], public=contract["publicEndpoint"]),
@@ -48,6 +49,39 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
                                           if (api["id"], endpoint["id"]) in keys]}
                            for api in plan.get("api_contracts", ()) if any(key[0] == api["id"] for key in keys)],
     }
+
+
+def module_implementation_rules(packet: dict[str, Any]) -> str:
+    """仅给当前模块实现要求，不将其他模块的缺省字段误当成待补充的正式配置。"""
+
+    module = packet["module"]
+    if module in {"skills", "knowledge"}:
+        if packet["configuration"].get("enabled") is False:
+            return (
+                f"Keep {module} disabled for this Agent; inspect and remove its stale resource wiring. "
+                "Do not request resource files for a disabled module. Preserve other modules and other Agents' "
+                "resource wiring. Shared helpers may remain only if they are fully defined and imported. "
+                "Do not change the existing system prompt, model or factory signature. "
+            )
+        return (
+            f"Install only the formal {module} files using its SkillsMiddleware or MemoryMiddleware. "
+            "Use explicit middleware lists and an independently rooted virtual_mode FilesystemBackend at "
+            f"Path(__file__).resolve().parents[1] / '{module}', with exact formal sources and actual imports. "
+        )
+    rules = {
+        "prompt": "Use resolvedSystemPrompt exactly; it already composes persona, tone and constraints. ",
+        "model": (
+            'Only if configuration.generation.temperature is set, use model.model_copy(update={"temperature": value}). '
+            "Otherwise pass the injected project model unchanged. Never mutate the shared project model. "
+        ),
+        "memory": "Preserve trusted Principal/thread isolation and the existing checkpoint lifecycle. ",
+        "tools": (
+            "Implement only declared tools via their exact Endpoint ApplicationService, never loopback REST; "
+            "require confirmation for configured writes. Disabled tools must have no business tool wiring. "
+        ),
+        "context": "Propagate only trusted RuntimeContext, Principal/thread and declared interaction inputs. ",
+    }
+    return rules[module] + "Preserve other modules and their already implemented configuration. "
 
 
 def generate_agent_modules_with_deep_agent(
@@ -77,15 +111,11 @@ def generate_agent_modules_with_deep_agent(
             "execution_policy.py or execution_guard.py. Public text conversation does not disable internal modules. "
             "Use an explicit tools=[declared business tools, *resource_tools(execution_policy)] list; import resource_tools "
             "from app.agent.execution_guard. Middleware must be an explicit list starting with *text_only_middleware(execution_policy), "
-            "followed only by enabled SkillsMiddleware/MemoryMiddleware with independent virtual_mode FilesystemBackend "
-            "roots Path(__file__).resolve().parents[1] / 'skills' or 'knowledge' and exact formal sources. "
+            "followed only by explicitly enabled resource middleware with exact formal sources. "
             "Do not expose default filesystem, task, Todo or shell tools. Native interrupts require a declared interactionKind. "
             "Preserve existing implemented builders for other formalAgentIds. Register only actual implementations; "
             "do not generate placeholders for other Agents. Remove the template chat registration when formal business Agents exist. "
-            "Use resolvedSystemPrompt exactly for the prompt module; it already composes persona, tone and constraints. "
-            "For model.generation.temperature, use a local model.model_copy(update={\"temperature\": value}); "
-            "otherwise pass the injected model unchanged. Never mutate the shared project model. "
-            "trusted RuntimeContext, checkpoint and AG-UI lifecycle. Do not create a second model, "
+            "Preserve trusted RuntimeContext, checkpoint and AG-UI lifecycle. Do not create a second model, "
             "server, workflow, database, user system or per-Agent wrapper. Memory must remain isolated "
             "by trusted Principal/thread. Tools import only the declared ApplicationService behind the "
             "exact Endpoint identity, never loopback REST; require confirmation for configured writes. "
@@ -95,6 +125,8 @@ def generate_agent_modules_with_deep_agent(
             "a path in module_policy is not extra write authorization. Never install dependencies, "
             "start services, run commands, change environment or planning artifacts. A contract gap "
             "must return a structured failure and change_request instead of an invented behavior.\n"
+            + module_implementation_rules(packet)
+            + "\n"
             "Return only {\"task_results\":[{\"task_id\":...,\"status\":...,\"summary\":...}]}. "
             "summary is optional display text; task_id and a valid status are mandatory. "
             "Use completed after actual writes; already_satisfied only with non-empty "

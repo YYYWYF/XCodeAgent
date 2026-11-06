@@ -6,11 +6,6 @@ import json
 import sys
 from pathlib import Path
 
-from app.services.ui_design_agent_template import (
-    AGENT_UI_TEMPLATE_MODULE,
-    AGENT_UI_TEMPLATE_VERSION,
-    component_for_surface,
-)
 from app.workspace.spec_documents import REPOSITORY_ROOT
 
 
@@ -78,6 +73,8 @@ def load_template_source(template_id: str, *, surface_type: str | None = None) -
             continue
         if str(manifest.get("id") or "").strip() != template_id:
             continue
+        if manifest.get("category") == "agent" or manifest.get("agentUi") is not None:
+            raise ValueError("Agent 模板已退出当前单文件设计，请使用包消费工程重新生成。")
         if surface_type is not None:
             category = str(manifest.get("category") or "").strip()
             supported_surfaces = manifest.get("supportedSurfaces")
@@ -92,20 +89,6 @@ def load_template_source(template_id: str, *, surface_type: str | None = None) -
                 raise ValueError(
                     f"load_template_source: 模板 {template_id} 与页面 Surface "
                     f"{surface_type or 'missing'} 不兼容。"
-                )
-            agent_ui = manifest.get("agentUi")
-            if category == "agent" and (
-                not isinstance(agent_ui, dict)
-                or agent_ui.get("module") != AGENT_UI_TEMPLATE_MODULE
-                or agent_ui.get("component") != component_for_surface(surface_type)
-                or agent_ui.get("version") != AGENT_UI_TEMPLATE_VERSION
-            ):
-                raise ValueError(
-                    f"load_template_source: Agent 模板 {template_id} 缺少当前固定组件证据。"
-                )
-            if category == "business" and agent_ui is not None:
-                raise ValueError(
-                    f"load_template_source: 业务模板 {template_id} 不得声明 Agent UI 固定组件。"
                 )
         index_path = entry / "index.tsx"
         if not index_path.is_file():

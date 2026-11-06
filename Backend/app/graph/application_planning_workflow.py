@@ -282,10 +282,17 @@ async def _ui_confirmation(state: ProjectState) -> dict:
             )
         update = await nodes.ui_confirmation(node_state)
         if update.get("status") != "completed":
-            # 仅在当前阶段允许推进到 UI设计确认时才推进，避免恢复场景下的自转冲突。
+            interaction = node_state.get("application_planning_interaction")
+            # 显式 UI 动作已成功返回时收口旧失败；只读轮询不清理异常或重复写确认门。
+            recovered_ui_action = (
+                lifecycle.initialization.status == ApplicationLifecycleStatus.FAILED
+                and isinstance(interaction, dict)
+                and interaction.get("action") == "ui_action"
+            )
             if (
                 lifecycle.initialization.stage
                 != ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION
+                or recovered_ui_action
             ):
                 lifecycle = persist_application_lifecycle_transition(
                     workspace,

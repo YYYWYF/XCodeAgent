@@ -203,7 +203,8 @@ def resolve_target_build_context(
         product = load_project_plan_json(_workspace_root(project_plan_path) / WORKSPACE_ARTIFACT_DIR / "plans/product-plan.json")
         if product.get("confirmation_status") != "confirmed":
             raise ValueError("Agent 页面 Build 必须读取已确认 ProductPlan。")
-        context["agent_ui_by_page"] = project_agent_ui_build_contracts(product, project_plan)
+        context["agent_ui_by_page"] = project_agent_ui_build_contracts(
+            product, project_plan, workspace=_workspace_root(project_plan_path))
     if agent_ids:
         context["required_unit_ids"] = list(dict.fromkeys([
             *context["required_unit_ids"], *(f"agent:{key}" for key in agent_ids),

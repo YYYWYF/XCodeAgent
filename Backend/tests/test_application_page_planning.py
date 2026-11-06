@@ -55,6 +55,7 @@ from app.services.requirement_spec import create_requirement_spec
 from app.services.product_plan import create_product_plan
 from app.workspace.spec_documents import (
     write_requirement_spec_draft_document,
+    write_ui_designs_json,
 )
 
 
@@ -108,9 +109,7 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
     product_plan_path.with_suffix(".json").write_text(
         json.dumps(state["product_plan"], ensure_ascii=False), encoding="utf-8"
     )
-    (workspace / ".devagentstudio" / "specs" / "ui-designs.json").write_text(
-        json.dumps(state["ui_designs"], ensure_ascii=False), encoding="utf-8"
-    )
+    write_ui_designs_json(state, state["ui_designs"])
     technical_plan_path.with_suffix(".json").write_text(
         json.dumps(state["technical_plan"], ensure_ascii=False), encoding="utf-8"
     )
@@ -1067,10 +1066,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             state = _confirmed_state(workspace)
             skipped = {"confirmation_status": "skipped", "pages": []}
             state["ui_designs"] = skipped
-            (workspace / ".devagentstudio" / "specs" / "ui-designs.json").write_text(
-                json.dumps(skipped),
-                encoding="utf-8",
-            )
+            write_ui_designs_json(state, skipped)
 
             confirmation = confirm_application_planning_artifacts(state)
 

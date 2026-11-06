@@ -1,5 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { UiReadVisibility } from './uiReadVisibility'
+import { isAgentProjectPage, type DesignPreviewPage } from '../components/DesignRenderer/projectPreview'
 import {
   designPagesGenerating,
   EMPTY_DESIGN_SOURCE,
@@ -9,11 +10,7 @@ import {
 } from './uiDesignPageSource'
 
 /** 页面清单里本 hook 关心的字段。 */
-type UiDesignPageLike = {
-  pageId?: string
-  status?: string
-  code?: string
-}
+type UiDesignPageLike = DesignPreviewPage
 
 /**
  * 把磁盘上的 code / status 合进页面清单（纯函数，便于单测）。
@@ -25,11 +22,21 @@ type UiDesignPageLike = {
 export function mergeUiDesignPageSources<T extends UiDesignPageLike>(
   sourcePages: T[],
   diskCode: Record<string, string>,
-  diskStatus: Record<string, string>
+  diskStatus: Record<string, string>,
+  diskProjects?: Record<string, DesignPreviewPage>
 ): T[] {
   const merged = sourcePages.map((page) => {
     const pageId = String(page.pageId || '')
     if (!pageId) return page
+    const project = diskProjects?.[pageId]
+    if (project && isAgentProjectPage(project)) {
+      const sameAsset = JSON.stringify(project.design_asset) === JSON.stringify(page.design_asset)
+      const status = diskStatus[pageId] || page.status
+      if (sameAsset && status === page.status && !page.code && project.error === page.error) return page
+      return { ...page, code: undefined, status, error: project.error, design_asset: project.design_asset,
+        project_preview: sameAsset ? page.project_preview : undefined,
+        preview_error: sameAsset ? page.preview_error : undefined }
+    }
     const code = page.code ? undefined : diskCode[pageId]
     const status = diskStatus[pageId]
     if (!code && (!status || status === page.status)) return page
@@ -91,7 +98,7 @@ export function useUiDesignPagesWithCode<T extends UiDesignPageLike>(
 
   const snapshot = disk.workspace === workspaceRoot ? disk.value : EMPTY_DESIGN_SOURCE
   return useMemo(
-    () => mergeUiDesignPageSources(sourcePages ?? [], snapshot.codes, snapshot.statuses),
+    () => mergeUiDesignPageSources(sourcePages ?? [], snapshot.codes, snapshot.statuses, snapshot.projects),
     [sourcePages, snapshot]
   )
 }

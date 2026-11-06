@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from app.services.builtin_skills import AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME, read_builtin_skill_md
 
 import json
 from typing import Any
 
 from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
-from app.agents.frontend.runtime_instruction import runtime_frontend_instruction
+from app.agents.frontend.runtime_instruction import runtime_frontend_instruction, shared_host_instruction
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
@@ -76,10 +75,16 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
     if not isinstance(pages, list) or not pages:
         return ""
     entries: list[dict[str, str]] = []
+    shared_page_ids: list[str] = []
     for page in pages:
         if not isinstance(page, dict):
             continue
         page_id = str(page.get("pageId") or "").strip()
+        asset = page.get("design_asset")
+        if page_id and isinstance(asset, dict) and asset.get("kind") == "agent-ui-project":
+            # 多文件 Agent 工程由已转入的 Host 持有，不能套用普通单文件 ProCard 稿。
+            shared_page_ids.append(page_id)
+            continue
         page_key = str(page.get("page_key") or "").strip()
         if not page_id or not page_key:
             continue
@@ -90,9 +95,17 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
                 "name": str(page.get("name") or page_id),
             }
         )
+    shared_reference = (
+        '## Shared Agent UI design reference\n'
+        'Pages ' + json.dumps(shared_page_ids, ensure_ascii=False) + ' use a confirmed multi-file Agent UI project, '
+        'not a single-file React/ProCard mockup. Use the transferred shared Host contract and read its public '
+        'page entry. Do not invent a pages/<page_key>/index.tsx reference or add a second page shell. '
+        'Preserve confirmed business controls; standalone layout follows the Shared Agent Host page boundary.\n\n'
+        if shared_page_ids else ''
+    )
     if not entries:
-        return ""
-    return (
+        return shared_reference
+    return shared_reference + (
         "## UI Design Reference (MUST READ BEFORE WRITING EACH PAGE)\n"
         "For each frontend page task, the task's unit_id is `page:<pageId>`. Before writing "
         "the page, find the matching pageId in the design reference map below and use "
@@ -114,7 +127,7 @@ def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
         "state switcher), not product UI. Omit them from the runtime page.\n"
         "- Implement only the ProductPlan actions identified by `data-action-id`. Follow the "
         "confirmed, deterministically compiled PageImplementationContract actionBindings exactly: endpoint actions call the "
-        "declared endpoint, agent actions reuse the fixed AgentConversation component and its declared agentId "
+        "declared endpoint, agent actions follow the task's platform-owned Agent UI entry and declared agentId "
         "according to the task's Agent UI adapter contract (including its Mock/real-integration boundary); "
         "Agent Runtime AG-UI conversations never become business REST endpoints. "
         "navigation actions route to the declared page, and local/external/sequence "
@@ -408,54 +421,15 @@ def _task_agent_ui_contracts(tasks: list[dict[str, Any]]) -> list[dict[str, Any]
         source_refs = task.get("source_refs")
         source_refs = source_refs if isinstance(source_refs, dict) else {}
         contract = source_refs.get("agent_ui")
-        if isinstance(contract, dict) and contract.get("mode") == "runtime":
+        if isinstance(contract, dict) and contract:
+            if contract.get('mode') != 'shared_host':
+                raise ValueError('Agent 页面需要当前共享构建合同，不能使用旧固定组件。')
             result.append({"taskId": str(task.get("id") or ""), **contract})
     return result
 
 def _agent_ui_runtime_instruction(contracts: list[dict[str, Any]]) -> str:
-    """要求页面组合固定组件及官方 Runtime 适配器，禁止生成另一套会话传输。"""
+    """页面只使用共享 Host 的公开占位和显隐 API，不重建会话。"""
 
     if not contracts:
         return ""
-    skill_content = read_builtin_skill_md(AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME)
-    if not skill_content:
-        raise RuntimeError("Agent UI Surface 内置 Skill 缺失，不能执行 Agent 页面 Build。")
-    return (
-        "## Agent UI Runtime composition boundary\n"
-        "The platform has loaded the required built-in Skill below as authoritative input; "
-        "follow it together with the fixed source reads.\n"
-        "<agent-ui-surface-template-skill>\n"
-        f"{skill_content}\n"
-        "</agent-ui-surface-template-skill>\n"
-        "Apply this section only to the task IDs listed in AgentUiRuntimeContracts. Before editing "
-        "their page, read the exact fixed componentPath, "
-        "`frontend/src/components/AgentConversation/AgentChatCore.tsx`, "
-        "`frontend/src/typings/agentConversation.ts`, and runtimeAdapterPath. These files are "
-        "platform-injected read-only assets and are not task output paths. In the page entry, "
-        "import the exact component from `@/components/AgentConversation`, import "
-        "`AgentUiTemplateConfig` from `@/typings/agentConversation`, declare the exact object "
-        "literal as `const AGENT_UI_CONFIG: AgentUiTemplateConfig = ...`, and pass it with "
-        "`config={AGENT_UI_CONFIG}`. Preserve config.runtime exactly; it binds the official "
-        "If the page contract contains companions, render EVERY companion with its own fixed component "
-        "and exact config, named AGENT_UI_CONFIG_1, AGENT_UI_CONFIG_2 in companion order. These are independent "
-        "Agent surfaces; never discard the business page or the primary surface. "
-        "For a product sequence containing ordinary business steps and Agent steps, run ordinary steps through "
-        "the declared generated business client, then pass actionRequest={request} to the fixed Agent component. "
-        "Request has a new requestId, the product actionId, the Agent stepId and optional message filled from "
-        "the declared step inputs. Handle onActionResult(requestId,result), clear the consumed request, and "
-        "advance later steps ONLY when result.status==='completed'. Waiting, cancellation, failure and unknown "
-        "results stop the sequence without automatically resubmitting. Never invoke mixed-sequence Agent steps "
-        "from mount effects or reconstruct the adapter. Declared action confirmation is handled by the fixed UI. "
-        "AG-UI adapter to the current same-origin /agents/{agentId}/run endpoint. The default "
-        "adapter is the only allowed Runtime chain: do not pass the `adapter` prop, JSX spreads, a wrapper, or a custom "
-        "AgentConversationAdapter. Do not create or copy AgentChatCore, chat bubbles, state "
-        "machines, mock records, or transport code. Remove all `data-preview-only` review "
-        "controls from production page composition. For the listed task, do not call fetch, "
-        "axios, XMLHttpRequest, WebSocket, EventSource, sendBeacon, a Python sidecar, or the "
-        "Java Gateway Endpoint. The fixed adapter performs real Runtime requests; do not reimplement "
-        "it in the page. All separately declared ordinary business APIs remain governed by their "
-        "existing page/API contracts. For floating_panel, preserve and "
-        "render the ordinary business page body and compose AgentFloatingPanel alongside it.\n"
-        "AgentUiRuntimeContracts:\n"
-        f"{json.dumps(contracts, ensure_ascii=False, indent=2)}\n\n"
-    )
+    return shared_host_instruction(contracts)

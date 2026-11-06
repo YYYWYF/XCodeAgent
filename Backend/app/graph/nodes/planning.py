@@ -208,6 +208,10 @@ def _technical_planning_requirement_spec(
         "skipped",
     }:
         raise ValueError("TechnicalPlan 必须基于已确认或已跳过的 UI 设计阶段生成。")
+    from app.services.agent_ui_design_confirmation import require_confirmed_agent_designs
+    from app.services.ui_design_interactions import require_ui_interaction_effects
+    require_ui_interaction_effects(product_plan, ui_designs)
+    require_confirmed_agent_designs(state, ui_designs)
     technical_input = {
         key: value
         for key, value in requirement_spec.items()

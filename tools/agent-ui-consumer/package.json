@@ -1,0 +1,35 @@
+{
+  "name": "xcodeagent-agent-ui-consumer",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "initialize": "node ../agent-ui/prepare-consumer.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "lint": "eslint src/App.tsx src/main.tsx vite.config.ts",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@za38.03/agent-ui-core": "file:../../vendor/agent-ui/za38.03-agent-ui-core-0.0.1.tgz",
+    "@za38.03/agent-ui-renderer": "file:../../vendor/agent-ui/za38.03-agent-ui-renderer-0.0.1.tgz",
+    "@za38.03/agent-ui-runtime": "file:../../vendor/agent-ui/za38.03-agent-ui-runtime-0.0.1.tgz",
+    "@za38.03/agent-ui-plugins": "file:../../vendor/agent-ui/za38.03-agent-ui-plugins-0.0.1.tgz",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "lucide-react": "1.41.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "tailwindcss": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.5",
+    "eslint": "9.31.0",
+    "typescript-eslint": "8.57.0",
+    "jsdom": "26.1.0"
+  }
+}

@@ -76,12 +76,15 @@ def runtime_health(url: str, launch_id: str, *, database_required: bool, health_
     return True, f"Runtime 健康、业务路由、AG-UI、{session_label}及数据库检查通过。"
 
 
-def wait_runtime_proxy_ready(url: str, launch_id: str, *, database_required: bool,
+def wait_runtime_proxy_ready(url: str, launch_id: str, *, workspace: Path, database_required: bool,
                              frontend_pid: int, runtime_pid: int, expected_agent_ids: list[str],
                              timeout_seconds: float = 20) -> tuple[bool, str]:
-    """等待本轮前端代理就绪；只做有界健康探测，进程退出或取消立即停止，不重启服务。"""
+    """核验代理的当前应用、本轮启动和匿名会话；只读健康检查不代表真实对话通过。"""
     from app.services.run_workers import current_run_id
 
+    root = workspace.resolve()
+    # 与标准预览启动环境使用同一身份，拒绝代理到其他工程或其他 Profile 的服务。
+    namespace = 'preview:' + hashlib.sha256(str(root).encode()).hexdigest()[:24]
     deadline = time.monotonic() + timeout_seconds
     message = "前端代理尚未就绪。"
     while time.monotonic() < deadline:
@@ -92,7 +95,8 @@ def wait_runtime_proxy_ready(url: str, launch_id: str, *, database_required: boo
         if not pid_is_running(runtime_pid):
             return False, "Runtime 进程已退出，请查看 Runtime 启动日志。"
         ready, message = runtime_health(url, launch_id, database_required=database_required,
-                                        health_path="/__runtime/health", expected_agent_ids=expected_agent_ids)
+                                        health_path="/__runtime/health", expected_agent_ids=expected_agent_ids,
+                                        expected_application=root / 'agent-runtime', expected_namespace=namespace)
         if ready:
             return True, message
         time.sleep(0.3)

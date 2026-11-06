@@ -1,0 +1,33 @@
+// 设计说明使用工作台现有主题变量，保持弹窗、正文和关闭按钮的明暗对比度。
+.@{class-prefix}-ui-design-document-modal {
+  .ant-modal-content,
+  .ant-modal-header {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+  }
+
+  .ant-modal-header {
+    border-bottom-color: var(--wb-border);
+  }
+
+  .ant-modal-title,
+  .ant-modal-close {
+    color: var(--wb-text);
+  }
+
+  .ant-modal-close:hover,
+  .ant-modal-close:focus-visible {
+    color: var(--wb-accent);
+    background: var(--wb-surface-hover);
+  }
+
+  .ant-modal-body {
+    max-height: 72vh;
+    overflow: auto;
+  }
+
+  .ant-typography-secondary {
+    color: var(--wb-text-secondary);
+    overflow-wrap: anywhere;
+  }
+}

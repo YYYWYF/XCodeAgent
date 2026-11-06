@@ -19,7 +19,8 @@ from app.agents.database.generator import generate_database_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
 from app.agents.agent_runtime.generator import generate_python_business_with_deep_agent
-from app.agents.agent_runtime.modules import generate_agent_modules_with_deep_agent
+from app.agents.agent_runtime.modules import agent_module_packet, generate_agent_modules_with_deep_agent
+from app.services.agent_runtime_template_policy import load_agent_runtime_template_policy
 from app.services.runtime_business_contract import serves_python_business
 from app.domain.models import (
     BuildTaskExecutionContractError,
@@ -871,13 +872,42 @@ def _plan_build_repair_with_repair_planner(
     state: ProjectState,
     repair_input: dict[str, Any],
 ) -> dict[str, Any]:
-    """让修复规划 Agent 继承当前工作流的技能集合。"""
+    """让修复规划继承技能及当前正式模块输入，不以失败回执代替业务配置。"""
+
+    task = repair_input.get("original_task") or {}
+    if task.get("owner") == "agent":
+        workspace = workspace_from_state(state)
+        if not workspace:
+            raise ValueError("Agent 模块修复规划缺少真实工作区。")
+        policy = load_agent_runtime_template_policy(Path(workspace) / "agent-runtime")
+        repair_input["agent_module_packet"] = agent_module_packet(state.get("project_plan") or {}, task, policy)
 
     return plan_build_failure_repair_with_repair_planner_agent(
         repair_input=repair_input,
         workspace=workspace_from_state(state),
         selected_skill_names=state.get("selected_skill_names"),
     )
+
+
+def _prepare_scheduler_repair(
+    state: ProjectState, slice_tasks: list[dict[str, Any]],
+) -> tuple[ProjectState, dict[str, Any], str]:
+    """共用首次失败和显式重试的修复编译，保留确认门、授权与深度上限。"""
+
+    plan = create_build_failure_repair_plan(
+        failed_results=[item for item in _results_for_tasks(state.get("build_results", []), slice_tasks)
+                        if item.get("status") == "failed"],
+        tasks=state["tasks"],
+        existing_repair_tasks=[task for task in state["tasks"] if task.get("kind") == "repair"],
+        workspace_snapshot=state.get("workspace_snapshot"),
+        repair_planner=lambda repair_input: _plan_build_repair_with_repair_planner(state, repair_input),
+    )
+    path = write_repair_task_plan_json(state, plan)
+    updated = {**state, "repair_task_plan": plan, "repair_task_plan_path": path}
+    if plan.get("decision") == "repair" and plan.get("tasks"):
+        next_plan = append_repair_tasks_to_build_plan(build_task_plan=state["build_task_plan"], repair_task_plan=plan)
+        updated.update(build_task_plan=next_plan, tasks=tasks_from_build_task_plan(next_plan), repair_tasks=plan["tasks"])
+    return updated, plan, path
 
 
 def _apply_scheduler_results(
@@ -1912,6 +1942,15 @@ def run_build_scheduler(
             task.get("kind") == "repair" for task in ready_tasks
         )
         if not ready_tasks:
+            # 恢复入口可能已经没有就绪任务；显式重试仍须重新评估原授权内的修复。
+            # 待确认请求在循环前处理，普通刷新和已执行过修复的轮次不走此入口。
+            if retry_requested and not repair_dispatched and summarize_build_runtime(
+                slice_tasks, _results_for_tasks(current_state.get("build_results", []), slice_tasks),
+            )["status"] == "needs_repair":
+                current_state, repair_task_plan, repair_task_plan_path = _prepare_scheduler_repair(current_state, slice_tasks)
+                build_events.append("scheduler:retry:repair_reassessed")
+                if repair_task_plan.get("decision") == "repair" and repair_task_plan.get("tasks"):
+                    continue
             build_events.append("scheduler:blocked")
             break
 
@@ -2052,60 +2091,16 @@ def run_build_scheduler(
             _results_for_tasks(current_state.get("build_results", []), slice_tasks),
         )
         if summary["status"] == "needs_repair":
-            repair_task_plan = create_build_failure_repair_plan(
-                failed_results=[
-                    result
-                    for result in _results_for_tasks(
-                        current_state.get("build_results", []),
-                        slice_tasks,
-                    )
-                    if result.get("status") == "failed"
-                ],
-                tasks=current_state["tasks"],
-                existing_repair_tasks=[
-                    task for task in current_state["tasks"] if task.get("kind") == "repair"
-                ],
-                workspace_snapshot=current_state.get("workspace_snapshot"),
-                repair_planner=lambda repair_input: _plan_build_repair_with_repair_planner(
-                    current_state,
-                    repair_input,
-                ),
-            )
-            repair_task_plan_path = write_repair_task_plan_json(
-                current_state,
-                repair_task_plan,
-            )
+            current_state, repair_task_plan, repair_task_plan_path = _prepare_scheduler_repair(current_state, slice_tasks)
             if repair_task_plan.get("decision") == "requires_user_confirmation":
-                current_state = {
-                    **current_state,
-                    "repair_task_plan": repair_task_plan,
-                    "repair_task_plan_path": repair_task_plan_path,
-                }
                 build_events.append("scheduler:repair_requires_confirmation")
                 break
             if repair_task_plan.get("decision") == "terminal_failure":
-                current_state = {
-                    **current_state,
-                    "repair_task_plan": repair_task_plan,
-                    "repair_task_plan_path": repair_task_plan_path,
-                }
                 build_events.append("scheduler:repair_terminal_failure")
                 break
             if not repair_task_plan.get("tasks"):
                 build_events.append("scheduler:repair_unavailable")
                 break
-            next_build_task_plan = append_repair_tasks_to_build_plan(
-                build_task_plan=current_state["build_task_plan"],
-                repair_task_plan=repair_task_plan,
-            )
-            current_state = {
-                **current_state,
-                "build_task_plan": next_build_task_plan,
-                "tasks": tasks_from_build_task_plan(next_build_task_plan),
-                "repair_task_plan": repair_task_plan,
-                "repair_task_plan_path": repair_task_plan_path,
-                "repair_tasks": repair_task_plan["tasks"],
-            }
             build_events.append(f"scheduler:repair_planned:{len(repair_task_plan['tasks'])}")
             _emit_build_progress(
                 progress_writer,
@@ -2259,8 +2254,14 @@ def run_build_scheduler(
 def build(state: ProjectState) -> dict:
     """运行构建调度节点，并在 LangGraph 流中报告逐任务进度。"""
 
-    from app.services.frontend_agent_ui_scaffold import inject_frontend_agent_ui_scaffold
+    from app.services.frontend_agent_ui_scaffold import verify_frontend_agent_ui_build
 
-    if any((task.get("source_refs") or {}).get("agent_ui") for task in state.get("tasks", [])):
-        inject_frontend_agent_ui_scaffold(workspace_from_state(state))
+    execution_slice = resolve_execution_slice(
+        build_task_plan=state.get("build_task_plan", {}),
+        tasks=state.get("tasks", []),
+        build_execution_scope=state.get("build_execution_scope"),
+    )
+    verify_frontend_agent_ui_build(
+        workspace_from_state(state), execution_slice["tasks"], unit_ids=execution_slice["unit_ids"],
+    )
     return run_build_scheduler(state)

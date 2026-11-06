@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.workflow_recovery_boundary import failed_node_reentry_target
+from app.protocols.agent_ui_preparation import AgentUiPreparationAction
 
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,14 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
     build_task_plan_confirmation = _build_task_plan_confirmation(
         clarification_answers
     )
+    agent_ui_preparation = (
+        AgentUiPreparationAction.model_validate(
+            clarification_answers["agent_ui_preparation"]
+        ).model_dump()
+        if isinstance(clarification_answers, dict)
+        and "agent_ui_preparation" in clarification_answers
+        else {}
+    )
     test_phase_confirmation = _test_phase_confirmation_submission(
         clarification_answers
     )
@@ -227,6 +236,11 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
         or _resume_from_state(resume_state, workflow_scope=workflow_scope),
         workflow_scope=workflow_scope,
     )
+    if agent_ui_preparation and (
+        explicit_resume_from or workflow_action or build_task_plan_confirmation
+        or workflow_scope in APPLICATION_PLANNING_SCOPES
+    ):
+        raise ValueError("Agent UI 准备只能在原页面开发对话提交，不能指定节点或混合其他动作。")
     if workflow_action in {
         "continue_revision_build",
         "start_revision",
@@ -293,6 +307,9 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             == "unit_test"
             else "small_task_repair"
         )
+    elif agent_ui_preparation:
+        # 准备动作只回到固定服务端入口，不能用客户端快照跳到 Build。
+        resume_from = "prepare_build_tasks"
     elif build_task_plan_confirmation and workflow_scope != "application_planning":
         # DAG 确认必须回到同一 prepare 节点，不能被通用开发入口回退规则截走。
         resume_from = "prepare_build_tasks"
@@ -745,6 +762,8 @@ def workflow_run_inputs(payload: dict[str, Any]) -> dict[str, Any]:
             else {}
         ),
         # 阶段确认是本次提交的一次性动作；空值也须覆盖 checkpoint 中的旧确认。
+        "agent_ui_preparation_action": agent_ui_preparation,
+        **({"build_task_plan_confirmation": {}} if agent_ui_preparation else {}),
         "test_phase_confirmation": test_phase_confirmation,
         **(
             {"review_phase_confirmation": review_phase_confirmation}
@@ -2425,6 +2444,8 @@ def _ui_design_action(value: Any) -> dict[str, Any] | None:
         "skip",
         "multi",
         "refresh",
+        "preview",
+        "cancel",
     }:
         return None
 

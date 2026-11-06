@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import unittest
+from typing import Any, Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -77,6 +78,22 @@ class GeneratePageEntryTests(unittest.TestCase):
 
         self.assertEqual(entry["status"], "confirmed")
         self.assertEqual(entry["code"], FAKE_CODE)
+
+    def test_agent_page_refuses_old_template_before_touching_source(self) -> None:
+        """新 Agent 页面不调用旧模型、不暂存旧稿、不把旧稿当作本轮成功。"""
+        page = {**_spec_page("chat"), "agent_surfaces": [{
+            "agentId": "assistant", "type": "standalone_page", "actionIds": ["chat-action"],
+        }]}
+        source = Path(self.project_dir) / "pages/Chat/index.tsx"
+        source.parent.mkdir(parents=True)
+        source.write_text("user design", encoding="utf-8")
+        with patch("app.services.ui_design_generation_pool.generate_page_react_code") as generate:
+            entry = generate_page_entry(_task(self.workspace, self.project_dir, page_id="chat", spec_page=page))
+        self.assertEqual(entry["status"], "generation_failed")
+        self.assertIn("多文件", entry["error"])
+        self.assertEqual(source.read_text(), "user design")
+        self.assertFalse(source.with_name(".index.tsx.stashed").exists())
+        generate.assert_not_called()
 
     def test_regenerate_failure_returns_generation_failed(self) -> None:
         """regenerate 抛异常应汇总为 generation_failed 并带 error。"""
@@ -169,7 +186,9 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page: dict[str, Any], page_key: str, project_dir: str,
+                          *, should_cancel: Callable[[], bool] | None = None) -> str:
+            """沿当前生成器签名模拟阻塞调用，由池检查返回后的取消边界。"""
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
@@ -209,7 +228,9 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page: dict[str, Any], page_key: str, project_dir: str,
+                          *, should_cancel: Callable[[], bool] | None = None) -> str:
+            """沿当前生成器签名模拟阻塞调用，由池检查返回后的取消边界。"""
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
@@ -272,7 +293,9 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page: dict[str, Any], page_key: str, project_dir: str,
+                          *, should_cancel: Callable[[], bool] | None = None) -> str:
+            """沿当前生成器签名模拟阻塞调用，由池检查返回后的取消边界。"""
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
@@ -311,7 +334,9 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         release = threading.Event()
         generated: list[str] = []
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page: dict[str, Any], page_key: str, project_dir: str,
+                          *, should_cancel: Callable[[], bool] | None = None) -> str:
+            """沿当前生成器签名模拟阻塞调用，由池检查返回后的取消边界。"""
             generated.append(page_key)
             started.set()
             release.wait(timeout=10)
@@ -384,7 +409,9 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page: dict[str, Any], page_key: str, project_dir: str,
+                          *, should_cancel: Callable[[], bool] | None = None) -> str:
+            """沿当前生成器签名模拟阻塞调用，由池检查返回后的取消边界。"""
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mergeUiDesignPageSources } from '../src/renderer/src/hooks/useUiDesignPagesWithCode'
+import type { DesignPreviewPage } from '../src/renderer/src/components/DesignRenderer/projectPreview'
 
 /** 重新打开工作区时快照里的页面没有 code，必须从磁盘补回来，否则预览区一片空白。 */
 test('缺 code 的页面从磁盘补回来', () => {
@@ -70,4 +71,18 @@ test('其余字段原样保留', () => {
 
   assert.equal(merged[0].name, '欢迎页')
   assert.equal(merged[0].template_id, 'commonTable')
+})
+
+/** 工程完成后恢复磁盘 ready 状态和资产身份，但不能读旧单文件或伪造 launch。 */
+test('Agent 工程合并当前资产，丢弃上一轮代码和 URL', () => {
+  const asset = { kind: 'agent-ui-project' as const, revision: 'new', draft: 'draft',
+    sourceDigest: 'source', buildDigest: 'build', pageIds: ['chat'] }
+  const source: DesignPreviewPage[] = [{ pageId: 'chat', status: 'generating', code: '// old',
+    design_asset: { ...asset, revision: 'old' } }]
+  const merged = mergeUiDesignPageSources(source, { chat: '// stale disk code' }, { chat: 'ready' },
+    { chat: { pageId: 'chat', status: 'ready', design_asset: asset } })
+  assert.equal(merged[0].status, 'ready')
+  assert.equal(merged[0].code, undefined)
+  assert.equal(merged[0].project_preview, undefined)
+  assert.equal(merged[0].design_asset?.revision, 'new')
 })

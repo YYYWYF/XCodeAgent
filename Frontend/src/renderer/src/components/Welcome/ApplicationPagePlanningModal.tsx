@@ -197,12 +197,13 @@ export default function ApplicationPagePlanningModal({
                     title={generatingTemplate ? '正在准备应用模板' : progressCopy.title}
                   />
                   {streamingUiPhase && workflow ? (
-                    <UiDesignStreamingPreview workflow={workflow} total={streamingUiTotal} />
+                    <UiDesignStreamingPreview workflow={workflow} total={streamingUiTotal} workspaceRoot={application.workspaceRoot} />
                   ) : null}
                 </div>
               ) : null}
               {!showingProgress && workflow && hasClarification ? (
                 <ApplicationPlanningQuestionPanel
+                  workspaceRoot={application.workspaceRoot}
                   disabled={running}
                   onSaveRequirementSpec={handleSaveRequirementSpec}
                   onReturnHome={onReturnHome}

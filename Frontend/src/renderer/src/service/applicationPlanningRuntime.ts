@@ -26,6 +26,7 @@ import {
   type WorkflowRevisionContinuationHandoff
 } from './applicationPagePlanning'
 import { isAuthenticationFailure } from './authentication'
+import { ApplicationPlanningUiActionQueue } from './applicationPlanningUiActionQueue'
 import { endApplicationPlanningExecution, stopApplicationPlanningExecution } from './applicationLifecycle'
 import { planningWorkflowCanPublishDuringRun, planningWorkflowPhase } from './applicationPlanningWorkflowState'
 import {
@@ -106,6 +107,7 @@ export class ApplicationPlanningRuntime {
   private runToken = 0
   private planningEndAcknowledgement?: { sourceToken: number; result: Promise<boolean> }
   private runActive = false
+  private readonly uiActionQueue = new ApplicationPlanningUiActionQueue()
   private reconcilePromise?: Promise<PlanningReconcileOutcome>
   private streamingContent = ''
   private technicalMessageAbort?: AbortController
@@ -347,6 +349,24 @@ export class ApplicationPlanningRuntime {
     designChangeRequest?: string,
     technicalPlanningConversation = false
   ): Promise<void> {
+    const submit = (): Promise<void> => this.submitClarificationNow(workflow, answers,
+      editedRequirementSpec, requirementSpecFeedback, designChangeRequest, technicalPlanningConversation)
+    if (answers.__applicationPlanningAction === 'ui_action') {
+      await this.uiActionQueue.enqueue(submit)
+    } else {
+      await submit()
+    }
+  }
+
+  /** 在实际发送时读取当前确认门，UI 动作仅在前一个传输结束后进入此方法。 */
+  private async submitClarificationNow(
+    workflow: WorkflowRunPayload,
+    answers: WorkflowClarificationAnswers,
+    editedRequirementSpec?: Record<string, unknown>,
+    requirementSpecFeedback?: string,
+    designChangeRequest?: string,
+    technicalPlanningConversation = false
+  ): Promise<void> {
     if (technicalPlanningConversation && designChangeRequest?.trim()) {
       await this.submitTechnicalPlanningMessage(designChangeRequest.trim())
       return
@@ -388,7 +408,7 @@ export class ApplicationPlanningRuntime {
           await this.handlePlanningResult(token, merged)
         },
         {
-          stopPrevious: true,
+          stopPrevious: answers.__applicationPlanningAction !== 'ui_action',
           onToken: (token) => {
             submitToken = token
           }
@@ -438,6 +458,7 @@ export class ApplicationPlanningRuntime {
   /** 停止生成只中断执行，保留原会话、修订和 checkpoint，继续动作由后端签发。 */
   async stop(): Promise<void> {
     const current = this.requireCurrentState()
+    this.uiActionQueue.cancelPending()
     this.technicalMessageAbort?.abort()
     let acknowledge!: (stopped: boolean) => void
     this.planningEndAcknowledgement = {
@@ -468,6 +489,7 @@ export class ApplicationPlanningRuntime {
   /** 显式结束本轮修订时才释放修订身份，停止生成不调用此入口。 */
   async end(): Promise<void> {
     const current = this.requireCurrentState()
+    this.uiActionQueue.cancelPending()
     this.technicalMessageAbort?.abort()
     if (current.lifecycle.activeFormalRevision) {
       // 旧请求可能先于 End 回执断开；等服务端确认后再决定是否向来源会话报错。
@@ -783,6 +805,7 @@ export class ApplicationPlanningRuntime {
   /** 使晚到帧立即失效并释放会话与正文订阅，停止失败不会写回已移除的应用。 */
   dispose(): void {
     if (this.disposed) return
+    this.uiActionQueue.cancelPending()
     this.technicalMessageAbort?.abort()
     this.disposed = true
     this.runToken += 1
@@ -922,6 +945,7 @@ export class ApplicationPlanningRuntime {
     })
     this.setStreamingContent('')
     let previousRunStopFailed = false
+    const settleTransport = this.uiActionQueue.beginTransport()
     try {
       if (previousRunActive) {
         try {
@@ -934,6 +958,7 @@ export class ApplicationPlanningRuntime {
       if (!this.isCurrentRun(token)) throw new Error('当前 Planning Runtime 已失效。')
       return await operation(token)
     } finally {
+      settleTransport()
       if (this.isCurrentRun(token)) {
         // 旧 run 停止未获确认时保留活动标记，下一次操作必须先重新 stop。
         this.runActive = previousRunStopFailed

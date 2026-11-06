@@ -22,14 +22,7 @@ from app.agents.messages import _coerce_content_text, strip_thinking_fragments
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.builtin_skills import (
-    AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME,
     read_builtin_skill_md,
-)
-from app.services.ui_design_agent_template import (
-    AGENT_UI_TEMPLATE_MODULE,
-    AGENT_UI_TEMPLATE_VERSION,
-    build_agent_ui_template_source_contract,
-    component_for_surface,
 )
 from app.services.ui_design_manifest import validate_ui_design_code
 from app.workspace.spec_documents import REPOSITORY_ROOT
@@ -133,20 +126,16 @@ def _ui_design_skill_document() -> str:
     return content if content else _FALLBACK_SKILL_NOTE
 
 
-def _agent_ui_skill_document(page: dict[str, Any]) -> str:
-    """仅为含 Agent Surface 的页面读取并注入专用固定模板技能。"""
-
-    surfaces = page.get("agent_surfaces")
-    if not isinstance(surfaces, list) or not any(isinstance(item, dict) for item in surfaces):
-        return ""
-    content = read_builtin_skill_md(AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME)
-    if not content:
-        raise ValueError("包含 Agent Surface 的页面缺少 agent-ui-surface-template 技能。")
-    return content
+def require_single_file_design_page(page: dict[str, Any]) -> None:
+    """阻止新 Agent 设计继续生成旧固定组件；普通页继续原单文件链路。"""
+    if page.get("agent_surfaces"):
+        raise ValueError("Agent UI 页面必须使用隔离多文件设计工程；请从当前工程设计入口生成并审阅预览。")
 
 
 def _page_brief(page: dict[str, Any]) -> str:
     """把 ProductPlan 单页语义组织成 prompt 友好的设计输入。"""
+
+    require_single_file_design_page(page)
 
     page_id = str(page.get("pageId") or page.get("id") or "").strip()
     name = str(page.get("name") or "").strip()
@@ -223,17 +212,6 @@ def _page_brief(page: dict[str, Any]) -> str:
                 "`<div role=\"button\">` carrying every literal marker. Do not rely solely "
                 "on antd Table `onRow`, because returned row props are not a JSX opening tag.)"
             )
-    agent_surfaces = page.get("agent_surfaces")
-    if isinstance(agent_surfaces, list) and agent_surfaces:
-        lines.append(
-            "- required agent surfaces: "
-            + json.dumps(agent_surfaces, ensure_ascii=False)
-        )
-        lines.append(
-            "- REQUIRED EXACT fixed Agent UI source contract (copy the import, component, "
-            "and static configJson exactly; do not rewrite its internal UI):\n"
-            + build_agent_ui_template_source_contract(page)
-        )
     state_requirements = page.get("state_requirements")
     if isinstance(state_requirements, dict) and state_requirements:
         lines.append(
@@ -254,7 +232,7 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
     """组合页面信息与技能全文，约束模型只返回单个页面的 .tsx 代码。"""
 
     skill_document = _ui_design_skill_document()
-    agent_ui_skill_document = _agent_ui_skill_document(page)
+    require_single_file_design_page(page)
     return (
         "You are a UI design code generation model for an app-generation workflow.\n"
         "Generate ONE self-contained React + antd5 + @ant-design/pro-components "
@@ -293,13 +271,6 @@ def _build_ui_design_prompt(page: dict[str, Any], page_key: str) -> str:
         "--- INJECTED antd-ui-design SKILL.md (content inlined) ---\n"
         + skill_document
         + "\n--- END INJECTED SKILL.md ---\n"
-        + (
-            "\n--- INJECTED agent-ui-surface-template SKILL.md ---\n"
-            + agent_ui_skill_document
-            + "\n--- END INJECTED AGENT UI SKILL.md ---\n"
-            if agent_ui_skill_document
-            else ""
-        )
     )
 
 
@@ -667,7 +638,6 @@ _ALLOWED_IMPORT_SOURCES = {
     "@ant-design/pro-components",
     "@ant-design/icons",
     "@ant-design/cssinjs",
-    AGENT_UI_TEMPLATE_MODULE,
     # dayjs 是 antd5 的传递依赖，页面模板（commonTable/tabsTable）用它做日期格式化。
     # 选模板作设计稿时模板代码原样落盘，校验需放行 dayjs，否则被当作禁用依赖拦截。
     "dayjs",
@@ -951,15 +921,12 @@ def _build_repair_prompt(
         f"{error_block}\n"
         "--- END ERRORS ---\n\n"
         "Mandatory repair self-check before returning:\n"
-        "- If the page declares an Agent Surface, preserve exactly one fixed Agent UI component "
-        "with the exact import, component name, and static configJson from PAGE TO DESIGN. Do not "
-        "recreate any Agent messages, controls, responsive behavior, or styles locally.\n"
+        "- This single-file path is for business pages only; do not add Agent UI components.\n"
         "- verify every REQUIRED marker listed in PAGE TO DESIGN appears on the JSX node that "
         "implements that action or displays that information item. Do not rename, omit, or "
         "duplicate stable ids.\n"
         "- Audit every interactive JSX opening tag in the complete file, including controls "
-        "nested in Drawer, Modal, and Table column render functions. Do not inspect controls "
-        "inside the imported fixed Agent UI component. "
+        "nested in Drawer, Modal, and Table column render functions. "
         "Classify every instance using the mandatory ownership rule above. A validation error "
         "naming only a component type such as `Button` can represent multiple instances, so "
         "inspect and fix every occurrence rather than stopping after the first match.\n"
@@ -1064,6 +1031,7 @@ def generate_adjusted_page_react_code(
     模板适配传入 allow_missing=False，必须覆盖当前 ProductPlan 的全部操作与信息项。
     """
 
+    require_single_file_design_page(page)
     settings = Settings.from_env()
     model = _create_ui_design_model(settings)
     page_id = str(page.get("pageId") or page.get("id") or "")
@@ -1201,6 +1169,7 @@ def generate_page_react_code(
     非空与未定义引用检查，仍能拦截 LLM 高频错误）。
     """
 
+    require_single_file_design_page(page)
     settings = Settings.from_env()
     model = _create_ui_design_model(settings)
     page_id = str(page.get("pageId") or page.get("id") or "")

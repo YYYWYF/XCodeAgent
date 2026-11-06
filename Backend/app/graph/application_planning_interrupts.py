@@ -216,6 +216,29 @@ def prepare_application_planning_review_resume(
     validate_application_planning_review_action(state, effective_node_name, submission)
     runtime_update = _application_planning_runtime_update(config)
 
+    if effective_node_name == "ui_confirmation" and submission.action == "confirm":
+        from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path, write_ui_designs_json
+        from app.workspace.ui_design_documents import prepare_ui_markdown_revision
+        from app.services.ui_design_manifest import persisted_ui_manifest
+        from app.services.ui_design_generation_pool import get_ui_design_generation_pool
+        from app.workspace.spec_documents import workspace_root
+
+        pool = get_ui_design_generation_pool()
+        workspace = str(workspace_root(state))
+        if pool.agent_project_lock(workspace).locked() or pool.pending_page_ids(workspace):
+            raise ValueError("当前设计仍在生成或调整，请等待完成并审阅新版本后再确认。")
+        current = load_ui_designs_json(ui_designs_json_path(state))
+        if persisted_ui_manifest(current) != persisted_ui_manifest(state.get("ui_designs") or {}):
+            # 后台生成只更新磁盘；旧卡片的确认降为显式刷新，重新签发审阅门，绝不批准新稿。
+            submission = submission.model_copy(update={"action": "ui_action", "ui_action": {"action": "refresh"}})
+        else:
+            synchronized, markdown_request = prepare_ui_markdown_revision(state, current)
+            if markdown_request:
+                # 修改 Markdown 是修订请求，不能批准尚未落实到原型的文字或覆盖隐藏资产身份。
+                write_ui_designs_json(state, synchronized)
+                runtime_update["ui_designs"] = synchronized
+                submission = submission.model_copy(update={"action": "design_change", "request": markdown_request})
+
     if submission.action == "design_change" or (
         submission.action == "revise" and effective_node_name == "requirement_document"
     ):

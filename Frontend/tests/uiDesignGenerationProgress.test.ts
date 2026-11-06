@@ -34,6 +34,16 @@ test('该页收尾后不再算作生成中', () => {
   assert.equal(uiDesignGenerationProgress(events)?.message, '设计稿已调整：概览页（第 1/2 页完成）')
 })
 
+test('Creator 等待期间显示最新阶段和耗时，心跳不算完成页面', () => {
+  const result = uiDesignGenerationProgress([
+    progress({ ready: 0, total: 1, pageId: 'chat' }, 'Creator 正在执行设计修改（已用时 5 秒）'),
+    progress({ ready: 0, total: 1, pageId: 'chat' }, 'Creator 正在执行设计修改（已用时 10 秒）'),
+    progress({ ready: 0, total: 1, pageId: 'chat' }, '正在启动设计预览（已用时 12 秒）')
+  ])
+  assert.equal(result?.pageId, 'chat')
+  assert.equal(result?.message, '正在启动设计预览（已用时 12 秒）')
+})
+
 test('逐页推进时跟着切到下一页', () => {
   const events: WorkflowEvent[] = [
     progress({ ready: 0, total: 2, pageId: 'overview' }, '正在调整设计稿（第 1/2 页）：概览页'),

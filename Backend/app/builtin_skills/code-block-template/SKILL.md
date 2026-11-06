@@ -56,6 +56,25 @@ import { Button, Col, Row, Space, Spin, FormInstance, message, Upload, Checkbox,
 
 判断依据：名称以 `Pro` 开头或为 `ModalForm`/`DrawerForm`/`StepsForm` → `@ant-design/pro-components`；其余 → `antd`。
 
+### Installed Icon Type Compatibility
+
+生成页面时沿用目标已经安装的图标包和 React 类型，不通过升级依赖、`any`、
+`@ts-ignore` 或关闭类型检查来绕过错误。当前模板的 `@ant-design/icons@5.0.1`
+声明保留了 React 类型已移除的 `onPointerEnterCapture` / `onPointerLeaveCapture`；
+在该组合下使用页面内共享的兼容属性并通过 JSX spread 传入每个图标：
+
+```tsx
+const iconCompatibilityProps = {
+  onPointerEnterCapture: undefined,
+  onPointerLeaveCapture: undefined,
+};
+
+<ArrowLeftOutlined {...iconCompatibilityProps} />
+```
+
+只在目标实际安装的声明需要时使用，不把它作为所有图标库或版本的通用要求。
+页面任务的检查仍由外层集成阶段运行，不自行安装或改写类型依赖。
+
 ### xlsx Import
 
 涉及 Excel 导入导出的页面，统一：
@@ -87,6 +106,7 @@ import * as XLSX from 'xlsx';
 - 每条信息量大、图文混排、卡片式 → ProList
 
 ### 何时用 ProCard
+- 独立智能体会话页例外：共享会话本身就是页面主体，不要再套 ProCard、Card、PageContainer、居中限宽卡片或重复页面标题；遵循 agent-ui-surface-template 的独立页布局约束。普通业务页和浮窗宿主页不受此例外影响。
 - 表单/信息按模块分组（最常用）
 - 多标签页容器（`tabs`）
 - 统计/概览卡片（Dashboard KPI）

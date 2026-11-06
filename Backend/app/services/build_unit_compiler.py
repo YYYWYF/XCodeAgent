@@ -383,6 +383,8 @@ def _unit_source_refs(
                 "template_policy_sha256": _dict_value(build_context.get("runtime_agent_template_policy")).get("policySha256")}
     if unit_id.startswith("page:"):
         agent_ui = _dict_value(build_context.get("agent_ui_by_page")).get(unit_id.removeprefix("page:"))
+        # 没有当前投影时不能沿用 Unit 中的固定组件或过期来源。
+        existing.pop('agent_ui', None)
         descriptions = _dict_items(build_context.get("business_descriptions"))
         return {
             **existing,

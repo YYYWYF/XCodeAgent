@@ -1,5 +1,7 @@
 import type { WorkspaceCodeChangeSet } from './codeChanges'
 import type { ToolApproval } from '../service/workspaceTools'
+import type { AgentUiDependencyPlan } from '../service/agentUiDependencies'
+import type { AgentUiTransferPlan } from '../service/agentUiDesignTransfer'
 import type {
   RecoveryActionPlan,
   RecoveryFailureDiagnostic
@@ -872,6 +874,8 @@ export type ApplicationPlanningAction =
   | 'design_change'
 
 export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationAnswer> & {
+  /** 页面开发准备只确认服务端审阅身份，经原主 Workflow 续接。 */
+  agent_ui_preparation?: WorkflowAgentUiPreparationAction
   /** 由创建规划 UI 明确写入，不能由确认文案反推。 */
   __applicationPlanningAction?: ApplicationPlanningAction
   /** 单元测试门禁的结构化运行或跳过选择。 */
@@ -890,6 +894,20 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   revision_draft_interaction?: WorkflowRevisionDraftInteraction
   /** API 开发门禁的映射重新检测动作。 */
   api_design_gate?: WorkflowApiDesignGateAction
+}
+
+export type WorkflowAgentUiPreparationAction = {
+  action: 'confirm' | 'refresh'
+  planId?: string
+  reviewId?: string
+  installationPlanId?: string
+  targetSourceRoot?: string
+}
+
+export type WorkflowAgentUiPreparation = {
+  stage: 'dependency' | 'initialize' | 'transfer' | 'blocked'
+  plan?: AgentUiDependencyPlan | AgentUiTransferPlan
+  error?: string
 }
 
 export type WorkflowApiDesignGateAction = {
@@ -963,6 +981,9 @@ export type WorkflowApiDesignReadinessItem = {
 }
 
 export type WorkflowClarification = {
+  agentUiPreparation?: WorkflowAgentUiPreparation
+  /** 当前 UiDesign 的可审阅 Markdown，正式确认时由后端检测文件编辑。 */
+  design_document?: { path: string; markdown: string }
   repair_target?: 'product_plan' | 'technical_plan'
   mode?: string
   /** 应用架构选项及可用状态由后端签发，前端不自行推断。 */

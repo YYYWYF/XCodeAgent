@@ -1628,6 +1628,9 @@ def _workflow_visual_payload(
 ) -> dict[str, Any]:
     """构建 CustomEvent 与 StateSnapshot 共用的标准可视化数据。"""
 
+    from app.services.agent_ui_design_projection import project_agent_workflow_preview
+    result = project_agent_workflow_preview(result)
+    summary = {**summary, "clarification": result.get("clarification", summary.get("clarification"))}
     code_changes = _workflow_code_changes(result)
     confirmation_artifact = _workflow_confirmation_artifact(result)
     state_payload = {

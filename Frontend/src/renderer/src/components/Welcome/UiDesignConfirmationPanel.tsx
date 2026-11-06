@@ -18,6 +18,7 @@ import type {
 } from '../../typings'
 import { cx } from '../../utils'
 import { useUiDesignPagesWithCode } from '../../hooks/useUiDesignPagesWithCode'
+import { useUiDesignReviewSync } from '../../hooks/useUiDesignReviewSync'
 import { shouldSettleAdjust } from '../../service/uiDesignAdjustSettlement'
 import { parseDesignMentions } from '../../service/designMention'
 import { uiDesignGenerationProgress } from '../../service/uiDesignGenerationProgress'
@@ -28,15 +29,18 @@ import {
   uiDesignPendingLabel
 } from '../../service/iterationOrigin'
 import IterationBadge from '../IterationBadge'
-import DesignRenderer from '../DesignRenderer/DesignRenderer'
+import DesignPagePreview from '../DesignRenderer/DesignPagePreview'
+import { designPageGenerationLabel, hasDesignPreview, isAgentProjectPage, isDesignReadyForConfirmation, type DesignPreviewPage } from '../DesignRenderer/projectPreview'
+import MarkdownContent from '../MarkdownContent/MarkdownContent'
 import { getAvailableTemplates } from '../../service/templateService'
 import './UiDesignConfirmationPanel.less'
+import './UiDesignDocument.less'
 
 const { Paragraph, Text } = Typography
 
 const { TextArea } = Input
 
-type PageDesign = {
+type PageDesign = DesignPreviewPage & {
   pageId?: string
   name?: string
   path?: string
@@ -118,30 +122,24 @@ export default function UiDesignConfirmationPanel({
   iterationOrigins,
   workspaceRoot
 }: Props): ReactElement | null {
+  workspaceRoot = workspaceRoot || String(workflow.state?.workspace || workflow.result?.workspace || '')
   const clarification = planningClarification(workflow)
   const rawPages = useMemo(() => readPages(clarification), [clarification])
   // 后台生成池完成（confirmed/generation_failed）后 workflow 快照可能仍停留在
   // queued/generating。直接读 ui-designs.json 拿到最新 status 覆盖快照，避免卡片
   // 一直显示「生成中」。override 只在本地 acting/generating 页存在时由轮询填充。
-  const [pageStatusOverrides, setPageStatusOverrides] = useState<Record<string, string>>({})
   // 快照里的页面没有 code（正式 manifest 只存 code_path），从磁盘补回来，
   // 否则「查看设计稿」按钮禁用、右侧预览也渲染不出东西。
   const pagesWithCode = useUiDesignPagesWithCode(workspaceRoot, rawPages)
-  // 本地 override 叠在磁盘数据之上：用户点「停止」时立刻显示「已停止」，不等轮询。
-  const pages = useMemo(
-    () =>
-      pagesWithCode.map((page) => {
-        const override = page.pageId ? pageStatusOverrides[page.pageId] : undefined
-        return override ? { ...page, status: override } : page
-      }),
-    [pagesWithCode, pageStatusOverrides]
-  )
+  const pages = pagesWithCode
   // 最终确认被后端事实校验拒绝时，直接展示确定性错误而不是只停留在当前页面。
   const validationErrors = useMemo(() => {
     const value = clarification?.validation_errors
     return Array.isArray(value) ? value.map(String).filter(Boolean) : []
   }, [clarification])
   const [feedback, setFeedback] = useState('')
+  const [documentOpen, setDocumentOpen] = useState(false)
+  const designDocument = clarification?.design_document
   const [internalActivePageId, setInternalActivePageId] = useState<string>('')
   // 受控模式（外部传入 activePageId）优先，否则用内部状态。
   const activePageId = controlledActivePageId ?? internalActivePageId
@@ -155,6 +153,7 @@ export default function UiDesignConfirmationPanel({
   )
   // 全屏查看的设计稿页面（null=关闭）。
   const [fullscreenPage, setFullscreenPage] = useState<PageDesign | null>(null)
+  const currentFullscreenPage = fullscreenPage ? pages.find((page) => page.pageId === fullscreenPage.pageId) : undefined
   // 页面模板列表统一从 templateService 读取，确保设计确认区使用当前模板清单。
   const templates = useMemo(() => getAvailableTemplates(), [])
   // 正在为哪个页面挑选模板（pageId，null=关闭模板选择弹窗）。
@@ -191,6 +190,8 @@ export default function UiDesignConfirmationPanel({
     Array<{ pageId: string; action: 'select_template' | 'regenerate'; templateId?: string }>
   >([])
   const runInFlightRef = useRef(false)
+  // 快速入队请求可能只收到最终帧，用新 runId 识别收尾，不依赖 running 帧一定被渲染。
+  const submittedRunIdRef = useRef('')
   // 提交 adjust 时的 runId：新一轮 run 一旦开始就会换代，用于区分"提交瞬间"与"新一轮已开始"。
   const adjustRunIdRef = useRef('')
   // 用 ref 持有最新的 onSubmit/workflow，供 flushPendingActions 等稳定 callback 使用，
@@ -228,6 +229,8 @@ export default function UiDesignConfirmationPanel({
   )
   const confirmedCount = pages.filter((page) => isPageConfirmed(page)).length
   const allConfirmed = pages.length > 0 && confirmedCount === pages.length
+  const readyCount = pages.filter(isDesignReadyForConfirmation).length
+  const allReady = pages.length > 0 && readyCount === pages.length
   // 当前处于后台生成池处理中的 pageId 列表（queued / generating），用于轮询与加载态。
   const generatingPageIds = useMemo(
     () =>
@@ -281,6 +284,7 @@ export default function UiDesignConfirmationPanel({
   }, [workflow.runId, workflow.summary?.status, actingSet, setActingPageIds])
 
   const confirmAll = (): void => {
+    if (disabled || reviewSyncPending || refreshing || uiGenerationInProgress || !allReady) return
     const feedbackText = feedback.trim()
     if (feedbackText) {
       // 确认按钮带有修改意见时仍按 UI 调整提交，不能把意见吞成确认。
@@ -301,7 +305,7 @@ export default function UiDesignConfirmationPanel({
     if (disabled || runInFlightRef.current) return
     const pendingPages = pages.filter(
       (page) =>
-        !isPageConfirmed(page) &&
+        !isPageConfirmed(page) && page.status !== 'ready' &&
         !isPageGenerating(page) &&
         !actingSet.has(page.pageId || '')
     )
@@ -315,6 +319,7 @@ export default function UiDesignConfirmationPanel({
     setActingPageIds(actingPageIds)
     runInFlightRef.current = true
     observedRunningRef.current = false
+    submittedRunIdRef.current = String(workflow.runId || '')
     const payload =
       batch.length === 1
         ? { pageId: batch[0].pageId, action: batch[0].action }
@@ -339,6 +344,7 @@ export default function UiDesignConfirmationPanel({
     const batch = pendingActionsRef.current.splice(0)
     runInFlightRef.current = true
     observedRunningRef.current = false
+    submittedRunIdRef.current = String(workflowRef.current.runId || '')
     const payload =
       batch.length === 1
         ? { pageId: batch[0].pageId, action: batch[0].action, ...(batch[0].templateId ? { templateId: batch[0].templateId } : {}) }
@@ -349,32 +355,23 @@ export default function UiDesignConfirmationPanel({
     onSubmitRef.current(workflowRef.current, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
   }, [])
 
-  // 用户主动停止单页生成：调后端 /api/ui-design/cancel（池立即把该页置 cancelled
-  // 终态，LLM 请求不打断但结果丢弃），随后立即复位本地 acting/run 态——不等 3 秒
-  // 轮询，点停止的瞬间卡片就退出「生成中」、恢复可重试。后端取消失败（如任务其实
-  // 已结束）时也照常复位本地态：本地「生成中」与后端在途任务解耦后，复位永远安全
-  // （若后端仍在生成，下轮 override 轮询会把 queued/generating 状态带回）。
+  // 预览与停止沿原官方 AG-UI 会话提交，只消费后端确认后的状态，不伪造本地取消。
+  const submitProjectAction = useCallback((pageId: string, action: 'preview' | 'cancel'): void => {
+    if (runInFlightRef.current) return
+    runInFlightRef.current = true
+    observedRunningRef.current = false
+    submittedRunIdRef.current = String(workflowRef.current.runId || '')
+    onSubmitRef.current(workflowRef.current, {
+      ui_design_action: { pageId, action }, __applicationPlanningAction: 'ui_action'
+    })
+  }, [])
+
+  // 用户主动停止共享工程：后端收口整组页面，前端等待当前 AG-UI 事实回执。
   const cancelPageGeneration = useCallback(
     async (pageId: string): Promise<void> => {
-      const baseUrl = window.devAgentStudio?.agentBaseUrl || 'http://127.0.0.1:8000'
-      try {
-        await fetch(`${baseUrl.replace(/\/$/, '')}/api/ui-design/cancel`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workspace: workspaceRoot, pageId }),
-        })
-      } catch {
-        // 网络失败不阻塞本地复位——本地加载态卡住的危害远大于一次取消请求丢失。
-      }
-      setActingPageIds((prev) => prev.filter((id) => id !== pageId))
-      if (actingPageIdsRef.current.filter((id) => id !== pageId).length === 0) {
-        runInFlightRef.current = false
-        observedRunningRef.current = false
-      }
-      // 立即把该页 override 置为 cancelled，卡片马上显示已停止（不等轮询）。
-      setPageStatusOverrides((prev) => ({ ...prev, [pageId]: 'cancelled' }))
+      submitProjectAction(pageId, 'cancel')
     },
-    [workspaceRoot, setActingPageIds]
+    [submitProjectAction]
   )
 
   // 逐页"选模板"或"重新生成"：点击即把该页加入 acting 集合（立即禁用该页按钮 +
@@ -535,19 +532,16 @@ export default function UiDesignConfirmationPanel({
     }
   }, [activePageId, pages])
 
-  // 后端 run 完成后清除本批 acting 加载态并重置 runInFlight。
-  // 完成信号：先观察到本轮 run 进入 running（observedRunningRef=true），再回到
-  // requires_user_input。flush 瞬间 workflowStatus 可能仍是上一轮残留的
-  // requires_user_input（run 尚未开始流式），此时 observedRunningRef=false，不清理，
-  // 避免提前重置 runInFlightRef 导致同 thread 并发新 run（AsyncSqliteSaver checkpoint
-  // 链冲突，workflow 回退到 requirements 节点）。
+  // 本轮进入 running 或收到新 runId 的最终待输入帧后收尾，避免漏掉短暂 running 帧。
+  // 提交瞬间仍是旧 runId，不会提前放行组件队列；实际传输由 Runtime 再串行保护。
   const workflowStatus = workflow.summary?.status
   useEffect(() => {
     if (workflowStatus === 'running') {
       observedRunningRef.current = true
     }
     if (workflowStatus !== 'requires_user_input') return
-    if (!observedRunningRef.current) return
+    const receivedNewRun = Boolean(workflow.runId) && String(workflow.runId) !== submittedRunIdRef.current
+    if (!observedRunningRef.current && !receivedNewRun) return
     if (!runInFlightRef.current && pendingActionsRef.current.length === 0) return
     observedRunningRef.current = false
     runInFlightRef.current = false
@@ -565,36 +559,30 @@ export default function UiDesignConfirmationPanel({
     } else {
       setActingPageIds([])
     }
-  }, [workflowStatus, flushPendingActions, setActingPageIds])
+  }, [workflowStatus, workflow.runId, flushPendingActions, setActingPageIds])
 
-  // 手动刷新：用户点击刷新按钮发起一次 no-op resume（空澄清答案 → 后端重读
-  // ui-designs.json，不触发动作/确认分支），拉取后台生成池最新进度。不再用
-  // setInterval 自动轮询——自动轮询会与正在跑的 run 在同 thread 并发，SSE 流被
-  // session.stop() 取消导致 ERR_INCOMPLETE_CHUNKED_ENCODING，且 cleanup-effect 依赖
-  // 链形成 actingPageIds 抖动自激循环，界面闪烁。手动刷新由用户按需触发，无并发。
-  // refreshing state 驱动按钮 loading 态：正常 2-3 秒后端往返后 cleanup-effect 清除；
-  // 若 SSE 流中断导致 cleanup-effect 不触发，5 秒兜底复位避免按钮永久禁用。
+  // 自动和手动刷新均提交显式 ui_action；空答案只读对账，不能更新 Graph 的旧审阅版本。
+  // 与逐页动作共用 run 守卫，等待新 run 回执后清除 loading。
   const [refreshing, setRefreshing] = useState(false)
   const refreshingTimeoutRef = useRef<number | undefined>(undefined)
   const refreshUiDesigns = useCallback((): void => {
-    if (runInFlightRef.current || refreshing) return
+    if (disabled || runInFlightRef.current || refreshing) return
     runInFlightRef.current = true
     observedRunningRef.current = true
+    submittedRunIdRef.current = String(workflowRef.current.runId || '')
     setRefreshing(true)
-    onSubmitRef.current(workflowRef.current, {})
+    onSubmitRef.current(workflowRef.current, {
+      ui_design_action: { action: 'refresh' }, __applicationPlanningAction: 'ui_action'
+    })
     if (refreshingTimeoutRef.current) window.clearTimeout(refreshingTimeoutRef.current)
     refreshingTimeoutRef.current = window.setTimeout(() => {
       runInFlightRef.current = false
       observedRunningRef.current = false
       setRefreshing(false)
     }, 5000)
-  }, [refreshing])
+  }, [disabled, refreshing])
 
-  // 后台生成池完成（confirmed/generation_failed）后不会主动通知前端，workflow 快照
-  // 里的 page status 仍停留在 queued/generating，导致卡片一直显示「生成中」无法恢复。
-  // 页面数据（status/code）由 useUiDesignPagesWithCode 从磁盘补全；这里只负责检测
-  // 「任一页刚进入终态」时触发一次 no-op resume，让后端把生成结果收口到快照。
-  // refreshUiDesigns 用 ref 持有，避免依赖变化重建定时器。
+  const reviewSyncPending = useUiDesignReviewSync(workspaceRoot, rawPages, refreshUiDesigns)
   const refreshUiDesignsRef = useRef(refreshUiDesigns)
   refreshUiDesignsRef.current = refreshUiDesigns
 
@@ -613,44 +601,6 @@ export default function UiDesignConfirmationPanel({
     }
     refreshUiDesigns()
   }, [refreshUiDesigns, setActingPageIds])
-  const prevStatusRef = useRef<Record<string, string>>({})
-  useEffect(() => {
-    if (!workspaceRoot) return
-    let cancelled = false
-    const TERMINAL_STATUSES = new Set(['confirmed', 'generation_failed'])
-    const poll = async (): Promise<void> => {
-      try {
-        const result = await window.devAgentStudio?.workspace?.readUiDesigns({ workspaceRoot })
-        if (cancelled || !result?.uiDesigns) return
-        const manifestPages = (result.uiDesigns as { pages?: Array<{ pageId?: string; status?: string }> }).pages
-        if (!Array.isArray(manifestPages)) return
-        let reachedTerminal = false
-        const statuses: Record<string, string> = {}
-        for (const page of manifestPages) {
-          const pageId = String(page?.pageId || '')
-          const status = String(page?.status || '')
-          if (!pageId || !status) continue
-          statuses[pageId] = status
-          const prev = prevStatusRef.current[pageId]
-          // 检测从非终态变为终态：prev 缺失或非终态，当前是终态。
-          if (TERMINAL_STATUSES.has(status) && (!prev || !TERMINAL_STATUSES.has(prev))) {
-            reachedTerminal = true
-          }
-        }
-        prevStatusRef.current = statuses
-        // 有页刚进入终态：自动触发 no-op resume 让后端回填 code，UI 立即反映生成结果。
-        if (reachedTerminal) refreshUiDesignsRef.current()
-      } catch {
-        // 读取失败不阻塞，下次轮询重试。
-      }
-    }
-    void poll()
-    const timer = window.setInterval(() => void poll(), 2000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [workspaceRoot])
 
   // Fallback：IPC 通道不可用时（前端未重启、readUiDesigns 不存在），退回纯 Graph run
   // 轮询。有 acting/generating 页时每 2 秒尝试 refreshUiDesigns（已有 runInFlight/refreshing
@@ -681,7 +631,7 @@ export default function UiDesignConfirmationPanel({
     if (actingSet.has('adjust')) return
     const terminalIds = pages
       .filter((page) =>
-        ['confirmed', 'generation_failed', 'cancelled'].includes(String(page.status || ''))
+        ['confirmed', 'ready', 'generation_failed', 'cancelled'].includes(String(page.status || ''))
       )
       .map((page) => String(page.pageId || ''))
       .filter(Boolean)
@@ -736,17 +686,17 @@ export default function UiDesignConfirmationPanel({
           {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
             <span className={cx('ui-design-processing-hint')}>
               {actingSet.has('adjust')
-                ? '正在调整设计稿，完成后点「刷新」查看结果…'
-                : `正在生成 ${new Set([...actingPageIds, ...generatingPageIds]).size} 个页面设计稿，完成后点「刷新」查看结果…`}
+                ? generationProgress?.message || '正在等待设计稿调整任务…'
+                : `正在处理 ${new Set([...actingPageIds, ...generatingPageIds]).size} 个页面设计任务（包含排队），完成后点「刷新」查看结果…`}
             </span>
           ) : null}
         </div>
         {pages.length > 0 ? (
           <span className={cx('ui-design-progress-badge')}>
-            {confirmedCount} / {pages.length}
+            {readyCount} / {pages.length}
           </span>
         ) : null}
-        {pages.length - confirmedCount > 0 ? (
+        {pages.length - readyCount > 0 ? (
           <Button
             className={cx('ui-design-generate-all-btn')}
             disabled={disabled || uiGenerationInProgress}
@@ -758,7 +708,7 @@ export default function UiDesignConfirmationPanel({
             全部生成
           </Button>
         ) : null}
-        {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
+        {pages.length > 0 ? (
           <Button
             className={cx('ui-design-refresh-btn')}
             disabled={disabled || refreshing}
@@ -842,7 +792,7 @@ export default function UiDesignConfirmationPanel({
                       'ui-design-card',
                       confirmed && 'is-confirmed'
                     )}
-                    key={pageId}
+                    key={workspaceRoot || 'ui-design-preview'}
                   >
                     <div className={cx('ui-design-card-header')}>
                       <div className={cx('ui-design-card-meta')}>
@@ -866,7 +816,7 @@ export default function UiDesignConfirmationPanel({
                       <div className={cx('ui-design-card-actions')}>
                         <Button
                           className={cx('ui-design-action-btn')}
-                          disabled={!page.code || generating || (disabled && actingSet.has('adjust'))}
+                          disabled={!hasDesignPreview(page) || generating || (disabled && actingSet.has('adjust'))}
                           icon={<EyeOutlined />}
                           onClick={() => setActivePageId(pageId)}
                           title={generating ? '正在生成设计稿' : '在右侧查看设计稿'}
@@ -875,14 +825,14 @@ export default function UiDesignConfirmationPanel({
                         </Button>
                         <Button
                           className={cx('ui-design-action-btn')}
-                          disabled={disabled || generating || templates.length === 0}
+                          disabled={disabled || generating || isAgentProjectPage(page) || templates.length === 0}
                           icon={<LayoutOutlined />}
                           onClick={() => setTemplatePickerFor(pageId)}
                           title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
                         >
                           选模板
                         </Button>
-                        {generating ? (
+                        {generating && !hasDesignPreview(page) ? (
                           <Button
                             className={cx('ui-design-action-btn')}
                             danger
@@ -896,9 +846,9 @@ export default function UiDesignConfirmationPanel({
                             className={cx('ui-design-action-btn')}
                             icon={<ReloadOutlined />}
                             onClick={() => submitPageAction(pageId, 'regenerate')}
-                            title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
+                            title={hasDesignPreview(page) ? '重新生成设计稿' : '生成设计稿'}
                           >
-                            {page.code ? '换一换' : '生成'}
+                            {hasDesignPreview(page) ? '换一换' : '生成'}
                           </Button>
                         )}
                       </div>
@@ -910,14 +860,14 @@ export default function UiDesignConfirmationPanel({
                     ) : null}
                     {showPreview ? (
                       <div className={cx('ui-design-card-preview')}>
-                        {generating ? (
+                        {generating && !hasDesignPreview(page) ? (
                           <div className={cx('ui-design-card-loading')}>
                             <Spin />
                             <span className={cx('ui-design-card-loading-text')}>
-                              正在生成设计稿…
+                              {designPageGenerationLabel(page, actingSet.has(pageId))}…
                             </span>
                           </div>
-                        ) : page.status === 'generation_failed' || page.status === 'cancelled' ? (
+                        ) : !hasDesignPreview(page) && (page.status === 'generation_failed' || page.status === 'cancelled') ? (
                           <div className={cx('ui-design-card-empty')}>
                             <InboxOutlined className={cx('ui-design-card-empty-icon')} />
                             <span className={cx('ui-design-card-empty-title')}>
@@ -940,17 +890,16 @@ export default function UiDesignConfirmationPanel({
                               </Button>
                             </div>
                           </div>
-                        ) : page.code ? (
+                        ) : hasDesignPreview(page) ? (
                           <>
-                            <DesignRenderer
-                              code={page.code}
-                              title={`设计稿-${page.name || pageId}`}
-                            />
-                            {disabled && actingSet.has('adjust') ? (
-                              <div className={cx('ui-design-card-adjust-mask')}>
+                            <DesignPagePreview page={page} workspaceRoot={workspaceRoot}
+                              onOpenPreview={(id) => submitProjectAction(id, 'preview')} />
+                            {generating || (disabled && actingSet.has('adjust')) ? (
+                              <div className={cx('ui-design-card-adjust-mask', generating && 'is-retaining-preview')}>
                                 <Spin />
                                 <span className={cx('ui-design-card-loading-text')}>
-                                  正在调整设计稿，请稍后…
+                                  {generating ? `${designPageGenerationLabel(page, actingSet.has(pageId))}，暂时展示上一版设计稿`
+                                    : '正在调整设计稿，请稍后…'}
                                 </span>
                               </div>
                             ) : null}
@@ -967,11 +916,12 @@ export default function UiDesignConfirmationPanel({
                             <div className={cx('ui-design-card-empty-actions')}>
                               <Button
                                 icon={<LayoutOutlined />}
-                                disabled={disabled || templates.length === 0}
-                                onClick={() => setTemplatePickerFor(pageId)}
+                                disabled={disabled || (!isAgentProjectPage(page) && templates.length === 0)}
+                                onClick={() => isAgentProjectPage(page)
+                                  ? submitPageAction(pageId, 'regenerate') : setTemplatePickerFor(pageId)}
                                 type="primary"
                               >
-                                选模板
+                                {isAgentProjectPage(page) ? '生成' : '选模板'}
                               </Button>
                             </div>
                           </div>
@@ -1037,14 +987,16 @@ export default function UiDesignConfirmationPanel({
                     ) : null}
                   </div>
                   {generating ? (
-                    <Tag className={cx('ui-design-page-row-status', 'is-generating')}>生成中</Tag>
+                    <Tag className={cx('ui-design-page-row-status', 'is-generating')}>
+                      {pageId === adjustingPageId ? '生成中' : designPageGenerationLabel(page, actingSet.has(pageId))}
+                    </Tag>
                   ) : confirmed ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已确认</Tag>
                   ) : page.status === 'generation_failed' ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-failed')} color="error">生成失败</Tag>
                   ) : page.status === 'cancelled' ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-cancelled')} color="warning">已停止</Tag>
-                  ) : page.code ? (
+                  ) : hasDesignPreview(page) ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-pending')}>待确认</Tag>
                   ) : (
                     // 本轮还没有设计稿：区分"从来没做过"和"上一轮做过、本轮待重做"。
@@ -1062,11 +1014,12 @@ export default function UiDesignConfirmationPanel({
                 <div className={cx('ui-design-page-row-actions')}>
                   <Button
                     className={cx('ui-design-action-btn')}
-                    disabled={!page.code || generating || (disabled && actingSet.has('adjust'))}
+                    disabled={!hasDesignPreview(page) || generating || (disabled && actingSet.has('adjust'))}
                     icon={<EyeOutlined />}
                     onClick={() => {
                       setActivePageId(pageId)
                       onActivePageChange?.(pageId)
+                      if (isAgentProjectPage(page) && !page.project_preview) submitProjectAction(pageId, 'preview')
                     }}
                     title={generating ? '正在生成设计稿' : '在右侧查看设计稿'}
                   >
@@ -1074,14 +1027,14 @@ export default function UiDesignConfirmationPanel({
                   </Button>
                   <Button
                     className={cx('ui-design-action-btn')}
-                    disabled={disabled || generating || templates.length === 0}
+                    disabled={disabled || generating || isAgentProjectPage(page) || templates.length === 0}
                     icon={<LayoutOutlined />}
                     onClick={() => setTemplatePickerFor(pageId)}
                     title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
                   >
                     选模板
                   </Button>
-                  {acting ? (
+                  {generating ? (
                     <Button
                       className={cx('ui-design-action-btn')}
                       danger
@@ -1099,15 +1052,23 @@ export default function UiDesignConfirmationPanel({
                       title={
                         generating
                           ? '本页正在调整中，请等本轮结束'
-                          : page.code
+                          : hasDesignPreview(page)
                             ? '重新生成本页设计稿'
                             : '生成本页设计稿'
                       }
                     >
-                      {page.code ? '换一换' : '生成'}
+                      {hasDesignPreview(page) ? '换一换' : '生成'}
                     </Button>
                   )}
                 </div>
+                {!generating && page.status === 'generation_failed' && page.error && (
+                  <Alert
+                    className={cx('ui-design-page-row-error')}
+                    type="error"
+                    showIcon
+                    message={page.error}
+                  />
+                )}
               </div>
             )
           })}
@@ -1168,11 +1129,16 @@ export default function UiDesignConfirmationPanel({
           <Text className={cx('ui-design-confirm-hint')} type="secondary">
             {adjustingHint
               ? adjustingHint
-              : allConfirmed
-                ? '所有页面设计稿已确认，可以进入技术规划。'
-                : `可为每个页面选模板或换一换生成设计稿，也可以直接跳过（已完成 ${confirmedCount}/${pages.length}）。`}
+              : reviewSyncPending || refreshing
+                ? '正在同步最新设计稿，完成后请审阅并确认。'
+                : allReady
+                  ? '请审阅设计说明与当前原型，点击下一步确认；随后需手动进入计划阶段。'
+                  : `可为每个页面生成设计稿，也可以直接跳过（已生成 ${readyCount}/${pages.length}）。`}
           </Text>
           <div className={cx('ui-design-confirm-actions')}>
+            {designDocument?.markdown ? (
+              <Button onClick={() => setDocumentOpen(true)} size="large">查看设计说明</Button>
+            ) : null}
             <Button
               className={cx('ui-design-skip-btn')}
               disabled={disabled || uiGenerationInProgress}
@@ -1183,7 +1149,7 @@ export default function UiDesignConfirmationPanel({
             </Button>
             <Button
               className={cx('ui-design-confirm-all-btn')}
-              disabled={disabled || uiGenerationInProgress || !allConfirmed}
+              disabled={disabled || uiGenerationInProgress || reviewSyncPending || refreshing || !allReady}
               onClick={confirmAll}
               size="large"
               type="primary"
@@ -1194,22 +1160,25 @@ export default function UiDesignConfirmationPanel({
         </div>
       </div>
 
+      <Modal title="UI 设计说明" open={documentOpen} onCancel={() => setDocumentOpen(false)} footer={null}
+        wrapClassName={cx('ui-design-document-modal')} width={800}>
+        <Paragraph type="secondary">可在工程中编辑 {designDocument?.path}，提交确认时将先同步修改并重新生成。</Paragraph>
+        <MarkdownContent content={(designDocument?.markdown || '').replace(/<!--[\s\S]*?-->/g, '')} />
+      </Modal>
+
       <Modal
         bodyStyle={{ padding: 0 }}
         cancelText="关闭"
         footer={null}
         onCancel={() => setFullscreenPage(null)}
-        open={Boolean(fullscreenPage)}
-        title={fullscreenPage?.name || '设计稿预览'}
+        open={Boolean(currentFullscreenPage)}
+        title={currentFullscreenPage?.name || '设计稿预览'}
         width="90vw"
         wrapClassName={cx('ui-design-fullscreen-modal')}
       >
-        {fullscreenPage && fullscreenPage.code ? (
-          <DesignRenderer
-            code={fullscreenPage.code}
-            fullscreen
-            title={`设计稿-${fullscreenPage.name || fullscreenPage.pageId}`}
-          />
+        {currentFullscreenPage && hasDesignPreview(currentFullscreenPage) ? (
+          <DesignPagePreview page={currentFullscreenPage} workspaceRoot={workspaceRoot} fullscreen
+            onOpenPreview={(id) => submitProjectAction(id, 'preview')} />
         ) : null}
       </Modal>
 

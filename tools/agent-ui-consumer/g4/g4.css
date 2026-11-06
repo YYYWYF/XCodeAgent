@@ -1,0 +1,8 @@
+:root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+body { margin: 0; color: CanvasText; background: Canvas; }
+header { min-height: 56px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 12px 24px; border-bottom: 1px solid GrayText; }
+nav { display: flex; gap: 16px; margin-right: auto; }
+a { color: inherit; }
+button { font: inherit; padding: 7px 12px; cursor: pointer; }
+main { padding: 24px; }
+.shared-agent-page-slot { height: calc(100vh - 190px); }

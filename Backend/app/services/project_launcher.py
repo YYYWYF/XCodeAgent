@@ -21,6 +21,7 @@ from app.utils.process_liveness import pid_is_running
 from app.services.python_runtime_checks import runtime_check_plan
 from app.services.agent_runtime_launcher import launch_runtime
 from app.services.agent_runtime_process import stop_runtime
+from app.services.agent_ui_design_preview import stop_agent_ui_design_preview
 
 
 LaunchProgressCallback = Callable[[str, str, str], None]
@@ -220,6 +221,7 @@ def _launch_project_preview(
 
         ready, reason = wait_runtime_proxy_ready(
             str(frontend.get("preview_url") or ""), agent_runtime["launch_id"],
+            workspace=root,
             database_required=agent_runtime["database_required"],
             frontend_pid=frontend["server"]["pid"], runtime_pid=agent_runtime["server"]["pid"],
             expected_agent_ids=agent_runtime["agent_ids"],
@@ -227,6 +229,9 @@ def _launch_project_preview(
         if not ready:
             stop_frontend_project(root)
             frontend = {**frontend, "status": "failed", "message": "前端到 Runtime 的代理未就绪：" + reason}
+        else:
+            # 沿原服务状态和 AG-UI 进度公开核验范围，不能把健康检查误报成聊天联通。
+            frontend = {**frontend, "message": "前端已连接当前应用的本轮 Runtime，健康及匿名会话检查通过；真实对话尚未验收。"}
     if frontend.get("status") == "failed":
         if backend_process is not None:
             stop_backend_project(backend, backend_process)
@@ -261,7 +266,7 @@ def _launch_project_preview(
         **frontend,
         "status": "running",
         "message": (
-            "Agent Runtime 与前端均已就绪，可以开始会话调试。"
+            "Agent Runtime 与前端同源健康核验通过；真实对话尚未验收。"
             if runtime_plan is not None else
             "前端项目已启动并就绪，未识别到后端工程。"
             if frontend_only
@@ -284,6 +289,7 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     ui_design_frontend = stop_frontend_project(root, runtime_subdir="launch-ui-design")
     backend = stop_workspace_backend_project(root)
     agent_runtime = stop_runtime(root)
+    agent_ui_design = stop_agent_ui_design_preview(root)
     failed_parts = [
         name
         for name, result in (
@@ -291,6 +297,7 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
             ("ui_design_frontend", ui_design_frontend),
             ("backend", backend),
             ("agent_runtime", agent_runtime),
+            ("agent_ui_design", agent_ui_design),
         )
         if result.get("status") == "failed"
     ]
@@ -306,6 +313,7 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         "ui_design_frontend": ui_design_frontend,
         "backend": backend,
         "agent_runtime": agent_runtime,
+        "agent_ui_design": agent_ui_design,
     }
     from app.services.preview_runtime_state import finish_attempt
 

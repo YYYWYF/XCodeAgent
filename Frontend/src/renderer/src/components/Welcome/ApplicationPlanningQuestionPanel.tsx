@@ -54,6 +54,7 @@ type Props = {
     requirementSpecFeedback?: string
   ) => void
   rootPath?: string
+  workspaceRoot?: string
   workflow: WorkflowRunPayload
 }
 
@@ -401,6 +402,7 @@ export default function ApplicationPlanningQuestionPanel({
   onReturnHome,
   onSubmit,
   rootPath,
+  workspaceRoot,
   workflow
 }: Props): ReactElement | null {
   const [form] = Form.useForm<{ answers: WorkflowClarificationAnswers }>()
@@ -495,6 +497,7 @@ export default function ApplicationPlanningQuestionPanel({
   if (!knownConfirmationModes.has(clarification.mode || '') && lastValidUiWorkflowRef.current) {
     return (
       <UiDesignConfirmationPanel
+        workspaceRoot={workspaceRoot}
         disabled={disabled}
         iterationOrigins={uiDesignIterationOrigins}
         onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
@@ -692,6 +695,7 @@ export default function ApplicationPlanningQuestionPanel({
   if (clarification.mode === 'ui_design_confirmation') {
     return (
       <UiDesignConfirmationPanel
+        workspaceRoot={workspaceRoot}
         disabled={disabled}
         iterationOrigins={uiDesignIterationOrigins}
         onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}

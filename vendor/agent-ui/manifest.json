@@ -1,0 +1,53 @@
+{
+  "commit": "71ebfaf975a6079102408e4f9b584da77f7205c7",
+  "branch": "dev",
+  "node": "v24.22.1",
+  "pnpm": "8.12.0",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "builtAt": "2026-11-03T08:15:27.635Z",
+  "packages": [
+    {
+      "name": "@za38.03/agent-ui-core",
+      "version": "0.0.1",
+      "file": "za38.03-agent-ui-core-0.0.1.tgz",
+      "bytes": 19173,
+      "sha256": "d2fd4f5eb8fd0cd22693b3f8cd8d3c984bde98764b440cd05aa22a2d9c4366ef"
+    },
+    {
+      "name": "@za38.03/agent-ui-renderer",
+      "version": "0.0.1",
+      "file": "za38.03-agent-ui-renderer-0.0.1.tgz",
+      "bytes": 10927,
+      "sha256": "03b79034bf23361bf264dff9b9a48d4c26c02fff57cb1101da40e8159e25ae21"
+    },
+    {
+      "name": "@za38.03/agent-ui-plugins",
+      "version": "0.0.1",
+      "file": "za38.03-agent-ui-plugins-0.0.1.tgz",
+      "bytes": 1019315,
+      "sha256": "9a9e3d5e43a9204f05c972692fc818df9526a4e8e600326cfb59bac39cc032cd"
+    },
+    {
+      "name": "@za38.03/agent-ui-runtime",
+      "version": "0.0.1",
+      "file": "za38.03-agent-ui-runtime-0.0.1.tgz",
+      "bytes": 289407,
+      "sha256": "414547ccf244b48797a40ea740c144d6a29ad9e49a398ec8a0540d60063aa6b0"
+    },
+    {
+      "name": "@za38.03/agent-ui-creator",
+      "version": "0.0.1",
+      "file": "za38.03-agent-ui-creator-0.0.1.tgz",
+      "bytes": 18267488,
+      "sha256": "4459e46e5b3141524fa98ad2b42d24b53d6626c03cf855723c3fdd141a748f52"
+    },
+    {
+      "name": "@za38.03/agent-ui-web-component",
+      "version": "0.0.1",
+      "file": "za38.03-agent-ui-web-component-0.0.1.tgz",
+      "bytes": 1548574,
+      "sha256": "1f149744add16d68452e92284a65bbd9b44647388ba91df62ea0f394f43fec2c"
+    }
+  ]
+}

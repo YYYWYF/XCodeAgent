@@ -25,6 +25,7 @@ import type {
 } from '../src/renderer/src/typings'
 import { initialConnectionState } from '../src/renderer/src/service/connectionState'
 import { applicationPlanningRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
+import { ApplicationPlanningUiActionQueue } from '../src/renderer/src/service/applicationPlanningUiActionQueue'
 
 /** 构造带稳定身份的最小 Planning 当前状态，不挂载任何 React 视图。 */
 function planningState(applicationId = 'app-A', threadId = 'thread-A'): ApplicationPlanningCurrentState {
@@ -47,6 +48,16 @@ function confirmationWorkflow(threadId = 'thread-A', gateId = 'current-gate'): W
     state: { application_planning_interrupt: { gateId, artifact: 'technical_plan', artifactRevision: 'revision-current' } },
     result: {}
   } as WorkflowRunPayload
+}
+
+/** 构造 UI 设计的当前确认门，每次入队回执可签发新的 gate。 */
+function uiConfirmationWorkflow(gateId: string): WorkflowRunPayload {
+  const workflow = confirmationWorkflow('thread-A', gateId)
+  return { ...workflow, runId: `run-${gateId}`,
+    summary: { ...workflow.summary, phase: 'ui_confirmation',
+      clarification: { mode: 'ui_design_confirmation', status: 'requires_user_input' } },
+    state: { application_planning_interrupt: { gateId, artifact: 'ui_designs', artifactRevision: 'ui-revision' } }
+  }
 }
 
 /** 构造同线程但缺少服务端中断的历史快照，用于覆盖提交前恢复。 */
@@ -213,6 +224,72 @@ async function waitForCondition<T>(
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   throw new Error(`等待${description}超时。`)
+}
+
+// 连点不同页面时第二个动作等待第一条消息流收尾，读取新确认门，绝不调用 stop。
+{
+  const workflow = uiConfirmationWorkflow('ui-first')
+  const current = { ...planningState(), workflow }
+  const h = harness(current)
+  let releaseFirst!: (value: AgUiChatResult) => void
+  h.onSend(async () => h.calls.length === 1
+    ? new Promise<AgUiChatResult>((resolve) => { releaseFirst = resolve })
+    : result(uiConfirmationWorkflow('ui-third')))
+  const first = h.runtime.submitClarification(workflow, {
+    __applicationPlanningAction: 'ui_action', ui_design_action: { pageId: 'home', action: 'regenerate' }
+  })
+  const second = h.runtime.submitClarification(workflow, {
+    __applicationPlanningAction: 'ui_action', ui_design_action: { pageId: 'chat', action: 'regenerate' }
+  })
+  await waitForCondition(() => h.calls.length === 1 ? true : undefined, '第一页入队请求')
+  assert.equal(h.stopCalls(), 0)
+  releaseFirst(result(uiConfirmationWorkflow('ui-second')))
+  await Promise.all([first, second])
+  assert.equal(h.calls.length, 2)
+  assert.equal(h.stopCalls(), 0)
+  assert.equal(h.calls[0].options.applicationPlanningInteraction?.gateId, 'ui-first')
+  assert.equal(h.calls[1].options.applicationPlanningInteraction?.gateId, 'ui-second')
+  assert.deepEqual(h.calls.map((call) => call.options.applicationPlanningInteraction?.uiAction), [
+    { pageId: 'home', action: 'regenerate' }, { pageId: 'chat', action: 'regenerate' }
+  ])
+}
+
+// 确认帧已经可见但初始流尚未结束时，点击生成也必须等待，不能取消初始执行。
+{
+  const h = harness()
+  const workflow = uiConfirmationWorkflow('ui-initial')
+  let releaseInitial!: (value: AgUiChatResult) => void
+  h.onSend(async (options) => {
+    if (h.calls.length > 1) return result(uiConfirmationWorkflow('ui-queued'))
+    options.onWorkflow?.(workflow)
+    return new Promise<AgUiChatResult>((resolve) => { releaseInitial = resolve })
+  })
+  const initial = h.runtime.ensureStarted()
+  await waitForCondition(() => h.current()?.workflow, '初始确认帧')
+  const generation = h.runtime.submitClarification(workflow, {
+    __applicationPlanningAction: 'ui_action', ui_design_action: { pageId: 'home', action: 'regenerate' }
+  })
+  assert.equal(h.calls.length, 1)
+  releaseInitial(result(workflow))
+  await Promise.all([initial, generation])
+  assert.equal(h.calls.length, 2)
+  assert.equal(h.stopCalls(), 0)
+  assert.equal(h.calls[1].options.applicationPlanningInteraction?.gateId, 'ui-initial')
+}
+
+// 显式停止会撤销尚未发送的动作；取消后的队列仍可接收用户下一次主动操作。
+{
+  const queue = new ApplicationPlanningUiActionQueue()
+  const settleTransport = queue.beginTransport()
+  const sent: string[] = []
+  const pending = queue.enqueue(async () => { sent.push('cancelled-page') })
+  const rejected = assert.rejects(pending, /UI 操作已取消/)
+  queue.cancelPending()
+  settleTransport()
+  await rejected
+  assert.deepEqual(sent, [])
+  await queue.enqueue(async () => { sent.push('new-page') })
+  assert.deepEqual(sent, ['new-page'])
 }
 
 // A：没有 Modal 也会启动；重复 ensureStarted 不创建第二轮执行。

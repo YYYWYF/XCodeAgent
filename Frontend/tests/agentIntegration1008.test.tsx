@@ -63,11 +63,11 @@ test('智能体完成统计和设计稿运行时使用当前真实合同', () =>
     }),
     { total: 1, completed: 0 }
   )
-  assert.match(
-    compileTsx(
+  assert.throws(
+    () => compileTsx(
       "import { AgentConversationTemplate } from '@xcodeagent/agent-ui-design'; export default AgentConversationTemplate"
     ),
-    /__DESIGN_RUNTIME__\.agentUi/
+    /重新生成/
   )
 })
 

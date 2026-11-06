@@ -14,3 +14,5 @@ __pycache__/
 *.bak
 .pnpm-store/
 .vscode/
+# Agent UI release tarballs are delivered outside Git.
+vendor/agent-ui/*.tgz

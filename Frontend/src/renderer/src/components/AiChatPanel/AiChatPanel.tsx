@@ -95,6 +95,7 @@ import SourcePanel from './components/SourcePanel'
 import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
+import type { DesignPreviewPage } from '../DesignRenderer/projectPreview'
 import MessageList from './components/MessageList'
 import AgentErrorCard from '../AgentErrorCard'
 import RetryEntryNotice from '../RetryEntryNotice'
@@ -1392,15 +1393,20 @@ export default function AiChatPanel({
   // workflow running 期间流式快照可能丢失 page.code，用 ref 缓存上一次有 code 的 pages，
   // running 期间回退到缓存，避免右侧设计稿闪烁消失、tab 被误禁用。
   const uiDesignPagesCacheRef = useRef<
-    Array<{ pageId?: string; name?: string; code?: string; status?: string; template_id?: string }>
+    Array<DesignPreviewPage & { template_id?: string }>
   >([])
+  const uiDesignCacheWorkspace = useRef(application.workspaceRoot)
+  if (uiDesignCacheWorkspace.current !== application.workspaceRoot) {
+    uiDesignCacheWorkspace.current = application.workspaceRoot
+    uiDesignPagesCacheRef.current = []
+  }
   const uiDesignPagesSource = useMemo(
     () =>
       (
         Array.isArray(planningUiDesignPagesSource)
           ? planningUiDesignPagesSource.filter((p) => p && typeof p === 'object')
           : []
-      ) as Array<{
+      ) as Array<DesignPreviewPage & {
         pageId?: string
         name?: string
         code?: string
@@ -1416,15 +1422,16 @@ export default function AiChatPanel({
     uiDesignPagesSource
   )
   const uiDesignPages = useMemo(() => {
-    if (uiDesignPagesWithCode.some((p) => Boolean(p.code))) {
+    if (uiDesignPagesWithCode.length > 0) {
       uiDesignPagesCacheRef.current = uiDesignPagesWithCode
       return uiDesignPagesWithCode
     }
-    if (planningPhaseRunning && uiDesignPagesCacheRef.current.length > 0) {
+    if (!planningUiDesignSkipped && planningPhaseRunning && uiDesignPagesCacheRef.current.length > 0) {
+      // 同一工作区的中间快照缺页时保留已验证的 Agent 画布，避免请求切换卸载 iframe。
       return uiDesignPagesCacheRef.current
     }
     return uiDesignPagesWithCode
-  }, [uiDesignPagesWithCode, planningPhaseRunning])
+  }, [uiDesignPagesWithCode, planningPhaseRunning, planningUiDesignSkipped])
   const requirementDocContent = mergedRequirementDocContentFor(
     designDocFileContent,
     currentPlanningWorkflow
@@ -5854,6 +5861,14 @@ export default function AiChatPanel({
           <div className={cx('workspace-content')}>
             {isDesignPhase && activeDesignDocKey === 'ui-design' ? (
               <UiDesignPreviewPanel
+                key={application.workspaceRoot}
+                workspaceRoot={application.workspaceRoot}
+                onOpenPreview={(pageId) => {
+                  if (!currentPlanningWorkflow || planningPhaseRunning) return
+                  void handleSubmitWorkflowClarification(currentPlanningWorkflow, {
+                    ui_design_action: { action: 'preview', pageId }, __applicationPlanningAction: 'ui_action'
+                  })
+                }}
                 activePageId={uiDesignActivePage?.pageId || ''}
                 code={uiDesignActivePageCode}
                 generating={uiDesignGenerating}
