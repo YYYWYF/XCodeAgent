@@ -857,7 +857,7 @@ The product and technical brand is **DevAgent Studio**. User-visible labels use 
 
 - AI 映射提示中的表结构由 `services/endpoint_design_assist_ddl.py` 复用当前直连/DBID 数据源凭据，通过只读 `SHOW CREATE TABLE` 从数据库取得原始 DDL；`generate_mapping` 将原文传给查询、写入和返回步骤，不拼接或裁剪外部表定义，读取失败不回退。内置来源当前没有原始 DDL 读取合同，按用户要求暂时保留 `agents/endpoint_design_assist_prompts.py` 的元数据拼接，明确标注为非原始 DDL，空 Schema 不输出限定符。操作识别仍只接收业务概要，现有结构化元数据校验及应用逻辑不变；凭据不进入提示词。本次按用户要求不进行测试工作。
 
-- 独立动作的阶段报告由 `protocols/ag_ui_action_stream.py` 等待当前进度的标准 Custom、状态快照及可选消息帧交给流消费者后再返回，避免 Endpoint AI 辅助已进入 operation/query 等步骤而前端仍显示上一阶段；模型文本增量仍按原队列转发，取消时收口等待回执的业务任务。沿用现有 AG-UI 帧与阶段字段，不增加前端阶段推断或新传输协议。回归：`tests.test_ag_ui_action_stream` 的逐帧交付顺序，以及 `tests.test_endpoint_design_assist_stream` 的取消生命周期。
+- 独立动作的阶段报告由 `protocols/ag_ui_action_stream.py` 等待当前进度的标准 Custom、状态快照及可选消息帧交给流消费者后再返回，避免 Endpoint AI 辅助已进入 operation/query 等步骤而前端仍显示上一阶段；模型文本增量仍按原队列转发。消息等待任务在每次等待的 `finally` 中取消并等待退出，覆盖业务先结束、外层取消与 ASGI 断连；关流同时收口等待交付回执的业务任务。沿用现有 AG-UI 帧与阶段字段，不增加前端阶段推断或新传输协议。回归：`tests.test_ag_ui_action_stream` 的逐帧交付顺序、`tests.test_ag_ui_action_stream_cancellation` 的任务回收与 ASGI 断连，以及 `tests.test_endpoint_design_assist_stream` 的取消生命周期。
 
 - 查询阶段提示由 `agents/endpoint_design_assist_prompts.py::_TASKS["query"]` 独立维护，不再拼接通用映射和取值策略；保留原简洁输出、请求依赖及最多一层 AND/OR 子组。提示区分筛选与分页/排序参数、直接/固定/业务取值，限定本阶段问题，缺少会改变筛选语义的信息时整组留空提问。没有增加缺值策略、自动忽略条件或新协议。同步回归 `tests.test_endpoint_design_assist_query` 解析实际提示中的示例，经过真实 Pydantic、字段转换和组合校验，覆盖关键词 OR、分类/状态 AND 及阶段策略隔离。
 

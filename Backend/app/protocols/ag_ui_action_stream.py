@@ -166,16 +166,20 @@ def build_ag_ui_action_stream(
                 while not operation_task.done() or not event_queue.empty():
                     if event_queue.empty():
                         progress_task = asyncio.create_task(event_queue.get())
-                        done, _pending = await asyncio.wait(
-                            {operation_task, progress_task},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                        if progress_task not in done:
-                            progress_task.cancel()
+                        try:
+                            done, _pending = await asyncio.wait(
+                                {operation_task, progress_task},
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if progress_task not in done:
+                                continue
+                            queued_event = progress_task.result()
+                        finally:
+                            # asyncio.wait 被取消不会连带取消子任务；每次退出都回收消息等待者。
+                            if not progress_task.done():
+                                progress_task.cancel()
                             with suppress(asyncio.CancelledError):
                                 await progress_task
-                            continue
-                        queued_event = progress_task.result()
                     else:
                         queued_event = event_queue.get_nowait()
 
