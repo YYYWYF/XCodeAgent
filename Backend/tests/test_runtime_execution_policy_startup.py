@@ -10,10 +10,50 @@ from app.services.runtime_execution_policy import (
     verify_execution_policy,
 )
 from tests.test_runtime_endpoint_contracts import plan
+from app.services.runtime_agent_implementation import agent_implementation_facts
 
 
 class RuntimeExecutionPolicyStartupTests(unittest.TestCase):
     """用真实静态依赖编译与平台发布流程验证启动准入，不执行目标代码。"""
+
+    def test_registry_accepts_local_string_constants(self):
+        """普通及带类型注解的字符串常量保持原静态注册语义。"""
+        original = self.factory.read_text()
+        expected = agent_implementation_facts(self.root, {'order_assistant'})
+        for declaration in ('AGENT_ID = "order_assistant"', 'AGENT_ID: str = "order_assistant"'):
+            with self.subTest(declaration=declaration):
+                self.factory.write_text(declaration + '\n' + original.replace(
+                    '{"order_assistant": _build}', '{AGENT_ID: _build}'))
+                self.assertEqual(agent_implementation_facts(self.root, {'order_assistant'}), expected)
+
+    def test_registry_rejects_duplicate_resolved_identities(self):
+        """不同键写法解析为同一身份时仍拒绝重复注册。"""
+        original = self.factory.read_text()
+        for registry in ('{AGENT_ID: _build, "order_assistant": _build}',
+                         '{AGENT_ID: _build, OTHER_ID: _build}'):
+            with self.subTest(registry=registry):
+                self.factory.write_text('AGENT_ID = "order_assistant"\nOTHER_ID = "order_assistant"\n'
+                    + original.replace('{"order_assistant": _build}', registry))
+                with self.assertRaisesRegex(ValueError, '重复身份：order_assistant'):
+                    agent_implementation_facts(self.root, {'order_assistant'})
+
+    def test_registry_rejects_dynamic_and_unknown_keys(self):
+        """动态值、未定义身份与非字符串值不能通过常量解析绕过检查。"""
+        original = self.factory.read_text()
+        for declaration, key in (('AGENT_ID = get_id()', 'AGENT_ID'),
+                                 ('AGENT_ID = 123', 'AGENT_ID'), ('', 'UNKNOWN_ID'), ('', 'get_id()')):
+            with self.subTest(key=key, declaration=declaration):
+                self.factory.write_text(declaration + '\n' + original.replace(
+                    '{"order_assistant": _build}', '{' + key + ': _build}'))
+                with self.assertRaisesRegex(ValueError, '静态字符串常量'):
+                    agent_implementation_facts(self.root, {'order_assistant'})
+
+    def test_registry_constant_preserves_formal_identity_check(self):
+        """常量解析后仍只允许当前正式合同中的智能体身份。"""
+        self.factory.write_text('AGENT_ID = "unknown_agent"\n' + self.factory.read_text().replace(
+            '{"order_assistant": _build}', '{AGENT_ID: _build}'))
+        with self.assertRaisesRegex(ValueError, '正式合同以外'):
+            agent_implementation_facts(self.root, {'order_assistant'})
 
     def setUp(self):
         """准备一个已确认且存在实际静态 Builder 的最小应用。"""

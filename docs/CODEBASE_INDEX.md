@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+`services/runtime_agent_implementation.py` 支持 `_AGENT_BUILDERS` 的键引用本文件在注册表之前直接赋值的字符串常量（含类型注解）；不执行动态表达式，按解析后的字符串检查重复身份，并保留正式 Agent 集合检查。回归：`tests.test_runtime_execution_policy_startup`。
+
 `services/api_contracts.py` 对模型 Endpoint 候选缺少 `kind` 返回具体 ValueError 诊断，让 TechnicalPlan 续修保留候选并反馈字段错误，不抛 KeyError、不自动补类型。Runtime recovery 回归按当前启动返回值、隔离端口/命名空间及尚无正式计划的失败候选合同构造夹具，并验证中断后重算最新诊断。回归：`tests.test_technical_plan_runtime_recovery`。
 
 智能体调试目录 `services/runtime_debug_endpoints.py` 按生命周期中接口自身的 completed/unchanged 状态过滤业务调用入口和工具接口，不以 Agent 完成代替 Endpoint 完成；目录读取、设置确认返回及 JSON 请求发送前共用该规则。`AgentDebugPanel` 在目录移除当前接口时清理旧选择、输入及响应，转到可用入口。回归：`tests.test_runtime_debug_endpoints`。

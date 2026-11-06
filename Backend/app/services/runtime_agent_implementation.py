@@ -74,9 +74,19 @@ def agent_implementation_facts(root: Path, formal_ids: set[str]) -> dict[str, di
         raise ValueError("Agent 必须使用静态 _AGENT_BUILDERS 注册表。")
     bindings = {}
     for key, value in zip(registry.keys, registry.values):
-        if not isinstance(key, ast.Constant) or not isinstance(key.value, str) or not isinstance(value, ast.Name) or key.value in bindings:
-            raise ValueError("Agent 注册表包含动态或重复身份。")
-        bindings[key.value] = value.id
+        identity = key
+        if isinstance(key, ast.Name):
+            # 只解析注册表之前、本文件直接赋值的字符串，不导入或执行生成代码。
+            declaration = symbols.get(key.id)
+            identity = (declaration.value if isinstance(declaration, (ast.Assign, ast.AnnAssign))
+                        and declaration.lineno < assignment.lineno else None)
+        if not isinstance(identity, ast.Constant) or not isinstance(identity.value, str):
+            raise ValueError("Agent 注册表身份必须为字符串字面量或本文件预先定义的静态字符串常量。")
+        if not isinstance(value, ast.Name):
+            raise ValueError("Agent 注册表构造器必须为静态函数名。")
+        if identity.value in bindings:
+            raise ValueError(f"Agent 注册表包含重复身份：{identity.value}。")
+        bindings[identity.value] = value.id
     if set(bindings) - formal_ids:
         raise ValueError("实际注册表包含正式合同以外的 Agent 或模板 chat。")
     for agent_id, builder in bindings.items():
