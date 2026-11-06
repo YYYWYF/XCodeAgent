@@ -1138,14 +1138,14 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertIsNone(selected)
         self.assertEqual(candidates, [primary, second])
 
-    def test_backend_readiness_accepts_only_current_version_markers(self) -> None:
-        """验证两种版本标志可就绪，普通 Started 日志和历史标志均无效。"""
+    def test_backend_readiness_requires_current_application_started_log(self) -> None:
+        """启动横幅、端口初始化和历史完成日志均不能替代本轮应用启动完成。"""
 
         with tempfile.TemporaryDirectory() as directory:
             stdout_log = Path(directory) / "backend.stdout.log"
             stderr_log = Path(directory) / "backend.stderr.log"
-            historical = "Spring Boot Version 3.5\n"
-            stdout_log.write_text(f"{historical}Started Application\n", encoding="utf-8")
+            historical = "Started Application in 3.5 seconds (process running for 4)\n"
+            stdout_log.write_text(f"{historical}Spring Boot Version 3.5\n", encoding="utf-8")
             stderr_log.write_text("", encoding="utf-8")
             self.assertFalse(
                 _backend_logs_are_ready(
@@ -1156,29 +1156,65 @@ class ProjectLauncherTests(unittest.TestCase):
                 )
             )
 
-            stdout_log.write_text("Spring Boot Version 3.5\n", encoding="utf-8")
-            self.assertTrue(
-                _backend_logs_are_ready(
-                    stdout_log=stdout_log,
-                    stdout_offset=0,
-                    stderr_log=stderr_log,
-                    stderr_offset=0,
-                )
+            cases = (
+                ("Spring Boot Version 3.5\n", False),
+                ("ZA21 Version 2.0\n", False),
+                ("Started Application\n", False),
+                ("Tomcat initialized with port(s): 8080 (http)\n", False),
+                ("Tomcat started on port(s): 8080 (http)\n", False),
+                ("INFO 123 --- [main] com.example.Application : Started Application in 3.5 seconds (JVM running for 4)\n", True),
+                ("INFO Started com.example.Main$Application in 3 seconds (process running for 4)\n", True),
+                ("INFO \x1b[32mStarted\x1b[0m Application in 3.5 seconds\n", True),
             )
+            for content, expected in cases:
+                for output in (stdout_log, stderr_log):
+                    with self.subTest(content=content, output=output.name):
+                        stdout_log.write_text("", encoding="utf-8")
+                        stderr_log.write_text("", encoding="utf-8")
+                        output.write_text(content, encoding="utf-8")
+                        self.assertEqual(
+                            _backend_logs_are_ready(
+                                stdout_log=stdout_log, stdout_offset=0,
+                                stderr_log=stderr_log, stderr_offset=0,
+                            ), expected,
+                        )
 
-            stdout_log.write_text("", encoding="utf-8")
-            stderr_log.write_text("ZA21 Version 2.0\n", encoding="utf-8")
-            self.assertTrue(
-                _backend_logs_are_ready(
-                    stdout_log=stdout_log,
-                    stdout_offset=0,
-                    stderr_log=stderr_log,
-                    stderr_offset=0,
-                )
-            )
+    def test_backend_startup_failure_overrides_ready_log_before_process_exits(self) -> None:
+        """端口冲突等明确失败必须覆盖双流成功信号，无需等待仍存活的进程退出。"""
+        failures = (
+            "APPLICATION FAILED TO START\n",
+            "Application run failed\n",
+            "Web server failed to start. Port 8080 was already in use.\n",
+            "java.net.BindException: Address already in use\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            stdout_log = Path(directory) / "stdout.log"
+            stderr_log = Path(directory) / "stderr.log"
+            for failure in failures:
+                for failed_output in (stdout_log, stderr_log):
+                    with self.subTest(failure=failure, output=failed_output.name):
+                        stdout_log.write_text("Started Application in 3.5 seconds\n", encoding="utf-8")
+                        stderr_log.write_text("Started Application in 3.5 seconds\n", encoding="utf-8")
+                        failed_output.write_text(failure, encoding="utf-8")
+                        with patch("app.services.backend_project_launcher.time.sleep") as sleep:
+                            ready = _wait_for_backend_ready(
+                                SimpleNamespace(poll=lambda: None),
+                                stdout_log=stdout_log, stdout_offset=0,
+                                stderr_log=stderr_log, stderr_offset=0,
+                            )
+                        self.assertFalse(ready)
+                        sleep.assert_not_called()
+
+            # 旧轮失败也不能污染已通过偏移隔离的新启动。
+            stdout_log.write_text(failures[0] + "Started Application in 3.5 seconds\n", encoding="utf-8")
+            stderr_log.write_text("", encoding="utf-8")
+            self.assertTrue(_backend_logs_are_ready(
+                stdout_log=stdout_log, stdout_offset=len(failures[0]),
+                stderr_log=stderr_log, stderr_offset=0,
+            ))
 
     def test_backend_readiness_stops_for_exited_process_and_times_out(self) -> None:
-        """验证 Java 进程提前退出或未产生版本标志时不会误报就绪。"""
+        """验证 Java 进程提前退出或未完成启动时不会误报就绪。"""
 
         fake_process = SimpleNamespace(poll=lambda: 1)
         with tempfile.TemporaryDirectory() as directory:

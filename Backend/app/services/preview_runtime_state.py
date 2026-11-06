@@ -301,7 +301,7 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                         raise ProcessLookupError()
             except (OSError, ValueError):
                 message = "服务进程已退出或就绪检测失败，请重启服务。"
-                part.update(status="failed", message=message)
+                part.update(status="failed", ready=False, message=message)
                 value.update(status="failed", message=message, failedStage=f"{layer}_process", previewUrl=None)
                 value["diagnostics"] = diagnostics_from_command(workspace, f"{layer}_process", "readiness", message, {
                     "stdout_log": str(root / f"{layer}.stdout.log"),
