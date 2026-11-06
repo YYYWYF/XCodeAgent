@@ -4,10 +4,9 @@ import {
   EyeOutlined,
   InboxOutlined,
   LayoutOutlined,
-  ReloadOutlined,
-  ThunderboltOutlined
+  ReloadOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Input, Modal, Spin, Tag, Typography } from 'antd'
+import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography } from 'antd'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -36,6 +35,12 @@ import './UiDesignConfirmationPanel.less'
 const { Paragraph, Text } = Typography
 
 const { TextArea } = Input
+
+// 后台 UI 设计稿生成池的并发上限（与后端 Settings.ui_design_concurrency=3 对齐）。
+// 超过该数量的页面同时生成时，模型调用拥塞易导致输出为空/截断而失败；前端据此
+// 禁用多余页面的「生成/换一换」按钮，等任一在途任务完成（confirmed/failed/cancelled）
+// 后自动放开，避免一次性提交过多页面把池挤爆。
+const MAX_CONCURRENT_UI_GENERATION = 3
 
 type PageDesign = {
   pageId?: string
@@ -306,6 +311,15 @@ export default function UiDesignConfirmationPanel({
         .filter(Boolean),
     [pages, isPageGenerating]
   )
+  // 当前正在生成中的页面数：合并本地 acting（排除 'adjust' 全局哨兵）与后台池状态，
+  // 去重后计数。达到 MAX_CONCURRENT_UI_GENERATION 时禁用其余页面的「生成/换一换」按钮。
+  const activeGenerationCount = useMemo(() => {
+    const ids = new Set<string>()
+    for (const id of actingPageIds) if (id !== 'adjust') ids.add(id)
+    for (const id of generatingPageIds) ids.add(id)
+    return ids.size
+  }, [actingPageIds, generatingPageIds])
+  const generationSlotsFull = activeGenerationCount >= MAX_CONCURRENT_UI_GENERATION
 
   // 设计稿生成进度：文案 + 当前正在生成的那一页（见 uiDesignGenerationProgress 的说明）。
   // 只在 adjust 进行中采信 pageId：run 结束后事件仍留在 workflow.events 里，
@@ -386,33 +400,6 @@ export default function UiDesignConfirmationPanel({
     )
   }
 
-  // 一键并发生成所有未确认页面的设计稿：把所有 pending 页一次性提交为 multi
-  // action，后端入队到进程级 worker pool 并发调度。已确认页、生成中页跳过。
-  const generateAll = (): void => {
-    if (disabled || runInFlightRef.current) return
-    const pendingPages = pages.filter(
-      (page) =>
-        !isPageConfirmed(page) &&
-        !isPageGenerating(page) &&
-        !actingSet.has(page.pageId || '')
-    )
-    if (pendingPages.length === 0) return
-    const batch = pendingPages.map((page) => ({
-      pageId: page.pageId || '',
-      action: 'regenerate' as const,
-    }))
-    // 立即把这些页标记为 acting（禁用按钮 + 显示生成中），与逐页点击一致。
-    const actingPageIds = batch.map((b) => b.pageId)
-    setActingPageIds(actingPageIds)
-    runInFlightRef.current = true
-    observedRunningRef.current = false
-    const payload =
-      batch.length === 1
-        ? { pageId: batch[0].pageId, action: batch[0].action }
-        : { action: 'multi', actions: batch }
-    onSubmit(workflow, { ui_design_action: payload, __applicationPlanningAction: 'ui_action' })
-  }
-
   // 把队列中所有待处理 action 取出，提交一个 run。单 action 仍发单 action dict
   // （向后兼容），多 action 发 {action:'multi', actions:[...]}，后端入队到进程级
   // worker pool 异步生成。提交前置 runInFlight=true。
@@ -449,10 +436,11 @@ export default function UiDesignConfirmationPanel({
         // 网络失败不阻塞本地复位——本地加载态卡住的危害远大于一次取消请求丢失。
       }
       setActingPageIds((prev) => prev.filter((id) => id !== pageId))
-      if (actingPageIdsRef.current.filter((id) => id !== pageId).length === 0) {
-        runInFlightRef.current = false
-        observedRunningRef.current = false
-      }
+      // 停止后总是复位 runInFlight：生成池架构下 run 只是入队、瞬时返回，
+      // runInFlight 卡住（没观察到 running 帧）会导致后续「换一换/生成」全部 early-return 卡死。
+      // 即便后端 run 仍在途，下一次提交会发新 run，后端 pool 幂等入队，不会重复生成。
+      runInFlightRef.current = false
+      observedRunningRef.current = false
       // 立即把该页 override 置为 cancelled，卡片马上显示已停止（不等轮询）。
       setPageStatusOverrides((prev) => ({ ...prev, [pageId]: 'cancelled' }))
     },
@@ -461,15 +449,25 @@ export default function UiDesignConfirmationPanel({
 
   // 逐页"选模板"或"重新生成"：点击即把该页加入 acting 集合（立即禁用该页按钮 +
   // 显示"生成中"）并入队。生成已解耦到进程级 worker pool，单页 run 只负责入队 +
-  // 重读清单、开销极小，因此无 run 进行中时立即 flush 单页 action，不再攒批；
-  // 并发由 pool 内部调度，前端不再设 3 页上限。run 进行中只入队，等 run 完成后
-  // cleanup-effect 自动 flush 下一批。已在处理中（本地 acting 或后台 queued/generating）
-  // 的页跳过，避免重复入队。
+  // 重读清单、开销极小，因此无 run 进行中时立即 flush 单页 action，不再攒批。
+  // 并发上限与后端 pool 对齐（MAX_CONCURRENT_UI_GENERATION）：达到上限时拒绝新提交，
+  // 避免一次性入队过多页面把模型调用挤爆导致输出为空/截断失败。run 进行中只入队，
+  // 等 run 完成后 cleanup-effect 自动 flush 下一批。已在处理中（本地 acting 或后台
+  // queued/generating）的页跳过，避免重复入队。
   const submitPageAction = useCallback(
     (pageId: string, action: 'select_template' | 'regenerate', templateId?: string): void => {
       if (actingSet.has(pageId)) return
       const page = pages.find((p) => (p.pageId || '') === pageId)
       if (page && isPageGenerating(page)) return
+      // 并发上限与后端 pool 对齐：用 ref 实时计数已入队页面，避免快速连点时
+      // React state 异步更新导致 generationSlotsFull 仍是旧值、多个点击同时通过。
+      // actingPageIdsRef 在 render 时同步赋值，但连点同一 tick 内不会重 render，
+      // 所以这里用 pendingActionsRef + actingPageIdsRef 合并去重做实时判断。
+      const inFlightIds = new Set<string>()
+      for (const id of actingPageIdsRef.current) if (id !== 'adjust') inFlightIds.add(id)
+      for (const item of pendingActionsRef.current) inFlightIds.add(item.pageId)
+      for (const id of generatingPageIds) inFlightIds.add(id)
+      if (inFlightIds.size >= MAX_CONCURRENT_UI_GENERATION) return
       setActingPageIds((prev) => (prev.includes(pageId) ? prev : [...prev, pageId]))
       pendingActionsRef.current.push({ pageId, action, templateId })
       onActivePageChange?.(pageId)
@@ -478,7 +476,7 @@ export default function UiDesignConfirmationPanel({
       // 无 run 进行中：立即提交单页动作，生成由后台 pool 异步完成。
       flushPendingActions()
     },
-    [actingSet, flushPendingActions, isPageGenerating, onActivePageChange, pages, setActingPageIds]
+    [actingSet, flushPendingActions, generatingPageIds, isPageGenerating, onActivePageChange, pages, setActingPageIds]
   )
 
   // 从输入框文本解析 @页面名 提及，映射回 pageId。按已知页面名/ID 做最长匹配，
@@ -828,18 +826,6 @@ export default function UiDesignConfirmationPanel({
             {confirmedCount} / {pages.length}
           </span>
         ) : null}
-        {pages.length - confirmedCount > 0 ? (
-          <Button
-            className={cx('ui-design-generate-all-btn')}
-            disabled={disabled || uiGenerationInProgress}
-            icon={<ThunderboltOutlined />}
-            onClick={generateAll}
-            title="一次性并发生成所有未确认页面的设计稿"
-            type="primary"
-          >
-            全部生成
-          </Button>
-        ) : null}
         {actingPageIds.length > 0 || generatingPageIds.length > 0 ? (
           <Button
             className={cx('ui-design-refresh-btn')}
@@ -953,15 +939,27 @@ export default function UiDesignConfirmationPanel({
                         >
                           查看设计稿
                         </Button>
-                        <Button
-                          className={cx('ui-design-action-btn')}
-                          disabled={disabled || generating || templates.length === 0}
-                          icon={<LayoutOutlined />}
-                          onClick={() => setTemplatePickerFor(pageId)}
-                          title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
-                        >
-                          选模板
-                        </Button>
+                        {!generating && generationSlotsFull ? (
+                          <Tooltip title={`仅支持同时 ${MAX_CONCURRENT_UI_GENERATION} 个UI设计稿正在生成，请稍后...`}>
+                            <Button
+                              className={cx('ui-design-action-btn')}
+                              disabled
+                              icon={<LayoutOutlined />}
+                            >
+                              选模板
+                            </Button>
+                          </Tooltip>
+                        ) : (
+                          <Button
+                            className={cx('ui-design-action-btn')}
+                            disabled={disabled || generating || templates.length === 0}
+                            icon={<LayoutOutlined />}
+                            onClick={() => setTemplatePickerFor(pageId)}
+                            title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
+                          >
+                            选模板
+                          </Button>
+                        )}
                         {generating ? (
                           <Button
                             className={cx('ui-design-action-btn')}
@@ -971,9 +969,20 @@ export default function UiDesignConfirmationPanel({
                           >
                             停止
                           </Button>
+                        ) : !generating && generationSlotsFull ? (
+                          <Tooltip title={`仅支持同时 ${MAX_CONCURRENT_UI_GENERATION} 个UI设计稿正在生成，请稍后...`}>
+                            <Button
+                              className={cx('ui-design-action-btn')}
+                              disabled
+                              icon={<ReloadOutlined />}
+                            >
+                              {page.code ? '换一换' : '生成'}
+                            </Button>
+                          </Tooltip>
                         ) : (
                           <Button
                             className={cx('ui-design-action-btn')}
+                            disabled={disabled || generating}
                             icon={<ReloadOutlined />}
                             onClick={() => submitPageAction(pageId, 'regenerate')}
                             title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
@@ -1154,15 +1163,27 @@ export default function UiDesignConfirmationPanel({
                   >
                     查看设计稿
                   </Button>
-                  <Button
-                    className={cx('ui-design-action-btn')}
-                    disabled={disabled || generating || templates.length === 0}
-                    icon={<LayoutOutlined />}
-                    onClick={() => setTemplatePickerFor(pageId)}
-                    title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
-                  >
-                    选模板
-                  </Button>
+                  {!acting && generationSlotsFull ? (
+                    <Tooltip title={`仅支持同时 ${MAX_CONCURRENT_UI_GENERATION} 个UI设计稿正在生成，请稍后...`}>
+                      <Button
+                        className={cx('ui-design-action-btn')}
+                        disabled
+                        icon={<LayoutOutlined />}
+                      >
+                        选模板
+                      </Button>
+                    </Tooltip>
+                  ) : (
+                    <Button
+                      className={cx('ui-design-action-btn')}
+                      disabled={disabled || generating || templates.length === 0}
+                      icon={<LayoutOutlined />}
+                      onClick={() => setTemplatePickerFor(pageId)}
+                      title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
+                    >
+                      选模板
+                    </Button>
+                  )}
                   {acting ? (
                     <Button
                       className={cx('ui-design-action-btn')}
@@ -1172,6 +1193,16 @@ export default function UiDesignConfirmationPanel({
                     >
                       停止
                     </Button>
+                  ) : !acting && generationSlotsFull ? (
+                    <Tooltip title={`仅支持同时 ${MAX_CONCURRENT_UI_GENERATION} 个UI设计稿正在生成，请稍后...`}>
+                      <Button
+                        className={cx('ui-design-action-btn', 'ui-design-action-btn-regenerate')}
+                        disabled
+                        icon={<ReloadOutlined />}
+                      >
+                        {page.code ? '换一换' : '生成'}
+                      </Button>
+                    </Tooltip>
                   ) : (
                     <Button
                       className={cx('ui-design-action-btn', 'ui-design-action-btn-regenerate')}
