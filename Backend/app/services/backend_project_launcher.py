@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.services.backend_process_registry import (
     backend_launch_lock,
@@ -36,7 +36,15 @@ from app.utils.subprocess_platform import preview_process_creation_options
 BACKEND_BUILD_TIMEOUT_SECONDS = 600
 BACKEND_READY_TIMEOUT_SECONDS = 60
 BACKEND_READY_INTERVAL_SECONDS = 1
-BACKEND_READY_MARKERS = ("Spring Boot", "ZA21 Version")
+_BACKEND_READY_PATTERN = re.compile(
+    r"\bStarted\s+[\w.$]+\s+in\s+\d+(?:[.,]\d+)?\s+seconds\b"
+)
+_BACKEND_FAILURE_PATTERN = re.compile(
+    r"APPLICATION FAILED TO START|Application run failed|Web server failed to start"
+    r"|Port\s+\d+\s+was already in use|BindException[^\n]*Address already in use",
+    re.IGNORECASE,
+)
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _BACKEND_PORT_PATTERN = re.compile(
     r"(?:Tomcat|Jetty|Netty|Undertow)[^\n]*?port(?:\(s\)|s)?\s*:?\s*(\d+)",
     re.IGNORECASE,
@@ -321,6 +329,13 @@ def _launch_backend_project_locked(
             message = f"Java 后端进程已退出（退出码：{returncode}）。"
         elif process is None:
             message = "Java 后端启动命令执行失败。"
+        elif _backend_startup_status(
+            stdout_log=runtime_root / "backend.stdout.log",
+            stdout_offset=int(server_result.get("stdout_offset") or 0),
+            stderr_log=runtime_root / "backend.stderr.log",
+            stderr_offset=int(server_result.get("stderr_offset") or 0),
+        ) == "failed":
+            message = "Java 后端启动失败，请查看本次启动日志。"
         else:
             message = "Java 后端就绪检查超时。"
         if resource_failure:
@@ -584,18 +599,21 @@ def _wait_for_backend_ready(
     stderr_log: Path,
     stderr_offset: int,
 ) -> bool:
-    """监督 Java 进程，并等待本次日志出现约定的版本标志。"""
+    """监督 Java 进程，等待应用启动完成，发现明确启动失败时立即结束等待。"""
 
     deadline = time.monotonic() + BACKEND_READY_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         if process.poll() is not None:
             return False
-        if _backend_logs_are_ready(
+        status = _backend_startup_status(
             stdout_log=stdout_log,
             stdout_offset=stdout_offset,
             stderr_log=stderr_log,
             stderr_offset=stderr_offset,
-        ):
+        )
+        if status == "failed":
+            return False
+        if status == "ready":
             return process.poll() is None
         time.sleep(BACKEND_READY_INTERVAL_SECONDS)
     return False
@@ -608,11 +626,32 @@ def _backend_logs_are_ready(
     stderr_log: Path,
     stderr_offset: int,
 ) -> bool:
-    """仅检查本次 Java 启动新增的 stdout/stderr 是否包含版本就绪标志。"""
+    """仅在本轮日志证明应用已启动完成且没有明确启动失败时认定就绪。"""
 
-    return _log_contains_backend_ready_marker(stdout_log, stdout_offset) or (
-        _log_contains_backend_ready_marker(stderr_log, stderr_offset)
+    return _backend_startup_status(
+        stdout_log=stdout_log,
+        stdout_offset=stdout_offset,
+        stderr_log=stderr_log,
+        stderr_offset=stderr_offset,
+    ) == "ready"
+
+
+def _backend_startup_status(
+    *,
+    stdout_log: Path,
+    stdout_offset: int,
+    stderr_log: Path,
+    stderr_offset: int,
+) -> Literal["starting", "ready", "failed"]:
+    """合并本轮双流证据，失败信号优先于应用完成日志，启动横幅不代表就绪。"""
+
+    contents = (
+        _read_backend_startup_log(stdout_log, stdout_offset),
+        _read_backend_startup_log(stderr_log, stderr_offset),
     )
+    if any(_BACKEND_FAILURE_PATTERN.search(content) for content in contents):
+        return "failed"
+    return "ready" if any(_BACKEND_READY_PATTERN.search(content) for content in contents) else "starting"
 
 
 def _detect_backend_port(
@@ -639,16 +678,16 @@ def _detect_backend_port(
     return None
 
 
-def _log_contains_backend_ready_marker(path: Path, offset: int) -> bool:
-    """从指定偏移读取日志，并按大小写精确匹配后端版本标志。"""
+def _read_backend_startup_log(path: Path, offset: int) -> str:
+    """从启动偏移读取日志并清除终端颜色码，避免历史输出或颜色影响判定。"""
 
     try:
         with path.open("rb") as stream:
             stream.seek(max(0, offset))
             content = stream.read().decode("utf-8", errors="replace")
     except OSError:
-        return False
-    return any(marker in content for marker in BACKEND_READY_MARKERS)
+        return ""
+    return _ANSI_ESCAPE_PATTERN.sub("", content)
 
 
 def _base_backend_launch_payload(
