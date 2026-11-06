@@ -1069,7 +1069,7 @@ export type WorkflowBuildTargetReview = {
 
 export type WorkflowBackendTaskScope = {
   backendStage?: 'foundation' | 'business' | 'controller'
-  coveredEndpoints?: Array<{ id: string; method: string; path: string }>
+  coveredEndpoints?: Array<{ id: string; method: string; path: string; summary: string }>
 }
 
 export type WorkflowBuildTaskPlanTask = WorkflowBackendTaskScope & {
@@ -1080,6 +1080,7 @@ export type WorkflowBuildTaskPlanTask = WorkflowBackendTaskScope & {
   owner?: string
   unit_id?: string
   dependencies?: string[]
+  dependencyTitles?: Record<string, string>
   target_files?: string[]
   allowed_paths?: string[]
   change_scope?: Array<Record<string, unknown>>

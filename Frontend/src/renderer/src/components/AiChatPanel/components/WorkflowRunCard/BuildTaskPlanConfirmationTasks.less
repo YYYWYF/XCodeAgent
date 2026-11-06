@@ -36,7 +36,7 @@
 
   > .ant-collapse-item > .ant-collapse-header {
     align-items: center;
-    padding: 11px 12px;
+    padding: 16px;
     color: var(--wb-text);
   }
 
@@ -98,22 +98,6 @@
   }
 }
 
-.@{class-prefix}-workflow-dag-confirmation-task-role.ant-tag {
-  margin: 0;
-  padding: 0 5px;
-  color: var(--wb-accent);
-  font-size: 12px;
-  line-height: 16px;
-  background: var(--wb-accent-soft);
-  border-color: var(--wb-accent-border);
-  border-radius: 4px;
-}
-
-.@{class-prefix}-workflow-dag-confirmation-task-role-reused.ant-tag {
-  color: var(--wb-text-secondary);
-  background: var(--wb-surface-subtle);
-}
-
 .@{class-prefix}-workflow-dag-confirmation-task-details,
 .@{class-prefix}-workflow-dag-confirmation-task-detail-block {
   display: flex;
@@ -137,42 +121,64 @@
 
 .@{class-prefix}-workflow-dag-confirmation-task-disclosures.ant-collapse {
   min-width: 0;
-  border-top: 1px solid var(--wb-border);
-  border-bottom: 1px solid var(--wb-border);
+  border: 0;
   background: transparent;
 
   > .ant-collapse-item {
-    margin: 0;
-    border-bottom: 1px solid var(--wb-border);
-    background: transparent;
+    margin: 0 0 8px;
+    overflow: hidden;
+    border: 1px solid var(--wb-border);
+    border-radius: 8px;
+    background: var(--wb-surface);
   }
 
   > .ant-collapse-item:last-child {
-    border-bottom: 0;
+    margin-bottom: 0;
+    border-radius: 8px;
+  }
+
+  > .ant-collapse-item-active > .ant-collapse-header {
+    box-shadow: inset 3px 0 0 var(--wb-accent);
   }
 
   > .ant-collapse-item > .ant-collapse-header {
     align-items: center;
-    // 右侧为 Ant Design 的绝对定位展开箭头保留空间，避免与“X 项”计数重叠。
-    padding: 9px 40px 9px 2px;
+    // 为展开文字及原生箭头留出独立空间，避免挤占数量标签。
+    padding: 12px 92px 12px 12px;
     color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+
+    &::after {
+      content: '展开';
+      position: absolute;
+      right: 38px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--wb-accent);
+      font-size: 12px;
+      pointer-events: none;
+    }
+
+    &[aria-expanded='true']::after {
+      content: '收起';
+    }
   }
 
   > .ant-collapse-item > .ant-collapse-header:hover {
-    background: var(--wb-surface-subtle);
+    background: var(--wb-accent-soft);
   }
 
   > .ant-collapse-item > .ant-collapse-header .ant-collapse-arrow {
-    color: var(--wb-text-tertiary);
+    color: var(--wb-accent);
   }
 
   > .ant-collapse-item > .ant-collapse-content {
-    background: transparent;
-    border-top: 0;
+    background: var(--wb-surface);
+    border-top: 1px solid var(--wb-border);
   }
 
   > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
-    padding: 1px 2px 10px;
+    padding: 12px;
   }
 
   .@{class-prefix}-workflow-dag-confirmation-acceptance {
@@ -188,12 +194,23 @@
   width: 100%;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 
   small {
     flex: 0 0 auto;
     color: var(--wb-text-tertiary);
     font-size: 12px;
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-disclosure-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  .anticon {
+    color: var(--wb-text-secondary);
   }
 }
 

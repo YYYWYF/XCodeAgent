@@ -12,6 +12,7 @@ import type {
   WorkflowBuildTaskPlanConfirmation
 } from '../../../../typings'
 import { cx } from '../../../../utils'
+import { taskDependencyNames } from './buildTaskPresentation'
 import {
   RetainedTaskSummary,
   TargetScopeReview,
@@ -41,6 +42,7 @@ export default function BuildTaskPlanConfirmation({
   onSubmit
 }: BuildTaskPlanConfirmationProps): JSX.Element {
   const tasks = Array.isArray(plan?.reviewTasks) ? plan.reviewTasks : []
+  const tasksById = new Map(tasks.map((task) => [task.id, task]))
   const retainedSummary = plan?.retainedTaskSummary
   const confirmDisabled =
     disabled || (tasks.length === 0 && plan?.status !== 'ready')
@@ -93,7 +95,7 @@ export default function BuildTaskPlanConfirmation({
                   header={<TaskHeader index={index} task={task} />}
                   key={task.id}
                 >
-                  <TaskDetails task={task} />
+                  <TaskDetails task={task} dependencyNames={taskDependencyNames(task, tasksById)} />
                 </Collapse.Panel>
               ))}
             </Collapse>

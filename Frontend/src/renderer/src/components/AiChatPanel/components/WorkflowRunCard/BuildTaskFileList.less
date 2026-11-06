@@ -1,0 +1,160 @@
+.@{class-prefix}-workflow-task-files.ant-collapse {
+  min-width: 0;
+  background: transparent;
+
+  > .ant-collapse-item {
+    margin: 0;
+    overflow: hidden;
+    border: 0;
+    border-bottom: 1px solid var(--wb-border);
+    border-radius: 0;
+    background: var(--wb-surface);
+  }
+
+  > .ant-collapse-item:last-child {
+    border-bottom: 0;
+    border-radius: 0;
+  }
+
+  > .ant-collapse-item > .ant-collapse-header {
+    padding: 14px 30px 14px 2px;
+    color: var(--wb-text);
+
+    &:hover {
+      background: var(--wb-surface-subtle);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--wb-accent);
+      outline-offset: -2px;
+    }
+
+    .ant-collapse-arrow {
+      color: var(--wb-text-tertiary);
+    }
+  }
+
+  > .ant-collapse-item > .ant-collapse-content {
+    border-top: 1px solid var(--wb-border);
+    background: var(--wb-surface-subtle);
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-workflow-task-file-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.@{class-prefix}-workflow-task-file-operation.ant-tag {
+  margin: 0;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-color: transparent;
+}
+
+.@{class-prefix}-workflow-task-file-path {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  line-height: 1.65;
+  user-select: text;
+}
+
+.@{class-prefix}-workflow-task-file-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+
+  .ant-typography {
+    margin: 0 0 8px;
+    color: var(--wb-text);
+    font-size: 12px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 6px 12px;
+  overflow-wrap: anywhere;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+}
+
+.@{class-prefix}-workflow-dag-confirmation-task-title-line > .ant-typography {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-workflow-task-endpoint-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.@{class-prefix}-workflow-task-endpoint-copy {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+
+  code {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+  }
+}
+
+.@{class-prefix}-workflow-task-method {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-subtle);
+
+  &[data-method='GET'],
+  &[data-method='HEAD'] {
+    color: var(--wb-code-add-text);
+    background: var(--wb-code-add);
+  }
+
+  &[data-method='POST'] {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+
+  &[data-method='PUT'],
+  &[data-method='PATCH'] {
+    color: var(--wb-warning);
+    background: color-mix(in srgb, var(--wb-warning) 10%, var(--wb-surface));
+  }
+
+  &[data-method='DELETE'] {
+    color: var(--wb-danger);
+    background: color-mix(in srgb, var(--wb-danger) 10%, var(--wb-surface));
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-tasks > .ant-collapse-item > .ant-collapse-header:hover {
+  background: var(--wb-surface-subtle);
+}
+
+.@{class-prefix}-workflow-dag-confirmation-tasks .ant-collapse-header:focus-visible {
+  outline: 2px solid var(--wb-accent);
+  outline-offset: -2px;
+}

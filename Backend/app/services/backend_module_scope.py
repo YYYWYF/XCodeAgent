@@ -35,7 +35,7 @@ def scope_endpoint_keys(tasks: Sequence[Mapping], scope: Mapping) -> set[tuple[s
 
 
 def backend_task_scope_projection(task: Mapping) -> dict:
-    """只公开任务阶段和覆盖接口的 HTTP 身份，不投射完整正式设计。"""
+    """公开任务阶段、覆盖接口的名称和 HTTP 身份，不投射完整正式设计。"""
     refs = task.get("source_refs") or {}
     stage = refs.get("backend_stage")
     if stage not in {"foundation", "business", "controller"}:
@@ -46,6 +46,7 @@ def backend_task_scope_projection(task: Mapping) -> dict:
         covered.append({
             "id": design["endpointId"], "method": endpoint.get("method") or "",
             "path": endpoint.get("path") or "",
+            "summary": endpoint.get("summary") or "",
         })
     return {"backendStage": stage, "coveredEndpoints": covered}
 

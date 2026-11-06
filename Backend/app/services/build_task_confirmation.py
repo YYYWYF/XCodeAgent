@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.services.build_task_planner import tasks_from_build_task_plan
+from app.services.backend_module_scope import backend_task_scope_projection
 from app.services.frontend_page_tree import (
     find_frontend_page,
     project_plan_page_records,
@@ -21,6 +22,7 @@ def project_build_task(
     task: dict[str, Any],
     *,
     review_role: str | None = None,
+    tasks_by_id: Mapping[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """把内部叶子任务裁剪成 DAG 确认允许公开的 JSON 安全字段。"""
 
@@ -37,6 +39,13 @@ def project_build_task(
         "deliverables": task.get("deliverables") or [],
         "business_acceptance_checks": task.get("business_acceptance_checks") or [],
         "status": task.get("status") or "pending",
+        **backend_task_scope_projection(task),
+    }
+    # 仅从当前正式任务集合解析依赖名称，供跨本轮任务的只读提示使用。
+    projected["dependencyTitles"] = {
+        dependency: tasks_by_id[dependency]["title"]
+        for dependency in task.get("dependencies") or []
+        if tasks_by_id and dependency in tasks_by_id and tasks_by_id[dependency].get("title")
     }
     if review_role in {"new", "reused"}:
         projected["reviewRole"] = review_role
@@ -53,6 +62,7 @@ def build_task_confirmation_read_model(
     """生成不写回累计 DAG 的目标、统一任务列表及历史任务摘要投影。"""
 
     tasks = tasks_from_build_task_plan(build_task_plan)
+    tasks_by_id = {task["id"]: task for task in tasks if task.get("id")}
     context = _effective_build_context(build_task_plan, build_context)
     scope = build_execution_scope or build_task_plan.get("build_execution_scope") or {}
     review_tasks, retained_tasks, classification_errors, classification_blocked = _partition_confirmation_tasks(
@@ -62,7 +72,7 @@ def build_task_confirmation_read_model(
     read_model: dict[str, Any] = {
         "targetReview": _target_review(project_plan or {}, scope, context),
         "reviewTasks": [
-            project_build_task(task, review_role=review_role)
+            project_build_task(task, review_role=review_role, tasks_by_id=tasks_by_id)
             for task, review_role in review_tasks
         ],
         "retainedTaskSummary": _retained_task_summary(retained_tasks),

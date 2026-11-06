@@ -1,5 +1,11 @@
-import { ApiOutlined, CheckCircleOutlined, FileTextOutlined } from '@ant-design/icons'
-import { Collapse, Tag, Typography } from 'antd'
+import {
+  ApiOutlined,
+  BranchesOutlined,
+  FileTextOutlined,
+  FolderOutlined,
+  UnorderedListOutlined
+} from '@ant-design/icons'
+import { Collapse, Typography } from 'antd'
 import type {
   WorkflowBuildTargetReview,
   WorkflowBuildTargetReviewEndpoint,
@@ -7,13 +13,11 @@ import type {
   WorkflowBuildTaskPlanTask
 } from '../../../../typings'
 import { cx } from '../../../../utils'
+import { BuildTaskFileList } from './BuildTaskFileList'
+import { taskDisplayTitle, taskFilePresentation } from './buildTaskPresentation'
 
 /** 将目标与修改范围合并展示，并仅在页面确有关联接口时追加接口契约。 */
-export function TargetScopeReview({
-  review
-}: {
-  review: WorkflowBuildTargetReview
-}): JSX.Element {
+export function TargetScopeReview({ review }: { review: WorkflowBuildTargetReview }): JSX.Element {
   const { target, relatedEndpoints } = review
   const isPage = target.type === 'page'
   const isEndpoint = target.type === 'endpoint'
@@ -22,7 +26,11 @@ export function TargetScopeReview({
     <section className={cx('workflow-dag-confirmation-target')}>
       <div className={cx('workflow-dag-confirmation-section-heading')}>
         <span>
-          {isEndpoint ? <ApiOutlined aria-hidden="true" /> : <FileTextOutlined aria-hidden="true" />}
+          {isEndpoint ? (
+            <ApiOutlined aria-hidden="true" />
+          ) : (
+            <FileTextOutlined aria-hidden="true" />
+          )}
           <Typography.Text strong>本次开发目标与范围</Typography.Text>
         </span>
       </div>
@@ -118,7 +126,7 @@ export function RetainedTaskSummary({
   )
 }
 
-/** 展示折叠态任务摘要，不暴露任务 ID、Unit 或依赖边。 */
+/** 折叠态仅展示任务序号与业务名称，将细节集中到任务正文。 */
 export function TaskHeader({
   index,
   task
@@ -126,90 +134,134 @@ export function TaskHeader({
   index: number
   task: WorkflowBuildTaskPlanTask
 }): JSX.Element {
-  const reviewRoleLabel =
-    task.reviewRole === 'new' ? '新增' : task.reviewRole === 'reused' ? '复用' : ''
   return (
     <div className={cx('workflow-dag-confirmation-task-header')}>
       <span className={cx('workflow-dag-confirmation-task-index')}>{index + 1}</span>
       <span className={cx('workflow-dag-confirmation-task-copy')}>
         <span className={cx('workflow-dag-confirmation-task-title-line')}>
-          <Typography.Text strong>{task.title || `开发任务 ${index + 1}`}</Typography.Text>
-          {reviewRoleLabel ? (
-            <Tag
-              className={cx(
-                'workflow-dag-confirmation-task-role',
-                `workflow-dag-confirmation-task-role-${task.reviewRole}`
-              )}
-            >
-              {reviewRoleLabel}
-            </Tag>
-          ) : null}
+          <Typography.Text strong>
+            {taskDisplayTitle(task) || `开发任务 ${index + 1}`}
+          </Typography.Text>
         </span>
       </span>
     </div>
   )
 }
 
-/** 展示任务执行说明，并按需展开修改范围与业务验收标准。 */
-export function TaskDetails({ task }: { task: WorkflowBuildTaskPlanTask }): JSX.Element {
-  const paths = taskPaths(task)
+/** 将涉及接口、依赖、文件和待验收内容独立折叠并保留内部展开状态。 */
+export function TaskDetails({
+  task,
+  dependencyNames = []
+}: {
+  task: WorkflowBuildTaskPlanTask
+  dependencyNames?: string[]
+}): JSX.Element {
+  const { files, ranges, supplementaryDescription } = taskFilePresentation(task)
   const businessChecks = acceptanceTexts(task.business_acceptance_checks)
+  const coveredEndpoints = task.coveredEndpoints || []
   return (
     <div className={cx('workflow-dag-confirmation-task-details')}>
-      <div className={cx('workflow-dag-confirmation-task-detail-block')}>
-        <Typography.Text className={cx('workflow-dag-confirmation-subsection-title')} strong>
-          执行说明
-        </Typography.Text>
-        <Typography.Paragraph className={cx('workflow-dag-confirmation-instructions')}>
-          {task.description || '未提供单独的执行说明'}
-        </Typography.Paragraph>
-      </div>
+      {supplementaryDescription ? (
+        <div className={cx('workflow-dag-confirmation-task-detail-block')}>
+          <Typography.Text className={cx('workflow-dag-confirmation-subsection-title')} strong>
+            任务补充说明
+          </Typography.Text>
+          <Typography.Paragraph className={cx('workflow-dag-confirmation-instructions')}>
+            {supplementaryDescription}
+          </Typography.Paragraph>
+        </div>
+      ) : null}
       <Collapse
         bordered={false}
         className={cx('workflow-dag-confirmation-task-disclosures')}
+        defaultActiveKey={[]}
+        destroyInactivePanel={false}
         expandIconPosition="right"
       >
-        <Collapse.Panel
-          header={<DisclosureHeader count={paths.length} label="修改范围" />}
-          key="scope"
-        >
-          {paths.length > 0 ? (
-            <ul className={cx('workflow-dag-confirmation-paths')}>
-              {paths.map((path) => (
-                <li key={path}>
-                  <code>{path}</code>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <Typography.Text type="secondary">未声明具体文件路径</Typography.Text>
-          )}
-        </Collapse.Panel>
-        {businessChecks.length > 0 ? (
+        {coveredEndpoints.length > 0 ? (
           <Collapse.Panel
-            header={<DisclosureHeader count={businessChecks.length} label="业务验收标准" />}
-            key="business-acceptance"
+            header={<DisclosureHeader count={coveredEndpoints.length} label="涉及接口" />}
+            key="endpoints"
           >
-            <AcceptanceList items={businessChecks} />
+            <div className={cx('workflow-dag-confirmation-task-metadata')}>
+              {coveredEndpoints.map((endpoint) => (
+                <div className={cx('workflow-task-endpoint-row')} key={endpoint.id}>
+                  <span
+                    className={cx('workflow-task-method')}
+                    data-method={endpoint.method.toUpperCase()}
+                  >
+                    {endpoint.method || 'API'}
+                  </span>
+                  <div className={cx('workflow-task-endpoint-copy')}>
+                    <Typography.Text>{endpoint.summary || '未提供接口名称'}</Typography.Text>
+                    <code>{endpoint.path}</code>
+                  </div>
+                </div>
+              ))}
+            </div>
           </Collapse.Panel>
         ) : null}
+        <Collapse.Panel
+          header={<DisclosureHeader count={dependencyNames.length} label="依赖任务" />}
+          key="dependencies"
+        >
+          <AcceptanceList items={dependencyNames} emptyText="无可展示的依赖任务" />
+        </Collapse.Panel>
+        <Collapse.Panel
+          header={<DisclosureHeader count={files.length} label="文件改动" unit="个文件" />}
+          key="files"
+        >
+          {files.length > 0 ? (
+            <BuildTaskFileList files={files} />
+          ) : (
+            <Typography.Text type="secondary">未声明具体文件</Typography.Text>
+          )}
+        </Collapse.Panel>
+        {ranges.length > 0 ? (
+          <Collapse.Panel
+            header={<DisclosureHeader count={ranges.length} label="允许修改范围" />}
+            key="scope"
+          >
+            <BuildTaskFileList files={ranges} />
+          </Collapse.Panel>
+        ) : null}
+        <Collapse.Panel
+          header={<DisclosureHeader count={businessChecks.length} label="待验收" />}
+          key="business-acceptance"
+        >
+          <AcceptanceList items={businessChecks} emptyText="本任务无独立业务验收标准" />
+        </Collapse.Panel>
       </Collapse>
-      {businessChecks.length === 0 ? (
-        <div className={cx('workflow-dag-confirmation-business-empty')}>
-          <Typography.Text>业务验收标准</Typography.Text>
-          <Typography.Text type="secondary">本任务无独立业务验收标准</Typography.Text>
-        </div>
-      ) : null}
     </div>
   )
 }
 
 /** 展示二级折叠项名称与内容数量，帮助用户判断是否需要展开。 */
-function DisclosureHeader({ count, label }: { count: number; label: string }): JSX.Element {
+function DisclosureHeader({
+  count,
+  label,
+  unit = '项'
+}: {
+  count: number
+  label: string
+  unit?: string
+}): JSX.Element {
+  const icons = {
+    涉及接口: <ApiOutlined />,
+    依赖任务: <BranchesOutlined />,
+    文件改动: <FileTextOutlined />,
+    允许修改范围: <FolderOutlined />,
+    待验收: <UnorderedListOutlined />
+  }
   return (
     <span className={cx('workflow-dag-confirmation-disclosure-header')}>
-      <Typography.Text>{label}</Typography.Text>
-      <small>{count} 项</small>
+      <span className={cx('workflow-dag-confirmation-disclosure-label')}>
+        <span aria-hidden="true">{icons[label as keyof typeof icons]}</span>
+        <Typography.Text>{label}</Typography.Text>
+      </span>
+      <small>
+        {count} {unit}
+      </small>
     </span>
   )
 }
@@ -235,7 +287,9 @@ function AcceptanceList({
         <ul>
           {items.map((item) => (
             <li key={item}>
-              <CheckCircleOutlined aria-hidden="true" />
+              <span className={cx('workflow-dag-confirmation-acceptance-dot')} aria-hidden="true">
+                •
+              </span>
               <span>{item}</span>
             </li>
           ))}
@@ -283,23 +337,6 @@ function endpointContractDetails(
     },
     { label: '错误码', value: endpoint.errorCodes.join('、') || '无' }
   ]
-}
-
-/** 收集任务声明的文件边界和交付物路径并去重。 */
-function taskPaths(task: WorkflowBuildTaskPlanTask): string[] {
-  const paths = [
-    ...(task.target_files || []),
-    ...(task.allowed_paths || []),
-    ...(task.change_scope || []).flatMap((item) =>
-      typeof item.path === 'string' ? [item.path] : []
-    ),
-    ...(task.deliverables || []).flatMap((item) =>
-      Array.isArray(item.paths)
-        ? item.paths.flatMap((path) => (typeof path === 'string' ? [path] : []))
-        : []
-    )
-  ]
-  return [...new Set(paths.map((path) => path.trim()).filter(Boolean))]
 }
 
 /** 从确定性验收对象中提取用户可读说明并去重。 */
