@@ -1,15 +1,11 @@
 [CmdletBinding()]
-param()
+param([string]$Env = "")
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendRoot = Join-Path $RepoRoot "Backend"
-$env:DEVAGENTSTUDIO_WORKING_DIR = if ($env:DEVAGENTSTUDIO_WORKING_DIR) {
-  $env:DEVAGENTSTUDIO_WORKING_DIR
-}
-else {
-  ".devagentstudio_dev"
-}
+. (Join-Path $PSScriptRoot "BackendEnvironment.ps1")
+Set-BackendEnvironment -AppEnvironment $Env -BackendRoot $BackendRoot -AllowExplicitFile | Out-Null
 
 $PythonCommand = $null
 $PythonArguments = @()
@@ -40,7 +36,10 @@ else {
 
 Push-Location $BackendRoot
 try {
+  & $PythonCommand @PythonArguments -m app.environment
+  if ($LASTEXITCODE -ne 0) { throw "Backend environment preflight failed." }
   & $PythonCommand @PythonArguments -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+  if ($LASTEXITCODE -ne 0) { throw "Backend startup failed." }
 }
 finally {
   Pop-Location

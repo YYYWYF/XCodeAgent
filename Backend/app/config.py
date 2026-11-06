@@ -4,21 +4,12 @@ import dataclasses
 import os
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
-from dotenv import load_dotenv
 from app.model_connection_config import load_transmit_settings, validate_model_transport
+from app.environment import load_backend_environment
 
 
-def _load_environment() -> None:
-    env_file = os.getenv("DEVAGENTSTUDIO_BACKEND_ENV_FILE")
-    if env_file:
-        load_dotenv(Path(env_file).expanduser(), override=False)
-        return
-    load_dotenv()
-
-
-_load_environment()
+load_backend_environment()
 
 _DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
 

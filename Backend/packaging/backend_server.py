@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import os
-import sys
-from pathlib import Path
-
-from dotenv import load_dotenv
+from app.environment import load_backend_environment
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -27,9 +24,7 @@ def main() -> None:
 def load_backend_env() -> None:
     """加载后端配置并在启动前校验冻结资源完整性。"""
 
-    env_file = resolve_env_file()
-    if env_file:
-        load_dotenv(env_file, override=False)
+    load_backend_environment()
 
     from app.observability.backend_logs import install_backend_log_capture
 
@@ -42,22 +37,8 @@ def load_backend_env() -> None:
     validate_page_templates()
 
 
-def resolve_env_file() -> Path | None:
-    configured_path = os.getenv("DEVAGENTSTUDIO_BACKEND_ENV_FILE")
-    if configured_path:
-        return Path(configured_path).expanduser().resolve()
-
-    default_env_file = executable_dir() / ".env"
-    return default_env_file if default_env_file.is_file() else None
-
-
-def executable_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parents[1]
-
-
 def parse_port(value: str | None) -> int:
+    """校验 Electron 分配或命令行传入的监听端口。"""
     if not value:
         return DEFAULT_PORT
     try:

@@ -1,6 +1,7 @@
 # 在 Windows x64 主机上依次打包后端和 Electron 安装包。
 [CmdletBinding()]
 param(
+  [string]$Env = "",
   [string]$Python = "",
   [switch]$Slim
 )
@@ -9,6 +10,8 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $BackendScript = Join-Path $PSScriptRoot "build-backend-win.ps1"
 $FrontendRoot = Join-Path $RepoRoot "Frontend"
+. (Join-Path $PSScriptRoot "BackendEnvironment.ps1")
+Set-BackendEnvironment -AppEnvironment $Env -BackendRoot (Join-Path $RepoRoot "Backend") -Required | Out-Null
 
 Get-Command pnpm -ErrorAction Stop | Out-Null
 
@@ -21,7 +24,7 @@ try {
     $env:DEVAGENTSTUDIO_BACKEND_GRAMMARS = "full"
   }
 
-  & $BackendScript -Python $Python
+  & $BackendScript -Env $Env -Python $Python
   if ($LASTEXITCODE -ne 0) {
     throw "Windows backend packaging failed."
   }
@@ -37,7 +40,7 @@ finally {
 
 Push-Location $FrontendRoot
 try {
-  & pnpm build:win:dev
+  & pnpm "build:win:$Env"
   if ($LASTEXITCODE -ne 0) {
     throw "Windows Electron packaging failed."
   }

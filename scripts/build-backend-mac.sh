@@ -4,7 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_ROOT="${BACKEND_ROOT:-"$ROOT_DIR/Backend"}"
 FRONTEND_ROOT="${FRONTEND_ROOT:-"$ROOT_DIR/Frontend"}"
-REQUESTED_ARCH="${1:-}"
+REQUESTED_ARCH=""
+if [ "$#" -gt 0 ] && [[ "$1" != --* ]]; then
+  REQUESTED_ARCH="$1"
+  shift
+fi
+source "$ROOT_DIR/scripts/backend-environment.sh"
+parse_backend_environment_arguments true false "$@"
+configure_backend_environment "$BACKEND_ROOT" false
 MACHINE_ARCH="$(uname -m)"
 case "$MACHINE_ARCH" in
   x86_64) BUILD_ARCH="x64" ;;
@@ -37,16 +44,10 @@ case "$PYTHON_VERSION" in
     ;;
 esac
 
-ENV_FILE="$BACKEND_ROOT/.env"
 SPEC_FILE="$BACKEND_ROOT/packaging/devagentstudio-backend.spec"
 DIST_DIR="$BACKEND_ROOT/dist/devagentstudio-backend"
 TARGET_DIR="$FRONTEND_ROOT/resources/backend/darwin-$BUILD_ARCH"
 TARGET_EXECUTABLE="$TARGET_DIR/devagentstudio-backend"
-
-if [ ! -f "$ENV_FILE" ]; then
-  echo "Missing Backend/.env. Create it before building the packaged backend." >&2
-  exit 1
-fi
 
 cd "$BACKEND_ROOT"
 "$PYTHON_BIN" -m pip install -r requirements-build.txt
@@ -62,7 +63,7 @@ fi
 rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 cp -R "$DIST_DIR"/. "$TARGET_DIR"/
-cp "$ENV_FILE" "$TARGET_DIR/.env"
+cp "$ENV_FILE" "$TARGET_DIR/$ENV_FILENAME"
 
 if [ ! -f "$TARGET_EXECUTABLE" ]; then
   echo "Staged backend executable not found: $TARGET_EXECUTABLE" >&2

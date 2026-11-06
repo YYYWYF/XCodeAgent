@@ -1,10 +1,10 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
-import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
-import { DEVAGENTSTUDIO_ENV } from './env'
+import { APP_ENV, DEVAGENTSTUDIO_ENV } from './env'
+import { backendEnvFilename, checkBackendHealth } from './backendEnvironment'
 
 const BACKEND_EXECUTABLE_NAMES: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'devagentstudio-backend',
@@ -25,13 +25,16 @@ type BundledBackendPaths = {
   envFilePath: string
 }
 
+/** 返回本次启动选择的后端地址。 */
 export function getBackendBaseUrl(): string {
   return backendBaseUrl
 }
 
+/** 启动内置后端或核验源码后端，并在环境一致后放行。 */
 export async function startBackendService(): Promise<string> {
   if (!shouldStartBundledBackend()) {
     backendBaseUrl = DEVAGENTSTUDIO_ENV.DEVAGENTSTUDIO_BACKEND_URL
+    await waitForBackendHealth(backendBaseUrl)
     return backendBaseUrl
   }
 
@@ -44,6 +47,7 @@ export async function startBackendService(): Promise<string> {
   const bundledBackend = await resolveBundledBackendPaths()
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    APP_ENV,
     DEVAGENTSTUDIO_BACKEND_HOST: BACKEND_HOST,
     DEVAGENTSTUDIO_BACKEND_PORT: String(port),
     DEVAGENTSTUDIO_BACKEND_ENV_FILE: bundledBackend.envFilePath,
@@ -106,6 +110,7 @@ function shouldStartBundledBackend(): boolean {
   return app.isPackaged && Boolean(BACKEND_EXECUTABLE_NAMES[process.platform])
 }
 
+/** 校验冻结后端资源及唯一环境文件，防止安装包夹带其他环境配置。 */
 async function resolveBundledBackendPaths(): Promise<BundledBackendPaths> {
   const backendDir = path.join(process.resourcesPath, 'backend')
   const executableName = BACKEND_EXECUTABLE_NAMES[process.platform]
@@ -114,10 +119,18 @@ async function resolveBundledBackendPaths(): Promise<BundledBackendPaths> {
   }
 
   const executablePath = path.join(backendDir, executableName)
-  const envFilePath = path.join(backendDir, '.env')
+  const envFilePath = path.join(backendDir, backendEnvFilename(APP_ENV))
+  const unexpectedFiles = (await fs.readdir(backendDir)).filter(
+    (name) => /^\.env(?:\..*)?$/i.test(name) && name !== backendEnvFilename(APP_ENV)
+  )
+  if (unexpectedFiles.length > 0) {
+    throw new Error(
+      `Packaged backend contains unexpected environment files: ${unexpectedFiles.join(', ')}`
+    )
+  }
 
   await assertFileExists(executablePath, 'Packaged backend executable')
-  await assertFileExists(envFilePath, 'Packaged backend .env')
+  await assertFileExists(envFilePath, `Packaged backend ${APP_ENV} configuration`)
 
   const bundledSkillsDir = path.join(backendDir, '_internal', 'app', 'builtin_skills')
   await assertDirectoryExists(bundledSkillsDir, 'Packaged backend built-in skills directory')
@@ -185,45 +198,20 @@ async function findAvailablePort(): Promise<number> {
   })
 }
 
-async function waitForBackendHealth(baseUrl: string, child: ChildProcess): Promise<void> {
+/** 在既有就绪预算内等待服务，环境错配立即失败。 */
+async function waitForBackendHealth(baseUrl: string, child?: ChildProcess): Promise<void> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
+    if (child && child.exitCode !== null) {
       throw new Error(`Backend exited before becoming healthy: code=${child.exitCode}`)
     }
-    if (await checkHealth(baseUrl)) {
+    if (await checkBackendHealth(baseUrl, APP_ENV)) {
       return
     }
     await delay(HEALTH_POLL_INTERVAL_MS)
   }
 
   throw new Error(`Backend did not become healthy within ${HEALTH_TIMEOUT_MS}ms: ${baseUrl}/health`)
-}
-
-function checkHealth(baseUrl: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    let settled = false
-    const finish = (healthy: boolean): void => {
-      if (settled) return
-      settled = true
-      resolve(healthy)
-    }
-
-    const request = http.get(`${baseUrl}/health`, { timeout: 1000 }, (response) => {
-      response.resume()
-      finish(
-        Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 300)
-      )
-    })
-
-    request.once('timeout', () => {
-      request.destroy()
-      finish(false)
-    })
-    request.once('error', () => {
-      finish(false)
-    })
-  })
 }
 
 /** 使用 taskkill 终止 Windows 子进程树，并返回命令是否成功。 */
