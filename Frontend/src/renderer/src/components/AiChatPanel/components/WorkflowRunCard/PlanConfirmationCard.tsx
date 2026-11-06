@@ -46,6 +46,13 @@ export function PlanConfirmationCard({
   const [revisionRequest, setRevisionRequest] = useState('')
   const canView = planType !== 'technical' && Boolean(artifact || plan)
   const canRevise = planType === 'technical'
+  const technicalReview = planType === 'technical' && requiresConfirmation && !revisionOnly
+  // 从当前审阅版本读取实际范围，资料未加载时不显示猜测的零计数。
+  const pageCount = Array.isArray(plan?.pages) ? plan.pages.length : undefined
+  const entityCount = Array.isArray(plan?.entities) ? plan.entities.length : undefined
+  const contracts = Array.isArray(plan?.api_contracts) ? plan.api_contracts : undefined
+  const endpointCount = contracts?.reduce((count: number, contract) =>
+    count + (Array.isArray(contract?.endpoints) ? contract.endpoints.length : 0), 0)
   const documentLabel =
     planType === 'product' ? '需求文档' : planType === 'technical' ? '技术规划' : '项目计划书'
 
@@ -74,12 +81,19 @@ export function PlanConfirmationCard({
       {!confirmed && !revising ? (
         <div className={cx('requirement-spec-draft-summary')}>
           <div>
-            <Text strong>{revisionOnly ? '已有技术规划已保留' : `${title}已生成，已展示在右侧`}</Text>
+            <Text strong>{revisionOnly ? '已有技术规划已保留' : technicalReview ? '请审阅这份技术规划，作为后续开发依据' : `${title}已生成，已展示在右侧`}</Text>
           </div>
           <div>
-            <Text type="secondary">{revisionOnly ? '可以继续提出修改意见，修改后需要重新确认。' : '请在右侧查看内容，确认无误后保存，也可以先提出修改意见。'}</Text>
+            <Text type="secondary">{revisionOnly ? '可以继续提出修改意见，修改后需要重新确认。' : technicalReview ? '请在右侧核对页面与数据范围、接口定义及页面操作绑定。确认后进入开发准备。' : '请在右侧查看内容，确认无误后保存，也可以先提出修改意见。'}</Text>
           </div>
         </div>
+      ) : null}
+      {technicalReview && !revising && (pageCount !== undefined || entityCount !== undefined || endpointCount !== undefined) ? (
+        <ul className={cx('technical-plan-review-scope')} aria-label="本次技术规划范围">
+          {pageCount !== undefined ? <li><strong>{pageCount}</strong>个页面</li> : null}
+          {entityCount !== undefined ? <li><strong>{entityCount}</strong>个数据实体</li> : null}
+          {endpointCount !== undefined ? <li><strong>{endpointCount}</strong>个接口</li> : null}
+        </ul>
       ) : null}
       <div className={cx('artifact-auth-bar-footer', revising && 'technical-plan-revision-inline')}>
         {revising ? (
@@ -126,7 +140,7 @@ export function PlanConfirmationCard({
                   disabled={disabled || confirmed}
                   onClick={startRevision}
                 >
-                  修改
+                  {technicalReview ? '提出修改' : '修改'}
                 </Button>
               ) : !confirmed ? (
                 <Button disabled={disabled} onClick={onAbandon}>
@@ -139,7 +153,7 @@ export function PlanConfirmationCard({
                   onClick={onConfirm}
                   type="primary"
                 >
-                  确认保存
+                  {technicalReview ? '确认技术规划' : '确认保存'}
                 </Button>
               ) : null}
             </span>

@@ -80,9 +80,9 @@ test('技术规划提示右侧查看并保留确认操作，隐藏各平台内�
     'C:\\Projects\\example\\.devagentstudio\\plans\\technical-plan.md'
   ]) {
     const { markup, workflow } = renderArtifacts('planning', { technical_plan_path: path })
-    assert.match(markup, /技术规划已生成，已展示在右侧/)
-    assert.match(markup, /请在右侧查看内容/)
-    assert.match(markup, /确认保存/)
+    assert.match(markup, /请审阅这份技术规划，作为后续开发依据/)
+    assert.match(markup, /请在右侧核对页面与数据范围/)
+    assert.match(markup, /确认技术规划/)
     assert.doesNotMatch(markup, /已生成产物|待确认事项|technical-plan\.md/)
     assert.doesNotMatch(markup, /\/Users\/|C:|\.devagentstudio|technical_plan_path/)
     assert.equal(workflow.summary.artifacts?.technical_plan_path, path)

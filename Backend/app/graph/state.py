@@ -98,6 +98,8 @@ class ProjectState(TypedDict, total=False):
     technical_plan_candidate_sha256: str
     technical_plan_repair_candidate: dict[str, Any]
     technical_plan_repair_errors: list[str]
+    # 当前技术生成的内部片段摘要；正文由唯一候选目录保存，不进入公开状态。
+    technical_plan_generation_input_sha256: str
     # 失败审阅门确认重试后，记录待交接的原生成 Run；只供当前事务内部消费。
     technical_plan_repair_source_run_id: str
     project_plan: dict[str, Any]

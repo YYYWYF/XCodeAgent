@@ -29,6 +29,9 @@ def workflow_failure_message(state: dict[str, Any]) -> str | None:
         reason = state.get("error")
         if isinstance(reason, str) and reason.strip() and reason != old_notice:
             return reason.strip()
+        retry_message = summary.get("retry_message")
+        if isinstance(retry_message, str) and retry_message.strip():
+            return retry_message.strip()
         return "代码构建失败，请查看构建任务详情后重试。"
     reason = state.get("error")
     return reason.strip() if isinstance(reason, str) and reason.strip() else None

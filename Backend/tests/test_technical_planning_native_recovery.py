@@ -159,10 +159,11 @@ def _model_stub(
         _existing_plan: dict[str, Any] | None,
         *,
         initial_errors: list[str] | None = None,
+        generation_fragments: dict | None = None,
     ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
         """记录一次模型调用并返回成功 candidate 或可审阅的失败候选。"""
 
-        del initial_errors
+        del initial_errors, generation_fragments
         counters["model"] += 1
         if not succeeds:
             return None, ["stub TechnicalPlan generation failure"], {}
@@ -225,7 +226,7 @@ def _initial_state(
             "confirmation_status": "confirmed",
             "pages": [],
         },
-        "ui_designs": {"confirmation_status": "skipped"},
+        "ui_designs": {"confirmation_status": "confirmed", "pages": []},
         "application_planning_recovery_boundary": application_planning_boundary_payload(
             operation_id=f"technical-plan-{run_id}",
             operation=operation,

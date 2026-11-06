@@ -218,6 +218,33 @@ async function waitForCondition<T>(
   throw new Error(`等待${description}超时。`)
 }
 
+// 正文只通过引用传输时仍交接一次模板任务；待确认版本即使有旧回执也不能触发。
+for (const confirmed of [true, false]) {
+  const current = planningState()
+  current.workflow = confirmationWorkflow()
+  const confirmation = {
+    confirmedAt: '2026-11-06T00:00:00Z', directories: { specs: 'specs', plans: 'plans' },
+    artifacts: { technicalPlan: { markdown: { sha256: 'b'.repeat(64) }, json: { sha256: 'c'.repeat(64) } } }
+  }
+  let bootstrapCalls = 0
+  const h = harness(current, {
+    /** 记录当前 Runtime 是否真正调用模板交接依赖。 */
+    onTechnicalPlanConfirmed: async (receipt) => { assert.deepEqual(receipt, confirmation); bootstrapCalls += 1; return true }
+  })
+  const completed = {
+    ...current.workflow, runId: 'confirmed-run', summary: { phase: 'technical_planning', status: 'completed' },
+    state: {
+      technicalPlanConfirmed: confirmed, application_planning_confirmation: confirmation,
+      artifactRefs: { technical_plan: { artifactId: 'a'.repeat(64), byteLength: 100, mediaType: 'application/json' } },
+      lifecycle: authoritativeLifecycle(current, { stage: 'generating_application_template_files', status: 'running' })
+    }
+  } as WorkflowRunPayload
+  h.onSend(async () => result(completed))
+  await h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
+  assert.equal(bootstrapCalls, confirmed ? 1 : 0)
+  if (confirmed) { await h.runtime.ensureStarted(); assert.equal(bootstrapCalls, 1) }
+}
+
 // A：没有 Modal 也会启动；重复 ensureStarted 不创建第二轮执行。
 {
   const h = harness()
@@ -411,6 +438,7 @@ async function waitForCondition<T>(
     runId: 'confirmed-plan-run', threadId: initial.threadId, events: [],
     summary: { status: 'completed', phase: 'technical_planning_confirm' },
     state: {
+      technicalPlanConfirmed: true,
       lifecycle, application_planning_confirmation: confirmation,
       artifactRefs: { technical_plan: { artifactId: 'c'.repeat(64), byteLength: 8000, mediaType: 'application/json' } }
     }

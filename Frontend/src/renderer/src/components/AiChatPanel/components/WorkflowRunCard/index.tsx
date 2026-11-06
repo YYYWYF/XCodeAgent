@@ -85,6 +85,11 @@ import {
 } from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import { PlanConfirmationCard } from './PlanConfirmationCard'
+import {
+  TechnicalPlanGenerationIssue,
+  WorkflowInteractionReceipt,
+  workflowInteractionTitle
+} from './WorkflowInteractionFeedback'
 import ApplicationConfigPrerequisiteCard from './ApplicationConfigPrerequisiteCard'
 import './WorkflowRunCard.less'
 
@@ -196,7 +201,7 @@ export default function WorkflowRunCard({
   application
 }: WorkflowRunCardProps): ReactElement {
   const documents = useWorkflowDocuments(sourceWorkflow, workspaceRoot, !disabled)
-  const workflow = documents.workflow
+  const workflow = documents.workflow || sourceWorkflow
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
   const status = String(workflow.summary.status || 'unknown')
   const clarification = workflowClarification(workflow)
@@ -306,23 +311,14 @@ export default function WorkflowRunCard({
   const databaseApprovalAnswerKey = clarificationQuestions[0]
     ? clarificationQuestionKey(clarificationQuestions[0], 0)
     : 'database_approval'
-  const confirmationItemCount = detailReview
-    ? (detailReview.pages?.length || 0) + (detailReview.endpoints?.length || 0)
-    : dagConfirmation
-      ? dagTaskPlan?.reviewTasks?.length || 0
-      : testPhaseConfirmation
-        ? 1
-        : reviewPhaseConfirmation
-          ? 1
-          : acceptancePhaseConfirmation
-            ? 1
-            : uiDesignConfirmation
-              ? (
-                  (clarification as unknown as Record<string, unknown> | undefined)?.pages as
-                    | unknown[]
-                    | undefined
-                )?.length || clarificationQuestions.length
-              : clarificationQuestions.length
+  // 专用交互按其真实对象展示，只有实际问题表单才显示问题数量。
+  const specializedInteraction = Boolean(
+    artifactConfirmation || uiDesignConfirmation || apiDesignRequired || unitTestConfirmation ||
+    frontendPerformanceConfirmation || detailReview || technicalPlanGenerationError || planningStageEntry ||
+    dagConfirmation || testPhaseConfirmation || reviewPhaseConfirmation || acceptancePhaseConfirmation ||
+    revisionImpact || revisionDraftBinding || databaseApproval || entityDesignGate
+  )
+  const genericQuestions = !specializedInteraction && clarificationQuestions.length > 0
   const hasWorkflowCardResult = Boolean(workflowCardResult)
   const revisionImpactDecision =
     workflowCardResult === 'confirmed'
@@ -382,12 +378,23 @@ export default function WorkflowRunCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.threadId, clarificationFingerprint])
 
+  // 历史技术规划只保留操作回执；过期版本不能继续声称正在等待本次确认。
+  if ((technicalPlanGenerationError || clarification?.mode === 'technical_plan_confirmation') &&
+      ((workflowCardResult && workflowCardResult !== 'confirmed') || staleConfirmation)) {
+    return <WorkflowInteractionReceipt mode={clarification?.mode} phase={planningPhase} result={workflowCardResult || 'stale'} />
+  }
+  if (workflowCardResult && clarification && clarificationQuestions.length === 0 &&
+      !artifactConfirmation && !uiDesignConfirmation && !apiDesignRequired && !detailReview &&
+      !revisionImpact && !entityDesignGate && !applicationConfigPrerequisite) {
+    return <WorkflowInteractionReceipt mode={clarification.mode} phase={planningPhase} result={workflowCardResult} />
+  }
   if (documents.loading) return <Alert type="info" showIcon message="正在读取确认资料…" />
   if (documents.error) return <Alert type="error" showIcon message={documents.error} />
   return (
     <div
       className={cx(
         'workflow-run-card',
+        (artifactConfirmation || technicalPlanGenerationError) && 'workflow-run-card-planning-review',
         apiDesignReadinessGate && 'workflow-run-card-api-design-readiness',
         activeConfirmation && 'workflow-run-card-pending',
         revisionImpact && activeConfirmation && 'workflow-run-card-revision-impact'
@@ -397,7 +404,7 @@ export default function WorkflowRunCard({
         <div className={cx('workflow-run-title')}>
           <span className={cx('workflow-run-signal')} aria-hidden="true" />
           <Text className={cx('workflow-run-name')} strong>
-            工作流执行
+            {workflowInteractionTitle(clarification?.mode, planningPhase)}
           </Text>
         </div>
         {/* 阶段入口卡只表达跳转动作，不显示通用待确认状态标签。 */}
@@ -427,7 +434,7 @@ export default function WorkflowRunCard({
                   ? '已提交'
                   : staleConfirmation
                     ? '已失效'
-                    : workflowStatusText(status)}
+                    : technicalPlanGenerationError && requiresConfirmation ? '待处理' : workflowStatusText(status)}
           </Tag>
         ) : null}
       </div>
@@ -437,13 +444,14 @@ export default function WorkflowRunCard({
           <Text type="secondary">正在生成或执行单元测试，请查看执行进度。</Text>
         </div>
       ) : null}
-      {workflow.summary.message && !unitTestRunning &&
+      {workflow.summary.message && !hasWorkflowCardResult && !unitTestRunning &&
         !apiDesignReadinessGate &&
         !revisionImpact &&
         !entityDesignReview &&
         !uiDesignConfirmation &&
         !planningStageEntry &&
         !artifactConfirmation &&
+        !technicalPlanGenerationError &&
         !unitTestConfirmation &&
         !projectLaunch &&
         !dagConfirmation &&
@@ -513,29 +521,18 @@ export default function WorkflowRunCard({
             title="技术规划"
           />
         </div>
-      ) : (clarificationQuestions.length > 0 ||
-        artifactConfirmation ||
-        uiDesignConfirmation ||
-        apiDesignRequired ||
-        unitTestConfirmation ||
-        detailReview ||
-        technicalPlanGenerationError ||
-        planningStageEntry ||
-        dagConfirmation ||
-        testPhaseConfirmation ||
-        reviewPhaseConfirmation ||
-        acceptancePhaseConfirmation) && (
+      ) : (genericQuestions || specializedInteraction) && (
         <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
-          {!artifactConfirmation && !reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+          {genericQuestions && !reviewStage && (
             <div className={cx('workflow-clarification-header')}>
               <div>
-                <Text strong>{staleConfirmation ? '原确认内容' : '待确认事项'}</Text>
+                <Text strong>{staleConfirmation ? '原补充信息' : historicalClarificationAnswers || hasWorkflowCardResult ? '补充信息记录' : '待补充信息'}</Text>
               </div>
               <Tag
                 className={cx('workflow-confirmation-count')}
                 color={activeConfirmation ? 'gold' : 'default'}
               >
-                {confirmationItemCount}
+                {clarificationQuestions.length}
               </Tag>
             </div>
           )}
@@ -552,31 +549,15 @@ export default function WorkflowRunCard({
             />
           )}
           {technicalPlanGenerationError && requiresConfirmation && (
-            <Alert
-              action={
-                <Button
-                  disabled={disabled || interactionAvailability !== 'active'}
-                  onClick={() =>
-                    onSubmitClarification?.(workflow, {
-                      planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。'
-                    })
-                  }
-                  type="primary"
-                >
-                  重新生成
-                </Button>
-              }
-              description={
-                Array.isArray(clarification?.errors)
-                  ? clarification.errors.map(String).filter(Boolean).slice(0, 5).join('；')
-                  : undefined
-              }
-              message={clarification?.message || '技术规划自动修复后仍未通过校验。'}
-              showIcon
-              type="error"
+            <TechnicalPlanGenerationIssue
+              disabled={Boolean(disabled || interactionAvailability !== 'active')}
+              errors={clarification?.errors}
+              onRetry={() => onSubmitClarification?.(workflow, {
+                planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。'
+              })}
             />
           )}
-          {revisionImpact && (requiresConfirmation || hasRevisionImpactDecision) ? (
+          {technicalPlanGenerationError ? null : revisionImpact && (requiresConfirmation || hasRevisionImpactDecision) ? (
             <RevisionImpactReview
               disabled={disabled || interactionAvailability !== 'active'}
               decision={revisionImpactDecision}
@@ -840,7 +821,7 @@ export default function WorkflowRunCard({
                       )
                     ) : (
                       <ClarificationQuestionControl
-                        disabled={disabled}
+                        disabled={Boolean(disabled || !activeConfirmation)}
                         onChange={(value) =>
                           updateAnswer(clarificationQuestionKey(question, index), value)
                         }
@@ -854,11 +835,11 @@ export default function WorkflowRunCard({
                   </div>
                 )
               })}
-              {clarification?.status === 'requires_user_input' &&
+              {requiresConfirmation && clarificationQuestions.length > 0 &&
                 !historicalClarificationAnswers && (
                   <Button
                     className={cx('clarification-confirm-btn')}
-                    disabled={disabled || !canSubmitClarification}
+                    disabled={disabled || !activeConfirmation || !canSubmitClarification}
                     onClick={() => {
                       clearClarificationDraft(workflow.threadId, clarificationQuestions)
                       onSubmitClarification?.(workflow, answers)
@@ -866,7 +847,7 @@ export default function WorkflowRunCard({
                     size="large"
                     type="primary"
                   >
-                    {implementationFixCancelled ? '确认取消' : '确认并继续'}
+                    {implementationFixCancelled ? '确认取消' : clarification?.mode === 'implementation_fix_confirmation' ? '确认修改需求' : '提交补充信息'}
                   </Button>
                 )}
             </>

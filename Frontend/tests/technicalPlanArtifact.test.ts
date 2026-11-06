@@ -2,6 +2,29 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { WorkflowRunPayload } from '../src/renderer/src/typings'
 import { technicalPlanFromWorkflow, technicalPlanBaselineStatus } from '../src/renderer/src/components/AiChatPanel/planningArtifactRecovery'
+import { planningTechnicalPlanConfirmed } from '../src/renderer/src/service/applicationPlanningWorkflowState'
+
+test('正文仅有引用时按服务端当前确认事实交接，待确认或非当前阶段禁止推进', () => {
+  const workflow = { summary: { phase: 'technical_planning', status: 'completed' }, state: {
+    lifecycle: { initialization: { stage: 'generating_application_template_files' } },
+    artifactRefs: { technical_plan: { artifactId: 'a'.repeat(64) } },
+    technicalPlanConfirmed: true,
+    application_planning_confirmation: {
+      confirmedAt: '2026-11-06T05:19:58Z',
+      artifacts: { technicalPlan: {
+        markdown: { sha256: 'b'.repeat(64) }, json: { sha256: 'c'.repeat(64) }
+      } }
+    }
+  } } as unknown as WorkflowRunPayload
+  assert.equal(planningTechnicalPlanConfirmed(workflow), true)
+  assert.equal(planningTechnicalPlanConfirmed({ ...workflow, state: { ...workflow.state,
+    technicalPlanConfirmed: false, technical_plan: { confirmation_status: 'confirmed' }
+  } }), false)
+  assert.equal(planningTechnicalPlanConfirmed({ ...workflow, state: { ...workflow.state, technicalPlanConfirmed: undefined } }), false)
+  assert.equal(planningTechnicalPlanConfirmed({ ...workflow, state: { ...workflow.state, application_planning_confirmation: {} } }), false)
+  assert.equal(planningTechnicalPlanConfirmed({ ...workflow, summary: { ...workflow.summary, status: 'running' } }), false)
+  assert.equal(planningTechnicalPlanConfirmed({ ...workflow, summary: { ...workflow.summary, phase: 'requirements' } }), false)
+})
 
 test('本轮技术规划中断时旧确认基线不能冒充本轮已确认，新草稿仍按待确认展示', () => {
   const plan = { confirmation_status: 'confirmed' }
@@ -12,13 +35,13 @@ test('本轮技术规划中断时旧确认基线不能冒充本轮已确认，�
   assert.equal(technicalPlanBaselineStatus({ ...failed, summary: { ...failed.summary, phase: 'build' } }, plan), undefined)
 })
 
-test('技术规划空状态不能遮住结果中的架构或阻止正式文件读取', () => {
+test('技术规划只从当前 state 读取，空对象保留正式文件读取入口', () => {
   const plan = { architecture: { frontend: 'React', backend: 'Java', data: 'MySQL' } }
   const workflow = {
     state: { technical_plan: {} },
     result: { technical_plan: plan }
   } as unknown as WorkflowRunPayload
-  assert.equal(technicalPlanFromWorkflow(workflow), plan)
+  assert.equal(technicalPlanFromWorkflow(workflow), undefined)
   assert.equal(technicalPlanFromWorkflow({ ...workflow, result: undefined }), undefined)
   assert.equal(technicalPlanFromWorkflow({ ...workflow, state: {
     technical_plan: { architecture: {} }

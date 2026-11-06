@@ -28,9 +28,20 @@ from tests import test_planning_execution_end as end_fixture
 class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
     """使用真实取消、checkpoint、lifecycle 和内容指纹验证停止与继续。"""
 
-    async def fixture(self, workspace, *, skills=None):
-        """建立正式需求修订，在实际生成节点中取消并保留原请求现场。"""
+    async def fixture(self, workspace, *, skills=None, initial_creation=False):
+        """建立首次生成或正式需求修订，在实际生成节点中取消并保留原请求现场。"""
         await end_fixture.PlanningExecutionEndTests.prepare(self, workspace)
+        if initial_creation:
+            from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
+
+            initial = load_application_lifecycle(workspace)
+            write_application_lifecycle(workspace, initial.model_copy(update={
+                "active_formal_revision": None,
+                "initialization": initial.initialization.model_copy(update={
+                    "stage": ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                    "status": ApplicationLifecycleStatus.RUNNING,
+                }),
+            }))
         started = asyncio.Event()
         calls, downstream = [], []
 
@@ -107,6 +118,29 @@ class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(downstream)
             with self.assertRaises(Exception):
                 await prepare_business_node_retry(source, graph)
+
+    async def test_initial_generation_uses_same_stop_continue_authority(self):
+        """复现首次生成停止无继续入口：使用同一 End 凭据、ActionPlan 和业务节点重试。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            graph, _, ended, calls, downstream = await self.fixture(workspace, initial_creation=True)
+            self.assertEqual(ended.initialization.status, "cancelled")
+            self.assertNotEqual(ended.initialization.stage, "ready_for_workbench")
+            self.assertIsNone(ended.ended_planning_execution.formal_revision)
+            source = await get_execution(workspace, "design-run")
+            snapshot = await graph.aget_state({"configurable": {"thread_id": "thread"}})
+            projection = await _build_application_planning_recovery_projection(
+                workspace=workspace, thread_id="thread", graph=graph, snapshot=snapshot, source=source)
+            self.assertTrue(projection.can_continue)
+            self.assertEqual(projection.recovery_action_plan["primaryAction"]["label"], "继续生成")
+            context = await prepare_business_node_retry(source, graph)
+            current = load_application_lifecycle(workspace)
+            self.assertIsNone(current.active_formal_revision)
+            self.assertIsNone(current.ended_planning_execution)
+            self.assertEqual(current.active_run_id, context.new_run_id)
+            result = await graph.ainvoke(context.fork_snapshot.values, context.fork_config)
+            self.assertEqual(len(calls), 2)
+            self.assertIn("__interrupt__", result)
+            self.assertFalse(downstream)
 
     async def test_file_change_denies_continue_and_keeps_released_state(self):
         """真实内容变化阻止继续，不能重新占用原修订或调用生成器。"""

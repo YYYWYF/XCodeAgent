@@ -53,6 +53,9 @@ def workflow_presentation(payload: dict[str, Any], *, workspace: str | None) -> 
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     state = {**result, **previous, **{key: item for key, item in summary.items() if key not in SUMMARY_FIELDS}}
+    # 正文外置后仍投影当前版本的确认事实，前端不读取大块正文来决定模板交接。
+    plan = state.get("technical_plan")
+    state["technicalPlanConfirmed"] = isinstance(plan, dict) and plan.get("confirmation_status") == "confirmed"
     state["workspace"] = workspace or state.get("workspace")
     view = {key: item for key, item in payload.items() if key not in {"result", "state", "summary"}}
     view["summary"] = {key: item for key, item in summary.items() if key in SUMMARY_FIELDS}

@@ -131,6 +131,34 @@ class BusinessNodeRetryTests(unittest.IsolatedAsyncioTestCase):
                 await prepare_business_node_retry(source, object())
             self.assertEqual(load_application_lifecycle(workspace).active_run_id, "new-owner")
 
+    def test_pending_technical_repair_only_claims_the_declared_same_thread_owner(self):
+        """已提交审阅输入只允许接管同线程原生成 owner，缺字段或其他阶段仍拒绝。"""
+        from app.domain.application_lifecycle import ApplicationLifecycleStage as Stage, ApplicationLifecycleStatus as Status
+        from app.domain.application_planning_recovery import (
+            ApplicationPlanningOperation as Operation, ApplicationPlanningRecoveryBoundary as Boundary,
+            application_planning_boundary_payload,
+        )
+        from app.domain.execution_recovery import RecoveryExecutionError
+        from app.services.business_node_retry import _planning_retry_owner
+        source = self.source('/unused').model_copy(update={"execution_kind": "application_planning"})
+        lifecycle = SimpleNamespace(active_run_id="original", initialization=SimpleNamespace(
+            stage=Stage.GENERATING_TECHNICAL_PLAN, status=Status.RUNNING, thread_id=source.thread_id))
+        values = {"active_run_id": source.run_id, "technical_plan_repair_source_run_id": "original",
+            "application_planning_recovery_boundary": application_planning_boundary_payload(
+                operation_id="repair-input", operation=Operation.REPAIR,
+                boundary=Boundary.INPUT_COMMITTED, request="重新生成技术规划")}
+        checkpoint = SimpleNamespace(snapshot=SimpleNamespace(values=values))
+        self.assertEqual(_planning_retry_owner(source, lifecycle, checkpoint, "technical_planning_begin"), "original")
+        for field, value in (("active_run_id", "other"), ("technical_plan_repair_source_run_id", ""),
+                             ("application_planning_recovery_boundary", {})):
+            with self.subTest(field=field):
+                invalid = SimpleNamespace(snapshot=SimpleNamespace(values={**values, field: value}))
+                with self.assertRaises(RecoveryExecutionError):
+                    _planning_retry_owner(source, lifecycle, invalid, "technical_planning_begin")
+        lifecycle.initialization.thread_id = "another-thread"
+        with self.assertRaises(RecoveryExecutionError):
+            _planning_retry_owner(source, lifecycle, checkpoint, "technical_planning_begin")
+
     async def test_stage_reads_disk_each_time_and_does_not_keep_missing_assets(self):
         """需求草稿随磁盘更新，正式下游不借用草稿或旧 State。"""
         with tempfile.TemporaryDirectory() as workspace:
