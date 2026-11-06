@@ -1447,7 +1447,7 @@ def _attach_technical_entity_field_refs(
     contracts: list[dict[str, Any]],
     entities: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """只为来源唯一的 Schema 字段补充引用，多个实体同名时保留明确来源决策。"""
+    """为确定性生成的同名 Schema 字段补充实体字段引用。"""
 
     fields_by_entity = {
         str(entity.get("id") or ""): {
@@ -1460,7 +1460,6 @@ def _attach_technical_entity_field_refs(
     }
 
     def attach(schema: Any, entity_ids: set[str]) -> Any:
-        """递归补充唯一引用，不能按无序实体集合的首项猜测 id 等同名字段归属。"""
         if not isinstance(schema, dict):
             return schema
         updated = deepcopy(schema)
@@ -1476,7 +1475,7 @@ def _attach_technical_entity_field_refs(
                         if str(name) in fields_by_entity.get(entity_id, set())
                         or (str(name) == "id" and entity_id in fields_by_entity)
                     ]
-                    if len(candidates) == 1:
+                    if candidates:
                         updated_schema = dict(field_schema)
                         updated_schema["entity_field_ref"] = f"{candidates[0]}.{name}"
                         properties[name] = updated_schema
@@ -1805,13 +1804,14 @@ def create_technical_plan(
         }
     ]
     api_contracts = _technical_api_contracts(
-        _merge_agent_items(
-            _attach_technical_entity_field_refs(
-                _api_contracts(contract_sources, {**spec, "entities": entities}), entities,
+        _attach_technical_entity_field_refs(
+            _merge_agent_items(
+                _api_contracts(contract_sources, {**spec, "entities": entities}),
+                agent_plan,
+                "api_contracts",
+                authoritative=True,
             ),
-            agent_plan,
-            "api_contracts",
-            authoritative=True,
+            entities,
         )
     )
     policy = _architecture_for_datasource_type(effective_datasource_type)

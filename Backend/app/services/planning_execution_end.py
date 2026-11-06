@@ -53,11 +53,10 @@ async def end_planning_execution(workspace: str, thread_id: str):
                for execution in latest.active_executions.values()):
             raise ValueError("当前修订已进入工作台，请在开发阶段结束任务。")
         updates = {"active_formal_revision": None, "pending_revision_impact": None, "error": None}
-        if source is not None:
+        if active is not None and source is not None:
             from app.domain.application_lifecycle import EndedPlanningExecution
             from app.services.ended_workspace import workspace_fingerprint
 
-            # 首次生成与正式修订都保存原阶段；不把未完成的首次创建提升为开发就绪。
             # 与开发任务 End 一样，在 writer 真实退出后保存稳定基线，释放占用但保留继续凭据。
             updates["ended_planning_execution"] = EndedPlanningExecution(
                 runId=run_id, initialization=latest.initialization,

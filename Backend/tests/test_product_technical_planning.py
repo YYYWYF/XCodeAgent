@@ -1886,8 +1886,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         self.assertEqual([item["bindingType"] for item in bindings], ["local", "sequence", "navigation"])
         self.assertNotIn("action_bindings", technical_plan["pages"][0]["references"])
 
-    def test_confirmed_ui_supplies_local_bindings(self) -> None:
-        """当前页面本地交互由已确认 UI 提供，不从产品预期结果猜测效果。"""
+    def test_skipped_ui_uses_product_expected_results_for_local_bindings(self) -> None:
+        """跳过 UI 设计后，页面契约仍应从 ProductPlan 补齐本地交互语义。"""
 
         product_plan = {
             "pages": [
@@ -1923,10 +1923,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         }
         ui_designs = {
             "schema_version": "ui-manifest.v3",
-            "confirmation_status": "confirmed",
-            "pages": [{"pageId": "orders", "status": "confirmed", "bindings": {"actions": [
-                {"actionId": "open-filter", "controlIds": ["filter-control"], "uiEffect": "展开筛选区域。"}
-            ]}}],
+            "confirmation_status": "skipped",
+            "pages": [],
         }
 
         attached = attach_page_implementation_contracts(

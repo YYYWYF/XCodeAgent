@@ -119,7 +119,7 @@ test('规划结束回执不展示模板成功卡或继续生成入口', () => {
   assert.doesNotMatch(markup, /应用模板已就绪|技术规划已确认|继续生成/)
 })
 
-/** 已提交卡收成历史回执，停止回执单独提供新的修改入口。 */
+/** 已提交卡保持说明和锁定按钮，停止回执单独提供新的修改入口。 */
 test('停止后保留已提交技术规划卡并新增可修改卡', () => {
   const historical = planningProgress('technical_planning', 'requires_user_input')
   historical.summary.clarification = {
@@ -134,12 +134,12 @@ test('停止后保留已提交技术规划卡并新增可修改卡', () => {
     { id: 3, role: 'assistant', content: ended.summary.message, createdAt: 3, workflow: ended }
   ])
   assert.match(markup, /已提交/)
-  assert.match(markup, /技术规划已提交/)
+  assert.match(markup, /技术规划已生成，已展示在右侧/)
   assert.match(markup, /本轮任务已结束/)
   assert.match(markup, /已有技术规划已保留/)
   assert.match(markup, /可继续修改/)
-  // 历史回执不保留禁用按钮；结束回执只有新的修改入口，没有旧确认操作。
-  assert.doesNotMatch(markup, /disabled=""[^>]*><span>修\s*改/)
+  // 历史修改按钮锁定；结束回执只有新的修改入口，没有新的确认保存按钮。
+  assert.match(markup, /disabled=""[^>]*><span>修\s*改/)
   assert.match(markup, /<button type="button" class="ant-btn ant-btn-default xa-requirement-spec-edit-btn"><span>修\s*改/)
 })
 
@@ -198,9 +198,9 @@ test('无本地会话仍展示后端当前确认操作', () => {
     }
   }
   const markup = renderPlanningMessage(workflow, undefined, undefined, false, true)
-  assert.match(markup, /确认技术规划/)
+  assert.match(markup, /确认保存/)
   assert.doesNotMatch(markup, /anticon-loading|正在恢复|暂无会话记录/)
-  assert.doesNotMatch(markup, /<button[^>]*disabled[^>]*>[^<]*确认技术规划/)
+  assert.doesNotMatch(markup, /<button[^>]*disabled[^>]*>[^<]*确认保存/)
 })
 
 /** 旧聊天不能遮住当前门禁，也不能继续提交已过期的确认。 */
@@ -223,10 +223,10 @@ test('历史消息未回填时当前后端确认仍独立可用且只出现一�
     const markup = renderPlanningMessage(current, undefined, undefined, false, false, history)
     assert.equal((markup.match(/data-testid="current-planning-confirmation"/g) || []).length, 1)
     const currentMarkup = markup.slice(markup.indexOf('data-testid="current-planning-confirmation"'))
-    assert.match(currentMarkup, /确认技术规划/)
+    assert.match(currentMarkup, /确认保存/)
     assert.doesNotMatch(currentMarkup, /<button[^>]*disabled/)
     if (history[0].workflow === current) {
-      assert.equal((markup.match(/确认技术规划/g) || []).length, 1)
+      assert.equal((markup.match(/确认保存/g) || []).length, 1)
     }
   }
 })

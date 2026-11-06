@@ -656,7 +656,6 @@ def _public_workflow_state(
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
             "technical_plan_repair_source_run_id",
-            "technical_plan_generation_input_sha256",
             "development_continuation_id",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))

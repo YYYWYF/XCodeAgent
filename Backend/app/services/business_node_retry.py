@@ -158,28 +158,6 @@ def _stopped_workbench_source(source: DurableExecutionRecord) -> bool:
                 and execution.owner_session_id == source.owner_session_id)
 
 
-def _planning_retry_owner(source: DurableExecutionRecord, lifecycle: Any, checkpoint: Any, node: str) -> str:
-    """只允许已提交的技术失败审阅输入接管尚未交接的原生成 Run。"""
-    if not lifecycle or lifecycle.active_run_id in {None, source.run_id}:
-        return source.run_id
-    from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
-    from app.domain.application_planning_recovery import (
-        ApplicationPlanningOperation, ApplicationPlanningRecoveryBoundary, parse_application_planning_boundary,
-    )
-    values = checkpoint.snapshot.values if checkpoint else {}
-    boundary = parse_application_planning_boundary(values.get("application_planning_recovery_boundary"))
-    if (node == "technical_planning_begin" and boundary
-            and boundary.boundary is ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED
-            and boundary.operation is ApplicationPlanningOperation.REPAIR
-            and lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN
-            and lifecycle.initialization.status is ApplicationLifecycleStatus.RUNNING
-            and lifecycle.initialization.thread_id == source.thread_id
-            and values.get("active_run_id") == source.run_id
-            and values.get("technical_plan_repair_source_run_id") == lifecycle.active_run_id):
-        return lifecycle.active_run_id
-    raise RecoveryExecutionError("RETRY_SOURCE_SUPERSEDED", "原任务已被新的执行替代，请查看当前流程。")
-
-
 async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any, *, allow_stopped: bool = False):
     """读取完整失败现场、刷新磁盘输入，再串行交接运行归属并重新执行一次。"""
     from app.services.ended_planning import ended_planning_available
@@ -202,23 +180,21 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
     from app.services.retry_node_state import retry_node_state, refresh_retry_node_inputs
 
     async with _locks.setdefault((source.workspace, source.run_id), asyncio.Lock()):
+        lifecycle = load_application_lifecycle(source.workspace)
+        if source.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, source.run_id}:
+            raise RecoveryExecutionError("RETRY_SOURCE_SUPERSEDED", "原任务已被新的执行替代，请查看当前流程。")
         # 节点和完整输入必须来自同一份已提交现场，不拼接其他 Run 的历史状态。
         checkpoint = await read_checkpoint_execution(source, graph)
         hint = _execution_retry_hint(checkpoint, graph, source)
         if hint is None:
             await release_unretryable_execution(source)
             raise RecoveryExecutionError("RETRY_ENTRY_NOT_FOUND", NO_RETRY_ENTRY)
-        lifecycle = load_application_lifecycle(source.workspace)
-        owner = _planning_retry_owner(source, lifecycle, checkpoint, hint.node) if source.execution_kind == "application_planning" else source.run_id
         await require_failed_run_drained(source.run_id)
-        if owner != source.run_id:
-            # 审阅提交不意味着旧模型线程已退出，必须先确认原 owner 真正收口。
-            await require_failed_run_drained(owner)
         from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
         reconcile_failed_execution_lifecycle(source)
         lifecycle = load_application_lifecycle(source.workspace)
-        if source.execution_kind == "application_planning":
-            owner = _planning_retry_owner(source, lifecycle, checkpoint, hint.node)
+        if source.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, source.run_id}:
+            raise RecoveryExecutionError("RETRY_SOURCE_SUPERSEDED", "原任务已被新的执行替代，请查看当前流程。")
         execution = lifecycle.active_executions.get(source.run_id) if lifecycle else None
         node = hint.node
         from app.services.stage_prerequisites import regeneration_for_retry
@@ -286,8 +262,8 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             elif source.execution_kind == "workbench":
                 lifecycle = handoff_workbench_execution_for_recovery(source.workspace, source_run_id=source.run_id,
                     new_run_id=new_run, thread_id=source.thread_id, phase=node, expected_lifecycle_revision=revision_number)
-            elif lifecycle and lifecycle.active_run_id == owner:
-                lifecycle = handoff_application_planning_run_for_recovery(source.workspace, source_run_id=owner,
+            elif lifecycle and lifecycle.active_run_id == source.run_id:
+                lifecycle = handoff_application_planning_run_for_recovery(source.workspace, source_run_id=source.run_id,
                     new_run_id=new_run, thread_id=source.thread_id, expected_lifecycle_revision=revision_number)
             else:
                 lifecycle = claim_application_planning_run_for_recovery(source.workspace, new_run_id=new_run,

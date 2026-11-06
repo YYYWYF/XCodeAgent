@@ -120,8 +120,6 @@ def prepare_technical_planning_retry(
         "technical_plan_candidate_sha256": "",
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
-        # 只保留内部存储身份；片段正文由生成入口按当前输入摘要读取。
-        "technical_plan_generation_input_sha256": str(state.get("technical_plan_generation_input_sha256") or ""),
         "technical_plan_repair_source_run_id": source_run_id,
         "clarification": {},
         "error": None,

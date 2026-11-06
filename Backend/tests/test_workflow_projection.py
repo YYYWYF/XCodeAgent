@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-import tempfile
 
 from app.protocols.workflow.projection import (
     _public_workflow_state,
@@ -14,19 +13,6 @@ from app.protocols.workflow.projection import (
 
 
 class WorkflowProjectionTests(unittest.TestCase):
-    def test_technical_confirmation_survives_document_externalization_without_stale_receipt(self) -> None:
-        """当前确认事实独立于正文引用；旧确认回执不能覆盖新版本待确认状态。"""
-        with tempfile.TemporaryDirectory() as workspace:
-            for status, expected in (("confirmed", True), ("pending_user_confirmation", False)):
-                with self.subTest(status=status):
-                    payload = _workflow_visual_payload(run_id="current", thread_id="thread",
-                        summary={"phase": "technical_planning", "status": "completed"}, events=[],
-                        result={"technical_plan": {"confirmation_status": status},
-                            "application_planning_confirmation": {"confirmedAt": "previous"}}, workspace=workspace)
-                    self.assertIs(payload["state"]["technicalPlanConfirmed"], expected)
-                    self.assertNotIn("technical_plan", payload["state"])
-                    self.assertIn("technical_plan", payload["state"]["artifactRefs"])
-
     def test_current_failure_is_not_replaced_by_previous_build_retry_message(self) -> None:
         """底部摘要保留当前单测原始错误，不被已完成 Build 的旧提示覆盖。"""
         error = "测试生成 Agent 检测到测试目录外实际写入：.devagentstudio/recovery/execution-recovery.sqlite"

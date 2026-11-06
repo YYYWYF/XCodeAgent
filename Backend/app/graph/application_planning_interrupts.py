@@ -228,11 +228,7 @@ def prepare_application_planning_review_resume(
 
     # 确认按钮的控制文案不是业务提问，后续节点及失败重试继续保留真实用户要求。
     business_request = str(state.get("request") or "").strip()
-    retry_control = (effective_node_name == "technical_planning" and submission.action == "revise"
-        and payload.get("clarification", {}).get("mode") == "technical_plan_generation_error"
-        and set(submission.answers) == {"planning_recovery"}
-        and submission.answers["planning_recovery"] == submission.request)
-    if submission.action in {"answer", "revise"} and submission.request.strip() and not retry_control:
+    if submission.action in {"answer", "revise"} and submission.request.strip():
         business_request = submission.request.strip()
     update: dict[str, Any] = {
         **runtime_update,
@@ -247,9 +243,6 @@ def prepare_application_planning_review_resume(
             exclude_none=True,
         ),
     }
-    if retry_control:
-        # 内置失败重试只授权续修，不是新的业务修改；保留输入身份才能复用已完成片段。
-        update["application_planning_interaction"]["request"] = business_request
     if effective_node_name == "planning_stage_entry":
         update["application_planning_recovery_boundary"] = _technical_input_boundary(
             state,
@@ -297,7 +290,7 @@ def prepare_application_planning_review_resume(
             ),
             gate_id=payload["gateId"],
             artifact_revision=payload["artifactRevision"],
-            request=business_request,
+            request=submission.request,
         )
         if effective_node_name == "technical_planning":
             # 已校验的失败审阅动作先把来源写进 checkpoint；begin 才做 lifecycle CAS 交接。

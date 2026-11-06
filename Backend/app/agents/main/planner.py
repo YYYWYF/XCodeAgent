@@ -10,8 +10,6 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from app.agents.model_operations import model_operation, observe_model_operation, technical_plan_operation
 from app.agents.main.technical_plan_language import repair_technical_plan_chinese_prose
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
-from app.agents.main.technical_plan_generation import generate_technical_plan_sections
-from app.agents.main.technical_plan_fragment_output import check_output_finish
 from app.agents.main.technical_plan_editor import (
     TechnicalPlanCandidateError,
     edit_technical_plan_with_agent,
@@ -545,9 +543,8 @@ def _invoke_live_chat_model(
     datasource_type: DatasourceType | None = None,
     settings: Settings | None = None,
     on_token: Callable[[str], None] | None = None,
-    generation_fragments: dict[str, Any] | None = None,
 ) -> str:
-    """技术规划分段生成后返回完整候选，其他规划仍透传数据源实现边界。
+    """调用项目规划模型，并透传数据源实现边界。
 
     GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens。ProjectPlan JSON
     体量大，thinking 会挤占输出预算，常在写完前被截断，流式投到前端的原始 JSON
@@ -555,17 +552,6 @@ def _invoke_live_chat_model(
     """
 
     active_settings = settings or Settings.from_env()
-    if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
-        def invoke_fragment(prompt: str) -> str:
-            """让所有技术规划片段复用现有模型、流式回调与取消协议。"""
-
-            return _invoke_prompt_with_chat_model(prompt, settings=active_settings, on_token=on_token)
-
-        sections = generate_technical_plan_sections(
-            requirement_spec, invoke=invoke_fragment, fragments=generation_fragments,
-            max_output_tokens=active_settings.default_max_tokens,
-        )
-        return json.dumps(sections, ensure_ascii=False)
     return _invoke_prompt_with_chat_model(
         _planning_prompt(requirement_spec, existing_plan, datasource_type),
         settings=active_settings,
@@ -587,13 +573,11 @@ def _invoke_prompt_with_chat_model(
     )
     if on_token is None:
         result = model.invoke(prompt)
-        check_output_finish(result)
         content = getattr(result, "content", "")
         return _coerce_content_text(content) or ""
 
     accumulated_text = ""
     for chunk in model.stream(prompt):
-        check_output_finish(chunk)
         # 流式模型返回 AIMessageChunk；非流式边界情况返回完整 AIMessage，
         # 两者都要提取 content，否则非流式时 accumulated_text 永远为空。
         if isinstance(chunk, (AIMessageChunk, AIMessage)):
@@ -922,7 +906,6 @@ def plan_project_with_chat_model(
     existing_plan: dict[str, Any] | None = None,
     datasource_type: DatasourceType | None = None,
     on_token: Callable[[str], None] | None = None,
-    generation_fragments: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """直接调用聊天模型生成 ProjectPlan 或创建流程的 TechnicalPlan。"""
 
@@ -950,7 +933,6 @@ def plan_project_with_chat_model(
             datasource_type=datasource_type,
             settings=settings,
             on_token=on_token,
-            generation_fragments=generation_fragments,
         )
     planning_source = "direct_chat_model"
 

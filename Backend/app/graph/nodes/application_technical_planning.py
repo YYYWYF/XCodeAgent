@@ -21,7 +21,6 @@ from app.domain.application_planning_recovery import (
 )
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
-from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
 from app.services.generated_document_inclusion import write_generated_documents
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
@@ -186,7 +185,7 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
 
 
 def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
-    """生成和校验候选并保存内部片段，不写正式文档或消费确认。"""
+    """唯一执行 TechnicalPlan LLM 生成与校验修复的 side-effect-free 节点。"""
 
     boundary = _technical_boundary(state)
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.GENERATION_READY:
@@ -217,12 +216,10 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         and state.get("technical_plan")
         else None
     )
-    generation_fragments = {}
     plan, errors, failed_candidate = _generate_valid_technical_plan(
         state,
         technical_requirement,
         existing_plan,
-        generation_fragments=generation_fragments,
     )
     if plan is None:
         # 生成失败不写磁盘、不改生命周期；审阅节点会把错误作为当前业务交互展示。
@@ -232,7 +229,6 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "technical_plan_repair_candidate": failed_candidate or {},
             "technical_plan_repair_source_run_id": "",
             "technical_plan_repair_errors": errors[:12],
-            "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
             "application_planning_recovery_boundary": _boundary_payload_for_state(
                 state,
                 boundary=ApplicationPlanningRecoveryBoundary.REVIEW_READY,
@@ -256,7 +252,6 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         ),
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
-        "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
         "technical_plan_repair_source_run_id": "",
         "timeline": ["technical_planning_generate"],
     }
@@ -302,7 +297,6 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         commit_technical_plan_document, state, candidate,
         expected_sha256=candidate_sha256,
     )
-    TechnicalPlanFragmentStore(workspace).clear(str(state.get("technical_plan_generation_input_sha256") or ""))
     if lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
         lifecycle = persist_application_lifecycle_transition(
             workspace,
@@ -316,7 +310,6 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         "phase": "technical_planning",
         "status": "requires_user_input",
         "technical_plan": candidate,
-        "technical_plan_generation_input_sha256": "",
         "project_plan": candidate,
         "technical_plan_path": markdown_path,
         "technical_plan_json_path": json_path,

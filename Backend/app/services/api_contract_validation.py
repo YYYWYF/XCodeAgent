@@ -8,7 +8,6 @@ from app.services.api_contracts import (
     response_field_paths,
 )
 from app.services.api_schema_refs import normalize_local_schema_ref
-from app.services.api_record_identity import validate_record_identity_sources
 from app.services.entity_definitions import normalize_entities
 
 
@@ -69,7 +68,6 @@ def _validate_api_contract_definitions(
         if not schemas:
             errors.append(f"API contract {contract_id} does not define schemas.")
         _validate_contract_schemas(contract_id, schemas, errors)
-        errors.extend(validate_record_identity_sources(contract))
         _index_and_validate_endpoints(
             contract,
             endpoint_index=endpoint_index,

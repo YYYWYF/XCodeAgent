@@ -255,8 +255,8 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         self.assertEqual(len(model.seen_messages), 43)
         self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
 
-    def test_generation_without_complete_candidate_uses_generation_route(self):
-        """没有完整候选时进入分段生成入口，不把缺失章节或类型错误的对象送入编辑器。"""
+    def test_generation_without_complete_candidate_uses_full_route(self):
+        """没有完整候选时继续完整生成，不把缺失章节或类型错误的对象送入编辑器。"""
 
         sections = {key: self.baseline[key] for key in ("architecture", "entities", "api_contracts", "pages")}
         with (

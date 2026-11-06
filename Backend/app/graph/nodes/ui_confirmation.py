@@ -995,8 +995,6 @@ async def ui_confirmation(state: ProjectState) -> dict:
     interaction_action = str(interaction.get("action") or "")
     request = str(state.get("request") or "")
     action = state.get("ui_design_action")
-    if isinstance(action, dict) and action.get("action") == "skip":
-        raise ValueError("当前流程必须完成并确认 UI 设计，不支持跳过 UI 设计。")
 
     # 恢复路径：已有待确认设计稿且本轮无新提交，直接重放确认卡。
     # 前端用「无操作 resume」轮询生成进度：这里读工作区最新 ui-designs.json（池在
@@ -1105,21 +1103,17 @@ async def ui_confirmation(state: ProjectState) -> dict:
     # "换一换"后才产生设计稿（经 ui_design_action 单页动作路径回填）。
     ui_designs = await _build_pending_ui_designs(state)
     _persist_ui_designs(state, ui_designs)
-    updated_product_plan = None
     if (state.get("design_conversation_target") == "ui_confirmation"
             and interaction_action == "ui_action" and isinstance(action, dict)
             and action.get("action") == "adjust_pages"):
         # 首次骨架落盘后执行 @ 携带的正文，返回仍是 UI 审阅门，不能直接放行计划阶段。
-        ui_designs, updated_product_plan = await _apply_ui_design_action(state, ui_designs, action)
-        if updated_product_plan is not None and updated_product_plan != product_plan:
-            write_confirmed_product_plan_documents(state, updated_product_plan)
+        ui_designs = await _apply_ui_design_action(state, ui_designs, action)
     return {
         "phase": "ui_confirmation",
         "status": "requires_user_input",
         "ui_designs": ui_designs,
         "ui_design_action": None,
-        "clarification": _ui_design_confirmation_payload(state, ui_designs, product_plan_override=updated_product_plan),
-        **({"product_plan": updated_product_plan} if updated_product_plan is not None else {}),
+        "clarification": _ui_design_confirmation_payload(state, ui_designs),
         "timeline": ["ui_confirmation"],
     }
 

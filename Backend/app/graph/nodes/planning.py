@@ -61,9 +61,6 @@ from app.services.authorization_deliverability import (
 )
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
-from app.domain.application_planning_recovery import application_planning_sha256
-from app.services.ui_design_manifest import persisted_ui_manifest
-from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.entity_display_language import validate_entity_display_language
 from app.services.data_source_policy import workspace_uses_builtin_database
@@ -216,8 +213,6 @@ def _technical_planning_requirement_spec(
         **technical_input,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
-        "confirmed_ui_design_sha256": application_planning_sha256(persisted_ui_manifest(ui_designs)),
-        "technical_plan_generation_workspace": workspace_from_state(state),
         "application_config": application_config,
     }
 
@@ -532,7 +527,6 @@ def project_planning(state: ProjectState) -> dict:
                 "adjustment_present=true"
             )
     if phase == "technical_planning":
-        generation_fragments = {}
         project_plan, validation_errors, failed_candidate = (
             _generate_valid_technical_plan(
                 state,
@@ -543,7 +537,6 @@ def project_planning(state: ProjectState) -> dict:
                     if resume_failed_candidate and isinstance(repair_errors, list)
                     else None
                 ),
-                generation_fragments=generation_fragments,
             )
         )
         if project_plan is None:
@@ -555,7 +548,6 @@ def project_planning(state: ProjectState) -> dict:
                 ),
                 "technical_plan_repair_candidate": failed_candidate or {},
                 "technical_plan_repair_errors": validation_errors[:12],
-                "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
                 "timeline": [phase],
             }
     else:
@@ -586,8 +578,6 @@ def project_planning(state: ProjectState) -> dict:
                 else project_plan_markdown_path(state)],
         write_project_plan_document, state, project_plan,
     )
-    if phase == "technical_planning" and workspace_from_state(state):
-        TechnicalPlanFragmentStore(workspace_from_state(state)).clear(generation_fragments.get("input_sha256", ""))
     clarification = (
         _project_plan_dependency_error_payload(validation_errors)
         if validation_errors
@@ -604,7 +594,6 @@ def project_planning(state: ProjectState) -> dict:
         "clarification": clarification,
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
-        "technical_plan_generation_input_sha256": "",
         "timeline": [phase],
     }
 
@@ -1879,12 +1868,10 @@ def _generate_valid_technical_plan(
     existing_plan: dict | None,
     *,
     initial_errors: list[str] | None = None,
-    generation_fragments: dict[str, Any] | None = None,
 ) -> tuple[dict | None, list[str], dict | None]:
     """在统一的三次总预算内完成 TechnicalPlan 生成、规范化校验与错误反馈修复。"""
 
     current_plan = deepcopy(existing_plan)
-    fragments = generation_fragments if generation_fragments is not None else {}
     remaining_errors = list(initial_errors or [])
     base_feedback = str(
         requirement_spec.get("planning_adjustment_request") or ""
@@ -1922,7 +1909,6 @@ def _generate_valid_technical_plan(
                     current_requirement,
                     **({"existing_plan": current_plan} if current_plan else {}),
                     on_token=_planning_token_callback,
-                    generation_fragments=fragments,
                 )
             )
             candidate = apply_project_plan_feedback(candidate, base_feedback)

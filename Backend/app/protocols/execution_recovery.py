@@ -448,6 +448,8 @@ async def _resolve_action_source_run(
             and record.run_id not in active_workbench_run_ids
         ):
             continue
+        if record.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, record.run_id}:
+            continue
         graph_factory = (
             application_planning_graph_for_request
             if record.execution_kind == "application_planning"
@@ -456,16 +458,6 @@ async def _resolve_action_source_run(
         graph = await recovery_graph_for_execution(record) if record.workflow_scope == "conversation" else await graph_factory(workspace=workspace, project_id=record.project_id)
         from app.services.checkpoint_execution import resolve_checkpoint_source
         record = await resolve_checkpoint_source(record, graph)
-        if record.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, record.run_id}:
-            from app.services.business_node_retry import _planning_retry_owner
-            from app.services.checkpoint_execution import read_checkpoint_execution
-
-            # 技术失败审阅可能先提交新 Run 输入、后交接旧生成 owner；与执行准备共用同一校验。
-            checkpoint = await read_checkpoint_execution(record, graph)
-            try:
-                _planning_retry_owner(record, lifecycle, checkpoint, checkpoint.node if checkpoint else "")
-            except RecoveryExecutionError:
-                continue
         from app.services.ended_planning import ended_planning_available
         if (record.execution_kind == "application_planning" and record.status is DurableExecutionStatus.CANCELLED
                 and record.ended_at is not None and ended_planning_available(workspace, lifecycle,

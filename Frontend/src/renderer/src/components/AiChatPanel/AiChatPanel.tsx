@@ -1456,18 +1456,11 @@ export default function AiChatPanel({
   const requirementSpecMemory = requirementSpecFromWorkflow(planningDocumentWorkflow)
   const productPlanMemory = productPlanFromWorkflow(planningDocumentWorkflow)
   const technicalPlanMemory = technicalPlanFromWorkflow(planningDocumentWorkflow)
-  // 未打开面板前凭当前引用开放入口，正文仅在可见时读取，避免两套读取器和重复预取。
-  const planningDocumentRefs = asWorkflowRecord(currentPlanningWorkflow?.state?.artifactRefs)
   const requirementDocAvailable = Boolean(
-    requirementDocContent.trim() || requirementSpecMemory || productPlanMemory ||
-    planningDocumentRefs?.requirement_spec || planningDocumentRefs?.product_plan ||
-    planningDocumentView.loading || planningDocumentView.error
+    requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
   )
   const uiDesignAvailable = Boolean(uiDesignDocContent.trim()) || uiDesignPages.length > 0
-  const technicalPlanDocAvailable = Boolean(
-    technicalPlanDocContent.trim() || technicalPlanMemory || planningDocumentRefs?.technical_plan ||
-    planningDocumentView.loading || planningDocumentView.error
-  )
+  const technicalPlanDocAvailable = Boolean(technicalPlanDocContent.trim() || technicalPlanMemory)
   // 按当前设计/计划阶段稳定生成右侧文档集合，避免阶段切换之外反复创建依赖对象。
   const designDocs = useMemo<DesignWorkspaceDoc[] | undefined>(() => {
     if (!isApplicationPlanningPhase) return undefined
@@ -1494,7 +1487,7 @@ export default function AiChatPanel({
       {
         key: 'technical-plan' as WorkspaceDocKey,
         title: '技术规划',
-        path: 'plans/technical-plan.md',
+        path: 'plans/technical-plan.json',
         content: technicalPlanDocContent,
         available: technicalPlanDocAvailable
       }
@@ -1528,7 +1521,7 @@ export default function AiChatPanel({
   const technicalPlanViewLoading =
     technicalPlanViewActive &&
     (!technicalPlanForDoc || !productPlanForDoc) &&
-    (technicalPlanFileLoading || planningDocumentView.loading)
+    technicalPlanFileLoading
   // 需求文档 tab 优先使用结构化可视化；结构化数据不可读时回退 Markdown。
   const requirementSpecForDoc = requirementDocViewActive
     ? requirementSpecMemory || requirementSpecFile

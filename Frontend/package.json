@@ -43,7 +43,6 @@
     "test:project-deletion": "node scripts/run-project-deletion-tests.mjs",
     "test:workflow-preview": "node scripts/run-workflow-preview-tests.mjs",
     "test:planning-documents": "node scripts/run-planning-document-tests.mjs",
-    "test:workflow-documents": "node scripts/run-workflow-document-tests.mjs",
     "test:test-report": "node scripts/run-test-report-panel-tests.mjs",
     "test:acceptance-phase": "node scripts/run-acceptance-phase-tests.mjs",
     "test:development-artifacts": "node scripts/run-development-artifact-tests.mjs",

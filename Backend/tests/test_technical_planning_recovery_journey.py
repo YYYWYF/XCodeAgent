@@ -148,8 +148,8 @@ class TechnicalPlanningRecoveryJourneyHarness:
 
         ui_designs = {
             "schema_version": "ui-manifest.v3",
-            "confirmation_status": "confirmed",
-            # 当前前置合同要求 UI 已确认；无业务控件的夹具保留空页集合并绑定产品摘要。
+            "confirmation_status": "skipped",
+            # 跳过 UI 也必须绑定当前产品计划，确保恢复测试实际进入技术规划节点。
             "product_plan_sha256": _artifact_hash(product_plan),
             "pages": [],
         }
@@ -266,11 +266,10 @@ class TechnicalPlanningRecoveryJourneyHarness:
         _existing_plan: dict[str, Any] | None,
         *,
         initial_errors: list[str] | None = None,
-        generation_fragments: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
         """只替代模型调用，按当前 Settings 产生真实 classifier 可识别的 404 或合法计划。"""
 
-        del initial_errors, generation_fragments
+        del initial_errors
         model_name = Settings.from_env().model_name
         self.called_models.append(model_name)
         if model_name != "working-model":
@@ -509,7 +508,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 for frame in self.harness.last_recovery_frames for line in frame.splitlines()
                 if line.startswith("data:") and json.loads(line[5:].strip()).get("type") == "STATE_SNAPSHOT"]
             self.assertTrue(snapshots)
-            final_lifecycle = snapshots[-1]["state"]["lifecycle"]
+            final_lifecycle = snapshots[-1]["result"]["lifecycle"]
             self.assertEqual(final_lifecycle["initialization"]["status"], "awaiting_user")
             self.assertEqual(final_lifecycle["initialization"]["stage"], "awaiting_technical_plan_confirmation")
             self.assertTrue(

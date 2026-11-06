@@ -292,11 +292,11 @@ class EndedWorkbenchExecution(ApplicationLifecycleModel):
 
 
 class EndedPlanningExecution(ApplicationLifecycleModel):
-    """保留已结束规划的阶段与工作区基线，首次生成和正式修订共用原节点恢复。"""
+    """保留已结束规划的原修订与工作区基线，继续时复用原业务节点恢复。"""
 
     run_id: str = Field(alias="runId")
     initialization: ApplicationInitialization
-    formal_revision: ActiveFormalRevision | None = Field(default=None, alias="formalRevision")
+    formal_revision: ActiveFormalRevision = Field(alias="formalRevision")
     fingerprint: str
     workspace: str
 
