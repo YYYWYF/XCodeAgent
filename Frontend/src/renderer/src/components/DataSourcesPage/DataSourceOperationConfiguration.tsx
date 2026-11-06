@@ -16,7 +16,7 @@ const SECTION_OPTIONS: SectionOption[] = [
   { key: 'responseBody', icon: <FileTextOutlined />, ...sectionMeta('responseBody') },
 ]
 
-const ADD_SECTION_ORDER: DataSourceOperationSection[] = ['query', 'path', 'header', 'requestBody', 'responseBody']
+const ADD_SECTION_ORDER: DataSourceOperationSection[] = ['query', 'header', 'requestBody', 'responseBody']
 
 /** 渲染新建接口第一步的配置模块选择卡。 */
 export function OperationContentPicker({ selected, onChange }: { selected: ReadonlySet<DataSourceOperationSection>; onChange: (sections: Set<DataSourceOperationSection>) => void }): ReactElement {
@@ -31,7 +31,7 @@ export function OperationContentPicker({ selected, onChange }: { selected: Reado
     <header className={cx('data-source-operation-selection-header')}><span className={cx('data-source-operation-selection-icon')}><SettingOutlined /></span><span><strong>配置接口内容</strong><small>请选择需要配置的内容（可多选）</small></span></header>
     <div className={cx('data-source-operation-selection-list')}>
       {SECTION_OPTIONS.map((option) => <label className={cx('data-source-operation-selection-item')} key={option.key}>
-        <Checkbox checked={selected.has(option.key)} onChange={() => toggle(option.key)} />
+        <Checkbox checked={selected.has(option.key)} disabled={option.key === 'path'} onChange={() => toggle(option.key)} />
         <span className={cx('data-source-operation-selection-item-icon', `tone-${option.key === 'responseBody' ? 'response' : option.key === 'requestBody' ? 'request' : option.key}`)}>{option.icon}</span>
         <span className={cx('data-source-operation-selection-copy')}><strong>{option.title}</strong><small>{option.description}</small></span>
       </label>)}

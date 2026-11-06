@@ -74,7 +74,7 @@ def _data_source_generation_prompt(
         "do not reject or rewrite it solely to migrate client technology. The prerequisite "
         "backend:bootstrap task owns the Maven OpenFeign dependency "
         "and @EnableFeignClients activation, while the upstream task owns only its typed Feign "
-        "Client, transport DTOs, operation-specific configuration, and error adaptation. Treat request_shape and "
+        "Client, transport DTOs, operation-specific configuration, and error adaptation. Treat "
         "requestStructure and responseStructure as field/type structure, never as literal values. "
         "Persist the confirmed baseUrl directly as "
         "the plain YAML or properties value at base_url_config_key; never wrap it in a "

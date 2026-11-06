@@ -7,6 +7,7 @@ import json
 import math
 from collections import defaultdict
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1264,7 +1265,7 @@ def _validated_source_snapshots(
                 "sourceType": "external_api",
                 "sourceId": source_id,
                 "name": str(operation.get("sourceName") or source_id),
-                "details": _project_external_snapshot(operation, refs, safe_connection),
+                "details": _project_external_snapshot(operation, safe_connection),
             }
         )
     return snapshots
@@ -1321,100 +1322,40 @@ def _project_database_snapshot(
 
 def _project_external_snapshot(
     operation: dict[str, Any],
-    refs: list[ExternalSourceField],
     safe_connection: dict[str, Any],
 ) -> dict[str, Any]:
-    """保留外部 Operation 身份和实际映射字段，裁剪未使用的参数与 Schema。"""
+    """保留当前 Operation 的完整结构，映射仅决定调用时的取值。"""
 
-    selected = {(ref.section, ref.path) for ref in refs}
-    projected = {
-        "connection": safe_connection,
+    raw_operation = operation.get("operation")
+    if not isinstance(raw_operation, dict):
+        raise ApiDesignError("外部 API 缺少完整 Operation 定义。")
+    return {
+        "connection": deepcopy(safe_connection),
         **{
-            key: value
+            key: deepcopy(value)
             for key, value in operation.items()
             if key not in {"fields", "connection", "operation"}
         },
-        "fields": [
-            field
-            for field in _dict_items(operation.get("fields"))
-            if (str(field.get("section") or ""), str(field.get("path") or "")) in selected
-        ],
+        "fields": deepcopy(_dict_items(operation.get("fields"))),
+        "operation": _safe_external_operation(raw_operation),
     }
-    raw_operation = operation.get("operation")
-    if not isinstance(raw_operation, dict):
-        return projected
-    nested = dict(raw_operation)
-    nested["pathParameters"] = [
-        item
-        for item in _dict_items(raw_operation.get("pathParameters"))
-        if ("path", str(item.get("name") or "")) in selected
-    ]
-    nested["queryParameters"] = [
-        item
-        for item in _dict_items(raw_operation.get("queryParameters"))
-        if ("query", str(item.get("name") or "")) in selected
-    ]
-    nested["headers"] = [
-        {"name": item.get("name")}
-        for item in _dict_items(raw_operation.get("headers"))
-        if ("header", str(item.get("name") or "")) in selected
-    ]
-    nested["requestStructure"] = _project_json_structure(
-        raw_operation.get("requestStructure"), "request_body", selected
-    )
-    nested["responseStructure"] = _project_json_structure(
-        raw_operation.get("responseStructure"), "response_body", selected
-    )
-    projected["operation"] = nested
-    return projected
-
-
-def _project_json_structure(
-    schema: Any,
-    section: str,
-    selected: set[tuple[str, str]],
-    prefix: str = "",
-) -> Any:
-    """递归裁剪 JSON Schema，仅保留被映射的叶子路径。"""
-
-    if not isinstance(schema, dict):
-        return schema
-    schema_types = schema.get("type") if isinstance(schema.get("type"), list) else [schema.get("type")]
-    if "array" in schema_types:
-        return {
-            **schema,
-            "items": _project_json_structure(schema.get("items"), section, selected, f"{prefix}[]"),
-        }
-    properties = schema.get("properties")
-    if not isinstance(properties, dict):
-        return schema
-    projected_properties: dict[str, Any] = {}
-    for name, child in properties.items():
-        child_path = f"{prefix}.{name}" if prefix else str(name)
-        if (section, child_path) not in selected and not any(
-            selected_path.startswith(f"{child_path}.")
-            or selected_path.startswith(f"{child_path}[]")
-            for selected_section, selected_path in selected
-            if selected_section == section
-        ):
-            continue
-        projected_properties[name] = _project_json_structure(child, section, selected, child_path)
-    projected = {**schema, "properties": projected_properties}
-    if isinstance(schema.get("required"), list):
-        projected["required"] = [name for name in schema["required"] if name in projected_properties]
-    return projected
 
 
 def _safe_external_operation(operation: dict[str, Any]) -> dict[str, Any]:
-    """仅保留外部 Operation 的结构元数据，移除 Header 值与样例数据。"""
+    """保留完整结构及 Header 元数据，排除样例和取值信息。"""
 
     safe = {
-        key: value
+        key: deepcopy(value)
         for key, value in operation.items()
         if key not in {"requestSample", "responseSample", "headers"}
     }
     safe["headers"] = [
-        {"name": item.get("name")}
+        {
+            "name": item.get("name"),
+            "type": item.get("type"),
+            "required": bool(item.get("required")),
+            "description": str(item.get("description") or ""),
+        }
         for item in _dict_items(operation.get("headers"))
         if str(item.get("name") or "").strip()
     ]
@@ -1464,9 +1405,9 @@ def _external_operation_fields(operation: dict[str, Any]) -> list[dict[str, Any]
             {
                 "section": "header",
                 "path": str(header.get("name") or ""),
-                "type": "string",
-                "required": False,
-                "description": "外部 Operation 非敏感请求 Header",
+                "type": str(header.get("type") or "unknown"),
+                "required": bool(header.get("required")),
+                "description": str(header.get("description") or ""),
             }
         )
     for source_key, section in (("requestStructure", "request_body"), ("responseStructure", "response_body")):

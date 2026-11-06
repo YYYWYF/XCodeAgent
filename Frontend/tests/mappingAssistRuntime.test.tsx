@@ -41,6 +41,8 @@ async function withServer(operation: (server: MockServer) => Promise<void>): Pro
     const input = JSON.parse(String(init?.body))
     const action = input.forwardedProps.endpointDesigns.action
     server.calls.push(action)
+    // 与原生 fetch 一致：SDK 延迟发起请求时也必须拒绝已取消的信号。
+    if (init?.signal?.aborted) throw new DOMException('cancelled', 'AbortError')
     if (server.delayed) return new Promise<Response>((resolve, reject) => {
       server.release = () => resolve(streamResponse(input.threadId, input.runId, server, action))
       init?.signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true })

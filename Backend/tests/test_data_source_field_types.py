@@ -70,7 +70,7 @@ class DataSourceFieldTypeTests(unittest.TestCase):
         self.assertEqual(updated.path_parameters[0].type, "integer")
         self.assertEqual(updated.query_parameters[0].description, "查询编号")
         index = json.loads((root / "index.json").read_text("utf-8"))
-        self.assertEqual(set(index["sources"][0]["directories"][1]["operations"][0]), {"id", "name", "method", "path"})
+        self.assertEqual(set(index["sources"][0]["directories"][1]["operations"][0]), {"id", "name", "description", "method", "path"})
 
     def test_parameter_defaults_query_types_and_path_rules(self) -> None:
         """Query 接受通用类型，Path 必填、类型和占位符在两个方向都受约束。"""

@@ -145,6 +145,10 @@ def begin_workflow_lifecycle(
                 workflow_inputs.get("workflow_action")
                 == "continue_after_entity_binding"
             ),
+            api_design_gate_action=(
+                resume_values.get("api_design_gate_action")
+                if phase == "api_design_readiness_gate" else None
+            ),
         )
     revision_continuation_replaces_run_id = (
         str(resume_values.get("revision_continuation_replaces_run_id") or "").strip()
@@ -233,6 +237,7 @@ def _validate_resumable_execution(
     target_id: str,
     allow_debug_reentry: bool = False,
     allow_entity_binding_continuation: bool = False,
+    api_design_gate_action: dict[str, Any] | None = None,
 ) -> None:
     """只允许安全恢复同一目标上的旧执行，阶段确认可切换到新对话。"""
 
@@ -304,6 +309,14 @@ def _validate_resumable_execution(
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.ENTITY_SOURCE_BINDING
     )
+    # API 映射确认仅重新检测原目标，不能把普通输入当作确认或接管其他等待交互。
+    api_design_refresh = (
+        isinstance(api_design_gate_action, dict)
+        and api_design_gate_action.get("action") == "refresh"
+        and execution.status == WorkbenchExecutionStatus.AWAITING_USER
+        and execution.pending_interaction is not None
+        and execution.pending_interaction.type == PendingInteractionType.API_DESIGN
+    )
     if (
         not resumable_status
         and not debug_waiting
@@ -316,8 +329,14 @@ def _validate_resumable_execution(
         and not code_review_repair_confirmation
         and not acceptance_phase_confirmation
         and not entity_binding_continuation
+        and not api_design_refresh
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
+    if api_design_refresh and (
+        api_design_gate_action.get("targetType") != scope
+        or api_design_gate_action.get("targetId") != target_id
+    ):
+        raise ApplicationLifecycleConflictError("API 映射检测目标与原工作台执行不一致。")
     # 阶段确认是显式的新对话边界：只有结构化测试/审查确认允许把 execution 所有权
     # 从上一阶段 thread 原子转交给新的阶段 thread，其余恢复仍必须留在原对话。
     if (

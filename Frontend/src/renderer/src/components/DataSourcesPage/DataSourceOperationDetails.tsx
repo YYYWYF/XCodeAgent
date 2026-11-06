@@ -50,9 +50,9 @@ function toDetailParameters(parameters: DataSourceOperation['pathParameters']): 
   return parameters.map((parameter) => ({ name: parameter.name, type: parameter.type, required: parameter.required, description: parameter.description }))
 }
 
-/** 将 Header 转换为统一的详情表格行，Header 值作为描述信息展示。 */
+/** 将接口 Header 定义转换为统一详情行，不把取值信息当作描述。 */
 function toHeaderParameters(operation: DataSourceOperation): DetailParameter[] {
-  return operation.headers.map((header) => ({ name: header.name, type: 'string', required: false, description: header.value }))
+  return operation.headers.map((header) => ({ name: header.name, type: header.type, required: header.required, description: header.description }))
 }
 
 /** 渲染选中接口的只读配置详情，空的可选模块不占用页面空间。 */

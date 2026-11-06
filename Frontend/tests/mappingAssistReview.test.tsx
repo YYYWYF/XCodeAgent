@@ -11,6 +11,7 @@ import { mappingRequirementsInput, mappingRequirementsKey } from '../src/rendere
 import MappingAssistQueryPreview from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/MappingAssistQueryPreview'
 import MappingAssistPreview from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/MappingAssistPreview'
 import MappingAssistResult from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/MappingAssistResult'
+import { installMappingDomConstructors } from './mappingAssistTestHarness'
 
 /** 创建真实结构的未配置目标，不按路径猜测业务规则。 */
 function unmapped(path: string): WorkflowApiFieldMapping {
@@ -99,16 +100,16 @@ test('紧凑条件树不改变分组语义，也不重复表头', () => {
   assert.ok(!markup.includes('checkbox'))
 })
 
-/** 返回字段能跳回待明确区，长说明保留完整原文但默认收起。 */
+/** 返回字段能跳回待明确区，说明直接展示完整原文且只显示一次。 */
 test('返回字段状态和完整说明在专用预览中可查', () => {
   const mapping = reviewResult().mapping!
   const markup = renderToStaticMarkup(createElement(MappingAssistPreview, { mapping, area: 'return', onShowIssues: () => {} }))
   assert.ok(markup.includes('处理 total 待明确问题'))
   assert.ok(markup.includes('处理 list[].categoryName 待明确问题'))
   const description = renderToStaticMarkup(createElement(MappingAssistPreview, { mapping, area: 'description', onShowIssues: () => {} }))
-  assert.ok(description.includes('<details>'))
   assert.ok(description.includes('查询商品列表。分类名称尚未配置。'))
-  assert.ok(!description.includes('<details open'))
+  assert.equal((description.match(/查询商品列表。分类名称尚未配置。/g) || []).length, 1)
+  assert.doesNotMatch(description, /<details(?:\s|>)/)
 })
 
 /** 重新生成入口移到底部后，普通预览和操作歧义都保留同一套输入与运行保护。 */
@@ -139,6 +140,7 @@ test('补充重生成集中在底栏，未明确操作时也能继续', () => {
 
 /** 分区切换、替换确认和补充失效使用真实 React 状态，初次点击不直接应用。 */
 test('审阅分区与整体替换确认保持输入基线约束', async () => {
+  const restoreDomConstructors = installMappingDomConstructors()
   let root!: ReactTestRenderer, applied = 0
   let result = reviewResult()
   // 本用例挂载完整映射，字段输入的生成与失效由真实 hook 用例覆盖。
@@ -172,5 +174,8 @@ test('审阅分区与整体替换确认保持输入基线约束', async () => {
     await act(async () => button('替换草稿').props.onClick())
     await act(async () => button('确认替换草稿').props.onClick())
     assert.equal(applied, 1)
-  } finally { await act(async () => root?.unmount()) }
+  } finally {
+    try { await act(async () => root?.unmount()) }
+    finally { restoreDomConstructors() }
+  }
 })

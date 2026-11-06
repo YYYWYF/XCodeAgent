@@ -24,9 +24,10 @@ function JsonBodyTabSwitcher({ activeKey, onChange }: { activeKey: JsonBodyTab; 
 }
 
 /** 描述可编辑的接口草稿，额外保留文本形式的 JSON 样例。 */
-export type OperationDraft = Omit<DataSourceOperation, 'pathParameters' | 'queryParameters'> & {
+export type OperationDraft = Omit<DataSourceOperation, 'pathParameters' | 'queryParameters' | 'headers'> & {
   pathParameters: ParameterDraft[]
   queryParameters: ParameterDraft[]
+  headers: ParameterDraft[]
   requestSampleText: string
   responseSampleText: string
   requestFieldDescriptionsDraft: Record<string, string>
@@ -69,7 +70,7 @@ export function operationDraftFromSource(operation?: DataSourceOperation): Opera
     description: operation.description || '',
     pathParameters: operation.pathParameters.map((parameter) => ({ ...parameter, rowId: crypto.randomUUID() })),
     queryParameters: operation.queryParameters.map((parameter) => ({ ...parameter, rowId: crypto.randomUUID() })),
-    headers: operation.headers.map((header) => ({ ...header })),
+    headers: operation.headers.map((header) => ({ ...header, rowId: crypto.randomUUID() })),
     requestSampleText: operation.requestSample === undefined ? '' : JSON.stringify(operation.requestSample, null, 2),
     responseSampleText: operation.responseSample === undefined ? '' : JSON.stringify(operation.responseSample, null, 2),
     requestFieldDescriptionsDraft: request.descriptions,
@@ -79,7 +80,7 @@ export function operationDraftFromSource(operation?: DataSourceOperation): Opera
   }
 }
 
-/** 渲染外部 API 的普通 Header 编辑器，可作为请求参数子卡片复用。 */
+/** 编辑域名级共享 Header 的固定名称和值。 */
 export function HeaderEditor({
   defaultExpanded = true,
   headers,
@@ -155,6 +156,7 @@ export function OperationFields({
   initiallyCollapsed = false,
   operation,
   onChange,
+  onPathBlur,
   onSectionsChange,
   phase = 'edit',
   sections,
@@ -163,6 +165,7 @@ export function OperationFields({
   initiallyCollapsed?: boolean
   operation: OperationDraft
   onChange: (operation: OperationDraft) => void
+  onPathBlur: () => void
   onSectionsChange: (sections: Set<DataSourceOperationSection>) => void
   phase?: 'selection' | 'edit'
   sections: ReadonlySet<DataSourceOperationSection>
@@ -212,10 +215,10 @@ export function OperationFields({
 
   /** 关闭一个已选模块，并清理其对应草稿。 */
   const removeSection = (section: DataSourceOperationSection): void => {
+    if (section === 'path') return
     const meta = sectionMeta(section)
     const nextOperation = clearOperationSection(operation, section)
-    const hasContent = section === 'path' ? operation.pathParameters.length > 0
-      : section === 'query' ? operation.queryParameters.length > 0
+    const hasContent = section === 'query' ? operation.queryParameters.length > 0
         : section === 'header' ? operation.headers.length > 0
           : section === 'requestBody' ? Boolean(operation.requestSampleText.trim() || operation.requestStructure)
             : Boolean(operation.responseSampleText.trim() || operation.responseStructure)
@@ -248,7 +251,7 @@ export function OperationFields({
           </label>
           <label className={cx('data-source-form-grid-wide')}>
             <span><em className={cx('data-source-required')}>*</em>路径</span>
-            <Input onChange={(event) => onChange({ ...operation, path: event.target.value })} placeholder="/products/{productId}" value={operation.path} />
+            <Input onBlur={onPathBlur} onChange={(event) => onChange({ ...operation, path: event.target.value })} placeholder="/products/{productId}" value={operation.path} />
           </label>
           <label className={cx('data-source-form-grid-wide')}>
             <span>接口描述（选填）</span>
@@ -260,9 +263,9 @@ export function OperationFields({
         <OperationConfigurationBar selected={sections} onChange={updateSections} />
         {sections.has('path') || sections.has('query') || sections.has('header') ? <DataSourceEditorSection actions={<span className={cx('data-source-editor-section-count')}>已配置 {[sections.has('path'), sections.has('query'), sections.has('header')].filter(Boolean).length} 项</span>} defaultExpanded={!initiallyCollapsed} icon={<SendOutlined />} title="请求参数" tone="request">
           <div className={cx('data-source-operation-parameter-stack')}>
-            {sections.has('path') ? <DataSourceParameterEditor defaultExpanded={!initiallyCollapsed} location="path" nested onChange={(pathParameters) => onChange({ ...operation, pathParameters })} onRemove={() => removeSection('path')} parameters={operation.pathParameters} /> : null}
+            {sections.has('path') ? <DataSourceParameterEditor defaultExpanded={!initiallyCollapsed} location="path" nested onChange={(pathParameters) => onChange({ ...operation, pathParameters })} parameters={operation.pathParameters} /> : null}
             {sections.has('query') ? <DataSourceParameterEditor defaultExpanded={!initiallyCollapsed} location="query" nested onChange={(queryParameters) => onChange({ ...operation, queryParameters })} onRemove={() => removeSection('query')} parameters={operation.queryParameters} /> : null}
-            {sections.has('header') ? <HeaderEditor defaultExpanded={!initiallyCollapsed} headers={operation.headers} nested onChange={(headers) => onChange({ ...operation, headers })} onRemove={() => removeSection('header')} title="Header 参数" /> : null}
+            {sections.has('header') ? <DataSourceParameterEditor defaultExpanded={!initiallyCollapsed} location="header" nested onChange={(headers) => onChange({ ...operation, headers })} onRemove={() => removeSection('header')} parameters={operation.headers} /> : null}
           </div>
         </DataSourceEditorSection> : null}
         {sections.has('requestBody') ? <DataSourceEditorSection actions={<Button aria-label="删除请求体配置" className={cx('data-source-editor-remove-button')} icon={<DeleteOutlined />} onClick={() => removeSection('requestBody')} size="small" type="text" />} defaultExpanded={!initiallyCollapsed} headerContent={<JsonBodyTabSwitcher activeKey={requestTab} onChange={setRequestTab} />} icon={<ApiOutlined />} title="请求体" tone="request">

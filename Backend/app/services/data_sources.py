@@ -62,12 +62,16 @@ class HeaderEntry(DataSourceModel):
 
 
 class ApiParameter(DataSourceModel):
-    """描述外部 API 的路径或查询参数。"""
+    """描述外部 API 的路径、查询或接口级 Header 参数。"""
 
     name: str = Field(min_length=1, max_length=128)
     type: DataSourceFieldType = "string"
     required: bool = False
     description: str = Field(default="", max_length=1024)
+
+
+class ApiHeaderParameter(ApiParameter):
+    """描述接口级 Header 参数，实际取值由接口映射提供。"""
 
 
 class ApiOperation(DataSourceModel):
@@ -80,7 +84,7 @@ class ApiOperation(DataSourceModel):
     path: str = Field(min_length=1, max_length=2048)
     path_parameters: list[ApiParameter] = Field(default_factory=list, alias="pathParameters", max_length=50)
     query_parameters: list[ApiParameter] = Field(default_factory=list, alias="queryParameters", max_length=50)
-    headers: list[HeaderEntry] = Field(default_factory=list, max_length=50)
+    headers: list[ApiHeaderParameter] = Field(default_factory=list, max_length=50)
     request_sample: Any = Field(default=None, alias="requestSample")
     response_sample: Any = Field(default=None, alias="responseSample")
     request_structure: JsonStructureNode | None = Field(default=None, alias="requestStructure")
@@ -374,8 +378,8 @@ def _write_catalog(workspace_root: str | Path, sources: list[dict[str, Any]]) ->
         raise DataSourceError(str(exc)) from exc
 
 
-def _validate_header_entries(headers: list[HeaderEntry]) -> None:
-    """校验 Header 名称唯一且不包含敏感凭据。"""
+def _validate_header_entries(headers: list[HeaderEntry] | list[ApiHeaderParameter]) -> None:
+    """校验共享配置和接口参数的 Header 名称及安全边界。"""
 
     sensitive = {
         "authorization",
@@ -388,6 +392,9 @@ def _validate_header_entries(headers: list[HeaderEntry]) -> None:
     names: set[str] = set()
     for header in headers:
         normalized = header.name.strip().lower()
+        if isinstance(header, ApiHeaderParameter):
+            header.name = header.name.strip()
+            header.description = header.description.strip()
         if not normalized or normalized in names:
             raise DataSourceError("Header 名称不能为空且不能重复。")
         if normalized in sensitive:
@@ -406,6 +413,8 @@ def _validate_operation(operation: ApiOperation, *, stored: bool = False) -> Non
     path_names = {parameter.name.strip() for parameter in operation.path_parameters}
     if "{" in remainder or "}" in remainder or placeholders != path_names:
         raise DataSourceError("API 路径占位符必须与 Path 参数一一对应。")
+    if any(re.search(r"\s", name) for name in placeholders):
+        raise DataSourceError("Path 占位符名称不能包含空白字符。")
     if len(operation.path_parameters) + len(operation.query_parameters) > 50:
         raise DataSourceError("同一 API 操作的 Path 和 Query 参数合计不能超过 50 个。")
     for location, parameters in (("path", operation.path_parameters), ("query", operation.query_parameters)):

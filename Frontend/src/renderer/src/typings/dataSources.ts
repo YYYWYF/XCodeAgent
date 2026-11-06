@@ -4,19 +4,22 @@ export type DatabaseSourceMode = 'builtin' | 'dbid' | 'direct'
 /** 描述参数及 JSON 字段可选择的通用类型。 */
 export type DataSourceFieldType = 'string' | 'integer' | 'number' | 'boolean' | 'object' | 'array' | 'null'
 
-/** 描述一个外部 API Header。 */
+/** 描述域名级共享 Header 的固定配置。 */
 export type DataSourceHeader = {
   name: string
   value: string
 }
 
-/** 描述外部 API 的路径或查询参数。 */
+/** 描述外部 API 的路径、查询或接口级 Header 参数。 */
 export type DataSourceParameter = {
   name: string
   type: DataSourceFieldType
   required: boolean
   description: string
 }
+
+/** 描述接口级 Header 参数，具体取值由入参映射提供。 */
+export type DataSourceOperationHeader = DataSourceParameter
 
 /** 使用 JSON Schema 标准关键词保存请求体或响应体的结构与字段说明。 */
 export type DataSourceJsonStructure = {
@@ -35,7 +38,7 @@ export type DataSourceOperation = {
   path: string
   pathParameters: DataSourceParameter[]
   queryParameters: DataSourceParameter[]
-  headers: DataSourceHeader[]
+  headers: DataSourceOperationHeader[]
   requestSample?: unknown
   responseSample?: unknown
   requestStructure: DataSourceJsonStructure | null

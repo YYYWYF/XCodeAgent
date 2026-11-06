@@ -111,6 +111,8 @@
 
 外部请求目标统一保存在 `externalApiBindings: [{ externalField, right }]`，不再由应用请求侧的 `source_mapping` 表示。每个目标唯一，输入可复用。调用前的规则禁止依赖该次调用尚未返回的响应。
 
+外部 API 的完整参数定义与本次调用取值分开处理：正式 `sourceSnapshots` 保存当前 Operation 的完整 Path、Query、接口 Header 和请求响应结构，Client 按这些定义生成全部形参及传输 DTO，不因非必填或未映射而删除声明。每个接口级 Header 对应一个类型化方法形参，`externalApiBindings` 只决定 service 调用处的值。无绑定的可选目标本次可以不发送，但不能改写 Client 签名；未填完的绑定仍须补全或明确移除后才能确认。保留 false/0，并区分字段缺席与明确的 null。接口 Header 的固定值也通过映射配置，域名共享 Header 保持独立配置方式。
+
 数据源返回加工继续使用 `source_mapping`、`sourceFields[]`、`processingType` 和 `businessDescription`，并增加缺值策略。`business_description` 继续表达应用入参的纯业务用途。确认时检查依赖快照、来源范围、目标唯一性、类型和必填覆盖。
 
 ## 下游消费

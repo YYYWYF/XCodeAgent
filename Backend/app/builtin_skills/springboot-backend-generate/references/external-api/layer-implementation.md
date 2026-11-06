@@ -7,37 +7,45 @@ current task `stage`; do not perform bootstrap dependency or global activation w
 
 ## Authoritative Inputs and Scope
 
-- Treat `implementation_contract.entities[].source_binding`, the endpoint-scoped
-  `operations[]`, and `implementation_contract.api_contract` as the only business
-  authority. `operations[]` must contain exactly one operation linked to the current
-  endpoint; otherwise return `contract_mismatch` before writing.
-- Preserve each operation's stable `operation_id`, effective `base_url_config_key`, HTTP
-  method and path, typed Path/Query parameters, merged non-sensitive headers,
-  request/response shapes, payload/cardinality semantics, and confirmed field mappings.
+- Read `implementation_contract.api_design` for the current confirmed Endpoint design.
+  `sourceBinding` identifies the selected Operation; each external `sourceSnapshots`
+  entry provides its source identity, `details.directoryId`, `details.connection`,
+  and complete `details.operation`. `externalApiBindings` owns request values and
+  `fieldMappings` owns application response values. The internal
+  `implementation_contract.api_contract` owns the Controller contract.
+- Preserve each Operation's stable `id`, `connection.baseUrlConfigKey`, HTTP method
+  and path, complete `pathParameters`, `queryParameters`, operation-level `headers`,
+  and `requestStructure`/`responseStructure`, together with confirmed field mappings.
   Never invent a URL, credential, header, response field, or mapping.
 - Write only `allowed_paths` and `change_scope`. If the confirmed contract cannot fit the
   scope, return the execution protocol's `change_request` instead of expanding it.
-- Keep the external transport model separate from internal API DTOs. Conversion belongs in
-  the same upstream module as the transport DTOs and HTTP Client, not in the Controller.
-- Treat `request_shape` and `response_shape` as field/type descriptions, never literal
-  examples. Bind internal request fields to upstream Path, Query, and body fields only by
-  exact name; a required unmatched field is a `contract_mismatch`.
+- Keep transport models separate from internal API DTOs. Upstream helpers perform
+  transport adaptation only; service owns business mappings and final response composition.
+- Treat `requestStructure` and `responseStructure` as complete field/type structures,
+  never literal examples. Retain optional and unmapped fields and parameters.
+  Every operation-level Header has one explicit typed Client method parameter.
+  Apply `externalApiBindings` at the service call site using the exact target identity;
+  application and external parameter names may differ. Never infer same-name mappings.
 
 ## Required Implementation Sequence
 
-1. Locate the single endpoint-linked operation and read its effective connection.
-2. Resolve the Base URL through the exact `base_url_config_key`; for Feign use the
+1. Locate the selected external Operation in `api_design.sourceSnapshots` and read
+   `details.connection` and the complete `details.operation`.
+2. Resolve the Base URL through the exact `connection.baseUrlConfigKey`; for Feign use the
    mechanically equivalent `${property.key}` placeholder rather than a Java constant.
-3. Create typed request/response transport DTOs, envelopes, and nested objects from the
-   confirmed shapes.
-4. Implement the upstream-local Converter only when confirmed payload or field conversion
-   is required, then bind exact-name inputs and apply only confirmed non-sensitive headers.
+3. Create complete typed request/response transport DTOs, envelopes, and nested objects
+   from `requestStructure` and `responseStructure`; do not flatten body leaves into
+   separate method arguments.
+4. Declare all Path, Query, and operation-level Header parameters, including optional
+   and unmapped parameters. Service computes confirmed `externalApiBindings` values
+   before calling the Client; upstream binds those already-computed values.
 5. Call through the preferred typed OpenFeign interface, or a compatible
    already-satisfying project Client, and deserialize the declared response root into typed
-   transport DTOs derived from `response_shape`.
-6. Accept only `success_status_codes`; translate other HTTP responses, declared
-   `error_message_path`, timeouts, and deserialization failures through existing exceptions.
-7. Traverse `mapped_entity_path` when present and apply every `field_mappings` entry exactly.
+   transport DTOs derived from `responseStructure`.
+6. Preserve confirmed error semantics through existing exceptions for upstream HTTP
+   failures, timeouts, and deserialization failures; never invent status or error mappings.
+7. Service applies every confirmed `fieldMappings` entry after the response is available,
+   preserving declared source paths and array-element correspondence.
 8. Return the internal API Contract response through the application service and Controller.
 
 ## Client Implementation
@@ -47,22 +55,30 @@ current task `stage`; do not perform bootstrap dependency or global activation w
 - Prefer a Java 8-compatible typed `@FeignClient` interface for every newly created external
   Client. Do not reject or rewrite an existing RestTemplate, WebClient, or project-approved
   abstraction solely because it is not Feign when it already satisfies the operation.
-- Reuse an existing compatible Feign Client when it represents the same `operation_id`. If
+- Reuse an existing compatible Feign Client when it represents the same Operation identity. If
   none exists, create the smallest interface and client-local configuration authorized by
   the upstream task. Missing shared Feign capability is a plan mismatch; endpoint tasks
   must not edit Maven dependencies or `@EnableFeignClients`.
-- Persist `effective_connection.base_url` directly under `base_url_config_key` in the
+- Persist `details.connection.baseUrl` directly under `details.connection.baseUrlConfigKey` in the
   authorized Spring Boot YAML/properties file as a plain scalar. Never wrap the stored value
   in `${ENV_NAME:default}`, derive an environment variable, or place the URL in Java.
 - Declare the upstream method/path with the exact Spring MVC mapping annotation. Bind typed
   Path, Query, header, and body values with `@PathVariable`, `@RequestParam`,
   `@RequestHeader`, and `@RequestBody` as required by the confirmed operation.
+- Use explicit binding names and preserve required flags. Optional Query/Header
+  bindings use `required=false`. Every operation-level Header remains a separate
+  typed method parameter even without a value mapping. Optional scalar arguments
+  must be able to represent absence. An absent target is omitted from the HTTP request;
+  preserve explicitly supplied null only where the confirmed contract supports it,
+  and preserve false and zero. Never substitute the literal null string or invent defaults.
+- Keep domain-level shared headers on their existing shared-configuration path;
+  do not turn them into additional operation-level mapped parameters.
 - Apply only confirmed non-sensitive headers. Do not add authentication, credentials,
   cookies, tracing, arbitrary interceptors, or unconfirmed headers.
 - Configure confirmed connect/read timeouts through the project's existing client-scoped
   Feign convention. Preserve the declared millisecond value; do not guess another unit.
-- Use typed request and response DTOs. Preserve object, array, envelope, pagination, and
-  `entity_payload` cardinality instead of using untyped maps or `Object`.
+- Use complete typed request and response DTOs. Preserve the declared object, array,
+  envelope, and pagination structure instead of using untyped maps or `Object`.
 - Preserve JSON property spelling with the project's Jackson annotation convention.
 - Reuse an existing Feign `ErrorDecoder`/exception convention. Add a client-local decoder
   only when required by confirmed error semantics and authorized by `allowed_paths`.
@@ -75,9 +91,9 @@ current task `stage`; do not perform bootstrap dependency or global activation w
    parameter binding, client-scoped timeout, Base URL property, and upstream error
    translation. Implement transport objects first, then Converter and Client. It does not
    own Maven or global Feign activation, and it must not create an empty Converter.
-2. The upstream Converter owns field conversion, payload-path traversal, array/cardinality
-   normalization, and internal semantic mapping. Its files remain distinct from transport
-   DTO and Client deliverable paths even though all belong to the same upstream task.
+2. Upstream helpers own transport-only adaptation. The service stage owns
+   `externalApiBindings`, `fieldMappings`, business conversion, source-path traversal,
+   array-element mapping, and final application response composition.
 3. The service stage owns endpoint-facing orchestration and business decisions. Prefer
    assigning the module ErrorCode file to this stage and throwing endpoint-facing
    `BizException` here; preserve an explicit existing module convention. The service does
@@ -85,9 +101,10 @@ current task `stage`; do not perform bootstrap dependency or global activation w
 4. The controller stage owns the confirmed internal HTTP method/path, request validation,
    response envelope/status mapping, and delegation to the application service.
 
-For `entity_payload=false`, preserve acknowledgement/status semantics and do not create an
-Entity, PO, or invented Converter. When multiple internal Endpoints reference the same
-`operation_id`, reuse one Client method and compatible transport DTO set.
+Preserve confirmed acknowledgement/status semantics without inventing an Entity, PO,
+or Converter. When multiple internal Endpoints reference the same external Operation,
+reuse one complete Client method and compatible transport DTO set; their different
+value mappings never authorize shrinking that shared method's signature.
 
 ## Template `common` Infrastructure
 
@@ -118,18 +135,15 @@ request when the task cannot satisfy both within scope.
 
 ## Mapping and Pagination
 
-For entity responses, `mapped_entity_path` is the record-extraction boundary. When it is
-`list[]`, keep the response root DTO as an object, traverse its `list` collection, and map
-every element. When it is empty, apply confirmed source paths directly. Never guess another
-envelope or array.
+Use current `api_design.fieldMappings` as the response assignment authority. Service
+applies the confirmed source paths, value rules, and missing policies after the upstream
+response is available. Preserve all declared array elements and the complete transport
+response structure. Never guess another envelope or array.
 
-`field_mappings` is the only assignment authority. Map `decimal` fields with `BigDecimal`,
-`datetime` through the project's Java time/Jackson convention, and `enum` only to confirmed
-`enum_values`. Use project-compatible Java 8 types for other fields.
-
-Implement pagination only when `response_handling.pagination` and `total_path` are both
-declared. Familiar field names such as `total`, `current`, `pageSize`, `list`, or `items` do
-not authorize pagination by themselves.
+Use project-compatible Java 8 types and the existing Jackson convention for declared
+types. Implement pagination only when the internal API contract and confirmed mappings
+declare it; familiar names such as `total`, `pageSize`, `list`, or `items` do not authorize
+pagination by themselves.
 
 ## Error and Safety Behavior
 

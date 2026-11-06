@@ -11,6 +11,58 @@ export type AssistTestServer = {
   requests: Array<{ input: Input; release: () => void }>
 }
 
+/** 为只读审阅的挂载补齐宿主构造器和图标样式容器，结束后精确还原全局环境。 */
+export function installMappingDomConstructors(): () => void {
+  type StyleNode = { tagName: string; parentNode: object | null; innerHTML: string; setAttribute: (name: string, value: string) => void; getAttribute: (name: string) => string | null }
+  const head = {
+    children: [] as StyleNode[],
+    /** 供图标样式插入到容器首部。 */
+    get firstChild(): StyleNode | undefined { return this.children[0] },
+    /** 图标库只向样式容器插入节点，不挂载实际 React 宿主元素。 */
+    appendChild(node: StyleNode): StyleNode { this.children.push(node); node.parentNode = this; return node },
+    /** 保留样式 prepend 顺序，供 rc-util 的动态样式注入使用。 */
+    insertBefore(node: StyleNode, before?: StyleNode): StyleNode {
+      const index = before ? this.children.indexOf(before) : -1
+      this.children.splice(index < 0 ? this.children.length : index, 0, node); node.parentNode = this; return node
+    },
+    /** 删除 rc-util 用于定位样式父容器的临时节点。 */
+    removeChild(node: StyleNode): void {
+      const index = this.children.indexOf(node)
+      if (index >= 0) this.children.splice(index, 1)
+      node.parentNode = null
+    }
+  }
+  const document = {
+    head, body: head,
+    /** 当前测试仅查询图标样式插入位置。 */
+    querySelector: (): typeof head => head,
+    /** 用属性表承载样式去重标识，避免模拟组件自身行为。 */
+    createElement: (tag: string): StyleNode => {
+      const attributes = new Map<string, string>()
+      return { tagName: tag.toUpperCase(), parentNode: null, innerHTML: '',
+        setAttribute: (name, value) => { attributes.set(name, value) },
+        getAttribute: (name) => attributes.get(name) || null }
+    },
+    /** 告知样式库当前容器仍属于本次模拟文档。 */
+    contains: (node: unknown): boolean => node === head || head.children.some((child) => child === node)
+  }
+  const constructors = { Element: class {}, HTMLElement: class {}, SVGElement: class {}, ShadowRoot: class {}, document,
+    window: { document } }
+  const originals = new Map<string, PropertyDescriptor | undefined>()
+  for (const [name, constructor] of Object.entries(constructors)) {
+    if (typeof Reflect.get(globalThis, name) !== 'undefined') continue
+    originals.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+    Object.defineProperty(globalThis, name, { configurable: true, value: constructor })
+  }
+  /** 只恢复本次补齐的全局对象，避免影响其他测试提供的浏览器环境。 */
+  return (): void => {
+    for (const [name, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
+}
+
 /** 用标准 AG-UI 事件响应真实客户端；可控网络延迟不模拟 React 状态或请求函数。 */
 function response(input: Input, threadId: string, runId: string, failed: boolean, operation: AssistTestServer['operation']): Response {
   const external = input.selection.sourceType === 'external_api'

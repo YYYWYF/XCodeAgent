@@ -1,6 +1,7 @@
 import type { DataSourceOperation, DataSourceOperationSection } from '../../typings'
 import type { OperationDraft } from './ExternalApiFormParts'
 import { parseJsonSampleText } from './jsonStructure'
+import { operationPathParameterNames } from './dataSourceOperations'
 
 /** 编辑器中按需配置的模块顺序，保持选择器和编辑态摘要一致。 */
 export const OPERATION_SECTIONS: DataSourceOperationSection[] = ['path', 'query', 'header', 'requestBody', 'responseBody']
@@ -15,7 +16,7 @@ export function hasJsonDraftContent(text: string, structure: DataSourceOperation
 /** 根据已保存接口内容推导需要展示的配置模块。 */
 export function configuredSections(operation: DataSourceOperation): DataSourceOperationSection[] {
   const sections: DataSourceOperationSection[] = []
-  if (operation.pathParameters.length) sections.push('path')
+  if (operationPathParameterNames(operation.path).length) sections.push('path')
   if (operation.queryParameters.length) sections.push('query')
   if (operation.headers.length) sections.push('header')
   if (operation.requestStructure !== null || (operation.requestSample !== undefined && operation.requestSample !== null)) sections.push('requestBody')
@@ -26,7 +27,7 @@ export function configuredSections(operation: DataSourceOperation): DataSourceOp
 /** 返回配置模块的中文标题和编辑说明。 */
 export function sectionMeta(section: DataSourceOperationSection): { title: string; description: string } {
   const metadata: Record<DataSourceOperationSection, { title: string; description: string }> = {
-    path: { title: 'Path 参数', description: '配置路径中的占位符参数' },
+    path: { title: 'Path 参数', description: '根据路径占位符自动生成' },
     query: { title: 'Query 参数', description: '配置 URL 查询参数' },
     header: { title: '接口 Header', description: '配置普通请求头' },
     requestBody: { title: '请求体', description: '用于记录接口请求示例' },
@@ -35,9 +36,9 @@ export function sectionMeta(section: DataSourceOperationSection): { title: strin
   return metadata[section]
 }
 
-/** 清空指定模块的草稿内容，删除配置时不影响其他模块。 */
+/** 清空可选模块草稿；Path 始终由路径派生，不能在模块操作中单独清理。 */
 export function clearOperationSection(operation: OperationDraft, section: DataSourceOperationSection): OperationDraft {
-  if (section === 'path') return { ...operation, pathParameters: [] }
+  if (section === 'path') return operation
   if (section === 'query') return { ...operation, queryParameters: [] }
   if (section === 'header') return { ...operation, headers: [] }
   if (section === 'requestBody') return { ...operation, requestSample: undefined, requestSampleText: '', requestStructure: null, requestFieldDescriptionsDraft: {}, requestFieldTypesDraft: {} }

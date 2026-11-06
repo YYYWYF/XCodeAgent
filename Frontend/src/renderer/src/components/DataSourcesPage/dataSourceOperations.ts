@@ -1,4 +1,4 @@
-import type { DataSourceCatalog, DataSourceOperation, DataSourceParameter, ExternalApiDataSource } from '../../typings/dataSources'
+import type { DataSourceCatalog, DataSourceOperation, DataSourceOperationSection, DataSourceParameter, ExternalApiDataSource } from '../../typings/dataSources'
 import { JSON_FIELD_TYPES, PATH_FIELD_TYPES } from './jsonFieldTypes'
 
 /** 从指定接口的详情响应中取得编辑目标，缺失时不使用列表摘要兜底。 */
@@ -9,11 +9,51 @@ export function requireOperationDetails(catalog: DataSourceCatalog, sourceId: st
   return operation
 }
 
+/** 按路径出现顺序解析占位符，拒绝非法括号、空白及仅大小写不同的重复名称。 */
+export function operationPathParameterNames(path: string): string[] {
+  const normalized = path.trim()
+  if (!normalized.startsWith('/')) throw new Error('外部 API 操作路径必须以 / 开头。')
+  if (/[{}]/.test(normalized.replace(/\{([^{}\/]+)\}/g, ''))) throw new Error('API 路径占位符格式无效。')
+  const names = Array.from(normalized.matchAll(/\{([^{}\/]+)\}/g), (match) => match[1])
+  const casing = new Map<string, string>()
+  for (const name of names) {
+    if (/\s/.test(name)) throw new Error('Path 占位符名称不能包含空白字符。')
+    const previous = casing.get(name.toLowerCase())
+    if (previous && previous !== name) throw new Error('Path 占位符名称不能仅大小写不同。')
+    casing.set(name.toLowerCase(), name)
+  }
+  return [...new Set(names)]
+}
+
+/** 同步占位符草稿，保留同名参数的类型、描述和稳定行标识，不修改原数组。 */
+export function synchronizePathParameters(
+  path: string,
+  parameters: Array<DataSourceParameter & { rowId: string }>
+): Array<DataSourceParameter & { rowId: string }> {
+  const previous = new Map(parameters.map((parameter) => [parameter.name, parameter]))
+  return operationPathParameterNames(path).map((name) => {
+    const parameter = previous.get(name)
+    return { rowId: parameter?.rowId || crypto.randomUUID(), name, type: parameter?.type || 'string',
+      required: true, description: parameter?.description || '' }
+  })
+}
+
+/** 在初始化、失焦、下一步与保存入口生成同一份规范化候选，Path 模块随路径派生。 */
+export function synchronizeOperationPath<T extends { path: string; pathParameters: Array<DataSourceParameter & { rowId: string }> }>(
+  operation: T,
+  sections: ReadonlySet<DataSourceOperationSection>
+): { operation: T; sections: Set<DataSourceOperationSection> } {
+  const path = operation.path.trim()
+  const pathParameters = synchronizePathParameters(path, operation.pathParameters)
+  const selected = new Set(sections)
+  if (pathParameters.length) selected.add('path')
+  else selected.delete('path')
+  return { operation: { ...operation, path, pathParameters }, sections: selected }
+}
+
 /** 校验分区后的参数与路径占位符，前端错误与后端规则保持一致。 */
 export function validateOperationParameters(path: string, pathParameters: DataSourceParameter[], queryParameters: DataSourceParameter[]): void {
-  if (!path.startsWith('/')) throw new Error('外部 API 操作路径必须以 / 开头。')
-  const placeholders = new Set(Array.from(path.matchAll(/\{([^{}\/]+)\}/g), (match) => match[1]))
-  if (/[{}]/.test(path.replace(/\{([^{}\/]+)\}/g, ''))) throw new Error('API 路径占位符格式无效。')
+  const placeholders = new Set(operationPathParameterNames(path))
   const pathNames = new Set<string>()
   if (pathParameters.length + queryParameters.length > 50) throw new Error('Path 和 Query 参数合计不能超过 50 个。')
   for (const [location, parameters] of [['path', pathParameters], ['query', queryParameters]] as const) {

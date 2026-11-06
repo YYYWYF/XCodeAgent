@@ -162,7 +162,9 @@ def _upstream_rules() -> tuple[str, ...]:
         "When the manifest contains upstream, implement the external Client, transport DTOs, "
         "and exact upstream request/response contract from sourceSnapshots and the frozen "
         "Endpoint API Design. Reuse one Client method and transport DTO set for the same "
-        "upstream operation. Own only endpoint-local client configuration when necessary; "
+        "upstream operation. Preserve all declared Path/Query/Header parameters, including optional "
+        "and unmapped targets, and complete request/response DTOs. externalApiBindings determines "
+        "service call-site values, never the transport signature. Own only endpoint-local client configuration when necessary; "
         "global OpenFeign activation belongs to backend:bootstrap.",
         "The upstream Task must not transform the final Endpoint response, execute "
         "fieldMappings, compose multiple sources, or create a standalone mapping layer. It "
@@ -177,7 +179,9 @@ def _service_rules() -> tuple[str, ...]:
         "The service Task is the sole owner of Endpoint fieldMappings, databaseQuery value rules, "
         "databaseWrites, externalApiBindings, business processing, and final response composition. "
         "Coordinate only repository/upstream branches present in the manifest and pass confirmed "
-        "externalApiBindings values to external request targets. Follow field-value planning rules for "
+        "externalApiBindings values to external request targets while retaining the complete Client signature. "
+        "Unmapped optional targets are absent from the HTTP request; preserve explicit presence, false, and zero. "
+        "Follow field-value planning rules for "
         "typed boundaries and execution phases. Do not add a standalone mapping Task, expose upstream "
         "transport types through the internal API, or implement Controller routing.",
         "Whenever implementation of a confirmed business failure branch requires "

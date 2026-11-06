@@ -538,11 +538,13 @@ class ApiDesignTests(unittest.TestCase):
 
         safe = _safe_external_operation({
             "id": "operation",
-            "headers": [{"name": "X-Trace", "value": "secret"}],
+            "headers": [{"name": "X-Trace", "type": "string", "required": True,
+                         "description": "调用标识", "value": "secret"}],
             "requestSample": {"token": "secret"},
             "responseSample": {"email": "user@example.com"},
         })
-        self.assertEqual(safe["headers"], [{"name": "X-Trace"}])
+        self.assertEqual(safe["headers"], [{"name": "X-Trace", "type": "string", "required": True,
+                                            "description": "调用标识"}])
         self.assertNotIn("requestSample", safe)
         self.assertNotIn("responseSample", safe)
 

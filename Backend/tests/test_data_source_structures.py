@@ -49,7 +49,7 @@ class DataSourceStructureTests(unittest.TestCase):
         detail = public_catalog(self.workspace, source_id="domain-structure", operation_id="operation-structure")
         self.assertEqual(detail.sources[0].directories[0].operations[0].request_structure, operation.request_structure)
         index = json.loads((directory / "index.json").read_text("utf-8"))
-        self.assertEqual(set(index["sources"][0]["directories"][0]["operations"][0]), {"id", "name", "method", "path"})
+        self.assertEqual(set(index["sources"][0]["directories"][0]["operations"][0]), {"id", "name", "description", "method", "path"})
 
     def test_save_rebuilds_structure_and_failed_save_preserves_saved_tree(self) -> None:
         """修改样例后服务端重建旧结构，保存失败不改变已保存结构。"""

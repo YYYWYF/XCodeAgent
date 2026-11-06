@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from app.agents.data_source.generator import _data_source_generation_prompt
 from app.agents.data_source.prompt_context import (
@@ -10,6 +11,8 @@ from app.agents.data_source.prompt_context import (
     task_required_skill_paths,
 )
 from app.agents.data_source.workspace_context import backend_workspace_context
+from app.domain.api_design import ExternalApiBinding, ExternalBinding
+from app.services.api_design import _external_operation_fields, _validated_source_snapshots
 from app.services.build_unit_compiler import apply_unit_compilation
 
 
@@ -63,6 +66,8 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
             "sourceId": source_id,
             "name": str(source.get("entity_name") or entity_id),
             "details": {
+                "sourceId": source_id,
+                "directoryId": "products",
                 "connection": {
                     "baseUrl": connection.get("base_url") or "https://example.invalid",
                     "baseUrlConfigKey": connection.get("base_url_config_key") or "upstream.url",
@@ -70,12 +75,13 @@ def _endpoint_design(source_specs: list[dict]) -> dict:
                     "headers": connection.get("headers") or [],
                 },
                 "operation": {
-                    "operationId": operation_id,
+                    "id": operation_id,
                     "name": operation.get("name") or operation_id,
                     "method": api_info.get("method") or "GET",
                     "path": api_info.get("path") or "/values",
                     "pathParameters": [],
                     "queryParameters": api_info.get("parameters") or [],
+                    "headers": api_info.get("headers") or [],
                     "requestStructure": api_info.get("request_shape") or {},
                     "responseStructure": api_info.get("response_shape") or {},
                 },
@@ -359,7 +365,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         operation = snapshot["details"]["operation"]
         operation["queryParameters"] = []
         operation["requestStructure"] = {}
-        design["sourceBinding"] = {"sourceType": "external_api", "sourceId": snapshot["sourceId"], "directoryId": "products", "operationId": operation["operationId"]}
+        design["sourceBinding"] = {"sourceType": "external_api", "sourceId": snapshot["sourceId"], "directoryId": "products", "operationId": operation["id"]}
         design["externalApiBindings"] = []
         design["fieldMappings"] = [{
             "endpointField": {"side": "response", "location": "response_body", "path": "accepted", "type": "boolean", "required": True, "description": ""},
@@ -383,6 +389,11 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
             "do not short-circuit every null dependency into an error",
             "failure_category=plan_mismatch",
             "never replace them with always-true predicates",
+            "complete typed Client method signature",
+            "one explicit method parameter per operation-level Header",
+            "externalApiBindings controls service call-site values only",
+            "absence is distinct from an explicitly supplied null",
+            "Domain-level shared headers keep their existing shared-configuration behavior",
         ):
             self.assertIn(expected, prompt)
         self.assertEqual(prompt.count("[Field-value contract]"), 1)
@@ -642,7 +653,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
 
         api_design = context["api_design"]
         operation = api_design["sourceSnapshots"][0]["details"]["operation"]
-        self.assertEqual(operation["operationId"], "external-op-product-list")
+        self.assertEqual(operation["id"], "external-op-product-list")
         self.assertNotIn("unrelated-operation", str(api_design))
         self.assertNotIn("request_body", str(operation))
         self.assertNotIn("response_body", str(operation))
@@ -683,7 +694,7 @@ class DataSourceGenerationPromptTests(unittest.TestCase):
         self.assertIn('"baseUrlConfigKey": "product.url"', prompt)
         self.assertIn('"path": "pageSize"', prompt)
         self.assertIn('"path": "list[].price"', prompt)
-        self.assertIn("request_shape and requestStructure and responseStructure", prompt)
+        self.assertIn("requestStructure and responseStructure", prompt)
         self.assertIn("Persist the confirmed baseUrl directly", prompt)
         self.assertIn("plain YAML or properties value", prompt)
         self.assertIn("never wrap it in a `${ENV_NAME:default}`", prompt)
@@ -851,6 +862,84 @@ class DataSourceWorkspaceContextTests(unittest.TestCase):
 
 class DataSourceTaskCompilationTests(unittest.TestCase):
     """验证 Unit 编译阶段按 Endpoint 身份隔离 API 设计。"""
+
+    def test_external_request_contract_survives_snapshot_compilation_and_packet(self) -> None:
+        """完整外部参数穿过真实快照、Unit 编译和执行包，映射只携带取值。"""
+
+        selection = {
+            "sourceType": "external_api", "sourceId": "supplier",
+            "directoryId": "products", "operationId": "product-detail",
+        }
+        operation = {
+            "id": "product-detail", "name": "商品详情", "method": "POST",
+            "path": "/products/{productId}",
+            "pathParameters": [{"name": "productId", "type": "string", "required": True, "description": "商品编号"}],
+            "queryParameters": [
+                {"name": "offset", "type": "integer", "required": False, "description": "偏移量"},
+                {"name": "includeInactive", "type": "boolean", "required": False, "description": "包含停用"},
+                {"name": "locale", "type": "string", "required": False, "description": "语言"},
+            ],
+            "headers": [
+                {"name": "X-Tenant-Id", "type": "string", "required": True, "description": "租户"},
+                {"name": "X-Retry-Count", "type": "integer", "required": False, "description": "重试次数"},
+                {"name": "X-Enabled", "type": "boolean", "required": False, "description": "启用"},
+            ],
+            "requestStructure": {"type": "object", "properties": {"filter": {"type": "string"}}},
+            "responseStructure": {"type": "object", "properties": {"name": {"type": "string"}, "unmapped": {"type": "boolean"}}},
+        }
+        metadata = {
+            "sourceId": "supplier", "directoryId": "products",
+            "connection": {"baseUrl": "https://supplier.invalid", "baseUrlConfigKey": "supplier.url", "timeoutMs": 10000, "headers": []},
+            "operation": operation, "fields": _external_operation_fields(operation),
+        }
+        bindings = [
+            ExternalApiBinding(
+                externalField={**selection, "section": section, "path": name, "type": field_type},
+                right={"kind": "fixed", "value": value},
+            )
+            for section, name, field_type, value in (
+                ("path", "productId", "string", "product-1"),
+                ("header", "X-Tenant-Id", "string", "tenant-1"),
+                ("query", "offset", "integer", 0),
+                ("query", "includeInactive", "boolean", False),
+            )
+        ]
+        with patch("app.services.api_design.load_external_operation", return_value=metadata):
+            snapshots = _validated_source_snapshots(
+                "unused", [], external_api_bindings=bindings,
+                binding=ExternalBinding(**selection),
+            )
+
+        design = _endpoint_design([])
+        design.update({
+            "sourceBinding": selection,
+            "sourceSnapshots": snapshots,
+            "externalApiBindings": [item.model_dump(mode="json", by_alias=True) for item in bindings],
+        })
+        unit_id = "backend:endpoint:category_api:category.create"
+        for stage in ("upstream", "service"):
+            with self.subTest(stage=stage):
+                task = {**_task(designs=[design]), "id": f"{unit_id}::{stage}"}
+                compiled = apply_unit_compilation(
+                    {"build_units": {unit_id: {"id": unit_id}}}, [task],
+                    {
+                        "target": {"type": "endpoint", "id": "category.create"},
+                        "endpoint_ids": ["category.create"], "entity_ids": [],
+                        "endpoint_designs": [design], "source_refs": {},
+                    },
+                )[0]
+                packet = execution_task_packet(_project_plan(), compiled)
+                actual = packet["implementation_contract"]["api_design"]
+                transport = actual["sourceSnapshots"][0]["details"]["operation"]
+                self.assertEqual(transport, operation)
+                self.assertEqual(len(transport["headers"]), 3)
+                self.assertEqual(actual["externalApiBindings"], design["externalApiBindings"])
+                values = {item["externalField"]["path"]: item["right"]["value"] for item in actual["externalApiBindings"]}
+                self.assertIs(type(values["offset"]), int)
+                self.assertEqual(values["offset"], 0)
+                self.assertIs(values["includeInactive"], False)
+                self.assertNotIn("X-Language", values)
+                self.assertNotIn("X-Trace-Id", values)
 
     def test_endpoint_task_filters_designs_to_endpoint_identity(self) -> None:
         """Endpoint Unit 只能继承复合标识完全匹配的 API 设计。"""

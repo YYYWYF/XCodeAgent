@@ -7,7 +7,7 @@ import type { DataSourceDirectory, DataSourceOperation, DataSourceOperationSecti
 import { cx } from '../../utils'
 import { OperationFields, operationDraftFromSource, type OperationDraft } from './ExternalApiFormParts'
 import { buildJsonSchema } from './jsonSchema'
-import { validateOperationParameters } from './dataSourceOperations'
+import { synchronizeOperationPath, validateOperationParameters } from './dataSourceOperations'
 import { configuredSections, validateSelectedSections } from './dataSourceOperationConfig'
 
 type Props = {
@@ -36,17 +36,26 @@ function operationSnapshot(operation: OperationDraft, directoryId: string, secti
   return JSON.stringify({ operation, directoryId, sections: [...sections].sort() })
 }
 
+/** 先规范化路径及模块再建立编辑基线，避免打开接口就产生未保存状态。 */
+function initialOperationDraft(editing?: DataSourceOperation): { operation: OperationDraft; sections: Set<DataSourceOperationSection> } {
+  return synchronizeOperationPath(operationDraftFromSource(editing), new Set<DataSourceOperationSection>(editing ? configuredSections(editing) : ['responseBody']))
+}
+
 /** 管理外部 API 单个接口及其目录归属的居中弹窗。 */
 export default function DataSourceOperationModal({ directories, editing, initialDirectoryId, onClose, onSave, open, saving, theme, embedded, hideDirectory = false, onDirtyChange, onCreateDirectory }: Props): ReactElement {
-  const [operation, setOperation] = useState<OperationDraft>(() => operationDraftFromSource(editing))
+  const [{ operation, sections }, setDraft] = useState(() => initialOperationDraft(editing))
   const [directoryId, setDirectoryId] = useState(initialDirectoryId || directories[0]?.id || '')
   const [phase, setPhase] = useState<'selection' | 'edit'>(() => editing ? 'edit' : 'selection')
-  const [sections, setSections] = useState<Set<DataSourceOperationSection>>(() => new Set(editing ? configuredSections(editing) : ['responseBody']))
   const [error, setError] = useState('')
   const initializedTargetRef = useRef<string>()
   const baseline = useRef(operationSnapshot(operation, directoryId, sections))
   const dirty = operationSnapshot(operation, directoryId, sections) !== baseline.current
   useEffect(() => { onDirtyChange?.(dirty) }, [dirty, onDirtyChange])
+
+  /** 更新表单草稿，不在输入尚未完成时解析并删除已有 Path 参数。 */
+  const setOperation = (next: OperationDraft): void => setDraft((current) => ({ ...current, operation: next }))
+  /** 保留当前操作内容，仅更新可选配置模块。 */
+  const setSections = (next: Set<DataSourceOperationSection>): void => setDraft((current) => ({ ...current, sections: next }))
 
   /** 独立弹窗自行保护输入；嵌入详情由父级统一保护关闭与切换。 */
   const cancel = (): void => {
@@ -64,16 +73,20 @@ export default function DataSourceOperationModal({ directories, editing, initial
     const target = editing?.id || 'new'
     if (initializedTargetRef.current === target) return
     initializedTargetRef.current = target
-    const nextOperation = operationDraftFromSource(editing)
+    const nextDraft = initialOperationDraft(editing)
     const nextDirectory = initialDirectoryId || directories[0]?.id || ''
-    const nextSections = new Set(editing ? configuredSections(editing) : ['responseBody'] as DataSourceOperationSection[])
-    baseline.current = operationSnapshot(nextOperation, nextDirectory, nextSections)
-    setOperation(nextOperation)
+    baseline.current = operationSnapshot(nextDraft.operation, nextDirectory, nextDraft.sections)
+    setDraft(nextDraft)
     setDirectoryId(nextDirectory)
-    setSections(nextSections)
     setPhase(editing ? 'edit' : 'selection')
     setError('')
   }, [directories, editing, initialDirectoryId, open])
+
+  /** 在路径填写完成时一次提交参数和模块；解析失败保留用户文本及旧参数草稿。 */
+  const handlePathBlur = (): void => {
+    try { setDraft(synchronizeOperationPath(operation, sections)); setError('') }
+    catch (caughtError) { setError(caughtError instanceof Error ? caughtError.message : '路径格式无效。') }
+  }
 
   /** 校验基本信息及路径配置选择，完成新建流程第一步。 */
   const handleNext = (): void => {
@@ -82,7 +95,7 @@ export default function DataSourceOperationModal({ directories, editing, initial
       if (!operation.name.trim()) throw new Error('请输入接口名称。')
       if (!operation.path.trim()) throw new Error('请输入接口路径。')
       if (!directoryId) throw new Error('请选择接口所属目录。')
-      if (/\{[^{}\/]+\}/.test(operation.path) && !sections.has('path')) throw new Error('当前路径包含占位符，请选择 Path 参数配置。')
+      setDraft(synchronizeOperationPath(operation, sections))
       setPhase('edit')
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '请先完善基本信息。')
@@ -96,30 +109,34 @@ export default function DataSourceOperationModal({ directories, editing, initial
       if (!operation.name.trim()) throw new Error('请输入接口名称。')
       if (!operation.path.trim()) throw new Error('请输入接口路径。')
       if (!directoryId) throw new Error('请选择接口所属目录。')
-      if (operation.description.trim().length > 500) throw new Error('接口描述不能超过 500 个字符。')
-      validateSelectedSections(operation, sections)
-      const requestSample = parseSample(operation.requestSampleText, '请求样例')
-      const responseSample = parseSample(operation.responseSampleText, '响应样例')
-      const pathParameters = operation.pathParameters.map(({ rowId: _rowId, ...parameter }) => ({ ...parameter, name: parameter.name.trim() }))
-      const queryParameters = operation.queryParameters.map(({ rowId: _rowId, ...parameter }) => ({ ...parameter, name: parameter.name.trim() }))
-      const headers = operation.headers.map((header) => ({ name: header.name.trim(), value: header.value.trim() }))
+      // 保存直接使用纯函数生成的候选，不能在 setState 后读取上一帧的参数或模块。
+      const candidate = synchronizeOperationPath(operation, sections)
+      const current = candidate.operation
+      if (current.description.trim().length > 500) throw new Error('接口描述不能超过 500 个字符。')
+      validateSelectedSections(current, candidate.sections)
+      const requestSample = parseSample(current.requestSampleText, '请求样例')
+      const responseSample = parseSample(current.responseSampleText, '响应样例')
+      const pathParameters = current.pathParameters.map(({ rowId: _rowId, ...parameter }) => ({ ...parameter, name: parameter.name.trim() }))
+      const queryParameters = current.queryParameters.map(({ rowId: _rowId, ...parameter }) => ({ ...parameter, name: parameter.name.trim() }))
+      const headers: DataSourceOperation['headers'] = current.headers.map((header) => ({ name: header.name.trim(), type: header.type, required: header.required, description: header.description.trim() }))
       if (headers.some((header) => !header.name)) throw new Error('Header 名称不能为空。')
       if (new Set(headers.map((header) => header.name.toLowerCase())).size !== headers.length) throw new Error('Header 名称不能重复。')
-      validateOperationParameters(operation.path.trim(), pathParameters, queryParameters)
+      validateOperationParameters(current.path, pathParameters, queryParameters)
       const next: DataSourceOperation = {
-        id: operation.id,
-        name: operation.name.trim(),
-        description: operation.description.trim(),
-        method: operation.method,
-        path: operation.path.trim(),
+        id: current.id,
+        name: current.name.trim(),
+        description: current.description.trim(),
+        method: current.method,
+        path: current.path,
         pathParameters,
         queryParameters,
         headers,
         requestSample,
         responseSample,
-        requestStructure: requestSample === undefined ? operation.requestStructure : buildJsonSchema(requestSample, operation.requestFieldDescriptionsDraft, operation.requestFieldTypesDraft),
-        responseStructure: responseSample === undefined ? operation.responseStructure : buildJsonSchema(responseSample, operation.responseFieldDescriptionsDraft, operation.responseFieldTypesDraft)
+        requestStructure: requestSample === undefined ? current.requestStructure : buildJsonSchema(requestSample, current.requestFieldDescriptionsDraft, current.requestFieldTypesDraft),
+        responseStructure: responseSample === undefined ? current.responseStructure : buildJsonSchema(responseSample, current.responseFieldDescriptionsDraft, current.responseFieldTypesDraft)
       }
+      setDraft(candidate)
       await onSave(next, directoryId)
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : '接口保存失败。')
@@ -130,7 +147,7 @@ export default function DataSourceOperationModal({ directories, editing, initial
     {error ? <Alert className={cx('data-source-editor-error')} message={error} showIcon type="error" /> : null}
     <div className={cx('data-source-editor-form')}>
       {directories.length === 0 ? <Alert message="当前接口域缺少默认目录，请重新创建接口域。" type="warning" showIcon action={onCreateDirectory ? <Button type="link" onClick={onCreateDirectory}>创建目录</Button> : undefined} /> : hideDirectory ? null : <label><span>所属目录</span><Select disabled={saving} onChange={setDirectoryId} options={directories.map((directory) => ({ label: directory.name, value: directory.id }))} value={directoryId || undefined} /></label>}
-      <fieldset disabled={saving} style={{ border: 0, padding: 0, minWidth: 0 }}><OperationFields initiallyCollapsed={false} onChange={setOperation} onSectionsChange={setSections} operation={operation} phase={phase} sections={sections} theme={theme} /></fieldset>
+      <fieldset disabled={saving} style={{ border: 0, padding: 0, minWidth: 0 }}><OperationFields initiallyCollapsed={false} onChange={setOperation} onPathBlur={handlePathBlur} onSectionsChange={setSections} operation={operation} phase={phase} sections={sections} theme={theme} /></fieldset>
     </div>
   </>
   const actions = <div className={cx('data-source-modal-footer')}>
