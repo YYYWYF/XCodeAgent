@@ -4,6 +4,7 @@ from typing import Any, AsyncIterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from langchain_core.runnables import RunnableLambda
+from app.agents.model_operations import model_operation
 
 from app.agents.technical_planning_conversation import classify_technical_planning_conversation
 from app.domain.application_lifecycle import ApplicationLifecycleStage
@@ -166,13 +167,14 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             "request": request.request, "resumeFrom": target_node,
             "forwardedProps": {"workspaceRoot": request.workspaceRoot, "workflowScope": "application_planning"},
         }
-        async for frame in build_workflow_ag_ui_stream(
-            graph=graph, payload=normalized, accept=accept,
-            technical_planning_revision=TechnicalPlanningMessageRevision(
-                request.request, checkpoint_id, target_node, request.conversationTarget,
-            ),
-        ):
-            yield frame
+        with model_operation(None, business_stage="technical_planning"):
+            async for frame in build_workflow_ag_ui_stream(
+                graph=graph, payload=normalized, accept=accept,
+                technical_planning_revision=TechnicalPlanningMessageRevision(
+                    request.request, checkpoint_id, target_node, request.conversationTarget,
+                ),
+            ):
+                yield frame
 
     if isinstance(raw, dict) and raw.get("action") in {"revise", "revise_design"}:
         return revise()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.agents.model_operations import layer_operation, model_operation
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import hashlib
@@ -60,12 +61,16 @@ def generate_or_update_unit_tests_with_agent(
         def invoke() -> str:
             """执行一次无命令权限的测试 Agent 调用。"""
 
-            return invoke_agent_with_tool_activity(
-                create_agent_bundle(workspace, selected_skill_names).test_generation,
-                {"messages": [{"role": "user", "content": prompt}]},
-                workspace=workspace,
-                on_tool_activity=on_tool_activity,
-            )
+            with model_operation(
+                layer_operation(_layers_for_sources(source_files), purpose="unit_tests"),
+                business_stage="unit_test",
+            ):
+                return invoke_agent_with_tool_activity(
+                    create_agent_bundle(workspace, selected_skill_names).test_generation,
+                    {"messages": [{"role": "user", "content": prompt}]},
+                    workspace=workspace,
+                    on_tool_activity=on_tool_activity,
+                )
 
         security_before = _workspace_security_snapshot(workspace)
         internal_before = _internal_artifact_snapshot(workspace)

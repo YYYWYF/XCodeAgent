@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
+from app.agents.model_operations import model_operation, observe_model_operation
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -197,6 +198,7 @@ def _authorization_evidence(value: Any, request: str) -> dict[str, Any]:
     return {"hasAuthorizationRequirement": True, "evidence": evidence}
 
 
+@observe_model_operation("classify_authorization_requirements", business_stage="requirements")
 def _classify_authorization_evidence(request: str, settings: Settings) -> dict[str, Any]:
     """以独立窄模型判定是否存在授权证据，阻断角色职责误入权限抽取。"""
 
@@ -369,7 +371,11 @@ def _extract_authorization_facts(
                 "\n\nPrevious output failed validation. Return a corrected complete JSON only:\n"
                 + feedback
             )
-        result = create_chat_model(settings).invoke(prompt)
+        with model_operation(
+            "repair_authorization_facts" if _attempt else "extract_authorization_facts",
+            business_stage="requirements",
+        ):
+            result = create_chat_model(settings).invoke(prompt)
         payload = extract_json_object(
             _coerce_content_text(getattr(result, "content", "")) or ""
         )
@@ -716,6 +722,7 @@ def analyze_requirements_with_chat_model(
     datasource_type: DatasourceType = "database",
     clarification_round: int = 0,
     on_token: Callable[[str], None] | None = None,
+    business_operation: str = "analyze_requirements",
 ) -> dict[str, Any]:
     """直接调用需求模型生成 RequirementSpec，并在关键需求不足时请求澄清。"""
 
@@ -732,7 +739,8 @@ def analyze_requirements_with_chat_model(
         )
 
     try:
-        return _analyze_once()
+        with model_operation(business_operation, business_stage="requirements"):
+            return _analyze_once()
     except ValueError as exc:
         # 模型输出的 JSON 结构损坏（引号未转义等）属于内容抖动：
         # 恢复层修不好时重新调用一次，新输出大概率自愈，避免直接打断 workflow。
@@ -742,7 +750,8 @@ def analyze_requirements_with_chat_model(
             "requirement_spec_content_retry: 模型返回的需求 JSON 不完整，重试一次：%s",
             exc,
         )
-        return _analyze_once()
+        with model_operation("repair_requirement_spec", business_stage="requirements"):
+            return _analyze_once()
 
 
 def _is_malformed_spec_json_error(exc: ValueError) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.agents.model_operations import observe_model_operation
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import hashlib
@@ -291,6 +292,7 @@ def _normalize_plan(
     return plan
 
 
+@observe_model_operation("generate_page_development_plan", business_stage="planning")
 async def generate_application_development_plan(
     request: GenerateDevelopmentPlanRequest,
     on_text_delta: ModelTextReporter | None = None,

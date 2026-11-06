@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from typing import Literal
 
+from app.agents.model_operations import model_operation, unit_planning_operation
 from app.agents.main.unit_task_prompt import build_unit_generation_prompt
 from app.agents.messages import extract_candidate_text
 from app.agents.model_factory import create_chat_model
@@ -127,6 +128,11 @@ async def generate_unit_candidate_once(
     """
 
     frozen_job = UnitAttemptJob.model_validate(job)
+    # 元数据只依赖平台分配的轮次和校验反馈，不改变原来的重试与调度逻辑。
+    repairing = bool(global_feedback or local_feedback) or (
+        frozen_job.identity.generation_round > 1 or frozen_job.identity.attempt_in_round > 1
+    )
+    business_operation = unit_planning_operation(frozen_job.context, repairing=repairing)
     active_settings = settings or Settings.from_env()
     prompt = build_unit_generation_prompt(
         frozen_job.context,
@@ -173,7 +179,8 @@ async def generate_unit_candidate_once(
             while model_turns < frozen_job.policy.model_turn_limit:
                 model_input = tool_session.messages if tool_session is not None else prompt
                 try:
-                    response = await runnable.ainvoke(model_input)
+                    with model_operation(business_operation, business_stage="planning"):
+                        response = await runnable.ainvoke(model_input)
                 except Exception as exc:
                     raise UnitGenerationInfrastructureError(
                         identity=frozen_job.identity,

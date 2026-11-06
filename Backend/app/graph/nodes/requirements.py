@@ -266,6 +266,7 @@ def requirements(state: ProjectState) -> dict:
         datasource_type=datasource_type,
         clarification_round=clarification_round,
         on_token=_llm_token_callback,
+        business_operation=("revise_requirements" if revision_requested else "clarify_requirements" if clarification_round else "analyze_requirements"),
     )
     spec = apply_authoritative_datasource_type(
         analysis["requirement_spec"],

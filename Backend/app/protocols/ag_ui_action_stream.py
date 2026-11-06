@@ -21,6 +21,7 @@ from ag_ui.core import (
 from ag_ui.encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
+from app.agents.model_business_context import bind_model_action_run
 from app.protocols.workflow.run_control import workflow_run_registry
 
 
@@ -117,6 +118,13 @@ def build_ag_ui_action_stream(
     run_id = str(payload.get("runId") or f"{run_id_prefix}-{uuid4().hex[:12]}")
     message_id = str(uuid4())
 
+    async def run_operation(
+        action: Callable[..., Awaitable[AgUiActionResult]], *args: Any
+    ) -> AgUiActionResult:
+        """使动作内部的模型请求继承当前 AG-UI Run ID。"""
+        with bind_model_action_run(run_id):
+            return await action(*args)
+
     async def stream() -> AsyncIterator[str]:
         """发送标准生命周期，并在长耗时操作期间持续转发阶段进度。"""
 
@@ -151,9 +159,9 @@ def build_ag_ui_action_stream(
                         await event_queue.put(_QueuedActionEvent(AgUiActionTextDelta(delta=delta)))
 
                 operation_task = asyncio.create_task(
-                    streaming_operation(report, report_text)
+                    run_operation(streaming_operation, report, report_text)
                     if streaming_operation
-                    else progress_operation(report)  # type: ignore[misc]
+                    else run_operation(progress_operation, report)  # type: ignore[arg-type]
                 )
                 while not operation_task.done() or not event_queue.empty():
                     if event_queue.empty():
@@ -211,7 +219,7 @@ def build_ag_ui_action_stream(
                         queued_event.delivered.set_result(None)
                 result = await operation_task
             else:
-                result = await operation()  # type: ignore[misc]
+                result = await run_operation(operation)  # type: ignore[arg-type]
             if workspace_root:
                 from app.services.preview_runtime_guard import record_product_interaction
                 record_product_interaction(workspace_root, thread_id, result.data)

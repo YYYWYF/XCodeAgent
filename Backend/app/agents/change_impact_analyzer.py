@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.agents.model_operations import model_operation
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -149,18 +150,22 @@ class ChangeImpactAnalyzer:
     ) -> dict[str, Any]:
         """把有界 JSON 事实传给模型，并只接受一个 JSON 对象。"""
 
+        from app.agents.model_business_context import current_model_context
+        business_stage = current_model_context({}).get("business_stage") or "conversation"
+
         model = self._model or create_chat_model(Settings.from_env())
         prompt = _build_analyzer_prompt(
             request,
             context=context,
             target=target,
         )
-        response = model.invoke(
-            [
-                SystemMessage(content=CHANGE_IMPACT_ANALYZER_SYSTEM_PROMPT),
-                HumanMessage(content=prompt),
-            ]
-        )
+        with model_operation("analyze_change_impact", business_stage=business_stage):
+            response = model.invoke(
+                [
+                    SystemMessage(content=CHANGE_IMPACT_ANALYZER_SYSTEM_PROMPT),
+                    HumanMessage(content=prompt),
+                ]
+            )
         text = _coerce_content_text(getattr(response, "content", response)) or ""
         payload = extract_json_object(text)
         if not isinstance(payload, dict):

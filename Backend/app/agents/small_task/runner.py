@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.model_operations import model_operation, small_task_operation
 from app.agents.small_task.scope import small_task_path_scope
 from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_with_tool_activity
 from app.agents.messages import NO_AGENT_TEXT
@@ -82,6 +83,8 @@ def invoke_small_task_agent(
 ) -> str:
     """使用本次工作流技能快照调用共享小任务 Agent。"""
 
+    business_operation, business_stage = small_task_operation(packet)
+
     from app.agents import create_agent_bundle
     from app.services.run_workers import current_run_id
 
@@ -89,12 +92,13 @@ def invoke_small_task_agent(
         _string_list(packet.get("allowedPaths"), limit=100),
         run_id=str(packet.get("executionRunId") or current_run_id()),
     ):
-        return invoke_agent_with_tool_activity(
-            create_agent_bundle(workspace, selected_skill_names).small_task,
-            {"messages": [{"role": "user", "content": build_small_task_prompt(packet)}]},
-            workspace=workspace,
-            on_tool_activity=on_tool_activity,
-        )
+        with model_operation(business_operation, business_stage=business_stage):
+            return invoke_agent_with_tool_activity(
+                create_agent_bundle(workspace, selected_skill_names).small_task,
+                {"messages": [{"role": "user", "content": build_small_task_prompt(packet)}]},
+                workspace=workspace,
+                on_tool_activity=on_tool_activity,
+            )
 
 
 def normalize_small_task_result(agent_note: str) -> dict[str, Any]:

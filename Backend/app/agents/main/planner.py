@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 
+from app.agents.model_operations import model_operation, observe_model_operation, technical_plan_operation
 from app.agents.main.technical_plan_language import repair_technical_plan_chinese_prose
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.main.technical_plan_editor import (
@@ -908,27 +909,31 @@ def plan_project_with_chat_model(
 ) -> dict[str, Any]:
     """直接调用聊天模型生成 ProjectPlan 或创建流程的 TechnicalPlan。"""
 
+    business_operation = technical_plan_operation(requirement_spec, existing_plan)
+
     settings = Settings.from_env()
     if (
         isinstance(requirement_spec.get("confirmed_product_plan"), dict)
         and has_editable_technical_plan_candidate(existing_plan)
     ):
         # 首版修复和二次修改共用同一编辑器；已有完整候选后不再让模型重写整份计划。
-        agent_plan = _parse_technical_plan_model_output(json.dumps(
-            edit_technical_plan_with_agent(
-                requirement_spec, existing_plan, settings=settings, on_token=on_token,
-            ), ensure_ascii=False,
-        ))
+        with model_operation(business_operation, business_stage="technical_planning"):
+            agent_plan = _parse_technical_plan_model_output(json.dumps(
+                edit_technical_plan_with_agent(
+                    requirement_spec, existing_plan, settings=settings, on_token=on_token,
+                ), ensure_ascii=False,
+            ))
         return _materialize_technical_plan_candidate(
             requirement_spec, agent_plan, datasource_type=datasource_type,
         )
-    agent_note = _invoke_live_chat_model(
-        requirement_spec,
-        existing_plan=existing_plan,
-        datasource_type=datasource_type,
-        settings=settings,
-        on_token=on_token,
-    )
+    with model_operation(business_operation, business_stage="technical_planning"):
+        agent_note = _invoke_live_chat_model(
+            requirement_spec,
+            existing_plan=existing_plan,
+            datasource_type=datasource_type,
+            settings=settings,
+            on_token=on_token,
+        )
     planning_source = "direct_chat_model"
 
     if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
@@ -1017,6 +1022,7 @@ def _plan_pages_for_repair(existing_plan: dict[str, Any]) -> list[dict[str, Any]
     return pages
 
 
+@observe_model_operation("revise_technical_plan", business_stage="technical_planning")
 def revise_project_plan_with_chat_model(
     existing_plan: dict[str, Any],
     user_feedback: str,

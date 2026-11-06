@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.agents.model_operations import build_task_operation, model_operation
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import contextvars
@@ -567,31 +568,32 @@ def _execute_owner_tasks(
             on_batch_tool_activity(owner_tasks, activity)
 
     try:
-        captured = capture_agent_file_changes(
-            workspace=workspace,
-            source_tool=source_tool,
-            action=lambda: runner(
-                project_plan=state["project_plan"],
-                build_task_plan=state["build_task_plan"],
-                tasks=owner_tasks,
+        with model_operation(build_task_operation(owner, owner_tasks), business_stage="build"):
+            captured = capture_agent_file_changes(
                 workspace=workspace,
-                selected_skill_names=state.get("selected_skill_names"),
-                **(
-                    {"workspace_snapshot": _workspace_snapshot_from_state(state)}
-                    if owner == "backend"
-                    else {}
+                source_tool=source_tool,
+                action=lambda: runner(
+                    project_plan=state["project_plan"],
+                    build_task_plan=state["build_task_plan"],
+                    tasks=owner_tasks,
+                    workspace=workspace,
+                    selected_skill_names=state.get("selected_skill_names"),
+                    **(
+                        {"workspace_snapshot": _workspace_snapshot_from_state(state)}
+                        if owner == "backend"
+                        else {}
+                    ),
+                    **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
+                    **({"ui_designs": state.get("ui_designs")} if owner == "frontend" else {}),
+                    **(
+                        {"database_change_plan": _approved_database_change_plan(owner_tasks)}
+                        if owner == "database"
+                        else {}
+                    ),
+                    # 即使前端没有订阅工具进度也必须记录写入，文件归属不能依赖 UI 回调。
+                    on_tool_activity=record_tool_activity,
                 ),
-                **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
-                **({"ui_designs": state.get("ui_designs")} if owner == "frontend" else {}),
-                **(
-                    {"database_change_plan": _approved_database_change_plan(owner_tasks)}
-                    if owner == "database"
-                    else {}
-                ),
-                # 即使前端没有订阅工具进度也必须记录写入，文件归属不能依赖 UI 回调。
-                on_tool_activity=record_tool_activity,
-            ),
-        )
+            )
     except Exception as exc:
         return (
             normalize_task_results(

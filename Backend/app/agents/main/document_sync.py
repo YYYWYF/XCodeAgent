@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any
 
+from app.agents.model_operations import observe_model_operation
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -188,6 +189,7 @@ def _invoke_sync_model(
     return synced
 
 
+@observe_model_operation("sync_requirement_spec", business_stage="requirements")
 def sync_requirement_spec_from_markdown(
     existing_spec: dict[str, Any],
     edited_markdown: str,
@@ -229,6 +231,7 @@ def sync_requirement_spec_from_markdown(
     return normalized
 
 
+@observe_model_operation("sync_technical_plan", business_stage="technical_planning")
 def sync_project_plan_from_markdown(
     existing_plan: dict[str, Any],
     requirement_spec: dict[str, Any],
@@ -287,6 +290,7 @@ def sync_project_plan_from_markdown(
     return normalized
 
 
+@observe_model_operation("sync_product_plan", business_stage="requirements")
 def sync_product_plan_from_markdown(
     existing_plan: dict[str, Any],
     requirement_spec: dict[str, Any],

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.agents.model_business_context import observe_model_node
+
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -800,9 +802,9 @@ def build_code_review_subgraph():
     """构建代码审查子图，首次扫描后等待一键修复并循环构建验证。"""
 
     builder = StateGraph(ProjectState)
-    builder.add_node("code_scan", code_scan)
-    builder.add_node("code_review_repair", code_review_repair)
-    builder.add_node("review_build_checks", review_build_checks)
+    builder.add_node("code_scan", observe_model_node('code_scan', code_scan, business_stage="code_review"))
+    builder.add_node("code_review_repair", observe_model_node('code_review_repair', code_review_repair, business_stage="code_review"))
+    builder.add_node("review_build_checks", observe_model_node('review_build_checks', review_build_checks, business_stage="code_review"))
     builder.add_conditional_edges(
         START,
         _route_review_start,

@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
+from app.services.model_transmit_client import ModelTransmitError
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -60,7 +61,12 @@ def run_with_transport_retry(
     for attempt in range(1, max(1, attempts) + 1):
         try:
             return operation()
-        except TRANSPORT_ERRORS as exc:
+        except (*TRANSPORT_ERRORS, ModelTransmitError) as exc:
+            # 保留原有调用层网络重试范围，认证、参数及业务内容错误不得新增重试。
+            if isinstance(exc, ModelTransmitError) and exc.code not in {
+                "UPSTREAM_TIMEOUT", "UPSTREAM_CONNECTION_ERROR", "MODEL_TRANSMIT_TRANSPORT_ERROR",
+            }:
+                raise
             last_error = exc
             if attempt >= max(1, attempts):
                 break

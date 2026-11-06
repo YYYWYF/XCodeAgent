@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.agents.model_operations import model_operation, observe_model_operation
 from app.agents.messages import last_agent_text
 from app.config import Settings
 from app.services.test_validation import create_repair_task_plan
@@ -161,6 +162,7 @@ def _invoke_repair_planner_agent(
     return last_agent_text(result)
 
 
+@observe_model_operation("plan_build_repairs", business_stage="build")
 def plan_build_failure_repair_with_repair_planner_agent(
     *,
     repair_input: dict[str, Any],
@@ -207,6 +209,7 @@ def plan_repairs_with_repair_planner_agent(
     repair_attempt: int = 1,
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
+    business_stage: str = "integration_test",
 ) -> dict[str, Any]:
     """在相同技能集合下为集成测试失败生成修复任务。"""
 
@@ -215,15 +218,19 @@ def plan_repairs_with_repair_planner_agent(
         agent_note = "No repair required because all quality gate checks passed."
         planner_decision: dict[str, Any] = {"decision": "terminal_failure"}
     else:
-        agent_note = _invoke_repair_planner_agent(
-            prompt=_test_repair_planning_prompt(
-                test_report=test_report,
-                revision_requests=revision_requests,
-                build_task_plan=build_task_plan,
-            ),
-            workspace=workspace,
-            selected_skill_names=selected_skill_names,
-        )
+        with model_operation(
+            "plan_unit_test_repairs" if business_stage == "unit_test" else "plan_integration_repairs",
+            business_stage=business_stage,
+        ):
+            agent_note = _invoke_repair_planner_agent(
+                prompt=_test_repair_planning_prompt(
+                    test_report=test_report,
+                    revision_requests=revision_requests,
+                    build_task_plan=build_task_plan,
+                ),
+                workspace=workspace,
+                selected_skill_names=selected_skill_names,
+            )
         planner_decision = extract_json_object(agent_note) or {
             "decision": "repair",
             "strategy": agent_note,

@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from app.agents.model_operations import model_operation
 from app.services.workspace_process_registry import workspace_process_registry
 
 from app.agents.messages import _coerce_content_text, strip_thinking_fragments
@@ -377,6 +378,7 @@ def _invoke_ui_design_model(
     page_id: str,
     max_retries: int,
     should_cancel: Callable[[], bool] | None = None,
+    business_operation: str,
 ) -> Any:
     """对无副作用的 UI 模型调用做外层瞬时异常重试。
 
@@ -386,18 +388,20 @@ def _invoke_ui_design_model(
     停止的合理代价，优于占用并发度十几分钟。
     """
 
+    page_target = {"type": "page", "id": page_id} if page_id and page_id != "adjust-target-resolution" else None
     attempts = max(1, max_retries + 1)
     for attempt in range(1, attempts + 1):
         try:
             # 流式聚合：边收 chunk 边检查取消，取消时抛 UiDesignGenerationCancelled
             # 中断迭代（break 后迭代器析构关闭底层 SSE 流）。
             collected: Any = None
-            for chunk in model.stream(prompt):
-                if should_cancel and should_cancel():
-                    raise UiDesignStreamCancelled(
-                        "用户取消了本次生成，LLM 流已中断。"
-                    )
-                collected = chunk if collected is None else collected + chunk
+            with model_operation(business_operation, business_stage="ui_design", target=page_target):
+                for chunk in model.stream(prompt):
+                    if should_cancel and should_cancel():
+                        raise UiDesignStreamCancelled(
+                            "用户取消了本次生成，LLM 流已中断。"
+                        )
+                    collected = chunk if collected is None else collected + chunk
             if collected is None:
                 raise RuntimeError("UI 设计模型调用未返回结果。")
             return collected
@@ -977,6 +981,7 @@ def generate_adjusted_page_react_code(
     instruction: str,
     *,
     should_cancel: Callable[[], bool] | None = None,
+    business_operation: str = "revise_ui_design_page",
 ) -> str:
     """基于现有设计稿 + 用户调整指令调 LLM 重新生成，并校验+自动修复。
 
@@ -997,6 +1002,7 @@ def generate_adjusted_page_react_code(
         page_id=page_id,
         max_retries=max_retries,
             should_cancel=should_cancel,
+        business_operation=business_operation,
     )
     content = _coerce_content_text(getattr(result, "content", ""))
     code = _extract_tsx_code(content)
@@ -1023,6 +1029,7 @@ def generate_adjusted_page_react_code(
             page_id=page_id,
             max_retries=max_retries,
                 should_cancel=should_cancel,
+            business_operation="repair_ui_design_page",
         )
         content = _coerce_content_text(getattr(result, "content", ""))
         code = _extract_tsx_code(content)
@@ -1086,6 +1093,7 @@ def resolve_adjust_target_pages(
         prompt,
         page_id="adjust-target-resolution",
         max_retries=max(0, settings.ui_design_max_retries),
+        business_operation="resolve_ui_design_targets",
     )
     content = _coerce_content_text(getattr(result, "content", "")).strip()
     # 去掉可能的 markdown 围栏。
@@ -1139,6 +1147,7 @@ def generate_page_react_code(
         page_id=page_id,
         max_retries=max_retries,
             should_cancel=should_cancel,
+        business_operation="generate_ui_design_page",
     )
     raw_content = getattr(result, "content", "")
     content = _coerce_content_text(raw_content)
@@ -1198,6 +1207,7 @@ def generate_page_react_code(
                 page_id=page_id,
                 max_retries=max_retries,
                     should_cancel=should_cancel,
+                business_operation="continue_ui_design_page",
             )
             raw_content = getattr(result, "content", "")
             content = _coerce_content_text(raw_content)
@@ -1232,6 +1242,7 @@ def generate_page_react_code(
             page_id=page_id,
             max_retries=max_retries,
                 should_cancel=should_cancel,
+            business_operation="repair_ui_design_page",
         )
         raw_content = getattr(result, "content", "")
         content = _coerce_content_text(raw_content)
