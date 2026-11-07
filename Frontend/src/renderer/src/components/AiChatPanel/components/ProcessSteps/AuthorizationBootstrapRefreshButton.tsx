@@ -48,7 +48,7 @@ export default function AuthorizationBootstrapRefreshButton({ workspaceRoot, ope
       disabled={!workspaceRoot}
       onClick={refreshStatus}
     >
-      刷新执行状态
+      查询原操作
     </Button>
   )
 }

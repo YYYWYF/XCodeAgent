@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
@@ -130,6 +131,9 @@ bootstrap_service = workspace_bootstrap_service(settings)
 async def lifespan(_app: FastAPI):
     """初始化平台级持久资源，并在退出时释放工作流缓存。"""
 
+    from app.services.builtin_authorization_orchestrator import start_builtin_authorization_tasks
+
+    start_builtin_authorization_tasks()
     ensure_database_platform_key()
     ensure_agents_document()
     backend_instance = initialize_backend_instance()
@@ -142,6 +146,9 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        from app.services.builtin_authorization_orchestrator import shutdown_builtin_authorization_tasks
+
+        await asyncio.to_thread(shutdown_builtin_authorization_tasks)
         clear_workflow_graph_cache()
         clear_application_planning_graph_cache()
         clear_direct_modification_graph_cache()

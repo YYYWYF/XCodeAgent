@@ -129,39 +129,26 @@ class BuiltinAuthorizationTests(unittest.TestCase):
                 "action": action, "workspaceRoot": str(self.root)}}}
             return "".join([frame async for frame in build_builtin_authorization_stream(payload)]).replace(" ", "")
 
-        service = "app.services.builtin_authorization_patch"
+        view = {"stage": "schema", "status": "waiting", "message": "正在自动处理。",
+                "schemaReady": False, "seedReady": False, "schemaOperationId": "123"}
         with (
-            patch(f"{service}.read_confirmed_seed_plan", return_value=PLAN),
-            patch(f"{service}.load_confirmed_build_task_plan", return_value={"status": "ready"}),
-            patch(f"{service}.read_application_config", return_value=self.application),
-            patch("app.services.builtin_authorization_bootstrap.ManagedTableClient", return_value=self.client),
-            patch(f"{service}.run_builtin_authorization_seed") as write,
+            patch("app.protocols.builtin_authorization.patch_view", return_value=view) as read,
+            patch("app.protocols.builtin_authorization.ensure_builtin_authorization_task", return_value=view) as ensure,
+            patch("app.protocols.builtin_authorization.refresh_patch", return_value={}) as query,
         ):
-            initial = asyncio.run(collect("get"))
-            self.assertIn('"patch":null', initial)
-            self.assertFalse(self.calls)
             first = asyncio.run(collect("run_patch"))
-            self.assertIn('"status":"in_progress"', first)
             self.assertIn('"status":"waiting"', first)
-            self.assertIn('"schemaOperationId":"123"', first)
-            self.assertEqual(len(self.batch_calls()), 1)
-            write.assert_not_called()
+            ensure.assert_called_once_with(str(self.root), source="patch")
+            query.assert_not_called()
+            asyncio.run(collect("get"))
+            ensure.assert_called_once()
+            self.assertEqual(read.call_count, 1)
             refreshed = asyncio.run(collect("refresh_patch"))
-            self.assertIn('"status":"continue"', refreshed)
-            self.assertIn('"nextAction":"run"', refreshed)
-            write.assert_not_called()
-            write.return_value = {"schema_ready": True, "seed_ready": False, "operation_id": "123",
-                                  "failure_category": "seed_http_500", "failure_phase": "seed_query_unconfirmed"}
-            failed = asyncio.run(collect("run_patch"))
-            self.assertIn('"stage":"write"', failed)
-            self.assertIn("查询原写入记录失败（HTTP500），本次未提交写入", failed)
-            self.assertIn("STATE_SNAPSHOT", failed)
-            self.assertIn("RUN_FINISHED", failed)
-            write.assert_called_once()
-            self.assertEqual(len(self.batch_calls()), 1)
-            self.assertFalse((self.root / ".devagentstudio/application-lifecycle.json").exists())
-        with self.assertRaisesRegex(ValueError, "独立的 /builtin-authorization/run"):
-            workflow_run_inputs({"workflowDebug": {"enabled": True, "resumeFrom": "builtin_authorization_patch"}})
+            query.assert_called_once_with(str(self.root))
+            ensure.assert_called_once()
+            self.assertIn("STATE_SNAPSHOT", refreshed)
+            self.assertIn("RUN_FINISHED", refreshed)
+            self.assertFalse(self.calls)
 
     def test_refresh_ag_ui_lifecycle_for_success_and_validation_failure(self) -> None:
         """刷新成功和业务失败均输出完整生命周期，不进入工作流图。"""

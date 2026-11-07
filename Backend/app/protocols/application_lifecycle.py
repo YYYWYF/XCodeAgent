@@ -350,6 +350,9 @@ def build_application_lifecycle_ag_ui_stream(
             state = load_application_lifecycle(request.workspace_root)
             if state is None:
                 raise ApplicationLifecycleMissingError("application-lifecycle.json 不存在。")
+            from app.services.builtin_authorization_orchestrator import resume_builtin_authorization_task
+
+            await asyncio.to_thread(resume_builtin_authorization_task, request.workspace_root)
             message = "Workspace Attach 已完成。"
         elif request.action == "release_session_pending":
             released = await asyncio.to_thread(

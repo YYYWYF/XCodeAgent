@@ -99,7 +99,7 @@ def _require_preview_authorization_ready(root: Path) -> None:
             return
     except (OSError, ValueError):
         pass
-    raise ValueError("Builtin 权限数据尚未核验就绪，请继续权限初始化或刷新原操作后再启动预览。")
+    raise ValueError("模拟数据库权限正在初始化，请在权限初始化卡查看当前状态；若结果待核对，请先完成核对。")
 
 
 def launch_project_preview(

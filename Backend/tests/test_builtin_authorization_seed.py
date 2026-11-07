@@ -196,7 +196,7 @@ class BuiltinAuthorizationSeedTests(unittest.TestCase):
         self.assertEqual(pending["seed_operation_id"], "456")
         self.assert_calls("GET", "POST")
         self.assertFalse(seed_ready(self.root, self.application, self.plan))
-        with self.assertRaisesRegex(ValueError, "尚未核验"):
+        with self.assertRaisesRegex(ValueError, "正在初始化"):
             _require_preview_authorization_ready(self.root)
         self.assertTrue(self.refresh()["seed_ready"])
         self.assertTrue(seed_ready(self.root, self.application, self.plan))

@@ -13,11 +13,13 @@ export type WorkflowAuthorizationBootstrap = {
   manifestFingerprint?: string
   durationMs?: number
   executor?: 'builtin_saas'
+  initializationStatus?: 'pending' | 'running' | 'waiting' | 'ready' | 'needs_attention' | 'failed' | 'cancelled'
+  initializationStage?: 'schema' | 'seed' | 'verify' | 'done'
   schemaReady?: boolean
   seedReady?: boolean
   seedOperationId?: string
   seedOperationStatus?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
-  nextAction?: 'continue' | 'lookup_seed' | 'refresh_seed' | 'review' | 'none'
+  nextAction?: 'continue' | 'lookup_seed' | 'refresh_seed' | 'review' | 'none' | 'resume'
   operationId?: string
   operationStatus?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN' | 'SCHEMA_READY'
   initializedTables?: string[]
@@ -38,6 +40,13 @@ export function readAuthorizationBootstrap(
     status: raw.status as WorkflowAuthorizationBootstrap['status']
   }
   if (raw.executor === 'builtin_saas') result.executor = 'builtin_saas'
+  if (['pending', 'running', 'waiting', 'ready', 'needs_attention', 'failed', 'cancelled'].includes(String(raw.initializationStatus))) {
+    result.initializationStatus = raw.initializationStatus as WorkflowAuthorizationBootstrap['initializationStatus']
+  }
+  if (['schema', 'seed', 'verify', 'done'].includes(String(raw.initializationStage))) {
+    result.initializationStage = raw.initializationStage as WorkflowAuthorizationBootstrap['initializationStage']
+  }
+  if (raw.nextAction === 'resume' && result.executor === 'builtin_saas') result.nextAction = 'resume'
   if (['RUNNING', 'SUCCEEDED', 'FAILED', 'UNKNOWN', 'SCHEMA_READY'].includes(String(raw.operationStatus))) {
     result.operationStatus = raw.operationStatus as WorkflowAuthorizationBootstrap['operationStatus']
   }
@@ -113,6 +122,9 @@ export function authorizationBootstrapTitle(
   result?: WorkflowAuthorizationBootstrap
 ): string {
   if (result?.executor === 'builtin_saas') {
+    if (result.initializationStatus) return result.schemaReady && result.seedReady
+      ? '权限数据库初始化已就绪' : ['pending', 'running', 'waiting'].includes(result.initializationStatus)
+        ? '权限数据库初始化运行中' : '权限数据库初始化待核对'
     if (result.schemaReady) {
       if (result.seedReady) return '权限表和权限数据已就绪'
       if (result.seedOperationStatus === 'RUNNING' && result.nextAction === 'refresh_seed') return '权限表已就绪，权限数据写入中'

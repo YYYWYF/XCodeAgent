@@ -3335,8 +3335,7 @@ export default function AiChatPanel({
   const builtinPatch = useBuiltinPatchCard(application.workspaceRoot || '', !isApplicationPlanningPhase)
   const builtinPatchDisabled = workflowInputLocked || loading || currentGenerationLoading || endingPlan
   const builtinPatchContent = builtinPatch.card && (
-    <BuiltinPatchCard card={builtinPatch.card} disabled={builtinPatchDisabled}
-      onAction={(action) => { void builtinPatch.execute(action) }} />
+    <BuiltinPatchCard card={builtinPatch.card} disabled={builtinPatchDisabled} />
   )
   /** 仅将权限补丁发往独立动作，其他调试项仍由原工作流处理。 */
   async function sendWithBuiltinPatch(
@@ -4177,13 +4176,7 @@ export default function AiChatPanel({
         runId: activeWorkflow.runId,
         threadId: activeWorkflow.threadId,
         continueDisabled: loading || workspaceBusy || workbenchExecutionInProgress ||
-          activeConnectionState.status !== 'healthy',
-        /** 使用原节点恢复路径，保持当前应用、会话和正式 Build DAG 的校验。 */
-        onContinue: (lookup: boolean) => {
-          void handleResumePlan({ enabled: true, resumeFrom: 'builtin_authorization_bootstrap',
-            buildExecutionScope: activeWorkflow.summary.buildExecutionScope },
-            lookup ? '查询原权限数据受理记录' : '继续初始化权限数据')
-        }
+          activeConnectionState.status !== 'healthy'
       }
     : undefined
   // 无当前执行所属会话时，不把共享规划、预览或投影错误转交给其他会话和阶段。

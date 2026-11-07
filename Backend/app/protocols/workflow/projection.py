@@ -683,6 +683,8 @@ def _public_workflow_state(
             "executor": bootstrap.get("executor"),
             "schemaReady": bootstrap.get("schema_ready"),
             "seedReady": bootstrap.get("seed_ready"),
+            "initializationStatus": bootstrap.get("initialization_status"),
+            "initializationStage": bootstrap.get("initialization_stage"),
             "seedOperationId": bootstrap.get("seed_operation_id"),
             "seedOperationStatus": bootstrap.get("seed_operation_status"),
             "nextAction": bootstrap.get("next_action"),
@@ -1050,6 +1052,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                         "seedOperationStatus": "seed_operation_status", "nextAction": "next_action",
                         "operationId": "operation_id", "operationStatus": "operation_status",
                         "initializedTables": "initialized_tables",
+                        "initializationStatus": "initialization_status", "initializationStage": "initialization_stage",
                     }.items()
                     if internal in result
                 }

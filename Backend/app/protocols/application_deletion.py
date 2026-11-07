@@ -147,6 +147,8 @@ async def prepare_application_deletion(
 ) -> dict[str, Any]:
     """按可逆停机和不可逆持久化释放两阶段准备应用目录删除。"""
 
+    from app.services.builtin_authorization_orchestrator import cancel_builtin_authorization_deletion, stop_builtin_authorization_task
+
     workspace = _validated_managed_workspace(
         request.workspace_root,
         application_id=request.application_id,
@@ -183,6 +185,7 @@ async def prepare_application_deletion(
                 workspace_process_registry.cancel_workspace,
                 workspace,
             ),
+            asyncio.to_thread(stop_builtin_authorization_task, workspace_text),
             return_exceptions=True,
         )
         # 等齐所有有限停机动作再回滚，避免后台停止线程与重新开放的工作区并发写入。
@@ -215,6 +218,7 @@ async def prepare_application_deletion(
         workflow_run_registry.end_workspace_deletion(workspace_text)
         workspace_process_registry.end_workspace_deletion(workspace)
         pool.end_workspace_deletion(workspace_text)
+        await asyncio.to_thread(cancel_builtin_authorization_deletion, workspace_text)
         raise
 
     # 阶段 B 已开始清除持久化状态；此后的失败不得把工作区伪装回可运行状态。

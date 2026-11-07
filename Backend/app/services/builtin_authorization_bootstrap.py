@@ -4,6 +4,8 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.services.builtin_authorization_task_store import task_transaction
+
 from app.config import Settings
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.entity_tables import OperationReceipt, TableReadiness
@@ -16,7 +18,7 @@ from app.services.builtin_authorization_seed import read_confirmed_seed_plan
 from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient
 from app.services.builtin_authorization_seed_runtime import run_builtin_authorization_seed
 from app.services.managed_database_client import ManagedDatabaseRegistrationError
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_table_client import ManagedTableClient, ManagedTableQueryTransientError
 
 
 def _result(record: dict, status: str, message: str, **extra) -> dict:
@@ -99,7 +101,7 @@ def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *,
     """读取权威配置并串行执行；普通 Build 仅自动提交一次，显式恢复才允许明确失败重试。"""
 
     root = Path(workspace).expanduser().resolve()
-    with builtin_lock(root):
+    with builtin_lock(root), task_transaction(root):
         record = {}
         stage = "binding"
         try:
@@ -128,7 +130,7 @@ def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *,
             remote = client or ManagedTableClient(Settings.from_env())
             stage = "remote"
             return _run_remote(root, record, binding, compiled, remote, explicit_recovery)
-        except (OSError, ValueError, ManagedDatabaseRegistrationError):
+        except (OSError, ValueError, ManagedDatabaseRegistrationError) as error:
             # 外部 HTTP/模型错误均不公开正文；提交前已持久化 submitting，重启亦不会重发。
             reason = {
                 "binding": "请核对 Builtin 模式、REGISTERED 绑定、权限开关及已确认 TechnicalPlan。",
@@ -138,7 +140,8 @@ def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *,
                 "remote": "请核对 SaaS 配置及原操作编号和逐表结果；未确认结果前不会重复建表。",
             }[stage]
             return _result(record, "manual_required", "权限表初始化待核对：" + reason,
-                           failure_category=f"builtin_authorization_{stage}_unconfirmed")
+                           failure_category="schema_query_transient" if isinstance(error, ManagedTableQueryTransientError)
+                           else f"builtin_authorization_{stage}_unconfirmed")
 
 
 def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote: ManagedTableClient, explicit_recovery: bool) -> dict:
@@ -234,7 +237,7 @@ def refresh_builtin_authorization(workspace: str, operation_id: str, *, client: 
     """按本地绑定和指定原操作刷新状态，仅允许写入核验事实，禁止建表或推进工作流。"""
 
     root = Path(workspace).expanduser().resolve()
-    with builtin_lock(root):
+    with builtin_lock(root), task_transaction(root):
         application = read_application_config(root)
         if (application.get("authorization") or {}).get("enabled") is not True:
             raise ValueError("权限已关闭，不能刷新旧操作。")

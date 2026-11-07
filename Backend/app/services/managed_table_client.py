@@ -10,6 +10,10 @@ import httpx
 from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseRegistrationError
 
 
+class ManagedTableQueryTransientError(ManagedDatabaseRegistrationError):
+    """仅标识只读请求的临时传输故障，不授权任何 SQL 重放。"""
+
+
 class ManagedTableError(ManagedDatabaseRegistrationError):
     """保存经过允许列表转换的产品提示，不透传 SaaS 原始错误正文。"""
 
@@ -59,6 +63,10 @@ class ManagedTableClient(ManagedDatabaseClient):
     def request(self, datasource_key: str, path: str, *, body: dict | None = None) -> Any:
         """发送一次请求；错误脱敏，提交结果未知时提示先查询原记录。"""
 
+        from app.services.builtin_authorization_task_store import check_task_inputs, input_guard
+
+        check_task_inputs()
+        managed_task = input_guard.get() is not None
         if not re.fullmatch(r"[0-9a-f]{12}", datasource_key):
             raise ValueError("数据源 datasourceKey 无效。")
         url = f"{self._url}/{datasource_key}/{path}"
@@ -70,10 +78,13 @@ class ManagedTableClient(ManagedDatabaseClient):
                     headers={"Authorization": f"Bearer {self._key}", "Accept": "application/json"},
                 )
         except httpx.RequestError:
+            if managed_task and (body is None or path == "tables/check"):
+                raise ManagedTableQueryTransientError("SaaS 原操作查询暂时不可用。") from None
             raise ManagedDatabaseRegistrationError(
                 "SaaS 请求未取得确认结果。若已提交执行，请刷新原操作记录，不要重复提交。",
                 uncertain=body is not None,
             ) from None
+        check_task_inputs()
         expected = 202 if path in {"table-operations", "table-operations/batch"} and body is not None else 200
         try:
             payload = response.json()
@@ -82,6 +93,8 @@ class ManagedTableClient(ManagedDatabaseClient):
         # SaaS 的 JSON 接口统一包装结果；业务模型仍由各调用方校验。
         wrapped = isinstance(payload, dict) and set(payload) == {"returnCode", "errorMsg", "body"}
         if response.status_code != expected:
+            if managed_task and (body is None or path == "tables/check") and response.status_code in {500, 502, 503, 504}:
+                raise ManagedTableQueryTransientError("SaaS 原操作查询暂时不可用。")
             code = payload["returnCode"] if wrapped and isinstance(payload["errorMsg"], str) else None
             raise _response_error(
                 response.status_code, code if isinstance(code, str) else None,
