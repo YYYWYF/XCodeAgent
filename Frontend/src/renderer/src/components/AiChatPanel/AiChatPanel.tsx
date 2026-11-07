@@ -1676,7 +1676,7 @@ export default function AiChatPanel({
   const uiDesignPoolBusy = useMemo(
     () =>
       uiDesignPages.some((page) =>
-        ['queued', 'generating'].includes(String(page.status || ''))
+        ['queued', 'generating', 'stopping'].includes(String(page.status || ''))
       ),
     [uiDesignPages]
   )
@@ -2650,7 +2650,7 @@ export default function AiChatPanel({
     localWorkflowLoading,
     restoredRunRunning,
     isApplicationPlanningPhase && activeWorkbenchPhase === derivedWorkbenchPhase &&
-      planningGenerationRunning(planningState)
+      (planningGenerationRunning(planningState) || (isDesignPhase && uiDesignPoolBusy))
   )
   const currentGenerationLoading = stopGenerationPending || currentGenerationOwner !== undefined
 
@@ -2662,7 +2662,11 @@ export default function AiChatPanel({
     // 即使生成状态先于停止请求回执消失，也保留按钮上的 loading，直到请求真正完成。
     void (async () => {
       try {
-        if (currentGenerationOwner === 'planning') await onStopPlanning()
+        if (currentGenerationOwner === 'planning') {
+          await onStopPlanning()
+          // Backend 已排空 UI writer，清掉尚未入队的本地页面意图与预览加载态。
+          setUiDesignActingPageIds([])
+        }
         else await handleEndPlan(ownedExecution?.runId || activeWorkflow?.runId)
       } catch (reason) {
         if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止生成失败'))

@@ -19,7 +19,7 @@ class UiDesignConfirmationGateTests(unittest.TestCase):
         """未生成、排队、生成中、失败、取消不能变成正式 UI 确认。"""
         with tempfile.TemporaryDirectory() as workspace:
             state = self.state(workspace)
-            for status in ('pending', 'queued', 'generating', 'generation_failed', 'cancelled'):
+            for status in ('pending', 'queued', 'generating', 'stopping', 'generation_failed', 'cancelled'):
                 with self.subTest(status=status):
                     manifest = {'product_plan_sha256': _product_plan_hash(state), 'pages': [{
                         'pageId': 'home', 'page_key': 'Home', 'status': status,

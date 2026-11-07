@@ -11,7 +11,7 @@ const { Text } = Typography
 
 /** 该页是否处于后台生成池处理中（queued/generating），尚未产出设计稿。 */
 function isPoolGenerating(status?: string): boolean {
-  return status === 'queued' || status === 'generating'
+  return ['queued', 'generating', 'stopping'].includes(String(status))
 }
 
 type UiDesignPage = {

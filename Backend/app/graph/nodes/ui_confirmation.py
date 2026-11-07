@@ -35,6 +35,7 @@ from app.services.ui_design_generation_pool import (
     UiDesignGenerationTask,
     get_ui_design_generation_pool,
 )
+from app.services.ui_design_generation_task import run_ui_design_thread
 from app.services.ui_design_generator import (
     derive_page_key,
     generate_adjusted_page_react_code,
@@ -318,7 +319,7 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     total = len(valid_pages)
 
     # 准备设计稿落盘目录（方案 B：仅 mkdir，无 clone/install/launch）。
-    setup = await asyncio.to_thread(setup_ui_design_project, workspace)
+    setup = await run_ui_design_thread(setup_ui_design_project, workspace)
     project_dir = str(setup.get("project_dir") or "")
     carried = read_ui_design_carryover(workspace)
     used_keys: set[str] = {"DefaultPage"}
@@ -546,7 +547,7 @@ async def _apply_adjust_pages(
         # 超出 UI 调整范畴，必须走产品意图识别路径（design_intent_analysis）。
         from app.agents.design_conversation.router import classify_design_conversation
 
-        decision = await asyncio.to_thread(
+        decision = await run_ui_design_thread(
             classify_design_conversation,
             instruction,
             requirement_spec=state.get("requirement_spec")
@@ -590,7 +591,7 @@ async def _apply_adjust_pages(
             adjust_ready=0,
         )
         spec_pages = _page_list(state)
-        page_ids = await asyncio.to_thread(
+        page_ids = await run_ui_design_thread(
             resolve_adjust_target_pages, spec_pages, instruction
         )
         if not page_ids:
@@ -678,12 +679,12 @@ async def _apply_adjust_pages(
         try:
             # 显式回退遇到未生成/已跳过的页面时，正文进入初次生成；已有稿仍增量调整。
             if prev_code:
-                code = await asyncio.to_thread(
+                code = await run_ui_design_thread(
                     generate_adjusted_page_react_code,
                     spec_page, page_key, project_dir, prev_code, instruction,
                 )
             else:
-                code = await asyncio.to_thread(
+                code = await run_ui_design_thread(
                     generate_page_react_code,
                     spec_page, page_key, project_dir, instruction=instruction,
                 )

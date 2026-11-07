@@ -68,6 +68,7 @@ from app.routes.entity_tables import entity_tables_router
 from app.routes.telemetry import telemetry_router
 from app.routes.backend_logs import backend_logs_router
 from app.protocols.backend_logs import backend_logs_capabilities
+from app.protocols.ui_design_generation import build_ui_design_generation_stream, ui_design_generation_capabilities
 from app.protocols.telemetry import telemetry_capabilities
 from app.protocols.app_update import app_update_capabilities, build_app_update_ag_ui_stream
 from app.protocols.entity_tables import entity_tables_capabilities
@@ -118,7 +119,6 @@ from app.services.database_crypto import (
     ensure_database_platform_key,
 )
 from app.services.backend_instance import current_backend_instance, initialize_backend_instance
-from app.services.ui_design_generation_pool import get_ui_design_generation_pool
 from app.services.workspace_bootstrap.service import workspace_bootstrap_service
 from app.tools import database_tools
 from app.workspace import workspace as workspace_tools
@@ -221,6 +221,7 @@ async def health() -> dict[str, object]:
             "telemetry": telemetry_capabilities(),
             "app_update": app_update_capabilities(),
             "backend_logs": backend_logs_capabilities(),
+            "ui_design_generation": ui_design_generation_capabilities(),
             "code_changes": code_changes_capabilities(),
             "revision_preview": revision_preview_capabilities(),
             "version_control": version_control_capabilities(),
@@ -642,22 +643,12 @@ async def run_workflow(
     )
 
 
-class UiDesignCancelRequest(BaseModel):
-    workspace: str = Field(min_length=1, max_length=4096)
-    pageId: str = Field(min_length=1, max_length=256)
-
-
-@app.post("/api/ui-design/cancel")
-async def api_cancel_ui_design(request: UiDesignCancelRequest) -> dict[str, Any]:
-    """用户主动取消单页设计稿生成。
-
-    池把该页状态立即置为 cancelled（结果丢弃、LLM 请求不打断），前端据此
-    复位卡片加载态并允许重试。无在途任务时返回 cancelled=False（幂等）。
-    """
-
-    pool = get_ui_design_generation_pool()
-    cancelled = await pool.cancel_page(request.workspace, request.pageId)
-    return {"cancelled": cancelled, "pageId": request.pageId}
+@app.post("/ui-design-generation/run")
+async def run_ui_design_generation(input_data: dict[str, Any] = Body(...),
+        accept: str | None = Header(default="text/event-stream")) -> StreamingResponse:
+    """使用独立 AG-UI 动作等待单页后台生成真实退出。"""
+    return StreamingResponse(build_ui_design_generation_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # CORS 必须包在整个 FastAPI 应用外层，确保路由构造或未处理异常生成的 500 响应也携带跨域头。

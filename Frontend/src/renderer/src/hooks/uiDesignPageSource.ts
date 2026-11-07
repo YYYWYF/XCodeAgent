@@ -34,7 +34,7 @@ function sameRecord(left: Record<string, string>, right: Record<string, string>)
 
 /** 判断后台生成池是否仍有待领取或运行中的页面。 */
 export function designPagesGenerating(pages: DesignPageSource[]): boolean {
-  return pages.some((page) => page.status === 'queued' || page.status === 'generating')
+  return pages.some((page) => ['queued', 'generating', 'stopping'].includes(String(page.status)))
 }
 
 /** 按工作区共享磁盘读取；只有生成期间才串行轮询，不拥有或取消后台任务。 */
