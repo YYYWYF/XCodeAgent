@@ -110,6 +110,7 @@ export default function RequirementDescriptionEditor({
       </div>}
       <Input.TextArea
         id={id} aria-label="应用需求描述" value={value} rows={rows}
+        autoSize={readOnly ? { minRows: 1, maxRows: rows } : false}
         disabled={disabled} readOnly={readOnly} placeholder={readOnly ? undefined : placeholder}
         onChange={(event) => update(event.target.value, false)}
       />

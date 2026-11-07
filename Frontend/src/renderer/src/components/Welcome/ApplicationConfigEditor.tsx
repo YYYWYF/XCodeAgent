@@ -7,6 +7,7 @@ import {
   FundOutlined,
   LockOutlined,
   MessageOutlined,
+  SkinOutlined,
   ShopOutlined,
   ShoppingOutlined,
   TeamOutlined,
@@ -107,7 +108,15 @@ export default function ApplicationConfigEditor({
           </Radio.Group>
         </Form.Item>
       ) : null}
-      {show('theme.primaryColor') ? <section className={cx('application-form-section', 'application-form-section--full')}><div className={cx('application-form-section-title')}>应用主题色</div><ThemeColorField form={form} /></section> : null}
+      {show('theme.primaryColor') ? (
+        <section className={cx('application-form-section', 'application-form-section--full')}>
+          <div className={cx('application-form-section-title')}>
+            <span className={cx('application-form-section-icon')}><SkinOutlined /></span>
+            <span className={cx('application-form-section-text')}>应用主题色</span>
+          </div>
+          <ThemeColorField form={form} />
+        </section>
+      ) : null}
       {show('auth.enable') || show('auth.yht.clientId') || show('auth.yht.privateKey') || show('auth.yht.publicKey') || show('auth.yht.centerPublicKey') || show('auth.yht.centerUri') || show('auth.yht.authorizeUri') || show('auth.yht.redirectUri') || show('auth.yht.endUrl') || show('auth.yht.logoutShareJs') ? (
       <section
         id={mode === 'settings' ? 'settings-auth' : undefined}

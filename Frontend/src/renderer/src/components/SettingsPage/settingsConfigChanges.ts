@@ -70,6 +70,7 @@ export function settingsConfigChanges(current: ApplicationConfig, next: Applicat
   const scalar: Array<[string, string | boolean, string | boolean]> = [
     ['appName', normalizedCurrent.appName, normalizedNext.appName],
     ['appIcon', normalizedCurrent.appIcon, normalizedNext.appIcon],
+    ['repoUrl', normalizedCurrent.repoUrl, normalizedNext.repoUrl],
     ['theme.primaryColor', normalizedCurrent.theme.primaryColor, normalizedNext.theme.primaryColor],
     ['auth.enable', normalizedCurrent.auth.enable, normalizedNext.auth.enable],
     ['authorization.enabled', normalizedCurrent.authorization.enabled, normalizedNext.authorization.enabled]

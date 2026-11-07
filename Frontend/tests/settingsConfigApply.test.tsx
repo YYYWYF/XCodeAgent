@@ -46,6 +46,19 @@ test('设置页仅将发生变化的白名单字段交给同一配置事务', as
   assert.deepEqual(result, { status: 'APPLIED', changedFiles: ['frontend/.env'] })
 })
 
+test('设置页修改或清空码云地址均通过配置事务提交', async () => {
+  const current = application()
+  for (const repoUrl of ['https://gitee.com/example/app.git', '']) {
+    const next = { ...current, repoUrl }
+    const calls: unknown[][] = []
+    await applySettingsConfigChanges(current, next, async (...args) => {
+      calls.push(args)
+      return { status: 'APPLIED' }
+    })
+    assert.deepEqual(calls, [[current.workspaceRoot, current.configRevision, { repoUrl }]])
+  }
+})
+
 test('旧应用设置补齐缺失地址，保留用户主动留空和自定义值', () => {
   const current = application()
   delete (current.auth.yht as Partial<typeof current.auth.yht>).centerUri

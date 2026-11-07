@@ -70,6 +70,24 @@ class ApplicationConfigOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(self.config_path.read_text())["configRevision"], 2)
         self.assertEqual(first["changedFiles"], [])
 
+    async def test_repository_url_save_clear_and_validation(self) -> None:
+        """仓库地址保存、清空均更新唯一配置，非法地址不得写盘。"""
+        for revision, url in enumerate(("https://gitee.com/example/app.git", "ssh://git@gitee.com/example/app.git", ""), start=1):
+            result = await self.service.apply(
+                self.root, operation_id=f"repository-url-{revision}", expected_revision=revision,
+                changes={"repoUrl": url},
+            )
+            saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "APPLIED")
+            self.assertEqual(saved["repoUrl"], url)
+            self.assertEqual(saved["configRevision"], revision + 1)
+            self.assertEqual(saved["appName"], "原应用")
+        before = self.config_path.read_bytes()
+        for url in ("git@gitee.com:example/app.git", "file:///tmp/app", "https://", "https://gitee.com/has space"):
+            with self.subTest(url=url), self.assertRaisesRegex(ApplicationConfigOperationError, "CONFIG_VALUE_INVALID"):
+                self.service.preview(self.root, expected_revision=4, changes={"repoUrl": url})
+        self.assertEqual(self.config_path.read_bytes(), before)
+
     async def test_noop_operation_id_is_still_bound_to_proposal(self) -> None:
         """无变化操作也保留摘要，不能把同一 ID 随后改绑到另一份提案。"""
         first = await self.service.apply(self.root, operation_id='noop-operation', expected_revision=1, changes={'appName': '原应用'})
