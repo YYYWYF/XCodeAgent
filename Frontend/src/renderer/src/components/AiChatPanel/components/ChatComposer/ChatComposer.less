@@ -250,6 +250,8 @@
   display: flex;
   width: 100%;
   min-width: 0;
+  // 窄分栏先换行，运行提示与固定尺寸按钮不能互相覆盖。
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -319,6 +321,7 @@
 .@{class-prefix}-composer-toolbar {
   display: flex;
   min-width: 0;
+  flex: 0 0 auto;
   align-items: center;
   gap: 2px;
 }
@@ -788,10 +791,12 @@
 }
 
 .@{class-prefix}-workspace-busy-label.ant-typography {
-  flex: 0 0 auto;
+  min-width: 0;
+  flex: 1 1 160px;
   color: var(--wb-warning);
   font-size: 12px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .@{class-prefix}-composer-send-button.ant-btn {

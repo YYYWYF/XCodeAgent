@@ -13,6 +13,12 @@ from app.services.application_config import read_application_config
 from app.services.template_reconcile.state_v3 import load_template_state_v3
 
 
+_APP_NAME_COMMAND = (
+    r"(?:把|将)?(?:应用|系统)(?:(?:名称|名字)(?:改为|修改为|设为|设置为|改成)"
+    r"|(?:改名|重命名)(?:为|成)?)"
+)
+
+
 @dataclass(frozen=True)
 class ConfigPrerequisiteAnalysis:
     """仅保存非敏感配置目标与主业务是否必须继续。"""
@@ -77,12 +83,11 @@ def analyze_application_config_prerequisite(request: str, workspace: str | Path)
             explicit.append(scalar)
             if scalar["desiredValue"] is not None:
                 suggested[path] = scalar["desiredValue"]
-    name_match = re.search(r"(?:把|将)?(?:应用|系统)?(?:名称|名字)(?:改为|修改为|设为|设置为|改成)\s*([^，,。；;\s]+)", request)
-    rename_requested = name_match is not None or re.search(r"(?:应用|系统)?改名", request) is not None
-    if rename_requested:
-        name = name_match.group(1) if name_match else None
+    name_intent = _app_name_intent(request)
+    if name_intent is not None:
+        name = name_intent["desiredValue"]
         if name != application.get("appName"):
-            explicit.append({"path": "appName", "desiredValue": name, "source": "explicit"})
+            explicit.append(name_intent)
             if name:
                 suggested["appName"] = name
     theme_intent = _theme_color_intent(request)
@@ -127,6 +132,15 @@ def analyze_application_config_prerequisite(request: str, workspace: str | Path)
     )
 
 
+def _app_name_intent(request: str) -> dict[str, Any] | None:
+    """仅识别明确应用或系统名称目标，字段、页面等业务对象改名不得触发全局配置。"""
+
+    match = re.search(_APP_NAME_COMMAND + r"\s*([^，,。；;\s]+)?", request)
+    if match is None:
+        return None
+    return {"path": "appName", "desiredValue": match.group(1), "source": "explicit"}
+
+
 def _theme_color_intent(request: str) -> dict[str, Any] | None:
     """从应用级主题表达提取受管颜色；页面或组件作用域不属于应用配置。"""
 
@@ -158,7 +172,7 @@ def _app_icon_intent(request: str) -> dict[str, Any] | None:
 def _has_config_request(request: str) -> bool:
     """判断文本是否包含本模块负责的应用配置语义，即使目标当前已满足。"""
 
-    return bool(_theme_color_intent(request) or _app_icon_intent(request) or _scalar_config_intent(request, "", ("认证中心地址", "登录授权地址", "权限用户服务地址", "用户视图 ID", "用户视图ID", "前端登出地址", "登出同步脚本")) or re.search(r"(?:应用|系统)?(?:名称|名字)(?:改为|修改为|设为|设置为|改成)|(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", request))
+    return bool(_app_name_intent(request) or _theme_color_intent(request) or _app_icon_intent(request) or _scalar_config_intent(request, "", ("认证中心地址", "登录授权地址", "权限用户服务地址", "用户视图 ID", "用户视图ID", "前端登出地址", "登出同步脚本")) or re.search(r"(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", request))
 
 
 def _scalar_config_intent(request: str, path: str, aliases: tuple[str, ...]) -> dict[str, Any] | None:
@@ -183,5 +197,7 @@ def _has_remaining_business_request(request: str) -> bool:
 def business_request_for_routing(request: str) -> str:
     """仅抽出混合请求中的非配置部分供分类，不改变 checkpoint 保存的原始请求。"""
 
-    text = re.sub(r"(?:把|将)?(?:应用|系统)?(?:主题色|主题颜色|主色|图标|名称|名字|认证中心地址|登录授权地址|权限用户服务地址|用户视图\s*ID|前端登出地址|登出同步脚本)(?:改为|修改为|设为|设置为|改成).*?(?=(?:，|,|。|；|;|并|同时|然后)|$)", "", request, flags=re.IGNORECASE)
+    # 名称目标必须沿同一应用作用域规则移除，不能把业务字段改名从分类请求中截掉。
+    text = re.sub(_APP_NAME_COMMAND + r".*?(?=(?:，|,|。|；|;|并|同时|然后)|$)", "", request)
+    text = re.sub(r"(?:把|将)?(?:应用|系统)?(?:主题色|主题颜色|主色|图标|认证中心地址|登录授权地址|权限用户服务地址|用户视图\s*ID|前端登出地址|登出同步脚本)(?:改为|修改为|设为|设置为|改成).*?(?=(?:，|,|。|；|;|并|同时|然后)|$)", "", text, flags=re.IGNORECASE)
     return re.sub(r"(?:开启|启用|关闭|禁用)(?:登录认证|登录|权限管理|权限控制)|(?:把|将)?(?:登录认证|登录|权限管理|权限控制)(?:开启|启用|关闭|禁用)", "", text).strip(" ，,；;")

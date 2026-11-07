@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.workspace.content_artifacts import pack_materials, put_artifact
+from app.services.ui_design_manifest import present_ui_pages
 
 SUMMARY_FIELDS = frozenset({
     "status", "phase", "message", "request", "errorCode", "failureDiagnostic",
@@ -53,6 +54,13 @@ def workflow_presentation(payload: dict[str, Any], *, workspace: str | None) -> 
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     state = {**result, **previous, **{key: item for key, item in summary.items() if key not in SUMMARY_FIELDS}}
+    # 确认后 clarification 会切换阶段入口，公开页面仍需携带当前 ProductPlan 的中文名称。
+    designs, product = state.get("ui_designs"), state.get("product_plan")
+    if isinstance(designs, dict) and isinstance(product, dict):
+        state["ui_designs"] = {**designs, "pages": present_ui_pages(designs, product)}
+    # 正文外置后仍投影当前版本的确认事实，前端不读取大块正文来决定模板交接。
+    plan = state.get("technical_plan")
+    state["technicalPlanConfirmed"] = isinstance(plan, dict) and plan.get("confirmation_status") == "confirmed"
     state["workspace"] = workspace or state.get("workspace")
     view = {key: item for key, item in payload.items() if key not in {"result", "state", "summary"}}
     view["summary"] = {key: item for key, item in summary.items() if key in SUMMARY_FIELDS}

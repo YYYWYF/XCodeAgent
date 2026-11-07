@@ -1,0 +1,27 @@
+// 接口能力卡中的实体标识可很长，按卡片边界换行，不能覆盖相邻能力。
+.@{class-prefix}-technical-plan-contract {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.@{class-prefix}-technical-plan-contract-main {
+  grid-template-columns: minmax(0, 1fr);
+
+  strong,
+  code {
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+.@{class-prefix}-technical-plan-contract-tags {
+  min-width: 0;
+
+  em,
+  .@{class-prefix}-technical-plan-lineage {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}

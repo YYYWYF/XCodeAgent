@@ -17,6 +17,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from app.agents.execution_control import RunCancellationMiddleware
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.main.technical_plan_file_tools import TechnicalPlanFileMiddleware
+from app.agents.main.technical_plan_review import TechnicalPlanReview
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 
@@ -219,6 +220,9 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
         "允许在同一轮使用多次 edit_file 完成关联修改，也允许中间文件暂时不是有效 JSON；"
         "编辑和读取回执会检查完整候选的 JSON 语法及四段根结构；不要靠反复搜索或遍历全文证明 JSON 有效。"
         "完成所有要求后读回受影响窗口一次，核对通过就立即最终回答并结束工具调用。"
+        "如果用户仅要求复核、保持内容不变，或候选已满足原始要求，不要为了满足工具要求伪造修改。"
+        "此时按需核对候选后调用 finish_review，明确无需修改的核对结论并结束。"
+        "finish_review 不能代替尚未落实的字段、接口、Schema 或页面修改，不能仅在回复中声称已复核。"
         "不要为解决匹配失败重写整个文件。\n"
         "候选根对象必须且只能包含 architecture、entities、api_contracts、pages。"
         "架构仅有 frontend/backend/data；所有用户可见说明使用简体中文。"
@@ -243,6 +247,8 @@ def edit_technical_plan_with_agent(
 
     model = create_chat_model(settings, extra_model_kwargs={"thinking": {"type": "disabled"}})
     backend = TechnicalPlanCandidateBackend()
+    files = _candidate_files(requirement_spec, existing_plan)
+    review = TechnicalPlanReview(backend)
     filesystem = FilesystemMiddleware(
         backend=backend,
         # 编辑规则已由上面的专用提示完整提供，避免默认提示宣称拥有已移除的写入和执行工具。
@@ -262,6 +268,7 @@ def edit_technical_plan_with_agent(
     agent = create_agent(
         name="technical-plan-fragment-editor",
         model=model,
+        tools=[review.completion_tool()],
         system_prompt=_editor_system_prompt(requirement_spec),
         middleware=[
             RunCancellationMiddleware(model),
@@ -270,15 +277,19 @@ def edit_technical_plan_with_agent(
         ],
     )
     callbacks = [_PlanningTokenCallback(on_token)] if on_token else []
-    # 不额外限制模型调用次数或覆盖框架图步数，沿用正常收尾和运行取消机制。
+    # 读取方式由模型按需选择，调用次数和图步数沿用框架原有运行限制。
     agent.invoke(
-        {"messages": [{"role": "user", "content": "请按原始修改要求和本轮校验反馈局部编辑候选，然后读回复核。"}],
-         "files": _candidate_files(requirement_spec, existing_plan)},
+        {"messages": [{"role": "user", "content": "请核对原始要求与本轮反馈，需要修改时局部编辑并读回；已满足要求且无需修改时，说明结论并调用 finish_review。"}],
+         "files": files},
         config={"callbacks": callbacks},
     )
+    if review.completed and backend.successful_edits:
+        raise ValueError("技术规划无变更复核与候选编辑冲突，不能把混合工具结果当作完成。")
     if backend.last_edit_error:
         raise ValueError("技术规划局部修改尚有未解决的工具错误：" + backend.last_edit_error)
     if not backend.successful_edits:
+        if review.completed:
+            return {key: deepcopy(existing_plan[key]) for key in TECHNICAL_PLAN_EDIT_SECTIONS}
         raise ValueError("技术规划模型没有应用任何局部修改；不能用回复文字冒充已修改候选。")
     candidate = json.loads(backend.candidate_text())
     if not isinstance(candidate, dict) or set(candidate) != set(TECHNICAL_PLAN_EDIT_SECTIONS):

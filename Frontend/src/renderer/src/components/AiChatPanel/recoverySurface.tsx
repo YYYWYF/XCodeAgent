@@ -95,6 +95,7 @@ export default function RecoverySurface({
       <div data-testid="workbench-recovery-incident">
         <AgentErrorCard
           title={scopeDenied ? '无权修改该路径' : '任务执行异常'}
+          details={incident.failureDiagnostic?.message || incident.failureMessage}
           error={
             recoveryError ||
             recoveryFailureMessage(incident.failureDiagnostic) ||

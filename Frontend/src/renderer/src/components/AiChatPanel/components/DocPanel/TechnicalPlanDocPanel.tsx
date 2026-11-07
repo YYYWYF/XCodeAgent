@@ -11,6 +11,7 @@ import {
 import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
+import './TechnicalPlanContractResponsive.less'
 
 type Props = {
   plan: JsonRecord

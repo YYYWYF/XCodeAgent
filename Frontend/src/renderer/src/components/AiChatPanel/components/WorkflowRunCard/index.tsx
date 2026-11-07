@@ -194,7 +194,7 @@ export default function WorkflowRunCard({
   workflow: sourceWorkflow,
   workspaceRoot,
   application
-}: WorkflowRunCardProps): ReactElement {
+}: WorkflowRunCardProps): ReactElement | null {
   const documents = useWorkflowDocuments(sourceWorkflow, workspaceRoot, !disabled)
   const workflow = documents.workflow
   const { phase: currentWorkbenchPhase } = useWorkbenchPhase()
@@ -382,8 +382,13 @@ export default function WorkflowRunCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow.threadId, clarificationFingerprint])
 
+  // 生成失败统一由输入框上方的原底部区域展示，历史失败也不再创建空卡片。
+  if (technicalPlanGenerationError) {
+    return null
+  }
   if (documents.loading) return <Alert type="info" showIcon message="正在读取确认资料…" />
-  if (documents.error) return <Alert type="error" showIcon message={documents.error} />
+  if (documents.error) return <Alert type="error" showIcon message="确认资料读取失败"
+    description={documents.error} action={<Button onClick={documents.retry}>重新读取</Button>} />
   return (
     <div
       className={cx(
@@ -519,7 +524,6 @@ export default function WorkflowRunCard({
         apiDesignRequired ||
         unitTestConfirmation ||
         detailReview ||
-        technicalPlanGenerationError ||
         planningStageEntry ||
         dagConfirmation ||
         testPhaseConfirmation ||
@@ -549,31 +553,6 @@ export default function WorkflowRunCard({
               }
               showIcon
               type="info"
-            />
-          )}
-          {technicalPlanGenerationError && requiresConfirmation && (
-            <Alert
-              action={
-                <Button
-                  disabled={disabled || interactionAvailability !== 'active'}
-                  onClick={() =>
-                    onSubmitClarification?.(workflow, {
-                      planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。'
-                    })
-                  }
-                  type="primary"
-                >
-                  重新生成
-                </Button>
-              }
-              description={
-                Array.isArray(clarification?.errors)
-                  ? clarification.errors.map(String).filter(Boolean).slice(0, 5).join('；')
-                  : undefined
-              }
-              message={clarification?.message || '技术规划自动修复后仍未通过校验。'}
-              showIcon
-              type="error"
             />
           )}
           {revisionImpact && (requiresConfirmation || hasRevisionImpactDecision) ? (
@@ -746,7 +725,7 @@ export default function WorkflowRunCard({
             ) : (
               <PlanConfirmationCard
                 artifact={confirmationArtifact}
-                disabled={Boolean(disabled)}
+                disabled={Boolean(disabled || interactionAvailability !== 'active')}
                 onAbandon={() =>
                   onSubmitClarification?.(workflow, { [artifactAnswerKey]: '需要修改，请重新生成' })
                 }
@@ -841,7 +820,7 @@ export default function WorkflowRunCard({
                       )
                     ) : (
                       <ClarificationQuestionControl
-                        disabled={disabled}
+                        disabled={Boolean(disabled || !activeConfirmation)}
                         onChange={(value) =>
                           updateAnswer(clarificationQuestionKey(question, index), value)
                         }
@@ -855,11 +834,11 @@ export default function WorkflowRunCard({
                   </div>
                 )
               })}
-              {clarification?.status === 'requires_user_input' &&
+              {requiresConfirmation && clarificationQuestions.length > 0 &&
                 !historicalClarificationAnswers && (
                   <Button
                     className={cx('clarification-confirm-btn')}
-                    disabled={disabled || !canSubmitClarification}
+                    disabled={disabled || !activeConfirmation || !canSubmitClarification}
                     onClick={() => {
                       clearClarificationDraft(workflow.threadId, clarificationQuestions)
                       onSubmitClarification?.(workflow, answers)

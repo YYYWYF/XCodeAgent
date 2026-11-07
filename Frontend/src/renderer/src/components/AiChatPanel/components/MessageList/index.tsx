@@ -46,6 +46,7 @@ import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
 import { PlanConfirmationCard } from '../WorkflowRunCard/PlanConfirmationCard'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
 import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
+import { isTechnicalPlanGenerationFailure } from '../../globalFallbackState'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
 import DevelopmentContinuationCard from '../WorkflowRunCard/DevelopmentContinuationCard'
 import { canEnterModifiedTesting } from '../../modifiedTestEntry'
@@ -458,6 +459,7 @@ export default function MessageList({
   const { phase: currentPhase, locked: phaseLocked } = useWorkbenchPhase()
   // 当前操作只读取后端门禁；历史消息是否存在、能否回填均不参与确认资格。
   const currentPlanningConfirmation = designPhasePlanning && !phaseLocked &&
+    !isTechnicalPlanGenerationFailure(planningWorkflow) &&
     messageAgentPhase(planningWorkflow, currentPhase) === currentPhase &&
     planningWorkflowRequiresUserInput(planningWorkflow) ? planningWorkflow : undefined
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -787,14 +789,15 @@ export default function MessageList({
                 ? planningWorkflowActivity(planningCardWorkflow)
                 : undefined
               // 规划中断和失败统一由底部恢复区域展示，空消息沿用下方规则隐藏 Agent 头。
+              const technicalGenerationFailed = isTechnicalPlanGenerationFailure(planningCardWorkflow)
               const planningActivityVisible = Boolean(
-                planningActivity && !messageError && planningCardWorkflow?.summary.status !== 'failed' &&
+                planningActivity && !technicalGenerationFailed && !messageError && planningCardWorkflow?.summary.status !== 'failed' &&
                 (planningActivity.status !== 'running' || (loading && isCurrentPlanningMessage))
               )
               // 当前技术规划失败仅保留必要的交接回执，移除原中断卡对应的 Agent 头像和名称。
               const hideInterruptedPlanningAgent = Boolean(
                 isCurrentPlanningMessage &&
-                  planningCardWorkflow?.summary.status === 'failed' &&
+                  (planningCardWorkflow?.summary.status === 'failed' || technicalGenerationFailed) &&
                   planningWorkflowPhase(planningCardWorkflow) === 'technical_planning'
               )
               // 只有真正携带实体设计载荷的确认才渲染聊天卡片；
@@ -844,6 +847,7 @@ export default function MessageList({
                 planningCardWorkflow.summary?.status !== 'running'
               const showWorkflowCard = Boolean(
                 planningCardWorkflow &&
+                  !technicalGenerationFailed &&
                   (!nonMutatingProductConversation || isActiveNonMutatingReviewFallback) &&
                   !isDuplicatePlanningReview &&
                   !(currentPlanningConfirmation && isCurrentPlanningReview) &&
@@ -921,7 +925,7 @@ export default function MessageList({
                 planningCardWorkflow.summary?.status === 'running'
               // 占位消息不是执行凭据；仅当前 Agent 确实运行时显示普通 loading。
               const showPlanningLoading = Boolean(
-                messageLoading && !messageError && !message.revisionHandoff &&
+                messageLoading && !technicalGenerationFailed && !messageError && !message.revisionHandoff &&
                 !isUiDesignConfirmationCard && !showWorkflowCard && !planningActivityVisible &&
                 !visibleAssistantContent.trim() && !(conversation && visibleProcessSteps?.length)
               )
@@ -930,6 +934,7 @@ export default function MessageList({
               // UI 确认阶段轮询 run 期间 status=running 但 phase 仍是 ui_confirmation，
               // 此时流式文本会短暂替代卡片造成闪烁，也需隐藏。
               const effectiveAssistantContent =
+                technicalGenerationFailed ||
                 (currentPhase === 'planning' &&
                   isWorkflowCompletionStatusMessage(visibleAssistantContent)) ||
                 messageError ||

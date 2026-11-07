@@ -271,40 +271,36 @@ def classify_direct_modification_intent(
 
     if not user_request.strip():
         return _clarification_fallback("用户没有提供可执行的修改需求。")
-    try:
-        model = create_chat_model(Settings.from_env())
-        messages = [
-            SystemMessage(
-                content=(
-                    "You are a workbench intent router. Be conservative only about write authorization; "
-                    "route clear product intent even when design details are missing. Output JSON only. "
-                    "All human-readable routing fields must use Simplified Chinese."
-                )
-            ),
-            HumanMessage(
-                content=_direct_modification_classifier_prompt(
-                    user_request=user_request.strip(),
-                    conversation_summary=conversation_summary[
-                        -_MAX_CONVERSATION_SUMMARY_CHARS:
-                    ],
-                    workspace_snapshot=workspace_snapshot,
-                )
-            ),
-        ]
-        if on_response_delta is None or not callable(getattr(model, "stream", None)):
-            response = model.invoke(messages)
-            text = _coerce_content_text(getattr(response, "content", "")) or ""
-        else:
-            text = _stream_classifier_response(model, messages, on_response_delta)
-        return _normalize_direct_modification_decision(
-            extract_json_object(text) or {},
-            user_request=user_request,
-            target=(workspace_snapshot or {}).get("currentTarget"),
-        )
-    except Exception as exc:
-        return _clarification_fallback(
-            f"意图识别失败（{type(exc).__name__}），需要用户补充后重试。"
-        )
+    # 模型准备和调用异常保留原类型交给执行边界记录失败，不能伪装成需求不明确。
+    model = create_chat_model(Settings.from_env())
+    messages = [
+        SystemMessage(
+            content=(
+                "You are a workbench intent router. Be conservative only about write authorization; "
+                "route clear product intent even when design details are missing. Output JSON only. "
+                "All human-readable routing fields must use Simplified Chinese."
+            )
+        ),
+        HumanMessage(
+            content=_direct_modification_classifier_prompt(
+                user_request=user_request.strip(),
+                conversation_summary=conversation_summary[
+                    -_MAX_CONVERSATION_SUMMARY_CHARS:
+                ],
+                workspace_snapshot=workspace_snapshot,
+            )
+        ),
+    ]
+    if on_response_delta is None or not callable(getattr(model, "stream", None)):
+        response = model.invoke(messages)
+        text = _coerce_content_text(getattr(response, "content", "")) or ""
+    else:
+        text = _stream_classifier_response(model, messages, on_response_delta)
+    return _normalize_direct_modification_decision(
+        extract_json_object(text) or {},
+        user_request=user_request,
+        target=(workspace_snapshot or {}).get("currentTarget"),
+    )
 
 
 def _workspace_routing_context(snapshot: dict[str, Any] | None) -> str:
@@ -683,6 +679,7 @@ def _frontend_direct_modification_prompt(
     conversation_summary: str,
     backend_handoff: dict[str, Any] | None = None,
     element_context: dict[str, Any] | None = None,
+    target_context: dict[str, Any] | None = None,
 ) -> str:
     """构造不依赖正式计划产物的前端快速修改 Prompt。"""
 
@@ -723,6 +720,13 @@ def _frontend_direct_modification_prompt(
         f"Backend handoff for this run:\n{handoff}\n\n"
         "Selected DOM source context:\n"
         f"{json.dumps(element_context or {}, ensure_ascii=False)}\n\n"
+        "Current selected application target:\n"
+        f"{json.dumps(target_context or {}, ensure_ascii=False)}\n"
+        "When the request refers to the current page or endpoint, use this target identity. "
+        "Resolve the existing route and its actual component before editing. A page whose name "
+        "contains 首页 is not necessarily the template Home page. Candidate paths are discovery "
+        "hints, not evidence that a file implements the selected target. Verify the requested "
+        "change in the resolved target implementation.\n\n"
         f"Current user request:\n{user_request}"
     )
 
@@ -769,6 +773,7 @@ def invoke_frontend_direct_modification(
     conversation_summary: str,
     backend_handoff: dict[str, Any] | None,
     element_context: dict[str, Any] | None = None,
+    target_context: dict[str, Any] | None = None,
     candidate_files: list[str] | None = None,
     approved_paths: list[str] | None = None,
     workspace: str | None,
@@ -794,11 +799,13 @@ def invoke_frontend_direct_modification(
             "conversationSummary": conversation_summary[-4_000:],
             "backendHandoff": backend_handoff or {},
             "elementContext": element_context or {},
+            "currentTarget": target_context or {},
             "legacyInstructions": _frontend_direct_modification_prompt(
                 user_request=user_request,
                 conversation_summary=conversation_summary,
                 backend_handoff=backend_handoff,
                 element_context=element_context,
+                target_context=target_context,
             ),
         },
         workspace=workspace,

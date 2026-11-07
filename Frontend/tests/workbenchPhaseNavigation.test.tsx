@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import './workbenchEntry.test'
+import './stoppedPlanningAvailability.test'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import WorkbenchTopBar from '../src/renderer/src/components/WorkbenchTopBar'
@@ -79,7 +80,17 @@ test('正式修订停止只在原需求会话显示继续卡，历史确认仍�
   const changed = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged={false}
     continuing={false} disabled={false} onContinue={async () => undefined} />)
   assert.ok(changed.includes('工作区已变化'))
-  assert.ok(!changed.includes('继续生成'))
+  assert.ok(changed.includes('无法继续原任务'))
+  assert.ok(!changed.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)?.some((button) => button.includes('继续生成')))
+  const changedWithReturn = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged={false}
+    continuing={false} disabled={false} onContinue={async () => assert.fail('失效规划不能继续')}
+    onRestart={() => undefined} />)
+  assert.ok(changedWithReturn.includes('返回开发阶段'))
+  assert.ok(!changedWithReturn.includes('重新发起任务'))
+  const checking = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" checkingWorkspace
+    continuing={false} disabled={false} onContinue={async () => undefined} />)
+  assert.ok(checking.includes('正在检查工作区状态'))
+  assert.ok(!checking.includes('继续生成'))
   const refreshed = latestApplicationLifecycle(lifecycle, {
     ...lifecycle, endedExecutionsCheckedAt: '2026-11-04T00:00:01Z',
     endedPlanningExecution: { ...lifecycle.endedPlanningExecution!, workspaceUnchanged: false }

@@ -123,7 +123,7 @@ class TechnicalPlanFragmentEditorTests(TestCase):
             self.assertIn(self.request, messages[0].content)
             self.assertIn("本轮需复核 Schema 引用", messages[0].content)
             self.assertNotIn("SECRET_SENTINEL", str(messages))
-        self.assertEqual(set(model.seen_tools[0]), {"grep", "read_file", "edit_file"})
+        self.assertEqual(set(model.seen_tools[0]), {"grep", "read_file", "edit_file", "finish_review"})
         self.assertNotIn("orders.other", model.seen_messages[0][0].content)
 
     def test_ambiguous_match_returns_error_then_can_retry_with_context(self):
@@ -255,8 +255,8 @@ class TechnicalPlanFragmentEditorTests(TestCase):
         self.assertEqual(len(model.seen_messages), 43)
         self.assertEqual(result["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"], 8)
 
-    def test_generation_without_complete_candidate_uses_full_route(self):
-        """没有完整候选时继续完整生成，不把缺失章节或类型错误的对象送入编辑器。"""
+    def test_generation_without_complete_candidate_uses_generation_route(self):
+        """没有完整候选时进入分段生成入口，不把缺失章节或类型错误的对象送入编辑器。"""
 
         sections = {key: self.baseline[key] for key in ("architecture", "entities", "api_contracts", "pages")}
         with (

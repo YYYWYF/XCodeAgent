@@ -225,12 +225,7 @@ def _verified_ui_designs_for_confirmation(
     state: ProjectState,
     ui_designs: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """按当前 ProductPlan 和真实 TSX 重新校验全部页面后返回 v2 清单。
-
-    校验只对已确认（confirmed）的页面强制：未生成 / 生成失败 / 已取消的页面**不再**
-    阻断进入技术规划，它们在 build 阶段会被自动跳过（generator 只对 confirmed 页
-    发出设计稿参考）。
-    """
+    """按当前 ProductPlan 和真实 TSX 复验全部页面，未生成或失败页不能消费确认门。"""
 
     product_pages = {_page_id(page): page for page in _page_list(state) if _page_id(page)}
     existing_pages = {
@@ -264,8 +259,10 @@ def _verified_ui_designs_for_confirmation(
         )
         verification = verified.get("verification", {})
         page_errors = verification.get("errors") if isinstance(verification, dict) else []
-        # 只校验已确认页：未生成/失败/取消页保留状态但不阻塞。
-        if status == "confirmed" and verification.get("status") != "passed":
+        # 未生成、失败或取消都不是可确认产物，不能用“确认全部”绕过生成。
+        if status != "confirmed":
+            errors.append(f"页面 {page_id} 尚未生成并通过校验，请先完成设计稿。")
+        elif verification.get("status") != "passed":
             detail = "；".join(str(item) for item in page_errors) or "设计稿代码或映射缺失"
             errors.append(f"页面 {page_id} 未通过产品事实一致性校验：{detail}")
         verified_pages.append(verified)
@@ -995,6 +992,8 @@ async def ui_confirmation(state: ProjectState) -> dict:
     interaction_action = str(interaction.get("action") or "")
     request = str(state.get("request") or "")
     action = state.get("ui_design_action")
+    if isinstance(action, dict) and action.get("action") == "skip":
+        raise ValueError("当前流程必须完成并确认 UI 设计，不支持跳过 UI 设计。")
 
     # 恢复路径：已有待确认设计稿且本轮无新提交，直接重放确认卡。
     # 前端用「无操作 resume」轮询生成进度：这里读工作区最新 ui-designs.json（池在
@@ -1103,17 +1102,21 @@ async def ui_confirmation(state: ProjectState) -> dict:
     # "换一换"后才产生设计稿（经 ui_design_action 单页动作路径回填）。
     ui_designs = await _build_pending_ui_designs(state)
     _persist_ui_designs(state, ui_designs)
+    updated_product_plan = None
     if (state.get("design_conversation_target") == "ui_confirmation"
             and interaction_action == "ui_action" and isinstance(action, dict)
             and action.get("action") == "adjust_pages"):
         # 首次骨架落盘后执行 @ 携带的正文，返回仍是 UI 审阅门，不能直接放行计划阶段。
-        ui_designs = await _apply_ui_design_action(state, ui_designs, action)
+        ui_designs, updated_product_plan = await _apply_ui_design_action(state, ui_designs, action)
+        if updated_product_plan is not None and updated_product_plan != product_plan:
+            write_confirmed_product_plan_documents(state, updated_product_plan)
     return {
         "phase": "ui_confirmation",
         "status": "requires_user_input",
         "ui_designs": ui_designs,
         "ui_design_action": None,
-        "clarification": _ui_design_confirmation_payload(state, ui_designs),
+        "clarification": _ui_design_confirmation_payload(state, ui_designs, product_plan_override=updated_product_plan),
+        **({"product_plan": updated_product_plan} if updated_product_plan is not None else {}),
         "timeline": ["ui_confirmation"],
     }
 

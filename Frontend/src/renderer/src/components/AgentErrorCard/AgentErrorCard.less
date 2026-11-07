@@ -47,6 +47,14 @@
   line-height: 1.45;
 }
 
+.@{class-prefix}-agent-error-card-header {
+  display: flex;
+  grid-column: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
 .@{class-prefix}-agent-error-card-message.ant-typography {
   color: var(--wb-text, var(--modal-text, #202124));
   line-height: 1.6;
@@ -92,13 +100,10 @@
 }
 
 .@{class-prefix}-agent-error-card-copy-button.ant-btn {
-  grid-column: 1;
-  justify-self: start;
-  align-self: flex-start;
+  flex: 0 0 auto;
   width: 22px;
   min-width: 22px;
   height: 22px;
-  margin-left: 4px;
   padding: 0;
   font-size: 12px;
   vertical-align: middle;

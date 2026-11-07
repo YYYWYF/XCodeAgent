@@ -218,6 +218,33 @@ async function waitForCondition<T>(
   throw new Error(`等待${description}超时。`)
 }
 
+// 正文只通过引用传输时仍交接一次模板任务；待确认版本即使有旧回执也不能触发。
+for (const confirmed of [true, false]) {
+  const current = planningState()
+  current.workflow = confirmationWorkflow()
+  const confirmation = {
+    confirmedAt: '2026-11-06T00:00:00Z', directories: { specs: 'specs', plans: 'plans' },
+    artifacts: { technicalPlan: { markdown: { sha256: 'b'.repeat(64) }, json: { sha256: 'c'.repeat(64) } } }
+  }
+  let bootstrapCalls = 0
+  const h = harness(current, {
+    /** 记录当前 Runtime 是否真正调用模板交接依赖。 */
+    onTechnicalPlanConfirmed: async (receipt) => { assert.deepEqual(receipt, confirmation); bootstrapCalls += 1; return true }
+  })
+  const completed = {
+    ...current.workflow, runId: 'confirmed-run', summary: { phase: 'technical_planning', status: 'completed' },
+    state: {
+      technicalPlanConfirmed: confirmed, application_planning_confirmation: confirmation,
+      artifactRefs: { technical_plan: { artifactId: 'a'.repeat(64), byteLength: 100, mediaType: 'application/json' } },
+      lifecycle: authoritativeLifecycle(current, { stage: 'generating_application_template_files', status: 'running' })
+    }
+  } as WorkflowRunPayload
+  h.onSend(async () => result(completed))
+  await h.runtime.submitClarification(current.workflow, { __applicationPlanningAction: 'confirm' })
+  assert.equal(bootstrapCalls, confirmed ? 1 : 0)
+  if (confirmed) { await h.runtime.ensureStarted(); assert.equal(bootstrapCalls, 1) }
+}
+
 // A：没有 Modal 也会启动；重复 ensureStarted 不创建第二轮执行。
 {
   const h = harness()
@@ -410,6 +437,7 @@ async function waitForCondition<T>(
     runId: 'confirmed-plan-run', threadId: initial.threadId, events: [],
     summary: { status: 'completed', phase: 'technical_planning_confirm' },
     state: {
+      technicalPlanConfirmed: true,
       lifecycle, application_planning_confirmation: confirmation,
       artifactRefs: { technical_plan: { artifactId: 'c'.repeat(64), byteLength: 8000, mediaType: 'application/json' } }
     }
@@ -1816,4 +1844,29 @@ console.log('application planning runtime tests passed')
   assert.equal(h.current()?.endRequested, true)
   assert.equal(h.current()?.lifecycle.activeFormalRevision?.changeId, 'keep-change')
   assert.equal(h.current()?.transportState, 'idle')
+}
+
+// 崩溃恢复成功后再次修改失败，新 Run 不能被上一轮恢复源遮住底部重试。
+{
+  const current = planningState()
+  current.workflow = { ...confirmationWorkflow(), runId: 'previous-recovered-run', threadId: current.threadId }
+  current.recovery = recoveryProjection(current.threadId, { sourceRunId: 'previous-crashed-run' })
+  const failed: WorkflowRunPayload = {
+    ...current.workflow, runId: 'new-revision-run',
+    summary: { ...current.workflow.summary, status: 'requires_user_input', phase: 'technical_planning' },
+    state: { ...current.workflow.state, clarification: {
+      mode: 'technical_plan_generation_error', errors: ['模型未应用修改'], questions: []
+    } }
+  }
+  const next = reduceApplicationPlanningCurrentState(current, {
+    type: 'workflow_received', applicationId: current.application.id, threadId: current.threadId, workflow: failed
+  })
+  assert.equal(next.recovery, undefined)
+  assert.equal(next.workflow?.runId, failed.runId)
+  assert.equal(next.workflow?.state?.clarification?.mode, 'technical_plan_generation_error')
+  // 同一 Run 的增量仍保留其当前恢复来源；普通只读答复不经此分支。
+  assert.equal(reduceApplicationPlanningCurrentState(current, {
+    type: 'workflow_received', applicationId: current.application.id, threadId: current.threadId,
+    workflow: { ...current.workflow, summary: { ...current.workflow.summary, message: '同轮更新' } }
+  }).recovery, current.recovery)
 }

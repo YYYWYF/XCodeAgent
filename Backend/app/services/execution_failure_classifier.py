@@ -19,6 +19,7 @@ _MODEL_OPERATIONS = frozenset(
         "ui_confirmation",
         "technical_planning_generate",
         "technical_planning",
+        "classify_intent",
     }
 )
 _NETWORK_ERROR_NAMES = frozenset(

@@ -898,6 +898,10 @@ export function useChatSessions({
     try {
       const summary = await enqueueSessionSave(key, () => saveChatSession(session, token.loadedMessageIds))
       saved = true
+      // 正式修订创建时先绑定来源 checkpoint，保存后已换成目标 Thread；运行态也必须
+      // 使用同一份已落盘身份，否则同进程断线重试仍会拿旧 Thread，被恢复归属检查拒绝。
+      const identity = sessionIdentityFromSummary(summary, input.editorMode, application.workspaceRoot)
+      if (identity) ensureAgent(identity)
       replaceSessionSummary(input.editorMode, summary)
     } finally {
       finishSessionSave(token, saved)

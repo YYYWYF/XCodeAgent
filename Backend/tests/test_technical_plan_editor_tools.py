@@ -86,7 +86,7 @@ class TechnicalPlanEditorToolsTests(TestCase):
         rejected = [m for m in model.seen_messages[-1] if isinstance(m, ToolMessage) and m.status == "error"]
         self.assertEqual({m.name for m in rejected}, {"write_file", "delete", "execute"})
         self.assertTrue(all("not a valid tool" in m.content for m in rejected))
-        self.assertTrue(all(set(tools) == {"grep", "read_file", "edit_file"} for tools in model.seen_tools))
+        self.assertTrue(all(set(tools) == {"grep", "read_file", "edit_file", "finish_review"} for tools in model.seen_tools))
         self.assertEqual(baseline, original)
         expected = {key: deepcopy(original[key]) for key in ("architecture", "entities", "api_contracts", "pages")}
         expected["api_contracts"][0]["endpoints"][0]["parameters"][0]["schema"]["default"] = 8
@@ -174,3 +174,46 @@ class TechnicalPlanEditorToolsTests(TestCase):
         self.assertIn("JSON 语法尚未通过", first.content)
         self.assertIn("JSON 语法和四段根结构检查通过", last.content)
         self.assertIn("尚未执行正式合同校验或用户确认", last.content)
+
+    def test_explicit_review_completes_without_fabricating_edits(self):
+        """按需读取局部候选后显式结束复核，内容不变且不携带旧确认状态。"""
+        baseline = candidate_plan()
+        original = deepcopy(baseline)
+        result, model = self._edit(baseline, "仅复核当前规划，保持内容不变并等待确认。", [
+            tool_response("read_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH, offset=0, limit=1),
+            tool_response("finish_review", summary="当前内容已满足已确认产品事实，无需修改。"),
+        ])
+        self.assertEqual(result, {key: original[key] for key in TECHNICAL_PLAN_EDIT_SECTIONS})
+        self.assertEqual(baseline, original)
+        self.assertNotIn("confirmation_status", result)
+        self.assertEqual(len(model.seen_messages), 2)
+        read = next(item for item in model.seen_messages[1] if isinstance(item, ToolMessage))
+        self.assertIn("returned_lines=1", read.content)
+
+    def test_review_does_not_require_a_separate_file_scan(self):
+        """已有候选上下文足够时可直接说明无需修改，外层仍负责合同校验和确认。"""
+        baseline = candidate_plan()
+        result, model = self._edit(baseline, "复核当前规划。", [
+            tool_response("finish_review", summary="当前候选已满足原始要求，无需修改。"),
+        ])
+        self.assertEqual(result, {key: baseline[key] for key in TECHNICAL_PLAN_EDIT_SECTIONS})
+        self.assertEqual(len(model.seen_messages), 1)
+
+    def test_review_cannot_hide_successful_edits(self):
+        """已经修改候选后不能声明无变更，工具错误仍由原生成流程处理。"""
+        with self.assertRaisesRegex(ValueError, "已有编辑"):
+            self._edit(candidate_plan(), "分页默认值改为8。", [
+                tool_response("edit_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH,
+                              old_string='"default": 20', new_string='"default": 8'),
+                tool_response("finish_review", summary="无需修改。"),
+            ])
+
+    def test_repeated_reads_can_finish_with_an_explicit_conclusion(self):
+        """重复核对同一窗口不触发次数门槛，模型可以正常结束无变更复核。"""
+        baseline = candidate_plan()
+        result, _ = self._edit(baseline, "复核当前规划。", [
+            *[tool_response("read_file", file_path=TECHNICAL_PLAN_CANDIDATE_PATH, offset=0, limit=1)
+              for _ in range(5)],
+            tool_response("finish_review", summary="核对完成，无需修改。"),
+        ])
+        self.assertEqual(result, {key: baseline[key] for key in TECHNICAL_PLAN_EDIT_SECTIONS})

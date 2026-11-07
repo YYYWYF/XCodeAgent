@@ -384,11 +384,11 @@ export function planningTechnicalPlanConfirmed(workflow?: WorkflowRunPayload): b
   ) {
     return false
   }
-  // 正式正文已通过 artifactRefs 外置；模板交接只读取后端确认后签发的产物回执，
-  // 不等待右侧文档加载，也不把资料引用本身当作已确认事实。
+  // 当前版本确认事实与正式文件回执须同时就绪，不依赖正文加载；旧回执不能推进新草稿。
   const confirmation = readRecord(workflow?.state?.application_planning_confirmation)
   const technicalPlan = readRecord(readRecord(confirmation.artifacts).technicalPlan)
   return Boolean(
+    workflow?.state?.technicalPlanConfirmed === true &&
     readText(confirmation.confirmedAt) &&
     readText(readRecord(technicalPlan.json).sha256)
   )

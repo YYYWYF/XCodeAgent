@@ -281,15 +281,9 @@ export default function UiDesignConfirmationPanel({
     (page: PageDesign): boolean => page.status === 'confirmed',
     []
   )
-  // 展示口径的「已确认」：除权威 status 外，还把"已有 code 但 status 滞后"（典型
-  // 场景：重新打开本卡片，磁盘 manifest 已落盘但快照还没追上）也按已确认渲染——
-  // 让绿色对勾、「已确认」标签与刚生成完的页面视觉一致，避免用户对着已有设计稿
-  // 找一个并不存在的「确认」按钮。
-  // 仅用于渲染，不参与 confirmedCount / generateAll 等状态语义。
+  // 旧代码仍可供预览，但本轮是否生成成功只认当前 Manifest 状态，与统计和门禁一致。
   const isPageConfirmedForDisplay = useCallback(
-    (page: PageDesign): boolean =>
-      page.status === 'confirmed' ||
-      (typeof page.code === 'string' && page.code.length > 0),
+    (page: PageDesign): boolean => page.status === 'confirmed',
     []
   )
   // 后台生成池处理中：入队（queued）或已领取（generating），尚未产出设计稿。
@@ -300,8 +294,9 @@ export default function UiDesignConfirmationPanel({
       page.status === 'queued' || page.status === 'generating',
     []
   )
-  // 已确认（生成成功）的页面数；不再要求全部确认才能进入下一步。
+  // 全部页面都生成成功后才允许确认，未生成或失败页不能被“下一步”跳过。
   const confirmedCount = pages.filter((page) => isPageConfirmed(page)).length
+  const allPagesGenerated = pages.length > 0 && confirmedCount === pages.length
   // 当前处于后台生成池处理中的 pageId 列表（queued / generating），用于轮询与加载态。
   const generatingPageIds = useMemo(
     () =>
@@ -386,6 +381,7 @@ export default function UiDesignConfirmationPanel({
   }, [phase, freshPages.length, actingSet, setActingPageIds])
 
   const confirmAll = (): void => {
+    if (disabled || uiGenerationInProgress || !allPagesGenerated) return
     const feedbackText = feedback.trim()
     if (feedbackText) {
       // 确认按钮带有修改意见时仍按 UI 调整提交，不能把意见吞成确认。
@@ -1128,10 +1124,7 @@ export default function UiDesignConfirmationPanel({
                   {generating ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-generating')}>生成中</Tag>
                   ) : confirmed ? (
-                    // confirmed 走 isPageConfirmedForDisplay：除权威 status === 'confirmed'
-                    // 外，"已有 code 但 status 滞后"（典型场景：重新打开本卡片，磁盘
-                    // manifest 已落盘但快照还没追上）也按已确认渲染，与刚生成完的页面
-                    // 视觉一致——避免用户对着已有设计稿找一个并不存在的「确认」按钮。
+                    // 行状态、统计及下一步使用相同的当前生成事实，不能由旧 code 冒充成功。
                     <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已生成</Tag>
                   ) : page.status === 'generation_failed' ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-failed')} color="error">生成失败</Tag>
@@ -1143,10 +1136,10 @@ export default function UiDesignConfirmationPanel({
                     <Tag
                       className={cx(
                         'ui-design-page-row-status',
-                        iterationOrigins?.[pageId]?.designedIn ? 'is-regen' : 'is-empty'
+                        page.code || iterationOrigins?.[pageId]?.designedIn ? 'is-regen' : 'is-empty'
                       )}
                     >
-                      {uiDesignPendingLabel(iterationOrigins?.[pageId])}
+                      {page.code ? '待重新生成' : uiDesignPendingLabel(iterationOrigins?.[pageId])}
                     </Tag>
                   )}
                 </div>
@@ -1284,14 +1277,14 @@ export default function UiDesignConfirmationPanel({
           <Text className={cx('ui-design-confirm-hint')} type="secondary">
             {adjustingHint
               ? adjustingHint
-              : confirmedCount > 0
-                ? `已生成 ${confirmedCount}/${pages.length} 个页面设计稿；未生成UI设计稿的页面将在后续直接生成页面。`
-                : ''}
+              : allPagesGenerated
+                ? '所有页面设计稿已生成，确认后可进入技术规划。'
+                : `已生成 ${confirmedCount}/${pages.length} 个页面设计稿，请先完成全部页面设计稿。`}
           </Text>
           <div className={cx('ui-design-confirm-actions')}>
             <Button
               className={cx('ui-design-confirm-all-btn')}
-              disabled={disabled || uiGenerationInProgress}
+              disabled={disabled || uiGenerationInProgress || !allPagesGenerated}
               onClick={confirmAll}
               size="large"
               type="primary"

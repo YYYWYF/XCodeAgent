@@ -165,7 +165,7 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                 patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             ):
                 child = await harness.execute_action(action)
-            self.assertNotEqual(child.run_id, source.run_id)
+            self.assertNotEqual(child.run_id, source.run_id, str(harness.last_recovery_frames))
             self.assertEqual(child.first_node, "technical_planning_begin")
             self.assertEqual(child.status, DurableExecutionStatus.AWAITING_USER)
             generate.assert_called_once()

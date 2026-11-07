@@ -109,17 +109,22 @@ export function bindRevisionSessionChangeId(
 ): ChatSessionRevisionContext | undefined {
   if (!context) return undefined
   const active = lifecycle?.activeFormalRevision
+  // 技术专项在正式交接后由 Backend 指定当前 Graph；来源 checkpoint 只是交接前的
+  // 指针，不能在多次修订或断线后继续当作权威。仍须精确核对下方完整修订来源。
+  const planningThreadMatches = context.formalBranch === 'workbench_plan_revision'
+    ? Boolean(active?.planningThreadId && active.planningThreadId === lifecycle?.initialization.threadId)
+    : active?.planningThreadId === context.planningThreadId
   if (
     !active ||
     active.formalBranch !== context.formalBranch ||
     active.impactInteractionId !== context.impactInteractionId ||
     active.sourceThreadId !== context.sourceConversationThreadId ||
     active.sourceRunId !== context.sourceRunId ||
-    active.planningThreadId !== context.planningThreadId
+    !planningThreadMatches
   ) {
     return context
   }
-  return { ...context, changeId: active.changeId }
+  return { ...context, planningThreadId: active.planningThreadId, changeId: active.changeId }
 }
 
 /** 为一次设计到规划的入口生成稳定去重键；新的 revision 或门禁必须得到不同键。 */
@@ -158,7 +163,9 @@ export function activeFormalRevisionStageSession(
       context.impactInteractionId !== active.impactInteractionId ||
       context.sourceConversationThreadId !== active.sourceThreadId ||
       context.sourceRunId !== active.sourceRunId ||
-      context.planningThreadId !== active.planningThreadId
+      (context.formalBranch === 'workbench_plan_revision'
+        ? active.planningThreadId !== lifecycle?.initialization.threadId
+        : context.planningThreadId !== active.planningThreadId)
     ) {
       return false
     }

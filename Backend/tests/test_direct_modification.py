@@ -117,6 +117,7 @@ class DirectModificationPromptTests(unittest.TestCase):
                 user_request="把宠物照片卡片宽度改成200px",
                 conversation_summary="",
                 backend_handoff=None,
+                target_context={"type": "page", "pageId": "pet_photo_list"},
                 element_context={
                     "tagName": "div",
                     "sourcePath": "/src/pages/PetPhotoList/index.tsx",
@@ -146,6 +147,9 @@ class DirectModificationPromptTests(unittest.TestCase):
             ],
         )
         self.assertEqual(packet["elementContext"]["line"], 18)
+        self.assertEqual(packet["currentTarget"], {"type": "page", "pageId": "pet_photo_list"})
+        self.assertIn('"pageId": "pet_photo_list"', packet["legacyInstructions"])
+        self.assertIn("Resolve the existing route", packet["legacyInstructions"])
         self.assertIn("Selected DOM source context", packet["legacyInstructions"])
         self.assertEqual(
             packet["candidateFiles"],
@@ -336,7 +340,7 @@ class DirectModificationPromptTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "conservative about write authorization, not about collecting design details",
+            "conservative about write authorization, not about collecting implementation details",
             prompt,
         )
         self.assertIn("The downstream workflow owns requirements clarification", prompt)
@@ -493,20 +497,20 @@ class DirectModificationPromptTests(unittest.TestCase):
         self.assertEqual(_partial_json_response_value(partial), "你好，")
         self.assertNotIn("casual_chat", _partial_json_response_value(partial))
 
-    def test_classifier_empty_request_and_model_error_request_clarification(self) -> None:
-        """空输入或分类模型异常时都必须返回可见的兜底澄清问题。"""
+    def test_classifier_clarifies_empty_request_but_propagates_model_error(self) -> None:
+        """空输入仍澄清，模型异常必须进入失败链路而非要求补充需求。"""
 
         empty_decision = classify_direct_modification_intent(user_request="   ")
         with patch(
             "app.agents.direct_modification.create_chat_model",
             side_effect=RuntimeError("offline"),
         ):
-            error_decision = classify_direct_modification_intent(user_request="sdf")
+            with self.assertRaisesRegex(RuntimeError, "offline"):
+                classify_direct_modification_intent(user_request="sdf")
 
-        for decision in (empty_decision, error_decision):
-            self.assertEqual(decision.owner, "unknown")
-            self.assertEqual(decision.scope, "clarification")
-            self.assertTrue(decision.clarification_question)
+        self.assertEqual(empty_decision.owner, "unknown")
+        self.assertEqual(empty_decision.scope, "clarification")
+        self.assertTrue(empty_decision.clarification_question)
 
 
 class DirectModificationNodeTests(unittest.TestCase):
@@ -2263,7 +2267,7 @@ class DirectModificationProtocolTests(unittest.TestCase):
         )
         self.assertEqual(
             capability["executionPolicy"]["confirmationContinuation"]["modes"],
-            ["small_task_scope_confirmation"],
+            ["implementation_fix_confirmation", "small_task_scope_confirmation"],
         )
         self.assertIs(
             capability["formalRevision"]["additionalModelImpactAnalysis"],

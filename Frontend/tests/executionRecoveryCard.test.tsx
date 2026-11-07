@@ -678,6 +678,26 @@ test('二次修改复用普通错误入口并显示当前重试错误', () => {
   assert.doesNotMatch(markup, /application-planning-recovery-incident|工作台执行需要恢复/)
 })
 
+test('二次修改模型错误只在卡片详情中保留原始原因', () => {
+  const candidate = { ...recovery('ready'), workflowScope: 'conversation', executionStatus: 'failed' } as ExecutionRecoveryCandidate
+  candidate.failureDiagnostic = {
+    sourceRunId: candidate.sourceRunId, origin: 'model_call', code: 'http_403', httpStatus: 403,
+    message: 'PermissionDeniedError: HTTP 403 - subscription payment method needs authorization'
+  }
+  const markup = renderToStaticMarkup(createElement(RecoverySurface, {
+    activeExecutionRecovery: candidate, isApplicationPlanningPhase: false,
+    onExecuteRecoveryAction: () => undefined, recoveryRunning: false
+  }))
+  const start = markup.indexOf('<details')
+  const end = markup.indexOf('</details>') + '</details>'.length
+  const outside = markup.slice(0, start) + markup.slice(end)
+  assert.match(outside, /模型服务拒绝访问/)
+  assert.match(outside, /复制诊断信息/)
+  assert.doesNotMatch(outside, /PermissionDeniedError|subscription payment/)
+  assert.match(markup.slice(start, end), /PermissionDeniedError.*subscription payment/)
+  assert.doesNotMatch(markup.slice(start, end), /<details[^>]*\bopen/)
+})
+
 test('Build 恢复保留原控制卡，不受二次修改错误入口影响', () => {
   const markup = renderToStaticMarkup(createElement(RecoverySurface, {
     activeExecutionRecovery: recovery('ready'),

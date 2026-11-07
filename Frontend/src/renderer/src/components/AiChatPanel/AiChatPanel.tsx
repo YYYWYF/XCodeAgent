@@ -182,7 +182,7 @@ import {
 } from './hooks/revisionSession'
 import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRuntime'
 import { sessionToRestoreForPhase } from './hooks/phaseSessionSelection'
-import { pendingFormalRevisionStart, retryFormalRevisionStart } from './formalRevisionStartRetry'
+import { formalRevisionRetryThread, pendingFormalRevisionStart, retryFormalRevisionStart } from './formalRevisionStartRetry'
 import { readApplicationPlanningAuthoritativeSnapshot } from '../../service/applicationPlanningRecovery'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import {
@@ -222,6 +222,8 @@ import {
   acceptancePreviewCanFocus,
   conversationUsesWorkflowRecovery,
   globalFallbackState,
+  isTechnicalPlanGenerationFailure,
+  technicalPlanGenerationFailureMessage,
   prioritizedConnection,
   latestConversationFailure,
   workbenchRecoveryCoveredByExecution
@@ -327,6 +329,7 @@ const PLANNING_ANSWER_LABELS: Record<string, string> = {
   requirement_spec_feedback: '需求文档意见',
   design_change_request: '设计变更',
   technical_plan_confirmation: '技术规划确认',
+  planning_recovery: '技术规划重试',
   planning_stage_entry: '计划阶段入口',
   project_plan_confirmation: '项目计划确认',
   entity_source_binding: '实体数据源绑定'
@@ -2504,10 +2507,11 @@ export default function AiChatPanel({
     void retryFormalRevisionStart({
       session: activeSession,
       read: async () => {
+        const lifecycle = await getApplicationLifecycle(application)
         const snapshot = await readApplicationPlanningAuthoritativeSnapshot(
-          application, activeSession.revisionContext!.planningThreadId
+          application, formalRevisionRetryThread(activeSession, lifecycle)
         )
-        return { snapshot, lifecycle: snapshot?.lifecycle || await getApplicationLifecycle(application) }
+        return { snapshot, lifecycle: snapshot?.lifecycle || lifecycle }
       },
       onLifecycle: (lifecycle) => onApplicationLifecycleChange(lifecycle),
       start: async (input) => {
@@ -4042,6 +4046,11 @@ export default function AiChatPanel({
     executionPhase: derivedWorkbenchPhase
   })
   const planningError = sessionPlanningFailureState?.error
+  // 生成校验失败仍保留原生重试门，但展示只归当前会话的底部错误入口。
+  const technicalFailureWorkflow = sessionPlanningFailureState?.transportState !== 'running' &&
+    isTechnicalPlanGenerationFailure(sessionPlanningFailureState?.workflow)
+    ? sessionPlanningFailureState?.workflow : undefined
+  const technicalPlanningError = technicalPlanGenerationFailureMessage(technicalFailureWorkflow)
   // 网络连接独立于业务 Run 归属：确认尚未到达服务端时，不能被旧恢复源过滤成健康。
   const planningConnection = planningConnectionForSession({
     state: planningState,
@@ -4069,6 +4078,7 @@ export default function AiChatPanel({
     isApplicationPlanningPhase &&
     Boolean(
       planningError ||
+        technicalPlanningError ||
         sessionPlanningFailureState?.recoveryActionError ||
         sessionPlanningFailureState?.syncError ||
         applicationPlanningRecoveryIncident(sessionPlanningFailureState)
@@ -4141,7 +4151,7 @@ export default function AiChatPanel({
     (isApplicationPlanningPhase
       ? uiDesignRecoveryError(sessionPlanningFailureState?.recovery)
       : undefined) ||
-    previewFallbackError ||
+    technicalPlanningError || previewFallbackError ||
     (!workbenchExecutionInProgress && !endedWorkbenchRecovery
       ? isApplicationPlanningPhase
         ? sessionPlanningFailureState?.syncError ||
@@ -5061,6 +5071,15 @@ export default function AiChatPanel({
     await handleSubmitClarification(workflow, answers)
   }
 
+  /** 底部重试复用当前原生门禁的原恢复答案及提交事务，不创建新的恢复协议。 */
+  const handleRetryTechnicalPlanning = (): void => {
+    if (!technicalFailureWorkflow || otherSessionExecutionLocked ||
+      planningState?.transportState === 'running' || planningState?.transportState === 'reconciling') return
+    void handleSubmitWorkflowClarification(technicalFailureWorkflow, {
+      planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。'
+    }).catch((reason) => message.error(formatError(reason, '重试技术规划失败')))
+  }
+
   /** 打开并定位右侧字段映射；确认后只更新当前门禁的本地配置状态。 */
   const handleOpenApiDesignConfig = useCallback(
     (target: ApiDesignConfigTarget, _workflow?: WorkflowRunPayload): void => {
@@ -5634,13 +5653,15 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
-                      title={lifecycleSyncError ? '工作区状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      title={lifecycleSyncError ? '工作区状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : technicalPlanningError ? '技术规划生成失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
                       retryLabel={recoveryProjectionError ? '重新同步' : undefined}
                       diagnostic={recoveryProjectionError && !lifecycleSyncError
                         ? executionRecoveryReadDiagnostic(applicationLifecycle) : undefined}
                       error={globalFallback.error}
+                      retryDisabled={Boolean(technicalPlanningError && (otherSessionExecutionLocked ||
+                        planningState?.transportState === 'running' || planningState?.transportState === 'reconciling'))}
                       onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
-                        ? handleRetryPlanning
+                        ? technicalFailureWorkflow ? handleRetryTechnicalPlanning : handleRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
                           : () => { void retryCurrentRecovery() })}
@@ -5651,7 +5672,8 @@ export default function AiChatPanel({
               ) : null}
 
               {stoppedPlanning ? (
-                <StoppedPlanningNotice unchanged={stoppedPlanning.workspaceUnchanged}
+                <StoppedPlanningNotice application={application} stopped={stoppedPlanning}
+                  onLifecycle={onApplicationLifecycleChange}
                   disabled={!onRetryPlanning || planningState?.transportState === 'running' || planningState?.transportState === 'reconciling'}
                   error={planningState?.recoveryActionError || planningState?.syncError}
                   onContinue={() => onRetryPlanning?.()} onRestart={() => switchPhase('development')} />

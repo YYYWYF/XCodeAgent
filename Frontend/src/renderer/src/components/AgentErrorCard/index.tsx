@@ -1,16 +1,18 @@
-import { CloseCircleOutlined, RedoOutlined } from '@ant-design/icons'
-import { Button, Typography } from 'antd'
+import { CheckOutlined, CloseCircleOutlined, CopyOutlined, RedoOutlined } from '@ant-design/icons'
+import { Button, Tooltip, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { RecoveryReadDiagnostic } from '../../typings'
 import { cx } from '../../utils'
 import ErrorDiagnostics from './ErrorDiagnostics'
 import { errorDiagnosticText } from './diagnosticText'
+import { useDiagnosticClipboard } from './useDiagnosticClipboard'
 import './AgentErrorCard.less'
 
 const { Text } = Typography
 
 type AgentErrorCardProps = {
   error?: string
+  details?: string
   onRetry?: () => void
   retrying?: boolean
   retryDisabled?: boolean
@@ -22,6 +24,7 @@ type AgentErrorCardProps = {
 /** 按真实错误类型区分模型连接异常和普通任务失败，避免把所有失败误报为模型问题。 */
 export default function AgentErrorCard({
   error,
+  details,
   onRetry,
   retrying,
   retryDisabled = false,
@@ -37,7 +40,9 @@ export default function AgentErrorCard({
       }
     : readableAgentError(error)
   const resolvedTitle = title || (copy?.modelServiceError ? '模型服务异常' : '任务执行异常')
-  const diagnosticText = errorDiagnosticText(error?.trim() || copy.message, diagnostic)
+  const diagnosticText = errorDiagnosticText(details?.trim() || error?.trim() || copy.message, diagnostic)
+  const { copied, copyFailed, copying, copyDiagnostic } = useDiagnosticClipboard(diagnosticText)
+  const copyLabel = copied ? '已复制' : '复制诊断信息'
 
   return (
     <section
@@ -50,16 +55,36 @@ export default function AgentErrorCard({
         <CloseCircleOutlined />
       </span>
       <div className={cx('agent-error-card-copy')}>
-        <Text className={cx('agent-error-card-title')} strong>
-          {resolvedTitle}
-        </Text>
+        <div className={cx('agent-error-card-header')}>
+          <Text className={cx('agent-error-card-title')} strong>
+            {resolvedTitle}
+          </Text>
+          <Tooltip title={copyLabel}>
+            <Button
+              type="text"
+              size="small"
+              className={cx('agent-error-card-copy-button')}
+              aria-label={copyLabel}
+              loading={copying}
+              icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+              onClick={() => {
+                // 标题旁复制按钮沿用当前可见诊断文本和原生剪贴板反馈。
+                void copyDiagnostic()
+              }}
+            />
+          </Tooltip>
+        </div>
         <Text className={cx('agent-error-card-message')}>{copy?.message}</Text>
         {copy?.hint ? (
           <Text className={cx('agent-error-card-hint')} type="secondary">
             {copy.hint}
           </Text>
         ) : null}
-        <ErrorDiagnostics text={diagnosticText} showDetails={Boolean(diagnostic || copy.detail)} />
+        <ErrorDiagnostics
+          text={diagnosticText}
+          showDetails={Boolean(diagnostic || details?.trim() || copy.detail)}
+          copyFailed={copyFailed}
+        />
         {onRetry ? (
           <Button
             className={cx('agent-error-card-retry')}

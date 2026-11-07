@@ -256,8 +256,8 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
         """设计修订在技术 begin 失败后仍可沿真实 Native Recovery 生成并回到确认门。"""
         await self._revise_formal_plan(native=True, design=True)
 
-    async def test_stop_generation_ends_without_recovery(self) -> None:
-        """用户停止技术规划后结束当前执行，不再签发原任务继续生成动作。"""
+    async def test_stop_generation_ends_and_offers_explicit_native_continuation(self) -> None:
+        """用户停止首次技术规划后释放执行，只签发需点击的共用原节点继续动作。"""
         harness = self.harness
         started = asyncio.Event()
 
@@ -292,4 +292,12 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                 workspace=str(harness.workspace), thread_id=harness.thread_id,
                 graph=harness.graph, source=source, snapshot=committed,
             )
-            self.assertIsNone(projected.recovery_action_plan)
+            self.assertTrue(projected.can_continue)
+            action = projected.recovery_action_plan["primaryAction"]
+            self.assertEqual(action["kind"], "retry_business_node")
+            self.assertEqual(action["targetNode"], "technical_planning_generate")
+            self.assertEqual(action["label"], "继续生成")
+            stopped = load_application_lifecycle(harness.workspace)
+            self.assertIsNone(stopped.active_run_id)
+            self.assertEqual(stopped.initialization.status, ApplicationLifecycleStatus.CANCELLED)
+            self.assertIsNotNone(stopped.ended_planning_execution)

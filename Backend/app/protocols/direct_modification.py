@@ -52,6 +52,7 @@ from app.services.application_revision_lifecycle import (
 )
 from app.services.user_skill_runtime import validate_selected_user_skills
 from app.services.conversation_execution import ConversationExecution
+from app.services.execution_failure_classifier import sanitize_failure_diagnostic
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext
 from app.services.node_recovery_context import bind_recovery_runtime
 from app.services.run_workers import bind_run_workers
@@ -543,6 +544,7 @@ def build_conversation_ag_ui_stream(
         raise ValueError("缺少 forwardedProps.conversation。")
 
     streamed_text = False
+    failure_progress: dict[str, Any] = {}
 
     async def operation(report: ProgressReporter, report_text: TextDeltaReporter) -> AgUiActionResult:
         """运行独立 Graph，并把节点、工具和测试进度送入 AG-UI 队列。"""
@@ -909,6 +911,15 @@ def build_conversation_ag_ui_stream(
             )
         except BaseException as error:
             await execution.failed(error)
+            if isinstance(error, Exception):
+                # 抛出异常的节点没有正常 update；终态必须替换其 running 步骤，
+                # 不能让前端收口时把实际失败归档成绿色“已执行”。
+                failed_update = {"status": "failed", "message": "执行失败，请查看下方错误卡。"}
+                failure_progress.update({
+                    "processStep": direct_node_process_step(execution.node, failed_update),
+                    "events": [*events, direct_node_event(execution.node, update=failed_update,
+                        run_id=run_id, thread_id=thread_id)],
+                })
             raise
         finally:
             async def release_conversation_ownership() -> None:
@@ -933,19 +944,24 @@ def build_conversation_ag_ui_stream(
         streaming_operation=operation,
         error_message_prefix="自由对话执行失败",
         error_data=lambda exc: {
+            **failure_progress,
             "summary": {
                 "status": "failed",
                 "phase": "conversation",
-                "message": str(exc) if isinstance(exc, ApplicationPlanningInProgressError) else "自由对话执行失败。",
+                "message": (
+                    str(exc) if isinstance(exc, ApplicationPlanningInProgressError)
+                    else f"自由对话执行失败（{type(exc).__name__}）：{sanitize_failure_diagnostic(exc) or '后台未提供具体原因。'}"
+                ),
                 **({"errorCode": exc.code, "lifecycle": application_lifecycle_payload(exc.lifecycle)}
                    if isinstance(exc, ApplicationPlanningInProgressError) else {}),
             },
-            "events": [],
+            "events": failure_progress.get("events", []),
             "state": {"status": "failed", "phase": "conversation"},
             "result": {"status": "failed"},
         },
         accept=accept,
         emit_progress_text=False,
+        emit_error_text=False,
         # 自由对话 operation 会按工作区、thread 和 run 自行登记；避免通用包装层用同一 runId 重复登记。
         register_workspace_run=False,
     )

@@ -82,6 +82,7 @@ def build_ag_ui_action_stream(
     error_data: ErrorDataFactory | None = None,
     accept: str | None = None,
     emit_progress_text: bool = True,
+    emit_error_text: bool = True,
     workspace_root: str | None = None,
     register_workspace_run: bool = True,
 ) -> AsyncIterator[str]:
@@ -260,9 +261,11 @@ def build_ag_ui_action_stream(
         safe_payload = jsonable_encoder(response_payload)
         yield encoder.encode(CustomEvent(name=event_name, value=safe_payload))
         yield encoder.encode(StateSnapshotEvent(snapshot={state_key: safe_payload}))
-        yield encoder.encode(
-            TextMessageContentEvent(messageId=message_id, delta=message)
-        )
+        # 卡片承载失败时只保留结构化结果，不把同一异常再写成助手正文。
+        if emit_error_text or response_payload.get("status") != "failed":
+            yield encoder.encode(
+                TextMessageContentEvent(messageId=message_id, delta=message)
+            )
         yield encoder.encode(TextMessageEndEvent(messageId=message_id))
         yield encoder.encode(
             RunFinishedEvent(

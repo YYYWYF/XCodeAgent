@@ -321,6 +321,9 @@ function reducePlanningWorkflow(
     ),
     lifecycle,
     workflow: mergedWorkflow,
+    // 新 Run 的正式快照已接管线程，旧恢复源不能继续遮住本轮失败与重试入口。
+    recovery: mergedWorkflow.runId !== current.workflow?.runId &&
+      current.recovery?.sourceRunId !== mergedWorkflow.runId ? undefined : current.recovery,
     checkpointMissing: false
   }
 }

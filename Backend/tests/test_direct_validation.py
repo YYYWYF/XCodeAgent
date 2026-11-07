@@ -30,7 +30,7 @@ class DirectValidationTests(unittest.TestCase):
         self.frontend = self.root / "frontend"
         self.source = self.frontend / "src"
         self.source.mkdir(parents=True)
-        (self.frontend / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+        (self.frontend / "package.json").write_text('{"type":"module","scripts":{"build":"vite build"}}', encoding="utf-8")
         self.app = self.source / "App.tsx"
         self.app.write_text('const App = "test";\nexport default Ap;\n', encoding="utf-8")
         (self.source / "Page.tsx").write_text('export default "blue";\n', encoding="utf-8")
@@ -80,7 +80,7 @@ class DirectValidationTests(unittest.TestCase):
             patch("app.services.direct_validation.run_project_restart_validation") as restart,
         ):
             result = validate_direct_fix(self.state)
-        self.assertEqual(command.call_args.args[0], ["pnpm", "exec", "vite", "build"])
+        self.assertEqual(command.call_args.args[0], ["pnpm", "run", "build"])
         self.assertEqual(command.call_count, 2)
         restart.assert_not_called()
         self.assertEqual(result["revision_requests"][0]["failed_check"]["id"], "frontend_build")
@@ -107,7 +107,7 @@ class DirectValidationTests(unittest.TestCase):
             patch("app.services.direct_validation.run_project_restart_validation", side_effect=restart),
         ):
             result = validate_direct_fix(self.state)
-        self.assertEqual(order, ["tsc", "vite", "restart"])
+        self.assertEqual(order, ["tsc", "run", "restart"])
         self.assertTrue(result["quality_gate_passed"])
         self.assertEqual(len(result["test_results"]), 3)
 
@@ -120,6 +120,18 @@ class DirectValidationTests(unittest.TestCase):
         ):
             run_direct_fix_validation(self.state, affected_layers={"backend"})
         command.assert_not_called()
+        restart.assert_called_once()
+
+    def test_repair_rechecks_declared_rsbuild_script_and_restart(self) -> None:
+        """Rsbuild 工程及修复轮次都执行 build 脚本，不调用缺失的 Vite 或省略最终门禁。"""
+        (self.frontend / "package.json").write_text(json.dumps({"scripts": {"build": "tsc -b && rsbuild build"}}))
+        with patch("app.services.direct_validation.shutil.which", return_value="pnpm"), \
+             patch("app.services.integration_test_runner.workspace_process_registry.run",
+                   return_value=subprocess.CompletedProcess([], 0, "", "")) as command, \
+             patch("app.services.direct_validation.run_project_restart_validation", return_value={"test_results": []}) as restart:
+            validate_direct_fix({**self.state, "repair_iteration": 1})
+        self.assertEqual([call.args[0] for call in command.call_args_list],
+                         [["pnpm", "exec", "tsc", "-b"], ["pnpm", "run", "build"]])
         restart.assert_called_once()
 
     def test_missing_package_or_manager_blocks_acceptance(self) -> None:
