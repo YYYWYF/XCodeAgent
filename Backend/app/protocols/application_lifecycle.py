@@ -91,10 +91,12 @@ class ApplicationLifecycleAction(BaseModel):
 
         if self.action == "initialize_application":
             from app.services.application_config.schema import validate_application_configuration
+            from app.services.application_config.initial_administrators import validate_new_admins
 
             if self.application is None or self.configuration is None:
                 raise ValueError("初始化应用必须提供应用身份和完整配置。")
             validate_application_configuration(self.configuration)
+            self.configuration["authorization"]["initialAdministratorSubjects"] = validate_new_admins(self.configuration["authorization"]["initialAdministratorSubjects"])
         if self.action in {"release_session_pending", "cleanup_session_failed_executions", "prepare_session_deletion"}:
             if not str(self.session_id or "").strip():
                 raise ValueError(f"{self.action} 必须提供合法非空的 sessionId。")

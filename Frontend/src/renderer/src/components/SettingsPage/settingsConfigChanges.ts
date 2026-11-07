@@ -5,6 +5,7 @@ import {
   type ConfigOperation
 } from '../../service/applicationConfigOperation'
 import { normalizeSettingsConfiguration } from './settingsDraft'
+import { validateAdminChange } from '../../utils/initialAdministrators'
 
 /** 声明设置页提交所依赖的统一配置事务，便于保持 UI 与测试的调用边界一致。 */
 export type ApplySettingsConfigChanges = (
@@ -98,7 +99,9 @@ export function settingsConfigChanges(current: ApplicationConfig, next: Applicat
   const beforeSubjects = normalizedCurrent.authorization.initialAdministratorSubjects
   const afterSubjects = normalizedNext.authorization.initialAdministratorSubjects
   if (JSON.stringify(beforeSubjects) !== JSON.stringify(afterSubjects)) {
-    changes['authorization.initialAdministratorSubjects'] = afterSubjects
+    changes['authorization.initialAdministratorSubjects'] = validateAdminChange(
+      current.authorization.enabled ? beforeSubjects : [], afterSubjects
+    )
   }
   // 首次启用权限时，磁盘旧快照可以尚无 api；即使界面补出的默认值与比较基线相同，
   // 也必须随开关提交，后端才能构造满足当前合同的 authorization.api。

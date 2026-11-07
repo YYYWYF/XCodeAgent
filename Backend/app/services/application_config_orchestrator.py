@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.config import Settings
 from app.services.application_config.repository import ApplicationConfigRepository
+from app.services.application_config.initial_administrators import validate_admin_change, validate_new_admins
 from app.services.application_config.schema import ApplicationConfigError, normalize_application_configuration, validate_application_configuration
 from app.services.application_parameter_updater import ApplicationParameterUpdater
 from app.services.application_parameter_updater import ParameterUpdateError
@@ -292,6 +293,13 @@ class ApplicationConfigOrchestrator:
                 raise ApplicationConfigOperationError("CONFIG_DEPENDENCY_CONFLICT", "权限能力需要登录认证。")
             result["auth"]["enable"] = True
         try:
+            # 历史资格只能来自当前磁盘基线；首次启用不能借用旧值资格。
+            before = current["authorization"]["initialAdministratorSubjects"]
+            after = result["authorization"]["initialAdministratorSubjects"]
+            if result["authorization"]["enabled"] and not current["authorization"]["enabled"]:
+                result["authorization"]["initialAdministratorSubjects"] = validate_new_admins(after)
+            elif "authorization.initialAdministratorSubjects" in changes:
+                result["authorization"]["initialAdministratorSubjects"] = validate_admin_change(before, after)
             validate_application_configuration(result)
             compile_template_application_config(result)
         except (ApplicationConfigError, ValueError) as exc:

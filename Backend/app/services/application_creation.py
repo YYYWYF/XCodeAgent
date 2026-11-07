@@ -9,11 +9,13 @@ import tempfile
 import threading
 from pathlib import Path
 from typing import Any
+from copy import deepcopy
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.application_lifecycle import ApplicationLifecycle
 from app.services.application_config.repository import ApplicationConfigRepository
 from app.services.application_config.schema import validate_application_configuration
+from app.services.application_config.initial_administrators import validate_new_admins
 from app.services.application_lifecycle import ensure_application_lifecycle, load_application_lifecycle
 from app.services.managed_database_registration import ensure_managed_database_registration
 
@@ -39,6 +41,8 @@ def initialize_application(
     """隔离应用配置、生命周期和数据库注册，全部就绪才原子提交元数据目录。"""
 
     validate_application_configuration(configuration)
+    configuration = deepcopy(configuration)
+    configuration["authorization"]["initialAdministratorSubjects"] = validate_new_admins(configuration["authorization"]["initialAdministratorSubjects"])
     if "managedDatabase" in configuration:
         raise ValueError("创建请求不能提供模拟数据库注册结果。")
     if configuration.get("appName") != application_name:

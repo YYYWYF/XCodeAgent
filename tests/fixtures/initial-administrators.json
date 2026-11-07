@@ -1,0 +1,106 @@
+[
+  {
+    "value": "00123456/张三",
+    "valid": true,
+    "memberId": "00123456",
+    "memberName": "张三"
+  },
+  {
+    "value": "00000001/欧阳娜娜",
+    "valid": true,
+    "memberId": "00000001",
+    "memberName": "欧阳娜娜"
+  },
+  {
+    "value": "1234567/张三",
+    "valid": false
+  },
+  {
+    "value": "123456789/张三",
+    "valid": false
+  },
+  {
+    "value": "00123456",
+    "valid": false
+  },
+  {
+    "value": "ops@example.com",
+    "valid": false
+  },
+  {
+    "value": "00123456/",
+    "valid": false
+  },
+  {
+    "value": "00123456/张三/别名",
+    "valid": false
+  },
+  {
+    "value": "00123456／张三",
+    "valid": false
+  },
+  {
+    "value": "current-user",
+    "valid": false
+  },
+  {
+    "value": "00123456/名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名",
+    "valid": false
+  },
+  {
+    "value": "00123456/ 张三",
+    "valid": false
+  },
+  {
+    "value": "00123456/张,三",
+    "valid": false
+  },
+  {
+    "value": "00123456/张，三",
+    "valid": false
+  },
+  {
+    "value": "00123456/张\n三",
+    "valid": false
+  },
+  {
+    "value": "00123456/张三",
+    "valid": false
+  },
+  {
+    "value": "00000000/阿·里 木",
+    "valid": true,
+    "memberId": "00000000",
+    "memberName": "阿·里 木"
+  },
+  {
+    "value": " 00123456/张三 ",
+    "valid": true,
+    "memberId": "00123456",
+    "memberName": "张三"
+  },
+  {
+    "value": "00123456/𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷",
+    "valid": true,
+    "memberId": "00123456",
+    "memberName": "𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷𠮷"
+  },
+  {
+    "value": "00123456/张三",
+    "valid": true,
+    "memberId": "00123456",
+    "memberName": "张三"
+  },
+  {
+    "value": "﻿00123456/张三",
+    "valid": false
+  },
+  {
+    "value": "00123456/张 三",
+    "valid": false
+  },
+  {
+    "value": "00123456/张 三",
+    "valid": false
+  }
+]

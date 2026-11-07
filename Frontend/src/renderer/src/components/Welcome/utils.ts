@@ -1,4 +1,5 @@
 import { DatasourceEnum } from '../../typings'
+import { validateAdminChange } from '../../utils/initialAdministrators'
 import type {
   ApplicationDatasourceConfig,
   ApplicationDraft,
@@ -147,19 +148,12 @@ export function buildApplicationSchema(
   const datasource: ApplicationDatasourceConfig = values.datasource.db?.useBuiltin === true
     ? { type: DatasourceEnum.DB, db: { useBuiltin: true } }
     : { type: DatasourceEnum.DB }
-  const initialAdministratorSubjects = authorizationEnabled
-    ? Array.from(
-        new Set(
-          (values.authorization.initialAdministratorSubjects ?? [])
-            .map((subject) => subject.trim())
-            .filter(Boolean)
-        )
-      )
-    : []
-
   if (authorizationEnabled && values.auth.enable !== true) {
     throw new Error('启用权限控制时必须同时启用认证。')
   }
+  const initialAdministratorSubjects = authorizationEnabled
+    ? validateAdminChange([], values.authorization.initialAdministratorSubjects ?? [])
+    : []
   if (authorizationEnabled && initialAdministratorSubjects.length === 0) {
     throw new Error('启用权限控制时至少填写一个初始管理员 subjectId。')
   }

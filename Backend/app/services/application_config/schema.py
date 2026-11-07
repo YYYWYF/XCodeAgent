@@ -75,8 +75,8 @@ def validate_application_snapshot(application: Any) -> dict[str, Any]:
     if set(application["authorization"]) not in ({"enabled", "initialAdministratorSubjects"}, {"enabled", "initialAdministratorSubjects", "api"}):
         raise ApplicationConfigError("application.json.authorization 只能包含 enabled、initialAdministratorSubjects 和可选 api。")
     subjects = application["authorization"].get("initialAdministratorSubjects")
-    if not isinstance(subjects, list) or any(not isinstance(item, str) or not item.strip() or item == "current-user" for item in subjects):
-        raise ApplicationConfigError("application.json.authorization.initialAdministratorSubjects 必须是真实 subjectId 数组。")
+    if not isinstance(subjects, list) or any(not isinstance(item, str) or not item.strip() or item.strip() == "current-user" for item in subjects):
+        raise ApplicationConfigError("application.json.authorization.initialAdministratorSubjects 必须是有效管理员字符串数组。")
     if values["authorization.enabled"] != bool(subjects):
         raise ApplicationConfigError("application.json.authorization.initialAdministratorSubjects 初始管理员与 enabled 冲突。")
     if values["authorization.enabled"] and not values["auth.enable"]:

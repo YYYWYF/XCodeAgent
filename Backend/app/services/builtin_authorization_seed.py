@@ -13,6 +13,7 @@ from app.services.authorization_manifest import (
     _with_fingerprint,
 )
 from app.services.authorization_table_projection import table_mapping
+from app.services.application_config.initial_administrators import parse_admins_for_initialization
 from app.services.builtin_authorization_state import builtin_binding
 from app.workspace.endpoint_design_documents import technical_plan_path
 
@@ -144,9 +145,13 @@ def compile_builtin_authorization_seed(application: dict, technical_plan: dict, 
     subjects = authorization.get("initialAdministratorSubjects")
     if not isinstance(subjects, list) or not subjects:
         raise ValueError("权限 Seed 需要至少一个真实初始管理员。")
-    admins = {_text(subject, 32) for subject in subjects}
-    if len(admins) > MAX_ADMINS or any(subject != subject.strip() or subject == "current-user" for subject in admins):
-        raise ValueError("权限 Seed 初始管理员无效或超过数量上限。")
+    admins = parse_admins_for_initialization(subjects)
+    for admin in admins:
+        # 旧值继续使用原文本约束，新姓名按 Unicode 码点匹配数据库列长度。
+        if admin.legacy:
+            _text(admin.member_id, 32)
+            if admin.member_id != admin.member_id.strip():
+                raise ValueError("权限 Seed 初始管理员存在首尾空白。")
 
     role = {"role_id": ADMIN, "created_by": "SYSTEM"}
     rows = {
@@ -154,7 +159,8 @@ def compile_builtin_authorization_seed(application: dict, technical_plan: dict, 
                   "enable": 1, "is_system": 1, "is_deleted": 0}],
         "resource": resources,
         "role_resource": [{**role, "resource_key": SYSTEM_RESOURCE_KEY}],
-        "role_member": [{**role, "member_id": subject, "member_name": subject} for subject in sorted(admins)],
+        "role_member": [{**role, "member_id": admin.member_id, "member_name": admin.member_name}
+                        for admin in sorted(admins, key=lambda item: item.member_id)],
     }
     payload = {"purpose": PURPOSE, "tables": [
         {"tableName": name, "rows": rows[logical]} for logical, name in table_mapping(datasource_key).items()

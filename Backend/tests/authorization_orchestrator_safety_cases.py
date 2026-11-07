@@ -14,6 +14,37 @@ from tests.authorization_seed_fixture import save_plan
 class AuthorizationOrchestratorSafetyCases:
     """由生产传输夹具类混入执行，不单独生成第二套业务替身。"""
 
+    def _assert_employee_name_change_never_reposts_seed(self, status: str) -> None:
+        """以真实编排推进状态，再验证改姓名不触发第二次提交或改写操作证据。"""
+
+        self.application["authorization"]["initialAdministratorSubjects"] = ["00123456/张三"]
+        self.begin()
+        self.tick()
+        if status != "RUNNING":
+            self.detail_overrides = {"status": status, "verified": status == "SUCCEEDED"}
+            if status == "UNKNOWN":
+                self.detail_overrides["createdCount"] = 0
+            self.tick()
+        before = deepcopy(read_record(self.root, "state.json"))
+        self.assertEqual(before["seed"]["status"], {"RUNNING": "running", "UNKNOWN": "unknown", "SUCCEEDED": "seed_ready"}.get(status, status))
+        self.application["authorization"]["initialAdministratorSubjects"] = ["00123456/李四"]
+        orchestration.ensure_builtin_authorization_task(str(self.root), source="test")
+        self.tick()
+        self.assertEqual(sum(method == "POST" for method, _ in self.calls), 1)
+        self.assertEqual(read_record(self.root, "state.json"), before)
+
+    def test_running_seed_name_change_never_reposts(self) -> None:
+        """执行中改姓名不能产生新的 Seed。"""
+        self._assert_employee_name_change_never_reposts_seed("RUNNING")
+
+    def test_unknown_seed_name_change_never_reposts(self) -> None:
+        """结果未知时改姓名不能重放或丢失原操作。"""
+        self._assert_employee_name_change_never_reposts_seed("UNKNOWN")
+
+    def test_ready_seed_name_change_never_reposts(self) -> None:
+        """已就绪时改姓名不能重新播种或修改已初始化成员。"""
+        self._assert_employee_name_change_never_reposts_seed("SUCCEEDED")
+
     def test_seed_child_loss_never_becomes_first_submission(self) -> None:
         """Seed 子对象被清空也不能通过 by-key 404 重发 POST。"""
 

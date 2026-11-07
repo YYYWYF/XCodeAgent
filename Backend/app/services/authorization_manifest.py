@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from app.services.requirement_spec import validate_authorization_requirements
+from app.services.application_config.initial_administrators import parse_admins_for_initialization
 
 
 AUTHORIZATION_MANIFEST_SCHEMA_VERSION = "authorization-manifest.v3"
@@ -125,8 +126,11 @@ def validate_authorization_configuration_projection(
     )
     if enabled:
         subjects = application_config.get("authorization", {}).get("initialAdministratorSubjects")
-        if not isinstance(subjects, list) or not any(str(item).strip() and str(item).strip() != "current-user" for item in subjects):
-            errors.append("启用权限时 application.json 必须包含真实初始管理员 subjectId。")
+        try:
+            if not parse_admins_for_initialization(subjects):
+                raise ValueError("初始管理员不能为空。")
+        except ValueError:
+            errors.append("启用权限时 application.json 必须包含有效且无身份冲突的初始管理员。")
     return errors
 
 

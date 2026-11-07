@@ -11,6 +11,7 @@ from app.services.application_config.change import (
     NATURAL_LANGUAGE_MUTABLE_APPLICATION_CONFIG,
 )
 from app.services.application_config.repository import ApplicationConfigRepository
+from app.services.application_config.initial_administrators import validate_admin_change, validate_new_admins
 from app.services.application_config.schema import ApplicationConfigError, normalize_application_configuration, validate_application_configuration
 
 
@@ -47,8 +48,13 @@ class ApplicationConfigService:
             updated[section][field] = change.to_value
         if initial_administrator_subjects is not None:
             updated["authorization"]["initialAdministratorSubjects"] = self._normalize_initial_administrator_subjects(
-                initial_administrator_subjects
+                initial_administrator_subjects, current["authorization"]["initialAdministratorSubjects"]
             )
+        if updated["authorization"]["enabled"] and not current["authorization"]["enabled"]:
+            try:
+                updated["authorization"]["initialAdministratorSubjects"] = validate_new_admins(updated["authorization"]["initialAdministratorSubjects"])
+            except ValueError as exc:
+                raise ApplicationConfigError(str(exc)) from exc
         return validate_application_configuration(normalize_application_configuration(updated))
 
     def changes_for_targets(
@@ -168,20 +174,13 @@ class ApplicationConfigService:
         )
         return [dependency, *changes]
 
-    def _normalize_initial_administrator_subjects(self, values: Sequence[str]) -> list[str]:
-        """去重并拒绝空白或 current-user 等非真实管理员主体。"""
+    def _normalize_initial_administrator_subjects(self, values: Sequence[str], before: list[str]) -> list[str]:
+        """依据磁盘基线保留旧项，严格校验新增或替换项。"""
 
-        subjects: list[str] = []
-        for raw_value in values:
-            subject = str(raw_value).strip()
-            if not subject or subject in subjects:
-                continue
-            if subject == "current-user":
-                raise ApplicationConfigError("初始管理员必须使用真实 subjectId，不能使用 current-user。")
-            subjects.append(subject)
-        if not subjects:
-            raise ApplicationConfigError("启用权限控制时至少需要一个真实初始管理员 subjectId。")
-        return subjects
+        try:
+            return validate_admin_change(before, list(values))
+        except ValueError as exc:
+            raise ApplicationConfigError(str(exc)) from exc
 
 
 def read_application_config(workspace_root: str | Path) -> dict[str, Any]:

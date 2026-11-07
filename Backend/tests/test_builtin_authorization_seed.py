@@ -174,6 +174,18 @@ class BuiltinAuthorizationSeedTests(unittest.TestCase):
         request["tables"][1]["rows"].reverse()
         self.assertNotEqual(seed_request_fingerprint(KEY, request), expected)
 
+    def test_employee_names_project_to_distinct_columns(self) -> None:
+        """新格式按工号排序分列；旧 subject 保持原列值且冲突不能落入载荷。"""
+
+        self.application["authorization"]["initialAdministratorSubjects"] = ["00123456/张三", "00000001/欧阳娜娜", SUBJECT]
+        rows = self.compile()["request"]["tables"][3]["rows"]
+        self.assertEqual([(row["member_id"], row["member_name"]) for row in rows],
+                         [("00000001", "欧阳娜娜"), ("00123456", "张三"), (SUBJECT, SUBJECT)])
+        for values in (["00123456/张三", "00123456/李四"], ["00123456", "00123456/张三"]):
+            self.application["authorization"]["initialAdministratorSubjects"] = values
+            with self.assertRaisesRegex(ValueError, "冲突"):
+                self.compile()
+
     def test_requires_schema_and_confirmed_dag(self) -> None:
         """Schema 或 DAG 未就绪时零 Seed 请求。"""
 

@@ -257,6 +257,7 @@ export default function ApplicationForm({
       <ApplicationConfigEditor
         form={form}
         lockedCapabilities={lockedCapabilities}
+        administratorBaseline={mode !== 'create' && persistedValues.authorization.enabled ? persistedValues.authorization.initialAdministratorSubjects : []}
         mode={mode}
         visiblePaths={[
           'auth.enable', 'auth.yht.clientId', 'auth.yht.privateKey', 'auth.yht.publicKey',

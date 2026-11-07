@@ -16,7 +16,7 @@ function schema(login: boolean, authorization: boolean) {
   draft.auth.enable = login
   Object.assign(draft.auth.yht, { clientId: 'test-client', privateKey: 'test-private', publicKey: 'test-public', centerPublicKey: 'test-center' })
   draft.authorization.enabled = authorization
-  draft.authorization.initialAdministratorSubjects = authorization ? ['test-admin'] : []
+  draft.authorization.initialAdministratorSubjects = authorization ? ['00123456/张三'] : []
   return buildApplicationSchema(draft)
 }
 

@@ -146,7 +146,7 @@ test('旧应用首次启用登录和权限时补齐缺失的嵌套配置', async
   next.auth.yht.publicKey = 'public-key'
   next.auth.yht.centerPublicKey = 'center-public-key'
   next.authorization.enabled = true
-  next.authorization.initialAdministratorSubjects = ['subject-001']
+  next.authorization.initialAdministratorSubjects = ['00123456/张三']
   const calls: unknown[][] = []
 
   await applySettingsConfigChanges(current, next, async (...args) => {
@@ -164,7 +164,7 @@ test('旧应用首次启用登录和权限时补齐缺失的嵌套配置', async
       'auth.yht.privateKey': 'private-key',
       'auth.yht.publicKey': 'public-key',
       'auth.yht.centerPublicKey': 'center-public-key',
-      'authorization.initialAdministratorSubjects': ['subject-001'],
+      'authorization.initialAdministratorSubjects': ['00123456/张三'],
       'authorization.api.baseUrl': LOGIN_AUTHORIZATION_DEFAULTS.baseUrl,
       'authorization.api.viewId': LOGIN_AUTHORIZATION_DEFAULTS.viewId
     }
@@ -183,11 +183,11 @@ test('已启用登录的旧应用首次开启权限时始终提交默认权限 A
   delete current.authorization.api
   const next = createSettingsDraft(current)
   next.authorization.enabled = true
-  next.authorization.initialAdministratorSubjects = ['subject-001']
+  next.authorization.initialAdministratorSubjects = ['00123456/张三']
 
   assert.deepEqual(settingsConfigChanges(current, next), {
     'authorization.enabled': true,
-    'authorization.initialAdministratorSubjects': ['subject-001'],
+    'authorization.initialAdministratorSubjects': ['00123456/张三'],
     'authorization.api.baseUrl': LOGIN_AUTHORIZATION_DEFAULTS.baseUrl,
     'authorization.api.viewId': LOGIN_AUTHORIZATION_DEFAULTS.viewId
   })

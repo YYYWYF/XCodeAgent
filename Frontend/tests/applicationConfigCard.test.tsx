@@ -68,7 +68,7 @@ test('配置卡片用完整应用配置补齐仅注册登录与权限字段的�
       enable: true,
       yht: { clientId: 'client', privateKey: 'private', publicKey: 'public', centerPublicKey: 'center' }
     },
-    authorization: { enabled: true, initialAdministratorSubjects: ['subject-001'] }
+    authorization: { enabled: true, initialAdministratorSubjects: ['00123456/张三'] }
   } as ApplicationDraft
 
   const merged = mergeConversationConfigValues(current, partial)
@@ -81,7 +81,7 @@ test('配置卡片用完整应用配置补齐仅注册登录与权限字段的�
     'auth.yht.privateKey': 'private',
     'auth.yht.publicKey': 'public',
     'auth.yht.centerPublicKey': 'center',
-    'authorization.initialAdministratorSubjects': ['subject-001'],
+    'authorization.initialAdministratorSubjects': ['00123456/张三'],
     'authorization.api.baseUrl': initialApplicationDraft.authorization.api?.baseUrl,
     'authorization.api.viewId': initialApplicationDraft.authorization.api?.viewId
   })
