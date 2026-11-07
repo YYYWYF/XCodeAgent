@@ -953,6 +953,13 @@ export default function AiChatPanel({
     () => new Set()
   )
   const [apiDesignRefreshKey, setApiDesignRefreshKey] = useState(0)
+  const [mappingJourney, setMappingJourney] = useState<{ workspaceRoot: string; target: ApiDesignConfigTarget; destination: 'sources' | 'entity' }>()
+  const [mappingSourceRefreshKey, setMappingSourceRefreshKey] = useState(0)
+  const currentMappingJourney = mappingJourney?.workspaceRoot === application.workspaceRoot
+    && mappingJourney.target.apiContractId === apiDesignConfigTarget?.apiContractId
+    && mappingJourney.target.endpointId === apiDesignConfigTarget?.endpointId ? mappingJourney : undefined
+  // 工作区或 Endpoint 改变即撤销旧返回意图，避免跨应用恢复错误目标。
+  useEffect(() => { setMappingJourney(undefined) }, [application.workspaceRoot, apiDesignConfigTarget?.apiContractId, apiDesignConfigTarget?.endpointId])
   // 工作区切换只清理当前界面目标；磁盘草稿仍按工作区和接口独立保存。
   useEffect(() => {
     setApiDesignConfigTarget(undefined)
@@ -1335,7 +1342,7 @@ export default function AiChatPanel({
     // 在绘制前解除上阶段全宽，避免新验收会话的首帧仍被旧布局隐藏。
     setRightPanelLayout((current) => phaseEntryRightPanelLayout(activeWorkbenchPhase, current))
   }, [activeWorkbenchPhase, setRightPanelLayout])
-  const { artifactDetailLabel, artifactOutlineProps, apiTarget } = useDevelopmentArtifactDetail({
+  const { artifactDetailLabel, artifactOutlineProps, apiTarget, openArtifactOverview } = useDevelopmentArtifactDetail({
     applicationId: application.id,
     setRightPanel,
     setRightPanelLayout
@@ -1344,6 +1351,34 @@ export default function AiChatPanel({
   const handleOpenDatabaseEntity = (entityId: string): void => {
     const entity = developmentPlanningEntities.find((item) => item.id === entityId)
     if (entity) artifactOutlineProps.onEntitySelect?.(entity)
+  }
+  /** 记录原接口后进入既有抽屉，连接与选表仍由抽屉的原按钮负责。 */
+  const handleMappingDatabaseSources = (): void => {
+    if (!workspaceRoot || !apiDesignConfigTarget) return
+    handleSidebarNavigation(() => {
+      setMappingJourney({ workspaceRoot, target: apiDesignConfigTarget, destination: 'sources' })
+      setActiveView('dataSources')
+    })
+  }
+  /** 只定位明确关联的实体，无法定位时保留开发产物菜单供用户选择。 */
+  const handleMappingBuiltinEntity = (entityId?: string): void => {
+    if (!workspaceRoot || !apiDesignConfigTarget) return
+    handleSidebarNavigation(() => {
+      setMappingJourney({ workspaceRoot, target: apiDesignConfigTarget, destination: 'entity' })
+      const entity = developmentPlanningEntities.find((item) => item.id === entityId)
+      if (entity) artifactOutlineProps.onEntitySelect?.(entity)
+      else openArtifactOverview()
+    })
+  }
+  /** 返回同一常驻映射实例，只刷新来源和真实列，不替换或保存草稿。 */
+  const handleBackToFieldMapping = (): void => {
+    if (!currentMappingJourney) return
+    setApiDesignConfigTarget(currentMappingJourney.target)
+    setRightPanel({ type: 'field-mapping' })
+    setRightPanelLayout((current) => current === 'hidden' ? 'split' : current)
+    setMappingSourceRefreshKey((value) => value + 1)
+    setMappingJourney(undefined)
+    setActiveView('chat')
   }
   // 中间区卡片点"查看设计稿"时：切到右侧"UI设计稿"tab 并选中该页。
   const handleUiDesignActivePageChange = useCallback(
@@ -5815,7 +5850,8 @@ export default function AiChatPanel({
           theme={theme}
           workspaceRoot={workspaceRoot || ''}
           onNavigationGuard={registerSourceNavigationGuard}
-          onClose={() => setActiveView('chat')}
+          onBackToFieldMapping={currentMappingJourney?.destination === 'sources' ? handleBackToFieldMapping : undefined}
+          onClose={() => { if (currentMappingJourney?.destination === 'sources') handleBackToFieldMapping(); else setActiveView('chat') }}
         />
       ) : null}
 
@@ -5900,6 +5936,11 @@ export default function AiChatPanel({
               workspaceRoot={workspaceRoot}
               target={apiDesignConfigTarget}
               contracts={developmentPlanningApiContracts}
+              databaseMode={application.datasource.type === 'database' ? application.datasource.db?.useBuiltin === true ? 'builtin' : application.datasource.db?.dbidMode ? 'dbid' : application.datasource.db?.plantMode ? 'direct' : 'external' : undefined}
+              entities={developmentPlanningEntities}
+              onOpenDatabaseSources={handleMappingDatabaseSources}
+              onOpenBuiltinEntityTable={handleMappingBuiltinEntity}
+              sourceRefreshKey={mappingSourceRefreshKey}
               onSelect={setApiDesignConfigTarget}
               onSaved={handleApiDesignConfigSaved}
             />
@@ -5921,6 +5962,8 @@ export default function AiChatPanel({
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
               theme={theme}
+              initialEntityTab={currentMappingJourney?.destination === 'entity' ? 'database' : undefined}
+              onBackToFieldMapping={currentMappingJourney?.destination === 'entity' ? handleBackToFieldMapping : undefined}
               useBuiltinDatabase={application.datasource.type === 'database' && application.datasource.db?.useBuiltin === true}
               onConfigureApi={(target) => handleOpenApiDesignConfig(target)}
               developmentArtifacts={applicationLifecycle?.developmentArtifacts}

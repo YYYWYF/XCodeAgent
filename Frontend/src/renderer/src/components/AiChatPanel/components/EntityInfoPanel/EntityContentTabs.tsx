@@ -1,7 +1,7 @@
 import { CodeOutlined, DatabaseOutlined } from '@ant-design/icons'
 import { Tabs, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { cx } from '../../../../utils'
 import EntityTablePanel from '../EntityTablePanel'
 import EntityDdlPreview from './EntityDdlPreview'
@@ -11,6 +11,7 @@ type Props = {
   entityId: string
   fieldCount: number
   useBuiltinDatabase?: boolean
+  initialTab?: 'fields' | 'database'
   children: ReactNode
 }
 
@@ -20,9 +21,12 @@ export default function EntityContentTabs({
   entityId,
   fieldCount,
   useBuiltinDatabase = false,
+  initialTab = 'fields',
   children
 }: Props): ReactElement {
-  const [activeKey, setActiveKey] = useState('fields')
+  const [activeKey, setActiveKey] = useState(initialTab === 'database' && useBuiltinDatabase ? 'database' : 'fields')
+  // 导航意图只定位页签；实际创建仍由原面板与确认弹窗控制。
+  useEffect(() => { setActiveKey(initialTab === 'database' && useBuiltinDatabase ? 'database' : 'fields') }, [initialTab, useBuiltinDatabase, entityId])
 
   return (
     <Tabs

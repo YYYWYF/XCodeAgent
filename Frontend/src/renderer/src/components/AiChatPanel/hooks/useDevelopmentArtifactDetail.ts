@@ -21,6 +21,7 @@ type Options = {
 }
 
 type DevelopmentArtifactDetail = {
+  openArtifactOverview: () => void
   artifactDetailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
   artifactOutlineProps: Pick<
@@ -72,6 +73,12 @@ export function useDevelopmentArtifactDetail({
   }
 
   return {
+    /** 无关联实体时清除上次浏览对象，仅展示现有产物目录。 */
+    openArtifactOverview: (): void => {
+      setSelection(undefined)
+      setRightPanel({ type: 'outline' })
+      setRightPanelLayout((current) => current === 'hidden' ? 'split' : current)
+    },
     artifactDetailLabel: currentSelection?.label,
     apiTarget: currentSelection?.apiContractId && currentSelection.endpointId
       ? { apiContractId: currentSelection.apiContractId, endpointId: currentSelection.endpointId }

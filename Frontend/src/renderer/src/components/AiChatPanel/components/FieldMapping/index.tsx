@@ -3,7 +3,7 @@ import { ApiOutlined, BulbOutlined, CaretDownOutlined, DownOutlined, EditOutline
 import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag, Tooltip } from 'antd'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { DevelopmentPlanningApiContract, EndpointDesignSaveResult, WorkflowApiDesignDraft } from '../../../../typings'
+import type { DevelopmentPlanningApiContract, DevelopmentPlanningEntityOption, EndpointDesignSaveResult, WorkflowApiDesignDraft } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
 import { cx } from '../../../../utils'
 import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigModal'
@@ -23,15 +23,21 @@ import MappingAssistPanel from './MappingAssistPanel'
 import type { MappingAssistRequest } from '../../../../typings/endpointDesignAssist'
 import { staticFields } from './staticData'
 import { useMockDataAssist } from './useMockDataAssist'
+import { resolveDatabaseGuideEntities, resolveDatabasePrerequisite, type DatabaseModeHint } from './databasePrerequisite'
 
 type Props = {
   workspaceRoot: string; target?: ApiDesignConfigTarget; contracts: DevelopmentPlanningApiContract[]
   onSelect: (target: ApiDesignConfigTarget) => void
   onSaved: (target: ApiDesignConfigTarget, result: EndpointDesignSaveResult) => void | Promise<void>
+  databaseMode?: DatabaseModeHint
+  entities?: DevelopmentPlanningEntityOption[]
+  onOpenDatabaseSources?: (intent: 'configure_connection' | 'add_tables') => void
+  onOpenBuiltinEntityTable?: (entityId?: string) => void
+  sourceRefreshKey?: number
 }
 
 /** 在常驻页签内编辑直接映射，复杂映射仍交给原有编辑器。 */
-export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved }: Props): ReactElement {
+export default function FieldMappingWorkspace({ workspaceRoot, target, contracts, onSelect, onSaved, databaseMode, entities = [], onOpenDatabaseSources, onOpenBuiltinEntityTable, sourceRefreshKey }: Props): ReactElement {
   // 映射失败只归属当前工作台，不参与主工作流的错误与恢复投影。
   const recovery = useEndpointDesignRecovery(workspaceRoot, [endpointRecoveryScope(workspaceRoot), endpointRecoveryScope(workspaceRoot, target)], ['binding'])
   const state = useBindingWorkspace(workspaceRoot, target, onSaved, recovery.report)
@@ -40,6 +46,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   /** 汇总尚未应用的规则编辑器，防止确认旧值。 */
   const trackRuleEditing = useCallback((delta: number) => setEditingRules((count) => count + delta), [])
   const [kind, setKind] = useState<BindingSelection['sourceType']>()
+  const [guideEntityId, setGuideEntityId] = useState<string>()
   const [sourceChanging, setSourceChanging] = useState(false)
   const [pendingSelection, setPendingSelection] = useState<BindingSelection | null>(null)
   const [advanced, setAdvanced] = useState(false)
@@ -103,8 +110,14 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   useEffect(() => { if (assist.phase === 'applying') mock.invalidate() }, [assist.phase, mock.invalidate])
   const withoutSource = fields.length === 0 && !selection && entry?.value.draft.fieldMappings.length === 0 && !entry?.value.draft.externalApiBindings?.length
   const canConfirm = !previewing && !mock.blocking && (!assist.receipt || Object.keys(validationErrors).length === 0) && editable && !sourceChanging && editingRules === 0 && assist.phase === 'idle' && mock.phase === 'idle'
+    && (selection?.sourceType !== 'database' || !state.sourcesRefreshing && !state.sourcesError)
     && (withoutSource || fields.length > 0 && Boolean(selection && (selection.sourceType === 'static' || metadata)) && !metadataLoading && !unavailableTable && !missingFields && !missingQueryColumns && !missingWriteColumns && !missingRequiredExternal)
   const databaseSelection = selection?.sourceType === 'database' ? selection : undefined
+  const prerequisite = resolveDatabasePrerequisite({ kind, mode: databaseMode, catalog, tables, loading: state.sourcesLoading, error: state.sourcesError })
+
+  // 返回时仅刷新候选与真实元数据；保持当前 Endpoint、来源选择及全部内存输入。
+  useEffect(() => { if (sourceRefreshKey) state.refreshSourceCandidates() }, [sourceRefreshKey])
+  useEffect(() => { setGuideEntityId(undefined) }, [state.key])
 
   useEffect(() => { setKind(undefined); setSourceChanging(false); setPendingSelection(null); setAdvanced(false); setSourceCollapsed(false); setValidation(undefined) }, [state.key, entry?.readOnly])
   useEffect(() => { if (selection) setKind(selection.sourceType) }, [state.key, selection?.sourceType])
@@ -118,6 +131,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const sourceLabel = selection?.sourceType === 'static' ? '自定义静态数据' : candidates.find((item) => item.value === selectionKey(selection))?.label || (selection?.sourceType === 'database' ? selection.table : selection?.operationId) || '尚未选择'
   const activeContract = target ? contracts.find((contract) => contract.id === target.apiContractId || contract.endpoints.some((endpoint) => endpoint.id === target.endpointId && (endpoint.apiContractId || contract.id) === target.apiContractId)) : undefined
   const activeEndpoint = activeContract?.endpoints.find((endpoint) => endpoint.id === target?.endpointId)
+  const { relatedEntities, targetEntityId } = resolveDatabaseGuideEntities(activeContract?.entityIds, entities, guideEntityId)
   const activeContractName = activeContract?.name || '未命名接口分组'
   const activeEndpointName = activeEndpoint?.name || String(entry?.preparation.payload.endpoint.name || '') || target?.label || target?.endpointId || '未命名接口'
   const activeEndpointPath = String(entry?.preparation.payload.endpoint.path || activeEndpoint?.path || target?.endpointId || '/')
@@ -224,9 +238,18 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
                   <Radio.Button value="external_api">外部 API</Radio.Button>
                   <Radio.Button value="static">静态数据</Radio.Button>
                 </Radio.Group>
-                {kind && kind !== 'static' && <Select className="binding-target" showSearch optionFilterProp="label" placeholder={kind === 'database' ? '选择已添加的数据表' : '选择域名 / 目录 / 接口'} disabled={busy || entry.conflict} value={displayedSelection?.sourceType === kind ? selectionKey(displayedSelection) : undefined} options={candidates} onDropdownVisibleChange={(open) => { if (open) state.refreshSourceCandidates() }} onChange={(value) => stageSourceSelection(candidates.find((item) => item.value === value)?.selection || null)} />}
+                {kind && kind !== 'static' && <Select className="binding-target" showSearch optionFilterProp="label" placeholder={kind === 'database' ? '选择已添加的数据表' : '选择域名 / 目录 / 接口'} disabled={busy || entry.conflict || kind === 'database' && prerequisite !== 'ready'} value={displayedSelection?.sourceType === kind ? selectionKey(displayedSelection) : undefined} options={candidates} onDropdownVisibleChange={(open) => { if (open) state.refreshSourceCandidates() }} onChange={(value) => stageSourceSelection(candidates.find((item) => item.value === value)?.selection || null)} />}
                 {sourceChanging ? <div className="database-source-toolbar"><Space><Button disabled={busy} onClick={cancelSourceChange}>取消</Button><Button type="primary" disabled={busy || entry.conflict || !pendingSelectionChanged} onClick={() => changeSelection(pendingSelection, kind)}>确认更换</Button></Space></div> : null}
-                {kind && kind !== 'static' && !candidates.length ? <p>暂无可绑定来源，请先配置{kind === 'database' ? '连接并添加数据表' : '外部 API 接口'}。</p> : null}
+                {kind === 'external_api' && !candidates.length ? <p>暂无可绑定来源，请先配置外部 API 接口。</p> : null}
+                {prerequisite !== 'hidden' && prerequisite !== 'ready' && <div className="binding-database-guide" role="status" aria-live="polite">
+                  <strong>{prerequisite === 'loading' ? '正在读取可绑定数据表' : prerequisite === 'load_error' ? '无法读取数据源信息' : prerequisite === 'builtin_create_table' ? '尚未创建模拟数据表' : prerequisite === 'external_config_connection' ? '尚未配置数据库连接' : '尚未添加数据表'}</strong>
+                  <p>{prerequisite === 'load_error' ? state.sourcesError || '数据源状态无法确认，请检查应用配置并重新读取。' : prerequisite === 'builtin_create_table' ? '请先在“开发产物 → 实体 → 模拟数据表”中创建数据表，完成真实结构核验后即可进行字段映射。运行中或结果未知时，请在原面板刷新结果。' : prerequisite === 'external_config_connection' ? '请先配置数据库连接，连接成功后再添加需要绑定的数据表。' : prerequisite === 'external_add_table' ? '请从已配置数据库中选择需要参与当前应用字段映射的数据表。添加候选不会创建物理表。' : '请稍候，正在读取当前数据库目录。'}</p>
+                  {prerequisite === 'loading' ? <Spin size="small" /> : prerequisite === 'load_error' ? <Button onClick={state.refreshSourceCandidates}>重试读取</Button> : prerequisite === 'builtin_create_table' ? <>
+                    {relatedEntities.length > 1 && <Select aria-label="选择关联实体" placeholder="请选择关联实体" value={targetEntityId} options={relatedEntities.map((entity) => ({ value: entity.id, label: entity.label }))} onChange={setGuideEntityId} />}
+                    {!relatedEntities.length && <p>未能确定关联实体，请先核对技术规划，或到开发产物列表选择实体。</p>}
+                    <Button disabled={busy || !onOpenBuiltinEntityTable || relatedEntities.length > 1 && !targetEntityId} onClick={() => onOpenBuiltinEntityTable?.(targetEntityId)}>{relatedEntities.length ? '前往实体建表' : '前往开发产物'}</Button>
+                  </> : <Button disabled={busy || !onOpenDatabaseSources} onClick={() => onOpenDatabaseSources?.(prerequisite === 'external_config_connection' ? 'configure_connection' : 'add_tables')}>{prerequisite === 'external_config_connection' ? '去配置连接' : '去添加数据表'}</Button>}
+                </div>}
               </>}
               {unavailableTable ? <Alert type="warning" message="所选表已不在当前应用的可用表清单中，请刷新数据源并重新选择。" /> : null}
               {missingFields ? <Alert type="warning" message="映射引用的数据库字段已发生变化，请重新配置并确认 API 映射。" /> : null}

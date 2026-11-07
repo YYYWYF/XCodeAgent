@@ -12,6 +12,8 @@ import './DevelopmentArtifactsPanel.less'
 type Props = ApplicationOutlineProps & {
   theme: 'light' | 'dark'
   useBuiltinDatabase?: boolean
+  initialEntityTab?: 'fields' | 'database'
+  onBackToFieldMapping?: () => void
   onEndpointRecovery?: EndpointRecoveryReporter
   detailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
@@ -24,6 +26,8 @@ type Props = ApplicationOutlineProps & {
 export default function DevelopmentArtifactsPanel({
   theme,
   useBuiltinDatabase,
+  initialEntityTab,
+  onBackToFieldMapping,
   detailLabel,
   apiTarget,
   workspaceRoot,
@@ -50,6 +54,7 @@ export default function DevelopmentArtifactsPanel({
         aria-label={detailLabel ? `${detailLabel}详情` : '开发产物详情'}
         className={cx('development-artifacts-detail')}
       >
+        {onBackToFieldMapping && <Button className={cx('development-artifacts-return')} onClick={onBackToFieldMapping}>返回字段映射</Button>}
         {apiTarget && onConfigureApi ? (
           <Button onClick={() => onConfigureApi({ ...apiTarget, label: detailLabel })}>
             打开字段映射
@@ -91,6 +96,7 @@ export default function DevelopmentArtifactsPanel({
             theme={theme}
             workspaceRoot={workspaceRoot}
             useBuiltinDatabase={useBuiltinDatabase}
+            initialTab={initialEntityTab}
           />
         ) : (
           <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
