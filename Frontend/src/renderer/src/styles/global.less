@@ -398,6 +398,16 @@ body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
     background: var(--wb-surface);
     border-color: var(--wb-border);
   }
+
+  // Alert 标题有独立的默认黑色，必须显式使用主题令牌，避免深色背景下无法阅读。
+  .ant-alert-message,
+  .ant-alert-description {
+    color: var(--wb-text);
+  }
+
+  .ant-alert-info .ant-alert-icon {
+    color: var(--wb-accent);
+  }
 }
 
 .@{class-prefix}-workbench-pane {
