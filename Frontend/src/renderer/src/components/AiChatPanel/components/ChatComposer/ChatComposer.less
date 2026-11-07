@@ -360,17 +360,33 @@
     font-size: 17px;
   }
 
-  &:hover,
-  &:focus {
-    color: var(--wb-text-secondary);
-    background: transparent;
+  &:not([disabled]):hover,
+  &:not([disabled]):focus {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
     border-color: transparent;
     box-shadow: none;
+  }
+
+  &:not([disabled]):focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 2px;
   }
 
   &.@{class-prefix}-active {
     color: var(--wb-accent);
     background: var(--wb-accent-soft);
+  }
+
+  // 覆盖 Ant Design 文本按钮的半透明黑色禁用态，保证明暗主题下图标仍可辨认。
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus,
+  &[disabled]:active {
+    color: var(--wb-text-tertiary);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
   }
 }
 
