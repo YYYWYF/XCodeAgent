@@ -1,4 +1,4 @@
-"""工作台正式修订草稿的创建、保存、确认和放弃协调服务。"""
+"""工作台结构化修订草稿的创建、确认和放弃协调服务。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from app.workspace.revision_draft_documents import (
 )
 
 
-MarkdownSynchronizer = Callable[[str, dict[str, Any]], dict[str, Any]]
+ArtifactPreparer = Callable[[dict[str, Any]], dict[str, Any]]
 ArtifactValidator = Callable[[dict[str, Any]], None]
 EMPTY_CANONICAL_SHA256 = hashlib.sha256(b"").hexdigest()
 
@@ -35,7 +35,6 @@ def create_revision_draft(
     kind: str,
     target_id: str,
     canonical_json_path: str | Path,
-    markdown: str,
     artifact: dict[str, Any],
     based_on_paths: dict[str, str | Path],
 ) -> RevisionDraftMetadata:
@@ -67,33 +66,9 @@ def create_revision_draft(
     write_revision_draft(
         workspace,
         metadata=metadata,
-        markdown=markdown,
         artifact=draft_artifact,
     )
     return metadata
-
-
-def save_revision_draft_markdown(
-    workspace: str | Path,
-    *,
-    change_id: str,
-    artifact_key: str,
-    markdown: str,
-) -> str:
-    """只覆盖当前草稿 Markdown 并返回正文哈希，保存不等于确认。"""
-
-    metadata, _old_markdown, artifact = load_revision_draft(
-        workspace,
-        change_id=change_id,
-        artifact_key=artifact_key,
-    )
-    write_revision_draft(
-        workspace,
-        metadata=metadata,
-        markdown=markdown,
-        artifact=artifact,
-    )
-    return hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 
 
 def confirm_revision_draft(
@@ -101,15 +76,14 @@ def confirm_revision_draft(
     *,
     change_id: str,
     artifact_key: str,
-    canonical_markdown_path: str | Path,
     canonical_json_path: str | Path,
     based_on_paths: dict[str, str | Path],
-    synchronize_markdown: MarkdownSynchronizer,
+    prepare_artifact: ArtifactPreparer,
     validate_artifact: ArtifactValidator,
 ) -> dict[str, Any]:
-    """校验基线、同步 Markdown、验证领域结构并原子提交当前 canonical。"""
+    """校验原有基线和上游约束，确认当前结构化草稿并原子提交。"""
 
-    metadata, markdown, artifact = load_revision_draft(
+    metadata, artifact = load_revision_draft(
         workspace,
         change_id=change_id,
         artifact_key=artifact_key,
@@ -126,11 +100,9 @@ def confirm_revision_draft(
     }
     if expected_upstream != actual_upstream:
         raise ValueError("草稿直接上游已变化，请重新生成 revision 草稿。")
-    synchronized = synchronize_markdown(markdown, dict(artifact))
-    if not isinstance(synchronized, dict):
-        raise ValueError("Markdown 同步器必须返回完整内部 JSON。")
+    prepared = prepare_artifact(dict(artifact))
     confirmed = {
-        **synchronized,
+        **prepared,
         "confirmation_status": "confirmed",
         "basedOn": [
             {"artifactKey": key, "sha256": value}
@@ -138,12 +110,15 @@ def confirm_revision_draft(
         ],
     }
     validate_artifact(confirmed)
-    _commit_canonical_pair(
-        markdown_path=Path(canonical_markdown_path),
-        json_path=Path(canonical_json_path),
-        markdown=markdown,
-        artifact=confirmed,
+    json_path = Path(canonical_json_path)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name = _temporary_text(
+        json_path, json.dumps(confirmed, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
     )
+    try:
+        os.replace(temporary_name, json_path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
     discard_revision_draft(
         workspace,
         change_id=change_id,
@@ -170,35 +145,6 @@ def discard_current_revision_draft(
         change_id=change_id,
         artifact_key=artifact_key,
     )
-
-
-def _commit_canonical_pair(
-    *,
-    markdown_path: Path,
-    json_path: Path,
-    markdown: str,
-    artifact: dict[str, Any],
-) -> None:
-    """先落临时文件，再按 Markdown 后 JSON 顺序提交一个正式产物。"""
-
-    if markdown_path.parent != json_path.parent:
-        raise ValueError("canonical Markdown 与 JSON 必须位于同一产物目录。")
-    markdown_path.parent.mkdir(parents=True, exist_ok=True)
-    markdown_temp = _temporary_text(markdown_path, markdown)
-    json_temp = _temporary_text(
-        json_path,
-        json.dumps(artifact, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-    )
-    try:
-        os.replace(markdown_temp, markdown_path)
-        os.replace(json_temp, json_path)
-    except Exception:
-        for temporary_name in (markdown_temp, json_temp):
-            try:
-                os.unlink(temporary_name)
-            except FileNotFoundError:
-                pass
-        raise
 
 
 def _temporary_text(path: Path, value: str) -> str:

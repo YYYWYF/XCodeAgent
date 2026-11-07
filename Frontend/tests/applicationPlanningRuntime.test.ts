@@ -403,7 +403,6 @@ async function waitForCondition<T>(
     confirmedAt: '2026-11-06T05:19:58Z',
     directories: { specs: '.devagentstudio/specs', plans: '.devagentstudio/plans' },
     artifacts: { technicalPlan: {
-      markdown: { format: 'markdown', path: '.devagentstudio/plans/technical-plan.md', sha256: 'a'.repeat(64) },
       json: { format: 'json', path: '.devagentstudio/plans/technical-plan.json', sha256: 'b'.repeat(64) }
     } }
   }

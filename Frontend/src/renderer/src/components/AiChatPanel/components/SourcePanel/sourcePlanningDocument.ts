@@ -28,15 +28,15 @@ export const SOURCE_DOCUMENT_LABELS: Record<SourcePlanningDocumentKey, string> =
   'technical-plan': '技术规划'
 }
 
-/** 读取所选 Markdown 对应的内部 JSON，保持工作区、草稿位置与 Git 修订一致。 */
+/** 读取所选规划的结构化数据，保持工作区、草稿位置与 Git 修订一致。 */
 export async function readSourcePlanningDocument(
   request: SourcePlanningDocumentRequest,
   readFile: FileReader = readWorkspaceFile
 ): Promise<SourcePlanningDocument> {
   const label = SOURCE_DOCUMENT_LABELS[request.documentKey]
   /** 校验完整对象后才交给可视化组件，避免截断或非法 JSON 被误展示为空文档。 */
-  const readDocument = async (markdownPath: string): Promise<JsonRecord> => {
-    const path = markdownPath.replace(/\.md$/, '.json')
+  const readDocument = async (documentPath: string): Promise<JsonRecord> => {
+    const path = documentPath.replace(/\.md$/, '.json')
     const result = await readFile({
       workspace_root: request.workspaceRoot,
       path,

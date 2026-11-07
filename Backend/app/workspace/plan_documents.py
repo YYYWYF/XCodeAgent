@@ -727,137 +727,8 @@ def _page_implementation_contract_markdown(contract: dict[str, Any]) -> str:
     )
 
 
-def _technical_page_references_markdown(page: dict[str, Any]) -> str:
-    """渲染当前页面新增的 endpoint 依赖与业务 action 实现。"""
-
-    references = page.get("references") if isinstance(page.get("references"), dict) else {}
-    dependencies = [
-        f"  - `{item.get('endpoint_id', '')}`：{item.get('usage', '')}；"
-        f"触发={item.get('trigger', '')}；首屏必需={bool(item.get('required_for_initial_load'))}"
-        for item in _dict_items(references.get("endpoint_dependencies"))
-    ]
-    implementations = [
-        f"  - `{item.get('actionId', '')}`："
-        f"{json.dumps({key: value for key, value in item.items() if key != 'actionId'}, ensure_ascii=False)}"
-        for item in _dict_items(references.get("action_implementations"))
-    ]
-    return "\n".join(
-        [
-            f"### `{page.get('pageId', 'unknown')}`",
-            "",
-            "Endpoint 依赖：",
-            *(dependencies or ["  - 无"]),
-            "",
-            "业务 Action 实现：",
-            *(implementations or ["  - 无"]),
-        ]
-    )
-
-
-def _technical_entity_markdown(entity: dict[str, Any]) -> str:
-    """把 TechnicalPlan 权威实体字段渲染为开发可审核的 Markdown。"""
-
-    fields = _dict_items(entity.get("fields"))
-    field_rows = [
-        "| 字段名 | 展示名 | 类型 | 必填 | 说明 |",
-        "| --- | --- | --- | --- | --- |",
-        *[
-            f"| `{field.get('name', '')}` | {field.get('label', '')} | "
-            f"{field.get('type', 'text')} | {'是' if field.get('required') else '否'} | "
-            f"{field.get('description', '') or '-'} |"
-            for field in fields
-        ],
-    ]
-    return "\n".join(
-        [
-            f"### {entity.get('name', entity.get('id', '未命名实体'))} "
-            f"(`{entity.get('id', 'unknown')}`)",
-            "",
-            str(entity.get("description") or "暂无实体描述。"),
-            "",
-            *(
-                [f"- 数据库真实表名：`{entity['table_name']}`", ""]
-                if entity.get("table_name") else []
-            ),
-            *(field_rows if fields else ["- 暂无字段"]),
-        ]
-    )
-
-
-def _authorization_manifest_markdown(plan: dict[str, Any]) -> str:
-    """仅渲染本阶段的接口权限绑定，角色及资源授权在需求阶段确认。"""
-
-    manifest = plan.get("authorization_manifest")
-    if not isinstance(manifest, dict):
-        return "- 暂无接口权限绑定。"
-    bindings = manifest.get("bindings") if isinstance(manifest.get("bindings"), dict) else {}
-    endpoint_lines = [
-        f"| `{item.get('endpointId', '')}` | {', '.join(f'`{key}`' for key in _text_items(item.get('operationResourceKeys'))) or '-'} | {'ANY-OF' if _text_items(item.get('operationResourceKeys')) else '未设置资源权限控制'} |"
-        for item in _dict_items(bindings.get("endpoints"))
-    ]
-    return "\n".join([
-        "- 角色、页面/操作资源及默认授权已在需求阶段确认；调整授权请返回需求阶段重新确认。",
-        "- 本阶段按业务操作调用的接口生成权限绑定，页面权限与接口权限独立。",
-        f"- Manifest：`{manifest.get('schema_version', '')}`",
-        f"- 指纹：`{manifest.get('fingerprint', '')}`",
-        "",
-        "Endpoint 操作资源绑定：",
-        "| Endpoint | 操作资源 | 裁决 |",
-        "| --- | --- | --- |",
-        *(endpoint_lines or ["| 无 | - | - |"]),
-    ])
-
-
-def _render_technical_plan_markdown(plan: dict[str, Any]) -> str:
-    """渲染只供开发审核且不重复产品事实的 TechnicalPlan。"""
-
-    architecture = plan.get("architecture") if isinstance(plan.get("architecture"), dict) else {}
-    api_contracts = "\n\n".join(
-        _api_contract_markdown(contract)
-        for contract in _dict_items(plan.get("api_contracts"))
-    )
-    entities = "\n\n".join(
-        _technical_entity_markdown(entity)
-        for entity in _dict_items(plan.get("entities"))
-    )
-    pages = "\n\n".join(
-        _technical_page_references_markdown(page)
-        for page in _dict_items(plan.get("pages"))
-    )
-    return f"""# 技术规划
-
-- 状态：{_status_label(plan.get('confirmation_status', 'draft'))}
-- 类型：{plan.get('artifact_type', TECHNICAL_PLAN_ARTIFACT_TYPE)}
-
-## 技术架构
-
-- 前端：{architecture.get('frontend', '待补充')}
-- 后端：{architecture.get('backend', '待补充')}
-- 数据：{architecture.get('data', '待补充')}
-
-## 业务实体
-
-{entities or '- 无'}
-
-## API 契约
-
-{api_contracts or '- 无'}
-
-## 页面技术引用
-
-{pages or '- 无'}
-
-## 接口权限绑定（系统编译，只读）
-
-{_authorization_manifest_markdown(plan)}
-"""
-
-
 def render_project_plan_markdown(plan: dict[str, Any]) -> str:
     """按 ProjectPlan 数据源类型渲染真实 HTTP 或前端 Mock 契约文档。"""
-
-    if plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
-        return _render_technical_plan_markdown(plan)
 
     overview = plan.get("requirements_overview", {})
     acceptance_criteria = plan.get("project_acceptance_criteria") or plan.get(
@@ -1036,9 +907,8 @@ def render_project_plan_markdown(plan: dict[str, Any]) -> str:
 def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> str:
     """写入当前规划文档；创建流程只写当前 TechnicalPlan。"""
 
-    if state.get("workflow_scope") == "application_planning":
-        markdown_path, _ = write_technical_plan_document(state, plan)
-        return markdown_path
+    if plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        return write_technical_plan_document(state, plan)
 
     path = project_plan_markdown_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1048,35 +918,16 @@ def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> 
     return str(path)
 
 
-def technical_plan_markdown_path(state: dict[str, Any]) -> Path:
-    """返回开发确认使用的 TechnicalPlan Markdown 正式路径。"""
-
-    return workflow_artifact_root(state) / "plans" / "technical-plan.md"
-
-
 def technical_plan_json_path(state: dict[str, Any]) -> Path:
     """返回开发确认使用的 TechnicalPlan JSON 正式路径。"""
 
     return workflow_artifact_root(state) / "plans" / "technical-plan.json"
 
 
-def edited_technical_plan_markdown(
-    state: dict[str, Any],
-    plan: dict[str, Any],
-) -> str | None:
-    """读取用户在开发确认阶段直接修改的 TechnicalPlan Markdown。"""
-
-    path = technical_plan_markdown_path(state)
-    if not path.is_file():
-        return None
-    content = path.read_text(encoding="utf-8")
-    return content if content != render_project_plan_markdown(plan) else None
-
-
 def write_technical_plan_document(
     state: dict[str, Any],
     plan: dict[str, Any],
-) -> tuple[str, str]:
+) -> str:
     """写入当前 TechnicalPlan 正式文件，并复用事务化原子提交实现。"""
 
     return commit_technical_plan_document(state, plan)
@@ -1087,24 +938,21 @@ def commit_technical_plan_document(
     plan: dict[str, Any],
     *,
     expected_sha256: str | None = None,
-) -> tuple[str, str]:
-    """以确定性、幂等且可重复执行的方式提交 TechnicalPlan JSON/Markdown。"""
+) -> str:
+    """原子提交 TechnicalPlan 结构化数据，不读取或处理同目录的其他文件。"""
 
     from app.domain.application_planning_recovery import application_planning_sha256
     from app.workspace.detail_design_documents import externalize_detail_designs
 
     json_path = technical_plan_json_path(state)
-    markdown_path = technical_plan_markdown_path(state)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     actual_sha256 = application_planning_sha256(plan)
     if expected_sha256 is not None and actual_sha256 != expected_sha256:
         raise ValueError("TechnicalPlan candidate SHA-256 与提交内容不一致。")
     compact_plan = externalize_detail_designs(state, plan)
     json_content = f"{json.dumps(compact_plan, ensure_ascii=False, indent=2)}\n"
-    markdown_content = render_project_plan_markdown(compact_plan)
     _write_text_atomically(json_path, json_content)
-    _write_text_atomically(markdown_path, markdown_content)
-    return str(markdown_path), str(json_path)
+    return str(json_path)
 
 
 def _write_text_atomically(path: Path, content: str) -> None:

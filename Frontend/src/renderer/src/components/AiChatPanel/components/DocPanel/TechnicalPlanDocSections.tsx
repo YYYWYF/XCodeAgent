@@ -15,14 +15,12 @@ import {
   authenticationLabel,
   fieldLabel,
   methodClass,
-  parameterSummary,
   recordItems,
-  schemaFor,
   stringItems,
   textValue,
   type JsonRecord
 } from './TechnicalPlanDocPanelData'
-import { SchemaTree } from './TechnicalPlanSchemaTree'
+import { EndpointInspector } from './TechnicalPlanEndpointInspector'
 
 const { Text } = Typography
 
@@ -298,74 +296,6 @@ export function ContractSection({
         </div>
       </div>
     </section>
-  )
-}
-
-/** 渲染所选 Endpoint 的参数、Schema、错误码和字段血缘检查器。 */
-export function EndpointInspector({
-  contract,
-  endpoint
-}: {
-  contract: JsonRecord
-  endpoint: JsonRecord
-}): ReactElement {
-  const responseRef = textValue(endpoint.response_schema_ref)
-  const requestRef = textValue(endpoint.request_schema_ref)
-  const schemaRef = responseRef || requestRef
-  const schema = schemaFor(contract, schemaRef)
-  const schemas = asRecord(contract.schemas)
-  const errorCodes = stringItems(endpoint.error_codes)
-  return (
-    <div className={cx('technical-plan-inspector')}>
-      <div className={cx('technical-plan-inspector-title')}>
-        <span
-          className={cx(
-            'technical-plan-method',
-            methodClass(textValue(endpoint.method, 'GET').toUpperCase())
-          )}
-        >
-          {textValue(endpoint.method, 'GET').toUpperCase()}
-        </span>
-        <strong className={cx('technical-plan-endpoint-name')}>
-          {textValue(endpoint.name, '未命名接口')}
-        </strong>
-        <code>{textValue(endpoint.path, '/')}</code>
-      </div>
-      <dl className={cx('technical-plan-inspector-grid')}>
-        <div>
-          <dt>鉴权</dt>
-          <dd>{authenticationLabel(endpoint.authentication || contract.authentication)}</dd>
-        </div>
-        <div>
-          <dt>参数</dt>
-          <dd>{parameterSummary(endpoint)}</dd>
-        </div>
-        <div>
-          <dt>请求</dt>
-          <dd>{requestRef || '无'}</dd>
-        </div>
-        <div>
-          <dt>响应</dt>
-          <dd>{responseRef || '无'}</dd>
-        </div>
-        <div>
-          <dt>错误码</dt>
-          <dd>{errorCodes.length ? errorCodes.join('、') : '未声明'}</dd>
-        </div>
-      </dl>
-      {schemaRef ? (
-        <div className={cx('technical-plan-schema-card')}>
-          <div className={cx('technical-plan-schema-heading')}>
-            <strong>{responseRef ? '响应 Schema' : '请求 Schema'}</strong>
-          </div>
-          {Object.keys(schema).length ? (
-            <SchemaTree name={schemaRef} schema={schema} schemas={schemas} />
-          ) : (
-            <Text type="secondary">Schema 引用暂不可解析</Text>
-          )}
-        </div>
-      ) : null}
-    </div>
   )
 }
 

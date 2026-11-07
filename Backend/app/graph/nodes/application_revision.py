@@ -5,16 +5,14 @@ from __future__ import annotations
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.planner import plan_project_with_chat_model
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
-from app.services.generated_document_inclusion import write_generated_documents
+from app.domain.application_planning_recovery import application_planning_sha256
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
 from app.services.entity_table_binding import bind_plan_entity_tables
@@ -40,13 +38,11 @@ from app.services.revision_drafts import (
     confirm_revision_draft,
     create_revision_draft,
     discard_current_revision_draft,
-    save_revision_draft_markdown,
 )
 from app.workspace.plan_documents import (
     load_project_plan_json,
-    render_project_plan_markdown,
 )
-from app.workspace.revision_draft_documents import load_revision_draft, revision_draft_directory
+from app.workspace.revision_draft_documents import load_revision_draft
 from app.workspace.spec_documents import load_requirement_spec_json, load_ui_designs_json
 
 
@@ -85,6 +81,8 @@ def _await_revision_draft(
 ) -> dict[str, Any]:
     """登记当前 TechnicalPlan 草稿，并以技术规划节点语义返回确认卡。"""
 
+    # 正文进入统一文档引用链路；确认信息只保留版本身份，不复制整份计划。
+    review = {key: value for key, value in draft.items() if key not in {"technicalPlan", "productPlan"}}
     update_active_revision_progress(
         workspace,
         change_id=change_id,
@@ -95,8 +93,8 @@ def _await_revision_draft(
     clarification = {
         "mode": "revision_draft_confirmation",
         "status": "requires_user_input",
-        "message": "TechnicalPlan 已重新生成；保存只更新草稿，确认后才覆盖 canonical。",
-        "revisionDraft": draft,
+        "message": "技术规划已重新生成，请审阅当前草稿；确认后才更新正式版本。",
+        "revisionDraft": review,
         "questions": [
             {
                 "id": "revision_draft_confirmation",
@@ -115,7 +113,9 @@ def _await_revision_draft(
         "status": "requires_user_input",
         "node_name": "technical_planning",
         "change_id": change_id,
-        "revision_draft": draft,
+        "revision_draft": review,
+        "technical_plan": draft["technicalPlan"],
+        "product_plan": draft["productPlan"],
         "clarification": clarification,
         "timeline": ["technical_planning"],
     }
@@ -128,18 +128,10 @@ def _handle_revision_interaction(
     *,
     source_execution_run_id: str,
 ) -> dict[str, Any]:
-    """执行当前草稿的 save/revise/confirm/discard，并拒绝隐式 Graph 恢复语义。"""
+    """执行当前草稿的修订、确认或放弃，确认前不覆盖正式产物。"""
 
     artifact_key = str(interaction.get("artifact_key") or "")
     action = str(interaction.get("action") or "")
-    edited_markdown = interaction.get("edited_markdown")
-    if edited_markdown is not None:
-        save_revision_draft_markdown(
-            workspace,
-            change_id=active.change_id,
-            artifact_key=artifact_key,
-            markdown=str(edited_markdown),
-        )
     if action == "discard":
         discard_current_revision_draft(
             workspace,
@@ -155,8 +147,6 @@ def _handle_revision_interaction(
             "clarification": {},
             "timeline": ["application_revision"],
         }
-    if action == "save":
-        return _await_loaded_revision_draft(workspace, active.change_id, artifact_key)
     if action == "revise":
         discard_current_revision_draft(
             workspace,
@@ -282,49 +272,28 @@ def _create_technical_plan_draft(
     artifact = attach_page_implementation_contracts(artifact, product_plan, ui_designs)
     artifact["confirmation_status"] = "pending_user_confirmation"
     _validate_technical_plan(artifact, requirement_spec, product_plan, ui_designs, technical_input["application_config"])
-    markdown = render_project_plan_markdown(artifact)
     based_on_paths = {
         "product-plan": plans / "product-plan.json",
         "ui-design": specs / "ui-designs.json",
     }
-    draft_path = revision_draft_directory(
-        workspace, change_id=active.change_id, artifact_key="technical-plan",
-    ) / "artifact.md"
-    metadata = write_generated_documents(
-        {"workspace": str(workspace)}, [draft_path], create_revision_draft, workspace,
+    create_revision_draft(
+        workspace,
         change_id=active.change_id,
         artifact_key="technical-plan",
         kind="technical_plan",
         target_id="application",
         canonical_json_path=canonical_json,
-        markdown=markdown,
         artifact=artifact,
         based_on_paths=based_on_paths,
     )
-    return _draft_projection(metadata.artifact_key, markdown, metadata)
-
-
-def _await_loaded_revision_draft(
-    workspace: Path,
-    change_id: str,
-    artifact_key: str,
-) -> dict[str, Any]:
-    """重新投影刚保存的 Markdown 与新 hash，并维持同一显式确认门。"""
-
-    metadata, markdown, _artifact = load_revision_draft(
-        workspace,
-        change_id=change_id,
-        artifact_key=artifact_key,
+    metadata, artifact = load_revision_draft(
+        workspace, change_id=active.change_id, artifact_key="technical-plan",
     )
-    return _await_revision_draft(
-        workspace,
-        change_id,
-        _draft_projection(artifact_key, markdown, metadata),
-    )
+    return _draft_projection(metadata.artifact_key, artifact, product_plan, metadata)
 
 
 def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> None:
-    """按当前 TechnicalPlan 合同同步 Markdown、校验并原子覆盖 canonical。"""
+    """按当前 TechnicalPlan 合同重新编译依赖、校验并原子覆盖正式数据。"""
 
     plans = workspace / WORKSPACE_ARTIFACT_DIR / "plans"
     specs = workspace / WORKSPACE_ARTIFACT_DIR / "specs"
@@ -336,21 +305,11 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
     if not requirement_spec or not product_plan or not ui_designs:
         raise ValueError("TechnicalPlan 确认缺少已确认上游。")
 
-    def synchronize(markdown: str, artifact: dict[str, Any]) -> dict[str, Any]:
-        """仅在用户改动 Markdown 时调用现有同步 Agent，并重新附加上游哈希。"""
+    def prepare(artifact: dict[str, Any]) -> dict[str, Any]:
+        """以当前应用配置及已确认上游重新编译结构化草稿。"""
 
-        generated_markdown = render_project_plan_markdown(artifact)
-        synchronized = (
-            artifact
-            if markdown == generated_markdown
-            else sync_project_plan_from_markdown(
-                artifact,
-                requirement_spec,
-                markdown,
-            )
-        )
-        synchronized.pop("basedOn", None)
-        synchronized = bind_plan_entity_tables(synchronized, read_application_config(workspace))
+        artifact.pop("basedOn", None)
+        synchronized = bind_plan_entity_tables(artifact, read_application_config(workspace))
         return attach_page_implementation_contracts(
             synchronized,
             product_plan,
@@ -361,13 +320,12 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
         workspace,
         change_id=active.change_id,
         artifact_key=artifact_key,
-        canonical_markdown_path=plans / "technical-plan.md",
         canonical_json_path=plans / "technical-plan.json",
         based_on_paths={
             "product-plan": plans / "product-plan.json",
             "ui-design": specs / "ui-designs.json",
         },
-        synchronize_markdown=synchronize,
+        prepare_artifact=prepare,
         validate_artifact=lambda artifact: _validate_technical_plan(
             artifact,
             requirement_spec,
@@ -426,22 +384,24 @@ def _current_plan_state(workspace: Path) -> dict[str, Any]:
     )
     return {
         "technical_plan": technical_plan,
-        "technical_plan_path": str(plans / "technical-plan.md"),
         "technical_plan_json_path": str(technical_path),
         "project_plan": runtime,
-        "project_plan_path": str(plans / "technical-plan.md"),
+        "project_plan_path": str(technical_path),
         "project_plan_json_path": str(technical_path),
         "pages": [page for page in runtime.get("pages", []) if isinstance(page, dict)],
     }
 
 
-def _draft_projection(artifact_key: str, markdown: str, metadata: Any) -> dict[str, Any]:
-    """构造不暴露内部 JSON 的 revision-draft AG-UI 公开载荷。"""
+def _draft_projection(
+    artifact_key: str, artifact: dict[str, Any], product_plan: dict[str, Any], metadata: Any,
+) -> dict[str, Any]:
+    """构造供可视化审阅的结构化草稿，确认哈希绑定服务端当前候选。"""
 
     return {
         "artifactKey": artifact_key,
-        "markdown": markdown,
-        "draftSha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        "technicalPlan": artifact,
+        "productPlan": product_plan,
+        "draftSha256": application_planning_sha256(artifact),
         "basedOn": [
             item.model_dump(mode="json", by_alias=True)
             for item in metadata.based_on_canonical

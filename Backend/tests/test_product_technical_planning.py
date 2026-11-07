@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from copy import deepcopy
 from unittest.mock import patch
 
@@ -22,7 +24,6 @@ from app.agents.main.requirements_analyzer import (
     _requirements_prompt,
     _validate_complete_requirement_spec,
 )
-from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.services.page_implementation_contract import (
     attach_page_implementation_contracts,
     expected_business_action_implementations,
@@ -47,7 +48,7 @@ from app.services.project_plan import (
     validate_technical_plan_api_contracts,
 )
 from app.workspace.spec_documents import render_requirement_spec_markdown
-from app.workspace.plan_documents import render_project_plan_markdown
+from app.workspace.plan_documents import commit_technical_plan_document
 
 
 def technical_model_entities(requirement_spec: dict) -> dict:
@@ -906,84 +907,6 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             )
         )
 
-    def test_technical_markdown_sync_does_not_inject_authorization_data_bindings(self) -> None:
-        """技术文档同步不得把平台权限绑定伪装成模型输出。"""
-
-        existing_plan = {
-            "artifact_type": "technical-plan",
-            "authorization_manifest": {"bindings": {"dataRules": ["forbidden"]}},
-        }
-        synced_plan = {
-            "architecture": {},
-            "entities": [],
-            "api_contracts": [],
-            "pages": [],
-            "template_capabilities": {},
-        }
-        with patch(
-            "app.agents.main.document_sync._invoke_sync_model",
-            return_value=synced_plan,
-        ), patch(
-            "app.agents.main.document_sync.create_technical_plan",
-            return_value={},
-        ) as create_plan, patch(
-            "app.agents.main.document_sync.validate_api_contract_consistency",
-            return_value=[],
-        ):
-            sync_project_plan_from_markdown(existing_plan, {}, "# TechnicalPlan")
-
-        self.assertNotIn(
-            "authorization_data_bindings",
-            create_plan.call_args.kwargs["agent_plan"],
-        )
-
-    def test_technical_markdown_sync_preserves_hidden_api_names(self) -> None:
-        """Markdown 未展示的既有 API 名称必须按稳定 ID 从正式 JSON 恢复。"""
-
-        existing_plan = {
-            "artifact_type": "technical-plan",
-            "api_contracts": [
-                {
-                    "id": "orders_api",
-                    "name": "订单管理",
-                    "endpoints": [
-                        {"id": "orders.list", "name": "查询订单列表"}
-                    ],
-                }
-            ],
-        }
-        synced_plan = {
-            "architecture": {},
-            "entities": [],
-            "api_contracts": [
-                {
-                    "id": "orders_api",
-                    "name": "模型误改名称",
-                    "endpoints": [
-                        {"id": "orders.list", "name": "模型误改接口名称"},
-                        {"id": "orders.create", "name": "创建订单"},
-                    ],
-                }
-            ],
-            "pages": [],
-        }
-        with patch(
-            "app.agents.main.document_sync._invoke_sync_model",
-            return_value=synced_plan,
-        ), patch(
-            "app.agents.main.document_sync.create_technical_plan",
-            return_value={},
-        ) as create_plan, patch(
-            "app.agents.main.document_sync.validate_api_contract_consistency",
-            return_value=[],
-        ):
-            sync_project_plan_from_markdown(existing_plan, {}, "# TechnicalPlan")
-
-        contract = create_plan.call_args.kwargs["agent_plan"]["api_contracts"][0]
-        self.assertEqual(contract["name"], "订单管理")
-        self.assertEqual(contract["endpoints"][0]["name"], "查询订单列表")
-        self.assertEqual(contract["endpoints"][1]["name"], "创建订单")
-
     def test_technical_plan_entities_come_only_from_model_output(self) -> None:
         """TechnicalPlan 实体不得继承 RequirementSpec.entities。"""
 
@@ -1525,15 +1448,11 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
                 for page in attached["pages"]
             )
         )
-        markdown = render_project_plan_markdown(attached)
-        self.assertIn("业务实体", markdown)
-        self.assertIn(f"`{attached['entities'][0]['id']}`", markdown)
-        self.assertNotIn("需求概述", markdown)
-
-        self.assertNotIn("业务流程", markdown)
-        self.assertNotIn("风险与待细化点", markdown)
-        self.assertNotIn("缓存策略", markdown)
-        self.assertNotIn("测试策略", markdown)
+        with tempfile.TemporaryDirectory() as directory:
+            path = commit_technical_plan_document({"workspace": directory}, attached)
+            stored = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertEqual(stored["entities"], attached["entities"])
+            self.assertFalse((Path(path).parent / "technical-plan.md").exists())
         runtime = materialize_technical_plan_runtime(
             attached,
             requirement_spec,
@@ -1761,9 +1680,6 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ),
             [],
         )
-        rendered = render_project_plan_markdown(attached)
-        self.assertIn(f"`{action_id}`", rendered)
-        self.assertIn("`inventory.list`", rendered)
 
     def test_product_and_ui_behaviors_compile_with_only_endpoint_technical_input(self) -> None:
         """产品/UI 决定非技术行为，TechnicalPlan 只补齐业务步骤的 endpoint。"""

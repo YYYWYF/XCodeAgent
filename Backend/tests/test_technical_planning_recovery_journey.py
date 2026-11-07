@@ -428,8 +428,8 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 candidate=harness.candidate,
             ),
         }
-        markdown_path, json_path = commit_technical_plan_document(state, harness.candidate)
-        state.update(technical_plan_path=markdown_path, technical_plan_json_path=json_path)
+        json_path = commit_technical_plan_document(state, harness.candidate)
+        state.update(technical_plan_json_path=json_path)
         update = technical_planning_confirm(state)
         self.assertEqual(update["status"], "completed")
         self.assertTrue(update["template_reconcile_pending"])

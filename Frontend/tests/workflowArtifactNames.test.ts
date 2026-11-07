@@ -76,15 +76,15 @@ test('需求修订确认门不使用旧版本已确认标记隐藏查看提示',
 
 test('技术规划提示右侧查看并保留确认操作，隐藏各平台内部路径', () => {
   for (const path of [
-    '/Users/test/project/.devagentstudio/plans/technical-plan.md',
-    'C:\\Projects\\example\\.devagentstudio\\plans\\technical-plan.md'
+    '/Users/test/project/.devagentstudio/plans/technical-plan.json',
+    'C:\\Projects\\example\\.devagentstudio\\plans\\technical-plan.json'
   ]) {
-    const { markup, workflow } = renderArtifacts('planning', { technical_plan_path: path })
+    const { markup, workflow } = renderArtifacts('planning', { technical_plan_json_path: path })
     assert.match(markup, /技术规划已生成，已展示在右侧/)
     assert.match(markup, /请在右侧查看内容/)
     assert.match(markup, /确认保存/)
-    assert.doesNotMatch(markup, /已生成产物|待确认事项|technical-plan\.md/)
-    assert.doesNotMatch(markup, /\/Users\/|C:|\.devagentstudio|technical_plan_path/)
-    assert.equal(workflow.summary.artifacts?.technical_plan_path, path)
+    assert.doesNotMatch(markup, /已生成产物|待确认事项|technical-plan\.json/)
+    assert.doesNotMatch(markup, /\/Users\/|C:|\.devagentstudio|technical_plan_json_path/)
+    assert.equal(workflow.summary.artifacts?.technical_plan_json_path, path)
   }
 })

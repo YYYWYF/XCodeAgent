@@ -9,7 +9,7 @@ from typing import Any
 EVENT_STATE_SCALARS = frozenset({
     "phase", "status", "selectedPageId", "selected_api_contract_id",
     "selected_endpoint_id", "selected_entity_id", "detail_target_type",
-    "requirement_spec_path", "product_plan_path", "technical_plan_path",
+    "requirement_spec_path", "product_plan_path",
     "project_plan_path", "test_report_path", "workspace_revision",
     "requirementsConfirmed",
 })

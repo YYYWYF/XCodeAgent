@@ -134,7 +134,8 @@ export default function SourcePanel({
   // 规划文档的可用路径：key -> 实际存在的路径。探测完成前不下"缺失"结论，避免置灰闪烁。
   const [docPaths, setDocPaths] = useState<Record<string, string>>({})
   const [docsProbed, setDocsProbed] = useState(false)
-  const selectedDoc = BROWSABLE_DESIGN_DOCS.find((doc) => doc.markdownPaths.includes(selectedPath))
+  const selectedDoc = BROWSABLE_DESIGN_DOCS.find((doc) =>
+    (doc.contentPaths || doc.markdownPaths).includes(selectedPath))
   const selectedDocumentKey =
     selectedDoc?.key === 'requirement-spec' ||
     selectedDoc?.key === 'product-plan' ||
@@ -154,7 +155,7 @@ export default function SourcePanel({
     setDocsProbed(false)
     void Promise.all(
       BROWSABLE_DESIGN_DOCS.map(async (doc): Promise<[string, string | undefined]> => {
-        for (const path of doc.markdownPaths) {
+        for (const path of doc.contentPaths || doc.markdownPaths) {
           try {
             await readWorkspaceFile({
               workspace_root: workspaceRoot,

@@ -91,7 +91,6 @@ class ProjectState(TypedDict, total=False):
     product_plan_json_path: str
     clarification: dict[str, Any]
     technical_plan: dict[str, Any]
-    technical_plan_path: str
     technical_plan_json_path: str
     application_planning_recovery_boundary: dict[str, Any]
     technical_plan_candidate: dict[str, Any]

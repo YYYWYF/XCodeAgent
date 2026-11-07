@@ -90,7 +90,6 @@ WORKFLOW_ARTIFACT_FIELDS = (
     "requirement_spec_json_path",
     "product_plan_path",
     "product_plan_json_path",
-    "technical_plan_path",
     "technical_plan_json_path",
     "project_plan_path",
     "project_plan_json_path",

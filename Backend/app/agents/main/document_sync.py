@@ -12,10 +12,7 @@ from app.config import Settings
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.data_source_policy import DatasourceType
 from app.services.project_plan import (
-    TECHNICAL_PLAN_ARTIFACT_TYPE,
     create_project_plan,
-    create_technical_plan,
-    validate_technical_plan_api_contracts,
     validate_project_plan_datasource_policy,
 )
 from app.services.product_plan import create_product_plan, validate_product_plan
@@ -27,42 +24,6 @@ from app.utils.model_output import extract_json_object
 
 
 _REQUIREMENT_RULE_ID_MARKER = re.compile(r"<!--\s*ruleId\s*:\s*([^\s>]+)")
-
-
-def _preserve_technical_api_names(
-    synced_plan: dict[str, Any],
-    existing_plan: dict[str, Any],
-) -> dict[str, Any]:
-    """按稳定标识恢复 Markdown 未展示的 Contract 与 Endpoint 中文名称。"""
-
-    result = deepcopy(synced_plan)
-    existing_contracts = {
-        str(contract.get("id") or "").strip(): contract
-        for contract in existing_plan.get("api_contracts", [])
-        if isinstance(contract, dict) and str(contract.get("id") or "").strip()
-    }
-    for contract in result.get("api_contracts", []):
-        if not isinstance(contract, dict):
-            continue
-        existing_contract = existing_contracts.get(str(contract.get("id") or "").strip())
-        if not isinstance(existing_contract, dict):
-            continue
-        if "name" in existing_contract:
-            contract["name"] = deepcopy(existing_contract.get("name"))
-        existing_endpoints = {
-            str(endpoint.get("id") or "").strip(): endpoint
-            for endpoint in existing_contract.get("endpoints", [])
-            if isinstance(endpoint, dict) and str(endpoint.get("id") or "").strip()
-        }
-        for endpoint in contract.get("endpoints", []):
-            if not isinstance(endpoint, dict):
-                continue
-            existing_endpoint = existing_endpoints.get(
-                str(endpoint.get("id") or "").strip()
-            )
-            if isinstance(existing_endpoint, dict) and "name" in existing_endpoint:
-                endpoint["name"] = deepcopy(existing_endpoint.get("name"))
-    return result
 
 
 def _requirement_rule_ids(spec: dict[str, Any]) -> set[str]:
@@ -112,14 +73,6 @@ def _sync_prompt(
         "bindings must not be reconstructed from Markdown. "
         "Preserve each hidden <!-- ruleId:... --> marker for an unchanged permission candidate; never invent it or emit dataRules, dataRuleKey, unauthorizedBehavior, or unauthenticated.\n\n"
         if artifact_name == "RequirementSpec"
-        else (
-            "For TechnicalPlan, preserve the complete top-level entities array with RequirementSpec "
-            "ids/names/descriptions and the confirmed snake_case field definitions. API contracts bind "
-            "one or more entities through entity_ids only. Never emit data_source_id, a top-level "
-            "data_sources field, or entity data_source; source selection belongs to EntityDesign. "
-            "module_boundaries describes code/service ownership and must not define entities or fields.\n\n"
-        )
-        if artifact_name == "TechnicalPlan"
         else (
             "For ProjectPlan, keep entities source-free and bind API contracts through entity_ids only. "
             "Do not emit a top-level data_sources field or assign entity data_source; those decisions "
@@ -231,62 +184,41 @@ def sync_requirement_spec_from_markdown(
     return normalized
 
 
-@observe_model_operation("sync_technical_plan", business_stage="technical_planning")
+@observe_model_operation("sync_project_plan", business_stage="planning")
 def sync_project_plan_from_markdown(
     existing_plan: dict[str, Any],
     requirement_spec: dict[str, Any],
     edited_markdown: str,
     datasource_type: DatasourceType = "database",
 ) -> dict[str, Any]:
-    """同步 ProjectPlan/TechnicalPlan Markdown，并保留实体设计边界。"""
+    """同步独立 ProjectPlan 的 Markdown；TechnicalPlan 使用结构化确认流程。"""
 
-    is_technical_plan = existing_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
     synced = _invoke_sync_model(
-        artifact_name="TechnicalPlan" if is_technical_plan else "ProjectPlan",
+        artifact_name="ProjectPlan",
         structured_document=existing_plan,
         edited_markdown=edited_markdown,
         datasource_type=datasource_type,
     )
-    if is_technical_plan:
-        synced = _preserve_technical_api_names(synced, existing_plan)
-    normalized = (
-        create_technical_plan(
-            requirement_spec,
-            agent_plan={
-                key: synced.get(key)
-                for key in (
-                    "architecture",
-                    "entities",
-                    "api_contracts",
-                    "pages",
-                )
-            },
-            datasource_type=datasource_type,
-        )
-        if is_technical_plan
-        else create_project_plan(
-            requirement_spec,
-            agent_note="synchronized from user-edited ProjectPlan Markdown",
-            planning_source="user_edited_markdown",
-            agent_plan=synced,
-            authoritative_agent_plan=True,
-            datasource_type=datasource_type,
-        )
+    normalized = create_project_plan(
+        requirement_spec,
+        agent_note="synchronized from user-edited ProjectPlan Markdown",
+        planning_source="user_edited_markdown",
+        agent_plan=synced,
+        authoritative_agent_plan=True,
+        datasource_type=datasource_type,
     )
-    if not is_technical_plan and isinstance(synced.get("app"), dict):
+    if isinstance(synced.get("app"), dict):
         normalized["app"] = synced["app"]
-    errors = validate_api_contract_consistency(normalized)
-    if is_technical_plan:
-        errors.extend(validate_technical_plan_api_contracts(normalized))
-    else:
-        errors.extend(validate_project_plan_datasource_policy(normalized))
+    errors = [
+        *validate_api_contract_consistency(normalized),
+        *validate_project_plan_datasource_policy(normalized),
+    ]
     if errors:
         raise ValueError("编辑后的项目计划存在不一致：" + "; ".join(errors))
-    if not is_technical_plan:
-        normalized["markdown_sync"] = {
-            "status": "synchronized",
-            "source": "user_edited_markdown",
-        }
+    normalized["markdown_sync"] = {
+        "status": "synchronized",
+        "source": "user_edited_markdown",
+    }
     return normalized
 
 

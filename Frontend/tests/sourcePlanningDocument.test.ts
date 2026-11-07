@@ -140,7 +140,7 @@ test('技术规划与页面绑定的产品规划使用相同修订，并保留�
     {
       workspaceRoot: '/workspace',
       documentKey: 'technical-plan',
-      documentPath: '.devagentstudio/plans/technical-plan.md',
+      documentPath: '.devagentstudio/plans/technical-plan.json',
       productPlanPath,
       revision: 'dev'
     },
@@ -165,7 +165,7 @@ test('技术规划缺少产品规划依赖时明确报错，避免不完整的�
       {
         workspaceRoot: '/workspace',
         documentKey: 'technical-plan',
-        documentPath: '.devagentstudio/plans/technical-plan.md'
+        documentPath: '.devagentstudio/plans/technical-plan.json'
       },
       async () => fileResult('{}')
     ),

@@ -590,7 +590,8 @@ export default function WorkflowRunCard({
           ) : revisionDraftBinding && requiresConfirmation ? (
             <RevisionDraftReview
               disabled={disabled || interactionAvailability !== 'active'}
-              draft={revisionDraftBinding.draft}
+              technicalPlan={technicalPlanObject || {}}
+              productPlan={productPlanObject || {}}
               interaction={revisionDraftBinding.interaction}
               key={revisionDraftBinding.draft.draftSha256}
               onAction={(interaction) =>
@@ -910,7 +911,7 @@ function workflowRevisionDraftBinding(
 ):
   | {
       draft: WorkflowRevisionDraft
-      interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'editedMarkdown' | 'feedback'>
+      interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'feedback'>
     }
   | undefined {
   if (clarification?.mode !== 'revision_draft_confirmation') return undefined

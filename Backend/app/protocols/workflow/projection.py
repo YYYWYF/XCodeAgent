@@ -880,7 +880,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     }:
         clarification = update.get("clarification")
         return {
-            "message": f"技术规划={update.get('technical_plan_path') or update.get('project_plan_path')}",
+            "message": f"技术规划={update.get('technical_plan_json_path') or update.get('project_plan_path')}",
             "data": {
                 "technicalPlan": update.get("technical_plan") or update.get("project_plan"),
                 "clarification": clarification,
@@ -1735,7 +1735,7 @@ def _workflow_visual_payload(
         "product_plan": result.get("product_plan"),
         "product_plan_path": result.get("product_plan_path"),
         "technical_plan": result.get("technical_plan"),
-        "technical_plan_path": result.get("technical_plan_path"),
+        "technical_plan_json_path": result.get("technical_plan_json_path"),
         "project_plan": result.get("project_plan"),
         "pending_project_plan": result.get("pending_project_plan"),
         "project_plan_path": result.get("project_plan_path"),
@@ -1798,12 +1798,6 @@ def _workflow_confirmation_artifact(
             "id": "project_plan",
             "name": "project-plan.md",
             "path_field": "project_plan_path",
-        },
-        "technical_plan_confirmation": {
-            "phase": "technical_planning",
-            "id": "technical_plan",
-            "name": "technical-plan.md",
-            "path_field": "technical_plan_path",
         },
     }
     contract = artifact_contracts.get(str(clarification.get("mode") or ""))

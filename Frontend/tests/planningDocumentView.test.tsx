@@ -171,6 +171,10 @@ test('技术规划只读取当前面板资料，文档关闭时不读取', async
     product_plan: reference('b'),
     requirement_spec: reference('a')
   }
+  source.confirmationArtifact = {
+    id: 'technical_plan', name: 'ignored.md', path: 'ignored.md', format: 'markdown', content: '',
+    contentRef: reference('d')
+  }
   await harness(
     async (_workspace, ref) => {
       calls.push(ref.artifactId[0])

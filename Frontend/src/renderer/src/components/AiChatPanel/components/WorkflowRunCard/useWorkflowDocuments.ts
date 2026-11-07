@@ -27,20 +27,22 @@ export function useWorkflowDocuments(
     [
       'requirement_document_confirmation',
       'project_plan_confirmation',
-      'technical_plan_confirmation'
+      'technical_plan_confirmation',
+      'revision_draft_confirmation'
     ].includes(mode)
   const refs = source.state?.artifactRefs as Record<string, unknown> | undefined
   const keys = required
     ? mode === 'requirement_document_confirmation'
       ? ['requirement_spec', 'product_plan']
-      : mode === 'technical_plan_confirmation'
-        ? ['technical_plan', 'product_plan', 'requirement_spec']
+      : mode === 'technical_plan_confirmation' || mode === 'revision_draft_confirmation'
+        ? ['technical_plan', 'product_plan']
         : ['project_plan']
     : []
+  const needsMarkdown = required && mode !== 'technical_plan_confirmation' && mode !== 'revision_draft_confirmation'
   const hasRefs =
     keys.some((key) => source.state?.[key] == null && isArtifactReference(refs?.[key])) ||
     Boolean(
-      required && source.confirmationArtifact?.contentRef && !source.confirmationArtifact.content
+      needsMarkdown && source.confirmationArtifact?.contentRef && !source.confirmationArtifact.content
     )
 
   useEffect(() => {
@@ -58,7 +60,7 @@ export function useWorkflowDocuments(
           if (stale) return
         }
         let artifact = source.confirmationArtifact
-        if (artifact?.contentRef && !artifact.content) {
+        if (needsMarkdown && artifact?.contentRef && !artifact.content) {
           const content = await readWorkflowArtifact(workspace, artifact.contentRef)
           if (typeof content !== 'string') throw new Error('确认文档正文格式无效。')
           artifact = { ...artifact, content }
@@ -78,7 +80,7 @@ export function useWorkflowDocuments(
     return () => {
       stale = true
     }
-  }, [source, workspace, required, hasRefs])
+  }, [source, workspace, required, hasRefs, needsMarkdown])
 
   if (!required || !hasRefs) return { workflow: source, loading: false }
   if (!workspace)

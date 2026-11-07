@@ -85,7 +85,6 @@ export default function DocPanel({
             <FileTextOutlined aria-hidden="true" />
             <span>
               <strong>技术规划</strong>
-              <small>{title?.split('/').pop() || 'technical-plan.json'}</small>
             </span>
             {technicalPlan ? (
               <Tag className={cx('doc-panel-technical-status')}>

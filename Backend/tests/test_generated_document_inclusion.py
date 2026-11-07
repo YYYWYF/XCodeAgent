@@ -23,7 +23,7 @@ from app.graph.nodes.requirements import requirements
 from app.services.generated_document_inclusion import write_generated_documents
 from app.services.product_plan import create_product_plan
 from app.services.requirement_spec import create_requirement_spec
-from app.services.revision_drafts import create_revision_draft, save_revision_draft_markdown
+from app.services.revision_drafts import create_revision_draft
 from app.tools.ask_user import clear_clarification
 from app.workspace.product_plan_documents import write_product_plan_documents
 from app.workspace.revision_draft_documents import revision_draft_directory
@@ -102,8 +102,8 @@ class GeneratedDocumentInclusionTests(unittest.TestCase):
         self.assertEqual(confirmed["status"], "completed")
         self.assertEqual(self.post.call_count, 1)
 
-    def test_technical_commit_reports_once_and_replay_is_unchanged(self):
-        """事务化技术规划提交真实文件后上报，幂等重放不增加请求。"""
+    def test_technical_commit_does_not_report_removed_markdown(self):
+        """技术规划只保存结构化数据，重放不创建或上报 Markdown。"""
         candidate = {"artifact_type": "technical-plan", "app": {"name": "文档统计"},
                      "pages": [], "entities": [], "api_contracts": [],
                      "confirmation_status": "pending_user_confirmation"}
@@ -122,9 +122,10 @@ class GeneratedDocumentInclusionTests(unittest.TestCase):
              patch("app.graph.nodes.application_technical_planning.application_lifecycle_payload", return_value={}):
             result = technical_planning_commit(state)
             technical_planning_commit(state)
-        records = self.records()
-        self.assertEqual(self.post.call_count, 1)
-        self.assertTrue(all(record["fileName"] == ".devagentstudio/plans/technical-plan.md" for record in records))
+        self.assertEqual(self.records(), [])
+        self.post.assert_not_called()
+        self.assertTrue(Path(result["technical_plan_json_path"]).is_file())
+        self.assertFalse((self.root / ".devagentstudio/plans/technical-plan.md").exists())
         self.assertEqual(result["status"], "requires_user_input")
 
     def test_regeneration_reports_diff_but_manual_save_does_not(self):
@@ -141,17 +142,17 @@ class GeneratedDocumentInclusionTests(unittest.TestCase):
         self.wait_reports()
         self.assertEqual(self.post.call_count, 1)
 
-    def test_revision_draft_generation_and_manual_edit_are_separate(self):
-        """正式修订草稿生成上报，后续人工 Markdown 保存不报告。"""
-        path = revision_draft_directory(self.root, change_id="change-1", artifact_key="technical-plan") / "artifact.md"
-        write_generated_documents(self.state, [path], create_revision_draft, self.root,
+    def test_revision_draft_does_not_generate_or_report_markdown(self):
+        """技术规划修订草稿只保存内部数据，不创建 Markdown 或触发文档上报。"""
+        create_revision_draft(self.root,
             change_id="change-1", artifact_key="technical-plan", kind="technical_plan", target_id="application",
-            canonical_json_path=self.root / "missing.json", markdown="# 新技术规划\n",
+            canonical_json_path=self.root / "missing.json",
             artifact={"app": {"name": "修订测试"}}, based_on_paths={})
-        self.assertEqual(len(self.records()), 1)
-        save_revision_draft_markdown(self.root, change_id="change-1", artifact_key="technical-plan", markdown="# 人工编辑\n")
-        self.wait_reports()
-        self.assertEqual(self.post.call_count, 1)
+        directory = revision_draft_directory(self.root, change_id="change-1", artifact_key="technical-plan")
+        self.assertTrue((directory / "artifact.json").is_file())
+        self.assertFalse((directory / "artifact.md").exists())
+        self.assertEqual(self.records(), [])
+        self.post.assert_not_called()
 
     def test_write_failure_does_not_report_and_is_not_swallowed(self):
         """保存失败不会上报，并保持原写盘错误可见。"""

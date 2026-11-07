@@ -302,7 +302,7 @@ function planningWorkflowCardResult(
   if (revisionInteraction && typeof revisionInteraction === 'object') {
     if (revisionInteraction.action === 'confirm') return 'confirmed'
     if (revisionInteraction.action === 'discard') return 'cancelled'
-    if (revisionInteraction.action === 'save' || revisionInteraction.action === 'revise') {
+    if (revisionInteraction.action === 'revise') {
       return 'submitted'
     }
   }
@@ -512,7 +512,7 @@ const DESIGN_ARTIFACT_PATH_FIELDS: Record<DesignDocArtifactKey, readonly string[
   'requirement-spec': ['requirement_spec_path'],
   'product-plan': ['product_plan_path'],
   'ui-design': [],
-  'technical-plan': ['technical_plan_path']
+  'technical-plan': ['technical_plan_json_path']
 }
 
 /** 把 Workflow 快照中的未知值安全收窄为普通对象。 */
@@ -677,7 +677,7 @@ async function readLocalDesignArtifactSnapshot(
   workspaceRoot: string,
   artifact: (typeof LOCAL_DESIGN_ARTIFACTS)[number]
 ): Promise<LocalDesignArtifactSnapshot> {
-  const documentPromise = readLocalDesignMarkdown(workspaceRoot, artifact)
+  const documentPromise = artifact.key === 'technical-plan' ? Promise.resolve(undefined) : readLocalDesignMarkdown(workspaceRoot, artifact)
     .then((document) => (document.content.trim() ? document : undefined))
     .catch(() => undefined)
   const structuredPromise =
@@ -711,31 +711,6 @@ async function readLocalDesignWorkspaceSnapshot(
       artifacts.map((artifact) => readLocalDesignArtifactSnapshot(workspaceRoot, artifact))
     )
   }
-}
-
-/** 优先读取当前 AG-UI 内存快照，本地 Markdown 只作为冷恢复兜底。 */
-function designDocContentFor(
-  localContents: Record<string, string>,
-  workflow: WorkflowRunPayload | undefined,
-  key: DesignDocArtifactKey
-): string {
-  const confirmationArtifact = workflow?.confirmationArtifact
-  const expectedArtifactId =
-    key === 'requirement-spec'
-      ? 'requirement_spec'
-      : key === 'product-plan'
-        ? 'product_plan'
-        : key === 'technical-plan'
-          ? 'technical_plan'
-          : undefined
-  if (
-    confirmationArtifact &&
-    confirmationArtifact.id === expectedArtifactId &&
-    confirmationArtifact.content.trim()
-  ) {
-    return confirmationArtifact.content
-  }
-  return localContents[key] || ''
 }
 
 /** 把第二份文档的首个 H1 降级为 H2 章节，供合并为一份连贯文档时接入。 */
@@ -1487,11 +1462,6 @@ export default function AiChatPanel({
     designDocFileContent,
     planningDocumentWorkflow
   )
-  const technicalPlanDocContent = designDocContentFor(
-    designDocFileContent,
-    planningDocumentWorkflow,
-    'technical-plan'
-  )
   const uiDesignDocContent = designDocFileContent['ui-design'] || ''
   const requirementSpecMemory = requirementSpecFromWorkflow(planningDocumentWorkflow)
   const productPlanMemory = productPlanFromWorkflow(planningDocumentWorkflow)
@@ -1505,7 +1475,7 @@ export default function AiChatPanel({
   )
   const uiDesignAvailable = Boolean(uiDesignDocContent.trim()) || uiDesignPages.length > 0
   const technicalPlanDocAvailable = Boolean(
-    technicalPlanDocContent.trim() || technicalPlanMemory || planningDocumentRefs?.technical_plan ||
+    technicalPlanMemory || technicalPlanFile || planningDocumentRefs?.technical_plan ||
     planningDocumentView.loading || planningDocumentView.error
   )
   // 按当前设计/计划阶段稳定生成右侧文档集合，避免阶段切换之外反复创建依赖对象。
@@ -1534,8 +1504,8 @@ export default function AiChatPanel({
       {
         key: 'technical-plan' as WorkspaceDocKey,
         title: '技术规划',
-        path: 'plans/technical-plan.md',
-        content: technicalPlanDocContent,
+        path: 'plans/technical-plan.json',
+        content: '',
         available: technicalPlanDocAvailable
       }
     ]
@@ -1547,7 +1517,6 @@ export default function AiChatPanel({
     requirementDocContent,
     requirementsConfirmed,
     technicalPlanDocAvailable,
-    technicalPlanDocContent,
     uiDesignAvailable,
     uiDesignDocContent
   ])

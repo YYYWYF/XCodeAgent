@@ -390,7 +390,6 @@ export function planningTechnicalPlanConfirmed(workflow?: WorkflowRunPayload): b
   const technicalPlan = readRecord(readRecord(confirmation.artifacts).technicalPlan)
   return Boolean(
     readText(confirmation.confirmedAt) &&
-    readText(readRecord(technicalPlan.markdown).sha256) &&
     readText(readRecord(technicalPlan.json).sha256)
   )
 }

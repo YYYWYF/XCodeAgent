@@ -24,6 +24,11 @@ def workspace_fingerprint(workspace: str | Path) -> str:
             rel = path.relative_to(root).as_posix()
             if rel == ".devagentstudio/application-lifecycle.json" or name.endswith((".log", ".pyc")):
                 continue
+            # 技术规划只以 JSON 为准；多余 Markdown 不参与停止后的继续资格。
+            if rel == ".devagentstudio/plans/technical-plan.md" or path.relative_to(root).match(
+                ".devagentstudio/drafts/revisions/*/technical-plan/artifact.md"
+            ):
+                continue
             digest.update(rel.encode())
             digest.update(b"\0")
             if path.is_symlink():

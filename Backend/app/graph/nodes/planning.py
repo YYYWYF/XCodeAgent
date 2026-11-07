@@ -76,12 +76,10 @@ from app.services.page_implementation_contract import (
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
-    edited_technical_plan_markdown,
     edited_project_plan_markdown,
     project_plan_json_path,
     project_plan_markdown_path,
     technical_plan_json_path,
-    technical_plan_markdown_path,
     write_technical_plan_document,
     write_project_plan_document,
 )
@@ -287,14 +285,13 @@ def _planning_artifact_fields(
     plan: dict,
     project_plan_path: str,
 ) -> dict:
-    """写入 TechnicalPlan 正式副本并返回新旧状态字段。"""
+    """写入 TechnicalPlan 结构化产物并返回当前状态字段。"""
 
     if state.get("workflow_scope") != "application_planning":
         return {}
-    technical_path, technical_json_path = write_technical_plan_document(state, plan)
+    technical_json_path = write_technical_plan_document(state, plan)
     return {
         "technical_plan": plan,
-        "technical_plan_path": technical_path,
         "technical_plan_json_path": technical_json_path,
         "project_plan_path": project_plan_path,
     }
@@ -433,7 +430,6 @@ def project_planning(state: ProjectState) -> dict:
             ),
             "project_plan_path": state.get("project_plan_path", ""),
             "project_plan_json_path": state.get("project_plan_json_path", ""),
-            "technical_plan_path": state.get("technical_plan_path", ""),
             "technical_plan_json_path": state.get("technical_plan_json_path", ""),
             "clarification": (
                 _project_plan_dependency_error_payload(pending_errors)
@@ -448,7 +444,7 @@ def project_planning(state: ProjectState) -> dict:
         else _user_confirmed_project_plan(request)
     ):
         edited_markdown = (
-            edited_technical_plan_markdown(state, existing_plan)
+            None
             if phase == "technical_planning"
             else edited_project_plan_markdown(state, existing_plan)
         )
@@ -480,9 +476,8 @@ def project_planning(state: ProjectState) -> dict:
                 state=state,
                 repair_attempts=_TECHNICAL_PLAN_GENERATION_ATTEMPTS,
             )
-            repaired_path = write_generated_documents(
-                state, [technical_plan_markdown_path(state) if phase == "technical_planning"
-                        else project_plan_markdown_path(state)],
+            repaired_path = write_project_plan_document(state, repaired_plan) if phase == "technical_planning" else write_generated_documents(
+                state, [project_plan_markdown_path(state)],
                 write_project_plan_document, state, repaired_plan,
             )
             return {
@@ -499,7 +494,7 @@ def project_planning(state: ProjectState) -> dict:
                 ),
                 "timeline": [phase],
             }
-        # 完整重写 Markdown，确保手动篡改的数据源类型和实现边界也被恢复。
+        # 完整提交当前产物，确认后的数据源类型和实现边界保持一致。
         project_plan_path = write_project_plan_document(state, project_plan)
         return {
             "phase": phase,
@@ -573,9 +568,8 @@ def project_planning(state: ProjectState) -> dict:
                 state=state,
                 repair_attempts=1,
             )
-    project_plan_path = write_generated_documents(
-        state, [technical_plan_markdown_path(state) if phase == "technical_planning"
-                else project_plan_markdown_path(state)],
+    project_plan_path = write_project_plan_document(state, project_plan) if phase == "technical_planning" else write_generated_documents(
+        state, [project_plan_markdown_path(state)],
         write_project_plan_document, state, project_plan,
     )
     clarification = (

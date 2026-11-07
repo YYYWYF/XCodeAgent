@@ -178,25 +178,22 @@ class RevisionContinuationRequest(RevisionModel):
 
 
 class RevisionDraftInteraction(RevisionModel):
-    """校验工作台草稿卡只能提交当前产物与当前正文版本的结构化动作。"""
+    """校验工作台草稿卡只能提交当前产物与当前候选版本的结构化动作。"""
 
     change_id: str = Field(alias="changeId", min_length=1, max_length=256)
     interaction_id: str = Field(alias="interactionId", min_length=1, max_length=256)
     based_on_lifecycle_revision: int = Field(alias="basedOnLifecycleRevision", ge=1)
     artifact_key: str = Field(alias="artifactKey", min_length=1, max_length=512)
     draft_sha256: str = Field(alias="draftSha256", pattern=r"^[0-9a-f]{64}$")
-    action: Literal["confirm", "save", "revise", "discard"]
+    action: Literal["confirm", "revise", "discard"]
     feedback: str | None = Field(default=None, max_length=16_000)
-    edited_markdown: str | None = Field(default=None, alias="editedMarkdown", max_length=2_000_000)
 
     @model_validator(mode="after")
     def validate_action_payload(self) -> "RevisionDraftInteraction":
-        """要求 revise 携带反馈、save 携带正文，避免空动作改变 lifecycle。"""
+        """要求 revise 携带修改意见，确认动作始终消费服务端当前草稿。"""
 
         if self.action == "revise" and not str(self.feedback or "").strip():
             raise ValueError("revision draft revise 必须提供 feedback。")
-        if self.action == "save" and self.edited_markdown is None:
-            raise ValueError("revision draft save 必须提供 editedMarkdown。")
         return self
 
 

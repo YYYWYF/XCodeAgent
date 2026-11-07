@@ -588,7 +588,6 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
     { relativePath: 'specs/requirement-spec.md', format: 'markdown' },
     { relativePath: 'specs/requirement-spec.json', format: 'json' },
     { relativePath: 'plans/product-plan.md', format: 'markdown' },
-    { relativePath: 'plans/technical-plan.md', format: 'markdown' }
   ]
   const missing: string[] = []
   const invalid: string[] = []

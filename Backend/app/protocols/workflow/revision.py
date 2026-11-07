@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
 from app.domain.application_lifecycle import PendingInteractionType
 from app.domain.application_revision import RevisionDraftInteraction
 from app.services.application_lifecycle import load_application_lifecycle
+from app.domain.application_planning_recovery import application_planning_sha256
 from app.workspace.revision_draft_documents import load_revision_draft
 
 
@@ -26,7 +26,7 @@ def bind_revision_draft_interaction(
     workspace: str | Path,
     interaction: RevisionDraftInteraction,
 ) -> dict[str, Any]:
-    """绑定当前 formal lease、Lifecycle interaction 和草稿正文哈希并返回恢复凭据。"""
+    """绑定当前 formal lease、Lifecycle interaction 和结构化草稿哈希并返回恢复凭据。"""
 
     lifecycle = load_application_lifecycle(workspace)
     active = lifecycle.active_formal_revision if lifecycle is not None else None
@@ -51,12 +51,12 @@ def bind_revision_draft_interaction(
     if not matched_run_id:
         raise ValueError("revisionInteraction 已过期或不是当前草稿确认交互。")
 
-    _metadata, markdown, _artifact = load_revision_draft(
+    _metadata, artifact = load_revision_draft(
         workspace,
         change_id=interaction.change_id,
         artifact_key=interaction.artifact_key,
     )
-    actual_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    actual_sha256 = application_planning_sha256(artifact)
     if actual_sha256 != interaction.draft_sha256:
         raise ValueError("revisionInteraction draftSha256 已过期，请刷新草稿。")
     return {

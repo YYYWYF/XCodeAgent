@@ -581,7 +581,7 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scenario.counters["model"], 1)
 
     async def test_partial_commit_converges_without_model_replay(self) -> None:
-        """JSON 已写入而 Markdown 失败后，下一次 child 必须幂等收敛双文件。"""
+        """结构化文件提交失败后重试原子提交，不重放模型或创建 Markdown。"""
 
         scenario = await self._scenario(pause_before="technical_planning_commit")
         _plan, first_context = await self._prepare(scenario)
@@ -589,17 +589,17 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         original_writer = plan_documents._write_text_atomically
 
-        def fail_markdown(path: Path, content: str) -> None:
-            """模拟 Markdown replace 失败，同时保留 JSON replace 成功。"""
+        def fail_json(path: Path, content: str) -> None:
+            """模拟 TechnicalPlan 原子写入失败。"""
 
-            if path.suffix == ".md":
-                raise OSError("injected markdown replace failure")
+            if path.suffix == ".json":
+                raise OSError("injected json replace failure")
             original_writer(path, content)
 
         with patch(
             "app.graph.nodes.planning._generate_valid_technical_plan",
             side_effect=_model_stub(scenario.counters, scenario.candidate, succeeds=True),
-        ), patch("app.workspace.plan_documents._write_text_atomically", side_effect=fail_markdown):
+        ), patch("app.workspace.plan_documents._write_text_atomically", side_effect=fail_json):
             with self.assertRaises(OSError):
                 await scenario.runtime_graph.ainvoke(None, config=first_context.fork_config)
         await stop_execution_heartbeat(first_context.heartbeat_task)
@@ -630,7 +630,7 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
         json_path = scenario.workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
         markdown_path = scenario.workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.md"
         self.assertTrue(json_path.is_file())
-        self.assertTrue(markdown_path.is_file())
+        self.assertFalse(markdown_path.exists())
         self.assertEqual(
             application_planning_sha256(json.loads(json_path.read_text(encoding="utf-8"))),
             application_planning_sha256(scenario.candidate),

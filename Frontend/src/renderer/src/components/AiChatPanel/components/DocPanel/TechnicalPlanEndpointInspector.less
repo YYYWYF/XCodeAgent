@@ -1,0 +1,64 @@
+// 完整类型区沿用工作台主题；窄分栏中允许换行，不省略类型和字段名称。
+.@{class-prefix}-technical-plan-complete-types {
+  min-width: 0;
+
+  .@{class-prefix}-technical-plan-inspector-title {
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-technical-plan-inspector-title code,
+  .@{class-prefix}-technical-plan-inspector-title .@{class-prefix}-technical-plan-endpoint-name,
+  .@{class-prefix}-technical-plan-inspector-grid dd,
+  .@{class-prefix}-technical-plan-schema-field code,
+  .@{class-prefix}-technical-plan-schema-node-head code,
+  .@{class-prefix}-technical-plan-lineage {
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+  }
+
+  .@{class-prefix}-technical-plan-schema-field,
+  .@{class-prefix}-technical-plan-schema-node-head {
+    flex-wrap: wrap;
+    align-items: baseline;
+  }
+
+  .@{class-prefix}-technical-plan-type {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .@{class-prefix}-technical-plan-schema-node,
+  .@{class-prefix}-technical-plan-schema-card {
+    min-width: 0;
+  }
+
+  .@{class-prefix}-technical-plan-schema-details {
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .@{class-prefix}-technical-plan-schema-details p {
+    margin: 0;
+    white-space: pre-wrap;
+  }
+}
+
+.@{class-prefix}-technical-plan-parameter {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--wb-border);
+  border-radius: 6px;
+}
+
+.@{class-prefix}-technical-plan-parameter-location {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+}

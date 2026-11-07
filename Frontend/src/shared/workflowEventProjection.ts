@@ -9,7 +9,6 @@ const STATE_SCALARS = new Set([
   'detail_target_type',
   'requirement_spec_path',
   'product_plan_path',
-  'technical_plan_path',
   'project_plan_path',
   'test_report_path',
   'workspace_revision',

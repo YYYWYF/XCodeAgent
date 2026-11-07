@@ -27,9 +27,8 @@ function documentRequests(
     .map((key) => ({ key, reference: refs?.[key] }))
   const artifact = source.confirmationArtifact
   const matches =
-    kind === 'technical-plan'
-      ? artifact?.id === 'technical_plan'
-      : artifact?.id === 'requirement_spec' || artifact?.id === 'product_plan'
+    kind === 'requirement-doc' &&
+    (artifact?.id === 'requirement_spec' || artifact?.id === 'product_plan')
   if (matches && artifact?.contentRef)
     requests.push({ key: 'markdown', reference: artifact.contentRef })
   return requests
