@@ -1,0 +1,179 @@
+.@{class-prefix}-technical-plan-review {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+  color: var(--wb-text);
+
+  > .ant-radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    width: fit-content;
+    .ant-radio-button-wrapper {
+      color: var(--wb-text-secondary);
+      background: var(--wb-surface);
+      border-color: var(--wb-border);
+      &:hover {
+        color: var(--wb-accent);
+      }
+      &::before {
+        background: var(--wb-border);
+      }
+      &.ant-radio-button-wrapper-checked {
+        color: var(--wb-accent);
+        background: var(--wb-accent-soft);
+        border-color: var(--wb-accent-border);
+        &::before {
+          background: var(--wb-accent-border);
+        }
+      }
+      &:focus-within {
+        box-shadow: none;
+        outline: none;
+      }
+      // 鼠标选中仅保留边框与底色，键盘导航使用一条细轮廓提示焦点。
+      &:has(input:focus-visible) {
+        outline: 1px solid var(--wb-accent-border);
+        outline-offset: 2px;
+      }
+    }
+  }
+  .@{class-prefix}-technical-plan-full-view {
+    display: grid;
+    gap: 18px;
+    min-width: 0;
+    .@{class-prefix}-technical-plan-section-tabs {
+      position: static;
+      margin-top: 0;
+      padding-top: 0;
+    }
+  }
+}
+
+.@{class-prefix}-technical-plan-changes {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  h3 {
+    margin: 0 0 6px;
+    font-size: 13px;
+    color: var(--wb-text-secondary);
+  }
+  details {
+    border-bottom: 1px solid var(--wb-border);
+  }
+  summary {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 12px 0;
+    cursor: pointer;
+    list-style: none;
+    &::before {
+      content: '›';
+      color: var(--wb-text-secondary);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--wb-accent-border);
+      outline-offset: 2px;
+    }
+    &:hover strong {
+      color: var(--wb-accent);
+    }
+    strong {
+      min-width: 0;
+      flex: 1;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    > span {
+      flex: none;
+      color: var(--wb-text-secondary);
+      font-size: 12px;
+    }
+  }
+  details[open] > summary::before {
+    content: '⌄';
+  }
+  .@{class-prefix}-technical-plan-change-kind {
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+}
+.@{class-prefix}-technical-plan-change-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  align-items: center;
+  justify-content: space-between;
+  span {
+    font-size: 12px;
+    color: var(--wb-text-secondary);
+  }
+}
+.@{class-prefix}-technical-plan-change-unchanged,
+.@{class-prefix}-technical-plan-change-context {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-technical-plan-change-details {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0 0 16px 18px;
+}
+.@{class-prefix}-technical-plan-change-field {
+  min-width: 0;
+}
+.@{class-prefix}-technical-plan-change-path {
+  margin-bottom: 6px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.@{class-prefix}-technical-plan-change-value {
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  > span {
+    flex: 0 0 52px;
+    font-size: 12px;
+  }
+  > code {
+    min-width: 0;
+    color: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  &.@{class-prefix}-is-before {
+    color: var(--wb-code-delete-text);
+    background: var(--wb-code-delete);
+  }
+  &.@{class-prefix}-is-after {
+    color: var(--wb-code-add-text);
+    background: var(--wb-code-add);
+  }
+}
+
+.@{class-prefix}-technical-plan-object-change {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.@{class-prefix}-technical-plan-endpoint-name > .@{class-prefix}-technical-plan-object-change {
+  margin-right: 6px;
+  margin-left: 0;
+}

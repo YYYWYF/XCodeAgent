@@ -14,7 +14,7 @@ SUMMARY_FIELDS = frozenset({
     "unitTestMaxRepairIterations", "integrationNextAction", "repairReturnNode",
     "repairIteration", "maxRepairIterations", "requiresUserInput", "intent",
 })
-DOCUMENT_FIELDS = frozenset({"requirement_spec", "product_plan", "technical_plan", "project_plan", "pending_project_plan"})
+DOCUMENT_FIELDS = frozenset({"requirement_spec", "product_plan", "technical_plan", "technical_plan_baseline", "project_plan", "pending_project_plan"})
 INTERNAL_FIELDS = frozenset({
     "tasks", "build_task_plan", "buildTaskPlan", "build_context", "build_results", "build_events",
     "code_change_sets", "workspace_snapshot", "unit_test_generation_context", "code_graph_index",

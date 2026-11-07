@@ -49,7 +49,7 @@ export type RightPanelState =
       codeChanges: WorkspaceCodeChangeSet
       selectedPath?: string
     }
-  | { type: 'doc'; docKey?: WorkspaceDocKey }
+  | { type: 'doc'; docKey?: WorkspaceDocKey; reviewKey?: string }
   | { type: 'test-report' }
   | { type: 'review-report' }
   | { type: 'source' }

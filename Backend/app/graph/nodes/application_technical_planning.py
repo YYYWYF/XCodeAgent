@@ -169,6 +169,8 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
     return {
         "phase": "technical_planning_begin",
         "status": "running",
+        # 每轮从已校验的输入捕获基线；后续候选提交不得覆盖它，冷进入沿 checkpoint 读取。
+        "technical_plan_baseline": deepcopy(state.get("technical_plan") or {}),
         "resume_from": "",
         "application_planning_recovery_boundary": _boundary_payload_for_state(
             state,

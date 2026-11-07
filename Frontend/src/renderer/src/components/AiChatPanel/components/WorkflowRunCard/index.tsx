@@ -57,6 +57,8 @@ import type { ToolApproval } from '../../../../service/workspaceTools'
 import ConfirmationArtifact from './ConfirmationArtifact'
 import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactReview'
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
+import { technicalPlanDiff } from '../DocPanel/technicalPlanDiff'
+import { asRecord } from '../DocPanel/TechnicalPlanDocPanelData'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import BuildTaskInstructions from './BuildTaskInstructions'
 import DetailReview from './DetailReview'
@@ -140,6 +142,7 @@ type WorkflowRunCardProps = {
   reviseConfirmedTechnicalPlanDisabled?: boolean
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
+  onOpenTechnicalPlanChanges?: () => void
   /** 已确认的技术规划通过当前规划会话发起正式修订。 */
   onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
   onSubmitClarification?: (
@@ -180,6 +183,7 @@ export default function WorkflowRunCard({
   workflowCardResult,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
+  onOpenTechnicalPlanChanges,
   onReviseConfirmedTechnicalPlan,
   reviseConfirmedTechnicalPlanDisabled,
   onSubmitClarification,
@@ -292,6 +296,13 @@ export default function WorkflowRunCard({
   const productPlanObject = readProductPlan(workflow)
   const projectPlanObject = readProjectPlan(workflow)
   const technicalPlanObject = readTechnicalPlan(workflow)
+  const technicalPlanBaseline = asRecord(workflow.state?.technical_plan_baseline)
+  const technicalChanges = technicalPlanObject && Object.keys(technicalPlanBaseline).length
+    ? technicalPlanDiff(technicalPlanBaseline, technicalPlanObject, productPlanObject || {}) : undefined
+  const technicalChangeCount = technicalChanges?.reduce((sum, group) => sum + group.objects.length, 0)
+  const technicalChangeSummary = technicalChanges
+    ? technicalChangeCount ? `涉及 ${technicalChanges.filter((group) => group.objects.length).map((group) => `${group.objects.length} 个 ${group.name}对象`).join('、')}` : '本次未产生内容变化'
+    : undefined
   // 技术规划弹框的「页面概览」版块需要上游 RequirementSpec 提取页面风格，故一并读取。
   const requirementSpecObject = readRequirementSpec(workflow)
   // 产物确认答案键必须与当前 mode 一一对应，避免确认产品规划时误发需求确认答案。
@@ -570,6 +581,7 @@ export default function WorkflowRunCard({
             <RevisionDraftReview
               disabled={disabled || interactionAvailability !== 'active'}
               technicalPlan={technicalPlanObject || {}}
+              baseline={technicalPlanBaseline}
               productPlan={productPlanObject || {}}
               interaction={revisionDraftBinding.interaction}
               key={revisionDraftBinding.draft.draftSha256}
@@ -725,6 +737,8 @@ export default function WorkflowRunCard({
             ) : (
               <PlanConfirmationCard
                 artifact={confirmationArtifact}
+                changeSummary={clarification?.mode === 'technical_plan_confirmation' ? technicalChangeSummary : undefined}
+                onViewChanges={!disabled && interactionAvailability === 'active' && technicalChanges ? onOpenTechnicalPlanChanges : undefined}
                 disabled={Boolean(disabled || interactionAvailability !== 'active')}
                 onAbandon={() =>
                   onSubmitClarification?.(workflow, { [artifactAnswerKey]: '需要修改，请重新生成' })

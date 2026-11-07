@@ -111,7 +111,11 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                         call = self._recover_authority(state)
                         error = RecoveryExecutionError
                     if allowed:
-                        await call
+                        result = await call
+                        if entry == "node":
+                            self.assertEqual(result["technical_plan_baseline"], baseline or {})
+                            if baseline:
+                                self.assertIsNot(result["technical_plan_baseline"], baseline)
                     else:
                         with self.assertRaisesRegex(error, "baseline"):
                             await call

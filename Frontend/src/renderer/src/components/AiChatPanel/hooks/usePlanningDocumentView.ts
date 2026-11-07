@@ -8,7 +8,7 @@ type LoadedDocuments = { identity: string; values: Record<string, unknown>; erro
 
 const DOCUMENT_KEYS: Record<DocumentKind, readonly string[]> = {
   'requirement-doc': ['requirement_spec', 'product_plan'],
-  'technical-plan': ['technical_plan', 'product_plan']
+  'technical-plan': ['technical_plan', 'product_plan', 'technical_plan_baseline']
 }
 
 /** 按当前可见文档选择引用，不预取其他阶段的资料。 */

@@ -5,7 +5,7 @@ import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import RichLoading from '../DesignProgress/RichLoading'
 import RequirementDocPanel from './RequirementDocPanel'
-import TechnicalPlanDocPanel from './TechnicalPlanDocPanel'
+import TechnicalPlanReviewPanel from './TechnicalPlanReviewPanel'
 import './index.less'
 
 const { Text } = Typography
@@ -40,6 +40,9 @@ type Props = {
   productPlan?: Record<string, unknown>
   requirementSpec?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
+  technicalPlanBaseline?: Record<string, unknown>
+  technicalPlanUpdating?: boolean
+  technicalPlanReviewKey?: string
   technicalPlanStatus?: string
   structuredDocument?: 'requirement-doc' | 'technical-plan'
   structuredDocumentLoading?: boolean
@@ -58,6 +61,9 @@ export default function DocPanel({
   productPlan,
   requirementSpec,
   technicalPlan,
+  technicalPlanBaseline,
+  technicalPlanUpdating,
+  technicalPlanReviewKey,
   technicalPlanStatus,
   structuredDocument,
   structuredDocumentLoading,
@@ -142,9 +148,12 @@ export default function DocPanel({
           >
             {isTechnicalPlan ? (
               technicalPlan && productPlan ? (
-                <TechnicalPlanDocPanel
+                <TechnicalPlanReviewPanel
+                  key={technicalPlanReviewKey}
                   plan={technicalPlan}
                   productPlan={productPlan}
+                  baseline={technicalPlanBaseline}
+                  updating={technicalPlanUpdating}
                   onReviseAuthorization={onReviseAuthorization}
                 />
               ) : (

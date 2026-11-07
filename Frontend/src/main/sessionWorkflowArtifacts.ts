@@ -60,6 +60,7 @@ export async function storeWorkflowArtifacts(
     'requirement_spec',
     'product_plan',
     'technical_plan',
+    'technical_plan_baseline',
     'project_plan',
     'pending_project_plan'
   ]) {

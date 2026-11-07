@@ -41,7 +41,7 @@ export function useWorkflowDocuments(
     ? mode === 'requirement_document_confirmation'
       ? ['requirement_spec', 'product_plan']
       : mode === 'technical_plan_confirmation' || mode === 'revision_draft_confirmation'
-        ? ['technical_plan', 'product_plan']
+        ? ['technical_plan', 'product_plan', 'technical_plan_baseline']
         : ['project_plan']
     : []
   const needsMarkdown = required && mode !== 'technical_plan_confirmation' && mode !== 'revision_draft_confirmation'

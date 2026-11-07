@@ -91,6 +91,8 @@ class ProjectState(TypedDict, total=False):
     product_plan_json_path: str
     clarification: dict[str, Any]
     technical_plan: dict[str, Any]
+    # 仅供本轮变更审阅的修改前快照，不参与生成、确认或配置决策。
+    technical_plan_baseline: dict[str, Any]
     technical_plan_json_path: str
     application_planning_recovery_boundary: dict[str, Any]
     technical_plan_candidate: dict[str, Any]

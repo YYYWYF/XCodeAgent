@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './technicalPlanDiff.test'
 import { test } from 'node:test'
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
@@ -168,6 +169,7 @@ test('技术规划只读取当前面板资料，文档关闭时不读取', async
   const source = workflow()
   source.state!.artifactRefs = {
     technical_plan: reference('c'),
+    technical_plan_baseline: reference('e'),
     product_plan: reference('b'),
     requirement_spec: reference('a')
   }
@@ -182,10 +184,11 @@ test('技术规划只读取当前面板资料，文档关闭时不读取', async
     },
     async (render, view) => {
       await render(source, '/workspace/a', 'technical-plan')
-      assert.deepEqual(calls, ['c', 'b'])
+      assert.deepEqual(calls, ['c', 'b', 'e'])
       assert.ok(view().workflow?.state?.technical_plan)
+      assert.ok(view().workflow?.state?.technical_plan_baseline)
       await render(source, '/workspace/a', null)
-      assert.equal(calls.length, 2)
+      assert.equal(calls.length, 3)
     }
   )
 })

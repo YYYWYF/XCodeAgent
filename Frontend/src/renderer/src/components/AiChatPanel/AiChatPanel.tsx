@@ -5483,6 +5483,11 @@ export default function AiChatPanel({
                 onContinueDevelopment={handleContinueDevelopment}
                 onEntityDesignGateJump={handleEntityDesignGateJump}
                 onOpenApiDesignConfig={handleOpenApiDesignConfig}
+                onOpenTechnicalPlanChanges={() => {
+                  // 查看差异只展开当前文档，不提交确认或发起新一轮生成。
+                  setRightPanel({ type: 'doc', docKey: 'technical-plan', reviewKey: crypto.randomUUID() })
+                  if (rightPanelLayout === 'hidden') setRightPanelLayout('split')
+                }}
                 onOpenCodeChangeFile={handleOpenCodeChangeFile}
                 onOpenRevisionSession={handleOpenRevisionSession}
                 onRevertCodeChanges={requestCodeChangeRevert}
@@ -6040,6 +6045,10 @@ export default function AiChatPanel({
                     : technicalPlanForDoc
                 }
                 technicalPlanStatus={technicalPlanBaselineStatus(currentPlanningWorkflow, technicalPlanForDoc)}
+                technicalPlanBaseline={['failed', 'cancelled', 'stopped'].includes(String(currentPlanningWorkflow?.summary.status))
+                  ? undefined : asWorkflowRecord(planningDocumentWorkflow?.state?.technical_plan_baseline)}
+                technicalPlanUpdating={technicalPlanViewActive && planningPhaseRunning}
+                technicalPlanReviewKey={`${JSON.stringify(planningDocumentRefs?.technical_plan)}:${rightPanel?.type === 'doc' ? rightPanel.reviewKey || '' : ''}`}
                 structuredDocument={
                   technicalPlanViewActive
                     ? 'technical-plan'

@@ -3,7 +3,7 @@ import type { ReactElement } from 'react'
 import { useState } from 'react'
 import type { WorkflowRevisionDraftInteraction } from '../../../../typings'
 import { cx } from '../../../../utils'
-import TechnicalPlanDocPanel from '../DocPanel/TechnicalPlanDocPanel'
+import TechnicalPlanReviewPanel from '../DocPanel/TechnicalPlanReviewPanel'
 import './ApplicationRevisionCard.less'
 
 const { Text, Title } = Typography
@@ -12,6 +12,7 @@ const { TextArea } = Input
 type RevisionDraftReviewProps = {
   disabled?: boolean
   technicalPlan: Record<string, unknown>
+  baseline?: Record<string, unknown>
   productPlan: Record<string, unknown>
   interaction: Omit<WorkflowRevisionDraftInteraction, 'action' | 'feedback'>
   onAction: (interaction: WorkflowRevisionDraftInteraction) => void
@@ -21,6 +22,7 @@ type RevisionDraftReviewProps = {
 export default function RevisionDraftReview({
   disabled,
   technicalPlan,
+  baseline,
   productPlan,
   interaction,
   onAction
@@ -45,7 +47,7 @@ export default function RevisionDraftReview({
         </div>
       </div>
       <div className={cx('application-revision-draft-preview')}>
-        <TechnicalPlanDocPanel plan={technicalPlan} productPlan={productPlan} />
+        <TechnicalPlanReviewPanel plan={technicalPlan} productPlan={productPlan} baseline={baseline} />
       </div>
       <div className={cx('application-revision-draft-revise')}>
         <TextArea

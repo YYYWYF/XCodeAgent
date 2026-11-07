@@ -226,6 +226,13 @@ def application_page_planning_capabilities() -> dict[str, Any]:
         "transport": "ag-ui-sse",
         "eventProtocol": "devagentstudio.workflow.event.v1",
         "stateSnapshotKey": "workflow",
+        "technicalPlanComparison": {
+            "baselineField": "technical_plan_baseline",
+            "documentReferenceField": "state.artifactRefs.technical_plan_baseline",
+            "baselineSource": "current-operation-input",
+            "artifactReadEndpoint": "/workflow-artifacts/run",
+            "readOnly": True,
+        },
         "customEventName": "workflow-run",
         "recoveryActionField": "forwardedProps.applicationPlanningRecovery",
         "stageHandoff": {

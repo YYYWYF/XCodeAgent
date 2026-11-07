@@ -82,7 +82,7 @@ def _await_revision_draft(
     """登记当前 TechnicalPlan 草稿，并以技术规划节点语义返回确认卡。"""
 
     # 正文进入统一文档引用链路；确认信息只保留版本身份，不复制整份计划。
-    review = {key: value for key, value in draft.items() if key not in {"technicalPlan", "productPlan"}}
+    review = {key: value for key, value in draft.items() if key not in {"technicalPlan", "productPlan", "baseline"}}
     update_active_revision_progress(
         workspace,
         change_id=change_id,
@@ -115,6 +115,7 @@ def _await_revision_draft(
         "change_id": change_id,
         "revision_draft": review,
         "technical_plan": draft["technicalPlan"],
+        "technical_plan_baseline": draft.get("baseline", {}),
         "product_plan": draft["productPlan"],
         "clarification": clarification,
         "timeline": ["technical_planning"],
@@ -148,6 +149,10 @@ def _handle_revision_interaction(
             "timeline": ["application_revision"],
         }
     if action == "revise":
+        # 连续修改按当前草稿比较，不能始终与正式目录中的旧版本比较。
+        _, previous_draft = load_revision_draft(
+            workspace, change_id=active.change_id, artifact_key=artifact_key,
+        )
         discard_current_revision_draft(
             workspace,
             change_id=active.change_id,
@@ -162,6 +167,7 @@ def _handle_revision_interaction(
             active,
             revision_request=revision_request,
         )
+        draft["baseline"] = previous_draft
         return _await_revision_draft(
             workspace,
             active.change_id,
@@ -289,7 +295,7 @@ def _create_technical_plan_draft(
     metadata, artifact = load_revision_draft(
         workspace, change_id=active.change_id, artifact_key="technical-plan",
     )
-    return _draft_projection(metadata.artifact_key, artifact, product_plan, metadata)
+    return {**_draft_projection(metadata.artifact_key, artifact, product_plan, metadata), "baseline": existing}
 
 
 def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> None:
