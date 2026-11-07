@@ -4108,13 +4108,8 @@ export default function AiChatPanel({
       previous.status === 'unavailable' && activeConnectionState.status === 'healthy' &&
       planningState?.transportState === 'idle') reconcilePlanningRef.current?.()
   }, [workspaceRoot, planningThreadId, isApplicationPlanningPhase, activeConnectionState.status, planningState?.transportState])
-  // 模板动作继续使用原专用入口，连接兜底和业务错误兜底共用同一动作归属。
-  const currentTemplateRetry = !generatingTemplate && templateGenerationRecoverable
-    ? onRetryTemplateGeneration
-    : templateReconcileRetryable ? onRetryTemplateReconcile : undefined
-  const templateFallbackError = generatingTemplate ? undefined : templateGenerationRecoverable
-    ? applicationLifecycle?.error?.message || '应用模板初始化未完成，请重试。'
-    : templateReconcileRetryable ? '应用模板能力更新失败，请重试。' : undefined
+  // 模板失败和中断由对话内专用卡片承载，规划状态里的同一错误不再重复弹全局通知。
+  const templateRecoveryInline = templateGenerationRecoverable || templateReconcileRetryable
   // 新一轮工作台执行已经开始时，旧失败投影只能留在历史记录，不能继续占用当前控制面。
   const workbenchExecutionInProgress = workbenchRecoveryCoveredByExecution({
     isApplicationPlanningPhase,
@@ -4141,7 +4136,7 @@ export default function AiChatPanel({
     workbenchExecutionInProgress ||
     endedWorkbenchRecovery ||
     Boolean(workflowCodeReviewRetry(activeWorkflow)) ||
-    Boolean(currentTemplateRetry) ||
+    templateRecoveryInline ||
     Boolean(currentPreviewRetry)
       ? undefined
       : isApplicationPlanningPhase
@@ -4153,15 +4148,13 @@ export default function AiChatPanel({
       ? uiDesignRecoveryError(sessionPlanningFailureState?.recovery)
       : undefined) ||
     technicalPlanningError || previewFallbackError ||
-    (!workbenchExecutionInProgress && !endedWorkbenchRecovery
+    (!templateRecoveryInline && !workbenchExecutionInProgress && !endedWorkbenchRecovery
       ? isApplicationPlanningPhase
         ? sessionPlanningFailureState?.syncError ||
           planningError ||
-          templateFallbackError ||
           sessionPlanningFailureState?.recoveryActionError ||
           (sessionPlanningFailureState ? latestConversationFailure(messages) : undefined)
-        : templateFallbackError ||
-          error ||
+        : error ||
           (previewRuntime.repairSession ? undefined : latestConversationFailure(messages))
       : undefined)
   const globalFallback = globalFallbackState({
@@ -4171,7 +4164,7 @@ export default function AiChatPanel({
     recoveryError:
       (isApplicationPlanningPhase && planningState?.checkpointMissing) ||
       workbenchExecutionInProgress ||
-      Boolean(currentTemplateRetry) ||
+      templateRecoveryInline ||
       Boolean(currentPreviewRetry)
         ? undefined
         : buildFailureMessageForDisplay(recoveryError, latestWorkflowForDisplay),
@@ -4183,8 +4176,8 @@ export default function AiChatPanel({
   )
   const authorizationRecoveryOwner = !isApplicationPlanningPhase &&
     activeConnectionState.status === 'healthy' && !recoveryProjectionError &&
-    !pendingRevisionStart && !currentPreviewRetry && !currentTemplateRetry &&
-    !revisionHandoffFailure && !previewFallbackError && !templateFallbackError &&
+    !pendingRevisionStart && !currentPreviewRetry && !templateRecoveryInline &&
+    !revisionHandoffFailure && !previewFallbackError &&
     !pendingRevisionStartError && (currentRecoveryIncident || globalFallback.error)
     ? authorizationBootstrapRecoveryOwner({ candidate: activeExecutionRecovery,
         workflow: latestWorkflowForDisplay, incident: currentRecoveryIncident, messages: displayedMessages })
@@ -4230,11 +4223,9 @@ export default function AiChatPanel({
           ? JSON.stringify(['workspace-read', lifecycleSyncError || recoveryProjectionError])
           : previewFallbackError
             ? JSON.stringify(['preview', previewFallbackError])
-            : templateFallbackError
-              ? JSON.stringify(['template', templateFallbackError])
-              : JSON.stringify(['task', activeSession?.key || draftKey,
-                sessionPlanningFailureState?.recovery?.sourceRunId || activeExecutionRecovery?.sourceRunId || latestWorkflowForDisplay?.runId,
-                globalFallback.error || currentRecoveryIncident?.failureMessage || currentRecoveryIncident?.recoveryMessage])
+            : JSON.stringify(['task', activeSession?.key || draftKey,
+              sessionPlanningFailureState?.recovery?.sourceRunId || activeExecutionRecovery?.sourceRunId || latestWorkflowForDisplay?.runId,
+              globalFallback.error || currentRecoveryIncident?.failureMessage || currentRecoveryIncident?.recoveryMessage])
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
@@ -5679,7 +5670,7 @@ export default function AiChatPanel({
                       error={globalFallback.error}
                       retryDisabled={Boolean(technicalPlanningError && (otherSessionExecutionLocked ||
                         planningState?.transportState === 'running' || planningState?.transportState === 'reconciling'))}
-                      onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
+                      onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || (isApplicationPlanningPhase
                         ? technicalFailureWorkflow ? handleRetryTechnicalPlanning : handleRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
