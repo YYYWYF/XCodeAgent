@@ -50,6 +50,8 @@ function SidebarAssetIcon({ source }: SidebarAssetIconProps): ReactElement {
 }
 
 type SessionSidebarProps = {
+  planningCatalogStatus?: import('../../../../typings').PlanningCatalogStatus
+  onPlanningCatalogRetry?: () => void
   activeSessionId?: string
   apiContracts: DevelopmentPlanningApiContract[]
   application: ApplicationConfig
@@ -103,6 +105,8 @@ type SessionSidebarProps = {
 
 /** 组织工作台左侧快捷入口，并在非折叠模式下复用应用大纲。 */
 export default function SessionSidebar({
+  planningCatalogStatus,
+  onPlanningCatalogRetry,
   activeSessionId,
   apiContracts = [],
   deletingSessionId,
@@ -417,6 +421,8 @@ export default function SessionSidebar({
 
         {!effectiveCollapsed ? (
           <ApplicationOutline
+            planningCatalogStatus={planningCatalogStatus}
+            onPlanningCatalogRetry={onPlanningCatalogRetry}
             currentBranch={currentBranch}
             apiContracts={apiContracts}
             entities={entities}

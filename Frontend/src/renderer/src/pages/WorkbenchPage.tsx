@@ -1,5 +1,6 @@
 import { useApplicationConfigRefresh } from './useApplicationConfigRefresh'
 import { useWorkbenchEntry } from './useWorkbenchEntry'
+import { useWorkbenchPlanningCatalog } from './useWorkbenchPlanningCatalog'
 import { Layout, message, notification } from 'antd'
 import { randomUUID } from '@ag-ui/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -11,7 +12,6 @@ import type {
 } from '../components/WorkbenchVersionModals'
 import { UncommittedChangesProvider, WorkbenchPhaseProvider } from '../context'
 import {
-  inspectWorkspacePlanningArtifacts,
   isApplicationCreationComplete,
   loadWorkspaceApplicationConfig,
   saveWorkspaceApplicationConfig
@@ -62,6 +62,13 @@ import type {
 import { developmentArtifactTotals, developmentPlanningTotals } from '../developmentArtifacts'
 import { cx } from '../utils'
 import './WorkbenchPage.less'
+
+const EMPTY_CATALOG = {
+  pages: [] as DevelopmentPlanningPageOption[],
+  pageTree: [] as DevelopmentPlanningPageTreeNode[],
+  apiContracts: [] as DevelopmentPlanningApiContract[],
+  entities: [] as DevelopmentPlanningEntityOption[]
+}
 
 type Props = {
   application: ApplicationConfig
@@ -157,18 +164,6 @@ function WorkbenchPage({
     markPlanningArtifactsLoaded,
     handleSessionHistoryReadyChange
   } = useWorkbenchEntry(onEntryLoadFailure)
-  const [developmentPlanningPages, setDevelopmentPlanningPages] = useState<
-    DevelopmentPlanningPageOption[]
-  >([])
-  const [developmentPlanningPageTree, setDevelopmentPlanningPageTree] = useState<
-    DevelopmentPlanningPageTreeNode[]
-  >([])
-  const [developmentPlanningApiContracts, setDevelopmentPlanningApiContracts] = useState<
-    DevelopmentPlanningApiContract[]
-  >([])
-  const [developmentPlanningEntities, setDevelopmentPlanningEntities] = useState<
-    DevelopmentPlanningEntityOption[]
-  >([])
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   // —— 应用分支（提交并推送/发起新迭代/切换分支）状态 ——
   // 当前查看的分支名；为空时取当前分支（branchName）。
@@ -202,33 +197,31 @@ function WorkbenchPage({
   // 模板是否就绪（lifecycle=ready_for_workbench），用于校准正式规划产物。
   const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
 
+  const catalog = useWorkbenchPlanningCatalog(application.workspaceRoot, JSON.stringify([
+    planningRefreshRevision, lifecycleReadyForWorkbench,
+    planningState?.workflow?.runId, planningState?.transportState
+  ]))
+  const developmentPlanningPages = catalog.inspection?.pages || EMPTY_CATALOG.pages
+  const developmentPlanningPageTree = catalog.inspection?.pageTree || EMPTY_CATALOG.pageTree
+  const developmentPlanningApiContracts = catalog.inspection?.apiContracts || EMPTY_CATALOG.apiContracts
+  const developmentPlanningEntities = catalog.inspection?.entities || EMPTY_CATALOG.entities
+
   useEffect(() => {
     let active = true
-
-    // 同步可选的应用配置和规划产物；窗口重新聚焦时只校准可能被外部修改的文件。
-    const syncWorkspaceFiles = async (): Promise<void> => {
-      if (!application.workspaceRoot) {
-        failWorkbenchEntry('workspace_missing')
-        return
-      }
+    // 配置与目录分别读取，配置读取的等待或失败不阻止目录发起真实 IPC。
+    const syncConfiguration = async (): Promise<void> => {
+      if (!application.workspaceRoot) { failWorkbenchEntry('workspace_missing'); return }
       try {
         const applicationConfig = await loadWorkspaceApplicationConfig(application.workspaceRoot)
         if (!active) return
         markConfigurationLoaded()
-        // application.json 只保存工作区配置，不拥有首页索引中的页面元数据；合并时保留索引字段，避免进入工作台后把 pages/defaultPage 覆盖成 undefined。
         setWorkspaceApplication((prev) => {
           const pages = Array.isArray(prev.pages) && prev.pages.length > 0 ? prev.pages : ['页面']
           return {
-            ...prev,
-            ...applicationConfig,
-            pages,
-            defaultPage: prev.defaultPage || pages[0],
-            // 磁盘是分支表的权威来源；只在磁盘没有分支表时才回退到内存那份。
+            ...prev, ...applicationConfig, pages, defaultPage: prev.defaultPage || pages[0],
             ...resolveBranchChain({
-              diskBranches: applicationConfig.branches,
-              diskBranchName: applicationConfig.branchName,
-              memoryBranches: prev.branches,
-              memoryBranchName: prev.branchName
+              diskBranches: applicationConfig.branches, diskBranchName: applicationConfig.branchName,
+              memoryBranches: prev.branches, memoryBranchName: prev.branchName
             })
           }
         })
@@ -236,77 +229,41 @@ function WorkbenchPage({
         if (!active) return
         console.warn('读取工作区 application.json 失败，终止本次工作台加载。', error)
         failWorkbenchEntry('configuration')
-        return
-      }
-      try {
-        const inspection = await inspectWorkspacePlanningArtifacts(application.workspaceRoot)
-        if (!active) return
-        setDevelopmentPlanningPages(inspection.pages)
-        setDevelopmentPlanningPageTree(
-          Array.isArray(inspection.pageTree) ? inspection.pageTree : []
-        )
-        setDevelopmentPlanningApiContracts(
-          Array.isArray(inspection.apiContracts) ? inspection.apiContracts : []
-        )
-        setDevelopmentPlanningEntities(
-          Array.isArray(inspection.entities) ? inspection.entities : []
-        )
-        if (!inspection.ready) {
-          console.warn('工作区规划产物不完整。', inspection)
-          if (lifecycleReadyForWorkbench) {
-            // 冷启动缓存可能仍是开发就绪，而正式修订已把磁盘产物转为待确认；以当前生命周期决定入口，避免误报损坏。
-            let currentLifecycle: ApplicationLifecycle | undefined
-            try {
-              currentLifecycle = await getApplicationLifecycle({
-                workspaceRoot: application.workspaceRoot,
-                id: application.id,
-                appName: application.appName
-              })
-            } catch (error) {
-              // 生命周期不可读时仍保留工作台入口；后续工作流会按后端当前状态返回可操作错误。
-              console.warn('无法同步应用生命周期，继续打开工作台。', error)
-            }
-            if (!active) return
-            if (currentLifecycle) {
-              onApplicationLifecycleChange(currentLifecycle)
-              if (!isApplicationCreationComplete(currentLifecycle)) return
-            }
-            const artifactNames: Record<string, string> = {
-              'requirement-spec': '需求文档', 'product-plan': '产品计划', 'technical-plan': '技术规划'
-            }
-            // 入口提示只显示业务产物名称，文件路径留在诊断日志和恢复卡详情中。
-            const details = [...new Set([...inspection.missing, ...inspection.invalid].map(
-              (path) => artifactNames[path.split('/').pop()?.replace(/\.(json|md)$/, '') || ''] || '规划文档'
-            ))].join('、')
-            // 业务产物损坏需要进入工作台修复；不能返回首页并把重新生成入口一起卸载。
-            message.warning(details
-              ? `规划文件缺失或不完整：${details}。执行时会提供对应步骤的重新生成入口。`
-              : '规划文件不完整。执行时会提供对应步骤的重新生成入口。')
-          }
-        }
-      } catch (error) {
-        if (!active) return
-        setDevelopmentPlanningPages([])
-        setDevelopmentPlanningPageTree([])
-        setDevelopmentPlanningApiContracts([])
-        setDevelopmentPlanningEntities([])
-        console.warn('检查 specs/plans 规划产物失败。', error)
-        failWorkbenchEntry('planning')
-      } finally {
-        if (active) markPlanningArtifactsLoaded()
       }
     }
-
-    // 首次进入由初始状态承载加载门禁；后续刷新保留当前内容，避免工作台反复清空闪烁。
-    // 仅当应用 id 变化时才用 prop 覆盖，避免发起新迭代后 lifecycle 变化触发 effect 回退分支。
     setWorkspaceApplication((prev) => (prev.id === application.id ? prev : application))
-    void syncWorkspaceFiles()
-    window.addEventListener('focus', syncWorkspaceFiles)
-    return () => {
-      active = false
-      window.removeEventListener('focus', syncWorkspaceFiles)
+    void syncConfiguration()
+    return () => { active = false }
+  }, [application, failWorkbenchEntry, markConfigurationLoaded])
+
+  useEffect(() => {
+    // 完成读取或明确展示读取失败后放行入口，失败不再通过 finally 清空目录并伪装成功。
+    if (catalog.settled) markPlanningArtifactsLoaded()
+  }, [catalog.settled, markPlanningArtifactsLoaded])
+
+  useEffect(() => {
+    const inspection = catalog.inspection
+    if (!inspection || inspection.ready || inspection.planningUnconfirmed ||
+      inspection.catalogIssues.length || !lifecycleReadyForWorkbench || !application.workspaceRoot) return
+    let active = true
+    // 目录自身错误由目录重试面板承载；其它正式文件的完整性仍核对当前生命周期后提示。
+    const warnIncompleteArtifacts = async (): Promise<void> => {
+      let lifecycle: ApplicationLifecycle | undefined
+      try {
+        lifecycle = await getApplicationLifecycle({
+          workspaceRoot: application.workspaceRoot!, id: application.id, appName: application.appName
+        })
+      } catch (error) { console.warn('无法同步应用生命周期，继续打开工作台。', error) }
+      if (!active) return
+      if (lifecycle) {
+        onApplicationLifecycleChange(lifecycle)
+        if (!isApplicationCreationComplete(lifecycle)) return
+      }
+      message.warning('规划文件缺失或不完整。执行时会提供对应步骤的重新生成入口。')
     }
-  }, [application, failWorkbenchEntry, lifecycleReadyForWorkbench, onApplicationLifecycleChange, planningRefreshRevision, markConfigurationLoaded, markPlanningArtifactsLoaded])
+    void warnIncompleteArtifacts()
+    return () => { active = false }
+  }, [catalog.inspection, lifecycleReadyForWorkbench, application, onApplicationLifecycleChange])
 
   useEffect(() => {
     let active = true
@@ -652,10 +609,7 @@ function WorkbenchPage({
       //    重新读取，所以它的 key 带上了迭代令牌（见 phaseProviderKey）。
       //    少了这一步，界面会沿用上一轮的手动阶段覆盖，发起新迭代后仍停在上一轮阶段。
       // 7. 重置前端规划状态，新迭代从空白开始。
-      setDevelopmentPlanningPages([])
-      setDevelopmentPlanningPageTree([])
-      setDevelopmentPlanningApiContracts([])
-      setDevelopmentPlanningEntities([])
+      catalog.reset()
       setViewingBranchName('')
       autoPublishShownRef.current = false
       setSwitchingTargetLabel(undefined)
@@ -803,10 +757,7 @@ function WorkbenchPage({
       await persistApplicationConfig(nextApp)
       // 6. 重置前端规划状态，新迭代从空白开始；viewingBranchName 清空让界面落在
       //    新的当前分支上。
-      setDevelopmentPlanningPages([])
-      setDevelopmentPlanningPageTree([])
-      setDevelopmentPlanningApiContracts([])
-      setDevelopmentPlanningEntities([])
+      catalog.reset()
       setViewingBranchName('')
       autoPublishShownRef.current = false
       setSwitchingTargetLabel(undefined)
@@ -901,6 +852,8 @@ function WorkbenchPage({
                   applicationLifecycle={applicationLifecycle}
                   developmentTotals={topBarDevelopmentTotals}
                   developmentPlanningReady={developmentPlanningPagesLoaded}
+                  planningCatalogStatus={catalog.status}
+                  onPlanningCatalogRetry={catalog.reload}
                   developmentPlanningPages={developmentPlanningPages}
                   developmentPlanningPageTree={developmentPlanningPageTree}
                   developmentPlanningApiContracts={developmentPlanningApiContracts}

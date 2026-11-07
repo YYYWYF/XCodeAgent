@@ -113,6 +113,18 @@ test('全部加载完成后保留淡出动画，后续错误与超时不再触�
   })
 })
 
+/** 配置和目录并行读取后，不能因目录先返回就提前结束整体入口门禁。 */
+test('目录与历史已返回但配置未完成时继续等待配置', () => {
+  withEntry(({ current, advance }) => {
+    act(() => { current().markPlanningArtifactsLoaded(); current().handleSessionHistoryReadyChange(true) })
+    advance(800)
+    assert.equal(current().entryStage, 'loading')
+    act(() => current().markConfigurationLoaded())
+    advance(280)
+    assert.equal(current().entryStage, 'ready')
+  })
+})
+
 test('会话技术异常不泄露到提示，多个失败和迟到完成只处理一次', () => {
   withEntry(({ current, advance, notices, failures }) => {
     act(() => {

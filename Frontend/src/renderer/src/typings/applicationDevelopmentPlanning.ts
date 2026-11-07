@@ -3,6 +3,7 @@ import type {
   ApplicationMenuItem,
   ApplicationSharedModule
 } from './application'
+export type { PlanningCatalogStatus } from '../../../shared/planningCatalog'
 
 export type DevelopmentPlanningQuestion = {
   id: string

@@ -16,6 +16,7 @@ const FADE_MS = 280
 // 集中管理入口加载、业务失败提示和整体超时，后续刷新不重新触发入口门禁。
 export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
+  const [configurationLoaded, setConfigurationLoaded] = useState(false)
   const [developmentPlanningPagesLoaded, setPlanningLoaded] = useState(false)
   const [chatSessionHistoryReady, setHistoryReady] = useState(false)
   const startedAtRef = useRef(Date.now())
@@ -41,6 +42,7 @@ export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
   // 记录配置已读，供超时时准确列出尚未完成的资源。
   const markConfigurationLoaded = useCallback((): void => {
     progressRef.current.configuration = true
+    setConfigurationLoaded(true)
   }, [])
 
   // 规划检查完成即可放行，文档缺失或待确认仍沿用原有业务处理。
@@ -68,7 +70,7 @@ export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
   }, [entryStage, failWithMessage])
 
   useEffect(() => {
-    if (!developmentPlanningPagesLoaded || !chatSessionHistoryReady || entryStage !== 'loading') return
+    if (!configurationLoaded || !developmentPlanningPagesLoaded || !chatSessionHistoryReady || entryStage !== 'loading') return
     const remaining = Math.max(0, MIN_VISIBLE_MS - (Date.now() - startedAtRef.current))
     const timer = window.setTimeout(() => {
       if (failedRef.current) return
@@ -76,7 +78,7 @@ export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
       setEntryStage('leaving')
     }, remaining)
     return () => window.clearTimeout(timer)
-  }, [developmentPlanningPagesLoaded, chatSessionHistoryReady, entryStage])
+  }, [configurationLoaded, developmentPlanningPagesLoaded, chatSessionHistoryReady, entryStage])
 
   useEffect(() => {
     if (entryStage !== 'leaving') return

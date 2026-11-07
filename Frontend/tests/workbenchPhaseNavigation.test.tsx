@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import './workbenchEntry.test'
+import './workbenchPlanningCatalog.test'
 import './stoppedPlanningAvailability.test'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'

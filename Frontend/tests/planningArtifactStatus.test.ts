@@ -11,6 +11,115 @@ import {
   endpointDesignDocumentStatus,
   PRODUCT_PLAN_SCHEMA_VERSION
 } from '../src/main/planningArtifactStatus'
+import { readWorkbenchPlanningArtifacts } from '../src/main/workbenchPlanningArtifacts'
+
+/** 创建完整当前正式规划，再替换单项状态以复现修订期间的工作台读取。 */
+async function writeWorkbenchPlans(workspaceRoot: string): Promise<void> {
+  const artifacts = {
+    'specs/requirement-spec.md': '# 需求',
+    'specs/requirement-spec.json': JSON.stringify({ confirmation_status: 'confirmed' }),
+    'plans/product-plan.md': '# 产品规划',
+    'plans/product-plan.json': JSON.stringify({
+      schema_version: PRODUCT_PLAN_SCHEMA_VERSION, confirmation_status: 'confirmed',
+      pages: [{ pageId: 'help', name: '帮助页', path: '/page/help' }]
+    }),
+    'plans/technical-plan.json': JSON.stringify({
+      artifact_type: 'technical-plan', confirmation_status: 'confirmed',
+      pages: [{ pageId: 'help' }], entities: [{ id: 'article' }],
+      api_contracts: [{ id: 'articles', endpoints: [{ id: 'list', path: '/articles' }] }]
+    })
+  }
+  for (const [relativePath, content] of Object.entries(artifacts)) {
+    const target = path.join(workspaceRoot, '.devagentstudio', relativePath)
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.writeFile(target, content)
+  }
+}
+
+/** 验证技术规划待确认时页面、接口、实体均可浏览，但正式准入仍被阻止。 */
+test('待确认技术规划保留完整接口和实体供目录浏览', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeWorkbenchPlans(workspaceRoot)
+    const technicalPath = path.join(workspaceRoot, '.devagentstudio/plans/technical-plan.json')
+    const technical = JSON.parse(await fs.readFile(technicalPath, 'utf8'))
+    technical.confirmation_status = 'pending_user_confirmation'
+    await fs.writeFile(technicalPath, JSON.stringify(technical))
+    const pending = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.deepEqual(pending.technicalPlan?.api_contracts, technical.api_contracts)
+    assert.deepEqual(pending.technicalPlan?.entities, technical.entities)
+    assert.equal((pending.productPlan?.pages as unknown[]).length, 1)
+    assert.deepEqual(pending.invalid, ['plans/technical-plan.json'])
+    assert.deepEqual(pending.catalogIssues, [])
+    technical.confirmation_status = 'confirmed'
+    await fs.writeFile(technicalPath, JSON.stringify(technical))
+    const confirmed = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.deepEqual(confirmed.technicalPlan?.api_contracts, technical.api_contracts)
+    assert.deepEqual(confirmed.invalid, [])
+  })
+})
+
+/** 验证技术规划缺失、损坏或状态未知时，产品目录保持可读，整体准入仍报告该错误。 */
+test('技术规划异常不会遮蔽已确认的产品页面，也不会通过正式产物准入', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeWorkbenchPlans(workspaceRoot)
+    const technicalPath = path.join(workspaceRoot, '.devagentstudio/plans/technical-plan.json')
+    for (const content of [
+      JSON.stringify({ artifact_type: 'technical-plan', confirmation_status: 'unknown' }),
+      '{invalid-json',
+      JSON.stringify({ artifact_type: 'wrong-contract', confirmation_status: 'confirmed' })
+    ]) {
+      await fs.writeFile(technicalPath, content)
+      const result = await readWorkbenchPlanningArtifacts(workspaceRoot)
+      assert.deepEqual(result.productPlan?.pages, [{ pageId: 'help', name: '帮助页', path: '/page/help' }])
+      assert.equal(result.technicalPlan, undefined)
+      assert.deepEqual(result.invalid, ['plans/technical-plan.json'])
+      assert.deepEqual(result.catalogIssues, [{ source: 'technical', reason: 'invalid' }])
+    }
+    await fs.rename(technicalPath, `${technicalPath}.test-backup`)
+    const missing = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.equal((missing.productPlan?.pages as unknown[]).length, 1)
+    assert.deepEqual(missing.missing, ['plans/technical-plan.json'])
+    assert.deepEqual(missing.catalogIssues, [{ source: 'technical', reason: 'missing' }])
+  })
+})
+
+/** 验证缺失数组与合法空数组严格区分，只有后者代表真实没有目录内容。 */
+test('损坏的目录数组不能被当成真实空目录', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeWorkbenchPlans(workspaceRoot)
+    const technicalPath = path.join(workspaceRoot, '.devagentstudio/plans/technical-plan.json')
+    const technical = JSON.parse(await fs.readFile(technicalPath, 'utf8'))
+    await fs.writeFile(technicalPath, JSON.stringify({ ...technical, api_contracts: null }))
+    const invalid = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.equal(invalid.technicalPlan, undefined)
+    assert.deepEqual(invalid.catalogIssues, [{ source: 'technical', reason: 'invalid' }])
+    await fs.writeFile(technicalPath, JSON.stringify({ ...technical, pages: [], api_contracts: [], entities: [] }))
+    const empty = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.deepEqual(empty.technicalPlan?.api_contracts, [])
+    assert.deepEqual(empty.technicalPlan?.entities, [])
+    assert.deepEqual(empty.catalogIssues, [])
+  })
+})
+
+/** 验证待确认产品页仍可浏览但不通过正式准入，技术契约也独立读取。 */
+test('产品规划与技术规划独立校验，确认后重新读取最新目录', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeWorkbenchPlans(workspaceRoot)
+    const productPath = path.join(workspaceRoot, '.devagentstudio/plans/product-plan.json')
+    const product = JSON.parse(await fs.readFile(productPath, 'utf8'))
+    await fs.writeFile(productPath, JSON.stringify({ ...product, confirmation_status: 'pending_user_confirmation' }))
+    const pending = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.deepEqual(pending.productPlan?.pages, product.pages)
+    assert.equal((pending.technicalPlan?.api_contracts as unknown[]).length, 1)
+    assert.deepEqual(pending.invalid, ['plans/product-plan.json'])
+    product.pages.push({ pageId: 'notice', name: '公告页', path: '/page/notice' })
+    await fs.writeFile(productPath, JSON.stringify(product))
+    const confirmed = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.equal((confirmed.productPlan?.pages as unknown[]).length, 2)
+    assert.deepEqual(confirmed.missing, [])
+    assert.deepEqual(confirmed.invalid, [])
+  })
+})
 
 /** 验证 Electron 工作台只读取后端当前的 ProductPlan v5 契约。 */
 test('ProductPlan 工作台校验使用 v5', () => {

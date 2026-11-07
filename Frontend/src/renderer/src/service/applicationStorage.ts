@@ -307,7 +307,8 @@ export async function inspectWorkspacePlanningArtifacts(
   workspaceRoot: string
 ): Promise<{
   ready: boolean;
-  hasPageDesigns: boolean;
+  planningUnconfirmed: boolean;
+  catalogIssues: import('../../../shared/planningCatalog').PlanningCatalogIssue[];
   missing: string[];
   invalid: string[];
   pages: DevelopmentPlanningPageOption[];

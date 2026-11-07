@@ -380,6 +380,8 @@ type Props = {
   applicationLifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
   developmentPlanningReady: boolean
+  planningCatalogStatus: import('../../typings').PlanningCatalogStatus
+  onPlanningCatalogRetry: () => void
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
@@ -859,6 +861,8 @@ export default function AiChatPanel({
   applicationLifecycle,
   developmentTotals,
   developmentPlanningReady,
+  planningCatalogStatus,
+  onPlanningCatalogRetry,
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
@@ -5348,6 +5352,8 @@ export default function AiChatPanel({
       ) : (
         <div className={cx('ai-chat-assistant')}>
           <SessionSidebar
+            planningCatalogStatus={planningCatalogStatus}
+            onPlanningCatalogRetry={onPlanningCatalogRetry}
             activeSessionId={activeSessionId}
             application={application}
             deletingSessionId={deletingSessionId}
@@ -5988,6 +5994,8 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              planningCatalogStatus={planningCatalogStatus}
+              onPlanningCatalogRetry={onPlanningCatalogRetry}
               theme={theme}
               initialEntityTab={currentMappingJourney?.destination === 'entity' ? 'database' : undefined}
               onBackToFieldMapping={currentMappingJourney?.destination === 'entity' ? handleBackToFieldMapping : undefined}
