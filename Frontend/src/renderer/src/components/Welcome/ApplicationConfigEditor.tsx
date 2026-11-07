@@ -19,7 +19,7 @@ import type { FormInstance } from 'antd'
 import type { ReactElement } from 'react'
 import type { ApplicationDraft } from '../../typings'
 import { cx } from '../../utils'
-import { hasLegacyAdministrators, validateAdminChange } from '../../utils/initialAdministrators'
+import { validateAdminChange } from '../../utils/initialAdministrators'
 import { applicationIconOptions } from './constants'
 import ThemeColorField from './ThemeColorField'
 
