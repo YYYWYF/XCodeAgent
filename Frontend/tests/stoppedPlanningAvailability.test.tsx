@@ -12,7 +12,8 @@ function lifecycle(unchanged: boolean): ApplicationLifecycle {
     application: { id: 'app', name: 'test' }, revision: 1, updatedAt: '',
     initialization: { stage: 'ready_for_workbench', status: 'completed', threadId: 'planning' },
     activeExecutions: {}, endedPlanningExecution: {
-      runId: 'stopped', threadId: 'planning', stage: 'generating_technical_plan', workspaceUnchanged: unchanged
+      runId: 'stopped', threadId: 'planning', stage: 'generating_technical_plan',
+      workspaceUnchanged: unchanged, canRestart: false
     }
   }
 }

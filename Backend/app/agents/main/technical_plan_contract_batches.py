@@ -10,6 +10,7 @@ from app.agents.main.technical_plan_contract_batch_prompts import (
 )
 from app.agents.main.technical_plan_contract_batch_validation import (
     SchemaPlanRepairRequired, contract_body, validate_endpoint_batch, validate_schema_fields, validate_schema_plan, validate_schema_semantics,
+    validate_frozen_schema_responses,
 )
 from app.agents.main.technical_plan_fragment_output import PlanningOutputTruncated
 from app.agents.main.technical_plan_generation_prompts import contract_prompt
@@ -85,6 +86,12 @@ def generate_contract(requirement: dict, catalog: dict, spec: dict, *, cache: di
         if schema["base"].get("type") == "object":
             schemas[schema["name"]].update(properties=properties, required=schema["required"])
     validate_schema_semantics(schemas, catalog=catalog, spec=spec, plan=plan)
+    try:
+        validate_frozen_schema_responses(schemas, spec=spec, plan=plan)
+    except SchemaPlanRepairRequired:
+        # 接口批次不能改写已冻结的必填目录或字段类型，先撤下所属契约再交回原重试预算。
+        _discard_contract(cache, key, prefix, publish, batched=True)
+        raise
     endpoints = []
     # 相同请求/响应 Schema 的接口相邻生成，减少每批重复携带的定义；正式顺序仍由目录恢复。
     refs = {item["endpointId"]: item for item in plan["endpoint_refs"]}

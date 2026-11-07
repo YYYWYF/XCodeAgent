@@ -11,7 +11,7 @@ from app.persistence.checkpoints import close_workflow_checkpointer_for_workspac
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.technical_planning_retry import prepare_technical_planning_retry
 from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
-from app.workspace.plan_documents import technical_plan_json_path, technical_plan_markdown_path
+from app.workspace.plan_documents import technical_plan_json_path
 from tests.test_technical_plan_modular_generation import fragment_outputs, catalog_bindings
 from tests.technical_plan_catalog_fixture import catalog_responses
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
@@ -78,7 +78,7 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         snapshot = await self.h.graph.aget_state({"configurable": {"thread_id": self.h.thread_id}})
         return snapshot, frames, model.call_count
 
-    async def test_assembled_plan_writes_markdown_and_stops_at_original_confirmation(self):
+    async def test_assembled_plan_writes_json_and_stops_at_original_confirmation(self):
         """首版拆分后完整校验通过，仍只有单份待确认计划且没有自动进入模板或开发。"""
 
         config_path = self.h.workspace / ".devagentstudio/application.json"
@@ -94,7 +94,7 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.values["technical_plan_generation_input_sha256"], "")
         self.assertFalse(TechnicalPlanFragmentStore(self.h.workspace).path.exists())
         self.assertTrue(technical_plan_json_path(snapshot.values).is_file())
-        self.assertTrue(technical_plan_markdown_path(snapshot.values).is_file())
+        self.assertFalse(technical_plan_json_path(snapshot.values).with_suffix(".md").exists())
         self.assertEqual(config_path.read_bytes(), config_before)
         self.assertTrue(any('"RUN_FINISHED"' in frame for frame in frames))
         self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
@@ -128,7 +128,8 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.next, ("technical_planning_review",), "\n".join(frames))
         self.assertEqual(snapshot.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
-        self.assertTrue(technical_plan_markdown_path(snapshot.values).is_file())
+        self.assertTrue(technical_plan_json_path(snapshot.values).is_file())
+        self.assertFalse(technical_plan_json_path(snapshot.values).with_suffix(".md").exists())
         self.assertFalse(TechnicalPlanFragmentStore(self.h.workspace).path.exists())
         self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
         self.assertFalse(any("catalog_repair" in frame for frame in frames if '"name":"llm.token"' not in frame))

@@ -224,6 +224,7 @@ import {
   globalFallbackState,
   isTechnicalPlanGenerationFailure,
   technicalPlanGenerationFailureMessage,
+  connectionErrorNoticeId,
   prioritizedConnection,
   latestConversationFailure,
   workbenchRecoveryCoveredByExecution
@@ -428,7 +429,7 @@ type Props = {
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试规划 Graph。 */
-  onRetryPlanning?: () => void | Promise<void>
+  onRetryPlanning?: (restartInitialPlanning?: boolean) => void | Promise<void>
   /** 底部连接恢复后读取当前规划中断事实，不启动生成或恢复动作。 */
   onReconcilePlanning?: () => void
   /** 仅重试应用模板初始化，独立于规划 Graph 的恢复。 */
@@ -4218,7 +4219,7 @@ export default function AiChatPanel({
     ? JSON.stringify(['handoff', revisionHandoffFailure?.handoff.continuation.changeId, revisionHandoffFailure?.error])
     : !fallbackErrorVisible ? undefined
       : activeConnectionState.status !== 'healthy'
-        ? JSON.stringify(['connection', activeConnectionState === previewRuntime.connection ? 'preview' : 'backend', activeConnectionState.lastError])
+        ? connectionErrorNoticeId(activeConnectionState, activeConnectionState === previewRuntime.connection ? 'preview' : 'backend')
         : lifecycleSyncError || recoveryProjectionError
           ? JSON.stringify(['workspace-read', lifecycleSyncError || recoveryProjectionError])
           : previewFallbackError
@@ -5685,7 +5686,8 @@ export default function AiChatPanel({
                   onLifecycle={onApplicationLifecycleChange}
                   disabled={!onRetryPlanning || planningState?.transportState === 'running' || planningState?.transportState === 'reconciling'}
                   error={planningState?.recoveryActionError || planningState?.syncError}
-                  onContinue={() => onRetryPlanning?.()} onRestart={() => switchPhase('development')} />
+                  onContinue={() => onRetryPlanning?.()} onRestart={() => stoppedPlanning.canRestart
+                    ? onRetryPlanning?.(true) : switchPhase('development')} />
               ) : planningHistoryOnly ? (
                 <PlanningHistoryNotice access={planningAccess} onReturn={() => {
                   const destination = planningAccess.destination

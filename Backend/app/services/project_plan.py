@@ -1620,8 +1620,10 @@ def _schema_for_contract_ref(contract: dict[str, Any], reference: Any) -> dict[s
 def _validate_technical_pagination(
     contract: dict[str, Any],
     endpoint: dict[str, Any],
+    *,
+    check_parameters: bool = True,
 ) -> list[str]:
-    """校验列表接口的统一分页参数和响应结构。"""
+    """校验列表接口的分页响应；分批生成尚无接口参数时只检查冻结的 Schema。"""
 
     endpoint_id = str(endpoint.get("id") or "unknown")
     if not endpoint_id.endswith(".list"):
@@ -1633,7 +1635,7 @@ def _validate_technical_pagination(
         if str(parameter.get("in") or "query") == "query"
     }
     for name in ("current", "pageSize"):
-        if name not in parameter_names:
+        if check_parameters and name not in parameter_names:
             errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 缺少分页参数 {name}。")
     response = _schema_for_contract_ref(contract, endpoint.get("response_schema_ref"))
     properties = response.get("properties") if isinstance(response, dict) else None

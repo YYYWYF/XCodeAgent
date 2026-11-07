@@ -3,6 +3,7 @@ import './formalRevisionHandoffRecovery.test'
 import './formalRevisionStartRetry.test'
 import './phaseSessionSelection.test'
 import './planningStageReentry.test'
+import './initialPlanningRestart.test'
 import {
   ApplicationPlanningRuntime,
   type ApplicationPlanningRuntimeDependencies

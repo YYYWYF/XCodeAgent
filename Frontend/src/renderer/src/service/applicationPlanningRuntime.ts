@@ -255,7 +255,7 @@ export class ApplicationPlanningRuntime {
   }
 
   /** 先对账，再提交 Backend 签发的恢复动作；缺少 action identity 时保持 fail closed。 */
-  async retryCurrentFailure(): Promise<void> {
+  async retryCurrentFailure(restartInitialPlanning = false): Promise<void> {
     this.dispatch({
       type: 'recovery_action_started',
       applicationId: this.applicationId,
@@ -270,6 +270,14 @@ export class ApplicationPlanningRuntime {
       }
       if (outcome.status !== 'recovered') return
       const current = this.requireCurrentState()
+      if (restartInitialPlanning) {
+        // 工作区变化后只接受明确的新生成动作；原继续入口仍须保持指纹一致。
+        const stopped = current.lifecycle.endedPlanningExecution
+        if (!stopped?.canRestart || stopped.threadId !== this.threadId)
+          throw new Error('当前没有可重新生成的首次创建任务，请同步当前流程。')
+        await this.executeRecoveryRetry({ threadId: this.threadId, sourceRunId: stopped.runId }, true)
+        return
+      }
       const recovery = current.recovery
       // 重试对账发现同一规划已完成时，只消费服务端已签发的原续接，不重新执行模板节点。
       if (current.workflow?.summary.status === 'completed' && revisionContinuationHandoffFromWorkflow(current.workflow)) {
@@ -706,7 +714,10 @@ export class ApplicationPlanningRuntime {
   }
 
   /** 对无法直接恢复的当前失败提交 source hint，由 Backend 重新判断安全入口。 */
-  private async executeRecoveryRetry(plan: ApplicationPlanningRecoveryActionPlan): Promise<void> {
+  private async executeRecoveryRetry(
+    plan: Pick<ApplicationPlanningRecoveryActionPlan, 'threadId' | 'sourceRunId'>,
+    restartInitialPlanning = false
+  ): Promise<void> {
     let recoveryToken: number | undefined
     try {
       await this.withExclusiveTransport(
@@ -717,12 +728,12 @@ export class ApplicationPlanningRuntime {
             : new AgUiChatSession(plan.threadId, getExecutionRecoveryActionUrl())
           const merged = await this.sendMessageWithinTransport(
             token,
-            '重试',
+            restartInitialPlanning ? '按当前文件重新生成' : '重试',
             {
               editorMode: 'frontend',
               workspaceRoot: current.application.workspaceRoot,
               executionRecovery: {
-                action: 'retry_current_failure',
+                action: restartInitialPlanning ? 'restart_initial_planning' : 'retry_current_failure',
                 sourceRunId: plan.sourceRunId
               }
             },

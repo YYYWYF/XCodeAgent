@@ -33,6 +33,11 @@ export function prioritizedConnection(workflow: ConnectionState, preview: Connec
   return workflow.status !== 'healthy' ? workflow : preview.status === 'unavailable' ? preview : workflow
 }
 
+/** 最近一次成功连接划分故障轮次，同次断线重试保持身份，恢复后同样的错误重新提示。 */
+export function connectionErrorNoticeId(connection: ConnectionState, origin: 'preview' | 'backend'): string {
+  return JSON.stringify(['connection', origin, connection.lastConnectedAt, connection.lastError])
+}
+
 /** 只提取最新消息的失败给底部兜底，新请求、运行占位或成功消息不继承历史错误。 */
 export function latestConversationFailure(messages: AgentChatMessage[]): string | undefined {
   const latest = messages[messages.length - 1]

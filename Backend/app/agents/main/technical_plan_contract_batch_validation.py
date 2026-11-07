@@ -7,7 +7,7 @@ from app.agents.main.technical_plan_generation_validation import (
     _Authentication, _StrictFragment, _check, _unique, validate_contract,
 )
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
-from app.services.project_plan import validate_technical_plan_api_contracts
+from app.services.project_plan import _validate_technical_pagination, validate_technical_plan_api_contracts
 
 
 class _SchemaSpec(_StrictFragment):
@@ -136,6 +136,19 @@ def validate_schema_semantics(schemas: dict, *, catalog: dict, spec: dict, plan:
 
     candidate = {"entities": catalog["entities"], "api_contracts": [contract_body(spec, plan, schemas, [])]}
     _check([*validate_technical_plan_api_contracts(candidate), *validate_technical_plan_chinese_prose(candidate)])
+
+
+def validate_frozen_schema_responses(schemas: dict, *, spec: dict, plan: dict) -> None:
+    """在接口生成前检查冻结响应，目录或字段错误必须回到有 Schema 写权限的阶段。"""
+
+    refs = {item["endpointId"]: item for item in plan["endpoint_refs"]}
+    body = {"schemas": schemas}
+    errors = [error for endpoint in spec["endpoints"]
+        for error in _validate_technical_pagination(
+            body, {**endpoint, **refs[endpoint["id"]]}, check_parameters=False,
+        )]
+    if errors:
+        raise SchemaPlanRepairRequired("冻结 Schema 响应不符合接口合同，须重建本 Contract 的 Schema 目录与字段：" + "；".join(errors))
 
 
 def validate_endpoint_batch(value: dict, *, endpoints: list, schemas: dict, plan: dict, catalog: dict, spec: dict) -> dict:

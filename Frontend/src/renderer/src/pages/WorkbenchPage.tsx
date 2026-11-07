@@ -106,7 +106,7 @@ type Props = {
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试设计阶段规划任务。 */
-  onRetryPlanning?: () => void | Promise<void>
+  onRetryPlanning?: (restartInitialPlanning?: boolean) => void | Promise<void>
   /** 底部连接恢复后只读同步规划投影，不派发节点重试。 */
   onReconcilePlanning?: () => void
   /** 保留独立的模板初始化重试动作。 */

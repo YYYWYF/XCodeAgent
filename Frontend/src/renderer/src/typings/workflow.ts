@@ -1382,6 +1382,7 @@ export type ApplicationLifecycle = {
     threadId: string
     stage: ApplicationLifecycleStage
     workspaceUnchanged: boolean
+    canRestart: boolean
   } | null
   resourceLocks?: {
     application?: ExecutionResourceLock

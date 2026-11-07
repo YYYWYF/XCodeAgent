@@ -14,7 +14,7 @@ export default function StoppedPlanningNotice({ application, stopped, onLifecycl
   disabled: boolean
   error?: string
   onContinue: () => void | Promise<void>
-  onRestart: () => void
+  onRestart: () => void | Promise<void>
 }): ReactElement {
   const [continuing, setContinuing] = useState(false)
   const availability = useStoppedPlanningAvailability({
@@ -28,11 +28,18 @@ export default function StoppedPlanningNotice({ application, stopped, onLifecycl
     setContinuing(true)
     try { if (await availability.check()) await onContinue() } finally { setContinuing(false) }
   }
+  /** 首次创建重新生成也等待原 Runtime 收口，避免重复点击启动两个新任务。 */
+  const handleRestart = async (): Promise<void> => {
+    if (continuing || disabled) return
+    setContinuing(true)
+    try { await onRestart() } finally { setContinuing(false) }
+  }
   return <div className={cx('ai-chat-composer')}>
     <div className={cx('ai-chat-composer-column')}>
       <EndedTaskNotice mode="stopped_generation" unchanged={availability.unchanged}
         checkingWorkspace={availability.unchanged === undefined} continuing={continuing}
-        disabled={disabled} onContinue={handleContinue} onRestart={onRestart} />
+        restartInitialPlanning={stopped.canRestart}
+        disabled={disabled} onContinue={handleContinue} onRestart={handleRestart} />
       {availability.error ? <Typography.Text type="danger">{availability.error}</Typography.Text> : null}
       {error ? <Typography.Text type="danger">{error}</Typography.Text> : null}
     </div>

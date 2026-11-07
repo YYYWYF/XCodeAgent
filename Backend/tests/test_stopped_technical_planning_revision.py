@@ -3,7 +3,7 @@
 from copy import deepcopy
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from app.agents.technical_planning_conversation import classify_technical_planning_conversation
 
 from app.domain.execution_recovery import DurableExecutionStatus
@@ -11,6 +11,7 @@ from app.persistence.checkpoints import close_workflow_checkpointer_for_workspac
 from app.persistence.execution_recovery import get_execution
 from app.protocols.application_page_planning import build_application_page_planning_ag_ui_stream
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
+from app.protocols.execution_recovery import build_execution_recovery_ag_ui_stream
 from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.services.application_lifecycle import load_application_lifecycle, write_application_lifecycle
 from app.services.planning_execution_end import end_planning_execution
@@ -110,6 +111,32 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
     async def test_modification_after_stopping_review(self):
         """等待确认时结束任务，新要求可以生成但仍须再次确认。"""
         await self._verify_new_modification()
+
+    async def test_changed_initial_review_restarts_generator_instead_of_reopening_old_gate(self):
+        """停止在审阅门的首次创建显式重生成，必须调用生成器并签发新的确认事务。"""
+        (self.h.workspace / "changed-input.txt").write_text("工作区已变化")
+        before = await self.h.graph.aget_state(self.config)
+        source = load_application_lifecycle(self.h.workspace).ended_planning_execution.run_id
+        with patch("app.protocols.execution_recovery.recovery_graph_for_execution", AsyncMock(return_value=self.h.graph)), patch(
+                "app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(self.h.candidate)) as generate, patch(
+                "app.graph.nodes.planning._project_plan_validation_errors", return_value=[]):
+            frames = [frame async for frame in build_execution_recovery_ag_ui_stream(payload={
+                "threadId": self.h.thread_id,
+                "forwardedProps": {"workspaceRoot": str(self.h.workspace), "executionRecovery": {
+                    "action": "restart_initial_planning", "sourceRunId": source,
+                }},
+            })]
+        self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames), "\n".join(frames))
+        generate.assert_called_once()
+        after = await self.h.graph.aget_state(self.config)
+        self.assertEqual(after.next, ("technical_planning_review",))
+        self.assertNotEqual(after.values["application_planning_recovery_boundary"]["operationId"],
+            before.values["application_planning_recovery_boundary"]["operationId"])
+        self.assertTrue(any(task.interrupts for task in after.tasks))
+        self.assertEqual(after.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
+        current = load_application_lifecycle(self.h.workspace)
+        self.assertEqual(current.initialization.stage, "awaiting_technical_plan_confirmation")
+        self.assertIsNone(current.ended_planning_execution)
 
     async def test_card_modification_skips_classifier_and_reuses_generator(self):
         """卡片输入无需 @，零意图分类调用，仍以原计划进入同一生成器和确认门。"""

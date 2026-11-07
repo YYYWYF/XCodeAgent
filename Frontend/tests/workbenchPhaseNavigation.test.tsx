@@ -21,6 +21,17 @@ import {
 } from '../src/renderer/src/workbenchPhaseNavigation'
 import type { ApplicationLifecycle, TestEntryGate, WorkflowRunPayload } from '../src/renderer/src/typings'
 
+test('首次创建停止且文件变化时留在原阶段重新生成，正式修订仍返回开发', () => {
+  for (const initial of [true, false]) {
+    const html = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged={false}
+      restartInitialPlanning={initial} continuing={false} disabled={false}
+      onContinue={async () => {}} onRestart={() => {}} />)
+    assert.equal(html.includes('返回开发阶段'), !initial)
+    assert.equal(html.includes('按当前文件重新生成'), initial)
+    assert.equal(html.includes('完成后仍需审阅确认'), initial)
+  }
+})
+
 test('入口交接后断网及冷启动仍在当前计划线程开放原门，来源会话保持只读', () => {
   const lifecycle: ApplicationLifecycle = {
     application: { id: 'app', name: 'app' }, revision: 6, updatedAt: '',
@@ -65,7 +76,8 @@ test('正式修订停止只在原需求会话显示继续卡，历史确认仍�
     application: { id: 'app', name: 'app' }, revision: 3, updatedAt: '',
     initialization: { stage: 'ready_for_workbench', status: 'completed', threadId: 'design' },
     activeExecutions: {}, extensions: {}, endedPlanningExecution: {
-      runId: 'stopped', threadId: 'design', stage: 'generating_requirement_document', workspaceUnchanged: true
+      runId: 'stopped', threadId: 'design', stage: 'generating_requirement_document',
+      workspaceUnchanged: true, canRestart: false
     }
   }
   const session = { threadId: 'design' }

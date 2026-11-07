@@ -5,6 +5,8 @@ import { act, create } from 'react-test-renderer'
 import { notification } from 'antd'
 import type { ArgsProps } from 'antd/lib/notification'
 import WorkbenchErrorNotification from '../src/renderer/src/components/WorkbenchErrorNotification'
+import { connectionErrorNoticeId } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
+import { initialConnectionState, completeConnectionRequest, failConnectionRequest } from '../src/renderer/src/service/connectionState'
 
 /** 验证真实组件的关闭、更新和隔离行为，Ant Design 浮层由 Electron 验证。 */
 test('统一通知关闭后不随会话更新重弹，新错误可展示且保留最新操作', async () => {
@@ -51,6 +53,19 @@ test('统一通知关闭后不随会话更新重弹，新错误可展示且保�
     assert.equal(notices.length, count + 2)
     await act(async () => { renderer!.update(view(undefined, 'workspace-B')) })
     assert.equal(closed.at(-1), key)
+    let connection = failConnectionRequest(completeConnectionRequest(initialConnectionState(), 1, 100), 2, 'offline', 200)
+    await act(async () => { renderer!.update(view(connectionErrorNoticeId(connection, 'backend'), 'workspace-B')) })
+    notices.at(-1)!.onClose!()
+    const beforeReconnect = notices.length
+    // 同一次断连重试和切换会话保持去重，失败时间变化不能制造新故障。
+    connection = failConnectionRequest(connection, 3, 'offline', 250)
+    await act(async () => { renderer!.update(view(connectionErrorNoticeId(connection, 'backend'), 'workspace-B', 'session-C')) })
+    assert.equal(notices.length, beforeReconnect)
+    connection = completeConnectionRequest(connection, 4, 300)
+    await act(async () => { renderer!.update(view(undefined, 'workspace-B')) })
+    connection = failConnectionRequest(connection, 5, 'offline', 400)
+    await act(async () => { renderer!.update(view(connectionErrorNoticeId(connection, 'backend'), 'workspace-B')) })
+    assert.equal(notices.length, beforeReconnect + 1, '连接恢复后再次同样断连属于新的故障轮次')
     await act(async () => { renderer!.unmount() })
     renderer = undefined
     assert.ok(closed.every((closedKey) => closedKey === key))

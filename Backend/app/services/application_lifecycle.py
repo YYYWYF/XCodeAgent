@@ -899,6 +899,7 @@ def claim_application_planning_run_for_recovery(
     thread_id: str,
     expected_lifecycle_revision: int | None,
     source_run_id: str | None = None,
+    restart_initial_planning: bool = False,
 ) -> ApplicationLifecycle:
     """以 lifecycle revision CAS 让 pre-ownership child 取得运行时 ownership。"""
 
@@ -925,7 +926,8 @@ def claim_application_planning_run_for_recovery(
         if source_run_id is not None:
             from app.services.ended_planning import restore_ended_planning
 
-            current = restore_ended_planning(workspace, current, source_run_id=source_run_id, thread_id=thread_id)
+            current = restore_ended_planning(workspace, current, source_run_id=source_run_id,
+                thread_id=thread_id, restart_initial=restart_initial_planning)
         if not str(new_run_id or "").strip():
             raise ApplicationLifecycleConflictError(
                 "RECOVERY_STATE_DRIFT: child activeRunId 不能为空。"
@@ -1754,7 +1756,7 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
     payload.pop("developmentContinuations", None)
     archived_planning = state.ended_planning_execution
     if archived_planning is not None:
-        from app.services.ended_planning import ended_planning_available
+        from app.services.ended_planning import ended_planning_available, initial_planning_restart_available
 
         # 公开控制面只提供原身份与可继续性，不泄漏修订内部凭据和文件摘要。
         payload["endedPlanningExecution"] = {
@@ -1762,6 +1764,7 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
             "threadId": archived_planning.initialization.thread_id,
             "stage": archived_planning.initialization.stage.value,
             "workspaceUnchanged": ended_planning_available(archived_planning.workspace, state),
+            "canRestart": initial_planning_restart_available(state),
         }
     if state.ended_executions or state.ended_planning_execution:
         payload["endedExecutionsCheckedAt"] = utc_now().isoformat()

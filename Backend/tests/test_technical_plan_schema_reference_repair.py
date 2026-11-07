@@ -60,6 +60,50 @@ def routed_model(catalog, order, page, customer, customer_page, plan):
 class TechnicalPlanSchemaReferenceRepairTests(TestCase):
     """已注册但漏登记的引用重建目录；真正未知的引用仍在原字段阶段拒绝。"""
 
+    def test_invalid_frozen_pagination_is_discarded_and_replanned_after_restart(self):
+        """必填目录及字段类型错误都撤下所属候选，磁盘续跑重新生成 Schema 而不重复目录。"""
+
+        for issue in ("required", "type"):
+            with self.subTest(issue=issue), tempfile.TemporaryDirectory() as workspace:
+                requirement, catalog, contract, page, plan = batch_fixture()
+                requirement["technical_plan_generation_workspace"] = workspace
+                old_id, new_id = catalog["contracts"][0]["endpoints"][0]["id"], "orders.list"
+                catalog["contracts"][0]["endpoints"][0]["id"] = new_id
+                contract["endpoints"][0]["id"] = new_id
+                plan["endpoint_refs"][0]["endpointId"] = new_id
+                for binding in [*catalog["action_bindings"], *page["references"]["action_implementations"]]:
+                    if binding["endpointId"] == old_id:
+                        binding["endpointId"] = new_id
+                for dependency in page["references"]["endpoint_dependencies"]:
+                    if dependency["endpoint_id"] == old_id:
+                        dependency["endpoint_id"] = new_id
+                contract["endpoints"][0]["parameters"] = [
+                    {"name": name, "in": "query", "required": False, "schema": {"type": "integer"}}
+                    for name in ("current", "pageSize")]
+                properties = {name: {"type": "integer", "description": "分页数值。"}
+                    for name in ("total", "pageSize", "current")}
+                properties["list"] = {"type": "array", "items": {"type": "string"}, "description": "订单结果。"}
+                contract["schemas"] = {"Output": {"type": "object", "properties": properties, "required": list(properties)}}
+                plan["schemas"][0].update(fields=list(properties), required=list(properties))
+                good_contract, good_plan = deepcopy(contract), deepcopy(plan)
+                if issue == "required":
+                    plan["schemas"][0]["required"].remove("pageSize")
+                else:
+                    properties["total"]["type"] = "string"
+                model = BatchModel(catalog, contract, page, plan)
+                with self.assertRaisesRegex(SchemaPlanRepairRequired, "冻结 Schema 响应"):
+                    generate_technical_plan_sections(requirement, invoke=model)
+                store = TechnicalPlanFragmentStore(workspace)
+                digest = json.loads(store.path.read_text())["inputSha256"]
+                prefix = contract_part_prefix(contract["id"])
+                self.assertEqual(set(store.load(digest)), {"catalog", prefix + "mode"})
+                self.assertEqual(model.endpoint_groups, [], "接口阶段没有 Schema 修改权限，不能空转重试")
+                resumed = BatchModel(catalog, good_contract, page, good_plan)
+                result = generate_technical_plan_sections(requirement, invoke=resumed)
+                self.assertEqual(result["api_contracts"], [good_contract])
+                self.assertEqual(sum("contract_schema_plan" in prompt.splitlines()[0] for prompt in resumed.prompts), 1)
+                self.assertFalse(any("catalog" in prompt.splitlines()[0] for prompt in resumed.prompts))
+
     def test_missing_registered_reference_atomically_replans_only_own_contract_and_resumes(self):
         """真实落盘撤下错误目录及其字段，重启式续跑保留已完成客户 Contract 和全局目录。"""
 
