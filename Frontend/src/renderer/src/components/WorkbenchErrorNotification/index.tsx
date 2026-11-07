@@ -1,7 +1,8 @@
 import { notification } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import { useEffect, useId, useRef } from 'react'
+import { useContext, useEffect, useId, useRef } from 'react'
 import { cx } from '../../utils'
+import { UiReadVisibility } from '../../hooks/uiReadVisibility'
 import './index.less'
 
 type WorkbenchErrorNotificationProps = {
@@ -17,6 +18,9 @@ export default function WorkbenchErrorNotification({
   children
 }: WorkbenchErrorNotificationProps): ReactElement {
   const [api, contextHolder] = notification.useNotification()
+  const visible = useContext(UiReadVisibility)
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
   const instanceId = useId()
   const key = `workbench-error-${instanceId}`
   const dismissed = useRef({ workspace, notices: new Set<string>() })
@@ -26,7 +30,8 @@ export default function WorkbenchErrorNotification({
     if (dismissed.current.workspace !== workspace) {
       dismissed.current = { workspace, notices: new Set() }
     }
-    if (!noticeId || dismissed.current.notices.has(noticeId)) {
+    // 工作台被隐藏时组件仍挂载；全局 Portal 必须显式关闭，不能留在首页或其他页面。
+    if (!visible || !noticeId || dismissed.current.notices.has(noticeId)) {
       notification.close(key)
       return
     }
@@ -41,10 +46,10 @@ export default function WorkbenchErrorNotification({
       closeIcon: <span aria-label="关闭工作台提示">×</span>,
       // 仅由用户点击关闭时记住本条错误；业务恢复时的自动移除不写入关闭记录。
       onClose: () => {
-        if (dismissed.current.workspace === workspace) dismissed.current.notices.add(noticeId)
+        if (visibleRef.current && dismissed.current.workspace === workspace) dismissed.current.notices.add(noticeId)
       }
     })
-  }, [api, children, key, noticeId, workspace])
+  }, [api, children, key, noticeId, visible, workspace])
 
   // 离开工作台时只移除本组件的通知，不销毁其他功能的 Ant Design 通知。
   useEffect(() => () => notification.close(key), [key])

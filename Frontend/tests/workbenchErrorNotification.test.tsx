@@ -5,6 +5,7 @@ import { act, create } from 'react-test-renderer'
 import { notification } from 'antd'
 import type { ArgsProps } from 'antd/lib/notification'
 import WorkbenchErrorNotification from '../src/renderer/src/components/WorkbenchErrorNotification'
+import { UiReadVisibility } from '../src/renderer/src/hooks/uiReadVisibility'
 import { connectionErrorNoticeId } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import { initialConnectionState, completeConnectionRequest, failConnectionRequest } from '../src/renderer/src/service/connectionState'
 
@@ -69,6 +70,46 @@ test('统一通知关闭后不随会话更新重弹，新错误可展示且保�
     await act(async () => { renderer!.unmount() })
     renderer = undefined
     assert.ok(closed.every((closedKey) => closedKey === key))
+  } finally {
+    if (renderer) await act(async () => { renderer!.unmount() })
+    notification.useNotification = originalHook
+    notification.close = originalClose
+  }
+})
+
+test('退出工作台立即关闭所属浮层，隐藏期间不重弹，返回时保留未关闭提示的操作', async () => {
+  const originalHook = notification.useNotification
+  const originalClose = notification.close
+  const notices: ArgsProps[] = []
+  const closed: string[] = []
+  /** 保存当前通知和关闭回执，验证真实组件的可见性 effect。 */
+  const open = (args: ArgsProps): void => { notices.push(args) }
+  notification.useNotification = () => [{ open, success: open, error: open, info: open, warning: open }, createElement(Fragment)]
+  notification.close = (key): void => { closed.push(key) }
+  let renderer: ReturnType<typeof create> | undefined
+  /** 保留组件挂载，只切换 AppEntryPage 同一个可见性 Context。 */
+  const view = (visible: boolean, noticeId = 'stopped-generation') => createElement(
+    UiReadVisibility.Provider, { value: visible },
+    createElement(WorkbenchErrorNotification, { workspace: 'workspace-A', noticeId,
+      children: createElement('button', null, '继续生成') })
+  )
+  try {
+    await act(async () => { renderer = create(view(true)) })
+    assert.equal(notices.length, 1)
+    const key = notices[0].key!
+    await act(async () => { renderer!.update(view(false)) })
+    assert.equal(closed.at(-1), key)
+    // 关闭动画的迟到回调不能把离开工作台误记为用户永久关闭。
+    notices[0].onClose?.()
+    await act(async () => { renderer!.update(view(false, 'new-background-error')) })
+    assert.equal(notices.length, 1)
+    await act(async () => { renderer!.update(view(true)) })
+    assert.equal(notices.length, 2)
+    assert.equal(notices.at(-1)?.key, key)
+    notices.at(-1)!.onClose?.()
+    await act(async () => { renderer!.update(view(false)) })
+    await act(async () => { renderer!.update(view(true)) })
+    assert.equal(notices.length, 2, '用户主动关闭的提示返回工作台后仍保持关闭')
   } finally {
     if (renderer) await act(async () => { renderer!.unmount() })
     notification.useNotification = originalHook
