@@ -1,44 +1,37 @@
+@import (reference) 'antd/lib/style/themes/default.less';
+
 .@{class-prefix}-agent-error-card {
   box-sizing: border-box;
-  display: flex;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
   min-width: 0;
   align-items: flex-start;
-  gap: 13px;
+  gap: 10px 12px;
   width: 100%;
-  padding: 16px;
+  padding: 20px;
   color: var(--wb-text, var(--modal-text, #202124));
-  background: color-mix(
-    in srgb,
-    var(--wb-danger, var(--modal-danger, #b42318)) 7%,
-    var(--wb-canvas, var(--modal-surface, #ffffff))
-  );
-  border: 1px solid
-    color-mix(
-      in srgb,
-      var(--wb-danger, var(--modal-danger, #b42318)) 38%,
-      var(--wb-border, var(--modal-border, rgba(0, 0, 0, 0.12)))
-    );
-  border-radius: 10px;
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--wb-danger, #b42318) 8%, transparent);
+  // 保留 80% 的 Ant Design 错误色，增强提示感，仍比默认配色柔和。
+  background: var(--agent-error-card-background, color-mix(in srgb, @alert-error-bg-color 80%, var(--wb-canvas, var(--modal-surface, #fff))));
+  border: 1px solid var(--agent-error-card-border, color-mix(in srgb, @alert-error-border-color 80%, var(--wb-canvas, var(--modal-surface, #fff))));
+  border-radius: 12px;
 }
 
 .@{class-prefix}-agent-error-card-icon {
+  grid-column: 1;
+  grid-row: 1;
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   color: var(--wb-danger, var(--modal-danger, #b42318));
-  font-size: 22px;
+  font-size: 20px;
 }
 
 .@{class-prefix}-agent-error-card-copy {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 4px;
+  // 标题与图标同排，正文与操作行共用整张卡片的宽度。
+  display: contents;
 }
 
 .@{class-prefix}-agent-error-card-title.ant-typography {
@@ -49,13 +42,15 @@
 
 .@{class-prefix}-agent-error-card-header {
   display: flex;
-  grid-column: 1;
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   align-items: center;
   gap: 4px;
 }
 
 .@{class-prefix}-agent-error-card-message.ant-typography {
+  grid-column: 1 / -1;
   color: var(--wb-text, var(--modal-text, #202124));
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -63,8 +58,9 @@
 
 .@{class-prefix}-agent-error-card-hint.ant-typography,
 .@{class-prefix}-agent-error-card-detail.ant-typography {
+  grid-column: 1 / -1;
   color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -81,6 +77,7 @@
   line-height: 1.55;
 
   summary {
+    padding: 5px 0;
     cursor: pointer;
     &:focus-visible {
       outline: 2px solid var(--wb-accent, var(--modal-accent, #722ed1));
@@ -101,6 +98,7 @@
 
 .@{class-prefix}-agent-error-card-copy-button.ant-btn {
   flex: 0 0 auto;
+  margin-left: auto;
   width: 22px;
   min-width: 22px;
   height: 22px;
@@ -124,13 +122,143 @@
   }
 }
 
-.@{class-prefix}-agent-error-card-retry.ant-btn {
-  align-self: flex-start;
-  margin-top: 4px;
+.@{class-prefix}-agent-error-card-retry.ant-btn-default.ant-btn-dangerous {
+  color: var(--wb-danger, var(--modal-danger));
+  background: var(--wb-canvas, var(--modal-surface));
+  border-color: var(--wb-danger, var(--modal-danger));
+  box-shadow: none;
+
+  &:not(:disabled):hover,
+  &:not(:disabled):focus,
+  &:not(:disabled):focus-visible {
+    color: var(--wb-danger, var(--modal-danger));
+    background: color-mix(in srgb, var(--wb-danger, var(--modal-danger)) 6%, var(--wb-canvas, var(--modal-surface)));
+    border-color: var(--wb-danger, var(--modal-danger));
+  }
+
+  &:disabled {
+    color: var(--wb-text-secondary, var(--modal-text-secondary));
+    border-color: var(--wb-border, var(--modal-border));
+    opacity: 0.55;
+  }
 }
 
-@media (max-width: 600px) {
-  .@{class-prefix}-agent-error-card {
-    flex-wrap: wrap;
+.@{class-prefix}-agent-error-card-actions {
+  // 同一组件在聊天区和通知中都使用详情靠左、重试靠右的底部操作行。
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  align-items: start;
+  gap: 8px 12px;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--wb-border, var(--modal-border));
+
+  > .@{class-prefix}-agent-error-card-hint {
+    grid-column: 1;
   }
+
+  > .@{class-prefix}-agent-error-card-retry.ant-btn {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+    margin: 0;
+  }
+
+  // 展开的诊断占满宽度，首行给右侧重试按钮留出空间。
+  &:has(> .@{class-prefix}-agent-error-card-retry)
+    > .@{class-prefix}-agent-error-card-details[open] {
+    grid-column: 1 / -1;
+    grid-row: 1;
+
+    summary {
+      padding-right: 100px;
+    }
+  }
+}
+
+// 聊天区用紧凑排版减少对输入空间的挤占，通知仍保留完整卡片布局。
+.@{class-prefix}-ai-chat-main .@{class-prefix}-agent-error-card {
+  grid-template-columns: 20px minmax(0, max-content) minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 12px 16px;
+
+  .@{class-prefix}-agent-error-card-icon {
+    width: 20px;
+    height: 22px;
+    font-size: 18px;
+  }
+
+  .@{class-prefix}-agent-error-card-header {
+    display: contents;
+  }
+
+  .@{class-prefix}-agent-error-card-title {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: 14px;
+  }
+
+  .@{class-prefix}-agent-error-card-copy-button {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  .@{class-prefix}-agent-error-card-message {
+    grid-column: 3;
+    grid-row: 1;
+    font-size: 14px;
+  }
+
+  .@{class-prefix}-agent-error-card-hint {
+    grid-column: 2 / -1;
+    grid-row: 2;
+  }
+
+  .@{class-prefix}-agent-error-card-actions {
+    grid-column: 2 / -1;
+    grid-row: 3;
+    margin-top: 0;
+    padding-top: 4px;
+    border-top: 0;
+  }
+
+  .@{class-prefix}-agent-error-card-retry.ant-btn {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+}
+
+// 窄聊天栏将正文换到下一行，保留完整文字，避免标题与错误说明互相挤压。
+@container ai-chat-main (max-width: 640px) {
+  .@{class-prefix}-ai-chat-main .@{class-prefix}-agent-error-card {
+    grid-template-columns: 20px minmax(0, 1fr) 22px;
+
+    .@{class-prefix}-agent-error-card-copy-button {
+      grid-column: 3;
+    }
+
+    .@{class-prefix}-agent-error-card-message {
+      grid-column: 2 / -1;
+      grid-row: 2;
+    }
+
+    .@{class-prefix}-agent-error-card-hint {
+      grid-row: 3;
+    }
+
+    .@{class-prefix}-agent-error-card-actions {
+      grid-row: 4;
+    }
+  }
+}
+
+// 浅深主题共用语义颜色，行内错误和浮动通知具有一致的淡色视觉。
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']),
+body:has(.@{class-prefix}-welcome-page[data-theme='dark']) {
+  --agent-error-card-background: color-mix(in srgb, var(--wb-danger) 5%, var(--wb-canvas));
+  --agent-error-card-border: color-mix(in srgb, var(--wb-danger) 16%, var(--wb-border));
 }

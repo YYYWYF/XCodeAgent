@@ -1,0 +1,75 @@
+@import (reference) 'antd/lib/style/themes/default.less';
+
+.@{class-prefix}-workbench-error-notification.ant-notification-notice {
+  width: min(480px, calc(100vw - 48px));
+  max-height: calc(100vh - 100px);
+  padding: 20px;
+  overflow: auto;
+  color: var(--wb-text);
+  // 与行内卡片一致，将 Ant Design 错误色与画布混合，减轻大面积红色。
+  background: color-mix(in srgb, @alert-error-bg-color 80%, var(--wb-canvas));
+  border: 1px solid color-mix(in srgb, @alert-error-border-color 80%, var(--wb-canvas));
+  border-radius: 12px;
+
+  .ant-notification-notice-message:empty {
+    display: none;
+  }
+
+  .ant-notification-notice-description {
+    color: var(--wb-text);
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
+  .ant-notification-notice-close {
+    color: var(--wb-text-secondary);
+
+    &:hover,
+    &:focus-visible {
+      color: var(--wb-accent);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--wb-accent);
+      outline-offset: 3px;
+    }
+  }
+
+  // 复用既有卡片正文及操作，外层通知统一承担边框、留白和关闭入口。
+  .@{class-prefix}-agent-error-card,
+  .@{class-prefix}-connection-status-banner,
+  .@{class-prefix}-application-planning-recovery-incident,
+  .@{class-prefix}-retry-entry-notice {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .@{class-prefix}-application-planning-recovery-incident {
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-application-planning-recovery-incident-action.ant-btn {
+    margin-left: 43px;
+  }
+
+  .@{class-prefix}-connection-status-banner-action.ant-btn {
+    width: auto;
+  }
+
+  // 卡片正文和操作复用共用组件；通知只为自己的关闭按钮预留标题空间。
+  .@{class-prefix}-agent-error-card-header {
+    padding-right: 24px;
+  }
+}
+
+// 深色沿用工作台主题令牌，只保留轻微红色，保证正文和诊断信息可读。
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark'])
+  .@{class-prefix}-workbench-error-notification.ant-notification-notice {
+  background: color-mix(in srgb, var(--wb-danger) 5%, var(--wb-canvas));
+  border-color: color-mix(in srgb, var(--wb-danger) 16%, var(--wb-border));
+}

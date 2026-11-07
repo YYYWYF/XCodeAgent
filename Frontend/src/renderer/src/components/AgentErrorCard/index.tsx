@@ -43,6 +43,7 @@ export default function AgentErrorCard({
   const diagnosticText = errorDiagnosticText(details?.trim() || error?.trim() || copy.message, diagnostic)
   const { copied, copyFailed, copying, copyDiagnostic } = useDiagnosticClipboard(diagnosticText)
   const copyLabel = copied ? '已复制' : '复制诊断信息'
+  const showDetails = Boolean(diagnostic || details?.trim() || copy.detail)
 
   return (
     <section
@@ -80,23 +81,26 @@ export default function AgentErrorCard({
             {copy.hint}
           </Text>
         ) : null}
-        <ErrorDiagnostics
-          text={diagnosticText}
-          showDetails={Boolean(diagnostic || details?.trim() || copy.detail)}
-          copyFailed={copyFailed}
-        />
-        {onRetry ? (
-          <Button
-            className={cx('agent-error-card-retry')}
-            icon={<RedoOutlined />}
-            loading={retrying}
-            disabled={retryDisabled}
-            onClick={onRetry}
-            type="primary"
-          >
-            {retryLabel}
-          </Button>
-        ) : null}
+        {showDetails || copyFailed || onRetry ? <div className={cx('agent-error-card-actions')}>
+          <ErrorDiagnostics
+            text={diagnosticText}
+            showDetails={showDetails}
+            copyFailed={copyFailed}
+          />
+          {onRetry ? (
+            <Button
+              className={cx('agent-error-card-retry')}
+              icon={<RedoOutlined />}
+              loading={retrying}
+              disabled={retryDisabled}
+              onClick={onRetry}
+              type="default"
+              danger
+            >
+              {retryLabel}
+            </Button>
+          ) : null}
+        </div> : null}
       </div>
     </section>
   )

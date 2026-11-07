@@ -231,6 +231,7 @@ import {
 import { planningConnectionForSession, planningFailureStateForSession, planningSnapshotForStage } from './planningFailureScope'
 import { initialConnectionState } from '../../service/connectionState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
+import WorkbenchErrorNotification from '../WorkbenchErrorNotification'
 import RecoverySurface from './recoverySurface'
 import { revisionContinuationHandoffFromWorkflow } from '../../service/applicationPagePlanning'
 import {
@@ -4212,6 +4213,28 @@ export default function AiChatPanel({
   const showGlobalFallback =
     !authorizationRecoveryNotice && globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
       !isApplicationPlanningPhase || Boolean(pendingRevisionStartError) || Boolean(sessionPlanningFailureState))
+  const revisionHandoffErrorVisible = Boolean(revisionHandoffFailure &&
+    revisionContinuationRecoveryVisible(applicationLifecycle,
+      revisionHandoffFailure.handoff.continuation, activeSession?.threadId))
+  // 正常首次连接不弹错误通知；真正断连与已有错误的重连仍沿用原连接卡片。
+  const fallbackErrorVisible = showGlobalFallback && !planningHistoryOnly &&
+    (Boolean(activeConnectionState.lastError) || activeConnectionState.status === 'unavailable' ||
+      Boolean(globalFallback.error) || Boolean(currentRecoveryIncident))
+  // 共享故障不绑定当前会话，避免切换会话重新弹出；任务故障按所属会话和 Run 区分。
+  const globalErrorNoticeId = revisionHandoffErrorVisible
+    ? JSON.stringify(['handoff', revisionHandoffFailure?.handoff.continuation.changeId, revisionHandoffFailure?.error])
+    : !fallbackErrorVisible ? undefined
+      : activeConnectionState.status !== 'healthy'
+        ? JSON.stringify(['connection', activeConnectionState === previewRuntime.connection ? 'preview' : 'backend', activeConnectionState.lastError])
+        : lifecycleSyncError || recoveryProjectionError
+          ? JSON.stringify(['workspace-read', lifecycleSyncError || recoveryProjectionError])
+          : previewFallbackError
+            ? JSON.stringify(['preview', previewFallbackError])
+            : templateFallbackError
+              ? JSON.stringify(['template', templateFallbackError])
+              : JSON.stringify(['task', activeSession?.key || draftKey,
+                sessionPlanningFailureState?.recovery?.sourceRunId || activeExecutionRecovery?.sourceRunId || latestWorkflowForDisplay?.runId,
+                globalFallback.error || currentRecoveryIncident?.failureMessage || currentRecoveryIncident?.recoveryMessage])
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
@@ -5370,7 +5393,7 @@ export default function AiChatPanel({
           />
           {/* 技能/文件/设置已改为抽屉（见下方 WorkbenchDrawer），对话区不再被替换。 */}
           {
-            <div className={cx('ai-chat-main', showGlobalFallback && 'has-global-fallback')}>
+            <div className={cx('ai-chat-main')}>
               {activeDetailTarget.type !== 'none' ? (
                 <PageContextHeader
                   description={activeHeaderTarget.description}
@@ -5392,12 +5415,9 @@ export default function AiChatPanel({
               ) : null}
 
               {previewError && (
-                <Alert
-                  className={cx('preview-action-error')}
-                  message={previewError}
-                  showIcon
-                  type="error"
-                />
+                <div className={cx('preview-action-error')}>
+                  <AgentErrorCard title="页面预览失败" error={previewError} />
+                </div>
               )}
 
               <AuthorizationBootstrapRecoveryContext.Provider value={authorizationRecoveryNotice}>
@@ -5598,17 +5618,11 @@ export default function AiChatPanel({
                 title="保存当前改动为版本"
               />
 
-              {revisionContinuationRecoveryVisible(applicationLifecycle,
-                revisionHandoffFailure?.handoff.continuation, activeSession?.threadId) && revisionHandoffFailure ? (
-                <div className={cx('ai-chat-global-fallback')}>
+              <WorkbenchErrorNotification workspace={workspaceRoot} noticeId={globalErrorNoticeId}>
+                {revisionHandoffErrorVisible && revisionHandoffFailure ? (
                   <AgentErrorCard title="开发交接尚未完成" error={revisionHandoffFailure.error}
                     retryLabel="继续开发" onRetry={() => { void retryRevisionDevelopmentHandoff() }} />
-                </div>
-              ) : null}
-
-              {showGlobalFallback && !planningHistoryOnly ? (
-                <div className={cx('ai-chat-global-fallback')}>
-                  {activeConnectionState.status !== 'healthy' ? (
+                ) : activeConnectionState.status !== 'healthy' ? (
                     <ConnectionStatusBanner
                       connection={activeConnectionState}
                       onReconnect={
@@ -5673,8 +5687,7 @@ export default function AiChatPanel({
                       retrying={recoveryRunning || revisionStartRetrying || recoveryProjectionSyncing}
                     />
                   ) : null}
-                </div>
-              ) : null}
+              </WorkbenchErrorNotification>
 
               {stoppedPlanning ? (
                 <StoppedPlanningNotice application={application} stopped={stoppedPlanning}
