@@ -3,7 +3,8 @@ import './workbenchEntry.test'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import WorkbenchTopBar from '../src/renderer/src/components/WorkbenchTopBar'
-import { planningStageAccess, stoppedPlanningForSession } from '../src/renderer/src/components/AiChatPanel/planningStageAccess'
+import { planningStageAccess, planningStageEntryTransferred, stoppedPlanningForSession } from '../src/renderer/src/components/AiChatPanel/planningStageAccess'
+import { planningMessageAgentPhase } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
 import EndedTaskNotice from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide/EndedTaskNotice'
 import { latestApplicationLifecycle } from '../src/renderer/src/service/activeApplicationPlanning'
 import PlanningHistoryNotice from '../src/renderer/src/components/AiChatPanel/components/PlanningHistoryNotice'
@@ -17,7 +18,34 @@ import {
   getReachedWorkbenchPhase,
   reachedPhaseFromSessions
 } from '../src/renderer/src/workbenchPhaseNavigation'
-import type { ApplicationLifecycle, TestEntryGate } from '../src/renderer/src/typings'
+import type { ApplicationLifecycle, TestEntryGate, WorkflowRunPayload } from '../src/renderer/src/typings'
+
+test('入口交接后断网及冷启动仍在当前计划线程开放原门，来源会话保持只读', () => {
+  const lifecycle: ApplicationLifecycle = {
+    application: { id: 'app', name: 'app' }, revision: 6, updatedAt: '',
+    initialization: { stage: 'awaiting_planning_stage_entry', status: 'awaiting_user', threadId: 'plan' },
+    activeExecutions: {}, extensions: {}
+  }
+  const workflow = { threadId: 'plan', summary: { phase: 'planning_stage_entry' },
+    state: { planning_stage_handoff: { targetPhase: 'planning' } } } as WorkflowRunPayload
+  const transferred = planningStageEntryTransferred(workflow, lifecycle)
+  assert.equal(transferred, true)
+  const access = planningStageAccess({ phase: 'planning', lifecycle, enteredDevelopment: false,
+    sessionThreadId: 'plan', pendingStageEntryTransferred: transferred })
+  assert.equal(access.stageActive, true)
+  assert.equal(access.historyOnly, false)
+  assert.equal(access.transitioning, undefined)
+  assert.equal(planningMessageAgentPhase(workflow, 'planning'), 'planning')
+  assert.equal(planningMessageAgentPhase({ ...workflow, state: {} }, 'planning'), 'product')
+  const history = planningStageAccess({ phase: 'product', lifecycle, enteredDevelopment: false,
+    sessionThreadId: 'design', pendingStageEntryTransferred: transferred })
+  assert.equal(history.historyOnly, true)
+  assert.equal(history.destination, 'planning')
+  assert.equal(planningStageEntryTransferred({ ...workflow, threadId: 'old' }, lifecycle), false)
+  assert.equal(planningStageEntryTransferred({ ...workflow, state: {} }, lifecycle), false)
+  assert.equal(planningStageEntryTransferred(workflow, { ...lifecycle,
+    initialization: { ...lifecycle.initialization, stage: 'generating_requirement_document' } }), false)
+})
 
 const allowed: TestEntryGate = {
   allowed: true,
@@ -327,6 +355,28 @@ test('进入计划后需求仅可回看，当前计划可对话，旧计划会�
   assert.ok(html.includes('历史会话只读'))
   assert.ok(html.includes('当前计划阶段提出'))
   assert.ok(!html.includes('textarea'))
+})
+
+test('真实阶段交接在途时展示同步，完成换绑后恢复当前确认且历史门禁不放开', () => {
+  const input = { phase: 'planning' as const, enteredDevelopment: false, sessionThreadId: 'new-plan',
+    lifecycle: planningLifecycle('awaiting_planning_stage_entry') }
+  const syncing = planningStageAccess({ ...input, enteringStage: true })
+  assert.equal(syncing.historyOnly, true)
+  assert.equal(syncing.transitioning, true)
+  assert.equal(syncing.destination, undefined)
+  const html = renderToStaticMarkup(<PlanningHistoryNotice access={syncing} onReturn={() => undefined} />)
+  assert.ok(html.includes('正在进入计划阶段'))
+  assert.ok(!html.includes('历史会话只读'))
+  assert.ok(!html.includes('已返回需求阶段'))
+  assert.ok(!html.includes('<button'))
+  assert.equal(planningStageAccess({ ...input, enteringStage: false }).destination, 'product')
+  const lifecycle = planningLifecycle('awaiting_technical_plan_confirmation')
+  lifecycle.initialization.threadId = 'new-plan'
+  const ready = planningStageAccess({ ...input, lifecycle, enteringStage: true })
+  assert.equal(ready.historyOnly, false)
+  assert.equal(ready.transitioning, undefined)
+  assert.equal(planningStageAccess({ ...input, phase: 'product', enteringStage: true,
+    lifecycle }).historyOnly, true)
 })
 
 test('开发及后续阶段始终关闭需求和计划自由输入，开发入口不随最远阶段关闭', () => {

@@ -18,7 +18,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWorkbenchPhase } from '../../../../context'
 import {
   WORKBENCH_PHASE_AGENTS,
-  workbenchPhaseForNode,
   type WorkbenchPhase
 } from '../../../../workbenchPhase'
 import {
@@ -97,7 +96,8 @@ import {
   planningReviewMatchesActiveWorkflow
 } from './productConversationPresentation'
 import {
-  planningInteractionIsCurrent
+  planningInteractionIsCurrent,
+  planningMessageAgentPhase as messageAgentPhase
 } from './planningMessageWorkflow'
 import './MessageList.less'
 
@@ -283,23 +283,6 @@ function parseAnsweredClarificationTrace(
     if (Object.keys(answers).length > 0) return answers
   }
   return undefined
-}
-
-/** 从消息自身的 Workflow 节点推导 Agent 身份，避免阶段推进后历史消息被重新标记。 */
-function messageAgentPhase(
-  workflow: WorkflowRunPayload | undefined,
-  fallback: WorkbenchPhase
-): WorkbenchPhase {
-  if (!workflow) return fallback
-  const phase =
-    String(workflow.summary?.phase || '').trim() ||
-    String(workflow.state?.phase || '').trim() ||
-    [...(workflow.events || [])]
-      .reverse()
-      .map((event) => String(event.nodeName || event.node?.id || '').trim())
-      .find(Boolean) ||
-    ''
-  return workbenchPhaseForNode(phase, fallback)
 }
 
 type MessageListProps = {

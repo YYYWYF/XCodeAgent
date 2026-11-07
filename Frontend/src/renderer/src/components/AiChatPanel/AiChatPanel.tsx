@@ -96,7 +96,7 @@ import SessionExecutionLockDock from './components/SessionExecutionLockDock'
 import PlanningHistoryNotice from './components/PlanningHistoryNotice'
 import PlanningTaskNotice from './components/PlanningTaskNotice'
 import { planningTaskBlock } from './planningTaskAdmission'
-import { planningStageAccess, planningSessionOwnsThread, stoppedPlanningForSession } from './planningStageAccess'
+import { planningStageAccess, planningStageEntryTransferred, planningSessionOwnsThread, stoppedPlanningForSession } from './planningStageAccess'
 import StoppedPlanningNotice from './components/StoppedPlanningNotice'
 import { shouldPreserveTechnicalPlanningReply } from '../../service/technicalPlanningConversation'
 import DocPanel from './components/DocPanel'
@@ -1399,12 +1399,15 @@ export default function AiChatPanel({
     hasRightPanel: Boolean(rightPanel)
   })
 
-  // ---- 创建计划阶段：设计阶段展示产品产物，计划阶段只展示 TechnicalPlan。 ----
+  // 已交接但未消费的入口仍展示已确认上游，避免断网或冷启动后出现空技术文档。
+  const pendingPlanningStageEntry = planningStageEntryTransferred(currentPlanningWorkflow, applicationLifecycle)
+  const showRequirementDocuments = isDesignPhase || pendingPlanningStageEntry
+  // ---- 技术生成实际开始前展示已确认上游，开始后展示 TechnicalPlan。 ----
   const planningDocumentView = usePlanningDocumentView(
     currentPlanningWorkflow,
     application.workspaceRoot,
     showRightPanel && rightPanel?.type === 'doc'
-      ? isDesignPhase && rightPanel.docKey === 'requirement-spec'
+      ? showRequirementDocuments && rightPanel.docKey === 'requirement-spec'
         ? 'requirement-doc'
         : isTechnicalPlanningPhase && rightPanel.docKey === 'technical-plan'
           ? 'technical-plan'
@@ -1493,15 +1496,22 @@ export default function AiChatPanel({
   const requirementSpecMemory = requirementSpecFromWorkflow(planningDocumentWorkflow)
   const productPlanMemory = productPlanFromWorkflow(planningDocumentWorkflow)
   const technicalPlanMemory = technicalPlanFromWorkflow(planningDocumentWorkflow)
+  // 未打开面板前凭当前引用开放入口，正文仅在可见时读取，避免两套读取器和重复预取。
+  const planningDocumentRefs = asWorkflowRecord(currentPlanningWorkflow?.state?.artifactRefs)
   const requirementDocAvailable = Boolean(
-    requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
+    requirementDocContent.trim() || requirementSpecMemory || productPlanMemory ||
+    planningDocumentRefs?.requirement_spec || planningDocumentRefs?.product_plan ||
+    planningDocumentView.loading || planningDocumentView.error
   )
   const uiDesignAvailable = Boolean(uiDesignDocContent.trim()) || uiDesignPages.length > 0
-  const technicalPlanDocAvailable = Boolean(technicalPlanDocContent.trim() || technicalPlanMemory)
+  const technicalPlanDocAvailable = Boolean(
+    technicalPlanDocContent.trim() || technicalPlanMemory || planningDocumentRefs?.technical_plan ||
+    planningDocumentView.loading || planningDocumentView.error
+  )
   // 按当前设计/计划阶段稳定生成右侧文档集合，避免阶段切换之外反复创建依赖对象。
   const designDocs = useMemo<DesignWorkspaceDoc[] | undefined>(() => {
     if (!isApplicationPlanningPhase) return undefined
-    if (isDesignPhase) {
+    if (showRequirementDocuments) {
       const documents: DesignWorkspaceDoc[] = [
         {
           key: 'requirement-spec' as WorkspaceDocKey,
@@ -1511,7 +1521,7 @@ export default function AiChatPanel({
           available: requirementDocAvailable
         }
       ]
-      documents.push({
+      if (isDesignPhase) documents.push({
         key: 'ui-design' as WorkspaceDocKey,
         title: 'UI设计稿',
         path: 'specs/ui-designs',
@@ -1524,7 +1534,7 @@ export default function AiChatPanel({
       {
         key: 'technical-plan' as WorkspaceDocKey,
         title: '技术规划',
-        path: 'plans/technical-plan.json',
+        path: 'plans/technical-plan.md',
         content: technicalPlanDocContent,
         available: technicalPlanDocAvailable
       }
@@ -1532,6 +1542,7 @@ export default function AiChatPanel({
   }, [
     isApplicationPlanningPhase,
     isDesignPhase,
+    showRequirementDocuments,
     requirementDocAvailable,
     requirementDocContent,
     requirementsConfirmed,
@@ -1547,7 +1558,7 @@ export default function AiChatPanel({
   const activeDesignDoc = designDocs?.find((doc) => doc.key === activeDesignDocKey)
   const technicalPlanViewActive =
     isTechnicalPlanningPhase && activeDesignDocKey === 'technical-plan'
-  const requirementDocViewActive = isDesignPhase && activeDesignDocKey === 'requirement-spec'
+  const requirementDocViewActive = showRequirementDocuments && activeDesignDocKey === 'requirement-spec'
   // 右侧技术规划优先使用完整 Workflow；空快照不能遮住正式文件。
   const technicalPlanForDoc = technicalPlanViewActive
     ? technicalPlanMemory || technicalPlanFile
@@ -1558,7 +1569,7 @@ export default function AiChatPanel({
   const technicalPlanViewLoading =
     technicalPlanViewActive &&
     (!technicalPlanForDoc || !productPlanForDoc) &&
-    technicalPlanFileLoading
+    (technicalPlanFileLoading || planningDocumentView.loading)
   // 需求文档 tab 优先使用结构化可视化；结构化数据不可读时回退 Markdown。
   const requirementSpecForDoc = requirementDocViewActive
     ? requirementSpecMemory || requirementSpecFile
@@ -1763,12 +1774,15 @@ export default function AiChatPanel({
 
   const planningComposerDraftRef = useRef({ key: draftKey, value: draft })
   planningComposerDraftRef.current = { key: draftKey, value: draft }
+  const [planningEntry, setPlanningEntry] = useState<{ workspace?: string; key: string }>()
   const planningAccess = planningStageAccess({
     phase: activeWorkbenchPhase,
     lifecycle: applicationLifecycle,
     enteredDevelopment: enterDevConfirmed,
     sessionThreadId: activeSession?.threadId,
-    sessionEntryKey: activeSession?.entryKey
+    sessionEntryKey: activeSession?.entryKey,
+    pendingStageEntryTransferred: pendingPlanningStageEntry,
+    enteringStage: Boolean(planningEntry && planningEntry.workspace === application.workspaceRoot)
   })
   const planningHistoryOnly = planningAccess.historyOnly
   const stoppedPlanning = stoppedPlanningForSession({
@@ -1962,6 +1976,7 @@ export default function AiChatPanel({
   const planningReturnedToDesign = isTechnicalPlanningPhase && (
     (currentPlanningWorkflow?.state?.planning_stage_handoff as { targetPhase?: string } | undefined)?.targetPhase === 'product' ||
     Boolean(applicationLifecycle && ![
+      ...(pendingPlanningStageEntry ? ['awaiting_planning_stage_entry'] : []),
       'generating_technical_plan', 'awaiting_technical_plan_confirmation',
       'generating_application_template_files', 'application_template_generation_failed', 'ready_for_workbench'
     ].includes(applicationLifecycle.initialization.stage))
@@ -4844,7 +4859,8 @@ export default function AiChatPanel({
         // 离开 UI 确认阶段（确认全部/进入规划）：清空 UI 确认阶段标记，
         // 避免后续阶段的纯 content 被误当作 UI 轮询 content 丢弃。
         lastUiDesignRunIdRef.current = undefined
-        if (planningAnswers.__applicationPlanningAction === 'enter_planning') {
+        if (planningAnswers.__applicationPlanningAction === 'enter_planning' &&
+            !planningStageEntryTransferred(workflow, applicationLifecycle)) {
           const checkpointThreadId = String(planningThreadId || workflow.threadId || '').trim()
           if (!checkpointThreadId) {
             message.error('当前规划 checkpoint 标识缺失，请重新打开应用后重试。')
@@ -4881,6 +4897,7 @@ export default function AiChatPanel({
           )
           if (planningStageTransitionRef.current === stageEntryKey) return
           planningStageTransitionRef.current = stageEntryKey
+          setPlanningEntry({ workspace: application.workspaceRoot, key: stageEntryKey })
           let planningIdentity: SessionIdentity | undefined
           let sourceMessages: AgentChatMessage[] = []
           let sourceMessagesWithReceipt: AgentChatMessage[] = []
@@ -4989,6 +5006,10 @@ export default function AiChatPanel({
               planningSessionKeyRef.current = ''
               switchPhase('product')
             }
+          }).finally(() => {
+            // 交接成功或回滚失败都必须结束当前工作区的临时展示态。
+            setPlanningEntry((current) => current?.key === stageEntryKey &&
+              current.workspace === application.workspaceRoot ? undefined : current)
           })
           if (stageEntryOutcome.status === 'frontend_handoff_failed') {
             message.error(formatError(stageEntryOutcome.error, '进入计划阶段失败'))
@@ -6036,7 +6057,9 @@ export default function AiChatPanel({
                       : undefined
                 }
                 structuredDocumentLoading={
-                  planningDocumentView.loading || (technicalPlanViewActive && technicalPlanViewLoading)
+                  planningDocumentView.loading || (technicalPlanViewActive &&
+                    (technicalPlanViewLoading || planningAccess.transitioning === true ||
+                      (!technicalPlanForDoc && planningPhaseRunning)))
                 }
                 title={designDocTitle}
               />
