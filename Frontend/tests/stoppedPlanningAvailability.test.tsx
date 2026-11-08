@@ -57,8 +57,10 @@ test('停止卡串行校准变更、点击前复验、失败关闭，隐藏和�
     await act(async () => { root = create(view('one')) })
     assert.equal(reads.length, 1)
     assert.equal(state.unchanged, undefined)
+    assert.equal(state.checking, true)
     await act(async () => reads[0].resolve(lifecycle(true)))
     assert.equal(state.unchanged, true)
+    assert.equal(state.checking, false)
     assert.equal(timers.size, 0, '空闲期间不得安排定时检查')
 
     await act(async () => {
@@ -82,6 +84,7 @@ test('停止卡串行校准变更、点击前复验、失败关闭，隐藏和�
     await act(async () => { check = state.check() })
     await act(async () => { reads[4].reject(new Error('offline')); assert.equal(await check, false) })
     assert.equal(state.unchanged, undefined)
+    assert.equal(state.checking, false, '失败不能继续伪装成检查中')
     assert.ok(state.error?.includes('无法检查工作区'))
 
     await act(async () => root!.update(view('one', false)))

@@ -11,6 +11,7 @@ from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.technical_plan_editor import TechnicalPlanCandidateError
+from app.agents.main.technical_plan_fragment_retry import PlanningFragmentFailed, dependency_repair_key
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 from app.agents.database.generator import (
     entity_design_bindings_with_agent,
@@ -1875,7 +1876,7 @@ def _generate_valid_technical_plan(
     initial_errors: list[str] | None = None,
     generation_fragments: dict[str, Any] | None = None,
 ) -> tuple[dict | None, list[str], dict | None]:
-    """在统一的三次总预算内完成 TechnicalPlan 生成、规范化校验与错误反馈修复。"""
+    """片段独立重试，依赖修复与完整候选校验各自有界，耗尽后不叠加重放。"""
 
     current_plan = deepcopy(existing_plan)
     fragments = generation_fragments if generation_fragments is not None else {}
@@ -1893,7 +1894,9 @@ def _generate_valid_technical_plan(
         except (TypeError, ValueError) as exc:
             # 续修候选仍可能在运行时契约编译处失败；保留候选和当前错误交回编辑器。
             remaining_errors = [str(exc)]
-    for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
+    attempt = 0
+    dependency_repairs: dict[str, int] = {}
+    while attempt < _TECHNICAL_PLAN_GENERATION_ATTEMPTS:
         validation_feedback = (
             _technical_plan_retry_feedback(remaining_errors)
             if remaining_errors
@@ -1928,10 +1931,23 @@ def _generate_valid_technical_plan(
             if not remaining_errors:
                 return candidate, [], None
             current_plan = candidate
+        except PlanningFragmentFailed as exc:
+            # 当前模块已用完独立预算，立即交回原失败审阅，不再乘以外层三轮。
+            return None, [str(exc)], current_plan
         except (TypeError, ValueError) as exc:
+            repair_key = dependency_repair_key(exc)
+            if repair_key is not None:
+                count = dependency_repairs.get(repair_key, 0) + 1
+                dependency_repairs[repair_key] = count
+                remaining_errors = [str(exc)]
+                logger.warning("technical_plan_dependency_repair: module=%s attempt=%s/%s error=%s", repair_key, count, _TECHNICAL_PLAN_GENERATION_ATTEMPTS, exc)
+                if count >= _TECHNICAL_PLAN_GENERATION_ATTEMPTS:
+                    return None, remaining_errors, current_plan
+                continue
             if isinstance(exc, TechnicalPlanCandidateError):
                 current_plan = exc.candidate
             remaining_errors = [str(exc)]
+        attempt += 1
         logger.warning(
             "technical_plan_generation_retry: attempt=%s/%s errors=%s",
             attempt,

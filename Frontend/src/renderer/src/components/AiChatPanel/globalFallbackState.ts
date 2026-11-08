@@ -38,6 +38,25 @@ export function connectionErrorNoticeId(connection: ConnectionState, origin: 'pr
   return JSON.stringify(['connection', origin, connection.lastConnectedAt, connection.lastError])
 }
 
+/** 按当前恢复卡实际采用的动作归属定位：会话任务留在聊天区，共享故障使用全局通知。 */
+export function recoveryNoticeIsInline(input: {
+  revisionHandoff: boolean
+  connectionStatus: string
+  planningEndRequested: boolean
+  hasRecoveryIncident: boolean
+  pendingRevisionStart: boolean
+  sharedReadError: boolean
+  previewRetry: boolean
+  hasSessionOwner: boolean
+}): boolean {
+  // 与卡片分派优先级保持一致，不能把任务恢复动作包装成全局错误。
+  if (input.revisionHandoff) return true
+  if (input.connectionStatus !== 'healthy') return false
+  if (input.planningEndRequested || input.hasRecoveryIncident || input.pendingRevisionStart) return true
+  if (input.sharedReadError || input.previewRetry) return false
+  return input.hasSessionOwner
+}
+
 /** 只提取最新消息的失败给底部兜底，新请求、运行占位或成功消息不继承历史错误。 */
 export function latestConversationFailure(messages: AgentChatMessage[]): string | undefined {
   const latest = messages[messages.length - 1]

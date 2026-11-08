@@ -10,34 +10,9 @@ from app.agents.main.technical_plan_generation_validation import validate_page
 from app.agents.main.technical_plan_catalog_repair import CatalogRepairRequired
 from app.agents.main.technical_plan_catalog_parts import generate_catalog
 from app.agents.main.technical_plan_contract_batches import generate_contract
-from app.agents.main.technical_plan_contract_batch_validation import SchemaPlanRepairRequired
-from app.agents.main.technical_plan_fragment_output import parse_batch_json
+from app.agents.main.technical_plan_fragment_retry import generate_fragment as _fragment
 from app.services.run_workers import run_worker
 from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
-from app.utils.model_output import extract_json_root_object_with_repair
-
-
-def _fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str], str], validate: Callable[[dict], dict], save: Callable[[str, dict], None]) -> dict:
-    """只重试尚未通过校验的片段，完整包络解析失败时不提取内部嵌套对象。"""
-
-    if key not in cache:
-        # 每个模型请求前重新检查当前 Run，停止后不得开始下一个模块。
-        with run_worker():
-            output = invoke(prompt)
-        try:
-            value = parse_batch_json(output) if key.startswith(("contract-part:", "catalog-part:")) else extract_json_root_object_with_repair(output)
-            if not isinstance(value, dict):
-                raise ValueError("模型未返回完整 JSON 根对象，无法恢复当前片段。")
-            validated = deepcopy(validate(value))
-            # 持久化先于内存发布，连接异常、取消或进程退出后仍可读取已完成片段。
-            with run_worker():
-                save(key, validated)
-            cache[key] = validated
-        except (CatalogRepairRequired, SchemaPlanRepairRequired):
-            raise
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"技术规划片段 {key} 校验失败：{exc}") from exc
-    return deepcopy(cache[key])
 
 
 def generate_technical_plan_sections(
@@ -85,7 +60,7 @@ def generate_technical_plan_sections(
     repair = cache.get("catalog_repair")
     model_requests = 0
     def read_fragment(key: str, prompt: str, validate) -> dict:
-        """共用持久化与原重试预算，记录未命中请求以定位修复反馈的完成边界。"""
+        """各片段独立重试并持久化，记录未命中请求以隔离修复反馈。"""
 
         nonlocal model_requests
         if key not in cache:

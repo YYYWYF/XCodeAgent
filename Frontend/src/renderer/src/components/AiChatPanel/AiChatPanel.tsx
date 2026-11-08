@@ -225,6 +225,7 @@ import {
   isTechnicalPlanGenerationFailure,
   technicalPlanGenerationFailureMessage,
   connectionErrorNoticeId,
+  recoveryNoticeIsInline,
   prioritizedConnection,
   latestConversationFailure,
   workbenchRecoveryCoveredByExecution
@@ -232,7 +233,7 @@ import {
 import { planningConnectionForSession, planningFailureStateForSession, planningSnapshotForStage } from './planningFailureScope'
 import { initialConnectionState } from '../../service/connectionState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
-import WorkbenchErrorNotification from '../WorkbenchErrorNotification'
+import WorkbenchRecoveryNotice from './components/WorkbenchRecoveryNotice'
 import RecoverySurface from './recoverySurface'
 import { revisionContinuationHandoffFromWorkflow } from '../../service/applicationPagePlanning'
 import {
@@ -1453,10 +1454,11 @@ export default function AiChatPanel({
   )
   // 快照里的页面没有 code（正式 manifest 只存 code_path），从磁盘补回来，
   // 否则右侧预览永远停在「本页尚未生成设计稿」。
-  const uiDesignPagesWithCode = useUiDesignPagesWithCode(
+  const uiDesignRead = useUiDesignPagesWithCode(
     application.workspaceRoot,
     uiDesignPagesSource
   )
+  const uiDesignPagesWithCode = uiDesignRead.pages
   const uiDesignPages = useMemo(() => {
     if (uiDesignPagesWithCode.some((p) => Boolean(p.code))) {
       uiDesignPagesCacheRef.current = uiDesignPagesWithCode
@@ -4141,7 +4143,7 @@ export default function AiChatPanel({
       }
     : undefined
   const currentRecoveryIncident =
-    Boolean(pendingRevisionStart) || Boolean(recoveryProjectionError) ||
+    Boolean(pendingRevisionStart) || Boolean(recoveryProjectionError) || Boolean(stoppedPlanning) ||
     workbenchExecutionInProgress ||
     endedWorkbenchRecovery ||
     Boolean(workflowCodeReviewRetry(activeWorkflow)) ||
@@ -4153,11 +4155,12 @@ export default function AiChatPanel({
         : workbenchRecoveryIncident(activeExecutionRecovery, latestWorkflowForDisplay)
   const globalFallbackError =
     pendingRevisionStartError || recoveryProjectionError ||
-    (isApplicationPlanningPhase
+    (isApplicationPlanningPhase && !stoppedPlanning
       ? uiDesignRecoveryError(sessionPlanningFailureState?.recovery)
       : undefined) ||
-    technicalPlanningError || previewFallbackError ||
-    (!templateRecoveryInline && !workbenchExecutionInProgress && !endedWorkbenchRecovery
+    technicalPlanningError ||
+    (!planningNeedsRecovery && !conversationNeedsRecovery ? previewFallbackError : undefined) ||
+    (!stoppedPlanning && !templateRecoveryInline && !workbenchExecutionInProgress && !endedWorkbenchRecovery
       ? isApplicationPlanningPhase
         ? sessionPlanningFailureState?.syncError ||
           planningError ||
@@ -4172,6 +4175,7 @@ export default function AiChatPanel({
     recoveryEnded: endedWorkbenchRecovery,
     recoveryError:
       (isApplicationPlanningPhase && planningState?.checkpointMissing) ||
+      Boolean(stoppedPlanning) ||
       workbenchExecutionInProgress ||
       templateRecoveryInline ||
       Boolean(currentPreviewRetry)
@@ -4218,6 +4222,17 @@ export default function AiChatPanel({
   const revisionHandoffErrorVisible = Boolean(revisionHandoffFailure &&
     revisionContinuationRecoveryVisible(applicationLifecycle,
       revisionHandoffFailure.handoff.continuation, activeSession?.threadId))
+  // 所有能明确归属会话的失败恢复都留在原聊天区；共享连接和工作区读取故障才弹全局提示。
+  const sessionRecoveryInline = recoveryNoticeIsInline({
+    revisionHandoff: revisionHandoffErrorVisible,
+    connectionStatus: activeConnectionState.status,
+    planningEndRequested: Boolean(isApplicationPlanningPhase && sessionPlanningFailureState?.endRequested),
+    hasRecoveryIncident: Boolean(currentRecoveryIncident),
+    pendingRevisionStart: Boolean(pendingRevisionStart),
+    sharedReadError: Boolean(lifecycleSyncError || recoveryProjectionError),
+    previewRetry: Boolean(currentPreviewRetry),
+    hasSessionOwner: Boolean(isApplicationPlanningPhase ? sessionPlanningFailureState : activeSession)
+  })
   // 正常首次连接不弹错误通知；真正断连与已有错误的重连仍沿用原连接卡片。
   const fallbackErrorVisible = showGlobalFallback && !planningHistoryOnly &&
     (Boolean(activeConnectionState.lastError) || activeConnectionState.status === 'unavailable' ||
@@ -5620,7 +5635,8 @@ export default function AiChatPanel({
                 title="保存当前改动为版本"
               />
 
-              <WorkbenchErrorNotification workspace={workspaceRoot} noticeId={globalErrorNoticeId}>
+              <WorkbenchRecoveryNotice workspace={workspaceRoot} noticeId={globalErrorNoticeId}
+                inline={sessionRecoveryInline}>
                 {revisionHandoffErrorVisible && revisionHandoffFailure ? (
                   <AgentErrorCard title="开发交接尚未完成" error={revisionHandoffFailure.error}
                     retryLabel="继续开发" onRetry={() => { void retryRevisionDevelopmentHandoff() }} />
@@ -5689,7 +5705,7 @@ export default function AiChatPanel({
                       retrying={recoveryRunning || revisionStartRetrying || recoveryProjectionSyncing}
                     />
                   ) : null}
-              </WorkbenchErrorNotification>
+              </WorkbenchRecoveryNotice>
 
               {stoppedPlanning ? (
                 <StoppedPlanningNotice application={application} stopped={stoppedPlanning}
@@ -6054,6 +6070,9 @@ export default function AiChatPanel({
             {isDesignPhase && activeDesignDocKey === 'ui-design' ? (
               <UiDesignPreviewPanel
                 activePageId={uiDesignActivePage?.pageId || ''}
+                reading={uiDesignRead.loading}
+                readError={uiDesignRead.error || uiDesignRead.pageErrors[uiDesignActivePage?.pageId || '']}
+                onRetryRead={uiDesignRead.retry}
                 code={uiDesignActivePageCode}
                 generating={uiDesignGenerating}
                 actingPageIds={uiDesignActingPageIds}

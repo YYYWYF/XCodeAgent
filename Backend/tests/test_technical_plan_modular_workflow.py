@@ -134,6 +134,21 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
         self.assertFalse(any("catalog_repair" in frame for frame in frames if '"name":"llm.token"' not in frame))
 
+    async def test_each_fragment_succeeds_on_third_attempt_and_keeps_confirmation_gate(self):
+        """每个模块前两次失败仍能沿真实 AG-UI 完成，最终只提交一份待确认产物。"""
+
+        outputs = [value for output in self.outputs for value in ('{"broken":', '{}', output)]
+        snapshot, frames, count = await self._run(outputs)
+        self.assertEqual(count, len(self.outputs) * 3)
+        self.assertEqual(snapshot.next, ("technical_planning_review",), "\n".join(frames))
+        self.assertTrue(any(task.interrupts for task in snapshot.tasks))
+        self.assertEqual(snapshot.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
+        self.assertEqual(snapshot.values["technical_plan"]["pages"], self.h.candidate["pages"])
+        self.assertTrue(technical_plan_json_path(snapshot.values).is_file())
+        self.assertFalse(TechnicalPlanFragmentStore(self.h.workspace).path.exists())
+        self.assertTrue(any('"RUN_FINISHED"' in frame for frame in frames))
+        self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
+
     async def test_fragment_failure_checkpoint_preserves_modules_and_current_input_retry(self):
         """失败审阅保存成功片段，重新读取 checkpoint 后从失败模块继续，不写半份正式产物。"""
 
@@ -154,10 +169,10 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         update = prepare_technical_planning_retry(persisted.values, target_node="technical_planning_generate")
         state = {**persisted.values, **update}
         with patch("app.config.Settings.from_env", side_effect=self.h.current_settings), patch(
-            "app.agents.main.planner._invoke_prompt_with_chat_model", side_effect=self.outputs[completed:],
+            "app.agents.main.planner._invoke_prompt_with_chat_model", side_effect=['{"broken":'] * 2 + self.outputs[completed:],
         ) as model:
             generated = technical_planning_generate(state)
-        self.assertEqual(model.call_count, len(self.outputs) - completed)
+        self.assertEqual(model.call_count, len(self.outputs) - completed + 2)
         self.assertEqual(generated["technical_plan_candidate"]["confirmation_status"], "pending_user_confirmation")
         self.assertTrue(generated["technical_plan_generation_input_sha256"])
         self.assertFalse(technical_plan_json_path(snapshot.values).exists())

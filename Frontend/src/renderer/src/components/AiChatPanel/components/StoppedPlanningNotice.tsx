@@ -24,23 +24,28 @@ export default function StoppedPlanningNotice({ application, stopped, onLifecycl
   })
   /** 等待原恢复链路完成，防止用户连续提交同一个继续动作。 */
   const handleContinue = async (): Promise<void> => {
-    if (continuing || disabled || availability.unchanged !== true) return
+    if (continuing || disabled || availability.checking || availability.unchanged !== true) return
     setContinuing(true)
     try { if (await availability.check()) await onContinue() } finally { setContinuing(false) }
   }
   /** 首次创建重新生成也等待原 Runtime 收口，避免重复点击启动两个新任务。 */
   const handleRestart = async (): Promise<void> => {
-    if (continuing || disabled) return
+    if (continuing || disabled || availability.checking) return
     setContinuing(true)
     try { await onRestart() } finally { setContinuing(false) }
+  }
+  /** 失败后只重新读取工作区资格，不自动继续或重新生成原任务。 */
+  const handleRetryCheck = (): void => {
+    if (continuing || disabled || availability.checking) return
+    void availability.check()
   }
   return <div className={cx('ai-chat-composer')}>
     <div className={cx('ai-chat-composer-column')}>
       <EndedTaskNotice mode="stopped_generation" unchanged={availability.unchanged}
-        checkingWorkspace={availability.unchanged === undefined} continuing={continuing}
+        checkingWorkspace={availability.checking} continuing={continuing}
+        workspaceCheckError={availability.error} onRetryWorkspaceCheck={handleRetryCheck}
         restartInitialPlanning={stopped.canRestart}
         disabled={disabled} onContinue={handleContinue} onRestart={handleRestart} />
-      {availability.error ? <Typography.Text type="danger">{availability.error}</Typography.Text> : null}
       {error ? <Typography.Text type="danger">{error}</Typography.Text> : null}
     </div>
   </div>

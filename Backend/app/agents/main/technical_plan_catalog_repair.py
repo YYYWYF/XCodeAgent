@@ -29,13 +29,13 @@ class _CatalogIssue(BaseModel):
 
 
 class CatalogRepairRequired(ValueError):
-    """保留已校验的目录缺口身份，交给原三轮预算向上修复。"""
+    """保留已校验的目录缺口身份，交给独立有界的目录修复链。"""
 
-    def __init__(self, issue: dict):
+    def __init__(self, issue: dict, *, diagnostic: str | None = None):
         """错误文本供原失败审阅展示，结构化事实仅留在内部候选。"""
 
         self.issue = issue
-        super().__init__(f"页面 {issue['pageId']} 需要修复共享接口目录：{issue['reason']}")
+        super().__init__(diagnostic or f"页面 {issue['pageId']} 需要修复共享接口目录：{issue['reason']}")
 
 
 def business_slots(product: dict) -> set[tuple[str, str, str | None]]:

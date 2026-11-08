@@ -86,17 +86,23 @@ export default function ArtifactDocument({
   const identity = `${workspaceRoot}:${documentKey}:${attempt}`
   const current = loaded?.identity === identity ? loaded : undefined
   const loading = !current || catalogLoading === true
-  const pages = useUiDesignPagesWithCode(
+  const designRead = useUiDesignPagesWithCode(
     documentKey === 'ui-design' ? workspaceRoot : undefined,
     current?.data?.pages
   )
-  const activePage = pages.find((page) => page.pageId === activePageId) || pages[0]
+  const pages = designRead.pages
+  const activePage = activePageId ? pages.find((page) => page.pageId === activePageId) : pages[0]
   // 从页面概览指定页面时，不能用其他页面的设计稿冒充该页设计。
   const requestedPageMissing = Boolean(
     activePageId &&
       current?.data?.pages &&
       !current.data.pages.some((page) => page.pageId === activePageId)
   )
+
+  useEffect(() => {
+    // 页面概览发出新的定位请求时重新选择；失效目标由预览区提示，不能清空其他页面。
+    setActivePageId(initialUiDesignPageId || '')
+  }, [workspaceRoot, initialUiDesignPageId])
 
   useEffect(() => {
     if (catalogLoading) return
@@ -117,7 +123,7 @@ export default function ArtifactDocument({
   }, [workspaceRoot, documentKey, identity, catalogLoading])
 
   if (documentKey === 'ui-design' && !loading && !current?.error) {
-    if (pages.length === 0 || requestedPageMissing) {
+    if (pages.length === 0) {
       return (
         <div className={cx('development-artifacts-placeholder')} role="status">
           <InboxOutlined aria-hidden="true" />
@@ -128,10 +134,14 @@ export default function ArtifactDocument({
     }
     return (
       <UiDesignPreviewPanel
-        activePageId={activePage?.pageId || ''}
+        activePageId={activePageId}
         code={activePage?.code || ''}
         pages={pages}
         onPageChange={setActivePageId}
+        selectionMissing={requestedPageMissing}
+        reading={designRead.loading}
+        readError={designRead.error || designRead.pageErrors[activePage?.pageId || '']}
+        onRetryRead={designRead.retry}
         readOnly
       />
     )

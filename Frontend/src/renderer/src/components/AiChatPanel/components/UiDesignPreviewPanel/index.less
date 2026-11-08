@@ -5,6 +5,30 @@
   height: 100%;
   min-height: 0;
 
+  .@{class-prefix}-ui-design-read-notice {
+    flex: 0 0 auto;
+    margin: 12px 16px 0;
+    color: var(--wb-text);
+    background: var(--wb-surface);
+    border-color: var(--wb-border);
+    overflow-wrap: anywhere;
+
+    .ant-alert-content { min-width: 0; }
+    .ant-alert-message, .ant-alert-description { color: var(--wb-text); }
+    .ant-alert-action { flex-shrink: 0; }
+    .ant-btn {
+      color: var(--wb-accent);
+      background: var(--wb-canvas);
+      border-color: var(--wb-accent-border);
+      &:not(:disabled):hover, &:focus-visible {
+        color: var(--wb-accent-hover);
+        background: var(--wb-accent-soft);
+        border-color: var(--wb-accent);
+      }
+      &:disabled { color: var(--wb-text-secondary); border-color: var(--wb-border); }
+    }
+  }
+
   .@{class-prefix}-ui-design-preview-anchor {
     display: flex;
     flex-shrink: 0;

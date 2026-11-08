@@ -157,7 +157,7 @@ class TechnicalPlanModularGenerationTests(TestCase):
             self.assertNotIn("SECRET-DO-NOT-PROMPT", prompt)
         self.assertEqual(self.requirement, original)
 
-    def test_invalid_contract_retries_only_failed_module_in_existing_total_budget(self):
+    def test_invalid_contract_retries_only_failed_module_with_own_budget(self):
         """第二模块 Schema 错误只重试该模块，不重复实体或第一个成功契约。"""
 
         outputs = fragment_outputs(self.catalog, self.contracts, self.pages)
@@ -195,7 +195,7 @@ class TechnicalPlanModularGenerationTests(TestCase):
         self.assertIn("load", model.call_args_list[-1].args[0])
 
     def test_exhausted_fragment_budget_preserves_completed_fragments_for_retry(self):
-        """持续失败仅消耗三次现有预算，已完成片段能在同输入的后续调用复用。"""
+        """持续失败仅消耗本模块三次机会，已完成片段能在同输入的后续调用复用。"""
 
         progress = {}
         outputs = fragment_outputs(self.catalog, self.contracts, [])[:self.catalog_count + 1] + ['{"api_contracts": ['] * 3
@@ -219,13 +219,16 @@ class TechnicalPlanModularGenerationTests(TestCase):
 
         sections = {"architecture": {}, "entities": self.catalog["entities"], "api_contracts": self.contracts, "pages": self.pages}
         with patch.object(planner.Settings, "from_env", return_value=self.settings), patch.object(
-            planner, "_invoke_prompt_with_chat_model", side_effect=fragment_outputs(self.catalog, self.contracts, self.pages),
+            planner, "_invoke_prompt_with_chat_model", side_effect=[
+                value for output in fragment_outputs(self.catalog, self.contracts, self.pages)
+                for value in ('{"broken":', '{}', output)
+            ],
         ) as model, patch.object(planning, "_planning_token_callback"), patch.object(
             planning, "_project_plan_validation_errors", side_effect=[["跨页面权限需要修复"], []],
         ), patch.object(planner, "edit_technical_plan_with_agent", return_value=deepcopy(sections)) as editor:
             plan, errors, _ = planning._generate_valid_technical_plan({}, self.requirement, None)
         self.assertIsNotNone(plan, errors)
-        self.assertEqual(model.call_count, self.catalog_count + 5)
+        self.assertEqual(model.call_count, (self.catalog_count + 5) * 3)
         editor.assert_called_once()
         self.assertIn("跨页面权限", editor.call_args.args[0]["technical_plan_validation_feedback"])
 
@@ -288,14 +291,14 @@ class TechnicalPlanModularGenerationTests(TestCase):
                 else:
                     contract["schemas"] = []
                 with self.assertRaises(ValueError):
-                    self._generate(fragment_outputs(self.catalog, [contract], []))
+                    self._generate(fragment_outputs(self.catalog, [], []) + [json.dumps({"api_contracts": [contract]})] * 3)
 
     def test_truncated_catalog_does_not_cache_nested_object(self):
         """截断目录不形成可复用候选，不将内部实体误认为完整根对象。"""
 
         progress = {}
         with self.assertRaisesRegex(ValueError, "catalog-part:.*"):
-            self._generate(['{"entities": [{"id": "Order"}], "contracts": ['], fragments=progress)
+            self._generate(['{"entities": [{"id": "Order"}], "contracts": ['] * 3, fragments=progress)
         self.assertEqual(progress["completed"], {})
 
     def test_static_page_generates_no_business_contract(self):

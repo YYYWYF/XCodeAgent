@@ -96,9 +96,9 @@ def generate_catalog(requirement: dict, *, cache: dict, fragment, publish) -> di
     validated = validate_catalog(catalog, product)
     try:
         published = repaired_catalog_fragments(cache, validated) if repair else {**cache, "catalog": validated}
-    except ValueError:
+    except ValueError as exc:
         # 完整目录仍是无效修复时，撤下本轮目录候选，下一次预算必须真的发起修复请求。
         publish({key: value for key, value in cache.items() if not key.startswith("catalog-part:")})
-        raise
+        raise CatalogRepairRequired(repair["issue"], diagnostic=str(exc)) from exc
     publish({key: value for key, value in published.items() if not key.startswith("catalog-part:")})
     return deepcopy(validated)

@@ -1413,8 +1413,9 @@ function setupWorkspaceIpc(): void {
       const content = await fs.readFile(uiDesignsPath, 'utf8')
       const parsed = JSON.parse(content)
       return { uiDesigns: await attachUiDesignPageCode(workspaceRoot, parsed) }
-    } catch {
-      return { uiDesigns: null }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { uiDesigns: null }
+      throw new Error('UI 设计稿清单无法读取，请检查文件后重新读取。')
     }
   })
 

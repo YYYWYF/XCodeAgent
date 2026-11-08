@@ -10,7 +10,7 @@ import { WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
  * 每一页都点不开**：workflow 快照里的页面同样没有 code，本轮新生成的和从上一轮继承来的
  * 一视同仁。
  *
- * 读不到某个页面的源码就原样留空：按钮禁用总好过报错。manifest 结构不符时原样返回。
+ * 单页读取失败通过临时 codeReadError 返回，不影响其他页，也不写回正式清单。
  */
 export async function attachUiDesignPageCode(
   workspaceRoot: string,
@@ -27,12 +27,18 @@ export async function attachUiDesignPageCode(
       // 已经带 code 的条目（生成池刚写完）保持原样，不做多余的磁盘读取。
       if ((page as { code?: unknown }).code) return page
       const pageKey = String((page as { page_key?: unknown }).page_key || '').trim()
-      if (!pageKey) return page
+      const expectsCode = (page as { status?: unknown }).status === 'confirmed' ||
+        Boolean((page as { code_path?: unknown }).code_path)
+      if (!pageKey) return expectsCode
+        ? { ...page, codeReadError: '设计稿源码定位信息缺失，请重新读取。' } : page
       try {
         const code = await fs.readFile(path.join(pagesDir, pageKey, 'index.tsx'), 'utf8')
-        return { ...(page as Record<string, unknown>), code }
-      } catch {
-        return page
+        return code.trim() ? { ...(page as Record<string, unknown>), code }
+          : { ...page, codeReadError: '设计稿源码为空，请检查文件后重新读取。' }
+      } catch (error) {
+        // 未生成页没有文件是正常空态；已声明生成成功的文件缺失属于可重试的读取故障。
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !expectsCode) return page
+        return { ...page, codeReadError: '设计稿源码无法读取，请检查文件后重新读取。' }
       }
     })
   )

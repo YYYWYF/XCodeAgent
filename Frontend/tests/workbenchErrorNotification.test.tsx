@@ -5,9 +5,70 @@ import { act, create } from 'react-test-renderer'
 import { notification } from 'antd'
 import type { ArgsProps } from 'antd/lib/notification'
 import WorkbenchErrorNotification from '../src/renderer/src/components/WorkbenchErrorNotification'
+import WorkbenchRecoveryNotice from '../src/renderer/src/components/AiChatPanel/components/WorkbenchRecoveryNotice'
 import { UiReadVisibility } from '../src/renderer/src/hooks/uiReadVisibility'
-import { connectionErrorNoticeId } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
+import { connectionErrorNoticeId, recoveryNoticeIsInline } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import { initialConnectionState, completeConnectionRequest, failConnectionRequest } from '../src/renderer/src/service/connectionState'
+
+test('会话任务失败常驻聊天区，切换与返回不丢失重试，全局故障继续使用通知', async () => {
+  const originalHook = notification.useNotification
+  const originalClose = notification.close
+  const notices: ArgsProps[] = []
+  const closed: string[] = []
+  /** 记录真实包装组件是否把当前失败发送给全局通知。 */
+  const open = (args: ArgsProps): void => { notices.push(args) }
+  const api = { open, success: open, error: open, info: open, warning: open }
+  notification.useNotification = () => [api, createElement(Fragment)]
+  notification.close = (key): void => { closed.push(key) }
+  let renderer: ReturnType<typeof create> | undefined
+  let retries = 0
+  /** 模拟任务失败与全局断连的归属切换，保留同一个生产包装组件。 */
+  const view = (inline: boolean, visible = true, noticeId: string | undefined = 'failure') => createElement(
+    UiReadVisibility.Provider, { value: visible },
+    createElement(WorkbenchRecoveryNotice, { workspace: 'workspace', noticeId, inline,
+      children: createElement('button', { onClick: () => { retries++ } }, '重试') })
+  )
+  try {
+    await act(async () => { renderer = create(view(true)) })
+    assert.equal(notices.length, 0, '任务失败不能弹到右下角')
+    assert.equal(renderer!.root.findAllByProps({ 'aria-label': '当前会话恢复操作' }).length, 1)
+    await act(async () => { renderer!.root.findByType('button').props.onClick() })
+    assert.equal(retries, 1)
+    await act(async () => { renderer!.update(view(true, false)) })
+    assert.equal(renderer!.root.findAllByType('button').length, 0)
+    await act(async () => { renderer!.update(view(true)) })
+    assert.equal(renderer!.root.findAllByType('button').length, 1)
+    assert.equal(notices.length, 0)
+    await act(async () => { renderer!.update(view(false)) })
+    assert.equal(renderer!.root.findAllByProps({ 'aria-label': '当前会话恢复操作' }).length, 0)
+    assert.equal(notices.length, 1, '共享连接故障仍使用全局通知')
+    await act(async () => { renderer!.update(view(true)) })
+    assert.ok(closed.length > 0, '返回任务提示时撤下原全局浮层')
+    assert.equal(renderer!.root.findAllByType('button').length, 1)
+    await act(async () => { renderer!.update(view(true, true, '')) })
+    assert.equal(renderer!.root.findAllByType('button').length, 0, '当前失败消失后撤下旧重试')
+  } finally {
+    if (renderer) await act(async () => { renderer!.unmount() })
+    notification.useNotification = originalHook
+    notification.close = originalClose
+  }
+})
+
+test('需求、技术规划、开发任务与交接按会话归属显示，全局连接和共享读取故障不进入聊天区', () => {
+  const session = { revisionHandoff: false, connectionStatus: 'healthy', planningEndRequested: false,
+    hasRecoveryIncident: false, pendingRevisionStart: false, sharedReadError: false,
+    previewRetry: false, hasSessionOwner: true }
+  // 需求和技术规划校验失败、开发会话异常均已由调用方核验当前会话身份。
+  assert.equal(recoveryNoticeIsInline(session), true)
+  assert.equal(recoveryNoticeIsInline({ ...session, hasRecoveryIncident: true }), true)
+  assert.equal(recoveryNoticeIsInline({ ...session, planningEndRequested: true }), true)
+  assert.equal(recoveryNoticeIsInline({ ...session, pendingRevisionStart: true }), true)
+  assert.equal(recoveryNoticeIsInline({ ...session, revisionHandoff: true, connectionStatus: 'unavailable' }), true)
+  assert.equal(recoveryNoticeIsInline({ ...session, connectionStatus: 'unavailable' }), false)
+  assert.equal(recoveryNoticeIsInline({ ...session, sharedReadError: true }), false)
+  assert.equal(recoveryNoticeIsInline({ ...session, previewRetry: true }), false)
+  assert.equal(recoveryNoticeIsInline({ ...session, hasSessionOwner: false }), false)
+})
 
 /** 验证真实组件的关闭、更新和隔离行为，Ant Design 浮层由 Electron 验证。 */
 test('统一通知关闭后不随会话更新重弹，新错误可展示且保留最新操作', async () => {

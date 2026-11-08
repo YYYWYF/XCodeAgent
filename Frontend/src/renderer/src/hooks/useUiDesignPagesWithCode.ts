@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { UiReadVisibility } from './uiReadVisibility'
 import {
   designPagesGenerating,
@@ -59,7 +59,7 @@ export function mergeUiDesignPageSources<T extends UiDesignPageLike>(
 export function useUiDesignPagesWithCode<T extends UiDesignPageLike>(
   workspaceRoot: string | undefined,
   sourcePages: T[] | undefined
-): T[] {
+): { pages: T[]; loading: boolean; error?: string; pageErrors: Record<string, string>; retry: () => void } {
   const visible = useContext(UiReadVisibility)
   const sourceRef = useRef<UiDesignPageSource>()
   const [disk, setDisk] = useState<{ workspace?: string; value: DesignSourceSnapshot }>({
@@ -90,8 +90,12 @@ export function useUiDesignPagesWithCode<T extends UiDesignPageLike>(
   }, [workspaceRoot, visible, sourceKey, generating])
 
   const snapshot = disk.workspace === workspaceRoot ? disk.value : EMPTY_DESIGN_SOURCE
-  return useMemo(
+  const pages = useMemo(
     () => mergeUiDesignPageSources(sourcePages ?? [], snapshot.codes, snapshot.statuses),
     [sourcePages, snapshot]
   )
+  /** 显式重读共享源码源，不要求清单身份或生成状态先发生变化。 */
+  const retry = useCallback((): void => sourceRef.current?.refresh(), [])
+  return { pages, loading: Boolean(workspaceRoot && visible && snapshot.loading), error: snapshot.error,
+    pageErrors: snapshot.pageErrors, retry }
 }

@@ -10,17 +10,18 @@ type Input = {
   onLifecycle: (lifecycle: ApplicationLifecycle) => void
 }
 
-type Availability = { key: string; unchanged?: boolean; error?: string }
+type Availability = { key: string; checking: boolean; unchanged?: boolean; error?: string }
 
 /** 仅在停止卡可见时校准当前工作区资格，继续前复验；不发起或恢复任何业务执行。 */
 export function useStoppedPlanningAvailability(input: Input): {
   unchanged?: boolean
+  checking: boolean
   error?: string
   check: () => Promise<boolean>
 } {
   const visible = useContext(UiReadVisibility)
   const key = JSON.stringify([input.scopeKey, input.runId, input.threadId])
-  const [availability, setAvailability] = useState<Availability>({ key })
+  const [availability, setAvailability] = useState<Availability>({ key, checking: true })
   const inputRef = useRef(input)
   inputRef.current = input
   const checkRef = useRef<(() => Promise<boolean>) | undefined>(undefined)
@@ -33,6 +34,9 @@ export function useStoppedPlanningAvailability(input: Input): {
     const refresh = (): Promise<boolean> => {
       if (cancelled || document.hidden) return Promise.resolve(false)
       if (pending) return pending
+      // 检查失败与检查中分别投影；重读期间保留错误入口的加载态，但撤下旧继续资格。
+      setAvailability((previous) => ({ key, checking: true,
+        error: previous.key === key ? previous.error : undefined }))
       pending = (async (): Promise<boolean> => {
         try {
           const lifecycle = await inputRef.current.read()
@@ -40,12 +44,12 @@ export function useStoppedPlanningAvailability(input: Input): {
           const stopped = lifecycle.endedPlanningExecution
           const unchanged = stopped?.runId === input.runId && stopped.threadId === input.threadId &&
             stopped.workspaceUnchanged === true
-          setAvailability({ key, unchanged })
+          setAvailability({ key, checking: false, unchanged })
           inputRef.current.onLifecycle(lifecycle)
           return unchanged
         } catch {
           if (!cancelled && !document.hidden) {
-            setAvailability({ key, error: '暂时无法检查工作区状态，恢复连接后将重新检查。' })
+            setAvailability({ key, checking: false, error: '暂时无法检查工作区状态，请重新检查。' })
           }
           return false
         } finally {
@@ -78,5 +82,6 @@ export function useStoppedPlanningAvailability(input: Input): {
   /** 点击继续只使用本次新读取，不能把界面上一次的未变化结果当作授权。 */
   const check = useCallback((): Promise<boolean> => checkRef.current?.() || Promise.resolve(false), [])
   const current = visible && availability.key === key ? availability : undefined
-  return { unchanged: current?.unchanged, error: current?.error, check }
+  return { unchanged: current?.unchanged, checking: visible && (!current || current.checking),
+    error: current?.error, check }
 }

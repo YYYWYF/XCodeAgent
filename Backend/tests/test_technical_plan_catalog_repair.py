@@ -194,7 +194,7 @@ class TechnicalPlanCatalogRepairTests(TestCase):
         self.assertEqual(len(customer_entities), 1)
 
     def test_noop_catalog_repair_remains_pending_and_uses_existing_budget(self):
-        """模型原样返回目录不会清掉缺口；三轮总预算耗尽后仍可从目录修复继续。"""
+        """模型原样返回目录不会清掉缺口；同一目录修复链三轮内收口。"""
 
         progress = {}
         noop = catalog_responses(self.catalog, entity_ids={"Order"}, contract_ids={"orders_api"}, page_ids=["order_detail"])
@@ -223,7 +223,7 @@ class TechnicalPlanCatalogRepairTests(TestCase):
                 calls = []
                 with self.assertRaises(ValueError):
                     generate_technical_plan_sections(self.requirement,
-                        invoke=self._invoke(self._initial_outputs()[:-1] + [issue], calls), fragments=progress)
+                        invoke=self._invoke(self._initial_outputs()[:-1] + [issue] * 3, calls), fragments=progress)
                 self.assertIn("catalog", progress["completed"])
                 self.assertNotIn("catalog_repair", progress["completed"])
 

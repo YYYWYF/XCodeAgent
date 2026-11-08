@@ -160,7 +160,7 @@ export default function UiDesignConfirmationPanel({
   // 一直显示「生成中」。override 只在本地 acting/generating 页存在时由轮询填充。
   // 快照里的页面没有 code（正式 manifest 只存 code_path），从磁盘补回来，
   // 否则「查看设计稿」按钮禁用、右侧预览也渲染不出东西。
-  const pagesWithCode = useUiDesignPagesWithCode(workspaceRoot, rawPages)
+  const { pages: pagesWithCode } = useUiDesignPagesWithCode(workspaceRoot, rawPages)
   // 终态只来自后台落盘事实，停止请求发出时不提前覆盖成 cancelled。
   const pages = pagesWithCode
   // 最终确认被后端事实校验拒绝时，直接展示确定性错误而不是只停留在当前页面。
