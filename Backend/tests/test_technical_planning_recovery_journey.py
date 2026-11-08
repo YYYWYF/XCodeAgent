@@ -58,7 +58,7 @@ from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
 )
-from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path
+from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path, technical_plan_draft_json_path
 from app.services.template_reconcile.finalization import claim_template_reconcile_finalization
 from app.workspace.product_plan_documents import (
     write_confirmed_product_plan_documents,
@@ -440,11 +440,15 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             update["lifecycle"]["activeFormalRevision"]["currentArtifact"], "technical-plan"
         )
-        self.assertEqual(json.loads(Path(json_path).read_text())["confirmation_status"], "confirmed")
+        self.assertFalse(Path(json_path).exists())
+        confirmed_path = update["technical_plan_json_path"]
+        self.assertEqual(Path(confirmed_path), technical_plan_json_path(state))
+        self.assertEqual(update["project_plan_json_path"], confirmed_path)
+        self.assertEqual(json.loads(Path(confirmed_path).read_text())["confirmation_status"], "confirmed")
         claim = claim_template_reconcile_finalization(
             harness.workspace,
             change_id=active.change_id,
-            technical_plan_path=json_path,
+            technical_plan_path=confirmed_path,
         )
         self.assertTrue(claim.acquired)
 
@@ -513,7 +517,7 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(final_lifecycle["initialization"]["status"], "awaiting_user")
             self.assertEqual(final_lifecycle["initialization"]["stage"], "awaiting_technical_plan_confirmation")
             self.assertTrue(
-                technical_plan_json_path(
+                technical_plan_draft_json_path(
                     {"workspace": str(self.harness.workspace)}
                 ).is_file()
             )

@@ -132,8 +132,12 @@ class PlanningStageThreadJourneyTests(unittest.IsolatedAsyncioTestCase):
         workflow = next(event["value"] for event in events if event.get("name") == "workflow-run")
         self.assertEqual(workflow["threadId"], "new-plan-thread")
         self.assertEqual(workflow["summary"]["status"], "requires_user_input")
+        self.assertTrue((self.h.workspace / ".devagentstudio/drafts/plans/technical-plan.json").is_file())
+        self.assertFalse((self.h.workspace / ".devagentstudio/plans/technical-plan.json").exists())
         result = await self._submit("confirm")
         self.assertEqual(result.values["technical_plan"]["confirmation_status"], "confirmed")
+        self.assertFalse((self.h.workspace / ".devagentstudio/drafts/plans/technical-plan.json").exists())
+        self.assertTrue((self.h.workspace / ".devagentstudio/plans/technical-plan.json").is_file())
         self.assertEqual(load_application_lifecycle(self.h.workspace).initialization.thread_id, "new-plan-thread")
 
     async def test_completed_product_history_cannot_start_conversation(self):

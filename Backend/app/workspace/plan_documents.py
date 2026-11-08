@@ -919,16 +919,29 @@ def write_project_plan_document(state: dict[str, Any], plan: dict[str, Any]) -> 
 
 
 def technical_plan_json_path(state: dict[str, Any]) -> Path:
-    """返回开发确认使用的 TechnicalPlan JSON 正式路径。"""
+    """返回用户确认后供开发使用的 TechnicalPlan JSON 正式路径。"""
 
     return workflow_artifact_root(state) / "plans" / "technical-plan.json"
+
+
+def technical_plan_draft_json_path(state: dict[str, Any]) -> Path:
+    """返回当前待确认技术规划的 JSON 草稿路径。"""
+
+    return workflow_artifact_root(state) / "drafts" / "plans" / "technical-plan.json"
+
+
+def current_technical_plan_json_path(state: dict[str, Any]) -> Path:
+    """审阅和继续修改优先读取当前草稿，没有草稿时沿用 plans 中的已有计划。"""
+
+    draft = technical_plan_draft_json_path(state)
+    return draft if draft.is_file() else technical_plan_json_path(state)
 
 
 def write_technical_plan_document(
     state: dict[str, Any],
     plan: dict[str, Any],
 ) -> str:
-    """写入当前 TechnicalPlan 正式文件，并复用事务化原子提交实现。"""
+    """按确认状态保存技术规划，复用事务化原子提交实现。"""
 
     return commit_technical_plan_document(state, plan)
 
@@ -939,12 +952,13 @@ def commit_technical_plan_document(
     *,
     expected_sha256: str | None = None,
 ) -> str:
-    """原子提交 TechnicalPlan 结构化数据，不读取或处理同目录的其他文件。"""
+    """待确认版本原子写入草稿，确认后写入正式计划并清理当前 JSON 草稿。"""
 
     from app.domain.application_planning_recovery import application_planning_sha256
     from app.workspace.detail_design_documents import externalize_detail_designs
 
-    json_path = technical_plan_json_path(state)
+    confirmed = plan.get("confirmation_status") == "confirmed"
+    json_path = technical_plan_json_path(state) if confirmed else technical_plan_draft_json_path(state)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     actual_sha256 = application_planning_sha256(plan)
     if expected_sha256 is not None and actual_sha256 != expected_sha256:
@@ -952,6 +966,8 @@ def commit_technical_plan_document(
     compact_plan = externalize_detail_designs(state, plan)
     json_content = f"{json.dumps(compact_plan, ensure_ascii=False, indent=2)}\n"
     _write_text_atomically(json_path, json_content)
+    if confirmed:
+        technical_plan_draft_json_path(state).unlink(missing_ok=True)
     return str(json_path)
 
 

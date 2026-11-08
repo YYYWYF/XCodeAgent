@@ -11,13 +11,80 @@ from unittest.mock import patch
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
 from app.services.ended_workspace import workspace_fingerprint
-from app.workspace.plan_documents import commit_technical_plan_document
+from app.workspace.plan_documents import (
+    commit_technical_plan_document, current_technical_plan_json_path,
+    technical_plan_json_path, technical_plan_draft_json_path,
+)
 from tests.test_application_page_planning import _confirmed_state
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
 class TechnicalPlanJsonStorageTests(unittest.TestCase):
     """验证没有 Markdown 与遗留任意 Markdown 的行为完全一致。"""
+
+    def test_pending_plan_stays_in_drafts_until_confirmation(self) -> None:
+        """初次生成与修改都只写草稿，确认才替换正式计划并撤下当前草稿。"""
+
+        from app.services.stage_artifacts import load_stage_artifacts
+        from app.services.technical_planning_retry import prepare_technical_planning_retry
+
+        harness = TechnicalPlanningRecoveryJourneyHarness()
+        try:
+            state = {"workspace": str(harness.workspace), "request": "完善前端架构说明"}
+            candidate = deepcopy(harness.candidate)
+            draft = Path(commit_technical_plan_document(state, candidate))
+            self.assertEqual(draft, technical_plan_draft_json_path(state))
+            self.assertFalse(technical_plan_json_path(state).exists())
+            confirmed = {**deepcopy(candidate), "confirmation_status": "confirmed"}
+            formal = Path(commit_technical_plan_document(state, confirmed))
+            before = formal.read_bytes()
+            self.assertFalse(draft.exists())
+
+            candidate["architecture"]["frontend"] += " 本轮修改保留正式版本。"
+            commit_technical_plan_document(state, candidate)
+            self.assertEqual(formal.read_bytes(), before)
+            self.assertEqual(current_technical_plan_json_path(state), draft)
+            self.assertEqual(prepare_technical_planning_retry(state)["technical_plan"], candidate)
+            review = load_stage_artifacts(state, "technical_planning_confirm")
+            self.assertEqual(review["technical_plan"], candidate)
+            self.assertEqual(review["project_plan_json_path"], str(draft))
+            downstream = load_stage_artifacts(state, "template_reconcile")
+            self.assertEqual(downstream["technical_plan"], confirmed)
+            self.assertEqual(Path(downstream["technical_plan_json_path"]).resolve(), formal.resolve())
+
+            with patch("app.workspace.plan_documents._write_text_atomically", side_effect=OSError("写入失败")):
+                with self.assertRaisesRegex(OSError, "写入失败"):
+                    commit_technical_plan_document(state, {**candidate, "confirmation_status": "confirmed"})
+            self.assertEqual(formal.read_bytes(), before)
+            self.assertTrue(draft.is_file())
+            commit_technical_plan_document(state, {**candidate, "confirmation_status": "confirmed"})
+            self.assertFalse(draft.exists())
+            self.assertEqual(json.loads(formal.read_text())["architecture"], candidate["architecture"])
+        finally:
+            harness.close()
+
+    def test_plans_only_application_remains_readable_without_migration(self) -> None:
+        """仅在 plans 保存待确认版本的已有应用照常审阅、重试和确认，不要求草稿存在。"""
+
+        from app.services.stage_artifacts import load_stage_artifacts
+        from app.services.technical_planning_retry import prepare_technical_planning_retry
+
+        harness = TechnicalPlanningRecoveryJourneyHarness()
+        try:
+            state = {"workspace": str(harness.workspace), "request": "继续修改技术规划"}
+            formal = technical_plan_json_path(state)
+            formal.write_text(json.dumps(harness.candidate, ensure_ascii=False), encoding="utf-8")
+            before = formal.read_bytes()
+            self.assertEqual(current_technical_plan_json_path(state), formal)
+            self.assertEqual(prepare_technical_planning_retry(state)["technical_plan"], harness.candidate)
+            review = load_stage_artifacts(state, "technical_planning_confirm")
+            self.assertEqual(review["technical_plan"], harness.candidate)
+            self.assertEqual(formal.read_bytes(), before)
+            self.assertFalse(technical_plan_draft_json_path(state).exists())
+            commit_technical_plan_document(state, {**harness.candidate, "confirmation_status": "confirmed"})
+            self.assertEqual(json.loads(formal.read_text())["confirmation_status"], "confirmed")
+        finally:
+            harness.close()
 
     def test_formal_revision_previews_and_confirms_the_stored_candidate(self) -> None:
         """正式修订生成结构化预览，等待确认后才覆盖正式数据，不读取多余 Markdown。"""

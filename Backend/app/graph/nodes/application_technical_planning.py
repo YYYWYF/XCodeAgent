@@ -275,7 +275,7 @@ def _technical_generation_error_payload(errors: list[str]) -> dict[str, Any]:
 
 
 def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
-    """校验候选摘要并幂等原子提交 TechnicalPlan 结构化数据。"""
+    """校验候选摘要并幂等原子保存 TechnicalPlan 草稿，等待用户确认。"""
 
     boundary = _technical_boundary(state)
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.CANDIDATE_COMMITTED:
@@ -422,6 +422,8 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         "technical_plan": confirmed_plan,
         "project_plan": confirmed_plan,
         "technical_plan_json_path": technical_plan_json,
+        "project_plan_path": technical_plan_json,
+        "project_plan_json_path": technical_plan_json,
         "application_planning_confirmation": confirmation,
         "revision_continuation": revision_continuation,
         "template_reconcile_pending": template_reconcile_pending,

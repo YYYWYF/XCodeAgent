@@ -43,11 +43,13 @@ export async function readWorkbenchPlanningArtifacts(workspaceRoot: string): Pro
     },
     {
       relativePath: 'plans/technical-plan.json', format: 'json',
+      draftRelativePath: 'drafts/plans/technical-plan.json',
       contractField: 'artifact_type', contractValue: 'technical-plan', target: 'technicalPlan'
     }
   ] as const
 
   for (const artifact of artifacts) {
+    let relativePath: string = artifact.relativePath
     /** 将当前目录源的真实读取失败单独返回，待确认状态不属于读取失败。 */
     const reportIssue = (reason: PlanningCatalogIssue['reason']): void => {
       if ('target' in artifact) result.catalogIssues.push({
@@ -55,45 +57,52 @@ export async function readWorkbenchPlanningArtifacts(workspaceRoot: string): Pro
       })
     }
     try {
-      const content = await fs.readFile(
-        path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, artifact.relativePath), 'utf8'
-      )
+      let content: string
+      try {
+        if ('draftRelativePath' in artifact) relativePath = artifact.draftRelativePath
+        content = await fs.readFile(path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, relativePath), 'utf8')
+      } catch (error) {
+        // 草稿尚不存在时仍读取已有正式计划，不要求旧应用创建草稿目录。
+        if (!('draftRelativePath' in artifact) || (error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error
+        relativePath = artifact.relativePath
+        content = await fs.readFile(path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, relativePath), 'utf8')
+      }
       if (!content.trim()) {
-        result.invalid.push(artifact.relativePath)
+        result.invalid.push(relativePath)
         reportIssue('invalid')
         continue
       }
       if (artifact.format === 'markdown') continue
       const value: unknown = JSON.parse(content)
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        result.invalid.push(artifact.relativePath)
+        result.invalid.push(relativePath)
         reportIssue('invalid')
         continue
       }
       const plan = value as Record<string, unknown>
       if ('contractField' in artifact && plan[artifact.contractField] !== artifact.contractValue) {
-        result.invalid.push(artifact.relativePath)
+        result.invalid.push(relativePath)
         reportIssue('invalid')
         continue
       }
       if ('target' in artifact && (!validCatalog(plan, artifact.target) ||
         !['confirmed', 'pending_user_confirmation'].includes(String(plan.confirmation_status)))) {
-        result.invalid.push(artifact.relativePath)
+        result.invalid.push(relativePath)
         reportIssue('invalid')
         continue
       }
       // 保留待确认错误使整体 ready 继续为 false；只向浏览目录提供当前契约内容，不提交或确认草稿。
-      if (plan.confirmation_status !== 'confirmed') result.invalid.push(artifact.relativePath)
+      if (plan.confirmation_status !== 'confirmed') result.invalid.push(relativePath)
       if ('target' in artifact && (
         plan.confirmation_status === 'confirmed' ||
         plan.confirmation_status === 'pending_user_confirmation'
       )) result[artifact.target] = plan
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-        result.missing.push(artifact.relativePath)
+        result.missing.push(relativePath)
         reportIssue('missing')
       } else {
-        result.invalid.push(artifact.relativePath)
+        result.invalid.push(relativePath)
         reportIssue(error instanceof SyntaxError ? 'invalid' : 'unreadable')
       }
     }

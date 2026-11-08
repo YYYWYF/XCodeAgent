@@ -628,9 +628,10 @@ class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         await self._run_child(scenario, second_context)
-        json_path = scenario.workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json"
-        markdown_path = scenario.workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.md"
+        json_path = scenario.workspace / WORKSPACE_ARTIFACT_DIR / "drafts" / "plans" / "technical-plan.json"
+        markdown_path = json_path.with_suffix(".md")
         self.assertTrue(json_path.is_file())
+        self.assertFalse((scenario.workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json").exists())
         self.assertFalse(markdown_path.exists())
         self.assertEqual(
             application_planning_sha256(json.loads(json_path.read_text(encoding="utf-8"))),

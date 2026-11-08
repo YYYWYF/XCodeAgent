@@ -506,7 +506,10 @@ type LocalDesignWorkspaceSnapshot = {
 // 同一 renderer 内每个应用只执行一次冷恢复；缓存 Promise 同时合并 React StrictMode 重放。
 const localDesignRecoveryCache = new Map<string, Promise<LocalDesignWorkspaceSnapshot>>()
 
-const TECHNICAL_PLAN_JSON_PATH = '.devagentstudio/plans/technical-plan.json'
+const TECHNICAL_PLAN_JSON_PATHS = [
+  '.devagentstudio/drafts/plans/technical-plan.json',
+  '.devagentstudio/plans/technical-plan.json'
+] as const
 const PRODUCT_PLAN_JSON_PATHS = [
   '.devagentstudio/drafts/plans/product-plan.json',
   '.devagentstudio/plans/product-plan.json'
@@ -616,24 +619,25 @@ async function readLocalDesignMarkdown(
   throw lastError || new Error('设计文档 Markdown 不存在')
 }
 
-/** 从当前工作区读取 TechnicalPlan 的内部结构化快照，供右侧可视化组件使用。 */
+/** 冷进入优先读取待确认技术草稿，没有草稿的应用继续读取 plans 中的计划。 */
 async function readLocalTechnicalPlanJson(
   workspaceRoot: string
 ): Promise<Record<string, unknown> | undefined> {
-  try {
-    const result = await readWorkspaceFile({
-      workspace_root: workspaceRoot,
-      path: TECHNICAL_PLAN_JSON_PATH,
-      // file.read 工具当前契约上限为 5000 行、200000 字符；TechnicalPlan JSON 在此范围内。
-      max_lines: 5000,
-      max_chars: 200000
-    })
-    const parsed: unknown = JSON.parse(result.content)
-    return asWorkflowRecord(parsed)
-  } catch {
-    // TechnicalPlan JSON 尚未生成或暂时不可读时，由右侧面板显示对应的空态。
-    return undefined
+  for (const path of TECHNICAL_PLAN_JSON_PATHS) {
+    try {
+      const result = await readWorkspaceFile({
+        workspace_root: workspaceRoot,
+        path,
+        max_lines: 5000,
+        max_chars: 200000
+      })
+      const parsed: unknown = JSON.parse(result.content)
+      return asWorkflowRecord(parsed)
+    } catch {
+      // 沿用需求和产品规划的冷读取方式，所有位置都不可读时交给面板显示空态。
+    }
   }
+  return undefined
 }
 
 /** 从当前工作区读取 ProductPlan 的当前结构化快照，草稿优先、正式文档兜底。 */

@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any
@@ -149,25 +150,21 @@ def _handle_revision_interaction(
             "timeline": ["application_revision"],
         }
     if action == "revise":
-        # 连续修改按当前草稿比较，不能始终与正式目录中的旧版本比较。
+        if artifact_key != "technical-plan":
+            raise ValueError("当前合同只允许修订 TechnicalPlan。")
+        # 当前草稿同时作为下一轮编辑和差异审阅的基线，保留前面各轮修改。
         _, previous_draft = load_revision_draft(
             workspace, change_id=active.change_id, artifact_key=artifact_key,
         )
-        discard_current_revision_draft(
-            workspace,
-            change_id=active.change_id,
-            artifact_key=artifact_key,
-        )
         feedback = str(interaction.get("feedback") or "").strip()
         revision_request = f"{active.request}\n\n本轮草稿修改意见：{feedback}"
-        if artifact_key != "technical-plan":
-            raise ValueError("当前合同只允许修订 TechnicalPlan。")
+        # 生成及完整校验成功后才写入新草稿；失败时旧稿及其元数据均保留。
         draft = _create_technical_plan_draft(
             workspace,
             active,
             revision_request=revision_request,
+            existing_plan=previous_draft,
         )
-        draft["baseline"] = previous_draft
         return _await_revision_draft(
             workspace,
             active.change_id,
@@ -251,13 +248,14 @@ def _create_technical_plan_draft(
     active: Any,
     *,
     revision_request: str | None = None,
+    existing_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """复用 Technical Planner 生成完整隔离草稿，并绑定 ProductPlan/UiDesign 上游。"""
+    """基于当前草稿或首次修订的正式版本生成候选，完整校验后替换待确认草稿。"""
 
     plans = workspace / WORKSPACE_ARTIFACT_DIR / "plans"
     specs = workspace / WORKSPACE_ARTIFACT_DIR / "specs"
     canonical_json = plans / "technical-plan.json"
-    existing = _load_json_object(canonical_json)
+    existing = deepcopy(existing_plan) if existing_plan is not None else _load_json_object(canonical_json)
     requirement_spec = load_requirement_spec_json(specs / "requirement-spec.json")
     product_plan = load_project_plan_json(plans / "product-plan.json")
     ui_designs = load_ui_designs_json(specs / "ui-designs.json")
@@ -272,7 +270,8 @@ def _create_technical_plan_draft(
     }
     artifact = plan_project_with_chat_model(
         technical_input,
-        existing_plan=existing,
+        # 编辑器可以修改候选，审阅基线必须保留修改前的独立快照。
+        existing_plan=deepcopy(existing),
     )
     artifact = bind_plan_entity_tables(artifact, technical_input["application_config"])
     artifact = attach_page_implementation_contracts(artifact, product_plan, ui_designs)

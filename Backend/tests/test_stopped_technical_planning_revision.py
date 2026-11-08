@@ -15,7 +15,7 @@ from app.protocols.execution_recovery import build_execution_recovery_ag_ui_stre
 from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.services.application_lifecycle import load_application_lifecycle, write_application_lifecycle
 from app.services.planning_execution_end import end_planning_execution
-from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path
+from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_draft_json_path
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -92,7 +92,7 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tuple(final.next), ("technical_planning_review",))
         self.assertTrue(any(task.interrupts for task in final.tasks))
         self.assertEqual(final.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
-        disk = json.loads(technical_plan_json_path({"workspace": str(self.h.workspace)}).read_text())
+        disk = json.loads(technical_plan_draft_json_path({"workspace": str(self.h.workspace)}).read_text())
         self.assertEqual(disk["summary"], candidate["summary"])
         self.assertEqual(disk["confirmation_status"], "pending_user_confirmation")
         current = load_application_lifecycle(self.h.workspace)

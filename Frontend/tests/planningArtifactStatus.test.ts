@@ -36,6 +36,38 @@ async function writeWorkbenchPlans(workspaceRoot: string): Promise<void> {
   }
 }
 
+/** 验证目录读取当前技术草稿，确认前保留正式版本，只有 plans 的应用继续走原读取。 */
+test('技术草稿优先用于目录浏览，确认后读取正式计划', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    await writeWorkbenchPlans(workspaceRoot)
+    const formalPath = path.join(workspaceRoot, '.devagentstudio/plans/technical-plan.json')
+    const draftPath = path.join(workspaceRoot, '.devagentstudio/drafts/plans/technical-plan.json')
+    const original = await fs.readFile(formalPath, 'utf8')
+    const draft = {
+      ...JSON.parse(original), confirmation_status: 'pending_user_confirmation',
+      entities: [{ id: 'revised_article' }]
+    }
+    await fs.mkdir(path.dirname(draftPath), { recursive: true })
+    await fs.writeFile(draftPath, JSON.stringify(draft))
+    const pending = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.deepEqual(pending.technicalPlan?.entities, draft.entities)
+    assert.deepEqual(pending.invalid, ['drafts/plans/technical-plan.json'])
+    assert.deepEqual(pending.catalogIssues, [])
+    assert.equal(await fs.readFile(formalPath, 'utf8'), original)
+    // 首次生成只有草稿时也可正常浏览，不能报告正式计划缺失。
+    await fs.rename(formalPath, `${formalPath}.test-backup`)
+    const initial = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.deepEqual(initial.technicalPlan?.entities, draft.entities)
+    assert.deepEqual(initial.missing, [])
+    await fs.writeFile(draftPath, JSON.stringify({ ...draft, confirmation_status: 'confirmed' }))
+    await fs.rename(draftPath, formalPath)
+    const confirmed = await readWorkbenchPlanningArtifacts(workspaceRoot)
+    assert.deepEqual(confirmed.technicalPlan?.entities, draft.entities)
+    assert.deepEqual(confirmed.invalid, [])
+    assert.deepEqual(confirmed.catalogIssues, [])
+  })
+})
+
 /** 验证技术规划待确认时页面、接口、实体均可浏览，但正式准入仍被阻止。 */
 test('待确认技术规划保留完整接口和实体供目录浏览', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {

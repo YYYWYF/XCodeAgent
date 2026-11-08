@@ -13,7 +13,7 @@ from app.domain.application_planning_recovery import (
     application_planning_boundary_payload,
     parse_application_planning_boundary,
 )
-from app.workspace.plan_documents import load_project_plan_json, technical_plan_json_path
+from app.workspace.plan_documents import load_project_plan_json, current_technical_plan_json_path
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError, _application_lifecycle_lock, application_lifecycle_path,
     load_application_lifecycle, restart_application_planning_lifecycle,
@@ -77,7 +77,7 @@ def prepare_technical_planning_retry(
     if not request:
         raise ValueError("技术规划重试缺少上次用户要求。")
     # 已落盘的正式/待确认计划优先；无落盘计划时保留当前事务已有计划。
-    path = technical_plan_json_path(state)
+    path = current_technical_plan_json_path(state)
     baseline = load_project_plan_json(path, hydrate_detail_designs=True) if path.is_file() else state.get("technical_plan")
     baseline = deepcopy(baseline) if isinstance(baseline, dict) and baseline else {}
     if new_request is not None:

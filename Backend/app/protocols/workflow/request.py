@@ -1524,12 +1524,9 @@ def _validated_technical_revision_intent(
         or pending.impact.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
     ):
         raise ValueError("TechnicalPlan revision intent 与当前 pending revision impact 不匹配。")
-    baseline_path = (
-        Path(workspace).expanduser().resolve()
-        / WORKSPACE_ARTIFACT_DIR
-        / "plans"
-        / "technical-plan.json"
-    )
+    from app.workspace.plan_documents import current_technical_plan_json_path
+
+    baseline_path = current_technical_plan_json_path({"workspace": workspace})
     baseline = load_project_plan_json(
         baseline_path,
         hydrate_detail_designs=True,

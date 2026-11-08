@@ -167,7 +167,7 @@ RequirementSpec、ProductPlan 和 UiDesign 的产品确认均不得要求产品�
 
 负责人：开发。
 
-TechnicalPlan 只写入 `.devagentstudio/plans/technical-plan.json`，`technical_plan` 是唯一语义来源。
+TechnicalPlan 待确认版本写入 `.devagentstudio/drafts/plans/technical-plan.json`，确认后原子写入 `.devagentstudio/plans/technical-plan.json` 并清理当前 JSON 草稿；修改期间保留上一份正式计划。审阅、连续修改及重试优先读取当前草稿，模板收敛和开发继续读取正式计划。只有 `plans` 中已有技术规划的应用照常读取和确认，不要求迁移、补建草稿或增加目录位置校验。`technical_plan` 是唯一语义来源。
 
 TechnicalPlan 通过结构化面板审阅，完整展示所有 Path/Query/Header 参数、请求体、响应体及嵌套类型、必填和已声明约束。正式产物与正式修订草稿均只保存 JSON，不生成或读取技术规划 Markdown，也不把 JSON 作为用户可编辑文档。修改通过原 AG-UI 修改意见提交，新版本仍需显式确认；修订继续保留基线、上游哈希与生命周期绑定。技术确认回执只包含 JSON，模板交接和 Electron 工作区检查不再要求 Markdown。多余的 `plans/technical-plan.md` 或技术修订草稿 `artifact.md` 直接忽略，也不参与停止后继续的工作区指纹；正式目录的多余文件不主动删除，修订草稿仍按原确认/放弃流程整体清理。其他产物的 Markdown 合同保持原用途。
 

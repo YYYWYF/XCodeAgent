@@ -9,7 +9,7 @@ from typing import Any
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.run_workers import WorkerStateGraph
 from app.services.generation_baseline import prepare_generation_baseline
-from app.workspace.plan_documents import load_project_plan_json
+from app.workspace.plan_documents import load_project_plan_json, current_technical_plan_json_path
 from langgraph.types import Command
 
 
@@ -72,6 +72,9 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
     fields: dict[str, Any] = {}
     for key, relative in _ARTIFACTS.items():
         path = root / relative
+        # 技术规划阶段消费当前草稿；模板及开发阶段继续只读正式计划。
+        if key == "technical_plan" and node in _TECHNICAL_STAGES - {"template_reconcile"}:
+            path = current_technical_plan_json_path(state)
         if node in _REQUIREMENT_STAGES and key in required:
             draft = root / "drafts" / relative
             if draft.is_file():
@@ -93,7 +96,7 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
         materialize_technical_plan_runtime(plan, fields["requirement_spec"], fields["product_plan"], fields["ui_designs"])
         if plan and node in _RUNTIME_STAGES and fields["product_plan"] else plan
     )
-    fields["project_plan_json_path"] = str(root / _ARTIFACTS["technical_plan"]) if "technical_plan" in required else ""
+    fields["project_plan_json_path"] = fields["technical_plan_json_path"] if "technical_plan" in required else ""
     if "technical_plan" not in required:
         fields["project_plan_path"] = ""
     if node in _TASK_PLAN_STAGES:

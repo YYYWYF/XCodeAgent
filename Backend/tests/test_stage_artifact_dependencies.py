@@ -68,7 +68,7 @@ class StageArtifactDependencyTests(unittest.TestCase):
             "direct_modification_repair", "finalize_direct_modification"}
         without_tasks = source_only | set(planning) | {"technical_planning_begin", "technical_planning_generate",
             "technical_planning_commit", "technical_planning_confirm", "template_reconcile", "project_planning",
-            "api_design_readiness_gate", "authorization_bootstrap"}
+            "api_design_readiness_gate", "authorization_bootstrap", "builtin_authorization_bootstrap"}
         with tempfile.TemporaryDirectory() as root:
             for node in _STAGES:
                 with self.subTest(node=node), patch.object(Path, "is_file", return_value=True), \
