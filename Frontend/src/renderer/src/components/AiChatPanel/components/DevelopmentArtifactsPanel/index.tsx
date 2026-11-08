@@ -8,6 +8,8 @@ import EntityInfoPanel from '../EntityInfoPanel'
 import { useEndpointDesignDetail } from '../../hooks/useEndpointDesignDetail'
 import type { EndpointRecoveryReporter } from '../../hooks/useEndpointDesignRecovery'
 import './DevelopmentArtifactsPanel.less'
+import ArtifactDocument from './ArtifactDocument'
+import PageArtifactOverview from './PageArtifactOverview'
 
 type Props = ApplicationOutlineProps & {
   theme: 'light' | 'dark'
@@ -19,6 +21,11 @@ type Props = ApplicationOutlineProps & {
   apiTarget?: { apiContractId: string; endpointId: string }
   workspaceRoot?: string
   apiDesignRefreshKey?: number
+  pageArtifactRefreshKey?: string
+  initialUiDesignPageId?: string
+  onPreviewArtifactPage?: (path: string) => void
+  onShowPageDesign: (pageId: string) => void
+  onShowArtifactFiles: () => void
   onConfigureApi?: (target: { apiContractId: string; endpointId: string; label?: string }) => void
 }
 
@@ -32,6 +39,11 @@ export default function DevelopmentArtifactsPanel({
   apiTarget,
   workspaceRoot,
   apiDesignRefreshKey,
+  pageArtifactRefreshKey,
+  initialUiDesignPageId,
+  onPreviewArtifactPage,
+  onShowPageDesign,
+  onShowArtifactFiles,
   onConfigureApi,
   onEndpointRecovery,
   ...outlineProps
@@ -39,6 +51,7 @@ export default function DevelopmentArtifactsPanel({
   const selectedEntity = outlineProps.entities.find(
     (entity) => entity.id === outlineProps.selectedEntityId
   )
+  const selectedPage = outlineProps.pages.find((page) => page.pageId === outlineProps.selectedPageId)
   const { detail, error, loading, reload } = useEndpointDesignDetail(
     workspaceRoot,
     apiTarget,
@@ -47,11 +60,11 @@ export default function DevelopmentArtifactsPanel({
   )
   return (
     <div className={cx('development-artifacts-panel')}>
-      <aside aria-label="开发产物菜单" className={cx('development-artifacts-menu')}>
+      <aside aria-label="应用产物菜单" className={cx('development-artifacts-menu')}>
         <ApplicationOutline {...outlineProps} />
       </aside>
       <section
-        aria-label={detailLabel ? `${detailLabel}详情` : '开发产物详情'}
+        aria-label={detailLabel ? `${detailLabel}详情` : '应用产物详情'}
         className={cx('development-artifacts-detail')}
       >
         {onBackToFieldMapping && <Button className={cx('development-artifacts-return')} onClick={onBackToFieldMapping}>返回字段映射</Button>}
@@ -60,7 +73,15 @@ export default function DevelopmentArtifactsPanel({
             打开字段映射
           </Button>
         ) : null}
-        {apiTarget ? (
+        {outlineProps.selectedDocumentKey && workspaceRoot ? (
+          <ArtifactDocument
+            key={`${workspaceRoot}:${outlineProps.selectedDocumentKey}`}
+            workspaceRoot={workspaceRoot}
+            documentKey={outlineProps.selectedDocumentKey}
+            catalogLoading={outlineProps.planningCatalogStatus?.loading}
+            initialUiDesignPageId={initialUiDesignPageId}
+          />
+        ) : apiTarget ? (
           loading ? (
             <div
               aria-atomic="true"
@@ -90,6 +111,23 @@ export default function DevelopmentArtifactsPanel({
           ) : (
             <EndpointDesignResult detail={detail} />
           )
+        ) : selectedPage && workspaceRoot ? (
+          <PageArtifactOverview
+            key={`${workspaceRoot}:${selectedPage.pageId}`}
+            workspaceRoot={workspaceRoot}
+            pageId={selectedPage.pageId}
+            refreshKey={pageArtifactRefreshKey}
+            catalogLoading={outlineProps.planningCatalogStatus?.loading}
+            onPreviewPage={onPreviewArtifactPage}
+            onShowDesign={onShowPageDesign}
+            onShowFiles={onShowArtifactFiles}
+            onEndpointSelect={(endpoint) => outlineProps.onApiEndpointSelect({
+              apiContractId: endpoint.apiContractId,
+              endpointId: endpoint.endpointId,
+              endpointKey: `${endpoint.apiContractId}:${endpoint.endpointId}`,
+              label: endpoint.name
+            })}
+          />
         ) : selectedEntity ? (
           <EntityInfoPanel
             entity={selectedEntity}
@@ -100,7 +138,7 @@ export default function DevelopmentArtifactsPanel({
           />
         ) : (
           <div aria-atomic="true" className={cx('development-artifacts-placeholder')} role="status">
-            <h3>{detailLabel || '请选择开发产物'}</h3>
+            <h3>{detailLabel || '请选择应用产物'}</h3>
             <p>{detailLabel ? '详情内容待设计' : '点击左侧菜单查看详情'}</p>
           </div>
         )}

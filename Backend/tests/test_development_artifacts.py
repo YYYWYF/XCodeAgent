@@ -51,6 +51,12 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         state.initialization.status = ApplicationLifecycleStatus.COMPLETED
         write_application_lifecycle(self.workspace, state)
 
+    def tearDown(self) -> None:
+        """关闭协议读取创建的真实 SQLite 连接，避免回归结束后工作线程仍占用临时目录。"""
+        from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
+
+        asyncio.run(close_workflow_checkpointer_for_workspace(workspace=str(self.workspace)))
+
     def write_plans(self) -> None:
         """写入已确认的正式目录，用于模拟目录变化。"""
 
@@ -487,7 +493,7 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertIn("TEXT_MESSAGE_CONTENT", types)
         final = events[-1]["result"]["workflow"]
         self.assertEqual(final["summary"]["errorCode"], "development_artifacts_incomplete")
-        self.assertFalse(final["summary"]["lifecycle"]["testEntryGate"]["allowed"])
+        self.assertFalse(final["state"]["lifecycle"]["testEntryGate"]["allowed"])
         self.assertEqual(load_application_lifecycle(self.workspace).active_executions["stream-run"].status, "awaiting_user")
 
     def test_last_completion_reaches_ag_ui_before_user_test_confirmation(self) -> None:
@@ -553,4 +559,4 @@ class DevelopmentArtifactsTests(unittest.TestCase):
             self.assertFalse(any(lifecycle_events[-1]["resourceLocks"].values()))
             self.assertEqual(workflow["summary"]["status"], "completed")
             self.assertEqual(workflow["state"]["clarification"], {})
-        self.assertEqual(events[-1]["result"]["workflow"]["summary"]["lifecycle"]["testEntryGate"]["completed"], 1)
+        self.assertEqual(events[-1]["result"]["workflow"]["state"]["lifecycle"]["testEntryGate"]["completed"], 1)

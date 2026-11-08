@@ -54,29 +54,6 @@ export function collectVisibleKeys(items: ApplicationMenuItem[], query: string):
   return visible
 }
 
-/** 收集当前页面的祖先与后代键，用于“只显示相关”筛选。 */
-export function collectRelatedKeys(items: ApplicationMenuItem[], selectedKey: string): Set<string> {
-  const related = new Set<string>()
-  /** 递归加入当前节点的全部后代。 */
-  const addDescendants = (item: ApplicationMenuItem): void => {
-    related.add(item.key)
-    item.children?.forEach(addDescendants)
-  }
-  /** 递归定位选中节点并保留其祖先链。 */
-  const visit = (item: ApplicationMenuItem, ancestors: string[]): boolean => {
-    if (item.key === selectedKey) {
-      ancestors.forEach((key) => related.add(key))
-      addDescendants(item)
-      return true
-    }
-    return item.children?.some((child) => visit(child, [...ancestors, item.key])) || false
-  }
-
-  if (!selectedKey) items.forEach(addDescendants)
-  else items.some((item) => visit(item, []))
-  return related
-}
-
 /** 判断页面树中是否存在指定键。 */
 export function containsMenuKey(items: ApplicationMenuItem[], key: string): boolean {
   return items.some((item) => item.key === key || containsMenuKey(item.children || [], key))

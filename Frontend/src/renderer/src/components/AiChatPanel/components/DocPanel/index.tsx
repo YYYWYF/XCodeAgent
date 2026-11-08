@@ -5,6 +5,7 @@ import { cx } from '../../../../utils'
 import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import RichLoading from '../DesignProgress/RichLoading'
 import RequirementDocPanel from './RequirementDocPanel'
+import ProductPlanDocPanel from './ProductPlanDocPanel'
 import TechnicalPlanReviewPanel from './TechnicalPlanReviewPanel'
 import './index.less'
 
@@ -20,8 +21,8 @@ function technicalPlanStatusLabel(plan?: Record<string, unknown>): string {
       : '草稿'
 }
 
-/** 将 RequirementSpec 的确认状态转换为顶部工具栏中的可读标签。 */
-function requirementStatusLabel(spec?: Record<string, unknown>): string {
+/** 将需求或产品文档的确认状态转换为顶部工具栏中的可读标签。 */
+function documentStatusLabel(spec?: Record<string, unknown>): string {
   const status = spec?.confirmation_status
   return status === 'confirmed'
     ? '已确认'
@@ -44,13 +45,13 @@ type Props = {
   technicalPlanUpdating?: boolean
   technicalPlanReviewKey?: string
   technicalPlanStatus?: string
-  structuredDocument?: 'requirement-doc' | 'technical-plan'
+  structuredDocument?: 'requirement-doc' | 'product-plan' | 'technical-plan'
   structuredDocumentLoading?: boolean
   workspaceRoot?: string
   onReviseAuthorization?: () => void
 }
 
-/** 右侧产物面板：需求文档与技术规划使用结构化审核视图，其余文档只读展示 Markdown。 */
+/** 右侧产物面板：需求、产品与技术规划使用结构化视图，其余文档只读展示 Markdown。 */
 export default function DocPanel({
   content,
   title,
@@ -72,6 +73,8 @@ export default function DocPanel({
 }: Props): ReactElement {
   const isTechnicalPlan = structuredDocument === 'technical-plan'
   const isRequirementDoc = structuredDocument === 'requirement-doc'
+  const isProductPlan = structuredDocument === 'product-plan'
+  const reviewDocument = isProductPlan ? productPlan : requirementSpec
   const requirementReady =
     isRequirementDoc && Boolean(requirementSpec && Object.keys(requirementSpec).length)
   const ready = Boolean(
@@ -79,6 +82,7 @@ export default function DocPanel({
       technicalPlan ||
       isTechnicalPlan ||
       requirementReady ||
+      (isProductPlan && productPlan) ||
       error ||
       structuredDocumentLoading
   )
@@ -98,22 +102,25 @@ export default function DocPanel({
               </Tag>
             ) : null}
           </div>
-        ) : isRequirementDoc ? (
+        ) : isRequirementDoc || isProductPlan ? (
           <div className={cx('doc-panel-path', 'doc-panel-technical-path')}>
             <FileTextOutlined aria-hidden="true" />
             <span>
-              <strong>需求文档</strong>
-              <small>{title?.split('/').pop() || 'requirement-spec.json'}</small>
+              <strong>{isProductPlan ? '产品规划' : '需求文档'}</strong>
+              <small>
+                {title?.split('/').pop() ||
+                  (isProductPlan ? 'product-plan.json' : 'requirement-spec.json')}
+              </small>
             </span>
-            {requirementSpec ? (
+            {reviewDocument ? (
               <Tag
                 className={cx(
                   'doc-panel-technical-status',
-                  requirementSpec.confirmation_status === 'confirmed' &&
+                  reviewDocument.confirmation_status === 'confirmed' &&
                     'doc-panel-technical-status-confirmed'
                 )}
               >
-                {requirementStatusLabel(requirementSpec)}
+                {documentStatusLabel(reviewDocument)}
               </Tag>
             ) : null}
           </div>
@@ -143,7 +150,9 @@ export default function DocPanel({
           <div
             className={cx(
               'doc-panel-viewer',
-              isTechnicalPlan || requirementReady ? 'doc-panel-structured' : 'doc-panel-markdown'
+              isTechnicalPlan || requirementReady || isProductPlan
+                ? 'doc-panel-structured'
+                : 'doc-panel-markdown'
             )}
           >
             {isTechnicalPlan ? (
@@ -168,6 +177,8 @@ export default function DocPanel({
                 spec={requirementSpec || {}}
                 workspaceRoot={workspaceRoot}
               />
+            ) : isProductPlan && productPlan ? (
+              <ProductPlanDocPanel productPlan={productPlan} />
             ) : (
               <MarkdownContent content={content ?? ''} />
             )}

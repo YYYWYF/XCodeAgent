@@ -64,6 +64,7 @@ from app.protocols.endpoint_designs import endpoint_designs_capabilities
 from app.routes.data_sources import data_sources_router
 from app.routes.endpoint_designs import endpoint_designs_router
 from app.routes.workflow_artifacts import workflow_artifacts_router, artifact_capabilities
+from app.routes.page_artifacts import page_artifacts_router, page_artifacts_capabilities
 from app.routes.entity_tables import entity_tables_router
 from app.routes.telemetry import telemetry_router
 from app.routes.backend_logs import backend_logs_router
@@ -164,6 +165,7 @@ app = FastAPI(
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
 app.include_router(workflow_artifacts_router)
+app.include_router(page_artifacts_router)
 app.include_router(entity_tables_router)
 app.include_router(builtin_authorization_router)
 app.include_router(telemetry_router)
@@ -232,6 +234,7 @@ async def health() -> dict[str, object]:
             "temporary_chat": temporary_chat_capabilities(),
             "execution_recovery": execution_recovery_capabilities(),
             "workspace": workspace_tools.capabilities(),
+            "page_artifacts": page_artifacts_capabilities(),
         },
     }
 

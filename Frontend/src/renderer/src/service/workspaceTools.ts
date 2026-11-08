@@ -136,6 +136,16 @@ export function workspaceToolErrorMessage(payload: unknown, status: number): str
   return `HTTP ${status}`
 }
 
+/** 保留基础设施请求的 HTTP 状态，供调用方区分文件缺失与实际读取故障。 */
+export class WorkspaceToolError extends Error {
+  /** 在可读错误消息之外保存服务端状态，不改变既有 Error 消费方式。 */
+  constructor(message: string, public readonly status: number) {
+    super(message)
+    this.name = 'WorkspaceToolError'
+  }
+}
+
+/** 调用既有工作区工具合同，并保留失败状态与可读错误。 */
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${getAgentBaseUrl()}${path}`, {
     ...init,
@@ -147,7 +157,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
-    throw new Error(workspaceToolErrorMessage(payload, response.status))
+    throw new WorkspaceToolError(workspaceToolErrorMessage(payload, response.status), response.status)
   }
   return payload as T
 }

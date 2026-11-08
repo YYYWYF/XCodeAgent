@@ -6,11 +6,13 @@
   min-height: 0;
   color: var(--wb-text);
   background: var(--wb-canvas);
+  container: artifacts / inline-size;
 }
 
 .@{class-prefix}-development-artifacts-menu {
-  flex: 0 0 clamp(240px, 32%, 280px);
-  max-width: 55%;
+  // 保持全屏时的目录宽度，拖动分栏时仅由详情区吸收宽度变化。
+  flex: 0 0 240px;
+  width: 240px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -39,18 +41,6 @@
     padding-left: 8px;
   }
 
-  .@{class-prefix}-session-filter-row {
-    gap: 6px;
-
-    > span {
-      min-width: 0;
-      gap: 4px;
-    }
-
-    .ant-switch {
-      flex-shrink: 0;
-    }
-  }
 }
 
 .@{class-prefix}-development-artifacts-detail {
@@ -59,6 +49,13 @@
   min-height: 0;
   overflow: auto;
   background: var(--wb-canvas);
+  container: artifact-detail / inline-size;
+
+  // 嵌入产物详情时由工作区提供外边界，避免文档卡片圆角在页签下方露出缝隙。
+  > .@{class-prefix}-doc-panel {
+    border: 0;
+    border-radius: 0;
+  }
 }
 
 .@{class-prefix}-development-artifacts-return {

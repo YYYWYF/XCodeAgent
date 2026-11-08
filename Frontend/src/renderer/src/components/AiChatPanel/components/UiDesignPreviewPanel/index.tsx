@@ -23,6 +23,7 @@ type UiDesignPage = {
 }
 
 type Props = {
+  readOnly?: boolean
   /** 当前选中页 id。 */
   activePageId: string
   /** 当前选中页的 .tsx 源码（DesignRenderer 编译渲染）。 */
@@ -40,6 +41,7 @@ type Props = {
 /** 右侧「UI设计稿」面板：左侧页面列表 + 右侧 DesignRenderer 预览。
  *  与中间区 UiDesignConfirmationPanel 联动：选中页同步显示设计稿。 */
 export default function UiDesignPreviewPanel({
+  readOnly = false,
   activePageId,
   code,
   generating,
@@ -122,8 +124,8 @@ export default function UiDesignPreviewPanel({
           ) : (
             <div className={cx('ui-design-preview-empty')}>
               <InboxOutlined className={cx('ui-design-preview-empty-icon')} />
-              <Text strong>本页尚未生成设计稿</Text>
-              <Text type="secondary">在中间区点击「换一换」或「选模板」生成</Text>
+              <Text strong>{readOnly ? '暂无设计稿' : '本页尚未生成设计稿'}</Text>
+              <Text type="secondary">{readOnly ? '当前页面暂无可预览的设计稿。' : '在中间区点击「换一换」或「选模板」生成'}</Text>
             </div>
           )}
         </div>

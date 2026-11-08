@@ -23,6 +23,7 @@ import { cx } from '../../../../utils'
 import type { SessionRunStatus } from '../../hooks/sessionRuntime'
 import { useCompactWorkbench } from '../../hooks/useCompactWorkbench'
 import ApplicationOutline from '../ApplicationOutline'
+import type { ApplicationOutlineProps } from '../ApplicationOutline'
 import FreeChatHistory from './FreeChatHistory'
 import TemporaryChatOverlay from '../TemporaryChatOverlay'
 import { useTemporaryChats } from './useTemporaryChats'
@@ -50,6 +51,8 @@ function SidebarAssetIcon({ source }: SidebarAssetIconProps): ReactElement {
 }
 
 type SessionSidebarProps = {
+  onDocumentSelect?: ApplicationOutlineProps['onDocumentSelect']
+  selectedDocumentKey?: ApplicationOutlineProps['selectedDocumentKey']
   planningCatalogStatus?: import('../../../../typings').PlanningCatalogStatus
   onPlanningCatalogRetry?: () => void
   activeSessionId?: string
@@ -105,6 +108,8 @@ type SessionSidebarProps = {
 
 /** 组织工作台左侧快捷入口，并在非折叠模式下复用应用大纲。 */
 export default function SessionSidebar({
+  onDocumentSelect,
+  selectedDocumentKey,
   planningCatalogStatus,
   onPlanningCatalogRetry,
   activeSessionId,
@@ -304,7 +309,7 @@ export default function SessionSidebar({
           compactLayout && 'compact-layout',
           resizing && 'resizing'
         )}
-        aria-label="开发产物"
+        aria-label="应用产物"
         style={
           {
             '--session-sidebar-width': `${effectiveCollapsed ? COLLAPSED_SIDEBAR_WIDTH : sidebarWidth}px`
@@ -421,6 +426,8 @@ export default function SessionSidebar({
 
         {!effectiveCollapsed ? (
           <ApplicationOutline
+            onDocumentSelect={onDocumentSelect}
+            selectedDocumentKey={selectedDocumentKey}
             planningCatalogStatus={planningCatalogStatus}
             onPlanningCatalogRetry={onPlanningCatalogRetry}
             currentBranch={currentBranch}

@@ -8,7 +8,7 @@
   background: var(--wb-canvas);
 }
 
-// 左栏：目录树（规划文档 + 工程源码）。树在左、内容在右。
+// 左栏只展示工程目录，树在左、文件内容在右。
 .@{class-prefix}-source-panel-tree {
   display: flex;
   flex: 0 0 240px;
@@ -80,29 +80,6 @@
   }
 }
 
-// 规划文档分组：与工程目录树用一条分隔线区分，避免被当成工程内文件。
-.@{class-prefix}-source-doc-tree {
-  border-bottom: 1px solid var(--wb-border);
-}
-
-.@{class-prefix}-source-tree-row.is-missing {
-  opacity: 0.45;
-  cursor: default;
-}
-
-// 文档正文：Markdown 渲染区，保持可读宽度与内边距。
-.@{class-prefix}-source-panel-doc {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 16px 20px;
-}
-
-// 与设计、计划阶段的可视化采用相同留白，复用章节吸顶及明暗主题样式。
-.@{class-prefix}-source-panel-structured {
-  padding: 16px 18px;
-}
-
 .@{class-prefix}-source-panel-tree-loading,
 .@{class-prefix}-source-panel-tree-empty {
   display: flex;
@@ -152,20 +129,6 @@
     flex: 0 0 auto;
     font-size: 13px;
     color: var(--wb-text-tertiary);
-  }
-
-  // 三份规划文档各给一个色调，便于在树里一眼区分。取中间调，明暗主题下都清晰；
-  // 放在 is-dir / is-selected 之前，选中态与目录态仍按后者的规则覆盖。
-  &.@{class-prefix}-is-requirement > .anticon {
-    color: #3b82f6;
-  }
-
-  &.@{class-prefix}-is-product > .anticon {
-    color: #10b981;
-  }
-
-  &.@{class-prefix}-is-technical > .anticon {
-    color: #f59e0b;
   }
 
   &.@{class-prefix}-is-dir {

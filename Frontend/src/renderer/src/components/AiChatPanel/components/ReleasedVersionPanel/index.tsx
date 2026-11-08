@@ -83,7 +83,7 @@ export default function ReleasedVersionPanel({
   const [activeTab, setActiveTab] = useState<WorkspaceTabKey>(TAB_KEYS.files)
   const [activeDrawer, setActiveDrawer] = useState<RailDrawerKey | undefined>(undefined)
   const tabs: WorkspaceTab[] = [
-    { key: TAB_KEYS.files, label: '应用文件', available: true },
+    { key: TAB_KEYS.files, label: '代码', available: true },
     { key: TAB_KEYS.preview, label: '应用预览', available: true }
   ]
   const serviceStatus = previewServiceState(serviceControl?.snapshot?.runtime)

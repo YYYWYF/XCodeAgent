@@ -3897,9 +3897,9 @@ export default function AiChatPanel({
         available: doc.available || doc.key === generatingDesignDocKey
       }))
     : [
-        { key: 'outline', label: '开发产物', available: true },
+        { key: 'outline', label: '应用产物', available: true },
         { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
-        { key: 'source', label: '应用文件', available: Boolean(application.workspaceRoot) },
+        { key: 'source', label: '代码', available: Boolean(application.workspaceRoot) },
         { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
         ...(shouldRenderPendingDagConfirmationTab(hasOwnedPendingPlan)
           ? [
@@ -6007,6 +6007,28 @@ export default function AiChatPanel({
               detailLabel={artifactDetailLabel}
               apiTarget={apiTarget}
               apiDesignRefreshKey={apiDesignRefreshKey}
+              pageArtifactRefreshKey={JSON.stringify([
+                applicationLifecycle?.revision,
+                latestWorkflowForDisplay?.summary.status,
+                latestWorkflowForDisplay?.summary.phase,
+                latestWorkflowForDisplay?.state?.buildSummary,
+                Array.isArray(latestWorkflowForDisplay?.state?.smallTaskTasks)
+                  ? latestWorkflowForDisplay.state.smallTaskTasks.map((task) => [
+                    asWorkflowRecord(task)?.id, asWorkflowRecord(task)?.status
+                  ]) : undefined
+              ])}
+              initialUiDesignPageId={uiDesignActivePageId}
+              onPreviewArtifactPage={runtimePreviewBaseUrl ? (path) => {
+                // 预览所浏览的页面，不修改当前开发会话的目标。
+                const url = composePreviewUrl(runtimePreviewBaseUrl, path)
+                if (url) setRightPanel({ type: 'preview', url, requestKey: url })
+              } : undefined}
+              onShowPageDesign={(pageId) => {
+                // 从页面概览跳转到同页设计稿，复用文档目录的真实预览。
+                setUiDesignActivePageId(pageId)
+                artifactOutlineProps.onDocumentSelect?.('ui-design')
+              }}
+              onShowArtifactFiles={() => setRightPanel({ type: 'source' })}
               workspaceRoot={workspaceRoot}
               outlineLocked={false}
               pages={displayedPlanningPages}

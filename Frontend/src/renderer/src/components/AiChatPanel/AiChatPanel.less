@@ -47,7 +47,7 @@
   min-height: 0;
   flex-direction: row;
   background: var(--wb-canvas);
-  // 打开/关闭左侧抽屉时，主区宽度从 66.67% ↔ 100% 之间过渡。
+  // 打开/关闭右侧面板时，对话区在当前分栏宽度与全宽之间平滑过渡。
   // 没有这个 transition 时，宽度瞬时变化会被感知为"底部界面闪烁"。
   transition: width 0.18s ease-out, flex-basis 0.18s ease-out;
 }
@@ -63,8 +63,8 @@
 
 .@{class-prefix}-embedded-preview-open {
   .@{class-prefix}-ai-chat-assistant {
-    flex: 0 0 var(--assistant-panel-width, 66.6667%);
-    width: var(--assistant-panel-width, 66.6667%);
+    flex: 0 0 var(--assistant-panel-width, 50%);
+    width: var(--assistant-panel-width, 50%);
     border-right: 0;
   }
 }
@@ -99,7 +99,7 @@
    隐藏/全宽态的 floating 用 right:0，兄弟节点下即为整块最右边线，无需覆盖。 */
 .@{class-prefix}-ai-chat-panel
   > .@{class-prefix}-right-panel-layout-control.@{class-prefix}-docked {
-  left: var(--assistant-panel-width, 66.6667%);
+  left: var(--assistant-panel-width, 50%);
 }
 
 .@{class-prefix}-element-inspection-active {
@@ -199,8 +199,8 @@
   background: var(--wb-canvas);
   display: flex;
   flex-direction: column;
-  // 底部留白对齐左侧对话区输入框的底部间距（ChatComposer padding-bottom: 24px）
-  padding-bottom: 24px;
+  // 右侧工作区贴底，左侧输入框的内部留白不参与右侧面板的高度分配。
+  padding-bottom: 0;
   box-sizing: border-box;
 }
 

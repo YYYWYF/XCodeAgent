@@ -5,7 +5,6 @@ import { RequirementPagesSection } from '../src/renderer/src/components/AiChatPa
 import type { JsonRecord } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocPanelData'
 import ProductPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/ProductPlanDocPanel'
 import TechnicalPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanDocPanel'
-import './sourcePlanningDocument.test'
 import './technicalPlanTypes.test'
 
 /** 一份包含所有可选区块的页面规划，用于确认重做后内容一条不少。 */

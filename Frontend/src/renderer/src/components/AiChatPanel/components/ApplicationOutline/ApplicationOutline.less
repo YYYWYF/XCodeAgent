@@ -21,6 +21,35 @@
   color: #19213a;
   background: var(--wb-canvas);
 
+  .@{class-prefix}-document-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 30px;
+    padding: 4px;
+    color: var(--wb-text);
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    cursor: pointer;
+
+    > .anticon {
+      color: var(--wb-accent);
+      flex-shrink: 0;
+      font-size: 14px;
+      &.@{class-prefix}-document-icon-product-plan { color: var(--wb-code-add-text); }
+      &.@{class-prefix}-document-icon-technical-plan { color: var(--wb-warning); }
+    }
+    &:hover { background: var(--outline-hover-bg); }
+    &:focus-visible { outline: 2px solid var(--outline-accent); outline-offset: -2px; }
+    &.@{class-prefix}-selected {
+      color: var(--outline-accent);
+      background: var(--outline-accent-soft);
+    }
+  }
+
   .@{class-prefix}-catalog-search-row {
     display: flex;
     align-items: center;

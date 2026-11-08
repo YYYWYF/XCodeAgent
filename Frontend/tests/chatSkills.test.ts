@@ -76,7 +76,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import {
   chatCopy,
-  DEFAULT_DIFF_PANEL_WIDTH
+  DEFAULT_ASSISTANT_PANEL_RATIO
 } from '../src/renderer/src/components/AiChatPanel/constants'
 import {
   splitWorkspacePath,
@@ -2903,13 +2903,16 @@ test('自由对话完成后仍保留与摘要相同的助手正文', () => {
   )
 })
 
-test('失败的技术规划历史隐藏模型 JSON 并保留结构化错误卡', () => {
+test('失败的技术规划隐藏模型 JSON，错误交给底栏且不重复创建卡片', () => {
   const workflow = {
     runId: 'technical-plan-error',
     threadId: 'technical-plan-error-thread',
     summary: {
       status: 'requires_user_input',
-      phase: 'technical_planning',
+      phase: 'technical_planning'
+    },
+    events: [],
+    state: {
       clarification: {
         mode: 'technical_plan_generation_error',
         status: 'requires_user_input',
@@ -2917,9 +2920,8 @@ test('失败的技术规划历史隐藏模型 JSON 并保留结构化错误卡',
         errors: ['entities[0].fields[0] 缺少 label'],
         questions: []
       }
-    },
-    events: [],
-    state: { ...({}), ...({}) }}
+    }
+  }
 
   assert.equal(isStructuredPlanningWorkflow(workflow), true)
   assert.equal(
@@ -2927,9 +2929,8 @@ test('失败的技术规划历史隐藏模型 JSON 并保留结构化错误卡',
     ''
   )
   const markup = renderWorkflowRunCard({ interactionAvailability: 'active', workflow })
-  assert.match(markup, /技术规划自动修复后仍未通过校验/)
-  assert.match(markup, /重新生成/)
-  assert.doesNotMatch(markup, /architecture/)
+  // 当前错误展示归底栏所有，WorkflowRunCard 明确返回空而不是再造一份错误卡。
+  assert.equal(markup, '')
 })
 
 test('失败终态仍可根据技术规划节点识别并隐藏历史 JSON', () => {
@@ -3786,8 +3787,8 @@ test('工作区文件路径拆分后保留完整目录和最终文件名', () =>
   })
 })
 
-test('历史变更路径包含工作区根目录且 Diff 默认宽度为 500px', () => {
+test('历史变更路径包含工作区根目录且左右面板默认均分', () => {
   assert.equal(workspaceCodeChangeDisplayPath('aa/b.js', '/Users/example/c', 'c'), 'c/aa/b.js')
   assert.equal(workspaceCodeChangeDisplayPath('aa\\b.js', 'C:\\workspace\\c'), 'c/aa/b.js')
-  assert.equal(DEFAULT_DIFF_PANEL_WIDTH, 500)
+  assert.equal(DEFAULT_ASSISTANT_PANEL_RATIO, 0.5)
 })

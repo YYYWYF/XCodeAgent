@@ -190,6 +190,6 @@ test('目录没有成功读取时显示加载或失败，不显示虚假的暂�
       issues: [{ source: 'technical', reason: 'missing' }] }} onPlanningCatalogRetry={() => undefined} />)
   assert.match(html, /接口与实体：文件未读到/)
   assert.match(html, /重新读取/)
-  assert.match(html, /aria-label="刷新开发产物"/)
+  assert.match(html, /aria-label="刷新应用产物"/)
   assert.doesNotMatch(html, /暂无接口|暂无实体|暂无页面/)
 })
