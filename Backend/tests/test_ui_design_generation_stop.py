@@ -15,6 +15,7 @@ from app.services.run_workers import bind_run_workers, current_run_id, active_wo
 from app.services.planning_execution_end import end_planning_execution
 from app.services.ended_planning import ended_planning_available
 from app.protocols.ui_design_generation import build_ui_design_generation_stream
+from app.services.ui_design_generation_control import inspect_page
 from tests.test_ui_design_generation_pool import _task, FAKE_CODE
 from tests import test_planning_execution_end as end_fixture
 
@@ -138,7 +139,8 @@ class UiDesignGenerationStopTests(unittest.IsolatedAsyncioTestCase):
             await self.pool.submit([task])
             self.assertTrue(await asyncio.to_thread(self.started.wait, 2))
             request = {"forwardedProps": {"uiDesignGeneration": {"action": "cancel",
-                "workspaceRoot": self.workspace, "pageId": "orders", "generationId": self.page()["generation_id"]}}}
+                "workspaceRoot": self.workspace, "pageId": "orders",
+                "stopToken": (await inspect_page(self.pool, self.workspace, "orders"))["stopToken"]}}}
             consumer = asyncio.create_task(consume(request))
             await asyncio.sleep(.01)
             self.assertFalse(consumer.done())
@@ -146,7 +148,12 @@ class UiDesignGenerationStopTests(unittest.IsolatedAsyncioTestCase):
             self.release.set()
             await consumer
             self.assertEqual(frames[-1]["type"], "RUN_FINISHED")
-            self.assertTrue(any(frame.get("value", {}).get("cancelled") for frame in frames))
+            self.assertTrue(any(frame.get("value", {}).get("settled") for frame in frames))
+            frames.clear()
+            await consume(request)
+            self.assertTrue(any(frame.get("value", {}).get("settled") for frame in frames))
+            await self.pool.submit([task])
+            await self.pool._queue.join()
             frames.clear()
             await consume(request)
             self.assertEqual(frames[0]["type"], "RUN_STARTED")

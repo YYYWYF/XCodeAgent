@@ -54,7 +54,7 @@ export type ApplicationPlanningRecoveryProjection = {
 /** 只在后端确认的当前 UI 中断任务存在时显示统一重试，不用本地生成中状态猜测。 */
 export function uiDesignRecoveryError(recovery?: ApplicationPlanningRecoveryProjection): string | undefined {
   return recovery?.classification === 'awaiting_user' && recovery.uiGenerationRecovery?.pageIds.length
-    ? 'UI 设计生成已中断，请重试；系统会恢复未完成页面，生成后仍需确认。'
+    ? 'UI 设计生成已中断，请在对应页面重新生成，或停止该页任务；刷新只同步状态。'
     : undefined
 }
 

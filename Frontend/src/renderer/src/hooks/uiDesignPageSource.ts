@@ -1,3 +1,5 @@
+import { getUiDesignGeneration } from '../service/uiDesignCancellation'
+
 export type DesignPageSource = { pageId?: string; status?: string; code?: string; codeReadError?: string }
 export type DesignSourceSnapshot = {
   codes: Record<string, string>
@@ -24,7 +26,12 @@ function readDesignPages(workspace: string): Promise<DesignPageSource[] | undefi
       if (result?.uiDesigns === null) return []
       const pages = (result?.uiDesigns as { pages?: DesignPageSource[] } | undefined)?.pages
       if (!Array.isArray(pages)) throw new Error('设计稿清单格式无效，请重新读取。')
-      return pages
+      // 运行状态由后台真实任务判定，磁盘残留 queued/generating 不代表仍有 worker。
+      return await Promise.all(pages.map(async (page) => {
+        if (!page.pageId || !designPagesGenerating([page])) return page
+        const current = await getUiDesignGeneration({ workspaceRoot: workspace, pageId: page.pageId })
+        return { ...page, status: current.taskState === 'orphaned' ? 'generation_failed' : current.pageStatus }
+      }))
     }),
     new Promise<never>((_resolve, reject) => {
       deadline = setTimeout(() => reject(new Error('设计稿读取超时，请重新读取。')), 15000)

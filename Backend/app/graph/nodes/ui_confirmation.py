@@ -754,12 +754,12 @@ async def _apply_adjust_pages(
 async def _latest_ui_designs(
     state: ProjectState, existing: dict[str, Any]
 ) -> dict[str, Any]:
-    """读取工作区最新 UI Manifest（池后台写入），并自愈恢复中断的生成页。
+    """只读工作区最新 UI Manifest，刷新不能隐式启动中断的生成任务。
 
     前端通过「无操作 resume」轮询进度：池在后台把每页状态（queued/generating/
     confirmed/generation_failed）写进 specs/ui-designs.json，这里直接读文件拿到
-    最新状态。进程重启后，文件里仍为 queued/generating 但池已不在处理的页会在此
-    重新入队。返回的 ui_designs 仅供重放确认卡，不落盘（避免与池写文件竞争）。
+    最新状态。已失去后台 owner 的生成页只在展示投影中标为中断，用户显式生成才入队。
+    返回的 ui_designs 仅供重放确认卡，不落盘（避免与池写文件竞争）。
     """
 
     manifest = load_ui_designs_json(ui_designs_json_path(state))
@@ -767,42 +767,21 @@ async def _latest_ui_designs(
         return existing if isinstance(existing, dict) else {}
 
     workspace = str(workspace_root(state))
-    project_dir = str(ui_design_project_dir(workspace))
     pool = get_ui_design_generation_pool()
     active_ids = pool.pending_page_ids(workspace)
-    spec_pages = {_page_id(p): p for p in _page_list(state) if _page_id(p)}
 
-    # 自愈恢复：重新入队状态仍为 queued/generating 且池未在处理的页。
-    stale: list[UiDesignGenerationTask] = []
+    # 只改变返回的展示对象，不回写磁盘；显式停止会由控制服务核对指纹后落盘收口。
     for page in manifest["pages"]:
         if not isinstance(page, dict):
             continue
         status = str(page.get("status") or "")
-        if status not in {UI_DESIGN_STATUS_QUEUED, UI_DESIGN_STATUS_GENERATING}:
+        if status not in {UI_DESIGN_STATUS_QUEUED, UI_DESIGN_STATUS_GENERATING, "stopping"}:
             continue
         page_id = str(page.get("pageId") or "")
         if not page_id or page_id in active_ids:
             continue
-        spec_page = spec_pages.get(page_id)
-        if not spec_page:
-            continue
-        template_id = str(page.get("template_id") or "").strip()
-        page_key = str(page.get("page_key") or "").strip() or derive_page_key(spec_page)
-        stale.append(
-            UiDesignGenerationTask(
-                workspace=workspace,
-                project_id=str(state.get("project_id") or ""),
-                project_dir=project_dir,
-                page_id=page_id,
-                spec_page=spec_page,
-                page_key=page_key,
-                action="select_template" if template_id else "regenerate",
-                template_id=template_id,
-            )
-        )
-    if stale:
-        await pool.submit(stale)
-        manifest = load_ui_designs_json(ui_designs_json_path(state))
+        page["status"] = "generation_failed"
+        page["error"] = "生成已中断，可重新生成；刷新不会自动启动生成。"
 
     # 回填内联 code：manifest 落盘时剥离了 code（persisted_ui_manifest），但前端
     # isPageConfirmed 要求 page.code 非空才显示「已确认」。no-op resume 走此路径，

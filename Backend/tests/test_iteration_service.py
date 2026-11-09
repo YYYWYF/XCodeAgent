@@ -61,7 +61,7 @@ def _request(workspace: Path) -> StartIterationRequest:
     return StartIterationRequest(
         action="start_iteration",
         workspaceRoot=str(workspace),
-        versionLabel="v1.1",
+        branchName="v1_1",
         description="",
     )
 
@@ -224,7 +224,7 @@ class AgentsContextGenerationTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            generate_agents_context(workspace, version_label="v1.0", description="首个版本")
+            generate_agents_context(workspace, branch_name="v1_0", description="首个版本")
 
             content = (devagentstudio / "AGENTS.md").read_text(encoding="utf-8")
             offenders = [
@@ -259,7 +259,7 @@ class AgentsContextGenerationTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            generate_agents_context(workspace, version_label="v1.0", description="首个版本")
+            generate_agents_context(workspace, branch_name="v1_0", description="首个版本")
 
             content = (devagentstudio / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("信息项：标题, 正文", content)

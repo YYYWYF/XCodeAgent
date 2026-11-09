@@ -9,8 +9,8 @@ Semaphore 的 3 页上限与前端 3 页 acting 上限影响。
 
 进度由前端通过「无操作 resume」轮询读取 ui-designs.json 获得（全程走 AG-UI
 StateSnapshot）：入队后页面状态为 queued，worker 领取后为 generating，结束后为
-confirmed / generation_failed。这些状态均落盘，进程重启后由 ui_confirmation 节点
-把仍处于 queued/generating 且池未在处理的页重新入队，实现自愈恢复。
+confirmed / generation_failed。这些状态均落盘；进程重启后的残留任务由控制服务
+提供只读识别和显式停止，刷新不会重新入队。
 """
 
 from __future__ import annotations
@@ -64,6 +64,8 @@ class UiDesignGenerationPool:
         self._stopping_workspaces: set[str] = set()
         self._locks: dict[str, asyncio.Lock] = {}
         self._workers: list[asyncio.Task[Any]] = []
+        self.control_identity = uuid4().hex
+        self.stop_receipts: dict[tuple[str, str], tuple[str, str]] = {}
 
     def _lock_for(self, workspace: str) -> asyncio.Lock:
         """串行化同工作区清单与设计稿提交。"""
@@ -112,6 +114,7 @@ class UiDesignGenerationPool:
                 if key in self._jobs:
                     continue
                 job = _Generation(task)
+                self.stop_receipts.pop(key, None)
                 self._jobs[key] = job
                 try:
                     self._commit(job, self._entry(job, UI_DESIGN_STATUS_QUEUED))
@@ -230,11 +233,11 @@ class UiDesignGenerationPool:
         """只停止用户所见代次，成功回执意味着线程与最终写入均已完成。"""
         job = self._jobs.get((workspace, page_id))
         if job is None:
-            # 进程重启后已无旧线程；用户显式停止同一 stopping 代次才可收口，不能重开模型。
+            # 内部精确代次调用也支持重复停止；缺标识的残留页由控制服务凭指纹收口。
             async with self._lock_for(workspace):
                 manifest = self._read_manifest(workspace, "")
                 page = next((page for page in manifest.get("pages", []) if page.get("pageId") == page_id), None)
-                if page and generation_id and page.get("generation_id") == generation_id and page.get("status") == "stopping":
+                if page and generation_id and page.get("generation_id") == generation_id and page.get("status") in {"queued", "generating", "stopping", "cancelled"}:
                     self._replace_page(manifest, page_id, {**page, "status": "cancelled", "error": "设计稿生成已停止。"})
                     write_ui_designs_json({"workspace": workspace}, manifest)
                     return True

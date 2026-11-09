@@ -309,7 +309,7 @@ export class ApplicationPlanningRuntime {
         await this.handlePlanningResult(this.runToken, current.workflow)
         return
       }
-      // 当前权威 UI 确认门仍持有孤立生成页时，进入节点已有自愈，禁止 replay 换一换/确认。
+      // 孤立生成页只重读确认门；生成必须由用户在对应页面显式提交。
       if (recovery?.classification === 'awaiting_user' && recovery.uiGenerationRecovery?.pageIds.length && current.workflow) {
         await this.submitClarification(current.workflow, {
           ui_design_action: { action: 'refresh' },

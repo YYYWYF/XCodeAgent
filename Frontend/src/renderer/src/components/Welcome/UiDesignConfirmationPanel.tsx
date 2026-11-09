@@ -419,11 +419,22 @@ export default function UiDesignConfirmationPanel({
 
   const cancellation = useUiDesignCancellation(workspaceRoot, (pageId) => {
     setActingPageIds((prev) => prev.filter((id) => id !== pageId))
-    runInFlightRef.current = false
-    observedRunningRef.current = false
+    if (String(workflowRef.current.summary?.status || '') !== 'running') {
+      runInFlightRef.current = false
+      observedRunningRef.current = false
+    }
     refreshUiDesignsRef.current()
   })
-  const cancelPageGeneration = cancellation.cancel
+  /** 尚未提交的本地意图直接移除，已提交的任务由后台核对身份后停止。 */
+  const cancelPageGeneration = async (pageId: string): Promise<void> => {
+    const queued = pendingActionsRef.current.some((item) => item.pageId === pageId)
+    if (queued) {
+      pendingActionsRef.current = pendingActionsRef.current.filter((item) => item.pageId !== pageId)
+      setActingPageIds((prev) => prev.filter((id) => id !== pageId))
+      return
+    }
+    await cancellation.cancel(pageId)
+  }
 
   // 逐页"选模板"或"重新生成"：点击即把该页加入 acting 集合（立即禁用该页按钮 +
   // 显示"生成中"）并入队。生成已解耦到进程级 worker pool，单页 run 只负责入队 +
@@ -960,7 +971,7 @@ export default function UiDesignConfirmationPanel({
                             loading={cancellation.stopping.includes(pageId)}
                             title="停止本页生成，并等待后台退出"
                           >
-                            {cancellation.stopping.includes(pageId) || page.status === 'stopping' ? '正在停止' : '停止'}
+                            {cancellation.stopping.includes(pageId) || page.status === 'stopping' ? '正在停止' : !isPageGenerating(page) ? '取消提交' : '停止'}
                           </Button>
                         ) : !generating && generationSlotsFull ? (
                           <Tooltip title={`仅支持同时 ${MAX_CONCURRENT_UI_GENERATION} 个UI设计稿正在生成，请稍后...`}>
@@ -1119,7 +1130,7 @@ export default function UiDesignConfirmationPanel({
                     ) : null}
                   </div>
                   {generating ? (
-                    <Tag className={cx('ui-design-page-row-status', 'is-generating')}>{page.status === 'stopping' || cancellation.stopping.includes(pageId) ? '正在停止' : '生成中'}</Tag>
+                    <Tag className={cx('ui-design-page-row-status', 'is-generating')}>{page.status === 'stopping' || cancellation.stopping.includes(pageId) ? '正在停止' : !isPageGenerating(page) ? '正在提交' : '生成中'}</Tag>
                   ) : confirmed ? (
                     // 行状态、统计及下一步使用相同的当前生成事实，不能由旧 code 冒充成功。
                     <Tag className={cx('ui-design-page-row-status', 'is-confirmed')}>已生成</Tag>
@@ -1182,7 +1193,7 @@ export default function UiDesignConfirmationPanel({
                             loading={cancellation.stopping.includes(pageId)}
                       title="停止本页生成，并等待后台退出"
                     >
-                      {cancellation.stopping.includes(pageId) || page.status === 'stopping' ? '正在停止' : '停止'}
+                      {cancellation.stopping.includes(pageId) || page.status === 'stopping' ? '正在停止' : !isPageGenerating(page) ? '取消提交' : '停止'}
                     </Button>
                   ) : !acting && generationSlotsFull ? (
                     <Tooltip title={`仅支持同时 ${MAX_CONCURRENT_UI_GENERATION} 个UI设计稿正在生成，请稍后...`}>

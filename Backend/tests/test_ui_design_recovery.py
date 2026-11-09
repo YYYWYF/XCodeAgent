@@ -46,8 +46,8 @@ class UiDesignRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(projection.to_payload()["uiGenerationRecovery"], {"pageIds": ["orphan"]})
         self.assertIsNone(projection.recovery_action_plan)
 
-    async def test_refresh_delegates_to_existing_self_healing_without_regenerate(self):
-        """恢复动作仅调用既有自愈，不能 replay 原 regenerate 或确认动作。"""
+    async def test_refresh_delegates_to_read_only_projection_without_regenerate(self):
+        """刷新只读当前投影，不能重放原生成或确认动作。"""
         latest = {"confirmation_status": "pending_user_confirmation", "pages": []}
         self.assertEqual(_ui_design_action({"ui_design_action": {"action": "refresh"}}), {"action": "refresh"})
         with patch("app.graph.nodes.ui_confirmation._latest_ui_designs", new=AsyncMock(return_value=latest)) as restore, patch("app.graph.nodes.ui_confirmation._enqueue_ui_design_generation", new=AsyncMock()) as enqueue:

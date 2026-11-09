@@ -1548,7 +1548,7 @@ for (const confirmed of [true, false]) {
   })
 }
 
-// UI worker 中断不伪造 Graph 失败；重试先读取当前确认门，再进入节点已有自愈。
+// UI worker 中断不伪造 Graph 失败；重试只读取当前确认门，不隐式生成。
 {
   const current = planningState()
   const workflow = confirmationWorkflow()
