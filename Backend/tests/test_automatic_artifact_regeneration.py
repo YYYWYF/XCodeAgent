@@ -69,6 +69,9 @@ class AutomaticArtifactRegenerationTests(unittest.IsolatedAsyncioTestCase):
             changed["api_contracts"][0]["endpoints"][0]["parameters"] = [
                 {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 13}}]
             for key, value in formal_artifacts(changed).items():
+                # 本用例只验证任务输入变化；当前正式 UI 必须已确认，不能沿用夹具的 skipped。
+                if key == "ui_designs":
+                    value = {"confirmation_status": "confirmed"}
                 write_json(Path(workspace), str(Path(".devagentstudio") / _ARTIFACTS[key]), value)
             state = {"workspace": workspace, "build_execution_scope": scope}
             write_build_task_plan_json(state, baseline)

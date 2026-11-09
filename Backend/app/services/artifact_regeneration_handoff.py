@@ -1,5 +1,6 @@
 """工作台缺少上游规划时，交接到已有规划 Graph 和原确认门。"""
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus, utc_now
@@ -39,16 +40,45 @@ def abandon_invalid_pending(workspace: str, owner_session_id: str) -> None:
             raise ValueError("旧任务计划尚未撤销，不能使用它继续开发。")
 
 
+def _completed_planning_owner(workspace: str, current) -> bool:
+    """区分已完成首次规划留下的 Run 镜像与仍有工作、确认门或资源占用的执行。"""
+    from app.protocols.application_planning_run_lock import application_planning_run_lock
+    from app.services.checkpoint_execution import execution_is_live
+    from app.services.detached_execution import background_execution_task, active_detached_run_for_thread
+
+    if (current.initialization.stage is not ApplicationLifecycleStage.READY_FOR_WORKBENCH
+            or current.initialization.status is not ApplicationLifecycleStatus.COMPLETED
+            or current.active_formal_revision is not None or current.pending_revision_impact is not None
+            or current.active_executions):
+        return False
+    locks = current.resource_locks
+    if any([locks.application, *locks.pages.values(), *locks.api_contracts.values(),
+            *locks.endpoints.values(), *locks.data_sources.values()]):
+        return False
+    thread_id = current.initialization.thread_id
+    if thread_id and (application_planning_run_lock(thread_id).locked()
+                      or active_detached_run_for_thread(workspace, thread_id)):
+        return False
+    # Bootstrap 正常完成会保留上一轮规划 Run；只有真实后台工作已经退出才能交接。
+    task = background_execution_task(current.active_run_id, workspace)
+    return not (task and not task.done()) and not execution_is_live(
+        SimpleNamespace(run_id=current.active_run_id, workspace=workspace))
+
+
 def handoff_artifact_generation(source, *, new_run_id: str, node: str, request: str, target=None):
     """只交接已退出原执行的占用，按明确生成目标投影修订，不增加阶段准入规则。"""
-    abandon_invalid_pending(source.workspace, str(getattr(source, "owner_session_id", "") or ""))
+    from app.workspace.task_documents import build_task_plan_lifecycle_lock
+
     path = lifecycle_service.application_lifecycle_path(source.workspace)
-    with lifecycle_service._application_lifecycle_lock(path):
+    # 保持 Pending → Lifecycle 的锁顺序，且先核验归属，拒绝交接时不撤销任何草稿。
+    with build_task_plan_lifecycle_lock(source.workspace), lifecycle_service._application_lifecycle_lock(path):
         current = lifecycle_service.load_application_lifecycle(source.workspace)
         if current is None:
             raise ValueError("产物重生成缺少当前应用生命周期。")
-        if current.active_run_id not in {None, source.run_id, new_run_id}:
+        if (current.active_run_id not in {None, source.run_id, new_run_id}
+                and not _completed_planning_owner(source.workspace, current)):
             raise ValueError("其他执行正在更新正式产物，不能接管其生成。")
+        abandon_invalid_pending(source.workspace, str(getattr(source, "owner_session_id", "") or ""))
         execution = current.active_executions.get(source.run_id)
         if target is None and execution and execution.development_target:
             target = execution.development_target.model_dump(mode="json", by_alias=True)
