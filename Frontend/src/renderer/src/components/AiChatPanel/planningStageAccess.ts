@@ -42,6 +42,16 @@ export function stoppedPlanningForSession(input: {
     ? archived : undefined
 }
 
+/** 首次创建和正式修订的当前阶段停止后保留输入框，后端单独签发新意见资格。 */
+export function stoppedPlanningAcceptsFeedback(stopped: ApplicationLifecycle['endedPlanningExecution']): boolean {
+  return Boolean((stopped?.canRestart || stopped?.canSubmitFeedback) && [
+    'collecting_requirement', 'analyzing_requirement', 'awaiting_requirement_clarification',
+    'generating_requirement_document', 'awaiting_requirement_document_confirmation',
+    'generating_ui_designs', 'awaiting_ui_design_confirmation',
+    'generating_technical_plan', 'awaiting_technical_plan_confirmation'
+  ].includes(stopped.stage))
+}
+
 /** 只以当前业务阶段和权威线程开放规划操作，浏览记录不能重新激活历史阶段。 */
 export function planningStageAccess(input: {
   phase: WorkbenchPhase
@@ -59,6 +69,12 @@ export function planningStageAccess(input: {
   if (!lifecycle) {
     if (phase === 'planning' && input.enteringStage) return planningStageTransitionAccess()
     return { stageActive: false, historyOnly: true, message: '正在同步当前流程，历史会话暂时仅供查看。' }
+  }
+  const stopped = stoppedPlanningForSession({ phase, lifecycle,
+    session: { threadId: sessionThreadId, entryKey: input.sessionEntryKey } })
+  if (stoppedPlanningAcceptsFeedback(stopped)) {
+    // End 释放开发准入后仍允许原会话提出本阶段新意见，旧确认卡继续由结束回执禁用。
+    return { stageActive: true, historyOnly: false, message: '' }
   }
   const current = input.pendingStageEntryTransferred ? 'planning' : deriveWorkbenchPhase(lifecycle)
   const developmentArtifacts = lifecycle.developmentArtifacts

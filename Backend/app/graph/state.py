@@ -47,6 +47,7 @@ class ProjectState(TypedDict, total=False):
     revision_continuation: dict[str, Any]
     revision_draft: dict[str, Any]
     revision_interaction: dict[str, Any]
+    document_review: dict[str, Any]
     design_change_submission: bool
     design_revision_intent: dict[str, Any]
     design_change_request: str

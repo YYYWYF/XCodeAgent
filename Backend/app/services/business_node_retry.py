@@ -181,10 +181,15 @@ def _planning_retry_owner(source: DurableExecutionRecord, lifecycle: Any, checkp
 
 
 async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any, *, allow_stopped: bool = False,
-        restart_initial_planning: bool = False):
+        restart_initial_planning: bool = False, initial_feedback=None):
     """读取完整失败现场、刷新磁盘输入，再串行交接运行归属并重新执行一次。"""
-    from app.services.ended_planning import ended_planning_available, initial_planning_restart_available
+    from app.services.ended_planning import ended_planning_available, initial_planning_restart_available, stopped_planning_feedback_available
     from app.services.application_lifecycle import load_application_lifecycle
+    if initial_feedback is not None and not (source.execution_kind == "application_planning"
+            and source.status is DurableExecutionStatus.CANCELLED and source.ended_at is not None
+            and stopped_planning_feedback_available(source.workspace, load_application_lifecycle(source.workspace),
+                run_id=source.run_id, thread_id=source.thread_id)):
+        raise ValueError("当前停止的规划已变化，不能提交补充意见，请同步当前阶段。")
     if restart_initial_planning and not (source.execution_kind == "application_planning"
             and source.status is DurableExecutionStatus.CANCELLED and source.ended_at is not None
             and initial_planning_restart_available(load_application_lifecycle(source.workspace),
@@ -235,6 +240,10 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
                 "ui_confirmation_review": "ui_confirmation",
                 "planning_stage_entry": "ui_confirmation",
             }.get(node, node))
+        if initial_feedback is not None:
+            from app.services.initial_planning_feedback import initial_feedback_node
+
+            node = initial_feedback_node(lifecycle, initial_feedback)
         from app.services.stage_prerequisites import regeneration_for_retry
         issue = regeneration_for_retry(source.workspace, node, graph, state={**checkpoint.snapshot.values, "workspace": source.workspace})
         if issue:
@@ -282,7 +291,11 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
                 design_change_target=generation_target, design_change_generation_target=generation_target,
                 design_change_generation_request=hint.request)
         refresh_retry_node_inputs(state, node)
-        if restart_initial_planning:
+        if initial_feedback is not None:
+            from app.services.initial_planning_feedback import apply_initial_planning_feedback
+
+            apply_initial_planning_feedback(state, node, initial_feedback)
+        elif restart_initial_planning:
             if node == "technical_planning_begin":
                 from app.services.technical_planning_retry import prepare_technical_planning_retry
 
@@ -314,10 +327,18 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
                 lifecycle = handoff_application_planning_run_for_recovery(source.workspace, source_run_id=owner,
                     new_run_id=new_run, thread_id=source.thread_id, expected_lifecycle_revision=revision_number)
             else:
+                from app.domain.application_lifecycle import ApplicationLifecycleStage
+
                 lifecycle = claim_application_planning_run_for_recovery(source.workspace, new_run_id=new_run,
                     thread_id=source.thread_id, expected_lifecycle_revision=revision_number,
                     **({"source_run_id": source.run_id, "restart_initial_planning": restart_initial_planning}
-                        if stopped_planning else {}))
+                        if stopped_planning else {}),
+                    **({"generation_stage": {
+                        "requirements": ApplicationLifecycleStage.ANALYZING_REQUIREMENT,
+                        "product_planning": ApplicationLifecycleStage.GENERATING_REQUIREMENT_DOCUMENT,
+                        "ui_confirmation": ApplicationLifecycleStage.GENERATING_UI_DESIGNS,
+                        "technical_planning_begin": ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN,
+                    }[node]} if initial_feedback is not None else {}))
             lease = None if planning_handoff else _acquire_workspace_lease(
                 workspace=source.workspace, source=source, new_run_id=new_run, lifecycle=lifecycle)
             child = await observe_execution_started(workspace=source.workspace, project_id=source.project_id,

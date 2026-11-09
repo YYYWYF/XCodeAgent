@@ -8,13 +8,15 @@ import {
 } from '../../service/chatSessions'
 import {
   loadStoredApplications,
-  loadWorkspaceApplicationConfig
+  loadWorkspaceApplicationConfig,
+  applicationIndexOf,
+  saveStoredApplications
 } from '../../service/applicationStorage'
+import { ApplicationLifecycleActionError, getApplicationLifecycle } from '../../service/applicationLifecycle'
 import type { ApplicationConfig, ApplicationSchemaConfig } from '../../typings'
 import { cx } from '../../utils'
 import WelcomeActionCard from './WelcomeActionCard'
 import WelcomeModalTitle from './WelcomeModalTitle'
-import { saveAndOpenApplication } from './applicationService'
 import './WelcomeModal.less'
 import './WorkspaceHistoryModal.less'
 import {
@@ -121,7 +123,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
     }
   }
 
-  /** 选择并添加受 DevAgent Studio 管理的本地项目；已有索引时直接使用原记录。 */
+  /** 选择本地项目，核对持久化应用身份后登记本机索引并打开。 */
   const addLocalWorkspace = async (): Promise<void> => {
     const workspaceApi = window.devAgentStudio?.workspace
     if (!workspaceApi?.selectDirectory) {
@@ -138,15 +140,20 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
       const indexedApplication = applications.find(
         (application) => application.workspaceRoot === selected.path
       )
-      if (indexedApplication) {
-        onOpenApplication(indexedApplication)
-        setHistoryOpen(false)
-        return
-      }
-
       const schema = await loadWorkspaceApplicationConfig(selected.path)
       const application = applicationFromWorkspace(schema, selected.path)
-      await saveAndOpenApplication(application, onOpenApplication)
+      // 项目身份随生命周期持久化；另一台电脑的本机索引不能随机分配新身份与其冲突。
+      try {
+        const lifecycle = await getApplicationLifecycle({ workspaceRoot: selected.path })
+        application.id = lifecycle.application.id
+      } catch (error) {
+        if (!(error instanceof ApplicationLifecycleActionError) || error.errorType !== 'ApplicationLifecycleMissingError') throw error
+        application.id = indexedApplication?.id || application.id
+      }
+      // 导入只登记本机索引，不重写 application.json、分支配置或文档资产。
+      await saveStoredApplications([applicationIndexOf(application), ...applications
+        .filter((item) => item.workspaceRoot !== selected.path && item.id !== application.id).map(applicationIndexOf)])
+      onOpenApplication(application)
       setHistoryOpen(false)
       message.success('本地项目已添加到首页索引')
     } catch (error) {

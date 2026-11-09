@@ -47,7 +47,7 @@ test('模板任务失败事件保留断线状态，不改变规划及恢复事�
   assert.equal(wrongThread, current)
 })
 
-test('模板专用重试先校准；业务失败与通信失败分别处理，运行中不重发', async () => {
+test('模板专用重试先校准；运行中不重发，切换目录后迟到成功不写索引或导航', async () => {
   const savedFetch = globalThis.fetch
   const savedWindow = globalThis.window
   const savedMessageError = message.error
@@ -58,17 +58,24 @@ test('模板专用重试先校准；业务失败与通信失败分别处理，�
   console.warn = () => undefined
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
   try {
-    for (const scenario of ['business', 'transport', 'running']) {
+    for (const scenario of ['business', 'transport', 'running', 'switched']) {
       let current = currentTemplate()
       const actions: string[] = []
       let bootstrapRequested = false
+      let unexpectedWrites = 0
       globalThis.fetch = async (url, init) => {
+        if (!String(url).endsWith('/application-lifecycle/run')) unexpectedWrites++
         assert.ok(String(url).endsWith('/application-lifecycle/run'))
         const request = JSON.parse(String(init?.body))
         const action = request.forwardedProps.applicationLifecycle.action
         actions.push(action)
         if (action === 'retry_bootstrap_template_generation') {
           bootstrapRequested = true
+          if (scenario === 'switched') {
+            const original = current.lifecycle
+            current = { ...currentTemplate(), application: { ...current.application, workspaceRoot: '/tmp/cloned-template' } }
+            return lifecycleResponse(request, { ...original, initialization: { ...original.initialization, stage: 'ready_for_workbench', status: 'completed' } })
+          }
           if (scenario === 'transport') throw new TypeError('Backend 不可达')
           return lifecycleResponse(request, current.lifecycle, true)
         }
@@ -82,6 +89,7 @@ test('模板专用重试先校准；业务失败与通信失败分别处理，�
       /** 捕获生产模板编排，保留真实 AG-UI 请求和 Canonical reducer。 */
       function Probe() {
         controller = useApplicationTemplateGeneration({
+          getPlanningState: () => current,
           dispatchPlanningEvent: event => { current = reduceApplicationPlanningCurrentState(current, event) },
           hidePlanning: () => { throw new Error('失败流程不应导航') },
           getVisiblePlanningId: () => current.application.id,
@@ -96,6 +104,8 @@ test('模板专用重试先校准；业务失败与通信失败分别处理，�
       assert.equal(current.workflow, undefined)
       assert.equal(current.recovery, undefined)
       assert.equal(actions.filter(action => action === 'retry_bootstrap_template_generation').length, scenario === 'running' ? 0 : 1)
+      assert.equal(unexpectedWrites, 0)
+      if (scenario === 'switched') assert.equal(current.application.workspaceRoot, '/tmp/cloned-template')
     }
   } finally {
     globalThis.fetch = savedFetch

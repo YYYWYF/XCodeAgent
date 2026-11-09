@@ -30,6 +30,17 @@ def initial_planning_restart_available(lifecycle, *, run_id=None, thread_id=None
         and not any(lifecycle.resource_locks.model_dump().values()))
 
 
+def stopped_planning_feedback_available(workspace, lifecycle, *, run_id=None, thread_id=None):
+    """新意见只接管当前已结束规划；正式修订仍要求工作区未变化且无其他占用。"""
+    archived = lifecycle.ended_planning_execution if lifecycle else None
+    if initial_planning_restart_available(lifecycle, run_id=run_id, thread_id=thread_id):
+        return True
+    return bool(archived and archived.formal_revision is not None
+        and archived.formal_revision.planning_thread_id == archived.initialization.thread_id
+        and not any(lifecycle.resource_locks.model_dump().values())
+        and ended_planning_available(workspace, lifecycle, run_id=run_id, thread_id=thread_id))
+
+
 def restore_ended_planning(workspace, current, *, source_run_id, thread_id, restart_initial=False):
     """在既有 lifecycle CAS 锁内核验并在内存恢复；新 Run 成功登记时才消费凭据。"""
     from app.services.application_lifecycle import ApplicationLifecycleConflictError

@@ -134,6 +134,43 @@ test('无生命周期冷启动收口连接：业务失败展示真实错误，�
   }
 })
 
+test('恢复投影读取成功即清除旧读取错误，不要求聊天输出变化', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }) })
+  let root: ReactTestRenderer | undefined
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  let failed = true
+  const params = buildRuntimeParams({ activeSession: buildSessionIdentity(),
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: buildIdleLifecycle(), agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined })
+  /** 使用真实 Hook 验证没有新增聊天输出时的只读恢复收口。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body))
+    const lifecycle = buildIdleLifecycle()
+    if (failed) lifecycle.extensions.executionRecovery = {
+      schemaVersion: 'execution-recovery.v1', generatedAt: lifecycle.updatedAt, candidates: [],
+      error: { code: 'RECOVERY_PROJECTION_READ_FAILED', message: '恢复状态读取失败：状态校验失败。' }
+    }
+    return sseResponse(body.threadId, body.runId, { applicationLifecycle: lifecycle })
+  }
+  try {
+    await act(async () => { root = create(createElement(Probe)) })
+    assert.equal(runtime.recoveryError, '恢复状态读取失败：状态校验失败。')
+    failed = false
+    await act(async () => { assert.equal(await runtime.refreshExecutionRecoveryLifecycle(true), true) })
+    assert.equal(runtime.recoveryError, undefined)
+  } finally {
+    await act(async () => { root?.unmount() })
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
+
 test('规划来源只读时，正式续接按显式开发 owner 判断；其他目标仍被阻止', async () => {
   const previousWindow = globalThis.window
   const restoreFetch = mockReadyContinuationReads()
@@ -360,6 +397,54 @@ test('正式修订确认沿用卡片目标并交给应用 Planning Runtime，不
   }
  }
 })
+test('正式需求与计划交接成功后撤下来源会话上次交接失败的错误', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }) })
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body))
+    return sseResponse(body.threadId, body.runId, { applicationLifecycle: buildIdleLifecycle() })
+  }
+  try {
+    for (const branch of ['design_stage_revision', 'workbench_plan_revision']) {
+      let runtime!: ReturnType<typeof useWorkflowConversation>
+      let root: ReactTestRenderer | undefined
+      let failed = true
+      const params = buildRuntimeParams({ activeSession: buildSessionIdentity(),
+        application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+        applicationLifecycle: buildIdleLifecycle(), agUiSessionsRef: { current: {} },
+        acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+        onApplicationLifecycleChange: () => undefined })
+      /** 第一次交接失败，第二次沿同一确认入口成功。 */
+      const startRevision = async (): Promise<void> => { if (failed) throw new Error('恢复状态读取失败：执行状态校验失败。') }
+      params.onStartDesignStageRevision = startRevision
+      params.onStartWorkbenchPlanRevision = startRevision
+      /** 挂载生产 Hook，验证来源会话的错误实际撤下。 */
+      function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+      const workflow: WorkflowRunPayload = { runId: 'handoff-source', threadId: OWNER_THREAD_ID, events: [],
+        summary: { phase: 'conversation', status: 'requires_user_input', intent: 'formal_revision',
+          request: '新增公告说明', target: { type: 'application' },
+          revisionImpact: { interactionId: 'handoff-impact', formalBranch: branch } as any,
+          clarification: { mode: 'revision_impact_confirmation', status: 'requires_user_input' } },
+        state: { workflow_scope: 'conversation' } }
+      try {
+        await act(async () => { root = create(createElement(Probe)) })
+        await act(async () => { assert.equal(await runtime.handleSubmitClarification(workflow,
+          { revision_impact_confirmation: 'approved' }), false) })
+        assert.equal(runtime.error, '恢复状态读取失败：执行状态校验失败。')
+        failed = false
+        await act(async () => { assert.equal(await runtime.handleSubmitClarification(workflow,
+          { revision_impact_confirmation: 'approved' }), true) })
+        assert.equal(runtime.error, undefined)
+      } finally { await act(async () => { root?.unmount() }) }
+    }
+  } finally {
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
+
 type WorkflowConversationParams = Parameters<typeof useWorkflowConversation>[0]
 
 test('完成引导在同一可见会话开始新页面和 API，使用新 Graph 并清除旧目标参数', async () => {

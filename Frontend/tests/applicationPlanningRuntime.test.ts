@@ -4,6 +4,8 @@ import './formalRevisionStartRetry.test'
 import './phaseSessionSelection.test'
 import './planningStageReentry.test'
 import './initialPlanningRestart.test'
+import './initialPlanningFeedback.test'
+import './applicationWorkspaceIsolation.test'
 import {
   ApplicationPlanningRuntime,
   type ApplicationPlanningRuntimeDependencies

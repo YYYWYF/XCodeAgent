@@ -245,17 +245,22 @@ async def index_missing_checkpoint_executions(workspace: str):
     from app.persistence.execution_recovery import get_execution
     from app.services.application_lifecycle import load_application_lifecycle
     from app.graph.workflow import workflow_graph_for_request
+    from app.graph.application_planning_workflow import application_planning_graph_for_request
+    from app.services.recovery_checkpoint import checkpoint_thread_exists
 
     lifecycle = load_application_lifecycle(workspace)
     if lifecycle is None:
         return
-    refs = [(item.run_id, item.thread_id) for item in lifecycle.active_executions.values()]
-    if lifecycle.active_run_id and lifecycle.initialization.thread_id:
-        refs.append((lifecycle.active_run_id, lifecycle.initialization.thread_id))
-    for run_id, thread_id in dict.fromkeys(refs):
-        if await get_execution(workspace, run_id) is not None:
+    refs = [(item.thread_id, False) for item in lifecycle.active_executions.values()]
+    if lifecycle.initialization.thread_id:
+        refs.append((lifecycle.initialization.thread_id, True))
+    for thread_id, planning in dict.fromkeys(refs):
+        if not await checkpoint_thread_exists(workspace, thread_id):
             continue
-        graph = await workflow_graph_for_request(workspace=workspace)
+        # 生命周期仅定位当前线程，当前 Run 取自 checkpoint，不能要求两份 Run 镜像一致。
+        factory = application_planning_graph_for_request if planning else workflow_graph_for_request
+        graph = await factory(workspace=workspace)
         snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
-        if (getattr(snapshot, "values", {}) or {}).get("active_run_id") == run_id:
+        run_id = (getattr(snapshot, "values", {}) or {}).get("active_run_id")
+        if run_id and await get_execution(workspace, run_id) is None:
             await index_checkpoint_execution(workspace, thread_id, snapshot)

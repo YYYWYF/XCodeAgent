@@ -65,6 +65,7 @@ class ApplicationLifecycleAction(BaseModel):
         "bootstrap_template_generation",
         "retry_bootstrap_template_generation",
         "workspace_attach",
+        "prepare_document_review",
         "release_session_pending",
         "cleanup_session_failed_executions",
         "prepare_session_deletion",
@@ -102,11 +103,13 @@ class ApplicationLifecycleAction(BaseModel):
                 raise ValueError(f"{self.action} 必须提供合法非空的 sessionId。")
         if self.action == "prepare_session_deletion" and not str(self.session_thread_id or "").strip():
             raise ValueError("prepare_session_deletion 必须提供 sessionThreadId。")
-        if self.action == "get" and (self.session_id is not None or self.session_thread_id is not None):
+        if self.action in {"get", "workspace_attach", "prepare_document_review"} and (self.session_id is not None or self.session_thread_id is not None):
             if not str(self.session_id or "").strip() or not str(self.session_thread_id or "").strip():
                 raise ValueError("会话结果读取必须同时提供 sessionId 和 sessionThreadId。")
             if self.planning_thread_id:
                 raise ValueError("规划和会话恢复必须使用各自的读取身份。")
+        if self.action == "prepare_document_review" and not (self.planning_thread_id or (self.session_id and self.session_thread_id)):
+            raise ValueError("重新建立文档审阅需要当前规划线程或完整会话身份。")
         if self.action == "skip_entity_development" and (
             not str(self.entity_id or "").strip() or not str(self.reason or "").strip()
         ):
@@ -132,6 +135,7 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "bootstrap_template_generation",
             "retry_bootstrap_template_generation",
             "workspace_attach",
+            "prepare_document_review",
             "release_session_pending",
             "cleanup_session_failed_executions",
             "prepare_session_deletion",
@@ -154,6 +158,11 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "identity": ["applicationId", "threadId", "sessionId"],
             "cursor": ["lifecycleRevision", "checkpointAt", "output.submissionOrder", "output.sequence"],
             "source": "current-checkpoint-and-live-execution", "reconcileAction": "workspace_attach",
+            "reconcileSessionScope": ["sessionId", "sessionThreadId"],
+            "checkpointAvailable": "current-root-checkpoint-exists",
+            "documentReview": {"field": "documentReview", "prepareAction": "prepare_document_review",
+                "kinds": ["requirement_document", "ui_designs", "technical_plan", "revision_draft", "build_task_plan"],
+                "callsModel": False, "requiresExplicitConfirmation": True},
         },
         "endedTasks": {
             "field": "endedExecutions", "checkedAtField": "endedExecutionsCheckedAt",
@@ -315,6 +324,16 @@ def build_application_lifecycle_ag_ui_stream(
 
             state = await end_planning_execution(request.workspace_root, str(payload.get("threadId") or ""))
             message = "本轮任务已结束，已有文件已保留。"
+        elif request.action == "prepare_document_review":
+            from app.services.document_review_rebuild import prepare_document_review
+            state = load_application_lifecycle(request.workspace_root)
+            if state is None:
+                raise ApplicationLifecycleMissingError("应用生命周期尚未创建。")
+            await prepare_document_review(request.workspace_root, application_id=state.application.id,
+                thread_id=request.planning_thread_id or request.session_thread_id or "",
+                session_id=request.session_id, planning=bool(request.planning_thread_id))
+            state = load_application_lifecycle(request.workspace_root)
+            message = "已使用现有文档建立审阅，等待明确确认。"
         elif request.action == "get":
             # 恢复收口属于明确的 Attach；Get 只投影当前事实，不释放或重建执行。
             state = load_application_lifecycle(request.workspace_root)
@@ -349,7 +368,15 @@ def build_application_lifecycle_ag_ui_stream(
             await reconcile_workspace_recovery(request.workspace_root)
             from app.services.execution_recovery_projection import reconcile_recovery_ownership
             from app.services.development_artifacts import refresh_development_artifacts
-            await reconcile_recovery_ownership(request.workspace_root)
+            try:
+                await reconcile_recovery_ownership(request.workspace_root)
+            except Exception:
+                # 恢复设施错误不能阻断资产工作区；保留占用，由 Get 的恢复诊断呈现读取故障。
+                logger.warning("Workspace 恢复校准失败，保留原执行状态。", exc_info=True)
+            if request.session_id and request.session_thread_id:
+                from app.services.session_checkpoint_reconciliation import reconcile_session_checkpoint
+                await reconcile_session_checkpoint(request.workspace_root,
+                    session_id=request.session_id, thread_id=request.session_thread_id)
             attached = await asyncio.to_thread(
                 template_mutation_coordinator.attach_workspace,
                 request.workspace_root,
@@ -401,6 +428,7 @@ def build_application_lifecycle_ag_ui_stream(
             }
         if request.action in {
             "get",
+            "prepare_document_review",
             "release_session_pending",
             "cleanup_session_failed_executions",
             "prepare_session_deletion",
@@ -410,7 +438,7 @@ def build_application_lifecycle_ag_ui_stream(
                 **dict(data["lifecycle"].get("extensions") or {}),
                 "planningRefresh": await _current_planning_refresh(request.workspace_root),
             }
-        if request.action == "get":
+        if request.action in {"get", "prepare_document_review"}:
             recovery_thread = request.planning_thread_id or request.session_thread_id
             if recovery_thread:
                 data["lifecycle"]["extensions"]["recoverySnapshot"] = await project_recovery_snapshot(
@@ -461,7 +489,7 @@ def build_application_lifecycle_ag_ui_stream(
     # 删除准备必须能停止目标会话的预览维护运行，不能先被维护互斥挡住。
     guarded_workspace = (
         None
-        if action in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution"}
+        if action in {"get", "workspace_attach", "prepare_document_review", "prepare_session_deletion", "end_planning_execution"}
         else str(resolved_input.get("workspaceRoot") or "") or None
     )
     return build_ag_ui_action_stream(
@@ -474,5 +502,5 @@ def build_application_lifecycle_ag_ui_stream(
         error_data=lambda _exc: {"action": resolved_input.get("action")},
         accept=accept,
         workspace_root=guarded_workspace,
-        register_workspace_run=action not in {"get", "workspace_attach", "prepare_session_deletion", "end_planning_execution"},
+        register_workspace_run=action not in {"get", "workspace_attach", "prepare_document_review", "prepare_session_deletion", "end_planning_execution"},
     )

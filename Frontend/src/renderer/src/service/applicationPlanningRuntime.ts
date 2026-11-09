@@ -28,6 +28,7 @@ import {
 import { isAuthenticationFailure } from './authentication'
 import { subscribeBackendConnection } from './backendConnection'
 import { recoveryStore } from './recoveryStore'
+import { normalizeWorkspaceRoot } from './applicationWorkspace'
 import { endApplicationPlanningExecution } from './applicationLifecycle'
 import { planningWorkflowCanPublishDuringRun, planningWorkflowPhase } from './applicationPlanningWorkflowState'
 import {
@@ -49,6 +50,7 @@ import { productConversationSubmissionError } from './applicationPlanningProduct
 import { readTechnicalPlanningReply, prepareTechnicalPlanningRevision, type TechnicalPlanningReply } from './technicalPlanningConversation'
 import { workflowEndedPlanControl } from '../components/AiChatPanel/planExecutionMode'
 import { isWorkflowDebugNodeForStage } from './workflowDebugNodes'
+import { stoppedPlanningAcceptsFeedback } from '../components/AiChatPanel/planningStageAccess'
 
 export type ApplicationPlanningRuntimeDependencies = {
   readTechnicalPlanningReply?: typeof readTechnicalPlanningReply
@@ -100,6 +102,7 @@ export class ApplicationPlanningSubmissionNotCommittedError extends Error {
 export class ApplicationPlanningRuntime {
   readonly applicationId: string
   readonly threadId: string
+  readonly workspaceRoot: string
   private readonly session: NonNullable<ApplicationPlanningRuntimeDependencies['session']>
   private started = false
   private completed = false
@@ -117,10 +120,11 @@ export class ApplicationPlanningRuntime {
   constructor(private readonly dependencies: ApplicationPlanningRuntimeDependencies) {
     this.applicationId = dependencies.applicationId
     this.threadId = dependencies.threadId
+    this.workspaceRoot = normalizeWorkspaceRoot(dependencies.getCurrentState()?.application.workspaceRoot)
     this.session = dependencies.session ?? createApplicationPlanningSession(this.threadId)
     this.unsubscribeBackendConnection = subscribeBackendConnection((connection) => {
       const current = this.dependencies.getCurrentState()
-      if (this.disposed || current?.threadId !== this.threadId || current.application.id !== this.applicationId) return
+      if (this.disposed || current?.threadId !== this.threadId || current.application.id !== this.applicationId || normalizeWorkspaceRoot(current.application.workspaceRoot) !== this.workspaceRoot) return
       this.runToken = Math.max(this.runToken, current.connection.requestGeneration) + 1
       this.runActive = false
       this.reconcilePromise = undefined
@@ -146,6 +150,7 @@ export class ApplicationPlanningRuntime {
       this.disposed ||
       !state ||
       state.application.id !== this.applicationId ||
+      normalizeWorkspaceRoot(state.application.workspaceRoot) !== this.workspaceRoot ||
       state.threadId !== this.threadId
     ) {
       throw new Error('当前 Planning Runtime 已失效。')
@@ -160,6 +165,7 @@ export class ApplicationPlanningRuntime {
       !this.disposed &&
       token === this.runToken &&
       current?.application.id === this.applicationId &&
+      normalizeWorkspaceRoot(current.application.workspaceRoot) === this.workspaceRoot &&
       current.threadId === this.threadId
     )
   }
@@ -169,7 +175,7 @@ export class ApplicationPlanningRuntime {
     const current = this.requireCurrentState()
     const key = recoveryStore.key(current.application.workspaceRoot || '', this.applicationId, this.threadId)
     if (event.type === 'run_started' || event.type === 'planning_end_started') recoveryStore.invalidate(key)
-    this.dependencies.dispatchCurrentEvent(event)
+    this.dependencies.dispatchCurrentEvent({ ...event, workspaceRoot: this.workspaceRoot })
     const next = this.dependencies.getCurrentState()
     if (next?.threadId === this.threadId) recoveryStore.adopt(key, next.lifecycle)
   }
@@ -382,6 +388,18 @@ export class ApplicationPlanningRuntime {
     designThreadHandoff?: () => Promise<void>,
     conversationTarget?: ApplicationPlanningInteraction['conversationTarget']
   ): Promise<void> {
+    const stopped = this.requireCurrentState().lifecycle.endedPlanningExecution
+    if (designChangeRequest?.trim() && stoppedPlanningAcceptsFeedback(stopped) &&
+        stopped?.threadId === this.threadId &&
+        (!technicalPlanningConversation || !conversationTarget || conversationTarget === 'technical_planning')) {
+      if (workflow.threadId !== this.threadId) throw new Error('当前规划会话已经失效。')
+      if (this.runActive || this.session.hasActiveRun()) throw new Error('当前规划正在执行，请等待完成后提交。')
+      // 已结束的旧审阅门没有提交权限；正式修订沿原继续动作恢复其修订上下文再生成。
+      await this.executeRecoveryRetry({ threadId: this.threadId, sourceRunId: stopped.runId }, stopped.canRestart, {
+        request: designChangeRequest.trim(), ...(conversationTarget ? { conversationTarget } : {})
+      })
+      return
+    }
     if (technicalPlanningConversation && designChangeRequest?.trim()) {
       await this.submitTechnicalPlanningMessage(designChangeRequest.trim(), designThreadHandoff, false, conversationTarget)
       return
@@ -744,7 +762,8 @@ export class ApplicationPlanningRuntime {
   /** 对无法直接恢复的当前失败提交 source hint，由 Backend 重新判断安全入口。 */
   private async executeRecoveryRetry(
     plan: Pick<ApplicationPlanningRecoveryActionPlan, 'threadId' | 'sourceRunId'>,
-    restartInitialPlanning = false
+    restartInitialPlanning = false,
+    feedback?: { request: string; conversationTarget?: ApplicationPlanningInteraction['conversationTarget'] }
   ): Promise<void> {
     let recoveryToken: number | undefined
     try {
@@ -756,13 +775,14 @@ export class ApplicationPlanningRuntime {
             : new AgUiChatSession(plan.threadId, getExecutionRecoveryActionUrl())
           const merged = await this.sendMessageWithinTransport(
             token,
-            restartInitialPlanning ? '按当前文件重新生成' : '重试',
+            feedback?.request || (restartInitialPlanning ? '按当前文件重新生成' : '重试'),
             {
               editorMode: 'frontend',
               workspaceRoot: current.application.workspaceRoot,
               executionRecovery: {
-                action: restartInitialPlanning ? 'restart_initial_planning' : 'retry_current_failure',
-                sourceRunId: plan.sourceRunId
+                action: restartInitialPlanning ? 'restart_initial_planning' : feedback ? 'continue' : 'retry_current_failure',
+                sourceRunId: plan.sourceRunId,
+                ...(feedback ? { feedback } : {})
               }
             },
             session
@@ -781,6 +801,8 @@ export class ApplicationPlanningRuntime {
       } finally {
         this.reportRecoveryActionFailure(reason, '重新检查当前失败时出错')
       }
+      // 新意见提交失败需恢复 Composer 草稿；既有按钮重试继续原位展示错误。
+      if (feedback) throw reason
     }
   }
 

@@ -272,6 +272,8 @@ def _validate_application_planning_resume(
     submission = ApplicationPlanningInteraction.model_validate(interaction)
     node_name = str(pending.get("phase") or "")
     validation_state = dict(snapshot.values)
+    from app.services.document_review_assets import require_current_document_review
+    require_current_document_review(validation_state)
     pending_clarification = pending.get("clarification")
     if isinstance(pending_clarification, dict):
         validation_state["clarification"] = pending_clarification

@@ -321,6 +321,31 @@ class ExecutionRecoveryStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loaded.status, DurableExecutionStatus.COMPLETED)
         self.assertIsNotNone(loaded.ended_at)
 
+    async def test_ending_failed_execution_clears_failure_evidence(self) -> None:
+        """失败执行被用户结束后可读取为 CANCELLED，重复失败态更新仍保留诊断。"""
+
+        record = self._record().model_copy(update={
+            "status": DurableExecutionStatus.FAILED,
+            "failure": ExecutionFailureEvidence(
+                origin=ExecutionFailureOrigin.MODEL_CALL,
+                code="MODEL_CONNECTION_ERROR",
+                operation="technical_planning",
+                replay_compatible=True,
+            ),
+        })
+        await insert_execution(record)
+        await update_execution_status(workspace=self.workspace, run_id=record.run_id,
+                                      status=DurableExecutionStatus.FAILED)
+        failed = await get_execution(self.workspace, record.run_id)
+        self.assertIsNotNone(failed.failure)
+
+        await update_execution_status(workspace=self.workspace, run_id=record.run_id,
+                                      status=DurableExecutionStatus.CANCELLED, ended=True)
+        ended = await get_execution(self.workspace, record.run_id)
+        self.assertEqual(ended.status, DurableExecutionStatus.CANCELLED)
+        self.assertIsNone(ended.failure)
+        self.assertIsNotNone(ended.ended_at)
+
     def _record(self) -> DurableExecutionRecord:
         """构造测试使用的最小执行记录。"""
 

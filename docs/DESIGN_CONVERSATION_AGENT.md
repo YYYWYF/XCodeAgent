@@ -101,6 +101,8 @@ planning run 执行期间输入框仍可编辑，但发送按钮和回车发送�
 
 计划阶段和开发阶段继续使用各自原有对话路径；产品专用自由输入仅在 workbenchPhase=product 时进入 /application-page-planning/run。
 
+首次创建和正式二次修改在需求文档、UI 设计稿或技术规划生成中停止后，原阶段原会话保留普通输入框及“继续生成”提示。输入补充或修改意见通过既有 `/execution-recovery/execute` 提交 `feedback={request,conversationTarget?}`：首次创建使用 `restart_initial_planning`，正式修订使用 `continue` 并恢复原 changeId、目标和开发来源。Backend 发布 `endedPlanningExecution.canSubmitFeedback`，核对当前结束身份、读取当前文件并合并原要求，复用原生成节点。正式修订继续要求工作区未变化且没有新任务，不允许借补充扩大已批准的阶段。新版本必须重新确认，旧 Run 和旧确认权限不会复活，其他历史会话仍只读。
+
 进入计划阶段后，手动回看需求阶段只能查看历史；进入开发及后续任何阶段后，需求和计划阶段都只能查看历史，底部不显示输入框、禁用历史确认/修改操作，后续需求统一在开发阶段提出。阶段历史列表可以浏览，不能由用户新建规划会话。服务端拒绝 `conversationPhase=product` 借技术规划入口提问，也拒绝完成态 `product_stage_conversation` 自由对话，不调用模型或写规划状态。
 
 可操作权限由当前 lifecycle 的业务阶段和 `initialization.threadId` 决定，手动浏览位置与最远到达记录不能授予权限。系统因正式修改返回需求/计划后，仅当前阶段的权威会话恢复对话、修改和确认；同阶段的旧会话继续只读。计划阶段提出上游修改仍可由系统受控交接回需求，不允许用户通过浏览历史自行回退。首次模板就绪的计划卡保留“进入开发阶段”操作。

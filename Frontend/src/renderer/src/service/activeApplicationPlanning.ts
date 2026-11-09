@@ -1,4 +1,5 @@
 import { mergeRecoverySnapshot } from './recoveryStore'
+import { normalizeWorkspaceRoot, sameApplicationWorkspace } from './applicationWorkspace'
 import { workflowEndedPlanControl } from '../components/AiChatPanel/planExecutionMode'
 import { mergeEndedTaskAvailability } from './endedTaskAvailability'
 import type {
@@ -47,7 +48,7 @@ export type ApplicationPlanningCurrentState = {
   recovery?: ApplicationPlanningRecoveryProjection
 }
 
-export type ApplicationPlanningCurrentEvent =
+export type ApplicationPlanningCurrentEvent = { workspaceRoot?: string } & (
   | { type: 'stage_thread_handed_off'; applicationId: string; threadId: string; workflow: WorkflowRunPayload }
   | { type: 'run_started'; applicationId: string; threadId: string }
   | { type: 'run_settled'; applicationId: string; threadId: string }
@@ -111,6 +112,7 @@ export type ApplicationPlanningCurrentEvent =
       threadId: string
       application: ApplicationConfig
     }
+)
 
 /** 从 Pending interaction 读取可比较的服务端草稿身份。 */
 function pendingDraftIdentity(value: unknown): string | undefined {
@@ -342,6 +344,8 @@ export function reduceApplicationPlanningCurrentState(
   if (event.applicationId !== current.application.id || event.threadId !== current.threadId) {
     return current
   }
+  // 同业务 ID 和线程也可能来自另一个本机克隆目录；旧目录帧不能覆盖新目录。
+  if (event.workspaceRoot !== undefined && normalizeWorkspaceRoot(event.workspaceRoot) !== normalizeWorkspaceRoot(current.application.workspaceRoot)) return current
 
   if (event.type === 'stage_thread_handed_off') {
     const lifecycle = workflowApplicationLifecycle(event.workflow)
@@ -473,7 +477,7 @@ export function reduceApplicationPlanningCurrentState(
     }
   }
   if (event.type === 'application_received') {
-    return event.application.id === current.application.id
+    return sameApplicationWorkspace(event.application, current.application)
       ? { ...current, application: event.application }
       : current
   }
@@ -504,6 +508,16 @@ export function reduceApplicationPlanningCurrentState(
     error,
     transportState: 'idle'
   }
+}
+
+/** 冷读取只合并同目录的当前线程；目录切换由显式 startPlanning 完整重建，不能混入另一目录的 revision。 */
+export function mergeRecoveredApplicationPlanning(existing: ApplicationPlanningCurrentState, incoming: ApplicationPlanningCurrentState): ApplicationPlanningCurrentState {
+  if (!sameApplicationWorkspace(existing.application, incoming.application)) return existing
+  if (existing.threadId !== incoming.threadId) return existing
+  const next = reduceApplicationPlanningCurrentState(existing, { type: 'lifecycle_received',
+    applicationId: incoming.application.id, threadId: incoming.threadId, lifecycle: incoming.lifecycle })
+  return reduceApplicationPlanningCurrentState(next, { type: 'application_received',
+    applicationId: incoming.application.id, threadId: incoming.threadId, application: incoming.application })
 }
 
 // 从应用目录逐一读取生命周期，并返回全部未完成创建流程。

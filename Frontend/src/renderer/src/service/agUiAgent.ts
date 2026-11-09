@@ -66,7 +66,13 @@ export type SendWorkflowMessageOptions = {
   buildTaskRetry?: import('./buildTaskRetry').BuildTaskRetryRequest
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
-    | { action: 'continue' | 'retry_current_failure' | 'restart_initial_planning'; sourceRunId: string }
+    | { action: 'retry_current_failure'; sourceRunId: string }
+    | { action: 'continue'; sourceRunId: string; feedback?: {
+        request: string; conversationTarget?: import('../typings').PlanningConversationTarget
+      } }
+    | { action: 'restart_initial_planning'; sourceRunId: string; feedback?: {
+        request: string; conversationTarget?: import('../typings').PlanningConversationTarget
+      } }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void

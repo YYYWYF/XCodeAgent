@@ -20,6 +20,7 @@ from app.services.execution_failure_classifier import public_failure_diagnostic
 from app.services.execution_recovery import recovery_graph_for_execution
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.recovery_read_diagnostic import recovery_read_error, recovery_read_operation
+from app.services.recovery_checkpoint import checkpoint_thread_exists
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -133,10 +134,9 @@ async def _record_has_current_owner(workspace: str, record: DurableExecutionReco
         return record.run_id in lifecycle.active_executions
     if record.thread_id != lifecycle.initialization.thread_id:
         return False
-    if lifecycle.active_run_id:
-        return record.run_id == lifecycle.active_run_id
-    if lifecycle.ended_planning_execution is not None or str(lifecycle.initialization.status) not in {"failed", "running"}:
+    if lifecycle.ended_planning_execution is not None and lifecycle.ended_planning_execution.run_id == record.run_id:
         return False
+    # 当前线程最新执行负责定位 Run，生命周期中的镜像字段不再否决 checkpoint。
     from app.persistence.execution_recovery import get_latest_execution_for_thread
     latest = await get_latest_execution_for_thread(workspace, thread_id=record.thread_id)
     return latest is not None and latest.run_id == record.run_id
@@ -144,6 +144,8 @@ async def _record_has_current_owner(workspace: str, record: DurableExecutionReco
 
 async def reconcile_recovery_ownership(workspace: str) -> None:
     """仅由显式 Workspace Attach 补建索引并收口失效 owner；只读投影不调用这里。"""
+    from app.services.workspace_checkpoint_reconciliation import reconcile_missing_workspace_checkpoints
+    await reconcile_missing_workspace_checkpoints(workspace)
     from app.services.checkpoint_execution import index_missing_checkpoint_executions
     await index_missing_checkpoint_executions(workspace)
     for record in await list_recovery_projection_candidates(workspace, limit=16):
@@ -156,7 +158,9 @@ async def _resolve_candidate(
     *, reconcile_ownership: bool = False,
 ) -> ExecutionRecoveryProjectionCandidate | None:
     """为单条记录选择 Graph，FAILED 与 INTERRUPTED 均走各自 authority resolver。"""
-
+    if not await checkpoint_thread_exists(record.workspace, record.thread_id):
+        # 仅有执行索引或生命周期不能制造恢复任务，也不能为了查询建立空 checkpoint。
+        return None
     graph_factory = (
         application_planning_graph_for_request
         if record.execution_kind == "application_planning"

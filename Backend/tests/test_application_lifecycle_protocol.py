@@ -54,6 +54,7 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 "bootstrap_template_generation",
                 "retry_bootstrap_template_generation",
                 "workspace_attach",
+                "prepare_document_review",
                 "release_session_pending",
                 "cleanup_session_failed_executions",
                 "prepare_session_deletion",

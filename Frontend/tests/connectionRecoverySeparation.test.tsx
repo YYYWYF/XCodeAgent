@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './documentReviewRecovery.test'
 import { test, beforeEach } from 'node:test'
 import { recoveryStore } from '../src/renderer/src/service/recoveryStore'
 

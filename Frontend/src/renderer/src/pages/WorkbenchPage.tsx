@@ -1,4 +1,5 @@
 import { useApplicationConfigRefresh } from './useApplicationConfigRefresh'
+import { sameApplicationWorkspace } from '../service/applicationWorkspace'
 import { useWorkbenchEntry } from './useWorkbenchEntry'
 import { useWorkbenchPlanningCatalog } from './useWorkbenchPlanningCatalog'
 import { Layout, message, notification } from 'antd'
@@ -231,7 +232,7 @@ function WorkbenchPage({
         failWorkbenchEntry('configuration')
       }
     }
-    setWorkspaceApplication((prev) => (prev.id === application.id ? prev : application))
+    setWorkspaceApplication((prev) => (sameApplicationWorkspace(prev, application) ? prev : application))
     void syncConfiguration()
     return () => { active = false }
   }, [application, failWorkbenchEntry, markConfigurationLoaded])

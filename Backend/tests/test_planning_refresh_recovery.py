@@ -116,7 +116,8 @@ def _formal_confirmation_context() -> tuple[dict, dict, dict, dict]:
             },
         ],
     }
-    ui_designs = {"confirmation_status": "skipped", "pages": []}
+    # 页面确认上下文要求上游已确认；此用例只验证接口详情，不依赖 UI 页面引用。
+    ui_designs = {"confirmation_status": "confirmed", "pages": []}
     return technical_plan, requirement_spec, product_plan, ui_designs
 
 
@@ -576,6 +577,15 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
         identity = pending["draft_identity"]
         self._write_confirmed_formal("planning-formal-a", "a" * 64)
         self._write_abandoned_marker("planning-abandoned-a", "b" * 64)
+        # B 必须仍有当前执行；只有草稿文件但无执行时不再占用新任务入口。
+        lifecycle = load_application_lifecycle(self.workspace)
+        execution = WorkbenchExecution(scope="application", targetId="application", threadId=self.planning.thread_id,
+            ownerSessionId="session-refresh-owner", runId=self.planning.workflow_run_id,
+            phase="prepare_build_tasks", status=WorkbenchExecutionStatus.AWAITING_USER,
+            startedAt=self.planning.updated_at, updatedAt=self.planning.updated_at)
+        write_application_lifecycle(self.workspace, lifecycle.model_copy(update={
+            "active_executions": {execution.run_id: execution},
+        }))
 
         recovered = self._resolve()
 

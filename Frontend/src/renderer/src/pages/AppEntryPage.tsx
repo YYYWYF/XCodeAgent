@@ -21,6 +21,7 @@ import {
   type ApplicationPlanningCurrentEvent
 } from '../service/activeApplicationPlanning'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import { applicationWorkspaceKey, sameApplicationWorkspace } from '../service/applicationWorkspace'
 import { isTemplateGenerationOrphaned, isTemplateReconcileRetryable } from '../service/templateApi'
 import { stopProjectPreview } from '../service/projectLaunch'
 import { leavePreviewRuntime } from '../service/previewRuntime'
@@ -57,11 +58,12 @@ function AppEntryContent(): JSX.Element {
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
   const activePreviewWorkspaceRef = useRef('')
+  const openRequestRef = useRef(0)
   const {
     lifecycle: applicationLifecycle,
     mergeLifecycle: mergeApplicationLifecycle,
     resetLifecycle: resetApplicationLifecycle
-  } = useApplicationLifecycleStore(activeApplication?.id || '')
+  } = useApplicationLifecycleStore(activeApplication?.id || '', activeApplication?.workspaceRoot)
 
   // 切换到另一个应用工作区前停止上一个应用的生成项目预览。
   const stopPreviousPreviewIfNeeded = useCallback(async (nextApplication: ApplicationConfig) => {
@@ -105,6 +107,7 @@ function AppEntryContent(): JSX.Element {
     (event: ApplicationPlanningCurrentEvent): void => {
       planningController.dispatchPlanningEvent(event)
       if (activeApplication?.id !== event.applicationId) return
+      if (event.workspaceRoot !== undefined && !sameApplicationWorkspace(activeApplication, { id: event.applicationId, workspaceRoot: event.workspaceRoot })) return
       const lifecycle =
         event.type === 'reconcile_received'
           ? event.lifecycle
@@ -117,12 +120,13 @@ function AppEntryContent(): JSX.Element {
                 : undefined
       if (lifecycle) mergeApplicationLifecycle(lifecycle)
     },
-    [activeApplication?.id, mergeApplicationLifecycle, planningController.dispatchPlanningEvent]
+    [activeApplication, mergeApplicationLifecycle, planningController.dispatchPlanningEvent]
   )
 
-  const activePlanning = activeApplication
+  const registeredPlanning = activeApplication
     ? planningController.getPlanningState(activeApplication.id)
     : undefined
+  const activePlanning = sameApplicationWorkspace(activeApplication || undefined, registeredPlanning?.application) ? registeredPlanning : undefined
 
   const {
     deliverPlanningChunk,
@@ -162,7 +166,7 @@ function AppEntryContent(): JSX.Element {
       target?: import('../service/planningStageHandoff').PlanningStageTarget
     ): Promise<void> => {
       let planning = planningController.getPlanningState(application.id)
-      if (!planning) {
+      if (!planning || !sameApplicationWorkspace(planning.application, application)) {
         const lifecycle = await getApplicationLifecycle(application)
         const threadId = lifecycle.initialization.threadId
         if (!threadId) throw new Error('当前应用缺少原 planning thread，无法返回设计阶段。')
@@ -262,14 +266,18 @@ function AppEntryContent(): JSX.Element {
   // 所有应用都直接进入工作台；已保存但尚未完成创建规划的应用也恢复原会话。
   const handleOpenApplication = useCallback(
     async (application: ApplicationConfig): Promise<void> => {
+      const requestId = ++openRequestRef.current
       const existingPlanning = planningController.getPlanningState(application.id)
-      if (existingPlanning) {
+      if (existingPlanning && sameApplicationWorkspace(existingPlanning.application, application)) {
         await openWorkbench(existingPlanning.application, existingPlanning.lifecycle)
         return
       }
+      // 切换到克隆目录时只释放旧前端状态和订阅，原后端任务仍由自己的工作区持有。
+      if (existingPlanning) planningController.dismissPlanning(application.id)
 
       try {
         const lifecycle = await getApplicationLifecycle(application)
+        if (requestId !== openRequestRef.current) return
         const readyForWorkbench = lifecycle?.initialization?.stage === 'ready_for_workbench'
         // 进入开发门禁按「应用 + 当前分支」隔离：新迭代已就绪但本轮还没进过开发时，
         // 不能跳过规划状态恢复，否则就绪卡与"进入开发阶段"入口都不会出现。
@@ -293,6 +301,7 @@ function AppEntryContent(): JSX.Element {
         }
         await openWorkbench(application, lifecycle)
       } catch (error) {
+        if (requestId !== openRequestRef.current) return
         // 生命周期读取失败不能再成为工作台入口门禁；工作台内部仍可通过实时事件继续校准。
         console.warn('读取应用生命周期失败，直接进入工作台。', error)
         await openWorkbench(application)
@@ -324,8 +333,8 @@ function AppEntryContent(): JSX.Element {
           key={`${visiblePlanning.application.id}:${visiblePlanning.threadId}`}
           planning={visiblePlanning}
           streamingContent={streamingContent}
-          generatingTemplate={planningController.generatingAppIds.has(
-            visiblePlanning.application.id
+          generatingTemplate={planningController.generatingWorkspaceKeys.has(
+            applicationWorkspaceKey(visiblePlanning.application)
           )}
           onSubmit={(...args) =>
             planningRuntimeController.submitClarification(visiblePlanning.application.id, ...args)
@@ -335,7 +344,7 @@ function AppEntryContent(): JSX.Element {
           }
           onRetry={() => {
             const generationFailed = visiblePlanning.lifecycle.initialization.stage === 'application_template_generation_failed' ||
-              isTemplateGenerationOrphaned(visiblePlanning.lifecycle, planningController.generatingAppIds.has(visiblePlanning.application.id))
+              isTemplateGenerationOrphaned(visiblePlanning.lifecycle, planningController.generatingWorkspaceKeys.has(applicationWorkspaceKey(visiblePlanning.application)))
             if (generationFailed) {
               void planningController.retryTemplateGeneration(visiblePlanning.application.id)
             } else if (isTemplateReconcileRetryable(visiblePlanning.lifecycle, visiblePlanning.workflow?.summary.templatePreparation)) {
@@ -357,7 +366,7 @@ function AppEntryContent(): JSX.Element {
         <div
           aria-hidden={activeSurface !== 'workbench'}
           hidden={activeSurface !== 'workbench'}
-          key={activeApplication.id}
+          key={applicationWorkspaceKey(activeApplication)}
         >
           <UiReadVisibility.Provider value={activeSurface === 'workbench'}>
             <WorkbenchPage
@@ -404,7 +413,7 @@ function AppEntryContent(): JSX.Element {
               onRetryTemplateGeneration={() => {
                 void planningController.retryTemplateGeneration(activeApplication.id)
               }}
-              generatingTemplate={planningController.generatingAppIds.has(activeApplication.id)}
+              generatingTemplate={planningController.generatingWorkspaceKeys.has(applicationWorkspaceKey(activeApplication))}
               planningState={activePlanning}
               theme={theme}
             />

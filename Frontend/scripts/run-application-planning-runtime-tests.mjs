@@ -2,7 +2,13 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createRequire } from 'node:module'
 import { build } from 'vite'
+
+// 生产 Hook 回归需要 React 的测试调度能力，不能把 act 打包为 production 空实现。
+process.env.NODE_ENV = 'test'
+const require = createRequire(import.meta.url)
+const reactModules = ['react', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-dom', 'react-dom/server', 'react-test-renderer']
 
 const frontendRoot = path.resolve(import.meta.dirname, '..')
 const entryFile = path.join(frontendRoot, 'tests', 'applicationPlanningRuntime.test.ts')
@@ -15,13 +21,17 @@ try {
     configFile: false,
     logLevel: 'error',
     root: frontendRoot,
+    define: { 'process.env.NODE_ENV': JSON.stringify('test') },
     ssr: { noExternal: true },
     build: {
       emptyOutDir: true,
       minify: false,
       outDir: outputDirectory,
       ssr: entryFile,
-      rollupOptions: { output: { entryFileNames: path.basename(outputFile) } }
+      rollupOptions: { external: reactModules, output: {
+        entryFileNames: path.basename(outputFile),
+        paths: (id) => reactModules.includes(id) ? require.resolve(id) : id
+      } }
     }
   })
   await import(`${pathToFileURL(outputFile).href}?run=${Date.now()}`)

@@ -1561,7 +1561,7 @@ async def update_execution_status(
     status: DurableExecutionStatus,
     ended: bool = False,
 ) -> None:
-    """更新恢复记录状态，并仅在明确结束时写入 ended_at。"""
+    """更新恢复记录状态，离开失败态时清除失败证据，仅在明确结束时写入 ended_at。"""
 
     await initialize_execution_recovery_store(workspace)
     now = _utc_iso(datetime.now(timezone.utc))
@@ -1570,10 +1570,11 @@ async def update_execution_status(
             """
             UPDATE execution_records
             SET status = ?, updated_at = ?, ended_at =
-                CASE WHEN ? THEN COALESCE(ended_at, ?) ELSE ended_at END
+                CASE WHEN ? THEN COALESCE(ended_at, ?) ELSE ended_at END,
+                failure_json = CASE WHEN ? = 'failed' THEN failure_json ELSE NULL END
             WHERE run_id = ?
             """,
-            (status.value, now, int(ended), now if ended else None, run_id),
+            (status.value, now, int(ended), now if ended else None, status.value, run_id),
         )
 
 

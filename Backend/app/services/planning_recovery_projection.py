@@ -2,14 +2,14 @@
 
 import inspect
 from typing import Any
-from app.domain.application_lifecycle import ApplicationLifecycleStatus
-from app.domain.execution_recovery import DurableExecutionStatus, RecoveryExecutionError
+from app.domain.execution_recovery import RecoveryExecutionError
 from app.protocols.application_planning_run_lock import application_planning_run_lock
 from app.protocols.application_planning_interrupt import project_application_planning_interrupt
 from app.protocols.application_planning_recovery_projection import project_planning_recovery, project_application_planning_recovery_snapshot
 from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
 from app.services.application_lifecycle import load_application_lifecycle, application_lifecycle_payload
-from app.services.planning_recovery_read import read_planning_recovery_checkpoint, assert_planning_recovery_owner_unchanged
+from app.services.planning_recovery_read import read_planning_recovery_checkpoint
+from app.services.detached_execution import active_detached_run_for_thread
 from app.services.ui_design_generator import load_page_code
 from app.services.ui_design_manifest import present_ui_pages
 from app.services.ui_design_project_setup import ui_design_project_dir
@@ -18,6 +18,13 @@ from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_p
 
 async def read_planning_recovery(*, graph: Any, workspace: str, application_id: str | None, thread_id: str, snapshot: Any = None):
     """读取当前规划现场，不运行 Graph、不释放资源、不把查询登记为业务任务。"""
+    if snapshot is None and callable(graph):
+        from app.services.recovery_checkpoint import checkpoint_thread_exists
+        if not await checkpoint_thread_exists(workspace, thread_id):
+            if application_planning_run_lock(thread_id).locked() or active_detached_run_for_thread(workspace, thread_id):
+                raise RecoveryExecutionError("APPLICATION_PLANNING_CHECKPOINT_PENDING",
+                    "规划仍在执行，正在等待首个已提交进度，稍后将重新同步。")
+            return None, None, load_application_lifecycle(workspace)
     active_graph = (
         graph(
             workspace=workspace,
@@ -33,38 +40,28 @@ async def read_planning_recovery(*, graph: Any, workspace: str, application_id: 
     values = getattr(snapshot, "values", {})
     result = dict(values) if isinstance(values, dict) else {}
     if not result:
-        from app.persistence.execution_recovery import get_execution
         lifecycle = load_application_lifecycle(workspace)
-        source = await get_execution(workspace, lifecycle.active_run_id) if lifecycle and lifecycle.active_run_id else None
-        if (source is None and lifecycle and not lifecycle.active_run_id
-                and lifecycle.initialization.thread_id == thread_id
-                and lifecycle.initialization.status in {ApplicationLifecycleStatus.FAILED, ApplicationLifecycleStatus.RUNNING}):
-            # Lifecycle GET 可能已释放缺失入口的旧 owner；仍为同一失败 thread
-            # 返回提示，但只能选最后一次执行，不能借用其他会话或更早的失败。
-            from app.persistence.execution_recovery import list_executions_for_thread
-            records = await list_executions_for_thread(workspace, thread_id=thread_id,
-                                                       execution_kind="application_planning")
-            source = records[-1] if records else None
-        if application_planning_run_lock(thread_id).locked():
+        if application_planning_run_lock(thread_id).locked() or active_detached_run_for_thread(workspace, thread_id):
             # 首个 checkpoint 尚未提交时也不能把活跃 writer 误判为空白新任务。
             raise RecoveryExecutionError("APPLICATION_PLANNING_CHECKPOINT_PENDING",
                 "规划仍在执行，正在等待首个已提交进度，稍后将重新同步。")
-        if source and source.thread_id == thread_id and source.status in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
-            result = {"active_run_id": source.run_id, "workspace": workspace}
-        else:
-            return None, snapshot, lifecycle
-    lifecycle_before = load_application_lifecycle(workspace)
+        return None, snapshot, lifecycle
     checkpoint_run_id = str(result.get("active_run_id") or "").strip()
     # 当前 checkpoint 仅定位原执行；重试不再要求精确恢复 lineage。
     from app.persistence.execution_recovery import get_execution
     source = await get_execution(workspace, checkpoint_run_id) if checkpoint_run_id else None
-    if (lifecycle_before is not None and lifecycle_before.initialization.thread_id == thread_id
-            and lifecycle_before.active_run_id and lifecycle_before.active_run_id != checkpoint_run_id):
-        # 新 Run 已接管而 checkpoint 仍是旧确认时只展示真实运行，禁止重新开放旧门禁。
-        from app.services.checkpoint_execution import execution_is_live
-        active_source = await get_execution(workspace, lifecycle_before.active_run_id)
-        if active_source is None or active_source.thread_id != thread_id or not execution_is_live(active_source):
-            raise RecoveryExecutionError("APPLICATION_PLANNING_SNAPSHOT_CHANGED", "规划任务正在交接，稍后将重新同步最新状态。")
+    from app.persistence.execution_recovery import get_latest_execution_for_thread
+    from app.services.checkpoint_execution import execution_is_live
+    active_source = await get_latest_execution_for_thread(workspace, thread_id=thread_id)
+    accepted_run = active_detached_run_for_thread(workspace, thread_id)
+    if accepted_run and accepted_run != checkpoint_run_id and (
+        active_source is None or active_source.run_id != accepted_run
+    ):
+        # 新提交尚未写执行索引时也不能恢复上一轮确认；读取只等待现场，不启动新业务。
+        raise RecoveryExecutionError("APPLICATION_PLANNING_CHECKPOINT_PENDING",
+            "规划仍在执行，正在等待首个已提交进度，稍后将重新同步。")
+    if active_source and active_source.run_id != checkpoint_run_id and execution_is_live(active_source):
+        # 首个新 checkpoint 前只由实际运行登记证明交接，不用生命周期 Run 否决现有现场。
         from types import SimpleNamespace
         source = active_source
         checkpoint_run_id = source.run_id
@@ -109,9 +106,6 @@ async def read_planning_recovery(*, graph: Any, workspace: str, application_id: 
                     result["ui_designs"], product_plan
                 )
     lifecycle = load_application_lifecycle(workspace)
-    assert_planning_recovery_owner_unchanged(lifecycle_before, lifecycle,
-        allow_released_owner=projection.classification in {"blocked", "completed"}
-            or projection.reason_code == "APPLICATION_PLANNING_ENDED")
     if lifecycle is not None:
         result["lifecycle"] = application_lifecycle_payload(lifecycle)
     recovery_run_id = str(result.get("active_run_id") or f"recovery:{thread_id}")

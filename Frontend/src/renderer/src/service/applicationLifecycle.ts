@@ -16,6 +16,7 @@ type ApplicationLifecyclePayload = {
     | 'bootstrap_template_generation'
     | 'retry_bootstrap_template_generation'
     | 'workspace_attach'
+    | 'prepare_document_review'
     | 'prepare_session_deletion'
     | 'register_managed_database'
     | 'end_planning_execution'
@@ -266,12 +267,19 @@ export async function getApplicationLifecycle(
   // 每次冷读取前先 Attach：后端 get 始终只读，孤儿 Bootstrap 的回收只能由 Attach 完成。
   const request = (async (): Promise<ApplicationLifecycle> => {
     try {
-      await attachApplicationWorkspace(application, threadId)
-      return await runApplicationLifecycleAction(threadId, {
+      const scope = resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId, planningThreadId: resultSession.planningThreadId } : {}
+      await attachApplicationWorkspace(application, threadId, scope)
+      const lifecycle = await runApplicationLifecycleAction(threadId, {
         action: 'get',
         workspaceRoot,
-        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId, planningThreadId: resultSession.planningThreadId } : {})
+        ...scope
       })
+      const review = lifecycle.extensions?.recoverySnapshot?.documentReview
+      // 只由服务端文档判定触发确定性重建；该动作不生成、不确认，也不使用历史消息拼 State。
+      if (review?.status === 'blocked') throw new ApplicationLifecycleActionError('DOCUMENT_REVIEW_UNAVAILABLE', review.message || '当前文档尚不能建立审阅。')
+      return review?.status === 'available'
+        ? runApplicationLifecycleAction(threadId, { action: 'prepare_document_review', workspaceRoot, ...scope })
+        : lifecycle
     } catch (error) {
       // 发起新迭代会先删掉 lifecycle 文件再由前端重建；这一步中途失败（或文件被外部清理）
       // 会让 Attach 与 Get 双双失败，工作区从此打不开。用本应用已知身份补建一份再读：
@@ -315,25 +323,29 @@ export async function prepareSessionDeletion(
 // 接管指定工作区的中断 Bootstrap；同一工作区的并发恢复请求必须共用一次 AG-UI 调用。
 export async function attachApplicationWorkspace(
   application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
-  threadId = randomUUID()
+  threadId = randomUUID(),
+  scope: { sessionId?: string; sessionThreadId?: string; planningThreadId?: string } = {}
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
   if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
-  const currentRequest = workspaceAttachRequests.get(workspaceRoot)
+  // 定向校准当前会话现场，不能被应用级 Attach 或其他会话的在途请求合并掉。
+  const requestKey = JSON.stringify([workspaceRoot, scope.sessionId, scope.sessionThreadId, scope.planningThreadId])
+  const currentRequest = workspaceAttachRequests.get(requestKey)
   if (currentRequest) {
     return assertApplicationLifecycleOwnership(await currentRequest, application.id)
   }
 
   const request = runApplicationLifecycleAction(threadId, {
     action: 'workspace_attach',
-    workspaceRoot
+    workspaceRoot,
+    ...scope
   })
-  workspaceAttachRequests.set(workspaceRoot, request)
+  workspaceAttachRequests.set(requestKey, request)
   try {
     return assertApplicationLifecycleOwnership(await request, application.id)
   } finally {
-    if (workspaceAttachRequests.get(workspaceRoot) === request) {
-      workspaceAttachRequests.delete(workspaceRoot)
+    if (workspaceAttachRequests.get(requestKey) === request) {
+      workspaceAttachRequests.delete(requestKey)
     }
   }
 }

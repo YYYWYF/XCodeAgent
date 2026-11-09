@@ -6,6 +6,7 @@ import type {
   ApplicationPlanningCurrentState
 } from '../service/activeApplicationPlanning'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import { applicationWorkspaceKey, sameApplicationWorkspace } from '../service/applicationWorkspace'
 import {
   APPLICATION_TEMPLATE_GENERATION_ENABLED,
   ensureApplicationTemplateReadiness,
@@ -35,6 +36,7 @@ function notifyRepositoryBranch(outcome?: RepositoryBranchOutcome): void {
 }
 
 type UseApplicationTemplateGenerationOptions = {
+  getPlanningState: (applicationId: string) => ApplicationPlanningCurrentState | undefined
   dispatchPlanningEvent: (event: ApplicationPlanningCurrentEvent) => void
   hidePlanning: (applicationId: string) => void
   getVisiblePlanningId: () => string | undefined
@@ -54,11 +56,12 @@ type ApplicationTemplateGenerationController = {
     planning: ApplicationPlanningCurrentState
   ) => Promise<boolean>
   /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
-  generatingAppIds: ReadonlySet<string>
+  generatingWorkspaceKeys: ReadonlySet<string>
 }
 
 // 以应用 ID 隔离模板生成任务、生命周期提交和完成后的导航。
 export function useApplicationTemplateGeneration({
+  getPlanningState,
   dispatchPlanningEvent,
   hidePlanning,
   getVisiblePlanningId,
@@ -66,7 +69,7 @@ export function useApplicationTemplateGeneration({
   onOpenWorkbench
 }: UseApplicationTemplateGenerationOptions): ApplicationTemplateGenerationController {
   const tasksRef = useRef(new Map<string, Promise<boolean>>())
-  const [generatingAppIds, setGeneratingAppIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [generatingWorkspaceKeys, setGeneratingWorkspaceKeys] = useState<ReadonlySet<string>>(() => new Set())
 
   // 为单个应用生成模板文件，并复用同一应用尚未结束的幂等任务。
   const runApplicationTemplateFiles = useCallback(
@@ -75,15 +78,20 @@ export function useApplicationTemplateGeneration({
       if (!APPLICATION_TEMPLATE_GENERATION_ENABLED) return Promise.resolve(true)
 
       const applicationId = planning.application.id
-      const runningTask = tasksRef.current.get(applicationId)
+      const workspaceKey = applicationWorkspaceKey(planning.application)
+      /** 旧目录任务可完成后端工作，但不能覆盖新目录的索引、提示和当前界面。 */
+      const isCurrentWorkspace = (): boolean => sameApplicationWorkspace(planning.application, getPlanningState(applicationId)?.application)
+      if (!isCurrentWorkspace()) return Promise.resolve(false)
+      const runningTask = tasksRef.current.get(workspaceKey)
       if (runningTask) return runningTask
 
       const task = (async (): Promise<boolean> => {
-        setGeneratingAppIds((current) => new Set(current).add(applicationId))
+        setGeneratingWorkspaceKeys((current) => new Set(current).add(workspaceKey))
         // 新一轮模板任务开始时清掉上一轮临时错误，生命周期仍由后端权威快照驱动。
         dispatchPlanningEvent({
           type: 'clear_error',
           applicationId,
+          workspaceRoot: planning.application.workspaceRoot,
           threadId: planning.threadId
         })
         try {
@@ -91,6 +99,7 @@ export function useApplicationTemplateGeneration({
             ? await retryApplicationTemplateReadiness(planning.application, planning.threadId)
             : await ensureApplicationTemplateReadiness(planning.application, planning.threadId)
           const lifecycle = bootstrap.lifecycle
+          if (!isCurrentWorkspace()) return false
           const confirmedApplication = {
             ...planning.application,
             planningThreadId: planning.threadId,
@@ -106,16 +115,19 @@ export function useApplicationTemplateGeneration({
               : {})
           }
           const persistedApplication = await saveApplication(confirmedApplication)
+          if (!isCurrentWorkspace()) return false
           const shouldOpenWorkbench = getVisiblePlanningId() === applicationId
           dispatchPlanningEvent({
             type: 'application_received',
             applicationId,
+            workspaceRoot: planning.application.workspaceRoot,
             threadId: planning.threadId,
             application: persistedApplication
           })
           dispatchPlanningEvent({
             type: 'lifecycle_received',
             applicationId,
+            workspaceRoot: planning.application.workspaceRoot,
             threadId: planning.threadId,
             lifecycle
           })
@@ -131,13 +143,16 @@ export function useApplicationTemplateGeneration({
           notifyRepositoryBranch(bootstrap.repositoryBranch)
           return true
         } catch (reason) {
+          if (!isCurrentWorkspace()) return false
           console.error('[应用模板初始化失败]', reason)
           let connectionError: string | undefined
           try {
             const lifecycle = await getApplicationLifecycle(planning.application)
+            if (!isCurrentWorkspace()) return false
             dispatchPlanningEvent({
               type: 'lifecycle_received',
               applicationId,
+              workspaceRoot: planning.application.workspaceRoot,
               threadId: planning.threadId,
               lifecycle
             })
@@ -147,7 +162,7 @@ export function useApplicationTemplateGeneration({
             connectionError = lifecycleError instanceof Error ? lifecycleError.message : 'Backend 暂时不可用，无法同步模板状态。'
           }
           dispatchPlanningEvent({
-            type: 'template_generation_failed', applicationId, threadId: planning.threadId,
+            type: 'template_generation_failed', applicationId, workspaceRoot: planning.application.workspaceRoot, threadId: planning.threadId,
             error: reason instanceof Error ? reason.message : String(reason), connectionError
           })
           message.error(reason instanceof Error ? reason.message : String(reason))
@@ -155,27 +170,27 @@ export function useApplicationTemplateGeneration({
         }
       })()
 
-      tasksRef.current.set(applicationId, task)
+      tasksRef.current.set(workspaceKey, task)
       void task.then(
         () => {
-          if (tasksRef.current.get(applicationId) === task) {
-            tasksRef.current.delete(applicationId)
+          if (tasksRef.current.get(workspaceKey) === task) {
+            tasksRef.current.delete(workspaceKey)
           }
-          setGeneratingAppIds((current) => {
-            if (!current.has(applicationId)) return current
+          setGeneratingWorkspaceKeys((current) => {
+            if (!current.has(workspaceKey)) return current
             const next = new Set(current)
-            next.delete(applicationId)
+            next.delete(workspaceKey)
             return next
           })
         },
         () => {
-          if (tasksRef.current.get(applicationId) === task) {
-            tasksRef.current.delete(applicationId)
+          if (tasksRef.current.get(workspaceKey) === task) {
+            tasksRef.current.delete(workspaceKey)
           }
-          setGeneratingAppIds((current) => {
-            if (!current.has(applicationId)) return current
+          setGeneratingWorkspaceKeys((current) => {
+            if (!current.has(workspaceKey)) return current
             const next = new Set(current)
-            next.delete(applicationId)
+            next.delete(workspaceKey)
             return next
           })
         }
@@ -184,6 +199,7 @@ export function useApplicationTemplateGeneration({
     },
     [
       dispatchPlanningEvent,
+      getPlanningState,
       getVisiblePlanningId,
       hidePlanning,
       onApplicationLifecycleChange,
@@ -207,18 +223,20 @@ export function useApplicationTemplateGeneration({
         lifecycle = await getApplicationLifecycle(planning.application)
       } catch (reason) {
         const error = reason instanceof Error ? reason.message : '无法同步模板初始化状态。'
-        dispatchPlanningEvent({ type: 'template_generation_failed', applicationId: planning.application.id,
+        if (!sameApplicationWorkspace(planning.application, getPlanningState(planning.application.id)?.application)) return false
+        dispatchPlanningEvent({ type: 'template_generation_failed', applicationId: planning.application.id, workspaceRoot: planning.application.workspaceRoot,
           threadId: planning.threadId, error, connectionError: error })
         return false
       }
-      dispatchPlanningEvent({ type: 'lifecycle_received', applicationId: planning.application.id,
+      if (!sameApplicationWorkspace(planning.application, getPlanningState(planning.application.id)?.application)) return false
+      dispatchPlanningEvent({ type: 'lifecycle_received', applicationId: planning.application.id, workspaceRoot: planning.application.workspaceRoot,
         threadId: planning.threadId, lifecycle })
       onApplicationLifecycleChange?.(lifecycle)
       if (lifecycle.initialization.stage !== 'application_template_generation_failed') return false
       return runApplicationTemplateFiles({ ...planning, lifecycle }, true)
     },
-    [runApplicationTemplateFiles, dispatchPlanningEvent, onApplicationLifecycleChange]
+    [runApplicationTemplateFiles, dispatchPlanningEvent, getPlanningState, onApplicationLifecycleChange]
   )
 
-  return { generateApplicationTemplateFiles, generatingAppIds, retryApplicationTemplateFiles }
+  return { generateApplicationTemplateFiles, generatingWorkspaceKeys, retryApplicationTemplateFiles }
 }

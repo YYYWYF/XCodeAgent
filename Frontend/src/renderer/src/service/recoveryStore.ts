@@ -14,6 +14,7 @@ export type RecoverySnapshot = {
   checkpointAt?: string | null; executionUpdatedAt?: string | null; observedAt: string
   startedAt?: string | null
   workflow: WorkflowRunPayload | null; output: RecoveryOutput | null
+  documentReview?: { status: 'available' | 'blocked'; kind?: string; digest?: string; message?: string } | null
 }
 type RecoveryEntry = {
   lifecycle?: ApplicationLifecycle; connection: ConnectionState; syncError?: string

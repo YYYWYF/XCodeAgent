@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ApplicationPlanningCurrentEvent, ApplicationPlanningCurrentState } from '../service/activeApplicationPlanning'
+import { normalizeWorkspaceRoot, sameApplicationWorkspace } from '../service/applicationWorkspace'
 import {
   ApplicationPlanningRuntime,
   type ApplicationPlanningRuntimeDependencies
@@ -50,9 +51,9 @@ export type ApplicationPlanningRuntimesController = {
   subscribeStreamingContent: (applicationId: string, listener: (content: string) => void) => () => void
 }
 
-/** 应用和线程共同标识会话，换线程时绝不复用旧 Runtime。 */
-export function planningRuntimeKey(applicationId: string, threadId: string): string {
-  return `${applicationId}:${threadId}`
+/** 项目、工作区和线程共同标识会话；克隆目录即使同 ID、同线程也不复用旧 Runtime。 */
+export function planningRuntimeKey(applicationId: string, threadId: string, workspaceRoot: string | undefined): string {
+  return JSON.stringify([applicationId, normalizeWorkspaceRoot(workspaceRoot), threadId])
 }
 
 /** 在应用根部管理 Planning 执行器的生命周期，使后台运行独立于 Modal 挂载。 */
@@ -67,8 +68,8 @@ export function useApplicationPlanningRuntimes(
   const ensureRuntime = useCallback((planning: ApplicationPlanningCurrentState): ApplicationPlanningRuntime => {
     const applicationId = planning.application.id
     const current = optionsRef.current.getPlanningState(applicationId)
-    if (!current || current.threadId !== planning.threadId) throw new Error('当前 Planning Runtime 已失效。')
-    const key = planningRuntimeKey(applicationId, current.threadId)
+    if (!current || current.threadId !== planning.threadId || !sameApplicationWorkspace(current.application, planning.application)) throw new Error('当前 Planning Runtime 已失效。')
+    const key = planningRuntimeKey(applicationId, current.threadId, current.application.workspaceRoot)
     for (const [existingKey, runtime] of runtimesRef.current) {
       if (runtime.applicationId === applicationId && existingKey !== key) {
         runtime.dispose()
@@ -77,16 +78,21 @@ export function useApplicationPlanningRuntimes(
     }
     const existing = runtimesRef.current.get(key)
     if (existing) return existing
+    /** 工作区切换立即使旧回调失效，不等待 React effect 才 dispose。 */
+    const getCurrentWorkspaceState = (): ApplicationPlanningCurrentState | undefined => {
+      const next = optionsRef.current.getPlanningState(applicationId)
+      return next && sameApplicationWorkspace(next.application, current.application) ? next : undefined
+    }
     const runtime = new ApplicationPlanningRuntime({
       applicationId,
       threadId: current.threadId,
-      getCurrentState: () => optionsRef.current.getPlanningState(applicationId),
+      getCurrentState: getCurrentWorkspaceState,
       dispatchCurrentEvent: (event) => optionsRef.current.dispatchPlanningEvent(event),
       publishContent: (content) => optionsRef.current.publishContent(applicationId, content),
       publishReply: (reply) => optionsRef.current.publishReply(applicationId, reply),
       publishWorkflow: (workflow) => optionsRef.current.publishWorkflow(applicationId, workflow),
-      onTechnicalPlanConfirmed: (confirmation) => optionsRef.current.onTechnicalPlanConfirmed(applicationId, confirmation),
-      onRevisionContinuation: (handoff) => optionsRef.current.onRevisionContinuation(applicationId, handoff),
+      onTechnicalPlanConfirmed: (confirmation) => getCurrentWorkspaceState() ? optionsRef.current.onTechnicalPlanConfirmed(applicationId, confirmation) : Promise.resolve(false),
+      onRevisionContinuation: (handoff) => getCurrentWorkspaceState() ? optionsRef.current.onRevisionContinuation(applicationId, handoff) : Promise.resolve(),
       session: optionsRef.current.createSession?.(current.threadId)
     })
     runtimesRef.current.set(key, runtime)
@@ -96,7 +102,7 @@ export function useApplicationPlanningRuntimes(
   /** 只返回 Canonical State 当前线程对应的现有 Runtime。 */
   const getRuntime = useCallback((applicationId: string): ApplicationPlanningRuntime | undefined => {
     const current = optionsRef.current.getPlanningState(applicationId)
-    return current ? runtimesRef.current.get(planningRuntimeKey(applicationId, current.threadId)) : undefined
+    return current ? runtimesRef.current.get(planningRuntimeKey(applicationId, current.threadId, current.application.workspaceRoot)) : undefined
   }, [])
 
   /** 允许 startPlanning 同步返回后立即操作，无需等待 React effect 或 Modal。 */
@@ -112,6 +118,7 @@ export function useApplicationPlanningRuntimes(
     if (!current) throw new Error('当前规划状态已失效。')
     if (current.threadId === target.threadId && current.workflow) return current.workflow
     const workflow = await handoffPlanningStage(current, target)
+    if (!sameApplicationWorkspace(current.application, optionsRef.current.getPlanningState(applicationId)?.application)) throw new Error('工作区已切换，本次阶段交接不再更新当前界面。')
     optionsRef.current.dispatchPlanningEvent({ type: 'stage_thread_handed_off', applicationId,
       threadId: current.threadId, workflow })
     const next = optionsRef.current.getPlanningState(applicationId)
@@ -124,14 +131,14 @@ export function useApplicationPlanningRuntimes(
   useEffect(() => {
     for (const [key, runtime] of runtimesRef.current) {
       const current = optionsRef.current.getPlanningState(runtime.applicationId)
-      if (!current || current.threadId !== runtime.threadId) {
+      if (!current || current.threadId !== runtime.threadId || normalizeWorkspaceRoot(current.application.workspaceRoot) !== runtime.workspaceRoot) {
         runtime.dispose()
         runtimesRef.current.delete(key)
       }
     }
     for (const planning of options.activePlannings) {
       const current = optionsRef.current.getPlanningState(planning.application.id)
-      if (!current || current.threadId !== planning.threadId) continue
+      if (!current || current.threadId !== planning.threadId || !sameApplicationWorkspace(current.application, planning.application)) continue
       const runtime = ensureRuntime(current)
       void runtime.ensureStarted().catch((reason: unknown) => {
         console.error('[planning-runtime] ensureStarted failed', reason)

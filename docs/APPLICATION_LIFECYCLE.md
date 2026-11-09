@@ -7,6 +7,20 @@
 
 ## 权威边界
 
+执行恢复是可选能力，不是打开工作区或使用资产的前置条件。只按当前线程实际存在的 checkpoint 恢复；没有文件、没有线程现场时返回空恢复，不从 lifecycle 的 Run、运行状态或恢复索引补造执行。Lifecycle 的 `activeRunId` 不再与 checkpoint 的 Run 作恢复准入比对，交接期间由实际运行登记防止旧确认重开。应用、阶段/迭代及明确结束的业务边界仍须核对。
+
+显式 Workspace Attach 只释放无 checkpoint 且已退出的执行占用，保留资产正文和确认状态；正式 RequirementSpec、ProductPlan、TechnicalPlan 已确认时，可将无现场的阶段展示校准为工作台就绪，后续节点继续校验各自当前资产及原有确认门。无可恢复执行的 Pending Build DAG 不占用新任务入口，文件仍保留。真实 Graph、Worker、子进程、已接受提交及 UI 生成不能被当作旧占用释放。恢复存储读取故障保留原占用并报告诊断，不阻断基础 Attach，也不冒充没有 checkpoint。
+
+没有 checkpoint 但当前文件明确待确认时，scoped Get 只返回 `recoverySnapshot.documentReview` 提示。前端随后通过既有 Lifecycle AG-UI `prepare_document_review` 动作，按现有文档重建本机审阅 Run 和原确认门；该动作不调用模型、不重新生成、不自动确认。支持需求与产品联合文档、UI、TechnicalPlan、工作台 TechnicalPlan 修订草稿和 Pending Build DAG。当前草稿优先于旧正式版本；Attach 发现待确认草稿时不能将应用误标为已完成。没有待确认文档时保持空恢复，不要求补造生命周期字段或原电脑 checkpoint。
+
+`checkpointAvailable` 表示当前线程实际存在 root 现场，不能以 Workflow 投影是否为空代替。已有普通现场时不提供文档重建；只有现场确实缺失，或带私有 `document_review` 绑定的既有重建稿已过期时，才发现文档重建候选。会话冷读取通过 scoped Workspace Attach 同时传入 `sessionId/sessionThreadId`，`session_checkpoint_reconciliation.py` 校验当前 root 的工作区、应用及 owner 后，只补原 Run 的执行索引和缺失归属；不运行 Graph、不改 checkpoint、不分配新 Run。其他会话、明确结束、更新的提交和真实在途工作均不能被旧现场接管。无作用域 Attach 不扫描历史会话，Get 仍只读。
+
+`protocols/workflow/resume_source.py` 对相同原 Run、相同确认内容使用当前 lifecycle 交互凭据，避免 Attach 重新签发归属后仍从 checkpoint 的旧镜像取不到或取错令牌；内容不同的旧确认继续沿原过期校验拒绝。已退出任务的 `running` 索引可按真实现场收口，不重新登记已经完成或明确停止的执行。
+
+审阅配置摘要只包含 `auth.enable`、`authorization.enabled`、`datasource.type` 和内置数据库模式；仓库地址、显示名称、分支、配置 revision 及 JSON 序列化排版不使确认卡失效。正文和直接上游摘要继续保留。正常本机场景回归见 `tests.test_document_review_local_recovery`。
+
+重建只读取当前路径和当前存储格式。文档缺失、损坏或直接上游未确认时明确提示并保留文件，不生成替代内容。新审阅绑定文档与上游摘要，重复请求复用同一现场；外部修改使旧卡片失效，再同步可审阅新内容。原电脑 Run 和会话凭据不作为新确认依据；已有本机 checkpoint 仍沿原恢复，真实在途工作不能被抢占。Pending DAG 只重绑本机执行归属，保留任务正文与规划依据。导入本地项目从持久化 lifecycle 读取应用身份，仅登记本机索引，不重写项目配置及资产。跨目录 Git 克隆回归见 `tests.test_document_review_cross_workspace`、`tests.test_document_review_workbench`，客户端 AG-UI 请求链回归见 `Frontend/tests/documentReviewRecovery.test.ts`。
+
 `.devagentstudio/application-lifecycle.json` 是用户可见、跨会话应用初始化、工作台执行和资源锁的持久化权威来源。应用索引只负责统一列出和打开应用，不保存阶段准入事实；设计、计划或开发阶段均可进入工作台。`checkpoints.sqlite` 继续负责 LangGraph 技术断点；RequirementSpec、ProductPlan、UiDesign 和 TechnicalPlan 各自负责正式内容与确认状态；Build DAG、ExecutionRun 和 TestReport 继续负责执行和测试事实。
 
 生命周期文件只承担冷启动、断线重连和显式校准，不作为渲染进程的实时轮询源。后端每次原子写入成功后，必须先通过主 Workflow AG-UI 流发送独立的 `application-lifecycle` 自定义事件，再继续投影对应节点或控制动作。工作台顶层 application store 按应用标识与单调 `revision` 合并冷启动读取、重连校准和实时事件；页面控制栏、应用大纲及 API 大纲只消费这一个 store。较旧的文件读取结果不得覆盖更新的实时 revision。

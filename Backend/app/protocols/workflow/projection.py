@@ -650,6 +650,7 @@ def _public_workflow_state(
             "design_revision_intent",
             "design_interaction_context",
             "application_planning_recovery_boundary",
+            "document_review",
             "technical_plan_candidate",
             "technical_plan_candidate_sha256",
             # 技术规划修复候选及错误只用于检查点内的自动修复，不能成为正式工件或公开状态。

@@ -12,6 +12,18 @@
   background: var(--wb-canvas);
 }
 
+// 停止提示与下方输入框连续展示时只保留 8px，避免两层 Composer 留白叠加。
+.@{class-prefix}-ai-chat-composer.@{class-prefix}-stopped-planning-notice:has(
+  + .@{class-prefix}-ai-chat-composer
+) {
+  padding-bottom: 0;
+
+  + .@{class-prefix}-ai-chat-composer {
+    margin-top: 0;
+    padding-top: 8px;
+  }
+}
+
 .@{class-prefix}-ai-chat-composer-column {
   display: flex;
   width: min(100%, 1080px);

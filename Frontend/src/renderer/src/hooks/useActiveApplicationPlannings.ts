@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { message } from 'antd'
 import {
   loadActiveApplicationPlannings,
+  mergeRecoveredApplicationPlanning,
   reduceApplicationPlanningCurrentState,
   type ApplicationPlanningCurrentEvent,
   type ApplicationPlanningCurrentState
@@ -27,8 +28,8 @@ type ActiveApplicationPlanningsController = {
   getPlanningState: (applicationId: string) => ApplicationPlanningCurrentState | undefined
   /** 只隐藏规划 Modal（清 visiblePlanningId），不删除 activePlannings 中的 planning。 */
   hidePlanning: (applicationId: string) => void
-  /** 当前正在生成模板的应用 ID 集合（驱动前端加载态卡片）。 */
-  generatingAppIds: ReadonlySet<string>
+  /** 当前正在生成模板的工作区集合（驱动前端加载态卡片）。 */
+  generatingWorkspaceKeys: ReadonlySet<string>
   onTechnicalPlanConfirmed: (applicationId: string) => Promise<boolean>
   retryTemplateGeneration: (applicationId: string) => Promise<boolean>
   returnHome: () => void
@@ -95,19 +96,7 @@ export function useActiveApplicationPlannings({
         const retainedCurrent = current.map((existing) => {
           const incoming = recoveredByApplication.get(existing.application.id)
           // 冷恢复只能补充同线程的应用信息与更新 lifecycle，不能替换已存在的实时线程或 workflow。
-          if (!incoming || existing.threadId !== incoming.threadId) return existing
-          const withLifecycle = reduceApplicationPlanningCurrentState(existing, {
-            type: 'lifecycle_received',
-            applicationId: incoming.application.id,
-            threadId: incoming.threadId,
-            lifecycle: incoming.lifecycle
-          })
-          return reduceApplicationPlanningCurrentState(withLifecycle, {
-            type: 'application_received',
-            applicationId: incoming.application.id,
-            threadId: incoming.threadId,
-            application: incoming.application
-          })
+          return incoming ? mergeRecoveredApplicationPlanning(existing, incoming) : existing
         })
         return [
           ...retainedCurrent,
@@ -203,9 +192,10 @@ export function useActiveApplicationPlannings({
     (): string | undefined => visiblePlanningIdRef.current,
     []
   )
-  const { generateApplicationTemplateFiles, generatingAppIds, retryApplicationTemplateFiles } =
+  const { generateApplicationTemplateFiles, generatingWorkspaceKeys, retryApplicationTemplateFiles } =
     useApplicationTemplateGeneration({
       dispatchPlanningEvent,
+      getPlanningState,
       hidePlanning,
       getVisiblePlanningId,
       onApplicationLifecycleChange,
@@ -283,7 +273,7 @@ export function useActiveApplicationPlannings({
     dismissPlanning,
     getPlanningState,
     hidePlanning,
-    generatingAppIds,
+    generatingWorkspaceKeys,
     onTechnicalPlanConfirmed,
     retryTemplateGeneration,
     returnHome,

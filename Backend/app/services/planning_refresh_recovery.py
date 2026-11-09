@@ -150,6 +150,9 @@ def _pending_is_inactive(workspace: str, identity: Any) -> bool:
     except (OSError, TypeError, ValueError):
         # 生命周期损坏时没有可验证的 Abandon 身份，不把未知状态误判为终态。
         lifecycle = None
+    if lifecycle is not None and not lifecycle.active_executions:
+        # 草稿资产可以保留，但没有可恢复执行时不再占用新任务入口或发布旧确认操作。
+        return True
     # End 保留草稿供原任务继续，但不能让它继续占用全应用输入或展示确认动作。
     # 继续成功入场会原子消费该归档，原确认门随后重新接管 Pending；不自动确认或删除草稿。
     if lifecycle and identity.workflow_run_id in lifecycle.ended_executions:

@@ -39,7 +39,7 @@ export default function StoppedPlanningNotice({ application, stopped, onLifecycl
     if (continuing || disabled || availability.checking) return
     void availability.check()
   }
-  return <div className={cx('ai-chat-composer')}>
+  return <div className={`${cx('ai-chat-composer')} ${cx('stopped-planning-notice')}`}>
     <div className={cx('ai-chat-composer-column')}>
       <EndedTaskNotice mode="stopped_generation" unchanged={availability.unchanged}
         checkingWorkspace={availability.checking} continuing={continuing}

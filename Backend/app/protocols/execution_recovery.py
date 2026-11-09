@@ -96,6 +96,7 @@ def execution_recovery_capabilities() -> dict[str, Any]:
                     "incidentId": "backend-issued current recovery incident",
                     "actionId": "backend-issued recovery action",
                     "sourceRunId": "current source hint; restart_initial_planning requires the current ended initial creation",
+                    "feedback": "optional {request, conversationTarget?}, for restart_initial_planning or continue of a stopped formal revision; regenerated artifacts require confirmation",
                 },
             },
             "clientSelectedFields": ["incidentId", "actionId", "sourceRunId"],
@@ -136,6 +137,13 @@ def build_execution_recovery_ag_ui_stream(
             graph = await recovery_graph_for_execution(source)
             from app.services.checkpoint_execution import resolve_checkpoint_source
             source = await resolve_checkpoint_source(source, graph)
+            feedback = (payload.get("forwardedProps") or {}).get("executionRecovery", {}).get("feedback")
+            if feedback is not None and source.run_id != source_run_id:
+                raise ValueError("停止的规划已被其他执行替换，请同步后重新提交补充意见。")
+            if feedback is not None:
+                from app.services.initial_planning_feedback import InitialPlanningFeedback
+
+                feedback = InitialPlanningFeedback.model_validate(feedback)
             allow_stopped = action == "continue" and source.status is DurableExecutionStatus.CANCELLED
             from app.services.ended_planning import ended_planning_available
             stopped_planning = (source.execution_kind == "application_planning"
@@ -147,7 +155,7 @@ def build_execution_recovery_ag_ui_stream(
                 raise RecoveryExecutionError("RECOVERY_SOURCE_NOT_ACTIONABLE", "原执行未失败或中断，请同步当前状态。")
             from app.services.business_node_retry import prepare_business_node_retry
             context = await prepare_business_node_retry(source, graph, allow_stopped=allow_stopped,
-                restart_initial_planning=restart_initial)
+                restart_initial_planning=restart_initial, initial_feedback=feedback)
             async for frame in _native_recovery_stream(context, accept):
                 yield frame
             return
@@ -389,12 +397,12 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
             "executionRecovery 必须包含 workspaceRoot 和对象值。",
         )
     unexpected = sorted(
-        set(recovery) - {"action", "sourceRunId", "incidentId", "actionId"}
+        set(recovery) - {"action", "sourceRunId", "incidentId", "actionId", "feedback"}
     )
     if unexpected:
         raise RecoveryExecutionError(
             "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "executionRecovery 只允许 action、incidentId、actionId 和 sourceRunId。",
+            "executionRecovery 只允许 action、incidentId、actionId、sourceRunId 和 feedback。",
         )
     forbidden = sorted(_FORBIDDEN_RECOVERY_FIELDS.intersection(recovery))
     if forbidden:
@@ -403,6 +411,12 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
             "executionRecovery 不允许客户端提交：" + ", ".join(forbidden),
         )
     action = str(recovery.get("action") or "")
+    if "feedback" in recovery:
+        from app.services.initial_planning_feedback import InitialPlanningFeedback
+
+        if action not in {"restart_initial_planning", "continue"}:
+            raise ValueError("补充意见只能用于已停止规划的继续或首次重新生成。")
+        InitialPlanningFeedback.model_validate(recovery["feedback"])
     if action not in {"execute", "continue", "retry_current_failure", "restart_initial_planning"}:
         raise RecoveryExecutionError(
             "INVALID_EXECUTION_RECOVERY_REQUEST",

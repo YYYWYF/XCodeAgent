@@ -4,7 +4,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from langgraph.checkpoint.memory import InMemorySaver
 from app.domain.application_lifecycle import ApplicationInitialization
@@ -123,6 +123,8 @@ class ConversationNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("app.protocols.direct_modification.direct_modification_graph_for_request", factory),
                 patch("app.graph.direct_modification_workflow.direct_modification_graph_for_request", factory),
+                # 本组有真实内存 checkpoint，磁盘存在性由可选恢复的 SQLite 用例单独覆盖。
+                patch("app.services.execution_recovery_projection.checkpoint_thread_exists", AsyncMock(return_value=True)),
             ):
                 if seed_old_confirmation:
                     # 在真实同 thread checkpoint 中保留上一轮确认，验证协议新输入主动清空。

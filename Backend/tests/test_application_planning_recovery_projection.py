@@ -148,7 +148,8 @@ class ApplicationPlanningRecoveryProjectionTests(unittest.IsolatedAsyncioTestCas
         workflow_run_registry.register(new_source.run_id, asyncio.current_task(), workspace=str(self.workspace), thread_id=new_source.thread_id)
         try:
             with (patch("app.services.execution_recovery_scanner.reconcile_workspace_recovery", new=AsyncMock()),
-                  patch("app.persistence.execution_recovery.get_execution", new=AsyncMock(return_value=new_source))):
+                  patch("app.persistence.execution_recovery.get_execution", new=AsyncMock(return_value=new_source)),
+                  patch("app.persistence.execution_recovery.get_latest_execution_for_thread", new=AsyncMock(return_value=new_source))):
                 content = "".join([frame async for frame in _build_application_planning_recovery_ag_ui_stream(
                     graph=graph, payload={"threadId": new_source.thread_id, "runId": "read-new-owner"},
                     recovery_input={"action": "get", "workspaceRoot": str(self.workspace), "applicationId": "planning-app"}, accept=None)])
@@ -244,8 +245,8 @@ class ApplicationPlanningRecoveryProjectionTests(unittest.IsolatedAsyncioTestCas
         self.assertEqual(projection.classification, "stopped")
         self.assertFalse(projection.user_action_required)
 
-    async def test_released_failed_owner_still_gets_missing_entry_notice(self) -> None:
-        """先读 lifecycle 释放 owner 后，同一失败 thread 仍显示无入口提示。"""
+    async def test_failed_owner_without_checkpoint_is_not_restored(self) -> None:
+        """没有 checkpoint 就跳过恢复，不能仅凭失败索引制造一张阻塞旧任务卡。"""
         lifecycle = create_application_lifecycle(application_id="planning-app", application_name="验收",
             initialization_thread_id=self.source.thread_id)
         lifecycle = lifecycle.model_copy(update={"initialization": lifecycle.initialization.model_copy(
@@ -270,8 +271,8 @@ class ApplicationPlanningRecoveryProjectionTests(unittest.IsolatedAsyncioTestCas
                 recovery_input={"action": "get", "workspaceRoot": str(self.workspace),
                                 "applicationId": "planning-app"}, accept=None)]
         content = "".join(frames)
-        self.assertIn("RETRY_ENTRY_NOT_FOUND", content)
-        self.assertIn("找不到恢复入口，请手动发起流程。", content)
+        self.assertIn('"checkpointAvailable":false', content)
+        self.assertNotIn("RETRY_ENTRY_NOT_FOUND", content)
         self.assertNotIn('"type":"RUN_ERROR"', content)
 
     def _snapshot(self, boundary: ApplicationPlanningRecoveryBoundary) -> object:

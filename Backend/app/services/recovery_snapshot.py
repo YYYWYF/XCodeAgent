@@ -27,6 +27,32 @@ async def project_recovery_snapshot(*, workspace: str, application_id: str | Non
     else:
         from app.services.session_workflow_projection import read_session_recovery
         workflow, checkpoint, source = await read_session_recovery(workspace, session_id=session_id or "", thread_id=thread_id)
+    from app.services.document_review_assets import find_document_review, document_review_is_current
+    from app.services.recovery_checkpoint import checkpoint_thread_exists
+    checkpoint_present = bool(getattr(checkpoint, "values", None)) or await checkpoint_thread_exists(workspace, thread_id)
+    review = None
+    identity = (getattr(checkpoint, "values", {}) or {}).get("document_review")
+    stale_review = False
+    try:
+        if identity and not document_review_is_current(workspace, identity):
+            # 仅在响应中撤销已过期的确认；重建仍通过明确 AG-UI 动作进行。
+            workflow = None
+            stale_review = True
+        if not workflow and (not checkpoint_present or stale_review):
+            # 已存在其他本机执行现场时不能将其草稿转移给当前新会话。
+            owned_elsewhere = False
+            if not planning and before:
+                for item in before.active_executions.values():
+                    if item.thread_id != thread_id and await checkpoint_thread_exists(workspace, item.thread_id):
+                        owned_elsewhere = True
+                        break
+            candidate = None if owned_elsewhere else find_document_review(workspace, planning=planning)
+            if candidate:
+                review = {"status": "available", "kind": candidate.kind, "digest": candidate.digest}
+    except (OSError, ValueError) as exc:
+        # 重建后若文件被外部改坏，也只撤销旧确认并呈现内容问题，不冒充后端失联。
+        workflow = None
+        review = {"status": "blocked", "message": str(exc)}
     output = await latest_execution_output(workspace, thread_id, session_id)
     if output:
         # 输出只有文字和过程，统一恢复只以本轮 checkpoint 解释器的 Workflow 为权威。
@@ -48,9 +74,9 @@ async def project_recovery_snapshot(*, workspace: str, application_id: str | Non
     return {"applicationId": after.application.id if after else application_id,
         "threadId": thread_id, "sessionId": session_id, "kind": "planning" if planning else "session",
         "lifecycleRevision": after.revision if after else 0,
-        "checkpointAvailable": bool(workflow), "checkpointId": config.get("checkpoint_id"),
+        "checkpointAvailable": checkpoint_present, "checkpointId": config.get("checkpoint_id"),
         "checkpointAt": getattr(checkpoint, "created_at", None),
         "executionUpdatedAt": source.updated_at.isoformat() if source else None,
         "startedAt": source.started_at.isoformat() if source else (output or {}).get("startedAt"),
         "observedAt": datetime.now(timezone.utc).isoformat(),
-        "workflow": workflow, "output": output}
+        "workflow": workflow, "output": output, "documentReview": review}

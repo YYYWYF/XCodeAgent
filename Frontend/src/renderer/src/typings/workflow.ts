@@ -1389,6 +1389,7 @@ export type ApplicationLifecycle = {
     stage: ApplicationLifecycleStage
     workspaceUnchanged: boolean
     canRestart: boolean
+    canSubmitFeedback?: boolean
   } | null
   resourceLocks?: {
     application?: ExecutionResourceLock

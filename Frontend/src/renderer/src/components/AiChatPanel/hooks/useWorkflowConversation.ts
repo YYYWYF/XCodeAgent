@@ -728,6 +728,7 @@ export function useWorkflowConversation({
   activeSessionRef.current = activeSession
   activeInputRef.current = { key: activeSession?.key || draftKey, draft }
   const [recoveryErrors, setRecoveryErrors] = useState<Record<string, string | undefined>>({})
+  const recoveryReadErrorsRef = useRef<Record<string, string>>({})
   const recoveryKey = recoveryStore.key(application.workspaceRoot || '', application.id,
     activeSession?.threadId || draftKey, activeSession?.sessionId)
   recoveryStore.get(recoveryKey, applicationLifecycle)
@@ -1106,8 +1107,18 @@ export function useWorkflowConversation({
       }
       const projectionError = executionRecoveryReadError(lifecycle)
       if (projectionError) {
-        if (activeSession) setRecoveryErrorForSession(activeSession.key, projectionError)
+        if (resultSession) {
+          recoveryReadErrorsRef.current[sessionKey] = projectionError
+          setRecoveryErrorForSession(sessionKey, projectionError)
+        }
         return false
+      }
+      // 读取恢复正常即撤下本次会话的旧读取错误，不依赖聊天输出变化，也不清除其他操作失败。
+      const previousReadError = recoveryReadErrorsRef.current[sessionKey]
+      if (previousReadError) {
+        setRecoveryErrors((current) => current[sessionKey] === previousReadError
+          ? { ...current, [sessionKey]: undefined } : current)
+        delete recoveryReadErrorsRef.current[sessionKey]
       }
       return true
     } catch (error) {
@@ -2123,6 +2134,8 @@ export function useWorkflowConversation({
             sourceConversationThreadId: sourceIdentity.threadId,
             sourceRunId: workflow.runId
           })
+          // 同一正式交接已成功，来源会话不再保留上次交接失败的底部错误。
+          setErrors((current) => ({ ...current, [activeRuntimeKey || draftKey]: undefined }))
           return true
         } catch (error) {
           // handoff 失败时把原因写回来源会话，避免按钮点击后只有无反馈的静默 Promise rejection。
@@ -2143,6 +2156,7 @@ export function useWorkflowConversation({
       // 技术修订同样由应用级 Planning Runtime 执行，避免会话结果与确认区当前状态分叉。
       try {
         await onStartWorkbenchPlanRevision(revisionInput)
+        setErrors((current) => ({ ...current, [activeRuntimeKey || draftKey]: undefined }))
         return true
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)

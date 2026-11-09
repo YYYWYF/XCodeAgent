@@ -70,6 +70,13 @@ async def read_resume_source(graph: Any, payload: dict[str, Any], reference: Wor
     latest = await get_latest_execution_for_thread(workspace, thread_id=reference.threadId)
     if latest is None or latest.run_id != source.run_id or latest.updated_at != source.updated_at:
         raise ValueError("读取期间任务状态已变化，请重新同步。")
+    # Attach 补回同一确认的归属后，用当前凭据替换旧镜像；内容不同的卡片仍沿原过期校验拒绝。
+    from app.services.application_lifecycle import load_application_lifecycle, application_lifecycle_payload
+    lifecycle = load_application_lifecycle(workspace)
+    execution = lifecycle.active_executions.get(source.run_id) if lifecycle else None
+    pending = execution.pending_interaction if execution else None
+    if pending and pending.payload == values.get("clarification"):
+        values["lifecycle"] = application_lifecycle_payload(lifecycle)
     # Graph reducer 管理的累计轨迹留在原 checkpoint，不能重复注入导致历史翻倍。
     for key in ("timeline", "build_events", "test_events", "code_review_events", "code_change_sets"):
         values.pop(key, None)

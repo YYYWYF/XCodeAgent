@@ -186,6 +186,8 @@ def prepare_application_planning_review_resume(
 
     payload = application_planning_review_payload(state, node_name)
     submission = ApplicationPlanningInteraction.model_validate(interrupt(payload))
+    from app.services.document_review_assets import require_current_document_review
+    require_current_document_review(state)
     if submission.gate_id != payload["gateId"]:
         raise ValueError("提交的创建规划确认卡已经过期，请刷新后重试。")
     if submission.artifact != payload["artifact"]:
@@ -207,6 +209,8 @@ def prepare_application_planning_review_resume(
         return ApplicationPlanningReviewResumeDecision(
             update={
                 **runtime_update,
+                # 已明确授权新修改，后续生成不再继承旧文档的重建绑定。
+                "document_review": {},
                 # design_change 会提前跳转到意图分析；在跳转前就消费旧 START
                 # 指令，避免意图分析失败时 checkpoint 继续保留错误入口。
                 "resume_from": "",
@@ -236,6 +240,8 @@ def prepare_application_planning_review_resume(
         business_request = submission.request.strip()
     update: dict[str, Any] = {
         **runtime_update,
+        # 显式动作通过版本核验后，后续正常确认/修改不再继承本轮重建绑定。
+        "document_review": {},
         # 原生 interrupt 已精确决定恢复节点，本轮开始后必须消费旧 START 指令。
         "resume_from": "",
         "request": business_request,

@@ -114,9 +114,11 @@ _preparations: set[asyncio.Task] = set()
 _accept_locks: dict[str, asyncio.Lock] = {}
 
 
-def active_detached_count() -> int:
+def active_detached_count(workspace: str | None = None) -> int:
     """退出检查也覆盖接受事务及结果落盘，不能只观察已经登记的 Graph。"""
-    return len(_preparations) + sum(not item.finished for item in _executions.values())
+    root = str(Path(workspace).resolve()) if workspace else None
+    return len(_preparations) + sum(not item.finished for (key, _), item in _executions.items()
+                                    if root is None or key == root)
 
 
 def _finish_preparation(task: asyncio.Task) -> None:
@@ -132,6 +134,15 @@ def background_execution_task(run_id: str, workspace: str | None = None) -> asyn
         actual_id = (execution.output.value.get("start") or {}).get("runId", request_id)
         if run_id in {request_id, actual_id} and (not workspace or root == str(Path(workspace).resolve())):
             return execution.task
+    return None
+
+
+def active_detached_run_for_thread(workspace: str, thread_id: str) -> str | None:
+    """读取已接受且未收口的线程提交，用于首个业务 checkpoint 前保护旧确认门。"""
+    root = str(Path(workspace).resolve())
+    for (key, request_id), execution in _executions.items():
+        if key == root and execution.record["thread_id"] == thread_id and not execution.finished:
+            return (execution.output.value.get("start") or {}).get("runId", request_id)
     return None
 
 

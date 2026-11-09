@@ -27,6 +27,10 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
 
         self._temporary_workspace = tempfile.TemporaryDirectory()
         self.workspace = Path(self._temporary_workspace.name)
+        # 本组专测投影诊断及动作，真实现场缺失边界由 optional_checkpoint_recovery 覆盖。
+        exists = patch("app.services.execution_recovery_projection.checkpoint_thread_exists", AsyncMock(return_value=True))
+        exists.start()
+        self.addCleanup(exists.stop)
 
     def tearDown(self) -> None:
         """释放投影测试的临时工作区。"""
@@ -156,9 +160,12 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_old_planning_owner_is_not_decoded_or_republished(self) -> None:
         """当前线程已由新 Run 接管时，旧等待记录不能读取历史 checkpoint 或重新生成恢复卡。"""
         record = self._record("old-run").model_copy(update={"execution_kind": "application_planning"})
-        lifecycle = SimpleNamespace(initialization=SimpleNamespace(thread_id=record.thread_id), active_run_id="new-run")
+        lifecycle = SimpleNamespace(initialization=SimpleNamespace(thread_id=record.thread_id),
+                                    active_run_id="stale-run", ended_planning_execution=None)
         with patch("app.services.execution_recovery_projection.load_application_lifecycle", return_value=lifecycle), \
                 patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[record])), \
+                patch("app.persistence.execution_recovery.get_latest_execution_for_thread",
+                      AsyncMock(return_value=record.model_copy(update={"run_id": "new-run"}))), \
                 patch("app.services.execution_recovery_projection._resolve_candidate", AsyncMock()) as resolve:
             projection = await resolve_execution_recovery_projection(str(self.workspace))
         self.assertEqual(projection.candidates, [])

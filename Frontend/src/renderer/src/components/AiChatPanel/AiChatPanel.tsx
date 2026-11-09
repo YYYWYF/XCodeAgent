@@ -96,7 +96,7 @@ import SessionExecutionLockDock from './components/SessionExecutionLockDock'
 import PlanningHistoryNotice from './components/PlanningHistoryNotice'
 import PlanningTaskNotice from './components/PlanningTaskNotice'
 import { planningTaskBlock } from './planningTaskAdmission'
-import { planningStageAccess, planningStageEntryTransferred, planningSessionOwnsThread, stoppedPlanningForSession } from './planningStageAccess'
+import { planningStageAccess, planningStageEntryTransferred, planningSessionOwnsThread, stoppedPlanningForSession, stoppedPlanningAcceptsFeedback } from './planningStageAccess'
 import StoppedPlanningNotice from './components/StoppedPlanningNotice'
 import { shouldPreserveTechnicalPlanningReply } from '../../service/technicalPlanningConversation'
 import DocPanel from './components/DocPanel'
@@ -1771,6 +1771,7 @@ export default function AiChatPanel({
   const stoppedPlanning = stoppedPlanningForSession({
     phase: activeWorkbenchPhase, lifecycle: applicationLifecycle, session: activeSession
   })
+  const stoppedPlanningFeedbackAvailable = stoppedPlanningAcceptsFeedback(stoppedPlanning)
   const developmentPlanningBlock = activeWorkbenchPhase === 'development'
     ? planningTaskBlock(applicationLifecycle) : undefined
 
@@ -5711,7 +5712,8 @@ export default function AiChatPanel({
                   error={planningState?.recoveryActionError || planningState?.syncError}
                   onContinue={() => onRetryPlanning?.()} onRestart={() => stoppedPlanning.canRestart
                     ? onRetryPlanning?.(true) : switchPhase('development')} />
-              ) : planningHistoryOnly ? (
+              ) : null}
+              {stoppedPlanning && !stoppedPlanningFeedbackAvailable ? null : planningHistoryOnly ? (
                 <PlanningHistoryNotice access={planningAccess} onReturn={() => {
                   const destination = planningAccess.destination
                   if (!destination) return

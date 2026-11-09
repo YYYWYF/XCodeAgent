@@ -900,6 +900,7 @@ def claim_application_planning_run_for_recovery(
     expected_lifecycle_revision: int | None,
     source_run_id: str | None = None,
     restart_initial_planning: bool = False,
+    generation_stage: ApplicationLifecycleStage | None = None,
 ) -> ApplicationLifecycle:
     """以 lifecycle revision CAS 让 pre-ownership child 取得运行时 ownership。"""
 
@@ -923,11 +924,22 @@ def claim_application_planning_run_for_recovery(
             )
         if current.active_run_id == new_run_id:
             return current
+        if generation_stage is not None:
+            from app.services.ended_planning import stopped_planning_feedback_available
+
+            if not source_run_id or not stopped_planning_feedback_available(workspace, current,
+                    run_id=source_run_id, thread_id=thread_id):
+                raise ApplicationLifecycleConflictError("停止的规划已变化，不能提交本轮补充意见。")
         if source_run_id is not None:
             from app.services.ended_planning import restore_ended_planning
 
             current = restore_ended_planning(workspace, current, source_run_id=source_run_id,
                 thread_id=thread_id, restart_initial=restart_initial_planning)
+        if generation_stage is not None:
+            # 补充意见重开生成，保留迭代和会话身份，绝不恢复上一版的确认权限。
+            current = current.model_copy(update={"initialization": current.initialization.model_copy(update={
+                "stage": generation_stage, "status": ApplicationLifecycleStatus.RUNNING,
+            }), "error": None})
         if not str(new_run_id or "").strip():
             raise ApplicationLifecycleConflictError(
                 "RECOVERY_STATE_DRIFT: child activeRunId 不能为空。"
@@ -1756,7 +1768,7 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
     payload.pop("developmentContinuations", None)
     archived_planning = state.ended_planning_execution
     if archived_planning is not None:
-        from app.services.ended_planning import ended_planning_available, initial_planning_restart_available
+        from app.services.ended_planning import ended_planning_available, initial_planning_restart_available, stopped_planning_feedback_available
 
         # 公开控制面只提供原身份与可继续性，不泄漏修订内部凭据和文件摘要。
         payload["endedPlanningExecution"] = {
@@ -1765,6 +1777,7 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
             "stage": archived_planning.initialization.stage.value,
             "workspaceUnchanged": ended_planning_available(archived_planning.workspace, state),
             "canRestart": initial_planning_restart_available(state),
+            "canSubmitFeedback": stopped_planning_feedback_available(archived_planning.workspace, state),
         }
     if state.ended_executions or state.ended_planning_execution:
         payload["endedExecutionsCheckedAt"] = utc_now().isoformat()
