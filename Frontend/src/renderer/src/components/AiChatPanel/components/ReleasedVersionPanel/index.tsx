@@ -86,7 +86,9 @@ export default function ReleasedVersionPanel({
     { key: TAB_KEYS.files, label: '代码', available: true },
     { key: TAB_KEYS.preview, label: '应用预览', available: true }
   ]
-  const serviceStatus = previewServiceState(serviceControl?.snapshot?.runtime)
+  const serviceRuntime = serviceControl?.snapshot?.runtime
+  const serviceStatus = previewServiceState(serviceRuntime)
+  const serviceStoppedByUser = serviceRuntime?.frontend.stoppedByUser || serviceRuntime?.backend.stoppedByUser
   // 每个"进入预览 tab"的周期只自动启动一次，避免反复拉起。
   const autoStartRequestedRef = useRef(false)
   const activeDrawerLabel = RAIL_DRAWERS.find((item) => item.key === activeDrawer)?.label
@@ -126,6 +128,7 @@ export default function ReleasedVersionPanel({
         busy: Boolean(serviceControl?.busy),
         status: serviceStatus,
         alreadyRequested: autoStartRequestedRef.current,
+        stoppedByUser: serviceStoppedByUser,
         hasRevision: Boolean(revision)
       })
     ) {
@@ -133,7 +136,7 @@ export default function ReleasedVersionPanel({
     }
     autoStartRequestedRef.current = true
     serviceControl?.onRestart()
-  }, [activeTab, serviceControl, serviceStatus, revision])
+  }, [activeTab, serviceControl, serviceStatus, serviceStoppedByUser, revision])
 
   return (
     <div className={cx('released-version-panel')}>

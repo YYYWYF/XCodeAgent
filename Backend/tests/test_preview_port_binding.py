@@ -95,7 +95,7 @@ class PreviewPortBindingTests(unittest.TestCase):
         finish_attempt(self.root, {"status": "running", "preview_url": "http://localhost:3000",
             "frontend": {"status": "running", "preview_url": "http://localhost:3000",
                          "server": {"pid": 12345, "port": 3000, "ready": True}}, "backend": {"status": "skipped"}})
-        with patch("app.services.preview_runtime_state.os.kill"), \
+        with patch("app.services.preview_runtime_state.pid_is_running", return_value=True), \
              patch("app.services.frontend_project_launcher._preview_is_ready", return_value=True) as probe:
             value = runtime_snapshot(self.root, logs=False)
         self.assertEqual(value["status"], "running")

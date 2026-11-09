@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { randomUUID } from '@ag-ui/client'
 import { PreviewRuntimeBusinessError, runPreviewRuntime } from '../../../service/previewRuntime'
-import type { PreviewAction, PreviewRuntimePayload } from '../../../service/previewRuntime'
+import type { PreviewAction, PreviewRuntimePayload, PreviewServiceLayer } from '../../../service/previewRuntime'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
 import type { PersistSessionInput } from './useChatSessions'
@@ -51,6 +51,7 @@ export function usePreviewRuntime(options: Options): {
   const [snapshot, setSnapshot] = useState<PreviewRuntimePayload>()
   const [busy, setBusy] = useState(false)
   const [busyLaunchLabel, setBusyLaunchLabel] = useState<ServiceStatusControl['busyLaunchLabel']>()
+  const [busyStopLayer, setBusyStopLayer] = useState<PreviewServiceLayer>()
   const [error, setError] = useState('')
   const [repairs, setRepairs] = useState<Record<string, PreviewRuntimePayload['repair']>>({})
   const busyRef = useRef(false)
@@ -88,7 +89,7 @@ export function usePreviewRuntime(options: Options): {
         workspaceRoot: workspaceRef.current
       })
       optionsRef.current.onReady(readyUrl)
-    } else if (value.runtime?.status === 'failed') {
+    } else if (value.runtime?.status === 'failed' || value.runtime?.frontend?.stoppedByUser) {
       lastReadyUrlRef.current = ''
     }
     if (threadId && value.repair) {
@@ -167,6 +168,7 @@ export function usePreviewRuntime(options: Options): {
     busyRef.current = false
     setBusy(false)
     setBusyLaunchLabel(undefined)
+    setBusyStopLayer(undefined)
     setError('')
 
     if (threadId) {
@@ -233,6 +235,7 @@ export function usePreviewRuntime(options: Options): {
     }
     busyRef.current = true
     setBusyLaunchLabel(action === 'restart' ? previewServiceLaunchLabel(snapshot?.runtime) : undefined)
+    setBusyStopLayer(action === 'stop_frontend' ? 'frontend' : action === 'stop_backend' ? 'backend' : undefined)
     setBusy(true)
     setError('')
     failedActionRef.current = undefined
@@ -374,6 +377,7 @@ export function usePreviewRuntime(options: Options): {
         busyRef.current = false
         setBusy(false)
         setBusyLaunchLabel(undefined)
+        setBusyStopLayer(undefined)
         if (identity && !awaitingConfirmation) releaseSessionExecution(identity.key)
       }
     }
@@ -440,10 +444,14 @@ export function usePreviewRuntime(options: Options): {
       snapshot,
       busy,
       busyLaunchLabel,
+      busyStopLayer,
       error: error || previewConnection.businessError || previewConnection.connection.lastError || '',
       blockedReason,
       onRestart: () => {
         void execute('restart')
+      },
+      onStop: (layer) => {
+        void execute(layer === 'frontend' ? 'stop_frontend' : 'stop_backend')
       },
       onDiagnose: () => {
         void diagnose()

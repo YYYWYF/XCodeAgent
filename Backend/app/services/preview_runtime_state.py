@@ -3,7 +3,6 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 """统一预览启动事实、分端日志及当前进程健康投影。"""
 
 import json
-import os
 import re
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -15,6 +14,7 @@ from uuid import uuid4
 
 from app.services.preview_runtime_guard import maintenance_owner
 from app.services.preview_diagnostics import diagnostics_from_command, launch_diagnostics
+from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import read_utf8_log_tail
 
 
@@ -196,6 +196,25 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
         write_record(workspace, value)
 
 
+def record_service_stop(workspace: str | Path, layer: str, result: dict[str, Any]) -> None:
+    """只提交已停止的一端，保留另一端运行事实和本轮日志。"""
+    with _lock:
+        value = read_record(workspace)
+        message = redact(str(result["message"]))
+        value[layer] = {"status": result["status"], "message": message, "stoppedByUser": True}
+        states = {value["frontend"]["status"], value["backend"]["status"]}
+        value["status"] = next(
+            (status for status in ("failed", "starting", "running") if status in states),
+            "stopped",
+        )
+        value["previewUrl"] = (
+            value["frontend"].get("url") if value["status"] == "running" else None
+        )
+        if value["status"] != "failed":
+            value.update(message=message, failedStage=None, diagnostics=[])
+        write_record(workspace, value)
+
+
 def record_frontend_runtime(workspace: str | Path, result: dict[str, Any]) -> None:
     """同步性能检查复用的标准前端服务，避免公共抽屉保留旧 PID。"""
     with _lock:
@@ -271,16 +290,15 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
     root = runtime_root(workspace)
     for layer in ("frontend", "backend"):
         part = value[layer]
-        if _coerce_port(part.get("port")) is None:
+        if not part.get("stoppedByUser") and _coerce_port(part.get("port")) is None:
             port = _service_port(root, layer, part)
             if port is not None:
                 part["port"] = port
         if part.get("status") == "running":
             try:
                 pid = int(part.get("pid") or 0)
-                if pid <= 0:
+                if not pid_is_running(pid):
                     raise ProcessLookupError()
-                os.kill(pid, 0)
                 pid_path = root / f"{layer}.pid"
                 if not pid_path.is_file() or int(pid_path.read_text().strip()) != pid:
                     raise ProcessLookupError()

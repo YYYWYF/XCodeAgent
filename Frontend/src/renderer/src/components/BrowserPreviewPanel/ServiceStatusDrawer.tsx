@@ -10,12 +10,13 @@ import {
   FullscreenOutlined,
   LoadingOutlined,
   ReloadOutlined,
+  StopOutlined,
   ToolOutlined
 } from '@ant-design/icons'
 import { Alert, Button, Drawer, Tabs, Typography } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { PreviewRuntimePayload, PreviewServiceState } from '../../service/previewRuntime'
+import type { PreviewRuntimePayload, PreviewServiceLayer, PreviewServiceState } from '../../service/previewRuntime'
 import { previewServiceActionAvailability, previewServiceLaunchLabel } from './serviceStatusPolicy'
 import DatabaseCheckPanel from './DatabaseCheckPanel'
 import ServiceLogContent from './ServiceLogContent'
@@ -29,15 +30,15 @@ export type ServiceStatusControl = {
   snapshot?: PreviewRuntimePayload
   busy: boolean
   busyLaunchLabel?: '启动服务' | '重启服务'
+  busyStopLayer?: PreviewServiceLayer
   error: string
   blockedReason: string
   onRestart: () => void
+  onStop: (layer: PreviewServiceLayer) => void
   onDiagnose: () => void
   showDatabaseCheck?: boolean
   onOpenEntity?: (entityId: string) => void
 }
-
-type ServiceLayer = 'frontend' | 'backend'
 
 const statusMeta: Record<
   PreviewServiceState['status'],
@@ -51,12 +52,12 @@ const statusMeta: Record<
 }
 
 /** 返回服务层的中文名称，统一服务卡片和日志标签的用词。 */
-function serviceLabel(layer: ServiceLayer): string {
+function serviceLabel(layer: PreviewServiceLayer): string {
   return layer === 'frontend' ? '前端服务' : '后端服务'
 }
 
 /** 返回服务层的说明，帮助用户在没有地址或失败时快速判断下一步。 */
-function serviceHint(layer: ServiceLayer, status: PreviewServiceState['status'], resourceFailure: boolean): string {
+function serviceHint(layer: PreviewServiceLayer, status: PreviewServiceState['status'], resourceFailure: boolean): string {
   if (status === 'skipped')
     return layer === 'backend' ? '当前项目无需启动后端进程' : '等待前端运行时就绪'
   if (status === 'starting') return '正在执行依赖、构建与就绪检测'
@@ -83,7 +84,7 @@ function servicePort(service?: PreviewServiceState): string {
 /** 展示主题化的服务状态、维护动作和前后端独立日志。 */
 export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactElement {
   const { snapshot, blockedReason, busy } = props
-  const [tab, setTab] = useState<ServiceLayer>('frontend')
+  const [tab, setTab] = useState<PreviewServiceLayer>('frontend')
   const [following, setFollowing] = useState(true)
   const { copied, copyError, copyLogs } = useServiceLogClipboard()
   const [logsExpanded, setLogsExpanded] = useState(false)
@@ -158,6 +159,8 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
             {(['frontend', 'backend'] as const).map((layer) => {
               const service = runtime?.[layer]
               const status = service?.status || 'stopped'
+              const stopped = status === 'stopped' && service?.stoppedByUser
+              const stopping = props.busyStopLayer === layer || runtime?.maintenance?.action === `stop_${layer}`
               const meta = statusMeta[status]
               const LayerIcon = layer === 'frontend' ? ApiOutlined : CloudServerOutlined
               const port = servicePort(service)
@@ -172,13 +175,17 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                     </div>
                     <span className={`preview-service-status-pill is-${meta.tone}`}>
                       <span>{meta.icon}</span>
-                      {meta.label}
+                      {stopped ? '已停止' : meta.label}
                     </span>
                   </div>
                   <div className="preview-service-card__meter" aria-hidden="true">
                     <span />
                   </div>
-                  <p className="preview-service-card__hint">{serviceHint(layer, status, layer === 'backend' && runtime?.failedStage === 'backend_database_resource')}</p>
+                  <p className="preview-service-card__hint">
+                    {stopped
+                      ? '可通过维护操作重新启动'
+                      : serviceHint(layer, status, layer === 'backend' && runtime?.failedStage === 'backend_database_resource')}
+                  </p>
                   <div className="preview-service-card__endpoint">
                     <span>服务端口</span>
                     {port ? (
@@ -186,7 +193,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                         {port}
                       </Typography.Text>
                     ) : (
-                      <span className="is-empty">等待端口</span>
+                      <span className="is-empty">{stopped ? '—' : '等待端口'}</span>
                     )}
                   </div>
                   {service?.message && (
@@ -195,6 +202,17 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
                       <span>{service.message}</span>
                     </div>
                   )}
+                  <Button
+                    aria-label={`停止${serviceLabel(layer)}`}
+                    className="preview-service-card__stop"
+                    size="small"
+                    icon={<StopOutlined />}
+                    loading={stopping}
+                    disabled={status !== 'running' || busy || Boolean(runtime?.maintenance)}
+                    onClick={() => props.onStop(layer)}
+                  >
+                    {stopping ? '停止中' : '停止服务'}
+                  </Button>
                 </article>
               )
             })}

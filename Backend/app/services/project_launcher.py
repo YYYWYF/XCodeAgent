@@ -5,7 +5,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.services.backend_project_launcher import (
     find_backend_project_root,
@@ -260,6 +260,26 @@ def _launch_project_preview(
     }
 
 
+def stop_preview_service(
+    workspace_path: str | Path, layer: Literal["frontend", "backend"], attempt_id: str,
+) -> dict[str, Any]:
+    """串行停止指定标准预览进程，避免迟到请求影响新的启动尝试。"""
+
+    from app.services.backend_process_registry import backend_launch_lock
+    from app.services.preview_runtime_state import read_record, record_service_stop
+
+    root = Path(workspace_path).expanduser().resolve()
+    with backend_launch_lock(root):
+        if read_record(root)["attemptId"] != attempt_id:
+            raise ValueError("服务启动记录已变化，请刷新状态后再停止。")
+        stop = stop_frontend_project if layer == "frontend" else stop_workspace_backend_project
+        result = stop(root)
+        if result["status"] == "failed":
+            raise RuntimeError(result["message"])
+        record_service_stop(root, layer, result)
+        return {"status": "stopped", "message": result["message"], layer: result}
+
+
 def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
     """停止指定工作区已启动的前后端预览进程。"""
 
@@ -438,6 +458,7 @@ __all__ = [
     "inspect_project_preview",
     "stop_backend_project",
     "stop_frontend_project",
+    "stop_preview_service",
     "stop_project_preview",
     "stop_standard_project_preview",
     "stop_workspace_backend_project",

@@ -67,6 +67,7 @@ function previewServiceControl(
     error: '',
     blockedReason: '',
     onRestart: () => undefined,
+    onStop: () => undefined,
     onDiagnose: () => undefined
   }
 }

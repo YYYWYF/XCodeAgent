@@ -6,6 +6,8 @@ export function previewRecoveryAction(
   failedAction?: PreviewAction,
   threadId?: string
 ): 'restart' | 'diagnose' | 'revise' | 'cancel' | undefined {
+  // 停服连接恢复只读取当前状态，新的停服请求必须再次来自对应服务卡。
+  if (failedAction === 'stop_frontend' || failedAction === 'stop_backend') return undefined
   if (failedAction === 'cancel' && threadId && value.runtime?.maintenance?.threadId === threadId) return 'cancel'
   if (value.runtime?.maintenance || value.blockedBy ||
     ['awaiting_confirmation', 'running', 'stopping'].includes(value.repair?.status || '') ||

@@ -198,6 +198,82 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["repair"]["status"], "stopped")
         self.assertIsNone(maintenance_owner(self.workspace))
 
+    async def test_stop_service_preserves_other_service_and_logs(self) -> None:
+        """两个分端动作各自调用目标启动器，保留另一端和本轮日志。"""
+        url = "http://localhost:3000"
+        root = runtime_root(self.workspace)
+        for layer, other, stopper in (
+            ("frontend", "backend", "stop_frontend_project"),
+            ("backend", "frontend", "stop_workspace_backend_project"),
+        ):
+            with self.subTest(layer=layer):
+                attempt = begin_attempt(self.workspace)
+                finish_attempt(self.workspace, {
+                    "status": "running",
+                    "preview_url": url,
+                    "frontend": {"status": "running", "preview_url": url, "server": {"pid": 123, "port": 3000}},
+                    "backend": {"status": "running", "server": {"pid": 456, "port": 8080}},
+                })
+                (root / "frontend.pid").write_text("123")
+                (root / "backend.pid").write_text("456")
+                (root / "backend.stdout.log").write_text("Started Application in 0.1 seconds\n")
+                previous = read_record(self.workspace)[other]
+                with (
+                    patch("app.services.preview_runtime_state.pid_is_running", return_value=True),
+                    patch("app.services.frontend_project_launcher._preview_is_ready", return_value=True),
+                    patch("app.services.project_launcher.stop_frontend_project") as stop_frontend,
+                    patch("app.services.project_launcher.stop_workspace_backend_project") as stop_backend,
+                ):
+                    stoppers = {"stop_frontend_project": stop_frontend, "stop_workspace_backend_project": stop_backend}
+                    stoppers[stopper].return_value = {"status": "stopped", "message": "预览进程已停止。"}
+                    value = self.result(await self.request(f"stop_{layer}", attemptId=attempt))
+                stoppers[stopper].assert_called_once_with(Path(self.workspace).resolve())
+                (stop_backend if layer == "frontend" else stop_frontend).assert_not_called()
+                self.assertEqual(value["status"], "completed")
+                runtime = value["runtime"]
+                self.assertEqual(runtime[layer]["status"], "stopped")
+                self.assertTrue(runtime[layer]["stoppedByUser"])
+                self.assertEqual(runtime[other], previous)
+                self.assertEqual(runtime["status"], "running")
+                self.assertEqual(runtime["previewUrl"], url if other == "frontend" else None)
+                self.assertTrue(runtime["logs"]["backend"])
+                self.assertFalse(runtime["repairAvailable"])
+                self.assertIsNone(runtime["maintenance"])
+
+    async def test_service_stop_rejects_stale_attempt_and_reports_process_failure(self) -> None:
+        """迟到请求无法终止新进程，终止失败不会把任一端写成已停止。"""
+        attempt = begin_attempt(self.workspace)
+        previous = read_record(self.workspace)
+        with patch("app.services.project_launcher.stop_workspace_backend_project") as stop:
+            stale = self.result(await self.request("stop_backend", attemptId="old-attempt"))
+            stop.assert_not_called()
+            self.assertIn("启动记录已变化", stale["error"]["message"])
+
+            stop.return_value = {"status": "failed", "message": "Java 后端预览进程停止失败。"}
+            failed = self.result(await self.request("stop_backend", attemptId=attempt))
+            self.assertEqual(failed["status"], "failed")
+            self.assertIn("停止失败", failed["error"]["message"])
+        self.assertEqual(read_record(self.workspace), previous)
+        self.assertIsNone(maintenance_owner(self.workspace))
+
+    async def test_orphaned_service_stop_resumes_only_its_own_attempt(self) -> None:
+        """恢复分端停止时仅清理原来的目标，更新后的启动尝试跳过。"""
+        attempt = begin_attempt(self.workspace)
+        claim_maintenance(self.workspace, self.thread, "stop_backend", attempt_id="old-attempt")
+        with (
+            patch("app.services.project_launcher.stop_frontend_project") as frontend,
+            patch("app.services.project_launcher.stop_workspace_backend_project",
+                  return_value={"status": "stopped", "message": "已停止"}) as backend,
+        ):
+            self.assertEqual(self.result(await self.request("get"))["status"], "completed")
+            backend.assert_not_called()
+            claim_maintenance(self.workspace, self.thread, "stop_backend", attempt_id=attempt)
+            value = self.result(await self.request("get"))["runtime"]
+            backend.assert_called_once()
+            frontend.assert_not_called()
+        self.assertTrue(value["backend"]["stoppedByUser"])
+        self.assertIsNone(value["maintenance"])
+
     async def test_leave_workbench_releases_other_preview_thread(self) -> None:
         """退出工作台可清理当前应用遗留的预览维护，不要求复用原会话身份。"""
         save_repair(
@@ -429,7 +505,7 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         """历史成功的已退出进程必须显示失败。"""
         begin_attempt(self.workspace)
         finish_attempt(self.workspace, {"status": "running", "frontend": {"status": "running", "server": {"pid": 12345}}, "backend": {"status": "skipped"}})
-        with patch("app.services.preview_runtime_state.os.kill", side_effect=ProcessLookupError):
+        with patch("app.services.preview_runtime_state.pid_is_running", return_value=False):
             value = runtime_snapshot(self.workspace)
         self.assertEqual(value["status"], "failed")
         self.assertEqual(value["backend"]["status"], "skipped")

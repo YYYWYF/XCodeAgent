@@ -8,11 +8,13 @@
 
 返回欢迎页时立即释放预览维护并在后台停止当前工作区的前后端服务；退出 Electron 前再次停止本次手动重启登记过的所有工作区，避免残留生成项目进程。
 
+前后端服务卡片各自提供「停止服务」。点击只停止该卡片对应的标准预览服务，并保留另一端的运行状态和本轮日志。停止期间同一工作区的预览维护保持互斥，停止失败可在卡片重试。前端停止后收起当前预览页面；后端停止时前端页面仍可浏览。已发布版本面板切换标签时尊重当前尝试中的手动停止状态。
+
 只有当前启动失败记录允许“诊断并修复”；运行中的页面业务错误不属于此入口。点击后创建开发阶段历史会话“诊断并修复”，保持右侧预览，后续计划确认、调整、停止、代码变更和结果均属于该会话。打开已有修复会话通过其 thread 读取当前修复状态，不借用原开发或测试会话。
 
 ## AG-UI 契约
 
-`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作是 `get/watch/restart/stop/diagnose/confirm/revise/cancel/leave`。所有字段在 Pydantic 边界校验；不接受日志文件路径。
+`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作包括 `get/watch/restart/stop/stop_frontend/stop_backend/diagnose/confirm/revise/cancel/leave`。分端停止在启动锁内校验 `attemptId`，成功后仅在目标服务写入 `stoppedByUser`。若维护中断，恢复时只对原尝试收口原目标。所有字段在 Pydantic 边界校验；不接受日志文件路径。
 
 所有响应均使用标准 AG-UI 生命周期、助手消息、`preview-runtime` CustomEvent、`previewRuntime` StateSnapshot 和 RunFinished，包括业务失败。`runtime.frontend` 与 `runtime.backend` 各自包含状态、可选 `port`、兼容保留的 URL 及失败摘要；操作失败含结构化 error。状态包含 runtime、blockedBy、当前会话 repair。`/health` 发布该能力。旧预览 REST 启停路由已移除；renderer 和 Electron 退出清理均通过 AG-UI 客户端调用。
 

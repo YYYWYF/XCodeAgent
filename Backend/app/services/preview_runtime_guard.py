@@ -34,17 +34,22 @@ def require_no_maintenance(workspace: str | Path, thread_id: str = "") -> None:
     del workspace, thread_id
 
 
-def claim_maintenance(workspace: str, thread_id: str, action: str) -> None:
+def claim_maintenance(
+    workspace: str, thread_id: str, action: str, *, attempt_id: str | None = None,
+) -> None:
     """调用方持有共享锁时登记独占维护身份。"""
     with maintenance_lock:
         owner = maintenance_owner(workspace)
         if owner and owner["threadId"] != thread_id:
             raise RuntimeError("当前应用已有预览维护任务，请完成或停止后再操作。")
-        _owners[workspace_key(workspace)] = {"threadId": thread_id, "action": action}
+        record = {"threadId": thread_id, "action": action}
+        if attempt_id is not None:
+            record["attemptId"] = attempt_id
+        _owners[workspace_key(workspace)] = record
         path = Path(workspace_key(workspace)) / WORKSPACE_ARTIFACT_DIR / 'runtime/preview-maintenance.json'
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(_owners[workspace_key(workspace)]), encoding="utf-8")
+        temporary.write_text(json.dumps(record), encoding="utf-8")
         temporary.replace(path)
 
 

@@ -103,6 +103,10 @@ try {
     action: 'leave',
     includeLogs: false
   })
+  for (const action of ['stop_frontend', 'stop_backend'] as const) {
+    await runPreviewRuntime({ workspace: '/workspace', action, attemptId: 'attempt-1' })
+    assert.deepEqual(forwarded, { workspace: '/workspace', action, attemptId: 'attempt-1' })
+  }
   mockStream(true)
   await assert.rejects(
     runPreviewRuntime({ workspace: '/workspace', action: 'restart' }),
@@ -288,6 +292,7 @@ try {
   assert.equal(autoStart({ status: 'starting' }), false, '正在启动不应重复拉起')
   assert.equal(autoStart({ status: 'failed' }), false, '失败交给用户诊断，不自动重启')
   assert.equal(autoStart({ busy: false, alreadyRequested: true }), false, '同一次进入只启动一次')
+  assert.equal(autoStart({ stoppedByUser: true }), false, '手动停服后切换预览不能自动拉起')
 
   assert.equal(
     shouldShowPreviewServiceEmptyState({ hasSnapshot: true, status: 'idle' }),
@@ -298,6 +303,11 @@ try {
     shouldShowPreviewServiceEmptyState({ hasSnapshot: false, status: 'idle' }),
     false,
     '快照未到达时不能把未知状态误判为停服'
+  )
+  assert.equal(
+    shouldShowPreviewServiceEmptyState({ hasSnapshot: true, status: 'running', frontendStopped: true }),
+    true,
+    '仅停止前端时，后端仍运行但不能继续显示旧预览'
   )
   assert.equal(
     shouldShowPreviewServiceEmptyState({

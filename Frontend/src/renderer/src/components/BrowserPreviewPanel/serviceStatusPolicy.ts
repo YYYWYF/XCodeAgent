@@ -51,8 +51,10 @@ export function shouldShowPreviewServiceEmptyState(input: {
   hasSnapshot: boolean
   status: PreviewServiceState
   externalStatus?: PreviewServiceState
+  frontendStopped?: boolean
 }): boolean {
-  return input.externalStatus === undefined && input.hasSnapshot && input.status !== 'running'
+  return input.externalStatus === undefined && input.hasSnapshot &&
+    (input.frontendStopped === true || input.status !== 'running')
 }
 
 /** 只有实际执行中的任务阻塞修复；等待用户确认的工作流已暂停。 */
@@ -92,11 +94,12 @@ export function shouldAutoStartPreviewService(input: {
   busy: boolean
   status: PreviewServiceState
   alreadyRequested: boolean
+  stoppedByUser?: boolean
   /** 当前是否在回看某个历史版本。 */
   hasRevision?: boolean
 }): boolean {
   if (!input.activeTabIsPreview || input.alreadyRequested) return false
-  if (input.hasRevision) return false
+  if (input.hasRevision || input.stoppedByUser) return false
   if (!input.hasSnapshot || input.busy) return false
   return input.status === 'idle'
 }
