@@ -889,7 +889,7 @@ for (const confirmed of [true, false]) {
   assert.equal(h.readCalls(), 2)
 }
 
-// T4：本地执行中及 Runtime 已释放时不查询；断线后的空闲 Runtime 可自动只读同步。
+// T4：本地执行、空闲断线及已释放实例不自动查询；正常显式读取仍可恢复。
 {
   const current = planningState()
   current.recovery = recoveryProjection('thread-A', { classification: 'running', recoveryActionPlan: null })
@@ -902,13 +902,13 @@ for (const confirmed of [true, false]) {
   assert.equal(h.readCalls(), 0)
   h.setCurrent({ ...current, transportState: 'idle', connection: { ...current.connection, status: 'unavailable' } })
   await h.runtime.refreshDetachedRunningState()
-  assert.equal(h.readCalls(), 1)
+  assert.equal(h.readCalls(), 0)
   h.runtime.dispose()
   await h.runtime.refreshDetachedRunningState()
-  assert.equal(h.readCalls(), 1)
+  assert.equal(h.readCalls(), 0)
 }
 
-// 首次冷读失败且尚无 Run 时也持续退避重读，恢复后只展示当前确认，不发送生成请求。
+// 首次冷读失败且尚无 Run 时不自动探测；用户正常同步后只展示当前确认，不发送生成请求。
 {
   const originalNow = Date.now
   let now = originalNow()
@@ -925,23 +925,24 @@ for (const confirmed of [true, false]) {
     assert.equal(h.readCalls(), 1)
     now += 1_000
     await h.runtime.refreshDetachedRunningState()
-    assert.equal(h.readCalls(), 2)
+    assert.equal(h.readCalls(), 1)
     now += 1_000
     await h.runtime.refreshDetachedRunningState()
-    assert.equal(h.readCalls(), 2)
+    assert.equal(h.readCalls(), 1)
     h.onRead(async () => ({ workflow: confirmationWorkflow(), lifecycle: authoritativeLifecycle(initial), recovery: recoveryProjection() }))
     now += 1_000
     await h.runtime.refreshDetachedRunningState()
-    assert.equal(h.readCalls(), 3)
+    assert.equal(h.readCalls(), 1)
+    await h.runtime.reconcileCurrentState()
+    assert.equal(h.readCalls(), 2)
     assert.equal(h.current()?.connection.status, 'healthy')
     assert.equal(h.current()?.workflow?.summary.clarification?.mode, 'technical_plan_confirmation')
     assert.equal(h.calls.length, 0)
     await h.runtime.refreshDetachedRunningState()
-    assert.equal(h.readCalls(), 3)
+    assert.equal(h.readCalls(), 2)
   } finally { Date.now = originalNow }
 }
 
-// UI 生成池等待确认时也要检测 Backend；IPC 仍能读文件不能冒充服务健康。
 // 认证失败不能由定时器持续重放；用户重新登录后仍可显式同步。
 {
   const initial = planningState()
@@ -957,7 +958,7 @@ for (const confirmed of [true, false]) {
   assert.equal(h.calls.length, 0)
 }
 
-// UI 生成池等待确认时也要检测 Backend；IPC 仍能读文件不能冒充服务健康。
+// UI 待确认不进行在线探测；用户实际读取失败才显示断连。
 {
   const initial = planningState()
   initial.workflow = { runId: 'ui-pool', threadId: initial.threadId, events: [],
@@ -966,16 +967,19 @@ for (const confirmed of [true, false]) {
   const h = harness(initial)
   h.onRead(async () => {
     assert.equal(h.current()?.connection.status, 'healthy')
-    assert.equal(h.current()?.transportState, 'idle')
+    assert.equal(h.current()?.transportState, 'reconciling')
     throw new TypeError('Failed to fetch')
   })
   await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 0)
+  assert.equal(h.current()?.connection.status, 'healthy')
+  await h.runtime.reconcileCurrentState()
   assert.equal(h.readCalls(), 1)
   assert.equal(h.calls.length, 0)
   assert.equal(h.current()?.connection.status, 'unavailable')
   assert.equal(h.current()?.workflow, initial.workflow)
   assert.equal(h.current()?.recovery, initial.recovery)
-  assert.equal(h.events.some((event) => event.type === 'reconcile_started'), false)
+  assert.equal(h.events.filter((event) => event.type === 'reconcile_started').length, 1)
   await h.runtime.refreshDetachedRunningState()
   assert.equal(h.readCalls(), 1)
   // 重启后由用户显式同步，读取孤立生成页的恢复入口，不自动重新生成或确认。

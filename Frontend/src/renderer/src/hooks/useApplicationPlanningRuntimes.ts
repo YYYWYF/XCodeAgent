@@ -146,8 +146,10 @@ export function useApplicationPlanningRuntimes(
     }
   }, [options.activePlannings, ensureRuntime])
 
-  // 跟进脱离本地流的运行与 UI 后台生成池；只读 GET 不恢复 Graph，也不提交确认。
+  // 仅已知任务运行且本地无流时跟进业务进度；空闲、待确认或断连均不启动定时器。
   useEffect(() => {
+    if (!options.activePlannings.some((planning) => planning.transportState === 'idle' &&
+      planning.connection.status === 'healthy' && !planning.syncError && planning.recovery?.classification === 'running')) return
     const timer = window.setInterval(() => {
       for (const runtime of runtimesRef.current.values()) {
         void runtime.refreshDetachedRunningState().catch((reason: unknown) => {
@@ -156,29 +158,12 @@ export function useApplicationPlanningRuntimes(
       }
     }, 5000)
     return () => window.clearInterval(timer)
-  }, [])
+  }, [options.activePlannings])
 
   // 应用根部真正卸载时才释放所有后台执行器；视图显隐不会触发这里。
   useEffect(() => () => {
     for (const runtime of runtimesRef.current.values()) runtime.dispose()
     runtimesRef.current.clear()
-  }, [])
-
-  // 网络恢复事件只为连接已失效的 Runtime 触发一次只读同步，不建立周期性轮询。
-  useEffect(() => {
-    const handleOnline = (): void => {
-      for (const runtime of runtimesRef.current.values()) {
-        const current = optionsRef.current.getPlanningState(runtime.applicationId)
-        if (!current || current.threadId !== runtime.threadId || current.connection.status !== 'unavailable') {
-          continue
-        }
-        void runtime.reconcileCurrentState().catch((reason: unknown) => {
-          console.error('[planning-runtime] online reconcile failed', reason)
-        })
-      }
-    }
-    window.addEventListener('online', handleOnline)
-    return () => window.removeEventListener('online', handleOnline)
   }, [])
 
   return useMemo<ApplicationPlanningRuntimesController>(() => ({

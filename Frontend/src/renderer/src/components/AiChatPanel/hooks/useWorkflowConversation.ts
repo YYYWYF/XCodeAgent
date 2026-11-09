@@ -762,9 +762,9 @@ export function useWorkflowConversation({
 
   const workbenchRefreshConnection: WorkbenchRunRefreshConnection = {
     scopeKey: recoveryKey,
-    shouldRefresh: !recoveringSourceRunId && !recoveryEntry.authenticationBlocked &&
-      (connectionState.status !== 'healthy' || Boolean(lifecycleSyncError) ||
-        Boolean(executionRecoveryReadError(applicationLifecycle)) || recoveryEntry.lifecycle?.extensions.recoverySnapshot?.output?.finished === false ||
+    shouldRefresh: !recoveringSourceRunId && !recoveryEntry.authenticationBlocked && connectionState.status === 'healthy' &&
+      !lifecycleSyncError && !executionRecoveryReadError(applicationLifecycle) &&
+      (recoveryEntry.lifecycle?.extensions.recoverySnapshot?.output?.finished === false ||
         Object.values(applicationLifecycle?.activeExecutions || {}).some((execution) => execution.ownerSessionId === activeSession?.sessionId &&
           execution.threadId === activeSession?.threadId && ['running', 'stopping'].includes(execution.status))),
     refresh: () => !loading && recoveryStore.canRead(recoveryKey) ? refreshExecutionRecoveryLifecycle() : Promise.resolve(false),
@@ -1146,7 +1146,9 @@ export function useWorkflowConversation({
   }, [application.id, application.workspaceRoot, activeSession?.key, draftKey])
 
   // 当前会话只有这一处只读跟进；查询合并、退避和连接状态均由共享 store 持有。
-  useWorkbenchRunRefresh(application, undefined, onApplicationLifecycleChange, workbenchRefreshConnection)
+  useWorkbenchRunRefresh(application, undefined, onApplicationLifecycleChange, {
+    ...workbenchRefreshConnection, shouldRefresh: !loading && workbenchRefreshConnection.shouldRefresh
+  })
 
   // 后台换实例后仅读取现场；先等待旧流的本地收口，避免旧 finally 清掉新恢复结果。
   useEffect(() => {
@@ -1253,16 +1255,6 @@ export function useWorkflowConversation({
       setRecoveringSourceRunId(undefined)
     }
   }
-
-  // 浏览器网络恢复只触发 durable truth 刷新，绝不自动执行 Recovery action。
-  useEffect(() => {
-    const handleOnline = (): void => {
-      if (connectionState.status !== 'unavailable') return
-      void refreshExecutionRecoveryLifecycle()
-    }
-    window.addEventListener('online', handleOnline)
-    return () => window.removeEventListener('online', handleOnline)
-  }, [connectionState.status])
 
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
   const sendWorkflowMessage = async (

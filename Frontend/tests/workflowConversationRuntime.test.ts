@@ -40,7 +40,7 @@ const OWNER_THREAD_ID = 'thread-owner'
 const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
 
-test('首次同步网络失败且没有已知 Run 时自动恢复，不依赖 online 事件或用户重试', async () => {
+test('首次同步失败不定时探测，后续正常读取成功才恢复连接', async () => {
   const savedWindow = globalThis.window
   const savedFetch = globalThis.fetch
   const fakeWindow = Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } })
@@ -67,11 +67,10 @@ test('首次同步网络失败且没有已知 Run 时自动恢复，不依赖 on
   try {
     await act(async () => { root = create(createElement(Probe)) })
     assert.equal(runtime.connectionState.status, 'unavailable')
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 3100)) })
+    assert.deepEqual(actions, ['workspace_attach'], '空闲断连不应持续发出状态查询')
     fail = false
-    const deadline = Date.now() + 4_000
-    while (runtime.connectionState.status !== 'healthy' && Date.now() < deadline) {
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)) })
-    }
+    await act(async () => { await runtime.refreshExecutionRecoveryLifecycle() })
     assert.equal(runtime.connectionState.status, 'healthy')
     assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'get'])
   } finally {

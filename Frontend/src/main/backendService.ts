@@ -24,7 +24,8 @@ let backendProcess: ChildProcess | null = null
 let backendBaseUrl = DEVAGENTSTUDIO_ENV.DEVAGENTSTUDIO_BACKEND_URL
 let stoppingBackend = false
 let activeRuntime: BackendRuntime | undefined
-let lastLeaseAt = 0
+let leaseTimer: ReturnType<typeof setTimeout> | undefined
+let leaseGeneration = 0
 let serviceEpoch = 0
 let startupPromise: Promise<string> | undefined
 const clientId = randomUUID()
@@ -155,6 +156,8 @@ async function stopBackendService(): Promise<void> {
 /** 前端退出只释放租约，业务任务继续执行；最后一个任务收口后后台自行退场。 */
 export async function detachBackendService(): Promise<void> {
   serviceEpoch++
+  leaseGeneration++
+  clearTimeout(leaseTimer)
   backendConnectionMonitor.stop()
   const runtime = activeRuntime
   activeRuntime = undefined
@@ -167,6 +170,8 @@ export async function detachBackendService(): Promise<void> {
 export async function prepareBackendServiceUpdate(cleanup: () => Promise<void>): Promise<void> {
   if (startupPromise) throw new Error('后台正在重新连接，请同步完成后再更新。')
   serviceEpoch++
+  leaseGeneration++
+  clearTimeout(leaseTimer)
   backendConnectionMonitor.stop()
   const runtime = activeRuntime
   if (!runtime) { await cleanup(); return }
@@ -182,27 +187,38 @@ export async function prepareBackendServiceUpdate(cleanup: () => Promise<void>):
       backendProcess = null
     }
     backendConnectionMonitor.start()
+    if (activeRuntime) connectRuntime(activeRuntime)
     throw error
   }
 }
 
-/** 记录当前接管身份，续租和探测由主进程唯一监督器执行。 */
+/** 仅为内置后台续租；失败静默保留原实例，不探测健康、不广播断连、不自动启动。 */
 function connectRuntime(runtime: BackendRuntime): void {
   activeRuntime = runtime
-  lastLeaseAt = Date.now()
+  clearTimeout(leaseTimer)
+  const generation = ++leaseGeneration
+  /** 租约只维持后台生命周期；通信状态由实际业务请求感知。 */
+  const renew = async (): Promise<void> => {
+    if (activeRuntime !== runtime || generation !== leaseGeneration) return
+    try { await controlBackendRuntime(runtime, clientId, 'attach') }
+    catch { /* 下次正常请求负责呈现通信失败，租约不产生界面错误。 */ }
+    if (activeRuntime === runtime && generation === leaseGeneration) schedule()
+  }
+  /** 串行安排续租，不与健康检查或 Renderer 状态同步耦合。 */
+  const schedule = (): void => {
+    leaseTimer = setTimeout(() => void renew(), 15000)
+    leaseTimer.unref()
+  }
+  schedule()
 }
 
-/** 校验环境与实例并每十五秒续租；失败只表示连接失效，不允许强杀活进程。 */
+/** 启动或明确进程事件中核验环境与实例，不用于定时在线检测。 */
 async function probeBackendConnection(): Promise<{ baseUrl: string; backendInstanceId: string } | undefined> {
   const runtime = activeRuntime
   if (shouldStartBundledBackend() && !runtime) return undefined
   const health = await readBackendHealth(runtime?.baseUrl || backendBaseUrl, APP_ENV)
   if (!health || (runtime && (health.backendInstanceId !== runtime.backendInstanceId || health.backendPid !== runtime.pid ||
     (health.managedRuntime as { phase?: string } | undefined)?.phase !== 'open'))) return undefined
-  if (runtime && Date.now() - lastLeaseAt >= 15000) {
-    if ((await controlBackendRuntime(runtime, clientId, 'attach')).state !== 'open') return undefined
-    lastLeaseAt = Date.now()
-  }
   return { baseUrl: runtime?.baseUrl || backendBaseUrl, backendInstanceId: String(health.backendInstanceId || '') }
 }
 
@@ -277,7 +293,7 @@ function wireBackendLogging(child: ChildProcess): void {
       console.error(
         `Backend process exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'null'}`
       )
-      void backendConnectionMonitor.checkNow(true)
+      void backendConnectionMonitor.checkNow()
     }
   })
 }

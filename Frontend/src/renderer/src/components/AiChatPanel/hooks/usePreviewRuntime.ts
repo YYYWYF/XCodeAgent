@@ -152,7 +152,8 @@ export function usePreviewRuntime(options: Options): {
     failedActionRef.current = undefined
     lastReadyUrlRef.current = ''
   }, [options.workspace])
-  const previewConnection = usePreviewRuntimeConnection(options.workspace, activeThread, open, receive)
+  const previewConnection = usePreviewRuntimeConnection(options.workspace, activeThread, open, receive,
+    open || busy || repairRunning || snapshot?.runtime?.status === 'running' || snapshot?.runtime?.status === 'starting')
 
   /** 立即停止渲染端等待，并在后台让服务端完成取消与占用收口。 */
   const cancelRepairImmediately = (identity?: SessionIdentity): void => {

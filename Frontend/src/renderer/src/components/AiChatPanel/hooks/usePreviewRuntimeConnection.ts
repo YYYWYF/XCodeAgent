@@ -8,11 +8,14 @@ export function usePreviewRuntimeConnection(
   workspace: string,
   threadId: string | undefined,
   includeLogs: boolean,
-  receive: (value: PreviewRuntimePayload, threadId?: string) => void
+  receive: (value: PreviewRuntimePayload, threadId?: string) => void,
+  watchEnabled: boolean
 ) {
   const [connection, setConnection] = useState(() => initialConnectionState())
   const [businessError, setBusinessError] = useState('')
   const generationRef = useRef(0)
+  const [subscriptionRevision, setSubscriptionRevision] = useState(0)
+  const readScopeRef = useRef<string>()
   const scopeRef = useRef(workspace)
   scopeRef.current = workspace
 
@@ -33,6 +36,9 @@ export function usePreviewRuntimeConnection(
         setBusinessError('')
         setConnection((current) => completeConnectionRequest(current, generation))
         receive(value, currentThread)
+        // 用户正常读取成功后才恢复必要的业务订阅，不用定时器探测服务是否恢复。
+        readScopeRef.current = JSON.stringify([workspace, threadId, includeLogs])
+        setSubscriptionRevision((revision) => revision + 1)
       }
       return value
     } catch (reason) {
@@ -46,13 +52,15 @@ export function usePreviewRuntimeConnection(
   }, [workspace, threadId, includeLogs, receive])
 
   useEffect(() => {
-    setConnection(initialConnectionState())
-    setBusinessError('')
     const controller = new AbortController()
-    /** 自动重连只恢复订阅，不派发维护或代码修改动作。 */
+    const scope = JSON.stringify([workspace, threadId, includeLogs])
+    const alreadyRead = readScopeRef.current === scope
+    readScopeRef.current = undefined
+    /** 工作区首次读取及可见/运行中的预览订阅；失败后停止，等待下一次正常请求。 */
     const watch = async (): Promise<void> => {
-      let initialRead = true
+      let initialRead = !alreadyRead
       while (!controller.signal.aborted && workspace) {
+        if (!initialRead && !watchEnabled) return
         const generation = ++generationRef.current
         try {
           await runPreviewRuntime({ workspace, action: initialRead ? 'get' : 'watch', includeLogs }, {
@@ -68,18 +76,17 @@ export function usePreviewRuntimeConnection(
           initialRead = false
         } catch (reason) {
           if (controller.signal.aborted) return
-          initialRead = true
           setBusinessError(reason instanceof PreviewRuntimeBusinessError ? reason.message : '')
           // watch 是长连接，同代次失败必须覆盖此前收到的状态。
           setConnection((current) => reason instanceof PreviewRuntimeBusinessError
             ? completeConnectionRequest(current, generation)
             : failConnectionRequest(current, generation, String(reason)))
-          await new Promise<void>((resolve) => window.setTimeout(resolve, 1000))
+          return
         }
       }
     }
     void watch()
     return () => controller.abort()
-  }, [workspace, threadId, includeLogs, receive])
+  }, [workspace, threadId, includeLogs, receive, watchEnabled, subscriptionRevision])
   return { connection, read, reportFailure, businessError }
 }

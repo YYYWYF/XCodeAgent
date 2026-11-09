@@ -30,7 +30,7 @@ import { subscribeBackendConnection } from './backendConnection'
 import { isRecoveryStateReadError, recoveryStore } from './recoveryStore'
 import { normalizeWorkspaceRoot } from './applicationWorkspace'
 import { endApplicationPlanningExecution } from './applicationLifecycle'
-import { planningWorkflowCanPublishDuringRun, planningWorkflowPhase } from './applicationPlanningWorkflowState'
+import { planningWorkflowCanPublishDuringRun } from './applicationPlanningWorkflowState'
 import {
   readApplicationPlanningAuthoritativeSnapshot,
   type ApplicationPlanningAuthoritativeSnapshot,
@@ -618,15 +618,15 @@ export class ApplicationPlanningRuntime {
     }
   }
 
-  /** 冷恢复及断线后持续只读对账；失败退避不依赖已有 Run，也不自动重跑节点。 */
+  /** 仅跟进已知运行中任务；空闲确认门与失败连接不定时请求后端。 */
   async refreshDetachedRunningState(): Promise<void> {
     if (this.disposed || this.runActive || this.session.hasActiveRun()) return
     const current = this.dependencies.getCurrentState()
     if (
       current?.application.id !== this.applicationId || current.threadId !== this.threadId ||
       current.transportState !== 'idle' || !recoveryStore.canRead(recoveryStore.key(current.application.workspaceRoot || '', this.applicationId, this.threadId)) ||
-      (current.connection.status !== 'unavailable' && !current.syncError &&
-        current.recovery?.classification !== 'running' && planningWorkflowPhase(current.workflow) !== 'ui_confirmation')
+      current.connection.status !== 'healthy' || Boolean(current.syncError) ||
+      current.recovery?.classification !== 'running'
     ) return
     // 第一次读取可能早于孤儿租约到期；后续只读对账负责显露兜底入口。
     await this.reconcileCurrentState(true)
