@@ -1,4 +1,4 @@
-"""管理工作区 Java 预览进程的内存登记、PID 恢复与安全终止。"""
+"""管理工作区 Java 预览进程、运行副本及安全终止。"""
 
 from __future__ import annotations
 
@@ -8,17 +8,29 @@ import signal
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record, remove_backend_jar
 from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
 
 
 BACKEND_STOP_TIMEOUT_SECONDS = 5
 BACKEND_STOP_POLL_INTERVAL_SECONDS = 0.05
-_BACKEND_PROCESSES: dict[str, subprocess.Popen[bytes]] = {}
+
+
+@dataclass(frozen=True)
+class _RegisteredBackend:
+    """内存中的进程及副本，记录写入失败时仍能回收。"""
+
+    process: subprocess.Popen[bytes]
+    jar: Path | None
+
+
+_BACKEND_PROCESSES: dict[str, _RegisteredBackend] = {}
 _BACKEND_LAUNCH_LOCKS: dict[str, threading.RLock] = {}
 _BACKEND_REGISTRY_GUARD = threading.Lock()
 
@@ -34,11 +46,12 @@ def backend_launch_lock(workspace: Path) -> threading.RLock:
 def register_backend_process(
     workspace: Path,
     process: subprocess.Popen[bytes],
+    jar: Path | None = None,
 ) -> None:
     """登记指定工作区最新启动的 Java 进程。"""
 
     with _BACKEND_REGISTRY_GUARD:
-        _BACKEND_PROCESSES[_workspace_key(workspace)] = process
+        _BACKEND_PROCESSES[_workspace_key(workspace)] = _RegisteredBackend(process, jar)
 
 
 def clear_backend_process_registry_workspace(workspace: str | Path) -> bool:
@@ -47,8 +60,8 @@ def clear_backend_process_registry_workspace(workspace: str | Path) -> bool:
     workspace_path = Path(workspace).expanduser().resolve(strict=False)
     workspace_key = _workspace_key(workspace_path)
     with _BACKEND_REGISTRY_GUARD:
-        process = _BACKEND_PROCESSES.get(workspace_key)
-        if process is not None and process.poll() is None:
+        registered = _BACKEND_PROCESSES.get(workspace_key)
+        if registered is not None and registered.process.poll() is None:
             return False
         removed_process = _BACKEND_PROCESSES.pop(workspace_key, None) is not None
         removed_lock = _BACKEND_LAUNCH_LOCKS.pop(workspace_key, None) is not None
@@ -58,24 +71,22 @@ def clear_backend_process_registry_workspace(workspace: str | Path) -> bool:
 def stop_previous_backend_process(
     *,
     workspace: Path,
-    backend_root: Path,
     runtime_root: Path,
 ) -> dict[str, Any]:
-    """优先停止内存登记进程，并在服务重启后安全回退到 PID 文件。"""
+    """优先停止内存登记进程，并在服务重启后通过进程记录校验身份。"""
 
-    pid_file = runtime_root / "backend.pid"
+    pid_file = runtime_root / BACKEND_PROCESS_FILENAME
     with _BACKEND_REGISTRY_GUARD:
-        process = _BACKEND_PROCESSES.get(_workspace_key(workspace))
-    if process is not None:
+        registered = _BACKEND_PROCESSES.get(_workspace_key(workspace))
+    if registered is not None:
         return terminate_backend_process(
             workspace=workspace,
-            process=process,
+            process=registered.process,
             pid_file=pid_file,
             source="memory",
         )
     return _stop_backend_process_from_pid_file(
         workspace=workspace,
-        backend_root=backend_root,
         pid_file=pid_file,
     )
 
@@ -87,7 +98,7 @@ def terminate_backend_process(
     pid_file: Path | None,
     source: str = "memory",
 ) -> dict[str, Any]:
-    """终止已持有 Popen 对象的 Java 进程，并同步清理登记与 PID 文件。"""
+    """终止持有的 Java 进程，确认退出后清理进程记录与运行副本。"""
 
     pid = getattr(process, "pid", None)
     cleanup = _cleanup_result(
@@ -115,8 +126,10 @@ def terminate_backend_process(
         cleanup["error"] = str(exc)
 
     if cleanup["success"]:
-        _unregister_backend_process(workspace, process)
-        _remove_pid_file(pid_file, cleanup, expected_pid=cleanup["pid"])
+        with _BACKEND_REGISTRY_GUARD:
+            registered = _BACKEND_PROCESSES.get(_workspace_key(workspace)) if workspace is not None else None
+        jar = registered.jar if registered is not None and registered.process is process else None
+        _finish_process_cleanup(workspace, process, pid_file, cleanup, jar=jar)
     cleanup["finished_at"] = datetime.now(UTC).isoformat()
     return cleanup
 
@@ -124,32 +137,30 @@ def terminate_backend_process(
 def _stop_backend_process_from_pid_file(
     *,
     workspace: Path,
-    backend_root: Path,
     pid_file: Path,
 ) -> dict[str, Any]:
-    """从 PID 文件恢复进程，校验命令身份后再执行跨平台终止。"""
+    """从磁盘恢复进程，校验命令使用的运行副本后再终止。"""
 
-    if not pid_file.is_file():
+    try:
+        record = read_backend_process_record(pid_file)
+    except (OSError, ValueError) as exc:
+        cleanup = _cleanup_result(attempted=False, source="pid_file", pid=None)
+        cleanup["error"] = f"无法读取有效的后端 PID 和运行副本记录：{exc}"
+        cleanup["finished_at"] = datetime.now(UTC).isoformat()
+        return cleanup
+    if record is None:
         cleanup = _cleanup_result(attempted=False, source="none", pid=None)
         cleanup["success"] = True
         cleanup["finished_at"] = datetime.now(UTC).isoformat()
         return cleanup
-    try:
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
-        if pid <= 0:
-            raise ValueError("PID 必须为正整数")
-    except (OSError, ValueError) as exc:
-        cleanup = _cleanup_result(attempted=False, source="pid_file", pid=None)
-        cleanup["error"] = f"无法读取有效的后端 PID 文件：{exc}"
-        cleanup["finished_at"] = datetime.now(UTC).isoformat()
-        return cleanup
 
+    pid = record.pid
     cleanup = _cleanup_result(attempted=True, source="pid_file", pid=pid)
     if not _pid_is_running(pid):
         cleanup["attempted"] = False
         cleanup["stale"] = True
         cleanup["success"] = True
-        _remove_pid_file(pid_file, cleanup, expected_pid=pid)
+        _finish_process_cleanup(workspace, None, pid_file, cleanup)
         cleanup["finished_at"] = datetime.now(UTC).isoformat()
         return cleanup
 
@@ -158,17 +169,16 @@ def _stop_backend_process_from_pid_file(
         cleanup["error"] = command_error
         cleanup["finished_at"] = datetime.now(UTC).isoformat()
         return cleanup
-    if not _command_matches_workspace_backend(command, backend_root):
+    if not _command_matches_backend_jar(command, record.jar):
         cleanup["identity_matched"] = False
-        cleanup["error"] = "PID 指向的进程不是当前工作区的 java -jar 后端，已拒绝终止。"
+        cleanup["error"] = "PID 指向的进程未使用当前工作区登记的 JAR 副本，已拒绝终止。"
         cleanup["finished_at"] = datetime.now(UTC).isoformat()
         return cleanup
 
     cleanup["identity_matched"] = True
     _terminate_recovered_pid(pid, cleanup)
     if cleanup["success"]:
-        _unregister_backend_process(workspace, None)
-        _remove_pid_file(pid_file, cleanup, expected_pid=pid)
+        _finish_process_cleanup(workspace, None, pid_file, cleanup)
     cleanup["finished_at"] = datetime.now(UTC).isoformat()
     return cleanup
 
@@ -249,6 +259,7 @@ def _query_process_command(pid: int) -> tuple[str, str | None]:
                 "-NonInteractive",
                 "-Command",
                 (
+                    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
                     "$process = Get-CimInstance Win32_Process -Filter "
                     f"\"ProcessId = {pid}\"; $process.CommandLine"
                 ),
@@ -270,19 +281,18 @@ def _query_process_command(pid: int) -> tuple[str, str | None]:
     return command, None
 
 
-def _command_matches_workspace_backend(command: str, backend_root: Path) -> bool:
-    """确认命令属于当前工作区 target 下的 Java JAR，而不是其他 Java 进程。"""
+def _command_matches_backend_jar(command: str, jar: Path) -> bool:
+    """核对 Java 可执行文件及最后一个参数，避免路径子串或 JVM 属性误匹配。"""
 
     normalized_command = _normalize_process_identity(command)
-    if "java" not in normalized_command or "-jar" not in normalized_command:
-        return False
-    target_root = backend_root / "target"
-    jar_paths = {
-        _normalize_process_identity(str(path.resolve()))
-        for path in target_root.glob("*.jar")
-        if path.is_file()
-    }
-    return any(jar_path in normalized_command for jar_path in jar_paths)
+    launcher, separator, argument = normalized_command.rpartition(" -jar ")
+    executable = launcher.partition(" -D" if os.name != "nt" else " -d")[0].strip('"')
+    expected = _normalize_process_identity(str(jar))
+    return (
+        bool(separator)
+        and executable.rsplit("/", 1)[-1] in {"java", "java.exe"}
+        and argument in {expected, f'"{expected}"'}
+    )
 
 
 def _normalize_process_identity(value: str) -> str:
@@ -303,29 +313,35 @@ def _unregister_backend_process(
     workspace_key = _workspace_key(workspace)
     with _BACKEND_REGISTRY_GUARD:
         registered = _BACKEND_PROCESSES.get(workspace_key)
-        if process is None or registered is process:
+        if process is None or (registered is not None and registered.process is process):
             _BACKEND_PROCESSES.pop(workspace_key, None)
 
 
-def _remove_pid_file(
+def _finish_process_cleanup(
+    workspace: Path | None,
+    process: subprocess.Popen[bytes] | None,
     pid_file: Path | None,
     cleanup: dict[str, Any],
     *,
-    expected_pid: int | None,
+    jar: Path | None = None,
 ) -> None:
-    """仅删除仍指向目标进程的 PID 文件，避免并发启动误删新记录。"""
+    """清理已退出的副本及匹配记录，失败时保留身份供下一次重试。"""
 
-    if pid_file is None:
-        return
     try:
-        if expected_pid is not None and pid_file.is_file():
-            current_pid = int(pid_file.read_text(encoding="utf-8").strip())
-            if current_pid != expected_pid:
-                cleanup["pid_file_preserved"] = True
-                return
-        pid_file.unlink(missing_ok=True)
+        record = read_backend_process_record(pid_file) if pid_file is not None else None
+        matches = record is not None and record.pid == cleanup["pid"] and jar in {None, record.jar}
+        if record is not None and not matches:
+            cleanup["pid_file_preserved"] = True
+        if matches and record is not None:
+            jar = record.jar
+        if jar is not None and (matches or record is None or jar != record.jar):
+            remove_backend_jar(jar)
+        if matches and pid_file is not None:
+            pid_file.unlink(missing_ok=True)
     except (OSError, ValueError) as exc:
-        cleanup["pid_file_error"] = str(exc)
+        cleanup.update(success=False, error=f"无法清理后端进程记录或 JAR 副本：{exc}")
+        return
+    _unregister_backend_process(workspace, process)
 
 
 def _cleanup_result(

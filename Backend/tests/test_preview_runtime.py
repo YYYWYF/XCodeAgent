@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from app.protocols.preview_runtime import build_preview_runtime_stream, blocking_task
 from app.agents.repair_planner.planner import _build_failure_repair_prompt
+from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, write_backend_process_record
 from app.services.preview_runtime_guard import _owners, claim_maintenance, maintenance_owner, release_maintenance, require_no_maintenance
 from app.services.preview_runtime_repair import execute_repair, load_repair, prepare_repair, save_repair, source_digest, safe_file
 from app.services.preview_runtime_state import (
@@ -215,7 +216,9 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     "backend": {"status": "running", "server": {"pid": 456, "port": 8080}},
                 })
                 (root / "frontend.pid").write_text("123")
-                (root / "backend.pid").write_text("456")
+                write_backend_process_record(
+                    root / BACKEND_PROCESS_FILENAME, pid=456, jar=root / "backend-jar" / ("a" * 32) / "app.jar",
+                )
                 (root / "backend.stdout.log").write_text("Started Application in 0.1 seconds\n")
                 previous = read_record(self.workspace)[other]
                 with (
@@ -528,7 +531,9 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         begin_attempt(self.workspace)
         root = runtime_root(self.workspace)
-        root.joinpath("backend.pid").write_text(str(os.getpid()))
+        write_backend_process_record(
+            root / BACKEND_PROCESS_FILENAME, pid=os.getpid(), jar=root / "backend-jar" / ("a" * 32) / "app.jar",
+        )
         stdout = root / "backend.stdout.log"
         stdout.write_text("Spring Boot Version 3.5\nStarted Application in 3.5 seconds\n")
         finish_attempt(self.workspace, {

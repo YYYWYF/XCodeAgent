@@ -327,7 +327,7 @@ launch_project failed -> launch_project
 | `backend_database_config` | plantMode 缺失、DBID/内置模式不支持、密码无法解密 | Maven 前失败 |
 | `backend_cleanup` | 旧 Java 进程无法安全识别或停止 | 中止 Maven，避免误杀和并发启动 |
 | `backend_build` | Maven 返回非零、超时或 OSError | 保存 stdout/stderr 日志后失败 |
-| `backend_jar` | 无唯一主 SNAPSHOT JAR | 直接失败 |
+| `backend_jar` | 无唯一主 JAR 或复制运行副本失败 | 直接失败 |
 | `backend_start` | Popen 失败、进程退出或就绪超时 | 清理本次进程并失败 |
 | `frontend_start` | package、script、包管理器、install、进程或健康检查失败 | 必要时补偿停止 Java |
 
@@ -387,7 +387,7 @@ Static 分支完全跳过 Java 和数据库密码解析是必要的安全边界�
 | `backend/mvnw`/`mvnw.cmd` | 项目 Maven wrapper | 条件必要 | 没有时回退 PATH `mvn` |
 | PATH `mvn` | Maven 构建 | 条件必要 | wrapper 存在时不需要 |
 | PATH `java` | `java -jar` | 条件必要 | 后端启动必需 |
-| `target/*-SNAPSHOT.jar` | 唯一主程序 | 条件必要 | 由 `mvn clean install` 产生 |
+| `target/app.jar` 或 `target/*-SNAPSHOT.jar` | 唯一主程序 | 条件必要 | 由 `mvn clean install` 产生 |
 | 后端 stdout/stderr | 就绪 marker | 当前设计必要 | 应逐步由健康端点替代 |
 
 主 JAR 选择会排除 `original-*`、sources、javadoc、tests/test JAR。要求唯一主包是合理的 fail-close，避免启动错误产物。
@@ -433,7 +433,8 @@ package.json
 
 | 文件 | 用途 | 是否必要 |
 | --- | --- | --- |
-| `backend.pid` | Backend 重启后恢复并安全停止旧 Java | 是 |
+| `backend-process.json` | 登记 PID 与运行副本，供 Backend 重启后安全停止 Java | 是 |
+| `backend-jar/<启动ID>/` | 保存当前运行的 JAR 副本及 Java 工作目录 | 是 |
 | `frontend.pid` | 复用或停止前端预览进程 | 是 |
 | `backend-build.stdout.log` | Maven 构建证据 | 是 |
 | `backend-build.stderr.log` | Maven 错误证据 | 是 |

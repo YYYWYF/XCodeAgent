@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from app.services.backend_launch_support import (
     JAVA_BACKEND_JAR_OPTIONS,
-    _backend_runtime_environment, _find_backend_snapshot_jar,
+    _backend_runtime_environment, _find_backend_jar,
     _jar_has_main_class, _run_backend_repackage,
 )
 from app.services.backend_startup_diagnostics import (
@@ -25,6 +25,7 @@ from app.services.backend_startup_diagnostics import (
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.managed_database_runtime import ManagedDatabaseStartupError, prepare_managed_startup
 from app.services.runtime_log_redaction import attach_redacted_logs
+from app.services.backend_runtime_jar import BACKEND_JAR_DIRECTORY, remove_backend_jar, stage_backend_jar
 
 BACKEND_STARTUP_TIMEOUT_SECONDS = 60
 BACKEND_STARTUP_STABILITY_SECONDS = 3
@@ -121,6 +122,7 @@ def _run_backend_startup_check_locked(
     stderr_path.touch(mode=0o600)
     environment: dict[str, str] = {}
     process: subprocess.Popen[Any] | None = None
+    runtime_jar: Path | None = None
     execution: dict[str, Any] = {
         "tool": "subprocess", "argv": [], "cwd": backend_root.relative_to(root).as_posix(),
         "returncode": None, "timed_out": False, "error": None,
@@ -139,9 +141,12 @@ def _run_backend_startup_check_locked(
         java = shutil.which("java")
         if not java:
             raise RuntimeError("未找到 Java 命令：java。")
-        jar, _candidates = _find_backend_snapshot_jar(backend_root / "target")
+        jar, candidates = _find_backend_jar(backend_root / "target")
         if jar is None:
-            raise RuntimeError("本轮构建未产生唯一的 SNAPSHOT 主 JAR。")
+            raise RuntimeError(
+                "本轮构建产生了多个主 JAR。" if candidates
+                else "本轮构建未产生 app.jar 或 SNAPSHOT 主 JAR。"
+            )
         if _jar_has_main_class(jar) is False:
             repackage = _run_backend_repackage(
                 maven_command=maven_command, workspace=root, cwd=backend_root,
@@ -155,7 +160,7 @@ def _run_backend_startup_check_locked(
             if repackage["returncode"] != 0:
                 category = "backend_repackage"
                 raise RuntimeError("后端 JAR 补打包失败。")
-            jar, _candidates = _find_backend_snapshot_jar(backend_root / "target")
+            jar, _candidates = _find_backend_jar(backend_root / "target")
         if jar is None or _jar_has_main_class(jar) is not True:
             raise RuntimeError("后端 JAR 损坏或缺少可执行 Main-Class。")
         if snapshot is not None:
@@ -163,15 +168,16 @@ def _run_backend_startup_check_locked(
             if config_error:
                 category = "backend_database_resource"
                 raise RuntimeError(f"后端启动配置不可用：{config_error}")
+        runtime_jar = stage_backend_jar(jar, attempt_root / BACKEND_JAR_DIRECTORY)
         java_args = [java, *JAVA_BACKEND_JAR_OPTIONS, "-jar"]
         server_args = ["--server.address=127.0.0.1", "--server.port=0"]
-        argv = [*java_args, str(jar), *server_args]
-        execution["argv"] = [*java_args, jar.relative_to(root).as_posix(), *server_args]
-        execution["cwd"] = jar.parent.relative_to(root).as_posix()
+        argv = [*java_args, str(runtime_jar), *server_args]
+        execution["argv"] = [*java_args, runtime_jar.relative_to(root).as_posix(), *server_args]
+        execution["cwd"] = runtime_jar.parent.relative_to(root).as_posix()
         execution["returncode"] = None
         with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
             with workspace_process_registry.managed_process(
-                argv, workspace=root, run_id=run_id, cwd=jar.parent, env=environment,
+                argv, workspace=root, run_id=run_id, cwd=runtime_jar.parent, env=environment,
                 stdout=subprocess.PIPE if snapshot is not None else stdout,
                 stderr=subprocess.PIPE if snapshot is not None else stderr, stdin=subprocess.DEVNULL,
             ) as process:
@@ -195,6 +201,14 @@ def _run_backend_startup_check_locked(
         result.update(passed=False, evidence=f"后端启动检查失败：{exc}")
         execution["error"] = str(exc)
     finally:
+        cleanup_succeeded = process is None or process.poll() is not None
+        if runtime_jar is not None and cleanup_succeeded:
+            try:
+                remove_backend_jar(runtime_jar)
+            except OSError as exc:
+                cleanup_succeeded = False
+                result.update(passed=False, evidence=f"后端启动检查副本清理失败：{exc}")
+                execution["error"] = str(exc)
         for thread in log_threads:
             thread.join(timeout=2)
         # 源日志也清理，避免修复 Agent 通过虚拟路径读到数据库密码。
@@ -212,7 +226,7 @@ def _run_backend_startup_check_locked(
     execution.update(
         root_cause=root_cause, stdout_tail=stdout_text[-OUTPUT_LIMIT:],
         stderr_tail=stderr_text[-OUTPUT_LIMIT:], finished_at=datetime.now(UTC).isoformat(),
-        cleanup_succeeded=process is None or process.poll() is not None,
+        cleanup_succeeded=cleanup_succeeded,
         error=redact_startup_text(str(execution["error"]), environment) if execution["error"] else None,
     )
     for key, path in (("stdout_log", stdout_path), ("stderr_log", stderr_path)):

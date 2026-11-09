@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.services.preview_runtime_guard import maintenance_owner
 from app.services.preview_diagnostics import diagnostics_from_command, launch_diagnostics
+from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record
 from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import read_utf8_log_tail
 
@@ -299,10 +300,9 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                 pid = int(part.get("pid") or 0)
                 if not pid_is_running(pid):
                     raise ProcessLookupError()
-                pid_path = root / f"{layer}.pid"
-                if not pid_path.is_file() or int(pid_path.read_text().strip()) != pid:
-                    raise ProcessLookupError()
                 if layer == "frontend":
+                    if int((root / "frontend.pid").read_text(encoding="utf-8").strip()) != pid:
+                        raise ProcessLookupError()
                     from app.services.frontend_project_launcher import _resolve_actual_preview_url
 
                     # 当前存活 PID 的启动日志优先于推算端口，校准 HTTP 被旧项目响应的误绑定。
@@ -314,6 +314,9 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                     if not _frontend_runtime_is_ready(root, part):
                         raise ProcessLookupError()
                 else:
+                    record = read_backend_process_record(root / BACKEND_PROCESS_FILENAME)
+                    if record is None or record.pid != pid:
+                        raise ProcessLookupError()
                     from app.services.backend_project_launcher import _backend_logs_are_ready
                     if not _backend_logs_are_ready(stdout_log=root / "backend.stdout.log", stdout_offset=0, stderr_log=root / "backend.stderr.log", stderr_offset=0):
                         raise ProcessLookupError()

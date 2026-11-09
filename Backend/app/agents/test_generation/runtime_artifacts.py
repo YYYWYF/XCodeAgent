@@ -6,7 +6,7 @@ import re
 # 与前后端启动器及 preview_runtime_state 的当前文件名保持一致，不放行整个 runtime 目录。
 _PREVIEW_LAUNCH_FILES = frozenset({
     "frontend.pid",
-    "backend.pid",
+    "backend-process.json",
     "preview-runtime.json",
     *(
         f"{command}.{stream}.log"
@@ -30,6 +30,8 @@ def is_preview_runtime_artifact(relative_path: str) -> bool:
         return False
     filename = relative_path[len(prefix):]
     # write_record 使用 UUID 命名的同目录临时文件进行原子替换，快照可能看到中间态。
-    return filename in _PREVIEW_LAUNCH_FILES or re.fullmatch(
-        r"\.preview-[0-9a-f]{32}\.tmp", filename,
-    ) is not None
+    return (
+        filename in _PREVIEW_LAUNCH_FILES
+        or re.fullmatch(r"\.(?:preview|backend-process)-[0-9a-f]{32}\.tmp", filename) is not None
+        or re.match(r"backend-jar/[0-9a-f]{32}/", filename) is not None
+    )

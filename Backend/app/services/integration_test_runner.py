@@ -8,12 +8,14 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from app.services.data_source_policy import read_application_datasource_type
+from app.services.backend_process_registry import backend_launch_lock
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.backend_startup_check import run_backend_startup_check
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
@@ -129,37 +131,40 @@ def run_integration_checks(
             events.append(result["id"])
     # Static 是纯前端运行时，即使模板保留 pom.xml 也不得触发后端质量门。
     elif "backend" in selected_layers and datasource_type != "static":
-        if (
+        frontend_failed = (
             "frontend" in selected_layers
             and frontend is not None
             and _has_blocking_failure(frontend_results)
-        ):
-            backend_results = _backend_checks_skipped_after_frontend_failure(
-                phase=phase,
-                on_progress=on_progress,
-            )
-        elif phase in {"all", "build"}:
-            backend_results = _backend_checks(
-                root,
-                log_root,
-                state=state,
-                unit_tests_affected=backend_unit_tests_affected,
-                include_unit_tests=phase == "all",
-                on_progress=on_progress,
-            )
-        else:
-            backend_results = _backend_unit_checks(
-                root,
-                log_root,
-                state=state,
-                unit_tests_affected=backend_unit_tests_affected,
-                on_progress=on_progress,
-            )
-        if include_backend_startup and phase in {"all", "build"}:
-            startup = _backend_startup_result(state, root, log_root, backend_results, on_progress)
-            index = next((i + 1 for i, item in enumerate(backend_results)
-                          if item["id"] == "backend_build"), len(backend_results))
-            backend_results.insert(index, startup)
+        )
+        # 后端构建与启动检查之间始终持锁，确保复制的是同一次 Maven 构建产物。
+        with nullcontext() if frontend_failed else backend_launch_lock(root):
+            if frontend_failed:
+                backend_results = _backend_checks_skipped_after_frontend_failure(
+                    phase=phase,
+                    on_progress=on_progress,
+                )
+            elif phase in {"all", "build"}:
+                backend_results = _backend_checks(
+                    root,
+                    log_root,
+                    state=state,
+                    unit_tests_affected=backend_unit_tests_affected,
+                    include_unit_tests=phase == "all",
+                    on_progress=on_progress,
+                )
+            else:
+                backend_results = _backend_unit_checks(
+                    root,
+                    log_root,
+                    state=state,
+                    unit_tests_affected=backend_unit_tests_affected,
+                    on_progress=on_progress,
+                )
+            if include_backend_startup and phase in {"all", "build"}:
+                startup = _backend_startup_result(state, root, log_root, backend_results, on_progress)
+                index = next((i + 1 for i, item in enumerate(backend_results)
+                              if item["id"] == "backend_build"), len(backend_results))
+                backend_results.insert(index, startup)
         for result in backend_results:
             results.append(result)
             events.append(result["id"])

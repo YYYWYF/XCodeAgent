@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from app.graph.subgraphs.testing import (
     frontend_performance_confirmation, integration_test,
 )
 from app.services.integration_test_runner import run_integration_checks
+from app.services.backend_process_registry import backend_launch_lock
 from app.services.small_task import build_small_task_packet
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
 from app.services.test_validation import create_repair_task_plan, evaluate_quality_gate
@@ -88,6 +90,43 @@ class BackendStartupIntegrationTests(unittest.TestCase):
                     static = run_integration_checks({'workspace': str(root)}, phase='build', affected_layers={'backend'}, include_backend_startup=True)
                 self.assertFalse(static['test_results'][-1]['required'])
                 start.assert_not_called()
+
+    def test_build_and_startup_hold_preview_launch_lock(self) -> None:
+        """另一线程的预览启动不能在构建及启动取包期间取得工作区锁。"""
+
+        with tempfile.TemporaryDirectory() as directory, ThreadPoolExecutor(1) as executor:
+            root = Path(directory).resolve()
+            (root / "pom.xml").write_text("<project/>")
+            lock = backend_launch_lock(root)
+
+            def preview_can_start() -> bool:
+                """在另一线程尝试进入与预览启动器相同的临界区。"""
+                if not lock.acquire(blocking=False):
+                    return False
+                lock.release()
+                return True
+
+            def build(**kwargs: object) -> dict:
+                """验证 Maven 调用期间预览不能重新构建。"""
+                self.assertFalse(executor.submit(preview_can_start).result(timeout=2))
+                return {"id": kwargs["check_id"], "passed": True}
+
+            def startup(**_kwargs: object) -> dict:
+                """验证取本轮产物时仍持有同一把锁。"""
+                self.assertFalse(executor.submit(preview_can_start).result(timeout=2))
+                return {**failed_startup(), "passed": True}
+
+            with (
+                patch("app.services.integration_test_runner._maven_command", return_value=["mvn"]),
+                patch("app.services.integration_test_runner._run_command_result", side_effect=build),
+                patch("app.services.integration_test_runner.run_backend_startup_check", side_effect=startup),
+            ):
+                result = run_integration_checks(
+                    {"workspace": str(root)}, phase="build",
+                    affected_layers={"backend"}, include_backend_startup=True,
+                )
+            self.assertTrue(all(check["passed"] for check in result["test_results"]))
+            self.assertTrue(executor.submit(preview_can_start).result(timeout=2))
 
     def test_graph_enables_check_and_failure_reaches_actual_repair_packet(self) -> None:
         """根因、配置线索与日志跨越门禁、规划和实际修复包后仍完整。"""

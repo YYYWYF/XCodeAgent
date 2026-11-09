@@ -129,16 +129,18 @@ def _run_backend_repackage(
     }
 
 
-def _find_backend_snapshot_jar(target_root: Path) -> tuple[Path | None, list[Path]]:
-    """筛选 Maven target 中唯一可执行的 SNAPSHOT 主 JAR。"""
+def _find_backend_jar(target_root: Path) -> tuple[Path | None, list[Path]]:
+    """筛选 Maven target 中唯一的 app.jar 或非附属 SNAPSHOT 主包。"""
 
     if not target_root.is_dir():
         return None, []
     candidates = sorted(
         (
             path
-            for path in target_root.glob("*-SNAPSHOT.jar")
-            if path.is_file() and not _is_auxiliary_snapshot_jar(path)
+            for path in target_root.iterdir()
+            if (path.name == "app.jar" or path.name.endswith("-SNAPSHOT.jar"))
+            and path.is_file() and not path.is_symlink()
+            and not _is_auxiliary_snapshot_jar(path)
         ),
         key=lambda path: path.name,
     )

@@ -17,6 +17,7 @@ from app.services.frontend_project_launcher import (
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record
 from app.utils.process_liveness import pid_is_running
 
 
@@ -345,7 +346,12 @@ def inspect_project_preview(workspace_path: str | Path) -> dict[str, Any]:
 
     root = Path(workspace_path).expanduser().resolve()
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
-    backend = {"running": _pid_file_is_running(runtime_root / "backend.pid")}
+    try:
+        backend_record = read_backend_process_record(runtime_root / BACKEND_PROCESS_FILENAME)
+        backend_running = backend_record is not None and pid_is_running(backend_record.pid)
+    except (OSError, ValueError):
+        backend_running = False
+    backend = {"running": backend_running}
     frontend = {"running": _pid_file_is_running(runtime_root / "frontend.pid")}
     return {
         "workspace": str(root),

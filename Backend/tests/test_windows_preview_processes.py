@@ -108,6 +108,19 @@ class WindowsPreviewProcessTests(unittest.TestCase):
                 )
                 posix_tree.assert_not_called()
 
+    def test_windows_backend_recovery_matches_exact_quoted_runtime_jar(self) -> None:
+        """Windows 恢复校验支持空格和大小写差异，同时拒绝仅包含副本路径的其他命令。"""
+
+        jar = Path(r"C:\Workspace With Spaces\.devagentstudio\runtime\launch\backend-jar\test\app.jar")
+        java = r'"C:\Program Files\Java\bin\JAVA.EXE" -Dfile.encoding=UTF-8'
+        with patch.object(backend_process_registry.os, "name", "nt"):
+            self.assertTrue(backend_process_registry._command_matches_backend_jar(
+                f'{java} -jar "{str(jar).lower()}"', jar,
+            ))
+            self.assertFalse(backend_process_registry._command_matches_backend_jar(
+                f'{java} -jar "{jar}.backup"', jar,
+            ))
+
     def test_windows_taskkill_failure_keeps_pid_file(self) -> None:
         """整树终止命令失败且进程仍存活时，保留 PID 以供后续重试。"""
 

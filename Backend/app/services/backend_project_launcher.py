@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from app.services.backend_process_registry import (
     backend_launch_lock,
@@ -21,11 +22,15 @@ from app.services.backend_process_registry import (
 from app.services.backend_launch_support import (
     JAVA_BACKEND_JAR_OPTIONS,
     _backend_runtime_environment,
-    _find_backend_snapshot_jar,
+    _find_backend_jar,
     _jar_has_main_class,
     _maven_log_environment,
     _maven_output_text,
     _run_backend_repackage,
+)
+from app.services.backend_runtime_jar import (
+    BACKEND_JAR_DIRECTORY, BACKEND_PROCESS_FILENAME, remove_backend_jar,
+    stage_backend_jar, write_backend_process_record,
 )
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.managed_database_runtime import ManagedDatabaseStartupError, prepare_managed_startup
@@ -175,7 +180,6 @@ def _launch_backend_project_locked(
 
     prebuild_cleanup = stop_previous_backend_process(
         workspace=root,
-        backend_root=backend_root,
         runtime_root=runtime_root,
     )
     if not prebuild_cleanup["success"]:
@@ -215,12 +219,12 @@ def _launch_backend_project_locked(
         )
 
     target_root = backend_root / "target"
-    jar_path, candidates = _find_backend_snapshot_jar(target_root)
+    jar_path, candidates = _find_backend_jar(target_root)
     if jar_path is None:
         message = (
-            "backend/target 中未找到可启动的 *-SNAPSHOT.jar。"
+            "backend/target 中未找到主包 app.jar 或 *-SNAPSHOT.jar。"
             if not candidates
-            else "backend/target 中存在多个可启动的 *-SNAPSHOT.jar，无法确定主程序。"
+            else "backend/target 中存在多个主 JAR，无法确定主程序。"
         )
         return _failed_backend_launch(
             message,
@@ -260,7 +264,7 @@ def _launch_backend_project_locked(
                 jar_candidates=candidates,
                 prebuild_cleanup=prebuild_cleanup,
             )
-        jar_path, candidates = _find_backend_snapshot_jar(target_root)
+        jar_path, candidates = _find_backend_jar(target_root)
         if jar_path is None or _jar_has_main_class(jar_path) is not True:
             return _failed_backend_launch(
                 "补打包完成，但 backend/target 中仍没有可执行的 Spring Boot JAR。",
@@ -290,15 +294,24 @@ def _launch_backend_project_locked(
 
     if on_progress:
         on_progress("正在启动 Java 后端并检测服务就绪…")
+    try:
+        runtime_jar = stage_backend_jar(jar_path, runtime_root / BACKEND_JAR_DIRECTORY / uuid4().hex)
+    except OSError as exc:
+        return _failed_backend_launch(
+            f"无法复制后端 JAR 到预览运行目录：{exc}",
+            root=root, backend_root=backend_root, pom_path=pom_path, runtime_root=runtime_root,
+            failed_stage="backend_jar", build=build_result, repackage=repackage_result,
+            target_root=target_root, jar_path=jar_path, jar_candidates=candidates,
+            prebuild_cleanup=prebuild_cleanup,
+        )
     server_result, process = _start_backend_server(
+        workspace=root,
         java_command=java_command,
-        jar_path=jar_path,
+        jar_path=runtime_jar,
         runtime_root=runtime_root,
         environment=runtime_environment,
         **({"redact_output": True} if managed_snapshot is not None else {}),
     )
-    if process is not None:
-        register_backend_process(root, process)
     ready = process is not None and _wait_for_backend_ready(
         process,
         stdout_log=Path(str(server_result.get("stdout_log") or "")),
@@ -435,7 +448,6 @@ def stop_workspace_backend_project(workspace_path: str | Path) -> dict[str, Any]
     with backend_launch_lock(root):
         cleanup = stop_previous_backend_process(
             workspace=root,
-            backend_root=backend_root,
             runtime_root=runtime_root,
         )
     if not pom_path.is_file() and not cleanup.get("attempted") and cleanup.get("success"):
@@ -529,69 +541,59 @@ def _run_backend_build(
 
 def _start_backend_server(
     *,
+    workspace: Path,
     java_command: str,
     jar_path: Path,
     runtime_root: Path,
     environment: dict[str, str],
     redact_output: bool = False,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
-    """在 target 目录后台启动 Java JAR，并注入当前应用的数据库环境。"""
+    """从隔离副本目录启动 Java，登记进程和副本后再交给就绪检查。"""
 
     argv = [java_command, *JAVA_BACKEND_JAR_OPTIONS, "-jar", str(jar_path.resolve())]
     stdout_path = runtime_root / "backend.stdout.log"
     stderr_path = runtime_root / "backend.stderr.log"
-    stdout = stdout_path.open("ab")
-    stderr = stderr_path.open("ab")
-    stdout_offset = stdout.tell()
-    stderr_offset = stderr.tell()
+    record_path = runtime_root / BACKEND_PROCESS_FILENAME
+    server: dict[str, Any] = {
+        "argv": argv,
+        "cwd": str(jar_path.parent),
+        "pid": None,
+        "stdout_log": str(stdout_path),
+        "stderr_log": str(stderr_path),
+    }
+    process: subprocess.Popen[bytes] | None = None
     try:
-        process = subprocess.Popen(
-            argv,
-            cwd=str(jar_path.parent),
-            stdout=subprocess.PIPE if redact_output else stdout,
-            stderr=subprocess.PIPE if redact_output else stderr,
-            stdin=subprocess.DEVNULL,
-            env=environment,
-            **preview_process_creation_options(),
-        )
-    except OSError as exc:
-        stdout.close()
-        stderr.close()
-        return (
-            {
-                "argv": argv,
-                "cwd": str(jar_path.parent),
-                "pid": None,
-                "error": str(exc),
-                "stdout_log": str(stdout_path),
-                "stdout_offset": stdout_offset,
-                "stderr_log": str(stderr_path),
-                "stderr_offset": stderr_offset,
-            },
-            None,
-        )
-    stdout.close()
-    stderr.close()
-    if redact_output:
-        from app.services.runtime_log_redaction import attach_redacted_logs
+        with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
+            server.update(stdout_offset=stdout.tell(), stderr_offset=stderr.tell())
+            process = subprocess.Popen(
+                argv,
+                cwd=str(jar_path.parent),
+                stdout=subprocess.PIPE if redact_output else stdout,
+                stderr=subprocess.PIPE if redact_output else stderr,
+                stdin=subprocess.DEVNULL,
+                env=environment,
+                **preview_process_creation_options(),
+            )
+            register_backend_process(workspace, process, jar_path)
+        write_backend_process_record(record_path, pid=process.pid, jar=jar_path)
+        if redact_output:
+            from app.services.runtime_log_redaction import attach_redacted_logs
 
-        process._devagent_log_threads = attach_redacted_logs(process, stdout_path, stderr_path, environment)
-    pid_path = runtime_root / "backend.pid"
-    pid_path.write_text(str(process.pid), encoding="utf-8")
-    return (
-        {
-            "argv": argv,
-            "cwd": str(jar_path.parent),
-            "pid": process.pid,
-            "pid_file": str(pid_path),
-            "stdout_log": str(stdout_path),
-            "stdout_offset": stdout_offset,
-            "stderr_log": str(stderr_path),
-            "stderr_offset": stderr_offset,
-            "started_at": datetime.now(UTC).isoformat(),
-        },
-        process,
-    )
+            process._devagent_log_threads = attach_redacted_logs(process, stdout_path, stderr_path, environment)
+    except (OSError, RuntimeError) as exc:
+        server["error"] = str(exc)
+        if process is not None:
+            server["cleanup"] = terminate_backend_process(
+                workspace=workspace, process=process, pid_file=record_path,
+            )
+        else:
+            try:
+                remove_backend_jar(jar_path)
+            except OSError as cleanup_error:
+                server["cleanup"] = {"success": False, "error": str(cleanup_error)}
+        return server, None
+    server.update(pid=process.pid, pid_file=str(record_path), started_at=datetime.now(UTC).isoformat())
+    return server, process
 
 
 def _wait_for_backend_ready(
