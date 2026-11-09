@@ -277,7 +277,7 @@ function wireBackendLogging(child: ChildProcess): void {
       console.error(
         `Backend process exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'null'}`
       )
-      void backendConnectionMonitor.checkNow()
+      void backendConnectionMonitor.checkNow(true)
     }
   })
 }

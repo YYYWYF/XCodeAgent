@@ -33,9 +33,9 @@ export function prioritizedConnection(workflow: ConnectionState, preview: Connec
   return workflow.status !== 'healthy' ? workflow : preview.status === 'unavailable' ? preview : workflow
 }
 
-/** 最近一次成功连接划分故障轮次，同次断线重试保持身份，恢复后同样的错误重新提示。 */
+/** 最近一次成功连接划分故障轮次；同次断线的错误文案变化不能重新打开已关闭提示。 */
 export function connectionErrorNoticeId(connection: ConnectionState, origin: 'preview' | 'backend'): string {
-  return JSON.stringify(['connection', origin, connection.lastConnectedAt, connection.lastError])
+  return JSON.stringify(['connection', origin, connection.lastConnectedAt])
 }
 
 /** 按当前恢复卡实际采用的动作归属定位：会话任务留在聊天区，共享故障使用全局通知。 */

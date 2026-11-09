@@ -10,6 +10,7 @@ export class BackendConnectionMonitor {
   private pending?: Promise<void>
   private generation = 0
   private running = false
+  private failures = 0
 
   /** 注入身份探测和安全启动，监督器不持有任务请求或任何业务重放能力。 */
   constructor(private options: { baseUrl: string; probe: () => Promise<BackendIdentity | undefined>;
@@ -36,7 +37,10 @@ export class BackendConnectionMonitor {
   }
 
   /** 初始启动和显式接管完成后复用同一连接投影。 */
-  ready(identity: BackendIdentity): void { this.publish('ready', identity) }
+  ready(identity: BackendIdentity): void {
+    this.failures = 0
+    this.publish('ready', identity)
+  }
 
   /** 启用串行监督，定时器不阻止 Electron 退出。 */
   start(): void {
@@ -54,15 +58,18 @@ export class BackendConnectionMonitor {
     this.publish('stopped')
   }
 
-  /** 一次检查完成后才安排下一轮，失败继续重试但不叠加启动进程。 */
+  /** 健康时十五秒巡检；首次失败三秒复查，持续断连退避至三十秒，不叠加请求。 */
   private schedule(): void {
     if (!this.running) return
-    this.timer = setTimeout(() => void this.checkNow(), this.options.intervalMs ?? 3000)
+    const interval = this.failures || this.state.status !== 'ready'
+      ? Math.min(30000, 3000 * 2 ** Math.min(Math.max(0, this.failures - 1), 4))
+      : 15000
+    this.timer = setTimeout(() => void this.checkNow(), this.options.intervalMs ?? interval)
     this.timer.unref()
   }
 
-  /** 子进程退出通知和定时探测共用同一在途恢复。 */
-  checkNow(): Promise<void> {
+  /** 短暂探测失败先复查，确认进程退出可立即恢复；同次断连不反复切换传输代次。 */
+  checkNow(confirmedExit = false): Promise<void> {
     if (!this.running) return Promise.resolve()
     if (this.pending) return this.pending
     clearTimeout(this.timer)
@@ -70,10 +77,14 @@ export class BackendConnectionMonitor {
     const current = (): boolean => this.running && this.generation === generation
     const pending = Promise.resolve().then(async () => {
       try {
-        const healthy = await this.options.probe()
+        // 超时和异常都需连续失败确认，单次迟到不能撤销仍在正常输出的 AG-UI 订阅。
+        const healthy = await this.options.probe().catch(() => undefined)
         if (!current()) return
         if (healthy) { this.ready(healthy); return }
-        this.publish('reconnecting')
+        this.failures++
+        if (!confirmedExit && this.state.status === 'ready' && this.failures < 2) return
+        // 已不可用时只在后台重试；不能每轮 unavailable → reconnecting 都使 Renderer 失效。
+        if (this.state.status !== 'unavailable') this.publish('reconnecting')
         const restored = await this.options.recover()
         if (current()) this.ready(restored)
       } catch {

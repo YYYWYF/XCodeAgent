@@ -32,7 +32,7 @@ export function readBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<Reco
       if (error) reject(error)
       else resolve(healthy ? health : undefined)
     }
-    const request = http.get(`${baseUrl}/health`, { timeout: 1000 }, (response) => {
+    const request = http.get(`${baseUrl}/health`, { timeout: 3000 }, (response) => {
       if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
         response.resume()
         finish(false)
