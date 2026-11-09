@@ -96,8 +96,12 @@ export function settingsConfigChanges(current: ApplicationConfig, next: Applicat
   for (const [path, before, after] of scalar) {
     if (before !== after) changes[path] = after
   }
-  const beforeSubjects = normalizedCurrent.authorization.initialAdministratorSubjects
-  const afterSubjects = normalizedNext.authorization.initialAdministratorSubjects
+  // 权限未启用时表单不注册管理员字段（ApplicationConfigEditor 里 authorizationEnabled && 才渲染），
+  // validateFields 读不到该字段，updatedApplication.authorization.initialAdministratorSubjects 为
+  // undefined。这里必须兜底为 []，否则会把 undefined 传给 validateAdminChange，
+  // 触发「初始管理员数量不得超过100」的误报（!Array.isArray(undefined) 走了数量上限分支）。
+  const beforeSubjects = normalizedCurrent.authorization.initialAdministratorSubjects ?? []
+  const afterSubjects = normalizedNext.authorization.initialAdministratorSubjects ?? []
   if (JSON.stringify(beforeSubjects) !== JSON.stringify(afterSubjects)) {
     changes['authorization.initialAdministratorSubjects'] = validateAdminChange(
       current.authorization.enabled ? beforeSubjects : [], afterSubjects
