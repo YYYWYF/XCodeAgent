@@ -19,6 +19,8 @@ import httpx
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_engine_tls import build_template_engine_ssl_context
 from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload, UpdatePackageDownloadV4
+from app.services.workspace_bootstrap.run_log import TemplateRunLog
+from app.services.workspace_bootstrap.template_generate import generate_template_package
 
 _CHUNK_BYTES = 64 * 1024
 logger = logging.getLogger("uvicorn.error")
@@ -45,46 +47,26 @@ class TemplateEngineClient:
         self._max_package_bytes = max_package_bytes
         self._client_factory = client_factory
 
-    async def generate(self, requested_config: dict[str, Any], *, temporary_dir: str | Path | None = None) -> TemplatePackageDownload:
+    async def generate(
+        self,
+        requested_config: dict[str, Any],
+        *,
+        temporary_dir: str | Path | None = None,
+        run_log: TemplateRunLog | None = None,
+    ) -> TemplatePackageDownload:
         """调用 V3 `/v1/generate` 并分块写临时 ZIP，同时计算 SHA-256。"""
 
-        if not self._base_url:
-            raise TemplateEngineError("模板生成服务地址未配置，无法生成模板代码。")
-        directory = str(Path(temporary_dir)) if temporary_dir is not None else None
-        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-", suffix=".zip", dir=directory)
-        temporary_path = Path(name)
-        digest = hashlib.sha256()
-        size = 0
-        try:
-            timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
-            # trust_env=False：模板引擎是本机直连的基础设施；httpx 在 Windows 会采用注册表系统代理但不执行其排除列表，回环请求会被代理拦截。
-            async with self._client_factory(timeout=timeout, trust_env=False, verify=build_template_engine_ssl_context()) as client:
-                async with client.stream("POST", f"{self._base_url}/v1/generate", json={"requestedConfig": requested_config}, headers={"Accept": "application/zip"}) as response:
-                    if response.status_code >= 400:
-                        raise await _engine_response_error(response, "模板生成服务拒绝请求")
-                    content_type = response.headers.get("content-type")
-                    if not content_type or not content_type.lower().startswith("application/zip"):
-                        raise TemplateEngineError("模板生成服务未返回 application/zip。")
-                    with os.fdopen(descriptor, "wb") as output:
-                        descriptor = -1
-                        async for chunk in response.aiter_bytes(_CHUNK_BYTES):
-                            size += len(chunk)
-                            if size > self._max_package_bytes:
-                                raise TemplateEngineError("模板 ZIP 超过下载大小限制。")
-                            digest.update(chunk)
-                            output.write(chunk)
-                        output.flush()
-                        os.fsync(output.fileno())
-            return TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
-        except httpx.TimeoutException as exc:
-            raise TemplateEngineError("调用模板生成服务超时。") from exc
-        except httpx.HTTPError as exc:
-            raise TemplateEngineError("调用模板生成服务失败。") from exc
-        except Exception:
-            if descriptor >= 0:
-                os.close(descriptor)
-            temporary_path.unlink(missing_ok=True)
-            raise
+        return await generate_template_package(
+            base_url=self._base_url,
+            connect_timeout=self._connect_timeout,
+            read_timeout=self._read_timeout,
+            max_package_bytes=self._max_package_bytes,
+            client_factory=self._client_factory,
+            requested_config=requested_config,
+            response_error=_engine_response_error,
+            temporary_dir=temporary_dir,
+            run_log=run_log,
+        )
 
     async def _generate_from_git_fallback(
         self, requested_config: dict[str, Any], *, temporary_dir: str | Path | None = None

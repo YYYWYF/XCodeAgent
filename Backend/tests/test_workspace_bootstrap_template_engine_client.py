@@ -14,6 +14,7 @@ from app.services.workspace_bootstrap.template_engine_client import (
     TemplateEngineClient,
     _build_fallback_template_state,
 )
+from app.services.workspace_bootstrap.run_log import TemplateRunLog
 
 
 class TemplateEngineClientTests(unittest.TestCase):
@@ -46,6 +47,73 @@ class TemplateEngineClientTests(unittest.TestCase):
             with self.assertRaises(TemplateEngineError):
                 asyncio.run(limited.generate({"capabilities": {}}, temporary_dir=directory))
             self.assertEqual(list(Path(directory).glob("*.zip")), [])
+
+    def test_generate_records_http_status_and_keeps_request_failure_log(self) -> None:
+        """模板引擎返回 HTTP 错误时，独立日志记录状态码并保留失败堆栈。"""
+
+        transport = httpx.MockTransport(
+            lambda _request: httpx.Response(
+                503,
+                json={"message": "temporarily unavailable", "password": "engine-secret"},
+            )
+        )
+        factory = lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            run_log = TemplateRunLog.create(workspace)
+            client = TemplateEngineClient(
+                base_url="https://user-secret:pass-secret@example.test?token=url-secret",
+                connect_timeout=1,
+                read_timeout=1,
+                max_package_bytes=100,
+                client_factory=factory,
+            )
+            try:
+                asyncio.run(client.generate({"capabilities": {}}, run_log=run_log))
+            except TemplateEngineError as exc:
+                run_log.finish_failure(exc)
+            else:
+                self.fail("expected the Template Engine HTTP failure")
+
+            content = run_log.path.read_text(encoding="utf-8")
+            self.assertIn("httpStatus=503", content)
+            self.assertIn('event="stage_failed"', content)
+            for secret in ("user-secret", "pass-secret", "url-secret", "engine-secret"):
+                self.assertNotIn(secret, content)
+
+    def test_generate_logs_connection_timeout_type(self) -> None:
+        """网络连接超时日志包含具体异常类型并最终保留本次运行文件。"""
+
+        def timeout(_request: httpx.Request) -> httpx.Response:
+            """注入连接超时，验证客户端的异常分类日志。"""
+
+            raise httpx.ConnectTimeout("engine connection timed out")
+
+        transport = httpx.MockTransport(timeout)
+        factory = lambda **kwargs: httpx.AsyncClient(transport=transport, **kwargs)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            run_log = TemplateRunLog.create(workspace)
+            client = TemplateEngineClient(
+                base_url="http://engine.invalid",
+                connect_timeout=1,
+                read_timeout=1,
+                max_package_bytes=100,
+                client_factory=factory,
+            )
+            try:
+                asyncio.run(client.generate({"capabilities": {}}, run_log=run_log))
+            except TemplateEngineError as exc:
+                run_log.finish_failure(exc)
+            else:
+                self.fail("expected the Template Engine connection timeout")
+
+            content = run_log.path.read_text(encoding="utf-8")
+            self.assertIn('exceptionType="ConnectTimeout"', content)
+            self.assertIn('stage="template_request"', content)
+            self.assertIn("Traceback (most recent call last)", content)
 
     def test_update_logs_external_engine_call_and_no_change_response(self) -> None:
         """后端调用外部模板更新接口时必须记录请求、响应和无变更结果。"""

@@ -22,7 +22,9 @@ from app.services.workspace_bootstrap.readiness import (
     validate_workspace_bootstrap_readiness,
 )
 from app.services.workspace_bootstrap.requested_config import compile_template_requested_config
+from app.services.workspace_bootstrap.run_log import TemplateRunLog
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
+from app.services.workspace_bootstrap.template_generate import cleanup_template_download
 from app.services.workspace_bootstrap.template_package import validate_template_package
 
 
@@ -67,75 +69,148 @@ class WorkspaceBootstrapService:
             self._tasks.pop(key, None)
 
     async def _run(self, workspace: Path) -> dict[str, Any]:
+        """为一次完整 Bootstrap 管理独立日志的失败保留与成功清理。"""
+
+        run_log = TemplateRunLog.create(workspace)
+        run_log.event(
+            stage="bootstrap",
+            event="bootstrap_started",
+            message="开始模板初始化",
+            workspacePath=str(workspace),
+            targetDirectory=str(workspace),
+            templateName="Template Engine V3 Generate",
+            templateVersion="由返回 ZIP 的 TemplateState 确定",
+        )
+        try:
+            result = await self._run_bootstrap(workspace, run_log)
+        except BaseException as exc:
+            run_log.finish_failure(exc)
+            raise
+        run_log.finish_success(
+            final_path=str(workspace),
+            reusedExistingTemplate=bool(result.get("reusedExistingTemplate", False)),
+            repositoryBranchStatus=(result.get("repositoryBranch") or {}).get("status", "unknown"),
+        )
+        return result
+
+    async def _run_bootstrap(
+        self,
+        workspace: Path,
+        run_log: TemplateRunLog,
+    ) -> dict[str, Any]:
         """编译请求、下载校验、事务物化，并确保失败写入 lifecycle。"""
 
         download_path: Path | None = None
         coordinator_started = False
         # 先拒绝非 TechnicalPlan-confirmed 的旧入口，避免下载后才发现 lifecycle 非法。
-        await asyncio.to_thread(begin_application_template_generation, workspace)
-        template_mutation_coordinator.begin_preparation(workspace)
+        with run_log.stage("lifecycle_precondition", "校验模板生成生命周期入口"):
+            await asyncio.to_thread(begin_application_template_generation, workspace)
+        with run_log.stage("mutation_coordination", "登记 Workspace 模板物化任务"):
+            template_mutation_coordinator.begin_preparation(workspace)
         coordinator_started = True
         try:
-            requested_config = await asyncio.to_thread(
-                compile_template_requested_config,
-                workspace,
-                include_application_config=True,
-            )
-            application_config = await asyncio.to_thread(read_application_config, workspace)
+            with run_log.stage("configuration_validation", "校验应用和 TechnicalPlan 配置"):
+                requested_config = await asyncio.to_thread(
+                    compile_template_requested_config,
+                    workspace,
+                    include_application_config=True,
+                )
+                application_config = await asyncio.to_thread(read_application_config, workspace)
+                run_log.event(
+                    stage="configuration_validation",
+                    event="configuration_validated",
+                    message="模板请求配置已校验",
+                    applicationName=application_config.get("appName", ""),
+                    configRevision=application_config.get("configRevision", "unknown"),
+                    requestedConfigKeys=sorted(requested_config),
+                    capabilityKeys=sorted((requested_config.get("capabilities") or {}).keys()),
+                )
             source_revision = application_config.get("configRevision")
-            template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
+            with run_log.stage("preparation_guard", "确认模板准备任务未被取消"):
+                template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
             # 新迭代沿用已有工程：模板请求只由 application.json 派生，各迭代完全一致，
             # 因此已物化的模板本来就在正确的状态。重新下载会把应用累积的业务代码整体覆盖掉。
-            template_status = await asyncio.to_thread(
-                classify_workspace_template,
-                workspace,
-                requested_config=requested_config,
-            )
-            if template_status is WorkspaceTemplateStatus.READY:
-                lifecycle = await asyncio.to_thread(
-                    complete_workspace_bootstrap,
+            with run_log.stage("workspace_template_classification", "检查工作区模板前置状态"):
+                template_status = await asyncio.to_thread(
+                    classify_workspace_template,
                     workspace,
-                    succeeded=True,
-                    readiness_verified=True,
+                    requested_config=requested_config,
                 )
+                run_log.event(
+                    stage="workspace_template_classification",
+                    event="classification_completed",
+                    message="工作区模板状态已判定",
+                    templateStatus=template_status.value,
+                )
+                if template_status is WorkspaceTemplateStatus.STALE:
+                    raise WorkspaceBootstrapError(
+                        "工作区已有工程产物，但模板状态与应用当前配置不一致（或工程不完整）。"
+                        "为避免覆盖已有代码，本次不会重新拉取模板；"
+                        "请改用独立的项目目录重建应用，或先手工清理该工作区。"
+                    )
+            if template_status is WorkspaceTemplateStatus.READY:
+                with run_log.stage("lifecycle_ready_commit", "确认已就绪模板的生命周期状态"):
+                    lifecycle = await asyncio.to_thread(
+                        complete_workspace_bootstrap,
+                        workspace,
+                        succeeded=True,
+                        readiness_verified=True,
+                    )
                 # 沿用已有工程时也要确保远端分支存在：分支名可能是后补上的（例如新建应用
                 # 时因故没写进 application.json），或者远端分支被删过。这里同样是非致命
                 # 收尾，失败只报告不影响 Bootstrap 结果。
-                repository_branch = await asyncio.to_thread(
-                    push_workspace_branch, workspace
-                )
+                with run_log.stage("repository_branch_push", "检查并推送应用远端分支"):
+                    repository_branch = await asyncio.to_thread(push_workspace_branch, workspace)
+                    run_log.event(
+                        stage="repository_branch_push",
+                        event="repository_branch_result",
+                        message="远端分支收尾完成",
+                        repositoryBranch=repository_branch,
+                    )
                 return {
                     "workspaceRoot": str(workspace),
                     "reusedExistingTemplate": True,
                     "lifecycle": lifecycle.model_dump(mode="json", by_alias=True),
                     "repositoryBranch": repository_branch,
                 }
-            if template_status is WorkspaceTemplateStatus.STALE:
-                raise WorkspaceBootstrapError(
-                    "工作区已有工程产物，但模板状态与应用当前配置不一致（或工程不完整）。"
-                    "为避免覆盖已有代码，本次不会重新拉取模板；"
-                    "请改用独立的项目目录重建应用，或先手工清理该工作区。"
-                )
             client = TemplateEngineClient(
                 base_url=self._settings.template_engine_base_url,
                 connect_timeout=self._settings.template_engine_connect_timeout_seconds,
                 read_timeout=self._settings.template_engine_read_timeout_seconds,
                 max_package_bytes=self._settings.template_package_max_bytes,
             )
-            download = await client.generate(requested_config)
+            with run_log.stage("template_engine_generate", "请求模板引擎并下载模板包"):
+                download = await client.generate(requested_config, run_log=run_log)
             download_path = download.temporary_path
-            template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
-            package = await asyncio.to_thread(
-                validate_template_package,
-                download_path,
-                ArchiveLimits(
-                    max_package_bytes=self._settings.template_package_max_bytes,
-                    max_files=self._settings.template_package_max_files,
-                    max_extracted_bytes=self._settings.template_package_max_extracted_bytes,
-                ),
-            )
-            template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
-            template_mutation_coordinator.enter_commit_section(workspace)
+            with run_log.stage("preparation_guard", "确认模板包下载后未被取消"):
+                template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
+            with run_log.stage(
+                "template_package_validation",
+                "校验模板 ZIP 文件、安全性及结构契约",
+                archivePath=str(download_path),
+                archiveExists=download_path.is_file(),
+                archiveSizeBytes=download.size,
+                sha256=download.sha256,
+            ):
+                package = await asyncio.to_thread(
+                    validate_template_package,
+                    download_path,
+                    ArchiveLimits(
+                        max_package_bytes=self._settings.template_package_max_bytes,
+                        max_files=self._settings.template_package_max_files,
+                        max_extracted_bytes=self._settings.template_package_max_extracted_bytes,
+                    ),
+                )
+                run_log.event(
+                    stage="template_package_validation",
+                    event="template_contract_validated",
+                    message="模板结构和 TemplateState 契约校验成功",
+                    templateRevision=package.template_state.templateRevision,
+                )
+            with run_log.stage("preparation_guard", "确认模板包校验后未被取消"):
+                template_mutation_coordinator.raise_if_preparation_cancelled(workspace)
+            with run_log.stage("mutation_commit_fence", "进入不可中断的物化提交区"):
+                template_mutation_coordinator.enter_commit_section(workspace)
             lifecycle: Any = None
 
             def assert_application_revision(root: Path) -> None:
@@ -151,52 +226,72 @@ class WorkspaceBootstrapService:
                 """在物化事务内验证完整性，并把唯一 READY 写入与其绑定。"""
 
                 nonlocal lifecycle
-                validate_workspace_bootstrap_readiness(
-                    root,
-                    requested_config=requested_config,
-                )
+                with run_log.stage("readiness_validation", "检查正式产物、模板状态和 Git baseline"):
+                    validate_workspace_bootstrap_readiness(
+                        root,
+                        requested_config=requested_config,
+                    )
                 assert_application_revision(root)
-                lifecycle = complete_workspace_bootstrap(
-                    root,
-                    succeeded=True,
-                    readiness_verified=True,
-                )
+                with run_log.stage("lifecycle_ready_commit", "提交 Bootstrap READY 生命周期状态"):
+                    lifecycle = complete_workspace_bootstrap(
+                        root,
+                        succeeded=True,
+                        readiness_verified=True,
+                    )
+                    run_log.event(
+                        stage="lifecycle_ready_commit",
+                        event="lifecycle_ready_committed",
+                        message="生命周期 READY 状态已提交",
+                        lifecycleStage=lifecycle.initialization.stage.value,
+                    )
 
-            await asyncio.to_thread(
-                WorkspaceMaterializer().materialize,
-                workspace=workspace,
-                archive_path=package.archive_path,
-                template_state=package.template_state,
-                before_baseline=assert_application_revision,
-                readiness=commit_readiness,
-            )
+            with run_log.stage("template_materialization", "事务化物化模板文件并完成 readiness"):
+                await asyncio.to_thread(
+                    WorkspaceMaterializer().materialize,
+                    workspace=workspace,
+                    archive_path=package.archive_path,
+                    template_state=package.template_state,
+                    before_baseline=assert_application_revision,
+                    readiness=commit_readiness,
+                    run_log=run_log,
+                )
             if lifecycle is None:
                 raise WorkspaceBootstrapError("Bootstrap 事务未提交 lifecycle READY。")
             # 基线已提交，此时才存在可推送的分支内容。必须在 materialize 事务**之外**执行：
             # 事务内异常会触发 journal.rollback() 撤销整个模板物化，网络推送绝不能进去。
-            repository_branch = await asyncio.to_thread(
-                push_workspace_branch, workspace
-            )
+            with run_log.stage("repository_branch_push", "检查并推送应用远端分支"):
+                repository_branch = await asyncio.to_thread(push_workspace_branch, workspace)
+                run_log.event(
+                    stage="repository_branch_push",
+                    event="repository_branch_result",
+                    message="远端分支收尾完成",
+                    repositoryBranch=repository_branch,
+                )
             return {
                 "workspaceRoot": str(workspace),
                 "lifecycle": lifecycle.model_dump(mode="json", by_alias=True),
                 "repositoryBranch": repository_branch,
             }
         except Exception as exc:
-            lifecycle = await asyncio.to_thread(
-                complete_workspace_bootstrap,
-                workspace,
-                succeeded=False,
-                error_message=str(exc),
-            )
+            with run_log.stage("lifecycle_failure_commit", "记录模板初始化失败生命周期状态"):
+                lifecycle = await asyncio.to_thread(
+                    complete_workspace_bootstrap,
+                    workspace,
+                    succeeded=False,
+                    error_message=str(exc),
+                )
             if isinstance(exc, WorkspaceBootstrapError):
                 raise
             raise WorkspaceBootstrapError(str(exc)) from exc
         finally:
-            if download_path is not None:
-                download_path.unlink(missing_ok=True)
-            if coordinator_started:
-                template_mutation_coordinator.finish(workspace)
+            try:
+                if download_path is not None:
+                    cleanup_template_download(download_path, run_log=run_log)
+            finally:
+                # 文件被杀毒软件等占用也必须释放协调器，避免后续执行一直被阻止。
+                if coordinator_started:
+                    with run_log.stage("mutation_coordination_release", "释放模板物化协调器"):
+                        template_mutation_coordinator.finish(workspace)
 
 
 def workspace_bootstrap_service(settings: Settings) -> WorkspaceBootstrapService:

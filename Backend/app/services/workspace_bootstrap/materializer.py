@@ -8,6 +8,7 @@ import shutil
 import stat
 import uuid
 import zipfile
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -18,6 +19,7 @@ from app.services.template_state import TEMPLATE_STATE_RELATIVE_PATH
 from app.utils.atomic_json import atomic_write_json
 from app.services.workspace_bootstrap.git_manager import BootstrapGitManager
 from app.services.workspace_bootstrap.models import TemplatePackageError, WorkspaceBootstrapError
+from app.services.workspace_bootstrap.run_log import TemplateRunLog
 from app.services.authorization_projection_sources import SOURCE_RECEIPT
 
 BOOTSTRAP_STAGING_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "bootstrap-staging"
@@ -104,46 +106,114 @@ class WorkspaceMaterializer:
         template_state: TemplateStateV3,
         before_baseline: Callable[[Path], None] | None = None,
         readiness: Callable[[Path], None] | None = None,
+        run_log: TemplateRunLog | None = None,
     ) -> str:
         """完整提交 ZIP 的安全文件、Git baseline 与唯一 TemplateState。"""
 
         root = Path(workspace).expanduser().resolve()
-        self._preflight(root)
+        with _logged_stage(run_log, "materialization_preflight", "检查物化目标路径", workspacePath=str(root)):
+            self._preflight(root)
         journal = BootstrapJournal(workspace=root)
         try:
-            journal.staging = self._extract_to_staging(root, Path(archive_path))
-            # 来源摘要在隔离 ZIP 内容上生成，不能在首次投影时信任可编辑工程当前值。
-            from app.services.authorization_projection_sources import record_materialized_authorization_sources
-            record_materialized_authorization_sources(journal.staging, template_state)
-            manifest = _build_file_manifest(journal.staging)
-            targets = _materialization_targets(journal.staging)
-            _validate_materialization_targets_available(root, targets)
-            for relative_path in targets:
-                source = journal.staging / relative_path
-                target = root / relative_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(source, target)
-                journal.moved_roots.append(target)
-            _verify_materialized_files(root, manifest)
+            with _logged_stage(run_log, "zip_extraction", "解压模板 ZIP 到隔离 staging", archivePath=str(archive_path)):
+                journal.staging = self._extract_to_staging(root, Path(archive_path))
+                if run_log is not None:
+                    # 计数只为日志服务，目录遍历故障不能触发物化回滚。
+                    extracted_count = None
+                    try:
+                        extracted_count = sum(1 for path in journal.staging.rglob("*") if path.is_file())
+                    except OSError as exc:
+                        run_log.event(stage="zip_extraction", event="file_count_failed",
+                                      message="无法统计解压文件数量", level="WARNING", exception=exc)
+                    run_log.event(
+                        stage="zip_extraction",
+                        event="extraction_summary",
+                        message="模板 ZIP 解压完成",
+                        stagingPath=str(journal.staging),
+                        extractedFileCount=extracted_count,
+                    )
+            with _logged_stage(run_log, "materialization_manifest", "生成模板文件校验清单"):
+                # 来源摘要在隔离 ZIP 内容上生成，不能在首次投影时信任可编辑工程当前值。
+                from app.services.authorization_projection_sources import record_materialized_authorization_sources
+                record_materialized_authorization_sources(journal.staging, template_state)
+                manifest = _build_file_manifest(journal.staging)
+                targets = _materialization_targets(journal.staging)
+                _validate_materialization_targets_available(root, targets)
+                if run_log is not None:
+                    run_log.event(
+                        stage="materialization_manifest",
+                        event="manifest_created",
+                        message="模板物化目标已校验",
+                        fileCount=len(manifest),
+                        targetRoots=[path.as_posix() for path in targets],
+                    )
+            with _logged_stage(
+                run_log,
+                "template_file_materialization",
+                "移动模板文件到目标目录",
+                targetRoots=[path.as_posix() for path in targets],
+            ):
+                for relative_path in targets:
+                    source = journal.staging / relative_path
+                    target = root / relative_path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(source, target)
+                    journal.moved_roots.append(target)
+            with _logged_stage(run_log, "materialized_file_verification", "核对物化文件摘要", fileCount=len(manifest)):
+                _verify_materialized_files(root, manifest)
             if before_baseline is not None:
-                before_baseline(root)
-            journal.template_state_written = True
-            _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
-            journal.git_initialized = True
-            self._git_manager.initialize_baseline(root)
-            _remove_managed_path(journal.staging)
-            _remove_empty_staging_parent(root)
+                with _logged_stage(run_log, "configuration_revision_check", "核对物化期间的应用配置版本"):
+                    before_baseline(root)
+            with _logged_stage(run_log, "template_state_commit", "提交模板状态文件", statePath=str(root / TEMPLATE_STATE_RELATIVE_PATH)):
+                journal.template_state_written = True
+                _write_template_state(root / TEMPLATE_STATE_RELATIVE_PATH, template_state)
+            with _logged_stage(run_log, "git_baseline", "初始化 Git 并提交模板基线"):
+                journal.git_initialized = True
+                baseline_commit = self._git_manager.initialize_baseline(root)
+                if run_log is not None:
+                    run_log.event(
+                        stage="git_baseline",
+                        event="baseline_committed",
+                        message="Git 模板基线已提交",
+                        commitSha=baseline_commit,
+                    )
+            with _logged_stage(run_log, "staging_cleanup", "清理隔离 staging 目录"):
+                _remove_managed_path(journal.staging)
+                _remove_empty_staging_parent(root)
             # Readiness 必须在 staging 已清除但仍可回滚的事务边界内执行。
             if readiness is not None:
                 readiness(root)
             return str(root)
-        except Exception:
+        except Exception as exc:
             try:
+                if run_log is not None:
+                    run_log.event(
+                        stage=run_log.last_failed_stage,
+                        event="rollback_started",
+                        message="物化失败，开始回滚受管产物",
+                        level="WARNING",
+                        exception=exc,
+                    )
                 journal.rollback()
                 _remove_empty_staging_parent(root)
-            except WorkspaceBootstrapError:
-                # 原始提交失败才是调用方的主要错误；残留由 Attach 兜底收尾。
-                pass
+                if run_log is not None:
+                    run_log.event(
+                        stage="materialization_rollback",
+                        event="rollback_completed",
+                        message="物化回滚完成",
+                    )
+            except Exception as rollback_exc:
+                if run_log is not None:
+                    run_log.event(
+                        stage="materialization_rollback",
+                        event="rollback_failed",
+                        message="物化回滚未能清理全部受管产物",
+                        level="ERROR",
+                        exception=rollback_exc,
+                    )
+                if not isinstance(rollback_exc, WorkspaceBootstrapError):
+                    raise
+                # 原始提交失败才是调用方的主要错误；受管残留由 Attach 兜底收尾。
             raise
 
     def _preflight(self, workspace: Path) -> None:
@@ -280,3 +350,11 @@ def _remove_empty_staging_parent(workspace: Path) -> None:
         return
     except OSError:
         return
+
+
+def _logged_stage(run_log: TemplateRunLog | None, stage: str, message: str, **fields: object):
+    """提供可选的阶段记录上下文，独立调用 Materializer 时不改变原行为。"""
+
+    if run_log is None:
+        return nullcontext()
+    return run_log.stage(stage, message, **fields)

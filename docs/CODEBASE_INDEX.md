@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+Bootstrap 运行日志由 `services/workspace_bootstrap/run_log.py` 与 `run_log_errors.py` 管理，文件名和正文统一使用本机当地时间（正文带时区）。同一异常链保留一份完整堆栈，后续事件通过 `errorRef` 关联，并携带首个 `failedStage`、根因类型/消息及可取得的 errno/winerror。`template_generate.py` 在下载失败或取消时关闭句柄后删除临时 ZIP；清理失败只记告警，不覆盖原错误或已提交成功，`service.py` 的 finally 独立保证协调器释放。解压计数为非致命日志统计。回归：`tests.test_template_run_log`、`tests.test_template_download_cleanup`、`tests.test_workspace_bootstrap_template_engine_client`、`tests.test_workspace_bootstrap_service`。
+
 Build 单任务重试使用独立 `/build-task-retry/run` AG-UI 入口（`protocols/build_task_retry.py`），不调用 `/execution-recovery/execute` 或 `prepare_business_node_retry`。`forwardedProps.buildTaskRetry` 严格接受 `action=enqueue|retry`、`workspaceRoot/sourceRunId/sourceThreadId/sessionId/taskId`，顶层 `runId` 必须由前端提供。运行中 `enqueue` 只向 `services/build_task_retry_queue.py` 的唯一调度器提交请求；调度线程验证当前切片、瞬时失败分类及计划绑定，按任务去重、只重置目标、递增原重试次数并原子提交后回执，原 Build Run 与流不变。并发、依赖和资源锁仍由既有调度器管理，确认和修复失败不通过该入口。退出期间未提交的入队请求明确失败。
 
 已退出且 checkpoint 确认为失败 Build 时，`services/build_task_retry.py` 独立读取原进度、校验计划和会话当前归属，共用底层生命周期 CAS/租约/标准 Workflow 流，以前端 `runId` 接管后仅消费内部 `build_retry_task_id`，保留其他失败及成功结果；缺失或漂移不降级为整轮重启，停止/确认/后续节点不允许从旧卡重试。`service/buildTaskRetry.ts` 使用官方 AG-UI SDK；`BuildTaskRetryButton.tsx` 在原卡展示局部 loading/error，`useWorkflowConversation.ts` 运行中保留原订阅，已结束时更新原消息及 Build 步骤，不追加用户/助手卡。所有新增 UI 沿用 Ant Design 与现有明暗主题。本轮按用户要求不运行测试、构建、health、编译或 Electron 验证。

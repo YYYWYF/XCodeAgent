@@ -116,6 +116,38 @@ def _write_package(path: Path, *, include_application: bool) -> None:
 class WorkspaceBootstrapServiceTests(unittest.TestCase):
     """验证服务把 Readiness 失败限定在物化事务并投影为不可恢复失败。"""
 
+    def test_locked_download_does_not_change_ready_or_skip_coordinator_release(self) -> None:
+        """模拟下载包被占用，READY 仍成功且协调器确实释放。"""
+
+        from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            _prepare_generating_workspace(workspace)
+            package = Path(directory) / "engine.zip"
+            _write_package(package, include_application=True)
+            download = TemplatePackageDownload(package, "ignored", package.stat().st_size, "application/zip")
+            original_unlink = Path.unlink
+
+            def unlink(path: Path, *args, **kwargs):
+                """只阻止下载包清理，不干扰物化和日志文件。"""
+
+                if path == package:
+                    raise PermissionError("download is locked")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                patch("app.services.workspace_bootstrap.service.TemplateEngineClient.generate", new=AsyncMock(return_value=download)),
+                patch("app.services.workspace_bootstrap.service.push_workspace_branch", return_value={"status": "skipped"}),
+                patch.object(Path, "unlink", new=unlink),
+                patch.object(template_mutation_coordinator, "finish", wraps=template_mutation_coordinator.finish) as finish,
+            ):
+                result = asyncio.run(WorkspaceBootstrapService(_settings())._run(workspace))
+            self.assertIn("lifecycle", result)
+            finish.assert_called_once_with(workspace)
+            self.assertTrue(package.exists())
+
     def test_success_keeps_template_projected_environment_in_first_git_baseline(self) -> None:
         """首次生成必须原样提交模板服务投影的环境配置。"""
 
@@ -155,6 +187,9 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
                 (workspace / ".devagentstudio/template-state.json").read_text(encoding="utf-8")
             )
             self.assertEqual(state["managedConfiguration"]["appName"], "任务中心")
+            log_directory = workspace / ".devagentstudio/runtime/template-download"
+            self.assertTrue(log_directory.is_dir())
+            self.assertEqual([], list(log_directory.glob("*.log")))
 
             committed = subprocess.run(
                 ["git", "show", "HEAD:frontend/.env"],
@@ -197,6 +232,42 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
                 self.assertFalse((workspace / relative).exists(), relative)
             self.assertTrue((workspace / ".devagentstudio/application.json").is_file())
             self.assertTrue((workspace / ".devagentstudio/application-lifecycle.json").is_file())
+            logs = list((workspace / ".devagentstudio/runtime/template-download").glob("*.log"))
+            self.assertEqual(1, len(logs))
+            log_content = logs[0].read_text(encoding="utf-8")
+            self.assertIn('stage="readiness_validation"', log_content)
+            self.assertIn('event="stage_failed"', log_content)
+            self.assertIn("validate_workspace_bootstrap_readiness", log_content)
+            self.assertIn("Traceback (most recent call last)", log_content)
+
+    def test_corrupt_package_failure_retains_validation_diagnostics(self) -> None:
+        """损坏 ZIP 必须在模板契约校验阶段留下异常堆栈并保留运行日志。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            _prepare_generating_workspace(workspace)
+            package = workspace / "engine.zip"
+            package.write_bytes(b"not a zip archive")
+            download = TemplatePackageDownload(
+                temporary_path=package,
+                sha256="unknown",
+                size=package.stat().st_size,
+                content_type="application/zip",
+            )
+            service = WorkspaceBootstrapService(_settings())
+            with patch(
+                "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
+                new=AsyncMock(return_value=download),
+            ):
+                with self.assertRaisesRegex(WorkspaceBootstrapError, "损坏"):
+                    asyncio.run(service._run(workspace))
+
+            logs = list((workspace / ".devagentstudio/runtime/template-download").glob("*.log"))
+            self.assertEqual(1, len(logs))
+            content = logs[0].read_text(encoding="utf-8")
+            self.assertIn('stage="template_package_validation"', content)
+            self.assertIn("BadZipFile: File is not a zip file", content)
+            self.assertIn("validate_template_package", content)
 
     def test_non_generating_lifecycle_rejects_before_calling_engine(self) -> None:
         """READY 等非生成阶段必须在网络调用前被 lifecycle gate 拒绝。"""
@@ -211,7 +282,13 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
                 "app.services.workspace_bootstrap.service.TemplateEngineClient.generate",
                 new=generate,
             ):
-                with self.assertRaisesRegex(Exception, "只有用户确认 TechnicalPlan"):
-                    asyncio.run(service._run(workspace))
+                for _ in range(2):
+                    with self.assertRaisesRegex(Exception, "只有用户确认 TechnicalPlan"):
+                        asyncio.run(service._run(workspace))
 
             generate.assert_not_awaited()
+            logs = list((workspace / ".devagentstudio/runtime/template-download").glob("*.log"))
+            self.assertEqual(2, len(logs))
+            self.assertEqual(2, len({path.stem for path in logs}))
+            for path in logs:
+                self.assertIn('stage="lifecycle_precondition"', path.read_text(encoding="utf-8"))
