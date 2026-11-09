@@ -184,6 +184,11 @@ function countOccurrences(markup: string, text: string): number {
   return markup.split(text).length - 1
 }
 
+/** 诊断区可复制原始错误；重复卡片判断只统计默认可见的正文。 */
+function countVisibleOccurrences(markup: string, text: string): number {
+  return countOccurrences(markup.replace(/<details\b[\s\S]*?<\/details>/g, ''), text)
+}
+
 /** 从 Backend-like Workflow 投影构造当前 Application Planning 状态。 */
 function planningStateFromRecovery(options: {
   sourceRunId: string
@@ -474,7 +479,8 @@ test('failed node retry shows the entry node and preserves the current public fa
   assert.match(markup, /将从「生成执行计划」节点重试。/)
   assert.match(markup, />重试</)
   assert.match(markup, /Workbench diagnostic visible/)
-  assert.match(markup, /<summary>错误详情<\/summary>/)
+  assert.match(markup, /aria-expanded="false"/)
+  assert.match(markup, /<summary hidden="">错误详情<\/summary>/)
   assert.doesNotMatch(markup, /PlanningRun|DagPlanningError/)
   assert.doesNotMatch(markup.split('<details')[0], /恢复目标：/)
 })
@@ -692,20 +698,22 @@ test('二次修改模型错误只在卡片详情中保留原始原因', () => {
   const end = markup.indexOf('</details>') + '</details>'.length
   const outside = markup.slice(0, start) + markup.slice(end)
   assert.match(outside, /模型服务拒绝访问/)
-  assert.match(outside, /复制诊断信息/)
+  assert.doesNotMatch(outside, /aria-label="复制诊断信息"/)
+  assert.match(markup.slice(start, end), /aria-label="复制诊断信息"/)
   assert.doesNotMatch(outside, /PermissionDeniedError|subscription payment/)
   assert.match(markup.slice(start, end), /PermissionDeniedError.*subscription payment/)
   assert.doesNotMatch(markup.slice(start, end), /<details[^>]*\bopen/)
 })
 
-test('Build 恢复保留原控制卡，不受二次修改错误入口影响', () => {
+test('Build 恢复共用错误样式，保留当前 Incident 的恢复入口', () => {
   const markup = renderToStaticMarkup(createElement(RecoverySurface, {
     activeExecutionRecovery: recovery('ready'),
     isApplicationPlanningPhase: false,
     onExecuteRecoveryAction: () => undefined,
     recoveryRunning: false
   }))
-  assert.doesNotMatch(markup, /agent-error-card/)
+  assert.match(markup, /agent-error-card/)
+  assert.match(markup, /data-testid="workbench-recovery-incident"/)
   assert.match(markup, /工作台执行需要恢复/)
 })
 
@@ -965,8 +973,8 @@ test('caller keeps historical errors unchanged and renders one current Incident'
   })
   const markup = renderPlanningRecoverySurface(historyErrors, planning)
 
-  assert.equal(countOccurrences(markup, '>404 model-A<'), 1)
-  assert.equal(countOccurrences(markup, '>404 model-B<'), 1)
+  assert.equal(countVisibleOccurrences(markup, '>404 model-A<'), 1)
+  assert.equal(countVisibleOccurrences(markup, '>404 model-B<'), 1)
   assert.equal(
     countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'),
     1
@@ -996,8 +1004,8 @@ test('caller updates only the current Incident when the canonical source moves f
   assert.match(firstMarkup, /Model-B not found/)
   assert.doesNotMatch(secondMarkup, /Model-B not found/)
   assert.match(secondMarkup, /Model-C unavailable/)
-  assert.equal(countOccurrences(secondMarkup, '404 model-A'), 1)
-  assert.equal(countOccurrences(secondMarkup, '404 model-B'), 1)
+  assert.equal(countVisibleOccurrences(secondMarkup, '404 model-A'), 1)
+  assert.equal(countVisibleOccurrences(secondMarkup, '404 model-B'), 1)
   assert.equal(
     countOccurrences(secondMarkup, 'data-testid="application-planning-recovery-incident"'),
     1
@@ -1050,7 +1058,7 @@ test('Workbench caller renders one unified current Recovery Incident', () => {
 
   assert.equal(countOccurrences(markup, 'data-testid="application-planning-recovery-incident"'), 0)
   assert.equal(countOccurrences(markup, 'data-testid="workbench-recovery-incident"'), 1)
-  assert.equal(countOccurrences(markup, 'agent-error-card-title'), 0)
+  assert.equal(countOccurrences(markup, 'agent-error-card-title'), 1)
   assert.match(markup, /application-planning-recovery-incident-action|工作台执行需要恢复/)
 })
 

@@ -1,10 +1,10 @@
-import { Typography } from 'antd'
 import { useState, type ReactElement } from 'react'
 import { cx } from '../../../utils'
 import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import type { ApplicationConfig, ApplicationLifecycle } from '../../../typings'
 import { useStoppedPlanningAvailability } from '../hooks/useStoppedPlanningAvailability'
 import EndedTaskNotice from './NextDevelopmentGuide/EndedTaskNotice'
+import AgentErrorCard from '../../AgentErrorCard'
 
 /** 复用既有停止卡与 Runtime 恢复操作；原历史消息和确认卡仍然只读。 */
 export default function StoppedPlanningNotice({ application, stopped, onLifecycle, disabled, error, onContinue, onRestart }: {
@@ -46,7 +46,7 @@ export default function StoppedPlanningNotice({ application, stopped, onLifecycl
         workspaceCheckError={availability.error} onRetryWorkspaceCheck={handleRetryCheck}
         restartInitialPlanning={stopped.canRestart}
         disabled={disabled} onContinue={handleContinue} onRestart={handleRestart} />
-      {error ? <Typography.Text type="danger">{error}</Typography.Text> : null}
+      {error ? <AgentErrorCard title="继续生成失败" error={error} /> : null}
     </div>
   </div>
 }

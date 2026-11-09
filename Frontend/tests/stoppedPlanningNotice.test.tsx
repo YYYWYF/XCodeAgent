@@ -86,6 +86,8 @@ test('停止卡检查失败可原位重试，重试中禁用重复点击，检�
   let renderer: ReactTestRenderer | undefined
   let continues = 0, restarts = 0
   const published: ApplicationLifecycle[] = []
+  /** 卡片新增详情和诊断复制后，仍按业务动作名称定位唯一资格重读入口。 */
+  const retryButton = () => renderer!.root.findAllByType(Button).find((button) => button.props.children === '重新检查')!
   try {
     await act(async () => { renderer = create(createElement(StoppedPlanningNotice, {
       application, stopped: lifecycle.endedPlanningExecution!, disabled: false,
@@ -95,14 +97,14 @@ test('停止卡检查失败可原位重试，重试中禁用重复点击，检�
     assert.equal(requests.length, 1)
     await act(async () => { requests[0].resolve(lifecycleResponse(requests[0].request)) })
     assert.match(JSON.stringify(renderer!.toJSON()), /工作区状态检查失败/)
-    let retry = renderer!.root.findByType(Button)
+    let retry = retryButton()
     assert.equal(retry.props.children, '重新检查')
     assert.equal(retry.props.disabled, false)
     assert.equal(renderer!.root.findByType('section').props['aria-busy'], false)
 
     await act(async () => { retry.props.onClick() })
     assert.equal(requests.length, 2)
-    retry = renderer!.root.findByType(Button)
+    retry = retryButton()
     assert.equal(retry.props.disabled, true)
     assert.equal(retry.props.loading, true)
     await act(async () => { retry.props.onClick() })
@@ -111,9 +113,9 @@ test('停止卡检查失败可原位重试，重试中禁用重复点击，检�
     assert.equal(requests.length, 3)
     // Attach 成功但 Get 失败也必须保留重试，不把半成功当成恢复授权。
     await act(async () => { requests[2].resolve(lifecycleResponse(requests[2].request)) })
-    assert.equal(renderer!.root.findByType(Button).props.children, '重新检查')
+    assert.equal(retryButton().props.children, '重新检查')
     assert.equal(published.length, 0)
-    await act(async () => { renderer!.root.findByType(Button).props.onClick() })
+    await act(async () => { retryButton().props.onClick() })
     await act(async () => { requests[3].resolve(lifecycleResponse(requests[3].request, lifecycle)) })
     await act(async () => { requests[4].resolve(lifecycleResponse(requests[4].request, lifecycle)) })
     assert.match(JSON.stringify(renderer!.toJSON()), /继续生成/)

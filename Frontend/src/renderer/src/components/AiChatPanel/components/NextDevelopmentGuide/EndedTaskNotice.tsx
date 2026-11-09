@@ -1,8 +1,9 @@
-import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, ExclamationCircleOutlined, LoadingOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LoadingOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import './EndedTaskNotice.less'
+import AgentErrorCard from '../../../AgentErrorCard'
 
 type Props = {
   mode?: 'ended' | 'stopped_generation'
@@ -28,16 +29,20 @@ export default function EndedTaskNotice({
   const canContinue = (generationStopped && unchanged === undefined) || unchanged
   const generationInvalid = generationStopped && unchanged === false
   const checkFailed = Boolean(workspaceCheckError)
+  // 停止后的状态保持普通提示；真实读取失败进入共用红底错误卡，重试仍仅检查资格。
+  if (checkFailed) return <AgentErrorCard title="工作区状态检查失败" error={workspaceCheckError}
+    retryLabel="重新检查" onRetry={onRetryWorkspaceCheck}
+    retryDisabled={disabled || continuing || checking || !onRetryWorkspaceCheck} retrying={checking} />
   return (
     <section className={cx('ended-task-notice')} aria-label={generationStopped ? '停止生成后续操作' : '结束任务后续操作'}
       aria-live="polite" aria-busy={continuing || checking}>
       <span className={cx('ended-task-notice-icon')} aria-hidden="true">
-        {checking ? <LoadingOutlined spin /> : checkFailed ? <ExclamationCircleOutlined /> : <CheckCircleOutlined />}
+        {checking ? <LoadingOutlined spin /> : <CheckCircleOutlined />}
       </span>
       <div className={cx('ended-task-notice-copy')}>
-        <Typography.Text strong>{checkFailed ? '工作区状态检查失败' : generationInvalid ? '无法继续生成' : generationStopped ? '已停止生成' : '任务已结束'}</Typography.Text>
+        <Typography.Text strong>{generationInvalid ? '无法继续生成' : generationStopped ? '已停止生成' : '任务已结束'}</Typography.Text>
         <Typography.Text type="secondary">
-          {checking ? '正在检查工作区状态…' : checkFailed ? workspaceCheckError : generationInvalid ? restartInitialPlanning
+          {checking ? '正在检查工作区状态…' : generationInvalid ? restartInitialPlanning
             ? '工作区已变化，可按当前文件重新生成，完成后仍需审阅确认。'
             : '工作区已变化，无法继续原任务。请返回开发阶段重新提出需求。'
             : generationStopped && unchanged === true ? '工作区未变化，可以继续原任务的生成。'
@@ -45,13 +50,7 @@ export default function EndedTaskNotice({
             ? '工作区未变化，可以继续原任务。' : '工作区已变化，请重新选择开发任务。'}
         </Typography.Text>
       </div>
-      {checkFailed ? (
-        <Button className={cx('ended-task-notice-action')} icon={<ReloadOutlined />}
-          disabled={disabled || continuing || checking || !onRetryWorkspaceCheck}
-          loading={checking} onClick={onRetryWorkspaceCheck}>
-          重新检查
-        </Button>
-      ) : !checking ? (
+      {!checking ? (
         <Button className={cx('ended-task-notice-action')} type={canContinue ? 'primary' : 'default'}
           icon={canContinue ? undefined : generationInvalid && !restartInitialPlanning ? <ArrowLeftOutlined /> : <ReloadOutlined />} disabled={disabled || continuing || (!canContinue && !onRestart)}
           loading={continuing} onClick={canContinue ? onContinue : onRestart}>

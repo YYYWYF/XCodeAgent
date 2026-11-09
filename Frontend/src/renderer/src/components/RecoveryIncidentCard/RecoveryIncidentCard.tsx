@@ -1,9 +1,4 @@
-import {
-  LoadingOutlined,
-  RedoOutlined,
-  WarningOutlined
-} from '@ant-design/icons'
-import { Button, Modal, Typography } from 'antd'
+import { Modal, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { RecoveryFailureDiagnostic } from '../../service/recoveryActionPlan'
 import type { RecoveryIncidentPresentation } from '../../service/recoveryIncident'
@@ -12,6 +7,8 @@ import { cx } from '../../utils'
 import '../ApplicationPlanningRecoveryIncidentCard/ApplicationPlanningRecoveryIncidentCard.less'
 import RetryEntryNotice from '../RetryEntryNotice'
 import EndedTaskNotice from '../AiChatPanel/components/NextDevelopmentGuide/EndedTaskNotice'
+import AgentErrorCard from '../AgentErrorCard'
+import DiagnosticDetails, { recoveryDiagnosticText } from './RecoveryDiagnosticDetails'
 
 const { Text } = Typography
 
@@ -61,62 +58,26 @@ export default function RecoveryIncidentCard({
     return <div className={cx('stopped-generation-recovery')} data-testid={testId}>
       <EndedTaskNotice mode="stopped_generation" continuing={retrying}
         disabled={disabled || !onAction} onContinue={async () => handleAction()} />
-      {error ? <Text type="danger">{error}</Text> : null}
+      {error ? <AgentErrorCard title="继续生成失败" error={error} /> : null}
     </div>
   }
-  const icon = retrying ? <LoadingOutlined spin /> : <WarningOutlined />
-
   return (
-    <section
-      aria-label={incident.title}
-      aria-live="polite"
-      className={cx('application-planning-recovery-incident')}
-      data-testid={testId}
-      role="status"
-    >
-      <span aria-hidden="true" className={cx('application-planning-recovery-incident-icon')}>
-        {icon}
-      </span>
-      <div className={cx('application-planning-recovery-incident-copy')}>
-        <Text className={cx('application-planning-recovery-incident-title')} strong>
-          {incident.title}
-        </Text>
-        <>
-          {(recoveryFailureMessage(incident.failureDiagnostic) || incident.failureMessage)?.trim() !== incident.recoveryMessage.trim() ? <FailureSummary
-            diagnostic={incident.failureDiagnostic}
-            message={incident.failureMessage}
-          /> : null}
-          <Text
-            className={cx('application-planning-recovery-incident-recovery-message')}
-            type="secondary"
-          >
+    <div className={cx('application-planning-recovery-incident')} data-testid={testId}>
+      <AgentErrorCard title={incident.title} error={incident.recoveryMessage}
+        summary={<>
+          {(recoveryFailureMessage(incident.failureDiagnostic) || incident.failureMessage)?.trim() !== incident.recoveryMessage.trim()
+            ? <FailureSummary diagnostic={incident.failureDiagnostic} message={incident.failureMessage} /> : null}
+          <Text className={cx('application-planning-recovery-incident-recovery-message')} type="secondary">
             {incident.recoveryMessage}
           </Text>
-          {error ? (
-            <Text className={cx('application-planning-recovery-incident-message')} type="danger">
-              {error}
-            </Text>
-          ) : null}
-          {incident.failureDiagnostic ? (
-            <DiagnosticDetails
-              diagnostic={incident.failureDiagnostic}
-            />
-          ) : null}
-        </>
-      </div>
-      {(hasAction || canRetry) && onAction ? (
-        <Button
-          className={cx('application-planning-recovery-incident-action')}
-          disabled={retrying || disabled}
-          icon={retrying ? <LoadingOutlined spin /> : <RedoOutlined />}
-          loading={retrying}
-          onClick={handleAction}
-          type="primary"
-        >
-          {action?.label || '重试'}
-        </Button>
-      ) : null}
-    </section>
+          {error ? <Text className={cx('application-planning-recovery-incident-message')} type="danger">{error}</Text> : null}
+        </>}
+        hint=""
+        details={recoveryDiagnosticText(incident.failureDiagnostic) || error || incident.failureMessage || incident.recoveryMessage}
+        diagnosticContent={incident.failureDiagnostic ? <DiagnosticDetails diagnostic={incident.failureDiagnostic} /> : undefined}
+        retryLabel={action?.label || '重试'} retrying={retrying} retryDisabled={disabled}
+        onRetry={(hasAction || canRetry) && onAction ? handleAction : undefined} />
+    </div>
   )
 }
 
@@ -164,51 +125,5 @@ function FailureSummary({
         </div>
       ) : null}
     </div>
-  )
-}
-
-/** 展示 Backend 允许公开的结构化详情，隐藏时不影响失败摘要和恢复动作。 */
-function DiagnosticDetails({
-  diagnostic
-}: {
-  diagnostic?: RecoveryFailureDiagnostic | null
-}): ReactElement {
-  return (
-    <details className={cx('application-planning-recovery-incident-details')}>
-      <summary>错误详情</summary>
-      <dl>
-        {diagnostic ? (
-          <>
-            <DiagnosticRow label="错误代码" value={diagnostic.code} />
-            <DiagnosticRow label="HTTP Status" value={diagnostic.httpStatus} />
-            <DiagnosticRow label="Provider Error Code" value={diagnostic.providerErrorCode} />
-            <DiagnosticRow label="来源" value={diagnostic.origin} />
-            <DiagnosticRow label="Provider" value={diagnostic.provider} />
-            <DiagnosticRow label="Model" value={diagnostic.model} />
-            <DiagnosticRow label="失败阶段" value={diagnostic.stage} />
-            <DiagnosticRow label="失败步骤 / Operation" value={diagnostic.operation} />
-            <DiagnosticRow label="Dependency" value={diagnostic.dependency} />
-            <DiagnosticRow label="Source Run ID" value={diagnostic.sourceRunId} />
-            <DiagnosticRow label="错误信息" value={diagnostic.message} />
-          </>
-        ) : null}
-      </dl>
-    </details>
-  )
-}
-
-/** 在详情表中统一显示可选字段，避免空白值造成难以阅读的表格行。 */
-function DiagnosticRow({
-  label,
-  value
-}: {
-  label: string
-  value?: number | string | null
-}): ReactElement {
-  return (
-    <>
-      <dt>{label}</dt>
-      <dd>{value === null || value === undefined || value === '' ? '—' : String(value)}</dd>
-    </>
   )
 }

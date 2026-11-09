@@ -1,3 +1,4 @@
+import { CloseOutlined } from '@ant-design/icons'
 import { notification } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useContext, useEffect, useId, useRef } from 'react'
@@ -43,7 +44,7 @@ export default function WorkbenchErrorNotification({
       bottom: 24,
       duration: 0,
       className: cx('workbench-error-notification'),
-      closeIcon: <span aria-label="关闭工作台提示">×</span>,
+      closeIcon: <span aria-label="关闭工作台提示"><CloseOutlined aria-hidden="true" /></span>,
       // 仅由用户点击关闭时记住本条错误；业务恢复时的自动移除不写入关闭记录。
       onClose: () => {
         if (visibleRef.current && dismissed.current.workspace === workspace) dismissed.current.notices.add(noticeId)
