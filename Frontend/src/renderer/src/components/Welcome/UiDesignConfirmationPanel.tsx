@@ -287,9 +287,12 @@ export default function UiDesignConfirmationPanel({
       ['queued', 'generating', 'stopping'].includes(String(page.status)),
     []
   )
-  // 全部页面都生成成功后才允许确认，未生成或失败页不能被“下一步”跳过。
+  // 下一步放行规则：一个设计稿都没生成过（confirmedCount === 0）时直接放行——
+  // 这些页面会在后续开发阶段直接生成页面，不必先在设计稿处卡住；只要生成过
+  // （confirmedCount > 0）就要求全部成功，未生成/失败的页不能被“下一步”跳过，
+  // 否则部分生成成功的设计稿与部分直出页面混在一起，视觉口径不一致。
   const confirmedCount = pages.filter((page) => isPageConfirmed(page)).length
-  const allPagesGenerated = pages.length > 0 && confirmedCount === pages.length
+  const allPagesGenerated = confirmedCount === 0 || confirmedCount === pages.length
   // 当前处于后台生成池处理中的 pageId 列表（queued / generating），用于轮询与加载态。
   const generatingPageIds = useMemo(
     () =>
