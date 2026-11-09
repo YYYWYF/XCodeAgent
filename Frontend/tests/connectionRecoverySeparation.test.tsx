@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { test, beforeEach } from 'node:test'
+import { recoveryStore } from '../src/renderer/src/service/recoveryStore'
+
+// 每个测试模拟独立 Renderer；不能让同名测试会话共享上一个测试的权威版本。
+beforeEach(() => recoveryStore.clear())
 
 test('Backend 停服优先于预览断线和 UI 待确认，恢复按钮必须同步 Backend', () => {
   const backend = { status: 'unavailable' as const, requestGeneration: 1, lastError: 'Failed to fetch' }
@@ -43,6 +47,8 @@ import './workbenchRunRefresh.test'
 import './templateRecovery.test'
 import './planningFailureScope.test'
 import './applicationLifecycleTimeout.test'
+import './executionOutputRecovery.test'
+import './recoveryStore.test'
 
 test('二次修改断线及恢复候选始终复用 Workflow 重试，预览断线不抢入口', () => {
   const healthy = { conversationActive: true, workflowConnectionStatus: 'healthy',

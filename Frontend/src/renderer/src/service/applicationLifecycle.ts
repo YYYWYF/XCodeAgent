@@ -252,12 +252,12 @@ export async function getApplicationLifecycle(
   application: Pick<ApplicationConfig, 'workspaceRoot'> &
     Partial<Pick<ApplicationConfig, 'id' | 'appName'>>,
   threadId = randomUUID(),
-  resultSession?: { sessionId: string; threadId: string; fresh?: boolean }
+  resultSession?: { sessionId?: string; threadId?: string; planningThreadId?: string; fresh?: boolean }
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
   if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   // 会话结果具有 owner/thread 边界，不能与应用级读取或其他会话共享响应。
-  const requestKey = JSON.stringify([workspaceRoot, resultSession?.sessionId, resultSession?.threadId])
+  const requestKey = JSON.stringify([workspaceRoot, resultSession?.sessionId, resultSession?.threadId, resultSession?.planningThreadId])
   const currentRequest = lifecycleReadRequests.get(requestKey)
   if (currentRequest && !resultSession?.fresh) {
     return assertApplicationLifecycleOwnership(await currentRequest, application.id)
@@ -270,7 +270,7 @@ export async function getApplicationLifecycle(
       return await runApplicationLifecycleAction(threadId, {
         action: 'get',
         workspaceRoot,
-        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId } : {})
+        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId, planningThreadId: resultSession.planningThreadId } : {})
       })
     } catch (error) {
       // 发起新迭代会先删掉 lifecycle 文件再由前端重建；这一步中途失败（或文件被外部清理）
@@ -282,7 +282,7 @@ export async function getApplicationLifecycle(
         threadId
       )
       return runApplicationLifecycleAction(threadId, { action: 'get', workspaceRoot,
-        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId } : {}) })
+        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId, planningThreadId: resultSession.planningThreadId } : {}) })
     }
   })()
   lifecycleReadRequests.set(requestKey, request)

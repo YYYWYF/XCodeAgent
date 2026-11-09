@@ -276,6 +276,11 @@ class UiDesignGenerationPool:
 _POOL: UiDesignGenerationPool | None = None
 
 
+def active_ui_design_count() -> int:
+    """退出检查包含已排队、正在生成和等待取消收口的页面，不创建新池。"""
+    return len(_POOL._jobs) if _POOL else 0
+
+
 def get_ui_design_generation_pool() -> UiDesignGenerationPool:
     """返回进程级生成池，并发度沿用当前配置。"""
     global _POOL

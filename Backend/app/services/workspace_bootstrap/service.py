@@ -52,6 +52,10 @@ class WorkspaceBootstrapService:
             )
             return task
 
+    def active_count(self) -> int:
+        """让后台退出只观察本服务仍未退出的真实任务，不依赖磁盘状态推测。"""
+        return sum(not task.done() for task in self._tasks.values())
+
     def _clear_completed_task(
         self,
         key: str,

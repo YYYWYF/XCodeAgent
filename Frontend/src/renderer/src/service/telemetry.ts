@@ -1,4 +1,5 @@
 import { HttpAgent, randomUUID } from '@ag-ui/client'
+import { resolveBackendUrl } from './backendConnection'
 import type { ChatSessionDevelopmentTarget } from './chatSessions'
 
 type TelemetryEventRecord = {
@@ -30,7 +31,7 @@ async function postTelemetryEvent(record: TelemetryEventRecord): Promise<void> {
     const baseUrl = window.devAgentStudio?.agentBaseUrl
     // 埋点请求使用独立客户端，不接入会话消息和全局认证失败提示。
     const agent = new HttpAgent({
-      url: baseUrl ? `${baseUrl.replace(/\/$/, '')}/telemetry/run` : '/api/agent/telemetry/run',
+      url: resolveBackendUrl(baseUrl ? `${baseUrl.replace(/\/$/, '')}/telemetry/run` : '/api/agent/telemetry/run'),
       threadId: `telemetry-${randomUUID()}`
     })
     await Promise.race([

@@ -11,7 +11,7 @@
 
 生命周期文件只承担冷启动、断线重连和显式校准，不作为渲染进程的实时轮询源。后端每次原子写入成功后，必须先通过主 Workflow AG-UI 流发送独立的 `application-lifecycle` 自定义事件，再继续投影对应节点或控制动作。工作台顶层 application store 按应用标识与单调 `revision` 合并冷启动读取、重连校准和实时事件；页面控制栏、应用大纲及 API 大纲只消费这一个 store。较旧的文件读取结果不得覆盖更新的实时 revision。
 
-开发续接的 Run 可能已经完成并释放 active execution，但其“你想开发哪个页面或 API？”选择结果仍需恢复。`/application-lifecycle/run` 的 `get` 可同时携带 `sessionId`、`sessionThreadId`（缺一拒绝），仅在本次响应 `extensions.workbenchResult` 返回该会话最新已完成 Run 的标准 Workflow。投影由最新执行索引与当前 checkpoint 的 Run/Thread/owner/workspace/完成状态共同证明，只公开 `development_target_selection`；不扫描历史 checkpoint，不调用 Graph、不消费 continuation，不把该投影写入 lifecycle 文件。前端按会话隔离并发读取，断连收口、冷进入和显式状态同步时合并到原 assistant 回复并保存历史；新一轮正在执行、较新本地输入和跨会话迟到响应不能被旧结果覆盖。选择卡的可见性必须实际验收，后台 completed 不能代替前端完成。验收见 [结果恢复验证](WORKBENCH_RESULT_RECOVERY_VALIDATION_2026_11_03.md)。
+规划与工作台通过既有 Lifecycle AG-UI Get 读取统一恢复投影：规划提供 `planningThreadId`，会话提供完整 `sessionId/sessionThreadId`；响应 `extensions.recoverySnapshot` 保存作用域、当前 Workflow、独立展示输出及 lifecycle revision/checkpoint 时间/输出序号。普通回复和已完成目标选择由同一 checkpoint 解释器及执行索引证明，不再分别提供 sessionWorkflow、sessionOutput 或 workbenchResult。输出不能授权确认或复活已结束任务，完整 snapshot 不写回 lifecycle。前端共享 RecoveryStore 持有在途读取、连接和退避，写入开始使旧读取失效，低版本响应不能用于恢复动作。Get 不运行 Graph、不补建索引或释放执行；显式 Workspace Attach 才校准孤儿、索引和目录。保留正式产物确认门、结束归档、阶段/迭代身份、修订归属及真实退出前的资源锁。
 
 ## Schema 与一致性
 

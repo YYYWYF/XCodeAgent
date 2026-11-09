@@ -34,8 +34,7 @@ from app.services.build_task_plan_lifecycle import (
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.planning_confirmation_projection import prioritize_checkpoint_confirmation
 from app.services.workbench_progress_projection import project_workbench_progress
-from app.services.workbench_result_projection import project_workbench_result
-from app.services.session_workflow_projection import project_session_workflow
+from app.services.recovery_snapshot import project_recovery_snapshot
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.execution_recovery_projection import resolve_execution_recovery_projection
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
@@ -78,6 +77,7 @@ class ApplicationLifecycleAction(BaseModel):
     configuration: dict[str, Any] | None = None
     session_id: str | None = Field(default=None, alias="sessionId", max_length=256)
     session_thread_id: str | None = Field(default=None, alias="sessionThreadId", max_length=256)
+    planning_thread_id: str | None = Field(default=None, alias="planningThreadId", min_length=1, max_length=256)
     entity_id: str | None = Field(default=None, alias="entityId", min_length=1, max_length=256)
     reason: str | None = Field(default=None, min_length=1, max_length=1000)
     # 发起新迭代时由调用方带入上一版本的产物进度，服务端只继承其中的 completed 事实。
@@ -105,6 +105,8 @@ class ApplicationLifecycleAction(BaseModel):
         if self.action == "get" and (self.session_id is not None or self.session_thread_id is not None):
             if not str(self.session_id or "").strip() or not str(self.session_thread_id or "").strip():
                 raise ValueError("会话结果读取必须同时提供 sessionId 和 sessionThreadId。")
+            if self.planning_thread_id:
+                raise ValueError("规划和会话恢复必须使用各自的读取身份。")
         if self.action == "skip_entity_development" and (
             not str(self.entity_id or "").strip() or not str(self.reason or "").strip()
         ):
@@ -146,11 +148,12 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "identity": ["runId", "threadId", "ownerSessionId"],
             "dagGenerationSchema": "dag-generation.v1",
         },
-        "workbenchResult": {
-            "field": "extensions.workbenchResult", "action": "get", "readOnly": True,
-            "requestFields": ["sessionId", "sessionThreadId"],
-            "identity": ["runId", "threadId", "ownerSessionId"],
-            "mode": "development_target_selection", "source": "current-checkpoint",
+        "recoverySnapshot": {
+            "field": "extensions.recoverySnapshot", "action": "get", "readOnly": True,
+            "planningFields": ["planningThreadId"], "sessionFields": ["sessionId", "sessionThreadId"],
+            "identity": ["applicationId", "threadId", "sessionId"],
+            "cursor": ["lifecycleRevision", "checkpointAt", "output.submissionOrder", "output.sequence"],
+            "source": "current-checkpoint-and-live-execution", "reconcileAction": "workspace_attach",
         },
         "endedTasks": {
             "field": "endedExecutions", "checkedAtField": "endedExecutionsCheckedAt",
@@ -313,12 +316,10 @@ def build_application_lifecycle_ag_ui_stream(
             state = await end_planning_execution(request.workspace_root, str(payload.get("threadId") or ""))
             message = "本轮任务已结束，已有文件已保留。"
         elif request.action == "get":
-            from app.services.development_artifacts import refresh_development_artifacts
-
-            # 重新打开已知 workspace 时惰性识别旧 Backend 留下的中断执行；扫描器自身
-            # fail-open，不能把恢复基础设施故障升级为 lifecycle get 失败。
-            await reconcile_workspace_recovery(request.workspace_root)
-            state = refresh_development_artifacts(request.workspace_root)
+            # 恢复收口属于明确的 Attach；Get 只投影当前事实，不释放或重建执行。
+            state = load_application_lifecycle(request.workspace_root)
+            if state is None:
+                raise ApplicationLifecycleMissingError("应用生命周期尚未创建。")
             message = "已读取应用生命周期。"
         elif request.action in {
             "bootstrap_template_generation",
@@ -345,11 +346,15 @@ def build_application_lifecycle_ag_ui_stream(
             }
             return AgUiActionResult(data=data, message=message)
         elif request.action == "workspace_attach":
+            await reconcile_workspace_recovery(request.workspace_root)
+            from app.services.execution_recovery_projection import reconcile_recovery_ownership
+            from app.services.development_artifacts import refresh_development_artifacts
+            await reconcile_recovery_ownership(request.workspace_root)
             attached = await asyncio.to_thread(
                 template_mutation_coordinator.attach_workspace,
                 request.workspace_root,
             )
-            state = load_application_lifecycle(request.workspace_root)
+            state = refresh_development_artifacts(request.workspace_root)
             if state is None:
                 raise ApplicationLifecycleMissingError("application-lifecycle.json 不存在。")
             from app.services.builtin_authorization_orchestrator import resume_builtin_authorization_task
@@ -406,13 +411,14 @@ def build_application_lifecycle_ag_ui_stream(
                 "planningRefresh": await _current_planning_refresh(request.workspace_root),
             }
         if request.action == "get":
-            if request.session_id and request.session_thread_id:
-                data["lifecycle"]["extensions"]["sessionWorkflow"] = await project_session_workflow(
-                    request.workspace_root, session_id=request.session_id, thread_id=request.session_thread_id)
-                data["lifecycle"]["extensions"]["workbenchResult"] = await project_workbench_result(
-                    request.workspace_root, state,
-                    session_id=request.session_id, thread_id=request.session_thread_id,
-                )
+            recovery_thread = request.planning_thread_id or request.session_thread_id
+            if recovery_thread:
+                data["lifecycle"]["extensions"]["recoverySnapshot"] = await project_recovery_snapshot(
+                    workspace=request.workspace_root, application_id=state.application.id,
+                    thread_id=recovery_thread, session_id=request.session_id,
+                    planning=bool(request.planning_thread_id))
+                if data["lifecycle"]["extensions"]["recoverySnapshot"]["lifecycleRevision"] != state.revision:
+                    raise RuntimeError("任务状态正在更新，请重新同步。")
             # 复用已落盘的进度供 Renderer 重入恢复，仅附加到 AG-UI 读取结果。
             data["lifecycle"]["extensions"]["workbenchProgress"] = await asyncio.to_thread(
                 project_workbench_progress, request.workspace_root, state

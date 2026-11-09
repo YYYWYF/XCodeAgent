@@ -282,10 +282,11 @@ async def _ui_confirmation(state: ProjectState) -> dict:
             )
         update = await nodes.ui_confirmation(node_state)
         if update.get("status") != "completed":
-            # 仅在当前阶段允许推进到 UI设计确认时才推进，避免恢复场景下的自转冲突。
+            # 每轮有效 UI 动作都将 owner 同步到本轮 checkpoint；同阶段只更新归属，不消费确认门。
             if (
                 lifecycle.initialization.stage
                 != ApplicationLifecycleStage.AWAITING_UI_DESIGN_CONFIRMATION
+                or lifecycle.active_run_id != state.get("active_run_id")
             ):
                 lifecycle = persist_application_lifecycle_transition(
                     workspace,

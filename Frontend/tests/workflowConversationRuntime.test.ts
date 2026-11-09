@@ -21,7 +21,7 @@ import {
   type SessionIdentity
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { useWorkflowConversation } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
-import { mergeWorkbenchResult } from '../src/renderer/src/components/AiChatPanel/workbenchResultRecovery'
+import { mergeExecutionOutput } from '../src/renderer/src/components/AiChatPanel/executionOutputRecovery'
 import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
 import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../src/renderer/src/components/AiChatPanel/pendingWorkflowInput'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
@@ -39,6 +39,47 @@ const OWNER_SESSION_ID = 'session-owner'
 const OWNER_THREAD_ID = 'thread-owner'
 const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
+
+test('首次同步网络失败且没有已知 Run 时自动恢复，不依赖 online 事件或用户重试', async () => {
+  const savedWindow = globalThis.window
+  const savedFetch = globalThis.fetch
+  const fakeWindow = Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } })
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fakeWindow })
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  let root: ReactTestRenderer | undefined
+  let fail = true
+  const actions: string[] = []
+  const params = buildRuntimeParams({ activeSession: buildSessionIdentity(),
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: buildIdleLifecycle(), agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined })
+  params.applicationLifecycle = undefined
+  /** 执行 production Hook 的真实 effect 和定时重读，不模拟恢复逻辑。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (input, init) => {
+    assert.ok(String(input).endsWith('/application-lifecycle/run'))
+    const body = JSON.parse(String(init?.body))
+    actions.push(body.forwardedProps.applicationLifecycle.action)
+    if (fail) throw new TypeError('Failed to fetch')
+    return sseResponse(body.threadId, body.runId, { applicationLifecycle: buildIdleLifecycle() })
+  }
+  try {
+    await act(async () => { root = create(createElement(Probe)) })
+    assert.equal(runtime.connectionState.status, 'unavailable')
+    fail = false
+    const deadline = Date.now() + 4_000
+    while (runtime.connectionState.status !== 'healthy' && Date.now() < deadline) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)) })
+    }
+    assert.equal(runtime.connectionState.status, 'healthy')
+    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'get'])
+  } finally {
+    await act(async () => { root?.unmount() })
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
 
 test('无生命周期冷启动收口连接：业务失败展示真实错误，显式同步成功后清除', async () => {
   const savedFetch = globalThis.fetch
@@ -211,8 +252,10 @@ test('断连续接完成后 scoped Get 恢复并保存页面选择，重新挂�
       clarification: { mode: 'development_target_selection', message: '你想开发哪个页面或 API？' } }
   } as WorkflowRunPayload
   const lifecycle = buildIdleLifecycle()
-  lifecycle.extensions.workbenchResult = { runId: workflow.runId, threadId: identity.threadId,
-    ownerSessionId: identity.sessionId, startedAt: '2026-11-03T00:00:01Z', workflow }
+  lifecycle.extensions.recoverySnapshot = { applicationId: lifecycle.application.id, threadId: identity.threadId,
+    sessionId: identity.sessionId, kind: 'session', lifecycleRevision: lifecycle.revision,
+    checkpointAvailable: true, checkpointId: 'selection-checkpoint', observedAt: new Date().toISOString(),
+    startedAt: new Date(Date.now() - 1000).toISOString(), workflow, output: null }
   const runningLifecycle = { ...buildIdleLifecycle(), activeExecutions: {
     [workflow.runId]: { runId: workflow.runId, threadId: identity.threadId, ownerSessionId: identity.sessionId,
       phase: 'api_design_readiness_gate', status: 'running', startedAt: '2026-11-03T00:00:01Z' }
@@ -276,11 +319,11 @@ test('断连续接完成后 scoped Get 恢复并保存页面选择，重新挂�
     assert.equal(messages.length, 2)
     assert.equal(saves, 1)
     assert.ok(actions.every((action) => ['get', 'workspace_attach'].includes(action)))
-    assert.equal(mergeWorkbenchResult(messages, { ...lifecycle, extensions: {
-      ...lifecycle.extensions, workbenchResult: { ...lifecycle.extensions.workbenchResult!, ownerSessionId: 'other' }
+    assert.equal(mergeExecutionOutput(messages, { ...lifecycle, extensions: {
+      ...lifecycle.extensions, recoverySnapshot: { ...lifecycle.extensions.recoverySnapshot!, sessionId: 'other' }
     } }, identity), messages)
     const newerInput = [...messages, { id: 3, role: 'user' as const, content: '新的修改', createdAt: Date.now() }]
-    assert.equal(mergeWorkbenchResult(newerInput, lifecycle, identity), newerInput)
+    assert.equal(mergeExecutionOutput(newerInput, lifecycle, identity), newerInput)
   } finally {
     await act(async () => { root?.unmount() })
     globalThis.fetch = oldFetch

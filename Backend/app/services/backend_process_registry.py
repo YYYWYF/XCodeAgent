@@ -35,6 +35,16 @@ _BACKEND_LAUNCH_LOCKS: dict[str, threading.RLock] = {}
 _BACKEND_REGISTRY_GUARD = threading.Lock()
 
 
+def stop_owned_backend_previews() -> None:
+    """后台退场只停止本次持有的 Java 预览句柄，不扫描或终止其它实例进程。"""
+    with _BACKEND_REGISTRY_GUARD:
+        entries = list(_BACKEND_PROCESSES.items())
+    for workspace, process in entries:
+        result = terminate_backend_process(workspace=Path(workspace), process=process, pid_file=None)
+        if not result.get("success"):
+            raise RuntimeError("后台退出时后端预览服务未能完成清理。")
+
+
 def backend_launch_lock(workspace: Path) -> threading.RLock:
     """返回指定工作区的串行启动锁，避免停止、构建和启动相互交叉。"""
 

@@ -763,7 +763,9 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
             safe_file(self.workspace, "/frontend/src/index.tsx"),
             "frontend/src/index.tsx",
         )
-        for path in ("frontend/**", "frontend/.npmrc", "frontend/.env", "backend/../../outside", "frontend"):
+        # 当前安装修复契约明确允许前端 registry 配置；后端及其它敏感文件仍拒绝。
+        self.assertEqual(safe_file(self.workspace, "frontend/.npmrc"), "frontend/.npmrc")
+        for path in ("frontend/**", "backend/.npmrc", "frontend/.env", "backend/../../outside", "frontend"):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 safe_file(self.workspace, path)
         with self.assertRaises(ValueError):

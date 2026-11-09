@@ -1,6 +1,7 @@
 import { contextBridge,ipcRenderer} from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { AppUpdateApi, AppUpdateState } from '../shared/appUpdate'
+import type { BackendConnectionApi, BackendConnectionState } from '../shared/backendConnection'
 
 const appUpdate: AppUpdateApi = {
   /** 补取启动更新的当前状态。 */
@@ -36,6 +37,16 @@ const api = {}
 
 const devAgentStudioApi = {
   appUpdate,
+  backendConnection: {
+    /** 冷重载后补取主进程当前地址，不能依赖窗口最初注入的地址。 */
+    getState: () => ipcRenderer.invoke('backend-connection:get'),
+    /** 订阅连接变更，仅转发公开快照并支持卸载清理。 */
+    onStateChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: BackendConnectionState): void => listener(state)
+      ipcRenderer.on('backend-connection:changed', handler)
+      return () => ipcRenderer.removeListener('backend-connection:changed', handler)
+    }
+  } satisfies BackendConnectionApi,
   /** 读取当前运行客户端的版本，不依赖启动更新窗口。 */
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
   isElectron: true,

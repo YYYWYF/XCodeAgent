@@ -1,3 +1,5 @@
+import { mergeRecoverySnapshot } from './recoveryStore'
+import { workflowEndedPlanControl } from '../components/AiChatPanel/planExecutionMode'
 import { mergeEndedTaskAvailability } from './endedTaskAvailability'
 import type {
   ApplicationConfig,
@@ -240,7 +242,8 @@ export function latestApplicationLifecycle(
     current,
     incoming
   )
-  return mergeEndedTaskAvailability(mergeWorkbenchProgress(merged, current, incoming), current, incoming)
+  const result = mergeEndedTaskAvailability(mergeWorkbenchProgress(merged, current, incoming), current, incoming)
+  return mergeRecoverySnapshot(result, current, incoming)
 }
 
 // 直接根据权威 lifecycle 状态计算首页展示状态。
@@ -307,6 +310,9 @@ function reducePlanningWorkflow(
   workflow: WorkflowRunPayload
 ): ApplicationPlanningCurrentState {
   if (workflow.threadId !== current.threadId) return current
+  const incomingLifecycle = workflowApplicationLifecycle(workflow)
+  if (incomingLifecycle && incomingLifecycle.revision < current.lifecycle.revision) return current
+  if (workflowEndedPlanControl(current.workflow) && workflow.runId === current.workflow?.runId && !workflowEndedPlanControl(workflow)) return current
   const mergedWorkflow = retainApplicationPlanningInterrupt(current.workflow, workflow)
   const workflowLifecycle = workflowApplicationLifecycle(mergedWorkflow)
   const lifecycle = workflowLifecycle

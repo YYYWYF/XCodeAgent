@@ -11,6 +11,8 @@ import type {
 } from '../../typings'
 
 export type AgentChatMessage = {
+  /** 本轮提交身份，落盘先于网络发送，恢复不能为同一次输入另建执行。 */
+  executionRequestId?: string
   id: number
   role: 'user' | 'assistant'
   content: string

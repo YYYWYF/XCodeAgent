@@ -231,6 +231,9 @@ class WorkflowRunRegistry:
             if entry is not None and entry[0]
             else _workspace_key(workspace)
         )
+        if task is None:
+            from app.services.detached_execution import background_execution_task
+            task = background_execution_task(run_id, workspace)
         if not ending and _pending_confirmation_for_run(workspace_key, run_id) is not None:
             return "pending_confirmation"
         had_work = (task is not None and not task.done()) or run_id in active_worker_runs(workspace_key)

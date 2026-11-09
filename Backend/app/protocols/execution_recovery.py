@@ -16,7 +16,7 @@ from ag_ui.core import (
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
-from ag_ui.encoder import EventEncoder
+from app.protocols.execution_event_encoder import EventEncoder
 from app.domain.execution_recovery import (
     DurableExecutionRecord,
     DurableExecutionStatus,

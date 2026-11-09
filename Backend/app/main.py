@@ -114,6 +114,10 @@ from app.protocols.workflow import (
     build_workflow_ag_ui_stream,
     workflow_capabilities,
 )
+from app.services.detached_execution import build_detached_execution_stream, shutdown_detached_executions
+from app.services.backend_runtime import runtime as backend_runtime, runtime_busy_count
+from app.protocols.backend_runtime import build_backend_runtime_stream
+from app.middleware.backend_runtime import BackendRuntimeAdmission
 from app.services.agent_file_documents import ensure_agents_document
 from app.services.builtin_skills import available_builtin_skills
 from app.services.database_crypto import (
@@ -146,11 +150,19 @@ async def lifespan(_app: FastAPI):
         backend_instance.started_at.isoformat(),
     )
     try:
+        await backend_runtime.start(lambda: runtime_busy_count(bootstrap_service))
         yield
     finally:
+        await backend_runtime.close()
         from app.services.builtin_authorization_orchestrator import shutdown_builtin_authorization_tasks
 
         await asyncio.to_thread(shutdown_builtin_authorization_tasks)
+        await shutdown_detached_executions()
+        if backend_runtime.managed:
+            from app.services.frontend_project_launcher import stop_owned_frontend_previews
+            from app.services.backend_process_registry import stop_owned_backend_previews
+            await asyncio.to_thread(stop_owned_frontend_previews)
+            await asyncio.to_thread(stop_owned_backend_previews)
         clear_workflow_graph_cache()
         clear_application_planning_graph_cache()
         clear_direct_modification_graph_cache()
@@ -163,6 +175,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.add_middleware(BackendRuntimeAdmission)
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
 app.include_router(workflow_artifacts_router)
@@ -186,6 +199,8 @@ async def health() -> dict[str, object]:
         "status": "ok",
         "app_env": load_backend_environment().app_env,
         "backendInstanceId": current_backend_instance().instance_id,
+        "backendPid": current_backend_instance().pid,
+        "managedRuntime": backend_runtime.metadata(),
         "provider": settings.provider_api_name,
         "model_transport": settings.model_transport,
         "model": settings.model_api_name,
@@ -208,6 +223,9 @@ async def health() -> dict[str, object]:
         "database_encryption": database_encryption_metadata(),
         "tools": {
             "workflow_run": workflow_capabilities(),
+            "background_execution": {"submissionIdentity": "runId", "survivesFrontendDisconnect": True,
+                "deduplication": "workspace-request-content", "outputRecovery": "application-lifecycle.get/recoverySnapshot.output",
+                "confirmation": "original-business-gates", "backendRestart": "explicit-recovery"},
             "workflow_artifacts": artifact_capabilities(),
             "application_page_planning": application_page_planning_capabilities(),
             "application_lifecycle": application_lifecycle_capabilities(),
@@ -218,6 +236,10 @@ async def health() -> dict[str, object]:
             "agent_files": agent_files_capabilities(),
             "builtin_authorization": builtin_authorization_capabilities(),
             "preview_runtime": preview_runtime_capabilities(),
+            "backend_runtime": {"endpoint": "/backend-runtime/run", "transport": "ag-ui-sse",
+                "actionField": "forwardedProps.backendRuntime", "customEventName": "backend-runtime",
+                "stateSnapshotKey": "backendRuntime", "workflowIndependent": True,
+                "actions": ["attach", "detach", "prepare_exit", "commit_exit", "cancel_exit"]},
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
             "entity_tables": entity_tables_capabilities(),
@@ -255,17 +277,27 @@ async def run_app_update(
     )
 
 
+@app.post("/backend-runtime/run")
+async def manage_backend_runtime(input_data: dict[str, Any] = Body(...),
+                                 accept: Optional[str] = Header(default="text/event-stream")) -> StreamingResponse:
+    """提供独立 AG-UI 后台接管及退出动作，不进入应用工作流。"""
+    return StreamingResponse(build_backend_runtime_stream(input_data, accept), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.post("/application-page-planning/run")
 async def run_application_page_planning(
         input_data: dict[str, Any] = Body(...),
         accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
+    """后端持有规划写任务，前端连接只消费原 AG-UI 输出。"""
     return StreamingResponse(
-        build_application_page_planning_ag_ui_stream(
+        build_detached_execution_stream(payload=input_data, endpoint='/application-page-planning/run',
+            source=lambda execution_payload: build_application_page_planning_ag_ui_stream(
             graph=application_planning_graph_for_request,
-            payload=input_data,
+            payload=execution_payload,
             accept=accept,
-        ),
+        )),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -303,10 +335,11 @@ async def execute_execution_recovery(
     """通过独立 AG-UI 端点执行后端签发的当前恢复动作。"""
 
     return StreamingResponse(
-        build_execution_recovery_ag_ui_stream(
-            payload=input_data,
+        build_detached_execution_stream(payload=input_data, endpoint='/execution-recovery/execute',
+            source=lambda execution_payload: build_execution_recovery_ag_ui_stream(
+            payload=execution_payload,
             accept=accept,
-        ),
+        )),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -508,7 +541,8 @@ async def run_conversation(
     """运行可回答常规问题、读取工作区或执行局部修改的自由对话 Graph。"""
 
     return StreamingResponse(
-        build_conversation_ag_ui_stream(payload=input_data, accept=accept),
+        build_detached_execution_stream(payload=input_data, endpoint='/conversation/run',
+            source=lambda execution_payload: build_conversation_ag_ui_stream(payload=execution_payload, accept=accept)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -647,12 +681,14 @@ async def run_workflow(
         input_data: dict[str, Any] = Body(...),
         accept: Optional[str] = Header(default="text/event-stream"),
 ) -> StreamingResponse:
+    """通过持久提交身份启动或重新接入同一后台工作流。"""
     return StreamingResponse(
-        build_workflow_ag_ui_stream(
+        build_detached_execution_stream(payload=input_data, endpoint='/workflow/run',
+            source=lambda execution_payload: build_workflow_ag_ui_stream(
             graph=workflow_graph_for_request,
-            payload=input_data,
+            payload=execution_payload,
             accept=accept,
-        ),
+        )),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

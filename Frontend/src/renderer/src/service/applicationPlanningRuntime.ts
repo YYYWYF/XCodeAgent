@@ -26,6 +26,8 @@ import {
   type WorkflowRevisionContinuationHandoff
 } from './applicationPagePlanning'
 import { isAuthenticationFailure } from './authentication'
+import { subscribeBackendConnection } from './backendConnection'
+import { recoveryStore } from './recoveryStore'
 import { endApplicationPlanningExecution } from './applicationLifecycle'
 import { planningWorkflowCanPublishDuringRun, planningWorkflowPhase } from './applicationPlanningWorkflowState'
 import {
@@ -60,7 +62,7 @@ export type ApplicationPlanningRuntimeDependencies = {
   publishWorkflow: (workflow: WorkflowRunPayload) => void
   onTechnicalPlanConfirmed: (confirmation: ApplicationPlanningConfirmation) => Promise<boolean>
   onRevisionContinuation: (handoff: WorkflowRevisionContinuationHandoff) => Promise<void>
-  session?: Pick<AgUiChatSession, 'sendMessage' | 'stop' | 'hasActiveRun'>
+  session?: Pick<AgUiChatSession, 'sendMessage' | 'stop' | 'hasActiveRun'> & Partial<Pick<AgUiChatSession, 'detach'>>
   /** 测试可替换短生命周期 Native Recovery 会话；生产不复用普通 Planning endpoint。 */
   createRecoverySession?: (
     threadId: string
@@ -109,12 +111,25 @@ export class ApplicationPlanningRuntime {
   private streamingContent = ''
   private technicalMessageAbort?: AbortController
   private streamingListeners = new Set<(content: string) => void>()
+  private unsubscribeBackendConnection: () => void
 
   /** 绑定应用和线程身份，只保存会话执行能力，不捕获业务快照。 */
   constructor(private readonly dependencies: ApplicationPlanningRuntimeDependencies) {
     this.applicationId = dependencies.applicationId
     this.threadId = dependencies.threadId
     this.session = dependencies.session ?? createApplicationPlanningSession(this.threadId)
+    this.unsubscribeBackendConnection = subscribeBackendConnection((connection) => {
+      const current = this.dependencies.getCurrentState()
+      if (this.disposed || current?.threadId !== this.threadId || current.application.id !== this.applicationId) return
+      this.runToken = Math.max(this.runToken, current.connection.requestGeneration) + 1
+      this.runActive = false
+      this.reconcilePromise = undefined
+      this.technicalMessageAbort?.abort()
+      this.session.detach?.()
+      this.dispatch({ type: 'reconcile_failed', applicationId: this.applicationId, threadId: this.threadId,
+        requestGeneration: this.runToken, error: '后台连接正在恢复，请稍候。' })
+      if (connection.status === 'ready') void this.reconcileCurrentState(true)
+    })
   }
 
   /** 交接响应已包含权威 checkpoint，目标实例无需再执行冷启动读取或自动启动。 */
@@ -151,8 +166,12 @@ export class ApplicationPlanningRuntime {
 
   /** 通过唯一事件入口提交当前实例的状态变化。 */
   private dispatch(event: ApplicationPlanningCurrentEvent): void {
-    this.requireCurrentState()
+    const current = this.requireCurrentState()
+    const key = recoveryStore.key(current.application.workspaceRoot || '', this.applicationId, this.threadId)
+    if (event.type === 'run_started' || event.type === 'planning_end_started') recoveryStore.invalidate(key)
     this.dependencies.dispatchCurrentEvent(event)
+    const next = this.dependencies.getCurrentState()
+    if (next?.threadId === this.threadId) recoveryStore.adopt(key, next.lifecycle)
   }
 
   /** 将显式恢复动作的失败留在当前 Incident 上，避免对账成功后吞掉请求错误。 */
@@ -581,14 +600,15 @@ export class ApplicationPlanningRuntime {
     }
   }
 
-  /** 冷恢复跟进运行收口；UI 后台池独立执行期间也检测 Backend，绝不自动重跑节点。 */
+  /** 冷恢复及断线后持续只读对账；失败退避不依赖已有 Run，也不自动重跑节点。 */
   async refreshDetachedRunningState(): Promise<void> {
     if (this.disposed || this.runActive || this.session.hasActiveRun()) return
     const current = this.dependencies.getCurrentState()
     if (
       current?.application.id !== this.applicationId || current.threadId !== this.threadId ||
-      current.transportState !== 'idle' || current.connection.status !== 'healthy' ||
-      (current.recovery?.classification !== 'running' && planningWorkflowPhase(current.workflow) !== 'ui_confirmation')
+      current.transportState !== 'idle' || !recoveryStore.canRead(recoveryStore.key(current.application.workspaceRoot || '', this.applicationId, this.threadId)) ||
+      (current.connection.status !== 'unavailable' && !current.syncError &&
+        current.recovery?.classification !== 'running' && planningWorkflowPhase(current.workflow) !== 'ui_confirmation')
     ) return
     // 第一次读取可能早于孤儿租约到期；后续只读对账负责显露兜底入口。
     await this.reconcileCurrentState(true)
@@ -614,6 +634,8 @@ export class ApplicationPlanningRuntime {
         this.dependencies.readAuthoritativeSnapshot ?? readApplicationPlanningAuthoritativeSnapshot
       const snapshot = await read(current.application, this.threadId)
       if (!this.isCurrentRun(token)) throw new Error('当前 Planning Runtime 已失效。')
+      if (this.dependencies.readAuthoritativeSnapshot) recoveryStore.recordSuccess(
+        recoveryStore.key(current.application.workspaceRoot || '', this.applicationId, this.threadId))
       if (!snapshot) {
         this.dispatch({ type: 'reconcile_checkpoint_missing', applicationId: this.applicationId,
           threadId: this.threadId, requestGeneration: token })
@@ -636,12 +658,18 @@ export class ApplicationPlanningRuntime {
       })
       const workflow = this.requireCurrentState().workflow
       if (workflow) this.dependencies.publishWorkflow(workflow)
+      const output = snapshot.output
+      if (workflowEndedPlanControl(workflow)) this.dependencies.publishContent(workflow?.summary.message || '本轮任务已结束，已有文件已保留。')
+      else if (output?.runId === workflow?.runId && output?.content) this.dependencies.publishContent(output.content)
       return { status: 'recovered' }
     } catch (reason) {
       if (!this.isCurrentRun(token)) {
         return { status: 'uncertain', error: '当前 Planning Runtime 已失效。' }
       }
       const error = planningRuntimeError(reason, PLANNING_SYNC_ERROR)
+      // 只限制后台重读频率；用户显式同步仍可立即尝试，认证失败交给登录门禁。
+      if (this.dependencies.readAuthoritativeSnapshot) recoveryStore.recordFailure(
+        recoveryStore.key(current.application.workspaceRoot || '', this.applicationId, this.threadId), reason)
       this.dispatch({
         type: 'reconcile_failed',
         applicationId: this.applicationId,
@@ -785,13 +813,12 @@ export class ApplicationPlanningRuntime {
     if (this.disposed) return
     this.technicalMessageAbort?.abort()
     this.disposed = true
+    this.unsubscribeBackendConnection()
     this.runToken += 1
     this.runActive = false
     this.streamingListeners.clear()
     this.streamingContent = ''
-    void this.session.stop().catch((reason: unknown) => {
-      console.error('[planning-runtime] dispose stop failed', reason)
-    })
+    this.session.detach?.()
   }
 
   /** 初始生成、节点调试和卡片恢复共用同一个带代次保护的运行入口。 */

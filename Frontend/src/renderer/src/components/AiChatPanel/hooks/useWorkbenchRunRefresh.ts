@@ -4,6 +4,8 @@ import type { ApplicationConfig, ApplicationLifecycle } from '../../../typings'
 
 export type WorkbenchRunRefreshConnection = {
   scopeKey?: string
+  shouldRefresh?: boolean
+  refresh?: () => Promise<boolean>
   start: () => number
   isCurrentRequest: (generation: number) => boolean
   settle: (generation: number, error?: string) => void
@@ -40,13 +42,17 @@ export function useWorkbenchRunRefresh(
   const connectionRef = useRef(connection)
   connectionRef.current = connection
   useEffect(() => {
-    if (!runId || !application.workspaceRoot) return
+    if ((!runId && !connection.shouldRefresh) || !application.workspaceRoot) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout>
     const scopeKey = connection.scopeKey
     /** 串行查询避免重叠，旧会话的迟到结果不再回写当前视图。 */
     const refresh = async (): Promise<void> => {
       try {
+        if (connectionRef.current.refresh) {
+          await connectionRef.current.refresh()
+          return
+        }
         await refreshWorkbenchRun(
           () => getApplicationLifecycle(application),
           onLifecycleRef.current,
@@ -62,5 +68,5 @@ export function useWorkbenchRunRefresh(
       cancelled = true
       clearTimeout(timer)
     }
-  }, [application.id, application.workspaceRoot, runId, connection.scopeKey])
+  }, [application.id, application.workspaceRoot, runId, connection.scopeKey, connection.shouldRefresh])
 }

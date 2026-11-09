@@ -728,7 +728,9 @@ export default function WorkflowRunCard({
                 onSaveRequirementSpec={onSaveRequirementSpec}
                 onSubmit={(feedback) =>
                   onSubmitClarification?.(workflow, {
-                    requirement_document_confirmation: feedback || '正确，继续规划'
+                    requirement_document_confirmation: feedback || '正确，继续规划',
+                    // 按钮明确区分确认和修改，不让 Runtime 从自然语言猜测确认意图。
+                    __applicationPlanningAction: feedback ? 'revise' : 'confirm'
                   })
                 }
                 requiresConfirmation={requiresConfirmation}
@@ -742,13 +744,13 @@ export default function WorkflowRunCard({
                 onViewChanges={!disabled && interactionAvailability === 'active' && technicalChanges ? onOpenTechnicalPlanChanges : undefined}
                 disabled={Boolean(disabled || interactionAvailability !== 'active')}
                 onAbandon={() =>
-                  onSubmitClarification?.(workflow, { [artifactAnswerKey]: '需要修改，请重新生成' })
+                  onSubmitClarification?.(workflow, { [artifactAnswerKey]: '需要修改，请重新生成', __applicationPlanningAction: 'revise' })
                 }
                 onConfirm={() =>
-                  onSubmitClarification?.(workflow, { [artifactAnswerKey]: '正确，继续' })
+                  onSubmitClarification?.(workflow, { [artifactAnswerKey]: '正确，继续', __applicationPlanningAction: 'confirm' })
                 }
                 onRevise={(request) =>
-                  onSubmitClarification?.(workflow, { technical_plan_confirmation: request })
+                  onSubmitClarification?.(workflow, { technical_plan_confirmation: request, __applicationPlanningAction: 'revise' })
                 }
                 plan={
                   clarification?.mode === 'requirement_document_confirmation'

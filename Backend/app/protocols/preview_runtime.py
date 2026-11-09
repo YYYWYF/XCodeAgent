@@ -51,6 +51,11 @@ _cancellations: dict[tuple[str, str], Event] = {}
 _leave_cleanups: dict[str, asyncio.Task[Any]] = {}
 
 
+def active_preview_runtime_count() -> int:
+    """退出检查包含断连后仍在运行的诊断、修复与预览清理。"""
+    return sum(not task.done() for task in [*_jobs.values(), *_leave_cleanups.values()])
+
+
 def _job_finished(key: tuple[str, str], task: asyncio.Task[Any]) -> None:
     """移除已完成任务并消费断开订阅后的异常，避免后台引用泄漏。"""
     if _jobs.get(key) is task:
@@ -258,6 +263,9 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
     async def operation(report: Any) -> AgUiActionResult:
         """先原子校验占用，再把持久操作与抽屉订阅生命周期分离。"""
         request = PreviewRuntimeInput.model_validate((payload.get("forwardedProps") or {}).get("previewRuntime") or {})
+        from app.services.backend_runtime import runtime as backend_runtime
+        if backend_runtime.phase != "open" and request.action != "stop":
+            raise ValueError("后台正在准备退出，当前仅允许清理已打开的预览。")
         root = Path(request.workspace).expanduser().resolve()
         if not (root / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
             raise ValueError("需要有效的应用工作区。")

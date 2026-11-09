@@ -1,8 +1,10 @@
 import { readWorkflowPayload } from '../../../service/agUiAgent'
 import { enqueueBuildTaskRetry, getBuildTaskRetryUrl, type BuildTaskRetryRequest } from '../../../service/buildTaskRetry'
 import { mergeBuildRetrySteps } from '../buildTaskRetryPresentation'
-import { useEffect, useRef, useState } from 'react'
-import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useWorkbenchRunRefresh, type WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
+import { recoveryStore } from '../../../service/recoveryStore'
+import { backendConnectionRevision, subscribeBackendConnection } from '../../../service/backendConnection'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
 import { workflowDebugEndedControl, workflowDebugResumeSource } from '../workflowDebugResume'
@@ -25,7 +27,7 @@ import {
 } from '../../../service/applicationPagePlanning'
 import { ApplicationLifecycleActionError, getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import { continueRevisionOnce } from '../../../service/revisionContinuationGuard'
-import { mergeWorkbenchResult } from '../workbenchResultRecovery'
+import { mergeExecutionOutput } from '../executionOutputRecovery'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
@@ -35,7 +37,6 @@ import {
   beginConnectionRequest,
   completeConnectionRequest,
   failConnectionRequest,
-  initialConnectionState,
   type ConnectionState
 } from '../../../service/connectionState'
 import type {
@@ -727,10 +728,16 @@ export function useWorkflowConversation({
   activeSessionRef.current = activeSession
   activeInputRef.current = { key: activeSession?.key || draftKey, draft }
   const [recoveryErrors, setRecoveryErrors] = useState<Record<string, string | undefined>>({})
-  const [connectionState, setConnectionState] = useState<ConnectionState>(() =>
-    initialConnectionState(Boolean(applicationLifecycle))
-  )
-  const [lifecycleSyncError, setLifecycleSyncError] = useState<string>()
+  const recoveryKey = recoveryStore.key(application.workspaceRoot || '', application.id,
+    activeSession?.threadId || draftKey, activeSession?.sessionId)
+  recoveryStore.get(recoveryKey, applicationLifecycle)
+  const recoveryEntry = useSyncExternalStore(
+    (listener) => recoveryStore.subscribe(recoveryKey, listener), () => recoveryStore.get(recoveryKey), () => recoveryStore.get(recoveryKey))
+  const connectionState = recoveryEntry.connection
+  const lifecycleSyncError = recoveryEntry.syncError
+  /** 实时流也回写统一恢复 store 的连接维度，不再在 Hook 保存第二份连接状态。 */
+  const setConnectionState = (update: SetStateAction<ConnectionState>): void => recoveryStore.setConnection(recoveryKey,
+    (current) => typeof update === 'function' ? update(current) : update)
   const connectionRequestGenerationRef = useRef(0)
   const applicationLifecycleRef = useRef(applicationLifecycle)
   const connectionStateRef = useRef(connectionState)
@@ -745,21 +752,27 @@ export function useWorkflowConversation({
 
   // 离开查询所属会话时废弃请求代次，并为新会话重新建立连接展示，避免残留重连中。
   useEffect(() => {
-    const generation = ++connectionRequestGenerationRef.current
-    const next = { ...initialConnectionState(Boolean(applicationLifecycleRef.current)), requestGeneration: generation }
-    connectionStateRef.current = next
-    setConnectionState(next)
-    setLifecycleSyncError(undefined)
+    const generation = recoveryStore.invalidate(recoveryKey)
+    connectionRequestGenerationRef.current = generation
+    if (applicationLifecycleRef.current) recoveryStore.adopt(recoveryKey, applicationLifecycleRef.current)
     return () => { ++connectionRequestGenerationRef.current }
+
   }, [application.id, application.workspaceRoot, activeSession?.key, draftKey])
 
   const workbenchRefreshConnection: WorkbenchRunRefreshConnection = {
-    scopeKey: activeSession?.key,
+    scopeKey: recoveryKey,
+    shouldRefresh: !recoveringSourceRunId && !recoveryEntry.authenticationBlocked &&
+      (connectionState.status !== 'healthy' || Boolean(lifecycleSyncError) ||
+        Boolean(executionRecoveryReadError(applicationLifecycle)) || recoveryEntry.lifecycle?.extensions.recoverySnapshot?.output?.finished === false ||
+        Object.values(applicationLifecycle?.activeExecutions || {}).some((execution) => execution.ownerSessionId === activeSession?.sessionId &&
+          execution.threadId === activeSession?.threadId && ['running', 'stopping'].includes(execution.status))),
+    refresh: () => !loading && recoveryStore.canRead(recoveryKey) ? refreshExecutionRecoveryLifecycle() : Promise.resolve(false),
     /** 新查询已经开始时，旧轮询不能回写生命周期或连接结果。 */
     isCurrentRequest: (generation) => generation === connectionRequestGenerationRef.current,
     /** 后台轮询只预留统一请求代次，不切换 connecting 状态以免每三秒闪动。 */
     start: () => {
-      const generation = ++connectionRequestGenerationRef.current
+      const generation = recoveryStore.invalidate(recoveryKey)
+      connectionRequestGenerationRef.current = generation
       connectionStateRef.current = { ...connectionStateRef.current, requestGeneration: generation }
       setConnectionState((current) => ({ ...current, requestGeneration: generation }))
       return generation
@@ -778,7 +791,6 @@ export function useWorkflowConversation({
   // 任一成功到达的 Backend lifecycle 都能恢复连接维度，但不会改写 Recovery projection。
   useEffect(() => {
     if (!applicationLifecycle) return
-    setLifecycleSyncError(undefined)
     setConnectionState((current) =>
       completeConnectionRequest(current, current.requestGeneration)
     )
@@ -1066,13 +1078,12 @@ export function useWorkflowConversation({
       sessionKey === activeInputRef.current.key
     setConnectionState((current) => beginConnectionRequest(current, requestGeneration))
     try {
-      const lifecycle = await getApplicationLifecycle(application, undefined,
-        resultSession ? { ...resultSession, fresh } : undefined)
+      const lifecycle = await recoveryStore.read(recoveryKey, () => getApplicationLifecycle(application, undefined,
+        resultSession ? { ...resultSession, fresh } : undefined), fresh)
       if (!isCurrent()) return false
-      setLifecycleSyncError(undefined)
       applicationLifecycleRef.current = lifecycle
       onApplicationLifecycleChange(lifecycle)
-      const serverWorkflow = readWorkflowPayload(lifecycle.extensions.sessionWorkflow)
+      const serverWorkflow = readWorkflowPayload(lifecycle.extensions.recoverySnapshot?.workflow)
       if (serverWorkflow && resultSession && !runFinalizationRef.current[sessionKey]) {
         setLiveWorkflows((current) => ({ ...current, [sessionKey]: serverWorkflow }))
       }
@@ -1083,7 +1094,7 @@ export function useWorkflowConversation({
       setConnectionState((current) => completeConnectionRequest(current, requestGeneration))
       if (resultSession && !runFinalizationRef.current[sessionKey]) {
         const currentMessages = getSessionMessages(sessionKey)
-        const restored = mergeWorkbenchResult(currentMessages, lifecycle, resultSession)
+        const restored = mergeExecutionOutput(currentMessages, lifecycle, resultSession)
         if (restored !== currentMessages) {
           setSessionMessages(sessionKey, restored)
           await persistSession({ editorMode: resultSession.editorMode, messages: restored,
@@ -1105,7 +1116,6 @@ export function useWorkflowConversation({
       if (error instanceof ApplicationLifecycleActionError) {
         connectionStateRef.current = completeConnectionRequest(connectionStateRef.current, requestGeneration)
         setConnectionState(connectionStateRef.current)
-        setLifecycleSyncError(error.message)
         return false
       }
       setConnectionState((current) =>
@@ -1122,6 +1132,25 @@ export function useWorkflowConversation({
   // 冷启动或切换会话必须收口初始连接；没有 lifecycle/运行中 Run 时也不能永久停在 connecting。
   useEffect(() => {
     if (application.workspaceRoot) void refreshExecutionRecoveryLifecycle()
+  }, [application.id, application.workspaceRoot, activeSession?.key, draftKey])
+
+  // 当前会话只有这一处只读跟进；查询合并、退避和连接状态均由共享 store 持有。
+  useWorkbenchRunRefresh(application, undefined, onApplicationLifecycleChange, workbenchRefreshConnection)
+
+  // 后台换实例后仅读取现场；先等待旧流的本地收口，避免旧 finally 清掉新恢复结果。
+  useEffect(() => {
+    let disposed = false
+    const unsubscribe = subscribeBackendConnection((connection) => {
+      ++connectionRequestGenerationRef.current
+      for (const session of Object.values(agUiSessionsRef.current)) session.detach()
+      if (connection.status === 'ready' && application.workspaceRoot) {
+        const finalizations = Object.values(runFinalizationRef.current).map((entry) => entry.promise)
+        void Promise.allSettled(finalizations).then(() => {
+          if (!disposed && backendConnectionRevision() === connection.revision) void refreshExecutionRecoveryLifecycle(true)
+        })
+      }
+    })
+    return () => { disposed = true; unsubscribe() }
   }, [application.id, application.workspaceRoot, activeSession?.key, draftKey])
 
   const resultRecoveryExecutionRef = useRef<{ key: string; runId?: string }>()
@@ -1228,6 +1257,7 @@ export function useWorkflowConversation({
   const sendWorkflowMessage = async (
     message: string,
     options?: {
+      requestId?: string
       clearDraft?: boolean
       clarificationAnswers?: ClarificationAnswers
       applicationPlanningInteraction?: ApplicationPlanningInteraction
@@ -1334,13 +1364,14 @@ export function useWorkflowConversation({
         createPlanControlRequestGuard(identity, options.planControlRunId || '')
       : undefined
     if (planControlRequest) planControlRequestRef.current = planControlRequest
+    const backendRevision = backendConnectionRevision()
     const isPlanControlResponseCurrent = (): boolean =>
-      !planControlRequest ||
+      backendConnectionRevision() === backendRevision && (!planControlRequest ||
       isCurrentPlanControlRequest(
         planControlRequest,
         planControlRequestRef.current,
         activePlanControlContextRef.current
-      )
+      ))
 
     const explicitBuildExecutionScope =
       options?.buildExecutionScope || options?.workflowDebug?.buildExecutionScope
@@ -1415,19 +1446,24 @@ export function useWorkflowConversation({
           ))
     const optimisticSkills = beginOptimisticSkillSend(options?.selectedSkills || [])
     const previousMessages = getSessionMessages(identity.key)
+    // 单任务重试复用原 Build 卡片；同一提交的断连续接按请求身份复用已保存消息。
     const reusedBuildMessage = options?.reuseBuildMessageId === undefined ? undefined
       : previousMessages.find((item) => item.id === options.reuseBuildMessageId)
+    const acceptedUser = options?.requestId ? previousMessages.find((item) => item.role === 'user' && item.executionRequestId === options.requestId) : undefined
+    const acceptedAssistant = options?.requestId ? previousMessages.find((item) => item.role === 'assistant' && item.executionRequestId === options.requestId) : undefined
     // 连续的确定性动作可能在同一毫秒返回；新任务消息身份必须唯一，避免覆盖此前任务/结束回执。
-    const userMessageId = previousMessages.reduce((next, item) => Math.max(next, item.id + 1), Date.now())
+    const userMessageId = acceptedUser?.id ?? previousMessages.reduce((next, item) => Math.max(next, item.id + 1), Date.now())
     const userMessage: AgentChatMessage = {
+      executionRequestId: options?.requestId || randomUUID(),
       id: userMessageId,
       role: 'user',
       content: trimmedMessage,
       skills: optimisticSkills.messageSkills,
       createdAt: Date.now()
     }
-    const assistantMessageId = reusedBuildMessage?.id ?? userMessageId + 1
+    const assistantMessageId = reusedBuildMessage?.id ?? acceptedAssistant?.id ?? userMessageId + 1
     const assistantMessage: AgentChatMessage = {
+      executionRequestId: userMessage.executionRequestId,
       id: assistantMessageId,
       role: 'assistant',
       content: '',
@@ -1435,7 +1471,8 @@ export function useWorkflowConversation({
     }
     const baselineRunIds = Object.keys(applicationLifecycleRef.current?.activeExecutions || {})
     delete pendingWorkflowInputsRef.current[identity.key]
-    const nextMessages = reusedBuildMessage ? previousMessages : [...previousMessages, userMessage, assistantMessage]
+    const nextMessages = reusedBuildMessage || (acceptedUser && acceptedAssistant)
+      ? previousMessages : [...previousMessages, userMessage, assistantMessage]
 
     setRunStates((current) => ({
       ...current,
@@ -1451,7 +1488,7 @@ export function useWorkflowConversation({
       setRecoveryErrorForSession(identity.key)
     }
     if (!options?.planControlAction) {
-      setLiveWorkflows((current) => omitKey(current, identity.key))
+      if (backendConnectionRevision() === backendRevision) setLiveWorkflows((current) => omitKey(current, identity.key))
       setEndedPlanSessionKeys((current) => {
         const next = omitKey(current, identity.key)
         return draftKey === identity.key ? next : omitKey(next, draftKey)
@@ -1572,13 +1609,15 @@ export function useWorkflowConversation({
           conversation: Boolean(options?.conversation)
         }
       }))
-      connectionRequestGeneration = ++connectionRequestGenerationRef.current
+      connectionRequestGeneration = recoveryStore.invalidate(recoveryKey)
+      connectionRequestGenerationRef.current = connectionRequestGeneration
       backendRequestStarted = true
       const {
         answer: rawAnswer,
         workflow,
         toolCalls: rawToolCalls
       } = await agUiSession.sendMessage(trimmedMessage, {
+        requestId: userMessage.executionRequestId,
         workspaceRoot: identity.workspaceRoot,
         sessionId: identity.sessionId,
         editorMode: identity.editorMode,
@@ -1812,7 +1851,7 @@ export function useWorkflowConversation({
         !options.resumeReference && !options.workflowDebug?.enabled && !streamedContent &&
         streamedToolCalls.length === 0 && streamedProcessSteps.length === 0) {
         const originalDraft = options.titleFrom || trimmedMessage
-        const frozenOptions = { ...options, sessionIdentity: identity,
+        const frozenOptions = { ...options, requestId: userMessage.executionRequestId, sessionIdentity: identity,
           selectedSkills: [...(options.selectedSkills || [])],
           selectedPageId: effectiveSelectedPageId, selectedApiContractId: effectiveSelectedApiContractId,
           selectedEndpointId: effectiveSelectedEndpointId, detailTargetType: effectiveDetailTargetType,

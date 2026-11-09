@@ -19,7 +19,7 @@ from ag_ui.core import (
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
-from ag_ui.encoder import EventEncoder
+from app.protocols.execution_event_encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 from langgraph.types import Command
 
@@ -657,8 +657,8 @@ def build_workflow_ag_ui_stream(
                 )
             if workflow_scope == "application_planning":
                 # 同一 planning thread 的所有 Graph 写运行必须串行。无 interaction 的
-                # 显式重试同样会修改 checkpoint，不能与确认恢复并发；snapshot-only
-                # 请求持锁时间很短，只保证读取到前一写运行完成后的稳定快照。
+                # 显式重试同样会修改 checkpoint，不能与确认写运行并发。
+                # 独立恢复查询直接读已提交 checkpoint，不等待生成结束。
                 application_planning_run_lock_instance = application_planning_run_lock(
                     thread_id
                 )

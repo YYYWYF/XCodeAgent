@@ -9,7 +9,8 @@ import icon from '../../resources/icon.png?asset'
 import { PRODUCT_DISPLAY_NAME, WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
 import { attachUiDesignPageCode } from './uiDesignPageCode'
 import { DEVAGENTSTUDIO_ENV } from './env'
-import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
+import { getBackendBaseUrl, startBackendService, detachBackendService, prepareBackendServiceUpdate } from './backendService'
+import { setupBackendConnectionIpc } from './backendConnectionIpc'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { readStoredSession, readStoredSessionSummary, saveStoredSession } from './sessionStorage'
@@ -1791,6 +1792,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   if (!(await clearAuthStateBeforeStartup())) return false
 
   setupApplicationSettingsIpc()
+  setupBackendConnectionIpc()
   let backendStartupPromise: Promise<string> | undefined
   /** 复用同一个 Python 就绪请求，更新页异常也不能重复启动后端或跳过健康等待。 */
   const ensureBackendReady = (): Promise<string> => {
@@ -1800,10 +1802,17 @@ async function initializePrimaryApplication(): Promise<boolean> {
   const continueStartup = await runStartupUpdate(
     ensureBackendReady,
     async () => {
+      try {
+        await prepareBackendServiceUpdate(async () => {
+          await stopGeneratedProjectPreviewsBeforeQuit()
+          if (launchedPreviewWorkspaces.size) throw new Error('预览服务尚未停止，请稍后再更新。')
+        })
+      } finally {
+        // 失败可能发生在退场提交之后，正常启动必须重新核验，不能复用旧就绪 Promise。
+        backendStartupPromise = undefined
+      }
       isQuitting = true
-      await cleanupBeforeQuit()
-      // 安装器接管前若失败，必须重新启动已被清理的 Python 后端。
-      backendStartupPromise = undefined
+      await clearAuthState()
       quitCleanupCompleted = true
     }
   )
@@ -1892,7 +1901,7 @@ if (!hasSingleInstanceLock) {
 let quitCleanupCompleted = false
 let quitCleanupStarted = false
 
-/** 在应用退出前清除认证状态并停止本地后端服务。 */
+/** 前端退出清除认证和预览；后台工作流服务继续运行，重开后核对实例再接入。 */
 async function cleanupBeforeQuit(): Promise<void> {
   try {
     await clearAuthState()
@@ -1907,7 +1916,7 @@ async function cleanupBeforeQuit(): Promise<void> {
   }
 
   try {
-    await stopBackendService()
+    await detachBackendService()
   } catch (error) {
     console.error('Failed to stop backend service', error)
   }

@@ -71,9 +71,6 @@ async def resolve_execution_recovery_projection(
 
     generated_at = datetime.now(timezone.utc)
     try:
-        from app.services.checkpoint_execution import index_missing_checkpoint_executions
-        with recovery_read_operation("补建任务恢复索引"):
-            await index_missing_checkpoint_executions(workspace)
         with recovery_read_operation("查询任务恢复记录"):
             records = await list_recovery_projection_candidates(workspace, limit=16)
     except Exception as exc:
@@ -98,6 +95,8 @@ async def resolve_execution_recovery_projection(
         ):
             continue
         try:
+            if not await _record_has_current_owner(workspace, record):
+                continue
             candidate = await _resolve_candidate(record)
         except Exception as exc:
             error = recovery_read_error(
@@ -125,8 +124,36 @@ async def resolve_execution_recovery_projection(
     )
 
 
+async def _record_has_current_owner(workspace: str, record: DurableExecutionRecord) -> bool:
+    """只解释当前 owner，历史等待记录不能触发历史解码或覆盖已结束、已交接的线程。"""
+    lifecycle = load_application_lifecycle(workspace)
+    if lifecycle is None:
+        return True
+    if record.execution_kind == "workbench":
+        return record.run_id in lifecycle.active_executions
+    if record.thread_id != lifecycle.initialization.thread_id:
+        return False
+    if lifecycle.active_run_id:
+        return record.run_id == lifecycle.active_run_id
+    if lifecycle.ended_planning_execution is not None or str(lifecycle.initialization.status) not in {"failed", "running"}:
+        return False
+    from app.persistence.execution_recovery import get_latest_execution_for_thread
+    latest = await get_latest_execution_for_thread(workspace, thread_id=record.thread_id)
+    return latest is not None and latest.run_id == record.run_id
+
+
+async def reconcile_recovery_ownership(workspace: str) -> None:
+    """仅由显式 Workspace Attach 补建索引并收口失效 owner；只读投影不调用这里。"""
+    from app.services.checkpoint_execution import index_missing_checkpoint_executions
+    await index_missing_checkpoint_executions(workspace)
+    for record in await list_recovery_projection_candidates(workspace, limit=16):
+        if await _record_has_current_owner(workspace, record):
+            await _resolve_candidate(record, reconcile_ownership=True)
+
+
 async def _resolve_candidate(
     record: DurableExecutionRecord,
+    *, reconcile_ownership: bool = False,
 ) -> ExecutionRecoveryProjectionCandidate | None:
     """为单条记录选择 Graph，FAILED 与 INTERRUPTED 均走各自 authority resolver。"""
 
@@ -145,12 +172,13 @@ async def _resolve_candidate(
         record = await resolve_checkpoint_source(record, graph)
     if record.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
         return None
-    from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
-    reconcile_failed_execution_lifecycle(record)
     from app.services.business_node_retry import retry_action_plan, release_unretryable_execution
     action_plan = await retry_action_plan(record, graph)
-    if action_plan.primary_action is None:
-        await release_unretryable_execution(record)
+    if reconcile_ownership:
+        from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
+        reconcile_failed_execution_lifecycle(record)
+        if action_plan.primary_action is None:
+            await release_unretryable_execution(record)
     availability = "ready" if action_plan.primary_action else "blocked"
     can_continue = action_plan.primary_action is not None
     owner_session_id = record.owner_session_id

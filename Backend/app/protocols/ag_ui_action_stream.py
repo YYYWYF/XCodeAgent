@@ -18,7 +18,7 @@ from ag_ui.core import (
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
-from ag_ui.encoder import EventEncoder
+from app.protocols.execution_event_encoder import EventEncoder
 from fastapi.encoders import jsonable_encoder
 
 from app.agents.model_business_context import bind_model_action_run

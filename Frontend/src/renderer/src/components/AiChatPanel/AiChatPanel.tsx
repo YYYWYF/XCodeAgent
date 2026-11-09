@@ -161,7 +161,6 @@ import { useTestReportPanel } from './hooks/useTestReportPanel'
 import TestReportDocument from './components/TestReportDocument'
 import { useWorkflowConversation } from './hooks/useWorkflowConversation'
 import { useSessionRuntimeStore } from './hooks/useSessionRuntimeStore'
-import { useWorkbenchRunRefresh } from './hooks/useWorkbenchRunRefresh'
 import {
   generationControlOwner,
   planningGenerationRunning,
@@ -2542,7 +2541,6 @@ export default function AiChatPanel({
     conversationRunning,
     connectionState,
     lifecycleSyncError,
-    workbenchRefreshConnection,
     error,
     handleAcceptPreview,
     handleContinueDevelopment: continueDevelopmentExecution,
@@ -2648,13 +2646,6 @@ export default function AiChatPanel({
   const [stopGenerationPending, setStopGenerationPending] = useState(false)
   const stopGenerationPendingRef = useRef(false)
   const stopping = stopGenerationPending || localWorkflowStopping || (restoredRunRunning && ownedExecution?.status === 'stopping')
-  // 只跟进脱离本地流的运行中任务；任务结束即停止轮询，点击继续时再校验工作区资格。
-  useWorkbenchRunRefresh(
-    application,
-    !localWorkflowLoading && restoredRunRunning ? ownedExecution?.runId : undefined,
-    onApplicationLifecycleChange,
-    workbenchRefreshConnection
-  )
 
   // 同一归属决定结束按钮显示和调用路径；重开后仍运行的 Backend Run 也保留结束入口。
   const currentGenerationOwner = generationControlOwner(

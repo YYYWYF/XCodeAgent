@@ -28,6 +28,26 @@ import { initialConnectionState } from '../src/renderer/src/service/connectionSt
 import { technicalPlanningReplyPresentation, shouldPreserveTechnicalPlanningReply, type TechnicalPlanningReply } from '../src/renderer/src/service/technicalPlanningConversation'
 import { applicationPlanningRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 
+// 结束恢复的文字不能由同 Run 的旧确认输出覆盖，迟到原流也不能复活旧确认。
+{
+  const current = planningState('app-ended-output', 'thread-ended-output')
+  const ended: WorkflowRunPayload = { runId: 'ended-run', threadId: current.threadId, events: [], state: {},
+    summary: { status: 'completed', phase: 'plan_control', message: '本轮任务已结束，已有文件已保留。',
+      planControl: { action: 'end', status: 'ended', targetRunId: 'ended-run' } } }
+  current.workflow = ended
+  const h = harness(current)
+  h.onRead(async () => ({ workflow: ended, lifecycle: authoritativeLifecycle(current, { status: 'cancelled' }),
+    recovery: recoveryProjection(current.threadId, { classification: 'completed', recoveryActionPlan: null }),
+    output: { requestId: 'old', runId: ended.runId, threadId: current.threadId, startedAt: '',
+      submissionOrder: 1, sequence: 10, finished: true, content: '请确认后继续', processSteps: [], toolCalls: [] } }))
+  await h.runtime.reconcileCurrentState()
+  assert.equal(h.contents.at(-1), ended.summary.message)
+  const late = { ...confirmationWorkflow(current.threadId), runId: ended.runId }
+  const result = reduceApplicationPlanningCurrentState(h.current()!, {
+    type: 'workflow_received', applicationId: current.application.id, threadId: current.threadId, workflow: late })
+  assert.equal(result.workflow?.summary.phase, 'plan_control')
+}
+
 /** 构造带稳定身份的最小 Planning 当前状态，不挂载任何 React 视图。 */
 function planningState(applicationId = 'app-A', threadId = 'thread-A'): ApplicationPlanningCurrentState {
   const application = { id: applicationId, appName: applicationId, workspaceRoot: `/workspace/${applicationId}` } as ApplicationConfig
@@ -124,6 +144,7 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
   let current: ApplicationPlanningCurrentState | undefined = initial
   let active = false
   let stopCalls = 0
+  let detachCalls = 0
   let stop = async (): Promise<void> => { active = false }
   let send: (options: SendWorkflowMessageOptions) => Promise<AgUiChatResult> = async () => result()
   let read: () => Promise<import('../src/renderer/src/service/applicationPlanningRecovery').ApplicationPlanningAuthoritativeSnapshot | undefined> = async () => ({
@@ -179,6 +200,8 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
       },
       /** 停止只影响本测试实例的会话。 */
       stop: async () => { stopCalls += 1; await stop() },
+      /** 卸载只移除观察者，保留后台执行。 */
+      detach: () => { detachCalls += 1; active = false },
       /** 读取当前模拟传输活动状态。 */
       hasActiveRun: () => active
     },
@@ -200,7 +223,9 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
     /** 查询独立权威读取次数。 */
     readCalls: () => readCalls,
     /** 查询本实例 stop 调用次数。 */
-    stopCalls: () => stopCalls
+    stopCalls: () => stopCalls,
+    /** 查询卸载释放观察者的次数。 */
+    detachCalls: () => detachCalls
   }
 }
 
@@ -378,7 +403,8 @@ for (const confirmed of [true, false]) {
   assert.equal(h.events.length, eventCount)
   assert.deepEqual(h.published, [])
   assert.deepEqual(h.contents, [])
-  assert.equal(h.stopCalls(), 1)
+  assert.equal(h.stopCalls(), 0)
+  assert.equal(h.detachCalls(), 1)
 }
 
 // G：保存服务完成后合并最新 Canonical Workflow，再把 artifact 返回给调用方。
@@ -861,7 +887,7 @@ for (const confirmed of [true, false]) {
   assert.equal(h.readCalls(), 2)
 }
 
-// T4：本地执行中、状态不确定或 Runtime 已释放时，不让后台只读校准干扰当前动作。
+// T4：本地执行中及 Runtime 已释放时不查询；断线后的空闲 Runtime 可自动只读同步。
 {
   const current = planningState()
   current.recovery = recoveryProjection('thread-A', { classification: 'running', recoveryActionPlan: null })
@@ -874,10 +900,59 @@ for (const confirmed of [true, false]) {
   assert.equal(h.readCalls(), 0)
   h.setCurrent({ ...current, transportState: 'idle', connection: { ...current.connection, status: 'unavailable' } })
   await h.runtime.refreshDetachedRunningState()
-  assert.equal(h.readCalls(), 0)
+  assert.equal(h.readCalls(), 1)
   h.runtime.dispose()
   await h.runtime.refreshDetachedRunningState()
-  assert.equal(h.readCalls(), 0)
+  assert.equal(h.readCalls(), 1)
+}
+
+// 首次冷读失败且尚无 Run 时也持续退避重读，恢复后只展示当前确认，不发送生成请求。
+{
+  const originalNow = Date.now
+  let now = originalNow()
+  Date.now = () => now
+  try {
+    const initial = planningState()
+    initial.restoreArtifactsFromDisk = true
+    const h = harness(initial)
+    h.onRead(async () => { throw new TypeError('Failed to fetch') })
+    await h.runtime.ensureStarted()
+    assert.equal(h.current()?.connection.status, 'unavailable')
+    assert.equal(h.current()?.checkpointMissing, undefined)
+    await h.runtime.refreshDetachedRunningState()
+    assert.equal(h.readCalls(), 1)
+    now += 1_000
+    await h.runtime.refreshDetachedRunningState()
+    assert.equal(h.readCalls(), 2)
+    now += 1_000
+    await h.runtime.refreshDetachedRunningState()
+    assert.equal(h.readCalls(), 2)
+    h.onRead(async () => ({ workflow: confirmationWorkflow(), lifecycle: authoritativeLifecycle(initial), recovery: recoveryProjection() }))
+    now += 1_000
+    await h.runtime.refreshDetachedRunningState()
+    assert.equal(h.readCalls(), 3)
+    assert.equal(h.current()?.connection.status, 'healthy')
+    assert.equal(h.current()?.workflow?.summary.clarification?.mode, 'technical_plan_confirmation')
+    assert.equal(h.calls.length, 0)
+    await h.runtime.refreshDetachedRunningState()
+    assert.equal(h.readCalls(), 3)
+  } finally { Date.now = originalNow }
+}
+
+// UI 生成池等待确认时也要检测 Backend；IPC 仍能读文件不能冒充服务健康。
+// 认证失败不能由定时器持续重放；用户重新登录后仍可显式同步。
+{
+  const initial = planningState()
+  initial.restoreArtifactsFromDisk = true
+  const h = harness(initial)
+  h.onRead(async () => { throw Object.assign(new Error('HTTP 401'), { status: 401 }) })
+  await h.runtime.ensureStarted()
+  await h.runtime.refreshDetachedRunningState()
+  assert.equal(h.readCalls(), 1)
+  h.onRead(async () => ({ workflow: confirmationWorkflow(), lifecycle: authoritativeLifecycle(initial), recovery: recoveryProjection() }))
+  await h.runtime.reconcileCurrentState()
+  assert.equal(h.current()?.connection.status, 'healthy')
+  assert.equal(h.calls.length, 0)
 }
 
 // UI 生成池等待确认时也要检测 Backend；IPC 仍能读文件不能冒充服务健康。
