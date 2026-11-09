@@ -35,6 +35,9 @@ from app.services.frontend_project_launcher import (
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.services.frontend_node_runtime import (
+    FrontendNodeError, frontend_operation_lock, has_matching_frontend_dependencies, resolve_frontend_node,
+)
 from app.services.version_control import _run_git
 
 ProgressCallback = Callable[[str, str, int], None]
@@ -189,9 +192,9 @@ def _link_reused_dependencies(workspace_root: Path, revision_dir: Path) -> bool:
     """把工作区的 node_modules 软链进物化目录，返回是否成功复用。"""
 
     link = revision_dir / "frontend" / "node_modules"
-    if link.exists() or link.is_symlink():
-        return True
     source = workspace_root / "frontend" / "node_modules"
+    if link.exists() or link.is_symlink():
+        return link.is_symlink() and link.resolve() == source.resolve()
     try:
         link.symlink_to(source, target_is_directory=True)
     except OSError:
@@ -217,33 +220,45 @@ def start_revision_preview(
     report("materialize", f"正在准备分支 {revision} 的代码…", 20)
     revision_dir = materialize_revision(root, revision)
 
-    reused = _can_reuse_dependencies(root, revision_dir) and _link_reused_dependencies(
-        root, revision_dir
-    )
-    if reused:
-        report("install", "依赖与当前工作区一致，复用已安装的依赖。", 45)
-    else:
-        report("install", "正在安装该分支的依赖…", 45)
+    with frontend_operation_lock(root):
+        try:
+            node_runtime = resolve_frontend_node(root)
+        except FrontendNodeError as exc:
+            raise RevisionPreviewError(str(exc)) from exc
+        reused = (
+            _can_reuse_dependencies(root, revision_dir)
+            and has_matching_frontend_dependencies(
+                root / WORKSPACE_ARTIFACT_DIR / "runtime/launch", root / "frontend", node_runtime,
+            )
+            and _link_reused_dependencies(root, revision_dir)
+        )
+        if not reused:
+            _unlink_reused_dependencies(revision_dir)
+        if reused:
+            report("install", "依赖与当前工作区一致，复用已安装的依赖。", 45)
+        else:
+            report("install", "正在安装该分支的依赖…", 45)
 
-    report("launch", "正在启动该分支的前端服务…", 70)
-    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / revision_preview_runtime_subdir(revision)
-    # 清掉上一次启动的 stdout 日志再启动：下面的地址解析是从日志里找 `Local:` 行，
-    # 留着旧内容就可能解析出上一次那个已经失效的端口。
-    (runtime_root / "frontend.stdout.log").unlink(missing_ok=True)
-    launch = launch_frontend_project(
-        root,
-        project_dir=revision_dir / "frontend",
-        runtime_subdir=revision_preview_runtime_subdir(revision),
-        # 复用依赖时跳过安装；否则让启动器正常安装该分支的依赖。
-        skip_install=reused,
-        # 复用的方式是把工作区的 node_modules 软链进来，要一并告诉包管理器别去"纠正"它。
-        linked_dependencies=reused,
-        # 必须绕开"服务已在运行就直接复用"这条捷径。它按运行时目录里的 PID 文件判断，
-        # 再探测脚本里写死的端口（本模板是 3000）—— 而那个端口是工作区预览在占着，于是
-        # 只要上次留下过一个 PID 文件，这里就会把**工作区的应用**当成该分支的预览返回，
-        # 界面上就又看到了当前分支。历史分支预览要的是自己那个 dev server，宁可重启。
-        force_restart=True,
-    )
+        report("launch", "正在启动该分支的前端服务…", 70)
+        runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / revision_preview_runtime_subdir(revision)
+        # 清掉上一次启动的 stdout 日志再启动：下面的地址解析是从日志里找 `Local:` 行，
+        # 留着旧内容就可能解析出上一次那个已经失效的端口。
+        (runtime_root / "frontend.stdout.log").unlink(missing_ok=True)
+        launch = launch_frontend_project(
+            root,
+            project_dir=revision_dir / "frontend",
+            node_runtime=node_runtime,
+            runtime_subdir=revision_preview_runtime_subdir(revision),
+            # 复用依赖时跳过安装；否则让启动器正常安装该分支的依赖。
+            skip_install=reused,
+            # 复用的方式是把工作区的 node_modules 软链进来，要一并告诉包管理器别去"纠正"它。
+            linked_dependencies=reused,
+            # 必须绕开"服务已在运行就直接复用"这条捷径。它按运行时目录里的 PID 文件判断，
+            # 再探测脚本里写死的端口（本模板是 3000）—— 而那个端口是工作区预览在占着，于是
+            # 只要上次留下过一个 PID 文件，这里就会把**工作区的应用**当成该分支的预览返回，
+            # 界面上就又看到了当前分支。历史分支预览要的是自己那个 dev server，宁可重启。
+            force_restart=True,
+        )
     if str(launch.get("status") or "failed") != "running":
         raise RevisionPreviewError(
             str(launch.get("message") or "历史分支前端服务启动失败。")

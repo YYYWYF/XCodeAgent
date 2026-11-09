@@ -14,6 +14,13 @@
 
 只有当前启动失败记录允许“诊断并修复”；运行中的页面业务错误不属于此入口。点击后创建开发阶段历史会话“诊断并修复”，保持右侧预览，后续计划确认、调整、停止、代码变更和结果均属于该会话。打开已有修复会话通过其 thread 读取当前修复状态，不借用原开发或测试会话。
 
+## 用户工程的 Node 版本
+
+- Windows 使用 NVM for Windows 时，执行 `nvm use <版本>` 后点击「重启服务」即可。每次启动或测试重新读取 `NVM_SYMLINK`，将真实 Node 目录放到本轮子进程的 PATH 首位。操作开始后的切换在下一次操作生效。
+- macOS 从执行过 `nvm use <版本>` 的同一个终端启动或重开 Studio；源码开发模式从该终端启动 Python 后端。Studio 读取继承的 `NVM_BIN`。没有配置 NVM 环境时，两端均使用 Python 后端继承的 PATH 中优先命中的 Node。Studio 安装包自身使用 Electron 内置的 Node。
+- 安装依赖、启动预览、构建、单测及性能检查会核对包管理器实际使用的 Node。前端优先采用 `packageManager` 声明的 pnpm 或 Yarn，其次沿用锁文件。NVM 路径失效、包管理器缺失、项目指定了其他 Node 时，现有启动或测试流程会给出具体原因。日志和测试证据记录 Node 的完整版本、真实路径和来源。
+- 进程、安装证据和历史预览依赖链接仅在 Node 路径和版本一致时复用。手动重启会重新执行依赖安装。构建完成后切换 Node 时，性能检查提示重新构建；仍有不同 Node 的预览在运行时，提示重启预览，并保留正在运行的服务。
+
 ## AG-UI 契约
 
 `/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作包括 `get/watch/restart/stop/stop_frontend/stop_backend/diagnose/confirm/revise/cancel/leave`。分端停止在启动锁内校验 `attemptId`，成功后仅在目标服务写入 `stoppedByUser`。若维护中断，恢复时只对原尝试收口原目标。所有字段在 Pydantic 边界校验；不接受日志文件路径。

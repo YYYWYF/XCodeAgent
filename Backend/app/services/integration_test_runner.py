@@ -16,6 +16,10 @@ from typing import Any, Literal
 
 from app.services.data_source_policy import read_application_datasource_type
 from app.services.backend_process_registry import backend_launch_lock
+from app.services.frontend_node_runtime import (
+    FrontendNodeError, FrontendNodeRuntime, frontend_dependencies_node, frontend_operation_lock, frontend_package_manager,
+    has_matching_frontend_dependencies, record_frontend_dependencies, resolve_frontend_node,
+)
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.backend_startup_check import run_backend_startup_check
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
@@ -93,27 +97,28 @@ def run_integration_checks(
 
     frontend_results: list[dict[str, Any]] = []
     if "frontend" in selected_layers:
-        if phase in {"all", "build"}:
-            frontend_results = _frontend_checks(
-                root,
-                log_root,
-                frontend,
-                state=state,
-                unit_tests_affected=frontend_unit_tests_affected,
-                include_unit_tests=phase == "all",
-                on_progress=on_progress,
-                preinstalled_result=frontend_install_result,
-                install_dependencies=install_frontend_dependencies,
-            )
-        else:
-            frontend_results = _frontend_unit_checks(
-                root,
-                log_root,
-                frontend,
-                state=state,
-                unit_tests_affected=frontend_unit_tests_affected,
-                on_progress=on_progress,
-            )
+        with frontend_operation_lock(root):
+            if phase in {"all", "build"}:
+                frontend_results = _frontend_checks(
+                    root,
+                    log_root,
+                    frontend,
+                    state=state,
+                    unit_tests_affected=frontend_unit_tests_affected,
+                    include_unit_tests=phase == "all",
+                    on_progress=on_progress,
+                    preinstalled_result=frontend_install_result,
+                    install_dependencies=install_frontend_dependencies,
+                )
+            else:
+                frontend_results = _frontend_unit_checks(
+                    root,
+                    log_root,
+                    frontend,
+                    state=state,
+                    unit_tests_affected=frontend_unit_tests_affected,
+                    on_progress=on_progress,
+                )
     for result in frontend_results:
         results.append(result)
         events.append(result["id"])
@@ -295,8 +300,24 @@ def _frontend_checks(
             )
         return results
 
-    package_manager_command = shutil.which(frontend.package_manager)
-    install_result = dict(preinstalled_result) if isinstance(preinstalled_result, dict) else (
+    node_runtime: FrontendNodeRuntime | None = None
+    package_manager_command: str | None = None
+    setup_error: str | None = None
+    try:
+        node_runtime = resolve_frontend_node(root)
+        package_manager_command = node_runtime.command(frontend.package_manager)
+    except FrontendNodeError as exc:
+        setup_error = str(exc)
+    reuse_install = (
+        package_manager_command is not None and node_runtime is not None
+        and isinstance(preinstalled_result, dict)
+        and preinstalled_result.get("passed") is True
+        and node_runtime.matches(_check_node_evidence(preinstalled_result))
+        and has_matching_frontend_dependencies(
+            root / WORKSPACE_ARTIFACT_DIR / "runtime/launch", frontend.cwd, node_runtime,
+        )
+    )
+    install_result = dict(preinstalled_result) if reuse_install and preinstalled_result is not None else (
         _run_command_result(
             check_id="frontend_install",
             name="前端依赖安装检查",
@@ -308,6 +329,7 @@ def _frontend_checks(
             log_root=log_root,
             required=True,
             on_progress=on_progress,
+            node_runtime=node_runtime,
         )
         if package_manager_command and install_dependencies
         else _missing_tool_result(
@@ -318,13 +340,13 @@ def _frontend_checks(
             evidence=(
                 "快速修改验证复用工作区现有依赖，不重复执行依赖安装。"
                 if not install_dependencies
-                else f"未找到包管理器命令：{frontend.package_manager}。"
+                else setup_error or f"未找到包管理器命令：{frontend.package_manager}。"
             ),
             required=install_dependencies,
             on_progress=on_progress,
         )
     )
-    if isinstance(preinstalled_result, dict):
+    if reuse_install:
         report_check_progress(
             on_progress,
             status="passed" if install_result.get("passed") is True else "failed",
@@ -341,6 +363,9 @@ def _frontend_checks(
         log_root=log_root,
         required=True,
         on_progress=on_progress,
+        node_runtime=node_runtime,
+        package_manager_command=package_manager_command,
+        setup_error=setup_error,
     )
     if not include_unit_tests:
         return [install_result, build_result]
@@ -357,6 +382,9 @@ def _frontend_checks(
         unit_tests_affected=unit_tests_affected,
         blocked_reason=blocked_reason,
         on_progress=on_progress,
+        node_runtime=node_runtime,
+        package_manager_command=package_manager_command,
+        setup_error=setup_error,
     )
     return [install_result, build_result, unit_result]
 
@@ -411,6 +439,9 @@ def _frontend_unit_test_result(
     unit_tests_affected: bool = True,
     blocked_reason: str | None = None,
     on_progress: CheckProgressCallback | None = None,
+    node_runtime: FrontendNodeRuntime | None = None,
+    package_manager_command: str | None = None,
+    setup_error: str | None = None,
 ) -> dict[str, Any]:
     """仅在约定目录存在前端单元测试文件时执行项目测试脚本。"""
 
@@ -463,6 +494,9 @@ def _frontend_unit_test_result(
         required=True,
         missing_evidence="发现前端单元测试文件，但 package.json 未声明 test:unit 或 test script。",
         on_progress=on_progress,
+        node_runtime=node_runtime,
+        package_manager_command=package_manager_command,
+        setup_error=setup_error,
     )
 
 
@@ -751,7 +785,11 @@ def _run_script_result(
     required: bool,
     missing_evidence: str | None = None,
     on_progress: CheckProgressCallback | None,
+    node_runtime: FrontendNodeRuntime | None = None,
+    package_manager_command: str | None = None,
+    setup_error: str | None = None,
 ) -> dict[str, Any]:
+    """按当前前端工具链执行项目脚本并保留环境失败证据。"""
     if not script_name or script_name not in _scripts(package):
         return _missing_tool_result(
             check_id=check_id,
@@ -762,14 +800,18 @@ def _run_script_result(
             required=required,
             on_progress=on_progress,
         )
-    package_manager_command = shutil.which(package.package_manager)
-    if not package_manager_command:
+    try:
+        if setup_error:
+            raise FrontendNodeError(setup_error)
+        node_runtime = node_runtime or resolve_frontend_node(root)
+        package_manager_command = package_manager_command or node_runtime.command(package.package_manager)
+    except FrontendNodeError as exc:
         return _missing_tool_result(
             check_id=check_id,
             name=name,
             layer=layer,
             language=language,
-            evidence=f"未找到包管理器命令：{package.package_manager}。",
+            evidence=str(exc),
             required=required,
             on_progress=on_progress,
         )
@@ -784,7 +826,14 @@ def _run_script_result(
         log_root=log_root,
         required=required,
         on_progress=on_progress,
+        node_runtime=node_runtime,
     )
+
+
+def _check_node_evidence(check: dict[str, Any]) -> Any:
+    """提取安装或构建检查记录的 Node 身份。"""
+    execution = check.get("execution")
+    return execution.get("nodeRuntime") if isinstance(execution, dict) else None
 
 
 def _run_command_result(
@@ -799,7 +848,9 @@ def _run_command_result(
     log_root: Path,
     required: bool,
     on_progress: CheckProgressCallback | None,
+    node_runtime: FrontendNodeRuntime | None = None,
 ) -> dict[str, Any]:
+    """执行实际检查，并为前端命令校验和记录同一 Node。"""
     report_check_progress(
         on_progress,
         status="running",
@@ -818,6 +869,20 @@ def _run_command_result(
     timed_out = False
     error: str | None = None
     try:
+        env_options = {}
+        if node_runtime is not None:
+            node_runtime.verify(argv[0], workspace=root, cwd=cwd, before_install=check_id == "frontend_install")
+            env_options["env"] = node_runtime.env
+            runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime/launch"
+            if check_id == "frontend_install":
+                record_frontend_dependencies(runtime_root, cwd, None)
+            else:
+                installed_node = frontend_dependencies_node(runtime_root, cwd)
+                if installed_node and not node_runtime.matches(installed_node):
+                    raise FrontendNodeError(
+                        f"现有依赖由 Node {installed_node.get('version')} 安装，与当前选择的 "
+                        f"{node_runtime.describe()} 不一致。请重新安装依赖后再验证。"
+                    )
         completed = workspace_process_registry.run(
             argv,
             workspace=root,
@@ -826,16 +891,20 @@ def _run_command_result(
             capture_output=True,
             timeout=COMMAND_TIMEOUT_SECONDS,
             check=False,
+            **env_options,
         )
         stdout = subprocess_output_text(completed.stdout)
         stderr = subprocess_output_text(completed.stderr)
         returncode = completed.returncode
+        if node_runtime is not None and check_id == "frontend_install" and returncode == 0:
+            node_runtime.verify(argv[0], workspace=root, cwd=cwd)
+            record_frontend_dependencies(runtime_root, cwd, node_runtime)
     except subprocess.TimeoutExpired as exc:
         # TimeoutExpired 即使在 text=True 下也可能携带 bytes，写日志前必须解码。
         stdout = subprocess_output_text(exc.stdout)
         stderr = subprocess_output_text(exc.stderr)
         timed_out = True
-    except OSError as exc:
+    except (OSError, FrontendNodeError) as exc:
         error = str(exc)
 
     finished_at = datetime.now(UTC).isoformat()
@@ -843,7 +912,8 @@ def _run_command_result(
     command_log_root.mkdir(parents=True, exist_ok=True)
     stdout_log = command_log_root / "stdout.log"
     stderr_log = command_log_root / "stderr.log"
-    stdout_log.write_text(stdout, encoding="utf-8")
+    node_heading = f"{node_runtime.describe()}\n" if node_runtime is not None else ""
+    stdout_log.write_text(node_heading + stdout, encoding="utf-8")
     stderr_log.write_text(stderr, encoding="utf-8")
     passed = returncode == 0 and not timed_out and error is None
     passed_tests, total_tests = _extract_test_counts(
@@ -858,6 +928,8 @@ def _run_command_result(
     )
     if error:
         evidence = f"{evidence}；错误：{error}"
+    if node_runtime is not None:
+        evidence = f"{node_heading}{evidence}"
     if timed_out:
         evidence = f"{evidence}；超过 {COMMAND_TIMEOUT_SECONDS}s 超时。"
     if returncode not in (0, None):
@@ -904,6 +976,8 @@ def _run_command_result(
     if passed_tests is not None and total_tests is not None:
         result["passed_tests"] = passed_tests
         result["total_tests"] = total_tests
+    if node_runtime is not None:
+        result["execution"]["nodeRuntime"] = node_runtime.evidence()
     report_check_progress(on_progress, status="passed" if passed else "failed", check=result)
     return result
 
@@ -1168,16 +1242,8 @@ def _read_package_project(path: Path) -> PackageProject | None:
         cwd=path.parent,
         package_json=package_json,
         package_json_path=path,
-        package_manager=_package_manager(path.parent),
+        package_manager=frontend_package_manager(path.parent, package_json),
     )
-
-
-def _package_manager(cwd: Path) -> str:
-    if (cwd / "pnpm-lock.yaml").is_file():
-        return "pnpm"
-    if (cwd / "yarn.lock").is_file():
-        return "yarn"
-    return "pnpm"
 
 
 def _find_maven_project_root(root: Path) -> Path | None:

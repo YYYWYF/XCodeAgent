@@ -5,7 +5,6 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import threading
@@ -17,6 +16,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.frontend_node_runtime import (
+    FRONTEND_NODE_FILE, FrontendNodeError, FrontendNodeRuntime, frontend_operation_lock, frontend_package_manager,
+    has_matching_frontend_dependencies, read_node_record,
+    record_frontend_dependencies, resolve_frontend_node, write_node_record,
+)
 from app.services.preview_diagnostics import launch_diagnostics, make_diagnostic, read_json_object
 from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
@@ -40,6 +44,8 @@ def launch_frontend_project(
     skip_install: bool = False,
     force_restart: bool = False,
     linked_dependencies: bool = False,
+    node_runtime: FrontendNodeRuntime | None = None,
+    preserve_running: bool = False,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -88,11 +94,39 @@ def launch_frontend_project(
             package_json_path=package_path,
         )
 
-    package_manager = _select_package_manager(package_path.parent)
+    package_manager = frontend_package_manager(package_path.parent, package_json)
+    with frontend_operation_lock(root):
+        return _launch_frontend_runtime(
+            root=root, package_path=package_path, package_manager=package_manager,
+            script_name=script_name, script_command=str(scripts.get(script_name, "")),
+            runtime_subdir=runtime_subdir, skip_install=skip_install, force_restart=force_restart,
+            linked_dependencies=linked_dependencies, node_runtime=node_runtime, preserve_running=preserve_running,
+        )
+
+
+def _launch_frontend_runtime(
+    *,
+    root: Path,
+    package_path: Path,
+    package_manager: str,
+    script_name: str,
+    script_command: str,
+    runtime_subdir: str,
+    skip_install: bool,
+    force_restart: bool,
+    linked_dependencies: bool,
+    node_runtime: FrontendNodeRuntime | None,
+    preserve_running: bool,
+) -> dict[str, Any]:
+    """在同一工作区锁内复用、安装并启动当前 Node 对应的预览。"""
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / runtime_subdir
     runtime_root.mkdir(parents=True, exist_ok=True)
-    preview_url = _preview_url(scripts.get(script_name, ""))
-    existing_server = None if force_restart else _reuse_ready_server(runtime_root, preview_url)
+    preview_url = _preview_url(script_command)
+    try:
+        node_runtime = node_runtime or resolve_frontend_node(root)
+    except FrontendNodeError as exc:
+        return _failed_launch(str(exc), root=root, package_json_path=package_path, category="dependency")
+    existing_server = None if force_restart else _reuse_ready_server(runtime_root, preview_url, node_runtime)
     if existing_server is not None:
         preview_url = existing_server["preview_url"]
         return {
@@ -113,18 +147,29 @@ def launch_frontend_project(
             "server": existing_server,
         }
 
+    if preserve_running and _pid_is_running(_read_frontend_pid(runtime_root / "frontend.pid")):
+        return {**_failed_launch(
+            f"当前前端预览无法按 {node_runtime.describe()} 复用。请重启预览后再执行性能检查。",
+            root=root, package_json_path=package_path, category="dependency",
+        ), "preserved_running": True}
+    if skip_install and not linked_dependencies and not has_matching_frontend_dependencies(
+        runtime_root, package_path.parent, node_runtime,
+    ):
+        return _failed_launch(
+            f"缺少与 {node_runtime.describe()} 匹配的依赖安装记录。请重新构建或启动预览。",
+            root=root, package_json_path=package_path, category="dependency",
+        )
+    try:
+        package_manager_command = node_runtime.command(package_manager)
+        node_runtime.verify(
+            package_manager_command, workspace=root, cwd=package_path.parent, before_install=not skip_install,
+        )
+    except FrontendNodeError as exc:
+        return _failed_launch(str(exc), root=root, package_json_path=package_path, category="dependency")
+
     # 复用失败但可能存在僵尸进程占用端口（如上次启动的 Vite 仍在运行），
     # 这里主动清理，避免新启动必然端口冲突导致 Vite 自动递增端口。
     _stop_frontend_process_from_pid_file(runtime_root / "frontend.pid")
-
-    package_manager_command = shutil.which(package_manager)
-    if not package_manager_command:
-        return _failed_launch(
-            f"未找到包管理器命令：{package_manager}",
-            root=root,
-            package_json_path=package_path,
-            category="dependency",
-        )
 
     if skip_install:
         install_result = {
@@ -146,6 +191,7 @@ def launch_frontend_project(
             workspace=root,
             cwd=package_path.parent,
             runtime_root=runtime_root,
+            node_runtime=node_runtime,
         )
     if install_result["returncode"] != 0:
         result = {
@@ -167,13 +213,23 @@ def launch_frontend_project(
         result["diagnostics"] = launch_diagnostics(root, "frontend", result)
         return result
 
+    if not skip_install:
+        try:
+            node_runtime.verify(package_manager_command, workspace=root, cwd=package_path.parent)
+            record_frontend_dependencies(runtime_root, package_path.parent, node_runtime)
+        except (FrontendNodeError, OSError) as exc:
+            return _failed_launch(str(exc), root=root, package_json_path=package_path, category="dependency")
+
     launch_result, process = _start_dev_server(
+        workspace=root,
         package_manager_command=package_manager_command,
         script_name=script_name,
-        script_command=str(scripts.get(script_name, "")),
+        script_command=script_command,
         cwd=package_path.parent,
         runtime_root=runtime_root,
         preview_url=preview_url,
+        node_runtime=node_runtime,
+        runtime_subdir=runtime_subdir,
         extra_argv=_dependency_check_bypass_argv(package_manager, linked_dependencies),
     )
     if process is not None:
@@ -360,28 +416,23 @@ def _select_launch_script(scripts: dict[str, Any]) -> str | None:
     return None
 
 
-def _select_package_manager(cwd: Path) -> str:
-    if (cwd / "pnpm-lock.yaml").is_file():
-        return "pnpm"
-    if (cwd / "yarn.lock").is_file():
-        return "yarn"
-    return "pnpm"
-
-
 def _run_install(
     *,
     package_manager_command: str,
     workspace: Path,
     cwd: Path,
     runtime_root: Path,
+    node_runtime: FrontendNodeRuntime,
 ) -> dict[str, Any]:
     argv = [package_manager_command, "install"]
     started_at = datetime.now(UTC).isoformat()
     try:
+        record_frontend_dependencies(runtime_root, cwd, None)
         completed = workspace_process_registry.run(
             argv,
             workspace=workspace,
             cwd=str(cwd),
+            env=node_runtime.env,
             capture_output=True,
             timeout=INSTALL_TIMEOUT_SECONDS,
             check=False,
@@ -408,7 +459,7 @@ def _run_install(
 
     stdout_path = runtime_root / "install.stdout.log"
     stderr_path = runtime_root / "install.stderr.log"
-    stdout_path.write_text(stdout, encoding="utf-8")
+    stdout_path.write_text(f"{node_runtime.describe()}\n{stdout}", encoding="utf-8")
     stderr_path.write_text(stderr, encoding="utf-8")
     return {
         "argv": argv,
@@ -439,12 +490,15 @@ def _dependency_check_bypass_argv(
 
 def _start_dev_server(
     *,
+    workspace: Path,
     package_manager_command: str,
     script_name: str,
     script_command: str,
     cwd: Path,
     runtime_root: Path,
     preview_url: str,
+    node_runtime: FrontendNodeRuntime,
+    runtime_subdir: str,
     extra_argv: list[str] | None = None,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
@@ -455,7 +509,9 @@ def _start_dev_server(
     stdout = stdout_path.open("ab")
     stderr = stderr_path.open("ab")
     stdout_offset = stdout.tell()
-    env = _launch_environment(script_command)
+    stdout.write(f"{node_runtime.describe()}\n".encode("utf-8"))
+    stdout.flush()
+    env = _launch_environment(script_command, node_runtime)
     try:
         process = subprocess.Popen(
             argv,
@@ -484,12 +540,26 @@ def _start_dev_server(
     stdout.close()
     stderr.close()
     pid_path = runtime_root / "frontend.pid"
-    pid_path.write_text(str(process.pid), encoding="utf-8")
+    try:
+        write_node_record(
+            runtime_root / FRONTEND_NODE_FILE,
+            {"pid": process.pid, "nodeRuntime": node_runtime.evidence()},
+        )
+        pid_path.write_text(str(process.pid), encoding="utf-8")
+    except OSError as exc:
+        cleanup = _terminate_frontend_process(
+            workspace=workspace, process=process, pid_file=pid_path, runtime_subdir=runtime_subdir,
+        )
+        return {
+            "argv": argv, "cwd": str(cwd), "error": str(exc), "cleanup": cleanup,
+            "stdout_log": str(stdout_path), "stderr_log": str(stderr_path),
+        }, None
     return (
         {
             "argv": argv,
             "cwd": str(cwd),
             "pid": process.pid,
+            "nodeRuntime": node_runtime.evidence(),
             "pid_file": str(pid_path),
             "stdout_log": str(stdout_path),
             "stdout_offset": stdout_offset,
@@ -501,10 +571,10 @@ def _start_dev_server(
     )
 
 
-def _launch_environment(script_command: str) -> dict[str, str]:
+def _launch_environment(script_command: str, node_runtime: FrontendNodeRuntime) -> dict[str, str]:
     """构造无终端颜色的启动环境，并避免 CRA 收到非法 loopback HOST。"""
 
-    env = {**os.environ, "BROWSER": "none", "NO_COLOR": "1"}
+    env = {**node_runtime.env, "BROWSER": "none", "NO_COLOR": "1"}
     # FORCE_COLOR 会覆盖 NO_COLOR；重定向到日志文件时不应继承终端颜色设置。
     env.pop("FORCE_COLOR", None)
     if "react-scripts" in script_command:
@@ -514,15 +584,25 @@ def _launch_environment(script_command: str) -> dict[str, str]:
     return env
 
 
-def _reuse_ready_server(runtime_root: Path, preview_url: str) -> dict[str, Any] | None:
+def _read_frontend_pid(path: Path) -> int:
+    """读取前端 PID，缺失或无效时返回零。"""
+    try:
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def _reuse_ready_server(
+    runtime_root: Path, preview_url: str, node_runtime: FrontendNodeRuntime,
+) -> dict[str, Any] | None:
     """复用 launcher 先前启动且仍可访问的服务，避免调试续跑重复占用端口。"""
 
     pid_path = runtime_root / "frontend.pid"
-    try:
-        pid = int(pid_path.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
+    pid = _read_frontend_pid(pid_path)
     if pid <= 0 or not _pid_is_running(pid):
+        return None
+    record = read_node_record(runtime_root / FRONTEND_NODE_FILE)
+    if record.get("pid") != pid or not node_runtime.matches(record.get("nodeRuntime")):
         return None
     stdout_log = runtime_root / "frontend.stdout.log"
     if not _dev_server_log_is_ready(stdout_log, 0) or _dev_server_stderr_is_fatal(runtime_root / "frontend.stderr.log"):
@@ -532,6 +612,7 @@ def _reuse_ready_server(runtime_root: Path, preview_url: str) -> dict[str, Any] 
         return None
     return {
         "pid": pid,
+        "nodeRuntime": node_runtime.evidence(),
         "pid_file": str(pid_path),
         "preview_url": preview_url,
         "ready": True,

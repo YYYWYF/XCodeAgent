@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call, patch
+from tests.frontend_node_fixture import stub_frontend_node
 from urllib.error import HTTPError
 
 from app.graph.nodes.lifecycle import acceptance, launch_project
@@ -154,6 +155,7 @@ class ProjectLauncherTests(unittest.TestCase):
 
         backend_process_registry._BACKEND_PROCESSES.clear()
         backend_process_registry._BACKEND_LAUNCH_LOCKS.clear()
+        self.node_runtime = stub_frontend_node(self, "app.services.frontend_project_launcher")
 
     def _write_application(self, workspace: str, datasource_type: str) -> None:
         """写入启动测试所需的最小应用数据源配置。"""
@@ -230,7 +232,7 @@ class ProjectLauncherTests(unittest.TestCase):
             with (
                 patch.dict("app.services.frontend_project_launcher.os.environ", {"FORCE_COLOR": "3"}),
                 patch(
-                    "app.services.frontend_project_launcher.shutil.which",
+                    "app.services.frontend_node_runtime.shutil.which",
                     return_value=package_manager_command,
                 ),
                 patch(
@@ -282,7 +284,7 @@ class ProjectLauncherTests(unittest.TestCase):
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
             with (
                 patch.dict("app.services.frontend_project_launcher.os.environ", {"HOST": "inherited"}),
-                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_node_runtime.shutil.which", return_value="/usr/bin/npm"),
                 patch(
                     "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
@@ -343,7 +345,7 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             fake_process = SimpleNamespace(pid=12345, poll=lambda: 1)
             with (
-                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_node_runtime.shutil.which", return_value="/usr/bin/npm"),
                 patch(
                     "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
@@ -372,7 +374,7 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
             with (
-                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_node_runtime.shutil.which", return_value="/usr/bin/npm"),
                 patch(
                     "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
@@ -417,7 +419,7 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "app.services.frontend_project_launcher.shutil.which",
+                    "app.services.frontend_node_runtime.shutil.which",
                     return_value="/usr/bin/npm",
                 ),
                 patch(
@@ -431,7 +433,7 @@ class ProjectLauncherTests(unittest.TestCase):
             self.assertTrue(result["install"]["timed_out"])
             self.assertEqual(
                 Path(result["install"]["stdout_log"]).read_text(encoding="utf-8"),
-                "partial output",
+                f"{self.node_runtime.describe()}\npartial output",
             )
 
     def test_frontend_install_oserror_is_returned_as_structured_failure(self) -> None:
@@ -448,7 +450,7 @@ class ProjectLauncherTests(unittest.TestCase):
             error = FileNotFoundError(2, "系统找不到指定的文件", package_manager_command)
             with (
                 patch(
-                    "app.services.frontend_project_launcher.shutil.which",
+                    "app.services.frontend_node_runtime.shutil.which",
                     return_value=package_manager_command,
                 ),
                 patch(
@@ -1404,6 +1406,31 @@ class ProjectLauncherTests(unittest.TestCase):
 
         self.assertEqual("running", result["status"])
         frontend.assert_called_once_with(Path(workspace).resolve(), force_restart=True)
+
+    def test_project_preview_pins_node_before_starting_backend(self) -> None:
+        """后端构建期间切换 Node 时，前端仍收到开始时锁定的身份。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            (root / "frontend").mkdir()
+            (root / "frontend/package.json").write_text('{"scripts":{"dev":"vite"}}', encoding="utf-8")
+            with (
+                patch("app.services.project_launcher.resolve_frontend_node", return_value=self.node_runtime) as resolve,
+                patch("app.services.project_launcher.find_backend_project_root", return_value=root / "backend"),
+                patch("app.services.project_launcher.launch_backend_project", return_value={"status": "running"}) as backend,
+                patch(
+                    "app.services.project_launcher.launch_frontend_project",
+                    return_value={"status": "running", "preview_url": "http://127.0.0.1:80"},
+                ) as frontend,
+            ):
+                def assert_node_was_selected(*_args, **_kwargs):
+                    """以已经完成的探测作为后端启动的前置条件。"""
+                    resolve.assert_called_once_with(root)
+                    return backend.return_value
+
+                backend.side_effect = assert_node_was_selected
+                result = launch_project_preview(root)
+        self.assertEqual(result["status"], "running")
+        frontend.assert_called_once_with(root, node_runtime=self.node_runtime)
 
     def test_restart_validation_adapts_launcher_result_for_changed_layer(self) -> None:
         """旧质量门可消费统一 Launcher 的真实重启结果，不再依赖独立运行时。"""

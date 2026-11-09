@@ -14,9 +14,11 @@ from app.services.backend_project_launcher import (
     stop_workspace_backend_project,
 )
 from app.services.frontend_project_launcher import (
+    _find_frontend_package_json,
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.services.frontend_node_runtime import FrontendNodeError, FrontendNodeRuntime, resolve_frontend_node
 from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record
 from app.utils.process_liveness import pid_is_running
 
@@ -138,7 +140,19 @@ def launch_project_preview(
                 on_progress(stage, status, message)
 
         try:
-            result = _launch_project_preview(root, on_progress=report, force_restart=force_restart)
+            # Maven 可能耗时较长，前端仍使用本轮预览开始时选中的 Node。
+            node_runtime = resolve_frontend_node(root) if _find_frontend_package_json(root) else None
+            result = _launch_project_preview(
+                root, on_progress=report, force_restart=force_restart, node_runtime=node_runtime,
+            )
+        except FrontendNodeError as exc:
+            from app.services.preview_diagnostics import make_diagnostic
+
+            result = {
+                "status": "failed", "message": str(exc), "failed_stage": "frontend_start",
+                "frontend": {"status": "failed", "message": str(exc)},
+                "diagnostics": [make_diagnostic(stage="frontend_start", category="dependency", message=str(exc))],
+            }
         except Exception as exc:
             from app.services.preview_diagnostics import diagnostic_from_exception
 
@@ -152,6 +166,7 @@ def _launch_project_preview(
     *,
     on_progress: LaunchProgressCallback | None = None,
     force_restart: bool = False,
+    node_runtime: FrontendNodeRuntime | None = None,
 ) -> dict[str, Any]:
     """按工作区工程结构启动应用预览；强制模式会重启 standard preview。"""
 
@@ -214,11 +229,12 @@ def _launch_project_preview(
         )
 
     report("frontend", "running", "正在启动前端服务并等待健康检查就绪…")
-    frontend = (
-        launch_frontend_project(root, force_restart=True)
-        if force_restart
-        else launch_frontend_project(root)
-    )
+    frontend_options: dict[str, Any] = {}
+    if force_restart:
+        frontend_options["force_restart"] = True
+    if node_runtime is not None:
+        frontend_options["node_runtime"] = node_runtime
+    frontend = launch_frontend_project(root, **frontend_options)
     if frontend.get("status") == "failed":
         if backend_process is not None:
             stop_backend_project(backend, backend_process)

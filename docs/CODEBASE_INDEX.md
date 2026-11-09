@@ -837,6 +837,8 @@ The product and technical brand is **DevAgent Studio**. User-visible labels use 
 
 ### Preview runtime maintenance
 
+- `services/frontend_node_runtime.py` 统一解析用户工程 Node 与包管理器环境，供预览、历史版本、受控 pnpm 安装和集成/性能检查使用。Windows 从 `NVM_SYMLINK` 锁定真实 Node；macOS 使用继承的 `NVM_BIN`；未配置 NVM 时按继承的 PATH 解析。包管理器脚本环境核对 Node 的路径和完整版本；启动日志和测试执行记录保存来源。工作区内安装与启动/构建共用前端操作锁。当前进程及安装记录分别保存在 `runtime/launch/frontend-node.json` 与 `runtime/launch/frontend-dependencies-node.json`，仅身份匹配时复用。回归：`tests.test_frontend_node_runtime`、`tests.test_project_launcher`、`tests.test_integration_test_runner`、`tests.test_frontend_performance_runner`。
+
 - 服务状态卡片通过 `/preview-runtime/run` 的 `stop_frontend` / `stop_backend` 及当前 `attemptId` 独立停止标准预览的一端。启动器在工作区启动锁内校验尝试身份，保留另一端和本轮日志，失败不提交停机状态。持久化占用记录保留原尝试，进程重启后只收口同一尝试的目标服务。卡片用 `stoppedByUser` 区分手动停止，前端停止时收起旧预览，已发布版本切换标签时不自动拉起已手动停止的服务。运行快照共用跨平台 PID 存活探测。回归：`tests.test_preview_runtime`、`pnpm test:preview-runtime`、`pnpm test:released-version`。
 
 - Java 后端启动与 `preview_runtime_state.py` 的实时校准共用 `backend_project_launcher.py::_backend_startup_status`：仅本轮 `Started <Application> in ... seconds` 代表启动完成，版本横幅与端口初始化无效；双流启动失败/端口占用优先，即使进程仍存活也投影 failed、清除 ready/previewUrl 并开放原诊断入口。回归：`tests.test_project_launcher`、`tests.test_preview_runtime`。

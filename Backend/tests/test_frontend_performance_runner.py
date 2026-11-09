@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from tests.frontend_node_fixture import stub_frontend_node
+from app.services.frontend_node_runtime import FrontendNodeRuntime
 
 from app.services.frontend_performance_runner import (
     PERFORMANCE_CHECK_ID,
@@ -16,6 +18,11 @@ from app.services.frontend_performance_runner import (
 
 
 class FrontendPerformanceRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """用固定 Node 和 npx 入口验证性能编排。"""
+        self.node_runtime = stub_frontend_node(self, "app.services.frontend_performance_runner")
+        self.enterContext(patch.object(FrontendNodeRuntime, "command", return_value="npx"))
+
     def _workspace_state(self, workspace: str) -> dict:
         """构造带 frontend 启动脚本的最小工作区状态。"""
 
@@ -28,7 +35,7 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
         return {
             "workspace": workspace,
             "test_results": [
-                {"id": "frontend_build", "passed": True},
+                {"id": "frontend_build", "passed": True, "execution": {"nodeRuntime": self.node_runtime.evidence()}},
             ],
         }
 
@@ -93,6 +100,22 @@ class FrontendPerformanceRunnerTests(unittest.TestCase):
         self.assertTrue(check["skipped"])
         self.assertFalse(check["blocking"])
         launch.assert_called_once()
+        stop.assert_not_called()
+
+    def test_node_change_after_build_leaves_preview_alone(self) -> None:
+        """暂停后切换 Node 时提示重新构建，不启动或停止预览。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            state = self._workspace_state(workspace)
+            state["test_results"][0]["execution"]["nodeRuntime"]["version"] = "v20.19.0"
+            with (
+                patch("app.services.frontend_performance_runner.launch_frontend_project") as launch,
+                patch("app.services.frontend_performance_runner.stop_frontend_project") as stop,
+            ):
+                result = run_frontend_performance_check(state)
+        check = result["test_results"][0]
+        self.assertTrue(check["skipped"])
+        self.assertIn("重新执行前端构建", check["evidence"])
+        launch.assert_not_called()
         stop.assert_not_called()
 
     def test_success_parses_report_and_stops_started_server(self) -> None:

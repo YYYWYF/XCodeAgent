@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import json
-import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +14,9 @@ from uuid import uuid4
 from langchain_core.tools import ToolException, tool
 
 from app.services.workspace_process_registry import workspace_process_registry
+from app.services.frontend_node_runtime import (
+    FrontendNodeError, frontend_operation_lock, record_frontend_dependencies, resolve_frontend_node,
+)
 
 
 PNPM_INSTALL_TOOL_NAME = "pnpm_install_frontend"
@@ -69,47 +71,63 @@ def create_code_review_pnpm_install_tool(workspace_root: str | None):
         lockfile = resolved_frontend / "pnpm-lock.yaml"
         if lockfile.is_symlink() or (lockfile.exists() and not lockfile.is_file()):
             raise ToolException("frontend/pnpm-lock.yaml 不能是符号链接或非普通文件。")
-        pnpm_command = shutil.which("pnpm")
-        if not pnpm_command:
-            raise ToolException("未找到 pnpm 命令。")
-
         resolved_runtime_root = _prepare_runtime_root(root)
-        execution_id = uuid4().hex
-        log_root = resolved_runtime_root / execution_id
-        log_root.mkdir()
-        try:
-            completed = workspace_process_registry.run(
-                [pnpm_command, "install"],
-                workspace=root,
-                cwd=resolved_frontend,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=PNPM_INSTALL_TIMEOUT_SECONDS,
-                shell=False,
-            )
-            exit_code = completed.returncode
-            stdout = completed.stdout
-            stderr = completed.stderr
-            timed_out = False
-        except subprocess.TimeoutExpired as exc:
-            exit_code = -1
-            stdout = _subprocess_text(exc.stdout)
-            stderr = _subprocess_text(exc.stderr) or "pnpm install 执行超时。"
-            timed_out = True
-        except OSError as exc:
-            exit_code = -1
-            stdout = ""
-            stderr = str(exc)
-            timed_out = False
+        preview_runtime = root / WORKSPACE_ARTIFACT_DIR / "runtime/launch"
+        if not preview_runtime.resolve().is_relative_to(root):
+            raise ToolException("前端依赖记录目录超出工作区。")
+        with frontend_operation_lock(root):
+            try:
+                node_runtime = resolve_frontend_node(root)
+                pnpm_command = node_runtime.command("pnpm")
+            except FrontendNodeError as exc:
+                raise ToolException(str(exc)) from exc
 
-        if exit_code == 0 and not _is_safe_generated_lockfile(lockfile, resolved_frontend):
-            exit_code = -1
-            stderr = f"{stderr}\npnpm install 未在 frontend 内生成安全的 pnpm-lock.yaml。".strip()
+            execution_id = uuid4().hex
+            log_root = resolved_runtime_root / execution_id
+            log_root.mkdir()
+            try:
+                node_runtime.verify(pnpm_command, workspace=root, cwd=resolved_frontend)
+                record_frontend_dependencies(preview_runtime, resolved_frontend, None)
+                completed = workspace_process_registry.run(
+                    [pnpm_command, "install"],
+                    workspace=root,
+                    cwd=resolved_frontend,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=PNPM_INSTALL_TIMEOUT_SECONDS,
+                    shell=False,
+                    env=node_runtime.env,
+                )
+                exit_code = completed.returncode
+                stdout = completed.stdout
+                stderr = completed.stderr
+                timed_out = False
+            except subprocess.TimeoutExpired as exc:
+                exit_code = -1
+                stdout = _subprocess_text(exc.stdout)
+                stderr = _subprocess_text(exc.stderr) or "pnpm install 执行超时。"
+                timed_out = True
+            except (OSError, FrontendNodeError) as exc:
+                exit_code = -1
+                stdout = ""
+                stderr = str(exc)
+                timed_out = False
+
+            if exit_code == 0 and not _is_safe_generated_lockfile(lockfile, resolved_frontend):
+                exit_code = -1
+                stderr = f"{stderr}\npnpm install 未在 frontend 内生成安全的 pnpm-lock.yaml。".strip()
+            if exit_code == 0:
+                try:
+                    node_runtime.verify(pnpm_command, workspace=root, cwd=resolved_frontend)
+                    record_frontend_dependencies(preview_runtime, resolved_frontend, node_runtime)
+                except (OSError, FrontendNodeError) as exc:
+                    exit_code = -1
+                    stderr = f"{stderr}\n{exc}".strip()
 
         stdout_path = log_root / "stdout.log"
         stderr_path = log_root / "stderr.log"
-        stdout_path.write_text(stdout, encoding="utf-8")
+        stdout_path.write_text(f"{node_runtime.describe()}\n{stdout}", encoding="utf-8")
         stderr_path.write_text(stderr, encoding="utf-8")
         evidence = {
             "execution_id": execution_id,
@@ -118,6 +136,7 @@ def create_code_review_pnpm_install_tool(workspace_root: str | None):
             "timed_out": timed_out,
             "command": ["pnpm", "install"],
             "cwd": "frontend",
+            "nodeRuntime": node_runtime.evidence(),
             "stdout_log": stdout_path.relative_to(root).as_posix(),
             "stderr_log": stderr_path.relative_to(root).as_posix(),
             "stdout_tail": stdout[-PNPM_OUTPUT_TAIL_LIMIT:],
@@ -133,7 +152,11 @@ def create_code_review_pnpm_install_tool(workspace_root: str | None):
             raise ToolException(
                 "pnpm install 执行失败，详细输出已保存到代码审查运行日志。"
             )
-        return json.dumps(evidence, ensure_ascii=False)
+        # 本机绝对路径只写入运行证据，修复 Agent 继续接收工作区相对日志位置。
+        return json.dumps(
+            {key: value for key, value in evidence.items() if key != "nodeRuntime"},
+            ensure_ascii=False,
+        )
 
     return pnpm_install_frontend
 
