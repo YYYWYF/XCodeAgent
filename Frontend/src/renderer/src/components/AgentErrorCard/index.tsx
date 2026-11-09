@@ -1,6 +1,6 @@
-import { CloseCircleOutlined, RedoOutlined } from '@ant-design/icons'
+import { ExclamationCircleOutlined, RedoOutlined } from '@ant-design/icons'
 import { Button, Typography } from 'antd'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import type { RecoveryReadDiagnostic } from '../../typings'
 import { cx } from '../../utils'
 import ErrorDiagnostics from './ErrorDiagnostics'
@@ -11,67 +11,78 @@ const { Text } = Typography
 
 type AgentErrorCardProps = {
   error?: string
+  details?: string
   onRetry?: () => void
   retrying?: boolean
   retryDisabled?: boolean
   retryLabel?: string
   title?: string
   diagnostic?: RecoveryReadDiagnostic
+  summary?: ReactNode
+  hint?: string
+  diagnosticContent?: ReactNode
 }
 
 /** 按真实错误类型区分模型连接异常和普通任务失败，避免把所有失败误报为模型问题。 */
 export default function AgentErrorCard({
   error,
+  details,
   onRetry,
   retrying,
   retryDisabled = false,
   retryLabel = '重试',
   title,
-  diagnostic
+  diagnostic,
+  summary,
+  hint,
+  diagnosticContent
 }: AgentErrorCardProps): ReactElement {
   const copy = diagnostic
     ? {
         message: error?.trim() || diagnostic.reason,
-        hint: '可复制诊断信息联系维护人员，或重新同步状态。',
+        hint: '',
         modelServiceError: false
       }
     : readableAgentError(error)
   const resolvedTitle = title || (copy?.modelServiceError ? '模型服务异常' : '任务执行异常')
-  const diagnosticText = errorDiagnosticText(error?.trim() || copy.message, diagnostic)
+  const diagnosticText = errorDiagnosticText(details?.trim() || error?.trim() || copy.message, diagnostic)
+  const visibleHint = hint ?? copy.hint
 
   return (
     <section
       aria-label={resolvedTitle}
       aria-live="assertive"
+      aria-busy={Boolean(retrying)}
       className={cx('agent-error-card')}
       role="alert"
     >
       <span aria-hidden="true" className={cx('agent-error-card-icon')}>
-        <CloseCircleOutlined />
+        <ExclamationCircleOutlined />
       </span>
       <div className={cx('agent-error-card-copy')}>
-        <Text className={cx('agent-error-card-title')} strong>
-          {resolvedTitle}
-        </Text>
-        <Text className={cx('agent-error-card-message')}>{copy?.message}</Text>
-        {copy?.hint ? (
+        <div className={cx('agent-error-card-header')}>
+          <Text className={cx('agent-error-card-title')} strong>
+            {resolvedTitle}
+          </Text>
+        </div>
+        <div className={cx('agent-error-card-message')}>{summary ?? copy.message}</div>
+        {visibleHint ? (
           <Text className={cx('agent-error-card-hint')} type="secondary">
-            {copy.hint}
+            {visibleHint}
           </Text>
         ) : null}
-        <ErrorDiagnostics text={diagnosticText} showDetails={Boolean(diagnostic || copy.detail)} />
-        {onRetry ? (
-          <Button
-            className={cx('agent-error-card-retry')}
-            icon={<RedoOutlined />}
-            loading={retrying}
-            disabled={retryDisabled}
-            onClick={onRetry}
-            type="primary"
-          >
-            {retryLabel}
-          </Button>
-        ) : null}
+        <ErrorDiagnostics text={diagnosticText} content={diagnosticContent} action={onRetry ? (
+            <Button
+              className={cx('agent-error-card-retry')}
+              icon={<RedoOutlined />}
+              loading={retrying}
+              disabled={retryDisabled}
+              onClick={onRetry}
+              type="text"
+            >
+              {retryLabel}
+            </Button>
+          ) : undefined} />
       </div>
     </section>
   )
@@ -106,7 +117,7 @@ function readableAgentError(error?: string): {
   }
   return {
     message: normalized || '任务没有返回有效结果。',
-    hint: '可复制诊断信息联系维护人员，或查看相关执行记录。',
+    hint: '',
     modelServiceError: false
   }
 }

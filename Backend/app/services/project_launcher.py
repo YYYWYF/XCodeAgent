@@ -5,7 +5,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.services.backend_project_launcher import (
     find_backend_project_root,
@@ -14,9 +14,12 @@ from app.services.backend_project_launcher import (
     stop_workspace_backend_project,
 )
 from app.services.frontend_project_launcher import (
+    _find_frontend_package_json,
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.services.frontend_node_runtime import FrontendNodeError, FrontendNodeRuntime, resolve_frontend_node
+from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record
 from app.utils.process_liveness import pid_is_running
 
 
@@ -99,7 +102,7 @@ def _require_preview_authorization_ready(root: Path) -> None:
             return
     except (OSError, ValueError):
         pass
-    raise ValueError("Builtin 权限数据尚未核验就绪，请继续权限初始化或刷新原操作后再启动预览。")
+    raise ValueError("模拟数据库权限正在初始化，请在权限初始化卡查看当前状态；若结果待核对，请先完成核对。")
 
 
 def launch_project_preview(
@@ -137,7 +140,19 @@ def launch_project_preview(
                 on_progress(stage, status, message)
 
         try:
-            result = _launch_project_preview(root, on_progress=report, force_restart=force_restart)
+            # Maven 可能耗时较长，前端仍使用本轮预览开始时选中的 Node。
+            node_runtime = resolve_frontend_node(root) if _find_frontend_package_json(root) else None
+            result = _launch_project_preview(
+                root, on_progress=report, force_restart=force_restart, node_runtime=node_runtime,
+            )
+        except FrontendNodeError as exc:
+            from app.services.preview_diagnostics import make_diagnostic
+
+            result = {
+                "status": "failed", "message": str(exc), "failed_stage": "frontend_start",
+                "frontend": {"status": "failed", "message": str(exc)},
+                "diagnostics": [make_diagnostic(stage="frontend_start", category="dependency", message=str(exc))],
+            }
         except Exception as exc:
             from app.services.preview_diagnostics import diagnostic_from_exception
 
@@ -151,6 +166,7 @@ def _launch_project_preview(
     *,
     on_progress: LaunchProgressCallback | None = None,
     force_restart: bool = False,
+    node_runtime: FrontendNodeRuntime | None = None,
 ) -> dict[str, Any]:
     """按工作区工程结构启动应用预览；强制模式会重启 standard preview。"""
 
@@ -213,11 +229,12 @@ def _launch_project_preview(
         )
 
     report("frontend", "running", "正在启动前端服务并等待健康检查就绪…")
-    frontend = (
-        launch_frontend_project(root, force_restart=True)
-        if force_restart
-        else launch_frontend_project(root)
-    )
+    frontend_options: dict[str, Any] = {}
+    if force_restart:
+        frontend_options["force_restart"] = True
+    if node_runtime is not None:
+        frontend_options["node_runtime"] = node_runtime
+    frontend = launch_frontend_project(root, **frontend_options)
     if frontend.get("status") == "failed":
         if backend_process is not None:
             stop_backend_project(backend, backend_process)
@@ -258,6 +275,26 @@ def _launch_project_preview(
         "frontend": frontend,
         "failed_stage": None,
     }
+
+
+def stop_preview_service(
+    workspace_path: str | Path, layer: Literal["frontend", "backend"], attempt_id: str,
+) -> dict[str, Any]:
+    """串行停止指定标准预览进程，避免迟到请求影响新的启动尝试。"""
+
+    from app.services.backend_process_registry import backend_launch_lock
+    from app.services.preview_runtime_state import read_record, record_service_stop
+
+    root = Path(workspace_path).expanduser().resolve()
+    with backend_launch_lock(root):
+        if read_record(root)["attemptId"] != attempt_id:
+            raise ValueError("服务启动记录已变化，请刷新状态后再停止。")
+        stop = stop_frontend_project if layer == "frontend" else stop_workspace_backend_project
+        result = stop(root)
+        if result["status"] == "failed":
+            raise RuntimeError(result["message"])
+        record_service_stop(root, layer, result)
+        return {"status": "stopped", "message": result["message"], layer: result}
 
 
 def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
@@ -325,7 +362,12 @@ def inspect_project_preview(workspace_path: str | Path) -> dict[str, Any]:
 
     root = Path(workspace_path).expanduser().resolve()
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
-    backend = {"running": _pid_file_is_running(runtime_root / "backend.pid")}
+    try:
+        backend_record = read_backend_process_record(runtime_root / BACKEND_PROCESS_FILENAME)
+        backend_running = backend_record is not None and pid_is_running(backend_record.pid)
+    except (OSError, ValueError):
+        backend_running = False
+    backend = {"running": backend_running}
     frontend = {"running": _pid_file_is_running(runtime_root / "frontend.pid")}
     return {
         "workspace": str(root),
@@ -438,6 +480,7 @@ __all__ = [
     "inspect_project_preview",
     "stop_backend_project",
     "stop_frontend_project",
+    "stop_preview_service",
     "stop_project_preview",
     "stop_standard_project_preview",
     "stop_workspace_backend_project",

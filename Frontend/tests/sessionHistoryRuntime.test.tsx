@@ -204,6 +204,11 @@ test('视口外的历史不创建重卡片；用户交互后的内容不因滚�
     oldResize = globalThis.ResizeObserver
   let notify!: (entries: Array<{ isIntersecting: boolean }>) => void
   let renders = 0
+  /** 统计重组件的实际挂载；构造元素以判断空消息不等于挂载组件。 */
+  function HeavyCard(): ReactElement {
+    renders++
+    return createElement('input')
+  }
   Object.defineProperty(globalThis, 'IntersectionObserver', {
     configurable: true,
     value: class {
@@ -223,10 +228,7 @@ test('视口外的历史不创建重卡片；用户交互后的内容不因滚�
           id: 1,
           initiallyVisible: false,
           protectedRow: false,
-          render: () => {
-            renders++
-            return createElement('input')
-          }
+          render: () => createElement(HeavyCard)
         }),
         {
           createNodeMock: () => ({ parentElement: { parentElement: {} } })

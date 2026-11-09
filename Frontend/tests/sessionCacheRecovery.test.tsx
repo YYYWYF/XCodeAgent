@@ -14,6 +14,7 @@ import {
 } from '../src/renderer/src/context/workbenchPhaseState'
 import type { ChatSessionRecord } from '../src/renderer/src/service/chatSessions'
 import type { ApplicationConfig } from '../src/renderer/src/typings'
+import { retryFormalRevisionStart } from '../src/renderer/src/components/AiChatPanel/formalRevisionStartRetry'
 
 test('真实会话链路：回收后重新读盘恢复原 Thread，失败保存和迟到保存不丢新消息，当前大会话不回收', async () => {
   const oldWindow = globalThis.window,
@@ -113,6 +114,42 @@ test('真实会话链路：回收后重新读盘恢复原 Thread，失败保存�
     })
     await open(0)
     const originalKey = chat.activeSession!.key
+    // 正式修订交接保存必须刷新当前运行身份；失败保存不得提前发布新归属。
+    const revisionContext = {
+      kind: 'formal_revision' as const, sessionRole: 'design' as const,
+      formalBranch: 'workbench_plan_revision' as const, impactInteractionId: 'impact-current',
+      sourceSessionId: 'source-session', sourceConversationThreadId: 'source-thread',
+      sourceRunId: 'source-run', planningThreadId: 'thread-0'
+    }
+    failSave = true
+    await act(async () => {
+      await assert.rejects(chat.persistSession({
+        editorMode: 'frontend', sessionId: 'session-0', threadId: 'thread-0',
+        messages: chat.messages, revisionContext
+      }), /disk full/)
+    })
+    assert.equal(chat.activeSession!.revisionContext, undefined)
+    failSave = false
+    await act(async () => chat.persistSession({
+      editorMode: 'frontend', sessionId: 'session-0', threadId: 'thread-0',
+      messages: chat.messages, revisionContext
+    }))
+    assert.deepEqual(chat.activeSession!.revisionContext, revisionContext)
+    assert.deepEqual(runtime.getIdentity(originalKey)?.revisionContext, revisionContext)
+    assert.equal(chat.messages[0].content, '已保存 0')
+    let recovered = 0
+    await retryFormalRevisionStart({
+      session: chat.activeSession!,
+      read: async () => ({ lifecycle: {
+        application: { id: 'cache-app' }, initialization: { threadId: 'thread-0' },
+        activeFormalRevision: { ...revisionContext, sourceThreadId: 'source-thread',
+          changeId: 'current-change', status: 'drafting' }
+      } as Parameters<Parameters<typeof retryFormalRevisionStart>[0]['onLifecycle']>[0] }),
+      onLifecycle: () => undefined,
+      start: async () => { assert.fail('已入场的修订不能再次提交启动') },
+      recover: () => { recovered += 1 }
+    })
+    assert.equal(recovered, 1)
     await open(1)
     await open(2)
     await open(3)

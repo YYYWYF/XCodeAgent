@@ -656,7 +656,7 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 写入 `acceptance_request` 并提示用户验收；
 - 保存和清理进程信息。
 
-`launch_project` 是验收子图内的启动子节点。编译后的验收子图直接作为主 Graph 的 `acceptance` runnable 挂载，AG-UI runtime 开启子图命名空间并即时转发其 custom 事件，因此 `structure`、`backend`、`frontend`、`ready` 会在各步骤开始或完成时刷新，而不是等待整个子图结束后一次性投影；子图内部 update/message 仍只在父节点完成时统一合并。LangGraph 节点先通过 `workspace_root(state)` 解析普通工作目录，再使用确定性的 `find_backend_project_root(workspace_path)` 探测直属 `backend/Backend/pom.xml`。识别到 Maven 后端时，节点依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务；未识别到后端时，将 `launch_result.backend.status` 记为 `skipped` 并直接启动前端。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend.pid` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；PID 恢复必须校验命令确实是当前工作区 `target` 下的 `java -jar`，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并在子图内标记启动完成；任一实际启动的进程提前退出或就绪检查超时都会返回启动失败，不进入 `acceptance_review`。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果；纯前端启动失败时不执行后端清理。前端收到验收 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。已有成功启动快照恢复时直接进入 `acceptance_review`，不会重复启动。
+`launch_project` 是验收子图内的启动子节点。编译后的验收子图直接作为主 Graph 的 `acceptance` runnable 挂载，AG-UI runtime 开启子图命名空间并即时转发其 custom 事件，因此 `structure`、`backend`、`frontend`、`ready` 会在各步骤开始或完成时刷新，而不是等待整个子图结束后一次性投影；子图内部 update/message 仍只在父节点完成时统一合并。LangGraph 节点先通过 `workspace_root(state)` 解析普通工作目录，再使用确定性的 `find_backend_project_root(workspace_path)` 探测直属 `backend/Backend/pom.xml`。识别到 Maven 后端时，节点依次调用与 Graph State 解耦的 `launch_backend_project(workspace_path)` 和 `launch_frontend_project(workspace_path)` 公共服务；未识别到后端时，将 `launch_result.backend.status` 记为 `skipped` 并直接启动前端。后端 launcher 在每个工作区的串行锁内，先停止内存登记或 `backend-process.json` 恢复出的上一轮 Java 进程，确认退出后才执行 Maven；进程恢复必须校验命令使用当前工作区登记的 JAR 副本，清理失败则以 `backend_cleanup` 中止构建。只有新 Java 进程仍存活且本次日志出现约定的版本标志后才启动前端。前端启动进程仍存活且预览地址通过 HTTP 或本次启动日志检查后，节点才返回 `preview_url` 和 `acceptance_request`，并在子图内标记启动完成；任一实际启动的进程提前退出或就绪检查超时都会返回启动失败，不进入 `acceptance_review`。若 Java 已启动但前端失败，节点停止本次 Java 进程并记录清理结果；纯前端启动失败时不执行后端清理。前端收到验收 Workflow 的成功 `summary.previewUrl` 后，会自动打开右侧预览面板并导航到该地址；重复状态快照不会重复导航，历史会话也不会自动弹出预览。已有成功启动快照恢复时直接进入 `acceptance_review`，不会重复启动。
 
 当前启动策略：
 
@@ -664,13 +664,13 @@ AG-UI `agent-process` 为 Workflow 步骤增加向后兼容的可选字段 `node
 - 后端探测器枚举工作区直属目录并识别 `backend/pom.xml` 或 `Backend/pom.xml`，保留磁盘上的真实目录大小写；缺少 `pom.xml` 表示工作流没有可启动的 Maven 后端，节点跳过后端，但直接调用后端 launcher 仍返回 `backend_validation`；
 - 识别到 Maven 后端后，通过 `shutil.which` 解析 `mvn`、`java` 的完整可执行路径；Windows 上直接使用解析到的 `mvn.cmd` 和 `java.exe`，不依赖 `cwd` 再次搜索 PATH；
 - 后端 Java 进程按规范化工作区路径保存在内存注册表中；同一工作区的停止、构建、启动和登记由可重入锁串行化，不同工作区互不阻塞；
-- 每次 Maven 构建前优先停止内存登记的进程；Backend 服务重启导致内存记录丢失时，从 `.devagentstudio/runtime/launch/backend.pid` 恢复 PID，通过完整进程命令行确认 `java`、`-jar` 和当前 `backend/target` JAR 绝对路径均匹配后才终止，拒绝按 Java 进程名批量清理；
+- 显式重启预览时先停止内存登记的进程。Backend 服务重启后，通过 `backend-process.json` 读取 PID 和运行副本，并核对实际 Java 命令行后再终止。测试阶段的 Maven 构建使用同一把工作区锁，开发预览继续运行。
 - 进程先温和终止并等待 5 秒，超时后强制结束；只有确认退出才删除 PID 和内存登记。无法读取 PID、无法确认身份或强杀后仍存活时返回 `failed_stage=backend_cleanup`，不执行 Maven；`prebuild_cleanup` 保存来源、PID、身份校验、强杀和错误摘要；
 - 在 `backend/` 执行 `mvn clean install`，构建输出写入 `.devagentstudio/runtime/launch/backend-build.stdout.log` 和 `backend-build.stderr.log`；
-- 在 `backend/target/` 查找唯一的 `*-SNAPSHOT.jar` 主包，排除 `original-*`、sources、javadoc 和 tests/test 等附属包；无主包或存在多个主包均启动失败；
+- 在 `backend/target/` 查找唯一的 `app.jar` 或 `*-SNAPSHOT.jar` 主包，排除 `original-*`、sources、javadoc 和 tests/test 等附属包。无主包或存在多个主包均启动失败。
 - 如果唯一主包是普通 Maven JAR 且清单缺少 `Main-Class`，启动器会追加执行 `mvn -B package spring-boot:repackage`，并将结果写入 `backend-repackage.stdout.log` 和 `backend-repackage.stderr.log`；补打包失败或仍未得到可执行 JAR 时以结构化启动失败返回；
 - 在启动 Java 子进程前，从当前工作区 `.devagentstudio/application.json` 的 `datasource.db.plantMode` 解析应用数据库配置，清除继承环境中的 `MYSQL_*` 和 `SPRING_DATASOURCE_*`，再注入当前应用对应的数据库变量；配置存在但非法时以 `failed_stage=backend_database_config` 在 Maven 前失败，缺少配置文件时也不回退到 Backend 服务 `.env`；
-- 在 `backend/target/` 以 `java -jar <JAR绝对路径>` 启动后台进程，将 pid 和 stdout/stderr 写入 `.devagentstudio/runtime/launch/backend.pid`、`backend.stdout.log` 和 `backend.stderr.log`；
+- 将主包复制到 `.devagentstudio/runtime/launch/backend-jar/<启动ID>/`，以该目录为 Java 工作目录启动副本，并将 stdout/stderr 写入 `backend.stdout.log` 和 `backend.stderr.log`。确认 Java 退出后清理副本。
 - Java 就绪检查只读取本次启动后追加的 stdout/stderr；进程存活且日志包含精确标志 `Spring Boot Version` 或 `ZA21 Version` 才继续启动前端，普通 `Started ...` 日志不构成就绪证据；
 - 在工作区内优先读取 `Frontend/package.json`，其次尝试 `frontend/package.json`、`app/frontend/package.json` 和根 `package.json`；
 - 根据 lockfile 选择包管理器：`pnpm-lock.yaml → pnpm`，`yarn.lock → yarn`，否则使用 `npm`；执行安装和开发服务器时使用 `shutil.which` 返回的完整路径，兼容 Windows 的 `npm.cmd`、`pnpm.cmd` 和 `yarn.cmd`；

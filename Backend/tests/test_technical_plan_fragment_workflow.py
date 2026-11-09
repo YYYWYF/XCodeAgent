@@ -14,7 +14,7 @@ from app.domain.application_planning_recovery import (
 from app.graph.nodes import planning
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
-from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path
+from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path, technical_plan_draft_json_path
 from tests.test_technical_plan_fragment_editor import ScriptedEditorModel, tool_response
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
@@ -106,7 +106,7 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(result["entities"], baseline["entities"])
         self.assertEqual(result["pages"], baseline["pages"])
         self.assertEqual(result["confirmation_status"], "pending_user_confirmation")
-        self.assertNotIn("FragmentMissingOutput", technical_plan_json_path(state.values).read_text())
+        self.assertNotIn("FragmentMissingOutput", technical_plan_draft_json_path(state.values).read_text())
         for model in (first, second):
             for messages in model.seen_messages:
                 self.assertIn(self.harness.request, messages[0].content)
@@ -116,7 +116,7 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         """三轮候选持续不合法时，磁盘既有产物保持不变且只展示生成错误审阅门。"""
 
         baseline = await self._prepare_revision()
-        path = technical_plan_json_path({"workspace": str(self.harness.workspace)})
+        path = technical_plan_draft_json_path({"workspace": str(self.harness.workspace)})
         before = path.read_bytes()
         models = [ScriptedEditorModel(responses=[
             tool_response("edit_file", file_path="/technical-plan.json", old_string='"pages":', new_string='"pages" invalid:'),
@@ -167,7 +167,8 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(result["entities"], h.candidate["entities"])
         self.assertEqual(result["pages"], h.candidate["pages"])
         self.assertEqual(result["confirmation_status"], "pending_user_confirmation")
-        self.assertTrue(technical_plan_json_path(state.values).is_file())
+        self.assertTrue(technical_plan_draft_json_path(state.values).is_file())
+        self.assertFalse(technical_plan_json_path(state.values).exists())
         self.assertEqual(len(generated_inputs), 1)
         for messages in editor.seen_messages:
             self.assertIn(h.request, messages[0].content)

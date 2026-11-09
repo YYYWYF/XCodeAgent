@@ -250,6 +250,8 @@
   display: flex;
   width: 100%;
   min-width: 0;
+  // 窄分栏先换行，运行提示与固定尺寸按钮不能互相覆盖。
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -319,6 +321,7 @@
 .@{class-prefix}-composer-toolbar {
   display: flex;
   min-width: 0;
+  flex: 0 0 auto;
   align-items: center;
   gap: 2px;
 }
@@ -357,17 +360,33 @@
     font-size: 17px;
   }
 
-  &:hover,
-  &:focus {
-    color: var(--wb-text-secondary);
-    background: transparent;
+  &:not([disabled]):hover,
+  &:not([disabled]):focus {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
     border-color: transparent;
     box-shadow: none;
+  }
+
+  &:not([disabled]):focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 2px;
   }
 
   &.@{class-prefix}-active {
     color: var(--wb-accent);
     background: var(--wb-accent-soft);
+  }
+
+  // 覆盖 Ant Design 文本按钮的半透明黑色禁用态，保证明暗主题下图标仍可辨认。
+  &[disabled],
+  &[disabled]:hover,
+  &[disabled]:focus,
+  &[disabled]:active {
+    color: var(--wb-text-tertiary);
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
   }
 }
 
@@ -788,10 +807,12 @@
 }
 
 .@{class-prefix}-workspace-busy-label.ant-typography {
-  flex: 0 0 auto;
+  min-width: 0;
+  flex: 1 1 160px;
   color: var(--wb-warning);
   font-size: 12px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .@{class-prefix}-composer-send-button.ant-btn {

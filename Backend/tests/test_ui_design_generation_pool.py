@@ -67,10 +67,10 @@ class GeneratePageEntryTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_regenerate_success_returns_confirmed(self) -> None:
-        """regenerate 成功应返回 confirmed 并落盘代码。"""
+        """regenerate 只返回已验证候选，不提前覆盖磁盘代码。"""
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             return_value=FAKE_CODE,
         ):
             entry = generate_page_entry(_task(self.workspace, self.project_dir))
@@ -82,7 +82,7 @@ class GeneratePageEntryTests(unittest.TestCase):
         """regenerate 抛异常应汇总为 generation_failed 并带 error。"""
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             side_effect=RuntimeError("boom"),
         ):
             entry = generate_page_entry(_task(self.workspace, self.project_dir))
@@ -94,10 +94,10 @@ class GeneratePageEntryTests(unittest.TestCase):
         """select_template 成功应返回 confirmed 并记录 template_id。"""
 
         with patch(
-            "app.services.ui_design_generation_pool.load_template_source",
+            "app.services.ui_design_generation_task.load_template_source",
             return_value=FAKE_CODE,
         ), patch(
-            "app.services.ui_design_generation_pool.generate_adjusted_page_react_code",
+            "app.services.ui_design_generation_task.generate_adjusted_page_react_code",
             return_value=FAKE_CODE,
         ):
             entry = generate_page_entry(
@@ -142,13 +142,13 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, **kwargs):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             side_effect=slow_generate,
         ):
             async def scenario():
@@ -171,7 +171,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         pages = self._manifest_pages()
         self.assertEqual(len(pages), 1)
         self.assertEqual(pages[0]["status"], "confirmed")
-        self.assertEqual(pages[0]["code"], FAKE_CODE)
+        self.assertTrue((Path(self.project_dir) / "pages" / "Orders" / "index.tsx").is_file())
 
     def test_queued_status_persisted_while_worker_busy(self) -> None:
         """并发度为 1 时，worker 忙期间新提交页应落盘 queued，之后随 worker 一起完成。"""
@@ -182,13 +182,13 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, **kwargs):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             side_effect=slow_generate,
         ):
             async def scenario():
@@ -217,7 +217,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         task = _task(self.workspace, self.project_dir)
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             side_effect=RuntimeError("boom"),
         ):
             async def scenario():
@@ -235,9 +235,8 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
     def test_cancel_page_while_generating_discards_result(self) -> None:
         """生成中取消：LLM 返回后结果不落盘，状态保持 cancelled，页面退出活跃集。
 
-        取消语义：HTTP 请求不打断（避免网关半截流式计费），但结果丢弃、状态立即
-        置 cancelled、前端可立即重试。worker 走到取消分支后不得用 confirmed
-        覆写 cancelled 终态。
+        取消请求必须等待真实模型线程退出，等待时保持 stopping 与页面占用，
+        旧结果不能写入，也不能提前接受下一次生成。
         """
 
         pool = UiDesignGenerationPool(concurrency=1)
@@ -245,26 +244,29 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, **kwargs):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             side_effect=slow_generate,
         ):
             async def scenario():
                 await pool.submit([task])
                 # worker 已领取并写入 generating。
                 self.assertTrue(await asyncio.to_thread(started.wait, 5))
-                cancelled = await pool.cancel_page(self.workspace, "orders")
-                self.assertTrue(cancelled)
-                # 取消即写回 cancelled 终态、退出活跃集，无需等 LLM 返回。
-                self.assertEqual(self._manifest_pages()[0]["status"], "cancelled")
-                self.assertFalse(pool.is_active(self.workspace, "orders"))
+                cancellation = asyncio.create_task(pool.cancel_page(self.workspace, "orders"))
+                await asyncio.sleep(0)
+                self.assertEqual(self._manifest_pages()[0]["status"], "stopping")
+                self.assertTrue(pool.is_active(self.workspace, "orders"))
+                self.assertFalse(cancellation.done())
+                self.assertEqual(await pool.submit([task]), [], "旧线程退出前不能接受重试")
                 release.set()
+                self.assertTrue(await cancellation)
                 await pool._queue.join()
+                self.assertFalse(pool.is_active(self.workspace, "orders"))
 
             asyncio.run(scenario())
 
@@ -272,7 +274,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         self.assertFalse((Path(self.project_dir) / "pages" / "orders" / "index.tsx").exists())
         pages = self._manifest_pages()
         self.assertEqual(pages[0]["status"], "cancelled")
-        self.assertIn("取消", pages[0]["error"])
+        self.assertIn("停止", pages[0]["error"])
 
     def test_cancel_page_while_queued_skips_worker_pickup(self) -> None:
         """排队中取消：worker 领取时惰性跳过，状态保持 cancelled，不触发生成。"""
@@ -284,14 +286,14 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         release = threading.Event()
         generated: list[str] = []
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, **kwargs):
             generated.append(page_key)
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             side_effect=slow_generate,
         ):
             async def scenario():
@@ -333,7 +335,7 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         task = _task(self.workspace, self.project_dir)
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             return_value=FAKE_CODE,
         ):
             async def scenario():
@@ -357,13 +359,13 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
         started = threading.Event()
         release = threading.Event()
 
-        def slow_generate(page, page_key, project_dir):
+        def slow_generate(page, page_key, project_dir, **kwargs):
             started.set()
             release.wait(timeout=10)
             return FAKE_CODE
 
         with patch(
-            "app.services.ui_design_generation_pool.generate_page_react_code",
+            "app.services.ui_design_generation_task.generate_page_react_code",
             side_effect=slow_generate,
         ):
             async def scenario():

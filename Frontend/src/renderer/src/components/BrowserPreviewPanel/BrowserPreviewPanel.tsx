@@ -98,7 +98,8 @@ export default function BrowserPreviewPanel({
   const showServiceEmptyState = shouldShowPreviewServiceEmptyState({
     hasSnapshot: Boolean(serviceControl?.snapshot),
     status: runtimeServiceState,
-    externalStatus: externalServiceStatus
+    externalStatus: externalServiceStatus,
+    frontendStopped: serviceRuntime?.frontend.stoppedByUser
   })
   const initialPagePath = selectedPagePath || pageOptions[0]?.value || '/'
   const initialUrl =
@@ -340,7 +341,11 @@ export default function BrowserPreviewPanel({
               <span className={cx('browser-preview-service-empty__icon')} aria-hidden="true">
                 <CloudServerOutlined />
               </span>
-              <p>请点击服务状态内的启动服务按钮进行预览</p>
+              <p>
+                {runtimeServiceState === 'running'
+                  ? '前端服务已停止，请通过服务状态重启服务后预览'
+                  : '请点击服务状态内的启动服务按钮进行预览'}
+              </p>
             </div>
           ) : (
             <iframe

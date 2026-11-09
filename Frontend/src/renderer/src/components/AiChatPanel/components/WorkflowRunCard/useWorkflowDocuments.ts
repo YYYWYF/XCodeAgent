@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { WorkflowRunPayload } from '../../../../typings'
 import { isArtifactReference, readWorkflowArtifact } from '../../../../service/workflowArtifacts'
 
-/** 当前确认卡才读取所需正式资料；局部展示结果不写回会话，也不用于恢复执行。 */
+/** 当前确认卡按需读取资料；展示副本不写回会话，也不用于恢复执行。 */
 export function useWorkflowDocuments(
   source: WorkflowRunPayload,
   workspace: string | undefined,
@@ -11,9 +11,15 @@ export function useWorkflowDocuments(
   workflow: WorkflowRunPayload
   loading: boolean
   error?: string
+  retry: () => void
 } {
+  const [attempt, setAttempt] = useState(0)
+  /** 仅重新读取当前卡片资料，不提交确认或重新执行业务节点。 */
+  const retry = useCallback((): void => setAttempt((value) => value + 1), [])
   const [loaded, setLoaded] = useState<{
     source: WorkflowRunPayload
+    workspace: string
+    attempt: number
     workflow: WorkflowRunPayload
     error?: string
   }>()
@@ -27,20 +33,22 @@ export function useWorkflowDocuments(
     [
       'requirement_document_confirmation',
       'project_plan_confirmation',
-      'technical_plan_confirmation'
+      'technical_plan_confirmation',
+      'revision_draft_confirmation'
     ].includes(mode)
   const refs = source.state?.artifactRefs as Record<string, unknown> | undefined
   const keys = required
     ? mode === 'requirement_document_confirmation'
       ? ['requirement_spec', 'product_plan']
-      : mode === 'technical_plan_confirmation'
-        ? ['technical_plan', 'product_plan', 'requirement_spec']
+      : mode === 'technical_plan_confirmation' || mode === 'revision_draft_confirmation'
+        ? ['technical_plan', 'product_plan', 'technical_plan_baseline']
         : ['project_plan']
     : []
+  const needsMarkdown = required && mode !== 'technical_plan_confirmation' && mode !== 'revision_draft_confirmation'
   const hasRefs =
     keys.some((key) => source.state?.[key] == null && isArtifactReference(refs?.[key])) ||
     Boolean(
-      required && source.confirmationArtifact?.contentRef && !source.confirmationArtifact.content
+      needsMarkdown && source.confirmationArtifact?.contentRef && !source.confirmationArtifact.content
     )
 
   useEffect(() => {
@@ -58,17 +66,24 @@ export function useWorkflowDocuments(
           if (stale) return
         }
         let artifact = source.confirmationArtifact
-        if (artifact?.contentRef && !artifact.content) {
+        if (needsMarkdown && artifact?.contentRef && !artifact.content) {
           const content = await readWorkflowArtifact(workspace, artifact.contentRef)
           if (typeof content !== 'string') throw new Error('确认文档正文格式无效。')
           artifact = { ...artifact, content }
         }
         if (!stale)
-          setLoaded({ source, workflow: { ...source, state, confirmationArtifact: artifact } })
+          setLoaded({
+            source,
+            workspace,
+            attempt,
+            workflow: { ...source, state, confirmationArtifact: artifact }
+          })
       } catch (error) {
         if (!stale)
           setLoaded({
             source,
+            workspace,
+            attempt,
             workflow: source,
             error: error instanceof Error ? error.message : '资料读取失败。'
           })
@@ -78,12 +93,15 @@ export function useWorkflowDocuments(
     return () => {
       stale = true
     }
-  }, [source, workspace, required, hasRefs])
+  }, [source, workspace, required, hasRefs, needsMarkdown, attempt])
 
-  if (!required || !hasRefs) return { workflow: source, loading: false }
+  if (!required || !hasRefs) return { workflow: source, loading: false, retry }
   if (!workspace)
-    return { workflow: source, loading: false, error: '缺少工作区，无法读取确认资料。' }
-  return loaded?.source === source
-    ? { workflow: loaded.workflow, loading: false, error: loaded.error }
-    : { workflow: source, loading: true }
+    return { workflow: source, loading: false, error: '缺少工作区，无法读取确认资料。', retry }
+  return loaded &&
+    loaded.source === source &&
+    loaded.workspace === workspace &&
+    loaded.attempt === attempt
+    ? { workflow: loaded.workflow, loading: false, error: loaded.error, retry }
+    : { workflow: source, loading: true, retry }
 }

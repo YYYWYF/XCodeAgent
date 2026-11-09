@@ -5,7 +5,7 @@ import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel
 import { pendingFormalRevisionStart, retryFormalRevisionStart } from '../src/renderer/src/components/AiChatPanel/formalRevisionStartRetry'
 
 const session = {
-  workflowId: 'app', workbenchPhase: 'product', revisionContext: {
+  workflowId: 'app', threadId: 'graph', workbenchPhase: 'product', revisionContext: {
     kind: 'formal_revision', sessionRole: 'design', formalBranch: 'design_stage_revision',
     impactInteractionId: 'impact', sourceSessionId: 'source-session',
     sourceConversationThreadId: 'source-thread', sourceRunId: 'source-run', planningThreadId: 'graph'
@@ -78,4 +78,24 @@ const planLifecycle = { ...lifecycle, pendingRevisionImpact: {
 } } as ApplicationLifecycle
 assert.equal(pendingFormalRevisionStart(planLifecycle, planSession)?.impact.formalBranch, 'workbench_plan_revision')
 assert.equal(pendingFormalRevisionStart(planLifecycle, session), undefined)
+
+// 已交接技术专项按精确来源读取当前 Backend Graph，展示会话可拥有独立 Thread。
+const handedOffPlanSession = { ...planSession, threadId: 'target-graph', revisionContext: {
+  ...planSession.revisionContext!, planningThreadId: 'source-checkpoint'
+} } as SessionIdentity
+const handedOffLifecycle = { ...active, initialization: { ...active.initialization, threadId: 'target-graph' },
+  activeFormalRevision: { ...active.activeFormalRevision!, formalBranch: 'workbench_plan_revision', planningThreadId: 'target-graph' }
+} as ApplicationLifecycle
+let continued = 0
+await retryFormalRevisionStart({
+  session: handedOffPlanSession, read: async () => ({ lifecycle: handedOffLifecycle }),
+  onLifecycle: () => {}, start: async () => { assert.fail('已接纳修订不能重新提交') },
+  recover: () => { continued += 1 }
+})
+assert.equal(continued, 1)
+await assert.rejects(retryFormalRevisionStart({
+  session: { ...handedOffPlanSession, revisionContext: { ...handedOffPlanSession.revisionContext!, sourceRunId: 'other-source' } },
+  read: async () => ({ lifecycle: handedOffLifecycle }), onLifecycle: () => {},
+  start: async () => { assert.fail('其他来源不能启动') }, recover: () => { assert.fail('其他来源不能恢复') }
+}), /应用或规划会话已变化/)
 console.log('formal revision start retry tests passed')

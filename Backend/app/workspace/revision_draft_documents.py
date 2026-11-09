@@ -39,10 +39,9 @@ def write_revision_draft(
     workspace: str | Path,
     *,
     metadata: RevisionDraftMetadata,
-    markdown: str,
     artifact: dict[str, Any],
 ) -> Path:
-    """覆盖写入当前草稿 Markdown、内部 JSON 和 metadata，不保留历史版本。"""
+    """写入当前草稿结构化数据和 metadata，忽略目录内的额外文件。"""
 
     directory = revision_draft_directory(
         workspace,
@@ -50,7 +49,6 @@ def write_revision_draft(
         artifact_key=metadata.artifact_key,
     )
     directory.mkdir(parents=True, exist_ok=True)
-    _write_text_atomically(directory / "artifact.md", markdown)
     _write_json_atomically(directory / "artifact.json", artifact)
     _write_json_atomically(
         directory / "metadata.json",
@@ -64,8 +62,8 @@ def load_revision_draft(
     *,
     change_id: str,
     artifact_key: str,
-) -> tuple[RevisionDraftMetadata, str, dict[str, Any]]:
-    """严格读取一个当前草稿的 metadata、Markdown 和内部 JSON。"""
+) -> tuple[RevisionDraftMetadata, dict[str, Any]]:
+    """读取当前草稿 metadata 和结构化数据，不读取 Markdown。"""
 
     directory = revision_draft_directory(
         workspace,
@@ -76,7 +74,6 @@ def load_revision_draft(
         metadata = RevisionDraftMetadata.model_validate_json(
             (directory / "metadata.json").read_text(encoding="utf-8")
         )
-        markdown = (directory / "artifact.md").read_text(encoding="utf-8")
         artifact = json.loads((directory / "artifact.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("revision 草稿缺失或未通过当前合同校验。") from exc
@@ -84,7 +81,7 @@ def load_revision_draft(
         raise ValueError("revision 草稿内部 JSON 必须是对象。")
     if metadata.change_id != change_id or metadata.artifact_key != artifact_key:
         raise ValueError("revision 草稿 metadata 与目录身份不匹配。")
-    return metadata, markdown, artifact
+    return metadata, artifact
 
 
 def discard_revision_draft(

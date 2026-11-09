@@ -1,0 +1,159 @@
+.@{class-prefix}-workbench-error-notification.ant-notification-notice {
+  container: workbench-notice / inline-size;
+  width: min(480px, calc(100vw - 48px));
+  max-height: calc(100vh - 100px);
+  padding: 16px;
+  overflow: auto;
+  color: var(--wb-text);
+  --error-card-background: var(--wb-canvas);
+  --error-card-border: var(--wb-border);
+  --error-card-divider: var(--wb-border);
+  --error-card-action: var(--wb-text);
+  // 白底全局通知保留原有中性诊断区，暖红详情仅用于聊天错误。
+  --error-card-diagnostic-background: color-mix(in srgb, var(--wb-text) 4%, var(--wb-canvas));
+  --error-card-diagnostic-border: transparent;
+  // 通知采用中性实体底色，故障色仅保留在图标内，明暗主题共用工作台令牌。
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-border);
+  border-radius: 12px;
+  box-shadow: var(--wb-shadow);
+
+  .ant-notification-notice-message:empty {
+    display: none;
+  }
+
+  .ant-notification-notice-description {
+    color: var(--wb-text);
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
+  .ant-notification-notice-close {
+    top: 18px;
+    right: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    font-size: 13px;
+    color: var(--wb-text-secondary);
+    border-radius: 6px;
+
+    &:hover,
+    &:focus-visible {
+      color: var(--wb-text);
+      background: var(--wb-control);
+    }
+
+    &:focus-visible {
+      outline: 2px solid currentColor;
+      outline-offset: 3px;
+    }
+  }
+
+  // 复用既有卡片正文及操作，外层通知统一承担边框、留白和关闭入口。
+  .@{class-prefix}-agent-error-card,
+  .@{class-prefix}-connection-status-banner,
+  .@{class-prefix}-application-planning-recovery-incident,
+  .@{class-prefix}-retry-entry-notice {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+
+  // 连接故障与其他白底通知共用标题、正文和底部左侧操作的层级。
+  .@{class-prefix}-connection-status-banner {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px 12px;
+  }
+
+  .@{class-prefix}-connection-status-banner-icon {
+    position: relative;
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    width: 32px;
+    height: 32px;
+    margin-top: 0;
+    color: var(--wb-danger);
+    background: color-mix(in srgb, var(--wb-danger) 9%, var(--wb-canvas));
+    border-radius: 10px;
+
+    // 断连图标增加斜杠，加载状态继续显示原有旋转图标。
+    &:has(.anticon-wifi)::after {
+      position: absolute;
+      width: 22px;
+      height: 1.5px;
+      background: currentColor;
+      box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--wb-danger) 9%, var(--wb-canvas));
+      transform: rotate(-45deg);
+      content: '';
+    }
+  }
+
+  .@{class-prefix}-connection-status-banner-copy {
+    display: contents;
+  }
+
+  .@{class-prefix}-connection-status-banner-title.ant-typography {
+    grid-column: 2;
+    grid-row: 1;
+    padding-right: 36px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .@{class-prefix}-connection-status-banner-message.ant-typography {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .@{class-prefix}-connection-status-banner-action.ant-btn {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    justify-self: stretch;
+    text-align: left;
+    width: auto;
+    height: auto;
+    min-height: 38px;
+    margin: 0;
+    padding: 10px 0 0;
+    color: var(--wb-text);
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--wb-border);
+    border-radius: 0;
+    box-shadow: none;
+    font-size: 13px;
+
+    &:not(:disabled):hover,
+    &:not(:disabled):focus-visible {
+      color: var(--wb-text);
+      background: var(--wb-control);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--wb-text);
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      color: var(--wb-text-secondary);
+      opacity: 0.55;
+    }
+  }
+
+  // 仅标题预留关闭区，正文和展开诊断可以使用通知完整宽度。
+  .@{class-prefix}-agent-error-card-header {
+    padding-right: 36px;
+  }
+}

@@ -43,35 +43,40 @@ export function schemaFor(contract: JsonRecord, schemaRef: string): JsonRecord {
   return asRecord(asRecord(contract.schemas)[schemaRef])
 }
 
-/** 从 Schema 或数组元素中读取规范化后的引用类型名称。 */
-export function schemaReferenceName(schema: JsonRecord): string {
-  const target = textValue(schema.type) === 'array' ? asRecord(schema.items) : schema
-  return textValue(target.$ref).replace(/^#\/components\/schemas\//, '')
+/** 数组的联合元素类型加括号，避免把 nullable 元素误读成 nullable 数组。 */
+function arrayType(schema: JsonRecord): string {
+  const itemType = schemaType(asRecord(schema.items))
+  return `${/[|&]/.test(itemType) ? `(${itemType})` : itemType}[]`
 }
 
-/** 将 schema type、数组和引用信息压缩成可读类型标签。 */
+/** 展示 API 契约类型，并明确标记枚举约束，避免与数据库列类型混淆。 */
 export function schemaType(schema: JsonRecord): string {
-  const type = textValue(schema.type)
-  if (type === 'array') {
-    const items = asRecord(schema.items)
-    const itemType = schemaReferenceName(schema) || textValue(items.type)
-    return itemType ? `${itemType}[]` : 'array[]'
+  if (Array.isArray(schema.enum) && schema.enum.length) {
+    return `enum [${schema.enum.map((value) => JSON.stringify(value)).join(', ')}]`
   }
-  if (type) return type
-  return schemaReferenceName(schema) || 'object'
+  const reference = textValue(schema.$ref).replace(/^#\/components\/schemas\//, '')
+  const types = Array.isArray(schema.type)
+    ? stringItems(schema.type)
+    : [textValue(schema.type)].filter(Boolean)
+  const composition = ['oneOf', 'anyOf', 'allOf'].find((key) => recordItems(schema[key]).length)
+  let label =
+    reference || types.map((type) => (type === 'array' ? arrayType(schema) : type)).join(' | ')
+  if (!label && composition) {
+    label = recordItems(schema[composition])
+      .map(schemaType)
+      .join(composition === 'allOf' ? ' & ' : ' | ')
+  }
+  if (!label) label = schema.properties || schema.additionalProperties ? 'object' : '未限定类型'
+  const typeLabel = schema.nullable === true && !types.includes('null') ? `${label} | null` : label
+  return typeLabel
 }
 
-/** 读取 Endpoint 的参数摘要，供右侧检查器使用。 */
+/** 为共享的接口摘要汇总全部参数，不按数量截断。 */
 export function parameterSummary(endpoint: JsonRecord): string {
   const parameters = recordItems(endpoint.parameters)
-  if (!parameters.length) return '无'
-  return parameters
-    .slice(0, 2)
-    .map((parameter) => {
-      const required = parameter.required ? ' · 必填' : ''
-      return `${textValue(parameter.name, 'param')} · ${textValue(parameter.in, 'query')} · ${schemaType(asRecord(parameter.schema))}${required}`
-    })
-    .join('；')
+  return parameters.length ? parameters.map((parameter) =>
+    `${textValue(parameter.name, 'param')} · ${textValue(parameter.in, 'query')} · ${schemaType(asRecord(parameter.schema))}${parameter.required ? ' · 必填' : ''}`
+  ).join('；') : '无'
 }
 
 /** 读取当前 Schema 的可展开属性，保留必填和字段血缘信息。 */

@@ -1,0 +1,36 @@
+// 根据卡片实际宽度换行，分栏收窄时保留页面名称、状态及操作，宽卡片沿用原布局。
+.@{class-prefix}-planning-question-panel.@{class-prefix}-is-ui-confirmation {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .@{class-prefix}-planning-question-panel.@{class-prefix}-is-ui-confirmation {
+    .@{class-prefix}-planning-question-panel-header {
+      flex-wrap: wrap;
+
+      .@{class-prefix}-ui-design-header-copy {
+        flex: 1 1 calc(100% - 65px);
+      }
+    }
+  }
+
+  .@{class-prefix}-ui-design-page-row {
+    flex-wrap: wrap;
+  }
+
+  .@{class-prefix}-ui-design-page-row-meta {
+    flex: 1 1 100%;
+  }
+
+  .@{class-prefix}-ui-design-page-row-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .@{class-prefix}-ui-design-page-row-actions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}

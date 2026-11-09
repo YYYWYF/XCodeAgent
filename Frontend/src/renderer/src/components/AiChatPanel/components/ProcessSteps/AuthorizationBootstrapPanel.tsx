@@ -1,14 +1,11 @@
 import { authorizationBootstrapTitle } from '../../../../service/authorizationBootstrap'
 import {
-  ArrowRightOutlined,
   CheckCircleOutlined,
-  ClockCircleOutlined,
   CopyOutlined,
-  SearchOutlined,
   WarningOutlined
 } from '@ant-design/icons'
 import { Button, message } from 'antd'
-import AuthorizationBootstrapRefreshButton from './AuthorizationBootstrapRefreshButton'
+import { BuiltinAuthorizationWorkflowPanel } from './BuiltinAuthorizationTaskCard'
 import type { ReactElement, ReactNode } from 'react'
 import type { WorkflowAuthorizationBootstrap } from '../../../../service/authorizationBootstrap'
 import { cx } from '../../../../utils'
@@ -20,25 +17,18 @@ export default function AuthorizationBootstrapPanel({
   recoveryNotice,
   workspaceRoot,
   onRefreshed,
-  onContinue,
   continueDisabled = false
 }: {
   workspaceRoot?: string
-  onContinue?: (lookup: boolean) => void
   continueDisabled?: boolean
   onRefreshed?: (result: WorkflowAuthorizationBootstrap) => void
   recoveryNotice?: ReactNode
   result: WorkflowAuthorizationBootstrap
 }): ReactElement | null {
   if (result.status === 'skipped') return null
-  const running = result.schemaReady
-    ? result.nextAction === 'refresh_seed' && result.seedOperationStatus === 'RUNNING'
-    : result.operationStatus === 'RUNNING'
-  const lookupSeed = result.nextAction === 'lookup_seed'
-  const needsContinue = result.nextAction === 'continue' || lookupSeed
-  const warning = !running && (result.executor === 'builtin_saas'
-    ? !result.seedReady
-    : result.status === 'failed' || result.status === 'manual_required')
+  if (result.executor === 'builtin_saas') return <BuiltinAuthorizationWorkflowPanel result={result}
+    workspace={workspaceRoot} disabled={continueDisabled} onRefreshed={onRefreshed} />
+  const warning = result.status === 'failed' || result.status === 'manual_required'
   /** 只复制已校验的完整 SQL，并提供明确的复制结果。 */
   async function copyDdl(): Promise<void> {
     if (!result.ddlAvailable || !result.ddl) return
@@ -52,41 +42,10 @@ export default function AuthorizationBootstrapPanel({
   return (
     <section className={cx('authorization-bootstrap-panel')} aria-label="权限数据库初始化结果">
       <p role={warning ? 'status' : undefined}>
-        {running ? <ClockCircleOutlined /> : warning ? <WarningOutlined /> : <CheckCircleOutlined />}{' '}
+        {warning ? <WarningOutlined /> : <CheckCircleOutlined />}{' '}
         {authorizationBootstrapTitle(result.status, result)}
       </p>
-      {result.executor === 'builtin_saas' && (
-        <>
-          {result.message && <p>{result.message}</p>}
-          {result.schemaReady && result.initializedTables?.length === 4 && (
-            <>
-              <p>以下四张权限表已初始化完成：</p>
-              <ul>{result.initializedTables.map((name) => <li key={name}><code>{name}</code></li>)}</ul>
-            </>
-          )}
-          {result.operationId && <p>操作 ID：{result.operationId}</p>}
-          {result.operationStatus && <p>建表状态：{{ RUNNING: '执行中', SUCCEEDED: '执行成功，待结构核验', FAILED: '执行失败', UNKNOWN: '结果未知', SCHEMA_READY: '四表结构已核验' }[result.operationStatus]}</p>}
-          {result.operationId && !result.schemaReady && (
-            <AuthorizationBootstrapRefreshButton workspaceRoot={workspaceRoot} operationId={result.operationId} onRefreshed={onRefreshed} />
-          )}
-          {result.seedOperationId && <p>权限数据操作 ID：{result.seedOperationId}</p>}
-          {result.seedOperationId && result.nextAction === 'refresh_seed' && (
-            <AuthorizationBootstrapRefreshButton workspaceRoot={workspaceRoot} operationId={result.seedOperationId} operationKind="seed" onRefreshed={onRefreshed} />
-          )}
-          {needsContinue && onContinue && (
-            <Button
-              type="primary"
-              icon={lookupSeed ? <SearchOutlined /> : <ArrowRightOutlined />}
-              disabled={continueDisabled}
-              onClick={() => onContinue(lookupSeed)}
-            >
-              {lookupSeed ? '查询原受理记录' : '继续初始化权限数据'}
-            </Button>
-          )}
-          {!result.schemaReady && recoveryNotice}
-        </>
-      )}
-      {warning && result.executor !== 'builtin_saas' && (
+      {warning && (
         <>
           {recoveryNotice || (result.message && <p>{result.message}</p>)}
           <p>

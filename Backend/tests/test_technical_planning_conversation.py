@@ -59,7 +59,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         )]
         events = [json.loads(line[5:]) for frame in frames for line in frame.splitlines() if line.startswith("data:")]
         self.assertEqual(events[0]["type"], "RUN_STARTED")
-        self.assertEqual(events[-1]["type"], "RUN_FINISHED")
+        self.assertEqual(events[-1]["type"], "RUN_FINISHED", str(events[-1]))
         results = [e["value"] for e in events if e.get("name") == "technical-planning-conversation"]
         return results[-1] if results else {}, events
 

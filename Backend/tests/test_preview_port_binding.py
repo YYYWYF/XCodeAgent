@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from tests.frontend_node_fixture import stub_frontend_node
+from app.services.frontend_node_runtime import FRONTEND_NODE_FILE, write_node_record
 
 from app.services.frontend_project_launcher import (
     _dev_server_log_is_ready, _resolve_actual_preview_url, _reuse_ready_server,
@@ -22,6 +24,7 @@ class PreviewPortBindingTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
+        self.node_runtime = stub_frontend_node(self, "app.services.frontend_project_launcher")
         self.log = self.root / "frontend.stdout.log"
         self.process = SimpleNamespace(poll=lambda: None)
 
@@ -67,12 +70,16 @@ class PreviewPortBindingTests(unittest.TestCase):
         self.log.write_text("Local: http://localhost:3001/\n")
         with patch("app.services.frontend_project_launcher._pid_is_running", return_value=True), \
              patch("app.services.frontend_project_launcher._preview_is_ready", return_value=True) as probe:
-            result = _reuse_ready_server(self.root, "http://localhost:3000")
+            write_node_record(
+                self.root / FRONTEND_NODE_FILE,
+                {"pid": 12345, "nodeRuntime": self.node_runtime.evidence()},
+            )
+            result = _reuse_ready_server(self.root, "http://localhost:3000", self.node_runtime)
         self.assertEqual(result["preview_url"], "http://localhost:3001")
         probe.assert_called_once_with("http://localhost:3001")
         with patch("app.services.frontend_project_launcher._pid_is_running", return_value=False), \
              patch("app.services.frontend_project_launcher._preview_is_ready") as probe:
-            self.assertIsNone(_reuse_ready_server(self.root, "http://localhost:3000"))
+            self.assertIsNone(_reuse_ready_server(self.root, "http://localhost:3000", self.node_runtime))
         probe.assert_not_called()
 
     def test_launcher_returns_reused_actual_address(self) -> None:
@@ -85,6 +92,29 @@ class PreviewPortBindingTests(unittest.TestCase):
             result = launch_frontend_project(self.root)
         self.assertEqual(result["preview_url"], "http://localhost:3001")
 
+    def test_performance_does_not_replace_running_preview_on_old_node(self) -> None:
+        """活着的旧 Node 进程不能被性能检查复用，也不能被该检查停止。"""
+        frontend = self.root / "frontend"
+        frontend.mkdir()
+        (frontend / "package.json").write_text('{"scripts":{"dev":"vite"}}')
+        runtime = runtime_root(self.root)
+        runtime.mkdir(parents=True)
+        (runtime / "frontend.pid").write_text("12345")
+        write_node_record(
+            runtime / FRONTEND_NODE_FILE,
+            {"pid": 12345, "nodeRuntime": {**self.node_runtime.evidence(), "version": "v20.19.0"}},
+        )
+        with (
+            patch("app.services.frontend_project_launcher._pid_is_running", return_value=True),
+            patch("app.services.frontend_project_launcher._stop_frontend_process_from_pid_file") as stop,
+            patch("app.services.frontend_project_launcher._preview_is_ready") as probe,
+        ):
+            result = launch_frontend_project(self.root, skip_install=True, preserve_running=True)
+        self.assertTrue(result["preserved_running"])
+        self.assertIn("重启预览", result["message"])
+        stop.assert_not_called()
+        probe.assert_not_called()
+
     def test_runtime_snapshot_corrects_current_process_port(self) -> None:
         """状态读取按存活 PID 的日志校准地址与端口，预览可自动离开旧项目。"""
 
@@ -95,7 +125,7 @@ class PreviewPortBindingTests(unittest.TestCase):
         finish_attempt(self.root, {"status": "running", "preview_url": "http://localhost:3000",
             "frontend": {"status": "running", "preview_url": "http://localhost:3000",
                          "server": {"pid": 12345, "port": 3000, "ready": True}}, "backend": {"status": "skipped"}})
-        with patch("app.services.preview_runtime_state.os.kill"), \
+        with patch("app.services.preview_runtime_state.pid_is_running", return_value=True), \
              patch("app.services.frontend_project_launcher._preview_is_ready", return_value=True) as probe:
             value = runtime_snapshot(self.root, logs=False)
         self.assertEqual(value["status"], "running")

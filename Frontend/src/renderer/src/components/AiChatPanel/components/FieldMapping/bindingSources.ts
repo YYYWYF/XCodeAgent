@@ -10,7 +10,8 @@ export type BindingSourcesReader = { refresh: () => void; dispose: () => void }
 export function observeBindingSources(
   workspaceRoot: string,
   onSnapshot: (snapshot: BindingSourcesSnapshot) => void,
-  onError: (reason: unknown) => void
+  onError: (reason: unknown) => void,
+  onLoading?: () => void
 ): BindingSourcesReader {
   let disposed = false
   let revision = 0
@@ -19,6 +20,7 @@ export function observeBindingSources(
   const refresh = (): void => {
     if (disposed) return
     const requestRevision = ++revision
+    onLoading?.()
     void Promise.all([requestDataSources(workspaceRoot), requestSelectedTables(workspaceRoot)])
       .then(([catalog, tables]) => {
         if (!disposed && requestRevision === revision) onSnapshot({ catalog, tables })

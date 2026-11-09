@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from tests.frontend_node_fixture import stub_frontend_node
 
 from langchain_core.tools import ToolException
 
@@ -17,6 +18,10 @@ from app.tools.code_review_pnpm import (
 
 class CodeReviewPnpmToolTests(unittest.TestCase):
     """验证代码审查专用 pnpm 工具的固定命令和工作区边界。"""
+
+    def setUp(self) -> None:
+        """隔离包管理器探测，保留固定安装命令的断言。"""
+        stub_frontend_node(self, "app.tools.code_review_pnpm")
 
     def test_tool_runs_fixed_command_without_shell_and_writes_evidence(self) -> None:
         """工具只能在 frontend 执行固定 pnpm install 并持久化日志证据。"""
@@ -42,7 +47,7 @@ class CodeReviewPnpmToolTests(unittest.TestCase):
                 )
 
             with patch(
-                "app.tools.code_review_pnpm.shutil.which",
+                "app.services.frontend_node_runtime.shutil.which",
                 return_value="/usr/local/bin/pnpm",
             ), patch(
                 "app.tools.code_review_pnpm.workspace_process_registry.run",
@@ -88,7 +93,7 @@ class CodeReviewPnpmToolTests(unittest.TestCase):
             tool = create_code_review_pnpm_install_tool(workspace)
 
             with patch(
-                "app.tools.code_review_pnpm.shutil.which",
+                "app.services.frontend_node_runtime.shutil.which",
                 return_value="/usr/local/bin/pnpm",
             ), patch("app.tools.code_review_pnpm.workspace_process_registry.run") as run:
                 with self.assertRaises(ToolException):

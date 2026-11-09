@@ -474,7 +474,6 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
         raise ValueError("UI 设计稿必须经产品角色确认后才能进入工作区。")
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
     product_plan_markdown = Path(str(state.get("product_plan_path") or ""))
-    technical_plan_markdown = Path(str(state.get("technical_plan_path") or ""))
     ui_design_json = workspace / WORKSPACE_ARTIFACT_DIR / "specs" / "ui-designs.json"
     return {
         "requirementSpec": {
@@ -511,12 +510,9 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
             ),
         },
         "technicalPlan": {
-            "markdown": _document_descriptor(
-                workspace, technical_plan_markdown, "技术规划", "markdown", ".devagentstudio/plans"
-            ),
             "json": _document_descriptor(
                 workspace,
-                state.get("technical_plan_json_path") or technical_plan_markdown.with_suffix(".json"),
+                state.get("technical_plan_json_path") or workspace / WORKSPACE_ARTIFACT_DIR / "plans" / "technical-plan.json",
                 "技术规划内部数据",
                 "json",
                 ".devagentstudio/plans",

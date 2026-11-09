@@ -17,10 +17,10 @@ import './DataSourcesDrawer.less'
 
 type Detail = { kind: 'table'; table: SelectedDataTable } | { kind: 'operation'; sourceId: string; directoryId: string; operationId?: string; operation?: DataSourceOperation }
 type DrawerMode = 'database' | 'external_api'
-type Props = { workspaceRoot: string; theme: 'light' | 'dark'; mode: DrawerMode; onClose: () => void; onNavigationGuard: (guard?: (action: () => void) => void) => void }
+type Props = { workspaceRoot: string; theme: 'light' | 'dark'; mode: DrawerMode; onClose: () => void; onNavigationGuard: (guard?: (action: () => void) => void) => void; onBackToFieldMapping?: () => void }
 
 /** 用列表与右侧详情双层抽屉维护数据来源，正式目录结构保持不变。 */
-export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose, onNavigationGuard }: Props): ReactElement {
+export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose, onNavigationGuard, onBackToFieldMapping }: Props): ReactElement {
   const [catalog, setCatalog] = useState<DataSourceCatalog>({ sources: [] })
   const [tables, setTables] = useState<SelectedDataTable[]>([])
   const [tab, setTab] = useState('')
@@ -291,6 +291,7 @@ export default function DataSourcesDrawer({ workspaceRoot, theme, mode, onClose,
             onChange={(event) => setSearch(event.target.value)} />
         ) : <Input.Search allowClear className="source-drawer-search" aria-label={mode === 'external_api' ? '搜索接口' : '搜索数据表'} placeholder={mode === 'external_api' ? '搜索接口名称、说明或路径' : '搜索表名或说明'} value={search} onChange={(event) => setSearch(event.target.value)} /> : null}
       </div>
+      {onBackToFieldMapping && <Button className="source-drawer-return" onClick={() => guard(onBackToFieldMapping)}>返回字段映射</Button>}
       {error ? <Alert type="error" message={error} action={<Button onClick={() => {
         if (detail?.kind === 'operation' && !fullSource) void openOperation(detail.sourceId, detail.directoryId, detail.operationId)
         else void load()

@@ -93,6 +93,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         ...application,
         appName: rest.appName,
         appIcon: rest.appIcon,
+        repoUrl: rest.repoUrl.trim(),
         theme: rest.theme,
         auth: rest.auth,
         authorization: rest.authorization,
@@ -109,6 +110,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         ...updatedApplication,
         appName: disk.appName,
         appIcon: disk.appIcon,
+        repoUrl: disk.repoUrl,
         theme: disk.theme,
         auth: disk.auth,
         authorization: disk.authorization,
@@ -117,15 +119,22 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
       // 保存成功后以最新磁盘配置刷新表单，避免再次保存时复用提交前的开关或 revision。
       form.setFieldsValue({ ...createSettingsDraft(persistedApplication), envVariables })
       onSaved(persistedApplication)
+      // 轻量成功反馈：固定 3 秒自动消失的 message，不再用 Modal 打断操作。
+      message.success({ content: '保存成功', duration: 3 })
       const notices = settingsSaveNoticeMessages(applied)
-      Modal.success({
-        title: '应用设置已保存',
-        content: (
-          <ul>
-            {notices.map((notice) => <li key={notice}>{notice}</li>)}
-          </ul>
-        )
-      })
+      // 仅当有工程文件变更/能力注入等用户必须知晓的副作用时才弹窗展示明细；
+      // 纯基础信息保存（只有「应用配置已保存」一条）不再打扰。
+      const effectNotices = notices.filter((notice) => notice !== '应用配置已保存。')
+      if (effectNotices.length > 0) {
+        Modal.success({
+          title: '应用设置已保存',
+          content: (
+            <ul>
+              {effectNotices.map((notice) => <li key={notice}>{notice}</li>)}
+            </ul>
+          )
+        })
+      }
     } catch (error) {
       refreshPending()
       // antd validateFields 校验失败时返回 { errorFields, values }，非 Error 实例

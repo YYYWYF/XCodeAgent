@@ -19,8 +19,8 @@ from app.services.entity_detail_plan import create_entity_detail_plan, refresh_e
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE, create_technical_plan
 from app.services.requirement_spec import create_requirement_spec
-from app.workspace.detail_design_documents import externalize_detail_designs, hydrate_external_detail_designs
-from app.workspace.plan_documents import render_project_plan_markdown
+from app.workspace.detail_design_documents import hydrate_external_detail_designs
+from app.workspace.plan_documents import commit_technical_plan_document
 
 
 class EntityTableBindingTests(unittest.TestCase):
@@ -176,17 +176,18 @@ class EntityTableBindingTests(unittest.TestCase):
                 ]}
                 self.assertTrue(any("真实表名" in error for error in entity_design_validation_errors(plan, detail, builtin=True)))
 
-    def test_markdown_and_externalized_detail_keep_formal_name(self) -> None:
+    def test_json_and_externalized_detail_keep_formal_name(self) -> None:
         """真实表名随正式技术文档和外置详情保存，也进入业务生成摘要。"""
 
         plan = {**self.bound(), "artifact_type": TECHNICAL_PLAN_ARTIFACT_TYPE}
         detail = create_entity_detail_plan(plan, plan["entities"][0])
         detail["status"] = "confirmed"
         plan["entity_detail_plans"] = [detail]
-        self.assertIn("数据库真实表名：`12ab34cd56ef_order`", render_project_plan_markdown(plan))
         self.assertEqual(entity_design_summaries(plan, ["Order"])[0]["table_name"], "12ab34cd56ef_order")
         with tempfile.TemporaryDirectory() as workspace:
-            compact = externalize_detail_designs({"workspace": workspace}, plan)
+            path = commit_technical_plan_document({"workspace": workspace}, plan)
+            compact = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertFalse(Path(path).with_suffix(".md").exists())
             hydrated = hydrate_external_detail_designs(
                 Path(workspace) / ".devagentstudio/plans/technical-plan.json", compact,
             )
@@ -194,7 +195,7 @@ class EntityTableBindingTests(unittest.TestCase):
             self.assertEqual(hydrated["entity_detail_plans"][0]["table_design"]["name"], "12ab34cd56ef_order")
 
     def test_technical_plan_generation_and_confirmation_bind_from_application(self) -> None:
-        """生成入口及确认前装配都读取应用配置，Markdown 同步丢字段时重新确定绑定。"""
+        """生成入口及确认前装配都读取应用配置，候选缺少表名时重新确定绑定。"""
 
         spec = create_requirement_spec("创建订单管理系统")
         spec["application_config"] = self.application()

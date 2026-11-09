@@ -1,6 +1,8 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { useState } from 'react'
 import type { ApplicationOutlineProps } from '../components/ApplicationOutline'
+import { ARTIFACT_DOCUMENTS } from '../components/ApplicationOutline/artifactDocuments'
+import type { ArtifactDocumentKey } from '../components/ApplicationOutline/artifactDocuments'
 import type { RightPanelLayout, RightPanelState } from '../types'
 
 type ArtifactSelection = {
@@ -11,6 +13,7 @@ type ArtifactSelection = {
   apiContractId?: string
   endpointId?: string
   entityId?: string
+  documentKey?: ArtifactDocumentKey
 }
 
 type Options = {
@@ -21,6 +24,7 @@ type Options = {
 }
 
 type DevelopmentArtifactDetail = {
+  openArtifactOverview: () => void
   artifactDetailLabel?: string
   apiTarget?: { apiContractId: string; endpointId: string }
   artifactOutlineProps: Pick<
@@ -31,10 +35,12 @@ type DevelopmentArtifactDetail = {
     | 'selectedPageId'
     | 'selectedApiEndpointKey'
     | 'selectedEntityId'
+    | 'onDocumentSelect'
+    | 'selectedDocumentKey'
   >
 }
 
-/** 开发产物仅维护本地浏览选择并打开空白详情，不改变会话、开发目标或工作流。 */
+/** 开发产物仅维护本地浏览选择，不改变会话、开发目标或工作流。 */
 export function useDevelopmentArtifactDetail({
   applicationId,
   setRightPanel,
@@ -43,7 +49,7 @@ export function useDevelopmentArtifactDetail({
   const [selection, setSelection] = useState<ArtifactSelection>()
   const currentSelection = selection?.applicationId === applicationId ? selection : undefined
 
-  /** 更新产物浏览选择，并保持开发产物内部的菜单与空白详情同时展示。 */
+  /** 更新产物浏览选择，保持菜单与对应详情同时展示。 */
   const openDetail = (target: Omit<ArtifactSelection, 'applicationId'>): void => {
     setSelection({ ...target, applicationId })
     setRightPanel({ type: 'outline' })
@@ -51,7 +57,7 @@ export function useDevelopmentArtifactDetail({
     setRightPanelLayout((current) => (current === 'hidden' ? 'split' : current))
   }
 
-  /** 点击页面只打开该页面的空白详情。 */
+  /** 点击页面只打开其事实概览，不启动正式开发任务。 */
   const onPageSelect: ApplicationOutlineProps['onPageSelect'] = (page) => {
     openDetail({ pageId: page.pageId, label: page.label })
   }
@@ -71,7 +77,18 @@ export function useDevelopmentArtifactDetail({
     openDetail({ entityId: entity.id, label: entity.label })
   }
 
+  /** 文档浏览只打开应用产物详情，不切换阶段或触发下游开发。 */
+  const onDocumentSelect = (documentKey: ArtifactDocumentKey): void => {
+    openDetail({ documentKey, label: ARTIFACT_DOCUMENTS.find((doc) => doc.key === documentKey)!.label })
+  }
+
   return {
+    /** 无关联实体时清除上次浏览对象，仅展示现有产物目录。 */
+    openArtifactOverview: (): void => {
+      setSelection(undefined)
+      setRightPanel({ type: 'outline' })
+      setRightPanelLayout((current) => current === 'hidden' ? 'split' : current)
+    },
     artifactDetailLabel: currentSelection?.label,
     apiTarget: currentSelection?.apiContractId && currentSelection.endpointId
       ? { apiContractId: currentSelection.apiContractId, endpointId: currentSelection.endpointId }
@@ -80,6 +97,8 @@ export function useDevelopmentArtifactDetail({
       onPageSelect,
       onApiEndpointSelect,
       onEntitySelect,
+      onDocumentSelect,
+      selectedDocumentKey: currentSelection?.documentKey,
       selectedPageId: currentSelection?.pageId || '',
       selectedApiEndpointKey: currentSelection?.endpointKey || '',
       selectedEntityId: currentSelection?.entityId || ''

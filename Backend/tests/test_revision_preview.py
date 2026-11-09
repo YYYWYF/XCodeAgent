@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.protocols.revision_preview import build_revision_preview_ag_ui_stream
+from app.services.frontend_node_runtime import record_frontend_dependencies
 from app.services.frontend_project_launcher import _dependency_check_bypass_argv
 from app.services.revision_preview import (
     RevisionPreviewError,
@@ -24,8 +25,10 @@ from app.services.revision_preview import (
     materialize_revision,
     revision_preview_dir,
     revision_preview_runtime_subdir,
+    start_revision_preview,
     stop_revision_preview,
 )
+from tests.frontend_node_fixture import stub_frontend_node
 
 
 class RevisionPreviewTests(unittest.TestCase):
@@ -112,7 +115,7 @@ class RevisionPreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = self._init_repository(Path(workspace))
 
-            with self.assertRaisesRegex(RevisionPreviewError, "缺少要预览的版本"):
+        with self.assertRaisesRegex(RevisionPreviewError, "缺少要预览的分支标识"):
                 materialize_revision(root, "   ")
 
     def test_stop_removes_materialized_directory(self) -> None:
@@ -227,6 +230,31 @@ class RevisionPreviewLaunchTests(unittest.TestCase):
     去执行 install，而 install 又要先清空这个它不认识的目录 —— 无终端时直接以
     ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY 失败，dev server 起不来（线上实测如此）。
     """
+
+    def test_reuse_also_requires_install_node_evidence(self) -> None:
+        """相同依赖声明只有在安装 Node 匹配时才允许历史预览链接。"""
+        node = stub_frontend_node(self, "app.services.revision_preview")
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            revision = root / "revision"
+            frontend = root / "frontend"
+            for cwd in (frontend, revision / "frontend"):
+                cwd.mkdir(parents=True)
+                (cwd / "package.json").write_text('{"scripts":{"dev":"vite"}}', encoding="utf-8")
+            (frontend / "node_modules").mkdir()
+            with (
+                patch("app.services.revision_preview.materialize_revision", return_value=revision),
+                patch("app.services.revision_preview._await_revision_preview_url", return_value="http://localhost:3001"),
+                patch("app.services.revision_preview.launch_frontend_project", return_value={"status": "running"}) as launch,
+                patch("app.services.revision_preview._link_reused_dependencies", return_value=True) as link,
+            ):
+                self.assertFalse(start_revision_preview(root, "release")["reused_dependencies"])
+                link.assert_not_called()
+                self.assertFalse(launch.call_args.kwargs["skip_install"])
+                record_frontend_dependencies(root / ".devagentstudio/runtime/launch", frontend, node)
+                self.assertTrue(start_revision_preview(root, "release")["reused_dependencies"])
+                link.assert_called_once_with(root, revision)
+                self.assertIs(launch.call_args.kwargs["node_runtime"], node)
 
     def test_pnpm_gets_the_bypass_flag(self) -> None:
         self.assertEqual(

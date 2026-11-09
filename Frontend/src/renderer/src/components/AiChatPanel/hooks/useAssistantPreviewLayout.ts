@@ -6,12 +6,8 @@ import type {
   RefObject,
   SetStateAction
 } from 'react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import {
-  DEFAULT_ASSISTANT_PANEL_RATIO,
-  DEFAULT_DIFF_PANEL_WIDTH,
-  DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO
-} from '../constants'
+import { useEffect, useRef, useState } from 'react'
+import { DEFAULT_ASSISTANT_PANEL_RATIO } from '../constants'
 import type { RightPanelLayout, RightPanelState } from '../types'
 import type { WorkbenchPhase } from '../../../workbenchPhase'
 import { clampAssistantPanelRatio } from '../utils'
@@ -38,11 +34,10 @@ export function phaseEntryRightPanelLayout(
   return phase === 'review' || phase === 'acceptance' ? 'split' : currentLayout
 }
 
-/** 管理右侧工作区的三档布局（隐藏/分栏/全宽）、分栏宽度、拖拽及预览初始比例。 */
+/** 管理右侧工作区的三档布局与默认均分宽度，所有内容共用用户调整后的分栏比例。 */
 export function useAssistantPreviewLayout(): AssistantPreviewLayout {
   const panelRef = useRef<HTMLElement | null>(null)
   const [rightPanel, setRightPanel] = useState<RightPanelState>()
-  const previousRightPanelTypeRef = useRef<RightPanelState['type']>()
   const [assistantPanelRatio, setAssistantPanelRatio] = useState(DEFAULT_ASSISTANT_PANEL_RATIO)
   // 三档布局取代了原先布尔式的 rightPanelOpen：隐藏与全宽在尺寸上互斥，
   // 用单一状态源避免"开着但铺满"这类组合态。
@@ -56,23 +51,6 @@ export function useAssistantPreviewLayout(): AssistantPreviewLayout {
           '--assistant-panel-width': `${(assistantPanelRatio * 100).toFixed(4)}%`
         } as CSSProperties)
       : undefined
-
-  /** 切入预览时扩宽右侧面板；切入 Diff 时按目标宽度初始化，之后允许拖拽。 */
-  useLayoutEffect(() => {
-    const previousType = previousRightPanelTypeRef.current
-    previousRightPanelTypeRef.current = rightPanel?.type
-    if (rightPanel?.type === 'preview' && previousType !== 'preview') {
-      setAssistantPanelRatio(DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO)
-      return
-    }
-    if (rightPanel?.type !== 'diff' || previousType === 'diff') return
-
-    const panelWidth = panelRef.current?.getBoundingClientRect().width ?? 0
-    if (panelWidth <= 0) return
-    setAssistantPanelRatio(
-      clampAssistantPanelRatio((panelWidth - DEFAULT_DIFF_PANEL_WIDTH) / panelWidth)
-    )
-  }, [rightPanel?.type])
 
   useEffect(() => {
     // 只有分栏态才有宽度可言：隐藏与全宽都不参与比例约束，

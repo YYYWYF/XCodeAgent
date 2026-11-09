@@ -10,11 +10,14 @@ import {
 } from './TechnicalPlanDocSections'
 import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
+import type { ChangeGroup } from './technicalPlanDiff'
 import './TechnicalPlanDocPanel.less'
+import './TechnicalPlanContractResponsive.less'
 
 type Props = {
   plan: JsonRecord
   productPlan: JsonRecord
+  changes?: ChangeGroup[]
   onReviseAuthorization?: () => void
 }
 
@@ -29,6 +32,7 @@ const technicalPlanSections: Array<{ key: SectionKey; label: string }> = [
 export default function TechnicalPlanDocPanel({
   plan,
   productPlan,
+  changes,
   onReviseAuthorization
 }: Props): ReactElement {
   const architecture = asRecord(plan.architecture)
@@ -36,6 +40,7 @@ export default function TechnicalPlanDocPanel({
   const contracts = recordItems(plan.api_contracts)
   const pages = recordItems(plan.pages)
   const sections = [...technicalPlanSections, { key: 'authorization' as const, label: '接口权限绑定' }]
+  const changeKinds = Object.fromEntries((changes || []).flatMap((group) => group.objects.map((object) => [object.id, object.kind])))
   const [activeSection, setActiveSection] = useState<SectionKey>('api-contracts')
   const resolvedActiveSection = sections.some((section) => section.key === activeSection)
     ? activeSection
@@ -80,6 +85,8 @@ export default function TechnicalPlanDocPanel({
             type="button"
           >
             {section.label}
+            {changes?.find((group) => group.name === section.label)?.objects.length
+              ? ` · ${changes.find((group) => group.name === section.label)!.objects.length}` : ''}
           </button>
         ))}
       </div>
@@ -87,10 +94,11 @@ export default function TechnicalPlanDocPanel({
         <ArchitectureSection architecture={architecture} sectionKey="architecture" />
       ) : null}
       {resolvedActiveSection === 'entities' ? (
-        <EntitiesSection entities={entities} sectionKey="entities" />
+        <EntitiesSection entities={entities} sectionKey="entities" changeKinds={changeKinds} />
       ) : null}
       {resolvedActiveSection === 'api-contracts' ? (
         <ContractSection
+          changeKinds={changeKinds}
           contracts={contracts}
           onContractChange={(id) => {
             setSelectedContractId(id)
@@ -106,6 +114,7 @@ export default function TechnicalPlanDocPanel({
       ) : null}
       {resolvedActiveSection === 'page-bindings' ? (
         <PageBindingsSection
+          changeKinds={changeKinds}
           contracts={contracts}
           pages={pages}
           productPlan={productPlan}

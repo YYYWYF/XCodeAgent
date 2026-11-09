@@ -219,7 +219,6 @@ export default function ProcessSteps({
           return (
             <ProcessStep
               workspaceRoot={item.step.nodeName === 'builtin_authorization_bootstrap' && item.step.id !== builtinStepId ? undefined : workspaceRoot}
-              onContinueAuthorization={item.step.id === builtinStepId ? actions?.onContinue : undefined}
               continueAuthorizationDisabled={actions?.continueDisabled}
               authorizationRecoveryNotice={
                 item.step.id === recoveryStepId ? recovery?.notice : undefined
@@ -249,7 +248,6 @@ export function ProcessStep({
   conversation,
   dagPendingPlanCompletion,
   isLast,
-  onContinueAuthorization,
   continueAuthorizationDisabled,
   onOpenPendingDagConfirmation,
   settled,
@@ -260,7 +258,6 @@ export function ProcessStep({
 }: {
   workspaceRoot?: string
   authorizationRecoveryNotice?: ReactNode
-  onContinueAuthorization?: (lookup: boolean) => void
   continueAuthorizationDisabled?: boolean
   conversation: boolean
   dagPendingPlanCompletion?: DagPendingPlanCompletion
@@ -489,7 +486,6 @@ export function ProcessStep({
                 onRefreshed={(result) => setRefreshed({ identity, result })}
                 result={step.authorizationBootstrap}
                 recoveryNotice={authorizationRecoveryNotice}
-                onContinue={onContinueAuthorization}
                 continueDisabled={continueAuthorizationDisabled}
               />
             ) : (

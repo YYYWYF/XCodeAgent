@@ -58,7 +58,7 @@ from app.services.execution_recovery_lineage import (
     RecoveryLineageState,
     resolve_recovery_lineage_head,
 )
-from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path
+from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path, technical_plan_draft_json_path
 from app.services.template_reconcile.finalization import claim_template_reconcile_finalization
 from app.workspace.product_plan_documents import (
     write_confirmed_product_plan_documents,
@@ -148,8 +148,8 @@ class TechnicalPlanningRecoveryJourneyHarness:
 
         ui_designs = {
             "schema_version": "ui-manifest.v3",
-            "confirmation_status": "skipped",
-            # 跳过 UI 也必须绑定当前产品计划，确保恢复测试实际进入技术规划节点。
+            "confirmation_status": "confirmed",
+            # 当前前置合同要求 UI 已确认；无业务控件的夹具保留空页集合并绑定产品摘要。
             "product_plan_sha256": _artifact_hash(product_plan),
             "pages": [],
         }
@@ -266,10 +266,11 @@ class TechnicalPlanningRecoveryJourneyHarness:
         _existing_plan: dict[str, Any] | None,
         *,
         initial_errors: list[str] | None = None,
+        generation_fragments: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any] | None, list[str], dict[str, Any] | None]:
         """只替代模型调用，按当前 Settings 产生真实 classifier 可识别的 404 或合法计划。"""
 
-        del initial_errors
+        del initial_errors, generation_fragments
         model_name = Settings.from_env().model_name
         self.called_models.append(model_name)
         if model_name != "working-model":
@@ -428,8 +429,8 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 candidate=harness.candidate,
             ),
         }
-        markdown_path, json_path = commit_technical_plan_document(state, harness.candidate)
-        state.update(technical_plan_path=markdown_path, technical_plan_json_path=json_path)
+        json_path = commit_technical_plan_document(state, harness.candidate)
+        state.update(technical_plan_json_path=json_path)
         update = technical_planning_confirm(state)
         self.assertEqual(update["status"], "completed")
         self.assertTrue(update["template_reconcile_pending"])
@@ -439,11 +440,15 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             update["lifecycle"]["activeFormalRevision"]["currentArtifact"], "technical-plan"
         )
-        self.assertEqual(json.loads(Path(json_path).read_text())["confirmation_status"], "confirmed")
+        self.assertFalse(Path(json_path).exists())
+        confirmed_path = update["technical_plan_json_path"]
+        self.assertEqual(Path(confirmed_path), technical_plan_json_path(state))
+        self.assertEqual(update["project_plan_json_path"], confirmed_path)
+        self.assertEqual(json.loads(Path(confirmed_path).read_text())["confirmation_status"], "confirmed")
         claim = claim_template_reconcile_finalization(
             harness.workspace,
             change_id=active.change_id,
-            technical_plan_path=json_path,
+            technical_plan_path=confirmed_path,
         )
         self.assertTrue(claim.acquired)
 
@@ -508,11 +513,11 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
                 for frame in self.harness.last_recovery_frames for line in frame.splitlines()
                 if line.startswith("data:") and json.loads(line[5:].strip()).get("type") == "STATE_SNAPSHOT"]
             self.assertTrue(snapshots)
-            final_lifecycle = snapshots[-1]["result"]["lifecycle"]
+            final_lifecycle = snapshots[-1]["state"]["lifecycle"]
             self.assertEqual(final_lifecycle["initialization"]["status"], "awaiting_user")
             self.assertEqual(final_lifecycle["initialization"]["stage"], "awaiting_technical_plan_confirmation")
             self.assertTrue(
-                technical_plan_json_path(
+                technical_plan_draft_json_path(
                     {"workspace": str(self.harness.workspace)}
                 ).is_file()
             )

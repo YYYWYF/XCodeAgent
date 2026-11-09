@@ -1,0 +1,287 @@
+.@{class-prefix}-page-artifact-overview {
+  box-sizing: border-box;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 24px 28px 32px;
+  color: var(--wb-text);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.65;
+  h2,
+  h3,
+  p {
+    margin: 0;
+  }
+  h2 {
+    color: var(--wb-text);
+    font-size: 23px;
+    font-weight: 650;
+    line-height: 1.4;
+  }
+  h3 {
+    color: var(--wb-text);
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.5;
+  }
+  .ant-tag {
+    margin: 0;
+    color: var(--wb-text-secondary);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: normal;
+  }
+  .ant-alert {
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+    border-radius: 6px;
+    margin: 12px 0;
+    .ant-alert-message,
+    .ant-alert-description {
+      color: var(--wb-text);
+    }
+    .ant-alert-icon {
+      color: var(--wb-warning);
+    }
+    &.ant-alert-error .ant-alert-icon {
+      color: var(--wb-danger);
+    }
+  }
+  .ant-btn {
+    color: var(--wb-text);
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+    border-radius: 6px;
+    font-size: 12px;
+    box-shadow: none;
+    &:hover:not(:disabled) {
+      color: var(--wb-accent);
+      background: var(--wb-accent-soft);
+      border-color: var(--wb-accent-border);
+    }
+    &:disabled {
+      color: var(--wb-text-secondary);
+      background: var(--wb-surface-subtle);
+      opacity: 0.65;
+    }
+  }
+  button:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 3px;
+  }
+}
+.@{class-prefix}-page-artifact-breadcrumb {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  margin-bottom: 20px !important;
+  span {
+    color: var(--wb-text-secondary);
+    padding: 0 8px;
+  }
+}
+.@{class-prefix}-page-artifact-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.@{class-prefix}-page-artifact-page-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+  font-size: 26px;
+}
+.@{class-prefix}-page-artifact-identity {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.@{class-prefix}-page-artifact-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  .@{class-prefix}-page-artifact-unverified {
+    color: var(--wb-warning);
+    border-color: var(--wb-warning);
+    background: transparent;
+  }
+}
+.@{class-prefix}-page-artifact-path {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  margin-top: 2px !important;
+}
+.@{class-prefix}-page-artifact-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.@{class-prefix}-page-artifact-description {
+  margin: 16px 0 22px !important;
+  line-height: 1.8;
+}
+.@{class-prefix}-page-artifact-main {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+  .@{class-prefix}-page-artifact-status-notice {
+    margin: 0;
+    padding: 8px 12px;
+    border-color: var(--wb-border);
+    background: var(--wb-surface-subtle);
+    .ant-alert-message {
+      font-size: 12px;
+      color: var(--wb-warning);
+    }
+  }
+}
+.@{class-prefix}-page-artifact-section-heading {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  > span {
+    font-size: 12px;
+    color: var(--wb-text-secondary);
+  }
+}
+.@{class-prefix}-page-artifact-caption {
+  color: var(--wb-text-secondary);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.@{class-prefix}-page-artifact-empty {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding-top: 9px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  > .anticon {
+    flex-shrink: 0;
+    font-size: 16px;
+  }
+}
+.@{class-prefix}-page-artifact-change-reason {
+  color: var(--wb-text-secondary);
+  border-left: 2px solid var(--wb-accent);
+  padding-left: 12px;
+}
+.@{class-prefix}-page-artifact-text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wb-accent);
+  font-size: 12px;
+  cursor: pointer;
+  &:hover {
+    color: var(--wb-accent-hover);
+    text-decoration: underline;
+  }
+  .anticon {
+    transform: rotate(45deg);
+  }
+}
+.@{class-prefix}-page-artifact-files {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 8px;
+  li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--wb-border);
+    border-radius: 7px;
+    background: var(--wb-surface-subtle);
+  }
+  li + li {
+    margin-top: 8px;
+  }
+  strong {
+    font-weight: 500;
+    font-size: 13px;
+  }
+  small {
+    display: block;
+    color: var(--wb-text-secondary);
+    font-size: 11px;
+  }
+}
+.@{class-prefix}-page-artifact-file-icon {
+  color: var(--wb-accent);
+  font-size: 24px;
+}
+.@{class-prefix}-page-artifact-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  text-align: left;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--wb-border);
+  background: transparent;
+  color: var(--wb-text);
+  cursor: pointer;
+  > span {
+    min-width: 0;
+  }
+  > span:nth-child(2) {
+    flex: 1;
+  }
+  strong {
+    font-size: 13px;
+    font-weight: 500;
+  }
+  small {
+    display: block;
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+  }
+  &:hover {
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+  }
+}
+@container artifact-detail (max-width: 420px) {
+  .@{class-prefix}-page-artifact-overview {
+    padding: 18px 16px 24px;
+  }
+  .@{class-prefix}-page-artifact-heading {
+    gap: 10px;
+  }
+  .@{class-prefix}-page-artifact-identity {
+    flex-basis: calc(100% - 60px);
+  }
+  .@{class-prefix}-page-artifact-title h2 {
+    font-size: 19px;
+  }
+  .@{class-prefix}-page-artifact-page-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+  }
+  .@{class-prefix}-page-artifact-actions {
+    width: 100%;
+    margin-top: 4px;
+  }
+}

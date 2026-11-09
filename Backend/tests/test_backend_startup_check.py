@@ -39,7 +39,7 @@ class BackendStartupCheckTests(unittest.TestCase):
         self.target = self.backend / 'target'
         self.target.mkdir(parents=True)
         (self.backend / 'pom.xml').write_text('<project/>')
-        self.jar = self.target / 'app-1.0-SNAPSHOT.jar'
+        self.jar = self.target / 'app.jar'
         self.write_jar(True)
         self.registry = WorkspaceProcessRegistry()
         self.stack.enter_context(patch.object(startup, 'workspace_process_registry', self.registry))
@@ -57,8 +57,12 @@ class BackendStartupCheckTests(unittest.TestCase):
         """保留进程管理与日志真实行为，只用 Python 子进程模拟 Java 服务。"""
         managed = self.registry.managed_process
 
-        def spawn(_argv, **kwargs):
+        def spawn(argv, **kwargs):
             """替换可执行文件但保留独立端口和进程登记参数。"""
+            runtime_jar = Path(argv[argv.index('-jar') + 1])
+            self.assertEqual(runtime_jar.read_bytes(), self.jar.read_bytes())
+            self.assertEqual(kwargs['cwd'], runtime_jar.parent)
+            self.assertNotEqual(kwargs['cwd'], self.target)
             return managed([sys.executable, '-u', '-c', script], **kwargs)
 
         with patch.object(self.registry, 'managed_process', side_effect=spawn):
@@ -77,13 +81,18 @@ class BackendStartupCheckTests(unittest.TestCase):
         self.assertTrue(result['execution']['cleanup_succeeded'])
         self.assertIsNone(result['execution']['returncode'])
         self.assertIn('--server.port=0', result['command'])
+        self.assertIn('-Dlogging.charset.console=UTF-8 -jar', result['command'])
         self.assertNotIn(str(self.root), result['command'])
+        argv = result['execution']['argv']
+        runtime_jar = self.root / argv[argv.index('-jar') + 1]
+        self.assertFalse(runtime_jar.exists())
+        self.assertTrue(self.jar.exists())
 
     def test_external_config_error_precedes_jar_checks_and_keeps_original_category(self) -> None:
         """外置配置失败沿用原检查次序，不受内置延后取密逻辑影响。"""
 
         with patch.object(startup, '_backend_runtime_environment', return_value=({}, '外置配置无效')), \
-             patch.object(startup, '_find_backend_snapshot_jar') as jar:
+             patch.object(startup, '_find_backend_jar') as jar:
             result = self.check()
         self.assertFalse(result['passed'])
         self.assertEqual(result['failure_category'], 'backend_startup')

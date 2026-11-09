@@ -1,9 +1,12 @@
-export type DesignPageSource = { pageId?: string; status?: string; code?: string }
+export type DesignPageSource = { pageId?: string; status?: string; code?: string; codeReadError?: string }
 export type DesignSourceSnapshot = {
   codes: Record<string, string>
   statuses: Record<string, string>
+  pageErrors: Record<string, string>
+  loading: boolean
+  error?: string
 }
-export const EMPTY_DESIGN_SOURCE: DesignSourceSnapshot = { codes: {}, statuses: {} }
+export const EMPTY_DESIGN_SOURCE: DesignSourceSnapshot = { codes: {}, statuses: {}, pageErrors: {}, loading: true }
 const sources = new Map<string, UiDesignPageSource>()
 const readsInFlight = new Map<string, Promise<DesignPageSource[] | undefined>>()
 
@@ -11,15 +14,24 @@ const readsInFlight = new Map<string, Promise<DesignPageSource[] | undefined>>()
 function readDesignPages(workspace: string): Promise<DesignPageSource[] | undefined> {
   const existing = readsInFlight.get(workspace)
   if (existing) return existing
-  const reading = Promise.resolve()
-    .then(async () => {
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  const reading = Promise.race([
+    Promise.resolve().then(async () => {
+      if (!window.devAgentStudio?.workspace?.readUiDesigns) throw new Error('当前无法读取设计稿，请重新读取。')
       const result = await window.devAgentStudio?.workspace?.readUiDesigns({
         workspaceRoot: workspace
       })
+      if (result?.uiDesigns === null) return []
       const pages = (result?.uiDesigns as { pages?: DesignPageSource[] } | undefined)?.pages
-      return Array.isArray(pages) ? pages : undefined
+      if (!Array.isArray(pages)) throw new Error('设计稿清单格式无效，请重新读取。')
+      return pages
+    }),
+    new Promise<never>((_resolve, reject) => {
+      deadline = setTimeout(() => reject(new Error('设计稿读取超时，请重新读取。')), 15000)
     })
+  ])
     .finally(() => {
+      clearTimeout(deadline)
       if (readsInFlight.get(workspace) === reading) readsInFlight.delete(workspace)
     })
   readsInFlight.set(workspace, reading)
@@ -34,7 +46,7 @@ function sameRecord(left: Record<string, string>, right: Record<string, string>)
 
 /** 判断后台生成池是否仍有待领取或运行中的页面。 */
 export function designPagesGenerating(pages: DesignPageSource[]): boolean {
-  return pages.some((page) => page.status === 'queued' || page.status === 'generating')
+  return pages.some((page) => ['queued', 'generating', 'stopping'].includes(String(page.status)))
 }
 
 /** 按工作区共享磁盘读取；只有生成期间才串行轮询，不拥有或取消后台任务。 */
@@ -47,6 +59,15 @@ export class UiDesignPageSource {
   private generating = false
   private sourceKey = ''
   private disposed = false
+
+  /** 仅在源码、状态或读取结果变化时通知共享视图，稳定轮询不制造重复渲染。 */
+  private publish(next: DesignSourceSnapshot): void {
+    if (next.loading === this.snapshot.loading && next.error === this.snapshot.error &&
+      sameRecord(next.codes, this.snapshot.codes) && sameRecord(next.statuses, this.snapshot.statuses) &&
+      sameRecord(next.pageErrors, this.snapshot.pageErrors)) return
+    this.snapshot = next
+    this.listeners.forEach((listener) => listener(next))
+  }
 
   /** 注入读取与可见性，便于测试慢请求、后台完成和隐藏窗口边界。 */
   constructor(
@@ -99,28 +120,29 @@ export class UiDesignPageSource {
   /** 等当前读取完成才安排下一轮；稳定磁盘终态覆盖快照中残留的 generating。 */
   private async poll(): Promise<void> {
     this.inFlight = true
+    // 稳定后台刷新保留现有预览；首次读取及失败重试才显示加载，避免进度轮询反复闪烁。
+    if (this.snapshot.error || Object.keys(this.snapshot.pageErrors).length)
+      this.publish({ ...this.snapshot, loading: true })
     try {
       const pages = await this.read()
       if (this.disposed) return
       if (pages) {
         // 请求期间若来了新一轮生成信号，旧磁盘结果不能终止新一轮跟进。
         if (!this.refreshPending) this.generating = designPagesGenerating(pages)
-        const next: DesignSourceSnapshot = { codes: {}, statuses: {} }
+        const next: DesignSourceSnapshot = { codes: {}, statuses: {}, pageErrors: {}, loading: false }
         for (const page of pages) {
           if (!page.pageId) continue
           if (page.code) next.codes[page.pageId] = page.code
           if (page.status) next.statuses[page.pageId] = page.status
+          if (page.codeReadError) next.pageErrors[page.pageId] = page.codeReadError
         }
-        if (
-          !sameRecord(next.codes, this.snapshot.codes) ||
-          !sameRecord(next.statuses, this.snapshot.statuses)
-        ) {
-          this.snapshot = next
-          this.listeners.forEach((listener) => listener(next))
-        }
+        this.publish(next)
+      } else {
+        throw new Error('未读取到有效设计稿清单，请重新读取。')
       }
-    } catch {
-      // 读取故障仅在已知仍在生成时重试；闲置视图等待重新显示或显式同步。
+    } catch (error) {
+      if (!this.disposed) this.publish({ ...this.snapshot, loading: false,
+        error: error instanceof Error ? error.message : '设计稿读取失败，请重新读取。' })
     } finally {
       this.inFlight = false
       if (!this.disposed && this.visible()) {

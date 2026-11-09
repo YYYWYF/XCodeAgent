@@ -25,7 +25,7 @@ const { Text } = Typography
 
 type Props = {
   form: FormInstance<ApplicationDraft>
-  /** 设置页复用新建表单时，创建期字段仅展示不允许编辑。 */
+  /** 设置页复用新建表单时，项目目录等创建期字段仅展示。 */
   mode?: 'create' | 'settings'
   /** 设置页传入已持久化配置转换出的初始草稿。 */
   initialValues?: ApplicationDraft & { envVariables?: unknown }
@@ -71,7 +71,6 @@ export default function ApplicationForm({
   const authEnabled = Form.useWatch(['auth', 'enable'], form) ?? persistedValues.auth.enable
   const projectPath = Form.useWatch('projectPath', form) ?? persistedValues.projectPath
   const terminal = Form.useWatch('terminal', form) ?? persistedValues.terminal
-  const repoUrl = Form.useWatch('repoUrl', form) ?? persistedValues.repoUrl
   const branchName = Form.useWatch('branchName', form) ?? persistedValues.branchName
   const rootPath = Form.useWatch(['menus', 'rootPath'], form) ?? persistedValues.menus.rootPath
 
@@ -157,25 +156,19 @@ export default function ApplicationForm({
         >
           <RequirementDescriptionEditor readOnly={isSettingsMode} rows={18} />
         </Form.Item>
-        <Form.Item label="码云地址">
-          {isSettingsMode ? (
-            <Text className={cx('application-form-readonly-value')}>{repoUrl || '—'}</Text>
-          ) : (
-            <Form.Item
-              name="repoUrl"
-              noStyle
-              rules={[
-                {
-                  validator: (_rule, value: string) => {
-                    const invalidReason = validateRepoUrl(value)
-                    return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
-                  }
-                }
-              ]}
-            >
-              <Input prefix={<GithubOutlined />} placeholder={defaultRepoUrl} />
-            </Form.Item>
-          )}
+        <Form.Item
+          label="码云地址"
+          name="repoUrl"
+          rules={[
+            {
+              validator: (_rule, value: string) => {
+                const invalidReason = validateRepoUrl(value)
+                return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
+              }
+            }
+          ]}
+        >
+          <Input aria-label="码云地址" prefix={<GithubOutlined />} placeholder={defaultRepoUrl} />
         </Form.Item>
         <Form.Item
           extra="应用代码会推送到远端的这个分支。如果远端已经有同名分支，它上面的代码会被覆盖。"
@@ -264,6 +257,7 @@ export default function ApplicationForm({
       <ApplicationConfigEditor
         form={form}
         lockedCapabilities={lockedCapabilities}
+        administratorBaseline={mode !== 'create' && persistedValues.authorization.enabled ? persistedValues.authorization.initialAdministratorSubjects : []}
         mode={mode}
         visiblePaths={[
           'auth.enable', 'auth.yht.clientId', 'auth.yht.privateKey', 'auth.yht.publicKey',

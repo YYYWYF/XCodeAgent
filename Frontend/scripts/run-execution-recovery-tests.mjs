@@ -22,7 +22,8 @@ const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'xcodeagent-execution
 const entries = [
   'executionRecoveryState.test.ts',
   'executionRecoveryCard.test.tsx',
-  'errorDiagnostics.test.tsx'
+  'errorDiagnostics.test.tsx',
+  'workbenchErrorNotification.test.tsx'
 ]
 
 try {

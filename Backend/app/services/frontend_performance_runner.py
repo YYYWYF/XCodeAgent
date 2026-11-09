@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -12,6 +11,7 @@ from app.services.frontend_project_launcher import (
     launch_frontend_project,
     stop_frontend_project,
 )
+from app.services.frontend_node_runtime import FrontendNodeError, frontend_build_check, resolve_frontend_node
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.lighthouse_report import parse_lighthouse_report
 from app.utils.subprocess_output import subprocess_output_text
@@ -51,12 +51,7 @@ def frontend_performance_available(state: dict[str, Any]) -> bool:
 def frontend_build_passed(state: dict[str, Any]) -> bool:
     """读取本轮集成测试结果中的前端构建检查是否通过。"""
 
-    for result in state.get("test_results", []):
-        if not isinstance(result, dict):
-            continue
-        if result.get("id") == "frontend_build":
-            return bool(result.get("passed"))
-    return False
+    return bool(frontend_build_check(state).get("passed"))
 
 
 def _lighthouserc_config(preview_url: str) -> dict[str, Any]:
@@ -111,15 +106,24 @@ def run_frontend_performance_check(
         report_check_progress(on_progress, status="skipped", check=result)
         return {"test_results": [result], "test_events": [PERFORMANCE_CHECK_ID]}
 
-    npx_command = shutil.which("npx")
-    if not npx_command:
+    try:
+        node_runtime = resolve_frontend_node(root)
+        execution = frontend_build_check(state).get("execution") or {}
+        if not isinstance(execution, dict) or not node_runtime.matches(execution.get("nodeRuntime")):
+            result = _skipped_result(
+                f"当前选择 {node_runtime.describe()}，与前端构建的 Node 记录不一致。请重新执行前端构建后再检测性能。"
+            )
+            report_check_progress(on_progress, status="skipped", check=result)
+            return {"test_results": [result], "test_events": [PERFORMANCE_CHECK_ID]}
+        npx_command = node_runtime.command("npx")
+    except FrontendNodeError as exc:
         result = _failed_result(
-            evidence="未找到 npx 命令，无法执行 @lhci/cli 前端性能测试。",
+            evidence=str(exc),
             argv=[],
             cwd=".",
             returncode=None,
             timed_out=False,
-            error="npx not found",
+            error=str(exc),
             stdout="",
             stderr="",
             root=root,
@@ -151,7 +155,11 @@ def run_frontend_performance_check(
 
     from app.services.preview_runtime_state import record_frontend_runtime
 
-    launch = launch_frontend_project(root, skip_install=True)
+    launch = launch_frontend_project(root, skip_install=True, node_runtime=node_runtime, preserve_running=True)
+    if launch.get("preserved_running"):
+        result = _skipped_result(str(launch["message"]))
+        report_check_progress(on_progress, status="skipped", check=result)
+        return {"test_results": [result], "test_events": [PERFORMANCE_CHECK_ID]}
     record_frontend_runtime(root, launch)
     preview_url = str(launch.get("preview_url") or "").strip()
     server_reused = bool(launch.get("server", {}).get("reused"))
@@ -200,12 +208,13 @@ def run_frontend_performance_check(
             str(config_path),
         ]
         env = {
-            **os.environ,
+            **node_runtime.env,
             "NO_UPDATE_NOTIFIER": "1",
             "CI": "1",
             "LHCI_BUILD_CONTEXT__CURRENT_BRANCH": "local",
         }
         try:
+            node_runtime.verify(npx_command, workspace=root, cwd=runtime_dir, npx=True)
             completed = workspace_process_registry.run(
                 argv,
                 workspace=root,
@@ -223,13 +232,13 @@ def run_frontend_performance_check(
             stdout = subprocess_output_text(exc.stdout)
             stderr = subprocess_output_text(exc.stderr)
             timed_out = True
-        except OSError as exc:
+        except (OSError, FrontendNodeError) as exc:
             error = str(exc)
 
         command_log_root = runtime_dir
         stdout_log = command_log_root / "frontend.stdout.log"
         stderr_log = command_log_root / "frontend.stderr.log"
-        stdout_log.write_text(stdout, encoding="utf-8")
+        stdout_log.write_text(f"{node_runtime.describe()}\n{stdout}", encoding="utf-8")
         stderr_log.write_text(stderr, encoding="utf-8")
 
         parsed = _parse_lighthouse_report(runtime_dir)
@@ -273,6 +282,7 @@ def run_frontend_performance_check(
             "failure_category": None if passed else "performance_test_failure",
             "execution": {
                 "tool": "npx",
+                "nodeRuntime": node_runtime.evidence(),
                 "argv": argv,
                 "cwd": _relative(runtime_dir, root),
                 "returncode": returncode,

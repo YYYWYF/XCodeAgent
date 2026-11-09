@@ -656,6 +656,7 @@ def _public_workflow_state(
             "technical_plan_repair_candidate",
             "technical_plan_repair_errors",
             "technical_plan_repair_source_run_id",
+            "technical_plan_generation_input_sha256",
             "development_continuation_id",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
@@ -683,6 +684,8 @@ def _public_workflow_state(
             "executor": bootstrap.get("executor"),
             "schemaReady": bootstrap.get("schema_ready"),
             "seedReady": bootstrap.get("seed_ready"),
+            "initializationStatus": bootstrap.get("initialization_status"),
+            "initializationStage": bootstrap.get("initialization_stage"),
             "seedOperationId": bootstrap.get("seed_operation_id"),
             "seedOperationStatus": bootstrap.get("seed_operation_status"),
             "nextAction": bootstrap.get("next_action"),
@@ -878,7 +881,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
     }:
         clarification = update.get("clarification")
         return {
-            "message": f"技术规划={update.get('technical_plan_path') or update.get('project_plan_path')}",
+            "message": f"技术规划={update.get('technical_plan_json_path') or update.get('project_plan_path')}",
             "data": {
                 "technicalPlan": update.get("technical_plan") or update.get("project_plan"),
                 "clarification": clarification,
@@ -1050,6 +1053,7 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
                         "seedOperationStatus": "seed_operation_status", "nextAction": "next_action",
                         "operationId": "operation_id", "operationStatus": "operation_status",
                         "initializedTables": "initialized_tables",
+                        "initializationStatus": "initialization_status", "initializationStage": "initialization_stage",
                     }.items()
                     if internal in result
                 }
@@ -1732,7 +1736,7 @@ def _workflow_visual_payload(
         "product_plan": result.get("product_plan"),
         "product_plan_path": result.get("product_plan_path"),
         "technical_plan": result.get("technical_plan"),
-        "technical_plan_path": result.get("technical_plan_path"),
+        "technical_plan_json_path": result.get("technical_plan_json_path"),
         "project_plan": result.get("project_plan"),
         "pending_project_plan": result.get("pending_project_plan"),
         "project_plan_path": result.get("project_plan_path"),
@@ -1795,12 +1799,6 @@ def _workflow_confirmation_artifact(
             "id": "project_plan",
             "name": "project-plan.md",
             "path_field": "project_plan_path",
-        },
-        "technical_plan_confirmation": {
-            "phase": "technical_planning",
-            "id": "technical_plan",
-            "name": "technical-plan.md",
-            "path_field": "technical_plan_path",
         },
     }
     contract = artifact_contracts.get(str(clarification.get("mode") or ""))

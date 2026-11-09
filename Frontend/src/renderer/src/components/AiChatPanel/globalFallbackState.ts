@@ -4,10 +4,57 @@ import type { AgentChatMessage } from './types'
 import { parseRecoveryFailureDiagnostic } from '../../service/recoveryActionPlan'
 import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
 import type { ConnectionState } from '../../service/connectionState'
+import type { WorkflowRunPayload } from '../../typings'
+import { workflowClarification } from './components/WorkflowRunCard/workflowClarification'
+
+/** 识别仍等待当前重试动作的技术生成校验失败，不把它当成正式产物确认。 */
+export function isTechnicalPlanGenerationFailure(workflow?: WorkflowRunPayload): boolean {
+  return workflow?.summary.status === 'requires_user_input' &&
+    workflowClarification(workflow)?.mode === 'technical_plan_generation_error'
+}
+
+/** 为原底部错误入口提取可读原因，内部片段、文件路径与堆栈不进入界面和复制内容。 */
+export function technicalPlanGenerationFailureMessage(workflow?: WorkflowRunPayload): string | undefined {
+  if (!isTechnicalPlanGenerationFailure(workflow)) return undefined
+  const errors = workflowClarification(workflow!)?.errors
+  const reasons = (Array.isArray(errors) ? errors : [])
+    .filter((error): error is string => typeof error === 'string')
+    .map((error) => error.trim()
+      .replace(/^技术规划片段\s+.*?校验失败[：:]\s*/s, '')
+      .replace(/^技术规划\s*/, '')
+      .replace(/Endpoint ID\s*/g, '接口标识'))
+    .filter((reason) => reason && !/[\r\n{}\[\]<>/\\]|catalog-part:|[a-f\d]{32,}|Traceback|sha256/i.test(reason))
+    .slice(0, 5)
+  return reasons.length ? `技术规划未通过检查：${reasons.join('；')}` : '技术规划未通过检查，请重试。'
+}
 
 /** Backend 连接失败优先于独立预览连接，不让预览重连按钮接管后端停服。 */
 export function prioritizedConnection(workflow: ConnectionState, preview: ConnectionState): ConnectionState {
   return workflow.status !== 'healthy' ? workflow : preview.status === 'unavailable' ? preview : workflow
+}
+
+/** 最近一次成功连接划分故障轮次，同次断线重试保持身份，恢复后同样的错误重新提示。 */
+export function connectionErrorNoticeId(connection: ConnectionState, origin: 'preview' | 'backend'): string {
+  return JSON.stringify(['connection', origin, connection.lastConnectedAt, connection.lastError])
+}
+
+/** 按当前恢复卡实际采用的动作归属定位：会话任务留在聊天区，共享故障使用全局通知。 */
+export function recoveryNoticeIsInline(input: {
+  revisionHandoff: boolean
+  connectionStatus: string
+  planningEndRequested: boolean
+  hasRecoveryIncident: boolean
+  pendingRevisionStart: boolean
+  sharedReadError: boolean
+  previewRetry: boolean
+  hasSessionOwner: boolean
+}): boolean {
+  // 与卡片分派优先级保持一致，不能把任务恢复动作包装成全局错误。
+  if (input.revisionHandoff) return true
+  if (input.connectionStatus !== 'healthy') return false
+  if (input.planningEndRequested || input.hasRecoveryIncident || input.pendingRevisionStart) return true
+  if (input.sharedReadError || input.previewRetry) return false
+  return input.hasSessionOwner
 }
 
 /** 只提取最新消息的失败给底部兜底，新请求、运行占位或成功消息不继承历史错误。 */

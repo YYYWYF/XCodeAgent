@@ -74,6 +74,13 @@ class ExecutionRecoveryProtocolTests(unittest.IsolatedAsyncioTestCase):
 
         self._temporary_workspace.cleanup()
 
+    async def asyncTearDown(self) -> None:
+        """关闭协议投影打开的工作区 checkpoint，避免测试完成后 SQLite 线程阻止退出。"""
+
+        from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
+
+        await close_workflow_checkpointer_for_workspace(workspace=str(self.workspace))
+
     async def test_generic_retry_uses_current_failed_head_from_same_session(self) -> None:
         """旧提示只在同会话当前 head 已失败时交给统一重试入口。"""
 

@@ -135,7 +135,7 @@ class ApplicationConfigChangeResolverTests(unittest.TestCase):
         self.assertTrue(all(item.to_value for item in changes))
         self.current["datasource"] = {"type": "database"}
         self._replace_current(self.current)
-        preview = ApplicationConfigService(self.workspace).preview(changes=changes, initial_administrator_subjects=["ops@example.com"])
+        preview = ApplicationConfigService(self.workspace).preview(changes=changes, initial_administrator_subjects=["00123456/张三"])
         self.assertTrue(preview["auth"]["enable"])
         self.assertTrue(preview["authorization"]["enabled"])
         self.current["auth"]["enable"] = True

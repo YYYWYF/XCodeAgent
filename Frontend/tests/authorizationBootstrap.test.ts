@@ -23,15 +23,16 @@ import { ProcessStep } from '../src/renderer/src/components/AiChatPanel/componen
 import Panel from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/AuthorizationBootstrapPanel'
 import { refreshBuiltinAuthorization, runBuiltinPatch } from '../src/renderer/src/service/builtinAuthorization'
 import BuiltinPatchCard from '../src/renderer/src/components/AiChatPanel/components/WorkspaceDebugDock/BuiltinPatchCard'
+import './authorizationBootstrapTask.test'
 
-test('Builtin 执行中显示手动刷新，单次 AG-UI 查询不轮询也不恢复工作流', async () => {
+test('Builtin 自动运行隐藏人工按钮，显式原操作查询保持单次 AG-UI', async () => {
   const originalWindow = globalThis.window
   const originalFetch = globalThis.fetch
   const requests: Record<string, unknown>[] = []
-  const builtin = { status: 'manual_required', executor: 'builtin_saas', operationStatus: 'RUNNING', operationId: '123', schemaReady: false }
+  const builtin = { status: 'manual_required', executor: 'builtin_saas', operationStatus: 'RUNNING', operationId: '123', schemaReady: false, initializationStatus: 'running', initializationStage: 'schema' }
   const markup = renderToStaticMarkup(createElement(Panel, { result: readAuthorizationBootstrap(builtin)!, workspaceRoot: '/workspace' }))
-  assert.match(markup, /初始化执行中/)
-  assert.match(markup, /刷新执行状态/)
+  assert.match(markup, /正在自动处理/)
+  assert.doesNotMatch(markup, /刷新执行状态|继续初始化权限数据/)
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://authorization.test' } } })
   globalThis.fetch = async (url, init) => {
     assert.equal(String(url), 'http://authorization.test/builtin-authorization/run')
@@ -40,14 +41,14 @@ test('Builtin 执行中显示手动刷新，单次 AG-UI 查询不轮询也不�
     const patch = payload.forwardedProps.builtinAuthorization.action === 'run_patch'
     const value = patch
       ? { schemaVersion: 1, status: 'completed', patch: {
-          stage: 'verify', status: 'ready', schemaReady: true, message: '权限数据已回读核验。',
+          stage: 'done', status: 'ready', schemaReady: true, seedReady: true, message: '权限数据已回读核验。',
           createdCount: 5, existingCount: 0, resourceCount: 2, roleGrantCount: 1
         } }
       : { schemaVersion: 1, status: 'completed', authorizationBootstrap: builtin }
     const events = [
       { type: 'RUN_STARTED', runId: payload.runId, threadId: payload.threadId },
       ...(patch ? [{ type: 'CUSTOM', name: 'builtin-authorization', value: {
-        status: 'in_progress', progress: { stage: 'write', message: '正在核对原写入记录…' }
+        status: 'in_progress', progress: { stage: 'seed', message: '正在核对原写入记录…' }
       } }] : []),
       { type: 'CUSTOM', name: 'builtin-authorization', value },
       { type: 'STATE_SNAPSHOT', snapshot: { builtinAuthorization: value } },
@@ -63,10 +64,10 @@ test('Builtin 执行中显示手动刷新，单次 AG-UI 查询不轮询也不�
     assert.equal(restored.processSteps?.[0].authorizationBootstrap?.operationStatus, 'RUNNING')
     const progress: string[] = []
     const patched = await runBuiltinPatch('/workspace', 'run_patch', (stage) => progress.push(stage))
-    assert.deepEqual(progress, ['write'])
+    assert.deepEqual(progress, ['seed'])
     assert.deepEqual(requests[1], { builtinAuthorization: { action: 'run_patch', workspaceRoot: '/workspace' } })
     const receipt = renderToStaticMarkup(createElement(BuiltinPatchCard, {
-      card: { result: patched! }, disabled: false, onAction: () => undefined
+      card: { result: patched! }, disabled: false
     }))
     assert.match(receipt, /新增 5 条，复用 0 条/)
     assert.match(receipt, /资源点 2 条，角色授权 1 条/)
@@ -89,17 +90,18 @@ const result = {
   executionAttempted: false
 }
 
-test('Builtin Schema 成功经历史与 Electron 落盘保留权限数据待初始化事实', () => {
+test('Builtin 自动阶段经历史与 Electron 落盘保留真实状态', () => {
   const builtin = {
     status: 'executed' as const,
     executor: 'builtin_saas' as const,
     datasourceMode: 'builtin' as const,
     schemaReady: true,
     seedReady: false,
-    nextAction: 'continue' as const,
+    initializationStatus: 'running' as const,
+    initializationStage: 'seed' as const,
     operationId: '123',
     initializedTables: ['cf2b2661f3e9_role', 'cf2b2661f3e9_resource', 'cf2b2661f3e9_role_resource', 'cf2b2661f3e9_role_member'],
-    message: '请继续初始化权限数据。'
+    message: '正在自动处理，无需手动刷新。'
   }
   const current = workflow()
   current.events = [
@@ -110,7 +112,7 @@ test('Builtin Schema 成功经历史与 Electron 落盘保留权限数据待初�
     }
   ]
   const steps = processStepsForDisplay(undefined, current)!
-  assert.equal(steps[0].title, '权限表已就绪，权限数据待初始化')
+  assert.equal(steps[0].title, '权限数据库初始化运行中')
   const restored = normalizePersistentSessionMessage({
     id: 1,
     role: 'assistant',
@@ -123,15 +125,15 @@ test('Builtin Schema 成功经历史与 Electron 落盘保留权限数据待初�
     readAuthorizationBootstrap(builtin)
   )
   const markup = renderToStaticMarkup(createElement(Panel, { result: builtin }))
-  assert.match(markup, /操作 ID：123/)
-  assert.match(markup, /权限表已就绪，权限数据待初始化/)
+  assert.match(markup, /权限数据库初始化/)
+  assert.match(markup, /正在自动查询数据写入结果/)
   assert.doesNotMatch(markup, /Seed|seed/)
   assert.match(markup, /以下四张权限表已初始化完成/)
   for (const name of builtin.initializedTables) assert.ok(markup.includes(name))
   assert.doesNotMatch(markup, /权限数据库初始化成功|复制完整 DDL|已尝试执行脚本/)
 })
 
-test('Schema 刷新完成后只在当前 Run 提供 Seed 继续入口', () => {
+test('当前与历史 Run 都不提供手动 Seed 继续入口', () => {
   const current = workflow()
   current.events = [{
     ...current.events[0],
@@ -144,12 +146,12 @@ test('Schema 刷新完成后只在当前 Run 提供 Seed 继续入口', () => {
   /** 用不同 Run 身份渲染真实 ProcessSteps，检查动作是否绑定当前节点。 */
   function render(runId: string): string {
     return renderToStaticMarkup(createElement(BuiltinAuthorizationActionsContext.Provider, {
-      value: { runId, threadId: current.threadId, continueDisabled: false, onContinue: () => undefined }
+      value: { runId, threadId: current.threadId, continueDisabled: false }
     }, createElement(ProcessSteps, {
       steps: processStepsForDisplay(undefined, current)!, workflow: current, loading: false, workspaceRoot: '/workspace'
     })))
   }
-  assert.match(render(current.runId), /继续初始化权限数据/)
+  assert.doesNotMatch(render(current.runId), /继续初始化权限数据/)
   assert.doesNotMatch(render('old-run'), /继续初始化权限数据/)
 })
 
@@ -159,13 +161,13 @@ test('Seed 刷新使用独立操作编号，校验响应身份及安全字段', 
   const seed = {
     status: 'manual_required', executor: 'builtin_saas', schemaReady: true, seedReady: false,
     operationId: '123', operationStatus: 'SCHEMA_READY', seedOperationId: '456',
-    seedOperationStatus: 'RUNNING', nextAction: 'refresh_seed', initialAdministratorSubjects: ['private-subject']
+    seedOperationStatus: 'RUNNING', nextAction: 'refresh_seed', initializationStatus: 'running', initializationStage: 'seed', initialAdministratorSubjects: ['private-subject']
   }
   const pending = readAuthorizationBootstrap(seed)!
   const markup = renderToStaticMarkup(createElement(Panel, { result: pending, workspaceRoot: '/workspace' }))
-  assert.match(markup, /权限数据写入中/)
-  assert.match(markup, /权限数据操作 ID：456/)
-  assert.match(markup, /刷新执行状态/)
+  assert.match(markup, /正在自动查询数据写入结果/)
+  assert.match(markup, /运行中/)
+  assert.doesNotMatch(markup, /刷新执行状态|继续初始化权限数据/)
   assert.doesNotMatch(markup, /private-subject/)
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://authorization.test' } } })
   let requests = 0
@@ -195,7 +197,7 @@ test('Seed 刷新使用独立操作编号，校验响应身份及安全字段', 
     assert.equal(requests, 1)
     assert.doesNotMatch(JSON.stringify(ready), /private-subject/)
     const readyMarkup = renderToStaticMarkup(createElement(Panel, { result: ready, workspaceRoot: '/workspace' }))
-    assert.match(readyMarkup, /权限表和权限数据已就绪/)
+    assert.match(readyMarkup, /权限表与权限数据均已核验就绪/)
     assert.doesNotMatch(readyMarkup, /刷新执行状态|继续初始化权限数据/)
     seedOperationId = '789'
     await assert.rejects(refreshBuiltinAuthorization('/workspace', '456', 'seed'), /与原操作不符/)
@@ -216,8 +218,8 @@ test('Builtin 未完成结果显示待核对且不提供脚本或 SQL 重放入�
     message: '原操作仍在运行，不会重复建表。'
   })!
   const markup = renderToStaticMarkup(createElement(Panel, { result: builtin }))
-  assert.match(markup, /初始化未完成／待核对/)
-  assert.match(markup, /操作 ID：123/)
+  assert.match(markup, /待处理/)
+  assert.match(markup, /权限数据库初始化/)
   assert.doesNotMatch(markup, /已就绪|已尝试执行脚本|复制完整 DDL/)
 })
 

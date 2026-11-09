@@ -1,4 +1,4 @@
 import { createContext } from 'react'
 
-/** 仅控制可暂停的界面磁盘读取，后台执行与 AG-UI 连接不消费此开关。 */
+/** 工作台隐藏时暂停界面读取并收起所属提示，后台执行与 AG-UI 连接不消费此开关。 */
 export const UiReadVisibility = createContext(true)

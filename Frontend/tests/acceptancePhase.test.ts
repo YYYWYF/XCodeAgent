@@ -19,7 +19,7 @@ import {
   preparePhaseTransitionSession,
   sessionsForWorkbenchPhase
 } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
-import { DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/components/AiChatPanel/constants'
+import { DEFAULT_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/components/AiChatPanel/constants'
 import { acceptancePreviewCanFocus } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import { phaseEntryRightPanelLayout } from '../src/renderer/src/components/AiChatPanel/hooks/useAssistantPreviewLayout'
 import type { RightPanelLayout } from '../src/renderer/src/components/AiChatPanel/types'
@@ -343,7 +343,8 @@ test('验收底栏参与布局并允许内容变高，避免遮挡预览', () =>
     'utf8'
   )
 
-  assert.match(panelStyles, /browser-preview-panel\s*\{\s*flex:\s*1;\s*height:\s*auto/)
+  // 当前预览由工作区内容容器分配剩余高度，底栏仍参与同一纵向布局。
+  assert.match(panelStyles, /workspace-content\s*\{\s*flex:\s*1;\s*min-height:\s*0;\s*overflow:\s*hidden/)
   assert.match(dockStyles, /max-height:\s*55%/)
   assert.match(dockStyles, /overflow-y:\s*auto/)
   assert.doesNotMatch(dockStyles, /position:\s*absolute/)
@@ -364,13 +365,13 @@ test('验收 Agent 头像拥有可见的阶段背景', () => {
   )
 })
 
-test('验收预览占满主区域，普通预览首次打开时右侧占六成', () => {
+test('验收预览占满主区域，普通分栏默认左右均分', () => {
   const panelStyles = readFileSync(
     path.join(process.cwd(), 'src/renderer/src/components/AiChatPanel/AiChatPanel.less'),
     'utf8'
   )
 
-  assert.equal(DEFAULT_PREVIEW_ASSISTANT_PANEL_RATIO, 0.4)
+  assert.equal(DEFAULT_ASSISTANT_PANEL_RATIO, 0.5)
   assert.match(
     panelStyles,
     /acceptance-preview-focus[\s\S]*ai-chat-assistant,[\s\S]*panel-split-handle\s*\{\s*display:\s*none/

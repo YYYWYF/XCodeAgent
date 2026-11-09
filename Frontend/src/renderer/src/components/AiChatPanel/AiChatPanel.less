@@ -47,7 +47,7 @@
   min-height: 0;
   flex-direction: row;
   background: var(--wb-canvas);
-  // 打开/关闭左侧抽屉时，主区宽度从 66.67% ↔ 100% 之间过渡。
+  // 打开/关闭右侧面板时，对话区在当前分栏宽度与全宽之间平滑过渡。
   // 没有这个 transition 时，宽度瞬时变化会被感知为"底部界面闪烁"。
   transition: width 0.18s ease-out, flex-basis 0.18s ease-out;
 }
@@ -63,8 +63,8 @@
 
 .@{class-prefix}-embedded-preview-open {
   .@{class-prefix}-ai-chat-assistant {
-    flex: 0 0 var(--assistant-panel-width, 66.6667%);
-    width: var(--assistant-panel-width, 66.6667%);
+    flex: 0 0 var(--assistant-panel-width, 50%);
+    width: var(--assistant-panel-width, 50%);
     border-right: 0;
   }
 }
@@ -99,7 +99,7 @@
    隐藏/全宽态的 floating 用 right:0，兄弟节点下即为整块最右边线，无需覆盖。 */
 .@{class-prefix}-ai-chat-panel
   > .@{class-prefix}-right-panel-layout-control.@{class-prefix}-docked {
-  left: var(--assistant-panel-width, 66.6667%);
+  left: var(--assistant-panel-width, 50%);
 }
 
 .@{class-prefix}-element-inspection-active {
@@ -199,8 +199,8 @@
   background: var(--wb-canvas);
   display: flex;
   flex-direction: column;
-  // 底部留白对齐左侧对话区输入框的底部间距（ChatComposer padding-bottom: 24px）
-  padding-bottom: 24px;
+  // 右侧工作区贴底，左侧输入框的内部留白不参与右侧面板的高度分配。
+  padding-bottom: 0;
   box-sizing: border-box;
 }
 
@@ -229,109 +229,18 @@
   container-type: inline-size;
 }
 
-.@{class-prefix}-ai-chat-global-fallback {
+.@{class-prefix}-preview-action-error {
+  // 与 ChatComposer 的左右 30px 留白、1080px 居中列保持一致。
   box-sizing: border-box;
-  width: 100%;
   flex: 0 0 auto;
-  margin-top: auto;
-  padding: 16px 30px 0;
-
-  // 停止提示使用独立包装层，也须与输入框保持相同的居中列宽。
-  .@{class-prefix}-stopped-generation-recovery {
-    width: min(100%, 1080px);
-    min-width: 0;
-    margin: 0 auto;
-    overflow-wrap: anywhere;
-
-    > .@{class-prefix}-ended-task-notice {
-      margin-top: 0;
-    }
-  }
-
-  > .@{class-prefix}-connection-status-banner,
-  > .@{class-prefix}-application-planning-recovery-incident,
-  > .@{class-prefix}-agent-error-card {
-    width: min(100%, 1080px);
-    gap: 9px;
-    margin: 0 auto;
-    padding: 9px 14px;
-  }
-
-  .@{class-prefix}-connection-status-banner-icon,
-  .@{class-prefix}-application-planning-recovery-incident-icon,
-  .@{class-prefix}-agent-error-card-icon {
-    width: 24px;
-    height: 24px;
-    flex-basis: 24px;
-    font-size: 18px;
-  }
-
-  .@{class-prefix}-connection-status-banner-copy,
-  .@{class-prefix}-application-planning-recovery-incident-copy,
-  .@{class-prefix}-agent-error-card-copy {
-    gap: 2px;
-  }
-
-  .@{class-prefix}-agent-error-card-copy {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-
-    > .ant-typography {
-      grid-column: 1;
-    }
-  }
-
-  .@{class-prefix}-agent-error-card-retry.ant-btn {
-    grid-column: 2;
-    grid-row: 1 / span 4;
-    align-self: center;
-    margin: 0;
-  }
-
-  .@{class-prefix}-connection-status-banner-title.ant-typography,
-  .@{class-prefix}-application-planning-recovery-incident-title.ant-typography,
-  .@{class-prefix}-agent-error-card-title.ant-typography {
-    font-size: 14px;
-    line-height: 1.35;
-  }
-
-  .@{class-prefix}-connection-status-banner-message.ant-typography,
-  .@{class-prefix}-application-planning-recovery-incident-recovery-message.ant-typography,
-  .@{class-prefix}-agent-error-card-message.ant-typography {
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .@{class-prefix}-connection-status-banner-action.ant-btn,
-  .@{class-prefix}-application-planning-recovery-incident-action.ant-btn,
-  .@{class-prefix}-agent-error-card-retry.ant-btn {
-    height: 30px;
-    padding: 0 12px;
-  }
+  width: min(calc(100% - 60px), 1080px);
+  margin: 10px auto 0;
 }
 
 @media (max-width: 820px) {
-  .@{class-prefix}-ai-chat-global-fallback {
-    padding: 16px 16px 0;
+  .@{class-prefix}-preview-action-error {
+    width: calc(100% - 32px);
   }
-}
-
-@media (max-width: 600px) {
-  .@{class-prefix}-ai-chat-global-fallback .@{class-prefix}-agent-error-card-retry.ant-btn {
-    grid-column: 1;
-    grid-row: auto;
-    justify-self: start;
-  }
-}
-
-.@{class-prefix}-ai-chat-main.@{class-prefix}-has-global-fallback
-  > .@{class-prefix}-ai-chat-composer {
-  margin-top: 0;
-}
-
-.@{class-prefix}-preview-action-error.ant-alert {
-  margin: 10px 16px 0;
-  border-radius: 8px;
 }
 
 @media (max-width: 1500px) {

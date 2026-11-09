@@ -5,6 +5,7 @@ declare const __FRONTEND_ROOT__: string
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import ReleasedVersionPanel from '../src/renderer/src/components/AiChatPanel/components/ReleasedVersionPanel'
+import DocumentOutline from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DocumentOutline'
 import {
   revisionPreviewPresentation,
   shouldRunRevisionPreview
@@ -66,6 +67,7 @@ function previewServiceControl(
     error: '',
     blockedReason: '',
     onRestart: () => undefined,
+    onStop: () => undefined,
     onDiagnose: () => undefined
   }
 }
@@ -139,21 +141,21 @@ test('当前版本运行中仍渲染真实预览', () => {
   assert.ok(!html.includes('browser-preview-service-empty'), '运行中不应展示停服空态')
 })
 
-test('已生成版本面板默认渲染应用文件，且不出现会话相关结构', () => {
+test('已生成版本面板默认渲染代码，且不出现会话相关结构', () => {
   const html = renderToStaticMarkup(
     <ReleasedVersionPanel application={application()} workspaceRoot="/workspace" />
   )
 
   // 两个只读入口都在。
-  assert.ok(html.includes('应用文件'), '缺少「应用文件」页签')
+  assert.ok(html.includes('>代码<'), '缺少「代码」页签')
   assert.ok(html.includes('应用预览'), '缺少「应用预览」页签')
-  // 默认选中应用文件：它渲染的是文件树面板，而不是预览 iframe。
+  // 默认选中代码：它渲染的是文件树面板，而不是预览 iframe。
   assert.ok(!html.includes('<iframe'), '默认不应渲染预览 iframe')
   // 只读视图不得带出会话侧栏/输入框等对话结构。
   assert.ok(!html.includes('ai-chat-assistant'), '不应渲染对话助手区')
 })
 
-test('应用文件面板拿到工作区路径后渲染文件浏览器', () => {
+test('代码面板拿到工作区路径后渲染文件浏览器', () => {
   const html = renderToStaticMarkup(
     <ReleasedVersionPanel application={application()} workspaceRoot="/workspace" />
   )
@@ -177,7 +179,7 @@ test('最左侧窄栏：顶部 4 个抽屉入口 + 底部 4 个入口（含用�
   assert.ok(html.includes('session-user'), '窄栏缺少用户头像')
 })
 
-test('目录树在左侧并列出规划文档，默认不置灰', () => {
+test('代码只展示工程目录，不再列出规划文档入口', () => {
   const html = renderToStaticMarkup(
     <ReleasedVersionPanel application={application()} workspaceRoot="/workspace" />
   )
@@ -187,13 +189,9 @@ test('目录树在左侧并列出规划文档，默认不置灰', () => {
   const viewerIndex = html.indexOf('source-panel-viewer')
   assert.ok(treeIndex >= 0 && viewerIndex >= 0, '缺少目录树或内容查看器容器')
   assert.ok(treeIndex < viewerIndex, '目录树应排在内容查看器之前（树在左）')
-  // 有 Markdown 形态的规划文档都应在树中；UI 设计稿是结构化 JSON，不进文档分组。
-  for (const label of ['需求文档', '产品规划', '技术规划']) {
-    assert.ok(html.includes(label), `目录树缺少「${label}」`)
+  for (const label of ['需求文档', '产品规划', '技术规划', 'UI 设计稿']) {
+    assert.ok(!html.includes(label), `工程目录中不应保留「${label}」快捷入口`)
   }
-  assert.ok(!html.includes('UI 设计'), '结构化产物不应混进文档分组')
-  // 探测未完成前不得把文档标成缺失，否则首帧会闪一片灰。
-  assert.ok(!html.includes('is-missing'), '探测完成前不应置灰')
 })
 
 test('历史版本不展示右侧工作区页签，当前版本保持原样', () => {
@@ -223,29 +221,6 @@ test('历史版本不展示右侧工作区页签，当前版本保持原样', ()
     false
   )
 })
-
-test('文档存在性探测的读取量必须满足后端约束', () => {
-  // 后端 ReadFileRequest.max_chars 的下限是 200，低于它请求会被校验层拒绝；
-  // 探测一旦失败就会把"参数非法"误判成"文档不存在"，三份文档全被置灰。
-  const backendMinMaxChars = 200
-  const probeChars = readProbeCharsFromSource()
-  assert.ok(
-    probeChars >= backendMinMaxChars,
-    `探测读取量 ${probeChars} 低于后端下限 ${backendMinMaxChars}：文档会被误判为不存在`
-  )
-  assert.ok(probeChars <= 200000, `探测读取量 ${probeChars} 超过后端上限`)
-})
-
-/** 从 SourcePanel 源码里读回 PROBE_CHARS，避免测试与实现各写一份常量。 */
-function readProbeCharsFromSource(): number {
-  const source = readFileSync(
-    `${__FRONTEND_ROOT__}/src/renderer/src/components/AiChatPanel/components/SourcePanel/index.tsx`,
-    'utf-8'
-  )
-  const matched = source.match(/const PROBE_CHARS = (\d+)/)
-  assert.ok(matched, '未找到 PROBE_CHARS 定义')
-  return Number(matched[1])
-}
 
 test('历史版本的预览用该版本自己的地址，没有 tag 时退回工作区预览', () => {
   const decide = (
@@ -372,21 +347,19 @@ test('当前版本的角标行为完全不变', () => {
   assert.equal(decide({ hasServiceControl: false }).interactive, false)
 })
 
-test('三份规划文档各有不同的图标与色调', () => {
+test('应用产物的四份文档使用不同图标并保留文档名称', () => {
   const html = renderToStaticMarkup(
-    <ReleasedVersionPanel application={application()} workspaceRoot="/workspace" />
+    <DocumentOutline query="" onSelect={() => undefined} />
   )
-  // 每份文档一个色调类，便于在树里区分；缺失时不再各自强调颜色。
-  for (const tone of ['is-requirement', 'is-product', 'is-technical']) {
-    assert.ok(html.includes(tone), `文档缺少色调类 ${tone}`)
+  for (const label of ['需求文档', '产品规划', '技术规划', 'UI 设计稿']) {
+    assert.ok(html.includes(label), `文档目录缺少「${label}」`)
   }
-  // 三份文档的图标应当不同：统计这段里的 anticon 名称，至少出现三种。
   const icons = new Set(
     (html.match(/anticon-[a-z-]+/g) ?? []).filter((name) =>
-      ['anticon-file-text', 'anticon-profile', 'anticon-code'].includes(name)
+      ['anticon-file-text', 'anticon-profile', 'anticon-picture', 'anticon-code'].includes(name)
     )
   )
-  assert.equal(icons.size, 3, `三份文档应使用三种不同图标，实际 ${[...icons].join(', ')}`)
+  assert.equal(icons.size, 4, `四份文档应使用四种不同图标，实际 ${[...icons].join(', ')}`)
 })
 
 test('窄栏顶部入口使用与 prototype 一致的图标', () => {
@@ -411,7 +384,7 @@ test('带 tag 的历史版本仍能正常渲染面板', () => {
   const html = renderToStaticMarkup(
     <ReleasedVersionPanel application={application()} revision="v1.0" workspaceRoot="/workspace" />
   )
-  assert.ok(html.includes('应用文件'), '带 tag 时仍应渲染两个只读入口')
+  assert.ok(html.includes('>代码<'), '带 tag 时仍应渲染代码入口')
   assert.ok(html.includes('目录树'), '带 tag 时仍应渲染目录树')
 })
 
@@ -426,17 +399,17 @@ test('历史版本不展示关闭按钮，当前版本仍有', () => {
 test('RightPanelTabs：不传 onClose 时不渲染关闭按钮', () => {
   const withoutClose = renderToStaticMarkup(
     <RightPanelTabs
-      tabs={[{ key: 'source', label: '应用文件', available: true }]}
+      tabs={[{ key: 'source', label: '代码', available: true }]}
       active="source"
       onChange={() => undefined}
     />
   )
   assert.ok(!withoutClose.includes('workspace-tabs-close'), '不传 onClose 时不应有关闭按钮')
-  assert.ok(withoutClose.includes('应用文件'), '页签本身仍应渲染')
+  assert.ok(withoutClose.includes('>代码<'), '页签本身仍应渲染')
 
   const withClose = renderToStaticMarkup(
     <RightPanelTabs
-      tabs={[{ key: 'source', label: '应用文件', available: true }]}
+      tabs={[{ key: 'source', label: '代码', available: true }]}
       active="source"
       onChange={() => undefined}
       onClose={() => undefined}

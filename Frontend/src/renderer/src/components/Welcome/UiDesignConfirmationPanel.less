@@ -968,9 +968,9 @@
   height: 22px;
   flex-shrink: 0;
   border-radius: 50%;
-  background: var(--fill-color, rgba(0, 0, 0, 0.06));
+  background: var(--modal-surface-hover);
   font-size: 12px;
-  color: var(--text-color-secondary, rgba(0, 0, 0, 0.45));
+  color: var(--modal-text-secondary);
 
   .@{class-prefix}-is-confirmed & {
     background: var(--success-color, #52c41a);
@@ -1052,9 +1052,9 @@
   }
 
   &.@{class-prefix}-is-empty {
-    color: rgba(0, 0, 0, 0.45) !important;
-    background: rgba(0, 0, 0, 0.04) !important;
-    border-color: rgba(0, 0, 0, 0.08) !important;
+    color: var(--modal-text-secondary) !important;
+    background: var(--modal-surface-hover) !important;
+    border-color: var(--modal-border) !important;
   }
 
   // 上一轮设计过、本轮待重新生成：本轮确实还有活要干，用 warning 档提示"需要你操作"，
@@ -1072,3 +1072,5 @@
   gap: 6px;
   flex-shrink: 0;
 }
+
+@import './UiDesignConfirmationResponsive.less';

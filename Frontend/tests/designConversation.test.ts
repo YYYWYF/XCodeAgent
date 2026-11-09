@@ -1078,6 +1078,7 @@ const completedTechnicalPlanWorkflow = {
   },
   state: {
     lifecycle: { initialization: { stage: 'generating_application_template_files' } },
+    technicalPlanConfirmed: true,
     application_planning_confirmation: {
       confirmedAt: '2026-11-06T05:19:58Z',
       artifacts: { technicalPlan: {
@@ -1093,6 +1094,14 @@ assert.equal(planningTechnicalPlanConfirmed(completedTechnicalPlanWorkflow), tru
 assert.equal(planningTechnicalPlanConfirmed({
   ...completedTechnicalPlanWorkflow,
   state: { ...completedTechnicalPlanWorkflow.state, application_planning_confirmation: {} }
+}), false)
+assert.equal(planningTechnicalPlanConfirmed({
+  ...completedTechnicalPlanWorkflow,
+  state: { ...completedTechnicalPlanWorkflow.state, technicalPlanConfirmed: false }
+}), false)
+assert.equal(planningTechnicalPlanConfirmed({
+  ...completedTechnicalPlanWorkflow,
+  state: { ...completedTechnicalPlanWorkflow.state, technicalPlanConfirmed: undefined }
 }), false)
 assert.equal(planningTechnicalPlanConfirmed({
   ...completedTechnicalPlanWorkflow,

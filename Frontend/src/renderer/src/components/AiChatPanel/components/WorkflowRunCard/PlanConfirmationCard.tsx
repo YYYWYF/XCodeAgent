@@ -13,6 +13,8 @@ const { Text } = Typography
 /** 规划文档确认卡片：展示产物状态并提交当前阶段支持的确认或修改操作。 */
 export function PlanConfirmationCard({
   artifact,
+  changeSummary,
+  onViewChanges,
   confirmed = false,
   disabled,
   onAbandon,
@@ -25,6 +27,8 @@ export function PlanConfirmationCard({
   title
 }: {
   artifact?: WorkflowConfirmationArtifact
+  changeSummary?: string
+  onViewChanges?: () => void
   confirmed?: boolean
   disabled: boolean
   onAbandon: () => void
@@ -74,8 +78,9 @@ export function PlanConfirmationCard({
       {!confirmed && !revising ? (
         <div className={cx('requirement-spec-draft-summary')}>
           <div>
-            <Text strong>{revisionOnly ? '已有技术规划已保留' : `${title}已生成，已展示在右侧`}</Text>
+            <Text strong>{revisionOnly ? '已有技术规划已保留' : changeSummary ? '技术规划已更新，已展示在右侧' : `${title}已生成，已展示在右侧`}</Text>
           </div>
+          {changeSummary ? <Text type="secondary">{changeSummary}</Text> : null}
           <div>
             <Text type="secondary">{revisionOnly ? '可以继续提出修改意见，修改后需要重新确认。' : '请在右侧查看内容，确认无误后保存，也可以先提出修改意见。'}</Text>
           </div>
@@ -112,6 +117,7 @@ export function PlanConfirmationCard({
               {title}{revisionOnly ? '可继续修改' : confirmed ? '已确认' : '已生成'}
             </span>
             <span className={cx('artifact-auth-actions')}>
+              {onViewChanges ? <Button onClick={onViewChanges}>查看本次变更</Button> : null}
               {canView ? (
                 <Button
                   className={cx('requirement-spec-edit-btn')}

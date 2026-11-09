@@ -47,15 +47,16 @@ export const LOCAL_DESIGN_ARTIFACTS: readonly DesignArtifactEntry[] = [
   {
     key: 'technical-plan',
     label: '技术规划',
-    markdownPaths: [`${ARTIFACT_ROOT}/plans/technical-plan.md`]
+    markdownPaths: [],
+    contentPaths: [`${ARTIFACT_ROOT}/plans/technical-plan.json`]
   }
 ]
 
 /**
- * 可浏览的规划文档：只保留有 Markdown 形态的产物。
+ * 可浏览的规划文档：需求、产品规划和结构化技术规划共用可视化入口。
  *
  * 结构化产物（UI 设计稿）按 Markdown 渲染会显示成一坨 JSON，因此不进「应用文件」的文档分组。
  */
 export const BROWSABLE_DESIGN_DOCS: readonly DesignArtifactEntry[] = LOCAL_DESIGN_ARTIFACTS.filter(
-  (entry) => entry.markdownPaths.length > 0
+  (entry) => entry.markdownPaths.length > 0 || entry.key === 'technical-plan'
 )

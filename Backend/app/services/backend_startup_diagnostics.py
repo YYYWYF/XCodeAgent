@@ -7,6 +7,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from app.utils.subprocess_output import read_utf8_log_tail
+
 OUTPUT_LIMIT = 4_000
 LOG_READ_LIMIT = 256_000
 
@@ -46,9 +48,8 @@ def startup_source_fingerprint(root: Path) -> str:
 def read_log_tail(path: Path, limit: int = LOG_READ_LIMIT) -> str:
     """只读取日志末尾，避免大体积启动日志拖慢检测和模型输入。"""
     with path.open("rb") as stream:
-        stream.seek(0, 2)
-        stream.seek(max(0, stream.tell() - limit))
-        return stream.read().decode("utf-8", errors="replace")
+        content, _ = read_utf8_log_tail(stream, limit)
+        return content
 
 
 def redact_startup_text(text: str, environment: dict[str, str]) -> str:

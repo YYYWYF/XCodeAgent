@@ -1453,7 +1453,6 @@ def _server_resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "tasks",
         "technical_plan",
         "technical_plan_json_path",
-        "technical_plan_path",
         "test_phase_confirmation",
         "test_report",
         "test_report_path",
@@ -1525,12 +1524,9 @@ def _validated_technical_revision_intent(
         or pending.impact.formal_branch is not FormalRevisionBranch.WORKBENCH_PLAN_REVISION
     ):
         raise ValueError("TechnicalPlan revision intent 与当前 pending revision impact 不匹配。")
-    baseline_path = (
-        Path(workspace).expanduser().resolve()
-        / WORKSPACE_ARTIFACT_DIR
-        / "plans"
-        / "technical-plan.json"
-    )
+    from app.workspace.plan_documents import current_technical_plan_json_path
+
+    baseline_path = current_technical_plan_json_path({"workspace": workspace})
     baseline = load_project_plan_json(
         baseline_path,
         hydrate_detail_designs=True,
@@ -1621,9 +1617,8 @@ def _project_plan_start_values(
         "technical_plan": technical_plan,
         "project_plan": project_plan,
         "pages": normalized_pages,
-        "project_plan_path": _markdown_sibling_path(project_plan_path),
+        "project_plan_path": str(project_plan_path),
         "project_plan_json_path": str(project_plan_path),
-        "technical_plan_path": _markdown_sibling_path(project_plan_path),
         "technical_plan_json_path": str(project_plan_path),
         "ui_designs": ui_designs,
         "requirement_spec": requirement_spec,

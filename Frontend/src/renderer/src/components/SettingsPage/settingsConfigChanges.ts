@@ -5,6 +5,7 @@ import {
   type ConfigOperation
 } from '../../service/applicationConfigOperation'
 import { normalizeSettingsConfiguration } from './settingsDraft'
+import { validateAdminChange } from '../../utils/initialAdministrators'
 
 /** 声明设置页提交所依赖的统一配置事务，便于保持 UI 与测试的调用边界一致。 */
 export type ApplySettingsConfigChanges = (
@@ -70,6 +71,7 @@ export function settingsConfigChanges(current: ApplicationConfig, next: Applicat
   const scalar: Array<[string, string | boolean, string | boolean]> = [
     ['appName', normalizedCurrent.appName, normalizedNext.appName],
     ['appIcon', normalizedCurrent.appIcon, normalizedNext.appIcon],
+    ['repoUrl', normalizedCurrent.repoUrl, normalizedNext.repoUrl],
     ['theme.primaryColor', normalizedCurrent.theme.primaryColor, normalizedNext.theme.primaryColor],
     ['auth.enable', normalizedCurrent.auth.enable, normalizedNext.auth.enable],
     ['authorization.enabled', normalizedCurrent.authorization.enabled, normalizedNext.authorization.enabled]
@@ -94,10 +96,16 @@ export function settingsConfigChanges(current: ApplicationConfig, next: Applicat
   for (const [path, before, after] of scalar) {
     if (before !== after) changes[path] = after
   }
-  const beforeSubjects = normalizedCurrent.authorization.initialAdministratorSubjects
-  const afterSubjects = normalizedNext.authorization.initialAdministratorSubjects
+  // 权限未启用时表单不注册管理员字段（ApplicationConfigEditor 里 authorizationEnabled && 才渲染），
+  // validateFields 读不到该字段，updatedApplication.authorization.initialAdministratorSubjects 为
+  // undefined。这里必须兜底为 []，否则会把 undefined 传给 validateAdminChange，
+  // 触发「初始管理员数量不得超过100」的误报（!Array.isArray(undefined) 走了数量上限分支）。
+  const beforeSubjects = normalizedCurrent.authorization.initialAdministratorSubjects ?? []
+  const afterSubjects = normalizedNext.authorization.initialAdministratorSubjects ?? []
   if (JSON.stringify(beforeSubjects) !== JSON.stringify(afterSubjects)) {
-    changes['authorization.initialAdministratorSubjects'] = afterSubjects
+    changes['authorization.initialAdministratorSubjects'] = validateAdminChange(
+      current.authorization.enabled ? beforeSubjects : [], afterSubjects
+    )
   }
   // 首次启用权限时，磁盘旧快照可以尚无 api；即使界面补出的默认值与比较基线相同，
   // 也必须随开关提交，后端才能构造满足当前合同的 authorization.api。

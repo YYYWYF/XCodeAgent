@@ -1,7 +1,12 @@
 import type { ApplicationLifecycle, WorkflowDesignStageRevisionStart, WorkflowRevisionImpact } from '../../typings'
 import type { ApplicationPlanningAuthoritativeSnapshot } from '../../service/applicationPlanningRecovery'
 import type { SessionIdentity } from './hooks/sessionRuntime'
-import { initialFormalRevisionPhase } from './hooks/revisionSession'
+import { bindRevisionSessionChangeId, initialFormalRevisionPhase } from './hooks/revisionSession'
+
+/** 已入场技术修订按完整来源绑定当前权威 Graph；其他请求仍使用已保存的 checkpoint。 */
+export function formalRevisionRetryThread(session: SessionIdentity, lifecycle: ApplicationLifecycle): string {
+  return bindRevisionSessionChangeId(session.revisionContext, lifecycle)?.planningThreadId || ''
+}
 
 /** 只从已确认创建的目标阶段会话和 Backend 当前 pending impact 还原原启动请求。 */
 export function pendingFormalRevisionStart(
@@ -43,14 +48,15 @@ export async function retryFormalRevisionStart(input: {
   input.onLifecycle(lifecycle)
   const context = input.session.revisionContext
   if (!context) { input.recover(); return }
+  const planningThreadId = formalRevisionRetryThread(input.session, lifecycle)
   if (input.session.workflowId !== lifecycle.application.id ||
-      context.planningThreadId !== lifecycle.initialization.threadId) {
+      planningThreadId !== lifecycle.initialization.threadId) {
     throw new Error('正式修改的应用或规划会话已变化，请同步最新状态。')
   }
   const active = lifecycle.activeFormalRevision
   if (active && active.impactInteractionId === context.impactInteractionId &&
       active.formalBranch === context.formalBranch && active.sourceRunId === context.sourceRunId &&
-      active.sourceThreadId === context.sourceConversationThreadId && active.planningThreadId === context.planningThreadId) {
+      active.sourceThreadId === context.sourceConversationThreadId && active.planningThreadId === planningThreadId) {
     input.recover()
     return
   }

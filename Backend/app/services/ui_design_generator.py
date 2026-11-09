@@ -392,6 +392,8 @@ def _invoke_ui_design_model(
     attempts = max(1, max_retries + 1)
     for attempt in range(1, attempts + 1):
         try:
+            if should_cancel and should_cancel():
+                raise UiDesignStreamCancelled("用户已停止本次生成。")
             # 流式聚合：边收 chunk 边检查取消，取消时抛 UiDesignGenerationCancelled
             # 中断迭代（break 后迭代器析构关闭底层 SSE 流）。
             collected: Any = None
@@ -408,6 +410,8 @@ def _invoke_ui_design_model(
         except UiDesignStreamCancelled:
             raise
         except Exception as exc:
+            if should_cancel and should_cancel():
+                raise UiDesignStreamCancelled("用户已停止本次生成。") from exc
             if attempt >= attempts:
                 raise
             logger.warning(

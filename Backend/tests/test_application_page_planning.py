@@ -74,12 +74,11 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
 
     requirement_path = workspace / ".devagentstudio" / "specs" / "requirement-spec.md"
     product_plan_path = workspace / ".devagentstudio" / "plans" / "product-plan.md"
-    technical_plan_path = workspace / ".devagentstudio" / "plans" / "technical-plan.md"
+    technical_plan_path = workspace / ".devagentstudio" / "plans" / "technical-plan.json"
     requirement_path.parent.mkdir(parents=True, exist_ok=True)
     product_plan_path.parent.mkdir(parents=True, exist_ok=True)
     requirement_path.write_text("# RequirementSpec\n\n任务中心需求。\n", encoding="utf-8")
     product_plan_path.write_text("# ProductPlan\n\n任务中心产品规划。\n", encoding="utf-8")
-    technical_plan_path.write_text("# TechnicalPlan\n\n任务中心技术规划。\n", encoding="utf-8")
     requirement_spec = create_requirement_spec("创建任务中心")
     requirement_spec["confirmation_status"] = "confirmed"
     product_plan = create_product_plan(requirement_spec)
@@ -96,7 +95,7 @@ def _confirmed_state(workspace: Path) -> dict[str, object]:
         "workspace": str(workspace),
         "requirement_spec_path": str(requirement_path),
         "product_plan_path": str(product_plan_path),
-        "technical_plan_path": str(technical_plan_path),
+        "technical_plan_json_path": str(technical_plan_path),
         "requirement_spec": requirement_spec,
         "product_plan": product_plan,
         "ui_designs": {"confirmation_status": "confirmed", "pages": []},
@@ -175,7 +174,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                                             "gateId": "requirement_document:test",
                                             "artifact": "requirement_document",
                                             "artifactRevision": "test",
-                                            "phase": "requirements",
+                                            "phase": "requirement_document",
                                             "clarification": self.values["clarification"],
                                         },
                                     ),
@@ -194,6 +193,9 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             artifact = Path(directory) / ".devagentstudio" / "drafts" / "specs" / "requirement-spec.md"
             artifact.parent.mkdir(parents=True, exist_ok=True)
             artifact.write_text("# RequirementSpec\n\n待确认需求。\n", encoding="utf-8")
+            product_artifact = Path(directory) / ".devagentstudio/drafts/plans/product-plan.md"
+            product_artifact.parent.mkdir(parents=True, exist_ok=True)
+            product_artifact.write_text("# ProductPlan\n", encoding="utf-8")
             now = datetime.now(timezone.utc)
             asyncio.run(
                 insert_execution(
@@ -205,7 +207,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                         execution_kind="application_planning",
                         workflow_scope="application_planning",
                         first_node="requirements",
-                        current_node="requirements",
+                        current_node="product_planning",
                         status=DurableExecutionStatus.AWAITING_USER,
                         started_at=now,
                         updated_at=now,
@@ -215,7 +217,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             graph = RecoveryGraph()
             graph.values = {
                 "active_run_id": "original-run",
-                "phase": "requirements",
+                "phase": "requirement_document",
                 "status": "requires_user_input",
                 "timeline": ["requirements"],
                 "requirement_spec": {
@@ -225,6 +227,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 # 待确认阶段应恢复 checkpoint 指向的草稿工件。
                 "requirements_confirmed": False,
                 "requirement_spec_path": str(artifact),
+                "product_plan_path": str(product_artifact),
                 "clarification": {
                     "mode": "requirement_document_confirmation",
                     "status": "requires_user_input",
@@ -664,7 +667,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 confirmation["artifacts"]["technicalPlan"]["json"]["path"],
                 ".devagentstudio/plans/technical-plan.json",
             )
-            self.assertEqual(len(confirmation["artifacts"]["technicalPlan"]["markdown"]["sha256"]), 64)
+            self.assertNotIn("markdown", confirmation["artifacts"]["technicalPlan"])
+            self.assertFalse((workspace / ".devagentstudio/plans/technical-plan.md").exists())
             self.assertEqual(set(confirmation), {"confirmedAt", "directories", "artifacts"})
 
     def test_technical_planning_confirmation_validates_without_detail_node(self) -> None:
@@ -682,7 +686,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "phase": "technical_planning",
                 "status": "completed",
                 "technical_plan": state["technical_plan"],
-                "technical_plan_path": state["technical_plan_path"],
+                "technical_plan_json_path": state["technical_plan_json_path"],
             }
 
             with patch(
@@ -794,7 +798,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "phase": "technical_planning",
                 "status": "completed",
                 "technical_plan": state["technical_plan"],
-                "technical_plan_path": state["technical_plan_path"],
+                "technical_plan_json_path": state["technical_plan_json_path"],
             }
 
             with patch(
@@ -829,7 +833,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 with self.subTest(branch=branch, outcome=outcome), tempfile.TemporaryDirectory() as directory:
                     workspace = Path(directory)
                     state = _confirmed_state(workspace)
-                    plan_path = Path(state["technical_plan_path"]).with_suffix(".json")
+                    plan_path = Path(state["technical_plan_json_path"]).with_suffix(".json")
                     plan = state["technical_plan"]
                     plan["entities"] = [
                         {"id": name, "fields": [{"name": "id", "type": "string"}]}
@@ -930,7 +934,7 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 "phase": "technical_planning",
                 "status": "completed",
                 "technical_plan": state["technical_plan"],
-                "technical_plan_path": state["technical_plan_path"],
+                "technical_plan_json_path": state["technical_plan_json_path"],
             }
 
             with patch(
@@ -1056,8 +1060,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "必须是已确认的 JSON 对象"):
                 confirm_application_planning_artifacts(state)
 
-    def test_artifact_gate_accepts_explicitly_skipped_ui_design(self) -> None:
-        """工作区入口应接受用户明确跳过后的 UI Manifest。"""
+    def test_artifact_gate_rejects_unconfirmed_ui_design(self) -> None:
+        """工作区入口只接受当前已确认 UI Manifest，不以 skipped 状态替代确认。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -1069,12 +1073,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            confirmation = confirm_application_planning_artifacts(state)
-
-        self.assertEqual(
-            confirmation["artifacts"]["uiDesigns"]["json"]["path"],
-            ".devagentstudio/specs/ui-designs.json",
-        )
+            with self.assertRaisesRegex(ValueError, "UI 设计稿必须经产品角色确认"):
+                confirm_application_planning_artifacts(state)
 
     def test_capability_exposes_workflow_visualization_contract(self) -> None:
         """页面规划端点应声明标准 Workflow 事件和两阶段。"""
@@ -1135,16 +1135,16 @@ class ApplicationPagePlanningTests(unittest.TestCase):
         self.assertNotIn("lifecycle", capability)
 
     def test_joint_requirement_confirmation_projects_only_draft_markdown(self) -> None:
-        """联合需求文档待确认时只投影 drafts/specs 下的 Markdown，不暴露内部 JSON。"""
+        """联合需求文档待确认时只投影 drafts/plans 下的 Markdown，不暴露内部 JSON。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            draft_path = Path(directory) / ".devagentstudio/drafts/specs/requirement-spec.md"
+            draft_path = Path(directory) / ".devagentstudio/drafts/plans/product-plan.md"
             draft_path.parent.mkdir(parents=True, exist_ok=True)
             draft_path.write_text("# 产品规划草稿\n", encoding="utf-8")
             result = {
-                "phase": "requirements",
+                "phase": "requirement_document",
                 "status": "requires_user_input",
-                "requirement_spec_path": str(draft_path),
+                "product_plan_path": str(draft_path),
                 "clarification": {
                     "status": "requires_user_input",
                     "mode": "requirement_document_confirmation",
@@ -1152,8 +1152,8 @@ class ApplicationPagePlanningTests(unittest.TestCase):
             }
 
             artifact = _workflow_confirmation_artifact(result)
-            result["requirement_spec_path"] = str(
-                Path(directory) / ".devagentstudio/specs/requirement-spec.md"
+            result["product_plan_path"] = str(
+                Path(directory) / ".devagentstudio/plans/product-plan.md"
             )
 
         self.assertIsNotNone(artifact)

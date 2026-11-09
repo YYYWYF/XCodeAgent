@@ -22,7 +22,6 @@ export const BuiltinAuthorizationActionsContext = createContext<{
   runId: string
   threadId: string
   continueDisabled: boolean
-  onContinue: (lookup: boolean) => void
 } | undefined>(undefined)
 
 /** 只把属于当前可见 Run 的权限恢复入口移入节点；DAG 和其他阶段失败保留全局入口。 */

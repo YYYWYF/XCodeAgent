@@ -91,10 +91,12 @@ class ApplicationLifecycleAction(BaseModel):
 
         if self.action == "initialize_application":
             from app.services.application_config.schema import validate_application_configuration
+            from app.services.application_config.initial_administrators import validate_new_admins
 
             if self.application is None or self.configuration is None:
                 raise ValueError("初始化应用必须提供应用身份和完整配置。")
             validate_application_configuration(self.configuration)
+            self.configuration["authorization"]["initialAdministratorSubjects"] = validate_new_admins(self.configuration["authorization"]["initialAdministratorSubjects"])
         if self.action in {"release_session_pending", "cleanup_session_failed_executions", "prepare_session_deletion"}:
             if not str(self.session_id or "").strip():
                 raise ValueError(f"{self.action} 必须提供合法非空的 sessionId。")
@@ -350,6 +352,9 @@ def build_application_lifecycle_ag_ui_stream(
             state = load_application_lifecycle(request.workspace_root)
             if state is None:
                 raise ApplicationLifecycleMissingError("application-lifecycle.json 不存在。")
+            from app.services.builtin_authorization_orchestrator import resume_builtin_authorization_task
+
+            await asyncio.to_thread(resume_builtin_authorization_task, request.workspace_root)
             message = "Workspace Attach 已完成。"
         elif request.action == "release_session_pending":
             released = await asyncio.to_thread(

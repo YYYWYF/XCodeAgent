@@ -193,7 +193,6 @@ export type WorkflowDevelopmentContinuation = {
 
 export type WorkflowRevisionDraft = {
   artifactKey: string
-  markdown: string
   draftSha256: string
   basedOn: Array<{ artifactKey: string; sha256: string }>
   status: 'pending_user_confirmation'
@@ -205,9 +204,8 @@ export type WorkflowRevisionDraftInteraction = {
   basedOnLifecycleRevision: number
   artifactKey: string
   draftSha256: string
-  action: 'confirm' | 'save' | 'revise' | 'discard'
+  action: 'confirm' | 'revise' | 'discard'
   feedback?: string
-  editedMarkdown?: string
 }
 
 /** 项目启动子图通过 AG-UI 实时投影的当前子步骤。 */
@@ -1390,6 +1388,7 @@ export type ApplicationLifecycle = {
     threadId: string
     stage: ApplicationLifecycleStage
     workspaceUnchanged: boolean
+    canRestart: boolean
   } | null
   resourceLocks?: {
     application?: ExecutionResourceLock

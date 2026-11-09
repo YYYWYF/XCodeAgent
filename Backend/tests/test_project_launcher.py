@@ -12,19 +12,24 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call, patch
+from tests.frontend_node_fixture import stub_frontend_node
 from urllib.error import HTTPError
 
 from app.graph.nodes.lifecycle import acceptance, launch_project
 from app.services import backend_process_registry
 from app.services.backend_project_launcher import (
     _backend_logs_are_ready,
-    _find_backend_snapshot_jar,
+    _find_backend_jar,
+    _start_backend_server,
     _wait_for_backend_ready,
 )
 from app.services.backend_process_registry import (
     backend_launch_lock,
     register_backend_process,
     stop_previous_backend_process,
+)
+from app.services.backend_runtime_jar import (
+    BACKEND_PROCESS_FILENAME, BackendProcessRecord, read_backend_process_record, write_backend_process_record,
 )
 from app.services.frontend_project_launcher import (
     _dev_server_log_is_ready,
@@ -50,6 +55,7 @@ from app.utils.subprocess_platform import (
     WINDOWS_CREATE_NO_WINDOW,
     preview_process_creation_options,
 )
+from app.utils.subprocess_output import subprocess_output_text
 
 
 def _write_manifest_jar(path: Path, main_class: str | None = None) -> None:
@@ -149,6 +155,7 @@ class ProjectLauncherTests(unittest.TestCase):
 
         backend_process_registry._BACKEND_PROCESSES.clear()
         backend_process_registry._BACKEND_LAUNCH_LOCKS.clear()
+        self.node_runtime = stub_frontend_node(self, "app.services.frontend_project_launcher")
 
     def _write_application(self, workspace: str, datasource_type: str) -> None:
         """写入启动测试所需的最小应用数据源配置。"""
@@ -225,7 +232,7 @@ class ProjectLauncherTests(unittest.TestCase):
             with (
                 patch.dict("app.services.frontend_project_launcher.os.environ", {"FORCE_COLOR": "3"}),
                 patch(
-                    "app.services.frontend_project_launcher.shutil.which",
+                    "app.services.frontend_node_runtime.shutil.which",
                     return_value=package_manager_command,
                 ),
                 patch(
@@ -277,7 +284,7 @@ class ProjectLauncherTests(unittest.TestCase):
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
             with (
                 patch.dict("app.services.frontend_project_launcher.os.environ", {"HOST": "inherited"}),
-                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_node_runtime.shutil.which", return_value="/usr/bin/npm"),
                 patch(
                     "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
@@ -338,7 +345,7 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             fake_process = SimpleNamespace(pid=12345, poll=lambda: 1)
             with (
-                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_node_runtime.shutil.which", return_value="/usr/bin/npm"),
                 patch(
                     "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
@@ -367,7 +374,7 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             fake_process = SimpleNamespace(pid=12345, poll=lambda: None)
             with (
-                patch("app.services.frontend_project_launcher.shutil.which", return_value="/usr/bin/npm"),
+                patch("app.services.frontend_node_runtime.shutil.which", return_value="/usr/bin/npm"),
                 patch(
                     "app.services.frontend_project_launcher.workspace_process_registry.run",
                     return_value=SimpleNamespace(returncode=0, stdout="installed", stderr=""),
@@ -412,7 +419,7 @@ class ProjectLauncherTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "app.services.frontend_project_launcher.shutil.which",
+                    "app.services.frontend_node_runtime.shutil.which",
                     return_value="/usr/bin/npm",
                 ),
                 patch(
@@ -426,7 +433,7 @@ class ProjectLauncherTests(unittest.TestCase):
             self.assertTrue(result["install"]["timed_out"])
             self.assertEqual(
                 Path(result["install"]["stdout_log"]).read_text(encoding="utf-8"),
-                "partial output",
+                f"{self.node_runtime.describe()}\npartial output",
             )
 
     def test_frontend_install_oserror_is_returned_as_structured_failure(self) -> None:
@@ -443,7 +450,7 @@ class ProjectLauncherTests(unittest.TestCase):
             error = FileNotFoundError(2, "系统找不到指定的文件", package_manager_command)
             with (
                 patch(
-                    "app.services.frontend_project_launcher.shutil.which",
+                    "app.services.frontend_node_runtime.shutil.which",
                     return_value=package_manager_command,
                 ),
                 patch(
@@ -492,8 +499,17 @@ class ProjectLauncherTests(unittest.TestCase):
                     "app.services.backend_project_launcher._wait_for_backend_ready",
                     return_value=True,
                 ),
+                patch.dict(os.environ, {"MAVEN_OPTS": "-Xmx512m"}),
             ):
                 result = launch_backend_project(workspace)
+            staged_jar = Path(popen.call_args.args[0][-1])
+            self.assertEqual(staged_jar.read_bytes(), jar_path.read_bytes())
+            self.assertEqual(staged_jar.name, jar_path.name)
+            self.assertEqual(staged_jar.parent.parent, Path(result["runtime_root"]) / "backend-jar")
+            record = read_backend_process_record(
+                Path(result["server"]["pid_file"])
+            )
+            self.assertEqual(record, BackendProcessRecord(fake_process.pid, staged_jar))
 
         self.assertEqual(result["status"], "running")
         self.assertEqual(Path(result["jar_path"]), jar_path.resolve())
@@ -505,16 +521,71 @@ class ProjectLauncherTests(unittest.TestCase):
         )
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
         self.assertNotIn("text", run.call_args.kwargs)
+        maven_options = run.call_args.kwargs["env"]["MAVEN_OPTS"].split()
+        self.assertEqual(maven_options[0], "-Xmx512m")
+        self.assertIn("-Dfile.encoding=UTF-8", maven_options)
         self.assertEqual(
             popen.call_args.args[0],
-            [java_command, "-jar", str(jar_path.resolve())],
+            [
+                java_command,
+                "-Dfile.encoding=UTF-8",
+                "-Dsun.stdout.encoding=UTF-8",
+                "-Dsun.stderr.encoding=UTF-8",
+                "-Dstdout.encoding=UTF-8",
+                "-Dstderr.encoding=UTF-8",
+                "-Dlogging.charset.console=UTF-8",
+                "-jar",
+                str(staged_jar),
+            ],
         )
-        self.assertEqual(Path(popen.call_args.kwargs["cwd"]), target.resolve())
+        self.assertEqual(Path(popen.call_args.kwargs["cwd"]), staged_jar.parent)
         for key, value in preview_process_creation_options().items():
             self.assertEqual(popen.call_args.kwargs[key], value)
         self.assertNotIn("start_new_session", popen.call_args.kwargs)
         self.assertTrue(result["prebuild_cleanup"]["success"])
         self.assertEqual(result["prebuild_cleanup"]["source"], "none")
+
+    def test_maven_output_preserves_utf8_and_native_windows_lines(self) -> None:
+        """同一输出中的 JVM 中文和 Windows 中文提示应各自按原编码解码。"""
+
+        jvm_log = "[INFO] 开始构建\r\n"
+        cmd_log = "系统找不到指定的路径。\r\n"
+        output = jvm_log.encode("utf-8") + cmd_log.encode("gbk") + jvm_log.encode("utf-8")
+
+        self.assertEqual(
+            subprocess_output_text(output, fallback_encoding="cp936"),
+            jvm_log + cmd_log + jvm_log,
+        )
+        self.assertEqual(subprocess_output_text(jvm_log.encode("utf-8")), jvm_log)
+
+    def test_process_record_write_failure_stops_java_and_removes_copy(self) -> None:
+        """启动后的进程记录落盘失败时回滚进程与副本，并保留日志。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            runtime = root / ".devagentstudio" / "runtime" / "launch"
+            jar = runtime / "backend-jar" / ("a" * 32) / "app.jar"
+            jar.parent.mkdir(parents=True)
+            jar.write_bytes(b"jar")
+            process = MagicMock(pid=12345)
+            process.poll.side_effect = [None, 0]
+            with (
+                patch("app.services.backend_project_launcher.subprocess.Popen", return_value=process),
+                patch(
+                    "app.services.backend_project_launcher.write_backend_process_record",
+                    side_effect=OSError("cannot write process record"),
+                ),
+            ):
+                server, started = _start_backend_server(
+                    workspace=root, java_command="java", jar_path=jar, runtime_root=runtime, environment={},
+                )
+            self.assertIsNone(started)
+            self.assertIn("cannot write process record", server["error"])
+            self.assertTrue(server["cleanup"]["success"])
+            self.assertFalse(jar.exists())
+            self.assertFalse((runtime / BACKEND_PROCESS_FILENAME).exists())
+            self.assertTrue((runtime / "backend.stdout.log").exists())
+            process.terminate.assert_called_once_with()
 
     def test_windows_frontend_stop_terminates_only_registered_process_tree(self) -> None:
         """验证 Windows 停止前端时强制回收子树且不发送控制台 Ctrl+C。"""
@@ -778,15 +849,14 @@ class ProjectLauncherTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
-            backend = root / "backend"
-            target = backend / "target"
             runtime = root / ".devagentstudio" / "runtime" / "launch"
-            target.mkdir(parents=True)
-            runtime.mkdir(parents=True)
-            jar_path = target / "app-1.0-SNAPSHOT.jar"
+            jar_path = runtime / "backend-jar" / ("a" * 32) / "app.jar"
+            jar_path.parent.mkdir(parents=True)
             jar_path.write_bytes(b"jar")
-            pid_file = runtime / "backend.pid"
-            pid_file.write_text("24680", encoding="utf-8")
+            log = runtime / "backend.stdout.log"
+            log.write_text("Started Application")
+            pid_file = runtime / BACKEND_PROCESS_FILENAME
+            write_backend_process_record(pid_file, pid=24680, jar=jar_path)
             with (
                 patch(
                     "app.services.backend_process_registry._pid_is_running",
@@ -794,21 +864,21 @@ class ProjectLauncherTests(unittest.TestCase):
                 ),
                 patch(
                     "app.services.backend_process_registry._query_process_command",
-                    return_value=(f"java -jar {jar_path.resolve()}", None),
+                    return_value=(f'"java" -Dfile.encoding=UTF-8 -jar "{jar_path.resolve()}"', None),
                 ),
                 patch("app.services.backend_process_registry.os.kill") as kill,
             ):
                 cleanup = stop_previous_backend_process(
                     workspace=root,
-                    backend_root=backend,
                     runtime_root=runtime,
                 )
-            pid_file_removed = not pid_file.exists()
+            self.assertFalse(pid_file.exists())
+            self.assertFalse(jar_path.parent.exists())
+            self.assertEqual(log.read_text(), "Started Application")
 
         self.assertTrue(cleanup["success"])
         self.assertTrue(cleanup["identity_matched"])
         self.assertEqual(cleanup["source"], "pid_file")
-        self.assertTrue(pid_file_removed)
         kill.assert_called_once_with(24680, backend_process_registry.signal.SIGTERM)
 
     def test_invalid_and_stale_pid_files_are_handled_deterministically(self) -> None:
@@ -816,27 +886,27 @@ class ProjectLauncherTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
-            backend = root / "backend"
             runtime = root / ".devagentstudio" / "runtime" / "launch"
-            runtime.mkdir(parents=True)
-            pid_file = runtime / "backend.pid"
+            jar = runtime / "backend-jar" / ("a" * 32) / "app.jar"
+            jar.parent.mkdir(parents=True)
+            pid_file = runtime / BACKEND_PROCESS_FILENAME
             pid_file.write_text("not-a-pid", encoding="utf-8")
             invalid = stop_previous_backend_process(
                 workspace=root,
-                backend_root=backend,
                 runtime_root=runtime,
             )
-            pid_file.write_text("13579", encoding="utf-8")
+            jar.write_bytes(b"jar")
+            write_backend_process_record(pid_file, pid=13579, jar=jar)
             with patch(
                 "app.services.backend_process_registry._pid_is_running",
                 return_value=False,
             ):
                 stale = stop_previous_backend_process(
                     workspace=root,
-                    backend_root=backend,
                     runtime_root=runtime,
                 )
             stale_pid_removed = not pid_file.exists()
+            self.assertFalse(jar.exists())
 
         self.assertFalse(invalid["success"])
         self.assertIn("PID", invalid["error"])
@@ -849,11 +919,12 @@ class ProjectLauncherTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
-            backend = root / "backend"
             runtime = root / ".devagentstudio" / "runtime" / "launch"
-            runtime.mkdir(parents=True)
-            pid_file = runtime / "backend.pid"
-            pid_file.write_text("97531", encoding="utf-8")
+            jar = runtime / "backend-jar" / ("a" * 32) / "app.jar"
+            jar.parent.mkdir(parents=True)
+            jar.write_bytes(b"jar")
+            pid_file = runtime / BACKEND_PROCESS_FILENAME
+            write_backend_process_record(pid_file, pid=97531, jar=jar)
             with (
                 patch(
                     "app.services.backend_process_registry._pid_is_running",
@@ -861,16 +932,16 @@ class ProjectLauncherTests(unittest.TestCase):
                 ),
                 patch(
                     "app.services.backend_process_registry._query_process_command",
-                    return_value=("java -jar other-project.jar", None),
+                    return_value=(f'java "-Dexample={jar.resolve()}" -jar other-project.jar', None),
                 ),
                 patch("app.services.backend_process_registry.os.kill") as kill,
             ):
                 cleanup = stop_previous_backend_process(
                     workspace=root,
-                    backend_root=backend,
                     runtime_root=runtime,
                 )
             pid_file_preserved = pid_file.exists()
+            self.assertTrue(jar.exists())
 
         self.assertFalse(cleanup["success"])
         self.assertFalse(cleanup["identity_matched"])
@@ -928,7 +999,6 @@ class ProjectLauncherTests(unittest.TestCase):
             register_backend_process(first_root, process)
             second_cleanup = stop_previous_backend_process(
                 workspace=second_root,
-                backend_root=second_root / "backend",
                 runtime_root=second_root / ".devagentstudio" / "runtime" / "launch",
             )
 
@@ -966,7 +1036,7 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertIs(
             backend_process_registry._BACKEND_PROCESSES[
                 backend_process_registry._workspace_key(first_root)
-            ],
+            ].process,
             process,
         )
         self.assertEqual(entered, ["first", "second"])
@@ -1127,16 +1197,20 @@ class ProjectLauncherTests(unittest.TestCase):
             ):
                 (target / name).write_bytes(b"jar")
 
-            selected, candidates = _find_backend_snapshot_jar(target)
+            selected, candidates = _find_backend_jar(target)
             self.assertEqual(selected, primary)
             self.assertEqual(candidates, [primary])
 
-            second = target / "other-1.0-SNAPSHOT.jar"
+            second = target / "app.jar"
             second.write_bytes(b"jar")
-            selected, candidates = _find_backend_snapshot_jar(target)
+            selected, candidates = _find_backend_jar(target)
+            self.assertIsNone(selected)
+            self.assertEqual(candidates, [primary, second])
+            primary.unlink()
+            selected, candidates = _find_backend_jar(target)
 
-        self.assertIsNone(selected)
-        self.assertEqual(candidates, [primary, second])
+        self.assertEqual(selected, second)
+        self.assertEqual(candidates, [second])
 
     def test_backend_readiness_requires_current_application_started_log(self) -> None:
         """启动横幅、端口初始化和历史完成日志均不能替代本轮应用启动完成。"""
@@ -1248,18 +1322,23 @@ class ProjectLauncherTests(unittest.TestCase):
         """验证前端失败回滚会终止本次 Java 进程并清理 PID 文件。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            pid_file = Path(directory) / "backend.pid"
-            pid_file.write_text("12345", encoding="utf-8")
+            root = Path(directory)
+            jar = root / "backend-jar" / ("a" * 32) / "app.jar"
+            jar.parent.mkdir(parents=True)
+            jar.write_bytes(b"jar")
+            pid_file = root / BACKEND_PROCESS_FILENAME
+            write_backend_process_record(pid_file, pid=12345, jar=jar)
             process = MagicMock(pid=12345)
             process.poll.side_effect = [None, 0, 0]
             launch_result = {"status": "running", "server": {"pid_file": str(pid_file)}}
 
             cleanup = stop_backend_project(launch_result, process)
+            self.assertFalse(pid_file.exists())
+            self.assertFalse(jar.exists())
 
         self.assertTrue(cleanup["terminated"])
         self.assertFalse(cleanup["forced"])
         self.assertEqual(launch_result["status"], "stopped")
-        self.assertFalse(pid_file.exists())
         process.terminate.assert_called_once_with()
 
     def test_process_cleanup_preserves_newer_pid_file(self) -> None:
@@ -1267,8 +1346,9 @@ class ProjectLauncherTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            pid_file = root / "backend.pid"
-            pid_file.write_text("222", encoding="utf-8")
+            pid_file = root / BACKEND_PROCESS_FILENAME
+            jar = root / "backend-jar" / ("a" * 32) / "app.jar"
+            write_backend_process_record(pid_file, pid=222, jar=jar)
             process = MagicMock(pid=111)
             process.poll.return_value = 0
             cleanup = backend_process_registry.terminate_backend_process(
@@ -1276,11 +1356,11 @@ class ProjectLauncherTests(unittest.TestCase):
                 process=process,
                 pid_file=pid_file,
             )
-            preserved_pid = pid_file.read_text(encoding="utf-8")
+            preserved_record = read_backend_process_record(pid_file)
 
         self.assertTrue(cleanup["success"])
         self.assertTrue(cleanup["pid_file_preserved"])
-        self.assertEqual(preserved_pid, "222")
+        self.assertEqual(preserved_record.pid, 222)
 
     def test_preview_starts_frontend_only_when_backend_project_missing(self) -> None:
         """未识别到后端 Maven 工程时只启动前端，不再读取应用级数据源类型。"""
@@ -1326,6 +1406,31 @@ class ProjectLauncherTests(unittest.TestCase):
 
         self.assertEqual("running", result["status"])
         frontend.assert_called_once_with(Path(workspace).resolve(), force_restart=True)
+
+    def test_project_preview_pins_node_before_starting_backend(self) -> None:
+        """后端构建期间切换 Node 时，前端仍收到开始时锁定的身份。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            (root / "frontend").mkdir()
+            (root / "frontend/package.json").write_text('{"scripts":{"dev":"vite"}}', encoding="utf-8")
+            with (
+                patch("app.services.project_launcher.resolve_frontend_node", return_value=self.node_runtime) as resolve,
+                patch("app.services.project_launcher.find_backend_project_root", return_value=root / "backend"),
+                patch("app.services.project_launcher.launch_backend_project", return_value={"status": "running"}) as backend,
+                patch(
+                    "app.services.project_launcher.launch_frontend_project",
+                    return_value={"status": "running", "preview_url": "http://127.0.0.1:80"},
+                ) as frontend,
+            ):
+                def assert_node_was_selected(*_args, **_kwargs):
+                    """以已经完成的探测作为后端启动的前置条件。"""
+                    resolve.assert_called_once_with(root)
+                    return backend.return_value
+
+                backend.side_effect = assert_node_was_selected
+                result = launch_project_preview(root)
+        self.assertEqual(result["status"], "running")
+        frontend.assert_called_once_with(root, node_runtime=self.node_runtime)
 
     def test_restart_validation_adapts_launcher_result_for_changed_layer(self) -> None:
         """旧质量门可消费统一 Launcher 的真实重启结果，不再依赖独立运行时。"""

@@ -50,6 +50,6 @@ class UiDesignRecoveryTests(unittest.IsolatedAsyncioTestCase):
         latest = {"confirmation_status": "pending_user_confirmation", "pages": []}
         self.assertEqual(_ui_design_action({"ui_design_action": {"action": "refresh"}}), {"action": "refresh"})
         with patch("app.graph.nodes.ui_confirmation._latest_ui_designs", new=AsyncMock(return_value=latest)) as restore, patch("app.graph.nodes.ui_confirmation._enqueue_ui_design_generation", new=AsyncMock()) as enqueue:
-            self.assertEqual(await _apply_ui_design_action(self.state, self.manifest, {"action": "refresh"}), latest)
+            self.assertEqual(await _apply_ui_design_action(self.state, self.manifest, {"action": "refresh"}), (latest, None))
         restore.assert_awaited_once_with(self.state, self.manifest)
         enqueue.assert_not_awaited()

@@ -175,6 +175,22 @@ test('技术规划终态不残留 loading 卡', () => {
   }
 })
 
+/** 生成失败不再作为消息或产物确认，原生重试门仍由底部消费。 */
+test('生成校验失败只交给底部，消息区无确认卡、错误卡和孤立 Agent 头', () => {
+  const workflow = planningProgress('technical_planning', 'requires_user_input')
+  workflow.summary.clarification = {
+    mode: 'technical_plan_generation_error', status: 'requires_user_input', questions: [],
+    errors: ['技术规划 Endpoint ID 存在重复值。']
+  }
+  workflow.state = { application_planning_interrupt: {
+    gateId: 'failure-gate', artifact: 'technical_plan', artifactRevision: 'failure-revision'
+  } }
+  for (const withoutHistory of [false, true]) {
+    const markup = renderPlanningMessage(workflow, undefined, undefined, false, withoutHistory)
+    assert.doesNotMatch(markup, /agent-error-card|workflow-run-card|current-planning-confirmation|规划 Agent|技术规划生成失败|重新生成技术规划/)
+  }
+})
+
 /** 空历史与旧 running 快照都不能冒充当前 Agent 在执行。 */
 test('空会话和陈旧运行消息不产生恢复卡或 loading', () => {
   const workflow = planningProgress('technical_planning_generate', 'running')

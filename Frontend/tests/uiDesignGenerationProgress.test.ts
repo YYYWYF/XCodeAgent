@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './uiDesignCancellation.test'
 import { test } from 'node:test'
 import { uiDesignGenerationProgress } from '../src/renderer/src/service/uiDesignGenerationProgress'
 import type { WorkflowEvent } from '../src/renderer/src/typings'

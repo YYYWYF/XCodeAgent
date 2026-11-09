@@ -62,12 +62,14 @@ class WorkflowStorageTests(unittest.IsolatedAsyncioTestCase):
     def test_public_view_has_single_state_and_artifact_references(self):
         """状态与结果合并且正式资料、diff 不再跟随事件和消息复制。"""
         document = {"text": "资料" * 20000}
-        payload = workflow_presentation({"state": {"product_plan": document},
+        payload = workflow_presentation({"state": {"product_plan": document, "technical_plan_baseline": document},
             "result": {"product_plan": document, "tasks": [{"source_refs": document}]},
             "summary": {"status": "completed", "lifecycle": {"revision": 1}},
             "codeChanges": {"files": [{"path": "file", "diff": "+line"}]}}, workspace=self.workspace)
         self.assertNotIn("result", payload)
         self.assertNotIn("product_plan", payload["state"])
+        self.assertNotIn("technical_plan_baseline", payload["state"])
+        self.assertEqual(read_artifact(self.workspace, payload["state"]["artifactRefs"]["technical_plan_baseline"]), document)
         self.assertNotIn("lifecycle", payload["summary"])
         self.assertEqual(payload["state"]["lifecycle"], {"revision": 1})
         self.assertEqual(read_artifact(self.workspace, payload["state"]["artifactRefs"]["product_plan"]), document)

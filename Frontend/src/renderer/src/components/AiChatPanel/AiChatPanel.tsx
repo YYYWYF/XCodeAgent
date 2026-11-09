@@ -96,7 +96,7 @@ import SessionExecutionLockDock from './components/SessionExecutionLockDock'
 import PlanningHistoryNotice from './components/PlanningHistoryNotice'
 import PlanningTaskNotice from './components/PlanningTaskNotice'
 import { planningTaskBlock } from './planningTaskAdmission'
-import { planningStageAccess, planningSessionOwnsThread, stoppedPlanningForSession } from './planningStageAccess'
+import { planningStageAccess, planningStageEntryTransferred, planningSessionOwnsThread, stoppedPlanningForSession } from './planningStageAccess'
 import StoppedPlanningNotice from './components/StoppedPlanningNotice'
 import { shouldPreserveTechnicalPlanningReply } from '../../service/technicalPlanningConversation'
 import DocPanel from './components/DocPanel'
@@ -182,7 +182,7 @@ import {
 } from './hooks/revisionSession'
 import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRuntime'
 import { sessionToRestoreForPhase } from './hooks/phaseSessionSelection'
-import { pendingFormalRevisionStart, retryFormalRevisionStart } from './formalRevisionStartRetry'
+import { formalRevisionRetryThread, pendingFormalRevisionStart, retryFormalRevisionStart } from './formalRevisionStartRetry'
 import { readApplicationPlanningAuthoritativeSnapshot } from '../../service/applicationPlanningRecovery'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import {
@@ -222,6 +222,10 @@ import {
   acceptancePreviewCanFocus,
   conversationUsesWorkflowRecovery,
   globalFallbackState,
+  isTechnicalPlanGenerationFailure,
+  technicalPlanGenerationFailureMessage,
+  connectionErrorNoticeId,
+  recoveryNoticeIsInline,
   prioritizedConnection,
   latestConversationFailure,
   workbenchRecoveryCoveredByExecution
@@ -229,6 +233,7 @@ import {
 import { planningConnectionForSession, planningFailureStateForSession, planningSnapshotForStage } from './planningFailureScope'
 import { initialConnectionState } from '../../service/connectionState'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
+import WorkbenchRecoveryNotice from './components/WorkbenchRecoveryNotice'
 import RecoverySurface from './recoverySurface'
 import { revisionContinuationHandoffFromWorkflow } from '../../service/applicationPagePlanning'
 import {
@@ -302,7 +307,7 @@ function planningWorkflowCardResult(
   if (revisionInteraction && typeof revisionInteraction === 'object') {
     if (revisionInteraction.action === 'confirm') return 'confirmed'
     if (revisionInteraction.action === 'discard') return 'cancelled'
-    if (revisionInteraction.action === 'save' || revisionInteraction.action === 'revise') {
+    if (revisionInteraction.action === 'revise') {
       return 'submitted'
     }
   }
@@ -327,6 +332,7 @@ const PLANNING_ANSWER_LABELS: Record<string, string> = {
   requirement_spec_feedback: '需求文档意见',
   design_change_request: '设计变更',
   technical_plan_confirmation: '技术规划确认',
+  planning_recovery: '技术规划重试',
   planning_stage_entry: '计划阶段入口',
   project_plan_confirmation: '项目计划确认',
   entity_source_binding: '实体数据源绑定'
@@ -375,6 +381,8 @@ type Props = {
   applicationLifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
   developmentPlanningReady: boolean
+  planningCatalogStatus: import('../../typings').PlanningCatalogStatus
+  onPlanningCatalogRetry: () => void
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
@@ -424,7 +432,7 @@ type Props = {
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试规划 Graph。 */
-  onRetryPlanning?: () => void | Promise<void>
+  onRetryPlanning?: (restartInitialPlanning?: boolean) => void | Promise<void>
   /** 底部连接恢复后读取当前规划中断事实，不启动生成或恢复动作。 */
   onReconcilePlanning?: () => void
   /** 仅重试应用模板初始化，独立于规划 Graph 的恢复。 */
@@ -498,7 +506,10 @@ type LocalDesignWorkspaceSnapshot = {
 // 同一 renderer 内每个应用只执行一次冷恢复；缓存 Promise 同时合并 React StrictMode 重放。
 const localDesignRecoveryCache = new Map<string, Promise<LocalDesignWorkspaceSnapshot>>()
 
-const TECHNICAL_PLAN_JSON_PATH = '.devagentstudio/plans/technical-plan.json'
+const TECHNICAL_PLAN_JSON_PATHS = [
+  '.devagentstudio/drafts/plans/technical-plan.json',
+  '.devagentstudio/plans/technical-plan.json'
+] as const
 const PRODUCT_PLAN_JSON_PATHS = [
   '.devagentstudio/drafts/plans/product-plan.json',
   '.devagentstudio/plans/product-plan.json'
@@ -512,7 +523,7 @@ const DESIGN_ARTIFACT_PATH_FIELDS: Record<DesignDocArtifactKey, readonly string[
   'requirement-spec': ['requirement_spec_path'],
   'product-plan': ['product_plan_path'],
   'ui-design': [],
-  'technical-plan': ['technical_plan_path']
+  'technical-plan': ['technical_plan_json_path']
 }
 
 /** 把 Workflow 快照中的未知值安全收窄为普通对象。 */
@@ -608,24 +619,25 @@ async function readLocalDesignMarkdown(
   throw lastError || new Error('设计文档 Markdown 不存在')
 }
 
-/** 从当前工作区读取 TechnicalPlan 的内部结构化快照，供右侧可视化组件使用。 */
+/** 冷进入优先读取待确认技术草稿，没有草稿的应用继续读取 plans 中的计划。 */
 async function readLocalTechnicalPlanJson(
   workspaceRoot: string
 ): Promise<Record<string, unknown> | undefined> {
-  try {
-    const result = await readWorkspaceFile({
-      workspace_root: workspaceRoot,
-      path: TECHNICAL_PLAN_JSON_PATH,
-      // file.read 工具当前契约上限为 5000 行、200000 字符；TechnicalPlan JSON 在此范围内。
-      max_lines: 5000,
-      max_chars: 200000
-    })
-    const parsed: unknown = JSON.parse(result.content)
-    return asWorkflowRecord(parsed)
-  } catch {
-    // TechnicalPlan JSON 尚未生成或暂时不可读时，由右侧面板显示对应的空态。
-    return undefined
+  for (const path of TECHNICAL_PLAN_JSON_PATHS) {
+    try {
+      const result = await readWorkspaceFile({
+        workspace_root: workspaceRoot,
+        path,
+        max_lines: 5000,
+        max_chars: 200000
+      })
+      const parsed: unknown = JSON.parse(result.content)
+      return asWorkflowRecord(parsed)
+    } catch {
+      // 沿用需求和产品规划的冷读取方式，所有位置都不可读时交给面板显示空态。
+    }
   }
+  return undefined
 }
 
 /** 从当前工作区读取 ProductPlan 的当前结构化快照，草稿优先、正式文档兜底。 */
@@ -677,7 +689,7 @@ async function readLocalDesignArtifactSnapshot(
   workspaceRoot: string,
   artifact: (typeof LOCAL_DESIGN_ARTIFACTS)[number]
 ): Promise<LocalDesignArtifactSnapshot> {
-  const documentPromise = readLocalDesignMarkdown(workspaceRoot, artifact)
+  const documentPromise = artifact.key === 'technical-plan' ? Promise.resolve(undefined) : readLocalDesignMarkdown(workspaceRoot, artifact)
     .then((document) => (document.content.trim() ? document : undefined))
     .catch(() => undefined)
   const structuredPromise =
@@ -711,31 +723,6 @@ async function readLocalDesignWorkspaceSnapshot(
       artifacts.map((artifact) => readLocalDesignArtifactSnapshot(workspaceRoot, artifact))
     )
   }
-}
-
-/** 优先读取当前 AG-UI 内存快照，本地 Markdown 只作为冷恢复兜底。 */
-function designDocContentFor(
-  localContents: Record<string, string>,
-  workflow: WorkflowRunPayload | undefined,
-  key: DesignDocArtifactKey
-): string {
-  const confirmationArtifact = workflow?.confirmationArtifact
-  const expectedArtifactId =
-    key === 'requirement-spec'
-      ? 'requirement_spec'
-      : key === 'product-plan'
-        ? 'product_plan'
-        : key === 'technical-plan'
-          ? 'technical_plan'
-          : undefined
-  if (
-    confirmationArtifact &&
-    confirmationArtifact.id === expectedArtifactId &&
-    confirmationArtifact.content.trim()
-  ) {
-    return confirmationArtifact.content
-  }
-  return localContents[key] || ''
 }
 
 /** 把第二份文档的首个 H1 降级为 H2 章节，供合并为一份连贯文档时接入。 */
@@ -879,6 +866,8 @@ export default function AiChatPanel({
   applicationLifecycle,
   developmentTotals,
   developmentPlanningReady,
+  planningCatalogStatus,
+  onPlanningCatalogRetry,
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
@@ -953,6 +942,13 @@ export default function AiChatPanel({
     () => new Set()
   )
   const [apiDesignRefreshKey, setApiDesignRefreshKey] = useState(0)
+  const [mappingJourney, setMappingJourney] = useState<{ workspaceRoot: string; target: ApiDesignConfigTarget; destination: 'sources' | 'entity' }>()
+  const [mappingSourceRefreshKey, setMappingSourceRefreshKey] = useState(0)
+  const currentMappingJourney = mappingJourney?.workspaceRoot === application.workspaceRoot
+    && mappingJourney.target.apiContractId === apiDesignConfigTarget?.apiContractId
+    && mappingJourney.target.endpointId === apiDesignConfigTarget?.endpointId ? mappingJourney : undefined
+  // 工作区或 Endpoint 改变即撤销旧返回意图，避免跨应用恢复错误目标。
+  useEffect(() => { setMappingJourney(undefined) }, [application.workspaceRoot, apiDesignConfigTarget?.apiContractId, apiDesignConfigTarget?.endpointId])
   // 工作区切换只清理当前界面目标；磁盘草稿仍按工作区和接口独立保存。
   useEffect(() => {
     setApiDesignConfigTarget(undefined)
@@ -1335,7 +1331,7 @@ export default function AiChatPanel({
     // 在绘制前解除上阶段全宽，避免新验收会话的首帧仍被旧布局隐藏。
     setRightPanelLayout((current) => phaseEntryRightPanelLayout(activeWorkbenchPhase, current))
   }, [activeWorkbenchPhase, setRightPanelLayout])
-  const { artifactDetailLabel, artifactOutlineProps, apiTarget } = useDevelopmentArtifactDetail({
+  const { artifactDetailLabel, artifactOutlineProps, apiTarget, openArtifactOverview } = useDevelopmentArtifactDetail({
     applicationId: application.id,
     setRightPanel,
     setRightPanelLayout
@@ -1344,6 +1340,34 @@ export default function AiChatPanel({
   const handleOpenDatabaseEntity = (entityId: string): void => {
     const entity = developmentPlanningEntities.find((item) => item.id === entityId)
     if (entity) artifactOutlineProps.onEntitySelect?.(entity)
+  }
+  /** 记录原接口后进入既有抽屉，连接与选表仍由抽屉的原按钮负责。 */
+  const handleMappingDatabaseSources = (): void => {
+    if (!workspaceRoot || !apiDesignConfigTarget) return
+    handleSidebarNavigation(() => {
+      setMappingJourney({ workspaceRoot, target: apiDesignConfigTarget, destination: 'sources' })
+      setActiveView('dataSources')
+    })
+  }
+  /** 只定位明确关联的实体，无法定位时保留开发产物菜单供用户选择。 */
+  const handleMappingBuiltinEntity = (entityId?: string): void => {
+    if (!workspaceRoot || !apiDesignConfigTarget) return
+    handleSidebarNavigation(() => {
+      setMappingJourney({ workspaceRoot, target: apiDesignConfigTarget, destination: 'entity' })
+      const entity = developmentPlanningEntities.find((item) => item.id === entityId)
+      if (entity) artifactOutlineProps.onEntitySelect?.(entity)
+      else openArtifactOverview()
+    })
+  }
+  /** 返回同一常驻映射实例，只刷新来源和真实列，不替换或保存草稿。 */
+  const handleBackToFieldMapping = (): void => {
+    if (!currentMappingJourney) return
+    setApiDesignConfigTarget(currentMappingJourney.target)
+    setRightPanel({ type: 'field-mapping' })
+    setRightPanelLayout((current) => current === 'hidden' ? 'split' : current)
+    setMappingSourceRefreshKey((value) => value + 1)
+    setMappingJourney(undefined)
+    setActiveView('chat')
   }
   // 中间区卡片点"查看设计稿"时：切到右侧"UI设计稿"tab 并选中该页。
   const handleUiDesignActivePageChange = useCallback(
@@ -1364,12 +1388,15 @@ export default function AiChatPanel({
     hasRightPanel: Boolean(rightPanel)
   })
 
-  // ---- 创建计划阶段：设计阶段展示产品产物，计划阶段只展示 TechnicalPlan。 ----
+  // 已交接但未消费的入口仍展示已确认上游，避免断网或冷启动后出现空技术文档。
+  const pendingPlanningStageEntry = planningStageEntryTransferred(currentPlanningWorkflow, applicationLifecycle)
+  const showRequirementDocuments = isDesignPhase || pendingPlanningStageEntry
+  // ---- 技术生成实际开始前展示已确认上游，开始后展示 TechnicalPlan。 ----
   const planningDocumentView = usePlanningDocumentView(
     currentPlanningWorkflow,
     application.workspaceRoot,
     showRightPanel && rightPanel?.type === 'doc'
-      ? isDesignPhase && rightPanel.docKey === 'requirement-spec'
+      ? showRequirementDocuments && rightPanel.docKey === 'requirement-spec'
         ? 'requirement-doc'
         : isTechnicalPlanningPhase && rightPanel.docKey === 'technical-plan'
           ? 'technical-plan'
@@ -1431,10 +1458,11 @@ export default function AiChatPanel({
   )
   // 快照里的页面没有 code（正式 manifest 只存 code_path），从磁盘补回来，
   // 否则右侧预览永远停在「本页尚未生成设计稿」。
-  const uiDesignPagesWithCode = useUiDesignPagesWithCode(
+  const uiDesignRead = useUiDesignPagesWithCode(
     application.workspaceRoot,
     uiDesignPagesSource
   )
+  const uiDesignPagesWithCode = uiDesignRead.pages
   const uiDesignPages = useMemo(() => {
     if (uiDesignPagesWithCode.some((p) => Boolean(p.code))) {
       uiDesignPagesCacheRef.current = uiDesignPagesWithCode
@@ -1449,24 +1477,26 @@ export default function AiChatPanel({
     designDocFileContent,
     planningDocumentWorkflow
   )
-  const technicalPlanDocContent = designDocContentFor(
-    designDocFileContent,
-    planningDocumentWorkflow,
-    'technical-plan'
-  )
   const uiDesignDocContent = designDocFileContent['ui-design'] || ''
   const requirementSpecMemory = requirementSpecFromWorkflow(planningDocumentWorkflow)
   const productPlanMemory = productPlanFromWorkflow(planningDocumentWorkflow)
   const technicalPlanMemory = technicalPlanFromWorkflow(planningDocumentWorkflow)
+  // 未打开面板前凭当前引用开放入口，正文仅在可见时读取，避免两套读取器和重复预取。
+  const planningDocumentRefs = asWorkflowRecord(currentPlanningWorkflow?.state?.artifactRefs)
   const requirementDocAvailable = Boolean(
-    requirementDocContent.trim() || requirementSpecMemory || productPlanMemory
+    requirementDocContent.trim() || requirementSpecMemory || productPlanMemory ||
+    planningDocumentRefs?.requirement_spec || planningDocumentRefs?.product_plan ||
+    planningDocumentView.loading || planningDocumentView.error
   )
   const uiDesignAvailable = Boolean(uiDesignDocContent.trim()) || uiDesignPages.length > 0
-  const technicalPlanDocAvailable = Boolean(technicalPlanDocContent.trim() || technicalPlanMemory)
+  const technicalPlanDocAvailable = Boolean(
+    technicalPlanMemory || technicalPlanFile || planningDocumentRefs?.technical_plan ||
+    planningDocumentView.loading || planningDocumentView.error
+  )
   // 按当前设计/计划阶段稳定生成右侧文档集合，避免阶段切换之外反复创建依赖对象。
   const designDocs = useMemo<DesignWorkspaceDoc[] | undefined>(() => {
     if (!isApplicationPlanningPhase) return undefined
-    if (isDesignPhase) {
+    if (showRequirementDocuments) {
       const documents: DesignWorkspaceDoc[] = [
         {
           key: 'requirement-spec' as WorkspaceDocKey,
@@ -1476,7 +1506,7 @@ export default function AiChatPanel({
           available: requirementDocAvailable
         }
       ]
-      documents.push({
+      if (isDesignPhase) documents.push({
         key: 'ui-design' as WorkspaceDocKey,
         title: 'UI设计稿',
         path: 'specs/ui-designs',
@@ -1490,18 +1520,18 @@ export default function AiChatPanel({
         key: 'technical-plan' as WorkspaceDocKey,
         title: '技术规划',
         path: 'plans/technical-plan.json',
-        content: technicalPlanDocContent,
+        content: '',
         available: technicalPlanDocAvailable
       }
     ]
   }, [
     isApplicationPlanningPhase,
     isDesignPhase,
+    showRequirementDocuments,
     requirementDocAvailable,
     requirementDocContent,
     requirementsConfirmed,
     technicalPlanDocAvailable,
-    technicalPlanDocContent,
     uiDesignAvailable,
     uiDesignDocContent
   ])
@@ -1512,7 +1542,7 @@ export default function AiChatPanel({
   const activeDesignDoc = designDocs?.find((doc) => doc.key === activeDesignDocKey)
   const technicalPlanViewActive =
     isTechnicalPlanningPhase && activeDesignDocKey === 'technical-plan'
-  const requirementDocViewActive = isDesignPhase && activeDesignDocKey === 'requirement-spec'
+  const requirementDocViewActive = showRequirementDocuments && activeDesignDocKey === 'requirement-spec'
   // 右侧技术规划优先使用完整 Workflow；空快照不能遮住正式文件。
   const technicalPlanForDoc = technicalPlanViewActive
     ? technicalPlanMemory || technicalPlanFile
@@ -1523,7 +1553,7 @@ export default function AiChatPanel({
   const technicalPlanViewLoading =
     technicalPlanViewActive &&
     (!technicalPlanForDoc || !productPlanForDoc) &&
-    technicalPlanFileLoading
+    (technicalPlanFileLoading || planningDocumentView.loading)
   // 需求文档 tab 优先使用结构化可视化；结构化数据不可读时回退 Markdown。
   const requirementSpecForDoc = requirementDocViewActive
     ? requirementSpecMemory || requirementSpecFile
@@ -1656,7 +1686,7 @@ export default function AiChatPanel({
   const uiDesignPoolBusy = useMemo(
     () =>
       uiDesignPages.some((page) =>
-        ['queued', 'generating'].includes(String(page.status || ''))
+        ['queued', 'generating', 'stopping'].includes(String(page.status || ''))
       ),
     [uiDesignPages]
   )
@@ -1728,12 +1758,15 @@ export default function AiChatPanel({
 
   const planningComposerDraftRef = useRef({ key: draftKey, value: draft })
   planningComposerDraftRef.current = { key: draftKey, value: draft }
+  const [planningEntry, setPlanningEntry] = useState<{ workspace?: string; key: string }>()
   const planningAccess = planningStageAccess({
     phase: activeWorkbenchPhase,
     lifecycle: applicationLifecycle,
     enteredDevelopment: enterDevConfirmed,
     sessionThreadId: activeSession?.threadId,
-    sessionEntryKey: activeSession?.entryKey
+    sessionEntryKey: activeSession?.entryKey,
+    pendingStageEntryTransferred: pendingPlanningStageEntry,
+    enteringStage: Boolean(planningEntry && planningEntry.workspace === application.workspaceRoot)
   })
   const planningHistoryOnly = planningAccess.historyOnly
   const stoppedPlanning = stoppedPlanningForSession({
@@ -1927,6 +1960,7 @@ export default function AiChatPanel({
   const planningReturnedToDesign = isTechnicalPlanningPhase && (
     (currentPlanningWorkflow?.state?.planning_stage_handoff as { targetPhase?: string } | undefined)?.targetPhase === 'product' ||
     Boolean(applicationLifecycle && ![
+      ...(pendingPlanningStageEntry ? ['awaiting_planning_stage_entry'] : []),
       'generating_technical_plan', 'awaiting_technical_plan_confirmation',
       'generating_application_template_files', 'application_template_generation_failed', 'ready_for_workbench'
     ].includes(applicationLifecycle.initialization.stage))
@@ -2485,10 +2519,11 @@ export default function AiChatPanel({
     void retryFormalRevisionStart({
       session: activeSession,
       read: async () => {
+        const lifecycle = await getApplicationLifecycle(application)
         const snapshot = await readApplicationPlanningAuthoritativeSnapshot(
-          application, activeSession.revisionContext!.planningThreadId
+          application, formalRevisionRetryThread(activeSession, lifecycle)
         )
-        return { snapshot, lifecycle: snapshot?.lifecycle || await getApplicationLifecycle(application) }
+        return { snapshot, lifecycle: snapshot?.lifecycle || lifecycle }
       },
       onLifecycle: (lifecycle) => onApplicationLifecycleChange(lifecycle),
       start: async (input) => {
@@ -2626,7 +2661,7 @@ export default function AiChatPanel({
     localWorkflowLoading,
     restoredRunRunning,
     isApplicationPlanningPhase && activeWorkbenchPhase === derivedWorkbenchPhase &&
-      planningGenerationRunning(planningState)
+      (planningGenerationRunning(planningState) || (isDesignPhase && uiDesignPoolBusy))
   )
   const currentGenerationLoading = stopGenerationPending || currentGenerationOwner !== undefined
 
@@ -2638,7 +2673,11 @@ export default function AiChatPanel({
     // 即使生成状态先于停止请求回执消失，也保留按钮上的 loading，直到请求真正完成。
     void (async () => {
       try {
-        if (currentGenerationOwner === 'planning') await onStopPlanning()
+        if (currentGenerationOwner === 'planning') {
+          await onStopPlanning()
+          // Backend 已排空 UI writer，清掉尚未入队的本地页面意图与预览加载态。
+          setUiDesignActingPageIds([])
+        }
         else await handleEndPlan(ownedExecution?.runId || activeWorkflow?.runId)
       } catch (reason) {
         if (!isAuthenticationFailure(reason)) message.error(formatError(reason, '停止生成失败'))
@@ -3336,8 +3375,7 @@ export default function AiChatPanel({
   const builtinPatch = useBuiltinPatchCard(application.workspaceRoot || '', !isApplicationPlanningPhase)
   const builtinPatchDisabled = workflowInputLocked || loading || currentGenerationLoading || endingPlan
   const builtinPatchContent = builtinPatch.card && (
-    <BuiltinPatchCard card={builtinPatch.card} disabled={builtinPatchDisabled}
-      onAction={(action) => { void builtinPatch.execute(action) }} />
+    <BuiltinPatchCard card={builtinPatch.card} disabled={builtinPatchDisabled} />
   )
   /** 仅将权限补丁发往独立动作，其他调试项仍由原工作流处理。 */
   async function sendWithBuiltinPatch(
@@ -3866,9 +3904,9 @@ export default function AiChatPanel({
         available: doc.available || doc.key === generatingDesignDocKey
       }))
     : [
-        { key: 'outline', label: '开发产物', available: true },
+        { key: 'outline', label: '应用产物', available: true },
         { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
-        { key: 'source', label: '应用文件', available: Boolean(application.workspaceRoot) },
+        { key: 'source', label: '代码', available: Boolean(application.workspaceRoot) },
         { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
         ...(shouldRenderPendingDagConfirmationTab(hasOwnedPendingPlan)
           ? [
@@ -4025,6 +4063,11 @@ export default function AiChatPanel({
     executionPhase: derivedWorkbenchPhase
   })
   const planningError = sessionPlanningFailureState?.error
+  // 生成校验失败仍保留原生重试门，但展示只归当前会话的底部错误入口。
+  const technicalFailureWorkflow = sessionPlanningFailureState?.transportState !== 'running' &&
+    isTechnicalPlanGenerationFailure(sessionPlanningFailureState?.workflow)
+    ? sessionPlanningFailureState?.workflow : undefined
+  const technicalPlanningError = technicalPlanGenerationFailureMessage(technicalFailureWorkflow)
   // 网络连接独立于业务 Run 归属：确认尚未到达服务端时，不能被旧恢复源过滤成健康。
   const planningConnection = planningConnectionForSession({
     state: planningState,
@@ -4052,6 +4095,7 @@ export default function AiChatPanel({
     isApplicationPlanningPhase &&
     Boolean(
       planningError ||
+        technicalPlanningError ||
         sessionPlanningFailureState?.recoveryActionError ||
         sessionPlanningFailureState?.syncError ||
         applicationPlanningRecoveryIncident(sessionPlanningFailureState)
@@ -4080,13 +4124,8 @@ export default function AiChatPanel({
       previous.status === 'unavailable' && activeConnectionState.status === 'healthy' &&
       planningState?.transportState === 'idle') reconcilePlanningRef.current?.()
   }, [workspaceRoot, planningThreadId, isApplicationPlanningPhase, activeConnectionState.status, planningState?.transportState])
-  // 模板动作继续使用原专用入口，连接兜底和业务错误兜底共用同一动作归属。
-  const currentTemplateRetry = !generatingTemplate && templateGenerationRecoverable
-    ? onRetryTemplateGeneration
-    : templateReconcileRetryable ? onRetryTemplateReconcile : undefined
-  const templateFallbackError = generatingTemplate ? undefined : templateGenerationRecoverable
-    ? applicationLifecycle?.error?.message || '应用模板初始化未完成，请重试。'
-    : templateReconcileRetryable ? '应用模板能力更新失败，请重试。' : undefined
+  // 模板失败和中断由对话内专用卡片承载，规划状态里的同一错误不再重复弹全局通知。
+  const templateRecoveryInline = templateGenerationRecoverable || templateReconcileRetryable
   // 新一轮工作台执行已经开始时，旧失败投影只能留在历史记录，不能继续占用当前控制面。
   const workbenchExecutionInProgress = workbenchRecoveryCoveredByExecution({
     isApplicationPlanningPhase,
@@ -4109,11 +4148,11 @@ export default function AiChatPanel({
       }
     : undefined
   const currentRecoveryIncident =
-    Boolean(pendingRevisionStart) || Boolean(recoveryProjectionError) ||
+    Boolean(pendingRevisionStart) || Boolean(recoveryProjectionError) || Boolean(stoppedPlanning) ||
     workbenchExecutionInProgress ||
     endedWorkbenchRecovery ||
     Boolean(workflowCodeReviewRetry(activeWorkflow)) ||
-    Boolean(currentTemplateRetry) ||
+    templateRecoveryInline ||
     Boolean(currentPreviewRetry)
       ? undefined
       : isApplicationPlanningPhase
@@ -4121,19 +4160,18 @@ export default function AiChatPanel({
         : workbenchRecoveryIncident(activeExecutionRecovery, latestWorkflowForDisplay)
   const globalFallbackError =
     pendingRevisionStartError || recoveryProjectionError ||
-    (isApplicationPlanningPhase
+    (isApplicationPlanningPhase && !stoppedPlanning
       ? uiDesignRecoveryError(sessionPlanningFailureState?.recovery)
       : undefined) ||
-    previewFallbackError ||
-    (!workbenchExecutionInProgress && !endedWorkbenchRecovery
+    technicalPlanningError ||
+    (!planningNeedsRecovery && !conversationNeedsRecovery ? previewFallbackError : undefined) ||
+    (!stoppedPlanning && !templateRecoveryInline && !workbenchExecutionInProgress && !endedWorkbenchRecovery
       ? isApplicationPlanningPhase
         ? sessionPlanningFailureState?.syncError ||
           planningError ||
-          templateFallbackError ||
           sessionPlanningFailureState?.recoveryActionError ||
           (sessionPlanningFailureState ? latestConversationFailure(messages) : undefined)
-        : templateFallbackError ||
-          error ||
+        : error ||
           (previewRuntime.repairSession ? undefined : latestConversationFailure(messages))
       : undefined)
   const globalFallback = globalFallbackState({
@@ -4142,8 +4180,9 @@ export default function AiChatPanel({
     recoveryEnded: endedWorkbenchRecovery,
     recoveryError:
       (isApplicationPlanningPhase && planningState?.checkpointMissing) ||
+      Boolean(stoppedPlanning) ||
       workbenchExecutionInProgress ||
-      Boolean(currentTemplateRetry) ||
+      templateRecoveryInline ||
       Boolean(currentPreviewRetry)
         ? undefined
         : buildFailureMessageForDisplay(recoveryError, latestWorkflowForDisplay),
@@ -4155,8 +4194,8 @@ export default function AiChatPanel({
   )
   const authorizationRecoveryOwner = !isApplicationPlanningPhase &&
     activeConnectionState.status === 'healthy' && !recoveryProjectionError &&
-    !pendingRevisionStart && !currentPreviewRetry && !currentTemplateRetry &&
-    !revisionHandoffFailure && !previewFallbackError && !templateFallbackError &&
+    !pendingRevisionStart && !currentPreviewRetry && !templateRecoveryInline &&
+    !revisionHandoffFailure && !previewFallbackError &&
     !pendingRevisionStartError && (currentRecoveryIncident || globalFallback.error)
     ? authorizationBootstrapRecoveryOwner({ candidate: activeExecutionRecovery,
         workflow: latestWorkflowForDisplay, incident: currentRecoveryIncident, messages: displayedMessages })
@@ -4178,19 +4217,44 @@ export default function AiChatPanel({
         runId: activeWorkflow.runId,
         threadId: activeWorkflow.threadId,
         continueDisabled: loading || workspaceBusy || workbenchExecutionInProgress ||
-          activeConnectionState.status !== 'healthy',
-        /** 使用原节点恢复路径，保持当前应用、会话和正式 Build DAG 的校验。 */
-        onContinue: (lookup: boolean) => {
-          void handleResumePlan({ enabled: true, resumeFrom: 'builtin_authorization_bootstrap',
-            buildExecutionScope: activeWorkflow.summary.buildExecutionScope },
-            lookup ? '查询原权限数据受理记录' : '继续初始化权限数据')
-        }
+          activeConnectionState.status !== 'healthy'
       }
     : undefined
   // 无当前执行所属会话时，不把共享规划、预览或投影错误转交给其他会话和阶段。
   const showGlobalFallback =
     !authorizationRecoveryNotice && globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
       !isApplicationPlanningPhase || Boolean(pendingRevisionStartError) || Boolean(sessionPlanningFailureState))
+  const revisionHandoffErrorVisible = Boolean(revisionHandoffFailure &&
+    revisionContinuationRecoveryVisible(applicationLifecycle,
+      revisionHandoffFailure.handoff.continuation, activeSession?.threadId))
+  // 所有能明确归属会话的失败恢复都留在原聊天区；共享连接和工作区读取故障才弹全局提示。
+  const sessionRecoveryInline = recoveryNoticeIsInline({
+    revisionHandoff: revisionHandoffErrorVisible,
+    connectionStatus: activeConnectionState.status,
+    planningEndRequested: Boolean(isApplicationPlanningPhase && sessionPlanningFailureState?.endRequested),
+    hasRecoveryIncident: Boolean(currentRecoveryIncident),
+    pendingRevisionStart: Boolean(pendingRevisionStart),
+    sharedReadError: Boolean(lifecycleSyncError || recoveryProjectionError),
+    previewRetry: Boolean(currentPreviewRetry),
+    hasSessionOwner: Boolean(isApplicationPlanningPhase ? sessionPlanningFailureState : activeSession)
+  })
+  // 正常首次连接不弹错误通知；真正断连与已有错误的重连仍沿用原连接卡片。
+  const fallbackErrorVisible = showGlobalFallback && !planningHistoryOnly &&
+    (Boolean(activeConnectionState.lastError) || activeConnectionState.status === 'unavailable' ||
+      Boolean(globalFallback.error) || Boolean(currentRecoveryIncident))
+  // 共享故障不绑定当前会话，避免切换会话重新弹出；任务故障按所属会话和 Run 区分。
+  const globalErrorNoticeId = revisionHandoffErrorVisible
+    ? JSON.stringify(['handoff', revisionHandoffFailure?.handoff.continuation.changeId, revisionHandoffFailure?.error])
+    : !fallbackErrorVisible ? undefined
+      : activeConnectionState.status !== 'healthy'
+        ? connectionErrorNoticeId(activeConnectionState, activeConnectionState === previewRuntime.connection ? 'preview' : 'backend')
+        : lifecycleSyncError || recoveryProjectionError
+          ? JSON.stringify(['workspace-read', lifecycleSyncError || recoveryProjectionError])
+          : previewFallbackError
+            ? JSON.stringify(['preview', previewFallbackError])
+            : JSON.stringify(['task', activeSession?.key || draftKey,
+              sessionPlanningFailureState?.recovery?.sourceRunId || activeExecutionRecovery?.sourceRunId || latestWorkflowForDisplay?.runId,
+              globalFallback.error || currentRecoveryIncident?.failureMessage || currentRecoveryIncident?.recoveryMessage])
   const acceptanceAwaiting = shouldShowAcceptanceDecisionDock({
     activePhase: activeWorkbenchPhase,
     planExecutionMode: displayedPlanExecutionMode,
@@ -4817,7 +4881,8 @@ export default function AiChatPanel({
         // 离开 UI 确认阶段（确认全部/进入规划）：清空 UI 确认阶段标记，
         // 避免后续阶段的纯 content 被误当作 UI 轮询 content 丢弃。
         lastUiDesignRunIdRef.current = undefined
-        if (planningAnswers.__applicationPlanningAction === 'enter_planning') {
+        if (planningAnswers.__applicationPlanningAction === 'enter_planning' &&
+            !planningStageEntryTransferred(workflow, applicationLifecycle)) {
           const checkpointThreadId = String(planningThreadId || workflow.threadId || '').trim()
           if (!checkpointThreadId) {
             message.error('当前规划 checkpoint 标识缺失，请重新打开应用后重试。')
@@ -4854,6 +4919,7 @@ export default function AiChatPanel({
           )
           if (planningStageTransitionRef.current === stageEntryKey) return
           planningStageTransitionRef.current = stageEntryKey
+          setPlanningEntry({ workspace: application.workspaceRoot, key: stageEntryKey })
           let planningIdentity: SessionIdentity | undefined
           let sourceMessages: AgentChatMessage[] = []
           let sourceMessagesWithReceipt: AgentChatMessage[] = []
@@ -4962,6 +5028,10 @@ export default function AiChatPanel({
               planningSessionKeyRef.current = ''
               switchPhase('product')
             }
+          }).finally(() => {
+            // 交接成功或回滚失败都必须结束当前工作区的临时展示态。
+            setPlanningEntry((current) => current?.key === stageEntryKey &&
+              current.workspace === application.workspaceRoot ? undefined : current)
           })
           if (stageEntryOutcome.status === 'frontend_handoff_failed') {
             message.error(formatError(stageEntryOutcome.error, '进入计划阶段失败'))
@@ -5042,6 +5112,15 @@ export default function AiChatPanel({
       return
     }
     await handleSubmitClarification(workflow, answers)
+  }
+
+  /** 底部重试复用当前原生门禁的原恢复答案及提交事务，不创建新的恢复协议。 */
+  const handleRetryTechnicalPlanning = (): void => {
+    if (!technicalFailureWorkflow || otherSessionExecutionLocked ||
+      planningState?.transportState === 'running' || planningState?.transportState === 'reconciling') return
+    void handleSubmitWorkflowClarification(technicalFailureWorkflow, {
+      planning_recovery: '请重新生成技术规划，并修复全部结构和契约错误。'
+    }).catch((reason) => message.error(formatError(reason, '重试技术规划失败')))
   }
 
   /** 打开并定位右侧字段映射；确认后只更新当前门禁的本地配置状态。 */
@@ -5293,6 +5372,8 @@ export default function AiChatPanel({
       ) : (
         <div className={cx('ai-chat-assistant')}>
           <SessionSidebar
+            planningCatalogStatus={planningCatalogStatus}
+            onPlanningCatalogRetry={onPlanningCatalogRetry}
             activeSessionId={activeSessionId}
             application={application}
             deletingSessionId={deletingSessionId}
@@ -5334,7 +5415,7 @@ export default function AiChatPanel({
           />
           {/* 技能/文件/设置已改为抽屉（见下方 WorkbenchDrawer），对话区不再被替换。 */}
           {
-            <div className={cx('ai-chat-main', showGlobalFallback && 'has-global-fallback')}>
+            <div className={cx('ai-chat-main')}>
               {activeDetailTarget.type !== 'none' ? (
                 <PageContextHeader
                   description={activeHeaderTarget.description}
@@ -5356,12 +5437,9 @@ export default function AiChatPanel({
               ) : null}
 
               {previewError && (
-                <Alert
-                  className={cx('preview-action-error')}
-                  message={previewError}
-                  showIcon
-                  type="error"
-                />
+                <div className={cx('preview-action-error')}>
+                  <AgentErrorCard title="页面预览失败" error={previewError} />
+                </div>
               )}
 
               <AuthorizationBootstrapRecoveryContext.Provider value={authorizationRecoveryNotice}>
@@ -5448,6 +5526,11 @@ export default function AiChatPanel({
                 onContinueDevelopment={handleContinueDevelopment}
                 onEntityDesignGateJump={handleEntityDesignGateJump}
                 onOpenApiDesignConfig={handleOpenApiDesignConfig}
+                onOpenTechnicalPlanChanges={() => {
+                  // 查看差异只展开当前文档，不提交确认或发起新一轮生成。
+                  setRightPanel({ type: 'doc', docKey: 'technical-plan', reviewKey: crypto.randomUUID() })
+                  if (rightPanelLayout === 'hidden') setRightPanelLayout('split')
+                }}
                 onOpenCodeChangeFile={handleOpenCodeChangeFile}
                 onOpenRevisionSession={handleOpenRevisionSession}
                 onRevertCodeChanges={requestCodeChangeRevert}
@@ -5558,17 +5641,12 @@ export default function AiChatPanel({
                 title="保存当前改动为版本"
               />
 
-              {revisionContinuationRecoveryVisible(applicationLifecycle,
-                revisionHandoffFailure?.handoff.continuation, activeSession?.threadId) && revisionHandoffFailure ? (
-                <div className={cx('ai-chat-global-fallback')}>
+              <WorkbenchRecoveryNotice workspace={workspaceRoot} noticeId={globalErrorNoticeId}
+                inline={sessionRecoveryInline}>
+                {revisionHandoffErrorVisible && revisionHandoffFailure ? (
                   <AgentErrorCard title="开发交接尚未完成" error={revisionHandoffFailure.error}
                     retryLabel="继续开发" onRetry={() => { void retryRevisionDevelopmentHandoff() }} />
-                </div>
-              ) : null}
-
-              {showGlobalFallback && !planningHistoryOnly ? (
-                <div className={cx('ai-chat-global-fallback')}>
-                  {activeConnectionState.status !== 'healthy' ? (
+                ) : activeConnectionState.status !== 'healthy' ? (
                     <ConnectionStatusBanner
                       connection={activeConnectionState}
                       onReconnect={
@@ -5618,27 +5696,30 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
-                      title={lifecycleSyncError ? '工作区状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      title={lifecycleSyncError ? '工作区状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : technicalPlanningError ? '技术规划生成失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
                       retryLabel={recoveryProjectionError ? '重新同步' : undefined}
                       diagnostic={recoveryProjectionError && !lifecycleSyncError
                         ? executionRecoveryReadDiagnostic(applicationLifecycle) : undefined}
                       error={globalFallback.error}
-                      onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || currentTemplateRetry || (isApplicationPlanningPhase
-                        ? handleRetryPlanning
+                      retryDisabled={Boolean(technicalPlanningError && (otherSessionExecutionLocked ||
+                        planningState?.transportState === 'running' || planningState?.transportState === 'reconciling'))}
+                      onRetry={globalFallbackScopeDenied ? undefined : pendingRevisionStart ? handleRetryPlanning : retryRecoveryProjection || currentPreviewRetry || (isApplicationPlanningPhase
+                        ? technicalFailureWorkflow ? handleRetryTechnicalPlanning : handleRetryPlanning
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
                           : () => { void retryCurrentRecovery() })}
                       retrying={recoveryRunning || revisionStartRetrying || recoveryProjectionSyncing}
                     />
                   ) : null}
-                </div>
-              ) : null}
+              </WorkbenchRecoveryNotice>
 
               {stoppedPlanning ? (
-                <StoppedPlanningNotice unchanged={stoppedPlanning.workspaceUnchanged}
+                <StoppedPlanningNotice application={application} stopped={stoppedPlanning}
+                  onLifecycle={onApplicationLifecycleChange}
                   disabled={!onRetryPlanning || planningState?.transportState === 'running' || planningState?.transportState === 'reconciling'}
                   error={planningState?.recoveryActionError || planningState?.syncError}
-                  onContinue={() => onRetryPlanning?.()} onRestart={() => switchPhase('development')} />
+                  onContinue={() => onRetryPlanning?.()} onRestart={() => stoppedPlanning.canRestart
+                    ? onRetryPlanning?.(true) : switchPhase('development')} />
               ) : planningHistoryOnly ? (
                 <PlanningHistoryNotice access={planningAccess} onReturn={() => {
                   const destination = planningAccess.destination
@@ -5824,7 +5905,8 @@ export default function AiChatPanel({
           theme={theme}
           workspaceRoot={workspaceRoot || ''}
           onNavigationGuard={registerSourceNavigationGuard}
-          onClose={() => setActiveView('chat')}
+          onBackToFieldMapping={currentMappingJourney?.destination === 'sources' ? handleBackToFieldMapping : undefined}
+          onClose={() => { if (currentMappingJourney?.destination === 'sources') handleBackToFieldMapping(); else setActiveView('chat') }}
         />
       ) : null}
 
@@ -5909,6 +5991,11 @@ export default function AiChatPanel({
               workspaceRoot={workspaceRoot}
               target={apiDesignConfigTarget}
               contracts={developmentPlanningApiContracts}
+              databaseMode={application.datasource.type === 'database' ? application.datasource.db?.useBuiltin === true ? 'builtin' : application.datasource.db?.dbidMode ? 'dbid' : application.datasource.db?.plantMode ? 'direct' : 'external' : undefined}
+              entities={developmentPlanningEntities}
+              onOpenDatabaseSources={handleMappingDatabaseSources}
+              onOpenBuiltinEntityTable={handleMappingBuiltinEntity}
+              sourceRefreshKey={mappingSourceRefreshKey}
               onSelect={setApiDesignConfigTarget}
               onSaved={handleApiDesignConfigSaved}
             />
@@ -5929,7 +6016,11 @@ export default function AiChatPanel({
           />
           <div className={cx('workspace-content')}>
             <DevelopmentArtifactsPanel
+              planningCatalogStatus={planningCatalogStatus}
+              onPlanningCatalogRetry={onPlanningCatalogRetry}
               theme={theme}
+              initialEntityTab={currentMappingJourney?.destination === 'entity' ? 'database' : undefined}
+              onBackToFieldMapping={currentMappingJourney?.destination === 'entity' ? handleBackToFieldMapping : undefined}
               useBuiltinDatabase={application.datasource.type === 'database' && application.datasource.db?.useBuiltin === true}
               onConfigureApi={(target) => handleOpenApiDesignConfig(target)}
               developmentArtifacts={applicationLifecycle?.developmentArtifacts}
@@ -5938,6 +6029,28 @@ export default function AiChatPanel({
               detailLabel={artifactDetailLabel}
               apiTarget={apiTarget}
               apiDesignRefreshKey={apiDesignRefreshKey}
+              pageArtifactRefreshKey={JSON.stringify([
+                applicationLifecycle?.revision,
+                latestWorkflowForDisplay?.summary.status,
+                latestWorkflowForDisplay?.summary.phase,
+                latestWorkflowForDisplay?.state?.buildSummary,
+                Array.isArray(latestWorkflowForDisplay?.state?.smallTaskTasks)
+                  ? latestWorkflowForDisplay.state.smallTaskTasks.map((task) => [
+                    asWorkflowRecord(task)?.id, asWorkflowRecord(task)?.status
+                  ]) : undefined
+              ])}
+              initialUiDesignPageId={uiDesignActivePageId}
+              onPreviewArtifactPage={runtimePreviewBaseUrl ? (path) => {
+                // 预览所浏览的页面，不修改当前开发会话的目标。
+                const url = composePreviewUrl(runtimePreviewBaseUrl, path)
+                if (url) setRightPanel({ type: 'preview', url, requestKey: url })
+              } : undefined}
+              onShowPageDesign={(pageId) => {
+                // 从页面概览跳转到同页设计稿，复用文档目录的真实预览。
+                setUiDesignActivePageId(pageId)
+                artifactOutlineProps.onDocumentSelect?.('ui-design')
+              }}
+              onShowArtifactFiles={() => setRightPanel({ type: 'source' })}
               workspaceRoot={workspaceRoot}
               outlineLocked={false}
               pages={displayedPlanningPages}
@@ -5963,6 +6076,9 @@ export default function AiChatPanel({
             {isDesignPhase && activeDesignDocKey === 'ui-design' ? (
               <UiDesignPreviewPanel
                 activePageId={uiDesignActivePage?.pageId || ''}
+                reading={uiDesignRead.loading}
+                readError={uiDesignRead.error || uiDesignRead.pageErrors[uiDesignActivePage?.pageId || '']}
+                onRetryRead={uiDesignRead.retry}
                 code={uiDesignActivePageCode}
                 generating={uiDesignGenerating}
                 actingPageIds={uiDesignActingPageIds}
@@ -5994,6 +6110,10 @@ export default function AiChatPanel({
                     : technicalPlanForDoc
                 }
                 technicalPlanStatus={technicalPlanBaselineStatus(currentPlanningWorkflow, technicalPlanForDoc)}
+                technicalPlanBaseline={['failed', 'cancelled', 'stopped'].includes(String(currentPlanningWorkflow?.summary.status))
+                  ? undefined : asWorkflowRecord(planningDocumentWorkflow?.state?.technical_plan_baseline)}
+                technicalPlanUpdating={technicalPlanViewActive && planningPhaseRunning}
+                technicalPlanReviewKey={`${JSON.stringify(planningDocumentRefs?.technical_plan)}:${rightPanel?.type === 'doc' ? rightPanel.reviewKey || '' : ''}`}
                 structuredDocument={
                   technicalPlanViewActive
                     ? 'technical-plan'
@@ -6002,7 +6122,9 @@ export default function AiChatPanel({
                       : undefined
                 }
                 structuredDocumentLoading={
-                  planningDocumentView.loading || (technicalPlanViewActive && technicalPlanViewLoading)
+                  planningDocumentView.loading || (technicalPlanViewActive &&
+                    (technicalPlanViewLoading || planningAccess.transitioning === true ||
+                      (!technicalPlanForDoc && planningPhaseRunning)))
                 }
                 title={designDocTitle}
               />

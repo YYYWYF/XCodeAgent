@@ -18,7 +18,9 @@ import { setupClipboardIpc } from './clipboard'
 import { setupAppVersionIpc } from './appVersion'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
-import { endpointDesignDocumentStatus, PRODUCT_PLAN_SCHEMA_VERSION } from './planningArtifactStatus'
+import { endpointDesignDocumentStatus } from './planningArtifactStatus'
+import { readWorkbenchPlanningArtifacts } from './workbenchPlanningArtifacts'
+import type { PlanningCatalogIssue } from '../shared/planningCatalog'
 import {
   nextStageSessionSequence,
   stageForWorkbenchPhase,
@@ -237,26 +239,6 @@ function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
 function projectPlanPageTree(value: unknown): WorkbenchPageTreeNode[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return []
   return buildWorkbenchPageTree((value as Record<string, unknown>).pages)
-}
-
-/** 运行时把 ProductPlan 页面事实与 TechnicalPlan references 合并为工作台视图。 */
-function technicalPlanWorkbenchView(
-  technicalPlan: Record<string, unknown>,
-  productPlan: Record<string, unknown>
-): Record<string, unknown> {
-  const references = new Map(
-    recordItems(technicalPlan.pages).map((page) => [
-      String(page.pageId || '').trim(),
-      isJsonRecord(page.references) ? page.references : {}
-    ])
-  )
-  return {
-    ...technicalPlan,
-    pages: recordItems(productPlan.pages).map((page) => ({
-      ...page,
-      references: references.get(String(page.pageId || '').trim()) || {}
-    }))
-  }
 }
 
 /** 递归构造工作台侧栏使用的页面树节点。 */
@@ -557,25 +539,12 @@ async function mergeWorkbenchApiStatus(
   )
 }
 
-/** 判断页面、Endpoint 或实体详细设计目录是否已有持久化产物；UI Manifest 不计入此状态。 */
-async function hasPersistedDetailDesigns(workspaceRoot: string): Promise<boolean> {
-  for (const directory of ['pages', 'endpoints', 'entities']) {
-    try {
-      const entries = await fs.readdir(path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'plans', directory))
-      if (entries.length > 0) return true
-    } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException
-      if (errnoException?.code === 'ENOENT') continue
-      throw error
-    }
-  }
-  return false
-}
 
 /** 校验当前正式规划产物，并从 ProductPlan/TechnicalPlan 投射工作台大纲。 */
 async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise<{
   ready: boolean
-  hasPageDesigns: boolean
+  planningUnconfirmed: boolean
+  catalogIssues: PlanningCatalogIssue[]
   missing: string[]
   invalid: string[]
   pages: WorkbenchPageOption[]
@@ -583,94 +552,14 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   apiContracts: WorkbenchApiContract[]
   entities: WorkbenchEntityOption[]
 }> {
-  const artifactRoot = path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME)
-  const artifacts = [
-    { relativePath: 'specs/requirement-spec.md', format: 'markdown' },
-    { relativePath: 'specs/requirement-spec.json', format: 'json' },
-    { relativePath: 'plans/product-plan.md', format: 'markdown' },
-    { relativePath: 'plans/technical-plan.md', format: 'markdown' }
-  ]
-  const missing: string[] = []
-  const invalid: string[] = []
-  let plannedPages = new Map<string, Record<string, unknown>>()
-  let pageTree: WorkbenchPageTreeNode[] = []
-  let apiContracts: WorkbenchApiContract[] = []
-  let entities: WorkbenchEntityOption[] = []
-
-  for (const artifact of artifacts) {
-    const artifactPath = path.join(artifactRoot, artifact.relativePath)
-    try {
-      const content = await fs.readFile(artifactPath, 'utf8')
-      if (!content.trim()) {
-        invalid.push(artifact.relativePath)
-        continue
-      }
-      if (artifact.format === 'json') {
-        const value = JSON.parse(content)
-        if (
-          !value ||
-          typeof value !== 'object' ||
-          Array.isArray(value) ||
-          value.confirmation_status !== 'confirmed'
-        ) {
-          invalid.push(artifact.relativePath)
-        }
-      }
-    } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException
-      if (errnoException?.code === 'ENOENT') missing.push(artifact.relativePath)
-      else invalid.push(artifact.relativePath)
-    }
-  }
-
-  let productPlan: Record<string, unknown> | undefined
-  let technicalPlan: Record<string, unknown> | undefined
-  const currentPlanArtifacts = [
-    {
-      relativePath: 'plans/product-plan.json',
-      contractField: 'schema_version',
-      contractValue: PRODUCT_PLAN_SCHEMA_VERSION
-    },
-    {
-      relativePath: 'plans/technical-plan.json',
-      contractField: 'artifact_type',
-      contractValue: 'technical-plan'
-    }
-  ]
-  // 工作台只读取当前 ProductPlan/TechnicalPlan 契约，不回退到旧计划文件。
-  for (const artifact of currentPlanArtifacts) {
-    try {
-      const content = await fs.readFile(path.join(artifactRoot, artifact.relativePath), 'utf8')
-      const plan = JSON.parse(content)
-      if (
-        !plan ||
-        typeof plan !== 'object' ||
-        Array.isArray(plan) ||
-        plan[artifact.contractField] !== artifact.contractValue ||
-        plan.confirmation_status !== 'confirmed'
-      ) {
-        invalid.push(artifact.relativePath)
-        continue
-      }
-      if (artifact.contractValue === PRODUCT_PLAN_SCHEMA_VERSION) {
-        productPlan = plan as Record<string, unknown>
-      } else {
-        technicalPlan = plan as Record<string, unknown>
-      }
-    } catch (error: unknown) {
-      const errnoException = error as NodeJS.ErrnoException
-      if (errnoException?.code === 'ENOENT') missing.push(artifact.relativePath)
-      else invalid.push(artifact.relativePath)
-    }
-  }
-
-  if (productPlan && technicalPlan) {
-    const workbenchPlan = technicalPlanWorkbenchView(technicalPlan, productPlan)
-    plannedPages = projectPlanPages(workbenchPlan)
-    pageTree = projectPlanPageTree(workbenchPlan)
-    apiContracts = projectPlanApiContracts(workbenchPlan)
-  }
-  entities = projectPlanEntities(technicalPlan)
+  const { missing, invalid, catalogIssues, productPlan, technicalPlan } =
+    await readWorkbenchPlanningArtifacts(workspaceRoot)
+  // 页面读取当前 ProductPlan，接口和实体读取当前 TechnicalPlan；待确认内容仍可浏览。
+  // 整体 ready 仍要求全部正式产物已确认，浏览结果不能解除后端开发准入门禁。
+  const plannedPages = projectPlanPages(productPlan)
+  const pageTree = projectPlanPageTree(productPlan)
+  let apiContracts = projectPlanApiContracts(technicalPlan)
+  let entities = projectPlanEntities(technicalPlan)
 
   const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
   const pages = mergeWorkbenchPageStatus(
@@ -680,12 +569,13 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
   apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
   entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
-  // 首次目标选择只针对完全没有详细设计记录的工作区；UI Manifest 不会跳过该入口。
-  const hasPageDesigns = await hasPersistedDetailDesigns(workspaceRoot)
 
   return {
     ready: missing.length === 0 && invalid.length === 0,
-    hasPageDesigns,
+    catalogIssues,
+    planningUnconfirmed: [productPlan, technicalPlan].some(
+      (plan) => plan?.confirmation_status === 'pending_user_confirmation'
+    ),
     missing,
     invalid,
     pages,
@@ -1523,8 +1413,9 @@ function setupWorkspaceIpc(): void {
       const content = await fs.readFile(uiDesignsPath, 'utf8')
       const parsed = JSON.parse(content)
       return { uiDesigns: await attachUiDesignPageCode(workspaceRoot, parsed) }
-    } catch {
-      return { uiDesigns: null }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { uiDesigns: null }
+      throw new Error('UI 设计稿清单无法读取，请检查文件后重新读取。')
     }
   })
 

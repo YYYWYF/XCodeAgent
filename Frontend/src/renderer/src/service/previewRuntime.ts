@@ -8,16 +8,20 @@ export type PreviewAction =
   | 'watch'
   | 'restart'
   | 'stop'
+  | 'stop_frontend'
+  | 'stop_backend'
   | 'diagnose'
   | 'confirm'
   | 'revise'
   | 'cancel'
   | 'leave'
+export type PreviewServiceLayer = 'frontend' | 'backend'
 export type PreviewServiceState = {
   status: 'starting' | 'running' | 'failed' | 'stopped' | 'skipped'
   message?: string
   port?: number
   url?: string
+  stoppedByUser?: boolean
 }
 export type PreviewDiagnostic = {
   stage: string
@@ -77,7 +81,7 @@ export type PreviewRuntimePayload = {
     databaseCheck?: PreviewDatabaseCheck
     repairAvailable?: boolean
     diagnostics?: PreviewDiagnostic[]
-    logs?: Record<'frontend' | 'backend', PreviewLog[]>
+    logs?: Record<PreviewServiceLayer, PreviewLog[]>
     maintenance?: { threadId: string; action: string }
   }
   blockedBy?: { threadId?: string; runId?: string; message: string }

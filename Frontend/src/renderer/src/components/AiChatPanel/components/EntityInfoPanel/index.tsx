@@ -16,6 +16,7 @@ type EntityInfoPanelProps = {
   theme: 'light' | 'dark'
   workspaceRoot?: string
   useBuiltinDatabase?: boolean
+  initialTab?: 'fields' | 'database'
 }
 
 /** 把数组或文本规整为可展示的字符串列表。 */
@@ -43,7 +44,8 @@ export default function EntityInfoPanel({
   entity,
   theme,
   workspaceRoot,
-  useBuiltinDatabase = false
+  useBuiltinDatabase = false,
+  initialTab
 }: EntityInfoPanelProps): ReactElement {
   const fields = Array.isArray(entity?.fields) ? entity.fields : []
   // 模拟数据表的技术设计与实时结果统一放入专属页签，字段页沿用普通实体清单。
@@ -165,6 +167,7 @@ export default function EntityInfoPanel({
         entityId={entity?.id || ''}
         fieldCount={fields.length}
         useBuiltinDatabase={useBuiltinDatabase}
+        initialTab={initialTab}
       >
         {!detail ? <EntityFieldList fields={fields} showHeading={false} /> : null}
 

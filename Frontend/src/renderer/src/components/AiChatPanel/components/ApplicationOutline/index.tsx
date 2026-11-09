@@ -1,11 +1,11 @@
 import {
   CaretDownOutlined,
   DatabaseOutlined,
-  FilterOutlined,
   LockOutlined,
+  ReloadOutlined,
   SearchOutlined
 } from '@ant-design/icons'
-import { Input, Switch, Typography } from 'antd'
+import { Button, Input, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
 import type {
@@ -20,9 +20,11 @@ import { cx } from '../../../../utils'
 import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
 import ApiOutlineGroup from './ApiOutlineGroup'
+import CatalogReadNotice from './CatalogReadNotice'
+import DocumentOutline from './DocumentOutline'
+import type { ArtifactDocumentKey } from './artifactDocuments'
 import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import {
-  collectRelatedKeys,
   collectVisibleKeys,
   containsMenuKey,
   pageTreeItems
@@ -31,6 +33,10 @@ import {
 const { Text } = Typography
 
 export type ApplicationOutlineProps = {
+  onDocumentSelect?: (key: ArtifactDocumentKey) => void
+  selectedDocumentKey?: ArtifactDocumentKey
+  planningCatalogStatus?: import('../../../../typings').PlanningCatalogStatus
+  onPlanningCatalogRetry?: () => void
   developmentArtifacts?: DevelopmentArtifacts
   /** 当前迭代的分支名（= 版本号），用于标注产物归属。 */
   currentBranch?: string
@@ -52,8 +58,12 @@ export type ApplicationOutlineProps = {
   selectedPageId: string
 }
 
-/** 渲染开发产物列表，提供搜索、筛选、分组展开与产物浏览入口。 */
+/** 渲染开发产物列表，提供搜索、分组展开与产物浏览入口。 */
 export default function ApplicationOutline({
+  onDocumentSelect,
+  selectedDocumentKey,
+  planningCatalogStatus,
+  onPlanningCatalogRetry,
   developmentArtifacts,
   currentBranch,
   apiContracts = [],
@@ -75,7 +85,8 @@ export default function ApplicationOutline({
   const [collapsedApiContractIds, setCollapsedApiContractIds] = useState<Set<string>>(
     () => new Set()
   )
-  const [onlyRelated, setOnlyRelated] = useState(false)
+  const productAvailable = planningCatalogStatus?.productAvailable !== false
+  const technicalAvailable = planningCatalogStatus?.technicalAvailable !== false
   const pagesById = useMemo(() => new Map(pages.map((page) => [page.pageId, page])), [pages])
   const pageItems = useMemo<ApplicationMenuItem[]>(
     () =>
@@ -95,18 +106,15 @@ export default function ApplicationOutline({
           })),
     [pageTree, pages]
   )
-  const selectedKey = selectedApiEndpointKey || selectedEntityId
+  const selectedKey = selectedDocumentKey || selectedApiEndpointKey || selectedEntityId
     ? ''
     : containsMenuKey(pageItems, selectedPageId)
       ? selectedPageId
       : ''
-  const visibleKeys = useMemo(() => {
-    const matchingKeys = collectVisibleKeys(pageItems, outlineQuery)
-    if (!onlyRelated) return matchingKeys
-    const relatedKeys = collectRelatedKeys(pageItems, selectedKey)
-    if (relatedKeys.size === 0) return matchingKeys
-    return new Set([...matchingKeys].filter((key) => relatedKeys.has(key)))
-  }, [onlyRelated, outlineQuery, pageItems, selectedKey])
+  const visibleKeys = useMemo(
+    () => collectVisibleKeys(pageItems, outlineQuery),
+    [outlineQuery, pageItems]
+  )
   const visibleApiContracts = useMemo(() => {
     const query = outlineQuery.trim().toLocaleLowerCase()
     if (!query) return apiContracts
@@ -143,33 +151,36 @@ export default function ApplicationOutline({
     <div className={cx('application-outline')}>
       <fieldset
         aria-disabled={outlineLocked}
-        aria-label={outlineLocked ? '页面产物暂不可操作，API 仍可选择' : '开发产物'}
+        aria-label={outlineLocked ? '页面产物暂不可操作，API 仍可选择' : '应用产物'}
         className={cx('session-outline-lock-shell')}
       >
         <div className={cx('session-outline-content')}>
-          <Input
-            allowClear
-            aria-label="搜索页面、接口或实体"
-            className={cx('session-search')}
-            onChange={(event) => setOutlineQuery(event.target.value)}
-            placeholder="搜索页面、接口或实体"
-            prefix={<SearchOutlined />}
-            value={outlineQuery}
-          />
-          <div className={cx('session-filter-row')}>
-            <span>
-              <FilterOutlined />
-              只显示与当前选中相关
-            </span>
-            <Switch
-              aria-label="只显示与当前选中相关"
-              checked={onlyRelated}
-              onChange={setOnlyRelated}
-              size="small"
+          <div className={cx('catalog-search-row')}>
+            <Input
+              allowClear
+              aria-label="搜索文档、页面、接口或实体"
+              className={cx('session-search')}
+              onChange={(event) => setOutlineQuery(event.target.value)}
+              placeholder="搜索文档、页面、接口或实体"
+              prefix={<SearchOutlined />}
+              value={outlineQuery}
+            />
+            <Button
+              aria-label="刷新应用产物"
+              className={cx('catalog-refresh')}
+              disabled={planningCatalogStatus?.loading || !onPlanningCatalogRetry}
+              icon={<ReloadOutlined />}
+              loading={planningCatalogStatus?.loading}
+              onClick={onPlanningCatalogRetry}
+              title="刷新应用产物"
+              type="text"
             />
           </div>
-
           <div className={cx('session-outline-scroll')}>
+            <CatalogReadNotice status={planningCatalogStatus} onRetry={onPlanningCatalogRetry} />
+            {onDocumentSelect ? (
+              <DocumentOutline query={outlineQuery} selectedKey={selectedDocumentKey} onSelect={onDocumentSelect} />
+            ) : null}
             <section className={cx('outline-section')}>
               <button
                 aria-expanded={pagesExpanded}
@@ -180,10 +191,10 @@ export default function ApplicationOutline({
                 <CaretDownOutlined className={cx(!pagesExpanded && 'collapsed')} />
                 <span>页面</span>
                 <span className={cx('development-count')}>
-                  {developmentCompletedCount(
+                  {productAvailable ? <>{developmentCompletedCount(
                     pages.map((page) => developmentArtifacts?.pages[page.pageId])
                   )}
-                  /{pages.length}
+                  /{pages.length}</> : '—'}
                 </span>
               </button>
               {pagesExpanded ? (
@@ -207,8 +218,9 @@ export default function ApplicationOutline({
                       />
                     ))}
                   {pageItems.length === 0 ? (
-                    <div className={cx('outline-empty')}>当前计划 pages 中暂无页面</div>
+                    <div className={cx('outline-empty')}>{productAvailable ? '当前规划中暂无页面' : '页面目录尚未读取成功'}</div>
                   ) : null}
+                  {pageItems.length > 0 && visibleKeys.size === 0 ? <div className={cx('outline-empty')}>没有匹配的页面</div> : null}
                 </div>
               ) : null}
             </section>
@@ -223,7 +235,7 @@ export default function ApplicationOutline({
                 <CaretDownOutlined className={cx(!apiExpanded && 'collapsed')} />
                 <span>接口</span>
                 <span className={cx('development-count')}>
-                  {developmentCompletedCount(
+                  {technicalAvailable ? <>{developmentCompletedCount(
                     apiContracts.flatMap((contract) =>
                       contract.endpoints.map(
                         (endpoint) =>
@@ -233,7 +245,7 @@ export default function ApplicationOutline({
                       )
                     )
                   )}
-                  /{apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}
+                  /{apiContracts.reduce((total, contract) => total + contract.endpoints.length, 0)}</> : '—'}
                 </span>
               </button>
               {apiExpanded ? (
@@ -255,7 +267,7 @@ export default function ApplicationOutline({
                   ))}
                   {visibleApiContracts.length === 0 ? (
                     <div className={cx('outline-empty')}>
-                      暂无接口
+                      {!technicalAvailable ? '接口目录尚未读取成功' : apiContracts.length ? '没有匹配的接口' : '暂无接口'}
                     </div>
                   ) : null}
                 </div>
@@ -270,7 +282,7 @@ export default function ApplicationOutline({
               >
                 <CaretDownOutlined className={cx(!entitiesExpanded && 'collapsed')} />
                 <span>实体</span>
-                <span className={cx('development-count')}>{entities.length}</span>
+                <span className={cx('development-count')}>{technicalAvailable ? entities.length : '—'}</span>
               </button>
               {entitiesExpanded ? (
                 <div className={cx('api-list')}>
@@ -290,7 +302,7 @@ export default function ApplicationOutline({
                   ))}
                   {visibleEntities.length === 0 ? (
                     <div className={cx('outline-empty')}>
-                      {entities.length === 0 ? '当前计划中暂无实体' : '没有匹配的实体'}
+                      {!technicalAvailable ? '实体目录尚未读取成功' : entities.length === 0 ? '当前计划中暂无实体' : '没有匹配的实体'}
                     </div>
                   ) : null}
                 </div>

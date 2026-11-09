@@ -177,6 +177,22 @@
   flex: 1;
   overflow-y: auto;
   padding: 20px 30px 32px;
+
+  // 设置页以网格行间距统一分隔模块，避免与模块内边距和末项外边距叠加。
+  .@{class-prefix}-application-form {
+    row-gap: 24px;
+  }
+
+  .@{class-prefix}-application-form-section {
+    padding-top: 0;
+    padding-bottom: 0;
+
+    > .ant-form-item:last-child,
+    > .@{class-prefix}-application-form-grid:last-child .ant-form-item,
+    > .@{class-prefix}-application-form-section-head:last-child {
+      margin-bottom: 0;
+    }
+  }
 }
 
 .@{class-prefix}-settings-form {

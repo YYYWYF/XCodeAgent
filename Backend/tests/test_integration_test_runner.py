@@ -4,15 +4,22 @@ import os
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from tests.frontend_node_fixture import stub_frontend_node
+from app.services.frontend_node_runtime import record_frontend_dependencies
 
 from app.services.integration_test_runner import run_integration_checks
 from app.services.test_validation import create_revision_requests, evaluate_quality_gate
 
 
 class IntegrationTestRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """用固定 Node 验证命令次序和检查结果投影。"""
+        self.node_runtime = stub_frontend_node(self, "app.services.integration_test_runner")
+
     def test_direct_frontend_scope_skips_install_and_backend_checks(self) -> None:
         """快速前端修复只验证前端层，不重复安装依赖或执行后端命令。"""
 
@@ -42,7 +49,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -66,7 +73,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         )
 
     def test_build_reuses_supplied_frontend_install_result(self) -> None:
-        """审查修复已安装依赖时只执行 Build，不重复运行 pnpm install。"""
+        """审查安装证据匹配当前 Node 时才跳过 pnpm install。"""
 
         with tempfile.TemporaryDirectory() as workspace:
             frontend = Path(workspace) / "frontend"
@@ -94,11 +101,14 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 "passed": True,
                 "required": True,
                 "evidence": "修复 Agent 已执行安装。",
+                "execution": {"nodeRuntime": self.node_runtime.evidence()},
             }
+            root = Path(workspace).resolve()
+            record_frontend_dependencies(root / ".devagentstudio/runtime/launch", frontend.resolve(), self.node_runtime)
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -111,9 +121,30 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                     frontend_install_result=install_result,
                 )
 
-        self.assertNotIn(["pnpm", "install"], calls)
-        self.assertIn(["pnpm", "run", "build"], calls)
-        self.assertIs(result["test_results"][0]["passed"], True)
+                self.assertEqual(calls, [["pnpm", "run", "build"]])
+                self.assertIs(result["test_results"][0]["passed"], True)
+                calls.clear()
+                install_result["execution"]["nodeRuntime"]["version"] = "v20.19.0"
+                run_integration_checks(
+                    {"workspace": workspace},
+                    phase="build",
+                    frontend_install_result=install_result,
+                )
+                self.assertEqual(calls, [["pnpm", "install"], ["pnpm", "run", "build"]])
+                record_frontend_dependencies(
+                    root / ".devagentstudio/runtime/launch",
+                    frontend.resolve(),
+                    replace(self.node_runtime, version="v20.19.0"),
+                )
+                calls.clear()
+                result = run_integration_checks(
+                    {"workspace": workspace},
+                    affected_layers={"frontend"},
+                    phase="build",
+                    install_frontend_dependencies=False,
+                )
+                self.assertEqual(calls, [])
+                self.assertIn("请重新安装依赖", result["test_results"][1]["evidence"])
 
     def test_frontend_build_failure_skips_backend_build_immediately(self) -> None:
         """前端构建阻塞失败后不得再启动 Maven，后端步骤只记录未执行。"""
@@ -149,7 +180,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -202,7 +233,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -248,7 +279,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -314,7 +345,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -376,7 +407,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -443,7 +474,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -573,7 +604,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -623,7 +654,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -675,7 +706,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -730,7 +761,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             with (
                 patch(
                     "app.services.integration_test_runner.shutil.which",
-                    side_effect=lambda name: name,
+                    side_effect=lambda name, **_kwargs: name,
                 ),
                 patch(
                     "app.services.integration_test_runner.workspace_process_registry.run",
@@ -782,7 +813,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
             stderr_log = Path(install["execution"]["stderr_log"])
             self.assertFalse(install["passed"])
             self.assertTrue(install["execution"]["timed_out"])
-            self.assertEqual(stdout_log.read_text(encoding="utf-8"), "安装中")
+            self.assertEqual(stdout_log.read_text(encoding="utf-8"), f"{self.node_runtime.describe()}\n安装中")
             self.assertEqual(
                 stderr_log.read_text(encoding="utf-8"),
                 "network timeout",

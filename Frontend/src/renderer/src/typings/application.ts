@@ -105,6 +105,7 @@ export type ApplicationLayout =
 /** 描述新建应用阶段声明的内置 RBAC 开关和首次管理员种子。 */
 export interface ApplicationAuthorizationSeed {
   enabled: boolean
+  /** 新增项为八位员工号/姓名；已保存旧值仅可原样保留和读取。 */
   initialAdministratorSubjects: string[]
   /** 权限服务仅在启用权限能力时参与工程投影。 */
   api?: {

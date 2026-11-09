@@ -15,14 +15,12 @@ import {
   authenticationLabel,
   fieldLabel,
   methodClass,
-  parameterSummary,
   recordItems,
-  schemaFor,
   stringItems,
   textValue,
   type JsonRecord
 } from './TechnicalPlanDocPanelData'
-import { SchemaTree } from './TechnicalPlanSchemaTree'
+import { EndpointInspector } from './TechnicalPlanEndpointInspector'
 
 const { Text } = Typography
 
@@ -35,6 +33,7 @@ export type SectionKey =
 
 type SectionProps = {
   sectionKey: SectionKey
+  changeKinds?: Record<string, string>
 }
 
 /** 渲染三层架构摘要，完整展示可自动换行的说明。 */
@@ -112,6 +111,7 @@ const entityFieldColumns: ColumnsType<EntityFieldRow> = [
 /** 渲染实体字段表，突出类型、必填状态和字段说明。 */
 export function EntitiesSection({
   entities,
+  changeKinds,
   sectionKey
 }: { entities: JsonRecord[] } & SectionProps): ReactElement {
   return (
@@ -139,6 +139,7 @@ export function EntitiesSection({
                     <code>{textValue(entity.id)}</code>
                   </div>
                   <span>{fields.length} 字段</span>
+                  {changeKinds?.[`entities:${textValue(entity.id)}`] ? <em className={cx('technical-plan-object-change')}>{changeKinds[`entities:${textValue(entity.id)}`]}</em> : null}
                 </div>
                 {textValue(entity.description) ? (
                   <Text type="secondary">{textValue(entity.description)}</Text>
@@ -183,6 +184,7 @@ type ContractSectionProps = {
 /** 渲染 API Contract 列表和 Endpoint 选择器。 */
 export function ContractSection({
   contracts,
+  changeKinds,
   selectedContract,
   selectedEndpoint,
   selectedContractId,
@@ -278,6 +280,7 @@ export function ContractSection({
                         {method}
                       </span>
                       <span className={cx('technical-plan-endpoint-name')}>
+                        {changeKinds?.[`endpoint:${selectedContractId}:${endpointId}`] ? <em className={cx('technical-plan-object-change')}>{changeKinds[`endpoint:${selectedContractId}:${endpointId}`]}</em> : null}
                         {textValue(endpoint.name, '未命名接口')}
                       </span>
                       <code>{textValue(endpoint.path, '/')}</code>
@@ -298,74 +301,6 @@ export function ContractSection({
         </div>
       </div>
     </section>
-  )
-}
-
-/** 渲染所选 Endpoint 的参数、Schema、错误码和字段血缘检查器。 */
-export function EndpointInspector({
-  contract,
-  endpoint
-}: {
-  contract: JsonRecord
-  endpoint: JsonRecord
-}): ReactElement {
-  const responseRef = textValue(endpoint.response_schema_ref)
-  const requestRef = textValue(endpoint.request_schema_ref)
-  const schemaRef = responseRef || requestRef
-  const schema = schemaFor(contract, schemaRef)
-  const schemas = asRecord(contract.schemas)
-  const errorCodes = stringItems(endpoint.error_codes)
-  return (
-    <div className={cx('technical-plan-inspector')}>
-      <div className={cx('technical-plan-inspector-title')}>
-        <span
-          className={cx(
-            'technical-plan-method',
-            methodClass(textValue(endpoint.method, 'GET').toUpperCase())
-          )}
-        >
-          {textValue(endpoint.method, 'GET').toUpperCase()}
-        </span>
-        <strong className={cx('technical-plan-endpoint-name')}>
-          {textValue(endpoint.name, '未命名接口')}
-        </strong>
-        <code>{textValue(endpoint.path, '/')}</code>
-      </div>
-      <dl className={cx('technical-plan-inspector-grid')}>
-        <div>
-          <dt>鉴权</dt>
-          <dd>{authenticationLabel(endpoint.authentication || contract.authentication)}</dd>
-        </div>
-        <div>
-          <dt>参数</dt>
-          <dd>{parameterSummary(endpoint)}</dd>
-        </div>
-        <div>
-          <dt>请求</dt>
-          <dd>{requestRef || '无'}</dd>
-        </div>
-        <div>
-          <dt>响应</dt>
-          <dd>{responseRef || '无'}</dd>
-        </div>
-        <div>
-          <dt>错误码</dt>
-          <dd>{errorCodes.length ? errorCodes.join('、') : '未声明'}</dd>
-        </div>
-      </dl>
-      {schemaRef ? (
-        <div className={cx('technical-plan-schema-card')}>
-          <div className={cx('technical-plan-schema-heading')}>
-            <strong>{responseRef ? '响应 Schema' : '请求 Schema'}</strong>
-          </div>
-          {Object.keys(schema).length ? (
-            <SchemaTree name={schemaRef} schema={schema} schemas={schemas} />
-          ) : (
-            <Text type="secondary">Schema 引用暂不可解析</Text>
-          )}
-        </div>
-      ) : null}
-    </div>
   )
 }
 
@@ -424,6 +359,7 @@ function pageBindingGroups(
 /** 按页面分组展示中文页面名、触发条件和 Endpoint 三段调用关系。 */
 export function PageBindingsSection({
   pages,
+  changeKinds,
   contracts,
   productPlan,
   sectionKey
@@ -451,7 +387,9 @@ export function PageBindingsSection({
         {groups.length ? (
           groups.map((group) => (
             <article className={cx('technical-plan-page-binding-group')} key={group.key}>
-              <strong className={cx('technical-plan-page-binding-name')}>{group.pageName}</strong>
+              <strong className={cx('technical-plan-page-binding-name')}>{group.pageName}
+                {changeKinds?.[`pages:${group.key}`] ? <em className={cx('technical-plan-object-change')}>{changeKinds[`pages:${group.key}`]}</em> : null}
+              </strong>
               <div className={cx('technical-plan-page-binding-rows')}>
                 {group.bindings.map((binding) => (
                   <div className={cx('technical-plan-page-binding-row')} key={binding.key}>

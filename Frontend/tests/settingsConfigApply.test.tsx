@@ -46,6 +46,19 @@ test('设置页仅将发生变化的白名单字段交给同一配置事务', as
   assert.deepEqual(result, { status: 'APPLIED', changedFiles: ['frontend/.env'] })
 })
 
+test('设置页修改或清空码云地址均通过配置事务提交', async () => {
+  const current = application()
+  for (const repoUrl of ['https://gitee.com/example/app.git', '']) {
+    const next = { ...current, repoUrl }
+    const calls: unknown[][] = []
+    await applySettingsConfigChanges(current, next, async (...args) => {
+      calls.push(args)
+      return { status: 'APPLIED' }
+    })
+    assert.deepEqual(calls, [[current.workspaceRoot, current.configRevision, { repoUrl }]])
+  }
+})
+
 test('旧应用设置补齐缺失地址，保留用户主动留空和自定义值', () => {
   const current = application()
   delete (current.auth.yht as Partial<typeof current.auth.yht>).centerUri
@@ -133,7 +146,7 @@ test('旧应用首次启用登录和权限时补齐缺失的嵌套配置', async
   next.auth.yht.publicKey = 'public-key'
   next.auth.yht.centerPublicKey = 'center-public-key'
   next.authorization.enabled = true
-  next.authorization.initialAdministratorSubjects = ['subject-001']
+  next.authorization.initialAdministratorSubjects = ['00123456/张三']
   const calls: unknown[][] = []
 
   await applySettingsConfigChanges(current, next, async (...args) => {
@@ -151,7 +164,7 @@ test('旧应用首次启用登录和权限时补齐缺失的嵌套配置', async
       'auth.yht.privateKey': 'private-key',
       'auth.yht.publicKey': 'public-key',
       'auth.yht.centerPublicKey': 'center-public-key',
-      'authorization.initialAdministratorSubjects': ['subject-001'],
+      'authorization.initialAdministratorSubjects': ['00123456/张三'],
       'authorization.api.baseUrl': LOGIN_AUTHORIZATION_DEFAULTS.baseUrl,
       'authorization.api.viewId': LOGIN_AUTHORIZATION_DEFAULTS.viewId
     }
@@ -170,11 +183,11 @@ test('已启用登录的旧应用首次开启权限时始终提交默认权限 A
   delete current.authorization.api
   const next = createSettingsDraft(current)
   next.authorization.enabled = true
-  next.authorization.initialAdministratorSubjects = ['subject-001']
+  next.authorization.initialAdministratorSubjects = ['00123456/张三']
 
   assert.deepEqual(settingsConfigChanges(current, next), {
     'authorization.enabled': true,
-    'authorization.initialAdministratorSubjects': ['subject-001'],
+    'authorization.initialAdministratorSubjects': ['00123456/张三'],
     'authorization.api.baseUrl': LOGIN_AUTHORIZATION_DEFAULTS.baseUrl,
     'authorization.api.viewId': LOGIN_AUTHORIZATION_DEFAULTS.viewId
   })

@@ -106,3 +106,97 @@
     }
   }
 }
+
+// 三阶段卡片全部继承工作台明暗主题，进度条不展示虚构百分比。
+.@{class-prefix}-builtin-authorization-task {
+  background: var(--wb-surface);
+  border-color: var(--wb-border-strong);
+  padding: 20px;
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  header > strong { font-size: 17px; }
+
+  header > span {
+    background: var(--wb-control);
+    border-radius: 16px;
+    padding: 3px 10px;
+  }
+
+  > ol {
+    list-style: none;
+    padding: 0;
+    margin: 24px 0 12px;
+  }
+
+  > ol > li {
+    display: flex;
+    gap: 12px;
+    padding-bottom: 24px;
+
+    > span {
+      font-size: 20px;
+      line-height: 24px;
+    }
+
+    > div {
+      flex: 1;
+      min-width: 0;
+    }
+
+    p {
+      margin: 6px 0;
+      color: var(--wb-text-secondary);
+    }
+  }
+
+  .@{class-prefix}-builtin-task-success { color: var(--wb-code-add-text); }
+  .@{class-prefix}-builtin-task-warning { color: var(--wb-warning); }
+  .@{class-prefix}-builtin-task-neutral { color: var(--wb-text-tertiary); }
+
+  .@{class-prefix}-builtin-task-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin: 5px 4px;
+    border-radius: 50%;
+    background: var(--wb-border-strong);
+  }
+
+  .@{class-prefix}-builtin-task-progress {
+    height: 3px;
+    margin-top: 12px;
+    border-radius: 3px;
+    background: var(--wb-control);
+    overflow: hidden;
+
+    &::after {
+      content: '';
+      display: block;
+      width: 30%;
+      height: 100%;
+      background: var(--wb-accent);
+      animation: builtin-task-pulse 1.8s ease-in-out infinite alternate;
+    }
+  }
+
+  .@{class-prefix}-builtin-task-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+}
+
+@keyframes builtin-task-pulse {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .@{class-prefix}-builtin-task-progress::after { animation: none !important; }
+}

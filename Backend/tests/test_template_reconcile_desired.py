@@ -9,11 +9,10 @@ from app.services.template_reconcile.desired import (
     compile_template_capabilities,
     requested_config_from_application_config,
 )
-from app.workspace.plan_documents import render_project_plan_markdown
 
 
 class TemplateReconcileDesiredTests(unittest.TestCase):
-    """验证 Desired Capability 的生成、一致性和 Markdown 展示。"""
+    """验证 Desired Capability 的生成与一致性。"""
 
     def test_committed_login_configuration_compiles_desired_capability(self) -> None:
         """登录模板能力只由已提交 application.json 开关决定。"""
@@ -54,6 +53,8 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
                             "privateKey": "111",
                             "publicKey": "123",
                             "centerPublicKey": "456",
+                            "centerUri": "", "authorizeUri": "", "redirectUri": "",
+                            "endUrl": "", "logoutShareJs": "",
                         },
                     },
                     "authorization": {"enabled": False},
@@ -73,6 +74,8 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
                             "privateKey": "111",
                             "publicKey": "123",
                             "centerPublicKey": "456",
+                            "centerUri": "", "authorizeUri": "", "redirectUri": "",
+                            "endUrl": "", "logoutShareJs": "",
                         },
                     },
                 },
@@ -92,19 +95,3 @@ class TemplateReconcileDesiredTests(unittest.TestCase):
                     "authorization": {"enabled": False},
                 }
             )
-
-    def test_does_not_render_template_capabilities_in_technical_plan_markdown(self) -> None:
-        """确认 TechnicalPlan 不再保存或展示应用级模板开关。"""
-
-        markdown = render_project_plan_markdown(
-            {
-                "artifact_type": "technical-plan",
-                "confirmation_status": "draft",
-                "architecture": {},
-                "entities": [],
-                "api_contracts": [],
-                "pages": [],
-                "authorization_manifest": {},
-            }
-        )
-        self.assertNotIn("## 模板能力", markdown)

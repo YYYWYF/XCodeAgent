@@ -1,3 +1,5 @@
+import administratorVectors from '../../tests/fixtures/initial-administrators.json'
+import { parseNewInitialAdministrator, validateAdminChange } from '../src/renderer/src/utils/initialAdministrators'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { ApplicationConfig, ApplicationDraft } from '../src/renderer/src/typings'
@@ -20,7 +22,7 @@ test('生成 schemaVersion 6 权限配置', () => {
   draft.auth.enable = true
   draft.authorization = {
     enabled: true,
-    initialAdministratorSubjects: [' ops@example.com ', 'ops@example.com', 'admin@example.com']
+    initialAdministratorSubjects: [' 00123456/张三 ', '00123456/张三', '00000001/欧阳娜娜']
   }
 
   const schema = buildApplicationSchema(draft)
@@ -29,7 +31,8 @@ test('生成 schemaVersion 6 权限配置', () => {
   assert.equal(schema.configRevision, 1)
   assert.deepEqual(schema.authorization, {
     enabled: true,
-    initialAdministratorSubjects: ['ops@example.com', 'admin@example.com']
+    initialAdministratorSubjects: ['00123456/张三', '00000001/欧阳娜娜'],
+    api: undefined
   })
 })
 
@@ -39,7 +42,7 @@ test('生成一号通登录初始配置', () => {
 
   assert.deepEqual(schema.auth, {
     enable: false,
-    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '' }
+    yht: structuredClone(initialApplicationDraft.auth.yht)
   })
   assert.equal('authnSource' in schema.auth, false)
 })
@@ -116,10 +119,11 @@ test('拒绝权限配置前置条件冲突', () => {
   staticDatasource.auth.enable = true
   staticDatasource.authorization = {
     enabled: true,
-    initialAdministratorSubjects: ['ops@example.com']
+    initialAdministratorSubjects: ['00123456/张三']
   }
   staticDatasource.datasource = { type: DatasourceEnum.STATIC }
-  assert.throws(() => buildApplicationSchema(staticDatasource), /数据库数据源/)
+  // 当前新建合同始终生成数据库数据源，不消费旧草稿中的静态数据源类型。
+  assert.equal(buildApplicationSchema(staticDatasource).datasource.type, DatasourceEnum.DB)
 
   const missingAdministrator = structuredClone(initialApplicationDraft) as ApplicationDraft
   missingAdministrator.auth.enable = true
@@ -145,11 +149,48 @@ test('设置页配置提案只包含发生变化的白名单字段', () => {
   const next = structuredClone(current)
   next.appName = '新的应用名称'
   next.theme.primaryColor = '#e60012'
-  next.authorization.initialAdministratorSubjects = ['ops@example.com']
+  next.authorization.initialAdministratorSubjects = ['00123456/张三']
 
   assert.deepEqual(settingsConfigChanges(current, next), {
     appName: '新的应用名称',
     'theme.primaryColor': '#e60012',
-    'authorization.initialAdministratorSubjects': ['ops@example.com']
+    'authorization.initialAdministratorSubjects': ['00123456/张三']
   })
+})
+
+/** 跨端共用向量验证新增严格、历史原样保留及 Unicode 姓名长度。 */
+test('初始管理员共享格式向量及历史基线', () => {
+  for (const vector of administratorVectors) {
+    if (vector.valid) {
+      const member = parseNewInitialAdministrator(vector.value)
+      assert.equal(member.memberId, vector.memberId)
+      assert.equal(member.memberName, vector.memberName)
+      assert.deepEqual(validateAdminChange([], [vector.value]), [`${vector.memberId}/${vector.memberName}`])
+    } else {
+      assert.throws(() => validateAdminChange([], [vector.value]))
+    }
+    if (vector.value !== 'current-user') {
+      assert.deepEqual(validateAdminChange([vector.value], [vector.value]), [vector.value])
+    }
+  }
+  assert.throws(() => validateAdminChange([], ['00123456/张三', '00123456/李四']), /冲突/)
+  assert.throws(() => validateAdminChange(['00123456'], ['00123456', '00123456/张三']), /冲突/)
+  assert.throws(() => validateAdminChange([], Array(101).fill('00123456/张三')), /100/)
+  assert.deepEqual(validateAdminChange([], ['00123456/张三', '00123456/张三']), ['00123456/张三'])
+})
+
+/** 设置的无关保存保留旧数组顺序与重复项，替换值严格验证。 */
+test('设置保留历史管理员且拒绝非法新增', () => {
+  const current = {
+    ...buildApplicationSchema(structuredClone(initialApplicationDraft) as ApplicationDraft),
+    authorization: { enabled: true, initialAdministratorSubjects: ['ops@example.com', '00123456', 'ops@example.com'] }
+  } as ApplicationConfig
+  const next = structuredClone(current)
+  next.theme.primaryColor = '#123456'
+  assert.deepEqual(settingsConfigChanges(current, next), { 'theme.primaryColor': '#123456' })
+  assert.deepEqual(next.authorization.initialAdministratorSubjects, current.authorization.initialAdministratorSubjects)
+  next.authorization.initialAdministratorSubjects.push('new-legacy')
+  assert.throws(() => settingsConfigChanges(current, next), /8位员工号/)
+  next.authorization.initialAdministratorSubjects = ['00123456/张三']
+  assert.deepEqual(settingsConfigChanges(current, next)['authorization.initialAdministratorSubjects'], ['00123456/张三'])
 })

@@ -89,7 +89,7 @@ class ApplicationConfigMutationTests(unittest.TestCase):
             self.assertFalse(json.loads(target.read_text(encoding="utf-8"))["authorization"]["enabled"])
         with tempfile.TemporaryDirectory() as workspace:
             _write_application(workspace, datasource="database", subjects=["ops@example.com"])
-            updated = apply_application_config_changes(workspace, changes=[_change("auth.enable", False, True), _change("authorization.enabled", False, True)], initial_administrator_subjects=["ops@example.com"])
+            updated = apply_application_config_changes(workspace, changes=[_change("auth.enable", False, True), _change("authorization.enabled", False, True)], initial_administrator_subjects=["00123456/张三"])
             self.assertTrue(updated["authorization"]["enabled"])
 
     def test_service_expands_authorization_dependency_for_manual_target_entry(self) -> None:
@@ -104,6 +104,6 @@ class ApplicationConfigMutationTests(unittest.TestCase):
                 evidence="manual-settings",
             )
             self.assertEqual([change.path for change in changes], ["authorization.enabled"])
-            updated = service.apply(changes=changes, initial_administrator_subjects=["ops@example.com"])
+            updated = service.apply(changes=changes, initial_administrator_subjects=["00123456/张三"])
             self.assertTrue(updated["auth"]["enable"])
             self.assertTrue(updated["authorization"]["enabled"])

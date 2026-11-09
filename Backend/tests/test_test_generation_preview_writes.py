@@ -17,6 +17,7 @@ from app.agents.test_generation.generator import (
     generate_or_update_unit_tests_with_agent,
 )
 from app.agents.test_generation.scope import ScopedTestGenerationBackend
+from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, remove_backend_jar, write_backend_process_record
 from app.services.preview_runtime_guard import claim_maintenance, release_maintenance
 from app.services.preview_runtime_state import (
     LOG_FILES,
@@ -37,6 +38,8 @@ class TestGenerationPreviewWritesTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace)
+            launch = runtime_root(workspace)
+            runtime_jar = launch / "backend-jar" / ("a" * 32) / "app.jar"
             source = root / "frontend/src/apis/orders.ts"
             source.parent.mkdir(parents=True)
             source.write_text("export const orders = [];\n", encoding="utf-8")
@@ -48,13 +51,15 @@ class TestGenerationPreviewWritesTests(unittest.TestCase):
                 claim_maintenance(workspace, "preview-thread", "restart")
                 try:
                     begin_attempt(workspace)
-                    launch = runtime_root(workspace)
                     for layer, names in LOG_FILES.items():
                         for name in names:
                             (launch / name).write_text(f"{marker}: {layer} ready\n", encoding="utf-8")
-                        pid = "9999998" if marker == "initial" else "9999999"
-                        (launch / f"{layer}.pid").write_text(pid, encoding="utf-8")
                         record_progress(workspace, layer, "completed", "预览已启动")
+                    pid = 9999998 if marker == "initial" else 9999999
+                    (launch / "frontend.pid").write_text(str(pid), encoding="utf-8")
+                    runtime_jar.parent.mkdir(parents=True, exist_ok=True)
+                    runtime_jar.write_bytes(marker.encode("utf-8"))
+                    write_backend_process_record(launch / BACKEND_PROCESS_FILENAME, pid=pid, jar=runtime_jar)
                     finish_attempt(workspace, {"status": "running", "message": "预览已就绪"})
                 finally:
                     release_maintenance(workspace, "preview-thread")
@@ -68,7 +73,9 @@ class TestGenerationPreviewWritesTests(unittest.TestCase):
                 if not preview_start.wait(timeout=5):
                     raise TimeoutError("测试生成未进入调用")
                 if mode == "delete":
-                    for path in runtime_root(workspace).iterdir():
+                    remove_backend_jar(runtime_jar)
+                    runtime_jar.parent.parent.rmdir()
+                    for path in launch.iterdir():
                         path.unlink()
                     (root / ".devagentstudio/runtime/preview-maintenance.json").unlink()
                 else:
@@ -125,6 +132,7 @@ class TestGenerationPreviewWritesTests(unittest.TestCase):
             ".devagentstudio/runtime/launch-backup/frontend.pid",
             ".devagentstudio/runtime/launch/frontend.pid.backup",
             ".devagentstudio/runtime/launch/.preview-invalid.tmp",
+            ".devagentstudio/runtime/launch/backend-jar/unmanaged/app.jar",
             ".devagentstudio/runtime/other.json",
             ".devagentstudio/runtime/nested/preview-maintenance.json",
             ".devagentstudio/plans/technical-plan.json",
@@ -144,6 +152,7 @@ class TestGenerationPreviewWritesTests(unittest.TestCase):
             root = Path(workspace) / ".devagentstudio"
             for path in (
                 "runtime/launch/.preview-0123456789abcdef0123456789abcdef.tmp",
+                "runtime/launch/.backend-process-0123456789abcdef0123456789abcdef.tmp",
                 "runtime/preview-maintenance.tmp",
                 "runtime/launch/.preview-invalid.tmp",
                 "runtime/launch/.preview-0123456789abcdef0123456789abcdef.tmp.backup",
@@ -167,6 +176,7 @@ class TestGenerationPreviewWritesTests(unittest.TestCase):
             "/.devagentstudio/runtime/launch/frontend.pid",
             "/.devagentstudio/runtime/launch/frontend.stdout.log",
             "/.devagentstudio/runtime/launch/preview-runtime.json",
+            "/.devagentstudio/runtime/launch/backend-jar/0123456789abcdef0123456789abcdef/app.jar",
             "/.devagentstudio/runtime/preview-maintenance.json",
         ):
             with self.subTest(path=path):

@@ -3,6 +3,7 @@ import './planningProgressCard.test'
 import './workflowArtifactNames.test'
 import './performanceReportDocument.test'
 import './technicalPlanArtifact.test'
+import './workflowInteractionFeedback.test'
 import { workflowDebugResumeSource } from '../src/renderer/src/components/AiChatPanel/workflowDebugResume'
 import { test } from 'node:test'
 import { canEnterModifiedTesting } from '../src/renderer/src/components/AiChatPanel/modifiedTestEntry'
@@ -633,12 +634,13 @@ test('测试启动事件阻止旧确认门触发报告聚焦，完成后再放�
   assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
 })
 
-test('恢复快照中的测试完成确认可从 state 或 result 读取', () => {
-  for (const field of ['state', 'result'] as const) {
-    const workflow = previewWorkflow({ phase: 'integration_test' })
-    workflow[field] = { phase: 'review_phase_confirmation' }
-    assert.equal(workflowTestReportCompleted(workflow, 'integration_test'), true)
-  }
+test('恢复快照中的测试完成确认只从当前 state 读取', () => {
+  const current = previewWorkflow({ phase: 'integration_test' })
+  current.state = { phase: 'review_phase_confirmation' }
+  assert.equal(workflowTestReportCompleted(current, 'integration_test'), true)
+  const withoutState = previewWorkflow({ phase: 'integration_test' })
+  withoutState.result = { phase: 'review_phase_confirmation' }
+  assert.equal(workflowTestReportCompleted(withoutState, 'integration_test'), false)
   assert.equal(workflowTestReportCompleted(undefined, 'review_phase_confirmation'), false)
   const confirmed = previewWorkflow({ phase: 'review_phase_confirmation' })
   confirmed.events = [{ type: 'workflow.node.started', node: { id: 'integration_test' } }]

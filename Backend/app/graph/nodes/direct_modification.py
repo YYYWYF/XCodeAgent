@@ -964,6 +964,7 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
             conversation_summary=str(state.get("direct_modification_summary") or ""),
             backend_handoff=state.get("backend_handoff"),
             element_context=state.get("element_context"),
+            target_context=state.get("change_target"),
             candidate_files=_direct_source_candidates(state, owner="frontend"),
             approved_paths=state.get("direct_modification_approved_paths"),
             workspace=workspace,
@@ -972,6 +973,9 @@ def execute_frontend_direct_modification(state: ProjectState) -> dict[str, Any]:
         ),
         capture_exceptions=True,
     )
+    # 尚无文件差异时保留原异常与失败节点，不能在收尾阶段丢失模型 HTTP 原因。
+    if captured.error is not None and not _code_change_set_has_files(captured.code_change_set):
+        raise captured.error
     stage_result = validated_direct_stage_result(
         _direct_result_from_capture(captured),
         code_change_set=captured.code_change_set,
@@ -1028,6 +1032,9 @@ def execute_backend_direct_modification(state: ProjectState) -> dict[str, Any]:
         ),
         capture_exceptions=True,
     )
+    # 写入前失败交给现有节点恢复；已有差异仍沿原部分结果验收路径处理。
+    if captured.error is not None and not _code_change_set_has_files(captured.code_change_set):
+        raise captured.error
     stage_result = validated_direct_stage_result(
         _direct_result_from_capture(captured),
         code_change_set=captured.code_change_set,
@@ -1073,9 +1080,6 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
     result = run_direct_fix_validation(
         validation_state,
         affected_layers=affected_layers,
-        # 首次验证跑全套（tsc + vite build + 重启）；repair 轮次只跑 tsc，
-        # 避免每轮修复都重复完整构建和重启，把总耗时拉长。
-        lightweight=repair_iteration > 0,
     )
     test_results = _scope_direct_validation_results(
         [item for item in result.get("test_results", []) if isinstance(item, dict)],

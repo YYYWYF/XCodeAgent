@@ -21,7 +21,7 @@ from app.domain.application_planning_recovery import (
 )
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
-from app.services.generated_document_inclusion import write_generated_documents
+from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -37,7 +37,6 @@ from app.services.application_revision_lifecycle import (
 )
 from app.workspace.plan_documents import (
     commit_technical_plan_document,
-    technical_plan_markdown_path,
 )
 
 
@@ -170,6 +169,8 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
     return {
         "phase": "technical_planning_begin",
         "status": "running",
+        # 每轮从已校验的输入捕获基线；后续候选提交不得覆盖它，冷进入沿 checkpoint 读取。
+        "technical_plan_baseline": deepcopy(state.get("technical_plan") or {}),
         "resume_from": "",
         "application_planning_recovery_boundary": _boundary_payload_for_state(
             state,
@@ -185,7 +186,7 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
 
 
 def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
-    """唯一执行 TechnicalPlan LLM 生成与校验修复的 side-effect-free 节点。"""
+    """生成和校验候选并保存内部片段，不写正式文档或消费确认。"""
 
     boundary = _technical_boundary(state)
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.GENERATION_READY:
@@ -216,10 +217,12 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         and state.get("technical_plan")
         else None
     )
+    generation_fragments = {}
     plan, errors, failed_candidate = _generate_valid_technical_plan(
         state,
         technical_requirement,
         existing_plan,
+        generation_fragments=generation_fragments,
     )
     if plan is None:
         # 生成失败不写磁盘、不改生命周期；审阅节点会把错误作为当前业务交互展示。
@@ -229,6 +232,7 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "technical_plan_repair_candidate": failed_candidate or {},
             "technical_plan_repair_source_run_id": "",
             "technical_plan_repair_errors": errors[:12],
+            "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
             "application_planning_recovery_boundary": _boundary_payload_for_state(
                 state,
                 boundary=ApplicationPlanningRecoveryBoundary.REVIEW_READY,
@@ -252,6 +256,7 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         ),
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
+        "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
         "technical_plan_repair_source_run_id": "",
         "timeline": ["technical_planning_generate"],
     }
@@ -270,7 +275,7 @@ def _technical_generation_error_payload(errors: list[str]) -> dict[str, Any]:
 
 
 def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
-    """校验候选摘要并幂等原子提交 TechnicalPlan JSON/Markdown。"""
+    """校验候选摘要并幂等原子保存 TechnicalPlan 草稿，等待用户确认。"""
 
     boundary = _technical_boundary(state)
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.CANDIDATE_COMMITTED:
@@ -292,11 +297,11 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         and lifecycle.initialization.status is ApplicationLifecycleStatus.AWAITING_USER
     ):
         raise ValueError("TechnicalPlan commit 的 lifecycle 不在可确认状态。")
-    markdown_path, json_path = write_generated_documents(
-        state, [technical_plan_markdown_path(state)],
-        commit_technical_plan_document, state, candidate,
+    json_path = commit_technical_plan_document(
+        state, candidate,
         expected_sha256=candidate_sha256,
     )
+    TechnicalPlanFragmentStore(workspace).clear(str(state.get("technical_plan_generation_input_sha256") or ""))
     if lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
         lifecycle = persist_application_lifecycle_transition(
             workspace,
@@ -310,10 +315,10 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         "phase": "technical_planning",
         "status": "requires_user_input",
         "technical_plan": candidate,
+        "technical_plan_generation_input_sha256": "",
         "project_plan": candidate,
-        "technical_plan_path": markdown_path,
         "technical_plan_json_path": json_path,
-        "project_plan_path": markdown_path,
+        "project_plan_path": json_path,
         "project_plan_json_path": json_path,
         "clarification": _planning_confirmation_payload(state, candidate),
         "application_planning_recovery_boundary": _boundary_payload_for_state(
@@ -329,7 +334,7 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
 
 
 def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
-    """确认 TechnicalPlan Markdown 并执行既有 continuation/template 收口逻辑。"""
+    """确认当前 TechnicalPlan 并执行既有 continuation/template 收口逻辑。"""
 
     boundary = _technical_boundary(state)
     if boundary.boundary is not ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED:
@@ -344,22 +349,10 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     )
     from app.graph.application_planning_revision import cleared_design_change_context
     from app.services.project_plan import apply_project_plan_feedback
-    from app.workspace.plan_documents import edited_technical_plan_markdown
-    from app.agents.main.document_sync import sync_project_plan_from_markdown
 
     request = _technical_request(state)
-    edited_markdown = edited_technical_plan_markdown(state, plan)
-    synchronized = (
-        sync_project_plan_from_markdown(
-            plan,
-            state.get("requirement_spec", {}),
-            edited_markdown,
-        )
-        if edited_markdown is not None
-        else plan
-    )
     confirmed_plan = {
-        **apply_project_plan_feedback(synchronized, request),
+        **apply_project_plan_feedback(plan, request),
         "confirmation_status": "confirmed",
     }
     confirmed_plan = _attach_technical_plan_contracts(state, confirmed_plan)
@@ -387,7 +380,7 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         }
 
     workspace, lifecycle = _ensure_technical_lifecycle(state)
-    technical_plan_path, technical_plan_json = commit_technical_plan_document(
+    technical_plan_json = commit_technical_plan_document(
         state,
         confirmed_plan,
     )
@@ -395,7 +388,6 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         {
             **state,
             "technical_plan": confirmed_plan,
-            "technical_plan_path": technical_plan_path,
             "technical_plan_json_path": technical_plan_json,
         }
     )
@@ -429,8 +421,9 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         "status": "completed",
         "technical_plan": confirmed_plan,
         "project_plan": confirmed_plan,
-        "technical_plan_path": technical_plan_path,
         "technical_plan_json_path": technical_plan_json,
+        "project_plan_path": technical_plan_json,
+        "project_plan_json_path": technical_plan_json,
         "application_planning_confirmation": confirmation,
         "revision_continuation": revision_continuation,
         "template_reconcile_pending": template_reconcile_pending,

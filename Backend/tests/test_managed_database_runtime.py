@@ -183,7 +183,7 @@ class ManagedDatabaseRuntimeTests(unittest.TestCase):
              patch("app.services.managed_database_runtime._client", return_value=self.client), \
              patch("app.services.backend_project_launcher.stop_previous_backend_process", return_value={"success": True}), \
              patch("app.services.backend_project_launcher._run_backend_build", side_effect=build), \
-             patch("app.services.backend_project_launcher._find_backend_snapshot_jar", return_value=(self.root / "test.jar", [])), \
+             patch("app.services.backend_project_launcher._find_backend_jar", return_value=(self.root / "test.jar", [])), \
              patch("app.services.backend_project_launcher._jar_has_main_class", return_value=True), \
              patch("app.services.backend_project_launcher._start_backend_server") as start:
             result = _launch_backend_project_locked(root=self.root, backend_root=self.root / "backend",

@@ -7,10 +7,12 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.config import Settings
 from app.services.application_config.repository import ApplicationConfigRepository
+from app.services.application_config.initial_administrators import validate_admin_change, validate_new_admins
 from app.services.application_config.schema import ApplicationConfigError, normalize_application_configuration, validate_application_configuration
 from app.services.application_parameter_updater import ApplicationParameterUpdater
 from app.services.application_parameter_updater import ParameterUpdateError
@@ -24,12 +26,13 @@ from app.utils.atomic_json import atomic_write_json
 from app.workspace.run_lease import workspace_run_leases
 
 _PATHS = frozenset({
-    "appName", "appIcon", "theme.primaryColor", "auth.enable",
+    "appName", "appIcon", "repoUrl", "theme.primaryColor", "auth.enable",
     "auth.yht.clientId", "auth.yht.privateKey", "auth.yht.publicKey", "auth.yht.centerPublicKey",
     "auth.yht.centerUri", "auth.yht.authorizeUri", "auth.yht.redirectUri", "auth.yht.endUrl", "auth.yht.logoutShareJs",
     "authorization.enabled", "authorization.initialAdministratorSubjects", "authorization.api.baseUrl", "authorization.api.viewId",
 })
 _OPTIONAL_SCALAR_PATHS = frozenset({
+    "repoUrl",
     "auth.yht.centerUri", "auth.yht.authorizeUri", "auth.yht.redirectUri", "auth.yht.endUrl",
     "auth.yht.logoutShareJs", "authorization.api.baseUrl", "authorization.api.viewId",
 })
@@ -264,6 +267,15 @@ class ApplicationConfigOrchestrator:
                     raise ApplicationConfigOperationError("CONFIG_VALUE_INVALID", "初始管理员必须是非空 Subject 列表。")
             elif not isinstance(value, str) or (path not in _OPTIONAL_SCALAR_PATHS and not value.strip()):
                 raise ApplicationConfigOperationError("CONFIG_VALUE_INVALID", f"{path} 必须是字符串。")
+            if path == "repoUrl" and value:
+                # 仓库地址可留空；非空时与前端一样限定协议、主机和空白字符。
+                try:
+                    parsed = urlparse(value)
+                    valid = parsed.scheme in {"http", "https", "ssh"} and bool(parsed.hostname) and not any(char.isspace() for char in value)
+                except ValueError:
+                    valid = False
+                if not valid:
+                    raise ApplicationConfigOperationError("CONFIG_VALUE_INVALID", "码云地址必须是完整的 http、https 或 ssh 地址。")
             cursor = result
             parts = path.split(".")
             for part in parts[:-1]:
@@ -281,6 +293,13 @@ class ApplicationConfigOrchestrator:
                 raise ApplicationConfigOperationError("CONFIG_DEPENDENCY_CONFLICT", "权限能力需要登录认证。")
             result["auth"]["enable"] = True
         try:
+            # 历史资格只能来自当前磁盘基线；首次启用不能借用旧值资格。
+            before = current["authorization"]["initialAdministratorSubjects"]
+            after = result["authorization"]["initialAdministratorSubjects"]
+            if result["authorization"]["enabled"] and not current["authorization"]["enabled"]:
+                result["authorization"]["initialAdministratorSubjects"] = validate_new_admins(after)
+            elif "authorization.initialAdministratorSubjects" in changes:
+                result["authorization"]["initialAdministratorSubjects"] = validate_admin_change(before, after)
             validate_application_configuration(result)
             compile_template_application_config(result)
         except (ApplicationConfigError, ValueError) as exc:

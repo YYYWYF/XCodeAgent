@@ -53,7 +53,6 @@ def invalidated_downstream_planning_state() -> dict[str, Any]:
 
     return {
         "technical_plan": {},
-        "technical_plan_path": "",
         "technical_plan_json_path": "",
         "application_planning_recovery_boundary": {},
         "technical_plan_candidate": {},
@@ -73,7 +72,6 @@ def technical_plan_revision_reset_state() -> dict[str, Any]:
     """直接修订 TechnicalPlan 时清理旧派生状态，但保留当前计划作为 baseline。"""
 
     return {
-        "technical_plan_path": "",
         "technical_plan_json_path": "",
         "application_planning_recovery_boundary": {},
         "technical_plan_candidate": {},
@@ -603,7 +601,7 @@ def existing_artifact_presence(state: ProjectState) -> dict[str, bool]:
         "ui_confirmation": bool(_dict_value(state.get("ui_designs"))),
         "technical_planning": bool(
             _dict_value(state.get("technical_plan"))
-            or str(state.get("technical_plan_path") or "").strip()
+            or str(state.get("technical_plan_json_path") or "").strip()
         ),
     }
 

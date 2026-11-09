@@ -21,7 +21,7 @@ from app.services.preview_runtime_state import (
     read_record,
     runtime_snapshot,
 )
-from app.services.project_launcher import launch_project_preview, stop_project_preview
+from app.services.project_launcher import launch_project_preview, stop_preview_service, stop_project_preview
 from app.services.preview_runtime_worker import run_preview_worker
 from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.run_lease import workspace_run_leases
@@ -32,13 +32,20 @@ class PreviewRuntimeInput(BaseModel):
     """在协议边界约束工作区、动作和本次确认身份。"""
     model_config = ConfigDict(extra="forbid")
     workspace: str = Field(min_length=1, max_length=4096)
-    action: Literal["get", "watch", "restart", "stop", "diagnose", "confirm", "revise", "cancel", "leave"]
+    action: Literal[
+        "get", "watch", "restart", "stop", "stop_frontend", "stop_backend",
+        "diagnose", "confirm", "revise", "cancel", "leave",
+    ]
     attemptId: str = ""
     planId: str = ""
     feedback: str = Field(default="", max_length=4000)
     includeLogs: bool = True
 
 
+_service_stop_layers: dict[str, Literal["frontend", "backend"]] = {
+    "stop_frontend": "frontend",
+    "stop_backend": "backend",
+}
 _jobs: dict[tuple[str, str], asyncio.Task[Any]] = {}
 _cancellations: dict[tuple[str, str], Event] = {}
 _leave_cleanups: dict[str, asyncio.Task[Any]] = {}
@@ -109,7 +116,7 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
         if not owner:
             return
         action = str(owner.get("action") or "")
-        if action not in {"restart", "stop", "diagnose", "confirm", "revise"}:
+        if action not in {"restart", "stop", "diagnose", "confirm", "revise", *_service_stop_layers}:
             return
         key = (str(Path(workspace).expanduser().resolve()), str(owner.get("threadId") or ""))
         job = _jobs.get(key)
@@ -117,6 +124,14 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
             return
 
         thread_id = str(owner.get("threadId") or "")
+        if layer := _service_stop_layers.get(action):
+            # 恢复仅收口原尝试的指定进程，旧停止请求不得影响其他服务或新一轮启动。
+            try:
+                with suppress(ValueError, RuntimeError):
+                    stop_preview_service(workspace, layer, owner["attemptId"])
+            finally:
+                release_maintenance(workspace, thread_id)
+            return
         if action in {"diagnose", "confirm", "revise"}:
             repair = load_repair(workspace, thread_id)
             # 待确认是持久暂停，正常情况下没有内存任务；不能把它当成孤儿释放。
@@ -185,6 +200,10 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
         repair = load_repair(workspace, thread_id)
         if cancel.is_set():
             raise RuntimeError("预览维护已请求停止。")
+        if layer := _service_stop_layers.get(request.action):
+            progress("stop", "正在停止前端服务…" if layer == "frontend" else "正在停止后端服务…")
+            result = await synchronous(stop_preview_service, workspace, layer, request.attemptId)
+            return {"launchResult": result}
         if request.action in {"restart", "stop"}:
             progress("restart", "正在停止旧服务并启动预览…" if request.action == "restart" else "正在更新预览服务…")
             if request.action == "stop":
@@ -314,7 +333,7 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             # 因此允许它与应用任务并行，避免短时重启占用反向打断 Workflow。
             blocker = (
                 None
-                if request.action in {"restart", "stop"}
+                if request.action in {"restart", "stop", *_service_stop_layers}
                 else blocking_task(request.workspace, thread_id)
             )
             if blocker:
@@ -343,7 +362,10 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
                     document = repair_path(request.workspace, thread_id).with_suffix(".md").read_text(encoding="utf-8")
                     if document != pending.get("markdown") or source_digest(request.workspace, pending["paths"]) != pending["digest"]:
                         raise ValueError("修复计划或代码已被编辑，请重新诊断并确认。")
-            claim_maintenance(request.workspace, thread_id, request.action)
+            claim_maintenance(
+                request.workspace, thread_id, request.action,
+                attempt_id=request.attemptId if request.action in _service_stop_layers else None,
+            )
             _cancellations[key] = Event()
             job = asyncio.create_task(run_mutation(request, thread_id, report))
             _jobs[key] = job

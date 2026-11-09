@@ -427,11 +427,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ),
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
-                return_value=("technical-plan.md", "technical-plan.json"),
-            ),
-            patch(
-                "app.graph.nodes.planning.edited_technical_plan_markdown",
-                return_value=None,
+                return_value="technical-plan.json",
             ),
         ):
             update = project_planning(state)
@@ -494,7 +490,7 @@ class ProductPlanningRetryTests(unittest.TestCase):
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
-                return_value="technical-plan.md",
+                return_value="technical-plan.json",
             ),
         ):
             update = project_planning(state)
@@ -563,11 +559,11 @@ class ProductPlanningRetryTests(unittest.TestCase):
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
-                return_value="technical-plan.md",
+                return_value="technical-plan.json",
             ),
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
-                return_value=("technical-plan.md", "technical-plan.json"),
+                return_value="technical-plan.json",
             ),
         ):
             project_planning(state)
@@ -609,11 +605,11 @@ class ProductPlanningRetryTests(unittest.TestCase):
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
-                return_value="technical-plan.md",
+                return_value="technical-plan.json",
             ),
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
-                return_value=("technical-plan.md", "technical-plan.json"),
+                return_value="technical-plan.json",
             ),
         ):
             project_planning(state)
@@ -660,11 +656,11 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ),
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
-                return_value="technical-plan.md",
+                return_value="technical-plan.json",
             ),
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
-                return_value=("technical-plan.md", "technical-plan.json"),
+                return_value="technical-plan.json",
             ),
         ):
             update = project_planning(state)
@@ -716,11 +712,11 @@ class ProductPlanningRetryTests(unittest.TestCase):
             ),
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
-                return_value="technical-plan.md",
+                return_value="technical-plan.json",
             ),
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
-                return_value=("technical-plan.md", "technical-plan.json"),
+                return_value="technical-plan.json",
             ),
         ):
             update = project_planning(state)
@@ -791,11 +787,11 @@ class ProductPlanningRetryTests(unittest.TestCase):
             patch("app.graph.nodes.planning.plan_project_with_chat_model") as planner_mock,
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
-                return_value="technical-plan.md",
+                return_value="technical-plan.json",
             ),
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
-                return_value=("technical-plan.md", "technical-plan.json"),
+                return_value="technical-plan.json",
             ),
         ):
             update = project_planning(state)
@@ -807,8 +803,8 @@ class ProductPlanningRetryTests(unittest.TestCase):
         ]
         self.assertEqual([item["endpoint_id"] for item in dependencies], [endpoint_id])
 
-    def test_ui_design_can_be_skipped_and_returns_completed(self) -> None:
-        """用户明确跳过 UI 设计时应落盘 skipped Manifest 并直接放行技术规划。"""
+    def test_ui_design_skip_is_rejected_without_writing_or_advancing(self) -> None:
+        """当前流程拒绝已移除的跳过动作，不生成伪确认或启动 UI 模型。"""
 
         requirement_spec = create_requirement_spec("创建一个库存管理系统")
         requirement_spec["confirmation_status"] = "confirmed"
@@ -816,32 +812,21 @@ class ProductPlanningRetryTests(unittest.TestCase):
         product_plan["confirmation_status"] = "confirmed"
 
         with tempfile.TemporaryDirectory() as directory:
-            result = asyncio.run(
-                ui_confirmation(
-                    {
-                        "workspace": directory,
-                        "workflow_scope": "application_planning",
-                        "application_planning_interaction": {"action": "ui_action"},
-                        "requirement_spec": requirement_spec,
-                        "product_plan": product_plan,
-                        "ui_design_action": {"action": "skip"},
-                    }
+            with self.assertRaisesRegex(ValueError, "不支持跳过 UI 设计"):
+                asyncio.run(
+                    ui_confirmation(
+                        {
+                            "workspace": directory,
+                            "workflow_scope": "application_planning",
+                            "application_planning_interaction": {"action": "ui_action"},
+                            "requirement_spec": requirement_spec,
+                            "product_plan": product_plan,
+                            "ui_design_action": {"action": "skip"},
+                        }
+                    )
                 )
-            )
 
-            persisted = json.loads(
-                (
-                    Path(directory)
-                    / ".devagentstudio"
-                    / "specs"
-                    / "ui-designs.json"
-                ).read_text(encoding="utf-8")
-            )
-
-        self.assertEqual(result["status"], "completed")
-        self.assertEqual(result["ui_designs"]["confirmation_status"], "skipped")
-        self.assertTrue(result["clarification"]["skipped"])
-        self.assertEqual(persisted["confirmation_status"], "skipped")
+            self.assertFalse((Path(directory) / ".devagentstudio/specs/ui-designs.json").exists())
 
     def test_product_plan_confirm_action_wins_over_revision_words_in_request(self) -> None:
         """ProductPlan 的显式 confirm 即使请求含“只保留首页”也必须直接确认。"""
@@ -966,15 +951,11 @@ class ProductPlanningRetryTests(unittest.TestCase):
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             patch(
                 "app.graph.nodes.planning.write_project_plan_document",
-                return_value="technical-plan.md",
+                return_value="technical-plan.json",
             ),
             patch(
                 "app.graph.nodes.planning.write_technical_plan_document",
-                return_value=("technical-plan.md", "technical-plan.json"),
-            ),
-            patch(
-                "app.graph.nodes.planning.edited_technical_plan_markdown",
-                return_value=None,
+                return_value="technical-plan.json",
             ),
         ):
             result = project_planning(state)

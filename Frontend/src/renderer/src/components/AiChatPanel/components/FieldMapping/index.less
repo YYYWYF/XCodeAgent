@@ -51,6 +51,14 @@
   .database-source-section, .database-mapping .binding-section, .external-mapping-section { border-color: var(--wb-border); background: var(--wb-canvas); }
   .database-source-section { .database-section-heading { margin-bottom: 14px; } }
   .database-source-toolbar { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+  .binding-database-guide { margin-top: 14px; padding: 14px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-surface-subtle); color: var(--wb-text);
+    p { margin: 8px 0; color: var(--wb-text-secondary); overflow-wrap: anywhere; }
+    .ant-select { width: 220px; max-width: 100%; margin-right: 10px; }
+    .ant-btn { color: var(--wb-accent); border-color: var(--wb-accent-border); background: var(--wb-canvas);
+      &:hover, &:focus-visible { color: var(--wb-accent-hover); border-color: var(--wb-accent); background: var(--wb-accent-soft); }
+      &:disabled { color: var(--wb-text-secondary); border-color: var(--wb-border); background: var(--wb-control); }
+    }
+  }
   .database-operation-section { padding: 14px 18px; }
   .database-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px;
     .ant-select { min-width: 150px; }

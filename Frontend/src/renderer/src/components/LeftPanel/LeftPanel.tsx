@@ -30,6 +30,8 @@ type Props = {
   applicationLifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
   developmentPlanningReady: boolean
+  planningCatalogStatus: import('../../typings').PlanningCatalogStatus
+  onPlanningCatalogRetry: () => void
   developmentPlanningPages: DevelopmentPlanningPageOption[]
   developmentPlanningPageTree: DevelopmentPlanningPageTreeNode[]
   developmentPlanningApiContracts: DevelopmentPlanningApiContract[]
@@ -96,6 +98,8 @@ export default function LeftPanel({
   applicationLifecycle,
   developmentTotals,
   developmentPlanningReady,
+  planningCatalogStatus,
+  onPlanningCatalogRetry,
   developmentPlanningPages,
   developmentPlanningPageTree,
   developmentPlanningApiContracts,
@@ -136,6 +140,8 @@ export default function LeftPanel({
             applicationLifecycle={applicationLifecycle}
             developmentTotals={developmentTotals}
             developmentPlanningReady={developmentPlanningReady}
+            planningCatalogStatus={planningCatalogStatus}
+            onPlanningCatalogRetry={onPlanningCatalogRetry}
             developmentPlanningPages={developmentPlanningPages}
             developmentPlanningPageTree={developmentPlanningPageTree}
             developmentPlanningApiContracts={developmentPlanningApiContracts}

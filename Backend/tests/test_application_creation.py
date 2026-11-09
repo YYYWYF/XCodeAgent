@@ -53,6 +53,21 @@ class ApplicationCreationTests(unittest.TestCase):
         self.assertEqual(self.create()[0], state)
         self.assertEqual(list(self.root.glob("devagentstudio-create-*")), [])
 
+    def test_new_administrators_are_strict_and_normalized(self):
+        """直接创建入口拒绝旧格式，并在写入前保留首零规范化复合值。"""
+        self.configuration["datasource"] = {"type": "database"}
+        self.configuration["auth"].update(enable=True, yht={
+            "clientId": "client", "privateKey": "private", "publicKey": "public", "centerPublicKey": "center",
+            "centerUri": "", "authorizeUri": "", "redirectUri": "", "endUrl": "", "logoutShareJs": "",
+        })
+        self.configuration["authorization"].update(enabled=True, api={"baseUrl": "", "viewId": ""}, initialAdministratorSubjects=["ops@example.com"])
+        with self.assertRaisesRegex(ValueError, "8位员工号"):
+            self.create()
+        self.assertFalse(self.target.exists())
+        self.configuration["authorization"]["initialAdministratorSubjects"] = [" 00123456/张三 "]
+        _, saved = self.create()
+        self.assertEqual(saved["authorization"]["initialAdministratorSubjects"], ["00123456/张三"])
+
     def test_existing_empty_target(self):
         """用户预先选择的空目录也可提交创建。"""
         self.target.mkdir()

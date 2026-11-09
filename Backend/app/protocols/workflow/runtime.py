@@ -406,7 +406,7 @@ def _mark_started_artifact_revision(
         ),
         "ui_confirmation": bool(state.get("ui_designs")),
         "technical_planning": bool(
-            state.get("technical_plan") or state.get("technical_plan_path")
+            state.get("technical_plan") or state.get("technical_plan_json_path")
         ),
     }
     if node_name == "requirements":

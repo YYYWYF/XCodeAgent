@@ -91,7 +91,8 @@ test('有界展示增量仍能恢复节点步骤、授权结果、扫描结果�
           stateDelta: {
             selected_entity_id: 'entity',
             detail_target_type: 'entity',
-            technical_plan_path: 'plans/technical-plan.md',
+            technical_plan_json_path: 'plans/technical-plan.json',
+            product_plan_path: 'plans/product-plan.md',
             timeline: ['inspect_workspace:cache_hit']
           },
           detail: {
@@ -136,7 +137,8 @@ test('有界展示增量仍能恢复节点步骤、授权结果、扫描结果�
   assert.equal(steps.find((step) => step.nodeName === 'authorization_bootstrap')?.attempt, 2)
   assert.equal((workflow.events[1].data?.stateDelta as any).selected_entity_id, null)
   assert.equal(
-    (workflow.events[0].data?.stateDelta as any).technical_plan_path,
-    'plans/technical-plan.md'
+    (workflow.events[0].data?.stateDelta as any).product_plan_path,
+    'plans/product-plan.md'
   )
+  assert.equal((workflow.events[0].data?.stateDelta as any).technical_plan_json_path, undefined)
 })

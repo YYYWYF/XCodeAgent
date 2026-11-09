@@ -19,6 +19,15 @@ from app.services.workspace_process_registry import workspace_process_registry
 from app.utils.subprocess_output import subprocess_output_text
 
 BACKEND_REPACKAGE_TIMEOUT_SECONDS = 600
+# 默认字符集供日志框架使用，标准流属性覆盖不同 JDK 的控制台编码。
+JAVA_UTF8_OPTIONS = (
+    "-Dfile.encoding=UTF-8",
+    "-Dsun.stdout.encoding=UTF-8",
+    "-Dsun.stderr.encoding=UTF-8",
+    "-Dstdout.encoding=UTF-8",
+    "-Dstderr.encoding=UTF-8",
+)
+JAVA_BACKEND_JAR_OPTIONS = (*JAVA_UTF8_OPTIONS, "-Dlogging.charset.console=UTF-8")
 _BACKEND_DATABASE_ENV_KEYS = frozenset(
     {
         "MYSQL_HOST",
@@ -44,6 +53,21 @@ _BACKEND_DATABASE_ENV_KEYS = frozenset(
 )
 
 
+def _maven_log_environment() -> dict[str, str]:
+    """保留用户 Maven 参数，并让 Maven JVM 以 UTF-8 输出日志。"""
+
+    environment = os.environ.copy()
+    existing_options = environment.get("MAVEN_OPTS", "")
+    environment["MAVEN_OPTS"] = f"{existing_options} {' '.join(JAVA_UTF8_OPTIONS)}".strip()
+    return environment
+
+
+def _maven_output_text(value: Any) -> str:
+    """保留 Maven 的 UTF-8 输出，并解码 Windows 批处理脚本的本机提示。"""
+
+    return subprocess_output_text(value, fallback_encoding="oem" if os.name == "nt" else None)
+
+
 def _run_backend_repackage(
     *,
     maven_command: str,
@@ -65,18 +89,19 @@ def _run_backend_repackage(
             workspace=workspace,
             run_id=run_id,
             cwd=str(cwd),
+            env=_maven_log_environment(),
             capture_output=True,
             timeout=BACKEND_REPACKAGE_TIMEOUT_SECONDS,
             check=False,
         )
-        stdout = subprocess_output_text(completed.stdout)
-        stderr = subprocess_output_text(completed.stderr)
+        stdout = _maven_output_text(completed.stdout)
+        stderr = _maven_output_text(completed.stderr)
         returncode = completed.returncode
         timed_out = False
         error = None
     except subprocess.TimeoutExpired as exc:
-        stdout = subprocess_output_text(exc.stdout)
-        stderr = subprocess_output_text(exc.stderr)
+        stdout = _maven_output_text(exc.stdout)
+        stderr = _maven_output_text(exc.stderr)
         returncode = None
         timed_out = True
         error = None
@@ -104,16 +129,18 @@ def _run_backend_repackage(
     }
 
 
-def _find_backend_snapshot_jar(target_root: Path) -> tuple[Path | None, list[Path]]:
-    """筛选 Maven target 中唯一可执行的 SNAPSHOT 主 JAR。"""
+def _find_backend_jar(target_root: Path) -> tuple[Path | None, list[Path]]:
+    """筛选 Maven target 中唯一的 app.jar 或非附属 SNAPSHOT 主包。"""
 
     if not target_root.is_dir():
         return None, []
     candidates = sorted(
         (
             path
-            for path in target_root.glob("*-SNAPSHOT.jar")
-            if path.is_file() and not _is_auxiliary_snapshot_jar(path)
+            for path in target_root.iterdir()
+            if (path.name == "app.jar" or path.name.endswith("-SNAPSHOT.jar"))
+            and path.is_file() and not path.is_symlink()
+            and not _is_auxiliary_snapshot_jar(path)
         ),
         key=lambda path: path.name,
     )

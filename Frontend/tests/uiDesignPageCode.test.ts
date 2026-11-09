@@ -64,8 +64,8 @@ test('给缺 code 的页面从磁盘回填源码', async () => {
   })
 })
 
-/** 本轮还没生成的页面磁盘上没有源码，留空即可 —— 按钮禁用是正确表现。 */
-test('磁盘没有源码时保持原样', async () => {
+/** 已生成页缺文件必须反馈读取失败，未生成页缺文件仍为正常空态。 */
+test('区分已生成源码缺失和本轮尚未生成', async () => {
   await withTemporaryWorkspace(async (workspaceRoot) => {
     const enriched = (await attachUiDesignPageCode(
       workspaceRoot,
@@ -73,6 +73,28 @@ test('磁盘没有源码时保持原样', async () => {
     )) as { pages: Array<Record<string, unknown>> }
 
     assert.equal(enriched.pages[0].code, undefined)
+    assert.match(String(enriched.pages[0].codeReadError), /无法读取/)
+    const pending = manifest('Pending')
+    ;(pending.pages as Array<Record<string, unknown>>)[0].status = 'pending'
+    const result = await attachUiDesignPageCode(workspaceRoot, pending)
+    assert.deepEqual(result, pending)
+  })
+})
+
+test('单页读取失败保留其他源码，文件恢复后重读清除错误', async () => {
+  await withTemporaryWorkspace(async (workspaceRoot) => {
+    const input = manifest('Good', 'Missing')
+    await writePageCode(workspaceRoot, 'Good', 'export default () => <div>可用页面</div>')
+    const first = await attachUiDesignPageCode(workspaceRoot, input) as { pages: Array<Record<string, unknown>> }
+    assert.ok(first.pages[0].code)
+    assert.equal(first.pages[0].codeReadError, undefined)
+    assert.match(String(first.pages[1].codeReadError), /无法读取/)
+    await writePageCode(workspaceRoot, 'Missing', 'export default () => <div>恢复页面</div>')
+    const retried = await attachUiDesignPageCode(workspaceRoot, input) as { pages: Array<Record<string, unknown>> }
+    assert.ok(retried.pages[1].code)
+    assert.equal(retried.pages[1].codeReadError, undefined)
+    assert.equal((input.pages as Array<Record<string, unknown>>)[1].codeReadError, undefined,
+      '读取错误只属于 IPC 投影，不能污染正式清单')
   })
 })
 

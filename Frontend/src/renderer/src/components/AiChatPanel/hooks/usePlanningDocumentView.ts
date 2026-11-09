@@ -8,7 +8,7 @@ type LoadedDocuments = { identity: string; values: Record<string, unknown>; erro
 
 const DOCUMENT_KEYS: Record<DocumentKind, readonly string[]> = {
   'requirement-doc': ['requirement_spec', 'product_plan'],
-  'technical-plan': ['technical_plan', 'product_plan']
+  'technical-plan': ['technical_plan', 'product_plan', 'technical_plan_baseline']
 }
 
 /** 按当前可见文档选择引用，不预取其他阶段的资料。 */
@@ -27,9 +27,8 @@ function documentRequests(
     .map((key) => ({ key, reference: refs?.[key] }))
   const artifact = source.confirmationArtifact
   const matches =
-    kind === 'technical-plan'
-      ? artifact?.id === 'technical_plan'
-      : artifact?.id === 'requirement_spec' || artifact?.id === 'product_plan'
+    kind === 'requirement-doc' &&
+    (artifact?.id === 'requirement_spec' || artifact?.id === 'product_plan')
   if (matches && artifact?.contentRef)
     requests.push({ key: 'markdown', reference: artifact.contentRef })
   return requests

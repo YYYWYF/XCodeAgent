@@ -110,7 +110,8 @@ function ValidatedConfigCard({
       {explicit.map((item) => <Text key={`${item.path}:${String(item.desiredValue)}`} type="secondary">请求配置：{item.path}</Text>)}
       {inferred.map((item) => <Text key={`${item.path}:${item.reason || ''}`} type="secondary">依赖说明：{item.reason || item.path}</Text>)}
       <Form form={form} initialValues={initialValues} layout="vertical">
-        <ApplicationConfigEditor form={form} mode="conversation" visiblePaths={editablePaths} />
+        <ApplicationConfigEditor form={form} mode="conversation" visiblePaths={editablePaths}
+          administratorBaseline={application.authorization.enabled ? application.authorization.initialAdministratorSubjects : []} />
       </Form>
       {submitError ? <Alert message={submitError} showIcon type="error" /> : null}
       {needsInferredAcceptance ? (

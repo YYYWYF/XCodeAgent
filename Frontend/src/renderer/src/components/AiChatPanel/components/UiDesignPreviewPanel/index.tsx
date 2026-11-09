@@ -1,5 +1,5 @@
 import { CheckOutlined, InboxOutlined } from '@ant-design/icons'
-import { Typography } from 'antd'
+import { Alert, Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { useEffect, useMemo } from 'react'
 import DesignRenderer from '../../../DesignRenderer/DesignRenderer'
@@ -11,7 +11,7 @@ const { Text } = Typography
 
 /** 该页是否处于后台生成池处理中（queued/generating），尚未产出设计稿。 */
 function isPoolGenerating(status?: string): boolean {
-  return status === 'queued' || status === 'generating'
+  return ['queued', 'generating', 'stopping'].includes(String(status))
 }
 
 type UiDesignPage = {
@@ -23,6 +23,11 @@ type UiDesignPage = {
 }
 
 type Props = {
+  readOnly?: boolean
+  reading?: boolean
+  readError?: string
+  onRetryRead?: () => void
+  selectionMissing?: boolean
   /** 当前选中页 id。 */
   activePageId: string
   /** 当前选中页的 .tsx 源码（DesignRenderer 编译渲染）。 */
@@ -40,6 +45,11 @@ type Props = {
 /** 右侧「UI设计稿」面板：左侧页面列表 + 右侧 DesignRenderer 预览。
  *  与中间区 UiDesignConfirmationPanel 联动：选中页同步显示设计稿。 */
 export default function UiDesignPreviewPanel({
+  readOnly = false,
+  reading = false,
+  readError,
+  onRetryRead,
+  selectionMissing = false,
   activePageId,
   code,
   generating,
@@ -62,13 +72,13 @@ export default function UiDesignPreviewPanel({
   )
   // 首次进入或选中页失效时，默认选第一页。
   useEffect(() => {
-    if (pages.length === 0) return
+    if (pages.length === 0 || selectionMissing) return
     const exists = pages.some((p) => (p.pageId || '') === activePageId)
     if (!exists) {
       const first = pages[0]
       if (first?.pageId) onPageChange(first.pageId)
     }
-  }, [activePageId, onPageChange, pages])
+  }, [activePageId, onPageChange, pages, selectionMissing])
 
   return (
     <div className={cx('ui-design-preview-panel')}>
@@ -109,8 +119,17 @@ export default function UiDesignPreviewPanel({
         </nav>
       </aside>
       <div className={cx('ui-design-preview-stage')}>
+        {selectionMissing ? <Alert className={cx('ui-design-read-notice')} type="info" showIcon
+          message="原选页面已不存在，请从页面列表选择其他设计稿。" /> : null}
+        {readError ? <Alert className={cx('ui-design-read-notice')} type="error" showIcon
+          message="设计稿读取失败" description={readError}
+          action={onRetryRead ? <Button loading={reading} disabled={reading} onClick={onRetryRead}>重新读取</Button> : undefined} /> : null}
         <div className={cx('ui-design-preview-stage-body')}>
-          {activePageGenerating || (generating && !code && actingSet.size === 0) ? (
+          {selectionMissing ? (
+            <div className={cx('ui-design-preview-empty')}><Text type="secondary">其他页面的设计稿仍可正常浏览。</Text></div>
+          ) : reading && !code ? (
+            <div className={cx('ui-design-preview-loading')}><RichLoading bare title="正在读取设计稿…" /></div>
+          ) : readError && !code ? null : activePageGenerating || (generating && !code && actingSet.size === 0) ? (
             <div className={cx('ui-design-preview-loading')}>
               <RichLoading bare title="正在生成设计稿…" />
             </div>
@@ -122,8 +141,8 @@ export default function UiDesignPreviewPanel({
           ) : (
             <div className={cx('ui-design-preview-empty')}>
               <InboxOutlined className={cx('ui-design-preview-empty-icon')} />
-              <Text strong>本页尚未生成设计稿</Text>
-              <Text type="secondary">在中间区点击「换一换」或「选模板」生成</Text>
+              <Text strong>{readOnly ? '暂无设计稿' : '本页尚未生成设计稿'}</Text>
+              <Text type="secondary">{readOnly ? '当前页面暂无可预览的设计稿。' : '在中间区点击「换一换」或「选模板」生成'}</Text>
             </div>
           )}
         </div>

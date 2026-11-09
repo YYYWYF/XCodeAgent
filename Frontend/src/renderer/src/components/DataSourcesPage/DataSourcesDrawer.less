@@ -16,6 +16,9 @@
   --data-source-modal-grid-border: rgba(24, 31, 45, 0.08);
   position: absolute; inset: 0 auto 0 68px; z-index: 30; display: flex; max-width: calc(100% - 68px); color: var(--wb-text); background: var(--wb-canvas); box-shadow: 24px 0 30px -18px var(--wb-border-strong);
   .source-drawer-list { width: 420px; max-width: 100%; overflow-y: auto; border-right: 1px solid var(--wb-border); }
+  .source-drawer-return { margin: 12px 20px; color: var(--wb-accent); background: var(--wb-canvas); border-color: var(--wb-accent-border);
+    &:hover, &:focus-visible { color: var(--wb-accent-hover); background: var(--wb-accent-soft); border-color: var(--wb-accent); }
+  }
   // 内置表数量增多时只滚动列表，头部、刷新与本地搜索保持可见，沿用明暗主题令牌。
   .source-drawer-list.is-builtin-database-list {
     display: flex; flex-direction: column; min-height: 0; overflow: hidden;

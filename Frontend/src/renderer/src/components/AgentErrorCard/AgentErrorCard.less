@@ -1,89 +1,170 @@
 .@{class-prefix}-agent-error-card {
   box-sizing: border-box;
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  gap: 13px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
   width: 100%;
-  padding: 16px;
-  color: var(--wb-text, var(--modal-text, #202124));
-  background: color-mix(
-    in srgb,
-    var(--wb-danger, var(--modal-danger, #b42318)) 7%,
-    var(--wb-canvas, var(--modal-surface, #ffffff))
-  );
-  border: 1px solid
-    color-mix(
-      in srgb,
-      var(--wb-danger, var(--modal-danger, #b42318)) 38%,
-      var(--wb-border, var(--modal-border, rgba(0, 0, 0, 0.12)))
-    );
-  border-radius: 10px;
-  box-shadow: 0 8px 22px color-mix(in srgb, var(--wb-danger, #b42318) 8%, transparent);
+  min-width: 0;
+  padding: 16px 18px;
+  color: var(--wb-text, var(--modal-text));
+  // 行内错误默认红底，浮动通知通过同一组变量切换为中性底和深灰操作。
+  background: var(--error-card-background, color-mix(in srgb, var(--wb-danger, var(--modal-danger)) 5%, var(--wb-canvas, var(--modal-surface))));
+  border: 1px solid var(--error-card-border, color-mix(in srgb, var(--wb-danger, var(--modal-danger)) 24%, var(--wb-border, var(--modal-border))));
+  border-radius: 12px;
 }
 
 .@{class-prefix}-agent-error-card-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  color: var(--wb-danger, var(--modal-danger, #b42318));
-  font-size: 22px;
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--wb-danger, var(--modal-danger));
+  background: color-mix(in srgb, var(--wb-danger, var(--modal-danger)) 10%, var(--wb-canvas, var(--modal-surface)));
+  border-radius: 9px;
+  font-size: 20px;
 }
 
-.@{class-prefix}-agent-error-card-copy {
-  display: flex;
+.@{class-prefix}-agent-error-card-copy { display: contents; }
+
+.@{class-prefix}-agent-error-card-header {
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 4px;
 }
 
 .@{class-prefix}-agent-error-card-title.ant-typography {
-  color: var(--wb-text, var(--modal-text, #202124));
-  font-size: 15px;
-  line-height: 1.45;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
-.@{class-prefix}-agent-error-card-message.ant-typography {
-  color: var(--wb-text, var(--modal-text, #202124));
+.@{class-prefix}-agent-error-card-message {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: inherit;
+  font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
-.@{class-prefix}-agent-error-card-hint.ant-typography,
-.@{class-prefix}-agent-error-card-detail.ant-typography {
-  color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
-  font-size: 13px;
+.@{class-prefix}-agent-error-card-hint.ant-typography {
+  grid-column: 1 / -1;
+  color: var(--wb-text-secondary, var(--modal-text-secondary));
+  font-size: 12px;
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
-.@{class-prefix}-agent-error-card-detail.ant-typography {
-  font-family: var(--ui-font-mono);
+.@{class-prefix}-agent-error-card-actions {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 12px;
+  min-width: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--error-card-divider, color-mix(in srgb, var(--wb-danger, var(--modal-danger)) 12%, var(--wb-border, var(--modal-border))));
 }
 
-.@{class-prefix}-agent-error-card-details {
-  grid-column: 1;
-  min-width: 0;
-  color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
+.@{class-prefix}-agent-error-card-retry.ant-btn,
+.@{class-prefix}-agent-error-card-disclosure.ant-btn,
+.@{class-prefix}-agent-error-card-copy-button.ant-btn {
+  max-width: 100%;
+  height: auto;
+  min-height: 28px;
+  padding: 2px 0;
+  color: var(--wb-text-secondary, var(--modal-text-secondary));
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  box-shadow: none;
   font-size: 13px;
-  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
 
-  summary {
-    cursor: pointer;
-    &:focus-visible {
-      outline: 2px solid var(--wb-accent, var(--modal-accent, #722ed1));
-      outline-offset: 3px;
-    }
+  &:not(:disabled):hover,
+  &:not(:disabled):focus-visible {
+    color: var(--error-card-action, var(--wb-danger, var(--modal-danger)));
+    background: color-mix(in srgb, currentColor 7%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 3px;
+  }
+
+  &:disabled {
+    color: var(--wb-text-secondary, var(--modal-text-secondary));
+    background: transparent;
+    opacity: 0.55;
   }
 }
 
+.@{class-prefix}-agent-error-card-retry.ant-btn {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+  margin: 0;
+  color: var(--error-card-action, var(--wb-danger, var(--modal-danger)));
+  font-weight: 500;
+}
+
+.@{class-prefix}-agent-error-card-disclosure.ant-btn {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.@{class-prefix}-agent-error-card-details {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  font-size: 12px;
+
+  &:not([open]) { display: none; }
+}
+
+.@{class-prefix}-agent-error-card-diagnostic-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  // 聊天诊断使用暖白底与浅红边，和外层红底保持同一色系；浮动通知单独覆盖。
+  background: var(--error-card-diagnostic-background, #fffcf8);
+  border: 1px solid var(--error-card-diagnostic-border, #eed8d1);
+  border-radius: 8px;
+
+  // 深色主题保留原有中性诊断底色与无边框布局，仅浅色主题采用暖白和浅红边。
+  .@{class-prefix}-workbench-shell[data-theme='dark'] &,
+  body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) &,
+  body:has(.@{class-prefix}-welcome-page[data-theme='dark']) & {
+    background: var(--error-card-diagnostic-background, color-mix(in srgb, var(--wb-text, var(--modal-text)) 4%, var(--wb-canvas, var(--modal-surface))));
+    border: 0;
+  }
+}
+
+.@{class-prefix}-agent-error-card-diagnostic-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+
+  > .ant-typography { color: inherit; }
+}
+
+.@{class-prefix}-agent-error-card-copy-button.ant-btn { font-size: 12px; }
+
 .@{class-prefix}-agent-error-card-diagnostic {
-  max-height: min(220px, 25vh);
-  margin: 8px 0;
+  max-height: min(240px, 28vh);
+  margin: 0;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -91,41 +172,16 @@
   user-select: text;
 }
 
-.@{class-prefix}-agent-error-card-copy-button.ant-btn {
-  grid-column: 1;
-  justify-self: start;
-  align-self: flex-start;
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
-  margin-left: 4px;
-  padding: 0;
-  font-size: 12px;
-  vertical-align: middle;
-  color: var(--wb-text-secondary, var(--modal-text-secondary, #65666a));
-  background: transparent;
-  border: 0;
-  box-shadow: none;
+.@{class-prefix}-agent-error-card-diagnostic-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 100px) minmax(0, 1fr);
+  gap: 6px 12px;
+  max-height: min(240px, 28vh);
+  margin: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  user-select: text;
 
-  &:hover,
-  &:focus-visible {
-    color: var(--wb-accent, var(--modal-accent, #722ed1));
-    background: var(--wb-accent-soft, var(--modal-surface));
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--wb-accent, var(--modal-accent, #722ed1));
-    outline-offset: 2px;
-  }
-}
-
-.@{class-prefix}-agent-error-card-retry.ant-btn {
-  align-self: flex-start;
-  margin-top: 4px;
-}
-
-@media (max-width: 600px) {
-  .@{class-prefix}-agent-error-card {
-    flex-wrap: wrap;
-  }
+  dt { color: var(--wb-text-secondary, var(--modal-text-secondary)); }
+  dd { margin: 0; white-space: pre-wrap; }
 }

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.services.application_config_prerequisite import analyze_application_config_prerequisite
+from app.services.application_config_prerequisite import analyze_application_config_prerequisite, business_request_for_routing
 
 
 class ConfigPrerequisiteTests(unittest.TestCase):
@@ -64,6 +64,46 @@ class ConfigPrerequisiteTests(unittest.TestCase):
         result = analyze_application_config_prerequisite("把应用名称改为员工中心，并新增员工查询", self.root)
         self.assertEqual(result.suggested_changes["appName"], "员工中心")
         self.assertTrue(result.business_request_required)
+
+    def test_business_field_renames_never_request_application_name(self) -> None:
+        """复现真实正式修订：字段反向改名和名称投影修改不属于应用配置。"""
+
+        for request in (
+            "再次正式修订技术规划，只做反向字段改名：将 WorkOrder 响应 equipment_display_name 恢复为 equipment_name，保留接口身份。",
+            "将接口响应字段名称改为 equipment_display_name，并同步 required。",
+            "把页面名字改为设备详情，其他配置不变。",
+            "将数据表的列改名为设备编号。",
+        ):
+            with self.subTest(request=request):
+                result = analyze_application_config_prerequisite(request, self.root)
+                self.assertEqual(result.config_intents, ())
+                self.assertFalse(result.requires_card)
+                self.assertEqual(business_request_for_routing(request), request)
+                self.assertEqual(result.original_request, request)
+
+    def test_explicit_application_renames_and_satisfied_name_still_work(self) -> None:
+        """真实应用改名仍形成提案，同值请求不重复要求确认。"""
+
+        for request in ("把应用名称改为员工中心", "应用改名为员工中心", "将系统重命名为员工中心"):
+            with self.subTest(request=request):
+                result = analyze_application_config_prerequisite(request, self.root)
+                self.assertEqual(result.suggested_changes, {"appName": "员工中心"})
+                self.assertTrue(result.requires_card)
+        unchanged = analyze_application_config_prerequisite("应用名称改为原应用", self.root)
+        self.assertEqual(unchanged.config_route, "config_only_satisfied")
+        unresolved = analyze_application_config_prerequisite("应用改名", self.root)
+        self.assertTrue(unresolved.requires_card)
+        self.assertIsNone(unresolved.config_intents[0]["desiredValue"])
+
+    def test_mixed_app_and_schema_rename_preserves_full_business_clause(self) -> None:
+        """同时改应用与字段时，仅剥离明确配置子句，字段改名原文保留给正式修订。"""
+
+        business = "把接口字段名称改为 equipment_display_name，并同步 required"
+        request = "把应用名称改为员工中心，" + business
+        result = analyze_application_config_prerequisite(request, self.root)
+        self.assertEqual(result.suggested_changes, {"appName": "员工中心"})
+        self.assertTrue(result.business_request_required)
+        self.assertEqual(business_request_for_routing(request), business)
 
     def test_explicit_denial_conflicts_with_admin_rule(self) -> None:
         """不得因权限禁用表达删除原业务访问条件。"""

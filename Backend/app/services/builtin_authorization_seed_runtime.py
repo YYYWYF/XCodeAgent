@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.services.builtin_authorization_task_store import task_transaction
+
 from app.config import Settings
 from app.services.application_config import read_application_config
 from app.services.authorization_table_projection import compile_authorization_tables
@@ -47,6 +49,9 @@ def _current_inputs(root: Path, record: dict) -> tuple[dict, dict, dict, dict]:
 def _verify_current(root: Path, record: dict, binding: dict, plan: dict, compiled: dict) -> None:
     """在网络边界复核正式 Manifest、实际行及原 Schema 状态。"""
 
+    from app.services.builtin_authorization_task_store import check_task_inputs
+
+    check_task_inputs()
     try:
         current_binding, _, current_plan, current_compiled = _current_inputs(root, record)
         if (current_binding == binding and current_compiled["seedFingerprint"] == compiled["seedFingerprint"]
@@ -202,7 +207,7 @@ def refresh_builtin_authorization_seed(workspace: str, operation_id: str,
     """严格按持久化 Seed ID 单次查询，不执行 Schema 查询或 Seed POST。"""
 
     root = Path(workspace).expanduser().resolve()
-    with builtin_lock(root):
+    with builtin_lock(root), task_transaction(root):
         record = read_record(root, "state.json")
         seed = record.get("seed")
         if not isinstance(seed, dict) or seed.get("operationId") != operation_id:

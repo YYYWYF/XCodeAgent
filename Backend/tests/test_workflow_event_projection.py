@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_event, _workflow_event_state
+from app.persistence.checkpoints import close_workflow_checkpointer
 
 
 class WorkflowEventProjectionTests(unittest.TestCase):
@@ -82,9 +83,13 @@ class WorkflowEventProjectionTests(unittest.TestCase):
 
         async def collect():
             """收集标准 AG-UI 帧，验证流传输而不构造替代产品协议。"""
-            return [frame async for frame in build_workflow_ag_ui_stream(graph=Graph(), payload={
-                "runId": "thin-event-run", "threadId": "thin-event-thread", "messages": [{"role": "user", "content": "受控验证"}]
-            })]
+            try:
+                return [frame async for frame in build_workflow_ag_ui_stream(graph=Graph(), payload={
+                    "runId": "thin-event-run", "threadId": "thin-event-thread", "messages": [{"role": "user", "content": "受控验证"}]
+                })]
+            finally:
+                # Runtime 可打开默认 checkpoint；测试结束时关闭连接线程，避免解释器退出等待。
+                await close_workflow_checkpointer()
 
         frames = [json.loads(line[5:].strip()) for frame in asyncio.run(collect())
                   for line in frame.splitlines() if line.startswith("data:")]

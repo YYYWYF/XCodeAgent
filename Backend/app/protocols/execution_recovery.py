@@ -92,10 +92,10 @@ def execution_recovery_capabilities() -> dict[str, Any]:
             "forwardedProps": {
                 "workspaceRoot": "workspace used to locate the Recovery Store",
                 "executionRecovery": {
-                    "action": "execute | continue | retry_current_failure",
+                    "action": "execute | continue | retry_current_failure | restart_initial_planning",
                     "incidentId": "backend-issued current recovery incident",
                     "actionId": "backend-issued recovery action",
-                    "sourceRunId": "current projection hint used by continue/retry_current_failure",
+                    "sourceRunId": "current source hint; restart_initial_planning requires the current ended initial creation",
                 },
             },
             "clientSelectedFields": ["incidentId", "actionId", "sourceRunId"],
@@ -142,10 +142,12 @@ def build_execution_recovery_ag_ui_stream(
                 and source.status is DurableExecutionStatus.CANCELLED and source.ended_at is not None
                 and ended_planning_available(workspace, load_application_lifecycle(workspace),
                     run_id=source.run_id, thread_id=source.thread_id))
-            if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not allow_stopped and not stopped_planning:
+            restart_initial = action == "restart_initial_planning"
+            if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not allow_stopped and not stopped_planning and not restart_initial:
                 raise RecoveryExecutionError("RECOVERY_SOURCE_NOT_ACTIONABLE", "原执行未失败或中断，请同步当前状态。")
             from app.services.business_node_retry import prepare_business_node_retry
-            context = await prepare_business_node_retry(source, graph, allow_stopped=allow_stopped)
+            context = await prepare_business_node_retry(source, graph, allow_stopped=allow_stopped,
+                restart_initial_planning=restart_initial)
             async for frame in _native_recovery_stream(context, accept):
                 yield frame
             return
@@ -401,10 +403,10 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
             "executionRecovery 不允许客户端提交：" + ", ".join(forbidden),
         )
     action = str(recovery.get("action") or "")
-    if action not in {"execute", "continue", "retry_current_failure"}:
+    if action not in {"execute", "continue", "retry_current_failure", "restart_initial_planning"}:
         raise RecoveryExecutionError(
             "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "executionRecovery.action 只支持 execute、continue 或 retry_current_failure。",
+            "executionRecovery.action 只支持 execute、continue、retry_current_failure 或 restart_initial_planning。",
         )
     source_run_id = str(recovery.get("sourceRunId") or "").strip()
     incident_id = str(recovery.get("incidentId") or "").strip()
@@ -448,8 +450,6 @@ async def _resolve_action_source_run(
             and record.run_id not in active_workbench_run_ids
         ):
             continue
-        if record.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, record.run_id}:
-            continue
         graph_factory = (
             application_planning_graph_for_request
             if record.execution_kind == "application_planning"
@@ -458,6 +458,16 @@ async def _resolve_action_source_run(
         graph = await recovery_graph_for_execution(record) if record.workflow_scope == "conversation" else await graph_factory(workspace=workspace, project_id=record.project_id)
         from app.services.checkpoint_execution import resolve_checkpoint_source
         record = await resolve_checkpoint_source(record, graph)
+        if record.execution_kind == "application_planning" and lifecycle and lifecycle.active_run_id not in {None, record.run_id}:
+            from app.services.business_node_retry import _planning_retry_owner
+            from app.services.checkpoint_execution import read_checkpoint_execution
+
+            # 技术失败审阅可能先提交新 Run 输入、后交接旧生成 owner；与执行准备共用同一校验。
+            checkpoint = await read_checkpoint_execution(record, graph)
+            try:
+                _planning_retry_owner(record, lifecycle, checkpoint, checkpoint.node if checkpoint else "")
+            except RecoveryExecutionError:
+                continue
         from app.services.ended_planning import ended_planning_available
         if (record.execution_kind == "application_planning" and record.status is DurableExecutionStatus.CANCELLED
                 and record.ended_at is not None and ended_planning_available(workspace, lifecycle,

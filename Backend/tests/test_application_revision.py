@@ -9,6 +9,8 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.domain.application_revision import RevisionContinuationRequest
+from app.domain.application_planning_recovery import application_planning_sha256
+from app.workspace.revision_draft_documents import load_revision_draft
 from app.domain.application_revision import RevisionImpact, RevisionTarget
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
@@ -43,7 +45,6 @@ from app.services.revision_drafts import (
     confirm_revision_draft,
     create_revision_draft,
     discard_current_revision_draft,
-    save_revision_draft_markdown,
 )
 from app.services.revision_routing import enforce_revision_routing
 from app.graph.application_planning_revision import analyze_design_intent
@@ -352,10 +353,7 @@ class RevisionRoutingTests(unittest.TestCase):
             self.assertIsNotNone(after.pending_revision_impact)
             self.assertIsNone(after.active_formal_revision)
 
-        resume_state = result["forwardedProps"]["resumeState"]["state"]
-        self.assertNotIn("technical_plan", resume_state)
-        self.assertEqual(resume_state["technical_plan_path"], "")
-        self.assertEqual(resume_state["technical_plan_json_path"], "")
+        self.assertNotIn("resumeState", result["forwardedProps"])
         self.assertEqual(result["request"], "查询接口增加分页")
         self.assertEqual(result["resumeFrom"], "technical_planning_begin")
         self.assertEqual(
@@ -538,6 +536,8 @@ class RevisionRoutingTests(unittest.TestCase):
                         "request": "把订单页改成双列布局",
                         "workspace": directory,
                         "active_run_id": "run-design",
+                        "active_thread_id": "planning-thread",
+                        "design_revision_intent": {"changeId": active.change_id, "interactionId": "impact-design"},
                         "requirement_spec": {"confirmation_status": "confirmed"},
                         "product_plan": {"confirmation_status": "confirmed"},
                         "ui_designs": {"confirmation_status": "confirmed"},
@@ -551,7 +551,7 @@ class RevisionRoutingTests(unittest.TestCase):
         self.assertEqual(update["resume_from"], "")
         self.assertEqual(update["design_change_reason"], "")
         self.assertEqual(update["technical_plan"], {})
-        self.assertEqual(update["technical_plan_path"], "")
+        self.assertNotIn("technical_plan_path", update)
         self.assertEqual(update["technical_plan_json_path"], "")
         self.assertEqual(update["revision_continuation"], {})
 
@@ -590,85 +590,53 @@ class RevisionRoutingTests(unittest.TestCase):
 class RevisionDraftTests(unittest.TestCase):
     """验证隔离草稿、基线保护、确认覆盖和仅草稿放弃语义。"""
 
-    def test_save_confirm_and_discard_preserve_contract(self) -> None:
-        """保存不确认，确认覆盖 canonical，放弃只删除当前草稿。"""
+    def test_confirm_and_discard_ignore_extra_markdown(self) -> None:
+        """有无多余 Markdown 都按结构化草稿确认，放弃不改变正式版本。"""
 
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            plans = workspace / ".devagentstudio" / "plans"
-            plans.mkdir(parents=True)
-            canonical_md = plans / "technical-plan.md"
-            canonical_json = plans / "technical-plan.json"
-            upstream = plans / "product-plan.json"
-            canonical_md.write_text("# old\n", encoding="utf-8")
-            canonical_json.write_text(
-                json.dumps({"confirmation_status": "confirmed", "title": "old"}),
-                encoding="utf-8",
-            )
-            upstream.write_text(json.dumps({"confirmation_status": "confirmed"}), encoding="utf-8")
-            create_revision_draft(
-                workspace,
-                change_id="chg_1",
-                artifact_key="technical-plan",
-                kind="technical_plan",
-                target_id="application",
-                canonical_json_path=canonical_json,
-                markdown="# new\n",
-                artifact={"title": "generated"},
-                based_on_paths={"product-plan": upstream},
-            )
-            draft_hash = save_revision_draft_markdown(
-                workspace,
-                change_id="chg_1",
-                artifact_key="technical-plan",
-                markdown="# edited\n",
-            )
-            self.assertEqual(canonical_md.read_text(encoding="utf-8"), "# old\n")
-            self.assertEqual(len(draft_hash), 64)
-
-            result = confirm_revision_draft(
-                workspace,
-                change_id="chg_1",
-                artifact_key="technical-plan",
-                canonical_markdown_path=canonical_md,
-                canonical_json_path=canonical_json,
-                based_on_paths={"product-plan": upstream},
-                synchronize_markdown=lambda markdown, artifact: {
-                    **artifact,
-                    "title": markdown.strip("# \n"),
-                },
-                validate_artifact=lambda artifact: self.assertEqual(
-                    artifact["title"], "edited"
-                ),
-            )
-            self.assertEqual(result["confirmationStatus"], "confirmed")
-            self.assertEqual(canonical_md.read_text(encoding="utf-8"), "# edited\n")
-            self.assertFalse(
-                revision_draft_directory(
-                    workspace,
-                    change_id="chg_1",
-                    artifact_key="technical-plan",
-                ).exists()
-            )
-
-            create_revision_draft(
-                workspace,
-                change_id="chg_2",
-                artifact_key="technical-plan",
-                kind="technical_plan",
-                target_id="application",
-                canonical_json_path=canonical_json,
-                markdown="# abandoned\n",
-                artifact={"title": "abandoned"},
-                based_on_paths={"product-plan": upstream},
-            )
-            canonical_before = canonical_json.read_bytes()
-            discard_current_revision_draft(
-                workspace,
-                change_id="chg_2",
-                artifact_key="technical-plan",
-            )
-            self.assertEqual(canonical_json.read_bytes(), canonical_before)
+        for extra_markdown in (False, True):
+            with self.subTest(extra_markdown=extra_markdown), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                plans = workspace / ".devagentstudio" / "plans"
+                plans.mkdir(parents=True)
+                canonical_md = plans / "technical-plan.md"
+                canonical_json = plans / "technical-plan.json"
+                upstream = plans / "product-plan.json"
+                canonical_json.write_text('{"confirmation_status":"confirmed","title":"old"}')
+                upstream.write_text('{"confirmation_status":"confirmed"}')
+                create_revision_draft(
+                    workspace, change_id="chg_1", artifact_key="technical-plan",
+                    kind="technical_plan", target_id="application",
+                    canonical_json_path=canonical_json, artifact={"title": "generated"},
+                    based_on_paths={"product-plan": upstream},
+                )
+                draft_dir = revision_draft_directory(workspace, change_id="chg_1", artifact_key="technical-plan")
+                self.assertFalse((draft_dir / "artifact.md").exists())
+                if extra_markdown:
+                    canonical_md.write_bytes(b"\xff")
+                    (draft_dir / "artifact.md").write_bytes(b"\xff")
+                self.assertEqual(json.loads(canonical_json.read_text())["title"], "old")
+                result = confirm_revision_draft(
+                    workspace, change_id="chg_1", artifact_key="technical-plan",
+                    canonical_json_path=canonical_json, based_on_paths={"product-plan": upstream},
+                    prepare_artifact=lambda artifact: artifact,
+                    validate_artifact=lambda artifact: self.assertEqual(artifact["title"], "generated"),
+                )
+                self.assertEqual(result["confirmationStatus"], "confirmed")
+                self.assertEqual(json.loads(canonical_json.read_text())["title"], "generated")
+                self.assertFalse(draft_dir.exists())
+                if extra_markdown:
+                    self.assertEqual(canonical_md.read_bytes(), b"\xff")
+                else:
+                    self.assertFalse(canonical_md.exists())
+                create_revision_draft(
+                    workspace, change_id="chg_2", artifact_key="technical-plan",
+                    kind="technical_plan", target_id="application",
+                    canonical_json_path=canonical_json, artifact={"title": "abandoned"},
+                    based_on_paths={"product-plan": upstream},
+                )
+                before = canonical_json.read_bytes()
+                discard_current_revision_draft(workspace, change_id="chg_2", artifact_key="technical-plan")
+                self.assertEqual(canonical_json.read_bytes(), before)
 
     def test_changed_upstream_rejects_confirmation(self) -> None:
         """草稿生成后直接上游变化必须拒绝确认，不能套用旧草稿。"""
@@ -688,7 +656,6 @@ class RevisionDraftTests(unittest.TestCase):
                 kind="technical_plan",
                 target_id="application",
                 canonical_json_path=canonical,
-                markdown="# new",
                 artifact={},
                 based_on_paths={"product-plan": upstream},
             )
@@ -698,10 +665,9 @@ class RevisionDraftTests(unittest.TestCase):
                     root,
                     change_id="chg_1",
                     artifact_key="technical-plan",
-                    canonical_markdown_path=markdown,
                     canonical_json_path=canonical,
                     based_on_paths={"product-plan": upstream},
-                    synchronize_markdown=lambda _markdown, artifact: artifact,
+                    prepare_artifact=lambda artifact: artifact,
                     validate_artifact=lambda _artifact: None,
                 )
 
@@ -1446,7 +1412,7 @@ class RevisionLifecycleTests(unittest.TestCase):
             assert ended.active_formal_revision is not None
             self.assertEqual(ended.active_formal_revision.change_id, active.change_id)
 
-    def test_draft_interaction_binds_current_lifecycle_and_markdown_hash(self) -> None:
+    def test_draft_interaction_binds_current_lifecycle_and_artifact_hash(self) -> None:
         """草稿动作必须同时匹配 active change、pending interaction 和最新 Markdown。"""
 
         with tempfile.TemporaryDirectory() as directory:
@@ -1502,7 +1468,6 @@ class RevisionLifecycleTests(unittest.TestCase):
                 kind="technical_plan",
                 target_id="application",
                 canonical_json_path=canonical,
-                markdown="# draft",
                 artifact={},
                 based_on_paths={"product-plan": upstream},
             )
@@ -1537,7 +1502,9 @@ class RevisionLifecycleTests(unittest.TestCase):
                     "interactionId": pending.id,
                     "basedOnLifecycleRevision": pending.based_on_revision,
                     "artifactKey": "technical-plan",
-                    "draftSha256": hashlib.sha256(b"# draft").hexdigest(),
+                    "draftSha256": application_planning_sha256(load_revision_draft(
+                        workspace, change_id=active.change_id, artifact_key="technical-plan",
+                    )[1]),
                     "action": "confirm",
                 }
             )

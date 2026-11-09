@@ -1,11 +1,4 @@
-import {
-  CodeOutlined,
-  FileOutlined,
-  FileTextOutlined,
-  LeftOutlined,
-  ProfileOutlined,
-  RightOutlined
-} from '@ant-design/icons'
+import { LeftOutlined, RightOutlined } from '@ant-design/icons'
 import { Empty, Spin, Typography } from 'antd'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
@@ -20,8 +13,6 @@ import xml from 'highlight.js/lib/languages/xml'
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { readWorkspaceFile, type WorkspaceTreeNode } from '../../../../service/workspaceTools'
 import { cx } from '../../../../utils'
-import { BROWSABLE_DESIGN_DOCS } from '../../designArtifacts'
-import SourcePlanningDoc from './SourcePlanningDoc'
 import SourceTree from './SourceTree'
 import { ancestorDirPaths } from './sourceTreeModel'
 import { useSourceTree } from './useSourceTree'
@@ -42,30 +33,11 @@ const { Text } = Typography
 type Props = {
   workspaceRoot: string
   initialFilePath?: string
-  /** 回看历史版本时传入该版本的 Git tag：目录树、文件内容与文档探测都按该版本读取。 */
+  /** 回看历史版本时传入该版本的 Git tag：目录树与文件内容都按该版本读取。 */
   revision?: string
 }
 
 const MAX_CHARS = 200000
-/**
- * 探测文档是否存在时读取的字符数。
- *
- * 后端 `ReadFileRequest.max_chars` 的下限是 200，低于它请求会在校验层被直接拒绝——
- * 探测就会把"参数非法"误当成"文件不存在"，文档全部被置灰。这里贴着下限取，
- * 既满足约束，也只需拉回极少量内容。
- */
-const PROBE_CHARS = 200
-
-/**
- * 每份规划文档的图标与色调：三者同形同色时在树里难以区分，按语义各给一个。
- * 颜色取中间调，明暗两套主题下都清晰可读。
- */
-const DOC_APPEARANCE: Record<string, { icon: ReactElement; tone: string }> = {
-  'requirement-spec': { icon: <FileTextOutlined />, tone: 'is-requirement' },
-  'product-plan': { icon: <ProfileOutlined />, tone: 'is-product' },
-  'technical-plan': { icon: <CodeOutlined />, tone: 'is-technical' }
-}
-
 /** 按文件扩展名推断 highlight.js 语言名；无匹配返回 undefined（纯文本）。 */
 function languageForFile(name: string): string | undefined {
   const ext = name.split('.').pop()?.toLowerCase() || ''
@@ -102,11 +74,12 @@ function languageForFile(name: string): string | undefined {
   }
 }
 
+/** 转义源码中的 HTML 字符，避免纯文本被解释为页面元素。 */
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 应用文件面板：左侧可整栏收起的目录树（规划文档 + 工程源码）+ 右侧内容查看器。 */
+/** 应用文件面板：左侧可整栏收起的工程目录树+ 右侧内容查看器。 */
 export default function SourcePanel({
   workspaceRoot,
   initialFilePath,
@@ -131,66 +104,9 @@ export default function SourcePanel({
   const [fileTruncated, setFileTruncated] = useState(false)
   const [initialTried, setInitialTried] = useState(false)
   const [treeCollapsed, setTreeCollapsed] = useState(false)
-  // 规划文档的可用路径：key -> 实际存在的路径。探测完成前不下"缺失"结论，避免置灰闪烁。
-  const [docPaths, setDocPaths] = useState<Record<string, string>>({})
-  const [docsProbed, setDocsProbed] = useState(false)
-  const selectedDoc = BROWSABLE_DESIGN_DOCS.find((doc) => doc.markdownPaths.includes(selectedPath))
-  const selectedDocumentKey =
-    selectedDoc?.key === 'requirement-spec' ||
-    selectedDoc?.key === 'product-plan' ||
-    selectedDoc?.key === 'technical-plan'
-      ? selectedDoc.key
-      : undefined
-
-  // 规划文档位于 .devagentstudio 下，不出现在工程目录树里（树默认不列隐藏目录），
-  // 因此单独探测一遍：每个文档取第一个存在的路径，都不存在则标记为缺失。
+  // 有指定文件时展开对应祖先目录；没有指定文件时等待用户选择工程文件。
   useEffect(() => {
-    if (!workspaceRoot) {
-      setDocPaths({})
-      setDocsProbed(false)
-      return
-    }
-    let cancelled = false
-    setDocsProbed(false)
-    void Promise.all(
-      BROWSABLE_DESIGN_DOCS.map(async (doc): Promise<[string, string | undefined]> => {
-        for (const path of doc.markdownPaths) {
-          try {
-            await readWorkspaceFile({
-              workspace_root: workspaceRoot,
-              path,
-              max_chars: PROBE_CHARS,
-              revision
-            })
-            return [doc.key, path]
-          } catch {
-            // 该候选路径不存在，继续试下一个（草稿目录 → 正式目录）。
-          }
-        }
-        return [doc.key, undefined]
-      })
-    ).then((entries) => {
-      if (cancelled) return
-      setDocPaths(
-        Object.fromEntries(entries.filter((entry): entry is [string, string] => Boolean(entry[1])))
-      )
-      setDocsProbed(true)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [workspaceRoot, revision])
-
-  // 初始选中：优先 initialFilePath（当前选中页面的文件），否则落到需求文档。
-  //
-  // 合并为一个 effect：拆成两个时会出现"initialFilePath 有值、但该文件不在目录树里"
-  // 的夹缝 —— 前者已把 initialTried 置真却没加载任何文件，后者又被 initialTried 挡住，
-  // 最终谁都不加载，表现为停在「未选择文件」。页面目录名与 pageId 大小写不一致
-  // （磁盘 Home / pageId home）就会踩到这一点。
-  //
-  // 等 tree 与 docsProbed 都就绪再决定，才能判断 initialFilePath 是否真的可选中。
-  useEffect(() => {
-    if (initialTried || !tree || !docsProbed) return
+    if (initialTried || !tree) return
     setInitialTried(true)
     if (initialFilePath) {
       const ancestors = ancestorDirPaths(tree, initialFilePath)
@@ -201,15 +117,12 @@ export default function SourcePanel({
         return
       }
     }
-    // 无指定文件、或指定文件不在树里：默认落在需求文档（最该先看的一份）。
-    const requirementPath = docPaths['requirement-spec']
-    if (requirementPath) void loadFile(requirementPath)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree, docsProbed, docPaths, initialFilePath, initialTried])
+  }, [tree, initialFilePath, initialTried])
 
-  // 规划文档由独立组件读取结构化数据；工程文件沿用现有读取和高亮方式。
+  // 仅在选择工程文件后读取正文，沿用工作区及 Git 修订身份。
   useEffect(() => {
-    if (!workspaceRoot || !selectedPath || selectedDocumentKey) return
+    if (!workspaceRoot || !selectedPath) return
     let cancelled = false
     setFileLoading(true)
     setFileError('')
@@ -236,7 +149,7 @@ export default function SourcePanel({
     return () => {
       cancelled = true
     }
-  }, [workspaceRoot, selectedPath, selectedDocumentKey, revision, fileReadSequence])
+  }, [workspaceRoot, selectedPath, revision, fileReadSequence])
 
   /** 选择文件并清空上一个文件的展示状态，避免切换时闪现旧内容。 */
   const loadFile = (filePath: string): void => {
@@ -249,6 +162,7 @@ export default function SourcePanel({
     setFileTruncated(false)
   }
 
+  /** 将目录树选择传给工程文件读取器。 */
   const handleSelectFile = (node: WorkspaceTreeNode): void => {
     loadFile(node.path)
   }
@@ -263,9 +177,6 @@ export default function SourcePanel({
     }
     return escapeHtml(fileContent)
   }, [fileContent, selectedPath])
-
-  // 三份规划文档复用之前阶段的可视化，源码仍走代码高亮。
-  const selectedDocLabel = selectedDoc?.label
 
   return (
     <div className={cx('source-panel', treeCollapsed && 'is-tree-collapsed')}>
@@ -297,37 +208,6 @@ export default function SourcePanel({
           </header>
 
           <div className={cx('source-panel-tree-body')}>
-            {/* 规划文档分组：位于 .devagentstudio 下，不在工程目录树里，单独列在最上面。 */}
-            <ul className={cx('source-tree', 'source-doc-tree')}>
-              {BROWSABLE_DESIGN_DOCS.map((doc) => {
-                const path = docPaths[doc.key]
-                const missing = docsProbed && !path
-                const appearance = DOC_APPEARANCE[doc.key]
-                return (
-                  <li className={cx('source-tree-node')} key={doc.key}>
-                    {/* 用原生 title 而不是 antd Tooltip：这里只需要一句路径提示，
-                        Tooltip 的浮层与箭头在这个窄栏里显得过重。 */}
-                    <button
-                      className={cx(
-                        'source-tree-row',
-                        appearance?.tone,
-                        path === selectedPath && 'is-selected',
-                        missing && 'is-missing'
-                      )}
-                      disabled={missing}
-                      onClick={() => path && loadFile(path)}
-                      title={missing ? '该文档在当前工作区不存在' : path}
-                      type="button"
-                    >
-                      <span className={cx('source-tree-leaf-spacer')} aria-hidden="true" />
-                      {appearance?.icon ?? <FileOutlined />}
-                      <span className={cx('source-tree-name')}>{doc.label}</span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-
             {treeLoading ? (
               <div className={cx('source-panel-tree-loading')}>
                 <Spin size="small" />
@@ -364,23 +244,14 @@ export default function SourcePanel({
 
       <div className={cx('source-panel-viewer')}>
         <header className={cx('source-panel-header')}>
-          <Text code>{selectedDocLabel || selectedPath || '未选择文件'}</Text>
+          <Text code>{selectedPath || '未选择文件'}</Text>
           {fileTruncated ? (
             <Text className={cx('source-panel-truncated')} type="warning">
               文件过大，已截断
             </Text>
           ) : null}
         </header>
-        {selectedDocumentKey ? (
-          <SourcePlanningDoc
-            key={`${workspaceRoot}:${revision || ''}:${selectedPath}:${fileReadSequence}`}
-            workspaceRoot={workspaceRoot}
-            documentKey={selectedDocumentKey}
-            documentPath={selectedPath}
-            productPlanPath={docPaths['product-plan']}
-            revision={revision}
-          />
-        ) : fileLoading ? (
+        {fileLoading ? (
           <div className={cx('source-panel-viewer-loading')}>
             <Spin size="small" />
             <Text type="secondary">正在读取文件…</Text>

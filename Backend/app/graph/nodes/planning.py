@@ -11,6 +11,7 @@ from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.technical_plan_editor import TechnicalPlanCandidateError
+from app.agents.main.technical_plan_fragment_retry import PlanningFragmentFailed, dependency_repair_key
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 from app.agents.database.generator import (
     entity_design_bindings_with_agent,
@@ -61,6 +62,9 @@ from app.services.authorization_deliverability import (
 )
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
+from app.domain.application_planning_recovery import application_planning_sha256
+from app.services.ui_design_manifest import persisted_ui_manifest
+from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.entity_display_language import validate_entity_display_language
 from app.services.data_source_policy import workspace_uses_builtin_database
@@ -76,12 +80,10 @@ from app.services.page_implementation_contract import (
 )
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
-    edited_technical_plan_markdown,
     edited_project_plan_markdown,
     project_plan_json_path,
     project_plan_markdown_path,
     technical_plan_json_path,
-    technical_plan_markdown_path,
     write_technical_plan_document,
     write_project_plan_document,
 )
@@ -213,6 +215,8 @@ def _technical_planning_requirement_spec(
         **technical_input,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
+        "confirmed_ui_design_sha256": application_planning_sha256(persisted_ui_manifest(ui_designs)),
+        "technical_plan_generation_workspace": workspace_from_state(state),
         "application_config": application_config,
     }
 
@@ -287,14 +291,13 @@ def _planning_artifact_fields(
     plan: dict,
     project_plan_path: str,
 ) -> dict:
-    """写入 TechnicalPlan 正式副本并返回新旧状态字段。"""
+    """写入 TechnicalPlan 结构化产物并返回当前状态字段。"""
 
     if state.get("workflow_scope") != "application_planning":
         return {}
-    technical_path, technical_json_path = write_technical_plan_document(state, plan)
+    technical_json_path = write_technical_plan_document(state, plan)
     return {
         "technical_plan": plan,
-        "technical_plan_path": technical_path,
         "technical_plan_json_path": technical_json_path,
         "project_plan_path": project_plan_path,
     }
@@ -433,7 +436,6 @@ def project_planning(state: ProjectState) -> dict:
             ),
             "project_plan_path": state.get("project_plan_path", ""),
             "project_plan_json_path": state.get("project_plan_json_path", ""),
-            "technical_plan_path": state.get("technical_plan_path", ""),
             "technical_plan_json_path": state.get("technical_plan_json_path", ""),
             "clarification": (
                 _project_plan_dependency_error_payload(pending_errors)
@@ -448,7 +450,7 @@ def project_planning(state: ProjectState) -> dict:
         else _user_confirmed_project_plan(request)
     ):
         edited_markdown = (
-            edited_technical_plan_markdown(state, existing_plan)
+            None
             if phase == "technical_planning"
             else edited_project_plan_markdown(state, existing_plan)
         )
@@ -480,9 +482,8 @@ def project_planning(state: ProjectState) -> dict:
                 state=state,
                 repair_attempts=_TECHNICAL_PLAN_GENERATION_ATTEMPTS,
             )
-            repaired_path = write_generated_documents(
-                state, [technical_plan_markdown_path(state) if phase == "technical_planning"
-                        else project_plan_markdown_path(state)],
+            repaired_path = write_project_plan_document(state, repaired_plan) if phase == "technical_planning" else write_generated_documents(
+                state, [project_plan_markdown_path(state)],
                 write_project_plan_document, state, repaired_plan,
             )
             return {
@@ -499,7 +500,7 @@ def project_planning(state: ProjectState) -> dict:
                 ),
                 "timeline": [phase],
             }
-        # 完整重写 Markdown，确保手动篡改的数据源类型和实现边界也被恢复。
+        # 完整提交当前产物，确认后的数据源类型和实现边界保持一致。
         project_plan_path = write_project_plan_document(state, project_plan)
         return {
             "phase": phase,
@@ -527,6 +528,7 @@ def project_planning(state: ProjectState) -> dict:
                 "adjustment_present=true"
             )
     if phase == "technical_planning":
+        generation_fragments = {}
         project_plan, validation_errors, failed_candidate = (
             _generate_valid_technical_plan(
                 state,
@@ -537,6 +539,7 @@ def project_planning(state: ProjectState) -> dict:
                     if resume_failed_candidate and isinstance(repair_errors, list)
                     else None
                 ),
+                generation_fragments=generation_fragments,
             )
         )
         if project_plan is None:
@@ -548,6 +551,7 @@ def project_planning(state: ProjectState) -> dict:
                 ),
                 "technical_plan_repair_candidate": failed_candidate or {},
                 "technical_plan_repair_errors": validation_errors[:12],
+                "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
                 "timeline": [phase],
             }
     else:
@@ -573,11 +577,12 @@ def project_planning(state: ProjectState) -> dict:
                 state=state,
                 repair_attempts=1,
             )
-    project_plan_path = write_generated_documents(
-        state, [technical_plan_markdown_path(state) if phase == "technical_planning"
-                else project_plan_markdown_path(state)],
+    project_plan_path = write_project_plan_document(state, project_plan) if phase == "technical_planning" else write_generated_documents(
+        state, [project_plan_markdown_path(state)],
         write_project_plan_document, state, project_plan,
     )
+    if phase == "technical_planning" and workspace_from_state(state):
+        TechnicalPlanFragmentStore(workspace_from_state(state)).clear(generation_fragments.get("input_sha256", ""))
     clarification = (
         _project_plan_dependency_error_payload(validation_errors)
         if validation_errors
@@ -594,6 +599,7 @@ def project_planning(state: ProjectState) -> dict:
         "clarification": clarification,
         "technical_plan_repair_candidate": {},
         "technical_plan_repair_errors": [],
+        "technical_plan_generation_input_sha256": "",
         "timeline": [phase],
     }
 
@@ -1868,10 +1874,12 @@ def _generate_valid_technical_plan(
     existing_plan: dict | None,
     *,
     initial_errors: list[str] | None = None,
+    generation_fragments: dict[str, Any] | None = None,
 ) -> tuple[dict | None, list[str], dict | None]:
-    """在统一的三次总预算内完成 TechnicalPlan 生成、规范化校验与错误反馈修复。"""
+    """片段独立重试，依赖修复与完整候选校验各自有界，耗尽后不叠加重放。"""
 
     current_plan = deepcopy(existing_plan)
+    fragments = generation_fragments if generation_fragments is not None else {}
     remaining_errors = list(initial_errors or [])
     base_feedback = str(
         requirement_spec.get("planning_adjustment_request") or ""
@@ -1886,7 +1894,9 @@ def _generate_valid_technical_plan(
         except (TypeError, ValueError) as exc:
             # 续修候选仍可能在运行时契约编译处失败；保留候选和当前错误交回编辑器。
             remaining_errors = [str(exc)]
-    for attempt in range(1, _TECHNICAL_PLAN_GENERATION_ATTEMPTS + 1):
+    attempt = 0
+    dependency_repairs: dict[str, int] = {}
+    while attempt < _TECHNICAL_PLAN_GENERATION_ATTEMPTS:
         validation_feedback = (
             _technical_plan_retry_feedback(remaining_errors)
             if remaining_errors
@@ -1909,6 +1919,7 @@ def _generate_valid_technical_plan(
                     current_requirement,
                     **({"existing_plan": current_plan} if current_plan else {}),
                     on_token=_planning_token_callback,
+                    generation_fragments=fragments,
                 )
             )
             candidate = apply_project_plan_feedback(candidate, base_feedback)
@@ -1920,10 +1931,23 @@ def _generate_valid_technical_plan(
             if not remaining_errors:
                 return candidate, [], None
             current_plan = candidate
+        except PlanningFragmentFailed as exc:
+            # 当前模块已用完独立预算，立即交回原失败审阅，不再乘以外层三轮。
+            return None, [str(exc)], current_plan
         except (TypeError, ValueError) as exc:
+            repair_key = dependency_repair_key(exc)
+            if repair_key is not None:
+                count = dependency_repairs.get(repair_key, 0) + 1
+                dependency_repairs[repair_key] = count
+                remaining_errors = [str(exc)]
+                logger.warning("technical_plan_dependency_repair: module=%s attempt=%s/%s error=%s", repair_key, count, _TECHNICAL_PLAN_GENERATION_ATTEMPTS, exc)
+                if count >= _TECHNICAL_PLAN_GENERATION_ATTEMPTS:
+                    return None, remaining_errors, current_plan
+                continue
             if isinstance(exc, TechnicalPlanCandidateError):
                 current_plan = exc.candidate
             remaining_errors = [str(exc)]
+        attempt += 1
         logger.warning(
             "technical_plan_generation_retry: attempt=%s/%s errors=%s",
             attempt,

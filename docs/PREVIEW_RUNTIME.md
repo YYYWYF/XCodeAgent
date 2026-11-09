@@ -8,11 +8,22 @@
 
 返回欢迎页时立即释放预览维护并在后台停止当前工作区的前后端服务；退出 Electron 前再次停止本次手动重启登记过的所有工作区，避免残留生成项目进程。
 
+前后端服务卡片各自提供「停止服务」。点击只停止该卡片对应的标准预览服务，并保留另一端的运行状态和本轮日志。停止期间同一工作区的预览维护保持互斥，停止失败可在卡片重试。前端停止后收起当前预览页面；后端停止时前端页面仍可浏览。已发布版本面板切换标签时尊重当前尝试中的手动停止状态。
+
+后端预览从 `.devagentstudio/runtime/launch/backend-jar/<启动ID>/` 中的 JAR 副本启动，Java 工作目录同样位于该目录。Maven 继续在用户工程的 `target` 中构建。测试阶段的干净构建可以与正在运行的开发预览并行，临时启动检查从本轮新构建的独立副本启动。升级前，对仍从 `target` 启动的预览先使用「后端服务 → 停止服务」释放文件，再升级并启动预览。
+
 只有当前启动失败记录允许“诊断并修复”；运行中的页面业务错误不属于此入口。点击后创建开发阶段历史会话“诊断并修复”，保持右侧预览，后续计划确认、调整、停止、代码变更和结果均属于该会话。打开已有修复会话通过其 thread 读取当前修复状态，不借用原开发或测试会话。
+
+## 用户工程的 Node 版本
+
+- Windows 使用 NVM for Windows 时，执行 `nvm use <版本>` 后点击「重启服务」即可。每次启动或测试重新读取 `NVM_SYMLINK`，将真实 Node 目录放到本轮子进程的 PATH 首位。操作开始后的切换在下一次操作生效。
+- macOS 从执行过 `nvm use <版本>` 的同一个终端启动或重开 Studio；源码开发模式从该终端启动 Python 后端。Studio 读取继承的 `NVM_BIN`。没有配置 NVM 环境时，两端均使用 Python 后端继承的 PATH 中优先命中的 Node。Studio 安装包自身使用 Electron 内置的 Node。
+- 安装依赖、启动预览、构建、单测及性能检查会核对包管理器实际使用的 Node。前端优先采用 `packageManager` 声明的 pnpm 或 Yarn，其次沿用锁文件。NVM 路径失效、包管理器缺失、项目指定了其他 Node 时，现有启动或测试流程会给出具体原因。日志和测试证据记录 Node 的完整版本、真实路径和来源。
+- 进程、安装证据和历史预览依赖链接仅在 Node 路径和版本一致时复用。手动重启会重新执行依赖安装。构建完成后切换 Node 时，性能检查提示重新构建；仍有不同 Node 的预览在运行时，提示重启预览，并保留正在运行的服务。
 
 ## AG-UI 契约
 
-`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作是 `get/watch/restart/stop/diagnose/confirm/revise/cancel/leave`。所有字段在 Pydantic 边界校验；不接受日志文件路径。
+`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作包括 `get/watch/restart/stop/stop_frontend/stop_backend/diagnose/confirm/revise/cancel/leave`。分端停止在启动锁内校验 `attemptId`，成功后仅在目标服务写入 `stoppedByUser`。若维护中断，恢复时只对原尝试收口原目标。所有字段在 Pydantic 边界校验；不接受日志文件路径。
 
 所有响应均使用标准 AG-UI 生命周期、助手消息、`preview-runtime` CustomEvent、`previewRuntime` StateSnapshot 和 RunFinished，包括业务失败。`runtime.frontend` 与 `runtime.backend` 各自包含状态、可选 `port`、兼容保留的 URL 及失败摘要；操作失败含结构化 error。状态包含 runtime、blockedBy、当前会话 repair。`/health` 发布该能力。旧预览 REST 启停路由已移除；renderer 和 Electron 退出清理均通过 AG-UI 客户端调用。
 
@@ -33,6 +44,8 @@ RepairPlanner 根据当前启动失败及脱敏日志生成精确文件范围，
 返回欢迎页会调用 `leave`：它先同步释放当前应用的维护占用、停止等待确认的修复，再立即返回；前后端服务关闭在后台完成，并在旧维护线程退出后再次确认停止。Renderer 不等待关闭过程即可显示欢迎页和打开其他应用。生命周期的只读 `get` 与入口 `workspace_attach` 不参与预览维护互斥，预览任务不能再阻塞工作台导航。普通规划和开发工作流仍按各自后台运行规则处理。
 
 ## 互斥与运行事实
+
+预览重启与平台的 Maven 检查共用工作区启动锁。测试侧从构建到临时启动检查持有同一把锁，防止另一轮平台构建替换待检查的产物。后端进程登记 `backend-process.json` 原子保存 PID 和 JAR 副本相对路径。平台重启后的停机根据实际命令行核对运行副本，确认退出后删除副本和登记，保留日志。
 
 Java 后端必须在本轮日志出现 `Started <Application> in <耗时> seconds` 后才认定就绪，`Spring Boot`、`ZA21 Version` 横幅和 Tomcat 端口初始化均不代表启动完成。启动等待与运行状态读取共用同一判定：stdout 或 stderr 出现 `APPLICATION FAILED TO START`、`Application run failed`、Web server 启动失败或端口占用时，失败优先于已有成功日志，即使 PID 尚未退出也不能显示运行中。失败快照同步清除 ready 与预览地址，并开放原诊断入口。
 

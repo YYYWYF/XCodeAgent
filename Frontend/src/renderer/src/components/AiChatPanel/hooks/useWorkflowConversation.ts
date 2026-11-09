@@ -639,7 +639,6 @@ function revisionDraftInteractionMessage(
   action: WorkflowRevisionDraftInteraction['action']
 ): string {
   return {
-    save: '保存当前正式产物草稿。',
     revise: '已提交草稿修改意见，请重新生成当前草稿。',
     confirm: '确认当前正式产物版本，并继续收口受影响产物。',
     discard: '放弃当前未确认草稿，已经确认的计划保持不变。'

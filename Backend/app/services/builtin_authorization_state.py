@@ -56,8 +56,12 @@ def schema_ready(root: Path, application: dict) -> bool:
 def save_state(root: Path, record: dict) -> None:
     """原子持久化非敏感事实；状态损坏或落盘失败不允许远程重放。"""
 
+    from app.services.builtin_authorization_task_store import check_task_inputs, observe_operation_state
+
+    check_task_inputs()
     read_record(root, "state.json")
     atomic_write_json(root / RUNTIME / "state.json", record)
+    observe_operation_state(record)
 
 
 def verified_seed(seed: object, compiled: dict) -> bool:

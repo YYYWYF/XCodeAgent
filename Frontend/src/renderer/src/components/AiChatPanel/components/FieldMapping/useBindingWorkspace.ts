@@ -22,6 +22,9 @@ type BindingWorkspaceState = {
   entry?: BindingEntry
   catalog: DataSourceCatalog
   tables: SelectedDataTable[]
+  sourcesLoading: boolean
+  sourcesRefreshing: boolean
+  sourcesError: string
   loading: boolean
   busy: boolean
   error: string
@@ -44,6 +47,11 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   const [entries, setEntries] = useState<Record<string, BindingEntry>>({})
   const [catalog, setCatalog] = useState<DataSourceCatalog>({ sources: [] })
   const [tables, setTables] = useState<SelectedDataTable[]>([])
+  const [sourcesRefreshing, setSourcesRefreshing] = useState(true)
+  const [sourcesSnapshotWorkspace, setSourcesSnapshotWorkspace] = useState<string>()
+  // 首次加载才阻塞选择；已有当前工作区快照时，后台刷新不能关闭已展开的下拉框。
+  const sourcesLoading = sourcesRefreshing && sourcesSnapshotWorkspace !== workspaceRoot
+  const [sourcesError, setSourcesError] = useState('')
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -85,15 +93,20 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   useEffect(() => {
     generation.current += 1
     setEntries({}); setCatalog({ sources: [] }); setTables([])
+    setSourcesSnapshotWorkspace(undefined)
     return () => { generation.current += 1 }
   }, [workspaceRoot])
 
   useEffect(() => {
     setError('')
     const reader = observeBindingSources(workspaceRoot, ({ catalog: sources, tables: selected }) => {
+      setSourcesRefreshing(false); setSourcesSnapshotWorkspace(workspaceRoot); setSourcesError('')
       setCatalog(sources); setTables(selected); publish('catalog', undefined, endpointRecoveryScope(workspaceRoot))
       setMetadataRevision((value) => value + 1)
-    }, (reason) => failRead(reason, 'catalog', endpointRecoveryScope(workspaceRoot)))
+    }, (reason) => {
+      setSourcesRefreshing(false); setSourcesError(reason instanceof Error ? reason.message : String(reason))
+      publish('catalog', reason, endpointRecoveryScope(workspaceRoot))
+    }, () => { setSourcesRefreshing(true) })
     sourcesReader.current = reader
     return () => { reader.dispose(); sourcesReader.current = undefined }
   }, [workspaceRoot, refresh])
@@ -149,6 +162,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
       const [sources, selected, preparation, nextMetadata] = await readBindingRecoverySnapshot(workspaceRoot, target, selection)
       if (generation.current !== requestGeneration || activeKey.current !== capturedKey) return
       setCatalog(sources); setTables(selected); setMetadata(nextMetadata)
+      setSourcesRefreshing(false); setSourcesSnapshotWorkspace(workspaceRoot); setSourcesError('')
       const current = entryRef.current
       if (current && preparation) update(reconcileBindingAfterRecovery(current, preparation))
       else setRefresh((value) => value + 1)
@@ -220,7 +234,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
     catch (reason) { if (generation.current === requestGeneration && activeKey.current === key) failRead(reason, 'discard') }
     finally { setBusy(false); locked.current = false }
   }
-  return { key, entry, catalog, tables, loading, busy, error, reportedError, metadata, metadataLoading, update, edit, save, reload,
+  return { key, entry, catalog, tables, sourcesLoading, sourcesRefreshing, sourcesError, loading, busy, error, reportedError, metadata, metadataLoading, update, edit, save, reload,
     discard,
     refreshSources: () => setRefresh((value) => value + 1),
     refreshSourceCandidates: () => sourcesReader.current?.refresh() }

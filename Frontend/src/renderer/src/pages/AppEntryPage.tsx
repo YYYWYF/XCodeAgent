@@ -393,7 +393,8 @@ function AppEntryContent(): JSX.Element {
                 planningRuntimeController.saveRequirementSpec(activeApplication.id, spec)
               }
               onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
-              onRetryPlanning={() => planningRuntimeController.retryCurrentFailure(activeApplication.id)}
+              onRetryPlanning={(restartInitialPlanning) =>
+                planningRuntimeController.retryCurrentFailure(activeApplication.id, restartInitialPlanning)}
               onReconcilePlanning={() => {
                 void planningRuntimeController.reconcileCurrentState(activeApplication.id).catch(console.error)
               }}

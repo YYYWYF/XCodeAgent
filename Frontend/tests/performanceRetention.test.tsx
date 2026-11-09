@@ -154,7 +154,7 @@ test('同工作区真实 hook 共用读取，隐藏工作台释放展示订阅�
   let root: ReactTestRenderer | undefined
   /** 两个真实组件订阅相同工作区，模拟左右两处设计稿展示。 */
   function Probe({ workspace }: { workspace: string }): ReactElement {
-    shown.push(useUiDesignPagesWithCode(workspace, sourcePages))
+    shown.push(useUiDesignPagesWithCode(workspace, sourcePages).pages)
     return createElement('output')
   }
   /** 保持组件挂载，仅改变工作台可见性，确保不会影响后台运行对象。 */
