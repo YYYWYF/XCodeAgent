@@ -4,6 +4,7 @@ import { mergeBuildRetrySteps } from '../buildTaskRetryPresentation'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useWorkbenchRunRefresh, type WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import { recoveryStore } from '../../../service/recoveryStore'
+import { backendRequestErrorMessage, isBackendTransportError } from '../../../service/backendRequestFailure'
 import { backendConnectionRevision, subscribeBackendConnection } from '../../../service/backendConnection'
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
@@ -25,7 +26,7 @@ import {
   getApplicationPlanningUrl,
   revisionContinuationHandoffFromWorkflow
 } from '../../../service/applicationPagePlanning'
-import { ApplicationLifecycleActionError, getApplicationLifecycle } from '../../../service/applicationLifecycle'
+import { getApplicationLifecycle } from '../../../service/applicationLifecycle'
 import { continueRevisionOnce } from '../../../service/revisionContinuationGuard'
 import { mergeExecutionOutput } from '../executionOutputRecovery'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
@@ -780,10 +781,12 @@ export function useWorkflowConversation({
     },
     /** 仅最新通信结果影响连接维度；执行状态仍由原生命周期合并逻辑决定。 */
     settle: (generation, error) => {
+      if (error !== undefined) recoveryStore.recordFailure(recoveryKey, error)
+      else recoveryStore.recordSuccess(recoveryKey)
       /** 沿用现有代次校验，迟到的轮询结果不能覆盖更新后的连接。 */
-      const update = (current: ConnectionState): ConnectionState => error === undefined
+      const update = (current: ConnectionState): ConnectionState => !isBackendTransportError(error)
         ? completeConnectionRequest(current, generation)
-        : failConnectionRequest(current, generation, error)
+        : failConnectionRequest(current, generation, backendRequestErrorMessage(error, '任务状态读取失败。'))
       connectionStateRef.current = update(connectionStateRef.current)
       setConnectionState(update)
     }
@@ -1123,8 +1126,10 @@ export function useWorkflowConversation({
       return true
     } catch (error) {
       if (!isCurrent()) return false
-      // 完整业务失败响应证明连接正常，工作区读取错误应保留在独立同步入口。
-      if (error instanceof ApplicationLifecycleActionError) {
+      // 已知业务、超时及本地处理失败沿独立同步入口展示，不能覆盖为 Backend 断线。
+      if (!isBackendTransportError(error)) {
+        if (recoveryStore.get(recoveryKey).syncError !== backendRequestErrorMessage(error, '暂时无法同步任务状态。'))
+          recoveryStore.recordFailure(recoveryKey, error)
         connectionStateRef.current = completeConnectionRequest(connectionStateRef.current, requestGeneration)
         setConnectionState(connectionStateRef.current)
         return false
@@ -1772,7 +1777,7 @@ export function useWorkflowConversation({
       if (stopRequestedRef.current[identity.key]) {
         setConnectionState((current) => completeConnectionRequest(current, connectionRequestGeneration))
       } else if (backendRequestStarted && !backendRunSettled && !isAbortedStreamError(caughtError)) {
-        if (caughtError instanceof AgUiRunError || isAuthenticationFailure(caughtError)) {
+        if (!isBackendTransportError(caughtError)) {
           setConnectionState((current) =>
             completeConnectionRequest(current, connectionRequestGeneration)
           )

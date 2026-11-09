@@ -5647,6 +5647,7 @@ export default function AiChatPanel({
                 ) : activeConnectionState.status !== 'healthy' ? (
                     <ConnectionStatusBanner
                       connection={activeConnectionState}
+                      scope={activeConnectionState === previewRuntime.connection ? 'preview' : 'backend'}
                       onReconnect={
                         activeConnectionState === previewRuntime.connection
                           ? () => {
@@ -5694,7 +5695,7 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
-                      title={lifecycleSyncError ? '工作区状态读取失败' : planningStateReadError ? '规划状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : technicalPlanningError ? '技术规划生成失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      title={lifecycleSyncError ? '工作区状态读取失败' : planningStateReadError ? '规划状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : technicalPlanningError ? '技术规划生成失败' : previewFallbackError ? '预览服务操作失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
                       retryLabel={recoveryProjectionError ? '重新同步' : undefined}
                       diagnostic={recoveryProjectionError && !lifecycleSyncError
                         ? executionRecoveryReadDiagnostic(applicationLifecycle) : undefined}

@@ -6,6 +6,7 @@ import type {
   ApplicationPlanningCurrentState
 } from '../service/activeApplicationPlanning'
 import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import { isBackendTransportError } from '../service/backendRequestFailure'
 import { applicationWorkspaceKey, sameApplicationWorkspace } from '../service/applicationWorkspace'
 import {
   APPLICATION_TEMPLATE_GENERATION_ENABLED,
@@ -146,6 +147,7 @@ export function useApplicationTemplateGeneration({
           if (!isCurrentWorkspace()) return false
           console.error('[应用模板初始化失败]', reason)
           let connectionError: string | undefined
+          let syncError: string | undefined
           try {
             const lifecycle = await getApplicationLifecycle(planning.application)
             if (!isCurrentWorkspace()) return false
@@ -159,11 +161,12 @@ export function useApplicationTemplateGeneration({
             onApplicationLifecycleChange?.(lifecycle)
           } catch (lifecycleError) {
             console.warn('[模板初始化失败后读取生命周期失败]', lifecycleError)
-            connectionError = lifecycleError instanceof Error ? lifecycleError.message : 'Backend 暂时不可用，无法同步模板状态。'
+            if (isBackendTransportError(lifecycleError)) connectionError = (lifecycleError as Error).message
+            else syncError = lifecycleError instanceof Error ? lifecycleError.message : '无法同步模板初始化状态。'
           }
           dispatchPlanningEvent({
             type: 'template_generation_failed', applicationId, workspaceRoot: planning.application.workspaceRoot, threadId: planning.threadId,
-            error: reason instanceof Error ? reason.message : String(reason), connectionError
+            error: reason instanceof Error ? reason.message : String(reason), connectionError, syncError
           })
           message.error(reason instanceof Error ? reason.message : String(reason))
           return false
@@ -225,7 +228,8 @@ export function useApplicationTemplateGeneration({
         const error = reason instanceof Error ? reason.message : '无法同步模板初始化状态。'
         if (!sameApplicationWorkspace(planning.application, getPlanningState(planning.application.id)?.application)) return false
         dispatchPlanningEvent({ type: 'template_generation_failed', applicationId: planning.application.id, workspaceRoot: planning.application.workspaceRoot,
-          threadId: planning.threadId, error, connectionError: error })
+          threadId: planning.threadId, error, connectionError: isBackendTransportError(reason) ? error : undefined,
+          syncError: isBackendTransportError(reason) ? undefined : error })
         return false
       }
       if (!sameApplicationWorkspace(planning.application, getPlanningState(planning.application.id)?.application)) return false

@@ -895,7 +895,7 @@ test('connection error shows one status-sync entry without inventing a Recovery 
   const markup = renderToStaticMarkup(
     createElement(ConnectionStatusBanner, { connection, onReconnect: () => undefined })
   )
-  assert.match(markup, /Backend 暂时不可用/)
+  assert.match(markup, /Backend 连接中断/)
   assert.match(markup, /与后端连接中断，当前规划状态尚未确认/)
   assert.match(markup, /重新同步/)
   assert.doesNotMatch(markup, /recovery-incident/)

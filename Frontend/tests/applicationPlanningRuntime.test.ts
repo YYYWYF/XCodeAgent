@@ -353,7 +353,7 @@ for (const confirmed of [true, false]) {
     sourceRunId: 'run-source', planningThreadId: 'thread-A', status: 'template_reconcile_failed' as const
   } }
   h.setCurrent({ ...current, lifecycle, connection: { ...current.connection, status: 'unavailable' } })
-  h.onRead(async () => { throw new TypeError('Backend 不可达') })
+  h.onRead(async () => { throw new TypeError('Failed to fetch') })
   await h.runtime.retryTemplateReconcile()
   assert.equal(h.calls.length, 0)
   assert.equal(h.current()?.connection.status, 'unavailable')
@@ -576,7 +576,7 @@ for (const confirmed of [true, false]) {
     } })
     throw new Error('Failed to fetch')
   })
-  h.onRead(async () => { throw new Error('Backend unavailable') })
+  h.onRead(async () => { throw new TypeError('Failed to fetch') })
   await h.runtime.startDesignRevision(input)
   assert.equal(h.current()?.lifecycle.activeFormalRevision?.currentArtifact, 'requirement-spec')
   assert.equal(h.current()?.connection.status, 'unavailable')
@@ -589,7 +589,7 @@ for (const confirmed of [true, false]) {
   const input = { request: '增加页面', target: { type: 'application' }, impact: { formalBranch: 'design_stage_revision', interactionId: 'impact-unacknowledged' }, sourceSessionId: 'source-session', sourceConversationThreadId: 'source-thread', sourceRunId: 'source-run' } as WorkflowDesignStageRevisionStart
   const uncertain = harness()
   uncertain.onSend(async () => { throw new Error('Failed to fetch') })
-  uncertain.onRead(async () => { throw new Error('Backend unavailable') })
+  uncertain.onRead(async () => { throw new TypeError('Failed to fetch') })
   await uncertain.runtime.startDesignRevision(input)
   assert.equal(uncertain.calls.length, 1)
   const rejected = harness()
@@ -771,11 +771,11 @@ for (const confirmed of [true, false]) {
 {
   const h = harness()
   h.onSend(async () => { throw new Error('fetch failed') })
-  h.onRead(async () => { throw new Error('recovery unavailable') })
+  h.onRead(async () => { throw new TypeError('Failed to fetch') })
   await h.runtime.ensureStarted()
   assert.equal(h.current()?.transportState, 'idle')
   assert.equal(h.current()?.connection.status, 'unavailable')
-  assert.equal(h.current()?.connection.lastError, 'recovery unavailable')
+  assert.equal(h.current()?.connection.lastError, 'Failed to fetch')
   assert.equal(h.current()?.error, undefined)
 }
 

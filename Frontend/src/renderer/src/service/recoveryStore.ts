@@ -2,6 +2,7 @@ import type { ApplicationLifecycle, WorkflowRunPayload } from '../typings'
 import { beginConnectionRequest, completeConnectionRequest, failConnectionRequest, initialConnectionState, type ConnectionState } from './connectionState'
 import { isAuthenticationFailure } from './authentication'
 import { subscribeBackendConnection } from './backendConnection'
+import { isBackendTransportError } from './backendRequestFailure'
 
 export type RecoveryOutput = {
   requestId: string; runId: string; threadId: string; ownerSessionId?: string
@@ -21,10 +22,9 @@ type RecoveryEntry = {
   failures: number; nextReadAt: number; authenticationBlocked: boolean
 }
 
-/** 业务拒绝、读取版本漂移和恢复投影校验失败均已有服务响应，不能冒充网络断连。 */
+/** 只有明确网络故障属于断连；业务、认证、超时、协议和本地异常均保留为状态读取失败。 */
 export function isRecoveryStateReadError(reason: unknown): boolean {
-  return reason instanceof Error && ['ApplicationLifecycleActionError', 'RecoveryReadStaleError',
-    'ApplicationPlanningRecoveryReadError'].includes(reason.name)
+  return !isBackendTransportError(reason)
 }
 
 /** 同一业务 revision 中按真实 checkpoint、提交和输出序号拒绝回退，查询完成时间不能冒充业务版本。 */

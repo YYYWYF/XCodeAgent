@@ -153,7 +153,7 @@ function renderSurfaces(
 test('J1/J4 transport state and durable Recovery render independently', () => {
   const disconnected = failConnectionRequest(initialConnectionState(true), 1, 'SSE disconnected')
   const disconnectedOnly = renderSurfaces(disconnected)
-  assert.match(disconnectedOnly, /Backend 暂时不可用/)
+  assert.match(disconnectedOnly, /Backend 连接中断/)
   assert.doesNotMatch(disconnectedOnly, /当前执行失败/)
 
   const healthyRecovery = renderSurfaces(initialConnectionState(true), recoveryCandidate())
@@ -168,13 +168,23 @@ test('J5/J7 disconnect and failed refresh preserve last-known-good Incident', ()
     disconnected,
     durable.extensions.executionRecovery?.candidates[0]
   )
-  assert.match(markup, /Backend 暂时不可用/)
+  assert.match(markup, /Backend 连接中断/)
   assert.match(markup, /当前执行失败/)
   assert.match(markup, /disabled=""/)
   assert.equal(
     durable.extensions.executionRecovery?.candidates[0]?.recoveryActionPlan.incidentId,
     'incident-A'
   )
+})
+
+test('预览订阅断开保留独立标题，不声称 Backend 不可用', () => {
+  const html = renderToStaticMarkup(createElement(ConnectionStatusBanner, {
+    scope: 'preview', connection: failConnectionRequest(initialConnectionState(true), 1, 'Failed to fetch'),
+    onReconnect: () => undefined
+  }))
+  assert.match(html, /预览状态连接中断/)
+  assert.doesNotMatch(html, /Backend/)
+  assert.match(html, /重新同步/)
 })
 
 test('J2/J6 only a successful empty durable projection clears the Incident', () => {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { PreviewRuntimeBusinessError, runPreviewRuntime } from '../../../service/previewRuntime'
+import { runPreviewRuntime } from '../../../service/previewRuntime'
 import type { PreviewRuntimePayload } from '../../../service/previewRuntime'
 import { completeConnectionRequest, failConnectionRequest, initialConnectionState } from '../../../service/connectionState'
+import { backendRequestErrorMessage, isBackendTransportError } from '../../../service/backendRequestFailure'
 
 /** 独立订阅预览服务事实，连接结果只影响预览入口，不覆盖 Workflow 的连接状态。 */
 export function usePreviewRuntimeConnection(
@@ -22,7 +23,8 @@ export function usePreviewRuntimeConnection(
   /** 只投影本工作区当前请求的通信错误；业务失败意味着 Backend 已响应。 */
   const reportFailure = useCallback((reason: unknown): void => {
     const generation = ++generationRef.current
-    setConnection((current) => reason instanceof PreviewRuntimeBusinessError
+    setBusinessError(isBackendTransportError(reason) ? '' : backendRequestErrorMessage(reason, '读取预览服务状态失败'))
+    setConnection((current) => !isBackendTransportError(reason)
       ? completeConnectionRequest(current, generation)
       : failConnectionRequest(current, generation, reason instanceof Error ? reason.message : '读取预览服务状态失败'))
   }, [])
@@ -43,7 +45,8 @@ export function usePreviewRuntimeConnection(
       return value
     } catch (reason) {
       if (scopeRef.current === workspace) {
-        setConnection((current) => reason instanceof PreviewRuntimeBusinessError
+        setBusinessError(isBackendTransportError(reason) ? '' : backendRequestErrorMessage(reason, '读取预览服务状态失败'))
+        setConnection((current) => !isBackendTransportError(reason)
           ? completeConnectionRequest(current, generation)
           : failConnectionRequest(current, generation, String(reason)))
       }
@@ -76,9 +79,9 @@ export function usePreviewRuntimeConnection(
           initialRead = false
         } catch (reason) {
           if (controller.signal.aborted) return
-          setBusinessError(reason instanceof PreviewRuntimeBusinessError ? reason.message : '')
+          setBusinessError(isBackendTransportError(reason) ? '' : backendRequestErrorMessage(reason, '读取预览服务状态失败'))
           // watch 是长连接，同代次失败必须覆盖此前收到的状态。
-          setConnection((current) => reason instanceof PreviewRuntimeBusinessError
+          setConnection((current) => !isBackendTransportError(reason)
             ? completeConnectionRequest(current, generation)
             : failConnectionRequest(current, generation, String(reason)))
           return

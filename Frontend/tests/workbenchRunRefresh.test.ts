@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { refreshWorkbenchRun, type WorkbenchRunRefreshConnection } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkbenchRunRefresh'
 import { completeConnectionRequest, failConnectionRequest, initialConnectionState } from '../src/renderer/src/service/connectionState'
 import { globalFallbackState } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
+import { backendRequestErrorMessage, isBackendTransportError } from '../src/renderer/src/service/backendRequestFailure'
 import type { ApplicationLifecycle } from '../src/renderer/src/typings'
 
 /** 隔离连接和生命周期，验证只读刷新不制造失败或恢复动作。 */
@@ -22,8 +23,8 @@ function harness() {
     },
     /** 使用实际连接 reducer 验证晚到结果不会倒退状态。 */
     settle: (requestGeneration, error) => {
-      state = error === undefined ? completeConnectionRequest(state, requestGeneration)
-        : failConnectionRequest(state, requestGeneration, error)
+      state = !isBackendTransportError(error) ? completeConnectionRequest(state, requestGeneration)
+        : failConnectionRequest(state, requestGeneration, backendRequestErrorMessage(error, '状态读取失败'))
     }
   }
   return {
@@ -38,10 +39,10 @@ function harness() {
 
 test('后台刷新失败展示连接兜底，同时原执行与恢复候选保持不变', async () => {
   const current = harness()
-  await refreshWorkbenchRun(async () => { throw new Error('Backend 不可达') }, current.merge, current.observer, () => true)
+  await refreshWorkbenchRun(async () => { throw new TypeError('Failed to fetch') }, current.merge, current.observer, () => true)
   const { state, merged, merges } = current.snapshot()
   assert.equal(state.status, 'unavailable')
-  assert.equal(state.lastError, 'Backend 不可达')
+  assert.equal(state.lastError, 'Failed to fetch')
   assert.equal(globalFallbackState({ connectionStatus: state.status, hasRecoveryIncident: false }).visible, true)
   assert.equal(merged, current.lifecycle)
   assert.equal(merged.activeExecutions.run.status, 'running')
