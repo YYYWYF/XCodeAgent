@@ -3,6 +3,9 @@ import http from 'node:http'
 import { test } from 'node:test'
 import { getApplicationLifecycle } from '../src/renderer/src/service/applicationLifecycle'
 import type { ApplicationLifecycle } from '../src/renderer/src/typings'
+import { ApplicationPlanningRuntime } from '../src/renderer/src/service/applicationPlanningRuntime'
+import { reduceApplicationPlanningCurrentState, type ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
+import { initialConnectionState } from '../src/renderer/src/service/connectionState'
 
 /** 使用官方 AG-UI 客户端验证读取、显式重建及单一恢复结果之间的完整请求链。 */
 test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成或确认动作', async () => {
@@ -74,6 +77,35 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
     actions.length = 0
     await assert.rejects(getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' }), /当前文档不完整/)
     assert.deepEqual(actions, ['workspace_attach', 'get'])
+    // 本机旧项目重入时使用生产 Runtime 与官方 AG-UI 读取：文档错误不能冒充后端失联。
+    let state = { application, lifecycle, threadId: 'review-thread', restoreArtifactsFromDisk: true,
+      transportState: 'idle', connection: initialConnectionState(true) } as ApplicationPlanningCurrentState
+    let writes = 0
+    const runtime = new ApplicationPlanningRuntime({ applicationId: application.id, threadId: state.threadId,
+      getCurrentState: () => state,
+      dispatchCurrentEvent: (event) => { state = reduceApplicationPlanningCurrentState(state, event) },
+      publishContent: () => {}, publishReply: () => {}, publishWorkflow: () => {},
+      onTechnicalPlanConfirmed: async () => true, onRevisionContinuation: async () => {},
+      session: { hasActiveRun: () => false, stop: async () => {},
+        sendMessage: async () => { writes++; throw new Error('恢复读取不能生成或确认') } } })
+    try {
+      await runtime.ensureStarted()
+      assert.equal(state.connection.status, 'healthy', '后端明确返回文档问题，不能显示重连')
+      assert.equal(state.syncError, '当前文档不完整')
+      assert.equal(state.transportState, 'idle')
+      await runtime.reconcileCurrentState()
+      assert.equal(state.connection.status, 'healthy', '重复同步业务错误也不能进入重连循环')
+      available = undefined
+      assert.equal((await runtime.reconcileCurrentState()).status, 'checkpoint_missing')
+      assert.equal(state.connection.status, 'healthy')
+      assert.equal(state.syncError, undefined, '读取成功应清除旧业务读取错误')
+      prepared = true
+      assert.equal((await runtime.reconcileCurrentState()).status, 'uncertain')
+      assert.equal(state.connection.status, 'healthy', '响应缺少有效恢复解释属于状态问题')
+      assert.equal(state.syncError, '当前规划没有有效的恢复解释。')
+      assert.equal(writes, 0)
+    } finally { runtime.dispose() }
+    prepared = false
     available = undefined
     actions.length = 0
     const empty = await getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' })

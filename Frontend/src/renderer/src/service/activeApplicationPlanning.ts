@@ -99,6 +99,8 @@ export type ApplicationPlanningCurrentEvent = { workspaceRoot?: string } & (
       error: string
       requestGeneration: number
     }
+  | { type: 'reconcile_state_failed'; applicationId: string; threadId: string;
+      error: string; requestGeneration: number }
   | {
       type: 'reconcile_checkpoint_missing'
       applicationId: string
@@ -404,15 +406,18 @@ export function reduceApplicationPlanningCurrentState(
       transportState: 'reconciling'
     }
   }
-  if (event.type === 'reconcile_failed') {
+  if (event.type === 'reconcile_failed' || event.type === 'reconcile_state_failed') {
     if (event.requestGeneration < current.connection.requestGeneration) return current
     return {
       ...current,
-      connection: failConnectionRequest(
-        current.connection,
-        event.requestGeneration,
-        event.error
-      ),
+      connection: event.type === 'reconcile_state_failed'
+        ? completeConnectionRequest(current.connection, event.requestGeneration)
+        : failConnectionRequest(
+          current.connection,
+          event.requestGeneration,
+          event.error
+        ),
+      syncError: event.type === 'reconcile_state_failed' ? event.error : undefined,
       transportState: 'idle'
     }
   }
@@ -472,6 +477,7 @@ export function reduceApplicationPlanningCurrentState(
       recovery: event.recovery,
       error,
       recoveryActionError: undefined,
+      syncError: undefined,
       connection: completeConnectionRequest(current.connection, event.requestGeneration),
       transportState: 'idle'
     }

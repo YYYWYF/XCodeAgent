@@ -4127,13 +4127,19 @@ export default function AiChatPanel({
   })
   // End 成功后立即隐藏旧 Recovery；Backend lifecycle 投影更新前也不能再点旧重试。
   const endedWorkbenchRecovery = !isApplicationPlanningPhase && planEnded
+  // 规划读取失败属于工作区同步，不依赖当前历史会话的 Run，也不能伪装成连接错误。
+  const planningStateReadError = isApplicationPlanningPhase ? planningState?.syncError : undefined
   const recoveryProjectionError =
-    lifecycleSyncError || (isApplicationPlanningPhase && planningState?.checkpointMissing
+    lifecycleSyncError || planningStateReadError || (isApplicationPlanningPhase && planningState?.checkpointMissing
       ? undefined
       : executionRecoveryReadError(applicationLifecycle))
   // 恢复投影失败只重新读取该投影，不误派发到另一个独立节点或执行旧动作。
   const retryRecoveryProjection = recoveryProjectionError
     ? () => {
+        if (planningStateReadError) {
+          if (planningState?.transportState !== 'reconciling') onReconcilePlanning?.()
+          return
+        }
         if (recoveryProjectionSyncing) return
         setRecoveryProjectionSyncing(true)
         void refreshExecutionRecoveryLifecycle().finally(() => setRecoveryProjectionSyncing(false))
@@ -4215,7 +4221,7 @@ export default function AiChatPanel({
   // 无当前执行所属会话时，不把共享规划、预览或投影错误转交给其他会话和阶段。
   const showGlobalFallback =
     !authorizationRecoveryNotice && globalFallback.visible && (activeConnectionState.status !== 'healthy' ||
-      !isApplicationPlanningPhase || Boolean(pendingRevisionStartError) || Boolean(sessionPlanningFailureState))
+      !isApplicationPlanningPhase || Boolean(recoveryProjectionError) || Boolean(pendingRevisionStartError) || Boolean(sessionPlanningFailureState))
   const revisionHandoffErrorVisible = Boolean(revisionHandoffFailure &&
     revisionContinuationRecoveryVisible(applicationLifecycle,
       revisionHandoffFailure.handoff.continuation, activeSession?.threadId))
@@ -5688,7 +5694,7 @@ export default function AiChatPanel({
                     <RetryEntryNotice key={`${activeSession?.key || draftKey}:retry-entry`} />
                   ) : globalFallback.error ? (
                     <AgentErrorCard
-                      title={lifecycleSyncError ? '工作区状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : technicalPlanningError ? '技术规划生成失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
+                      title={lifecycleSyncError ? '工作区状态读取失败' : planningStateReadError ? '规划状态读取失败' : recoveryProjectionError ? '任务恢复状态读取失败' : technicalPlanningError ? '技术规划生成失败' : globalFallbackScopeDenied ? '无权修改该路径' : undefined}
                       retryLabel={recoveryProjectionError ? '重新同步' : undefined}
                       diagnostic={recoveryProjectionError && !lifecycleSyncError
                         ? executionRecoveryReadDiagnostic(applicationLifecycle) : undefined}
@@ -5700,7 +5706,8 @@ export default function AiChatPanel({
                         : workflowCodeReviewRetry(activeWorkflow)
                           ? () => { void handleRetryCodeReview() }
                           : () => { void retryCurrentRecovery() })}
-                      retrying={recoveryRunning || revisionStartRetrying || recoveryProjectionSyncing}
+                      retrying={recoveryRunning || revisionStartRetrying || recoveryProjectionSyncing ||
+                        Boolean(planningStateReadError && planningState?.transportState === 'reconciling')}
                     />
                   ) : null}
               </WorkbenchRecoveryNotice>

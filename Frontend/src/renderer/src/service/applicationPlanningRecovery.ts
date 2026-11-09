@@ -16,6 +16,15 @@ export type ApplicationPlanningAuthoritativeSnapshot = {
   output?: RecoveryOutput | null
 }
 
+/** 后端已响应但恢复投影不可用；保留读取错误，不将项目状态问题标记为断连。 */
+export class ApplicationPlanningRecoveryReadError extends Error {
+  /** 为恢复结果的身份、Workflow 与解释校验失败提供明确的通信分类。 */
+  constructor(message: string) {
+    super(message)
+    this.name = 'ApplicationPlanningRecoveryReadError'
+  }
+}
+
 export type {
   RecoveryActionKind,
   RecoveryFailureDiagnostic,
@@ -200,11 +209,11 @@ export async function readApplicationPlanningAuthoritativeSnapshot(
     () => getApplicationLifecycle(application, threadId, { planningThreadId: threadId }))
   const snapshot = lifecycle.extensions.recoverySnapshot
   if (!snapshot || snapshot.kind !== 'planning' || snapshot.applicationId !== application.id || snapshot.threadId !== threadId)
-    throw new Error('规划恢复快照与当前应用或线程不匹配。')
+    throw new ApplicationPlanningRecoveryReadError('规划恢复快照与当前应用或线程不匹配。')
   if (!snapshot.checkpointAvailable) return undefined
   const workflow = readWorkflowPayload(snapshot.workflow)
-  if (!workflow || workflow.threadId !== threadId) throw new Error('当前规划没有有效的 Workflow 快照。')
+  if (!workflow || workflow.threadId !== threadId) throw new ApplicationPlanningRecoveryReadError('当前规划没有有效的 Workflow 快照。')
   const recovery = applicationPlanningRecoveryProjection(workflow)
-  if (!recovery || recovery.threadId !== threadId) throw new Error('当前规划没有有效的恢复解释。')
+  if (!recovery || recovery.threadId !== threadId) throw new ApplicationPlanningRecoveryReadError('当前规划没有有效的恢复解释。')
   return { workflow, lifecycle, recovery, output: snapshot.output }
 }

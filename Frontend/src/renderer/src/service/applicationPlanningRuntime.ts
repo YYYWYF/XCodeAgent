@@ -27,7 +27,7 @@ import {
 } from './applicationPagePlanning'
 import { isAuthenticationFailure } from './authentication'
 import { subscribeBackendConnection } from './backendConnection'
-import { recoveryStore } from './recoveryStore'
+import { isRecoveryStateReadError, recoveryStore } from './recoveryStore'
 import { normalizeWorkspaceRoot } from './applicationWorkspace'
 import { endApplicationPlanningExecution } from './applicationLifecycle'
 import { planningWorkflowCanPublishDuringRun, planningWorkflowPhase } from './applicationPlanningWorkflowState'
@@ -689,7 +689,7 @@ export class ApplicationPlanningRuntime {
       if (this.dependencies.readAuthoritativeSnapshot) recoveryStore.recordFailure(
         recoveryStore.key(current.application.workspaceRoot || '', this.applicationId, this.threadId), reason)
       this.dispatch({
-        type: 'reconcile_failed',
+        type: isRecoveryStateReadError(reason) ? 'reconcile_state_failed' : 'reconcile_failed',
         applicationId: this.applicationId,
         threadId: this.threadId,
         error,
