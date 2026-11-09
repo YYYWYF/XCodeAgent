@@ -4,9 +4,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.services.stage_execution_artifacts import bind_unit_test_report, load_stage_execution_artifacts
-from app.workspace.task_documents import build_task_plan_sha256, build_run_task_plan_json_path, write_build_execution_record
+from app.workspace.task_documents import (
+    build_task_plan_sha256, build_run_task_plan_json_path,
+    write_build_execution_record, write_build_run_task_plan_json,
+)
 
 
 class StageExecutionArtifactTests(unittest.TestCase):
@@ -55,6 +59,79 @@ class StageExecutionArtifactTests(unittest.TestCase):
         self.assertTrue(fields["unit_test_gate_passed"])
         (self.root / "frontend/src/Page.tsx").write_text("changed source")
         self.assertFalse(load_stage_execution_artifacts(self.state, self.plan, "test_phase_confirmation")["unit_test_gate_passed"])
+
+    def _write_referenced_build(self):
+        """使用生产写入器保存超阈值计划与进度，避免纯内联夹具遗漏引用读取问题。"""
+        task = {"id": "task", "status": "completed", "build_context": {"text": "业务材料" * 1500}}
+        self.plan["task_registry"] = {"task": task}
+        path = write_build_run_task_plan_json(
+            self.state, build_run_id=self.record["build_run_id"], build_task_plan=self.plan,
+        )
+        self.record.update(build_run_plan_path=path, build_run_plan_sha256=build_task_plan_sha256(self.plan))
+        self.record["progress"].update({
+            key: self.record[key]
+            for key in ("build_run_id", "build_run_plan_path", "build_run_plan_sha256")
+        })
+        self.record["progress"]["tasks"] = [task]
+        write_build_execution_record(self.state, self.record)
+        raw = json.loads(Path(path).read_text())
+        reference = raw["task_registry"]["task"]["build_context"]["$artifact"]
+        return self.root / ".devagentstudio/artifacts/sha256" / (reference["artifactId"] + ".json")
+
+    def test_referenced_plan_and_progress_retain_completed_build(self):
+        """三个下游入口均按展开后的计划校验，并恢复完整任务材料及原 Build 绑定。"""
+        self._write_referenced_build()
+        for node in ("unit_test", "unit_test_repair", "test_phase_confirmation"):
+            with self.subTest(node=node):
+                fields = load_stage_execution_artifacts(self.state, self.plan, node)
+                self.assertEqual(fields["build_summary"], {"status": "completed"})
+                self.assertEqual(fields["build_run_id"], self.record["build_run_id"])
+                self.assertEqual(fields["tasks"], self.record["progress"]["tasks"])
+
+    def test_skip_unit_tests_with_references_reaches_test_confirmation(self):
+        """真实跳过分支写报告后仍保留磁盘 Build 事实，不回退构建且继续等待测试确认。"""
+        from app.domain.development_artifacts import TestEntryGate
+        from app.graph.nodes.lifecycle import test_phase_confirmation
+        from app.graph.subgraphs.unit_testing import unit_test
+        from app.graph.workflow import route_test_phase_confirmation
+        from app.services.application_lifecycle import create_application_lifecycle
+
+        self._write_referenced_build()
+        state = {**self.state, "unit_test_decision": "skip"}
+        state.update(load_stage_execution_artifacts(state, self.plan, "unit_test"))
+        state.update(unit_test(state))
+        self.assertTrue(state["unit_test_gate_passed"])
+        state.update(load_stage_execution_artifacts(state, self.plan, "test_phase_confirmation"))
+        self.assertEqual(state["build_run_id"], self.record["build_run_id"])
+        self.assertTrue(state["unit_test_gate_passed"])
+        # 这里只隔离目标完成登记；跳过、报告写读及确认路由均运行真实实现。
+        with patch("app.graph.nodes.lifecycle.complete_initial_development", return_value=
+                   create_application_lifecycle(application_id="test", application_name="测试")), patch(
+            "app.graph.nodes.lifecycle.test_entry_gate", return_value=TestEntryGate(
+                allowed=True, total=1, completed=1, pending=0, inProgress=0, blockers=[],
+            ),
+        ):
+            result = test_phase_confirmation(state)
+        self.assertEqual(result["clarification"]["mode"], "test_phase_confirmation")
+        self.assertEqual(route_test_phase_confirmation({**state, **result}), "await_user_input")
+
+    def test_missing_or_corrupt_material_invalidates_completed_build(self):
+        """缺失或摘要不符的引用仍失效，不能借用旧完成事实或修改损坏文件。"""
+        material = self._write_referenced_build()
+        original = material.read_bytes()
+        material.rename(material.with_suffix(".test-backup"))
+        for content in (None, b"{}"):
+            with self.subTest(content=content):
+                if content is not None:
+                    material.write_bytes(content)
+                fields = load_stage_execution_artifacts(self.state, self.plan, "unit_test")
+                self.assertEqual(fields["build_summary"], {})
+                self.assertEqual(fields["build_run_id"], "")
+                if content is not None:
+                    self.assertEqual(material.read_bytes(), content)
+        material.write_bytes(original)
+        self.assertEqual(load_stage_execution_artifacts(self.state, self.plan, "unit_test")["build_summary"],
+                         {"status": "completed"})
 
     def test_repair_reads_latest_failure_report_without_granting_confirmation(self):
         """修复入口读取最新失败报告并保留返修证据，不能投影为单测通过。"""

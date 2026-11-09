@@ -293,7 +293,7 @@ TestGeneration 写入边界在平铺测试文件外，仅允许当前 Jest 契�
 
 同样，审查确认缺少集成门禁事实时重做当前集成测试，验收确认缺少有效审查结果时重新审查当前文件。上游实际失败仍由其原失败卡收口，不循环伪造通过；实际通过后再回到对应用户确认门。回归：`tests.test_stage_execution_artifacts`、`tests.test_code_review_subgraph`、`tests.test_acceptance_subgraph`。
 
-旧 Build 绑定快照和单测报告属于可重新计算的结果缓存：`stage_execution_artifacts.py` 对缺失、不可读、损坏及非法结构按结果失效处理，明确清空 checkpoint 中旧 Build/单测通过投影，再交给既有确认节点重做 Build 或单测。最新执行记录无法读取时不借用更旧成功；损坏文件原样保留，正式输入和原确认门不变。回归：`tests.test_stage_execution_artifacts`。
+旧 Build 绑定快照和单测报告属于可重新计算的结果缓存：`stage_execution_artifacts.py` 复用 `load_build_task_plan_json` 展开当前 `$artifact` 引用后校验计划摘要、恢复执行进度，避免大材料使有效 Build 被误判失效，跳过单测后循环回退 Build 并触发绑定冲突。对缺失、不可读、损坏及非法结构仍按结果失效处理，明确清空 checkpoint 中旧 Build/单测通过投影，再交给既有确认节点重做 Build 或单测。最新执行记录无法读取时不借用更旧成功；损坏文件原样保留，正式输入和原确认门不变。回归：`tests.test_stage_execution_artifacts`（含真实引用写读、单测跳过确认及引用缺失/损坏）。
 
 聊天底部 `/execution-recovery/execute` 统一调用 `services/business_node_retry.py`：从同 Run 的最新已提交失败现场保留完整业务上下文，经 `retry_node_state.py` 清理一次性操作并读取节点最新磁盘输入，以新 Run 在原 Thread 的全新 checkpoint 分支重新执行原失败节点。没有 checkpoint 续跑、自动降级或错误类型双重尝试；`/health.execution_recovery.retry.mode` 为 `full-context-node-reexecution`。技术规划提交保留未落盘候选；测试修复保留报告、任务与变更集，不回退生成或测试阶段。原工作真实退出后才交接资源，正式产物仍需显式确认。回归：`tests.test_checkpoint_first_retry`、`tests.test_business_node_retry`、`tests.test_conversation_native_recovery`、`tests.test_technical_planning_stage_retry`。
 

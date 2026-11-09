@@ -1,18 +1,20 @@
 """从磁盘读取已提交的 Build 终态与当前源码绑定的单测报告。"""
 
 import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.workspace.task_documents import build_task_plan_sha256, build_run_task_plan_json_path
+from app.workspace.task_documents import (
+    build_task_plan_sha256, build_run_task_plan_json_path, load_build_task_plan_json,
+)
 
 
 def _read_result_object(path: Path) -> dict[str, Any] | None:
-    """旧执行结果是可重算缓存，损坏、缺失或不可读均不冒充有效通过事实。"""
+    """展开当前存储引用后读取结果缓存，损坏、缺失或不可读均不冒充通过事实。"""
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        # 写入器会外置较大的材料；摘要与恢复进度必须使用展开后的业务内容。
+        value = load_build_task_plan_json(path)
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) else None
