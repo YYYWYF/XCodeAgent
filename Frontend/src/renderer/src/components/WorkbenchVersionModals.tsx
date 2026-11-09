@@ -14,8 +14,8 @@ import { cx } from '../utils'
 
 type VersionGenerateState = { stepIndex: number } | null
 
-/** 发起新迭代时用户对分支的选择。 */
-export type IterationBranchChoice = { mode: 'current' } | { mode: 'new'; branchName: string }
+/** 发起新迭代时固定新建分支：只携带新版本号（不提供「在当前分支继续」，便于后续回退）。 */
+export type IterationBranchChoice = { mode: 'new'; branchName: string }
 
 /** 「基于历史版本迭代」流程对工作区未提交改动的处理方式。 */
 export type HistoricalIterationDirtyChoice = 'commit' | 'discard'
@@ -44,10 +44,12 @@ type IterationModalProps = {
 }
 
 /**
- * 发起新迭代确认弹框：让用户选择在**当前分支继续**，还是**新建一条分支**。
+ * 发起新迭代确认弹框：固定**新建一条分支**（便于后续回退），只做版本号的本地即时校验。
  *
- * 新建分支时立刻推送到远端，因此这里只做本地即时校验（格式 + 是否与应用已有分支重名）；
- * 远端是否已有同名分支由推送结果反馈（远端可能被同事建过，本地看不到）。
+ * 不再提供「在当前分支继续」的选项——在原版本上继续开发会覆盖该分支历史，
+ * 用户无法回退到迭代前状态。新建分支时立刻推送到远端，因此这里只做本地即时
+ * 校验（格式 + 是否与应用已有分支重名）；远端是否已有同名分支由推送结果反馈
+ * （远端可能被同事建过，本地看不到）。
  */
 function StartIterationModal({
   currentBranchName,
@@ -57,10 +59,11 @@ function StartIterationModal({
   onCancel,
   onConfirm
 }: IterationModalProps): JSX.Element {
+  // 固定新建分支：choice 语义保留，但此弹窗只产生 mode:'new'。
   const newBranchName = choice.mode === 'new' ? choice.branchName : ''
-  const invalidReason = choice.mode === 'new' ? validateBranchName(newBranchName) : undefined
-  const duplicated = choice.mode === 'new' && existingBranchNames.includes(newBranchName.trim())
-  const canConfirm = choice.mode === 'current' || (!invalidReason && !duplicated)
+  const invalidReason = validateBranchName(newBranchName)
+  const duplicated = existingBranchNames.includes(newBranchName.trim())
+  const canConfirm = Boolean(newBranchName.trim()) && !invalidReason && !duplicated
 
   return (
     <Modal
@@ -84,40 +87,27 @@ function StartIterationModal({
         </header>
         <div className={cx('workbench-publish-modal-body')}>
           <p className={cx('workbench-publish-modal-lead')}>
-            新迭代会从设计阶段开始，并使用全新的对话记录。请选择这次迭代在哪儿进行：
+            新迭代会基于当前版本 <strong>{currentBranchName}</strong> 新建一个版本，从设计阶段开始，
+            并使用全新的对话记录。原版本保持只读，可随时切换查看或回退。
           </p>
-          <Radio.Group
-            className={cx('workbench-iteration-branch-choice')}
-            onChange={(e) => {
-              const mode = e.target.value as 'current' | 'new'
-              onChoiceChange(
-                mode === 'current' ? { mode: 'current' } : { mode: 'new', branchName: '' }
-              )
-            }}
-            value={choice.mode}
-          >
-            <Radio value="current">
-              在当前版本 <strong>{currentBranchName}</strong> 上继续
-            </Radio>
-            <Radio value="new">新建一个版本</Radio>
-          </Radio.Group>
-          {choice.mode === 'new' ? (
-            <div className={cx('workbench-generate-field')}>
-              <Input
-                value={newBranchName}
-                onChange={(e) => onChoiceChange({ mode: 'new', branchName: e.target.value })}
-                placeholder="例如 v1_1"
-                status={invalidReason || duplicated ? 'error' : undefined}
-              />
-              <div className={cx('workbench-iteration-branch-hint')}>
-                {invalidReason
-                  ? invalidReason
-                  : duplicated
-                    ? '这个版本号应用里已经用过了，换一个吧。'
-                    : '新版本会立刻创建并推送到远端仓库。'}
-              </div>
+          <div className={cx('workbench-generate-field')}>
+            <Input
+              autoFocus
+              value={newBranchName}
+              onChange={(e) => onChoiceChange({ mode: 'new', branchName: e.target.value })}
+              placeholder="例如 v1_1"
+              status={invalidReason || duplicated ? 'error' : undefined}
+            />
+            <div
+              className={cx('workbench-iteration-branch-hint', (invalidReason || duplicated) && 'is-error')}
+            >
+              {invalidReason
+                ? invalidReason
+                : duplicated
+                  ? '这个版本号应用里已经用过了，换一个吧。'
+                  : '新版本会立刻创建并推送到远端仓库。'}
             </div>
-          ) : null}
+          </div>
           <div className={cx('workbench-publish-modal-meta')}>
             <CheckCircleFilled aria-hidden="true" /> 其他版本保持只读，可随时切换查看
           </div>
@@ -264,7 +254,12 @@ function HistoricalIterationModal({
                 placeholder="例如 v1_1"
                 status={invalidReason || duplicated || sameAsSource ? 'error' : undefined}
               />
-              <div className={cx('workbench-iteration-branch-hint')}>
+              <div
+                className={cx(
+                  'workbench-iteration-branch-hint',
+                  (invalidReason || duplicated || sameAsSource) && 'is-error'
+                )}
+              >
                 {invalidReason
                   ? invalidReason
                   : duplicated
@@ -298,7 +293,7 @@ function HistoricalIterationModal({
               disabled={!canConfirm}
               onClick={onConfirm}
             >
-              <RollbackOutlined aria-hidden="true" /> 确认创建并迭代
+              确定
             </button>
           )}
         </footer>

@@ -128,6 +128,28 @@ type Props = {
 
 type Theme = 'light' | 'dark'
 
+/** 由当前版本号建议下一个迭代版本号：尾号 +1（v1_0 → v1_1），无尾号则追加 _1。 */
+function suggestNextBranchName(currentBranchName: string, existingBranchNames: string[]): string {
+  const base = (currentBranchName || 'v1').trim() || 'v1'
+  const match = base.match(/^(.*?)(\d+)$/)
+  const taken = new Set(existingBranchNames.map((name) => name.trim()))
+  // 从当前分支的尾号开始递增；若当前分支无尾号则在其后追加 _1 起跳。
+  let prefix = base
+  let counter = 0
+  if (match) {
+    prefix = match[1]
+    counter = Number.parseInt(match[2], 10)
+  } else {
+    prefix = `${base}_`
+  }
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    counter += 1
+    const candidate = `${prefix}${counter}`
+    if (!taken.has(candidate)) return candidate
+  }
+  return `${prefix}${counter}_${Date.now()}`
+}
+
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({
   application,
@@ -179,9 +201,10 @@ function WorkbenchPage({
   const [publishModalOpen, setPublishModalOpen] = useState(false)
   // 发起新迭代弹框是否开启。
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
-  // 发起新迭代：用户对分支的选择（当前分支继续 / 新建分支）。
+  // 发起新迭代：固定新建分支（便于回退），这里仅存用户输入的新版本号。
   const [iterationChoice, setIterationChoice] = useState<IterationBranchChoice>({
-    mode: 'current'
+    mode: 'new',
+    branchName: ''
   })
   // 「基于此版本迭代」弹框：起点历史分支名；为空串表示弹框关闭。
   const [historicalIterationSource, setHistoricalIterationSource] = useState<string>('')
@@ -523,31 +546,27 @@ function WorkbenchPage({
     workspaceApplication
   ])
 
-  // 确认发起新迭代：回到需求分析阶段。用户可选择在当前分支继续，或新建一条分支。
+  // 确认发起新迭代：回到需求分析阶段。固定新建一条分支（便于回退）。
   // 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md），重置 lifecycle 为 collecting_requirement。
   const handleConfirmIteration = useCallback(async (): Promise<void> => {
     if (!viewedBranch || !applicationLifecycle) return
-    const baseBranchName = viewedBranch.name
-    const targetBranchName =
-      iterationChoice.mode === 'new' ? iterationChoice.branchName.trim() : baseBranchName
+    const targetBranchName = iterationChoice.branchName.trim()
     setIterationModalOpen(false)
     setSwitchingTargetLabel(targetBranchName)
     try {
       // 1. 新建分支时必须**先**建分支再清空产物 —— 新分支要指向当前这次已提交的代码，
       //    晚于清空就会把新分支建在残缺的树上。后端会切到新分支并推送到远端。
       let branchCreationFailed = false
-      if (iterationChoice.mode === 'new') {
-        const created = await createRepositoryBranch({
-          workspaceRoot: workspaceApplication.workspaceRoot,
-          branchName: targetBranchName
-        })
-        if (created.status !== 'pushed') {
-          branchCreationFailed = true
-          // 后端消息是完整句子（自带句号），嵌进本句前先去掉句末标点，否则会出现「。。」。
-          message.warning(
-            `版本 ${targetBranchName} 未提交到远端：${asMessageClause(created.message, '原因未知')}。已切换到该版本，稍后可重试提交。`
-          )
-        }
+      const created = await createRepositoryBranch({
+        workspaceRoot: workspaceApplication.workspaceRoot,
+        branchName: targetBranchName
+      })
+      if (created.status !== 'pushed') {
+        branchCreationFailed = true
+        // 后端消息是完整句子（自带句号），嵌进本句前先去掉句末标点，否则会出现「。。」。
+        message.warning(
+          `版本 ${targetBranchName} 未提交到远端：${asMessageClause(created.message, '原因未知')}。已切换到该版本，稍后可重试提交。`
+        )
       }
       // 2. 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md + application.json）。
       await startIteration({
@@ -583,20 +602,13 @@ function WorkbenchPage({
       if (newThreadId) {
         onIterationStarted(workspaceApplication, newThreadId, awaitingLifecycle)
       }
-      // 4. 更新分支表：在当前分支继续时刷新该分支的 lifecycle 并**清掉本轮提交事实**；
-      //    新建分支时追加一条记录并把当前分支指针移过去。
-      //    清 gitRef 是必须的：它同时是"本轮已提交"的标记（顶部按钮据此在
-      //    「提交并推送」与「发起新迭代」之间切换），不清的话新一轮一进来就直接
-      //    显示「发起新迭代」，用户没法提交这一轮的改动。
+      // 4. 更新分支表：固定新建分支，追加一条记录并把当前分支指针移过去。
+      //    不再支持「在当前分支继续」，因此无需清该分支的 gitRef。
       const existingBranches = workspaceApplication.branches || []
-      const nextBranches =
-        iterationChoice.mode === 'new'
-          ? [...existingBranches, createBranchRecord(targetBranchName, awaitingLifecycle, Date.now())]
-          : existingBranches.map((branch) =>
-            branch.name === targetBranchName
-              ? { ...branch, lifecycle: awaitingLifecycle, gitRef: undefined }
-              : branch
-          )
+      const nextBranches = [
+        ...existingBranches,
+        createBranchRecord(targetBranchName, awaitingLifecycle, Date.now())
+      ]
       const nextApp: ApplicationConfig = {
         ...workspaceApplication,
         branches: nextBranches,
@@ -614,7 +626,7 @@ function WorkbenchPage({
       setViewingBranchName('')
       autoPublishShownRef.current = false
       setSwitchingTargetLabel(undefined)
-      setIterationChoice({ mode: 'current' })
+      setIterationChoice({ mode: 'new', branchName: '' })
       message.success(
         branchCreationFailed
           ? `已发起新迭代（版本 ${targetBranchName}），但未提交到远端。`
@@ -654,7 +666,11 @@ function WorkbenchPage({
   const handleOpenHistoricalIteration = useCallback(
     (sourceBranchName: string): void => {
       setHistoricalIterationSource(sourceBranchName)
-      setHistoricalIterationBranchName('')
+      // 预填基于起点版本自增的建议版本号（跳过已有分支重名），用户可直接采用或修改。
+      const existingNames = (workspaceApplication.branches || [])
+        .map((branch) => branch?.name || '')
+        .filter(Boolean)
+      setHistoricalIterationBranchName(suggestNextBranchName(sourceBranchName, existingNames))
       setHistoricalIterationDirtyChoice('discard')
       setHistoricalIterationUncommittedCount(0)
       const workspaceRoot = workspaceApplication.workspaceRoot
@@ -667,7 +683,7 @@ function WorkbenchPage({
           console.warn('读取未提交改动数失败，按 0 处理。', error)
         })
     },
-    [workspaceApplication.workspaceRoot]
+    [workspaceApplication.workspaceRoot, workspaceApplication.branches]
   )
 
   // 关闭「基于此版本迭代」弹框：清掉所有相关草稿。
@@ -839,8 +855,15 @@ function WorkbenchPage({
                 onThemeChange={handleThemeChange}
                 onPublishBranch={handleOpenPublish}
                 onStartIteration={() => {
-                  // 每次打开都从「在当前分支继续」开始，避免沿用上一次的选择。
-                  setIterationChoice({ mode: 'current' })
+                  // 固定新建一个版本（便于回退）：打开时基于当前分支给出递增的建议版本号，
+                  // 跳过与已有分支的重名。用户可直接采用或自行修改。
+                  const existingNames = (workspaceApplication.branches || [])
+                    .map((branch) => branch?.name || '')
+                    .filter(Boolean)
+                  setIterationChoice({
+                    mode: 'new',
+                    branchName: suggestNextBranchName(viewedBranch?.name || activeBranchName, existingNames)
+                  })
                   setIterationModalOpen(true)
                 }}
                 onBranchSelect={handleBranchSelect}

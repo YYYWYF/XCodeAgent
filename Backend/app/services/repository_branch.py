@@ -278,17 +278,25 @@ def create_local_branch(
         if start_sha.returncode == 0 and start_sha.stdout.strip():
             commit_sha = start_sha.stdout.strip()
 
-    # 已存在同名本地分支时切过去（不重建），否则从 start_point（默认 HEAD）建出并切过去。
+    # 新建分支语义是"创建一条全新版本"：本地已存在同名分支时必须拒绝，而不是切过去。
+    # 切过去会把后续开发直接叠加到那条旧分支上、覆盖其历史 —— 用户本想新建一个版本
+    # 便于回退，结果却在旧版本上改动，恰好违背了新迭代"可回退"的初衷。前端弹窗虽有
+    # 重名校验，但那是 UI 层提示，不能作为唯一防线；这里在后端再拦一道，任何绕过
+    # 前端的调用都会被拒绝。
     existing = _run_git(
         root, ["branch", "--list", "--format=%(refname:short)", branch], timeout=15
     )
     if existing.returncode == 0 and branch in existing.stdout.split():
-        switch = _run_git(root, ["checkout", branch], timeout=60)
-    else:
-        create_args = ["checkout", "-b", branch]
-        if resolved_start_point:
-            create_args.append(resolved_start_point)
-        switch = _run_git(root, create_args, timeout=60)
+        return _branch_result(
+            branch,
+            "failed",
+            commit_sha,
+            f"版本 {branch} 已存在，不能重复创建。请换一个新版本号；如需在该版本上继续，请直接切换到该版本。",
+        )
+    create_args = ["checkout", "-b", branch]
+    if resolved_start_point:
+        create_args.append(resolved_start_point)
+    switch = _run_git(root, create_args, timeout=60)
     if switch.returncode != 0:
         return _branch_result(branch, "failed", commit_sha, _failure_detail(switch))
 

@@ -7,6 +7,23 @@
   }
 }
 
+// 版本号输入框下方的提示文案。默认是低调的中性说明（灰字）；
+// 错误态（重名 / 格式非法 / 与起点相同）需要与前面的引导说明形成鲜明对比，
+// 用项目错误红 + 加粗 + 左侧竖线标识，让用户一眼认出"这条是必须处理的强提示"。
+.@{class-prefix}-workbench-iteration-branch-hint {
+  margin-top: 6px;
+  color: var(--wb-text-secondary, rgba(0, 0, 0, 0.45));
+  font-size: 12px;
+  line-height: 1.5;
+
+  &.@{class-prefix}-is-error {
+    padding-left: 8px;
+    border-left: 3px solid #ff4d4f;
+    color: #ff4d4f;
+    font-weight: 600;
+  }
+}
+
 .@{class-prefix}-workbench-publish-modal.@{class-prefix}-has-database-delivery {
   .@{class-prefix}-workbench-publish-modal-inner {
     max-height: calc(100vh - 64px);
