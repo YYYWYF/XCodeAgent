@@ -50,6 +50,7 @@ from app.utils.subprocess_platform import (
     WINDOWS_CREATE_NO_WINDOW,
     preview_process_creation_options,
 )
+from app.utils.subprocess_output import subprocess_output_text
 
 
 def _write_manifest_jar(path: Path, main_class: str | None = None) -> None:
@@ -492,6 +493,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     "app.services.backend_project_launcher._wait_for_backend_ready",
                     return_value=True,
                 ),
+                patch.dict(os.environ, {"MAVEN_OPTS": "-Xmx512m"}),
             ):
                 result = launch_backend_project(workspace)
 
@@ -505,9 +507,22 @@ class ProjectLauncherTests(unittest.TestCase):
         )
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
         self.assertNotIn("text", run.call_args.kwargs)
+        maven_options = run.call_args.kwargs["env"]["MAVEN_OPTS"].split()
+        self.assertEqual(maven_options[0], "-Xmx512m")
+        self.assertIn("-Dfile.encoding=UTF-8", maven_options)
         self.assertEqual(
             popen.call_args.args[0],
-            [java_command, "-jar", str(jar_path.resolve())],
+            [
+                java_command,
+                "-Dfile.encoding=UTF-8",
+                "-Dsun.stdout.encoding=UTF-8",
+                "-Dsun.stderr.encoding=UTF-8",
+                "-Dstdout.encoding=UTF-8",
+                "-Dstderr.encoding=UTF-8",
+                "-Dlogging.charset.console=UTF-8",
+                "-jar",
+                str(jar_path.resolve()),
+            ],
         )
         self.assertEqual(Path(popen.call_args.kwargs["cwd"]), target.resolve())
         for key, value in preview_process_creation_options().items():
@@ -515,6 +530,19 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertNotIn("start_new_session", popen.call_args.kwargs)
         self.assertTrue(result["prebuild_cleanup"]["success"])
         self.assertEqual(result["prebuild_cleanup"]["source"], "none")
+
+    def test_maven_output_preserves_utf8_and_native_windows_lines(self) -> None:
+        """同一输出中的 JVM 中文和 Windows 中文提示应各自按原编码解码。"""
+
+        jvm_log = "[INFO] 开始构建\r\n"
+        cmd_log = "系统找不到指定的路径。\r\n"
+        output = jvm_log.encode("utf-8") + cmd_log.encode("gbk") + jvm_log.encode("utf-8")
+
+        self.assertEqual(
+            subprocess_output_text(output, fallback_encoding="cp936"),
+            jvm_log + cmd_log + jvm_log,
+        )
+        self.assertEqual(subprocess_output_text(jvm_log.encode("utf-8")), jvm_log)
 
     def test_windows_frontend_stop_terminates_only_registered_process_tree(self) -> None:
         """验证 Windows 停止前端时强制回收子树且不发送控制台 Ctrl+C。"""

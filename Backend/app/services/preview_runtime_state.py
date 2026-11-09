@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from app.services.preview_runtime_guard import maintenance_owner
 from app.services.preview_diagnostics import diagnostics_from_command, launch_diagnostics
+from app.utils.subprocess_output import read_utf8_log_tail
 
 
 _lock = RLock()
@@ -230,11 +231,10 @@ def read_logs(workspace: str | Path) -> dict[str, Any]:
             if not path.is_file() or path.is_symlink():
                 continue
             with path.open("rb") as stream:
-                size = os.fstat(stream.fileno()).st_size
-                stream.seek(max(0, size - LOG_LIMIT))
-                content = _plain_log_text(stream.read(LOG_LIMIT).decode("utf-8", errors="replace"))
+                raw_content, truncated = read_utf8_log_tail(stream, LOG_LIMIT)
+                content = _plain_log_text(raw_content)
             if content:
-                entries.append({"name": name, "stream": "stderr" if ".stderr." in name else "stdout", "stage": "install" if name.startswith("install") else "build" if "build" in name or "repackage" in name else "start", "content": content, "truncated": size > LOG_LIMIT})
+                entries.append({"name": name, "stream": "stderr" if ".stderr." in name else "stdout", "stage": "install" if name.startswith("install") else "build" if "build" in name or "repackage" in name else "start", "content": content, "truncated": truncated})
         logs[layer] = entries
     return logs
 

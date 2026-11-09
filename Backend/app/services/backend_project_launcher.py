@@ -19,9 +19,12 @@ from app.services.backend_process_registry import (
     terminate_backend_process,
 )
 from app.services.backend_launch_support import (
+    JAVA_BACKEND_JAR_OPTIONS,
     _backend_runtime_environment,
     _find_backend_snapshot_jar,
     _jar_has_main_class,
+    _maven_log_environment,
+    _maven_output_text,
     _run_backend_repackage,
 )
 from app.services.workspace_process_registry import workspace_process_registry
@@ -29,7 +32,6 @@ from app.services.managed_database_runtime import ManagedDatabaseStartupError, p
 from app.services.database_credentials import DatabaseCredentialError
 from app.services.backend_startup_diagnostics import database_resource_failure, read_log_tail
 from app.services.preview_runtime_state import record_database_check
-from app.utils.subprocess_output import subprocess_output_text
 from app.utils.subprocess_platform import preview_process_creation_options
 
 
@@ -483,19 +485,20 @@ def _run_backend_build(
             argv,
             workspace=workspace,
             cwd=str(cwd),
+            env=_maven_log_environment(),
             capture_output=True,
             timeout=BACKEND_BUILD_TIMEOUT_SECONDS,
             check=False,
         )
-        stdout = subprocess_output_text(completed.stdout)
-        stderr = subprocess_output_text(completed.stderr)
+        stdout = _maven_output_text(completed.stdout)
+        stderr = _maven_output_text(completed.stderr)
         returncode = completed.returncode
         timed_out = False
         error = None
     except subprocess.TimeoutExpired as exc:
         # Maven 超时时仍需保留已产生的输出，便于用户定位下载或构建卡点。
-        stdout = subprocess_output_text(exc.stdout)
-        stderr = subprocess_output_text(exc.stderr)
+        stdout = _maven_output_text(exc.stdout)
+        stderr = _maven_output_text(exc.stderr)
         returncode = None
         timed_out = True
         error = None
@@ -534,7 +537,7 @@ def _start_backend_server(
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """在 target 目录后台启动 Java JAR，并注入当前应用的数据库环境。"""
 
-    argv = [java_command, "-jar", str(jar_path.resolve())]
+    argv = [java_command, *JAVA_BACKEND_JAR_OPTIONS, "-jar", str(jar_path.resolve())]
     stdout_path = runtime_root / "backend.stdout.log"
     stderr_path = runtime_root / "backend.stderr.log"
     stdout = stdout_path.open("ab")

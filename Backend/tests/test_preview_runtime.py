@@ -15,6 +15,7 @@ from app.agents.repair_planner.planner import _build_failure_repair_prompt
 from app.services.preview_runtime_guard import _owners, claim_maintenance, maintenance_owner, release_maintenance, require_no_maintenance
 from app.services.preview_runtime_repair import execute_repair, load_repair, prepare_repair, save_repair, source_digest, safe_file
 from app.services.preview_runtime_state import (
+    LOG_LIMIT,
     begin_attempt,
     finish_attempt,
     read_logs,
@@ -401,6 +402,28 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("\x1b", content)
         self.assertNotIn("secret-value", content)
         self.assertIn("password=[REDACTED]", content)
+
+    async def test_backend_log_snapshot_keeps_complete_utf8_characters(self) -> None:
+        """AG-UI 抽屉快照跳过窗口首尾不完整的字符，保留完整中文。"""
+
+        begin_attempt(self.workspace)
+        log = runtime_root(self.workspace) / "backend.stdout.log"
+        marker = "后端已启动\r\n"
+        pending = "测".encode("utf-8")
+        tail = marker.encode("utf-8") + pending[:2]
+        padding = b"x" * (LOG_LIMIT - len(tail) - 2)
+        log.write_bytes("中".encode("utf-8") + padding + tail)
+
+        snapshot = self.result(await self.request("get"))
+        entry = snapshot["runtime"]["logs"]["backend"][0]
+
+        self.assertTrue(entry["truncated"])
+        self.assertEqual(entry["content"], padding.decode("ascii") + marker)
+
+        with log.open("ab") as stream:
+            stream.write(pending[2:])
+        snapshot = self.result(await self.request("get"))
+        self.assertEqual(snapshot["runtime"]["logs"]["backend"][0]["content"], padding.decode("ascii") + marker + "测")
 
     def test_dead_process_is_not_healthy(self) -> None:
         """历史成功的已退出进程必须显示失败。"""

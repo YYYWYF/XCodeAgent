@@ -77,6 +77,7 @@ class BackendStartupCheckTests(unittest.TestCase):
         self.assertTrue(result['execution']['cleanup_succeeded'])
         self.assertIsNone(result['execution']['returncode'])
         self.assertIn('--server.port=0', result['command'])
+        self.assertIn('-Dlogging.charset.console=UTF-8 -jar', result['command'])
         self.assertNotIn(str(self.root), result['command'])
 
     def test_external_config_error_precedes_jar_checks_and_keeps_original_category(self) -> None:

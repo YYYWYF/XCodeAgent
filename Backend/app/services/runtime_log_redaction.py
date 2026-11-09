@@ -11,7 +11,7 @@ def _copy_redacted(stream: BinaryIO, path: Path, environment: dict[str, str]) ->
     """持续消费单个输出管道，每行脱敏后落盘并及时供就绪检查读取。"""
 
     try:
-        with path.open("a", encoding="utf-8") as output:
+        with path.open("a", encoding="utf-8", newline="") as output:
             for line in stream:
                 output.write(redact_startup_text(line.decode("utf-8", errors="replace"), environment))
                 output.flush()

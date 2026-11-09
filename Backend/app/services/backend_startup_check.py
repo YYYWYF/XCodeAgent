@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.services.backend_launch_support import (
+    JAVA_BACKEND_JAR_OPTIONS,
     _backend_runtime_environment, _find_backend_snapshot_jar,
     _jar_has_main_class, _run_backend_repackage,
 )
@@ -162,8 +163,10 @@ def _run_backend_startup_check_locked(
             if config_error:
                 category = "backend_database_resource"
                 raise RuntimeError(f"后端启动配置不可用：{config_error}")
-        argv = [java, "-jar", str(jar), "--server.address=127.0.0.1", "--server.port=0"]
-        execution["argv"] = [java, "-jar", jar.relative_to(root).as_posix(), *argv[3:]]
+        java_args = [java, *JAVA_BACKEND_JAR_OPTIONS, "-jar"]
+        server_args = ["--server.address=127.0.0.1", "--server.port=0"]
+        argv = [*java_args, str(jar), *server_args]
+        execution["argv"] = [*java_args, jar.relative_to(root).as_posix(), *server_args]
         execution["cwd"] = jar.parent.relative_to(root).as_posix()
         execution["returncode"] = None
         with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
