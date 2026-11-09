@@ -1,4 +1,4 @@
-"""复现 Electron 中 0/N 设计稿被全部确认绕过的确认门问题。"""
+"""验证部分页面无设计稿时可以确认，已有设计稿仍核验真实代码。"""
 import tempfile
 import unittest
 
@@ -6,7 +6,7 @@ from app.graph.nodes.ui_confirmation import _product_plan_hash, _verified_ui_des
 
 
 class UiDesignConfirmationGateTests(unittest.TestCase):
-    """未生成页必须阻止确认，完整且有效的 TSX 仍可确认。"""
+    """未生成页不阻塞确认，已有设计稿保持产品事实校验。"""
 
     def state(self, workspace):
         """构造单页无交互产品事实，避免依赖模型或历史产物。"""
@@ -15,8 +15,8 @@ class UiDesignConfirmationGateTests(unittest.TestCase):
             'information_items': [{'itemId': 'welcome', 'label': '欢迎文字'}], 'actions': [],
         }]}}
 
-    def test_unfinished_pages_cannot_be_confirmed(self):
-        """未生成、排队、生成中、失败、取消不能变成正式 UI 确认。"""
+    def test_unfinished_pages_do_not_block_confirmation(self):
+        """未生成、排队、生成中、失败、取消页面不阻塞确认，也不伪造页面完成状态。"""
         with tempfile.TemporaryDirectory() as workspace:
             state = self.state(workspace)
             for status in ('pending', 'queued', 'generating', 'stopping', 'generation_failed', 'cancelled'):
@@ -25,7 +25,8 @@ class UiDesignConfirmationGateTests(unittest.TestCase):
                         'pageId': 'home', 'page_key': 'Home', 'status': status,
                     }]}
                     verified, errors = _verified_ui_designs_for_confirmation(state, manifest)
-                    self.assertTrue(any('尚未生成并通过校验' in error for error in errors))
+                    self.assertEqual(errors, [])
+                    self.assertEqual(verified['pages'][0]['status'], status)
                     self.assertEqual(verified['confirmation_status'], 'pending_user_confirmation')
 
     def test_generated_page_still_requires_valid_code(self):

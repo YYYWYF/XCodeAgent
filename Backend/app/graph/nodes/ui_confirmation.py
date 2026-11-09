@@ -226,7 +226,7 @@ def _verified_ui_designs_for_confirmation(
     state: ProjectState,
     ui_designs: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """按当前 ProductPlan 和真实 TSX 复验全部页面，未生成或失败页不能消费确认门。"""
+    """按当前 ProductPlan 复验已生成页面，未生成、失败或取消页面保留原状态且不阻塞确认。"""
 
     product_pages = {_page_id(page): page for page in _page_list(state) if _page_id(page)}
     existing_pages = {
@@ -260,10 +260,8 @@ def _verified_ui_designs_for_confirmation(
         )
         verification = verified.get("verification", {})
         page_errors = verification.get("errors") if isinstance(verification, dict) else []
-        # 未生成、失败或取消都不是可确认产物，不能用“确认全部”绕过生成。
-        if status != "confirmed":
-            errors.append(f"页面 {page_id} 尚未生成并通过校验，请先完成设计稿。")
-        elif verification.get("status") != "passed":
+        # 只校验已生成页面，允许用户在部分页面没有设计稿时确认并继续。
+        if status == "confirmed" and verification.get("status") != "passed":
             detail = "；".join(str(item) for item in page_errors) or "设计稿代码或映射缺失"
             errors.append(f"页面 {page_id} 未通过产品事实一致性校验：{detail}")
         verified_pages.append(verified)
