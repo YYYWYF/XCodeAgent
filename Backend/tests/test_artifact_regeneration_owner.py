@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, patch
 from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
 from app.domain.application_revision import ActiveFormalRevision, PendingRevisionImpact
 from app.protocols.application_planning_run_lock import application_planning_run_lock
-from app.protocols.planning_stage_handoff import assert_current_planning_thread
 from app.protocols.workflow.run_control import workflow_run_registry
 from app.services.application_lifecycle import (
     application_lifecycle_path, complete_workspace_bootstrap, create_application_lifecycle,
@@ -50,8 +49,8 @@ class ArtifactRegenerationOwnerTests(unittest.IsolatedAsyncioTestCase):
             new_run_id="new-work", node="technical_planning_begin", request="开发天气页",
         )
 
-    async def test_completed_bootstrap_owner_does_not_block_regeneration(self):
-        """正常完成规划后首次开发可交接，原文件不改且新版本仍需要确认。"""
+    async def test_completed_bootstrap_owner_is_preserved_by_development_check(self):
+        """首次开发发现失效输入时仍保留完成的规划归属，不创建新的规划任务。"""
         with tempfile.TemporaryDirectory() as workspace:
             before = self.ready_workspace(workspace)
             self.assertEqual(before.active_run_id, "finished-planning")
@@ -65,15 +64,14 @@ class ArtifactRegenerationOwnerTests(unittest.IsolatedAsyncioTestCase):
                 "build_execution_scope": {"type": "page", "targetId": "weather"}}}
             graph = object()
             with patch("app.graph.application_planning_workflow.application_planning_graph_for_request",
-                       AsyncMock(return_value=graph)):
+                       AsyncMock(return_value=graph)) as planner:
                 result = await prepare_automatic_regeneration(inputs, run_id="new-work", thread_id="workbench")
-            self.assertIs(result, graph)
-            self.assertEqual(inputs["resume_from"], "technical_planning")
+            self.assertIsNone(result)
+            planner.assert_not_awaited()
+            self.assertNotIn("resume_from", inputs)
             current = load_application_lifecycle(workspace)
-            self.assertEqual(current.active_run_id, "new-work")
-            assert_current_planning_thread(workspace, "workbench")
-            self.assertEqual(current.active_formal_revision.regeneration_target.page_id, "weather")
-            self.assertIsNone(current.active_formal_revision.continuation_token_sha256)
+            self.assertEqual(current, before)
+            self.assertIsNone(current.active_formal_revision)
             for path, content in original.items():
                 self.assertEqual(path.read_bytes(), content)
 

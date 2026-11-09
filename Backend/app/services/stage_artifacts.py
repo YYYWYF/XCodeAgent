@@ -62,13 +62,15 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
     workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
     if not workspace or node not in _STAGES:
         return {}
-    from app.services.stage_prerequisites import require_stage_inputs
+    from app.services.stage_prerequisites import require_stage_inputs, endpoint_development
     require_stage_inputs(state, node)
     root = Path(workspace) / WORKSPACE_ARTIFACT_DIR
     required = (
         set(_ARTIFACTS) if node in _TECHNICAL_STAGES | _RUNTIME_STAGES
         else _PLANNING_INPUTS.get(node, set())
     )
+    if node in _RUNTIME_STAGES and endpoint_development(state):
+        required.discard("ui_designs")
     fields: dict[str, Any] = {}
     for key, relative in _ARTIFACTS.items():
         path = root / relative

@@ -661,9 +661,21 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
     )
     from app.services.workflow_input_artifacts import pregraph_artifact_values
     artifact_entry_node = resume_from or "api_design_readiness_gate"
+    artifact_target = {"selected_endpoint_id": selected_endpoint_id, "selectedPageId": selectedPageId}
+    if not selected_endpoint_id and not selectedPageId and not revision_build_target_type:
+        artifact_target["build_execution_scope"] = (
+            _optional_dict(payload.get("buildExecutionScope"))
+            or _optional_dict(payload.get("build_execution_scope"))
+            or _optional_dict(forwarded_props.get("buildExecutionScope"))
+            or _optional_dict(forwarded_props.get("build_execution_scope"))
+            or _optional_dict(resume_values_from_state.get("build_execution_scope"))
+        )
+    from app.services.stage_prerequisites import endpoint_development
+    include_ui_designs = not endpoint_development(artifact_target)
     project_plan_start_values = (
         pregraph_artifact_values(workspace, artifact_entry_node,
-            lambda: _project_plan_start_values(workspace, selected_page_id=selectedPageId))
+            lambda: _project_plan_start_values(workspace, selected_page_id=selectedPageId,
+                include_ui_designs=include_ui_designs), state=artifact_target)
         if workflow_scope not in APPLICATION_PLANNING_SCOPES
         else {}
     )
@@ -732,7 +744,7 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         "completed_development_analysis": workflow_action == "continue_revision_build" and active_revision.regeneration_target is None,
         **project_plan_start_values,
         **pregraph_artifact_values(workspace, artifact_entry_node,
-            lambda: _debug_resume_values(debug_state, workspace=workspace)),
+            lambda: _debug_resume_values(debug_state, workspace=workspace), state=artifact_target),
         **({"owner_session_id": owner_session_id} if owner_session_id else {}),
         "retry_failed_tasks": (
             workflow_action == "retry_failed_tasks" and resume_from == "build"
@@ -1560,6 +1572,7 @@ def _project_plan_start_values(
     workspace: str,
     *,
     selected_page_id: str = "",
+    include_ui_designs: bool = True,
 ) -> dict[str, Any]:
     """加载主 Workflow 计划，并按需接入 RequirementSpec 中的待设计页面。"""
 
@@ -1585,8 +1598,8 @@ def _project_plan_start_values(
     )
     ui_designs = load_ui_designs_json(
         workspace_root / WORKSPACE_ARTIFACT_DIR / "specs" / "ui-designs.json"
-    )
-    if not product_plan or not ui_designs:
+    ) if include_ui_designs else {}
+    if not product_plan or (include_ui_designs and not ui_designs):
         raise ValueError("当前 TechnicalPlan 运行时需要已确认的 ProductPlan 和 UiManifest。")
     project_plan = materialize_technical_plan_runtime(
         technical_plan,

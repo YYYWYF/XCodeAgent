@@ -401,7 +401,8 @@ def _assemble_planning_context(
     """
 
     workspace = workspace_from_state(state)
-    formal_artifacts = _load_formal_artifacts(workspace)
+    from app.services.stage_prerequisites import endpoint_development
+    formal_artifacts = _load_formal_artifacts(workspace, include_ui_designs=not endpoint_development(state))
     formal_state = _formal_artifact_state_update(formal_artifacts)
     project_plan = _latest_project_plan(state, formal_artifacts=formal_artifacts)
     scope = _build_execution_scope_from_state(state)

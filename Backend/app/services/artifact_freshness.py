@@ -6,7 +6,7 @@ from typing import Any
 from app.services.artifact_invalidation import canonical_sha256
 
 
-def upstream_errors(root: Path, key: str, value: dict[str, Any]) -> list[str]:
+def upstream_errors(root: Path, key: str, value: dict[str, Any], *, include_ui_designs: bool = True) -> list[str]:
     """校验文件依赖与各正式产物原生语义摘要，不把旧确认状态当作有效证据。"""
     from app.services.stage_artifacts import _ARTIFACTS
     from app.workspace.plan_documents import load_project_plan_json
@@ -19,6 +19,8 @@ def upstream_errors(root: Path, key: str, value: dict[str, Any]) -> list[str]:
     references = value.get("basedOn") or []
     errors = []
     for reference in references:
+        if not include_ui_designs and isinstance(reference, dict) and reference.get("artifactKey") == "ui-design":
+            continue
         path = paths.get(reference.get("artifactKey")) if isinstance(reference, dict) else None
         if path is None or not path.is_file() or reference.get("sha256") != canonical_sha256(path):
             errors.append("直接上游已变化")
@@ -31,6 +33,8 @@ def upstream_errors(root: Path, key: str, value: dict[str, Any]) -> list[str]:
         ],
     }
     for field, upstream, digest in dependencies.get(key, []):
+        if upstream == "ui_designs" and not include_ui_designs:
+            continue
         if field in value:
             current = load_project_plan_json(root / _ARTIFACTS[upstream])
             if value[field] != digest(current):
