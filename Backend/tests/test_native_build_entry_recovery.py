@@ -146,7 +146,7 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
             original_apply = build_module._apply_scheduler_results
 
             def persist_then_stop(*args, **kwargs):
-                """在批次进度落盘后模拟进程中断，保留真实 checkpoint 入口。"""
+                """在首个任务进度落盘后模拟进程中断，保留真实 checkpoint 入口。"""
 
                 original_apply(*args, **kwargs)
                 raise RuntimeError("backend stopped")
@@ -159,10 +159,12 @@ class NativeBuildEntryRecoveryTests(unittest.IsolatedAsyncioTestCase):
                 await graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
             source_record = load_build_execution_record(state, source_run_id)
             assert source_record is not None
-            self.assertEqual(
-                {task["id"]: task["status"] for task in source_record["progress"]["tasks"]},
-                {"A": "completed", "B": "failed", "C": "pending"},
-            )
+            statuses = {task["id"]: task["status"] for task in source_record["progress"]["tasks"]}
+            self.assertEqual(statuses["C"], "pending")
+            # A、B 的完成顺序不固定，首个提交后另一个仍记录为在途任务。
+            self.assertIn((statuses["A"], statuses["B"]), {
+                ("completed", "running"), ("running", "failed"),
+            })
             await mark_execution_interrupted(
                 workspace=workspace, run_id=source_run_id,
                 interrupted_at=datetime.now(timezone.utc),

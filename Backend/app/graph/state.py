@@ -26,6 +26,7 @@ class ProjectState(TypedDict, total=False):
     phase: str
     resume_from: str
     retry_source_run_id: str
+    build_retry_task_id: str
     resume_execution_run_id: str
     workflow_action: str
     request_complexity: str

@@ -74,6 +74,14 @@ def select_ready_build_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         )
     ]
 
+    running_locks = {
+        lock for task in tasks_by_id.values() if task.get("status") == "running"
+        for lock in _task_locks(task)
+    }
+    ready_candidates = [
+        task for task in ready_candidates
+        if not running_locks.intersection(_task_locks(task))
+    ]
     selected = _lock_compatible_batch(_database_first_candidates(ready_candidates, tasks_by_id))
     return {
         "ready_tasks": selected,

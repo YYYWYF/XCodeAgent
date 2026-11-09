@@ -60,6 +60,7 @@ export type SendWorkflowMessageOptions = {
   workflowDebug?: WorkflowDebugOptions
   resumeReference?: { runId: string; threadId: string }
   workflowScope?: string
+  buildTaskRetry?: import('./buildTaskRetry').BuildTaskRetryRequest
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
     | { action: 'continue' | 'retry_current_failure'; sourceRunId: string }
@@ -144,6 +145,7 @@ export function buildWorkflowForwardedProps(
     resumeReference: options.resumeReference,
     workflowScope: options.workflowScope,
     executionRecovery: options.executionRecovery,
+    buildTaskRetry: options.buildTaskRetry,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
     planningRunId: options.planningRunId,
@@ -592,6 +594,7 @@ export class AgUiChatSession {
   readonly threadId: string
 
   readonly endpointUrl: string
+  private readonly cancellationEndpointUrl: string
 
   private activeAgent?: HttpAgent
   private activeRunId?: string
@@ -602,9 +605,10 @@ export class AgUiChatSession {
   private activeWorkspaceRoot?: string
 
   /** 创建可指向主 Workflow 或同协议独立 Graph 的 AG-UI 会话。 */
-  constructor(threadId = randomUUID(), url = getWorkflowUrl()) {
+  constructor(threadId = randomUUID(), url = getWorkflowUrl(), cancellationUrl = url) {
     this.threadId = threadId
     this.endpointUrl = url
+    this.cancellationEndpointUrl = cancellationUrl
   }
 
   /** 返回当前会话是否仍有本地活动运行或尚未确认退出的服务端运行。 */
@@ -630,7 +634,7 @@ export class AgUiChatSession {
       return
     }
 
-    const cancellation = await cancelWorkflowRun(this.threadId, runId, this.activeWorkspaceRoot, this.endpointUrl)
+    const cancellation = await cancelWorkflowRun(this.threadId, runId, this.activeWorkspaceRoot, this.cancellationEndpointUrl)
     const serverStopped =
       cancellation.status === 'cancelled' ||
       cancellation.status === 'pending_confirmation' ||
@@ -692,6 +696,10 @@ export class AgUiChatSession {
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
         if (!acceptingEvents) return
+        if (event.name === 'build-task-retry' && event.value?.status === 'failed') {
+          runErrorMessage = event.value.error?.message || '任务重试失败。'
+          runErrorCode = 'BUILD_TASK_RETRY_REJECTED'
+        }
         if (event.name === 'technical-planning-conversation' && event.value?.status === 'failed') {
           runErrorMessage = event.value.error?.message || '技术规划修改失败。'
         }
@@ -822,7 +830,7 @@ export class AgUiChatSession {
       })
     }
     // 对话及一次性续接必须收到结束回执；响应丢失只能同步后端事实，不能伪装为成功。
-    if (!runFinished && (options.conversation || options.workflowAction === 'continue_revision_build' ||
+    if (!runFinished && (options.buildTaskRetry || options.conversation || options.workflowAction === 'continue_revision_build' ||
       workflow?.state?.workflow_scope === 'conversation')) {
       throw new Error('Backend 连接中断，未收到运行结束回执。请重试同步当前节点状态。')
     }

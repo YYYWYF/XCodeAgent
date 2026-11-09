@@ -41,6 +41,7 @@ import MarkdownContent from '../../../MarkdownContent/MarkdownContent'
 import CodeChangeCard from '../CodeChangeCard'
 import { ToolCallChain } from '../ToolCallCard'
 import ProcessSteps from '../ProcessSteps'
+import { BuildTaskRetryContext } from '../WorkflowRunCard/BuildTaskRetryButton'
 import DagGenerationProgress from '../ProcessSteps/DagGenerationProgress'
 import VersionCommitReminder from '../VersionCommitReminder'
 import WorkflowRunCard, { type ClarificationAnswers } from '../WorkflowRunCard'
@@ -315,6 +316,7 @@ type MessageListProps = {
   conversationRunning: boolean
   /** 操作占用仅禁用提交，不将其他会话的锁显示成当前 Agent loading。 */
   actionsDisabled?: boolean
+  onRetryBuildTask?: (messageId: number, taskId: string) => Promise<void>
   /** 当前 owner 的待确认任务身份与可信进度摘要。 */
   dagPendingPlanCompletion?: DagPendingPlanCompletion
   entityDesignSession?: boolean
@@ -409,6 +411,7 @@ export default function MessageList({
   codeChangeActionsDisabled,
   conversationRunning,
   actionsDisabled = false,
+  onRetryBuildTask,
   dagPendingPlanCompletion,
   entityDesignSession = false,
   emptyContent,
@@ -1034,6 +1037,10 @@ export default function MessageList({
                           visibleProcessSteps &&
                           visibleProcessSteps.length > 0 &&
                           !designPhasePlanning && (
+                            <BuildTaskRetryContext.Provider value={
+                              !actionsDisabled && message.id === latestAssistantMessageId && onRetryBuildTask
+                                ? (taskId) => onRetryBuildTask(message.id, taskId) : undefined
+                            }>
                             <ProcessSteps
                               workspaceRoot={workspaceRoot}
                               conversation={conversation}
@@ -1049,6 +1056,7 @@ export default function MessageList({
                               steps={visibleProcessSteps}
                               workflow={message.workflow}
                             />
+                            </BuildTaskRetryContext.Provider>
                           )}
                         {!hideEntityWorkflowChrome &&
                           messageLoading &&

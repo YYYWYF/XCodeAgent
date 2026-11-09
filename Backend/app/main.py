@@ -102,6 +102,7 @@ from app.protocols.execution_recovery import (
     build_execution_recovery_ag_ui_stream,
     execution_recovery_capabilities,
 )
+from app.protocols.build_task_retry import build_task_retry_stream, build_task_retry_capabilities
 from app.protocols.user_skills import (
     build_user_skills_ag_ui_stream,
     user_skills_capabilities,
@@ -223,6 +224,7 @@ async def health() -> dict[str, object]:
             "conversation": conversation_capabilities(),
             "temporary_chat": temporary_chat_capabilities(),
             "execution_recovery": execution_recovery_capabilities(),
+            "build_task_retry": build_task_retry_capabilities(),
             "workspace": workspace_tools.capabilities(),
         },
     }
@@ -270,6 +272,16 @@ async def run_application_config(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/build-task-retry/run")
+async def run_build_task_retry(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 动作重新调度指定失败任务。"""
+    return StreamingResponse(build_task_retry_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/execution-recovery/execute")

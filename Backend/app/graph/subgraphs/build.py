@@ -62,6 +62,10 @@ from app.services.template_route_projector import (
     apply_template_route_projection,
     build_route_projector_input,
 )
+from app.services.build_dispatch import BuildDispatch
+from app.services.build_task_retry_queue import (
+    register_build_scheduler, publish_build_retry_state, consume_build_task_retries, validate_task_retry,
+)
 from app.services.build_tool_activity import (
     path_matches_task_scope,
     task_ids_for_tool_activity,
@@ -347,28 +351,35 @@ def _execute_ready_tasks(
 
     all_results: list[dict[str, Any]] = []
     code_change_sets: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(
-        max_workers=max(1, min(len(ready_tasks), MAX_PARALLEL_BUILD_TASKS)),
-        thread_name_prefix="build-task",
-    ) as executor:
-        # 把节点线程的 LangGraph 运行上下文复制进每个任务工作线程；
-        # 否则 custom 模式 stream writer 在回调中调用 get_config() 时缺少上下文，会抛 RuntimeError。
-        futures = [
-            executor.submit(
-                contextvars.copy_context().run,
-                _execute_task,
-                state,
-                task,
-                on_batch_tool_activity=on_batch_tool_activity,
-            )
-            for task in ready_tasks
-        ]
-        # 按提交顺序归并结果，保持任务结果和事件展示稳定。
-        for future in futures:
-            owner_results, owner_change_set = future.result()
-            all_results.extend(owner_results)
-            if owner_change_set:
-                code_change_sets.append(owner_change_set)
+    if len(ready_tasks) == 1:
+        all_results, change_set = _execute_task(
+            state, ready_tasks[0], on_batch_tool_activity=on_batch_tool_activity,
+        )
+        if change_set:
+            code_change_sets.append(change_set)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(len(ready_tasks), MAX_PARALLEL_BUILD_TASKS)),
+            thread_name_prefix="build-task",
+        ) as executor:
+            # 把节点线程的 LangGraph 运行上下文复制进每个任务工作线程；
+            # 否则 custom 模式 stream writer 在回调中调用 get_config() 时缺少上下文，会抛 RuntimeError。
+            futures = [
+                executor.submit(
+                    contextvars.copy_context().run,
+                    _execute_task,
+                    state,
+                    task,
+                    on_batch_tool_activity=on_batch_tool_activity,
+                )
+                for task in ready_tasks
+            ]
+            # 按提交顺序归并结果，保持任务结果和事件展示稳定。
+            for future in futures:
+                owner_results, owner_change_set = future.result()
+                all_results.extend(owner_results)
+                if owner_change_set:
+                    code_change_sets.append(owner_change_set)
     workspace = workspace_from_state(state)
     if workspace and any("implementation_notes" in result for result in all_results):
         from app.services.backend_notes_sync import sync_backend_notes
@@ -1551,6 +1562,9 @@ def _restore_build_runtime(
         if isinstance(result, dict) and result.get("task_id")
     }
     for task in restored_tasks:
+        # 逐任务提交可同时记录其他在途任务，恢复后重新领取未提交结果的任务。
+        if task.get("status") == "running":
+            task["status"] = "pending"
         result = latest_results.get(str(task["id"]))
         if task.get("status") == "pending" and isinstance(result, dict) and not task.get("retry_count"):
             if result.get("status") in {"completed", "already_satisfied", "failed"}:
@@ -1662,6 +1676,16 @@ def run_build_scheduler(
     *,
     progress_writer: ProgressWriter | None = None,
 ) -> dict[str, Any]:
+    """为当前 Build 登记唯一调度器，单任务重试始终交由该线程提交。"""
+    with register_build_scheduler(state):
+        return {**_run_build_scheduler(state, progress_writer=progress_writer), "build_retry_task_id": ""}
+
+
+def _run_build_scheduler(
+    state: ProjectState,
+    *,
+    progress_writer: ProgressWriter | None = None,
+) -> dict[str, Any]:
     """按 build_execution_scope 裁剪任务图，并持续调度到当前切片完成或阻塞。"""
 
     recovery = current_node_recovery_context()
@@ -1669,6 +1693,7 @@ def run_build_scheduler(
     inherited_progress = None
     progress_source_run_id = None
     disk_retry_source = str(state.get("retry_source_run_id") or "")
+    single_retry = str(state.get("build_retry_task_id") or "")
     # 中断和显式从 Build 开始走整轮重启；FAILED 走既有局部失败重试。
     restarting = ((recovery is not None and recovery.reentry_reason is WorkflowReentryReason.INTERRUPTED_CONTINUE)
                   or (recovery is None and not disk_retry_source and state.get("resume_from") == "build"))
@@ -1680,11 +1705,15 @@ def run_build_scheduler(
         try:
             record = load_build_execution_record(state, disk_retry_source)
             progress = record.get("progress") if record else None
+            if single_retry and not progress:
+                raise ValueError("单任务重试的原 Build 进度已不存在。")
             if progress:
                 state = _restore_build_runtime(state, disk_retry_source, progress, retry_failed_tasks=True)
                 inherited_progress = progress
                 progress_source_run_id = disk_retry_source
         except (OSError, ValueError, RecoveryExecutionError):
+            if single_retry:
+                raise
             state, scan_fields = restart_build_state(state)
         state, scan_fields = refresh_build_workspace(state)
     elif recovery is not None:
@@ -1793,7 +1822,7 @@ def run_build_scheduler(
             paused_tasks=database_paused_tasks,
             build_task_plan=build_task_plan,
         )
-    retry_requested = bool(state.get("retry_failed_tasks"))
+    retry_requested = bool(state.get("retry_failed_tasks")) or bool(single_retry)
     scope_confirmation_pending = (
         isinstance(incoming_repair_task_plan, dict)
         and incoming_repair_task_plan.get("decision") == "requires_user_confirmation"
@@ -1880,6 +1909,9 @@ def run_build_scheduler(
             retry_slice["tasks"],
             list(state.get("build_results", [])),
         )
+        if single_retry:
+            validate_task_retry({**state, "tasks": tasks, "build_task_plan": build_task_plan}, single_retry)
+            retry_task_ids = {single_retry}
         if retry_task_ids:
             tasks = reset_failed_tasks_for_retry(tasks, retry_task_ids)
             build_task_plan = replace_build_task_plan_tasks(build_task_plan, tasks)
@@ -1943,246 +1975,291 @@ def run_build_scheduler(
     max_iterations = max(len(tasks) * 2, 1)
     progress_writer = progress_writer if progress_writer is not None else _build_progress_writer()
 
-    for iteration in range(1, max_iterations + 1):
-        execution_slice = resolve_execution_slice(
-            build_task_plan=current_state["build_task_plan"],
-            tasks=current_state["tasks"],
-            build_execution_scope=build_execution_scope,
-        )
-        slice_tasks = execution_slice["tasks"]
-        if not slice_tasks:
-            build_events.append("scheduler:no_tasks_in_scope")
-            break
+    active_tool_activities: dict[str, dict[str, Any]] = {}
+    tool_activity_lock = Lock()
+    pause_dispatch = False
 
-        selection = select_ready_build_batch(slice_tasks)
-        if selection["errors"]:
-            build_events.append("scheduler:invalid_dag")
-            break
-        if selection["is_complete"]:
-            build_events.append("scheduler:completed")
-            break
-        ready_tasks = selection["ready_tasks"]
-        repair_dispatched = repair_dispatched or any(
-            task.get("kind") == "repair" for task in ready_tasks
-        )
-        if not ready_tasks:
-            build_events.append("scheduler:blocked")
-            break
+    def commit_task_retry(updated: dict[str, Any]) -> None:
+        """先提交重试次数及 pending 状态，再向独立动作确认已接收。"""
+        errors = _build_run_plan_drift_errors(updated)
+        if errors:
+            raise ValueError("；".join(errors))
+        write_build_execution_record(updated, _build_execution_record(
+            updated, build_run_binding, _build_runtime_progress(updated),
+            progress_source_run_id=str(updated.get("active_run_id") or ""), execution_stage="prepared"))
 
-        drift_errors = _build_run_plan_drift_errors(current_state)
-        if drift_errors:
-            return _build_run_plan_drift_result(
-                current_state,
-                errors=drift_errors,
-                build_events=build_events,
-                build_execution_scope=build_execution_scope,
-            )
-
-        ready_ids = selection["ready_task_ids"]
-        build_events.append(f"scheduler:dispatch:{','.join(ready_ids)}")
-        running_tasks = mark_tasks_running(current_state["tasks"], ready_ids)
-        active_tool_activities: dict[str, dict[str, Any]] = {}
-        tool_activity_lock = Lock()
-        running_message = f"正在执行构建任务：{', '.join(ready_ids)}"
-        _emit_build_progress(
-            progress_writer,
-            current_state={**current_state, "tasks": running_tasks},
-            build_execution_scope=build_execution_scope,
-            build_events=build_events,
-            message=running_message,
-        )
-
-        def update_batch_tool_activity(
-            owner_tasks: list[dict[str, Any]],
-            activity: dict[str, Any] | None,
-        ) -> None:
-            """让批次内最新工具活动覆盖旧值，并发送不进入历史事件的临时切片。"""
-
+    with BuildDispatch(_execute_ready_tasks, MAX_PARALLEL_BUILD_TASKS) as dispatch:
+        iteration = 0
+        publish_build_retry_state(current_state)
+        while iteration < max_iterations or dispatch.pending:
             with tool_activity_lock:
-                owner_task_ids = [str(task.get("id") or "") for task in owner_tasks]
-                if activity is None:
-                    for task_id in owner_task_ids:
-                        active_tool_activities.pop(task_id, None)
+                if not pause_dispatch and not dispatch.cancelled():
+                    retried = consume_build_task_retries(current_state, commit_task_retry)
+                    max_iterations += retried * 2
                 else:
-                    for task_id in task_ids_for_tool_activity(activity, owner_tasks):
-                        active_tool_activities[task_id] = activity
-                _emit_build_progress(
-                    progress_writer,
-                    current_state={**current_state, "tasks": running_tasks},
-                    build_execution_scope=build_execution_scope,
-                    build_events=build_events,
-                    message=running_message,
-                    active_tool_activities=active_tool_activities,
-                    ephemeral=True,
-                )
-
-        results, code_change_sets = _execute_ready_tasks(
-            {**current_state, "tasks": running_tasks},
-            ready_tasks,
-            on_batch_tool_activity=update_batch_tool_activity,
-        )
-        # 每个调度批次完成后刷新一次代码图，让后续阶段查询到真实的新文件、
-        # 新符号和新关系；刷新失败只影响导航，不影响任务结果。
-        refresh_code_graph_after_changes(
-            workspace_from_state(current_state),
-            code_change_sets,
-        )
-        database_approval = _database_approval_result(results)
-        if database_approval is not None:
-            paused_tasks = _reset_running_tasks_to_pending(running_tasks, ready_ids)
-            approved_plan = database_approval.get("database_change_plan") or {}
-            paused_tasks = [
-                (
-                    {**task, "approved_database_change_plan": approved_plan}
-                    if task.get("id") in ready_ids
-                    else task
-                )
-                for task in paused_tasks
-            ]
-            current_state = {
-                **current_state,
-                "tasks": paused_tasks,
-                "build_task_plan": replace_build_task_plan_tasks(
-                    current_state["build_task_plan"],
-                    paused_tasks,
-                ),
-                "database_change_plan": database_approval.get("database_change_plan") or {},
-                "database_approval_requests": [
-                    *(
-                        current_state.get("database_approval_requests")
-                        if isinstance(current_state.get("database_approval_requests"), list)
-                        else []
-                    ),
-                    database_approval.get("database_approval") or {},
-                ],
-            }
-            build_events.append("scheduler:database_requires_approval")
+                    retried = 0
+            budget_exhausted = iteration >= max_iterations
             execution_slice = resolve_execution_slice(
                 build_task_plan=current_state["build_task_plan"],
                 tasks=current_state["tasks"],
                 build_execution_scope=build_execution_scope,
             )
-            build_summary = {
-                **summarize_build_runtime(
-                    execution_slice["tasks"],
-                    _results_for_tasks(current_state.get("build_results", []), execution_slice["tasks"]),
-                ),
-                "status": "requires_confirmation",
-            }
-            return {
-                **current_state,
-                "phase": "build",
-                "status": "requires_user_input",
-                "build_summary": build_summary,
-                "build_execution_scope": build_execution_scope,
-                "build_execution_slice": execution_slice,
-                "clarification": _database_approval_payload(database_approval),
-                "build_events": build_events,
-                "timeline": ["build"],
-            }
-        all_code_change_sets.extend(code_change_sets)
-        updated = _apply_scheduler_results(
-            {**current_state, "tasks": running_tasks},
-            tasks=running_tasks,
-            results=results,
-            stage=f"build_scheduler_iteration_{iteration}",
-        )
-        current_state = {**current_state, **updated}
-        build_events.append(f"scheduler:results:{len(results)}")
-        _emit_build_progress(
-            progress_writer,
-            current_state=current_state,
-            build_execution_scope=build_execution_scope,
-            build_events=build_events,
-            message=f"构建任务结果已更新：{len(results)} 个任务返回结果。",
-        )
+            slice_tasks = execution_slice["tasks"]
+            if not slice_tasks:
+                build_events.append("scheduler:no_tasks_in_scope")
+                break
 
-        summary = summarize_build_runtime(
-            resolve_execution_slice(
-                build_task_plan=current_state["build_task_plan"],
-                tasks=current_state["tasks"],
-                build_execution_scope=build_execution_scope,
-            )["tasks"],
-            _results_for_tasks(current_state.get("build_results", []), slice_tasks),
-        )
-        if summary["status"] == "needs_repair":
-            repair_task_plan = create_build_failure_repair_plan(
-                failed_results=[
-                    result
-                    for result in _results_for_tasks(
-                        current_state.get("build_results", []),
-                        slice_tasks,
-                    )
-                    if result.get("status") == "failed"
-                ],
-                tasks=current_state["tasks"],
-                existing_repair_tasks=[
-                    task for task in current_state["tasks"] if task.get("kind") == "repair"
-                ],
-                workspace_snapshot=current_state.get("workspace_snapshot"),
-                workspace=workspace_root(current_state),
-                repair_planner=lambda repair_input: _plan_build_repair_with_repair_planner(
+            selection = select_ready_build_batch(slice_tasks)
+            if selection["errors"] and not dispatch.pending:
+                build_events.append("scheduler:invalid_dag")
+                break
+            if selection["is_complete"]:
+                build_events.append("scheduler:completed")
+                break
+            ready_tasks = selection["ready_tasks"][:MAX_PARALLEL_BUILD_TASKS - len(dispatch.pending)]
+            # 数据库审批沿现有单计划确认载荷执行，避免同时产生多个审批。
+            if ready_tasks and ready_tasks[0].get("owner") == "database":
+                ready_tasks = ready_tasks[:1] if not dispatch.pending else []
+            pause_dispatch = pause_dispatch or dispatch.cancelled() or bool(selection["errors"])
+            if pause_dispatch or budget_exhausted:
+                ready_tasks = []
+            repair_dispatched = repair_dispatched or any(
+                task.get("kind") == "repair" for task in ready_tasks
+            )
+            if not ready_tasks and not dispatch.pending:
+                build_events.append("scheduler:blocked")
+                break
+
+            drift_errors = _build_run_plan_drift_errors(current_state)
+            if drift_errors and not dispatch.pending:
+                return _build_run_plan_drift_result(
                     current_state,
-                    repair_input,
-                ),
-            )
-            repair_task_plan_path = write_repair_task_plan_json(
-                current_state,
-                repair_task_plan,
-            )
-            if repair_task_plan.get("decision") == "requires_user_confirmation":
-                current_state = {
-                    **current_state,
-                    "repair_task_plan": repair_task_plan,
-                    "repair_task_plan_path": repair_task_plan_path,
-                }
-                build_events.append("scheduler:repair_requires_confirmation")
-                break
-            if repair_task_plan.get("decision") == "terminal_failure":
-                current_state = {
-                    **current_state,
-                    "repair_task_plan": repair_task_plan,
-                    "repair_task_plan_path": repair_task_plan_path,
-                }
-                build_events.append("scheduler:repair_terminal_failure")
-                break
-            if not repair_task_plan.get("tasks"):
-                build_events.append("scheduler:repair_unavailable")
-                break
-            next_build_task_plan = append_repair_tasks_to_build_plan(
-                build_task_plan=current_state["build_task_plan"],
-                repair_task_plan=repair_task_plan,
-            )
-            current_state = {
-                **current_state,
-                "build_task_plan": next_build_task_plan,
-                "tasks": tasks_from_build_task_plan(next_build_task_plan),
-                "repair_task_plan": repair_task_plan,
-                "repair_task_plan_path": repair_task_plan_path,
-                "repair_tasks": repair_task_plan["tasks"],
-            }
-            build_events.append(f"scheduler:repair_planned:{len(repair_task_plan['tasks'])}")
-            _emit_build_progress(
-                progress_writer,
-                current_state=current_state,
-                build_execution_scope=build_execution_scope,
-                build_events=build_events,
-                message=f"已生成修复任务：{len(repair_task_plan['tasks'])} 个。",
-            )
-            continue
+                    errors=drift_errors,
+                    build_events=build_events,
+                    build_execution_scope=build_execution_scope,
+                )
 
-        if summary["status"] == "requires_confirmation":
-            build_events.append(f"scheduler:{summary['status']}")
-            break
-        # 失败任务不再立即终止调度循环：本批任务失败只阻塞其下游
-        # （select_ready_build_batch 已排除依赖失败的任务），与失败任务无关的
-        # 独立就绪任务应在下一轮继续并行调度。当 DAG 真正停滞（无就绪任务且
-        # 无可推进的 pending）时，下一轮循环顶部的 `if not ready_tasks: break`
-        # （scheduler:blocked）会自然退出，随后由最终的 build_summary 汇总出
-        # failed 状态。这样前后端任务能真正并行，一个后端任务失败不会拖死
-        # 与它无依赖关系的前端任务。
-    else:
-        build_events.append("scheduler:iteration_budget_exhausted")
+            if drift_errors:
+                ready_tasks = []
+            ready_ids = [task["id"] for task in ready_tasks]
+            if ready_ids:
+                build_events.append(f"scheduler:dispatch:{','.join(ready_ids)}")
+            running_tasks = mark_tasks_running(current_state["tasks"], ready_ids)
+            current_state = {**current_state, "tasks": running_tasks}
+            running_message = "正在执行构建任务"
+            if ready_ids or retried:
+                with tool_activity_lock:
+                    publish_build_retry_state(current_state)
+                    _emit_build_progress(
+                        progress_writer,
+                        current_state=current_state,
+                        build_execution_scope=build_execution_scope,
+                        build_events=build_events,
+                        message=running_message,
+                    )
+
+            def update_batch_tool_activity(
+                owner_tasks: list[dict[str, Any]],
+                activity: dict[str, Any] | None,
+            ) -> None:
+                """按任务更新工具活动，并从最新已提交状态投射临时切片。"""
+
+                with tool_activity_lock:
+                    owner_task_ids = [str(task.get("id") or "") for task in owner_tasks]
+                    if activity is None:
+                        for task_id in owner_task_ids:
+                            active_tool_activities.pop(task_id, None)
+                    else:
+                        for task_id in task_ids_for_tool_activity(activity, owner_tasks):
+                            active_tool_activities[task_id] = activity
+                    _emit_build_progress(
+                        progress_writer,
+                        current_state=current_state,
+                        build_execution_scope=build_execution_scope,
+                        build_events=build_events,
+                        message=running_message,
+                        active_tool_activities=active_tool_activities,
+                        ephemeral=True,
+                    )
+
+            dispatch.submit(current_state, ready_tasks, update_batch_tool_activity)
+            completion = dispatch.completed()
+            if completion is None:
+                continue
+            iteration += 1
+            completed_task, (results, code_change_sets) = completion
+            ready_ids = [completed_task["id"]]
+            # 单任务结果完成后刷新代码图，再提交状态并释放依赖。
+            refresh_code_graph_after_changes(
+                workspace_from_state(current_state),
+                code_change_sets,
+            )
+            database_approval = _database_approval_result(results)
+            if database_approval is not None:
+                paused_tasks = _reset_running_tasks_to_pending(running_tasks, ready_ids)
+                approved_plan = database_approval.get("database_change_plan") or {}
+                paused_tasks = [
+                    (
+                        {**task, "approved_database_change_plan": approved_plan}
+                        if task.get("id") in ready_ids
+                        else task
+                    )
+                    for task in paused_tasks
+                ]
+                current_state = {
+                    **current_state,
+                    "tasks": paused_tasks,
+                    "build_task_plan": replace_build_task_plan_tasks(
+                        current_state["build_task_plan"],
+                        paused_tasks,
+                    ),
+                    "database_change_plan": database_approval.get("database_change_plan") or {},
+                    "database_approval_requests": [
+                        *(
+                            current_state.get("database_approval_requests")
+                            if isinstance(current_state.get("database_approval_requests"), list)
+                            else []
+                        ),
+                        database_approval.get("database_approval") or {},
+                    ],
+                }
+                build_events.append("scheduler:database_requires_approval")
+                execution_slice = resolve_execution_slice(
+                    build_task_plan=current_state["build_task_plan"],
+                    tasks=current_state["tasks"],
+                    build_execution_scope=build_execution_scope,
+                )
+                build_summary = {
+                    **summarize_build_runtime(
+                        execution_slice["tasks"],
+                        _results_for_tasks(current_state.get("build_results", []), execution_slice["tasks"]),
+                    ),
+                    "status": "requires_confirmation",
+                }
+                return {
+                    **current_state,
+                    "phase": "build",
+                    "status": "requires_user_input",
+                    "build_summary": build_summary,
+                    "build_execution_scope": build_execution_scope,
+                    "build_execution_slice": execution_slice,
+                    "clarification": _database_approval_payload(database_approval),
+                    "build_events": build_events,
+                    "timeline": ["build"],
+                }
+            all_code_change_sets.extend(code_change_sets)
+            updated = _apply_scheduler_results(
+                {**current_state, "tasks": running_tasks},
+                tasks=running_tasks,
+                results=results,
+                stage=f"build_scheduler_iteration_{iteration}",
+            )
+            # 与工具回调串行发布，防止迟到的旧 running 快照覆盖完成事件。
+            with tool_activity_lock:
+                current_state = {**current_state, **updated}
+                publish_build_retry_state(current_state)
+                build_events.append(f"scheduler:results:{len(results)}")
+                _emit_build_progress(
+                    progress_writer,
+                    current_state=current_state,
+                    build_execution_scope=build_execution_scope,
+                    build_events=build_events,
+                    message=f"构建任务结果已更新：{len(results)} 个任务返回结果。",
+                )
+
+            summary = summarize_build_runtime(
+                resolve_execution_slice(
+                    build_task_plan=current_state["build_task_plan"],
+                    tasks=current_state["tasks"],
+                    build_execution_scope=build_execution_scope,
+                )["tasks"],
+                _results_for_tasks(current_state.get("build_results", []), slice_tasks),
+            )
+            pause_dispatch = pause_dispatch or summary["status"] == "requires_confirmation"
+            if dispatch.pending:
+                continue
+            if dispatch.cancelled() or budget_exhausted:
+                build_events.append("scheduler:cancelled" if dispatch.cancelled() else "scheduler:iteration_budget_exhausted")
+                break
+            if summary["status"] == "needs_repair" and select_ready_build_batch(
+                resolve_execution_slice(
+                    build_task_plan=current_state["build_task_plan"], tasks=current_state["tasks"],
+                    build_execution_scope=build_execution_scope,
+                )["tasks"]
+            )["ready_tasks"]:
+                continue
+            if summary["status"] == "needs_repair":
+                repair_task_plan = create_build_failure_repair_plan(
+                    failed_results=[
+                        result
+                        for result in _results_for_tasks(
+                            current_state.get("build_results", []),
+                            slice_tasks,
+                        )
+                        if result.get("status") == "failed"
+                    ],
+                    tasks=current_state["tasks"],
+                    existing_repair_tasks=[
+                        task for task in current_state["tasks"] if task.get("kind") == "repair"
+                    ],
+                    workspace_snapshot=current_state.get("workspace_snapshot"),
+                    workspace=workspace_root(current_state),
+                    repair_planner=lambda repair_input: _plan_build_repair_with_repair_planner(
+                        current_state,
+                        repair_input,
+                    ),
+                )
+                repair_task_plan_path = write_repair_task_plan_json(
+                    current_state,
+                    repair_task_plan,
+                )
+                if repair_task_plan.get("decision") == "requires_user_confirmation":
+                    current_state = {
+                        **current_state,
+                        "repair_task_plan": repair_task_plan,
+                        "repair_task_plan_path": repair_task_plan_path,
+                    }
+                    build_events.append("scheduler:repair_requires_confirmation")
+                    break
+                if repair_task_plan.get("decision") == "terminal_failure":
+                    current_state = {
+                        **current_state,
+                        "repair_task_plan": repair_task_plan,
+                        "repair_task_plan_path": repair_task_plan_path,
+                    }
+                    build_events.append("scheduler:repair_terminal_failure")
+                    break
+                if not repair_task_plan.get("tasks"):
+                    build_events.append("scheduler:repair_unavailable")
+                    break
+                next_build_task_plan = append_repair_tasks_to_build_plan(
+                    build_task_plan=current_state["build_task_plan"],
+                    repair_task_plan=repair_task_plan,
+                )
+                current_state = {
+                    **current_state,
+                    "build_task_plan": next_build_task_plan,
+                    "tasks": tasks_from_build_task_plan(next_build_task_plan),
+                    "repair_task_plan": repair_task_plan,
+                    "repair_task_plan_path": repair_task_plan_path,
+                    "repair_tasks": repair_task_plan["tasks"],
+                }
+                build_events.append(f"scheduler:repair_planned:{len(repair_task_plan['tasks'])}")
+                _emit_build_progress(
+                    progress_writer,
+                    current_state=current_state,
+                    build_execution_scope=build_execution_scope,
+                    build_events=build_events,
+                    message=f"已生成修复任务：{len(repair_task_plan['tasks'])} 个。",
+                )
+                continue
+
+            if summary["status"] == "requires_confirmation":
+                build_events.append(f"scheduler:{summary['status']}")
+                break
+            # 失败只阻塞依赖它的任务，独立任务继续补位，真正无就绪工作时退出。
+        else:
+            build_events.append("scheduler:iteration_budget_exhausted")
 
     build_results = current_state.get("build_results", [])
     execution_slice = resolve_execution_slice(
@@ -2235,6 +2312,9 @@ def run_build_scheduler(
         else "failed"
     )
     route_projection_evidence: dict[str, Any] = {}
+    if dispatch.cancelled():
+        workflow_status = "failed"
+        build_summary = {**build_summary, "status": "failed", "finalization_error": "当前运行已停止。"}
     if workflow_status == "completed":
         workspace = workspace_from_state(current_state)
         if workspace:

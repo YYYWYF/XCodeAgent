@@ -59,6 +59,7 @@ import RevisionImpactReview from '../ApplicationRevisionCard/RevisionImpactRevie
 import RevisionDraftReview from '../ApplicationRevisionCard/RevisionDraftReview'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import BuildTaskInstructions from './BuildTaskInstructions'
+import BuildTaskRetryButton from './BuildTaskRetryButton'
 import DetailReview from './DetailReview'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
 import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
@@ -1479,6 +1480,7 @@ function BuildExecutionTaskFooter({
   const title = displayTaskTitle(task)
   return (
     <div className={cx('workflow-build-task-footer')}>
+      <BuildTaskRetryButton task={task} />
       <Tag className={cx('workflow-build-task-status-tag', status)} color={taskStatusColor(status)}>
         {taskStatusText(status)}
       </Tag>

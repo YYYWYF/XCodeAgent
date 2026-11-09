@@ -1,4 +1,6 @@
 import { readWorkflowPayload } from '../../../service/agUiAgent'
+import { enqueueBuildTaskRetry, getBuildTaskRetryUrl, type BuildTaskRetryRequest } from '../../../service/buildTaskRetry'
+import { mergeBuildRetrySteps } from '../buildTaskRetryPresentation'
 import { useEffect, useRef, useState } from 'react'
 import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import type { MutableRefObject, SetStateAction } from 'react'
@@ -311,6 +313,7 @@ type UseWorkflowConversationResult = {
     authorizationAction?: string
   ) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
+  handleRetryBuildTask: (messageId: number, taskId: string) => Promise<void>
   handleSend: (
     workflowDebug?: WorkflowDebugOptions,
     confirmScopeBeforeExecution?: boolean
@@ -1273,6 +1276,8 @@ export function useWorkflowConversation({
       revisionContinuation?: { changeId: string; token: string }
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
+      buildTaskRetry?: BuildTaskRetryRequest
+      reuseBuildMessageId?: number
       executionRecovery?:
         | { action: 'execute'; incidentId: string; actionId: string }
         | { action: 'continue' | 'retry_current_failure'; sourceRunId: string }
@@ -1388,7 +1393,9 @@ export function useWorkflowConversation({
     const effectiveBuildExecutionScope =
       explicitBuildExecutionScope || sessionTargetFields.buildExecutionScope
 
-    const endpointUrl = options?.executionRecovery
+    const endpointUrl = options?.buildTaskRetry
+      ? getBuildTaskRetryUrl()
+      : options?.executionRecovery
       ? getExecutionRecoveryActionUrl()
       : options?.conversation
       ? getConversationUrl()
@@ -1404,10 +1411,13 @@ export function useWorkflowConversation({
         ? currentAgUiSession
         : (agUiSessionsRef.current[identity.key] = new AgUiChatSession(
             executionThreadId,
-            endpointUrl
+            endpointUrl,
+            options?.buildTaskRetry ? getWorkflowUrl() : endpointUrl
           ))
     const optimisticSkills = beginOptimisticSkillSend(options?.selectedSkills || [])
     const previousMessages = getSessionMessages(identity.key)
+    const reusedBuildMessage = options?.reuseBuildMessageId === undefined ? undefined
+      : previousMessages.find((item) => item.id === options.reuseBuildMessageId)
     // 连续的确定性动作可能在同一毫秒返回；新任务消息身份必须唯一，避免覆盖此前任务/结束回执。
     const userMessageId = previousMessages.reduce((next, item) => Math.max(next, item.id + 1), Date.now())
     const userMessage: AgentChatMessage = {
@@ -1417,7 +1427,7 @@ export function useWorkflowConversation({
       skills: optimisticSkills.messageSkills,
       createdAt: Date.now()
     }
-    const assistantMessageId = userMessageId + 1
+    const assistantMessageId = reusedBuildMessage?.id ?? userMessageId + 1
     const assistantMessage: AgentChatMessage = {
       id: assistantMessageId,
       role: 'assistant',
@@ -1426,7 +1436,7 @@ export function useWorkflowConversation({
     }
     const baselineRunIds = Object.keys(applicationLifecycleRef.current?.activeExecutions || {})
     delete pendingWorkflowInputsRef.current[identity.key]
-    const nextMessages = [...previousMessages, userMessage, assistantMessage]
+    const nextMessages = reusedBuildMessage ? previousMessages : [...previousMessages, userMessage, assistantMessage]
 
     setRunStates((current) => ({
       ...current,
@@ -1460,9 +1470,9 @@ export function useWorkflowConversation({
     }
 
     let streamedContent = ''
-    let streamedWorkflow: WorkflowRunPayload | undefined
+    let streamedWorkflow: WorkflowRunPayload | undefined = reusedBuildMessage?.workflow
     let streamedToolCalls: ToolCallRecord[] = []
-    let streamedProcessSteps: ProcessStepRecord[] = []
+    let streamedProcessSteps: ProcessStepRecord[] = reusedBuildMessage?.processSteps || []
     let latestMessages = nextMessages
     let executionStartedNotified = false
     let connectionRequestGeneration = 0
@@ -1617,8 +1627,9 @@ export function useWorkflowConversation({
         revisionContinuation: options?.revisionContinuation,
         developmentContinuation: options?.developmentContinuation,
         revisionInteraction: options?.revisionInteraction,
-      workflowScope: options?.workflowScope,
-      executionRecovery: options?.executionRecovery,
+        workflowScope: options?.workflowScope,
+        executionRecovery: options?.executionRecovery,
+        buildTaskRetry: options?.buildTaskRetry,
         onContent: (content) => {
           if (!isPlanControlResponseCurrent()) return
           streamedContent = content
@@ -1634,12 +1645,12 @@ export function useWorkflowConversation({
         },
         onProcessSteps: (nextProcessSteps) => {
           if (!isPlanControlResponseCurrent()) return
-          streamedProcessSteps = nextProcessSteps
+          streamedProcessSteps = mergeBuildRetrySteps(reusedBuildMessage?.processSteps, nextProcessSteps)
           updateAssistantMessage(
             streamedContent,
             streamedWorkflow,
             streamedToolCalls,
-            nextProcessSteps
+            streamedProcessSteps
           )
         }
       })
@@ -1738,9 +1749,9 @@ export function useWorkflowConversation({
       }
       if (isAuthenticationFailure(caughtError)) {
         // 只撤销本次乐观发送；期间读入的历史与其它本地内容仍然保留。
-        const rollbackMessages = getSessionMessages(identity.key).filter(
-          (item) => item.id !== userMessageId && item.id !== assistantMessageId
-        )
+        const rollbackMessages = reusedBuildMessage
+          ? getSessionMessages(identity.key).map((item) => item.id === assistantMessageId ? reusedBuildMessage : item)
+          : getSessionMessages(identity.key).filter((item) => item.id !== userMessageId && item.id !== assistantMessageId)
         setSessionMessages(identity.key, rollbackMessages)
         if (options?.clearDraft) setDraftByKey(identity.key, trimmedMessage)
         if (options?.clearDraft) {
@@ -1789,7 +1800,7 @@ export function useWorkflowConversation({
       const failedWorkflow = runError?.workflow ?? streamedWorkflow
       const failedToolCalls = runError?.toolCalls?.length ? runError.toolCalls : streamedToolCalls
       const failedProcessSteps = runError?.processSteps?.length
-        ? runError.processSteps
+        ? mergeBuildRetrySteps(reusedBuildMessage?.processSteps, runError.processSteps)
         : streamedProcessSteps
       const failedContent =
         runError?.message ||
@@ -1882,6 +1893,31 @@ export function useWorkflowConversation({
         await refreshExecutionRecoveryLifecycle(true)
       }
     }
+  }
+
+  /** 单任务重试始终更新原消息；活跃 Build 使用独立控制流，不打断原订阅。 */
+  const handleRetryBuildTask = async (messageId: number, taskId: string): Promise<void> => {
+    const identity = activeSession
+    if (!identity || applicationMutationReadonly) throw new Error('当前会话不可执行重试。')
+    const messages = getSessionMessages(identity.key)
+    const target = messages.find((item) => item.id === messageId)
+    const workflow = target?.workflow
+    if (!workflow || [...messages].reverse().find((item) => item.workflow)?.id !== messageId)
+      throw new Error('该任务已不是当前执行，请查看最新卡片。')
+    const request: BuildTaskRetryRequest = {
+      action: loading ? 'enqueue' : 'retry', workspaceRoot: identity.workspaceRoot,
+      sourceRunId: workflow.runId, sourceThreadId: workflow.threadId,
+      sessionId: identity.sessionId, taskId
+    }
+    if (loading) {
+      await enqueueBuildTaskRetry(request)
+      return
+    }
+    const success = await sendWorkflowMessage('重试构建任务', {
+      buildTaskRetry: request, reuseBuildMessageId: messageId,
+      executionThreadId: workflow.threadId, sessionIdentity: identity
+    })
+    if (!success) throw new Error('任务重试未完成，请查看当前错误信息。')
   }
 
   /** 在普通 DAG generation 或 Confirm、Abandon、Regenerate 完成后重新读取 PendingPlan 权威投影。 */
@@ -2733,6 +2769,7 @@ export function useWorkflowConversation({
     handleContinueDevelopment,
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
+    handleRetryBuildTask,
     handleEndPlan,
     handleResumePlan,
     handleSend,
