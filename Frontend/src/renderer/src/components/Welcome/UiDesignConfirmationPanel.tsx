@@ -752,8 +752,15 @@ export default function UiDesignConfirmationPanel({
       runInFlightRef.current = false
       observedRunningRef.current = false
       setRefreshing(false)
+      // 复位后若队列里还有积压动作（runInFlight 卡住期间用户点击只入队未提交），
+      // 立即 flush 提交——否则只能等 workflowStatus 变化触发清理 effect，
+      // 而 refresh/入队型 run 的状态帧可能被批处理吞掉，队列永久滞留，
+      // 表现为"点了没反应，直到某个外部事件后才突然一起生效"。
+      if (pendingActionsRef.current.length > 0) {
+        flushPendingActions()
+      }
     }
-  }, [pages, actingSet, setActingPageIds])
+  }, [pages, actingSet, setActingPageIds, flushPendingActions])
 
   // runInFlight 看门狗：入队型 run（只入队 + 重读清单）几秒就该返回。置位后 90 秒
   // 仍未观察到 running → requires_user_input 完成序列，说明 SSE 流中断/后端异常，
@@ -770,10 +777,16 @@ export default function UiDesignConfirmationPanel({
         observedRunningRef.current = false
         setRefreshing(false)
         setActingPageIds((prev) => (prev.length > 0 ? [] : prev))
+        // 看门狗复位后同样 flush 积压队列：卡死期间用户点击只入了队，
+        // 复位后若不主动提交，这些动作会永久滞留（依赖 workflowStatus
+        // 变化的清理 effect 可能永远等不到变化）。
+        if (pendingActionsRef.current.length > 0) {
+          flushPendingActions()
+        }
       }
     }, 90_000)
     return () => window.clearTimeout(watchdog)
-  }, [actingPageIds, setActingPageIds])
+  }, [actingPageIds, setActingPageIds, flushPendingActions])
 
   if (!clarification) return null
 
