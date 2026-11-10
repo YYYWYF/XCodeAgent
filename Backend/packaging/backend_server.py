@@ -18,11 +18,7 @@ def main() -> None:
     port = parse_port(os.getenv("DEVAGENTSTUDIO_BACKEND_PORT"))
     log_level = os.getenv("DEVAGENTSTUDIO_BACKEND_LOG_LEVEL", "info")
 
-    from app.services.backend_runtime import runtime
-    server = uvicorn.Server(uvicorn.Config("app.main:app", host=host, port=port, log_level=log_level))
-    # 后台自己请求 Uvicorn 有序退场，跨平台都等待 lifespan 和线程收口，不由前端强杀。
-    runtime.shutdown = lambda: setattr(server, "should_exit", True)
-    server.run()
+    uvicorn.run("app.main:app", host=host, port=port, log_level=log_level)
 
 
 def load_backend_env() -> None:

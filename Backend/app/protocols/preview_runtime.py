@@ -263,9 +263,6 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
     async def operation(report: Any) -> AgUiActionResult:
         """先原子校验占用，再把持久操作与抽屉订阅生命周期分离。"""
         request = PreviewRuntimeInput.model_validate((payload.get("forwardedProps") or {}).get("previewRuntime") or {})
-        from app.services.backend_runtime import runtime as backend_runtime
-        if backend_runtime.phase != "open" and request.action != "stop":
-            raise ValueError("后台正在准备退出，当前仅允许清理已打开的预览。")
         root = Path(request.workspace).expanduser().resolve()
         if not (root / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
             raise ValueError("需要有效的应用工作区。")

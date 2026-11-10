@@ -9,19 +9,33 @@ const directory = await fs.mkdtemp(
   path.join(os.tmpdir(), 'devagentstudio-backend-environment-tests-')
 )
 try {
-  await build({
-    configFile: false,
-    logLevel: 'error',
-    root: frontendRoot,
-    ssr: { noExternal: true },
-    build: {
-      outDir: directory,
-      minify: false,
-      ssr: path.join(frontendRoot, 'tests/backendEnvironment.test.ts'),
-      rollupOptions: { output: { entryFileNames: 'backendEnvironment.test.mjs' } }
-    }
-  })
-  await import(pathToFileURL(path.join(directory, 'backendEnvironment.test.mjs')).href)
+  for (const entry of ['backendEnvironment', 'backendServiceLifecycle']) {
+    await build({
+      configFile: false,
+      logLevel: 'error',
+      root: frontendRoot,
+      resolve: {
+        alias: [
+          {
+            find: /^electron$/,
+            replacement: path.join(frontendRoot, 'tests/backendServiceElectron.ts')
+          },
+          {
+            find: /^node:child_process$/,
+            replacement: path.join(frontendRoot, 'tests/backendServiceChildProcess.ts')
+          }
+        ]
+      },
+      ssr: { noExternal: true },
+      build: {
+        outDir: directory,
+        minify: false,
+        ssr: path.join(frontendRoot, `tests/${entry}.test.ts`),
+        rollupOptions: { output: { entryFileNames: `${entry}.test.mjs` } }
+      }
+    })
+    await import(pathToFileURL(path.join(directory, `${entry}.test.mjs`)).href)
+  }
 } finally {
   await fs.rm(directory, { recursive: true, force: true })
 }

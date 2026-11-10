@@ -120,35 +120,28 @@ uses the existing readiness budget and is not counted in the 5-second version ch
 startup failure retains the original fatal startup handling; a Java/AG-UI check failure opens login.
 Manifest checks time out after 10 seconds. Downloads are cancelled after 30
 seconds without new bytes or 15 minutes total. Errors show briefly, then enter normal startup.
-Packaged applications offer **立即安装 / 退出**. Installation first prepares a backend exit barrier:
-active requests, accepted execution/output writes, UI generation, Bootstrap, worker threads and
-short-lived child commands must finish first, and other desktop clients must detach. A busy
-backend refuses installation without cancelling its tasks. Once prepared, new business requests
-are rejected; only preview stop cleanup is allowed. Cleanup failure cancels the barrier. Successful
-cleanup commits exit and waits up to 30 seconds for the original backend PID to exit before handing
-control to the updater. A failed handoff rechecks backend readiness before normal startup.
+Packaged applications offer **立即安装 / 退出**. Installation stops generated-project previews,
+then terminates the bundled backend owned by the current Electron process and waits for its exit
+before handing control to the updater. A preview cleanup or backend shutdown failure prevents
+installation. A failed handoff rechecks backend readiness before normal startup.
 **退出** quits without installing; subsequent launches
 check Java again before reusing a verified updater cache. A second instance focuses the update
 window instead of bypassing it.
 
-The bundled backend is detached from Electron. `backend-runtime.json` holds its environment, PID,
-instance, executable identity and private random control token (POSIX mode 0600; Windows uses the
-user profile's inherited ACL). The token never appears in `/health` or product recovery state.
-Electron renews a 45-second client lease every 15 seconds and releases it on normal quit. A crashed
-client expires naturally; accepted work continues until all real owners finish. With no clients and
-no work, the backend retires after a 5-second idle grace (60 seconds before its first client), closing
-its owned previews and persistence resources through Uvicorn's lifespan. Reopening before retirement
-reattaches to that instance; reopening afterwards reads persisted workflow facts and confirmation gates.
-A changed bundled executable uses the same prepare/commit exit sequence before spawning its successor.
-An unknown live PID, wrong identity or unreadable health never triggers a force kill or second backend.
-The shared source-development backend is unmanaged and does not retire automatically.
+The bundled backend belongs to the current Electron process. Normal client quit stops its process
+tree, including in-progress work, rather than leaving tasks running in the background. A subsequent
+launch creates a new backend and reads existing workflow checkpoints through the explicit recovery
+flows. There is no persisted backend registry, cross-launch instance adoption, client lease or
+`/backend-runtime/run` endpoint. Windows restores `detached: false`; POSIX retains a separate process
+group for shutdown. The backend's stdout/stderr are piped to Electron for startup diagnostics.
+The shared source-development backend remains under the developer's control and is not stopped
+when Electron exits.
 
-While Electron stays open, one main-process connection monitor checks the backend every three
-seconds and renews managed-client leases every fifteen seconds. Child exit and health failures share
-one startup attempt. A confirmed dead bundled backend can be replaced; a live but unreachable or
-unverifiable PID is retained and retried without spawning another backend. Source development only
-waits for the external backend to return. Normal quit and update preparation invalidate monitoring
-and pending startup publication so they do not trigger automatic relaunch.
+While Electron stays open, the main-process connection monitor reacts once to an explicit child
+exit; it does not poll health or renew leases. Concurrent startup requests share one attempt. A live
+owned backend is not duplicated because of a temporary request failure. Source development waits
+for the external backend to return. Normal quit and update preparation invalidate monitoring and
+pending startup publication so they do not trigger automatic relaunch.
 
 The preload connection API (`backend-connection:get/changed`) publishes only infrastructure state,
 address and instance identity with a monotonic revision. The renderer subscribes before reading the

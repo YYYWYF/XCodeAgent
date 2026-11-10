@@ -9,7 +9,7 @@ import icon from '../../resources/icon.png?asset'
 import { PRODUCT_DISPLAY_NAME, WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
 import { attachUiDesignPageCode } from './uiDesignPageCode'
 import { DEVAGENTSTUDIO_ENV } from './env'
-import { getBackendBaseUrl, startBackendService, detachBackendService, prepareBackendServiceUpdate } from './backendService'
+import { getBackendBaseUrl, startBackendService, stopBackendService, prepareBackendServiceUpdate } from './backendService'
 import { setupBackendConnectionIpc } from './backendConnectionIpc'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
@@ -1901,7 +1901,7 @@ if (!hasSingleInstanceLock) {
 let quitCleanupCompleted = false
 let quitCleanupStarted = false
 
-/** 前端退出清除认证和预览；后台工作流服务继续运行，重开后核对实例再接入。 */
+/** 客户端退出时清除认证、停止应用预览，并结束当前客户端启动的内置后台。 */
 async function cleanupBeforeQuit(): Promise<void> {
   try {
     await clearAuthState()
@@ -1916,7 +1916,7 @@ async function cleanupBeforeQuit(): Promise<void> {
   }
 
   try {
-    await detachBackendService()
+    await stopBackendService()
   } catch (error) {
     console.error('Failed to stop backend service', error)
   }

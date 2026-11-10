@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import './uncommittedChangesRuntime.test'
 import { shouldShowIncompleteChangesHint } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   isCheckpointCandidate,
@@ -65,25 +66,20 @@ test('未提交角标：有变更才显示，计数取可提交文件数', () =>
   const application: never = {
     id: 'app-1',
     appName: '欢迎页',
-    versions: [
+    branches: [
       {
-        id: 'app-1-v1-0',
-        versionLabel: 'v1.0',
-        major: 1,
-        minor: 0,
-        status: 'iterating',
+        name: 'main',
         createdAt: 0,
         lifecycle: {} as never
       }
     ],
-    currentVersionId: 'app-1-v1-0'
+    branchName: 'main'
   } as never
   const props: never = {
     application,
     onPublish: () => undefined,
-    onRollback: () => undefined,
     onStartIteration: () => undefined,
-    onVersionSelect: () => undefined
+    onBranchSelect: () => undefined
   }
 
   const withChanges = renderToStaticMarkup(
@@ -508,8 +504,8 @@ test('验收自动保存：只在能安全提交时自动执行，否则降级�
     '读不到状态时必须降级，不能因为计数为 0 就静默'
   )
 
-  // 提交信息带语义，让历史里能看出这是验收节点。
-  assert.match(ACCEPTANCE_COMMIT_MESSAGE, /验收/)
+  // 当前自动保存文案描述开发完成，并携带看板编号。
+  assert.match(ACCEPTANCE_COMMIT_MESSAGE, /#comment.*开发完成/)
 })
 
 test('敏感文件识别：覆盖后端会拒绝的那些文件名', () => {

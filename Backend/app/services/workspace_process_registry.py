@@ -316,12 +316,14 @@ def _workspace_key(workspace: str | Path) -> str:
 
 
 def _configure_process_group(kwargs: dict[str, Any]) -> None:
-    """让每条受控命令拥有可整体终止的独立进程组。"""
+    """让受控命令拥有独立进程组，并禁止 Windows 后台命令创建控制台窗口。"""
 
     if os.name == "nt":
         kwargs["creationflags"] = (
             int(kwargs.get("creationflags") or 0)
             | subprocess.CREATE_NEW_PROCESS_GROUP
+            # 安装包由 Electron 隐藏启动，子命令仍须显式隐藏；捕获输出并不隐藏窗口。
+            | subprocess.CREATE_NO_WINDOW
         )
     else:
         kwargs.setdefault("start_new_session", True)
@@ -389,6 +391,7 @@ def _terminate_process_group(process: subprocess.Popen[Any], *, force: bool) -> 
                 capture_output=True,
                 timeout=2,
                 check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         else:
             # 受控命令在独立 session 内启动；父进程退出后仍以原 PID 定位其进程组。
