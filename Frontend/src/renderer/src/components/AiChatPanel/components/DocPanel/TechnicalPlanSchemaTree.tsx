@@ -13,6 +13,7 @@ import {
 type SchemaTreeProps = {
   name: string
   schema: JsonRecord
+  description?: string
   schemas?: JsonRecord
   depth?: number
   isDependency?: boolean
@@ -20,6 +21,7 @@ type SchemaTreeProps = {
   referenceTrail?: ReadonlySet<string>
   isField?: boolean
   fieldRequired?: boolean
+  fieldOptional?: boolean
 }
 
 /** 收集字段、数组和组合类型的引用依赖，循环引用只访问一次。 */
@@ -48,7 +50,6 @@ export function schemaDependencyNames(schema: JsonRecord, schemas: JsonRecord): 
 
 const constraintLabels: Array<[string, string]> = [
   ['format', '格式'],
-  ['minimum', '最小值'],
   ['maximum', '最大值'],
   ['exclusiveMinimum', '不含下限'],
   ['exclusiveMaximum', '不含上限'],
@@ -68,19 +69,20 @@ const constraintLabels: Array<[string, string]> = [
   ['additionalProperties', '允许额外属性']
 ]
 
-/** 仅展示当前 Schema 已声明的类型约束，保留 false、零和空值。 */
-function SchemaDetails({ schema }: { schema: JsonRecord }): ReactElement {
+/** 将当前 Schema 的约束紧跟在字段后展示，保留 false、零和空值。 */
+function SchemaDetails({ schema }: { schema: JsonRecord }): ReactElement | null {
   const constraints = constraintLabels.filter(
     ([key]) => key in schema && (key !== 'additionalProperties' || typeof schema[key] === 'boolean')
   )
+  if (!constraints.length) return null
   return (
-    <div className={cx('technical-plan-schema-details')}>
+    <span className={cx('technical-plan-schema-details', 'technical-plan-schema-constraints')}>
       {constraints.map(([key, label]) => (
-        <p key={key}>
+        <span key={key}>
           {label}：{JSON.stringify(schema[key])}
-        </p>
+        </span>
       ))}
-    </div>
+    </span>
   )
 }
 
@@ -88,14 +90,18 @@ function SchemaDetails({ schema }: { schema: JsonRecord }): ReactElement {
 export function SchemaTree({
   name,
   schema,
+  description,
   schemas = {},
   depth = 0,
   isDependency = false,
   referencedBy,
   referenceTrail,
   isField = false,
-  fieldRequired = false
+  fieldRequired = false,
+  fieldOptional = false
 }: SchemaTreeProps): ReactElement {
+  // 参数说明属于 Parameter，其他字段说明来自 Schema；只展示契约已有文字。
+  const displayDescription = description?.trim() || textValue(schema.description).trim()
   const required = new Set(stringItems(schema.required))
   const properties = schemaProperties(schema)
   const activeReferenceTrail = referenceTrail || new Set([name])
@@ -103,6 +109,15 @@ export function SchemaTree({
   const referencedSchema = asRecord(schemas[reference])
   const circular = activeReferenceTrail.has(reference)
   const items = asRecord(schema.items)
+  const itemReference = textValue(items.$ref).replace(/^#\/components\/schemas\//, '')
+  const itemDefinition = asRecord(schemas[itemReference])
+  // 纯引用数组直接展示命名元素类型；带额外约束、缺失或循环引用仍完整展示原节点。
+  const inlineItemReference = Boolean(
+    itemReference &&
+      Object.keys(items).length === 1 &&
+      Object.keys(itemDefinition).length &&
+      !activeReferenceTrail.has(itemReference)
+  )
   const extraProperties = asRecord(schema.additionalProperties)
   const compositions = ['allOf', 'oneOf', 'anyOf', 'prefixItems'].flatMap((kind) =>
     Array.isArray(schema[kind])
@@ -137,17 +152,22 @@ export function SchemaTree({
         </span>
         <code>{name}</code>
         <span className={cx('technical-plan-type')}>{schemaType(schema)}</span>
-        {fieldRequired ? <span className={cx('technical-plan-required')}>必填</span> : null}
-        {textValue(schema.entity_field_ref) ? (
-          <span className={cx('technical-plan-lineage')}>{textValue(schema.entity_field_ref)}</span>
+        {isField || fieldRequired || fieldOptional ? (
+          <span className={cx('technical-plan-schema-status')}>
+            {fieldRequired ? <span className={cx('technical-plan-required')}>必填</span> : null}
+            {fieldOptional ? <span className={cx('technical-plan-type')}>可选</span> : null}
+          </span>
         ) : null}
+        <SchemaDetails schema={schema} />
         {referencedBy ? (
           <span className={cx('technical-plan-schema-reference-context')}>
             被 {referencedBy} 引用
           </span>
         ) : null}
+        {displayDescription ? (
+          <span className={cx('technical-plan-schema-description')}>{displayDescription}</span>
+        ) : null}
       </div>
-      <SchemaDetails schema={schema} />
       {reference ? (
         circular ? (
           <span className={cx('technical-plan-schema-details')}>循环引用：{reference}</span>
@@ -182,13 +202,25 @@ export function SchemaTree({
         </div>
       ))}
       {Object.keys(items).length ? (
-        <SchemaTree
-          name="数组元素"
-          schema={items}
-          schemas={schemas}
-          depth={depth + 1}
-          referenceTrail={activeReferenceTrail}
-        />
+        inlineItemReference ? (
+          <div className={cx('technical-plan-schema-dependency-rail')}>
+            <SchemaTree
+              isDependency
+              name={itemReference}
+              schema={itemDefinition}
+              schemas={schemas}
+              referenceTrail={new Set([...activeReferenceTrail, itemReference])}
+            />
+          </div>
+        ) : (
+          <SchemaTree
+            name="数组元素"
+            schema={items}
+            schemas={schemas}
+            depth={depth + 1}
+            referenceTrail={activeReferenceTrail}
+          />
+        )
       ) : null}
       {Object.keys(extraProperties).length ? (
         <SchemaTree

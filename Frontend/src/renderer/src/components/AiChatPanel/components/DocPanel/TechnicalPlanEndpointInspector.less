@@ -1,6 +1,7 @@
 // 完整类型区沿用工作台主题；窄分栏中允许换行，不省略类型和字段名称。
 .@{class-prefix}-technical-plan-complete-types {
   min-width: 0;
+  border-color: var(--wb-border);
 
   .@{class-prefix}-technical-plan-inspector-title {
     flex-wrap: wrap;
@@ -10,8 +11,7 @@
   .@{class-prefix}-technical-plan-inspector-title .@{class-prefix}-technical-plan-endpoint-name,
   .@{class-prefix}-technical-plan-inspector-grid dd,
   .@{class-prefix}-technical-plan-schema-field code,
-  .@{class-prefix}-technical-plan-schema-node-head code,
-  .@{class-prefix}-technical-plan-lineage {
+  .@{class-prefix}-technical-plan-schema-node-head code {
     overflow: visible;
     white-space: normal;
     overflow-wrap: anywhere;
@@ -22,6 +22,63 @@
   .@{class-prefix}-technical-plan-schema-node-head {
     flex-wrap: wrap;
     align-items: baseline;
+  }
+
+  // 字段名、类型、必填和说明各占一列，同组内对齐；窄栏和长类型允许完整换行。
+  .@{class-prefix}-technical-plan-schema-field {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1.4fr) 28px minmax(0, 1.8fr);
+    column-gap: 8px;
+    row-gap: 2px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--wb-border);
+
+    > .@{class-prefix}-technical-plan-schema-caret {
+      grid-area: 1 / 1;
+    }
+    > code {
+      grid-area: 1 / 2;
+      font-size: 13px;
+    }
+    > .@{class-prefix}-technical-plan-type {
+      grid-area: 1 / 3;
+    }
+    > .@{class-prefix}-technical-plan-schema-status {
+      grid-area: 1 / 4;
+    }
+    > .@{class-prefix}-technical-plan-schema-description {
+      grid-area: 1 / 5;
+    }
+    > .@{class-prefix}-technical-plan-schema-constraints {
+      grid-column: 2 / -1;
+    }
+  }
+
+  .@{class-prefix}-technical-plan-schema-status {
+    min-width: 0;
+    font-size: 12px;
+  }
+
+  .@{class-prefix}-technical-plan-required {
+    padding: 0;
+    background: transparent;
+  }
+
+  .@{class-prefix}-technical-plan-schema-dependency {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .@{class-prefix}-technical-plan-schema-dependency-rail {
+    margin: 3px 0 2px 8px;
+    padding-left: 8px;
+    border-left: 1px solid var(--wb-border);
+
+    &::before {
+      display: none;
+    }
   }
 
   .@{class-prefix}-technical-plan-type {
@@ -40,25 +97,75 @@
     overflow-wrap: anywhere;
   }
 
-  .@{class-prefix}-technical-plan-schema-details p {
-    margin: 0;
+  .@{class-prefix}-technical-plan-schema-constraints {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    min-width: 0;
+
+    > span {
+      white-space: pre-wrap;
+    }
+  }
+
+  // 说明用柔和绿色正文呈现，取消标签轮廓和底色，避免抢过字段本身。
+  .@{class-prefix}-technical-plan-schema-description {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    color: color-mix(in srgb, var(--wb-code-add-text) 65%, var(--wb-text-secondary));
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.6;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 }
 
-.@{class-prefix}-technical-plan-parameter {
+// 同一位置的参数共用组标题，字段行与响应类型保持一致。
+.@{class-prefix}-technical-plan-parameter-group {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
-  padding: 8px;
-  border: 1px solid var(--wb-border);
-  border-radius: 6px;
 }
 
 .@{class-prefix}-technical-plan-parameter-location {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  color: var(--wb-text-secondary);
+  padding-left: 9px;
+  color: var(--wb-text-tertiary);
   font-size: 12px;
+}
+
+// 标题帮助沿用全局 Tooltip 明暗主题，按钮只在交互时使用品牌色。
+.@{class-prefix}-technical-plan-transport-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 0;
+  border-radius: 3px;
+  color: var(--wb-text-tertiary);
+  background: transparent;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--wb-accent);
+    background: var(--wb-surface-subtle);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 2px;
+  }
+}
+
+.@{class-prefix}-technical-plan-transport-tooltip {
+  max-width: min(360px, calc(100vw - 32px));
+
+  .ant-tooltip-inner {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
 }
