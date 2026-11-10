@@ -42,6 +42,7 @@ import type {
   WorkspaceCodeChangeSet
 } from '../../typings'
 import { composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../utils'
+import { OPEN_SETTINGS_EVENT } from '../../utils/openSettingsEvent'
 import { readWorkspaceFile } from '../../service/workspaceTools'
 import type {
   ChatSessionDevelopmentContinuation,
@@ -4477,6 +4478,19 @@ export default function AiChatPanel({
   const handleShowSettings = (): void => {
     setActiveView((current) => (current === 'settings' ? 'chat' : 'settings'))
   }
+
+  /**
+   * 监听全局「打开设置」事件：发布弹窗等深层组件在缺仓库地址等场景下需要引导用户跳到设置，
+   * 但 WorkbenchPage → LeftPanel → AiChatPanel 的回调链路过长，使用 CustomEvent 解耦。
+   * 与 handleShowSettings 的 toggle 语义不同：事件触发是"打开"，已开就保持，不再切回 chat。
+   */
+  useEffect(() => {
+    const handler = (): void => {
+      setActiveView('settings')
+    }
+    window.addEventListener(OPEN_SETTINGS_EVENT, handler)
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, handler)
+  }, [])
 
   /** 在当前对话之上打开数据来源抽屉，保留右侧映射与会话上下文。 */
   const handleShowDataSources = (): void => {

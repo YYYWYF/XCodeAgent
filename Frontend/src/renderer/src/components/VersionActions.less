@@ -388,7 +388,9 @@
   cursor: pointer;
   transition:
     transform 120ms ease,
-    box-shadow 120ms ease;
+    box-shadow 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
 
   &:hover {
     transform: translateY(-1px);
@@ -397,6 +399,18 @@
 
   &:active {
     transform: translateY(0);
+  }
+
+  /* 禁用态：未配置仓库地址、说明为空、依赖未就绪等场景下按钮不可用。
+     视觉上明显脱离"可点"语义（灰色、无阴影、无位移、not-allowed 鼠标）。 */
+  &:disabled,
+  &:disabled:hover,
+  &:disabled:active {
+    color: var(--wb-text-tertiary, rgba(0, 0, 0, 0.35));
+    background: var(--wb-border-soft, #e2e6ee);
+    box-shadow: none;
+    cursor: not-allowed;
+    transform: none;
   }
 }
 
@@ -429,6 +443,39 @@
     font-family: var(--wb-font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
     font-size: 12px;
     line-height: 1.5;
+  }
+}
+
+/* 未配置仓库地址时:Alert 替代原本的仓库展示条,并附「去设置」按钮引导用户跳转到左栏设置面板。
+   主题上沿用 workbench 调色板,避免引入新的硬编码颜色。 */
+.@{class-prefix}-workbench-generate-repo-missing {
+  margin: 0 0 12px;
+  border-radius: 8px;
+
+  .ant-alert-action {
+    margin-inline-start: 12px;
+  }
+}
+
+.@{class-prefix}-workbench-publish-modal-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--wb-accent, #6b3cf0);
+  border: 1px solid var(--wb-accent, #6b3cf0);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+
+  &:hover {
+    background: var(--wb-accent, #6b3cf0);
+    color: #fff;
   }
 }
 

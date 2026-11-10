@@ -1,7 +1,8 @@
-import { CloudUploadOutlined, LoadingOutlined } from '@ant-design/icons'
-import { Input, Modal, Progress, Steps } from 'antd'
+import { CloudUploadOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons'
+import { Alert, Input, Modal, Progress, Steps } from 'antd'
 import { useState } from 'react'
 import { cx } from '../utils'
+import { dispatchOpenSettings } from '../utils/openSettingsEvent'
 import DatabaseDeliveryPreview from './DatabaseDeliveryPreview'
 import './WorkbenchVersionModals.less'
 
@@ -38,8 +39,15 @@ export default function PublishBranchModal({
   onGenerate
 }: PublishModalProps): JSX.Element {
   const [databaseDeliveryReady, setDatabaseDeliveryReady] = useState(false)
+  // 未配置仓库地址时不允许提交：后端 VersionPublishRequest.repoUrl 是 min_length=1 的必填字段，
+  // 直接放行只会让 Pydantic 抛 string_too_short，对用户没有指导意义。这里在弹窗内直接阻断，
+  // 并提供「去设置」入口跳转到左侧菜单的设置面板。
+  const repoUrlMissing = !repoUrl
   const canSubmit =
-    !generating && !!description.trim() && (!isBuiltinDatabase || databaseDeliveryReady)
+    !generating &&
+    !repoUrlMissing &&
+    !!description.trim() &&
+    (!isBuiltinDatabase || databaseDeliveryReady)
   return (
     <Modal
       centered
@@ -73,7 +81,31 @@ export default function PublishBranchModal({
               <CloudUploadOutlined aria-hidden="true" />
               <span className={cx('workbench-generate-repo-url')}>{repoUrl}</span>
             </div>
-          ) : null}
+          ) : (
+            <Alert
+              className={cx('workbench-generate-repo-missing')}
+              type="warning"
+              showIcon
+              message="未配置仓库地址"
+              description={
+                <span>
+                  提交并推送需要目标仓库地址。需先配置<strong>码云地址</strong>后再回来提交。
+                </span>
+              }
+              action={
+                <button
+                  className={cx('workbench-publish-modal-settings-btn')}
+                  type="button"
+                  onClick={() => {
+                    dispatchOpenSettings()
+                    onCancel()
+                  }}
+                >
+                  <SettingOutlined aria-hidden="true" /> 去设置
+                </button>
+              }
+            />
+          )}
           {generating ? (
             <div className={cx('workbench-generate-progress')}>
               <Progress
@@ -166,15 +198,7 @@ export default function PublishBranchModal({
               if (canSubmit) onGenerate()
             }}
           >
-            {generating ? (
-              <>
-                <LoadingOutlined aria-hidden="true" /> 提交中…
-              </>
-            ) : (
-              <>
-                <CloudUploadOutlined aria-hidden="true" /> 确认提交
-              </>
-            )}
+            {generating ? '提交中…' : '确认提交'}
           </button>
         </footer>
       </div>
