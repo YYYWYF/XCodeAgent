@@ -7,6 +7,7 @@ import {
 } from '../../../../service/builtinAuthorization'
 import BuiltinAuthorizationTaskCard from '../ProcessSteps/BuiltinAuthorizationTaskCard'
 import { useBuiltinAuthorizationTask } from '../ProcessSteps/useBuiltinAuthorizationTask'
+import { cx } from '../../../../utils'
 import './WorkspaceDebugDock.less'
 
 type PatchCardState = {
@@ -81,7 +82,10 @@ export default function BuiltinPatchCard({ card, disabled }: {
   card: PatchCardState
   disabled: boolean
 }): ReactElement {
-  return card.result
-    ? <BuiltinAuthorizationTaskCard task={card.result} workspace={card.workspace} disabled={disabled} onChanged={card.onChanged} />
-    : <div role="status">{card.progress?.message || '正在调度权限初始化…'}</div>
+  // 调试区位于固定底栏，共用任务卡必须放回受限高度的滚动容器，避免撑出窗口。
+  return <div className={cx('builtin-patch-card')} role="region" aria-label="权限初始化结果" tabIndex={0}>
+    {card.result
+      ? <BuiltinAuthorizationTaskCard task={card.result} workspace={card.workspace} disabled={disabled} onChanged={card.onChanged} />
+      : <div role="status">{card.progress?.message || '正在调度权限初始化…'}</div>}
+  </div>
 }

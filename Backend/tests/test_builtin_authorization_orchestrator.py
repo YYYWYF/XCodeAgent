@@ -1,5 +1,6 @@
 """真实原子服务和假 SaaS 驱动编排，不使用真实轮询等待。"""
 
+import asyncio
 import json
 import threading
 import unittest
@@ -15,6 +16,7 @@ from app.services.authorization_workspace_projector import RUNTIME, read_record
 from app.services.builtin_authorization_bootstrap import run_builtin_authorization_bootstrap
 from app.services.builtin_authorization_state import save_state
 from app.services.builtin_authorization_task_store import AuthorizationTask, read_task, save_task
+from app.protocols.builtin_authorization import build_builtin_authorization_stream
 from app.services.managed_table_client import ManagedTableClient
 from tests import test_builtin_authorization_seed as seed_fixture
 from tests.authorization_orchestrator_safety_cases import AuthorizationOrchestratorSafetyCases
@@ -97,6 +99,25 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
         self.assertEqual(sum(method == "POST" for method, _ in self.calls), 1)
         self.assertEqual(sum(method == "GET" for method, _ in self.calls), 5)
         self.assertEqual(orchestration.get_builtin_authorization_task(str(self.root))["status"], "ready")
+
+    def test_dag_changes_do_not_interrupt_authorization(self) -> None:
+        """DAG 更新不改变权限摘要，网络边界变化后仍只提交一次 Seed。"""
+
+        self.begin()
+        fingerprint = orchestration._inputs(self.root)[0]
+        self.orchestrator_dag.return_value = {"status": "ready", "revision": "changed"}
+        self.assertEqual(orchestration._inputs(self.root)[0], fingerprint)
+
+        def update_dag() -> None:
+            """用新对象模拟 Build 在请求期间回写正式 DAG。"""
+
+            self.orchestrator_dag.return_value = {"status": "ready", "summary": {"completed": 1}}
+
+        self.before_response = update_dag
+        self.assertTrue(self.tick())
+        self.assertFalse(self.tick())
+        self.assertEqual(read_task(self.root).status, "ready")
+        self.assertEqual(sum(method == "POST" for method, _ in self.calls), 1)
 
     def test_schema_success_without_structure_never_seeds(self) -> None:
         """操作成功不能替代四表核验。"""
@@ -229,6 +250,75 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
                 self.assertEqual(sum(path.endswith("/" + operation_id) for _, path in calls), 1)
                 if stage == "seed":
                     self.assertEqual(read_task(self.root).status, "ready")
+
+    def test_explicit_retry_recovers_lookup_failure_via_ag_ui(self) -> None:
+        """显式重试恢复首次查询错误，attach 不重启，最终仅提交一次数据。"""
+
+        self.begin()
+        task = read_task(self.root)
+        task.status, task.stage, task.failureCategory = "needs_attention", "seed", "seed_invalid_response"
+        save_task(self.root, task)
+        before = read_record(self.root, "state.json")
+        self.assertEqual(orchestration.get_builtin_authorization_task(str(self.root))["nextAction"], "retry")
+
+        async def collect() -> str:
+            """通过实际 AG-UI retry 动作收集完整生命周期。"""
+
+            stream = build_builtin_authorization_stream({"threadId": "retry-thread", "runId": "retry-run",
+                "forwardedProps": {"builtinAuthorization": {"action": "retry", "workspaceRoot": str(self.root)}}})
+            return "".join([frame async for frame in stream])
+
+        with patch.object(orchestration, "_executor") as executor:
+            executor.submit.return_value = Future()
+            self.addCleanup(orchestration._workers.pop, str(self.root), None)
+            orchestration.resume_builtin_authorization_task(str(self.root))
+            executor.submit.assert_not_called()
+            frames = asyncio.run(collect())
+            self.assertIn("RUN_STARTED", frames)
+            self.assertIn("STATE_SNAPSHOT", frames)
+            self.assertIn("RUN_FINISHED", frames)
+            self.assertNotIn('"status":"failed"', frames.replace(" ", ""))
+            orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+            executor.submit.assert_called_once()
+        self.assertEqual(read_record(self.root, "state.json"), before)
+        self.assertTrue(self.tick())
+        self.assertFalse(self.tick())
+        self.assert_calls("GET", "POST", "GET")
+
+    def test_explicit_retry_after_receipt_loss_never_reposts(self) -> None:
+        """回执丢失后的显式重试沿原幂等键查询，不产生第二次 POST。"""
+
+        self.begin()
+        self.drop = True
+        self.assertTrue(self.tick())
+        task = read_task(self.root)
+        task.status, task.failureCategory = "needs_attention", "timeout"
+        save_task(self.root, task)
+        with patch.object(orchestration, "_executor") as executor:
+            executor.submit.return_value = Future()
+            self.addCleanup(orchestration._workers.pop, str(self.root), None)
+            orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+        self.assertFalse(self.tick())
+        self.assert_calls("GET", "POST", "GET")
+        self.assertEqual(read_task(self.root).status, "ready")
+
+    def test_explicit_retry_rejects_unsafe_failures_and_changed_inputs(self) -> None:
+        """输入变化、损坏和远端失败未知均不能通过重试绕过原提交保护。"""
+
+        self.begin()
+        for failure in ("inputs_changed", "state_or_inputs_invalid", "seed_operation_failed", "seed_operation_unknown"):
+            task = read_task(self.root)
+            task.status, task.failureCategory = "needs_attention", failure
+            save_task(self.root, task)
+            with self.assertRaises(ValueError):
+                orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+            self.assertEqual(read_task(self.root).status, "needs_attention")
+        task.failureCategory = "seed_invalid_response"
+        save_task(self.root, task)
+        self.application["authorization"]["initialAdministratorSubjects"] = ["changed"]
+        with self.assertRaises(ValueError):
+            orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+        self.assert_calls()
 
     def test_restart_resumes_original_id_and_worker_deduplication(self) -> None:
         """attach 与重复 Build 合用一个 worker，重启接管只查原 Seed ID。"""

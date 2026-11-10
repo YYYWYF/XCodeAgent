@@ -137,7 +137,6 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
         request = compiled["request"]
         validate_seed_transport(request)
         # 首次受理前也按键查询，复用其他运行已建立的同一请求记录。
-        dag = None
         if seed is None:
             dag = load_confirmed_build_task_plan(root)
             if not dag or dag.get("status") != "ready":
@@ -155,8 +154,6 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
         if seed is not None:
             return _summary(record, tables, "未查到原权限数据操作，请按原幂等键人工核对。",
                             next_action="lookup_seed", failure="seed_operation_not_found")
-        if load_confirmed_build_task_plan(root) != dag:
-            raise SeedRemoteError("seed_dag_changed")
         # 在 POST 前持久化保护，即使进程退出或回执丢失也只查询原操作。
         stage = "seed_state_write_failed"
         marker = {**identity, "status": "submitting", "ready": False}
@@ -165,8 +162,6 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
         record = submitting
         seed = marker
         _verify_current(root, record, binding, plan, compiled)
-        if load_confirmed_build_task_plan(root) != dag:
-            raise SeedRemoteError("seed_dag_changed")
         try:
             receipt = remote.submit(key, request)
         except SeedRemoteError as error:

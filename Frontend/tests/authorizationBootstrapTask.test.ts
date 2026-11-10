@@ -5,18 +5,52 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { useBuiltinAuthorizationTask } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/useBuiltinAuthorizationTask'
 import BuiltinAuthorizationTaskCard from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/BuiltinAuthorizationTaskCard'
-import type { BuiltinPatchResult } from '../src/renderer/src/service/builtinAuthorization'
+import { authorizationTaskWorkflowResult, runBuiltinPatch, type BuiltinPatchResult } from '../src/renderer/src/service/builtinAuthorization'
 
-test('异常重试仅以后端恢复信号显示，UNKNOWN 与输入变化保留只读查询', () => {
+test('重试按钮以后端信号启用，UNKNOWN 与输入变化不能绕过保护', () => {
   const task: BuiltinPatchResult = { status: 'needs_attention', stage: 'seed', schemaReady: true,
     seedReady: false, message: '请人工核对', failureCategory: 'inputs_changed' }
   const blocked = renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, { task, workspace: '/workspace' }))
   assert.match(blocked, /待处理|查询原操作|inputs_changed/)
-  assert.doesNotMatch(blocked, />重\s*试</)
+  const blockedRetry = blocked.match(/<button\b[^>]*title="当前状态不能安全重试[^>]*>/)?.[0]
+  assert.ok(blockedRetry)
+  assert.match(blockedRetry, /disabled=""/)
   const recoverable = renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, {
     task: { ...task, failureCategory: 'timeout', nextAction: 'resume' }, workspace: '/workspace'
   }))
   assert.match(recoverable, />重\s*试</)
+  const retryable = renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, {
+    task: { ...task, failureCategory: 'seed_invalid_response', nextAction: 'retry' }, workspace: '/workspace'
+  }))
+  assert.match(retryable, /title="恢复初始化，保留原操作并避免重复提交"/)
+  assert.doesNotMatch(retryable, /disabled=""/)
+})
+
+test('显式重试通过官方 AG-UI 客户端发送 retry，并保留后端重试资格', async () => {
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const originalFetch = globalThis.fetch
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://authorization.test' } } })
+  globalThis.fetch = async (_url, init) => {
+    const payload = JSON.parse(String(init?.body))
+    assert.deepEqual(payload.forwardedProps.builtinAuthorization, { action: 'retry', workspaceRoot: '/workspace' })
+    const value = { status: 'completed', patch: { status: 'needs_attention', stage: 'seed', schemaReady: true,
+      seedReady: false, message: '查询失败，可重试', failureCategory: 'seed_invalid_response', nextAction: 'retry' } }
+    return new Response([
+      { type: 'RUN_STARTED', runId: payload.runId, threadId: payload.threadId },
+      { type: 'CUSTOM', name: 'builtin-authorization', value },
+      { type: 'STATE_SNAPSHOT', snapshot: { builtinAuthorization: value } },
+      { type: 'RUN_FINISHED', runId: payload.runId, threadId: payload.threadId }
+    ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'Content-Type': 'text/event-stream' } })
+  }
+  try {
+    const result = await runBuiltinPatch('/workspace', 'retry')
+    assert.equal(result?.nextAction, 'retry')
+    assert.equal(authorizationTaskWorkflowResult(result!).nextAction, 'retry')
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
 })
 
 test('只读轮询隔离工作区迟到响应，历史不查询，隐藏暂停且卸载清理', async () => {

@@ -19,7 +19,7 @@ export type WorkflowAuthorizationBootstrap = {
   seedReady?: boolean
   seedOperationId?: string
   seedOperationStatus?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN'
-  nextAction?: 'continue' | 'lookup_seed' | 'refresh_seed' | 'review' | 'none' | 'resume'
+  nextAction?: 'continue' | 'lookup_seed' | 'refresh_seed' | 'review' | 'none' | 'resume' | 'retry'
   operationId?: string
   operationStatus?: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'UNKNOWN' | 'SCHEMA_READY'
   initializedTables?: string[]
@@ -46,7 +46,7 @@ export function readAuthorizationBootstrap(
   if (['schema', 'seed', 'verify', 'done'].includes(String(raw.initializationStage))) {
     result.initializationStage = raw.initializationStage as WorkflowAuthorizationBootstrap['initializationStage']
   }
-  if (raw.nextAction === 'resume' && result.executor === 'builtin_saas') result.nextAction = 'resume'
+  if ((raw.nextAction === 'resume' || raw.nextAction === 'retry') && result.executor === 'builtin_saas') result.nextAction = raw.nextAction
   if (['RUNNING', 'SUCCEEDED', 'FAILED', 'UNKNOWN', 'SCHEMA_READY'].includes(String(raw.operationStatus))) {
     result.operationStatus = raw.operationStatus as WorkflowAuthorizationBootstrap['operationStatus']
   }

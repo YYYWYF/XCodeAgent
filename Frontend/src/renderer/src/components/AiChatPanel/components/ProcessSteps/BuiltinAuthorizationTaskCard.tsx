@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, ClockCircleOutlined, WarningOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, ClockCircleOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons'
 import { Button, message } from 'antd'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { authorizationTaskWorkflowResult, runBuiltinPatch, type BuiltinPatchResult } from '../../../../service/builtinAuthorization'
@@ -27,17 +27,22 @@ export default function BuiltinAuthorizationTaskCard({ task, workspace, disabled
   }, [workspace])
   const ready = task.schemaReady && task.seedReady
   const running = !ready && ['pending', 'running', 'waiting'].includes(task.status)
+  const canRetry = task.nextAction === 'resume' || task.nextAction === 'retry'
   const stage = task.stage === 'schema' ? 0 : task.stage === 'seed' ? 1 : 2
   const completedDescriptions = ['4 张表已创建并核验', ready ? '权限数据写入完成' : '权限数据结果待核验', '权限表与权限数据均已核验就绪']
   const runningDescriptions = ['正在自动检查权限表和原建表操作', '正在自动查询数据写入结果', '正在核验初始化结果']
   /** 手工动作仍经过统一 AG-UI，恢复不表示批准重新提交未知操作。 */
-  async function act(action: 'resume' | 'refresh_patch'): Promise<void> {
+  async function act(action: 'retry' | 'refresh_patch'): Promise<void> {
     if (!workspace || busy) return
     const owner = generation.current
     setBusy(true)
     try {
-      await runBuiltinPatch(workspace, action)
-      if (identity.current === workspace && owner === generation.current) onChanged?.()
+      const result = await runBuiltinPatch(workspace, action)
+      if (identity.current === workspace && owner === generation.current) {
+        if (action === 'retry' && result) message.info(['pending', 'running', 'waiting'].includes(result.status)
+          ? '已恢复权限初始化，将自动查询并核验结果。' : result.message)
+        onChanged?.()
+      }
     } catch (error) {
       if (identity.current === workspace && owner === generation.current) message.error(error instanceof Error ? error.message : '查询失败')
     } finally {
@@ -65,7 +70,9 @@ export default function BuiltinAuthorizationTaskCard({ task, workspace, disabled
       {task.seedOperationId && <p>数据操作 ID　{task.seedOperationId}</p>}
       <details><summary>查看详情</summary><p>{task.message}</p>{task.failureCategory && <code>{task.failureCategory}</code>}</details>
       {workspace && <div className={cx('builtin-task-actions')}>
-        {task.nextAction === 'resume' && <Button loading={busy} disabled={disabled} onClick={() => { void act('resume') }}>重试</Button>}
+        <Button icon={<ReloadOutlined />} loading={busy} disabled={disabled || !canRetry}
+          title={canRetry ? '恢复初始化，保留原操作并避免重复提交' : '当前状态不能安全重试，请先核对详情及原操作'}
+          onClick={() => { void act('retry') }}>重试</Button>
         <Button loading={busy} disabled={disabled} onClick={() => { void act('refresh_patch') }}>查询原操作</Button>
       </div>}
     </>}
@@ -96,7 +103,7 @@ export function BuiltinAuthorizationWorkflowPanel({ result, workspace, disabled,
     schemaReady: Boolean(result.schemaReady), seedReady: Boolean(result.seedReady),
     message: result.message || '权限初始化结果待核对。', schemaOperationId: result.operationId,
     initializedTables: result.initializedTables, seedOperationId: result.seedOperationId,
-    failureCategory: result.failureCategory, nextAction: result.nextAction === 'resume' ? 'resume' as const : undefined
+    failureCategory: result.failureCategory, nextAction: result.nextAction === 'resume' || result.nextAction === 'retry' ? result.nextAction : undefined
   }
   return <BuiltinAuthorizationTaskCard task={task} workspace={workspace} disabled={disabled}
     onChanged={() => setRevision((value) => value + 1)} />

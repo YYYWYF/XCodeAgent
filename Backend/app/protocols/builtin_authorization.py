@@ -31,7 +31,7 @@ class PatchRequest(BaseModel):
     """限制补丁输入，权限数据和原操作身份均由服务端确定。"""
 
     model_config = ConfigDict(extra="forbid", strict=True)
-    action: Literal["get", "run_patch", "refresh_patch", "resume"]
+    action: Literal["get", "run_patch", "refresh_patch", "resume", "retry"]
     workspaceRoot: str = Field(min_length=1, max_length=4096)
 
 
@@ -45,6 +45,9 @@ async def _patch_action(request: PatchRequest, report: ProgressReporter) -> AgUi
         await report(AgUiActionProgress("query", "正在查询原操作…", 0))
         result = await asyncio.to_thread(refresh_patch, workspace)
         view = await asyncio.to_thread(patch_view, workspace, result)
+    elif request.action == "retry":
+        await report(AgUiActionProgress("query", "正在重试权限初始化…", 0))
+        view = await asyncio.to_thread(resume_builtin_authorization_task, workspace, retry=True)
     elif request.action == "resume":
         view = await asyncio.to_thread(resume_builtin_authorization_task, workspace)
     else:
@@ -58,7 +61,7 @@ def builtin_authorization_capabilities() -> dict[str, Any]:
     """公开单次状态刷新合同与独立事件身份。"""
 
     return {"endpoint": "/builtin-authorization/run", "transport": "ag-ui-sse",
-            "actions": ["refresh", "get", "run_patch", "refresh_patch", "resume"], "operationKinds": ["schema", "seed"], "customEventName": "builtin-authorization",
+            "actions": ["refresh", "get", "run_patch", "refresh_patch", "resume", "retry"], "operationKinds": ["schema", "seed"], "customEventName": "builtin-authorization",
             "stateSnapshotKey": "builtinAuthorization", "workflowIndependent": True}
 
 
@@ -69,7 +72,7 @@ def build_builtin_authorization_stream(payload: dict, accept: str | None = None)
         """执行独立权限动作，并保持原工作流刷新结果合同。"""
 
         action = (payload.get("forwardedProps") or {}).get("builtinAuthorization") or {}
-        if isinstance(action, dict) and action.get("action") in ("get", "run_patch", "refresh_patch", "resume"):
+        if isinstance(action, dict) and action.get("action") in ("get", "run_patch", "refresh_patch", "resume", "retry"):
             return await _patch_action(PatchRequest.model_validate(action), report)
         request = RefreshRequest.model_validate(action)
         query = refresh_builtin_authorization_seed if request.operationKind == "seed" else refresh_builtin_authorization

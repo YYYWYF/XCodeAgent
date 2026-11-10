@@ -3,7 +3,7 @@ import { createAgUiHttpAgent } from './authentication'
 import { readAuthorizationBootstrap, type WorkflowAuthorizationBootstrap } from './authorizationBootstrap'
 
 export type BuiltinPatchStage = 'schema' | 'seed' | 'verify' | 'done' | 'query'
-export type BuiltinPatchAction = 'get' | 'run_patch' | 'refresh_patch' | 'resume'
+export type BuiltinPatchAction = 'get' | 'run_patch' | 'refresh_patch' | 'resume' | 'retry'
 export type BuiltinPatchResult = {
   stage: BuiltinPatchStage
   status: 'pending' | 'running' | 'waiting' | 'ready' | 'needs_attention' | 'failed' | 'cancelled'
@@ -16,7 +16,7 @@ export type BuiltinPatchResult = {
   updatedAt?: string
   schemaOperationId?: string
   seedOperationId?: string
-  nextAction?: 'resume'
+  nextAction?: 'resume' | 'retry'
   createdCount?: number
   existingCount?: number
   resourceCount?: number
@@ -90,7 +90,7 @@ export async function runBuiltinPatch(
   const projected = readAuthorizationBootstrap({ status: 'manual_required', executor: 'builtin_saas',
     schemaReady: result.schemaReady, initializedTables: patch.initializedTables })
   result.initializedTables = projected?.initializedTables
-  if (patch.nextAction === 'resume') result.nextAction = 'resume'
+  if (patch.nextAction === 'resume' || patch.nextAction === 'retry') result.nextAction = patch.nextAction
   if (typeof patch.failureCategory === 'string' && /^[a-z][a-z0-9_]{0,95}$/.test(patch.failureCategory)) result.failureCategory = patch.failureCategory
   if (typeof patch.updatedAt === 'string' && patch.updatedAt.length <= 64) result.updatedAt = patch.updatedAt
   if (typeof response.backendInstanceId === 'string' && /^backend-[0-9a-f]{32}$/.test(response.backendInstanceId)) result.backendInstanceId = response.backendInstanceId

@@ -103,7 +103,7 @@ class AuthorizationOrchestratorSafetyCases:
         self.assertEqual(orchestration.ensure_builtin_authorization_task(str(self.root), source="test")["status"], "needs_attention")
 
     def test_input_drift_variants_block_before_network(self) -> None:
-        """开关、绑定、DDL、Manifest 及 DAG 漂移均不能使用旧任务提交。"""
+        """开关、绑定、DDL、管理员及 Manifest 漂移不能使用旧任务提交。"""
 
         self.begin()
         with patch.object(orchestration, "_inputs", side_effect=ValueError("changed")):
@@ -122,7 +122,7 @@ class AuthorizationOrchestratorSafetyCases:
                        lambda: self.application["managedDatabase"].update(datasourceId=3),
                        lambda: self.ddl.write_text(self.ddl.read_text().replace("BIGINT", "INT")),
                        lambda: self.application["authorization"].update(initialAdministratorSubjects=["other"]),
-                       change_manifest, lambda: self.orchestrator_dag.return_value.update(revision="changed")):
+                       change_manifest):
             with self.subTest(change=change):
                 self.begin()
                 change()

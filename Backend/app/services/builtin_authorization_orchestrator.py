@@ -28,6 +28,12 @@ _executor: ThreadPoolExecutor | None = None
 _closed = False
 ACTIVE = {"pending", "running", "waiting"}
 BACKOFF = (2, 3, 5, 10)
+RETRYABLE_FAILURES = {
+    "seed_timeout", "seed_network_error", "seed_invalid_response", "seed_query_unconfirmed",
+    "seed_client_configuration", "seed_saas_contract_incompatible", "seed_state_write_failed",
+    "schema_query_transient",
+    *(f"seed_http_{code}" for code in (401, 403, 408, 429, 500, 502, 503, 504)),
+}
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +44,7 @@ def _now() -> str:
 
 
 def _inputs(root: Path) -> tuple[str, dict, dict]:
-    """重新读取确认产物，摘要覆盖绑定、DDL、管理员、Manifest 与完整 DAG。"""
+    """重新读取权限输入；DAG 只校验确认准入，不参与权限业务摘要。"""
 
     application = read_application_config(root)
     binding = builtin_binding(application)
@@ -48,7 +54,7 @@ def _inputs(root: Path) -> tuple[str, dict, dict]:
     if not dag or dag.get("status") != "ready":
         raise ValueError("权限初始化需要已确认且有效的 Build DAG。")
     payload = {"binding": binding, "ddl": compile_authorization_tables(root, binding["datasourceKey"])["ddlFingerprint"],
-               "seed": compiled["seedFingerprint"], "manifest": plan["authorization_manifest"], "dag": dag,
+               "seed": compiled["seedFingerprint"], "manifest": plan["authorization_manifest"],
                "authEnabled": (application.get("auth") or {}).get("enable")}
     return hashlib.sha256(canonical_json(payload)).hexdigest(), application, plan
 
@@ -102,6 +108,9 @@ def get_builtin_authorization_task(workspace: str) -> dict | None:
                          record.get("operationId") or seed.get("idempotencyKey")) or
                      task.failureCategory == "operation_unconfirmed" and schema and not seed):
             view["nextAction"] = "resume"
+        elif task and status == "needs_attention" and task.failureCategory in RETRYABLE_FAILURES:
+            # 仅显式点击可重试；attach 不自动重启这些已停止的操作。
+            view["nextAction"] = "retry"
         if ready:
             compiled = compile_builtin_authorization_seed(application, plan, datasource_key=binding["datasourceKey"])
             tables = compiled["request"]["tables"]
@@ -256,8 +265,8 @@ def ensure_builtin_authorization_task(workspace: str, *, source: str) -> dict:
         return _attention("state_or_inputs_invalid")
 
 
-def resume_builtin_authorization_task(workspace: str) -> dict | None:
-    """仅接管已有任务或操作证据，不把 attach 当作首次初始化授权。"""
+def resume_builtin_authorization_task(workspace: str, *, retry: bool = False) -> dict | None:
+    """接管原任务；显式重试可恢复查询故障，仍保留输入和原提交身份保护。"""
 
     root = Path(workspace).expanduser().resolve()
     try:
@@ -268,11 +277,17 @@ def resume_builtin_authorization_task(workspace: str) -> dict | None:
             if task is None and not read_operation_record(root):
                 return None
             view = get_builtin_authorization_task(str(root))
-            if task and view and view.get("nextAction") == "resume":
+            if retry and (not view or view["status"] not in ACTIVE | {"ready"}
+                          and view.get("nextAction") not in {"resume", "retry"}):
+                raise ValueError("当前权限操作不能安全重试，请先核对输入及原操作状态。")
+            if task and view and (view.get("nextAction") == "resume"
+                                  or retry and view.get("nextAction") == "retry"):
                 task.status, task.failureCategory, task.updatedAt = "waiting", None, _now()
                 save_task(root, task)
-        return ensure_builtin_authorization_task(str(root), source="resume")
+        return ensure_builtin_authorization_task(str(root), source="retry" if retry else "resume")
     except (OSError, ValueError, TypeError, portalocker.exceptions.LockException):
+        if retry:
+            raise ValueError("无法安全重试权限初始化，请核对当前输入、状态文件及原操作。") from None
         return _attention("state_or_inputs_invalid")
 
 

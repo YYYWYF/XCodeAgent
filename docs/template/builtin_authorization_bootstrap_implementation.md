@@ -8,7 +8,7 @@
 
 编排文件为 `.devagentstudio/runtime/builtin-authorization-bootstrap/orchestration.json`，通过原子替换、文件和目录 fsync 保存。字段包括 `schemaVersion`、`generation`、`inputFingerprint`、`operationStateExpected`、`seedStateExpected`、`status`、`stage`、`failureCategory`、`updatedAt`。不保存 Subject、管理员列表、SQL、Seed 行数据或凭据。操作编号、幂等键、逐表结果和成功事实继续归属 `state.json`。
 
-输入摘要覆盖 REGISTERED 绑定、DDL、已确认 Manifest、实际 Seed 输入和当前已确认有效 DAG。远端请求及业务状态写入边界复核摘要。`orchestration.lock` 为工作区级 portalocker 短事务锁，覆盖首次提交判定、GET/POST 和落盘。原子服务、手工查询与编排器共享同一锁。进程内 RLock 及 worker registry 仅负责本进程串行和降噪。
+输入摘要覆盖 REGISTERED 绑定、DDL、已确认 Manifest、实际 Seed 输入及登录开关。DAG 保留已确认有效的准入校验，不参与权限业务摘要或 Seed 请求前后的等值比较；正常任务进度回写不使权限输入失效。远端请求及业务状态写入边界复核摘要。`orchestration.lock` 为工作区级 portalocker 短事务锁，覆盖首次提交判定、GET/POST 和落盘。原子服务、手工查询与编排器共享同一锁。进程内 RLock 及 worker registry 仅负责本进程串行和降噪。
 
 任务状态为 `pending/running/waiting/ready/needs_attention/failed/cancelled`，阶段为 `schema/seed/verify/done`。线程池最多同时运行四个工作区，最多登记 32 个未结束任务。worker 释放锁后按 2、3、5、10 秒退避，后续封顶 10 秒。单次 worker 连续查询上限为 600 秒，超时保留原身份并进入待处理。测试直接驱动 tick，或注入时钟及等待事件。
 
@@ -26,21 +26,21 @@
 | 原 Seed by-key 返回 404 | 待核对，不能清空保护后重发 |
 | 临时 GET 网络错误或 5xx | 有界退避后继续 GET，POST 不重试 |
 | 原操作 FAILED 或 UNKNOWN | 停止自动推进，保留证据和只读查询 |
-| 绑定、DDL、管理员、Manifest 或 DAG 变化 | 停止并返回 inputs_changed，迟到结果不写为成功 |
+| 绑定、DDL、管理员、Manifest 或登录开关变化 | 停止并返回 inputs_changed，迟到结果不写为成功 |
 
 编排文件丢失时，可从原 `state.json` 恢复。两份文件都不存在时，仍执行原远端结构/历史检查和 Seed by-key 查询。底层原 `explicit_recovery` 校验保留，自动 ensure/resume 不授予重建或重放权限。
 
 ## PR2 运行入口与生命周期
 
 - Graph 在 `_build_plan_gate_error()` 通过后快速调度任务，保留两个既有结果键、`executor=builtin_saas` 和 Build 放行策略。新增 `initializationStatus/initializationStage` 描述独立任务，节点 completed 不推导数据库就绪。
-- `/builtin-authorization/run` 的 `get` 仅本地读取，`run_patch` 调用统一 ensure，`resume` 仅安全接管。`refresh` 与 `refresh_patch` 保持查询原操作，不能自动接续 Seed POST。动作均经过标准 AG-UI 生命周期。
+- `/builtin-authorization/run` 的 `get` 仅本地读取，`run_patch` 调用统一 ensure，`resume` 仅安全接管；`retry` 是显式用户动作，可恢复查询、认证、服务配置或响应合同故障，不改变输入摘要、操作 ID 或幂等键，也不放行远端 FAILED/UNKNOWN 的重复提交。`refresh` 与 `refresh_patch` 保持查询原操作，不能自动接续 Seed POST。动作均经过标准 AG-UI 生命周期。
 - `workspace_attach` 成功后恢复已有任务，不扫描其他工作区。前端已有生命周期读取会先 attach。卡片检测连接恢复、页面重新可见或 Backend 实例改变时，单独调用同一个 attach，再继续纯只读 get。
 - Backend shutdown 唤醒等待中的 worker，取消排队任务并等待当前安全 tick 退出。删除准备停止 worker，保留远端操作证据。删除准备失败回滚时解除本地栅栏并接管原任务。
 - Build 路由、Direct 模式、模板 Java Bootstrap 及预览 `seed_ready()` 门禁保持原逻辑。预览未就绪提示更新为自动初始化/待核对文案。
 
 ## PR3 前端旅程
 
-工作流和调试补丁共用三阶段卡片，分别展示权限数据表初始化、权限数据初始化、初始化结果核验。运行中隐藏手动刷新和继续 Seed 按钮，显示无百分比的执行条。待处理时保留查询原操作和详情，仅在后端 `nextAction=resume` 时显示重试。
+工作流和调试补丁共用三阶段卡片，分别展示权限数据表初始化、权限数据初始化、初始化结果核验。运行中隐藏手动刷新和继续 Seed 按钮，显示无百分比的执行条。待处理时展示重试、查询原操作和详情；后端 `nextAction=resume|retry` 时启用重试，否则禁用并解释原因。重试经独立 AG-UI `retry` 动作，attach 仅沿原 resume 策略接管，不自动重试新增的故障类别。
 
 当前 Run 通过只读 get 每三秒读取一次状态。隐藏页面暂停，卸载和切换工作区撤销旧请求代次。历史 Run 仅显示持久化快照。实时结果回投当前步骤的展示状态，使外层标题与卡片保持一致。颜色、背景、边框、按钮和焦点使用现有 `--wb-*` 明暗主题令牌。
 

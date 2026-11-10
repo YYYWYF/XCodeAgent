@@ -197,6 +197,20 @@ class BuiltinAuthorizationSeedTests(unittest.TestCase):
             self.assertFalse(self.run_node()["seed_ready"])
         self.assert_calls()
 
+    def test_dag_change_during_lookup_does_not_block_seed(self) -> None:
+        """首次查询期间 DAG 被正常回写不阻断 Seed，原提交保护保持有效。"""
+
+        def update_dag() -> None:
+            """替换 DAG 快照，模拟请求期间任务进度发生变化。"""
+
+            self.dag.return_value = {"status": "ready", "summary": {"completed": 1}}
+
+        self.before_response = update_dag
+        self.assertFalse(self.run_node()["seed_ready"])
+        self.assert_calls("GET", "POST")
+        self.assertTrue(self.run_node()["seed_ready"])
+        self.assert_calls("GET", "POST", "GET")
+
     def test_receipt_never_ready_then_get_and_reuse(self) -> None:
         """202 即使报告 SUCCEEDED 也需要原 GET，之后 Build 和预览复用同一事实。"""
 
