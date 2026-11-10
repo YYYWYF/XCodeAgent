@@ -14,7 +14,7 @@ export type TaskFileChange = {
 }
 
 /** 仅移除与明确阶段一致的固定标题前缀。 */
-export function taskDisplayTitle(task: WorkflowBuildTaskPlanTask): string {
+export function taskDisplayTitle(task: Pick<WorkflowBuildTaskPlanTask, 'title' | 'backendStage'>): string {
   const prefix = task.backendStage && taskStagePrefixes[task.backendStage]
   return prefix && task.title.startsWith(prefix) && task.title.length > prefix.length
     ? task.title.slice(prefix.length)

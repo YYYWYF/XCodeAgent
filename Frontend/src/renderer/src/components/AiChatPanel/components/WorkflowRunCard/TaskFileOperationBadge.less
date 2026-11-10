@@ -1,0 +1,30 @@
+// 自有徽标避免通用 .ant-tag 的灰色覆盖；明暗主题均从工作台变量派生。
+.@{class-prefix}-workflow-task-file-operation {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 2px 8px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  background: var(--wb-surface-subtle);
+  border-radius: 6px;
+
+  &[data-operation='add'] {
+    color: var(--wb-code-add-text);
+    background: var(--wb-code-add);
+  }
+
+  &[data-operation='modify'],
+  &[data-operation='rename'] {
+    color: var(--wb-code-modify-text);
+    background: var(--wb-code-modify);
+  }
+
+  &[data-operation='delete'] {
+    color: var(--wb-danger);
+    background: color-mix(in srgb, var(--wb-danger) 12%, var(--wb-canvas));
+  }
+}

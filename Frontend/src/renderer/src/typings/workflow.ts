@@ -1511,6 +1511,9 @@ export type WorkflowBuildExecutionTask = WorkflowBackendTaskScope & {
   description?: string
   status?: 'pending' | 'running' | 'completed' | 'already_satisfied' | 'failed' | string
   dependencies?: string[]
+  dependencyTitles?: Record<string, string>
+  change_scope?: Array<Record<string, unknown>>
+  deliverables?: Array<Record<string, unknown>>
   dependsOn?: string[]
   targetFiles?: string[]
   target_files?: string[]

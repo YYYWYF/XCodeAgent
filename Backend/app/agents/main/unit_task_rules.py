@@ -12,7 +12,7 @@ from app.services.business_acceptance import (
     frontend_api_task_id,
 )
 from app.services.unit_task_manifest import (
-    BACKEND_MODULE_PREFIX, backend_bootstrap_task_id, frontend_api_task_manifest,
+    backend_bootstrap_task_id, frontend_api_task_manifest,
 )
 from app.services.page_identity import canonical_page_entry_path, page_id_to_page_key
 from app.services.unit_generation_contracts import (
@@ -253,9 +253,8 @@ def resolve_unit_task_rules(context: UnitGenerationContext) -> tuple[str, ...]:
     elif frozen.unit_id == "frontend:data:static" and frozen.unit_kind == "frontend":
         specific = _frontend_static_rules(frozen)
     elif frozen.unit_kind == "backend":
-        specific = resolve_backend_unit_task_rules(frozen)
-        if frozen.unit_id.startswith(BACKEND_MODULE_PREFIX):
-            return specific
+        # 后端的精简清单只投影一次，Bootstrap 也不再叠加通用职责 JSON。
+        return resolve_backend_unit_task_rules(frozen)
     else:
         raise ValueError(
             f"模型 Unit {frozen.unit_id} 没有可用的任务规划规则投影。"

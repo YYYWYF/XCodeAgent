@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-import json
+import re
 from typing import Any
 
 from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.builtin_skills import (
+    SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME,
+    resolve_builtin_skills_root,
+)
 from app.services.unit_task_manifest import (
     BACKEND_MODULE_PREFIX, PHYSICAL_SOURCE_TYPES, backend_bootstrap_task_id, backend_stage_manifest,
 )
-from app.agents.field_value_prompt_rules import FIELD_VALUE_PLANNING_RULES
-
-
-def _stable_json(value: Any) -> str:
-    """把后端固定职责清单序列化为稳定 JSON。"""
-
-    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
 
 
 def _text(value: Any) -> str:
@@ -49,105 +46,144 @@ def _bootstrap_rules(context: UnitGenerationContext) -> tuple[str, ...]:
         capabilities.append("MyBatis-Plus/MySQL")
     if "external_api" in source_types:
         capabilities.append("Spring Cloud OpenFeign")
-    return (
+    rules = [
         f"Emit exactly one root Task with id `{backend_bootstrap_task_id(context)}` and dependencies "
         "`[]`. It must cover every current backend.bootstrap requirement in one Task and "
         "declare one exact backend.bootstrap deliverable per requirement. Its capability "
         f"scope is {', '.join(capabilities) or 'the listed bootstrap requirements only'}.",
-        "Inspect and own the existing `backend/pom.xml`; add or modify only the minimum "
-        "dependencies and common configuration required by the listed source types. For "
-        "database, own only required datasource/MyBatis bootstrap configuration. For "
-        "external_api, also inspect the real Spring Boot Application.java or existing "
-        "Feign-enablement configuration and add the smallest authorized "
-        "@EnableFeignClients activation only when missing. Include every exact affected "
-        "path in target_files, allowed_paths, change_scope, and the relevant deliverable.",
+        f"Use unit_id `{context.unit_id}`, owner `backend`, task_type `backend.code` and status "
+        "`pending`. target_files, allowed_paths and change_scope must list the same exact "
+        "workspace-relative files; deliverable paths must stay within them. Give each deliverable "
+        "a unique stable ID under the task ID. Use add for "
+        "missing files and modify for existing files. Write titles and descriptions in Simplified Chinese.",
+        "Plan only the minimum additions to backend/pom.xml and the required common configuration.",
         "This Unit must not generate endpoint Clients, transport DTOs, endpoint objects, "
         "repositories, services, Controllers, DDL, migrations, seed data, tests, builds, "
         "verification, or acceptance work.",
-    )
+    ]
+    if "database" in source_types:
+        rules.append("Database: prepare only the required datasource and MyBatis bootstrap configuration.")
+    if "external_api" in source_types:
+        rules.append(
+            "External API: add only the required OpenFeign dependency and missing @EnableFeignClients "
+            "activation on the real Application.java or existing Feign configuration."
+        )
+    return tuple(rules)
 
 
 def _backend_common_rules() -> tuple[str, ...]:
     """声明 Endpoint 级路径、命名、描述和权限边界。"""
 
     return (
-        "All backend business source paths must be under `backend/src/main/java/` or "
-        "`backend/src/main/resources/`. Resolve naming from the exact API Contract and "
-        "Endpoint IDs plus the authorized Endpoint API Design. Reuse an existing package "
-        "for that Endpoint/API Contract; otherwise derive basePackage from the existing "
-        "Application.java or neighboring business classes. Never derive Task identity, "
-        "stage count, datasource, or deliverable target_id from TechnicalPlan entity_ids.",
-        "Write titles and per-file descriptions in Simplified Chinese. For an existing "
-        "path, plan only the minimum correction against the frozen contracts; for a "
-        "missing path, plan direct creation from those contracts.",
-        "For each endpoint whose authorized contract slice contains operationResourceKeys, "
-        "only the controller Task may add exactly one @RequireAnyResource annotation before "
-        "business logic, using platform-generated AuthConstants symbols and preserving "
-        "ANY-OF semantics. Never create or modify AuthConstants, authorization services, "
-        "request-derived permission checks, or data rules.",
-        "Never emit owner=database Tasks, database Units, DDL, schema/table changes, "
-        "migrations, seed SQL, tests, builds, lint, verification, runtime checks, or "
-        "acceptance responsibilities. Only backend:bootstrap may modify pom.xml or global "
-        "datasource/MyBatis/OpenFeign activation.",
+        "Plan business files only under backend/src/main/java or backend/src/main/resources. "
+        "Resolve the base package from Application.java or neighboring classes in the backend tree; "
+        "resolve module/type names from the confirmed API Contract and Endpoint API Design. "
+        "Never derive task identity, sources or deliverable targets from TechnicalPlan entity_ids.",
+        "Path selection:\n"
+        "- Existing implementation: modify its exact existing path and preserve existing members. "
+        "Prefer reuse over a second implementation of the same responsibility.\n"
+        "- New implementation: use the resolved module root + the layout directory + filename. "
+        "Existing flat packages do not define the layout for new responsibilities.\n"
+        "- Resolve one module root consistently from the backend tree and confirmed contracts; "
+        "do not mechanically turn an API identifier such as product_api into a package name.\n"
+        "- Directory migration is outside this plan. A directory listing proves existence, not method "
+        "signatures or implementation compatibility.\n"
+        "- Use add for missing files and modify for existing files or files created by earlier module tasks.",
+        "File descriptions: use only sections needed by the file's actual responsibility, in Simplified Chinese. "
+        "There is no mandatory five-section template. Put each included section on its own line. "
+        "Simple DTO/domain data classes: list fields, types and contract-required nullability/validation; "
+        "POs also need table/column/key mappings. Do not invent processing logic for data containers. "
+        "Repository interfaces: method signatures and only caller-visible semantics needed to interpret them; "
+        "leave query implementation details to RepositoryImpl. Feign interfaces also need exact HTTP bindings. "
+        "Foundation skeletons: inheritance, injection and intentionally empty methods only. "
+        "Implementation files: describe only their own logic and relevant boundaries — Service business "
+        "decisions/orchestration, RepositoryImpl filters/pagination/write guards, external adapters request "
+        "or response adaptation, Converter/Assembler field mappings and any required nontrivial conversion. "
+        "Direct mappings need only a concise mapping statement, not generic boundary boilerplate. "
+        "Controllers need route/binding/envelope/authorization/delegation details, not business algorithms. "
+        "Use labels such as 字段、接口/方法、处理逻辑、边界约束、复用要求 only when useful; omit empty "
+        "or redundant sections. Mention specific members to preserve only when modifying shared files. "
+        "Separate sections with actual line breaks encoded as \\n inside the JSON string, not literal "
+        "backslash-n text after JSON decoding. Do not insert raw unescaped newlines inside JSON strings. "
+        "Never fill placeholders or repeat the file path, generic architecture rules, or another layer's "
+        "full algorithm. Preserve all contract-required details in their responsible file descriptions. "
+        "Labels are description text, not additional JSON fields.",
+        "Do not change auth/common infrastructure, AuthConstants, authorization services or invent "
+        "request-derived permission checks/data rules.",
+        "No extra tasks, standalone mapping tasks, database-owner work, DDL, schema/table changes, migrations, seed data, "
+        "tests, builds, lint, runtime verification or acceptance work. Only backend:bootstrap owns "
+        "pom.xml and global datasource/MyBatis/OpenFeign activation.",
     )
 
 
-def _module_topology_rules(
-    manifest: tuple[dict[str, Any], ...],
-) -> tuple[str, ...]:
-    """列出模块阶段与文件必须覆盖的交付物序号，平台负责 ID 和依赖。"""
+def _module_layout_rules(sources: set[str]) -> tuple[str, ...]:
+    """从现有规范的文件清单投影目录表，不内联示例工程树或修改 Skill。"""
 
-    prompt_manifest = [
-        {
-            "key": item["key"],
-            "endpoint_ids": item["endpoint_ids"],
-            "data_source_types": item["data_source_types"],
-            "deliverables": [
-                {"index": index, "kind": spec["kind"], "endpoint_id": spec["target_id"]}
-                for index, spec in enumerate(item["deliverables"], start=1)
-            ],
-        }
-        for item in manifest
-    ]
+    reference = (
+        resolve_builtin_skills_root() / SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME
+        / "references" / "module-layout.md"
+    )
+    # 只读取随应用发布的固定规范，不访问业务工作区，也不从任务候选反推目录规则。
+    layout = reference.read_text(encoding="utf-8")
+    directories: dict[str, list[str]] = {}
+    database_prefixes = ("infrastructure/po/", "infrastructure/mapper/", "infrastructure/repository/",
+                         "domain/repository/", "resources/mapper/")
+    # 只读取编号文件表；相同目录的请求/响应 DTO 合并为一行，保留原规范的目录位置。
+    for line in layout.splitlines():
+        if not re.match(r"^\|\s*\d+\s*\|", line):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        match = re.fullmatch(r"`([^`]+)`", cells[1])
+        if match is None:
+            raise ValueError("module-layout.md 文件清单缺少精确路径。")
+        path = match[1]
+        if "database" not in sources and path.startswith(database_prefixes):
+            continue
+        directory = path.rsplit("/", 1)[0]
+        directories.setdefault(directory, []).append(cells[-1])
+    if not directories:
+        raise ValueError("module-layout.md 缺少可投影的模块目录清单。")
+    if "external_api" in sources:
+        directories.update({
+            "infrastructure/client": ["Client"], "infrastructure/client/dto": ["Upstream transport DTO"],
+            "infrastructure/client/config": ["Client-local configuration, if needed"],
+            "infrastructure/client/adapter": ["Transport adapter, if needed"],
+        })
+    rows = ["| File role | Directory |", "| --- | --- |"]
+    rows.extend(f"| {' / '.join(roles)} | `{directory}` |" for directory, roles in directories.items())
     return (
-        "Emit one file plan for each exact key in this module manifest. Every files[].covers "
-        "array lists the 1-based deliverable indices that file implements for that key. "
-        "Assign at least one file to every listed deliverable. The platform sets Task IDs, "
-        "deliverables, and dependencies. Do not add standalone mapping tasks.\n"
-        + _stable_json(prompt_manifest),
-        "Use add for a missing file and modify for a file on disk or prepared by an earlier "
-        "task in the module. Reuse shared paths across the scoped endpoints where appropriate. "
-        "Describe the exact change for each file on one line.",
+        "Required new Java files use these directories relative to the resolved module package. "
+        "resources/mapper is relative to backend/src/main. Create only contract-required files, "
+        "not every role in the table.\n" + "\n".join(rows),
     )
 
 
-def _foundation_rules() -> tuple[str, ...]:
+def _foundation_rules(sources: set[str]) -> tuple[str, ...]:
     """定义共享基础骨架的文件边界与复用要求。"""
 
-    return (
-        "The foundation task prepares the module's shared skeletons from confirmed "
-        "sourceSnapshots. For database sources plan the PO, BaseMapper interface, and "
-        "Repository with Mapper injection. For external sources plan the FeignClient "
-        "interface and exact client-local connection configuration. Reuse compatible "
-        "files and preserve existing methods. Do not add operation methods, transport DTOs, "
-        "custom Mapper XML, business logic, or routes in foundation.",
-    )
+    rules = [
+        "Foundation prepares shared skeletons from confirmed sourceSnapshots, with no business/operation "
+        "methods, transport DTOs, custom Mapper XML or routes."
+    ]
+    if "database" in sources:
+        rules.append("Database foundation: PO, BaseMapper interface, empty domain Repository interface "
+                     "and RepositoryImpl skeleton with Mapper injection only in the implementation.")
+    if "external_api" in sources:
+        rules.append("External foundation: compatible FeignClient skeleton and exact client-local connection configuration.")
+    return tuple(rules)
 
 
 def _repository_rules() -> tuple[str, ...]:
     """定义 database 分支的 Endpoint repository 职责边界。"""
 
     return (
-        "For a business task with a backend.repository deliverable, use the prepared PO, "
-        "BaseMapper and Repository. Plan the concrete Repository/Mapper methods required by "
-        "databaseWrites, databaseQuery, and read-side database fieldMappings. "
-        "For single-table insert, primary-key lookup/update/delete, conditional single/list "
-        "queries, count, pagination, sorting, fuzzy matching, and IN predicates, use "
-        "BaseMapper with LambdaQueryWrapper/LambdaUpdateWrapper. "
-        "Plan a custom Mapper method and XML statement only when the confirmed Endpoint "
-        "requires a join, aggregation/grouping, UNION, subquery, window function, "
-        "database-specific SQL, or a documented performance-sensitive query that BaseMapper "
-        "cannot express clearly; name that reason in the task description.",
+        "Repository business work: plan matching domain Repository signatures and RepositoryImpl methods "
+        "for confirmed databaseQuery/databaseWrites/fieldMappings, with necessary domain results and PO "
+        "conversions. Keep PO, MyBatis Page and wrappers inside infrastructure; domain interfaces must not "
+        "import infrastructure or application DTOs. Use BaseMapper and LambdaQueryWrapper/LambdaUpdateWrapper "
+        "for ordinary single-table CRUD, filters, count, pagination, sorting, LIKE and IN. Custom Mapper/XML "
+        "requires a confirmed join, aggregation, UNION, subquery, window/database-specific SQL or documented "
+        "performance need BaseMapper cannot express clearly; state the reason. No placeholder XML.",
     )
 
 
@@ -155,45 +191,84 @@ def _upstream_rules() -> tuple[str, ...]:
     """定义 external_api 分支的 Endpoint upstream 职责边界。"""
 
     return (
-        "For a business task with a backend.upstream deliverable, complete the concrete "
-        "Client method on the prepared Client. Use the full upstream request/response "
-        "contract from sourceSnapshots and the frozen Endpoint API Design. Reuse one "
-        "Client method and transport DTO set for the same upstream operation. Preserve "
-        "all declared Path/Query/Header parameters, including optional and unmapped targets, "
-        "and complete request/response DTOs. externalApiBindings determines service call-site "
-        "values, never the transport signature.",
-        "Upstream helpers adapt transport. Keep fieldMappings and source composition in "
-        "the Service. Do not add persistence work to an external-only business task.",
+        "Upstream business work: complete the prepared Client method and full typed transport DTOs from "
+        "sourceSnapshots[].details.operation, preserving Path/Query/Header/body locations, names, types, "
+        "required flags, optional/unmapped parameters and nested request/response structure. Reuse the same "
+        "method/DTOs for the same operation. externalApiBindings supplies Service call-site values, never "
+        "a reduced transport signature. Omit unmapped optional request targets; keep their declarations. "
+        "Keep shared headers in existing configuration, transport adaptation in upstream, and response "
+        "fieldMappings/source composition in Service. Retain the selected upstream call even with no "
+        "parameter bindings or source-mapped response fields. Add no unrelated persistence work.",
     )
 
 
-def _service_rules() -> tuple[str, ...]:
+def _service_rules(sources: set[str]) -> tuple[str, ...]:
     """定义统一 service 对字段映射、组合和业务说明的职责边界。"""
 
-    return (
-        "Each business task plans one Endpoint's request/response DTOs, necessary Domain "
-        "types, typed conversions, and Service. Derive the internal API DTOs from "
-        "endpointContract and keep them separate from PO and upstream transport DTOs. "
-        "The Service is the sole owner of Endpoint fieldMappings, databaseQuery value rules, "
-        "databaseWrites, externalApiBindings, business processing, and final response composition. "
-        "Coordinate only repository/upstream branches present for this Endpoint and pass confirmed "
-        "externalApiBindings values to external request targets while retaining the complete Client signature. "
-        "Unmapped optional targets are absent from the HTTP request; preserve explicit presence, false, and zero. "
-        "Follow field-value planning rules for "
-        "typed boundaries and execution phases. Do not add a standalone mapping Task, expose upstream "
-        "transport types through the internal API, or implement Controller routing.",
-        "Whenever implementation of a confirmed business failure branch requires "
-        "`throw new BizException(...)`, also plan the concrete module-level "
-        "`domain/exception/<Module>ErrorCode.java` enum implementing `IBizErrorCode`. "
-        "Decide from the confirmed API Contract error_codes and Endpoint semantics; only "
-        "create ErrorCode work for business failure branches the implementation needs. "
-        "Use operation=add when the exact file is absent from the workspace snapshot and "
-        "operation=modify when it exists. Include the path in the responsible task's "
-        "files array with coverage for its business deliverable so the plan never "
-        "imports a missing ErrorCode type. Prefer business task ownership and raising the "
-        "exception in ApplicationService; this is a planning recommendation, not an "
-        "exclusive constraint. Preserve an explicit existing ownership convention.",
-    )
+    rules = [
+        "Each business task implements one Endpoint's methods and required types, not an exclusive set "
+        "of classes. Plan all module tasks together to choose consistent shared file paths before "
+        "assigning per-task changes. Default to one module ApplicationService and one module Assembler, "
+        "adding separately named methods for different Endpoints rather than generating an "
+        "Endpoint-specific Service or Assembler for each operation. For example, detail and list tasks "
+        "extend the same ProductApplicationService and ProductAssembler, not GetProductApplicationService "
+        "and ListProductsApplicationService or ProductDetailAssembler and ProductListItemAssembler. "
+        "Use actual module names; these examples are not mandatory file names. "
+        "Reuse compatible existing classes without renaming or migrating them. Split shared classes only "
+        "when confirmed responsibility boundaries require it, and state the reason in the file description.",
+        "The first responsible business task creates a missing shared class with only its own methods; "
+        "later tasks modify the same path, append their own methods and preserve prior methods and injected "
+        "dependencies. Do not move business implementations into foundation or merge Endpoint tasks. "
+        "Reuse domain entities and error enums across the module. Reuse converters by source/target model "
+        "pair: database Endpoints share PO-to-domain converters; external API Endpoints share compatible "
+        "transport-to-domain adapters, Clients and transport DTOs by upstream contract. Database and external "
+        "API Endpoints may share the module Service, Assembler and compatible domain models, but keep their "
+        "transport types, access layers and conversion boundaries distinct. Never create duplicate mapping "
+        "methods for the same semantics or one generic converter mixing unrelated sources.",
+        "Request/response DTOs follow endpointContract; reuse only when fields, types, validation and "
+        "business semantics match, otherwise keep distinct DTOs and mapping methods in the shared Assembler. "
+        "Keep internal DTOs separate from "
+        "source models. Service alone owns business decisions, source composition and final response "
+        "fieldMappings. Plan matching typed boundaries in the same responsible task.",
+        "When a confirmed business failure needs BizException, plan the concrete module "
+        "domain/exception/<Module>ErrorCode.java enum implementing IBizErrorCode from API Contract "
+        "error_codes. Reuse/extend it and include its path/covers; never reference a missing type. "
+        "Prefer business-task ownership and throwing in ApplicationService, preserving explicit existing conventions.",
+    ]
+    if "database" in sources:
+        rules.append("Service uses domain Repository interfaces, never PO, Mapper or RepositoryImpl. "
+                     "Keep PO-to-domain conversion in infrastructure and domain-to-API composition in application.")
+    return tuple(rules)
+
+
+def _field_planning_rules(sources: set[str]) -> tuple[str, ...]:
+    """只注入本轮物理来源适用的规划检查项，执行阶段详细规则保持原样。"""
+
+    values = []
+    if "database" in sources:
+        values.extend(("databaseQuery.items", "databaseWrites"))
+    if "external_api" in sources:
+        values.append("externalApiBindings")
+    rules = [
+        f"Read complete fieldMappings, {', '.join(values)} and optional implementationDescription. "
+        "Assign target paths/columns, dependencies, processing, missing rules and pre-call/post-call order "
+        "to the descriptions of files that implement them, rather than repeating them in every file. "
+        "Service resolves values before access and maps source results after "
+        "access; access layers receive typed values with explicit presence. sourceBinding/sourceSnapshots "
+        "fix the physical sources; equal field names, origin categories or free-text guidance cannot "
+        "invent bindings, sources or override contracts. Missing/blank implementationDescription adds no work.",
+        "Preserve typed fixed values and declared endpointFields/builtinFields/sourceFields dependencies. "
+        "value_mapping needs no sourceFields; direct source_mapping assigns directly, descriptive mappings "
+        "apply their businessDescription. Preserve array order and item correspondence; no implicit flattening "
+        "or first-item selection. Distinguish absence from null, false, zero and empty strings according to "
+        "field constraints. Follow missingBehavior error/omit/default with typed defaultValue and any "
+        "explicit missing-input branch. Never mask invalid inputs or source failures with defaults, omit "
+        "required targets or guess missing algorithms, timezones, rounding or error semantics; report contract gaps.",
+    ]
+    if "database" in sources:
+        rules.append("Repository preserves parameterized values and AND/OR grouping, including repeated "
+                     "columns and omitted predicates. Reject update/delete when omit removes all effective predicates.")
+    return tuple(rules)
 
 
 def _controller_rules() -> tuple[str, ...]:
@@ -205,6 +280,8 @@ def _controller_rules() -> tuple[str, ...]:
         "binding, status/envelope contract, required authorization annotation, and delegation "
         "to its Service. It must never expose an upstream path, "
         "perform repository/client access, repeat fieldMappings, or hard-code sample values.",
+        "Only Controller may add one @RequireAnyResource per endpoint with operationResourceKeys, "
+        "using platform AuthConstants and ANY-OF semantics. Omit it when no operationResourceKeys are declared.",
     )
 
 
@@ -222,19 +299,26 @@ def resolve_backend_unit_task_rules(
         raise ValueError(f"后端模块 Unit {context.unit_id} 缺少增量职责。")
     kinds = {spec["kind"] for item in manifest for spec in item["deliverables"]}
     stages = {item["stage"] for item in manifest}
+    sources = {source for item in manifest for source in item["data_source_types"]}
     rules = [
+        "### Common paths and file descriptions",
         *_backend_common_rules(),
-        *_module_topology_rules(manifest),
+        *_module_layout_rules(sources),
     ]
     if "foundation" in stages:
-        rules.extend(_foundation_rules())
-    if "backend.repository" in kinds:
-        rules.extend(_repository_rules())
-    if "backend.upstream" in kinds:
-        rules.extend(_upstream_rules())
+        foundation_sources = {source for item in manifest if item["stage"] == "foundation"
+                              for source in item["data_source_types"]}
+        rules.extend(("### foundation — shared skeletons", *_foundation_rules(foundation_sources)))
     if "business" in stages:
-        rules.extend(FIELD_VALUE_PLANNING_RULES)
-        rules.extend(_service_rules())
+        business_sources = {source for item in manifest if item["stage"] == "business"
+                            for source in item["data_source_types"]}
+        rules.append("### business — one Endpoint per task")
+        rules.extend(_service_rules(business_sources))
+        if "backend.repository" in kinds:
+            rules.extend(_repository_rules())
+        if "backend.upstream" in kinds:
+            rules.extend(_upstream_rules())
+        rules.extend(_field_planning_rules(business_sources))
     if "controller" in stages:
-        rules.extend(_controller_rules())
+        rules.extend(("### controller — shared web adapter", *_controller_rules()))
     return tuple(rules)

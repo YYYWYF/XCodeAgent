@@ -1,10 +1,4 @@
-import {
-  ApiOutlined,
-  BranchesOutlined,
-  FileTextOutlined,
-  FolderOutlined,
-  UnorderedListOutlined
-} from '@ant-design/icons'
+import { ApiOutlined, FileTextOutlined } from '@ant-design/icons'
 import { Collapse, Typography } from 'antd'
 import type {
   WorkflowBuildTargetReview,
@@ -15,6 +9,10 @@ import type {
 import { cx } from '../../../../utils'
 import { BuildTaskFileList } from './BuildTaskFileList'
 import { taskDisplayTitle, taskFilePresentation } from './buildTaskPresentation'
+import {
+  TaskDisclosureHeader as DisclosureHeader,
+  taskDisclosureExpandIcon
+} from './TaskDisclosureHeader'
 
 /** 将目标与修改范围合并展示，并仅在页面确有关联接口时追加接口契约。 */
 export function TargetScopeReview({ review }: { review: WorkflowBuildTargetReview }): JSX.Element {
@@ -177,6 +175,7 @@ export function TaskDetails({
         defaultActiveKey={[]}
         destroyInactivePanel={false}
         expandIconPosition="right"
+        expandIcon={taskDisclosureExpandIcon}
       >
         {coveredEndpoints.length > 0 ? (
           <Collapse.Panel
@@ -202,13 +201,24 @@ export function TaskDetails({
           </Collapse.Panel>
         ) : null}
         <Collapse.Panel
-          header={<DisclosureHeader count={dependencyNames.length} label="依赖任务" />}
+          header={
+            <DisclosureHeader
+              count={dependencyNames.length}
+              label="依赖任务"
+              summary={!task.dependencies?.length ? '无' : undefined}
+            />
+          }
           key="dependencies"
         >
-          <AcceptanceList items={dependencyNames} emptyText="无可展示的依赖任务" />
+          <AcceptanceList
+            items={dependencyNames}
+            emptyText={task.dependencies?.length ? '依赖任务名称未提供' : '无'}
+          />
         </Collapse.Panel>
         <Collapse.Panel
-          header={<DisclosureHeader count={files.length} label="文件改动" unit="个文件" />}
+          header={
+            <DisclosureHeader count={files.length} label="文件改动" unit="个文件" files={files} />
+          }
           key="files"
         >
           {files.length > 0 ? (
@@ -233,36 +243,6 @@ export function TaskDetails({
         </Collapse.Panel>
       </Collapse>
     </div>
-  )
-}
-
-/** 展示二级折叠项名称与内容数量，帮助用户判断是否需要展开。 */
-function DisclosureHeader({
-  count,
-  label,
-  unit = '项'
-}: {
-  count: number
-  label: string
-  unit?: string
-}): JSX.Element {
-  const icons = {
-    涉及接口: <ApiOutlined />,
-    依赖任务: <BranchesOutlined />,
-    文件改动: <FileTextOutlined />,
-    允许修改范围: <FolderOutlined />,
-    待验收: <UnorderedListOutlined />
-  }
-  return (
-    <span className={cx('workflow-dag-confirmation-disclosure-header')}>
-      <span className={cx('workflow-dag-confirmation-disclosure-label')}>
-        <span aria-hidden="true">{icons[label as keyof typeof icons]}</span>
-        <Typography.Text>{label}</Typography.Text>
-      </span>
-      <small>
-        {count} {unit}
-      </small>
-    </span>
   )
 }
 

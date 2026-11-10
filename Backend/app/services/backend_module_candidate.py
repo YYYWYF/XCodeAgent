@@ -72,8 +72,7 @@ def _materialize_task(context: UnitGenerationContext, record: dict, draft: dict,
         if file["operation"] not in ("add", "modify"):
             raise ValueError(f"{path} 的 operation 必须是 add 或 modify。")
         description = _required_text(file["description"], "files.description")
-        if "\n" in description or "\r" in description:
-            raise ValueError(f"{path} 的 description 必须为单行说明。")
+        # 保留模型按职责、方法及约束生成的换行，供确认卡直接分行展示。
         covers = file["covers"]
         if (
             not isinstance(covers, list) or not covers

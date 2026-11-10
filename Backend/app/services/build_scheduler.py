@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.backend_module_scope import scoped_task_ids
+from app.services.build_execution_projection import project_execution_tasks
 from app.services.engineering_acceptance import ensure_engineering_acceptance
 from app.services.engineering_acceptance_verifier import verify_engineering_acceptance
 from app.services.unit_task_manifest import backend_module_unit_id
@@ -639,7 +640,7 @@ def resolve_execution_slice(
         "task_ids": task_ids,
         "pending_task_ids": pending_task_ids,
         "reusable_task_ids": reusable_task_ids,
-        "tasks": sliced_tasks,
+        "tasks": project_execution_tasks(sliced_tasks, tasks),
         "summary": {
             "total": len(sliced_tasks),
             "pending": len(pending_task_ids),

@@ -1,0 +1,162 @@
+// 仅标题栏按成功/失败状态着色，任务正文保持中性底色。
+.@{class-prefix}-workflow-build-execution-task {
+  --task-row-tone: var(--wb-accent);
+  --task-status-tone: var(--wb-accent);
+  --task-row-soft: color-mix(in srgb, var(--task-row-tone) 9%, var(--wb-canvas));
+
+  &.@{class-prefix}-completed {
+    --task-status-tone: var(--workflow-task-success);
+  }
+  &.@{class-prefix}-failed {
+    --task-status-tone: var(--workflow-task-danger);
+  }
+
+  .@{class-prefix}-workflow-build-execution-task-heading {
+    background: linear-gradient(
+      115deg,
+      color-mix(in srgb, var(--task-status-tone) 3%, var(--wb-canvas)),
+      color-mix(in srgb, var(--task-status-tone) 11%, var(--wb-canvas))
+    );
+    gap: 14px;
+    > .anticon {
+      color: var(--task-status-tone);
+    }
+    &:hover,
+    &:active,
+    &:focus-visible {
+      background: color-mix(in srgb, var(--task-status-tone) 13%, var(--wb-canvas));
+    }
+  }
+
+  .@{class-prefix}-workflow-build-execution-task-emblem {
+    display: grid;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 auto;
+    place-items: center;
+    color: var(--task-status-tone);
+    background: color-mix(in srgb, var(--task-status-tone) 13%, var(--wb-canvas));
+    font-size: 21px;
+    border-radius: 10px;
+  }
+
+  .@{class-prefix}-workflow-build-execution-task-result {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 7px;
+    color: var(--task-status-tone);
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .@{class-prefix}-workflow-build-execution-task-content {
+    padding-top: 6px;
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-task-disclosures.ant-collapse {
+    > .ant-collapse-item {
+      margin-bottom: 3px;
+      border: 0;
+      border-bottom: 1px solid var(--wb-border);
+      background: var(--wb-canvas);
+      border-radius: 9px;
+    }
+    > .ant-collapse-item > .ant-collapse-header,
+    > .ant-collapse-item.ant-collapse-item-active > .ant-collapse-header {
+      padding-top: 9px;
+      padding-bottom: 9px;
+      min-height: 52px;
+      background: var(--wb-canvas);
+    }
+    > .ant-collapse-item > .ant-collapse-header:hover {
+      background: var(--task-row-soft);
+    }
+    > .ant-collapse-item > .ant-collapse-header::after,
+    > .ant-collapse-item > .ant-collapse-header .ant-collapse-arrow {
+      color: var(--task-row-tone);
+    }
+    > .ant-collapse-item > .ant-collapse-content {
+      border-top: 1px solid var(--wb-border);
+      background: var(--wb-canvas);
+    }
+  }
+
+  .@{class-prefix}-workflow-dag-confirmation-disclosure-icon,
+  .@{class-prefix}-workflow-dag-confirmation-disclosure-header small {
+    background: var(--task-row-soft);
+    color: var(--task-row-tone);
+    .anticon {
+      color: var(--task-row-tone);
+    }
+  }
+  .@{class-prefix}-workflow-dag-confirmation-disclosure-label > .ant-typography {
+    font-weight: 600;
+  }
+  .@{class-prefix}-workflow-dag-confirmation-disclosure-operations {
+    padding-right: 14px;
+    border-right: 1px solid var(--wb-border);
+  }
+
+  .@{class-prefix}-workflow-build-task-footer {
+    padding: 12px 0 0;
+    > span:first-child:has(.ant-btn) {
+      margin-right: 0;
+    }
+  }
+  &.@{class-prefix}-failed .@{class-prefix}-workflow-build-task-footer .ant-btn:not(:disabled) {
+    color: var(--task-row-tone);
+    border-color: var(--workflow-task-danger-border);
+    background: var(--task-row-soft);
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-disclosure-summary {
+  min-width: 0;
+  flex: 1 1 140px;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+}
+
+.@{class-prefix}-workflow-build-task-error-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  > .anticon {
+    color: var(--wb-danger);
+  }
+  .@{class-prefix}-workflow-build-task-error-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .@{class-prefix}-workflow-build-task-error-link {
+    flex: 0 0 auto;
+    color: var(--wb-danger);
+  }
+}
+
+@media (max-width: 600px) {
+  .@{class-prefix}-workflow-build-execution-task {
+    .@{class-prefix}-workflow-build-execution-task-heading {
+      flex-wrap: wrap;
+      gap: 9px;
+    }
+    .@{class-prefix}-workflow-build-execution-task-heading > .ant-typography {
+      flex-basis: calc(100% - 60px);
+    }
+    .@{class-prefix}-workflow-build-execution-task-result {
+      margin-left: auto;
+    }
+  }
+  .@{class-prefix}-workflow-build-task-error-summary {
+    flex-wrap: wrap;
+  }
+  .@{class-prefix}-workflow-build-task-error-summary
+    .@{class-prefix}-workflow-build-task-error-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}

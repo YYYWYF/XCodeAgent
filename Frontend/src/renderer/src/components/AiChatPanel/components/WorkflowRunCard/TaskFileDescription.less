@@ -1,0 +1,45 @@
+.@{class-prefix}-workflow-task-description-plain {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.@{class-prefix}-workflow-task-description-sections {
+  dl {
+    margin: 0;
+  }
+  dl > div {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1fr);
+    gap: 16px;
+    padding: 12px 0;
+  }
+  dl > div + div {
+    border-top: 1px solid var(--wb-border);
+  }
+  dt,
+  dd {
+    margin: 0;
+    min-width: 0;
+  }
+  dt {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-weight: 600;
+  }
+  dt .anticon {
+    color: var(--wb-text-secondary);
+    font-size: 16px;
+  }
+  dd {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 600px) {
+  .@{class-prefix}-workflow-task-description-sections dl > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+}

@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from app.agents.main.backend_unit_task_prompt import build_backend_unit_generation_prompt
 from app.agents.main.unit_task_rules import (
     example_task_id,
     expected_task_owner,
@@ -57,6 +58,21 @@ def _retained_task_summaries(context: UnitGenerationContext) -> list[dict[str, A
     return [plain_json(summary) for summary in summaries if isinstance(summary, Mapping)]
 
 
+def _prompt_context(context: UnitGenerationContext) -> dict[str, Any]:
+    """后端提示词只投影完整目录树，不修改冻结快照或其他类型 Unit 的上下文。"""
+
+    projected = context.model_dump(mode="json")
+    if context.unit_kind == "backend":
+        backend = projected["workspace_context"].get("backend")
+        # 保留后端目录树原文，不筛选子目录；缺失时显式留空，不补其他工作区信息。
+        projected["workspace_context"] = {
+            "backend": {
+                "dir_structure": backend.get("dir_structure") if isinstance(backend, Mapping) else None,
+            },
+        }
+    return projected
+
+
 def _output_contract(context: UnitGenerationContext) -> str:
     """按 Unit 声明精简文件计划或完整 Candidate 的输出格式。"""
 
@@ -74,10 +90,14 @@ def _output_contract(context: UnitGenerationContext) -> str:
             '"description":"该文件的精确变更","covers":[1]}]}]}'
         )
 
-    deliverable_kinds = ", ".join(f"`{kind}`" for kind in DELIVERABLE_KINDS)
     requirement_contracts = requirement_output_contracts(
         context.generation_requirements
     )
+    kinds = (
+        sorted({item["deliverable_kind"] for item in requirement_contracts})
+        if context.unit_kind == "backend" else DELIVERABLE_KINDS
+    )
+    deliverable_kinds = ", ".join(f"`{kind}`" for kind in kinds)
     sample_contract = requirement_contracts[0] if requirement_contracts else {}
     if context.unit_id == "frontend:api-client":
         sample_contract = next(
@@ -196,6 +216,16 @@ def build_unit_generation_prompt(
     rules = tuple(dict.fromkeys((*automatic_rules, *additional_rules)))
     if not isinstance(contract_tool_enabled, bool):
         raise TypeError("contract_tool_enabled 必须是 bool。")
+    if frozen_context.unit_kind == "backend":
+        return build_backend_unit_generation_prompt(
+            frozen_context,
+            rules=rules,
+            workspace_context=_prompt_context(frozen_context)["workspace_context"],
+            output_contract=_output_contract(frozen_context),
+            contract_tool_enabled=contract_tool_enabled,
+            global_feedback=global_feedback,
+            local_feedback=latest_local_feedback,
+        )
     contract_access = (
         "The only available tool is `read_frozen_contract_fragment`. Call it only with "
         "an exact catalog `ref_id` and authorized `selector`; when a response is paged, "
@@ -248,7 +278,7 @@ def build_unit_generation_prompt(
             + contract_access
             + "Do not read or infer contracts "
             "outside this allowlist.\n"
-            + _stable_json(frozen_context.model_dump(mode="json"))
+            + _stable_json(_prompt_context(frozen_context))
         ),
         (
             "## 5. Dependency Allowlist\n"

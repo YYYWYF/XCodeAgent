@@ -125,28 +125,37 @@
   background: transparent;
 
   > .ant-collapse-item {
-    margin: 0 0 8px;
+    margin: 0 0 11px;
     overflow: hidden;
-    border: 1px solid var(--wb-border);
-    border-radius: 8px;
-    background: var(--wb-surface);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: var(--wb-canvas);
   }
 
   > .ant-collapse-item:last-child {
     margin-bottom: 0;
-    border-radius: 8px;
+    border-radius: 10px;
   }
 
-  > .ant-collapse-item-active > .ant-collapse-header {
-    box-shadow: inset 3px 0 0 var(--wb-accent);
+  > .ant-collapse-item-active {
+    border-color: var(--wb-accent-border);
+  }
+
+  > .ant-collapse-item.ant-collapse-item-active > .ant-collapse-header {
+    background: color-mix(in srgb, var(--wb-accent) 13%, var(--wb-canvas));
   }
 
   > .ant-collapse-item > .ant-collapse-header {
     align-items: center;
+    min-height: 56px;
     // 为展开文字及原生箭头留出独立空间，避免挤占数量标签。
-    padding: 12px 92px 12px 12px;
+    padding: 12px 84px 12px 14px;
     color: var(--wb-text);
-    background: var(--wb-surface-subtle);
+    background: color-mix(in srgb, var(--wb-accent) 8%, var(--wb-canvas));
+
+    > .ant-collapse-header-text {
+      min-width: 0;
+    }
 
     &::after {
       content: '展开';
@@ -165,7 +174,12 @@
   }
 
   > .ant-collapse-item > .ant-collapse-header:hover {
-    background: var(--wb-accent-soft);
+    background: color-mix(in srgb, var(--wb-accent) 16%, var(--wb-canvas));
+  }
+
+  > .ant-collapse-item > .ant-collapse-header:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: -3px;
   }
 
   > .ant-collapse-item > .ant-collapse-header .ant-collapse-arrow {
@@ -173,12 +187,12 @@
   }
 
   > .ant-collapse-item > .ant-collapse-content {
-    background: var(--wb-surface);
-    border-top: 1px solid var(--wb-border);
+    background: var(--wb-canvas);
+    border-top: 1px solid color-mix(in srgb, var(--wb-accent) 18%, var(--wb-border));
   }
 
   > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
-    padding: 12px;
+    padding: 13px;
   }
 
   .@{class-prefix}-workflow-dag-confirmation-acceptance {
@@ -199,18 +213,59 @@
 
   small {
     flex: 0 0 auto;
-    color: var(--wb-text-tertiary);
+    padding: 1px 8px;
+    color: var(--wb-accent);
     font-size: 12px;
+    background: color-mix(in srgb, var(--wb-accent) 16%, var(--wb-canvas));
+    border-radius: 7px;
   }
 }
 
 .@{class-prefix}-workflow-dag-confirmation-disclosure-label {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 
+  > .ant-typography {
+    color: var(--wb-text);
+    font-size: 13px;
+    font-weight: 600;
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-disclosure-icon {
+  display: grid;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 auto;
+  place-items: center;
+  background: color-mix(in srgb, var(--wb-accent) 16%, var(--wb-canvas));
+  border-radius: 7px;
+
   .anticon {
-    color: var(--wb-text-secondary);
+    color: var(--wb-accent);
+    font-size: 16px;
+  }
+}
+
+.@{class-prefix}-workflow-dag-confirmation-disclosure-operations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+@media (max-width: 520px) {
+  .@{class-prefix}-workflow-dag-confirmation-task-disclosures.ant-collapse {
+    > .ant-collapse-item > .ant-collapse-header {
+      padding-left: 10px;
+      padding-right: 76px;
+    }
+    > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
+      padding: 9px;
+    }
   }
 }
 

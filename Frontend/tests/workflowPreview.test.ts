@@ -1854,7 +1854,7 @@ test('任务说明按连续序号拆行，保留路径、版本号和未编号�
   assert.deepEqual(splitBuildTaskInstructions('  '), [])
 })
 
-test('执行卡片默认逐行收起编号说明，状态与详情箭头位于底栏', () => {
+test('执行卡片按后端归属分组，收起时只显示标题和展开按钮', () => {
   const markup = renderToStaticMarkup(
     createElement(BuildExecutionRunCard, {
       status: 'completed',
@@ -1863,6 +1863,8 @@ test('执行卡片默认逐行收起编号说明，状态与详情箭头位于�
         tasks: [
           {
             id: 'dto',
+            owner: 'backend',
+            unit_id: 'backend:module:product',
             title: '创建请求与响应对象',
             status: 'completed',
             description:
@@ -1873,13 +1875,12 @@ test('执行卡片默认逐行收起编号说明，状态与详情箭头位于�
       }
     })
   )
-  assert.equal((markup.match(/workflow-build-instruction-row[^"<>]*collapsed/g) || []).length, 3)
-  const footer = markup.slice(markup.indexOf('workflow-build-task-footer'))
-  assert.ok(markup.indexOf('workflow-build-task-footer') > markup.indexOf('验证对象映射。'))
-  assert.match(footer, /workflow-build-task-status-tag/)
-  assert.match(footer, /可形成检查点/)
-  assert.match(footer, /aria-expanded="false" aria-label="展开任务详情：创建请求与响应对象"/)
-  assert.doesNotMatch(markup, /ant-collapse-arrow/)
+  assert.match(markup, /后端任务/)
+  assert.doesNotMatch(markup, /前端任务/)
+  assert.match(markup, /aria-label="展开任务详情：创建请求与响应对象，完成"/)
+  assert.match(markup, /aria-expanded="false"/)
+  assert.doesNotMatch(markup, /workflow-build-instruction-row|创建请求对象，保留必填字段/)
+  assert.doesNotMatch(markup, /workflow-build-task-status-tag|可形成检查点/)
   assert.doesNotMatch(markup, /任务 ID/)
 })
 
@@ -1897,14 +1898,12 @@ test('构建卡片将已满足要求的任务展示为完成，并与其他状�
   const markup = renderToStaticMarkup(
     createElement(BuildExecutionRunCard, { executionSlice, status: 'running' })
   )
-  const tags = [
-    ...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)
-  ]
+  const tags = [...markup.matchAll(/aria-label="展开任务详情：[^"<>]*，([^"<>]*)"/g)]
   assert.deepEqual(
     tags.map((match) => match[1]),
     ['完成', '完成', '运行中', '失败', '待执行']
   )
-  const panels = [...markup.matchAll(/class="([^"]*workflow-build-task-panel[^"]*)"/g)]
+  const panels = [...markup.matchAll(/<article class="([^"]*workflow-build-execution-task[^"]*)"/g)]
   assert.equal(panels.length, 5)
   assert.match(panels[0][1], /completed/)
   assert.match(panels[1][1], /completed/)
@@ -1927,14 +1926,12 @@ test('构建完成快照有无汇总时都把已满足要求的任务计入完�
       createElement(BuildExecutionRunCard, { executionSlice, status: 'completed' })
     )
     assert.match(markup, /100% 完成/)
-    const tags = [
-      ...markup.matchAll(/class="[^"]*workflow-build-task-status-tag[^"]*"[^>]*>(.*?)<\/span>/g)
-    ]
+    const tags = [...markup.matchAll(/aria-label="展开任务详情：[^"<>]*，([^"<>]*)"/g)]
     assert.deepEqual(
       tags.map((match) => match[1]),
       ['完成', '完成']
     )
-    assert.doesNotMatch(markup, /workflow-build-task-panel[^"<>]*already_satisfied/)
+    assert.doesNotMatch(markup, /workflow-build-execution-task[^"<>]*already_satisfied/)
   }
 })
 

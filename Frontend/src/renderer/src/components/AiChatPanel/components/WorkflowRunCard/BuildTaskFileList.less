@@ -3,25 +3,30 @@
   background: transparent;
 
   > .ant-collapse-item {
-    margin: 0;
+    margin: 0 0 12px;
     overflow: hidden;
-    border: 0;
-    border-bottom: 1px solid var(--wb-border);
-    border-radius: 0;
-    background: var(--wb-surface);
+    border: 1px solid color-mix(in srgb, var(--wb-accent) 18%, var(--wb-border));
+    border-radius: 10px;
+    background: var(--wb-canvas);
+  }
+
+  > .ant-collapse-item-active {
+    border-color: var(--wb-accent-border);
   }
 
   > .ant-collapse-item:last-child {
-    border-bottom: 0;
-    border-radius: 0;
+    margin-bottom: 0;
+    border-radius: 10px;
   }
 
   > .ant-collapse-item > .ant-collapse-header {
-    padding: 14px 30px 14px 2px;
+    min-height: 88px;
+    align-items: center;
+    padding: 18px 42px 18px 16px;
     color: var(--wb-text);
 
     &:hover {
-      background: var(--wb-surface-subtle);
+      background: color-mix(in srgb, var(--wb-accent) 4%, var(--wb-canvas));
     }
 
     &:focus-visible {
@@ -30,15 +35,47 @@
     }
 
     .ant-collapse-arrow {
-      color: var(--wb-text-tertiary);
+      color: var(--wb-accent);
+    }
+
+    > .ant-collapse-header-text {
+      min-width: 0;
     }
   }
 
   > .ant-collapse-item > .ant-collapse-content {
-    border-top: 1px solid var(--wb-border);
-    background: var(--wb-surface-subtle);
+    border: 0;
+    background: transparent;
     color: var(--wb-text);
+
+    > .ant-collapse-content-box {
+      padding: 0 14px 14px;
+    }
   }
+}
+
+.@{class-prefix}-workflow-task-file-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.@{class-prefix}-workflow-task-file-icon {
+  flex: 0 0 auto;
+  display: grid;
+  width: 32px;
+  height: 36px;
+  place-items: center;
+  background: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-canvas));
+  border-radius: 8px;
+  color: var(--wb-accent);
+  font-size: 20px;
+}
+
+.@{class-prefix}-workflow-task-file-summary {
+  min-width: 0;
+  flex: 1;
 }
 
 .@{class-prefix}-workflow-task-file-heading {
@@ -46,21 +83,14 @@
   min-width: 0;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   overflow-wrap: anywhere;
-  font-size: 12px;
-}
-
-.@{class-prefix}-workflow-task-file-operation.ant-tag {
-  margin: 0;
-  color: var(--wb-accent);
-  background: var(--wb-accent-soft);
-  border-color: transparent;
+  font-size: 13px;
 }
 
 .@{class-prefix}-workflow-task-file-path {
   display: block;
-  margin-top: 5px;
+  margin-top: 9px;
   overflow-wrap: anywhere;
   color: var(--wb-text-secondary);
   font-size: 12px;
@@ -70,15 +100,48 @@
 
 .@{class-prefix}-workflow-task-file-detail {
   min-width: 0;
+  font-size: 13px;
+  line-height: 1.9;
+  padding: 13px 16px;
+  background: var(--wb-surface-subtle);
+  border-radius: 8px;
   overflow-wrap: anywhere;
   user-select: text;
+
+  > div + div,
+  > p + p {
+    margin-top: 12px;
+  }
 
   .ant-typography {
     margin: 0 0 8px;
     color: var(--wb-text);
-    font-size: 12px;
-    line-height: 1.65;
+    font-size: 13px;
+    line-height: 1.9;
     white-space: pre-wrap;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+}
+
+@media (max-width: 520px) {
+  .@{class-prefix}-workflow-task-file-icon {
+    display: none;
+  }
+
+  .@{class-prefix}-workflow-task-files.ant-collapse {
+    > .ant-collapse-item > .ant-collapse-header {
+      padding: 16px 36px 16px 10px;
+    }
+    > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
+      padding: 0 10px 10px;
+    }
+  }
+
+  .@{class-prefix}-workflow-task-file-detail {
+    padding: 12px;
   }
 }
 
