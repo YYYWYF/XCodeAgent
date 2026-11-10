@@ -255,6 +255,8 @@ function useSessionRuntimeStoreState(): SessionRuntimeStore {
 
   /** 从内存运行态中清理已删除会话的全部关联状态。 */
   const removeSession = (sessionKey: string): void => {
+    // 后端删除准备已确认真实退出，同时撤下本地 DAG 占用和运行登记。
+    releaseSessionExecution(sessionKey)
     delete agUiSessionsRef.current[sessionKey]
     delete identitiesRef.current[sessionKey]
     cache.remove(sessionKey)

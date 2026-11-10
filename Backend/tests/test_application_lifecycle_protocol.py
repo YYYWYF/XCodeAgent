@@ -278,7 +278,12 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
             start_workbench_execution(
                 directory, scope="page", target_id="orders", page_id="orders",
                 thread_id="owned-thread", run_id="owned-run",
-                phase="prepare_build_tasks", owner_session_id="session-owned",
+                phase="build", owner_session_id="session-owned",
+            )
+            start_workbench_execution(
+                directory, scope="page", target_id="customers", page_id="customers",
+                thread_id="other-thread", run_id="other-run",
+                phase="build", owner_session_id="session-other",
             )
 
             async def collect() -> tuple[str, list[tuple[str]]]:
@@ -313,6 +318,9 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
 
         self.assertIn('"status":"completed"', frames)
         self.assertNotIn("owned-run", saved["activeExecutions"])
+        self.assertIn("other-run", saved["activeExecutions"])
+        self.assertNotIn("orders", saved["resourceLocks"]["pages"])
+        self.assertEqual(saved["resourceLocks"]["pages"]["customers"]["runId"], "other-run")
         self.assertEqual(rows, [("other-thread",)])
 
     def test_create_action_emits_complete_ag_ui_lifecycle(self) -> None:

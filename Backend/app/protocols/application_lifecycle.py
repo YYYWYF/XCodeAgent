@@ -230,7 +230,11 @@ async def _prepare_session_deletion(request: ApplicationLifecycleAction) -> Any:
         workflow_run_registry.begin_thread_deletion(workspace, thread_id)
     try:
         for thread_id in thread_ids:
-            result = await workflow_run_registry.cancel_thread(workspace, thread_id)
+            result = await workflow_run_registry.cancel_thread(
+                workspace, thread_id,
+                run_ids=tuple(run_id for run_id, execution in owned.items()
+                              if execution.thread_id == thread_id),
+            )
             if result["remainingRunIds"] or result["remainingProcessIds"]:
                 raise RuntimeError(f"会话运行或子进程仍未退出：{result}")
         await asyncio.to_thread(

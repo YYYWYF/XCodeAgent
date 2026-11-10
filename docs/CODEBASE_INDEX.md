@@ -1,5 +1,9 @@
 # DevAgent Studio Codebase Index
 
+会话删除沿既有 `prepare_session_deletion` AG-UI 动作，`protocols/application_lifecycle.py` 将目标 owner 的精确 Run 按 Graph thread 交给 `WorkflowRunRegistry.cancel_thread`，统一等待协程、同步 worker 和命令退出；外层登记已注销时仍按 lifecycle Run 等待，超时保留会话、checkpoint 和锁。成功后只清理目标 owner 的 Pending/执行/checkpoint，响应重算 Pending 投影；`useSessionRuntimeStore.removeSession` 同时撤下本地 DAG 执行占用。回归：`tests.test_session_run_deletion`、`tests.test_application_lifecycle_protocol`、`pnpm test:session-history`。
+
+开发任务 End 的成功、重复结束及并发幂等回执由 `protocols/workflow/run_control.py` 重新读取当前 lifecycle 并附带 `extensions.planningRefresh`；结束的 Pending 明确投影 `none/idle`，避免前端合并器保留旧的待确认占用，使“任务已结束”后输入框仍只读。保留 Pending 草稿及原任务继续/确认边界。回归：`tests.test_workbench_end_projection`、`tests.test_workflow_run_control`、`tests.test_planning_refresh_recovery`。
+
 Bootstrap 运行日志由 `services/workspace_bootstrap/run_log.py` 与 `run_log_errors.py` 管理，文件名和正文统一使用本机当地时间（正文带时区）。同一异常链保留一份完整堆栈，后续事件通过 `errorRef` 关联，并携带首个 `failedStage`、根因类型/消息及可取得的 errno/winerror。`template_generate.py` 在下载失败或取消时关闭句柄后删除临时 ZIP；清理失败只记告警，不覆盖原错误或已提交成功，`service.py` 的 finally 独立保证协调器释放。解压计数为非致命日志统计。回归：`tests.test_template_run_log`、`tests.test_template_download_cleanup`、`tests.test_workspace_bootstrap_template_engine_client`、`tests.test_workspace_bootstrap_service`。
 
 连接错误分类由 `Frontend/src/renderer/src/service/backendRequestFailure.ts` 统一限定为运行时明确报告的网络故障；HTTP 错误响应、认证失败、查询超时、协议/投影校验和未知本地异常均保留具体操作原因，不推断 Backend 不可用。RecoveryStore、Planning Runtime、工作台读取/发送及模板校准共用此边界，失败保留原 Workflow 与确认门；预览请求失败沿原操作错误展示，预览订阅断连使用独立标题。未收到结束回执只说明结果未确认。回归：`pnpm test:connection-recovery`、`pnpm test:application-planning-runtime`；Electron 已有无效文档场景核对浅/深主题及重复同步，网络/HTTP/超时分支由受控回归覆盖。

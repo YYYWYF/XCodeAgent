@@ -163,35 +163,35 @@ class WorkflowRunRegistry:
         with self._lock:
             self._deleting_threads.discard((_workspace_key(workspace), thread_id))
 
-    async def cancel_thread(self, workspace: str, thread_id: str) -> dict[str, Any]:
-        """取消目标会话的运行并等待终态，不影响同工作区其它会话。"""
+    async def cancel_thread(
+        self, workspace: str, thread_id: str, *,
+        run_ids: tuple[str, ...] = (), timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """等待目标会话的协程、同步线程和命令退出，不影响其它会话。"""
 
         workspace_key = _workspace_key(workspace)
         current_task = asyncio.current_task()
         with self._lock:
-            entries = [
-                (run_id, task)
+            registered = {
+                run_id
                 for run_id, (root, task) in self._tasks.items()
                 if root == workspace_key
                 and self._run_threads.get(run_id) == thread_id
                 and task is not current_task
-            ]
-        for run_id, task in entries:
-            workspace_process_registry.cancel_run(run_id)
-            if not task.done():
-                task.cancel()
-        if entries:
-            active_tasks = [task for _, task in entries if not task.done()]
-            if active_tasks:
-                await asyncio.wait(active_tasks, timeout=30.0)
-        remaining = [run_id for run_id, task in entries if not task.done()]
-        remaining_processes = []
-        for run_id, _task in entries:
-            remaining_processes.extend(
-                await asyncio.to_thread(workspace_process_registry.wait_run_processes, run_id)
-            )
+            }
+        # lifecycle 仍持有的 Run 必须参与等待，即使外层协程已经注销或只剩后台线程。
+        requested = sorted(registered | set(run_ids))
+        outcomes = await asyncio.gather(*(
+            self.cancel_and_wait(
+                run_id, workspace=workspace, ending=True, timeout_seconds=timeout_seconds,
+            ) for run_id in requested
+        ))
+        remaining = [run_id for run_id, status in zip(requested, outcomes)
+                     if status not in {"cancelled", "not_running"}]
+        remaining_processes = [pid for run_id in requested
+                               for pid in workspace_process_registry.active_run_processes(run_id)]
         return {
-            "requestedRunIds": [run_id for run_id, _ in entries],
+            "requestedRunIds": requested,
             "remainingRunIds": remaining,
             "remainingProcessIds": remaining_processes,
         }
@@ -753,7 +753,7 @@ async def _execute_workbench_plan_control(
         if target_status == "already_ended":
             return (
                 "already_ended",
-                application_lifecycle_payload(lifecycle) if lifecycle is not None else None,
+                _planning_lifecycle_payload(workspace),
                 _plan_control_message(action, "already_ended"),
             )
         # 即使外层已注销，也先封锁尚在线程池队列里的迟到节点，再等待全部真实工作。
@@ -767,14 +767,14 @@ async def _execute_workbench_plan_control(
                 message="尚未确认当前运行停止，工作区未释放，请重试结束计划。",
             )
         try:
-            updated_lifecycle = end_workbench_execution(
+            end_workbench_execution(
                 workspace,
                 run_id=target_run_id,
                 preserve_resume=True,
             )
         except ApplicationLifecycleConflictError as exc:
             # 另一个 End 可能刚刚完成；重新解析仍只接受同一 workspace/runId。
-            retry_status, retry_lifecycle, _ = await _resolve_plan_control_target(
+            retry_status, _, _ = await _resolve_plan_control_target(
                 workspace=workspace,
                 target_run_id=target_run_id,
                 thread_id=thread_id,
@@ -784,9 +784,7 @@ async def _execute_workbench_plan_control(
             if retry_status == "already_ended":
                 return (
                     "already_ended",
-                    application_lifecycle_payload(retry_lifecycle)
-                    if retry_lifecycle is not None
-                    else None,
+                    _planning_lifecycle_payload(workspace),
                     _plan_control_message(action, "already_ended"),
                 )
             if retry_status in {"stale_target", "unresolved"}:
@@ -798,7 +796,8 @@ async def _execute_workbench_plan_control(
             raise
         return (
             "ended",
-            application_lifecycle_payload(updated_lifecycle),
+            # End 后同步重算 Pending 行动权，避免前端继续保留旧 GET 的应用占用。
+            _planning_lifecycle_payload(workspace),
             _plan_control_message(action, "ended"),
         )
 

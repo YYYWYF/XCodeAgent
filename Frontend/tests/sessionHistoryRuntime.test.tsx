@@ -19,6 +19,35 @@ import {
 import type { ApplicationConfig } from '../src/renderer/src/typings'
 import { HistoryMessageRow } from '../src/renderer/src/components/AiChatPanel/components/MessageList/HistoryMessageRow'
 import { useHistoryScroll } from '../src/renderer/src/components/AiChatPanel/components/MessageList/useHistoryScroll'
+import { createSessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
+
+test('删除已清理会话同时释放本地 DAG 占用，保留其它会话运行', async () => {
+  let store!: SessionRuntimeStore
+  let root: ReactTestRenderer | undefined
+  /** 捕获真实应用级运行登记，检查删除前后的跨会话准入。 */
+  function Probe(): ReactElement { store = useSessionRuntimeStore(); return createElement('output') }
+  /** 为同工作区的独立会话创建当前身份。 */
+  const identity = (id: string) => createSessionIdentity({
+    workspaceRoot: '/session-deletion', editorMode: 'frontend', sessionId: id,
+    threadId: `thread-${id}`, workflowId: 'deletion-app', workbenchPhase: 'development'
+  })
+  const target = identity('target'), other = identity('other'), next = identity('next')
+  try {
+    await act(async () => { root = create(createElement(SessionRuntimeProvider, null, createElement(Probe))) })
+    await act(async () => {
+      store.acquireSessionExecution(other, false, 'build')
+      store.acquireSessionExecution(target, false, 'prepare_build_tasks')
+    })
+    assert.equal(store.acquireSessionExecution(next, false)?.identity.key, target.key)
+    await act(async () => { store.removeSession(target.key) })
+    assert.equal(store.runningSessionsRef.current.has(target.key), false)
+    assert.equal(store.runningSessionsRef.current.has(other.key), true)
+    assert.deepEqual(store.sessionExecutions.map((entry) => entry.identity.key), [other.key])
+    await act(async () => { assert.equal(store.acquireSessionExecution(next, false), undefined) })
+  } finally {
+    await act(async () => { root?.unmount() })
+  }
+})
 
 test('生产 Hook + 真实文件：尾页恢复、上滚并发新回复、部分保存、失败重试和切换隔离', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'session-page-runtime-'))

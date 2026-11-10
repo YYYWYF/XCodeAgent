@@ -79,11 +79,14 @@ class EndTaskWorkerTests(unittest.IsolatedAsyncioTestCase):
         """真实 Graph 继续只重现确认门，不消费旧提交或信任前端伪造的通过状态。"""
         from langgraph.checkpoint.memory import InMemorySaver
         from app.graph.workflow import build_graph
+        from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
         from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 
         with tempfile.TemporaryDirectory() as directory, patch(
             "app.graph.nodes.code_review.development_review_files", return_value=[],
         ):
+            # 真实续接会打开工作区 checkpoint；用例结束时关闭连接，避免测试进程挂起。
+            self.addAsyncCleanup(close_workflow_checkpointer_for_workspace, workspace=directory)
             _write_ready_workbench_lifecycle(directory)
             start_workbench_execution(directory, scope="application", target_id="application", page_id=None,
                                       thread_id="thread", owner_session_id="session", run_id="old", phase="review_phase_confirmation")
@@ -94,22 +97,29 @@ class EndTaskWorkerTests(unittest.IsolatedAsyncioTestCase):
                                  "lifecycle_interaction_submission": {"runId": "stale", "id": "consumed", "basedOnRevision": 1}},
                                 {"configurable": {"thread_id": "thread"}})
             end_workbench_execution(directory, run_id="old", preserve_resume=True)
-            frames = "".join([frame async for frame in build_workflow_ag_ui_stream(graph=graph, payload={
+            rejected = "".join([frame async for frame in build_workflow_ag_ui_stream(graph=graph, payload={
                 "threadId": "thread", "runId": "new", "messages": [{"role": "user", "content": "继续任务"}],
                 "forwardedProps": {"workspaceRoot": directory, "sessionId": "session", "resumeExecutionRunId": "old",
                                    "resumeState": {"summary": {"phase": "review_phase_confirmation"},
                                                    "state": {"qualityGatePassed": False, "reviewPhaseConfirmation": {"action": "confirm", "reviewMode": "full"}}}},
             })])
+            # 当前协议直接拒绝客户端状态快照；拒绝不能消费原任务的继续凭据。
+            self.assertIn("不能提交会话状态快照", rejected)
+            self.assertIn("old", load_application_lifecycle(directory).ended_executions)
+            frames = "".join([frame async for frame in build_workflow_ag_ui_stream(graph=graph, payload={
+                "threadId": "thread", "runId": "accepted", "messages": [{"role": "user", "content": "继续任务"}],
+                "forwardedProps": {"workspaceRoot": directory, "sessionId": "session", "resumeExecutionRunId": "old"},
+            })])
             self.assertNotIn('"type":"RUN_ERROR"', frames)
             current = load_application_lifecycle(directory)
             self.assertFalse(current.ended_executions)
-            self.assertEqual(current.active_executions["new"].status, "awaiting_user")
-            self.assertEqual(current.active_executions["new"].pending_interaction.type, "review_phase_confirmation")
+            self.assertEqual(current.active_executions["accepted"].status, "awaiting_user")
+            self.assertEqual(current.active_executions["accepted"].pending_interaction.type, "review_phase_confirmation")
             # 即使断线前没有保存任何公开消息，只凭后端归档身份仍可继续。
-            end_workbench_execution(directory, run_id="new", preserve_resume=True)
+            end_workbench_execution(directory, run_id="accepted", preserve_resume=True)
             frames = "".join([frame async for frame in build_workflow_ag_ui_stream(graph=graph, payload={
                 "threadId": "thread", "runId": "new2", "messages": [{"role": "user", "content": "继续任务"}],
-                "forwardedProps": {"workspaceRoot": directory, "sessionId": "session", "resumeExecutionRunId": "new"},
+                "forwardedProps": {"workspaceRoot": directory, "sessionId": "session", "resumeExecutionRunId": "accepted"},
             })])
             self.assertNotIn('"type":"RUN_ERROR"', frames)
             self.assertEqual(load_application_lifecycle(directory).active_executions["new2"].status, "awaiting_user")
