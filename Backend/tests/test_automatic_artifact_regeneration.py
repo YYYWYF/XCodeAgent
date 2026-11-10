@@ -69,6 +69,9 @@ class AutomaticArtifactRegenerationTests(unittest.IsolatedAsyncioTestCase):
             changed["api_contracts"][0]["endpoints"][0]["parameters"] = [
                 {"name": "pageSize", "in": "query", "schema": {"type": "integer", "default": 13}}]
             for key, value in formal_artifacts(changed).items():
+                # 本用例只验证任务输入变化；当前正式 UI 必须已确认，不能沿用夹具的 skipped。
+                if key == "ui_designs":
+                    value = {"confirmation_status": "confirmed"}
                 write_json(Path(workspace), str(Path(".devagentstudio") / _ARTIFACTS[key]), value)
             state = {"workspace": workspace, "build_execution_scope": scope}
             write_build_task_plan_json(state, baseline)
@@ -78,8 +81,9 @@ class AutomaticArtifactRegenerationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(issue.key, "build_task_plan")
             self.assertEqual(issue.node, "prepare_build_tasks")
 
-    async def test_normal_entry_hands_off_and_preserves_target_without_confirmation(self):
-        """正常开发自动进入原规划图，并把原页面留给确认后的 continuation。"""
+    async def test_normal_entry_preserves_development_and_reports_invalid_inputs(self):
+        """上游失效时仍进入原开发检查，不创建修订、不改文件或消费任务确认。"""
+        from copy import deepcopy
         with tempfile.TemporaryDirectory() as workspace:
             self.write_artifacts(workspace)
             _write_ready_workbench_lifecycle(workspace)
@@ -87,46 +91,37 @@ class AutomaticArtifactRegenerationTests(unittest.IsolatedAsyncioTestCase):
                 "build_execution_scope": {"type": "page", "targetId": "orders"},
                 "tasks": [{"id": "old"}], "build_run_id": "old-build", "build_task_plan_confirmation": {"action": "confirm"},
             }}
-            expected_graph = object()
-            with patch("app.graph.application_planning_workflow.application_planning_graph_for_request", AsyncMock(return_value=expected_graph)):
+            original = deepcopy(inputs)
+            lifecycle = load_application_lifecycle(workspace)
+            with patch("app.graph.application_planning_workflow.application_planning_graph_for_request", AsyncMock()) as planner:
                 graph = await prepare_automatic_regeneration(inputs, run_id="new-run", thread_id="thread")
-            self.assertIs(graph, expected_graph)
-            self.assertEqual(inputs["workflow_scope"], "application_planning")
-            self.assertEqual(inputs["resume_from"], "technical_planning")
-            self.assertEqual(inputs["resume_values"]["tasks"], [])
-            self.assertEqual(inputs["resume_values"]["build_task_plan_confirmation"], {})
-            revision = load_application_lifecycle(workspace).active_formal_revision
-            self.assertEqual(revision.regeneration_target.page_id, "orders")
-            self.assertIsNone(revision.continuation_token_sha256)
-            from app.services.retry_node_state import refresh_retry_node_inputs
-            from app.graph.nodes.application_technical_planning import technical_planning_begin
-            state = {**inputs["resume_values"], "workspace": workspace, "request": inputs["request"],
-                "active_run_id": "new-run", "active_thread_id": "thread", "workflow_scope": "application_planning"}
-            refresh_retry_node_inputs(state, "technical_planning_begin")
-            begun = await technical_planning_begin(state)
-            self.assertEqual(begun["status"], "running")
-            self.assertEqual(begun["application_planning_recovery_boundary"]["boundary"], "generation_ready")
+            self.assertIsNone(graph)
+            planner.assert_not_awaited()
+            self.assertEqual(inputs, original)
+            self.assertEqual(load_application_lifecycle(workspace), lifecycle)
 
-    async def test_confirmed_regeneration_continues_original_page(self):
-        """续接使用后端保存的原目标，不退回目录选择，也不接受客户端旧范围。"""
-        from app.services.application_revision_lifecycle import issue_revision_continuation
-        from app.protocols.workflow.request import workflow_run_inputs
-        with tempfile.TemporaryDirectory() as workspace:
-            root = self.write_artifacts(workspace)
-            _write_ready_workbench_lifecycle(workspace)
-            inputs = {"workspace": workspace, "request": "开发订单页", "resume_values": {
-                "build_execution_scope": {"type": "page", "targetId": "orders"}}}
-            with patch("app.graph.application_planning_workflow.application_planning_graph_for_request", AsyncMock(return_value=object())):
-                await prepare_automatic_regeneration(inputs, run_id="new-run", thread_id="thread")
-            current = load_application_lifecycle(workspace)
-            token, revision = issue_revision_continuation(workspace, change_id=current.active_formal_revision.change_id,
-                technical_plan_path=root / "plans/technical-plan.json")
-            result = workflow_run_inputs({"request": "继续", "forwardedProps": {
-                "workspaceRoot": workspace, "workflowAction": "continue_revision_build",
-                "revisionContinuation": {"changeId": revision.change_id, "token": token},
-                "selectedPageId": "wrong-page"}})
-            self.assertFalse(result["resume_values"]["completed_development_analysis"])
-            self.assertEqual(result["resume_values"]["build_execution_scope"], {"type": "page", "targetId": "orders"})
+    async def test_each_upstream_issue_is_read_only_for_page_and_api_entry(self):
+        """缺失、损坏和待确认上游都只参与检查，页面与 API 均不能自动返回规划。"""
+        from copy import deepcopy
+        from app.services.stage_artifacts import _ARTIFACTS
+        for key in _ARTIFACTS:
+            for content in (None, "{", json.dumps({"confirmation_status": "pending_user_confirmation"})):
+                for target_type in ("page", "endpoint"):
+                    with self.subTest(key=key, content=content, target=target_type), tempfile.TemporaryDirectory() as workspace:
+                        root = self.write_artifacts(workspace)
+                        _write_ready_workbench_lifecycle(workspace)
+                        path = root / _ARTIFACTS[key]
+                        if content is None:
+                            path.unlink()
+                        else:
+                            path.write_text(content)
+                        original = {item: item.read_bytes() for item in root.rglob("*.json")}
+                        inputs = {"workspace": workspace, "request": "开发目标", "resume_values": {
+                            "build_execution_scope": {"type": target_type, "targetId": "orders"}}}
+                        before = deepcopy(inputs)
+                        self.assertIsNone(await prepare_automatic_regeneration(inputs, run_id="run", thread_id="thread"))
+                        self.assertEqual(inputs, before)
+                        self.assertEqual({item: item.read_bytes() for item in root.rglob("*.json")}, original)
 
     def test_replanning_discards_execution_but_preserves_business_target(self):
         """重规划不能恢复旧任务、运行绑定、修复计划、快照及一次性确认。"""

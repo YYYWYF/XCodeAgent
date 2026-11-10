@@ -8,7 +8,7 @@ export type WorkbenchRunRefreshConnection = {
   refresh?: () => Promise<boolean>
   start: () => number
   isCurrentRequest: (generation: number) => boolean
-  settle: (generation: number, error?: string) => void
+  settle: (generation: number, error?: unknown) => void
 }
 
 /** 单轮只读刷新只报告通信结果，不根据断流改写执行状态或恢复候选。 */
@@ -26,7 +26,7 @@ export async function refreshWorkbenchRun(
     onLifecycle(lifecycle)
   } catch (reason) {
     if (!isCurrent() || !connection.isCurrentRequest(generation)) return
-    connection.settle(generation, reason instanceof Error ? reason.message : 'Backend 暂时不可用，无法同步最新状态。')
+    connection.settle(generation, reason)
   }
 }
 

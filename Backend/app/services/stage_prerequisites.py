@@ -61,7 +61,16 @@ def artifact_issue(key: str, path: Path, detail: str = "") -> ArtifactRegenerati
     return ArtifactRegeneration(key, node, name, path.name, detail)
 
 
-def required_artifacts(node: str) -> set[str]:
+def endpoint_development(state: dict | None) -> bool:
+    """只按本轮明确开发目标识别独立 API 开发，不从页面完成数量推断阶段。"""
+    state = state or {}
+    scope = state.get("build_execution_scope") or {}
+    return scope.get("type") == "endpoint" or (
+        not scope and bool(state.get("selected_endpoint_id")) and not state.get("selectedPageId")
+    )
+
+
+def required_artifacts(node: str, *, state: dict | None = None) -> set[str]:
     """共用阶段加载的依赖声明，自身可选旧稿不作为生成前置条件。"""
     from app.services.stage_artifacts import (
         _ARTIFACTS, _GENERATED_BASELINES, _PLANNING_INPUTS,
@@ -76,6 +85,9 @@ def required_artifacts(node: str) -> set[str]:
         keys.discard("technical_plan")
     if node in _TASK_PLAN_STAGES and node != "prepare_build_tasks":
         keys.add("build_task_plan")
+    # 独立 API 执行只消费业务及接口合同，视觉设计仍属于规划和页面开发。
+    if node in _RUNTIME_STAGES and endpoint_development(state):
+        keys.discard("ui_designs")
     return keys
 
 
@@ -87,7 +99,7 @@ def regeneration_for_retry(workspace: str, node: str, graph=None, *, state: dict
     if not (root / "application.json").is_file():
         return None
     paths = {**_ARTIFACTS, "build_task_plan": "plans/build-task-plan.json"}
-    required = required_artifacts(node)
+    required = required_artifacts(node, state=state)
     for key in _PRODUCERS:
         if key not in required:
             continue
@@ -105,7 +117,7 @@ def regeneration_for_retry(workspace: str, node: str, graph=None, *, state: dict
             valid = isinstance(value, dict) and bool(value)
             if valid and key != "build_task_plan" and path == root / paths[key]:
                 from app.services.artifact_freshness import upstream_errors
-                errors = upstream_errors(root, key, value)
+                errors = upstream_errors(root, key, value, include_ui_designs="ui_designs" in required)
                 valid = not errors
                 detail = "；".join(errors)
             if valid and key == "build_task_plan" and state:
@@ -127,6 +139,6 @@ def regeneration_for_retry(workspace: str, node: str, graph=None, *, state: dict
 def require_stage_inputs(state: dict, node: str) -> None:
     """在进入业务节点前发布缺失产物提示，原文件和原确认门保持完整。"""
     workspace = str(state.get("workspace") or state.get("workspace_path") or "")
-    issue = regeneration_for_retry(workspace, node) if workspace else None
+    issue = regeneration_for_retry(workspace, node, state=state) if workspace else None
     if issue:
         raise StagePrerequisiteError(issue)

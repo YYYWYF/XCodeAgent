@@ -13,15 +13,21 @@ from app.graph.state import ProjectState
 from app.protocols.workflow.request import workflow_run_inputs
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.persistence.execution_recovery import get_execution
-from app.services.application_lifecycle import load_application_lifecycle
-from app.services.business_node_retry import read_retry_hint, retry_action_plan
+from app.persistence.checkpoints import close_workflow_checkpointer
+from app.services.application_lifecycle import end_workbench_execution, load_application_lifecycle, start_workbench_execution
+from app.services.business_node_retry import prepare_business_node_retry, read_retry_hint, retry_action_plan
 from app.services.stage_artifacts import ArtifactStateGraph
+from app.services.stage_prerequisites import StagePrerequisiteError
 from app.services.workflow_input_artifacts import pregraph_artifact_values
 from tests.test_workflow_run_control import _write_ready_workbench_lifecycle
 
 
 class PregraphArtifactRecoveryTests(unittest.IsolatedAsyncioTestCase):
     """验证正式请求适配器和真实 Graph 在损坏输入下不丢失恢复上下文。"""
+
+    async def asyncTearDown(self):
+        """关闭阶段恢复读取打开的 SQLite 连接，测试结束后不保留后台线程。"""
+        await close_workflow_checkpointer()
 
     def inputs(self, root):
         """建立真实正式应用的最小磁盘输入，并故意损坏产品计划。"""
@@ -58,8 +64,8 @@ class PregraphArtifactRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("project_plan", result["resume_values"])
             self.assertEqual(broken.read_text(), '{"incomplete":')
 
-    async def test_full_protocol_records_failure_before_agent_and_issues_regeneration(self):
-        """真实 AG-UI 失败留下 checkpoint 和原问题，并签发产品文档重新生成而非无效重试。"""
+    async def test_full_protocol_records_check_failure_without_leaving_development(self):
+        """真实 AG-UI 检查失败保留原开发节点，重试不能变成上游重生成。"""
         with tempfile.TemporaryDirectory() as root:
             broken = self.inputs(root)
             agent_calls = []
@@ -90,16 +96,32 @@ class PregraphArtifactRecoveryTests(unittest.IsolatedAsyncioTestCase):
             hint = await read_retry_hint(source, graph)
             self.assertEqual((hint.node, hint.request), ("prepare_build_tasks", "保留原提问 PREGRAPH-ORIGINAL"))
             action = await retry_action_plan(source, graph)
-            self.assertEqual(action.primary_action.target_node, "product_planning")
-            self.assertEqual(action.primary_action.label, "重新生成产品计划")
+            self.assertEqual(action.primary_action.target_node, "prepare_build_tasks")
+            self.assertEqual(action.primary_action.label, "重新检查")
             self.assertNotIn("product-plan.json", action.message)
-            self.assertIn("产品计划不完整", action.message)
+            self.assertIn("产品计划检查未通过", action.message)
+            lifecycle = load_application_lifecycle(root)
+            self.assertEqual(lifecycle.initialization.stage.value, "ready_for_workbench")
+            self.assertIsNone(lifecycle.active_formal_revision)
+            # 再次检查仍失败也只能停在原开发节点，不能趁重试创建规划归属。
+            with self.assertRaises(StagePrerequisiteError):
+                await prepare_business_node_retry(source, graph)
+            self.assertEqual(agent_calls, [])
+            lifecycle = load_application_lifecycle(root)
+            self.assertEqual(lifecycle.initialization.stage.value, "ready_for_workbench")
+            self.assertIsNone(lifecycle.active_formal_revision)
             self.assertIn("product-plan.json", source.failure.diagnostic_message)
             self.assertIn("Expecting", source.failure.diagnostic_message)
             self.assertNotIn("Expecting", source.failure.user_message)
             locks = load_application_lifecycle(root).resource_locks.model_dump()
             self.assertTrue(all(not value for value in locks.values()))
             self.assertEqual(broken.read_text(), '{"incomplete":')
+            # 当前失败可直接结束并启动另一个开发检查，不依赖返回历史规划会话。
+            end_workbench_execution(root, run_id=source.run_id, missing_ok=True)
+            lifecycle = start_workbench_execution(root, scope="page", target_id="another-page", page_id="another-page",
+                thread_id="another-thread", run_id="another-run", phase="api_design_readiness_gate", owner_session_id="another-session")
+            self.assertIn("another-run", lifecycle.active_executions)
+            self.assertIsNone(lifecycle.active_formal_revision)
 
     def test_unrelated_read_error_is_not_hidden_as_artifact_regeneration(self):
         """无法定位到正式产物的 I/O 错误继续明确上报，不静默吞掉。"""

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { getApplicationLifecycle } from '../src/renderer/src/service/applicationLifecycle'
 import { refreshWorkbenchRun } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkbenchRunRefresh'
-import { failConnectionRequest, initialConnectionState } from '../src/renderer/src/service/connectionState'
+import { RecoveryStore } from '../src/renderer/src/service/recoveryStore'
 import type { ApplicationLifecycle } from '../src/renderer/src/typings'
 
 /** 用标准事件信封覆盖真实 AG-UI 客户端，不绕过生产请求与共享查询缓存。 */
@@ -52,22 +52,22 @@ test('Attach/Get 永不返回时按时退出、释放共享查询，重新同步
         }
         return response(request, lifecycle)
       }
-      let state = initialConnectionState(true)
+      const store = new RecoveryStore(), key = store.key(application.workspaceRoot, application.id, 'thread')
       let merges = 0
       const first = getApplicationLifecycle(application)
       const shared = getApplicationLifecycle(application)
       const read = refreshWorkbenchRun(() => first, () => { merges++ }, {
         start: () => 1,
         isCurrentRequest: () => true,
-        settle: (generation, error) => {
-          if (error) state = failConnectionRequest(state, generation, error)
+        settle: (_generation, error) => {
+          if (error) store.recordFailure(key, error)
         }
       }, () => true)
       const outcomes = await Promise.allSettled([first, shared, read])
       assert.equal(outcomes[0].status, 'rejected')
       assert.equal(outcomes[1].status, 'rejected')
-      assert.match(state.lastError || '', /应用状态同步超时/)
-      assert.equal(state.status, 'unavailable')
+      assert.match(store.get(key).syncError || '', /应用状态同步超时/)
+      assert.equal(store.get(key).connection.status, 'healthy')
       assert.equal(blockedSignal?.aborted, true)
       assert.equal(merges, 0)
       // 下一次必须发出全新的 Attach/Get，而不是继续等待缓存中的旧 Promise。

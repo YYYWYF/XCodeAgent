@@ -87,7 +87,7 @@ export type PlanningReconcileOutcome =
 
 type PlanningExecutionFailure = 'authoritative_failure' | 'recovered' | 'uncertain'
 
-const PLANNING_SYNC_ERROR = '与后端连接中断，当前规划状态尚未确认。请重新同步状态。'
+const PLANNING_SYNC_ERROR = '规划状态同步失败，当前规划状态尚未确认。请重新同步状态。'
 
 /** 标识 Backend 已证明本次乐观提交尚未被 Native Interrupt 消费。 */
 export class ApplicationPlanningSubmissionNotCommittedError extends Error {

@@ -75,19 +75,24 @@ async def retry_action_plan(source: DurableExecutionRecord, graph: Any) -> Recov
                if execution.development_target and execution.development_target.api_contract_id else {})}
     issue = regeneration_for_retry(source.workspace, hint.node, graph,
         state=inputs) if hint else None
-    target = ("api_design_readiness_gate" if issue.key == "build_task_plan" else issue.node) if issue else hint.node if hint else ""
+    recheck_only = bool(issue and source.execution_kind == "workbench" and issue.key != "build_task_plan")
+    target = ("api_design_readiness_gate" if issue.key == "build_task_plan" else (
+        hint.node if recheck_only else issue.node
+    )) if issue else hint.node if hint else ""
+    message = (f"{issue.name}检查未通过。请处理后重新检查，或结束当前任务。"
+               if recheck_only else issue.message if issue else "")
     digest = hashlib.sha256(f"{source.run_id}:{source.updated_at}:{target}".encode()).hexdigest()
     action = RecoveryAction(actionId=f"retry:{digest}", kind=RecoveryActionKind.RETRY_BUSINESS_NODE,
-                            targetNode=target, label=issue.label if issue else (
+                            targetNode=target, label="重新检查" if recheck_only else issue.label if issue else (
                                 "继续生成" if source.execution_kind == "application_planning"
                                 and source.status is DurableExecutionStatus.INTERRUPTED else "重试"),
-                            description=issue.message if issue else "读取当前文件，重新执行失败的业务步骤。",
+                            description=message if issue else "读取当前文件，重新执行失败的业务步骤。",
                             requiresConfirmation=False) if hint else None
     return RecoveryActionPlan(incidentId=digest, sourceRunId=source.run_id, threadId=source.thread_id,
                               executionKind=source.execution_kind,
                               status=RecoveryIncidentStatus.RECOVERABLE if hint else RecoveryIncidentStatus.NEEDS_ATTENTION,
                               reasonCode="STAGE_PREREQUISITE_INCOMPLETE" if issue else "BUSINESS_NODE_RETRY_READY" if hint else "RETRY_ENTRY_NOT_FOUND",
-                              message=issue.message if issue else "读取当前文件，重新执行失败的业务步骤。" if hint else NO_RETRY_ENTRY,
+                              message=message if issue else "读取当前文件，重新执行失败的业务步骤。" if hint else NO_RETRY_ENTRY,
                               primaryAction=action, updatedAt=source.updated_at)
 
 
@@ -246,9 +251,11 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             node = initial_feedback_node(lifecycle, initial_feedback)
         from app.services.stage_prerequisites import regeneration_for_retry
         issue = regeneration_for_retry(source.workspace, node, graph, state={**checkpoint.snapshot.values, "workspace": source.workspace})
-        if issue:
+        # 开发重试只重新检查原节点，不能把“重试”解释为修订上游文档。
+        if issue and (source.execution_kind == "application_planning" or issue.key == "build_task_plan"):
             node = "api_design_readiness_gate" if issue.key == "build_task_plan" else issue.node
-        planning_handoff = node not in graph.nodes and node in {"requirements", "product_planning", "ui_confirmation", "technical_planning_begin"}
+        planning_handoff = (source.execution_kind == "application_planning" and node not in graph.nodes
+            and node in {"requirements", "product_planning", "ui_confirmation", "technical_planning_begin"})
         if planning_handoff:
             from app.graph.application_planning_workflow import application_planning_graph_for_request
             graph = await application_planning_graph_for_request(workspace=source.workspace, project_id=source.project_id)

@@ -55,7 +55,7 @@ export type ApplicationPlanningCurrentEvent = { workspaceRoot?: string } & (
   | { type: 'planning_end_started'; applicationId: string; threadId: string }
   | { type: 'planning_ended'; applicationId: string; threadId: string;
       lifecycle: ApplicationLifecycle; workflow: WorkflowRunPayload }
-  | { type: 'template_generation_failed'; applicationId: string; threadId: string; error: string; connectionError?: string }
+  | { type: 'template_generation_failed'; applicationId: string; threadId: string; error: string; connectionError?: string; syncError?: string }
   | { type: 'recovery_action_started'; applicationId: string; threadId: string }
   | { type: 'recovery_action_failed'; applicationId: string; threadId: string; error: string }
   | {
@@ -384,10 +384,11 @@ export function reduceApplicationPlanningCurrentState(
     return {
       ...current,
       error: event.error,
+      syncError: event.syncError,
       transportState: 'idle',
       connection: event.connectionError
         ? failConnectionRequest(current.connection, current.connection.requestGeneration + 1, event.connectionError)
-        : current.connection
+        : event.syncError ? completeConnectionRequest(current.connection, current.connection.requestGeneration + 1) : current.connection
     }
   }
   if (event.type === 'recovery_action_started') {

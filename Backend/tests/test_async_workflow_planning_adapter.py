@@ -37,6 +37,7 @@ from app.services.execution_recovery_executor import prepare_native_recovery
 from app.services.execution_lease_heartbeat import stop_execution_heartbeat
 from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 from app.persistence.execution_recovery import get_execution, mark_execution_interrupted
+from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.workflow.lifecycle import begin_workflow_lifecycle, fail_workflow_lifecycle
 from app.services.node_recovery_context import (
     NodeRecoveryContext,
@@ -92,12 +93,15 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.generated_jobs = []
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
+        self.addAsyncCleanup(close_workflow_checkpointer)
         self.workspace = Path(directory.name)
         self.plan = project_plan()
         # Graph 按当前合同从 ProductPlan 物化页面，不能使用缺页的旧最小夹具。
         for page in self.plan["pages"]:
             page["references"]["endpoint_dependencies"] = [{"endpoint_id": f"{page['pageId']}.list"}]
         artifacts = formal_artifacts(self.plan)
+        # 页面用例沿当前正式确认合同，不使用旧 skipped 状态充当确认事实。
+        artifacts["ui_designs"]["confirmation_status"] = "confirmed"
         artifacts["product_plan"]["pages"] = deepcopy(self.plan["pages"])
         from app.services.page_implementation_contract import materialize_technical_plan_runtime
         self.plan = materialize_technical_plan_runtime(artifacts["technical_plan"], artifacts["requirement_spec"],
@@ -478,6 +482,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             fresh_plan = deepcopy(self.plan)
             fresh_plan["pages"][0]["name"] = "当前订单列表"
             fresh_plan["api_contracts"][0]["endpoints"][0]["name"] = "当前订单查询"
+            fresh_plan["api_contracts"][0]["name"] = "当前订单管理"
             write_json(self.workspace, ARTIFACT_PATHS["technical_plan"], formal_artifacts(fresh_plan)["technical_plan"])
             write_json(self.workspace, ARTIFACT_PATHS["product_plan"], {
                 "artifact_type": "product-plan", "confirmation_status": "confirmed", "pages": deepcopy(fresh_plan["pages"]),
@@ -503,7 +508,7 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
         for event in events:
             names = {unit["id"]: unit.get("displayName") for unit in event["dag_generation"]["units"]}
             self.assertEqual(names["page:orders"], "当前订单列表页面")
-            self.assertEqual(names["backend:endpoint:orders-api:orders.list"], "当前订单查询接口")
+            self.assertEqual(names["backend:module:orders-api"], "当前订单管理模块")
         self.assertTrue(events)
         self.assertEqual(result["dag_generation_progress"], events[-1]["dag_generation"])
 
@@ -676,20 +681,15 @@ class AsyncWorkflowPlanningAdapterTests(unittest.IsolatedAsyncioTestCase):
             job
             for job in self.generated_jobs
             if job.context.unit_id
-            == "backend:endpoint:customers-api:customers.list"
+            == "backend:module:customers-api"
         )
         catalog_kinds = {entry.kind for entry in backend_job.context.contract_catalog}
         self.assertIn("endpoint_api_design", catalog_kinds)
         self.assertNotIn("entity_binding", catalog_kinds)
-        self.assertEqual(
-            set(pending["build_units"][backend_job.context.unit_id]["task_ids"]),
-            {
-                f"{backend_job.context.unit_id}::objects",
-                f"{backend_job.context.unit_id}::repository",
-                f"{backend_job.context.unit_id}::service",
-                f"{backend_job.context.unit_id}::controller",
-            },
-        )
+        module_tasks = [pending["task_registry"][task_id]
+                        for task_id in pending["build_units"][backend_job.context.unit_id]["task_ids"]]
+        self.assertEqual({task["source_refs"]["backend_stage"] for task in module_tasks},
+                         {"foundation", "business", "controller"})
         self.assertNotIn("::Customer::", json.dumps(pending))
         self.assertEqual(formal_path.read_bytes(), formal_bytes)
         self.assertEqual(

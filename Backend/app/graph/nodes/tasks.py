@@ -32,6 +32,7 @@ from app.services.page_dependencies import validate_project_plan_dependencies
 from app.services.planning_issues import ValidationIssue
 from app.services.page_implementation_contract import materialize_technical_plan_runtime
 from app.services.template_state import effective_capabilities, load_template_state
+from app.services.stage_prerequisites import endpoint_development
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.plan_documents import (
     load_project_plan_json,
@@ -67,11 +68,14 @@ def _latest_project_plan(
             artifacts.get("requirement_spec") or state.get("requirement_spec")
         )
         product_plan = artifacts.get("product_plan") or state.get("product_plan")
-        ui_designs = artifacts.get("ui_designs") or state.get("ui_designs")
+        include_ui_designs = not endpoint_development(state)
+        ui_designs = (
+            artifacts.get("ui_designs") or state.get("ui_designs") or {}
+        ) if include_ui_designs else {}
         if not all(
                 isinstance(artifact, dict) and artifact
-                for artifact in (requirement_spec, product_plan, ui_designs)
-        ):
+                for artifact in (requirement_spec, product_plan)
+        ) or (include_ui_designs and not ui_designs):
             return latest_plan
         # 正式 TechnicalPlan 不持久化 PageImplementationContract；Build 每次都必须
         # 使用最新正式上游重新编译，不能让磁盘重载抹掉运行时派生契约。
@@ -94,10 +98,14 @@ def _build_prerequisite_errors(
     """在 DAG 生成前只读校验正式产物、TemplateState 和当前运行时计划。"""
 
     errors: list[str] = []
+    target_state = {**state}
+    if build_execution_scope:
+        target_state["build_execution_scope"] = build_execution_scope
+    include_ui_designs = not endpoint_development(target_state)
     artifacts = (
         formal_artifacts
         if formal_artifacts is not None
-        else _load_formal_artifacts(workspace)
+        else _load_formal_artifacts(workspace, include_ui_designs=include_ui_designs)
     )
     requirement_spec = artifacts.get("requirement_spec", {})
     product_plan = artifacts.get("product_plan", {})
@@ -107,7 +115,7 @@ def _build_prerequisite_errors(
         errors.append("RequirementSpec 未确认。")
     if not product_plan or product_plan.get("confirmation_status") != "confirmed":
         errors.append("ProductPlan 未确认。")
-    if not ui_designs or ui_designs.get("confirmation_status") != "confirmed":
+    if include_ui_designs and (not ui_designs or ui_designs.get("confirmation_status") != "confirmed"):
         errors.append("UiManifest 未确认。")
     if (
         not technical_plan
@@ -121,9 +129,10 @@ def _build_prerequisite_errors(
             {
                 "requirement-spec": requirement_spec,
                 "product-plan": product_plan,
-                "ui-design": ui_designs,
+                **({"ui-design": ui_designs} if include_ui_designs else {}),
                 "technical-plan": technical_plan,
             },
+            include_ui_designs=include_ui_designs,
         )
     )
     if not isinstance(project_plan, dict) or project_plan.get("artifact_type") != "technical-plan":
@@ -168,6 +177,8 @@ def _build_prerequisite_errors(
 def _formal_artifact_hash_errors(
     workspace: str | None,
     artifacts: dict[str, dict[str, Any]],
+    *,
+    include_ui_designs: bool = True,
 ) -> list[str]:
     """对采用当前 basedOn 合同的正式产物执行 Build 前直接上游哈希门禁。"""
 
@@ -184,11 +195,14 @@ def _formal_artifact_hash_errors(
         hashes = {
             artifact_key: canonical_sha256(path)
             for artifact_key, path in paths.items()
-            if path.is_file()
+            if (include_ui_designs or artifact_key != "ui-design") and path.is_file()
         }
         stale = stale_artifact_keys(
             {
-                artifact_key: artifact
+                artifact_key: artifact if include_ui_designs else {**artifact, "basedOn": [
+                    reference for reference in artifact["basedOn"]
+                    if include_ui_designs or not isinstance(reference, dict) or reference.get("artifactKey") != "ui-design"
+                ]}
                 for artifact_key, artifact in artifacts.items()
                 if artifact.get("basedOn")
             },
@@ -201,6 +215,8 @@ def _formal_artifact_hash_errors(
 
 def _load_formal_artifacts(
     workspace: str | None,
+    *,
+    include_ui_designs: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """从当前工作区读取 DAG 门禁需要的正式 JSON，不使用 checkpoint 兜底。"""
 
@@ -216,7 +232,7 @@ def _load_formal_artifacts(
         "ui_designs": _load_formal_artifact(
             workspace,
             ".devagentstudio/specs/ui-designs.json",
-        ),
+        ) if include_ui_designs else {},
         "technical_plan": _load_formal_artifact(
             workspace,
             ".devagentstudio/plans/technical-plan.json",

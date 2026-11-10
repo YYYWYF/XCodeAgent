@@ -10,21 +10,24 @@ const { Text } = Typography
 export type ConnectionStatusBannerProps = {
   connection: ConnectionState
   onReconnect?: () => void
+  scope?: 'backend' | 'preview'
 }
 
 /** 独立展示 renderer 到 Backend 的连接状态，不生成或解释 Workflow Recovery。 */
 export default function ConnectionStatusBanner({
   connection,
-  onReconnect
+  onReconnect,
+  scope = 'backend'
 }: ConnectionStatusBannerProps): ReactElement | null {
   if (connection.status === 'healthy') return null
   const pending = connection.status === 'connecting' || connection.status === 'reconnecting'
+  const subject = scope === 'preview' ? '预览状态服务' : 'Backend'
   const title =
     connection.status === 'connecting'
-      ? '正在连接 Backend'
+      ? `正在连接 ${subject}`
       : connection.status === 'reconnecting'
-        ? '正在重新连接 Backend'
-        : 'Backend 暂时不可用'
+        ? `正在重新连接 ${subject}`
+        : scope === 'preview' ? '预览状态连接中断' : 'Backend 连接中断'
   const message = pending
     ? '正在同步最新状态和可用的恢复入口。'
     : connection.lastError || '连接已中断，暂时无法同步最新状态。'

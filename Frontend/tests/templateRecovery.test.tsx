@@ -58,7 +58,7 @@ test('模板专用重试先校准；运行中不重发，切换目录后迟到�
   console.warn = () => undefined
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
   try {
-    for (const scenario of ['business', 'transport', 'running', 'switched']) {
+    for (const scenario of ['business', 'state-read', 'transport', 'running', 'switched']) {
       let current = currentTemplate()
       const actions: string[] = []
       let bootstrapRequested = false
@@ -76,10 +76,11 @@ test('模板专用重试先校准；运行中不重发，切换目录后迟到�
             current = { ...currentTemplate(), application: { ...current.application, workspaceRoot: '/tmp/cloned-template' } }
             return lifecycleResponse(request, { ...original, initialization: { ...original.initialization, stage: 'ready_for_workbench', status: 'completed' } })
           }
-          if (scenario === 'transport') throw new TypeError('Backend 不可达')
+          if (scenario === 'transport') throw new TypeError('Failed to fetch')
           return lifecycleResponse(request, current.lifecycle, true)
         }
-        if (bootstrapRequested && scenario === 'transport') throw new TypeError('Backend 不可达')
+        if (bootstrapRequested && scenario === 'transport') throw new TypeError('Failed to fetch')
+        if (bootstrapRequested && scenario === 'state-read') return lifecycleResponse(request, current.lifecycle, true)
         const lifecycle = scenario === 'running' ? { ...current.lifecycle, initialization: {
           ...current.lifecycle.initialization, stage: 'generating_application_template_files' as const, status: 'running' as const
         }} : current.lifecycle
@@ -101,6 +102,7 @@ test('模板专用重试先校准；运行中不重发，切换目录后迟到�
       assert.equal(await controller.retryApplicationTemplateFiles(current), false)
       assert.deepEqual(actions.slice(0, 2), ['workspace_attach', 'get'])
       assert.equal(current.connection.status, scenario === 'transport' ? 'unavailable' : 'healthy')
+      if (scenario === 'state-read') assert.equal(current.syncError, '模板物化失败')
       assert.equal(current.workflow, undefined)
       assert.equal(current.recovery, undefined)
       assert.equal(actions.filter(action => action === 'retry_bootstrap_template_generation').length, scenario === 'running' ? 0 : 1)
