@@ -8,6 +8,7 @@ import { SessionMessageCache } from '../src/renderer/src/components/AiChatPanel/
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import './sessionHistoryRuntime.test'
 import './sessionTailLargeFile.test'
+import './sessionFileReplacement.test'
 import './workflowEventProjection.test'
 import './sessionWorkflowArtifacts.test'
 

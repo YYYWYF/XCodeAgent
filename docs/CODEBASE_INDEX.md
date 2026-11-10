@@ -241,7 +241,7 @@ OpenAI 兼容模型 HTTP 客户端通过 `services/model_request_cancellation.py
 
 工作台失败恢复不受同 Thread 旧开发 End 归档影响：`AiChatPanel/planExecutionMode.ts::workflowExecutionEnded` 与 `developmentNextStep.ts` 只按失败 Workflow 的具体 Run/Thread 匹配结束事实；新测试、审查等执行失败保留现有统一 Recovery 卡，不跳到仅允许未开发目标的选择器。点击仍使用统一原失败节点重执行服务，不改 Agent 或 Lifecycle 准入。回归：`pnpm test:connection-recovery`、`pnpm test:development-artifacts`。
 
-技术规划确认回到原开发会话时，`Frontend/src/main/sessionPersistence.ts` 以同目录临时文件原子替换正式会话记录；创建与保存入口共用它，避免交接消息保存期间 `sessions:list` 读取半份 JSON、漏掉原会话并清空显式选择。会话身份、IPC 契约及 Agent/Lifecycle 逻辑不变。回归：`pnpm test:stage-sessions` 中的 `sessionPersistence.test.ts`。
+技术规划确认回到原开发会话时，`Frontend/src/main/sessionPersistence.ts` 以同目录临时文件原子替换正式会话记录，避免交接消息保存期间 `sessions:list` 读取半份 JSON、漏掉原会话并清空显式选择。完整发布与 `sessionFileWriter.ts` 的流式保存共用 `publishSessionFile`；流式复制结束后先关闭旧文件，再替换正式文件。Windows 的 EPERM/EACCES/EBUSY 最多按 50/100/200/400/800ms 重试五次，每次重新校验已有文件快照，外部改写时拒绝覆盖；持续失败保留原始错误及旧文件并清理临时文件，不先删除正式文件。会话身份、IPC 契约及 Agent/Lifecycle 逻辑不变。回归：`pnpm test:stage-sessions` 中的 `sessionPersistence.test.ts`，以及 `pnpm test:session-history` 中的 `sessionFileReplacement.test.ts`。
 
 交接提交后首节点尚未执行的恢复：`failed_execution_reconciliation.py` 在 Durable 尚无 `current_node` 时保留已登记的 `first_node` / 原阶段，不能将 `phase` 写成 null。`handoff_workbench_execution_for_recovery` 按具名资源键重新申请失败执行资源，同键仍保护其他 owner，不把 application 键额外扩大为全部页面/接口的通配锁；与正常交接一致。不改变 Agent 或增加 Lifecycle 准入条件。回归：`tests.test_failed_execution_reconciliation`、`tests.test_failed_run_cleanup`、`tests.test_revision_continuation_handoff`。
 

@@ -46,7 +46,9 @@ export async function writeSessionFile(
   loadedMessageIds?: number[]
 ): Promise<number> {
   const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`
-  const { messages: rawMessages, history: _history, ...metadata } = session
+  const { messages: rawMessages, ...metadata } = session
+  // 分页读取状态不属于正式会话元数据。
+  delete metadata.history
   const messages = rawMessages as JsonRecord[]
   const incoming = new Map(messages.map((message) => [Number(message.id), message]))
   const loaded = new Set(loadedMessageIds)
@@ -62,7 +64,15 @@ export async function writeSessionFile(
     /** 每条消息单独序列化，分隔符不依赖已加载历史数量。 */
     const append = async (message: JsonRecord): Promise<void> => {
       if (count++) await writeAll(output, ',')
-      await writeAll(output, JSON.stringify(await storeWorkflowArtifacts(session.workspaceRoot, normalizePersistentSessionMessage(message))))
+      await writeAll(
+        output,
+        JSON.stringify(
+          await storeWorkflowArtifacts(
+            session.workspaceRoot,
+            normalizePersistentSessionMessage(message)
+          )
+        )
+      )
     }
     if (loadedMessageIds !== undefined) {
       source = await fs.open(file, 'r')
@@ -96,7 +106,7 @@ export async function writeSessionFile(
     })
     return count
   } finally {
-    await source?.close()
+    await source?.close().catch(() => undefined)
     await output.close().catch(() => undefined)
     await fs.unlink(temporary).catch(() => undefined)
   }
