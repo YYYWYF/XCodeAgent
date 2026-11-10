@@ -49,7 +49,7 @@ def restart_build_state(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str
 
 
 def refresh_build_workspace(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """重试和重启都扫描当前磁盘，保留调用方选定的任务运行态。"""
+    """为整阶段重试或重启扫描当前磁盘；任务级重试不调用此入口。"""
 
     from app.graph.nodes.workspace_inspection import inspect_workspace
 

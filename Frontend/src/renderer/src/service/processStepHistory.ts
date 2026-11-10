@@ -10,6 +10,7 @@ import {
   readWorkspaceInspectionSnapshot
 } from './agUiAgent'
 import type { DagGenerationSnapshot, ProcessStepRecord } from './agUiAgent'
+import { restoreBuildExecutionStep } from './buildExecutionHistory'
 
 const WORKFLOW_NODE_LABELS: Record<string, string> = {
   api_design_readiness_gate: 'API 设计前置检查',
@@ -66,6 +67,7 @@ export function processStepsForDisplay(
 ): ProcessStepRecord[] | undefined {
   const recoveredSteps = completedWorkflowProcessSteps(workflow)
   let displaySteps = sortProcessStepsForDisplay(mergeRecoveredWorkflowSteps(steps, recoveredSteps))
+  displaySteps = restoreBuildExecutionStep(displaySteps, workflow)
   if (!displaySteps?.length) return displaySteps
   const finalChecks = completedIntegrationTestChecks(workflow)
   if (finalChecks?.checks.length) {

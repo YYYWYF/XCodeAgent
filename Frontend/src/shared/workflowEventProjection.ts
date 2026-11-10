@@ -73,7 +73,7 @@ function stateContext(value: RecordValue): RecordValue {
 }
 
 /** Build 过程详情不附带每个任务重复内嵌的执行源材料。 */
-function executionSlice(value: unknown): unknown {
+export function compactBuildExecutionSlice(value: unknown): unknown {
   const slice = record(value)
   if (!slice || !Array.isArray(slice.tasks)) return value
   return {
@@ -95,7 +95,10 @@ function eventDetail(value: RecordValue): RecordValue {
   const detail = Object.fromEntries(
     Object.entries(value)
       .filter(([key]) => !DOCUMENT_DETAILS.has(key) && !TRACE_DETAILS.has(key))
-      .map(([key, item]) => [key, key === 'buildExecutionSlice' ? executionSlice(item) : item])
+      .map(([key, item]) => [
+        key,
+        key === 'buildExecutionSlice' ? compactBuildExecutionSlice(item) : item
+      ])
   )
   for (const key of DOCUMENT_DETAILS) {
     const document = record(value[key])

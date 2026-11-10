@@ -38,7 +38,7 @@ async def read_session_recovery(workspace: str, *, session_id: str, thread_id: s
     execution = checkpoint_source(execution, interpreted)
     if interpreted is None:
         return None, snapshot, execution
-    values = dict(values)
+    values = dict(interpreted.values)
     status = str(execution.status)
     values["status"] = "requires_user_input" if status == "awaiting_user" else status
     if status in {"cancelled", "stopped"}:

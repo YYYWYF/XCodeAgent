@@ -64,7 +64,7 @@ async def reconcile_session_checkpoint(workspace: str, *, session_id: str, threa
         interpreted = interpret_checkpoint(candidate, snapshot, graph)
         if interpreted is None:
             return False
-        values = snapshot.values
+        values = interpreted.values
         candidate = checkpoint_source(candidate, interpreted)
         control = values.get("plan_control") or {}
         ended = control.get("status") == "ended" or str(values.get("status")) in {"cancelled", "stopped"}
@@ -77,13 +77,28 @@ async def reconcile_session_checkpoint(workspace: str, *, session_id: str, threa
         changed = source is None
         if source is None:
             await insert_execution(candidate)
-        elif source.status == DurableExecutionStatus.RUNNING and candidate.status != DurableExecutionStatus.RUNNING:
+        elif (source.status in {DurableExecutionStatus.RUNNING, DurableExecutionStatus.INTERRUPTED}
+                and candidate.status != source.status):
             # 真实工作已退出且现场已到确认门时，收口旧 running 镜像，避免后续 resume 被索引误挡住。
             from app.services.workspace_checkpoint_reconciliation import _run_is_live
             if _run_is_live(workspace, run_id):
                 return False
             await update_execution_status(workspace=workspace, run_id=run_id, status=candidate.status)
             changed = True
+        if active and candidate.status is DurableExecutionStatus.AWAITING_USER:
+            from app.services.build_task_waiting import awaiting_build_task_retry
+            from app.services.workspace_checkpoint_reconciliation import _run_is_live
+
+            # 只校准本会话的任务重试等待；已有正式确认或并发归属变化不能被清除。
+            if awaiting_build_task_retry(values) and active.pending_interaction is None:
+                with lifecycle_service._application_lifecycle_lock(lifecycle_service.application_lifecycle_path(workspace)):
+                    current = lifecycle_service.load_application_lifecycle(workspace)
+                    if (current is not None and current.revision == before.revision
+                            and not _run_is_live(workspace, run_id)
+                            and (active.status != WorkbenchExecutionStatus.AWAITING_USER or active.phase != "build")):
+                        lifecycle_service.update_workbench_execution(workspace, run_id=run_id,
+                            phase="build", status=WorkbenchExecutionStatus.AWAITING_USER)
+                        changed = True
         if active or candidate.status == DurableExecutionStatus.COMPLETED:
             return changed
         _restore_workbench_owner(workspace, before, candidate, values, interpreted)

@@ -23,6 +23,12 @@ class CheckpointExecution:
     status: DurableExecutionStatus
     node: str
     request: str
+    runtime_values: dict[str, Any] | None = None
+
+    @property
+    def values(self) -> dict[str, Any]:
+        """提供同 Run 已验证的任务进度视图，原生 snapshot 身份和元数据保持不变。"""
+        return self.runtime_values if self.runtime_values is not None else self.snapshot.values
 
 
 def execution_is_live(source) -> bool:
@@ -104,9 +110,12 @@ def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
     ):
         failed = []
     pending = list(getattr(snapshot, "next", ()) or ())
+    live = execution_is_live(source)
+    from app.services.build_checkpoint_projection import build_checkpoint_values
+
+    values = build_checkpoint_values(source, snapshot, live=live)
     raw_status = str(values.get("status") or "")
     phase = str(values.get("phase") or "")
-    live = execution_is_live(source)
     native_interrupt = _has_native_user_interrupt(source, snapshot, tasks)
     if failed or raw_status == "failed":
         status = DurableExecutionStatus.FAILED
@@ -165,7 +174,7 @@ def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
     question = interaction.get("request") if interaction.get("action") in {"answer", "revise", "design_change"} else ""
     request = str(question or values.get("design_change_generation_request")
                   or values.get("design_change_request") or values.get("request") or "").strip()
-    return CheckpointExecution(snapshot, status, node, request)
+    return CheckpointExecution(snapshot, status, node, request, runtime_values=values)
 
 
 async def read_checkpoint_execution(source, graph) -> CheckpointExecution | None:

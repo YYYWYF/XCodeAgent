@@ -1301,6 +1301,13 @@ function BuildExecutionSliceProgress({
           <BuildExecutionTaskList tasks={displayTasks} reusableTaskIds={executionSlice.reusable_task_ids} />
         </div>
       )}
+      {/* 失败处理与任务列表放在同一内容区，保持重试入口紧随任务。 */}
+      {tasks.length > 0 && (
+        <BuildTaskRetryNotice
+          tasks={tasks}
+          waiting={executionSlice.summary?.status === 'awaiting_task_retry'}
+        />
+      )}
     </div>
   )
 }
@@ -1335,12 +1342,6 @@ export function BuildExecutionRunCard({
           本轮模块改动已完成，可在版本入口创建提交
         </Text>
       ) : null}
-      {Boolean(executionSlice.tasks?.length) && (
-        <BuildTaskRetryNotice
-          tasks={executionSlice.tasks || []}
-          waiting={executionSlice.summary?.status === 'awaiting_task_retry'}
-        />
-      )}
     </section>
   )
 }

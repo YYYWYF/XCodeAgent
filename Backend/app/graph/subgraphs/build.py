@@ -1678,7 +1678,11 @@ def run_build_scheduler(
 ) -> dict[str, Any]:
     """为当前 Build 登记唯一调度器，单任务重试始终交由该线程提交。"""
     with register_build_scheduler(state):
-        return {**_run_build_scheduler(state, progress_writer=progress_writer), "build_retry_task_ids": []}
+        result = _run_build_scheduler(state, progress_writer=progress_writer)
+        # 任务级重试来源只供本次 Build 恢复进度，不能让下游阶段据此重新扫描工作区。
+        if state.get("build_retry_task_ids"):
+            result["retry_source_run_id"] = ""
+        return {**result, "build_retry_task_ids": []}
 
 
 def _run_build_scheduler(
@@ -1715,7 +1719,9 @@ def _run_build_scheduler(
             if selected_retries:
                 raise
             state, scan_fields = restart_build_state(state)
-        state, scan_fields = refresh_build_workspace(state)
+        # 单项和批量任务重试沿用已校验上下文；实际文件改动仍由调度器增量更新索引。
+        if not selected_retries:
+            state, scan_fields = refresh_build_workspace(state)
     elif recovery is not None:
         if recovery.entry_state.get("build_execution_scope") != state.get("build_execution_scope"):
             raise RecoveryExecutionError("BUILD_RETRY_SCOPE_DRIFT", "Build 恢复范围已偏离原节点入口。")
@@ -1745,7 +1751,7 @@ def _run_build_scheduler(
                 state = _restore_build_runtime(state, progress_source_run_id, source_progress,
                                                retry_failed_tasks=retry_failed_tasks)
 
-    if not restarting and (recovery is not None or state.get("retry_failed_tasks")):
+    if not restarting and not selected_retries and (recovery is not None or state.get("retry_failed_tasks")):
         state, scan_fields = refresh_build_workspace(state)
 
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)

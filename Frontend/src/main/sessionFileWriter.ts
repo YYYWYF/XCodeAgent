@@ -2,6 +2,7 @@ import { storeWorkflowArtifacts } from './sessionWorkflowArtifacts'
 import crypto from 'node:crypto'
 import fs, { type FileHandle } from 'node:fs/promises'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
+import { publishSessionFile } from './sessionPersistence'
 import {
   SessionFileReader,
   SESSION_FILE_BLOCK_BYTES,
@@ -84,10 +85,15 @@ export async function writeSessionFile(
     for (const message of incoming.values()) await append(message)
     await writeAll(output, ']}\n')
     await output.close()
-    if (signature && fileSignature(await fs.stat(file)) !== signature) {
-      throw new Error('会话在保存期间已变化，请重新打开后重试。')
-    }
-    await fs.rename(temporary, file)
+    // 复制完即释放原文件句柄，避免 Windows 原子替换时仍持有自己的读取句柄。
+    await source?.close()
+    source = undefined
+    await publishSessionFile(temporary, file, async () => {
+      // 每次重试都核对同一个源快照，等待占用释放期间的外部修改也不能被覆盖。
+      if (signature && fileSignature(await fs.stat(file)) !== signature) {
+        throw new Error('会话在保存期间已变化，请重新打开后重试。')
+      }
+    })
     return count
   } finally {
     await source?.close()

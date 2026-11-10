@@ -1,6 +1,9 @@
 import { persistentWorkflowView } from '../shared/workflowPresentation'
 import { readAuthorizationBootstrap } from '../shared/authorizationBootstrap'
-import { compactWorkflowEvents } from '../shared/workflowEventProjection'
+import {
+  compactBuildExecutionSlice,
+  compactWorkflowEvents
+} from '../shared/workflowEventProjection'
 type JsonRecord = Record<string, unknown>
 
 const MESSAGE_APPROVAL_STATUSES = new Set([
@@ -219,6 +222,11 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
     const checks = normalizeSessionChecks(valueItem.checks)
     const dagGeneration = normalizeSessionDagGeneration(valueItem.dagGeneration)
     const workspaceInspection = normalizeSessionWorkspaceInspection(valueItem.workspaceInspection)
+    const buildExecutionSlice =
+      isJsonRecord(valueItem.buildExecutionSlice) &&
+      Array.isArray(valueItem.buildExecutionSlice.tasks)
+        ? cloneJsonRecord(compactBuildExecutionSlice(valueItem.buildExecutionSlice))
+        : undefined
     steps.push({
       id,
       kind,
@@ -228,12 +236,17 @@ function normalizeSessionProcessSteps(value: unknown): JsonRecord[] {
       ...(typeof valueItem.result === 'string' ? { result: valueItem.result.slice(-24_000) } : {}),
       sequence: typeof valueItem.sequence === 'number' ? valueItem.sequence : 0,
       appendDetail: valueItem.appendDetail === true,
-      ...(typeof valueItem.nodeName === 'string' ? { nodeName: valueItem.nodeName.slice(0, 128) } : {}),
-      ...(Number.isInteger(valueItem.attempt) && Number(valueItem.attempt) > 0 ? { attempt: valueItem.attempt } : {}),
+      ...(typeof valueItem.nodeName === 'string'
+        ? { nodeName: valueItem.nodeName.slice(0, 128) }
+        : {}),
+      ...(Number.isInteger(valueItem.attempt) && Number(valueItem.attempt) > 0
+        ? { attempt: valueItem.attempt }
+        : {}),
       ...(authorizationBootstrap ? { authorizationBootstrap } : {}),
       ...(checks.length > 0 ? { checks } : {}),
       ...(dagGeneration ? { dagGeneration } : {}),
-      ...(workspaceInspection ? { workspaceInspection } : {})
+      ...(workspaceInspection ? { workspaceInspection } : {}),
+      ...(buildExecutionSlice ? { buildExecutionSlice } : {})
     })
   }
   return steps

@@ -1,5 +1,9 @@
 # DevAgent Studio Codebase Index
 
+Build 单项及全部失败任务重试由 `graph/subgraphs/build.py` 按非空 `build_retry_task_ids` 跳过两处 `refresh_build_workspace`；仍验证原执行进度和计划绑定，缺失进度直接失败，不降级为扫描及整轮重启。调度收口清空仅用于本次任务恢复的 `retry_source_run_id`，防止后续测试/审查阶段因该标记再次扫描；实际写入文件后的代码图增量更新、正常规划和整阶段重试/重启扫描保持原行为。
+
+本地会话保存由 `Frontend/src/main/sessionFileWriter.ts` 在复制未加载历史后、发布前关闭源文件句柄；`sessionPersistence.ts::publishSessionFile` 统一原子替换，Windows 的 EPERM/EACCES/EBUSY 最多延迟重试五次，每次重新核对保存起点的源文件签名。失败保留原会话，不先删除目标、不退化为非原子覆盖；Worker 的既有串行保存和阶段身份校验不变。
+
 已撤回“退出客户端后内置后台继续执行、重开接管旧实例”功能。`Frontend/src/main/backendService.ts` 仅持有当前客户端启动的 Backend，恢复管道输出与 Windows 非 detached 参数；退出和升级通过 `backendProcess.ts` 停止该进程树并等待实际退出，启动代次阻止迟到启动。已移除后台登记文件、客户端续租、`/backend-runtime/run`、专用退场中间件和 health 的 `managedRuntime/backend_runtime` 能力。源码 Backend 仍由开发者管理，工作流 checkpoint 与窗口运行期间的断连同步保留。当前回归：`pnpm test:backend-environment` 中的内置后台生命周期用例，以及 `pnpm build`。
 
 Windows 安装包的后台工作区命令由 `services/workspace_process_registry.py` 统一附加 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`，取消时的 `taskkill` 同样隐藏窗口。Electron 隐藏启动内置 Backend 不会自动隐藏其后续子命令。`hooks/useUncommittedChangesStore.ts` 只在工作区打开/切换、lifecycle revision 变化和显式刷新时读取 Git，不监听窗口 focus；同工作区在途请求合并，读取期间的连续内容变化只为最新信号补读，切换工作区拒绝旧响应。回归：`tests.test_workspace_process_visibility`、`tests.test_workspace_process_registry`、`tests.test_version_control`、`pnpm test:uncommitted-changes`。
@@ -19,6 +23,8 @@ Build 单项及批量任务重试使用独立 `/build-task-retry/run` AG-UI 入�
 已退出且 checkpoint 确认为失败或等待任务处理的 Build 时，`services/build_task_retry.py` 独立读取原进度、校验计划和会话当前归属，共用底层生命周期 CAS/租约/标准 Workflow 流，以前端 `runId` 接管后仅消费服务端解析的内部 `build_retry_task_ids`，保留其他失败及成功结果；缺失或漂移不降级为整轮重启，停止/确认/后续节点不允许从旧卡重试。`service/buildTaskRetry.ts` 使用官方 AG-UI SDK；`BuildTaskRetryButton.tsx` 在原卡提供共享提交锁及单项 loading/error，`BuildTaskRetryNotice.tsx` 与同名 LESS 在原 Build 卡片最底部（任务列表之后）展示失败任务处理提示及“重试全部失败任务（N）”，处理区使用提示图标、保留成功任务的说明与紫色主操作，适配窄屏和明暗主题；点击批量重试后立即隐藏，按服务端 retry_count 区分失败轮次，避免入队回执早于进度帧时旧失败导致闪现，提交失败或新一轮任务失败时恢复入口，全部成功后保持隐藏；单项与批量资格一致、无可重试任务不显示批量按钮，`useWorkflowConversation.ts` 运行中保留原订阅，已结束时更新原消息及 Build 步骤，不追加用户/助手卡。所有新增 UI 沿用 Ant Design 与现有明暗主题。本轮按用户要求不运行测试、构建、health、编译或 Electron 验证。
 
 Build 自然阻塞且全部失败均可直接重试时，`services/build_task_waiting.py` 将汇总标记为 `awaiting_task_retry`，节点返回 `requires_user_input` 并直接暂停后续阶段；进度及等待状态持久化，不保持后台调度线程或空转连接。`checkpoint_execution.py` 将该等待准确定位到 build；Lifecycle 保留 awaiting_user 及资源归属，不伪造计划调整/正式确认。专用重试核验同会话、同线程、当前计划、已退出状态，才允许无 pending 确认的 Build 等待交接；有真实确认载荷一律拒绝。前端阶段及步骤显示“等待处理”，Dock 指向任务重试或结束。阶段级错误、无效 DAG、取消、耗尽预算及不可直接重试失败保持原错误/修复/确认语义；完成任务不重跑，重试成功后依赖任务沿原调度器继续。单项/批量请求不携带客户端任务状态或计划，不改变正式产物确认门。
+
+失败任务冷加载由 `services/build_checkpoint_projection.py` 只读补齐当前 Run 已提交的 Build 进度：核对 Run/thread/scope、原计划绑定与任务合同，复用 `_restore_build_runtime` 归一化已中断的在途任务，不扫描其他执行、不修改正式计划。`CheckpointExecution.values` 提供该已校验视图，原生 snapshot 身份及元数据不变；会话投影、专用任务重试与业务重试共用此视图。已退出且有可直接重试失败的任务切片恢复为任务等待，保留阶段错误、真实确认和用户结束的边界；专用重试也接纳有当前已提交进度的 Build 中断。显式 Attach 校准当前 owner 的等待状态，不能清除已有正式交互。前端 `service/buildExecutionHistory.ts` 从当前 Workflow 的 buildExecutionSlice 补齐最后一个 Build 步骤，即使恢复输出没有事件/过程详情也能展示任务；实时步骤继续优先，不能在新 Run 尚未进入 Build 时引入来源 Run 切片。Electron `sessionMessageNormalization.ts` 保留步骤任务切片，复用共享 `compactBuildExecutionSlice` 排除执行源材料与内部检查定义。手动验收：失败等待后重启、在途任务期间退出后重进、批量与单项重试、空输出恢复，以及已结束或待确认任务不得重开。
 
 失败规划被用户结束时，`persistence/execution_recovery.py::update_execution_status` 在写入 CANCELLED 的同一事务清空 failure evidence；只有 FAILED 状态保留诊断，避免后续 lifecycle/recovery 读取校验失败并使正式阶段交接回滚。`useWorkflowConversation.ts` 按会话追踪读取错误，后续读取成功即撤下该错误，不依赖聊天输出变化，也不清除独立操作失败。回归：`tests.test_execution_recovery_store`、`tests.test_planning_execution_end`、`pnpm test:connection-recovery`。
 

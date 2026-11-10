@@ -55,16 +55,17 @@ async def prepare_build_task_retry(request, run_id: str):
             raise ValueError("重试请求 runId 已使用，请刷新后重试。")
         graph = await workflow_graph_for_request(workspace=source.workspace, project_id=source.project_id)
         checkpoint = await read_checkpoint_execution(source, graph)
-        waiting = bool(checkpoint and awaiting_build_task_retry(checkpoint.snapshot.values))
+        waiting = bool(checkpoint and awaiting_build_task_retry(checkpoint.values))
         if (not checkpoint or checkpoint.node != "build"
-                or checkpoint.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.AWAITING_USER}
+                or checkpoint.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.AWAITING_USER,
+                                             DurableExecutionStatus.INTERRUPTED}
                 or (checkpoint.status is DurableExecutionStatus.AWAITING_USER and not waiting)):
             raise ValueError("当前执行不在失败或等待处理的 Build 阶段，不能重试其历史任务。")
         if source.status in {DurableExecutionStatus.CANCELLED, DurableExecutionStatus.STOPPED}:
             raise ValueError("原 Build 已停止，请使用工作流继续入口。")
         source = source.model_copy(update={"status": checkpoint.status, "current_node": "build"})
         await require_failed_run_drained(source.run_id)
-        state = dict(checkpoint.snapshot.values)
+        state = dict(checkpoint.values)
         state.update(workspace=source.workspace, project_id=source.project_id)
         record = load_build_execution_record(state, source.run_id)
         if not record or not record.get("progress"):

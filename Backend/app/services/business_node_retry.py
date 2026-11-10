@@ -250,7 +250,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
 
             node = initial_feedback_node(lifecycle, initial_feedback)
         from app.services.stage_prerequisites import regeneration_for_retry
-        issue = regeneration_for_retry(source.workspace, node, graph, state={**checkpoint.snapshot.values, "workspace": source.workspace})
+        issue = regeneration_for_retry(source.workspace, node, graph, state={**checkpoint.values, "workspace": source.workspace})
         # 开发重试只重新检查原节点，不能把“重试”解释为修订上游文档。
         if issue and (source.execution_kind == "application_planning" or issue.key == "build_task_plan"):
             node = "api_design_readiness_gate" if issue.key == "build_task_plan" else issue.node
@@ -259,7 +259,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
         if planning_handoff:
             from app.graph.application_planning_workflow import application_planning_graph_for_request
             graph = await application_planning_graph_for_request(workspace=source.workspace, project_id=source.project_id)
-        state = retry_node_state(checkpoint.snapshot.values, node,
+        state = retry_node_state(checkpoint.values, node,
                                  planning=source.execution_kind == "application_planning" or planning_handoff)
         if issue and node == "technical_planning_begin":
             state["application_planning_recovery_boundary"] = {}
