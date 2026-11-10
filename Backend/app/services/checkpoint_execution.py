@@ -145,6 +145,10 @@ def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
             node = entry
     if node in _NON_BUSINESS_RECOVERY_NODES:
         node = ""
+    from app.services.build_task_waiting import awaiting_build_task_retry
+
+    if not node and status is DurableExecutionStatus.AWAITING_USER and awaiting_build_task_retry(values):
+        node = "build"
     if not node and status in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
         # 没有唯一的失败/待执行节点时，先读取 checkpoint 状态中的确定性后继；
         # 路由缺失或存在歧义时，从最后业务节点带完整上下文重新执行。

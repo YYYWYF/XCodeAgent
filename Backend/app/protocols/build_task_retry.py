@@ -1,9 +1,9 @@
-"""独立 Build 单任务重试 AG-UI 入口，不调用统一业务节点重试。"""
+"""独立 Build 单项及批量任务重试 AG-UI 入口，不调用统一业务节点重试。"""
 
 import asyncio
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 from app.services.build_task_retry import load_task_retry_source, prepare_build_task_retry
@@ -18,15 +18,24 @@ class BuildTaskRetryInput(BaseModel):
     sourceRunId: str = Field(min_length=1)
     sourceThreadId: str = Field(min_length=1)
     sessionId: str = Field(min_length=1)
-    taskId: str = Field(min_length=1)
+    scope: Literal["single", "all_failed"] = "single"
+    taskId: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_selection(self):
+        """单任务必须明确 ID；批量范围由服务端解析，禁止夹带任务 ID。"""
+        if (self.scope == "single") != (self.taskId is not None):
+            raise ValueError("单任务重试必须提供 taskId，批量重试不得提供 taskId。")
+        return self
 
 
 def build_task_retry_capabilities() -> dict:
-    """公开单任务重试的身份、事件和运行中入队合同。"""
+    """公开任务重试范围、身份、事件和运行中入队合同。"""
     return {"endpoint": "/build-task-retry/run", "transport": "ag-ui-sse",
         "actionField": "forwardedProps.buildTaskRetry", "actions": ["enqueue", "retry"],
         "customEventName": "build-task-retry", "stateSnapshotKey": "buildTaskRetry",
-        "runId": "frontend", "enqueueRunId": "request-only", "retryScope": "single-failed-task"}
+        "runId": "frontend", "enqueueRunId": "request-only",
+        "retryScopes": ["single", "all_failed"]}
 
 
 async def build_task_retry_stream(*, payload: dict, accept: str | None = None):

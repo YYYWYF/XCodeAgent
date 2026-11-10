@@ -662,8 +662,13 @@ def _error_frames(error: Exception) -> dict[str, Any]:
 
 def _pending_interaction(
     update: dict[str, Any],
-) -> tuple[PendingInteractionType, dict[str, Any]]:
+) -> tuple[PendingInteractionType | None, dict[str, Any]]:
     """把 Workflow clarification 模式映射为稳定生命周期交互类型。"""
+    from app.services.build_task_waiting import awaiting_build_task_retry
+
+    # 任务重试等待没有待审批产物，不制造计划调整或正式确认凭据。
+    if awaiting_build_task_retry(update):
+        return None, {}
 
     clarification = update.get("clarification")
     clarification = clarification if isinstance(clarification, dict) else {}

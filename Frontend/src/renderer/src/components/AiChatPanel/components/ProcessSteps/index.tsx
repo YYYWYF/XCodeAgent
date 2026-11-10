@@ -786,7 +786,10 @@ function processStepTitle(
   const label =
     labels[step.nodeName || ''] || step.title.replace(/^正在执行\s*/, '').replace(/^已完成\s*/, '')
   if (step.status === 'failed') return `${label}失败`
-  if (step.status === 'requires_user_input') return `等待确认 · ${label}`
+  if (step.status === 'requires_user_input') {
+    return step.buildExecutionSlice?.summary?.status === 'awaiting_task_retry'
+      ? `等待处理 · ${label}` : `等待确认 · ${label}`
+  }
   return step.status === 'running' && !settled ? `正在${label}` : `已完成${label}`
 }
 

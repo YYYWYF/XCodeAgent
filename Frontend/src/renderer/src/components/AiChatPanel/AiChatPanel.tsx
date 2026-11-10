@@ -849,6 +849,7 @@ function pageContextStatus(
     return { details, label: '待确认', tone: 'warning' }
   }
   if (mode === 'failed') return { details, label: '失败', tone: 'error' }
+  if (mode === 'awaiting_build_task_retry') return { details, label: '等待处理', tone: 'warning' }
   if (mode === 'stopped') return { details, label: '已停止', tone: 'neutral' }
   if (!designed) return { details, label: '待设计', tone: 'neutral' }
   if (totalTasks > 0 && completedTasks === totalTasks) {

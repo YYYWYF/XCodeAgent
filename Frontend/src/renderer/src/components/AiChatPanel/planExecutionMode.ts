@@ -16,6 +16,7 @@ export type PlanExecutionMode =
   | 'awaiting_code_review_repair_confirmation'
   | 'awaiting_acceptance'
   | 'awaiting_plan_adjustment'
+  | 'awaiting_build_task_retry'
   | 'failed'
   | 'stopped'
 
@@ -268,6 +269,7 @@ export function derivePlanExecutionMode(execution?: WorkbenchExecution): PlanExe
   if (execution.status === 'stopped') return 'stopped'
 
   const interactionType = execution.pendingInteraction?.type
+  if (execution.phase === 'build' && !execution.pendingInteraction) return 'awaiting_build_task_retry'
   if (interactionType === 'agent_approval') return 'awaiting_authorization'
   if (interactionType === 'repair_scope_confirmation') {
     return 'awaiting_repair_confirmation'

@@ -1678,7 +1678,7 @@ def run_build_scheduler(
 ) -> dict[str, Any]:
     """为当前 Build 登记唯一调度器，单任务重试始终交由该线程提交。"""
     with register_build_scheduler(state):
-        return {**_run_build_scheduler(state, progress_writer=progress_writer), "build_retry_task_id": ""}
+        return {**_run_build_scheduler(state, progress_writer=progress_writer), "build_retry_task_ids": []}
 
 
 def _run_build_scheduler(
@@ -1693,7 +1693,7 @@ def _run_build_scheduler(
     inherited_progress = None
     progress_source_run_id = None
     disk_retry_source = str(state.get("retry_source_run_id") or "")
-    single_retry = str(state.get("build_retry_task_id") or "")
+    selected_retries = set(state.get("build_retry_task_ids") or [])
     # 中断和显式从 Build 开始走整轮重启；FAILED 走既有局部失败重试。
     restarting = ((recovery is not None and recovery.reentry_reason is WorkflowReentryReason.INTERRUPTED_CONTINUE)
                   or (recovery is None and not disk_retry_source and state.get("resume_from") == "build"))
@@ -1705,14 +1705,14 @@ def _run_build_scheduler(
         try:
             record = load_build_execution_record(state, disk_retry_source)
             progress = record.get("progress") if record else None
-            if single_retry and not progress:
-                raise ValueError("单任务重试的原 Build 进度已不存在。")
+            if selected_retries and not progress:
+                raise ValueError("任务重试的原 Build 进度已不存在。")
             if progress:
                 state = _restore_build_runtime(state, disk_retry_source, progress, retry_failed_tasks=True)
                 inherited_progress = progress
                 progress_source_run_id = disk_retry_source
         except (OSError, ValueError, RecoveryExecutionError):
-            if single_retry:
+            if selected_retries:
                 raise
             state, scan_fields = restart_build_state(state)
         state, scan_fields = refresh_build_workspace(state)
@@ -1822,7 +1822,7 @@ def _run_build_scheduler(
             paused_tasks=database_paused_tasks,
             build_task_plan=build_task_plan,
         )
-    retry_requested = bool(state.get("retry_failed_tasks")) or bool(single_retry)
+    retry_requested = bool(state.get("retry_failed_tasks")) or bool(selected_retries)
     scope_confirmation_pending = (
         isinstance(incoming_repair_task_plan, dict)
         and incoming_repair_task_plan.get("decision") == "requires_user_confirmation"
@@ -1909,9 +1909,10 @@ def _run_build_scheduler(
             retry_slice["tasks"],
             list(state.get("build_results", [])),
         )
-        if single_retry:
-            validate_task_retry({**state, "tasks": tasks, "build_task_plan": build_task_plan}, single_retry)
-            retry_task_ids = {single_retry}
+        if selected_retries:
+            for task_id in selected_retries:
+                validate_task_retry({**state, "tasks": tasks, "build_task_plan": build_task_plan}, task_id)
+            retry_task_ids = selected_retries
         if retry_task_ids:
             tasks = reset_failed_tasks_for_retry(tasks, retry_task_ids)
             build_task_plan = replace_build_task_plan_tasks(build_task_plan, tasks)
@@ -2283,6 +2284,11 @@ def _run_build_scheduler(
         and repair_task_plan.get("decision") == "requires_user_confirmation"
     ):
         build_summary = {**build_summary, "status": "requires_confirmation"}
+    from app.services.build_task_waiting import task_retry_wait_summary
+
+    build_summary = task_retry_wait_summary(
+        build_summary, execution_slice["tasks"], build_results, build_events,
+    )
     if retry_requested:
         build_summary.update(
             {
@@ -2308,7 +2314,7 @@ def _run_build_scheduler(
         "completed"
         if build_summary.get("status") == "completed"
         else "requires_user_input"
-        if build_summary.get("status") == "requires_confirmation"
+        if build_summary.get("status") in {"requires_confirmation", "awaiting_task_retry"}
         else "failed"
     )
     route_projection_evidence: dict[str, Any] = {}
@@ -2346,6 +2352,8 @@ def _run_build_scheduler(
             build_events.append("scheduler:finalization_failed")
     else:
         platform_projection_evidence = state.get("platform_projection_evidence", {})
+    # 阶段收尾可能失败，展示状态必须使用最终结果而非收尾前的任务汇总。
+    execution_slice["summary"]["status"] = build_summary["status"]
     clarification = (
         _repair_scope_confirmation_payload(repair_task_plan)
         if isinstance(repair_task_plan, dict)
@@ -2389,7 +2397,9 @@ def _run_build_scheduler(
 
     result["error"] = workflow_failure_message(result) if workflow_status == "failed" else ""
     result["message"] = result["error"] or (
-        "Build 已完成。" if workflow_status == "completed" else "Build 等待确认。"
+        "Build 已完成。" if workflow_status == "completed"
+        else f"Build 等待处理：{build_summary.get('failed', 0)} 个任务失败，可重试失败任务。"
+        if build_summary.get("status") == "awaiting_task_retry" else "Build 等待确认。"
     )
     # 任务批次完成不等于 Build 完成；模板路由/授权等收尾结果也必须先落盘。
     if state.get("active_run_id") and state.get("active_thread_id"):

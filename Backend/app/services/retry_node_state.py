@@ -9,7 +9,7 @@ def retry_node_state(values: dict[str, Any], node: str, *, planning: bool) -> di
     state = deepcopy(values)
     state.update(
         phase=node, status="running" if planning else "in_progress", error=None,
-        build_retry_task_id="",
+        build_retry_task_ids=[],
         clarification={}, resume_from=node, resume_execution_run_id="", workflow_action="",
         application_planning_interaction={}, application_planning_review_route="",
         lifecycle_interaction_submission={}, revision_interaction={},

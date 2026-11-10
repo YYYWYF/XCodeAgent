@@ -1510,6 +1510,7 @@ export type WorkflowBuildExecutionTask = WorkflowBackendTaskScope & {
   title?: string
   description?: string
   status?: 'pending' | 'running' | 'completed' | 'already_satisfied' | 'failed' | string
+  retry_count?: number
   dependencies?: string[]
   dependencyTitles?: Record<string, string>
   change_scope?: Array<Record<string, unknown>>
@@ -1550,6 +1551,7 @@ export type WorkflowBuildExecutionSlice = {
   reusable_task_ids?: string[]
   tasks?: WorkflowBuildExecutionTask[]
   summary?: {
+    status?: string
     total?: number
     pending?: number
     running?: number

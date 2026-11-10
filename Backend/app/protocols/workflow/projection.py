@@ -1604,6 +1604,11 @@ def _workflow_user_input_message(
     result: dict[str, Any], clarification: dict[str, Any]
 ) -> str:
     """按实际门禁类型生成面向用户的等待提示，避免把验收误写成待补充问题。"""
+    from app.services.build_task_waiting import awaiting_build_task_retry
+
+    if awaiting_build_task_retry(result):
+        failed = (result.get("build_summary") or {}).get("failed", 0)
+        return f"Build 等待处理：{failed} 个任务失败，请在任务卡中重试或结束当前计划。"
 
     acceptance_request = result.get("acceptance_request")
     clarification_mode = str(clarification.get("mode") or "")

@@ -214,6 +214,7 @@ function planModeTitle(mode: Exclude<PlanExecutionMode, 'idle'>): string {
     awaiting_code_review_repair_confirmation: '等待一键修复代码问题',
     awaiting_acceptance: '页面已准备好，等待最终验收',
     awaiting_plan_adjustment: '等待调整计划',
+    awaiting_build_task_retry: '等待处理失败任务',
     failed: '计划执行失败',
     stopped: '当前执行已停止'
   }[mode]
@@ -257,5 +258,6 @@ function planModeDescription(
   }
   if (mode === 'awaiting_acceptance') return '请检查右侧预览，验收通过后才会完成计划。'
   if (mode === 'awaiting_plan_adjustment') return '可在上方输入计划调整意见或结束当前计划。'
+  if (mode === 'awaiting_build_task_retry') return '请在构建任务卡中重试失败任务，或结束当前计划。'
   return `当前任务：${planExecutionPhaseLabel(phase)}`
 }

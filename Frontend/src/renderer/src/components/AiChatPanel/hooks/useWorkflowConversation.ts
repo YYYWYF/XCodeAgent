@@ -315,7 +315,7 @@ type UseWorkflowConversationResult = {
     authorizationAction?: string
   ) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
-  handleRetryBuildTask: (messageId: number, taskId: string) => Promise<void>
+  handleRetryBuildTask: (messageId: number, taskId?: string) => Promise<void>
   handleSend: (
     workflowDebug?: WorkflowDebugOptions,
     confirmScopeBeforeExecution?: boolean
@@ -1943,7 +1943,7 @@ export function useWorkflowConversation({
   }
 
   /** 单任务重试始终更新原消息；活跃 Build 使用独立控制流，不打断原订阅。 */
-  const handleRetryBuildTask = async (messageId: number, taskId: string): Promise<void> => {
+  const handleRetryBuildTask = async (messageId: number, taskId?: string): Promise<void> => {
     const identity = activeSession
     if (!identity || applicationMutationReadonly) throw new Error('当前会话不可执行重试。')
     const messages = getSessionMessages(identity.key)
@@ -1954,13 +1954,14 @@ export function useWorkflowConversation({
     const request: BuildTaskRetryRequest = {
       action: loading ? 'enqueue' : 'retry', workspaceRoot: identity.workspaceRoot,
       sourceRunId: workflow.runId, sourceThreadId: workflow.threadId,
-      sessionId: identity.sessionId, taskId
+      sessionId: identity.sessionId, scope: taskId ? 'single' : 'all_failed',
+      ...(taskId ? { taskId } : {})
     }
     if (loading) {
       await enqueueBuildTaskRetry(request)
       return
     }
-    const success = await sendWorkflowMessage('重试构建任务', {
+    const success = await sendWorkflowMessage(taskId ? '重试构建任务' : '重试全部失败任务', {
       buildTaskRetry: request, reuseBuildMessageId: messageId,
       executionThreadId: workflow.threadId, sessionIdentity: identity
     })

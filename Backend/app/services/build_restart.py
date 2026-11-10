@@ -19,7 +19,7 @@ def confirmed_plan_build_handoff(
         "build_run_id": "", "build_run_plan_path": "", "build_run_plan_sha256": "",
         "build_results": [], "build_summary": {}, "build_execution_slice": {},
         "ready_tasks": [], "pending_build_results": [],
-        "retry_failed_tasks": False, "retry_source_run_id": "", "build_retry_task_id": "",
+        "retry_failed_tasks": False, "retry_source_run_id": "", "build_retry_task_ids": [],
         # 上轮点击过的确认是一次性动作，不能替新计划自动跨过下游确认门。
         "test_phase_confirmation": {}, "review_phase_confirmation": {},
         "acceptance_phase_confirmation": {}, "code_review_repair_confirmation": {},
@@ -38,7 +38,7 @@ def restart_build_state_fields() -> dict[str, Any]:
         "platform_projection_evidence": {}, "route_projection_evidence": {},
         "clarification": {}, "workspace_snapshot": {},
         "workspace_revision": "", "workspace_snapshot_path": "",
-        "retry_source_run_id": "", "build_retry_task_id": "",
+        "retry_source_run_id": "", "build_retry_task_ids": [],
     }
 
 

@@ -7,7 +7,8 @@ export type BuildTaskRetryRequest = {
   sourceRunId: string
   sourceThreadId: string
   sessionId: string
-  taskId: string
+  scope: 'single' | 'all_failed'
+  taskId?: string
 }
 
 /** 返回独立任务重试地址，和整节点恢复入口保持分离。 */
@@ -21,12 +22,16 @@ export async function enqueueBuildTaskRetry(request: BuildTaskRetryRequest): Pro
   const agent = createAgUiHttpAgent({ url: getBuildTaskRetryUrl(), threadId: randomUUID() })
   let completed = false
   let failure = ''
-  await agent.runAgent({ runId: randomUUID(), forwardedProps: { buildTaskRetry: request } }, {
-    onCustomEvent: ({ event }) => {
-      if (event.name !== 'build-task-retry') return
-      if (event.value?.status === 'failed') failure = event.value.error?.message || '任务重试失败。'
-      if (event.value?.status === 'completed') completed = true
+  await agent.runAgent(
+    { runId: randomUUID(), forwardedProps: { buildTaskRetry: request } },
+    {
+      onCustomEvent: ({ event }) => {
+        if (event.name !== 'build-task-retry') return
+        if (event.value?.status === 'failed')
+          failure = event.value.error?.message || '任务重试失败。'
+        if (event.value?.status === 'completed') completed = true
+      }
     }
-  })
+  )
   if (failure || !completed) throw new Error(failure || '未收到任务入队回执，请刷新状态。')
 }

@@ -424,6 +424,10 @@ def _runtime_terminal_process_title(
     state: dict[str, Any],
 ) -> str:
     """按步骤终态和动态节点名生成流程标题。"""
+    from app.services.build_task_waiting import awaiting_build_task_retry
+
+    if node_name == "build" and awaiting_build_task_retry(state):
+        return "等待处理 构建执行"
 
     if node_name in {"authorization_bootstrap", "builtin_authorization_bootstrap"}:
         result = state.get("authorization_bootstrap_result")

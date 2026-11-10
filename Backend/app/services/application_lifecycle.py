@@ -720,6 +720,7 @@ def handoff_workbench_execution_for_recovery(
     thread_id: str,
     phase: str,
     expected_lifecycle_revision: int | None,
+    awaiting_build_tasks: bool = False,
 ) -> ApplicationLifecycle:
     """在同一生命周期锁内把完整 Workbench execution 和资源锁转给 child run。"""
 
@@ -754,7 +755,8 @@ def handoff_workbench_execution_for_recovery(
                 "RECOVERY_STATE_DRIFT: source threadId 与恢复请求不一致。"
             )
         if (
-            source.status == WorkbenchExecutionStatus.AWAITING_USER
+            (source.status == WorkbenchExecutionStatus.AWAITING_USER
+             and not (awaiting_build_tasks and source.phase == "build" and phase == "build"))
             or source.pending_interaction is not None
         ):
             raise ApplicationLifecycleConflictError(

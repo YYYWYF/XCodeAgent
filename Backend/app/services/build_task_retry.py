@@ -1,4 +1,4 @@
-"""Build 单任务重试的独立准入与已结束调度上下文准备。"""
+"""Build 单项及批量任务重试的独立准入与已结束调度上下文准备。"""
 
 import asyncio
 from pathlib import Path
@@ -8,7 +8,8 @@ from uuid import uuid4
 from app.domain.execution_recovery import DurableExecutionStatus
 from app.persistence.execution_recovery import get_execution
 from app.services.application_lifecycle import load_application_lifecycle
-from app.services.build_task_retry_queue import validate_task_retry
+from app.services.build_task_retry_queue import resolve_task_retry_ids
+from app.services.build_task_waiting import awaiting_build_task_retry
 
 _locks: dict[tuple[str, str], asyncio.Lock] = {}
 
@@ -29,7 +30,7 @@ async def load_task_retry_source(request):
 
 
 async def prepare_build_task_retry(request, run_id: str):
-    """只恢复失败 Build 的已绑定计划，保持成功任务并交接到前端指定的新 Run。"""
+    """恢复失败或等待处理的已绑定 Build，只重试选中任务并保留成功结果。"""
     from app.graph.workflow import workflow_graph_for_request
     from app.graph.subgraphs.build import _restore_build_runtime
     from app.services.checkpoint_execution import read_checkpoint_execution, execution_is_live
@@ -54,8 +55,11 @@ async def prepare_build_task_retry(request, run_id: str):
             raise ValueError("重试请求 runId 已使用，请刷新后重试。")
         graph = await workflow_graph_for_request(workspace=source.workspace, project_id=source.project_id)
         checkpoint = await read_checkpoint_execution(source, graph)
-        if not checkpoint or checkpoint.node != "build" or checkpoint.status is not DurableExecutionStatus.FAILED:
-            raise ValueError("当前执行不在失败的 Build 阶段，不能重试其历史任务。")
+        waiting = bool(checkpoint and awaiting_build_task_retry(checkpoint.snapshot.values))
+        if (not checkpoint or checkpoint.node != "build"
+                or checkpoint.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.AWAITING_USER}
+                or (checkpoint.status is DurableExecutionStatus.AWAITING_USER and not waiting)):
+            raise ValueError("当前执行不在失败或等待处理的 Build 阶段，不能重试其历史任务。")
         if source.status in {DurableExecutionStatus.CANCELLED, DurableExecutionStatus.STOPPED}:
             raise ValueError("原 Build 已停止，请使用工作流继续入口。")
         source = source.model_copy(update={"status": checkpoint.status, "current_node": "build"})
@@ -64,12 +68,12 @@ async def prepare_build_task_retry(request, run_id: str):
         state.update(workspace=source.workspace, project_id=source.project_id)
         record = load_build_execution_record(state, source.run_id)
         if not record or not record.get("progress"):
-            raise ValueError("缺少已提交的 Build 进度，不能安全重试单个任务。")
+            raise ValueError("缺少已提交的 Build 进度，不能安全重试任务。")
         state = _restore_build_runtime(state, source.run_id, record["progress"], retry_failed_tasks=False)
-        validate_task_retry(state, request.taskId)
+        retry_ids = resolve_task_retry_ids(state, request.taskId)
         state = retry_node_state(state, "build", planning=False)
         state.update(request=checkpoint.request, resume_from="build", retry_source_run_id=source.run_id,
-            build_retry_task_id=request.taskId, retry_failed_tasks=False,
+            build_retry_task_ids=sorted(retry_ids), retry_failed_tasks=False,
             active_thread_id=source.thread_id, owner_session_id=source.owner_session_id,
             workflow_scope=source.workflow_scope or "")
         from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
@@ -80,7 +84,8 @@ async def prepare_build_task_retry(request, run_id: str):
         try:
             lifecycle = handoff_workbench_execution_for_recovery(source.workspace,
                 source_run_id=source.run_id, new_run_id=run_id, thread_id=source.thread_id,
-                phase="build", expected_lifecycle_revision=before.revision)
+                phase="build", expected_lifecycle_revision=before.revision,
+                awaiting_build_tasks=waiting)
             handed_off = True
             lease = _acquire_workspace_lease(workspace=source.workspace, source=source,
                 new_run_id=run_id, lifecycle=lifecycle)

@@ -57,6 +57,7 @@ import { technicalPlanDiff } from '../DocPanel/technicalPlanDiff'
 import { asRecord } from '../DocPanel/TechnicalPlanDocPanelData'
 import BuildTaskPlanConfirmation from './BuildTaskPlanConfirmation'
 import { BuildExecutionTaskList } from './BuildExecutionTaskList'
+import { BuildTaskRetryNotice } from './BuildTaskRetryNotice'
 import { sortBuildTasksForDisplay } from './buildExecutionPresentation'
 import DetailReview from './DetailReview'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
@@ -1323,7 +1324,7 @@ export function BuildExecutionRunCard({
           </Text>
         </div>
         <Tag className={cx('workflow-run-status')} color={workflowStatusColor(status)}>
-          {workflowStatusText(status)}
+          {executionSlice.summary?.status === 'awaiting_task_retry' ? '等待处理' : workflowStatusText(status)}
         </Tag>
       </div>
       <BuildExecutionSliceProgress executionSlice={executionSlice} />
@@ -1334,6 +1335,12 @@ export function BuildExecutionRunCard({
           本轮模块改动已完成，可在版本入口创建提交
         </Text>
       ) : null}
+      {Boolean(executionSlice.tasks?.length) && (
+        <BuildTaskRetryNotice
+          tasks={executionSlice.tasks || []}
+          waiting={executionSlice.summary?.status === 'awaiting_task_retry'}
+        />
+      )}
     </section>
   )
 }
