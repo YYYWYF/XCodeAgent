@@ -78,7 +78,7 @@ ES mapping 字段示例：
 | context.business_stage/node_name | 原样读取 metadata.extensions.context 中同名字段，不根据操作标识或固定模型 Span 名推断 |
 | context.mode | 读取 metadata.extensions.context.mode，支持 ultra/pro/fast，不使用 GATEWAY_TIER 兜底 |
 | context.target.type/id/api_contract_id | 读取 metadata.extensions.context.target 中同名字段，均可独立省略或为 null，不按目标类型要求其他字段齐全 |
-| data.trace_id/span_id/parent_span_id | 真实 RunTree.trace_id/id/parent_run_id；本地 SDK 对象创建失败时 null，不生成替代 ID |
+| data.trace_id/span_id/parent_span_id | 本地 RunTree.trace_id/id/parent_run_id；本地 SDK 对象创建失败时为 null |
 | data.span_kind | 固定为 model，表示本服务实际执行的模型调用 |
 | data.run_name | 固定为 model-inference，不随提示词职责、工具指令或追踪对象名称变化 |
 | data.started_at/ended_at | 优先读取 RunTree.start_time/end_time 的实际请求边界，缺失时取本次观测；统一按北京时间输出，格式为 yyyy-MM-dd HH:mm:ss |
@@ -112,7 +112,7 @@ ES mapping 字段示例：
 
 除 span_kind/run_name 按当前模型服务合同固定外，data 优先读取本地追踪对象中的有效字段；对象或字段缺失时，仅使用当前调用已经取得的真实事实兜底，未知保持 null。追踪对象没有 SDK 原生字段的状态、实测单调时钟耗时、TTFT、输出区间及结构化错误，由服务写入 RunTree.metadata 后统一读取。usage_source/status 仍固定为 null，不受其他追踪元数据覆盖。identity 继续原样来自请求，不用追踪 ID 替换。
 
-LangSmith 身份由 SDK 本地创建对象时生成，不需要网络。当前请求不继承外部追踪上下文，模型追踪是独立根，trace_id=span_id、parent_span_id=null。此身份不等同于 Studio 的请求 runId；不能仅根据同 threadId/runId 伪造调用树。模型响应出现 tool_calls 仍为模型 Span；Studio 真正执行的工具或 RAG 没有经过本服务，不会补建它们的追踪记录。
+请求顶层 runId 为标准 UUID 时，转发服务在首次收到该业务 Run 的模型请求时创建本地根 Span，以 runId 作为根 ID。每次模型调用的 LangSmith trace_id 和 parent_run_id 等于该根 ID，各自使用独立的 span_id。根缓存按转发进程维护，最多保留 4096 个最近使用的业务根。跨进程、重启或缓存淘汰后根的起始时间可能不同，业务根 ID 仍由同一个 runId 决定。旧格式 runId 沿用独立本地模型 Span。ES 只写模型记录，data_traceId 读取本地 Span 的 trace_id，按业务 Run 查询使用 identity_runId。模型响应出现 tool_calls 时仍记录为模型 Span，Studio 实际执行的工具或 RAG 由其执行端追踪。
 
 ## Token 统计
 

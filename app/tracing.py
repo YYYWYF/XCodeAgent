@@ -1,7 +1,10 @@
 """只在本地构建 LangSmith 追踪；不创建上传客户端，不执行远程上报。"""
 
 import logging
+from collections import OrderedDict
+from threading import Lock
 from typing import Any
+from uuid import UUID
 
 from langsmith import RunTree
 
@@ -9,25 +12,51 @@ from .config import Settings
 from .model_observation import safe_error
 
 logger = logging.getLogger(__name__)
+_MAX_LOCAL_ROOTS = 4096
 
 
 class TraceRecorder:
-    """每次模型请求独立创建本地 SDK 对象，旧远程开关不影响采集或触发上传。"""
+    """在转发进程内按业务 Run 关联独立的模型 Span。"""
 
     def __init__(self, settings: Settings):
-        """只保留本地配置；不初始化、注入或访问 LangSmith Client。"""
+        """保存本地配置和有界的业务根缓存。"""
         self.settings = settings
+        self._roots: OrderedDict[UUID, RunTree] = OrderedDict()
+        self._root_lock = Lock()
+
+    def _business_root(self, run_id: Any) -> RunTree | None:
+        """使用请求中的标准 UUID 获取业务根，并保留首次接收的根时间。"""
+        if not isinstance(run_id, str):
+            return None
+        try:
+            root_id = UUID(run_id)
+        except ValueError:
+            return None
+        if str(root_id) != run_id:
+            return None
+        with self._root_lock:
+            root = self._roots.get(root_id)
+            if root is None:
+                root = RunTree(id=root_id, name="business-run", run_type="chain",
+                               project_name=self.settings.langsmith_project, replicas=[])
+                self._roots[root_id] = root
+                if len(self._roots) > _MAX_LOCAL_ROOTS:
+                    self._roots.popitem(last=False)
+            else:
+                self._roots.move_to_end(root_id)
+            return root
 
     async def start(self, request: dict[str, Any], metadata: dict[str, Any]) -> tuple[str | None, Any]:
-        """由 SDK 在内存生成独立根身份，不读取外层追踪或环境中的上传配置。"""
+        """创建独立模型 Span，有业务根时继承其 Trace ID。"""
         try:
-            # 身份由 LangSmith SDK 本地生成，不把 AG-UI runId 当作 Span ID。
+            parent = self._business_root(metadata.get("run_id"))
+            # 通过构造参数继承根身份，避免将每次模型调用累积到缓存根的 child_runs。
             tree = RunTree(name="model-inference", run_type="llm", inputs=request,
                            extra={"metadata": {**metadata, "model_started": False,
                                                "ls_provider": self.settings.model_upstream,
                                                "ls_model_name": self.settings.active_model}},
                            project_name=self.settings.langsmith_project,
-                           parent_run=None, parent_run_id=None, replicas=[])
+                           parent_run=parent, replicas=[])
         except Exception:
             logger.warning("LangSmith 本地追踪创建失败，推理继续")
             return None, None
