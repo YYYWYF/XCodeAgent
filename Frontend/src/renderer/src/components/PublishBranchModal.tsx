@@ -18,6 +18,9 @@ type PublishModalProps = {
   /** 是否正在按本次改动生成变更说明（生成期间输入框仍可编辑）。 */
   descriptionGenerating?: boolean
   onDescriptionChange: (value: string) => void
+  /** 提交前缀（看板编号 + #comment + 提交类型），由用户编辑。 */
+  prefix: string
+  onPrefixChange: (value: string) => void
   /** 仓库地址：提交与推送的远程落点，弹框内回显。 */
   repoUrl?: string
   generating: VersionGenerateState
@@ -33,6 +36,8 @@ export default function PublishBranchModal({
   description,
   descriptionGenerating = false,
   onDescriptionChange,
+  prefix,
+  onPrefixChange,
   repoUrl,
   generating,
   onCancel,
@@ -43,9 +48,12 @@ export default function PublishBranchModal({
   // 直接放行只会让 Pydantic 抛 string_too_short，对用户没有指导意义。这里在弹窗内直接阻断，
   // 并提供「去设置」入口跳转到左侧菜单的设置面板。
   const repoUrlMissing = !repoUrl
+  // 前缀与描述必填其一：前缀通常带看板编号是必填项，描述可以稍短，但完全空就不让提。
+  // 通常提交规范要求看板编号 + 描述齐全，这里用「前缀非空 AND 描述非空」做强校验。
   const canSubmit =
     !generating &&
     !repoUrlMissing &&
+    !!prefix.trim() &&
     !!description.trim() &&
     (!isBuiltinDatabase || databaseDeliveryReady)
   return (
@@ -158,6 +166,21 @@ export default function PublishBranchModal({
                   onReadyChange={setDatabaseDeliveryReady}
                 />
               )}
+              <div className={cx('workbench-generate-field')}>
+                <label className={cx('workbench-generate-field-label')}>
+                  <span className={cx('workbench-generate-required')}>*</span>
+                  提交前缀
+                  <span className={cx('workbench-generate-field-hint')}>
+                    将拼在变更说明前面
+                  </span>
+                </label>
+                <Input
+                  value={prefix}
+                  onChange={(e) => onPrefixChange(e.target.value)}
+                  maxLength={80}
+                  placeholder="例如：Z000000-0000 #comment chore:"
+                />
+              </div>
               <div className={cx('workbench-generate-field')}>
                 <label className={cx('workbench-generate-field-label')}>
                   <span className={cx('workbench-generate-required')}>*</span>

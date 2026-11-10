@@ -312,6 +312,9 @@ type WorkbenchVersionModalsProps = {
   /** 是否正在按本次改动生成变更说明。 */
   descriptionGenerating?: boolean
   onDescriptionChange: (value: string) => void
+  /** 提交推送弹框：提交前缀（看板编号 + #comment + 提交类型），由用户编辑。 */
+  publishPrefix: string
+  onPrefixChange: (value: string) => void
   generating: VersionGenerateState
   onCancelPublish: () => void
   onGenerate: () => void
@@ -348,6 +351,8 @@ export default function WorkbenchVersionModals({
   publishDescription,
   descriptionGenerating,
   onDescriptionChange,
+  publishPrefix,
+  onPrefixChange,
   generating,
   onCancelPublish,
   onGenerate,
@@ -388,6 +393,8 @@ export default function WorkbenchVersionModals({
           description={publishDescription}
           descriptionGenerating={descriptionGenerating}
           onDescriptionChange={onDescriptionChange}
+          prefix={publishPrefix}
+          onPrefixChange={onPrefixChange}
           repoUrl={publishRepoUrl}
           generating={generating}
           onCancel={onCancelPublish}

@@ -533,7 +533,12 @@
 }
 
 .@{class-prefix}-workbench-generate-field {
-  margin-bottom: 4px;
+  margin-bottom: 12px;
+
+  // 最后一个字段贴底,不挤 footer。
+  &:last-child {
+    margin-bottom: 4px;
+  }
 
   .@{class-prefix}-workbench-generate-field-label {
     display: block;

@@ -71,6 +71,11 @@ const EMPTY_CATALOG = {
   entities: [] as DevelopmentPlanningEntityOption[]
 }
 
+// 提交推送弹框「提交前缀」的默认值：与后端 git_commit_message.py 的 BOARD_COMMIT_NUMBER
+// + #comment + 常用类型保持一致。后端在收到已带编号的提交信息时幂等返回，不会重复补前缀，
+// 所以这里把编号显性化给用户编辑是安全的。
+const DEFAULT_PUBLISH_PREFIX = 'Z000000-0000 #comment chore:'
+
 type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
@@ -195,6 +200,10 @@ function WorkbenchPage({
   const [versionGenerating, setVersionGenerating] = useState<{ stepIndex: number } | null>(null)
   // 提交推送弹框：变更说明草稿。
   const [publishDescription, setPublishDescription] = useState('')
+  // 提交推送弹框：提交前缀（看板编号 + #comment + 提交类型），跨弹窗保留，
+  // 用户改过一次后下次打开不再重置。默认值与后端 git_commit_message.py 的兜底格式一致，
+  // 后端 ensure_board_number 检测到已带编号就不会重复添加，所以前端拼好后端不会再加工。
+  const [publishPrefix, setPublishPrefix] = useState(DEFAULT_PUBLISH_PREFIX)
   // 提交推送弹框：是否正在根据本次改动生成变更说明（生成期间弹窗照常可用）。
   const [descriptionGenerating, setDescriptionGenerating] = useState(false)
   // 提交推送弹框是否开启。
@@ -470,7 +479,12 @@ function WorkbenchPage({
   const handleGenerateVersion = useCallback(async (): Promise<void> => {
     if (!viewedBranch) return
     const branchName = viewedBranch.name
-    const description = publishDescription.trim()
+    // 前缀 + 空格 + 描述拼成完整提交说明：前缀含看板编号（如 Z000000-0000 #comment chore:），
+    // 后端 ensure_board_number 检测到已带编号时幂等返回，不会重复补，所以这里直接拼好。
+    // 描述本身可能为空（用户只填前缀就提交），用 filter 防空白再 join，避免出现双空格。
+    const description = [publishPrefix.trim(), publishDescription.trim()]
+      .filter(Boolean)
+      .join(' ')
     setVersionGenerating({ stepIndex: 0 })
     try {
       const result = await publishVersion(
@@ -542,6 +556,7 @@ function WorkbenchPage({
     applicationLifecycle,
     persistApplicationConfig,
     publishDescription,
+    publishPrefix,
     viewedBranch,
     workspaceApplication
   ])
@@ -933,6 +948,8 @@ function WorkbenchPage({
               publishDescription={publishDescription}
               descriptionGenerating={descriptionGenerating}
               onDescriptionChange={handleDescriptionChange}
+              publishPrefix={publishPrefix}
+              onPrefixChange={setPublishPrefix}
               generating={versionGenerating}
               onCancelPublish={() => {
                 if (versionGenerating) return
