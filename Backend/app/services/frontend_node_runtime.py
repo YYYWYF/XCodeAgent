@@ -60,11 +60,20 @@ class FrontendNodeRuntime:
         )
 
     def command(self, name: str) -> str:
-        """在选定 Node 的 PATH 中查找包管理器，保留其启动脚本入口。"""
-        command = _path_command(name, self.env["PATH"])
-        if not command:
+        """在选定 Node 的 PATH 中查找包管理器，保留其启动脚本入口。
+
+        Windows 上 Corepack 会把 pnpm.CMD / yarn.CMD 等 shim 装进 Node 安装目录，
+        任何子命令都会先触发 Corepack 联网解析版本；企业内网无法访问
+        registry.npmjs.org 时这一步必然失败。这里扫描 PATH 中所有候选，
+        优先返回非 Corepack shim 的真实可执行文件；找不到时退而返回第一个候选。
+        """
+        candidates = _path_commands_all(name, self.env["PATH"])
+        if not candidates:
             raise FrontendNodeError(f"未找到包管理器命令：{name}。当前选择 {self.describe()}。")
-        return command
+        for candidate in candidates:
+            if not _is_corepack_shim(candidate):
+                return candidate
+        return candidates[0]
 
     def verify(
         self, command: str, *, workspace: Path, cwd: Path, npx: bool = False, before_install: bool = False,
@@ -146,6 +155,42 @@ def _path_command(name: str, path: str) -> str | None:
             if command:
                 return command
     return None
+
+
+def _path_commands_all(name: str, path: str) -> list[str]:
+    """按 PATH 顺序收集所有命中该命令的候选路径，保持原有 Windows 查询语义。"""
+    if sys.platform != "win32":
+        located = shutil.which(name, path=path)
+        return [located] if located else []
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for entry in path.split(os.pathsep):
+        if not entry:
+            continue
+        command = shutil.which(str(Path(entry.strip('"')).absolute() / name))
+        if command:
+            key = os.path.normcase(command)
+            if key not in seen:
+                seen.add(key)
+                candidates.append(command)
+    return candidates
+
+
+def _is_corepack_shim(command: str) -> bool:
+    """识别 Windows 上的 Corepack shim：脚本内容里显式引用 corepack。
+
+    Corepack 在 Node 安装目录写入 pnpm.CMD / yarn.CMD 等批处理脚本，前几行
+    就会出现 "corepack" 字样（调用 corepack.js 或 node corepack）。真实安装
+    的 pnpm（如 npm i -g pnpm 落在 %APPDATA%\\npm）脚本不含此引用。
+    仅 Windows 需要此判定；非 Windows 平台返回 False。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        head = Path(command).read_text(encoding="utf-8", errors="ignore")[:2048]
+    except OSError:
+        return False
+    return "corepack" in head.lower()
 
 
 def _probe_yarn_launcher(
