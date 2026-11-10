@@ -40,6 +40,8 @@ _TASK_RUNTIME_FIELDS = {
     "acceptance_evidence",
     "business_acceptance_evidence",
     "business_acceptance_summary",
+    # Markdown 同步结果由执行器产生，不属于用户确认的任务合同。
+    "implementation_document",
     "scheduler",
     "updated_by",
     "updated_at",

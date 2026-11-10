@@ -1539,8 +1539,16 @@ def _restore_build_runtime(
 
     for task_id, formal in formal_by_id.items():
         actual = source_by_id[task_id]
-        if immutable(actual) != immutable(formal):
-            raise RecoveryExecutionError("BUILD_RETRY_TASK_DRIFT", f"Build 任务 {task_id} 的正式合同已变化。")
+        actual_contract, formal_contract = immutable(actual), immutable(formal)
+        if actual_contract != formal_contract:
+            # 仅公开字段名，便于区分真实合同变更与运行字段误归类，不输出合同正文。
+            changed_fields = sorted(
+                key for key in actual_contract.keys() | formal_contract.keys()
+                if key not in actual_contract or key not in formal_contract
+                or actual_contract[key] != formal_contract[key]
+            )
+            raise RecoveryExecutionError("BUILD_RETRY_TASK_DRIFT",
+                f"Build 任务 {task_id} 的正式合同已变化（字段：{'、'.join(changed_fields)}）。")
     repair_plan = source.get("repair_task_plan")
     repair_ids = {
         str(task.get("id")) for task in (repair_plan.get("tasks") or [])

@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+`workspace/task_documents.py::_TASK_RUNTIME_FIELDS` 包含后端 Markdown 同步回执 `implementation_document`，统一用于计划摘要、运行状态回写与 Build 恢复合同比较，避免较早成功任务的文档回执阻断后续失败任务重试。`graph/subgraphs/build.py::_restore_build_runtime` 的真实任务合同漂移错误附带变更字段名，仍严格校验身份、计划绑定及合同正文，不输出正文或放宽正式变更校验。
+
 Build 单项及全部失败任务重试由 `graph/subgraphs/build.py` 按非空 `build_retry_task_ids` 跳过两处 `refresh_build_workspace`；仍验证原执行进度和计划绑定，缺失进度直接失败，不降级为扫描及整轮重启。调度收口清空仅用于本次任务恢复的 `retry_source_run_id`，防止后续测试/审查阶段因该标记再次扫描；实际写入文件后的代码图增量更新、正常规划和整阶段重试/重启扫描保持原行为。
 
 本地会话保存由 `Frontend/src/main/sessionFileWriter.ts` 在复制未加载历史后、发布前关闭源文件句柄；`sessionPersistence.ts::publishSessionFile` 统一原子替换，Windows 的 EPERM/EACCES/EBUSY 最多延迟重试五次，每次重新核对保存起点的源文件签名。失败保留原会话，不先删除目标、不退化为非原子覆盖；Worker 的既有串行保存和阶段身份校验不变。
