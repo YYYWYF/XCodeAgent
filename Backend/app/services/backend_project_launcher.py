@@ -571,7 +571,7 @@ def _start_backend_server(
                 stdout=subprocess.PIPE if redact_output else stdout,
                 stderr=subprocess.PIPE if redact_output else stderr,
                 stdin=subprocess.DEVNULL,
-                env=environment,
+                env={**environment, "SPRING_PROFILES_ACTIVE": "dev"},
                 **preview_process_creation_options(),
             )
             register_backend_process(workspace, process, jar_path)

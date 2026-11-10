@@ -18,7 +18,8 @@ from app.services.backend_startup_diagnostics import startup_root_cause
 from app.services.workspace_process_registry import WorkspaceProcessRegistry
 
 READY_SCRIPT = '''
-import socket,time
+import os,socket,time
+assert os.environ.get('SPRING_PROFILES_ACTIVE') == 'dev'
 s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(20)
 print('Tomcat started on port(s): '+str(s.getsockname()[1])+' (http)',flush=True)
 print('Started Application in 0.1 seconds (JVM running for 0.2)',flush=True)
@@ -45,7 +46,10 @@ class BackendStartupCheckTests(unittest.TestCase):
         self.stack.enter_context(patch.object(startup, 'workspace_process_registry', self.registry))
         self.stack.enter_context(patch.object(startup, 'BACKEND_STARTUP_TIMEOUT_SECONDS', 1))
         self.stack.enter_context(patch.object(startup, 'BACKEND_STARTUP_STABILITY_SECONDS', .05))
-        self.stack.enter_context(patch.object(startup, '_backend_runtime_environment', return_value=(dict(os.environ), None)))
+        self.stack.enter_context(patch.object(
+            startup, '_backend_runtime_environment',
+            return_value=({**os.environ, 'SPRING_PROFILES_ACTIVE': 'prod'}, None),
+        ))
         self.stack.enter_context(patch.object(startup.shutil, 'which', return_value=sys.executable))
 
     def write_jar(self, executable: bool) -> None:

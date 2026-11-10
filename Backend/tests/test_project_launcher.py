@@ -499,7 +499,7 @@ class ProjectLauncherTests(unittest.TestCase):
                     "app.services.backend_project_launcher._wait_for_backend_ready",
                     return_value=True,
                 ),
-                patch.dict(os.environ, {"MAVEN_OPTS": "-Xmx512m"}),
+                patch.dict(os.environ, {"MAVEN_OPTS": "-Xmx512m", "SPRING_PROFILES_ACTIVE": "prod"}),
             ):
                 result = launch_backend_project(workspace)
             staged_jar = Path(popen.call_args.args[0][-1])
@@ -522,6 +522,7 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(Path(run.call_args.kwargs["cwd"]), backend.resolve())
         self.assertNotIn("text", run.call_args.kwargs)
         maven_options = run.call_args.kwargs["env"]["MAVEN_OPTS"].split()
+        self.assertEqual(run.call_args.kwargs["env"]["SPRING_PROFILES_ACTIVE"], "prod")
         self.assertEqual(maven_options[0], "-Xmx512m")
         self.assertIn("-Dfile.encoding=UTF-8", maven_options)
         self.assertEqual(
@@ -539,6 +540,7 @@ class ProjectLauncherTests(unittest.TestCase):
             ],
         )
         self.assertEqual(Path(popen.call_args.kwargs["cwd"]), staged_jar.parent)
+        self.assertEqual(popen.call_args.kwargs["env"]["SPRING_PROFILES_ACTIVE"], "dev")
         for key, value in preview_process_creation_options().items():
             self.assertEqual(popen.call_args.kwargs[key], value)
         self.assertNotIn("start_new_session", popen.call_args.kwargs)

@@ -177,7 +177,8 @@ def _run_backend_startup_check_locked(
         execution["returncode"] = None
         with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
             with workspace_process_registry.managed_process(
-                argv, workspace=root, run_id=run_id, cwd=runtime_jar.parent, env=environment,
+                argv, workspace=root, run_id=run_id, cwd=runtime_jar.parent,
+                env={**environment, "SPRING_PROFILES_ACTIVE": "dev"},
                 stdout=subprocess.PIPE if snapshot is not None else stdout,
                 stderr=subprocess.PIPE if snapshot is not None else stderr, stdin=subprocess.DEVNULL,
             ) as process:
