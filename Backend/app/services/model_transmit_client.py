@@ -12,13 +12,29 @@ from weakref import WeakKeyDictionary
 import httpx
 from ag_ui.core import Event, RunAgentInput
 from httpx_sse import aconnect_sse, connect_sse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from app.services.model_request_cancellation import (
     check_model_request, guard_model_response, check_async_model_request, guard_async_model_response,
 )
 
 _EVENT_ADAPTER = TypeAdapter(Event)
+
+
+class _ServiceError(BaseModel):
+    """严格接受转发服务当前的两字段错误合同，不读取旧字段别名。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False, hide_input_in_errors=True)
+    return_code: str | int | float | bool = Field(alias="returnCode")
+    error_msg: str = Field(alias="errorMsg")
+
+    @field_validator("return_code", "error_msg")
+    @classmethod
+    def validate_text(cls, value: Any) -> Any:
+        """拒绝空错误码和空提示，数值零仍是有效的上游业务码。"""
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("错误码与提示不能为空")
+        return value
 
 
 class ModelTransmitError(RuntimeError):
@@ -34,6 +50,19 @@ class ModelTransmitError(RuntimeError):
         self.provider = "transmit"
         self.model = "studio-model"
 
+    @classmethod
+    def from_payload(cls, value: Any, *, status_code: int | None = None) -> "ModelTransmitError":
+        """将当前服务错误映射为模型依赖异常，仅按明确事实生成重试属性。"""
+        try:
+            error = _ServiceError.model_validate(value)
+        except ValidationError as exc:
+            raise cls("模型转发服务错误载荷无效", code="INVALID_MODEL_RESULT",
+                      status_code=status_code) from exc
+        code = str(error.return_code)
+        retryable = code in {"UPSTREAM_TIMEOUT", "UPSTREAM_CONNECTION_ERROR", "UPSTREAM_RATE_LIMIT"} or (
+            status_code == 429 or status_code is not None and status_code >= 500)
+        return cls(error.error_msg, code=code, status_code=status_code, retryable=retryable)
+
 
 class _RunEvents:
     """校验单次 AG-UI 流的生命周期和结构化模型结果。"""
@@ -43,6 +72,7 @@ class _RunEvents:
         self.thread_id = payload["threadId"]
         self.run_id = payload["runId"]
         self.result_name = result_name
+        self.error_name = result_name.rsplit(".", 1)[0] + ".error"
         self.started = False
         self.finished = False
         self.has_result = False
@@ -73,12 +103,8 @@ class _RunEvents:
             self._check_outcome(getattr(event, "result", None))
             self.finished = True
         if kind == "CUSTOM":
-            if event.name == "model-inference.error":
-                value = event.value if isinstance(event.value, dict) else {}
-                raise ModelTransmitError(value.get("message", "模型调用失败"),
-                                         code=value.get("code", "MODEL_RUN_ERROR"),
-                                         status_code=value.get("statusCode"),
-                                         retryable=bool(value.get("retryable", False)))
+            if event.name == self.error_name:
+                raise ModelTransmitError.from_payload(event.value)
             if event.name in (self.result_name, "model-inference.chunk"):
                 if not isinstance(event.value, dict):
                     raise ModelTransmitError("模型结果结构无效", code="INVALID_MODEL_RESULT")
@@ -96,10 +122,9 @@ class _RunEvents:
         if isinstance(value, dict) and (value.get("status") in ("failed", "error", "cancelled")
                                         or value.get("error")):
             error = value.get("error")
-            details = error if isinstance(error, dict) else {}
-            raise ModelTransmitError(details.get("message", "模型调用未成功完成"),
-                                     code=details.get("code", "MODEL_RUN_FAILED"),
-                                     status_code=details.get("statusCode"))
+            if isinstance(error, dict):
+                raise ModelTransmitError.from_payload(error)
+            raise ModelTransmitError("模型调用未成功完成", code="MODEL_RUN_FAILED")
 
     def validate_end(self) -> None:
         """流连接结束后要求合法终帧和结构化结果均已到达。"""
@@ -136,12 +161,19 @@ class ModelTransmitClient:
                 "trust_env": self.trust_env, "transport": self.transport}
 
     @staticmethod
-    def _check_http(response: httpx.Response) -> None:
-        """把传输状态转换为模型依赖异常，不向 Studio 登录层抛 HTTPException。"""
-        if response.is_error:
-            raise ModelTransmitError(f"模型转发服务 HTTP {response.status_code}",
-                                     code="MODEL_TRANSMIT_HTTP_ERROR", status_code=response.status_code,
-                                     retryable=response.status_code in (429, 502, 503, 504))
+    def _check_http(response: httpx.Response, *, error_name: str) -> None:
+        """读取已加载的 HTTP 错误事件，保留服务提示，不触发 Studio 登录失效。"""
+        if not response.is_error:
+            return
+        try:
+            event = _EVENT_ADAPTER.validate_json(response.content)
+        except ValidationError as exc:
+            raise ModelTransmitError("模型转发服务返回无效错误事件", code="INVALID_AGUI_EVENT",
+                                     status_code=response.status_code) from exc
+        if event.type != "CUSTOM" or event.name != error_name:
+            raise ModelTransmitError("模型转发服务错误事件与调用不匹配", code="INVALID_AGUI_EVENT",
+                                     status_code=response.status_code)
+        raise ModelTransmitError.from_payload(event.value, status_code=response.status_code)
 
     def iterate(self, path: str, payload: dict[str, Any], *, timeout: float = 120,
                 result_name: str = "model-inference.result") -> Iterator[tuple[str, dict[str, Any]]]:
@@ -152,7 +184,9 @@ class ModelTransmitClient:
                 "request": [check_model_request], "response": [guard_model_response],
             }) as client:
                 with connect_sse(client, "POST", path, json=payload) as source:
-                    self._check_http(source.response)
+                    if source.response.is_error:
+                        source.response.read()
+                    self._check_http(source.response, error_name=state.error_name)
                     for event in source.iter_sse():
                         item = state.consume(event.data)
                         if item is not None:
@@ -171,7 +205,9 @@ class ModelTransmitClient:
                 "request": [check_async_model_request], "response": [guard_async_model_response],
             }) as client:
                 async with aconnect_sse(client, "POST", path, json=payload) as source:
-                    self._check_http(source.response)
+                    if source.response.is_error:
+                        await source.response.aread()
+                    self._check_http(source.response, error_name=state.error_name)
                     async for event in source.aiter_sse():
                         item = state.consume(event.data)
                         if item is not None:

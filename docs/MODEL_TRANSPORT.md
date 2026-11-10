@@ -34,7 +34,7 @@ MODEL_TRANSMIT_TRUST_ENV=false
 | 字段 | 内容 |
 | --- | --- |
 | `request` | 完整模型消息、工具 Schema、temperature、max_tokens、thinking、stop、stream 等生成参数；模型占位名固定 `studio-model`，真实模型由服务配置决定 |
-| `timeoutSeconds` | 本次上游模型调用超时 |
+| `timeoutSeconds` | 本次上游网络等待超时，默认 120 秒；连续无网络数据的读取间隔触发超时，不是整次调用总时长 |
 | `maxRetries` | 本次上游 SDK 重试预算，0 保持零重试 |
 | `metadata.sessionId` | 当前会话身份 |
 | `metadata.requestId` | 每次模型请求独立生成的身份 |
@@ -44,6 +44,14 @@ MODEL_TRANSMIT_TRUST_ENV=false
 | `metadata.extensions.workflow_scope/operation_id/conversation_id` | 调用上下文显式提供时传递 |
 
 首次实际模型调用懒加载 `/model-info/run`。服务认证使用 `Authorization: Bearer <MODEL_TRANSMIT_TOKEN>`，不向服务传递本地上游模型密钥。同步、异步、流式和工具调用均由同一适配器生成上述请求；直连 SDK 不接收这些转发专用字段。
+
+## 错误合同
+
+模型转发服务的推理错误统一为 `{"type":"CUSTOM","name":"model-inference.error","value":{"returnCode":"UPSTREAM_TIMEOUT","errorMsg":"上游模型请求超时"}}`；模型信息查询使用 `model-info.error`。`value` 严格只接受 `returnCode` 与 `errorMsg`，不读取旧的 `code/message/statusCode/retryable`。上游有业务错误码时保留其含义，数值码在本地异常中转成字符串，数值零不会丢失；没有上游码时使用转发服务定义的错误码。
+
+同步、异步、invoke 和 stream 共用 `ModelTransmitError` 转换，`code` 保存 `returnCode`，异常提示保存 `errorMsg`。流建立前 HTTP 401/413/422 的 JSON 响应也按官方 AG-UI 事件模型读取，保留实际 HTTP 状态；流内错误没有上游 HTTP 状态时不推测状态。两类认证错误均属于模型依赖失败，不触发 Studio 登录失效，也不切换直连。
+
+已知超时、连接错误沿原调用层有界重试范围处理；认证、参数及未知业务码不根据提示文本猜测重试。HTTP 状态仅来自本次服务响应。客户端不增加网络重试，也不探测旧协议。
 
 ## 代码边界
 
@@ -58,4 +66,4 @@ MODEL_TRANSMIT_TRUST_ENV=false
 
 ## 手动验证
 
-按本次要求不新增测试文件，最终修改由用户手动验证。可分别配置两种模式并重启后端，观察需求、技术规划、UI 设计、工具调用及停止行为；转发模式在服务端核对业务身份、操作上下文及调用预算。不要将凭据提交到仓库。
+本次适配在既有 `Backend/tests/test_model_transport_retry.py` 中补充当前合同的同步、异步、HTTP 拒绝及 SSE 错误回归，不新增测试文件。可分别配置两种模式并重启后端，观察需求、技术规划、UI 设计、工具调用及停止行为；转发模式在服务端核对业务身份、操作上下文及调用预算。不要将凭据提交到仓库。
