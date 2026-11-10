@@ -1011,6 +1011,94 @@ test('重入丢失本地登记时，仍运行的 Backend Run 阻止重复发送'
   await runtime.handleSend()
 })
 
+for (const failure of ['http', 'sdk', 'eof', 'persist', 'success'] as const) {
+  test(`API 映射检测 ${failure} 通过原 Run 提交，成功展示后续计划、失败保留错误和原确认门`, async () => {
+    const savedWindow = globalThis.window
+    const savedFetch = globalThis.fetch
+    Object.defineProperty(globalThis, 'window', { configurable: true,
+      value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+    const identity = buildSessionIdentity()
+    const lifecycle = buildIdleLifecycle()
+    const clarification = { mode: 'api_design_required', status: 'requires_user_input',
+      developmentTarget: { type: 'endpoint', id: 'animals.list', apiContractId: 'animals' } }
+    lifecycle.activeExecutions = { 'mapping-run': {
+      runId: 'mapping-run', threadId: 'mapping-thread', ownerSessionId: identity.sessionId,
+      phase: 'api_design_readiness_gate', status: 'awaiting_user', scope: 'endpoint',
+      targetId: 'animals.list', pendingInteraction: { id: 'mapping-confirmation',
+        type: 'api_design', basedOnRevision: 1, payload: clarification }
+    } } as unknown as ApplicationLifecycle['activeExecutions']
+    const source = { runId: 'mapping-run', threadId: 'mapping-thread', events: [],
+      summary: { status: 'requires_user_input', phase: 'api_design_readiness_gate',
+        clarification, lifecycle, buildExecutionScope: {
+          type: 'endpoint', targetId: 'animals.list', apiContractId: 'animals' } }
+    } as unknown as WorkflowRunPayload
+    let messages: AgentChatMessage[] = [{ id: 1, role: 'assistant', content: '', workflow: source }]
+    let savedMessages: AgentChatMessage[] = []
+    let released = 0
+    let workflowRequests = 0
+    const params = buildRuntimeParams({ activeSession: identity,
+      application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+      applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} },
+      acquireSessionExecution: () => undefined, releaseSessionExecution: () => { released += 1 },
+      onApplicationLifecycleChange: () => undefined,
+      persistSession: async (input) => {
+        if (failure === 'persist') throw new Error('会话文件写入失败')
+        savedMessages = input.messages
+      } })
+    params.getSessionMessages = () => messages
+    params.setSessionMessages = (_key, value) => {
+      messages = typeof value === 'function' ? value(messages) : value
+    }
+    let runtime!: ReturnType<typeof useWorkflowConversation>
+    /** 经真实 Hook 和官方客户端提交原确认，覆盖无业务错误事件的异常出口。 */
+    function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+    globalThis.fetch = async (input, init) => {
+      const request = JSON.parse(String(init?.body))
+      assert.ok(String(input).endsWith('/workflow/run'))
+      workflowRequests += 1
+      assert.equal(request.threadId, source.threadId)
+      assert.deepEqual(request.forwardedProps.resumeReference, { runId: source.runId, threadId: source.threadId })
+      assert.deepEqual(request.forwardedProps.clarificationAnswers.api_design_gate,
+        { action: 'refresh', targetType: 'endpoint', targetId: 'animals.list', apiContractId: 'animals' })
+      if (failure === 'http') return new Response('服务暂时不可用', { status: 503 })
+      if (failure === 'sdk') throw new Error('客户端请求失败')
+      if (failure === 'success') return sseResponse(request.threadId, request.runId, {
+        workflow: { ...buildGenerationWorkflow(request.threadId), runId: request.runId,
+          summary: { ...buildGenerationWorkflow(request.threadId).summary,
+            message: '映射检测通过，开发任务计划已生成。' } } })
+      return new Response(`data: ${JSON.stringify({ type: 'RUN_STARTED',
+        threadId: request.threadId, runId: request.runId })}\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } })
+    }
+    try {
+      renderToStaticMarkup(createElement(Probe))
+      assert.equal(await runtime.handleSubmitClarification(source, { api_design_gate: {
+        action: 'refresh', targetType: 'endpoint', targetId: 'animals.list', apiContractId: 'animals'
+      } }), failure === 'success')
+      assert.equal(workflowRequests, failure === 'persist' ? 0 : 1, '不能自动重发检测')
+      const failedMessage = messages.at(-1)
+      assert.equal(failedMessage?.role, 'assistant')
+      if (failure === 'success') {
+        assert.equal(failedMessage?.error, undefined)
+        assert.equal(failedMessage?.workflow?.summary.phase, 'prepare_build_tasks')
+        assert.match(failedMessage?.content || '', /映射检测通过/)
+      } else {
+        assert.ok(failedMessage?.error, '错误不能变成不可见的空助手消息')
+        if (failure === 'eof') assert.match(failedMessage.error, /未收到运行结束回执/)
+        if (failure === 'persist') assert.match(failedMessage.error, /会话文件写入失败/)
+        if (failure === 'sdk') assert.match(failedMessage.error, /客户端请求失败/)
+      }
+      assert.equal(released, 1)
+      assert.equal(messages[0].workflow, source)
+      assert.equal(lifecycle.activeExecutions['mapping-run'].pendingInteraction?.submittedAt, undefined)
+      if (failure !== 'persist') assert.equal(savedMessages.at(-1)?.error, failedMessage.error)
+    } finally {
+      globalThis.fetch = savedFetch
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+    }
+  })
+}
+
 /** 构造 generation 完成后服务端签发的 DAG 确认载荷。 */
 function buildDagConfirmation(): Record<string, unknown> {
   return {

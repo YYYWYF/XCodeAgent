@@ -1592,6 +1592,56 @@ test('PendingPlan recovery 缺少 threadId 仍按 owner、WorkflowRunId 和 Draf
   assert.deepEqual(boundWorkflow?.summary.clarification?.draftIdentity, planningRefresh.confirmation.draftIdentity)
   assert.equal(workflowInteractionAvailability(boundWorkflow!, handedOffLifecycle), 'active')
   assert.equal(workflowInteractionAvailability(recoveredWorkflow!, handedOffLifecycle), 'stale')
+  // 同一草稿的本次拒绝反馈不能被无错误的 Refresh 重建卡覆盖；其他 Run/草稿不得串入。
+  const rejectedWorkflow = {
+    ...boundWorkflow!,
+    summary: {
+      ...boundWorkflow!.summary,
+      clarification: {
+        ...boundWorkflow!.summary.clarification!,
+        errors: ['Pending DAG 缺少正式基线中的 retained Task。']
+      }
+    }
+  }
+  const rejectedMessage = {
+    id: 99, role: 'assistant' as const, content: '', createdAt: 99, workflow: rejectedWorkflow
+  }
+  const rejectedProjection = pendingDagConfirmationWorkflow(
+    [rejectedMessage], boundExecution, handedOffLifecycle
+  )
+  assert.deepEqual(rejectedProjection?.summary.clarification?.errors, rejectedWorkflow.summary.clarification.errors)
+  assert.deepEqual(rejectedProjection?.summary.clarification?.taskPlan, planningRefresh.confirmation.taskPlan)
+  const rejectedExecution = {
+    ...boundExecution!,
+    pendingInteraction: {
+      ...boundExecution!.pendingInteraction!,
+      payload: rejectedWorkflow.summary.clarification
+    }
+  }
+  assert.deepEqual(pendingDagConfirmationWorkflow(
+    [], rejectedExecution, handedOffLifecycle
+  )?.summary.clarification?.errors, rejectedWorkflow.summary.clarification.errors)
+  assert.deepEqual(pendingDagConfirmationWorkflow(
+    [{ ...rejectedMessage, workflow: boundWorkflow! }], rejectedExecution, handedOffLifecycle
+  )?.summary.clarification?.errors, rejectedWorkflow.summary.clarification.errors)
+  for (const workflow of [
+    { ...rejectedWorkflow, runId: 'old-run' },
+    { ...rejectedWorkflow, threadId: 'other-thread' },
+    {
+      ...rejectedWorkflow,
+      summary: {
+        ...rejectedWorkflow.summary,
+        clarification: {
+          ...rejectedWorkflow.summary.clarification,
+          draftIdentity: { ...planningRefresh.confirmation.draftIdentity, draftDigest: 'b'.repeat(64) }
+        }
+      }
+    }
+  ]) {
+    assert.equal(pendingDagConfirmationWorkflow(
+      [{ ...rejectedMessage, workflow }], boundExecution, handedOffLifecycle
+    )?.summary.clarification?.errors, undefined)
+  }
   const submittedLifecycle = {
     ...handedOffLifecycle,
     activeExecutions: {

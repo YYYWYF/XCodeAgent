@@ -172,6 +172,20 @@ export function pendingDagConfirmationWorkflow(
     recovery.status === 'awaiting_confirmation' &&
     recovery.confirmation
   ) {
+    // Refresh 重建计划正文；本次确认拒绝的反馈只从同 execution、同草稿合并，避免被只读重建覆盖。
+    const identityKey = dagDraftIdentityKey(recovery.confirmation.draftIdentity)
+    const currentMessage = [...messages].reverse().find(
+      ({ workflow }) => workflow?.runId === execution.runId && workflow.threadId === execution.threadId
+    )
+    const feedback = [
+      currentDagConfirmationPayload(currentMessage?.workflow),
+      execution.pendingInteraction?.payload
+    ].filter((payload) => identityKey && dagDraftIdentityKey(payload?.draftIdentity) === identityKey)
+    const errors = [...new Set([
+      ...(recovery.confirmation.errors || []),
+      ...feedback.flatMap((payload) => Array.isArray(payload?.errors) ? payload.errors : [])
+    ].filter((error): error is string => typeof error === 'string' && Boolean(error.trim())))]
+    const confirmation = { ...recovery.confirmation, ...(errors.length ? { errors } : {}) }
     return {
       // Pending 的 workflowRunId 是生成来源；确认失败交接后必须继续当前有效 execution。
       runId: execution.runId,
@@ -181,14 +195,14 @@ export function pendingDagConfirmationWorkflow(
         status: 'requires_user_input',
         phase: 'prepare_build_tasks',
         message: recovery.message,
-        clarification: recovery.confirmation,
-        buildTaskPlanConfirmation: recovery.confirmation,
+        clarification: confirmation,
+        buildTaskPlanConfirmation: confirmation,
         lifecycle
       },
       state: {
         status: 'requires_user_input',
         phase: 'prepare_build_tasks',
-        clarification: recovery.confirmation,
+        clarification: confirmation,
         lifecycle
       }
     }

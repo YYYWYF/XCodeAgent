@@ -1884,7 +1884,8 @@ export function useWorkflowConversation({
         failedWorkflow,
         failedToolCalls,
         failedProcessSteps,
-        !options?.executionRecovery && runError ? failedContent : undefined
+        // HTTP、SDK 和本地落盘异常也必须留在原消息，不能因缺少 RUN_ERROR 而成为空白。
+        !options?.executionRecovery ? failedContent : undefined
       )
       if (failedWorkflow) {
         setLiveWorkflows((current) => ({
@@ -1904,7 +1905,7 @@ export function useWorkflowConversation({
         // 首次落盘失败时仍保留内存中的原输入及错误入口，不让第二次同源落盘异常跳过兜底。
         try { await persistSession(failedSession) } catch { /* 原落盘错误已显示，等待用户重试。 */ }
       }
-      if (!options?.executionRecovery && runError) {
+      if (!options?.executionRecovery) {
         setErrors((current) => ({
           ...current,
           [identity.key]: failedContent

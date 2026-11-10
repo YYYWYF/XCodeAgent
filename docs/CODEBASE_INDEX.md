@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+任务计划生成与确认共用 `services/retained_task_projection.py::project_retained_tasks`，按当前正式合同和 ReuseFacts 投影有效基线职责。`scope_assembly.py` 与 `build_task_plan_lifecycle.py` 使用同一保留集合，允许生成阶段已裁剪的过期基础任务缺席，同时继续拒绝删除有效 retained Task；草稿、基线、输入摘要和图门禁保持严格校验。前端 `AiChatPanel/stageOutputState.ts` 以 Planning Refresh 重建确认正文，仅合并同 Run、同 thread、同 DraftIdentity 的本次确认错误，避免重建卡遮蔽拒绝原因。回归：`tests.test_retained_plan_confirmation`、`tests.test_build_task_plan_lifecycle`、`tests.test_scope_assembly`、`pnpm test:dag-generation`。
+
 会话删除沿既有 `prepare_session_deletion` AG-UI 动作，`protocols/application_lifecycle.py` 将目标 owner 的精确 Run 按 Graph thread 交给 `WorkflowRunRegistry.cancel_thread`，统一等待协程、同步 worker 和命令退出；外层登记已注销时仍按 lifecycle Run 等待，超时保留会话、checkpoint 和锁。成功后只清理目标 owner 的 Pending/执行/checkpoint，响应重算 Pending 投影；`useSessionRuntimeStore.removeSession` 同时撤下本地 DAG 执行占用。回归：`tests.test_session_run_deletion`、`tests.test_application_lifecycle_protocol`、`pnpm test:session-history`。
 
 开发任务 End 的成功、重复结束及并发幂等回执由 `protocols/workflow/run_control.py` 重新读取当前 lifecycle 并附带 `extensions.planningRefresh`；结束的 Pending 明确投影 `none/idle`，避免前端合并器保留旧的待确认占用，使“任务已结束”后输入框仍只读。保留 Pending 草稿及原任务继续/确认边界。回归：`tests.test_workbench_end_projection`、`tests.test_workflow_run_control`、`tests.test_planning_refresh_recovery`。

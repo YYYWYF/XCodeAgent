@@ -21,7 +21,7 @@ from app.services.build_task_planner import (
 )
 from app.services.build_unit_compiler import BuildUnitCompilationError
 from app.services.build_task_reuse_contracts import ReuseFacts
-from app.services.task_input_freshness import task_covers_current_input
+from app.services.retained_task_projection import project_retained_tasks
 from app.services.planning_frozen import (
     FrozenJsonObject,
     FrozenPlanningModel,
@@ -509,19 +509,10 @@ def assemble_scope_build_task_plan(
         candidates_by_unit, required_units
     )
     # 固定 ID 的新任务替换过期合同，不能继承 completed；旧文件及不可变 Build Run 仍保留。
-    from app.services.backend_module_freshness import project_current_backend_task
-    projected_retained = []
-    for task in retained:
-        if task["unit_id"].startswith("backend:module:"):
-            projected = project_current_backend_task(
-                task, project_plan, build_context,
-                facts.reusable_capabilities_by_unit.get(task["unit_id"], {}),
-            )
-            if projected is not None:
-                projected_retained.append(projected)
-        elif task["unit_id"] not in required_units or task_covers_current_input(task, project_plan, build_context):
-            projected_retained.append(task)
-    retained = projected_retained
+    retained = project_retained_tasks(
+        retained, project_plan=project_plan, build_context=build_context,
+        reuse_facts=facts, planning_unit_ids=required_units,
+    )
     collision_issues = _collision_issues(
         retained, candidates, candidate_unit_by_task_id
     )

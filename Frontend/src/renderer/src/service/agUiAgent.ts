@@ -849,8 +849,8 @@ export class AgUiChatSession {
         processSteps
       })
     }
-    // 对话及一次性续接必须收到结束回执；响应丢失只能同步后端事实，不能伪装为成功。
-    if (!runFinished && (options.buildTaskRetry || options.conversation || options.workflowAction === 'continue_revision_build' ||
+    // 映射检测、对话及一次性续接必须收到结束回执，提前断流不能伪装为检测成功。
+    if (!runFinished && (options.clarificationAnswers?.api_design_gate || options.buildTaskRetry || options.conversation || options.workflowAction === 'continue_revision_build' ||
       workflow?.state?.workflow_scope === 'conversation')) {
       throw new Error('未收到运行结束回执，当前任务结果尚未确认。请重新同步当前节点状态。')
     }

@@ -16,6 +16,7 @@ from app.services.planning_frozen import (
     plain_json,
 )
 from app.services.planning_run_contracts import PlanningRun, PlanningRunProjection
+from app.services.retained_task_projection import project_retained_tasks
 from app.services.template_state import validate_template_context
 from app.workspace.spec_documents import workspace_root
 
@@ -274,7 +275,13 @@ def _dag_gate_errors(plan: dict, inputs: SequentialPlanningInputs) -> list[str]:
         return ["Pending DAG 不得持久化已删除的 route_projection 页面正文。"]
     baseline = plain_json(inputs.base_confirmed_plan) or {}
     baseline_registry = baseline.get("task_registry", {})
-    retained_ids = {str(task_id) for task_id in baseline_registry}
+    # 生成已按当前合同剔除过期职责；确认必须复用同一投影，不能重新要求旧任务全集。
+    retained = project_retained_tasks(
+        list(baseline_registry.values()), project_plan=inputs.project_plan,
+        build_context=inputs.build_context, reuse_facts=inputs.reuse_facts,
+        planning_unit_ids=set(inputs.requirements().planning_unit_ids),
+    )
+    retained_ids = {task["id"] for task in retained}
     if not retained_ids <= set(registry):
         return ["Pending DAG 缺少正式基线中的 retained Task。"]
     context = {
