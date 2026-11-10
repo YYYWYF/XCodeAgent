@@ -231,10 +231,12 @@
   font-size: 12px;
 }
 .@{class-prefix}-next-development-guide .@{class-prefix}-next-development-guide-picker-toggle {
-  padding: 3px 0 3px 6px;
+  // 开合按钮两侧保留相同留白，避免悬停背景紧贴末尾图标。
+  padding: 4px 10px;
   min-height: 28px;
   font-size: 12px;
   border: none;
+  border-radius: 6px;
   box-shadow: none;
   .anticon {
     font-size: 12px;
