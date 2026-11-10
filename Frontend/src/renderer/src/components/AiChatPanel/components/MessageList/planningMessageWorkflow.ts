@@ -1,5 +1,44 @@
-import type { WorkflowRunPayload } from '../../../../typings'
+import type { WorkflowClarification, WorkflowRunPayload } from '../../../../typings'
 import { workbenchPhaseForNode, type WorkbenchPhase } from '../../../../workbenchPhase'
+import { useRef } from 'react'
+
+/** 单页动作仍在同一 UI 审阅阶段时保留页面展示，原始运行状态及中断权限继续由当前快照决定。 */
+export function useUiDesignReviewWorkflow(
+  workflow: WorkflowRunPayload | undefined,
+  workspaceRoot: string | undefined
+): WorkflowRunPayload | undefined {
+  const previous = useRef<{ workspaceRoot?: string; workflow: WorkflowRunPayload }>()
+  const status = workflow?.summary.status
+  const phase = workflow?.summary.phase || workflow?.state?.phase
+  const cached = previous.current
+  const sameSource = cached && cached.workspaceRoot === workspaceRoot && cached.workflow.threadId === workflow?.threadId
+  // 原生恢复先经过 review 节点，RunStarted 也可能暂缺 phase；这些帧仍属于同一次 UI 操作。
+  const uiPhase = phase === 'ui_confirmation' || phase === 'ui_confirmation_review' ||
+    (!phase && status === 'running' && sameSource)
+  if (!workflow || !uiPhase || !['requires_user_input', 'running'].includes(String(status))) {
+    previous.current = undefined
+    return undefined
+  }
+  const rawClarification = workflow.summary.clarification || workflow.state?.clarification
+  const clarification = rawClarification && typeof rawClarification === 'object' && !Array.isArray(rawClarification)
+    ? rawClarification as WorkflowClarification : undefined
+  const hasPages = clarification?.mode === 'ui_design_confirmation' &&
+    Array.isArray(clarification.pages) && clarification.pages.length > 0
+  const retained = !hasPages && status === 'running' && sameSource ? cached.workflow.summary.clarification : undefined
+  const display = hasPages ? clarification : retained
+  if (!display) {
+    previous.current = undefined
+    return undefined
+  }
+  // 只补展示内容，绝不沿用旧 Run 的原生中断或改写 running 为待确认。
+  const result = display === clarification && phase === 'ui_confirmation' ? workflow : {
+    ...workflow,
+    summary: { ...workflow.summary, phase: 'ui_confirmation', clarification: display },
+    state: { ...workflow.state, clarification: display }
+  }
+  previous.current = { workspaceRoot, workflow: result }
+  return result
+}
 
 /** 判断确认交互是否由当前审阅门或当前权威消息承载，避免新快照复用旧消息宿主时被误锁定。 */
 export function planningInteractionIsCurrent(

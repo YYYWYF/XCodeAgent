@@ -22,8 +22,8 @@ function planningInteraction(mode: string): WorkflowRunPayload {
   } }
 }
 
-test('UI 设计未全部生成时下一步禁用，不允许把 0/N 当成确认完成', () => {
-  for (const status of ['pending', 'queued', 'generating', 'generation_failed', 'cancelled', 'confirmed']) {
+test('UI 设计仅在处理期间禁用下一步，未生成、失败或取消不要求补齐', () => {
+  for (const status of ['pending', 'queued', 'generating', 'stopping', 'generation_failed', 'cancelled', 'confirmed']) {
     const workflow: WorkflowRunPayload = { runId: 'ui-run', threadId: 'ui-thread', events: [], summary: {
       status: 'requires_user_input', phase: 'ui_confirmation', clarification: {
         mode: 'ui_design_confirmation', pages: [{ pageId: 'home', name: '首页', status }]
@@ -35,8 +35,8 @@ test('UI 设计未全部生成时下一步禁用，不允许把 0/N 当成确认
     const next = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)]
       .find(([button]) => button.includes('下一步'))?.[0]
     assert.ok(next)
-    assert.equal(/\bdisabled/.test(next), status !== 'confirmed', status)
-    assert.doesNotMatch(markup, /未生成UI设计稿的页面将在后续直接生成/)
+    assert.equal(/\bdisabled/.test(next), ['queued', 'generating', 'stopping'].includes(status), status)
+    assert.doesNotMatch(markup, /请先完成全部页面设计稿/)
   }
 })
 

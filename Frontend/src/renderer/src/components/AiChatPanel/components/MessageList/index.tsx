@@ -15,6 +15,7 @@ import {
 import { Button, Input, Tag, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useUiDesignReviewWorkflow } from './planningMessageWorkflow'
 import { useWorkbenchPhase } from '../../../../context'
 import {
   WORKBENCH_PHASE_AGENTS,
@@ -442,6 +443,7 @@ export default function MessageList({
   commitDisabled = false
 }: MessageListProps): ReactElement {
   const planningWorkflow = planningState?.workflow
+  const uiDesignReviewWorkflow = useUiDesignReviewWorkflow(planningWorkflow, workspaceRoot)
   const mutationDisabled = loading || actionsDisabled
   let latestConfirmedTechnicalPlanMessageIndex = -1
   for (let index = 0; index < messages.length; index += 1) {
@@ -466,7 +468,8 @@ export default function MessageList({
   const currentPlanningConfirmation = designPhasePlanning && !phaseLocked &&
     !isTechnicalPlanGenerationFailure(planningWorkflow) &&
     messageAgentPhase(planningWorkflow, currentPhase) === currentPhase &&
-    planningWorkflowRequiresUserInput(planningWorkflow) ? planningWorkflow : undefined
+    (planningWorkflowRequiresUserInput(planningWorkflow) || uiDesignReviewWorkflow)
+      ? uiDesignReviewWorkflow || planningWorkflow : undefined
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const messageColumnRef = useRef<HTMLDivElement>(null)
   const followLatestContentRef = useRef(true)

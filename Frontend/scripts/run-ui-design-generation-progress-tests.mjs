@@ -21,6 +21,8 @@ try {
     logLevel: 'error',
     root: frontendRoot,
     define: { 'process.env.NODE_ENV': JSON.stringify('test') },
+    esbuild: { jsx: 'automatic' },
+    css: { preprocessorOptions: { less: { additionalData: '@class-prefix: test;' } } },
     ssr: { noExternal: true },
     build: {
       emptyOutDir: true,
