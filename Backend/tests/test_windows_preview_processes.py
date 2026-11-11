@@ -105,8 +105,48 @@ class WindowsPreviewProcessTests(unittest.TestCase):
                     capture_output=True,
                     timeout=frontend_project_launcher.FRONTEND_STOP_TIMEOUT_SECONDS,
                     check=False,
+                    creationflags=0x08000000,
                 )
                 posix_tree.assert_not_called()
+
+    def test_windows_backend_recovery_hides_identity_probe_and_tree_cleanup(self) -> None:
+        """Java 预览恢复时 PowerShell 核对身份和强制停机均不创建窗口。"""
+
+        command = b'java.exe -jar "C:\\workspace\\app.jar"'
+        with (
+            patch.object(backend_process_registry.os, "name", "nt"),
+            patch.object(backend_process_registry.shutil, "which", return_value="powershell.exe"),
+            patch.object(backend_process_registry.subprocess, "run", side_effect=[
+                subprocess.CompletedProcess([], 0, command, b""),
+                subprocess.CompletedProcess([], 0, b"", b""),
+            ]) as run,
+        ):
+            self.assertEqual(backend_process_registry._query_process_command(1234), (command.decode(), None))
+            backend_process_registry._force_kill_pid(1234)
+
+        probe, cleanup = run.call_args_list
+        self.assertEqual(probe.args[0][:4], ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"])
+        self.assertIn("ProcessId = 1234", probe.args[0][4])
+        self.assertEqual(cleanup.args[0], ["taskkill", "/PID", "1234", "/T", "/F"])
+        for call in (probe, cleanup):
+            self.assertEqual(call.kwargs["creationflags"], 0x08000000)
+            self.assertTrue(call.kwargs["capture_output"])
+            self.assertEqual(call.kwargs["timeout"], backend_process_registry.BACKEND_STOP_TIMEOUT_SECONDS)
+
+    def test_posix_backend_identity_probe_still_uses_ps(self) -> None:
+        """POSIX 保留 ps 命令和原输出，零创建标志不改变进程行为。"""
+
+        command = b"java -jar /workspace/app.jar\n"
+        with (
+            patch.object(backend_process_registry.os, "name", "posix"),
+            patch.object(backend_process_registry.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, command, b"")) as run,
+        ):
+            self.assertEqual(backend_process_registry._query_process_command(1234), (command.decode().strip(), None))
+        run.assert_called_once_with(
+            ["ps", "-ww", "-p", "1234", "-o", "command="],
+            capture_output=True, timeout=backend_process_registry.BACKEND_STOP_TIMEOUT_SECONDS,
+            check=False, creationflags=0,
+        )
 
     def test_windows_backend_recovery_matches_exact_quoted_runtime_jar(self) -> None:
         """Windows 恢复校验支持空格和大小写差异，同时拒绝仅包含副本路径的其他命令。"""

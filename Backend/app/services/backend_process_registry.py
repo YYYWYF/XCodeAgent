@@ -16,6 +16,7 @@ from typing import Any
 from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record, remove_backend_jar
 from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
+from app.utils.subprocess_platform import WINDOWS_CREATE_NO_WINDOW
 
 
 BACKEND_STOP_TIMEOUT_SECONDS = 5
@@ -221,6 +222,7 @@ def _force_kill_pid(pid: int) -> None:
             capture_output=True,
             timeout=BACKEND_STOP_TIMEOUT_SECONDS,
             check=False,
+            creationflags=WINDOWS_CREATE_NO_WINDOW,
         )
         if completed.returncode != 0 and _pid_is_running(pid):
             message = (
@@ -281,6 +283,8 @@ def _query_process_command(pid: int) -> tuple[str, str | None]:
             capture_output=True,
             timeout=BACKEND_STOP_TIMEOUT_SECONDS,
             check=False,
+            # 恢复预览时先核对旧进程身份，Windows 的 PowerShell 探测应静默执行。
+            creationflags=WINDOWS_CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return "", f"无法读取后端进程命令行：{exc}"

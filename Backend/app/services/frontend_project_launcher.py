@@ -24,7 +24,7 @@ from app.services.frontend_node_runtime import (
 from app.services.preview_diagnostics import launch_diagnostics, make_diagnostic, read_json_object
 from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
-from app.utils.subprocess_platform import preview_process_creation_options
+from app.utils.subprocess_platform import WINDOWS_CREATE_NO_WINDOW, preview_process_creation_options
 
 
 INSTALL_TIMEOUT_SECONDS = 120
@@ -995,6 +995,8 @@ def _force_kill_pid(pid: int) -> None:
             capture_output=True,
             timeout=FRONTEND_STOP_TIMEOUT_SECONDS,
             check=False,
+            # 重启会先清理旧预览，taskkill 也必须显式隐藏自己的控制台。
+            creationflags=WINDOWS_CREATE_NO_WINDOW,
         )
         if completed.returncode != 0 and _pid_is_running(pid):
             message = (
