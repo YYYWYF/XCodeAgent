@@ -1,6 +1,14 @@
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
+import { pairEntries } from './technicalPlanRename'
 
-export type Difference = { path: string; field: string; before: unknown; after: unknown }
+export type Difference = {
+  path: string
+  field: string
+  before: unknown
+  after: unknown
+  kind?: 'rename'
+  unchanged?: boolean
+}
 export type ChangedObject = {
   id: string
   name: string
@@ -84,7 +92,7 @@ function itemIdentity(value: unknown): string | undefined {
   return undefined
 }
 
-/** 只在每项身份明确且唯一时按身份比较，无法证明的改名保留为删除和新增。 */
+/** 只在每项身份明确且唯一时按身份建立索引，避免重复名称覆盖内容。 */
 function keyedItems(values: unknown[]): Map<string, unknown> | undefined {
   const result = new Map<string, unknown>()
   for (const value of values) {
@@ -118,6 +126,45 @@ function normalized(value: unknown, field = ''): unknown {
   return value
 }
 
+/** 字段仅名称变化时合并展示；存在其他变化或多个候选时仍保留真实增删。 */
+function entryDifferences(
+  before: Map<string, unknown>,
+  after: Map<string, unknown>,
+  path: string,
+  field: string
+): Difference[] {
+  const canRename = field === 'fields' || field === 'properties'
+  return pairEntries(before, after, canRename ? normalized : undefined, field === 'fields').flatMap(
+    ([oldKey, newKey]) => {
+      if (oldKey !== undefined && newKey !== undefined && oldKey !== newKey) {
+        const remaining = differences(
+          before.get(oldKey),
+          after.get(newKey),
+          `${path} → ${newKey}`
+        ).filter((change) => field !== 'fields' || change.field !== 'name')
+        return [
+          {
+            path: `${path} → 名称变更`,
+            field: 'name',
+            before: oldKey,
+            after: newKey,
+            kind: 'rename' as const,
+            unchanged: remaining.length === 0
+          },
+          ...remaining
+        ]
+      }
+      const key = newKey ?? oldKey!
+      return differences(
+        before.get(oldKey!),
+        after.get(newKey!),
+        [path, key].filter(Boolean).join(' → '),
+        field === 'properties' ? key : ''
+      )
+    }
+  )
+}
+
 /** 从结构化值提取叶子差异，不把确认状态、时间或模型总结混入业务差异。 */
 function differences(before: unknown, after: unknown, path = '', field = ''): Difference[] {
   if (JSON.stringify(normalized(before, field)) === JSON.stringify(normalized(after, field)))
@@ -131,6 +178,13 @@ function differences(before: unknown, after: unknown, path = '', field = ''): Di
   ) {
     const old = asRecord(before),
       next = asRecord(after)
+    if (field === 'properties')
+      return entryDifferences(
+        new Map(Object.entries(old)),
+        new Map(Object.entries(next)),
+        path,
+        field
+      )
     const keys = [...new Set([...Object.keys(old), ...Object.keys(next)])]
     if (keys.length)
       return keys.flatMap((key) =>
@@ -149,9 +203,7 @@ function differences(before: unknown, after: unknown, path = '', field = ''): Di
     const old = keyedItems(Array.isArray(before) ? before : [])
     const next = keyedItems(Array.isArray(after) ? after : [])
     if (old && next && (old.size || next.size)) {
-      return [...new Set([...old.keys(), ...next.keys()])].flatMap((key) =>
-        differences(old.get(key), next.get(key), [path, key].filter(Boolean).join(' → '))
-      )
+      return entryDifferences(old, next, path, field)
     }
   }
   return [{ path: path || '内容', field, before, after }]

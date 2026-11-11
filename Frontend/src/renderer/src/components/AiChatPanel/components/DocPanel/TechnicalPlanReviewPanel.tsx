@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
-import { Alert, Radio } from 'antd'
+import { Radio } from 'antd'
 import { cx } from '../../../../utils'
 import TechnicalPlanDocPanel from './TechnicalPlanDocPanel'
 import { technicalPlanDiff, differenceCode, type ChangeGroup } from './technicalPlanDiff'
@@ -45,18 +45,30 @@ function ChangeList({ groups }: { groups: ChangeGroup[] }): ReactElement {
                       key={`${difference.path}:${changeIndex}`}
                     >
                       <div className={cx('technical-plan-change-path')}>{difference.path}</div>
-                      {difference.before !== undefined ? (
-                        <div className={cx('technical-plan-change-value', 'is-before')}>
-                          <span>− {difference.after === undefined ? '删除' : '修改前'}</span>
-                          <code>{differenceCode(difference.field, difference.before)}</code>
+                      {difference.kind === 'rename' ? (
+                        <div className={cx('technical-plan-name-change')}>
+                          <span>名称变更</span>
+                          <code>{String(difference.before)}</code>
+                          <span aria-label="改为">→</span>
+                          <code>{String(difference.after)}</code>
+                          {difference.unchanged ? <span>其余属性未变</span> : null}
                         </div>
-                      ) : null}
-                      {difference.after !== undefined ? (
-                        <div className={cx('technical-plan-change-value', 'is-after')}>
-                          <span>+ {difference.before === undefined ? '新增' : '修改后'}</span>
-                          <code>{differenceCode(difference.field, difference.after)}</code>
-                        </div>
-                      ) : null}
+                      ) : (
+                        <>
+                          {difference.before !== undefined ? (
+                            <div className={cx('technical-plan-change-value', 'is-before')}>
+                              <span>− {difference.after === undefined ? '删除' : '修改前'}</span>
+                              <code>{differenceCode(difference.field, difference.before)}</code>
+                            </div>
+                          ) : null}
+                          {difference.after !== undefined ? (
+                            <div className={cx('technical-plan-change-value', 'is-after')}>
+                              <span>+ {difference.before === undefined ? '新增' : '修改后'}</span>
+                              <code>{differenceCode(difference.field, difference.after)}</code>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -92,14 +104,6 @@ export default function TechnicalPlanReviewPanel({
   const [mode, setMode] = useState<'changes' | 'full'>('changes')
   return (
     <div className={cx('technical-plan-review')}>
-      {updating ? (
-        <Alert
-          type="info"
-          showIcon
-          message="正在修改技术规划"
-          description="下方保留修改前的内容，完成后可查看本次变更。"
-        />
-      ) : null}
       {canCompare ? (
         <Radio.Group
           aria-label="技术规划阅读模式"
