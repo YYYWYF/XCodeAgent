@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from app.environment import load_backend_environment
 
 
@@ -10,6 +11,12 @@ DEFAULT_PORT = 8000
 
 def main() -> None:
     """尽早安装日志采集，再启动冻结的 Python HTTP 服务。"""
+    from app.services.code_graph.parser_probe import dispatch_parser_probe
+
+    dispatch_parser_probe(sys.argv[1:])
+    # 后端只接受无参数启动及专用探测模式，禁止解释器参数意外启动第二个服务。
+    if sys.argv[1:]:
+        raise SystemExit(2)
     load_backend_env()
 
     import uvicorn

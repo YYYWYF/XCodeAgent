@@ -5,6 +5,7 @@ import importlib
 import importlib.metadata
 import json
 import os
+import sys
 import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
@@ -459,6 +460,12 @@ class CodeReviewGraphAdapter:
         if self._imports is None:
             graph = importlib.import_module("code_review_graph.graph")
             parser = importlib.import_module("code_review_graph.parser")
+            if getattr(sys, "frozen", False):
+                from app.services.code_graph.parser_probe import run_frozen_parser_probe
+
+                # CRG 2.3.7 的默认探测使用 python -c；冻结 EXE 必须走专用入口。
+                # 只替换底层启动函数，保留上游的锁、缓存和语法不可用处理。
+                parser._run_parser_load_probe = run_frozen_parser_probe
             incremental = importlib.import_module("code_review_graph.incremental")
             self._imports = (
                 graph.GraphStore,

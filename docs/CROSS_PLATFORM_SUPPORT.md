@@ -134,6 +134,15 @@ launch creates a new backend and reads existing workflow checkpoints through the
 flows. There is no persisted backend registry, cross-launch instance adoption, client lease or
 `/backend-runtime/run` endpoint. Windows restores `detached: false`; POSIX retains a separate process
 group for shutdown. The backend's stdout/stderr are piped to Electron for startup diagnostics.
+Code-graph native grammar probes use a dedicated frozen entry mode,
+`devagentstudio-backend.exe --devagentstudio-parser-probe <grammar>`. The probe loads only the
+requested Tree-sitter grammar and exits before backend configuration or Uvicorn startup. On Windows
+it uses `CREATE_NO_WINDOW`; the upstream timeout, per-language cache and failure handling remain
+in place. A frozen executable cannot interpret the upstream Python `-I -c` invocation. Source
+development keeps the upstream interpreter probe. Rebuild the backend and Electron installer after
+changing this adapter; verify multi-language scanning without console flashes or extra HTTP servers
+on Windows. Other nonempty backend entry arguments are rejected before service startup.
+
 The shared source-development backend remains under the developer's control and is not stopped
 when Electron exits.
 

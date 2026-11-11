@@ -3,6 +3,7 @@
 任务生成规则由 `services/task_generation_policy.py` 集中定义：每轮只复用 `backend:bootstrap` 数据库/外部 API 配置检查任务，其他任务按本轮正式合同和工作区上下文重新生成，不传入旧业务任务摘要、owner 或完成状态。`dag_planning_inputs.py`、`dag_planning_orchestrator.py` 与 `retained_task_projection.py` 在生成、装配和确认边界使用同一规则；新正式 DAG 仅包含配置任务及本轮新任务，既有代码与不可变 Build Run 不被删除。页面上下文由 `build_context_resolver.py` 读取 lifecycle，冻结精确的 `completed_backend_endpoints`；只有初次开发 completed 且 changeStatus=unchanged 的接口跳过后端职责，前端调用及页面职责仍生成。同模块 A 完成、B 未完成时仍完整生成 B 的骨架、业务、Controller；显式开发接口不应用页面跳过规则。`build_unit_compiler.py` 允许本页全部接口已完成的模块无任务；共享前端 API 文件允许保留同一正式合同的其他接口，不依赖旧 Task owner。新增回归 `tests.test_task_generation_policy`，本轮按用户要求不执行测试。
 
 后端模块直接输入新鲜度由 `task_input_freshness.py` 复用逐接口比较。`artifact_freshness.task_plan_errors` 复用调度器实际切片及依赖闭包，按精确合同/接口身份补读当前正式设计、投射当前应用权限配置；不回填冻结旧设计或扩大到范围外任务。计划绑定摘要和直接输入变化仍严格校验。
+冻结后端的代码图语法探测由 `services/code_graph/parser_probe.py` 提供 `--devagentstudio-parser-probe <grammar>` 专用模式，`packaging/backend_server.py` 在配置与 HTTP 服务启动前分流，其他非空参数直接拒绝。`code_graph/adapter.py` 仅在冻结环境替换固定 CRG 2.3.7 的底层探测函数，保留上游锁、缓存、超时与不可用处理；Windows 探测使用 `CREATE_NO_WINDOW`，避免上游 `sys.executable -I -c` 将冻结 EXE 当作解释器而重复启动后端并弹窗。源码探测保持上游实现。回归：`tests.test_frozen_parser_probe`、`tests.test_code_graph_manager`、`tests.test_workspace_process_visibility`；Windows 需重打安装包，在多语言代码扫描时确认不弹窗且不新增 HTTP 后端实例。
 
 `workspace/task_documents.py::_TASK_RUNTIME_FIELDS` 包含后端 Markdown 同步回执 `implementation_document`，统一用于计划摘要、运行状态回写与 Build 恢复合同比较，避免较早成功任务的文档回执阻断后续失败任务重试。`graph/subgraphs/build.py::_restore_build_runtime` 的真实任务合同漂移错误附带变更字段名，仍严格校验身份、计划绑定及合同正文，不输出正文或放宽正式变更校验。
 
