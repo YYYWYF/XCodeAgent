@@ -183,7 +183,6 @@ export default function CreateApplicationAction({ onStartPlanning, theme }: Prop
         cancelText="取消"
         confirmLoading={creating}
         destroyOnClose
-        forceRender
         maskClosable={false}
         maskTransitionName=""
         okText="创建并规划页面"
