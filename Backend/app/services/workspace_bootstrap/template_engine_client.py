@@ -21,6 +21,7 @@ from app.services.template_engine_tls import build_template_engine_ssl_context
 from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload, UpdatePackageDownloadV4
 from app.services.workspace_bootstrap.run_log import TemplateRunLog
 from app.services.workspace_bootstrap.template_generate import generate_template_package
+from app.services.workspace_process_registry import workspace_process_registry
 
 _CHUNK_BYTES = 64 * 1024
 logger = logging.getLogger("uvicorn.error")
@@ -295,8 +296,9 @@ def _git_clone(url: str, dest: Path) -> None:
     """以 depth=1 浅克隆指定仓库到 dest，失败抛出 TemplateEngineError。"""
 
     try:
-        subprocess.run(
+        workspace_process_registry.run(
             ["git", "clone", "--depth", "1", url, str(dest)],
+            workspace=dest.parent,
             check=True,
             capture_output=True,
             text=True,

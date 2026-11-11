@@ -21,6 +21,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from app.utils.subprocess_platform import WINDOWS_CREATE_NO_WINDOW
+
 logger = logging.getLogger("uvicorn.error")
 
 AUTHOR_NAME_ENV_VAR = "DEVAGENTSTUDIO_GIT_AUTHOR_NAME"
@@ -50,6 +52,8 @@ def _read_local_git_identity(key: str) -> str:
                 text=False,
                 timeout=_IDENTITY_TIMEOUT_SECONDS,
                 check=False,
+                # 身份来自宿主机配置，独立于工作区命令执行器，需显式隐藏控制台。
+                creationflags=WINDOWS_CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
         except (OSError, subprocess.SubprocessError):
             continue
