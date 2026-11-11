@@ -193,6 +193,9 @@ def _apply_unit_task_dependencies(
             str(task.get("unit_id") or "application:root"), []
         ).append(str(task.get("id")))
     dependency_units = _unit_dependency_map(unit_graph)
+    from app.services.task_generation_policy import completed_backend_units
+
+    completed_units = completed_backend_units(build_context)
     module_dependencies = module_task_dependencies(
         tasks, _dict_value(build_context.get("_backend_foundation_providers")),
         design_endpoint_keys(build_context.get("endpoint_designs", ())),
@@ -300,6 +303,7 @@ def _apply_unit_task_dependencies(
                     dependency_unit_id
                     for dependency_unit_id in dependency_units.get(unit_id, [])
                     if dependency_unit_id in units
+                    and dependency_unit_id not in completed_units
                     and dependency_unit_id != "frontend:shell"
                     and not (
                         auth_resolution is not None

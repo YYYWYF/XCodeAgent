@@ -169,7 +169,10 @@ async def plan_dag_sequential(
     让 Run 停在 active/persisting_pending，等待调用方写 Pending；本函数不写 Pending/Formal。
     """
 
+    from app.services.task_generation_policy import generation_reuse_facts
+
     frozen = SequentialPlanningInputs.model_validate(inputs)
+    frozen = frozen.model_copy(update={"reuse_facts": generation_reuse_facts(frozen.reuse_facts)})
     policy = UnitGenerationPolicy.model_validate(policy)
     try:
         requirements = frozen.requirements()

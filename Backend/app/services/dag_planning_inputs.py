@@ -8,6 +8,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
 from app.services.build_task_reuse_contracts import ReuseFacts
+from app.services.task_generation_policy import generation_reuse_facts, completed_backend_keys
 from app.services.task_input_freshness import task_covers_current_input
 from app.services.frozen_contract_catalog import (
     ContractCatalogBindingError,
@@ -118,7 +119,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         return resolve_generation_requirements(
             required_unit_ids=self.build_context.get("required_unit_ids", ()),
             build_execution_scope=self.build_execution_scope, unit_skeleton=self.skeleton_plan,
-            reuse_facts=self.reuse_facts, formal_target=self.project_plan,
+            reuse_facts=generation_reuse_facts(self.reuse_facts), formal_target=self.project_plan,
+            completed_backend_endpoints=sorted(completed_backend_keys(self.build_context)),
             endpoint_designs=plain_json(tuple(
                 contract.content
                 for contract in self.formal_contract_inputs.endpoint_api_designs
@@ -136,19 +138,20 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         from app.workspace.task_documents import build_task_plan_sha256
 
         units = {}
+        generation_facts = generation_reuse_facts(self.reuse_facts)
         registry = self.base_confirmed_plan["task_registry"] if self.base_confirmed_plan is not None else {}
         for key, strategy in requirements.generation_strategy_by_unit.items():
             if strategy in {"model", "deterministic"} and not requirements.generation_requirements_by_unit[key]:
                 fail_requirement_input("PLANNING_EMPTY_GENERATION_STRATEGY", "空职责的生成策略不能创建可调度 Unit。", unit_ids=(key,))
-            # 本轮生成会替换直接输入过期的任务，不能向模型或进度声明这些旧任务仍被复用。
+            # 只有配置检查任务可以传入保留摘要，业务任务每轮重新规划。
             retained = tuple(task_id for task_id in self.reuse_facts.retained_task_ids_by_unit.get(key, ())
-                             if not (strategy in {"model", "deterministic"}
+                             if key == "backend:bootstrap" and not (strategy in {"model", "deterministic"}
                                      and not task_covers_current_input(registry[task_id], self.project_plan, self.build_context)))
             units[key] = UnitRunState.create(
                 unit_id=key, kind=self.skeleton_plan["build_units"][key]["kind"],
                 generation_strategy=strategy,
                 retained_task_ids=retained,
-                reusable_capabilities=tuple(self.reuse_facts.reusable_capabilities_by_unit.get(key, {})),
+                reusable_capabilities=tuple(generation_facts.reusable_capabilities_by_unit.get(key, {})),
             )
         # 同一冻结输入只在新 Run 创建时派生名称，后续发布和重连均读取 Run。
         display_names = project_plan_unit_display_names(plain_json(self.project_plan))
@@ -227,8 +230,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                 "dependency_unit_ids": sorted({edge["from"] for edge in self.skeleton_plan["unit_graph"].get("edges", ())
                                                if edge.get("to") == unit_id and edge.get("type") == "depends_on"}),
                 "retained_task_summaries": summaries,
-                "retained_owner_constraints": [owner.model_dump(mode="json") for owner in self.reuse_facts.retained_endpoint_owners
-                                               if (owner.api_contract_id, owner.endpoint_id) in endpoint_keys],
+                "retained_owner_constraints": [],
             },
             constraints={"owner": "frontend" if unit.kind == "page" else unit.kind,
                          "managed_files": [], "strong_rules": ["exact_unit_owner", "exact_file_scope",
@@ -282,7 +284,7 @@ def assemble_mainline_planning_inputs(
         build_context=build_context,
         build_execution_scope=build_execution_scope,
         workspace_snapshot=workspace_snapshot,
-        reuse_facts=reuse_facts,
+        reuse_facts=generation_reuse_facts(reuse_facts),
         formal_contract_inputs=formal_contract_inputs,
         formal_source_refs=(),
     )

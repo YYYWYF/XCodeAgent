@@ -1,5 +1,9 @@
 # DevAgent Studio Codebase Index
 
+任务生成规则由 `services/task_generation_policy.py` 集中定义：每轮只复用 `backend:bootstrap` 数据库/外部 API 配置检查任务，其他任务按本轮正式合同和工作区上下文重新生成，不传入旧业务任务摘要、owner 或完成状态。`dag_planning_inputs.py`、`dag_planning_orchestrator.py` 与 `retained_task_projection.py` 在生成、装配和确认边界使用同一规则；新正式 DAG 仅包含配置任务及本轮新任务，既有代码与不可变 Build Run 不被删除。页面上下文由 `build_context_resolver.py` 读取 lifecycle，冻结精确的 `completed_backend_endpoints`；只有初次开发 completed 且 changeStatus=unchanged 的接口跳过后端职责，前端调用及页面职责仍生成。同模块 A 完成、B 未完成时仍完整生成 B 的骨架、业务、Controller；显式开发接口不应用页面跳过规则。`build_unit_compiler.py` 允许本页全部接口已完成的模块无任务；共享前端 API 文件允许保留同一正式合同的其他接口，不依赖旧 Task owner。新增回归 `tests.test_task_generation_policy`，本轮按用户要求不执行测试。
+
+后端模块直接输入新鲜度由 `task_input_freshness.py` 复用逐接口比较。`artifact_freshness.task_plan_errors` 复用调度器实际切片及依赖闭包，按精确合同/接口身份补读当前正式设计、投射当前应用权限配置；不回填冻结旧设计或扩大到范围外任务。计划绑定摘要和直接输入变化仍严格校验。
+
 `workspace/task_documents.py::_TASK_RUNTIME_FIELDS` 包含后端 Markdown 同步回执 `implementation_document`，统一用于计划摘要、运行状态回写与 Build 恢复合同比较，避免较早成功任务的文档回执阻断后续失败任务重试。`graph/subgraphs/build.py::_restore_build_runtime` 的真实任务合同漂移错误附带变更字段名，仍严格校验身份、计划绑定及合同正文，不输出正文或放宽正式变更校验。
 
 Build 单项及全部失败任务重试由 `graph/subgraphs/build.py` 按非空 `build_retry_task_ids` 跳过两处 `refresh_build_workspace`；仍验证原执行进度和计划绑定，缺失进度直接失败，不降级为扫描及整轮重启。调度收口清空仅用于本次任务恢复的 `retry_source_run_id`，防止后续测试/审查阶段因该标记再次扫描；实际写入文件后的代码图增量更新、正常规划和整阶段重试/重启扫描保持原行为。
@@ -10,7 +14,7 @@ Build 单项及全部失败任务重试由 `graph/subgraphs/build.py` 按非空 
 
 Windows 安装包的后台工作区命令由 `services/workspace_process_registry.py` 统一附加 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`，取消时的 `taskkill` 同样隐藏窗口。Electron 隐藏启动内置 Backend 不会自动隐藏其后续子命令。`hooks/useUncommittedChangesStore.ts` 只在工作区打开/切换、lifecycle revision 变化和显式刷新时读取 Git，不监听窗口 focus；同工作区在途请求合并，读取期间的连续内容变化只为最新信号补读，切换工作区拒绝旧响应。回归：`tests.test_workspace_process_visibility`、`tests.test_workspace_process_registry`、`tests.test_version_control`、`pnpm test:uncommitted-changes`。
 
-任务计划生成与确认共用 `services/retained_task_projection.py::project_retained_tasks`，按当前正式合同和 ReuseFacts 投影有效基线职责。`scope_assembly.py` 与 `build_task_plan_lifecycle.py` 使用同一保留集合，允许生成阶段已裁剪的过期基础任务缺席，同时继续拒绝删除有效 retained Task；草稿、基线、输入摘要和图门禁保持严格校验。前端 `AiChatPanel/stageOutputState.ts` 以 Planning Refresh 重建确认正文，仅合并同 Run、同 thread、同 DraftIdentity 的本次确认错误，避免重建卡遮蔽拒绝原因。回归：`tests.test_retained_plan_confirmation`、`tests.test_build_task_plan_lifecycle`、`tests.test_scope_assembly`、`pnpm test:dag-generation`。
+任务计划生成与确认共用 `services/retained_task_projection.py::project_retained_tasks`，仅保留配置检查任务，其他任务每轮重新规划。`scope_assembly.py` 与 `build_task_plan_lifecycle.py` 使用同一保留集合；草稿、基线、输入摘要和图门禁保持严格校验。前端 `AiChatPanel/stageOutputState.ts` 以 Planning Refresh 重建确认正文，仅合并同 Run、同 thread、同 DraftIdentity 的本次确认错误，避免重建卡遮蔽拒绝原因。
 
 会话删除沿既有 `prepare_session_deletion` AG-UI 动作，`protocols/application_lifecycle.py` 将目标 owner 的精确 Run 按 Graph thread 交给 `WorkflowRunRegistry.cancel_thread`，统一等待协程、同步 worker 和命令退出；外层登记已注销时仍按 lifecycle Run 等待，超时保留会话、checkpoint 和锁。成功后只清理目标 owner 的 Pending/执行/checkpoint，响应重算 Pending 投影；`useSessionRuntimeStore.removeSession` 同时撤下本地 DAG 执行占用。回归：`tests.test_session_run_deletion`、`tests.test_application_lifecycle_protocol`、`pnpm test:session-history`。
 
@@ -335,7 +339,7 @@ TestGeneration 写入边界在平铺测试文件外，仅允许当前 Jest 契�
 
 `services/task_plan_confirmation.py` 只接受磁盘上摘要和 provenance 均有效的 PendingPlan。`task_planning_adapter.py` 的旧 Confirm/Regenerate 动作失效后，没有可确认草稿就显式失败，不能生成空确认门；统一重试清除旧 Confirm/Regenerate 操作后从原节点重新生成或展示新 Pending 确认，失败沿既有清理释放资源。不新增 Lifecycle 阶段校验，不改变 Agent 生成逻辑。回归：`tests.test_task_planning_native_regenerate_context`、`tests.test_checkpoint_first_retry`、`tests.test_failed_run_cleanup`。
 
-`services/task_input_freshness.py` 复用原平台业务合同编译器，按任务交付物精确选择并比较直接消费的 Endpoint 参数、Schema、字段映射及页面接口依赖；页面自身实现合同仍由 `page_task_freshness.py` 检查，不将其他 Scope 或确认元数据变化递归传播。`build_task_reuse.py` 不再让过期任务声明 capability 或 Endpoint owner；`dag_planning_inputs.py` 从本轮生成的保留摘要中排除过期任务；`scope_assembly.py` 在有效 Candidate 就绪后替换过期任务及其完成状态，未变任务保留，原正式基线和不可变 Build 快照不变。Agent、模型提示及 Lifecycle 校验未变。回归：`tests.test_task_input_freshness`、`tests.test_build_task_reuse`、`tests.test_unit_generation_requirements`、`tests.test_scope_assembly`、`tests.test_dag_planning_orchestrator`。缺少恢复入口的 `RetryEntryNotice` 沿用主题和输入区宽度。
+`services/task_input_freshness.py` 按交付物直接消费的 Endpoint 参数、Schema、字段映射及页面接口依赖校验输入，后端模块使用逐接口比较；页面自身实现合同仍由 `page_task_freshness.py` 检查，不将其他 Scope 或确认元数据变化递归传播。覆盖事实仍供正式修订的只读变更分析使用；实际任务规划通过 `task_generation_policy.py` 仅复用配置检查，`scope_assembly.py` 不再继承旧业务任务或其完成状态。原不可变 Build 快照和正式确认门不变。缺少恢复入口的 `RetryEntryNotice` 沿用主题和输入区宽度。
 
 ## Execution Cleanup and Workflow Interaction
 

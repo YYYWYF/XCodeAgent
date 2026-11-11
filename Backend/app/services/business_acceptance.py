@@ -731,7 +731,7 @@ def _endpoint_expectations(
 def _frontend_api_allowed_existing_endpoint_expectations(
     formal: dict[str, Any], required: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """从平台注入的 retained owner 事实投射本任务允许保留的旧 Endpoint。"""
+    """允许共享调用文件保留同一正式合同的其他接口，不依赖旧任务的复用归属。"""
 
     required_keys = {
         (_text(endpoint.get("api_contract_id")), _text(endpoint.get("endpoint_id")))
@@ -742,25 +742,13 @@ def _frontend_api_allowed_existing_endpoint_expectations(
         for contract_id, _ in required_keys
         if contract_id
     }
-    retained_keys = {
-        (
-            _text(owner.get("api_contract_id")),
-            _text(owner.get("endpoint_id")),
-        )
-        for owner in _dict_items(formal.get("retained_endpoint_owner_constraints"))
-    }
-    allowed_keys = {
-        key
-        for key in retained_keys
-        if key[0] in contract_ids and key not in required_keys and key[0] and key[1]
-    }
     return [
         endpoint
         for endpoint in _endpoint_expectations(formal, include_all=True)
-        if (
+        if _text(endpoint.get("api_contract_id")) in contract_ids and (
             _text(endpoint.get("api_contract_id")),
             _text(endpoint.get("endpoint_id")),
-        ) in allowed_keys
+        ) not in required_keys
     ]
 
 

@@ -172,6 +172,7 @@ def resolve_generation_requirements(
     *, required_unit_ids: Sequence[str], build_execution_scope: Mapping[str, Any],
     unit_skeleton: Mapping[str, Any], reuse_facts: ReuseFacts, formal_target: Mapping[str, Any],
     endpoint_designs: Sequence[Mapping[str, Any]] = (),
+    completed_backend_endpoints: Sequence[tuple[str, str]] = (),
 ) -> UnitGenerationRequirements:
     """计算当前 Scope 的新增职责、策略和 planning 集合；source type 只来自 Endpoint Design。
 
@@ -208,6 +209,12 @@ def resolve_generation_requirements(
     strategies = {}
     for unit_id in required:
         duties = _unit_responsibilities(unit_id, pages, endpoints, sources, plan)
+        if build_execution_scope.get("type") == "page" and unit_id.startswith(BACKEND_MODULE_PREFIX):
+            # 同模块 A 完成、B 未完成时，只移除 A 的后端职责，前端调用职责保持完整。
+            completed = set(completed_backend_endpoints)
+            duties = [item for item in duties if (
+                item.source_refs.get("api_contract_id"), item.source_refs.get("endpoint_id"),
+            ) not in completed]
         missing = [item for item in duties if not _is_satisfied(unit_id, item, facts)]
         if unit_id in _STRUCTURAL_UNITS:
             strategy = "structural_only"

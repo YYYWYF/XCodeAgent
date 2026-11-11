@@ -232,7 +232,13 @@ def _page_context(
         required_unit_ids.extend(
             ["backend:bootstrap", *list(dict.fromkeys(module_unit_ids))]
         )
+    from app.services.task_generation_policy import completed_page_backend_endpoints
+
+    completed = completed_page_backend_endpoints(
+        workspace_root, [(item["apiContractId"], item["endpointId"]) for item in endpoint_designs],
+    )
     return {
+        "completed_backend_endpoints": completed,
         "target": {
             "type": "page",
             "id": page_id,

@@ -1,4 +1,4 @@
-"""将正式历史任务与本轮有效 Unit Candidate 确定性组装为累计 Build DAG。"""
+"""将可复用配置任务与本轮有效 Unit Candidate 组装为当前 Build DAG。"""
 
 from __future__ import annotations
 
@@ -467,13 +467,13 @@ def assemble_scope_build_task_plan(
     generation_requirements_by_unit: Mapping[str, Any],
     candidates_by_unit: Mapping[str, CandidateAttempt | Mapping[str, Any]],
 ) -> ScopeAssemblyResult:
-    """append-only 组装 retained Tasks 与当前 valid Candidates，并重编译 DAG 派生字段。
+    """组装配置检查任务与本轮 valid Candidates，并重编译 DAG 派生字段。
 
     ``build_execution_scope`` 由当前 PlanningRun 显式提供，是唯一允许写入 Plan
     root 的权威 Scope；ConfirmedPlan 和 skeleton 仅提供历史 Task 与当前编译骨架。
     本服务不选择 Candidate、不执行 retry、不写 PendingPlan。
-    本轮有有效 Candidate 时，替换直接输入过期的旧任务；不受影响的任务继续保留。
-    其余来源或 ID 冲突均在 registry 建立前失败，不自动 rename 或合并。
+    非配置任务每轮重新生成，不继承旧业务任务的执行状态或依赖。
+    配置任务与候选的 ID 冲突仍在 registry 建立前失败，不自动 rename 或合并。
     """
 
     if not all(
@@ -524,6 +524,8 @@ def assemble_scope_build_task_plan(
     all_tasks = [*retained_for_assembly, *candidates]
     skeleton = _validate_task_units(skeleton_plan, all_tasks)
     retained_task_ids = tuple(str(task["id"]) for task in retained_for_assembly)
+    # 旧业务任务不进入本轮计划，不能继续作为 owner 或 capability provider 参与编译。
+    facts = facts.retained_subset(retained_task_ids)
     candidate_task_ids = tuple(str(task["id"]) for task in candidates)
     retained_id_set = set(retained_task_ids)
     context = {

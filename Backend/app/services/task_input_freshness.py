@@ -42,6 +42,12 @@ def task_covers_current_input(task: Mapping, project_plan: Mapping, build_contex
     """重编译同一交付物的直接输入并比较原冻结合同；不因无关上游变更递归失效。"""
     if check_page and not page_task_covers_current_input(task, project_plan):
         return False
+    if str(task.get("unit_id") or "").startswith("backend:module:"):
+        from app.services.backend_module_freshness import current_backend_deliverables
+
+        # 模块累计多接口职责，沿用规划的逐接口判断；范围外设计未加载不代表正式输入已变化。
+        # 范围内仍比较当前正式设计、HTTP 合同及权限，不能用冻结旧设计为自身背书。
+        return current_backend_deliverables(task, project_plan, build_context) == plain_json(task).get("deliverables", [])
     # 复用原平台合同编译器选择精确 Endpoint、Schema、字段映射和页面依赖，不能用新 Unit 背书。
     from app.services.business_acceptance import compile_business_acceptance
     from app.services.build_unit_compiler import apply_unit_compilation
