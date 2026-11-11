@@ -175,6 +175,9 @@ _RUNTIME_ARTIFACT_PATHS = (
     ".devagentstudio/runtime",
     ".devagentstudio/cache",
     ".devagentstudio/checkpoints",
+    # LangGraph checkpoint SQLite 数据库；旧工作区的 .gitignore 没排它，
+    # 这里在 git add -A 之后兜底移除暂存条目，避免几十 MB 的状态文件被推到远端。
+    ".devagentstudio/recovery",
 )
 
 

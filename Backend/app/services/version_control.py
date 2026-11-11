@@ -718,6 +718,8 @@ _RUNTIME_ARTIFACT_PREFIXES = (
     ".devagentstudio/runtime/",
     ".devagentstudio/cache/",
     ".devagentstudio/checkpoints/",
+    # LangGraph checkpoint SQLite 数据库，可能膨胀到几十 MB；不参与"未提交变更"计数。
+    ".devagentstudio/recovery/",
 )
 
 

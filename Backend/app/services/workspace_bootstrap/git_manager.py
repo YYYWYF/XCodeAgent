@@ -18,7 +18,9 @@ class BootstrapGitError(WorkspaceBootstrapError):
 
 
 # .devagentstudio 下的运行时产物目录，不应进入版本控制。
-_RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints")
+# recovery/ 存放 LangGraph checkpoint 的 SQLite 数据库（execution-recovery.sqlite），
+# 在工作流密集推进时会迅速膨胀到几十 MB；推进过程是短期状态，不属于"应被追溯的产物"。
+_RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints", "recovery")
 
 # 依赖目录与构建产物：发布时 `git add -A` 会把工作区所有未忽略文件加进暂存区，
 # 不排除 node_modules 会导致数万文件被加入，git 同时输出大量 LF/CRLF warning 把
