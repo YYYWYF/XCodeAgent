@@ -378,6 +378,7 @@ export default function UiDesignConfirmationPanel({
     setActingPageIds([])
   }, [phase, freshPages.length, actingSet, setActingPageIds])
 
+  /** 等待在途设计任务结束后提交确认，不要求所有页面生成成功。 */
   const confirmAll = (): void => {
     if (disabled || uiGenerationInProgress) return
     const feedbackText = feedback.trim()
@@ -473,8 +474,7 @@ export default function UiDesignConfirmationPanel({
     [pages]
   )
 
-  // UI 设计稿生成中（本地 acting 入队、后台 worker pool 处理或 run 提交进行中）：
-  // 期间跳过/进入规划等阶段动作都应禁用，与「全部生成」按钮保持一致，避免并发提交冲突。
+  // 排队、生成和停止尚未完成时等待；未生成、失败和已停止不限制下一步。
   const uiGenerationInProgress =
     actingPageIds.length > 0 || generatingPageIds.length > 0 || runInFlightRef.current
 
@@ -1181,8 +1181,8 @@ export default function UiDesignConfirmationPanel({
             {adjustingHint
               ? adjustingHint
               : uiGenerationInProgress
-                ? '设计稿正在处理，请等待完成后继续。'
-                : '可按需生成设计稿，点击“下一步”确认并进入技术规划。'}
+                ? '设计稿正在处理，请等待完成或停止后继续。'
+                : '可按需生成设计稿，点击“下一步”进入技术规划。'}
           </Text>
           <div className={cx('ui-design-confirm-actions')}>
             <Button

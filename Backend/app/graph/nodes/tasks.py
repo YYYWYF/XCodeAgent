@@ -75,7 +75,7 @@ def _latest_project_plan(
         if not all(
                 isinstance(artifact, dict) and artifact
                 for artifact in (requirement_spec, product_plan)
-        ) or (include_ui_designs and not ui_designs):
+        ):
             return latest_plan
         # 正式 TechnicalPlan 不持久化 PageImplementationContract；Build 每次都必须
         # 使用最新正式上游重新编译，不能让磁盘重载抹掉运行时派生契约。
@@ -115,8 +115,6 @@ def _build_prerequisite_errors(
         errors.append("RequirementSpec 未确认。")
     if not product_plan or product_plan.get("confirmation_status") != "confirmed":
         errors.append("ProductPlan 未确认。")
-    if include_ui_designs and (not ui_designs or ui_designs.get("confirmation_status") != "confirmed"):
-        errors.append("UiManifest 未确认。")
     if (
         not technical_plan
         or technical_plan.get("artifact_type") != "technical-plan"
@@ -129,7 +127,6 @@ def _build_prerequisite_errors(
             {
                 "requirement-spec": requirement_spec,
                 "product-plan": product_plan,
-                **({"ui-design": ui_designs} if include_ui_designs else {}),
                 "technical-plan": technical_plan,
             },
             include_ui_designs=include_ui_designs,
@@ -188,7 +185,6 @@ def _formal_artifact_hash_errors(
     paths = {
         "requirement-spec": root / WORKSPACE_ARTIFACT_DIR / 'specs/requirement-spec.json',
         "product-plan": root / WORKSPACE_ARTIFACT_DIR / 'plans/product-plan.json',
-        "ui-design": root / WORKSPACE_ARTIFACT_DIR / 'specs/ui-designs.json',
         "technical-plan": root / WORKSPACE_ARTIFACT_DIR / 'plans/technical-plan.json',
     }
     try:
@@ -329,7 +325,7 @@ def _build_prerequisite_blocked_result(
             "errors": errors,
             "target": build_execution_scope,
             "artifact": (
-                "RequirementSpec / ProductPlan / UiManifest / TechnicalPlan / "
+                "RequirementSpec / ProductPlan / TechnicalPlan / "
                 "template-state.json / Endpoint API Design"
             ),
             "recommended_action": "手动完成并确认错误所指向的前置产物后重新发起 DAG 生成。",

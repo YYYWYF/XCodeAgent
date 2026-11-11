@@ -222,60 +222,6 @@ def _application_planning_interaction(state: ProjectState) -> dict[str, Any]:
     return value if isinstance(value, dict) and value else {}
 
 
-def _verified_ui_designs_for_confirmation(
-    state: ProjectState,
-    ui_designs: dict[str, Any],
-) -> tuple[dict[str, Any], list[str]]:
-    """按当前 ProductPlan 复验已生成页面，未生成、失败或取消页面保留原状态且不阻塞确认。"""
-
-    product_pages = {_page_id(page): page for page in _page_list(state) if _page_id(page)}
-    existing_pages = {
-        _page_id(page): page
-        for page in ui_designs.get("pages", [])
-        if isinstance(page, dict) and _page_id(page)
-    }
-    errors: list[str] = []
-    if ui_designs.get("product_plan_sha256") != _product_plan_hash(state):
-        errors.append("UI Manifest 引用的 ProductPlan 哈希已过期，请重新生成受影响页面。")
-    if set(existing_pages) != set(product_pages):
-        errors.append("UI Manifest 页面集合必须与 ProductPlan pages 完全一致。")
-    verified_pages: list[dict[str, Any]] = []
-    for page_id, product_page in product_pages.items():
-        existing = existing_pages.get(page_id, {})
-        page_key = str(existing.get("page_key") or derive_page_key(product_page)).strip()
-        code = load_page_code(
-            str(workspace_root(state) / WORKSPACE_ARTIFACT_DIR / "ui-design"),
-            page_key,
-        ) or str(existing.get("code") or "")
-        status = str(existing.get("status") or "pending")
-        verified = build_ui_page_manifest(
-            product_page,
-            page_key=page_key,
-            code_path=str(existing.get("code_path") or ""),
-            code=code,
-            status=status,
-            template_id=str(existing.get("template_id") or ""),
-            template_source_path=str(existing.get("template_source_path") or ""),
-            error=str(existing.get("error") or ""),
-        )
-        verification = verified.get("verification", {})
-        page_errors = verification.get("errors") if isinstance(verification, dict) else []
-        # 只校验已生成页面，允许用户在部分页面没有设计稿时确认并继续。
-        if status == "confirmed" and verification.get("status") != "passed":
-            detail = "；".join(str(item) for item in page_errors) or "设计稿代码或映射缺失"
-            errors.append(f"页面 {page_id} 未通过产品事实一致性校验：{detail}")
-        verified_pages.append(verified)
-    return (
-        {
-            "schema_version": UI_MANIFEST_SCHEMA_VERSION,
-            "confirmation_status": "pending_user_confirmation",
-            "product_plan_sha256": _product_plan_hash(state),
-            "pages": verified_pages,
-        },
-        errors,
-    )
-
-
 def _has_explicit_user_submission(state: ProjectState) -> bool:
     """创建规划只接受原生中断恢复写入的 UI 交互。"""
 
@@ -956,7 +902,7 @@ def _adjust_base_pages(
 
 
 async def ui_confirmation(state: ProjectState) -> dict:
-    """生成各页 React 设计稿并等待用户确认；不再支持「跳过 UI 设计」入口。"""
+    """展示可选 React 设计稿，用户可直接确认继续，不校验设计稿就绪程度。"""
 
     requirement_spec = state.get("requirement_spec")
     if not isinstance(requirement_spec, dict):
@@ -970,8 +916,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
     interaction_action = str(interaction.get("action") or "")
     request = str(state.get("request") or "")
     action = state.get("ui_design_action")
-    if isinstance(action, dict) and action.get("action") == "skip":
-        raise ValueError("当前流程必须完成并确认 UI 设计，不支持跳过 UI 设计。")
+    skip_designs = isinstance(action, dict) and action.get("action") == "skip"
 
     # 恢复路径：已有待确认设计稿且本轮无新提交，直接重放确认卡。
     # 前端用「无操作 resume」轮询生成进度：这里读工作区最新 ui-designs.json（池在
@@ -1003,6 +948,7 @@ async def ui_confirmation(state: ProjectState) -> dict:
     # _apply_ui_design_action 返回的 ui_designs 无需在此重复落盘。
     if (
         isinstance(action, dict)
+        and not skip_designs
         and isinstance(existing, dict)
         and existing.get("confirmation_status") == "pending_user_confirmation"
         and (
@@ -1038,33 +984,16 @@ async def ui_confirmation(state: ProjectState) -> dict:
             result["product_plan"] = updated_product_plan
         return result
 
-    # 用户确认路径：检测到全部确认信号且无页面仍待确认。
-    # 先读最新文件（池可能刚完成最后一页），再按当前 ProductPlan 校验。
+    # 用户显式确认即可继续；设计稿缺失或还在生成都不构成前置要求。
     if (
-        isinstance(existing, dict)
-        and existing.get("confirmation_status") == "pending_user_confirmation"
-        and (
-            interaction_action == "confirm"
-            if application_planning_scope
-            else _user_confirmed_all_designs(request)
-        )
+        (interaction_action == "confirm" or (interaction_action == "ui_action" and skip_designs))
+        if application_planning_scope
+        else (_user_confirmed_all_designs(request) or skip_designs)
     ):
-        latest = await _latest_ui_designs(state, existing)
-        verified, validation_errors = _verified_ui_designs_for_confirmation(state, latest)
-        if validation_errors:
-            clarification = _ui_design_confirmation_payload(state, verified)
-            clarification["message"] = "设计稿尚未通过产品事实一致性校验，请修正后再确认。"
-            clarification["validation_errors"] = validation_errors
-            _persist_ui_designs(state, verified)
-            return {
-                "phase": "ui_confirmation",
-                "status": "requires_user_input",
-                "ui_designs": verified,
-                "clarification": clarification,
-                "timeline": ["ui_confirmation"],
-            }
+        latest = await _latest_ui_designs(state, existing if isinstance(existing, dict) else {})
+        # 用户确认只表达继续流程，不附加页面数量、生成状态、代码或摘要校验。
         ui_designs = {
-            **verified,
+            **latest,
             "confirmation_status": "confirmed",
         }
         _persist_ui_designs(state, ui_designs)

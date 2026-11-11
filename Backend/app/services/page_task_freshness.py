@@ -9,6 +9,19 @@ from app.services.frontend_page_tree import project_plan_page_records
 from app.services.planning_frozen import plain_json
 
 
+def without_ui_references(value: Any) -> Any:
+    """业务指纹排除可选设计稿引用，设计稿更新或删除不能使任务确认失效。"""
+
+    if isinstance(value, Mapping):
+        return {key: without_ui_references(item) for key, item in value.items()
+                if key not in {"uiDesignRef", "uiControlRefs", "ui_designs_sha256",
+                               "ui_design_path", "ui_design_sha256"}}
+    if isinstance(value, (list, tuple)):
+        return [without_ui_references(item) for item in value
+                if not isinstance(item, Mapping) or item.get("artifactKey") != "ui-design"]
+    return value
+
+
 def page_task_input_digest(unit_id: str, project_plan: Mapping[str, Any]) -> str:
     """摘要当前页面实现合同和技术方案；其他页面变化不使本页任务失效。"""
 
@@ -21,7 +34,7 @@ def page_task_input_digest(unit_id: str, project_plan: Mapping[str, Any]) -> str
         "contract": next((contract for contract in plan.get("page_implementation_contracts", [])
                           if contract.get("pageId") == page_id), None),
     }
-    return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True,
+    return sha256(json.dumps(without_ui_references(payload), ensure_ascii=False, sort_keys=True,
                              separators=(",", ":")).encode("utf-8")).hexdigest()
 
 

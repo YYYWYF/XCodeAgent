@@ -116,7 +116,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 负责人：产品。
 
-生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。当前合同必须完成并确认 UI 设计，不支持跳过。确认只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，当前工作台为该应用创建或恢复独立的 PLAN StageSession，并原地切换到 Planning 阶段。先以 `forwardedProps.planningStageHandoff` 校验当前来源 Run/lifecycle revision 并在 PLAN 会话的独立线程重建原审阅门，再在该线程提交 `enter_planning`。交接不运行产物模型、不消费用户确认；旧 DESIGN 线程不再有权推进。RequirementSpec、ProductPlan 与 UiDesign 从服务端当前 checkpoint 传递，不使用前端快照。`initialization.iterationId` 保持不变，`initialization.threadId` 指向新阶段线程。
+生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。UI 设计稿为可选参考，所有流程均不要求它存在、完整、已生成、已确认或摘要匹配；UI 卡片的“下一步”须等待排队、生成或正在停止的任务全部结束；没有在途任务时即可继续，不要求所有页面生成成功，未生成、失败和已停止页面均允许继续。确认只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，当前工作台为该应用创建或恢复独立的 PLAN StageSession，并原地切换到 Planning 阶段。先以 `forwardedProps.planningStageHandoff` 校验当前来源 Run/lifecycle revision 并在 PLAN 会话的独立线程重建原审阅门，再在该线程提交 `enter_planning`。交接不运行产物模型、不消费用户确认；旧 DESIGN 线程不再有权推进。RequirementSpec、ProductPlan 与 UiDesign 从服务端当前 checkpoint 传递，不使用前端快照。`initialization.iterationId` 保持不变，`initialization.threadId` 指向新阶段线程。
 
 `ui-designs.json` 使用 `ui-manifest.v3`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。核心结构为：
 
@@ -157,7 +157,7 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 UI 生成只能消费已确认 ProductPlan，不能发明 ProductPlan 中不存在的页面、业务字段或操作。
 
-生成、模板适配、用户调整和最终确认都必须执行确定性一致性检查：ProductPlan 的每个 `actionId` 和 `informationItemId` 必须在 TSX 中有静态控件映射；`interface` action 还必须通过 `data-ui-effect` 固化实际本地界面效果；未知 ID、缺失映射、无归属交互控件、无归属业务展示组件都拒绝确认。仅用于切换原型状态的控件必须显式标记 `data-preview-only="true"`，不得进入 ProductPlan 或 TechnicalPlan。模板只能作为布局和组件风格参考，必须先按 ProductPlan 重写业务语义，禁止原样携带模板字段或操作。
+生成、模板适配和用户调整期间可执行一致性检查以提供生成诊断，但最终确认和下游流程不以这些检查为门槛：ProductPlan 的每个 `actionId` 和 `informationItemId` 必须在 TSX 中有静态控件映射；`interface` action 还必须通过 `data-ui-effect` 固化实际本地界面效果；未知 ID、缺失映射、无归属交互控件、无归属业务展示组件只作为生成诊断，不拒绝用户确认或下游执行。仅用于切换原型状态的控件必须显式标记 `data-preview-only="true"`，不得进入 ProductPlan 或 TechnicalPlan。模板只能作为布局和组件风格参考，必须先按 ProductPlan 重写业务语义，禁止原样携带模板字段或操作。
 
 RequirementSpec、ProductPlan 和 UiDesign 的产品确认均不得要求产品角色选择或审核数据源、数据库、持久化和 API 方案；这些内容只进入 TechnicalPlan 的开发确认。
 
@@ -216,7 +216,7 @@ Contract 内部分批由代码根据当前模型的**输出预算**决定，和�
 
 仅当 SDK 明确报告 `finish_reason=length` 或 `stop_reason=max_tokens` 时，将失败接口/字段组记录为二分任务，交给依赖调整后的下一次生成执行；普通 JSON、身份或语义错误只重试当前片段，每片段最多三次。模型调用边界异常交回现有失败流程，不叠加片段重放。小 Contract 若明确截断，下一次进入分批；单个接口/字段或 Schema 目录仍截断则显式失败，不提交半成品。批次使用 Contract 归属、冻结目录与内容摘要作为持久化键，完成邻居不重做；目录修复须一并撤销受影响 Contract 的 Schema 目录、字段、接口和缩批标记，保留未变化模块。
 
-片段属于内部候选，不是额外的正式文档或确认节点。当前按模块串行调用模型，不增加调度器或新的 AG-UI 接口。各片段独立最多尝试三次（首次加两次重试），只重试解析或局部校验失败的当前片段；最新诊断仅注入当前提示，成功模块不消耗其他模块的机会。片段耗尽后立即返回原失败审阅，不再乘以外层重试次数。计数仅属于本次执行，不写入恢复存储；手动重试或进程重启后显式继续时，未完成模块获得新预算，同输入成功片段仍复用。用户停止与保存失败不触发模型重放。每个片段校验通过后，必须先同步写入现有内容寻址资料库，再原子更新 `.devagentstudio/runtime/technical-plan-generation.json` 的当前输入摘要与已完成引用，随后才能请求下一模块。模型连接异常或进程退出后，通过现有业务节点重试读取同输入目录继续；ProductPlan、UI 摘要、application.json 或原始修改要求变化则清空当前引用，拒绝迟到旧输入写入。Graph 只保留内部摘要 `technical_plan_generation_input_sha256`，不重复保存片段正文。完整正式文档提交成功后清理当前目录；失败片段不会写入正式计划，也不因恢复而消费用户确认。存储损坏显式失败，不扫描历史文件或静默降级。
+片段属于内部候选，不是额外的正式文档或确认节点。当前按模块串行调用模型，不增加调度器或新的 AG-UI 接口。各片段独立最多尝试三次（首次加两次重试），只重试解析或局部校验失败的当前片段；最新诊断仅注入当前提示，成功模块不消耗其他模块的机会。片段耗尽后立即返回原失败审阅，不再乘以外层重试次数。计数仅属于本次执行，不写入恢复存储；手动重试或进程重启后显式继续时，未完成模块获得新预算，同输入成功片段仍复用。用户停止与保存失败不触发模型重放。每个片段校验通过后，必须先同步写入现有内容寻址资料库，再原子更新 `.devagentstudio/runtime/technical-plan-generation.json` 的当前输入摘要与已完成引用，随后才能请求下一模块。模型连接异常或进程退出后，通过现有业务节点重试读取同输入目录继续；ProductPlan、application.json 或原始修改要求变化则清空当前引用，拒绝迟到旧输入写入。Graph 只保留内部摘要 `technical_plan_generation_input_sha256`，不重复保存片段正文。完整正式文档提交成功后清理当前目录；失败片段不会写入正式计划，也不因恢复而消费用户确认。存储损坏显式失败，不扫描历史文件或静默降级。
 
 已有完整候选后，二次修改、跨页面权限冲突等全局修复继续使用原局部文件编辑器，不重新分段生成。最终正式产物仍只有一份 TechnicalPlan JSON，结构化审阅和显式确认规则保持不变。
 

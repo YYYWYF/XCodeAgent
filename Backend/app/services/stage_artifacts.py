@@ -10,6 +10,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.run_workers import WorkerStateGraph
 from app.services.generation_baseline import prepare_generation_baseline
 from app.workspace.plan_documents import load_project_plan_json, current_technical_plan_json_path
+from app.workspace.spec_documents import load_ui_designs_json
 from langgraph.types import Command
 
 
@@ -85,7 +86,9 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
         exists = key in required and path.is_file()
         if exists and _GENERATED_BASELINES.get(node) == key:
             exists = prepare_generation_baseline(path)
-        value = load_project_plan_json(path, hydrate_detail_designs=True) if exists else {}
+        # 可选设计稿读取失败时使用空参考，不能影响技术规划、开发或恢复。
+        value = (load_ui_designs_json(path) if key == "ui_designs" else
+                 load_project_plan_json(path, hydrate_detail_designs=True)) if exists else {}
         if not isinstance(value, dict):
             raise ValueError(f"阶段产物不是有效对象：{path.name}")
         fields[key] = value

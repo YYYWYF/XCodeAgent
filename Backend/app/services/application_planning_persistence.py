@@ -450,14 +450,13 @@ def _document_descriptor(
 
 
 def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, Any]:
-    """校验设计与计划阶段的四类正式产物并返回索引，UI允许明确跳过。"""
+    """校验需求、产品和技术规划并返回索引，设计稿不参与进入工作区的门禁。"""
 
     requirement_spec = state.get("requirement_spec")
     product_plan = state.get("product_plan")
     technical_plan = state.get("technical_plan")
     if not isinstance(requirement_spec, dict) or requirement_spec.get("confirmation_status") != "confirmed":
         raise ValueError("需求文档必须经用户确认后才能进入工作区。")
-    ui_designs = state.get("ui_designs")
     if (
         not isinstance(technical_plan, dict)
         or technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE
@@ -467,14 +466,8 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
     product_plan = require_current_product_plan(product_plan, requirement_spec)
     if not isinstance(product_plan, dict) or product_plan.get("confirmation_status") != "confirmed":
         raise ValueError("产品规划必须经产品角色确认后才能进入工作区。")
-    if (
-        not isinstance(ui_designs, dict)
-        or ui_designs.get("confirmation_status") != "confirmed"
-    ):
-        raise ValueError("UI 设计稿必须经产品角色确认后才能进入工作区。")
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))
     product_plan_markdown = Path(str(state.get("product_plan_path") or ""))
-    ui_design_json = workspace / WORKSPACE_ARTIFACT_DIR / "specs" / "ui-designs.json"
     return {
         "requirementSpec": {
             "markdown": _document_descriptor(
@@ -498,15 +491,6 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
                 "产品规划内部数据",
                 "json",
                 ".devagentstudio/plans",
-            ),
-        },
-        "uiDesigns": {
-            "json": _document_descriptor(
-                workspace,
-                ui_design_json,
-                "UI 设计索引",
-                "json",
-                ".devagentstudio/specs",
             ),
         },
         "technicalPlan": {

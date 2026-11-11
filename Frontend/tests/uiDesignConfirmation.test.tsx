@@ -102,13 +102,22 @@ test('单页入队 Run 的中间空快照保留同一个面板及修改意见，
   })
 })
 
-test('排队、生成及停止期间禁用下一步，未处理页面仍可继续提交生成', async () => {
-  await withPanel(async ({ root, render }) => {
+test('排队、生成及停止未完成时禁止下一步，停止完成后可以继续', async () => {
+  await withPanel(async ({ root, render, submissions }) => {
     for (const status of ['queued', 'generating', 'stopping']) {
       await render([{ pageId: 'a', name: '页面甲', status }, { pageId: 'b', name: '页面乙', status: 'pending' }])
       assert.equal(buttons(root(), 'ui-design-confirm-all-btn')[0].props.disabled, true)
       assert.equal(Boolean(buttons(root(), 'ui-design-action-btn-regenerate')[0].props.disabled), false)
+      const before = submissions.length
+      await act(async () => { buttons(root(), 'ui-design-confirm-all-btn')[0].props.onClick() })
+      assert.equal(submissions.length, before)
     }
+    await render([{ pageId: 'a', name: '页面甲', status: 'cancelled' }, { pageId: 'b', name: '页面乙', status: 'pending' }])
+    const next = buttons(root(), 'ui-design-confirm-all-btn')[0]
+    assert.equal(Boolean(next.props.disabled), false)
+    await act(async () => { next.props.onClick() })
+    assert.equal(submissions.length, 1)
+    assert.equal(submissions[0].__applicationPlanningAction, 'confirm')
   })
 })
 

@@ -1985,8 +1985,8 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_ui_manifest_controls_must_reference_exact_product_actions(self) -> None:
-        """UI 业务控件与产品操作不一致时必须阻止进入工作台。"""
+    def test_ui_manifest_controls_do_not_gate_technical_plan(self) -> None:
+        """设计稿控件不匹配不影响技术规划的业务合同校验。"""
 
         product_plan = {
             "pages": [
@@ -2043,7 +2043,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ui_designs,
         )
 
-        self.assertTrue(any("UiManifest controls" in error for error in errors))
+        self.assertFalse(any("UiManifest" in error for error in errors))
 
     def test_binding_type_rejects_fields_from_another_type(self) -> None:
         """本地操作夹带 endpointId 时必须报告类型冲突，不能静默猜成接口调用。"""

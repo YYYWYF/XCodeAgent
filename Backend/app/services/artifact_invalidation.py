@@ -35,6 +35,9 @@ def stale_artifact_keys(
     while changed:
         changed = False
         for artifact_key, artifact in artifacts.items():
+            # 设计稿及其引用只提供参考，不进入正式产物失效闭包。
+            if artifact_key == "ui-design":
+                continue
             if artifact_key in stale:
                 continue
             based_on = artifact.get("basedOn")
@@ -46,6 +49,8 @@ def stale_artifact_keys(
                         f"{artifact_key} 的 basedOn 必须只包含对象。"
                     )
                 upstream = str(reference.get("artifactKey") or "").strip()
+                if upstream == "ui-design":
+                    continue
                 expected = str(reference.get("sha256") or "").strip()
                 actual = canonical_hashes.get(upstream)
                 if not upstream or len(expected) != 64 or actual is None:
@@ -68,6 +73,8 @@ def mark_artifact_documents_stale(
 
     artifacts: dict[str, dict[str, Any]] = {}
     for artifact_key, path in artifact_paths.items():
+        if artifact_key == "ui-design":
+            continue
         try:
             value = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -92,7 +99,7 @@ def assert_confirmed_artifact_closure(
     invalid_status = sorted(
         key
         for key, artifact in artifacts.items()
-        if artifact.get("confirmation_status") != "confirmed"
+        if key != "ui-design" and artifact.get("confirmation_status") != "confirmed"
     )
     stale = stale_artifact_keys(artifacts, canonical_hashes=canonical_hashes)
     blocked = sorted(set(invalid_status) | set(stale))

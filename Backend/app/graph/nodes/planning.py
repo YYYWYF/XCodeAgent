@@ -62,8 +62,6 @@ from app.services.authorization_deliverability import (
 )
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.application_config import read_application_config
-from app.domain.application_planning_recovery import application_planning_sha256
-from app.services.ui_design_manifest import persisted_ui_manifest
 from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.entity_display_language import validate_entity_display_language
@@ -193,14 +191,11 @@ def _technical_planning_requirement_spec(
     if state.get("workflow_scope") != "application_planning":
         return requirement_spec
     product_plan = state.get("product_plan")
-    ui_designs = state.get("ui_designs")
     if (
         not isinstance(product_plan, dict)
         or product_plan.get("confirmation_status") != "confirmed"
     ):
         raise ValueError("TechnicalPlan 必须基于已确认 ProductPlan 生成。")
-    if not isinstance(ui_designs, dict) or ui_designs.get("confirmation_status") != "confirmed":
-        raise ValueError("TechnicalPlan 必须基于已确认的 UI 设计阶段生成。")
     technical_input = {
         key: value
         for key, value in requirement_spec.items()
@@ -215,7 +210,6 @@ def _technical_planning_requirement_spec(
         **technical_input,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
         "confirmed_product_plan": product_plan,
-        "confirmed_ui_design_sha256": application_planning_sha256(persisted_ui_manifest(ui_designs)),
         "technical_plan_generation_workspace": workspace_from_state(state),
         "application_config": application_config,
     }
@@ -230,9 +224,9 @@ def _attach_technical_plan_contracts(
     if state.get("workflow_scope") != "application_planning":
         return plan
     product_plan = state.get("product_plan")
-    ui_designs = state.get("ui_designs")
-    if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
-        raise ValueError("TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。")
+    ui_designs = state.get("ui_designs") or {}
+    if not isinstance(product_plan, dict):
+        raise ValueError("TechnicalPlan 缺少 ProductPlan 输入。")
     closed_plan = {
         **plan,
         "pages": close_page_action_endpoint_dependencies(
@@ -259,9 +253,9 @@ def _technical_plan_contract_errors(
     if state.get("workflow_scope") != "application_planning":
         return []
     product_plan = state.get("product_plan")
-    ui_designs = state.get("ui_designs")
-    if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
-        return ["TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。"]
+    ui_designs = state.get("ui_designs") or {}
+    if not isinstance(product_plan, dict):
+        return ["TechnicalPlan 缺少 ProductPlan 输入。"]
     requirement_spec = state.get("requirement_spec")
     errors = validate_page_implementation_contracts(plan, product_plan, ui_designs)
     if isinstance(requirement_spec, dict):
@@ -1803,13 +1797,12 @@ def _project_plan_validation_errors(
         and project_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE
         and isinstance(state.get("requirement_spec"), dict)
         and isinstance(state.get("product_plan"), dict)
-        and isinstance(state.get("ui_designs"), dict)
     ):
         validation_plan = materialize_technical_plan_runtime(
             project_plan,
             state["requirement_spec"],
             state["product_plan"],
-            state["ui_designs"],
+            state.get("ui_designs") or {},
         )
     errors = [
         *validate_project_plan_dependencies(validation_plan),
@@ -1841,7 +1834,7 @@ def _technical_plan_retry_feedback(errors: list[str]) -> str:
 
     diagnostics = "\n".join(f"- {error}" for error in errors[:12])
     return (
-        "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan 与 UiManifest，"
+        "系统 TechnicalPlan 一致性校验未通过。请基于已确认的 ProductPlan，"
         "修复方式遵循当前入口约定：编辑工具可用时仅修改相关片段，保留未受影响的内容；"
         "不得猜测或省略业务 action/step，"
         "必须完整保留当前 TechnicalPlan 实体并通过 entity_ids 绑定 API Contract，禁止 data_source_id；"

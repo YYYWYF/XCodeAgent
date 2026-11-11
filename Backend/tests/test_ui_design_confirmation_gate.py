@@ -1,52 +1,48 @@
-"""验证部分页面无设计稿时可以确认，已有设计稿仍核验真实代码。"""
+"""设计稿的生成状态、页面内容和上游摘要均不阻断显式确认。"""
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, patch
 
-from app.graph.nodes.ui_confirmation import _product_plan_hash, _verified_ui_designs_for_confirmation
+from app.graph.nodes.ui_confirmation import ui_confirmation
 
 
-class UiDesignConfirmationGateTests(unittest.TestCase):
-    """未生成页不阻塞确认，已有设计稿保持产品事实校验。"""
+class UiDesignConfirmationGateTests(unittest.IsolatedAsyncioTestCase):
+    """通过真实确认分支验证设计稿只作可选参考。"""
 
-    def state(self, workspace):
-        """构造单页无交互产品事实，避免依赖模型或历史产物。"""
-        return {'workspace': workspace, 'product_plan': {'confirmation_status': 'confirmed', 'pages': [{
-            'pageId': 'home', 'name': '首页', 'path': '/page/home',
-            'information_items': [{'itemId': 'welcome', 'label': '欢迎文字'}], 'actions': [],
-        }]}}
-
-    def test_unfinished_pages_do_not_block_confirmation(self):
-        """未生成、排队、生成中、失败、取消页面不阻塞确认，也不伪造页面完成状态。"""
+    async def test_any_ui_manifest_can_be_confirmed_without_readiness_checks(self):
+        """空清单、过期摘要、无代码、错误控件和各类生成状态都可继续。"""
         with tempfile.TemporaryDirectory() as workspace:
-            state = self.state(workspace)
-            for status in ('pending', 'queued', 'generating', 'stopping', 'generation_failed', 'cancelled'):
-                with self.subTest(status=status):
-                    manifest = {'product_plan_sha256': _product_plan_hash(state), 'pages': [{
-                        'pageId': 'home', 'page_key': 'Home', 'status': status,
-                    }]}
-                    verified, errors = _verified_ui_designs_for_confirmation(state, manifest)
-                    self.assertEqual(errors, [])
-                    self.assertEqual(verified['pages'][0]['status'], status)
-                    self.assertEqual(verified['confirmation_status'], 'pending_user_confirmation')
+            for status in ('pending', 'queued', 'generating', 'stopping', 'generation_failed', 'cancelled', 'confirmed'):
+                for pages in ([], [{'pageId': 'old-page', 'status': status}]):
+                    with self.subTest(status=status, pages=pages):
+                        manifest = {'confirmation_status': 'pending_user_confirmation',
+                                    'product_plan_sha256': 'outdated', 'pages': pages}
+                        state = {'workspace': workspace, 'requirement_spec': {},
+                                 'product_plan': {'confirmation_status': 'confirmed', 'pages': []},
+                                 'ui_designs': manifest, 'workflow_scope': 'application_planning',
+                                 'application_planning_interaction': {'action': 'confirm'}}
+                        with patch('app.graph.nodes.ui_confirmation.require_current_product_plan', return_value=state['product_plan']), \
+                             patch('app.graph.nodes.ui_confirmation._latest_ui_designs', new=AsyncMock(return_value=manifest)), \
+                             patch('app.graph.nodes.ui_confirmation._persist_ui_designs') as persist, \
+                             patch('app.graph.nodes.ui_confirmation._ui_design_confirmed_payload', return_value={}):
+                            result = await ui_confirmation(state)
+                        self.assertEqual(result['status'], 'completed')
+                        self.assertEqual(result['ui_designs']['confirmation_status'], 'confirmed')
+                        self.assertEqual(result['ui_designs']['pages'], pages)
+                        persist.assert_called_once()
 
-    def test_generated_page_still_requires_valid_code(self):
-        """仅有 confirmed 标签但没有真实代码也不能确认。"""
+    async def test_missing_manifest_and_explicit_skip_can_continue(self):
+        """没有设计稿也能确认；显式跳过不进入生成器或代码验证。"""
         with tempfile.TemporaryDirectory() as workspace:
-            state = self.state(workspace)
-            _, errors = _verified_ui_designs_for_confirmation(state, {
-                'product_plan_sha256': _product_plan_hash(state),
-                'pages': [{'pageId': 'home', 'page_key': 'Home', 'status': 'confirmed'}],
-            })
-            self.assertTrue(errors)
-
-    def test_complete_valid_page_can_be_confirmed(self):
-        """完整生成且产品事实绑定有效的页面不被新门禁误拦。"""
-        with tempfile.TemporaryDirectory() as workspace:
-            state = self.state(workspace)
-            _, errors = _verified_ui_designs_for_confirmation(state, {
-                'product_plan_sha256': _product_plan_hash(state), 'pages': [{
-                    'pageId': 'home', 'page_key': 'Home', 'status': 'confirmed',
-                    'code': '<div data-information-item-id="welcome" data-control-id="welcome-display">欢迎</div>',
-                }],
-            })
-            self.assertEqual(errors, [])
+            for action in ('confirm', 'ui_action'):
+                state = {'workspace': workspace, 'requirement_spec': {},
+                         'product_plan': {'confirmation_status': 'confirmed', 'pages': []},
+                         'ui_designs': {}, 'workflow_scope': 'application_planning',
+                         'application_planning_interaction': {'action': action},
+                         'ui_design_action': {'action': 'skip'} if action == 'ui_action' else None}
+                with patch('app.graph.nodes.ui_confirmation.require_current_product_plan', return_value=state['product_plan']), \
+                     patch('app.graph.nodes.ui_confirmation._latest_ui_designs', new=AsyncMock(return_value={})), \
+                     patch('app.graph.nodes.ui_confirmation._persist_ui_designs'), \
+                     patch('app.graph.nodes.ui_confirmation._ui_design_confirmed_payload', return_value={}):
+                    result = await ui_confirmation(state)
+                self.assertEqual(result['status'], 'completed')

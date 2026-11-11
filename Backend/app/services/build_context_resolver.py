@@ -117,20 +117,19 @@ def _materialize_page_confirmation_plan(
             product_path,
             hydrate_detail_designs=True,
         )
-        ui_designs = load_ui_designs_json(ui_path)
     except (OSError, TypeError, ValueError) as exc:
-        raise ValueError("当前正式 RequirementSpec、ProductPlan 或 UiManifest 无法读取。") from exc
+        raise ValueError("当前正式 RequirementSpec 或 ProductPlan 无法读取。") from exc
     if not all(
         isinstance(artifact, dict) and artifact
-        for artifact in (requirement_spec, product_plan, ui_designs)
+        for artifact in (requirement_spec, product_plan)
     ):
-        raise ValueError("当前正式 RequirementSpec、ProductPlan 或 UiManifest 不完整。")
+        raise ValueError("当前正式 RequirementSpec 或 ProductPlan 不完整。")
     if requirement_spec.get("confirmation_status") != "confirmed":
         raise ValueError("当前正式 RequirementSpec 未确认。")
     if product_plan.get("confirmation_status") != "confirmed":
         raise ValueError("当前正式 ProductPlan 未确认。")
-    if ui_designs.get("confirmation_status") != "confirmed":
-        raise ValueError("当前正式 UiManifest 未确认。")
+    # 设计稿只作为视觉参考，缺失、损坏和未确认都不影响页面开发。
+    ui_designs = load_ui_designs_json(ui_path)
     return materialize_technical_plan_runtime(
         technical_plan,
         requirement_spec,

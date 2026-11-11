@@ -1599,8 +1599,8 @@ def _project_plan_start_values(
     ui_designs = load_ui_designs_json(
         workspace_root / WORKSPACE_ARTIFACT_DIR / "specs" / "ui-designs.json"
     ) if include_ui_designs else {}
-    if not product_plan or (include_ui_designs and not ui_designs):
-        raise ValueError("当前 TechnicalPlan 运行时需要已确认的 ProductPlan 和 UiManifest。")
+    if not product_plan:
+        raise ValueError("当前 TechnicalPlan 运行时需要已确认的 ProductPlan。")
     project_plan = materialize_technical_plan_runtime(
         technical_plan,
         requirement_spec,

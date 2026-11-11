@@ -16,7 +16,7 @@ def find_workbench_document_review(files, state: dict, lifecycle) -> DocumentRev
         files.track(directory / "metadata.json")
         baseline, _ = files.read("plans/technical-plan.json", required=True)
         from app.services.artifact_invalidation import canonical_sha256
-        upstream_paths = {"product-plan": files.root / "plans/product-plan.json", "ui-design": files.root / "specs/ui-designs.json"}
+        upstream_paths = {"product-plan": files.root / "plans/product-plan.json"}
         if canonical_sha256(files.root / "plans/technical-plan.json") != metadata.base_canonical_sha256:
             raise ValueError("当前正式技术规划已变化，请先核对现有修订草稿。")
         if {item.artifact_key: item.sha256 for item in metadata.based_on_canonical} != {

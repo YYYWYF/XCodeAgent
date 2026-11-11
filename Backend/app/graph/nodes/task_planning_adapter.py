@@ -10,6 +10,7 @@ from app.config import Settings
 from app.domain.execution_recovery import WorkflowReentryReason
 from app.graph.nodes.common import workspace_from_state
 from app.graph.nodes.task_planning_inputs import mainline_formal_contract_inputs
+from app.services.page_task_freshness import without_ui_references
 from app.graph.nodes.tasks import (
     _api_contract_inconsistency_payload,
     _build_context_error_payload,
@@ -404,7 +405,7 @@ def _assemble_planning_context(
     from app.services.stage_prerequisites import endpoint_development
     formal_artifacts = _load_formal_artifacts(workspace, include_ui_designs=not endpoint_development(state))
     formal_state = _formal_artifact_state_update(formal_artifacts)
-    project_plan = _latest_project_plan(state, formal_artifacts=formal_artifacts)
+    project_plan = without_ui_references(_latest_project_plan(state, formal_artifacts=formal_artifacts))
     scope = _build_execution_scope_from_state(state)
     prerequisite_errors = _build_prerequisite_errors(
         state,
@@ -437,11 +438,11 @@ def _assemble_planning_context(
         project_plan, workspace_snapshot, confirmed_plan
     )
     try:
-        build_context = compile_authorization_overlay(
+        build_context = without_ui_references(compile_authorization_overlay(
             project_plan,
             _resolve_build_context(state, project_plan, scope, skeleton),
             application_config=read_application_config(workspace),
-        )
+        ))
     except ValueError as exc:
         return _context_blocked_result(
             project_plan=project_plan,

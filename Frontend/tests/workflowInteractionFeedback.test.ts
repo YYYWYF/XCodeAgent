@@ -22,7 +22,7 @@ function planningInteraction(mode: string): WorkflowRunPayload {
   } }
 }
 
-test('UI 设计仅在处理期间禁用下一步，未生成、失败或取消不要求补齐', () => {
+test('UI 设计仅在排队、生成和停止未完成时限制下一步', () => {
   for (const status of ['pending', 'queued', 'generating', 'stopping', 'generation_failed', 'cancelled', 'confirmed']) {
     const workflow: WorkflowRunPayload = { runId: 'ui-run', threadId: 'ui-thread', events: [], summary: {
       status: 'requires_user_input', phase: 'ui_confirmation', clarification: {

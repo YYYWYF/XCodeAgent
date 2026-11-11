@@ -127,11 +127,19 @@ def find_document_review(workspace: str, *, planning: bool) -> DocumentReview | 
         state.update(phase="requirement_document", status="requires_user_input", clarification=_confirmation_payload(product))
         return DocumentReview("requirement_document", "requirement_document_review",
             "awaiting_requirement_document_confirmation", state, files.sources)
-    ui, ui_path = files.read("specs/ui-designs.json")
+    from app.workspace.spec_documents import load_ui_designs_json
+    ui_path = files.root / "specs/ui-designs.json"
+    ui = load_ui_designs_json(ui_path)
     state.update(ui_designs=ui, ui_designs_json_path=str(ui_path))
-    if _pending(ui):
-        if not planning:
-            return None
+    # 已有待审技术规划优先，旧 UI 待确认状态不能挡住它；仅审 UI 时忽略坏的下游。
+    try:
+        plan, plan_path = files.current("plans/technical-plan.json")
+    except ValueError:
+        if not _pending(ui):
+            raise
+        plan, plan_path = {}, files.root / "plans/technical-plan.json"
+    if (planning and _pending(ui) and not _pending(plan)
+            and (not plan or lifecycle.initialization.stage == "awaiting_ui_design_confirmation")):
         _require_confirmed(spec, "需求文档")
         _require_confirmed(product, "产品规划")
         from app.graph.nodes.ui_confirmation import _ui_design_confirmation_payload
@@ -143,13 +151,10 @@ def find_document_review(workspace: str, *, planning: bool) -> DocumentReview | 
     if not planning:
         from app.services.document_review_workbench import find_workbench_document_review
         return find_workbench_document_review(files, state, lifecycle)
-    plan, plan_path = files.current("plans/technical-plan.json")
     if not _pending(plan):
         return None
     _require_confirmed(spec, "需求文档")
     _require_confirmed(product, "产品规划")
-    if ui.get("confirmation_status") not in {"confirmed", "skipped"}:
-        raise ValueError("请先完成 UI 设计确认或显式跳过，再审阅技术规划。")
     from app.graph.nodes.planning import _planning_confirmation_payload, _project_plan_validation_errors
     state.update(technical_plan=plan, project_plan=plan, technical_plan_json_path=str(plan_path),
                  project_plan_json_path=str(plan_path), project_plan_path=str(plan_path))

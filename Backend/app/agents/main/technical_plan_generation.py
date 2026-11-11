@@ -25,7 +25,6 @@ def generate_technical_plan_sections(
     product = frozen["confirmed_product_plan"]
     identity = {
         "product": product,
-        "ui": frozen.get("confirmed_ui_design_sha256"),
         "application_config": frozen.get("application_config"),
         "request": frozen.get("planning_adjustment_request", ""),
     }

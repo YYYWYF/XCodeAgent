@@ -399,8 +399,8 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
         self.assertEqual(analysis.analysis_status.value, "insufficient_evidence")
         self.assertEqual(analysis.atomic_changes[0].contract_impact.value, "unknown")
 
-    def test_incomplete_relevant_json_coverage_blocks_preserves_and_scan(self) -> None:
-        """相关确认 JSON 缺失时，preserves 不能直接升级为实现修复。"""
+    def test_missing_ui_does_not_block_preserves_and_scan(self) -> None:
+        """设计稿缺失不影响使用业务合同判断实现修复。"""
 
         root = self._workspace()
         (root / ".devagentstudio" / "specs" / "ui-designs.json").unlink()
@@ -443,9 +443,9 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
             target={"type": "page", "pageId": "login"},
             allow_code_scan=True,
         )
-        self.assertEqual(analysis.analysis_status.value, "insufficient_evidence")
-        self.assertIn("coverage-gap", {item.change_id for item in analysis.atomic_changes})
-        self.assertFalse(scanner_calls)
+        self.assertEqual(analysis.analysis_status.value, "completed")
+        self.assertNotIn("coverage-gap", {item.change_id for item in analysis.atomic_changes})
+        self.assertEqual(len(scanner_calls), 1)
 
     def test_skipped_ui_does_not_block_non_visual_implementation_fix(self) -> None:
         """明确跳过 UI 设计时，普通按钮实现修复仍可取得代码证据。"""
@@ -509,8 +509,8 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
         self.assertEqual(len(scanner_calls), 1)
         self.assertTrue(analysis.atomic_changes[0].code_scan.findings)
 
-    def test_skipped_ui_requires_evidence_for_visual_revision(self) -> None:
-        """UI 明确跳过后，视觉修改没有 UI 契约时必须保守降级。"""
+    def test_skipped_ui_does_not_require_visual_contract(self) -> None:
+        """视觉修改也不要求补齐设计稿，继续按现有业务事实分析。"""
 
         root = self._workspace()
         ui_path = root / ".devagentstudio" / "specs" / "ui-designs.json"
@@ -557,9 +557,9 @@ class ChangeImpactAnalyzerTests(unittest.TestCase):
             allow_code_scan=True,
         )
 
-        self.assertEqual(analysis.analysis_status.value, "insufficient_evidence")
-        self.assertIn("coverage-gap", {item.change_id for item in analysis.atomic_changes})
-        self.assertEqual(scanner_calls, [])
+        self.assertEqual(analysis.analysis_status.value, "completed")
+        self.assertNotIn("coverage-gap", {item.change_id for item in analysis.atomic_changes})
+        self.assertEqual(len(scanner_calls), 1)
 
     def test_invalid_explicit_analysis_status_is_conservative(self) -> None:
         """模型显式返回未知状态时不能默认为 completed。"""

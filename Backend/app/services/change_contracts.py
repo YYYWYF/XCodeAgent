@@ -134,9 +134,9 @@ class ContractCorpus:
 
     @property
     def coverage_complete(self) -> bool:
-        """判断四份当前权威产物是否都存在且已确认。"""
+        """判断必需业务产物是否都存在且已确认，UI 不参与覆盖门禁。"""
 
-        return not self.unavailable_artifacts and not self.skipped_artifacts
+        return not any(key != "ui-design" for key in (*self.unavailable_artifacts, *self.skipped_artifacts))
 
     def relevant_skipped_artifacts(
         self,
@@ -144,21 +144,7 @@ class ContractCorpus:
         *,
         target: dict[str, Any] | None = None,
     ) -> tuple[str, ...]:
-        """只在请求确实要求 UI 契约时报告被明确跳过的 UI 产物。"""
-
-        if "ui-design" not in self.skipped_artifacts:
-            return ()
-        text = str(request or "").casefold()
-        # 页面目标本身不能证明用户要求改变视觉契约；按钮无响应等实现
-        # 修复应继续使用 Requirement/Product/Technical JSON 作为证据。只有
-        # 明确的视觉/布局/主题语义需要 UI 契约时，跳过状态才构成覆盖缺口。
-        visual_hints = (
-            "视觉", "样式", "布局", "颜色", "尺寸", "间距", "主题", "响应式",
-            "外观", "ui", "ux", "css", "style", "layout", "visual", "theme",
-            "responsive", "spacing", "appearance",
-        )
-        if any(hint in text for hint in visual_hints):
-            return ("ui-design",)
+        """设计稿始终可选，不因缺少视觉契约要求用户补齐设计稿。"""
         return ()
 
     def search(
@@ -256,7 +242,7 @@ class ContractCorpus:
                 relevant.add(artifact_key)
         return tuple(
             key for key, _path, _stage in _ARTIFACTS
-            if key in relevant and key in self.unavailable_artifacts
+            if key != "ui-design" and key in relevant and key in self.unavailable_artifacts
         )
 
 
@@ -312,8 +298,8 @@ def load_confirmed_contract_corpus(workspace: str | Path) -> ContractCorpus:
         root,
         artifacts,
         tuple(facts),
-        tuple(unavailable),
-        tuple(skipped),
+        tuple(key for key in unavailable if key != "ui-design"),
+        tuple(key for key in skipped if key != "ui-design"),
     )
 
 

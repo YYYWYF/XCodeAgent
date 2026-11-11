@@ -490,7 +490,7 @@ def load_ui_designs_json(path: str | Path) -> dict[str, Any]:
         return {}
     try:
         manifest = json.loads(resolved.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
     if not isinstance(manifest, dict):
         return {}

@@ -75,11 +75,13 @@ class StageArtifactDependencyTests(unittest.TestCase):
                         patch("app.services.stage_prerequisites.require_stage_inputs"), \
                         patch("app.services.stage_artifacts.prepare_generation_baseline", return_value=True), \
                         patch("app.services.stage_artifacts.load_project_plan_json", return_value={}) as read, \
+                        patch("app.services.stage_artifacts.load_ui_designs_json", return_value={}) as ui_read, \
                         patch("app.workspace.task_documents.load_confirmed_build_task_plan", return_value={}) as tasks, \
                         patch("app.services.development_review_files.development_review_files", return_value=[]), \
                         patch("app.services.stage_execution_artifacts.load_stage_execution_artifacts", return_value={}):
                     load_stage_artifacts({"workspace": root}, node)
                     expected = set() if node in source_only else planning.get(node, set(_ARTIFACTS))
                     self.assertEqual({call.args[0].name for call in read.call_args_list},
-                                     {Path(_ARTIFACTS[key]).name for key in expected})
+                                     {Path(_ARTIFACTS[key]).name for key in expected if key != "ui_designs"})
+                    self.assertEqual(ui_read.call_count, int("ui_designs" in expected))
                     self.assertEqual(tasks.call_count, 0 if node in without_tasks else 1)

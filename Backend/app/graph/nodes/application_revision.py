@@ -259,8 +259,8 @@ def _create_technical_plan_draft(
     requirement_spec = load_requirement_spec_json(specs / "requirement-spec.json")
     product_plan = load_project_plan_json(plans / "product-plan.json")
     ui_designs = load_ui_designs_json(specs / "ui-designs.json")
-    if not requirement_spec or not product_plan or not ui_designs:
-        raise ValueError("TechnicalPlan revision 缺少已确认 RequirementSpec/ProductPlan/UiDesign。")
+    if not requirement_spec or not product_plan:
+        raise ValueError("TechnicalPlan revision 缺少已确认 RequirementSpec/ProductPlan。")
     technical_input = {
         **requirement_spec,
         "pages": product_plan.get("pages", requirement_spec.get("pages", [])),
@@ -279,7 +279,6 @@ def _create_technical_plan_draft(
     _validate_technical_plan(artifact, requirement_spec, product_plan, ui_designs, technical_input["application_config"])
     based_on_paths = {
         "product-plan": plans / "product-plan.json",
-        "ui-design": specs / "ui-designs.json",
     }
     create_revision_draft(
         workspace,
@@ -307,7 +306,7 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
     requirement_spec = load_requirement_spec_json(specs / "requirement-spec.json")
     product_plan = load_project_plan_json(plans / "product-plan.json")
     ui_designs = load_ui_designs_json(specs / "ui-designs.json")
-    if not requirement_spec or not product_plan or not ui_designs:
+    if not requirement_spec or not product_plan:
         raise ValueError("TechnicalPlan 确认缺少已确认上游。")
 
     def prepare(artifact: dict[str, Any]) -> dict[str, Any]:
@@ -328,7 +327,6 @@ def _confirm_current_draft(workspace: Path, active: Any, artifact_key: str) -> N
         canonical_json_path=plans / "technical-plan.json",
         based_on_paths={
             "product-plan": plans / "product-plan.json",
-            "ui-design": specs / "ui-designs.json",
         },
         prepare_artifact=prepare,
         validate_artifact=lambda artifact: _validate_technical_plan(
@@ -379,7 +377,7 @@ def _current_plan_state(workspace: Path) -> dict[str, Any]:
     requirement_spec = load_requirement_spec_json(specs / "requirement-spec.json")
     product_plan = load_project_plan_json(plans / "product-plan.json")
     ui_designs = load_ui_designs_json(specs / "ui-designs.json")
-    if not isinstance(technical_plan, dict) or not product_plan or not ui_designs:
+    if not isinstance(technical_plan, dict) or not product_plan:
         raise ValueError("正式产物收口后无法重新投影 TechnicalPlan。")
     runtime = materialize_technical_plan_runtime(
         technical_plan,

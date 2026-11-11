@@ -79,15 +79,14 @@ def required_artifacts(node: str, *, state: dict | None = None) -> set[str]:
     keys = (set(_ARTIFACTS) if node in _TECHNICAL_STAGES | _RUNTIME_STAGES
             else set(_PLANNING_INPUTS.get(node, set())))
     keys.discard(_GENERATED_BASELINES.get(node))
+    # UI 设计稿仅作可选参考，任何阶段都不得因其缺失、未确认或过期而阻断。
+    keys.discard("ui_designs")
     # 技术事务的 generate/commit/confirm 消费本轮候选；正式文件要到确认时才提交。
     if node in {"technical_planning_begin", "technical_planning_generate", "technical_planning_commit",
                 "technical_planning_confirm", "project_planning"}:
         keys.discard("technical_plan")
     if node in _TASK_PLAN_STAGES and node != "prepare_build_tasks":
         keys.add("build_task_plan")
-    # 独立 API 执行只消费业务及接口合同，视觉设计仍属于规划和页面开发。
-    if node in _RUNTIME_STAGES and endpoint_development(state):
-        keys.discard("ui_designs")
     return keys
 
 
@@ -117,7 +116,7 @@ def regeneration_for_retry(workspace: str, node: str, graph=None, *, state: dict
             valid = isinstance(value, dict) and bool(value)
             if valid and key != "build_task_plan" and path == root / paths[key]:
                 from app.services.artifact_freshness import upstream_errors
-                errors = upstream_errors(root, key, value, include_ui_designs="ui_designs" in required)
+                errors = upstream_errors(root, key, value)
                 valid = not errors
                 detail = "；".join(errors)
             if valid and key == "build_task_plan" and state:

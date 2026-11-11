@@ -65,8 +65,10 @@ class WorkbenchDocumentReviewTests(unittest.IsolatedAsyncioTestCase):
         draft["architecture"]["frontend"] += " 保留来自另一位用户的修改。"
         create_revision_draft(self.h.workspace, change_id=active.change_id, artifact_key="technical-plan", kind="technical_plan",
             target_id="application", canonical_json_path=root / "plans/technical-plan.json", artifact=draft,
-            based_on_paths={"product-plan": root / "plans/product-plan.json",
-                            "ui-design": root / "specs/ui-designs.json"})
+            based_on_paths={"product-plan": root / "plans/product-plan.json"})
+        # 旧设计稿即使仍待确认，也不能抢占正式技术修订的恢复入口。
+        (root / "specs/ui-designs.json").write_text(json.dumps({
+            "confirmation_status": "pending_user_confirmation", "pages": []}))
         self.clone()
         await self.attach()
         artifact_path = Path(self.other) / ".devagentstudio/drafts/revisions/cross-user-revision/technical-plan/artifact.json"

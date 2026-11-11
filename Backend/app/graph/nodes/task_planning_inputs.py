@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.services.frozen_contract_store import PlanningFormalInputs
+from app.services.page_task_freshness import without_ui_references
 
 
 def mainline_formal_contract_inputs(
@@ -16,6 +17,8 @@ def mainline_formal_contract_inputs(
     """把已过门禁的正式产物和已解析 API 设计转换为 Frozen Store 输入。"""
 
     product_plan = formal_artifacts["product_plan"]
+    # 设计稿仅提供生成参考，不属于 DAG 确认与复用所需的正式业务输入。
+    project_plan = without_ui_references(project_plan)
     page_contracts = _mapping_items(project_plan.get("page_implementation_contracts"))
     api_contracts = _mapping_items(project_plan.get("api_contracts"))
     endpoint_api_designs = _mapping_items(build_context.get("endpoint_designs"))

@@ -438,22 +438,12 @@ def build_page_implementation_contracts(
                     "uiControlRefs": ui_controls.get(action_id, []),
                 }
             )
-        # 只有生成了已确认设计稿的页才需要"还原设计稿"约束；未生成/失败页走
-        # ProductPlan + TechnicalPlan 的实现验收口径。
-        has_ui_reference = str(ui_page.get("status") or "").strip() == "confirmed"
-        engineering_acceptance = (
-            [
-                "页面实现必须还原已确认 UI 设计稿。",
-                "页面只能调用 requiredEndpointIds 中声明的接口。",
-                "页面权限、跳转和状态处理必须与 ProductPlan 保持一致。",
-            ]
-            if has_ui_reference
-            else [
-                "页面实现应依据 ProductPlan 与 TechnicalPlan 生成，不依赖 UI 设计稿。",
-                "页面只能调用 requiredEndpointIds 中声明的接口。",
-                "页面权限、跳转和状态处理必须与 ProductPlan 保持一致。",
-            ]
-        )
+        # 验收只依据业务与技术合同，设计稿始终只是可选视觉参考。
+        engineering_acceptance = [
+            "页面实现应依据 ProductPlan 与 TechnicalPlan 生成，不依赖 UI 设计稿。",
+            "页面只能调用 requiredEndpointIds 中声明的接口。",
+            "页面权限、跳转和状态处理必须与 ProductPlan 保持一致。",
+        ]
         contracts.append(
             {
                 "schema_version": "page-implementation-contract.v1",
@@ -607,11 +597,6 @@ def validate_page_implementation_contracts(
         for page in _dict_items(product_plan.get("pages"))
         if page.get("pageId")
     }
-    ui_pages = {
-        str(page.get("pageId") or "").strip(): page
-        for page in _dict_items((ui_designs or {}).get("pages"))
-        if page.get("pageId")
-    }
     for contract in contracts:
         page_id = str(contract.get("pageId") or "")
         required_endpoint_ids = set(_text_items(contract.get("requiredEndpointIds")))
@@ -677,17 +662,6 @@ def validate_page_implementation_contracts(
                 validate_endpoint_references=not uses_current_product_contract,
                 errors=errors,
             )
-        if ui_designs is not None:
-            control_action_ids = [
-                str(control.get("actionId") or "").strip()
-                for control in ui_action_bindings(ui_pages.get(page_id, {}))
-            ]
-            unknown_controls = sorted(set(control_action_ids) - set(expected_action_ids))
-            missing_controls = sorted(set(expected_action_ids) - set(control_action_ids))
-            if unknown_controls or missing_controls:
-                errors.append(
-                    f"页面 {page_id} 的 UiManifest controls 必须与 ProductPlan actions 一一对应。"
-                )
     return errors
 
 
