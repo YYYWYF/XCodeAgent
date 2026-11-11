@@ -14,27 +14,6 @@ import {
   retryApplicationTemplateReadiness
 } from '../service/templateApi'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
-import type { RepositoryBranchOutcome } from '../service/repositoryBranch'
-
-/**
- * 反馈模板基线推成远端分支的结果。
- *
- * 推送成功是默认预期，不再弹提示打扰；未推送或失败时必须说明，避免用户误以为代码
- * 已经在远端仓库里。这些情况都不影响应用本身可用。
- */
-function notifyRepositoryBranch(outcome?: RepositoryBranchOutcome): void {
-  if (!outcome || outcome.status === 'pushed') return
-  const branch = outcome.branchName || '所选版本'
-  if (outcome.status === 'skipped') {
-    message.warning(
-      outcome.message || `远端已存在版本 ${branch}，本次没有覆盖它。`
-    )
-    return
-  }
-  // 失败原因可能包含服务端返回的多行 policy 说明（提交信息规范等），塞进 toast 会变成
-  // 一条读不完的提示。toast 只给结论，完整原因由卡片的"未提交到远端"区展示。
-  message.warning(`版本 ${branch} 未提交到远端，应用本身可以正常使用，详情见卡片，稍后可重试。`)
-}
 
 type UseApplicationTemplateGenerationOptions = {
   getPlanningState: (applicationId: string) => ApplicationPlanningCurrentState | undefined
@@ -104,8 +83,8 @@ export function useApplicationTemplateGeneration({
           const confirmedApplication = {
             ...planning.application,
             planningThreadId: planning.threadId,
-            // 把远端推送结果一并落盘：工作台的「应用模板已就绪」卡据此如实说明代码
-            // 有没有真的到远端（早先只读本地 git 事实，推送失败时仍显示"已自动提交"）。
+            // 把远端推送结果落盘：Bootstrap 的非致命收尾事实，留给工作台或其他诊断
+            // 入口使用。当前不主动展示给用户，失败由「提交并推送」入口在需要时报告。
             ...(bootstrap.repositoryBranch
               ? {
                   repositoryBranch: {
@@ -139,9 +118,8 @@ export function useApplicationTemplateGeneration({
               ? '应用模板初始化完成，正在进入工作台'
               : `「${planning.application.appName}」初始化完成，可从最近项目打开`
           )
-          // 远端分支推送是 Bootstrap 的非致命收尾：成功不打扰，没推上去要说清楚，
-          // 否则用户会以为代码已经在远端了。
-          notifyRepositoryBranch(bootstrap.repositoryBranch)
+          // 远端分支推送是 Bootstrap 的非致命收尾，结果持久化到 application.json，
+          // 不再用 toast 打扰用户——"未提交到远端"的提示已由卡片自行承载。
           return true
         } catch (reason) {
           if (!isCurrentWorkspace()) return false
