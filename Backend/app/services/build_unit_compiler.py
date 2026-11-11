@@ -193,12 +193,12 @@ def _apply_unit_task_dependencies(
             str(task.get("unit_id") or "application:root"), []
         ).append(str(task.get("id")))
     dependency_units = _unit_dependency_map(unit_graph)
-    from app.services.task_generation_policy import completed_backend_units
+    from app.services.task_generation_policy import completed_backend_keys, completed_backend_units
 
     completed_units = completed_backend_units(build_context)
     module_dependencies = module_task_dependencies(
         tasks, _dict_value(build_context.get("_backend_foundation_providers")),
-        design_endpoint_keys(build_context.get("endpoint_designs", ())),
+        design_endpoint_keys(build_context.get("endpoint_designs", ())) - completed_backend_keys(build_context),
     )
     auth_resolution = _auth_dependency_resolution(
         tasks,
@@ -418,8 +418,13 @@ def _unit_source_refs(
             **({"business_descriptions": descriptions} if descriptions else {}),
         }
     if unit_id.startswith(BACKEND_MODULE_PREFIX):
+        from app.services.task_generation_policy import completed_backend_keys
+
         contract_id = unit_id.removeprefix(BACKEND_MODULE_PREFIX)
-        designs = [item for item in endpoint_designs if item.get("apiContractId") == contract_id]
+        completed = completed_backend_keys(build_context)
+        # 模块来源只覆盖本轮后端职责；页面与 API client 仍保留全部调用设计。
+        designs = [item for item in endpoint_designs if item.get("apiContractId") == contract_id
+                   and (contract_id, item.get("endpointId")) not in completed]
         endpoint_ids = [item["endpointId"] for item in designs]
         return {
             **existing, "type": "technical_plan_module",
@@ -429,7 +434,8 @@ def _unit_source_refs(
             "mapping_flows": _string_list(build_context.get("mapping_flows")),
             "source_types": source_types,
             "business_descriptions": [item for item in _dict_items(build_context.get("business_descriptions"))
-                                      if item.get("api_contract_id") == contract_id],
+                                      if item.get("api_contract_id") == contract_id
+                                      and item.get("endpoint_id") in endpoint_ids],
         }
     if unit_id == "backend:bootstrap":
         descriptions = _dict_items(build_context.get("business_descriptions"))

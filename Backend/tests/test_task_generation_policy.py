@@ -7,6 +7,9 @@ from unittest.mock import patch
 
 from app.services.build_task_reuse_contracts import ReuseFacts, RetainedEndpointOwner
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.authorization_overlay import unit_authorization_slice
+from app.services.build_task_planner import _authorization_coverage_errors
+from app.services.build_unit_compiler import _unit_source_refs, _apply_unit_task_dependencies
 from app.services.retained_task_projection import project_retained_tasks
 from app.services.task_generation_policy import (
     completed_backend_units, completed_page_backend_endpoints, generation_reuse_facts,
@@ -39,6 +42,58 @@ class TaskGenerationPolicyTests(unittest.TestCase):
                 "sourceBinding": {"sourceType": "database"},
             } for endpoint in contract["endpoints"]],
         }
+
+    def completed_context(self):
+        """构造页面同时调用已完成 A 和待开发 B 的冻结上下文。"""
+        return {
+            "target": {"type": "page", "id": "orders"},
+            "required_unit_ids": ["backend:module:orders-api"],
+            "endpoint_designs": self.inputs()["endpoint_designs"],
+            "completed_backend_endpoints": [
+                {"api_contract_id": "orders-api", "endpoint_id": "orders.list"},
+            ],
+            "authorization_constraints": {"endpoints": [
+                {"apiContractId": "orders-api", "endpointId": endpoint,
+                 "operationResourceKeys": ["orders.read"]}
+                for endpoint in ("orders.list", "orders.detail")
+            ]},
+        }
+
+    def test_authorization_requires_only_current_backend_controller(self):
+        """已完成 A 无需 Controller，未完成 B 缺失时仍失败，显式开发 A 仍校验。"""
+        context = self.completed_context()
+        task = {"id": "controller", "unit_id": "backend:module:orders-api", "owner": "backend",
+                "deliverables": [{"kind": "backend.endpoint_controller", "target_id": "orders.detail"}]}
+        self.assertEqual(_authorization_coverage_errors([task], context), [])
+        errors = _authorization_coverage_errors([], context)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("orders.detail", errors[0])
+        context["target"] = {"type": "endpoint"}
+        self.assertIn("orders.list", _authorization_coverage_errors([task], context)[0])
+
+    def test_module_inputs_exclude_completed_backend_but_page_keeps_it(self):
+        """后端设计及权限只含 B，页面仍保留 A/B 的完整调用上下文。"""
+        context = self.completed_context()
+        refs = _unit_source_refs("backend:module:orders-api", {}, context)
+        self.assertEqual(refs["endpoint_ids"], ["orders.detail"])
+        authorization = unit_authorization_slice("backend:module:orders-api", context)
+        self.assertEqual([item["endpointId"] for item in authorization["endpoints"]], ["orders.detail"])
+        page = _unit_source_refs("page:orders", {}, context)
+        self.assertEqual(page["endpoint_designs"], context["endpoint_designs"])
+        context["completed_backend_endpoints"].append(
+            {"api_contract_id": "orders-api", "endpoint_id": "orders.detail"})
+        self.assertEqual(_authorization_coverage_errors([], context), [])
+
+    def test_all_completed_module_does_not_create_missing_execution_dependency(self):
+        """全部接口完成时，页面不会要求不存在的模块任务，也不会补入旧任务。"""
+        context = self.completed_context()
+        context["completed_backend_endpoints"].append(
+            {"api_contract_id": "orders-api", "endpoint_id": "orders.detail"})
+        graph = {"edges": [{"from": "backend:module:orders-api", "to": "page:orders", "type": "depends_on"}]}
+        tasks = [{"id": "page", "unit_id": "page:orders"}]
+        compiled = _apply_unit_task_dependencies(tasks, {"backend:module:orders-api": {}}, graph, context)
+        self.assertEqual(compiled[0]["missing_unit_dependencies"], [])
+        self.assertEqual(compiled[0]["dependencies"], [])
 
     def test_only_bootstrap_capabilities_reduce_generation(self):
         """即使旧任务覆盖所有职责，新一轮仍生成全部非配置任务。"""

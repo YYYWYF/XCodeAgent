@@ -109,11 +109,15 @@ def unit_authorization_slice(unit_id: str, build_context: dict[str, Any]) -> dic
             ],
         }
     if unit_id.startswith("backend:module:"):
+        from app.services.task_generation_policy import completed_backend_keys
+
         api_contract_id = unit_id.removeprefix("backend:module:")
+        completed = completed_backend_keys(build_context)
         endpoints = [
             dict(item)
             for item in _dict_items(constraints.get("endpoints"))
             if str(item.get("apiContractId") or "") == api_contract_id
+            and (api_contract_id, str(item.get("endpointId") or "")) not in completed
         ]
         resource_keys = {
             str(resource_key)

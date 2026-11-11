@@ -1099,6 +1099,9 @@ def _authorization_coverage_errors(
     if not isinstance(constraints, dict):
         return []
     errors: list[str] = []
+    from app.services.task_generation_policy import completed_backend_keys
+
+    completed_endpoints = completed_backend_keys(build_context)
     units = {str(task.get("unit_id") or "") for task in tasks}
     task_paths = [
         path
@@ -1116,7 +1119,9 @@ def _authorization_coverage_errors(
         contract_id = _text(endpoint.get("apiContractId"))
         endpoint_id = _text(endpoint.get("endpointId"))
         unit_id = backend_module_unit_id(contract_id)
-        if not keys or unit_id not in required_unit_ids:
+        # 页面已完成且无变更的接口不承担本轮后端职责，不能重新要求 Controller 任务。
+        if (not keys or unit_id not in required_unit_ids
+                or (contract_id, endpoint_id) in completed_endpoints):
             continue
         has_controller_task = any(
             str(task.get("unit_id") or "") == unit_id
