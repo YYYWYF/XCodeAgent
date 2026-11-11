@@ -89,14 +89,53 @@ export function moduleOwnedFilesFromPlan(content: string): Set<string> {
  * 从"未提交文件"里挑出没有归属到任何模块的零散改动。
  *
  * 模块集合为空时返回空数组：那是"还不知道哪些文件属于模块"，不是"全部都没归属"。
+ *
+ * 工程级配置/锁文件（如 package.json、pnpm-lock.yaml、pnpm-workspace.yaml、tsconfig*.json）
+ * 永远不属于任何业务模块的 target_files —— 它们由模板/Lint/依赖安装器维护，不属于"业务代码孤儿"。
+ * 把它们报成"未关联到任何模块"是误报，会让用户在验收阶段对着锁文件去"确认归属"，没有可操作的出口。
+ * 这里直接白名单过滤掉。
  */
+const INFRASTRUCTURE_FILE_PATTERNS: ReadonlyArray<RegExp> = [
+  // 各层 package.json 与锁文件
+  /(?:^|\/)package\.json$/,
+  /(?:^|\/)package-lock\.json$/,
+  /(?:^|\/)pnpm-lock\.yaml$/,
+  /(?:^|\/)yarn\.lock$/,
+  /(?:^|\/)pnpm-workspace\.yaml$/,
+  // TS / 构建配置
+  /(?:^|\/)tsconfig[^/]*\.json$/,
+  /(?:^|\/)vite\.config\.[tj]s$/,
+  /(?:^|\/)vitest\.config\.[tj]s$/,
+  /(?:^|\/)webpack\.config\.[tj]s$/,
+  /(?:^|\/)rollup\.config\.[tj]s$/,
+  /(?:^|\/)babel\.config\.[tj]s$/,
+  /(?:^|\/)eslint\.config\.[tj]s$/,
+  /(?:^|\/)\.eslintrc(?:\.[^/]+)?$/,
+  /(?:^|\/)\.prettierrc(?:\.[^/]+)?$/,
+  /(?:^|\/)\.gitignore$/,
+  /(?:^|\/)\.gitattributes$/,
+  /(?:^|\/)\.editorconfig$/,
+  // 环境变量与说明文件
+  /(?:^|\/)\.env(?:\.[^/]+)?$/,
+  /(?:^|\/)README(?:\.[^/]+)?$/i
+]
+
+/** 判定路径是否为工程级配置/锁文件，这类文件不参与"业务模块孤儿"判定。 */
+function isInfrastructurePath(path: string): boolean {
+  const normalized = normalizeWorkspacePath(path)
+  if (!normalized) return false
+  return INFRASTRUCTURE_FILE_PATTERNS.some((pattern) => pattern.test(normalized))
+}
+
 export function orphanUncommittedPaths(input: {
   uncommittedPaths: readonly string[]
   moduleOwnedFiles: ReadonlySet<string>
 }): string[] {
   if (input.moduleOwnedFiles.size === 0) return []
   return input.uncommittedPaths.filter(
-    (path) => !input.moduleOwnedFiles.has(normalizeWorkspacePath(path))
+    (path) =>
+      !isInfrastructurePath(path) &&
+      !input.moduleOwnedFiles.has(normalizeWorkspacePath(path))
   )
 }
 

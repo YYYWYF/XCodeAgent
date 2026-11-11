@@ -5506,10 +5506,7 @@ export default function AiChatPanel({
                 designPhasePlanning={isApplicationPlanningPhase}
                 reusedExistingTemplate={reusingExistingTemplate}
                 branchName={application.branchName}
-                repositoryBranch={application.repositoryBranch}
-                onRetryRepositoryBranch={handleRetryRepositoryBranch}
                 onOpenPendingDagConfirmation={handleOpenPendingDagConfirmation}
-                retryingRepositoryBranch={retryingRepositoryBranch}
                 emptyContent={
                   !isApplicationPlanningPhase ? (
                     <QuickTaskGuide

@@ -270,6 +270,10 @@ def commit_version_control(
     # （设计版本提醒提交的就是清一色 .devagentstudio 文件）。
     checked_paths = _business_paths(selected_paths)
     if checked_paths:
+        # 先把 LLM 常犯的"末尾多空行"修掉——这种空白行没有语义价值，
+        # 留着只会让 diff --check 报 'new blank line at EOF' 把提交卡住。
+        # 用户没有在弹窗里"修这个空行"的可操作出口，所以这里直接规范化。
+        _normalize_trailing_blank_lines(repository_root, checked_paths)
         _run_git_checked(
             repository_root,
             ["diff", "--check", "--", *checked_paths],
@@ -759,6 +763,53 @@ def _business_paths(paths: list[str]) -> list[str]:
     """
 
     return [path for path in paths if not _is_platform_artifact_path(path)]
+
+
+def _normalize_trailing_blank_lines(repository_root: Path, paths: list[str]) -> None:
+    """把每个文本文件末尾的连续空白行规范为单个换行符。
+
+    LLM 生成代码常犯"文件末尾多一个空行"的毛病，会触发 `git diff --check` 的
+    `new blank line at EOF` 把提交卡住。这类空行没有语义价值（绝大多数风格规范
+    都允许"单换行结尾"，禁止"多空白行结尾"），且用户在弹窗里**没有修复它的可操作
+    出口**，所以这里直接帮用户修掉，再让 diff --check 通过。
+
+    只处理 UTF-8 可解码的文本文件：
+    - 二进制文件直接跳过（read_bytes 后内容不含文本换行结构）
+    - 无法 UTF-8 解码的文件跳过（多数是二进制或非常规编码，改了反而弄坏）
+    - 文件被并发修改/删除时跳过（OSError），让 diff --check 自己判断
+
+    规范化规则：保留全部非空白行；末尾如果存在 \n\n 或更多连续换行（含 \r\n 形式），
+    收敛为单个 \n。完全不写换行的文件（罕见但合法）保持原样。
+    """
+
+    for path in paths:
+        file_path = repository_root / path
+        try:
+            raw = file_path.read_bytes()
+        except OSError:
+            continue
+        # 二进制/空文件不动。
+        if not raw or b"\x00" in raw:
+            continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        # 统一行尾再处理，避免 \r\n 与 \n 混杂时漏判。
+        normalized = text.replace("\r\n", "\n")
+        # 把末尾的 \n{2,} 收敛为单个 \n。中间的空行不动。
+        stripped = normalized.rstrip("\n")
+        if not stripped:
+            # 文件全是空行——视为空文件，写空内容。
+            new_text = ""
+        else:
+            new_text = stripped + "\n"
+        if new_text != normalized:
+            try:
+                file_path.write_text(new_text, encoding="utf-8")
+            except OSError:
+                # 写不进去就跳过；让后续 diff --check 决定是不是真要拦。
+                continue
 
 
 def _read_status(repository_root: Path) -> tuple[bytes, list[VersionControlFile]]:
