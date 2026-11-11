@@ -182,7 +182,7 @@ import {
 } from './hooks/revisionSession'
 import { sessionIdentityFromSummary, sessionRuntimeKey } from './hooks/sessionRuntime'
 import { sessionToRestoreForPhase } from './hooks/phaseSessionSelection'
-import { formalRevisionRetryThread, pendingFormalRevisionStart, retryFormalRevisionStart } from './formalRevisionStartRetry'
+import { formalRevisionRetryThread, pendingFormalRevisionStart, retryFormalRevisionStart, technicalRevisionStageEntryReady } from './formalRevisionStartRetry'
 import { readApplicationPlanningAuthoritativeSnapshot } from '../../service/applicationPlanningRecovery'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import {
@@ -1077,6 +1077,11 @@ export default function AiChatPanel({
   const designRevisionStartInteractionRef = useRef('')
   const formalRevisionSessionIdentitiesRef = useRef<Record<string, SessionIdentity>>({})
   const formalRevisionSourcePhasesRef = useRef<Record<string, WorkbenchPhase>>({})
+  const [pendingTechnicalRevisionEntry, setPendingTechnicalRevisionEntry] = useState<SessionIdentity>()
+  // 应用或工作区变化后，不再替上一处工作区执行延迟跳转。
+  useEffect(() => {
+    setPendingTechnicalRevisionEntry(undefined)
+  }, [application.id, application.workspaceRoot])
   // 二次修改：保存待工作台接管的 continuation。
   const [revisionState, setRevisionState] = useState<{
     pendingContinuation:
@@ -2399,7 +2404,8 @@ export default function AiChatPanel({
         throw error
       }
       formalRevisionSessionIdentitiesRef.current[input.impact.interactionId] = revisionIdentity
-      switchPhase(sessionPhase)
+      // 技术专项修订先保留原界面，等本轮 begin 提交成功再显示目标规划会话。
+      if (input.impact.formalBranch !== 'workbench_plan_revision') switchPhase(sessionPhase)
       return revisionIdentity
     },
     [
@@ -2491,16 +2497,32 @@ export default function AiChatPanel({
       let revisionIdentity: SessionIdentity | undefined
       try {
         revisionIdentity = await prepareFormalRevisionSession(input)
+        if (input.impact.formalBranch === 'workbench_plan_revision') {
+          setPendingTechnicalRevisionEntry(revisionIdentity)
+          switchPhase(activeWorkbenchPhase, 'auto')
+        }
         await onStartDesignStageRevision(input, { threadId: revisionIdentity.threadId,
           phase: initialFormalRevisionPhase(input.impact.formalBranch) })
       } catch (error) {
+        setPendingTechnicalRevisionEntry((pending) =>
+          pending?.threadId === revisionIdentity?.threadId ? undefined : pending)
         designRevisionStartInteractionRef.current = ''
         if (revisionIdentity) await rollbackFormalRevisionSession(input, revisionIdentity)
         throw error
       }
     },
-    [onStartDesignStageRevision, prepareFormalRevisionSession, rollbackFormalRevisionSession]
+    [onStartDesignStageRevision, prepareFormalRevisionSession, rollbackFormalRevisionSession,
+      activeWorkbenchPhase, switchPhase]
   )
+
+  // 入场前的流式片段沿既有缓存保存；切换后由规划会话绑定逻辑回放到目标线程。
+  useEffect(() => {
+    if (!pendingTechnicalRevisionEntry || !technicalRevisionStageEntryReady(
+      pendingTechnicalRevisionEntry, planningState?.workflow, applicationLifecycle
+    )) return
+    setPendingTechnicalRevisionEntry(undefined)
+    switchPhase('planning', 'auto')
+  }, [pendingTechnicalRevisionEntry, planningState?.workflow, applicationLifecycle, switchPhase])
 
   /** 技术专项修订复用同一会话准备、Runtime 执行及失败回滚，不另建聊天发送路径。 */
   const handleStartWorkbenchPlanRevision = useCallback(

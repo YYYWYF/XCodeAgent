@@ -2,6 +2,33 @@ import type { ApplicationLifecycle, WorkflowDesignStageRevisionStart, WorkflowRe
 import type { ApplicationPlanningAuthoritativeSnapshot } from '../../service/applicationPlanningRecovery'
 import type { SessionIdentity } from './hooks/sessionRuntime'
 import { bindRevisionSessionChangeId, initialFormalRevisionPhase } from './hooks/revisionSession'
+import { workflowApplicationLifecycle } from '../../service/activeApplicationPlanning'
+import type { WorkflowRunPayload } from '../../typings'
+
+/** 本轮 begin 已返回成功生命周期且界面已同步后，才允许进入技术修订会话。 */
+export function technicalRevisionStageEntryReady(
+  session: SessionIdentity,
+  workflow: WorkflowRunPayload | undefined,
+  lifecycle: ApplicationLifecycle | undefined
+): boolean {
+  const projected = workflowApplicationLifecycle(workflow)
+  const context = bindRevisionSessionChangeId(session.revisionContext, projected)
+  const active = projected?.activeFormalRevision
+  const technicalStages = ['generating_technical_plan', 'awaiting_technical_plan_confirmation']
+  return Boolean(
+    context?.formalBranch === 'workbench_plan_revision' && context.changeId &&
+    active?.changeId === context.changeId && active.formalBranch === context.formalBranch &&
+    active.impactInteractionId === context.impactInteractionId &&
+    active.sourceThreadId === context.sourceConversationThreadId && active.sourceRunId === context.sourceRunId &&
+    projected?.application.id === session.workflowId &&
+    projected.initialization.threadId === session.threadId &&
+    workflow?.threadId === session.threadId && workflow.runId === projected.activeRunId &&
+    technicalStages.includes(projected.initialization.stage) &&
+    lifecycle?.activeFormalRevision?.changeId === context.changeId &&
+    lifecycle.initialization.threadId === session.threadId &&
+    technicalStages.includes(lifecycle.initialization.stage)
+  )
+}
 
 /** 已入场技术修订按完整来源绑定当前权威 Graph；其他请求仍使用已保存的 checkpoint。 */
 export function formalRevisionRetryThread(session: SessionIdentity, lifecycle: ApplicationLifecycle): string {

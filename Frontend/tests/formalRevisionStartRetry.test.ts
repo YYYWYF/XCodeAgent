@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import type { ApplicationLifecycle, WorkflowDesignStageRevisionStart } from '../src/renderer/src/typings'
+import type { ApplicationLifecycle, WorkflowDesignStageRevisionStart, WorkflowRunPayload } from '../src/renderer/src/typings'
 import type { ApplicationPlanningAuthoritativeSnapshot } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
-import { pendingFormalRevisionStart, retryFormalRevisionStart } from '../src/renderer/src/components/AiChatPanel/formalRevisionStartRetry'
+import { pendingFormalRevisionStart, retryFormalRevisionStart, technicalRevisionStageEntryReady } from '../src/renderer/src/components/AiChatPanel/formalRevisionStartRetry'
 
 const session = {
   workflowId: 'app', threadId: 'graph', workbenchPhase: 'product', revisionContext: {
@@ -98,4 +98,36 @@ await assert.rejects(retryFormalRevisionStart({
   read: async () => ({ lifecycle: handedOffLifecycle }), onLifecycle: () => {},
   start: async () => { assert.fail('其他来源不能启动') }, recover: () => { assert.fail('其他来源不能恢复') }
 }), /应用或规划会话已变化/)
+// 线程已交接、节点 started 仍携带旧就绪态时不切换；begin 成功并同步界面后才切换。
+const readyLifecycle = { ...handedOffLifecycle, activeRunId: 'revision-run', initialization: {
+  ...handedOffLifecycle.initialization, stage: 'ready_for_workbench'
+} } as ApplicationLifecycle
+const begunLifecycle = { ...readyLifecycle, initialization: {
+  ...readyLifecycle.initialization, stage: 'generating_technical_plan'
+} } as ApplicationLifecycle
+const begunWorkflow = { runId: 'revision-run', threadId: 'target-graph',
+  summary: { phase: 'technical_planning_begin', status: 'running' },
+  state: { lifecycle: begunLifecycle }, events: []
+} as WorkflowRunPayload
+assert.equal(technicalRevisionStageEntryReady(handedOffPlanSession, {
+  ...begunWorkflow, state: { lifecycle: readyLifecycle },
+  events: [{ type: 'workflow.node.started', nodeName: 'technical_planning_begin' }]
+} as WorkflowRunPayload, readyLifecycle), false)
+assert.equal(technicalRevisionStageEntryReady(handedOffPlanSession, begunWorkflow, readyLifecycle), false)
+assert.equal(technicalRevisionStageEntryReady(handedOffPlanSession, begunWorkflow, begunLifecycle), true)
+// 其他线程、Run、来源或旧修订不能触发本轮跳转。
+assert.equal(technicalRevisionStageEntryReady(handedOffPlanSession, { ...begunWorkflow, runId: 'old-run' }, begunLifecycle), false)
+assert.equal(technicalRevisionStageEntryReady(handedOffPlanSession, { ...begunWorkflow, threadId: 'other' }, begunLifecycle), false)
+assert.equal(technicalRevisionStageEntryReady({ ...handedOffPlanSession, revisionContext: {
+  ...handedOffPlanSession.revisionContext!, sourceRunId: 'other'
+} }, begunWorkflow, begunLifecycle), false)
+assert.equal(technicalRevisionStageEntryReady(handedOffPlanSession, begunWorkflow, {
+  ...begunLifecycle, activeFormalRevision: { ...begunLifecycle.activeFormalRevision!, changeId: 'other' }
+}), false)
+const awaitingLifecycle = { ...begunLifecycle, initialization: {
+  ...begunLifecycle.initialization, stage: 'awaiting_technical_plan_confirmation'
+} } as ApplicationLifecycle
+assert.equal(technicalRevisionStageEntryReady(handedOffPlanSession, {
+  ...begunWorkflow, state: { lifecycle: awaitingLifecycle }
+}, awaitingLifecycle), true)
 console.log('formal revision start retry tests passed')
