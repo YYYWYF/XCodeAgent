@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import './uncommittedChangesRuntime.test'
+import './returnWelcome.test'
 import { shouldShowIncompleteChangesHint } from '../src/renderer/src/components/AiChatPanel/utils'
 import {
   isCheckpointCandidate,

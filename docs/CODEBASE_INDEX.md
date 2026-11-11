@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+返回欢迎页的提交提醒使用 `/version-control/run` 的 `inspect_pending_count` 动作，经 `services/version_control_pending.py` 复用仓库校验、Git status 与业务文件过滤，仅启动两条 Git 命令；协议以工作线程执行，结果为 `workspaceRoot/pendingCodeCount`，完整 AG-UI 生命周期及 health 能力同步发布。`hooks/useReturnWelcome.ts` 持有实时计数、确认框、同步锁与应用/页面身份，旧响应不能导航或弹框；顶部应用名和 Logo 共用 pending 状态及主题样式。`inspect_all`、提交指纹及其他调用维持完整快照语义。回归：`tests.test_version_control_pending`、`tests.test_version_control`、`pnpm test:uncommitted-changes`、`pnpm build`；Windows 打包后需对比实际返回耗时。
+
 任务生成规则由 `services/task_generation_policy.py` 集中定义：每轮只复用 `backend:bootstrap` 数据库/外部 API 配置检查任务，其他任务按本轮正式合同和工作区上下文重新生成，不传入旧业务任务摘要、owner 或完成状态。`dag_planning_inputs.py`、`dag_planning_orchestrator.py` 与 `retained_task_projection.py` 在生成、装配和确认边界使用同一规则；新正式 DAG 仅包含配置任务及本轮新任务，既有代码与不可变 Build Run 不被删除。页面上下文由 `build_context_resolver.py` 读取 lifecycle，冻结精确的 `completed_backend_endpoints`；只有初次开发 completed 且 changeStatus=unchanged 的接口跳过后端职责，前端调用及页面职责仍生成。同模块 A 完成、B 未完成时仍完整生成 B 的骨架、业务、Controller；显式开发接口不应用页面跳过规则。`build_unit_compiler.py` 允许本页全部接口已完成的模块无任务；共享前端 API 文件允许保留同一正式合同的其他接口，不依赖旧 Task owner。新增回归 `tests.test_task_generation_policy`，本轮按用户要求不执行测试。
 
 后端模块直接输入新鲜度由 `task_input_freshness.py` 复用逐接口比较。`artifact_freshness.task_plan_errors` 复用调度器实际切片及依赖闭包，按精确合同/接口身份补读当前正式设计、投射当前应用权限配置；不回填冻结旧设计或扩大到范围外任务。计划绑定摘要和直接输入变化仍严格校验。

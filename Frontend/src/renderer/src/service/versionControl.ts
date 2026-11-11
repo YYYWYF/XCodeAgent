@@ -4,7 +4,13 @@ import type { Message } from '@ag-ui/core'
 import type { VersionControlCommitResult, VersionControlSnapshot } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 
-type VersionControlAction = 'inspect' | 'inspect_all' | 'commit' | 'summarize' | 'discard'
+type VersionControlAction =
+  | 'inspect'
+  | 'inspect_all'
+  | 'inspect_pending_count'
+  | 'commit'
+  | 'summarize'
+  | 'discard'
 
 type VersionControlAgUiPayload = {
   schemaVersion: 1
@@ -14,6 +20,7 @@ type VersionControlAgUiPayload = {
   action?: VersionControlAction
   snapshot?: VersionControlSnapshot
   workspaceRoot?: string
+  pendingCodeCount?: number
   repositoryRoot?: string
   commitSha?: string
   message?: string
@@ -144,6 +151,26 @@ export async function inspectAllVersionControl(
     throw new Error('版本控制接口没有返回完整的 Git 状态。')
   }
   return response.snapshot
+}
+
+/** 实时读取未提交业务文件数，供返回欢迎页提醒使用。 */
+export async function inspectPendingCodeCount(workspaceRoot: string): Promise<number> {
+  const response = await runVersionControl(
+    { action: 'inspect_pending_count', workspaceRoot },
+    '读取未提交业务文件数量。'
+  )
+  const count = response.pendingCodeCount
+  if (
+    response.action !== 'inspect_pending_count' ||
+    typeof response.workspaceRoot !== 'string' ||
+    !response.workspaceRoot.trim() ||
+    typeof count !== 'number' ||
+    !Number.isSafeInteger(count) ||
+    count < 0
+  ) {
+    throw new Error('版本控制接口没有返回有效的未提交文件数量。')
+  }
+  return count
 }
 
 /** 按本次未提交改动生成业务变更说明，用于预填「提交并推送」弹窗的说明框。

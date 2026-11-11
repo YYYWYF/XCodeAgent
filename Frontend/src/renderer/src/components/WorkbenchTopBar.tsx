@@ -1,6 +1,12 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { message } from 'antd'
-import { LeftOutlined, FolderOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons'
+import {
+  LeftOutlined,
+  LoadingOutlined,
+  FolderOutlined,
+  MoonOutlined,
+  SunOutlined
+} from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import AppVersionBadge from './AppVersionBadge'
 import WorkbenchSettings from './BackendLogDrawer'
@@ -22,6 +28,8 @@ type Props = {
   application: Pick<ApplicationConfig, 'id' | 'name' | 'branches' | 'branchName'>
   workspaceRoot: string
   onReturnWelcome: () => void
+  /** 轻量检查及确认期间禁用两个返回入口。 */
+  returningWelcome?: boolean
   lifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
   /** 当前主题：驱动右侧快捷区里月亮/太阳图标按钮的形态。 */
@@ -50,6 +58,7 @@ export default function WorkbenchTopBar({
   developmentTotals: providedDevelopmentTotals,
   workspaceRoot,
   onReturnWelcome,
+  returningWelcome = false,
   theme,
   onThemeChange,
   onPublishBranch,
@@ -106,6 +115,8 @@ export default function WorkbenchTopBar({
       <button
         className={cx('workbench-topbar-logo')}
         onClick={onReturnWelcome}
+        disabled={returningWelcome}
+        aria-busy={returningWelcome}
         title="返回首页"
         aria-label="返回首页"
         type="button"
@@ -121,11 +132,17 @@ export default function WorkbenchTopBar({
       <button
         className={cx('workbench-topbar-app')}
         onClick={onReturnWelcome}
+        disabled={returningWelcome}
+        aria-busy={returningWelcome}
         title={`返回欢迎页 · ${workspaceRoot}`}
         aria-label={`${application.name}，返回欢迎页`}
         type="button"
       >
-        <LeftOutlined aria-hidden="true" />
+        {returningWelcome ? (
+          <LoadingOutlined spin aria-hidden="true" />
+        ) : (
+          <LeftOutlined aria-hidden="true" />
+        )}
         <FolderOutlined />
         <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
       </button>

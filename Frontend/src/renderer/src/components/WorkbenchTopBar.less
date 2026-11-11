@@ -63,6 +63,24 @@
   white-space: nowrap;
 }
 
+.@{class-prefix}-workbench-topbar-logo,
+.@{class-prefix}-workbench-topbar-app {
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    cursor: wait;
+    color: var(--wb-text-secondary);
+    opacity: 0.65;
+  }
+
+  &:disabled:hover {
+    background: var(--wb-surface-subtle);
+  }
+}
+
 /* —— 阶段 stepper（横排紧凑）+ 节点状态内联 —— */
 .@{class-prefix}-workbench-topbar-phase {
   display: flex;

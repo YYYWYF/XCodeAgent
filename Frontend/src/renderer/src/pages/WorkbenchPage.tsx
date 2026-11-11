@@ -83,6 +83,7 @@ type Props = {
   onApplicationLifecycleReset: (lifecycle: ApplicationLifecycle) => void
   onEntryLoadFailure: () => void
   onReturnWelcome: () => void
+  returningWelcome?: boolean
   onSubmitPlanningClarification: (
     workflow: WorkflowRunPayload,
     answers: WorkflowClarificationAnswers,
@@ -163,6 +164,7 @@ function WorkbenchPage({
   onApplicationLifecycleReset,
   onEntryLoadFailure,
   onReturnWelcome,
+  returningWelcome = false,
   onSubmitPlanningClarification,
   onStartDesignStageRevision,
   onIterationStarted,
@@ -864,6 +866,7 @@ function WorkbenchPage({
                   workspaceApplication.workspaceRoot || workspaceApplication.projectParentPath || ''
                 }
                 onReturnWelcome={onReturnWelcome}
+                returningWelcome={returningWelcome}
                 lifecycle={topBarLifecycle}
                 developmentTotals={topBarDevelopmentTotals}
                 theme={theme}

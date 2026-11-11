@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncIterator
 
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
+from app.services.version_control_pending import InspectPendingCountRequest, inspect_pending_count
 from app.services.version_control import (
     CommitVersionControlRequest,
     DiscardVersionControlRequest,
@@ -29,7 +31,7 @@ def version_control_capabilities() -> dict[str, Any]:
         "name": "version-control",
         "endpoint": "/version-control/run",
         "transport": "ag-ui-sse",
-        "actions": ["inspect", "inspect_all", "commit", "summarize", "discard"],
+        "actions": ["inspect", "inspect_all", "inspect_pending_count", "commit", "summarize", "discard"],
         "customEventName": VERSION_CONTROL_EVENT_NAME,
         "stateSnapshotKey": "versionControl",
         "workflowIndependent": True,
@@ -57,6 +59,12 @@ def build_version_control_ag_ui_stream(
             snapshot = inspect_all_version_control(request)
             data = {"action": action, "snapshot": snapshot.model_dump(by_alias=True)}
             message = "已读取工作区全部 Git 状态。"
+        elif action == "inspect_pending_count":
+            request = InspectPendingCountRequest.model_validate(version_control_input)
+            # Git 查询交给工作线程，避免等待子进程时阻塞其他 AG-UI 请求。
+            result = await asyncio.to_thread(inspect_pending_count, request)
+            data = result.model_dump(by_alias=True)
+            message = "已读取未提交业务文件数量。"
         elif action == "commit":
             request = CommitVersionControlRequest.model_validate(version_control_input)
             result = commit_version_control(request)
@@ -82,7 +90,7 @@ def build_version_control_ag_ui_stream(
             )
         else:
             raise ValueError(
-                "versionControl.action 必须是 inspect、inspect_all、commit、summarize 或 discard。"
+                "versionControl.action 必须是 inspect、inspect_all、inspect_pending_count、commit、summarize 或 discard。"
             )
         return AgUiActionResult(data=data, message=message)
 

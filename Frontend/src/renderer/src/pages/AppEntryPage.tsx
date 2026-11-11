@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from 'react'
-import { message, Modal } from 'antd'
 import {
   SessionRuntimeProvider,
   useSessionRuntimeStore
@@ -25,7 +24,7 @@ import { applicationWorkspaceKey, sameApplicationWorkspace } from '../service/ap
 import { isTemplateGenerationOrphaned, isTemplateReconcileRetryable } from '../service/templateApi'
 import { stopProjectPreview } from '../service/projectLaunch'
 import { leavePreviewRuntime } from '../service/previewRuntime'
-import { inspectAllVersionControl } from '../service/versionControl'
+import { useReturnWelcome } from '../hooks/useReturnWelcome'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -214,48 +213,13 @@ function AppEntryContent(): JSX.Element {
     setActiveSurface('welcome')
   }, [activeApplication, releasePreviewMaintenanceExecutions])
 
-  /**
-   * 中等提示：返回欢迎页前，若有已验证但未提交的变更则确认一次。
-   *
-   * 这里**当场重新读取** Git 状态，而不是复用工作台里的常驻快照 —— 即将离开工作台，
-   * 常驻快照可能已过期，而"是否还有未提交代码"正是这次判断的全部依据。
-   *
-   * Agent 仍在运行时只提示、不阻断、也不启动提交（代码还没写完，提交没有意义）。
-   */
-  const handleReturnWelcome = useCallback(async (): Promise<void> => {
-    const workspace = activeApplication ? applicationPreviewWorkspace(activeApplication) : ''
-    if (!workspace) {
-      leaveWorkbench()
-      return
-    }
-    if (hasNonTerminalApplicationExecution(applicationLifecycle)) {
-      message.info('当前有任务正在执行，返回首页后会在后台继续。')
-      leaveWorkbench()
-      return
-    }
-    let pending = 0
-    try {
-      // 只算业务代码：`.devagentstudio` 平台产物（规划文档、状态快照）不算"用户改了代码"，
-      // 否则新建迭代清空产物后，一进工作台就会因为这个弹窗被拦一次。
-      pending = (await inspectAllVersionControl(workspace)).codePaths.length
-    } catch {
-      // 读不到 Git（未建仓库等）时直接返回，不因为辅助提示挡住导航。
-      leaveWorkbench()
-      return
-    }
-    if (pending === 0) {
-      leaveWorkbench()
-      return
-    }
-    Modal.confirm({
-      centered: true,
-      title: '仍有未提交的代码变更',
-      content: `当前工作区有 ${pending} 个文件未提交。返回首页不会丢失代码，但建议先提交形成可追溯版本。`,
-      okText: '仍然返回',
-      cancelText: '取消',
-      onOk: () => leaveWorkbench()
-    })
-  }, [activeApplication, applicationLifecycle, leaveWorkbench])
+  const { returningWelcome, handleReturnWelcome } = useReturnWelcome({
+    applicationKey: activeApplication ? applicationWorkspaceKey(activeApplication) : '',
+    workspace: activeApplication ? applicationPreviewWorkspace(activeApplication) : '',
+    enabled: activeSurface === 'workbench',
+    hasActiveExecution: hasNonTerminalApplicationExecution(applicationLifecycle),
+    onLeave: leaveWorkbench
+  })
 
   // 工作台首次加载失败时卸载本次工作台实例，确保再次打开应用会重新执行完整恢复。
   const handleWorkbenchEntryFailure = useCallback((): void => {
@@ -376,6 +340,7 @@ function AppEntryContent(): JSX.Element {
               onApplicationLifecycleReset={resetApplicationLifecycle}
               onEntryLoadFailure={handleWorkbenchEntryFailure}
               onReturnWelcome={handleReturnWelcome}
+              returningWelcome={returningWelcome}
               onSubmitPlanningClarification={(...args) =>
                 planningRuntimeController.submitClarification(activeApplication.id, ...args)
               }
