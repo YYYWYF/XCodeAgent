@@ -1,4 +1,4 @@
-"""受生命周期管理的 Builtin Schema → Seed 自动编排，未知结果永不重放。"""
+"""受生命周期管理的 Builtin Schema → Seed 编排，Seed 按远端事实协调同键提交。"""
 
 import hashlib
 import logging
@@ -30,9 +30,9 @@ ACTIVE = {"pending", "running", "waiting"}
 BACKOFF = (2, 3, 5, 10)
 RETRYABLE_FAILURES = {
     "seed_timeout", "seed_network_error", "seed_invalid_response", "seed_query_unconfirmed",
-    "seed_client_configuration", "seed_saas_contract_incompatible", "seed_state_write_failed",
+    "seed_client_configuration", "seed_saas_contract_incompatible", "seed_state_write_failed", "seed_operation_not_found",
     "schema_query_transient",
-    *(f"seed_http_{code}" for code in (401, 403, 408, 429, 500, 502, 503, 504)),
+    *(f"seed_http_{code}" for code in (400, 401, 403, 404, 408, 422, 429, 500, 502, 503, 504)),
 }
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ def get_builtin_authorization_task(workspace: str) -> dict | None:
 
 
 def tick(root: Path, generation: str, *, execute=run_builtin_authorization_bootstrap) -> bool:
-    """短事务内只推进一次原子动作；返回是否需要后续只读查询或阶段衔接。"""
+    """短事务内推进一次协调动作；返回是否需要后续查询、同键提交或阶段衔接。"""
 
     with builtin_lock(root), task_transaction(root):
         task = read_task(root)
@@ -162,15 +162,18 @@ def tick(root: Path, generation: str, *, execute=run_builtin_authorization_boots
                 else:
                     failure = result.get("failure_category")
                     operation_status = seed.get("operationStatus") if schema else record.get("status", "").upper()
-                    # 网络故障只允许已有身份的 GET 退避；首次 POST 失败不能进入提交重试。
-                    transient_query = failure in {
-                        "seed_timeout", "seed_network_error", "seed_http_500", "seed_http_502", "seed_http_503", "seed_http_504"}
+                    # 临时故障下一轮先查原操作；明确未找到才可同键提交，认证和参数拒绝停止自动尝试。
+                    transient_seed = failure in {
+                        "seed_timeout", "seed_network_error", "seed_resource_busy", "seed_http_408", "seed_http_429",
+                        "seed_http_500", "seed_http_502", "seed_http_503", "seed_http_504"}
                     lost_receipt = seed.get("status") in {"submitting", "unknown"} and (
-                        not failure or failure == seed.get("failureCategory") and result.get("failure_phase") == "seed_state_write_failed")
-                    query_retry = schema and (transient_query or lost_receipt)
+                        failure in {"seed_invalid_response", "seed_state_write_failed"}
+                        and result.get("failure_phase") in {"seed_submit_unconfirmed", "seed_state_write_failed"})
+                    query_retry = schema and (transient_seed or lost_receipt)
                     schema_query_retry = not schema and failure == "schema_query_transient" and (
                         record.get("operationId") or record.get("status") == "pending")
                     waiting = (operation_status in {"RUNNING", "SUCCEEDED"} and not failure
+                               or schema and result.get("next_action") == "refresh_seed" and not failure
                                or query_retry or schema_query_retry)
                     task.status = "waiting" if waiting else "needs_attention"
                     verifying = schema and (operation_status == "SUCCEEDED" or failure in {

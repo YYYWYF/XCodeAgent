@@ -11,7 +11,8 @@ test('重试按钮以后端信号启用，UNKNOWN 与输入变化不能绕过保
   const task: BuiltinPatchResult = { status: 'needs_attention', stage: 'seed', schemaReady: true,
     seedReady: false, message: '请人工核对', failureCategory: 'inputs_changed' }
   const blocked = renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, { task, workspace: '/workspace' }))
-  assert.match(blocked, /待处理|查询原操作|inputs_changed/)
+  assert.match(blocked, /待处理|inputs_changed/)
+  assert.match(blocked, />刷新状态</)
   const blockedRetry = blocked.match(/<button\b[^>]*title="当前状态不能安全重试[^>]*>/)?.[0]
   assert.ok(blockedRetry)
   assert.match(blockedRetry, /disabled=""/)

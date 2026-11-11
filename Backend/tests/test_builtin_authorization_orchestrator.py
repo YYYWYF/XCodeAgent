@@ -157,17 +157,19 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
         self.assert_calls("GET", "POST", "GET")
         self.assertEqual(self.schema_posts, 0)
 
-    def test_existing_seed_key_404_is_attention(self) -> None:
-        """已有提交保护的 by-key 404 不能成为再次 POST 的依据。"""
+    def test_existing_seed_key_404_resumes_same_request(self) -> None:
+        """本地未确认记录不阻断原键提交，最终仍须 GET 核验。"""
 
         self.begin()
         record = read_record(self.root, "state.json")
         compiled = self.compile()
         save_state(self.root, {**record, "seed": {"seedFingerprint": compiled["seedFingerprint"],
                    "idempotencyKey": compiled["idempotencyKey"], "status": "unknown", "ready": False}})
+        self.assertTrue(self.tick())
+        self.assertEqual(read_task(self.root).status, "waiting")
         self.assertFalse(self.tick())
-        self.assert_calls("GET")
-        self.assertEqual(read_task(self.root).status, "needs_attention")
+        self.assert_calls("GET", "POST", "GET")
+        self.assertEqual(read_task(self.root).status, "ready")
 
 
     def test_stale_generation_and_read_only_get(self) -> None:
@@ -285,14 +287,35 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
         self.assertFalse(self.tick())
         self.assert_calls("GET", "POST", "GET")
 
+    def test_explicit_retry_recovers_previous_http_404_failure(self) -> None:
+        """修复查无记录响应后，原 404 失败可显式恢复且只提交一次 Seed。"""
+
+        self.begin()
+        task = read_task(self.root)
+        task.status, task.stage, task.failureCategory = "needs_attention", "seed", "seed_http_404"
+        save_task(self.root, task)
+        before = read_record(self.root, "state.json")
+        self.assertEqual(orchestration.get_builtin_authorization_task(str(self.root))["nextAction"], "retry")
+        with patch.object(orchestration, "_executor") as executor:
+            executor.submit.return_value = Future()
+            self.addCleanup(orchestration._workers.pop, str(self.root), None)
+            orchestration.resume_builtin_authorization_task(str(self.root))
+            executor.submit.assert_not_called()
+            orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+            executor.submit.assert_called_once()
+        self.assertEqual(read_record(self.root, "state.json"), before)
+        self.assertTrue(self.tick())
+        self.assertFalse(self.tick())
+        self.assert_calls("GET", "POST", "GET")
+
     def test_explicit_retry_after_receipt_loss_never_reposts(self) -> None:
-        """回执丢失后的显式重试沿原幂等键查询，不产生第二次 POST。"""
+        """回执丢失后即使因 404 显式重试，也沿原幂等键查询，不重复 POST。"""
 
         self.begin()
         self.drop = True
         self.assertTrue(self.tick())
         task = read_task(self.root)
-        task.status, task.failureCategory = "needs_attention", "timeout"
+        task.status, task.failureCategory = "needs_attention", "seed_http_404"
         save_task(self.root, task)
         with patch.object(orchestration, "_executor") as executor:
             executor.submit.return_value = Future()

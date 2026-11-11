@@ -56,13 +56,13 @@ class ManagedAuthorizationSeedClient(ManagedDatabaseClient):
             raise SeedRemoteError("seed_invalid_response") from None
 
     def query(self, key: str, *, operation_id: str | None = None, idempotency_key: str) -> SeedDetail | None:
-        """按唯一原 ID 或原幂等键 GET 一次，仅明确的按键 404 返回空。"""
+        """按原 ID 或原幂等键 GET 一次，仅明确的业务查无记录返回空。"""
 
         if not re.fullmatch(r"[0-9a-f]{64}", idempotency_key):
             raise SeedRemoteError("seed_invalid_identity")
         if operation_id is not None and not re.fullmatch(r"[1-9][0-9]{0,18}", operation_id):
             raise SeedRemoteError("seed_invalid_identity")
-        body = self._request(key, operation_id or f"by-key/{idempotency_key}", allow_missing=operation_id is None)
+        body = self._request(key, operation_id or f"by-key/{idempotency_key}", allow_missing=True)
         if body is None:
             return None
         try:
@@ -89,17 +89,25 @@ class ManagedAuthorizationSeedClient(ManagedDatabaseClient):
         except httpx.RequestError:
             raise SeedRemoteError("seed_network_error") from None
         expected = 200 if payload is None else 202
-        if response.status_code != expected and not (allow_missing and response.status_code == 404):
+        submit_conflict = payload is not None and response.status_code == 409
+        if response.status_code != expected and not (submit_conflict or allow_missing and response.status_code == 404):
             raise SeedRemoteError(f"seed_http_{response.status_code}")
+        invalid_envelope = "seed_http_409" if submit_conflict else "seed_invalid_response"
         try:
             envelope = response.json()
         except ValueError:
-            raise SeedRemoteError("seed_invalid_response") from None
+            raise SeedRemoteError(invalid_envelope) from None
         if (not isinstance(envelope, dict) or set(envelope) != {"returnCode", "errorMsg", "body"}
+                or not isinstance(envelope["returnCode"], str)
                 or envelope["errorMsg"] is not None and not isinstance(envelope["errorMsg"], str)):
-            raise SeedRemoteError("seed_invalid_response")
+            raise SeedRemoteError(invalid_envelope)
+        if submit_conflict:
+            # 资源占用可退避，幂等键冲突必须停止；其他 409 保留受控 HTTP 分类。
+            categories = {"RESOURCE_BUSY": "seed_resource_busy", "IDEMPOTENCY_CONFLICT": "seed_idempotency_conflict"}
+            raise SeedRemoteError(categories.get(envelope["returnCode"], "seed_http_409"))
         if response.status_code == 404:
-            if envelope["returnCode"] == "RESOURCE_NOT_FOUND" and envelope["body"] == {}:
+            # 仅识别 SaaS 明确的记录不存在；路由错误和未知错误体不能授权提交。
+            if envelope["returnCode"] == "RESOURCE_NOT_FOUND" and (envelope["body"] is None or envelope["body"] == {}):
                 return None
             raise SeedRemoteError("seed_http_404")
         if envelope["returnCode"] != "SUC0000" or envelope["errorMsg"] is not None or not isinstance(envelope["body"], dict):

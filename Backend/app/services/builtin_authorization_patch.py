@@ -13,8 +13,8 @@ from app.services.builtin_authorization_seed_runtime import refresh_builtin_auth
 from app.services.builtin_authorization_state import builtin_binding, builtin_lock, schema_ready
 
 
-def write_patch_seed(workspace: str) -> dict:
-    """复用已核验 Schema 并提交或查询权限数据，不重新进入建表分支。"""
+def _query_patch_seed(workspace: str) -> dict:
+    """复用已核验 Schema 只读查询原 Seed 幂等键，不允许初始化提交。"""
 
     root = Path(workspace).expanduser().resolve()
     with builtin_lock(root), task_transaction(root):
@@ -24,7 +24,7 @@ def write_patch_seed(workspace: str) -> dict:
         if not schema_ready(root, application):
             raise ValueError("权限表状态已变化，请重新检查。")
         tables = compile_authorization_tables(root, binding["datasourceKey"])["tables"]
-        return run_builtin_authorization_seed(root, record, tables, read_confirmed_seed_plan(root))
+        return run_builtin_authorization_seed(root, record, tables, read_confirmed_seed_plan(root), query_only=True)
 
 
 def refresh_patch(workspace: str) -> dict:
@@ -37,8 +37,8 @@ def refresh_patch(workspace: str) -> dict:
         if isinstance(seed, dict):
             if seed.get("operationId"):
                 return refresh_builtin_authorization_seed(str(root), seed["operationId"])
-            # 已存在的保护记录只能进入按幂等键查询分支。
-            return write_patch_seed(str(root))
+            # 刷新显式使用只读模式，不能因按键未找到而触发同键提交。
+            return _query_patch_seed(str(root))
         if record.get("operationId"):
             return refresh_builtin_authorization(str(root), record["operationId"])
         raise ValueError("没有可查询的原操作，请核对数据库状态。")

@@ -1,7 +1,10 @@
 """共享真实编排夹具的安全边界用例，按输入与持久保护集中维护。"""
 
 from copy import deepcopy
+from concurrent.futures import Future
 from unittest.mock import patch
+
+import httpx
 
 from app.services import builtin_authorization_orchestrator as orchestration
 from app.services.authorization_workspace_projector import RUNTIME, read_record
@@ -194,3 +197,123 @@ class AuthorizationOrchestratorSafetyCases:
         save_state(self.root, record)
         self.assertFalse(self.tick())
         self.assertEqual(self.calls, [])
+
+    def test_post_rejections_stop_automatic_attempts(self) -> None:
+        """认证、参数、路由及幂等冲突拒绝不能误判为丢失回执而无限自动重提。"""
+
+        baseline = read_record(self.root, "state.json")
+        for status in (400, 401, 403, 404, 409, 422):
+            with self.subTest(status=status):
+                save_state(self.root, baseline)
+                self.calls.clear()
+                self.post_error = status
+                self.post_error_code = "IDEMPOTENCY_CONFLICT" if status == 409 else "INVALID_ARGUMENT"
+                self.begin()
+                self.assertFalse(self.tick())
+                category = "seed_idempotency_conflict" if status == 409 else f"seed_http_{status}"
+                self.assertEqual(read_task(self.root).failureCategory, category)
+                self.assertEqual(read_record(self.root, "state.json")["seed"]["status"], "failed")
+                self.assertFalse(self.tick())
+                self.assert_calls("GET", "POST")
+                if status == 409:
+                    with self.assertRaises(ValueError):
+                        orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+
+    def test_explicit_retry_after_auth_rejection_can_submit(self) -> None:
+        """认证拒绝后修正服务，显式重试先查原键再恢复提交，不删除本地身份。"""
+
+        self.begin()
+        self.post_error = 401
+        self.assertFalse(self.tick())
+        identity = deepcopy(read_record(self.root, "state.json")["seed"])
+        self.post_error = None
+        with patch.object(orchestration, "_executor") as executor:
+            executor.submit.return_value = Future()
+            self.addCleanup(orchestration._workers.pop, str(self.root), None)
+            orchestration.resume_builtin_authorization_task(str(self.root))
+            executor.submit.assert_not_called()
+            orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+            executor.submit.assert_called_once()
+        self.assertTrue(self.tick())
+        self.assertFalse(self.tick())
+        actual = read_record(self.root, "state.json")["seed"]
+        self.assertEqual(actual["idempotencyKey"], identity["idempotencyKey"])
+        self.assertEqual(read_task(self.root).status, "ready")
+        self.assert_calls("GET", "POST", "GET", "POST", "GET")
+
+    def test_unaccepted_post_network_error_recovers_automatically(self) -> None:
+        """首次 POST 连接失败未受理，后续 tick 查无记录后按原键恢复。"""
+
+        self.begin()
+        original = self.respond
+        unavailable = True
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            """仅让第一次 POST 在受理前失败，不模拟远端已有操作。"""
+
+            nonlocal unavailable
+            if request.method == "POST" and unavailable:
+                unavailable = False
+                self.calls.append((request.method, request.url.path))
+                raise httpx.ConnectError("fixture", request=request)
+            return original(request)
+
+        with patch.object(self, "respond", side_effect=respond):
+            self.assertTrue(self.tick())
+            self.assertFalse(self.accepted)
+            self.assertEqual(read_task(self.root).status, "waiting")
+            self.assertTrue(self.tick())
+            self.assertFalse(self.tick())
+        self.assertEqual(read_task(self.root).status, "ready")
+        self.assert_calls("GET", "POST", "GET", "POST", "GET")
+
+    def test_terminal_receipts_require_get_then_stop(self) -> None:
+        """202 的失败或未知回执仍须 GET 核实，远端终态确认后停止而不重新执行。"""
+
+        baseline = read_record(self.root, "state.json")
+        for status in ("FAILED", "UNKNOWN"):
+            with self.subTest(status=status):
+                save_state(self.root, baseline)
+                self.calls.clear()
+                self.accepted = False
+                self.receipt_status = status
+                self.detail_overrides = {"status": status, "verified": False, "createdCount": 0}
+                self.begin()
+                self.assertTrue(self.tick())
+                self.assertFalse(self.tick())
+                self.assertEqual(read_task(self.root).failureCategory, f"seed_operation_{status.lower()}")
+                self.assertFalse(self.tick())
+                self.assert_calls("GET", "POST", "GET")
+
+    def test_resource_busy_recovers_after_rechecking_key(self) -> None:
+        """SaaS 409 资源占用释放后可恢复；重试必须先查原键。"""
+
+        self.begin()
+        self.post_error = 409
+        self.assertTrue(self.tick())
+        self.assertEqual(read_task(self.root).status, "waiting")
+        self.assertEqual(read_record(self.root, "state.json")["seed"]["failureCategory"], "seed_resource_busy")
+        self.post_error = None
+        self.assertTrue(self.tick())
+        self.assertFalse(self.tick())
+        self.assertEqual(read_task(self.root).status, "ready")
+        self.assert_calls("GET", "POST", "GET", "POST", "GET")
+
+    def test_invalid_accepted_receipt_recovers_by_key(self) -> None:
+        """202 回执无效但远端已受理时，自动按键查回原操作，不再次 POST。"""
+
+        self.begin()
+        original = self.respond
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            """保留远端受理副作用，只损坏返回的操作编号。"""
+
+            response = original(request)
+            return self.envelope(202, {}) if request.method == "POST" else response
+
+        with patch.object(self, "respond", side_effect=respond):
+            self.assertTrue(self.tick())
+            self.assertEqual(read_record(self.root, "state.json")["seed"]["status"], "unknown")
+            self.assertFalse(self.tick())
+        self.assertEqual(read_task(self.root).status, "ready")
+        self.assert_calls("GET", "POST", "GET")

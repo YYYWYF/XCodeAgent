@@ -1,4 +1,4 @@
-"""以真实请求解析、持久化和路由验证 Builtin Seed 的不可重放边界。"""
+"""以真实请求解析、持久化和路由验证 Builtin Seed 的同键协调与核验边界。"""
 
 import asyncio
 from copy import deepcopy
@@ -18,14 +18,15 @@ from app.services.authorization_table_projection import compile_authorization_ta
 from app.services.authorization_workspace_projector import read_record
 from app.services.builtin_authorization_bootstrap import run_builtin_authorization_bootstrap
 from app.services.builtin_authorization_seed import PURPOSE, compile_builtin_authorization_seed, seed_request_fingerprint
-from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient
+from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient, SeedRemoteError
 from app.services.builtin_authorization_seed_runtime import refresh_builtin_authorization_seed
 from app.services.builtin_authorization_state import save_state, seed_ready
 from app.services.project_launcher import _require_preview_authorization_ready
 from tests.authorization_seed_fixture import KEY, SUBJECT, SYSTEM, save_plan, seed_plan, write_schema
+from tests.authorization_seed_recovery_cases import AuthorizationSeedRecoveryCases
 
 
-class BuiltinAuthorizationSeedTests(unittest.TestCase):
+class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.TestCase):
     """用严格 SaaS 替身验证独立受理、单次查询和当前输入隔离。"""
 
     def setUp(self) -> None:
@@ -59,6 +60,7 @@ class BuiltinAuthorizationSeedTests(unittest.TestCase):
         self.accepted = False
         self.drop = False
         self.post_error = None
+        self.post_error_code = "RESOURCE_BUSY"
         self.receipt_status = "RUNNING"
         self.detail_overrides = {}
         self.before_response = None
@@ -100,7 +102,7 @@ class BuiltinAuthorizationSeedTests(unittest.TestCase):
             self.assertEqual(marker["status"], "submitting")
             self.assertEqual(marker["idempotencyKey"], compiled["idempotencyKey"])
             if self.post_error:
-                return self.envelope(self.post_error, {}, "RESOURCE_BUSY")
+                return self.envelope(self.post_error, {}, self.post_error_code)
             self.accepted = True
             if self.drop:
                 raise httpx.ReadTimeout("fixture-secret", request=request)
@@ -237,17 +239,14 @@ class BuiltinAuthorizationSeedTests(unittest.TestCase):
             self.assertNotIn(private, public)
 
     def test_accepted_without_receipt_only_queries_by_key(self) -> None:
-        """响应丢失后重启只查原键，暂查不到也不能再次 POST。"""
+        """响应丢失后查询原键，找到原操作时不再次 POST。"""
 
         self.drop = True
         result = self.run_node()
         self.assertEqual(result["failure_category"], "seed_timeout")
         self.assertEqual(result["next_action"], "lookup_seed")
-        self.accepted = False
-        self.assertEqual(self.run_node()["failure_category"], "seed_operation_not_found")
-        self.accepted = True
         self.assertTrue(self.run_node()["seed_ready"])
-        self.assert_calls("GET", "POST", "GET", "GET")
+        self.assert_calls("GET", "POST", "GET")
         self.assertTrue(self.calls[-1][1].endswith("/by-key/" + self.compile()["idempotencyKey"]))
 
     def test_existing_remote_operation_without_local_seed(self) -> None:
@@ -344,18 +343,78 @@ class BuiltinAuthorizationSeedTests(unittest.TestCase):
         self.assertNotIn("seed", read_record(self.root, "state.json"))
         self.assert_calls("GET")
 
-    def test_definite_http_errors_do_not_replay(self) -> None:
-        """HTTP 失败保留安全分类并继续保护可能已受理的操作。"""
+    def test_null_missing_lookup_allows_first_seed_submission(self) -> None:
+        """首次按键 404 的 null 业务体允许提交一次，并继续查询原 ID 核验。"""
+
+        original = self.respond
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            """模拟 SaaS 实际的按键查无记录响应，其他请求沿用完整夹具。"""
+
+            if request.method == "GET" and "/by-key/" in request.url.path and not self.accepted:
+                self.calls.append((request.method, request.url.path))
+                return self.envelope(404, None, "RESOURCE_NOT_FOUND")
+            return original(request)
+
+        with patch.object(self, "respond", side_effect=respond):
+            self.assertFalse(self.run_node()["seed_ready"])
+            self.assertTrue(self.run_node()["seed_ready"])
+        self.assert_calls("GET", "POST", "GET")
+
+    def test_null_missing_lookup_resumes_existing_attempt(self) -> None:
+        """已有未确认尝试时，按键 404 的 null 业务体允许原键再次提交。"""
+
+        self.drop = True
+        self.run_node()
+        self.drop = False
+        original = self.respond
+
+        def missing(request: httpx.Request) -> httpx.Response:
+            """模拟按键查询暂时不可见，POST 继续复用原操作。"""
+
+            if request.method == "GET" and "/by-key/" in request.url.path:
+                self.calls.append((request.method, request.url.path))
+                return self.envelope(404, None, "RESOURCE_NOT_FOUND")
+            return original(request)
+
+        with patch.object(self, "respond", side_effect=missing):
+            self.assertFalse(self.run_node()["seed_ready"])
+        self.assertTrue(self.run_node()["seed_ready"])
+        self.assert_calls("GET", "POST", "GET", "POST", "GET")
+
+    def test_missing_response_requires_explicit_business_not_found(self) -> None:
+        """未知业务码、非空错误体及成功响应 null 均不能当作查无记录。"""
+
+        for status, code, body, operation_id in (
+            (404, "BEEZ404", None, None),
+            (404, "RESOURCE_NOT_FOUND", {"unexpected": True}, None),
+            (200, "SUC0000", None, None),
+        ):
+            with self.subTest(status=status, code=code, body=body, operation_id=operation_id):
+                def respond(request: httpx.Request) -> httpx.Response:
+                    """按用例返回受控响应，不调用远端服务。"""
+
+                    return self.envelope(status, body, code)
+
+                client = ManagedAuthorizationSeedClient(self.settings, transport=httpx.MockTransport(respond))
+                with self.assertRaises(SeedRemoteError):
+                    client.query(KEY, operation_id=operation_id, idempotency_key=self.compile()["idempotencyKey"])
+
+    def test_post_rejection_can_recover_after_remote_missing(self) -> None:
+        """请求拒绝后保留错误，修正服务后按原键查无记录即可恢复。"""
 
         baseline = read_record(self.root, "state.json")
-        for status in (400, 409, 500):
+        for status, category in ((400, "seed_http_400"), (409, "seed_resource_busy"), (500, "seed_http_500")):
             with self.subTest(status=status):
                 save_state(self.root, baseline)
                 self.calls.clear()
+                self.accepted = False
                 self.post_error = status
-                self.assertEqual(self.run_node()["failure_category"], f"seed_http_{status}")
-                self.assertEqual(self.run_node()["failure_category"], "seed_operation_not_found")
-                self.assert_calls("GET", "POST", "GET")
+                self.assertEqual(self.run_node()["failure_category"], category)
+                self.post_error = None
+                self.assertFalse(self.run_node()["seed_ready"])
+                self.assertTrue(self.run_node()["seed_ready"])
+                self.assert_calls("GET", "POST", "GET", "POST", "GET")
 
     def test_current_saas_contract_rejects_action_refs_and_empty_descriptions(self) -> None:
         """Direct 合法但 SaaS 尚未支持的实际行保留原值，受理前停止。"""

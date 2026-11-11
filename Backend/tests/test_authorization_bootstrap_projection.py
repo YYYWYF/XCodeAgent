@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.graph.workflow import route_prepare_build_tasks
+from app.persistence.checkpoints import close_workflow_checkpointer
 from app.protocols.workflow import build_workflow_ag_ui_stream
 from app.protocols.workflow.projection import _workflow_next_nodes
 from app.services.authorization_workspace_projector import RUNTIME
@@ -127,11 +128,15 @@ class AuthorizationBootstrapProjectionTests(unittest.TestCase):
 
                     async def collect() -> list[str]:
                         """运行真实事件编码器，模拟页面开发而不访问用户工作区。"""
-                        return [frame async for frame in build_workflow_ag_ui_stream(
-                            graph=graph, payload={"threadId": "projection-thread", "runId": "projection-run",
-                                "messages": [{"role": "user", "content": "开发页面"}],
-                                "forwardedProps": {"resumeFrom": "inspect_workspace"}},
-                        )]
+                        try:
+                            return [frame async for frame in build_workflow_ag_ui_stream(
+                                graph=graph, payload={"threadId": "projection-thread", "runId": "projection-run",
+                                    "messages": [{"role": "user", "content": "开发页面"}],
+                                    "forwardedProps": {"resumeFrom": "inspect_workspace"}},
+                            )]
+                        finally:
+                            # 回收测试流打开的 SQLite 连接，避免后台线程阻止测试进程退出。
+                            await close_workflow_checkpointer()
 
                     async def observe_start(*, operation, callback, **kwargs):
                         """仅执行开始节点观察，隔离其余依赖真实持久化工作区的回调。"""

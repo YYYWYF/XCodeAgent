@@ -98,7 +98,7 @@ def _ready(root: Path, record: dict) -> dict:
 def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *, client: ManagedTableClient | None = None,
                                         seed_client: ManagedAuthorizationSeedClient | None = None,
                                         explicit_recovery: bool = False, schema_only: bool = False) -> dict:
-    """读取权威配置并串行执行；普通 Build 仅自动提交一次，显式恢复才允许明确失败重试。"""
+    """读取权威配置并串行执行；Schema 保留原提交保护，Seed 按幂等身份协调。"""
 
     root = Path(workspace).expanduser().resolve()
     with builtin_lock(root), task_transaction(root):

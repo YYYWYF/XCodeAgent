@@ -17,6 +17,11 @@ from app.services.builtin_authorization_seed_client import ManagedAuthorizationS
 from app.services.builtin_authorization_state import builtin_binding, builtin_lock, save_state, schema_ready, verified_seed
 from app.workspace.task_documents import load_confirmed_build_task_plan
 
+_SUBMIT_REJECTIONS = {
+    "seed_idempotency_conflict", "seed_resource_busy",
+    *(f"seed_http_{code}" for code in (400, 401, 403, 404, 409, 413, 422, 429)),
+}
+
 
 def _summary(record: dict, tables: list[str], message: str, *, status: str = "manual_required",
              ready: bool = False, next_action: str = "review", failure: str | None = None) -> dict:
@@ -99,11 +104,12 @@ def _save_detail(root: Path, record: dict, seed: dict, binding: dict,
 
 def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], technical_plan: dict | None = None,
                                    *, client: ManagedAuthorizationSeedClient | None = None,
-                                   refresh_id: str | None = None) -> dict:
-    """在调用方锁内查询原操作，只有首次 Build 才能受理一个新批次。"""
+                                   refresh_id: str | None = None, query_only: bool = False) -> dict:
+    """在调用方锁内协调原操作，明确查无记录时按原键和原载荷幂等提交。"""
 
     stage = "seed_input_invalid"
     seed = record.get("seed")
+    read_only = query_only or refresh_id is not None
     try:
         binding, schema, plan, compiled = _current_inputs(root, record)
         key = binding["datasourceKey"]
@@ -136,8 +142,8 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
 
         request = compiled["request"]
         validate_seed_transport(request)
-        # 首次受理前也按键查询，复用其他运行已建立的同一请求记录。
-        if seed is None:
+        # 所有可提交路径都要求正式 DAG；纯查询动作继续保持只读。
+        if not read_only:
             dag = load_confirmed_build_task_plan(root)
             if not dag or dag.get("status") != "ready":
                 raise ValueError("权限 Seed 需要当前已确认 Build DAG。")
@@ -145,33 +151,46 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
         remote = client or ManagedAuthorizationSeedClient(Settings.from_env())
         stage = "seed_query_unconfirmed"
         _verify_current(root, record, binding, plan, compiled)
-        detail = remote.query(key, operation_id=seed.get("operationId") if seed else None,
+        operation_id = seed.get("operationId") if seed else None
+        detail = remote.query(key, operation_id=operation_id,
                               idempotency_key=identity["idempotencyKey"])
         _verify_current(root, record, binding, plan, compiled)
+        if detail is None and operation_id is not None and not read_only:
+            # 原 ID 丢失不能直接触发提交，必须再按原幂等键核对远端事实。
+            detail = remote.query(key, idempotency_key=identity["idempotencyKey"])
+            _verify_current(root, record, binding, plan, compiled)
         if detail is not None:
             stage = "seed_state_write_failed"
             return _save_detail(root, record, seed or identity, binding, compiled, detail)
-        if seed is not None:
-            return _summary(record, tables, "未查到原权限数据操作，请按原幂等键人工核对。",
+        if read_only:
+            return _summary(record, tables, "未查到原权限数据操作，请重试初始化以按原幂等键协调。",
                             next_action="lookup_seed", failure="seed_operation_not_found")
-        # 在 POST 前持久化保护，即使进程退出或回执丢失也只查询原操作。
+        # 本地 submitting/unknown 仅记录进度；SaaS 在资源锁和唯一键下保证同键同载荷只执行一次。
+        # 保留已有受理身份，避免重新提交的回执静默替换曾经确认的原操作 ID。
         stage = "seed_state_write_failed"
-        marker = {**identity, "status": "submitting", "ready": False}
+        marker = {**(seed or {}), **identity, "status": "submitting", "ready": False}
+        marker.pop("failureCategory", None)
         submitting = {**record, "seed": marker}
         save_state(root, submitting)
         record = submitting
         seed = marker
         _verify_current(root, record, binding, plan, compiled)
+        stage = "seed_submit_unconfirmed"
         try:
             receipt = remote.submit(key, request)
+            if operation_id is not None and receipt.operationId != operation_id:
+                raise SeedRemoteError("seed_operation_identity_mismatch")
         except SeedRemoteError as error:
             _verify_current(root, record, binding, plan, compiled)
-            seed = {**marker, "status": "unknown", "failureCategory": error.category}
-            unknown = {**record, "seed": seed}
-            save_state(root, unknown)
-            record = unknown
+            # 明确拒绝记录本次失败；传输和回执异常仅记录受理结果未确认。
+            status = "failed" if error.category in _SUBMIT_REJECTIONS else "unknown"
+            seed = {**marker, "status": status, "failureCategory": error.category}
+            updated = {**record, "seed": seed}
+            save_state(root, updated)
+            record = updated
             raise
         _verify_current(root, record, binding, plan, compiled)
+        stage = "seed_state_write_failed"
         updated = {**record, "seed": {**marker, "operationId": receipt.operationId,
                                       "operationStatus": receipt.status, "status": receipt.status.lower()}}
         save_state(root, updated)

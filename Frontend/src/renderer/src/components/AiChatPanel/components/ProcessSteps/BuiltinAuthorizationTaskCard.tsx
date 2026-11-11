@@ -73,7 +73,7 @@ export default function BuiltinAuthorizationTaskCard({ task, workspace, disabled
         <Button icon={<ReloadOutlined />} loading={busy} disabled={disabled || !canRetry}
           title={canRetry ? '恢复初始化，保留原操作并避免重复提交' : '当前状态不能安全重试，请先核对详情及原操作'}
           onClick={() => { void act('retry') }}>重试</Button>
-        <Button loading={busy} disabled={disabled} onClick={() => { void act('refresh_patch') }}>查询原操作</Button>
+        <Button loading={busy} disabled={disabled} onClick={() => { void act('refresh_patch') }}>刷新状态</Button>
       </div>}
     </>}
     {task.schemaReady && task.initializedTables?.length === 4 && <details><summary>以下四张权限表已初始化完成</summary>

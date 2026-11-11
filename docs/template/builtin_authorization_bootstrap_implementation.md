@@ -4,7 +4,7 @@
 
 ## PR1 后端编排与持久化
 
-`builtin_authorization_orchestrator.py` 复用原 Schema 和 Seed 单次服务。每个 tick 只推进一个阶段。Schema 完整核验后，下一轮自动进入 Seed，Seed 首次仍先 GET by-key，再按既有保护规则提交一次 POST。202 始终只代表受理。
+`builtin_authorization_orchestrator.py` 复用原 Schema 和 Seed 单次服务。每个 tick 只推进一个协调阶段。Schema 完整核验后，下一轮自动进入 Seed。Seed 先查询原 ID 或原幂等键，明确查无记录时按原键、原载荷 POST；本地 submitting/unknown 记录尝试进度，不永久禁止提交。202 始终只代表受理。
 
 编排文件为 `.devagentstudio/runtime/builtin-authorization-bootstrap/orchestration.json`，通过原子替换、文件和目录 fsync 保存。字段包括 `schemaVersion`、`generation`、`inputFingerprint`、`operationStateExpected`、`seedStateExpected`、`status`、`stage`、`failureCategory`、`updatedAt`。不保存 Subject、管理员列表、SQL、Seed 行数据或凭据。操作编号、幂等键、逐表结果和成功事实继续归属 `state.json`。
 
@@ -21,26 +21,36 @@
 | 首次 Schema POST 前 | 沿用原四表检查、历史检查及提交前 `submitting` 保护 |
 | Schema POST 后有原 ID | 自动 GET 原 ID，SUCCEEDED 后再严格核验四表 |
 | Schema POST 回执丢失，无 ID | 保留 submitting/unknown，不能自动再建表 |
-| Seed POST 前后 | 原 `seed.idempotencyKey` 与 submitting 保护持续落盘 |
+| Seed POST 前后 | 原 `seed.idempotencyKey`、载荷指纹和已有 ID 持续落盘，submitting 不代表远端已受理 |
 | Seed 回执丢失 | 按原幂等键 GET，成功后核验指纹、表名、归属、数量和 verified |
-| 原 Seed by-key 返回 404 | 待核对，不能清空保护后重发 |
-| 临时 GET 网络错误或 5xx | 有界退避后继续 GET，POST 不重试 |
+| 原 Seed by-key 明确返回查无记录 | 输入和 DAG 仍有效时按原键、原载荷提交，不删除本地记录 |
+| 原 Seed ID 明确返回查无记录 | 自动协调先补查原键；纯刷新只返回未找到，不触发 POST |
+| 临时网络错误、资源繁忙、408/429 或 5xx | 有界退避后先查询；明确未找到才同键提交 |
+| POST 认证、参数或路由拒绝 | 停止自动尝试，修正后通过显式 retry 恢复；幂等冲突不放行 |
 | 原操作 FAILED 或 UNKNOWN | 停止自动推进，保留证据和只读查询 |
 | 绑定、DDL、管理员、Manifest 或登录开关变化 | 停止并返回 inputs_changed，迟到结果不写为成功 |
 
-编排文件丢失时，可从原 `state.json` 恢复。两份文件都不存在时，仍执行原远端结构/历史检查和 Seed by-key 查询。底层原 `explicit_recovery` 校验保留，自动 ensure/resume 不授予重建或重放权限。
+编排文件丢失时，可从原 `state.json` 恢复。两份文件都不存在时，仍执行原远端结构/历史检查和 Seed by-key 查询。底层原 `explicit_recovery` 校验保留，自动 ensure/resume 不授予 Schema 重建或远端 Seed FAILED/UNKNOWN 重新执行权限。
+
+### Seed 同键恢复合同（2026-11-10）
+
+本机 `managed-database-service` 源码的 `AuthorizationSeedService.submit` 对已有键调用 `requireFingerprint` 并复用回执；`MybatisDataOperationRepository.begin` 在资源行锁内再次判重，管理库 `(datasource_key,idempotency_key)` 唯一索引兜底，只有新建 Admission 才调度。`AuthorizationSeedJdbcAdapter` 在四表事务内按自然键插入缺失数据、核验身份列，再提交。因此客户端可以重复发送同键同载荷请求，不能自行生成新键绕过原操作。
+
+`run_builtin_authorization_seed` 的原 ID 未找到后补查原键；两者均未找到才进入同键提交。已有 ID 保留在提交标记中，GET 或 POST 返回不同 ID 均报 `seed_operation_identity_mismatch`，不静默覆盖原受理证据。所有可提交路径要求已确认 DAG；纯刷新显式使用只读模式，查询失败或未找到均不 POST。网络和落盘边界继续检查当前绑定、指纹、Manifest 与任务身份。
+
+POST 传输失败或回执无效进入本地 unknown，后续先查询协调；明确拒绝记录本次 failed，不代表已有远端失败操作。400/401/403/404/422 拒绝停止自动尝试并允许显式 retry。409 `RESOURCE_BUSY` 退避后重新查询；`IDEMPOTENCY_CONFLICT` 及其他冲突停止。202 回执即使报告 FAILED/UNKNOWN 也只代表受理摘要，下一轮 GET 核实后停止，保留远端终态。SaaS 当前没有重新执行 FAILED/UNKNOWN 操作的接口，本次不修改 SaaS。源码核对不等同于远端部署验收。
 
 ## PR2 运行入口与生命周期
 
 - Graph 在 `_build_plan_gate_error()` 通过后快速调度任务，保留两个既有结果键、`executor=builtin_saas` 和 Build 放行策略。新增 `initializationStatus/initializationStage` 描述独立任务，节点 completed 不推导数据库就绪。
-- `/builtin-authorization/run` 的 `get` 仅本地读取，`run_patch` 调用统一 ensure，`resume` 仅安全接管；`retry` 是显式用户动作，可恢复查询、认证、服务配置或响应合同故障，不改变输入摘要、操作 ID 或幂等键，也不放行远端 FAILED/UNKNOWN 的重复提交。`refresh` 与 `refresh_patch` 保持查询原操作，不能自动接续 Seed POST。动作均经过标准 AG-UI 生命周期。
+- `/builtin-authorization/run` 的 `get` 仅本地读取，`run_patch` 调用统一 ensure，`resume` 仅安全接管；`retry` 是显式用户动作，可恢复查无记录、查询、认证、参数、服务配置或响应合同故障，不改变输入摘要、已知操作 ID 或幂等键，也不放行远端 FAILED/UNKNOWN 重新执行。`refresh` 与 `refresh_patch` 显式只读，不能自动接续 Seed POST。动作均经过标准 AG-UI 生命周期。
 - `workspace_attach` 成功后恢复已有任务，不扫描其他工作区。前端已有生命周期读取会先 attach。卡片检测连接恢复、页面重新可见或 Backend 实例改变时，单独调用同一个 attach，再继续纯只读 get。
 - Backend shutdown 唤醒等待中的 worker，取消排队任务并等待当前安全 tick 退出。删除准备停止 worker，保留远端操作证据。删除准备失败回滚时解除本地栅栏并接管原任务。
 - Build 路由、Direct 模式、模板 Java Bootstrap 及预览 `seed_ready()` 门禁保持原逻辑。预览未就绪提示更新为自动初始化/待核对文案。
 
 ## PR3 前端旅程
 
-工作流和调试补丁共用三阶段卡片，分别展示权限数据表初始化、权限数据初始化、初始化结果核验。运行中隐藏手动刷新和继续 Seed 按钮，显示无百分比的执行条。待处理时展示重试、查询原操作和详情；后端 `nextAction=resume|retry` 时启用重试，否则禁用并解释原因。重试经独立 AG-UI `retry` 动作，attach 仅沿原 resume 策略接管，不自动重试新增的故障类别。
+工作流和调试补丁共用三阶段卡片，分别展示权限数据表初始化、权限数据初始化、初始化结果核验。运行中隐藏手动刷新和继续 Seed 按钮，显示无百分比的执行条。待处理时展示「重试」、「刷新状态」和详情；后端 `nextAction=resume|retry` 时启用重试，否则禁用并解释原因。重试经独立 AG-UI `retry` 动作，attach 仅沿原 resume 策略接管，不自动重试新增的故障类别。
 
 当前 Run 通过只读 get 每三秒读取一次状态。隐藏页面暂停，卸载和切换工作区撤销旧请求代次。历史 Run 仅显示持久化快照。实时结果回投当前步骤的展示状态，使外层标题与卡片保持一致。颜色、背景、边框、按钮和焦点使用现有 `--wb-*` 明暗主题令牌。
 
@@ -95,9 +105,9 @@ pnpm build
 3. 观察一个当前权限任务卡，从建表受理、自动 GET 原 Schema ID、四表结构核验，自动进入权限数据初始化。期间不点击刷新或继续。
 4. 在受控 SaaS 日志中核对 Schema POST 一次、Seed 首次 by-key GET、Seed POST 一次及后续原 ID GET。卡片最终满足 schemaReady 和 seedReady，三个阶段全部完成。
 5. Seed 就绪前尝试预览，应由原门禁拒绝。就绪后再启动，应通过相同 seed_ready 门禁。
-6. 分别在 Schema RUNNING、Seed RUNNING 和 Seed POST 受理但响应丢失处重启 Backend，再打开同一应用。确认 attach 接管原任务，ID/幂等键不变，POST 次数不增加。
+6. 分别在 Schema RUNNING、Seed RUNNING、Seed POST 前落盘后退出和 Seed POST 受理但响应丢失处重启 Backend，再打开同一应用。确认 attach 接管原任务，ID/幂等键不变；查到原操作时仅 GET，明确查无记录时可同键 POST，业务效果不重复。
 7. 保持窗口不切换，在两次查询间快速重启 Backend。确认卡片识别新实例，独立 attach 接管并自动继续。隐藏窗口后重启 Backend，再显示窗口，验证相同恢复路径。
-8. 为原 GET 注入超时/503，应继续退避查询。为 Seed 已有保护记录注入 by-key 404，应进入待核对。为 Schema 注入 UNKNOWN 或丢失回执且无 ID，应禁止再建表。
+8. 为原 GET 注入超时/503，应继续退避查询而不直接提交。为 Seed 本地 submitting/unknown 注入明确 by-key 404，应按原键原载荷提交并继续 GET 核验。为纯 refresh/refresh_patch 注入 404，不得 POST。为 Schema 注入 UNKNOWN 或丢失回执且无 ID，应禁止再建表。
 9. 在请求途中关闭权限或更换绑定、管理员、DDL、Manifest，确认没有后继写入或过期成功回填。两窗口同时触发同一工作区，应共享原操作。
 10. 检查浅色和深色主题下运行、完成、待处理及错误状态。历史会话保持静态，当前会话与其他工作区之间没有串台。
 11. 删除准备期间应等待安全 tick 结束。远端已受理操作保留原证据，不能显示为远端撤销。
