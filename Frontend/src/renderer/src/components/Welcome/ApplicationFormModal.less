@@ -338,3 +338,56 @@
     grid-template-columns: 1fr;
   }
 }
+
+// 「移动端」禁用项的 Tooltip 美化：覆盖 antd 默认白底黑箭头的不一致问题。
+// Tooltip 通过 Portal 挂到 body，必须用 overlayClassName 限定作用域，不能依赖父级嵌套。
+// 箭头颜色由 --antd-arrow-background-color 驱动（作用于 .ant-tooltip-arrow-content::before
+// 伪元素），需要显式设置才能与 inner 同色。
+.@{class-prefix}-application-form-terminal-tooltip {
+  &.ant-tooltip-placement-top,
+  &.ant-tooltip-placement-topLeft,
+  &.ant-tooltip-placement-topRight {
+    padding-bottom: 2px;
+  }
+
+  .ant-tooltip-inner {
+    min-height: 24px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .ant-tooltip-arrow-content {
+    --antd-arrow-background-color: #ffffff;
+  }
+}
+
+// 暗色主题：箭头与内容块同步切到深色。
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
+  .@{class-prefix}-application-form-terminal-tooltip {
+    .ant-tooltip-inner {
+      color: #f2f2f2;
+      background: #28282b;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .ant-tooltip-arrow-content {
+      --antd-arrow-background-color: #28282b;
+    }
+  }
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='light']) {
+  .@{class-prefix}-application-form-terminal-tooltip {
+    .ant-tooltip-inner {
+      color: #202124;
+      background: #ffffff;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .ant-tooltip-arrow-content {
+      --antd-arrow-background-color: #ffffff;
+    }
+  }
+}

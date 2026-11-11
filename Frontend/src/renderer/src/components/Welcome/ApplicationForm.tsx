@@ -5,7 +5,7 @@ import {
   GithubOutlined,
   MenuOutlined
 } from '@ant-design/icons'
-import { Button, Form, Input, Radio, Typography } from 'antd'
+import { Button, Form, Input, Radio, Tooltip, Typography } from 'antd'
 import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import type { ApplicationDraft } from '../../typings'
@@ -137,11 +137,31 @@ export default function ApplicationForm({
             ) : (
               <Form.Item name="terminal" noStyle>
                 <Radio.Group>
-                  {Object.entries(terminalLabels).map(([value, label]) => (
-                    <Radio.Button key={value} value={value}>
-                      {label}
-                    </Radio.Button>
-                  ))}
+                  {Object.entries(terminalLabels).map(([value, label]) => {
+                    // 移动端尚未支持：禁用并以 tooltip 引导。注意 Radio.Button 的 disabled 会让
+                    // antd 自动给按钮加 pointer-events: none，导致 Tooltip 直接挂上去时鼠标事件
+                    // 透不过去 —— 必须在外层套一个 span 接收 hover。
+                    const disabled = value === 'Mobile'
+                    const button = (
+                      <Radio.Button key={value} value={value} disabled={disabled}>
+                        {label}
+                      </Radio.Button>
+                    )
+                    return disabled ? (
+                      <Tooltip
+                        key={value}
+                        title="建设中..."
+                        placement="top"
+                        overlayClassName={cx('application-form-terminal-tooltip')}
+                      >
+                        <span style={{ display: 'inline-block', cursor: 'not-allowed' }}>
+                          {button}
+                        </span>
+                      </Tooltip>
+                    ) : (
+                      button
+                    )
+                  })}
                 </Radio.Group>
               </Form.Item>
             )}
