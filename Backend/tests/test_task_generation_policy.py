@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from app.services.build_task_reuse_contracts import ReuseFacts, RetainedEndpointOwner
+from app.services.build_task_reuse import resolve_reuse_facts
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
 from app.services.authorization_overlay import unit_authorization_slice
 from app.services.build_task_planner import _authorization_coverage_errors
@@ -15,11 +16,48 @@ from app.services.task_generation_policy import (
     completed_backend_units, completed_page_backend_endpoints, generation_reuse_facts,
 )
 from app.services.unit_generation_requirements import resolve_generation_requirements
+from app.services.unit_generation_requirements_contracts import GenerationRequirementsError
 from tests.dag_planning_baseline_fixtures import project_plan
+from tests.dag_planning_orchestrator_fixtures import planning_inputs
+from tests.test_build_task_reuse import _plan, _task
 
 
 class TaskGenerationPolicyTests(unittest.TestCase):
     """覆盖配置复用、旧任务退出及同模块部分接口完成的边界。"""
+
+    def test_old_units_outside_current_skeleton_do_not_block_planning(self):
+        """旧页面、模块和静态单元不在当前骨架时仍可规划，且不带入旧任务。"""
+        inputs = planning_inputs()
+        baseline = _plan(*[_task(f"old-{index}", unit_id=unit) for index, unit in enumerate(
+            ("page:removed", "backend:module:removed", "frontend:data:static"))])
+        facts = resolve_reuse_facts(
+            confirmed_plan=baseline, unit_skeleton=inputs.skeleton_plan,
+            build_context=inputs.build_context, workspace_snapshot=inputs.workspace_snapshot,
+            formal_plan=inputs.project_plan,
+        )
+        self.assertEqual(facts.issues, ())
+        facts = facts.model_copy(update={"external_capabilities": inputs.reuse_facts.external_capabilities})
+        current = inputs.model_copy(update={"base_confirmed_plan": baseline, "reuse_facts": facts})
+        requirements = current.requirements()
+        self.assertEqual(requirements.planning_unit_ids, ("page:a", "page:b", "page:c"))
+        run = current.create_run(requirements, planning_run_id="current", workflow_run_id="workflow",
+                                 thread_id="thread", at="2026-11-11T00:00:00Z")
+        self.assertTrue(all(not unit.retained_task_ids for unit in run.unit_states.values()))
+        self.assertEqual(project_retained_tasks(
+            list(baseline["task_registry"].values()), project_plan=current.project_plan,
+            build_context=current.build_context, reuse_facts=facts,
+            planning_unit_ids=set(requirements.planning_unit_ids),
+        ), [])
+        # 旧任务无需进入骨架，但完整基线覆盖及本轮必需单元门禁仍必须生效。
+        invalid = current.model_copy(update={"reuse_facts": inputs.reuse_facts})
+        with self.assertRaises(GenerationRequirementsError) as mismatch:
+            invalid.requirements()
+        self.assertEqual(mismatch.exception.issues[0].code, "PLANNING_REUSE_BASELINE_MISMATCH")
+        skeleton = {**inputs.skeleton_plan, "build_units": {key: unit
+                    for key, unit in inputs.skeleton_plan["build_units"].items() if key != "page:a"}}
+        with self.assertRaises(GenerationRequirementsError) as missing:
+            current.model_copy(update={"skeleton_plan": skeleton}).requirements()
+        self.assertEqual(missing.exception.issues[0].code, "REQUIRED_UNIT_MISSING")
 
     def inputs(self):
         """构造同模块列表与详情接口，页面同时调用两者。"""
@@ -140,11 +178,12 @@ class TaskGenerationPolicyTests(unittest.TestCase):
         inputs["build_execution_scope"] = {
             "type": "endpoint", "targetId": "orders.list", "apiContractId": "orders-api",
         }
-        inputs["required_unit_ids"] = ["backend:module:orders-api"]
+        inputs["required_unit_ids"] = ["backend:bootstrap", "backend:module:orders-api"]
         result = resolve_generation_requirements(
             **inputs, completed_backend_endpoints=[("orders-api", "orders.list")],
         )
         self.assertTrue(result.generation_requirements_by_unit["backend:module:orders-api"])
+        self.assertTrue(result.generation_requirements_by_unit["backend:bootstrap"])
 
     def test_all_page_endpoints_completed_keeps_frontend_generation(self):
         """页面接口全部完成时不生成模块候选，前端页面及 API 调用仍生成。"""
@@ -154,6 +193,7 @@ class TaskGenerationPolicyTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result.generation_strategy_by_unit["backend:module:orders-api"], "not_required")
+        self.assertEqual(result.generation_strategy_by_unit["backend:bootstrap"], "not_required")
         self.assertEqual(result.generation_strategy_by_unit["frontend:api-client"], "model")
         self.assertEqual(result.generation_strategy_by_unit["page:orders"], "model")
 
@@ -180,6 +220,45 @@ class TaskGenerationPolicyTests(unittest.TestCase):
         """已完成业务任务不以完成状态或旧依赖进入新计划。"""
         tasks = [{"id": "config", "unit_id": "backend:bootstrap", "status": "completed"},
                  {"id": "business", "unit_id": "backend:module:orders-api", "status": "completed"}]
-        kept = project_retained_tasks(tasks, project_plan={}, build_context={},
+        context = self.completed_context()
+        context["required_unit_ids"].append("backend:bootstrap")
+        kept = project_retained_tasks(tasks, project_plan={}, build_context=context,
                                       reuse_facts=self.inputs()["reuse_facts"], planning_unit_ids=set())
         self.assertEqual([task["id"] for task in kept], ["config"])
+
+    def test_no_backend_work_drops_retained_configuration(self):
+        """纯页面、全部后端已完成及纯静态接口均不能因旧配置任务存在而带入它。"""
+        active = self.completed_context()
+        active["required_unit_ids"].append("backend:bootstrap")
+        completed = deepcopy(active)
+        completed["completed_backend_endpoints"].append(
+            {"api_contract_id": "orders-api", "endpoint_id": "orders.detail"})
+        static = deepcopy(active)
+        static["endpoint_designs"][1]["sourceBinding"] = {"sourceType": "static"}
+        for context in ({}, {**active, "endpoint_designs": []}, completed, static):
+            with self.subTest(context=context):
+                kept = project_retained_tasks(
+                    [{"id": "config", "unit_id": "backend:bootstrap", "status": "completed"}],
+                    project_plan={}, build_context=context,
+                    reuse_facts=self.inputs()["reuse_facts"], planning_unit_ids=set(),
+                )
+                self.assertEqual(kept, [])
+
+    def test_bootstrap_uses_only_unfinished_backend_sources(self):
+        """已完成数据库接口不触发配置，未完成外部接口仍要求对应配置。"""
+        inputs = self.inputs()
+        inputs["endpoint_designs"][1]["sourceBinding"] = {"sourceType": "external_api"}
+        result = resolve_generation_requirements(
+            **inputs, completed_backend_endpoints=[("orders-api", "orders.list")],
+        )
+        duties = result.generation_requirements_by_unit["backend:bootstrap"]
+        self.assertEqual([item.source_refs["data_source_type"] for item in duties], ["external_api"])
+
+    def test_page_without_endpoints_does_not_generate_bootstrap(self):
+        """页面没有接口依赖时，即使骨架存在配置单元也不生成配置职责。"""
+        inputs = self.inputs()
+        inputs["formal_target"]["page_implementation_contracts"][0]["requiredEndpointIds"] = []
+        inputs["required_unit_ids"] = ["page:orders", "backend:bootstrap"]
+        result = resolve_generation_requirements(**inputs)
+        self.assertEqual(result.generation_strategy_by_unit["backend:bootstrap"], "not_required")
+        self.assertEqual(result.planning_unit_ids, ("page:orders",))

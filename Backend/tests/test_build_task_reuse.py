@@ -312,12 +312,12 @@ class BuildTaskReuseTests(unittest.TestCase):
                 self.assertEqual(facts.issues[0].code, "CONFIRMED_BASELINE_INVALID")
 
     def test_baseline_identity_errors_are_explicit_and_never_repaired(self) -> None:
-        """registry 身份不能被自动补齐，骨架缺失 Unit 也不能使有效历史 Task 消失。"""
+        """registry 身份不能被自动补齐，范围外旧 Unit 仍完整登记供基线核验。"""
 
         self.inputs["confirmed_plan"] = _plan(_task("bad-id"), _task("old", unit_id="page:removed"))
         self.inputs["confirmed_plan"]["task_registry"]["bad-id"]["id"] = "different"
         facts = resolve_reuse_facts(**self.inputs)
-        self.assertEqual({issue.code for issue in facts.issues}, {"CONFIRMED_TASK_IDENTITY_INVALID", "CONFIRMED_UNIT_MISSING"})
+        self.assertEqual({issue.code for issue in facts.issues}, {"CONFIRMED_TASK_IDENTITY_INVALID"})
         self.assertEqual(facts.retained_task_ids_by_unit["page:removed"], ("old",))
 
     def test_results_are_deterministic_frozen_and_do_not_modify_inputs(self) -> None:

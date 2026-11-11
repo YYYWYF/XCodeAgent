@@ -208,7 +208,12 @@ def resolve_generation_requirements(
     requirements_by_unit = {}
     strategies = {}
     for unit_id in required:
-        duties = _unit_responsibilities(unit_id, pages, endpoints, sources, plan)
+        # 配置检查只服务本轮待开发的后端接口；已完成接口仍保留前端调用上下文。
+        unit_sources = sources
+        if unit_id == "backend:bootstrap" and build_execution_scope.get("type") == "page":
+            completed = set(completed_backend_endpoints)
+            unit_sources = {key: types for key, types in sources.items() if key not in completed}
+        duties = _unit_responsibilities(unit_id, pages, endpoints, unit_sources, plan)
         if build_execution_scope.get("type") == "page" and unit_id.startswith(BACKEND_MODULE_PREFIX):
             # 同模块 A 完成、B 未完成时，只移除 A 的后端职责，前端调用职责保持完整。
             completed = set(completed_backend_endpoints)

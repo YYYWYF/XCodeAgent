@@ -43,6 +43,22 @@ def completed_backend_keys(context: Mapping) -> set[tuple[str, str]]:
             for item in context.get("completed_backend_endpoints", ())}
 
 
+def required_bootstrap_source_types(context: Mapping) -> set[str]:
+    """仅从本轮待开发后端接口提取配置来源，无后端职责时不继承旧配置任务。"""
+    from app.services.unit_generation_requirement_targets import (
+        ENDPOINT_PHYSICAL_SOURCE_TYPES, endpoint_source_types,
+    )
+
+    if "backend:bootstrap" not in context.get("required_unit_ids", ()):
+        return set()
+    designs = context.get("endpoint_designs", ())
+    keys = {(item["apiContractId"], item["endpointId"]) for item in designs}
+    sources = endpoint_source_types(designs, keys)
+    completed = completed_backend_keys(context)
+    return {source for key, types in sources.items() if key not in completed
+            for source in types if source in ENDPOINT_PHYSICAL_SOURCE_TYPES}
+
+
 def completed_backend_units(context: Mapping) -> set[str]:
     """仅当模块在本页引用的接口全部完成时，允许该模块没有本轮任务。"""
     from app.services.unit_task_manifest import backend_module_unit_id

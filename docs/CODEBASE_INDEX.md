@@ -1,5 +1,9 @@
 # DevAgent Studio Codebase Index
 
+任务规划入口 `dag_planning_inputs.py::SequentialPlanningInputs.requirements` 与 `build_task_reuse.py::_baseline_tasks` 不再要求旧正式任务的 Unit 存在于当前骨架：完整基线身份与 ReuseFacts 索引覆盖仍严格核验，本轮必需 Unit 由 `resolve_generation_requirements` 校验。旧页面、模块、静态数据 Unit 不会因范围变化阻断新任务生成，也不会回填当前 DAG；配置复用继续受本轮来源与输入有效性约束。回归：`tests.test_task_generation_policy`、`tests.test_build_task_reuse`。
+
+`backend:bootstrap` 仅在本轮待开发后端接口需要数据库或外部 API 基础能力时生成或复用。`unit_generation_requirements.py` 计算页面配置职责时排除已完成且无变更接口，前端调用仍消费完整接口上下文；`task_generation_policy.required_bootstrap_source_types` 与 `retained_task_projection.py` 在组装及确认边界阻止范围外旧配置任务进入新 DAG，`dag_planning_inputs.py` 不为 `not_required` 配置单元携带旧任务摘要。无接口页面、后端接口全部已完成及纯静态接口不带入配置任务；显式接口开发仍按当前来源要求配置。回归：`tests.test_task_generation_policy`。
+
 页面跳过已完成后端接口的规则在生成、编译和权限覆盖校验共用 `task_generation_policy.completed_backend_keys` 的精确合同/接口集合：`build_task_planner._authorization_coverage_errors` 不再要求已跳过接口的 Controller 交付物；`authorization_overlay.unit_authorization_slice` 与 `build_unit_compiler` 的模块来源及 Controller 依赖范围排除这些接口。页面/前端 API 的完整接口上下文、bootstrap 检查、未完成接口的职责覆盖及显式接口开发校验保持严格。全模块已完成时沿既有 `completed_backend_units` 允许无模块任务；任务切片只消费当前 DAG，不回填历史业务任务。回归场景补充至 `tests.test_task_generation_policy`，按用户约定不执行自动测试、构建或健康检查。
 
 返回欢迎页的提交提醒使用 `/version-control/run` 的 `inspect_pending_count` 动作，经 `services/version_control_pending.py` 复用仓库校验、Git status 与业务文件过滤，仅启动两条 Git 命令；协议以工作线程执行，结果为 `workspaceRoot/pendingCodeCount`，完整 AG-UI 生命周期及 health 能力同步发布。`hooks/useReturnWelcome.ts` 持有实时计数、确认框、同步锁与应用/页面身份，旧响应不能导航或弹框；顶部应用名和 Logo 共用 pending 状态及主题样式。`inspect_all`、提交指纹及其他调用维持完整快照语义。回归：`tests.test_version_control_pending`、`tests.test_version_control`、`pnpm test:uncommitted-changes`、`pnpm build`；Windows 打包后需对比实际返回耗时。

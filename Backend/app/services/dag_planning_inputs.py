@@ -79,7 +79,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         return _input_digest(value)
 
     def requirements(self) -> UnitGenerationRequirements:
-        """验证基线身份及 retained 全量覆盖，再调用 T2.3 计算本轮职责。"""
+        """验证正式基线及事实索引全量覆盖，再按当前骨架计算本轮职责。"""
 
         baseline = self.base_confirmed_plan
         graph = baseline.get("task_graph") if baseline is not None else None
@@ -104,8 +104,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         actual = [(key, unit) for unit, keys in self.reuse_facts.retained_task_ids_by_unit.items() for key in keys]
         if len(retained) != expected_retained_count or len(actual) != len(set(actual)) or set(retained) != set(actual):
             fail_requirement_input("PLANNING_REUSE_BASELINE_MISMATCH", "ReuseFacts 必须精确覆盖完整 ConfirmedPlan。")
-        if any(unit not in self.skeleton_plan.get("build_units", {}) for _, unit in retained):
-            fail_requirement_input("CONFIRMED_UNIT_MISSING", "所有历史 Task Unit 必须保留在当前骨架中。")
+        # 旧业务任务只参与基线身份核验，不要求其 Unit 进入当前正式骨架。
+        # 本轮必需 Unit 的存在性由 resolve_generation_requirements 单独严格校验。
         scope = self.build_context.get("scope")
         if scope is not None and scope != self.build_execution_scope:
             fail_requirement_input("PLANNING_SCOPE_MISMATCH", "BuildContext 与显式 BuildExecutionScope 不一致。")
@@ -145,7 +145,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                 fail_requirement_input("PLANNING_EMPTY_GENERATION_STRATEGY", "空职责的生成策略不能创建可调度 Unit。", unit_ids=(key,))
             # 只有配置检查任务可以传入保留摘要，业务任务每轮重新规划。
             retained = tuple(task_id for task_id in self.reuse_facts.retained_task_ids_by_unit.get(key, ())
-                             if key == "backend:bootstrap" and not (strategy in {"model", "deterministic"}
+                             if key == "backend:bootstrap" and strategy != "not_required"
+                             and not (strategy in {"model", "deterministic"}
                                      and not task_covers_current_input(registry[task_id], self.project_plan, self.build_context)))
             units[key] = UnitRunState.create(
                 unit_id=key, kind=self.skeleton_plan["build_units"][key]["kind"],

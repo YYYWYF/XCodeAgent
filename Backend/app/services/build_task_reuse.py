@@ -42,7 +42,7 @@ def _task_issue(task: Mapping, code: str, message: str, **details: Any) -> Valid
 
 
 def _baseline_tasks(
-    plan: Mapping[str, Any] | None, units: set[str], issues: list[ValidationIssue],
+    plan: Mapping[str, Any] | None, issues: list[ValidationIssue],
 ) -> list[Mapping]:
     """读取完整 confirmed registry；执行状态不参与，非法身份报错而非补齐或静默丢弃。"""
 
@@ -71,12 +71,7 @@ def _baseline_tasks(
                 tasks=[task_id] if _identity(task_id) else (),
             ))
             continue
-        unit_id = task["unit_id"]
-        if unit_id not in units:
-            issues.append(_issue(
-                "CONFIRMED_UNIT_MISSING", "正式任务所属 Unit 不在当前骨架中，不能静默删除历史任务。",
-                units=[unit_id], tasks=[task_id],
-            ))
+        # 完整登记基线身份用于一致性检查；旧 Unit 不必属于本轮正式骨架。
         tasks.append(task)
     return tasks
 
@@ -312,7 +307,7 @@ def resolve_reuse_facts(
     if not isinstance(skeleton_units, Mapping) or any(not _identity(key) for key in skeleton_units):
         raise ValueError("unit_skeleton 必须显式提供以精确 Unit ID 为键的 build_units。")
     unit_ids = set(skeleton_units)
-    tasks = _baseline_tasks(confirmed_plan, unit_ids, issues)
+    tasks = _baseline_tasks(confirmed_plan, issues)
     # 历史任务不会因当前 Scope 或 Unit 骨架的裁剪而消失；异常所属关系由 issues 阻断。
     all_unit_ids = unit_ids | {task["unit_id"] for task in tasks}
     retained: dict[str, list[str]] = {unit_id: [] for unit_id in sorted(all_unit_ids)}
