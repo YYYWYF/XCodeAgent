@@ -49,13 +49,15 @@ def current_backend_deliverables(
         if split_pending or endpoint in missing:
             continue
         kind = deliverable.get("kind")
+        unchanged = api_design_content(old[endpoint]) == api_design_content(current[endpoint])
         if kind == "backend.foundation" and finished:
             from app.services.backend_foundation_inputs import foundation_facts
 
             required = foundation_facts(current[endpoint])
-            unchanged = bool(required) and required <= foundation_facts(old[endpoint])
-        else:
-            unchanged = api_design_content(old[endpoint]) == api_design_content(current[endpoint])
+            # 可复用事实非空时才按能力覆盖比较；无配置键的外部来源仍须比较完整正式正文。
+            # 空事实不表示输入变化，不能让同一任务仅因执行完成而在下一阶段失效。
+            if required:
+                unchanged = required <= foundation_facts(old[endpoint])
         if kind == "backend.endpoint_controller":
             unchanged = unchanged and previous_permissions.get(endpoint) == current_permissions.get(endpoint)
         if unchanged and (endpoint not in http_old or http_now[endpoint] == http_old[endpoint]):
