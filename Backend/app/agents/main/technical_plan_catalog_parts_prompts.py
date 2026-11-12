@@ -37,7 +37,7 @@ def _prompt(stage: str, rules: str, context: dict, requirement: dict, repair: di
 
 
 def registry_prompt(requirement: dict, repair: dict | None) -> str:
-    """全应用只确定轻量身份与业务能力划分，不展开字段、接口及动作映射。"""
+    """全应用只确定轻量身份与按业务实体或聚合组织的分组，不展开字段、接口及动作映射。"""
 
     product = requirement["confirmed_product_plan"]
     context = {"app": product.get("app", {}), "business_flows": product.get("business_flows", []),
@@ -46,8 +46,12 @@ def registry_prompt(requirement: dict, repair: dict | None) -> str:
     if repair:
         context["previous_registry"] = catalog_registry(repair["catalog"])
     return _prompt("catalog_registry（全局身份）", "只返回 {entities:[{id,name,description}],"
-        "contracts:[{id,name,entity_ids,base_path,page_ids}]}。实体在全应用只定义一次；Contract 按业务能力划分，"
-        "可供多页共享，entity_ids/page_ids 非空。所有业务动作所在页面必须被相应 Contract 覆盖。"
+        "contracts:[{id,name,entity_ids,base_path,page_ids}]}。实体在全应用只定义一次；Contract 按业务实体或业务聚合划分，"
+        "先确定操作所属的业务主体，再把该主体的新增、列表查询、详情查询、修改、删除及其他业务操作归入同一 Contract。"
+        "例如新增商品和查询商品详情都属于“商品”分组，不要拆成“商品新增”和“商品查询”。"
+        "不能按操作类型、读写差异、页面或生成批次拆分同一主体；内容较多时由平台在同一 Contract 内分批生成。"
+        "分组名称体现业务主体；引用关联实体不改变操作主体，例如订单引用商品不代表订单与商品必须合为一组。"
+        "Contract 可供多页共享，page_ids 汇总该主体操作涉及的页面，entity_ids/page_ids 非空。所有业务动作所在页面必须被相应 Contract 覆盖。"
         "已确认的普通 business 动作不能改成 sequence 或新增步骤。页面刷新可复用多个现有读取能力，"
         "不要仅为刷新关联列表重复创建业务接口。"
         "不返回实体字段、接口或动作绑定。纯静态应用可以返回两个空数组。", context, requirement,
@@ -73,7 +77,8 @@ def endpoints_prompt(requirement: dict, identity: dict, entities: list, complete
     return _prompt("catalog_endpoints（单 Contract 接口目录）", "只返回 {endpoints:[{id,name,method,path,summary}]}。"
         "完整覆盖当前 Contract 的页面读取、business 动作及 sequence 的 business 步骤，接口可跨页复用。"
         "不返回 Schema、参数、Contract 身份或动作绑定。用户原始要求描述整个应用，不代表本次需要返回全应用接口。"
-        "本次只生成 contract 指定的业务能力，其他 Contract 由独立任务生成；不得把其他能力的接口一起输出。"
+        "本次只生成 contract 指定的业务实体或聚合的接口，完整覆盖该主体在所列页面中的读取与写入操作，不能只生成查询或新增一类操作。"
+        "其他业务主体的 Contract 由独立任务生成；不得把其他主体的接口一起输出。"
         "Endpoint 路径必须位于当前 base_path 的完整路径段范围内，不能占用其他 Contract 更具体的路径范围。"
         "Endpoint ID 全局唯一，推荐使用 ContractId.能力名；禁止使用其他 Contract 的 ID 命名空间。"
         "同一 method/path 只定义一次，不能重复创建已冻结接口。GET 只能读取，创建不能代替更新已有记录。"
