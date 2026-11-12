@@ -91,9 +91,10 @@ Restart the backend/app after changing the setting; rebuilding
 the frontend is unnecessary. Electron never reads or exposes the `.env` contents and has no separate
 Java update URL or build-time Java address injection.
 
-The Java response supplies the CDN **base URL**, not an installer URL. The client reads
-`latest.yml` on Windows or `latest-mac.yml` on macOS directly below that base, without adding
-version/platform directories. The manifest version must exactly match `latestAppVersion`.
+The Java response supplies the CDN URL for the target version directory. The client reads
+`latest.yml` on Windows or `latest-mac.yml` on macOS directly from that directory.
+The manifest version must exactly match `latestAppVersion`. A target can be higher or lower
+than the current version. The user confirms the switch after the download completes.
 Keep generated SHA-512, size and filenames intact. Windows uses NSIS EXE; macOS auto-update uses
 ZIP while DMG remains available for initial installation. The ZIP filenames must distinguish
 `arm64` and `x64`; when publishing both architectures, combine their `files` entries into the same
@@ -109,10 +110,10 @@ the pipeline's upload root and preserve the version directory in the CDN path.
 
 Local test setup (three terminals):
 
-1. In `Frontend`, run `pnpm mock:cdn`. It validates `dist/latest.yml` and/or
-   `dist/latest-mac.yml`, all referenced artifacts and SHA-512, then serves only their allowlisted
-   filenames and optional blockmaps at `http://127.0.0.1:18081/`. An optional directory argument is
-   supported: `pnpm mock:cdn /absolute/path/to/release`. Files are served in place, not copied or uploaded.
+1. Serve a local release root on `127.0.0.1:18081` with the update manifest and its referenced
+   files in a `1.0.1/` subdirectory. For example, run
+   `python3 -m http.server 18081 --bind 127.0.0.1 --directory /absolute/path/to/release-root`
+   with a root containing only release files.
 2. Start the Java JAR from `springboot-template` with its `application-local.yml` and an absolute
    `TEMPLATE_ENGINE_SOURCE_ROOT`. Local release settings are `latestAppVersion: "1.0.1"` and
    `appDownloadUrl: "http://127.0.0.1:18081/"`. HTTP and HTTPS base URLs are supported.

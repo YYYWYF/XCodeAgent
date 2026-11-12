@@ -24,10 +24,10 @@ export function createUpdaterDriver(baseUrl: string): UpdateDriver {
     baseUrl,
     app.isPackaged ? undefined : path.join(app.getAppPath(), 'dev-app-update.yml')
   )
-  // Java 统一决定预发布版资格，始终从同一发布清单读取，设置 channel 后再次禁止降级。
+  // Java 决定目标版本；固定清单名称，并允许安装低于当前版本的目标包。
   updater.channel = 'latest'
   updater.allowPrerelease = updater.currentVersion.prerelease.length > 0
-  updater.allowDowngrade = false
+  updater.allowDowngrade = true
   const cancellation = new CancellationToken()
   let disposed = false
   let progressListener: ((progress: ProgressInfo) => void) | undefined

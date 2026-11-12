@@ -18,6 +18,7 @@ class InspectableUpdater extends electronUpdater.NsisUpdater {
 
 test('SDK 开发配置路径重置后，仍从 Java 返回的 CDN 读取清单和安装包', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'app-update-feed-'))
+  const targetDirectory = 'http://java-cdn.example/releases/1.0.1/'
   try {
     const config = path.join(directory, 'dev-app-update.yml')
     await fs.writeFile(
@@ -53,12 +54,12 @@ test('SDK 开发配置路径重置后，仍从 Java 返回的 CDN 读取清单�
         }
       }
     })
-    configureUpdateFeed(updater, 'http://java-cdn.example/releases/', config)
+    configureUpdateFeed(updater, targetDirectory, config)
     const files = await updater.resolvedFiles()
     assert.equal(requested.length, 1)
     assert.equal(new URL(requested[0]).origin, 'http://java-cdn.example')
-    assert.ok(new URL(requested[0]).pathname.startsWith('/releases/latest'))
-    assert.deepEqual(files, ['http://java-cdn.example/releases/app-setup.exe'])
+    assert.ok(new URL(requested[0]).pathname.startsWith('/releases/1.0.1/latest'))
+    assert.deepEqual(files, [new URL('app-setup.exe', targetDirectory).href])
   } finally {
     await fs.rm(directory, { force: true, recursive: true })
   }
