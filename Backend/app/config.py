@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from app.model_connection_config import load_transmit_settings, validate_model_transport
 from app.environment import load_backend_environment
 
-
 load_backend_environment()
 
 _DISPLAY_MODEL_SUFFIX = re.compile(r"\s+\[[^\]]+\]\s*$")
@@ -86,6 +85,8 @@ class Settings:
     template_reconcile_enabled: bool = True
     # SaaS 注册只在启用模拟数据库时使用，服务密钥不进入工作区或前端配置。
     managed_database_base_url: str = "http://127.0.0.1:18081"
+    # 内网明文 HTTP 域名白名单（逗号分隔）；不在白名单内的远程服务仍必须使用 HTTPS。
+    managed_database_http_allowed_hosts: str = ""
     managed_database_service_key: str = field(default="", repr=False)
     managed_database_timeout_seconds: float = 15.0
     git_username: str = ""
@@ -154,33 +155,37 @@ class Settings:
         transport = validate_model_transport(os.getenv("MODEL_TRANSPORT", "direct"))
         direct = transport == "direct"
         base_url = _required_any("MODEL_BASE_URL", "OPENAI_BASE_URL") if direct else ""
-        model_provider = (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai") if direct else "openai"
+        model_provider = (
+            (os.getenv("MODEL_PROVIDER", "").strip().lower() or "openai")
+            if direct
+            else "openai"
+        )
         if model_provider == "openai-compatible":
             model_provider = "openai"
         if model_provider not in ("openai", "anthropic"):
-            raise RuntimeError(
-                "Only MODEL_PROVIDER=openai or anthropic is supported."
-            )
+            raise RuntimeError("Only MODEL_PROVIDER=openai or anthropic is supported.")
         custom_headers_raw = os.getenv("MODEL_CUSTOM_HEADERS", "")
         custom_headers = _parse_custom_headers(custom_headers_raw)
         return cls(
             model_transport=transport,
             **load_transmit_settings(transport),
             model_base_url=base_url,
-            model_api_key=_required_any("MODEL_API_KEY", "OPENAI_API_KEY") if direct else "",
-            model_name=_required_any("MODEL_NAME", "OPENAI_MODEL") if direct else "studio-model",
+            model_api_key=(
+                _required_any("MODEL_API_KEY", "OPENAI_API_KEY") if direct else ""
+            ),
+            model_name=(
+                _required_any("MODEL_NAME", "OPENAI_MODEL")
+                if direct
+                else "studio-model"
+            ),
             model_provider=model_provider,
             model_trust_env=_env_bool("MODEL_TRUST_ENV", default=False),
             model_output_log_enabled=_env_bool(
                 "MODEL_OUTPUT_LOG_ENABLED", default=False
             ),
-            model_timeout_seconds=float(
-                os.getenv("MODEL_TIMEOUT_SECONDS", "120.0")
-            ),
+            model_timeout_seconds=float(os.getenv("MODEL_TIMEOUT_SECONDS", "120.0")),
             model_max_retries=int(os.getenv("MODEL_MAX_RETRIES", "2")),
-            anthropic_api_version=os.getenv(
-                "ANTHROPIC_API_VERSION", "2023-06-01"
-            ),
+            anthropic_api_version=os.getenv("ANTHROPIC_API_VERSION", "2023-06-01"),
             model_custom_headers=custom_headers,
             model_opencode_go_headers_enabled=_env_bool(
                 "MODEL_OPENCODE_GO_HEADERS_ENABLED", default=False
@@ -239,7 +244,9 @@ class Settings:
                 "DEVAGENTSTUDIO_TEMPLATE_ENGINE_BASE_URL", ""
             ).rstrip("/"),
             template_engine_connect_timeout_seconds=float(
-                os.getenv("DEVAGENTSTUDIO_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10")
+                os.getenv(
+                    "DEVAGENTSTUDIO_TEMPLATE_ENGINE_CONNECT_TIMEOUT_SECONDS", "10"
+                )
             ),
             template_engine_read_timeout_seconds=float(
                 os.getenv("DEVAGENTSTUDIO_TEMPLATE_ENGINE_READ_TIMEOUT_SECONDS", "120")
@@ -261,14 +268,23 @@ class Settings:
             managed_database_base_url=os.getenv(
                 "DEVAGENTSTUDIO_MANAGED_DATABASE_BASE_URL", "http://127.0.0.1:18081"
             ).rstrip("/"),
+            managed_database_http_allowed_hosts=os.getenv(
+                "DEVAGENTSTUDIO_MANAGED_DATABASE_HTTP_ALLOWED_HOSTS", ""
+            ),
             managed_database_service_key=os.getenv("MANAGED_DATABASE_SERVICE_KEY", ""),
             managed_database_timeout_seconds=_env_float(
-                "DEVAGENTSTUDIO_MANAGED_DATABASE_TIMEOUT_SECONDS", default=15.0, minimum=0.1
+                "DEVAGENTSTUDIO_MANAGED_DATABASE_TIMEOUT_SECONDS",
+                default=15.0,
+                minimum=0.1,
             ),
             git_username=os.getenv("DEVAGENTSTUDIO_GIT_USERNAME", ""),
             git_token=os.getenv("DEVAGENTSTUDIO_GIT_TOKEN", ""),
-            deployment_platform=os.getenv("DEVAGENTSTUDIO_PLATFORM", "").strip().lower(),
-            npm_registry=os.getenv("DEVAGENTSTUDIO_NPM_REGISTRY", "").strip().rstrip("/"),
+            deployment_platform=os.getenv("DEVAGENTSTUDIO_PLATFORM", "")
+            .strip()
+            .lower(),
+            npm_registry=os.getenv("DEVAGENTSTUDIO_NPM_REGISTRY", "")
+            .strip()
+            .rstrip("/"),
         )
 
 

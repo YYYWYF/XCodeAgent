@@ -32,7 +32,7 @@
 export const LOGIN_AUTHORIZATION_DEFAULTS = {
   centerUri: 'http://one-account-gateway.paasuat.cmbchina.cn/auth-server',
   authorizeUri: 'https://one-account-gateway.paasuat.cmbchina.cn/auth-server/auth',
-  redirectUri: 'http://localhost',
+  redirectUri: 'http://localhost/login',
   endUrl: 'https://one-account-gateway.paasuat.cmbchina.cn/auth-server/endsession',
   logoutShareJs: 'https://one-account-gateway.paasuat.cmbchina.cn/logout-share/js/logoutShare.js',
   baseUrl: 'http://one-account-gateway.paasuat.cmbchina.cn/api-server',

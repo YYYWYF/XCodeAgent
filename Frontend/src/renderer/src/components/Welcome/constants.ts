@@ -27,7 +27,7 @@ export const defaultRepoUrl = 'https://github.com/ruyue1/user-application'
 export const LOGIN_AUTHORIZATION_DEFAULTS = {
   centerUri: 'http://one-account-gateway.paasuat.cmbchina.cn/auth-server',
   authorizeUri: 'https://one-account-gateway.paasuat.cmbchina.cn/auth-server/auth',
-  redirectUri: 'http://localhost',
+  redirectUri: 'http://localhost/login',
   endUrl: 'https://one-account-gateway.paasuat.cmbchina.cn/auth-server/endsession',
   logoutShareJs: 'https://one-account-gateway.paasuat.cmbchina.cn/logout-share/js/logoutShare.js',
   baseUrl: 'http://one-account-gateway.paasuat.cmbchina.cn/api-server',
@@ -53,15 +53,25 @@ export const initialApplicationDraft: ApplicationDraft = {
   envText: '',
   auth: {
     enable: false,
-    yht: { clientId: '', privateKey: '', publicKey: '', centerPublicKey: '',
-      centerUri: LOGIN_AUTHORIZATION_DEFAULTS.centerUri, authorizeUri: LOGIN_AUTHORIZATION_DEFAULTS.authorizeUri,
-      redirectUri: LOGIN_AUTHORIZATION_DEFAULTS.redirectUri, endUrl: LOGIN_AUTHORIZATION_DEFAULTS.endUrl,
-      logoutShareJs: LOGIN_AUTHORIZATION_DEFAULTS.logoutShareJs }
+    yht: {
+      clientId: '',
+      privateKey: '',
+      publicKey: '',
+      centerPublicKey: '',
+      centerUri: LOGIN_AUTHORIZATION_DEFAULTS.centerUri,
+      authorizeUri: LOGIN_AUTHORIZATION_DEFAULTS.authorizeUri,
+      redirectUri: LOGIN_AUTHORIZATION_DEFAULTS.redirectUri,
+      endUrl: LOGIN_AUTHORIZATION_DEFAULTS.endUrl,
+      logoutShareJs: LOGIN_AUTHORIZATION_DEFAULTS.logoutShareJs
+    }
   },
   authorization: {
     enabled: false,
     initialAdministratorSubjects: [],
-    api: { baseUrl: LOGIN_AUTHORIZATION_DEFAULTS.baseUrl, viewId: LOGIN_AUTHORIZATION_DEFAULTS.viewId }
+    api: {
+      baseUrl: LOGIN_AUTHORIZATION_DEFAULTS.baseUrl,
+      viewId: LOGIN_AUTHORIZATION_DEFAULTS.viewId
+    }
   },
   track: { enable: false, uploadId: '', apiHost: '', method: 'post' },
   apiTrack: { enable: false, businessId: '', traceBaggage: '', apiTrackHost: '' },

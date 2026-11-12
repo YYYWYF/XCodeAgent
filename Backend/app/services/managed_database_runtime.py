@@ -17,9 +17,10 @@ from app.config import Settings
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.entity_tables import EntityTableRequest, TableReadiness
 from app.domain.managed_database import ManagedDatabaseRegistration
+from app.services.internal_service_tls import build_internal_service_ssl_context
 from app.services.application_config.repository import ApplicationConfigRepository
 from app.services.database_credentials import DatabaseCredentialError, load_application_json
-from app.services.managed_database_client import ManagedDatabaseClient
+from app.services.managed_database_client import ManagedDatabaseClient, unwrap_bee_envelope
 from app.services.managed_database_readiness import database_check_report
 from app.workspace.endpoint_design_documents import technical_plan_path
 
@@ -70,11 +71,13 @@ class ManagedRuntimeClient(ManagedDatabaseClient):
 
         try:
             with httpx.Client(transport=self._transport, timeout=self._timeout,
-                              follow_redirects=False, trust_env=False) as client:
+                              follow_redirects=False, trust_env=False,
+                              verify=build_internal_service_ssl_context()) as client:
                 response = client.request(
                     "POST" if sqls is not None else "GET", f"{self._url}/{datasource_key}/{path}",
                     json={"sqls": list(sqls)} if sqls is not None else None,
-                    headers={"Authorization": f"Bearer {self._key}", "Accept": "application/json"},
+                    headers={**{"Authorization": f"Bearer {self._key}", "Accept": "application/json"},
+                               **self._actor_headers()},
                 )
         except httpx.RequestError:
             raise ManagedDatabaseStartupError("无法连接内置数据库资源服务，请确认 SaaS 运行状态后重新启动。") from None
@@ -96,7 +99,7 @@ class ManagedRuntimeClient(ManagedDatabaseClient):
                 message = "内置数据库资源暂不可用，请检查 SaaS 挂载配置后重新启动。"
             raise ManagedDatabaseStartupError(message)
         try:
-            return response.json()
+            return unwrap_bee_envelope(response.json())
         except ValueError:
             raise ManagedDatabaseStartupError("SaaS 返回的数据库资源结果无效，请核对服务后重新启动。") from None
 

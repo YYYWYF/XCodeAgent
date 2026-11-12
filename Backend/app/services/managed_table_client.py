@@ -7,7 +7,12 @@ from typing import Any
 
 import httpx
 
-from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseRegistrationError
+from app.services.internal_service_tls import build_internal_service_ssl_context
+from app.services.managed_database_client import (
+    ManagedDatabaseClient,
+    ManagedDatabaseRegistrationError,
+    unwrap_bee_envelope,
+)
 
 
 class ManagedTableQueryTransientError(ManagedDatabaseRegistrationError):
@@ -72,10 +77,12 @@ class ManagedTableClient(ManagedDatabaseClient):
         url = f"{self._url}/{datasource_key}/{path}"
         try:
             with httpx.Client(transport=self._transport, timeout=self._timeout,
-                              follow_redirects=False, trust_env=False) as client:
+                              follow_redirects=False, trust_env=False,
+                              verify=build_internal_service_ssl_context()) as client:
                 response = client.request(
                     "GET" if body is None else "POST", url, json=body,
-                    headers={"Authorization": f"Bearer {self._key}", "Accept": "application/json"},
+                    headers={**{"Authorization": f"Bearer {self._key}", "Accept": "application/json"},
+                               **self._actor_headers()},
                 )
         except httpx.RequestError:
             if managed_task and (body is None or path == "tables/check"):
@@ -84,10 +91,11 @@ class ManagedTableClient(ManagedDatabaseClient):
                 "SaaS 请求未取得确认结果。若已提交执行，请刷新原操作记录，不要重复提交。",
                 uncertain=body is not None,
             ) from None
-        check_task_inputs()
-        expected = 202 if path in {"table-operations", "table-operations/batch"} and body is not None else 200
+        # Bee 框架 @BeeResponseBody 统一返回 HTTP 200，@ResponseStatus 设置的状态码不生效。
+        if response.status_code != 200:
+            raise _response_error(response, creating=path == "table-operations" and body is not None and body.get("mode") == "CREATE")
         try:
-            payload = response.json()
+            return unwrap_bee_envelope(response.json())
         except ValueError:
             payload = None
         # SaaS 的 JSON 接口统一包装结果；业务模型仍由各调用方校验。
