@@ -92,6 +92,9 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise ValueError(f"阶段产物不是有效对象：{path.name}")
         fields[key] = value
+        # 标记该字段是"磁盘自动加载"而非"本轮 LLM 生成"——requirements 节点据此
+        # 识别"上一轮 confirmed 旧产物"，避免误走"已确认直接复用"分支跳过 LLM。
+        fields[f"{key}_loaded_from_disk"] = exists
         fields[f"{key}_json_path"] = str(path) if key in required else ""
         fields[f"{key}_path"] = str(path.with_suffix(".md")) if key in required else ""
     # ProjectPlan 是当前正式 TechnicalPlan 的运行时投影，不是另一份历史资产。

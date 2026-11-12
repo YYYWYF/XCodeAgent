@@ -53,13 +53,19 @@ class StartIterationResult(BaseModel):
 
 # 发起新迭代时清空的 .devagentstudio 子目录（如果存在）。
 # 只登记**平台自己产生**的规划/运行态目录；未列名的一律保留。
+#
+# `specs/` 刻意不在清单里：里面的 `requirement-spec.json` 与 `product-plan.json` 是上一轮
+# 已确认的产物。新一轮需求收集会把它读出来作为 LLM 的 existing_spec 输入做增量合并
+# （见 `graph/nodes/requirements.py` 的种子加载分支），删掉它LLM 就只能从零推导，
+# 会让上一轮没确认的页面在新迭代里被丢失。
 _CLEARABLE_DIRS = {
-    "specs",
     "plans",
     "drafts",
     "cache",
     "checkpoints",
-    "datasource",
+    # datasource/ 刻意不在清单里：里面的实体字段映射是用户在数据源配置阶段手工
+    # 建立的"实体字段 ↔ 接口字段"对应关系，跨迭代有事实价值。清空它会让新一轮
+    # 开发阶段要求用户重新配置一次同样的映射 —— 这是重复劳动。
     "ui-design",
     # 预览运行态（PID、日志、preview-runtime.json）：瞬时数据，随迭代作废。
     "runtime",

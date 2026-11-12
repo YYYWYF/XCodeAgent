@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.git_branch import GitBranchError, validate_branch_name
 from app.services.git_credentials import git_env, git_failure_detail
+from app.services.preview_runtime_state import redact
 from app.services.version_publish import build_authenticated_remote_url
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -413,13 +414,20 @@ def push_workspace_branch(
 def _branch_result(
     branch_name: str, status: str, commit_sha: str, message: str
 ) -> dict[str, Any]:
-    """构造统一的远端分支动作结果。"""
+    """构造统一的远端分支动作结果。
+
+    message 会持久化到 application.json 并随提交进入 git 历史，所以必须脱敏：
+    env 模式下 push 命令的 URL 包含 user:token，整段塞进 message 就会让 token
+    跟着进入下一次 push（GitHub Push Protection 会扫到并拒绝，更糟的是 token 永久
+    进入远端仓库历史）。这里调 preview_runtime_state.redact 把 `://user:pass@` 形式
+    的凭证统一改成 `[REDACTED]`，保留主机与路径便于排查。
+    """
 
     return {
         "branchName": branch_name,
         "status": status,
         "commitSha": commit_sha,
-        "message": message,
+        "message": redact(message),
     }
 
 

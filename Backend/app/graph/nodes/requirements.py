@@ -36,10 +36,12 @@ from app.tools.ask_user import (
 from app.workspace.spec_documents import (
     confirmed_requirement_spec_json_path,
     edited_requirement_spec_markdown,
+    load_requirement_spec_json,
     requirement_spec_draft_json_path,
     requirement_spec_draft_markdown_path,
     requirement_spec_markdown_path,
     synchronize_requirement_spec_markdown_datasource_types,
+    workflow_artifact_root,
     workspace_root,
     write_confirmed_requirement_spec_document,
     write_requirement_spec_draft_document,
@@ -187,6 +189,37 @@ def requirements(state: ProjectState) -> dict:
         existing_spec = apply_authoritative_datasource_type(
             existing_spec, datasource_type
         )
+    # 跨迭代参考：新迭代 state.requirement_spec 为空（checkpoints 已清），但上一轮
+    # `specs/requirement-spec.json` 被保留下来作为参考。这里**单独**加载一份用于 LLM 调用，
+    # 不污染 state 也不影响下方"已确认直接复用"分支 —— 上一轮 spec 的
+    # confirmation_status 是 confirmed，直接覆盖 existing_spec 会让本节点跳过 LLM。
+    #
+    # 这条种子只告诉 LLM "上一轮做了这些页面"，由它在新一轮输出里保留未删除的部分；
+    # 新一轮自己的 spec 由 LLM 重新产出，走完整的 pending → confirmed 生命周期。
+    llm_reference_spec = existing_spec
+    if not isinstance(llm_reference_spec, dict) or not llm_reference_spec.get("pages"):
+        try:
+            seed_path = workflow_artifact_root(state) / "specs" / "requirement-spec.json"
+            loaded = load_requirement_spec_json(seed_path)
+            if isinstance(loaded, dict) and loaded.get("pages"):
+                llm_reference_spec = loaded
+        except (OSError, ValueError):
+            # 文件读不出来（首轮新建 / 文件被外部破坏）就保持原值，
+            # 让流程走"从零创建"分支，不要因为磁盘噪音把节点卡死。
+            pass
+    # LLM 提示词里的 followup_policy 分支只在 confirmation_status=='pending_user_input'
+    # 时生效 —— 那时 LLM 才被指示"用户的澄清回答是确认，必须合并"。上一轮保留的 spec
+    # 是 confirmed，如果直接传给 LLM，它的提示词会缺少"用户已确认"信号，可能把
+    # 用户的澄清回答（如"新增独立页面"）当成普通描述处理，从而漏掉新加的页面。
+    #
+    # 这里**只在 LLM 调用入参上**把 confirmation_status 改成 pending_user_input，
+    # 让提示词走"用户已确认，必须合并"分支；不改磁盘文件，不影响 state 也不影响
+    # 下游对 spec 正式状态的判定。
+    if isinstance(llm_reference_spec, dict):
+        llm_reference_spec = {
+            **llm_reference_spec,
+            "confirmation_status": "pending_user_input",
+        }
     interaction = _application_planning_interaction(state)
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _request_for_requirement_node(state, interaction)
@@ -211,6 +244,16 @@ def requirements(state: ProjectState) -> dict:
             not _has_application_planning_revision_context(state)
             and (not interaction or interaction.get("action") == "confirm")
         )
+        # 跨迭代继承防护：ArtifactStateGraph 会把磁盘上的旧 spec 自动加载进新迭代的
+        # state（连同 confirmation_status='confirmed'）。新一轮 LangGraph checkpoint
+        # 是空的，但 state.requirement_spec 已被自动加载成上一轮 confirmed 产物 ——
+        # 那时如果直接复用，就会跳过 LLM 调用，用户输入的新需求就被忽略。
+        #
+        # 真正的"用户已确认新一轮 spec"复用路径必然走过 LLM 生成 → 用户点确认 →
+        # requirements 节点把它写进 state（此时没有 loaded_from_disk 标记）。
+        # 磁盘自动加载的旧产物会被 load_stage_artifacts 打上 loaded_from_disk 标记，
+        # 必须强制走 LLM（用 llm_reference_spec 作参考）。
+        and not state.get("requirement_spec_loaded_from_disk")
     ):
         # 已确认需求且没有新的结构化交互或修订游标时直接复用 checkpoint，禁止再次调用 LLM。
         return _confirmed_requirement_spec_update(state, existing_spec)
@@ -262,7 +305,7 @@ def requirements(state: ProjectState) -> dict:
     )
     analysis = analyze_requirements_with_chat_model(
         analysis_request,
-        existing_spec=existing_spec,
+        existing_spec=llm_reference_spec,
         datasource_type=datasource_type,
         clarification_round=clarification_round,
         on_token=_llm_token_callback,
