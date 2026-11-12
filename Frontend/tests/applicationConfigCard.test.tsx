@@ -13,8 +13,10 @@ import {
   type ConfigPrerequisite
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ApplicationConfigPrerequisiteCard'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import ApplicationConfigPrerequisiteCard from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/ApplicationConfigPrerequisiteCard'
 import { applyConfigChanges, configChangesDigest } from '../src/renderer/src/service/applicationConfigOperation'
+import { runConfigPrerequisiteAction, type ConfigPrerequisiteAction } from '../src/renderer/src/service/applicationConfigContinuation'
 
 /** 构造与聊天卡一致的已生成应用配置。 */
 function application(): ApplicationConfig {
@@ -233,7 +235,7 @@ for (const section of ['auth', 'authorization'] as const) {
     test(`配置卡拒绝非法 ${section} 根并保持错误可见：${String(invalid)}`, () => {
       const current = application()
       Object.assign(current, { [section]: invalid })
-      const html = renderToStaticMarkup(<ApplicationConfigPrerequisiteCard application={current} pending={{}} onCancel={() => {}} onSubmit={async () => {}} />)
+      const html = renderToStaticMarkup(<ApplicationConfigPrerequisiteCard application={current} pending={{}} />)
       assert.match(html, /配置无法读取/)
       assert.match(html, new RegExp(section))
     })
@@ -266,4 +268,81 @@ test('重复刷新与新增字段初始化保留已编辑值', () => {
   initializeConversationFields(form, current, ['auth.enable', 'auth.yht.privateKey', 'auth.yht.clientId'], initialized)
   assert.equal(store.get('auth.enable'), false)
   assert.equal(store.get('auth.yht.privateKey'), 'typed-secret')
+})
+
+test('失败的配置卡只有一个恢复按钮，续跑失败后重挂载只显示继续原请求', async () => {
+  const originalWindow = globalThis.window, originalFetch = globalThis.fetch
+  // 图标只需要插入样式；卡片交互仍由 React 和 Ant Design 执行。
+  const children = new Set<unknown>()
+  const head = {
+    get children() { return [...children] },
+    insertBefore: (node: { parentNode?: object }) => { node.parentNode = head; children.add(node) },
+    removeChild: (node: unknown) => { children.delete(node) }
+  }
+  const document = {
+    querySelector: () => head,
+    contains: (node: unknown) => node === head,
+    createElement: () => {
+      const attributes = new Map<string, string>()
+      return { tagName: 'STYLE', setAttribute: (key: string, value: string) => attributes.set(key, value),
+        getAttribute: (key: string) => attributes.get(key) ?? null }
+    }
+  }
+  const constructors = { HTMLElement: class {}, SVGElement: class {}, ShadowRoot: class {}, document }
+  const installed = Object.entries(constructors).filter(([name]) => !(name in globalThis))
+  for (const [name, constructor] of installed) Object.defineProperty(globalThis, name, { configurable: true, value: constructor })
+  const current = application()
+  const workspace = current.workspaceRoot, requestId = 'request-0001', operationId = 'operation-0001'
+  const storage = memoryStorage()
+  storage.setItem(`application-config-operation:${workspace}`, JSON.stringify({
+    version: 1, operationId, requestId, expectedConfigRevision: 1, digest: await configChangesDigest({ 'auth.enable': true })
+  }))
+  const actions: string[] = []
+  const submitted: ConfigPrerequisiteAction[] = []
+  let root: ReactTestRenderer | undefined
+  Object.assign(globalThis, {
+    window: { document, localStorage: storage, dispatchEvent: () => true, setTimeout, clearTimeout, devAgentStudio: {
+      agentBaseUrl: 'https://config.test', workspace: { readApplication: async () => ({ application: current }) }
+    } },
+    fetch: async (_url: string, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body)).forwardedProps.applicationConfig
+      actions.push(input.action)
+      return configOperationResponse({ operationId, requestId, status: input.action === 'get' ? 'FAILED' : 'APPLIED' })
+    }
+  })
+  /** 通过真实卡片动作进入与会话 hook 共用的配置编排。 */
+  const onAction = async (input: ConfigPrerequisiteAction): Promise<void> => {
+    submitted.push(input)
+    await runConfigPrerequisiteAction(workspace, requestId, 1, input, async () => {
+      if (submitted.length === 1) throw new Error('配置已完成，但继续原请求失败。')
+      return true
+    })
+  }
+  const pending = { requestId, configPrerequisites: [{ path: 'auth.enable', desiredValue: false, source: 'inferred' }] }
+  /** 只查找用户可点击的实际主按钮。 */
+  const primary = () => root!.root.findAllByType('button').filter((button) => /ant-btn-primary/.test(button.props.className))
+  try {
+    await act(async () => { root = create(<ApplicationConfigPrerequisiteCard application={current} pending={pending} onAction={onAction} />) })
+    assert.equal(primary().length, 1)
+    assert.match(JSON.stringify(root!.toJSON()), /继续完成配置并执行/)
+    assert.doesNotMatch(JSON.stringify(root!.toJSON()), /确认配置并继续|我确认启用上述推断/)
+    assert.equal(primary()[0].props.disabled, false)
+    await act(async () => { primary()[0].props.onClick() })
+    assert.match(JSON.stringify(root!.toJSON()), /配置已完成，但继续原请求失败/)
+    assert.match(JSON.stringify(root!.toJSON()), /继续原请求/)
+    await act(async () => { root!.unmount() })
+    await act(async () => { root = create(<ApplicationConfigPrerequisiteCard application={current} pending={pending} onAction={onAction} />) })
+    assert.equal(primary().length, 1)
+    assert.doesNotMatch(JSON.stringify(root!.toJSON()), /继续完成配置并执行|确认配置并继续/)
+    await act(async () => { primary()[0].props.onClick() })
+    assert.deepEqual(submitted, [{ action: 'resume' }, { action: 'continue' }])
+    assert.deepEqual(actions, ['get', 'resume'])
+    await act(async () => { root!.update(<ApplicationConfigPrerequisiteCard application={current} pending={pending} result="confirmed" onAction={onAction} />) })
+    assert.equal(primary().length, 0)
+    assert.match(JSON.stringify(root!.toJSON()), /配置已完成，已继续处理原请求/)
+  } finally {
+    await act(async () => { root?.unmount() })
+    Object.assign(globalThis, { window: originalWindow, fetch: originalFetch })
+    for (const [name] of installed) Reflect.deleteProperty(globalThis, name)
+  }
 })

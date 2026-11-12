@@ -30,7 +30,11 @@ import { mergeWorkbenchResult } from '../workbenchResultRecovery'
 import type { WorkflowRevisionContinuationHandoff } from '../../../service/applicationPagePlanning'
 import type { ProcessStepRecord, ToolCallRecord } from '../../../service/agUiAgent'
 import { isAuthenticationFailure } from '../../../service/authentication'
-import { applyConfigChanges, resumePendingConfigOperation, type ConfigChanges } from '../../../service/applicationConfigOperation'
+import type { ConfigChanges } from '../../../service/applicationConfigOperation'
+import {
+  configCheckpointStatus, configDecisionAccepted, runConfigPrerequisiteAction, settleConfigContinuation,
+  type ConfigPrerequisiteAction
+} from '../../../service/applicationConfigContinuation'
 import { configOperationEffectMessages } from '../../SettingsPage/settingsConfigChanges'
 import {
   beginConnectionRequest,
@@ -1085,7 +1089,18 @@ export function useWorkflowConversation({
       setConnectionState((current) => completeConnectionRequest(current, requestGeneration))
       if (resultSession && !runFinalizationRef.current[sessionKey]) {
         const currentMessages = getSessionMessages(sessionKey)
-        const restored = mergeWorkbenchResult(currentMessages, lifecycle, resultSession)
+        const projected = mergeWorkbenchResult(currentMessages, lifecycle, resultSession)
+        const settledConfig = settleConfigContinuation(application.workspaceRoot, resultSession.threadId, serverWorkflow)
+        let restored = projected
+        if (settledConfig) {
+          restored = projected.map((item) => {
+            if (!item.workflow || item.workflow.threadId !== resultSession.threadId ||
+              item.workflowCardResult === settledConfig.result ||
+              configPrerequisiteRequestId(item.workflow) !== settledConfig.requestId) return item
+            return { ...item, workflowCardResult: settledConfig.result }
+          })
+          if (restored.every((item, index) => item === projected[index])) restored = projected
+        }
         if (restored !== currentMessages) {
           setSessionMessages(sessionKey, restored)
           await persistSession({ editorMode: resultSession.editorMode, messages: restored,
@@ -1226,6 +1241,12 @@ export function useWorkflowConversation({
       recoveryRetryRequestRef.current = false
       setRecoveringSourceRunId(undefined)
     }
+  }
+
+  /** 配置续跑用原会话的持久 checkpoint 核对接收结果。 */
+  const readConfigCheckpoint = async (identity: SessionIdentity): Promise<WorkflowRunPayload | undefined> => {
+    const lifecycle = await getApplicationLifecycle(application, undefined, { ...identity, fresh: true })
+    return readWorkflowPayload(lifecycle.extensions.sessionWorkflow)
   }
 
   /** 发送并持久化 Workflow 对话，认证失败时恢复发送前的界面状态。 */
@@ -1482,6 +1503,16 @@ export function useWorkflowConversation({
     let backendRequestStarted = false
     let backendRunSettled = false
     let executionFinalized = false
+    let acceptedConfigCheckpoint: WorkflowRunPayload | undefined
+    const configDecision = options?.conversationConfigDecision
+    const configRequestId = options?.conversationConfigRequestId
+    /** AG-UI 传输结束或断开时只采信当前线程已持久化的接收状态。 */
+    const checkConfigReceipt = async (): Promise<WorkflowRunPayload | undefined> => {
+      if (!configDecision || !configRequestId) return undefined
+      const checkpoint = await readConfigCheckpoint(identity).catch(() => undefined)
+      return configDecisionAccepted(configCheckpointStatus(checkpoint, executionThreadId, configRequestId), configDecision)
+        ? checkpoint : undefined
+    }
     /** 收口本地运行态；不修改 Backend Pending，避免以 UI 状态猜测生命周期。 */
     const finalizeSessionExecution = (): void => {
       if (executionFinalized) return
@@ -1560,13 +1591,16 @@ export function useWorkflowConversation({
       resolve: resolveFinalization
     }
     try {
-      await persistSession({
-        editorMode: identity.editorMode,
-        messages: nextMessages,
-        sessionId: identity.sessionId,
-        threadId: identity.threadId,
-        titleFrom: options?.titleFrom || trimmedMessage
-      })
+      // 配置决策提交前已有原卡和续跑身份。接收前只在内存展示乐观消息，避免刷新把原卡判成历史卡。
+      if (!configDecision) {
+        await persistSession({
+          editorMode: identity.editorMode,
+          messages: nextMessages,
+          sessionId: identity.sessionId,
+          threadId: identity.threadId,
+          titleFrom: options?.titleFrom || trimmedMessage
+        })
+      }
       updateSessionExecutionStatus(identity.key, 'running')
       setRunStates((current) => ({
         ...current,
@@ -1663,13 +1697,17 @@ export function useWorkflowConversation({
         return false
       }
       backendRunSettled = true
+      if (configDecision) {
+        acceptedConfigCheckpoint = await checkConfigReceipt()
+        if (!acceptedConfigCheckpoint) throw new Error('未能确认服务端已接收原请求。')
+      }
       setConnectionState((current) =>
         completeConnectionRequest(current, connectionRequestGeneration)
       )
       const stopRequested = Boolean(stopRequestedRef.current[identity.key])
       const finalWorkflow = stopRequested
         ? withWorkflowExecutionStatus(workflow ?? streamedWorkflow, 'stopped')
-        : (workflow ?? streamedWorkflow)
+        : (workflow ?? streamedWorkflow ?? acceptedConfigCheckpoint)
       // 最终确认门胜出时连同正文一起保留，不能再把正常结果写成“已停止生成”。
       const stopped = stopRequested && (!finalWorkflow || finalWorkflow.summary.status === 'stopped')
       const answer = stopped ? stoppedAnswer(streamedContent || rawAnswer) : rawAnswer.trim()
@@ -1774,7 +1812,7 @@ export function useWorkflowConversation({
         return false
       }
       // 结束任务会先取消原流并等待其收口；此处只归档断流消息，最终 End 回执决定占用释放。
-      if (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError)) {
+      if (!configDecision && (stopRequestedRef.current[identity.key] || isAbortedStreamError(caughtError))) {
         const answer = stoppedAnswer(streamedContent)
         const stoppedWorkflow = withWorkflowExecutionStatus(streamedWorkflow, 'stopped')
         const completedMessages = updateAssistantMessage(
@@ -1800,7 +1838,22 @@ export function useWorkflowConversation({
         return false
       }
       const runError = caughtError instanceof AgUiRunError ? caughtError : undefined
-      const failedWorkflow = runError?.workflow ?? streamedWorkflow
+      if (configDecision) {
+        acceptedConfigCheckpoint ??= await checkConfigReceipt()
+        if (!acceptedConfigCheckpoint) {
+          // 撤销未被接收的乐观消息，保留原确认卡的可操作位置与仅续跑入口。
+          const restored = getSessionMessages(identity.key)
+            .filter((item) => item.id !== userMessageId && item.id !== assistantMessageId)
+          setSessionMessages(identity.key, restored)
+          await persistSession({ editorMode: identity.editorMode, messages: restored,
+            sessionId: identity.sessionId, threadId: identity.threadId }).catch(() => undefined)
+          throw new Error(
+            configDecision === 'applied' ? '配置已完成，但继续原请求失败。' : '取消请求尚未被接收。',
+            { cause: caughtError }
+          )
+        }
+      }
+      const failedWorkflow = acceptedConfigCheckpoint ?? runError?.workflow ?? streamedWorkflow
       const failedToolCalls = runError?.toolCalls?.length ? runError.toolCalls : streamedToolCalls
       const failedProcessSteps = runError?.processSteps?.length
         ? mergeBuildRetrySteps(reusedBuildMessage?.processSteps, runError.processSteps)
@@ -1883,11 +1936,11 @@ export function useWorkflowConversation({
             : '无法安全执行当前恢复操作，请查看最新状态。')
         }
       }
-      if (runError && !options?.executionRecovery && !options?.planControlAction) {
+      if (runError && !acceptedConfigCheckpoint && !options?.executionRecovery && !options?.planControlAction) {
         // Backend 已返回业务 RUN_ERROR；只读刷新 durable truth，绝不根据错误文本猜恢复动作。
         await refreshExecutionRecoveryLifecycle()
       }
-      return false
+      return Boolean(acceptedConfigCheckpoint)
     } finally {
       finalizeSessionExecution()
       // 终态快照已在消息正文中保留；释放重复的大对象引用，让历史缓存能真正回收。
@@ -2022,44 +2075,48 @@ export function useWorkflowConversation({
       ? undefined
       : workflowSelectedPageId(workflow) || selectedPageId
     const continuationEntityId = workflowSelectedEntityId(workflow) || selectedEntityId
-    if (conversation && clarificationMode === 'application_config_prerequisite' && configPrerequisite) {
-      // 配置卡本身正是暂停在同一会话中的确认门；不能把该等待态误当作仍在生成而静默拒绝。
-      if (workspaceBusy) {
-        throw new Error('当前应用由其他会话持有，请切回发起此配置确认的会话后重试。')
+    if (conversation && clarificationMode === 'application_config_prerequisite') {
+      const sourceSession = options?.sessionIdentity || activeSessionRef.current
+      if (!configPrerequisite || !sourceSession || sourceSession.threadId !== workflow.threadId ||
+        sourceSession.workspaceRoot !== application.workspaceRoot) return false
+      // 先绑定来源会话，防止配置同步期间切换对话后续跑到其他线程。
+      if (workspaceBusy || applicationMutationReadonly) {
+        throw new Error('当前会话不可提交配置，请回到发起确认的会话后重试。')
       }
-      if (configPrerequisite.action === 'cancelled') {
-        return sendWorkflowMessage('用户已取消本次应用配置与原业务请求。', {
-          originalRequest,
-          conversation: true,
-          conversationConfigRequestId: configPrerequisite.requestId,
-          conversationConfigDecision: 'cancelled',
-          titleFrom: originalRequest || '取消应用配置'
-        })
-      }
-      const operation = configPrerequisite.action === 'resume'
-        ? await resumePendingConfigOperation(application.workspaceRoot, configPrerequisite.requestId)
-        : await applyConfigChanges(
-        application.workspaceRoot,
-        configPrerequisite.expectedConfigRevision,
-        configPrerequisite.changes,
-        undefined,
-        configPrerequisite.requestId
+      const { requestId, expectedConfigRevision, input } = configPrerequisite
+      return runConfigPrerequisiteAction(
+        application.workspaceRoot, requestId, expectedConfigRevision, input,
+        async (operationId, operation) => {
+          const decision = operationId ? 'applied' : 'cancelled'
+          if (operationId && !operation) {
+            // 重试先读当前 checkpoint；响应丢失但已推进时直接收口。
+            const checkpoint = await readConfigCheckpoint(sourceSession).catch(() => undefined)
+            const status = configCheckpointStatus(checkpoint, sourceSession.threadId, requestId)
+            if (checkpoint && configDecisionAccepted(status, decision)) {
+              setLiveWorkflows((current) => ({ ...current, [sourceSession.key]: checkpoint }))
+              return true
+            }
+            if (status !== 'AWAITING_CONFIG') {
+              throw new Error('配置已完成，暂时无法确认原请求仍可继续。请同步会话后重试。')
+            }
+          }
+          const effects = configOperationEffectMessages(operation)
+          const confirmation = operationId
+            ? `应用配置已确认。${effects.join('')}继续处理原请求。`
+            : '用户已取消本次请求，保留已保存的应用配置。'
+          const accepted = await sendWorkflowMessage(confirmation, {
+            originalRequest,
+            sessionIdentity: sourceSession,
+            conversation: true,
+            conversationConfigRequestId: requestId,
+            conversationConfigOperationId: operationId,
+            conversationConfigDecision: decision,
+            titleFrom: originalRequest || '应用配置确认'
+          })
+          if (!accepted && operationId) throw new Error('配置已完成，但继续原请求失败。')
+          return accepted
+        }
       )
-      if (!operation.operationId || operation.status !== 'APPLIED') {
-        throw new Error('应用配置尚未完成提交，请根据提示修正后重试。')
-      }
-      const effects = configOperationEffectMessages(operation)
-      const confirmation = effects.length
-        ? `应用配置已确认。${effects.join('')}继续处理原请求。`
-        : '应用配置已确认，继续处理原请求。'
-      return sendWorkflowMessage(confirmation, {
-        originalRequest,
-        conversation: true,
-        conversationConfigRequestId: configPrerequisite.requestId,
-        conversationConfigOperationId: operation.operationId,
-        conversationConfigDecision: 'applied',
-        titleFrom: originalRequest || '应用配置确认'
-      })
     }
     if (
       conversation &&
@@ -2813,20 +2870,29 @@ function latestWorkflow(messages: AgentChatMessage[]): WorkflowRunPayload | unde
 function configPrerequisiteSubmission(
   workflow: WorkflowRunPayload,
   answers: ClarificationAnswers
-): { action: 'apply'; requestId: string; expectedConfigRevision: number; changes: ConfigChanges } | { action: 'resume'; requestId: string } | { action: 'cancelled'; requestId: string } | undefined {
-  const answer = answers.application_config_prerequisite
+): { input: ConfigPrerequisiteAction; requestId: string; expectedConfigRevision: number } | undefined {
+  const answer = answers.application_config_prerequisite as { action?: unknown; changes?: unknown } | undefined
   const clarification = workflowClarification(workflow) as Record<string, unknown> | undefined
-  const pending = clarification?.configPrerequisite
-  if (!answer || typeof answer !== 'object' || Array.isArray(answer) || !pending || typeof pending !== 'object' || Array.isArray(pending)) return undefined
-  const action = String((answer as Record<string, unknown>).action || '')
-  const requestId = String((pending as Record<string, unknown>).requestId || '')
+  const pending = clarification?.configPrerequisite as { expectedConfigRevision?: unknown } | undefined
+  const requestId = configPrerequisiteRequestId(workflow)
   if (!requestId) return undefined
-  if (action === 'cancelled') return { action: 'cancelled', requestId }
-  if (action === 'resume') return { action: 'resume', requestId }
-  const expectedConfigRevision = Number((pending as Record<string, unknown>).expectedConfigRevision)
-  const changes = (answer as Record<string, unknown>).changes
-  if (action !== 'apply' || !Number.isInteger(expectedConfigRevision) || expectedConfigRevision < 1 || !changes || typeof changes !== 'object' || Array.isArray(changes)) return undefined
-  return { action: 'apply', requestId, expectedConfigRevision, changes: changes as ConfigChanges }
+  const expectedConfigRevision = Number(pending?.expectedConfigRevision)
+  const action = answer?.action
+  if (action === 'cancelled' || action === 'resume' || action === 'continue') {
+    return { input: { action }, requestId, expectedConfigRevision }
+  }
+  const changes = answer?.changes
+  if (action !== 'apply' || !Number.isInteger(expectedConfigRevision) || expectedConfigRevision < 1 ||
+    !changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) return undefined
+  return { input: { action, changes: changes as ConfigChanges }, requestId, expectedConfigRevision }
+}
+
+/** 从配置卡读取请求身份，其他类型的澄清不参与配置续跑。 */
+function configPrerequisiteRequestId(workflow: WorkflowRunPayload): string | undefined {
+  const clarification = workflowClarification(workflow) as Record<string, unknown> | undefined
+  if (clarification?.mode !== 'application_config_prerequisite') return undefined
+  const requestId = (clarification.configPrerequisite as { requestId?: unknown } | undefined)?.requestId
+  return typeof requestId === 'string' && requestId.trim() ? requestId : undefined
 }
 
 function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {

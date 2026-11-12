@@ -1,11 +1,15 @@
 import { Alert, Button, Checkbox, Form, Typography, type FormInstance } from 'antd'
 import type { ReactElement } from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ApplicationConfig, ApplicationDraft } from '../../../../typings'
 import { configOperationFailureMessage, settingsConfigChanges } from '../../../SettingsPage/settingsConfigChanges'
 import ApplicationConfigEditor, { type ApplicationConfigFieldPath } from '../../../Welcome/ApplicationConfigEditor'
 import { LOGIN_AUTHORIZATION_DEFAULTS } from '../../../Welcome/constants'
-import { hasPendingConfigOperation, type ConfigChanges } from '../../../../service/applicationConfigOperation'
+import type { ConfigChanges } from '../../../../service/applicationConfigOperation'
+import {
+  configActionPhase, resolveConfigPrerequisiteMode, subscribeConfigAction,
+  type ConfigPrerequisiteAction, type ConfigPrerequisiteMode
+} from '../../../../service/applicationConfigContinuation'
 import { cx } from '../../../../utils'
 
 import ConfigCardBoundary, { configurationViewError, InvalidConfiguration } from './ConfigCardBoundary'
@@ -33,31 +37,41 @@ type Props = {
   application: ApplicationConfig
   disabled?: boolean
   pending: PendingConfig
-  onResume?: () => Promise<void>
-  onCancel: () => void
-  onSubmit: (changes: ConfigChanges) => Promise<void>
+  historical?: boolean
+  result?: 'confirmed' | 'cancelled' | 'submitted'
+  onAction?: (input: ConfigPrerequisiteAction) => Promise<void>
 }
 
 /** 校验完整配置并隔离卡片渲染错误。 */
 export default function ApplicationConfigPrerequisiteCard(props: Props): ReactElement {
   const reason = configurationViewError(props.application)
   if (reason) return <InvalidConfiguration reason={reason} />
-  const identity = `${props.application.workspaceRoot}:${props.pending.requestId}:${props.application.configRevision}`
+  const identity = JSON.stringify([props.application.workspaceRoot, props.pending?.requestId])
   return <ConfigCardBoundary key={identity}><ValidatedConfigCard key={identity} {...props} /></ConfigCardBoundary>
 }
 
-/** 在对话中明确展示配置意图，并让用户确认推断出的能力依赖。 */
+/** 按原请求归属展示唯一配置动作，并区分配置同步与会话续跑。 */
 function ValidatedConfigCard({
-  application, disabled, pending, onCancel, onSubmit, onResume
+  application, disabled, historical, result, pending, onAction
 }: Props): ReactElement {
   const [form] = Form.useForm<ApplicationDraft>()
   const [acceptInferred, setAcceptInferred] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string>()
-  const [canResume, setCanResume] = useState(() => hasPendingConfigOperation(application.workspaceRoot))
-  const suggested = pending.suggestedChanges ?? EMPTY_CONFIG_CHANGES
-  const inferred = pending.configPrerequisites ?? EMPTY_PREREQUISITES
-  const explicit = pending.configIntents ?? EMPTY_PREREQUISITES
+  const [accepted, setAccepted] = useState<'confirmed' | 'cancelled'>()
+  const [check, setCheck] = useState<{ mode: ConfigPrerequisiteMode } | { error: string }>()
+  const [checkAttempt, setCheckAttempt] = useState(0)
+  const [submitting, setSubmitting] = useState(false)
+  const clickLock = useRef(false)
+  const workspaceRoot = application.workspaceRoot
+  const requestId = typeof pending?.requestId === 'string' ? pending.requestId : ''
+  const phase = useSyncExternalStore(subscribeConfigAction, () => configActionPhase(workspaceRoot, requestId), () => undefined)
+  const outcome = result ?? accepted
+  const inactive = Boolean(historical || outcome || !onAction)
+  const busy = submitting || Boolean(phase)
+  const mode = check && 'mode' in check ? check.mode : undefined
+  const suggested = pending?.suggestedChanges ?? EMPTY_CONFIG_CHANGES
+  const inferred = pending?.configPrerequisites ?? EMPTY_PREREQUISITES
+  const explicit = pending?.configIntents ?? EMPTY_PREREQUISITES
   const editablePaths = resolveConversationEditablePaths(explicit, inferred, suggested)
   const needsInferredAcceptance = inferred.length > 0
   const initialChanges = useMemo(
@@ -65,60 +79,85 @@ function ValidatedConfigCard({
     [explicit, inferred, suggested]
   )
   const initialValues = useMemo(() => mergeSuggested(application, initialChanges), [application, initialChanges])
-
   const initializedPaths = useRef(new Set<string>())
   useEffect(() => {
-    initializeConversationFields(form, initialValues, editablePaths, initializedPaths.current)
-  }, [form, initialValues, editablePaths])
+    if (mode === 'apply') initializeConversationFields(form, initialValues, editablePaths, initializedPaths.current)
+  }, [form, initialValues, editablePaths, mode])
 
-  const submit = async (): Promise<void> => {
-    if (needsInferredAcceptance && !acceptInferred) return
-    // 表单错误由 Form.Item 就地展示，避免以通用错误覆盖具体的缺失字段提示。
-    let values: ApplicationDraft
-    try {
-      values = await form.validateFields()
-    } catch {
-      return
-    }
-    let submittedChanges: ConfigChanges = {}
+  useEffect(() => {
+    if (inactive || phase || clickLock.current) return
+    let current = true
+    setCheck(undefined)
+    void resolveConfigPrerequisiteMode(workspaceRoot, requestId).then(
+      (next) => { if (current) setCheck({ mode: next }) },
+      (error) => { if (current) setCheck({ error: configOperationFailureMessage(error, {}) }) }
+    )
+    return () => { current = false }
+  }, [workspaceRoot, requestId, inactive, phase, checkAttempt])
+
+  /** 恢复和续跑直接提交原操作身份；新提案才读取表单。 */
+  const submit = async (action: ConfigPrerequisiteMode | 'cancelled'): Promise<void> => {
+    if (!onAction || !requestId || disabled || inactive || busy || clickLock.current) return
+    clickLock.current = true
     setSubmitting(true)
     setSubmitError(undefined)
+    let changes: ConfigChanges = {}
     try {
-      submittedChanges = configPrerequisiteChanges(
-        application,
-        mergeConversationConfigValues(application, values),
-        inferred,
-        acceptInferred
-      )
-      if (Object.keys(submittedChanges).length === 0) {
-        setSubmitError('当前配置已满足，未提交空配置提案。')
+      if (action !== 'apply') {
+        await onAction({ action })
+        setAccepted(action === 'cancelled' ? 'cancelled' : 'confirmed')
         return
       }
-      await onSubmit(submittedChanges)
+      if (needsInferredAcceptance && !acceptInferred) return
+      // 表单字段错误由 Form.Item 就地展示。
+      const values = await form.validateFields().catch(() => undefined)
+      if (!values) return
+      changes = configPrerequisiteChanges(application, mergeConversationConfigValues(application, values), inferred, acceptInferred)
+      if (!Object.keys(changes).length) {
+        setSubmitError('当前表单没有新的配置修改。')
+        return
+      }
+      await onAction({ action, changes })
+      setAccepted('confirmed')
     } catch (error) {
-      // 配置预检、CAS 或模板收敛失败必须留在当前卡片，用户才能修正后重试。
-      setSubmitError(configOperationFailureMessage(error, submittedChanges))
-      setCanResume(hasPendingConfigOperation(application.workspaceRoot))
+      setSubmitError(configOperationFailureMessage(error, changes))
+      setCheck(undefined)
+      setCheckAttempt((value) => value + 1)
     } finally {
+      clickLock.current = false
       setSubmitting(false)
     }
   }
 
+  const showForm = !inactive && mode === 'apply' && phase !== 'continuing'
+  const primaryLabel = mode === 'resume' ? '继续完成配置并执行' : mode === 'continue' ? '继续原请求' : '确认配置并继续'
+  const checkError = check && 'error' in check ? check.error : undefined
   return (
     <div className={cx('workflow-clarification', 'application-config-prerequisite-card')}>
-      <div className={cx('workflow-clarification-header')}><Text strong>应用配置确认</Text></div>
+      <div className={cx('workflow-clarification-header')}><Text strong>
+        {mode === 'resume' && !inactive && !busy ? '配置同步尚未完成' : '应用配置确认'}
+      </Text></div>
       {explicit.map((item) => <Text key={`${item.path}:${String(item.desiredValue)}`} type="secondary">请求配置：{item.path}</Text>)}
       {inferred.map((item) => <Text key={`${item.path}:${item.reason || ''}`} type="secondary">依赖说明：{item.reason || item.path}</Text>)}
-      <Form form={form} initialValues={initialValues} layout="vertical">
-        <ApplicationConfigEditor form={form} mode="conversation" visiblePaths={editablePaths}
-          administratorBaseline={application.authorization.enabled ? application.authorization.initialAdministratorSubjects : []} />
-      </Form>
-      {submitError ? <Alert message={submitError} showIcon type="error" /> : null}
-      {needsInferredAcceptance ? (
-        <Checkbox checked={acceptInferred} disabled={disabled || submitting} onChange={(event) => {
+      {outcome === 'confirmed' ? <Text>配置已完成，已继续处理原请求。</Text> :
+        outcome === 'cancelled' ? <Text>已取消本次请求。</Text> :
+        phase === 'continuing' ? <Text>配置已完成，正在继续原请求…</Text> :
+        busy ? <Text>正在同步工程配置…</Text> :
+        !inactive && !check ? <Text>正在确认上次配置状态…</Text> :
+        !inactive && mode === 'resume' ? <Text>应用配置已保存，工程能力安装或参数同步尚未完成。继续执行上次中断的步骤会保留已有工程。</Text> :
+        !inactive && mode === 'continue' ? <Text>配置已完成，原请求待继续。继续原请求只会提交会话续跑。</Text> : null}
+      {showForm ? <Form form={form} initialValues={initialValues} layout="vertical">
+        <fieldset disabled={disabled || busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          <ApplicationConfigEditor form={form} mode="conversation" visiblePaths={editablePaths}
+            administratorBaseline={application.authorization.enabled ? application.authorization.initialAdministratorSubjects : []} />
+        </fieldset>
+      </Form> : null}
+      {!inactive && (submitError || checkError) ? <Alert message={submitError || checkError} showIcon type="error" /> : null}
+      {showForm && needsInferredAcceptance ? (
+        <Checkbox checked={acceptInferred} disabled={disabled || busy} onChange={(event) => {
           const accepted = event.target.checked
           setAcceptInferred(accepted)
-          // 勾选前置能力后立即展示其依赖字段和校验，避免提交时才出现隐式失败。
+          // 勾选前置能力后立即展示其依赖字段和校验。
           if (accepted) {
             const inferredValues = Object.fromEntries(
               inferred.filter((item) => item.path && item.desiredValue !== undefined)
@@ -130,16 +169,18 @@ function ValidatedConfigCard({
           我确认启用上述推断出的配置依赖
         </Checkbox>
       ) : null}
-      <div className={cx('workflow-clarification-actions')}>
-        {canResume && onResume ? <Button disabled={disabled || submitting} onClick={() => {
-          setSubmitting(true)
-          void onResume().catch((error) => setSubmitError(configOperationFailureMessage(error, {}))).finally(() => setSubmitting(false))
-        }}>恢复原配置操作</Button> : null}
-        <Button disabled={disabled || submitting} onClick={onCancel}>取消本次请求</Button>
-        <Button disabled={disabled || submitting || (needsInferredAcceptance && !acceptInferred)} loading={submitting} onClick={() => void submit()} type="primary">
-          确认配置并继续
-        </Button>
-      </div>
+      {!inactive ? <div className={cx('workflow-clarification-actions')}>
+        <Button disabled={disabled || busy || !requestId} title="取消后保留已经保存的应用配置"
+          onClick={() => void submit('cancelled')}>取消本次请求</Button>
+        {checkError && requestId ? <Button disabled={disabled || busy} onClick={() => {
+          setSubmitError(undefined)
+          setCheck(undefined)
+          setCheckAttempt((value) => value + 1)
+        }}>重新检查</Button> : null}
+        {mode && phase !== 'continuing' ? <Button
+          disabled={disabled || busy || (mode === 'apply' && needsInferredAcceptance && !acceptInferred)}
+          loading={busy} onClick={() => void submit(mode)} type="primary">{primaryLabel}</Button> : null}
+      </div> : null}
     </div>
   )
 }

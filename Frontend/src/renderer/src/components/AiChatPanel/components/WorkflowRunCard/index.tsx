@@ -503,12 +503,12 @@ export default function WorkflowRunCard({
         <ApplicationConfigPrerequisiteCard
           application={application}
           disabled={disabled || interactionAvailability !== 'active'}
+          historical={interactionAvailability !== 'active'}
+          result={workflowCardResult}
           pending={(clarification as Record<string, unknown>).configPrerequisite as Record<string, unknown>}
-          onResume={async () => { await onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'resume' } }) }}
-          onCancel={() => onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'cancelled' } })}
-          onSubmit={async (changes) => {
-            await onSubmitClarification?.(workflow, { application_config_prerequisite: { action: 'apply', changes } })
-          }}
+          onAction={onSubmitClarification ? async (action) => {
+            await onSubmitClarification(workflow, { application_config_prerequisite: action })
+          } : undefined}
         />
       ) : null}
       {/* API 映射门禁使用专用卡片，即使没有通用问题列表也必须提供配置和确认入口。 */}

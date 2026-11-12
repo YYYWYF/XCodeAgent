@@ -1,4 +1,5 @@
 import { workspaceRecoveryAttachments } from '../src/renderer/src/service/workspaceRecoveryAttachments'
+import { configChangesDigest, readConfigContinuation } from '../src/renderer/src/service/applicationConfigOperation'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createElement, type MutableRefObject, type ReactElement } from 'react'
@@ -40,6 +41,100 @@ const OWNER_SESSION_ID = 'session-owner'
 const OWNER_THREAD_ID = 'thread-owner'
 const WORKFLOW_EXECUTION_THREAD_ID = 'workflow-thread-regenerate'
 const DRAFT_DIGEST = 'a'.repeat(64)
+
+test('配置确认断线恢复保留原卡，服务端已继续时只认 checkpoint 并清理续跑身份', async () => {
+  const previousWindow = globalThis.window, previousFetch = globalThis.fetch
+  const identity = buildSessionIdentity('config-session', 'config-thread')
+  const requestId = 'config-request', operationId = 'config-operation', originalRequest = '启用权限并调整页面'
+  const configPrerequisite = { requestId, sourceThreadId: identity.threadId, expectedConfigRevision: 1, status: 'AWAITING_CONFIG' }
+  const source: WorkflowRunPayload = {
+    runId: 'config-source-run', threadId: identity.threadId, events: [],
+    summary: { status: 'requires_user_input', request: originalRequest },
+    state: { request: originalRequest, workflow_scope: 'conversation', application_config_prerequisite: configPrerequisite,
+      clarification: { mode: 'application_config_prerequisite', status: 'requires_user_input', configPrerequisite } }
+  }
+  const resumed: WorkflowRunPayload = {
+    runId: 'config-continued-run', threadId: identity.threadId, events: [],
+    summary: { status: 'completed' },
+    state: { request: originalRequest, workflow_scope: 'conversation',
+      application_config_prerequisite: { ...configPrerequisite, status: 'CONFIG_APPLIED' } }
+  }
+  const storage = new Map<string, string>()
+  const pendingKey = `application-config-operation:${WORKSPACE_ROOT}`
+  storage.set(pendingKey, JSON.stringify({ version: 1, requestId, operationId, expectedConfigRevision: 1,
+    digest: await configChangesDigest({ 'authorization.enabled': true }) }))
+  let checkpoint = source
+  let messages: AgentChatMessage[] = [{ id: 1, role: 'assistant', content: '请确认配置', workflow: source, createdAt: 1 }]
+  let sends = 0, resumes = 0
+  let root: ReactTestRenderer | undefined
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  const app = { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig
+  const session = {
+    threadId: identity.threadId, endpointUrl: 'http://agent.test/conversation/run',
+    /** 同一次恢复立刻尝试续跑；第二次模拟接收成功后响应丢失。 */
+    sendMessage: async (_message: string, options: Record<string, unknown>) => {
+      assert.equal(options.conversationConfigDecision, 'applied')
+      assert.equal(options.conversationConfigRequestId, requestId)
+      assert.equal(options.conversationConfigOperationId, operationId)
+      assert.equal(options.originalRequest, originalRequest)
+      if (++sends === 2) checkpoint = resumed
+      throw new TypeError('Failed to fetch')
+    }
+  } as unknown as AgUiChatSession
+  const params = buildRuntimeParams({ activeSession: identity, application: app, applicationLifecycle: buildIdleLifecycle(),
+    agUiSessionsRef: { current: { [identity.key]: session } }, acquireSessionExecution: () => undefined,
+    releaseSessionExecution: () => undefined, onApplicationLifecycleChange: () => undefined })
+  params.getSessionMessages = () => messages
+  params.setSessionMessages = (_key, value) => { messages = typeof value === 'function' ? value(messages) : value }
+  /** 挂载生产 hook，使用原配置卡和可控的当前服务端投影。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: Object.assign(new EventTarget(), {
+    localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key) },
+    devAgentStudio: { agentBaseUrl: 'http://agent.test', workspace: { readApplication: async () => ({ application: app }) } }
+  }) })
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(String(init?.body))
+    if (String(url).endsWith('/application-config/run')) {
+      assert.deepEqual(body.forwardedProps.applicationConfig, { workspaceRoot: WORKSPACE_ROOT, action: 'resume', requestId, operationId })
+      resumes += 1
+      const result = { applicationConfigOperation: { schemaVersion: 1, status: 'completed', operation: { status: 'APPLIED', requestId, operationId } } }
+      return new Response(
+        [{ type: 'RUN_STARTED', threadId: body.threadId, runId: body.runId },
+          { type: 'STATE_SNAPSHOT', snapshot: result },
+          { type: 'RUN_FINISHED', threadId: body.threadId, runId: body.runId, result }]
+          .map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+        { headers: { 'Content-Type': 'text/event-stream' } }
+      )
+    }
+    assert.ok(String(url).endsWith('/application-lifecycle/run'))
+    const lifecycle = buildIdleLifecycle()
+    lifecycle.extensions.sessionWorkflow = checkpoint
+    return sseResponse(body.threadId, body.runId, { applicationLifecycle: lifecycle })
+  }
+  try {
+    await act(async () => { root = create(createElement(Probe)) })
+    await act(async () => {
+      await assert.rejects(runtime.handleSubmitClarification(source, { application_config_prerequisite: { action: 'resume' } }),
+        /配置已完成，但继续原请求失败/)
+    })
+    assert.equal(resumes, 1)
+    assert.equal(sends, 1)
+    assert.deepEqual(messages.map((item) => item.workflow?.runId), [source.runId])
+    assert.equal(readConfigContinuation(WORKSPACE_ROOT, requestId), operationId)
+    await act(async () => {
+      assert.equal(await runtime.handleSubmitClarification(source, { application_config_prerequisite: { action: 'continue' } }), true)
+    })
+    assert.equal(sends, 2)
+    assert.equal(resumes, 1)
+    assert.equal(messages.at(-1)?.workflow?.runId, resumed.runId)
+    assert.equal(readConfigContinuation(WORKSPACE_ROOT, requestId), undefined)
+  } finally {
+    await act(async () => root?.unmount())
+    globalThis.fetch = previousFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow })
+  }
+})
 
 test('无生命周期冷启动收口连接：业务失败展示真实错误，显式同步成功后清除', async () => {
   const savedFetch = globalThis.fetch
