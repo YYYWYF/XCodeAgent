@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -13,9 +14,50 @@ from app.domain.application_revision import (
     FormalRevisionBranch,
     StartRevisionRequest,
 )
+from app.domain.application_lifecycle import ApplicationLifecycleStage
+from app.domain.execution_recovery import (
+    DurableExecutionRecord,
+    DurableExecutionStatus,
+    RecoveryExecutionError,
+)
+from app.domain.application_lifecycle import ApplicationLifecycleStatus
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
+from app.protocols.application_planning_interrupt import (
+    application_planning_interrupt_from_snapshot,
+    project_application_planning_interrupt,
+)
+from app.protocols.application_planning_recovery_projection import (
+    ApplicationPlanningRecoveryProjection,
+    application_planning_input_committed,
+    build_application_planning_recovery_projection,
+    project_application_planning_recovery_snapshot,
+    terminal_application_planning_projection_fields,
+)
+from app.protocols.application_planning_run_lock import application_planning_run_lock
 from app.protocols.application_lifecycle import application_lifecycle_input
 from app.protocols.workflow import build_workflow_ag_ui_stream
+from app.protocols.workflow.projection import _workflow_summary, _workflow_visual_payload
+from app.services.execution_recovery_action_planner import (
+    plan_failed_node_reentry_action,
+    plan_interrupted_continue_action,
+)
+from app.services.execution_recovery_lineage import (
+    RecoveryLineageResolution,
+    RecoveryLineageState,
+    resolve_recovery_lineage_head,
+)
+from app.services.execution_recovery_scanner import reconcile_workspace_recovery
+from app.services.execution_recovery_reconciliation import reconcile_interrupted_execution_state
+from app.services.execution_recovery_source_admission import assess_recovery_source
+from app.services.ui_design_generator import load_page_code
+from app.services.ui_design_manifest import present_ui_pages
+from app.services.ui_design_recovery import interrupted_ui_design_pages
+from app.services.ui_design_project_setup import ui_design_project_dir
+from app.workspace.spec_documents import (
+    load_ui_designs_json,
+    ui_designs_json_path,
+    workspace_root,
+)
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -25,6 +67,7 @@ from app.services.requirement_spec import (
     save_requirement_spec_draft,
 )
 from app.services.template_reconcile.runtime_v2 import load_current_attempt
+from app.services.workflow_reentry import FailureTargetResolver, InterruptedTargetResolver
 
 
 REQUIREMENT_SPEC_DRAFT_EVENT_NAME = "requirement-spec-draft"
@@ -41,6 +84,142 @@ class ApplicationPlanningRecoveryRequest(BaseModel):
     applicationId: str | None = None
 
 
+async def _build_application_planning_recovery_projection(
+    *,
+    workspace: str,
+    thread_id: str,
+    graph: Any,
+    snapshot: Any,
+    source: DurableExecutionRecord | None,
+    lineage_resolution: RecoveryLineageResolution | None = None,
+) -> ApplicationPlanningRecoveryProjection:
+    """在公开 Workflow 边界调用 Generic Recovery authority 并生成 Planning DTO。"""
+
+    input_committed = application_planning_input_committed(source, snapshot)
+    # 只有取消记录与已清锁的结束 lifecycle 同时成立，才是用户主动 End；断连取消不能冒充。
+    lifecycle = load_application_lifecycle(workspace)
+    archived = lifecycle.ended_planning_execution if lifecycle else None
+    if (source is None and archived and archived.run_id == snapshot.values.get("active_run_id")
+            and archived.initialization.thread_id == thread_id and lifecycle.active_run_id is None):
+        return build_application_planning_recovery_projection(
+            classification="completed", source=None, thread_id=thread_id,
+            reason_code="APPLICATION_PLANNING_ENDED", message="本轮任务已结束，已有文件已保留。")
+    from app.services.ended_planning import ended_planning_available
+    if (source is not None and source.status is DurableExecutionStatus.CANCELLED
+            and source.ended_at is not None
+            and ended_planning_available(workspace, lifecycle, run_id=source.run_id, thread_id=thread_id)):
+        from app.services.business_node_retry import retry_action_plan
+
+        # 正常停止仍使用原节点重试签发动作，不恢复停止前的旧确认门。
+        plan = await retry_action_plan(source.model_copy(update={"status": DurableExecutionStatus.INTERRUPTED}), graph)
+        return build_application_planning_recovery_projection(
+            classification="ready_to_continue" if plan.primary_action else "blocked",
+            source=source, thread_id=thread_id, input_committed=input_committed,
+            reason_code="APPLICATION_PLANNING_ENDED", message="本轮任务已结束，已有文件已保留。",
+            can_continue=plan.primary_action is not None,
+            recovery_action_plan=plan.model_dump(mode="json", by_alias=True),
+        )
+    if (source is not None and source.status is DurableExecutionStatus.CANCELLED
+            and source.ended_at is not None and lifecycle is not None
+            and lifecycle.initialization.thread_id == thread_id
+            and lifecycle.active_run_id is None and lifecycle.active_formal_revision is None
+            and lifecycle.initialization.status in {
+                ApplicationLifecycleStatus.CANCELLED, ApplicationLifecycleStatus.COMPLETED,
+            }):
+        return build_application_planning_recovery_projection(
+            classification="completed", source=source, thread_id=thread_id,
+            input_committed=input_committed, reason_code="APPLICATION_PLANNING_ENDED",
+            message="本轮任务已结束，已有文件已保留。",
+        )
+    from app.services.checkpoint_execution import checkpoint_source, interpret_checkpoint
+    if source is not None:
+        source = checkpoint_source(source, interpret_checkpoint(source, snapshot, graph))
+    interrupt = application_planning_interrupt_from_snapshot(snapshot)
+    if interrupt is not None and (
+        source is None
+        or source.status
+        not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED,
+                DurableExecutionStatus.CANCELLED, DurableExecutionStatus.STOPPED}
+    ):
+        # 父 Graph 已等待确认不代表后台 UI worker 仍存在；只读报告，用户重试才重入节点。
+        interrupted_pages = (
+            interrupted_ui_design_pages(dict(snapshot.values), workspace)
+            if interrupt.get("artifact") == "ui_designs" else []
+        )
+        return build_application_planning_recovery_projection(
+            classification="awaiting_user",
+            source=source,
+            thread_id=thread_id,
+            user_action_required=True,
+            input_committed=input_committed,
+            reason_code="NATIVE_APPLICATION_PLANNING_INTERRUPT",
+            message="当前应用规划正在等待你的确认。",
+            ui_generation_recovery=(
+                {"pageIds": interrupted_pages} if interrupted_pages else None
+            ),
+        )
+    if source is None:
+        return build_application_planning_recovery_projection(
+            classification="legacy_unverified",
+            source=None,
+            thread_id=thread_id,
+            reason_code="DURABLE_APPLICATION_PLANNING_EXECUTION_MISSING",
+            message="当前规划现场缺少可验证的执行记录，无法安全自动恢复。",
+        )
+
+    if source.status is DurableExecutionStatus.RUNNING:
+        return build_application_planning_recovery_projection(
+            classification="running",
+            source=source,
+            thread_id=thread_id,
+            input_committed=input_committed,
+            reason_code="DURABLE_APPLICATION_PLANNING_RUNNING",
+            message="当前规划仍在运行。",
+        )
+    if source.status in {
+        DurableExecutionStatus.COMPLETED,
+        DurableExecutionStatus.CANCELLED,
+        DurableExecutionStatus.STOPPED,
+    }:
+        classification, message, _ = terminal_application_planning_projection_fields(
+            source.status
+        )
+        return build_application_planning_recovery_projection(
+            classification=classification,
+            source=source,
+            thread_id=thread_id,
+            input_committed=input_committed,
+            reason_code=f"DURABLE_APPLICATION_PLANNING_{source.status.name}",
+            message=message,
+        )
+    # 没有原生确认现场时不相信旁路索引中的 awaiting_user；沿统一恢复入口处理。
+    if source.status is DurableExecutionStatus.AWAITING_USER:
+        source = source.model_copy(update={"status": DurableExecutionStatus.INTERRUPTED})
+
+    from app.services.business_node_retry import retry_action_plan
+    action_plan = await retry_action_plan(source, graph)
+
+    recovery_action_plan = action_plan.model_dump(mode="json", by_alias=True)
+    if action_plan.primary_action is not None:
+        return build_application_planning_recovery_projection(
+            classification="ready_to_continue",
+            source=source,
+            thread_id=thread_id,
+            can_continue=True,
+            input_committed=input_committed,
+            reason_code=action_plan.reason_code,
+            message=action_plan.message,
+            recovery_action_plan=recovery_action_plan,
+        )
+    return build_application_planning_recovery_projection(
+        classification="blocked",
+        source=source,
+        thread_id=thread_id,
+        input_committed=input_committed,
+        reason_code=action_plan.reason_code,
+        message=action_plan.message,
+        recovery_action_plan=recovery_action_plan,
+    )
 
 def application_page_planning_capabilities() -> dict[str, Any]:
     """发布设计阶段、计划阶段及其显式入口门禁的 AG-UI 能力。"""
@@ -305,24 +484,123 @@ def _build_application_planning_recovery_ag_ui_stream(
     async def operation() -> AgUiActionResult:
         """读取 checkpoint 与权威 lifecycle，并返回标准 Workflow 快照。"""
 
-        from app.services.recovery_snapshot import project_recovery_snapshot
         request = ApplicationPlanningRecoveryRequest.model_validate(recovery_input)
         thread_id = str(payload.get("threadId") or "").strip()
         if not thread_id:
             raise ValueError("恢复应用规划必须提供 threadId。")
-        snapshot = await project_recovery_snapshot(workspace=request.workspaceRoot,
-            application_id=request.applicationId, thread_id=thread_id, planning=True, graph=graph)
-        lifecycle = load_application_lifecycle(request.workspaceRoot)
-        return AgUiActionResult(data={"recoverySnapshot": snapshot,
-            "lifecycle": application_lifecycle_payload(lifecycle) if lifecycle else None},
-            message=snapshot["workflow"]["summary"].get("message", "已同步当前规划。") if snapshot["workflow"] else "当前没有执行存档。")
+        active_graph = (
+            graph(
+                workspace=request.workspaceRoot,
+                project_id=request.applicationId,
+            )
+            if callable(graph)
+            else graph
+        )
+        if inspect.isawaitable(active_graph):
+            active_graph = await active_graph
+        lock = application_planning_run_lock(thread_id)
+        # 与同 thread writer 共用屏障；锁内先收敛旧 owner，再用同一 Graph snapshot
+        # 锚定 Durable lineage、恢复投影和 Lifecycle，禁止由历史 clarification 猜门禁。
+        async with lock:
+            await reconcile_workspace_recovery(request.workspaceRoot)
+            try:
+                snapshot = await active_graph.aget_state({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
+            except Exception as exc:
+                from app.domain.execution_recovery import RecoveryExecutionError
+                raise RecoveryExecutionError("APPLICATION_PLANNING_CHECKPOINT_UNAVAILABLE",
+                    "暂时无法读取规划进度，请重新同步。") from exc
+            values = getattr(snapshot, "values", {})
+            result = dict(values) if isinstance(values, dict) else {}
+            if not result:
+                from app.persistence.execution_recovery import get_execution
+                lifecycle = load_application_lifecycle(request.workspaceRoot)
+                source = await get_execution(request.workspaceRoot, lifecycle.active_run_id) if lifecycle and lifecycle.active_run_id else None
+                if (source is None and lifecycle and not lifecycle.active_run_id
+                        and lifecycle.initialization.thread_id == thread_id
+                        and lifecycle.initialization.status in {ApplicationLifecycleStatus.FAILED, ApplicationLifecycleStatus.RUNNING}):
+                    # Lifecycle GET 可能已释放缺失入口的旧 owner；仍为同一失败 thread
+                    # 返回提示，但只能选最后一次执行，不能借用其他会话或更早的失败。
+                    from app.persistence.execution_recovery import list_executions_for_thread
+                    records = await list_executions_for_thread(request.workspaceRoot, thread_id=thread_id,
+                                                               execution_kind="application_planning")
+                    source = records[-1] if records else None
+                if source and source.thread_id == thread_id and source.status in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
+                    result = {"active_run_id": source.run_id, "workspace": request.workspaceRoot}
+                else:
+                    return AgUiActionResult(data={"checkpointAvailable": False}, message="当前没有执行存档。")
+            checkpoint_run_id = str(result.get("active_run_id") or "").strip()
+            # 当前 checkpoint 仅定位原执行；重试不再要求精确恢复 lineage。
+            from app.persistence.execution_recovery import get_execution
+            source = await get_execution(request.workspaceRoot, checkpoint_run_id) if checkpoint_run_id else None
+            if source is None and checkpoint_run_id:
+                from app.services.checkpoint_execution import index_checkpoint_execution
+                source = await index_checkpoint_execution(request.workspaceRoot, thread_id, snapshot)
+            lineage_resolution = None
+            projection = await _build_application_planning_recovery_projection(
+                workspace=request.workspaceRoot,
+                thread_id=thread_id,
+                graph=active_graph,
+                snapshot=snapshot,
+                source=source,
+                lineage_resolution=lineage_resolution,
+            )
+            if projection.classification == "awaiting_user":
+                result = project_application_planning_interrupt(result, snapshot)
+            result = project_application_planning_recovery_snapshot(
+                result,
+                projection=projection,
+            )
+            # UI 确认阶段：后台生成池把最新 page status/code 写进 ui-designs.json，
+            # 但 checkpoint 里的 ui_designs 仍停留在入队时的 queued/generating（池不写
+            # checkpoint）。recovery 只读 checkpoint 不跑 Graph，若不回填 manifest，
+            # 返回的快照里 pages 无 code 且 status 过时，右侧渲染区永远显示「生成中」。
+            if str(result.get("phase") or "") == "ui_confirmation":
+                manifest = load_ui_designs_json(
+                    ui_designs_json_path(dict(snapshot.values))
+                )
+                if isinstance(manifest, dict) and manifest.get("pages"):
+                    # 正式 manifest 刻意剥离了 code（源码是运行时数据，不入库）。但确认界面
+                    # 要靠它渲染预览、「查看设计稿」按钮也按它判可用性 —— 不回填的话，
+                    # 重新打开工作区后每一页（本轮新生成的和继承来的都一样）都点不开。
+                    result["ui_designs"] = _with_page_code(manifest, dict(snapshot.values))
+                    clarification = result.get("clarification")
+                    if isinstance(clarification, dict):
+                        product_plan = result.get("product_plan")
+                        product_plan = (
+                            product_plan if isinstance(product_plan, dict) else {}
+                        )
+                        clarification["pages"] = present_ui_pages(
+                            result["ui_designs"], product_plan
+                        )
+            lifecycle = load_application_lifecycle(request.workspaceRoot)
+        if lifecycle is not None:
+            result["lifecycle"] = application_lifecycle_payload(lifecycle)
+        recovery_run_id = str(result.get("active_run_id") or f"recovery:{thread_id}")
+        summary = _workflow_summary(result, [])
+        summary["message"] = projection.message
+        if projection.reason_code == "APPLICATION_PLANNING_ENDED":
+            # 只发布独立结束回执；修改必须发起新请求，不能消费停止前的旧确认。
+            summary.update(status="completed", phase="plan_control", planControl={
+                "action": "end", "status": "ended", "targetRunId": recovery_run_id,
+            })
+            summary.pop("error", None)
+        visual_payload = _workflow_visual_payload(
+            run_id=recovery_run_id,
+            thread_id=thread_id,
+            summary=summary,
+            events=[],
+            result=result,
+        )
+        return AgUiActionResult(
+            data=visual_payload,
+            message=projection.message,
+        )
 
     return build_ag_ui_action_stream(
         payload=payload,
         event_name="workflow-run",
         state_key="workflow",
         run_id_prefix="application-planning-recovery",
-        register_workspace_run=False,
         operation=operation,
         error_message_prefix="恢复应用规划失败",
         error_data=lambda exc: {
@@ -336,6 +614,31 @@ def _build_application_planning_recovery_ag_ui_stream(
         accept=accept,
     )
 
+
+def _with_page_code(manifest: dict[str, Any], state_values: dict[str, Any]) -> dict[str, Any]:
+    """给正式 manifest 的每页补回 `code`，供确认界面渲染预览。
+
+    `persisted_ui_manifest` 落盘时刻意剥离了 `code`（源码是运行时数据，不入库），
+    但确认界面要靠它渲染预览、「查看设计稿」按钮也按它判可用性。重新打开工作区时
+    只读 checkpoint + 磁盘 manifest，不回填的话每一页都点不开 —— 本轮新生成的
+    和从上一轮继承来的一视同仁。
+
+    读不到某个页面的源码就原样留空：按钮禁用总好过报错。
+    """
+
+    pages = manifest.get("pages")
+    if not isinstance(pages, list):
+        return manifest
+    project_dir = str(ui_design_project_dir(workspace_root(state_values)))
+    enriched: list[dict[str, Any]] = []
+    for page in pages:
+        if not isinstance(page, dict) or page.get("code"):
+            enriched.append(page)
+            continue
+        page_key = str(page.get("page_key") or "").strip()
+        code = load_page_code(project_dir, page_key) if page_key else None
+        enriched.append({**page, "code": code} if code else page)
+    return {**manifest, "pages": enriched}
 
 
 def _build_requirement_spec_draft_ag_ui_stream(

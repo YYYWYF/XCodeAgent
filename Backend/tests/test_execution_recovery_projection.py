@@ -137,11 +137,11 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("database is locked", error.message)
         self.assertNotIn("secret-test", error.model_dump_json())
         self.assertNotIn("hidden-test", error.model_dump_json())
-        with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates",
+        with patch("app.services.checkpoint_execution.index_missing_checkpoint_executions",
                    AsyncMock(side_effect=OSError("index unavailable"))):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
         self.assertEqual(projection.candidates, [])
-        self.assertEqual(projection.error.diagnostic.operation, "查询任务恢复记录")
+        self.assertEqual(projection.error.diagnostic.operation, "补建任务恢复索引")
 
     async def test_current_retry_only_exposes_public_fields(self) -> None:
         """当前重试只公开节点动作，不泄漏 checkpoint 或旧恢复 authority。"""
@@ -160,7 +160,7 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(forbidden, candidate)
 
     async def test_missing_node_produces_dismissible_notice(self) -> None:
-        """没有节点时只读签发可关闭提示，收口必须由明确的接管动作执行。"""
+        """没有节点时签发当前可关闭提示并收口原执行，不依赖已移除的精确恢复 resolver。"""
         record = self._record("run-invalid")
         with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[record])), \
                 patch("app.services.checkpoint_execution.resolve_checkpoint_source", AsyncMock(return_value=record)), \
@@ -170,21 +170,7 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
             projection = await resolve_execution_recovery_projection(str(self.workspace))
         self.assertEqual(projection.candidates[0].reason_code, "RETRY_ENTRY_NOT_FOUND")
         self.assertFalse(projection.candidates[0].can_continue)
-        release.assert_not_awaited()
-
-    async def test_old_planning_owner_is_not_decoded_or_republished(self) -> None:
-        """当前线程已由新 Run 接管时，旧等待记录不能读取历史 checkpoint 或重新生成恢复卡。"""
-        record = self._record("old-run").model_copy(update={"execution_kind": "application_planning"})
-        lifecycle = SimpleNamespace(initialization=SimpleNamespace(thread_id=record.thread_id),
-                                    active_run_id="stale-run", ended_planning_execution=None)
-        with patch("app.services.execution_recovery_projection.load_application_lifecycle", return_value=lifecycle), \
-                patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[record])), \
-                patch("app.persistence.execution_recovery.get_latest_execution_for_thread",
-                      AsyncMock(return_value=record.model_copy(update={"run_id": "new-run"}))), \
-                patch("app.services.execution_recovery_projection._resolve_candidate", AsyncMock()) as resolve:
-            projection = await resolve_execution_recovery_projection(str(self.workspace))
-        self.assertEqual(projection.candidates, [])
-        resolve.assert_not_awaited()
+        release.assert_awaited_once_with(record)
 
     async def test_unowned_record_is_not_assigned_owner_from_checkpoint(self) -> None:
         """当前合同不支持历史 owner 补造，checkpoint 只用于节点与提问定位。"""

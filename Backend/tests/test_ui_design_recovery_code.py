@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.services.planning_recovery_projection import _with_page_code
+from app.protocols.application_page_planning import _with_page_code
 
 _PAGE_KEY = "WelcomeHome"
 _CODE = "export default function PageWelcomeHome() { return <div>hello</div>; }\n"

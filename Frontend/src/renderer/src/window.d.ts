@@ -15,7 +15,6 @@ declare global {
       getAppVersion: () => Promise<string>
       isElectron: boolean
       agentBaseUrl: string
-      backendConnection: import('../../shared/backendConnection').BackendConnectionApi
       platform: string
       clipboard: {
         writeText: (text: string) => Promise<void>

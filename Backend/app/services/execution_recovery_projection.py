@@ -72,6 +72,9 @@ async def resolve_execution_recovery_projection(
 
     generated_at = datetime.now(timezone.utc)
     try:
+        from app.services.checkpoint_execution import index_missing_checkpoint_executions
+        with recovery_read_operation("补建任务恢复索引"):
+            await index_missing_checkpoint_executions(workspace)
         with recovery_read_operation("查询任务恢复记录"):
             records = await list_recovery_projection_candidates(workspace, limit=16)
     except Exception as exc:
@@ -96,8 +99,6 @@ async def resolve_execution_recovery_projection(
         ):
             continue
         try:
-            if not await _record_has_current_owner(workspace, record):
-                continue
             candidate = await _resolve_candidate(record)
         except Exception as exc:
             error = recovery_read_error(
@@ -154,8 +155,7 @@ async def reconcile_recovery_ownership(workspace: str) -> None:
 
 
 async def _resolve_candidate(
-    record: DurableExecutionRecord,
-    *, reconcile_ownership: bool = False,
+    record: DurableExecutionRecord, *, reconcile_ownership: bool = True,
 ) -> ExecutionRecoveryProjectionCandidate | None:
     """为单条记录选择 Graph，FAILED 与 INTERRUPTED 均走各自 authority resolver。"""
     if not await checkpoint_thread_exists(record.workspace, record.thread_id):

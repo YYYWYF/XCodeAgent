@@ -62,7 +62,7 @@ test('生产 Runtime 在工作区切换后丢弃旧目录的在途响应，并�
   } finally { runtime.dispose() }
 })
 
-test('生产 Runtime 管理 Hook 为同 ID 克隆创建新实例，旧实例只断订阅，不停止后端任务', async () => {
+test('生产 Runtime 管理 Hook 为同 ID 克隆创建新实例，并收口旧目录的请求', async () => {
   const previousWindow = globalThis.window
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: {
     setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval,
@@ -89,8 +89,8 @@ test('生产 Runtime 管理 Hook 为同 ID 克隆创建新实例，旧实例只�
     const next = manager.getRuntime(current.application.id)!
     assert.notEqual(next, old)
     assert.equal(next.workspaceRoot, '/workspace/second')
-    assert.equal(detached, 1)
-    assert.equal(stopped, 0)
+    assert.equal(detached, 0)
+    assert.equal(stopped, 1)
   } finally {
     await act(async () => renderer?.unmount())
     Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: previousWindow })

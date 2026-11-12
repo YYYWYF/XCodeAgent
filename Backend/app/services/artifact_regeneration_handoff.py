@@ -44,7 +44,6 @@ def _completed_planning_owner(workspace: str, current) -> bool:
     """区分已完成首次规划留下的 Run 镜像与仍有工作、确认门或资源占用的执行。"""
     from app.protocols.application_planning_run_lock import application_planning_run_lock
     from app.services.checkpoint_execution import execution_is_live
-    from app.services.detached_execution import background_execution_task, active_detached_run_for_thread
 
     if (current.initialization.stage is not ApplicationLifecycleStage.READY_FOR_WORKBENCH
             or current.initialization.status is not ApplicationLifecycleStatus.COMPLETED
@@ -56,12 +55,10 @@ def _completed_planning_owner(workspace: str, current) -> bool:
             *locks.endpoints.values(), *locks.data_sources.values()]):
         return False
     thread_id = current.initialization.thread_id
-    if thread_id and (application_planning_run_lock(thread_id).locked()
-                      or active_detached_run_for_thread(workspace, thread_id)):
+    if thread_id and application_planning_run_lock(thread_id).locked():
         return False
     # Bootstrap 正常完成会保留上一轮规划 Run；只有真实后台工作已经退出才能交接。
-    task = background_execution_task(current.active_run_id, workspace)
-    return not (task and not task.done()) and not execution_is_live(
+    return not execution_is_live(
         SimpleNamespace(run_id=current.active_run_id, workspace=workspace))
 
 

@@ -7,7 +7,6 @@ import { AppEntryPage } from './pages';
 import { AuthenticationFailureGate } from './components/AuthenticationFailureGate/AuthenticationFailureGate';
 import { ApplicationThemeProvider } from './hooks/useApplicationTheme';
 import { loadApplicationTheme } from './service/applicationSettings';
-import { initializeBackendConnection } from './service/backendConnection';
 
 // 标记当前桌面系统，让字体回退可以按平台选择最合适的系统字体。
 function markRuntimePlatform(): void {
@@ -22,7 +21,6 @@ function markRuntimePlatform(): void {
 /** 在首次渲染前加载应用级主题，避免界面先显示默认主题再闪烁切换。 */
 async function bootstrapRenderer(): Promise<void> {
   markRuntimePlatform();
-  await initializeBackendConnection();
   await loadApplicationTheme();
   ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <React.StrictMode>

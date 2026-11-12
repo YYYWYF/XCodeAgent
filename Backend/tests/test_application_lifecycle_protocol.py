@@ -75,7 +75,7 @@ class ApplicationLifecycleProtocolTests(unittest.TestCase):
                 frames = asyncio.run(collect())
                 reconcile.assert_awaited_once_with(directory, session_id="owner", thread_id="thread")
         self.assertIn('"sessionDeferred":true', frames)
-        self.assertIn('"recoverySnapshot":', frames)
+        self.assertIn('"sessionWorkflow":', frames)
         self.assertIn('"type":"RUN_FINISHED"', frames)
 
     def test_capabilities_publish_dedicated_endpoint(self) -> None:

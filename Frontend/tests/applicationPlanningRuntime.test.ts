@@ -30,26 +30,6 @@ import { initialConnectionState } from '../src/renderer/src/service/connectionSt
 import { technicalPlanningReplyPresentation, shouldPreserveTechnicalPlanningReply, type TechnicalPlanningReply } from '../src/renderer/src/service/technicalPlanningConversation'
 import { applicationPlanningRecoveryIncident } from '../src/renderer/src/service/recoveryIncident'
 
-// 结束恢复的文字不能由同 Run 的旧确认输出覆盖，迟到原流也不能复活旧确认。
-{
-  const current = planningState('app-ended-output', 'thread-ended-output')
-  const ended: WorkflowRunPayload = { runId: 'ended-run', threadId: current.threadId, events: [], state: {},
-    summary: { status: 'completed', phase: 'plan_control', message: '本轮任务已结束，已有文件已保留。',
-      planControl: { action: 'end', status: 'ended', targetRunId: 'ended-run' } } }
-  current.workflow = ended
-  const h = harness(current)
-  h.onRead(async () => ({ workflow: ended, lifecycle: authoritativeLifecycle(current, { status: 'cancelled' }),
-    recovery: recoveryProjection(current.threadId, { classification: 'completed', recoveryActionPlan: null }),
-    output: { requestId: 'old', runId: ended.runId, threadId: current.threadId, startedAt: '',
-      submissionOrder: 1, sequence: 10, finished: true, content: '请确认后继续', processSteps: [], toolCalls: [] } }))
-  await h.runtime.reconcileCurrentState()
-  assert.equal(h.contents.at(-1), ended.summary.message)
-  const late = { ...confirmationWorkflow(current.threadId), runId: ended.runId }
-  const result = reduceApplicationPlanningCurrentState(h.current()!, {
-    type: 'workflow_received', applicationId: current.application.id, threadId: current.threadId, workflow: late })
-  assert.equal(result.workflow?.summary.phase, 'plan_control')
-}
-
 /** 构造带稳定身份的最小 Planning 当前状态，不挂载任何 React 视图。 */
 function planningState(applicationId = 'app-A', threadId = 'thread-A'): ApplicationPlanningCurrentState {
   const application = { id: applicationId, appName: applicationId, workspaceRoot: `/workspace/${applicationId}` } as ApplicationConfig
@@ -146,7 +126,6 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
   let current: ApplicationPlanningCurrentState | undefined = initial
   let active = false
   let stopCalls = 0
-  let detachCalls = 0
   let stop = async (): Promise<void> => { active = false }
   let send: (options: SendWorkflowMessageOptions) => Promise<AgUiChatResult> = async () => result()
   let read: () => Promise<import('../src/renderer/src/service/applicationPlanningRecovery').ApplicationPlanningAuthoritativeSnapshot | undefined> = async () => ({
@@ -202,8 +181,6 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
       },
       /** 停止只影响本测试实例的会话。 */
       stop: async () => { stopCalls += 1; await stop() },
-      /** 卸载只移除观察者，保留后台执行。 */
-      detach: () => { detachCalls += 1; active = false },
       /** 读取当前模拟传输活动状态。 */
       hasActiveRun: () => active
     },
@@ -225,9 +202,7 @@ function harness(initial = planningState(), overrides: Partial<ApplicationPlanni
     /** 查询独立权威读取次数。 */
     readCalls: () => readCalls,
     /** 查询本实例 stop 调用次数。 */
-    stopCalls: () => stopCalls,
-    /** 查询卸载释放观察者的次数。 */
-    detachCalls: () => detachCalls
+    stopCalls: () => stopCalls
   }
 }
 
@@ -405,8 +380,7 @@ for (const confirmed of [true, false]) {
   assert.equal(h.events.length, eventCount)
   assert.deepEqual(h.published, [])
   assert.deepEqual(h.contents, [])
-  assert.equal(h.stopCalls(), 0)
-  assert.equal(h.detachCalls(), 1)
+  assert.equal(h.stopCalls(), 1)
 }
 
 // G：保存服务完成后合并最新 Canonical Workflow，再把 artifact 返回给调用方。

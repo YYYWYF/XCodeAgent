@@ -16,7 +16,7 @@ from app.protocols.application_planning_interrupt import application_planning_in
 from app.services.application_lifecycle import application_lifecycle_path, load_application_lifecycle, write_application_lifecycle
 from app.services.document_review_assets import find_document_review, require_current_document_review
 from app.services.document_review_rebuild import prepare_document_review
-from app.services.recovery_snapshot import project_recovery_snapshot
+from tests.document_review_read_fixture import read_document_review_state
 from app.workspace.plan_documents import commit_technical_plan_document
 from app.workspace.spec_documents import write_requirement_spec_draft_document, write_ui_designs_json
 from app.workspace.product_plan_documents import write_product_plan_documents
@@ -111,17 +111,18 @@ class DocumentReviewCrossWorkspaceTests(unittest.IsolatedAsyncioTestCase):
             await self.clone_after_source_review(kind)
             before = self.hashes(self.other)
             result = await self.action(self.other, "get", planningThreadId=self.h.thread_id)
-            self.assertFalse(result["lifecycle"]["extensions"]["recoverySnapshot"]["checkpointAvailable"])
+            self.assertEqual(result["lifecycle"]["extensions"]["documentReview"]["status"], "available")
             self.assertFalse(workflow_checkpoint_db_path(workspace=self.other).exists())
             result = await self.action(self.other, "prepare_document_review", planningThreadId=self.h.thread_id)
         self.assertEqual(result["status"], "completed", result)
-        snapshot = result["lifecycle"]["extensions"]["recoverySnapshot"]
+        snapshot = await read_document_review_state(workspace=self.other, application_id=self.h.project_id,
+            thread_id=self.h.thread_id, planning=True)
         self.assertEqual(snapshot["workflow"]["state"]["applicationPlanningRecovery"]["classification"], "awaiting_user")
         self.assertNotEqual(load_application_lifecycle(self.other).active_run_id,
                             load_application_lifecycle(str(self.h.workspace)).active_run_id)
         self.assertEqual(self.hashes(self.other), before)
         await close_workflow_checkpointer_for_workspace(workspace=self.other)
-        reloaded = await project_recovery_snapshot(workspace=self.other, application_id=self.h.project_id,
+        reloaded = await read_document_review_state(workspace=self.other, application_id=self.h.project_id,
             thread_id=self.h.thread_id, planning=True)
         self.assertEqual(reloaded["workflow"]["runId"], snapshot["workflow"]["runId"])
         self.assertEqual(self.hashes(self.other), before)
@@ -197,7 +198,7 @@ class DocumentReviewCrossWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"confirmation_status": "pending_user_confirmation"}))
         result = await self.action(str(self.h.workspace), "get", planningThreadId=self.h.thread_id)
-        review = result["lifecycle"]["extensions"]["recoverySnapshot"]["documentReview"]
+        review = result["lifecycle"]["extensions"]["documentReview"]
         self.assertEqual(review["status"], "blocked")
         self.assertFalse(workflow_checkpoint_db_path(workspace=str(self.h.workspace)).exists())
 
@@ -208,7 +209,7 @@ class DocumentReviewCrossWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         await prepare_document_review(workspace, application_id=self.h.project_id, thread_id=self.h.thread_id)
         draft = self.h.workspace / ".devagentstudio/drafts/plans/technical-plan.json"
         draft.write_text("{外部编辑未完成")
-        result = await project_recovery_snapshot(workspace=workspace, application_id=self.h.project_id,
+        result = await read_document_review_state(workspace=workspace, application_id=self.h.project_id,
             thread_id=self.h.thread_id, planning=True)
         self.assertIsNone(result["workflow"])
         self.assertEqual(result["documentReview"]["status"], "blocked")

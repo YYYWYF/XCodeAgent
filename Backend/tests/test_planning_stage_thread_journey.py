@@ -129,8 +129,7 @@ class PlanningStageThreadJourneyTests(unittest.IsolatedAsyncioTestCase):
             payload={"threadId": "new-plan-thread", "forwardedProps": {"applicationPlanningRecovery": {
                 "action": "get", "workspaceRoot": str(self.h.workspace), "applicationId": self.h.project_id}}})]
         events = [json.loads(line[5:]) for frame in frames for line in frame.splitlines() if line.startswith("data:")]
-        recovery = next(event["value"] for event in events if event.get("name") == "workflow-run")
-        workflow = recovery["recoverySnapshot"]["workflow"]
+        workflow = next(event["value"] for event in events if event.get("name") == "workflow-run")
         self.assertEqual(workflow["threadId"], "new-plan-thread")
         self.assertEqual(workflow["summary"]["status"], "requires_user_input")
         self.assertTrue((self.h.workspace / ".devagentstudio/drafts/plans/technical-plan.json").is_file())

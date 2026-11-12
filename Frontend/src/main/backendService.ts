@@ -5,8 +5,6 @@ import net from 'node:net'
 import path from 'node:path'
 import { APP_ENV, DEVAGENTSTUDIO_ENV } from './env'
 import { backendEnvFilename, checkBackendHealth } from './backendEnvironment'
-import { readBackendHealth } from './backendEnvironment'
-import { BackendConnectionMonitor } from './backendConnectionMonitor'
 import { stopBackendProcess } from './backendProcess'
 
 const BACKEND_EXECUTABLE_NAMES: Partial<Record<NodeJS.Platform, string>> = {
@@ -22,18 +20,6 @@ let backendBaseUrl = DEVAGENTSTUDIO_ENV.DEVAGENTSTUDIO_BACKEND_URL
 let stoppingBackend = false
 let serviceEpoch = 0
 let startupPromise: Promise<string> | undefined
-
-export const backendConnectionMonitor = new BackendConnectionMonitor({
-  baseUrl: backendBaseUrl,
-  probe: probeBackendConnection,
-  recover: async () => {
-    await startBackendService()
-    return {
-      baseUrl: backendBaseUrl,
-      backendInstanceId: backendConnectionMonitor.getState().backendInstanceId
-    }
-  }
-})
 
 type BundledBackendPaths = {
   backendDir: string
@@ -52,16 +38,8 @@ export async function startBackendService(): Promise<string> {
   if (startupPromise) return startupPromise
   const epoch = serviceEpoch
   const pending = performBackendStart(epoch)
-    .then(async (baseUrl) => {
-      if (epoch !== serviceEpoch) throw new Error('后台连接操作已取消。')
-      const health = await readBackendHealth(baseUrl, APP_ENV)
-      if (epoch !== serviceEpoch) throw new Error('后台连接操作已取消。')
-      if (!health) throw new Error('后台尚未就绪，请稍后重新同步。')
-      backendConnectionMonitor.ready({
-        baseUrl,
-        backendInstanceId: String(health.backendInstanceId || '')
-      })
-      backendConnectionMonitor.start()
+    .then((baseUrl) => {
+      if (epoch !== serviceEpoch) throw new Error('后台启动操作已取消。')
       return baseUrl
     })
     .finally(() => {
@@ -132,7 +110,6 @@ async function performBackendStart(epoch: number): Promise<string> {
 /** 客户端退出或安装更新时停止其内置后台，并等待在途启动收口。 */
 export async function stopBackendService(): Promise<void> {
   serviceEpoch++
-  backendConnectionMonitor.stop()
   const pending = startupPromise
   const child = backendProcess
   stoppingBackend = true
@@ -152,16 +129,6 @@ export async function stopBackendService(): Promise<void> {
 export async function prepareBackendServiceUpdate(cleanup: () => Promise<void>): Promise<void> {
   await cleanup()
   await stopBackendService()
-}
-
-/** 启动或明确进程事件中核验环境与实例，不用于定时在线检测。 */
-async function probeBackendConnection(): Promise<
-  { baseUrl: string; backendInstanceId: string } | undefined
-> {
-  if (shouldStartBundledBackend() && !backendProcess) return undefined
-  const health = await readBackendHealth(backendBaseUrl, APP_ENV)
-  if (!health || (backendProcess && health.backendPid !== backendProcess.pid)) return undefined
-  return { baseUrl: backendBaseUrl, backendInstanceId: String(health.backendInstanceId || '') }
 }
 
 function shouldStartBundledBackend(): boolean {
@@ -235,7 +202,6 @@ function wireBackendLogging(child: ChildProcess): void {
       console.error(
         `Backend process exited unexpectedly: code=${code ?? 'null'} signal=${signal ?? 'null'}`
       )
-      void backendConnectionMonitor.checkNow()
     }
   })
 }

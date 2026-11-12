@@ -10,7 +10,6 @@ from typing import Any, AsyncIterator, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.execution_recovery import ExecutionRecoveryProjection
-from app.services.backend_instance import current_backend_instance
 from app.services.recovery_read_diagnostic import recovery_read_error
 from app.protocols.ag_ui_action_stream import (
     AgUiActionResult,
@@ -35,7 +34,8 @@ from app.services.build_task_plan_lifecycle import (
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.services.planning_confirmation_projection import prioritize_checkpoint_confirmation
 from app.services.workbench_progress_projection import project_workbench_progress
-from app.services.recovery_snapshot import project_recovery_snapshot
+from app.services.workbench_result_projection import project_workbench_result
+from app.services.session_workflow_projection import project_session_workflow
 from app.services.execution_recovery_scanner import reconcile_workspace_recovery
 from app.services.execution_recovery_projection import resolve_execution_recovery_projection
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
@@ -155,7 +155,8 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         "summaryRead": {"action": "get", "field": "includeRecovery", "value": False, "readOnly": True,
             "fields": ["application", "initialization", "revision", "updatedAt"]},
         "workspaceAttach": {"returnsRecovery": True, "sessionOnlyField": "reconcileWorkspace"},
-        "backendInstanceField": "backendInstanceId",
+        "documentReview": {"field": "extensions.documentReview", "prepareAction": "prepare_document_review",
+            "callsModel": False, "requiresExplicitConfirmation": True},
         "workbenchProgress": {
             "field": "extensions.workbenchProgress",
             "action": "get",
@@ -163,17 +164,11 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "identity": ["runId", "threadId", "ownerSessionId"],
             "dagGenerationSchema": "dag-generation.v1",
         },
-        "recoverySnapshot": {
-            "field": "extensions.recoverySnapshot", "action": "get", "readOnly": True,
-            "planningFields": ["planningThreadId"], "sessionFields": ["sessionId", "sessionThreadId"],
-            "identity": ["applicationId", "threadId", "sessionId"],
-            "cursor": ["lifecycleRevision", "checkpointAt", "output.submissionOrder", "output.sequence"],
-            "source": "current-checkpoint-and-live-execution", "reconcileAction": "workspace_attach",
-            "reconcileSessionScope": ["sessionId", "sessionThreadId"],
-            "checkpointAvailable": "current-root-checkpoint-exists",
-            "documentReview": {"field": "documentReview", "prepareAction": "prepare_document_review",
-                "kinds": ["requirement_document", "ui_designs", "technical_plan", "revision_draft", "build_task_plan"],
-                "callsModel": False, "requiresExplicitConfirmation": True},
+        "workbenchResult": {
+            "field": "extensions.workbenchResult", "action": "get", "readOnly": True,
+            "requestFields": ["sessionId", "sessionThreadId"],
+            "identity": ["runId", "threadId", "ownerSessionId"],
+            "mode": "development_target_selection", "source": "current-checkpoint",
         },
         "endedTasks": {
             "field": "endedExecutions", "checkedAtField": "endedExecutionsCheckedAt",
@@ -350,10 +345,16 @@ def build_application_lifecycle_ag_ui_stream(
             state = load_application_lifecycle(request.workspace_root)
             message = "已使用现有文档建立审阅，等待明确确认。"
         elif request.action == "get":
-            # 恢复收口属于明确的 Attach；Get 只投影当前事实，不释放或重建执行。
-            state = load_application_lifecycle(request.workspace_root)
-            if state is None:
-                raise ApplicationLifecycleMissingError("应用生命周期尚未创建。")
+            from app.services.development_artifacts import refresh_development_artifacts
+
+            # 首页摘要仍沿用已有的轻量读取，不随执行链路撤销而恢复全量扫描。
+            if request.include_recovery:
+                await reconcile_workspace_recovery(request.workspace_root)
+                state = refresh_development_artifacts(request.workspace_root)
+            else:
+                state = load_application_lifecycle(request.workspace_root)
+                if state is None:
+                    raise ApplicationLifecycleMissingError("应用生命周期尚未创建。")
             message = "已读取应用生命周期。"
         elif request.action in {
             "bootstrap_template_generation",
@@ -441,7 +442,6 @@ def build_application_lifecycle_ag_ui_stream(
             # 首页识别只需身份和阶段；不计算结束任务的工作区指纹或签发恢复资格。
             "lifecycle": application_lifecycle_payload(state) if request.include_recovery else state.model_dump(
                 mode="json", by_alias=True, include={"application", "initialization", "revision", "updated_at"}),
-            "backendInstanceId": current_backend_instance().instance_id,
         }
         if request.action == "workspace_attach":
             data["workspaceAttach"] = {
@@ -465,14 +465,18 @@ def build_application_lifecycle_ag_ui_stream(
                 "planningRefresh": await _current_planning_refresh(request.workspace_root),
             }
         if request.action in {"get", "workspace_attach", "prepare_document_review"} and request.include_recovery:
-            recovery_thread = request.planning_thread_id or request.session_thread_id
-            if recovery_thread:
-                data["lifecycle"]["extensions"]["recoverySnapshot"] = await project_recovery_snapshot(
-                    workspace=request.workspace_root, application_id=state.application.id,
-                    thread_id=recovery_thread, session_id=request.session_id,
-                    planning=bool(request.planning_thread_id))
-                if data["lifecycle"]["extensions"]["recoverySnapshot"]["lifecycleRevision"] != state.revision:
-                    raise RuntimeError("任务状态正在更新，请重新同步。")
+            if request.session_id and request.session_thread_id:
+                data["lifecycle"]["extensions"]["sessionWorkflow"] = await project_session_workflow(
+                    request.workspace_root, session_id=request.session_id, thread_id=request.session_thread_id)
+                data["lifecycle"]["extensions"]["workbenchResult"] = await project_workbench_result(
+                    request.workspace_root, state,
+                    session_id=request.session_id, thread_id=request.session_thread_id,
+                )
+            review_thread = request.planning_thread_id or request.session_thread_id
+            if review_thread:
+                from app.services.document_review_assets import project_document_review_availability
+                data["lifecycle"]["extensions"]["documentReview"] = await project_document_review_availability(
+                    request.workspace_root, thread_id=review_thread, planning=bool(request.planning_thread_id))
             # 复用已落盘的进度供 Renderer 重入恢复，仅附加到 AG-UI 读取结果。
             data["lifecycle"]["extensions"]["workbenchProgress"] = await asyncio.to_thread(
                 project_workbench_progress, request.workspace_root, state

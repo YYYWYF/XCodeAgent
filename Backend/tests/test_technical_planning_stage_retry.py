@@ -15,7 +15,7 @@ from app.protocols.workflow.run_control import build_workflow_cancellation_ag_ui
 from app.persistence.execution_recovery import get_execution
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
-from app.protocols.application_planning_recovery_projection import project_planning_recovery
+from app.protocols.application_page_planning import _build_application_planning_recovery_projection
 from app.workspace.plan_documents import commit_technical_plan_document
 from app.services.application_lifecycle import (
     load_application_lifecycle, persist_application_lifecycle_transition, write_application_lifecycle,
@@ -288,7 +288,7 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(source.status, DurableExecutionStatus.CANCELLED)
             self.assertIsNotNone(source.ended_at)
             committed = await harness.graph.aget_state({"configurable": {"thread_id": harness.thread_id}})
-            projected = await project_planning_recovery(
+            projected = await _build_application_planning_recovery_projection(
                 workspace=str(harness.workspace), thread_id=harness.thread_id,
                 graph=harness.graph, source=source, snapshot=committed,
             )

@@ -12,10 +12,10 @@ from app.domain.application_lifecycle import ApplicationLifecycleStage, Applicat
 from app.domain.execution_recovery import DurableExecutionRecord, DurableExecutionStatus
 from app.graph.state import ProjectState
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace, workflow_checkpointer
-from app.persistence.execution_recovery import insert_execution, list_executions_for_thread, update_execution_status
+from app.persistence.execution_recovery import insert_execution, list_executions_for_thread
 from app.protocols.application_lifecycle import ApplicationLifecycleAction, build_application_lifecycle_ag_ui_stream
 from app.services.application_lifecycle import create_application_lifecycle, write_application_lifecycle
-from app.services.recovery_snapshot import project_recovery_snapshot
+from app.services.workbench_result_projection import project_workbench_result
 
 
 def _selection(state):
@@ -64,35 +64,26 @@ class WorkbenchResultProjectionTests(unittest.IsolatedAsyncioTestCase):
         before = path.read_bytes()
         config = {"configurable": {"thread_id": "thread"}}
         snapshot = await self.graph.aget_state(config)
-        first = await project_recovery_snapshot(workspace=self.workspace, application_id="app", session_id="owner", thread_id="thread")
+        first = await project_workbench_result(self.workspace, self.state, session_id="owner", thread_id="thread")
         self.assertEqual(first["workflow"]["state"]["clarification"]["mode"], "development_target_selection")
-        self.assertEqual(first["workflow"]["runId"], "run")
+        self.assertEqual(first["runId"], "run")
         self.assertNotIn("must-not-be-published", json.dumps(first))
-        second = await project_recovery_snapshot(workspace=self.workspace, application_id="app", session_id="owner", thread_id="thread")
-        self.assertEqual(first["workflow"], second["workflow"])
-        self.assertEqual(first["checkpointId"], second["checkpointId"])
+        self.assertEqual(first, await project_workbench_result(self.workspace, self.state,
+                         session_id="owner", thread_id="thread"))
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual((await self.graph.aget_state(config)).config, snapshot.config)
         self.assertEqual(len(await list_executions_for_thread(self.workspace, thread_id="thread")), 1)
 
     async def test_other_owner_and_newer_run_cannot_restore_old_card(self):
         """错 owner/thread、更新执行和 checkpoint Run 不匹配都不能借旧结果生成卡片。"""
-        self.assertIsNone((await project_recovery_snapshot(workspace=self.workspace, application_id="app",
-                         session_id="other", thread_id="thread"))["workflow"])
-        self.assertIsNone((await project_recovery_snapshot(workspace=self.workspace, application_id="app",
-                         session_id="owner", thread_id="other"))["workflow"])
+        self.assertIsNone(await project_workbench_result(self.workspace, self.state,
+                         session_id="other", thread_id="thread"))
+        self.assertIsNone(await project_workbench_result(self.workspace, self.state,
+                         session_id="owner", thread_id="other"))
         await insert_execution(self.record.model_copy(update={"run_id": "new-run",
             "started_at": self.record.started_at + timedelta(seconds=1)}))
-        self.assertIsNone((await project_recovery_snapshot(workspace=self.workspace, application_id="app",
-                         session_id="owner", thread_id="thread"))["workflow"])
-
-    async def test_ended_record_cannot_restore_checkpoint_selection(self):
-        """真实执行记录已结束时，旧 checkpoint 的选择和确认字段不再成为可操作入口。"""
-        await update_execution_status(workspace=self.workspace, run_id="run", status=DurableExecutionStatus.CANCELLED, ended=True)
-        snapshot = await project_recovery_snapshot(workspace=self.workspace, application_id="app", session_id="owner", thread_id="thread")
-        self.assertEqual(snapshot["workflow"]["summary"]["status"], "cancelled")
-        self.assertFalse(snapshot["workflow"]["summary"].get("clarification"))
-        self.assertNotIn("revision_continuation", snapshot["workflow"]["state"])
+        self.assertIsNone(await project_workbench_result(self.workspace, self.state,
+                         session_id="owner", thread_id="thread"))
 
     async def test_ag_ui_get_includes_result_only_for_requested_session(self):
         """产品读取仍发出完整 AG-UI 生命周期，结果只进入 scoped Get 响应。"""
@@ -101,10 +92,10 @@ class WorkbenchResultProjectionTests(unittest.IsolatedAsyncioTestCase):
                 "action": "get", "workspaceRoot": self.workspace, "sessionId": "owner", "sessionThreadId": "thread"}}})])
         self.assertIn('"type":"RUN_STARTED"', stream)
         self.assertIn('"type":"RUN_FINISHED"', stream)
-        self.assertIn('"recoverySnapshot":', stream)
+        self.assertIn('"workbenchResult":', stream)
         self.assertIn('"development_target_selection"', stream)
         self.assertNotIn('must-not-be-published', stream)
-        self.assertNotIn('recoverySnapshot', (Path(self.workspace) / ".devagentstudio/application-lifecycle.json").read_text())
+        self.assertNotIn('workbenchResult', (Path(self.workspace) / ".devagentstudio/application-lifecycle.json").read_text())
 
     def test_get_requires_complete_session_identity(self):
         """请求边界拒绝只有半个会话身份的结果读取。"""

@@ -31,11 +31,6 @@ class WorkspaceProcessRegistry:
         with self._lock:
             self._cancelled_runs.discard(run_id)
 
-    def active_count(self) -> int:
-        """退出检查也保留已脱离外层协程但尚未结束的短期命令。"""
-        with self._lock:
-            return len({process.pid for processes in self._processes.values() for process in processes if process.poll() is None})
-
     def is_run_cancelled(self, run_id: str) -> bool:
         """让同步检测循环观察异步工作流的停止请求。"""
         with self._lock:

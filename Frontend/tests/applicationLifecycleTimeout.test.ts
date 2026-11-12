@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { getApplicationLifecycle } from '../src/renderer/src/service/applicationLifecycle'
 import { refreshWorkbenchRun } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkbenchRunRefresh'
-import { RecoveryStore } from '../src/renderer/src/service/recoveryStore'
 import type { ApplicationLifecycle } from '../src/renderer/src/typings'
 
 /** 用标准事件信封覆盖真实 AG-UI 客户端，不绕过生产请求与共享查询缓存。 */
@@ -55,7 +54,7 @@ test('Attach/Get 永不返回时按时退出、释放共享查询，重新同步
       }
       // 首次 Attach 已返回完整恢复结果；Get 超时场景在后续只读同步中触发。
       if (blockedAction === 'get') await getApplicationLifecycle(application)
-      const store = new RecoveryStore(), key = store.key(application.workspaceRoot, application.id, 'thread')
+      let syncError: unknown
       let merges = 0
       const first = getApplicationLifecycle(application)
       const shared = getApplicationLifecycle(application)
@@ -63,14 +62,13 @@ test('Attach/Get 永不返回时按时退出、释放共享查询，重新同步
         start: () => 1,
         isCurrentRequest: () => true,
         settle: (_generation, error) => {
-          if (error) store.recordFailure(key, error)
+          syncError = error
         }
       }, () => true)
       const outcomes = await Promise.allSettled([first, shared, read])
       assert.equal(outcomes[0].status, 'rejected')
       assert.equal(outcomes[1].status, 'rejected')
-      assert.match(store.get(key).syncError || '', /应用状态同步超时/)
-      assert.equal(store.get(key).connection.status, 'healthy')
+      assert.match(String(syncError), /应用状态同步超时/)
       assert.equal(blockedSignal?.aborted, true)
       assert.equal(merges, 0)
       // 下一次发出新查询，已成功的校准不因普通读取超时而重复执行。

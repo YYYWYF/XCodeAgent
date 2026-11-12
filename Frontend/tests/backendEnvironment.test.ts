@@ -6,8 +6,6 @@ import {
   checkBackendHealth
 } from '../src/main/backendEnvironment'
 import type { AppEnv } from '../src/main/env'
-import './backendConnectionMonitor.test'
-import './backendConnectionRecovery.test'
 
 /** 通过真实 HTTP 服务验证身份解析、分片响应和连接错误。 */
 async function run(): Promise<void> {

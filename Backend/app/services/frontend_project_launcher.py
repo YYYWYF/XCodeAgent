@@ -36,17 +36,6 @@ _FRONTEND_PROCESSES: dict[str, subprocess.Popen[bytes]] = {}
 _FRONTEND_PROCESS_GUARD = threading.Lock()
 
 
-def stop_owned_frontend_previews() -> None:
-    """后台退场仅清理本实例持有的预览进程，包含客户端崩溃后未能发出的停止请求。"""
-    with _FRONTEND_PROCESS_GUARD:
-        entries = list(_FRONTEND_PROCESSES)
-    for key in entries:
-        workspace, runtime_subdir = key.rsplit("::", 1)
-        result = stop_frontend_project(Path(workspace), runtime_subdir=runtime_subdir)
-        if not result.get("cleanup", {}).get("success"):
-            raise RuntimeError("后台退出时预览服务未能完成清理。")
-
-
 def launch_frontend_project(
     workspace_path: str | Path,
     *,

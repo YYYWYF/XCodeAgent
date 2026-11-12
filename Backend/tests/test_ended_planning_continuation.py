@@ -13,7 +13,7 @@ from langgraph.types import interrupt
 
 from app.graph.state import ProjectState
 from app.persistence.execution_recovery import get_execution
-from app.protocols.application_planning_recovery_projection import project_planning_recovery
+from app.protocols.application_page_planning import _build_application_planning_recovery_projection
 from app.protocols.execution_recovery import _resolve_action_source_run, build_execution_recovery_ag_ui_stream
 from app.protocols.workflow.run_control import WorkflowRunRegistry
 from app.services.application_lifecycle import application_lifecycle_payload, load_application_lifecycle
@@ -95,7 +95,7 @@ class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(application_lifecycle_payload(ended)["endedPlanningExecution"]["workspaceUnchanged"])
             source = await get_execution(workspace, "design-run")
             snapshot = await graph.aget_state({"configurable": {"thread_id": "thread"}})
-            projection = await project_planning_recovery(
+            projection = await _build_application_planning_recovery_projection(
                 workspace=workspace, thread_id="thread", graph=graph, snapshot=snapshot, source=source)
             self.assertTrue(projection.can_continue)
             plan = projection.recovery_action_plan
@@ -128,7 +128,7 @@ class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(ended.ended_planning_execution.formal_revision)
             source = await get_execution(workspace, "design-run")
             snapshot = await graph.aget_state({"configurable": {"thread_id": "thread"}})
-            projection = await project_planning_recovery(
+            projection = await _build_application_planning_recovery_projection(
                 workspace=workspace, thread_id="thread", graph=graph, snapshot=snapshot, source=source)
             self.assertTrue(projection.can_continue)
             self.assertEqual(projection.recovery_action_plan["primaryAction"]["label"], "继续生成")
@@ -237,7 +237,7 @@ class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
             graph, _, _, calls, downstream = await self.fixture(workspace, skills=[])
             source = await get_execution(workspace, "design-run")
             snapshot = await graph.aget_state({"configurable": {"thread_id": "thread"}})
-            projection = await project_planning_recovery(
+            projection = await _build_application_planning_recovery_projection(
                 workspace=workspace, thread_id="thread", graph=graph, snapshot=snapshot, source=source)
             plan = projection.recovery_action_plan
             frames = []

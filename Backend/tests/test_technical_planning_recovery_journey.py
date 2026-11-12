@@ -40,7 +40,9 @@ from app.persistence.execution_recovery import (
     list_recovery_attempts_for_thread,
 )
 from app.protocols.execution_recovery import build_execution_recovery_ag_ui_stream
-from app.protocols.application_planning_recovery_projection import project_planning_recovery
+from app.protocols.application_page_planning import (
+    _build_application_planning_recovery_projection,
+)
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.application_lifecycle import (
     create_application_lifecycle,
@@ -320,7 +322,7 @@ class TechnicalPlanningRecoveryJourneyHarness:
         snapshot = await self.graph.aget_state(
             {"configurable": {"thread_id": self.thread_id}}
         )
-        projection = await project_planning_recovery(
+        projection = await _build_application_planning_recovery_projection(
             workspace=str(self.workspace),
             thread_id=self.thread_id,
             graph=self.graph,

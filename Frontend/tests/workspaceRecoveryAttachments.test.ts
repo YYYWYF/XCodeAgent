@@ -21,7 +21,7 @@ test('校准只记录凭据，不复用快照；会话及克隆目录彼此隔�
   assert.equal(reads, 4)
 })
 
-test('失败及推迟不签发凭据，重新进入和后台换代拒绝迟到回执', async () => {
+test('失败及推迟不签发凭据，重新进入拒绝迟到回执', async () => {
   const store = new WorkspaceRecoveryAttachments()
   let reads = 0
   /** 前两次分别模拟校准失败与活动任务推迟，第三次才完成。 */
@@ -44,9 +44,4 @@ test('失败及推迟不签发凭据，重新进入和后台换代拒绝迟到�
   store.invalidate()
   await store.ensure('/workspace', 'owner', read)
   assert.equal(reads, 5)
-  store.observeBackend('first')
-  const oldRevision = store.backendRevision
-  assert.equal(store.observeBackend('second'), true)
-  assert.throws(() => store.observeBackend('first', oldRevision), /旧后台响应已失效/)
-  assert.equal(store.observeBackend('second'), false)
 })

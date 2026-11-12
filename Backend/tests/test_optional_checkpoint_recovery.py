@@ -22,9 +22,9 @@ from app.services.application_lifecycle import (
     application_lifecycle_path, create_application_lifecycle, load_application_lifecycle,
     start_workbench_execution, write_application_lifecycle,
 )
-from app.services.planning_recovery_projection import read_planning_recovery
+from tests.document_review_read_fixture import read_planning_review
 from app.services.recovery_checkpoint import checkpoint_thread_exists
-from app.services.recovery_snapshot import project_recovery_snapshot
+from tests.document_review_read_fixture import read_document_review_state
 from app.services.workspace_checkpoint_reconciliation import reconcile_missing_workspace_checkpoints
 
 
@@ -83,10 +83,11 @@ class OptionalCheckpointRecoveryTests(unittest.IsolatedAsyncioTestCase):
         """规划及会话都可缺少现场，不能因此创建空 checkpoint 或制造旧错误卡。"""
         result = await self.action("get", planningThreadId="planning-thread")
         self.assertEqual(result["status"], "completed")
-        snapshot = result["lifecycle"]["extensions"]["recoverySnapshot"]
+        snapshot = await read_document_review_state(workspace=self.workspace, application_id="app",
+            thread_id="planning-thread", planning=True)
         self.assertFalse(snapshot["checkpointAvailable"])
         self.assertIsNone(snapshot["workflow"])
-        session = await project_recovery_snapshot(workspace=self.workspace, application_id="app",
+        session = await read_document_review_state(workspace=self.workspace, application_id="app",
             thread_id="copied-thread", session_id="session")
         self.assertFalse(session["checkpointAvailable"])
         self.assertFalse(workflow_checkpoint_db_path(workspace=self.workspace).exists())
@@ -127,7 +128,7 @@ class OptionalCheckpointRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.action("workspace_attach")
         result = await self.action("get", planningThreadId="planning-thread")
         extensions = result["lifecycle"]["extensions"]
-        self.assertFalse(extensions["recoverySnapshot"]["checkpointAvailable"])
+        self.assertFalse(await checkpoint_thread_exists(self.workspace, "planning-thread"))
         self.assertEqual(extensions["executionRecovery"]["candidates"], [])
         self.assertFalse(workflow_checkpoint_db_path(workspace=self.workspace).exists())
 
@@ -222,21 +223,10 @@ class OptionalCheckpointRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     "workflow_scope": "application_planning"}, config={}, next=("review",),
             tasks=(SimpleNamespace(interrupts=(SimpleNamespace(value={"type": "application_planning_review",
                 "artifact": "technical_plan", "clarification": {"mode": "technical_plan_confirmation"}}),)),))))
-        workflow, _, _ = await read_planning_recovery(graph=graph, workspace=self.workspace,
+        workflow, _, _ = await read_planning_review(graph=graph, workspace=self.workspace,
             application_id="app", thread_id="planning-thread")
         self.assertEqual(workflow["runId"], "current-run")
         self.assertEqual(workflow["state"]["applicationPlanningRecovery"]["classification"], "awaiting_user")
-
-    async def test_accepted_submission_hides_old_confirmation_before_execution_index(self) -> None:
-        """后台已接受新请求但索引尚未落盘时，不能重新开放旧 checkpoint 的确认门。"""
-        from app.domain.execution_recovery import RecoveryExecutionError
-        graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(
-            values={"active_run_id": "old-run", "workspace": self.workspace}, config={}, tasks=(), next=())))
-        with patch("app.services.planning_recovery_projection.active_detached_run_for_thread", return_value="accepted-new-run"):
-            with self.assertRaises(RecoveryExecutionError) as raised:
-                await read_planning_recovery(graph=graph, workspace=self.workspace,
-                    application_id="app", thread_id="planning-thread")
-        self.assertEqual(raised.exception.code, "APPLICATION_PLANNING_CHECKPOINT_PENDING")
 
     async def test_attach_indexes_current_checkpoint_instead_of_lifecycle_run(self) -> None:
         """有真实 checkpoint 但执行索引缺失时只索引当前现场，不补造旧生命周期 Run。"""

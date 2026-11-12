@@ -336,12 +336,6 @@ def cancel_builtin_authorization_deletion(workspace: str) -> None:
         logger.error("Builtin authorization deletion rollback needs review")
 
 
-def active_builtin_authorization_count() -> int:
-    """退出检查保留权限初始化及其停止收口线程，避免线程池尚在工作时升级。"""
-    with _registry_lock:
-        return sum(not future.done() for _, future in _workers.values())
-
-
 def shutdown_builtin_authorization_tasks() -> None:
     """在 Backend lifespan 退出时有序停止所有受管线程。"""
 

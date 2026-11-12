@@ -51,11 +51,6 @@ _cancellations: dict[tuple[str, str], Event] = {}
 _leave_cleanups: dict[str, asyncio.Task[Any]] = {}
 
 
-def active_preview_runtime_count() -> int:
-    """退出检查包含断连后仍在运行的诊断、修复与预览清理。"""
-    return sum(not task.done() for task in [*_jobs.values(), *_leave_cleanups.values()])
-
-
 def _job_finished(key: tuple[str, str], task: asyncio.Task[Any]) -> None:
     """移除已完成任务并消费断开订阅后的异常，避免后台引用泄漏。"""
     if _jobs.get(key) is task:

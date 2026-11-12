@@ -9,7 +9,6 @@ import type { ArtifactReference } from '../../../shared/workflowArtifactReferenc
 import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
-import { currentBackendBaseUrl } from './backendConnection'
 import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
 import { readWorkspaceToolActivity } from './workspaceToolActivity'
 import type {
@@ -32,8 +31,6 @@ import type {
 } from '../typings'
 
 export type SendWorkflowMessageOptions = {
-  /** 同一次用户提交持久保存的身份；连接重试复用，新的明确提交使用新身份。 */
-  requestId?: string
   workspaceRoot?: string
   sessionId?: string
   editorMode: EditorMode
@@ -584,7 +581,7 @@ async function promiseWithTimeout<T>(
 
 /** 解析桌面端注入的 Backend 地址，并为独立开发页面提供本地默认地址。 */
 function getAgentBaseUrl(): string {
-  return currentBackendBaseUrl(DEFAULT_AGENT_BASE_URL)
+  return (window.devAgentStudio?.agentBaseUrl || DEFAULT_AGENT_BASE_URL).replace(/\/$/, '')
 }
 
 /** 返回主工作流的 AG-UI 地址。 */
@@ -676,17 +673,6 @@ export class AgUiChatSession {
         this.rejectStoppedRun?.(reason)
       }
     }
-  }
-
-  /** 只释放前端订阅，窗口卸载不向后端发送停止动作。 */
-  detach(): void {
-    const runId = this.activeRunId
-    const agent = this.activeAgent
-    const reason = new Error('前端订阅已关闭，后台任务继续执行。')
-    reason.name = 'AbortError'
-    agent?.abortRun()
-    this.rejectStoppedRun?.(reason)
-    if (runId) this.finishActiveRun(runId, agent)
   }
 
   /** 使用请求级 HttpAgent 发送当前消息，避免把本地会话历史和旧状态重复传输。 */
@@ -820,7 +806,7 @@ export class AgUiChatSession {
       }
     }
 
-    const runId = options.requestId || randomUUID()
+    const runId = randomUUID()
     this.activeAgent = requestAgent
     this.activeRunId = runId
     this.activeWorkspaceRoot = options.workspaceRoot

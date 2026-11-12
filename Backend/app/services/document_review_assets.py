@@ -143,7 +143,7 @@ def find_document_review(workspace: str, *, planning: bool) -> DocumentReview | 
         _require_confirmed(spec, "需求文档")
         _require_confirmed(product, "产品规划")
         from app.graph.nodes.ui_confirmation import _ui_design_confirmation_payload
-        from app.services.planning_recovery_projection import _with_page_code
+        from app.protocols.application_page_planning import _with_page_code
         ui = _with_page_code(ui, state)
         state.update(ui_designs=ui, phase="ui_confirmation", status="requires_user_input",
                      clarification=_ui_design_confirmation_payload(state, ui))
@@ -188,3 +188,33 @@ def require_current_document_review(state: dict) -> None:
     identity = state.get("document_review")
     if identity and not document_review_is_current(str(state["workspace"]), identity):
         raise RecoveryExecutionError("DOCUMENT_REVIEW_SOURCE_CHANGED", "文档或上游已变化，请重新同步后审阅当前版本。")
+
+
+async def project_document_review_availability(workspace: str, *, thread_id: str, planning: bool) -> dict | None:
+    """仅检查当前文档是否需要重建审阅，不恢复执行结果或签发确认权限。"""
+    from app.persistence.checkpoints import workflow_checkpointer
+    from app.services.recovery_checkpoint import checkpoint_thread_exists
+    from app.services.application_lifecycle import load_application_lifecycle
+    present = await checkpoint_thread_exists(workspace, thread_id)
+    stale = False
+    if present:
+        saver = await workflow_checkpointer(workspace=workspace)
+        saved = await saver.aget_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}})
+        values = saved.checkpoint.get("channel_values", {}) if saved else {}
+        identity = values.get("document_review")
+        try:
+            stale = bool(identity and not document_review_is_current(workspace, identity))
+        except (OSError, ValueError) as exc:
+            return {"status": "blocked", "message": str(exc)}
+        if not stale:
+            return None
+    lifecycle = load_application_lifecycle(workspace)
+    if not planning and lifecycle:
+        for item in lifecycle.active_executions.values():
+            if item.thread_id != thread_id and await checkpoint_thread_exists(workspace, item.thread_id):
+                return None
+    try:
+        candidate = find_document_review(workspace, planning=planning)
+        return {"status": "available", "kind": candidate.kind, "digest": candidate.digest} if candidate else None
+    except (OSError, ValueError) as exc:
+        return {"status": "blocked", "message": str(exc)}

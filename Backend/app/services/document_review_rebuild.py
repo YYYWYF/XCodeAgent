@@ -20,11 +20,10 @@ async def prepare_document_review(workspace: str, *, application_id: str, thread
     """串行建立或复用当前审阅，校验文件与真实执行后才登记新的 Run。"""
     workspace = str(Path(workspace).resolve())
     async with _locks.setdefault(workspace, asyncio.Lock()):
-        from app.services.detached_execution import active_detached_count
         from app.services.ui_design_generation_pool import active_ui_design_count
         from app.protocols.workflow.run_control import workflow_run_registry
         from app.protocols.application_planning_run_lock import application_planning_run_lock
-        if (workflow_run_registry.active_run_ids(workspace) or active_detached_count(workspace)
+        if (workflow_run_registry.active_run_ids(workspace)
                 or active_ui_design_count(workspace) or application_planning_run_lock(thread_id).locked()):
             raise RecoveryExecutionError("DOCUMENT_REVIEW_BUSY", "当前应用仍有真实任务，请等待其结束后重新同步。")
         before = lifecycle_service.load_application_lifecycle(workspace)

@@ -50,7 +50,6 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
   const inputs: Array<{ action: string; sessionId?: string; sessionThreadId?: string; reconcileWorkspace?: boolean; includeRecovery?: boolean }> = []
   let available: 'available' | 'blocked' | undefined = 'available'
   let prepared = false
-  let backendInstanceId = 'document-review-backend-first'
   const lifecycle = {
     application: { id: 'document-review-client', name: '现有文档' }, revision: 1, updatedAt: '2026-11-09T00:00:00Z',
     initialization: { threadId: 'review-thread', stage: 'awaiting_technical_plan_confirmation', status: 'awaiting_user' },
@@ -58,24 +57,31 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
   } as ApplicationLifecycle
   const server = http.createServer(async (request, response) => {
     // 假服务只提供规范 AG-UI 帧；产品调用与事件解析均使用官方客户端。
-    assert.equal(request.url, '/application-lifecycle/run')
+    assert.ok(['/application-lifecycle/run', '/application-page-planning/run'].includes(request.url || ''))
     let body = ''
     for await (const part of request) body += part
     const payload = JSON.parse(body)
-    const input = payload.forwardedProps.applicationLifecycle
+    const input = payload.forwardedProps.applicationLifecycle || payload.forwardedProps.applicationPlanningRecovery
+    if (request.url === '/application-page-planning/run') {
+      const value = available === 'blocked' ? { schemaVersion: 1, status: 'failed', error: { message: '当前文档不完整' } }
+        : prepared ? { schemaVersion: 1, status: 'completed', runId: 'new-review', threadId: 'review-thread', summary: { status: 'requires_user_input' }, state: {}, events: [] }
+        : { schemaVersion: 1, status: 'completed', checkpointAvailable: false }
+      const events = [{ type: 'RUN_STARTED', runId: payload.runId, threadId: payload.threadId },
+        { type: 'CUSTOM', name: 'workflow-run', value },
+        { type: 'RUN_FINISHED', runId: payload.runId, threadId: payload.threadId, result: { workflow: value } }]
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''))
+      return
+    }
     actions.push(input.action)
     inputs.push(input)
     if (input.action === 'prepare_document_review') prepared = true
     const current = { ...lifecycle, revision: prepared ? 2 : 1,
-      extensions: input.planningThreadId ? { recoverySnapshot: {
-        applicationId: lifecycle.application.id, threadId: input.planningThreadId, kind: 'planning',
-        lifecycleRevision: prepared ? 2 : 1, checkpointAvailable: prepared, observedAt: '2026-11-09T00:00:00Z',
-        workflow: prepared ? { runId: 'new-review', threadId: 'review-thread', summary: { status: 'requires_user_input' }, state: {}, events: [] } : null,
-        output: null, documentReview: prepared || !available ? null : { status: available, kind: 'technical_plan', message: '当前文档不完整' }
-      } } : {} }
+      extensions: input.planningThreadId ? { documentReview: prepared || !available ? null
+        : { status: available, kind: 'technical_plan', message: '当前文档不完整' } } : {} }
     const value = { schemaVersion: 1, runId: payload.runId, threadId: payload.threadId,
       status: 'completed', action: input.action, lifecycle: current,
-      workspaceAttach: { workspaceReconciled: input.reconcileWorkspace !== false, sessionDeferred: false }, backendInstanceId }
+      workspaceAttach: { workspaceReconciled: input.reconcileWorkspace !== false, sessionDeferred: false } }
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
     for (const event of [
       { type: 'RUN_STARTED', threadId: payload.threadId, runId: payload.runId },
@@ -96,7 +102,7 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
     const [first, second] = await Promise.all([getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' }),
       getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' })])
     assert.equal(first, second)
-    assert.equal(first.extensions.recoverySnapshot?.checkpointAvailable, true)
+    assert.equal(first.extensions.documentReview, null)
     assert.deepEqual(actions, ['workspace_attach', 'get', 'prepare_document_review'])
     actions.length = 0
     await getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' })
@@ -124,9 +130,8 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
     await openApplicationWorkspace(application)
     assert.deepEqual(actions, ['workspace_attach'], '显式重入重新校准并直接消费完整回执')
     actions.length = 0
-    backendInstanceId = 'document-review-backend-restarted'
     await getApplicationLifecycle(application)
-    assert.deepEqual(actions, ['get', 'workspace_attach'], '同地址后台重启也必须先重新校准，不能沿用旧凭据')
+    assert.deepEqual(actions, ['get'], '普通读取不再自动接管后台实例')
     prepared = false
     available = 'blocked'
     actions.length = 0
@@ -157,14 +162,14 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
       prepared = true
       assert.equal((await runtime.reconcileCurrentState()).status, 'uncertain')
       assert.equal(state.connection.status, 'healthy', '响应缺少有效恢复解释属于状态问题')
-      assert.equal(state.syncError, '当前规划没有有效的恢复解释。')
+      assert.equal(state.syncError, '读取应用规划权威状态没有返回有效的 Recovery Projection。')
       assert.equal(writes, 0)
     } finally { runtime.dispose() }
     prepared = false
     available = undefined
     actions.length = 0
     const empty = await getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' })
-    assert.equal(empty.extensions.recoverySnapshot?.checkpointAvailable, false)
+    assert.equal(empty.extensions.documentReview, null)
     assert.deepEqual(actions, ['get'])
   } finally {
     Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: previousWindow })

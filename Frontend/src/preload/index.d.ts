@@ -1,6 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { AppUpdateApi } from '../shared/appUpdate'
-import type { BackendConnectionApi } from '../shared/backendConnection'
 import type {
   ApplicationSchemaConfig,
   DevelopmentPlanningPageTreeNode
@@ -12,7 +11,6 @@ declare global {
     api: unknown
     devAgentStudio?: {
       appUpdate: AppUpdateApi
-      backendConnection: BackendConnectionApi
       getAppVersion: () => Promise<string>
       isElectron: boolean
       agentBaseUrl: string

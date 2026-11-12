@@ -22,9 +22,8 @@ async def reconcile_session_checkpoint(workspace: str, *, session_id: str, threa
         if not await checkpoint_thread_exists(workspace, thread_id):
             return False
         from app.protocols.workflow.run_control import workflow_run_registry
-        from app.services.detached_execution import active_detached_count
         from app.services.ui_design_generation_pool import active_ui_design_count
-        if workflow_run_registry.active_run_ids(workspace) or active_detached_count(workspace) or active_ui_design_count(workspace):
+        if workflow_run_registry.active_run_ids(workspace) or active_ui_design_count(workspace):
             return None
         before = lifecycle_service.load_application_lifecycle(workspace)
         if before is None:

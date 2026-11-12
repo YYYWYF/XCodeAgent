@@ -1425,8 +1425,15 @@ export type ApplicationLifecycle = {
   }
   recovery?: Record<string, unknown>
   extensions: Record<string, unknown> & {
-    /** 当前线程的唯一恢复投影；不作为业务事实再次落盘。 */
-    recoverySnapshot?: import('../service/recoveryStore').RecoverySnapshot | null
+    documentReview?: { status: 'available' | 'blocked'; kind?: string; digest?: string; message?: string } | null
+    /** 仅当前会话 Get 返回的已完成选择结果，不作为新的持久化业务状态。 */
+    workbenchResult?: {
+      runId: string
+      threadId: string
+      ownerSessionId: string
+      startedAt: string
+      workflow: WorkflowRunPayload
+    } | null
     planningRefresh?: PlanningRefreshState
     executionRecovery?: ExecutionRecoveryProjection
     workbenchProgress?: Record<string, WorkbenchExecution & {

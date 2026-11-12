@@ -1,5 +1,3 @@
-import { currentBackendBaseUrl } from './backendConnection'
-
 export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export type ToolRisk = {
@@ -110,7 +108,8 @@ export type WorkspaceTreeResult = {
 }
 
 function getAgentBaseUrl(): string {
-  return currentBackendBaseUrl('/api/agent')
+  const agentBaseUrl = window.devAgentStudio?.agentBaseUrl
+  return agentBaseUrl ? agentBaseUrl.replace(/\/$/, '') : '/api/agent'
 }
 
 /** 从 FastAPI 字符串或结构化校验错误中提取可读提示。 */

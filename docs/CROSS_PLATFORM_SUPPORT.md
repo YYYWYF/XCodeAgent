@@ -127,11 +127,8 @@ uses the existing readiness budget and is not counted in the 5-second version ch
 startup failure retains the original fatal startup handling; a Java/AG-UI check failure opens login.
 Manifest checks time out after 10 seconds. Downloads are cancelled after 30
 seconds without new bytes or 15 minutes total. Errors show briefly, then enter normal startup.
-Packaged applications offer **立即安装 / 退出**. Installation stops generated-project previews,
-then terminates the bundled backend owned by the current Electron process and waits for its exit
-before handing control to the updater. A preview cleanup or backend shutdown failure prevents
-installation. A failed handoff rechecks backend readiness before normal startup.
-**退出** quits without installing; subsequent launches
+Packaged applications offer **立即安装 / 退出**. Installation first completes existing shutdown
+cleanup, then hands control to the updater. **退出** quits without installing; subsequent launches
 check Java again before reusing a verified updater cache. A second instance focuses the update
 window instead of bypassing it.
 
@@ -152,21 +149,6 @@ on Windows. Other nonempty backend entry arguments are rejected before service s
 
 The shared source-development backend remains under the developer's control and is not stopped
 when Electron exits.
-
-While Electron stays open, the main-process connection monitor reacts once to an explicit child
-exit; it does not poll health or renew leases. Concurrent startup requests share one attempt. A live
-owned backend is not duplicated because of a temporary request failure. Source development waits
-for the external backend to return. Normal quit and update preparation invalidate monitoring and
-pending startup publication so they do not trigger automatic relaunch.
-
-The preload connection API (`backend-connection:get/changed`) publishes only infrastructure state,
-address and instance identity with a monotonic revision. The renderer subscribes before reading the
-current snapshot, including after a cold reload of an old window. Existing AG-UI session URLs are
-rebound through the official client factory only for known desktop backend origins. Connection
-changes invalidate old reads and stream callbacks, preserve business snapshots, then trigger read-only
-planning/session synchronization. They never replay accepted submissions, restart a business node,
-consume a confirmation, or remove an authentication block. See
-`BACKEND_RECONNECT_VALIDATION_2026_11_09.md` for real macOS process-fault evidence and its scope.
 
 On Windows, **立即安装** runs NSIS silently and explicitly targets the directory containing the
 running EXE, including custom paths with spaces or non-ASCII characters. The installer restarts

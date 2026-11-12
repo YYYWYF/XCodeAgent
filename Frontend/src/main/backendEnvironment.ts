@@ -22,15 +22,15 @@ export function assertBackendEnvironment(health: unknown, appEnv: AppEnv): void 
 }
 
 /** 读取现有基础设施健康接口；连接失败可重试，环境错配立即拒绝启动。 */
-export function readBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<Record<string, unknown> | undefined> {
+export function checkBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<boolean> {
   return new Promise((resolve, reject) => {
     let settled = false
     /** 统一收口网络事件，避免超时与迟到响应重复完成。 */
-    const finish = (healthy: boolean, error?: Error, health?: Record<string, unknown>): void => {
+    const finish = (healthy: boolean, error?: Error): void => {
       if (settled) return
       settled = true
       if (error) reject(error)
-      else resolve(healthy ? health : undefined)
+      else resolve(healthy)
     }
     const request = http.get(`${baseUrl}/health`, { timeout: 3000 }, (response) => {
       if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
@@ -61,7 +61,7 @@ export function readBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<Reco
         }
         try {
           assertBackendEnvironment(health, appEnv)
-          finish(true, undefined, health as Record<string, unknown>)
+          finish(true)
         } catch (error) {
           finish(false, error as Error)
         }
@@ -73,9 +73,4 @@ export function readBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<Reco
     })
     request.once('error', () => finish(false))
   })
-}
-
-/** 保留启动健康判定；后台接入额外读取同一份公开实例身份。 */
-export async function checkBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<boolean> {
-  return Boolean(await readBackendHealth(baseUrl, appEnv))
 }

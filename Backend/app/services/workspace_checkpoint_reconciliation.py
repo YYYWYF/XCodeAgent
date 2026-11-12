@@ -15,9 +15,7 @@ from app.services.recovery_checkpoint import checkpoint_thread_exists
 
 def _run_is_live(workspace: str, run_id: str) -> bool:
     """同时保护 Graph、后台线程、子进程及首个 checkpoint 前的已接受任务。"""
-    from app.services.detached_execution import background_execution_task
-    task = background_execution_task(run_id, workspace)
-    return bool(task and not task.done()) or execution_is_live(SimpleNamespace(run_id=run_id, workspace=workspace))
+    return execution_is_live(SimpleNamespace(run_id=run_id, workspace=workspace))
 
 
 def _confirmed_planning_assets(workspace: str) -> bool:
@@ -37,7 +35,6 @@ async def reconcile_missing_workspace_checkpoints(workspace: str) -> None:
     """只在显式 Attach 释放无现场且已退出的任务；读取异常保留原占用。"""
     from app.protocols.application_planning_run_lock import application_planning_run_lock
     from app.protocols.workflow.run_control import workflow_run_registry
-    from app.services.detached_execution import active_detached_count
     from app.services.ui_design_generation_pool import active_ui_design_count
     from app.workspace.run_lease import workspace_run_leases
 
@@ -59,7 +56,6 @@ async def reconcile_missing_workspace_checkpoints(workspace: str) -> None:
     # 接受事务尚未发布 Run 时也不能释放占用；这是实际执行保护，不以文件里的 running 猜测。
     planning_idle = (not application_planning_run_lock(thread_id).locked()
                      and not workflow_run_registry.active_run_ids(workspace)
-                     and not active_detached_count(workspace)
                      and not active_ui_design_count(workspace)
                      and not (before.active_run_id and _run_is_live(workspace, before.active_run_id)))
     ready = (planning_missing and planning_idle and before.active_formal_revision is None

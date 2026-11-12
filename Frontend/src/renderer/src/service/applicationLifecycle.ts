@@ -3,10 +3,9 @@ import type { AgentSubscriber } from '@ag-ui/client'
 import type { ApplicationConfig, ApplicationSchemaConfig, ApplicationLifecycle, ManagedDatabaseRegistration } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 import type { RepositoryBranchOutcome } from './repositoryBranch'
-import { currentBackendBaseUrl } from './backendConnection'
 import { isBackendTransportError } from './backendRequestFailure'
 import { normalizeWorkspaceRoot } from './applicationWorkspace'
-import { RecoveryBackendChangedError, workspaceRecoveryAttachments, type WorkspaceAttachmentResult } from './workspaceRecoveryAttachments'
+import { workspaceRecoveryAttachments, type WorkspaceAttachmentResult } from './workspaceRecoveryAttachments'
 
 type ApplicationLifecyclePayload = {
   schemaVersion: 1
@@ -32,7 +31,6 @@ type ApplicationLifecyclePayload = {
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
   repositoryBranch?: RepositoryBranchOutcome
   workspaceAttach?: { workspaceReconciled: boolean; sessionDeferred: boolean }
-  backendInstanceId?: string
   error?: { type?: string; message?: string }
 }
 
@@ -75,7 +73,7 @@ const workspaceAttachRequests = new Map<string, Promise<WorkspaceAttachmentResul
 
 /** 工作区和接入地址共同隔离校准凭据；不同应用身份仍须各自核验。 */
 function attachmentWorkspace(application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>): string {
-  return JSON.stringify([currentBackendBaseUrl(), normalizeWorkspaceRoot(application.workspaceRoot), application.id])
+  return JSON.stringify([normalizeWorkspaceRoot(application.workspaceRoot), application.id])
 }
 
 /** 显式进入重新校准工作区；完成的入口结果交给工作台直接使用。 */
@@ -165,7 +163,6 @@ async function runApplicationLifecycleRequest(
   threadId: string,
   action: Record<string, unknown>
 ): Promise<ResolvedApplicationLifecyclePayload> {
-  const backendRevision = workspaceRecoveryAttachments.backendRevision
   const agent = createAgUiHttpAgent({ url: getApplicationLifecycleUrl(), threadId })
   agent.addMessage({ id: randomUUID(), role: 'user', content: '同步应用生命周期状态。' })
   let payload: ApplicationLifecyclePayload | undefined
@@ -206,10 +203,6 @@ async function runApplicationLifecycleRequest(
     )
   }
   if (!payload.lifecycle) throw new Error('生命周期接口没有返回 lifecycle。')
-  if (payload.backendInstanceId && workspaceRecoveryAttachments.observeBackend(payload.backendInstanceId, backendRevision)
-      && (action.action === 'workspace_attach' || action.action === 'get' && action.includeRecovery !== false)) {
-    throw new RecoveryBackendChangedError('后台实例已变化，重新校准当前工作区。')
-  }
   // 显式带上已校验的 lifecycle：属性收窄不会改变 payload 本身的类型。
   return { ...payload, lifecycle: payload.lifecycle }
 }
@@ -287,7 +280,6 @@ export async function getApplicationLifecycle(
     Partial<Pick<ApplicationConfig, 'id' | 'appName'>>,
   threadId = randomUUID(),
   resultSession?: { sessionId?: string; threadId?: string; planningThreadId?: string; fresh?: boolean },
-  retryBackendChange = true
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
   if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
@@ -314,17 +306,13 @@ export async function getApplicationLifecycle(
         workspaceRoot,
         ...scope
       })
-      const review = lifecycle.extensions?.recoverySnapshot?.documentReview
+      const review = lifecycle.extensions?.documentReview
       // 只由服务端文档判定触发确定性重建；该动作不生成、不确认，也不使用历史消息拼 State。
       if (review?.status === 'blocked') throw new ApplicationLifecycleActionError('DOCUMENT_REVIEW_UNAVAILABLE', review.message || '当前文档尚不能建立审阅。')
       return review?.status === 'available'
         ? runApplicationLifecycleAction(threadId, { action: 'prepare_document_review', workspaceRoot, ...scope })
         : lifecycle
     } catch (error) {
-      // 同地址源码 Backend 重启可能没有桌面连接事件；只重做一次状态恢复，不重放业务提交。
-      if (error instanceof RecoveryBackendChangedError && retryBackendChange) {
-        return getApplicationLifecycle(application, threadId, { ...resultSession, fresh: true }, false)
-      }
       if (isBackendTransportError(error)) workspaceRecoveryAttachments.invalidate(attachmentKey)
       // 发起新迭代会先删掉 lifecycle 文件再由前端重建；这一步中途失败（或文件被外部清理）
       // 会让 Attach 与 Get 双双失败，工作区从此打不开。用本应用已知身份补建一份再读：
@@ -335,7 +323,7 @@ export async function getApplicationLifecycle(
         threadId
       )
       return runApplicationLifecycleAction(threadId, { action: 'get', workspaceRoot,
-        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId, planningThreadId: resultSession.planningThreadId } : {}) })
+        ...(resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId } : {}) })
     }
   })()
   lifecycleReadRequests.set(requestKey, request)

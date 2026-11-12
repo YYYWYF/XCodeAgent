@@ -105,24 +105,13 @@ class ArtifactRegenerationOwnerTests(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
-    async def test_detached_and_planning_write_windows_are_protected(self):
-        """保护首个 checkpoint 前的后台任务与同线程规划写窗口。"""
+    async def test_planning_write_window_is_protected(self):
+        """同步规划请求尚未退出时不允许接管其产物生成。"""
         with tempfile.TemporaryDirectory() as workspace:
             current = self.ready_workspace(workspace)
-            task = asyncio.create_task(asyncio.Event().wait())
-            try:
-                with patch("app.services.detached_execution.background_execution_task", return_value=task):
-                    with self.assertRaisesRegex(ValueError, "其他执行"):
-                        self.handoff(workspace)
-                with patch("app.services.detached_execution.active_detached_run_for_thread", return_value="accepted"):
-                    with self.assertRaisesRegex(ValueError, "其他执行"):
-                        self.handoff(workspace)
-                async with application_planning_run_lock(current.initialization.thread_id):
-                    with self.assertRaisesRegex(ValueError, "其他执行"):
-                        self.handoff(workspace)
-            finally:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+            async with application_planning_run_lock(current.initialization.thread_id):
+                with self.assertRaisesRegex(ValueError, "其他执行"):
+                    self.handoff(workspace)
 
     async def test_pending_review_and_formal_revision_are_not_taken_over(self):
         """待确认初始化或正式修订即使没有活跃进程，也不能被当作完成镜像释放。"""

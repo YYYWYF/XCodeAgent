@@ -1,5 +1,4 @@
 import type { ApplicationLifecycle } from '../typings'
-import { subscribeBackendConnection } from './backendConnection'
 
 type WorkspaceAttachments = {
   completed: Set<string>
@@ -7,27 +6,10 @@ type WorkspaceAttachments = {
 }
 export type WorkspaceAttachmentResult = { lifecycle: ApplicationLifecycle; calibrated: boolean }
 
-/** 实际请求发现源码后台换实例时，只允许重新读取和校准，不重发业务动作。 */
-export class RecoveryBackendChangedError extends Error {}
-
 /** 只记录本次后台连接下已完成的校准，不保存或复用业务快照。 */
 export class WorkspaceRecoveryAttachments {
   private workspaces = new Map<string, WorkspaceAttachments>()
   revision = 0
-  private backendInstance?: string
-  backendRevision = 0
-
-  /** 通过真实业务响应识别同地址后台重启，不增加 health 探测或定时器。 */
-  observeBackend(instanceId: string, expectedRevision = this.backendRevision): boolean {
-    if (expectedRevision !== this.backendRevision && instanceId !== this.backendInstance) {
-      throw new RecoveryBackendChangedError('旧后台响应已失效，请重新同步。')
-    }
-    const changed = this.backendInstance !== undefined && this.backendInstance !== instanceId
-    this.backendInstance = instanceId
-    if (changed) { this.backendRevision += 1; this.invalidate() }
-    return changed
-  }
-
   /** 仅成功校准的工作区才允许后续请求跳过全局扫描。 */
   has(workspace: string, scope: string): boolean {
     return this.workspaces.get(workspace)?.completed.has(scope) === true
@@ -67,4 +49,3 @@ export class WorkspaceRecoveryAttachments {
 }
 
 export const workspaceRecoveryAttachments = new WorkspaceRecoveryAttachments()
-subscribeBackendConnection(() => workspaceRecoveryAttachments.invalidate())

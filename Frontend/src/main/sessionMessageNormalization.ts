@@ -55,7 +55,6 @@ export function normalizePersistentSessionMessage(message: JsonRecord): JsonReco
 
   return {
     ...normalizedMessage,
-    ...(typeof message.executionRequestId === 'string' ? { executionRequestId: message.executionRequestId } : {}),
     ...(orchestration ? { orchestration } : {}),
     ...(approval ? { approval } : {}),
     ...(approvalStatus ? { approvalStatus } : {}),

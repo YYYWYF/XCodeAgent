@@ -1,4 +1,4 @@
-"""串行化 application planning 同线程写运行；只读恢复不等待此锁。"""
+"""协调 application planning 同线程写运行与权威只读恢复。"""
 
 from __future__ import annotations
 

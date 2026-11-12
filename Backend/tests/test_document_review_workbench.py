@@ -12,7 +12,7 @@ from app.domain.application_revision import ActiveFormalRevision
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.services.application_lifecycle import load_application_lifecycle, write_application_lifecycle
 from app.services.document_review_rebuild import prepare_document_review
-from app.services.recovery_snapshot import project_recovery_snapshot
+from tests.document_review_read_fixture import read_document_review_state
 from app.services.revision_drafts import create_revision_draft
 from app.workspace.plan_documents import commit_technical_plan_document
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
@@ -76,7 +76,7 @@ class WorkbenchDocumentReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await prepare_document_review(self.other, application_id=self.h.project_id,
             thread_id="local-thread-b", session_id="local-user-b", planning=False))
         self.assertEqual(artifact_path.read_bytes(), before)
-        snapshot = await project_recovery_snapshot(workspace=self.other, application_id=self.h.project_id,
+        snapshot = await read_document_review_state(workspace=self.other, application_id=self.h.project_id,
             thread_id="local-thread-b", session_id="local-user-b")
         self.assertTrue(snapshot["checkpointAvailable"])
         self.assertEqual(snapshot["workflow"]["state"]["clarification"]["mode"], "revision_draft_confirmation")
@@ -118,7 +118,7 @@ class WorkbenchDocumentReviewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(after["confirmation_status"], "pending")
         self.assertEqual(after["draft_identity"]["owner_session_id"], "local-user-b")
         self.assertNotEqual(after["draft_identity"]["workflow_run_id"], "remote-run-a")
-        snapshot = await project_recovery_snapshot(workspace=self.other, application_id=self.h.project_id,
+        snapshot = await read_document_review_state(workspace=self.other, application_id=self.h.project_id,
             thread_id="local-thread-b", session_id="local-user-b")
         self.assertEqual(snapshot["workflow"]["state"]["clarification"]["mode"], "build_task_plan_confirmation")
         self.assertIsNone(snapshot["documentReview"])

@@ -16,7 +16,7 @@ from app.protocols.application_lifecycle import build_application_lifecycle_ag_u
 from app.services import application_lifecycle as lifecycle_service
 from app.services.document_review_assets import find_document_review, require_current_document_review
 from app.services.document_review_rebuild import prepare_document_review
-from app.services.recovery_snapshot import project_recovery_snapshot
+from tests.document_review_read_fixture import read_document_review_state
 from app.services.session_checkpoint_reconciliation import reconcile_session_checkpoint
 from app.workspace.plan_documents import commit_technical_plan_document
 from app.workspace.task_documents import write_pending_build_task_plan_atomic, build_task_plan_pending_json_path
@@ -65,7 +65,7 @@ class LocalDocumentReviewRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def read(self):
         """按当前会话身份读取只读快照。"""
-        return await project_recovery_snapshot(workspace=self.workspace, application_id=self.h.project_id,
+        return await read_document_review_state(workspace=self.workspace, application_id=self.h.project_id,
             thread_id=self.thread, session_id=self.session)
 
     async def test_existing_checkpoint_never_proposes_document_rebuild(self) -> None:

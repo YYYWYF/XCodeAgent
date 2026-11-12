@@ -28,7 +28,6 @@ export type ChatSessionMessage = {
   workflow?: WorkflowRunPayload;
   /** 工作流卡片已提交的最终操作结果，用于恢复历史状态。 */
   workflowCardResult?: 'confirmed' | 'cancelled' | 'submitted';
-  executionRequestId?: string;
   /** 持久化当前 assistant 轮次的模型或 Workflow 错误，恢复历史时仍能显示错误卡片。 */
   error?: string;
   toolCalls?: ToolCallRecord[];
@@ -266,7 +265,6 @@ function normalizeMessages(value: unknown): ChatSessionMessage[] {
             ? 'pending'
             : undefined,
       createdAt: Number(item.createdAt || Date.now()),
-      executionRequestId: typeof item.executionRequestId === 'string' ? item.executionRequestId : undefined,
     }));
 }
 

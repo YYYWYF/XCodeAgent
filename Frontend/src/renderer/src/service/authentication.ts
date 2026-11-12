@@ -1,6 +1,5 @@
 import { HttpAgent } from '@ag-ui/client'
 import type { AgentSubscriber, HttpAgentConfig } from '@ag-ui/client'
-import { backendConnectionRevision, resolveBackendUrl, subscribeBackendConnection } from './backendConnection'
 
 export type AuthenticationFailureStatus = 401 | 403
 
@@ -16,14 +15,7 @@ type HttpErrorLike = Error & {
 }
 
 const authenticationFailureListeners = new Set<AuthenticationFailureListener>()
-const activeAgents = new Set<HttpAgent>()
 let activeAuthenticationFailure: AuthenticationFailure | undefined
-
-// 连接代次改变时只撤销旧 HTTP 订阅；不发送停止、恢复执行或确认动作。
-subscribeBackendConnection(() => {
-  for (const agent of activeAgents) agent.abortRun()
-  activeAgents.clear()
-})
 
 /** 从未知错误中提取 HTTP 401 或 403 状态。 */
 export function getAuthenticationFailureStatus(
@@ -80,17 +72,15 @@ export function subscribeAuthenticationFailure(
 }
 
 const authenticationSubscriber: AgentSubscriber = {
-  onRunInitialized: ({ agent }) => { activeAgents.add(agent as HttpAgent) },
-  onRunFinalized: ({ agent }) => { activeAgents.delete(agent as HttpAgent) },
+  onRunFailed: ({ error }) => {
+    reportAuthenticationFailure(error)
+  }
 }
 
 /** 创建自动订阅 HTTP 401/403 认证失败事件的 AG-UI HttpAgent。 */
 export function createAgUiHttpAgent(config: HttpAgentConfig): HttpAgent {
-  const agent = new HttpAgent({ ...config, url: resolveBackendUrl(config.url) })
-  const revision = backendConnectionRevision()
-  agent.subscribe({ ...authenticationSubscriber, onRunFailed: ({ error }) => {
-    if (revision === backendConnectionRevision()) reportAuthenticationFailure(error)
-  } })
+  const agent = new HttpAgent(config)
+  agent.subscribe(authenticationSubscriber)
   return agent
 }
 
