@@ -667,25 +667,6 @@ def _execute_owner_tasks(
         sanitized_results,
         workspace_root=str(workspace) if workspace else None,
     )
-    if owner == "backend" and workspace:
-        from app.services.backend_stage_verification import backend_stage_errors
-
-        added_paths = frozenset(
-            item["path"] for item in (owner_change_set or {}).get("files", [])
-            if item.get("changeType") == "added"
-        )
-        by_id = {task["id"]: task for task in owner_tasks}
-        for result in sanitized_results:
-            if result.get("status") not in {"completed", "already_satisfied"}:
-                continue
-            try:
-                errors = backend_stage_errors(by_id[result["task_id"]], str(workspace), added_paths)
-            except (OSError, ValueError, KeyError) as exc:
-                errors = [f"无法核对后端阶段产物：{exc}"]
-            if errors:
-                result.update(status="failed", failure_category="acceptance_verification_failed",
-                              failure_reason="；".join(errors))
-                result["scheduler_decision"] = classify_task_result(result)
     return sanitized_results, owner_change_set
 
 
@@ -1334,18 +1315,28 @@ def _build_gate_result(
         clarification = {
             "mode": "build_task_plan_generation_error",
             "status": "failed",
-            "message": "最新 Build DAG 未通过平台执行门禁，不能人工修正任务边界。",
+            "message": "最新 Build DAG 未通过平台执行门禁，请查看错误；明确归因到单任务的问题可在任务卡中修复。",
             "errors": errors,
         }
         workflow_status = "failed"
         summary_status = "failed"
     tasks = tasks_from_build_task_plan(build_task_plan)
+    # 已确认计划的明确任务校验错误可走单任务修复，仍不允许手写修改整个 DAG。
+    repair_slice = resolve_execution_slice(build_task_plan=build_task_plan, tasks=tasks,
+        build_execution_scope=state.get("build_execution_scope") or build_task_plan.get("build_execution_scope")) if tasks else {}
+    for task in repair_slice.get("tasks", []):
+        task["taskRepairEligible"] = bool(not pending and confirmation_status == "confirmed"
+            and task.get("owner") in {"backend", "frontend"}
+            and any(str(task["id"]) in str(error) for error in errors))
+    if repair_slice:
+        repair_slice["summary"]["status"] = summary_status
     return {
         "phase": "build",
         "status": workflow_status,
         "build_task_plan": build_task_plan,
         "tasks": tasks,
         "build_results": list(state.get("build_results", [])),
+        "build_execution_slice": repair_slice,
         "build_summary": {
             "status": summary_status,
             "total": len(tasks),
@@ -1579,7 +1570,7 @@ def _restore_build_runtime(
                 task["status"] = result["status"]
     restored = {**state, **dict(zip(binding_keys, source_binding)), "tasks": restored_tasks,
                 "retry_failed_tasks": retry_failed_tasks, "request": str(state.get("request") or "")}
-    for key in ("build_results", "build_summary", "repair_task_plan", "repair_task_plan_path", "repair_tasks", "database_change_plan", "database_approval_requests"):
+    for key in ("build_results", "build_summary", "repair_task_plan", "repair_task_plan_path", "repair_tasks", "database_change_plan", "database_approval_requests", "build_task_repair_id"):
         if key in source:
             restored[key] = deepcopy(source[key])
     return restored
@@ -1619,6 +1610,7 @@ def _build_runtime_progress(state: ProjectState) -> dict[str, Any]:
         "repair_tasks": deepcopy(state.get("repair_tasks", [])),
         "database_change_plan": deepcopy(state.get("database_change_plan", {})),
         "database_approval_requests": deepcopy(state.get("database_approval_requests", [])),
+        "build_task_repair_id": str(state.get("build_task_repair_id") or ""),
     }
 
 
@@ -1688,9 +1680,9 @@ def run_build_scheduler(
     with register_build_scheduler(state):
         result = _run_build_scheduler(state, progress_writer=progress_writer)
         # 任务级重试来源只供本次 Build 恢复进度，不能让下游阶段据此重新扫描工作区。
-        if state.get("build_retry_task_ids"):
+        if state.get("build_retry_task_ids") or state.get("build_task_repair_id"):
             result["retry_source_run_id"] = ""
-        return {**result, "build_retry_task_ids": []}
+        return {**result, "build_retry_task_ids": [], "build_task_repair_id": ""}
 
 
 def _run_build_scheduler(
@@ -1706,6 +1698,7 @@ def _run_build_scheduler(
     progress_source_run_id = None
     disk_retry_source = str(state.get("retry_source_run_id") or "")
     selected_retries = set(state.get("build_retry_task_ids") or [])
+    repaired_task = bool(state.get("build_task_repair_id"))
     # 中断和显式从 Build 开始走整轮重启；FAILED 走既有局部失败重试。
     restarting = ((recovery is not None and recovery.reentry_reason is WorkflowReentryReason.INTERRUPTED_CONTINUE)
                   or (recovery is None and not disk_retry_source and state.get("resume_from") == "build"))
@@ -1717,18 +1710,19 @@ def _run_build_scheduler(
         try:
             record = load_build_execution_record(state, disk_retry_source)
             progress = record.get("progress") if record else None
-            if selected_retries and not progress:
+            if (selected_retries or repaired_task) and not progress:
                 raise ValueError("任务重试的原 Build 进度已不存在。")
             if progress:
-                state = _restore_build_runtime(state, disk_retry_source, progress, retry_failed_tasks=True)
+                state = _restore_build_runtime(state, disk_retry_source, progress,
+                    retry_failed_tasks=bool(selected_retries) or not repaired_task)
                 inherited_progress = progress
                 progress_source_run_id = disk_retry_source
         except (OSError, ValueError, RecoveryExecutionError):
-            if selected_retries:
+            if selected_retries or repaired_task:
                 raise
             state, scan_fields = restart_build_state(state)
         # 单项和批量任务重试沿用已校验上下文；实际文件改动仍由调度器增量更新索引。
-        if not selected_retries:
+        if not selected_retries and not repaired_task:
             state, scan_fields = refresh_build_workspace(state)
     elif recovery is not None:
         if recovery.entry_state.get("build_execution_scope") != state.get("build_execution_scope"):
@@ -1759,7 +1753,7 @@ def _run_build_scheduler(
                 state = _restore_build_runtime(state, progress_source_run_id, source_progress,
                                                retry_failed_tasks=retry_failed_tasks)
 
-    if not restarting and not selected_retries and (recovery is not None or state.get("retry_failed_tasks")):
+    if not restarting and not selected_retries and not repaired_task and (recovery is not None or state.get("retry_failed_tasks")):
         state, scan_fields = refresh_build_workspace(state)
 
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)

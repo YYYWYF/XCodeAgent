@@ -26,6 +26,7 @@ import { buildTaskDisplayStatus, isCheckpointCandidate } from './buildTaskStatus
 import { taskDependencyNames } from './buildTaskPresentation'
 import { BuildExecutionTaskDetails } from './BuildExecutionTaskDetails'
 import BuildTaskRetryButton from './BuildTaskRetryButton'
+import BuildTaskRepairButton from './BuildTaskRepairButton'
 import WorkspaceToolActivity from './WorkspaceToolActivity'
 import './BuildExecutionTaskList.less'
 import './BuildExecutionTaskAppearance.less'
@@ -168,6 +169,7 @@ function BuildExecutionTaskCard({
             />
             <div className={cx('workflow-build-task-footer')}>
               <BuildTaskRetryButton task={task} />
+              <BuildTaskRepairButton task={task} />
               {status !== 'completed' && (
                 <Tag
                   className={cx('workflow-build-task-status-tag', status)}

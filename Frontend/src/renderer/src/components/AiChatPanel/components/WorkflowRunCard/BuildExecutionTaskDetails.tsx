@@ -37,7 +37,7 @@ export function BuildExecutionTaskDetails({
   dependencyNames: string[]
   expanded: boolean
 }): JSX.Element {
-  const { files, ranges, supplementaryDescription } = taskFilePresentation(
+  const { files, ranges, supplementaryDescription, repairSupplement } = taskFilePresentation(
     executionTaskPlanView(task)
   )
   const engineeringChecks = structuredCheckDescriptions(
@@ -86,6 +86,11 @@ export function BuildExecutionTaskDetails({
         expandIconPosition="right"
         expandIcon={taskDisclosureExpandIcon}
       >
+        {repairSupplement && (
+          <Collapse.Panel key="repair-supplement" header={<DisclosureHeader label="修复补充说明" count={1} unit="条" />}>
+            <Paragraph className={cx('workflow-dag-confirmation-instructions')}>{repairSupplement}</Paragraph>
+          </Collapse.Panel>
+        )}
         {endpoints.length > 0 && (
           <Collapse.Panel
             key="endpoints"

@@ -35,7 +35,8 @@ export function TaskDisclosureHeader({
     待验收: <UnorderedListOutlined />,
     业务检查: <UnorderedListOutlined />,
     工程检查: <UnorderedListOutlined />,
-    执行信息: <InfoCircleOutlined />
+    执行信息: <InfoCircleOutlined />,
+    修复补充说明: <InfoCircleOutlined />
   }
   // 按去重后的明确文件统计操作；目录、通配范围和缺失操作不推测为新增。
   const operationCounts = ['add', 'modify', 'delete', 'rename']

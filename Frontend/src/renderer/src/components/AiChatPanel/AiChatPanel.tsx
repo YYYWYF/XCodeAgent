@@ -2530,6 +2530,7 @@ export default function AiChatPanel({
     recoveryRunning,
     retryCurrentRecovery,
     handleRetryBuildTask,
+    handleRepairBuildTask,
     refreshExecutionRecoveryLifecycle
   } = useWorkflowConversation({
     acquireSessionExecution,
@@ -5426,6 +5427,7 @@ export default function AiChatPanel({
                 <BuiltinAuthorizationActionsContext.Provider value={builtinAuthorizationActions}>
               <MessageList
                 onRetryBuildTask={handleRetryBuildTask}
+                onRepairBuildTask={handleRepairBuildTask}
                 history={history}
                 loadingHistory={loadingHistory}
                 historyError={historyError}

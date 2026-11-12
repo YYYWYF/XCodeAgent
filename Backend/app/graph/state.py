@@ -27,6 +27,7 @@ class ProjectState(TypedDict, total=False):
     resume_from: str
     retry_source_run_id: str
     build_retry_task_ids: list[str]
+    build_task_repair_id: str
     resume_execution_run_id: str
     workflow_action: str
     request_complexity: str

@@ -1,0 +1,246 @@
+.@{class-prefix}-workflow-task-repair-action {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-workflow-task-repair-progress,
+.@{class-prefix}-workflow-task-repair-error {
+  order: 1;
+  flex: 1 1 100%;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  text-align: right;
+
+  > .anticon {
+    flex: 0 0 auto;
+    margin-top: 4px;
+  }
+}
+
+.@{class-prefix}-workflow-task-repair-progress {
+  padding: 4px 2px;
+  color: var(--wb-text-secondary);
+
+  > .anticon { color: var(--wb-accent); }
+}
+
+.@{class-prefix}-workflow-task-repair-error {
+  padding: 4px 2px;
+  color: var(--wb-code-delete-text);
+}
+
+.@{class-prefix}-workflow-task-repair-review {
+  order: 1;
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  container-type: inline-size;
+  min-width: 0;
+  max-width: 100%;
+  padding: 16px;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+
+  .ant-alert-info {
+    background: var(--wb-accent-soft);
+    border-color: var(--wb-accent-border);
+    .ant-alert-icon { color: var(--wb-accent); }
+  }
+
+  .ant-alert-warning {
+    background: var(--wb-code-modify);
+    border-color: var(--wb-code-modify-text);
+    .ant-alert-icon { color: var(--wb-code-modify-text); }
+  }
+
+  .ant-alert-error {
+    background: var(--wb-code-delete);
+    border-color: var(--wb-code-delete-text);
+    .ant-alert-icon { color: var(--wb-code-delete-text); }
+  }
+
+  .ant-alert-message,
+  .ant-alert-description,
+  .ant-typography { color: var(--wb-text); }
+
+}
+
+.@{class-prefix}-workflow-task-repair-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+}
+
+.@{class-prefix}-workflow-task-repair-heading-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 8px;
+}
+
+.@{class-prefix}-workflow-task-repair-info {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 8px;
+
+  > .@{class-prefix}-workflow-task-repair-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .ant-typography {
+    margin-bottom: 0;
+    white-space: pre-wrap;
+  }
+}
+
+.@{class-prefix}-workflow-task-repair-text-toggle {
+  padding: 0;
+  border: 0;
+  color: var(--wb-accent);
+  background: transparent;
+  cursor: pointer;
+  &:hover { color: var(--wb-accent-hover); }
+  &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+}
+
+.@{class-prefix}-workflow-task-repair-cause { background: var(--wb-code-delete); }
+.@{class-prefix}-workflow-task-repair-adjustment { background: var(--wb-accent-soft); }
+
+.@{class-prefix}-workflow-task-repair-info-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 160px;
+  padding-right: 12px;
+  border-right: 1px solid var(--wb-border);
+  color: var(--wb-text);
+  font-weight: 600;
+  > .anticon { color: var(--wb-accent); }
+}
+
+.@{class-prefix}-workflow-task-repair-cause .@{class-prefix}-workflow-task-repair-info-label > .anticon {
+  color: var(--wb-code-delete-text);
+}
+
+// 提高确认区按钮优先级，避免失败任务页脚的状态样式覆盖主操作及禁用态。
+.@{class-prefix}-workflow-build-execution-task .@{class-prefix}-workflow-build-task-footer
+  .@{class-prefix}-workflow-task-repair-controls {
+  align-self: stretch;
+  justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid var(--wb-border);
+
+  .ant-btn:not(:disabled) {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+    border-color: var(--wb-border-strong);
+    &:hover { color: var(--wb-accent); border-color: var(--wb-accent); }
+  }
+
+  .ant-btn {
+    &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+    &:disabled { color: var(--wb-text-tertiary); background: var(--wb-surface-subtle); border-color: var(--wb-border); }
+  }
+
+  .ant-btn-primary:not(:disabled) {
+    color: var(--wb-canvas);
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+    &:hover { color: var(--wb-canvas); background: var(--wb-accent-hover); }
+  }
+}
+
+.@{class-prefix}-workflow-task-repair-view {
+  color: var(--wb-text);
+  overflow-wrap: anywhere;
+
+  .ant-typography {
+    white-space: pre-wrap;
+  }
+}
+
+.@{class-prefix}-workflow-task-repair-files {
+  min-width: 0;
+  margin-top: 10px;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-subtle);
+  transition: border-color 0.2s;
+
+  > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 7px;
+    color: var(--wb-text);
+    font-weight: 500;
+    list-style: none;
+    cursor: pointer;
+    &::-webkit-details-marker { display: none; }
+    > span:first-child > .anticon { color: var(--wb-accent); margin-right: 4px; }
+    > .anticon { color: var(--wb-accent); transition: transform 0.2s; }
+    &:hover { color: var(--wb-accent); background: var(--wb-accent-soft); }
+    &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
+  }
+  &[open] {
+    border-color: var(--wb-accent-border);
+    > summary { color: var(--wb-accent); }
+    > summary > .anticon { transform: rotate(180deg); }
+  }
+}
+
+.@{class-prefix}-workflow-task-repair-count {
+  display: inline-block;
+  min-width: 22px;
+  margin-left: 4px;
+  padding: 0 6px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  border-radius: 10px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.@{class-prefix}-workflow-task-repair-file-list {
+  display: grid;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+@container (max-width: 520px) {
+  .@{class-prefix}-workflow-task-repair-info {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .@{class-prefix}-workflow-task-repair-info-label {
+    flex-basis: auto;
+    padding: 0;
+    border: 0;
+  }
+}
+

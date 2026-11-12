@@ -106,6 +106,7 @@ from app.protocols.execution_recovery import (
     execution_recovery_capabilities,
 )
 from app.protocols.build_task_retry import build_task_retry_stream, build_task_retry_capabilities
+from app.protocols.build_task_repair import build_task_repair_stream, build_task_repair_capabilities
 from app.protocols.user_skills import (
     build_user_skills_ag_ui_stream,
     user_skills_capabilities,
@@ -235,6 +236,7 @@ async def health() -> dict[str, object]:
             "temporary_chat": temporary_chat_capabilities(),
             "execution_recovery": execution_recovery_capabilities(),
             "build_task_retry": build_task_retry_capabilities(),
+            "build_task_repair": build_task_repair_capabilities(),
             "workspace": workspace_tools.capabilities(),
             "page_artifacts": page_artifacts_capabilities(),
         },
@@ -284,6 +286,16 @@ async def run_application_config(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/build-task-repair/run")
+async def run_build_task_repair(
+        input_data: dict[str, Any] = Body(...),
+        accept: Optional[str] = Header(default="text/event-stream"),
+) -> StreamingResponse:
+    """通过独立 AG-UI 动作生成、审阅和确认单任务修复。"""
+    return StreamingResponse(build_task_repair_stream(payload=input_data, accept=accept),
+        media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/build-task-retry/run")

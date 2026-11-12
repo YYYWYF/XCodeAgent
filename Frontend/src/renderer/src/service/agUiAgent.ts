@@ -63,6 +63,7 @@ export type SendWorkflowMessageOptions = {
   resumeReference?: { runId: string; threadId: string }
   workflowScope?: string
   buildTaskRetry?: import('./buildTaskRetry').BuildTaskRetryRequest
+  buildTaskRepair?: import('./buildTaskRepair').BuildTaskRepairRequest
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
     | { action: 'retry_current_failure'; sourceRunId: string }
@@ -154,6 +155,7 @@ export function buildWorkflowForwardedProps(
     workflowScope: options.workflowScope,
     executionRecovery: options.executionRecovery,
     buildTaskRetry: options.buildTaskRetry,
+    buildTaskRepair: options.buildTaskRepair,
     planControlAction: options.planControlAction,
     planControlRunId: options.planControlRunId,
     planningRunId: options.planningRunId,
@@ -709,6 +711,10 @@ export class AgUiChatSession {
           runErrorMessage = event.value.error?.message || '任务重试失败。'
           runErrorCode = 'BUILD_TASK_RETRY_REJECTED'
         }
+        if (event.name === 'build-task-repair' && event.value?.status === 'failed') {
+          runErrorMessage = event.value.error?.message || '任务修复失败。'
+          runErrorCode = 'BUILD_TASK_REPAIR_REJECTED'
+        }
         if (event.name === 'technical-planning-conversation' && event.value?.status === 'failed') {
           runErrorMessage = event.value.error?.message || '技术规划修改失败。'
         }
@@ -839,7 +845,7 @@ export class AgUiChatSession {
       })
     }
     // 映射检测、对话及一次性续接必须收到结束回执，提前断流不能伪装为检测成功。
-    if (!runFinished && (options.clarificationAnswers?.api_design_gate || options.buildTaskRetry || options.conversation || options.workflowAction === 'continue_revision_build' ||
+    if (!runFinished && (options.clarificationAnswers?.api_design_gate || options.buildTaskRetry || options.buildTaskRepair || options.conversation || options.workflowAction === 'continue_revision_build' ||
       workflow?.state?.workflow_scope === 'conversation')) {
       throw new Error('未收到运行结束回执，当前任务结果尚未确认。请重新同步当前节点状态。')
     }

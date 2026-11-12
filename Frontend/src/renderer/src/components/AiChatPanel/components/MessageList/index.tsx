@@ -302,6 +302,7 @@ type MessageListProps = {
   /** 操作占用仅禁用提交，不将其他会话的锁显示成当前 Agent loading。 */
   actionsDisabled?: boolean
   onRetryBuildTask?: (messageId: number, taskId?: string) => Promise<void>
+  onRepairBuildTask?: (messageId: number, ...args: Parameters<import('../../../../service/buildTaskRepair').RepairTaskAction>) => ReturnType<import('../../../../service/buildTaskRepair').RepairTaskAction>
   /** 当前 owner 的待确认任务身份与可信进度摘要。 */
   dagPendingPlanCompletion?: DagPendingPlanCompletion
   entityDesignSession?: boolean
@@ -394,6 +395,7 @@ export default function MessageList({
   conversationRunning,
   actionsDisabled = false,
   onRetryBuildTask,
+  onRepairBuildTask,
   dagPendingPlanCompletion,
   entityDesignSession = false,
   emptyContent,
@@ -1023,9 +1025,12 @@ export default function MessageList({
                           visibleProcessSteps &&
                           visibleProcessSteps.length > 0 &&
                           !designPhasePlanning && (
-                            <BuildTaskRetryProvider retry={
+                            <BuildTaskRetryProvider sourceRunId={message.workflow?.runId} retry={
                               !actionsDisabled && message.id === latestAssistantMessageId && onRetryBuildTask
                                 ? (taskId) => onRetryBuildTask(message.id, taskId) : undefined
+                            } repair={
+                              !actionsDisabled && !messageLoading && message.id === latestAssistantMessageId && onRepairBuildTask
+                                ? (...args) => onRepairBuildTask(message.id, ...args) : undefined
                             }>
                             <ProcessSteps
                               workspaceRoot={workspaceRoot}

@@ -31,6 +31,7 @@ export function taskFilePresentation(task: WorkflowBuildTaskPlanTask): {
   files: TaskFileChange[]
   ranges: TaskFileChange[]
   supplementaryDescription: string
+  repairSupplement: string
 } {
   const entries = new Map<string, TaskFileChange>()
   const explicitFiles = new Set((task.target_files || []).map(normalizedPath))
@@ -97,11 +98,21 @@ export function taskFilePresentation(task: WorkflowBuildTaskPlanTask): {
         typeof item.description === 'string' &&
         item.description.trim()
     )
+  // 修复追加在原描述之后；还原原文件说明后只在精确匹配时沿用去重规则。
+  const marker = '\n\n修复补充：'
+  const parts = task.description.split(marker)
+  const originalDescription = parts[0]
+  const originalScopeLines = scope.map((item, index) =>
+    `${index + 1}. ${typeof item.description === 'string' ? item.description.split('\n修复补充：')[0] : ''}（${item.path}）`)
+  const generatedOriginal = parts.length > 1 && originalScopeLines.some((_, index) =>
+    originalScopeLines.slice(0, index + 1).join('\n') === originalDescription)
   return {
     files,
     ranges,
     supplementaryDescription:
-      fullyDescribed && task.description === generatedDescription ? '' : task.description
+      (fullyDescribed && originalDescription === generatedDescription) || generatedOriginal
+        ? '' : originalDescription,
+    repairSupplement: parts.slice(1).join('\n\n修复补充：')
   }
 }
 

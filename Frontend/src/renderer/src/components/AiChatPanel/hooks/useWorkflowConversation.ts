@@ -1,6 +1,7 @@
 import { readWorkflowPayload } from '../../../service/agUiAgent'
 import { enqueueBuildTaskRetry, getBuildTaskRetryUrl, type BuildTaskRetryRequest } from '../../../service/buildTaskRetry'
 import { mergeBuildRetrySteps } from '../buildTaskRetryPresentation'
+import { runBuildTaskRepairAction, getBuildTaskRepairUrl, type BuildTaskRepairRequest, type RepairTaskAction } from '../../../service/buildTaskRepair'
 import { useEffect, useRef, useState } from 'react'
 import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import { backendRequestErrorMessage, isBackendTransportError } from '../../../service/backendRequestFailure'
@@ -315,6 +316,7 @@ type UseWorkflowConversationResult = {
   ) => Promise<void>
   handleRetryCodeReview: () => Promise<void>
   handleRetryBuildTask: (messageId: number, taskId?: string) => Promise<void>
+  handleRepairBuildTask: (messageId: number, ...args: Parameters<RepairTaskAction>) => ReturnType<RepairTaskAction>
   handleSend: (
     workflowDebug?: WorkflowDebugOptions,
     confirmScopeBeforeExecution?: boolean
@@ -1280,6 +1282,7 @@ export function useWorkflowConversation({
       revisionInteraction?: WorkflowRevisionDraftInteraction
       workflowScope?: string
       buildTaskRetry?: BuildTaskRetryRequest
+      buildTaskRepair?: BuildTaskRepairRequest
       reuseBuildMessageId?: number
       executionRecovery?:
         | { action: 'execute'; incidentId: string; actionId: string }
@@ -1396,7 +1399,9 @@ export function useWorkflowConversation({
     const effectiveBuildExecutionScope =
       explicitBuildExecutionScope || sessionTargetFields.buildExecutionScope
 
-    const endpointUrl = options?.buildTaskRetry
+    const endpointUrl = options?.buildTaskRepair
+      ? getBuildTaskRepairUrl()
+      : options?.buildTaskRetry
       ? getBuildTaskRetryUrl()
       : options?.executionRecovery
       ? getExecutionRecoveryActionUrl()
@@ -1415,7 +1420,7 @@ export function useWorkflowConversation({
         : (agUiSessionsRef.current[identity.key] = new AgUiChatSession(
             executionThreadId,
             endpointUrl,
-            options?.buildTaskRetry ? getWorkflowUrl() : endpointUrl
+            options?.buildTaskRetry || options?.buildTaskRepair ? getWorkflowUrl() : endpointUrl
           ))
     const optimisticSkills = beginOptimisticSkillSend(options?.selectedSkills || [])
     const previousMessages = getSessionMessages(identity.key)
@@ -1633,6 +1638,7 @@ export function useWorkflowConversation({
         workflowScope: options?.workflowScope,
         executionRecovery: options?.executionRecovery,
         buildTaskRetry: options?.buildTaskRetry,
+        buildTaskRepair: options?.buildTaskRepair,
         onContent: (content) => {
           if (!isPlanControlResponseCurrent()) return
           streamedContent = content
@@ -1923,6 +1929,30 @@ export function useWorkflowConversation({
       executionThreadId: workflow.threadId, sessionIdentity: identity
     })
     if (!success) throw new Error('任务重试未完成，请查看当前错误信息。')
+  }
+
+  /** 单任务草稿动作走独立流，确认执行复用原 Build 卡片及标准执行进度。 */
+  const handleRepairBuildTask = async (
+    messageId: number, ...[taskId, action, feedback, draftDigest]: Parameters<RepairTaskAction>
+  ): ReturnType<RepairTaskAction> => {
+    const identity = activeSession
+    if (!identity || applicationMutationReadonly || loading) throw new Error('请等待当前 Build 停止派发后修复任务。')
+    const messages = getSessionMessages(identity.key)
+    const workflow = messages.find((item) => item.id === messageId)?.workflow
+    if (!workflow || [...messages].reverse().find((item) => item.workflow)?.id !== messageId)
+      throw new Error('该任务已不是当前执行，请查看最新卡片。')
+    const request: BuildTaskRepairRequest = {
+      action, workspaceRoot: identity.workspaceRoot, sourceRunId: workflow.runId,
+      sourceThreadId: workflow.threadId, sessionId: identity.sessionId, taskId,
+      ...(feedback ? { feedback } : {}), ...(draftDigest ? { draftDigest } : {})
+    }
+    if (action !== 'confirm') return runBuildTaskRepairAction(request)
+    const success = await sendWorkflowMessage('执行已确认的单任务修复', {
+      buildTaskRepair: request, reuseBuildMessageId: messageId,
+      executionThreadId: workflow.threadId, sessionIdentity: identity
+    })
+    if (!success) throw new Error('任务修复执行未完成，请查看当前错误信息。')
+    return null
   }
 
   /** 在普通 DAG generation 或 Confirm、Abandon、Regenerate 完成后重新读取 PendingPlan 权威投影。 */
@@ -2778,6 +2808,7 @@ export function useWorkflowConversation({
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
     handleRetryBuildTask,
+    handleRepairBuildTask,
     handleEndPlan,
     handleResumePlan,
     handleSend,

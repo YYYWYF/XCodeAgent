@@ -154,7 +154,7 @@ export function TaskDetails({
   task: WorkflowBuildTaskPlanTask
   dependencyNames?: string[]
 }): JSX.Element {
-  const { files, ranges, supplementaryDescription } = taskFilePresentation(task)
+  const { files, ranges, supplementaryDescription, repairSupplement } = taskFilePresentation(task)
   const businessChecks = acceptanceTexts(task.business_acceptance_checks)
   const coveredEndpoints = task.coveredEndpoints || []
   return (
@@ -177,6 +177,11 @@ export function TaskDetails({
         expandIconPosition="right"
         expandIcon={taskDisclosureExpandIcon}
       >
+        {repairSupplement && (
+          <Collapse.Panel key="repair-supplement" header={<DisclosureHeader label="修复补充说明" count={1} unit="条" />}>
+            <Typography.Paragraph className={cx('workflow-dag-confirmation-instructions')}>{repairSupplement}</Typography.Paragraph>
+          </Collapse.Panel>
+        )}
         {coveredEndpoints.length > 0 ? (
           <Collapse.Panel
             header={<DisclosureHeader count={coveredEndpoints.length} label="涉及接口" />}

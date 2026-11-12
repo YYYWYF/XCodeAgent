@@ -1,5 +1,11 @@
 # DevAgent Studio Codebase Index
 
+Build 已移除任务完成后的独立后端阶段检查调用及 `services/backend_stage_verification.py`，不再额外以 foundation 骨架、controller 路由/DTO/分层/权限阶段检查阻断任务。通用业务自检仍由 `DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED` 控制，默认关闭；其公共 verifier 及任务验收契约保留。执行前任务计划、确认、绑定、依赖及文件范围门禁保持原规则。
+
+单任务计划修复使用独立 `/build-task-repair/run` AG-UI 端点，`domain/build_task_repair.py` 严格解析 `forwardedProps.buildTaskRepair` 的 `get/generate/regenerate/discard/confirm` 动作；确认、放弃和重新生成必须携带精确 `draftDigest`。`services/build_task_repair.py` 校验原 Run/thread/session、Build 已退出、正式计划和当前输入，保存 `.devagentstudio/drafts/task-repairs/<source+task摘要>.json`；模型 `agents/build_task_repair.py` 无写入工具，平台提供有界源码及一次定向补读。`domain/build_task_repair.py` 的模型输出只接受 repairInstructions 和精确文件增量，拒绝标题/完整说明重写；`build_task_repair_contract.py` 确定性保留原说明和未变化文件，追加修复步骤及文件要求，保留身份、阶段、依赖及交付职责，重新编译工程/业务验收及完整 DAG；允许 business 补充同模块 PO 等既有文件的 modify 权限，禁止其他 Unit、模板公共文件、删除原目标或削弱业务预期。并发调度字段按新文件重叠统一派生，其他任务业务合同和完成证据不变。
+
+`build_task_repair_execution.py` 在明确确认后再次检查计划 CAS 与全部诊断源码签名，提升目标合同并写入 `task_repair_confirmation` 回执，创建新的不可变 Build Run 和当前 Run 的 prepared 进度，原 Run 记录不变；未启动交接失败按匹配摘要回退。`graph/state.py` 的 `build_task_repair_id` 随内部进度保存，调度器沿原逐任务队列执行、保留其他成功及失败状态，不触发整轮重扫或重跑成功任务；不额外复验已完成的共享文件使用方。明确归因到任务的 DAG 门禁错误通过 `build_execution_slice.tasks[].taskRepairEligible` 提供入口，其他门禁仍拒绝。Frontend `service/buildTaskRepair.ts` 使用官方 AG-UI SDK；`buildTaskRepairEligibility.ts` 在前端按错误分类及诊断隐藏模型调用/传输失败的修复入口（含 runner_crash 包装的 ModelTransmitError），后端不增加此限制；`BuildTaskRepairButton.tsx/.less` 点击后立即根据报错自动生成方案，无前置弹窗或补充要求输入；原任务卡右下方展示加载/红字错误；确认区默认只展示增量步骤和变化文件，完整任务收起展示，提供重新生成、放弃和确认执行，已有待确认稿直接恢复。生成不执行代码，必须明确确认，复用重试提交锁及原消息进度，支持明暗主题。回归文件 `Backend/tests/test_build_task_repair.py`；实现边界及手动验收见 [单任务计划修复](BUILD_TASK_REPAIR.md)。本次按用户要求不执行自动测试、构建、Python 编译或 Electron 功能验证。
+
 Windows 发布归档入口为根目录的 `scripts/stage-windows-update.mjs`。签名并刷新 `latest.yml` 后，脚本复用 `Frontend/scripts/app-update-cdn.mjs` 的摘要校验，将 `Frontend/dist` 内全部产物移入清单指定的版本目录。
 
 测试检查失败时，`services/test_error_logs.py` 在原检查结果写入 `errorLogReferences`，按顺序保存完整诊断、stdout 和 stderr 的不可变内容引用；重测覆盖运行日志不影响旧卡片。测试进度和最终快照沿原 AG-UI 工作流投影，Electron 会话只保留引用。`ProcessSteps/TestErrorLogButton.tsx` 在失败检查卡片底部按需经 `/workflow-artifacts/run` 读取全部片段，再通过原生剪贴板复制；读取失败不会复制部分内容。

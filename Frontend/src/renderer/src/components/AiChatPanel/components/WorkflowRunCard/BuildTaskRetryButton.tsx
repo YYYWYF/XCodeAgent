@@ -8,19 +8,26 @@ import {
 } from 'react'
 import { Button, Typography } from 'antd'
 import type { WorkflowBuildExecutionTask } from '../../../../typings'
+import type { RepairTaskAction } from '../../../../service/buildTaskRepair'
 
 type RetryAction = (taskId?: string) => Promise<void>
 export const BuildTaskRetryContext = createContext<{
   retry?: RetryAction
+  repair?: RepairTaskAction
+  sourceRunId?: string
   pending: boolean
 }>({ pending: false })
 
 /** 同一轮任务共用提交锁，批量与单项重试不能在交接期间重复发送。 */
 export function BuildTaskRetryProvider({
   retry,
+  repair,
+  sourceRunId,
   children
 }: {
   retry?: RetryAction
+  repair?: RepairTaskAction
+  sourceRunId?: string
   children: ReactNode
 }): ReactElement {
   const lock = useRef(false)
@@ -37,8 +44,20 @@ export function BuildTaskRetryProvider({
       setPending(false)
     }
   }
+  /** 修复生成和确认与重试共用提交锁，避免同一执行同时发生两次控制交接。 */
+  const submitRepair: RepairTaskAction = async (...args) => {
+    if (lock.current || !repair) throw new Error('任务操作正在提交，请稍后再试。')
+    lock.current = true
+    setPending(true)
+    try {
+      return await repair(...args)
+    } finally {
+      lock.current = false
+      setPending(false)
+    }
+  }
   return (
-    <BuildTaskRetryContext.Provider value={{ retry: retry ? submit : undefined, pending }}>
+    <BuildTaskRetryContext.Provider value={{ retry: retry ? submit : undefined, repair: repair ? submitRepair : undefined, sourceRunId, pending }}>
       {children}
     </BuildTaskRetryContext.Provider>
   )

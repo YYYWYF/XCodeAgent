@@ -1510,6 +1510,9 @@ export type WorkflowBuildToolActivity = {
 }
 
 export type WorkflowBuildExecutionTask = WorkflowBackendTaskScope & {
+  taskRepairEligible?: boolean
+  kind?: string
+  execution_strategy?: string
   id?: string
   task_id?: string
   unit_id?: string
