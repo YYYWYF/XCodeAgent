@@ -39,6 +39,7 @@ import { integrationTestCheckReportPath } from './reportAction'
 import ToolActivityChain from './ToolActivityChain'
 import WorkspaceInspectionPanel from './WorkspaceInspectionPanel'
 import AuthorizationBootstrapPanel from './AuthorizationBootstrapPanel'
+import TestErrorLogButton from './TestErrorLogButton'
 import './ProcessSteps.less'
 
 const { Text } = Typography
@@ -509,7 +510,9 @@ export function ProcessStep({
             waitingPrompt={waitingPrompt}
           />
         )}
-        {step.checks && <IntegrationTestChecklist checks={step.checks} />}
+        {step.checks && (
+          <IntegrationTestChecklist checks={step.checks} workspaceRoot={workspaceRoot} />
+        )}
         {step.dagGeneration && !hideUnverifiedActiveDagSnapshot ? (
           <DagGenerationProgress
             completion={
@@ -611,9 +614,11 @@ function WorkspaceInspectionProgressPanel({
 
 /** 渲染集成测试的实时检查清单，并在流程结束后保留最终状态。 */
 function IntegrationTestChecklist({
-  checks
+  checks,
+  workspaceRoot
 }: {
   checks: IntegrationTestCheckRecord[]
+  workspaceRoot?: string
 }): ReactElement {
   const summary = testCheckSummary(checks)
   const counts = testCheckCounts(checks)
@@ -718,6 +723,12 @@ function IntegrationTestChecklist({
                   {testCheckStatusLabel(check.status)}
                 </Text>
               </span>
+              {check.status === 'failed' && (
+                <TestErrorLogButton
+                  references={check.errorLogReferences}
+                  workspaceRoot={workspaceRoot}
+                />
+              )}
             </li>
           )
         })}

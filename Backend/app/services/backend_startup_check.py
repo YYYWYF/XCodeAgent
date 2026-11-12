@@ -25,6 +25,7 @@ from app.services.backend_startup_diagnostics import (
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.managed_database_runtime import ManagedDatabaseStartupError, prepare_managed_startup
 from app.services.runtime_log_redaction import attach_redacted_logs
+from app.services.test_error_logs import record_test_error_log
 from app.services.backend_runtime_jar import BACKEND_JAR_DIRECTORY, remove_backend_jar, stage_backend_jar
 
 BACKEND_STARTUP_TIMEOUT_SECONDS = 60
@@ -236,6 +237,9 @@ def _run_backend_startup_check_locked(
     result["execution"] = execution
     result["source_fingerprint"] = startup_source_fingerprint(root)
     result["repair_hints"] = [] if category == "backend_database_resource" else _repair_hints(backend_root, root)
+    if not result["passed"]:
+        # 启动进度会复制检查对象，先在最终结果上保存已脱敏的日志引用。
+        record_test_error_log(root, log_root, result)
     _report(on_progress, result, "passed" if result["passed"] else "failed")
     return result
 

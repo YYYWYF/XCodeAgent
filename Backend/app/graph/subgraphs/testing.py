@@ -28,6 +28,7 @@ from app.services.integration_test_runner import run_integration_checks
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
 from app.services.test_validation import evaluate_quality_gate
 from app.services.test_generation_diagnostics import generation_failure_diagnostics
+from app.services.test_error_logs import record_test_error_log
 from app.workspace.code_changes import code_change_state_update
 from app.workspace.code_changes import merge_code_change_sets
 from app.workspace.test_documents import (
@@ -35,6 +36,7 @@ from app.workspace.test_documents import (
     write_test_report_markdown,
 )
 from app.workspace.task_documents import write_repair_task_plan_json
+from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 
 INTEGRATION_TEST_PROGRESS_REPORTER_KEY = "integration_test_progress_reporter"
@@ -74,6 +76,26 @@ def _progress_reporter(config: RunnableConfig | None) -> IntegrationTestProgress
     configurable = config.get("configurable", {}) if config else {}
     reporter = configurable.get(INTEGRATION_TEST_PROGRESS_REPORTER_KEY)
     return reporter if callable(reporter) else None
+
+
+def _diagnostic_progress_reporter(
+    state: ProjectState, reporter: IntegrationTestProgressReporter | None,
+) -> IntegrationTestProgressReporter:
+    """在发布失败检查前保留原始诊断；同一结果也进入最终测试报告。"""
+
+    root = workspace_root(state).resolve()
+    runtime_root = workflow_artifact_root(state).resolve() / "runtime"
+
+    def report(event: dict[str, Any]) -> None:
+        """保存当次检查的日志并转发既有进度事件。"""
+
+        check = event.get("check")
+        if event.get("status") == "failed" and isinstance(check, dict) and "errorLogReferences" not in check:
+            record_test_error_log(root, runtime_root, check)
+        if reporter is not None:
+            reporter(event)
+
+    return report
 
 
 def _check_progress_snapshot_writer(
@@ -126,6 +148,8 @@ def _check_progress_snapshot_writer(
         }
         if status == "running" and isinstance(check.get("activeToolActivity"), dict):
             checks[check_id]["activeToolActivity"] = dict(check["activeToolActivity"])
+        if status == "failed" and "errorLogReferences" in check:
+            checks[check_id]["errorLogReferences"] = check["errorLogReferences"]
         writer(
             {
                 "type": event_type,
@@ -720,6 +744,11 @@ def validate_generated_unit_tests(
     ]
     reporter = _progress_reporter(config)
     for check in checks:
+        if not passed:
+            record_test_error_log(
+                workspace_root(state).resolve(), workflow_artifact_root(state) / "runtime",
+                check, evidence=failure_evidence,
+            )
         progress_status = (
             "skipped"
             if check["skipped"]
@@ -1075,7 +1104,6 @@ def _startup_cache_is_current(state: ProjectState, checks: list[dict[str, Any]])
     if check is None:
         return False
     try:
-        from app.workspace.spec_documents import workspace_root
         return check.get("source_fingerprint") == startup_source_fingerprint(workspace_root(state))
     except OSError:
         return False
@@ -1108,7 +1136,7 @@ def build_project_checks(
 
     result = run_integration_checks(
         state,
-        on_progress=reporter,
+        on_progress=_diagnostic_progress_reporter(state, reporter),
         phase="build",
         include_backend_startup=True,
     )
@@ -1277,7 +1305,7 @@ def actual_project_checks(
 
     result = run_integration_checks(
         state,
-        on_progress=_progress_reporter(config),
+        on_progress=_diagnostic_progress_reporter(state, _progress_reporter(config)),
         phase="unit",
     )
     test_results = _ordered_integration_checks(
@@ -1394,7 +1422,7 @@ def frontend_performance_test(
 
     result = run_frontend_performance_check(
         state,
-        on_progress=_progress_reporter(config),
+        on_progress=_diagnostic_progress_reporter(state, _progress_reporter(config)),
     )
     test_results = _ordered_integration_checks(
         [

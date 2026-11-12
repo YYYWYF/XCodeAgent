@@ -1,5 +1,6 @@
 import { persistentWorkflowView } from '../shared/workflowPresentation'
 import { readAuthorizationBootstrap } from '../shared/authorizationBootstrap'
+import { readArtifactReferences } from '../shared/workflowArtifactReference'
 import {
   compactBuildExecutionSlice,
   compactWorkflowEvents
@@ -393,19 +394,24 @@ function nonNegativeSessionInteger(value: unknown): number {
     : 0
 }
 
-/** 规范化集成测试检查项，只持久化安全的可见摘要。 */
+/** 保留测试摘要和完整日志的只读引用，不在会话中存储日志正文。 */
 function normalizeSessionChecks(value: unknown): JsonRecord[] {
   if (!Array.isArray(value)) return []
   const ids = new Set<string>()
   return value
     .filter(isJsonRecord)
-    .map((item) => ({
-      id: stringValue(item.id),
-      name: stringValue(item.name),
-      status: stringValue(item.status),
-      required: item.required === true,
-      ...(typeof item.evidence === 'string' ? { evidence: item.evidence.slice(0, 1_000) } : {})
-    }))
+    .map((item) => {
+      const errorLogReferences =
+        item.status === 'failed' ? readArtifactReferences(item.errorLogReferences) : undefined
+      return {
+        id: stringValue(item.id),
+        name: stringValue(item.name),
+        status: stringValue(item.status),
+        required: item.required === true,
+        ...(typeof item.evidence === 'string' ? { evidence: item.evidence.slice(0, 1_000) } : {}),
+        ...(errorLogReferences ? { errorLogReferences } : {})
+      }
+    })
     .filter((item) => {
       if (!item.id || !item.name || !CHECK_STATUSES.has(item.status) || ids.has(item.id)) {
         return false

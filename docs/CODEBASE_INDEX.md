@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+测试检查失败时，`services/test_error_logs.py` 在原检查结果写入 `errorLogReferences`，按顺序保存完整诊断、stdout 和 stderr 的不可变内容引用；重测覆盖运行日志不影响旧卡片。测试进度和最终快照沿原 AG-UI 工作流投影，Electron 会话只保留引用。`ProcessSteps/TestErrorLogButton.tsx` 在失败检查卡片底部按需经 `/workflow-artifacts/run` 读取全部片段，再通过原生剪贴板复制；读取失败不会复制部分内容。
+
 任务规划入口 `dag_planning_inputs.py::SequentialPlanningInputs.requirements` 与 `build_task_reuse.py::_baseline_tasks` 不再要求旧正式任务的 Unit 存在于当前骨架：完整基线身份与 ReuseFacts 索引覆盖仍严格核验，本轮必需 Unit 由 `resolve_generation_requirements` 校验。旧页面、模块、静态数据 Unit 不会因范围变化阻断新任务生成，也不会回填当前 DAG；配置复用继续受本轮来源与输入有效性约束。回归：`tests.test_task_generation_policy`、`tests.test_build_task_reuse`。
 
 `backend:bootstrap` 仅在本轮待开发后端接口需要数据库或外部 API 基础能力时生成或复用。`unit_generation_requirements.py` 计算页面配置职责时排除已完成且无变更接口，前端调用仍消费完整接口上下文；`task_generation_policy.required_bootstrap_source_types` 与 `retained_task_projection.py` 在组装及确认边界阻止范围外旧配置任务进入新 DAG，`dag_planning_inputs.py` 不为 `not_required` 配置单元携带旧任务摘要。无接口页面、后端接口全部已完成及纯静态接口不带入配置任务；显式接口开发仍按当前来源要求配置。回归：`tests.test_task_generation_policy`。

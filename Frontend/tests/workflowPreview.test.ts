@@ -1936,6 +1936,7 @@ test('构建完成快照有无汇总时都把已满足要求的任务计入完�
 })
 
 test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、失败、通过与跳过状态', () => {
+  const logReference = { artifactId: 'a'.repeat(64), byteLength: 18, mediaType: 'application/json' }
   for (const status of ['running', 'failed', 'passed', 'skipped'] as const) {
     const checks = readIntegrationTestChecks({
       checks: [
@@ -1945,6 +1946,7 @@ test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、�
           name: '后端启动检查',
           status,
           required: true,
+          errorLogReferences: [logReference],
           evidence:
             status === 'failed'
               ? 'ClassNotFoundException: ConfigurationBeanFactoryMetadata'
@@ -1974,7 +1976,14 @@ test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、�
     )
     assert.ok(markup.indexOf('后端构建检查') < markup.indexOf('后端启动检查'))
     assert.ok(markup.indexOf('后端启动检查') < markup.indexOf('前端性能测试'))
-    if (status === 'failed') assert.match(markup, /ConfigurationBeanFactoryMetadata/)
+    if (status === 'failed') {
+      assert.match(markup, /ConfigurationBeanFactoryMetadata/)
+      assert.match(markup, /integration-test-check-footer[^>]*>.*复制错误日志/)
+      assert.deepEqual(checks?.[1].errorLogReferences, [logReference])
+    } else {
+      assert.doesNotMatch(markup, /复制错误日志/)
+      assert.equal(checks?.[1].errorLogReferences, undefined)
+    }
     assert.equal(integrationTestCheckReportPath(checks![1]), undefined)
   }
 })

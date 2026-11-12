@@ -140,6 +140,8 @@ def integration_test_checks(value: Any) -> list[dict[str, Any]]:
             "advisory": bool(raw_check.get("advisory")),
             "evidence": str(raw_check.get("evidence") or "")[:1_000],
         }
+        if status == "failed" and "errorLogReferences" in raw_check:
+            normalized_check["errorLogReferences"] = raw_check["errorLogReferences"]
         if status == "running" and check_id in {
             "frontend_test_generation", "backend_test_generation",
         }:

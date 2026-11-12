@@ -4,6 +4,8 @@ export type { WorkflowAuthorizationBootstrap } from './authorizationBootstrap'
 export { readAuthorizationBootstrap } from './authorizationBootstrap'
 import { randomUUID } from '@ag-ui/client'
 import { compactWorkflowEvents } from '../../../shared/workflowEventProjection'
+import { readArtifactReferences } from '../../../shared/workflowArtifactReference'
+import type { ArtifactReference } from '../../../shared/workflowArtifactReference'
 import type { AgentSubscriber, HttpAgent } from '@ag-ui/client'
 import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
@@ -253,6 +255,7 @@ export type IntegrationTestCheckRecord = {
   required: boolean
   advisory?: boolean
   evidence?: string
+  errorLogReferences?: ArtifactReference[]
   activeToolActivity?: WorkflowBuildToolActivity
   passedTests?: number
   totalTests?: number
@@ -1286,6 +1289,8 @@ export function readIntegrationTestChecks(
     if (!id || !name || seenIds.has(id)) continue
     seenIds.add(id)
     const evidence = stringValue(check.evidence).slice(0, 1_000)
+    const errorLogReferences =
+      status === 'failed' ? readArtifactReferences(check.errorLogReferences) : undefined
     const passedTests = optionalNonNegativeInteger(check.passedTests ?? check.passed_tests)
     const totalTests = optionalNonNegativeInteger(check.totalTests ?? check.total_tests)
     const activeToolActivity =
@@ -1299,6 +1304,7 @@ export function readIntegrationTestChecks(
       required: check.required === true,
       ...(check.advisory === true ? { advisory: true } : {}),
       ...(evidence ? { evidence } : {}),
+      ...(errorLogReferences ? { errorLogReferences } : {}),
       ...(activeToolActivity ? { activeToolActivity } : {}),
       ...(passedTests !== undefined ? { passedTests } : {}),
       ...(totalTests !== undefined ? { totalTests } : {})
