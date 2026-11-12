@@ -84,6 +84,26 @@ def publish_version(
     # 数万 node_modules 文件加进暂存区，stderr 同时被 LF/CRLF warning 塞满，导致整个
     # add 超时或返回非零（用户看到"无法暂存工作区变更"+大量 warning）。
     _ensure_dependencies_ignored(repository_root)
+    # 把 application.json 从 git 索引移除：它是跨分支共享的应用配置 + 分支表，
+    # 每次发布后前端又会写入 commitSha，留下未提交改动挡住后续「基于此版本迭代」
+    # 的 checkout。从索引移除后它回到未追踪状态，.gitignore 才会生效。
+    # 新工作区本就未追踪，此调用幂等无副作用。
+    _ensure_platform_state_untracked(repository_root)
+    # 把本轮迭代的 AGENTS.md 摘要追加**在 git add -A 之前** —— 摘要会被一起 commit，
+    # 工作区不会留下未提交改动。AGENTS.md 必须进 git（按分支隔离），
+    # 不能加进 .gitignore，否则 checkout -b 到历史分支时它不会被切回对应版本，
+    # 新分支的 LLM 会读到其他分支的迭代摘要。
+    try:
+        from app.services.iteration_service import generate_agents_context
+
+        generate_agents_context(
+            workspace_root,
+            branch_name=branch,
+            description=request.description,
+        )
+    except Exception:
+        # AGENTS.md 生成失败不影响发布结果。
+        pass
 
     # 2. 提交：git add -A + git commit。
     report("commit", "正在提交变更到本地仓库…", 30)
@@ -145,18 +165,8 @@ def publish_version(
             # 推送失败时仅清理临时 remote，本地提交保留便于用户手动重推。
             _run_git(repository_root, ["remote", "remove", remote_name])
 
-    # 4. 生成迭代上下文总结（AGENTS.md），供下一轮迭代的大模型作为起点。
-    try:
-        from app.services.iteration_service import generate_agents_context
-
-        generate_agents_context(
-            workspace_root,
-            branch_name=branch,
-            description=request.description,
-        )
-    except Exception:
-        # AGENTS.md 生成失败不影响发布结果。
-        pass
+    # 4. AGENTS.md 的当次摘要已在「git add -A 之前」由 generate_agents_context 追加
+    #    并随本轮提交一起进 git；不再需要在 push 后处理。
 
     report("done", "提交并推送完成。", 100)
 
@@ -227,6 +237,10 @@ _REQUIRED_GITIGNORE_PATTERNS = (
     "target/",
     "__pycache__/",
     ".venv/",
+    # application.json 是跨分支共享的应用配置 + 分支表，每次发布后前端又会写入
+    # commitSha，留下未提交改动挡住后续 checkout -b。它不是用户维护的业务代码，
+    # 不应进 git。AGENTS.md 相反：必须进 git（按分支隔离），见 publish_version。
+    ".devagentstudio/application.json",
     ".DS_Store",
 )
 
@@ -259,6 +273,39 @@ def _ensure_dependencies_ignored(repository_root: Path) -> None:
         import sys
 
         print(f"[version_publish] 无法更新 .gitignore 排除依赖目录：{gitignore}", file=sys.stderr)
+
+
+# 平台运行时文件：application.json 是应用配置 + 分支表，跨所有分支共享（分支表
+# 应始终反映"当前最新"，切到历史分支时不该被切回旧版本）。每次发布后前端会写入
+# commitSha，留下未提交改动挡住后续 checkout -b。
+# AGENTS.md 相反：必须进 git（按分支隔离），不能从这里移除。
+_PLATFORM_STATE_FILES = (
+    ".devagentstudio/application.json",
+)
+
+
+def _ensure_platform_state_untracked(repository_root: Path) -> None:
+    """把 application.json 从 git 索引中移除，让它回到未追踪状态。
+
+    这个文件在旧工作区已经被 `git add -A` 提交进历史。仅写 .gitignore 不会
+    生效（gitignore 只对未追踪文件生效）—— 必须 `git rm --cached` 把它从索引
+    移除，之后工作区的修改就不会再出现在 git status 里。
+
+    本函数幂等：文件本就未追踪时 `git rm --cached` 会报错，但 `--ignore-unmatch`
+    让其静默成功。失败也不阻断发布。
+    """
+
+    result = _run_git(
+        repository_root,
+        ["rm", "-r", "--cached", "--ignore-unmatch", *_PLATFORM_STATE_FILES],
+    )
+    if result.returncode != 0:
+        import sys
+
+        print(
+            f"[version_publish] 无法把 application.json 从 git 索引移除：{result.stderr or result.stdout}",
+            file=sys.stderr,
+        )
 
 
 def _resolve_workspace_root(value: str) -> Path:

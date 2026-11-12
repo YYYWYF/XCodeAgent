@@ -22,6 +22,22 @@ class BootstrapGitError(WorkspaceBootstrapError):
 # 在工作流密集推进时会迅速膨胀到几十 MB；推进过程是短期状态，不属于"应被追溯的产物"。
 _RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints", "recovery")
 
+# .devagentstudio 下的"平台运行时文件"：application.json 是应用配置 + 分支表，
+# 跨所有分支共享（分支表应始终反映"当前最新"，切到历史分支时不该被切回旧版本）。
+# 每次「提交并推送」之后前端会写入 commitSha，留下用户感知不到的未提交改动，
+# 导致后续「基于此版本迭代」的 `git checkout -b` 被这些"幽灵改动"挡住。
+# 它本质是工作区的本地状态，不属于"应被追溯的产物"，因此不进 git。
+#
+# 注意：AGENTS.md **不在这里**。AGENTS.md 是按分支隔离的迭代摘要（每个分支只记录
+# 自己的故事），它必须进 git 才能被 `checkout -b` 切到对应分支的版本。
+# 为防止"push 后追加摘要留下未提交改动"，`generate_agents_context` 在 `git add -A`
+# 之前调用，让摘要被一起 commit。
+#
+# 对于已经把 application.json 提交进 git 的旧工作区，仅写 .gitignore 不会生效
+# （gitignore 只对未追踪文件生效）。需要配套 `git rm --cached` 把它从索引移除，
+# 见 `version_publish._ensure_platform_state_untracked`。
+_PLATFORM_STATE_FILES = ("application.json",)
+
 # 依赖目录与构建产物：发布时 `git add -A` 会把工作区所有未忽略文件加进暂存区，
 # 不排除 node_modules 会导致数万文件被加入，git 同时输出大量 LF/CRLF warning 把
 # stderr 缓冲区塞满，最终让整个 add 命令超时/失败（用户看到"无法暂存工作区变更"）。
@@ -29,6 +45,11 @@ _GITIGNORE_CONTENT = "\n".join(
     [
         # 运行时产物（日志、缓存、checkpoint sqlite）。
         *(f"{WORKSPACE_ARTIFACT_DIR_NAME}/{name}/" for name in _RUNTIME_ARTIFACT_DIRS),
+        # 跨分支共享的平台运行时文件（application.json，含应用配置与分支表）。
+        # 每次「提交并推送」后前端会写入 commitSha，留下未提交改动挡住后续 checkout -b；
+        # 它不是用户维护的业务代码，不应进 git。
+        # AGENTS.md 相反：必须进 git（按分支隔离），不在此排除。
+        *(f"{WORKSPACE_ARTIFACT_DIR_NAME}/{name}" for name in _PLATFORM_STATE_FILES),
         # 前端依赖与构建产物。
         "node_modules/",
         "dist/",
