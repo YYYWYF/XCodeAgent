@@ -1,0 +1,58 @@
+// 参数位置仅标注一次，字段继续使用与正文相同的轻量类型树。
+.@{class-prefix}-technical-plan-parameter-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.@{class-prefix}-technical-plan-parameter-location {
+  justify-self: start;
+  padding: 2px 9px;
+  border-radius: 5px;
+  color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+  font-size: 12px;
+}
+
+// 默认值列贯穿参数的全部嵌套层级，子字段不会另起一套列宽。
+.@{class-prefix}-technical-plan-complete-types .@{class-prefix}-technical-plan-schema-with-default {
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) 30px minmax(42px, 0.55fr) minmax(
+      0,
+      1.45fr
+    );
+
+  .@{class-prefix}-technical-plan-schema-field {
+    > .@{class-prefix}-technical-plan-schema-default {
+      grid-area: 1 / 4;
+      min-width: 0;
+      color: var(--wb-text-secondary);
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    > .@{class-prefix}-technical-plan-schema-description {
+      grid-area: 1 / 5;
+    }
+  }
+}
+
+// 窄栏同样保留树形缩进；极窄时只把说明移到字段下方，默认值仍在同行。
+@container (max-width: 480px) {
+  .@{class-prefix}-technical-plan-complete-types
+    .@{class-prefix}-technical-plan-schema-with-default {
+    grid-template-columns: minmax(132px, 1.4fr) minmax(80px, 1fr) 28px 42px minmax(0, 1fr);
+  }
+}
+
+@container (max-width: 340px) {
+  .@{class-prefix}-technical-plan-complete-types
+    .@{class-prefix}-technical-plan-schema-with-default {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 28px 42px;
+
+    .@{class-prefix}-technical-plan-schema-field
+      > .@{class-prefix}-technical-plan-schema-description {
+      grid-area: 2 / 1 / auto / -1;
+    }
+  }
+}

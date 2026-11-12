@@ -1,6 +1,6 @@
 import { QuestionCircleOutlined } from '@ant-design/icons'
 import { Tooltip, Typography } from 'antd'
-import type { ReactElement } from 'react'
+import type { ReactElement, ReactNode } from 'react'
 import { cx } from '../../../../utils'
 import {
   asRecord,
@@ -16,6 +16,33 @@ import { SchemaTree } from './TechnicalPlanSchemaTree'
 import './TechnicalPlanEndpointInspector.less'
 
 const { Text } = Typography
+
+/** 参数与正文共用类型树列标题，参数表为每层字段保留默认值列。 */
+function SchemaTable({
+  children,
+  showDefault = false
+}: {
+  children: ReactNode
+  showDefault?: boolean
+}): ReactElement {
+  return (
+    <div
+      className={cx(
+        'technical-plan-schema-table',
+        showDefault && 'technical-plan-schema-with-default'
+      )}
+    >
+      <div className={cx('technical-plan-schema-column-head')}>
+        <span>字段名</span>
+        <span>类型</span>
+        <span>必填</span>
+        {showDefault ? <span>默认值</span> : null}
+        <span>说明</span>
+      </div>
+      {children}
+    </div>
+  )
+}
 
 /** 标题旁提供可悬停、聚焦或点击的说明入口，正文默认保持简洁。 */
 function SchemaHeading({ label, help }: { label: string; help?: string }): ReactElement {
@@ -75,7 +102,9 @@ function BodySchema({
       {!reference ? (
         <Text type="secondary">无{label}</Text>
       ) : Object.keys(schema).length ? (
-        <SchemaTree name={reference} schema={schema} schemas={asRecord(contract.schemas)} />
+        <SchemaTable>
+          <SchemaTree name={reference} schema={schema} schemas={asRecord(contract.schemas)} />
+        </SchemaTable>
       ) : (
         <Text type="secondary">{reference} · 类型定义暂不可读取</Text>
       )}
@@ -135,18 +164,21 @@ export function EndpointInspector({
           {Array.from(parameterGroups, ([location, group]) => (
             <div className={cx('technical-plan-parameter-group')} key={location}>
               <span className={cx('technical-plan-parameter-location')}>{location}</span>
-              {group.map((parameter, index) => (
-                <SchemaTree
-                  key={`${textValue(parameter.name)}:${index}`}
-                  name={textValue(parameter.name, `参数 ${index + 1}`)}
-                  schema={asRecord(parameter.schema)}
-                  description={textValue(parameter.description)}
-                  schemas={schemas}
-                  isField
-                  fieldRequired={Boolean(parameter.required)}
-                  fieldOptional={!parameter.required}
-                />
-              ))}
+              <SchemaTable showDefault>
+                {group.map((parameter, index) => (
+                  <SchemaTree
+                    key={`${textValue(parameter.name)}:${index}`}
+                    name={textValue(parameter.name, `参数 ${index + 1}`)}
+                    schema={asRecord(parameter.schema)}
+                    description={textValue(parameter.description)}
+                    schemas={schemas}
+                    isField
+                    showDefault
+                    fieldRequired={Boolean(parameter.required)}
+                    fieldOptional={!parameter.required}
+                  />
+                ))}
+              </SchemaTable>
             </div>
           ))}
         </section>

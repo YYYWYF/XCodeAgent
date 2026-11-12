@@ -1,7 +1,12 @@
 // 完整类型区沿用工作台主题；窄分栏中允许换行，不省略类型和字段名称。
 .@{class-prefix}-technical-plan-complete-types {
+  --schema-indent: 20px;
+  --schema-column-gap: 12px;
   min-width: 0;
   border-color: var(--wb-border);
+  padding: 16px;
+  gap: 12px;
+  container-type: inline-size;
 
   .@{class-prefix}-technical-plan-inspector-title {
     flex-wrap: wrap;
@@ -18,40 +23,174 @@
     text-overflow: clip;
   }
 
-  .@{class-prefix}-technical-plan-schema-field,
-  .@{class-prefix}-technical-plan-schema-node-head {
-    flex-wrap: wrap;
-    align-items: baseline;
+  .@{class-prefix}-technical-plan-schema-heading {
+    margin: 3px 0 7px;
+
+    &::before {
+      width: 3px;
+      height: 16px;
+      border-radius: 2px;
+      background: var(--wb-accent);
+      content: '';
+    }
+
+    strong {
+      color: var(--wb-text);
+      font-size: 14px;
+    }
   }
 
-  // 字段名、类型、必填和说明各占一列，同组内对齐；窄栏和长类型允许完整换行。
-  .@{class-prefix}-technical-plan-schema-field {
+  // 所有层级共享四列，只有字段名缩进；引用及内联对象不会使类型、状态和说明错列。
+  .@{class-prefix}-technical-plan-schema-node,
+  .@{class-prefix}-technical-plan-schema-table {
     display: grid;
-    grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1.4fr) 28px minmax(0, 1.8fr);
-    column-gap: 8px;
-    row-gap: 2px;
-    padding-top: 5px;
-    padding-bottom: 5px;
-    border-bottom: 1px solid var(--wb-border);
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) 30px minmax(0, 1.45fr);
+    column-gap: var(--schema-column-gap);
+    row-gap: 0;
+  }
 
-    > .@{class-prefix}-technical-plan-schema-caret {
+  .@{class-prefix}-technical-plan-schema-column-head {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--wb-border);
+    color: var(--wb-text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+
+    > span:first-child {
+      padding-left: 20px;
+    }
+  }
+
+  .@{class-prefix}-technical-plan-schema-table,
+  .@{class-prefix}-technical-plan-schema-children,
+  .@{class-prefix}-technical-plan-schema-field-group,
+  .@{class-prefix}-technical-plan-schema-dependency-rail {
+    display: grid;
+
+    > .@{class-prefix}-technical-plan-schema-node {
+      grid-column: 1 / -1;
+      grid-template-columns: subgrid;
+    }
+  }
+
+  .@{class-prefix}-technical-plan-schema-children,
+  .@{class-prefix}-technical-plan-schema-field-group,
+  .@{class-prefix}-technical-plan-schema-dependency-rail {
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+  }
+
+  // 连续细竖线标记父组边界，不给叶子字段添加图标或树枝符号。
+  .@{class-prefix}-technical-plan-schema-children {
+    position: relative;
+
+    > .@{class-prefix}-technical-plan-schema-details {
+      grid-column: 1 / -1;
+      padding-left: calc(var(--schema-depth, 0) * var(--schema-indent) + 20px);
+    }
+
+    &::before {
+      position: absolute;
+      top: 0;
+      bottom: 3px;
+      left: calc(var(--schema-depth, 0) * var(--schema-indent) + 6px);
+      width: 1px;
+      background: var(--wb-border-strong);
+      content: '';
+    }
+  }
+
+  .@{class-prefix}-technical-plan-schema-field {
+    position: relative;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+    gap: 3px var(--schema-column-gap);
+    min-width: 0;
+    padding: 8px 0;
+    border: 0;
+
+    &::after {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: calc(var(--schema-depth, 0) * var(--schema-indent) + 20px);
+      border-bottom: 1px solid var(--wb-border);
+      content: '';
+    }
+
+    > .@{class-prefix}-technical-plan-schema-name {
       grid-area: 1 / 1;
     }
-    > code {
-      grid-area: 1 / 2;
-      font-size: 13px;
-    }
     > .@{class-prefix}-technical-plan-type {
-      grid-area: 1 / 3;
+      grid-area: 1 / 2;
     }
     > .@{class-prefix}-technical-plan-schema-status {
-      grid-area: 1 / 4;
+      grid-area: 1 / 3;
     }
     > .@{class-prefix}-technical-plan-schema-description {
-      grid-area: 1 / 5;
+      grid-area: 1 / 4;
     }
-    > .@{class-prefix}-technical-plan-schema-constraints {
-      grid-column: 2 / -1;
+    > .@{class-prefix}-technical-plan-schema-constraints,
+    > .@{class-prefix}-technical-plan-schema-reference-context {
+      grid-column: 1 / -1;
+      padding-left: calc(var(--schema-depth, 0) * var(--schema-indent) + 20px);
+    }
+  }
+
+  .@{class-prefix}-technical-plan-schema-node-head {
+    display: flex;
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    padding: 10px 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  .@{class-prefix}-technical-plan-schema-name {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+    padding-left: calc(var(--schema-depth, 0) * var(--schema-indent));
+
+    code {
+      min-width: 0;
+      color: var(--wb-text);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+  }
+
+  .@{class-prefix}-technical-plan-schema-caret,
+  .@{class-prefix}-technical-plan-schema-caret-space {
+    width: 14px;
+    flex: 0 0 14px;
+    margin-right: 6px;
+  }
+
+  .@{class-prefix}-technical-plan-schema-caret {
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+
+    &:hover,
+    &:focus-visible {
+      color: var(--wb-accent);
+      background: var(--wb-surface-subtle);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--wb-accent-border);
+      outline-offset: 2px;
     }
   }
 
@@ -62,19 +201,25 @@
 
   .@{class-prefix}-technical-plan-required {
     padding: 0;
+    color: var(--wb-text-secondary);
     background: transparent;
   }
 
   .@{class-prefix}-technical-plan-schema-dependency {
     padding: 0;
     border: 0;
+    border-radius: 0;
     background: transparent;
+
+    > .@{class-prefix}-technical-plan-schema-node-head {
+      padding: 10px 0;
+    }
   }
 
   .@{class-prefix}-technical-plan-schema-dependency-rail {
-    margin: 3px 0 2px 8px;
-    padding-left: 8px;
-    border-left: 1px solid var(--wb-border);
+    margin: 0;
+    padding: 0;
+    border: 0;
 
     &::before {
       display: none;
@@ -108,31 +253,47 @@
     }
   }
 
-  // 说明用柔和绿色正文呈现，取消标签轮廓和底色，避免抢过字段本身。
+  // 说明统一使用主题次级正文色，保留中文标点的自然换行。
   .@{class-prefix}-technical-plan-schema-description {
     flex: 0 1 auto;
     min-width: 0;
     max-width: 100%;
-    color: color-mix(in srgb, var(--wb-code-add-text) 65%, var(--wb-text-secondary));
+    color: var(--wb-text-secondary);
     font-size: 12px;
     font-weight: 400;
     line-height: 1.6;
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
+    line-break: strict;
   }
 }
 
-// 同一位置的参数共用组标题，字段行与响应类型保持一致。
-.@{class-prefix}-technical-plan-parameter-group {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
+// 窄分栏适当收紧缩进，给嵌套字段名和类型保留完整阅读空间。
+@container (max-width: 480px) {
+  .@{class-prefix}-technical-plan-complete-types .@{class-prefix}-technical-plan-schema-table {
+    --schema-indent: 14px;
+    --schema-column-gap: 8px;
+    grid-template-columns: minmax(140px, 1.4fr) minmax(96px, 1fr) 28px minmax(0, 1fr);
+  }
 }
 
-.@{class-prefix}-technical-plan-parameter-location {
-  padding-left: 9px;
-  color: var(--wb-text-tertiary);
-  font-size: 12px;
+// 极窄区域把说明移到所属字段下方，避免多层缩进把字段名挤成单字。
+@container (max-width: 340px) {
+  .@{class-prefix}-technical-plan-complete-types .@{class-prefix}-technical-plan-schema-table {
+    --schema-indent: 10px;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 28px;
+
+    .@{class-prefix}-technical-plan-schema-column-head > span:last-child {
+      grid-area: 2 / 1 / auto / -1;
+      padding-left: 20px;
+    }
+
+    .@{class-prefix}-technical-plan-schema-field
+      > .@{class-prefix}-technical-plan-schema-description {
+      grid-area: 2 / 1 / auto / -1;
+      padding-left: calc(var(--schema-depth, 0) * var(--schema-indent) + 20px);
+    }
+  }
 }
 
 // 标题帮助沿用全局 Tooltip 明暗主题，按钮只在交互时使用品牌色。
@@ -169,3 +330,5 @@
     overflow-wrap: anywhere;
   }
 }
+
+@import './TechnicalPlanParameterTable.less';

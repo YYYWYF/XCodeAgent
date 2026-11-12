@@ -153,6 +153,47 @@ test('根数组和多层数组保留元素定义，缺少请求体的接口正�
   assert.ok(missingBody.includes('请求体如何发送') && missingBody.includes('类型定义暂不可读取'))
 })
 
+test('嵌套请求参数沿用同一类型树与默认值列，保留零值、布尔、空字符串及空值', () => {
+  const html = renderToStaticMarkup(
+    <EndpointInspector
+      contract={{ schemas }}
+      endpoint={{
+        parameters: [
+          {
+            name: 'filter',
+            in: 'query',
+            schema: {
+              type: 'object',
+              properties: {
+                options: {
+                  type: 'object',
+                  properties: { enabled: { type: 'boolean', default: false } }
+                },
+                page: { type: 'integer', default: 0 },
+                label: { type: 'string', default: '' },
+                nullable: { type: ['string', 'null'], default: null },
+                lines: { type: 'array', items: { $ref: 'OrderLine' } }
+              }
+            }
+          }
+        ]
+      }}
+    />
+  )
+  const defaults = Array.from(
+    html.matchAll(
+      /class="[^"]*technical-plan-schema-default" aria-label="默认值">([^<]*)<\/span>/g
+    ),
+    (match) => match[1]
+  )
+  assert.deepEqual(defaults, ['—', '—', 'false', '0', '&quot;&quot;', 'null', '—', '—', '—'])
+  for (const text of ['filter', 'options', 'enabled', 'OrderLine', 'quantity', '循环引用']) {
+    assert.ok(html.includes(text), `嵌套参数缺少：${text}`)
+  }
+  assert.ok(!html.includes('默认值：'), '各层默认值仅在默认值列展示一次')
+  assert.ok(html.includes('technical-plan-schema-column-head'), '参数沿用正文的列标题')
+})
+
 test('数组元素简化层级仍保留额外约束、缺失引用和循环引用提示', () => {
   const constrained = renderToStaticMarkup(
     <SchemaTree
