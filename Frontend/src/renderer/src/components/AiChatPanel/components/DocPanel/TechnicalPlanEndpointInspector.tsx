@@ -188,7 +188,7 @@ export function EndpointInspector({
           label="请求体"
           reference={requestReference}
           contract={contract}
-          help="作为 JSON 数据放在 HTTP 请求正文中发送，不拼在 URL 后面。数据结构按下方类型定义组织，字段值由实际调用传入。"
+          help="作为 JSON 数据放在 Body 中发送。"
         />
       ) : null}
       <BodySchema
