@@ -1,6 +1,6 @@
 import { buildFailureMessageForDisplay } from '../../service/buildFailureMessage'
 import { BuiltinAuthorizationActionsContext, AuthorizationBootstrapRecoveryContext, AuthorizationBootstrapRetryNotice, authorizationBootstrapRecoveryOwner } from './authorizationBootstrapRecovery'
-import { Alert, Button, message } from 'antd'
+import { Alert, Button, Modal, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useUncommittedChanges, useWorkbench, useWorkbenchPhase } from '../../context'
@@ -116,6 +116,7 @@ import {
   isStageAdvanceDecision,
   useCommitBeforeSend
 } from './components/MilestoneCommitReminder/useCommitBeforeSend'
+import { asMessageClause, pushRepositoryBranch } from '../../service/repositoryBranch'
 import type { ApiDesignConfigTarget } from './components/WorkflowRunCard/ApiDesignConfigModal'
 import { workflowClarification } from './components/WorkflowRunCard/workflowClarification'
 import {
@@ -875,6 +876,7 @@ export default function AiChatPanel({
   developmentPlanningEntities,
   editorMode,
   onApplicationUpdate,
+  onPersistApplication,
   onApplicationLifecycleChange,
   onPlanningArtifactsRefresh,
   previewBaseUrl,
@@ -1196,7 +1198,69 @@ export default function AiChatPanel({
   // 已有多条分支即处于迭代：模板请求只由 application.json 派生，各迭代一致，
   // 因此本轮沿用已有工程、不重新拉取模板，就绪卡文案需要说明这一点。
   const reusingExistingTemplate = (application.branches?.length ?? 0) > 1
+  const [retryingRepositoryBranch, setRetryingRepositoryBranch] = useState(false)
   const [recoveryProjectionSyncing, setRecoveryProjectionSyncing] = useState(false)
+  // 重试把当前分支推到远端（上次因网络等原因失败）。结果要落盘：卡片文案由它驱动，
+  // 不落盘的话刷新后又变回"已自动提交到版本 X"。
+  const handleRetryRepositoryBranch = useCallback(async (): Promise<void> => {
+    const workspaceRoot = application.workspaceRoot || ''
+    if (!workspaceRoot || retryingRepositoryBranch) return
+
+    // 远端可能已经存在同名分支。平台推送的是全新初始化的模板基线，与远端既有分支
+    // 没有共同祖先，普通推送和 force 都会被服务端拒绝（denyNonFastForwards），
+    // 只能删掉远端那条分支再推 —— 也就是"全覆盖"。这是破坏性操作，必须先确认。
+    const branchLabel = application.branchName || '所选版本'
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        cancelText: '取消',
+        centered: true,
+        content: (
+          <div className={cx('welcome-branch-overwrite-confirmation')}>
+            <p>
+              如果远端仓库里已经有 <strong>{branchLabel}</strong> 分支，它的代码会被
+              <strong>全部覆盖</strong>，原来的内容找不回来。
+            </p>
+            <p>确认后会把本地当前代码完整推送到该分支。</p>
+          </div>
+        ),
+        okButtonProps: { danger: true },
+        okText: '覆盖并提交',
+        onCancel: () => resolve(false),
+        onOk: () => resolve(true),
+        title: `确定要把代码提交到 ${branchLabel} 吗？`,
+        wrapClassName: cx('welcome-modal', `theme-${theme}`)
+      })
+    })
+    if (!confirmed) return
+
+    setRetryingRepositoryBranch(true)
+    try {
+      const outcome = await pushRepositoryBranch({ workspaceRoot, allowOverwrite: true })
+      const nextApplication: ApplicationConfig = {
+        ...application,
+        repositoryBranch: { ...outcome, updatedAt: Date.now() }
+      }
+      onApplicationUpdate(nextApplication)
+      await onPersistApplication?.(nextApplication)
+      if (outcome.status === 'pushed') {
+        message.success(`已提交到版本 ${outcome.branchName}。`)
+      } else {
+        message.warning(
+          `版本 ${outcome.branchName || ''} 仍未提交到远端：${asMessageClause(outcome.message, '原因未知')}。`
+        )
+      }
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '推送失败')
+    } finally {
+      setRetryingRepositoryBranch(false)
+    }
+  }, [
+    application,
+    onApplicationUpdate,
+    onPersistApplication,
+    retryingRepositoryBranch,
+    theme
+  ])
   const templateGenerationFailed =
     applicationLifecycle?.initialization?.stage === 'application_template_generation_failed'
   const templateGenerationOrphaned = isTemplateGenerationOrphaned(
@@ -4823,15 +4887,6 @@ export default function AiChatPanel({
     editedRequirementSpec?: Record<string, unknown>
   ): Promise<void> => {
     setGeneratingDetailTargetKey('')
-    if (answers.application_config_prerequisite) {
-      const sourceSession = activeSession
-      const answer = answers.application_config_prerequisite as { action?: string }
-      if (!await handleSubmitClarification(workflow, answers)) {
-        throw new Error('原请求未能提交，请确认当前会话可操作后重试。')
-      }
-      await persistWorkflowCardResult(sourceSession, workflow, answer.action === 'cancelled' ? 'cancelled' : 'confirmed')
-      return
-    }
     // 设计阶段：规划确认直接交给应用根部的 Planning Runtime。
     if (isApplicationPlanningPhase) {
       // 空答案 = UI 设计稿生成池轮询（no-op resume）：不开启新一轮、不追加用户消息，
@@ -5535,10 +5590,7 @@ export default function AiChatPanel({
                   answers,
                   editedRequirementSpec
                 ): Promise<void> => {
-                  if (planningHistoryOnly) {
-                    if (answers.application_config_prerequisite) throw new Error('历史配置卡已失效。')
-                    return
-                  }
+                  if (planningHistoryOnly) return
                   const submit = (): Promise<void> =>
                     handleSubmitWorkflowClarification(workflow, answers, editedRequirementSpec)
                   if (!isStageAdvanceDecision(answers)) {

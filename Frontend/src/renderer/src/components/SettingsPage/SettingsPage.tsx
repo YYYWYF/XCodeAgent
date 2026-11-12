@@ -53,7 +53,7 @@ type SettingsFormValues = ApplicationDraft & {
 export default function SettingsPage({ application, onClose, onSaved }: Props): ReactElement {
   const [form] = Form.useForm<SettingsFormValues>()
   const [saving, setSaving] = useState(false)
-  const { canResume, recoveryMessage, refreshPending, handleResume } = useSettingsConfigRecovery(application, form, setSaving, onSaved)
+  const { canResume, refreshPending, handleResume } = useSettingsConfigRecovery(application, form, setSaving, onSaved)
 
   const settingsDraft = useMemo(() => createSettingsDraft(application), [application])
   // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
@@ -102,9 +102,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         environment
       }
       submittedChanges = settingsConfigChanges(application, updatedApplication)
-      if (hasPendingConfigOperation(application.workspaceRoot) && Object.keys(submittedChanges).length === 0) {
-        throw new Error(canResume ? '上次配置尚未完成，请先点击“继续完成上次配置”。' : recoveryMessage || '上次配置尚未完成，请回到原入口继续。')
-      }
+      if (hasPendingConfigOperation(application.workspaceRoot) && Object.keys(submittedChanges).length === 0) throw new Error('原配置操作尚未完成，请点击恢复原配置操作。')
       const applied: ConfigOperation | undefined = await applySettingsConfigChanges(application, updatedApplication)
       if (applied && applied.status !== 'APPLIED') throw new Error('应用配置尚未完成工程同步。')
       const disk = await loadWorkspaceApplicationConfig(application.workspaceRoot)
@@ -186,8 +184,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
           </Title>
         </div>
         <div className={cx('settings-page-header-right')}>
-          {recoveryMessage ? <Typography.Text type="secondary">{recoveryMessage}</Typography.Text> : null}
-          {canResume ? <Button disabled={saving} onClick={() => void handleResume()}>继续完成上次配置</Button> : null}
+          {canResume ? <Button disabled={saving} onClick={() => void handleResume()}>恢复原配置操作</Button> : null}
           <Button
             className={cx('settings-save-btn')}
             icon={<SaveOutlined />}

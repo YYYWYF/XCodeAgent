@@ -7,7 +7,6 @@ export type ConfigChanges = Record<string, string | boolean | string[]>
 
 export type ConfigOperation = {
   operationId?: string
-  requestId?: string | null
   status?: 'APPLYING' | 'APPLIED' | 'FAILED'
   configRevision?: number
   expectedConfigRevision?: number
@@ -109,71 +108,8 @@ type PendingOperation = {
   digest: string
 }
 
-type PendingConfigIdentity =
-  | { kind: 'none' }
-  | { kind: 'invalid' }
-  | { kind: 'other'; requestId?: string }
-  | { kind: 'mine'; operationId: string }
-
-/** 使用现有配置操作键绑定工作区。 */
-function pendingKey(workspaceRoot: string): string {
-  return `application-config-operation:${workspaceRoot}`
-}
-
-/** 校验当前存储格式；损坏记录留在原处。 */
-function readPendingOperation(workspaceRoot: string): PendingOperation | undefined {
-  const raw = window.localStorage.getItem(pendingKey(workspaceRoot))
-  if (raw === null) return undefined
-  try {
-    const pending = JSON.parse(raw) as PendingOperation
-    if (pending?.version !== 1 || typeof pending.operationId !== 'string' ||
-      !/^[A-Za-z0-9_-]{8,128}$/.test(pending.operationId) ||
-      typeof pending.digest !== 'string' || !/^[a-f0-9]{64}$/.test(pending.digest) ||
-      !Number.isInteger(pending.expectedConfigRevision) || pending.expectedConfigRevision < 1 ||
-      (pending.requestId !== undefined && (typeof pending.requestId !== 'string' || !pending.requestId.trim()))) {
-      throw new Error()
-    }
-    return pending
-  } catch {
-    throw new Error('CONFIG_OPERATION_CONFLICT：本地操作身份无效，已保留原记录。')
-  }
-}
-
-/** 只读识别归属；无请求 ID 的设置页操作只归设置页。 */
-export function inspectPendingConfigIdentity(workspaceRoot: string, requestId?: string): PendingConfigIdentity {
-  try {
-    const pending = readPendingOperation(workspaceRoot)
-    if (!pending) return { kind: 'none' }
-    return pending.requestId === requestId
-      ? { kind: 'mine', operationId: pending.operationId }
-      : { kind: 'other', requestId: pending.requestId }
-  } catch {
-    return { kind: 'invalid' }
-  }
-}
-
-/** 按工作区与请求隔离续跑身份，配置提案和凭据不进入该记录。 */
-function continuationKey(workspaceRoot: string, requestId: string): string {
-  return `application-config-continuation:${JSON.stringify([workspaceRoot, requestId])}`
-}
-
-/** 读取已完成配置的续跑身份。 */
-export function readConfigContinuation(workspaceRoot: string, requestId: string): string | undefined {
-  const operationId = window.localStorage.getItem(continuationKey(workspaceRoot, requestId))
-  if (operationId === null) return undefined
-  if (!/^[A-Za-z0-9_-]{8,128}$/.test(operationId)) throw new Error('本地配置续跑身份无效，已保留原记录。')
-  return operationId
-}
-
-/** 仅在同一请求的配置续跑已被接收后释放身份。 */
-export function clearConfigContinuation(workspaceRoot: string, requestId: string, operationId: string): void {
-  if (readConfigContinuation(workspaceRoot, requestId) === operationId) {
-    window.localStorage.removeItem(continuationKey(workspaceRoot, requestId))
-  }
-}
-
 /** 读取成功之后才允许丢弃恢复身份，并通知工作台刷新磁盘事实。 */
-async function finishOperation(workspaceRoot: string, operation: ConfigOperation, requestId?: string): Promise<ConfigOperation> {
+async function finishOperation(workspaceRoot: string, storageKey: string, operation: ConfigOperation): Promise<ConfigOperation> {
   if (operation.status !== 'APPLIED') return operation
   try {
     await loadWorkspaceApplicationConfig(workspaceRoot)
@@ -182,30 +118,9 @@ async function finishOperation(workspaceRoot: string, operation: ConfigOperation
       failureStage: 'config_snapshot_read', failureCode: 'CONFIG_SNAPSHOT_INVALID', failureTarget: '.devagentstudio/application.json'
     })
   }
-  const pending = readPendingOperation(workspaceRoot)
-  if (pending && pending.operationId === operation.operationId && pending.requestId === requestId) {
-    // 先保留续跑身份，刷新或退出时至少能找回一个原操作身份。
-    if (requestId) window.localStorage.setItem(continuationKey(workspaceRoot, requestId), pending.operationId)
-    window.localStorage.removeItem(pendingKey(workspaceRoot))
-  }
   window.dispatchEvent(new CustomEvent(APPLICATION_CONFIG_REFRESHED_EVENT, { detail: { workspaceRoot } }))
+  window.localStorage.removeItem(storageKey)
   return operation
-}
-
-/** 向服务端核实原操作状态，已应用时读盘并转入会话续跑。 */
-export async function checkPendingConfigOperation(workspaceRoot: string, requestId: string, operationId: string): Promise<ConfigOperation> {
-  const operation = await runConfigOperation(workspaceRoot, 'get', { operationId })
-  if (operation.operationId !== operationId || operation.requestId !== requestId ||
-    !operation.status || !['APPLYING', 'APPLIED', 'FAILED'].includes(operation.status)) {
-    throw new Error('服务端配置操作与当前请求不匹配。')
-  }
-  if (operation.status !== 'APPLIED') return operation
-  const current = inspectPendingConfigIdentity(workspaceRoot, requestId)
-  if (current.kind === 'mine' && current.operationId === operationId) {
-    return finishOperation(workspaceRoot, operation, requestId)
-  }
-  if (readConfigContinuation(workspaceRoot, requestId) === operationId) return operation
-  throw new Error('配置操作身份已变化，请重新检查。')
 }
 
 /** 使用提案指纹绑定原操作；变更提案必须先恢复旧操作并刷新修订号。 */
@@ -217,10 +132,17 @@ async function applyConfigChangesOnce(
   requestId?: string
 ): Promise<ConfigOperation> {
   // 不把 revision 放入键：Desired 已保存后的刷新仍须找回未完成操作。
+  const storageKey = `application-config-operation:${workspaceRoot}`
   const digest = await configChangesDigest(changes)
-  const pending = readPendingOperation(workspaceRoot)
-  if (pending && pending.requestId !== requestId) {
-    throw new Error('CONFIG_OPERATION_CONFLICT：此应用存在其他来源尚未完成的配置，请回到原入口处理。')
+  const raw = window.localStorage.getItem(storageKey)
+  let pending: PendingOperation | undefined
+  if (raw) {
+    try {
+      pending = JSON.parse(raw) as PendingOperation
+      if (pending?.version !== 1 || !pending.operationId || !pending.digest || !Number.isInteger(pending.expectedConfigRevision)) throw new Error()
+    } catch {
+      throw new Error('CONFIG_OPERATION_CONFLICT：本地操作身份无效，已保留记录，请检查原操作。')
+    }
   }
   if (operationId && pending && operationId !== pending.operationId) throw new Error('CONFIG_OPERATION_CONFLICT：已有未完成操作，请先恢复。')
   const pendingId = pending?.operationId || operationId
@@ -231,32 +153,32 @@ async function applyConfigChangesOnce(
     } catch (error) {
       if (!(error instanceof Error) || !error.message.includes('CONFIG_OPERATION_MISSING')) throw error
     }
-    if ((pending && pending.digest !== digest) || (previous?.changesDigest && previous.changesDigest !== digest)) {
+    if ((pending && (pending.digest !== digest || pending.requestId !== requestId)) || (previous?.changesDigest && previous.changesDigest !== digest)) {
       if (previous?.status === 'APPLIED') {
-        await finishOperation(workspaceRoot, previous, requestId)
+        await finishOperation(workspaceRoot, storageKey, previous)
         throw new Error('CONFIG_REVISION_CONFLICT：原操作已完成，请刷新配置后重新提交新提案。')
       }
       throw new Error(`CONFIG_OPERATION_CONFLICT：提案已变更，原操作 ${pendingId} 尚未完成；请恢复原提案并重试。原操作 ID 已保留。`)
     }
-    if (previous?.status === 'APPLIED') return finishOperation(workspaceRoot, previous, requestId)
+    if (previous?.status === 'APPLIED') return finishOperation(workspaceRoot, storageKey, previous)
     const retried = await runConfigOperation(workspaceRoot, 'apply', {
       expectedConfigRevision: pending?.expectedConfigRevision ?? expectedConfigRevision,
       changes, operationId: pendingId, requestId: pending?.requestId ?? requestId
     })
-    return finishOperation(workspaceRoot, retried, requestId)
+    return finishOperation(workspaceRoot, storageKey, retried)
   }
   await runConfigOperation(workspaceRoot, 'preview', { expectedConfigRevision, changes })
   const nextId = randomUUID()
   const next: PendingOperation = { version: 1, operationId: nextId, expectedConfigRevision, requestId, digest }
-  window.localStorage.setItem(pendingKey(workspaceRoot), JSON.stringify(next))
+  window.localStorage.setItem(storageKey, JSON.stringify(next))
   const applied = await runConfigOperation(workspaceRoot, 'apply', {
     expectedConfigRevision, changes, operationId: nextId, requestId
   })
-  return finishOperation(workspaceRoot, applied, requestId)
+  return finishOperation(workspaceRoot, storageKey, applied)
 }
 
 
-const inFlightOperations = new Map<string, { digest?: string; operationId?: string; requestId?: string; promise: Promise<ConfigOperation> }>()
+const inFlightOperations = new Map<string, { digest: string; operationId?: string; promise: Promise<ConfigOperation> }>()
 
 /** 串行化同一表单提案，快速重复点击不会覆盖 pending 身份或生成第二个操作。 */
 export async function applyConfigChanges(
@@ -270,11 +192,11 @@ export async function applyConfigChanges(
   const digest = await configChangesDigest(changes)
   const current = inFlightOperations.get(key)
   if (current) {
-    if (current.digest !== digest || current.operationId !== operationId || current.requestId !== requestId) throw new Error('CONFIG_OPERATION_CONFLICT：原提案正在提交，请等待完成。')
+    if (current.digest !== digest || current.operationId !== operationId) throw new Error('CONFIG_OPERATION_CONFLICT：原提案正在提交，请等待完成。')
     return current.promise
   }
   const promise = applyConfigChangesOnce(workspaceRoot, expectedConfigRevision, changes, operationId, requestId)
-  inFlightOperations.set(key, { digest, operationId, requestId, promise })
+  inFlightOperations.set(key, { digest, operationId, promise })
   try {
     return await promise
   } finally {
@@ -285,27 +207,16 @@ export async function applyConfigChanges(
 
 /** 判断当前工作区是否仍持有需要显式恢复的操作身份。 */
 export function hasPendingConfigOperation(workspaceRoot: string): boolean {
-  return window.localStorage.getItem(pendingKey(workspaceRoot)) !== null
+  return Boolean(window.localStorage.getItem(`application-config-operation:${workspaceRoot}`))
 }
 
 /** 仅发送原操作身份恢复磁盘 Desired，成功读盘后再释放 pending。 */
 export async function resumePendingConfigOperation(workspaceRoot: string, requestId?: string): Promise<ConfigOperation> {
-  const pending = readPendingOperation(workspaceRoot)
-  if (!pending) throw new Error('CONFIG_OPERATION_MISSING：没有待完成的配置操作。')
-  if (pending.requestId !== requestId) throw new Error('CONFIG_OPERATION_CONFLICT：请回到原配置请求继续操作。')
-  const current = inFlightOperations.get(workspaceRoot)
-  if (current) {
-    if (current.digest || current.operationId !== pending.operationId || current.requestId !== requestId) {
-      throw new Error('CONFIG_OPERATION_CONFLICT：配置正在提交，请等待完成。')
-    }
-    return current.promise
-  }
-  const promise = runConfigOperation(workspaceRoot, 'resume', { operationId: pending.operationId, requestId })
-    .then((operation) => finishOperation(workspaceRoot, operation, requestId))
-  inFlightOperations.set(workspaceRoot, { operationId: pending.operationId, requestId, promise })
-  try {
-    return await promise
-  } finally {
-    inFlightOperations.delete(workspaceRoot)
-  }
+  const key = `application-config-operation:${workspaceRoot}`
+  const raw = window.localStorage.getItem(key)
+  if (!raw) throw new Error('CONFIG_OPERATION_MISSING：没有待恢复配置操作。')
+  const pending = JSON.parse(raw) as PendingOperation
+  if (pending.version !== 1 || !pending.operationId || pending.requestId !== requestId) throw new Error('CONFIG_OPERATION_CONFLICT：请回到原配置请求恢复操作。')
+  const operation = await runConfigOperation(workspaceRoot, 'resume', { operationId: pending.operationId, requestId })
+  return finishOperation(workspaceRoot, key, operation)
 }
