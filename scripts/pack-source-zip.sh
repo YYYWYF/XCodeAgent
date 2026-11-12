@@ -35,9 +35,10 @@ if [ -e "$OUTPUT" ] || [ -L "$OUTPUT" ]; then
   exit 1
 fi
 
-# 不读取 Git 忽略规则；-y 保存链接本身，排除模式覆盖任意深度的目标目录。
+# 不读取 Git 忽略规则；-y 保存链接本身，另外排除仓库根目录的 artifacts 验证产物。
 cd "$REPO_PARENT"
 ZIPOPT= zip -q -r -y "$OUTPUT" "$REPO_NAME" \
   -x '*/.git' '*/.git/*' '*/node_modules/*' '*/.venv/*' \
-     '*/.pytest_cache/*' '*/.superpowers/*' '*/.vscode/*'
+     '*/.pytest_cache/*' '*/.superpowers/*' '*/.vscode/*' \
+     "$REPO_NAME/artifacts" "$REPO_NAME/artifacts/*"
 echo "打包完成：$OUTPUT"
