@@ -118,6 +118,8 @@ ProductPlan 中面向产品角色展示的验收标准，只描述生成应用�
 
 生成 React 页面稿时，它是页面视觉设计的唯一权威来源，负责布局、区域、组件、弹窗、操作入口、视觉层级、响应式策略、明暗主题和页面状态的视觉呈现。设计稿使用 Mock 值和本地状态表达搜索、筛选、弹窗、表单与确认交互，不接入真实 API。Mock 只能给 ProductPlan 已声明的信息项填充示例值，不能新增业务字段、指标、筛选器、操作、跳转、角色或业务区域。UI 设计稿为可选参考，所有流程均不要求它存在、完整、已生成、已确认或摘要匹配；UI 卡片的“下一步”须等待排队、生成或正在停止的任务全部结束；没有在途任务时即可继续，不要求所有页面生成成功，未生成、失败和已停止页面均允许继续。确认只到达 `awaiting_planning_stage_entry`，用户点击绿色入口卡后，当前工作台为该应用创建或恢复独立的 PLAN StageSession，并原地切换到 Planning 阶段。先以 `forwardedProps.planningStageHandoff` 校验当前来源 Run/lifecycle revision 并在 PLAN 会话的独立线程重建原审阅门，再在该线程提交 `enter_planning`。交接不运行产物模型、不消费用户确认；旧 DESIGN 线程不再有权推进。RequirementSpec、ProductPlan 与 UiDesign 从服务端当前 checkpoint 传递，不使用前端快照。`initialization.iterationId` 保持不变，`initialization.threadId` 指向新阶段线程。
 
+Build 读取设计稿时，仅比较清单的 `product_plan_sha256` 与当前 ProductPlan 的现有摘要：匹配才参考，不匹配或缺失时静默忽略，不提示、不阻断开发。无需新增版本或摘要字段，也不额外检查 RequirementSpec 哈希。UI 引用不参与任务业务合同的来源摘要，避免设计稿是否存在或更新导致 DAG 失效。
+
 `ui-designs.json` 使用 `ui-manifest.v3`，它是 React 稿的引用与校验证据，不是另一份页面详设，也不是第二份产品事实。正式落盘文件不保存 TSX 正文，不重复页面名称、正式路由、描述、角色、状态要求、业务标签或验收标准；确认界面需要这些文案时，仅从当前 ProductPlan 临时投影。核心结构为：
 
 ```json

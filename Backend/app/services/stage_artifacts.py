@@ -95,7 +95,12 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
         fields[f"{key}_json_path"] = str(path) if key in required else ""
         fields[f"{key}_path"] = str(path.with_suffix(".md")) if key in required else ""
     # ProjectPlan 是当前正式 TechnicalPlan 的运行时投影，不是另一份历史资产。
-    from app.services.page_implementation_contract import materialize_technical_plan_runtime
+    from app.services.page_implementation_contract import (
+        current_ui_design_reference, materialize_technical_plan_runtime,
+    )
+    if node in _RUNTIME_STAGES:
+        # 执行 Agent 与页面合同采用同一参考；摘要不匹配时不保留旧 State 的设计稿。
+        fields["ui_designs"] = current_ui_design_reference(fields["product_plan"], fields["ui_designs"])
     plan = fields["technical_plan"]
     fields["project_plan"] = (
         materialize_technical_plan_runtime(plan, fields["requirement_spec"], fields["product_plan"], fields["ui_designs"])

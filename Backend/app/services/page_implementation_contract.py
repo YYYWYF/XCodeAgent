@@ -28,6 +28,16 @@ def _artifact_hash(value: Any) -> str:
     ).hexdigest()
 
 
+def current_ui_design_reference(
+    product_plan: dict[str, Any], ui_designs: dict[str, Any],
+) -> dict[str, Any]:
+    """只参考绑定当前 ProductPlan 的设计稿，缺失或过期时静默忽略。"""
+
+    if product_plan and ui_designs.get("product_plan_sha256") == _artifact_hash(product_plan):
+        return ui_designs
+    return {}
+
+
 def _endpoint_catalog(project_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """把 TechnicalPlan API Contract 展开为 endpoint 索引。"""
 
@@ -505,6 +515,7 @@ def materialize_technical_plan_runtime(
 
     if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
         raise ValueError("只接受当前 TechnicalPlan。")
+    ui_designs = current_ui_design_reference(product_plan, ui_designs)
     references_by_page = {
         str(page.get("pageId") or ""): page.get("references", {})
         for page in technical_plan_pages(technical_plan)

@@ -5,10 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.agents.frontend.generator import _ui_design_reference_instruction
 from app.services.artifact_freshness import upstream_errors
 from app.services.artifact_invalidation import assert_confirmed_artifact_closure
 from app.services.build_context_resolver import _materialize_page_confirmation_plan
 from app.services.change_contracts import load_confirmed_contract_corpus
+from app.services.page_implementation_contract import _artifact_hash
 from app.services.stage_artifacts import _ARTIFACTS, _STAGES, _TECHNICAL_STAGES, load_stage_artifacts
 from app.services.stage_prerequisites import required_artifacts, require_stage_inputs
 
@@ -89,3 +91,51 @@ class OptionalUiWorkflowTests(unittest.TestCase):
         artifacts = {'product_plan': {'pages': []}}
         self.assertEqual(mainline_formal_contract_inputs(artifacts, plan, {}),
                          mainline_formal_contract_inputs(artifacts, with_ui, {}))
+
+    def test_runtime_and_agent_only_reference_current_product_designs(self):
+        """磁盘设计稿只按产品摘要决定是否参考，旧 State 不得补回被忽略的设计稿。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace) / '.devagentstudio'
+            product = {'confirmation_status': 'confirmed', 'pages': [{'pageId': 'home', 'actions': [
+                {'actionId': 'open', 'name': '打开',
+                 'behavior': {'type': 'interface', 'expectedResult': '当前产品效果'}}]}]}
+            technical = {'artifact_type': 'technical-plan', 'confirmation_status': 'confirmed',
+                'product_plan_sha256': _artifact_hash(product),
+                'pages': [{'pageId': 'home', 'references': {}}], 'api_contracts': []}
+            self.write(root, 'application.json', {})
+            self.write(root, _ARTIFACTS['requirement_spec'], {'confirmation_status': 'confirmed'})
+            self.write(root, _ARTIFACTS['product_plan'], product)
+            self.write(root, _ARTIFACTS['technical_plan'], technical)
+            code_path = root / 'ui-design/pages/Home/index.tsx'
+            code_path.parent.mkdir(parents=True)
+            code_path.write_text('export default () => <div />;', encoding='utf-8')
+            ui = {'confirmation_status': 'confirmed', 'pages': [{'pageId': 'home', 'page_key': 'Home',
+                'status': 'confirmed', 'code_path': str(code_path), 'code_sha256': 'recorded-code-hash',
+                'bindings': {'actions': [{'actionId': 'open', 'controlIds': ['open-control'],
+                                         'uiEffect': '设计稿效果'}]}}]}
+            for digest in (None, '', 'outdated', _artifact_hash(product)):
+                with self.subTest(digest=digest):
+                    manifest = dict(ui)
+                    if digest is not None:
+                        manifest['product_plan_sha256'] = digest
+                    self.write(root, _ARTIFACTS['ui_designs'], manifest)
+                    fields = load_stage_artifacts({'workspace': workspace, 'ui_designs': ui},
+                                                 'api_design_readiness_gate')
+                    runtime = _materialize_page_confirmation_plan(Path(workspace), technical)
+                    reference = runtime['page_implementation_contracts'][0]['uiDesignRef']
+                    current = digest == _artifact_hash(product)
+                    self.assertEqual(reference['path'], str(code_path) if current else '')
+                    self.assertEqual(bool(fields['ui_designs']), current)
+                    self.assertEqual(bool(_ui_design_reference_instruction(fields['ui_designs'])), current)
+                    binding = runtime['page_implementation_contracts'][0]['actionBindings'][0]
+                    self.assertEqual(binding['localEffect'], '设计稿效果' if current else '当前产品效果')
+                    self.assertEqual(bool(binding['uiControlRefs']), current)
+                    self.assertEqual(fields['project_plan']['page_implementation_contracts'],
+                                     runtime['page_implementation_contracts'])
+            # 产品更新后原稿自动失去参考资格，不阻止运行时合同读取，也不改写设计清单。
+            product['pages'][0]['description'] = '新增页面要求'
+            self.write(root, _ARTIFACTS['product_plan'], product)
+            before = (root / _ARTIFACTS['ui_designs']).read_text(encoding='utf-8')
+            runtime = _materialize_page_confirmation_plan(Path(workspace), technical)
+            self.assertEqual(runtime['page_implementation_contracts'][0]['uiDesignRef']['path'], '')
+            self.assertEqual((root / _ARTIFACTS['ui_designs']).read_text(encoding='utf-8'), before)

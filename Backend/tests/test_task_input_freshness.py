@@ -32,6 +32,31 @@ class TaskInputFreshnessTests(unittest.TestCase):
         """相同内容再次确认不要求重复实现已完成任务。"""
         self.assertTrue(all(self.freshness(self.plan).values()))
 
+    def test_ui_references_do_not_invalidate_page_tasks_or_business_sources(self):
+        """无设计稿、空引用和真实参考共享业务来源摘要，实际业务变化仍使其失效。"""
+        from app.services.business_acceptance_verifier import _source_hash_errors
+
+        task = self.baseline['task_registry']['orders:page']
+        for reference in (None, {'path': '', 'sha256': ''},
+                          {'path': '.devagentstudio/ui-design/pages/Orders/index.tsx', 'sha256': 'new-design'}):
+            with self.subTest(reference=reference):
+                changed = deepcopy(self.plan)
+                contract = changed['page_implementation_contracts'][0]
+                if reference is None:
+                    contract.pop('uiDesignRef', None)
+                else:
+                    contract['uiDesignRef'] = reference
+                context = build_context(changed, self.scope)
+                self.assertTrue(task_covers_current_input(task, changed, context))
+                errors = [error for check in task['business_acceptance_checks']
+                          for error in _source_hash_errors(check, changed)]
+                self.assertEqual(errors, [])
+        changed['page_implementation_contracts'][0]['productAcceptance'] = ['新增业务验收要求']
+        self.assertFalse(task_covers_current_input(task, changed, build_context(changed, self.scope)))
+        errors = [error for check in task['business_acceptance_checks']
+                  for error in _source_hash_errors(check, changed)]
+        self.assertTrue(any('哈希已变化' in error for error in errors))
+
     def test_application_scope_does_not_make_unchanged_page_stale(self):
         """应用级任务编译与复用采用同一输入范围，不因重算时改变 target 而反复生成页面。"""
         from app.services.build_unit_compiler import apply_unit_compilation

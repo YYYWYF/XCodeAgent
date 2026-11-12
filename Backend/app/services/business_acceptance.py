@@ -14,6 +14,7 @@ from typing import Any
 
 from app.services.api_design_mapping_rules import mapping_business_description, mapping_sources
 from app.services.page_identity import canonical_page_entry_path
+from app.services.page_task_freshness import without_ui_references
 
 
 BUSINESS_ACCEPTANCE_KINDS = (
@@ -1294,6 +1295,9 @@ def _source(
     if artifact == "api_design":
         from app.services.api_design_fingerprint import api_design_content
         payload = api_design_content(payload)
+    elif artifact == "page_implementation_contract":
+        # 设计稿只供执行参考，不让引用差异改变任务的业务验收来源。
+        payload = without_ui_references(payload)
     return {
         "artifact": artifact,
         "target_id": target_id,

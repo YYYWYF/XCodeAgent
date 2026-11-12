@@ -13,6 +13,7 @@ from app.services.business_acceptance import (
     _endpoint_expectations,
     _stable_hash,
 )
+from app.services.page_task_freshness import without_ui_references
 from app.services.business_acceptance_verifiers.backend_domain import verify_objects_source
 from app.services.business_acceptance_verifiers.backend_external_api import verify_upstream_source
 from app.services.business_acceptance_verifiers.backend_endpoint import verify_endpoint_source
@@ -322,7 +323,8 @@ def _current_source_hash(source: dict[str, Any], formal: dict[str, Any]) -> str:
             ),
             {},
         )
-        return _stable_hash(contract) if contract else ""
+        # 与任务编译共用业务口径，设计稿增删或更新不能使正式来源失效。
+        return _stable_hash(without_ui_references(contract)) if contract else ""
     if artifact == "endpoint_detail":
         detail = next(
             (

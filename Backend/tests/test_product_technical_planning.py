@@ -25,6 +25,7 @@ from app.agents.main.requirements_analyzer import (
     _validate_complete_requirement_spec,
 )
 from app.services.page_implementation_contract import (
+    _artifact_hash,
     attach_page_implementation_contracts,
     expected_business_action_implementations,
     materialize_technical_plan_runtime,
@@ -1619,6 +1620,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         scoped_product_plan = {**product_plan, "pages": [first_page]}
         ui_designs = {
             "confirmation_status": "confirmed",
+            "product_plan_sha256": _artifact_hash(scoped_product_plan),
             "pages": [
                 {
                     "pageId": page_id,
@@ -1760,6 +1762,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
             ],
         }
         ui_designs = {
+            "product_plan_sha256": _artifact_hash(product_plan),
             "pages": [
                 {
                     "pageId": "orders",
@@ -1840,6 +1843,7 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         ui_designs = {
             "schema_version": "ui-manifest.v3",
             "confirmation_status": "confirmed",
+            "product_plan_sha256": _artifact_hash(product_plan),
             "pages": [{"pageId": "orders", "status": "confirmed", "bindings": {"actions": [
                 {"actionId": "open-filter", "controlIds": ["filter-control"], "uiEffect": "展开筛选区域。"}
             ]}}],
