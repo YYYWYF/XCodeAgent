@@ -43,7 +43,10 @@ class ParameterUpdaterTests(unittest.TestCase):
 
     def test_full_paths_preserve_unmanaged_names_and_inline_comments(self) -> None:
         """同名叶子不影响其他树，CRLF 与行尾注释均保持原字节。"""
-        other = b'other:\r\n  client-id: user-client # keep\r\n  base-url: https://user.test\r\n'
+        other = (
+            b'other:\r\n  client-id: user-client # keep\r\n  base-url: https://user.test\r\n'
+            b'"yht.authentication.client-id": unrelated # keep literal key\r\n'
+        )
         self.yaml.write_bytes(self.yaml.read_bytes().replace(b'client-id: "old"', b'client-id: "old" # managed comment') + other)
         plan = self.updater.preview(self.root, self.config, login_applied=True, authorization_applied=True)
         self.updater.apply(self.root, plan)

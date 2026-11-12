@@ -80,10 +80,10 @@ class TemplateReconcileService:
             if next_state.stateSequence != current.stateSequence + 1 or next_applied != desired or installed - set(next_applied):
                 raise TemplateStateError("TEMPLATE_RECONCILE_PROTOCOL_UNSUPPORTED：V4 能力或 State 序列无效。")
             newly_installed = set(next_applied) - installed
-            validate_ensure_package(package, validated.payloads, newly_installed)
+            fragments = validate_ensure_package(package, validated.payloads, newly_installed)
             store = WorkingCopyStoreV3(root)
             UpdatePackageExecutorV3().execute(package, store, validated.payloads)
-            validate_working_surfaces(store, newly_installed)
+            validate_working_surfaces(store, fragments)
             state_entry = store.entry((WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix())
             state_entry.working = (json.dumps(next_state.model_dump(mode="json", exclude={"managedConfiguration"}), ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             from app.services.authorization_projection_sources import stage_authorization_sources

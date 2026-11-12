@@ -1,38 +1,37 @@
-"""V4 新装能力配置表面的路径合同与安全解析，不负责创建模板结构。"""
+"""校验 V4 配置片段及其在内存副本中的合并结果。"""
 from __future__ import annotations
 
 import re
-from typing import Any
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Any
 
 import yaml
-from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 from yaml.tokens import AliasToken, AnchorToken, TagToken
+
+if TYPE_CHECKING:
+    from app.services.template_reconcile.executor_v3 import WorkingCopyStoreV3
+    from app.services.template_reconcile.protocol_v4 import ExtensionUpdatePackageV4
 
 ENV = "frontend/.env"
 MAIN = "backend/src/main/resources/application.yml"
 DEV = "backend/src/main/resources/application-dev.yml"
-LOGIN_FIELDS = ("client-id", "private-key", "public-key", "center-public-key", "center-uri")
-CONTRACT = {
-    "login": {
-        ENV: {name for name in ("PUBLIC_YHT_CLIENT_ID", "PUBLIC_YHT_AUTHORIZE_URI", "PUBLIC_YHT_END_URL", "PUBLIC_YHT_LOGOUT_SHARE_JS")},
-        MAIN: {*(f"bee.auth.{key}" for key in LOGIN_FIELDS), "bee.auth.login.authorize-uri", "bee.auth.login.redirect-uri", "bee.auth.login.filter-patterns"},
-        DEV: {*(f"yht.authentication.{key}" for key in LOGIN_FIELDS), "yht.authentication.authorize-uri", "yht.authentication.redirect-uri"},
-    },
-    "authorization": {MAIN: {"yht.api.user-query-path"}, DEV: {"yht.api.base-url", "yht.api.view-id"}},
-}
+MANAGED_CONFIG_FORMATS = {ENV: "dotenv", MAIN: "yaml", DEV: "yaml"}
 
 
 class ConfigSurfaceError(ValueError):
     """保留可投影错误码与不含值的受管路径。"""
 
     def __init__(self, code: str, target: str) -> None:
-        """错误中仅携带已知文件或字段路径。"""
+        """错误中仅携带受管目标文件路径。"""
         self.code = code
         self.target = target
         super().__init__(f"{code}：{target} 配置结构不满足当前合同。")
 
 
-def yaml_nodes(content: str, target: str) -> tuple[MappingNode, dict[str, Any]]:
+def yaml_nodes(content: str, target: str) -> tuple[MappingNode, dict[tuple[str | int, ...], Node]]:
     """递归索引完整 YAML 路径，拒绝重复键、锚点、别名、合并键和不安全标签。"""
     try:
         if any(isinstance(token, (AliasToken, AnchorToken, TagToken)) for token in yaml.scan(content)):
@@ -40,9 +39,9 @@ def yaml_nodes(content: str, target: str) -> tuple[MappingNode, dict[str, Any]]:
         root = yaml.compose(content, Loader=yaml.SafeLoader)
         if not isinstance(root, MappingNode):
             raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target)
-        nodes: dict[str, Any] = {}
+        nodes: dict[tuple[str | int, ...], Node] = {}
 
-        def visit(node: Any, path: str) -> None:
+        def visit(node: Node, path: tuple[str | int, ...]) -> None:
             """检查整棵树而不是仅检查本次缺失节点所在分支。"""
             if isinstance(node, MappingNode):
                 if node.flow_style:
@@ -52,17 +51,17 @@ def yaml_nodes(content: str, target: str) -> tuple[MappingNode, dict[str, Any]]:
                     if not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" or key.value in seen or key.value == "<<":
                         raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target)
                     seen.add(key.value)
-                    child = f"{path}.{key.value}" if path else key.value
+                    child = (*path, key.value)
                     nodes[child] = value
                     visit(value, child)
             elif isinstance(node, SequenceNode):
                 for index, value in enumerate(node.value):
-                    visit(value, f"{path}[{index}]")
+                    visit(value, (*path, index))
             elif not isinstance(node, ScalarNode) or node.tag not in {f"tag:yaml.org,2002:{kind}" for kind in ("str", "int", "float", "bool", "null", "timestamp")}:
                 raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target)
-        visit(root, "")
+        visit(root, ())
         return root, nodes
-    except (yaml.YAMLError, UnicodeError) as exc:
+    except (yaml.YAMLError, UnicodeError, RecursionError) as exc:
         raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target) from exc
 
 
@@ -80,87 +79,126 @@ def dotenv_entries(content: str, target: str, *, fragment: bool = False) -> dict
     return entries
 
 
-def surface_values(content: bytes | None, target: str) -> dict[str, Any]:
-    """读取配置语义用于完整性及非受管值保护，不持久化任何字段值。"""
-    if content is None:
-        raise ConfigSurfaceError("CONFIG_STRUCTURE_MISSING", target)
-    try:
-        text = content.decode("utf-8")
-    except UnicodeError as exc:
-        raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target) from exc
-    if target == ENV:
-        return dotenv_entries(text, target)
-    _, nodes = yaml_nodes(text, target)
-    return nodes
+@dataclass(frozen=True)
+class _ScalarValue:
+    """保留 YAML 标量的标签，避免布尔值和数字在比较时等同。"""
+
+    tag: str
+    value: Any
 
 
-def validate_required(values: dict[str, Any], required: set[str], target: str) -> None:
-    """要求全部受管叶子存在且具有模板约定的字符串或过滤规则数组类型。"""
-    for path in required:
-        node = values.get(path)
-        if node is None:
-            raise ConfigSurfaceError("CONFIG_STRUCTURE_MISSING", path)
-        if target == ENV:
-            continue
-        valid = isinstance(node, ScalarNode) and node.tag == "tag:yaml.org,2002:str"
-        if path == "bee.auth.login.filter-patterns" and isinstance(node, SequenceNode):
-            valid = all(isinstance(item, ScalarNode) and item.tag == "tag:yaml.org,2002:str" for item in node.value)
-        if not valid:
-            raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", path)
-
-
-def validate_ensure_package(package: Any, payloads: dict[str, bytes], newly_installed: set[str]) -> None:
-    """在执行前验证 Capability × 目标文件 × 实际片段路径覆盖且不夹带用户节点。"""
-    from app.services.template_reconcile.protocol_v4 import EnsureCapabilityConfigOperationV4
-    coverage: dict[tuple[str, str], set[str]] = {}
-    for operation in package.operations:
-        if not isinstance(operation, EnsureCapabilityConfigOperationV4):
-            if operation.target in {ENV, MAIN, DEV}:
-                raise ConfigSurfaceError("TEMPLATE_PACKAGE_CONTRACT_INVALID", operation.target)
-            continue
-        caps = operation.parameters.capabilityIds
-        if len(set(caps)) != len(caps) or not set(caps) <= newly_installed:
-            raise ConfigSurfaceError("TEMPLATE_PACKAGE_CONTRACT_INVALID", operation.target)
-        allowed: set[str] = set()
-        for cap in caps:
-            paths = CONTRACT[cap].get(operation.target)
-            if not paths:
-                raise ConfigSurfaceError("TEMPLATE_PACKAGE_CONTRACT_INVALID", operation.target)
-            allowed.update(paths)
-        values = surface_values(payloads[operation.payloadRef], operation.target)
-        leaves = {path for path, node in values.items() if not isinstance(node, MappingNode)}
-        if not leaves or not leaves <= allowed:
-            raise ConfigSurfaceError("TEMPLATE_PACKAGE_CONTRACT_INVALID", operation.target)
-        validate_required(values, leaves, operation.target)
-        for cap in caps:
-            coverage.setdefault((cap, operation.target), set()).update(leaves & CONTRACT[cap][operation.target])
-    for cap in newly_installed & CONTRACT.keys():
-        for target, required in CONTRACT[cap].items():
-            if not required <= coverage.get((cap, target), set()):
-                raise ConfigSurfaceError("CONFIG_STRUCTURE_MISSING", target)
-
-
-def validate_working_surfaces(store: Any, capabilities: set[str]) -> None:
-    """在 TemplateState 写入前复验全部目标及原有节点值，防止半包或用户配置覆盖。"""
-    targets = {target for cap in capabilities & CONTRACT.keys() for target in CONTRACT[cap]}
-    for target in targets:
-        entry = store.entry(target)
-        values = surface_values(entry.working, target)
-        original = surface_values(entry.original, target)
-        for cap in capabilities & CONTRACT.keys():
-            validate_required(values, CONTRACT[cap].get(target, set()), target)
-        # 原有映射、数组、标量均必须保留；对叶子比较原 AST 对应语义。
-        for path, value in original.items():
-            if path not in values or _semantic(value) != _semantic(values[path]):
-                raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target)
-
-
-def _semantic(node: Any) -> Any:
-    """映射允许补键，原有叶子及数组必须完全相同。"""
+def _semantic(node: Node, loader: yaml.SafeLoader) -> Any:
+    """保留映射键原文和标量类型，将整个序列作为一个值比较。"""
     if isinstance(node, MappingNode):
-        return "mapping"
+        return {key.value: _semantic(value, loader) for key, value in node.value}
     if isinstance(node, SequenceNode):
-        return (node.tag, tuple(_semantic(item) if not isinstance(item, MappingNode) else tuple((k.value, _semantic(v)) for k, v in item.value) for item in node.value))
-    if isinstance(node, ScalarNode):
-        return (node.tag, node.value)
-    return node
+        return tuple(_semantic(item, loader) for item in node.value)
+    value = loader.construct_object(node)
+    # NaN 不等于自身，需要稳定的表示才能比较重复声明。
+    if isinstance(value, float) and value != value:
+        value = "nan"
+    return _ScalarValue(node.tag, value)
+
+
+def _surface_values(content: bytes, target: str, *, fragment: bool = False) -> dict[str, Any]:
+    """安全读取配置结构，保留含点号的 YAML 键及 dotenv 原始值。"""
+    try:
+        decoded = content.decode("utf-8")
+        if target == ENV:
+            return dotenv_entries(decoded, target, fragment=fragment)
+        root, _ = yaml_nodes(decoded, target)
+        loader = yaml.SafeLoader("")
+        try:
+            return _semantic(root, loader)
+        finally:
+            loader.dispose()
+    except ConfigSurfaceError:
+        raise
+    except (ValueError, OverflowError, yaml.YAMLError, RecursionError) as exc:
+        raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target) from exc
+
+
+def _ensure_values(
+    current: dict[str, Any], fragment: dict[str, Any], target: str, *, declarations: bool,
+) -> None:
+    """推演缺失键补齐；聚合片段时拒绝歧义，应用时保留用户已有值。"""
+    for key, proposed in fragment.items():
+        if key not in current:
+            current[key] = deepcopy(proposed) if isinstance(proposed, dict) else proposed
+            continue
+        existing = current[key]
+        if isinstance(existing, dict) and isinstance(proposed, dict):
+            _ensure_values(existing, proposed, target, declarations=declarations)
+        elif type(existing) is not type(proposed) or (
+            declarations and existing != proposed
+        ):
+            code = "TEMPLATE_PACKAGE_CONTRACT_INVALID" if declarations else "MANAGED_SURFACE_CONFLICT"
+            raise ConfigSurfaceError(code, target)
+
+
+def validate_ensure_package(
+    package: ExtensionUpdatePackageV4, payloads: dict[str, bytes], newly_installed: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """预检受管操作及片段，按目标保留已验证的操作顺序供后验使用。"""
+    from app.services.template_reconcile.protocol_v4 import EnsureCapabilityConfigOperationV4
+
+    fragments: dict[str, list[dict[str, Any]]] = {}
+    declarations: dict[str, dict[str, Any]] = {}
+    for operation in package.operations:
+        target = operation.target
+        if not isinstance(operation, EnsureCapabilityConfigOperationV4):
+            # 折叠路径别名，避免在大小写不敏感的文件系统上绕开受管目标。
+            normalized = "/".join(part.rstrip(". ").casefold() for part in PurePosixPath(target).parts)
+            if normalized in MANAGED_CONFIG_FORMATS:
+                raise ConfigSurfaceError("TEMPLATE_PACKAGE_CONTRACT_INVALID", normalized)
+            continue
+
+        caps = operation.parameters.capabilityIds
+        if (
+            not caps or len(set(caps)) != len(caps) or not set(caps) <= newly_installed
+            or MANAGED_CONFIG_FORMATS.get(target) != operation.parameters.format
+            or operation.payloadRef not in payloads
+        ):
+            raise ConfigSurfaceError("TEMPLATE_PACKAGE_CONTRACT_INVALID", target)
+        fragment = _surface_values(payloads[operation.payloadRef], target, fragment=True)
+        if not fragment:
+            raise ConfigSurfaceError("TEMPLATE_PACKAGE_CONTRACT_INVALID", target)
+        # 独立聚合声明以检查包内冲突。
+        _ensure_values(declarations.setdefault(target, {}), fragment, target, declarations=True)
+        fragments.setdefault(target, []).append(fragment)
+    return fragments
+
+
+def _preserves_original_lines(original: bytes, working: bytes) -> bool:
+    """确认旧行字节及顺序不变，允许为原 EOF 行补换行以插入新配置。"""
+    remaining = iter(working.splitlines(keepends=True))
+    for line in original.splitlines(keepends=True):
+        if not any(
+            candidate == line or (
+                not line.endswith((b"\r", b"\n")) and candidate.rstrip(b"\r\n") == line
+            )
+            for candidate in remaining
+        ):
+            return False
+    return True
+
+
+def validate_working_surfaces(
+    store: WorkingCopyStoreV3, fragments: dict[str, list[dict[str, Any]]],
+) -> None:
+    """独立推演每个目标的补齐结果，提交前拒绝漏写、改写和额外节点。"""
+    for target, additions in fragments.items():
+        entry = store.entry(target)
+        original, working = entry.original, entry.working
+        if original is None or working is None:
+            raise ConfigSurfaceError("CONFIG_STRUCTURE_MISSING", target)
+        original_values = _surface_values(original, target)
+        expected = deepcopy(original_values)
+        for fragment in additions:
+            _ensure_values(expected, fragment, target, declarations=False)
+        if (
+            _surface_values(working, target) != expected
+            or (expected == original_values and working != original)
+            or not _preserves_original_lines(original, working)
+        ):
+            raise ConfigSurfaceError("MANAGED_SURFACE_CONFLICT", target)

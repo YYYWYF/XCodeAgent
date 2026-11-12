@@ -23,7 +23,7 @@ class EnsureCapabilityConfigParametersV4(ProtocolV3Model):
     """声明由新安装能力拥有的配置结构，实际值仍由本地 updater 写入。"""
 
     format: Literal["dotenv", "yaml"]
-    capabilityIds: list[NonBlankStringV3] = Field(min_length=1)
+    capabilityIds: list[Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]*$")]] = Field(min_length=1)
 
 
 class EnsureCapabilityConfigOperationV4(OperationBaseV3):
@@ -40,12 +40,13 @@ class EnsureCapabilityConfigOperationV4(OperationBaseV3):
 
     @model_validator(mode="after")
     def validate_surface(self) -> "EnsureCapabilityConfigOperationV4":
-        """校验配置格式与固定工程表面一一对应。"""
+        """校验配置目标与格式的对应关系，以及能力 ID 的唯一性。"""
 
         expected = "dotenv" if self.target == "frontend/.env" else "yaml"
         if self.parameters.format != expected:
             raise ValueError("ENSURE_CAPABILITY_CONFIG target 与 format 不匹配。")
-        if any(item not in {"login", "authorization"} for item in self.parameters.capabilityIds):
+        caps = self.parameters.capabilityIds
+        if len(set(caps)) != len(caps):
             raise ValueError("ENSURE_CAPABILITY_CONFIG capabilityIds 非法。")
         return self
 

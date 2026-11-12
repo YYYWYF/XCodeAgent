@@ -81,7 +81,7 @@ def edit_yht_yaml(original: bytes, values: Mapping[str, str]) -> bytes:
         raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{target} 无法安全定位 YAML。") from exc
     replacements: list[tuple[int, int, str]] = []
     for path, value in values.items():
-        node = nodes.get(path)
+        node = nodes.get(tuple(path.split(".")))
         if node is None:
             raise ParameterUpdateError(f"CONFIG_STRUCTURE_MISSING：{path} 缺少受管配置结构。", target=path)
         # 仅允许唯一块式映射下的单行字符串标量，禁止多行、对象及猜测定位。
@@ -102,7 +102,7 @@ def edit_yht_yaml(original: bytes, values: Mapping[str, str]) -> bytes:
     except ConfigSurfaceError as exc:
         raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{target} 更新后结构无效。") from exc
     for path, value in values.items():
-        node = projected.get(path)
+        node = projected.get(tuple(path.split(".")))
         if not isinstance(node, ScalarNode) or node.tag != "tag:yaml.org,2002:str" or node.value != value:
             raise ParameterUpdateError(f"CONFIG_TARGET_CONFLICT：{path} 更新后校验失败。")
     return result.encode("utf-8")

@@ -18,8 +18,7 @@ from app.services.application_parameter_updater import ApplicationParameterUpdat
 from app.services.application_parameter_updater import ParameterUpdateError
 from app.services.template_reconcile.desired import compile_template_application_config, compile_template_capabilities
 from app.services.template_reconcile.transaction_v4 import recover_v4_transaction
-from app.services.template_reconcile.executor_v3 import WorkingCopyStoreV3
-from app.services.template_reconcile.config_surfaces import validate_working_surfaces, ConfigSurfaceError
+from app.services.template_reconcile.config_surfaces import ConfigSurfaceError
 from app.services.template_reconcile.service import TemplateReconcileService
 from app.services.template_reconcile.state_v3 import load_template_state_v3
 from app.utils.atomic_json import atomic_write_json
@@ -157,7 +156,6 @@ class ApplicationConfigOrchestrator:
                     recover_v4_transaction(root)
                     applied = {name: value.model_dump(mode="json") for name, value in load_template_state_v3(root).effective.items()}
                     before = set(applied)
-                    desired_capabilities = _desired_capabilities(desired)
                     # 仅修改名称、主题或参数时不能触发模板更新包；能力差异才进入 V4 收敛。
                     if applied != compile_template_capabilities(desired):
                         failure_stage = "template_capability_reconcile"
@@ -168,7 +166,6 @@ class ApplicationConfigOrchestrator:
                     record["progressStage"] = "CAPABILITY_APPLIED"
                     self._write_operation(root, record)
                     failure_stage = "application_parameter_update"
-                    validate_working_surfaces(WorkingCopyStoreV3(root), desired_capabilities)
                     plan = self._parameters.preview(root, desired, login_applied="login" in after, authorization_applied="authorization" in after)
                     self._parameters.apply(root, plan)
                     record["changedFiles"] = list(plan.changed_files)
@@ -333,14 +330,3 @@ class ApplicationConfigOrchestrator:
         path = self._operation_path(root, record["operationId"])
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(path, record)
-
-
-def _desired_capabilities(config: dict[str, Any]) -> set[str]:
-    """从唯一 application.json 当前配置推导模板能力集合。"""
-
-    result: set[str] = set()
-    if config["auth"]["enable"]:
-        result.add("login")
-    if config["authorization"]["enabled"]:
-        result.add("authorization")
-    return result

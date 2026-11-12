@@ -28,14 +28,18 @@ def merge_capability_yaml(current: str, addition: str) -> str:
         raise CapabilityYamlMergeError("MANAGED_SURFACE_CONFLICT：YAML 配置根必须是映射。")
     current_lines = current.splitlines(keepends=True)
     fragment_lines = fragment_text.splitlines(keepends=True)
-    inserts: dict[int, list[str]] = defaultdict(list)
+    inserts: dict[int, list[tuple[int, str]]] = defaultdict(list)
     _collect_missing(target, fragment, fragment_lines, inserts)
     if not inserts:
         return current
     newline = "\r\n" if "\r\n" in current else "\n"
     # 从文件末尾向前插入，避免新增行使前面计算的节点行号失效。
     for line_index in sorted(inserts, reverse=True):
-        blocks = inserts[line_index]
+        # 父映射与子映射可能在同一行结束，先补子键再退出缩进。
+        blocks = [
+            block.replace("\r\n", "\n").replace("\r", "\n").replace("\n", newline)
+            for _, block in sorted(inserts[line_index], key=lambda item: -item[0])
+        ]
         if line_index > 0 and current_lines[line_index - 1] and not current_lines[line_index - 1].endswith(("\n", "\r")):
             blocks.insert(0, newline)
         current_lines[line_index:line_index] = blocks
@@ -67,7 +71,7 @@ def _collect_missing(
     target: MappingNode,
     fragment: MappingNode,
     fragment_lines: list[str],
-    inserts: dict[int, list[str]],
+    inserts: dict[int, list[tuple[int, str]]],
 ) -> None:
     """按完整父子路径定位缺失节点，已有叶子保持原值。"""
 
@@ -80,7 +84,7 @@ def _collect_missing(
             target_value = present[1]
             if isinstance(source_value, MappingNode) and isinstance(target_value, MappingNode):
                 _collect_missing(target_value, source_value, fragment_lines, inserts)
-            elif type(source_value) is not type(target_value) or source_value.tag != target_value.tag:
+            elif type(source_value) is not type(target_value):
                 raise CapabilityYamlMergeError("MANAGED_SURFACE_CONFLICT：YAML 已有节点类型与模板片段冲突。")
             continue
         end_line = fragment_items[index + 1][1][0].start_mark.line if index + 1 < len(fragment_items) else fragment.end_mark.line
@@ -89,7 +93,7 @@ def _collect_missing(
         block = "".join(_reindent_line(line, shift) for line in source_block)
         if block and not block.endswith(("\n", "\r")):
             block += "\n"
-        inserts[target.end_mark.line].append(block)
+        inserts[target.end_mark.line].append((target.start_mark.column, block))
 
 
 def _reindent_line(line: str, shift: int) -> str:

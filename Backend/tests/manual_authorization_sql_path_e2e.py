@@ -107,11 +107,11 @@ async def main() -> None:
             assert next_state.stateSequence == current.stateSequence + 1
             assert {key: value.model_dump(mode="json") for key, value in next_state.effective.items()} == target
             newly_installed = set(next_state.effective) - set(current.effective)
-            validate_ensure_package(package.package, package.payloads, newly_installed)
+            fragments = validate_ensure_package(package.package, package.payloads, newly_installed)
             store = WorkingCopyStoreV3(root)
             UpdatePackageExecutorV3().execute(package.package, store, package.payloads)
             # 此后验门逐一比较原有 YAML/dotenv 值，拒绝任何用户配置覆盖。
-            validate_working_surfaces(store, newly_installed)
+            validate_working_surfaces(store, fragments)
             store.entry(STATE).working = (json.dumps(next_state.model_dump(mode="json",
                 exclude={"managedConfiguration"}), ensure_ascii=False, indent=2) + "\n").encode()
             apply_working_copy_v4(root, store)

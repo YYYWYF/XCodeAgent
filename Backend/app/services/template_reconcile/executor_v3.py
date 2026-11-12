@@ -107,7 +107,9 @@ class UpdatePackageExecutorV3:
             dotenv_entries(addition, operation.target, fragment=True)
             missing = [line for line in addition.splitlines() if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", line) and line.split("=", 1)[0] not in existing]
             if missing:
-                entry.working = (current + ("" if not current or current.endswith("\n") else "\n") + "\n".join(missing) + "\n").encode("utf-8")
+                newline = "\r\n" if "\r\n" in current else "\n"
+                separator = "" if not current or current.endswith("\n") else newline
+                entry.working = (current + separator + newline.join(missing) + newline).encode("utf-8")
             return
         # YAML 片段按完整父子路径补入，不能把已有 bee/yht 根再次追加为重复根。
         try:

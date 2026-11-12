@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
 
 from app.services.template_reconcile.executor_v3 import UpdatePackageExecutorV3, WorkingCopyStoreV3
 from app.services.template_reconcile.protocol_v3 import EnsureMavenDependencyOperationV3
@@ -100,6 +101,23 @@ class TemplateUpdateV4Tests(unittest.TestCase):
         validated = validate_update_package_v4(self.path, ArchiveLimits(100000, 10, 100000))
 
         self.assertEqual(validated.package.operations[0].type, "ENSURE_CAPABILITY_CONFIG")
+
+    def test_ensure_capability_id_syntax_and_format(self) -> None:
+        """协议只限制 ID 语法和唯一性，配置格式仍绑定目标文件。"""
+        operation = {
+            "schemaVersion": 1, "operationId": "ensure-config", "index": 0,
+            "type": "ENSURE_CAPABILITY_CONFIG", "target": "frontend/.env", "payloadRef": "payload/env",
+            "parameters": {"format": "dotenv", "capabilityIds": ["future_addon-2"]},
+        }
+        validated = EnsureCapabilityConfigOperationV4.model_validate(operation)
+        self.assertEqual(validated.parameters.capabilityIds, ["future_addon-2"])
+        for params in (
+            {"format": "yaml", "capabilityIds": ["login"]},
+            {"format": "dotenv", "capabilityIds": ["login", "login"]},
+            {"format": "dotenv", "capabilityIds": ["Invalid.ID"]},
+        ):
+            with self.subTest(params=params), self.assertRaises(ValidationError):
+                EnsureCapabilityConfigOperationV4.model_validate({**operation, "parameters": params})
 
     def test_accepts_login_application_yaml_ensure_payload(self) -> None:
         """Login 的固定 application.yml 占位配置属于 V4 能力安装目标。"""
