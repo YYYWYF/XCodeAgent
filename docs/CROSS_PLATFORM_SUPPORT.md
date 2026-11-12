@@ -100,6 +100,13 @@ ZIP while DMG remains available for initial installation. The ZIP filenames must
 version's `latest-mac.yml`, preserve each artifact's hash/size, and do not overwrite it with the
 other architecture's manifest. Keep the existing artifact names in the manifest.
 
+After the Windows signing step replaces the EXE and refreshes `dist/latest.yml` with the
+signed file's size and SHA-512, run `node scripts/stage-windows-update.mjs Frontend/dist`
+from the repository root. The script uses the manifest version, verifies the signed file against
+the manifest, and moves all contents of `Frontend/dist` into `Frontend/dist/<version>/`.
+Run this step after packaging has removed temporary build outputs. Use `./Frontend/dist` as
+the pipeline's upload root and preserve the version directory in the CDN path.
+
 Local test setup (three terminals):
 
 1. In `Frontend`, run `pnpm mock:cdn`. It validates `dist/latest.yml` and/or

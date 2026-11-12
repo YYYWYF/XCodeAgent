@@ -21,11 +21,11 @@ function artifactName(value) {
 }
 
 /** 校验发布清单引用的文件大小及 SHA-512，并建立只读白名单。 */
-export async function prepareCdn(directory) {
+export async function prepareCdn(directory, manifestNames = ['latest.yml', 'latest-mac.yml']) {
   const root = path.resolve(directory)
   const files = new Map()
   let version
-  for (const name of ['latest.yml', 'latest-mac.yml']) {
+  for (const name of manifestNames) {
     let stat
     try {
       stat = await fs.lstat(path.join(root, name))
