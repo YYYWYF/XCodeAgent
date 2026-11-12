@@ -8,7 +8,8 @@ import type { ApplicationLifecycle } from '../src/renderer/src/typings'
 /** 用标准事件信封覆盖真实 AG-UI 客户端，不绕过生产请求与共享查询缓存。 */
 function response(request: Record<string, any>, lifecycle: ApplicationLifecycle): Response {
   const payload = { schemaVersion: 1, runId: request.runId, threadId: request.threadId,
-    status: 'completed', lifecycle }
+    status: 'completed', lifecycle,
+    workspaceAttach: { workspaceReconciled: true, sessionDeferred: false } }
   const frames = [
     { type: 'RUN_STARTED', runId: request.runId, threadId: request.threadId },
     { type: 'CUSTOM', name: 'application-lifecycle', value: payload },
@@ -52,6 +53,8 @@ test('Attach/Get 永不返回时按时退出、释放共享查询，重新同步
         }
         return response(request, lifecycle)
       }
+      // 首次 Attach 已返回完整恢复结果；Get 超时场景在后续只读同步中触发。
+      if (blockedAction === 'get') await getApplicationLifecycle(application)
       const store = new RecoveryStore(), key = store.key(application.workspaceRoot, application.id, 'thread')
       let merges = 0
       const first = getApplicationLifecycle(application)
@@ -70,10 +73,10 @@ test('Attach/Get 永不返回时按时退出、释放共享查询，重新同步
       assert.equal(store.get(key).connection.status, 'healthy')
       assert.equal(blockedSignal?.aborted, true)
       assert.equal(merges, 0)
-      // 下一次必须发出全新的 Attach/Get，而不是继续等待缓存中的旧 Promise。
+      // 下一次发出新查询，已成功的校准不因普通读取超时而重复执行。
       const before = actions.length
       assert.deepEqual(await getApplicationLifecycle(application), lifecycle)
-      assert.deepEqual(actions.slice(before), ['workspace_attach', 'get'])
+      assert.deepEqual(actions.slice(before), [blockedAction])
       lateResolve(response(blockedRequest, { ...lifecycle, revision: 99 }))
       await new Promise(resolve => savedTimeout(resolve, 0))
       assert.equal(merges, 0, '超时旧响应不得再回写生命周期')

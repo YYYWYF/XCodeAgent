@@ -8,8 +8,12 @@ from app.workspace.planning_run_documents import load_planning_run
 
 def project_workbench_progress(workspace: str, state: ApplicationLifecycle) -> dict:
     """只投影当前 execution，严格匹配 Run/Thread 后复用既有 DAG 进度协议。"""
+    planning = None
     try:
-        payload = load_planning_run({"workspace": workspace})
+        # 没有 DAG 规划执行时无需读取 PlanningRun，仍保留其他执行的原始状态。
+        payload = load_planning_run({"workspace": workspace}) if any(
+            execution.phase == "prepare_build_tasks" for execution in state.active_executions.values()
+        ) else None
         planning = PlanningRunProjection.model_validate(payload) if payload else None
     except (OSError, ValueError):
         # 快照损坏不能阻断基础运行状态，也不能伪造生成进度。

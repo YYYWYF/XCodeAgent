@@ -37,6 +37,47 @@ from app.workspace.task_documents import (
 class ApplicationLifecycleProtocolTests(unittest.TestCase):
     """验证独立 lifecycle 端点保持完整 AG-UI 动作契约。"""
 
+    def test_summary_get_skips_recovery_and_keeps_ag_ui_lifecycle(self) -> None:
+        """首页识别阶段只读持久化 lifecycle，不扫描 checkpoint 或制造确认动作。"""
+        with tempfile.TemporaryDirectory() as directory:
+            write_application_lifecycle(directory, create_application_lifecycle(application_id="summary", application_name="摘要"))
+            async def collect() -> str:
+                """消费只读摘要的完整标准事件流。"""
+                return "".join([frame async for frame in build_application_lifecycle_ag_ui_stream(payload={
+                    "threadId": "summary-thread", "runId": "summary-run", "forwardedProps": {"applicationLifecycle": {
+                        "action": "get", "workspaceRoot": directory, "includeRecovery": False}}})])
+            with patch("app.protocols.application_lifecycle._current_planning_refresh", AsyncMock(side_effect=AssertionError("不读规划"))), \
+                    patch("app.protocols.application_lifecycle.resolve_execution_recovery_projection", AsyncMock(side_effect=AssertionError("不读恢复"))), \
+                    patch("app.protocols.application_lifecycle.application_lifecycle_payload", side_effect=AssertionError("不计算资格或工作区指纹")):
+                frames = asyncio.run(collect())
+        self.assertIn('"type":"RUN_STARTED"', frames)
+        self.assertIn('"type":"RUN_FINISHED"', frames)
+        self.assertIn('"status":"completed"', frames)
+        self.assertNotIn('"executionRecovery"', frames)
+
+    def test_session_only_attach_keeps_identity_and_skips_workspace_scan(self) -> None:
+        """已校准工作区仅执行本会话归属校准，完整投影仍随同一次回执返回。"""
+        from app.protocols.application_lifecycle import ApplicationLifecycleAction
+        with self.assertRaises(ValueError):
+            ApplicationLifecycleAction(action="workspace_attach", workspaceRoot="/workspace", reconcileWorkspace=False)
+        with self.assertRaises(ValueError):
+            ApplicationLifecycleAction(action="get", workspaceRoot="/workspace", sessionId="owner", sessionThreadId="thread", includeRecovery=False)
+        with tempfile.TemporaryDirectory() as directory:
+            write_application_lifecycle(directory, create_application_lifecycle(application_id="scoped", application_name="会话"))
+            async def collect() -> str:
+                """读取校准后本会话的恢复投影。"""
+                return "".join([frame async for frame in build_application_lifecycle_ag_ui_stream(payload={
+                    "threadId": "control", "runId": "read", "forwardedProps": {"applicationLifecycle": {
+                        "action": "workspace_attach", "workspaceRoot": directory, "sessionId": "owner",
+                        "sessionThreadId": "thread", "reconcileWorkspace": False}}})])
+            with patch("app.protocols.application_lifecycle.reconcile_workspace_recovery", AsyncMock(side_effect=AssertionError("不重复扫描"))), \
+                    patch("app.services.session_checkpoint_reconciliation.reconcile_session_checkpoint", AsyncMock(return_value=None)) as reconcile:
+                frames = asyncio.run(collect())
+                reconcile.assert_awaited_once_with(directory, session_id="owner", thread_id="thread")
+        self.assertIn('"sessionDeferred":true', frames)
+        self.assertIn('"recoverySnapshot":', frames)
+        self.assertIn('"type":"RUN_FINISHED"', frames)
+
     def test_capabilities_publish_dedicated_endpoint(self) -> None:
         """能力元数据应发布语义明确的独立 AG-UI 地址。"""
 

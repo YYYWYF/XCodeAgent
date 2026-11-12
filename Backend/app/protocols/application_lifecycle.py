@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.execution_recovery import ExecutionRecoveryProjection
+from app.services.backend_instance import current_backend_instance
 from app.services.recovery_read_diagnostic import recovery_read_error
 from app.protocols.ag_ui_action_stream import (
     AgUiActionResult,
@@ -79,6 +80,8 @@ class ApplicationLifecycleAction(BaseModel):
     session_id: str | None = Field(default=None, alias="sessionId", max_length=256)
     session_thread_id: str | None = Field(default=None, alias="sessionThreadId", max_length=256)
     planning_thread_id: str | None = Field(default=None, alias="planningThreadId", min_length=1, max_length=256)
+    include_recovery: bool = Field(default=True, alias="includeRecovery")
+    reconcile_workspace: bool = Field(default=True, alias="reconcileWorkspace")
     entity_id: str | None = Field(default=None, alias="entityId", min_length=1, max_length=256)
     reason: str | None = Field(default=None, min_length=1, max_length=1000)
     # 发起新迭代时由调用方带入上一版本的产物进度，服务端只继承其中的 completed 事实。
@@ -110,6 +113,10 @@ class ApplicationLifecycleAction(BaseModel):
                 raise ValueError("规划和会话恢复必须使用各自的读取身份。")
         if self.action == "prepare_document_review" and not (self.planning_thread_id or (self.session_id and self.session_thread_id)):
             raise ValueError("重新建立文档审阅需要当前规划线程或完整会话身份。")
+        if not self.include_recovery and (self.action != "get" or self.session_id or self.planning_thread_id):
+            raise ValueError("轻量生命周期读取仅用于无会话作用域的 Get。")
+        if not self.reconcile_workspace and (self.action != "workspace_attach" or not self.session_id):
+            raise ValueError("仅会话校准必须提供完整会话身份并使用 workspace_attach。")
         if self.action == "skip_entity_development" and (
             not str(self.entity_id or "").strip() or not str(self.reason or "").strip()
         ):
@@ -145,6 +152,10 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
         ],
         "customEventName": APPLICATION_LIFECYCLE_EVENT_NAME,
         "stateSnapshotKey": "applicationLifecycle",
+        "summaryRead": {"action": "get", "field": "includeRecovery", "value": False, "readOnly": True,
+            "fields": ["application", "initialization", "revision", "updatedAt"]},
+        "workspaceAttach": {"returnsRecovery": True, "sessionOnlyField": "reconcileWorkspace"},
+        "backendInstanceField": "backendInstanceId",
         "workbenchProgress": {
             "field": "extensions.workbenchProgress",
             "action": "get",
@@ -369,28 +380,33 @@ def build_application_lifecycle_ag_ui_stream(
             }
             return AgUiActionResult(data=data, message=message)
         elif request.action == "workspace_attach":
-            await reconcile_workspace_recovery(request.workspace_root)
             from app.services.execution_recovery_projection import reconcile_recovery_ownership
             from app.services.development_artifacts import refresh_development_artifacts
-            try:
-                await reconcile_recovery_ownership(request.workspace_root)
-            except Exception:
-                # 恢复设施错误不能阻断资产工作区；保留占用，由 Get 的恢复诊断呈现读取故障。
-                logger.warning("Workspace 恢复校准失败，保留原执行状态。", exc_info=True)
+            from app.services.workspace_bootstrap.coordinator import WorkspaceAttachResult
+            attached = WorkspaceAttachResult("session", False, False)
+            workspace_reconciled = False
+            session_deferred = False
+            if request.reconcile_workspace:
+                await reconcile_workspace_recovery(request.workspace_root)
+                try:
+                    await reconcile_recovery_ownership(request.workspace_root)
+                    workspace_reconciled = True
+                except Exception:
+                    # 恢复设施错误不能阻断资产工作区；保留占用，由恢复投影呈现读取故障。
+                    logger.warning("Workspace 恢复校准失败，保留原执行状态。", exc_info=True)
             if request.session_id and request.session_thread_id:
                 from app.services.session_checkpoint_reconciliation import reconcile_session_checkpoint
-                await reconcile_session_checkpoint(request.workspace_root,
-                    session_id=request.session_id, thread_id=request.session_thread_id)
-            attached = await asyncio.to_thread(
-                template_mutation_coordinator.attach_workspace,
-                request.workspace_root,
-            )
-            state = refresh_development_artifacts(request.workspace_root)
+                session_deferred = await reconcile_session_checkpoint(request.workspace_root,
+                    session_id=request.session_id, thread_id=request.session_thread_id) is None
+            if request.reconcile_workspace:
+                attached = await asyncio.to_thread(template_mutation_coordinator.attach_workspace, request.workspace_root)
+                state = refresh_development_artifacts(request.workspace_root)
+                from app.services.builtin_authorization_orchestrator import resume_builtin_authorization_task
+                await asyncio.to_thread(resume_builtin_authorization_task, request.workspace_root)
+            else:
+                state = load_application_lifecycle(request.workspace_root)
             if state is None:
                 raise ApplicationLifecycleMissingError("application-lifecycle.json 不存在。")
-            from app.services.builtin_authorization_orchestrator import resume_builtin_authorization_task
-
-            await asyncio.to_thread(resume_builtin_authorization_task, request.workspace_root)
             message = "Workspace Attach 已完成。"
         elif request.action == "release_session_pending":
             released = await asyncio.to_thread(
@@ -422,27 +438,33 @@ def build_application_lifecycle_ag_ui_stream(
             message = "已按用户决定跳过当前实体开发，保留实体定义。"
         data = {
             "action": request.action,
-            "lifecycle": application_lifecycle_payload(state),
+            # 首页识别只需身份和阶段；不计算结束任务的工作区指纹或签发恢复资格。
+            "lifecycle": application_lifecycle_payload(state) if request.include_recovery else state.model_dump(
+                mode="json", by_alias=True, include={"application", "initialization", "revision", "updated_at"}),
+            "backendInstanceId": current_backend_instance().instance_id,
         }
         if request.action == "workspace_attach":
             data["workspaceAttach"] = {
                 "action": attached.action,
                 "cleaned": attached.cleaned,
                 "lifecycleChanged": attached.lifecycle_changed,
+                "workspaceReconciled": workspace_reconciled and attached.action != "cleanup_failed",
+                "sessionDeferred": session_deferred,
             }
         if request.action in {
             "get",
+            "workspace_attach",
             "prepare_document_review",
             "release_session_pending",
             "cleanup_session_failed_executions",
             "prepare_session_deletion",
-        }:
+        } and request.include_recovery:
             # 恢复或收口后的投影仅附加到当前响应，不能伪装成可跨重启持久化的生命周期事实。
             data["lifecycle"]["extensions"] = {
                 **dict(data["lifecycle"].get("extensions") or {}),
                 "planningRefresh": await _current_planning_refresh(request.workspace_root),
             }
-        if request.action in {"get", "prepare_document_review"}:
+        if request.action in {"get", "workspace_attach", "prepare_document_review"} and request.include_recovery:
             recovery_thread = request.planning_thread_id or request.session_thread_id
             if recovery_thread:
                 data["lifecycle"]["extensions"]["recoverySnapshot"] = await project_recovery_snapshot(

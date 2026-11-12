@@ -69,6 +69,21 @@ class ExecutionRecoveryProjectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(projection.candidates, [])
         self.assertIsNone(projection.error)
 
+    async def test_candidate_reuses_checkpoint_only_within_one_projection(self) -> None:
+        """状态判断与重试定位共享现场；下一次查询必须读取新的 checkpoint。"""
+        record = self._record("shared-checkpoint")
+        snapshot = SimpleNamespace(values={"active_run_id": record.run_id, "phase": "build", "status": "failed",
+            "request": "原要求"}, tasks=(), next=("build",), config={})
+        graph = SimpleNamespace(nodes={"build": object()}, aget_state=AsyncMock(return_value=snapshot))
+        with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates", AsyncMock(return_value=[record])), \
+                patch("app.services.execution_recovery_projection.workflow_graph_for_request", AsyncMock(return_value=graph)), \
+                patch("app.services.stage_prerequisites.regeneration_for_retry", return_value=None):
+            first = await resolve_execution_recovery_projection(str(self.workspace))
+            self.assertTrue(first.candidates[0].can_continue)
+            graph.aget_state.assert_awaited_once()
+            await resolve_execution_recovery_projection(str(self.workspace))
+            self.assertEqual(graph.aget_state.await_count, 2)
+
     async def test_candidate_query_failure_is_not_successful_empty_projection(self) -> None:
         """候选查询失败必须显式标记，不能把停服重连后的未知状态当成无任务。"""
         with patch("app.services.execution_recovery_projection.list_recovery_projection_candidates",

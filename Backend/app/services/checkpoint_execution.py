@@ -1,6 +1,8 @@
 """统一解释 checkpoint 的业务位置；执行索引只定位线程，运行登记只证明工作仍存活。"""
 
 from dataclasses import dataclass, replace
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from app.domain.execution_recovery import DurableExecutionStatus, RecoveryExecutionError
@@ -29,6 +31,19 @@ class CheckpointExecution:
     def values(self) -> dict[str, Any]:
         """提供同 Run 已验证的任务进度视图，原生 snapshot 身份和元数据保持不变。"""
         return self.runtime_values if self.runtime_values is not None else self.snapshot.values
+
+
+_checkpoint_reads: ContextVar[dict | None] = ContextVar("recovery_checkpoint_reads", default=None)
+
+
+@contextmanager
+def reuse_checkpoint_reads():
+    """单个候选解析共享已读取现场；离开后失效，不能跨操作复用确认权限。"""
+    token = _checkpoint_reads.set({})
+    try:
+        yield
+    finally:
+        _checkpoint_reads.reset(token)
 
 
 def execution_is_live(source) -> bool:
@@ -180,6 +195,10 @@ def interpret_checkpoint(source, snapshot, graph) -> CheckpointExecution | None:
 async def read_checkpoint_execution(source, graph) -> CheckpointExecution | None:
     """有界读取最新原执行现场，历史中的旧失败不能覆盖较新的成功或确认。"""
     from app.services.retry_preparation import await_checkpoint_preparation
+    reads = _checkpoint_reads.get()
+    key = (source.workspace, source.thread_id, source.run_id, id(graph))
+    if reads is not None and key in reads:
+        return reads[key]
 
     async def read():
         """按 LangGraph 原生历史顺序只取最新同 Run 现场。"""
@@ -205,7 +224,10 @@ async def read_checkpoint_execution(source, graph) -> CheckpointExecution | None
         return latest
 
     try:
-        return await await_checkpoint_preparation(read(), source.run_id)
+        result = await await_checkpoint_preparation(read(), source.run_id)
+        if reads is not None:
+            reads[key] = result
+        return result
     except Exception as exc:
         # 只有读取成功且没有同 Run 现场才表示缺失；暂时读失败不能释放有效恢复入口。
         raise RecoveryExecutionError("RETRY_CHECKPOINT_UNAVAILABLE",

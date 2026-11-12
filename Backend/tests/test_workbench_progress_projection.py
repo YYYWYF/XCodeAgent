@@ -13,6 +13,15 @@ from tests.planning_run_fixtures import AT, run
 class WorkbenchProgressProjectionTests(unittest.TestCase):
     """覆盖归属隔离、快照损坏及无副作用的只读恢复。"""
 
+    def test_no_dag_execution_skips_planning_snapshot(self):
+        """空工作区和普通构建只投影执行状态，不读取无消费者的 PlanningRun。"""
+        execution = WorkbenchExecution(scope="page", targetId="orders", threadId="thread-1", runId="workflow-1",
+            ownerSessionId="session-1", phase="build", status="running", startedAt=AT, updatedAt=AT)
+        with patch("app.services.workbench_progress_projection.load_planning_run", side_effect=AssertionError("不应读取")):
+            self.assertEqual(project_workbench_progress("/workspace", SimpleNamespace(active_executions={})), {})
+            result = project_workbench_progress("/workspace", SimpleNamespace(active_executions={execution.run_id: execution}))
+        self.assertEqual(result[execution.run_id]["phase"], "build")
+
     def test_current_run_and_thread_only(self):
         """只附加匹配的 PlanningRun，不修改 lifecycle 本体。"""
         execution = WorkbenchExecution(

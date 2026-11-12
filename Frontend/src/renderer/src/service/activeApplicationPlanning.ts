@@ -9,8 +9,8 @@ import type {
   WorkflowRunPayload
 } from '../typings'
 import { retainApplicationPlanningInterrupt } from './applicationPlanningWorkflowState'
-import { isApplicationCreationComplete, loadStoredApplications } from './applicationStorage'
-import { getApplicationLifecycle } from './applicationLifecycle'
+import { loadStoredApplications } from './applicationStorage'
+import { getApplicationLifecycle, getApplicationLifecycleSummary } from './applicationLifecycle'
 import type { ApplicationPlanningRecoveryProjection } from './applicationPlanningRecovery'
 import { mergeWorkbenchProgress } from './workbenchProgressMerge'
 import {
@@ -537,8 +537,12 @@ export async function loadActiveApplicationPlannings(): Promise<ApplicationPlann
 
   for (const application of applications) {
     try {
+      const summary = await getApplicationLifecycleSummary(application)
+      if (summary.initialization.stage === 'ready_for_workbench') continue
+      // 只有未完成规划进入正式恢复；摘要不能成为确认权限或运行状态的来源。
       const lifecycle = await getApplicationLifecycle(application)
-      if (isApplicationCreationComplete(lifecycle)) continue
+      // Attach 可能依据当前正式资产校准到已就绪，必须保留原有的最终阶段检查。
+      if (lifecycle.initialization.stage === 'ready_for_workbench') continue
       const threadId = lifecycle.initialization.threadId
       if (!threadId) {
         throw new Error(`应用 ${application.id} 缺少初始化线程标识。`)

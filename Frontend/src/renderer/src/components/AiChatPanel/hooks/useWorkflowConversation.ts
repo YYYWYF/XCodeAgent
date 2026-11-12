@@ -1147,6 +1147,8 @@ export function useWorkflowConversation({
 
   // 冷启动或切换会话必须收口初始连接；没有 lifecycle/运行中 Run 时也不能永久停在 connecting。
   useEffect(() => {
+    // 会话列表尚未读完时复用入口 lifecycle；选中真实会话后再按 owner/thread 恢复。
+    if (!activeSessionRef.current && applicationLifecycleRef.current) return
     if (application.workspaceRoot) void refreshExecutionRecoveryLifecycle()
   }, [application.id, application.workspaceRoot, activeSession?.key, draftKey])
 

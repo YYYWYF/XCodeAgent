@@ -2,6 +2,7 @@ import { useApplicationConfigRefresh } from './useApplicationConfigRefresh'
 import { sameApplicationWorkspace } from '../service/applicationWorkspace'
 import { useWorkbenchEntry } from './useWorkbenchEntry'
 import { useWorkbenchPlanningCatalog } from './useWorkbenchPlanningCatalog'
+import { useWorkbenchLifecycleRecovery } from './useWorkbenchLifecycleRecovery'
 import { Layout, message, notification } from 'antd'
 import { randomUUID } from '@ag-ui/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -79,6 +80,7 @@ const DEFAULT_PUBLISH_PREFIX = 'Z000000-0000 #comment chore:'
 type Props = {
   application: ApplicationConfig
   applicationLifecycle?: ApplicationLifecycle
+  entryLifecycle?: ApplicationLifecycle
   onApplicationLifecycleChange: (lifecycle: ApplicationLifecycle) => void
   onApplicationLifecycleReset: (lifecycle: ApplicationLifecycle) => void
   onEntryLoadFailure: () => void
@@ -160,6 +162,7 @@ function suggestNextBranchName(currentBranchName: string, existingBranchNames: s
 function WorkbenchPage({
   application,
   applicationLifecycle,
+  entryLifecycle,
   onApplicationLifecycleChange,
   onApplicationLifecycleReset,
   onEntryLoadFailure,
@@ -184,6 +187,9 @@ function WorkbenchPage({
 }: Props): JSX.Element {
   const editorMode: EditorMode = 'frontend'
   const [workspaceApplication, setWorkspaceApplication] = useState(application)
+  const lifecycleRef = useRef(applicationLifecycle)
+  lifecycleRef.current = applicationLifecycle
+  useWorkbenchLifecycleRecovery(application, entryLifecycle, onApplicationLifecycleChange)
   useApplicationConfigRefresh(application.workspaceRoot, setWorkspaceApplication)
 
   const {
@@ -283,9 +289,9 @@ function WorkbenchPage({
     let active = true
     // 目录自身错误由目录重试面板承载；其它正式文件的完整性仍核对当前生命周期后提示。
     const warnIncompleteArtifacts = async (): Promise<void> => {
-      let lifecycle: ApplicationLifecycle | undefined
+      let lifecycle: ApplicationLifecycle | undefined = lifecycleRef.current
       try {
-        lifecycle = await getApplicationLifecycle({
+        if (!lifecycle) lifecycle = await getApplicationLifecycle({
           workspaceRoot: application.workspaceRoot!, id: application.id, appName: application.appName
         })
       } catch (error) { console.warn('无法同步应用生命周期，继续打开工作台。', error) }
@@ -299,26 +305,6 @@ function WorkbenchPage({
     void warnIncompleteArtifacts()
     return () => { active = false }
   }, [catalog.inspection, lifecycleReadyForWorkbench, application, onApplicationLifecycleChange])
-
-  useEffect(() => {
-    let active = true
-    const workspaceRoot = application.workspaceRoot
-    if (!workspaceRoot) return
-
-    // 每次进入一个工作区只做一次冷启动校准；后续状态由 Workflow AG-UI 事件实时合并。
-    getApplicationLifecycle({ workspaceRoot, id: application.id, appName: application.appName })
-      .then((lifecycle) => {
-        if (active) onApplicationLifecycleChange(lifecycle)
-      })
-      .catch((error) => {
-        if (!active) return
-        // 生命周期只用于恢复规划状态，不作为打开已有工作区的准入条件。
-        console.warn('读取工作台应用生命周期失败，继续保留工作台。', error)
-      })
-    return () => {
-      active = false
-    }
-  }, [application.id, application.appName, application.workspaceRoot, onApplicationLifecycleChange])
 
   // 应用首次进入工作台时初始化首条分支记录，分支名取自新建表单。
   // 已有 branches 的应用（如发起新迭代后重新进入）跳过，保留分支表。

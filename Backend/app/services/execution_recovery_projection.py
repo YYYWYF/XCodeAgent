@@ -171,13 +171,15 @@ async def _resolve_candidate(
             workspace=record.workspace,
             project_id=record.project_id,
         )
-    from app.services.checkpoint_execution import resolve_checkpoint_source
-    with recovery_read_operation("读取任务执行进度"):
-        record = await resolve_checkpoint_source(record, graph)
-    if record.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
-        return None
+    from app.services.checkpoint_execution import resolve_checkpoint_source, reuse_checkpoint_reads
     from app.services.business_node_retry import retry_action_plan, release_unretryable_execution
-    action_plan = await retry_action_plan(record, graph)
+    # 状态解释与重试节点定位消费同一份现场；生命周期写入前结束读取共享范围。
+    with reuse_checkpoint_reads():
+        with recovery_read_operation("读取任务执行进度"):
+            record = await resolve_checkpoint_source(record, graph)
+        if record.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
+            return None
+        action_plan = await retry_action_plan(record, graph)
     if reconcile_ownership:
         from app.services.failed_execution_reconciliation import reconcile_failed_execution_lifecycle
         reconcile_failed_execution_lifecycle(record)

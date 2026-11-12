@@ -6,6 +6,7 @@ import { message } from 'antd'
 import { useApplicationTemplateGeneration } from '../src/renderer/src/hooks/useApplicationTemplateGeneration'
 import { reduceApplicationPlanningCurrentState, type ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
 import { failConnectionRequest, initialConnectionState } from '../src/renderer/src/service/connectionState'
+import { workspaceRecoveryAttachments } from '../src/renderer/src/service/workspaceRecoveryAttachments'
 
 /** 构造已确认正式规划后的模板失败现场，不制造新的 Graph 运行。 */
 function currentTemplate(): ApplicationPlanningCurrentState {
@@ -23,6 +24,7 @@ function currentTemplate(): ApplicationPlanningCurrentState {
 /** 返回标准 AG-UI 生命周期事件流，测试经过真实客户端解析。 */
 function lifecycleResponse(request: Record<string, any>, lifecycle: ApplicationPlanningCurrentState['lifecycle'], failed = false): Response {
   const payload = { schemaVersion: 1, runId: request.runId, threadId: request.threadId, status: failed ? 'failed' : 'completed', lifecycle,
+    workspaceAttach: { workspaceReconciled: true, sessionDeferred: false },
     ...(failed ? { error: { type: 'BootstrapFailure', message: '模板物化失败' } } : {}) }
   const frames = [
     { type: 'RUN_STARTED', runId: request.runId, threadId: request.threadId },
@@ -59,6 +61,7 @@ test('模板专用重试先校准；运行中不重发，切换目录后迟到�
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
   try {
     for (const scenario of ['business', 'state-read', 'transport', 'running', 'switched']) {
+      workspaceRecoveryAttachments.invalidate()
       let current = currentTemplate()
       const actions: string[] = []
       let bootstrapRequested = false
@@ -100,7 +103,8 @@ test('模板专用重试先校准；运行中不重发，切换目录后迟到�
       }
       renderToStaticMarkup(createElement(Probe))
       assert.equal(await controller.retryApplicationTemplateFiles(current), false)
-      assert.deepEqual(actions.slice(0, 2), ['workspace_attach', 'get'])
+      assert.equal(actions[0], 'workspace_attach')
+      assert.equal(actions.filter((action) => action === 'workspace_attach').length, 1)
       assert.equal(current.connection.status, scenario === 'transport' ? 'unavailable' : 'healthy')
       if (scenario === 'state-read') assert.equal(current.syncError, '模板物化失败')
       assert.equal(current.workflow, undefined)

@@ -10,6 +10,7 @@ import type { ApplicationConfig, ApplicationLifecycle } from '../src/renderer/sr
 function lifecycleResponse(request: Record<string, unknown>, lifecycle?: ApplicationLifecycle): Response {
   const payload = { schemaVersion: 1, runId: request.runId, threadId: request.threadId,
     status: lifecycle ? 'completed' : 'failed', lifecycle,
+    workspaceAttach: { workspaceReconciled: true, sessionDeferred: false },
     ...(!lifecycle ? { error: { type: 'ReadError', message: '读取暂时失败' } } : {}) }
   const frames = [
     { type: 'RUN_STARTED', runId: request.runId, threadId: request.threadId },
@@ -109,15 +110,14 @@ test('停止卡检查失败可原位重试，重试中禁用重复点击，检�
     assert.equal(retry.props.loading, true)
     await act(async () => { retry.props.onClick() })
     assert.equal(requests.length, 2, '读取中不能重复提交')
-    await act(async () => { requests[1].resolve(lifecycleResponse(requests[1].request, lifecycle)) })
-    assert.equal(requests.length, 3)
-    // Attach 成功但 Get 失败也必须保留重试，不把半成功当成恢复授权。
-    await act(async () => { requests[2].resolve(lifecycleResponse(requests[2].request)) })
+    // 校准及恢复投影失败仍保留重试，不能从失败回执获得继续权限。
+    await act(async () => { requests[1].resolve(lifecycleResponse(requests[1].request)) })
+    assert.equal(requests.length, 2)
     assert.equal(retryButton().props.children, '重新检查')
     assert.equal(published.length, 0)
     await act(async () => { retryButton().props.onClick() })
-    await act(async () => { requests[3].resolve(lifecycleResponse(requests[3].request, lifecycle)) })
-    await act(async () => { requests[4].resolve(lifecycleResponse(requests[4].request, lifecycle)) })
+    await act(async () => { requests[2].resolve(lifecycleResponse(requests[2].request, lifecycle)) })
+    assert.equal(requests.length, 3, '完整 Attach 回执后不再追加 Get')
     assert.match(JSON.stringify(renderer!.toJSON()), /继续生成/)
     assert.doesNotMatch(JSON.stringify(renderer!.toJSON()), /工作区状态检查失败|重新检查/)
     assert.equal(published.length, 1)

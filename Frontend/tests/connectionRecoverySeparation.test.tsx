@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import './documentReviewRecovery.test'
+import './workspaceRecoveryAttachments.test'
+import './workbenchLifecycleRecovery.test'
 import './previewRuntimeConnection.test'
 import { test, beforeEach } from 'node:test'
 import { recoveryStore } from '../src/renderer/src/service/recoveryStore'
+import { workspaceRecoveryAttachments } from '../src/renderer/src/service/workspaceRecoveryAttachments'
 
 // 每个测试模拟独立 Renderer；不能让同名测试会话共享上一个测试的权威版本。
-beforeEach(() => recoveryStore.clear())
+beforeEach(() => { recoveryStore.clear(); workspaceRecoveryAttachments.invalidate() })
 
 test('Backend 停服优先于预览断线和 UI 待确认，恢复按钮必须同步 Backend', () => {
   const backend = { status: 'unavailable' as const, requestGeneration: 1, lastError: 'Failed to fetch' }

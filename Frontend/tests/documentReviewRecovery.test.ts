@@ -1,18 +1,56 @@
 import assert from 'node:assert/strict'
 import http from 'node:http'
 import { test } from 'node:test'
-import { getApplicationLifecycle } from '../src/renderer/src/service/applicationLifecycle'
+import { getApplicationLifecycle, getApplicationLifecycleSummary, openApplicationWorkspace } from '../src/renderer/src/service/applicationLifecycle'
 import type { ApplicationLifecycle } from '../src/renderer/src/typings'
 import { ApplicationPlanningRuntime } from '../src/renderer/src/service/applicationPlanningRuntime'
-import { reduceApplicationPlanningCurrentState, type ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
+import { loadActiveApplicationPlannings, reduceApplicationPlanningCurrentState, type ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
 import { initialConnectionState } from '../src/renderer/src/service/connectionState'
+
+test('首页摘要未完成但 Attach 校准已就绪时，不登记多余的规划 Runtime', async () => {
+  const previousWindow = globalThis.window
+  const previousFetch = globalThis.fetch
+  const application = { id: 'attach-completed', workspaceRoot: '/attach-completed', name: '校准完成', lastOpenedAt: 1 }
+  const inputs: Array<{ action: string; includeRecovery?: boolean }> = []
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: {
+    localStorage: { setItem: () => undefined },
+    devAgentStudio: { agentBaseUrl: 'http://attachment-completed.test',
+      applications: { load: async () => ({ applications: [application] }) },
+      workspace: { readApplication: async () => ({ application: { appName: application.name } }) } }
+  } })
+  /** 使用官方 AG-UI 客户端模拟摘要与正式校准之间发生的阶段变化。 */
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body))
+    const input = request.forwardedProps.applicationLifecycle
+    inputs.push(input)
+    const lifecycle = { application: { id: application.id }, revision: 1,
+      initialization: { threadId: 'original-thread', stage: input.includeRecovery === false
+        ? 'awaiting_technical_plan_confirmation' : 'ready_for_workbench' }, activeExecutions: {}, extensions: {} }
+    const payload = { schemaVersion: 1, runId: request.runId, threadId: request.threadId, status: 'completed', lifecycle,
+      workspaceAttach: { workspaceReconciled: true, sessionDeferred: false } }
+    const events = [{ type: 'RUN_STARTED', threadId: request.threadId, runId: request.runId },
+      { type: 'STATE_SNAPSHOT', snapshot: { applicationLifecycle: payload } },
+      { type: 'RUN_FINISHED', threadId: request.threadId, runId: request.runId }]
+    return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''),
+      { headers: { 'Content-Type': 'text/event-stream' } })
+  }
+  try {
+    assert.deepEqual(await loadActiveApplicationPlannings(), [])
+    assert.deepEqual(inputs.map((input) => input.action), ['get', 'workspace_attach'])
+    assert.equal(inputs[0].includeRecovery, false)
+  } finally {
+    globalThis.fetch = previousFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: previousWindow })
+  }
+})
 
 /** 使用官方 AG-UI 客户端验证读取、显式重建及单一恢复结果之间的完整请求链。 */
 test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成或确认动作', async () => {
   const actions: string[] = []
-  const inputs: Array<{ action: string; sessionId?: string; sessionThreadId?: string }> = []
+  const inputs: Array<{ action: string; sessionId?: string; sessionThreadId?: string; reconcileWorkspace?: boolean; includeRecovery?: boolean }> = []
   let available: 'available' | 'blocked' | undefined = 'available'
   let prepared = false
+  let backendInstanceId = 'document-review-backend-first'
   const lifecycle = {
     application: { id: 'document-review-client', name: '现有文档' }, revision: 1, updatedAt: '2026-11-09T00:00:00Z',
     initialization: { threadId: 'review-thread', stage: 'awaiting_technical_plan_confirmation', status: 'awaiting_user' },
@@ -36,7 +74,8 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
         output: null, documentReview: prepared || !available ? null : { status: available, kind: 'technical_plan', message: '当前文档不完整' }
       } } : {} }
     const value = { schemaVersion: 1, runId: payload.runId, threadId: payload.threadId,
-      status: 'completed', action: input.action, lifecycle: current }
+      status: 'completed', action: input.action, lifecycle: current,
+      workspaceAttach: { workspaceReconciled: input.reconcileWorkspace !== false, sessionDeferred: false }, backendInstanceId }
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })
     for (const event of [
       { type: 'RUN_STARTED', threadId: payload.threadId, runId: payload.runId },
@@ -61,7 +100,7 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
     assert.deepEqual(actions, ['workspace_attach', 'get', 'prepare_document_review'])
     actions.length = 0
     await getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' })
-    assert.deepEqual(actions, ['workspace_attach', 'get'])
+    assert.deepEqual(actions, ['get'])
     // 同工作区的两个本机会话均须携带自己的身份执行 Attach，不能共享一次无作用域校准。
     prepared = true
     inputs.length = 0
@@ -71,12 +110,28 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
     const attaches = inputs.filter((input) => input.action === 'workspace_attach')
     assert.deepEqual(attaches.map((input) => [input.sessionId, input.sessionThreadId]).sort(),
       [['session-a', 'thread-a'], ['session-b', 'thread-b']])
+    assert.ok(attaches.every((input) => input.reconcileWorkspace === false), '会话校准不能重复全工作区扫描')
+    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach'])
     assert.equal(actions.filter((action) => action === 'prepare_document_review').length, 0)
+    actions.length = 0
+    await getApplicationLifecycle(application, 'control-a', { sessionId: 'session-a', threadId: 'thread-a' })
+    assert.deepEqual(actions, ['get'], '已校准会话后续查询仍读最新状态，但不再 Attach')
+    actions.length = 0
+    await getApplicationLifecycleSummary(application)
+    assert.deepEqual(actions, ['get'])
+    assert.equal(inputs.at(-1)?.includeRecovery, false)
+    actions.length = 0
+    await openApplicationWorkspace(application)
+    assert.deepEqual(actions, ['workspace_attach'], '显式重入重新校准并直接消费完整回执')
+    actions.length = 0
+    backendInstanceId = 'document-review-backend-restarted'
+    await getApplicationLifecycle(application)
+    assert.deepEqual(actions, ['get', 'workspace_attach'], '同地址后台重启也必须先重新校准，不能沿用旧凭据')
     prepared = false
     available = 'blocked'
     actions.length = 0
     await assert.rejects(getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' }), /当前文档不完整/)
-    assert.deepEqual(actions, ['workspace_attach', 'get'])
+    assert.deepEqual(actions, ['get'])
     // 本机旧项目重入时使用生产 Runtime 与官方 AG-UI 读取：文档错误不能冒充后端失联。
     let state = { application, lifecycle, threadId: 'review-thread', restoreArtifactsFromDisk: true,
       transportState: 'idle', connection: initialConnectionState(true) } as ApplicationPlanningCurrentState
@@ -110,7 +165,7 @@ test('缺少 checkpoint 但有文档时只发起审阅重建，不发送生成�
     actions.length = 0
     const empty = await getApplicationLifecycle(application, 'review-thread', { planningThreadId: 'review-thread' })
     assert.equal(empty.extensions.recoverySnapshot?.checkpointAvailable, false)
-    assert.deepEqual(actions, ['workspace_attach', 'get'])
+    assert.deepEqual(actions, ['get'])
   } finally {
     Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: previousWindow })
     server.closeAllConnections()

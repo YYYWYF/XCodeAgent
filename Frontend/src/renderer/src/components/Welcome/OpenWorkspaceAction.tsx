@@ -12,7 +12,7 @@ import {
   applicationIndexOf,
   saveStoredApplications
 } from '../../service/applicationStorage'
-import { ApplicationLifecycleActionError, getApplicationLifecycle } from '../../service/applicationLifecycle'
+import { ApplicationLifecycleActionError, getApplicationLifecycleSummary } from '../../service/applicationLifecycle'
 import type { ApplicationConfig, ApplicationSchemaConfig } from '../../typings'
 import { cx } from '../../utils'
 import WelcomeActionCard from './WelcomeActionCard'
@@ -144,7 +144,7 @@ export default function OpenWorkspaceAction({ onOpenApplication, theme }: Props)
       const application = applicationFromWorkspace(schema, selected.path)
       // 项目身份随生命周期持久化；另一台电脑的本机索引不能随机分配新身份与其冲突。
       try {
-        const lifecycle = await getApplicationLifecycle({ workspaceRoot: selected.path })
+        const lifecycle = await getApplicationLifecycleSummary({ workspaceRoot: selected.path })
         application.id = lifecycle.application.id
       } catch (error) {
         if (!(error instanceof ApplicationLifecycleActionError) || error.errorType !== 'ApplicationLifecycleMissingError') throw error

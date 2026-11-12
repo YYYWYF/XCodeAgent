@@ -3,6 +3,10 @@ import type { AgentSubscriber } from '@ag-ui/client'
 import type { ApplicationConfig, ApplicationSchemaConfig, ApplicationLifecycle, ManagedDatabaseRegistration } from '../typings'
 import { createAgUiHttpAgent } from './authentication'
 import type { RepositoryBranchOutcome } from './repositoryBranch'
+import { currentBackendBaseUrl } from './backendConnection'
+import { isBackendTransportError } from './backendRequestFailure'
+import { normalizeWorkspaceRoot } from './applicationWorkspace'
+import { RecoveryBackendChangedError, workspaceRecoveryAttachments, type WorkspaceAttachmentResult } from './workspaceRecoveryAttachments'
 
 type ApplicationLifecyclePayload = {
   schemaVersion: 1
@@ -27,6 +31,8 @@ type ApplicationLifecyclePayload = {
   workspaceRoot?: string
   /** 仅 Bootstrap 动作返回：模板基线推成远端分支的结果（失败不影响 Bootstrap 成功）。 */
   repositoryBranch?: RepositoryBranchOutcome
+  workspaceAttach?: { workspaceReconciled: boolean; sessionDeferred: boolean }
+  backendInstanceId?: string
   error?: { type?: string; message?: string }
 }
 
@@ -65,7 +71,29 @@ function isLifecycleMissingError(error: unknown): boolean {
 }
 
 const lifecycleReadRequests = new Map<string, Promise<ApplicationLifecycle>>()
-const workspaceAttachRequests = new Map<string, Promise<ApplicationLifecycle>>()
+const workspaceAttachRequests = new Map<string, Promise<WorkspaceAttachmentResult>>()
+
+/** 工作区和接入地址共同隔离校准凭据；不同应用身份仍须各自核验。 */
+function attachmentWorkspace(application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>): string {
+  return JSON.stringify([currentBackendBaseUrl(), normalizeWorkspaceRoot(application.workspaceRoot), application.id])
+}
+
+/** 显式进入重新校准工作区；完成的入口结果交给工作台直接使用。 */
+export function openApplicationWorkspace(
+  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id' | 'appName'>>
+): Promise<ApplicationLifecycle> {
+  workspaceRecoveryAttachments.invalidate(attachmentWorkspace(application))
+  return getApplicationLifecycle(application)
+}
+
+/** 首页只读取持久化生命周期以识别未完成规划，不扫描恢复现场或执行 Attach。 */
+export async function getApplicationLifecycleSummary(
+  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>
+): Promise<Pick<ApplicationLifecycle, 'application' | 'initialization' | 'revision' | 'updatedAt'>> {
+  return assertApplicationLifecycleOwnership(await runApplicationLifecycleAction(randomUUID(), {
+    action: 'get', workspaceRoot: application.workspaceRoot, includeRecovery: false
+  }), application.id)
+}
 
 /** 通过 AG-UI 在隔离区完成创建，成功后才提交目标目录的配置和生命周期。 */
 export async function initializeApplication(
@@ -137,6 +165,7 @@ async function runApplicationLifecycleRequest(
   threadId: string,
   action: Record<string, unknown>
 ): Promise<ResolvedApplicationLifecyclePayload> {
+  const backendRevision = workspaceRecoveryAttachments.backendRevision
   const agent = createAgUiHttpAgent({ url: getApplicationLifecycleUrl(), threadId })
   agent.addMessage({ id: randomUUID(), role: 'user', content: '同步应用生命周期状态。' })
   let payload: ApplicationLifecyclePayload | undefined
@@ -177,6 +206,10 @@ async function runApplicationLifecycleRequest(
     )
   }
   if (!payload.lifecycle) throw new Error('生命周期接口没有返回 lifecycle。')
+  if (payload.backendInstanceId && workspaceRecoveryAttachments.observeBackend(payload.backendInstanceId, backendRevision)
+      && (action.action === 'workspace_attach' || action.action === 'get' && action.includeRecovery !== false)) {
+    throw new RecoveryBackendChangedError('后台实例已变化，重新校准当前工作区。')
+  }
   // 显式带上已校验的 lifecycle：属性收窄不会改变 payload 本身的类型。
   return { ...payload, lifecycle: payload.lifecycle }
 }
@@ -248,28 +281,35 @@ export async function endApplicationPlanningExecution(
   }), application.id)
 }
 
-// 先接管可能中断的 Workspace，再读取权威生命周期，并合并 StrictMode 等并发请求。
+// 首次进入校准后直接消费完整回执，后续只读 Get；会话校准保持独立归属边界。
 export async function getApplicationLifecycle(
   application: Pick<ApplicationConfig, 'workspaceRoot'> &
     Partial<Pick<ApplicationConfig, 'id' | 'appName'>>,
   threadId = randomUUID(),
-  resultSession?: { sessionId?: string; threadId?: string; planningThreadId?: string; fresh?: boolean }
+  resultSession?: { sessionId?: string; threadId?: string; planningThreadId?: string; fresh?: boolean },
+  retryBackendChange = true
 ): Promise<ApplicationLifecycle> {
   const workspaceRoot = application.workspaceRoot
   if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   // 会话结果具有 owner/thread 边界，不能与应用级读取或其他会话共享响应。
-  const requestKey = JSON.stringify([workspaceRoot, resultSession?.sessionId, resultSession?.threadId, resultSession?.planningThreadId])
+  const attachmentKey = attachmentWorkspace(application)
+  const requestKey = JSON.stringify([attachmentKey, workspaceRecoveryAttachments.revision, resultSession?.sessionId, resultSession?.threadId, resultSession?.planningThreadId])
   const currentRequest = lifecycleReadRequests.get(requestKey)
   if (currentRequest && !resultSession?.fresh) {
     return assertApplicationLifecycleOwnership(await currentRequest, application.id)
   }
 
-  // 每次冷读取前先 Attach：后端 get 始终只读，孤儿 Bootstrap 的回收只能由 Attach 完成。
+  // 校准凭据不缓存 lifecycle；普通同步始终读取当前事实。
   const request = (async (): Promise<ApplicationLifecycle> => {
     try {
       const scope = resultSession ? { sessionId: resultSession.sessionId, sessionThreadId: resultSession.threadId, planningThreadId: resultSession.planningThreadId } : {}
-      await attachApplicationWorkspace(application, threadId, scope)
-      const lifecycle = await runApplicationLifecycleAction(threadId, {
+      const workspace = await workspaceRecoveryAttachments.ensure(attachmentKey, 'workspace',
+        () => runWorkspaceAttachment(application, threadId))
+      const session = scope.sessionId ? await workspaceRecoveryAttachments.ensure(attachmentKey,
+        JSON.stringify([scope.sessionId, scope.sessionThreadId]),
+        () => runWorkspaceAttachment(application, threadId, scope,
+          !workspaceRecoveryAttachments.has(attachmentKey, 'workspace'))) : undefined
+      const lifecycle = session || (!scope.sessionId && !scope.planningThreadId ? workspace : undefined) || await runApplicationLifecycleAction(threadId, {
         action: 'get',
         workspaceRoot,
         ...scope
@@ -281,6 +321,11 @@ export async function getApplicationLifecycle(
         ? runApplicationLifecycleAction(threadId, { action: 'prepare_document_review', workspaceRoot, ...scope })
         : lifecycle
     } catch (error) {
+      // 同地址源码 Backend 重启可能没有桌面连接事件；只重做一次状态恢复，不重放业务提交。
+      if (error instanceof RecoveryBackendChangedError && retryBackendChange) {
+        return getApplicationLifecycle(application, threadId, { ...resultSession, fresh: true }, false)
+      }
+      if (isBackendTransportError(error)) workspaceRecoveryAttachments.invalidate(attachmentKey)
       // 发起新迭代会先删掉 lifecycle 文件再由前端重建；这一步中途失败（或文件被外部清理）
       // 会让 Attach 与 Get 双双失败，工作区从此打不开。用本应用已知身份补建一份再读：
       // 后端 create 幂等（已存在则原样返回），损坏或归属冲突仍会照常抛出，不会掩盖真实故障。
@@ -324,25 +369,44 @@ export async function prepareSessionDeletion(
 export async function attachApplicationWorkspace(
   application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
   threadId = randomUUID(),
-  scope: { sessionId?: string; sessionThreadId?: string; planningThreadId?: string } = {}
+  scope: { sessionId?: string; sessionThreadId?: string; planningThreadId?: string } = {},
+  reconcileWorkspace = true
 ): Promise<ApplicationLifecycle> {
+  return (await runWorkspaceAttachment(application, threadId, scope, reconcileWorkspace)).lifecycle
+}
+
+/** 校准回执保留是否真正完成的信息，推迟或失败不能签发可复用凭据。 */
+async function runWorkspaceAttachment(
+  application: Pick<ApplicationConfig, 'workspaceRoot'> & Partial<Pick<ApplicationConfig, 'id'>>,
+  threadId: string,
+  scope: { sessionId?: string; sessionThreadId?: string; planningThreadId?: string } = {},
+  reconcileWorkspace = true
+): Promise<WorkspaceAttachmentResult> {
   const workspaceRoot = application.workspaceRoot
   if (!workspaceRoot) throw new Error('应用缺少 workspaceRoot。')
   // 定向校准当前会话现场，不能被应用级 Attach 或其他会话的在途请求合并掉。
-  const requestKey = JSON.stringify([workspaceRoot, scope.sessionId, scope.sessionThreadId, scope.planningThreadId])
+  const requestKey = JSON.stringify([attachmentWorkspace(application), workspaceRecoveryAttachments.revision, scope.sessionId, scope.sessionThreadId, scope.planningThreadId, reconcileWorkspace])
   const currentRequest = workspaceAttachRequests.get(requestKey)
   if (currentRequest) {
-    return assertApplicationLifecycleOwnership(await currentRequest, application.id)
+    const result = await currentRequest
+    assertApplicationLifecycleOwnership(result.lifecycle, application.id)
+    return result
   }
 
-  const request = runApplicationLifecycleAction(threadId, {
+  const request = runApplicationLifecycleRequest(threadId, {
     action: 'workspace_attach',
     workspaceRoot,
-    ...scope
-  })
+    ...scope,
+    reconcileWorkspace
+  }).then((payload): WorkspaceAttachmentResult => ({
+    lifecycle: assertApplicationLifecycleOwnership(payload.lifecycle, application.id),
+    calibrated: Boolean(payload.workspaceAttach && (reconcileWorkspace
+      ? payload.workspaceAttach.workspaceReconciled
+      : !payload.workspaceAttach.sessionDeferred)) && !payload.lifecycle.extensions?.executionRecovery?.error
+  }))
   workspaceAttachRequests.set(requestKey, request)
   try {
-    return assertApplicationLifecycleOwnership(await request, application.id)
+    return await request
   } finally {
     if (workspaceAttachRequests.get(requestKey) === request) {
       workspaceAttachRequests.delete(requestKey)

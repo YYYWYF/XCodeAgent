@@ -19,7 +19,7 @@ import {
   workflowApplicationLifecycle,
   type ApplicationPlanningCurrentEvent
 } from '../service/activeApplicationPlanning'
-import { getApplicationLifecycle } from '../service/applicationLifecycle'
+import { getApplicationLifecycle, openApplicationWorkspace } from '../service/applicationLifecycle'
 import { applicationWorkspaceKey, sameApplicationWorkspace } from '../service/applicationWorkspace'
 import { isTemplateGenerationOrphaned, isTemplateReconcileRetryable } from '../service/templateApi'
 import { stopProjectPreview } from '../service/projectLaunch'
@@ -55,6 +55,7 @@ function AppEntryContent(): JSX.Element {
   const { releasePreviewMaintenanceExecutions } = useSessionRuntimeStore()
   const { theme, setTheme } = useApplicationTheme()
   const [activeApplication, setActiveApplication] = useState<ApplicationConfig | null>(null)
+  const [entryLifecycle, setEntryLifecycle] = useState<ApplicationLifecycle>()
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>('welcome')
   const activePreviewWorkspaceRef = useRef('')
   const openRequestRef = useRef(0)
@@ -89,6 +90,7 @@ function AppEntryContent(): JSX.Element {
     async (application: ApplicationConfig, lifecycle?: ApplicationLifecycle): Promise<void> => {
       await stopPreviousPreviewIfNeeded(application)
       setActiveApplication(application)
+      setEntryLifecycle(lifecycle)
       activePreviewWorkspaceRef.current = applicationPreviewWorkspace(application)
       if (lifecycle) mergeApplicationLifecycle(lifecycle)
       setActiveSurface('workbench')
@@ -240,7 +242,7 @@ function AppEntryContent(): JSX.Element {
       if (existingPlanning) planningController.dismissPlanning(application.id)
 
       try {
-        const lifecycle = await getApplicationLifecycle(application)
+        const lifecycle = await openApplicationWorkspace(application)
         if (requestId !== openRequestRef.current) return
         const readyForWorkbench = lifecycle?.initialization?.stage === 'ready_for_workbench'
         // 进入开发门禁按「应用 + 当前分支」隔离：新迭代已就绪但本轮还没进过开发时，
@@ -335,7 +337,8 @@ function AppEntryContent(): JSX.Element {
           <UiReadVisibility.Provider value={activeSurface === 'workbench'}>
             <WorkbenchPage
               application={activeApplication}
-              applicationLifecycle={applicationLifecycle}
+              applicationLifecycle={applicationLifecycle || entryLifecycle}
+              entryLifecycle={entryLifecycle}
               onApplicationLifecycleChange={mergeApplicationLifecycle}
               onApplicationLifecycleReset={resetApplicationLifecycle}
               onEntryLoadFailure={handleWorkbenchEntryFailure}

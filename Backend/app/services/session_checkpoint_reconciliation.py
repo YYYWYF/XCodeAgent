@@ -15,8 +15,8 @@ from app.services.recovery_checkpoint import checkpoint_thread_exists
 _locks: dict[str, asyncio.Lock] = {}
 
 
-async def reconcile_session_checkpoint(workspace: str, *, session_id: str, thread_id: str) -> bool:
-    """只校准请求会话自己的当前 root 现场，原 Run、文档和确认决定均不改变。"""
+async def reconcile_session_checkpoint(workspace: str, *, session_id: str, thread_id: str) -> bool | None:
+    """只校准本会话 root；None 表示被真实活动任务推迟，不能登记为已校准。"""
     workspace = str(Path(workspace).resolve())
     async with _locks.setdefault(workspace, asyncio.Lock()):
         if not await checkpoint_thread_exists(workspace, thread_id):
@@ -25,7 +25,7 @@ async def reconcile_session_checkpoint(workspace: str, *, session_id: str, threa
         from app.services.detached_execution import active_detached_count
         from app.services.ui_design_generation_pool import active_ui_design_count
         if workflow_run_registry.active_run_ids(workspace) or active_detached_count(workspace) or active_ui_design_count(workspace):
-            return False
+            return None
         before = lifecycle_service.load_application_lifecycle(workspace)
         if before is None:
             return False

@@ -22,6 +22,7 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { useWorkflowConversation } from '../src/renderer/src/components/AiChatPanel/hooks/useWorkflowConversation'
 import { mergeExecutionOutput } from '../src/renderer/src/components/AiChatPanel/executionOutputRecovery'
+import { workspaceRecoveryAttachments } from '../src/renderer/src/service/workspaceRecoveryAttachments'
 import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
 import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../src/renderer/src/components/AiChatPanel/pendingWorkflowInput'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
@@ -72,7 +73,7 @@ test('首次同步失败不定时探测，后续正常读取成功才恢复连�
     fail = false
     await act(async () => { await runtime.refreshExecutionRecoveryLifecycle() })
     assert.equal(runtime.connectionState.status, 'healthy')
-    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'get'])
+    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'workspace_attach'])
   } finally {
     await act(async () => { root?.unmount() })
     globalThis.fetch = savedFetch
@@ -120,7 +121,7 @@ test('无生命周期冷启动收口连接：业务失败展示真实错误，�
     await act(async () => { assert.equal(await runtime.refreshExecutionRecoveryLifecycle(), true) })
     assert.equal(runtime.connectionState.status, 'healthy')
     assert.equal(runtime.lifecycleSyncError, undefined)
-    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'get'])
+    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'workspace_attach'])
     // 真正的网络失败仍走连接提示，不能被业务错误分类吞掉。
     globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
     await act(async () => { assert.equal(await runtime.refreshExecutionRecoveryLifecycle(), false) })
@@ -822,6 +823,7 @@ test('兜底同步正常待确认执行不报缺少恢复入口，也不提交�
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
   try {
     for (const owner of [OWNER_SESSION_ID, 'another-session', 'completed', 'failed-after-completed']) {
+      workspaceRecoveryAttachments.invalidate()
       const identity = buildSessionIdentity()
       const lifecycle = buildIdleLifecycle()
       lifecycle.activeExecutions = { acceptance: {
@@ -856,7 +858,7 @@ test('兜底同步正常待确认执行不报缺少恢复入口，也不提交�
       }
       renderToStaticMarkup(createElement(Probe))
       assert.equal(await runtime!.retryCurrentRecovery(), [OWNER_SESSION_ID, 'completed'].includes(owner))
-      assert.equal(reads, 2) // 既有 workspace_attach + get；不派发恢复或验收写动作。
+      assert.equal(reads, 2) // 工作区与会话各校准一次，不派发恢复或验收写动作。
     }
   } finally {
     globalThis.fetch = savedFetch
@@ -918,6 +920,7 @@ test('Run 建立前失败的底部重试只恢复输入；再次发送保留原�
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
   try {
     for (const scenario of ['transport', 'persistence', 'read-failed', 'received', 'late-received'] as const) {
+      workspaceRecoveryAttachments.invalidate()
       const identity = buildSessionIdentity()
       const lifecycle = buildIdleLifecycle()
       let runtime: ReturnType<typeof useWorkflowConversation> | undefined
@@ -959,7 +962,7 @@ test('Run 建立前失败的底部重试只恢复输入；再次发送保留原�
       failPersistence = false
       const result = await runtime!.retryCurrentRecovery()
       assert.equal(workflowWrites, beforeRetry, '底部重试不能重复提交原请求')
-      assert.equal(reads, scenario === 'read-failed' ? 1 : 2, `${scenario}: workspace Attach + lifecycle get`)
+      assert.equal(reads, scenario === 'read-failed' ? 1 : 2, `${scenario}: 工作区与会话各自校准`)
       if (scenario === 'transport' || scenario === 'persistence' || scenario === 'late-received') {
         assert.equal(result, true)
         assert.equal(restoredDrafts.at(-1), params.draft)
@@ -1209,6 +1212,7 @@ function sseResponse(
             threadId,
             status: 'completed',
             action: 'get',
+            workspaceAttach: { workspaceReconciled: true, sessionDeferred: false },
             lifecycle: payload.applicationLifecycle
           }
         }
@@ -1407,13 +1411,12 @@ test('DAG generation 完成后 production hook 先收口 runtime，再发布 Pen
         planControlAction?: string
         applicationLifecycle?: {
           action?: string
+          sessionId?: string
         }
       }
     }
     if (url.endsWith('/application-lifecycle/run')) {
-      if (request.forwardedProps?.applicationLifecycle?.action === 'get') {
-        lifecycleGetCount += 1
-      }
+      lifecycleGetCount += 1 // 首次 Attach 和后续 Get 都直接返回完整生命周期投影。
       return sseResponse(request.threadId, request.runId, {
         applicationLifecycle: lifecycleAfterWorkflow
       })
@@ -1973,7 +1976,7 @@ test('恢复投影读取失败重试只同步状态，不执行旧候选或其�
     assert.equal(await runtime!.refreshExecutionRecoveryLifecycle(), false)
     failed = false
     assert.equal(await runtime!.refreshExecutionRecoveryLifecycle(), true)
-    assert.deepEqual(actions, ['workspace_attach', 'get', 'workspace_attach', 'get'])
+    assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'workspace_attach', 'workspace_attach'])
   } finally {
     globalThis.fetch = savedFetch
     Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
