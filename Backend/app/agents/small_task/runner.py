@@ -9,6 +9,7 @@ from app.agents.model_operations import model_operation, small_task_operation
 from app.agents.small_task.scope import small_task_path_scope
 from app.agents.tool_activity_stream import ToolActivityCallback, invoke_agent_with_tool_activity
 from app.agents.messages import NO_AGENT_TEXT
+from app.utils.model_output import repair_unescaped_json_string_quotes
 
 
 SMALL_TASK_MODE_MARKER = "<devagentstudio-small-task-mode>"
@@ -156,32 +157,33 @@ def normalize_small_task_result(agent_note: str) -> dict[str, Any]:
 
 
 def _read_small_task_output(agent_note: str) -> tuple[dict[str, Any], str | None]:
-    """接收唯一完整结果对象，允许前置说明，禁止从工具参数或损坏 JSON 内捞取结果。"""
+    """按 Build 的提取及引号修复方式读取结果，保留根对象与业务状态校验。"""
 
     text = agent_note.strip()
     if not text or text == NO_AGENT_TEXT:
         return {}, "SmallTask Agent 未返回最终执行结果（空响应）。"
     if text.startswith("Action:") or "Action Input:" in text.split("{", 1)[0]:
         return {}, "SmallTask Agent 仅返回工具调用文本，而非有效的最终执行结果。"
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 3 and lines[-1].strip() == "```":
-            text = "\n".join(lines[1:-1]).strip()
-    # 模型可能在最终结果前附带说明；只剥离不含 JSON 结构的独立说明行。
-    # 必须解析剩余全文，不能从损坏外层、数组或多个结果中选择一个“成功”对象。
     object_start = text.find("{")
-    if object_start > 0:
-        prefix = text[:object_start]
-        if (
-            "[" not in prefix
-            and "```" not in prefix
-            and not prefix.rsplit("\n", 1)[-1].strip()
-        ):
-            text = text[object_start:]
+    if object_start < 0 or "[" in text[:object_start]:
+        return {}, "SmallTask Agent 执行结果必须是 JSON 对象。"
+    # 与 Build 一样用 raw_decode 提取说明文字中的 JSON；只解析首个根对象，
+    # 不从截断外层回退到嵌套对象，避免把局部内容误认为已完成结果。
+    text = text[object_start:]
+    decoder = json.JSONDecoder()
     try:
-        payload = json.loads(text)
-    except (ValueError, TypeError):
-        return {}, "SmallTask Agent 没有返回完整有效的 JSON 执行结果。"
+        payload, end = decoder.raw_decode(text)
+    except ValueError:
+        # 复用 Build 的受控恢复，只转义正文中未转义的双引号，不补全截断结果。
+        repaired_text = repair_unescaped_json_string_quotes(text)
+        try:
+            payload, end = decoder.raw_decode(repaired_text)
+        except ValueError:
+            return {}, "SmallTask Agent 没有返回完整有效的 JSON 执行结果。"
+        text = repaired_text
+    suffix = text[end:].strip()
+    if "{" in suffix or suffix.startswith(("}", "]", ",")):
+        return {}, "SmallTask Agent 返回多个结果或损坏的 JSON 执行结果。"
     if not isinstance(payload, dict):
         return {}, "SmallTask Agent 执行结果必须是 JSON 对象。"
     if not isinstance(payload.get("status"), str) or payload["status"] not in _VALID_STATUSES:

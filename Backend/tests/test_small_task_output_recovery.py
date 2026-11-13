@@ -29,9 +29,8 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
             'Action: read_file\nAction Input:\n{"status":"completed","summary":"工具参数"}',
             '[\n{"status":"completed","summary":"数组里的结果"}\n]',
             '说明\n{"broken":\n{"status":"completed","summary":"嵌套结果"}',
-            '说明\n{"status":"completed","summary":"结果"}\n还需要处理',
             '说明\n{"status":"completed","summary":"结果"}{"status":"failed","summary":"冲突"}',
-            '说明\n```json\n{"status":"completed","summary":"结果"}\n```',
+            '{"status":"completed","summary":"截断结果"',
         ]
         for response in responses:
             with self.subTest(response=response):
@@ -63,6 +62,53 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 self.assertEqual(result["status"], status)
                 self.assertIsNone(result["failureCode"])
                 self.assertEqual(result["verification"], ["静态复核完成"])
+
+    def test_build_style_extraction_and_quote_repair_preserve_business_results(self) -> None:
+        """与 Build 对照验证说明包裹及未转义引号恢复，不改变成功、失败和确认状态。"""
+        from app.services.build_result_coordinator import create_agent_task_results
+
+        for status in ("completed", "already_satisfied", "failed", "requires_workflow", "requires_user_confirmation"):
+            for wrapper in ("结果：{body}。处理结束。", "说明\n```json\n{body}\n```\n处理结束。"):
+                with self.subTest(status=status, wrapper=wrapper):
+                    summary = '已检查"概览页"组件'
+                    body = json.dumps({"status": status, "summary": summary}, ensure_ascii=False)
+                    response = wrapper.format(body=body.replace('\\"', '"'))
+                    result = normalize_small_task_result(response)
+                    self.assertEqual(result["status"], status)
+                    self.assertEqual(result["summary"], summary)
+                    self.assertIsNone(result["failureCode"])
+                    if status in ("completed", "already_satisfied", "failed"):
+                        build_body = json.dumps({"task_results": [{
+                            "task_id": "repair", "status": status, "summary": summary,
+                        }]}, ensure_ascii=False)
+                        build_result = create_agent_task_results(
+                            [{"id": "repair", "owner": "frontend"}],
+                            wrapper.format(body=build_body.replace('\\"', '"')),
+                            require_structured=True,
+                        )[0]
+                        self.assertEqual(result["status"], build_result["status"])
+                        self.assertEqual(result["summary"], build_result["agent_note"])
+
+    def test_repaired_output_uses_real_diff_without_dispatching_again(self) -> None:
+        """格式恢复后直接交回复测，文件清单以磁盘 Diff 为准且不依赖模型声明。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            task = repair_task("frontend_build")
+            task.update({"owner": "frontend", "allowed_paths": ["frontend"]})
+            target = Path(workspace) / "frontend/src/App.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("before", encoding="utf-8")
+
+            def repair_with_unescaped_summary(**kwargs: object) -> str:
+                """写入授权修复，但返回带未转义引号且未声明 changedFiles 的结果。"""
+                target.write_text("after", encoding="utf-8")
+                return '处理完成。\n```json\n{"status":"completed","summary":"修复"概览页"类型"}\n```\n请复测。'
+
+            with patch("app.services.small_task.invoke_small_task_agent", side_effect=repair_with_unescaped_summary) as invoke:
+                result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
+            invoke.assert_called_once()
+            self.assertEqual(route_small_task_result(result), "integration_test")
+            self.assertEqual(result["small_task_results"][0]["changedFiles"], ["frontend/src/App.tsx"])
+            self.assertIsNone(result["small_task_results"][0]["failureCode"])
 
     def test_completed_repair_with_explanation_returns_to_retest_without_rereading(self) -> None:
         """复现真实日志：已写入的修复附带说明时只调用一次 Agent，并带真实 Diff 进入复测。"""
