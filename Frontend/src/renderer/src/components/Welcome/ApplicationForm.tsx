@@ -28,7 +28,7 @@ type Props = {
   /** 设置页复用新建表单时，项目目录等创建期字段仅展示。 */
   mode?: 'create' | 'settings'
   /** 设置页传入已持久化配置转换出的初始草稿。 */
-  initialValues?: ApplicationDraft & { envVariables?: unknown }
+  initialValues?: ApplicationDraft
   /** 设置页传入已经落盘并注入工程的能力，用于禁止关闭。 */
   lockedCapabilities?: { login?: boolean; authorization?: boolean }
   onSelectProjectParent?: () => void

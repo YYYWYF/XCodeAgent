@@ -1,14 +1,11 @@
 import {
   AppstoreOutlined,
-  CodeOutlined,
-  DeleteOutlined,
   LockOutlined,
-  PlusOutlined,
   SaveOutlined,
   SettingOutlined,
   CloseOutlined
 } from '@ant-design/icons'
-import { Anchor, Button, Form, Input, Modal, Typography, message } from 'antd'
+import { Anchor, Button, Form, Modal, Typography, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useMemo, useState } from 'react'
 import { type ApplicationConfig, type ApplicationDraft } from '../../typings'
@@ -29,14 +26,7 @@ import { useSettingsConfigRecovery } from './useSettingsConfigRecovery'
 import '../Welcome/ApplicationFormModal.less'
 import './SettingsPage.less'
 
-const { Title, Text } = Typography
-
-type EnvVariable = {
-  key: string
-  devValue: string
-  prodValue: string
-  encrypted: boolean
-}
+const { Title } = Typography
 
 type Props = {
   application: ApplicationConfig
@@ -45,9 +35,7 @@ type Props = {
   onSaved: (application: ApplicationConfig) => void
 }
 
-type SettingsFormValues = ApplicationDraft & {
-  envVariables: EnvVariable[]
-}
+type SettingsFormValues = ApplicationDraft
 
 /** 组织并保存应用级基础能力与环境配置。 */
 export default function SettingsPage({ application, onClose, onSaved }: Props): ReactElement {
@@ -56,50 +44,24 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
   const { canResume, refreshPending, handleResume } = useSettingsConfigRecovery(application, form, setSaving, onSaved)
 
   const settingsDraft = useMemo(() => createSettingsDraft(application), [application])
-  // 环境变量 — 将 { dev:[], prod:[] } 合并为统一的 flat list
-  const safeEnvVariables = useMemo<EnvVariable[]>(() => {
-    const devVars = application?.environment?.dev ?? []
-    const prodVars = application?.environment?.prod ?? []
-    const maxLen = Math.max(devVars.length, prodVars.length)
-    return Array.from({ length: maxLen }, (_, i) => ({
-      key: devVars[i]?.key ?? prodVars[i]?.key ?? '',
-      devValue: devVars[i]?.value ?? '',
-      prodValue: prodVars[i]?.value ?? '',
-      encrypted: devVars[i]?.encrypted ?? prodVars[i]?.encrypted ?? false
-    }))
-  }, [application?.environment?.dev, application?.environment?.prod])
-
-  const envVars: EnvVariable[] = Form.useWatch('envVariables', form) ?? safeEnvVariables
   // 校验设置并通过统一应用保存入口加密数据库凭据。
   const handleSave = async (): Promise<void> => {
     let submittedChanges: ConfigChanges = {}
     try {
       const values = await form.validateFields()
       setSaving(true)
-      const { envVariables, ...rest } = values
-      const environment = {
-        dev: (envVariables ?? []).map((v) => ({
-          key: v.key,
-          value: v.devValue,
-          encrypted: v.encrypted
-        })),
-        prod: (envVariables ?? []).map((v) => ({
-          key: v.key,
-          value: v.prodValue,
-          encrypted: v.encrypted
-        }))
-      }
+      // environment 不在表单里：环境变量板块已下线，但已有数据要原样保留——
+      // 老工作区可能存了用户的环境变量，保存设置不该把它们清掉。
       const updatedApplication: ApplicationConfig = {
         ...application,
-        appName: rest.appName,
-        appIcon: rest.appIcon,
-        repoUrl: rest.repoUrl.trim(),
-        theme: rest.theme,
-        auth: rest.auth,
-        authorization: rest.authorization,
-        datasource: buildDatasourceConfig(rest.datasource),
-        menus: application.menus,
-        environment
+        appName: values.appName,
+        appIcon: values.appIcon,
+        repoUrl: values.repoUrl.trim(),
+        theme: values.theme,
+        auth: values.auth,
+        authorization: values.authorization,
+        datasource: buildDatasourceConfig(values.datasource),
+        menus: application.menus
       }
       submittedChanges = settingsConfigChanges(application, updatedApplication)
       if (hasPendingConfigOperation(application.workspaceRoot) && Object.keys(submittedChanges).length === 0) throw new Error('原配置操作尚未完成，请点击恢复原配置操作。')
@@ -117,7 +79,7 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
         configRevision: disk.configRevision
       })
       // 保存成功后以最新磁盘配置刷新表单，避免再次保存时复用提交前的开关或 revision。
-      form.setFieldsValue({ ...createSettingsDraft(persistedApplication), envVariables })
+      form.setFieldsValue(createSettingsDraft(persistedApplication))
       onSaved(persistedApplication)
       // 轻量成功反馈：固定 3 秒自动消失的 message，不再用 Modal 打断操作。
       message.success({ content: '保存成功', duration: 3 })
@@ -234,157 +196,18 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
                 </span>
               }
             />
-            <Anchor.Link
-              href="#settings-environment"
-              title={
-                <span className={cx('settings-anchor-item')}>
-                  <CodeOutlined />
-                  <span>环境变量</span>
-                </span>
-              }
-            />
           </Anchor>
         </aside>
         <div className={cx('settings-page-scroll')}>
           <ApplicationForm
             form={form}
-            initialValues={{
-              ...settingsDraft,
-              envVariables: safeEnvVariables
-            }}
+            initialValues={settingsDraft}
             lockedCapabilities={{
               login: application.auth.enable,
               authorization: application.authorization.enabled
             }}
             mode="settings"
-          >
-            <section
-              id="settings-environment"
-              className={cx('application-form-section', 'application-form-section--full')}
-            >
-              <div className={cx('application-form-section-title', 'datasource-config-title')}>
-                <span className={cx('application-form-section-icon')}>
-                  <CodeOutlined />
-                </span>
-                <span className={cx('application-form-section-text')}>环境变量</span>
-              </div>
-              {/* 第一行：开发/生产环境标签 — 纯展示 */}
-              <div className={cx('settings-env-labels')}>
-                <span className={cx('settings-env-labels-key')} />
-                <div className={cx('settings-env-labels-key')}>
-                  <span className={cx('settings-env-badge', 'settings-env-badge--dev')}>
-                    <Text strong>开发环境</Text>
-                  </span>
-                </div>
-                <div className={cx('settings-env-labels-key')}>
-                  <span className={cx('settings-env-badge', 'settings-env-badge--prod')}>
-                    <Text strong>生产环境</Text>
-                  </span>
-                </div>
-                <span className={cx('settings-env-var-header-spacer')} />
-              </div>
-
-              {/* 第二行：变量名 / 变量值 列头 */}
-              <div className={cx('settings-env-labels')}>
-                <span className={cx('settings-env-labels-key')}>变量名</span>
-                <span className={cx('settings-env-labels-key')}>变量值</span>
-                <span className={cx('settings-env-labels-key')}>变量值</span>
-                <span className={cx('settings-env-var-header-spacer')} />
-              </div>
-
-              <Form.List name="envVariables">
-                {(fields, { add, remove }) => (
-                  <>
-                    <div className={cx('settings-env-var-scroll')}>
-                      {fields.length === 0 ? (
-                        <div className={cx('settings-env-var-empty')}>
-                          <Text type="secondary">暂无数据</Text>
-                        </div>
-                      ) : (
-                        fields.map(({ key, name, ...restField }, index) => {
-                          const encrypted = envVars[index]?.encrypted ?? false
-
-                          return (
-                            <div key={key} className={cx('settings-env-var-row')}>
-                              <Form.Item
-                                {...restField}
-                                className={cx('settings-env-var-field-item')}
-                                name={[name, 'key']}
-                                rules={[
-                                  { required: true, message: '请输入变量名' },
-                                  {
-                                    pattern: /^[A-Z][A-Z0-9_]*$/,
-                                    message: '仅限大写字母、下划线和数字，且大写字母开头'
-                                  }
-                                ]}
-                              >
-                                <Input
-                                  placeholder="变量名，如NAME_1"
-                                  prefix={
-                                    encrypted ? (
-                                      <LockOutlined className={cx('settings-env-var-lock')} />
-                                    ) : undefined
-                                  }
-                                />
-                              </Form.Item>
-                              <Form.Item
-                                {...restField}
-                                className={cx('settings-env-var-field-item')}
-                                name={[name, 'devValue']}
-                              >
-                                {encrypted ? (
-                                  <Input.Password placeholder="值" visibilityToggle />
-                                ) : (
-                                  <Input placeholder="值" />
-                                )}
-                              </Form.Item>
-                              <Form.Item
-                                {...restField}
-                                className={cx('settings-env-var-field-item')}
-                                name={[name, 'prodValue']}
-                              >
-                                {encrypted ? (
-                                  <Input.Password placeholder="值" visibilityToggle />
-                                ) : (
-                                  <Input placeholder="值" />
-                                )}
-                              </Form.Item>
-                              <Button
-                                className={cx('settings-env-var-delete')}
-                                danger
-                                icon={<DeleteOutlined />}
-                                onClick={() => remove(name)}
-                                type="text"
-                              />
-                            </div>
-                          )
-                        })
-                      )}
-                    </div>
-
-                    <div className={cx('settings-env-actions')}>
-                      <Button
-                        icon={<PlusOutlined />}
-                        onClick={() =>
-                          add({ key: '', devValue: '', prodValue: '', encrypted: false })
-                        }
-                      >
-                        新增环境变量
-                      </Button>
-                      <Button
-                        icon={<PlusOutlined />}
-                        onClick={() =>
-                          add({ key: '', devValue: '', prodValue: '', encrypted: true })
-                        }
-                      >
-                        新增加密环境变量
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </Form.List>
-            </section>
-          </ApplicationForm>
+          />
         </div>
       </div>
     </div>
