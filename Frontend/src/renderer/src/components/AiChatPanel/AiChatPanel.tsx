@@ -243,12 +243,12 @@ import {
 } from '../../service/recoveryIncident'
 import { runPlanningStageEntryTransaction } from './planningStageEntry'
 import {
+  codeDiffPanelForSession,
   endpointDetailTargetKey,
   pageDetailTargetKey,
   shouldShowAcceptanceDecisionDock,
   currentRoundAcceptancePassed,
   shouldShowRightWorkspace,
-  workflowShouldShowCodeChanges,
   workflowDetailTargetKey,
   type WorkflowPreviewTarget
 } from './utils'
@@ -3857,7 +3857,7 @@ export default function AiChatPanel({
     workflow: latestWorkflowForDisplay,
     workspaceRoot: application.workspaceRoot
   })
-  const codeDiffVisible = workflowShouldShowCodeChanges(latestWorkflowForDisplay)
+  const codeDiffPanel = codeDiffPanelForSession(rightPanel, activeWorkbenchPhase, draftKey)
   const workspaceTabs: WorkspaceTab[] = isApplicationPlanningPhase
     ? (designDocs || []).map((doc) => ({
         key: doc.key,
@@ -3922,20 +3922,19 @@ export default function AiChatPanel({
     [designDocs, generatingDesignDocKey, isApplicationPlanningPhase, setRightPanel]
   )
 
-  // 阶段切入测试或审查后立即退出可能遗留的 Diff 详情，避免卡片隐藏后右侧仍显示代码差异。
+  // 离开开发会话后退出旧差异，避免切回分栏时重新出现其他会话的文件。
   useEffect(() => {
-    if (rightPanelLayout === 'hidden' || rightPanel?.type !== 'diff' || codeDiffVisible) return
+    if (isApplicationPlanningPhase || rightPanel?.type !== 'diff' || codeDiffPanel) return
     if (reviewReportAvailable) {
       setRightPanel({ type: 'review-report' })
       return
     }
-    // 开发阶段已无「文档」tab，兜底回落到「开发产物」。
     setRightPanel(testReportAvailable ? { type: 'test-report' } : { type: 'outline' })
   }, [
-    codeDiffVisible,
+    codeDiffPanel,
+    isApplicationPlanningPhase,
     reviewReportAvailable,
     rightPanel,
-    rightPanelLayout,
     setRightPanel,
     testReportAvailable
   ])
@@ -4425,12 +4424,15 @@ export default function AiChatPanel({
     }
   }
 
+  /** 用被点击卡片的变更集打开差异，并记录当前会话以隔离后续导航。 */
   const handleOpenCodeChangeFile = (
     codeChanges: WorkspaceCodeChangeSet,
     selectedPath: string
   ): void => {
+    if (activeWorkbenchPhase !== 'development') return
+    if (hasOwnedPendingPlan) markPendingDagPlanGuided()
     ensureRightPanelVisible()
-    setRightPanel({ type: 'diff', codeChanges, selectedPath })
+    setRightPanel({ type: 'diff', sessionKey: draftKey, codeChanges, selectedPath })
   }
 
   const handleShowSkills = (): void => {
@@ -5330,7 +5332,7 @@ export default function AiChatPanel({
         showRightPanel && 'embedded-preview-open',
         // 全宽：右侧铺满、对话区归零（样式见 .right-panel-full）。
         rightPanelLayout === 'full' && 'right-panel-full',
-        rightPanel?.type === 'diff' && 'diff-panel-open',
+        codeDiffPanel && 'diff-panel-open',
         acceptanceAwaiting && 'acceptance-awaiting',
         acceptancePreviewFocus && 'acceptance-preview-focus',
         elementInspectionActive && 'element-inspection-active',
@@ -6323,11 +6325,11 @@ export default function AiChatPanel({
         </div>
       )}
 
-      {showRightPanel && codeDiffVisible && rightPanel?.type === 'diff' && (
+      {showRightPanel && codeDiffPanel && (
         <div className={cx('embedded-preview-pane', 'diff-detail-pane')}>
           <CodeDiffDetailPanel
-            codeChanges={rightPanel.codeChanges}
-            selectedPath={rightPanel.selectedPath}
+            codeChanges={codeDiffPanel.codeChanges}
+            selectedPath={codeDiffPanel.selectedPath}
             onClose={() => {
               setRightPanel(undefined)
             }}

@@ -46,6 +46,7 @@ export type RightPanelState =
   | { type: 'preview'; requestKey?: string; url?: string }
   | {
       type: 'diff'
+      sessionKey: string
       codeChanges: WorkspaceCodeChangeSet
       selectedPath?: string
     }

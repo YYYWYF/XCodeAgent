@@ -7,6 +7,7 @@ import type {
 } from '../../typings'
 import { normalizePreviewUrl } from '../../utils/previewUrl'
 import type { WorkbenchPhase } from '../../workbenchPhase'
+import type { RightPanelState } from './types'
 
 export type WorkflowPreviewTarget = {
   key: string
@@ -288,6 +289,17 @@ export function workflowShouldShowCodeChanges(workflow: WorkflowRunPayload | und
   if (!workflow) return true
 
   return ['conversation', 'test_phase_confirmation'].includes(String(workflow.summary.phase || ''))
+}
+
+/** 已选差异属于打开它的开发会话，不随会话内的后续工作流快照变化。 */
+export function codeDiffPanelForSession(
+  panel: RightPanelState | undefined,
+  phase: WorkbenchPhase,
+  sessionKey: string
+): Extract<RightPanelState, { type: 'diff' }> | undefined {
+  return panel?.type === 'diff' && phase === 'development' && panel.sessionKey === sessionKey
+    ? panel
+    : undefined
 }
 
 /** 仅在代码审查及进入验收的确认门展示审查结果，验收会话不继承审查卡片。 */

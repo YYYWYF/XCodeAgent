@@ -7,9 +7,11 @@ import {
   type PlanExecutionMode
 } from '../src/renderer/src/components/AiChatPanel/planExecutionMode'
 import {
+  codeDiffPanelForSession,
   currentRoundAcceptancePassed,
   shouldShowAcceptanceDecisionDock,
   workflowPreviewTarget,
+  workflowShouldShowCodeChanges,
   workflowShouldShowCodeReview,
   workflowShouldShowProjectLaunch
 } from '../src/renderer/src/components/AiChatPanel/utils'
@@ -22,7 +24,7 @@ import {
 import { DEFAULT_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/components/AiChatPanel/constants'
 import { acceptancePreviewCanFocus } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import { phaseEntryRightPanelLayout } from '../src/renderer/src/components/AiChatPanel/hooks/useAssistantPreviewLayout'
-import type { RightPanelLayout } from '../src/renderer/src/components/AiChatPanel/types'
+import type { RightPanelLayout, RightPanelState } from '../src/renderer/src/components/AiChatPanel/types'
 import { revisionStartTarget } from '../src/renderer/src/components/AiChatPanel/hooks/revisionSession'
 import type {
   ApplicationLifecycle,
@@ -259,6 +261,39 @@ test('恢复验收时按当前执行状态显示步骤或全屏，不沿用旧�
     assert.equal(acceptancePreviewCanFocus('acceptance', true, false, mode), false)
   }
   assert.equal(phaseEntryRightPanelLayout('development', 'full'), 'full')
+})
+
+test('开发会话保留用户选中的历史文件差异，切换会话或阶段时退出', () => {
+  const latest = acceptanceWorkflow()
+  latest.summary.phase = 'validate_direct_fix'
+  assert.equal(workflowShouldShowCodeChanges(latest), false)
+  const panel: RightPanelState = {
+    type: 'diff',
+    sessionKey: 'development-session',
+    selectedPath: 'frontend/src/pages/Home/index.tsx',
+    codeChanges: {
+      id: 'original-change',
+      status: 'applied',
+      workspaceRoot: '/workspace',
+      summary: { files: 1, additions: 1, deletions: 1 },
+      files: [
+        {
+          id: 'home-change',
+          path: 'frontend/src/pages/Home/index.tsx',
+          tool: 'file.patch',
+          changeType: 'modified',
+          additions: 1,
+          deletions: 1,
+          diff: '-刷新\n+123'
+        }
+      ]
+    }
+  }
+  assert.equal(codeDiffPanelForSession(panel, 'development', 'development-session'), panel)
+  assert.equal(codeDiffPanelForSession(panel, 'development', 'other-session'), undefined)
+  for (const phase of ['product', 'planning', 'test', 'review', 'acceptance', 'release'] as const) {
+    assert.equal(codeDiffPanelForSession(panel, phase, 'development-session'), undefined)
+  }
 })
 
 test('项目启动进度选择后续子步骤，不被旧工程识别事件覆盖', () => {
