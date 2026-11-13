@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { cx } from '../../utils';
 import './MarkdownContent.less';
 
@@ -31,7 +31,8 @@ const TABLE_DIVIDER_CELL_RE = /^:?-{3,}:?$/;
 const INLINE_TOKEN_RE =
   /\[([^\]]+)]\(([^)\s]+)(?:\s+"[^"]*")?\)|\*\*([^*]+)\*\*|__([^_]+)__|\*([^*\n]+)\*|_([^_\n]+)_/g;
 
-export default function MarkdownContent({ content, className }: MarkdownContentProps) {
+/** 将 Markdown 内容渲染为只读文档。 */
+export default function MarkdownContent({ content, className }: MarkdownContentProps): ReactElement | null {
   const blocks = parseMarkdown(content);
 
   if (!blocks.length) return null;
@@ -43,7 +44,8 @@ export default function MarkdownContent({ content, className }: MarkdownContentP
   );
 }
 
-function parseMarkdown(content: string) {
+/** 将 Markdown 正文解析成块级内容。 */
+function parseMarkdown(content: string): MarkdownBlock[] {
   const lines = content.replace(/\r\n?/g, '\n').split('\n');
   const blocks: MarkdownBlock[] = [];
   let index = 0;
@@ -142,7 +144,8 @@ function parseMarkdown(content: string) {
   return blocks;
 }
 
-function isBlockStart(lines: string[], index: number) {
+/** 检查当前位置是否开始新的块级内容。 */
+function isBlockStart(lines: string[], index: number): boolean {
   const line = lines[index];
   return (
     FENCE_RE.test(line) ||
@@ -154,7 +157,8 @@ function isBlockStart(lines: string[], index: number) {
   );
 }
 
-function getListItem(line: string) {
+/** 读取列表项的文本、缩进和编号类型。 */
+function getListItem(line: string): { indent: number; ordered: boolean; text: string } | null {
   const indent = line.match(/^\s*/)?.[0].length ?? 0;
   const ordered = line.match(ORDERED_LIST_RE);
   if (ordered) return { indent, ordered: true, text: ordered[1] };
@@ -229,27 +233,48 @@ function parseList(lines: string[], startIndex: number): {
   };
 }
 
-function isTableStart(lines: string[], index: number) {
-  return Boolean(
-    lines[index]?.includes('|') &&
-      lines[index + 1]?.includes('|') &&
-      isTableDivider(lines[index + 1]),
+/** 仅在表头与分隔行的列数一致时识别表格。 */
+function isTableStart(lines: string[], index: number): boolean {
+  const header = lines[index];
+  const divider = lines[index + 1];
+  if (!header?.includes('|') || !divider?.includes('|')) return false;
+
+  const cells = splitTableRow(divider);
+  return (
+    cells.length > 0 &&
+    cells.length === splitTableRow(header).length &&
+    cells.every((cell) => TABLE_DIVIDER_CELL_RE.test(cell))
   );
 }
 
-function isTableDivider(line: string) {
-  const cells = splitTableRow(line).filter(Boolean);
-  return cells.length > 0 && cells.every((cell) => TABLE_DIVIDER_CELL_RE.test(cell));
+/** 把转义的竖线留在单元格内，仅用未转义的竖线分列。 */
+function splitTableRow(line: string): string[] {
+  const row = line.trim();
+  const cells: string[] = [];
+  let cell = '';
+  let offset = row.startsWith('|') ? 1 : 0;
+
+  for (const match of row.matchAll(/\\\||\|/g)) {
+    const index = match.index;
+    if (index < offset) continue;
+    cell += row.slice(offset, index);
+    offset = index + match[0].length;
+    if (match[0] === '|') {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += '|';
+    }
+  }
+
+  if (offset < row.length || !row.endsWith('|') || cell) {
+    cells.push((cell + row.slice(offset)).trim());
+  }
+  return cells;
 }
 
-function splitTableRow(line: string) {
-  let row = line.trim();
-  if (row.startsWith('|')) row = row.slice(1);
-  if (row.endsWith('|')) row = row.slice(0, -1);
-  return row.split('|').map((cell) => cell.trim());
-}
-
-function renderBlock(block: MarkdownBlock, index: number | string) {
+/** 根据块类型生成 Markdown 的语义化元素。 */
+function renderBlock(block: MarkdownBlock, index: number | string): ReactElement {
   const key = `markdown-block-${String(index)}`;
 
   if (block.type === 'heading') {
@@ -291,33 +316,39 @@ function renderBlock(block: MarkdownBlock, index: number | string) {
   if (block.type === 'table') {
     const [header, ...bodyRows] = block.rows;
     return (
-      <table key={key}>
-        <thead>
-          <tr>
-            {header.map((cell, cellIndex) => (
-              <th key={`${key}-head-${cellIndex}`}>{renderInline(cell, `${key}-head-${cellIndex}`)}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {bodyRows.map((row, rowIndex) => (
-            <tr key={`${key}-row-${rowIndex}`}>
-              {row.map((cell, cellIndex) => (
-                <td key={`${key}-cell-${rowIndex}-${cellIndex}`}>
-                  {renderInline(cell, `${key}-cell-${rowIndex}-${cellIndex}`)}
-                </td>
+      <div className={cx('markdown-table-scroll')} key={key}>
+        <table>
+          <thead>
+            <tr>
+              {header.map((cell, cellIndex) => (
+                <th key={`${key}-head-${cellIndex}`}>
+                  {renderInline(cell, `${key}-head-${cellIndex}`)}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {bodyRows.map((row, rowIndex) => (
+              <tr key={`${key}-row-${rowIndex}`}>
+                {/* 表头决定列数，避免不规则的正文行撑出额外列。 */}
+                {header.map((_, cellIndex) => (
+                  <td key={`${key}-cell-${rowIndex}-${cellIndex}`}>
+                    {renderInline(row[cellIndex] ?? '', `${key}-cell-${rowIndex}-${cellIndex}`)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     );
   }
 
   return <hr key={key} />;
 }
 
-function renderHeading(depth: number, text: string, key: string) {
+/** 按 Markdown 标题深度使用对应的 HTML 标题。 */
+function renderHeading(depth: number, text: string, key: string): ReactElement {
   const children = renderInline(text, key);
 
   if (depth === 1) return <h1 key={key}>{children}</h1>;
@@ -408,13 +439,15 @@ function renderInlineWithoutCode(text: string, keyPrefix: string): ReactNode[] {
   return nodes;
 }
 
-function countBackticks(text: string, start: number) {
+/** 统计代码标记开头连续的反引号。 */
+function countBackticks(text: string, start: number): number {
   let count = 0;
   while (text[start + count] === '`') count += 1;
   return count;
 }
 
-function getSafeHref(href: string) {
+/** 仅返回受支持的链接协议或相对路径。 */
+function getSafeHref(href: string): string | null {
   const normalizedHref = href.trim();
   if (/^(https?:|mailto:|tel:)/i.test(normalizedHref)) return normalizedHref;
   if (/^(#|\/|\.\/|\.\.\/)/.test(normalizedHref)) return normalizedHref;

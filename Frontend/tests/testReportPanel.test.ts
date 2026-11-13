@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createElement, useCallback, useEffect, useRef, type ReactElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
+import MarkdownContent from '../src/renderer/src/components/MarkdownContent/MarkdownContent'
 import { useAssistantPreviewLayout } from '../src/renderer/src/components/AiChatPanel/hooks/useAssistantPreviewLayout'
 import { useTestReportPanel } from '../src/renderer/src/components/AiChatPanel/hooks/useTestReportPanel'
 import type {
@@ -9,6 +10,35 @@ import type {
   RightPanelState
 } from '../src/renderer/src/components/AiChatPanel/types'
 import type { WorkflowRunPayload } from '../src/renderer/src/typings'
+
+test('测试报告保留日志中的转义竖线，正文行始终与表头对齐', () => {
+  const content = [
+    '| 检查 | 状态 | 结果摘要 |',
+    '| --- | --- | --- |',
+    '| 前端构建检查 | 失败 | Type \'"title" \\| "name"\' and `a\\|b` |',
+    String.raw`后端构建检查 | 失败 | 日志以竖线结尾 \|`,
+    '| 后端启动检查 | 已跳过 | 无 | 额外字段 |',
+    '| 前端性能测试 | 未执行 |'
+  ].join('\n')
+  const report = create(createElement(MarkdownContent, { content }))
+
+  try {
+    const rows = report.root.findAllByType('tr')
+    assert.equal(rows.length, 5)
+    assert.equal(rows[0].findAllByType('th').length, 3)
+    assert.deepEqual(
+      rows.slice(1).map((row) => row.findAllByType('td').length),
+      [3, 3, 3, 3]
+    )
+    assert.equal(rows[1].findAllByType('td')[2].children[0], 'Type \'"title" | "name"\' and ')
+    assert.deepEqual(rows[1].findByType('code').children, ['a|b'])
+    assert.deepEqual(rows[2].findAllByType('td')[2].children, ['日志以竖线结尾 |'])
+    assert.deepEqual(rows[3].findAllByType('td')[2].children, ['无'])
+    assert.deepEqual(rows[4].findAllByType('td')[2].children, [])
+  } finally {
+    report.unmount()
+  }
+})
 
 /** 构造与真实测试会话一致的集成测试及审查确认门投影。 */
 function reportWorkflow(runId: string, completed: boolean): WorkflowRunPayload {

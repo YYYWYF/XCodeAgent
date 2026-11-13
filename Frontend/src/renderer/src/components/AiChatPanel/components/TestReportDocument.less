@@ -4,14 +4,16 @@
   min-width: 0;
 
   .@{class-prefix}-markdown-content table {
-    display: table;
+    // 窄面板下由表格容器横向滚动，避免摘要列被挤到逐字换行。
+    min-width: 400px;
     table-layout: fixed;
 
     th:first-child {
-      width: 26%;
+      width: 27%;
     }
-    th:nth-child(2) {
-      width: 28%;
+
+    th:nth-child(2):not(:last-child) {
+      width: 21%;
     }
   }
 }

@@ -104,11 +104,14 @@
     text-underline-offset: 2px;
   }
 
-  table {
-    display: block;
-    width: 100%;
+  .@{class-prefix}-markdown-table-scroll {
+    max-width: 100%;
     margin: 0 0 8px;
-    overflow: auto;
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
     border-collapse: collapse;
   }
 
