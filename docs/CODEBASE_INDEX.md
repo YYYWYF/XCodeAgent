@@ -8,7 +8,7 @@ Build 已移除任务完成后的独立后端阶段检查调用及 `services/bac
 
 Windows 发布归档入口为根目录的 `scripts/stage-windows-update.mjs`。签名并刷新 `latest.yml` 后，脚本复用 `Frontend/scripts/app-update-cdn.mjs` 的摘要校验，将 `Frontend/dist` 内全部产物移入清单指定的版本目录。
 
-测试检查失败时，`services/test_error_logs.py` 在原检查结果写入 `errorLogReferences`，按顺序保存完整诊断、stdout 和 stderr 的不可变内容引用；重测覆盖运行日志不影响旧卡片。测试进度和最终快照沿原 AG-UI 工作流投影，Electron 会话只保留引用。`ProcessSteps/TestErrorLogButton.tsx` 在失败检查卡片底部按需经 `/workflow-artifacts/run` 读取全部片段，再通过原生剪贴板复制；读取失败不会复制部分内容。
+测试检查失败时，测试子图与 `graph/nodes/direct_modification.py::validate_direct_fix` 都复用 `services/test_error_logs.py` 写入 `errorLogReferences`，按顺序保存完整诊断、stdout 和 stderr 的不可变内容引用；重测覆盖运行日志不影响旧卡片。测试进度和最终快照沿原 AG-UI 工作流投影，Electron 会话保留摘要和引用。`ProcessSteps/TestErrorLogButton.tsx` 经 `/workflow-artifacts/run` 读齐日志片段后通过原生剪贴板复制；仅有卡片摘要时提供“复制错误摘要”。
 
 任务规划入口 `dag_planning_inputs.py::SequentialPlanningInputs.requirements` 与 `build_task_reuse.py::_baseline_tasks` 不再要求旧正式任务的 Unit 存在于当前骨架：完整基线身份与 ReuseFacts 索引覆盖仍严格核验，本轮必需 Unit 由 `resolve_generation_requirements` 校验。旧页面、模块、静态数据 Unit 不会因范围变化阻断新任务生成，也不会回填当前 DAG；配置复用继续受本轮来源与输入有效性约束。回归：`tests.test_task_generation_policy`、`tests.test_build_task_reuse`。
 

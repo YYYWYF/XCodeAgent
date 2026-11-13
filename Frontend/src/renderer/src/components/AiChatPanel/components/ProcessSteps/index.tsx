@@ -725,6 +725,7 @@ function IntegrationTestChecklist({
               </span>
               {check.status === 'failed' && (
                 <TestErrorLogButton
+                  evidence={check.evidence}
                   references={check.errorLogReferences}
                   workspaceRoot={workspaceRoot}
                 />

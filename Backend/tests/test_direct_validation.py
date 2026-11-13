@@ -17,6 +17,7 @@ from app.protocols.direct_modification_projection import direct_node_process_ste
 from app.services.direct_repair import authorized_direct_repair_paths
 from app.services.direct_validation import run_direct_fix_validation
 from app.services.test_validation import create_repair_task_plan
+from app.workspace.content_artifacts import read_artifact
 
 
 class DirectValidationTests(unittest.TestCase):
@@ -45,12 +46,13 @@ class DirectValidationTests(unittest.TestCase):
         }
 
     def test_typecheck_failure_short_circuits_build_and_restart(self) -> None:
-        """tsc 失败必须保存退出码及诊断，不运行 Vite 或重启。"""
+        """tsc 失败必须短路后续检查，并给卡片保留完整且不可变的命令输出。"""
+        stdout = "最早的诊断\n" + "x" * 10_000 + "\nsrc/App.tsx(2,16): error TS2304: Cannot find name 'Ap'."
+        stderr = "TypeScript 检查失败\n"
         with (
             patch("app.services.direct_validation.shutil.which", return_value="pnpm"),
             patch("app.services.integration_test_runner.workspace_process_registry.run",
-                  return_value=subprocess.CompletedProcess([], 1,
-                      "src/App.tsx(2,16): error TS2304: Cannot find name 'Ap'.", "")) as command,
+                  return_value=subprocess.CompletedProcess([], 1, stdout, stderr)) as command,
             patch("app.services.direct_validation.run_project_restart_validation") as restart,
         ):
             result = validate_direct_fix(self.state)
@@ -59,12 +61,17 @@ class DirectValidationTests(unittest.TestCase):
         restart.assert_not_called()
         self.assertFalse(result["quality_gate_passed"])
         self.assertEqual(result["status"], "in_progress")
-        self.assertEqual(direct_node_process_step("validate_direct_fix", result)["status"], "failed")
+        step = direct_node_process_step("validate_direct_fix", result)
+        self.assertEqual(step["status"], "failed")
+        check = step["checks"][0]
+        self.assertNotIn("最早的诊断", check["evidence"])
         self.assertEqual(_route_direct_validation(result), "direct_modification_repair")
         failed = result["revision_requests"][0]["failed_check"]
         self.assertEqual(failed["execution"]["returncode"], 1)
         self.assertEqual(failed["execution"]["cwd"], "frontend")
-        self.assertIn("TS2304", Path(failed["execution"]["stdout_log"]).read_text())
+        Path(failed["execution"]["stdout_log"]).write_text("下一轮输出", encoding="utf-8")
+        full_log = "".join(read_artifact(self.root, ref) for ref in check["errorLogReferences"])
+        self.assertTrue(full_log.endswith(f"\n\n--- stdout ---\n{stdout}\n\n--- stderr ---\n{stderr}"))
         self.assertFalse(failed.get("advisory", False))
         paths = authorized_direct_repair_paths({**self.state, **result})
         self.assertEqual(paths["frontend"], ["frontend/src/Page.tsx", "frontend/src/App.tsx"])

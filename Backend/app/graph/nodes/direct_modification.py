@@ -49,6 +49,7 @@ from app.services.revision_routing import (
 from app.services.application_config_prerequisite import analyze_application_config_prerequisite, business_request_for_routing
 from app.services.access_control_intent import has_explicit_business_access_control_change, has_explicit_capability_change
 from app.services.application_config.schema import ApplicationConfigError
+from app.services.test_error_logs import record_test_error_log
 from app.services.test_validation import evaluate_quality_gate
 from app.domain.change_impact import (
     AnalysisStatus,
@@ -58,6 +59,7 @@ from app.domain.change_impact import (
 from app.services.change_code_scan import sanitize_code_scan_evidence, scan_targeted_code
 from app.services.change_contracts import load_confirmed_contract_corpus
 from app.workspace.code_changes import CapturedWorkspaceChanges, merge_code_change_sets
+from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 from app.workspace.test_documents import write_test_report_json, write_test_report_markdown
 from app.workspace.workspace_snapshot_documents import load_workspace_snapshot_json
 
@@ -1097,6 +1099,13 @@ def validate_direct_fix(state: ProjectState) -> dict[str, Any]:
                 "evidence": "本轮真实差异无法映射到 Frontend 或 Backend 代码层。",
             }
         ]
+    # 快速修改独立于测试子图，在发布结果和自动修复重跑前保存本轮失败日志。
+    if workspace_from_state(validation_state):
+        root = workspace_root(validation_state).resolve()
+        runtime_root = workflow_artifact_root(validation_state).resolve() / "runtime"
+        for check in test_results:
+            if check.get("passed") is False and "errorLogReferences" not in check:
+                record_test_error_log(root, runtime_root, check)
     report = evaluate_quality_gate(
         test_results=test_results,
         source="direct_fix_validation",

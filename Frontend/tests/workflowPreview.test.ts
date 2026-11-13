@@ -1960,6 +1960,7 @@ test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、�
     const markup = renderToStaticMarkup(
       createElement(ProcessSteps, {
         loading: true,
+        workspaceRoot: '/workspace',
         steps: [
           {
             id: 'integration',
@@ -1985,6 +1986,39 @@ test('后端启动检查沿用实时和恢复快照，按顺序渲染运行、�
       assert.equal(checks?.[1].errorLogReferences, undefined)
     }
     assert.equal(integrationTestCheckReportPath(checks![1]), undefined)
+  }
+})
+
+test('快速修改失败卡片按可用内容显示复制摘要，空卡片不显示复制按钮', () => {
+  for (const evidence of ['TS2688: Cannot find type definition file for vite', '']) {
+    const markup = renderToStaticMarkup(
+      createElement(ProcessSteps, {
+        workspaceRoot: '/workspace',
+        steps: [
+          {
+            id: 'direct:validate_direct_fix',
+            kind: 'workflow',
+            status: 'failed',
+            title: '验证本次修改失败',
+            detail: '',
+            sequence: 1,
+            nodeName: 'validate_direct_fix',
+            checks: [
+              {
+                id: 'frontend_typecheck',
+                name: '前端类型检查',
+                status: 'failed',
+                required: true,
+                evidence
+              }
+            ]
+          }
+        ]
+      })
+    )
+    assert.match(markup, /前端类型检查/)
+    assert.equal(markup.includes('复制错误摘要'), Boolean(evidence))
+    assert.doesNotMatch(markup, /复制错误日志/)
   }
 })
 
