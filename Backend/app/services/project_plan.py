@@ -1819,6 +1819,9 @@ def create_technical_plan(
     if isinstance(agent_plan, dict):
         from app.services.runtime_endpoint_candidates import editable_runtime_candidate
         agent_plan = editable_runtime_candidate(agent_plan)
+        if isinstance(spec.get("confirmed_product_plan"), dict):
+            from app.services.runtime_agent_page_references import compile_agent_page_references
+            agent_plan = compile_agent_page_references(agent_plan, spec["confirmed_product_plan"])
 
     authentication_errors = validate_technical_plan_model_authentication(agent_plan)
     authorization_errors = validate_technical_plan_model_authorization(agent_plan)

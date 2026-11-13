@@ -91,7 +91,7 @@ def _structured_task_reports(
 ) -> tuple[dict[str, dict[str, Any]], bool, str, bool]:
     """从最终 JSON 中提取以任务 ID 索引的结构化报告。"""
 
-    payload = extract_json_object(agent_note)
+    payload = extract_json_object(agent_note, prefer=_is_task_report_payload)
     contract_marker_present = (
         '"task_results"' in agent_note or '"task_id"' in agent_note
     )
@@ -99,7 +99,7 @@ def _structured_task_reports(
     if contract_marker_present and not _is_task_report_payload(payload):
         repaired_note = repair_unescaped_json_string_quotes(agent_note)
         if repaired_note != agent_note:
-            repaired_payload = extract_json_object(repaired_note)
+            repaired_payload = extract_json_object(repaired_note, prefer=_is_task_report_payload)
             if _is_task_report_payload(repaired_payload):
                 payload = repaired_payload
                 recovered = True

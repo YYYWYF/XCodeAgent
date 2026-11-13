@@ -4,6 +4,7 @@ import json
 
 from app.services.runtime_agent_dag import agent_task_manifest
 from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.runtime_agent_memory import MEMORY_GENERATION_RULES
 
 
 def resolve_agent_unit_task_rules(context: UnitGenerationContext) -> tuple[str, ...]:
@@ -30,9 +31,10 @@ def resolve_agent_unit_task_rules(context: UnitGenerationContext) -> tuple[str, 
         "A disabled module still needs an inspection/removal-of-wiring Task, status=pending; "
         "never mark it completed without execution. Prompt implements persona and constraints; "
         "Model reuses the project-injected model without a new credential or model instance; "
-        "Memory reuses the template checkpointer with trusted Principal/thread isolation; Tools "
+        "Memory follows the selected storage capabilities and reuses template checkpoint interfaces with trusted Principal/thread isolation; Tools "
         "import the declared Endpoint ApplicationService locally, never call loopback REST; "
         "Skills and Knowledge honor only configured resources; Context propagates trusted "
         "request identity and confirmed interaction inputs. Use Chinese numbered execution steps. "
         "Do not plan build, startup, database schema changes, permissions changes or acceptance tasks.",
+        MEMORY_GENERATION_RULES,
     )

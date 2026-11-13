@@ -7,6 +7,22 @@ from app.services.build_result_coordinator import create_agent_task_results
 
 
 class BuildResultCoordinatorTests(unittest.TestCase):
+    def test_structured_report_can_follow_json_in_explanation(self) -> None:
+        """模型说明里的配置对象不能遮住后面的正式任务回执。"""
+
+        task = {"id": "agent:travel_buddy_agent::tools", "owner": "agent"}
+        note = (
+            '保留现有模型装配 `model.model_copy(update={"temperature": 0.2})`。\n'
+            '```json\n'
+            + json.dumps({"task_results": [{"task_id": task["id"], "status": "already_satisfied"}]})
+            + '\n```'
+        )
+
+        result = create_agent_task_results([task], note, require_structured=True, strict_schema=True)[0]
+
+        self.assertEqual(result["status"], "already_satisfied")
+        self.assertIsNone(result["failure_category"])
+
     def test_missing_display_summary_does_not_invalidate_task_batch(self) -> None:
         """缺失、空白及 null 摘要不能阻断 knowledge 或连带拒绝同批其他任务。"""
         tasks = [{"id": "agent:it_assistant::knowledge", "owner": "agent"},

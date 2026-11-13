@@ -68,6 +68,8 @@ def _check_cancel(should_cancel: Callable[[], bool] | None) -> None:
 
 def _prompt(pages: list[dict[str, Any]], allowed: tuple[str, ...]) -> str:
     """沿现有 UI 设计模型生成业务正文，SDK 与唯一会话 owner 均由平台装配。"""
+    from app.services.ui_design_generator import _page_brief
+
     skill = read_builtin_skill_md(AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME)
     if not skill:
         raise ValueError("缺少 Agent UI Surface 设计技能。")
@@ -77,7 +79,8 @@ def _prompt(pages: list[dict[str, Any]], allowed: tuple[str, ...]) -> str:
     for page, path in zip(pages, allowed, strict=True):
         body = business_design_page(page)
         contracts.append({"path": path, "requiredBusinessActions": body["actions"],
-                          "requiredBusinessInformationItems": body["information_items"]})
+                          "requiredBusinessInformationItems": body["information_items"],
+                          "pageBrief": _page_brief(body)})
     return (
         "Generate a package-consumer Agent UI design prototype. ProductPlan is the ONLY source of product facts.\n"
         "Return ONLY JSON: {\"files\":{\"allowed/path.tsx\":\"source code\"}}. "
@@ -94,6 +97,9 @@ def _prompt(pages: list[dict[str, Any]], allowed: tuple[str, ...]) -> str:
         "The platform owns ALL actions listed in agent_surfaces.actionIds. "
         "Keep remaining actions and information_items, using stable data-action-id/data-information-item-id and "
         "unique data-control-id on their controls. Do not invent metrics, business fields or operations.\n"
+        "Copy the literal markers from each file's pageBrief. Return/back navigation is allowed only when "
+        "declared in that file's requiredBusinessActions. Preview-only retry or recovery controls use "
+        "data-preview-only=\"true\", without inventing a business action ID.\n"
         "MANDATORY: Every requiredBusinessInformationItems item must have its literal itemId in "
         "data-information-item-id AND a unique literal data-control-id on that SAME JSX element. "
         "Every requiredBusinessActions action must have its literal actionId in data-action-id AND a unique "
@@ -103,9 +109,10 @@ def _prompt(pages: list[dict[str, Any]], allowed: tuple[str, ...]) -> str:
         "or hidden state. String literals, never expressions, are required for these evidence attributes.\n"
         "Page receives typed props {onOpenAgentPanel: () => void; onCloseAgentPanel: () => void; "
         "agentPanelOpen: boolean; onNavigatePage: (pageId: string) => void}. For each navigation action, "
-        "use onClick={() => onNavigatePage('exact targetPageId')} on its button with its literal data-action-id. "
+        "prefer onClick={() => onNavigatePage('exact targetPageId')} with its literal data-action-id. "
+        "As in ordinary page previews, a declared navigation action may use a local placeholder handler. "
         "Do not use href or implement routing. For confirmed interface actions that open/close the Agent panel, "
-        "bind the button directly with onClick={onOpenAgentPanel} / onClick={onCloseAgentPanel}, "
+        "call onOpenAgentPanel / onCloseAgentPanel from the handler, "
         "preserving their action/control/effect IDs. Use agentPanelOpen for their visibility/disabled state. "
         "The Host owns panel visibility; do not create local panel state or duplicate chat UI. "
         "Other business interface actions keep their own behavior; never bind them to these callbacks.\n"
@@ -114,7 +121,7 @@ def _prompt(pages: list[dict[str, Any]], allowed: tuple[str, ...]) -> str:
         "Business controls must support both light and dark themes using matching dark: variants or inherited semantic colors. "
         "Only named imports from react are allowed. Runtime imports: useState/useMemo/useCallback/useReducer/useId/Fragment; "
         "type imports are allowed. No default or namespace imports, services, effects, external resources, href/src, "
-        "forms, computed object access, JSX spreads, dynamic imports, window/document/globalThis, browser storage, "
+        "forms, dynamic imports, window/document/globalThis, browser storage, "
         "timers, fetch, credentials or endpoint literals. Every function needs a Chinese purpose comment.\n"
         f"SKILL:\n{skill}\nAllowed paths: {_json(allowed)}\n"
         f"Exact required business contract for EACH output file:\n{_json(contracts)}\n"
@@ -182,16 +189,20 @@ def _validate_files(project: AgentUiDesignProject, files: dict[str, str], pages:
 
     candidate = project.root / "candidate.json"
     _write_record(candidate, files)
-    _run([str(node), str(Path(__file__).with_name("agent_ui_design_validate.mjs")),
-          str(project.project_dir), str(candidate)], project.workspace, project.project_dir,
-         project.root / "logs/generated-boundary.log", run_id)
-    controls = json.loads((project.root / "logs/generated-boundary.log").read_text(encoding="utf-8"))
+    log = project.root / "logs/generated-boundary.log"
+    try:
+        _run([str(node), str(Path(__file__).with_name("agent_ui_design_validate.mjs")),
+              str(project.project_dir), str(candidate)], project.workspace, project.project_dir, log, run_id)
+    except ValueError as exc:
+        # 固定 AST 检查器只输出源码边界诊断，直接提供具体位置供原修复预算使用。
+        raise ValueError(f"设计页面源码校验失败：{log.read_text(encoding='utf-8')[-4000:]}") from exc
+    controls = json.loads(log.read_text(encoding="utf-8"))
     panel_actions: dict[str, dict[str, list[str]]] = {}
     for (path, code), page in zip(files.items(), pages, strict=True):
         business = business_design_page(page)
         errors = validate_ui_design_code(business, code)
         if errors:
-            raise ValueError("业务页面未满足当前产品事实：" + "；".join(errors))
+            raise ValueError(f"业务页面 {page['pageId']} 未满足当前产品事实：" + "；".join(errors))
         bindings = controls[path]
         interface_ids = {action["actionId"] for action in business["actions"]
                          if (action.get("behavior") or {}).get("type") == "interface"}
@@ -199,8 +210,8 @@ def _validate_files(project: AgentUiDesignProject, files: dict[str, str], pages:
             raise ValueError("浮窗回调只能绑定当前产品计划声明的界面动作。")
         navigation = {action["actionId"]: action["behavior"]["targetPageId"] for action in business["actions"]
                       if (action.get("behavior") or {}).get("type") == "navigation"}
-        if {item["actionId"]: item["pageId"] for item in bindings.get("navigate", [])} != navigation:
-            raise ValueError("页面导航必须通过宿主回调精确绑定正式动作和目标页面。")
+        if any(navigation.get(item["actionId"]) != item["pageId"] for item in bindings.get("navigate", [])):
+            raise ValueError(f"页面 {page['pageId']} 的实际导航目标与正式动作不一致。")
         panel_actions[page["pageId"]] = bindings
     return panel_actions
 

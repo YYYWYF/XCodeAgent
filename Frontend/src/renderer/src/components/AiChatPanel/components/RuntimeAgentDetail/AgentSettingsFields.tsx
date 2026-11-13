@@ -1,15 +1,16 @@
 import { Form, Input, InputNumber, Select } from 'antd'
 import type { ReactElement } from 'react'
 import type { EditableAgentSettings } from '../../../../service/runtimeWorkbench'
+import AgentMemorySettings, { normalizedMemory } from './AgentMemorySettings'
 
-/** 规范化五个编辑字段；人设全部留空表示不启用独立人设。 */
+/** 规范化可编辑值，只有实际编辑的记忆选项才进入提交。 */
 export function normalizedSettings(value: EditableAgentSettings): EditableAgentSettings {
   const role = value.prompt.persona?.role.trim() || ''
   const tone = value.prompt.persona?.tone.trim() || ''
   return { prompt: { systemPrompt: value.prompt.systemPrompt.trim(),
     ...(role || tone ? { persona: { role, tone } } : {}),
     constraints: (value.prompt.constraints || []).map((line) => line.trim()).filter(Boolean) },
-    temperature: value.temperature }
+    temperature: value.temperature, ...(value.memory ? { memory: normalizedMemory(value.memory) } : {}) }
 }
 
 /** 沿原设置编辑布局展示一份表单，模型身份及凭据继续沿用项目配置。 */
@@ -43,5 +44,7 @@ export default function AgentSettingsFields({ value, disabled, onChange }: {
           onChange={(temperature) => onChange({ ...value, temperature })} />
       </Form.Item>
     </div>
+    <Form.Item label="记忆模块"><AgentMemorySettings value={normalizedMemory(value.memory)} disabled={disabled}
+      onChange={(memory) => onChange({ ...value, memory })} /></Form.Item>
   </Form>
 }

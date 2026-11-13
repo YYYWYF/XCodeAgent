@@ -130,6 +130,42 @@ class RuntimeAgentSettingsTests(unittest.TestCase):
         self.assertEqual(current.extensions, self.lifecycle.extensions)
         self.assertEqual(current.development_artifacts, self.lifecycle.development_artifacts)
 
+    def test_memory_choices_preview_and_confirm_without_environment_credentials(self):
+        """旧模板字段保留，记忆能力经过预览确认保存且无需连接服务。"""
+
+        self.plan["agent_contracts"][0]["agentSettings"]["memory"] = {"isolation": "principal/thread"}
+        self.path.write_text(json.dumps(self.plan, ensure_ascii=False))
+        self.path.with_suffix(".md").write_text(render_project_plan_markdown(self.plan))
+        preview = self.prepare({"memory": {"shortTerm": {"storage": "tdsql"}, "longTerm": {"enabled": True}}})
+        self.assertNotIn("shortTerm", json.loads(self.path.read_text())["agent_contracts"][0]["agentSettings"]["memory"])
+        self.assertEqual({diff["field"] for diff in preview["fieldDiffs"]}, {"memoryStorage", "longTermEnabled"})
+        self.submit("confirm_settings", preview)
+        saved = json.loads(self.path.read_text())["agent_contracts"][0]["agentSettings"]["memory"]
+        self.assertEqual(saved, {"isolation": "principal/thread", "shortTerm": {"storage": "tdsql"}, "longTerm": {"enabled": True}})
+        self.assertTrue(self.request("get_settings")["editableSettings"]["memory"]["shortTerm"]["enabled"])
+
+    def test_memory_preview_rebinds_compatible_application_revision(self):
+        """应用配置版本增加时局部记忆预览仍有效，确认前不改正式方案。"""
+
+        application_path = self.path.parent.parent / "application.json"
+        application_path.write_text(json.dumps({**self.application, "configRevision": 2}))
+        original = self.path.read_bytes()
+        preview = self.prepare({"memory": {"shortTerm": {"storage": "tdsql"}}})
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(preview["after"]["memory"]["shortTerm"]["storage"], "tdsql")
+        self.assertTrue(self.submit("confirm_settings", preview)["saved"])
+        self.assertEqual(json.loads(self.path.read_text())["sourceConfigRevision"], 2)
+
+    def test_memory_preview_still_checks_current_application_capabilities(self):
+        """兼容版本变化仍须遵守当前应用的真实架构能力。"""
+
+        (self.path.parent.parent / "application.json").write_text(json.dumps({
+            **self.application, "configRevision": 2, "auth": {"enable": True, "yht": {
+                "clientId": "fixture-client", "privateKey": "fixture-private",
+                "publicKey": "fixture-public", "centerPublicKey": "fixture-center"}}}))
+        with self.assertRaisesRegex(ValueError, "关闭登录和授权"):
+            self.prepare({"memory": {"longTerm": {"enabled": True}}})
+
     def test_ui_design_is_not_a_settings_dependency(self):
         """UI 文件缺失可正常预览，预览后 UI 独立变化也不阻止当前配置确认。"""
 

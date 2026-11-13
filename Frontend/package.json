@@ -5,6 +5,7 @@
   "main": "./out/main/index.js",
   "author": "80303865",
   "scripts": {
+    "check:packages": "node scripts/check-agent-ui-packages.mjs",
     "test:requirement-editor": "node scripts/run-requirement-editor-tests.mjs",
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -93,6 +94,12 @@
     "test:source-tree": "node scripts/run-source-tree-tests.mjs"
   },
   "dependencies": {
+    "@za38.03/agent-ui-core": "file:../vendor/agent-ui/za38.03-agent-ui-core-0.0.1.tgz",
+    "@za38.03/agent-ui-creator": "file:../vendor/agent-ui/za38.03-agent-ui-creator-0.0.1.tgz",
+    "@za38.03/agent-ui-plugins": "file:../vendor/agent-ui/za38.03-agent-ui-plugins-0.0.1.tgz",
+    "@za38.03/agent-ui-renderer": "file:../vendor/agent-ui/za38.03-agent-ui-renderer-0.0.1.tgz",
+    "@za38.03/agent-ui-runtime": "file:../vendor/agent-ui/za38.03-agent-ui-runtime-0.0.1.tgz",
+    "@za38.03/agent-ui-web-component": "file:../vendor/agent-ui/za38.03-agent-ui-web-component-0.0.1.tgz",
     "@ag-ui/client": "0.0.57",
     "@ag-ui/core": "0.0.57",
     "@ant-design/icons": "^5.0.1",
@@ -153,6 +160,14 @@
     "ws": "^8.21.3"
   },
   "pnpm": {
+    "overrides": {
+      "@za38.03/agent-ui-core": "file:../vendor/agent-ui/za38.03-agent-ui-core-0.0.1.tgz",
+      "@za38.03/agent-ui-creator": "file:../vendor/agent-ui/za38.03-agent-ui-creator-0.0.1.tgz",
+      "@za38.03/agent-ui-plugins": "file:../vendor/agent-ui/za38.03-agent-ui-plugins-0.0.1.tgz",
+      "@za38.03/agent-ui-renderer": "file:../vendor/agent-ui/za38.03-agent-ui-renderer-0.0.1.tgz",
+      "@za38.03/agent-ui-runtime": "file:../vendor/agent-ui/za38.03-agent-ui-runtime-0.0.1.tgz",
+      "@za38.03/agent-ui-web-component": "file:../vendor/agent-ui/za38.03-agent-ui-web-component-0.0.1.tgz"
+    },
     "onlyBuiltDependencies": [
       "electron",
       "esbuild"

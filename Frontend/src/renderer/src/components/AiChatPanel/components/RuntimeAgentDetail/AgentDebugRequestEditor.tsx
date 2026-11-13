@@ -91,7 +91,7 @@ export default function AgentDebugRequestEditor({ endpoint, value, onChange, dis
           ['GET', 'HEAD'].includes(endpoint.method) ? <div className="agent-debug-inline-empty">此接口使用路径和查询参数，无请求体。</div>
             : <DebugJsonEditor label="JSON 请求体" value={body} disabled={disabled} schema={endpoint.requestSchema}
               onChange={onBodyChange} /> }]
-        : [{ key: 'context', label: '上下文（可选）', children: <><DebugJsonEditor label="上下文参数（JSON 对象）" compact objectOnly
+        : [{ key: 'body', label: 'Body', children: <><DebugJsonEditor label="JSON 请求体" compact objectOnly
           value={value.context} disabled={disabled} onChange={(context) => onChange({ ...value, context })}
           validate={() => validateDebugField(endpoint, 'context', value.context)} />
           <p>默认不携带页面。需要模拟页面来源时，可填写 pageId、actionId、contextItems。</p></> }]),

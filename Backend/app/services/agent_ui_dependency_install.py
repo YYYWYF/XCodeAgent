@@ -18,7 +18,7 @@ from app.services.agent_ui_dependency_plan import (
 )
 from app.services.agent_ui_dependency_evidence import installed_evidence, stylesheet_evidence
 from app.services.agent_ui_design_project import command_environment
-from app.services.agent_ui_tool_environment import _javascript_entry, resolve_design_tools
+from app.services.agent_ui_tool_environment import _javascript_entry, resolve_design_tools, resolve_node_executable
 from app.services.preview_runtime_state import redact
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -95,16 +95,16 @@ def _tools(target: Path, plan: dict[str, Any], run_id: str) -> list[str]:
     if plan["manager"] == "pnpm" and plan["managerVersion"]:
         node, cli = resolve_design_tools(Path(plan["workspace"]), target / "package.json", run_id)
         return [str(node), str(cli)]
-    node = shutil.which("node")
+    node = resolve_node_executable()
     manager = plan["manager"]
     cli = _javascript_entry(shutil.which(manager), manager, "bin/npm-cli.js" if manager == "npm" else "bin/pnpm.cjs")
-    if not node or cli is None:
+    if cli is None:
         raise ValueError("未找到目标管理器的 Node/JavaScript 入口。")
-    result = workspace_process_registry.run([node, str(cli), "--version"], workspace=plan["workspace"],
+    result = workspace_process_registry.run([str(node), str(cli), "--version"], workspace=plan["workspace"],
         run_id=run_id, cwd=target, env=command_environment(), capture_output=True, text=True, timeout=10)
     if result.returncode or (plan["managerVersion"] and result.stdout.strip() != plan["managerVersion"]):
         raise ValueError("实际包管理器版本与目标声明不一致。")
-    return [str(Path(node).resolve()), str(cli)]
+    return [str(node), str(cli)]
 
 
 def _command(argv: list[str], *, target: Path, plan: dict[str, Any], run_id: str,

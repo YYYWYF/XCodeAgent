@@ -269,8 +269,11 @@ def write_application_lifecycle(
         from app.services.development_artifacts import reconcile_development_artifacts
 
         state = reconcile_development_artifacts(workspace, state)
-        # 只记录现有规划归属，不增加准入校验；清空 activeRunId 后仍保留失败修订的归属。
-        if state.active_formal_revision is not None and state.active_run_id:
+        # 已登记的开发执行可能属于其他会话，不能借全局 activeRunId 接管当前正式修订。
+        active_execution = state.active_executions.get(state.active_run_id or "")
+        if (state.active_formal_revision is not None and state.active_run_id
+                and (active_execution is None
+                     or active_execution.thread_id == state.active_formal_revision.planning_thread_id)):
             state = state.model_copy(
                 update={
                     "active_formal_revision": state.active_formal_revision.model_copy(

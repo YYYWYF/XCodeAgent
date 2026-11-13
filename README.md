@@ -13,6 +13,7 @@ macOS 终端：
 
 ```bash
 cd Frontend
+pnpm check:packages
 pnpm install --frozen-lockfile
 cd ..
 ```
@@ -21,6 +22,7 @@ Windows PowerShell：
 
 ```powershell
 Set-Location Frontend
+pnpm check:packages
 pnpm install --frozen-lockfile
 Set-Location ..
 ```

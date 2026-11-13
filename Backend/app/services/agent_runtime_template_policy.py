@@ -48,7 +48,7 @@ _MODULE_PATH_POLICY: dict[str, dict[str, list[str]]] = {
             "src/app/agent/factory.py",
             "src/app/persistence/checkpointer.py",
         ],
-        "addRoots": [],
+        "addRoots": ["src/app/memory"],
         "testRoots": ["tests"],
     },
     "tools": {

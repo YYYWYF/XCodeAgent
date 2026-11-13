@@ -14,20 +14,23 @@ the Creator flow below.
 
 1. Read the projected Agent Surface before choosing the page composition.
 2. For `standalone_page`, the platform mounts one official initialized Agent.
-   Generate page controls for non-Agent actions, including navigation back to
-   another page. The page's message
+   Generate page controls for declared non-Agent actions. Include navigation back to
+   another page only when the current page declares that action. The page's message
    list, input, send control and state information are implemented by that Agent;
    they are not business information items to render a second time. Preserve
    non-Agent actions and their formal IDs. Navigation buttons use the Host's typed
-   `onNavigatePage('exact targetPageId')` callback; they never implement routing.
+   `onNavigatePage('exact targetPageId')` callback when connected. As in ordinary
+   page previews, declared navigation may use a local placeholder handler.
 3. For `floating_panel`, preserve the complete business body. The Host supplies
    the normal open/close interaction while keeping the same Agent mounted. When
    the confirmed business body declares panel open/close interface actions, bind
-   their buttons directly to the typed `onOpenAgentPanel` / `onCloseAgentPanel`
+   their controls to the typed `onOpenAgentPanel` / `onCloseAgentPanel`
    props and use `agentPanelOpen` for visibility or disabled state. Preserve the
    declared action IDs and effects. Never create page-local panel state. An
    explicit business launcher replaces the Host's default launcher; other
    interface actions must not use these panel callbacks.
+   Direct handlers and arrow-function wrappers are both supported. Business
+   action and information markers use the same validation as ordinary pages.
 4. Keep stable page/Agent/action/context identities from confirmed ProductPlan.
    Do not invent backend addresses, ports, credentials or advanced capabilities.
 5. Keep ProductPlan action and information-item evidence on the business controls

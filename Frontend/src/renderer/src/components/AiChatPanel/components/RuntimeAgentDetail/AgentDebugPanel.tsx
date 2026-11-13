@@ -270,7 +270,7 @@ export default function AgentDebugPanel({ agent, workspaceRoot }: { agent: Runti
       </section>
       <AgentDebugResponse response={jsonResponse} loading={busy && sendingRef.current} />
     </div> : endpoint && <>
-      <details className="agent-debug-advanced"><summary>请求参数与上下文<span>可选</span></summary>
+      <details className="agent-debug-advanced"><summary>请求<span>可选</span></summary>
         <AgentDebugRequestEditor key={targetKey} endpoint={endpoint} value={fields} onChange={setFields}
           disabled={busy || running || view.messages.length > 0} body={draft} onBodyChange={setDraft} />
       </details>

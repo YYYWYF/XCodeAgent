@@ -13,6 +13,7 @@ from app.services.build_result_coordinator import create_agent_task_results
 from app.services.runtime_agent_contracts import agent_contract_index, agent_endpoint_keys, agent_invocation
 from app.services.runtime_agent_module_policy import module_source_refs, module_task_errors, module_task_source
 from app.services.runtime_agent_editable_config import compile_agent_prompt
+from app.services.runtime_agent_memory import MEMORY_GENERATION_RULES, runtime_memory_settings
 
 
 def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
@@ -40,6 +41,7 @@ def agent_module_packet(plan: dict, task: dict, policy: dict) -> dict:
         "configuration": deepcopy(contract["agentSettings"][module]),
         **({"resolvedSystemPrompt": compile_agent_prompt(contract["agentSettings"]["prompt"])}
            if module == "prompt" else {}),
+        **({"memorySelection": runtime_memory_settings(contract["agentSettings"]["memory"])} if module == "memory" else {}),
         "description": task.get("description"), "target_files": targets,
         "change_scope": changes, "module_policy": policy["modulePaths"][module],
         "invocation": agent_invocation(contract["agentId"], public=contract["publicEndpoint"]),
@@ -133,6 +135,7 @@ def generate_agent_modules_with_deep_agent(
             "satisfaction_evidence describing inspected files and concrete findings; failed requires "
             "failure_category and failure_reason. A contract_mismatch or plan_mismatch also requires "
             "a concrete change_request. Do not return implementation_action, changed_files or commands.\n"
+            + (MEMORY_GENERATION_RULES if packet["module"] == "memory" else "")
             + json.dumps(packet, ensure_ascii=False, indent=2)
         )
         note = invoke_agent_with_tool_activity(

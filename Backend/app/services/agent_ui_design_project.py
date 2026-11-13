@@ -13,6 +13,7 @@ from typing import Callable
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.agent_ui_tool_host import AgentUiToolHostInspection, inspect_agent_ui_tool_host
+from app.services.agent_ui_tool_environment import resolve_node_executable
 from app.services.workspace_process_registry import workspace_process_registry
 
 
@@ -89,10 +90,14 @@ def source_digest(project: Path) -> str:
 
 
 def command_environment() -> dict[str, str]:
-    """构建和预览仅继承系统环境，不向生成代码或 Node 注入模型凭据。"""
+    """构建和预览使用统一 Node 的 PATH，仅继承必要系统环境，不注入模型凭据。"""
     allowed = {"PATH", "HOME", "USERPROFILE", "SystemRoot", "SYSTEMROOT", "WINDIR",
                "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL"}
-    return {**{key: value for key, value in os.environ.items() if key in allowed}, "CI": "true"}
+    environment = {**{key: value for key, value in os.environ.items() if key in allowed}, "CI": "true"}
+    # 包管理器及生成脚本的子进程也必须使用同一个 Node，不能沿旧 PATH 切回其他版本。
+    node_directory = str(resolve_node_executable().parent)
+    environment["PATH"] = os.pathsep.join(filter(None, (node_directory, environment.get("PATH", ""))))
+    return environment
 
 
 def _run(argv: list[str], workspace: Path, cwd: Path, log: Path, run_id: str) -> None:

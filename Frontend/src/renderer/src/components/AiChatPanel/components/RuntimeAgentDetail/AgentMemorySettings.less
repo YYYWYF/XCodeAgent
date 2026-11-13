@@ -1,0 +1,45 @@
+.runtime-agent-detail .agent-memory-settings {
+  color: var(--wb-text);
+  section { padding: 14px 0; }
+  section + section { border-top: 1px solid var(--wb-border); }
+  .agent-memory-toggle { display: flex; align-items: center; flex-shrink: 0; gap: 9px; color: var(--wb-text-secondary); font-size: 12px; }
+  .agent-memory-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    h4 { margin: 0; color: var(--wb-text); font-size: 14px; font-weight: 500; }
+    p { margin: 6px 0 0; color: var(--wb-text-secondary); font-size: 13px; line-height: 1.7; }
+    > span { color: var(--wb-text-secondary); font-size: 12px; white-space: nowrap; }
+    .ant-switch { flex-shrink: 0; margin-top: 2px; }
+    .ant-switch:not(.ant-switch-checked) { background: var(--wb-text-tertiary); }
+    .ant-switch-checked { background: var(--wb-accent); }
+    .ant-switch:focus { box-shadow: 0 0 0 2px var(--wb-accent-soft); }
+  }
+  .agent-memory-storage {
+    display: flex;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    margin-top: 18px;
+    font-size: 13px;
+    > span { color: var(--wb-text-secondary); }
+    strong { font-weight: 400; }
+    p { margin: 8px 0 0; color: var(--wb-text-secondary); font-size: 12px; }
+    .ant-radio-wrapper { color: var(--wb-text); font-size: 13px; }
+    .ant-radio-wrapper-disabled { color: var(--wb-text-secondary); }
+    .ant-radio-inner { background: var(--wb-surface); border-color: var(--wb-border); }
+    .ant-radio-checked .ant-radio-inner { border-color: var(--wb-accent); }
+    .ant-radio-wrapper:hover .ant-radio-inner { border-color: var(--wb-accent); }
+    .ant-radio-input:focus + .ant-radio-inner { box-shadow: 0 0 0 2px var(--wb-accent-soft); }
+    .ant-radio-inner::after { background: var(--wb-accent); }
+  }
+  .agent-memory-hint { margin: 6px 0 0; color: var(--wb-text-secondary); font-size: 12px; line-height: 1.7; }
+}
+
+.runtime-agent-detail .agent-memory-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}

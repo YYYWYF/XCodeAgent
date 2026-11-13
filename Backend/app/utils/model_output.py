@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from hashlib import sha256
 import json
 import logging
@@ -25,42 +26,57 @@ def _strip_json_code_fence(text: str) -> str:
     return stripped
 
 
-def extract_json_object(text: str) -> dict[str, Any] | None:
-    """提取首个可解析对象，并记录最外层解析失败后回退到嵌套对象的诊断信息。"""
+def extract_json_object(
+    text: str,
+    *,
+    prefer: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, Any] | None:
+    """优先提取匹配对象，否则返回首个可解析对象，并保留解析失败的诊断信息。"""
 
     stripped = _strip_json_code_fence(text)
 
     decoder = json.JSONDecoder()
     first_error: json.JSONDecodeError | None = None
     first_error_index: int | None = None
+    candidate: tuple[dict[str, Any], int] | None = None
+    next_object_start = 0
     for index, char in enumerate(stripped):
-        if char != "{":
+        if index < next_object_start or char != "{":
             continue
         try:
-            parsed, _ = decoder.raw_decode(stripped[index:])
+            parsed, end = decoder.raw_decode(stripped[index:])
         except json.JSONDecodeError as exc:
             if first_error is None:
                 first_error = exc
                 first_error_index = index
             continue
         if isinstance(parsed, dict):
-            if first_error is not None and first_error_index is not None:
-                logger.warning(
-                    "model_json_nested_object_fallback response_sha256=%s "
-                    "first_object_start=%s root_error_position=%s root_error=%s "
-                    "root_error_context=%s fallback_object_start=%s fallback_keys=%s",
-                    _response_fingerprint(stripped),
-                    first_error_index,
+            if prefer is None or prefer(parsed):
+                candidate = (parsed, index)
+                break
+            if candidate is None:
+                candidate = (parsed, index)
+            # 已完整解析的说明对象整体跳过，避免把它的子对象当成独立回执。
+            next_object_start = index + end
+    if candidate is not None:
+        parsed, index = candidate
+        if first_error is not None and first_error_index is not None and first_error_index < index:
+            logger.warning(
+                "model_json_nested_object_fallback response_sha256=%s "
+                "first_object_start=%s root_error_position=%s root_error=%s "
+                "root_error_context=%s fallback_object_start=%s fallback_keys=%s",
+                _response_fingerprint(stripped),
+                first_error_index,
+                first_error_index + first_error.pos,
+                first_error.msg,
+                _redacted_error_context(
+                    stripped,
                     first_error_index + first_error.pos,
-                    first_error.msg,
-                    _redacted_error_context(
-                        stripped,
-                        first_error_index + first_error.pos,
-                    ),
-                    index,
-                    sorted(str(key) for key in parsed),
-                )
-            return parsed
+                ),
+                index,
+                sorted(str(key) for key in parsed),
+            )
+        return parsed
     if first_error is not None and first_error_index is not None:
         logger.warning(
             "model_json_object_decode_failed response_sha256=%s first_object_start=%s "

@@ -1,7 +1,8 @@
 import { Collapse, Descriptions, Typography } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
-import type { RuntimeAgent } from '../../../../service/runtimeWorkbench'
+import type { AgentMemorySettings as MemorySettings, RuntimeAgent } from '../../../../service/runtimeWorkbench'
 import './AgentSettingsSummary.less'
+import AgentMemorySettings, { normalizedMemory } from './AgentMemorySettings'
 
 /** 用文字和状态点展示启用状态，避免只读配置被误认为可操作的复选框。 */
 function status(enabled: boolean): ReactElement {
@@ -21,10 +22,15 @@ function ResourceFiles({ config, empty }: { config: Record<string, unknown>; emp
 }
 
 /** 以连续的七模块阅读区展示正式设置，保留模块展开和当前合同字段。 */
-export default function AgentSettingsSummary({ agent }: { agent: RuntimeAgent }): ReactElement {
+export default function AgentSettingsSummary({ agent, memory: memoryDraft, onMemoryChange, memoryDisabled, memoryActions }: {
+  agent: RuntimeAgent; memory?: MemorySettings; onMemoryChange?: (value: MemorySettings) => void
+  memoryDisabled?: boolean; memoryActions?: ReactNode
+}): ReactElement {
   const { prompt, model, tools, skills, knowledge } = agent.agentSettings
   const persona = prompt.persona as { role?: string; tone?: string } | undefined
   const generation = model.generation as { temperature?: number } | undefined
+  const memory = normalizedMemory(memoryDraft ?? agent.agentSettings.memory)
+  const memorySummary = [memory.shortTerm.enabled ? '短期记忆' : '', memory.longTerm.enabled ? '长期记忆' : ''].filter(Boolean).join(' / ') || '未启用'
   const bindings = Array.isArray(tools.bindings) ? tools.bindings as Record<string, unknown>[] : []
   return <Collapse className="agent-settings-collapse" ghost defaultActiveKey={['prompt', 'model']}>
     <Collapse.Panel key="prompt" header={title('人设与提示词', '技术规划')}>
@@ -49,8 +55,9 @@ export default function AgentSettingsSummary({ agent }: { agent: RuntimeAgent })
         <Descriptions.Item label="温度参数（Temperature）">{generation?.temperature ?? '跟随项目默认'}</Descriptions.Item>
       </Descriptions>
     </Collapse.Panel>
-    <Collapse.Panel key="memory" header={title('记忆模块', '模板默认')}>
-      <div className="agent-setting-card-grid"><article><strong>会话记忆</strong><Typography.Text type="secondary">沿用当前 Runtime 模板实现</Typography.Text></article></div>
+    <Collapse.Panel key="memory" header={title('记忆模块', memorySummary)}>
+      <AgentMemorySettings value={memory} onChange={onMemoryChange} disabled={memoryDisabled} />
+      {memoryActions}
     </Collapse.Panel>
     <Collapse.Panel key="tools" header={title('工具配置', status(tools.enabled === true))}>
       <div className="agent-setting-list">{bindings.length ? bindings.map((binding) => <article key={String(binding.toolId)}>

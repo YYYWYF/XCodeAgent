@@ -1,4 +1,4 @@
-"""Agent 设置编辑仅接收 Prompt／Temperature 及服务端签发的草稿身份。"""
+"""Agent 设置编辑接收提示词、模型参数、记忆选择及服务端签发的草稿身份。"""
 
 from typing import Annotated, Literal
 
@@ -22,7 +22,7 @@ class GetSettingsRequest(SettingsRequest):
 
 
 class PreviewSettingsRequest(SettingsRequest):
-    """提交 Prompt／Temperature 的精确变化段，并绑定当前技术规划。"""
+    """提交配置的实际变化段，并绑定当前技术规划。"""
 
     action: Literal["preview_settings"]
     contractHash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")

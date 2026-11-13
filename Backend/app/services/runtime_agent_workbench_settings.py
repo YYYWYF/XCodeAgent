@@ -127,13 +127,16 @@ def _prepare(root: Path, current, plan: dict, contract: dict, path: Path,
         raise ValueError("技术规划 Markdown 有未同步的修改，请先完成原技术规划的确认。")
     before = editable_settings(contract)
     candidate = apply_settings_patch(plan, request.agentId, request.settingsPatch)
-    candidate = rebind_selected_topology(candidate, read_application_config(root))
+    application = read_application_config(root)
+    # 局部配置沿当前应用事实重编译；版本变化本身不要求重新生成整份规划。
+    candidate["sourceConfigRevision"] = application["configRevision"]
+    candidate = rebind_selected_topology(candidate, application)
     after = editable_settings(agent_contract_index(candidate)[request.agentId])
     if not settings_diffs(before, after):
         raise ValueError("Agent 配置没有变化。")
     change_id = f"chg_{uuid4().hex}"
     active = ActiveFormalRevision(changeId=change_id, formalBranch=FormalRevisionBranch.WORKBENCH_PLAN_REVISION,
-        sourceThreadId=thread_id, sourceRunId=run_id, request=f"修改智能体 {request.agentId} 的 Prompt／Temperature",
+        sourceThreadId=thread_id, sourceRunId=run_id, request=f"修改智能体 {request.agentId} 的提示词、模型参数或记忆配置",
         target=RevisionTarget(type="agent", agentId=request.agentId), impactInteractionId=change_id,
         planningThreadId=current.initialization.thread_id or thread_id, planningRunId=run_id,
         status="awaiting_user", currentArtifact=ARTIFACT_KEY)
@@ -181,7 +184,9 @@ def _submit(root: Path, current, request: SubmitSettingsRequest) -> dict:
             != {key: canonical_sha256(value) for key, value in _upstreams(root).items()}):
         raise ValueError("技术规划、应用配置或上游文档已变化，请放弃当前预览后重新修改。")
     candidate = apply_settings_patch(plan, request.agentId, SettingsPatch.model_validate(metadata.hidden["settingsPatch"]))
-    candidate = rebind_selected_topology(candidate, read_application_config(root))
+    application = read_application_config(root)
+    candidate["sourceConfigRevision"] = application["configRevision"]
+    candidate = rebind_selected_topology(candidate, application)
     agent_contract_index(candidate)
     expected = {**candidate, "confirmation_status": "pending_user_confirmation", "basedOn": draft.get("basedOn")}
     if draft != expected or markdown != render_project_plan_markdown({**candidate, "confirmation_status": "pending_user_confirmation"}):

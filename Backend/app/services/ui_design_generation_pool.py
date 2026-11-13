@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from contextvars import Context
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -226,12 +227,15 @@ class UiDesignGenerationPool:
         return lock
 
     async def _ensure_started(self) -> None:
+        """启动独立于提交方工作流的常驻生成 worker。"""
+
         if self._started:
             return
         self._started = True
         loop = asyncio.get_running_loop()
         for _index in range(self._concurrency):
-            self._workers.append(loop.create_task(self._worker_loop()))
+            # 隔离提交方的 Run 绑定和 RunnableConfig，避免旧 Run 的取消影响后续页面。
+            self._workers.append(loop.create_task(self._worker_loop(), context=Context()))
 
     def is_active(self, workspace: str, page_id: str) -> bool:
         """页面是否已排队或正在生成。"""

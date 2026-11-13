@@ -1,4 +1,4 @@
-"""按项目 packageManager 自动选择默认 Node 和精确 pnpm，不读取设计模型凭据。"""
+"""按本机工具配置选择 Node 和项目精确 pnpm，不读取设计模型凭据。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import re
 import shutil
 import subprocess
 
-from app.services.agent_ui_design_project import command_environment
 from app.services.workspace_process_registry import workspace_process_registry
 
 
@@ -39,6 +38,8 @@ def _javascript_entry(command: str | None, package: str, entry: str) -> Path | N
 
 def _run_tool(argv: list[str], workspace: Path, cwd: Path, run_id: str, *, installing: bool = False) -> str:
     """通过进程 owner 执行固定工具命令，取消、超时或失败均不回显原始输出。"""
+    from app.services.agent_ui_design_project import command_environment
+
     environment = command_environment()
     for key in ("COREPACK_HOME", "XDG_CACHE_HOME", "LOCALAPPDATA"):
         if os.environ.get(key):
@@ -56,8 +57,23 @@ def _run_tool(argv: list[str], workspace: Path, cwd: Path, run_id: str, *, insta
     return result.stdout.strip() if len(result.stdout) <= 4096 else ""
 
 
+def resolve_node_executable() -> Path:
+    """为全部 Agent UI 工具统一选择 Node；显式配置无效时不回退到 PATH。"""
+    configured_node = os.environ.get("DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE", "").strip()
+    if configured_node:
+        configured_path = Path(configured_node).expanduser()
+        if not configured_path.is_absolute() or not configured_path.is_file():
+            raise ValueError("Agent UI 配置的 Node 必须是实际存在的原生绝对文件路径。")
+        executable = str(configured_path)
+    else:
+        executable = shutil.which("node")
+    if not executable:
+        raise ValueError("未找到默认 Node，请安装符合 Agent UI 工具 engines 的 Node 并重新启动应用。")
+    return Path(executable).resolve()
+
+
 def resolve_design_tools(workspace: Path, package_json: Path, run_id: str = "") -> tuple[Path, Path]:
-    """使用默认 Node 和项目声明的 pnpm；缺缓存时只缓存精确版本，不改变全局版本。"""
+    """使用统一 Node 及项目声明的精确 pnpm，不切换系统全局版本。"""
     try:
         manager = json.loads(package_json.read_text(encoding="utf-8")).get("packageManager")
     except (OSError, ValueError, AttributeError):
@@ -66,10 +82,7 @@ def resolve_design_tools(workspace: Path, package_json: Path, run_id: str = "") 
                         manager if isinstance(manager, str) else "")
     if match is None:
         raise ValueError("项目 packageManager 必须声明精确的 pnpm 版本。")
-    executable = shutil.which("node")
-    if not executable:
-        raise ValueError("未找到默认 Node，请安装符合 Agent UI 工具 engines 的 Node 并重新启动应用。")
-    node = Path(executable).resolve()
+    node = resolve_node_executable()
     version = match[1]
     cached = _corepack_home() / "v1/pnpm" / version / "bin/pnpm.cjs"
     candidates = [cached, _javascript_entry(shutil.which("pnpm"), "pnpm", "bin/pnpm.cjs")]

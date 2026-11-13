@@ -24,6 +24,24 @@ def create(settings, context, checkpointer):
 class RuntimeAgentSettingsAcceptanceTests(unittest.TestCase):
     """检查缺字段、错误参数及额外参数都不能冒充实际生效。"""
 
+    def test_memory_runtime_uses_sqlite_for_all_saved_choices(self):
+        """临时策略覆盖实际执行选项，保留用户配置及模板的其他隔离字段。"""
+
+        from app.services.runtime_agent_memory import runtime_memory_settings
+
+        for storage in ("template", "tdsql", "object_storage"):
+            for enabled in (True, False):
+                with self.subTest(storage=storage, enabled=enabled):
+                    configuration = {"isolation": "principal/thread",
+                        "shortTerm": {"enabled": enabled, "storage": storage},
+                        "longTerm": {"enabled": True}}
+                    effective = runtime_memory_settings(configuration)
+                    self.assertEqual(effective, {"isolation": "principal/thread",
+                        "shortTerm": {"enabled": True, "storage": "template"},
+                        "longTerm": {"enabled": False}})
+                    self.assertEqual(configuration["shortTerm"], {"enabled": enabled, "storage": storage})
+                    self.assertTrue(configuration["longTerm"]["enabled"])
+
     def setUp(self):
         """为编译、生成和静态验收准备相同的当前业务配置。"""
 
@@ -117,3 +135,19 @@ def stream_agent(settings, runtime_context, checkpointer, execution_policy):
         self.assertEqual(packet["resolvedSystemPrompt"], self.expected_prompt)
         self.assertEqual(packet["configuration"], self.prompt)
         self.assertEqual(plan["agent_contracts"][0]["agentSettings"]["model"], {"source": "project"})
+
+        # 正式选择保留原值，当前执行始终使用模板 SQLite 且不启用云服务。
+        task["id"] = "agent:policy::memory"
+        policy["modulePaths"]["memory"] = policy["modulePaths"]["prompt"]
+        task["source_refs"] = module_source_refs(plan, task, policy)
+        packet = agent_module_packet(plan, task, policy)
+        self.assertEqual(packet["configuration"], {})
+        self.assertEqual(packet["memorySelection"]["shortTerm"], {"enabled": True, "storage": "template"})
+        memory = {"shortTerm": {"enabled": True, "storage": "object_storage"}, "longTerm": {"enabled": True}}
+        plan["agent_contracts"][0]["agentSettings"]["memory"] = memory
+        task["source_refs"] = module_source_refs(plan, task, policy)
+        packet = agent_module_packet(plan, task, policy)
+        self.assertEqual(packet["configuration"], memory)
+        self.assertEqual(packet["memorySelection"], {
+            "shortTerm": {"enabled": True, "storage": "template"}, "longTerm": {"enabled": False},
+        })

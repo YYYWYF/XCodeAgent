@@ -1,5 +1,5 @@
 import { RobotOutlined } from '@ant-design/icons'
-import { Tabs, Tag, Typography } from 'antd'
+import { Tabs, Typography } from 'antd'
 import { useState } from 'react'
 import type { ReactElement } from 'react'
 import type { DevelopmentPlanningApiContract, WorkbenchExecution } from '../../../../typings'
@@ -38,7 +38,7 @@ export default function RuntimeAgentDetail({ agent, workspaceRoot, onSaved, onSt
       { key: 'development', label: '智能体开发', children:
         <AgentDevelopmentStatus agent={agent} disabled={disabled} onStart={onStartDevelopment} onOpen={onOpenExecution}
           apiContracts={apiContracts} onDebug={() => setActiveTab('debug')} onOpenFile={onOpenFile} /> },
-      { key: 'debug', label: <span className="agent-debug-tab-label">智能体调试<Tag>开发中</Tag></span>,
+      { key: 'debug', label: '智能体调试',
         children: <AgentDebugPanel agent={agent} workspaceRoot={workspaceRoot} /> }
     ]} />
   </div>

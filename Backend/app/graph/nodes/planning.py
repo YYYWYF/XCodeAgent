@@ -247,6 +247,8 @@ def _attach_technical_plan_contracts(
     ui_designs = state.get("ui_designs")
     if not isinstance(product_plan, dict) or not isinstance(ui_designs, dict):
         raise ValueError("TechnicalPlan 缺少 ProductPlan 或 UiDesign 输入。")
+    from app.services.runtime_agent_page_references import compile_agent_page_references
+    plan = compile_agent_page_references(plan, product_plan)
     closed_plan = {
         **plan,
         "pages": close_page_action_endpoint_dependencies(

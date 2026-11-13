@@ -29,6 +29,13 @@ def agent_project_page_bindings(
         if errors:
             raise ValueError("业务页面未满足当前产品事实：" + "；".join(errors))
     bindings = build_ui_page_manifest(page, page_key=page_id, code=code)["bindings"]
+    owned = {action_id for surface in surfaces for action_id in surface["actionIds"]}
+    actions = {action["actionId"]: action for action in page.get("actions", [])}
+    for binding in bindings["actions"]:
+        action = actions[binding["actionId"]]
+        if action["actionId"] in owned and (action.get("behavior") or {}).get("type") == "interface":
+            # 效果来自已确认且由共享 Host 承担的动作，不虚构包内部控件 ID。
+            binding["uiEffect"] = str(action["behavior"].get("expectedResult") or "").strip()
     bindings["agent_surfaces"] = [
         {key: surface.get(key) for key in ("agentId", "type", "actionIds", "contextItemIds")}
         for surface in surfaces

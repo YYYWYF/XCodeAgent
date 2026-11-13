@@ -25,10 +25,16 @@ def _string_items(value: Any) -> list[str]:
     return result
 
 
-def validate_api_contract_consistency(project_plan: dict[str, Any]) -> list[str]:
-    """校验项目计划中的实体、API 契约和页面字段引用是否闭合。"""
+def validate_api_contract_consistency(
+    project_plan: dict[str, Any],
+    *,
+    runtime_endpoint_plan: dict[str, Any] | None = None,
+) -> list[str]:
+    """校验当前范围的 API 和页面引用，可传入同一计划的完整投影用于运行接口校验。"""
 
-    errors, endpoint_index = _validate_api_contract_definitions(project_plan)
+    errors, endpoint_index = _validate_api_contract_definitions(
+        project_plan, runtime_endpoint_plan=runtime_endpoint_plan
+    )
     contracts = dict_items(project_plan.get("api_contracts"))
     _validate_page_api_dependencies(project_plan, endpoint_index, errors)
     _validate_page_bindings(project_plan, contracts, errors)
@@ -44,6 +50,8 @@ def validate_api_contract_definitions(project_plan: dict[str, Any]) -> list[str]
 
 def _validate_api_contract_definitions(
     project_plan: dict[str, Any],
+    *,
+    runtime_endpoint_plan: dict[str, Any] | None = None,
 ) -> tuple[list[str], dict[tuple[str, str], tuple[dict[str, Any], dict[str, Any]]]]:
     """校验 Contract 定义并返回页面引用校验需要的 Endpoint 索引。"""
 
@@ -65,7 +73,10 @@ def _validate_api_contract_definitions(
         if any(item.get("kind") == "agent_runtime" for item in dict_items(contract.get("endpoints"))):
             try:
                 from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
-                materialize_runtime_endpoints(project_plan, require_topology=False)
+
+                # 运行入口由正式 Agent 派生，复验时需要其页面和 Tool 依赖。
+                runtime_plan = project_plan if runtime_endpoint_plan is None else runtime_endpoint_plan
+                materialize_runtime_endpoints(runtime_plan, require_topology=False)
                 for endpoint in contract["endpoints"]:
                     key = (contract_id, endpoint["id"])
                     if key in endpoint_index:

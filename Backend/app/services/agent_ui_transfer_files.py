@@ -6,7 +6,6 @@ import json
 from pathlib import Path, PurePosixPath
 import posixpath
 import re
-import shutil
 import tempfile
 import unicodedata
 from typing import Any
@@ -15,6 +14,7 @@ from uuid import uuid4
 from app.services.agent_ui_dependency_plan import safe_path, sha256
 from app.services.agent_ui_dependency_layout import current_dependency_layout
 from app.services.agent_ui_design_project import command_environment
+from app.services.agent_ui_tool_environment import resolve_node_executable
 from app.services.agent_ui_design_shared import require_shared_application
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -95,16 +95,14 @@ def source_files(source: Path, source_root: str, target_root: str) -> tuple[dict
 
 def scan_imports(source: Path, files: dict[str, str], workspace: Path) -> dict[str, Any]:
     """用已有 Node/TypeScript 解析真实模块引用；不执行被分析源码或工具初始化。"""
-    node = shutil.which("node")
-    if not node:
-        raise ValueError("只读模块分析需要已有独立 Node。")
+    node = resolve_node_executable()
     # 取消轮询会分段 communicate；私有临时文件避免大输入在首轮超时后停止写入。
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stream:
         json.dump({"projectRoot": str(source), "files": {
             name: code for name, code in files.items() if PurePosixPath(name).suffix in {".ts", ".tsx", ".js", ".jsx"}}}, stream)
         stream.seek(0)
         completed = workspace_process_registry.run(
-            [node, str(Path(__file__).with_name("agent_ui_transfer_imports.mjs"))], workspace=workspace,
+            [str(node), str(Path(__file__).with_name("agent_ui_transfer_imports.mjs"))], workspace=workspace,
             run_id="agent-ui-transfer-inspection:" + uuid4().hex, cwd=source, env=command_environment(),
             stdin=stream, capture_output=True, text=True, timeout=30, check=False,
         )

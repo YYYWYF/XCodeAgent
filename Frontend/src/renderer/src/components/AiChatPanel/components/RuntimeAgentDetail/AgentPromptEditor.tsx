@@ -5,9 +5,12 @@ import { requestRuntimeSettings } from '../../../../service/runtimeWorkbench'
 import type { AgentSettingsPatch, EditableAgentSettings, RuntimeAgent, RuntimeSettingsResult, SettingsPreview } from '../../../../service/runtimeWorkbench'
 import AgentSettingsFields, { normalizedSettings } from './AgentSettingsFields'
 import AgentSettingsSummary from './AgentSettingsSummary'
+import { normalizedMemory } from './AgentMemorySettings'
 
 /** 将字段差异转成可读文本，不直接展示内部 JSON。 */
 function diffText(value: unknown, field: string): string {
+  if (typeof value === 'boolean') return value ? '已启用' : '未启用'
+  if (field === 'memoryStorage') return ({ template: '沿用模板', object_storage: '对象存储', tdsql: 'TDSQL' } as Record<string, string>)[String(value)] || String(value)
   if (value === null || value === undefined) return field === 'temperature' ? '跟随项目默认' : '未设置'
   if (Array.isArray(value)) return value.length ? value.join('\n') : '未设置'
   return String(value)
@@ -70,6 +73,7 @@ export default function AgentPromptEditor({ agent, workspaceRoot, onSaved }: {
       if (JSON.stringify(normalized.prompt) !== JSON.stringify(normalizedSettings(baseline).prompt)) settingsPatch.prompt = normalized.prompt
       if (normalized.temperature !== baseline.temperature) settingsPatch.model = {
         generation: normalized.temperature === null ? null : { temperature: normalized.temperature } }
+      if (normalized.memory && JSON.stringify(normalized.memory) !== JSON.stringify(baseline.memory)) settingsPatch.memory = normalized.memory
       const result = await requestRuntimeSettings(workspaceRoot, action === 'preview_settings'
         ? { action, agentId: agent.agentId, ...identity, settingsPatch }
         : { action, agentId: agent.agentId, changeId: preview!.changeId,
@@ -88,7 +92,7 @@ export default function AgentPromptEditor({ agent, workspaceRoot, onSaved }: {
         if (!result.cancelled) throw new Error('未收到完整放弃结果，请重新加载配置核对。')
         setValue(continueEditing ? preview!.after : baseline)
         setPreview(undefined)
-        setEditing(continueEditing)
+        setEditing(continueEditing && editing)
       }
     } catch (cause) {
       if (active.current) setError(cause instanceof Error ? cause.message : '配置操作失败。')
@@ -100,6 +104,7 @@ export default function AgentPromptEditor({ agent, workspaceRoot, onSaved }: {
 
   const errorAlert = error ? <Alert showIcon type="error" message={error}
     action={<Button size="small" disabled={busy} onClick={() => void reload()}>重新加载</Button>} /> : null
+  const memoryChanged = Boolean(value.memory) && JSON.stringify(normalizedMemory(value.memory)) !== JSON.stringify(normalizedMemory(baseline.memory))
 
   return <section className="agent-detail-section agent-settings-view" aria-busy={busy}>
     <div className="agent-detail-section-title">
@@ -107,15 +112,23 @@ export default function AgentPromptEditor({ agent, workspaceRoot, onSaved }: {
       {editing ? <Tag>正在编辑正式配置</Tag>
         : <Button size="small" disabled={busy || !identity} loading={busy} onClick={() => setEditing(true)}>编辑配置</Button>}
     </div>
-    {!preview && errorAlert}
+    {!preview && (editing || !memoryChanged) && errorAlert}
     {editing ? <div className="agent-prompt-editor">
-      <Alert showIcon type="info" message="可修改人设、系统提示词、业务约束和温度参数，其他模块为只读配置。" />
+      <Alert showIcon type="info" message="可修改人设、系统提示词、业务约束、温度参数和记忆能力。" />
       <AgentSettingsFields value={value} disabled={busy || Boolean(preview)} onChange={setValue} />
       <Space wrap><Button type="primary" loading={busy} disabled={busy || Boolean(preview) || !value.prompt.systemPrompt.trim()
         || JSON.stringify(normalizedSettings(value)) === JSON.stringify(normalizedSettings(baseline))}
         onClick={() => void submit('preview_settings')}>生成修改预览</Button>
         <Button disabled={busy || Boolean(preview)} onClick={() => { setValue(baseline); setError(''); setEditing(false) }}>取消</Button></Space>
-    </div> : <AgentSettingsSummary agent={agent} />}
+    </div> : <AgentSettingsSummary agent={agent} memory={value.memory}
+      memoryDisabled={busy || !identity || Boolean(preview)}
+      onMemoryChange={(memory) => setValue({ ...value, memory })}
+      memoryActions={memoryChanged && <div className="agent-memory-actions">
+        {!preview && errorAlert}
+        <Space wrap><Button type="primary" loading={busy} disabled={busy || !identity || Boolean(preview)}
+          onClick={() => void submit('preview_settings')}>预览记忆配置修改</Button>
+          <Button disabled={busy || Boolean(preview)} onClick={() => { setValue(baseline); setError('') }}>取消</Button></Space>
+      </div>} />}
     <Modal className="agent-settings-modal" getContainer={false} open={Boolean(preview)} title="确认智能体配置修改"
       width={760} closable={false} keyboard={false} maskClosable={false}
       footer={<Space wrap>

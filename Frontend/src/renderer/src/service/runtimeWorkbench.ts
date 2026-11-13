@@ -39,8 +39,14 @@ export type SettingsPreview = {
   fieldDiffs: { field: string; label: string; before: unknown; after: unknown }[]
 }
 export type AgentPromptSettings = { systemPrompt: string; persona?: { role: string; tone: string }; constraints?: string[] }
-export type EditableAgentSettings = { prompt: AgentPromptSettings; temperature: number | null }
-export type AgentSettingsPatch = { prompt?: AgentPromptSettings; model?: { generation: { temperature: number } | null } }
+export type AgentMemorySettings = {
+  shortTerm: { enabled: boolean; storage: 'template' | 'object_storage' | 'tdsql' }
+  longTerm: { enabled: boolean }
+}
+export type EditableAgentSettings = { prompt: AgentPromptSettings; temperature: number | null; memory?: AgentMemorySettings }
+export type AgentSettingsPatch = {
+  prompt?: AgentPromptSettings; model?: { generation: { temperature: number } | null }; memory?: AgentMemorySettings
+}
 export type SettingsAction =
   | { action: 'get_settings'; agentId: string }
   | { action: 'preview_settings'; agentId: string; contractHash: string; technicalPlanSha256: string; settingsPatch: AgentSettingsPatch }

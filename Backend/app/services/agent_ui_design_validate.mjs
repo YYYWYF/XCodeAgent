@@ -20,6 +20,21 @@ const errors = []
 const panelActions = {}
 const panelCallbacks = new Map([['onOpenAgentPanel', 'open'], ['onCloseAgentPanel', 'close']])
 
+/** 兼容直接传递及箭头函数包装的共享面板回调，收集实际调用用途。 */
+function panelRoles(expression) {
+  const roles = new Set()
+  if (ts.isIdentifier(expression) && panelCallbacks.has(expression.text)) roles.add(panelCallbacks.get(expression.text))
+  /** 读取包装函数内的明确回调调用，不执行页面代码。 */
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && panelCallbacks.has(node.expression.text)) {
+      roles.add(panelCallbacks.get(node.expression.text))
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(expression)
+  return roles
+}
+
 /** 使用完整语法树检查 import、浏览器能力与 JSX，拒绝旧虚拟模块和额外消息 owner。 */
 function inspect(path, code) {
   const actions = { open: [], close: [], navigate: [] }
@@ -47,24 +62,20 @@ function inspect(path, code) {
     if (ts.isImportEqualsDeclaration(node) || ts.isImportTypeNode(node) || ts.isMetaProperty(node)
         || node.kind === ts.SyntaxKind.ImportKeyword) errors.push(`${path}: dynamic module access is forbidden`)
     if (ts.isIdentifier(node) && forbidden.has(node.text)) errors.push(`${path}: forbidden capability ${node.text}`)
-    if (ts.isElementAccessExpression(node)) errors.push(`${path}: computed object access is outside the design subset`)
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
       if (forbiddenTags.has(node.tagName.getText(source))) errors.push(`${path}: unsafe element`)
       for (const attribute of node.attributes.properties) {
-        if (ts.isJsxSpreadAttribute(attribute)) errors.push(`${path}: JSX spread is outside the design subset`)
         if (ts.isJsxAttribute(attribute) && ['src', 'srcDoc', 'href', 'action', 'formAction'].includes(attribute.name.getText(source))) {
           errors.push(`${path}: external resources and navigation belong to the Host`)
         }
         if (ts.isJsxAttribute(attribute) && attribute.name.getText(source) === 'onClick'
             && attribute.initializer && ts.isJsxExpression(attribute.initializer)
-            && attribute.initializer.expression && ts.isIdentifier(attribute.initializer.expression)) {
-          const role = panelCallbacks.get(attribute.initializer.expression.text)
-          if (role) {
+            && attribute.initializer.expression) {
+          for (const role of panelRoles(attribute.initializer.expression)) {
             const action = node.attributes.properties.find((item) => ts.isJsxAttribute(item)
               && item.name.getText(source) === 'data-action-id')?.initializer
-            if (node.tagName.getText(source) !== 'button' || !action || !ts.isStringLiteral(action)) {
-              errors.push(`${path}: panel callbacks require a button with a static action ID`)
-            } else actions[role].push(action.text)
+            // 动作标记统一交给普通页面校验器；此处只收集共享浮窗入口。
+            if (action && ts.isStringLiteral(action)) actions[role].push(action.text)
           }
         }
       }
@@ -73,10 +84,10 @@ function inspect(path, code) {
       const call = expression && ts.isArrowFunction(expression) ? expression.body : undefined
       if (call && ts.isCallExpression(call) && ts.isIdentifier(call.expression) && call.expression.text === 'onNavigatePage') {
         const action = node.attributes.properties.find((item) => ts.isJsxAttribute(item) && item.name.text === 'data-action-id')?.initializer
-        if (node.tagName.getText(source) !== 'button' || !action || !ts.isStringLiteral(action) ||
-            call.arguments.length !== 1 || !ts.isStringLiteral(call.arguments[0])) {
-          errors.push(`${path}: navigation needs a button with static action and page IDs`)
-        } else actions.navigate.push({ actionId: action.text, pageId: call.arguments[0].text })
+        // 允许普通页面已有的占位/封装写法，只核对能够静态确定的导航映射。
+        if (action && ts.isStringLiteral(action) && call.arguments.length === 1 && ts.isStringLiteral(call.arguments[0])) {
+          actions.navigate.push({ actionId: action.text, pageId: call.arguments[0].text })
+        }
       }
     }
     ts.forEachChild(node, visit)

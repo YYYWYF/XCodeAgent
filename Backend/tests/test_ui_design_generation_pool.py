@@ -8,6 +8,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import httpx
+
+from app.services.model_request_cancellation import check_model_request
+from app.services.run_workers import bind_run_workers
 from app.services.ui_design_generation_pool import (
     UI_DESIGN_STATUS_GENERATING,
     UI_DESIGN_STATUS_QUEUED,
@@ -15,6 +19,7 @@ from app.services.ui_design_generation_pool import (
     UiDesignGenerationTask,
     generate_page_entry,
 )
+from app.services.workspace_process_registry import workspace_process_registry
 from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
 
 # 单页设计稿假代码：仅用于验证状态流转，不涉及真实 LLM 生成。
@@ -177,6 +182,31 @@ class UiDesignGenerationPoolTests(unittest.TestCase):
             ui_designs_json_path({"workspace": self.workspace, "project_id": "proj"})
         )
         return manifest.get("pages", [])
+
+    def test_worker_ignores_submitter_run_cancellation(self) -> None:
+        """提交方 Run 取消后，独立的单页生成仍能通过模型请求钩子。"""
+
+        pool = UiDesignGenerationPool(concurrency=1)
+        task = _task(self.workspace, self.project_dir)
+        run_id = "ui-design-pool-submitter"
+        self.addCleanup(workspace_process_registry.allow_run, run_id)
+
+        def generate(page, page_key, project_dir, *, should_cancel=None):
+            """执行真实请求前检查并返回固定设计稿。"""
+            check_model_request(httpx.Request("POST", "https://model.invalid/v1/chat/completions"))
+            return FAKE_CODE
+
+        async def scenario():
+            """在提交方运行上下文中启动 worker，再取消该运行。"""
+            with bind_run_workers(run_id, self.workspace):
+                await pool.submit([task])
+                workspace_process_registry.cancel_run(run_id)
+            await pool._queue.join()
+
+        with patch("app.services.ui_design_generation_pool.generate_page_react_code", side_effect=generate):
+            asyncio.run(scenario())
+
+        self.assertEqual(self._manifest_pages()[0]["status"], "confirmed")
 
     def test_submit_dedups_and_worker_confirms(self) -> None:
         """同页重复提交只接受一次，worker 处理完落盘 confirmed 并退出活跃集。"""

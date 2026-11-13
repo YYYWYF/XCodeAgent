@@ -11,7 +11,7 @@ const { decodeRuntimeResult, observeRuntimeResults } = await import('data:text/j
 /** 使用当前 Python 公开结果形状，默认不生成结构化业务输出。 */
 function payload(overrides = {}) {
   return { schemaVersion: 1, agentId: 'assistant', threadId: 'thread-a', runId: 'run-a',
-    status: 'completed', pendingInteraction: null, ...overrides }
+    status: 'completed', pendingInteraction: null, result: null, ...overrides }
 }
 
 /** 只提供公开只读订阅接口，观察器若尝试发送或恢复请求会直接失败。 */
@@ -52,7 +52,10 @@ test('current Python result and error envelopes are validated without coercion',
   assert.equal(decodeRuntimeResult('agent_runtime_error.v1', error).status, 'failed')
   const pending = { schemaVersion: 1, interactionId: 'approval-a', kind: 'confirmation', message: '确认？', payload: {} }
   assert.equal(decodeRuntimeResult('agent_runtime_result.v1', payload({ status: 'awaiting_user', pendingInteraction: pending })).status, 'awaiting_user')
+  const missingResult = payload()
+  delete missingResult.result
   for (const value of [null, [], payload({ schemaVersion: '1' }), payload({ agentId: '' }),
+    missingResult, payload({ result: undefined }),
     payload({ pendingInteraction: undefined }), payload({ status: 'awaiting_user' }),
     payload({ status: 'completed', pendingInteraction: pending }), payload({ extra: true }),
     payload({ status: 'awaiting_user', pendingInteraction: { ...pending, message: 1 } })]) {
@@ -61,6 +64,35 @@ test('current Python result and error envelopes are validated without coercion',
   assert.equal(decodeRuntimeResult('agent_runtime_error.v1', payload()), null)
   assert.equal(decodeRuntimeResult('agent_runtime_result.v1', error), null)
   assert.equal(decodeRuntimeResult('other.v1', payload()), null)
+})
+
+/** 后端已按正式 Schema 校验业务结果；状态观察器接受 JSON 结果但不持有或投影业务正文。 */
+test('Python result values do not invalidate a completed status envelope', () => {
+  for (const result of [null, { orderId: 'order-a', items: [1, 2] }, ['a', 'b'], 'done', 0, false]) {
+    const value = JSON.parse(JSON.stringify(payload({ result })))
+    assert.deepEqual(decodeRuntimeResult('agent_runtime_result.v1', value), {
+      agentId: 'assistant', threadId: 'thread-a', runId: 'run-a', status: 'completed',
+    })
+  }
+})
+
+/** 有可核验运行身份时，真实结果字段不会阻止完成或待交互状态交付。 */
+test('matching Python result envelopes settle completed and awaiting-user runs', () => {
+  const f = fixture()
+  f.set('running')
+  f.emit(payload({ result: { orderId: 'order-a' } }))
+  f.set('idle')
+  assert.equal(f.current().status, 'completed')
+  assert.equal(Object.hasOwn(f.current(), 'result'), false)
+
+  f.set('running', 'run-b')
+  f.emit(payload({ runId: 'run-b', status: 'awaiting_user', result: null,
+    pendingInteraction: { schemaVersion: 1, interactionId: 'approval-a', kind: 'confirmation',
+      message: '确认？', payload: {} } }))
+  f.set('idle', 'run-b')
+  assert.equal(f.current().status, 'awaiting_user')
+  assert.equal(f.current().interactionId, 'approval-a')
+  f.dispose()
 })
 
 /** 业务结果只有在匹配的运行结束后成为已完成证据，空终态仍为未知。 */

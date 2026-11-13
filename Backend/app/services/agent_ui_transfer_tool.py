@@ -2,12 +2,12 @@
 
 import json
 from pathlib import Path
-import shutil
 from typing import Any
 
 from app.services.agent_ui_dependency_plan import REPOSITORY, digest, read_object, safe_path
 from app.services.agent_ui_design_project import command_environment
 from app.services.agent_ui_tool_host import inspect_agent_ui_tool_host
+from app.services.agent_ui_tool_environment import resolve_node_executable
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.preview_runtime_state import redact
 from app.services.agent_ui_design_confirmation import _installed_package_digest
@@ -37,11 +37,9 @@ def run_public_tool(action: str, target: Path, source_root: str, *, workspace: P
         raise ValueError("公开工具资源已变化，请重新审阅转入计划。")
     tool_root = REPOSITORY / "tools/agent-ui"
     metadata = read_object(tool_root / "node_modules/@za38.03/agent-ui-creator/package.json")
-    node = shutil.which("node")
-    if not node:
-        raise ValueError("转入需要已有独立 Node。")
+    node = resolve_node_executable()
     inspection = inspect_agent_ui_tool_host(workspace=workspace, installation_root=tool_root,
-        node_executable=Path(node).resolve(), creator_version=metadata["version"], run_id=run_id)
+        node_executable=node, creator_version=metadata["version"], run_id=run_id)
     script = Path(__file__).with_suffix(".mjs")
     result = workspace_process_registry.run([str(inspection.node_executable), "--input-type=module", "--eval", script.read_text()],
         workspace=workspace, run_id=run_id, cwd=tool_root, env=command_environment(),

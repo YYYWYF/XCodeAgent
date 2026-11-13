@@ -40,8 +40,10 @@ export function decodeRuntimeResult(name: string, value: unknown): RuntimeBusine
       || !text(value.error.message, 4096) || typeof value.error.recoverable !== 'boolean') return null
     return { ...identity, status: 'failed' }
   }
+  // Python 成功和待交互回执始终携带 result（无业务输出时为 null）；这里只观察状态，不保存业务正文。
   if (name !== 'agent_runtime_result.v1'
-    || !keys(value, ['schemaVersion', 'agentId', 'threadId', 'runId', 'status', 'pendingInteraction'])) return null
+    || !keys(value, ['schemaVersion', 'agentId', 'threadId', 'runId', 'status', 'pendingInteraction', 'result'])
+    || value.result === undefined) return null
   if (value.status === 'completed' && value.pendingInteraction === null) return { ...identity, status: 'completed' }
   const pending = value.pendingInteraction
   if (value.status !== 'awaiting_user' || !object(pending)

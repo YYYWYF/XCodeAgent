@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -30,6 +31,7 @@ class AgentUiToolEnvironmentTests(unittest.TestCase):
         self.cache = self.root / "cache"
         self.cli = self.cache / "v1/pnpm/9.15.9/bin/pnpm.cjs"
         self.env = patch.dict(os.environ, {"COREPACK_HOME": str(self.cache),
+            "DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE": "",
             "NODE_OPTIONS": "--require fixture-secret", "CREATOR_MODEL_API_KEY": "fixture-secret"})
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -57,6 +59,23 @@ class AgentUiToolEnvironmentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Node") as caught:
                 resolve_design_tools(self.root, self.manifest)
         self.assertNotIn("DEVAGENTSTUDIO_AGENT_UI_", str(caught.exception))
+
+    def test_explicit_installed_node_does_not_require_default_node(self) -> None:
+        """本机已有兼容版本可显式用于工具进程，默认 PATH 不参与选择。"""
+        self.cached_cli()
+        with patch.dict(os.environ, {"DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE": str(self.node)}), \
+                patch("app.services.agent_ui_tool_environment.shutil.which", return_value=None), \
+                patch("app.services.agent_ui_tool_environment.workspace_process_registry.run",
+                    return_value=subprocess.CompletedProcess([], 0, "9.15.9", "")):
+            self.assertEqual(resolve_design_tools(self.root, self.manifest), (self.node, self.cli))
+
+    def test_invalid_explicit_node_reports_configuration_error(self) -> None:
+        """显式路径失效时准确报错，避免悄悄改用不兼容的默认 Node。"""
+        for value in ("relative/node", str(self.root / "missing-node")):
+            with self.subTest(value=value), patch.dict(os.environ,
+                    {"DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE": value}):
+                with self.assertRaisesRegex(ValueError, "绝对文件路径"):
+                    resolve_design_tools(self.root, self.manifest)
 
     def test_package_manager_must_be_exact(self) -> None:
         """工具链不能按 latest 或范围隐式升级。"""
@@ -130,6 +149,58 @@ class AgentUiToolEnvironmentTests(unittest.TestCase):
         with patch('app.services.agent_ui_tool_environment.shutil.which', return_value=str(self.node)), \
              patch('app.services.agent_ui_tool_environment.workspace_process_registry.run', side_effect=execute):
             self.assertEqual(resolve_design_tools(self.root, self.manifest, 'original-owner'), (self.node, self.cli))
+
+    def test_child_environment_prioritizes_configured_node(self) -> None:
+        """父进程 PATH 指向其他版本时，工具子进程仍优先使用显式 Node 且不继承密钥。"""
+        from app.services.agent_ui_design_project import command_environment
+
+        with patch.dict(os.environ, {"DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE": str(self.node),
+                "PATH": str(self.root / "other-node")}):
+            environment = command_environment()
+        self.assertEqual(environment['PATH'].split(os.pathsep)[0], str(self.node.parent))
+        self.assertNotIn('NODE_OPTIONS', environment)
+        self.assertNotIn('CREATOR_MODEL_API_KEY', environment)
+
+    def test_import_analysis_uses_configured_node(self) -> None:
+        """转入模块分析不能另从父进程 PATH 选择 Node。"""
+        from app.services.agent_ui_transfer_files import scan_imports
+
+        with patch.dict(os.environ, {"DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE": str(self.node)}), \
+                patch('app.services.agent_ui_transfer_files.workspace_process_registry.run',
+                    return_value=subprocess.CompletedProcess([], 0, '{}', '')) as run:
+            scan_imports(self.root, {'src/page.tsx': 'export {}'}, self.root)
+        self.assertEqual(run.call_args.args[0][0], str(self.node))
+
+    def test_public_initialization_uses_configured_node(self) -> None:
+        """初始化和组合验证共用设计阶段的 Node，不受默认 PATH 影响。"""
+        from app.services.agent_ui_transfer_tool import run_public_tool
+
+        inspection = SimpleNamespace(node_executable=self.node, package_json_sha256='fixture')
+        with patch.dict(os.environ, {"DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE": str(self.node)}), \
+                patch('app.services.agent_ui_transfer_tool.tool_identity', return_value={}), \
+                patch('app.services.agent_ui_transfer_tool.read_object', return_value={'version': '0.0.1'}), \
+                patch('app.services.agent_ui_transfer_tool.inspect_agent_ui_tool_host', return_value=inspection) as inspect, \
+                patch('app.services.agent_ui_transfer_tool.workspace_process_registry.run',
+                    return_value=subprocess.CompletedProcess([], 0, '{"status":"passed"}', '')) as run, \
+                patch('app.services.agent_ui_dependency_install._write'):
+            for action in ('initialize', 'verify'):
+                run_public_tool(action, self.root, 'src/agent-ui', workspace=self.root,
+                    run_id='current-run', directory=self.root, expected_identity={})
+                self.assertEqual(inspect.call_args.kwargs['node_executable'], self.node)
+                self.assertEqual(run.call_args.args[0][0], str(self.node))
+
+    def test_npm_dependency_branch_uses_configured_node(self) -> None:
+        """npm 依赖分支与 pnpm 分支使用同一个 Node 选择规则。"""
+        from app.services.agent_ui_dependency_install import _tools
+
+        cli = self.root / 'npm-cli.js'
+        cli.touch()
+        plan = {'workspace': str(self.root), 'manager': 'npm', 'managerVersion': '11.12.1'}
+        with patch.dict(os.environ, {"DEVAGENTSTUDIO_AGENT_UI_NODE_EXECUTABLE": str(self.node)}), \
+                patch('app.services.agent_ui_dependency_install.shutil.which', return_value=str(cli)), \
+                patch('app.services.agent_ui_dependency_install.workspace_process_registry.run',
+                    return_value=subprocess.CompletedProcess([], 0, '11.12.1', '')):
+            self.assertEqual(_tools(self.root, plan, 'current-run'), [str(self.node), str(cli)])
 
 
 class CreatorProcessEnvironmentTests(unittest.TestCase):

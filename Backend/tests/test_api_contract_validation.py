@@ -2,13 +2,40 @@ from __future__ import annotations
 
 import unittest
 
+from app.graph.nodes.tasks import _scoped_contract_errors
 from app.services.api_contract_validation import (
     validate_api_contract_consistency,
     validate_api_contract_definitions,
 )
+from app.services.runtime_endpoint_contracts import materialize_runtime_endpoints
+from tests.test_runtime_endpoint_contracts import business, plan
 
 
 class ApiContractValidationTests(unittest.TestCase):
+    def test_scoped_runtime_endpoint_validates_against_complete_plan(self) -> None:
+        """单接口规划能解析正式 Agent 的页面和 Tool，派生路由被改写时仍阻止开发。"""
+
+        project_plan = plan()
+        project_plan["artifact_type"] = "technical-plan"
+        project_plan["entities"] = [{"id": "Order"}]
+        project_plan["api_contracts"].append(business())
+        project_plan["agent_contracts"][0]["agentSettings"]["tools"] = {
+            "enabled": True,
+            "bindings": [{"toolId": "read_orders", "apiContractId": "order_api", "endpointId": "order.list"}],
+        }
+        project_plan = materialize_runtime_endpoints(project_plan)
+        contract_id = "agent.order_assistant"
+        endpoint_id = "agent.order_assistant.run"
+        scope = {"type": "endpoint", "targetId": endpoint_id, "apiContractId": contract_id}
+        build_context = {"target": {"type": "endpoint", "id": endpoint_id}, "endpoint_ids": [endpoint_id]}
+
+        self.assertEqual(_scoped_contract_errors(project_plan, scope, build_context), [])
+
+        runtime_contract = next(contract for contract in project_plan["api_contracts"] if contract["id"] == contract_id)
+        runtime_contract["endpoints"][0]["path"] = "/forged"
+        errors = _scoped_contract_errors(project_plan, scope, build_context)
+        self.assertEqual(errors, [f"运行 Endpoint {contract_id} 的派生身份、绑定或能力已被修改/占用。"])
+
     def test_bodyless_post_command_is_allowed_when_semantics_use_path_and_auth(self) -> None:
         """命令型 POST 由路径参数和登录态表达完整语义时允许没有请求体。"""
 
@@ -97,7 +124,7 @@ class ApiContractValidationTests(unittest.TestCase):
 
         self.assertEqual(
             validate_api_contract_consistency(project_plan),
-            ["Page orders references unknown endpoint orders.list."],
+            ["Page orders: Endpoint 缺失或有歧义：/orders.list，请声明 apiContractId。"],
         )
 
     def test_contract_definition_validation_excludes_page_reference_errors(self) -> None:
@@ -118,8 +145,7 @@ class ApiContractValidationTests(unittest.TestCase):
         self.assertEqual(
             validate_api_contract_consistency(project_plan),
             [
-                "Page name_entry references unknown endpoint "
-                "person_name_api.create."
+                "Page name_entry: Endpoint 缺失或有歧义：/person_name_api.create，请声明 apiContractId。"
             ],
         )
 

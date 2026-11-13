@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import posixpath
-import shutil
 from typing import Any
 from uuid import uuid4
 
 from app.services.agent_ui_dependency_plan import safe_path
 from app.services.agent_ui_design_project import command_environment
+from app.services.agent_ui_tool_environment import resolve_node_executable
 from app.services.agent_ui_connection_requirements import connection_requirements, connection_blocking_reason
 from app.services.agent_ui_plain_text_preview import plain_text_preview_allowed
 from app.services.runtime_agent_contracts import agent_contract_index, agent_invocation
@@ -107,11 +107,9 @@ def plan_host_integration(state: dict[str, Any], *, target: Path, source: Path,
             raise ValueError('设计页面不属于唯一 Agent 的正式入口。')
         requirements = connection_requirements(config, contract)
         plain_text = plain_text_preview_allowed(config, contract)
-        node = shutil.which('node')
-        if not node:
-            raise ValueError('Host 注册表只读分析需要已有独立 Node。')
+        node = resolve_node_executable()
         completed = workspace_process_registry.run(
-            [node, str(Path(__file__).with_name('agent_ui_host_registry.mjs'))],
+            [str(node), str(Path(__file__).with_name('agent_ui_host_registry.mjs'))],
             workspace=workspace, run_id='agent-ui-host-inspection:' + uuid4().hex,
             cwd=source, env=command_environment(), capture_output=True, text=True, timeout=30, check=False,
             input=json.dumps({'projectRoot': str(source), 'code': registry.read_text(encoding='utf-8'),

@@ -697,7 +697,7 @@ def _scoped_contract_errors(
     scoped_plan = _scoped_contract_validation_plan(project_plan, build_context)
     return [
         *validate_project_plan_dependencies(scoped_plan),
-        *validate_api_contract_consistency(scoped_plan),
+        *validate_api_contract_consistency(scoped_plan, runtime_endpoint_plan=project_plan),
     ]
 
 

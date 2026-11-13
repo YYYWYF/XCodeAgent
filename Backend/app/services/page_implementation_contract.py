@@ -254,7 +254,8 @@ def _compile_product_action_binding(
         }
     if behavior_type == "interface":
         local_effect = ui_effect
-        if ui_design_skipped and not local_effect:
+        # 共享 Host 拥有的界面动作使用已确认产品效果；普通业务控件仍读取 UI 实现。
+        if (ui_design_skipped or agent_id) and not local_effect:
             local_effect = str(behavior.get("expectedResult") or "").strip()
         return {
             "actionId": action_id,

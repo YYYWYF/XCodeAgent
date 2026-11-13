@@ -5,6 +5,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from app.services.runtime_agent_memory import MemorySettings, memory_settings, merge_memory_settings
+
 
 class ConfigValue(BaseModel):
     """拒绝未实现参数，避免界面保存成功但 Runtime 不消费。"""
@@ -47,17 +49,18 @@ class ModelPatch(ConfigValue):
 
 
 class SettingsPatch(ConfigValue):
-    """只允许修改实际变化的 Prompt 或模型生成参数。"""
+    """接收实际变化的提示词、模型参数和记忆能力选择。"""
 
     prompt: PromptSettings | None = None
     model: ModelPatch | None = None
+    memory: MemorySettings | None = None
 
     @model_validator(mode="after")
     def require_change(self):
         """禁止没有任何可编辑配置的空提交。"""
 
-        if self.prompt is None and self.model is None:
-            raise ValueError("请至少修改提示词配置或 Temperature。")
+        if self.prompt is None and self.model is None and self.memory is None:
+            raise ValueError("请至少修改提示词、Temperature 或记忆配置。")
         return self
 
 
@@ -79,8 +82,11 @@ def editable_settings(contract: dict) -> dict:
 
     settings = contract["agentSettings"]
     model = ProjectModelSettings.model_validate(settings["model"])
-    return {"prompt": deepcopy(settings["prompt"]),
-            "temperature": model.generation.temperature if model.generation else None}
+    result = {"prompt": deepcopy(settings["prompt"]),
+              "temperature": model.generation.temperature if model.generation else None}
+    if "shortTerm" in settings["memory"] or "longTerm" in settings["memory"]:
+        result["memory"] = memory_settings(settings["memory"])
+    return result
 
 
 def apply_settings_patch(plan: dict, agent_id: str, patch: SettingsPatch) -> dict:
@@ -96,11 +102,13 @@ def apply_settings_patch(plan: dict, agent_id: str, patch: SettingsPatch) -> dic
             settings["model"].pop("generation", None)
         else:
             settings["model"]["generation"] = patch.model.generation.model_dump()
+    if patch.memory is not None:
+        settings["memory"] = merge_memory_settings(settings["memory"], patch.memory)
     return candidate
 
 
 def settings_diffs(before: dict, after: dict) -> list[dict]:
-    """按五个可编辑字段生成差异，不要求用户阅读整份技术规划。"""
+    """生成人设、模型参数和记忆选择的可读差异。"""
 
     old, new = before["prompt"], after["prompt"]
     fields = [("role", "角色", (old.get("persona") or {}).get("role"), (new.get("persona") or {}).get("role")),
@@ -108,5 +116,12 @@ def settings_diffs(before: dict, after: dict) -> list[dict]:
               ("systemPrompt", "System Prompt", old["systemPrompt"], new["systemPrompt"]),
               ("constraints", "业务约束", old.get("constraints", []), new.get("constraints", [])),
               ("temperature", "Temperature", before["temperature"], after["temperature"])]
+    left_memory = memory_settings(before.get("memory", {}))
+    right_memory = memory_settings(after.get("memory", {}))
+    fields.extend([
+        ("shortTermEnabled", "短期记忆", left_memory["shortTerm"]["enabled"], right_memory["shortTerm"]["enabled"]),
+        ("memoryStorage", "短期记忆存储", left_memory["shortTerm"]["storage"], right_memory["shortTerm"]["storage"]),
+        ("longTermEnabled", "长期记忆", left_memory["longTerm"]["enabled"], right_memory["longTerm"]["enabled"]),
+    ])
     return [{"field": key, "label": label, "before": left, "after": right}
             for key, label, left, right in fields if left != right]
