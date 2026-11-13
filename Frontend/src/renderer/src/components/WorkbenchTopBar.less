@@ -9,24 +9,10 @@
   background: var(--wb-canvas);
 }
 
-/* —— Logo（独立块，可点返回首页）—— */
+/* —— 品牌标识 —— */
 .@{class-prefix}-workbench-topbar-logo {
-  display: flex;
-  align-items: center;
-  gap: 7px;
   padding: 4px 6px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
   color: var(--wb-text);
-  flex: 0 0 auto;
-  /* button 默认字体与周围不同，会改变 Logo 文案外观，这里继承页面字体。 */
-  font: inherit;
-
-  &:hover {
-    background: var(--wb-surface-hover);
-  }
 }
 
 .@{class-prefix}-workbench-topbar-divider {
@@ -63,7 +49,6 @@
   white-space: nowrap;
 }
 
-.@{class-prefix}-workbench-topbar-logo,
 .@{class-prefix}-workbench-topbar-app {
   &:focus-visible {
     outline: 2px solid var(--wb-accent);

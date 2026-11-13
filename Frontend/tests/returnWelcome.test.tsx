@@ -13,7 +13,7 @@ type State = ReturnType<typeof useReturnWelcome>
 type Dialog = Parameters<typeof Modal.confirm>[0]
 type Request = { respond: (overrides?: Record<string, unknown>) => void }
 
-test('明暗主题的顶部两个返回入口共同禁用，应用按钮显示加载图标', () => {
+test('明暗主题的顶部 Logo 只展示品牌，应用卡保留返回按钮和加载状态', () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
@@ -37,12 +37,13 @@ test('明暗主题的顶部两个返回入口共同禁用，应用按钮显示�
             {topbar}
           </WorkbenchPhaseProvider>
         )
+        assert.match(html, /<div class="[^"]*workbench-topbar-logo[^"]*">/)
         const buttons = html.match(/<button[^>]*aria-busy="(?:true|false)"[^>]*>/g) || []
-        assert.equal(buttons.length, 2)
-        for (const button of buttons) {
-          assert.equal(button.includes('disabled=""'), returningWelcome)
-          assert.equal(button.includes('aria-busy="true"'), returningWelcome)
-        }
+        assert.equal(buttons.length, 1)
+        const [button] = buttons
+        assert.match(button, /aria-label="测试应用，返回欢迎页"/)
+        assert.equal(button.includes('disabled=""'), returningWelcome)
+        assert.equal(button.includes('aria-busy="true"'), returningWelcome)
         assert.equal(html.includes('anticon-loading'), returningWelcome)
       }
     }

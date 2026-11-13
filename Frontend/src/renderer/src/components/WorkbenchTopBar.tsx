@@ -28,7 +28,7 @@ type Props = {
   application: Pick<ApplicationConfig, 'id' | 'name' | 'branches' | 'branchName'>
   workspaceRoot: string
   onReturnWelcome: () => void
-  /** 轻量检查及确认期间禁用两个返回入口。 */
+  /** 轻量检查及确认期间禁用应用卡的返回按钮。 */
   returningWelcome?: boolean
   lifecycle?: ApplicationLifecycle
   developmentTotals?: { completed: number; total: number }
@@ -110,22 +110,10 @@ export default function WorkbenchTopBar({
 
   return (
     <div className={cx('workbench-topbar')}>
-      {/* Logo 同时是返回首页的入口：图标与 "DevAgent Studio" 文案整块可点，
-          与右侧应用卡保持一致的返回语义，避免左上角只有应用卡能回首页。 */}
-      <button
-        className={cx('workbench-topbar-logo')}
-        onClick={onReturnWelcome}
-        disabled={returningWelcome}
-        aria-busy={returningWelcome}
-        title="返回首页"
-        aria-label="返回首页"
-        type="button"
-      >
-        <span className={cx('app-version-brand')}>
-          <BrandLogo size={22} />
-          <AppVersionBadge />
-        </span>
-      </button>
+      <div className={cx('workbench-topbar-logo', 'app-version-brand')}>
+        <BrandLogo size={22} />
+        <AppVersionBadge />
+      </div>
 
       <span className={cx('workbench-topbar-divider')} aria-hidden="true" />
 
