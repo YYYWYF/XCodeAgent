@@ -50,12 +50,20 @@ export default function PublishBranchModal({
   const repoUrlMissing = !repoUrl
   // 前缀与描述必填其一：前缀通常带看板编号是必填项，描述可以稍短，但完全空就不让提。
   // 通常提交规范要求看板编号 + 描述齐全，这里用「前缀非空 AND 描述非空」做强校验。
+  //
+  // `descriptionGenerating` 也要禁用提交：AI 正在生成说明时用户可以手动改 description
+  // （输入框未禁用），若此时提交，正在流式返回的 token 会继续写到已关闭弹窗的 state，
+  // 造成的"提交说明"与用户最后看到的字段不一致。让用户等到生成结束再确认更可控。
   const canSubmit =
     !generating &&
+    !descriptionGenerating &&
     !repoUrlMissing &&
     !!prefix.trim() &&
     !!description.trim() &&
     (!isBuiltinDatabase || databaseDeliveryReady)
+  // 弹窗关闭闸门：「提交推送」和「AI 生成变更说明」任一在进行都不允许关闭。
+  // 否则生成中的流式 token 会写到已卸载组件的 state，且用户看不见自己刚才在写什么。
+  const blockClose = !!generating || descriptionGenerating
   return (
     <Modal
       centered
@@ -64,11 +72,12 @@ export default function PublishBranchModal({
         'is-generate',
         isBuiltinDatabase && 'has-database-delivery'
       )}
-      closable={!generating}
+      closable={!blockClose}
       footer={null}
-      maskClosable={!generating}
+      keyboard={!blockClose}
+      maskClosable={!blockClose}
       onCancel={() => {
-        if (!generating) onCancel()
+        if (!blockClose) onCancel()
       }}
       open
       width={isBuiltinDatabase ? 680 : 460}
@@ -208,7 +217,7 @@ export default function PublishBranchModal({
           <button
             className={cx('workbench-publish-modal-cancel')}
             type="button"
-            disabled={!!generating}
+            disabled={blockClose}
             onClick={onCancel}
           >
             取消
