@@ -392,6 +392,23 @@ test('结束后工作区未变化仅提供继续，变化后仅提供重新发�
   }
 })
 
+test('生命周期清理结束凭据后显示重新发起，未读取生命周期时仍等待校准', () => {
+  const control: WorkflowRunPayload = {
+    runId: 'end-control', threadId: 'development-thread', events: [],
+    summary: { status: 'completed', phase: 'plan_control',
+      planControl: { action: 'end', status: 'ended', targetRunId: 'ended-source' } }
+  }
+  const messages = [message(control)]
+  assert.equal(developmentNextStep(messages)?.workspaceUnchanged, undefined)
+  const step = developmentNextStep(messages, { ...lifecycle, endedExecutions: {} })
+  assert.equal(step?.workspaceUnchanged, false)
+  const html = renderToStaticMarkup(<NextDevelopmentGuide
+    step={step!} tasks={tasks} disabled={false} loading={false}
+    onStart={async () => undefined} onContinue={async () => undefined} />)
+  assert.match(html, /重新发起任务/)
+  assert.doesNotMatch(html, /正在检查工作区状态|>继续任务</)
+})
+
 
 test('结束资格同 revision 更新，迟到或旧 revision 的检查不能回退当前结果', () => {
   const current = { ...lifecycle, endedExecutionsCheckedAt: '2026-10-15T01:00:00Z' }

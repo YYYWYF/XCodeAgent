@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.domain.application_lifecycle import EndedWorkbenchExecution
 from app.services.ended_workspace import (
+    discard_changed_ended_executions,
     workspace_fingerprint,
     ended_workspace_unchanged,
 )
@@ -252,9 +253,25 @@ def create_application_lifecycle(
 
 
 def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | None:
-    """读取生命周期快照，允许可选字段缺失并保留额外字段；损坏内容显式失败。"""
+    """读取当前快照，并在业务内容变化时原子删除已失效的结束任务继续凭据。"""
 
     path = application_lifecycle_path(workspace)
+    with _application_lifecycle_lock(path):
+        current = _read_application_lifecycle(path)
+        if current is None:
+            return None
+        updated = discard_changed_ended_executions(workspace, current)
+        if updated is current:
+            return current
+        updated = updated.model_copy(update={
+            "revision": current.revision + 1, "updated_at": utc_now(),
+        })
+        return write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+
+
+def _read_application_lifecycle(path: Path) -> ApplicationLifecycle | None:
+    """只读取并校验磁盘快照，供持锁清理及写入 CAS 使用，避免递归触发清理。"""
+
     if not path.exists():
         return None
     try:
@@ -300,12 +317,14 @@ def write_application_lifecycle(
             )
         path.parent.mkdir(parents=True, exist_ok=True)
         if expected_revision is not None:
-            current = load_application_lifecycle(workspace)
+            current = _read_application_lifecycle(path)
             current_revision = current.revision if current else 0
             if current_revision != expected_revision:
                 raise ApplicationLifecycleConflictError(
                     f"生命周期 revision 冲突：期望 {expected_revision}，实际 {current_revision}。"
                 )
+        # 普通业务写入也清理失效凭据，不能把旧快照中的恢复信息重新写回文件。
+        state = discard_changed_ended_executions(workspace, state)
         payload = state.model_dump_json(by_alias=True, indent=2) + "\n"
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -520,6 +539,10 @@ def start_workbench_execution(
         ):
             raise ApplicationPlanningInProgressError(current)
         archived = current.ended_executions.get(replaces_run_id or "")
+        if replaces_run_id and archived is None and replaces_run_id not in current.active_executions:
+            raise ApplicationLifecycleConflictError(
+                "要继续的工作台执行已不存在或工作区已变化，请重新发起任务。"
+            )
         if archived is not None:
             original = archived.execution
             if (

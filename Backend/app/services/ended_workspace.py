@@ -3,6 +3,10 @@
 import hashlib
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.domain.application_lifecycle import ApplicationLifecycle
 
 # 这些目录只承载依赖、构建或运行证据；正式产物和 application.json 必须参与。
 _IGNORED = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "target",
@@ -53,3 +57,28 @@ def ended_workspace_unchanged(workspace: str, fingerprint: str) -> bool:
         return workspace_fingerprint(workspace) == fingerprint
     except OSError:
         return False
+
+
+def discard_changed_ended_executions(
+    workspace: str | Path, state: "ApplicationLifecycle"
+) -> "ApplicationLifecycle":
+    """业务内容变化后丢弃旧继续凭据，读取失败时保留记录而不推断发生变化。"""
+    if not state.ended_executions and state.ended_planning_execution is None:
+        return state
+    try:
+        fingerprint = workspace_fingerprint(workspace)
+    except OSError:
+        # 无法读取不等于内容已变，继续入口仍由原有资格校验拒绝未知状态。
+        return state
+    executions = {
+        run_id: item for run_id, item in state.ended_executions.items()
+        if item.fingerprint == fingerprint
+    }
+    planning = state.ended_planning_execution
+    if planning is not None and planning.fingerprint != fingerprint:
+        planning = None
+    if len(executions) == len(state.ended_executions) and planning is state.ended_planning_execution:
+        return state
+    return state.model_copy(update={
+        "ended_executions": executions, "ended_planning_execution": planning,
+    })

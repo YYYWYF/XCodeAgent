@@ -219,8 +219,8 @@ class EndedTaskResumeTests(unittest.TestCase):
             self.assertNotIn("old", resumed.ended_executions)
             self.assertEqual(resumed.resource_locks.pages["page1"].run_id, "new")
 
-    def test_changed_code_or_configuration_rejects_resume_and_preserves_archive(self):
-        """源码、配置、增加和删除文件都不能以旧状态继续。"""
+    def test_changed_code_or_configuration_rejects_resume_and_removes_archive(self):
+        """源码或配置变化后删除继续凭据，不能以旧状态继续。"""
         for name in ("app.ts", ".devagentstudio/application.json", "new.ts"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 ended = self._end(directory)
@@ -228,10 +228,10 @@ class EndedTaskResumeTests(unittest.TestCase):
                 self.assertFalse(application_lifecycle_payload(ended)["endedExecutions"]["old"]["workspaceUnchanged"])
                 with self.assertRaisesRegex(ApplicationLifecycleConflictError, "工作区已变化"):
                     self._resume(directory)
-                self.assertIn("old", load_application_lifecycle(directory).ended_executions)
+                self.assertNotIn("old", load_application_lifecycle(directory).ended_executions)
 
     def test_change_after_eligible_projection_rejects_resume_at_admission(self):
-        """GET 曾允许继续也不能授权后续变更：入场必须重新检查磁盘并保留归档。"""
+        """GET 曾允许继续也不能授权后续变更：入场复验并删除失效凭据。"""
         with tempfile.TemporaryDirectory() as directory:
             ended = self._end(directory)
             eligible = application_lifecycle_payload(ended)
@@ -243,7 +243,7 @@ class EndedTaskResumeTests(unittest.TestCase):
             current = load_application_lifecycle(directory)
             self.assertFalse(current.active_executions)
             self.assertFalse(current.resource_locks.pages)
-            self.assertIn("old", current.ended_executions)
+            self.assertNotIn("old", current.ended_executions)
 
     def test_other_session_and_resource_owner_reject_resume(self):
         """代码未变也不能串会话或抢占另一任务的资源。"""

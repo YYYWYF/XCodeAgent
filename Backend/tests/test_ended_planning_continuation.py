@@ -154,14 +154,14 @@ class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(calls), 1)
             self.assertIsNone(load_application_lifecycle(workspace).active_formal_revision)
 
-    async def test_changed_initial_creation_restarts_explicitly_and_waits_for_confirmation(self):
-        """首次创建文件变化后沿 AG-UI 显式重生成，不能跳到开发或复用旧继续授权。"""
+    async def test_changed_initial_creation_discards_restart_credential(self):
+        """首次创建也在文件变化后删除结束凭据，旧恢复请求不能重新启动生成。"""
         with tempfile.TemporaryDirectory() as workspace:
             graph, _, ended, calls, downstream = await self.fixture(workspace, initial_creation=True, skills=[])
             Path(workspace, "business.txt").write_text("updated input")
-            projected = application_lifecycle_payload(ended)["endedPlanningExecution"]
-            self.assertFalse(projected["workspaceUnchanged"])
-            self.assertTrue(projected["canRestart"])
+            current = load_application_lifecycle(workspace)
+            self.assertIsNone(current.ended_planning_execution)
+            self.assertIsNone(application_lifecycle_payload(current)["endedPlanningExecution"])
             source = await get_execution(workspace, "design-run")
             with self.assertRaises(Exception):
                 await prepare_business_node_retry(source, graph)
@@ -172,12 +172,9 @@ class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
                         "action": "restart_initial_planning", "sourceRunId": source.run_id,
                     }},
                 })]
-            self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames), "\n".join(frames))
-            self.assertEqual(len(calls), 2)
-            self.assertEqual(calls[-1]["request"], "增加年度报表 ORIGINAL")
+            self.assertTrue(any('"RUN_ERROR"' in frame for frame in frames), "\n".join(frames))
+            self.assertEqual(len(calls), 1)
             self.assertFalse(downstream)
-            snapshot = await graph.aget_state({"configurable": {"thread_id": "thread"}})
-            self.assertTrue(any(task.interrupts for task in snapshot.tasks))
             current = load_application_lifecycle(workspace)
             self.assertNotEqual(current.initialization.stage, "ready_for_workbench")
             self.assertIsNone(current.ended_planning_execution)
@@ -223,11 +220,11 @@ class EndedPlanningContinuationTests(unittest.IsolatedAsyncioTestCase):
             _, _, ended, _, _ = await self.fixture(workspace)
             self.assertTrue(ended_planning_available(workspace, ended))
             Path(workspace, "late-change.txt").write_text("changed after check")
-            with self.assertRaisesRegex(Exception, "工作区或当前任务已变化"):
+            with self.assertRaisesRegex(Exception, "revision 已变化"):
                 claim_application_planning_run_for_recovery(workspace, new_run_id="child", thread_id="thread",
                     source_run_id="design-run", expected_lifecycle_revision=ended.revision)
             current = load_application_lifecycle(workspace)
-            self.assertIsNotNone(current.ended_planning_execution)
+            self.assertIsNone(current.ended_planning_execution)
             write_application_lifecycle(workspace, current.model_copy(update={"active_run_id": "new-run"}))
             self.assertFalse(ended_planning_available(workspace, load_application_lifecycle(workspace)))
 

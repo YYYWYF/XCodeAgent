@@ -7,13 +7,15 @@
 
 ## 权威边界
 
+结束任务的 `endedExecutions` 与 `endedPlanningExecution` 只在工作区业务内容未变化时保留。生命周期读写发现代码、应用配置、正式文档、草稿或任务计划等参与指纹的内容变化后，在原生命周期锁内原子删除旧继续凭据；读取触发清理时递增 revision，后续即使把文件改回也不会恢复这些凭据。日志、心跳、checkpoint 等运行证据及 lifecycle 自身写入不触发失效；扫描失败保留记录，不把未知状态当成已变化。此规则同样适用于首次规划的继续和重新生成，不删除业务产物、会话或 checkpoint，不启动后台监听。
+
 执行恢复是可选能力，不是打开工作区或使用资产的前置条件。只按当前线程实际存在的 checkpoint 恢复；没有文件、没有线程现场时返回空恢复，不从 lifecycle 的 Run、运行状态或恢复索引补造执行。Lifecycle 的 `activeRunId` 不再与 checkpoint 的 Run 作恢复准入比对，交接期间由实际运行登记防止旧确认重开。应用、阶段/迭代及明确结束的业务边界仍须核对。
 
 显式 Workspace Attach 只释放无 checkpoint 且已退出的执行占用，保留资产正文和确认状态；正式 RequirementSpec、ProductPlan、TechnicalPlan 已确认时，可将无现场的阶段展示校准为工作台就绪，后续节点继续校验各自当前资产及原有确认门。无可恢复执行的 Pending Build DAG 不占用新任务入口，文件仍保留。真实 Graph、Worker、子进程、已接受提交及 UI 生成不能被当作旧占用释放。恢复存储读取故障保留原占用并报告诊断，不阻断基础 Attach，也不冒充没有 checkpoint。
 
 没有 checkpoint 但当前文件明确待确认时，scoped Get 只返回 `extensions.documentReview` 提示。前端随后通过既有 Lifecycle AG-UI `prepare_document_review` 动作，按现有文档重建本机审阅 Run 和原确认门；该动作不调用模型、不重新生成、不自动确认。支持需求与产品联合文档、UI、TechnicalPlan、工作台 TechnicalPlan 修订草稿和 Pending Build DAG。当前草稿优先于旧正式版本；Attach 发现待确认草稿时不能将应用误标为已完成。没有待确认文档时保持空恢复，不要求补造生命周期字段或原电脑 checkpoint。
 
-`checkpointAvailable` 表示当前线程实际存在 root 现场，不能以 Workflow 投影是否为空代替。已有普通现场时不提供文档重建；只有现场确实缺失，或带私有 `document_review` 绑定的既有重建稿已过期时，才发现文档重建候选。会话冷读取通过 scoped Workspace Attach 同时传入 `sessionId/sessionThreadId`，`session_checkpoint_reconciliation.py` 校验当前 root 的工作区、应用及 owner 后，只补原 Run 的执行索引和缺失归属；不运行 Graph、不改 checkpoint、不分配新 Run。其他会话、明确结束、更新的提交和真实在途工作均不能被旧现场接管。无作用域 Attach 不扫描历史会话，Get 仍只读。
+`checkpointAvailable` 表示当前线程实际存在 root 现场，不能以 Workflow 投影是否为空代替。已有普通现场时不提供文档重建；只有现场确实缺失，或带私有 `document_review` 绑定的既有重建稿已过期时，才发现文档重建候选。会话冷读取通过 scoped Workspace Attach 同时传入 `sessionId/sessionThreadId`，`session_checkpoint_reconciliation.py` 校验当前 root 的工作区、应用及 owner 后，只补原 Run 的执行索引和缺失归属；不运行 Graph、不改 checkpoint、不分配新 Run。其他会话、明确结束、更新的提交和真实在途工作均不能被旧现场接管。无作用域 Attach 不扫描历史会话，Get 不重建执行，仅允许清理已失效的结束任务继续凭据。
 
 `protocols/workflow/resume_source.py` 对相同原 Run、相同确认内容使用当前 lifecycle 交互凭据，避免 Attach 重新签发归属后仍从 checkpoint 的旧镜像取不到或取错令牌；内容不同的旧确认继续沿原过期校验拒绝。已退出任务的 `running` 索引可按真实现场收口，不重新登记已经完成或明确停止的执行。
 
@@ -71,7 +73,7 @@ UI 设计确认或明确跳过只会进入 `awaiting_planning_stage_entry`，不
 
 主 Workflow、创建规划与自由对话的异常或终止性业务失败，先按精确 Run 封锁后续 Agent/工具调用并终止受控命令及启动验收进程，再等待真实后台线程（含写盘和回滚）退出。清理不因 AG-UI 连接取消而中止；在途线程尚未退出时继续保留运行占用。退出后停止心跳、注销活动任务、释放工作区运行租约与规划线程锁。Workbench 的 `FAILED` execution、原始诊断、完整 `resourceKeys` 和 LangGraph checkpoint 保留用于显式重试，仅清除该 Run 当前拥有的 `resourceLocks`，不影响其他运行。Native Recovery 重试从失败记录的完整资源键重新申请恢复集合；若被后来的任务占用则拒绝覆盖，仍保留原失败与 checkpoint。重新生成的正式产物继续经过原确认门，不自动重试或确认。
 
-用户点击停止统一表示结束本轮任务。规划阶段通过 `end_planning_execution` 等待真实退出后标记执行 cancelled/ended，释放修订和占用并保留文件；二次修改结束恢复开发准入，同时在 `endedPlanningExecution` 保存原 Run、initialization、正式修订和已有工作区指纹，供显式继续使用。公开投影只返回 Run/Thread、阶段与 `workspaceUnchanged`，不暴露内部修订凭据。原会话复用“已停止生成 / 继续生成”卡，历史输入与旧确认仍只读。点击继续先只读校准，再走现有 `/execution-recovery/execute` 的 Backend ActionPlan 与原业务节点重执行；在原 lifecycle CAS 中复验无新任务和工作区未变后恢复修订并消费凭据，准备失败则退回结束态。新的产物仍需原确认门，不自动生成、确认或增加恢复策略。首次创建未完成则保留原业务阶段及 cancelled 状态，不绕过确认门。开发阶段沿现有结束计划动作处理。后台尚未退出时保留占用，只提供重试结束；网络中断与真实失败仍使用独立的故障恢复规则。
+用户点击停止统一表示结束本轮任务。规划阶段通过 `end_planning_execution` 等待真实退出后标记执行 cancelled/ended，释放修订和占用并保留文件；二次修改结束恢复开发准入，同时在 `endedPlanningExecution` 保存原 Run、initialization、正式修订和已有工作区指纹，供显式继续使用。公开投影只返回 Run/Thread、阶段与 `workspaceUnchanged`，不暴露内部修订凭据。原会话复用“已停止生成 / 继续生成”卡，历史输入与旧确认仍只读。点击继续先校准并清理失效凭据，再走现有 `/execution-recovery/execute` 的 Backend ActionPlan 与原业务节点重执行；在原 lifecycle CAS 中复验无新任务和工作区未变后恢复修订并消费凭据，准备失败则退回结束态。新的产物仍需原确认门，不自动生成、确认或增加恢复策略。首次创建未完成则保留原业务阶段及 cancelled 状态，不绕过确认门。开发阶段沿现有结束计划动作处理。后台尚未退出时保留占用，只提供重试结束；网络中断与真实失败仍使用独立的故障恢复规则。
 
 普通启动不执行业务资源集合互斥，不放宽文件、命令、敏感操作或 Agent 工具权限。失败重试的资源重获单独检查后来 owner，防止旧恢复覆盖新任务；它不改变普通启动规则。`resourceLocks` 只保存稳定资源键和紧凑 owner 元数据，恢复全面业务互斥前应重新引入显式策略开关和冲突 UX。
 

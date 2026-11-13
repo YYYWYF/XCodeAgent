@@ -112,9 +112,8 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
         """等待确认时结束任务，新要求可以生成但仍须再次确认。"""
         await self._verify_new_modification()
 
-    async def test_changed_initial_review_restarts_generator_instead_of_reopening_old_gate(self):
-        """停止在审阅门的首次创建显式重生成，必须调用生成器并签发新的确认事务。"""
-        (self.h.workspace / "changed-input.txt").write_text("工作区已变化")
+    async def test_unchanged_initial_review_restarts_generator_instead_of_reopening_old_gate(self):
+        """工作区未变时首次创建可显式重生成，必须调用生成器并签发新的确认事务。"""
         before = await self.h.graph.aget_state(self.config)
         source = load_application_lifecycle(self.h.workspace).ended_planning_execution.run_id
         with patch("app.protocols.execution_recovery.recovery_graph_for_execution", AsyncMock(return_value=self.h.graph)), patch(

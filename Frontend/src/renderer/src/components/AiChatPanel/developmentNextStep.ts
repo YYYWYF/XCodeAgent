@@ -136,7 +136,10 @@ export function developmentNextStep(
         key: workflow.runId,
         reason: 'ended',
         endedRunId: targetRunId,
-        workspaceUnchanged: targetRunId ? lifecycle?.endedExecutions?.[targetRunId]?.workspaceUnchanged : undefined,
+        // 当前生命周期已读到但归档消失表示继续凭据已被清理，不能一直显示检查中。
+        workspaceUnchanged: targetRunId && lifecycle
+          ? lifecycle.endedExecutions?.[targetRunId]?.workspaceUnchanged ?? false
+          : undefined,
         target: source?.workflow ? workflowDevelopmentTarget(source.workflow) : undefined
       }
     }
