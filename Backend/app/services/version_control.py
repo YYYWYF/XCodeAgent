@@ -720,6 +720,10 @@ _RUNTIME_ARTIFACT_PREFIXES = (
     ".devagentstudio/checkpoints/",
     # LangGraph checkpoint SQLite 数据库，可能膨胀到几十 MB；不参与"未提交变更"计数。
     ".devagentstudio/recovery/",
+    # 构建调度的内容寻址材料库（artifacts/sha256/<hash>.json），单次构建会写几十到
+    # 上百个小文件，累积后总量爆炸；被 checkpoint 通过 $artifact 占位符引用，磁盘
+    # 上不能删，但也不该进 git，更不该让用户在"未提交改动"角标里看到几百个文件。
+    ".devagentstudio/artifacts/",
 )
 
 

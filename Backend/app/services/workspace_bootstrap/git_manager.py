@@ -20,7 +20,12 @@ class BootstrapGitError(WorkspaceBootstrapError):
 # .devagentstudio 下的运行时产物目录，不应进入版本控制。
 # recovery/ 存放 LangGraph checkpoint 的 SQLite 数据库（execution-recovery.sqlite），
 # 在工作流密集推进时会迅速膨胀到几十 MB；推进过程是短期状态，不属于"应被追溯的产物"。
-_RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints", "recovery")
+# artifacts/ 是构建调度的内容寻址材料库（artifacts/sha256/<hash>.json），每个文件
+# 记录一份任务定义/验收检查/依赖图等中间状态。一次构建会产生几十到上百个文件，
+# 累积数轮迭代后总量爆炸，曾触发码云推送限制；这些文件被 checkpoint 通过
+# $artifact 占位符引用，磁盘上不能删，但也**不该进 git** —— 它们是工作区
+# 本地的执行缓存，不是用户应追溯的产物。
+_RUNTIME_ARTIFACT_DIRS = ("runtime", "cache", "checkpoints", "recovery", "artifacts")
 
 # .devagentstudio 下的"平台运行时文件"：application.json 是应用配置 + 分支表，
 # 跨所有分支共享（分支表应始终反映"当前最新"，切到历史分支时不该被切回旧版本）。

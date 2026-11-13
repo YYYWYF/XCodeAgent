@@ -188,6 +188,11 @@ _RUNTIME_ARTIFACT_PATHS = (
     # LangGraph checkpoint SQLite 数据库；旧工作区的 .gitignore 没排它，
     # 这里在 git add -A 之后兜底移除暂存条目，避免几十 MB 的状态文件被推到远端。
     ".devagentstudio/recovery",
+    # 构建调度的内容寻址材料库（artifacts/sha256/<hash>.json）。一次构建会写几十
+    # 到上百个小文件，累积数轮迭代后总量爆炸，曾触发码云推送限制；它们是工作区
+    # 本地的执行缓存，被 checkpoint 通过 $artifact 占位符引用，磁盘上不能删，
+    # 但也不该进 git。
+    ".devagentstudio/artifacts",
 )
 
 
@@ -241,6 +246,12 @@ _REQUIRED_GITIGNORE_PATTERNS = (
     # commitSha，留下未提交改动挡住后续 checkout -b。它不是用户维护的业务代码，
     # 不应进 git。AGENTS.md 相反：必须进 git（按分支隔离），见 publish_version。
     ".devagentstudio/application.json",
+    # artifacts/ 是构建调度的内容寻址材料库（artifacts/sha256/<hash>.json）。
+    # 一次构建会写几十到上百个小文件，累积数轮迭代后总量爆炸，曾触发码云推送限制；
+    # 它是工作区本地的执行缓存，被 checkpoint 通过 $artifact 占位符引用，
+    # 磁盘上不能删，但也不该进 git。这条 pattern 让旧工作区在下次发布时把
+    # artifacts/ 加进 .gitignore，配套 _unstage_runtime_artifacts 把暂存条目兜底移除。
+    ".devagentstudio/artifacts/",
     ".DS_Store",
 )
 
