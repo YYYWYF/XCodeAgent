@@ -166,6 +166,7 @@ test('API 字段及同名实体引用同步改名时合并名称，仍展示引�
     entity_field_ref: 'task.subject'
   }
   delete after.api_contracts[0].schemas.Task.properties.title
+  after.api_contracts[0].schemas.Task.required = ['subject']
   let changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
   assert.equal(changes.length, 2)
   assert.equal(changes[0].kind, 'rename')
@@ -176,6 +177,87 @@ test('API 字段及同名实体引用同步改名时合并名称，仍展示引�
   after.api_contracts[0].schemas.Task.properties.subject.entity_field_ref = 'other.subject'
   changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
   assert.ok(changes.every((change) => change.kind !== 'rename'))
+})
+
+test('API 字段改名且实体引用不变时只展示名称，required 同步改名不重复展示', () => {
+  const before = plan(),
+    after = plan()
+  before.api_contracts[0].schemas.Task.properties.title = {
+    type: 'string',
+    description: '标题',
+    entity_field_ref: 'task.title'
+  }
+  after.api_contracts[0].schemas.Task.properties.subject = {
+    ...before.api_contracts[0].schemas.Task.properties.title
+  }
+  delete after.api_contracts[0].schemas.Task.properties.title
+  after.api_contracts[0].schemas.Task.required = ['subject']
+  const snapshot = JSON.stringify({ before, after })
+  const objects = technicalPlanDiff(before, after, {})[2].objects
+  for (const object of objects) {
+    assert.equal(object.differences.length, 1)
+    assert.equal(object.differences[0].kind, 'rename')
+    assert.equal(object.differences[0].before, 'title')
+    assert.equal(object.differences[0].after, 'subject')
+    assert.equal(object.differences[0].unchanged, true)
+  }
+  const markup = renderToStaticMarkup(
+    createElement(TechnicalPlanReviewPanel, { plan: after, productPlan: {}, baseline: before })
+  )
+  assert.match(markup, /名称变更/)
+  assert.doesNotMatch(markup, /删除|新增|&quot;required&quot;:/)
+  assert.equal(JSON.stringify({ before, after }), snapshot)
+})
+
+test('嵌套多字段改名合并 required，但真实必填变化仍保留', () => {
+  const before = plan(),
+    after = plan()
+  before.api_contracts[0].schemas.Task.properties.details = {
+    type: 'object',
+    properties: {
+      image: { type: 'string' },
+      enabled: { type: 'boolean' },
+      id: { type: 'integer' }
+    },
+    required: ['image', 'enabled', 'id']
+  }
+  after.api_contracts[0].schemas.Task.properties.details = {
+    type: 'object',
+    properties: {
+      cup_image: { type: 'string' },
+      active: { type: 'boolean' },
+      id: { type: 'integer' }
+    },
+    required: ['id', 'active', 'cup_image']
+  }
+  let changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
+  assert.equal(changes.length, 2)
+  assert.ok(changes.every((change) => change.kind === 'rename'))
+  after.api_contracts[0].schemas.Task.properties.details.required = ['active', 'cup_image']
+  changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
+  assert.equal(changes.length, 3)
+  const required = changes.find((change) => change.field === 'required')!
+  assert.deepEqual(required.before, ['image', 'enabled', 'id'])
+  assert.deepEqual(required.after, ['active', 'cup_image'])
+})
+
+test('原引用不变与同步改名同时存在候选时不强行合并，也不隐藏 required', () => {
+  const before = plan(),
+    after = plan()
+  before.api_contracts[0].schemas.Task.properties.title.entity_field_ref = 'task.title'
+  after.api_contracts[0].schemas.Task.properties.subject = {
+    type: 'string',
+    entity_field_ref: 'task.title'
+  }
+  after.api_contracts[0].schemas.Task.properties.heading = {
+    type: 'string',
+    entity_field_ref: 'task.heading'
+  }
+  delete after.api_contracts[0].schemas.Task.properties.title
+  after.api_contracts[0].schemas.Task.required = ['subject']
+  const changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
+  assert.ok(changes.every((change) => change.kind !== 'rename'))
+  assert.ok(changes.some((change) => change.field === 'required'))
 })
 
 test('改名同时变更属性或匹配不唯一时保留增删，不隐藏实际变化', () => {

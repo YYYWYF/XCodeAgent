@@ -1,5 +1,5 @@
 import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
-import { pairEntries } from './technicalPlanRename'
+import { isRequiredRenameOnly, pairEntries } from './technicalPlanRename'
 
 export type Difference = {
   path: string
@@ -188,12 +188,15 @@ function differences(before: unknown, after: unknown, path = '', field = ''): Di
     const keys = [...new Set([...Object.keys(old), ...Object.keys(next)])]
     if (keys.length)
       return keys.flatMap((key) =>
-        differences(
-          old[key],
-          next[key],
-          [path, differenceLabel(key)].filter(Boolean).join(' → '),
-          key
-        )
+        // 只合并同一 Schema 内随已识别改名同步替换的 required，真实必填变化继续展示。
+        key === 'required' && isRequiredRenameOnly(old, next, normalized)
+          ? []
+          : differences(
+              old[key],
+              next[key],
+              [path, differenceLabel(key)].filter(Boolean).join(' → '),
+              key
+            )
       )
   }
   if (
