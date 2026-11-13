@@ -20,6 +20,7 @@ from app.services.frontend_project_launcher import (
 )
 from app.services.frontend_node_runtime import FrontendNodeError, FrontendNodeRuntime, resolve_frontend_node
 from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record
+from app.services.preview_authorization_advisory import get_preview_authorization_advisory
 from app.utils.process_liveness import pid_is_running
 
 
@@ -85,26 +86,6 @@ def _application_has_no_backend_business(root: Path) -> bool:
     return _lifecycle_declares_no_backend_business(root) is True
 
 
-def _require_preview_authorization_ready(root: Path) -> None:
-    """Builtin 权限预览必须使用已核验 Seed 的当前输入。"""
-
-    from app.services.application_config import read_application_config
-    from app.services.builtin_authorization_seed import read_confirmed_seed_plan
-    from app.services.builtin_authorization_state import seed_ready, uses_builtin_database
-
-    if not (root / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
-        return
-    application = read_application_config(root)
-    if not uses_builtin_database(application) or application["authorization"]["enabled"] is not True:
-        return
-    try:
-        if seed_ready(root, application, read_confirmed_seed_plan(root)):
-            return
-    except (OSError, ValueError):
-        pass
-    raise ValueError("模拟数据库权限正在初始化，请在权限初始化卡查看当前状态；若结果待核对，请先完成核对。")
-
-
 def launch_project_preview(
     workspace_path: str | Path,
     *,
@@ -117,12 +98,6 @@ def launch_project_preview(
 
     root = Path(workspace_path).expanduser().resolve()
     with backend_launch_lock(root):
-        try:
-            _require_preview_authorization_ready(root)
-        except (OSError, ValueError) as exc:
-            result = {"status": "failed", "message": str(exc), "failed_stage": "authorization_readiness"}
-            finish_attempt(root, result)
-            return result
         # 在清空本轮日志前停止旧进程，避免旧输出污染新的诊断证据。
         if force_restart:
             frontend_stop = stop_frontend_project(root)
@@ -158,6 +133,8 @@ def launch_project_preview(
 
             result = {"status": "failed", "message": str(exc), "failed_stage": "launch", "diagnostics": [diagnostic_from_exception(root, "launch", exc)]}
         finish_attempt(root, result)
+        if result["status"] == "running":
+            result["authorization_advisory"] = get_preview_authorization_advisory(root)
         return result
 
 

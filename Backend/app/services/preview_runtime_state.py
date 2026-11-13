@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from app.services.preview_runtime_guard import maintenance_owner
+from app.services.preview_authorization_advisory import get_preview_authorization_advisory
 from app.services.preview_diagnostics import diagnostics_from_command, launch_diagnostics
 from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record
 from app.utils.process_liveness import pid_is_running
@@ -336,4 +337,5 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
         and value.get("failedStage") not in {"stop", "launch_interrupted", "backend_database_resource"}
     )
     value["maintenance"] = maintenance_owner(workspace)
+    value["authorizationAdvisory"] = get_preview_authorization_advisory(Path(workspace).expanduser().resolve())
     return value

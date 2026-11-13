@@ -141,7 +141,7 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
             raise SeedRemoteError("seed_invalid_identity")
 
         request = compiled["request"]
-        validate_seed_transport(request)
+        validate_seed_transport(request, datasource_key=key)
         # 所有可提交路径都要求正式 DAG；纯查询动作继续保持只读。
         if not read_only:
             dag = load_confirmed_build_task_plan(root)

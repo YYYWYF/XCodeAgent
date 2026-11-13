@@ -10,6 +10,10 @@ import { usePreviewRuntime } from '../src/renderer/src/components/AiChatPanel/ho
 import { SessionRuntimeProvider } from '../src/renderer/src/components/AiChatPanel/hooks/useSessionRuntimeStore'
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
+import BrowserPreviewPanel from '../src/renderer/src/components/BrowserPreviewPanel/BrowserPreviewPanel'
+import type { PreviewRuntimePayload } from '../src/renderer/src/service/previewRuntime'
+import type { ApplicationConfig } from '../src/renderer/src/typings'
+import { parsePreviewAuthorizationAdvisory } from '../src/renderer/src/typings/previewAuthorization'
 import {
   previewServiceActionAvailability,
   previewRepairExecutionBlocks,
@@ -26,6 +30,47 @@ await import('./databaseOperations.test')
 const originalFetch = globalThis.fetch
 Object.assign(globalThis, { window: { devAgentStudio: { agentBaseUrl: 'http://127.0.0.1:8000' } } })
 let forwarded: Record<string, unknown> | undefined
+const warning = {
+  applicable: true,
+  status: 'needs_attention',
+  schemaReady: true,
+  seedReady: false,
+  severity: 'warning',
+  title: '权限功能尚未就绪',
+  message: '请在「权限数据库初始化」卡查看当前状态。',
+  nextAction: 'open_authorization_status'
+} as const
+
+/** 用同一预览界面验证就绪快照只控制提醒，地址栏和刷新继续可用。 */
+function renderPreview(advisory: NonNullable<PreviewRuntimePayload['runtime']>['authorizationAdvisory']): string {
+  return renderToStaticMarkup(
+    <BrowserPreviewPanel
+      application={{ name: '测试应用', menus: { items: [] }, pages: ['首页'] } as unknown as ApplicationConfig}
+      previewBaseUrl="http://127.0.0.1:3000"
+      serviceControl={{
+        snapshot: {
+          status: 'completed',
+          runtime: {
+            attemptId: 'attempt-1', status: 'running',
+            frontend: { status: 'running' }, backend: { status: 'running' },
+            authorizationAdvisory: advisory
+          }
+        }
+      } as Parameters<typeof BrowserPreviewPanel>[0]['serviceControl']}
+    />
+  )
+}
+
+const warnedPreview = renderPreview(warning)
+assert.match(warnedPreview, /权限功能尚未就绪/)
+assert.match(warnedPreview, /权限数据库初始化/)
+assert.doesNotMatch(warnedPreview, /启动失败/)
+assert.match(warnedPreview, /<iframe[^>]*src="http:\/\/127\.0\.0\.1:3000/)
+assert.doesNotMatch(warnedPreview, /<(button|input)[^>]*(disabled[^>]*aria-label="(刷新|预览地址)"|aria-label="(刷新|预览地址)"[^>]*disabled)/)
+assert.doesNotMatch(renderPreview({ ...warning, status: 'ready', seedReady: true, message: '' }), /权限功能尚未就绪/)
+assert.doesNotMatch(renderPreview(null), /权限功能尚未就绪/)
+assert.equal(parsePreviewAuthorizationAdvisory({ ...warning, message: 'x'.repeat(257) }), null)
+assert.equal(parsePreviewAuthorizationAdvisory({ ...warning, seedReady: true }), null)
 
 /** 用规范 AG-UI 生命周期验证真实 HttpAgent 的事件消费，不模拟客户端内部解析。 */
 function mockStream(failed = false): void {
@@ -39,6 +84,7 @@ function mockStream(failed = false): void {
         attemptId: 'attempt-1',
         status: 'failed',
         repairAvailable: true,
+        authorizationAdvisory: { ...warning, operationId: 'private-field' },
         diagnostics: [
           {
             stage: 'frontend_config',
@@ -82,6 +128,7 @@ try {
     { threadId: 'repair-session', onUpdate: (event) => updates.push(event.status) }
   )
   assert.equal(value.repair?.planId, 'plan-1')
+  assert.deepEqual(value.runtime?.authorizationAdvisory, warning)
   assert.deepEqual(
     value.runtime?.diagnostics?.[0].location,
     {

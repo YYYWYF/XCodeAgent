@@ -1574,6 +1574,7 @@ class ProjectLauncherTests(unittest.TestCase):
             "backend": {"status": "running", "server": {"pid": 321}},
             "frontend": frontend_result,
             "failed_stage": None,
+            "authorization_advisory": {"applicable": True, "status": "needs_attention", "seedReady": False},
         }
         with patch(
             "app.graph.nodes.lifecycle.launch_project_preview",
@@ -1586,6 +1587,7 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(result["acceptance_request"]["preview_url"], "http://127.0.0.1:80")
         self.assertEqual(result["launch_result"]["backend"]["status"], "running")
         self.assertEqual(result["launch_result"]["frontend"], frontend_result)
+        self.assertFalse(result["launch_result"]["authorization_advisory"]["seedReady"])
         launcher.assert_called_once_with(Path("/workspace").resolve(), on_progress=ANY)
 
     def test_launch_project_reports_startup_failure(self) -> None:

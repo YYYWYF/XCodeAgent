@@ -2,6 +2,8 @@ import { randomUUID } from '@ag-ui/client'
 import { createAgUiHttpAgent } from './authentication'
 import type { ProjectLaunchResult } from './projectLaunch'
 import type { WorkspaceCodeChangeSet } from '../typings'
+import { parsePreviewAuthorizationAdvisory } from '../typings/previewAuthorization'
+import type { PreviewAuthorizationAdvisory } from '../typings/previewAuthorization'
 
 export type PreviewAction =
   | 'get'
@@ -79,6 +81,7 @@ export type PreviewRuntimePayload = {
     previewUrl?: string
     failedStage?: string
     databaseCheck?: PreviewDatabaseCheck
+    authorizationAdvisory?: PreviewAuthorizationAdvisory | null
     repairAvailable?: boolean
     diagnostics?: PreviewDiagnostic[]
     logs?: Record<PreviewServiceLayer, PreviewLog[]>
@@ -125,7 +128,23 @@ export async function runPreviewRuntime(
   /** 合并进度与终态，避免进度事件清空已有运行事实。 */
   const accept = (value: unknown): void => {
     if (!value || typeof value !== 'object') return
-    latest = { ...latest, ...(value as PreviewRuntimePayload) }
+    const update = value as PreviewRuntimePayload
+    latest = {
+      ...latest,
+      ...update,
+      ...(update.runtime && {
+        runtime: {
+          ...update.runtime,
+          authorizationAdvisory: parsePreviewAuthorizationAdvisory(update.runtime.authorizationAdvisory)
+        }
+      }),
+      ...(update.launchResult && {
+        launchResult: {
+          ...update.launchResult,
+          authorization_advisory: parsePreviewAuthorizationAdvisory(update.launchResult.authorization_advisory)
+        }
+      })
+    }
     options.onUpdate?.(latest)
   }
   /** 关闭日志订阅时中止当前读取，不影响独立服务端维护任务。 */

@@ -23,6 +23,15 @@ MAX_RESOURCES = 500
 MAX_ADMINS = 100
 ADMIN = "SYSTEM_ADMIN"
 SYSTEM_REF = "system:authorization_management"
+SEED_COLUMNS = {
+    "role": {"role_id": 32, "role_name": 32, "description": 128, "enable": 0,
+             "is_system": 0, "is_deleted": 0, "created_by": 32},
+    "resource": {"key": 64, "name": 32, "description": 128, "origin": 8,
+                 "type": 9, "target_resource_ref": 255},
+    "role_resource": {"role_id": 32, "resource_key": 64, "created_by": 32},
+    "role_member": {"role_id": 32, "member_id": 32, "member_name": 32, "created_by": 32},
+}
+SEED_ROW_LIMITS = {"role": 1, "resource": MAX_RESOURCES, "role_resource": 1, "role_member": MAX_ADMINS}
 
 
 class SeedContractError(ValueError):
@@ -43,15 +52,32 @@ def _objects(value: object) -> list[dict]:
     return value
 
 
-def _text(value: object, limit: int, *, allow_blank: bool = False) -> str:
-    """按 Direct Java 字符长度校验文本，并保留已确认的原始值。"""
+def _text(value: object, limit: int, *, allow_blank: bool = False, code_points: bool = False) -> str:
+    """复用文本校验，正式编译保留 Direct 长度约束，SaaS 传输按码点计数。"""
 
-    if (not isinstance(value, str) or len(value) + sum(ord(char) > 0xFFFF for char in value) > limit
-            or not allow_blank and not value.strip()
+    if (not isinstance(value, str) or len(value) > limit
+            or not code_points and len(value) + sum(ord(char) > 0xFFFF for char in value) > limit
+            or not allow_blank and not value or value != value.strip()
             or any(ord(char) < 32 or 127 <= ord(char) <= 159 or 0xD800 <= ord(char) <= 0xDFFF
                    for char in value)):
         raise ValueError("权限 Seed 文本缺失、超长或包含无效字符。")
     return value
+
+
+def _validate_resource_identity(key: str, origin: str, kind: str, ref: str) -> None:
+    """复用正式资源键及系统、页面、操作引用的组合约束。"""
+
+    if not re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", key):
+        raise ValueError("权限资源键非法。")
+    if key == SYSTEM_RESOURCE_KEY:
+        valid = (origin, kind, ref) == ("system", "system", SYSTEM_REF)
+    else:
+        valid = origin == "business" and (
+            kind == "page" and ref == f"page:{key}"
+            or kind == "operation" and re.fullmatch(r"action:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", ref)
+        )
+    if not valid:
+        raise ValueError("权限资源类型或引用无效。")
 
 
 def _resource_rows(manifest: dict) -> list[dict]:
@@ -64,22 +90,12 @@ def _resource_rows(manifest: dict) -> list[dict]:
     for item in resources:
         key = _text(item.get("resourceKey"), 64)
         name = _text(item.get("name"), 32)
-        description = item.get("description")
-        if description is not None:
-            description = _text(description, 128, allow_blank=True)
+        description = _text(item.get("description"), 128, allow_blank=True)
         origin, kind = item.get("origin"), item.get("type")
         ref = _text(item.get("targetResourceRef"), 255)
-        if not re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", key) or key in rows:
-            raise ValueError("权限资源键非法或重复。")
-        if key == SYSTEM_RESOURCE_KEY:
-            valid = (origin, kind, ref) == ("system", "system", SYSTEM_REF)
-        else:
-            valid = origin == "business" and (
-                kind == "page" and ref == f"page:{key}"
-                or kind == "operation" and re.fullmatch(r"action:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*", ref)
-            )
-        if not valid:
-            raise ValueError("权限资源类型或引用无效。")
+        if key in rows:
+            raise ValueError("权限资源键重复。")
+        _validate_resource_identity(key, origin, kind, ref)
         rows[key] = {"key": key, "name": name, "description": description, "origin": origin,
                      "type": kind, "target_resource_ref": ref}
     if SYSTEM_RESOURCE_KEY not in rows:
@@ -192,15 +208,61 @@ def seed_request_fingerprint(datasource_key: str, request: dict) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def validate_seed_transport(request: dict) -> None:
-    """在受理前识别 SaaS 无法接收的当前正式数据，保留 Direct 行语义。"""
+def _validate_seed_rows(logical: str, rows: list[dict]) -> None:
+    """校验单表白名单、固定写入身份和自然键唯一性。"""
 
-    resources = request["tables"][1]["rows"]
-    if any(row["type"] == "operation" for row in resources):
-        raise SeedContractError("当前 SaaS Seed 接口尚不接受已确认操作资源的 action: 引用，请核对 SaaS 合同。")
-    if any(value is None or isinstance(value, str) and (not value.strip() or value != value.strip())
-           for table in request["tables"] for row in table["rows"] for value in row.values()):
-        raise SeedContractError("当前 SaaS Seed 接口要求非空且无首尾空白的文本，请核对权限资源描述及 SaaS 合同。")
+    columns = SEED_COLUMNS[logical]
+    if not 1 <= len(rows) <= SEED_ROW_LIMITS[logical]:
+        raise ValueError("权限 Seed 行数无效。")
+    identities = set()
+    for row in rows:
+        if row.keys() != columns.keys():
+            raise ValueError("权限 Seed 字段集合无效。")
+        for column, limit in columns.items():
+            if limit:
+                _text(row[column], limit, allow_blank=logical == "resource" and column == "description",
+                      code_points=True)
+            elif type(row[column]) is not int:
+                raise ValueError("权限 Seed 标志字段必须是整数。")
+        if logical == "resource":
+            identity = row["key"]
+            _validate_resource_identity(identity, row["origin"], row["type"], row["target_resource_ref"])
+        else:
+            if (row["role_id"], row["created_by"]) != (ADMIN, "SYSTEM"):
+                raise ValueError("权限 Seed 角色或审计身份无效。")
+            if logical == "role" and (row["enable"], row["is_system"], row["is_deleted"]) != (1, 1, 0):
+                raise ValueError("权限 Seed 系统角色标志无效。")
+            if logical == "role_resource" and row["resource_key"] != SYSTEM_RESOURCE_KEY:
+                raise ValueError("权限 Seed 系统授权引用无效。")
+            identity = row["member_id"] if logical == "role_member" else row["role_id"]
+        if identity in identities:
+            raise ValueError("权限 Seed 自然键重复。")
+        identities.add(identity)
+    if logical == "resource" and SYSTEM_RESOURCE_KEY not in identities:
+        raise ValueError("缺少系统权限管理资源。")
+
+
+def validate_seed_transport(request: dict, *, datasource_key: str) -> None:
+    """发起远端请求前复核四表顺序及数据，错误只包含固定提示。"""
+
+    try:
+        mapping = table_mapping(datasource_key)
+        if not isinstance(request, dict) or set(request) != {"purpose", "idempotencyKey", "tables"}:
+            raise ValueError("权限 Seed 请求结构无效。")
+        key = request["idempotencyKey"]
+        if request["purpose"] != PURPOSE or not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise ValueError("权限 Seed 用途或幂等键无效。")
+        tables = _objects(request["tables"])
+        if len(tables) != len(mapping):
+            raise ValueError("权限 Seed 必须包含固定四表。")
+        for (logical, name), table in zip(mapping.items(), tables, strict=True):
+            if set(table) != {"tableName", "rows"} or table["tableName"] != name:
+                raise ValueError("权限 Seed 表名或顺序无效。")
+            _validate_seed_rows(logical, _objects(table["rows"]))
+        if len(canonical_json(request)) > MAX_BYTES:
+            raise ValueError("权限 Seed 超过 SaaS 256 KiB 请求上限。")
+    except ValueError as exc:
+        raise SeedContractError(str(exc)) from None
 
 
 def read_confirmed_seed_plan(root: Path) -> dict:

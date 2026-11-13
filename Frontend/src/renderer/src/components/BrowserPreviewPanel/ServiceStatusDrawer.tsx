@@ -14,6 +14,7 @@ import {
   ToolOutlined
 } from '@ant-design/icons'
 import { Alert, Button, Drawer, Tabs, Typography } from 'antd'
+import PreviewAuthorizationAlert from './PreviewAuthorizationAlert'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PreviewRuntimePayload, PreviewServiceLayer, PreviewServiceState } from '../../service/previewRuntime'
@@ -155,6 +156,7 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
             </div>
             <span className="preview-section-caption">受控进程 · 就绪检测</span>
           </div>
+          <PreviewAuthorizationAlert runtime={runtime} />
           <div className="preview-service-grid">
             {(['frontend', 'backend'] as const).map((layer) => {
               const service = runtime?.[layer]

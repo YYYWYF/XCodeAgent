@@ -1,4 +1,5 @@
 import type { WorkspaceCodeChangeSet } from './codeChanges'
+import type { PreviewAuthorizationAdvisory } from './previewAuthorization'
 import type { ToolApproval } from '../service/workspaceTools'
 import type {
   RecoveryActionPlan,
@@ -246,6 +247,7 @@ export type WorkflowLaunchResult = {
   backend?: WorkflowLaunchPart
   frontend?: WorkflowLaunchPart
   failed_stage?: string
+  authorization_advisory?: PreviewAuthorizationAdvisory | null
   [key: string]: unknown
 }
 

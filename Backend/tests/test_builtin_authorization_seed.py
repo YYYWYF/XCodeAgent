@@ -15,13 +15,16 @@ from app.graph.workflow import route_workflow_start
 from app.protocols.builtin_authorization import build_builtin_authorization_stream
 from app.services.authorization_manifest import _with_fingerprint
 from app.services.authorization_table_projection import compile_authorization_tables
-from app.services.authorization_workspace_projector import read_record
+from app.services.authorization_workspace_projector import RUNTIME, read_record
 from app.services.builtin_authorization_bootstrap import run_builtin_authorization_bootstrap
-from app.services.builtin_authorization_seed import PURPOSE, compile_builtin_authorization_seed, seed_request_fingerprint
+from app.services.builtin_authorization_seed import (
+    PURPOSE, SeedContractError, compile_builtin_authorization_seed, seed_request_fingerprint, validate_seed_transport,
+)
 from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient, SeedRemoteError
 from app.services.builtin_authorization_seed_runtime import refresh_builtin_authorization_seed
 from app.services.builtin_authorization_state import save_state, seed_ready
-from app.services.project_launcher import _require_preview_authorization_ready
+from app.services.preview_runtime_state import read_record as read_preview_record, runtime_snapshot
+from app.services.project_launcher import launch_project_preview
 from tests.authorization_seed_fixture import KEY, SUBJECT, SYSTEM, save_plan, seed_plan, write_schema
 from tests.authorization_seed_recovery_cases import AuthorizationSeedRecoveryCases
 
@@ -224,11 +227,14 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
         self.assertEqual(pending["seed_operation_id"], "456")
         self.assert_calls("GET", "POST")
         self.assertFalse(seed_ready(self.root, self.application, self.plan))
-        with self.assertRaisesRegex(ValueError, "正在初始化"):
-            _require_preview_authorization_ready(self.root)
+        advisory = runtime_snapshot(self.root, logs=False)["authorizationAdvisory"]
+        self.assertEqual(advisory["status"], "running")
+        self.assertFalse(advisory["seedReady"])
         self.assertTrue(self.refresh()["seed_ready"])
         self.assertTrue(seed_ready(self.root, self.application, self.plan))
-        _require_preview_authorization_ready(self.root)
+        advisory = runtime_snapshot(self.root, logs=False)["authorizationAdvisory"]
+        self.assertEqual(advisory["status"], "ready")
+        self.assertTrue(advisory["seedReady"])
         self.assertEqual(self.run_node()["status"], "reused")
         for resume in ("build", "authorization_bootstrap", "builtin_authorization_bootstrap"):
             state = {"workspace": str(self.root), "technical_plan": self.plan, "resume_from": resume}
@@ -416,20 +422,103 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
                 self.assertTrue(self.run_node()["seed_ready"])
                 self.assert_calls("GET", "POST", "GET", "POST", "GET")
 
-    def test_current_saas_contract_rejects_action_refs_and_empty_descriptions(self) -> None:
-        """Direct 合法但 SaaS 尚未支持的实际行保留原值，受理前停止。"""
+    def test_current_saas_contract_accepts_action_refs_and_empty_descriptions(self) -> None:
+        """以 SaaS AuthorizationSeedPayloadTest 同款操作和描述验证真实提交路径。"""
 
+        action = {"resourceKey": "home_edit", "name": "编辑首页", "description": "", "origin": "business",
+                  "type": "operation", "targetResourceRef": "action:home:edit", "sourceRuleIds": ["edit_rule"]}
         manifest = deepcopy(self.plan["authorization_manifest"])
-        manifest["resources"][0]["description"] = ""
+        manifest["resources"].append(action)
+        manifest["bindings"]["actions"].append({"pageId": "home", "actionId": "edit", "resourceKey": "home_edit"})
         self.plan["authorization_manifest"] = _with_fingerprint(manifest)
         save_plan(self.root, self.plan)
-        self.assertEqual(self.run_node()["failure_category"], "seed_saas_contract_incompatible")
-        manifest["resources"][0].update(type="operation", targetResourceRef="action:home:edit", description="编辑首页")
-        self.plan["authorization_manifest"] = _with_fingerprint(manifest)
-        save_plan(self.root, self.plan)
-        self.assertEqual(self.compile()["request"]["tables"][1]["rows"][0]["target_resource_ref"], "action:home:edit")
-        self.assertEqual(self.run_node()["failure_category"], "seed_saas_contract_incompatible")
-        self.assert_calls()
+        request = self.compile()["request"]
+        page, operation, _ = request["tables"][1]["rows"]
+        self.assertEqual(page["target_resource_ref"], "page:home")
+        self.assertEqual(operation["target_resource_ref"], "action:home:edit")
+        self.assertEqual(operation["description"], "")
+        self.assertFalse(self.run_node()["seed_ready"])
+        self.assertTrue(self.refresh()["seed_ready"])
+        self.assert_calls("GET", "POST", "GET")
+
+        cases = [
+            (1, 0, "target_resource_ref", "page:other"),
+            *((1, 1, "target_resource_ref", ref) for ref in (
+                "operation:home:edit", "action:home", "action::edit", "action:home:", "action:home:edit:extra",
+                "action:-home:edit", "action:Home:edit", "action:home:1edit",
+            )),
+            *((1, 1, "description", value) for value in (None, "   ", "　", " 描述 ", "\u0001", "\ud800", "说" * 129)),
+            (1, 1, "name", ""), (0, 0, "description", ""), (0, 0, "enable", True),
+            (1, 1, "origin", "system"), (1, 1, "key", "home"), (1, 1, "extra", "value"),
+        ]
+        for table, index, field, value in cases:
+            with self.subTest(table=table, row=index, field=field, value=value):
+                invalid = deepcopy(request)
+                invalid["tables"][table]["rows"][index][field] = value
+                with self.assertRaises(SeedContractError):
+                    validate_seed_transport(invalid, datasource_key=KEY)
+                manifest_field = {"target_resource_ref": "targetResourceRef", "description": "description"}.get(field)
+                if table == 1 and manifest_field:
+                    invalid_manifest = deepcopy(manifest)
+                    resource_key = request["tables"][table]["rows"][index]["key"]
+                    resource = next(item for item in invalid_manifest["resources"] if item["resourceKey"] == resource_key)
+                    resource[manifest_field] = value
+                    # 编译器先验证资源内容，再检查指纹，因此非法 Unicode 也会被拦截。
+                    with self.assertRaisesRegex(ValueError, "权限资源类型或引用无效|权限 Seed 文本"):
+                        compile_builtin_authorization_seed(self.application,
+                            {**self.plan, "authorization_manifest": invalid_manifest}, datasource_key=KEY)
+        request["tables"].reverse()
+        with self.assertRaises(SeedContractError):
+            validate_seed_transport(request, datasource_key=KEY)
+
+    def test_preview_starts_and_restarts_independently_of_seed(self) -> None:
+        """在真实预览 Attempt 记录上验证所有权限状态只影响提示。"""
+
+        baseline = read_record(self.root, "state.json")
+        self.run_node()
+        running = read_record(self.root, "state.json")
+        self.assertTrue(self.refresh()["seed_ready"])
+        ready = read_record(self.root, "state.json")
+        cases = [
+            ("pending", baseline, True, True),
+            ("running", running, True, True),
+            ("needs_attention", {**running, "seed": {**running["seed"], "status": "unknown"}}, True, True),
+            ("needs_attention", {**running, "seed": {**running["seed"], "status": "failed"}}, True, True),
+            ("unknown", None, True, True),
+            ("ready", ready, True, True),
+            (None, baseline, False, True),
+            (None, baseline, True, False),
+        ]
+        attempts = set()
+        state_file = self.root / RUNTIME / "state.json"
+        for expected, record, enabled, builtin in cases:
+            with self.subTest(expected=expected, enabled=enabled, builtin=builtin):
+                self.application["authorization"]["enabled"] = enabled
+                self.application["datasource"]["db"]["useBuiltin"] = builtin
+                state_file.write_text(json.dumps(record) if record else "{", encoding="utf-8")
+                before = state_file.read_bytes()
+                with (
+                    patch("app.services.project_launcher.stop_frontend_project", return_value={"status": "stopped"}) as stop_frontend,
+                    patch("app.services.project_launcher.stop_workspace_backend_project", return_value={"status": "stopped"}) as stop_backend,
+                    patch("app.services.project_launcher._launch_project_preview", return_value={"status": "running"}) as start,
+                ):
+                    result = launch_project_preview(self.root, force_restart=True)
+                start.assert_called_once()
+                stop_frontend.assert_called_once_with(self.root)
+                stop_backend.assert_called_once_with(self.root)
+                self.assertEqual(result["status"], "running")
+                self.assertNotIn("failed_stage", result)
+                advisory = result["authorization_advisory"]
+                self.assertEqual(advisory and advisory["status"], expected)
+                if advisory:
+                    self.assertEqual(advisory["seedReady"], expected == "ready")
+                attempt = read_preview_record(self.root)
+                self.assertEqual(attempt["status"], "running")
+                self.assertNotIn(attempt["attemptId"], attempts)
+                attempts.add(attempt["attemptId"])
+                self.assertNotIn("authorizationAdvisory", attempt)
+                self.assertEqual(state_file.read_bytes(), before)
+        self.assert_calls("GET", "POST", "GET")
 
     def test_invalid_subjects_manifest_and_size_fail_closed(self) -> None:
         """校验占位管理员、指纹漂移、重复资源和 SaaS 字节边界。"""
@@ -453,6 +542,12 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
                                   for i in range(498)]
         self.plan["authorization_manifest"] = _with_fingerprint(manifest)
         with self.assertRaisesRegex(ValueError, "256 KiB"):
+            self.compile()
+        self.plan["authorization_manifest"]["resources"].append({
+            "resourceKey": "extra", "name": "额外资源", "description": "",
+            "origin": "business", "type": "page", "targetResourceRef": "page:extra",
+        })
+        with self.assertRaisesRegex(ValueError, "权限资源数量"):
             self.compile()
 
     def test_seed_ag_ui_refresh_projects_safe_identity(self) -> None:

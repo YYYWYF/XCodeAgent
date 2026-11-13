@@ -29,6 +29,7 @@ try {
     configFile: false,
     logLevel: 'error',
     root: frontendRoot,
+    esbuild: { jsx: 'automatic' },
     define: { 'process.env.NODE_ENV': JSON.stringify('test') },
     ssr: { noExternal: true },
     // 表详情测试复用生产样式变量，避免独立 SSR 测试缺失 Less 品牌前缀。

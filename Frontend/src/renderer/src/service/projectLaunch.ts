@@ -1,4 +1,5 @@
 import { runPreviewRuntime } from './previewRuntime'
+import type { PreviewAuthorizationAdvisory } from '../typings/previewAuthorization'
 
 /** 模板项目预览停止服务；启动统一由服务状态中的手动重启操作负责。 */
 
@@ -11,6 +12,7 @@ export type ProjectLaunchResult = {
   backend?: Record<string, unknown>
   frontend?: Record<string, unknown>
   failed_stage?: string
+  authorization_advisory?: PreviewAuthorizationAdvisory | null
 }
 
 /** 通过独立 AG-UI 流停止生成项目预览。 */

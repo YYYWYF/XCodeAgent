@@ -8,6 +8,7 @@ import httpx
 
 from app.services import builtin_authorization_orchestrator as orchestration
 from app.services.authorization_workspace_projector import RUNTIME, read_record
+from app.services.builtin_authorization_seed import SeedContractError
 from app.services.builtin_authorization_state import save_state
 from app.services.builtin_authorization_task_store import read_task
 from app.services.authorization_manifest import _with_fingerprint
@@ -162,13 +163,12 @@ class AuthorizationOrchestratorSafetyCases:
         self.assertEqual(self.schema_posts, 1)
 
     def test_contract_mismatch_reports_attention_without_posts(self) -> None:
-        """空描述保留合同错误，不为贯通旅程而填造数据。"""
+        """传输合同错误进入待处理且不会查询或提交远端操作。"""
 
-        self.plan["authorization_manifest"]["resources"][0]["description"] = ""
-        self.plan["authorization_manifest"] = _with_fingerprint(self.plan["authorization_manifest"])
-        save_plan(self.root, self.plan)
         self.begin()
-        self.assertFalse(self.tick())
+        with patch("app.services.builtin_authorization_seed_runtime.validate_seed_transport",
+                   side_effect=SeedContractError("权限 Seed 字段集合无效。")):
+            self.assertFalse(self.tick())
         self.assertEqual(read_task(self.root).failureCategory, "seed_saas_contract_incompatible")
         self.assertEqual(self.calls, [])
 
