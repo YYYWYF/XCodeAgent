@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import shutil
 import tempfile
 import threading
@@ -20,7 +21,8 @@ from app.services.application_lifecycle import ensure_application_lifecycle, loa
 from app.services.managed_database_registration import ensure_managed_database_registration
 
 _CREATION_LOCK = threading.Lock()
-# 注册可能已经在远端成功时保留独立暂存区，重试复用原身份，绝不重新申请资源。
+_LOGGER = logging.getLogger(__name__)
+# 注册已返回成功但本地提交失败时保留暂存区，重试复用原身份和绑定。
 
 
 def _assert_empty_target(target: Path) -> None:
@@ -80,6 +82,16 @@ def initialize_application(
                 "threadId": thread_id,
             }), encoding="utf-8")
         committed = False
+
+        # 新增：只记录本次注册调用是否抛出异常。
+        registration_call_failed = False
+
+        def mark_registration_failure() -> None:
+            """标记本次注册调用失败，供创建事务收尾清理暂存目录。"""
+
+            nonlocal registration_call_failed
+            registration_call_failed = True
+
         try:
             metadata = staging / WORKSPACE_ARTIFACT_DIR
             metadata.mkdir(exist_ok=True)
@@ -91,7 +103,9 @@ def initialize_application(
                 application_name=application_name, initialization_thread_id=thread_id,
             )
             if uses_managed_database:
-                saved = ensure_managed_database_registration(staging)
+                saved = ensure_managed_database_registration(
+                    staging, on_registration_failure=mark_registration_failure,
+                )
             else:
                 saved = repository.load()
             # 暂存区可能位于另一磁盘；在目标同级准备完整副本后只提交一次 rename。
@@ -113,9 +127,22 @@ def initialize_application(
             committed = True
             return state, saved
         finally:
-            # 成功或明确失败时清理暂存文件；外部注册结果未知/成功则保留供同请求续接。
-            current_file = staging / WORKSPACE_ARTIFACT_DIR / "application.json"
-            registration = json.loads(current_file.read_text(encoding="utf-8")).get("managedDatabase", {}) if current_file.exists() else {}
-            retain = not committed and registration.get("status") in {"REGISTERING", "UNKNOWN", "REGISTERED"}
-            if not retain:
-                shutil.rmtree(staging, ignore_errors=True)
+            if registration_call_failed:
+                # 新增：注册调用失败后，只删除本次创建的暂存目录。
+                try:
+                    shutil.rmtree(staging)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    # 删除失败只记录日志，不覆盖原始注册异常。
+                    _LOGGER.warning(
+                        "清理注册失败的创建暂存目录失败，目录=%s，异常类型=%s",
+                        staging, type(exc).__name__,
+                    )
+            else:
+                # 未发生注册调用失败时，完全沿用原来的收尾规则。
+                current_file = staging / WORKSPACE_ARTIFACT_DIR / "application.json"
+                registration = json.loads(current_file.read_text(encoding="utf-8")).get("managedDatabase", {}) if current_file.exists() else {}
+                retain = not committed and registration.get("status") in {"REGISTERING", "UNKNOWN", "REGISTERED"}
+                if not retain:
+                    shutil.rmtree(staging, ignore_errors=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ def ensure_managed_database_registration(
     *,
     settings: Settings | None = None,
     client: ManagedDatabaseClient | None = None,
+    on_registration_failure: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """只为已确认启用模拟数据库的应用注册一次，已成功或结果未知时不再次 POST。"""
 
@@ -77,10 +79,16 @@ def ensure_managed_database_registration(
         try:
             # 应用名称只作关联展示，不生成 appKey；当前 Studio 仅提交权威配置中的 appName。
             binding = resolved_client.register(application.get("appName"))
-        except ManagedDatabaseRegistrationError as exc:
-            _save_registration(
-                repository, {"status": "UNKNOWN" if exc.uncertain else "FAILED"}
-            )
+        except Exception as exc:
+            # 新增：仅通知本次注册调用失败，不改变成功返回后的本地保存处理。
+            if on_registration_failure is not None:
+                on_registration_failure()
+
+            # 原有业务异常继续按原规则保存状态，其他异常原样向上传递。
+            if isinstance(exc, ManagedDatabaseRegistrationError):
+                _save_registration(
+                    repository, {"status": "UNKNOWN" if exc.uncertain else "FAILED"}
+                )
             raise
         try:
             return _save_registration(repository, binding)
