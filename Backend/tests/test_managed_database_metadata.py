@@ -16,7 +16,7 @@ from app.services.api_design import api_design_readiness, load_database_columns,
 from app.services.binding_workspace import BindingDraftRequest, BindingTarget, save_binding_draft
 from app.services.data_sources import change_selected_tables, public_catalog, selected_tables
 from app.services.endpoint_design_detail import EndpointDesignPrepareRequest, EndpointDesignSaveRequest, prepare_endpoint_design, save_endpoint_design
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from app.workspace.endpoint_design_documents import technical_plan_sha256
 from tests.managed_database_http_fixture import saas_success
 
@@ -53,10 +53,10 @@ class ManagedDatabaseMetadataTests(unittest.TestCase):
         self.busy = False
         self.calls: list[httpx.Request] = []
         settings = Settings(model_base_url="http://model.invalid", model_api_key="test", model_name="test", managed_database_service_key="test-service-key")
-        client = ManagedTableClient(settings, transport=httpx.MockTransport(self.reply))
+        client = ManagedDatabaseClient(settings, transport=httpx.MockTransport(self.reply))
         stack = self.enterContext(ExitStack())
         stack.enter_context(patch("app.services.managed_database_metadata.Settings.from_env", return_value=settings))
-        stack.enter_context(patch("app.services.managed_database_metadata.ManagedTableClient", return_value=client))
+        stack.enter_context(patch("app.services.managed_database_metadata.ManagedDatabaseClient", return_value=client))
 
     def reply(self, request: httpx.Request) -> httpx.Response:
         """只接受当前应用的元数据 GET，不允许测试意外提交表操作。"""

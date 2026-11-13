@@ -15,7 +15,7 @@ from app.graph.workflow import route_prepare_build_tasks, route_workflow_start
 from app.services.authorization_table_projection import TABLES, compile_authorization_tables
 from app.services.authorization_workspace_projector import PO_FILES, XML_FILES, RUNTIME, ensure_projection
 from app.services.builtin_authorization_bootstrap import ensure_builtin_build_projection, run_builtin_authorization_bootstrap, refresh_builtin_authorization, _check
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from app.services.authorization_projection_sources import SOURCE_RECEIPT, record_materialized_authorization_sources
 from app.services.template_reconcile.state_v3 import load_template_state_v3
 from app.protocols.workflow.projection import _public_workflow_state, _workflow_node_detail
@@ -71,7 +71,7 @@ class BuiltinAuthorizationTests(unittest.TestCase):
         self.history = []
         self.drop_response = False
         self.synced_after_success = True
-        self.client = ManagedTableClient(Settings(model_base_url='', model_api_key='', model_name='', managed_database_base_url='https://saas.example', managed_database_service_key='test-secret'), transport=httpx.MockTransport(self.respond))
+        self.client = ManagedDatabaseClient(Settings(model_base_url='', model_api_key='', model_name='', managed_database_base_url='https://saas.example', managed_database_service_key='test-secret'), transport=httpx.MockTransport(self.respond))
 
     def read_application(self, *args, **kwargs) -> dict:
         """让路由与服务读取同一份测试权威配置。"""
@@ -88,7 +88,7 @@ class BuiltinAuthorizationTests(unittest.TestCase):
         if request.url.path.endswith('/batch'):
             if self.drop_response:
                 raise httpx.ReadTimeout('sensitive driver data', request=request)
-            return saas_success(202, {"operationId": "123", "status": "RUNNING"})
+            return saas_success(200, {"operationId": "123", "status": "RUNNING"})
         if request.url.query:
             return saas_success(200, self.history)
         if request.url.path.endswith('/123'):
@@ -193,7 +193,7 @@ class BuiltinAuthorizationTests(unittest.TestCase):
 
         compiled = compile_authorization_tables(self.root, KEY)
         for ready, status in ((False, 'RUNNING'), (False, 'UNKNOWN'), (True, 'SUCCEEDED')):
-            remote = ManagedTableClient(Settings(model_base_url='', model_api_key='', model_name='', managed_database_base_url='https://saas.example', managed_database_service_key='test'),
+            remote = ManagedDatabaseClient(Settings(model_base_url='', model_api_key='', model_name='', managed_database_base_url='https://saas.example', managed_database_service_key='test'),
                 transport=httpx.MockTransport(lambda request: saas_success(200, {"datasourceId": 2, "ready": ready, "operationStatus": status, "tables": []})))
             if ready:
                 with self.assertRaises(ValueError):
@@ -242,7 +242,7 @@ class BuiltinAuthorizationTests(unittest.TestCase):
         self.assertEqual(self.batch_calls(), [])
 
     def test_running_failed_unknown_and_lost_receipt_do_not_replay(self) -> None:
-        """202 不等于成功，明确失败与未知受理均不会被普通 Build 重发。"""
+        """HTTP 200 不等于成功，明确失败与未知受理均不会被普通 Build 重发。"""
 
         self.operation_status = 'RUNNING'
         self.assertFalse(self.run_bootstrap()['schema_ready'])

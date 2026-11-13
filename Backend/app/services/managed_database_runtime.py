@@ -10,23 +10,17 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
 
-import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from app.config import Settings
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.entity_tables import EntityTableRequest, TableReadiness
 from app.domain.managed_database import ManagedDatabaseRegistration
-from app.services.internal_service_tls import build_internal_service_ssl_context
 from app.services.application_config.repository import ApplicationConfigRepository
 from app.services.database_credentials import DatabaseCredentialError, load_application_json
-from app.services.managed_database_client import ManagedDatabaseClient, unwrap_bee_envelope
+from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseStartupError
 from app.services.managed_database_readiness import database_check_report
 from app.workspace.endpoint_design_documents import technical_plan_path
-
-
-class ManagedDatabaseStartupError(DatabaseCredentialError):
-    """仅携带可公开的资源错误，避免将响应正文或凭据带入启动记录。"""
 
 
 class RuntimeConnection(BaseModel):
@@ -63,47 +57,6 @@ class StartupSnapshot:
     entities: tuple[tuple[str, str, str], ...] = ()
 
 
-class ManagedRuntimeClient(ManagedDatabaseClient):
-    """复用 SaaS 地址与鉴权约束，资源错误不套用建表重发提示。"""
-
-    def request(self, datasource_key: str, path: str, *, sqls: tuple[str, ...] | None = None) -> object:
-        """发出一次只读请求，不自动重试，不公开响应或请求异常内容。"""
-
-        try:
-            with httpx.Client(transport=self._transport, timeout=self._timeout,
-                              follow_redirects=False, trust_env=False,
-                              verify=build_internal_service_ssl_context()) as client:
-                response = client.request(
-                    "POST" if sqls is not None else "GET", f"{self._url}/{datasource_key}/{path}",
-                    json={"sqls": list(sqls)} if sqls is not None else None,
-                    headers={**{"Authorization": f"Bearer {self._key}", "Accept": "application/json"},
-                               **self._actor_headers()},
-                )
-        except httpx.RequestError:
-            raise ManagedDatabaseStartupError("无法连接内置数据库资源服务，请确认 SaaS 运行状态后重新启动。") from None
-        if response.status_code != 200:
-            try:
-                payload = response.json()
-                code = payload.get("code") if isinstance(payload, dict) else None
-            except ValueError:
-                code = None
-            if response.status_code in {401, 403}:
-                message = "内置数据库资源服务鉴权失败，请检查 Studio 后端服务密钥。"
-            elif code == "RESOURCE_BUSY":
-                message = "内置数据库存在未完成操作，请先在实体中核对执行结果，再重新启动。"
-            elif code == "RUNTIME_CONNECTION_NOT_CONFIGURED":
-                message = "SaaS 尚未配置当前挂载的专用调试连接，请配置后重新启动。"
-            elif response.status_code == 404:
-                message = "SaaS 应用或运行时连接接口不存在，请核对应用注册与 SaaS 版本。"
-            else:
-                message = "内置数据库资源暂不可用，请检查 SaaS 挂载配置后重新启动。"
-            raise ManagedDatabaseStartupError(message)
-        try:
-            return unwrap_bee_envelope(response.json())
-        except ValueError:
-            raise ManagedDatabaseStartupError("SaaS 返回的数据库资源结果无效，请核对服务后重新启动。") from None
-
-
 def _current_documents(root: Path) -> tuple[dict, dict, str]:
     """读取唯一应用配置和当前技术规划，计算不持久化的启动指纹。"""
 
@@ -125,19 +78,19 @@ def _require_current(root: Path, snapshot: StartupSnapshot) -> None:
         raise ManagedDatabaseStartupError("应用配置或技术规划已变化，请重新启动，不能沿用本次数据库检查。")
 
 
-def _client(client: ManagedRuntimeClient | None) -> ManagedRuntimeClient:
+def _client(client: ManagedDatabaseClient | None) -> ManagedDatabaseClient:
     """把基础客户端缺配置错误转换为启动资源问题，不暴露底层异常。"""
 
     try:
-        return client or ManagedRuntimeClient(Settings.from_env())
+        return client or ManagedDatabaseClient(Settings.from_env())
     except ValueError:
         raise ManagedDatabaseStartupError("请在 Studio 后端配置 SaaS 地址和 MANAGED_DATABASE_SERVICE_KEY 后重新启动。") from None
 
 
 def _check(
-    root: Path, snapshot: StartupSnapshot, remote: ManagedRuntimeClient | None,
+    root: Path, snapshot: StartupSnapshot, remote: ManagedDatabaseClient | None,
     on_readiness: Callable[[dict], None] | None = None,
-) -> ManagedRuntimeClient:
+) -> ManagedDatabaseClient:
     """核对本次完整表集合、资源身份和真实结构，不执行 SQL 或自动重建。"""
 
     trusted = None
@@ -147,7 +100,7 @@ def _check(
         _require_current(root, snapshot)
         remote = _client(remote)
         try:
-            readiness = TableReadiness.model_validate(remote.request(snapshot.datasource_key, "tables/check", sqls=snapshot.sqls))
+            readiness = TableReadiness.model_validate(remote.check_runtime_tables(snapshot.datasource_key, snapshot.sqls))
         except ValidationError:
             raise ManagedDatabaseStartupError("SaaS 表结构检查响应无效，请核对服务后重新启动。") from None
         if readiness.datasourceId != snapshot.datasource_id:
@@ -176,7 +129,7 @@ def _check(
 
 
 def prepare_managed_startup(
-    root: Path, *, client: ManagedRuntimeClient | None = None,
+    root: Path, *, client: ManagedDatabaseClient | None = None,
     on_readiness: Callable[[dict], None] | None = None,
 ) -> StartupSnapshot | None:
     """只对内置应用冻结完整设计并预检；外部模式保持原有连接解析路径。"""
@@ -217,14 +170,14 @@ def prepare_managed_startup(
 
 
 def resolve_managed_runtime(
-    root: Path, snapshot: StartupSnapshot, *, client: ManagedRuntimeClient | None = None,
+    root: Path, snapshot: StartupSnapshot, *, client: ManagedDatabaseClient | None = None,
     on_readiness: Callable[[dict], None] | None = None,
 ) -> RuntimeConnection:
     """Java 创建前复查真实结构、一次取密，并丢弃身份或设计不一致的响应。"""
 
     remote = _check(root, snapshot, client, on_readiness)
     try:
-        connection = RuntimeConnection.model_validate(remote.request(snapshot.datasource_key, "runtime-connection"))
+        connection = RuntimeConnection.model_validate(remote.get_runtime_connection(snapshot.datasource_key))
     except ValidationError:
         raise ManagedDatabaseStartupError("SaaS 调试连接响应无效，已停止启动，请核对服务配置。") from None
     if connection.datasourceKey != snapshot.datasource_key or connection.datasourceId != snapshot.datasource_id:

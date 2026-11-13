@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
+from app.services.authorization_manifest import RESOURCE_KEY_MAX_LENGTH
 from app.services.product_plan import create_product_plan, validate_product_plan_model_output
 from app.utils.model_output import extract_json_object
 from json_repair import repair_json
@@ -55,7 +56,7 @@ def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
                 ],
                 "actions": [
                     {
-                        "actionId": f"{page_id}_primary_action",
+                        "actionId": "primary_action",
                         "name": "<填写用户主动操作名称；纯展示页面删除此示例并返回空数组>",
                         "description": "<填写操作意图>",
                         "requiresConfirmation": False,
@@ -129,6 +130,8 @@ def _authorization_operation_action_instruction(requirement_spec: dict[str, Any]
         "权限操作覆盖约束：以下是已确认的业务受限操作："
         f"{names}。每一项必须在某个页面的 actions 中各出现且只出现一次，"
         "对应 action.name 必须与该名称完全相同；这些 action 仍是普通产品 action，"
+        f"平台派生的 pageId_actionId 权限资源键最长 {RESOURCE_KEY_MAX_LENGTH} 个字符；"
+        "请使用页面内简短且唯一的 actionId，省去重复的 pageId 前缀。"
         "不要输出任何权限、角色或 authorizationTargets 字段。\n"
     )
 
@@ -193,7 +196,7 @@ def _product_planning_prompt(
         "details, schemas, data sources, database operations, or implementation guesses.\n"
         "Every actionId must be lower_snake_case: it may contain only lowercase English letters, digits, and "
         "single underscores, must start with a letter, and must never use camelCase, PascalCase, hyphens, spaces, "
-        "or Chinese. For example, use order_list_export rather than OrderListExport or order-list-export.\n"
+        "or Chinese. For new actions, prefer short IDs unique within the page, such as export on order_list.\n"
         "navigation_targets may only reference pageIds declared in the same plan. Never return authorizationTargets, authorization, "
         "permissions, allowed_roles, role IDs, role assignments, resource keys, policy keys, or the fixed /roles "
         "system page. Every navigation behavior targetPageId must also appear "

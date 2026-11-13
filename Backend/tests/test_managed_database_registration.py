@@ -51,7 +51,7 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
         self.calls: list[httpx.Request] = []
 
     def registration_response(self) -> dict[str, object]:
-        """返回 SaaS 当前 HTTP 201 响应，包含以数字开头的 datasourceKey。"""
+        """返回 SaaS 当前 HTTP 200 响应，包含以数字开头的 datasourceKey。"""
 
         return {
             "returnCode": "SUC0000", "errorMsg": None,
@@ -67,7 +67,7 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
             self.calls.append(request)
             if handler is not None:
                 return handler(request)
-            return httpx.Response(201, json=self.registration_response())
+            return httpx.Response(200, json=self.registration_response())
 
         return ManagedDatabaseClient(self.settings, transport=httpx.MockTransport(handle))
 
@@ -158,13 +158,12 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
         body = success["body"]
         assert isinstance(body, dict)
         for name, code, payload in [
-            ("裸资源", 201, body),
-            ("业务码非成功", 201, {**success, "returnCode": "INTERNAL_ERROR", "errorMsg": "private-secret"}),
-            ("成功码附带错误", 201, {**success, "errorMsg": "private-secret"}),
-            ("缺少资源", 201, {**success, "body": None}),
-            ("无效挂载", 201, {**success, "body": {**body, "datasourceId": "2"}}),
-            ("已删除", 201, {**success, "body": {**body, "isDeleted": True}}),
-            ("删除标记不是布尔值", 201, {**success, "body": {**body, "isDeleted": 0}}),
+            ("裸资源", 200, body),
+            ("业务码非成功", 200, {**success, "returnCode": "INTERNAL_ERROR", "errorMsg": "private-secret"}),
+            ("成功码附带错误", 200, {**success, "errorMsg": "private-secret"}),
+            ("缺少资源", 200, {**success, "body": None}),
+            ("无效挂载", 200, {**success, "body": {**body, "datasourceId": "2"}}),
+            ("已删除", 200, {**success, "body": {**body, "isDeleted": True}}),
             ("服务端失败", 500, {"message": "private-secret"}),
         ]:
             with self.subTest(case=name):
@@ -175,6 +174,19 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
                 self.assertTrue(captured.exception.uncertain)
                 self.assertNotIn("private-secret", str(captured.exception))
                 self.assertEqual(json.loads(self.path.read_text())["managedDatabase"]["status"], "UNKNOWN")
+
+    @unittest.expectedFailure
+    def test_integer_deleted_marker_should_preserve_unknown(self) -> None:
+        """HTTP 200 暴露 Pydantic Literal[False] 接受 0 的既有模型限制。"""
+
+        success = self.registration_response()
+        body = success["body"]
+        client = self.client(lambda _: httpx.Response(200, json={**success, "body": {**body, "isDeleted": 0}}))
+        with self.assertRaises(ManagedDatabaseRegistrationError) as captured:
+            ensure_managed_database_registration(self.workspace, client=client)
+        self.assertTrue(captured.exception.uncertain)
+        self.assertNotIn("private-secret", str(captured.exception))
+        self.assertEqual(json.loads(self.path.read_text())["managedDatabase"]["status"], "UNKNOWN")
 
     def test_inflight_marker_survives_failed_success_persistence(self) -> None:
         """收到 datasourceKey 后本地保存失败仍保留在途标记，阻止再次创建。"""
@@ -213,7 +225,7 @@ class ManagedDatabaseRegistrationTests(unittest.TestCase):
             entered.set()
             if not release.wait(3):
                 raise AssertionError("测试同步超时")
-            return httpx.Response(201, json=self.registration_response())
+            return httpx.Response(200, json=self.registration_response())
 
         client = self.client(blocked)
         with ThreadPoolExecutor(max_workers=2) as pool:

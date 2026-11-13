@@ -26,7 +26,6 @@ import {
 import './BrowserPreviewPanel.less'
 import { useElementInspector } from './useElementInspector'
 import ServiceStatusDrawer from './ServiceStatusDrawer'
-import PreviewAuthorizationAlert from './PreviewAuthorizationAlert'
 import type { ServiceStatusControl } from './ServiceStatusDrawer'
 import type { PreviewServiceState } from './serviceStatusPolicy'
 import {
@@ -335,7 +334,6 @@ export default function BrowserPreviewPanel({
         </header>
       </div>
 
-      <PreviewAuthorizationAlert runtime={serviceRuntime} />
       <div className={cx('browser-preview-stage')}>
         <div className={cx('browser-preview-viewport')}>
           {showServiceEmptyState ? (

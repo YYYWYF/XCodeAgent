@@ -15,12 +15,14 @@ from app.config import Settings
 from app.services.backend_launch_support import _backend_runtime_environment
 from app.services.database_credentials import MySQLConnectionConfig
 from app.services.backend_project_launcher import _launch_backend_project_locked
+from app.services.managed_database_client import ManagedDatabaseClient
 from app.services.managed_database_runtime import (
-    ManagedDatabaseStartupError, ManagedRuntimeClient, prepare_managed_startup, resolve_managed_runtime,
+    ManagedDatabaseStartupError, prepare_managed_startup, resolve_managed_runtime,
 )
 from app.services.preview_runtime_repair import prepare_repair
-from app.services.runtime_log_redaction import attach_redacted_logs
 from app.services.preview_runtime_state import begin_attempt, record_database_check, runtime_snapshot
+from app.services.runtime_log_redaction import attach_redacted_logs
+from tests.managed_database_http_fixture import saas_success
 
 
 class ManagedDatabaseRuntimeTests(unittest.TestCase):
@@ -57,7 +59,7 @@ class ManagedDatabaseRuntimeTests(unittest.TestCase):
         self.status = 200
         settings = Settings(model_base_url="http://model.invalid", model_api_key="test", model_name="test",
                             managed_database_service_key="test-service-key")
-        self.client = ManagedRuntimeClient(settings, transport=httpx.MockTransport(self.reply))
+        self.client = ManagedDatabaseClient(settings, transport=httpx.MockTransport(self.reply))
 
     def reply(self, request: httpx.Request) -> httpx.Response:
         """检查请求只读语义和服务鉴权，模拟资源响应。"""
@@ -65,16 +67,16 @@ class ManagedDatabaseRuntimeTests(unittest.TestCase):
         self.calls.append(request)
         self.assertEqual(request.headers["Authorization"], "Bearer test-service-key")
         if self.status != 200:
-            return httpx.Response(self.status, json={"code": "RUNTIME_CONNECTION_NOT_CONFIGURED", "message": "sensitive-payload"})
+            return httpx.Response(self.status, json={"returnCode": "RUNTIME_CONNECTION_NOT_CONFIGURED", "errorMsg": "sensitive-payload", "body": None})
         if request.url.path.endswith("/tables/check"):
             self.assertEqual(request.method, "POST")
             sqls = json.loads(request.content)["sqls"]
             self.assertEqual(len(sqls), len(self.plan["entities"]))
             self.assertIn("CREATE TABLE `12ab34cd56ef_order`", sqls[0])
-            return httpx.Response(200, json=self.ready)
+            return saas_success(200, self.ready)
         self.assertTrue(request.url.path.endswith("/runtime-connection"))
         self.assertEqual(request.method, "GET")
-        return httpx.Response(200, json=self.connection)
+        return saas_success(200, self.connection)
 
     def test_preflight_and_before_launch_check_then_fetch_once(self) -> None:
         """构建前后固定两次检查，连接只取一次且不改正式配置。"""
@@ -200,12 +202,15 @@ class ManagedDatabaseRuntimeTests(unittest.TestCase):
         self.application["datasource"]["db"] = {"useBuiltin": False, "plantMode": {}}
         self.application_path.write_text(json.dumps(self.application))
         config = MySQLConnectionConfig("external.invalid", 3306, "external_user", "external-password", "external_db")
-        with patch("app.services.backend_launch_support.resolve_application_mysql_config", return_value=config) as resolver, \
+        source = {"id": "runtime-external"}
+        with patch("app.services.backend_launch_support.select_runtime_database", return_value=source) as selector, \
+             patch("app.services.backend_launch_support.resolve_runtime_mysql_config", return_value=config) as resolver, \
              patch("app.services.managed_database_runtime._client") as client:
             environment, error = _backend_runtime_environment(self.root)
         self.assertIsNone(error)
         self.assertEqual(environment["MYSQL_DATABASE"], "external_db")
-        resolver.assert_called_once_with(self.root)
+        selector.assert_called_once_with(self.root)
+        resolver.assert_called_once_with(self.root, source)
         client.assert_not_called()
 
     def test_resource_failure_does_not_call_repair_model(self) -> None:

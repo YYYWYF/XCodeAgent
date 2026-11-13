@@ -15,10 +15,9 @@ from app.services.authorization_table_projection import compile_authorization_ta
 from app.services.authorization_workspace_projector import ensure_projection, read_record
 from app.services.builtin_authorization_state import builtin_binding, builtin_lock, save_state, schema_ready, seed_ready
 from app.services.builtin_authorization_seed import read_confirmed_seed_plan
-from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient
 from app.services.builtin_authorization_seed_runtime import run_builtin_authorization_seed
-from app.services.managed_database_client import ManagedDatabaseRegistrationError
-from app.services.managed_table_client import ManagedTableClient, ManagedTableQueryTransientError
+from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseRegistrationError
+from app.services.managed_table_client import ManagedTableQueryTransientError
 
 
 def _result(record: dict, status: str, message: str, **extra) -> dict:
@@ -32,10 +31,10 @@ def _result(record: dict, status: str, message: str, **extra) -> dict:
             "message": message, **extra}
 
 
-def _check(remote: ManagedTableClient, binding: dict, compiled: dict) -> TableReadiness:
+def _check(remote: ManagedDatabaseClient, binding: dict, compiled: dict) -> TableReadiness:
     """要求四个目标与应用绑定精确匹配，不能用单纯表存在代替归属结构检查。"""
 
-    check = TableReadiness.model_validate(remote.request(binding["datasourceKey"], "tables/check", body={"sqls": compiled["sqls"]}))
+    check = TableReadiness.model_validate(remote.check_tables(binding["datasourceKey"], compiled["sqls"]))
     # SaaS 在资源占用期间合法返回空逐表结果，不能将执行中误判为响应损坏。
     if not check.ready and not check.tables and check.operationStatus in {"RUNNING", "UNKNOWN"} and check.datasourceId == binding["datasourceId"]:
         return check
@@ -95,8 +94,8 @@ def _ready(root: Path, record: dict) -> dict:
                    initialized_tables=compiled["tables"], next_action="continue", requires_manual_action=True)
 
 
-def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *, client: ManagedTableClient | None = None,
-                                        seed_client: ManagedAuthorizationSeedClient | None = None,
+def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *, client: ManagedDatabaseClient | None = None,
+                                        seed_client: ManagedDatabaseClient | None = None,
                                         explicit_recovery: bool = False, schema_only: bool = False) -> dict:
     """读取权威配置并串行执行；Schema 保留原提交保护，Seed 按幂等身份协调。"""
 
@@ -127,7 +126,7 @@ def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *,
                 return run_builtin_authorization_seed(root, record, compiled["tables"], technical_plan, client=seed_client)
             record = record or {"schemaVersion": 1, "datasourceMode": "builtin", **binding,
                                 "ddlFingerprint": compiled["ddlFingerprint"], "schemaReady": False}
-            remote = client or ManagedTableClient(Settings.from_env())
+            remote = client or ManagedDatabaseClient(Settings.from_env())
             stage = "remote"
             return _run_remote(root, record, binding, compiled, remote, explicit_recovery)
         except (OSError, ValueError, ManagedDatabaseRegistrationError) as error:
@@ -144,7 +143,7 @@ def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *,
                            else f"builtin_authorization_{stage}_unconfirmed")
 
 
-def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote: ManagedTableClient, explicit_recovery: bool) -> dict:
+def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote: ManagedDatabaseClient, explicit_recovery: bool) -> dict:
     """编排 SaaS 只读检查、持久受理和单次有界查询，跨重启复用同一操作。"""
 
     key = binding["datasourceKey"]
@@ -161,7 +160,7 @@ def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote:
         # 不能把较早的失败历史误认成本次丢失的受理结果；只有完整结构核验可解除未知保护。
         return _result(record, "manual_required", "原权限批次受理结果未知，请人工核对；不会再次提交。")
     # 新工作区也先查历史。任何在途/未知资源操作均禁止新建，已失败批次需显式恢复。
-    history = remote.request(key, "table-operations?limit=100")
+    history = remote.list_table_operations(key)
     if not isinstance(history, list) or len(history) > 100:
         raise ValueError("权限初始化操作记录不符合合同。")
     for item in history:
@@ -215,11 +214,11 @@ def _verify_schema_inputs(root: Path, binding: dict, compiled: dict) -> None:
         raise ValueError("权限 Schema 查询期间当前应用输入已变化。")
 
 
-def _query_operation(root: Path, record: dict, binding: dict, compiled: dict, remote: ManagedTableClient) -> dict:
+def _query_operation(root: Path, record: dict, binding: dict, compiled: dict, remote: ManagedDatabaseClient) -> dict:
     """仅查询原批次一次，成功后核验结构；不会轮询或提交 SQL。"""
 
     operation_id = record["operationId"]
-    operation = _operation(remote.request(binding["datasourceKey"], f"table-operations/{operation_id}"), compiled["tables"], operation_id)
+    operation = _operation(remote.get_table_operation(binding["datasourceKey"], operation_id), compiled["tables"], operation_id)
     _verify_schema_inputs(root, binding, compiled)
     record.update(status=operation["status"].lower(), steps=operation["steps"])
     save_state(root, record)
@@ -233,7 +232,7 @@ def _query_operation(root: Path, record: dict, binding: dict, compiled: dict, re
     return _result(record, "manual_required", "权限批次失败或结果未知，请核对原操作；刷新不会重复建表。")
 
 
-def refresh_builtin_authorization(workspace: str, operation_id: str, *, client: ManagedTableClient | None = None) -> dict:
+def refresh_builtin_authorization(workspace: str, operation_id: str, *, client: ManagedDatabaseClient | None = None) -> dict:
     """按本地绑定和指定原操作刷新状态，仅允许写入核验事实，禁止建表或推进工作流。"""
 
     root = Path(workspace).expanduser().resolve()
@@ -248,7 +247,7 @@ def refresh_builtin_authorization(workspace: str, operation_id: str, *, client: 
                 or any(record.get(key) != value for key, value in binding.items())
                 or record.get("ddlFingerprint") != compiled["ddlFingerprint"]):
             raise ValueError("原操作编号、数据库绑定或 DDL 已变化，请核对当前应用。")
-        return _query_operation(root, record, binding, compiled, client or ManagedTableClient(Settings.from_env()))
+        return _query_operation(root, record, binding, compiled, client or ManagedDatabaseClient(Settings.from_env()))
 
 
 def ensure_builtin_build_projection(state: dict) -> None:

@@ -11,7 +11,7 @@ from app.services.authorization_manifest import (
 )
 from app.services.authorization_deliverability import authorization_deliverability_report
 from app.services.page_implementation_contract import build_page_implementation_contracts
-from app.services.product_plan import create_product_plan
+from app.services.product_plan import create_product_plan, validate_product_plan
 from app.services.requirement_spec import create_requirement_spec
 
 
@@ -126,6 +126,41 @@ class AuthorizationManifestTests(unittest.TestCase):
         )
         self.assertTrue(manifest["resources"])
 
+    def test_resource_key_length_is_checked_during_planning_and_compilation(self) -> None:
+        """允许 64 字符的最终键，65 字符的键在产品规划和资源编译时均被拒绝。"""
+
+        requirement, product, _, _ = self._inputs()
+        action = product["pages"][0]["actions"][0]
+        target = product["authorizationTargets"]["operationRules"][0]
+        action["actionId"] = target["actionId"] = "a" * 57
+        manifest = compile_authorization_resources(requirement, product, application_config=self._application_config())
+        binding = manifest["bindings"]["actions"][0]
+        self.assertEqual(binding["resourceKey"], f"people_{action['actionId']}")
+        self.assertEqual(len(binding["resourceKey"]), 64)
+        resource = next(item for item in manifest["resources"] if item["resourceKey"] == binding["resourceKey"])
+        self.assertEqual(resource["targetResourceRef"], f"action:people:{action['actionId']}")
+        self.assertEqual(validate_product_plan(product, requirement), [])
+
+        action["actionId"] = target["actionId"] = "a" * 58
+        self.assertTrue(any("长度为 65，上限为 64" in error for error in validate_product_plan(product, requirement)))
+        with self.assertRaisesRegex(ValueError, "长度为 65，上限为 64"):
+            compile_authorization_resources(requirement, product, application_config=self._application_config())
+
+    def test_resource_compiler_rejects_dangling_action_and_wrong_page(self) -> None:
+        """直接编译也拒绝悬空操作，以及被改绑到另一页面的权限规则。"""
+
+        requirement, product, _, _ = self._inputs()
+        action_target = product["authorizationTargets"]["operationRules"][0]
+        action_target["actionId"] = "missing_action"
+        with self.assertRaisesRegex(ValueError, "不存在的页面操作：people/missing_action"):
+            compile_authorization_resources(requirement, product, application_config=self._application_config())
+
+        action_target["actionId"] = "edit_person"
+        product["pages"].append({"pageId": "other"})
+        product["authorizationTargets"]["pageRules"][0]["pageId"] = "other"
+        with self.assertRaisesRegex(ValueError, "页面引用与已确认目标不一致"):
+            compile_authorization_resources(requirement, product, application_config=self._application_config())
+
     def test_rejects_data_permissions_and_mixed_endpoint_control(self) -> None:
         """数据权限和受控/未受控复用 Endpoint 必须阻止 TechnicalPlan。"""
 
@@ -159,6 +194,7 @@ class AuthorizationManifestTests(unittest.TestCase):
                 "actionId": "operate_person",
             }
         )
+        product["pages"][0]["actions"].append({"actionId": "operate_person"})
         pages[0]["references"]["action_implementations"].append(
             {"actionId": "operate_person", "endpointId": "person_api.update"}
         )
@@ -177,7 +213,8 @@ class AuthorizationManifestTests(unittest.TestCase):
             }
         )
         product["authorizationTargets"]["pageRules"].append({"ruleId": "page_collision", "pageId": "people_edit_person"})
-        with self.assertRaisesRegex(ValueError, "跨类型或跨目标碰撞"):
+        product["pages"].append({"pageId": "people_edit_person"})
+        with self.assertRaisesRegex(ValueError, "权限资源键重复：people_edit_person"):
             compile_authorization_manifest(requirement, product, contracts, pages, application_config=self._application_config())
 
     def test_deliverability_report_covers_closed_loop_and_default_endpoint_access(self) -> None:

@@ -17,7 +17,7 @@ from app.services.application_config.repository import ApplicationConfigReposito
 from app.services.entity_table_sql import compile_entity_table, create_table_sql
 from app.services.entity_ddl import preview_entity_ddl
 from app.services.entity_table_binding import bind_plan_entity_tables
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from app.services.backend_process_registry import backend_launch_lock
 from app.services.project_launcher import inspect_project_preview
 from app.workspace.endpoint_design_documents import technical_plan_path
@@ -60,7 +60,7 @@ def prepare_entity_table(request: EntityTableRequest) -> dict[str, Any]:
     }
 
 
-def run_entity_table_action(request: EntityTableRequest, *, client: ManagedTableClient | None = None) -> dict[str, Any]:
+def run_entity_table_action(request: EntityTableRequest, *, client: ManagedDatabaseClient | None = None) -> dict[str, Any]:
     """执行一次明确动作；查询只读，不自动重试、轮询或创建远端资源。"""
 
     # 普通实体只读查看 DDL，不进入模拟数据库配置校验，也不创建远端客户端。
@@ -74,12 +74,10 @@ def run_entity_table_action(request: EntityTableRequest, *, client: ManagedTable
         raise ValueError("请先预览并明确确认当前 SQL；设计变化后需要重新加载和确认。")
     if request.action == "rebuild" and not request.allow_data_loss:
         raise ValueError("重建将清空该表全部数据，请明确确认允许丢弃数据后再提交。")
-    remote = client or ManagedTableClient(Settings.from_env())
+    remote = client or ManagedDatabaseClient(Settings.from_env())
     datasource_key = preview["datasourceKey"]
     if request.action in {"execute", "rebuild"}:
-        body = {"mode": "CREATE", "sql": preview["sql"]}
         if request.action == "rebuild":
-            body.update(mode="REBUILD", allowDataLoss=True)
             # 与受控预览启动共用锁，检查已停止后再受理；不代替 SaaS 的应用占用。
             with backend_launch_lock(Path(request.workspace_root).expanduser().resolve()):
                 if inspect_project_preview(request.workspace_root)["running"]:
@@ -87,20 +85,20 @@ def run_entity_table_action(request: EntityTableRequest, *, client: ManagedTable
                 # 等待启动锁期间设计可能变化，删除数据前再次核对用户确认的版本。
                 if prepare_entity_table(request)["previewHash"] != request.preview_hash:
                     raise ValueError("等待期间实体设计已变化，请重新加载 SQL 后确认重建。")
-                raw_receipt = remote.request(datasource_key, "table-operations", body=body)
+                raw_receipt = remote.submit_table(datasource_key, mode="REBUILD", sql=preview["sql"], allow_data_loss=True)
         else:
-            raw_receipt = remote.request(datasource_key, "table-operations", body=body)
+            raw_receipt = remote.submit_table(datasource_key, mode="CREATE", sql=preview["sql"])
         try:
             receipt = OperationReceipt.model_validate(raw_receipt)
         except ValidationError:
             raise ValueError("SaaS 已响应，但受理结果无效；请先刷新原操作记录，不要重复提交。") from None
         result["receipt"] = receipt.model_dump()
         return result
-    operations = remote.request(datasource_key, "table-operations?limit=100")
+    operations = remote.list_table_operations(datasource_key)
     history = parse_database_operations(operations)
     selected = next((item for item in history if item.targets_table(preview["tableName"])), None)
     result["operation"] = selected.model_dump() if selected else None
-    raw_readiness = remote.request(datasource_key, "tables/check", body={"sqls": [preview["sql"]]})
+    raw_readiness = remote.check_tables(datasource_key, [preview["sql"]])
     try:
         readiness = TableReadiness.model_validate(raw_readiness)
     except ValidationError:

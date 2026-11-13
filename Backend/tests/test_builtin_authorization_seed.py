@@ -20,7 +20,8 @@ from app.services.builtin_authorization_bootstrap import run_builtin_authorizati
 from app.services.builtin_authorization_seed import (
     PURPOSE, SeedContractError, compile_builtin_authorization_seed, seed_request_fingerprint, validate_seed_transport,
 )
-from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient, SeedRemoteError
+from app.services.builtin_authorization_seed_client import SeedRemoteError
+from app.services.managed_database_client import ManagedDatabaseClient
 from app.services.builtin_authorization_seed_runtime import refresh_builtin_authorization_seed
 from app.services.builtin_authorization_state import save_state, seed_ready
 from app.services.preview_runtime_state import read_record as read_preview_record, runtime_snapshot
@@ -55,8 +56,6 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
                        "app.services.application_config", "app.graph.workflow"):
             self.start_patch(module + ".read_application_config", return_value=self.application)
         self.start_patch("app.services.builtin_authorization_bootstrap.ensure_projection")
-        self.dag = self.start_patch("app.services.builtin_authorization_seed_runtime.load_confirmed_build_task_plan",
-                                    return_value={"status": "ready"})
         self.settings = Settings(model_base_url="", model_api_key="", model_name="",
                                  managed_database_base_url="https://saas.example", managed_database_service_key="fixture-secret")
         self.calls = []
@@ -80,10 +79,10 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
 
         return compile_builtin_authorization_seed(self.application, self.plan, datasource_key=KEY)
 
-    def client(self) -> ManagedAuthorizationSeedClient:
+    def client(self) -> ManagedDatabaseClient:
         """每次创建独立客户端，恢复仅依赖持久文件。"""
 
-        return ManagedAuthorizationSeedClient(self.settings, transport=httpx.MockTransport(self.respond))
+        return ManagedDatabaseClient(self.settings, transport=httpx.MockTransport(self.respond))
 
     def envelope(self, status: int, body: dict, code: str = "SUC0000") -> httpx.Response:
         """按 Java 真实包装返回响应，错误文本包含虚构敏感内容以检查脱敏。"""
@@ -109,7 +108,7 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
             self.accepted = True
             if self.drop:
                 raise httpx.ReadTimeout("fixture-secret", request=request)
-            return self.envelope(202, {"operationId": "456", "status": self.receipt_status, "purpose": PURPOSE})
+            return self.envelope(200, {"operationId": "456", "status": self.receipt_status, "purpose": PURPOSE})
         self.assertIn(request.url.path, {path + "by-key/" + compiled["idempotencyKey"], path + "456"})
         if not self.accepted:
             return self.envelope(404, {}, "RESOURCE_NOT_FOUND")
@@ -191,33 +190,27 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
             with self.assertRaisesRegex(ValueError, "冲突"):
                 self.compile()
 
-    def test_requires_schema_and_confirmed_dag(self) -> None:
-        """Schema 或 DAG 未就绪时零 Seed 请求。"""
+    def test_requires_verified_schema(self) -> None:
+        """Schema 未核验时零 Seed 请求。"""
 
-        self.dag.return_value = None
-        self.assertFalse(self.run_node()["seed_ready"])
         record = read_record(self.root, "state.json")
         save_state(self.root, {**record, "schemaReady": False})
         with patch("app.services.builtin_authorization_bootstrap._run_remote", return_value={"seed_ready": False}):
             self.assertFalse(self.run_node()["seed_ready"])
         self.assert_calls()
 
-    def test_dag_change_during_lookup_does_not_block_seed(self) -> None:
-        """首次查询期间 DAG 被正常回写不阻断 Seed，原提交保护保持有效。"""
+    def test_unconfirmed_build_plan_does_not_block_seed(self) -> None:
+        """Build DAG 未确认时仍按原键查询、提交和核验 Seed。"""
 
-        def update_dag() -> None:
-            """替换 DAG 快照，模拟请求期间任务进度发生变化。"""
-
-            self.dag.return_value = {"status": "ready", "summary": {"completed": 1}}
-
-        self.before_response = update_dag
+        plan_path = self.root / ".devagentstudio/plans/build-task-plan.json"
+        plan_path.write_text(json.dumps({"status": "pending", "confirmation_status": "draft"}), encoding="utf-8")
         self.assertFalse(self.run_node()["seed_ready"])
         self.assert_calls("GET", "POST")
         self.assertTrue(self.run_node()["seed_ready"])
         self.assert_calls("GET", "POST", "GET")
 
     def test_receipt_never_ready_then_get_and_reuse(self) -> None:
-        """202 即使报告 SUCCEEDED 也需要原 GET，之后 Build 和预览复用同一事实。"""
+        """HTTP 200 即使报告 SUCCEEDED 也需要原 GET，之后 Build 和预览复用同一事实。"""
 
         self.receipt_status = "SUCCEEDED"
         pending = self.run_node()
@@ -391,20 +384,20 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
     def test_missing_response_requires_explicit_business_not_found(self) -> None:
         """未知业务码、非空错误体及成功响应 null 均不能当作查无记录。"""
 
-        for status, code, body, operation_id in (
-            (404, "BEEZ404", None, None),
-            (404, "RESOURCE_NOT_FOUND", {"unexpected": True}, None),
-            (200, "SUC0000", None, None),
+        for status, code, body in (
+            (404, "BEEZ404", None),
+            (404, "RESOURCE_NOT_FOUND", {"unexpected": True}),
+            (200, "SUC0000", None),
         ):
-            with self.subTest(status=status, code=code, body=body, operation_id=operation_id):
+            with self.subTest(status=status, code=code, body=body):
                 def respond(request: httpx.Request) -> httpx.Response:
                     """按用例返回受控响应，不调用远端服务。"""
 
                     return self.envelope(status, body, code)
 
-                client = ManagedAuthorizationSeedClient(self.settings, transport=httpx.MockTransport(respond))
+                client = ManagedDatabaseClient(self.settings, transport=httpx.MockTransport(respond))
                 with self.assertRaises(SeedRemoteError):
-                    client.query(KEY, operation_id=operation_id, idempotency_key=self.compile()["idempotencyKey"])
+                    client.get_seed_by_key(KEY, self.compile()["idempotencyKey"])
 
     def test_post_rejection_can_recover_after_remote_missing(self) -> None:
         """请求拒绝后保留错误，修正服务后按原键查无记录即可恢复。"""
@@ -563,7 +556,7 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
                 "action": "refresh", "operationKind": "seed", "workspaceRoot": str(self.root), "operationId": "456"}}}
             return "".join([frame async for frame in build_builtin_authorization_stream(payload)])
 
-        with patch("app.services.builtin_authorization_seed_runtime.ManagedAuthorizationSeedClient", return_value=self.client()):
+        with patch("app.services.builtin_authorization_seed_runtime.ManagedDatabaseClient", return_value=self.client()):
             frames = asyncio.run(collect()).replace(" ", "")
         for value in ("RUN_STARTED", "TEXT_MESSAGE_END", "STATE_SNAPSHOT", "RUN_FINISHED",
                       '"schemaReady":true', '"seedReady":true', '"operationId":"123"', '"seedOperationId":"456"'):

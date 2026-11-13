@@ -17,7 +17,7 @@ from app.services.builtin_authorization_bootstrap import run_builtin_authorizati
 from app.services.builtin_authorization_state import save_state
 from app.services.builtin_authorization_task_store import AuthorizationTask, read_task, save_task
 from app.protocols.builtin_authorization import build_builtin_authorization_stream
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from tests import test_builtin_authorization_seed as seed_fixture
 from tests.authorization_orchestrator_safety_cases import AuthorizationOrchestratorSafetyCases
 
@@ -30,8 +30,6 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
 
         super().setUp()
         self.start_patch("app.services.builtin_authorization_orchestrator.read_application_config", return_value=self.application)
-        self.orchestrator_dag = self.start_patch("app.services.builtin_authorization_orchestrator.load_confirmed_build_task_plan",
-                                                 return_value={"status": "ready"})
         self.schema_status = "RUNNING"
         self.schema_synced = False
         self.schema_drop = False
@@ -58,7 +56,7 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
             self.schema_posts += 1
             if self.schema_drop:
                 raise httpx.ReadTimeout("fixture", request=request)
-            return self.envelope(202, {"operationId": "123", "status": "RUNNING"})
+            return self.envelope(200, {"operationId": "123", "status": "RUNNING"})
         if request.url.query:
             return self.envelope(200, [])
         self.assertTrue(request.url.path.endswith("/123"))
@@ -69,7 +67,7 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
     def execute(self, workspace: str, plan: dict, *, schema_only: bool) -> dict:
         """保留真实 Schema 和 Seed 的幂等及成功核验代码。"""
 
-        client = ManagedTableClient(self.settings, transport=httpx.MockTransport(self.schema_respond))
+        client = ManagedDatabaseClient(self.settings, transport=httpx.MockTransport(self.schema_respond))
         return run_builtin_authorization_bootstrap(workspace, plan, client=client, seed_client=self.client(), schema_only=schema_only)
 
     def tick(self) -> bool:
@@ -77,9 +75,10 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
 
         return orchestration.tick(self.root, self.generation, execute=self.execute)
 
-    def test_full_automatic_journey_and_running_queries(self) -> None:
-        """CREATE 和 Seed 各一次，多次 RUNNING 仅 GET，最终两个事实就绪。"""
+    def test_full_automatic_journey_without_build_plan(self) -> None:
+        """无 Build DAG 时 CREATE 和 Seed 各一次，多次 RUNNING 仅 GET，最终均就绪。"""
 
+        self.assertFalse((self.root / ".devagentstudio/plans/build-task-plan.json").exists())
         self.begin(fresh=True)
         self.assertTrue(self.tick())
         for _ in range(3):
@@ -99,25 +98,6 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
         self.assertEqual(sum(method == "POST" for method, _ in self.calls), 1)
         self.assertEqual(sum(method == "GET" for method, _ in self.calls), 5)
         self.assertEqual(orchestration.get_builtin_authorization_task(str(self.root))["status"], "ready")
-
-    def test_dag_changes_do_not_interrupt_authorization(self) -> None:
-        """DAG 更新不改变权限摘要，网络边界变化后仍只提交一次 Seed。"""
-
-        self.begin()
-        fingerprint = orchestration._inputs(self.root)[0]
-        self.orchestrator_dag.return_value = {"status": "ready", "revision": "changed"}
-        self.assertEqual(orchestration._inputs(self.root)[0], fingerprint)
-
-        def update_dag() -> None:
-            """用新对象模拟 Build 在请求期间回写正式 DAG。"""
-
-            self.orchestrator_dag.return_value = {"status": "ready", "summary": {"completed": 1}}
-
-        self.before_response = update_dag
-        self.assertTrue(self.tick())
-        self.assertFalse(self.tick())
-        self.assertEqual(read_task(self.root).status, "ready")
-        self.assertEqual(sum(method == "POST" for method, _ in self.calls), 1)
 
     def test_schema_success_without_structure_never_seeds(self) -> None:
         """操作成功不能替代四表核验。"""

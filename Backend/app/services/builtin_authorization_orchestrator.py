@@ -19,7 +19,6 @@ from app.services.builtin_authorization_state import builtin_binding, builtin_lo
 from app.services.builtin_authorization_task_store import (
     AuthorizationTask, task_input_scope, read_task, save_task, task_transaction, read_operation_record,
 )
-from app.workspace.task_documents import load_confirmed_build_task_plan
 
 _registry_lock = threading.RLock()
 _workers: dict[str, tuple[threading.Event, Future]] = {}
@@ -44,15 +43,12 @@ def _now() -> str:
 
 
 def _inputs(root: Path) -> tuple[str, dict, dict]:
-    """重新读取权限输入；DAG 只校验确认准入，不参与权限业务摘要。"""
+    """重新读取当前数据库绑定、正式 Manifest、DDL 和 Seed 输入并计算摘要。"""
 
     application = read_application_config(root)
     binding = builtin_binding(application)
     plan = read_confirmed_seed_plan(root)
     compiled = compile_builtin_authorization_seed(application, plan, datasource_key=binding["datasourceKey"])
-    dag = load_confirmed_build_task_plan(root)
-    if not dag or dag.get("status") != "ready":
-        raise ValueError("权限初始化需要已确认且有效的 Build DAG。")
     payload = {"binding": binding, "ddl": compile_authorization_tables(root, binding["datasourceKey"])["ddlFingerprint"],
                "seed": compiled["seedFingerprint"], "manifest": plan["authorization_manifest"],
                "authEnabled": (application.get("auth") or {}).get("enable")}

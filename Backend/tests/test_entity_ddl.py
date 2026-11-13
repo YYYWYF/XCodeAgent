@@ -45,7 +45,7 @@ class EntityDdlTests(unittest.TestCase):
         """固定类型、注释转义与隐式主键沿用共用编译器，预览不触发副作用。"""
         before = self.path.read_bytes()
         with patch("app.services.entity_tables.ApplicationConfigRepository") as repository, \
-                patch("app.services.entity_tables.ManagedTableClient") as remote:
+                patch("app.services.entity_tables.ManagedDatabaseClient") as remote:
             preview = run_entity_table_action(self.request())["ddlPreview"]
             repository.assert_not_called()
             remote.assert_not_called()

@@ -41,7 +41,7 @@ const warning = {
   nextAction: 'open_authorization_status'
 } as const
 
-/** 用同一预览界面验证就绪快照只控制提醒，地址栏和刷新继续可用。 */
+/** 用同一预览界面验证权限状态不会显示启动提示，地址栏和刷新继续可用。 */
 function renderPreview(advisory: NonNullable<PreviewRuntimePayload['runtime']>['authorizationAdvisory']): string {
   return renderToStaticMarkup(
     <BrowserPreviewPanel
@@ -62,8 +62,14 @@ function renderPreview(advisory: NonNullable<PreviewRuntimePayload['runtime']>['
 }
 
 const warnedPreview = renderPreview(warning)
-assert.match(warnedPreview, /权限功能尚未就绪/)
-assert.match(warnedPreview, /权限数据库初始化/)
+assert.doesNotMatch(warnedPreview, /权限功能尚未就绪/)
+assert.doesNotMatch(warnedPreview, /权限数据库初始化/)
+assert.doesNotMatch(renderPreview({
+  ...warning,
+  status: 'unknown',
+  schemaReady: false,
+  message: '暂时无法确认权限初始化状态，权限相关功能可能无法正常使用。请在「权限数据库初始化」卡刷新状态。'
+}), /权限功能尚未就绪|暂时无法确认权限初始化状态/)
 assert.doesNotMatch(warnedPreview, /启动失败/)
 assert.match(warnedPreview, /<iframe[^>]*src="http:\/\/127\.0\.0\.1:3000/)
 assert.doesNotMatch(warnedPreview, /<(button|input)[^>]*(disabled[^>]*aria-label="(刷新|预览地址)"|aria-label="(刷新|预览地址)"[^>]*disabled)/)

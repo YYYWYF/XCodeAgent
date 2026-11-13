@@ -150,7 +150,7 @@ class AuthorizationSeedRecoveryCases:
             if request.method == "POST":
                 envelope = response.json()
                 envelope["body"]["operationId"] = "789"
-                return httpx.Response(202, json=envelope)
+                return httpx.Response(200, json=envelope)
             return response
 
         with patch.object(self, "respond", side_effect=respond):
@@ -182,13 +182,18 @@ class AuthorizationSeedRecoveryCases:
                 self.assertEqual(read_record(self.root, "state.json"), baseline)
                 self.assert_calls("GET")
 
-    def test_recovery_still_requires_confirmed_dag(self) -> None:
-        """已有提交尝试也不能绕过正式 DAG 准入进入重提路径。"""
+    def test_recovery_without_build_plan_reuses_seed_identity(self) -> None:
+        """无 Build DAG 时，查无原操作仍按原键提交并核验。"""
 
         self.store_seed_attempt()
-        self.dag.return_value = None
+        self.assertFalse((self.root / ".devagentstudio/plans/build-task-plan.json").exists())
+        original_seed = read_record(self.root, "state.json")["seed"]
         self.assertFalse(self.run_node()["seed_ready"])
-        self.assert_calls()
+        self.assertTrue(self.run_node()["seed_ready"])
+        current_seed = read_record(self.root, "state.json")["seed"]
+        for field in ("idempotencyKey", "seedFingerprint"):
+            self.assertEqual(current_seed[field], original_seed[field])
+        self.assert_calls("GET", "POST", "GET")
 
     def test_inputs_changed_after_missing_lookup_block_submission(self) -> None:
         """按键未找到后管理员变化，网络边界复核必须阻断 POST。"""
@@ -225,7 +230,7 @@ class AuthorizationSeedRecoveryCases:
                     "workspaceRoot": str(self.root), "operationId": "456"}}}
             return "".join([frame async for frame in build_builtin_authorization_stream(payload)])
 
-        with patch("app.services.builtin_authorization_seed_runtime.ManagedAuthorizationSeedClient", return_value=self.client()):
+        with patch("app.services.builtin_authorization_seed_runtime.ManagedDatabaseClient", return_value=self.client()):
             frames = asyncio.run(collect()).replace(" ", "")
         for expected in ("RUN_STARTED", "TEXT_MESSAGE_END", "STATE_SNAPSHOT", "RUN_FINISHED",
                          '"failureCategory":"seed_operation_not_found"', '"seedReady":false'):
@@ -234,7 +239,7 @@ class AuthorizationSeedRecoveryCases:
         self.assert_calls("GET")
 
     def test_existing_rows_are_verified_before_ready(self) -> None:
-        """预期行全部已存在时仍需 GET 核验，202 回执不能直接宣告完成。"""
+        """预期行全部已存在时仍需 GET 核验，HTTP 200 回执不能直接宣告完成。"""
 
         total = sum(len(table["rows"]) for table in self.compile()["request"]["tables"])
         self.detail_overrides = {"createdCount": 0, "existingCount": total}
@@ -249,9 +254,8 @@ class AuthorizationSeedRecoveryCases:
 
         self.store_seed_attempt()
         baseline = read_record(self.root, "state.json")
-        self.dag.return_value = None
         with patch("app.services.builtin_authorization_patch.read_application_config", return_value=self.application), \
-                patch("app.services.builtin_authorization_seed_runtime.ManagedAuthorizationSeedClient", return_value=self.client()):
+                patch("app.services.builtin_authorization_seed_runtime.ManagedDatabaseClient", return_value=self.client()):
             result = refresh_patch(str(self.root))
         self.assertEqual(result["failure_category"], "seed_operation_not_found")
         self.assertEqual(read_record(self.root, "state.json"), baseline)

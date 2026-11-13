@@ -14,6 +14,7 @@ from app.services.application_config.initial_administrators import parse_admins_
 AUTHORIZATION_MANIFEST_SCHEMA_VERSION = "authorization-manifest.v3"
 SYSTEM_ADMIN_ROLE_SEED_KEY = "system_admin"
 SYSTEM_RESOURCE_KEY = "system_authorization_management"
+RESOURCE_KEY_MAX_LENGTH = 64
 _LOWER_SNAKE_CASE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 _FORBIDDEN_FIELDS = {"dataRules", "dataPolicyBindings", "dataRuleKey", "policyKey", "requiredSubjectAttributes", "authorization_data_bindings"}
 
@@ -26,6 +27,19 @@ def _dict_items(value: Any) -> list[dict[str, Any]]:
 def _text_items(value: Any) -> list[str]:
     """归一化字符串列表并去重排序。"""
     return sorted({str(item).strip() for item in value if str(item).strip()}) if isinstance(value, list) else []
+
+
+def authorization_resource_key(page_id: str, *, action_id: str | None = None) -> str:
+    """按现有规则派生资源键，并在预览、规划和正式编译中复用同一键长约束。"""
+
+    target = f"页面 {page_id}" if action_id is None else f"操作 {page_id}/{action_id}"
+    key = page_id if action_id is None else f"{page_id}_{action_id}"
+    if len(key) > RESOURCE_KEY_MAX_LENGTH:
+        hint = "请缩短该页面的操作 ID，可省去重复的页面前缀。" if action_id is not None else "请缩短该页面 ID。"
+        raise ValueError(f"{target} 的权限资源键 {key} 长度为 {len(key)}，上限为 {RESOURCE_KEY_MAX_LENGTH}。{hint}")
+    if not _LOWER_SNAKE_CASE.fullmatch(key):
+        raise ValueError(f"{target} 的权限资源键 {key} 必须使用 lower_snake_case。")
+    return key
 
 
 def _canonical_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -153,38 +167,51 @@ def compile_authorization_resources(requirement_spec: dict[str, Any], product_pl
     if not enabled:
         return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": [], "bindings": {"pages": [], "actions": [], "endpoints": []}, "systemAuthorization": {"adminRoleSeedKey": "", "managementResourceKey": ""}, "defaultRoleAuthorization": {"roles": [], "roleResourceGrants": []}})
     targets = product_plan.get("authorizationTargets") if isinstance(product_plan.get("authorizationTargets"), dict) else {}
-    page_targets = {str(item.get("ruleId") or "").strip(): str(item.get("pageId") or "").strip() for item in _dict_items(targets.get("pageRules"))}
+    page_rules = _dict_items(targets.get("pageRules"))
+    action_rules = _dict_items(targets.get("operationRules"))
+    page_targets = {str(item.get("ruleId") or "").strip(): str(item.get("pageId") or "").strip() for item in page_rules}
     action_targets = {
         str(item.get("ruleId") or "").strip(): (
             str(item.get("pageId") or "").strip(),
             str(item.get("actionId") or "").strip(),
             str(item.get("mode") or "hidden").strip() or "hidden",
         )
-        for item in _dict_items(targets.get("operationRules"))
+        for item in action_rules
+    }
+    if len(page_targets) != len(page_rules) or len(action_targets) != len(action_rules):
+        raise ValueError("权限 Manifest 的同一规则不能绑定多个目标。")
+    product_pages = _dict_items(product_plan.get("pages"))
+    page_ids = {str(page.get("pageId") or "").strip() for page in product_pages}
+    action_ids = {
+        (str(page.get("pageId") or "").strip(), str(action.get("actionId") or "").strip())
+        for page in product_pages
+        for action in _dict_items(page.get("actions"))
     }
     resources: dict[str, dict[str, Any]] = {SYSTEM_RESOURCE_KEY: {"resourceKey": SYSTEM_RESOURCE_KEY, "origin": "system", "type": "system", "name": "权限管理", "description": "管理角色、成员角色与角色资源关系。", "sourceRuleIds": [], "targetResourceRef": "system:authorization_management"}}
     page_bindings: dict[str, dict[str, str]] = {}; action_bindings: dict[tuple[str, str], dict[str, str]] = {}; grants: dict[str, set[str]] = {}
     for rule in _dict_items(authorization.get("restrictedPages")):
         rule_id = str(rule.get("ruleId") or "").strip(); page_id = page_targets.get(rule_id, "")
         if not rule_id or not page_id: raise ValueError("权限 manifest 的页面规则缺少已确认 pageId 目标。")
-        resource = resources.setdefault(page_id, {"resourceKey": page_id, "origin": "business", "type": "page", "name": str(rule.get("name") or page_id), "description": str(rule.get("description") or ""), "sourceRuleIds": [], "targetResourceRef": f"page:{page_id}"})
-        resource["sourceRuleIds"] = _text_items([*resource["sourceRuleIds"], rule_id]); page_bindings[page_id] = {"pageId": page_id, "resourceKey": page_id}
-        for role_id in _text_items(rule.get("defaultGrantedRoleIds")): grants.setdefault(role_id, set()).add(page_id)
+        if page_id not in page_ids or page_id != str(rule.get("targetPageId") or "").strip():
+            raise ValueError(f"权限页面规则 {rule_id} 的页面引用与已确认目标不一致：{page_id}。")
+        resource_key = authorization_resource_key(page_id)
+        if resource_key in resources:
+            raise ValueError(f"权限资源键重复：{resource_key}（规则 {rule_id}）。")
+        resources[resource_key] = {"resourceKey": resource_key, "origin": "business", "type": "page", "name": str(rule.get("name") or page_id), "description": str(rule.get("description") or ""), "sourceRuleIds": [rule_id], "targetResourceRef": f"page:{page_id}"}
+        page_bindings[page_id] = {"pageId": page_id, "resourceKey": resource_key}
+        for role_id in _text_items(rule.get("defaultGrantedRoleIds")): grants.setdefault(role_id, set()).add(resource_key)
     for rule in _dict_items(authorization.get("restrictedOperations")):
         rule_id = str(rule.get("ruleId") or "").strip(); page_id, action_id, mode = action_targets.get(rule_id, ("", "", "hidden"))
         if not rule_id or not page_id or not action_id: raise ValueError("权限 manifest 的操作规则缺少已确认 pageId/actionId 目标。")
         if mode not in {"hidden", "disabled"}: raise ValueError("权限 manifest 的操作规则 mode 必须是 hidden 或 disabled。")
-        resource_key = f"{page_id}_{action_id}"
-        existing = resources.get(resource_key)
-        if existing is not None and (
-            existing.get("type") != "operation"
-            or existing.get("targetResourceRef") != f"action:{page_id}:{action_id}"
-        ):
-            raise ValueError(f"权限资源键跨类型或跨目标碰撞：{resource_key}。")
-        resource = resources.setdefault(resource_key, {"resourceKey": resource_key, "origin": "business", "type": "operation", "name": str(rule.get("name") or action_id), "description": str(rule.get("description") or ""), "sourceRuleIds": [], "targetResourceRef": f"action:{page_id}:{action_id}"})
-        resource["sourceRuleIds"] = _text_items([*resource["sourceRuleIds"], rule_id]); action_bindings[(page_id, action_id)] = {"pageId": page_id, "actionId": action_id, "resourceKey": resource_key, "mode": mode}
+        if (page_id, action_id) not in action_ids:
+            raise ValueError(f"权限操作规则 {rule_id} 引用了不存在的页面操作：{page_id}/{action_id}。")
+        resource_key = authorization_resource_key(page_id, action_id=action_id)
+        if resource_key in resources:
+            raise ValueError(f"权限资源键重复：{resource_key}（规则 {rule_id}）。")
+        resources[resource_key] = {"resourceKey": resource_key, "origin": "business", "type": "operation", "name": str(rule.get("name") or action_id), "description": str(rule.get("description") or ""), "sourceRuleIds": [rule_id], "targetResourceRef": f"action:{page_id}:{action_id}"}
+        action_bindings[(page_id, action_id)] = {"pageId": page_id, "actionId": action_id, "resourceKey": resource_key, "mode": mode}
         for role_id in _text_items(rule.get("defaultGrantedRoleIds")): grants.setdefault(role_id, set()).add(resource_key)
-    if any(not _LOWER_SNAKE_CASE.match(key) for key in resources): raise ValueError("权限资源键必须全局唯一且使用 lower_snake_case。")
     roles = _dict_items(requirement_spec.get("user_roles"))
     # 系统管理员固定创建；业务角色只得到需求规则明确授予的业务资源。
     return _with_fingerprint({"schema_version": AUTHORIZATION_MANIFEST_SCHEMA_VERSION, "resources": list(resources.values()), "bindings": {"pages": list(page_bindings.values()), "actions": list(action_bindings.values()), "endpoints": []}, "systemAuthorization": {"adminRoleSeedKey": SYSTEM_ADMIN_ROLE_SEED_KEY, "managementResourceKey": SYSTEM_RESOURCE_KEY}, "defaultRoleAuthorization": {"roles": [{"roleSeedKey": str(role.get("id") or ""), "name": str(role.get("name") or ""), "description": str(role.get("description") or "")} for role in roles], "roleResourceGrants": [{"roleSeedKey": role_id, "resourceKeys": sorted(keys)} for role_id, keys in grants.items()]}})

@@ -17,7 +17,7 @@ from app.services.authorization_table_projection import fingerprint, table_mappi
 from app.services.authorization_workspace_projector import RUNTIME, verify_projection
 from app.services.database_delivery import export_database_scripts
 from app.services.builtin_authorization_bootstrap import refresh_builtin_authorization, run_builtin_authorization_bootstrap
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from tests.authorization_delivery_fixture import install_authorization
 from tests.managed_database_http_fixture import saas_success
 
@@ -42,7 +42,7 @@ class AuthorizationDeliveryTests(unittest.TestCase):
             {"id": "Order", "name": "订单", "description": "订单", "table_name": "12ab34cd56ef_order", "fields": []}]}
         self.history = self.root / ".devagentstudio/database-deliveries.json"
         self.guards = []
-        for target in ("app.services.managed_table_client.ManagedTableClient.request",
+        for target in ("app.services.managed_database_client.ManagedDatabaseClient._http_client",
                        "app.services.builtin_authorization_bootstrap.run_builtin_authorization_bootstrap",
                        "app.services.authorization_bootstrap.workspace_process_registry.run"):
             guard = patch(target, side_effect=AssertionError("交付不得访问数据库或执行初始化"))
@@ -325,7 +325,7 @@ class AuthorizationDeliveryTests(unittest.TestCase):
                     for name in names]})
             if path.endswith("/batch"):
                 batches.append(json.loads(request.content)["sqls"])
-                return saas_success(202, {"operationId": "123", "status": "RUNNING"})
+                return saas_success(200, {"operationId": "123", "status": "RUNNING"})
             if path.endswith("/123"):
                 ready = True
                 return saas_success(200, {"operationId": "123", "status": "SUCCEEDED", "mode": "CREATE_BATCH",
@@ -334,7 +334,7 @@ class AuthorizationDeliveryTests(unittest.TestCase):
                 return saas_success(200, [])
             raise AssertionError(request.url)
 
-        client = ManagedTableClient(Settings(model_base_url="", model_api_key="", model_name="",
+        client = ManagedDatabaseClient(Settings(model_base_url="", model_api_key="", model_name="",
             managed_database_base_url="https://saas.example", managed_database_service_key="test"),
             transport=httpx.MockTransport(respond))
         run_builtin_authorization_bootstrap(str(self.root), self.plan, client=client)

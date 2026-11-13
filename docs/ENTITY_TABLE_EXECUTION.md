@@ -18,7 +18,7 @@ Studio 使用独立 `/entity-tables/run` AG-UI 流，forwardedProps.entityTables
 
 - preview_ddl：只读生成当前正式实体的 DDL，不查询数据库或执行 SQL。
 - prepare：只从当前正式工件生成预览，不查库、不建表；界面刷新设计后另行调用 refresh，更新实际表状态。
-- execute：一次 `POST /managed-database/datasources/{datasourceKey}/table-operations`，只提交 `{mode: "CREATE", sql}`，HTTP 202 的 operationId/RUNNING 只表示受理。
+- execute：一次 `POST /managed-database/datasources/{datasourceKey}/table-operations`，只提交 `{mode: "CREATE", sql}`，HTTP 200 的 operationId/RUNNING 只表示受理。
 - rebuild：通过弹窗展示表名、删除全部数据的影响及确认勾选；每次打开确认均重置勾选。后端复核 SQL 指纹与数据丢弃确认，与标准预览启动共用启动锁，检查受控预览 PID 已停止后再次核对当前设计，再提交一次 `{mode: "REBUILD", sql, allowDataLoss: true}`。SaaS 负责表归属、外键引用、逐步删除/创建及应用占用检查。本地不会自动停服务、生成 DROP SQL 或把 CREATE 失败自动转换成 REBUILD。
 - refresh：读取 SaaS 最近最多 100 条历史，展示当前表最新原操作；以当前 SQL 调用 tables/check，只检查这个实体。历史成功和本次结构一致分别展示。返回数据源必须与已注册挂载一致，检查期间上游设计变化时丢弃结果。
 
@@ -34,7 +34,7 @@ SaaS 拒绝请求时，根据 HTTP 状态与当前错误码共同生成安全提
 
 单实体检查不代表应用可以启动。启动流程另行提交全应用实体 SQL 检查，并在 Java 启动前复核和注入运行时连接，见 [整体方案](BUILTIN_DATASOURCE_OVERALL_REVIEW.md)。前端沿用现有 Ant Design、工作台主题 token、紫色操作按钮及明暗模式。
 
-建表回执、操作历史和详情、结构检查及表元数据使用 SaaS 的统一 JSON 响应。后端先核对接口预期的 HTTP 状态及 `returnCode: "SUC0000"`、`errorMsg: null`，再将 `body` 交给各业务模型校验。历史数组为空时正常返回空历史。非成功响应按 HTTP 状态和 `returnCode` 映射提示。
+建表回执、操作历史和详情、结构检查及表元数据使用 SaaS 的统一 JSON 响应。后端先核对接口预期的 HTTP 状态及 `returnCode: "SUC0000"`、空字符串或 null 的 `errorMsg`，再将 `body` 交给各业务模型校验。历史数组为空时正常返回空历史。非成功响应按 HTTP 状态和 `returnCode` 映射提示。
 
 ## 版本交付 SQL
 

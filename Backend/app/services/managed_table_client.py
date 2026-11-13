@@ -1,18 +1,11 @@
-"""适配 SaaS 单表创建及只读结果查询，不自动重发 SQL。"""
+"""解析表操作及元数据响应，并保留受控业务提示。"""
 
 from __future__ import annotations
 
-import re
-from typing import Any
-
 import httpx
 
-from app.services.internal_service_tls import build_internal_service_ssl_context
-from app.services.managed_database_client import (
-    ManagedDatabaseClient,
-    ManagedDatabaseRegistrationError,
-    unwrap_bee_envelope,
-)
+from app.services.managed_database_bee import unwrap_bee_envelope
+from app.services.managed_database_client import ManagedDatabaseRegistrationError
 
 
 class ManagedTableQueryTransientError(ManagedDatabaseRegistrationError):
@@ -57,60 +50,27 @@ def _response_error(status: int, code: str | None, *, creating: bool) -> Managed
     )
 
 
-class ManagedTableClient(ManagedDatabaseClient):
-    """复用注册客户端的地址、密钥和超时约束。"""
+def decode_table_response(response: httpx.Response, path: str, *, body: dict | None, managed_task: bool) -> object:
+    """按原读写语义解析 Bee，失败时只公开受控错误和提示。"""
 
-    def batch_create_tables(self, datasource_key: str, sqls: list[str]) -> Any:
-        """一次提交完整 CREATE 列表，不复用单表请求体或自动重试。"""
-
-        return self.request(datasource_key, "table-operations/batch", body={"mode": "CREATE", "sqls": sqls})
-
-    def request(self, datasource_key: str, path: str, *, body: dict | None = None) -> Any:
-        """发送一次请求；错误脱敏，提交结果未知时提示先查询原记录。"""
-
-        from app.services.builtin_authorization_task_store import check_task_inputs, input_guard
-
-        check_task_inputs()
-        managed_task = input_guard.get() is not None
-        if not re.fullmatch(r"[0-9a-f]{12}", datasource_key):
-            raise ValueError("数据源 datasourceKey 无效。")
-        url = f"{self._url}/{datasource_key}/{path}"
-        try:
-            with httpx.Client(transport=self._transport, timeout=self._timeout,
-                              follow_redirects=False, trust_env=False,
-                              verify=build_internal_service_ssl_context()) as client:
-                response = client.request(
-                    "GET" if body is None else "POST", url, json=body,
-                    headers={**{"Authorization": f"Bearer {self._key}", "Accept": "application/json"},
-                               **self._actor_headers()},
-                )
-        except httpx.RequestError:
-            if managed_task and (body is None or path == "tables/check"):
-                raise ManagedTableQueryTransientError("SaaS 原操作查询暂时不可用。") from None
-            raise ManagedDatabaseRegistrationError(
-                "SaaS 请求未取得确认结果。若已提交执行，请刷新原操作记录，不要重复提交。",
-                uncertain=body is not None,
-            ) from None
-        # Bee 框架 @BeeResponseBody 统一返回 HTTP 200，@ResponseStatus 设置的状态码不生效。
-        if response.status_code != 200:
-            raise _response_error(response, creating=path == "table-operations" and body is not None and body.get("mode") == "CREATE")
-        try:
-            return unwrap_bee_envelope(response.json())
-        except ValueError:
-            payload = None
-        # SaaS 的 JSON 接口统一包装结果；业务模型仍由各调用方校验。
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if response.status_code != 200:
+        if (managed_task and (body is None or path == "tables/check")
+                and response.status_code in {500, 502, 503, 504}):
+            raise ManagedTableQueryTransientError("SaaS 原操作查询暂时不可用。")
         wrapped = isinstance(payload, dict) and set(payload) == {"returnCode", "errorMsg", "body"}
-        if response.status_code != expected:
-            if managed_task and (body is None or path == "tables/check") and response.status_code in {500, 502, 503, 504}:
-                raise ManagedTableQueryTransientError("SaaS 原操作查询暂时不可用。")
-            code = payload["returnCode"] if wrapped and isinstance(payload["errorMsg"], str) else None
-            raise _response_error(
-                response.status_code, code if isinstance(code, str) else None,
-                creating=path == "table-operations" and body is not None and body.get("mode") == "CREATE",
-            )
-        if not wrapped or payload["returnCode"] != "SUC0000" or payload["errorMsg"] is not None:
-            raise ManagedDatabaseRegistrationError(
-                "SaaS 响应不符合当前接口合同，请先核对原操作记录，不要重复提交。",
-                uncertain=body is not None,
-            )
-        return payload["body"]
+        code = payload["returnCode"] if wrapped and isinstance(payload["errorMsg"], str) else None
+        raise _response_error(
+            response.status_code, code if isinstance(code, str) else None,
+            creating=path == "table-operations" and body is not None and body.get("mode") == "CREATE",
+        )
+    try:
+        return unwrap_bee_envelope(payload)
+    except ValueError:
+        raise ManagedDatabaseRegistrationError(
+            "SaaS 响应不符合当前接口合同，请先核对原操作记录，不要重复提交。",
+            uncertain=body is not None,
+        ) from None

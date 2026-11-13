@@ -139,7 +139,6 @@ class AuthorizationOrchestratorSafetyCases:
                 self.plan.update(deepcopy(plan))
                 save_plan(self.root, self.plan)
                 self.ddl.write_text(ddl)
-                self.orchestrator_dag.return_value = {"status": "ready"}
 
     def test_post_inflight_input_change_preserves_submitting_guard(self) -> None:
         """POST 已发出后换库，迟到成功不能覆盖 submitting 原证据。"""
@@ -268,7 +267,7 @@ class AuthorizationOrchestratorSafetyCases:
         self.assert_calls("GET", "POST", "GET", "POST", "GET")
 
     def test_terminal_receipts_require_get_then_stop(self) -> None:
-        """202 的失败或未知回执仍须 GET 核实，远端终态确认后停止而不重新执行。"""
+        """HTTP 200 的失败或未知回执仍须 GET 核实，远端终态确认后停止而不重新执行。"""
 
         baseline = read_record(self.root, "state.json")
         for status in ("FAILED", "UNKNOWN"):
@@ -300,7 +299,7 @@ class AuthorizationOrchestratorSafetyCases:
         self.assert_calls("GET", "POST", "GET", "POST", "GET")
 
     def test_invalid_accepted_receipt_recovers_by_key(self) -> None:
-        """202 回执无效但远端已受理时，自动按键查回原操作，不再次 POST。"""
+        """HTTP 200 回执无效但远端已受理时，自动按键查回原操作，不再次 POST。"""
 
         self.begin()
         original = self.respond
@@ -309,7 +308,7 @@ class AuthorizationOrchestratorSafetyCases:
             """保留远端受理副作用，只损坏返回的操作编号。"""
 
             response = original(request)
-            return self.envelope(202, {}) if request.method == "POST" else response
+            return self.envelope(200, {}) if request.method == "POST" else response
 
         with patch.object(self, "respond", side_effect=respond):
             self.assertTrue(self.tick())

@@ -14,7 +14,7 @@ from app.domain.entity_tables import EntityTableRequest
 from app.protocols.entity_tables import build_entity_tables_stream
 from app.services.entity_tables import prepare_entity_table, run_entity_table_action
 from app.services.managed_database_client import ManagedDatabaseRegistrationError
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from tests.managed_database_http_fixture import saas_success
 
 
@@ -58,10 +58,10 @@ class EntityTableTests(unittest.TestCase):
         return EntityTableRequest.model_validate({"workspaceRoot": str(self.workspace),
                                                   "entityId": "Order", "action": action, **extra})
 
-    def client(self, handler) -> ManagedTableClient:
+    def client(self, handler) -> ManagedDatabaseClient:
         """配置固定假密钥和传输替身，不访问网络。"""
 
-        return ManagedTableClient(Settings(model_base_url="http://model.invalid", model_api_key="test",
+        return ManagedDatabaseClient(Settings(model_base_url="http://model.invalid", model_api_key="test",
                                           model_name="test", managed_database_service_key="test-service-key"),
                                   transport=httpx.MockTransport(handler))
 
@@ -83,7 +83,7 @@ class EntityTableTests(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             """记录唯一请求并返回 SaaS 真实受理结构。"""
             self.calls.append(request)
-            return saas_success(202, {"operationId": "123", "status": "RUNNING"})
+            return saas_success(200, {"operationId": "123", "status": "RUNNING"})
 
         client = self.client(handler)
         preview = prepare_entity_table(self.request())
@@ -106,7 +106,7 @@ class EntityTableTests(unittest.TestCase):
         """重建缺任一确认或使用旧 SQL 指纹时不发送远端请求。"""
 
         preview = prepare_entity_table(self.request())
-        with patch.object(ManagedTableClient, "request") as remote:
+        with patch.object(ManagedDatabaseClient, "_http_client") as remote:
             for extra in [
                 {"previewHash": preview["previewHash"], "allowDataLoss": True},
                 {"previewHash": preview["previewHash"], "confirmed": True},
@@ -122,7 +122,7 @@ class EntityTableTests(unittest.TestCase):
         def handler(request: httpx.Request) -> httpx.Response:
             """记录重建请求，不实际删除或创建任何表。"""
             self.calls.append(request)
-            return saas_success(202, {"operationId": "456", "status": "RUNNING"})
+            return saas_success(200, {"operationId": "456", "status": "RUNNING"})
 
         preview = prepare_entity_table(self.request())
         request = self.request("rebuild", previewHash=preview["previewHash"], confirmed=True, allowDataLoss=True)
@@ -141,9 +141,9 @@ class EntityTableTests(unittest.TestCase):
 
         preview = prepare_entity_table(self.request())
         request = self.request("rebuild", previewHash=preview["previewHash"], confirmed=True, allowDataLoss=True)
-        client = self.client(lambda _request: saas_success(202, {}))
+        client = self.client(lambda _request: saas_success(200, {}))
         with patch("app.services.entity_tables.inspect_project_preview", return_value={"running": True}), \
-                patch.object(client, "request") as remote:
+                patch.object(client, "_http_client") as remote:
             with self.assertRaisesRegex(ValueError, "先停止预览"):
                 run_entity_table_action(request, client=client)
             remote.assert_not_called()
@@ -281,7 +281,7 @@ class EntityTableTests(unittest.TestCase):
     def test_cleanup_modes_cannot_be_submitted_as_entity_actions(self) -> None:
         """扩大历史读取范围不允许实体入口提交删除或回收动作。"""
 
-        with patch.object(ManagedTableClient, "request") as remote:
+        with patch.object(ManagedDatabaseClient, "_http_client") as remote:
             for action in ["DROP", "RELEASE", "drop", "release"]:
                 with self.subTest(action=action), self.assertRaises(ValueError):
                     self.request(action)

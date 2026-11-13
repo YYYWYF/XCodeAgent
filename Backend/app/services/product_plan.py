@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any
 
+from app.services.authorization_manifest import SYSTEM_RESOURCE_KEY, authorization_resource_key
 from app.services.requirement_spec import product_acceptance_criteria
 from app.services.product_plan_carryover import carried_definition_for_page
 
@@ -559,24 +560,28 @@ def _authorization_resource_candidate_errors(product_plan: dict[str, Any]) -> li
 
     targets = product_plan.get("authorizationTargets")
     targets = targets if isinstance(targets, dict) else {}
-    candidates: dict[str, list[str]] = {"system_authorization_management": ["系统资源"]}
-    for mapping in _dict_items(targets.get("pageRules")):
-        page_id = str(mapping.get("pageId") or "").strip()
-        if page_id:
-            candidates.setdefault(page_id, []).append(f"页面 {page_id}")
-    for mapping in _dict_items(targets.get("operationRules")):
-        page_id = str(mapping.get("pageId") or "").strip()
-        action_id = str(mapping.get("actionId") or "").strip()
-        if page_id and action_id:
-            candidates.setdefault(f"{page_id}_{action_id}", []).append(
-                f"操作 {page_id}/{action_id}"
-            )
-    return [
+    candidates: dict[str, list[str]] = {SYSTEM_RESOURCE_KEY: ["系统资源"]}
+    errors = []
+    for field in ("pageRules", "operationRules"):
+        for mapping in _dict_items(targets.get(field)):
+            page_id = str(mapping.get("pageId") or "").strip()
+            action_id = str(mapping.get("actionId") or "").strip() if field == "operationRules" else None
+            if not page_id or action_id == "":
+                continue
+            try:
+                key = authorization_resource_key(page_id, action_id=action_id)
+            except ValueError as exc:
+                errors.append(str(exc))
+                continue
+            location = f"页面 {page_id}" if action_id is None else f"操作 {page_id}/{action_id}"
+            candidates.setdefault(key, []).append(location)
+    errors.extend(
         "ProductPlan 权限资源候选发生跨类型碰撞："
         + f"{resource_key}（{'、'.join(locations)}）。"
         for resource_key, locations in candidates.items()
         if len(locations) > 1
-    ]
+    )
+    return errors
 
 
 def authorization_operation_action_coverage(
@@ -857,6 +862,10 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
         for page in _dict_items(product_plan.get("pages"))
         for action in _dict_items(page.get("actions"))
     }
+    page_rule_targets = {
+        str(rule.get("ruleId") or "").strip(): str(rule.get("targetPageId") or "").strip()
+        for rule in _dict_items(authorization.get("restrictedPages"))
+    }
     for requirement_field, mapping_field, expected_mapping_keys in target_specs:
         expected_rule_ids = {
             str(rule.get("ruleId") or "").strip()
@@ -883,6 +892,10 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
                 errors.append(
                     f"ProductPlan.authorizationTargets.{mapping_field} 引用了不存在的 pageId。"
                 )
+            if mapping_field == "pageRules":
+                rule_id = str(mapping.get("ruleId") or "").strip()
+                if rule_id in page_rule_targets and page_id != page_rule_targets[rule_id]:
+                    errors.append(f"ProductPlan 权限页面规则 {rule_id} 的页面引用与已确认目标不一致：{page_id}。")
             if mapping_field == "operationRules":
                 action_id = str(mapping.get("actionId") or "").strip()
                 if (page_id, action_id) not in action_targets:

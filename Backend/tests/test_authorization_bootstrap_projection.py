@@ -87,7 +87,7 @@ class AuthorizationBootstrapProjectionTests(unittest.TestCase):
     def assert_projection(self, expected: str, **updates) -> None:
         """对照真实图路由，并证明展示选择器不触发远端操作。"""
         state = {**self.state, **updates}
-        with patch("app.services.managed_table_client.ManagedTableClient.request") as remote:
+        with patch("app.services.managed_database_client.ManagedDatabaseClient._http_client") as remote:
             self.assertEqual(route_prepare_build_tasks(state), expected)
             self.assertEqual(_workflow_next_nodes("prepare_build_tasks", state), [] if expected == "await_user_input" else [expected])
             remote.assert_not_called()

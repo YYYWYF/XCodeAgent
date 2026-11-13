@@ -13,9 +13,9 @@ from app.services.builtin_authorization_seed import (
     SeedContractError, compile_builtin_authorization_seed, read_confirmed_seed_plan,
     seed_request_fingerprint, validate_seed_transport,
 )
-from app.services.builtin_authorization_seed_client import ManagedAuthorizationSeedClient, SeedDetail, SeedRemoteError
+from app.services.builtin_authorization_seed_client import SeedDetail, SeedRemoteError
 from app.services.builtin_authorization_state import builtin_binding, builtin_lock, save_state, schema_ready, verified_seed
-from app.workspace.task_documents import load_confirmed_build_task_plan
+from app.services.managed_database_client import ManagedDatabaseClient
 
 _SUBMIT_REJECTIONS = {
     "seed_idempotency_conflict", "seed_resource_busy",
@@ -103,7 +103,7 @@ def _save_detail(root: Path, record: dict, seed: dict, binding: dict,
 
 
 def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], technical_plan: dict | None = None,
-                                   *, client: ManagedAuthorizationSeedClient | None = None,
+                                   *, client: ManagedDatabaseClient | None = None,
                                    refresh_id: str | None = None, query_only: bool = False) -> dict:
     """在调用方锁内协调原操作，明确查无记录时按原键和原载荷幂等提交。"""
 
@@ -142,22 +142,17 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
 
         request = compiled["request"]
         validate_seed_transport(request, datasource_key=key)
-        # 所有可提交路径都要求正式 DAG；纯查询动作继续保持只读。
-        if not read_only:
-            dag = load_confirmed_build_task_plan(root)
-            if not dag or dag.get("status") != "ready":
-                raise ValueError("权限 Seed 需要当前已确认 Build DAG。")
         stage = "seed_client_configuration"
-        remote = client or ManagedAuthorizationSeedClient(Settings.from_env())
+        remote = client or ManagedDatabaseClient(Settings.from_env())
         stage = "seed_query_unconfirmed"
         _verify_current(root, record, binding, plan, compiled)
         operation_id = seed.get("operationId") if seed else None
-        detail = remote.query(key, operation_id=operation_id,
-                              idempotency_key=identity["idempotencyKey"])
+        detail = (remote.get_seed_operation(key, operation_id, identity["idempotencyKey"])
+                  if operation_id is not None else remote.get_seed_by_key(key, identity["idempotencyKey"]))
         _verify_current(root, record, binding, plan, compiled)
         if detail is None and operation_id is not None and not read_only:
             # 原 ID 丢失不能直接触发提交，必须再按原幂等键核对远端事实。
-            detail = remote.query(key, idempotency_key=identity["idempotencyKey"])
+            detail = remote.get_seed_by_key(key, identity["idempotencyKey"])
             _verify_current(root, record, binding, plan, compiled)
         if detail is not None:
             stage = "seed_state_write_failed"
@@ -177,7 +172,7 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
         _verify_current(root, record, binding, plan, compiled)
         stage = "seed_submit_unconfirmed"
         try:
-            receipt = remote.submit(key, request)
+            receipt = remote.submit_authorization_seed(key, request)
             if operation_id is not None and receipt.operationId != operation_id:
                 raise SeedRemoteError("seed_operation_identity_mismatch")
         except SeedRemoteError as error:
@@ -217,7 +212,7 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
 
 
 def refresh_builtin_authorization_seed(workspace: str, operation_id: str,
-                                       *, client: ManagedAuthorizationSeedClient | None = None) -> dict:
+                                       *, client: ManagedDatabaseClient | None = None) -> dict:
     """严格按持久化 Seed ID 单次查询，不执行 Schema 查询或 Seed POST。"""
 
     root = Path(workspace).expanduser().resolve()

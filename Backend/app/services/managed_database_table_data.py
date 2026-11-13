@@ -1,15 +1,13 @@
 """内置表只读数据和最近操作投影，身份仅来自当前工作区权威配置。"""
 
 from typing import Any, Literal
-from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config import Settings
 from app.domain.managed_database_operations import parse_database_operations
-from app.services.managed_database_agui import ManagedDatabaseAgUiClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from app.services.managed_database_metadata import ManagedColumn, _binding, _require_unchanged, read_managed_tables
-from app.services.managed_table_client import ManagedTableClient
 
 
 class DataPage(BaseModel):
@@ -55,9 +53,11 @@ def read_table_page(workspace: str, source_id: str, table: str, page_number: int
     if page_number < 1 or not 1 <= page_size <= 100 or (page_number - 1) * page_size > 100000:
         raise ValueError("分页参数无效或超出支持的分页范围。")
     binding = _available_table(workspace, source_id, table)
-    remote = ManagedDatabaseAgUiClient(Settings.from_env())
-    raw = remote.query(binding.datasource_key, f"tables/{quote(table, safe='')}/data/run",
-                       {"pageNumber": page_number, "pageSize": page_size, "filter": {"logic": "AND", "conditions": []}})
+    remote = ManagedDatabaseClient(Settings.from_env())
+    raw = remote.query_table_data(
+        binding.datasource_key, table,
+        {"pageNumber": page_number, "pageSize": page_size, "filter": {"logic": "AND", "conditions": []}},
+    )
     try:
         page = DataPage.model_validate(raw)
     except ValidationError:
@@ -80,7 +80,7 @@ def read_table_operations(workspace: str, source_id: str, table: str) -> dict[st
         raise ValueError("目标表名无效。")
     # 历史查询本身不读业务表，不能因在途操作阻断用户核对原记录。
     binding = _managed_source(workspace, source_id)
-    raw = ManagedTableClient(Settings.from_env()).request(binding.datasource_key, "table-operations?limit=100")
+    raw = ManagedDatabaseClient(Settings.from_env()).list_table_operations(binding.datasource_key)
     entries = parse_database_operations(raw)
     _require_unchanged(workspace, binding)
     return {"historyLimit": 100, "operations": [entry.model_dump() for entry in entries

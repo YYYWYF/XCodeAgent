@@ -8,8 +8,8 @@ import httpx
 
 from app.config import Settings
 from app.protocols.entity_tables import build_entity_tables_stream
-from app.services.managed_database_client import ManagedDatabaseRegistrationError
-from app.services.managed_table_client import ManagedTableClient, ManagedTableError
+from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseRegistrationError
+from app.services.managed_table_client import ManagedTableError
 
 
 class ManagedTableErrorTests(unittest.TestCase):
@@ -25,11 +25,11 @@ class ManagedTableErrorTests(unittest.TestCase):
             calls.append(request)
             return httpx.Response(status, json={"returnCode": code, "errorMsg": "secret=do-not-expose", "body": {}})
 
-        client = ManagedTableClient(Settings(model_base_url="http://model.invalid", model_api_key="test",
+        client = ManagedDatabaseClient(Settings(model_base_url="http://model.invalid", model_api_key="test",
             model_name="test", managed_database_service_key="test-service-key"),
             transport=httpx.MockTransport(handler))
         with self.assertRaises(ManagedTableError) as caught:
-            client.request("12ab34cd56ef", "table-operations", body={"mode": mode, "sql": "test SQL"})
+            client.submit_table("12ab34cd56ef", mode=mode, sql="test SQL")
         self.assertEqual(len(calls), 1)
         self.assertNotIn("do-not-expose", str(caught.exception))
         self.assertNotIn("HTTP", str(caught.exception))
@@ -73,9 +73,9 @@ class ManagedTableErrorTests(unittest.TestCase):
                         {"returnCode": "SUC0000", "errorMsg": None}):
             with self.subTest(payload=payload):
                 transport = httpx.MockTransport(lambda _: httpx.Response(200, json=payload))
-                client = ManagedTableClient(settings, transport=transport)
+                client = ManagedDatabaseClient(settings, transport=transport)
                 with self.assertRaisesRegex(ManagedDatabaseRegistrationError, "不符合当前接口合同") as caught:
-                    client.request("12ab34cd56ef", "table-operations?limit=100")
+                    client.list_table_operations("12ab34cd56ef")
                 self.assertNotIn("private", str(caught.exception))
 
     def test_structured_issue_uses_complete_ag_ui_failure_lifecycle(self) -> None:

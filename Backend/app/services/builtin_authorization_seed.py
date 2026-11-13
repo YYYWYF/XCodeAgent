@@ -8,6 +8,7 @@ import re
 
 from app.services.authorization_manifest import (
     AUTHORIZATION_MANIFEST_SCHEMA_VERSION,
+    RESOURCE_KEY_MAX_LENGTH,
     SYSTEM_ADMIN_ROLE_SEED_KEY,
     SYSTEM_RESOURCE_KEY,
     _with_fingerprint,
@@ -26,9 +27,9 @@ SYSTEM_REF = "system:authorization_management"
 SEED_COLUMNS = {
     "role": {"role_id": 32, "role_name": 32, "description": 128, "enable": 0,
              "is_system": 0, "is_deleted": 0, "created_by": 32},
-    "resource": {"key": 64, "name": 32, "description": 128, "origin": 8,
+    "resource": {"key": RESOURCE_KEY_MAX_LENGTH, "name": 32, "description": 128, "origin": 8,
                  "type": 9, "target_resource_ref": 255},
-    "role_resource": {"role_id": 32, "resource_key": 64, "created_by": 32},
+    "role_resource": {"role_id": 32, "resource_key": RESOURCE_KEY_MAX_LENGTH, "created_by": 32},
     "role_member": {"role_id": 32, "member_id": 32, "member_name": 32, "created_by": 32},
 }
 SEED_ROW_LIMITS = {"role": 1, "resource": MAX_RESOURCES, "role_resource": 1, "role_member": MAX_ADMINS}
@@ -88,7 +89,7 @@ def _resource_rows(manifest: dict) -> list[dict]:
         raise ValueError("权限资源数量超出 Seed 限制。")
     rows = {}
     for item in resources:
-        key = _text(item.get("resourceKey"), 64)
+        key = _text(item.get("resourceKey"), RESOURCE_KEY_MAX_LENGTH)
         name = _text(item.get("name"), 32)
         description = _text(item.get("description"), 128, allow_blank=True)
         origin, kind = item.get("origin"), item.get("type")
@@ -123,7 +124,7 @@ def _validate_default_roles(defaults: object, resources) -> None:
         refs = grant.get("resourceKeys")
         if key not in roles or key in granted or not isinstance(refs, list):
             raise ValueError("业务默认角色授权引用无效。")
-        keys = [_text(ref, 64) for ref in refs]
+        keys = [_text(ref, RESOURCE_KEY_MAX_LENGTH) for ref in refs]
         if len(keys) != len(set(keys)) or any(ref == SYSTEM_RESOURCE_KEY or ref not in resources for ref in keys):
             raise ValueError("业务默认角色授权资源无效。")
         granted.add(key)

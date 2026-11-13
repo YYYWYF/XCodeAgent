@@ -1,8 +1,8 @@
 """读取 SaaS 应用范围的真实元数据，内置挂载不向平台公开真实 Schema。"""
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -10,8 +10,8 @@ from app.config import Settings
 from app.domain.managed_database import ManagedDatabaseRegistration
 from app.services.application_config.repository import ApplicationConfigRepository
 from app.services.data_source_policy import workspace_uses_builtin_database
-from app.services.managed_table_client import ManagedTableClient, ManagedTableError
-from app.services.managed_database_client import ManagedDatabaseRegistrationError
+from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseRegistrationError
+from app.services.managed_table_client import ManagedTableError
 
 
 class MetadataModel(BaseModel):
@@ -79,11 +79,11 @@ def _require_unchanged(workspace: str | Path, binding: ManagedDatabaseRegistrati
         raise ValueError("应用数据库绑定已变化，请重新读取数据表。")
 
 
-def _read_response(remote: ManagedTableClient, datasource_key: str, path: str) -> Any:
+def _read_response(read: Callable[..., Any], datasource_key: str, *args: str) -> Any:
     """把只读资源错误转为数据源提示，不引导用户重发执行或查看无关操作。"""
 
     try:
-        return remote.request(datasource_key, path)
+        return read(datasource_key, *args)
     except ManagedTableError as exc:
         if exc.issue["code"] == "RESOURCE_BUSY":
             raise ValueError("平台内置数据库存在未完成操作或资源繁忙，请稍后刷新数据源。") from None
@@ -94,12 +94,12 @@ def _read_response(remote: ManagedTableClient, datasource_key: str, path: str) -
         raise ValueError("暂时无法读取平台内置数据库，请确认服务状态后刷新数据源。") from None
 
 
-def read_managed_tables(workspace: str | Path, source_id: str, *, client: ManagedTableClient | None = None) -> dict[str, Any]:
+def read_managed_tables(workspace: str | Path, source_id: str, *, client: ManagedDatabaseClient | None = None) -> dict[str, Any]:
     """从 SaaS 读取本应用表目录，schema 留空表示由固定挂载解析。"""
 
     binding = _binding(workspace)
-    remote = client or ManagedTableClient(Settings.from_env())
-    raw = _read_response(remote, binding.datasource_key, "tables")
+    remote = client or ManagedDatabaseClient(Settings.from_env())
+    raw = _read_response(remote.list_tables, binding.datasource_key)
     try:
         result = ManagedTables.model_validate(raw)
     except ValidationError:
@@ -113,15 +113,15 @@ def read_managed_tables(workspace: str | Path, source_id: str, *, client: Manage
                        for item in result.tables]}
 
 
-def read_managed_columns(workspace: str | Path, source_id: str, table: str, *, client: ManagedTableClient | None = None) -> dict[str, Any]:
+def read_managed_columns(workspace: str | Path, source_id: str, table: str, *, client: ManagedDatabaseClient | None = None) -> dict[str, Any]:
     """读取实际列并保持完整表候选；不接受 Schema 或任意 datasourceKey 输入。"""
 
     binding = _binding(workspace)
-    remote = client or ManagedTableClient(Settings.from_env())
+    remote = client or ManagedDatabaseClient(Settings.from_env())
     listing = read_managed_tables(workspace, source_id, client=remote)
     if table not in {item["name"] for item in listing["tables"]}:
         raise ValueError("该表不在当前应用已建成的表清单中，请刷新数据源。")
-    raw = _read_response(remote, binding.datasource_key, f"tables/{quote(table, safe='')}/columns")
+    raw = _read_response(remote.get_table_columns, binding.datasource_key, table)
     try:
         result = ManagedColumns.model_validate(raw)
     except ValidationError:

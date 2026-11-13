@@ -13,9 +13,8 @@ from ag_ui.encoder import EventEncoder
 
 from app.config import Settings
 from app.protocols.data_sources import DataSourceRequest, data_sources_capabilities
-from app.services.managed_database_agui import ManagedDatabaseAgUiClient
 from app.services.managed_database_table_data import read_table_page, read_table_operations
-from app.services.managed_table_client import ManagedTableClient
+from app.services.managed_database_client import ManagedDatabaseClient
 from tests.managed_database_http_fixture import saas_success
 
 
@@ -44,9 +43,9 @@ class ManagedDatabaseTableDataTests(unittest.TestCase):
         self.failure_code = None
         self.calls = []
         settings = Settings(model_base_url="http://model.invalid", model_api_key="test", model_name="test", managed_database_service_key="test-only-key")
-        self.client = ManagedDatabaseAgUiClient(settings, transport=httpx.MockTransport(self.reply))
+        self.client = ManagedDatabaseClient(settings, transport=httpx.MockTransport(self.reply))
         self.enterContext(patch("app.services.managed_database_table_data.Settings.from_env", return_value=settings))
-        self.enterContext(patch("app.services.managed_database_table_data.ManagedDatabaseAgUiClient", return_value=self.client))
+        self.enterContext(patch("app.services.managed_database_table_data.ManagedDatabaseClient", return_value=self.client))
         self.enterContext(patch("app.services.data_sources.database_source_mode", return_value="builtin"))
         self.listing = self.enterContext(patch("app.services.managed_database_table_data.read_managed_tables", return_value={"tables": [{"name": self.table}]}))
 
@@ -135,8 +134,8 @@ class ManagedDatabaseTableDataTests(unittest.TestCase):
             self.assertTrue(request.url.path.endswith("/table-operations"))
             return saas_success(200, [entry, unrelated, bulk])
 
-        client = ManagedTableClient(Settings.from_env(), transport=httpx.MockTransport(reply))
-        with patch("app.services.managed_database_table_data.ManagedTableClient", return_value=client):
+        client = ManagedDatabaseClient(Settings.from_env(), transport=httpx.MockTransport(reply))
+        with patch("app.services.managed_database_table_data.ManagedDatabaseClient", return_value=client):
             result = read_table_operations(str(self.root), "database", self.table)
         self.assertEqual([item["operationId"] for item in result["operations"]], ["101", "103"])
         self.assertEqual(result["historyLimit"], 100)
