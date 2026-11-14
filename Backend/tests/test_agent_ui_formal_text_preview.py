@@ -61,6 +61,17 @@ class FormalTextPreviewTests(TestCase):
         self.assertEqual(options['endpoint'], '/agents/assistant/run')
         self.assertEqual(self.provider.read_bytes(), before)
 
+    def test_business_source_preserves_endpoint_and_uses_business_preview(self) -> None:
+        """正式业务能力不再被纯文本判定挡住，预览仍不改写目标源码。"""
+        self.record['plan']['hostIntegration']['connection'] = 'business'
+        (self.root / 'record.json').write_text(json.dumps(self.record))
+        self.contract['agentSettings']['context'] = {'description': '处理当前业务记录'}
+        self.contract['interactionContract']['interactionKinds'] = ['confirmation']
+        before = self.provider.read_bytes()
+        command = managed_preview_command(self.root, self.target, 'rsbuild dev', runtime_public_url='http://127.0.0.1:9000')
+        self.assertEqual(json.loads(command[-1])['mode'], 'formal-business')
+        self.assertEqual(self.provider.read_bytes(), before)
+
     def test_changed_capability_or_missing_runtime_cannot_open_formal_chat(self) -> None:
         """正式规划扩大权限或当前 Runtime 不存在时必须停止，不能沿用旧连接。"""
         with self.assertRaises(ValueError):

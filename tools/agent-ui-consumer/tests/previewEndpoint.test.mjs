@@ -34,3 +34,13 @@ test('mock preview stays explicit and isolated', () => {
   assert.match(output, /agentId=\{undefined\}/)
   assert.match(output, /key="official-mock:/)
 })
+
+/** 两类 endpoint 改写与观察在同一次受检编译中组合，均不增加发送 owner。 */
+test('both preview sources compose read-only observation after endpoint validation', () => {
+  for (const mode of ['real-text', 'official-mock']) {
+    const output = transform.call({ getOptions: () => ({ ...options, mode, observe: true }) }, code)
+    assert.match(output, /<AgentUiPreviewObserver epoch="aaaa/)
+    assert.ok(output.includes(`source="${mode}"`))
+    assert.doesNotMatch(output, /fetch\(|new HttpAgent|\.sendMessage\(|\.resumeInterrupts\(/)
+  }
+})

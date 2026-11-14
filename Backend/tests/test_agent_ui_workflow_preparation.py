@@ -1,4 +1,4 @@
-"""页面开发在主 Workflow 内审阅准备动作，不要求用户操作独立工具入口。"""
+"""页面开发自动准备已确认设计，只在生产依赖变更或异常时暂停。"""
 
 import asyncio
 import json
@@ -7,8 +7,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from tests.agent_ui_transfer_fixtures import transfer_fixture
+from tests.agent_ui_build_fixtures import shared_build_target
 from app.services.agent_ui_dependency_plan import target_snapshot
+from app.services.agent_ui_design_transfer_plan import prepare_transfer_plan
 
 
 class WorkflowPreparationTests(unittest.IsolatedAsyncioTestCase):
@@ -18,7 +19,10 @@ class WorkflowPreparationTests(unittest.IsolatedAsyncioTestCase):
         """准备已经确认设计及完成安装的目标，但尚未初始化共享应用层。"""
         self.temp = TemporaryDirectory(prefix='Agent UI Workflow ')
         self.workspace = Path(self.temp.name).resolve()
-        self.source, self.target, self.installation = transfer_fixture(str(self.workspace))
+        self.installation = shared_build_target(self.workspace, transfer=False)['installationPlanId']
+        self.target = self.workspace / 'frontend'
+        plan = prepare_transfer_plan(self.workspace, installation_plan_id=self.installation)
+        self.source = self.workspace / plan['source']['projectRoot']
         product = json.loads((self.workspace / '.devagentstudio/plans/product-plan.json').read_text())
         self.page_id = product['pages'][0]['pageId']
         self.state = {'workspace': str(self.workspace), 'active_thread_id': 'original-thread',
@@ -34,18 +38,93 @@ class WorkflowPreparationTests(unittest.IsolatedAsyncioTestCase):
         from app.services.agent_ui_workflow_preparation import prepare_agent_ui_workflow
         return await prepare_agent_ui_workflow({**self.state, **fields})
 
-    async def test_installed_page_gets_inline_initialization_review_without_writes(self) -> None:
-        """已有T21凭据时直接审阅T23初始化，不能重复安装或提前写入。"""
+    def tool(self, action: str, target: Path, source_root: str, **_fields: object) -> dict:
+        """只隔离公开工具进程，使用真实计划、磁盘写入、归属和证据校验。"""
+        if action == 'initialize':
+            files = {'.agent-ui/project.json': json.dumps({'sourceRoot': source_root}),
+                     '.agent-ui/source-lock.json': json.dumps({'sourceRoot': source_root, 'items': {}}),
+                     source_root + '/application/project-config.tsx': '// official default\n'}
+            for name, content in files.items():
+                path = target / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+        return {'status': 'passed'}
+
+    async def test_installed_page_automatically_initializes_replans_and_transfers(self) -> None:
+        """开始页面开发即执行常规准备，初始化后的新计划仍需通过全部校验。"""
+        progress: list[dict] = []
+        with patch('app.services.agent_ui_design_transfer.run_public_tool', side_effect=self.tool), \
+             patch('app.services.agent_ui_design_transfer.validate_target', return_value={'static': 'passed'}), \
+             patch('app.services.agent_ui_workflow_preparation.get_stream_writer', return_value=progress.append):
+            self.assertIsNone(await self.prepare())
+        self.assertEqual((self.target / 'src/agent-ui/application/project-config.tsx').read_bytes(),
+                         (self.source / 'src/agent-ui/application/project-config.tsx').read_bytes())
+        self.assertIn('initialize', [item['stage'] for item in progress])
+        self.assertIn('copy', [item['stage'] for item in progress])
+        from app.services.agent_ui_build_evidence import load_build_evidence
+        self.assertTrue(load_build_evidence(self.workspace))
+
+    async def test_new_production_dependency_requires_review_without_writes(self) -> None:
+        """缺少生产声明时只展示具体依赖差异，不能在点击开发时自动安装。"""
+        package_path = self.target / 'package.json'
+        package = json.loads(package_path.read_text())
+        del package['dependencies']['zod']
+        package_path.write_text(json.dumps(package))
         before = target_snapshot(self.target)
-        result = await self.prepare()
-        self.assertEqual(result['phase'], 'prepare_build_tasks')
-        self.assertEqual(result['clarification']['mode'], 'agent_ui_integration_pending')
+        with patch('app.services.agent_ui_workflow_preparation.execute_dependency_plan') as execute:
+            result = await self.prepare()
         self.assertEqual(result['clarification']['status'], 'requires_user_input')
-        review = result['clarification']['agentUiPreparation']
-        self.assertEqual(review['stage'], 'initialize')
-        self.assertTrue(review['plan']['initialization']['required'])
-        self.assertEqual(review['plan']['installation']['planId'], self.installation)
+        self.assertEqual(result['clarification']['agentUiPreparation']['stage'], 'dependency')
+        execute.assert_not_called()
         self.assertEqual(target_snapshot(self.target), before)
+
+    async def test_existing_dependency_declarations_are_revalidated_automatically(self) -> None:
+        """仅缺少有效安装凭据而生产声明不变时自动验证，不重复要求确认。"""
+        from tests.test_agent_ui_dependency_install import AgentUiDependencyPlanTests
+        import sys
+        helper = AgentUiDependencyPlanTests()
+        helper.target = self.target
+        with patch('app.services.agent_ui_workflow_preparation.select_installation',
+                   side_effect=[ValueError('凭据失效'), self.installation, self.installation]), \
+             patch('app.services.agent_ui_dependency_install._tools', return_value=[sys.executable, __file__]), \
+             patch('app.services.agent_ui_dependency_install._command', side_effect=helper.fake_command), \
+             patch('app.services.agent_ui_design_transfer.run_public_tool', side_effect=self.tool), \
+             patch('app.services.agent_ui_design_transfer.validate_target', return_value={'static': 'passed'}):
+            self.assertIsNone(await self.prepare())
+
+    async def test_confirmed_new_dependency_automatically_continues_full_preparation(self) -> None:
+        """生产依赖只确认一次，后续真实初始化和转入不再要求逐步批准。"""
+        from tests.test_agent_ui_dependency_install import AgentUiDependencyPlanTests
+        import sys
+        package_path = self.target / 'package.json'
+        package = json.loads(package_path.read_text())
+        del package['dependencies']['zod']
+        package_path.write_text(json.dumps(package))
+        result = await self.prepare()
+        plan = result['clarification']['agentUiPreparation']['plan']
+        helper = AgentUiDependencyPlanTests()
+        helper.target = self.target
+        with patch('app.services.agent_ui_dependency_install._tools', return_value=[sys.executable, __file__]), \
+             patch('app.services.agent_ui_dependency_install._command', side_effect=helper.fake_command), \
+             patch('app.services.agent_ui_design_transfer.run_public_tool', side_effect=self.tool), \
+             patch('app.services.agent_ui_design_transfer.validate_target', return_value={'static': 'passed'}):
+            self.assertIsNone(await self.prepare(agent_ui_preparation_action={
+                'action': 'confirm', 'planId': plan['planId'], 'reviewId': plan['reviewId']}))
+        self.assertEqual(json.loads(package_path.read_text())['dependencies']['zod'], '4.5.4')
+
+    async def test_dependency_version_conflict_is_not_automatically_changed(self) -> None:
+        """已有不同版本必须暂停，不能因自动准备而升级或降级生产依赖。"""
+        package_path = self.target / 'package.json'
+        package = json.loads(package_path.read_text())
+        package['dependencies']['zod'] = '3.0.0'
+        package_path.write_text(json.dumps(package))
+        before = target_snapshot(self.target)
+        with patch('app.services.agent_ui_workflow_preparation.execute_dependency_plan') as execute:
+            result = await self.prepare()
+        self.assertEqual(result['clarification']['agentUiPreparation']['stage'], 'blocked')
+        self.assertIn('版本', result['clarification']['agentUiPreparation']['error'])
+        self.assertEqual(target_snapshot(self.target), before)
+        execute.assert_not_called()
 
     async def test_current_verified_evidence_continues_without_preparation(self) -> None:
         """已有效转入的页面直接继续任务规划，不重复展示或执行安装。"""
@@ -67,46 +146,39 @@ class WorkflowPreparationTests(unittest.IsolatedAsyncioTestCase):
         value['confirmation_status'] = 'pending'
         path.write_text(json.dumps(value))
         with patch('app.services.agent_ui_workflow_preparation.execute_transfer') as execute:
-            result = await self.prepare(agent_ui_preparation_action={
-                'action': 'confirm', 'planId': 'a' * 64, 'installationPlanId': self.installation,
-                'targetSourceRoot': 'src/agent-ui'})
+            result = await self.prepare()
         self.assertEqual(result['clarification']['agentUiPreparation']['stage'], 'blocked')
         execute.assert_not_called()
         self.assertFalse((self.target / '.agent-ui').exists())
 
     async def test_stale_confirmation_is_replanned_without_writes(self) -> None:
-        """错误摘要由原T23复算拒绝，再展示新的只读审阅，不能默默沿用批准。"""
+        """过期依赖批准必须停止，不能转而执行新计划。"""
         before = target_snapshot(self.target)
         result = await self.prepare(agent_ui_preparation_action={
-            'action': 'confirm', 'planId': 'a' * 64, 'installationPlanId': self.installation,
-            'targetSourceRoot': 'src/agent-ui'})
+            'action': 'confirm', 'planId': 'a' * 64, 'reviewId': 'b' * 32})
         review = result['clarification']['agentUiPreparation']
-        self.assertEqual(review['stage'], 'initialize')
+        self.assertEqual(review['stage'], 'blocked')
         self.assertIn('过期', review['error'])
-        self.assertNotEqual(review['plan']['planId'], 'a' * 64)
         self.assertEqual(target_snapshot(self.target), before)
 
     async def test_confirm_uses_original_workflow_identity_and_server_stage(self) -> None:
-        """客户端不选择initialize/confirm节点，服务端根据当前计划决定唯一动作。"""
-        result = await self.prepare()
-        plan = result['clarification']['agentUiPreparation']['plan']
-        with patch('app.services.agent_ui_workflow_preparation.execute_transfer', return_value={'state': 'initialized'}) as execute:
-            await self.prepare(agent_ui_preparation_action={'action': 'confirm', 'planId': plan['planId'],
-                'installationPlanId': self.installation, 'targetSourceRoot': 'src/agent-ui'})
-        self.assertEqual(execute.call_args.kwargs['action'], 'initialize')
+        """依赖确认只批准当前生产依赖计划，使用原工作流身份后自动继续。"""
+        from app.services.agent_ui_dependency_plan import prepare_dependency_plan
+        plan = prepare_dependency_plan(self.workspace, source='local-vendor', review_id='b' * 32)
+        with patch('app.services.agent_ui_workflow_preparation.execute_dependency_plan',
+                   return_value={'state': 'failed', 'message': '安装失败，保留现场'}) as execute:
+            result = await self.prepare(agent_ui_preparation_action={'action': 'confirm',
+                'planId': plan['planId'], 'reviewId': plan['reviewId']})
         self.assertEqual(execute.call_args.kwargs['thread_id'], 'original-thread')
         self.assertEqual(execute.call_args.kwargs['run_id'], 'original-run')
+        self.assertIn('安装失败', result['clarification']['agentUiPreparation']['error'])
 
     async def test_source_changed_after_review_cannot_execute_old_approval(self) -> None:
         """设计来源变化必须重新正式确认，旧转入批准不能替它放行。"""
-        result = await self.prepare()
-        plan = result['clarification']['agentUiPreparation']['plan']
         source_file = self.source / 'src/agent-ui/app-ui.json'
         source_file.write_text('{"root":{"type":"slot","plugins":["changed"]}}')
         with patch('app.services.agent_ui_workflow_preparation.execute_transfer') as execute:
-            result = await self.prepare(agent_ui_preparation_action={'action': 'confirm',
-                'planId': plan['planId'], 'installationPlanId': self.installation,
-                'targetSourceRoot': 'src/agent-ui'})
+            result = await self.prepare()
         self.assertEqual(result['clarification']['agentUiPreparation']['stage'], 'blocked')
         execute.assert_not_called()
 
@@ -123,17 +195,53 @@ class WorkflowPreparationTests(unittest.IsolatedAsyncioTestCase):
         """主页面入口到达相同准备门，不能先被通用BuildContext错误截断。"""
         from app.graph.nodes.task_planning_adapter import create_async_workflow_planning_adapter
         adapter = create_async_workflow_planning_adapter()
-        with patch('app.graph.nodes.task_planning_adapter._assemble_planning_context') as assemble:
+        with patch('app.services.agent_ui_workflow_preparation.prepare_transfer_plan',
+                   return_value={'status': 'blocked', 'blockers': ['目标冲突']}), \
+             patch('app.graph.nodes.task_planning_adapter._assemble_planning_context') as assemble:
             result = await adapter(self.state)
         self.assertEqual(result['clarification']['mode'], 'agent_ui_integration_pending')
         assemble.assert_not_called()
+
+    async def test_failed_or_unknown_preparation_stops_without_replay(self) -> None:
+        """失败、未知和重复阶段不得自动继续或生成任务。"""
+        for state in ('failed', 'unknown', 'stopped', 'initialized'):
+            with self.subTest(state=state), \
+                 patch('app.services.agent_ui_workflow_preparation.execute_transfer',
+                       return_value={'state': state, 'message': '请核对现场'}) as execute:
+                result = await self.prepare()
+            self.assertEqual(result['clarification']['agentUiPreparation']['stage'], 'blocked')
+            self.assertLessEqual(execute.call_count, 2)
+
+    async def test_post_initialization_conflict_preserves_user_file(self) -> None:
+        """初始化之后重新检测冲突，不能因自动准备而接管用户文件。"""
+        from app.services.agent_ui_design_transfer import execute_transfer
+        def initialize_with_conflict(workspace: Path, **fields: object) -> dict:
+            """在初始化完成后的重新规划中模拟用户并发编辑。"""
+            result = execute_transfer(workspace, **fields)
+            if fields['action'] == 'initialize':
+                (self.target / 'src/agent-ui/application/project-config.tsx').write_text('user customized')
+            return result
+
+        with patch('app.services.agent_ui_design_transfer.run_public_tool', side_effect=self.tool), \
+             patch('app.services.agent_ui_workflow_preparation.execute_transfer', side_effect=initialize_with_conflict), \
+             patch('app.services.agent_ui_workflow_preparation.select_installation', return_value=self.installation):
+            result = await self.prepare()
+        self.assertEqual(result['clarification']['agentUiPreparation']['stage'], 'blocked')
+        self.assertEqual((self.target / 'src/agent-ui/application/project-config.tsx').read_text(), 'user customized')
+
+    async def test_missing_workflow_identity_cannot_write(self) -> None:
+        """自动准备同样需要真实主工作流身份，不能由裸状态触发副作用。"""
+        with patch('app.services.agent_ui_workflow_preparation.execute_transfer') as execute:
+            result = await self.prepare(active_run_id='')
+        self.assertEqual(result['clarification']['agentUiPreparation']['stage'], 'blocked')
+        execute.assert_not_called()
 
 
 class PreparationRequestTests(unittest.TestCase):
     """准备动作只能经主Workflow结构化答案进入固定服务端恢复节点。"""
 
     def test_refresh_routes_to_prepare_and_clears_old_dag_confirmation(self) -> None:
-        """刷新不携带写入批准，并覆盖checkpoint中的旧DAG确认输入。"""
+        """重新检查不批准生产依赖变更，并清除checkpoint中的旧DAG确认。"""
         from app.protocols.workflow.request import workflow_run_inputs
         result = workflow_run_inputs({'clarificationAnswers': {'agent_ui_preparation': {'action': 'refresh'}}})
         self.assertEqual(result['resume_from'], 'prepare_build_tasks')
@@ -149,6 +257,14 @@ class PreparationRequestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             workflow_run_inputs({'resume_from': 'build',
                                  'clarificationAnswers': {'agent_ui_preparation': {'action': 'refresh'}}})
+
+    def test_transfer_confirmation_fields_are_not_part_of_main_workflow_contract(self) -> None:
+        """初始化和转入已由主流程托管，不再接收独立写入确认字段。"""
+        from app.protocols.workflow.request import workflow_run_inputs
+        with self.assertRaises(ValueError):
+            workflow_run_inputs({'clarificationAnswers': {'agent_ui_preparation': {
+                'action': 'confirm', 'planId': 'a' * 64, 'installationPlanId': 'b' * 64,
+                'targetSourceRoot': 'src/agent-ui'}}})
 
 
 class PreparationLifecycleTests(unittest.TestCase):

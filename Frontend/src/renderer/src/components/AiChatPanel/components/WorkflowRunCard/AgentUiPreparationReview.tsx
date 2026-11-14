@@ -13,7 +13,7 @@ type Props = {
   onAction: (answer: WorkflowAgentUiPreparationAction) => void
 }
 
-/** 在当前页面开发对话内审阅依赖和正式设计交接，通过主 Workflow 继续原目标。 */
+/** 常规准备由主流程自动执行，仅展示生产依赖确认和需处理的异常。 */
 export default function AgentUiPreparationReview({
   preparation,
   disabled,
@@ -23,7 +23,7 @@ export default function AgentUiPreparationReview({
   const plan = preparation?.plan
   const dependency = plan && 'reviewId' in plan ? plan : undefined
   const transfer = plan && 'initialization' in plan ? plan : undefined
-  const blocked = preparation?.stage === 'blocked' || transfer?.status === 'blocked' || !plan
+  const blocked = preparation?.stage !== 'dependency' || !dependency
   const changes =
     dependency?.changes.map((change) => ({
       path: change.path,
@@ -38,31 +38,11 @@ export default function AgentUiPreparationReview({
         content: change.diff || change.after
       })) ||
     []
-  const label = dependency
-    ? '确认依赖与样式准备'
-    : preparation?.stage === 'initialize'
-      ? '确认初始化，随后重新审阅设计差异'
-      : '确认转入设计并继续页面开发'
 
   /** 只提交服务端当前计划的身份；不接受客户端源码、路径重选或命令。 */
   const confirm = (): void => {
-    if (!reviewed || disabled || blocked || !plan) return
-    onAction(
-      dependency
-        ? {
-            action: 'confirm',
-            planId: dependency.planId,
-            reviewId: dependency.reviewId
-          }
-        : transfer
-          ? {
-              action: 'confirm',
-              planId: transfer.planId,
-              installationPlanId: transfer.installation.planId,
-              targetSourceRoot: transfer.target.sourceRoot
-            }
-          : { action: 'refresh' }
-    )
+    if (!reviewed || disabled || blocked || !dependency) return
+    onAction({ action: 'confirm', planId: dependency.planId, reviewId: dependency.reviewId })
   }
 
   return (
@@ -70,14 +50,12 @@ export default function AgentUiPreparationReview({
       <Alert
         type={blocked ? 'warning' : 'info'}
         showIcon
-        message="页面开发前的 Agent UI 准备"
+        message={blocked ? '智能体页面准备需要处理' : '确认新增或变更的生产依赖'}
         description={
           preparation?.error ||
-          (dependency
-            ? '请审阅依赖和样式差异。确认后由开发流程执行安装并验证。'
-            : preparation?.stage === 'initialize'
-              ? '目标尚未初始化。初始化后会再次展示已确认设计与默认文件的差异，再由你确认转入。'
-              : '请审阅已确认设计到当前工程的差异。验证成功后继续原页面任务规划。')
+          (blocked
+            ? '请先处理提示的问题，已有文件会保留。重新检查通过后将自动继续准备和页面开发。'
+            : '工程需要新增或变更生产依赖，请审阅具体差异。确认后将自动安装、初始化、转入已确认设计并验证。')
         }
       />
       {dependency && (
@@ -127,7 +105,7 @@ export default function AgentUiPreparationReview({
       <Space wrap>
         {!blocked && (
           <Button type="primary" disabled={disabled || !reviewed} onClick={confirm}>
-            {label}
+            确认依赖变更并继续
           </Button>
         )}
         <Button disabled={disabled} onClick={() => onAction({ action: 'refresh' })}>

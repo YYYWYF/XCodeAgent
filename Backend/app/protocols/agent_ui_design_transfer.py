@@ -45,7 +45,7 @@ def transfer_capabilities() -> dict[str, Any]:
         "transport": "ag-ui-sse", "actionField": "forwardedProps.agentUiDesignTransfer", "actions": ["plan", "initialize", "confirm", "get", "cancel"],
         "customEventName": "agent-ui-design-transfer", "stateSnapshotKey": "agentUiDesignTransfer",
         "workflowIndependent": True, "readOnly": False, "executionAvailable": True, "automaticReplay": False,
-        'hostIntegration': 'reviewed-template-provider-extension', 'realRuntimeConnection': 'blocked_T27'}
+        'hostIntegration': 'reviewed-template-provider-extension', 'realRuntimeConnection': 'same-origin-business'}
 
 
 async def _execute(request: AgentUiTransferAction, thread_id: str, run_id: str, report: ProgressReporter) -> dict[str, Any]:

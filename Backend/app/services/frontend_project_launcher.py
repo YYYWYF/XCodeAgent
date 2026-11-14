@@ -226,6 +226,7 @@ def launch_frontend_project(
         "status": launch_status,
         "agent_ui_preview": ({key: json.loads(preview_argv[-1])[key] for key in ('mode', 'agentId')}
                              if preview_argv else None),
+        "agent_ui_observation": (json.loads(preview_argv[-1])['observation'] if preview_argv else None),
         "message": message,
         "preview_url": preview_url,
         "install": install_result,

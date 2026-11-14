@@ -14,13 +14,19 @@ the Creator flow below.
 
 1. Read the projected Agent Surface before choosing the page composition.
 2. For `standalone_page`, the platform mounts one official initialized Agent.
-   Generate page controls for declared non-Agent actions. Include navigation back to
-   another page only when the current page declares that action. The page's message
-   list, input, send control and state information are implemented by that Agent;
-   they are not business information items to render a second time. Preserve
-   non-Agent actions and their formal IDs. Navigation buttons use the Host's typed
-   `onNavigatePage('exact targetPageId')` callback when connected. As in ordinary
-   page previews, declared navigation may use a local placeholder handler.
+   Generate controls only for declared non-Agent actions. Include navigation only
+   when the current page declares that action. The page's message list, input, send
+   control and state information are implemented by that Agent; do not render a
+   second copy as business information. Preserve non-Agent actions and their formal
+   IDs. Native `stop_generation` belongs to the official composer's `submit-action`;
+   `copy_response` belongs to the assistant response footer's `copy-action` and
+   copies the complete response. Never duplicate these controls in page TSX or
+   replace their real effects with local success flags. Copying an extracted
+   field/document fragment remains a distinct business action with an explicit
+   target. Connected navigation uses the Host's typed
+   `onNavigatePage('exact targetPageId')` callback. An isolated design preview may
+   use a local placeholder for a declared navigation action; production code must
+   not implement routing.
 3. For `floating_panel`, preserve the complete business body. The Host supplies
    the normal open/close interaction while keeping the same Agent mounted. When
    the confirmed business body declares panel open/close interface actions, bind
@@ -34,7 +40,8 @@ the Creator flow below.
 4. Keep stable page/Agent/action/context identities from confirmed ProductPlan.
    Do not invent backend addresses, ports, credentials or advanced capabilities.
 5. Keep ProductPlan action and information-item evidence on the business controls
-   that implement those facts. The platform owns declared Agent entry actions.
+   that implement those facts. The platform owns declared Agent entry and native
+   conversation actions. Stop/copy/clear are never floating-panel launchers.
 
 ## Fixed Boundaries
 

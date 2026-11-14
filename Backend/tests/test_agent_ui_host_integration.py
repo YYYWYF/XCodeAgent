@@ -22,7 +22,8 @@ class AgentUiHostIntegrationTests(unittest.TestCase):
         self.target = self.root / 'frontend'
         self.source = self.root / 'source'
         (self.source / 'src/design').mkdir(parents=True)
-        for name in ('SharedApplication.tsx', 'SharedPage.tsx', 'runtimeResults.ts', 'useRuntimeResult.ts'):
+        for name in ('SharedApplication.tsx', 'SharedPage.tsx', 'runtimeResults.ts', 'useRuntimeResult.ts',
+                     'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'RuntimeInput.tsx'):
             shutil.copy2(REPOSITORY / 'tools/agent-ui-design' / name, self.source / 'src/design' / name)
         (self.source / 'package.json').write_text('{}')
         (self.source / 'node_modules').symlink_to(REPOSITORY / 'tools/agent-ui-consumer/node_modules', target_is_directory=True)
@@ -71,7 +72,7 @@ class AgentUiHostIntegrationTests(unittest.TestCase):
         self.assertIn('endpoint="/agents/assistant/run"', provider)
         self.assertIn('agentId="assistant"', provider)
 
-    def test_business_capabilities_keep_formal_connection_disabled(self) -> None:
+    def test_business_capabilities_use_current_connection_and_invalid_contracts_fail(self) -> None:
         """纯文本例外不能开放页面数据、工具、状态、审批或登录身份。"""
         from copy import deepcopy
         original = deepcopy(self.state)
@@ -93,8 +94,8 @@ class AgentUiHostIntegrationTests(unittest.TestCase):
                 if result['status'] == 'blocked':
                     self.assertEqual(result['files'], {})
                 else:
-                    self.assertEqual(result['connection'], 'blocked_T27')
-                    self.assertIn('endpoint=""', result['files']['src/extensions/AgentUiHostProvider.tsx'])
+                    self.assertEqual(result['connection'], 'blocked_T27' if feature == 'auth' else 'business')
+                    self.assertIn('endpoint=""' if feature == 'auth' else 'endpoint="/agents/assistant/run"', result['files']['src/extensions/AgentUiHostProvider.tsx'])
 
     def test_description_only_context_remains_plain_text(self) -> None:
         """提示描述不等同于业务页面数据，正式接线只使用当前 Agent 固定地址。"""

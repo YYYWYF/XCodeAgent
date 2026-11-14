@@ -79,12 +79,12 @@ class AgentUiDesignInputTests(unittest.TestCase):
         product["pages"].append({"pageId": "about", "name": "关于", "actions": [], "information_items": []})
         self.assertEqual([page["pageId"] for page in project_agent_design_pages(requirement, product)], ["home", "chat"])
 
-    def test_official_welcome_uses_confirmed_agent_without_demo_suggestions(self) -> None:
-        """共享会话使用正式身份和职责，不向通用助手注入银行示例业务。"""
+    def test_official_welcome_uses_confirmed_agent_and_preserves_default_suggestions(self) -> None:
+        """共享会话使用正式身份和职责，不覆盖官方默认建议。"""
         source = _host_files(project_agent_design_pages(*formal_facts()))["src/design/props.ts"]
         props = json.loads(source.split("export const agentProps = ", 1)[1].split(" satisfies", 1)[0])
         self.assertEqual(props["welcome"], {"title": "通用助手", "description": "通用文本对话"})
-        self.assertEqual(props["suggestions"], [])
+        self.assertNotIn("suggestions", props)
 
     def test_file_set_is_exact_and_rejects_duplicate_or_foreign_paths(self) -> None:
         """模型不能写配置、依赖、包源码或通过重复 JSON key 隐藏覆盖。"""

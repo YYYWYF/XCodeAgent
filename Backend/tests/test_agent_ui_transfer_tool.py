@@ -34,7 +34,11 @@ process.stdout.write(JSON.stringify(required));
         result = subprocess.run(['node', '--input-type=module', '--eval', script],
             cwd=REPOSITORY / 'tools/agent-ui', text=True, capture_output=True, timeout=30, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), dict(SOURCE_DEPENDENCIES))
+        self.assertEqual(json.loads(result.stdout), {name: version for name, version in SOURCE_DEPENDENCIES if not name.startswith('@ag-ui/')})
+        runtime = json.loads((REPOSITORY / 'tools/agent-ui-consumer/node_modules/@za38.03/agent-ui-runtime/package.json').read_text())
+        for name, version in SOURCE_DEPENDENCIES:
+            if name.startswith('@ag-ui/'):
+                self.assertEqual(runtime['dependencies'][name], version)
 
     def test_missing_runtime_packages_cannot_initialize(self) -> None:
         """宿主不再调用依赖规划器后，公开事务仍拒绝未安装的 Runtime 包。"""

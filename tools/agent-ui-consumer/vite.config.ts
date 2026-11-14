@@ -17,6 +17,40 @@ function productionBoundary(): Plugin {
 
 export default defineConfig({
   plugins: [tailwindcss(), productionBoundary()],
+  // 正文独立编译，防止共享 Agent 的扫描范围、主题覆盖和圆角变量影响普通页面。
+  // https://vite.dev/config/shared-options.html#css-postcss
+  css: {
+    postcss: {
+      plugins: [{
+        postcssPlugin: 'agent-design-business-boundary',
+        /** 仅隔离正文入口的编译结果，官方 Agent 与消费者外壳的样式保持原样。 */
+        Once(root) {
+          if (!root.source?.input.file?.replace(/\\/g, '/').endsWith('/src/business.css')) return
+          const scope = '.agent-design-business'
+          const animations = new Map<string, string>()
+          root.walkAtRules(/keyframes$/, (rule) => {
+            const scoped = `${rule.params}-design-business`
+            animations.set(rule.params, scoped)
+            rule.params = scoped
+          })
+          root.walkRules((rule) => {
+            // 嵌套规则沿用外层限定；关键帧内部的百分比不能当作普通选择器。
+            for (let parent = rule.parent; parent && parent.type !== 'root'; parent = parent.parent) {
+              if (parent.type === 'rule' || (parent.type === 'atrule' && /keyframes$/.test(parent.name))) return
+            }
+            rule.selectors = [...new Set(rule.selectors.map((selector) =>
+              /^(?::root|:host|html|body)$/.test(selector) ? scope : `${scope} ${selector}`))]
+          })
+          root.walkDecls((declaration) => {
+            if (declaration.prop.startsWith('--animate-') || /^animation(?:-name)?$/.test(declaration.prop)) {
+              declaration.value = declaration.value.split(/(\s+|,)/)
+                .map((value) => animations.get(value) ?? value).join('')
+            }
+          })
+        },
+      }],
+    },
+  },
   build: {
     rollupOptions: {
       output: {

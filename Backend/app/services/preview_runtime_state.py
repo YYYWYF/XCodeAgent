@@ -194,6 +194,7 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
                                     agentIds=part.get("agent_ids"))
             if layer == "frontend":
                 value[layer]['agentUiPreview'] = part.get('agent_ui_preview')
+                value[layer]['agentUiObservation'] = part.get('agent_ui_observation')
         write_record(workspace, value)
 
 

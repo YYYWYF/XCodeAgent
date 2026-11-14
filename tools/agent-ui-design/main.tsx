@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { App } from './App'
 import { designPages } from './design/pages'
 import './styles.css'
+import './business.css'
 
 /** 只读取受控预览 HTTP 文档注入的临时连接；磁盘构建没有默认 Mock 或真实地址。 */
 function readPreview(): Parameters<typeof App>[0] {

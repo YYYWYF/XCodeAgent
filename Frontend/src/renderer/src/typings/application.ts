@@ -316,6 +316,9 @@ export interface ApplicationPageInteraction {
   bindingType?: 'endpoint' | 'agent' | 'navigation' | 'local' | 'sequence' | 'external'
   endpointId?: string
   agentId?: string
+  operation?: 'send_message' | 'clear_conversation' | 'stop_generation' | 'copy_response'
+  message?: string
+  requiresConfirmation?: boolean
   targetMenuKey?: string
   localEffect?: string
   externalTarget?: string

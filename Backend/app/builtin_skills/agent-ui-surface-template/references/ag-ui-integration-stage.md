@@ -20,6 +20,11 @@ installs, copies fixed assets, confirms documents or falls back to old templates
   max-width frame, rounded/shadowed panels, duplicate hero text or a technical footer.
   Keep confirmed non-Agent actions in a compact toolbar. Fill the actual Shell
   content area with a flat full-width flex layout.
+  `stop_generation` belongs to the official composer and `copy_response` copies
+  the complete selected assistant response through its native response action.
+  Do not implement page-local substitutes, success flags, or ordinary business
+  endpoints for these operations. Field/fragment copying remains an independent
+  business requirement with its explicit target.
   Remove the Shell content padding and contrasting outer background only for this
   mounted standalone page, using a page-scoped parent selector such as
   `.ant-pro-layout-content:has(> .your-page-class)`. Do not edit the global Shell

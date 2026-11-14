@@ -11,6 +11,7 @@ from app.services.database_credentials import DatabaseCredentialError, load_appl
 from app.services.python_runtime_checks import runtime_check_plan
 from app.services.runtime_agent_contracts import agent_contract_index
 from app.services.agent_ui_plain_text_preview import plain_text_preview_allowed
+from app.services.agent_ui_observation import observation_snapshot
 
 
 class ProxyHealth(TypedDict):
@@ -30,6 +31,7 @@ class RuntimeConnectionSnapshot(TypedDict):
     plainTextPreview: bool
     checks: list[ConnectionCheck]
     proxyHealth: ProxyHealth
+    observation: dict[str, Any] | None
 
 
 def connection_snapshot(workspace: Path, frontend: Mapping[str, Any],
@@ -38,7 +40,8 @@ def connection_snapshot(workspace: Path, frontend: Mapping[str, Any],
     root = workspace.resolve()
     result: RuntimeConnectionSnapshot = {
         'agentId': None, 'endpoint': None, 'verificationScope': 'live_proxy_health',
-        'sendEnabled': False, 'plainTextPreview': False, 'checks': [],
+        'sendEnabled': False, 'plainTextPreview': False, 'businessPreview': False, 'checks': [],
+        'observation': None,
         'proxyHealth': {'status': 'not_verified', 'reason': '当前正式 Agent 合同不可用，请检查已确认的技术规划。'},
     }
     try:
@@ -62,6 +65,7 @@ def connection_snapshot(workspace: Path, frontend: Mapping[str, Any],
             or type(port) is not int or not 0 < port < 65536
             or not isinstance(launch_id, str) or not launch_id):
         result['proxyHealth']['reason'] = '当前前端和 Python 服务尚未同时就绪，请沿原服务入口启动或重启。'
+        result['observation'] = observation_snapshot(root, frontend, runtime, requirements['agentId'], False)
         return result
     # 不使用任意 URL 或来自旧记录的 Agent 集合，限定当前本机端口和正式身份。
     ready, reason = runtime_health(f'http://127.0.0.1:{port}', launch_id,
@@ -69,7 +73,10 @@ def connection_snapshot(workspace: Path, frontend: Mapping[str, Any],
         expected_agent_ids=[requirements['agentId']], expected_application=root / 'agent-runtime',
         expected_namespace='preview:' + hashlib.sha256(str(root).encode()).hexdigest()[:24])
     result['proxyHealth'] = {'status': 'ready' if ready else 'blocked', 'reason': reason}
+    result['observation'] = observation_snapshot(root, frontend, runtime, requirements['agentId'], ready)
     marker = frontend.get('agentUiPreview')
+    result['businessPreview'] = (ready and isinstance(marker, Mapping)
+        and dict(marker) == {'mode': 'formal-business', 'agentId': requirements['agentId']})
     result['plainTextPreview'] = (ready and isinstance(marker, Mapping)
         and dict(marker) in ({'mode': mode, 'agentId': requirements['agentId']} for mode in ('real-text', 'formal-text'))
         and plain_text_preview_allowed(application, contract))

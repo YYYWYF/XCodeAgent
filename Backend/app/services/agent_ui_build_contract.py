@@ -58,7 +58,7 @@ def project_agent_ui_build_contracts(
     agent_id, runtime = next(iter(contracts.items()))
     from app.services.runtime_endpoint_contracts import runtime_endpoint_capability_snapshot, runtime_endpoint_identity
     endpoint = runtime_endpoint_capability_snapshot(technical_plan, *runtime_endpoint_identity(agent_id))
-    if (host['agentId'] != agent_id or host.get('connection') not in {'blocked_T27', 'plain_text'}
+    if (host['agentId'] != agent_id or host.get('connection') not in {'blocked_T27', 'plain_text', 'business'}
             or host.get('endpoint') != endpoint['invocation']['path']):
         raise ValueError('共享 Host 与当前正式 Agent 或连接准入不一致。')
     result: dict[str, dict[str, Any]] = {}

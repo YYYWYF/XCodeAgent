@@ -900,12 +900,10 @@ export type WorkflowAgentUiPreparationAction = {
   action: 'confirm' | 'refresh'
   planId?: string
   reviewId?: string
-  installationPlanId?: string
-  targetSourceRoot?: string
 }
 
 export type WorkflowAgentUiPreparation = {
-  stage: 'dependency' | 'initialize' | 'transfer' | 'blocked'
+  stage: 'dependency' | 'blocked'
   plan?: AgentUiDependencyPlan | AgentUiTransferPlan
   error?: string
 }

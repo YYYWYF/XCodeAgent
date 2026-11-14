@@ -285,6 +285,32 @@ try {
   assert.match(realTextConnection, /真实文本对话预览已启用/)
   assert.match(realTextConnection, /回复来自当前 Python 智能体/)
   assert.doesNotMatch(realTextConnection, /真实发送保持禁用/)
+  const businessConnection = renderToStaticMarkup(createElement(AgentUiConnectionStatus, { connection: {
+    agentId: 'assistant', endpoint: '/agents/assistant/run', verificationScope: 'live_proxy_health',
+    sendEnabled: false, plainTextPreview: false, businessPreview: true,
+    proxyHealth: { status: 'ready', reason: '当前应用身份核验通过' }, checks: []
+  } }))
+  assert.match(businessConnection, /真实业务连接已启用/)
+  assert.match(businessConnection, /业务工具、结果和用户交互/)
+  assert.doesNotMatch(businessConnection, /真实发送保持禁用/)
+  const observedConnection = renderToStaticMarkup(createElement(AgentUiConnectionStatus, { connection: {
+    agentId: 'assistant', endpoint: '/agents/assistant/run', verificationScope: 'live_proxy_health',
+    sendEnabled: false, plainTextPreview: true, checks: [],
+    proxyHealth: { status: 'ready', reason: '当前应用身份核验通过' }, observation: {
+      source: 'unknown', sessionId: null, launchId: 'launch-current', identityMatches: false,
+      identity: { status: 'available', transferPlanId: 'plan-current', sourceSha256: 'source-current',
+        lockSha256: 'lock-current', packages: [{ name: '@za38.03/agent-ui-runtime', version: '0.0.1', metadataSha256: 'metadata-current' }] },
+      replay: 'not_implemented'
+    }
+  } }))
+  assert.match(observedConnection, /来源与身份/)
+  assert.match(observedConnection, /未知或当前连接未就绪/)
+  assert.match(observedConnection, /未捕获，请重启受管预览/)
+  assert.match(observedConnection, /未确认或已变化/)
+  assert.match(observedConnection, /source-current/)
+  assert.match(observedConnection, /metadata-current/)
+  assert.match(observedConnection, /回放尚未实现/)
+  assert.doesNotMatch(observedConnection, /<button|业务成功/)
 
   const awaiting = renderToStaticMarkup(
     createElement(PreviewRepairControls, {

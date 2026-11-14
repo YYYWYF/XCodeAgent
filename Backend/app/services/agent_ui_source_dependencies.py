@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Any
 
 # 当前 0.0.1 成品公开 Source Registry 的 platform preset closure；不由模型选包或升级。
-SOURCE_DEPENDENCIES = (('lucide-react', '1.41.0'), ('zod', '4.5.4'))
+SOURCE_DEPENDENCIES = (('lucide-react', '1.41.0'), ('zod', '4.5.4'),
+                       ('@ag-ui/client', '1.0.3'), ('@ag-ui/core', '1.0.3'))
 
 
 def prepare_source_dependencies(package: dict[str, Any]) -> list[dict[str, str]]:

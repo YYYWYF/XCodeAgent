@@ -10,6 +10,7 @@ from app.services.agent_ui_dependency_evidence import installed_evidence
 from app.services.agent_ui_transfer_records import transfer_directory
 from app.services.agent_ui_connection_requirements import connection_requirements
 from app.services.agent_ui_plain_text_preview import plain_text_preview_allowed
+from app.services.agent_ui_connection_requirements import runtime_connection_allowed
 from app.services.runtime_agent_contracts import agent_contract_index
 
 
@@ -54,7 +55,7 @@ def load_build_evidence(workspace: str | Path) -> dict[str, Any]:
     application = read_object(root / '.devagentstudio/application.json')
     contract = contracts[host['agentId']]
     requirements = connection_requirements(application, contract)
-    expected_connection = 'plain_text' if plain_text_preview_allowed(application, contract) else 'blocked_T27'
+    expected_connection = ('plain_text' if plain_text_preview_allowed(application, contract) else 'business') if runtime_connection_allowed(application, contract) else 'blocked_T27'
     if (host.get('connection') != expected_connection or host.get('connectionRequirements') != requirements
             or host.get('endpoint') != requirements['endpoint']):
         raise ValueError('连接条件与当前应用配置、正式能力或公开包接入限制不一致，请重新审阅转入。')

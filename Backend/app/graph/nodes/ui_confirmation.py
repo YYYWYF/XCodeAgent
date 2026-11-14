@@ -541,16 +541,16 @@ async def _apply_adjust_pages(
     agent_ids = [page_id for page_id in page_ids if any(
         _page_id(page) == page_id and page.get("design_asset") for page in pages)]
     if agent_ids:
-        _emit_progress("正在等待智能体设计任务…", ready=0, total=len(agent_ids),
+        _emit_progress("正在准备多文件页面设计调整…", ready=0, total=len(agent_ids),
                        pages=list(pages), adjust_total=len(page_ids), adjust_ready=0,
                        adjust_current=agent_ids[0])
         def report_agent_progress(message: str, page_id: str) -> None:
-            """复用当前 AG-UI 进度流展示 Creator 阶段，不将心跳当成页面完成。"""
+            """复用当前 AG-UI 流展示范围分析、正文或 Creator 阶段，不将心跳当成完成。"""
             _emit_progress(message, ready=0, total=len(agent_ids), pages=list(pages),
                            adjust_total=len(page_ids), adjust_ready=0, adjust_current=page_id)
 
         pages = await adjust_agent_pages(state, pages, agent_ids, instruction, on_progress=report_agent_progress)
-        _emit_progress("智能体设计稿调整已结束，请检查页面结果。", ready=len(agent_ids),
+        _emit_progress("页面设计稿调整已结束，请检查页面结果。", ready=len(agent_ids),
                        total=len(agent_ids), pages=list(pages), adjust_total=len(page_ids),
                        adjust_ready=len(agent_ids))
         page_ids = [page_id for page_id in page_ids if page_id not in agent_ids]

@@ -1,4 +1,4 @@
-"""T27 连接条件的只读投影；当前成品能力和静态合同均不能授权真实发送。"""
+"""T27 当前连接合同：后端校验准入，前端消费当前线程的业务回执。"""
 
 from collections.abc import Mapping
 from typing import Any, Literal, TypedDict
@@ -44,24 +44,24 @@ def connection_requirements(application: Mapping[str, Any], contract: Mapping[st
                   and capability.get('resultSchema') is None
                   and settings['tools']['enabled'] is False and not settings['tools']['bindings'])
     checks: list[ConnectionCheck] = [
-        {'id': 'plain_text', 'status': 'supported' if plain_text else 'blocked',
+        {'id': 'plain_text', 'status': 'supported' if plain_text else 'not_required',
          'reason': '正式合同支持无业务输入/Tool 的纯文本会话' if plain_text else
-                   '正式合同含任务、业务输入/结果或 Tool，不能按纯文本样例开放'},
+                   '使用完整业务连接，按正式合同传递输入、结果和 Tool'},
         {'id': 'runtime_identity', 'status': 'supported' if anonymous else 'blocked',
          'reason': '应用配置明确采用当前模板支持的匿名会话模式' if anonymous else
                    '当前 Runtime 仅支持 auth.enable=false 且 authorization.enabled=false；缺失或开启均不可连接'},
         {'id': 'same_origin_session', 'status': 'not_verified',
          'reason': '目标同源代理及匿名会话尚未验证；须沿现有受管预览核对本轮 launchId、Agent 注册和会话'},
-        {'id': 'context', 'status': 'blocked' if settings['context'] else 'not_required',
-         'reason': '正式上下文尚未对齐标准 Context' if settings['context'] else '当前 Agent 未声明业务上下文'},
-        {'id': 'interrupts', 'status': 'blocked' if capability['interactionKinds'] else 'not_required',
-         'reason': '正式交互的 interrupt/resume 与只读查询尚未接通' if capability['interactionKinds'] else
+        {'id': 'context', 'status': 'supported' if settings['context'] else 'not_required',
+         'reason': '通过标准 Context 传递当前页面和业务数据，Python 边界负责校验' if settings['context'] else '当前 Agent 未声明业务上下文'},
+        {'id': 'interrupts', 'status': 'supported' if capability['interactionKinds'] else 'not_required',
+         'reason': '使用标准 interrupt/resume 和显式只读查询' if capability['interactionKinds'] else
                    '当前 Agent 未声明用户交互'},
-        # 当前已核对成品未填 canonical run.id、无统一 veto；包资源身份由原计划绑定。
-        {'id': 'run_identity', 'status': 'blocked',
-         'reason': '当前成品公开快照未提供可信 run.id，业务结果归属无法核验'},
-        {'id': 'send_admission', 'status': 'blocked',
-         'reason': '当前成品缺少覆盖所有发送/恢复入口的公开准入能力'},
+        # 当前标准不要求包额外投影 run.id 或提供全入口零请求 veto。
+        {'id': 'run_identity', 'status': 'supported',
+         'reason': '按当前 Agent/线程消费后端业务回执；缺失或矛盾结果保持未知'},
+        {'id': 'send_admission', 'status': 'supported',
+         'reason': '后端负责输入、权限和待办校验；前端错误允许由后端明确拒绝'},
         {'id': 'real_conversation', 'status': 'not_verified',
          'reason': '实际生成并注册的 Python Agent 两轮对话、失败、停止和断流尚未验收'},
     ]
@@ -73,4 +73,10 @@ def connection_requirements(application: Mapping[str, Any], contract: Mapping[st
 def connection_blocking_reason(requirements: ConnectionRequirements) -> str:
     """为既有转入审阅提示聚合未闭合条件，不把静态支持写成运行通过。"""
     return '；'.join(check['reason'] for check in requirements['checks']
-                    if check['status'] in {'blocked', 'not_verified'}) + '。真实发送保持禁用。'
+                    if check['status'] in {'blocked', 'not_verified'})
+
+
+def runtime_connection_allowed(application: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
+    """允许当前模板实际支持的公开业务能力；运行验收状态不冒充静态准入。"""
+    report = connection_requirements(application, contract)
+    return contract.get('publicEndpoint') is True and not any(item['status'] == 'blocked' for item in report['checks'])

@@ -169,18 +169,20 @@ function click(label: string): void {
 
 try {
   render({ stage: 'dependency', plan: dependency })
-  assert.equal(button('确认依赖与样式准备').props.disabled, true)
-  act(() => button('确认依赖与样式准备').props.onClick())
+  assert.equal(button('确认依赖变更并继续').props.disabled, true)
+  act(() => button('确认依赖变更并继续').props.onClick())
   assert.equal(
     submissions.length,
     0,
     'unchecked review must not submit even if a callback is invoked'
   )
+  assert.match(JSON.stringify(root?.toJSON()), /确认新增或变更的生产依赖/)
+  assert.match(JSON.stringify(root?.toJSON()), /自动安装、初始化、转入已确认设计并验证/)
   assert.match(JSON.stringify(root?.toJSON()), /pnpm/)
   assert.match(JSON.stringify(root?.toJSON()), /11\.9\.0/)
   assert.match(JSON.stringify(root?.toJSON()), /reviewed style contents/)
   review()
-  click('确认依赖与样式准备')
+  click('确认依赖变更并继续')
   assert.deepEqual(submissions.at(-1), {
     workflow,
     answers: {
@@ -195,7 +197,7 @@ try {
   const nextDependency = { ...dependency, planId: '1'.repeat(64), reviewId: '2'.repeat(32) }
   render({ stage: 'dependency', plan: nextDependency })
   assert.equal(
-    button('确认依赖与样式准备').props.disabled,
+    button('确认依赖变更并继续').props.disabled,
     true,
     'new plan identity must revoke previous review'
   )
@@ -206,52 +208,17 @@ try {
   review()
   render({ stage: 'dependency', plan: nextDependency }, true)
   assert.equal(root?.root.findByType('input').props.disabled, true)
-  assert.equal(button('确认依赖与样式准备').props.disabled, true)
+  assert.equal(button('确认依赖变更并继续').props.disabled, true)
   assert.equal(button('重新检查当前工程').props.disabled, true)
   const historyCount = submissions.length
-  act(() => button('确认依赖与样式准备').props.onClick())
+  act(() => button('确认依赖变更并继续').props.onClick())
   assert.equal(
     submissions.length,
     historyCount,
     'disabled or historical review cannot submit a write'
   )
 
-  const initialization = transferPlan(true)
-  render({ stage: 'initialize', plan: initialization })
-  assert.equal(button('确认初始化，随后重新审阅设计差异').props.disabled, true)
-  assert.match(JSON.stringify(root?.toJSON()), /初始化后会再次展示/)
-  review()
-  click('确认初始化，随后重新审阅设计差异')
-  assert.deepEqual(submissions.at(-1)?.answers, {
-    agent_ui_preparation: {
-      action: 'confirm',
-      planId: initialization.planId,
-      installationPlanId: initialization.installation.planId,
-      targetSourceRoot: initialization.target.sourceRoot
-    }
-  })
-
   const transfer = transferPlan(false)
-  render({ stage: 'transfer', plan: transfer })
-  assert.equal(
-    button('确认转入设计并继续页面开发').props.disabled,
-    true,
-    'initialization must not approve the later transfer'
-  )
-  assert.match(JSON.stringify(root?.toJSON()), /reviewed design diff/)
-  assert.doesNotMatch(JSON.stringify(root?.toJSON()), /unchanged contents/)
-  assert.match(JSON.stringify(root?.toJSON()), /真实发送仍待独立验收/)
-  review()
-  click('确认转入设计并继续页面开发')
-  assert.deepEqual(submissions.at(-1)?.answers, {
-    agent_ui_preparation: {
-      action: 'confirm',
-      planId: transfer.planId,
-      installationPlanId: transfer.installation.planId,
-      targetSourceRoot: transfer.target.sourceRoot
-    }
-  })
-
   render({
     stage: 'blocked',
     plan: { ...transfer, status: 'blocked', blockers: ['保留已有自定义配置'] },
@@ -260,6 +227,10 @@ try {
   assert.equal(root?.root.findAllByType('input').length, 0)
   assert.equal(root?.root.findAllByType('button').length, 1)
   assert.match(JSON.stringify(root?.toJSON()), /保留已有自定义配置/)
+  assert.match(JSON.stringify(root?.toJSON()), /智能体页面准备需要处理/)
+  assert.match(JSON.stringify(root?.toJSON()), /reviewed design diff/)
+  assert.doesNotMatch(JSON.stringify(root?.toJSON()), /确认初始化|确认转入设计/)
+  assert.doesNotMatch(JSON.stringify(root?.toJSON()), /unchanged contents/)
   assert.match(JSON.stringify(root?.toJSON()), /当前计划需要重新审阅/)
   click('重新检查当前工程')
   render(undefined, true)
@@ -267,7 +238,7 @@ try {
   assert.equal(button('重新检查当前工程').props.disabled, true)
   assert.equal(networkCalls, 0, 'the review must not invoke standalone install or transfer APIs')
   console.log(
-    'Agent UI preparation review tests passed (main-workflow identity, review gate, plan reset, initialization, transfer, blocked/history).'
+    'Agent UI preparation review tests passed (main-workflow identity, review gate, plan reset, automatic-preparation copy, blocked/history).'
   )
 } finally {
   act(() => root?.unmount())

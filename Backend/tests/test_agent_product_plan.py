@@ -122,6 +122,26 @@ class AgentProductPlanTests(unittest.TestCase):
         self.assertEqual(plan["agents"], [])
         self.assertEqual(validate_product_plan(plan, spec), [])
 
+    def test_native_conversation_operations_survive_product_and_markdown_boundaries(self) -> None:
+        """原生操作经产品严格校验和 Markdown 审阅保持语义，不变成发送或业务接口。"""
+        spec = self._requirement_spec_with_agent()
+        model = self._agent_model_plan(spec)
+        page = model['pages'][0]
+        for operation in ('stop_generation', 'copy_response'):
+            page['actions'].append({'actionId': operation, 'name': operation,
+                'description': '使用原生会话操作', 'requiresConfirmation': False,
+                'behavior': {'type': 'agent', 'agentId': 'inventory_assistant',
+                    'operation': operation, 'message': '', 'expectedResult': '会话中完成原生操作'}})
+            model['agents'][0]['pageActionBindings'][0]['actionIds'].append(operation)
+        self.assertEqual(validate_product_plan_model_output(model, spec), [])
+        plan = create_product_plan(spec, agent_plan=model)
+        self.assertEqual(validate_product_plan(plan, spec), [])
+        self.assertEqual([item['behavior']['operation'] for item in plan['pages'][0]['actions'][-2:]],
+                         ['stop_generation', 'copy_response'])
+        markdown = render_product_plan_markdown(plan)
+        self.assertIn('停止当前会话回复生成', markdown)
+        self.assertIn('复制所选助手回复的完整文本', markdown)
+
     def test_product_plan_projects_agent_contract_with_stable_references(self) -> None:
         """ProductPlan 必须承接需求智能体并闭合能力、页面和操作引用。"""
 

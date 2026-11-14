@@ -19,8 +19,8 @@ from tests.agent_ui_transfer_fixtures import transfer_fixture, verify_target
 from tests.test_runtime_endpoint_contracts import agent, plan as runtime_plan
 
 
-def shared_build_target(root: Path) -> dict:
-    """仅替代实际 SDK 与昂贵命令，其余磁盘确认/归属/公开包校验走真实实现。"""
+def shared_build_target(root: Path, *, transfer: bool = True) -> dict:
+    """准备完整正式来源，可停在转入前以验证主Workflow自动准备。"""
     source, target, _ = transfer_fixture(str(root))
     state = _formal_state(root)
     pages = project_agent_design_pages(state['requirement_spec'], state['product_plan'])
@@ -65,6 +65,8 @@ def shared_build_target(root: Path) -> dict:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     installation = verify_target(root)
+    if not transfer:
+        return {'installationPlanId': installation}
 
     def public_tool(action: str, _target: Path, source_root: str, **_kwargs: object) -> dict:
         """仅模拟公开初始化的目标 BASE；不把设计 BASE 复制进目标。"""

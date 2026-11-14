@@ -155,6 +155,94 @@ class DesignCreatorRevisionTests(unittest.TestCase):
         self.assertEqual((design.project.project_dir / 'src/agent-ui/app-ui.json').read_text(),
                          (self.current.project_dir / 'src/agent-ui/app-ui.json').read_text())
 
+    def test_home_body_change_does_not_invoke_creator(self) -> None:
+        """首页含浮窗也只能由普通 UI 模型修改正文，保留已有共享应用与原稿。"""
+        response = SimpleNamespace(content=json.dumps({'files': {
+            'src/pages/page-0.tsx': 'export default function Page() { return <main>请假助手</main> }'}}))
+        route = SimpleNamespace(content=json.dumps({'tasks': [
+            {'owner': 'business_page', 'pageIds': ['home'], 'instruction': '首页标题改为请假助手'}],
+            'clarification': ''}))
+        with patch('app.services.ui_design_generator._create_ui_design_model'), \
+                patch('app.services.ui_design_generator._invoke_ui_design_model', side_effect=[route, response]):
+            design = revise_agent_ui_design(self.inspection, current_project=self.current,
+                draft_root=self.workspace / '.devagentstudio/drafts/home', pnpm_cli=Path('/pnpm.cjs'),
+                requirement_spec=self.requirement, product_plan=self.product, targets=['home'],
+                instruction='首页标题改为请假助手，保留浮窗', run_id='body-test')
+        self.creator.assert_not_called()
+        self.assertIn('请假助手', (design.project.project_dir / 'src/pages/page-0.tsx').read_text())
+        self.assertEqual((self.current.project_dir / 'src/pages/page-0.tsx').read_text(), 'preserve home business')
+        self.assertEqual(design.affected_page_ids, ('home',))
+        self.assertEqual((design.project.project_dir / 'src/agent-ui/app-ui.json').read_bytes(),
+                         (self.current.project_dir / 'src/agent-ui/app-ui.json').read_bytes())
+
+    def test_mixed_body_and_agent_changes_use_one_draft(self) -> None:
+        """混合请求分别交给两个执行方，Creator 接收到的指令不含正文修改任务。"""
+        route = SimpleNamespace(content=json.dumps({'tasks': [
+            {'owner': 'business_page', 'pageIds': ['home'], 'instruction': '首页标题改为请假助手'},
+            {'owner': 'agent_ui', 'pageIds': ['home'], 'instruction': '浮窗欢迎语改为你好'}],
+            'clarification': ''}))
+        response = SimpleNamespace(content=json.dumps({'files': {
+            'src/pages/page-0.tsx': 'export default function Page() { return <main>请假助手</main> }'}}))
+
+        def edit(_inspection, project: Path, request: str, **_options):
+            """Creator 只修改欢迎语，且在同一草稿看到普通正文的新结果。"""
+            self.assertTrue(request.startswith('浮窗欢迎语改为你好\n'))
+            self.assertIn('请假助手', (project / 'src/pages/page-0.tsx').read_text())
+            (project / 'src/design/presentation.json').write_text(
+                '{"home":{"props":{"welcome":{"title":"你好"}},"styles":[]}}')
+            return {'type': 'completed'}
+
+        self.creator.side_effect = edit
+        with patch('app.services.ui_design_generator._create_ui_design_model'), \
+                patch('app.services.ui_design_generator._invoke_ui_design_model', side_effect=[route, response]):
+            design = revise_agent_ui_design(self.inspection, current_project=self.current,
+                draft_root=self.workspace / '.devagentstudio/drafts/mixed', pnpm_cli=Path('/pnpm.cjs'),
+                requirement_spec=self.requirement, product_plan=self.product, targets=['home'],
+                instruction='首页标题改为请假助手，浮窗欢迎语改为你好', run_id='mixed-test')
+        self.creator.assert_called_once()
+        evidence = json.loads((design.project.root / 'generation.json').read_text())
+        self.assertEqual({task['executor'] for task in evidence['tasks']}, {'ui_model', 'creator'})
+        self.assertEqual(evidence['confirmation_status'], 'pending_user_confirmation')
+        self.assertEqual(design.affected_page_ids, ('home',))
+
+    def test_creator_failure_after_body_edit_keeps_original_and_records_failure(self) -> None:
+        """正文已在草稿修改但 Creator 失败时，不向当前设计提交部分结果。"""
+        route = SimpleNamespace(content=json.dumps({'tasks': [
+            {'owner': 'business_page', 'pageIds': ['home'], 'instruction': '修改首页标题'},
+            {'owner': 'agent_ui', 'pageIds': ['home'], 'instruction': '修改欢迎语'}], 'clarification': ''}))
+        response = SimpleNamespace(content=json.dumps({'files': {
+            'src/pages/page-0.tsx': 'export default function Page() { return <main>新标题</main> }'}}))
+        self.creator.side_effect = ValueError('Creator failed')
+        with patch('app.services.ui_design_generator._create_ui_design_model'), \
+                patch('app.services.ui_design_generator._invoke_ui_design_model', side_effect=[route, response]):
+            with self.assertRaisesRegex(ValueError, 'Creator failed'):
+                revise_agent_ui_design(self.inspection, current_project=self.current,
+                    draft_root=self.workspace / '.devagentstudio/drafts/failed', pnpm_cli=Path('/pnpm.cjs'),
+                    requirement_spec=self.requirement, product_plan=self.product, targets=['home'],
+                    instruction='修改首页标题和欢迎语', run_id='failed-test')
+        self.assertEqual((self.current.project_dir / 'src/pages/page-0.tsx').read_text(), 'preserve home business')
+        record = self.workspace / '.devagentstudio/drafts/failed/agent-ui-project/generation.json'
+        self.assertEqual(json.loads(record.read_text())['status'], 'generation_failed')
+
+    def test_creator_cannot_change_even_target_page_business_body(self) -> None:
+        """Creator 子任务也不能因为首页包含浮窗而接管该页正文。"""
+        route = SimpleNamespace(content=json.dumps({'tasks': [
+            {'owner': 'agent_ui', 'pageIds': ['home'], 'instruction': '修改欢迎语'}], 'clarification': ''}))
+
+        def edit(_inspection, project: Path, _request: str, **_options):
+            """模拟 Creator 越过同页内部的 owner 边界。"""
+            (project / 'src/pages/page-0.tsx').write_text('unexpected body takeover')
+            return {'type': 'completed'}
+
+        self.creator.side_effect = edit
+        with patch('app.services.ui_design_generator._create_ui_design_model'), \
+                patch('app.services.ui_design_generator._invoke_ui_design_model', return_value=route):
+            with self.assertRaisesRegex(ValueError, '超出当前设计范围'):
+                revise_agent_ui_design(self.inspection, current_project=self.current,
+                    draft_root=self.workspace / '.devagentstudio/drafts/boundary', pnpm_cli=Path('/pnpm.cjs'),
+                    requirement_spec=self.requirement, product_plan=self.product, targets=['home'],
+                    instruction='修改欢迎语', run_id='boundary-test')
+
     def test_independent_variants_require_explicit_regeneration(self) -> None:
         """已有独立应用不自动压平成共享应用，避免丢弃已接受的定制。"""
         variant = self.current.project_dir / 'src/design/agent-pages/page-1'

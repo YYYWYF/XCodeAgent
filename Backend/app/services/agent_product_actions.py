@@ -2,6 +2,9 @@
 
 from typing import Any
 
+AGENT_OPERATIONS: frozenset[str] = frozenset({'send_message', 'clear_conversation', 'stop_generation', 'copy_response'})
+NATIVE_RESPONSE_OPERATIONS: frozenset[str] = frozenset({'stop_generation', 'copy_response'})
+
 
 def _objects(value: Any) -> list[dict]:
     """筛选外部列表中的对象，结构错误留给产品边界校验报告。"""
@@ -45,12 +48,18 @@ def agent_product_action_errors(agents: list[dict], pages: list[dict]) -> list[s
                     continue
                 if page_id not in entries.get(agent_id, set()):
                     errors.append(f"页面 {page_id} 的动作 {action.get('actionId')} 引用了未绑定该页的 Agent {agent_id}。")
-                if target.get("operation") not in {"send_message", "clear_conversation"}:
-                    errors.append("Agent 动作 operation 必须为 send_message 或 clear_conversation。")
+                operation = target.get("operation") if isinstance(target.get("operation"), str) else ''
+                if operation not in AGENT_OPERATIONS:
+                    errors.append("Agent 动作 operation 必须为 send_message、clear_conversation、stop_generation 或 copy_response。")
                 if not isinstance(target.get("message"), str):
-                    errors.append("Agent 动作 message 必须为字符串；自由输入和清空会话使用空字符串。")
-                if target.get("operation") == "clear_conversation" and target.get("message"):
-                    errors.append("清空当前客户端会话不能同时发送消息。")
+                    errors.append("Agent 动作 message 必须为字符串；非发送操作使用空字符串。")
+                if operation in AGENT_OPERATIONS - {'send_message'} and target.get("message"):
+                    errors.append("清空会话、停止生成和复制回复不能同时发送消息。")
+                if operation in NATIVE_RESPONSE_OPERATIONS:
+                    if (action.get('behavior') or {}).get('type') == 'sequence':
+                        errors.append("内置停止生成和复制回复必须为独立 Agent 动作，不能伪装成业务组合步骤。")
+                    if action.get('requiresConfirmation') is True:
+                        errors.append("内置停止生成和复制回复不提供额外确认门，不能承接 requiresConfirmation=true 的操作。")
                 owner = owners.get((page_id, action.get("actionId", "")))
                 if owner and owner != agent_id and (action.get("behavior") or {}).get("type") != "sequence":
                     errors.append(f"动作 {action.get('actionId')} 的 Agent 归属与页面绑定冲突。")

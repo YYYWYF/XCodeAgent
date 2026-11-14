@@ -1,0 +1,4 @@
+/* 正文有独立的 Tailwind 主题和扫描范围；Vite 将产物限定在 .agent-design-business 内。 */
+/* https://tailwindcss.com/docs/detecting-classes-in-source-files#disabling-automatic-detection */
+@import "tailwindcss" source(none);
+@source "./pages";

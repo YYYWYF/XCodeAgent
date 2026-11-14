@@ -92,7 +92,7 @@ test(`actual design snapshot and official Mock: ${mode}`, async (t) => {
   await until(() => host?.getSnapshot().status === 'ready', 'Agent did not become ready')
   await setTimeout(200)
   const thread = host.getSnapshot().runtime.conversation.id
-  assert.match(document.body.textContent, /官方模拟服务.*未连接真实业务/)
+  assert.doesNotMatch(document.body.textContent, /设计原型|官方模拟服务|未连接真实业务/)
   assert.doesNotMatch(document.body.textContent, /发送测试消息|当前场景|切换明暗主题/)
   click('账户交易查询')
   await until(() => host.getSnapshot().runtime.run.status === 'running', 'Run did not start')
@@ -123,5 +123,5 @@ test(`actual design snapshot and official Mock: ${mode}`, async (t) => {
   await setTimeout(250)
   assert.equal(requests.length, 1, 'One user action must not replay or create a second sender')
   assert.equal(host.getSnapshot().runtime.conversation.id, thread)
-  assert.match(document.body.textContent, /官方模拟服务.*未连接真实业务/)
+  assert.doesNotMatch(document.body.textContent, /设计原型|官方模拟服务|未连接真实业务/)
 })

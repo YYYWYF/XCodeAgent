@@ -47,8 +47,16 @@ def _action_behavior(item: dict[str, Any]) -> str:
     }
     target = ""
     if behavior_type == "agent":
-        operation = "切换到空白客户端会话（保留服务端历史）" if behavior.get("operation") == "clear_conversation" else "发送问题"
-        target = f"；智能体 `{behavior.get('agentId', '')}`；操作 {operation}；提问 {behavior.get('message') or '用户自由输入'}"
+        operation = str(behavior.get('operation') or '')
+        labels_by_operation = {
+            'send_message': '发送问题',
+            'clear_conversation': '切换到空白客户端会话（保留服务端历史）',
+            'stop_generation': '停止当前会话回复生成（会话输入区原生控件）',
+            'copy_response': '复制所选助手回复的完整文本（回复原生操作，不提取业务字段）',
+        }
+        target = f"；智能体 `{behavior.get('agentId', '')}`；操作 {labels_by_operation.get(operation, operation)}"
+        if operation == 'send_message':
+            target += f"；提问 {behavior.get('message') or '用户自由输入'}"
     elif behavior_type == "navigation":
         target = f"；目标页面 `{behavior.get('targetPageId', '')}`"
     elif behavior_type == "external":

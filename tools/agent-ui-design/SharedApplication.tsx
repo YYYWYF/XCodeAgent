@@ -2,7 +2,9 @@ import { AgentUIProvider, type AgentUIUser } from '@za38.03/agent-ui-runtime'
 import { createContext, useContext, useState, type ReactElement } from 'react'
 import { SharedAgentHost, type SharedAgentHostProps } from './SharedHost'
 import { PageSlotContext, usePageBounds, type PageSlot } from './SharedPage'
+import { SharedRunContextProvider } from './runtimeContext'
 export { SharedAgentPage } from './SharedPage'
+export { useSharedAgentContext } from './runtimeContext'
 
 interface PanelControls {
   panelOpen: boolean
@@ -22,6 +24,7 @@ const inactivePanel: PanelControls = {
 }
 
 export interface SharedAgentApplicationProps extends Omit<SharedAgentHostProps, 'panelOpen' | 'onPanelOpenChange'> {
+  contextDescription?: string
   /** 由宿主身份生命周期提供；退出为 null，重新登录或切用户必须改变。不是授权凭据。 */
   sessionKey: string | null
   user?: AgentUIUser | null
@@ -39,12 +42,16 @@ export function useSharedAgentPanel(): PanelControls {
 /** 路由外的会话边界仅在身份变化时重建；展示资料不参与服务端授权。 */
 export function SharedAgentApplication(props: SharedAgentApplicationProps): ReactElement {
   if (!props.sessionKey?.trim()) return <PanelContext.Provider value={inactivePanel}>
-    <PageSlotContext.Provider value={ignoreUnauthenticatedAction}>
-      {props.children}
-    </PageSlotContext.Provider>
+    <SharedRunContextProvider pageId={props.pageId}>
+      <PageSlotContext.Provider value={ignoreUnauthenticatedAction}>
+        {props.children}
+      </PageSlotContext.Provider>
+    </SharedRunContextProvider>
   </PanelContext.Provider>
   return <AgentUIProvider key={props.sessionKey} user={props.user}>
-    <ApplicationSession {...props} />
+    <SharedRunContextProvider pageId={props.pageId} description={props.contextDescription}>
+      <ApplicationSession {...props} />
+    </SharedRunContextProvider>
   </AgentUIProvider>
 }
 

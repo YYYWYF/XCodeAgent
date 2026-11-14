@@ -4,10 +4,13 @@ import { Agent as ProjectAgent } from './Agent'
 import { agentSurfaces } from './surfaces'
 import { agentProps } from './props'
 import { pagePresentation } from './presentation'
-import { useRuntimeResult, runtimeResultLabel } from './useRuntimeResult'
+import { RuntimeBusinessPanel } from './RuntimeBusinessPanel'
+import { useSharedRunContext } from './runtimeContext'
+import { RuntimeInput } from './RuntimeInput'
 import './shared-host.css'
 
 const Agent = memo(ProjectAgent)
+const surfaces: readonly { pageId: string; surface: string; entries: readonly { actionId: string; label: string }[] }[] = agentSurfaces
 
 export interface SharedAgentHostProps {
   /** 来自当前正式合同；设计 Mock 不提供此身份，不能生成真实业务证据。 */
@@ -17,6 +20,7 @@ export interface SharedAgentHostProps {
   panelOpen: boolean
   onPanelOpenChange: (open: boolean) => void
   getRunContext?: AgentProps['getRunContext']
+  inputSchema?: Record<string, unknown>
   standaloneBounds?: CSSProperties
   preserveLayout?: boolean
   children?: ReactNode
@@ -24,14 +28,17 @@ export interface SharedAgentHostProps {
 
 /** 在路由外常驻挂载一次；页面切换及浮窗关闭只改变容器和公开展示 props。 */
 export function SharedAgentHost({ agentId, pageId, endpoint, panelOpen, onPanelOpenChange,
-  children, getRunContext, standaloneBounds, preserveLayout = false }: SharedAgentHostProps): ReactElement {
-  const page = agentSurfaces.find((item) => item.pageId === pageId)
+  children, getRunContext, inputSchema, standaloneBounds, preserveLayout = false }: SharedAgentHostProps): ReactElement {
+  const page = surfaces.find((item) => item.pageId === pageId)
   const standalone = page?.surface === 'standalone_page'
   const visible = (standalone && (!preserveLayout || Boolean(standaloneBounds))) ||
     (page?.surface === 'floating_panel' && panelOpen)
   const presentation = pagePresentation[pageId]
   const [error, setError] = useState('')
-  const result = useRuntimeResult(agentId)
+  const context = useSharedRunContext()
+  /** 原生发送和恢复都读取当前页面数据；允许宿主补充标准上下文。 */
+  const readContext = useCallback<NonNullable<AgentProps['getRunContext']>>((input) =>
+    [...context.read(), ...(getRunContext?.(input) ?? [])], [context.read, getRunContext])
   const reportError = useCallback((value: Error): void => setError(value.message), [])
   // endpoint 必须由宿主从当前连接合同提供，不能回落到包的默认 /agent。
   const connected = /^\/(?!\/)[^\s\\?#]+$/.test(endpoint)
@@ -54,11 +61,10 @@ export function SharedAgentHost({ agentId, pageId, endpoint, panelOpen, onPanelO
       {!standalone && <button type="button" className="shared-agent-close" onClick={closePanel}
         aria-label="关闭助手">关闭助手</button>}
       {error && <p role="alert">{error}</p>}
-      {result && result.status !== 'idle' && <p role="status" data-runtime-business-status={result.status}>
-        {runtimeResultLabel(result)}
-      </p>}
+      {connected && <RuntimeInput key={pageId} schema={inputSchema} />}
+      {connected && <RuntimeBusinessPanel agentId={agentId} endpoint={endpoint} />}
       {connected ? <Agent pageId={pageId} {...agentProps} {...presentation?.props}
-        endpoint={endpoint} getRunContext={getRunContext} onError={reportError} /> : <p role="status">等待配置智能体连接</p>}
+        endpoint={endpoint} getRunContext={readContext} onError={reportError} /> : <p role="status">等待配置智能体连接</p>}
     </section>
   </div>
 }

@@ -1,144 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { JSDOM } from 'jsdom'
-import { createServer } from 'vite'
-import { createRequire } from 'node:module'
 import { createServer as createHttpServer } from 'node:http'
-import path from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { cp, mkdtemp, mkdir, readFile, symlink, writeFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { createConsumerMockServer } from '../../agent-ui/mock-consumer.mjs'
-
-/** 等待真实组件状态收敛，超时保留页面文本帮助定位集成失败。 */
-async function until(read, message) {
-  for (let i = 0; i < 200; i++) {
-    if (read()) return
-    await setTimeout(40)
-  }
-  throw new Error(message + '\n' + document.body.textContent)
-}
-
-/** 为真实生成应用层提供测试 DOM 与官方 HTTP Mock，不替换 Agent 或解析 SSE。 */
-async function mountConsumer(t, scenario = 'simple-chat', sharedProject) {
-  const mock = sharedProject?.mockServer ?? createConsumerMockServer(scenario)
-  await new Promise((resolve, reject) => {
-    mock.once('error', reject)
-    mock.listen(0, '127.0.0.1', resolve)
-  })
-  const origin = `http://127.0.0.1:${mock.address().port}`
-  const dom = new JSDOM('<div id="root"></div>', { url: `${origin}/?scenario=${scenario}` })
-  const names = ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'MutationObserver', 'getComputedStyle', 'Event', 'CustomEvent', 'MouseEvent', 'DOMRect', 'ShadowRoot', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame']
-  const saved = new Map(names.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
-  for (const name of names) Object.defineProperty(globalThis, name, { value: dom.window[name], configurable: true, writable: true })
-  // jsdom 不提供布局、媒体查询和动画帧；只补测试平台能力，不改包行为。
-  window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} })
-  globalThis.ResizeObserver = class {
-    /** 测试 DOM 没有布局变化。 */
-    observe() {}
-    /** 测试 DOM 没有布局变化。 */
-    unobserve() {}
-    /** 测试 DOM 没有布局资源。 */
-    disconnect() {}
-  }
-  globalThis.requestAnimationFrame = (callback) => globalThis.setTimeout(() => callback(Date.now()), 0)
-  globalThis.cancelAnimationFrame = globalThis.clearTimeout
-  const nativeFetch = globalThis.fetch
-  // Node fetch 不接受浏览器相对 URL；仅补同源地址解析，原始响应仍由官方 SDK 消费。
-  globalThis.fetch = (input, init) => nativeFetch(typeof input === 'string' ? new URL(input, origin) : input, init)
-  const server = await createServer({
-    configFile: false,
-    root: sharedProject?.root,
-    esbuild: { jsx: 'automatic' },
-    server: { host: '127.0.0.1', middlewareMode: true, hmr: false, watch: null },
-    ssr: { noExternal: [/^@za38\.03\//] },
-  })
-  // 目标拥有独立安装；测试 renderer 必须解析到该目标的同一份 React。
-  const requireFromTarget = createRequire(sharedProject ? path.join(sharedProject.root, 'package.json') : import.meta.url)
-  const { createElement } = await import(pathToFileURL(requireFromTarget.resolve('react')).href)
-  const { createRoot } = await import(pathToFileURL(requireFromTarget.resolve('react-dom/client')).href)
-  const module = await server.ssrLoadModule(sharedProject?.module ?? '/src/App.tsx')
-  const App = sharedProject ? (module.SharedAgentApplication ?? module.SharedAgentHost ?? module.App) : module.App
-  const { AgentUIProvider, useAgentUI } = await server.ssrLoadModule('@za38.03/agent-ui-runtime')
-  let host
-  /** 只在测试中观察公开 Host 状态，不向成品页面添加调试状态或控制按钮。 */
-  function Observer() {
-    host = useAgentUI()
-    return null
-  }
-  const root = createRoot(document.getElementById('root'))
-  const requests = []
-  mock.on('request', (request) => { requests.push(request) })
-  t.after(async () => {
-    root.unmount()
-    await server.close()
-    mock.closeAllConnections()
-    await new Promise((resolve) => mock.close(resolve))
-    dom.window.close()
-    globalThis.fetch = nativeFetch
-    for (const [name, descriptor] of saved) {
-      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
-      else delete globalThis[name]
-    }
-  })
-  /** 外层 Provider 及 Host 的树位置稳定，测试只更新路由和显隐参数。 */
-  function showPage(pageId = 'chat', panelOpen = true, sessionKey = 'user-a') {
-    const props = { pageId, endpoint: '/agent', source: 'official-mock', panelOpen, sessionKey, agentId: sharedProject?.agentId,
-      onNavigatePage: (target) => showPage(target, true, sessionKey),
-      onPanelOpenChange: (open) => showPage(pageId, open, sessionKey),
-      children: createElement('main', null, '业务首页', sessionKey && createElement(Observer),
-        module.SharedAgentPage && pageId === 'chat' && createElement(module.SharedAgentPage, { pageId })),
-    }
-    root.render(module.SharedAgentApplication
-      ? createElement(App, props)
-      : createElement(AgentUIProvider, null, createElement(App, sharedProject ? props : {}), createElement(Observer)))
-  }
-  showPage()
-  await until(() => host?.getSnapshot().status === 'ready', 'Agent did not become ready')
-  // 初次 ready 后 upstream 仍会提交初始 thread-list 选择；等待 React 初始提交结束再驱动用户动作。
-  await setTimeout(200)
-  return { requests, mock, snapshot: () => host.getSnapshot().runtime, showPage, getHost: () => host }
-}
-
-/** 从本仓库的真实应用层准备 Host 回归；独立成品转入另由集成用例验证。 */
-async function mountSharedConsumer(t, scenario, agentId, mockServer, preview = false) {
-  const seed = path.resolve(import.meta.dirname, '..')
-  const root = await mkdtemp(path.join(tmpdir(), 'agent-ui-host-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  await cp(path.join(seed, 'src/agent-ui'), path.join(root, 'src/agent-ui'), { recursive: true })
-  await symlink(path.join(seed, 'node_modules'), path.join(root, 'node_modules'), 'dir')
-  await writeFile(path.join(root, 'package.json'), await readFile(path.join(seed, 'package.json')))
-  await mkdir(path.join(root, 'src/design'))
-  for (const name of ['Agent.tsx', 'SharedHost.tsx', 'SharedApplication.tsx', 'SharedPage.tsx',
-    'runtimeResults.ts', 'useRuntimeResult.ts', 'shared-host.css']) {
-    await cp(path.resolve(seed, '../agent-ui-design', name), path.join(root, 'src/design', name))
-  }
-  await writeFile(path.join(root, 'src/design/props.ts'), 'export const agentProps = {}')
-  await writeFile(path.join(root, 'src/design/surfaces.ts'), `export const agentSurfaces = [
-    {pageId:'chat',surface:'standalone_page',entries:[]},
-    {pageId:'home',surface:'floating_panel',entries:[{actionId:'open',label:'打开助手'}]}] as const`)
-  await writeFile(path.join(root, 'src/design/presentation.ts'), `export const pagePresentation: Record<string, {props: object; css: string}> = {
-    chat:{props:{welcome:{title:'独立页欢迎'}},css:''},home:{props:{welcome:{title:'首页欢迎'}},css:''}}`)
-  if (preview) {
-    await cp(path.resolve(seed, '../agent-ui-design/App.tsx'), path.join(root, 'src/App.tsx'))
-    await cp(path.resolve(seed, '../agent-ui-design/host.css'), path.join(root, 'src/design/host.css'))
-    await writeFile(path.join(root, 'src/design/locales.json'), JSON.stringify({
-      mockSource: '官方模拟服务', source: '设计预览', conversation: '智能体会话', close: '关闭助手',
-    }))
-    await writeFile(path.join(root, 'src/design/pages.tsx'), `
-      /** 只渲染已确认导航，不复制官方消息区。 */
-      function Chat({onNavigatePage}) {return <button data-action-id="back_home" onClick={() => onNavigatePage('home')}>返回首页</button>}
-      /** 浮窗业务正文与已确认跳转。 */
-      function Home({onNavigatePage}) {return <button data-action-id="go_chat" onClick={() => onNavigatePage('chat')}>进入智能体页</button>}
-      export const designPages = [
-        {pageId:'chat',surface:'standalone_page',component:Chat,entries:[]},
-        {pageId:'home',surface:'floating_panel',component:Home,entries:[{actionId:'open',label:'打开助手'}]},
-      ]`)
-  }
-  return mountConsumer(t, scenario, { root,
-    module: preview ? '/src/App.tsx' : '/src/design/SharedApplication.tsx', agentId, mockServer })
-}
+import { until, mountConsumer, mountSharedConsumer, click } from './sessionHarness.mjs'
 
 /** 独立页导航和官方会话同时可见，来回切页仍保留唯一 Composer 和当前线程。 */
 test('design preview retains standalone navigation beside one official conversation', async (t) => {
@@ -147,8 +11,10 @@ test('design preview retains standalone navigation beside one official conversat
   const composer = document.querySelector('textarea')
   assert.ok(document.querySelector('[data-action-id="back_home"]'))
   assert.equal(document.querySelectorAll('textarea').length, 1)
+  assert.equal(document.querySelector('.agent-design-source'), null)
   document.querySelector('[data-action-id="back_home"]').click()
   await until(() => document.querySelector('[data-design-page="home"]'), 'Navigation did not reach home')
+  assert.equal(document.querySelector('.agent-design-source'), null)
   document.querySelector('[data-action-id="go_chat"]').click()
   await until(() => document.querySelector('[data-design-page="chat"]'), 'Navigation did not return to chat')
   assert.equal(document.querySelector('textarea'), composer)
@@ -195,7 +61,7 @@ test('plain text requests preserve the Python request boundary across two turns'
   for (const input of inputs) {
     assert.equal(input.protocolVersion, '1.0')
     assert.deepEqual(Object.keys(input).filter(key => !['threadId', 'runId', 'tools', 'context', 'forwardedProps', 'state', 'messages', 'protocolVersion'].includes(key)), [])
-    assert.deepEqual(input.context ?? [], [])
+    assert.equal(JSON.parse(input.context[0].value).pageId, 'chat')
     assert.deepEqual(input.tools ?? [], [])
     assert.ok(input.messages.every(message => Object.keys(message).sort().join(',') === 'content,id,role'))
   }
@@ -203,13 +69,13 @@ test('plain text requests preserve the Python request boundary across two turns'
 })
 
 /** 即使收到当前请求的合法 Python 结果，包未公开 runId 时仍不能独立核验。 */
-test('well-formed Python HTTP result stays unknown with the actual package snapshot', async (t) => {
+test('well-formed Python HTTP result is consumed without requiring package run identity', async (t) => {
   const { getHost, snapshot, requests } = await mountSharedConsumer(t, 'runtime-result', 'assistant', runtimeResultFixture())
   await getHost().sendMessage('仅合同夹具')
-  await until(() => document.querySelector('[data-runtime-business-status="unknown"]'), 'Unverified result was treated as success')
+  await until(() => document.querySelector('[data-runtime-business-status="completed"]'), 'Backend receipt did not settle')
   assert.equal(snapshot().run.id, undefined)
   assert.equal(requests.length, 1)
-  assert.equal(document.querySelector('[data-runtime-business-status="completed"]'), null)
+  assert.ok(document.querySelector('[data-runtime-business-status="completed"]'))
   assert.match(document.body.textContent, /合同夹具回复/)
 })
 
@@ -219,7 +85,7 @@ test('shared Host reports unknown without public run identity and clears it on u
   await getHost().sendMessage('本轮结果观察')
   await until(() => document.querySelector('[data-runtime-business-status="unknown"]'), 'Missing unknown business state')
   assert.equal(snapshot().run.id, undefined)
-  assert.match(document.body.textContent, /未提供可核验的运行身份/)
+  assert.match(document.body.textContent, /请查询当前状态/)
   assert.equal(requests.length, 1)
   showPage('home', true)
   await until(() => document.getElementById('shared-agent-conversation')?.classList.contains('is-floating'), 'Page switch did not settle')
@@ -296,13 +162,6 @@ test('standalone placement preserves the Shell and the same conversation element
   assert.equal(document.querySelector('main').parentElement.hidden, false)
 })
 
-/** 通过真实宿主按钮驱动组件。 */
-function click(label) {
-  const button = [...document.querySelectorAll('button')].find((item) => item.textContent.includes(label) || item.getAttribute('aria-label') === label)
-  assert.ok(button, `Missing button: ${label}`)
-  assert.equal(button.disabled, false, label)
-  button.click()
-}
 
 /** 官方建议与正常发送/运行状态保留，页面不包含人为主题、状态或呈现切换控件。 */
 test('official defaults and real conversation work without demonstration controls', async (t) => {
@@ -314,6 +173,8 @@ test('official defaults and real conversation work without demonstration control
   click('账户交易查询')
   await until(() => snapshot().run.status === 'running', 'Run did not start')
   await until(() => snapshot().run.status === 'idle' && snapshot().messages.length === 2, 'Text run did not settle')
+  // Host 终态先于 React 的流式文本渲染完成，必须等真实 DOM 收敛再断言回复。
+  await until(() => /你好，这是一个纯文本流式回复/.test(document.body.textContent), 'Completed reply did not render')
   assert.match(document.body.textContent, /你好，这是一个纯文本流式回复/)
   assert.equal(snapshot().conversation.id, id)
   assert.equal(requests.length, 1)
@@ -327,6 +188,41 @@ test('stop before first output settles without replay', async (t) => {
   click('停止生成')
   await until(() => snapshot().run.status === 'idle', 'Cancellation did not settle')
   await setTimeout(200)
+  assert.equal(requests.length, 1)
+})
+
+/** 官方复制按钮写入完整回复，剪贴板失败不能显示复制成功或发起新运行。 */
+test('native response copy writes real text and reports clipboard failure', async (t) => {
+  const { getHost, snapshot, requests } = await mountSharedConsumer(t)
+  const writes = []
+  let rejectCopy = true
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    /** 只替代测试环境剪贴板端口；复制控件和回复数据仍由实际官方组件提供。 */
+    async writeText(value) {
+      if (rejectCopy) throw new Error('clipboard denied by test')
+      writes.push(value)
+    },
+  } })
+  const originalError = console.error
+  t.after(() => { console.error = originalError })
+  console.error = (...values) => {
+    if (values[0] !== '[agent-ui] response copy failed:') originalError(...values)
+  }
+  await getHost().sendMessage('生成一段完整回复供复制')
+  await until(() => snapshot().run.status === 'idle' && snapshot().messages.length === 2, 'Reply did not settle')
+  const button = document.querySelector('[data-slot="copy-action-idle"]')?.closest('button')
+  assert.ok(button && !button.disabled)
+  button.click()
+  await until(() => document.querySelector('[data-slot="copy-action-error"]'), 'Copy failure was hidden')
+  assert.equal(document.querySelector('[data-slot="copy-action-copied"]'), null)
+  assert.deepEqual(writes, [])
+  rejectCopy = false
+  button.click()
+  await until(() => document.querySelector('[data-slot="copy-action-copied"]'), 'Copy did not complete')
+  assert.equal(document.querySelector('[data-slot="copy-action-error"]'), null)
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0], snapshot().messages.find(({ role }) => role === 'assistant').content)
+  assert.match(writes[0], /你好，这是一个纯文本流式回复/)
   assert.equal(requests.length, 1)
 })
 

@@ -31,7 +31,6 @@ export function App({ pageId, endpoint, source, onNavigatePage }: {
   return (
     <main className="agent-design" data-design-page={page.pageId} data-design-surface={page.surface}>
       {presentation?.css && <style>{presentation.css}</style>}
-      <p className="agent-design-source">{connected ? labels.mockSource : labels.source}</p>
       {error && <p role="alert">{error}</p>}
       {Page && <section className="agent-design-business" data-page-id={page.pageId}>
         <Page onOpenAgentPanel={openPanel} onCloseAgentPanel={closePanel} agentPanelOpen={visible}

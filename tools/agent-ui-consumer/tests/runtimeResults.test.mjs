@@ -6,7 +6,7 @@ import ts from 'typescript'
 
 const source = await readFile(path.resolve(import.meta.dirname, '../../agent-ui-design/runtimeResults.ts'), 'utf8')
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } })
-const { decodeRuntimeResult, observeRuntimeResults } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputText).toString('base64'))
+const { decodeRuntimeReceipt, decodeRuntimeResult, observeRuntimeResults } = await import('data:text/javascript;base64,' + Buffer.from(compiled.outputText).toString('base64'))
 
 /** 使用当前 Python 公开结果形状，默认不生成结构化业务输出。 */
 function payload(overrides = {}) {
@@ -15,11 +15,12 @@ function payload(overrides = {}) {
 }
 
 /** 只提供公开只读订阅接口，观察器若尝试发送或恢复请求会直接失败。 */
-function fixture() {
+function fixture(includeReceipts = false) {
   let snapshot = { status: 'ready', runtime: { conversation: { id: 'thread-a' }, run: { status: 'idle' } } }
   const updates = new Set()
   const events = new Map()
   const values = []
+  const receipts = []
   const host = {
     getSnapshot: () => snapshot,
     subscribe: (listener) => { updates.add(listener); return () => updates.delete(listener) },
@@ -29,9 +30,12 @@ function fixture() {
       return () => listeners.delete(listener)
     },
   }
-  const dispose = observeRuntimeResults(host, 'assistant', (value) => values.push(value))
+  const publish = (value) => values.push(value)
+  const dispose = includeReceipts
+    ? observeRuntimeResults(host, 'assistant', publish, (value) => receipts.push(value))
+    : observeRuntimeResults(host, 'assistant', publish)
   return {
-    dispose, values,
+    dispose, values, receipts,
     current: () => values.at(-1),
     activeListeners: () => updates.size + [...events.values()].reduce((sum, set) => sum + set.size, 0),
     set: (status, id = 'run-a', thread = 'thread-a') => {
@@ -74,6 +78,24 @@ test('Python result values do not invalidate a completed status envelope', () =>
       agentId: 'assistant', threadId: 'thread-a', runId: 'run-a', status: 'completed',
     })
   }
+})
+
+/** 只有用户可见业务回执保留已校验的正文；状态观察器只投影摘要。 */
+test('validated business receipts are separate from sanitized status summaries', () => {
+  const value = payload({ result: { orderId: 'order-a' } })
+  assert.deepEqual(decodeRuntimeReceipt('agent_runtime_result.v1', value), {
+    agentId: 'assistant', threadId: 'thread-a', runId: 'run-a', status: 'completed', result: { orderId: 'order-a' },
+  })
+
+  const f = fixture(true)
+  f.set('running')
+  f.emit(value)
+  assert.equal(Object.hasOwn(f.current(), 'result'), false)
+  f.set('idle')
+  assert.deepEqual(f.receipts.at(-1), {
+    agentId: 'assistant', threadId: 'thread-a', runId: 'run-a', status: 'completed', result: { orderId: 'order-a' },
+  })
+  f.dispose()
 })
 
 /** 有可核验运行身份时，真实结果字段不会阻止完成或待交互状态交付。 */
@@ -137,6 +159,10 @@ test('business failure is distinct from transport failure and conflicting termin
     status: 'failed', error: { code: 'denied', message: '拒绝执行', recoverable: false } }
   f.set('running'); f.emit(failure, 'agent_runtime_error.v1'); f.set('idle')
   assert.equal(f.current().status, 'failed')
+  f.set('running', 'native-error')
+  f.emit({ ...failure, runId: 'native-error' }, 'agent_runtime_error.v1')
+  f.set('error', 'native-error')
+  assert.equal(f.current().status, 'failed')
   f.set('running', 'run-b'); f.emit(payload({ runId: 'run-b' })); f.set('error', 'run-b')
   assert.equal(f.current().status, 'unknown')
   f.set('running'); f.emit(payload()); f.emit(failure, 'agent_runtime_error.v1'); f.set('idle')
@@ -144,15 +170,15 @@ test('business failure is distinct from transport failure and conflicting termin
   f.dispose()
 })
 
-/** 当前发行快照没有 run.id，不能信任事件载荷自己声明的运行身份。 */
-test('missing public run identity keeps even a well-formed event unverified', () => {
+/** 当前合同接受活动线程的后端业务回执，不要求包额外公开 run.id。 */
+test('server receipt settles without public run identity; empty next run is unknown', () => {
   const f = fixture()
   f.set('running', '')
   assert.equal(f.current().status, 'running')
   f.emit(payload())
   f.set('idle', '')
-  assert.equal(f.current().status, 'unknown')
-  assert.equal(f.current().reason, 'run_identity_unavailable')
+  assert.equal(f.current().status, 'completed')
+  assert.equal(f.current().runId, 'run-a')
   f.set('running', '')
   assert.equal(f.current().status, 'running')
   f.set('idle', '')

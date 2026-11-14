@@ -27,7 +27,6 @@ import { previewPagePath, sameSiteLoopbackPreview } from '../../utils/previewUrl
 import './BrowserPreviewPanel.less'
 import { useElementInspector } from './useElementInspector'
 import ServiceStatusDrawer from './ServiceStatusDrawer'
-import AgentUiTransfer from '../AgentUiTransfer'
 import type { ServiceStatusControl } from './ServiceStatusDrawer'
 import type { PreviewServiceState } from './serviceStatusPolicy'
 import {
@@ -121,7 +120,7 @@ export default function BrowserPreviewPanel({
   const [openError, setOpenError] = useState('')
   const [launchError, setLaunchError] = useState(externalError || '')
   const rawPreviewUrl = navigation.history[navigation.index]
-  const previewUrl = serviceRuntime?.agentUiConnection?.plainTextPreview
+  const previewUrl = (serviceRuntime?.agentUiConnection?.plainTextPreview || serviceRuntime?.agentUiConnection?.businessPreview)
     ? sameSiteLoopbackPreview(rawPreviewUrl, window.location.href) : rawPreviewUrl
   const frameKey = `${previewUrl}-${refreshKey}`
   const elementInspector = useElementInspector({
@@ -253,8 +252,6 @@ export default function BrowserPreviewPanel({
               </Button>
             </span>
           </Tooltip>
-          {!externalServiceStatus && application.workspaceRoot && !inspectionDisabled && <AgentUiTransfer
-            key={application.workspaceRoot} workspaceRoot={application.workspaceRoot} />}
           <div className={cx('browser-navigation')}>
             <Tooltip title="后退">
               <Button

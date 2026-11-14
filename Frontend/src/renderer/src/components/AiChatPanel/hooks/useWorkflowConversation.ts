@@ -2134,7 +2134,7 @@ export function useWorkflowConversation({
         return false
       return sendWorkflowMessage(
         action.action === 'confirm'
-          ? '确认本轮 Agent UI 准备差异，继续原页面开发。'
+          ? '确认本轮生产依赖变更，自动准备并继续原页面开发。'
           : '重新检查当前页面的 Agent UI 准备状态。',
         {
           clarificationAnswers: answers,

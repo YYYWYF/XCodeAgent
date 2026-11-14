@@ -40,7 +40,7 @@ class RuntimeConnectionTests(TestCase):
         self.assertFalse(value['sendEnabled'])
         checks = {item['id']: item for item in value['checks']}
         for key in ('context', 'run_identity', 'send_admission'):
-            self.assertEqual(checks[key]['status'], 'blocked')
+            self.assertEqual(checks[key]['status'], 'supported')
         self.assertEqual(checks['same_origin_session']['status'], 'not_verified')
         self.assertEqual(checks['real_conversation']['status'], 'not_verified')
         self.assertNotIn('never-expose', str(value))

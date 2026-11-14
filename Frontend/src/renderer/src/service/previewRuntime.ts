@@ -32,8 +32,24 @@ export type AgentUiRuntimeConnection = {
   verificationScope: 'live_proxy_health'
   sendEnabled: false
   plainTextPreview: boolean
+  businessPreview?: boolean
   proxyHealth: { status: 'ready' | 'blocked' | 'not_verified'; reason: string }
   checks: Array<{ id: string; status: 'supported' | 'blocked' | 'not_verified' | 'not_required'; reason: string }>
+  observation?: AgentUiObservation | null
+}
+export type AgentUiObservation = {
+  source: 'official-mock' | 'real-text' | 'formal-text' | 'formal-business' | 'unknown'
+  sessionId: string | null
+  launchId: string | null
+  identityMatches: boolean
+  replay: 'not_implemented'
+  identity: {
+    status: 'available' | 'unavailable'
+    transferPlanId?: string
+    sourceSha256?: string
+    lockSha256?: string
+    packages?: Array<{ name: string; version: string; metadataSha256: string }>
+  }
 }
 export type PreviewRepair = {
   interrupted?: boolean

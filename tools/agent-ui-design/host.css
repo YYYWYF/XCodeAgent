@@ -2,7 +2,6 @@
 html { color-scheme: light dark; color: CanvasText; background: Canvas; }
 /* 背景不会默认继承；画布和浮窗显式使用不透明语义色，避免从 body/#root 继承透明背景。 */
 .agent-design { height: 100dvh; display: flex; flex-direction: column; font-family: system-ui, sans-serif; color: inherit; background: Canvas; }
-.agent-design-source { margin: .5rem 1rem; font-size: .75rem; }
 .agent-design-business { padding: 1rem; }
 /* 独立页正文仅占内容所需空间，模型的全页根节点不能挤走唯一会话。 */
 .agent-design[data-design-surface="standalone_page"] .agent-design-business { flex: 0 1 auto; min-height: 0; overflow: auto; }

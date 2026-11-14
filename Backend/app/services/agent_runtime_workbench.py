@@ -79,6 +79,9 @@ def debug_snapshot(workspace: str, thread_id: str = "") -> dict:
             if result.get("status") == "failed":
                 raise ValueError(result["message"])
             return {"active": False}
+        if time.time() >= current.expires_at:
+            stop_debug(str(root), current.owner)
+            return {"active": False}
         ready, _ = runtime_health(current.url, current.launch_id, database_required=current.database_required,
                                   expected_agent_ids=current.agent_ids, allowed_agent_ids=current.allowed_agent_ids,
                                   profile="debug", expected_application=root / "agent-runtime",

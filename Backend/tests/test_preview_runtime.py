@@ -232,6 +232,7 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_orphaned_repair_launch_cleans_partial_services(self) -> None:
         """修复末尾启动服务时中断，也必须清理进程并开放纯启动重试。"""
         begin_attempt(self.workspace)
+        record_progress(self.workspace, 'frontend', 'starting', '正在启动前端服务')
         save_repair(self.workspace, self.thread, {"status": "running", "iteration": 2})
         claim_maintenance(self.workspace, self.thread, "confirm")
         with patch("app.protocols.preview_runtime.stop_project_preview") as stop:

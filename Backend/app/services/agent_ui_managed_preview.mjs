@@ -10,9 +10,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 async function main() {
   assert.equal(process.argv.length, 3)
   const options = JSON.parse(process.argv[2])
-  assert.ok(['real-text', 'formal-text', 'official-mock'].includes(options.mode))
+  assert.ok(['real-text', 'formal-text', 'formal-business', 'official-mock'].includes(options.mode))
   const realText = options.mode !== 'official-mock'
-  const formalText = options.mode === 'formal-text'
+  const business = options.mode === 'formal-business'
+  const formalText = options.mode === 'formal-text' || business
+  assert.match(options.sessionId, /^[a-f0-9]{32}$/)
   if (realText) assert.equal(options.endpoint, `/agents/${options.agentId}/run`)
   const target = await realpath(options.target)
   const provider = path.join(target, 'src/extensions/AgentUiHostProvider.tsx')
@@ -84,23 +86,23 @@ async function main() {
       html: { ...config.html, tags: [...(Array.isArray(tags) ? tags : tags ? [tags] : []), {
         tag: 'div', head: false, append: false,
         attrs: { role: 'status', 'data-agent-ui-preview-source': options.mode,
-          title: realText ? '当前 Python 智能体生成真实回复；仅文本，不传页面业务数据，完整业务能力未验收' : '官方 Mock 提供模拟回复，尚未连接真实智能体',
-          'aria-label': realText ? '真实对话预览，仅文本' : '开发预览，官方 Mock 模拟回复，非真实智能体',
+          title: business ? '当前 Python 智能体执行业务合同，支持页面上下文、工具、结果和交互' : realText ? '当前 Python 智能体生成真实回复；仅文本，不传页面业务数据，完整业务能力未验收' : '官方 Mock 提供模拟回复，尚未连接真实智能体',
+          'aria-label': business ? '真实业务连接' : realText ? '真实对话预览，仅文本' : '开发预览，官方 Mock 模拟回复，非真实智能体',
           style: 'position:fixed;left:8px;bottom:8px;z-index:2147483647;max-width:calc(100vw - 16px);padding:2px 6px;background:Canvas;color:CanvasText;font:11px/1.5 system-ui,sans-serif;pointer-events:none' },
-        children: formalText ? '真实文本对话 · 正式接线' : realText ? '真实对话预览 · 仅文本' : '开发预览 · 模拟回复',
+        children: business ? '真实业务连接 · 正式接线' : formalText ? '真实文本对话 · 正式接线' : realText ? '真实对话预览 · 仅文本' : '开发预览 · 模拟回复',
       }] },
       tools: { ...config.tools, bundlerChain: [...(Array.isArray(hooks) ? hooks : hooks ? [hooks] : []),
-        /** 保留目标原有编译规则，仅改写已核对的空连接 Provider。 */
-        ...(!formalText ? [chain => chain.module.rule('devagentstudio-preview-mock').test(filename => filename === provider)
+        /** 同一受检编译输入中注入只读观察；正式模式不改写连接。 */
+        chain => chain.module.rule('devagentstudio-preview-observation').test(filename => filename === provider)
           .enforce('pre').use('devagentstudio-preview-mock')
-          .loader(fileURLToPath(new URL('./agent_ui_preview_endpoint.cjs', import.meta.url)))
+          .loader(fileURLToPath(new URL(formalText ? './agent_ui_preview_observer.cjs' : './agent_ui_preview_endpoint.cjs', import.meta.url)))
           .options({ sha256: options.providerSha256, agentId: options.agentId,
-            mode: options.mode, endpoint: options.endpoint, sessionId: options.sessionId })] : []),
+            mode: options.mode, endpoint: options.endpoint, sessionId: options.sessionId, observe: true }),
       ] },
     } })
     preview = await rsbuild.startDevServer()
     if (closing) { await preview.server.close(); return }
-    console.log(realText ? 'Agent UI 真实对话预览：当前 Python 智能体，仅文本；完整 T27 仍待验收。'
+    console.log(business ? 'Agent UI 真实业务连接：使用当前 Python Runtime 和正式业务合同。' : realText ? 'Agent UI 真实对话预览：当前 Python 智能体，仅文本；完整 T27 仍待验收。'
       : 'Agent UI 开发预览：官方 Mock，真实智能体尚未连接。')
   } catch (error) {
     await close()

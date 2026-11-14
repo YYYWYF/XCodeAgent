@@ -220,7 +220,7 @@ def _prepare(
     fingerprint.update(tree_digest(vendor).encode())
     initializer = (REPOSITORY / "tools/agent-ui/prepare-consumer.mjs").read_text(encoding="utf-8")
     fingerprint.update(initializer.encode())
-    for name in (*SEED_FILES, "vite.config.ts", "src/main.tsx", "src/styles.css"):
+    for name in (*SEED_FILES, "vite.config.ts", "src/main.tsx", "src/styles.css", "src/business.css"):
         fingerprint.update((seed / name).read_bytes())
     # 本生产者代码改变时旧缓存也不再被当作已验证环境。
     fingerprint.update(Path(__file__).read_bytes())
@@ -245,7 +245,7 @@ def _prepare(
     for name in SEED_FILES:
         shutil.copyfile(seed / name, project / name)
     (project / "src").mkdir()
-    for name in ("main.tsx", "styles.css"):
+    for name in ("main.tsx", "styles.css", "business.css"):
         shutil.copyfile(seed / "src" / name, project / "src" / name)
     (project / "src/App.tsx").write_text(_PLACEHOLDER, encoding="utf-8")
     (project / "index.html").write_text(

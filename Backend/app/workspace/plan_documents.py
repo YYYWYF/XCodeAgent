@@ -691,7 +691,7 @@ def _action_binding_target(binding: dict[str, Any]) -> str:
     if binding_type == "endpoint":
         return f"API `{binding.get('endpointId', '')}`"
     if binding_type == "agent":
-        return f"智能体 `{binding.get('agentId', '')}` 的 AG-UI 会话"
+        return f"智能体 `{binding.get('agentId', '')}` 的 AG-UI 会话；操作 `{binding.get('operation', '')}`"
     if binding_type == "navigation":
         return f"跳转页面 `{binding.get('targetPageId', '')}`"
     if binding_type == "local":

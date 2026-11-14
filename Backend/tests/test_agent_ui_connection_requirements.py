@@ -28,8 +28,8 @@ class ConnectionRequirementsTests(TestCase):
         self.assertEqual(checks['plain_text']['status'], 'supported')
         self.assertEqual(checks['runtime_identity']['status'], 'supported')
         self.assertEqual(checks['same_origin_session']['status'], 'not_verified')
-        self.assertEqual(checks['run_identity']['status'], 'blocked')
-        self.assertEqual(checks['send_admission']['status'], 'blocked')
+        self.assertEqual(checks['run_identity']['status'], 'supported')
+        self.assertEqual(checks['send_admission']['status'], 'supported')
         self.assertEqual(checks['context']['status'], 'not_required')
         self.assertEqual(checks['interrupts']['status'], 'not_required')
         self.assertEqual((self.config, self.agent), before)
@@ -63,17 +63,17 @@ class ConnectionRequirementsTests(TestCase):
             with self.subTest(change=change):
                 report = connection_requirements(self.config, contract)
                 checks = {item['id']: item for item in report['checks']}
-                self.assertEqual(checks['plain_text']['status'], 'blocked')
+                self.assertEqual(checks['plain_text']['status'], 'not_required')
                 self.assertIs(report['sendEnabled'], False)
 
-    def test_context_and_interactions_remain_explicit_blockers(self) -> None:
+    def test_context_and_interactions_use_standard_protocol(self) -> None:
         """正式声明上下文或审批时保留缺口，绝不把澄清当作批准。"""
         self.agent['agentSettings']['context'] = {'pageId': 'chat'}
         self.agent['interactionContract']['interactionKinds'] = ['confirmation']
         report = connection_requirements(self.config, self.agent)
         checks = {item['id']: item for item in report['checks']}
-        self.assertEqual(checks['context']['status'], 'blocked')
-        self.assertEqual(checks['interrupts']['status'], 'blocked')
+        self.assertEqual(checks['context']['status'], 'supported')
+        self.assertEqual(checks['interrupts']['status'], 'supported')
 
     def test_report_excludes_business_payload_and_credentials(self) -> None:
         """只输出固定原因和运行路径，不把配置、Prompt 或输入内容回传到计划。"""

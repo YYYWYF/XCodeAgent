@@ -23,6 +23,7 @@ export class RuntimeDebugConversation {
   private view: DebugConversation = { status: 'idle', messages: [], tools: [] }
   private running = false
   private stopped = false
+  private disposed = false
   private timer?: ReturnType<typeof setTimeout>
   private receivedBytes = 0
   private httpStartedAt = 0
@@ -104,6 +105,7 @@ export class RuntimeDebugConversation {
 
   /** 卸载时移除发布回调并关闭网络流，凭据不进入任何持久化对象。 */
   dispose(): void {
+    this.disposed = true
     this.publish = () => undefined
     this.stop()
     clearTimeout(this.timer)
@@ -111,6 +113,7 @@ export class RuntimeDebugConversation {
 
   /** 普通问题和交互响应均使用新 runId；同一线程串行执行，不自动重试。 */
   async send(content: string, context: Record<string, unknown> = {}, response?: string | boolean, input?: Record<string, unknown>): Promise<void> {
+    if (this.disposed) throw new Error('调试会话已释放，请重新启动或新建会话。')
     if (this.running || this.view.status === 'unknown') throw new Error('当前会话不可继续，请等待运行结束或新建会话。')
     if (Date.now() >= this.credential.expiresAt * 1000) throw new Error('调试凭据已过期，请停止后重新启动。')
     if (this.client.messages.filter((message) => ['user', 'assistant'].includes(message.role) && typeof message.content === 'string').length >= 60) throw new Error('当前会话已达 60 条消息上限，请新建会话。')
@@ -122,7 +125,7 @@ export class RuntimeDebugConversation {
     if (pending && pending.kind !== 'clarification' && typeof response !== 'boolean') throw new Error('请明确同意或拒绝。')
     if (!pending) this.client.addMessage({ id: randomUUID(), role: 'user', content })
     const runId = randomUUID()
-    this.running = true; this.stopped = false
+    this.running = true; this.stopped = false; this.receivedBytes = 0
     this.view = { ...this.view, status: 'running', pending: undefined, error: undefined, http: undefined, request: undefined, result: undefined, events: [] }
     let started = false, finished = false
     let result: { status: string; result?: unknown; pendingInteraction?: DebugPending; error?: { message?: string } } | undefined
@@ -178,9 +181,13 @@ export class RuntimeDebugConversation {
     }
     this.update(true)
     try {
-      const forwardedProps = pending ? { interactionResponse: { interactionId: pending.interactionId, value: response },
-        ...context } : { ...context }
-      await this.client.runAgent({ runId, forwardedProps: { ...forwardedProps, ...(input ? { input } : {}) } }, subscriber)
+      const runContext = [
+        ...(Object.keys(context).length ? [{ description: 'xcodeagent.page', value: JSON.stringify(context) }] : []),
+        ...(input ? [{ description: 'xcodeagent.input', value: JSON.stringify(input) }] : [])
+      ]
+      await this.client.runAgent({ runId, context: runContext,
+        ...(pending ? { resume: [{ interruptId: pending.interactionId, status: 'resolved' as const, payload: response }] } : {})
+      }, subscriber)
       if (this.stopped) return
       if (!started || !finished || !result || protocolError) throw new Error(protocolError || '未收到完整运行终态，请核对业务结果。')
       if (result.status === 'failed') throw new Error(result.error?.message || 'Agent 执行失败，请核对业务结果。')

@@ -87,7 +87,8 @@ class AgentUiDependencyPlanTests(unittest.TestCase):
         self.assertEqual(plan["manager"], "pnpm")
         self.assertEqual(len(plan["packages"]), 4)
         self.assertEqual(plan['sourceDependencies'], [
-            {'name': 'lucide-react', 'version': '1.41.0'}, {'name': 'zod', 'version': '4.5.4'}])
+            {'name': 'lucide-react', 'version': '1.41.0'}, {'name': 'zod', 'version': '4.5.4'},
+            {'name': '@ag-ui/client', 'version': '1.0.3'}, {'name': '@ag-ui/core', 'version': '1.0.3'}])
         self.assertEqual(after['dependencies']['lucide-react'], '1.41.0')
         self.assertEqual(after['dependencies']['zod'], '4.5.4')
         self.assertFalse((self.workspace / ".devagentstudio").exists())
@@ -402,10 +403,15 @@ export default {source: {entry: {index: './src/main.tsx'}}, tools: {
     def test_lock_integrity_tampering_is_rejected(self) -> None:
         """同名同版本不足以证明安装来自已选 tarball。"""
         plan = self.plan()
+        for item in plan['changes']:
+            destination = self.target / item['path']
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(item['after'])
         self.fake_command([], stage="install", plan=plan)
         path = self.target / "pnpm-lock.yaml"
         lock = yaml.safe_load(path.read_text())
-        next(iter(lock["packages"].values()))["resolution"]["integrity"] = "sha512-other"
+        package = plan['packages'][0]
+        lock['packages'][package['name'] + '@' + package['specifier']]['resolution']['integrity'] = 'sha512-other'
         path.write_text(yaml.safe_dump(lock))
         with self.assertRaisesRegex(ValueError, "integrity"):
             installed_evidence(self.target, plan)
@@ -417,7 +423,7 @@ export default {source: {entry: {index: './src/main.tsx'}}, tools: {
              patch('app.services.agent_ui_dependency_install._command', side_effect=self.fake_command):
             result = self.execute(plan)
         self.assertEqual(result['state'], 'verified', result.get('message'))
-        self.assertEqual(len(result['installation']['sourcePackages']), 2)
+        self.assertEqual(len(result['installation']['sourcePackages']), 4)
         path = self.target / 'node_modules/lucide-react/package.json'
         path.write_text('{"name":"lucide-react","version":"0.0.1"}')
         with self.assertRaisesRegex(ValueError, 'lucide-react'):

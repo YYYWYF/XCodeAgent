@@ -220,10 +220,10 @@ def workflow_capabilities() -> dict[str, Any]:
             "agent_ui_integration_pending": {
                 "answerField": "clarificationAnswers.agent_ui_preparation",
                 "actions": ["confirm", "refresh"],
-                "stages": ["dependency", "initialize", "transfer", "blocked"],
-                "identityFields": ["planId", "reviewId", "installationPlanId", "targetSourceRoot"],
+                "stages": ["dependency", "blocked"],
+                "identityFields": ["planId", "reviewId"],
                 "lifecycleInteraction": "agent_ui_integration_pending",
-                "semantics": "原页面开发对话中复算T21/T23当前差异；确认只批准具体准备写入，不批准正式设计或任务DAG；刷新只读。",
+                "semantics": "原页面开发对话自动完成已确认设计的常规准备；生产依赖新增或变更需确认，冲突和失败暂停；重新检查可执行常规准备，不批准正式设计或任务DAG。",
             },
             "api_design_required": {
                 "answerField": "clarificationAnswers.api_design_gate",

@@ -10,5 +10,13 @@
 .shared-agent-launchers { position: fixed; bottom: 1rem; right: 1rem; display: flex; gap: .5rem; }
 .shared-agent-launchers button, .shared-agent-close { color-scheme: inherit; color: CanvasText; background: Canvas; padding: .5rem 1rem; border: 1px solid currentColor; border-radius: .5rem; cursor: pointer; }
 .shared-agent-close { align-self: flex-end; margin: .5rem; }
+.shared-agent-business { flex: 0 0 auto; max-height: 40%; overflow: auto; padding: .5rem 1rem; border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); }
+.shared-agent-business p { margin: .25rem 0; }
+.shared-agent-business pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.shared-agent-business button, .shared-agent-business input { color: CanvasText; background: Canvas; border: 1px solid color-mix(in srgb, CanvasText 35%, Canvas); border-radius: .375rem; padding: .375rem .75rem; margin: .25rem; }
+.shared-agent-business button { cursor: pointer; }
+.shared-agent-business button:disabled { opacity: .5; cursor: default; }
+.shared-agent-business button:hover:not(:disabled) { background: color-mix(in srgb, CanvasText 8%, Canvas); }
+.shared-agent-business button:focus-visible, .shared-agent-business input:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .shared-agent-launchers button:hover, .shared-agent-close:hover { text-decoration: underline; }
 .shared-agent-launchers button:focus-visible, .shared-agent-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

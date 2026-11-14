@@ -1,6 +1,7 @@
-"""在页面开发主Workflow中完成受控依赖/设计准备，等待每份具体差异确认。"""
+"""在页面开发主Workflow中自动准备已确认设计，仅依赖变更和异常暂停。"""
 
 import asyncio
+import json
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Callable
@@ -31,27 +32,65 @@ def _pending(stage: str, *, plan: dict[str, Any] | None = None, error: str = '')
         'phase': 'prepare_build_tasks', 'status': 'requires_user_input',
         'build_task_plan_confirmation': {}, 'agent_ui_preparation_action': {},
         'clarification': {'mode': 'agent_ui_integration_pending', 'status': 'requires_user_input',
-            'message': '请审阅当前智能体页面准备差异；确认后由开发流程执行并继续。',
+            'message': ('生产依赖变更需要确认，随后自动继续页面准备。' if stage == 'dependency'
+                        else '智能体页面准备已暂停，请处理提示的问题后重新检查。'),
             'agentUiPreparation': preparation},
         'timeline': ['prepare_build_tasks'],
     }
 
 
-def _current_review(workspace: Path, *, error: str = '') -> dict[str, Any]:
-    """优先复用有效安装，初始化后重新审阅，读取本身没有写入副作用。"""
+def _current_plan(workspace: Path) -> tuple[str, dict[str, Any]]:
+    """优先复用有效安装，每个准备阶段都重新计算当前差异及保护摘要。"""
     try:
         installation = select_installation(workspace)
     except ValueError:
-        plan = prepare_dependency_plan(workspace, source='local-vendor', review_id=uuid4().hex)
-        return _pending('dependency', plan=plan, error=error)
+        return 'dependency', prepare_dependency_plan(workspace, source='local-vendor')
     plan = prepare_transfer_plan(workspace, installation_plan_id=installation)
     if plan['status'] != 'reviewable':
-        return _pending('blocked', plan=plan, error=error or '；'.join(plan.get('blockers', [])))
-    return _pending('initialize' if plan['initialization']['required'] else 'transfer', plan=plan, error=error)
+        return 'blocked', plan
+    return 'initialize' if plan['initialization']['required'] else 'transfer', plan
+
+
+def _changes_production_dependencies(workspace: Path, plan: dict[str, Any]) -> bool:
+    """生产依赖声明新增或变更仍需确认，已有声明的安装和样式准备可自动执行。"""
+    change = next((item for item in plan['changes'] if item['path'] == 'package.json'), None)
+    if change is None:
+        return False
+    current = read_object(safe_path(workspace, 'frontend/package.json'))
+    proposed = json.loads(change['after'])
+    return current.get('dependencies', {}) != proposed.get('dependencies', {})
+
+
+def _execute(workspace: Path, stage: str, plan: dict[str, Any], state: dict[str, Any],
+             publish: Callable[[dict[str, Any]], None]) -> None:
+    """复用原命令owner、CAS和失败留痕，自动准备也必须绑定主Workflow身份。"""
+    thread_id, run_id = str(state.get('active_thread_id') or ''), str(state.get('active_run_id') or '')
+    if not thread_id or not run_id:
+        raise ValueError('Agent UI 准备缺少当前开发运行身份。')
+
+    def progress(current: str) -> None:
+        """沿原AG-UI主对话发布可见进度，不创建额外产品接口。"""
+        labels = {'install': '安装并验证依赖', 'initialize': '初始化页面组件', 'copy': '转入已确认设计',
+                  'composition': '检查组件组合', 'validation': '验证目标工程'}
+        publish({'type': 'agent_ui_preparation.progress', 'stage': current,
+                 'message': '正在准备智能体页面：' + labels.get(current, current)})
+
+    if stage == 'dependency':
+        record = execute_dependency_plan(workspace, plan_id=plan['planId'], source='local-vendor',
+            entry=plan['entry'], review_id=plan['reviewId'], thread_id=thread_id, run_id=run_id, progress=progress)
+        expected = 'verified'
+    else:
+        record = execute_transfer(workspace, installation_plan_id=plan['installation']['planId'],
+            plan_id=plan['planId'], target_source_root=plan['target']['sourceRoot'],
+            action='initialize' if stage == 'initialize' else 'confirm',
+            thread_id=thread_id, run_id=run_id, progress=progress)
+        expected = 'initialized' if stage == 'initialize' else 'verified'
+    if record.get('state') != expected:
+        raise ValueError(str(record.get('message') or '准备未通过验证，已有文件和任务记录保留。'))
 
 
 def _prepare(state: dict[str, Any], publish: Callable[[dict[str, Any]], None]) -> dict[str, Any] | None:
-    """重读当前正式页面并执行唯一批准动作，不信任客户端产物或旧准备快照。"""
+    """正式设计已确认后自动完成常规准备；生产依赖变更和任何失败均先暂停。"""
     scope = state.get('build_execution_scope') or {}
     action = AgentUiPreparationAction.model_validate(state['agent_ui_preparation_action']) if state.get('agent_ui_preparation_action') else None
     if scope.get('type') != 'page':
@@ -78,48 +117,36 @@ def _prepare(state: dict[str, Any], publish: Callable[[dict[str, Any]], None]) -
             return None
         except (OSError, ValueError, KeyError):
             pass
-        error = ''
         if action is not None and action.action == 'confirm':
-            thread_id, run_id = str(state.get('active_thread_id') or ''), str(state.get('active_run_id') or '')
-            if not thread_id or not run_id:
-                raise ValueError('Agent UI 准备缺少当前开发运行身份。')
-
-            def progress(stage: str) -> None:
-                """把受控命令阶段放入主Workflow的AG-UI进度流。"""
-                publish({'type': 'agent_ui_preparation.progress', 'stage': stage,
-                         'message': '正在准备智能体页面：' + stage})
-
+            plan = prepare_dependency_plan(workspace, source='local-vendor', review_id=action.reviewId)
+            if plan['planId'] != action.planId:
+                raise ValueError('依赖计划过期，请重新检查当前差异。')
+            _execute(workspace, 'dependency', plan, state, publish)
+        seen: set[str] = set()
+        # 最多依赖、初始化、转入三次写入；初始化后重新规划，失败或无进展绝不循环重放。
+        for attempt in range(4):
+            _formal_state(workspace)
             try:
-                if action.reviewId:
-                    plan = prepare_dependency_plan(workspace, source='local-vendor', review_id=action.reviewId)
-                    if plan['planId'] != action.planId:
-                        raise ValueError('依赖计划过期，请重新审阅当前差异。')
-                    record = execute_dependency_plan(workspace, plan_id=action.planId,
-                        source='local-vendor', entry=plan['entry'], review_id=action.reviewId,
-                        thread_id=thread_id, run_id=run_id, progress=progress)
-                    expected = {'verified'}
-                else:
-                    plan = prepare_transfer_plan(workspace, installation_plan_id=action.installationPlanId,
-                                                  target_source_root=action.targetSourceRoot)
-                    if plan['planId'] != action.planId:
-                        raise ValueError('转入计划过期，请重新审阅当前差异。')
-                    record = execute_transfer(workspace, installation_plan_id=action.installationPlanId,
-                        plan_id=action.planId, target_source_root=action.targetSourceRoot,
-                        action='initialize' if plan['initialization']['required'] else 'confirm',
-                        thread_id=thread_id, run_id=run_id, progress=progress)
-                    expected = {'initialized', 'verified'}
-                if record.get('state') not in expected:
-                    return _pending('blocked', error=str(record.get('message') or '准备未通过验证，已有文件和任务记录保留。'))
-                if record.get('state') == 'verified':
-                    try:
-                        load_build_evidence(workspace)
-                        return None
-                    except (OSError, ValueError, KeyError):
-                        pass
-            except ValueError as exc:
-                # CAS在写入前拒绝旧批准后，必须重新展示当前差异，不能自动重放写入。
-                error = str(exc)
-        return _current_review(workspace, error=error)
+                load_build_evidence(workspace)
+                return None
+            except (OSError, ValueError, KeyError):
+                pass
+            stage, plan = _current_plan(workspace)
+            if stage == 'blocked':
+                return _pending('blocked', plan=plan, error='；'.join([
+                    *plan.get('blockers', []), *[f'保留现有修改：{path}' for path in plan.get('conflicts', [])]]))
+            if stage == 'dependency' and _changes_production_dependencies(workspace, plan):
+                review = prepare_dependency_plan(workspace, source='local-vendor', review_id=uuid4().hex)
+                return _pending('dependency', plan=review)
+            if attempt == 3 or plan['planId'] in seen:
+                raise ValueError('准备后仍缺少有效转入证据，请核对当前文件和任务记录后重新检查。')
+            seen.add(plan['planId'])
+            _execute(workspace, stage, plan, state, publish)
+            if stage == 'transfer':
+                # 转入自报成功仍须通过完整构建来源验证；失败不得转回安装并自动重试。
+                load_build_evidence(workspace)
+                return None
+        raise ValueError('Agent UI 准备未完成。')
     except (OSError, ValueError, KeyError) as exc:
         return _pending('blocked', error=str(exc))
 

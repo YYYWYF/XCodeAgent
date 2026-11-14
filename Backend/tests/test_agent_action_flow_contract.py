@@ -5,6 +5,10 @@ import json
 from unittest import TestCase
 
 from app.services.agent_action_bindings import agent_action_bindings
+from app.services.agent_product_actions import agent_product_action_errors
+from app.services.agent_ui_design_content import business_design_page, has_business_body, agent_launcher_actions
+from app.services.application_planning_persistence import _interactions, _page_contract_map
+from app.workspace.plan_documents import _action_binding_target
 from app.services.agent_ui_build_contract import project_agent_ui_build_contracts
 from app.services.api_contract_validation import validate_api_contract_consistency
 from app.services.api_contracts import normalize_page_api_dependencies
@@ -43,6 +47,55 @@ def product() -> dict:
 
 class AgentActionFlowContractTests(TestCase):
     """验证合法产品变化能贯穿下游，真正缺失的业务实现仍能被发现。"""
+
+    def test_native_conversation_actions_are_not_page_business_controls(self):
+        """停止和复制按显式操作归官方会话，导航与独立业务动作仍留给页面。"""
+        value = product()
+        value['agents'] = value['agents'][:1]
+        page = value['pages'][0]
+        page['actions'] = [action('ask', 'order_assistant'),
+                           action('halt', 'order_assistant', 'stop_generation'),
+                           action('duplicate', 'order_assistant', 'copy_response')]
+        value['agents'][0]['pageActionBindings'][0]['actionIds'] = ['ask']
+        self.assertEqual(agent_product_action_errors(value['agents'], value['pages']), [])
+        projected = project_ui_design_pages(value)[0]
+        self.assertEqual(set(projected['agent_surfaces'][0]['actionIds']), {'ask', 'halt', 'duplicate'})
+        self.assertFalse(has_business_body(projected))
+        self.assertEqual([item['actionId'] for item in agent_launcher_actions(projected)], ['ask'])
+        # 即使不重复声明 actionIds，明确的同页 Agent 操作仍由会话承担。
+        projected['agent_surfaces'][0]['actionIds'] = ['ask']
+        self.assertEqual(business_design_page(projected)['actions'], [])
+        contracts = build_page_implementation_contracts(
+            {'artifact_type': 'technical-plan', 'api_contracts': [], 'pages': [{'pageId': 'orders'}]},
+            value, {'confirmation_status': 'skipped'})
+        self.assertEqual([item['operation'] for item in contracts[0]['actionBindings']],
+                         ['send_message', 'stop_generation', 'copy_response'])
+        self.assertTrue(all(item['bindingType'] == 'agent' for item in contracts[0]['actionBindings']))
+        persisted = _interactions(_page_contract_map({'page_implementation_contracts': contracts})['orders'])
+        self.assertEqual([item['operation'] for item in persisted],
+                         ['send_message', 'stop_generation', 'copy_response'])
+        self.assertTrue(all(item['message'] == '' and item['requiresConfirmation'] is False for item in persisted))
+        self.assertIn('copy_response', _action_binding_target(contracts[0]['actionBindings'][-1]))
+        page['actions'] += [
+            {'actionId': 'return_home', 'behavior': {'type': 'navigation', 'targetPageId': 'home'}},
+            {'actionId': 'copy_field', 'behavior': {'type': 'business', 'expectedResult': '复制订单编号'}},
+        ]
+        projected = project_ui_design_pages(value)[0]
+        self.assertEqual([item['actionId'] for item in business_design_page(projected)['actions']],
+                         ['return_home', 'copy_field'])
+        self.assertEqual(expected_business_action_implementations(page, agent_action_ids={'ask', 'halt', 'duplicate'}),
+                         {'copy_field': None})
+
+    def test_native_actions_cannot_smuggle_messages_or_approvals(self):
+        """停止和复制不发送新消息，也不能用无确认的内置控件冒充已要求审批。"""
+        value = product()
+        for operation in ('stop_generation', 'copy_response'):
+            for message, confirmation in (('额外消息', False), ('', True)):
+                item = action('native', 'order_assistant', operation, message)
+                item['requiresConfirmation'] = confirmation
+                value['pages'][0]['actions'] = [item]
+                value['agents'][0]['pageActionBindings'][0]['actionIds'] = ['native']
+                self.assertTrue(agent_product_action_errors(value['agents'], value['pages']))
 
     def test_multiple_agent_design_cannot_become_single_shared_runtime(self):
         """保留设计动作事实，但共享首版不能默默吞掉另一个 Agent。"""

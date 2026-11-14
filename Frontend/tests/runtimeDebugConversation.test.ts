@@ -9,14 +9,20 @@ import type { DebugConversation } from '../src/renderer/src/service/runtimeDebug
 async function main(): Promise<void> {
   const original = globalThis.fetch
   let calls = 0
-  let mode: 'pending' | 'completed' | 'broken' | 'oversized' | 'many-tools' = 'pending'
-  let lastInput: Record<string, any> = {}
+  let mode: 'pending' | 'completed' | 'broken' | 'oversized' | 'many-tools' | 'large-valid' | 'network-error' = 'pending'
+  let lastInput: Record<string, unknown> & { forwardedProps: Record<string, unknown> } = { forwardedProps: {} }
   let lastUrl = ''
   globalThis.fetch = async (_url, init) => {
     lastUrl = String(_url)
     calls += 1
     assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer transient')
     const input = JSON.parse(String(init?.body)); lastInput = input
+    if (mode === 'network-error') return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'RUN_STARTED', threadId: input.threadId, runId: input.runId })}\n\n`))
+        queueMicrotask(() => controller.error(new TypeError('test network disconnected')))
+      }
+    }), { headers: { 'Content-Type': 'text/event-stream' } })
     if (mode === 'oversized') return new Response('data: '+ 'x'.repeat(600 * 1024),
       { headers: { 'Content-Type': 'text/event-stream' } })
     const result = { schemaVersion: 1, agentId: 'assistant', threadId: input.threadId, runId: input.runId,
@@ -26,7 +32,7 @@ async function main(): Promise<void> {
     const events = [
       { type: 'RUN_STARTED', threadId: input.threadId, runId: input.runId },
       { type: 'TEXT_MESSAGE_START', messageId: input.runId, role: 'assistant' },
-      { type: 'TEXT_MESSAGE_CONTENT', messageId: input.runId, delta: '测试回复' },
+      { type: 'TEXT_MESSAGE_CONTENT', messageId: input.runId, delta: mode === 'large-valid' ? 'x'.repeat(300 * 1024) : '测试回复' },
       { type: 'TEXT_MESSAGE_END', messageId: input.runId },
       { type: 'TOOL_CALL_START', toolCallId: input.runId, toolCallName: 'query' },
       { type: 'TOOL_CALL_ARGS', toolCallId: input.runId, delta: '{"limit":1}' },
@@ -63,7 +69,7 @@ async function main(): Promise<void> {
     assert.equal(calls, 1)
     mode = 'completed'
     await client.send('', {}, false)
-    assert.deepEqual(lastInput.forwardedProps.interactionResponse, { interactionId: 'approval-1', value: false })
+    assert.deepEqual(lastInput.resume[0], { interruptId: 'approval-1', status: 'resolved', payload: false })
     assert.equal(view?.status, 'completed', view?.error)
     mode = 'broken'
     await client.send('断流测试')
@@ -105,7 +111,7 @@ async function main(): Promise<void> {
     try {
       await selected.send('执行任务', {}, undefined, { text: '测试' })
       assert.equal(lastUrl, 'http://127.0.0.1:32100/api/detect/a%20b?q=test')
-      assert.deepEqual(lastInput.forwardedProps.input, { text: '测试' })
+      assert.deepEqual(JSON.parse(lastInput.context.find((item) => item.description === 'xcodeagent.input').value), { text: '测试' })
       assert.equal(view?.status, 'completed', view?.error)
       assert.ok(view?.events?.some((event) => event.type === 'RUN_FINISHED'))
       assert.equal('Authorization' in (view?.request?.headers || {}), false)
@@ -120,6 +126,36 @@ async function main(): Promise<void> {
       assert.match(view?.error || '', /512 KB/)
       assert.equal(view?.tools.length, 0)
     } finally { bounded.dispose() }
+    mode = 'large-valid'
+    const perRequest = new RuntimeDebugConversation({ url: 'http://127.0.0.1:32100', token: 'transient',
+      launchId: 'launch', expiresAt: Date.now()/1000+600 }, 'assistant', (next) => { view = next })
+    try {
+      await perRequest.send('第一条有界响应')
+      assert.equal(view?.status, 'completed', view?.error)
+      await perRequest.send('第二条有界响应')
+      assert.equal(view?.status, 'completed', '响应限制必须按请求重置，不能累计多个合法响应')
+    } finally { perRequest.dispose() }
+    const disposed = new RuntimeDebugConversation({ url: 'http://127.0.0.1:32100', token: 'transient',
+      launchId: 'launch', expiresAt: Date.now()/1000+600 }, 'assistant', () => undefined)
+    disposed.dispose()
+    const beforeDisposed = calls
+    await assert.rejects(disposed.send('销毁后禁止发送'), /释放|销毁/)
+    assert.equal(calls, beforeDisposed)
+    const expired = new RuntimeDebugConversation({ url: 'http://127.0.0.1:32100', token: 'transient',
+      launchId: 'launch', expiresAt: Date.now()/1000-1 }, 'assistant', () => undefined)
+    try { await assert.rejects(expired.send('过期后禁止发送'), /过期/); assert.equal(calls, beforeDisposed) }
+    finally { expired.dispose() }
+    mode = 'network-error'
+    const disconnected = new RuntimeDebugConversation({ url: 'http://127.0.0.1:32100', token: 'transient',
+      launchId: 'launch', expiresAt: Date.now()/1000+600 }, 'assistant', (next) => { view = next })
+    const beforeDisconnect = calls
+    try {
+      await disconnected.send('网络断流')
+      assert.equal(view?.status, 'unknown')
+      await assert.rejects(disconnected.send('禁止自动重放'), /不可继续/)
+      assert.equal(calls, beforeDisconnect + 1)
+      assert.equal(view?.pending, undefined)
+    } finally { disconnected.dispose() }
     assert.throws(() => new RuntimeDebugConversation({ url: 'https://example.com', token: 'transient',
       launchId: 'launch', expiresAt: 9999999999 }, 'assistant', () => undefined), /本机/)
     console.log('Runtime 调试：交互拒绝续接、工具事件、断流防重放和地址边界通过')

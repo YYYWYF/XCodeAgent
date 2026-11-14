@@ -5,6 +5,7 @@ from typing import Any
 
 from app.services.agent_action_bindings import agent_action_bindings
 from app.services.agent_ui_design_content import business_design_page, has_business_body
+from app.services.agent_ui_design_actions import validate_native_action_composition
 from app.services.product_plan import project_active_agent_product_plan
 from app.services.ui_design_manifest import build_ui_page_manifest, ui_action_bindings, validate_ui_design_code
 
@@ -14,6 +15,7 @@ def agent_project_page_bindings(
 ) -> dict[str, Any]:
     """从当前多文件工程读取业务控件及效果，官方 Agent 控件仍由共享 Host 持有。"""
     page_id = str(page["pageId"])
+    validate_native_action_composition(project_dir, [page])
     surfaces = page.get("agent_surfaces", [])
     business = business_design_page(page)
     code = ""

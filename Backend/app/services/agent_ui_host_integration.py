@@ -11,7 +11,9 @@ from uuid import uuid4
 from app.services.agent_ui_dependency_plan import safe_path
 from app.services.agent_ui_design_project import command_environment
 from app.services.agent_ui_tool_environment import resolve_node_executable
-from app.services.agent_ui_connection_requirements import connection_requirements, connection_blocking_reason
+from app.services.agent_ui_connection_requirements import (
+    connection_requirements, connection_blocking_reason, runtime_connection_allowed,
+)
 from app.services.agent_ui_plain_text_preview import plain_text_preview_allowed
 from app.services.runtime_agent_contracts import agent_contract_index, agent_invocation
 from app.services.workspace_process_registry import workspace_process_registry
@@ -37,7 +39,7 @@ def current_host_contract(workspace: Path) -> dict[str, Any]:
 
 
 def _provider_code(source_root: str, *, authenticated: bool, page_ids: list[str], agent_id: str,
-                   endpoint: str) -> str:
+                   endpoint: str, description: str = '', input_schema: dict[str, Any] | None = None) -> str:
     """使用模板的路由树及身份上下文，不更改 Router/Shell 或复制身份实现。"""
     module = posixpath.relpath(source_root + '/design/SharedApplication', 'src/extensions')
     identity_import = "import { useContext } from 'react'\nimport { IdentityContext } from '@/platform/identity/IdentityContext'\n" if authenticated else ''
@@ -66,9 +68,9 @@ def _provider_code(source_root: str, *, authenticated: bool, page_ids: list[str]
         + identity
         + '  const { pathname } = useLocation()\n'
         "  const pageId = selectedPage(APP_PAGE_ROUTE_TREE, pathname.replace(/\\/$/, ''))\n"
-        + ('  // 仅开放已审阅的匿名纯文本连接；页面数据、工具及业务交互不在本合同范围。\n' if endpoint else
+        + ('  // 使用已审阅同源业务连接，页面经公开 hook 声明当前记录与输入。\n' if endpoint else
            '  // T27 连接条件尚未闭合；正式 endpoint 记录于转入计划，发送保持禁用。\n')
-        + f'  return <SharedAgentApplication agentId={json.dumps(agent_id)} sessionKey={{{session}}} user={{{user}}} pageId={{pageId}} endpoint={json.dumps(endpoint)}>\n'
+        + f'  return <SharedAgentApplication agentId={json.dumps(agent_id)} sessionKey={{{session}}} user={{{user}}} pageId={{pageId}} contextDescription={json.dumps(description, ensure_ascii=False)} inputSchema={{{json.dumps(input_schema or {}, ensure_ascii=False)}}} endpoint={json.dumps(endpoint)}>\n'
         '    {children}\n'
         '  </SharedAgentApplication>\n'
         '}\n'
@@ -83,7 +85,8 @@ def plan_host_integration(state: dict[str, Any], *, target: Path, source: Path,
         return {'status': 'unavailable', 'files': {}, 'reason': '目标没有公开 extensionProviders 扩展入口；保留 Router/Shell。'}
     try:
         if not all(safe_path(source, 'src/design/' + name).is_file() for name in (
-                'SharedApplication.tsx', 'SharedPage.tsx', 'runtimeResults.ts', 'useRuntimeResult.ts')):
+                'SharedApplication.tsx', 'SharedPage.tsx', 'runtimeResults.ts', 'useRuntimeResult.ts',
+                'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'RuntimeInput.tsx')):
             raise ValueError('已确认设计缺少当前共享 Host 入口，请按原流程重新生成并确认；不能用默认 Host 替代。')
         for name in ('src/providers/AppProviders.tsx', 'src/routes/pageRegistry.ts',
                      'src/utils/pageRouteTree.ts'):
@@ -107,6 +110,7 @@ def plan_host_integration(state: dict[str, Any], *, target: Path, source: Path,
             raise ValueError('设计页面不属于唯一 Agent 的正式入口。')
         requirements = connection_requirements(config, contract)
         plain_text = plain_text_preview_allowed(config, contract)
+        allowed = runtime_connection_allowed(config, contract)
         node = resolve_node_executable()
         completed = workspace_process_registry.run(
             [str(node), str(Path(__file__).with_name('agent_ui_host_registry.mjs'))],
@@ -121,11 +125,11 @@ def plan_host_integration(state: dict[str, Any], *, target: Path, source: Path,
             raise ValueError(result['error'])
         return {'status': 'reviewable', 'endpoint': agent_invocation(agent_id)['path'],
             'agentId': agent_id, 'pageIds': page_ids, 'identitySource': 'IdentityContext' if authenticated else 'anonymous-session',
-            'connection': 'plain_text' if plain_text else 'blocked_T27', 'connectionRequirements': requirements,
-            'reason': ('正式接线仅开放匿名纯文本多轮对话；不传页面业务数据，不执行工具或审批。'
-                       '部署须提供同源 Runtime 路由；静态验证不代表运行及完整 T27 验收。'
-                       if plain_text else connection_blocking_reason(requirements)),
+            'connection': ('plain_text' if plain_text else 'business') if allowed else 'blocked_T27', 'connectionRequirements': requirements,
+            'reason': ('已接入同源 Runtime；标准 Context、业务结果、工具及交互按正式声明执行，运行情况须联调验收。'
+                       if allowed else connection_blocking_reason(requirements)),
             'files': {REGISTRY: result['after'], PROVIDER: _provider_code(source_root, authenticated=authenticated,
-                page_ids=page_ids, agent_id=agent_id, endpoint=requirements['endpoint'] if plain_text else '')}}
+                page_ids=page_ids, agent_id=agent_id, endpoint=requirements['endpoint'] if allowed else '',
+                description=str(contract['agentSettings']['context'].get('description', '')), input_schema=contract['interactionContract']['inputSchema'])}}
     except (OSError, ValueError, KeyError) as exc:
         return {'status': 'blocked', 'files': {}, 'reason': str(exc)}

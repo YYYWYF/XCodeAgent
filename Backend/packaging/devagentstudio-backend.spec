@@ -43,6 +43,8 @@ datas = [
     # 标准开发预览进程托管官方 Mock，资源不进入目标应用生产构建。
     (str(backend_root / "app/services/agent_ui_managed_preview.mjs"), "app/services"),
     (str(backend_root / "app/services/agent_ui_preview_endpoint.cjs"), "app/services"),
+    (str(backend_root / "app/services/agent_ui_preview_observer.cjs"), "app/services"),
+    (str(backend_root / "app/services/agent_ui_preview_observer.tsx"), "app/services"),
     # 转入分析和目标 Rsbuild 资源适配共用同一受审阅编译边界。
     (
         str(backend_root / "app" / "services" / "agent_ui_rsbuild_loader.cjs"),

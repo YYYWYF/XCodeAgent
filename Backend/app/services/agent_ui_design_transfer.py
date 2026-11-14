@@ -148,6 +148,7 @@ def execute_transfer(workspace: str | Path, *, installation_plan_id: str, plan_i
             record["state"] = "verified"
             record["message"] = ("已转入确认应用层并通过组合与静态检查；"
                 + ("已接入同源真实纯文本对话；完整业务连接与运行验收仍待完成。" if plan['hostIntegration'].get('connection') == 'plain_text'
+                   else "已接入同源真实业务连接，请按正式能力完成前后端联调验收。" if plan['hostIntegration'].get('connection') == 'business'
                    else "Host 扩展已接线，真实 Runtime 映射待 T27，发送保持禁用。" if plan['hostIntegration']['status'] == 'reviewable'
                    else "目标缺少模板 Host 扩展入口，正式接线与运行验收仍未完成。"))
         if workspace_process_registry.is_run_cancelled(command_id) or formal_snapshot(root) != plan["formal"]:

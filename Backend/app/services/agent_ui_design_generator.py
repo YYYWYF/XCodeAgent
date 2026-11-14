@@ -18,7 +18,8 @@ from app.services.agent_ui_tool_host import AgentUiToolHostInspection
 from app.services.agent_ui_design_presentation import presentation_files
 from app.services.agent_ui_design_shared import SHARED_AGENT_ROOT
 from app.services.agent_ui_design_response import parse_design_files
-from app.services.agent_ui_design_content import business_design_page, has_business_body
+from app.services.agent_ui_design_content import business_design_page, has_business_body, agent_launcher_actions
+from app.services.agent_ui_design_actions import validate_native_action_composition
 from app.services.ui_design_agent_surfaces import project_agent_design_pages
 from app.services.builtin_skills import (
     AGENT_UI_SURFACE_TEMPLATE_SKILL_NAME, read_builtin_skill_md, resolve_builtin_skills_root,
@@ -95,6 +96,9 @@ def _prompt(pages: list[dict[str, Any]], allowed: tuple[str, ...]) -> str:
         "The platform mounts the official Agent beside this body; do not render an Agent, chat, messages, composer, "
         "theme/state/scenario controls or mock controls yourself. "
         "The platform owns ALL actions listed in agent_surfaces.actionIds. "
+        "Native stop_generation and copy_response belong to the official composer/assistant response; "
+        "never duplicate them in a business toolbar or simulate success with page-local state. "
+        "copy_response copies the complete selected assistant response, not a field or extracted business result. "
         "Keep remaining actions and information_items, using stable data-action-id/data-information-item-id and "
         "unique data-control-id on their controls. Do not invent metrics, business fields or operations.\n"
         "Copy the literal markers from each file's pageBrief. Return/back navigation is allowed only when "
@@ -139,11 +143,10 @@ def _host_files(pages: list[dict[str, Any]], panel_actions: dict[str, dict[str, 
         body = has_business_body(page)
         if body:
             imports.append(f"import Page{index} from '../pages/page-{index}'")
-        owned = set(surface.get("actionIds", []))
         entry = {"pageId": page["pageId"], "surface": surface.get("type", "none"),
                  "hasInlineLauncher": bool((panel_actions or {}).get(page["pageId"], {}).get("open")), "entries": [
             {"actionId": item["actionId"], "label": item.get("name") or item["actionId"]}
-            for item in page.get("actions", []) if item.get("actionId") in owned
+            for item in agent_launcher_actions(page)
         ]}
         component = f"Page{index}" if body else "null"
         entries.append("{..." + _json(entry) + f",component:{component}" + "}")
@@ -163,11 +166,15 @@ def _host_files(pages: list[dict[str, Any]], panel_actions: dict[str, dict[str, 
         "src/design/SharedPage.tsx": (REPOSITORY / "tools/agent-ui-design/SharedPage.tsx").read_text(encoding="utf-8"),
         "src/design/runtimeResults.ts": (REPOSITORY / "tools/agent-ui-design/runtimeResults.ts").read_text(encoding="utf-8"),
         "src/design/useRuntimeResult.ts": (REPOSITORY / "tools/agent-ui-design/useRuntimeResult.ts").read_text(encoding="utf-8"),
+        "src/design/runtimeContext.tsx": (REPOSITORY / "tools/agent-ui-design/runtimeContext.tsx").read_text(encoding="utf-8"),
+        "src/design/runtimeRequest.ts": (REPOSITORY / "tools/agent-ui-design/runtimeRequest.ts").read_text(encoding="utf-8"),
+        "src/design/RuntimeInput.tsx": (REPOSITORY / "tools/agent-ui-design/RuntimeInput.tsx").read_text(encoding="utf-8"),
+        "src/design/RuntimeBusinessPanel.tsx": (REPOSITORY / "tools/agent-ui-design/RuntimeBusinessPanel.tsx").read_text(encoding="utf-8"),
         "src/design/shared-host.css": (REPOSITORY / "tools/agent-ui-design/shared-host.css").read_text(encoding="utf-8"),
         "src/design/surfaces.ts": "export const agentSurfaces = " + _json([
             {"pageId": page['pageId'], "surface": page['agent_surfaces'][0]['type'],
              "entries": [{"actionId": action['actionId'], "label": action.get('name') or action['actionId']}
-                for action in page.get('actions', []) if action['actionId'] in set(page['agent_surfaces'][0]['actionIds'])]}
+                for action in agent_launcher_actions(page)]}
             for page in pages]) + " as const\n",
         "src/App.tsx": (REPOSITORY / "tools/agent-ui-design/App.tsx").read_text(encoding="utf-8"),
         "src/main.tsx": (REPOSITORY / "tools/agent-ui-design/main.tsx").read_text(encoding="utf-8"),
@@ -175,9 +182,7 @@ def _host_files(pages: list[dict[str, Any]], panel_actions: dict[str, dict[str, 
         "src/design/pages.tsx": registry,
         "src/design/props.ts": "import type { AgentProps } from '@za38.03/agent-ui-runtime/ui'\n"
             "export const agentProps = " + _json({"welcome": welcome}) + " satisfies AgentProps\n",
-        "src/design/locales.json": _json({"source": "设计原型 · 业务数据为示例，尚未连接智能体服务",
-            "mockSource": "设计原型 · 官方模拟服务，回复为模拟数据，未连接真实业务",
-            "conversation": "智能体会话", "close": "关闭助手", "connectionPending": "等待配置设计预览连接",
+        "src/design/locales.json": _json({"conversation": "智能体会话", "close": "关闭助手", "connectionPending": "等待配置设计预览连接",
             "pageUnavailable": "当前页面不属于本轮 Agent UI 设计，请重新选择页面。"}),
     }
 
@@ -309,6 +314,7 @@ def generate_agent_ui_design(
                     raise RuntimeError("校验期间源码发生变化，保留用户修改。")
                 expected = _write_sources(project, {**_host_files(pages, panel_actions, presentations),
                     **files, **agent_sources}, expected, should_cancel)
+                validate_native_action_composition(project.project_dir, pages)
                 built = build_agent_ui_design_project(project, node_executable=inspection.node_executable,
                     pnpm_cli=pnpm_cli, run_id=run_id, check_cancel=lambda: _check_cancel(should_cancel))
                 _check_cancel(should_cancel)

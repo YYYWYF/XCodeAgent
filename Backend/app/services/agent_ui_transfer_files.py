@@ -19,7 +19,7 @@ from app.services.agent_ui_design_shared import require_shared_application
 from app.services.workspace_process_registry import workspace_process_registry
 
 HOST_FILES = {"Agent.tsx", "SharedHost.tsx", "SharedApplication.tsx", "SharedPage.tsx", "runtimeResults.ts",
-              "useRuntimeResult.ts", "shared-host.css", "surfaces.ts", "props.ts", "presentation.ts", "presentation.json"}
+              "useRuntimeResult.ts", "runtimeContext.tsx", "runtimeRequest.ts", "RuntimeBusinessPanel.tsx", "RuntimeInput.tsx", "shared-host.css", "surfaces.ts", "props.ts", "presentation.ts", "presentation.json"}
 GENERATED = {"index.ts", "plugins/index.ts", "plugins/registry.generated.ts",
              "application/Agent.tsx", "application/runtime-config.generated.ts",
              "composition-revision.generated.json", "agent-contract/frontend-tools.generated.ts",
