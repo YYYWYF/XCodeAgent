@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 
 /** 停止当前客户端创建的内置后台及其进程树，正常退出和启动失败共用同一回收入口。 */
 export async function stopBackendProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
     const killed = await new Promise<boolean>((resolve) => {
       const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {

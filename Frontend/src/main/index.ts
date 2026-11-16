@@ -9,6 +9,12 @@ import icon from '../../resources/icon.png?asset'
 import { PRODUCT_DISPLAY_NAME, WORKSPACE_ARTIFACT_DIR_NAME } from './branding'
 import { attachUiDesignPageCode } from './uiDesignPageCode'
 import { DEVAGENTSTUDIO_ENV } from './env'
+import {
+  maintainDiagnostics,
+  recordDiagnosticError,
+  setDiagnosticExitStatus,
+  setDiagnosticStage
+} from './diagnostics/runtime'
 import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
@@ -1769,6 +1775,8 @@ async function clearAuthStateBeforeStartup(): Promise<boolean> {
     return true
   } catch (error) {
     const authFile = path.join(getDevAgentStudioDataDir(), 'auth.json')
+    recordDiagnosticError('startup_auth_cleanup_failed', error)
+    setDiagnosticExitStatus('startup_failed')
     console.error('Failed to clear auth token during startup', error)
     dialog.showErrorBox(
       '认证状态清理失败',
@@ -1781,6 +1789,7 @@ async function clearAuthStateBeforeStartup(): Promise<boolean> {
 
 /** 初始化获得单实例锁的主进程，成功后才允许窗口恢复。 */
 async function initializePrimaryApplication(): Promise<boolean> {
+  setDiagnosticStage('initialize_primary')
   installDesignRuntimeProtocol()
 
   // Set app user model id for windows
@@ -1797,6 +1806,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
     backendStartupPromise ??= startBackendService()
     return backendStartupPromise
   }
+  setDiagnosticStage('startup_update')
   const continueStartup = await runStartupUpdate(
     ensureBackendReady,
     async () => {
@@ -1843,7 +1853,9 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupSessionStorageIpc()
   setupTray()
 
+  setDiagnosticStage('opening_application_window')
   await openAuthenticatedWindow()
+  setDiagnosticStage('running')
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -1856,6 +1868,8 @@ async function initializePrimaryApplication(): Promise<boolean> {
 
 /** 处理主实例初始化中的非认证清理异常。 */
 function handlePrimaryStartupFailure(error: unknown): boolean {
+  recordDiagnosticError('primary_startup_failed', error)
+  setDiagnosticExitStatus('startup_failed')
   console.error('Failed to start DevAgent Studio', error)
   app.quit()
   return false
@@ -1877,8 +1891,10 @@ function handleSecondInstance(): void {
 }
 
 if (!hasSingleInstanceLock) {
+  setDiagnosticExitStatus('second_instance')
   app.quit()
 } else {
+  maintainDiagnostics()
   app.on('second-instance', handleSecondInstance)
   app.on('activate', () => {
     focusStartupUpdate()
@@ -1922,6 +1938,7 @@ if (hasSingleInstanceLock) {
     event.preventDefault()
     if (quitCleanupStarted) return
     quitCleanupStarted = true
+    setDiagnosticStage('quit_cleanup')
 
     void cleanupBeforeQuit().finally(() => {
       quitCleanupCompleted = true

@@ -6,6 +6,7 @@ import type { UpdateDriver, UpdateProgress } from './coordinator'
 import { assertUpdateFiles } from './manifest'
 import { configureUpdateFeed } from './configureFeed'
 import { quitAndInstallUpdate } from './installUpdate'
+import { setDiagnosticExitStatus, setDiagnosticStage } from '../diagnostics/runtime'
 
 /** 按平台创建 updater，使用 Java 返回的基础地址而非猜测安装包名称。 */
 export function createUpdaterDriver(baseUrl: string): UpdateDriver {
@@ -75,6 +76,8 @@ export function createUpdaterDriver(baseUrl: string): UpdateDriver {
         }
         /** 原生安装器已接管退出流程。 */
         const ready = (): void => {
+          setDiagnosticExitStatus('update_exit')
+          setDiagnosticStage('update_handoff')
           cleanup()
           resolve()
         }

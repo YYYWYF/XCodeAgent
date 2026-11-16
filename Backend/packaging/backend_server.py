@@ -1,16 +1,49 @@
 from __future__ import annotations
 
+import atexit
+import faulthandler
 import os
 import sys
-from app.environment import load_backend_environment
+from pathlib import Path
+from typing import BinaryIO
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 
 
+def _close_fatal_log(stream: BinaryIO) -> None:
+    """进程正常结束时先取消致命信号处理器，再释放文件。"""
+    faulthandler.disable()
+    stream.close()
+
+
+def install_fatal_log() -> None:
+    """在业务模块加载前启用致命堆栈捕获，文件描述符保持到进程结束。"""
+    directory = os.environ.pop("DEVAGENTSTUDIO_DIAGNOSTICS_DIR", None)
+    if not directory or not Path(directory).is_absolute():
+        return
+
+    try:
+        stream = (Path(directory) / f"python-fatal-{os.getpid()}.log").open("xb")
+    except OSError:
+        print("Unable to open backend fatal diagnostic log", file=sys.stderr)
+        return
+
+    try:
+        faulthandler.enable(stream, all_threads=True)
+    except (OSError, RuntimeError):
+        stream.close()
+        print("Unable to enable backend fatal diagnostics", file=sys.stderr)
+        return
+    atexit.register(_close_fatal_log, stream)
+
+
 def main() -> None:
     """尽早安装日志采集，再启动冻结的 Python HTTP 服务。"""
+    if not sys.argv[1:]:
+        install_fatal_log()
+
     from app.services.code_graph.parser_probe import dispatch_parser_probe
 
     dispatch_parser_probe(sys.argv[1:])
@@ -30,6 +63,7 @@ def main() -> None:
 
 def load_backend_env() -> None:
     """加载后端配置并在启动前校验冻结资源完整性。"""
+    from app.environment import load_backend_environment
 
     load_backend_environment()
 

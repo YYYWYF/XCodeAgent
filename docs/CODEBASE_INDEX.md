@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+Windows/macOS 桌面诊断由 `Frontend/src/main/bootstrap.ts` 在业务入口前初始化，`diagnostics/` 按运行保存本地 Crashpad 转储、脱敏事件与原子摘要到 `~/<环境目录>/logs/diagnostics`，源码模式使用 `source-dev`。主实例检查上次中断并清理旧记录，退出按正常、重复启动、更新、启动失败或其他异常分类。`backendService.ts` 记录内置后端启动及退出，冻结入口 `Backend/packaging/backend_server.py` 用 `faulthandler` 按 PID 保存致命堆栈。回归见 `pnpm test:desktop-diagnostics` 和 `tests.test_frozen_parser_probe`，诊断位置及限制见 [跨平台排障](CROSS_PLATFORM_SUPPORT.md#desktop-crash-diagnostics)。
+
 Build 已移除任务完成后的独立后端阶段检查调用及 `services/backend_stage_verification.py`，不再额外以 foundation 骨架、controller 路由/DTO/分层/权限阶段检查阻断任务。通用业务自检仍由 `DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED` 控制，默认关闭；其公共 verifier 及任务验收契约保留。执行前任务计划、确认、绑定、依赖及文件范围门禁保持原规则。
 
 单任务计划修复使用独立 `/build-task-repair/run` AG-UI 端点，`domain/build_task_repair.py` 严格解析 `forwardedProps.buildTaskRepair` 的 `get/generate/regenerate/discard/confirm` 动作；确认、放弃和重新生成必须携带精确 `draftDigest`。`services/build_task_repair.py` 校验原 Run/thread/session、Build 已退出、正式计划和当前输入，保存 `.devagentstudio/drafts/task-repairs/<source+task摘要>.json`；模型 `agents/build_task_repair.py` 无写入工具，平台提供有界源码及一次定向补读。`domain/build_task_repair.py` 的模型输出只接受 repairInstructions 和精确文件增量，拒绝标题/完整说明重写；`build_task_repair_contract.py` 确定性保留原说明和未变化文件，追加修复步骤及文件要求，保留身份、阶段、依赖及交付职责，重新编译工程/业务验收及完整 DAG；允许 business 补充同模块 PO 等既有文件的 modify 权限，禁止其他 Unit、模板公共文件、删除原目标或削弱业务预期。并发调度字段按新文件重叠统一派生，其他任务业务合同和完成证据不变。

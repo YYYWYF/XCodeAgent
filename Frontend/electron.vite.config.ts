@@ -21,7 +21,14 @@ const appEnvDefine = {
 
 export default defineConfig({
   main: {
-    define: appEnvDefine
+    define: appEnvDefine,
+    build: {
+      rollupOptions: {
+        input: { index: resolve('src/main/bootstrap.ts') },
+        // 业务入口与引导入口同级，沿用 preload、renderer 和资源的相对路径。
+        output: { chunkFileNames: '[name]-[hash].js' }
+      }
+    }
   },
   preload: {
     define: appEnvDefine

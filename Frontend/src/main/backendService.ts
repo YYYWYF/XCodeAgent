@@ -6,6 +6,12 @@ import path from 'node:path'
 import { APP_ENV, DEVAGENTSTUDIO_ENV } from './env'
 import { backendEnvFilename, checkBackendHealth } from './backendEnvironment'
 import { stopBackendProcess } from './backendProcess'
+import {
+  getDiagnosticRunDirectory,
+  recordDiagnostic,
+  recordDiagnosticError,
+  setDiagnosticStage
+} from './diagnostics/runtime'
 
 const BACKEND_EXECUTABLE_NAMES: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'devagentstudio-backend',
@@ -37,10 +43,17 @@ export async function startBackendService(): Promise<string> {
   if (stoppingBackend) throw new Error('后台服务正在停止。')
   if (startupPromise) return startupPromise
   const epoch = serviceEpoch
+  setDiagnosticStage('backend_starting')
   const pending = performBackendStart(epoch)
     .then((baseUrl) => {
       if (epoch !== serviceEpoch) throw new Error('后台启动操作已取消。')
+      setDiagnosticStage('backend_ready')
+      recordDiagnostic('backend_ready', { pid: backendProcess?.pid ?? null })
       return baseUrl
+    })
+    .catch((error: unknown) => {
+      if (epoch === serviceEpoch) recordDiagnosticError('backend_start_failed', error)
+      throw error
     })
     .finally(() => {
       if (startupPromise === pending) startupPromise = undefined
@@ -75,6 +88,9 @@ async function performBackendStart(epoch: number): Promise<string> {
     DEVAGENTSTUDIO_WORKING_DIR: DEVAGENTSTUDIO_ENV.WORKING_DIR,
     PYTHONUTF8: '1'
   }
+  const diagnosticsDirectory = getDiagnosticRunDirectory()
+  if (diagnosticsDirectory) env.DEVAGENTSTUDIO_DIAGNOSTICS_DIR = diagnosticsDirectory
+  else delete env.DEVAGENTSTUDIO_DIAGNOSTICS_DIR
 
   const child = spawn(bundledBackend.executablePath, [], {
     cwd: bundledBackend.backendDir,
@@ -86,17 +102,18 @@ async function performBackendStart(epoch: number): Promise<string> {
   })
 
   backendProcess = child
-  wireBackendLogging(child)
+  const readSpawnError = wireBackendLogging(child)
 
   try {
-    await waitForBackendHealth(backendBaseUrl, child)
+    await waitForBackendHealth(backendBaseUrl, child, readSpawnError)
     if (epoch !== serviceEpoch) throw new Error('后台连接操作已取消。')
   } catch (error) {
     // 正常退出已接管回收责任；启动自身失败时只清理本次创建的进程。
     if (epoch === serviceEpoch) {
       stoppingBackend = true
       try {
-        await stopBackendProcess(child)
+        if (child.pid !== undefined) await stopBackendProcess(child)
+        else if (backendProcess === child) backendProcess = null
       } finally {
         stoppingBackend = false
       }
@@ -187,7 +204,14 @@ async function assertDirectoryExists(directoryPath: string, label: string): Prom
   throw new Error(`${label} not found: ${directoryPath}`)
 }
 
-function wireBackendLogging(child: ChildProcess): void {
+/** 采集子进程生命周期，详细应用输出继续由 Python 日志负责。 */
+function wireBackendLogging(child: ChildProcess): () => Error | undefined {
+  let spawnError: Error | undefined
+  child.once('spawn', () => recordDiagnostic('backend_spawned', { pid: child.pid ?? null }))
+  child.on('error', (error) => {
+    if (child.pid === undefined) spawnError = error
+    recordDiagnosticError('backend_process_error', error)
+  })
   child.stdout?.on('data', (chunk) => {
     console.log(`[backend] ${String(chunk).trimEnd()}`)
   })
@@ -195,6 +219,12 @@ function wireBackendLogging(child: ChildProcess): void {
     console.error(`[backend] ${String(chunk).trimEnd()}`)
   })
   child.once('exit', (code, signal) => {
+    recordDiagnostic('backend_exit', {
+      pid: child.pid ?? null,
+      exitCode: code,
+      signal,
+      expected: stoppingBackend
+    })
     if (backendProcess === child) {
       backendProcess = null
     }
@@ -204,6 +234,7 @@ function wireBackendLogging(child: ChildProcess): void {
       )
     }
   })
+  return () => spawnError
 }
 
 async function findAvailablePort(): Promise<number> {
@@ -224,9 +255,15 @@ async function findAvailablePort(): Promise<number> {
 }
 
 /** 在既有就绪预算内等待服务，环境错配立即失败。 */
-async function waitForBackendHealth(baseUrl: string, child?: ChildProcess): Promise<void> {
+async function waitForBackendHealth(
+  baseUrl: string,
+  child?: ChildProcess,
+  readSpawnError?: () => Error | undefined
+): Promise<void> {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS
   while (Date.now() < deadline) {
+    const spawnError = readSpawnError?.()
+    if (spawnError) throw spawnError
     if (child && (child.exitCode !== null || child.signalCode !== null)) {
       throw new Error(
         `Backend exited before becoming healthy: code=${child.exitCode} signal=${child.signalCode}`

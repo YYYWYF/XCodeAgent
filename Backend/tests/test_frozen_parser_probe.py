@@ -6,6 +6,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,3 +113,25 @@ class FrozenParserProbeTests(unittest.TestCase):
                     capture_output=True, timeout=10,
                 )
                 self.assertEqual(result.returncode == 0, succeeds, result.stderr.decode())
+
+    def test_frozen_fatal_handler_writes_to_desktop_run_directory(self) -> None:
+        """在独立后端子进程中验证致命信号日志及会话目录传递。"""
+        root = Path(__file__).resolve().parents[1]
+        entry = root / "packaging/backend_server.py"
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, "-c",
+                 "import os,runpy,sys; "
+                 "namespace=runpy.run_path(sys.argv[1]); "
+                 "namespace['install_fatal_log'](); "
+                 "assert 'DEVAGENTSTUDIO_DIAGNOSTICS_DIR' not in os.environ; "
+                 "os.abort()", str(entry)],
+                cwd=directory,
+                env={**os.environ, "DEVAGENTSTUDIO_DIAGNOSTICS_DIR": directory},
+                capture_output=True,
+                timeout=10,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            files = list(Path(directory).glob("python-fatal-*.log"))
+            self.assertEqual(len(files), 1)
+            self.assertIn("Fatal Python error", files[0].read_text())

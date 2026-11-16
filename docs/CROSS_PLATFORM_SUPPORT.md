@@ -166,6 +166,33 @@ without installation. Complete installation tests require two packaged versions 
 update implementation; macOS requires valid signing (ad-hoc local packages only validate download
 and UI). Validate signed Intel/Apple Silicon packages and Windows x64 NSIS on their native hosts.
 
+## Desktop crash diagnostics
+
+Electron writes startup and crash diagnostics for Windows and macOS packages and Electron source
+runs. For ST, open the appropriate folder for the account that launched the app.
+
+| Mode | Diagnostics location |
+| --- | --- |
+| Windows ST package | `%USERPROFILE%\.devagentstudio_st\logs\diagnostics` |
+| macOS ST package | `~/.devagentstudio_st/logs/diagnostics/` |
+| Electron source run | `source-dev/` under the selected environment's diagnostics directory |
+
+The DEV, UAT, and PRD equivalents use `.devagentstudio_dev`, `.devagentstudio_uat`, and
+`.devagentstudio`. Select the `run-<id>` whose `summary.json` matches the incident time. The summary
+contains the build version, process ID, latest startup stage, and exit classification.
+`events.jsonl` includes window and process failures, sanitized JavaScript stack frames, and recent
+Electron memory samples. `crashpad/` may contain native minidumps. A packaged Python backend can
+write a fatal traceback to `python-fatal-<pid>.log`. Match its PID and incident time with the
+backend lifecycle events and the existing `logs/backend.log`.
+
+After a forced termination, relaunch once to reconcile the previous run as `interrupted` when
+its process is gone. Early OS startup failures can precede application diagnostics. On Windows,
+look up the incident time in Event Viewer or contact desktop support. On macOS, check crash
+reports in Console. Crashpad uploads are disabled. The app cleans up completed runs older
+than 14 days, or oldest-first when diagnostics exceed 200 MiB. Active runs and recently closed
+Crashpad directories can temporarily exceed the limit. Review native dumps through the company's
+internal process because dumps can contain process memory.
+
 ## Agent architecture mapping
 
 - learn-coding-agent: retain the compact gather, act, verify loop and structured argv-first terminal

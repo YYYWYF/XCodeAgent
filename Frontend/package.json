@@ -7,6 +7,7 @@
   "scripts": {
     "test:database-delivery": "node scripts/run-database-delivery-tests.mjs",
     "test:backend-logs": "node scripts/run-backend-log-tests.mjs",
+    "test:desktop-diagnostics": "node scripts/run-desktop-diagnostics-tests.mjs",
     "test:requirement-editor": "node scripts/run-requirement-editor-tests.mjs",
     "format": "prettier --write .",
     "lint": "eslint --cache .",
