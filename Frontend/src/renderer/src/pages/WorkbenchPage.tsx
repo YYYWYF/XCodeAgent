@@ -234,6 +234,12 @@ function WorkbenchPage({
   // 「基于此版本迭代」弹框：未提交改动处理方式（commit = 审阅并提交 / discard = 丢掉）。
   const [historicalIterationDirtyChoice, setHistoricalIterationDirtyChoice] =
     useState<HistoricalIterationDirtyChoice>('discard')
+  // 「基于此版本迭代」暂存的起点分支名：当用户在工作区脏的情况下点击「基于此版本迭代」，
+  // 平台会先弹「审阅并提交」让用户提交，提交成功后用这个暂存值自动重新打开历史迭代弹框
+  // 继续走流程 —— 不能让用户在提交完后还得手动再点一次按钮（那时界面可能已被切回
+  // 当前分支，用户以为还在看历史分支，会基于错误的起点建分支，见 v1_2 从 v1_1 派生的
+  // 事故）。提交取消 / 历史迭代确认完成后清空。
+  const [pendingHistoricalIterationSource, setPendingHistoricalIterationSource] = useState<string>('')
   // 分支切换全屏加载的目标名；为空时不显示。
   const [switchingTargetLabel, setSwitchingTargetLabel] = useState<string | undefined>(undefined)
   // 模板是否就绪（lifecycle=ready_for_workbench），用于校准正式规划产物。
@@ -463,6 +469,99 @@ function WorkbenchPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionReleasable])
 
+  // 关闭「基于此版本迭代」弹框：清掉所有相关草稿。
+  const handleCancelHistoricalIteration = useCallback((): void => {
+    setHistoricalIterationSource('')
+    setHistoricalIterationBranchName('')
+    setHistoricalIterationUncommittedCount(0)
+    setHistoricalIterationDirtyChoice('discard')
+  }, [])
+
+  // 「审阅并提交」分支：关闭历史迭代弹框，切回当前可编辑分支，再打开提交推送弹框。
+  // 用户提交完后由 handleGenerateVersion 用 pendingHistoricalIterationSource 自动
+  // 重新打开历史迭代弹框，避免用户在界面被切回当前分支后还得手动再点一次按钮。
+  //
+  // 提取到 handleOpenHistoricalIteration 之前：后者在脏检查不通过时直接调用本函数，
+  // 函数声明顺序必须先于引用点，否则 useCallback 的依赖列表会拿到 undefined。
+  const handleGoToCommitHistoricalIteration = useCallback((): void => {
+    // 当前可编辑分支名：弹框打开时是基于历史分支查看，所以需要主动切回去。
+    const activeName = workspaceApplication.branchName || ''
+    // 如果历史迭代弹框已经打开（用户在弹框里选了「审阅并提交」），起点已在
+    // historicalIterationSource 里 —— 先暂存到 pendingHistoricalIterationSource 再清空，
+    // 让提交成功后能自动回到这个起点。
+    // 如果是从 handleOpenHistoricalIteration 的脏检查分支进来（弹框未打开），
+    // pendingHistoricalIterationSource 已被前置设置好，这里不动它。
+    if (historicalIterationSource) {
+      setPendingHistoricalIterationSource(historicalIterationSource)
+    }
+    handleCancelHistoricalIteration()
+    if (activeName) {
+      setViewingBranchName(activeName)
+    }
+    // 与 handleOpenPublish 同一入口：重置描述并触发模型预填。
+    setPublishDescription('')
+    setVersionGenerating(null)
+    setPublishModalOpen(true)
+    descriptionEditedRef.current = false
+    requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
+    message.info('请先提交当前版本的改动，提交完成后会自动回到「基于此版本迭代」。')
+  }, [
+    handleCancelHistoricalIteration,
+    historicalIterationSource,
+    requestDescriptionDraft,
+    workspaceApplication.branchName,
+    workspaceApplication.workspaceRoot
+  ])
+
+  // 打开「基于此版本迭代」入口：先做全量脏检查（含 .devagentstudio 平台产物）。
+  // 只看 codePaths（业务代码）会漏掉平台产物脏 —— 那是平台自动生成的规划文件，
+  // 用户感知不到，但会让后端 `git checkout -b` 失败；前端再只用 status !== 'pushed'
+  // 判断是否失败，就会静默走到 startIteration，在错误的磁盘状态上登记 carryover。
+  // 一旦有未提交改动，**先把起点分支名暂存到 pendingHistoricalIterationSource**，
+  // 再复用「审阅并提交」流程（handleGoToCommitHistoricalIteration）；用户提交成功后
+  // 由 handleGenerateVersion 用这个暂存值自动重新打开历史迭代弹框，避免用户
+  // 在界面被切回当前分支后还得手动再点一次按钮（且会基于错误的起点）。
+  //
+  // 函数声明顺序：本函数被 handleGenerateVersion 依赖（提交成功后自动接续），
+  // 必须先于 handleGenerateVersion 声明。
+  const handleOpenHistoricalIteration = useCallback(
+    (sourceBranchName: string): void => {
+      const workspaceRoot = workspaceApplication.workspaceRoot
+      if (!workspaceRoot) return
+      void inspectAllVersionControl(workspaceRoot)
+        .then((snapshot) => {
+          // eligiblePaths 覆盖业务代码 + .devagentstudio 平台产物（含 spec/plan）。
+          // codePaths 把平台产物过滤掉了，不能用作"工作区是否干净"的判据。
+          const totalDirty = snapshot.eligiblePaths.length
+          if (totalDirty > 0) {
+            // 工作区脏：先暂存起点，再走提交流程。提交成功后由 handleGenerateVersion
+            // 自动重新打开历史迭代弹框。
+            setPendingHistoricalIterationSource(sourceBranchName)
+            handleGoToCommitHistoricalIteration()
+            return
+          }
+          // 工作区真的干净：进入历史迭代弹框。
+          setHistoricalIterationSource(sourceBranchName)
+          // 预填基于起点版本自增的建议版本号（跳过已有分支重名），用户可直接采用或修改。
+          const existingNames = (workspaceApplication.branches || [])
+            .map((branch) => branch?.name || '')
+            .filter(Boolean)
+          setHistoricalIterationBranchName(suggestNextBranchName(sourceBranchName, existingNames))
+          setHistoricalIterationDirtyChoice('discard')
+          setHistoricalIterationUncommittedCount(0)
+        })
+        .catch((error) => {
+          console.warn('读取未提交改动数失败。', error)
+          message.error('无法检查工作区状态，请稍后再试。')
+        })
+    },
+    [
+      workspaceApplication.workspaceRoot,
+      workspaceApplication.branches,
+      handleGoToCommitHistoricalIteration
+    ]
+  )
+
   // 确认提交并推送：调后端真实 git 提交并推送到当前分支，三步进度实时推进。
   // 分支不锁定；提交时冻结当前 lifecycle、资产快照与提交事实，并持久化到 application.json。
   const handleGenerateVersion = useCallback(async (): Promise<void> => {
@@ -537,12 +636,22 @@ function WorkbenchPage({
         placement: 'bottomRight',
         duration: 4
       })
+      // 若本次提交来自「基于此版本迭代」的脏检查拦截：起点分支已暂存，
+      // 现在工作区干净了，自动重新打开历史迭代弹框，把暂存的起点交还给用户继续操作。
+      // 这样用户不需要在界面被切回当前分支后还得手动再点一次按钮（且会基于错误的起点）。
+      if (pendingHistoricalIterationSource) {
+        const sourceToResume = pendingHistoricalIterationSource
+        setPendingHistoricalIterationSource('')
+        handleOpenHistoricalIteration(sourceToResume)
+      }
     } catch (error) {
       setVersionGenerating(null)
       message.error(error instanceof Error ? error.message : '提交并推送失败')
     }
   }, [
     applicationLifecycle,
+    handleOpenHistoricalIteration,
+    pendingHistoricalIterationSource,
     persistApplicationConfig,
     publishDescription,
     publishPrefix,
@@ -673,82 +782,6 @@ function WorkbenchPage({
     [workspaceApplication]
   )
 
-  // 关闭「基于此版本迭代」弹框：清掉所有相关草稿。
-  const handleCancelHistoricalIteration = useCallback((): void => {
-    setHistoricalIterationSource('')
-    setHistoricalIterationBranchName('')
-    setHistoricalIterationUncommittedCount(0)
-    setHistoricalIterationDirtyChoice('discard')
-  }, [])
-
-  // 「审阅并提交」分支：关闭历史迭代弹框，切回当前可编辑分支，再打开提交推送弹框。
-  // 用户提交完后回到当前分支，那时 dirty=0，再次点击「基于此版本迭代」会直接进入
-  // 建分支流程。
-  //
-  // 提取到 handleOpenHistoricalIteration 之前：后者在脏检查不通过时直接调用本函数，
-  // 函数声明顺序必须先于引用点，否则 useCallback 的依赖列表会拿到 undefined。
-  const handleGoToCommitHistoricalIteration = useCallback((): void => {
-    // 当前可编辑分支名：弹框打开时是基于历史分支查看，所以需要主动切回去。
-    const activeName = workspaceApplication.branchName || ''
-    handleCancelHistoricalIteration()
-    if (activeName) {
-      setViewingBranchName(activeName)
-    }
-    // 与 handleOpenPublish 同一入口：重置描述并触发模型预填。
-    setPublishDescription('')
-    setVersionGenerating(null)
-    setPublishModalOpen(true)
-    descriptionEditedRef.current = false
-    requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
-    message.info('请先提交当前版本的改动，提交完成后再回来「基于此版本迭代」。')
-  }, [
-    handleCancelHistoricalIteration,
-    requestDescriptionDraft,
-    workspaceApplication.branchName,
-    workspaceApplication.workspaceRoot
-  ])
-
-  // 打开「基于此版本迭代」入口：先做全量脏检查（含 .devagentstudio 平台产物）。
-  // 只看 codePaths（业务代码）会漏掉平台产物脏 —— 那是平台自动生成的规划文件，
-  // 用户感知不到，但会让后端 `git checkout -b` 失败；前端再只用 status !== 'pushed'
-  // 判断是否失败，就会静默走到 startIteration，在错误的磁盘状态上登记 carryover。
-  // 一旦有未提交改动，直接复用「审阅并提交」流程（handleGoToCommitHistoricalIteration），
-  // 不开历史迭代弹框；用户提交完后再回来点。
-  const handleOpenHistoricalIteration = useCallback(
-    (sourceBranchName: string): void => {
-      const workspaceRoot = workspaceApplication.workspaceRoot
-      if (!workspaceRoot) return
-      void inspectAllVersionControl(workspaceRoot)
-        .then((snapshot) => {
-          // eligiblePaths 覆盖业务代码 + .devagentstudio 平台产物（含 spec/plan）。
-          // codePaths 把平台产物过滤掉了，不能用作"工作区是否干净"的判据。
-          const totalDirty = snapshot.eligiblePaths.length
-          if (totalDirty > 0) {
-            handleGoToCommitHistoricalIteration()
-            return
-          }
-          // 工作区真的干净：进入历史迭代弹框。
-          setHistoricalIterationSource(sourceBranchName)
-          // 预填基于起点版本自增的建议版本号（跳过已有分支重名），用户可直接采用或修改。
-          const existingNames = (workspaceApplication.branches || [])
-            .map((branch) => branch?.name || '')
-            .filter(Boolean)
-          setHistoricalIterationBranchName(suggestNextBranchName(sourceBranchName, existingNames))
-          setHistoricalIterationDirtyChoice('discard')
-          setHistoricalIterationUncommittedCount(0)
-        })
-        .catch((error) => {
-          console.warn('读取未提交改动数失败。', error)
-          message.error('无法检查工作区状态，请稍后再试。')
-        })
-    },
-    [
-      workspaceApplication.workspaceRoot,
-      workspaceApplication.branches,
-      handleGoToCommitHistoricalIteration
-    ]
-  )
-
   // 确认「基于此版本迭代」：在工作区干净（无未提交改动，或用户选了 discard）时
   // 以历史分支为起点创建新分支，清空规划产物，重置 lifecycle，把新分支写盘。
   // 与 handleConfirmIteration 的关键差异：起点不是当前 HEAD，而是历史分支的 HEAD。
@@ -843,6 +876,9 @@ function WorkbenchPage({
       setViewingBranchName('')
       autoPublishShownRef.current = false
       setSwitchingTargetLabel(undefined)
+      // 历史迭代已完成：清掉「基于此版本迭代」的暂存起点（防御性兜底，
+      // 正常路径下暂存已在 handleGenerateVersion 提交成功时被消费）。
+      setPendingHistoricalIterationSource('')
       message.success(
         branchCreationFailed
           ? `已基于版本 ${sourceBranchName} 创建新版本 ${targetBranchName}，但未提交到远端。`
@@ -984,6 +1020,9 @@ function WorkbenchPage({
               onCancelPublish={() => {
                 if (versionGenerating) return
                 setPublishModalOpen(false)
+                // 用户主动取消提交：清掉「基于此版本迭代」的暂存起点，
+                // 否则后续其他提交动作完成后会错误地自动打开历史迭代弹框。
+                setPendingHistoricalIterationSource('')
               }}
               onGenerate={handleGenerateVersion}
               iterationModalOpen={iterationModalOpen}
