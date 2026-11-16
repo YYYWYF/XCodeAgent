@@ -25,9 +25,9 @@ test('Attach/Get 永不返回时按时退出、释放共享查询，重新同步
   const savedTimeout = globalThis.setTimeout
   Object.defineProperty(globalThis, 'window', { configurable: true,
     value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
-  // 只加速生产的 20 秒查询定时器，保留 AG-UI 自身调度行为。
+  // 只加速生产的 60 秒查询定时器，保留 AG-UI 自身调度行为。
   globalThis.setTimeout = ((handler, delay, ...args) =>
-    savedTimeout(handler, delay === 20_000 ? 0 : delay, ...args)) as typeof globalThis.setTimeout
+    savedTimeout(handler, delay === 60_000 ? 0 : delay, ...args)) as typeof globalThis.setTimeout
   try {
     for (const blockedAction of ['workspace_attach', 'get']) {
       const application = { id: `timeout-${blockedAction}`, workspaceRoot: `/tmp/timeout-${blockedAction}` }

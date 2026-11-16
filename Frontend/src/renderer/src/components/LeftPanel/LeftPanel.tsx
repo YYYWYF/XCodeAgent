@@ -73,6 +73,7 @@ type Props = {
   ) => Promise<RequirementSpecDraftSaveResult>
   onStopPlanning: () => Promise<void>
   onSessionHistoryReadyChange: (ready: boolean, error?: string) => void
+  onSessionStatusReadyChange: (ready: boolean, error?: string) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试设计阶段规划任务。 */
@@ -121,6 +122,7 @@ export default function LeftPanel({
   onSavePlanningRequirementSpec,
   onStopPlanning,
   onSessionHistoryReadyChange,
+  onSessionStatusReadyChange,
   generatingTemplate,
   onRetryPlanning,
   onReconcilePlanning,
@@ -163,6 +165,7 @@ export default function LeftPanel({
             onSavePlanningRequirementSpec={onSavePlanningRequirementSpec}
             onStopPlanning={onStopPlanning}
             onSessionHistoryReadyChange={onSessionHistoryReadyChange}
+            onSessionStatusReadyChange={onSessionStatusReadyChange}
             generatingTemplate={generatingTemplate}
             onRetryPlanning={onRetryPlanning}
             onReconcilePlanning={onReconcilePlanning}

@@ -14,16 +14,28 @@ const MIN_VISIBLE_MS = 520
 const FADE_MS = 280
 
 // 集中管理入口加载、业务失败提示和整体超时，后续刷新不重新触发入口门禁。
-export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
+export function useWorkbenchEntry(onEntryLoadFailure: () => void): {
+  entryStage: WorkbenchEntryStage
+  developmentPlanningPagesLoaded: boolean
+  failWorkbenchEntry: (reason: WorkbenchEntryFailure) => void
+  markConfigurationLoaded: () => void
+  markPlanningArtifactsLoaded: () => void
+  handleSessionHistoryReadyChange: (ready: boolean, error?: string) => void
+  handleSessionStatusReadyChange: (ready: boolean, error?: string) => void
+} {
   const [entryStage, setEntryStage] = useState<WorkbenchEntryStage>('loading')
   const [configurationLoaded, setConfigurationLoaded] = useState(false)
   const [developmentPlanningPagesLoaded, setPlanningLoaded] = useState(false)
   const [chatSessionHistoryReady, setHistoryReady] = useState(false)
+  const [sessionStatusReady, setSessionStatusReady] = useState(false)
   const startedAtRef = useRef(Date.now())
   const stageRef = useRef<WorkbenchEntryStage>('loading')
   const failedRef = useRef(false)
   const progressRef = useRef<WorkbenchEntryProgress>({
-    configuration: false, planning: false, sessionHistory: false
+    configuration: false,
+    planning: false,
+    sessionHistory: false,
+    sessionState: false
   })
 
   // 首个入口错误只处理一次；具体技术原因由调用方记录在日志中。
@@ -61,6 +73,19 @@ export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
     }
   }, [failWorkbenchEntry])
 
+  // 当前会话的服务端状态读取成功后才放行，读取失败不能把旧历史当作当前事实。
+  const handleSessionStatusReadyChange = useCallback(
+    (ready: boolean, error?: string): void => {
+      progressRef.current.sessionState = ready
+      setSessionStatusReady(ready)
+      if (error) {
+        console.warn('工作台入口读取当前会话状态失败。', error)
+        failWorkbenchEntry('session_state')
+      }
+    },
+    [failWorkbenchEntry]
+  )
+
   useEffect(() => {
     if (entryStage !== 'loading') return
     const timer = window.setTimeout(() => {
@@ -70,7 +95,14 @@ export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
   }, [entryStage, failWithMessage])
 
   useEffect(() => {
-    if (!configurationLoaded || !developmentPlanningPagesLoaded || !chatSessionHistoryReady || entryStage !== 'loading') return
+    if (
+      !configurationLoaded ||
+      !developmentPlanningPagesLoaded ||
+      !chatSessionHistoryReady ||
+      !sessionStatusReady ||
+      entryStage !== 'loading'
+    )
+      return
     const remaining = Math.max(0, MIN_VISIBLE_MS - (Date.now() - startedAtRef.current))
     const timer = window.setTimeout(() => {
       if (failedRef.current) return
@@ -78,7 +110,13 @@ export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
       setEntryStage('leaving')
     }, remaining)
     return () => window.clearTimeout(timer)
-  }, [configurationLoaded, developmentPlanningPagesLoaded, chatSessionHistoryReady, entryStage])
+  }, [
+    configurationLoaded,
+    developmentPlanningPagesLoaded,
+    chatSessionHistoryReady,
+    sessionStatusReady,
+    entryStage
+  ])
 
   useEffect(() => {
     if (entryStage !== 'leaving') return
@@ -95,6 +133,7 @@ export function useWorkbenchEntry(onEntryLoadFailure: () => void) {
     failWorkbenchEntry,
     markConfigurationLoaded,
     markPlanningArtifactsLoaded,
-    handleSessionHistoryReadyChange
+    handleSessionHistoryReadyChange,
+    handleSessionStatusReadyChange
   }
 }

@@ -3,6 +3,7 @@ import { enqueueBuildTaskRetry, getBuildTaskRetryUrl, type BuildTaskRetryRequest
 import { mergeBuildRetrySteps } from '../buildTaskRetryPresentation'
 import { runBuildTaskRepairAction, getBuildTaskRepairUrl, type BuildTaskRepairRequest, type RepairTaskAction } from '../../../service/buildTaskRepair'
 import { useEffect, useRef, useState } from 'react'
+import { useSessionStatusReadiness } from './useSessionStatusReadiness'
 import type { WorkbenchRunRefreshConnection } from './useWorkbenchRunRefresh'
 import { backendRequestErrorMessage, isBackendTransportError } from '../../../service/backendRequestFailure'
 import type { MutableRefObject, SetStateAction } from 'react'
@@ -295,6 +296,8 @@ type UseWorkflowConversationResult = {
   activeWorkflow?: WorkflowRunPayload
   connectionState: ConnectionState
   lifecycleSyncError?: string
+  sessionStatusReady: boolean
+  sessionStatusError?: string
   workbenchRefreshConnection: WorkbenchRunRefreshConnection
   conversationRunning: boolean
   error?: string
@@ -735,6 +738,7 @@ export function useWorkflowConversation({
     initialConnectionState(Boolean(applicationLifecycle))
   )
   const [lifecycleSyncError, setLifecycleSyncError] = useState<string>()
+  const sessionStatus = useSessionStatusReadiness(activeSession?.key)
   const connectionRequestGenerationRef = useRef(0)
   const applicationLifecycleRef = useRef(applicationLifecycle)
   const connectionStateRef = useRef(connectionState)
@@ -1090,8 +1094,12 @@ export function useWorkflowConversation({
         const restored = mergeWorkbenchResult(currentMessages, lifecycle, resultSession)
         if (restored !== currentMessages) {
           setSessionMessages(sessionKey, restored)
-          await persistSession({ editorMode: resultSession.editorMode, messages: restored,
-            sessionId: resultSession.sessionId, threadId: resultSession.threadId })
+          try {
+            await persistSession({ editorMode: resultSession.editorMode, messages: restored,
+              sessionId: resultSession.sessionId, threadId: resultSession.threadId })
+          } catch {
+            // 恢复结果已用于当前展示，历史保存失败静默处理，不能误判为状态读取失败。
+          }
           if (!isCurrent()) return false
           setErrors((current) => ({ ...current, [sessionKey]: undefined }))
           setRecoveryErrorForSession(sessionKey)
@@ -1099,12 +1107,14 @@ export function useWorkflowConversation({
       }
       const projectionError = executionRecoveryReadError(lifecycle)
       if (projectionError) {
+        sessionStatus.settle(projectionError)
         if (resultSession) {
           recoveryReadErrorsRef.current[sessionKey] = projectionError
           setRecoveryErrorForSession(sessionKey, projectionError)
         }
         return false
       }
+      sessionStatus.settle()
       // 读取恢复正常即撤下本次会话的旧读取错误，不依赖聊天输出变化，也不清除其他操作失败。
       const previousReadError = recoveryReadErrorsRef.current[sessionKey]
       if (previousReadError) {
@@ -1115,6 +1125,7 @@ export function useWorkflowConversation({
       return true
     } catch (error) {
       if (!isCurrent()) return false
+      sessionStatus.settle(backendRequestErrorMessage(error, '暂时无法同步当前会话状态。'))
       // 已知业务、超时及本地处理失败沿独立同步入口展示，不能覆盖为 Backend 断线。
       if (!isBackendTransportError(error)) {
         connectionStateRef.current = completeConnectionRequest(connectionStateRef.current, requestGeneration)
@@ -2799,6 +2810,8 @@ export function useWorkflowConversation({
     activeWorkflow,
     connectionState,
     lifecycleSyncError,
+    sessionStatusReady: sessionStatus.ready,
+    sessionStatusError: sessionStatus.error,
     workbenchRefreshConnection,
     conversationRunning,
     error,

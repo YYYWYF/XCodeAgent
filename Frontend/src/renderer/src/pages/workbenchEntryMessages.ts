@@ -3,6 +3,7 @@ export type WorkbenchEntryFailure =
   | 'configuration'
   | 'planning'
   | 'session_history'
+  | 'session_state'
   | 'session_missing'
   | 'unknown'
 
@@ -13,6 +14,7 @@ const messages: Record<WorkbenchEntryFailure, string> = {
   configuration: '无法读取应用配置，请确认项目文件完整后重试。',
   planning: '无法加载应用的规划内容，请重新打开应用；若仍失败，请检查项目文件是否完整。',
   session_history: '无法恢复历史对话，请重新打开应用后重试。',
+  session_state: '无法读取当前会话状态，请稍后重新进入工作台。',
   session_missing: '要恢复的对话已不存在，请重新打开应用并选择其他对话。',
   unknown: '工作台暂时无法打开，请稍后重试。'
 }
@@ -33,6 +35,7 @@ export type WorkbenchEntryProgress = {
   configuration: boolean
   planning: boolean
   sessionHistory: boolean
+  sessionState: boolean
 }
 
 // 根据真实未完成的入口步骤解释超时，不推测网络或文件损坏等根因。
@@ -40,7 +43,8 @@ export function workbenchEntryTimeoutMessage(progress: WorkbenchEntryProgress): 
   const pending = [
     !progress.configuration && '应用配置',
     !progress.planning && '规划内容',
-    !progress.sessionHistory && '历史对话'
+    !progress.sessionHistory && '历史对话',
+    !progress.sessionState && '当前会话状态'
   ].filter(Boolean)
   return pending.length
     ? `进入工作台已等待超过 60 秒，${pending.join('、')}仍未加载完成，请稍后重试。`

@@ -79,7 +79,7 @@ test('入口等待满 60 秒才失败，超时准确列出尚未完成的资源'
     assert.equal(failures(), 0)
     advance(1)
     assert.equal(failures(), 1)
-    assert.match(notices[0], /规划内容、历史对话仍未加载完成/)
+    assert.match(notices[0], /规划内容、历史对话、当前会话状态仍未加载完成/)
     assert.ok(!notices[0].includes('应用配置'))
     assert.ok(!notices[0].includes('已返回首页'))
   })
@@ -87,7 +87,10 @@ test('入口等待满 60 秒才失败，超时准确列出尚未完成的资源'
 
 test('已完成规划检查后仅历史对话未完成时，超时不误报规划内容', () => {
   withEntry(({ current, advance, notices }) => {
-    act(() => { current().markConfigurationLoaded(); current().markPlanningArtifactsLoaded() })
+    act(() => {
+      current().markConfigurationLoaded(); current().markPlanningArtifactsLoaded()
+      current().handleSessionStatusReadyChange(true)
+    })
     advance(60_000)
     assert.match(notices[0], /历史对话仍未加载完成/)
     assert.ok(!notices[0].includes('规划内容'))
@@ -100,6 +103,7 @@ test('全部加载完成后保留淡出动画，后续错误与超时不再触�
       current().markConfigurationLoaded()
       current().markPlanningArtifactsLoaded()
       current().handleSessionHistoryReadyChange(true)
+      current().handleSessionStatusReadyChange(true)
     })
     advance(519)
     assert.equal(current().entryStage, 'loading')
@@ -116,7 +120,10 @@ test('全部加载完成后保留淡出动画，后续错误与超时不再触�
 /** 配置和目录并行读取后，不能因目录先返回就提前结束整体入口门禁。 */
 test('目录与历史已返回但配置未完成时继续等待配置', () => {
   withEntry(({ current, advance }) => {
-    act(() => { current().markPlanningArtifactsLoaded(); current().handleSessionHistoryReadyChange(true) })
+    act(() => {
+      current().markPlanningArtifactsLoaded(); current().handleSessionHistoryReadyChange(true)
+      current().handleSessionStatusReadyChange(true)
+    })
     advance(800)
     assert.equal(current().entryStage, 'loading')
     act(() => current().markConfigurationLoaded())
@@ -150,7 +157,7 @@ test('目标会话不存在时使用对应业务提示', () => {
 
 test('入口全部失败类别都只显示业务原因和建议', () => {
   const reasons: WorkbenchEntryFailure[] = [
-    'workspace_missing', 'configuration', 'planning', 'session_history', 'session_missing', 'unknown'
+    'workspace_missing', 'configuration', 'planning', 'session_history', 'session_state', 'session_missing', 'unknown'
   ]
   for (const reason of reasons) {
     withEntry(({ current, notices, failures }) => {
@@ -160,4 +167,43 @@ test('入口全部失败类别都只显示业务原因和建议', () => {
       assert.doesNotMatch(notices[0], /已返回首页|JSON|IPC|Error|\.json/)
     })
   }
+})
+
+/** 历史先返回不代表当前运行状态已读，入口必须继续遮挡旧选择卡。 */
+test('配置、规划和历史就绪后仍等待当前会话状态，成功才淡出', () => {
+  withEntry(({ current, advance, failures }) => {
+    act(() => {
+      current().markConfigurationLoaded()
+      current().markPlanningArtifactsLoaded()
+      current().handleSessionHistoryReadyChange(true)
+    })
+    advance(5_000)
+    assert.equal(current().entryStage, 'loading')
+    act(() => current().handleSessionStatusReadyChange(true))
+    advance(280)
+    assert.equal(current().entryStage, 'ready')
+    assert.equal(failures(), 0)
+  })
+})
+
+/** 状态读取失败或一直未返回都不能放行历史快照。 */
+test('当前状态超时与失败给出明确提示，不泄露底层异常', () => {
+  withEntry(({ current, advance, notices }) => {
+    act(() => {
+      current().markConfigurationLoaded()
+      current().markPlanningArtifactsLoaded()
+      current().handleSessionHistoryReadyChange(true)
+    })
+    advance(60_000)
+    assert.match(notices[0], /当前会话状态仍未加载完成/)
+    assert.doesNotMatch(notices[0], /历史对话/)
+  })
+  withEntry(({ current, advance, notices, failures }) => {
+    act(() => current().handleSessionStatusReadyChange(false, 'Error: private checkpoint path'))
+    act(() => current().handleSessionStatusReadyChange(true))
+    advance(1_000)
+    assert.equal(current().entryStage, 'loading')
+    assert.equal(failures(), 1)
+    assert.deepEqual(notices, ['无法读取当前会话状态，请稍后重新进入工作台。'])
+  })
 })

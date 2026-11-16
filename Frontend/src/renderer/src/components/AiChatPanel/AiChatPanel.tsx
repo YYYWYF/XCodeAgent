@@ -429,6 +429,7 @@ type Props = {
   ) => Promise<RequirementSpecDraftSaveResult>
   onStopPlanning: () => Promise<void>
   onSessionHistoryReadyChange: (ready: boolean, error?: string) => void
+  onSessionStatusReadyChange: (ready: boolean, error?: string) => void
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试规划 Graph。 */
@@ -889,6 +890,7 @@ export default function AiChatPanel({
   onSavePlanningRequirementSpec,
   onStopPlanning,
   onSessionHistoryReadyChange,
+  onSessionStatusReadyChange,
   generatingTemplate,
   onRetryPlanning,
   onReconcilePlanning,
@@ -2503,6 +2505,8 @@ export default function AiChatPanel({
     conversationRunning,
     connectionState,
     lifecycleSyncError,
+    sessionStatusReady,
+    sessionStatusError,
     workbenchRefreshConnection,
     error,
     handleAcceptPreview,
@@ -2613,7 +2617,7 @@ export default function AiChatPanel({
   // 只跟进脱离本地流的运行中任务；任务结束即停止轮询，点击继续时再校验工作区资格。
   useWorkbenchRunRefresh(
     application,
-    !localWorkflowLoading && restoredRunRunning ? ownedExecution?.runId : undefined,
+    sessionStatusReady && !localWorkflowLoading && restoredRunRunning ? ownedExecution?.runId : undefined,
     onApplicationLifecycleChange,
     workbenchRefreshConnection
   )
@@ -3358,6 +3362,11 @@ export default function AiChatPanel({
   useEffect(() => {
     onSessionHistoryReadyChange(!loadingSessions && !sessionError, sessionError)
   }, [loadingSessions, onSessionHistoryReadyChange, sessionError])
+
+  // 历史加载完成与当前会话状态同步是独立步骤，空会话不需要额外读取。
+  useEffect(() => {
+    onSessionStatusReadyChange(!loadingSessions && sessionStatusReady, sessionStatusError)
+  }, [loadingSessions, sessionStatusReady, sessionStatusError, onSessionStatusReadyChange])
 
   useEffect(() => {
     // 浏览阶段只加载最近会话；仅当前业务阶段接收新的规划事件，不把上游事件写入历史计划。

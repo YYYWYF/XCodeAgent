@@ -36,7 +36,7 @@ type ApplicationLifecyclePayload = {
 
 /** 工作区尚未建立生命周期状态：后端以 ApplicationLifecycleMissingError 单独标识，可幂等补建。 */
 const MISSING_LIFECYCLE_ERROR_TYPE = 'ApplicationLifecycleMissingError'
-const LIFECYCLE_STATUS_REQUEST_TIMEOUT_MS = 20_000
+const LIFECYCLE_STATUS_REQUEST_TIMEOUT_MS = 60_000
 
 /** Bootstrap 动作的结果：权威 lifecycle + 非致命的远端分支推送结果。 */
 export type ApplicationTemplateBootstrapResult = {

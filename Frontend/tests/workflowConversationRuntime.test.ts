@@ -76,11 +76,15 @@ test('无生命周期冷启动收口连接：业务失败展示真实错误，�
     await act(async () => { root = create(createElement(Probe)) })
     assert.equal(runtime.connectionState.status, 'healthy')
     assert.equal(runtime.lifecycleSyncError, '生命周期状态文件未通过 schema 校验。')
+    assert.equal(runtime.sessionStatusReady, false)
+    assert.equal(runtime.sessionStatusError, '生命周期状态文件未通过 schema 校验。')
     assert.deepEqual(actions, ['workspace_attach'])
     failed = false
     await act(async () => { assert.equal(await runtime.refreshExecutionRecoveryLifecycle(), true) })
     assert.equal(runtime.connectionState.status, 'healthy')
     assert.equal(runtime.lifecycleSyncError, undefined)
+    assert.equal(runtime.sessionStatusReady, true)
+    assert.equal(runtime.sessionStatusError, undefined)
     assert.deepEqual(actions, ['workspace_attach', 'workspace_attach', 'workspace_attach'])
     // 真正的网络失败仍走连接提示，不能被业务错误分类吞掉。
     globalThis.fetch = async () => { throw new TypeError('Failed to fetch') }
@@ -91,6 +95,70 @@ test('无生命周期冷启动收口连接：业务失败展示真实错误，�
     await act(async () => { root?.unmount() })
     globalThis.fetch = savedFetch
     Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+  }
+})
+
+/** 通过真实 AG-UI 读取延迟重现反复进入和切换会话，旧请求不能提前放行新会话。 */
+test('冷重入先等 scoped 状态返回，迟到旧会话回执不能标记新会话就绪', async () => {
+  const savedFetch = globalThis.fetch
+  const savedWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }) })
+  workspaceRecoveryAttachments.invalidate()
+  const first = buildSessionIdentity()
+  const second = buildSessionIdentity('second-session', 'second-thread')
+  const waiting = new Map<string, () => void>()
+  const params = buildRuntimeParams({ activeSession: first,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: buildIdleLifecycle(), agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined })
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  let root: ReactTestRenderer | undefined
+  /** 重渲染真实 Hook，确保 session key 改变时立即撤下上一会话的就绪事实。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (_input, init) => {
+    const request = JSON.parse(String(init?.body))
+    const sessionId = request.forwardedProps.applicationLifecycle.sessionId
+    if (sessionId) await new Promise<void>((resolve) => { waiting.set(sessionId, resolve) })
+    return sseResponse(request.threadId, request.runId, { applicationLifecycle: buildIdleLifecycle() })
+  }
+  try {
+    await act(async () => { root = create(createElement(Probe)) })
+    assert.ok(waiting.has(first.sessionId))
+    assert.equal(runtime.sessionStatusReady, false, '缓存 lifecycle 和历史均不代表 scoped 读取完成')
+    params.activeSession = second
+    params.draftKey = second.key
+    await act(async () => { root!.update(createElement(Probe)) })
+    assert.equal(runtime.sessionStatusReady, false)
+    assert.ok(waiting.has(second.sessionId))
+    await act(async () => { waiting.get(first.sessionId)!() })
+    assert.equal(runtime.sessionStatusReady, false, '第一会话的迟到回执不能放行第二会话')
+    await act(async () => { waiting.get(second.sessionId)!() })
+    assert.equal(runtime.sessionStatusReady, true)
+    params.activeSession = first
+    params.draftKey = first.key
+    await act(async () => { root!.update(createElement(Probe)) })
+    assert.equal(runtime.sessionStatusReady, false)
+    params.activeSession = second
+    params.draftKey = second.key
+    await act(async () => { root!.update(createElement(Probe)) })
+    assert.equal(runtime.sessionStatusReady, false, '快速切回已读过的会话也必须等本次读取')
+    await act(async () => { waiting.get(first.sessionId)!() })
+    assert.equal(runtime.sessionStatusReady, false)
+    await act(async () => { waiting.get(second.sessionId)!() })
+    assert.equal(runtime.sessionStatusReady, true)
+    await act(async () => { root!.unmount() })
+    waiting.clear()
+    await act(async () => { root = create(createElement(Probe)) })
+    assert.equal(runtime.sessionStatusReady, false, '再次进入必须重新读取，不能复用上次就绪标记')
+    await act(async () => { waiting.get(second.sessionId)!() })
+    assert.equal(runtime.sessionStatusReady, true)
+  } finally {
+    await act(async () => { root?.unmount() })
+    globalThis.fetch = savedFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: savedWindow })
+    workspaceRecoveryAttachments.invalidate()
   }
 })
 
@@ -323,6 +391,65 @@ test('断连续接完成后 scoped Get 恢复并保存页面选择，重新挂�
     await act(async () => { root?.unmount() })
     globalThis.fetch = oldFetch
     Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow })
+  }
+})
+
+/** 恢复结果写入历史失败仍可进入；再次打开从后端重读，不依赖上次保存成功。 */
+test('恢复会话保存失败静默处理，重新挂载仍读取当前状态', async () => {
+  const oldFetch = globalThis.fetch
+  const oldWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: Object.assign(new EventTarget(), { devAgentStudio: { agentBaseUrl: 'http://agent.test' } }) })
+  workspaceRecoveryAttachments.invalidate()
+  const identity = buildSessionIdentity()
+  const workflow = { runId: 'unsaved-selection', threadId: identity.threadId, events: [],
+    summary: { status: 'completed', phase: 'api_design_readiness_gate',
+      clarification: { mode: 'development_target_selection', message: '请选择开发目标。' } }
+  } as WorkflowRunPayload
+  const lifecycle = buildIdleLifecycle()
+  lifecycle.extensions.workbenchResult = { runId: workflow.runId, threadId: identity.threadId,
+    ownerSessionId: identity.sessionId, startedAt: '2026-11-03T00:00:01Z', workflow }
+  let messages: AgentChatMessage[] = []
+  let saves = 0
+  let reads = 0
+  let root: ReactTestRenderer | undefined
+  let runtime!: ReturnType<typeof useWorkflowConversation>
+  const params = buildRuntimeParams({ activeSession: identity,
+    application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+    applicationLifecycle: lifecycle, agUiSessionsRef: { current: {} },
+    acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+    onApplicationLifecycleChange: () => undefined,
+    persistSession: async () => { saves++; throw new Error('历史文件暂时不可写') } })
+  params.getSessionMessages = () => messages
+  params.setSessionMessages = (_key, value) => { messages = typeof value === 'function' ? value(messages) : value }
+  /** 执行生产挂载读取与保存路径，校验失败不会污染入口就绪或连接状态。 */
+  function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+  globalThis.fetch = async (_input, init) => {
+    reads++
+    const request = JSON.parse(String(init?.body))
+    return sseResponse(request.threadId, request.runId, { applicationLifecycle: lifecycle })
+  }
+  try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      messages = []
+      const previousReads = reads
+      await act(async () => { root = create(createElement(Probe)) })
+      assert.ok(reads > previousReads, '再次进入必须实际读取，不能复用上次就绪状态')
+      assert.equal(saves, attempt)
+      assert.equal(messages.at(-1)?.workflow?.runId, workflow.runId)
+      assert.equal(runtime.sessionStatusReady, true)
+      assert.equal(runtime.sessionStatusError, undefined)
+      assert.equal(runtime.lifecycleSyncError, undefined)
+      assert.equal(runtime.recoveryError, undefined)
+      assert.equal(runtime.connectionState.status, 'healthy')
+      await act(async () => { root?.unmount() })
+      root = undefined
+    }
+  } finally {
+    await act(async () => { root?.unmount() })
+    globalThis.fetch = oldFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: oldWindow })
+    workspaceRecoveryAttachments.invalidate()
   }
 })
 

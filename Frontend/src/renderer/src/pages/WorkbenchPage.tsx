@@ -198,7 +198,8 @@ function WorkbenchPage({
     failWorkbenchEntry,
     markConfigurationLoaded,
     markPlanningArtifactsLoaded,
-    handleSessionHistoryReadyChange
+    handleSessionHistoryReadyChange,
+    handleSessionStatusReadyChange
   } = useWorkbenchEntry(onEntryLoadFailure)
   const [planningRefreshRevision, setPlanningRefreshRevision] = useState(0)
   // —— 应用分支（提交并推送/发起新迭代/切换分支）状态 ——
@@ -949,6 +950,7 @@ function WorkbenchPage({
                   onSavePlanningRequirementSpec={onSavePlanningRequirementSpec}
                   onStopPlanning={onStopPlanning}
                   onSessionHistoryReadyChange={handleSessionHistoryReadyChange}
+                  onSessionStatusReadyChange={handleSessionStatusReadyChange}
                   generatingTemplate={generatingTemplate}
                   onRetryPlanning={onRetryPlanning}
                   onReconcilePlanning={onReconcilePlanning}
@@ -1019,7 +1021,7 @@ function WorkbenchPage({
             </div>
             <div className={cx('workbench-entry-kicker')}>DevAgent Studio WORKSPACE</div>
             <h1>正在进入工作台</h1>
-            <p>正在同步项目配置、页面设计与历史会话</p>
+            <p>正在同步项目配置、页面设计、历史会话与当前任务状态</p>
             <div className={cx('workbench-entry-progress')} aria-hidden="true">
               <span />
               <span />
