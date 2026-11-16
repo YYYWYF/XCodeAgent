@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
+from secrets import token_hex
 
 from app.services.builtin_authorization_task_store import task_transaction
 
@@ -14,11 +15,13 @@ from app.services.builtin_authorization_seed import (
     seed_request_fingerprint, validate_seed_transport,
 )
 from app.services.builtin_authorization_seed_client import SeedDetail, SeedRemoteError
-from app.services.builtin_authorization_state import builtin_binding, builtin_lock, save_state, schema_ready, verified_seed
+from app.services.builtin_authorization_state import (
+    builtin_binding, builtin_lock, save_state, schema_ready, seed_attempt_matches, verified_seed,
+)
 from app.services.managed_database_client import ManagedDatabaseClient
 
 _SUBMIT_REJECTIONS = {
-    "seed_idempotency_conflict", "seed_resource_busy",
+    "seed_idempotency_conflict", "seed_resource_busy", "seed_table_binding_conflict",
     *(f"seed_http_{code}" for code in (400, 401, 403, 404, 409, 413, 422, 429)),
 }
 
@@ -80,6 +83,7 @@ def _save_detail(root: Path, record: dict, seed: dict, binding: dict,
     ready = detail.status == "SUCCEEDED"
     if (detail.datasourceKey != key or detail.requestFingerprint != seed_request_fingerprint(key, request)
             or set(detail.tableNames) != set(tables)
+            or detail.operationId == seed.get("retryOfOperationId")
             or seed.get("operationId", detail.operationId) != detail.operationId):
         raise SeedRemoteError("seed_operation_identity_mismatch")
     if (detail.verified != ready or (ready and (total != row_count or detail.errorCode is not None))
@@ -104,8 +108,9 @@ def _save_detail(root: Path, record: dict, seed: dict, binding: dict,
 
 def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], technical_plan: dict | None = None,
                                    *, client: ManagedDatabaseClient | None = None,
-                                   refresh_id: str | None = None, query_only: bool = False) -> dict:
-    """在调用方锁内协调原操作，明确查无记录时按原键和原载荷幂等提交。"""
+                                   refresh_id: str | None = None, query_only: bool = False,
+                                   explicit_recovery: bool = False) -> dict:
+    """协调当前尝试，用户重试且 GET 确认 FAILED 时才更换尝试身份。"""
 
     stage = "seed_input_invalid"
     seed = record.get("seed")
@@ -126,7 +131,7 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
                     raise SeedRemoteError("seed_input_changed")
                 return _summary(record, tables, "权限数据输入已变化，请人工核对增量初始化，原操作保持不变。",
                                 failure="seed_input_changed")
-            if seed["idempotencyKey"] != identity["idempotencyKey"] or seed.get("status") not in {
+            if not seed_attempt_matches(seed, compiled) or seed.get("status") not in {
                 "submitting", "running", "succeeded", "unknown", "failed", "seed_ready"
             }:
                 raise ValueError("本地 Seed 操作身份无效。")
@@ -136,12 +141,15 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
             if refresh_id is None and verified_seed(seed, compiled):
                 return _summary(record, tables, "权限表和权限数据已就绪，复用原核验结果。",
                                 status="reused", ready=True, next_action="none")
+            identity["idempotencyKey"] = seed["idempotencyKey"]
 
         if refresh_id is not None and (not seed or seed.get("operationId") != refresh_id):
             raise SeedRemoteError("seed_invalid_identity")
 
-        request = compiled["request"]
-        validate_seed_transport(request, datasource_key=key)
+        request = {**compiled["request"], "idempotencyKey": identity["idempotencyKey"]}
+        if seed and "retryOfOperationId" in seed:
+            request["retryOfOperationId"] = seed["retryOfOperationId"]
+        validate_seed_transport(request)
         stage = "seed_client_configuration"
         remote = client or ManagedDatabaseClient(Settings.from_env())
         stage = "seed_query_unconfirmed"
@@ -156,8 +164,22 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
             _verify_current(root, record, binding, plan, compiled)
         if detail is not None:
             stage = "seed_state_write_failed"
-            return _save_detail(root, record, seed or identity, binding, compiled, detail)
-        if read_only:
+            result = _save_detail(root, record, seed or identity, binding, compiled, detail)
+            if not (seed and explicit_recovery and not read_only and detail.status == "FAILED"):
+                return result
+            # 保存已核验的旧失败事实，再为这一次点击分配新的尝试身份。
+            record = read_record(root, "state.json")
+            failed_attempt = {"operationId": detail.operationId, "idempotencyKey": identity["idempotencyKey"],
+                              "errorCode": detail.errorCode}
+            identity["idempotencyKey"] = token_hex(32)
+            seed = {"retryOfOperationId": detail.operationId,
+                    "failedAttempts": [*seed.get("failedAttempts", []), failed_attempt]}
+            request.update(idempotencyKey=identity["idempotencyKey"], retryOfOperationId=detail.operationId)
+            validate_seed_transport(request)
+            operation_id = None
+        elif (read_only or seed and seed.get("operationStatus") == "FAILED"
+              or operation_id is not None and (explicit_recovery or "retryOfOperationId" in seed)):
+            # 已有受理编号的手工重试仅核对原操作；查无记录不能证明原写入未发生。
             return _summary(record, tables, "未查到原权限数据操作，请重试初始化以按原幂等键协调。",
                             next_action="lookup_seed", failure="seed_operation_not_found")
         # 本地 submitting/unknown 仅记录进度；SaaS 在资源锁和唯一键下保证同键同载荷只执行一次。
@@ -173,7 +195,8 @@ def run_builtin_authorization_seed(root: Path, record: dict, tables: list[str], 
         stage = "seed_submit_unconfirmed"
         try:
             receipt = remote.submit_authorization_seed(key, request)
-            if operation_id is not None and receipt.operationId != operation_id:
+            if (receipt.operationId == marker.get("retryOfOperationId")
+                    or operation_id is not None and receipt.operationId != operation_id):
                 raise SeedRemoteError("seed_operation_identity_mismatch")
         except SeedRemoteError as error:
             _verify_current(root, record, binding, plan, compiled)

@@ -7,27 +7,31 @@ import { useBuiltinAuthorizationTask } from '../src/renderer/src/components/AiCh
 import BuiltinAuthorizationTaskCard from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/BuiltinAuthorizationTaskCard'
 import { authorizationTaskWorkflowResult, runBuiltinPatch, type BuiltinPatchResult } from '../src/renderer/src/service/builtinAuthorization'
 
-test('重试按钮以后端信号启用，UNKNOWN 与输入变化不能绕过保护', () => {
+test('重试按钮按失败状态启用，运行中、就绪和已取消各自保留限制', () => {
   const task: BuiltinPatchResult = { status: 'needs_attention', stage: 'seed', schemaReady: true,
     seedReady: false, message: '请人工核对', failureCategory: 'inputs_changed' }
-  const blocked = renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, { task, workspace: '/workspace' }))
-  assert.match(blocked, /待处理|inputs_changed/)
-  assert.match(blocked, />刷新状态</)
-  const blockedRetry = blocked.match(/<button\b[^>]*title="当前状态不能安全重试[^>]*>/)?.[0]
-  assert.ok(blockedRetry)
-  assert.match(blockedRetry, /disabled=""/)
-  const recoverable = renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, {
-    task: { ...task, failureCategory: 'timeout', nextAction: 'resume' }, workspace: '/workspace'
-  }))
-  assert.match(recoverable, />重\s*试</)
-  const retryable = renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, {
-    task: { ...task, failureCategory: 'seed_invalid_response', nextAction: 'retry' }, workspace: '/workspace'
-  }))
-  assert.match(retryable, /title="恢复初始化，保留原操作并避免重复提交"/)
-  assert.doesNotMatch(retryable, /disabled=""/)
+  const label = '重新请求当前失败阶段，由服务端处理重复数据及冲突'
+  const button = new RegExp(`<button[^>]*title="${label}"[^>]*>`)
+  /** 使用真实卡片渲染，工作区缺失时不提供操作入口。 */
+  function markup(current: BuiltinPatchResult, workspace?: string, disabled?: boolean): string {
+    return renderToStaticMarkup(createElement(BuiltinAuthorizationTaskCard, { task: current, workspace, disabled }))
+  }
+  for (const status of ['needs_attention', 'failed'] as const) {
+    const rendered = markup({ ...task, status }, '/workspace')
+    assert.match(rendered, />刷新状态</)
+    assert.ok(rendered.match(button))
+    assert.doesNotMatch(rendered.match(button)![0], /disabled=""/)
+  }
+  for (const status of ['pending', 'waiting', 'running', 'ready'] as const) {
+    const rendered = markup({ ...task, status, seedReady: status === 'ready' }, '/workspace')
+    assert.doesNotMatch(rendered, button)
+  }
+  assert.match(markup({ ...task, status: 'cancelled' }, '/workspace').match(button)![0], /disabled=""/)
+  assert.match(markup(task, '/workspace', true).match(button)![0], /disabled=""/)
+  assert.doesNotMatch(markup(task), button)
 })
 
-test('显式重试通过官方 AG-UI 客户端发送 retry，并保留后端重试资格', async () => {
+test('显式重试通过官方 AG-UI 客户端发送 retry，并投影服务端状态', async () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const originalFetch = globalThis.fetch
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { devAgentStudio: { agentBaseUrl: 'http://authorization.test' } } })

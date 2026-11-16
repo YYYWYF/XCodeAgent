@@ -64,6 +64,18 @@ def save_state(root: Path, record: dict) -> None:
     observe_operation_state(record)
 
 
+def seed_attempt_matches(seed: dict, compiled: dict) -> bool:
+    """按当前持久身份区分首次 Seed 和显式重试。"""
+
+    key = seed.get("idempotencyKey")
+    if "retryOfOperationId" not in seed:
+        return key == compiled["idempotencyKey"]
+    parent = seed["retryOfOperationId"]
+    return (isinstance(parent, str) and re.fullmatch(r"[1-9][0-9]{0,18}", parent) is not None
+            and parent != seed.get("operationId")
+            and isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key) is not None)
+
+
 def verified_seed(seed: object, compiled: dict) -> bool:
     """只接受已核验原操作及精确匹配的本地 Seed 身份。"""
 
@@ -73,7 +85,7 @@ def verified_seed(seed: object, compiled: dict) -> bool:
             and bool(re.fullmatch(r"[1-9][0-9]{0,18}", seed["operationId"]))
             and isinstance(seed.get("verifiedAt"), str) and bool(seed["verifiedAt"])
             and seed.get("seedFingerprint") == compiled["seedFingerprint"]
-            and seed.get("idempotencyKey") == compiled["idempotencyKey"])
+            and seed_attempt_matches(seed, compiled))
 
 
 def seed_ready(root: Path, application: dict, technical_plan: dict) -> bool:

@@ -59,7 +59,8 @@ def decode_seed_response(response: httpx.Response, *, submitting: bool, allow_mi
         raise SeedRemoteError(invalid_envelope)
     if submit_conflict:
         # 资源占用可退避，幂等键冲突必须停止；其他 409 保留受控 HTTP 分类。
-        categories = {"RESOURCE_BUSY": "seed_resource_busy", "IDEMPOTENCY_CONFLICT": "seed_idempotency_conflict"}
+        categories = {"RESOURCE_BUSY": "seed_resource_busy", "IDEMPOTENCY_CONFLICT": "seed_idempotency_conflict",
+                      "TABLE_BINDING_CONFLICT": "seed_table_binding_conflict"}
         raise SeedRemoteError(categories.get(envelope["returnCode"], "seed_http_409"))
     if response.status_code == 404:
         # 仅识别 SaaS 明确的记录不存在；路由错误和未知错误体不能授权提交。

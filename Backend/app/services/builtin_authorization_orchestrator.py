@@ -26,13 +26,8 @@ _blocked: set[str] = set()
 _executor: ThreadPoolExecutor | None = None
 _closed = False
 ACTIVE = {"pending", "running", "waiting"}
+FAILED = {"needs_attention", "failed"}
 BACKOFF = (2, 3, 5, 10)
-RETRYABLE_FAILURES = {
-    "seed_timeout", "seed_network_error", "seed_invalid_response", "seed_query_unconfirmed",
-    "seed_client_configuration", "seed_saas_contract_incompatible", "seed_state_write_failed", "seed_operation_not_found",
-    "schema_query_transient",
-    *(f"seed_http_{code}" for code in (400, 401, 403, 404, 408, 422, 429, 500, 502, 503, 504)),
-}
 logger = logging.getLogger(__name__)
 
 
@@ -58,8 +53,14 @@ def _inputs(root: Path) -> tuple[str, dict, dict]:
 def _attention(category: str) -> dict:
     """返回固定脱敏错误，拒绝猜测损坏或失配状态的成功事实。"""
 
+    message = {
+        "inputs_changed": "权限初始化输入已变化，请核对当前配置和原操作。",
+        "operation_state_missing": "权限初始化原操作记录缺失，请恢复状态文件后重试。",
+        "state_missing": "权限初始化任务记录缺失，请核对工作区及原操作。",
+        "state_or_inputs_invalid": "权限初始化状态文件或当前输入无效，请核对工作区及原操作。",
+    }.get(category, "权限初始化结果待核对，请查看原操作。")
     return {"status": "needs_attention", "stage": "schema", "schemaReady": False, "seedReady": False,
-            "failureCategory": category, "nextAction": None, "message": "权限初始化结果待核对，请查看原操作。"}
+            "failureCategory": category, "nextAction": None, "message": message}
 
 
 def workflow_task_result(view: dict) -> dict:
@@ -88,9 +89,11 @@ def get_builtin_authorization_task(workspace: str) -> dict | None:
         ddl = compile_authorization_tables(root, binding["datasourceKey"])
         schema = schema_ready(root, application) and record.get("ddlFingerprint") == ddl["ddlFingerprint"]
         ready = schema and seed_ready(root, application, plan)
-        if not ready and task and (task.inputFingerprint != fingerprint or not record and task.operationStateExpected
-                                   or task.seedStateExpected and "seed" not in record):
-            return _attention("inputs_changed" if record else "operation_state_missing")
+        if not ready and task and task.status != "cancelled":
+            if task.inputFingerprint != fingerprint:
+                return _attention("inputs_changed")
+            if not record and task.operationStateExpected or task.seedStateExpected and "seed" not in record:
+                return _attention("operation_state_missing")
         seed = record.get("seed") or {}
         status = "ready" if ready else task.status if task and task.status != "ready" else "needs_attention"
         stage = "done" if ready else task.stage if task else "seed" if schema else "schema"
@@ -100,12 +103,11 @@ def get_builtin_authorization_task(workspace: str) -> dict | None:
                 "updatedAt": task.updatedAt if task else None, "nextAction": None,
                 "message": "权限表与权限数据均已核验就绪" if ready else
                            "正在自动处理，无需手动刷新。" if status in ACTIVE else "权限初始化结果待核对，请查看原操作。"}
-        if task and (task.failureCategory == "timeout" or task.failureCategory == "worker_failed" and (
+        if task and status in FAILED and (task.failureCategory == "timeout" or task.failureCategory == "worker_failed" and (
                          record.get("operationId") or seed.get("idempotencyKey")) or
                      task.failureCategory == "operation_unconfirmed" and schema and not seed):
             view["nextAction"] = "resume"
-        elif task and status == "needs_attention" and task.failureCategory in RETRYABLE_FAILURES:
-            # 仅显式点击可重试；attach 不自动重启这些已停止的操作。
+        elif task and status in FAILED:
             view["nextAction"] = "retry"
         if ready:
             compiled = compile_builtin_authorization_seed(application, plan, datasource_key=binding["datasourceKey"])
@@ -146,8 +148,9 @@ def tick(root: Path, generation: str, *, execute=run_builtin_authorization_boots
                 # 进入原子动作前标记已开始，状态丢失不能退回首次运行。
                 task.status, task.updatedAt, task.operationStateExpected = "running", _now(), True
                 task.seedStateExpected = task.seedStateExpected or "seed" in record
+                explicit_recovery, task.explicitRetryPending = task.explicitRetryPending, False
                 save_task(root, task)
-                result = execute(str(root), plan, schema_only=not schema)
+                result = execute(str(root), plan, schema_only=not schema, explicit_recovery=explicit_recovery)
                 guard()
                 record = read_operation_record(root)
                 seed = record.get("seed") or {}
@@ -165,7 +168,8 @@ def tick(root: Path, generation: str, *, execute=run_builtin_authorization_boots
                     lost_receipt = seed.get("status") in {"submitting", "unknown"} and (
                         failure in {"seed_invalid_response", "seed_state_write_failed"}
                         and result.get("failure_phase") in {"seed_submit_unconfirmed", "seed_state_write_failed"})
-                    query_retry = schema and (transient_seed or lost_receipt)
+                    retry_conflict = failure == "seed_resource_busy" and "retryOfOperationId" in seed
+                    query_retry = schema and (transient_seed and not retry_conflict or lost_receipt)
                     schema_query_retry = not schema and failure == "schema_query_transient" and (
                         record.get("operationId") or record.get("status") == "pending")
                     waiting = (operation_status in {"RUNNING", "SUCCEEDED"} and not failure
@@ -186,6 +190,7 @@ def tick(root: Path, generation: str, *, execute=run_builtin_authorization_boots
                 if current is None or current.generation != generation:
                     return False
                 task.status, task.failureCategory, task.updatedAt = "needs_attention", "inputs_changed", _now()
+                task.explicitRetryPending = False
                 save_task(root, task)
                 return False
 
@@ -202,6 +207,7 @@ def _worker(root: Path, generation: str, stop: threading.Event, *, clock=time.mo
                     task = read_task(root)
                     if task and task.generation == generation and task.status in ACTIVE:
                         task.status, task.failureCategory, task.updatedAt = "needs_attention", "timeout", _now()
+                        task.explicitRetryPending = False
                         save_task(root, task)
                 return
             try:
@@ -220,6 +226,7 @@ def _worker(root: Path, generation: str, stop: threading.Event, *, clock=time.mo
                 task = read_task(root)
                 if task and task.generation == generation and task.status in ACTIVE:
                     task.status, task.failureCategory, task.updatedAt = "needs_attention", "worker_failed", _now()
+                    task.explicitRetryPending = False
                     save_task(root, task)
         except (OSError, ValueError, portalocker.exceptions.LockException):
             logger.error("Builtin authorization worker state unavailable generation=%s", generation)
@@ -264,11 +271,53 @@ def ensure_builtin_authorization_task(workspace: str, *, source: str) -> dict:
         return _attention("state_or_inputs_invalid")
 
 
+def _retry_builtin_authorization_task(root: Path) -> dict:
+    """在工作区互斥内登记一次重试，并为任务安排唯一 worker。"""
+
+    key = str(root)
+    with _registry_lock:
+        if _closed or key in _blocked:
+            return _attention("task_stopped")
+        if read_task(root) is None:
+            return _attention("state_missing")
+        worker = _workers.get(key)
+        with builtin_lock(root), task_transaction(root):
+            task = read_task(root)
+            if task is None:
+                return _attention("state_missing")
+            view = get_builtin_authorization_task(key)
+            if task.status not in FAILED or view["status"] == "ready":
+                return view
+            if task.inputFingerprint != _inputs(root)[0]:
+                return _attention("inputs_changed")
+            record = read_operation_record(root)
+            if not record and task.operationStateExpected or task.seedStateExpected and "seed" not in record:
+                return _attention("operation_state_missing")
+            retiring = worker and not worker[1].done()
+            if not retiring and sum(not future.done() for _, future in _workers.values()) >= 32:
+                return _attention("worker_capacity")
+            task.status, task.failureCategory, task.updatedAt = "waiting", None, _now()
+            task.explicitRetryPending = True
+            save_task(root, task)
+        if retiring:
+            # 失败 tick 可能刚退出，由原 worker 退场后接续这次点击。
+            def handoff(_: Future) -> None:
+                """重新检查这次重试是否仍待调度。"""
+
+                ensure_builtin_authorization_task(key, source="retry")
+
+            worker[1].add_done_callback(handoff)
+            return get_builtin_authorization_task(key)
+        return ensure_builtin_authorization_task(key, source="retry")
+
+
 def resume_builtin_authorization_task(workspace: str, *, retry: bool = False) -> dict | None:
-    """接管原任务；显式重试可恢复查询故障，仍保留输入和原提交身份保护。"""
+    """接管原任务，或为实际失败的任务登记一次手工重试。"""
 
     root = Path(workspace).expanduser().resolve()
     try:
+        if retry:
+            return _retry_builtin_authorization_task(root)
         if read_task(root) is None and not read_operation_record(root):
             return None
         with builtin_lock(root), task_transaction(root):
@@ -276,17 +325,13 @@ def resume_builtin_authorization_task(workspace: str, *, retry: bool = False) ->
             if task is None and not read_operation_record(root):
                 return None
             view = get_builtin_authorization_task(str(root))
-            if retry and (not view or view["status"] not in ACTIVE | {"ready"}
-                          and view.get("nextAction") not in {"resume", "retry"}):
-                raise ValueError("当前权限操作不能安全重试，请先核对输入及原操作状态。")
-            if task and view and (view.get("nextAction") == "resume"
-                                  or retry and view.get("nextAction") == "retry"):
+            if task and view and view.get("nextAction") == "resume":
                 task.status, task.failureCategory, task.updatedAt = "waiting", None, _now()
                 save_task(root, task)
-        return ensure_builtin_authorization_task(str(root), source="retry" if retry else "resume")
-    except (OSError, ValueError, TypeError, portalocker.exceptions.LockException):
-        if retry:
-            raise ValueError("无法安全重试权限初始化，请核对当前输入、状态文件及原操作。") from None
+        return ensure_builtin_authorization_task(str(root), source="resume")
+    except portalocker.exceptions.LockException:
+        return get_builtin_authorization_task(str(root)) or _attention("worker_busy")
+    except (OSError, ValueError, TypeError):
         return _attention("state_or_inputs_invalid")
 
 
@@ -309,6 +354,7 @@ def stop_builtin_authorization_task(workspace: str) -> None:
             task = read_task(root)
             if task and task.status in ACTIVE:
                 task.status, task.updatedAt = "cancelled", _now()
+                task.explicitRetryPending = False
                 save_task(root, task)
 
 

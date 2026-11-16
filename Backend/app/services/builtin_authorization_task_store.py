@@ -58,6 +58,8 @@ def read_operation_record(root: Path) -> dict:
                 "submitting", "unknown", "running", "succeeded", "failed", "seed_ready"}
                 or not re.fullmatch(r"[0-9a-f]{64}", str(seed.get("idempotencyKey", "")))
                 or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(seed.get("seedFingerprint", "")))
+                or "retryOfOperationId" in seed and (not isinstance(seed["retryOfOperationId"], str)
+                                            or not re.fullmatch(r"[1-9][0-9]{0,18}", seed["retryOfOperationId"]))
                 or "operationId" in seed and (not isinstance(seed["operationId"], str)
                                             or not re.fullmatch(r"[1-9][0-9]{0,18}", seed["operationId"]))):
             raise ValueError("权限原 Seed 身份结构无效。")
@@ -73,6 +75,7 @@ class AuthorizationTask(BaseModel):
     inputFingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     operationStateExpected: bool = False
     seedStateExpected: bool = False
+    explicitRetryPending: bool = False
     status: Literal["pending", "running", "waiting", "ready", "needs_attention", "failed", "cancelled"]
     stage: Literal["schema", "seed", "verify", "done"] = "schema"
     failureCategory: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,95}$")

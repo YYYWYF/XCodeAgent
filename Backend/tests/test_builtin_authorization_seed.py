@@ -435,34 +435,38 @@ class BuiltinAuthorizationSeedTests(AuthorizationSeedRecoveryCases, unittest.Tes
         self.assert_calls("GET", "POST", "GET")
 
         cases = [
-            (1, 0, "target_resource_ref", "page:other"),
-            *((1, 1, "target_resource_ref", ref) for ref in (
+            ("home", "targetResourceRef", "page:other"),
+            *(("home_edit", "targetResourceRef", ref) for ref in (
                 "operation:home:edit", "action:home", "action::edit", "action:home:", "action:home:edit:extra",
                 "action:-home:edit", "action:Home:edit", "action:home:1edit",
             )),
-            *((1, 1, "description", value) for value in (None, "   ", "　", " 描述 ", "\u0001", "\ud800", "说" * 129)),
-            (1, 1, "name", ""), (0, 0, "description", ""), (0, 0, "enable", True),
-            (1, 1, "origin", "system"), (1, 1, "key", "home"), (1, 1, "extra", "value"),
+            *(("home_edit", "description", value) for value in (
+                None, "   ", "　", " 描述 ", "\u0001", "\ud800", "说" * 129,
+            )),
         ]
-        for table, index, field, value in cases:
-            with self.subTest(table=table, row=index, field=field, value=value):
-                invalid = deepcopy(request)
-                invalid["tables"][table]["rows"][index][field] = value
-                with self.assertRaises(SeedContractError):
-                    validate_seed_transport(invalid, datasource_key=KEY)
-                manifest_field = {"target_resource_ref": "targetResourceRef", "description": "description"}.get(field)
-                if table == 1 and manifest_field:
-                    invalid_manifest = deepcopy(manifest)
-                    resource_key = request["tables"][table]["rows"][index]["key"]
-                    resource = next(item for item in invalid_manifest["resources"] if item["resourceKey"] == resource_key)
-                    resource[manifest_field] = value
-                    # 编译器先验证资源内容，再检查指纹，因此非法 Unicode 也会被拦截。
-                    with self.assertRaisesRegex(ValueError, "权限资源类型或引用无效|权限 Seed 文本"):
-                        compile_builtin_authorization_seed(self.application,
-                            {**self.plan, "authorization_manifest": invalid_manifest}, datasource_key=KEY)
-        request["tables"].reverse()
+        for resource_key, field, value in cases:
+            with self.subTest(resource=resource_key, field=field, value=value):
+                invalid_manifest = deepcopy(manifest)
+                resource = next(item for item in invalid_manifest["resources"] if item["resourceKey"] == resource_key)
+                resource[field] = value
+                # 编译器先验证资源内容，再检查指纹，因此非法 Unicode 也会被拦截。
+                with self.assertRaisesRegex(ValueError, "权限资源类型或引用无效|权限 Seed 文本"):
+                    compile_builtin_authorization_seed(self.application,
+                        {**self.plan, "authorization_manifest": invalid_manifest}, datasource_key=KEY)
+
+    def test_seed_transport_checks_shape_and_leaves_business_rows_to_saas(self) -> None:
+        """只允许冻结合同的可选字段，传输层不重复核对业务行。"""
+
+        request = self.compile()["request"]
+        validate_seed_transport(request)
+        validate_seed_transport({**request, "retryOfOperationId": "12345"})
+        for invalid in (12345, "0", "-1", "012345", "abc"):
+            with self.subTest(invalid=invalid), self.assertRaises(SeedContractError):
+                validate_seed_transport({**request, "retryOfOperationId": invalid})
         with self.assertRaises(SeedContractError):
-            validate_seed_transport(request, datasource_key=KEY)
+            validate_seed_transport({**request, "retryOperationId": "12345"})
+        request["tables"][0]["rows"] = [{"unvalidated": "business row"}]
+        validate_seed_transport(request)
 
     def test_preview_starts_and_restarts_independently_of_seed(self) -> None:
         """在真实预览 Attempt 记录上验证所有权限状态只影响提示。"""

@@ -17,7 +17,7 @@ from app.services.builtin_authorization_state import builtin_binding, builtin_lo
 from app.services.builtin_authorization_seed import read_confirmed_seed_plan
 from app.services.builtin_authorization_seed_runtime import run_builtin_authorization_seed
 from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseRegistrationError
-from app.services.managed_table_client import ManagedTableQueryTransientError
+from app.services.managed_table_client import ManagedTableError, ManagedTableQueryTransientError
 
 
 def _result(record: dict, status: str, message: str, **extra) -> dict:
@@ -123,13 +123,17 @@ def run_builtin_authorization_bootstrap(workspace: str, technical_plan: dict, *,
                     return _result(record, "reused", "四张权限表已核验，复用已有表。",
                                    initialized_tables=compiled["tables"], next_action="continue",
                                    operation_status="SCHEMA_READY")
-                return run_builtin_authorization_seed(root, record, compiled["tables"], technical_plan, client=seed_client)
+                return run_builtin_authorization_seed(root, record, compiled["tables"], technical_plan,
+                                                      client=seed_client, explicit_recovery=explicit_recovery)
             record = record or {"schemaVersion": 1, "datasourceMode": "builtin", **binding,
                                 "ddlFingerprint": compiled["ddlFingerprint"], "schemaReady": False}
             remote = client or ManagedDatabaseClient(Settings.from_env())
             stage = "remote"
             return _run_remote(root, record, binding, compiled, remote, explicit_recovery)
         except (OSError, ValueError, ManagedDatabaseRegistrationError) as error:
+            if explicit_recovery and isinstance(error, ManagedTableError) and error.issue["code"] != "RESULT_UNCONFIRMED":
+                return _result(record, "manual_required", "权限建表请求待核对：" + error.issue["title"],
+                               failure_category="schema_" + error.issue["code"].lower())
             # 外部 HTTP/模型错误均不公开正文；提交前已持久化 submitting，重启亦不会重发。
             reason = {
                 "binding": "请核对 Builtin 模式、REGISTERED 绑定、权限开关及已确认 TechnicalPlan。",
@@ -152,6 +156,8 @@ def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote:
         result = _query_operation(root, record, binding, compiled, remote)
         if record.get("status") != "failed" or not explicit_recovery:
             return result
+        # 原批次已明确失败，重新提交原 DDL，由 SaaS 检查表归属、结构与占用。
+        return _submit_schema(root, record, binding, compiled, remote, explicit_recovery=True)
     check = _check(remote, binding, compiled)
     # 即使本地受理结果丢失，远端仍可通过完整归属和结构证明已就绪。
     if not record.get("operationId") and check.ready and check.operationStatus not in {"RUNNING", "UNKNOWN"}:
@@ -171,6 +177,9 @@ def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote:
                 operation = _operation(item, compiled["tables"])
                 record.update(operationId=operation["operationId"], status=operation["status"].lower(), steps=operation["steps"])
                 save_state(root, record)
+            elif explicit_recovery:
+                # 同库的其他操作是否占用本次目标，由 SaaS 在 CREATE 请求中判断。
+                continue
             return _result(record, "manual_required", "数据库存在执行中或待核对操作，请恢复原操作，不能重复建表。")
         if item.get("mode") == "CREATE_BATCH" and set(item.get("tableNames") or []) == set(compiled["tables"]) and not explicit_recovery:
             operation = _operation(item, compiled["tables"])
@@ -181,27 +190,44 @@ def _run_remote(root: Path, record: dict, binding: dict, compiled: dict, remote:
         return _result(record, "manual_required", "原权限批次受理结果未知，请人工核对；不会再次提交。")
     if record.get("status") == "failed" and not explicit_recovery:
         return _result(record, "failed", "权限批次失败，请核对逐表结果后显式恢复。")
-    if check.operationStatus in {"RUNNING", "UNKNOWN"} or any(table.status not in {"NOT_CREATED", "SYNCED"} for table in check.tables):
+    if not explicit_recovery and (check.operationStatus in {"RUNNING", "UNKNOWN"}
+                                  or any(table.status not in {"NOT_CREATED", "SYNCED"} for table in check.tables)):
         return _result(record, "manual_required", "权限表归属、结构或在途操作未确认，不允许 CREATE/REBUILD。")
-    # 先写未知保护再 POST：进程在收到 202 前退出也不会触发第二次提交。
+    return _submit_schema(root, record, binding, compiled, remote, explicit_recovery=explicit_recovery)
+
+
+def _submit_schema(root: Path, record: dict, binding: dict, compiled: dict, remote: ManagedDatabaseClient,
+                   *, explicit_recovery: bool) -> dict:
+    """沿用原批量建表，区分明确拒绝与受理结果未知。"""
+
+    # 先写未知保护再 POST，进程在收到回执前退出也不会触发第二次提交。
+    key = binding["datasourceKey"]
     if builtin_binding(read_application_config(root)) != binding:
         raise ValueError("提交前应用数据库绑定已变化。")
     if (read_application_config(root).get("authorization") or {}).get("enabled") is not True:
         raise ValueError("提交前应用权限已关闭。")
-    record.update(status="submitting")
-    if record.get("operationId"):
+    marker = {**record, "status": "submitting"}
+    marker.pop("failureCategory", None)
+    if marker.get("operationId"):
         # 新提交前隔离上次明确失败 ID，避免新响应丢失后误查询旧失败并再次重放。
-        record["previousOperationId"] = record.pop("operationId")
-    save_state(root, record)
+        marker["previousOperationId"] = marker.pop("operationId")
+        marker.pop("steps", None)
+    save_state(root, marker)
     try:
         receipt = OperationReceipt.model_validate(remote.batch_create_tables(key, compiled["sqls"]))
-    except (ValueError, ManagedDatabaseRegistrationError):
-        record.update(status="unknown")
-        save_state(root, record)
-        return _result(record, "manual_required", "权限批次受理结果未知，请核对原操作；不会自动重发。")
-    record.update(operationId=receipt.operationId, status="running")
-    save_state(root, record)
-    return _result(record, "manual_required", "权限建表请求已受理，请点击“刷新执行状态”查看结果。", requires_manual_action=False)
+    except (ValueError, ManagedDatabaseRegistrationError) as error:
+        if explicit_recovery and isinstance(error, ManagedTableError) and error.issue["code"] != "RESULT_UNCONFIRMED":
+            failure = "schema_" + error.issue["code"].lower()
+            failed = {**record, "status": "failed", "failureCategory": failure}
+            save_state(root, failed)
+            return _result(failed, "manual_required", "权限建表请求待核对：" + error.issue["title"],
+                           failure_category=failure)
+        marker["status"] = "unknown"
+        save_state(root, marker)
+        return _result(marker, "manual_required", "权限批次受理结果未知，请核对原操作；不会自动重发。")
+    marker.update(operationId=receipt.operationId, status="running")
+    save_state(root, marker)
+    return _result(marker, "manual_required", "权限建表请求已受理，请点击“刷新执行状态”查看结果。", requires_manual_action=False)
 
 
 def _verify_schema_inputs(root: Path, binding: dict, compiled: dict) -> None:

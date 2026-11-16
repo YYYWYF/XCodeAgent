@@ -214,9 +214,7 @@ class AuthorizationOrchestratorSafetyCases:
                 self.assertEqual(read_record(self.root, "state.json")["seed"]["status"], "failed")
                 self.assertFalse(self.tick())
                 self.assert_calls("GET", "POST")
-                if status == 409:
-                    with self.assertRaises(ValueError):
-                        orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+                self.assertEqual(orchestration.get_builtin_authorization_task(str(self.root))["nextAction"], "retry")
 
     def test_explicit_retry_after_auth_rejection_can_submit(self) -> None:
         """认证拒绝后修正服务，显式重试先查原键再恢复提交，不删除本地身份。"""

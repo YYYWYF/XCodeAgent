@@ -9,7 +9,7 @@ import type { WorkflowAuthorizationBootstrap } from '../../../../service/authori
 
 const steps = ['权限数据表初始化', '权限数据初始化', '初始化结果核验']
 
-/** 工作流与调试入口共用一个三阶段投影，只在服务端明确允许时提供恢复。 */
+/** 工作流与调试入口共用三阶段投影，按任务状态提供显式重试。 */
 export default function BuiltinAuthorizationTaskCard({ task, workspace, disabled = false, onChanged }: {
   task: BuiltinPatchResult
   workspace?: string
@@ -27,13 +27,13 @@ export default function BuiltinAuthorizationTaskCard({ task, workspace, disabled
   }, [workspace])
   const ready = task.schemaReady && task.seedReady
   const running = !ready && ['pending', 'running', 'waiting'].includes(task.status)
-  const canRetry = task.nextAction === 'resume' || task.nextAction === 'retry'
+  const canRetry = task.status === 'needs_attention' || task.status === 'failed'
   const stage = task.stage === 'schema' ? 0 : task.stage === 'seed' ? 1 : 2
   const completedDescriptions = ['4 张表已创建并核验', ready ? '权限数据写入完成' : '权限数据结果待核验', '权限表与权限数据均已核验就绪']
   const runningDescriptions = ['正在自动检查权限表和原建表操作', '正在自动查询数据写入结果', '正在核验初始化结果']
   /** 手工动作仍经过统一 AG-UI，恢复不表示批准重新提交未知操作。 */
   async function act(action: 'retry' | 'refresh_patch'): Promise<void> {
-    if (!workspace || busy) return
+    if (!workspace || busy || disabled || (action === 'retry' && (!canRetry || running || ready))) return
     const owner = generation.current
     setBusy(true)
     try {
@@ -70,8 +70,8 @@ export default function BuiltinAuthorizationTaskCard({ task, workspace, disabled
       {task.seedOperationId && <p>数据操作 ID　{task.seedOperationId}</p>}
       <details><summary>查看详情</summary><p>{task.message}</p>{task.failureCategory && <code>{task.failureCategory}</code>}</details>
       {workspace && <div className={cx('builtin-task-actions')}>
-        <Button icon={<ReloadOutlined />} loading={busy} disabled={disabled || !canRetry}
-          title={canRetry ? '恢复初始化，保留原操作并避免重复提交' : '当前状态不能安全重试，请先核对详情及原操作'}
+        <Button icon={<ReloadOutlined />} loading={busy} disabled={disabled || busy || !canRetry}
+          title="重新请求当前失败阶段，由服务端处理重复数据及冲突"
           onClick={() => { void act('retry') }}>重试</Button>
         <Button loading={busy} disabled={disabled} onClick={() => { void act('refresh_patch') }}>刷新状态</Button>
       </div>}

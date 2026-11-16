@@ -14,6 +14,8 @@ import httpx
 from app.services import builtin_authorization_orchestrator as orchestration
 from app.services.authorization_workspace_projector import RUNTIME, read_record
 from app.services.builtin_authorization_bootstrap import run_builtin_authorization_bootstrap
+from app.services.builtin_authorization_patch import refresh_patch
+from app.services.builtin_authorization_seed import PURPOSE, seed_request_fingerprint
 from app.services.builtin_authorization_state import save_state
 from app.services.builtin_authorization_task_store import AuthorizationTask, read_task, save_task
 from app.protocols.builtin_authorization import build_builtin_authorization_stream
@@ -64,11 +66,12 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
         return self.envelope(200, {"operationId": "123", "mode": "CREATE_BATCH", "status": self.schema_status,
             "tableNames": [t["tableName"] for t in self.compile()["request"]["tables"]], "executionResult": {"steps": []}})
 
-    def execute(self, workspace: str, plan: dict, *, schema_only: bool) -> dict:
+    def execute(self, workspace: str, plan: dict, *, schema_only: bool, explicit_recovery: bool = False) -> dict:
         """保留真实 Schema 和 Seed 的幂等及成功核验代码。"""
 
         client = ManagedDatabaseClient(self.settings, transport=httpx.MockTransport(self.schema_respond))
-        return run_builtin_authorization_bootstrap(workspace, plan, client=client, seed_client=self.client(), schema_only=schema_only)
+        return run_builtin_authorization_bootstrap(workspace, plan, client=client, seed_client=self.client(),
+                                                   schema_only=schema_only, explicit_recovery=explicit_recovery)
 
     def tick(self) -> bool:
         """推进一个安全转换，所有等待均由测试显式驱动。"""
@@ -305,23 +308,172 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
         self.assert_calls("GET", "POST", "GET")
         self.assertEqual(read_task(self.root).status, "ready")
 
-    def test_explicit_retry_rejects_unsafe_failures_and_changed_inputs(self) -> None:
-        """输入变化、损坏和远端失败未知均不能通过重试绕过原提交保护。"""
+    def request_retry(self) -> dict:
+        """调用真实调度入口，将 worker 的执行时机留给测试。"""
+
+        with patch.object(orchestration, "_executor") as executor, patch.dict(orchestration._workers, clear=True):
+            executor.submit.return_value = Future()
+            view = orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+            self.assertEqual(executor.submit.call_count, int(view["status"] == "waiting"))
+            return view
+
+    def test_explicit_retry_reports_changed_inputs_and_missing_state(self) -> None:
+        """提示真实任务保护错误，同时保留原状态，不访问 SaaS。"""
 
         self.begin()
-        for failure in ("inputs_changed", "state_or_inputs_invalid", "seed_operation_failed", "seed_operation_unknown"):
-            task = read_task(self.root)
-            task.status, task.failureCategory = "needs_attention", failure
-            save_task(self.root, task)
-            with self.assertRaises(ValueError):
-                orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
-            self.assertEqual(read_task(self.root).status, "needs_attention")
-        task.failureCategory = "seed_invalid_response"
+        task = read_task(self.root)
+        task.status, task.operationStateExpected = "failed", True
         save_task(self.root, task)
-        self.application["authorization"]["initialAdministratorSubjects"] = ["changed"]
-        with self.assertRaises(ValueError):
-            orchestration.resume_builtin_authorization_task(str(self.root), retry=True)
+        with patch.dict(self.application["authorization"], initialAdministratorSubjects=["changed"]):
+            self.assertEqual(self.request_retry()["failureCategory"], "inputs_changed")
+        path = self.root / RUNTIME / "state.json"
+        path.unlink()
+        self.assertEqual(self.request_retry()["failureCategory"], "operation_state_missing")
+        path.write_text("{")
+        self.assertEqual(self.request_retry()["failureCategory"], "state_or_inputs_invalid")
+        self.assertEqual(read_task(self.root).status, "failed")
         self.assert_calls()
+
+    def test_manual_schema_retry_reuses_original_sql_after_conflict(self) -> None:
+        """失败后使用原批量接口，409 保留原编号并允许再次点击。"""
+
+        self.begin(fresh=True)
+        original = self.schema_respond
+        batches = []
+
+        def respond(request):
+            """第一次重试拒绝，第二次返回新编号。"""
+
+            if request.url.path.endswith("/table-operations/batch"):
+                batches.append(json.loads(request.content))
+                if len(batches) == 2:
+                    return self.envelope(409, {}, "TABLE_BINDING_CONFLICT")
+                if len(batches) == 3:
+                    return self.envelope(200, {"operationId": "124", "status": "RUNNING"})
+            return original(request)
+
+        with patch.object(self, "schema_respond", side_effect=respond):
+            self.assertTrue(self.tick())
+            self.schema_status = "FAILED"
+            self.assertFalse(self.tick())
+            self.assertEqual(self.request_retry()["status"], "waiting")
+            self.assertFalse(self.tick())
+            view = orchestration.get_builtin_authorization_task(str(self.root))
+            self.assertEqual((view["failureCategory"], view["schemaOperationId"]), ("schema_table_binding_conflict", "123"))
+            self.assertFalse(read_task(self.root).explicitRetryPending)
+            self.request_retry()
+            self.assertTrue(self.tick())
+        self.assertEqual(batches, [batches[0]] * 3)
+        self.assertEqual(set(batches[0]), {"mode", "sqls"})
+        state = read_record(self.root, "state.json")
+        self.assertEqual((state["operationId"], state["previousOperationId"]), ("124", "123"))
+
+    def test_explicit_seed_retry_rotates_failed_attempt_and_recovers_lost_receipt(self) -> None:
+        """真实 HTTP 合同下两次失败重试，丢回执先查询新键，明确未找到才同键重发。"""
+
+        self.begin()
+        compiled = self.compile()
+        self.assertTrue(self.tick())
+        original = self.respond
+        failure = {"status": "FAILED", "verified": False, "createdCount": 0, "errorCode": "TABLE_BINDING_CONFLICT"}
+        self.detail_overrides = failure
+        self.assertFalse(self.tick())
+        self.assertEqual(read_task(self.root).failureCategory, "seed_operation_failed")
+        submitted = []
+        operation_ids = ("457", "458")
+        requests = []
+        detail_status = "RUNNING"
+
+        def respond(request):
+            """按已落盘身份提供失败、占用、查无记录和最终安全摘要。"""
+
+            if request.url.path.endswith("/456"):
+                return original(request)
+            requests.append(request)
+            seed = read_record(self.root, "state.json")["seed"]
+            if request.method == "POST":
+                payload = json.loads(request.content)
+                self.assertTrue(request.url.path.endswith("/data-operations/batch"))
+                self.assertEqual(seed["status"], "submitting")
+                self.assertNotIn("operationId", seed)
+                self.assertRegex(seed["idempotencyKey"], r"^[0-9a-f]{64}$")
+                self.assertEqual(payload, {**compiled["request"], "idempotencyKey": seed["idempotencyKey"],
+                                           "retryOfOperationId": seed["retryOfOperationId"]})
+                submitted.append(payload)
+                if len(submitted) == 1:
+                    raise httpx.ReadTimeout("fixture", request=request)
+                return self.envelope(200, {"operationId": operation_ids[len(submitted) - 2],
+                                           "status": "RUNNING", "purpose": PURPOSE})
+            if request.url.path.endswith("/by-key/" + seed["idempotencyKey"]):
+                return self.envelope(404, {}, "RESOURCE_NOT_FOUND")
+            self.assertTrue(request.url.path.endswith("/" + seed["operationId"]))
+            tables = compiled["request"]["tables"]
+            ready = detail_status == "SUCCEEDED"
+            return self.envelope(200, {"operationId": seed["operationId"], "status": detail_status, "purpose": PURPOSE,
+                "datasourceKey": seed_fixture.KEY, "requestFingerprint": seed_request_fingerprint(seed_fixture.KEY, compiled["request"]),
+                "tableNames": [table["tableName"] for table in tables],
+                "createdCount": sum(len(table["rows"]) for table in tables) if ready else 0,
+                "existingCount": 0, "verified": ready, "errorCode": failure["errorCode"] if detail_status == "FAILED" else None})
+
+        with patch.object(self, "respond", side_effect=respond):
+            self.request_retry()
+            self.assertTrue(self.tick())
+            self.assertFalse(read_task(self.root).explicitRetryPending)
+            self.assertEqual(submitted[0]["retryOfOperationId"], "456")
+            self.assertNotEqual(submitted[0]["idempotencyKey"], compiled["idempotencyKey"])
+            with (patch("app.services.builtin_authorization_seed_runtime.ManagedDatabaseClient", return_value=self.client()),
+                  patch("app.services.builtin_authorization_patch.read_application_config", return_value=self.application)):
+                self.assertEqual(refresh_patch(str(self.root))["failure_category"], "seed_operation_not_found")
+            self.assertEqual(len(submitted), 1)
+            self.assertTrue(self.tick())
+            self.assertEqual([request.method for request in requests], ["POST", "GET", "GET", "POST"])
+            self.assertEqual(submitted[0], submitted[1])
+            self.assertTrue(self.tick())
+            self.assertEqual(len(submitted), 2)
+            detail_status = "FAILED"
+            self.assertFalse(self.tick())
+            self.assertFalse(self.tick())
+            self.assertEqual(len(submitted), 2)
+            self.request_retry()
+            self.assertTrue(self.tick())
+            self.assertEqual(submitted[-1]["retryOfOperationId"], "457")
+            self.assertNotEqual(submitted[-1]["idempotencyKey"], submitted[0]["idempotencyKey"])
+            self.assertFalse(orchestration.get_builtin_authorization_task(str(self.root))["seedReady"])
+            detail_status = "SUCCEEDED"
+            self.assertFalse(self.tick())
+        view = orchestration.get_builtin_authorization_task(str(self.root))
+        self.assertEqual((view["seedOperationId"], view["seedReady"]), ("458", True))
+        archive = read_record(self.root, "state.json")["seed"]["failedAttempts"]
+        self.assertEqual([(entry["operationId"], entry["idempotencyKey"], entry["errorCode"]) for entry in archive],
+                         [("456", compiled["idempotencyKey"], failure["errorCode"]),
+                          ("457", submitted[0]["idempotencyKey"], failure["errorCode"])])
+        self.assertEqual(self.request_retry()["status"], "ready")
+
+    def test_manual_seed_retry_queries_original_nonfailed_operations(self) -> None:
+        """远端运行、未知、成功或两个查询均查无记录时，手工重试保留已受理的原 ID。"""
+
+        self.begin()
+        self.assertTrue(self.tick())
+        state = read_record(self.root, "state.json")
+        for status in ("RUNNING", "UNKNOWN", "missing", "SUCCEEDED"):
+            with self.subTest(status=status):
+                save_state(self.root, state)
+                task = read_task(self.root)
+                task.status, task.failureCategory = "needs_attention", "seed_http_409"
+                save_task(self.root, task)
+                self.calls.clear()
+                self.accepted = status != "missing"
+                self.detail_overrides = {} if status == "SUCCEEDED" else {
+                    "status": status, "verified": False, "createdCount": 0,
+                }
+                self.request_retry()
+                self.assertEqual(self.tick(), status == "RUNNING")
+                self.assert_calls(*(["GET", "GET"] if status == "missing" else ["GET"]))
+                seed = read_record(self.root, "state.json")["seed"]
+                self.assertEqual(seed["operationId"], "456")
+                self.assertEqual(seed["idempotencyKey"], state["seed"]["idempotencyKey"])
+                self.assertNotIn("retryOfOperationId", seed)
+                self.assertEqual(seed["ready"], status == "SUCCEEDED")
 
     def test_restart_resumes_original_id_and_worker_deduplication(self) -> None:
         """attach 与重复 Build 合用一个 worker，重启接管只查原 Seed ID。"""
