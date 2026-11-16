@@ -32,16 +32,19 @@ PRODUCT_PLAN_CARRYOVER_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "product-plan-ca
 
 _SCHEMA_VERSION = 2
 
-# 判断"用户改没改这一页"时比较的需求字段：决定**页面身份与路由**的那几个。
+# 判断"用户改没改这一页"时比较的需求字段：决定**页面身份与路由**的那几个，
+# 加上 description —— 它在本工作流里是 spec 中**用户对这页的需求描述**（"展示一个按钮，
+# 按钮文案是打开github"），不是模型自由措辞。description 变化时意味着用户重写了
+# 这页的功能定位（哪怕只是改措辞），沿用旧 definition 会让 ProductPlan 停留在旧语义，
+# 后续 UI 设计稿继承、构建、技术规划都会基于错位的 product fact 推进。
 #
-# 刻意不含 `description` 与 `module_id` —— 两者都是模型每轮自由重写的产物，且都与
-# 设计稿无关（设计稿由 information_items / actions 驱动）：
-#   - `description` 是散文，实测同一页只把"应用首页与唯一页面"改成"应用首页"；
-#   - `module_id` 是模块分组标签，实测把 `module_welcome_display` 改写成
-#     `welcome_display`（去掉前缀）。
-# 拿它们做相等判定，本机制几乎永不生效，ID 照旧漂移、继承被拒 —— 用户看到的是
-# "第一轮设计过的页面在第二轮显示待确认"。
-_STRUCTURAL_REQUIREMENT_FIELDS = ("pageId", "name", "path")
+# 之前刻意不含 description 是因为担心"模型每轮自由重写"导致继承失效；但实测发现
+# 真正担心的是 description 不变但页面内容变化的场景（用户在迭代里完全推翻重做一页
+# 而 pageId 不变，例如把"展示 hello world"改成"展示打开 GitHub 按钮"）—— 这种
+# 语义级别的变更必须重新走 ProductPlan 生成，不能沿用。
+#
+# `module_id` 仍不参与比对：它是模型自由重写的分组标签，与页面业务事实无关。
+_STRUCTURAL_REQUIREMENT_FIELDS = ("pageId", "name", "path", "description")
 
 # 沿用的字段：模型在 ProductPlan 页面里补充、而 RequirementSpec 不提供的那部分。
 # 与 `product_plan._normalized_pages` 读取的 `supplement` 完全对应。
@@ -160,20 +163,16 @@ def carried_definition_for_page(
     page_id: str,
     requirement_page: Any,
 ) -> dict[str, Any] | None:
-    """若这一页的**身份与路由**与上一轮相同，返回可沿用的上一轮定义。
+    """若这一页的**身份与功能定位**与上一轮相同，返回可沿用的上一轮定义。
 
-    只比 `pageId` / `name` / `path`。**不比 `description` 与 `module_id`** ——
-    两者都是模型每轮自由重写的产物，且都与设计稿无关（设计稿由
-    information_items / actions 驱动）：`description` 是散文（实测只改措辞），
-    `module_id` 是模块分组标签（实测把 `module_welcome_display` 改写成
-    `welcome_display`）。拿它们做相等判定会让本机制几乎永不生效，
-    ID 于是照旧漂移、继承被拒。
+    比对 `pageId` / `name` / `path` / `description`（见 `_STRUCTURAL_REQUIREMENT_FIELDS`）。
+    description 关键：它承载"用户对这页的功能要求"（如"展示 hello world" vs
+    "展示打开 GitHub 按钮"）。同一 pageId 下 description 变了 = 用户改需求了，
+    沿用旧 definition 会让 ProductPlan 与 spec 脱节，UI 设计稿继承、技术规划都会错位。
 
-    取舍：只改 `description`/`module_id` 的需求不会被识别为"要改这一页"，会沿用旧定义。
-    这类变更没有视觉后果 —— 用户真要改页面内容，走的是设计稿卡片上的「描述要调整的设计稿」
-    调整流程，或在迭代请求里新增页面（新 pageId，不受影响）。
+    `module_id` 不参与比对：它是模型自由重写的分组标签，与页面业务事实无关。
 
-    缺任一前提（没记录 / 没定义 / 身份字段变了）都返回 None。
+    缺任一前提（没记录 / 没定义 / 任一身份字段变了）都返回 None，让 LLM 重新生成。
     """
 
     record = carried.get(str(page_id or "").strip())

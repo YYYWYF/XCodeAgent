@@ -124,44 +124,48 @@ export default function VersionActions({
           ))}
         </div>
       ) : null}
-      {[...allBranches].reverse().map((branch) => {
-        // 高亮跟随当前查看分支；状态标签跟随当前正在开发的分支。
-        const isViewing = branch.name === viewedBranch.name
-        const isWorking = branch.name === currentBranchName
-        return (
-          <button
-            key={branch.name}
-            type="button"
-            className={cx(
-              'version-dropdown-item',
-              isViewing && 'is-active',
-              !isWorking && 'is-released'
-            )}
-            onClick={() => {
-              setMenuOpen(false)
-              onBranchSelect(branch.name)
-            }}
-          >
-            <span className={cx('version-dropdown-item-head')}>
-              {!isWorking ? <LockOutlined /> : null}
-              <span className={cx('version-menu-label')}>{branch.name}</span>
-              <span
-                className={cx(
-                  'version-menu-status',
-                  isWorking ? 'is-current' : 'is-readonly'
-                )}
-              >
-                {statusLabelFor(isWorking)}
+      {/* 分支列表单独成滚动区：迭代多了之后列表会很长，给 max-height + 内部滚动，
+          让"已完成模块"区始终可见，弹层整体高度也不会撑出视口。 */}
+      <div className={cx('version-dropdown-list')}>
+        {[...allBranches].reverse().map((branch) => {
+          // 高亮跟随当前查看分支；状态标签跟随当前正在开发的分支。
+          const isViewing = branch.name === viewedBranch.name
+          const isWorking = branch.name === currentBranchName
+          return (
+            <button
+              key={branch.name}
+              type="button"
+              className={cx(
+                'version-dropdown-item',
+                isViewing && 'is-active',
+                !isWorking && 'is-released'
+              )}
+              onClick={() => {
+                setMenuOpen(false)
+                onBranchSelect(branch.name)
+              }}
+            >
+              <span className={cx('version-dropdown-item-head')}>
+                {!isWorking ? <LockOutlined /> : null}
+                <span className={cx('version-menu-label')}>{branch.name}</span>
+                <span
+                  className={cx(
+                    'version-menu-status',
+                    isWorking ? 'is-current' : 'is-readonly'
+                  )}
+                >
+                  {statusLabelFor(isWorking)}
+                </span>
               </span>
-            </span>
-            {branch.description ? (
-              <span className={cx('version-dropdown-item-log')} title={branch.description}>
-                {branch.description}
-              </span>
-            ) : null}
-          </button>
-        )
-      })}
+              {branch.description ? (
+                <span className={cx('version-dropdown-item-log')} title={branch.description}>
+                  {branch.description}
+                </span>
+              ) : null}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 

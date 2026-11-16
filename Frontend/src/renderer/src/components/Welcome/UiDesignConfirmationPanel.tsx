@@ -169,6 +169,13 @@ export default function UiDesignConfirmationPanel({
     const value = clarification?.validation_errors
     return Array.isArray(value) ? value.map(String).filter(Boolean) : []
   }, [clarification])
+  // 产品事实变更提示：用户在二次修改跳转设计阶段后改了产品规划（spec / product_plan），
+  // 当前 ui_designs 还是按旧 plan 生成或继承的，actions / information_items 可能对不上
+  // 新产品事实。后端在 clarification 透传 product_plan_stale 标记，前端在确认卡顶部
+  // 给一条黄色提示 —— **提示而非阻断**：用户审视后认为没问题仍可点确认继续。
+  const productPlanStale = Boolean(
+    (clarification as unknown as Record<string, unknown> | undefined)?.product_plan_stale
+  )
   // 用户在调整输入框里提出了结构性变更（新增/删除整个页面），后端识别后通过
   // clarification.structural_change 透传；前端据此弹出「转交产品 Agent」按钮，
   // 点击后把同一段指令作为 design_change_request 提交到下方产品意图识别路径。
@@ -736,6 +743,26 @@ export default function UiDesignConfirmationPanel({
           </Button>
         ) : null}
       </header>
+
+      {productPlanStale ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="检测到产品规划已更新"
+          description={
+            <span>
+              当前设计稿基于旧的产品规划生成或继承，可能与最新需求不符。
+              建议先逐页「换一换」重新生成受影响的页面，再确认进入计划阶段；
+              审视后认为不影响也可以直接点击下一步。
+            </span>
+          }
+          style={{ marginBottom: 12 }}
+          // antd v4 的 Alert 在「message 单行 + description 多行」时，图标默认对齐
+          // 整个内容块的中线，导致图标相对 message 偏上。用 className 覆写
+          // `.ant-alert-icon` 让其与首行（message）对齐。
+          className={cx('ui-design-stale-alert')}
+        />
+      ) : null}
 
       {validationErrors.length > 0 ? (
         <Alert

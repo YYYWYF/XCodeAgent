@@ -147,6 +147,18 @@ def _ui_design_confirmation_payload(
     payload["pages"] = pages
     # 每页在历史迭代里的归属（designedIn / plannedButUndesignedIn），供界面标注。
     payload["iteration_origins"] = _with_iteration_origins(state, pages)
+    # 产品事实变更检测：两个来源任一命中即认为 stale —
+    # 1. ui_designs 清单顶层已被 _build_pending_ui_designs 标记（基于继承被拒事实，
+    #    这是**权威来源**——它在清单重建时持久化，覆盖所有恢复路径）；
+    # 2. hash 兜底：恢复路径里磁盘 manifest 是旧版本（二次修改跳回时），hash 不等
+    #    也是 stale 信号。
+    # 透传给前端在确认卡顶部加黄色提示条 —— **提示而非阻断**，用户审视后可继续。
+    expected_hash = _product_plan_hash_for(product_plan)
+    recorded_hash = str(ui_designs.get("product_plan_sha256") or "").strip()
+    hash_mismatch = bool(expected_hash and recorded_hash and expected_hash != recorded_hash)
+    manifest_marked_stale = bool(ui_designs.get("product_plan_stale"))
+    if hash_mismatch or manifest_marked_stale:
+        payload["product_plan_stale"] = True
     # 结构性变更（新增/删除整个页面）超出 UI 调整范畴，需要走产品意图识别路径。
     # 透传 structural_change / structural_change_instruction 让前端弹出「转交产品
     # Agent」按钮，把同一段指令作为 design_change_request 提交到下方输入框对应的
@@ -286,11 +298,20 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
         total=total,
         pages=list(entries),
     )
+    # 产品事实变更检测：本工作区已有继承记录，但本轮有页面因为产品事实（spec description
+    # 或 ProductPlan actions/items）变化导致继承被拒。把这个事实写到清单顶层 —
+    # clarification 在恢复路径可能用旧的 ui_designs 重放，这里在 _build_pending_ui_designs
+    # 写入的标记会随清单一起持久化到 specs/ui-designs.json，让前端在用户最终确认前
+    # 都能看到这条提示。
+    has_rejected_carryover = any(
+        isinstance(entry, dict) and entry.get("inheritance_rejected") for entry in entries
+    )
     return {
         "schema_version": UI_MANIFEST_SCHEMA_VERSION,
         "confirmation_status": "pending_user_confirmation",
         "product_plan_sha256": _product_plan_hash(state),
         "pages": entries,
+        **({"product_plan_stale": True} if has_rejected_carryover else {}),
     }
 
 
@@ -315,7 +336,12 @@ def _ui_page_entry(
     carried_key = str((carried.get(_page_id(page)) or {}).get("pageKey") or "").strip()
     if carried_key:
         # 继承被拒（页面定义变了）但这一页上一轮做过：复用旧 key，等重新生成覆盖它。
-        return build_ui_page_manifest(page, page_key=carried_key), False
+        # 在条目上加 inheritance_rejected 标记，让 _build_pending_ui_designs 能识别
+        # "这一页因为产品事实变更没能继承"，再透传给前端显示提示条 —— 否则用户看到的
+        # 是一个普通的"待生成"页面，不知道原本可以继承但被产品变更打回了。
+        entry = build_ui_page_manifest(page, page_key=carried_key)
+        entry["inheritance_rejected"] = True
+        return entry, False
     return build_ui_page_manifest(page, page_key=derive_page_key(page, used_keys)), False
 
 
@@ -342,9 +368,15 @@ def _carried_ui_page_manifest(
     if not code:
         # 目录被清掉或写入失败：没有代码可继承。
         return None
-    # 用户可能在 UI 调整时主动删除某些板块/操作，继承已确认设计稿时放宽 missing 检查，
-    # 只校验越界与语法错误，避免把用户刻意删减后的设计稿误判为"对不上"而退回未生成。
-    if validate_ui_design_code(page, code, allow_missing=True):
+    # 跨迭代继承必须**严格**校验：新一轮 ProductPlan 可能新增 action / item（用户
+    # 改了产品需求），旧设计稿没这些标记就是"不能代表新需求"，必须退回 pending
+    # 让用户重新生成 —— 不能用 allow_missing=True 放行，否则用户看到的是一份
+    # 缺了新动作的"已确认"设计稿，下游构建会拿它当参考实现出错的页面。
+    #
+    # allow_missing=True 的设计意图只适用于「UI 调整」场景（用户在当前迭代的卡片
+    # 里主动删除某个元素），那里的"用户意图"由 ui_design_action 的单页动作路径
+    # 单独处理；跨迭代继承这条路径上没有"用户主动删除"的语义，必须严格比对。
+    if validate_ui_design_code(page, code):
         return None
     return build_ui_page_manifest(
         page,

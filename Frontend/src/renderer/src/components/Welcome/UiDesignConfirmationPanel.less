@@ -1073,4 +1073,16 @@
   flex-shrink: 0;
 }
 
+// 产品规划变更提示条：antd v4 Alert 在「message 单行 + description 多行」时，
+// 默认把图标对齐整个内容块的中线，导致图标相对 message 偏上。这里把图标
+// 顶对齐（与 message 行同高），让标题与图标在视觉上同行。
+.@{class-prefix}-ui-design-stale-alert {
+  .ant-alert-icon {
+    align-self: flex-start;
+    // antd Alert 的 message 行高约 22px（14px 字号 × 1.5715），图标本身
+    // 14px 高，差值 8px，居中需下移 4px。
+    margin-top: 4px;
+  }
+}
+
 @import './UiDesignConfirmationResponsive.less';

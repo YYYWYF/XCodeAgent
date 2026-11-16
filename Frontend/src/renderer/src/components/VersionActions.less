@@ -117,6 +117,24 @@
   border-radius: 10px;
   background: var(--wb-canvas, #fff);
   box-shadow: 0 12px 36px rgba(15, 18, 24, 0.16);
+  // 弹层整体高度也需要兜底：候选模块 + 分支列表都存在时，各自的内容
+  // 加起来可能超过视口。给一层 max-height 让浏览器在极限场景下拉出整体滚动条。
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+}
+
+// 分支列表的滚动容器：版本迭代多了之后（v1_0 ~ v1_N），如果没有高度限制会把
+// 整个弹层撑出视口。给它一个最大高度，超出后内部滚动；候选模块区在上方固定不动。
+// 取一个能让 ~8 条记录一屏展示的折中值（每条 ~56px，含 padding 与描述行）。
+.@{class-prefix}-version-dropdown-list {
+  flex: 1;
+  min-height: 0;
+  max-height: 448px;
+  overflow-y: auto;
+  // 让滚动条在深色模式下不那么突兀
+  scrollbar-width: thin;
+  scrollbar-color: var(--wb-border-strong, rgba(0, 0, 0, 0.18)) transparent;
 }
 
 // 版本面板里的"已完成模块"区：按模块列出候选提交点及其文件。
