@@ -21,6 +21,11 @@ COMMON_RULES = (
 )
 
 API_SCHEMA_RULES = (
+    "API 请求和响应 Schema 的 properties 属性名统一使用 lowerCamelCase，"
+    "例如 hireDate、personnelId，不使用 hire_date、personnel_id。"
+    "嵌套对象和数组元素中的属性同样遵守，required 中使用对应名称。"
+    "entity_field_ref 保留实体来源字段的真实名称，"
+    "例如 API 属性 hireDate 可以引用 Personnel.hire_date。\n"
     "API JSON Schema 中，业务明确为正整数的数量必须使用 type=integer 且 minimum=1；"
     "明确非负的数值必须包含 minimum=0，不能只把约束写在 description 中。\n"
 )
