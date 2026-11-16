@@ -4,7 +4,6 @@ from copy import deepcopy
 import logging
 from typing import Callable
 
-from app.agents.main.technical_plan_catalog_repair import CatalogRepairRequired
 from app.agents.main.technical_plan_contract_batch_validation import SchemaPlanRepairRequired
 from app.agents.main.technical_plan_contract_budget import contract_part_prefix
 from app.agents.main.technical_plan_fragment_output import PlanningOutputTruncated, parse_batch_json
@@ -31,8 +30,6 @@ class PlanningFragmentFailed(ValueError):
 def dependency_repair_key(error: ValueError) -> str | None:
     """依赖修复按稳定归属计数，目录内容或批次哈希变化不能重置同一修复链。"""
 
-    if isinstance(error, CatalogRepairRequired):
-        return "catalog:" + error.issue["pageId"]
     key = getattr(error, "fragment_key", "")
     if isinstance(error, SchemaPlanRepairRequired):
         return ":".join(key.split(":")[:2]) if key else "schema-plan"
@@ -70,7 +67,7 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
             if not isinstance(value, dict):
                 raise ValueError("输出必须是唯一完整的 JSON 根对象，不能包含多个对象、说明文字或未闭合结构")
             validated = deepcopy(validate(value))
-        except (CatalogRepairRequired, SchemaPlanRepairRequired) as exc:
+        except SchemaPlanRepairRequired as exc:
             # 不能在无权修改上游的片段内重复生成，保持原依赖失效与修复路径。
             exc.fragment_key = key
             raise

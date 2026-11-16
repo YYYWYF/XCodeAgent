@@ -7,7 +7,6 @@ from typing import Callable
 
 from app.agents.main.technical_plan_generation_prompts import page_prompt
 from app.agents.main.technical_plan_generation_validation import validate_page
-from app.agents.main.technical_plan_catalog_repair import CatalogRepairRequired
 from app.agents.main.technical_plan_catalog_parts import generate_catalog
 from app.agents.main.technical_plan_contract_batches import generate_contract
 from app.agents.main.technical_plan_fragment_retry import generate_fragment as _fragment
@@ -56,7 +55,6 @@ def generate_technical_plan_sections(
         if store is not None:
             store.save(fingerprint, key, value)
 
-    repair = cache.get("catalog_repair")
     model_requests = 0
     def read_fragment(key: str, prompt: str, validate) -> dict:
         """各片段独立重试并持久化，记录未命中请求以隔离修复反馈。"""
@@ -67,8 +65,8 @@ def generate_technical_plan_sections(
         return _fragment(cache, key, prompt, invoke, validate, save_fragment)
 
     catalog = generate_catalog(frozen, cache=cache, fragment=read_fragment, publish=publish_fragments)
-    if repair or model_requests:
-        # 当前目录全部通过后，已解决的目录诊断不再传给后续 Contract。
+    if model_requests:
+        # 当前目录全部通过后，本轮目录诊断不再传给后续 Contract。
         frozen["technical_plan_validation_feedback"] = ""
     contracts = []
     for spec in catalog["contracts"]:
@@ -83,16 +81,10 @@ def generate_technical_plan_sections(
     pages = []
     for page in product.get("pages", []):
         requests_before = model_requests
-        try:
-            pages.append(read_fragment(
-                f"page:{page['pageId']}", page_prompt(frozen, catalog, page, contracts),
-                lambda value, page=page: validate_page(value, page, contracts),
-            ))
-        except CatalogRepairRequired as exc:
-            # 缺口属于目录时撤下旧目录，下一轮预算必须先修目录，不能空转重试页面。
-            publish_fragments({**{key: value for key, value in cache.items() if key != "catalog"},
-                "catalog_repair": {"catalog": catalog, "baseline": catalog, "issue": exc.issue}})
-            raise
+        pages.append(read_fragment(
+            f"page:{page['pageId']}", page_prompt(frozen, catalog, page, contracts),
+            lambda value, page=page: validate_page(value, page, contracts),
+        ))
         if model_requests > requests_before:
             frozen["technical_plan_validation_feedback"] = ""
     # 架构由现有物化器按权威应用配置和固定技术栈补齐，模型不再重复生成。

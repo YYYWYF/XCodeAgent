@@ -101,40 +101,26 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
         self.assertFalse(any("technical_plan_generation_input_sha256" in frame for frame in frames))
 
-    async def test_catalog_repair_still_commits_once_and_waits_for_confirmation(self):
-        """页面报告目录缺口后沿真实 Graph 修目录，仍不发布半份计划或绕过确认。"""
+    async def test_page_report_retries_locally_and_waits_for_confirmation(self):
+        """模型审查报告只作为页面错误输出重试，目录不变也能完成并保留原确认门。"""
 
         pages = self.h.candidate["pages"]
         target_page = next(page for page in pages if page["references"]["endpoint_dependencies"])
-        endpoint_id = target_page["references"]["endpoint_dependencies"][0]["endpoint_id"]
-        fixed = deepcopy(self.catalog)
-        target_spec = next(c for c in fixed["contracts"] if any(e["id"] == endpoint_id for e in c["endpoints"]))
-        target_endpoint = next(e for e in target_spec["endpoints"] if e["id"] == endpoint_id)
-        target_endpoint["summary"] += "已核对本页业务用途。"
-        contract = deepcopy(next(c for c in self.h.candidate["api_contracts"] if c["id"] == target_spec["id"]))
-        next(e for e in contract["endpoints"] if e["id"] == endpoint_id)["summary"] = target_endpoint["summary"]
         issue = {"catalog_issue": {"pageId": target_page["pageId"], "kind": "initial_load",
-            "actionId": None, "stepId": None, "reason": "当前目录需要明确本页首次读取的业务用途。"}}
-        contract_count = len(self.catalog["contracts"])
-        page_index = pages.index(target_page)
-        related = [c for c in self.catalog["contracts"] if target_page["pageId"] in c["page_ids"]]
-        related_ids = {c["id"] for c in related}
-        entity_ids = {entity_id for c in related for entity_id in c["entity_ids"]}
-        related_pages = {page_id for c in related for page_id in c["page_ids"]}
-        repair_outputs = catalog_responses(fixed, entity_ids=entity_ids, contract_ids=related_ids,
-            page_ids=[page["pageId"] for page in pages if page["pageId"] in related_pages])
-        outputs = self.outputs[:self.catalog_count + contract_count + page_index] + [json.dumps(issue),
-            *[json.dumps(value) for value in repair_outputs], json.dumps({"api_contracts": [contract]})] + self.outputs[self.catalog_count + contract_count + page_index:]
-        snapshot, frames, _count = await self._run(outputs)
+            "actionId": None, "stepId": None, "reason": "模型认为当前目录需要另行审查。"}}
+        index = self.catalog_count + len(self.catalog["contracts"]) + pages.index(target_page)
+        outputs = [*self.outputs[:index], json.dumps(issue), *self.outputs[index:]]
+        snapshot, frames, count = await self._run(outputs)
+        self.assertEqual(count, len(outputs))
         self.assertEqual(snapshot.next, ("technical_planning_review",), "\n".join(frames))
         self.assertEqual(snapshot.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
+        self.assertEqual(snapshot.values["technical_plan"]["api_contracts"], self.h.candidate["api_contracts"])
+        self.assertEqual(snapshot.values["technical_plan"]["pages"], pages)
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
         self.assertTrue(technical_plan_draft_json_path(snapshot.values).is_file())
         self.assertFalse(technical_plan_json_path(snapshot.values).exists())
-        self.assertFalse(technical_plan_draft_json_path(snapshot.values).with_suffix(".md").exists())
         self.assertFalse(TechnicalPlanFragmentStore(self.h.workspace).path.exists())
         self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
-        self.assertFalse(any("catalog_repair" in frame for frame in frames if '"name":"llm.token"' not in frame))
 
     async def test_each_fragment_succeeds_on_third_attempt_and_keeps_confirmation_gate(self):
         """每个模块前两次失败仍能沿真实 AG-UI 完成，最终只提交一份待确认产物。"""

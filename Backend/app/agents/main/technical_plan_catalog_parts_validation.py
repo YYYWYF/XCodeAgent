@@ -5,7 +5,7 @@ import re
 
 from pydantic import Field
 
-from app.agents.main.technical_plan_catalog_repair import CatalogBinding, business_slots, raise_catalog_issue, validate_catalog_coverage
+from app.agents.main.technical_plan_catalog_repair import CatalogBinding, business_slots, validate_catalog_coverage
 from app.agents.main.technical_plan_generation_validation import (
     _StrictFragment, _Entity, _Endpoint, _check, _unique, validate_catalog,
 )
@@ -148,10 +148,8 @@ def validate_endpoint_directory(value: dict, *, identity: dict, entities: list, 
 
 
 def validate_page_bindings(value: dict, *, page: dict, catalog: dict) -> dict:
-    """逐页完整覆盖业务槽位，接口能力不足时立即进入现有目录修复流程。"""
+    """逐页校验业务槽位完整覆盖及接口引用，不改变共享目录。"""
 
-    if "catalog_issue" in value:
-        raise_catalog_issue(value, page)
     if set(value) != {"action_bindings"} or not isinstance(value["action_bindings"], list):
         raise ValueError("页面映射阶段只能返回 {action_bindings:[业务映射]}。")
     bindings = [CatalogBinding.model_validate(binding).model_dump() for binding in value["action_bindings"]]
@@ -166,9 +164,7 @@ def validate_page_bindings(value: dict, *, page: dict, catalog: dict) -> dict:
                 f"已确认动作 {binding['actionId']} 是普通 business，合法 stepId 只能为 null，不得虚构步骤。"
                 f"完整业务结果为：{action['behavior'].get('expectedResult', action.get('description', ''))}。"
                 "如只是刷新多个已有读取，选择主体的主要接口，后续页面 endpoint_dependencies 的 trigger 完整声明刷新读取；"
-                "如确实缺少所需业务操作或读取，只返回 catalog_issue，kind=business_action，"
-                f"pageId={page['pageId']}，actionId={binding['actionId']}，stepId=null，"
-                "reason 说明完整结果的能力缺口，交由目录修复；不能丢弃部分业务结果或修改产品动作。"
+                "只修正当前动作映射，不能丢弃部分业务结果或修改产品动作。"
             )
     validate_catalog_coverage({**catalog, "action_bindings": bindings}, {"pages": [page]})
     return {"action_bindings": bindings}

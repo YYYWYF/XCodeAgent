@@ -5,7 +5,6 @@ import json
 
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.main.technical_plan_generation_prompts import COMMON_RULES
-from app.agents.main.technical_plan_catalog_parts_validation import catalog_registry
 from app.agents.main.technical_plan_catalog_repair import business_slots
 
 
@@ -27,24 +26,21 @@ def _page_facts(page: dict) -> dict:
     return {**result, "actions": actions}
 
 
-def _prompt(stage: str, rules: str, context: dict, requirement: dict, repair: dict | None = None) -> str:
-    """统一注入原始要求，缺口诊断仅传给本轮需要修复的片段。"""
+def _prompt(stage: str, rules: str, context: dict, requirement: dict) -> str:
+    """统一注入原始要求与当前片段的校验反馈。"""
 
     return (f"生成阶段：{stage}。\n" + COMMON_RULES + rules + "\n"
         + technical_plan_feedback_prompt(requirement)
-        + ("共享目录修复任务：仅调整报告缺口所需的事实，未受影响身份与定义保持原样。\n" if repair else "")
-        + json.dumps({**context, **({"repair": repair} if repair else {})}, ensure_ascii=False))
+        + json.dumps(context, ensure_ascii=False))
 
 
-def registry_prompt(requirement: dict, repair: dict | None) -> str:
+def registry_prompt(requirement: dict) -> str:
     """全应用只确定轻量身份与按业务实体或聚合组织的分组，不展开字段、接口及动作映射。"""
 
     product = requirement["confirmed_product_plan"]
     context = {"app": product.get("app", {}), "business_flows": product.get("business_flows", []),
         "acceptance": product.get("product_acceptance_criteria", []),
         "pages": [_page_facts(page) for page in product.get("pages", [])]}
-    if repair:
-        context["previous_registry"] = catalog_registry(repair["catalog"])
     return _prompt("catalog_registry（全局身份）", "只返回 {entities:[{id,name,description}],"
         "contracts:[{id,name,entity_ids,base_path,page_ids}]}。实体在全应用只定义一次；Contract 按业务实体或业务聚合划分，"
         "先确定操作所属的业务主体，再把该主体的新增、列表查询、详情查询、修改、删除及其他业务操作归入同一 Contract。"
@@ -54,11 +50,10 @@ def registry_prompt(requirement: dict, repair: dict | None) -> str:
         "Contract 可供多页共享，page_ids 汇总该主体操作涉及的页面，entity_ids/page_ids 非空。所有业务动作所在页面必须被相应 Contract 覆盖。"
         "已确认的普通 business 动作不能改成 sequence 或新增步骤。页面刷新可复用多个现有读取能力，"
         "不要仅为刷新关联列表重复创建业务接口。"
-        "不返回实体字段、接口或动作绑定。纯静态应用可以返回两个空数组。", context, requirement,
-        {"issue": repair["issue"]} if repair else None)
+        "不返回实体字段、接口或动作绑定。纯静态应用可以返回两个空数组。", context, requirement)
 
 
-def entity_prompt(requirement: dict, registry: dict, identity: dict, repair: dict | None) -> str:
+def entity_prompt(requirement: dict, registry: dict, identity: dict) -> str:
     """只展开一个共享实体，读取消费它的业务页面和其他实体的轻量身份。"""
 
     page_ids = {page_id for contract in registry["contracts"] if identity["id"] in contract["entity_ids"] for page_id in contract["page_ids"]}
@@ -68,10 +63,10 @@ def entity_prompt(requirement: dict, registry: dict, identity: dict, repair: dic
         "正整数、非负等约束写入 description；不得输出 integer、minimum、maximum 或 properties。"
         "只定义当前实体的完整业务语义字段，不重新声明其他实体，不凭空增加产品没有的枚举值。",
         {"entity": identity, "registry": registry["entities"], "pages": [_page_facts(page)
-            for page in requirement["confirmed_product_plan"].get("pages", []) if page["pageId"] in page_ids]}, requirement, repair)
+            for page in requirement["confirmed_product_plan"].get("pages", []) if page["pageId"] in page_ids]}, requirement)
 
 
-def endpoints_prompt(requirement: dict, identity: dict, entities: list, completed: list, repair: dict | None, *, registry: dict) -> str:
+def endpoints_prompt(requirement: dict, identity: dict, entities: list, completed: list, *, registry: dict) -> str:
     """只规划目标业务能力接口，同时提供已冻结全局路由防止重复创建。"""
 
     return _prompt("catalog_endpoints（单 Contract 接口目录）", "只返回 {endpoints:[{id,name,method,path,summary}]}。"
@@ -90,26 +85,23 @@ def endpoints_prompt(requirement: dict, identity: dict, entities: list, complete
                 for item in registry["contracts"] if item["id"] != identity["id"]],
             "pages": [_page_facts(page) for page in requirement["confirmed_product_plan"].get("pages", []) if page["pageId"] in identity["page_ids"]],
             "reserved_endpoints": [{"contractId": contract["id"], "page_ids": contract["page_ids"], **endpoint}
-                for contract in completed for endpoint in contract["endpoints"]]}, requirement, repair)
+                for contract in completed for endpoint in contract["endpoints"]]}, requirement)
 
 
-def bindings_prompt(requirement: dict, page: dict, catalog: dict, repair: dict | None) -> str:
-    """逐页核对真实接口能力，输出业务槽位映射或精确缺口报告。"""
+def bindings_prompt(requirement: dict, page: dict, catalog: dict) -> str:
+    """根据已确认业务动作和接口目录生成单页动作映射。"""
 
     return _prompt("catalog_bindings（单页动作映射）", "只返回 {action_bindings:[{pageId,actionId,stepId,endpointId}]}。"
         "完整且仅覆盖当前页面每个 business action 以及 sequence 的每个 business step，直接 action 的 stepId=null。"
         "navigation/interface/external 不生成映射。同一槽位恰好映射一个现有接口，允许多个槽位复用同一接口。"
         "required_slots 是已确认产品定义的完整合法槽位，pageId/actionId/stepId 必须逐字一致，不能增删或虚构步骤。"
-        "先核对 method/path/summary 是否真正满足业务结果，GET 不能实现写入，创建不能实现更新。"
         "一个普通 business 动作即使刷新多类数据，也仍只有一个 stepId=null 的槽位，绑定主体的主要接口；"
         "相关数据已有读取接口时，后续页面阶段在 endpoint_dependencies 中声明这些读取及刷新 trigger，"
         "不能把页面重读虚构成新的业务步骤，也不能声称主要接口会返回其他接口的数据。"
-        "仅当真实业务操作或所需读取数据缺失时，报告原动作的 business_action 缺口，stepId=null。"
         "不能修改已确认 ProductPlan。"
-        "接口能力不足时只返回 {catalog_issue:{pageId,kind,actionId,stepId,reason}}，kind=business_action 或 initial_load。"
-        "业务缺口必须引用本页真实业务槽位；首次加载缺口 actionId/stepId=null；reason 使用中文。禁止虚构接口或强行匹配。",
+        "只输出本页动作映射，不输出审查报告或其他章节。",
         {"page": _page_facts(page),
             "required_slots": [{"pageId": page_id, "actionId": action_id, "stepId": step_id}
                 for page_id, action_id, step_id in sorted(business_slots({"pages": [page]}), key=str)],
             "endpoints": [{"contractId": contract["id"], **endpoint}
-            for contract in catalog["contracts"] if page["pageId"] in contract["page_ids"] for endpoint in contract["endpoints"]]}, requirement, repair)
+            for contract in catalog["contracts"] if page["pageId"] in contract["page_ids"] for endpoint in contract["endpoints"]]}, requirement)

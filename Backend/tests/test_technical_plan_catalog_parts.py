@@ -9,7 +9,6 @@ import tempfile
 from unittest import TestCase
 from unittest.mock import patch
 
-from app.agents.main.technical_plan_catalog_repair import repaired_catalog_fragments
 from app.agents.main.technical_plan_generation import generate_technical_plan_sections
 from app.agents.main.technical_plan_catalog_parts_validation import validate_registry
 from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
@@ -170,17 +169,3 @@ generate_technical_plan_sections(req,invoke=invoke)
             resumed = CatalogModel(self.catalog, self.contracts, self.pages)
             generate_technical_plan_sections(requirement, invoke=resumed)
             self.assertFalse(any("catalog_" in prompt.splitlines()[0] for prompt in resumed.calls))
-
-    def test_nested_repair_invalidates_against_original_published_baseline(self):
-        """第二次缺口不能把前次中间目录当成已发布基线，漏掉第一业务能力的旧缓存。"""
-
-        middle = deepcopy(self.catalog)
-        middle["contracts"][0]["endpoints"][0]["summary"] += "第一轮修复。"
-        final = deepcopy(middle)
-        final["contracts"][1]["endpoints"][0]["summary"] += "第二轮修复。"
-        cache = {"catalog_repair": {"catalog": middle, "baseline": self.catalog,
-            "issue": {"pageId": "customers", "kind": "initial_load", "actionId": None, "stepId": None,
-                "reason": "需要补全客户读取能力。"}}, **{f"contract:{contract['id']}": contract for contract in self.contracts}}
-        published = repaired_catalog_fragments(cache, final)
-        self.assertNotIn("contract:orders_api", published)
-        self.assertNotIn("contract:customers_api", published)

@@ -4,7 +4,7 @@ from typing import Literal
 import re
 
 from pydantic import BaseModel, ConfigDict, Field
-from app.agents.main.technical_plan_catalog_repair import CatalogBinding, raise_catalog_issue, validate_catalog_coverage
+from app.agents.main.technical_plan_catalog_repair import CatalogBinding, validate_catalog_coverage
 
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 from app.services.api_contract_validation import validate_api_contract_definitions
@@ -231,8 +231,6 @@ def validate_contract(value: dict, catalog: dict, spec: dict) -> dict:
 def validate_page(value: dict, page: dict, contracts: list[dict]) -> dict:
     """检查单页身份、业务动作和步骤覆盖，避免依赖最终归一化掩盖片段错误。"""
 
-    if "catalog_issue" in value:
-        raise_catalog_issue(value, page)
     items = value.get("pages")
     if set(value) != {"pages"} or not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
         raise ValueError("页面生成必须且只能返回 pages 中的一个对象。")
