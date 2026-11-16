@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 打包仓库，保留其他隐藏文件和符号链接，排除各层 Git 元数据、依赖、测试缓存及本地工具配置目录。
+# 打包仓库，保留其他隐藏文件和符号链接，排除各层 Git 元数据、依赖、测试、文档、缓存及本地工具配置目录。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_NAME="$(basename "$REPO_ROOT")"
@@ -35,10 +35,12 @@ if [ -e "$OUTPUT" ] || [ -L "$OUTPUT" ]; then
   exit 1
 fi
 
-# 不读取 Git 忽略规则；-y 保存链接本身，另外排除仓库根目录的 artifacts 验证产物。
+# 不读取 Git 忽略规则；-y 保存链接本身，另外排除仓库根目录的验证产物及运行数据。
 cd "$REPO_PARENT"
 ZIPOPT= zip -q -r -y "$OUTPUT" "$REPO_NAME" \
   -x '*/.git' '*/.git/*' '*/node_modules/*' '*/.venv/*' \
      '*/.pytest_cache/*' '*/.superpowers/*' '*/.vscode/*' \
-     "$REPO_NAME/artifacts" "$REPO_NAME/artifacts/*"
+     '*/tests' '*/tests/*' '*/docs' '*/docs/*' \
+     "$REPO_NAME/artifacts" "$REPO_NAME/artifacts/*" \
+     "$REPO_NAME/var" "$REPO_NAME/var/*" "$REPO_NAME/vars" "$REPO_NAME/vars/*"
 echo "打包完成：$OUTPUT"
