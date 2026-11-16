@@ -14,6 +14,16 @@ from app.services.managed_database_client import ManagedDatabaseClient, ManagedD
 from app.services.managed_table_client import ManagedTableError
 
 
+class ManagedMetadataResourceBusyError(RuntimeError):
+    """内置数据库的只读元数据请求被 SaaS 明确拒绝，需稍后重新检查。"""
+
+    code = "RESOURCE_BUSY"
+
+    def __init__(self) -> None:
+        """提供固定的公开提示，避免暴露上游响应。"""
+        super().__init__("内置数据库正在执行操作，请在操作完成后继续。")
+
+
 class MetadataModel(BaseModel):
     """只投射当前接口允许的元数据字段，忽略额外审计信息。"""
 
@@ -86,7 +96,7 @@ def _read_response(read: Callable[..., Any], datasource_key: str, *args: str) ->
         return read(datasource_key, *args)
     except ManagedTableError as exc:
         if exc.issue["code"] == "RESOURCE_BUSY":
-            raise ValueError("平台内置数据库存在未完成操作或资源繁忙，请稍后刷新数据源。") from None
+            raise ManagedMetadataResourceBusyError() from None
         if exc.issue["code"] == "TABLE_BINDING_CONFLICT":
             raise ValueError("当前表的应用归属不可用，请刷新数据源后重新选择。") from None
         raise ValueError("平台内置数据库元数据读取失败，请确认服务状态后刷新数据源。") from None

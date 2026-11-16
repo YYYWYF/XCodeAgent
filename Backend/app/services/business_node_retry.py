@@ -13,6 +13,8 @@ from app.domain.execution_recovery import (
     DurableExecutionRecord, DurableExecutionStatus, RecoveryAction, RecoveryActionKind,
     RecoveryActionPlan, RecoveryExecutionError, RecoveryIncidentStatus,
 )
+from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
+from app.services.stage_prerequisites import ArtifactRegeneration
 
 NO_RETRY_ENTRY = "找不到恢复入口，请手动发起流程。"
 _locks: dict[tuple[str, str], asyncio.Lock] = {}
@@ -61,10 +63,21 @@ def _failed_test_retry(source: DurableExecutionRecord) -> bool:
             and source.status is DurableExecutionStatus.FAILED)
 
 
+def _retry_artifact_issue(
+    source: DurableExecutionRecord, node: str, graph: Any, state: dict[str, Any],
+) -> ArtifactRegeneration | None:
+    """仅返回可确认的产物问题，资源繁忙交给有 Run 身份的节点重查。"""
+    from app.services.stage_prerequisites import regeneration_for_retry
+
+    try:
+        return regeneration_for_retry(source.workspace, node, graph, state=state)
+    except ManagedMetadataResourceBusyError:
+        return None
+
+
 async def retry_action_plan(source: DurableExecutionRecord, graph: Any) -> RecoveryActionPlan:
     """用同一轻量节点定位为 Planning 和 Workbench 签发重试或可关闭提示。"""
     hint = await read_retry_hint(source, graph)
-    from app.services.stage_prerequisites import regeneration_for_retry
     from app.services.application_lifecycle import load_application_lifecycle
     lifecycle = load_application_lifecycle(source.workspace)
     execution = lifecycle.active_executions.get(source.run_id) if lifecycle else None
@@ -73,26 +86,35 @@ async def retry_action_plan(source: DurableExecutionRecord, graph: Any) -> Recov
         inputs["build_execution_scope"] = {"type": execution.scope, "targetId": execution.target_id,
             **({"apiContractId": execution.development_target.api_contract_id}
                if execution.development_target and execution.development_target.api_contract_id else {})}
-    issue = regeneration_for_retry(source.workspace, hint.node, graph,
-        state=inputs) if hint else None
+    issue = _retry_artifact_issue(source, hint.node, graph, inputs) if hint else None
+    busy = bool(hint and not issue and source.failure
+                and source.failure.code == ManagedMetadataResourceBusyError.code)
     recheck_only = bool(issue and source.execution_kind == "workbench" and issue.key != "build_task_plan")
     target = ("api_design_readiness_gate" if issue.key == "build_task_plan" else (
         hint.node if recheck_only else issue.node
     )) if issue else hint.node if hint else ""
-    message = (f"{issue.name}检查未通过。请处理后重新检查，或结束当前任务。"
-               if recheck_only else issue.message if issue else "")
+    if issue:
+        message = f"{issue.name}检查未通过。请处理后重新检查，或结束当前任务。" if recheck_only else issue.message
+        reason = "STAGE_PREREQUISITE_INCOMPLETE"
+        label = "重新检查" if recheck_only else issue.label
+    elif busy:
+        message = "数据库操作尚未完成，操作完成后点击继续，重新检查原步骤。"
+        reason = "MANAGED_DATABASE_RESOURCE_BUSY"
+        label = "继续"
+    else:
+        message = "读取当前文件，重新执行失败的业务步骤。" if hint else NO_RETRY_ENTRY
+        reason = "BUSINESS_NODE_RETRY_READY" if hint else "RETRY_ENTRY_NOT_FOUND"
+        label = ("继续生成" if source.execution_kind == "application_planning"
+                 and source.status is DurableExecutionStatus.INTERRUPTED else "重试")
     digest = hashlib.sha256(f"{source.run_id}:{source.updated_at}:{target}".encode()).hexdigest()
     action = RecoveryAction(actionId=f"retry:{digest}", kind=RecoveryActionKind.RETRY_BUSINESS_NODE,
-                            targetNode=target, label="重新检查" if recheck_only else issue.label if issue else (
-                                "继续生成" if source.execution_kind == "application_planning"
-                                and source.status is DurableExecutionStatus.INTERRUPTED else "重试"),
-                            description=message if issue else "读取当前文件，重新执行失败的业务步骤。",
+                            targetNode=target, label=label,
+                            description=message,
                             requiresConfirmation=False) if hint else None
     return RecoveryActionPlan(incidentId=digest, sourceRunId=source.run_id, threadId=source.thread_id,
                               executionKind=source.execution_kind,
                               status=RecoveryIncidentStatus.RECOVERABLE if hint else RecoveryIncidentStatus.NEEDS_ATTENTION,
-                              reasonCode="STAGE_PREREQUISITE_INCOMPLETE" if issue else "BUSINESS_NODE_RETRY_READY" if hint else "RETRY_ENTRY_NOT_FOUND",
-                              message=message if issue else "读取当前文件，重新执行失败的业务步骤。" if hint else NO_RETRY_ENTRY,
+                              reasonCode=reason, message=message,
                               primaryAction=action, updatedAt=source.updated_at)
 
 
@@ -249,8 +271,7 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             from app.services.initial_planning_feedback import initial_feedback_node
 
             node = initial_feedback_node(lifecycle, initial_feedback)
-        from app.services.stage_prerequisites import regeneration_for_retry
-        issue = regeneration_for_retry(source.workspace, node, graph, state={**checkpoint.values, "workspace": source.workspace})
+        issue = _retry_artifact_issue(source, node, graph, {**checkpoint.values, "workspace": source.workspace})
         # 开发重试只重新检查原节点，不能把“重试”解释为修订上游文档。
         if issue and (source.execution_kind == "application_planning" or issue.key == "build_task_plan"):
             node = "api_design_readiness_gate" if issue.key == "build_task_plan" else issue.node
@@ -297,7 +318,11 @@ async def prepare_business_node_retry(source: DurableExecutionRecord, graph: Any
             state.update(design_change_submission=True, design_change_request=hint.request,
                 design_change_target=generation_target, design_change_generation_target=generation_target,
                 design_change_generation_request=hint.request)
-        refresh_retry_node_inputs(state, node)
+        try:
+            refresh_retry_node_inputs(state, node)
+        except ManagedMetadataResourceBusyError:
+            # 保留原输入与 Build 绑定，由新 Run 的节点入口重新读取正式产物。
+            pass
         if initial_feedback is not None:
             from app.services.initial_planning_feedback import apply_initial_planning_feedback
 

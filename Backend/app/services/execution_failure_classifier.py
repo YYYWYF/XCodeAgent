@@ -68,11 +68,22 @@ def classify_execution_failure(
 
     normalized_operation = str(operation or "").strip() or None
     from app.services.stage_prerequisites import StagePrerequisiteError
+    from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
     if isinstance(exc, StagePrerequisiteError):
         return ExecutionFailureEvidence(
             origin=ExecutionFailureOrigin.BUSINESS, code="STAGE_PREREQUISITE_INCOMPLETE",
             operation=normalized_operation, replay_compatible=True,
             diagnostic_message=exc.issue.diagnostic, user_message=str(exc),
+        )
+    if isinstance(exc, ManagedMetadataResourceBusyError):
+        return ExecutionFailureEvidence(
+            origin=ExecutionFailureOrigin.EXTERNAL_DEPENDENCY,
+            code=exc.code,
+            dependency="managed_database",
+            operation=normalized_operation,
+            replay_compatible=True,
+            diagnostic_message="内置数据库正在执行操作，暂时无法读取数据表结构。",
+            user_message="数据库操作尚未完成，请稍后点击“继续”重新检查。",
         )
     # 模板领域的 models 模块不是模型 SDK，必须在通用模块归因前识别。
     # 保留原可重放属性和真实 Graph 节点，恢复入口仍由既有 resolver 验证。

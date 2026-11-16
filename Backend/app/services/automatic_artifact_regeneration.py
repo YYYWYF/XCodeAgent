@@ -1,6 +1,7 @@
 """只重置开发内部的失效任务计划，上游文档问题交给原节点检查报告。"""
 from typing import Any
 
+from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
 from app.services.stage_prerequisites import regeneration_for_retry
 
 
@@ -13,7 +14,11 @@ async def prepare_automatic_regeneration(inputs: dict[str, Any], *, run_id: str,
         return None
     values = inputs.get("resume_values") or {}
     node = inputs.get("resume_from") or "api_design_readiness_gate"
-    issue = regeneration_for_retry(workspace, node, state={**values, "workspace": workspace})
+    try:
+        issue = regeneration_for_retry(workspace, node, state={**values, "workspace": workspace})
+    except ManagedMetadataResourceBusyError:
+        # 原节点会重查元数据；此时没有证据可以重置 DAG。
+        return None
     if issue is None or issue.key != "build_task_plan":
         # 正式文档缺失或失效不授权返回规划；原开发节点仍检查并报告具体原因。
         return None

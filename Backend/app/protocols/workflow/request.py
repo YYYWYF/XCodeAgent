@@ -661,7 +661,8 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
     )
     from app.services.workflow_input_artifacts import pregraph_artifact_values
     artifact_entry_node = resume_from or "api_design_readiness_gate"
-    artifact_target = {"selected_endpoint_id": selected_endpoint_id, "selectedPageId": selectedPageId}
+    artifact_target = {"workspace": workspace, "selected_endpoint_id": selected_endpoint_id,
+                       "selectedPageId": selectedPageId}
     if not selected_endpoint_id and not selectedPageId and not revision_build_target_type:
         artifact_target["build_execution_scope"] = (
             _optional_dict(payload.get("buildExecutionScope"))

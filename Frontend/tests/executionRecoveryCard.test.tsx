@@ -46,6 +46,34 @@ test('产品计划损坏的解析细节只出现在可展开详情中', () => {
   assert.doesNotMatch(markup.slice(detailsStart, detailsEnd), /<details[^>]*\bopen/)
 })
 
+/** 繁忙时复用原恢复卡，按钮及说明取自后端签发的动作。 */
+test('内置数据库繁忙时显示继续并保留后端签发的 Build 动作', () => {
+  const candidate = recovery('ready')
+  candidate.executionStatus = 'failed'
+  const actionPlan = candidate.recoveryActionPlan
+  actionPlan.reasonCode = 'MANAGED_DATABASE_RESOURCE_BUSY'
+  actionPlan.message = '数据库操作尚未完成，操作完成后点击继续，重新检查原步骤。'
+  actionPlan.primaryAction = {
+    actionId: 'continue-build', kind: 'retry_business_node', targetNode: 'build',
+    label: '继续', description: actionPlan.message, requiresConfirmation: false
+  }
+  candidate.failureDiagnostic = {
+    sourceRunId: candidate.sourceRunId, origin: 'external_dependency', code: 'RESOURCE_BUSY',
+    dependency: 'managed_database', operation: 'build', message: '暂时无法读取数据表结构。'
+  }
+  const incident = workbenchRecoveryIncident(candidate)!
+  assert.equal(incident.kind, 'recoverable')
+  if (incident.kind !== 'recoverable') return
+  assert.deepEqual(incident.action, actionPlan.primaryAction)
+  assert.equal(incident.recoveryMessage, actionPlan.message)
+  /** 仅验证真实恢复卡的呈现。 */
+  const onAction = () => undefined
+  const markup = renderToStaticMarkup(createElement(RecoveryIncidentCard, { incident, onAction }))
+  assert.match(markup, />继续</)
+  assert.match(markup, /RESOURCE_BUSY/)
+  assert.doesNotMatch(markup, /前置文件需要重新生成/)
+})
+
 /** 无 checkpoint 入口只显示可关闭提示，不能继续派发相同重试。 */
 test('找不到节点时 Planning 和二次修改均使用可关闭提示', () => {
   const candidate = recovery('blocked')

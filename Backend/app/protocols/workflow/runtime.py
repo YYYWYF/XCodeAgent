@@ -2552,8 +2552,9 @@ def build_workflow_ag_ui_stream(
             # 只读取同一 Workflow Run 的结构化失败；模型主失败和规划逐轮原因各自归因。
             structured_failure = None
             from app.services.stage_prerequisites import StagePrerequisiteError
-            if isinstance(exc, StagePrerequisiteError):
-                # 外层仅发布业务说明，原文件和解析原因通过 failureDiagnostic 留在详情。
+            from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
+            if isinstance(exc, (StagePrerequisiteError, ManagedMetadataResourceBusyError)):
+                # 主提示使用安全文案，结构化错误码及诊断随原 AG-UI 失败结果发布。
                 structured_failure = classify_execution_failure(exc, operation=current_phase)
             stale_planning_failure = (
                 isinstance(exc, DagPlanningError)

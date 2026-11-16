@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from app.domain.application_lifecycle import (
     PendingInteraction,
@@ -23,6 +24,7 @@ from app.services.application_lifecycle import (
 )
 from app.services.api_design import endpoint_field_nodes
 from app.services.build_context_resolver import resolve_confirmation_context
+from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 from app.workspace.endpoint_design_documents import (
     technical_plan_sha256,
@@ -483,6 +485,21 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
             "new",
         )
         self.assertIn("confirm", confirmation["actionValues"])
+
+    def test_resource_busy_keeps_pending_confirmation_available(self) -> None:
+        """确认详情暂不可读时保留原 Pending 身份和动作。"""
+        pending = self._write_pending(build_execution_scope={
+            "type": "endpoint", "targetId": "listOrders", "apiContractId": "orders-api",
+        })
+        busy = ManagedMetadataResourceBusyError()
+        with patch("app.services.planning_refresh_recovery.resolve_confirmation_context", side_effect=busy):
+            recovered = self._resolve()
+        self.assertEqual(recovered["status"], "awaiting_confirmation")
+        confirmation = recovered["confirmation"]
+        self.assertIn(str(busy), confirmation["errors"])
+        self.assertNotIn("targetReview", confirmation)
+        self.assertIn("confirm", confirmation["actionValues"])
+        self.assertEqual(load_pending_build_task_plan(self.state), pending)
 
     def test_case_b_missing_pending_is_idle_even_with_active_planning_run(self) -> None:
         """没有 PendingPlan 时，旧 PlanningRun 不能伪造待确认状态。"""

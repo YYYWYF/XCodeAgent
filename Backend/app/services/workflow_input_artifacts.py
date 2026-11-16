@@ -3,21 +3,24 @@
 from collections.abc import Callable
 from typing import Any
 
+from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
 from app.services.stage_prerequisites import regeneration_for_retry
 
 
 def pregraph_artifact_values(workspace: str, node: str, read: Callable[[], dict[str, Any]], *, state: dict | None = None) -> dict[str, Any]:
     """必要产物不可用时延后到节点读取，避免在身份、原提问进入 checkpoint 前抛错。"""
-    issue = regeneration_for_retry(workspace, node, state=state) if workspace else None
-    if issue:
-        # 这里不把坏文件解释为空资产供 Agent 使用；正式节点 wrapper 会在 Agent 前
-        # 再读磁盘并抛结构化前置提示，由原失败、清理和重试协议发布重新生成入口。
-        return {}
     try:
-        return read()
-    except (OSError, ValueError):
-        # 请求投影后文件可能被并发替换；只延后已能定位生成节点的产物错误。
         issue = regeneration_for_retry(workspace, node, state=state) if workspace else None
         if issue:
+            # 正式节点会在调用 Agent 前重新读取并检查磁盘输入。
             return {}
-        raise
+        try:
+            return read()
+        except (OSError, ValueError):
+            # 文件可能被并发替换；只延后能定位到生成节点的产物错误。
+            if workspace and regeneration_for_retry(workspace, node, state=state):
+                return {}
+            raise
+    except ManagedMetadataResourceBusyError:
+        # 入图后用原请求和完整 Run 身份重新检查并记录结果。
+        return {}

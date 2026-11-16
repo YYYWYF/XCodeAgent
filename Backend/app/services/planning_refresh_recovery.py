@@ -6,6 +6,7 @@ from typing import Any, Literal, TypedDict
 
 from app.services.build_context_resolver import resolve_confirmation_context
 from app.services.build_task_confirmation import build_task_confirmation_read_model
+from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
 from app.workspace.task_documents import (
     build_task_plan_lifecycle_lock,
     load_confirmed_build_task_plan,
@@ -57,8 +58,8 @@ def _pending_confirmation(
     if target_type in {"page", "endpoint"}:
         try:
             context = resolve_confirmation_context(workspace, scope)
-        except (KeyError, OSError, TypeError, ValueError) as exc:
-            # Refresh 只读恢复不能因正式上下文损坏而伪造空接口详情或升级为 500。
+        except (KeyError, OSError, TypeError, ValueError, ManagedMetadataResourceBusyError) as exc:
+            # 正式上下文不可读时只保留 Pending 和真实原因，避免 Lifecycle 读取中断。
             context_error = str(exc).strip() or "正式上下文解析失败。"
         else:
             read_model = build_task_confirmation_read_model(

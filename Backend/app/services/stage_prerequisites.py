@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.services.managed_database_metadata import ManagedMetadataResourceBusyError
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,9 @@ def regeneration_for_retry(workspace: str, node: str, graph=None, *, state: dict
                 errors = task_plan_errors(state, value)
                 valid = not errors
                 detail = "任务直接输入已变化：" + "、".join(errors) if errors else ""
+        except ManagedMetadataResourceBusyError:
+            # 元数据暂时不可读，不能据此判定任务计划失效。
+            raise
         except (OSError, ValueError) as exc:
             valid = False
             detail = str(exc)

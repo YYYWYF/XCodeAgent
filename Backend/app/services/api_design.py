@@ -439,6 +439,7 @@ def api_design_readiness(
                 _validate_persisted_design(project_plan, contract, endpoint, design)
                 from app.services.managed_database_metadata import validate_managed_snapshots
 
+                # 只有已确认的校验错误会标为过期，资源繁忙异常继续交给业务节点。
                 validate_managed_snapshots(workspace_root, design)
             except (ApiDesignError, ValueError) as exc:
                 status = {

@@ -207,6 +207,7 @@ export function workbenchRecoveryIncident(
     ? '开发任务执行失败。' : rawFailureMessage
   if (actionPlan.status === 'recoverable' && actionPlan.primaryAction) {
     const regenerate = actionPlan.reasonCode === 'STAGE_PREREQUISITE_INCOMPLETE'
+    const databaseBusy = actionPlan.reasonCode === 'MANAGED_DATABASE_RESOURCE_BUSY'
     const retryingNode = ['retry_failed_node', 'retry_business_node'].includes(
       actionPlan.primaryAction.kind
     )
@@ -220,7 +221,7 @@ export function workbenchRecoveryIncident(
       failureDiagnostic: regenerate && failureDiagnostic
         ? { ...failureDiagnostic, userMessage: actionPlan.message } : failureDiagnostic,
       failureMessage,
-      recoveryMessage: regenerate ? actionPlan.message : buildRetry
+      recoveryMessage: regenerate || databaseBusy ? actionPlan.message : buildRetry
         ? `${completedMessage}将保留已完成进度，${buildSummary?.retry_available === true
             ? '仅重试失败任务。'
             : buildSummary?.recovery_available === true
@@ -234,7 +235,7 @@ export function workbenchRecoveryIncident(
           : retryingNode
         ? nodeLabel ? `将从「${nodeLabel}」节点重试。` : '重试时将重新确认执行起点。'
         : '可以继续当前执行。',
-      action: retryingNode && !regenerate
+      action: retryingNode && !regenerate && !databaseBusy
         ? { ...actionPlan.primaryAction, label: '重试' }
         : actionPlan.primaryAction,
       incidentId: actionPlan.incidentId
