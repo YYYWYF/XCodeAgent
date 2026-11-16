@@ -301,6 +301,47 @@ def create_workspace_permissions(
         )
         return permissions
 
+    if mode == "frontend":
+        # 前端编码 Agent：默认在前端目录读写；后端目录只读 —— 看 API 契约/服务代码
+        # 是合理诉求（避免凭空实现客户端），但**不能写**。`.devagentstudio` 平台产物
+        # 既不能读也不能写：那不是业务代码，读了会让 LLM 把上一轮规划草稿当成
+        # 真相源，写了会污染分支表 / spec / plan 等关键状态。
+        permissions.extend(
+            [
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=[
+                        "/frontend/node_modules",
+                        "/frontend/node_modules/**",
+                        "/.devagentstudio",
+                        "/.devagentstudio/**",
+                    ],
+                    mode="deny",
+                ),
+                FilesystemPermission(
+                    operations=["write"],
+                    paths=["/frontend/pnpm-lock.yaml"],
+                    mode="deny",
+                ),
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=["/frontend", "/frontend/**"],
+                    mode="allow",
+                ),
+                FilesystemPermission(
+                    operations=["read"],
+                    paths=["/backend", "/backend/**"],
+                    mode="allow",
+                ),
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=["/**"],
+                    mode="deny",
+                ),
+            ]
+        )
+        return permissions
+
     permissions.append(
         FilesystemPermission(operations=["read", "write"], paths=["/**"], mode="allow")
     )
