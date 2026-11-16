@@ -5,7 +5,7 @@ import {
   WarningOutlined
 } from '@ant-design/icons'
 import { Button, message } from 'antd'
-import { BuiltinAuthorizationWorkflowPanel } from './BuiltinAuthorizationTaskCard'
+import { BuiltinAuthorizationWorkflowPanel } from '../../../BuiltinAuthorization'
 import type { ReactElement, ReactNode } from 'react'
 import type { WorkflowAuthorizationBootstrap } from '../../../../service/authorizationBootstrap'
 import { cx } from '../../../../utils'

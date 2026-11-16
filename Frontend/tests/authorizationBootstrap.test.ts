@@ -24,6 +24,7 @@ import Panel from '../src/renderer/src/components/AiChatPanel/components/Process
 import { refreshBuiltinAuthorization, runBuiltinPatch } from '../src/renderer/src/service/builtinAuthorization'
 import BuiltinPatchCard from '../src/renderer/src/components/AiChatPanel/components/WorkspaceDebugDock/BuiltinPatchCard'
 import './authorizationBootstrapTask.test'
+import './dataSourcesBuiltinAuthorization.test'
 
 test('Builtin 自动运行隐藏人工按钮，显式原操作查询保持单次 AG-UI', async () => {
   const originalWindow = globalThis.window
@@ -645,7 +646,8 @@ test('真实会话路径：权限已放行，Build 任务停止失败时恢复�
     })
   )
   assert.match(markup, /当前运行已停止/)
-  assert.doesNotMatch(markup, /权限数据库初始化/)
+  // 折叠诊断保留来源信息，用户看到的正文应来自实际失败的 Build。
+  assert.doesNotMatch(markup.replace(/<details\b[^>]*>[\s\S]*?<\/details>/g, ''), /权限数据库初始化/)
   assert.match(markup, /重试/)
 })
 

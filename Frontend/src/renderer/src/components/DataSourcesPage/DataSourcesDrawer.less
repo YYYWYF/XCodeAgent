@@ -22,10 +22,14 @@
   // 内置表数量增多时只滚动列表，头部、刷新与本地搜索保持可见，沿用明暗主题令牌。
   .source-drawer-list.is-builtin-database-list {
     display: flex; flex-direction: column; min-height: 0; overflow: hidden;
-    > .source-drawer-header, > .source-drawer-tabs, > .source-drawer-tools, > .ant-alert { flex-shrink: 0; }
-    > .ant-spin-nested-loading {
-      flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto;
-      scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--wb-border-strong) transparent;
+    > .source-drawer-header, > .source-drawer-tabs, > .source-drawer-authorization { flex-shrink: 0; }
+    > .source-drawer-items {
+      display: flex; flex: 1; flex-direction: column; min-height: 0;
+      > .source-drawer-tools, > .ant-alert { flex-shrink: 0; }
+      > .ant-spin-nested-loading {
+        flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto;
+        scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--wb-border-strong) transparent;
+      }
     }
   }
   .source-drawer-header { display: flex; gap: 14px; align-items: center; min-height: 92px; padding: 20px; border-bottom: 1px solid var(--wb-border);
@@ -65,7 +69,7 @@
     .ant-btn-primary:not(:disabled):hover, .ant-btn-primary:not(:disabled):focus { color: #fff; background: var(--wb-accent-hover); border-color: var(--wb-accent-hover); }
   }
   // 内置表工具区使用轻量标题和即时筛选输入框，不显示独立的搜索提交按钮。
-  .is-builtin-database-list > .source-drawer-tools {
+  .is-builtin-database-list > .source-drawer-items > .source-drawer-tools {
     padding: 12px 16px 14px;
     .source-drawer-tool-row { min-height: 28px; }
     .source-drawer-static-hint { color: var(--wb-text); font-size: 13px; font-weight: 600; }
@@ -85,6 +89,20 @@
       .ant-input-clear-icon { color: var(--wb-text-tertiary);
         &:hover { color: var(--wb-text-secondary); }
       }
+    }
+  }
+  // 权限初始化是数据表的同级模块，详情继续独立限高滚动。
+  .source-drawer-authorization {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--wb-border);
+    p { margin: 6px 0; color: var(--wb-text-secondary); }
+    .source-builtin-read-state { margin-inline-start: 6px; }
+    .source-builtin-authorization-details {
+      max-height: min(228px, 33vh);
+      overflow: auto;
+      scrollbar-color: var(--wb-border-strong) transparent;
+      scrollbar-width: thin;
+      &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
     }
   }
   .source-drawer-rows { padding: 0 16px 24px;

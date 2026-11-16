@@ -6,17 +6,23 @@ import threading
 import unittest
 import multiprocessing
 from concurrent.futures import Future
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
+from langgraph.checkpoint.memory import InMemorySaver
+
+from app.graph.workflow import build_graph, route_prepare_build_tasks, route_workflow_start
+from app.persistence.checkpoints import close_workflow_checkpointer
+from app.protocols.workflow import build_workflow_ag_ui_stream
+from app.protocols.workflow.projection import _workflow_next_nodes
 
 from app.services import builtin_authorization_orchestrator as orchestration
 from app.services.authorization_workspace_projector import RUNTIME, read_record
 from app.services.builtin_authorization_bootstrap import run_builtin_authorization_bootstrap
 from app.services.builtin_authorization_patch import refresh_patch
 from app.services.builtin_authorization_seed import PURPOSE, seed_request_fingerprint
-from app.services.builtin_authorization_state import save_state
+from app.services.builtin_authorization_state import save_state, seed_ready
 from app.services.builtin_authorization_task_store import AuthorizationTask, read_task, save_task
 from app.protocols.builtin_authorization import build_builtin_authorization_stream
 from app.services.managed_database_client import ManagedDatabaseClient
@@ -101,6 +107,113 @@ class BuiltinAuthorizationOrchestratorTests(AuthorizationOrchestratorSafetyCases
         self.assertEqual(sum(method == "POST" for method, _ in self.calls), 1)
         self.assertEqual(sum(method == "GET" for method, _ in self.calls), 5)
         self.assertEqual(orchestration.get_builtin_authorization_task(str(self.root))["status"], "ready")
+
+    def test_run_patch_verified_then_new_build_omits_bootstrap_and_remote_posts(self) -> None:
+        """真实手动 AG-UI 安排任务，进行 Schema/Seed/Verify 后，生产 Graph 直接进入 Build。"""
+
+        (self.root / RUNTIME / "state.json").unlink()
+        workspace = str(self.root)
+        state = {"workspace": workspace, "technical_plan": self.plan, "status": "completed"}
+        ensure_target = "app.graph.nodes.builtin_authorization_bootstrap.ensure_builtin_authorization_task"
+
+        async def collect_patch() -> str:
+            """从抽屉使用的同一协议启动，不提前写入成功标记。"""
+            return "".join([frame async for frame in build_builtin_authorization_stream({
+                "threadId": "manual-thread", "runId": "manual-run",
+                "forwardedProps": {"builtinAuthorization": {"workspaceRoot": workspace, "action": "run_patch"}},
+            })])
+
+        with patch.object(orchestration, "_executor") as executor:
+            executor.submit.return_value = Future()
+            self.addCleanup(orchestration._workers.pop, workspace, None)
+            frames = asyncio.run(collect_patch())
+            self.assertIn("RUN_FINISHED", frames)
+            self.assertIn('"status":"pending"', frames.replace(" ", ""))
+            task = read_task(self.root)
+            self.generation = task.generation
+            self.assertFalse(seed_ready(self.root, self.application, self.plan))
+            self.assertTrue(self.tick())
+            self.assertEqual(route_prepare_build_tasks(state), "builtin_authorization_bootstrap")
+            # 未完成时运行真正的 Build 权限节点，复用正在执行的手动任务。
+            from app.graph.nodes.builtin_authorization_bootstrap import builtin_authorization_bootstrap
+            with patch("app.graph.nodes.builtin_authorization_bootstrap._build_plan_gate_error", return_value=None):
+                builtin_authorization_bootstrap(state)
+            executor.submit.assert_called_once()
+            self.assertEqual(read_task(self.root).generation, self.generation)
+            self.assertEqual(self.schema_posts, 1)
+
+            self.schema_status, self.schema_synced = "SUCCEEDED", True
+            self.assertTrue(self.tick())
+            self.assertTrue(self.tick())
+            self.assertFalse(self.tick())
+
+        self.assertTrue(seed_ready(self.root, self.application, self.plan))
+        self.assertEqual(read_task(self.root).status, "ready")
+        self.assertEqual(route_prepare_build_tasks(state), "build")
+        self.assertEqual(_workflow_next_nodes("prepare_build_tasks", state), ["build"])
+        for node in ("build", "builtin_authorization_bootstrap", "authorization_bootstrap"):
+            self.assertEqual(route_workflow_start({**state, "resume_from": node}), "build")
+        before = (self.schema_posts, list(self.calls))
+
+        async def collect_build() -> list[dict]:
+            """生成真正的工作流帧，只替换工作区扫描、已通过 DAG 的结果和 Build 执行体。"""
+            def planner(_state):
+                """模拟已确认任务规划交给分流所需的增量。"""
+                return {"phase": "prepare_build_tasks", "status": "completed", "technical_plan": self.plan}
+
+            def inspect_workspace(_state):
+                """提供有效工作区版本，不扫描或运行外部程序。"""
+                return {"phase": "inspect_workspace", "status": "completed", "workspace_revision": "fixture"}
+
+            async def observe_start(*, operation, callback, **_kwargs):
+                """保留节点开始观察，隔离测试用例外的持久化副作用。"""
+                if operation == "node.started":
+                    return await callback()
+
+            with (
+                patch("app.protocols.workflow.request._project_plan_start_values", return_value={"technical_plan": self.plan}),
+                patch("app.services.stage_prerequisites.require_stage_inputs"),
+                patch("app.graph.workflow.nodes.inspect_workspace", new=inspect_workspace),
+                patch("app.graph.workflow.nodes.build", return_value={
+                    "phase": "build", "status": "requires_user_input",
+                }) as build,
+                patch(ensure_target) as ensure,
+                patch.object(ManagedDatabaseClient, "_http_client") as http,
+                patch("app.protocols.workflow.runtime.observe_node_started", new_callable=AsyncMock) as observed,
+                patch("app.protocols.workflow.runtime.best_effort_recovery_observation", side_effect=observe_start),
+            ):
+                graph = build_graph(checkpointer=InMemorySaver(), prepare_build_tasks_node=planner)
+                try:
+                    frames = [frame async for frame in build_workflow_ag_ui_stream(
+                        graph=graph, payload={"threadId": "after-patch-thread", "runId": "after-patch-run",
+                            "messages": [{"role": "user", "content": "执行 Build"}],
+                            "forwardedProps": {"resumeFrom": "inspect_workspace", "workspaceRoot": workspace}},
+                    )]
+                finally:
+                    await close_workflow_checkpointer()
+                self.assertEqual(build.call_count, 1, next((frame for frame in frames if "RUN_ERROR" in frame), ""))
+                ensure.assert_not_called()
+                http.assert_not_called()
+                started = [call.kwargs.get("node_name") for call in observed.await_args_list]
+                self.assertIn("build", started)
+                self.assertNotIn("builtin_authorization_bootstrap", started)
+                self.assertNotIn("authorization_bootstrap", started)
+                return [json.loads(line[5:]) for frame in frames for line in frame.splitlines() if line.startswith("data:")]
+
+        events = asyncio.run(collect_build())
+        self.assertTrue(any(event["type"] == "RUN_FINISHED" for event in events))
+        self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events))
+        process_nodes = [event.get("value", {}).get("nodeName") for event in events if event.get("name") == "agent-process"]
+        self.assertIn("build", process_nodes)
+        self.assertNotIn("builtin_authorization_bootstrap", process_nodes)
+        self.assertNotIn("authorization_bootstrap", process_nodes)
+        self.assertEqual((self.schema_posts, self.calls), before)
+        self.assertEqual(self.schema_posts, 1)
+        self.assertEqual(sum(method == "POST" for method, _ in self.calls), 1)
+
+        self.application["authorization"]["initialAdministratorSubjects"].append("new-admin")
+        self.assertFalse(seed_ready(self.root, self.application, self.plan))
+        self.assertEqual(route_prepare_build_tasks(state), "builtin_authorization_bootstrap")
 
     def test_schema_success_without_structure_never_seeds(self) -> None:
         """操作成功不能替代四表核验。"""

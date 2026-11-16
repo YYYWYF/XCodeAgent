@@ -1,80 +1,28 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
-import {
-  BuiltinPatchResponseError,
-  runBuiltinPatch,
-  type BuiltinPatchResult,
-  type BuiltinPatchStage
-} from '../../../../service/builtinAuthorization'
-import BuiltinAuthorizationTaskCard from '../ProcessSteps/BuiltinAuthorizationTaskCard'
-import { useBuiltinAuthorizationTask } from '../ProcessSteps/useBuiltinAuthorizationTask'
+import { Button } from 'antd'
+import type { ReactElement } from 'react'
+import type { BuiltinPatchResult, BuiltinPatchStage } from '../../../../service/builtinAuthorization'
+import { BuiltinAuthorizationTaskCard, useBuiltinAuthorizationActions, useBuiltinAuthorizationTask } from '../../../BuiltinAuthorization'
 import { cx } from '../../../../utils'
 import './WorkspaceDebugDock.less'
 
 type PatchCardState = {
   workspace?: string
-  onChanged?: () => void
   result?: BuiltinPatchResult
   progress?: { stage: BuiltinPatchStage; message: string }
+  error?: string
+  refreshing?: boolean
+  refreshOriginal?: () => void
 }
 
-/** 读取当前应用的补丁结果，隔离切换工作区后的迟到事件。 */
+/** 调试面板订阅权威任务，调度期间保留原进度和异常提示。 */
 export function useBuiltinPatchCard(workspace: string, enabled: boolean) {
-  const scope = enabled ? workspace : ''
-  const [revision, setRevision] = useState(0)
-  const live = useBuiltinAuthorizationTask(scope || undefined, revision)
-  const [card, setCard] = useState<{ workspace: string; value: PatchCardState }>()
-  const active = useRef<{ workspace: string }>()
-  const currentScope = useRef(scope)
-  currentScope.current = scope
-
-  useEffect(() => {
-    active.current = undefined
-    return () => { active.current = undefined }
-  }, [scope])
-
-  /** 点击即反馈，网络断开时只提供原操作查询。 */
-  async function execute(action: 'run_patch' | 'refresh_patch'): Promise<void> {
-    if (!scope || active.current?.workspace === scope) return
-    const owner = { workspace: scope }
-    const previous = card?.workspace === scope ? card.value.result : undefined
-    const request: { stage: BuiltinPatchStage } = { stage: action === 'run_patch' ? 'schema' : 'query' }
-    active.current = owner
-    setCard({ workspace: scope, value: { result: previous, progress: {
-      stage: request.stage, message: action === 'run_patch' ? '正在检查权限表…' : '正在查询原操作…'
-    } } })
-    /** 仅向仍归属本次请求的工作区投递结果。 */
-    function update(value: PatchCardState): void {
-      if (currentScope.current === scope && active.current === owner) setCard({ workspace: scope, value })
-    }
-    try {
-      const result = await runBuiltinPatch(scope, action, (nextStage, message) => {
-        request.stage = nextStage
-        update({ result: previous, progress: { stage: nextStage, message } })
-      })
-      if (result) {
-        update({ result })
-        if (currentScope.current === scope && active.current === owner) setRevision((value) => value + 1)
-      }
-    } catch (error) {
-      const rejected = error instanceof BuiltinPatchResponseError
-      const { stage } = request
-      update({ result: {
-        ...previous,
-        stage: stage === 'query' ? previous?.stage || 'schema' : stage,
-        schemaReady: stage === 'seed' || stage === 'verify' || Boolean(previous?.schemaReady),
-        status: rejected ? 'failed' : 'needs_attention',
-        seedReady: false,
-        message: rejected ? error.message : '连接中断，无法确认本次操作结果。请查询原操作。',
-        nextAction: undefined
-      } })
-    } finally {
-      if (active.current === owner) active.current = undefined
-    }
-  }
-
-  const current = card?.workspace === scope ? card.value : undefined
-  return { card: current || live ? { ...current, result: live || current?.result,
-    workspace: scope, onChanged: () => setRevision((value) => value + 1) } : undefined, execute }
+  const scope = enabled && workspace ? workspace : undefined
+  const live = useBuiltinAuthorizationTask(scope)
+  const { progress, error, execute } = useBuiltinAuthorizationActions(scope)
+  const card = live.value || progress || error || (live.value === null && live.refreshing)
+    ? { result: live.value || undefined, workspace: scope, progress, error, refreshing: live.refreshing, refreshOriginal: () => { void execute('refresh_patch') } }
+    : undefined
+  return { card, execute }
 }
 
 /** 调试入口复用统一权限卡片和只读轮询，无独立 Schema/Seed 通道。 */
@@ -84,8 +32,13 @@ export default function BuiltinPatchCard({ card, disabled }: {
 }): ReactElement {
   // 调试区位于固定底栏，共用任务卡必须放回受限高度的滚动容器，避免撑出窗口。
   return <div className={cx('builtin-patch-card')} role="region" aria-label="权限初始化结果" tabIndex={0}>
+    {card.progress && <div role="status">{card.progress.message}</div>}
+    {card.error && <div className={cx('authorization-bootstrap-panel')}>
+      <p role="alert">{card.error}</p>
+      {!card.result && <Button disabled={disabled} onClick={card.refreshOriginal}>刷新状态</Button>}
+    </div>}
     {card.result
-      ? <BuiltinAuthorizationTaskCard task={card.result} workspace={card.workspace} disabled={disabled} onChanged={card.onChanged} />
-      : <div role="status">{card.progress?.message || '正在调度权限初始化…'}</div>}
+      ? <BuiltinAuthorizationTaskCard task={card.result} workspace={card.workspace} disabled={disabled || Boolean(card.progress) || Boolean(card.refreshing)} />
+      : !card.progress && !card.error && <div role="status">正在调度权限初始化…</div>}
   </div>
 }

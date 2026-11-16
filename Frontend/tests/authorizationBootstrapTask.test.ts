@@ -3,8 +3,8 @@ import { test } from 'node:test'
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { useBuiltinAuthorizationTask } from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/useBuiltinAuthorizationTask'
-import BuiltinAuthorizationTaskCard from '../src/renderer/src/components/AiChatPanel/components/ProcessSteps/BuiltinAuthorizationTaskCard'
+import { useBuiltinAuthorizationTask } from '../src/renderer/src/components/BuiltinAuthorization/useBuiltinAuthorizationTask'
+import BuiltinAuthorizationTaskCard from '../src/renderer/src/components/BuiltinAuthorization/BuiltinAuthorizationTaskCard'
 import { authorizationTaskWorkflowResult, runBuiltinPatch, type BuiltinPatchResult } from '../src/renderer/src/service/builtinAuthorization'
 
 test('重试按钮按失败状态启用，运行中、就绪和已取消各自保留限制', () => {
@@ -115,7 +115,7 @@ test('只读轮询隔离工作区迟到响应，历史不查询，隐藏暂停�
   }
   /** 仅渲染 Hook，无宿主 DOM 或第二套轮询实现。 */
   function Harness({ workspace }: { workspace?: string }) {
-    current = useBuiltinAuthorizationTask(workspace)
+    current = useBuiltinAuthorizationTask(workspace).value ?? undefined
     return null
   }
   /** 等待 SDK 消费当前内存流，不使用真实计时等待。 */
