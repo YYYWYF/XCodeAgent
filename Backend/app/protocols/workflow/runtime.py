@@ -878,9 +878,24 @@ def build_workflow_ag_ui_stream(
                     thread_id=thread_id,
                     run_id=run_id,
                 )
+            # AGENTS.md 拼接只对「新迭代 / 首次创建」类从零开始的需求收集有意义 ——
+            # 那时 LLM 没有当前 spec/plan 作为参考，需要 AGENTS.md 的"上一轮摘要"做种子。
+            # 但**二次修改跳转设计阶段**（formal_revision 重入）不应拼接：
+            #   - 用户输入已是明确的修改请求（"新增 XX 页面"），不是"开始新迭代"；
+            #   - state 里已经被 load_stage_artifacts 装入了当前磁盘上**最新**的
+            #     requirement_spec / product_plan / ui_designs（它们才是事实来源）；
+            #   - 拼接 AGENTS.md 会把"上一迭代做了什么"当成背景堆进 prompt，
+            #     LLM 可能误以为用户在推翻重写，倾向保留所有旧页面而不是按需求修改；
+            #   - AGENTS.md 跨分支共享时还可能把其他分支的迭代摘要污染进来。
+            # 因此 formal_revision 重入跳过这层拼接，让 LLM 直接基于当前事实工作。
+            is_formal_revision_reentry = _is_formal_revision_reentry({**checkpoint_values, **resume_values})
             initial_state: dict[str, Any] = {
                 **checkpoint_values,
-                "request": _augment_request_with_iteration_context(request, workspace),
+                "request": (
+                    request
+                    if is_formal_revision_reentry
+                    else _augment_request_with_iteration_context(request, workspace)
+                ),
                 "workflow_action": workflow_inputs.get("workflow_action") or "",
                 "selected_skill_names": list(selected_skill_names),
                 "timeline": [],
