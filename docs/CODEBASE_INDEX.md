@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+Build 执行入口 `graph/subgraphs/build.py` 按正式 DAG 和 Run 摘要绑定派发，不再重放 Builtin 权限工程投影。收尾继续运行路由投影、权限共享投影和 Authorization EDD，权限投影及 EDD 告警进入 `platform_projection_evidence`、`build_summary.authorization_warnings` 和既有 AG-UI 构建步骤详情；路由失败、计划摘要漂移和工作区越界仍阻断。任务提交沿现有工程验收策略执行，额外只读检查 `frontend_authorization` 和 `backend_authorization`，仅将实际接入不匹配记录为告警。读取、解析或定位失败仍报错，显式权限资源生成任务失败仍阻断其 DAG 依赖。回归见 `tests.test_build_subgraph_scheduler`、`tests.test_engineering_acceptance`、`tests.test_authorization_platform_projection`、`tests.test_authorization_frontend_resources_executor`。
+
 Windows/macOS 桌面诊断由 `Frontend/src/main/bootstrap.ts` 在业务入口前初始化，`diagnostics/` 按运行保存本地 Crashpad 转储、脱敏事件与原子摘要到 `~/<环境目录>/logs/diagnostics`，源码模式使用 `source-dev`。主实例检查上次中断并清理旧记录，退出按正常、重复启动、更新、启动失败或其他异常分类。`backendService.ts` 记录内置后端启动及退出，冻结入口 `Backend/packaging/backend_server.py` 用 `faulthandler` 按 PID 保存致命堆栈。回归见 `pnpm test:desktop-diagnostics` 和 `tests.test_frozen_parser_probe`，诊断位置及限制见 [跨平台排障](CROSS_PLATFORM_SUPPORT.md#desktop-crash-diagnostics)。
 
 Build 已移除任务完成后的独立后端阶段检查调用及 `services/backend_stage_verification.py`，不再额外以 foundation 骨架、controller 路由/DTO/分层/权限阶段检查阻断任务。通用业务自检仍由 `DEVAGENTSTUDIO_DAG_BUSINESS_SELF_CHECK_ENABLED` 控制，默认关闭；其公共 verifier 及任务验收契约保留。执行前任务计划、确认、绑定、依赖及文件范围门禁保持原规则。

@@ -12,6 +12,7 @@ from app.services.engineering_acceptance import (
     ensure_engineering_acceptance,
 )
 from app.services.build_task_planner import create_build_task_plan
+from app.services.build_scheduler import verify_task_file_changes
 from app.services.engineering_acceptance_verifier import (
     unauthorized_batch_paths,
     verify_engineering_acceptance,
@@ -27,6 +28,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             "owner": "backend",
             "unit_id": "backend:endpoint:orders_api:orders.approve",
             "source_refs": {
+                "backend_stage": "controller",
                 "authorization": {
                     "endpoints": [
                         {
@@ -47,6 +49,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             "deliverables": [
                 {
                     "kind": "backend.endpoint_controller",
+                    "target_id": "orders.approve",
                     "paths": ["backend/src/main/java/example/OrdersController.java"],
                 }
             ],
@@ -86,9 +89,20 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 code_change_set={"files": [{"path": controller.relative_to(root).as_posix(), "changeType": "added"}]},
                 workspace_root=workspace,
             )
+            warning_evidence, warning_errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set={"files": [{"path": controller.relative_to(root).as_posix(), "changeType": "added"}]},
+                workspace_root=workspace,
+                authorization_checks_as_warning=True,
+            )
 
         self.assertFalse(errors, errors)
         self.assertTrue(any("常量集合不匹配" in error for error in mismatch_errors), mismatch_errors)
+        self.assertFalse(warning_errors, warning_errors)
+        warning = next(item for item in warning_evidence if item["kind"] == "backend_authorization")
+        self.assertEqual(warning["status"], "warning")
+        self.assertIn("常量集合不匹配", warning["error"])
 
     def test_frontend_action_permission_uses_platform_resource_key(self) -> None:
         """页面受控操作必须唯一映射到平台切片给定的 Permission。"""
@@ -228,7 +242,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 "import { Permission } from '@/authorization';\nimport { RESOURCES } from '@/constants/resources';\n"
                 "export default function Orders() {\n"
                 "  fetch('/api/orders');\n"
-                "  return <Permission resourceKey={RESOURCES.OPERATION.ORDERS_APPROVE} mode=\"hidden\"><button>批准</button></Permission>;\n"
+                "  return <Permission resourceKey=\"wrong\" mode=\"hidden\"><button>批准</button></Permission>;\n"
                 "}\n",
                 encoding="utf-8",
             )
@@ -244,6 +258,22 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                     ]
                 },
                 workspace_root=workspace,
+            )
+            mixed_result, = verify_task_file_changes(
+                tasks=[compiled],
+                results=[{"task_id": task["id"], "status": "completed"}],
+                code_change_set={"files": [{"path": page_file.relative_to(root).as_posix(), "changeType": "added"}]},
+                workspace_root=workspace,
+                authorization_checks_as_warning=True,
+                batch_unauthorized_paths=["frontend/src/Unrelated.tsx"],
+            )
+            unavailable_evidence, unavailable_errors = verify_engineering_acceptance(
+                task=compiled,
+                status="completed",
+                code_change_set=None,
+                workspace_root=None,
+                authorization_checks_as_warning=True,
+                authorization_checks_only=True,
             )
 
             page_file.write_text(
@@ -269,10 +299,31 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 },
                 workspace_root=workspace,
             )
+            with tempfile.TemporaryDirectory() as external:
+                escaped_file = Path(external) / page_file.name
+                page_file.replace(escaped_file)
+                page_file.symlink_to(escaped_file)
+                escaped_evidence, escaped_errors = verify_engineering_acceptance(
+                    task=compiled,
+                    status="completed",
+                    code_change_set=None,
+                    workspace_root=workspace,
+                    authorization_checks_as_warning=True,
+                    authorization_checks_only=True,
+                )
 
         self.assertTrue(any("RESOURCES" in error for error in errors), errors)
         self.assertTrue(any("fetch、axios 或 service" in error for error in http_errors), http_errors)
         self.assertTrue(any("未声明的 RESOURCES" in error for error in uncontrolled_errors), uncontrolled_errors)
+        self.assertEqual(mixed_result["status"], "failed")
+        self.assertEqual(mixed_result["scheduler_decision"]["action"], "repair")
+        self.assertIn("fetch、axios 或 service", mixed_result["failure_reason"])
+        self.assertIn("frontend/src/Unrelated.tsx", mixed_result["failure_reason"])
+        self.assertIn("RESOURCES", mixed_result["authorization_warnings"][0])
+        self.assertEqual(unavailable_evidence[0]["status"], "failed")
+        self.assertIn("缺少工作区根目录", unavailable_errors[0])
+        self.assertEqual(escaped_evidence[0]["status"], "failed")
+        self.assertIn("越过工作区", escaped_errors[0])
 
     def test_business_acceptance_is_not_copied_into_build_task(self) -> None:
         """角色过滤等业务验收必须保留在详情上下文，但不得进入 Build Task。"""

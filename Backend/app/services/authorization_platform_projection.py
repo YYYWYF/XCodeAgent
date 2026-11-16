@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from app.services.authorization_constants_projection import (
+    AUTH_CONSTANTS_RELATIVE_PATH,
     AuthorizationConstantsProjectionError,
     apply_authorization_constants_projection,
 )
 from app.services.authorization_frontend_projection import (
+    RESOURCES_RELATIVE_PATH,
     AuthorizationFrontendProjectionError,
     apply_authorization_frontend_projection,
 )
@@ -22,6 +24,10 @@ class PlatformProjectionError(ValueError):
     """表示确认后的平台共享投影无法安全应用。"""
 
 
+class PlatformProjectionBoundaryError(PlatformProjectionError):
+    """表示投影违反 Build 计划绑定或工作区边界，必须阻断。"""
+
+
 def apply_platform_projections(
     workspace: str | Path,
     build_task_plan: dict[str, Any],
@@ -32,21 +38,26 @@ def apply_platform_projections(
     """应用确认 DAG 的共享投影，并把源码差异作为平台证据单独返回。"""
 
     if not isinstance(build_task_plan, dict):
-        raise PlatformProjectionError("Build DAG 根结构无效，不能应用平台共享投影。")
+        raise PlatformProjectionBoundaryError("Build DAG 根结构无效，不能应用平台共享投影。")
     actual_plan_sha256 = build_task_plan_sha256(build_task_plan)
     if plan_sha256 and plan_sha256 != actual_plan_sha256:
-        raise PlatformProjectionError("Build Run 绑定的任务计划摘要与投影输入不一致。")
+        raise PlatformProjectionBoundaryError("Build Run 绑定的任务计划摘要与投影输入不一致。")
     frontend_projection = build_task_plan.get("authorization_frontend_projection")
     constants_projection = build_task_plan.get("authorization_constants_projection")
-    if frontend_projection is None and constants_projection is None:
-        authorization_decorations = None
-    else:
+    workspace_path = Path(workspace).expanduser().resolve()
+    if not workspace_path.is_dir():
+        raise PlatformProjectionBoundaryError("平台共享投影工作区不存在或不是目录。")
+    # 在任何权限写入前检查两个固定目标，防止符号链接把写入移到工作区之外。
+    for projection, relative_path in (
+        (frontend_projection, RESOURCES_RELATIVE_PATH),
+        (constants_projection, AUTH_CONSTANTS_RELATIVE_PATH),
+    ):
+        if projection is not None and not (workspace_path / relative_path).resolve().is_relative_to(workspace_path):
+            raise PlatformProjectionBoundaryError(f"权限投影目标越过工作区：{relative_path}。")
+    if frontend_projection is not None or constants_projection is not None:
         state = load_template_state(workspace)
         if not has_capability(state, "authorization"):
             raise PlatformProjectionError("权限投影要求 TemplateState.effective 含 authorization。")
-    workspace_path = Path(workspace).expanduser().resolve()
-    if not workspace_path.is_dir():
-        raise PlatformProjectionError("平台共享投影工作区不存在或不是目录。")
 
     def _apply() -> dict[str, Any]:
         """严格按确认 DAG 写入仍保留的权限共享投影。"""
@@ -66,7 +77,7 @@ def apply_platform_projections(
             AuthorizationFrontendProjectionError,
             AuthorizationConstantsProjectionError,
             OSError,
-            ValueError,
+            UnicodeError,
         ) as exc:
             raise PlatformProjectionError(str(exc)) from exc
 

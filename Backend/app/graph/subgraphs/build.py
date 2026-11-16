@@ -32,6 +32,7 @@ from app.graph.nodes.common import (
     workspace_from_state,
 )
 from app.graph.state import ProjectState
+from app.observability.backend_log_redaction import LogRedactor
 from app.domain.execution_recovery import RecoveryExecutionError, WorkflowReentryReason
 from app.services.build_restart import fresh_build_tasks, refresh_build_workspace, restart_build_state
 from app.services.node_recovery_context import current_node_recovery_context
@@ -47,6 +48,7 @@ from app.graph.nodes.confirmation import extract_confirmation_answer, user_confi
 from app.services.build_result_coordinator import apply_agent_results_with_scheduler
 from app.services.build_task_confirmation import build_task_confirmation_read_model
 from app.services.authorization_platform_projection import (
+    PlatformProjectionBoundaryError,
     PlatformProjectionError,
     apply_platform_projections,
 )
@@ -71,7 +73,6 @@ from app.services.build_tool_activity import (
     task_ids_for_tool_activity,
 )
 from app.services.build_scheduler import (
-    attribute_task_file_changes,
     classify_task_result,
     mark_tasks_running,
     normalize_task_results,
@@ -83,6 +84,7 @@ from app.services.build_scheduler import (
     select_ready_build_batch,
     summarize_build_runtime,
     hydrate_missing_failed_results,
+    verify_task_file_changes,
 )
 from app.services.platform_task_executors import (
     PlatformTaskExecutorRegistryError,
@@ -638,15 +640,6 @@ def _execute_owner_tasks(
         dispatched_tasks=owner_tasks,
         raw_results=captured.value,
     )
-    attributed_results = (
-        normalized_results
-        if owner == "database"
-        else attribute_task_file_changes(
-            results=normalized_results,
-            code_change_set=owner_change_set,
-            tasks=owner_tasks,
-        )
-    )
     # Agent 返回的验收字段不是可信证据，先清除后只使用本轮确定性验证结果。
     sanitized_results = [
         {
@@ -655,12 +648,22 @@ def _execute_owner_tasks(
             if key
             not in {
                 "acceptance_evidence",
+                "authorization_warnings",
                 "business_acceptance_evidence",
                 "business_acceptance_summary",
             }
         }
-        for result in attributed_results
+        for result in normalized_results
     ]
+    if owner != "database":
+        sanitized_results = verify_task_file_changes(
+            results=sanitized_results,
+            code_change_set=owner_change_set,
+            tasks=owner_tasks,
+            workspace_root=str(workspace) if workspace else None,
+            authorization_checks_as_warning=True,
+            authorization_checks_only=True,
+        )
     sanitized_results = _verify_business_results(
         state,
         owner_tasks,
@@ -1370,7 +1373,7 @@ def _finalize_build(
     confirmed_build_task_plan: dict[str, Any],
     build_run_binding: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, list[str], str | None]:
-    """按固定顺序完成成功 DAG 的可选路由、权限投影和 EDD，失败时不继续后续步骤。"""
+    """收尾时保持路由和安全边界强校验，将权限共享投影与 EDD 问题留作告警。"""
 
     workspace = workspace_from_state(state)
     product_plan = state.get("product_plan")
@@ -1456,18 +1459,33 @@ def _finalize_build(
             build_run_id=build_run_binding.get("build_run_id"),
             plan_sha256=build_run_binding.get("build_run_plan_sha256"),
         )
+        finalization_events.append("scheduler:platform_projection_applied")
         logger.info(
             "build_finalization_authorization_projection_completed run_id=%s changed_files=%s",
             build_run_binding.get("build_run_id"),
             len(platform_evidence.get("files") or []),
         )
-    except PlatformProjectionError as exc:
+    except PlatformProjectionBoundaryError as exc:
         logger.warning(
-            "build_finalization_authorization_projection_failed run_id=%s error=%s",
+            "build_finalization_projection_boundary_failed run_id=%s error=%s",
             build_run_binding.get("build_run_id"),
             exc,
         )
         return route_evidence, {}, route_change_set, finalization_events, f"Authorization Platform Projection 失败：{exc}"
+    except PlatformProjectionError as exc:
+        detail = LogRedactor().redact(str(exc))
+        logger.warning(
+            "build_finalization_authorization_projection_warning run_id=%s category=%s detail=%s",
+            build_run_binding.get("build_run_id"),
+            type(exc.__cause__ or exc).__name__,
+            " ".join(detail.splitlines()),
+        )
+        platform_evidence = {
+            "status": "warning",
+            "warnings": [f"权限共享投影结果未获确认，部分文件可能已写入。{detail}"],
+            "files": [],
+        }
+        finalization_events.append("scheduler:authorization_projection_warning")
     logger.info(
         "build_finalization_edd_started run_id=%s",
         build_run_binding.get("build_run_id"),
@@ -1479,12 +1497,19 @@ def _finalize_build(
             build_run_binding.get("build_run_id"),
             len(edd_errors),
         )
-        return route_evidence, platform_evidence, route_change_set, [*finalization_events, "scheduler:platform_projection_applied"], f"Authorization EDD 失败：{'；'.join(edd_errors)}"
+        redactor = LogRedactor()
+        platform_evidence["warnings"] = [
+            *platform_evidence.get("warnings", []),
+            *(f"Authorization EDD：{redactor.redact(error)}" for error in edd_errors),
+        ]
+        finalization_events.append("scheduler:authorization_edd_warning")
+    else:
+        finalization_events.append("scheduler:authorization_edd_passed")
     logger.info(
         "build_finalization_completed run_id=%s",
         build_run_binding.get("build_run_id"),
     )
-    return route_evidence, platform_evidence, route_change_set, [*finalization_events, "scheduler:platform_projection_applied", "scheduler:authorization_edd_passed"], None
+    return route_evidence, platform_evidence, route_change_set, finalization_events, None
 
 
 def _restore_build_runtime(
@@ -1759,12 +1784,6 @@ def _run_build_scheduler(
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
-    # 模板安装完成且 DAG 门通过后，Builtin 仅恢复本地表名投影，不触发远程初始化。
-    from app.services.builtin_authorization_bootstrap import ensure_builtin_build_projection
-    try:
-        ensure_builtin_build_projection(state)
-    except (OSError, ValueError):
-        return _build_gate_result(state, build_task_plan, ["Builtin 权限工程投影冲突，请核对模板受管文件、绑定及 DDL。"])
     # 绑定先于任何任务派发落盘；恢复时沿用原 Run，避免入口旧 pending 覆盖完成事实。
     if state.get("active_run_id") and state.get("active_thread_id"):
         existing = load_build_execution_record(state, str(state["active_run_id"]))
@@ -2346,6 +2365,10 @@ def _run_build_scheduler(
             build_run_binding=build_run_binding,
         )
         build_events.extend(finalization_events)
+        if platform_warnings := platform_projection_evidence.get("warnings"):
+            build_summary["authorization_warnings"] = [
+                *build_summary.get("authorization_warnings", []), *platform_warnings,
+            ]
         if route_change_set:
             merged_code_changes = merge_code_change_sets([*all_code_change_sets, route_change_set])
         if route_projection_evidence:
@@ -2404,8 +2427,12 @@ def _run_build_scheduler(
     from app.services.workflow_failure_message import workflow_failure_message
 
     result["error"] = workflow_failure_message(result) if workflow_status == "failed" else ""
+    completion_message = (
+        "Build 已完成，部分权限事项待检查。"
+        if build_summary.get("authorization_warnings") else "Build 已完成。"
+    )
     result["message"] = result["error"] or (
-        "Build 已完成。" if workflow_status == "completed"
+        completion_message if workflow_status == "completed"
         else f"Build 等待处理：{build_summary.get('failed', 0)} 个任务失败，可重试失败任务。"
         if build_summary.get("status") == "awaiting_task_retry" else "Build 等待确认。"
     )

@@ -6,14 +6,17 @@ import unittest
 from pathlib import Path
 
 from app.services.authorization_edd import verify_authorization_edd
-from app.services.authorization_platform_projection import apply_platform_projections
+from app.services.authorization_platform_projection import (
+    PlatformProjectionBoundaryError,
+    apply_platform_projections,
+)
 
 
 class AuthorizationPlatformProjectionTests(unittest.TestCase):
     """验证显式前端路由和后端常量由平台统一投影。"""
 
     def test_records_frontend_and_backend_diffs(self) -> None:
-        """首次生成三处平台文件，重复执行不再产生差异。"""
+        """首次生成两处平台文件，重复执行不再产生差异。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -38,6 +41,22 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
 
         self.assertTrue(any("权限共享投影 EDD 失败" in error for error in errors), errors)
 
+    def test_build_plan_binding_and_path_escape_are_boundary_errors(self) -> None:
+        """计划漂移与越界路径都要在写入任何投影前阻断。"""
+
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as external:
+            workspace = Path(directory)
+            self._write_template(workspace)
+            with self.assertRaisesRegex(PlatformProjectionBoundaryError, "摘要"):
+                apply_platform_projections(workspace, self._plan(), plan_sha256="0" * 64)
+
+            target_dir = workspace / "frontend/src/constants"
+            target_dir.rename(target_dir.with_name("original"))
+            target_dir.symlink_to(external, target_is_directory=True)
+            with self.assertRaisesRegex(PlatformProjectionBoundaryError, "越过工作区"):
+                apply_platform_projections(workspace, self._plan())
+            self.assertEqual(list(Path(external).iterdir()), [])
+
     def _plan(self) -> dict:
         """构造最小确认 Build DAG 权限投影。"""
 
@@ -57,11 +76,12 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
         """创建带固定业务路由托管区的最小 auth 模板。"""
 
         self._write(workspace / ".devagentstudio/template-state.json", json.dumps({
-            "schemaVersion": 2,
-            "templateRevision": "r1",
+            "schemaVersion": 3,
+            "templateRevision": "2026.10.16.1",
             "requested": {"authorization": {"enabled": True, "config": {}}},
             "effective": {"authorization": {"enabled": True, "config": {}}},
-            "appliedAdditions": {},
+            "installedArtifacts": {},
+            "managedContributions": {},
         }))
         self._write(workspace / "frontend/src/constants/resources.ts", "export const RESOURCES = {} as const;\n")
         self._write(workspace / "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java", "// DEVAGENTSTUDIO_AUTH_CONSTANTS_START\n// DEVAGENTSTUDIO_AUTH_CONSTANTS_END\n")

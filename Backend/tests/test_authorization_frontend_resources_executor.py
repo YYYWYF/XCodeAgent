@@ -11,7 +11,7 @@ from app.services.authorization_resource_catalog import (
     compile_frontend_resource_catalog,
     resource_catalog_fingerprint,
 )
-from app.services.build_scheduler import classify_task_result
+from app.services.build_scheduler import classify_task_result, select_ready_build_batch
 from app.services.platform_task_executors import (
     execute_authorization_frontend_resources,
 )
@@ -95,6 +95,10 @@ class AuthorizationFrontendResourcesExecutorTests(unittest.TestCase):
             self.assertEqual(result["failure_category"], "stale_authorization_resource_catalog")
             self.assertEqual(classify_task_result(result)["action"], "terminal_failure")
             self.assertEqual(target.read_text(encoding="utf-8"), "// existing\n")
+            dependent = {"id": "orders-page", "status": "pending", "dependencies": [task["id"]]}
+            selection = select_ready_build_batch([{**task, "status": result["status"]}, dependent])
+            self.assertEqual(selection["ready_task_ids"], [])
+            self.assertEqual(selection["blocked_tasks"][0]["failed_dependencies"], [task["id"]])
 
     def test_invalid_target_fails_before_any_write(self) -> None:
         """任何非 resources.ts 目标声明都作为终止型 contract failure 拒绝。"""

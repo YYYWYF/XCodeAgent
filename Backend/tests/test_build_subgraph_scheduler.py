@@ -22,6 +22,9 @@ from app.agents.auto_dedup_backend import AutoDedupFilesystemBackend
 from app.agents.data_source.prompt_context import execution_task_packet
 from app.tools.delete_file import create_delete_file_tool
 from app.domain.execution_recovery import WorkflowReentryReason
+from app.protocols.workflow.projection import _workflow_node_detail
+from app.services.authorization_platform_projection import PlatformProjectionError
+from app.services.template_route_projector import TemplateRouteProjectorError
 from app.services.node_recovery_context import NodeRecoveryContext, bind_node_recovery, bind_recovery_runtime
 from app.services.build_task_planner import replace_build_task_plan_tasks, tasks_from_build_task_plan
 from app.services.build_scheduler import attribute_task_file_changes
@@ -707,9 +710,15 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as workspace:
             plan = self._platform_projection_plan(workspace)
-            with patch(
-                "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
-                side_effect=write_page_runner,
+            with (
+                patch(
+                    "app.graph.subgraphs.build.generate_frontend_with_deep_agent",
+                    side_effect=write_page_runner,
+                ),
+                patch(
+                    "app.services.builtin_authorization_bootstrap.ensure_builtin_build_projection",
+                    side_effect=ValueError("Builtin 受管文件摘要、DDL 或投影收据已漂移"),
+                ) as builtin_projection,
             ):
                 result = run_build_scheduler(
                     _ready_build_state(
@@ -724,13 +733,106 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                     )
                 )
 
+        builtin_projection.assert_not_called()
         self.assertEqual(result["status"], "completed", result)
         self.assertEqual(result["platform_projection_evidence"]["status"], "applied")
         self.assertIn("scheduler:platform_projection_applied", result["build_events"])
+        self.assertIn("scheduler:authorization_edd_passed", result["build_events"])
+        self.assertNotIn("authorization_warnings", result["build_summary"])
         self.assertNotIn(
             "frontend/src/constants/routes.tsx",
             [item["path"] for item in result["code_changes"]["files"]],
         )
+
+    def test_authorization_warnings_preserve_build_completion_and_reach_workflow_detail(self) -> None:
+        """任务接入、共享投影和 EDD 告警均保留证据，业务任务照常完成。"""
+
+        def write_page(**kwargs):
+            """生成一个可读但尚未接入 Permission 的业务页面。"""
+
+            _write_workspace_file(kwargs["workspace"], "frontend/src/pages/Orders/index.tsx")
+            return [{"task_id": "page-orders", "status": "completed"}]
+
+        for projection_fails in (False, True):
+            with self.subTest(projection_fails=projection_fails), tempfile.TemporaryDirectory() as workspace:
+                plan = self._platform_projection_plan(workspace)
+                task = plan["task_registry"]["page-orders"]
+                task.update(
+                    unit_id="page:orders",
+                    source_refs={"authorization": {"actions": [
+                        {"actionId": "approve", "resourceKey": "orders_approve"},
+                    ]}},
+                )
+                unit = plan["build_units"].pop("application:root")
+                plan["build_units"]["page:orders"] = {**unit, "id": "page:orders", "kind": "page"}
+                plan["unit_graph"]["nodes"] = ["page:orders"]
+                state = _ready_build_state(workspace, {
+                    "workspace": workspace,
+                    "project_plan": {"version": "1.0.0"},
+                    "build_task_plan": plan,
+                })
+                with (
+                    patch("app.graph.subgraphs.build.generate_frontend_with_deep_agent", side_effect=write_page),
+                    patch(
+                        "app.graph.subgraphs.build.apply_platform_projections",
+                        side_effect=PlatformProjectionError("token=test-secret") if projection_fails else None,
+                        return_value={"status": "applied", "files": []},
+                    ),
+                    patch("app.graph.subgraphs.build.verify_authorization_edd", return_value=["EDD 缺少接入证据"]),
+                    patch("app.graph.subgraphs.build.plan_build_failure_repair_with_repair_planner_agent") as repair,
+                ):
+                    result = run_build_scheduler(state)
+
+                repair.assert_not_called()
+                self.assertEqual(result["status"], "completed", result)
+                self.assertEqual(result["build_summary"]["status"], "completed")
+                task_result = result["build_results"][0]
+                self.assertEqual(task_result["status"], "completed")
+                self.assertEqual(task_result["acceptance_evidence"][0]["status"], "warning")
+                self.assertIn("Permission", task_result["authorization_warnings"][0])
+                evidence = result["platform_projection_evidence"]
+                self.assertIn("EDD 缺少接入证据", evidence["warnings"][-1])
+                self.assertIn("scheduler:authorization_edd_warning", result["build_events"])
+                self.assertNotIn("scheduler:authorization_edd_passed", result["build_events"])
+                self.assertEqual("scheduler:platform_projection_applied" in result["build_events"], not projection_fails)
+                self.assertEqual(evidence["status"], "warning" if projection_fails else "applied")
+                if projection_fails:
+                    self.assertIn("scheduler:authorization_projection_warning", result["build_events"])
+                    self.assertIn("部分文件可能已写入", evidence["warnings"][0])
+                    self.assertNotIn("test-secret", str(evidence))
+                    self.assertEqual(evidence["files"], [])
+                detail = _workflow_node_detail("build", result)
+                self.assertIn("Build 已完成，部分权限事项待检查。", detail["message"])
+                self.assertIn("EDD 缺少接入证据", detail["message"])
+
+    def test_route_projection_failure_still_blocks_build(self) -> None:
+        """路由投影失败仍阻断收尾，跳过之后的权限投影和 EDD。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = self._platform_projection_plan(workspace)
+            state = _ready_build_state(workspace, {
+                "workspace": workspace,
+                "project_plan": {"version": "1.0.0"},
+                "build_task_plan": plan,
+            })
+            with (
+                patch("app.graph.subgraphs.build.generate_frontend_with_deep_agent", return_value=[
+                    {"task_id": "page-orders", "status": "completed"},
+                ]),
+                patch(
+                    "app.graph.subgraphs.build.apply_template_route_projection",
+                    side_effect=TemplateRouteProjectorError("模板路由不可用"),
+                ),
+                patch("app.graph.subgraphs.build.apply_platform_projections") as projection,
+                patch("app.graph.subgraphs.build.verify_authorization_edd") as edd,
+            ):
+                result = run_build_scheduler(state)
+
+        projection.assert_not_called()
+        edd.assert_not_called()
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["build_results"][0]["status"], "completed")
+        self.assertIn("Route Projection Finalization", result["build_summary"]["finalization_error"])
 
     def _platform_projection_plan(self, workspace: str) -> dict:
         """构造含单个页面任务的 v4 计划与最小无权限模板。"""

@@ -1024,8 +1024,12 @@ def _workflow_node_detail(node_name: str, update: dict[str, Any]) -> dict[str, A
         }
     if node_name == "build":
         summary = update.get("build_summary", {})
+        message = f"完成={summary.get('completed', 0)}，失败={summary.get('failed', 0)}"
+        if warnings := summary.get("authorization_warnings"):
+            notice = "Build 已完成，部分权限事项待检查。" if summary.get("status") == "completed" else "部分权限事项待检查。"
+            message = "\n".join((message, notice, *warnings))
         return {
-            "message": f"完成={summary.get('completed', 0)}，失败={summary.get('failed', 0)}",
+            "message": message,
             "data": {
                 "buildSummary": summary,
                 "buildExecutionSlice": update.get("build_execution_slice"),

@@ -7,7 +7,6 @@ from typing import Any
 
 from app.services.backend_module_scope import scoped_task_ids
 from app.services.build_execution_projection import project_execution_tasks
-from app.services.engineering_acceptance import ensure_engineering_acceptance
 from app.services.engineering_acceptance_verifier import verify_engineering_acceptance
 from app.services.unit_task_manifest import backend_module_unit_id
 
@@ -358,9 +357,16 @@ def verify_task_file_changes(
     tasks: list[dict[str, Any]] | None = None,
     workspace_root: str | None = None,
     batch_unauthorized_paths: list[str] | None = None,
+    authorization_checks_as_warning: bool = False,
+    authorization_checks_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """在 Owner 执行后执行完整工程验收并生成结构化工程证据。"""
+    """验证任务工程证据，也支持只检查当前 Build 启用的权限接入。"""
 
+    if authorization_checks_only:
+        # 常规 Build 已跳过全量工程验收，保留原有文件归属及成功状态判定。
+        results = attribute_task_file_changes(
+            results=results, code_change_set=code_change_set, tasks=tasks,
+        )
     changed_paths: list[str] = []
     if code_change_set and isinstance(code_change_set.get("files"), list):
         changed_paths = [
@@ -382,32 +388,46 @@ def verify_task_file_changes(
             verified.append(verified_result)
             continue
 
-        task = ensure_engineering_acceptance(
-            tasks_by_id.get(str(verified_result.get("task_id") or ""), {})
-        )
-        authorized_paths = _task_authorized_paths(task)
-        attributed_paths = [
-            path for path in changed_paths if _path_matches_any(path, authorized_paths)
-        ]
-        status = _normalize_noop_completed_status(
-            status=str(status),
-            attributed_paths=attributed_paths,
-        )
+        task = tasks_by_id.get(str(verified_result.get("task_id") or ""), {})
+        if authorization_checks_only:
+            attributed_paths = verified_result["changed_files"]
+        else:
+            authorized_paths = _task_authorized_paths(task)
+            attributed_paths = [
+                path for path in changed_paths if _path_matches_any(path, authorized_paths)
+            ]
+            status = _normalize_noop_completed_status(
+                status=str(status),
+                attributed_paths=attributed_paths,
+            )
         acceptance_evidence, acceptance_errors = verify_engineering_acceptance(
             task=task,
             status=status,
             code_change_set=code_change_set,
             workspace_root=workspace_root,
             batch_unauthorized_paths=batch_unauthorized_paths,
+            authorization_checks_as_warning=authorization_checks_as_warning,
+            authorization_checks_only=authorization_checks_only,
         )
+        if authorization_checks_only and not acceptance_evidence and not acceptance_errors:
+            verified.append(verified_result)
+            continue
         verified_result["acceptance_evidence"] = acceptance_evidence
+        warnings = [check["error"] for check in acceptance_evidence if check["status"] == "warning"]
+        if warnings:
+            verified_result["authorization_warnings"] = warnings
+        engineering_status = "skipped" if authorization_checks_only else "passed"
+        if acceptance_errors:
+            engineering_status = "failed"
+        elif warnings:
+            engineering_status = "warning"
         verified_result["acceptance_status"] = {
             **(
                 verified_result.get("acceptance_status")
                 if isinstance(verified_result.get("acceptance_status"), dict)
                 else {}
             ),
-            "engineering": "failed" if acceptance_errors else "passed",
+            "engineering": engineering_status,
         }
         verified_result["satisfaction_evidence"] = {
             "target_files": _task_target_paths(task),
@@ -587,7 +607,13 @@ def summarize_build_runtime(
         if classify_task_result(result).get("action") == "requires_confirmation"
     ]
     repair_task_ids = sorted(ready_repair_task_ids(repair_task_plan))
+    authorization_warnings = [
+        f"{task_id}：{warning}"
+        for task_id, result in latest_results.items()
+        for warning in result.get("authorization_warnings", [])
+    ]
     return {
+        **({"authorization_warnings": authorization_warnings} if authorization_warnings else {}),
         "total": len(tasks),
         "completed": counts["completed"] + counts.get("already_satisfied", 0),
         "failed": counts["failed"],

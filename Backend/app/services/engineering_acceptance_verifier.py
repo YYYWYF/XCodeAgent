@@ -13,6 +13,8 @@ from app.services.business_acceptance_verifiers.java_inspection_support import (
     _type_has_suffix,
 )
 
+_AUTHORIZATION_CHECK_KINDS = {"frontend_authorization", "backend_authorization"}
+
 
 def unauthorized_batch_paths(
     code_change_set: dict[str, Any] | None,
@@ -35,14 +37,18 @@ def verify_engineering_acceptance(
     code_change_set: dict[str, Any] | None,
     workspace_root: str | None,
     batch_unauthorized_paths: list[str] | None = None,
+    authorization_checks_as_warning: bool = False,
+    authorization_checks_only: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """确定性执行任务的全部工程检查并返回证据与错误。"""
+    """确定性执行选定工程检查，区分接入告警和阻断错误。"""
 
     # 验收入口重新归一化任务，确保工程检查只由当前任务元数据产生。
     task = ensure_engineering_acceptance(task)
     checks = _dict_items(task.get("acceptance_checks"))
     if not checks:
         return [], ["任务缺少 acceptance_checks，请重新执行 prepare_build_tasks。"]
+    if authorization_checks_only:
+        checks = [check for check in checks if check.get("kind") in _AUTHORIZATION_CHECK_KINDS]
     root = Path(workspace_root).expanduser().resolve() if workspace_root else None
     changes = {
         _normalize_path(item.get("path")): item
@@ -52,25 +58,36 @@ def verify_engineering_acceptance(
     evidence: list[dict[str, Any]] = []
     errors: list[str] = []
     for check in checks:
-        error, detail = _verify_check(
-            check,
-            task=task,
-            status=status,
-            changes=changes,
-            root=root,
-            batch_unauthorized_paths=batch_unauthorized_paths or [],
-        )
+        kind = check.get("kind")
+        if kind == "frontend_authorization":
+            error, detail, mismatch = _verify_frontend_authorization(check, root=root)
+        elif kind == "backend_authorization":
+            error, detail, mismatch = _verify_backend_authorization(check, root=root)
+        else:
+            error, detail = _verify_check(
+                check,
+                task=task,
+                status=status,
+                changes=changes,
+                root=root,
+                batch_unauthorized_paths=batch_unauthorized_paths or [],
+            )
+            mismatch = False
+        # 只有实际读到的权限接入不符合预期才可告警，读取、解析和定位失败仍阻断。
+        check_status = "passed"
+        if error:
+            check_status = "warning" if authorization_checks_as_warning and mismatch else "failed"
+            if check_status == "failed":
+                errors.append(error)
         evidence.append(
             {
                 "check_id": check.get("id"),
-                "kind": check.get("kind"),
-                "status": "failed" if error else "passed",
+                "kind": kind,
+                "status": check_status,
                 "error": error,
                 "evidence": detail,
             }
         )
-        if error:
-            errors.append(error)
     return evidence, errors
 
 
@@ -139,10 +156,6 @@ def _verify_check(
         return _verify_page_component_reachability(check, root=root)
     if kind == "frontend_api_boundary":
         return _verify_frontend_api_boundary(check, root=root)
-    if kind == "frontend_authorization":
-        return _verify_frontend_authorization(check, root=root)
-    if kind == "backend_authorization":
-        return _verify_backend_authorization(check, root=root)
     return f"不支持的工程验收检查类型：{kind or '<empty>'}", "检查类型无法执行。"
 
 
@@ -362,8 +375,8 @@ def _verify_frontend_authorization(
     check: dict[str, Any],
     *,
     root: Path | None,
-) -> tuple[str | None, str]:
-    """验证页面受控操作的 Permission 接入及页面层 HTTP 边界。"""
+) -> tuple[str | None, str, bool]:
+    """验证 Permission 接入，第三项标明是否发现实际接入不一致。"""
 
     expected = _dict_value(check.get("expected"))
     actions = [
@@ -378,23 +391,25 @@ def _verify_frontend_authorization(
         and str(item.get("resourceKey") or "").strip()
     ]
     paths = _string_list(check.get("target_paths"))
+    if not paths:
+        return "权限验收缺少页面目标路径。", "无法读取页面源码。", False
     sources: list[str] = []
     for path in paths:
         source, error = _read_workspace_file(root, _normalize_path(path))
         if error:
-            return error, error
+            return error, error, False
         sources.append(strip_comments(source or ""))
     merged = "\n".join(sources)
     if not re.search(
         r'import\s*\{[^}]*\bPermission\b[^}]*\}\s*from\s*["\'][^"\']*authorization[^"\']*["\']',
         merged,
     ):
-        return "页面受控操作未从模板 authorization 模块导入 Permission。", "未发现 Permission 导入。"
+        return "页面受控操作未从模板 authorization 模块导入 Permission。", "未发现 Permission 导入。", True
     if not re.search(
         r'import\s*\{[^}]*\bRESOURCES\b[^}]*\}\s*from\s*["\']@/constants/resources["\']',
         merged,
     ):
-        return "页面受控操作未从唯一资源目录导入 RESOURCES。", "未发现 RESOURCES 导入。"
+        return "页面受控操作未从唯一资源目录导入 RESOURCES。", "未发现 RESOURCES 导入。", True
     blocks = list(
         re.finditer(
             r"<Permission\b(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</Permission\s*>",
@@ -411,6 +426,7 @@ def _verify_frontend_authorization(
             return (
                 f"受控 Action {action['actionId']} 必须由 Permission 使用精确 RESOURCES 常量和 mode={action['mode']} 包装。",
                 "Permission 包装与平台权限约束不一致。",
+                True,
             )
     # Permission 只允许使用当前任务声明的资源常量和展示模式；不依赖 UI 标记推断动作身份。
     for block in blocks:
@@ -418,8 +434,9 @@ def _verify_frontend_authorization(
             return (
                 "Permission 使用了当前任务未声明的 RESOURCES 常量或展示模式。",
                 "权限包装范围超出平台资源约束。",
+                True,
             )
-    return None, f"已验证 {len(actions)} 个受控 Action 的 Permission 资源接入。"
+    return None, f"已验证 {len(actions)} 个受控 Action 的 Permission 资源接入。", False
 
 
 def _verify_frontend_api_boundary(
@@ -445,8 +462,8 @@ def _verify_backend_authorization(
     check: dict[str, Any],
     *,
     root: Path | None,
-) -> tuple[str | None, str]:
-    """验证目标 Controller Method 的唯一 RequireAnyResource 与 ANY-OF 常量集合。"""
+) -> tuple[str | None, str, bool]:
+    """验证 Controller 权限注解，第三项标明是否发现实际接入不一致。"""
 
     expected = _dict_value(check.get("expected"))
     identity = _dict_value(expected.get("endpointIdentity"))
@@ -462,33 +479,34 @@ def _verify_backend_authorization(
     for target_path in _string_list(check.get("target_paths")):
         source, error = _read_workspace_file(root, _normalize_path(target_path))
         if error:
-            return error, error
+            return error, error, False
         sources[_normalize_path(target_path)] = source or ""
     model = _inspect_or_block(sources)
     if isinstance(model, dict):
-        return str(model.get("reason") or "Controller 权限验收无法安全解析源码。"), "Java AST 无法解析 Controller 源码。"
+        return str(model.get("reason") or "Controller 权限验收无法安全解析源码。"), "Java AST 无法解析 Controller 源码。", False
     controllers = [item for item in model.types if _type_has_suffix(item, "Controller", "Resource", "Endpoint", "Handler")]
     matched = _find_controller_method(controllers, method, path)
     if matched is None:
-        return f"无法唯一定位 Controller Endpoint：{method} {path}。", "未发现与平台 Endpoint 身份匹配的 Controller Method。"
+        return f"无法唯一定位 Controller Endpoint：{method} {path}。", "未发现与平台 Endpoint 身份匹配的 Controller Method。", False
     _controller, handler = matched
     annotations = [item for item in handler.annotations if item.name == "RequireAnyResource"]
     if not resource_keys:
         if annotations:
-            return f"未受控 Endpoint {method} {path} 不得新增 RequireAnyResource。", "空资源集合存在权限注解。"
-        return None, f"未受控 Endpoint {method} {path} 未发现 RequireAnyResource。"
+            return f"未受控 Endpoint {method} {path} 不得新增 RequireAnyResource。", "空资源集合存在权限注解。", True
+        return None, f"未受控 Endpoint {method} {path} 未发现 RequireAnyResource。", False
     if len(annotations) != 1:
-        return f"受控 Endpoint {method} {path} 必须恰好存在一个 RequireAnyResource，实际为 {len(annotations)} 个。", "权限注解数量不符合唯一性约束。"
+        return f"受控 Endpoint {method} {path} 必须恰好存在一个 RequireAnyResource，实际为 {len(annotations)} 个。", "权限注解数量不符合唯一性约束。", True
     annotation_text = annotations[0].text
     actual_constants = set(re.findall(r"(?:AuthConstants\s*\.\s*)?([A-Z][A-Z0-9_]*_RESOURCE)\b", annotation_text))
     if actual_constants != set(constants):
         return (
             f"Endpoint {method} {path} 的 RequireAnyResource 常量集合不匹配：期望 {', '.join(constants)}，实际 {', '.join(sorted(actual_constants)) or '<empty>'}。",
             "权限常量集合未精确匹配平台 Contract。",
+            True,
         )
     if any("@RequireAnyResource" in text for source_path, text in sources.items() if source_path != _controller.source_path):
-        return "Controller 之外的任务目标文件出现 RequireAnyResource。", "资源权限判断越过 Controller 边界。"
-    return None, f"已验证 {method} {path} 的唯一 RequireAnyResource，包含 {len(resource_keys)} 个 ANY-OF 常量。"
+        return "Controller 之外的任务目标文件出现 RequireAnyResource。", "资源权限判断越过 Controller 边界。", True
+    return None, f"已验证 {method} {path} 的唯一 RequireAnyResource，包含 {len(resource_keys)} 个 ANY-OF 常量。", False
 
 
 def _permission_block_matches(attributes: str, action: dict[str, Any]) -> bool:
@@ -525,6 +543,9 @@ def _read_workspace_file(root: Path | None, path: str) -> tuple[str | None, str 
     if path_error:
         return None, path_error
     target = _workspace_target(root, path)
+    # 大小写回退可能命中另一条符号链接，读取前也要校验最终路径。
+    if not target.is_relative_to(root):
+        return None, f"目标路径越过工作区：{path}。"
     if not target.is_file():
         return None, f"页面工程检查目标文件不存在：{path}。"
     try:
