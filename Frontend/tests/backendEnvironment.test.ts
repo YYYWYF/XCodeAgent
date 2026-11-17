@@ -14,7 +14,7 @@ async function run(): Promise<void> {
     assert.doesNotThrow(() => assertBackendEnvironment({ app_env: env }, env))
     assert.throws(() => assertBackendEnvironment({}, env), /start-backend/)
   }
-  let body = '{"app_env":"st"}'
+  let body = '{"app_env":"st","tools":{"telemetry":{"enabled":true}}}'
   let status = 200
   let delay = 0
   const server = http.createServer((request, response) => {
@@ -30,7 +30,11 @@ async function run(): Promise<void> {
   assert.ok(address && typeof address === 'object')
   const url = `http://127.0.0.1:${address.port}`
   try {
-    assert.equal(await checkBackendHealth(url, 'st'), true)
+    let verifiedHealth: unknown
+    assert.equal(await checkBackendHealth(url, 'st', (health) => {
+      verifiedHealth = health
+    }), true)
+    assert.deepEqual(verifiedHealth, JSON.parse(body))
     delay = 1200
     assert.equal(await checkBackendHealth(url, 'st'), true, '短暂响应延迟不能误报后台不可用')
     delay = 0

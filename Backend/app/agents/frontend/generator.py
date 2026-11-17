@@ -8,6 +8,7 @@ from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
 )
+from app.observability.build_instrumentation import record_prompt
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_results
 from app.services.template_state import validate_template_context
@@ -150,6 +151,7 @@ def _frontend_generation_prompt(
     page_template: dict[str, Any] | None = None,
     ui_designs: dict[str, Any] | None = None,
 ) -> str:
+    """构造前端执行提示词，并观察已注入内容的大小。"""
     app_name = _app_name_from_plan(project_plan)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
@@ -226,7 +228,7 @@ def _frontend_generation_prompt(
         else "## Platform route boundary\n"
         "Authorization is not effective for this application. Do not import RESOURCES, create permission wrappers, authorization clients, role-management UI, route guards, menus, routers, or shared authorization files. Do not modify shared menu or route files.\n\n"
     )
-    return (
+    prompt = (
         "You are the Frontend Generation Agent in an app-generation workflow.\n"
         "Execute only the approved frontend tasks below. Modify code only within "
         "each task's allowed_paths. Implement layout, components, interactions, "
@@ -303,10 +305,12 @@ def _frontend_generation_prompt(
         "or `npx tsc`. The outer integration-test phase performs the repository checks after "
         "all owner tasks complete. If a dependency or command appears to be missing, report "
         "it in the final JSON instead of installing dependencies or creating temporary scripts.\n\n"
-        f"Approved frontend tasks:\n{json.dumps(tasks, ensure_ascii=False, indent=2)}\n\n"
+        f"Approved frontend tasks:\n{(task_text := json.dumps(tasks, ensure_ascii=False, indent=2))}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
-        f"ProjectPlan context:\n{json.dumps(project_plan, ensure_ascii=False, indent=2)}"
+        f"ProjectPlan context:\n{(plan_text := json.dumps(project_plan, ensure_ascii=False, indent=2))}"
     )
+    record_prompt(prompt, task_context=task_text, project_plan=plan_text)
+    return prompt
 
 
 def _invoke_live_frontend_agent(

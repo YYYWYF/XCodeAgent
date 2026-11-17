@@ -22,7 +22,11 @@ export function assertBackendEnvironment(health: unknown, appEnv: AppEnv): void 
 }
 
 /** 读取现有基础设施健康接口；连接失败可重试，环境错配立即拒绝启动。 */
-export function checkBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<boolean> {
+export function checkBackendHealth(
+  baseUrl: string,
+  appEnv: AppEnv,
+  onReady?: (health: unknown) => void
+): Promise<boolean> {
   return new Promise((resolve, reject) => {
     let settled = false
     /** 统一收口网络事件，避免超时与迟到响应重复完成。 */
@@ -61,6 +65,7 @@ export function checkBackendHealth(baseUrl: string, appEnv: AppEnv): Promise<boo
         }
         try {
           assertBackendEnvironment(health, appEnv)
+          onReady?.(health)
           finish(true)
         } catch (error) {
           finish(false, error as Error)

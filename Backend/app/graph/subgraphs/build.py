@@ -33,6 +33,9 @@ from app.graph.nodes.common import (
 )
 from app.graph.state import ProjectState
 from app.observability.backend_log_redaction import LogRedactor
+from app.observability.build_instrumentation import (
+    bind_build_run, bind_build_tasks, observe_build, observe_repair, observe_task, observe_validation,
+)
 from app.domain.execution_recovery import RecoveryExecutionError, WorkflowReentryReason
 from app.services.build_restart import fresh_build_tasks, refresh_build_workspace, restart_build_state
 from app.services.node_recovery_context import current_node_recovery_context
@@ -394,6 +397,7 @@ def _execute_ready_tasks(
     return all_results, code_change_sets
 
 
+@observe_task
 def _execute_task(
     state: ProjectState,
     task: dict[str, Any],
@@ -656,7 +660,8 @@ def _execute_owner_tasks(
         for result in normalized_results
     ]
     if owner != "database":
-        sanitized_results = verify_task_file_changes(
+        sanitized_results = observe_validation(
+            verify_task_file_changes,
             results=sanitized_results,
             code_change_set=owner_change_set,
             tasks=owner_tasks,
@@ -664,7 +669,8 @@ def _execute_owner_tasks(
             authorization_checks_as_warning=True,
             authorization_checks_only=True,
         )
-    sanitized_results = _verify_business_results(
+    sanitized_results = observe_validation(
+        _verify_business_results,
         state,
         owner_tasks,
         sanitized_results,
@@ -1696,6 +1702,7 @@ def _source_build_record(state: ProjectState, recovery: Any) -> tuple[dict[str, 
     return progress_record or (({**expected_binding, "progress": None}, recovery.source_run_id) if expected_binding else None)
 
 
+@observe_build
 def run_build_scheduler(
     state: ProjectState,
     *,
@@ -1784,6 +1791,7 @@ def _run_build_scheduler(
     build_task_plan, build_run_binding, gate_errors = _bound_build_task_plan_for_build(state)
     if gate_errors:
         return _build_gate_result(state, build_task_plan, gate_errors)
+    bind_build_run(build_run_binding)
     # 绑定先于任何任务派发落盘；恢复时沿用原 Run，避免入口旧 pending 覆盖完成事实。
     if state.get("active_run_id") and state.get("active_thread_id"):
         existing = load_build_execution_record(state, str(state["active_run_id"]))
@@ -1982,6 +1990,7 @@ def _run_build_scheduler(
         tasks=current_state["tasks"],
         build_execution_scope=build_execution_scope,
     )
+    bind_build_tasks(current_state["tasks"], execution_slice["task_ids"])
     build_events: list[str] = []
     if retry_requested:
         if retry_task_ids:
@@ -2217,7 +2226,8 @@ def _run_build_scheduler(
             )["ready_tasks"]:
                 continue
             if summary["status"] == "needs_repair":
-                repair_task_plan = create_build_failure_repair_plan(
+                repair_task_plan = observe_repair(
+                    create_build_failure_repair_plan,
                     failed_results=[
                         result
                         for result in _results_for_tasks(

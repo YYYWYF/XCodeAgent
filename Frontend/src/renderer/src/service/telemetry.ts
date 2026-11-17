@@ -62,7 +62,7 @@ async function postTelemetryEvent(record: TelemetryEventRecord): Promise<void> {
 
 /** 非阻塞提交业务埋点，不返回发送结果，调用方无需 await。 */
 export function emitTelemetryEvent(record: TelemetryEventRecord): void {
-  void postTelemetryEvent(record)
+  if (window.devAgentStudio?.telemetryEnabled === true) void postTelemetryEvent(record)
 }
 
 /** 构建阶段会话创建事件，以已持久化会话 ID 标识创建事实。 */

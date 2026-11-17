@@ -14,6 +14,7 @@ from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
 )
+from app.observability.build_instrumentation import record_prompt
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_results
 
@@ -28,7 +29,7 @@ def _data_source_generation_prompt(
 
     task_packets = [_execution_task_packet(project_plan, task) for task in tasks]
     workspace_context = backend_workspace_context(workspace_snapshot)
-    return (
+    prompt = (
         "Execute the approved Java backend task packets in the provided array order. The "
         "scheduler has already verified their dependencies and non-overlapping write scopes. "
         "For each task, before the first write, read every instruction_paths file, inspect the "
@@ -135,9 +136,11 @@ def _data_source_generation_prompt(
         "Do not return changed_files or commands; the platform derives real changes from "
         "the workspace diff. Do not wrap the JSON in a Markdown fence.\n\n"
         "Backend Workspace Context:\n"
-        f"{json.dumps(workspace_context, ensure_ascii=False, indent=2)}\n\n"
-        f"Task packets:\n{json.dumps(task_packets, ensure_ascii=False, indent=2)}\n"
+        f"{(workspace_text := json.dumps(workspace_context, ensure_ascii=False, indent=2))}\n\n"
+        f"Task packets:\n{(task_text := json.dumps(task_packets, ensure_ascii=False, indent=2))}\n"
     )
+    record_prompt(prompt, task_context=task_text, workspace_context=workspace_text)
+    return prompt
 
 
 def _invoke_live_data_source_agent(

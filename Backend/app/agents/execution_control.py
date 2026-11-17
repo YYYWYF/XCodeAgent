@@ -3,16 +3,23 @@
 import asyncio
 from deepagents import create_deep_agent as _create_deep_agent
 from langchain.agents.middleware import AgentMiddleware
+from app.observability.build_instrumentation import activate, finish_tool, start_tool
 from app.services.run_workers import run_worker
 from app.services.inclusion_rate import bind_inclusion_identity
 
 
-async def _tracked_async(handler, request):
+async def _tracked_async(handler, request, *, tool=False):
     """独立等待真实异步调用，外层取消不能提前释放仍在执行的工具登记。"""
     async def invoke():
         """在子任务内持有登记直到调用及其清理全部结束。"""
         with run_worker():
-            return await handler(request)
+            span = start_tool(request) if tool else None
+            if span is None:
+                return await handler(request)
+            with activate(span):
+                result = await handler(request)
+                finish_tool(span, result)
+                return result
 
     task = asyncio.create_task(invoke())
     # shield 防止外层 Graph 的取消把 to_thread 工具伪装成已经退出。
@@ -39,7 +46,13 @@ class RunCancellationMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         """登记同步工具调用，停止成功前等待文件或命令操作结束。"""
         with run_worker(), bind_inclusion_identity(self.model):
-            return handler(request)
+            span = start_tool(request)
+            if span is None:
+                return handler(request)
+            with activate(span):
+                result = handler(request)
+                finish_tool(span, result)
+                return result
 
     async def awrap_model_call(self, request, handler):
         """登记异步模型调用的真实生命周期。"""
@@ -48,7 +61,7 @@ class RunCancellationMiddleware(AgentMiddleware):
     async def awrap_tool_call(self, request, handler):
         """登记异步工具及其同步线程的真实生命周期。"""
         with bind_inclusion_identity(self.model):
-            return await _tracked_async(handler, request)
+            return await _tracked_async(handler, request, tool=True)
 
 
 def create_deep_agent(*args, **kwargs):

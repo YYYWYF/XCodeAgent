@@ -15,7 +15,7 @@ import {
   setDiagnosticExitStatus,
   setDiagnosticStage
 } from './diagnostics/runtime'
-import { getBackendBaseUrl, startBackendService, stopBackendService } from './backendService'
+import { getBackendBaseUrl, isBackendTelemetryEnabled, startBackendService, stopBackendService } from './backendService'
 import { installDesignRuntimeProtocol, registerDesignRuntimeScheme } from './designRuntimeProtocol'
 import { normalizePersistentSessionMessage } from './sessionMessageNormalization'
 import { readStoredSession, readStoredSessionSummary, saveStoredSession } from './sessionStorage'
@@ -1638,7 +1638,10 @@ function createMainWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--devagentstudio-base-url=${getBackendBaseUrl()}`]
+      additionalArguments: [
+        `--devagentstudio-base-url=${getBackendBaseUrl()}`,
+        ...(isBackendTelemetryEnabled() ? ['--devagentstudio-telemetry-enabled'] : [])
+      ]
     }
   })
 
@@ -1691,7 +1694,10 @@ function createLoginWindow(): void {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--devagentstudio-base-url=${getBackendBaseUrl()}`]
+      additionalArguments: [
+        `--devagentstudio-base-url=${getBackendBaseUrl()}`,
+        ...(isBackendTelemetryEnabled() ? ['--devagentstudio-telemetry-enabled'] : [])
+      ]
     }
   })
 

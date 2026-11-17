@@ -24,6 +24,7 @@ const HEALTH_POLL_INTERVAL_MS = 500
 let backendProcess: ChildProcess | null = null
 let backendBaseUrl = DEVAGENTSTUDIO_ENV.DEVAGENTSTUDIO_BACKEND_URL
 let stoppingBackend = false
+let telemetryEnabled = false
 let serviceEpoch = 0
 let startupPromise: Promise<string> | undefined
 
@@ -36,6 +37,17 @@ type BundledBackendPaths = {
 /** 返回本次启动选择的后端地址。 */
 export function getBackendBaseUrl(): string {
   return backendBaseUrl
+}
+
+/** 复用启动健康响应提供埋点开关，无需渲染器额外探测。 */
+export function isBackendTelemetryEnabled(): boolean {
+  return telemetryEnabled
+}
+
+/** 只读取已验证后端的遥测能力，缺少显式开关时默认关闭。 */
+function applyBackendCapabilities(health: unknown): void {
+  const capabilities = health as { tools?: { telemetry?: { enabled?: boolean } } } | null
+  telemetryEnabled = capabilities?.tools?.telemetry?.enabled === true
 }
 
 /** 启动内置后端或核验源码后端，并在环境一致后放行。 */
@@ -269,7 +281,7 @@ async function waitForBackendHealth(
         `Backend exited before becoming healthy: code=${child.exitCode} signal=${child.signalCode}`
       )
     }
-    if (await checkBackendHealth(baseUrl, APP_ENV)) {
+    if (await checkBackendHealth(baseUrl, APP_ENV, applyBackendCapabilities)) {
       return
     }
     await delay(HEALTH_POLL_INTERVAL_MS)

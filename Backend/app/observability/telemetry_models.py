@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OptionalTelemetryModel(BaseModel):
@@ -42,10 +42,52 @@ class TelemetryTarget(OptionalTelemetryModel):
     api_contract_id: str | None = None
 
 
+class TelemetryContextExtra(OptionalTelemetryModel):
+    """关联 Build 实例、真实任务及仅用于统计的执行尝试。"""
+
+    build_run_id: str | None = None
+    task_plan_sha256: str | None = None
+    task_id: str | None = None
+    task_ids: list[str] | None = None
+    attempt_id: str | None = None
+    task_owner: str | None = None
+    experiment_tag: str | None = None
+    scenario_id: str | None = None
+    retry: bool | None = None
+    repair: bool | None = None
+
+
+Count = Annotated[int, Field(ge=0)]
+
+
+class TelemetryMetrics(OptionalTelemetryModel):
+    """仅保存量化指标，不接收文本或任意扩展对象。"""
+
+    project_plan_chars: Count | None = None
+    project_plan_bytes: Count | None = None
+    workspace_context_chars: Count | None = None
+    workspace_context_bytes: Count | None = None
+    task_context_chars: Count | None = None
+    task_context_bytes: Count | None = None
+    initial_prompt_chars: Count | None = None
+    initial_prompt_bytes: Count | None = None
+    tool_result_bytes: Count | None = None
+    planned_tasks: Count | None = None
+    completed_tasks: Count | None = None
+    first_completed_tasks: Count | None = None
+    acceptance_passed: Count | None = None
+    acceptance_failed: Count | None = None
+    model_spans: Count | None = None
+    tool_spans: Count | None = None
+    node_spans: Count | None = None
+
+
 class TelemetryContext(OptionalTelemetryModel):
     """描述业务阶段、节点、模式和目标。"""
 
     business_stage: str | None = None
+    business_operation: str | None = None
+    extra: TelemetryContextExtra | None = None
     node_name: str | None = None
     mode: Literal["ultra", "pro", "fast"] | None = None
     target: TelemetryTarget | None = None
@@ -95,6 +137,7 @@ class ExecutionTraceData(OptionalTelemetryModel):
     status: Literal["completed", "failed", "cancelled", "interrupted", "awaiting_user"] | None = None
     active_intervals: list[TelemetryActiveInterval] | None = None
     model: TelemetryModelUsage | None = None
+    metrics: TelemetryMetrics | None = None
     error: TelemetryError | None = None
 
 

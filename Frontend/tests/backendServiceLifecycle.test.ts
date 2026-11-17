@@ -5,6 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import {
   getBackendBaseUrl,
+  isBackendTelemetryEnabled,
   startBackendService,
   stopBackendService,
   prepareBackendServiceUpdate
@@ -20,7 +21,8 @@ const server = http.createServer((request, response) => {
   if (request.url !== '/health') { response.writeHead(404); response.end(); return; }
   response.writeHead(200, {'Content-Type': 'application/json'});
   response.end(JSON.stringify({status:'ok', app_env:process.env.APP_ENV,
-    backendPid:process.pid, backendInstanceId:'fixture-' + process.pid}));
+    backendPid:process.pid, backendInstanceId:'fixture-' + process.pid,
+    tools:{telemetry:{enabled:true}}}));
 });
 setTimeout(() => server.listen(Number(process.env.DEVAGENTSTUDIO_BACKEND_PORT), '127.0.0.1'),
   Number(process.env.TEST_BACKEND_READY_DELAY || 0));
@@ -42,9 +44,11 @@ test('退出客户端结束内置 Backend，重开新建进程，升级与在途
   )
   Object.defineProperty(process, 'resourcesPath', { configurable: true, value: directory })
   try {
+    assert.equal(isBackendTelemetryEnabled(), false)
     const firstIndex = launches.length
     const urls = await Promise.all([startBackendService(), startBackendService()])
     assert.equal(urls[0], urls[1])
+    assert.equal(isBackendTelemetryEnabled(), true)
     assert.equal(launches.length, firstIndex + 1)
     const first = launches[firstIndex]
     assert.deepEqual(first.options.stdio, ['ignore', 'pipe', 'pipe'])

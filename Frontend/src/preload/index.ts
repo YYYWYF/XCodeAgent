@@ -40,6 +40,7 @@ const devAgentStudioApi = {
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
   isElectron: true,
   agentBaseUrl,
+  telemetryEnabled: process.argv.includes('--devagentstudio-telemetry-enabled'),
   platform: process.platform,
   clipboard: {
     /** 将日志等纯文本交给主进程写入系统剪贴板。 */

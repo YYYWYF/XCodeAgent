@@ -1,52 +1,78 @@
-# 后端一期埋点调用说明
+# 统一分析埋点与 Build Baseline
 
-本期提供后端调用入口，不自动接入业务节点，也不新增前端或产品 HTTP 端点。字段结构以同目录的 `telemetry-phase1-v1.jsonc` 为准；完整版 `telemetry-batch.schema.json` 不用于校验本期精简记录。
+## 配置与输出
 
-## 配置
+在后端的当前环境文件中配置，重启后端生效。Electron 在启动时复用现有 `/health` 响应里的 `tools.telemetry.enabled`，重新启动客户端后读取新的开关。
 
-在后端运行环境设置 `DEVAGENTSTUDIO_TELEMETRY_URL` 为第三方接收接口的完整 HTTP(S) POST URL。留空时不发送埋点。当前不发送鉴权信息。
+| 模式 | 配置与行为 |
+| --- | --- |
+| `off` | 默认。前端跳过 `/telemetry/run` 提交，后端不创建分析队列、线程、客户端或文件，Build 不注册 Usage 回调，也不扫描 Prompt 或工具输出。 |
+| `local` | 设置 `DEVAGENTSTUDIO_OBSERVABILITY_MODE=local`。后台将嵌套 snake_case JSONL 写到 `~/<Studio 环境目录>/observability/<experiment>/events-*.jsonl`。开发环境目录是 `.devagentstudio_dev`。 |
+| `http` | 设置 `DEVAGENTSTUDIO_OBSERVABILITY_MODE=http` 和 `DEVAGENTSTUDIO_OBSERVABILITY_URL`，使用完整 HTTP(S) POST 地址。记录从内存直接进入 camelCase 批次。HTTP 失败只增加进程内计数。 |
 
-## 在业务完成后调用
+显式 MODE 优先。未设置 MODE 且 `DEVAGENTSTUDIO_TELEMETRY_URL` 非空时，按旧设置使用 HTTP，并保留旧接收端的缺省 `userId`。显式 `http` 使用新 URL；仅在新 URL 变量未设置时读取旧 URL。任一启用模式只建立一条队列与一个 Sink。已有 `backend.log` 继续独立用于本地排障。
 
-例如，应用创建**成功持久化之后**，在后端业务代码中提交一次埋点；同步和异步调用处都可使用：
+前端保持独立标准 AG-UI `/telemetry/run` 的 `emit_event` / `emit_trace` 动作。后端业务事实或片段终态可调用 `emit_telemetry_event(record)`、`emit_telemetry_trace(record)` 或 `publish(record, record_type)`，入口同步返回，无需 `await`。普通字典会在入队时冻结，字段校验和编码在后台完成。AG-UI 路由在边界校验外部结构，返回完整生命周期，提交成功表示调用完成。
 
-```python
-from app.observability.telemetry import emit_telemetry_event
+当前严格字段以 [telemetry_models.py](../../../Backend/app/observability/telemetry_models.py) 为准。共有 `execution_trace`、`telemetry_event` 两类记录，省略值和显式 `null` 分开保留。默认 `occurred_at`、HTTP 批次 `sentAt` 采用固定 UTC+08:00 的 `YYYY-MM-DD HH:mm:ss`。片段耗时取单调时钟。HTTP 批次沿用 `{schemaVersion, batchId, sentAt, records}`，每批最多 16 条。字段平铺仅属于模型服务的 ES 写入方式。
 
-emit_telemetry_event(
-    {
-        "identity": {"project_id": application_id},
-        "data": {
-            "event_name": "application_created",
-            "payload": {"creation_source": "new_app"},
-        },
+每进程队列最多积压 128 条，每个提交限制为 2048 个结构成员和 16384 个字符。满载时丢弃最新提交。内存诊断可通过 `telemetry.diagnostics()` 读取 `accepted/written/sent/dropped/validation_failed/local_write_failed/http_failed/pending`。后台不重试 HTTP。正常进程退出最多等待 250 毫秒清空，强制退出可能丢失在途数据。只有稳定标识、时间、大小、状态及真实用量属于 Build 分析数据。
+
+## 采集口径
+
+- Build 根片段采用实际 `build_run_id` 和确认 DAG 摘要。每次调度调用有自己的 `trace_id`。任务按实际执行分配 `attempt_id`，重试和修复都有标记。工作流缺少独立 `operation_id` 时保留 `null`。现行调度器逐任务调用 Agent，`task_ids` 留给未来确有多任务同批调用的生产者。
+- 前端记录已渲染的完整 ProjectPlan 和任务列表文本。后端记录实际 WorkspaceSnapshot 投影和序列化任务包，其中包含分型实现契约。两边都记录拼接完成的初始 Prompt。每项分别统计字符和 UTF-8 字节。
+- 模型耗时覆盖一次 LangChain 调用。用量来自 Provider Usage 或 LangChain 的标准用量字段，累计流式尾帧采用最后一个有效快照。每个模型调用只有一个终态，SDK 内部重发若未产出独立用量则无法单列。失败和取消有片段，缺失的用量保留 `null`。工具统计已返回的文本字节，未知结构保留 `null`，工具次数仍计入。
+- 任务完成率分母为首次执行切片中的原 DAG 任务数，分子分别取首轮完成和最终完成任务。验收通过率同样使用原 DAG 任务作分母，另列验收覆盖率，跳过和无证据任务不计通过。修复规划、修复执行和重试的模型用量可沿父片段追溯，重试与修复子集允许重叠。多个调度调用组成一个 BuildRun 时，报告显示调度耗时合计，跨暂停墙钟保留 `N/A`。
+
+## 记录和复跑
+
+1. 选择可从同一起点恢复的真实项目。冻结已确认 DAG、需求版本、起始工程快照、Provider/模型、参数、模板、权限与工具环境、冷热缓存、验收套件和质量阈值。为每次运行恢复一份相同快照，冷热缓存分别设 Scenario。建议每个 Scenario 重复 3–5 次。
+2. 配置 `DEVAGENTSTUDIO_OBSERVABILITY_MODE=local`、`DEVAGENTSTUDIO_OBSERVABILITY_EXPERIMENT=baseline`、`DEVAGENTSTUDIO_OBSERVABILITY_SCENARIO=crud-query`，沿现有 Build 路径运行。根据根片段的真实 `build_run_id` 填写实验目录的 `manifest.json`。每次使用独立 BuildRun ID，每个进程会生成独立 JSONL 文件。
+3. 在实验目录记录清单。下面的值是填写示例，质量门禁先于实验确定。复测时换实验标签和代码版本，验证其余字段与原始条件相同。模型中记录真实名称、供应商、转发方式和有效参数。工具环境可用稳定的配置指纹，验收套件可列实际命令与门禁。清单只供离线比较，存放于对应的分析目录。
+
+```json
+[
+  {
+    "build_run_id": "<根片段的 build_run_id>",
+    "experiment_tag": "baseline",
+    "scenario_id": "crud-query",
+    "project_id": "<真实应用标识>",
+    "requirement_revision": "<确认需求的版本或摘要>",
+    "workspace_snapshot": "<相同起始工程的快照或提交摘要>",
+    "task_plan_sha256": "<根片段的 task_plan_sha256>",
+    "model": {
+      "name": "<模型>",
+      "provider": "<供应商>",
+      "transport": "direct",
+      "parameters": {"temperature": 0, "max_tokens": 16384}
+    },
+    "template_version": "<模板版本>",
+    "code_revision": "<XCodeAgent 代码提交>",
+    "tool_environment": "<工具版本、依赖和权限的可核对记录>",
+    "validation_suite": ["<同一验收套件及命令>"],
+    "cache_condition": "cold",
+    "repetitions": 1,
+    "quality_gate": {
+      "minimum_final_rate": 1.0,
+      "minimum_acceptance_rate": 0.9,
+      "wall_time_tolerance": 0.05,
+      "repair_count_tolerance": 0
     }
-)
+  }
+]
 ```
 
-执行片段使用 `ExecutionTraceRecord(data=ExecutionTraceData(...))`，调用 `emit_telemetry_trace(record)`，同样不加 `await`。调用位置应在业务事实成立之后，例如保存成功后记录创建事件，执行终态确定后记录 Trace。本期没有把入口接入任何具体业务节点。
+从 `Backend` 运行：
 
-入口接受上面的字典或已构造的 `TelemetryEventRecord`／`ExecutionTraceRecord`。推荐直接传字典，这样字段校验、读取地址、序列化和 POST 都在埋点专用线程中完成；字段无效时只记录日志，不会在业务调用处抛出校验异常。若调用处自行构造 Pydantic 对象，构造时的校验仍发生在调用线程。传入字典后请不要再修改它，因为线程稍后才读取内容。`telemetry_models.py` 中每个字段都可省略，但提供的值仍会按字段类型检查。
+```bash
+.venv/bin/python -m app.observability.build_baseline_report summary \
+  --input ~/.devagentstudio_dev/observability/baseline --output baseline-summary.md
 
-公共字段在发送任务中自动补齐，直接新建模型不会补齐这些字段。只补未提供的键，调用方提供的值（包括空字符串和显式 `None`）保留；显式 `producer=None` 或 `identity=None` 时不补对应对象。其余未提供的业务字段仍省略。
+.venv/bin/python -m app.observability.build_baseline_report compare \
+  --baseline ~/.devagentstudio_dev/observability/baseline \
+  --after ~/.devagentstudio_dev/observability/optimized-v1 \
+  --output build-baseline-comparison.md
+```
 
-| 字段 | 未提供时的默认值 |
-| --- | --- |
-| `type` | 根据 Event／Trace 入口确定 |
-| `record_id` | 自动生成 UUID |
-| `occurred_at` | 调用入口捕获的时间，不包含线程池排队时间 |
-| `producer.platform` | 当前系统对应的 `windows`／`macos`／`linux`；未知系统省略 |
-| `producer.xcodeagent_version` | 从 `Frontend/package.json` 读取产品版本；打包时将同一文件复制到 `app/product_metadata/package.json`；无法读取时记日志并省略 |
-| `identity.user_id` | 暂时默认 `Hupy/test`，可通过调用参数覆盖 |
-
-`producer` 只自动补齐 `platform` 和 `xcodeagent_version`；`source`、`environment` 由调用方按需提供，未提供则省略。
-
-本次请求另补 `schema_version=1`、`batch_id`、`sent_at`。时间使用 UTC RFC3339 `Z` 后缀；`sent_at` 在工作线程组装发送请求时生成。若业务事实发生在更早时刻，请提供对应的 `occurred_at`。Trace 的开始时间、结束时间、耗时和 Token 用量仍由调用方采集。同一事实若由业务层再次上报，请复用稳定的 `record_id` 和原 `occurred_at`。
-
-`emit_telemetry_event(...)` 是普通函数，只向独立于业务执行器的埋点线程池提交任务，随后立即继续业务流程；**调用时不要加 `await`，也无需接收返回值或运行中的事件循环**。线程池最多同时执行 2 个任务，最多容纳 16 个执行中或待执行任务；满载时直接丢弃新埋点并记日志，避免无限积压。URL 未配置时任务不发送；地址无效或字段校验失败时只记录日志。第三方收到的请求体为 `{"schema_version":1,"batch_id":"...","sent_at":"...Z","records":[一条记录]}`，需接受省略的业务字段。
-
-## 失败处理
-
-每次业务触发只发送一次。HTTP 非 2xx、网络异常或 5 秒超时仅写状态日志；不抛回业务流程，不保存本地持久队列，也不自动重试。Python 正常退出时会等待已提交的线程任务，可能延长关闭时间；进程被强制结束时，未完成的埋点可能丢失。专用线程池避免占用业务事件循环和业务默认线程池，但仍共享进程的 CPU、内存与网络资源。需要更强的送达保证时，再单独扩展持久化机制。
-
-构造错误摘要前应先脱敏，不上传凭证、完整 Prompt 或源码。发送日志不记录请求体或完整 URL。
+报告固定分为 Prompt、整体 Token、交付效率与质量三部分。数值按 BuildRun 展示样本数、均值和中位数，逐片段展示 Task/Attempt 与 Span 父链。After 缺失时显示 `N/A`。数据损坏、Span 数目不符、模型用量缺失或条件不同会限制比较结论。质量通过需要最终完成、验收通过及覆盖率至少保持 Baseline 水平，并达到预设阈值；耗时和修复成本也须在预设容差内，才可根据 Token 下降判定该场景有效。

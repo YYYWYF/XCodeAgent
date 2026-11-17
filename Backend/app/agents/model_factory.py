@@ -16,6 +16,25 @@ from app.services.model_request_cancellation import (
 )
 
 
+def _model_callbacks(settings: Settings):
+    """保留模型输出日志，按需附加终态 Usage 观察器。"""
+    from app.observability.telemetry import enabled
+
+    callbacks = [ModelOutputLogHandler()] if settings.model_output_log_enabled else []
+    if enabled():
+        try:
+            from app.observability.model_usage_callback import BuildModelUsageCallback
+
+            direct = settings.model_transport == "direct"
+            callbacks.append(BuildModelUsageCallback(
+                settings.model_provider if direct else None,
+                settings.model_api_name if direct else None,
+            ))
+        except Exception:
+            pass
+    return callbacks or None
+
+
 def create_chat_model(
     settings: Settings,
     *,
@@ -52,7 +71,7 @@ def create_chat_model(
             max_retries=settings.model_max_retries if max_retries_override is None else max_retries_override,
             timeout_seconds=settings.model_timeout_seconds if timeout_seconds_override is None else timeout_seconds_override,
             extra_body=deepcopy(extra_model_kwargs) if extra_model_kwargs else None,
-            callbacks=[ModelOutputLogHandler()] if settings.model_output_log_enabled else None,
+            callbacks=_model_callbacks(settings),
         )
     if settings.model_transport != "direct":
         raise ValueError("MODEL_TRANSPORT must be direct or transmit")
@@ -123,11 +142,7 @@ def create_chat_model(
             # 不匹配，chunk 被丢弃，最终返回空 messages 误报"未返回完整 JSON"。
             # model_output_log_enabled 只控制是否打印日志，不再复用为 streaming 开关。
             streaming=True,
-            callbacks=(
-                [ModelOutputLogHandler()]
-                if settings.model_output_log_enabled
-                else None
-            ),
+            callbacks=_model_callbacks(settings),
             **anthropic_extra,
         )
 
@@ -156,8 +171,6 @@ def create_chat_model(
             event_hooks={"request": [check_async_model_request], "response": [guard_async_model_response]},
         ),
         streaming=True,
-        callbacks=(
-            [ModelOutputLogHandler()] if settings.model_output_log_enabled else None
-        ),
+        callbacks=_model_callbacks(settings),
         extra_body=extra_body,
     )

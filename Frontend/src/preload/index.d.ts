@@ -14,6 +14,7 @@ declare global {
       getAppVersion: () => Promise<string>
       isElectron: boolean
       agentBaseUrl: string
+      telemetryEnabled: boolean
       platform: string
       clipboard: {
         writeText: (text: string) => Promise<void>

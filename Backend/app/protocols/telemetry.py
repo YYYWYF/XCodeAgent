@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from app.observability.telemetry import emit_telemetry_event, emit_telemetry_trace
+from app.observability.telemetry import enabled, emit_telemetry_event, emit_telemetry_trace
 from app.observability.telemetry_models import ExecutionTraceRecord, TelemetryEventRecord
 from app.protocols.ag_ui_action_stream import AgUiActionResult, build_ag_ui_action_stream
 
@@ -31,6 +31,7 @@ def telemetry_capabilities() -> dict[str, Any]:
         "customEventName": "telemetry",
         "stateSnapshotKey": "telemetry",
         "workflowIndependent": True,
+        "enabled": enabled(),
         "deliveryPolicy": "best_effort",
         "deliveryAcknowledged": False,
     }
@@ -42,7 +43,7 @@ def build_telemetry_ag_ui_stream(
     """将提交成功和输入失败都编码为完整 AG-UI 动作生命周期。"""
 
     async def operation() -> AgUiActionResult:
-        """校验外部输入后调用现有发送入口，实际 POST 留在专用线程池。"""
+        """校验外部输入后调用现有发送入口，分析输出由后台统一管道处理。"""
 
         forwarded = payload.get("forwardedProps")
         raw_input = forwarded.get("telemetry") if isinstance(forwarded, dict) else None
@@ -60,7 +61,7 @@ def build_telemetry_ag_ui_stream(
             emit_telemetry_event(record)
         else:
             emit_telemetry_trace(record)
-        # 原发送入口无返回值，满载或未配置地址时可能丢弃，不能声称已入队或送达。
+        # 原发送入口无返回值，满载或关闭时可能丢弃，不能声称已入队或送达。
         return AgUiActionResult(
             data={},
             message="埋点提交调用已完成，不代表第三方已收到。",
