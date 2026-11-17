@@ -553,6 +553,9 @@ def _build_iteration_section(
             lines.append("")
 
     # —— 接口设计（请求/响应摘要）——
+    # 关键：必须把 method + path 完整带出来。下一迭代的 LLM 只能凭这份摘要判断
+    # "这个契约已经有接口了，路径是这个"，否则它会按契约 ID 重新推断路径
+    # （实测 v1_3 LLM 把 v1_1 的 /api/hello-messages 改写成了 /api/hello-message）。
     endpoints_dir = devagentstudio / "plans" / "endpoints"
     if endpoints_dir.is_dir():
         endpoint_files = sorted(endpoints_dir.glob("*.json"))
@@ -562,13 +565,37 @@ def _build_iteration_section(
             for ef in endpoint_files:
                 ep = _load_json(ef)
                 if ep and isinstance(ep, dict):
-                    ep_name = ep.get("name") or ef.stem
-                    ep_desc = str(ep.get("description") or "").strip()
-                    ep_method = str(ep.get("method") or ep.get("httpMethod") or "").strip()
-                    ep_path = str(ep.get("path") or ep.get("url") or "").strip()
+                    # endpointContract 是嵌套的真实契约（含 method/path），顶层
+                    # 字段是包装。两个都尝试取，优先嵌套。
+                    endpoint_contract = ep.get("endpointContract") if isinstance(ep.get("endpointContract"), dict) else {}
+                    ep_name = ep.get("name") or endpoint_contract.get("name") or ef.stem
+                    ep_desc = str(ep.get("description") or endpoint_contract.get("summary") or "").strip()
+                    ep_method = str(
+                        endpoint_contract.get("method")
+                        or ep.get("method")
+                        or ep.get("httpMethod")
+                        or ""
+                    ).strip()
+                    ep_path = str(
+                        endpoint_contract.get("path")
+                        or ep.get("path")
+                        or ep.get("url")
+                        or ""
+                    ).strip()
+                    api_contract_id = str(ep.get("apiContractId") or "").strip()
+                    endpoint_id = str(ep.get("endpointId") or "").strip()
                     lines.append(f"- **{ep_name}**")
                     if ep_method or ep_path:
                         lines.append(f"  - {ep_method} {ep_path}")
+                    # 把契约 ID 也带上：LLM 在新迭代里要扩展同一契约时，能认出这是
+                    # 已存在的契约（避免把"修改既有接口"误当成"新增契约"）。
+                    if api_contract_id or endpoint_id:
+                        id_parts = []
+                        if api_contract_id:
+                            id_parts.append(f"契约 `{api_contract_id}`")
+                        if endpoint_id:
+                            id_parts.append(f"端点 `{endpoint_id}`")
+                        lines.append(f"  - " + "，".join(id_parts))
                     if ep_desc:
                         lines.append(f"  - 描述：{ep_desc}")
             lines.append("")
