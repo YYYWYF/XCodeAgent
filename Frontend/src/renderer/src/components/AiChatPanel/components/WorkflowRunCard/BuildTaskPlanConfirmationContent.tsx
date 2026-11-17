@@ -155,7 +155,7 @@ export function TaskDetails({
   dependencyNames?: string[]
 }): JSX.Element {
   const { files, ranges, supplementaryDescription, repairSupplement } = taskFilePresentation(task)
-  const businessChecks = acceptanceTexts(task.business_acceptance_checks)
+  const businessChecks = acceptanceTexts(task.businessAcceptanceTexts)
   const coveredEndpoints = task.coveredEndpoints || []
   return (
     <div className={cx('workflow-dag-confirmation-task-details')}>
@@ -324,14 +324,8 @@ function endpointContractDetails(
   ]
 }
 
-/** 从确定性验收对象中提取用户可读说明并去重。 */
-function acceptanceTexts(checks?: Array<Record<string, unknown>>): string[] {
-  const values = (checks || []).flatMap((check) => {
-    for (const key of ['description', 'summary', 'title', 'label']) {
-      const value = check[key]
-      if (typeof value === 'string' && value.trim()) return [value.trim()]
-    }
-    return []
-  })
-  return [...new Set(values)]
+/** 校验 AG-UI 展示数据，避免异常验收字段中断任务详情渲染。 */
+function acceptanceTexts(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((text: unknown): text is string => typeof text === 'string' && !!text.trim())
 }

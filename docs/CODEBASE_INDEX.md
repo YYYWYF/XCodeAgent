@@ -1007,6 +1007,8 @@ The product and technical brand is **DevAgent Studio**. User-visible labels use 
 
 ### Workflow storage and backend-owned continuation
 
+- Build 任务确认由 `services/build_task_confirmation.py` 将业务检查投影为 `reviewTasks[].businessAcceptanceTexts`，按顺序提供去重的可读文本。AG-UI 展示状态直接携带该数组，任务合同仍用 `business_acceptance_checks` 保存完整检查并按原规则引用化。`BuildTaskPlanConfirmationContent.tsx` 校验文本数组后渲染“待验收”。回归见 `tests.test_build_task_confirmation` 和 `pnpm test:dag-generation`。
+
 - Build 前置检查经 `managed_database_metadata.py` 保留 Bee HTTP 409 / `RESOURCE_BUSY` 的只读错误，`stage_prerequisites.py` 和 API 映射门禁向原节点传播。`workflow_input_artifacts.py`、`automatic_artifact_regeneration.py`、`business_node_retry.py` 遇忙时把检查延后到持久化的节点入口。原恢复动作以 `MANAGED_DATABASE_RESOURCE_BUSY` 提供“继续”，由原 Build 范围及计划摘要重新校验。回归：`tests.test_managed_database_metadata`、`pnpm test:execution-recovery`。
 
 - `Backend/app/protocols/workflow/presentation.py` owns the single public `state`, scalar `summary`, document/diff references and task presentation without embedded execution source material. `projection.py`, `stream_events.py` and direct-modification projections share it; standard AG-UI `RUN_FINISHED.result` remains the protocol envelope, not a second Workflow state.

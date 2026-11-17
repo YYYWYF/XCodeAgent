@@ -18,6 +18,23 @@ from app.workspace.task_documents import validate_pending_planning_provenance
 _COMPLETED_STATUSES = {"completed", "already_satisfied"}
 
 
+def _business_acceptance_texts(checks: Any) -> list[str]:
+    """提取待确认的可读验收说明，保留顺序并去重。"""
+
+    if not isinstance(checks, list):
+        return []
+    texts: dict[str, None] = {}
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        for key in ("description", "summary", "title", "label"):
+            value = check.get(key)
+            if isinstance(value, str) and (text := value.strip()):
+                texts[text] = None
+                break
+    return list(texts)
+
+
 def project_build_task(
     task: dict[str, Any],
     *,
@@ -37,7 +54,8 @@ def project_build_task(
         "allowed_paths": task.get("allowed_paths") or [],
         "change_scope": task.get("change_scope") or [],
         "deliverables": task.get("deliverables") or [],
-        "business_acceptance_checks": task.get("business_acceptance_checks") or [],
+        # 展示文本使用独立字段，避免完整检查被 AG-UI 打包为资料引用。
+        "businessAcceptanceTexts": _business_acceptance_texts(task.get("business_acceptance_checks")),
         "status": task.get("status") or "pending",
         **backend_task_scope_projection(task),
     }

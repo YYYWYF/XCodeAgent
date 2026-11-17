@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
 
+from app.protocols.workflow.presentation import workflow_presentation
 from app.services.build_task_confirmation import build_task_confirmation_read_model
 from app.workspace.task_documents import build_planning_provenance
 
@@ -75,6 +77,34 @@ def _cumulative_plan() -> dict:
 
 class BuildTaskConfirmationTests(unittest.TestCase):
     """验证确认任务只从 Pending provenance 与 Task Graph 派生。"""
+
+    def test_review_acceptance_texts_stay_inline_for_large_checks(self) -> None:
+        """执行资料超过外置阈值时，AG-UI 确认卡仍收到可读文本数组。"""
+
+        plan = _cumulative_plan()
+        task = plan["task_registry"]["orders-backend"]
+        checks = [
+            {"description": " 查询订单 ", "expected": {"endpoints": [{"summary": "详细设计" * 2048}]}},
+            {"description": " ", "summary": "处理无权限请求", "title": "备用标题"},
+            {"label": "查询订单"},
+            {"description": None},
+            None,
+        ]
+        task["business_acceptance_checks"] = checks
+        read_model = build_task_confirmation_read_model(plan, None)
+        with tempfile.TemporaryDirectory() as workspace:
+            view = workflow_presentation(
+                {"summary": {"clarification": {"taskPlan": read_model}}},
+                workspace=workspace,
+            )
+
+        review_tasks = view["state"]["clarification"]["taskPlan"]["reviewTasks"]
+        review_task = next(item for item in review_tasks if item["id"] == task["id"])
+        self.assertEqual(
+            review_task.get("businessAcceptanceTexts"), ["查询订单", "处理无权限请求"]
+        )
+        self.assertNotIn("business_acceptance_checks", review_task)
+        self.assertIs(task["business_acceptance_checks"], checks)
 
     def test_provenance_contains_assembly_review_scope_in_topological_order(self) -> None:
         """Pending provenance 保留 Assembly 的 review、platform、new、reused 四组来源。"""

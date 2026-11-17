@@ -1085,7 +1085,7 @@ export type WorkflowBuildTaskPlanTask = WorkflowBackendTaskScope & {
   allowed_paths?: string[]
   change_scope?: Array<Record<string, unknown>>
   deliverables?: Array<Record<string, unknown>>
-  business_acceptance_checks?: Array<Record<string, unknown>>
+  businessAcceptanceTexts?: string[]
   business_acceptance_evidence?: Array<Record<string, unknown>>
   business_acceptance_summary?: Record<string, unknown>
   status?: string

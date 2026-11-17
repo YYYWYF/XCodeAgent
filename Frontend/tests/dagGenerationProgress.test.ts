@@ -58,7 +58,10 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import { maybeRefreshPendingPlanLifecycleAfterGeneration } from '../src/renderer/src/components/AiChatPanel/pendingPlanLifecycleRefresh'
 import { workflowClarification } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/workflowClarification'
-import { TaskHeader } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/BuildTaskPlanConfirmationContent'
+import {
+  TaskDetails,
+  TaskHeader
+} from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/BuildTaskPlanConfirmationContent'
 import { latestApplicationLifecycle } from '../src/renderer/src/hooks/useApplicationLifecycleStore'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
 import type {
@@ -68,7 +71,7 @@ import type {
   WorkflowRunPayload
 } from '../src/renderer/src/typings'
 
-test('统一 DAG 任务列表为新增和复用任务显示对应 Tag', () => {
+test('DAG 任务列表为新增和复用任务展示序号与业务标题', () => {
   const markup = renderToStaticMarkup(
     createElement(
       'div',
@@ -84,10 +87,25 @@ test('统一 DAG 任务列表为新增和复用任务显示对应 Tag', () => {
     )
   )
 
-  assert.match(markup, />新增<\/span>/)
-  assert.match(markup, />复用<\/span>/)
+  assert.match(markup, /task-index">1<\/span>/)
+  assert.match(markup, /task-index">2<\/span>/)
   assert.match(markup, /实现订单接口/)
   assert.match(markup, /复用基础客户端/)
+})
+
+test('展开 DAG 任务时校验验收文本，异常数据不会中断详情渲染', () => {
+  const task = { id: 'orders', title: '实现订单接口', description: '' }
+  // 模拟 AG-UI 中静态类型无法约束的引用对象与无效数组元素。
+  const cases: ReadonlyArray<readonly [unknown, number]> = [
+    [{ $artifact: { artifactId: 'checks' } }, 0],
+    [['查询订单', null, {}, '  ', '处理无权限请求'], 2]
+  ]
+  for (const [value, count] of cases) {
+    const markup = renderToStaticMarkup(
+      createElement(TaskDetails, { task: { ...task, businessAcceptanceTexts: value as string[] } })
+    )
+    assert.ok(markup.includes(`待验收</span><small>${count} 项</small>`), markup)
+  }
 })
 
 test('仅匹配最终 Pending PlanningRun 的完整快照才能提供完成计数', () => {
