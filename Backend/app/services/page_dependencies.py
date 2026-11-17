@@ -261,10 +261,12 @@ def _normalize_endpoint_dependencies(
     endpoint_index: dict[str, dict[str, Any]],
     api_contracts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """接受规划模型的 endpoint 引用；缺失时仅按页面数据源生成保守读取默认值。"""
+    """保留模型显式声明的空依赖，仅为未提供有效引用的页面推导默认读取。"""
 
-    supplied = dict_items(_references_value(page, "endpoint_dependencies"))
-    if not supplied:
+    raw_dependencies = _references_value(page, "endpoint_dependencies")
+    supplied = dict_items(raw_dependencies)
+    # 空数组表示明确取消页面读取依赖，不能把它当作缺省值重新绑定接口。
+    if not supplied and raw_dependencies != []:
         supplied = endpoint_dependencies_for_contracts(
             api_contracts,
             [str(item) for item in page.get("data_dependencies", [])],
