@@ -36,6 +36,83 @@ const identity: SessionIdentity = {
 }
 
 try {
+  {
+    let root: ReactTestRenderer | undefined
+    let controller: ReturnType<typeof usePreviewRuntime> | undefined
+    let finishWatch: (() => void) | undefined
+    const actions: string[] = []
+    const readyUrls: string[] = []
+    const url = 'http://127.0.0.1:3000'
+    const idle: NonNullable<PreviewRuntimePayload['runtime']> = {
+      attemptId: '',
+      status: 'stopped',
+      frontend: { status: 'stopped' },
+      backend: { status: 'stopped' }
+    }
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { devAgentStudio: { agentBaseUrl: 'http://preview.test' }, setTimeout }
+    })
+    globalThis.fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      const action = body.forwardedProps.previewRuntime.action
+      actions.push(action)
+      if (action === 'get')
+        return response(body.threadId, body.runId, { status: 'completed', runtime: idle })
+      return new Promise<Response>((resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('watch aborted')), {
+          once: true
+        })
+        if (actions.length === 2) {
+          finishWatch = () =>
+            resolve(
+              response(body.threadId, body.runId, {
+                status: 'completed',
+                runtime: {
+                  attemptId: 'acceptance-attempt',
+                  status: 'running',
+                  frontend: { status: 'running', url },
+                  backend: { status: 'skipped' },
+                  previewUrl: url
+                }
+              })
+            )
+        }
+      })
+    }
+
+    /** 挂载抽屉关闭、没有服务在运行的验收工作台。 */
+    function AcceptanceProbe(): ReactElement {
+      controller = usePreviewRuntime({
+        workspace: identity.workspaceRoot,
+        watchForAcceptance: true,
+        localBlocked: false,
+        createSession: async () => identity,
+        discardSession: async () => {},
+        persistSession: async () => {},
+        setMessages: () => {},
+        getMessages: () => [],
+        onReady: (readyUrl) => readyUrls.push(readyUrl)
+      })
+      return createElement('output')
+    }
+
+    try {
+      await act(async () => {
+        root = create(createElement(SessionRuntimeProvider, null, createElement(AcceptanceProbe)))
+      })
+      assert.deepEqual(actions, ['get', 'watch'])
+      assert.equal(controller!.control.snapshot?.runtime?.status, 'stopped')
+      assert.deepEqual(readyUrls, [])
+      assert.ok(finishWatch)
+      await act(async () => finishWatch?.())
+      assert.equal(controller!.control.snapshot?.runtime?.attemptId, 'acceptance-attempt')
+      assert.deepEqual(readyUrls, [url])
+    } finally {
+      await act(async () => root?.unmount())
+    }
+  }
+
   for (const failFirstCancel of [false, true]) {
     let root: ReactTestRenderer | undefined
     let controller: ReturnType<typeof usePreviewRuntime> | undefined

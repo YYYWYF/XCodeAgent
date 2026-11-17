@@ -240,6 +240,7 @@ export type WorkflowLaunchPart = {
 }
 
 export type WorkflowLaunchResult = {
+  attempt_id?: string
   status?: string
   message?: string
   preview_url?: string

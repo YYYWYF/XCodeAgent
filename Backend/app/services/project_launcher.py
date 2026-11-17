@@ -106,7 +106,7 @@ def launch_project_preview(
                 result = {"status": "failed", "message": "旧服务停止失败，未启动新的服务。", "failed_stage": "stop", "frontend": frontend_stop, "backend": backend_stop}
                 finish_attempt(root, result)
                 return result
-        begin_attempt(root)
+        attempt_id = begin_attempt(root)
 
         def report(stage: str, status: str, message: str) -> None:
             """同时向公共状态和调用者推送阶段变化。"""
@@ -135,7 +135,7 @@ def launch_project_preview(
         finish_attempt(root, result)
         if result["status"] == "running":
             result["authorization_advisory"] = get_preview_authorization_advisory(root)
-        return result
+        return {**result, "attempt_id": attempt_id}
 
 
 def _launch_project_preview(

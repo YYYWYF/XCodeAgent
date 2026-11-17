@@ -7,7 +7,7 @@ import {
   ReloadOutlined
 } from '@ant-design/icons'
 import { Button, Input, Select, Tooltip, Typography } from 'antd'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   ApplicationConfig,
@@ -53,6 +53,7 @@ type Props = {
   pages?: DevelopmentPlanningPageOption[]
   previewBaseUrl?: string
   selectedPagePath?: string
+  onRequestedPageLoad?: () => void
   onInspectingChange?: (active: boolean) => void
   onElementContextChange?: (context: InspectedElementContext | undefined) => void
 }
@@ -83,7 +84,8 @@ export default function BrowserPreviewPanel({
   previewBaseUrl = '',
   selectedPagePath = '',
   onElementContextChange,
-  onInspectingChange
+  onInspectingChange,
+  onRequestedPageLoad
 }: Props): ReactElement {
   const pageOptions = useMemo<PreviewPageOption[]>(() => {
     if (pages.length > 0) {
@@ -111,6 +113,7 @@ export default function BrowserPreviewPanel({
   const [draftUrl, setDraftUrl] = useState(initialUrl)
   const [selectedPage, setSelectedPage] = useState(initialPagePath)
   const [refreshKey, setRefreshKey] = useState(0)
+  const previousRequestKey = useRef(requestKey)
   const [openError, setOpenError] = useState('')
   const [launchError, setLaunchError] = useState(externalError || '')
   const previewUrl = navigation.history[navigation.index]
@@ -136,7 +139,9 @@ export default function BrowserPreviewPanel({
   }, [previewUrl])
 
   useEffect(() => {
-    if (requestKey) setRefreshKey((key) => key + 1)
+    // 首次挂载已使用目标地址，只有后续新请求需要重载当前 iframe。
+    if (requestKey && requestKey !== previousRequestKey.current) setRefreshKey((key) => key + 1)
+    previousRequestKey.current = requestKey
     if (!requestedUrl || showServiceEmptyState) return
     // 从外部收到新的 preview 地址（如 launch 成功返回），清除此前可能的启动错误
     setLaunchError('')
@@ -353,6 +358,7 @@ export default function BrowserPreviewPanel({
               ref={elementInspector.iframeRef}
               className={cx('browser-preview-frame')}
               src={previewUrl}
+              onLoad={requestedUrl === previewUrl ? onRequestedPageLoad : undefined}
               title={`${application.name} 网页预览`}
               sandbox="allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
             />

@@ -50,6 +50,7 @@ from app.services.project_launcher import (
     run_project_restart_validation,
     stop_backend_project,
 )
+from app.services.preview_runtime_state import read_record
 from app.utils.subprocess_platform import (
     WINDOWS_CREATE_NEW_PROCESS_GROUP,
     WINDOWS_CREATE_NO_WINDOW,
@@ -1487,7 +1488,7 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertNotIn("_process", result["backend"])
 
     def test_launch_preview_reports_real_stage_progress(self) -> None:
-        """启动预览按结构识别、后端、前端、就绪顺序报告真实阶段进度。"""
+        """启动进度有序，并将同一个启动身份传给 Workflow 和预览运行时。"""
 
         events: list[tuple[str, str]] = []
         backend_process = MagicMock(pid=321)
@@ -1520,6 +1521,8 @@ class ProjectLauncherTests(unittest.TestCase):
                         (stage, status)
                     ),
                 )
+            self.assertTrue(result["attempt_id"])
+            self.assertEqual(result["attempt_id"], read_record(workspace)["attemptId"])
 
         self.assertEqual(result["status"], "running")
         self.assertEqual(

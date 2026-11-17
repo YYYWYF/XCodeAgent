@@ -204,6 +204,14 @@
   box-sizing: border-box;
 }
 
+// 验收页面在实际尺寸下加载，隐藏视图不参与工作台分栏。
+.@{class-prefix}-preview-pane-preloading {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .@{class-prefix}-workspace-content {
   flex: 1;
   min-height: 0;

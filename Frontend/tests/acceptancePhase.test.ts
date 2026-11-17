@@ -23,6 +23,12 @@ import {
 } from '../src/renderer/src/components/AiChatPanel/hooks/phaseSessionSelection'
 import { DEFAULT_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/components/AiChatPanel/constants'
 import { acceptancePreviewCanFocus } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
+import {
+  acceptancePreviewForOwner,
+  acceptancePreviewToLoad,
+  type AcceptancePreviewRequest
+} from '../src/renderer/src/components/AiChatPanel/acceptancePreview'
+import type { PreviewRuntimePayload } from '../src/renderer/src/service/previewRuntime'
 import { phaseEntryRightPanelLayout } from '../src/renderer/src/components/AiChatPanel/hooks/useAssistantPreviewLayout'
 import type { RightPanelLayout, RightPanelState } from '../src/renderer/src/components/AiChatPanel/types'
 import { revisionStartTarget } from '../src/renderer/src/components/AiChatPanel/hooks/revisionSession'
@@ -122,6 +128,57 @@ test('验收等待态自动生成预览目标且不展示代码审查结果', ()
     key: 'acceptance-thread:acceptance-run:http://127.0.0.1:3000',
     url: 'http://127.0.0.1:3000'
   })
+})
+
+test('验收 Workflow 先返回时，等待当前启动轮次的服务就绪后才加载目标页面', () => {
+  const owner = { workspace: '/app', sessionKey: 'current-session', runId: 'acceptance-run' }
+  const request: AcceptancePreviewRequest = {
+    ...owner,
+    key: 'acceptance-thread:acceptance-run',
+    attemptId: 'current-attempt',
+    url: 'http://127.0.0.1:3000'
+  }
+  const running: NonNullable<PreviewRuntimePayload['runtime']> = {
+    attemptId: request.attemptId,
+    status: 'running',
+    previewUrl: request.url,
+    frontend: { status: 'running' },
+    backend: { status: 'running' }
+  }
+  const pagePath = '/page/orders'
+  const url = `${request.url}${pagePath}`
+
+  assert.equal(acceptancePreviewToLoad(request, undefined, pagePath), undefined)
+  const unready: Array<Partial<typeof running>> = [
+    { attemptId: 'previous-attempt' },
+    { status: 'starting' },
+    { status: 'failed' },
+    { frontend: { status: 'starting' } },
+    { frontend: { status: 'stopped', stoppedByUser: true } },
+    { backend: { status: 'starting' } },
+    { backend: { status: 'failed' } },
+    { previewUrl: 'http://127.0.0.1:3001' }
+  ]
+  for (const change of unready) {
+    assert.equal(acceptancePreviewToLoad(request, { ...running, ...change }, pagePath), undefined)
+  }
+  assert.equal(acceptancePreviewForOwner(request, { ...owner, workspace: '/other' }), undefined)
+  assert.equal(
+    acceptancePreviewForOwner(request, { ...owner, sessionKey: 'other-session' }),
+    undefined
+  )
+  assert.equal(acceptancePreviewForOwner(request, { ...owner, runId: 'other-run' }), undefined)
+  const target = acceptancePreviewToLoad(
+    acceptancePreviewForOwner(request, owner),
+    running,
+    pagePath
+  )
+  assert.equal(target?.url, url)
+  assert.equal(
+    acceptancePreviewToLoad(request, { ...running, backend: { status: 'skipped' } }, pagePath)?.key,
+    target?.key
+  )
+  assert.notEqual(acceptancePreviewToLoad(request, running, '/other-page')?.key, target?.key)
 })
 
 test('验收通过后不再展示底部验收操作', () => {

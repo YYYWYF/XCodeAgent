@@ -81,6 +81,11 @@ import BrowserPreviewPanel from '../BrowserPreviewPanel/BrowserPreviewPanel'
 import PreviewRepairControls from '../BrowserPreviewPanel/PreviewRepairControls'
 import { previewRepairExecutionBlocks } from '../BrowserPreviewPanel/serviceStatusPolicy'
 import { usePreviewRuntime } from './hooks/usePreviewRuntime'
+import {
+  acceptancePreviewForOwner,
+  acceptancePreviewToLoad,
+  type AcceptancePreviewRequest
+} from './acceptancePreview'
 import ChatComposer from './components/ChatComposer'
 import {
   PRODUCT_CONVERSATION_PLACEHOLDER,
@@ -1135,6 +1140,8 @@ export default function AiChatPanel({
     []
   )
   const handledPreviewTargetRef = useRef('')
+  const [acceptancePreviewRequest, setAcceptancePreviewRequest] =
+    useState<AcceptancePreviewRequest>()
   // 已处理过完成跳转的实体设计运行，避免打开历史会话时再次跳回信息面板。
   const handledEntityDesignRunRef = useRef<Set<string>>(new Set())
   // 标记当前实体会话是否在本应用会话内真实运行过（经历过 loading）。
@@ -1275,7 +1282,10 @@ export default function AiChatPanel({
     if (previous === activeWorkbenchPhase) return
     // 在绘制前解除上阶段全宽，避免新验收会话的首帧仍被旧布局隐藏。
     setRightPanelLayout((current) => phaseEntryRightPanelLayout(activeWorkbenchPhase, current))
-  }, [activeWorkbenchPhase, setRightPanelLayout])
+    if (activeWorkbenchPhase === 'acceptance' && rightPanel?.type === 'preview') {
+      setRightPanel(undefined)
+    }
+  }, [activeWorkbenchPhase, rightPanel?.type, setRightPanel, setRightPanelLayout])
   const { artifactDetailLabel, artifactOutlineProps, apiTarget, openArtifactOverview } = useDevelopmentArtifactDetail({
     applicationId: application.id,
     setRightPanel,
@@ -1724,6 +1734,7 @@ export default function AiChatPanel({
   const previewRuntime = usePreviewRuntime({
     workspace: application.workspaceRoot || '',
     activeSession,
+    watchForAcceptance: activeWorkbenchPhase === 'acceptance' && !versionReadOnly,
     localBlocked:
       Object.values(sessionExecutions).some(
         (entry) => entry.identity.workspaceRoot === application.workspaceRoot
@@ -1921,22 +1932,52 @@ export default function AiChatPanel({
   )
   const activePreviewPath = activePageOption?.path || '/'
 
-  /** 接收实时 launch 结果并复用手动预览入口打开右侧面板。 */
-  const handlePreviewReady = useCallback(
-    (target: WorkflowPreviewTarget) => {
+  /** 打开已解析的目标地址，每个实时预览请求只处理一次。 */
+  const openWorkflowPreview = useCallback(
+    (target: WorkflowPreviewTarget, acceptanceLoadKey?: string): void => {
       if (handledPreviewTargetRef.current === target.key) return
-      handledPreviewTargetRef.current = target.key
       const nextBaseUrl = previewOrigin(target.url)
-      const nextPreviewUrl = composePreviewUrl(nextBaseUrl, activePreviewPath)
-      if (!nextPreviewUrl) return
+      if (!nextBaseUrl) return
+      handledPreviewTargetRef.current = target.key
       setPreviewError('')
       setRuntimePreviewBaseUrl(nextBaseUrl)
       setRuntimePreviewLaunchError('')
-      // 验收子图完成启动后自动打开嵌入式预览，供用户直接完成验收。
       ensureRightPanelVisible()
-      setRightPanel({ type: 'preview', requestKey: target.key, url: nextPreviewUrl })
+      setRightPanel({ type: 'preview', requestKey: target.key, url: target.url, acceptanceLoadKey })
     },
-    [activePreviewPath, ensureRightPanelVisible, setRightPanel]
+    [
+      ensureRightPanelVisible,
+      setPreviewError,
+      setRightPanel,
+      setRuntimePreviewBaseUrl,
+      setRuntimePreviewLaunchError
+    ]
+  )
+
+  /** 验收地址先登记为待展示请求，自由修改完成仍沿原入口直接打开。 */
+  const handlePreviewReady = useCallback(
+    (
+      target: WorkflowPreviewTarget,
+      workflow: WorkflowRunPayload,
+      identity: SessionIdentity
+    ): void => {
+      if (workflow.summary.phase !== 'conversation') {
+        const attemptId = workflow.summary.launchResult?.attempt_id
+        if (attemptId) {
+          setAcceptancePreviewRequest({
+            ...target,
+            attemptId,
+            runId: workflow.runId,
+            sessionKey: identity.key,
+            workspace: identity.workspaceRoot
+          })
+        }
+        return
+      }
+      const url = composePreviewUrl(target.url, activePreviewPath)
+      if (url) openWorkflowPreview({ ...target, url })
+    },
+    [activePreviewPath, openWorkflowPreview]
   )
 
   /** 测试会话启动时立即高亮测试阶段，避免生命周期回传延迟造成步骤条仍显示开发中。 */
@@ -3472,6 +3513,14 @@ export default function AiChatPanel({
         workflowIdentity
       )
   const scopedExecution = targetExecutionContext.execution
+  const currentAcceptancePreview =
+    activeWorkbenchPhase === 'acceptance'
+      ? acceptancePreviewForOwner(acceptancePreviewRequest, {
+          workspace: application.workspaceRoot,
+          sessionKey: activeSession?.key,
+          runId: scopedExecution?.runId
+        })
+      : undefined
   const latestWorkflowForDisplay = resolveWorkflowForDisplay(activeWorkflow, displayedMessages)
   // 新建对话的空白草稿不归属于任何历史 Run；应用级 execution 不能重新锁住输入区。
   const detachedConversationDraft =
@@ -3923,6 +3972,7 @@ export default function AiChatPanel({
       } else if (key === 'outline') {
         setRightPanel({ type: 'outline' })
       } else if (key === 'preview') {
+        setAcceptancePreviewRequest(undefined)
         setRightPanel({ type: 'preview' })
       } else if (key === 'source') {
         setRightPanel({ type: 'source' })
@@ -4051,8 +4101,23 @@ export default function AiChatPanel({
     : (templateGenerationRecoverable || templateReconcileRetryable) && planningState
       ? planningState.connection
       : connectionState
+  const acceptanceRuntime = previewRuntime.control.snapshot?.runtime
+  const acceptanceLaunchError =
+    displayedPlanExecutionMode === 'awaiting_acceptance' &&
+    currentAcceptancePreview &&
+    acceptanceRuntime?.attemptId === currentAcceptancePreview.attemptId &&
+    acceptanceRuntime.status === 'failed'
+      ? acceptanceRuntime.frontend.message ||
+        acceptanceRuntime.backend.message ||
+        '验收预览服务未就绪，请重试。'
+      : undefined
   const previewFallbackError = !previewRuntime.control.busy
-    ? previewRuntime.control.error || ((previewRuntime.repairState?.interrupted && previewRuntime.control.snapshot?.runtime?.status !== 'running') || previewRuntime.repairState?.status === 'failed' ? previewRuntime.repairState.message : undefined)
+    ? previewRuntime.control.error ||
+      acceptanceLaunchError ||
+      ((previewRuntime.repairState?.interrupted && acceptanceRuntime?.status !== 'running') ||
+      previewRuntime.repairState?.status === 'failed'
+        ? previewRuntime.repairState.message
+        : undefined)
     : undefined
   const previewConnectionUnavailable = previewRuntime.connection.status === 'unavailable'
   // 二次修改断线走原 Workbench 对账与恢复；预览订阅断线不能抢走它的重试入口。
@@ -4236,9 +4301,35 @@ export default function AiChatPanel({
     planExecutionMode: displayedPlanExecutionMode,
     acceptancePassed
   })
+  const preloadingAcceptancePreview =
+    acceptanceAwaiting && !versionReadOnly && !showGlobalFallback
+      ? acceptancePreviewToLoad(
+          currentAcceptancePreview,
+          acceptanceRuntime,
+          activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'
+        )
+      : undefined
+  const visiblePreview = showRightPanel && rightPanel?.type === 'preview' ? rightPanel : undefined
+  const previewPane = preloadingAcceptancePreview
+    ? {
+        requestKey: preloadingAcceptancePreview.key,
+        url: preloadingAcceptancePreview.url,
+        acceptanceLoadKey: preloadingAcceptancePreview.key
+      }
+    : visiblePreview
+
+  /** 复用已经加载的 iframe，在当前请求仍有效时一次性显示验收预览。 */
+  const revealAcceptancePreview = (): void => {
+    if (!preloadingAcceptancePreview || !currentAcceptancePreview) return
+    openWorkflowPreview(preloadingAcceptancePreview, preloadingAcceptancePreview.key)
+    setAcceptancePreviewRequest((request) =>
+      request === currentAcceptancePreview ? undefined : request
+    )
+  }
+
   const acceptancePreviewFocus = acceptancePreviewCanFocus(
     activeWorkbenchPhase,
-    showRightPanel && rightPanel?.type === 'preview',
+    Boolean(visiblePreview && !currentAcceptancePreview),
     showGlobalFallback,
     displayedPlanExecutionMode
   )
@@ -4360,6 +4451,7 @@ export default function AiChatPanel({
       setPreviewError(runtimePreviewLaunchError || '前端服务尚未启动完成，暂时无法预览页面')
       return
     }
+    setAcceptancePreviewRequest(undefined)
     ensureRightPanelVisible()
     setPreviewError('')
     setRightPanel({
@@ -6179,8 +6271,14 @@ export default function AiChatPanel({
         </div>
       )}
 
-      {showRightPanel && rightPanel?.type === 'preview' && (
-        <div className={cx('embedded-preview-pane')}>
+      {previewPane && (
+        <div
+          aria-hidden={preloadingAcceptancePreview ? true : undefined}
+          className={cx(
+            'embedded-preview-pane',
+            preloadingAcceptancePreview && 'preview-pane-preloading'
+          )}
+        >
           <RightPanelTabs
             tabs={displayedWorkspaceTabs}
             active={displayedWorkspaceTab}
@@ -6193,22 +6291,26 @@ export default function AiChatPanel({
           {/* 预览及其内联抽屉仅占用剩余高度，避让会动态换行的保存提示和验收底栏。 */}
           <div className={cx('workspace-content')}>
             <BrowserPreviewPanel
+              key={previewPane.acceptanceLoadKey}
               inspectionDisabled={activeWorkbenchPhase === 'acceptance'}
               serviceControl={{ ...previewRuntime.control,
                 showDatabaseCheck: application.datasource.type === 'database' && application.datasource.db?.useBuiltin === true,
                 onOpenEntity: handleOpenDatabaseEntity }}
               application={application}
               pages={displayedPlanningPages}
-              requestKey={rightPanel.requestKey}
-              requestedUrl={rightPanel.url}
+              requestKey={previewPane.requestKey}
+              requestedUrl={previewPane.url}
               previewBaseUrl={runtimePreviewBaseUrl}
               selectedPagePath={activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'}
               errorMessage={runtimePreviewLaunchError}
+              onRequestedPageLoad={
+                preloadingAcceptancePreview ? revealAcceptancePreview : undefined
+              }
               onInspectingChange={setElementInspectionActive}
               onElementContextChange={setInspectedElementContext}
             />
           </div>
-          {acceptanceAwaiting && (
+          {acceptanceAwaiting && !currentAcceptancePreview && (
             <div className={cx('acceptance-footer')}>
               <div className={cx('acceptance-footer-notices')}>
                 {/* 验收是质量门禁通过后的稳定边界，此时把工作区自动快照成一个独立

@@ -43,7 +43,7 @@ export type WorkspaceDocKey =
 
 export type RightPanelState =
   | { type: 'field-mapping' }
-  | { type: 'preview'; requestKey?: string; url?: string }
+  | { type: 'preview'; requestKey?: string; url?: string; acceptanceLoadKey?: string }
   | {
       type: 'diff'
       sessionKey: string

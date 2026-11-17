@@ -281,7 +281,11 @@ type UseWorkflowConversationParams = {
   onEnterReviewPhase: () => void
   onEnterAcceptancePhase: () => void
   onElementContextConsumed: (context: InspectedElementContext) => void
-  onPreviewReady: (target: WorkflowPreviewTarget) => void
+  onPreviewReady: (
+    target: WorkflowPreviewTarget,
+    workflow: WorkflowRunPayload,
+    identity: SessionIdentity
+  ) => void
   publishAiMessage: (mode: EditorMode, content: string) => void
   releaseSessionExecution: (sessionKey: string) => void
   sessionExecutions: SessionExecutionEntry[]
@@ -1557,8 +1561,14 @@ export function useWorkflowConversation({
       if (editorMode !== 'frontend') return
       const previewTarget = workflowPreviewTarget(nextWorkflow, true)
       if (!previewTarget || notifiedPreviewTargetsRef.current.has(previewTarget.key)) return
+      if (
+        nextWorkflow.summary.phase !== 'conversation' &&
+        (!nextWorkflow.summary.launchResult?.attempt_id || !isPlanControlResponseCurrent())
+      ) {
+        return
+      }
       notifiedPreviewTargetsRef.current.add(previewTarget.key)
-      onPreviewReady(previewTarget)
+      onPreviewReady(previewTarget, nextWorkflow, identity)
     }
     /** 过滤迟到的 Plan Control lifecycle，避免旧请求覆盖新会话的全局快照。 */
     const onPlanControlLifecycle = (lifecycle: ApplicationLifecycle): void => {
