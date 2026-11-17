@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.protocols.revision_preview import build_revision_preview_ag_ui_stream
+from app.services.backend_project_launcher import _detect_backend_port
 from app.services.frontend_node_runtime import record_frontend_dependencies
 from app.services.frontend_project_launcher import _dependency_check_bypass_argv
 from app.services.revision_preview import (
@@ -27,12 +28,35 @@ from app.services.revision_preview import (
     revision_preview_runtime_subdir,
     start_revision_preview,
     stop_revision_preview,
+    stop_workspace_revision_previews,
 )
 from tests.frontend_node_fixture import stub_frontend_node
 
 
 class RevisionPreviewTests(unittest.TestCase):
     """验证物化出的是该版本当时的树，且不碰工作区。"""
+
+    def test_workspace_cleanup_finds_worktrees_and_orphaned_runtime(self) -> None:
+        """退出同时识别现存 worktree 和只剩进程登记的分支，范围限于所属工作区。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            first = revision_preview_dir(root, "feature/one")
+            second = revision_preview_dir(root, "feature/two")
+            orphan = revision_preview_dir(root, "orphan")
+            runtime = first.parent.parent
+            for path in (first, second, runtime / revision_preview_runtime_subdir("orphan"), runtime / "launch"):
+                path.mkdir(parents=True, exist_ok=True)
+            with (
+                patch("app.services.revision_preview.stop_frontend_project", return_value={"status": "stopped"}) as frontend,
+                patch("app.services.revision_preview.stop_workspace_backend_project", return_value={"status": "stopped"}) as backend,
+                patch("app.services.revision_preview._remove_worktree") as remove,
+            ):
+                stop_workspace_revision_previews(root)
+            self.assertEqual({call.kwargs["runtime_subdir"] for call in frontend.call_args_list}, {
+                revision_preview_runtime_subdir(branch) for branch in ("feature/one", "feature/two", "orphan")
+            })
+            self.assertEqual({call.args for call in backend.call_args_list}, {(first,), (second,), (orphan,)})
+            self.assertEqual({call.args for call in remove.call_args_list}, {(root, first), (root, second)})
 
     def test_materializes_the_revision_tree(self) -> None:
         """物化目录里的内容必须是该 tag 当时的版本，而不是工作区当前内容。"""
@@ -230,6 +254,52 @@ class RevisionPreviewLaunchTests(unittest.TestCase):
     去执行 install，而 install 又要先清空这个它不认识的目录 —— 无终端时直接以
     ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY 失败，dev server 起不来（线上实测如此）。
     """
+
+    def test_java_worktree_and_api_proxy_are_bound_to_the_same_revision(self) -> None:
+        """Java 从历史 worktree 构建，前端使用该 Java 实际端口，原配置保持不变。"""
+        stub_frontend_node(self, "app.services.revision_preview")
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace).resolve()
+            target = revision_preview_dir(root, "release")
+            (target / "backend").mkdir(parents=True)
+            (target / "backend/pom.xml").touch()
+            (target / "frontend").mkdir()
+            config = target / "frontend/rsbuild.config.ts"
+            original = "export default { server: { proxy: { '/api': 'http://127.0.0.1:8080' } } };"
+            config.write_text(original, encoding="utf-8")
+            with (
+                patch("app.services.revision_preview.materialize_revision", return_value=target),
+                patch("app.services.revision_preview._await_revision_preview_url", return_value="http://localhost:3001"),
+                patch("app.services.revision_preview.launch_backend_project", return_value={"status": "running", "server": {"port": 49152}}) as backend,
+                patch("app.services.revision_preview.launch_frontend_project", return_value={"status": "running"}) as frontend,
+                patch("app.services.revision_preview.stop_workspace_backend_project", return_value={"status": "stopped"}) as stop_backend,
+            ):
+                result = start_revision_preview(root, "release")
+                self.assertEqual(result["preview_url"], "http://localhost:3001")
+                self.assertEqual(backend.call_args.args, (target,))
+                self.assertEqual(backend.call_args.kwargs["preview_application_workspace"], root)
+                self.assertEqual(frontend.call_args.kwargs["project_dir"], target / "frontend")
+                generated = frontend.call_args.kwargs["server_config"]
+                self.assertIn("target: 'http://127.0.0.1:49152'", generated.read_text(encoding="utf-8"))
+                self.assertEqual(config.read_text(encoding="utf-8"), original)
+
+                frontend.return_value = {"status": "failed", "message": "前端启动失败"}
+                stop_backend.reset_mock()
+                with self.assertRaisesRegex(RevisionPreviewError, "前端启动失败"):
+                    start_revision_preview(root, "release")
+                self.assertEqual([call.args for call in stop_backend.call_args_list], [(target,), (target,)])
+
+    def test_reads_dynamic_java_port_after_zero_port_initialization(self) -> None:
+        """Spring Boot 初始化时记录端口零，Tomcat 就绪后才输出所分配的端口。"""
+        with tempfile.TemporaryDirectory() as runtime:
+            stdout = Path(runtime) / "backend.stdout.log"
+            stdout.write_text(
+                "Tomcat initialized with port(s): 0 (http)\nTomcat started on port(s): 49152 (http)\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_detect_backend_port(
+                stdout_log=stdout, stdout_offset=0, stderr_log=Path(runtime) / "stderr.log", stderr_offset=0,
+            ), 49152)
 
     def test_reuse_also_requires_install_node_evidence(self) -> None:
         """相同依赖声明只有在安装 Node 匹配时才允许历史预览链接。"""

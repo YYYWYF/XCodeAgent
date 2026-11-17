@@ -171,8 +171,21 @@ export async function runPreviewRuntime(
   }
 }
 
-/** 离开工作台时停止当前应用的预览维护并释放应用级占用。 */
-export async function leavePreviewRuntime(workspace: string): Promise<void> {
-  if (!workspace) return
-  await runPreviewRuntime({ workspace, action: 'leave', includeLogs: false })
+const pendingPreviewLeaves = new Map<string, Promise<void>>()
+
+/** 离开工作台时结束预览，并保留请求直到后端登记清理。 */
+export function leavePreviewRuntime(workspace: string): Promise<void> {
+  if (!workspace) return Promise.resolve()
+  const pending = pendingPreviewLeaves.get(workspace)
+  if (pending) return pending
+  const request = runPreviewRuntime({ workspace, action: 'leave', includeLogs: false })
+    .then(() => undefined)
+    .finally(() => pendingPreviewLeaves.delete(workspace))
+  pendingPreviewLeaves.set(workspace, request)
+  return request
+}
+
+/** 重开历史预览前等待退出请求回执，后端随后负责等待实际停机。 */
+export async function waitForPreviewRuntimeLeave(workspace: string): Promise<void> {
+  await pendingPreviewLeaves.get(workspace)
 }

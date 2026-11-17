@@ -88,12 +88,13 @@ export default function ReleasedVersionPanel({
   ]
   const serviceRuntime = serviceControl?.snapshot?.runtime
   const serviceStatus = previewServiceState(serviceRuntime)
-  const serviceStoppedByUser = serviceRuntime?.frontend.stoppedByUser || serviceRuntime?.backend.stoppedByUser
+  const serviceStoppedByUser =
+    serviceRuntime?.frontend.stoppedByUser || serviceRuntime?.backend.stoppedByUser
   // 每个"进入预览 tab"的周期只自动启动一次，避免反复拉起。
   const autoStartRequestedRef = useRef(false)
   const activeDrawerLabel = RAIL_DRAWERS.find((item) => item.key === activeDrawer)?.label
 
-  // 历史版本的预览要跑该版本当时的代码，得单独物化并起一个 dev server；
+  // 历史版本在独立 worktree 启动该分支的预览服务；
   // 只在预览 tab 激活时才启动，在应用文件上翻文件不会白白拉起进程。
   const revisionPreview = useRevisionPreview({
     workspaceRoot,
@@ -199,8 +200,7 @@ export default function ReleasedVersionPanel({
                 <Spin size="small" />
                 <Text type="secondary">正在准备该版本的预览…</Text>
                 <Text className={cx('released-version-preview-hint')} type="secondary">
-                  首次预览需要物化该版本的代码；依赖与当前工作区不一致时还要安装依赖，
-                  可能要几分钟。
+                  首次预览需要准备该版本的代码和依赖，并构建该版本的 Java 后端（如有）。
                 </Text>
               </div>
             ) : previewPresentation.kind === 'error' ? (

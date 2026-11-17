@@ -4,12 +4,16 @@ import { readFileSync } from 'node:fs'
 declare const __FRONTEND_ROOT__: string
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import ReleasedVersionPanel from '../src/renderer/src/components/AiChatPanel/components/ReleasedVersionPanel'
 import DocumentOutline from '../src/renderer/src/components/AiChatPanel/components/ApplicationOutline/DocumentOutline'
 import {
   revisionPreviewPresentation,
-  shouldRunRevisionPreview
+  shouldRunRevisionPreview,
+  useRevisionPreview
 } from '../src/renderer/src/components/AiChatPanel/components/ReleasedVersionPanel/useRevisionPreview'
+import { UiReadVisibility } from '../src/renderer/src/hooks/uiReadVisibility'
+import { leavePreviewRuntime } from '../src/renderer/src/service/previewRuntime'
 import {
   shouldInjectPlanningPlaceholder,
   shouldShowRightWorkspace
@@ -257,6 +261,119 @@ test('历史版本预览未就绪时只给加载态，不落到空白 iframe', (
     kind: 'error',
     message: '依赖安装失败'
   })
+})
+
+test('工作台隐藏后重新打开同一历史预览，先显示启动状态再接受新地址', async () => {
+  const workspaceRoot = '/reopened-workbench'
+  const revision = 'sbw_1'
+  const originalFetch = globalThis.fetch
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const requests: { action: string; respond: (url?: string) => void }[] = []
+  let renderer: ReactTestRenderer | undefined
+
+  /** 让真实 Hook 和展示策略在保留挂载的工作台中响应可见性变化。 */
+  function PreviewProbe(): JSX.Element {
+    const preview = useRevisionPreview({ workspaceRoot, revision, enabled: true })
+    const presentation = revisionPreviewPresentation({ revision, ...preview })
+    return <span>{presentation.kind === 'revision' ? presentation.url : presentation.kind}</span>
+  }
+
+  /** 用真实工作台上下文更新可见性，保持历史预览组件挂载。 */
+  function workbench(visible: boolean): JSX.Element {
+    return (
+      <UiReadVisibility.Provider value={visible}>
+        <PreviewProbe />
+      </UiReadVisibility.Provider>
+    )
+  }
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' }, setTimeout, clearTimeout }
+  })
+  globalThis.fetch = async (_url, init) => {
+    const request = JSON.parse(String(init?.body))
+    const isRevision = Boolean(request.forwardedProps.revisionPreview)
+    const key = isRevision ? 'revisionPreview' : 'previewRuntime'
+    const name = isRevision ? 'revision-preview' : 'preview-runtime'
+    const action = request.forwardedProps[key].action
+    return new Promise<Response>((resolve) => {
+      requests.push({
+        action,
+        respond: (url) => {
+          const { threadId, runId } = request
+          const frames = [
+            { type: 'RUN_STARTED', threadId, runId },
+            {
+              type: 'CUSTOM',
+              name,
+              value: { schemaVersion: 1, threadId, runId, status: 'completed', preview_url: url }
+            },
+            { type: 'RUN_FINISHED', threadId, runId }
+          ]
+          resolve(
+            new Response(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(''), {
+              headers: { 'content-type': 'text/event-stream' }
+            })
+          )
+        }
+      })
+    })
+  }
+
+  try {
+    await act(async () => {
+      renderer = create(workbench(true))
+    })
+    assert.deepEqual(
+      requests.map(({ action }) => action),
+      ['start']
+    )
+    assert.equal(renderer!.root.findByType('span').children[0], 'loading')
+    await act(async () => {
+      requests[0].respond('http://127.0.0.1:3000')
+    })
+    assert.equal(renderer!.root.findByType('span').children[0], 'http://127.0.0.1:3000')
+
+    const leaving = leavePreviewRuntime(workspaceRoot)
+    await act(async () => {
+      renderer!.update(workbench(false))
+    })
+    await act(async () => {
+      renderer!.update(workbench(true))
+    })
+    assert.deepEqual(
+      requests.map(({ action }) => action),
+      ['start', 'leave']
+    )
+    assert.equal(renderer!.root.findByType('span').children[0], 'loading')
+
+    await act(async () => {
+      requests[1].respond()
+      await leaving
+    })
+    assert.deepEqual(
+      requests.map(({ action }) => action),
+      ['start', 'leave', 'start']
+    )
+    assert.equal(renderer!.root.findByType('span').children[0], 'loading')
+    await act(async () => {
+      requests[2].respond('http://127.0.0.1:3001')
+    })
+    assert.equal(renderer!.root.findByType('span').children[0], 'http://127.0.0.1:3001')
+  } finally {
+    if (renderer) {
+      await act(async () => {
+        renderer!.update(workbench(false))
+      })
+      await act(async () => {
+        renderer!.unmount()
+      })
+    }
+    globalThis.fetch = originalFetch
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)
+    else Reflect.deleteProperty(globalThis, 'window')
+  }
 })
 
 test('历史版本预览面板横向铺满剩余空间', () => {

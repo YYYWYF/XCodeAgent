@@ -1,30 +1,23 @@
-"""按 Git 分支物化代码并启动历史分支预览。
-
-回看历史分支时，源码面板按分支只读读取（见 `revision_workspace.py`），但**预览需要一个
-真正跑起来的应用** —— 只读读取给不出 dev server。这里把该分支的树物化到一个独立目录，
-再用既有的前端启动器把它跑起来。
-
-两个关键设计：
-
-- **用 `git worktree add` 而不是 checkout**：worktree 在独立目录建树，不碰工作区，
-  与 `revision_workspace.py`「绝不 checkout」的原则不冲突。
-- **独立 runtime_subdir 与独立端口**：复用 `launch_frontend_project` 的 `runtime_subdir`
-  隔离进程登记（设计稿预览的 `launch-ui-design` 是同一先例）。端口不显式指定 ——
-  vite 在 3000 被当前预览占用时会自动递增，启动器已从日志读回真实地址
-  （见 `_resolve_actual_preview_url`）。所以当前预览与历史预览可以并存。
-"""
+"""将 Git 分支检出到独立 worktree，并从该目录启动历史前后端。"""
 
 from __future__ import annotations
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import hashlib
+import json
 import re
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
 
+from app.services.backend_process_registry import backend_launch_lock
+from app.services.backend_project_launcher import (
+    find_backend_project_root, launch_backend_project, stop_workspace_backend_project,
+)
+from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record
 from app.services.frontend_project_launcher import (
     SERVER_READY_INTERVAL_SECONDS,
     _dev_server_log_is_ready,
@@ -53,6 +46,7 @@ REVISION_PREVIEW_READY_TIMEOUT_SECONDS = 120
 
 # 目录名只保留安全字符；分支名可以含 `/`（如 feature/login），不能直接当目录名。
 _UNSAFE_DIR_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+_REVISION_RUNTIME_SLUG = re.compile(r"[A-Za-z0-9._-]{1,60}-[0-9a-f]{8}")
 
 
 class RevisionPreviewError(ValueError):
@@ -154,6 +148,8 @@ def _remove_worktree(root: Path, target: Path) -> None:
         shutil.rmtree(target, ignore_errors=True)
     # 无论上面成败都 prune 一次：崩溃或强删都可能留下注册项。
     _run_git(root, ["worktree", "prune"])
+    if target.exists():
+        raise RevisionPreviewError(f"无法清理历史分支 worktree：{target}")
 
 
 def _unlink_reused_dependencies(target: Path) -> None:
@@ -208,17 +204,48 @@ def start_revision_preview(
     *,
     report_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """物化该分支并启动独立的前端预览，返回预览地址。"""
-
-    def report(stage: str, message: str, percent: int) -> None:
-        if report_progress is not None:
-            report_progress(stage, message, percent)
+    """串行准备该分支的 worktree 与双端进程，部分启动失败时回收已启动进程。"""
 
     root = Path(workspace_root).expanduser().resolve()
     revision = str(revision or "").strip()
+    revision_dir = revision_preview_dir(root, revision)
+    with backend_launch_lock(revision_dir):
+        _stop_revision_services(root, revision_dir)
+        try:
+            return _start_revision_preview(root, revision, report_progress)
+        except Exception as exc:
+            try:
+                _stop_revision_services(root, revision_dir)
+            except RevisionPreviewError as cleanup_error:
+                raise RevisionPreviewError(f"{exc}；回收失败：{cleanup_error}") from exc
+            raise
+
+
+def _start_revision_preview(
+    root: Path, revision: str, report_progress: ProgressCallback | None,
+) -> dict[str, Any]:
+    """先启动 worktree 内的 Java 服务，再用它的实际端口启动分支前端。"""
+
+    def report(stage: str, message: str, percent: int) -> None:
+        """将本轮启动进度发给 AG-UI 调用方。"""
+        if report_progress is not None:
+            report_progress(stage, message, percent)
 
     report("materialize", f"正在准备分支 {revision} 的代码…", 20)
     revision_dir = materialize_revision(root, revision)
+    server_config = None
+    if find_backend_project_root(revision_dir) is not None:
+        backend = launch_backend_project(
+            revision_dir,
+            preview_application_workspace=root,
+            on_progress=lambda message: report("backend", message, 30),
+        )
+        port = (backend.get("server") or {}).get("port")
+        if backend.get("status") != "running" or type(port) is not int or not 0 < port <= 65535:
+            message = backend.get("message") or "没有获取到 Java 后端端口。"
+            logs = revision_dir / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
+            raise RevisionPreviewError(f"分支 {revision} 的 Java 后端启动失败：{message} 日志目录：{logs}")
+        server_config = _revision_frontend_config(revision_dir / "frontend", port)
 
     with frontend_operation_lock(root):
         try:
@@ -249,6 +276,7 @@ def start_revision_preview(
             project_dir=revision_dir / "frontend",
             node_runtime=node_runtime,
             runtime_subdir=revision_preview_runtime_subdir(revision),
+            server_config=server_config,
             # 复用依赖时跳过安装；否则让启动器正常安装该分支的依赖。
             skip_install=reused,
             # 复用的方式是把工作区的 node_modules 软链进来，要一并告诉包管理器别去"纠正"它。
@@ -281,6 +309,40 @@ def start_revision_preview(
         "runtime_subdir": revision_preview_runtime_subdir(revision),
         "materialized_path": str(revision_dir),
     }
+
+
+def _revision_frontend_config(frontend: Path, backend_port: int) -> Path:
+    """生成仅供本轮 dev server 使用的代理配置，保留 Git 中的配置与其他代理项。"""
+
+    source = next((
+        frontend / f"{framework}.config.{extension}"
+        for framework in ("rsbuild", "vite")
+        for extension in ("ts", "mts", "js", "mjs", "cts", "cjs")
+        if (frontend / f"{framework}.config.{extension}").is_file()
+    ), None)
+    if source is None:
+        raise RevisionPreviewError("历史分支缺少 Rsbuild 或 Vite 配置，无法设置独立后端代理。")
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=frontend, prefix=".devagent-preview-", suffix=".mts", delete=False,
+    ) as config:
+        config.write(f'''import original from {json.dumps('./' + source.name)};
+
+// 保留历史分支的构建配置，仅在预览运行时重定向业务 API。
+export default async function configurePreview(env) {{
+  const base = typeof original === 'function' ? await original(env) : original;
+  const proxy = base.server?.proxy ?? {{}};
+  if (Array.isArray(proxy)) throw new Error('历史预览需要对象形式的 API 代理配置。');
+  const api = typeof proxy['/api'] === 'object' ? proxy['/api'] : {{}};
+  return {{
+    ...base,
+    server: {{
+      ...base.server,
+      proxy: {{ ...proxy, '/api': {{ changeOrigin: true, ...api, target: 'http://127.0.0.1:{backend_port}' }} }},
+    }},
+  }};
+}}
+''')
+        return Path(config.name)
 
 
 def _await_revision_preview_url(runtime_root: Path) -> str:
@@ -335,18 +397,77 @@ def _launch_failure_detail(runtime_root: Path) -> str:
 
 
 def stop_revision_preview(workspace_root: str | Path, revision: str) -> dict[str, Any]:
-    """停止该分支的前端服务并摘除物化目录。"""
+    """停止该分支的前后端，确认两端都退出后摘除物化目录。"""
 
     root = Path(workspace_root).expanduser().resolve()
     revision = str(revision or "").strip()
     if not revision:
         return {"status": "stopped", "revision": revision}
 
-    stop_frontend_project(root, runtime_subdir=revision_preview_runtime_subdir(revision))
     target = revision_preview_dir(root, revision)
-    if target.exists():
-        _remove_worktree(root, target)
+    _stop_revision_directory(root, target)
     return {"status": "stopped", "revision": revision, "removed_path": str(target)}
+
+
+def stop_workspace_revision_previews(workspace_root: str | Path) -> None:
+    """按磁盘登记回收该工作区的全部历史预览，覆盖 Backend 重启前遗留的进程。"""
+
+    root = Path(workspace_root).expanduser().resolve()
+    worktrees = root / REVISION_PREVIEW_ROOT
+    runtime = worktrees.parent
+    targets = _revision_directories(worktrees)
+    targets.update(_revision_directories(runtime, prefix=REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX))
+    failures: list[str] = []
+    for slug in sorted(targets):
+        try:
+            _stop_revision_directory(root, worktrees / slug)
+        except (OSError, RevisionPreviewError) as exc:
+            failures.append(f"{slug}：{exc}")
+    if failures:
+        raise RevisionPreviewError("；".join(failures))
+
+
+def _revision_directories(directory: Path, *, prefix: str = "") -> set[str]:
+    """只使用启动器生成的分支目录标识，忽略其他运行时目录和符号链接。"""
+
+    if directory.is_symlink():
+        raise RevisionPreviewError(f"历史预览目录不能是符号链接：{directory}")
+    try:
+        return {
+            item.name.removeprefix(prefix)
+            for item in directory.iterdir()
+            if item.name.startswith(prefix)
+            and _REVISION_RUNTIME_SLUG.fullmatch(item.name.removeprefix(prefix))
+            and item.is_dir() and not item.is_symlink()
+        }
+    except FileNotFoundError:
+        return set()
+
+
+def _stop_revision_directory(root: Path, target: Path) -> None:
+    """与单分支启动串行，确认服务退出后再删除 worktree。"""
+
+    if target.is_symlink():
+        raise RevisionPreviewError(f"历史分支 worktree 不能是符号链接：{target}")
+    with backend_launch_lock(target):
+        _stop_revision_services(root, target)
+        if target.exists():
+            _remove_worktree(root, target)
+
+
+def _stop_revision_services(root: Path, target: Path) -> None:
+    """仅清理该分支登记的进程，避免删掉还在运行的 Java 工作目录。"""
+
+    runtime_subdir = f"{REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX}{target.name}"
+    runtime = root / WORKSPACE_ARTIFACT_DIR / "runtime" / runtime_subdir
+    if runtime.is_symlink() or (runtime / "frontend.pid").is_symlink():
+        frontend = {"status": "failed", "message": f"历史预览进程登记不能是符号链接：{runtime}"}
+    else:
+        frontend = stop_frontend_project(root, runtime_subdir=runtime_subdir)
+    backend = stop_workspace_backend_project(target)
+    failures = [str(result["message"]) for result in (frontend, backend) if result.get("status") == "failed"]
+    if failures:
+        raise RevisionPreviewError("；".join(failures))
 
 
 def revision_preview_state(workspace_root: str | Path, revision: str) -> dict[str, Any]:
@@ -379,6 +500,12 @@ def revision_preview_state(workspace_root: str | Path, revision: str) -> dict[st
     # 必须确认进程还活着：日志里的地址会一直留在文件里，只看地址会把已经退出的服务
     # 报成 running，前端便不会重新拉起，用户对着一个死地址看空白。
     running = pid > 0 and bool(preview_url) and bool(_running_pids([pid]))
+    if running and find_backend_project_root(target) is not None:
+        try:
+            record = read_backend_process_record(target / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch" / BACKEND_PROCESS_FILENAME)
+        except (ValueError, OSError):
+            record = None
+        running = record is not None and bool(_running_pids([record.pid]))
     return {
         "status": "running" if running else "idle",
         "revision": revision,

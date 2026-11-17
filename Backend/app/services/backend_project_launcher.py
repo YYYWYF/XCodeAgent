@@ -58,8 +58,11 @@ _BACKEND_PORT_PATTERN = re.compile(
 )
 
 
-def launch_backend_project(workspace_path: str | Path, *, on_progress: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """按普通工作目录构建并启动 Java 后端，不依赖 LangGraph 状态。"""
+def launch_backend_project(
+    workspace_path: str | Path, *, on_progress: Callable[[str], None] | None = None,
+    preview_application_workspace: Path | None = None,
+) -> dict[str, Any]:
+    """从工作目录构建 Java；历史预览使用所属应用的数据库绑定和独立端口。"""
 
     root = Path(workspace_path).expanduser().resolve()
     backend_root = find_backend_project_root(root) or root / "backend"
@@ -107,6 +110,7 @@ def launch_backend_project(workspace_path: str | Path, *, on_progress: Callable[
             maven_command=maven_command,
             java_command=java_command,
             on_progress=on_progress,
+            preview_application_workspace=preview_application_workspace,
         )
 
 
@@ -154,20 +158,23 @@ def _launch_backend_project_locked(
     maven_command: str,
     java_command: str,
     on_progress: Callable[[str], None] | None = None,
+    preview_application_workspace: Path | None = None,
 ) -> dict[str, Any]:
     """在工作区锁内完成旧进程清理、Maven 构建和新 Java 进程启动。"""
 
     if on_progress:
         on_progress("正在准备后端启动环境…")
+    # 分支预览从 worktree 构建，应用数据库绑定仍由主工作区配置提供。
+    config_root = preview_application_workspace or root
     try:
-        managed_snapshot = prepare_managed_startup(root, on_readiness=lambda report: record_database_check(root, report))
+        managed_snapshot = prepare_managed_startup(config_root, on_readiness=lambda report: record_database_check(root, report))
     except DatabaseCredentialError as exc:
         return _failed_backend_launch(str(exc), root=root, backend_root=backend_root,
                                       pom_path=pom_path, runtime_root=runtime_root,
                                       failed_stage=("backend_database_resource" if isinstance(exc, ManagedDatabaseStartupError)
                                                     else "backend_database_config"))
     # 内置模式此时只检查结构，连接凭据延后到构建完成再获取。
-    runtime_environment, database_config_error = ({}, None) if managed_snapshot is not None else _backend_runtime_environment(root)
+    runtime_environment, database_config_error = ({}, None) if managed_snapshot is not None else _backend_runtime_environment(config_root)
     if database_config_error:
         return _failed_backend_launch(
             f"当前应用数据库配置不可用于启动后端：{database_config_error}",
@@ -285,7 +292,7 @@ def _launch_backend_project_locked(
         if on_progress:
             on_progress("正在复核实体表并获取内置数据库调试连接…")
         runtime_environment, database_config_error = _backend_runtime_environment(
-            root, managed_snapshot=managed_snapshot, on_database_check=lambda report: record_database_check(root, report),
+            config_root, managed_snapshot=managed_snapshot, on_database_check=lambda report: record_database_check(root, report),
         )
         if database_config_error:
             return _failed_backend_launch(database_config_error, root=root, backend_root=backend_root,
@@ -311,6 +318,7 @@ def _launch_backend_project_locked(
         runtime_root=runtime_root,
         environment=runtime_environment,
         **({"redact_output": True} if managed_snapshot is not None else {}),
+        **({"isolated_preview": True} if preview_application_workspace is not None else {}),
     )
     ready = process is not None and _wait_for_backend_ready(
         process,
@@ -334,7 +342,7 @@ def _launch_backend_project_locked(
         "returncode": returncode,
         "ready_checked_at": datetime.now(UTC).isoformat(),
     }
-    if not ready or not process_running:
+    if not ready or not process_running or (preview_application_workspace is not None and port is None):
         if process is not None and returncode is not None and managed_snapshot is not None:
             for thread in getattr(process, "_devagent_log_threads", []):
                 thread.join(timeout=2)
@@ -344,6 +352,8 @@ def _launch_backend_project_locked(
             message = f"Java 后端进程已退出（退出码：{returncode}）。"
         elif process is None:
             message = "Java 后端启动命令执行失败。"
+        elif ready and port is None:
+            message = "Java 后端未报告实际监听端口，无法连接历史分支前端。"
         elif _backend_startup_status(
             stdout_log=runtime_root / "backend.stdout.log",
             stdout_offset=int(server_result.get("stdout_offset") or 0),
@@ -547,10 +557,14 @@ def _start_backend_server(
     runtime_root: Path,
     environment: dict[str, str],
     redact_output: bool = False,
+    isolated_preview: bool = False,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """从隔离副本目录启动 Java，登记进程和副本后再交给就绪检查。"""
 
     argv = [java_command, *JAVA_BACKEND_JAR_OPTIONS, "-jar", str(jar_path.resolve())]
+    if isolated_preview:
+        # 由系统在 Spring Boot 启动时分配端口，避免占用或检查当前分支的端口。
+        argv.extend(("--server.address=127.0.0.1", "--server.port=0"))
     stdout_path = runtime_root / "backend.stdout.log"
     stderr_path = runtime_root / "backend.stderr.log"
     record_path = runtime_root / BACKEND_PROCESS_FILENAME
@@ -675,8 +689,8 @@ def _detect_backend_port(
                 content = stream.read().decode("utf-8", errors="replace")
         except OSError:
             continue
-        match = _BACKEND_PORT_PATTERN.search(content)
-        if match:
+        # 随机端口先记录初始化值 0，再记录 Web 服务器实际绑定的端口。
+        for match in _BACKEND_PORT_PATTERN.finditer(content):
             port = int(match.group(1))
             if 0 < port <= 65535:
                 return port

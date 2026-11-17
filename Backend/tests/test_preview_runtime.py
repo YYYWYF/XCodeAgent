@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import patch
 
 from app.protocols.preview_runtime import build_preview_runtime_stream, blocking_task
+from app.protocols.revision_preview import build_revision_preview_ag_ui_stream, schedule_revision_preview_cleanup
 from app.agents.repair_planner.planner import _build_failure_repair_prompt
 from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, write_backend_process_record
 from app.services.preview_runtime_guard import _owners, claim_maintenance, maintenance_owner, release_maintenance, require_no_maintenance
@@ -314,6 +315,58 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value["status"], "completed")
         stop_preview.assert_called_once()
         self.assertEqual(Path(stop_preview.call_args.args[0]), Path(self.workspace).resolve())
+
+    async def test_leave_closes_inflight_revision_even_if_start_stream_disconnects(self) -> None:
+        """原订阅断开时仍登记启动线程，退出后等待它收口再清理历史预览。"""
+        started = Event()
+        release_start = Event()
+        steps: list[str] = []
+
+        def start_revision(workspace: str, revision: str, *, report_progress: Any) -> None:
+            """模拟无法立即中断的 Java 构建，结束后先检查退出信号。"""
+            started.set()
+            try:
+                if not release_start.wait(5):
+                    raise AssertionError("测试未释放构建")
+                report_progress("launch", "准备启动前端", 70)
+                steps.append("frontend-launched")
+            finally:
+                steps.append("start-drained")
+
+        def stop_revisions(workspace: str) -> None:
+            """记录历史清理顺序和工作区范围。"""
+            self.assertEqual(workspace, str(Path(self.workspace).resolve()))
+            steps.append("history-stopped")
+
+        async def consume_start() -> None:
+            """通过实际 AG-UI 流提交历史启动。"""
+            payload = {"threadId": "revision", "forwardedProps": {"revisionPreview": {
+                "workspace": self.workspace, "action": "start", "revision": "history",
+            }}}
+            async for _ in build_revision_preview_ag_ui_stream(payload=payload):
+                pass
+
+        with (
+            patch("app.protocols.revision_preview.start_revision_preview", side_effect=start_revision),
+            patch("app.protocols.revision_preview.stop_workspace_revision_previews", side_effect=stop_revisions),
+            patch("app.protocols.preview_runtime.stop_project_preview", return_value={"status": "stopped"}),
+        ):
+            subscription = asyncio.create_task(consume_start())
+            try:
+                self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                subscription.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await subscription
+                value = self.result(await self.request("leave"))
+                self.assertEqual(value["status"], "completed")
+                cleanup = schedule_revision_preview_cleanup(self.workspace)
+                self.assertFalse(cleanup.done())
+                self.assertEqual(steps, [])
+                release_start.set()
+                await asyncio.wait_for(asyncio.shield(cleanup), 5)
+            finally:
+                release_start.set()
+        self.assertEqual(steps, ["start-drained", "history-stopped"])
 
     async def test_get_recovers_orphaned_restart_after_server_restart(self) -> None:
         """平台重启丢失内存任务后，读取状态应清理孤儿重启并开放再次操作。"""

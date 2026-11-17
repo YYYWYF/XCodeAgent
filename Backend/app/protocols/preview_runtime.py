@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.protocols.ag_ui_action_stream import AgUiActionProgress, AgUiActionResult, build_ag_ui_action_stream
+from app.protocols.revision_preview import schedule_revision_preview_cleanup
 from app.protocols.workflow.run_control import workflow_run_registry
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.preview_runtime_guard import claim_maintenance, maintenance_lock, maintenance_owner, release_maintenance, pending_product_interaction
@@ -279,6 +280,7 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
                     await asyncio.sleep(1)
             return AgUiActionResult(data=current, message="已读取服务状态。")
         if request.action == "leave":
+            schedule_revision_preview_cleanup(request.workspace)
             owner = maintenance_owner(request.workspace)
             job: asyncio.Task[Any] | None = None
             if owner:

@@ -46,6 +46,7 @@ def launch_frontend_project(
     linked_dependencies: bool = False,
     node_runtime: FrontendNodeRuntime | None = None,
     preserve_running: bool = False,
+    server_config: Path | None = None,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -62,6 +63,7 @@ def launch_frontend_project(
     ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY 失败，dev server 根本起不来。
     force_restart 为 True 时不复用健康服务，而是停止 standard preview 后
     重新安装、启动并执行 Ready 检查，供模板更新后的真实工程验收使用。
+    server_config 指定仅本轮开发服务器加载的配置，例如历史分支的 API 代理。
     """
 
     root = Path(workspace_path).expanduser().resolve()
@@ -101,6 +103,7 @@ def launch_frontend_project(
             script_name=script_name, script_command=str(scripts.get(script_name, "")),
             runtime_subdir=runtime_subdir, skip_install=skip_install, force_restart=force_restart,
             linked_dependencies=linked_dependencies, node_runtime=node_runtime, preserve_running=preserve_running,
+            server_config=server_config,
         )
 
 
@@ -117,6 +120,7 @@ def _launch_frontend_runtime(
     linked_dependencies: bool,
     node_runtime: FrontendNodeRuntime | None,
     preserve_running: bool,
+    server_config: Path | None,
 ) -> dict[str, Any]:
     """在同一工作区锁内复用、安装并启动当前 Node 对应的预览。"""
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / runtime_subdir
@@ -231,6 +235,7 @@ def _launch_frontend_runtime(
         node_runtime=node_runtime,
         runtime_subdir=runtime_subdir,
         extra_argv=_dependency_check_bypass_argv(package_manager, linked_dependencies),
+        **({"script_argv": _dev_server_config_argv(package_manager, server_config)} if server_config else {}),
     )
     if process is not None:
         _register_frontend_process(root, process, runtime_subdir=runtime_subdir)
@@ -488,6 +493,13 @@ def _dependency_check_bypass_argv(
     return ["--config.verify-deps-before-run=false"]
 
 
+def _dev_server_config_argv(package_manager: str, server_config: Path) -> list[str]:
+    """把配置路径交给开发服务器，npm 需要用分隔符转发参数。"""
+
+    separator = ["--"] if package_manager == "npm" else []
+    return [*separator, "--config", str(server_config)]
+
+
 def _start_dev_server(
     *,
     workspace: Path,
@@ -500,10 +512,11 @@ def _start_dev_server(
     node_runtime: FrontendNodeRuntime,
     runtime_subdir: str,
     extra_argv: list[str] | None = None,
+    script_argv: list[str] | None = None,
 ) -> tuple[dict[str, Any], subprocess.Popen[bytes] | None]:
     """以后台进程启动开发服务器，并保留进程对象供健康检查监督。"""
     # 额外参数要排在子命令之前：pnpm 只把 `run` 之前的参数当自己的选项。
-    argv = [package_manager_command, *(extra_argv or []), "run", script_name]
+    argv = [package_manager_command, *(extra_argv or []), "run", script_name, *(script_argv or [])]
     stdout_path = runtime_root / "frontend.stdout.log"
     stderr_path = runtime_root / "frontend.stderr.log"
     stdout = stdout_path.open("ab")

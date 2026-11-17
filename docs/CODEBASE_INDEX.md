@@ -924,6 +924,12 @@ The product and technical brand is **DevAgent Studio**. User-visible labels use 
 
 ### Preview runtime maintenance
 
+- 欢迎页保留工作台的组件和标签选择。`useRevisionPreview.ts` 使用 `UiReadVisibility` 在隐藏时清空该轮历史预览地址与错误，恢复可见时从启动提示重新开始。`service/previewRuntime.ts` 记录尚未收到回执的退出请求，避免快速重新进入时，旧退出请求关闭刚发起的历史预览。
+
+- 返回欢迎页的 `/preview-runtime/run` `leave` 同时关闭标准预览和该应用的历史预览。`protocols/revision_preview.py` 保留实际启动线程的登记，退出时要求启动在下一阶段收口，再由 `services/revision_preview.py` 按 worktree 和进程登记目录清理全部历史前后端。欢迎页立即显示，重新打开时的历史启动等待上一轮清理结束。
+
+- `/revision-preview/run` 的历史分支预览在 `.devagentstudio/runtime/revision-preview/<分支>/` 使用 detached worktree。`services/revision_preview.py` 从该 worktree 的 Maven 工程构建 Java 后端，使用当前应用已有数据库绑定并通过 Spring Boot 分配独立 loopback 端口。前端启动器加载 worktree 内生成的 Rsbuild/Vite 配置，将 `/api` 指向本轮 Java 端口。进程、日志和停止操作按分支隔离；启动失败回收历史前后端，停止确认后再清理 worktree。没有 Maven 工程的分支仍可单独预览前端。
+
 - `services/preview_authorization_advisory.py` 根据当前应用配置、正式 TechnicalPlan、Builtin 本地操作与编排状态提供只读权限状态。Seed 未就绪时，启动和重启仍按实际服务结果收口。`/preview-runtime/run` 的 get/watch 动态发布 `runtime.authorizationAdvisory`，工作流启动结果发布 `authorization_advisory`。用户可在「权限数据库初始化」卡查看和刷新状态。模板权限请求继续使用原鉴权。
 
 - `services/frontend_node_runtime.py` 统一解析用户工程 Node 与包管理器环境，供预览、历史版本、受控 pnpm 安装和集成/性能检查使用。Windows 从 `NVM_SYMLINK` 锁定真实 Node；macOS 使用继承的 `NVM_BIN`；未配置 NVM 时按继承的 PATH 解析。包管理器脚本环境核对 Node 的路径和完整版本；启动日志和测试执行记录保存来源。工作区内安装与启动/构建共用前端操作锁。当前进程及安装记录分别保存在 `runtime/launch/frontend-node.json` 与 `runtime/launch/frontend-dependencies-node.json`，仅身份匹配时复用。回归：`tests.test_frontend_node_runtime`、`tests.test_project_launcher`、`tests.test_integration_test_runner`、`tests.test_frontend_performance_runner`。

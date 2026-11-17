@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
+import { UiReadVisibility } from '../../../../hooks/uiReadVisibility'
+import { waitForPreviewRuntimeLeave } from '../../../../service/previewRuntime'
 import { startRevisionPreview, stopRevisionPreview } from '../../../../service/revisionPreview'
 
 type Params = {
   workspaceRoot: string
-  /** 该版本的 Git tag；为空（旧记录没有 tag）时不启动历史预览。 */
+  /** 要预览的 Git 分支名，未指定时使用工作区预览。 */
   revision?: string
   /**
    * 是否要发起启动。
@@ -50,7 +52,7 @@ export function revisionPreviewPresentation(input: {
   url: string
   error: string
 }): RevisionPreviewPresentation {
-  // 没有 tag 的版本退回工作区预览，行为与引入历史预览之前一致。
+  // 未指定历史分支时继续使用工作区预览。
   if (!input.revision) return { kind: 'workspace' }
   if (input.error) return { kind: 'error', message: input.error }
   // 地址为空即"未就绪"：既包括还没开始启动，也包括正在物化/安装/启动。
@@ -63,7 +65,7 @@ export function revisionPreviewPresentation(input: {
  * 是否该为这个版本拉起预览服务。
  *
  * 抽出来是为了让"懒启动"这条边界可测：三个条件缺一不可 —— 预览 tab 激活
- * （在应用文件上翻文件不该拉起 dev server）、版本有 tag、工作区路径已知。
+ * （在应用文件上翻文件不该拉起服务）、分支名和工作区路径已知。
  */
 export function shouldRunRevisionPreview(input: {
   enabled: boolean
@@ -76,7 +78,7 @@ export function shouldRunRevisionPreview(input: {
 /**
  * 按需保证某个历史版本的预览服务处于运行态，返回它的地址。
  *
- * 启停都在后端（物化该版本的树 + 起一个独立 dev server），这里只负责在正确的时机发起
+ * 预览后端负责检出代码和启停该分支的服务，这里只负责在正确的时机发起
  * 请求：进入预览 tab 时启动，切换版本、切换工作区或面板卸载时停止。
  *
  * 复杂度几乎都来自 React 18 的 StrictMode：开发模式下挂载时的 effect 会跑两遍
@@ -93,11 +95,10 @@ export function useRevisionPreview({
   const [reusedDependencies, setReusedDependencies] = useState(false)
   const [error, setError] = useState('')
   const [retryNonce, setRetryNonce] = useState(0)
+  const visible = useContext(UiReadVisibility)
 
   // 已经（或正在）为其拉起服务的目标。空表示当前没有该由本 hook 负责的服务。
   const runningRef = useRef<PreviewTarget | undefined>(undefined)
-  // 请求代号：只有最后一次发起的启动能写状态，过期结果一律丢弃。
-  const sequenceRef = useRef(0)
   // 卸载时排下的停止，见 unmount effect 里的说明。
   const pendingStopRef = useRef<{ key: string; timer: number } | undefined>(undefined)
 
@@ -110,6 +111,15 @@ export function useRevisionPreview({
     if (pendingStopRef.current?.key === targetKey) {
       window.clearTimeout(pendingStopRef.current.timer)
       pendingStopRef.current = undefined
+    }
+
+    // 欢迎页隐藏工作台但保留组件。退出动作负责停机，这里立即丢弃旧地址和迟到回执。
+    if (!visible) {
+      runningRef.current = undefined
+      setUrl('')
+      setError('')
+      setReusedDependencies(false)
+      return
     }
 
     // 目标换了（版本或工作区）：上一个目标的服务已无归属，收掉，并清掉它的地址与错误 ——
@@ -132,47 +142,34 @@ export function useRevisionPreview({
       key: targetKey
     }
     runningRef.current = target
-    const sequence = ++sequenceRef.current
-    let disposed = false
     setError('')
     setUrl('')
     setReusedDependencies(false)
 
-    void startRevisionPreview(target)
+    void waitForPreviewRuntimeLeave(target.workspace)
+      .then(() => (runningRef.current === target ? startRevisionPreview(target) : undefined))
       .then((result) => {
-        if (disposed || sequenceRef.current !== sequence) {
-          // 这次启动已被作废。只有目标确实换了才收掉它拉起的服务：StrictMode 的双挂载
-          // 也会让第一次启动"作废"，但那个目标正被重新要回来，收掉就是自毁。
-          if (runningRef.current?.key !== targetKey) {
-            void stopRevisionPreview(target).catch(() => undefined)
-          }
-          return
-        }
+        // 切到代码标签页不释放该目标，Java 构建期间切回预览仍可收到这一轮地址。
+        if (!result || runningRef.current !== target) return
         setUrl(result.previewUrl)
         setReusedDependencies(Boolean(result.reusedDependencies))
       })
       .catch((cause) => {
-        if (disposed || sequenceRef.current !== sequence) return
+        if (runningRef.current !== target) return
         // 启动失败就不再算"在跑"，否则点重试会被"已在跑"的守卫挡掉。
-        if (runningRef.current?.key === targetKey) runningRef.current = undefined
+        runningRef.current = undefined
         setError(cause instanceof Error ? cause.message : '历史版本预览启动失败')
       })
+  }, [active, targetKey, workspaceRoot, revision, retryNonce, visible])
 
-    return () => {
-      disposed = true
-    }
-  }, [active, targetKey, workspaceRoot, revision, retryNonce])
-
-  // 卸载时收掉正在跑的服务。单独一个 effect 是因为上面那个的 cleanup 每次依赖变化都会
-  // 跑，而只有"面板真的没了"才该停 —— 切 tab、点重试都还留着这个面板。
+  // 只有面板卸载时才收掉当前目标。切标签页仍保留同一次服务启动。
   useEffect(() => {
     return () => {
       const target = runningRef.current
       runningRef.current = undefined
       if (!target) return
       // 延后一拍再停：StrictMode 的双挂载会紧接着重跑上面那个 effect，把同一目标要回来，
-      // 那时它会撤销这次停止。真正卸载（以及启动还在路上、停止排得太早）时，上面那段
-      // "作废后按目标收尾"的逻辑还会再收一次，停止是幂等的。
+      // 那时它会撤销这次停止。真正卸载时，后端会把停止和同一分支的启动串行执行。
       const entry = { key: target.key, timer: 0 }
       entry.timer = window.setTimeout(() => {
         if (pendingStopRef.current === entry) pendingStopRef.current = undefined
@@ -183,9 +180,9 @@ export function useRevisionPreview({
   }, [])
 
   return {
-    url,
-    reusedDependencies,
-    error,
+    url: visible ? url : '',
+    reusedDependencies: visible && reusedDependencies,
+    error: visible ? error : '',
     // 先摘掉"在跑"的标记再触发重跑：否则上面那条"已为该目标启动过"的守卫会直接跳过。
     retry: () => {
       runningRef.current = undefined
