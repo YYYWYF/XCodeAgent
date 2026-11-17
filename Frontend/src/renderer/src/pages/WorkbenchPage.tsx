@@ -726,10 +726,12 @@ function WorkbenchPage({
       }
       // 4. 更新分支表：固定新建分支，追加一条记录并把当前分支指针移过去。
       //    不再支持「在当前分支继续」，因此无需清该分支的 gitRef。
+      //    baseBranch 记录基线分支（即发起新迭代时所在的分支），用于在版本
+      //    切换下拉里显示迭代链路（"v1_1 基线 v1_0"）。
       const existingBranches = workspaceApplication.branches || []
       const nextBranches = [
         ...existingBranches,
-        createBranchRecord(targetBranchName, awaitingLifecycle, Date.now())
+        createBranchRecord(targetBranchName, awaitingLifecycle, Date.now(), viewedBranch.name)
       ]
       const nextApp: ApplicationConfig = {
         ...workspaceApplication,
@@ -858,10 +860,12 @@ function WorkbenchPage({
         onIterationStarted(workspaceApplication, newThreadId, awaitingLifecycle)
       }
       // 5. 更新分支表：追加新分支记录，并把当前分支指针移过去。
+      //    baseBranch 记录基线分支（用户选择的"基于此版本迭代"的起点），
+      //    用于在版本切换下拉里显示迭代链路（"v1_2 基线 v1_0"）。
       const existingBranches = workspaceApplication.branches || []
       const nextBranches = [
         ...existingBranches,
-        createBranchRecord(targetBranchName, awaitingLifecycle, Date.now())
+        createBranchRecord(targetBranchName, awaitingLifecycle, Date.now(), sourceBranchName)
       ]
       const nextApp: ApplicationConfig = {
         ...workspaceApplication,

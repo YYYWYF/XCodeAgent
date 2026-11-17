@@ -89,12 +89,23 @@ export function branchIterationScope(
  *
  * lifecycle 由调用方传入（通常是重置后的 collecting_requirement）。
  */
+/**
+ * 创建一条分支记录：分支名 + 创建时间 + 引用调用方传入的 lifecycle。
+ * `baseBranch` 是该分支的"基线"（从哪一条分支派生），供版本切换下拉显示
+ * 迭代链路。第一个分支用 createInitialBranch（本函数只在迭代时调用）。
+ */
 export function createBranchRecord(
   branchName: string,
   lifecycle: ApplicationLifecycle,
-  now: number
+  now: number,
+  baseBranch?: string
 ): ApplicationBranch {
-  return { name: branchName, createdAt: now, lifecycle }
+  return {
+    name: branchName,
+    createdAt: now,
+    lifecycle,
+    ...(baseBranch ? { baseBranch } : {})
+  }
 }
 
 /**

@@ -148,6 +148,14 @@ export default function VersionActions({
               <span className={cx('version-dropdown-item-head')}>
                 {!isWorking ? <LockOutlined /> : null}
                 <span className={cx('version-menu-label')}>{branch.name}</span>
+                {branch.baseBranch ? (
+                  <span
+                    className={cx('version-menu-baseline')}
+                    title={`基于 ${branch.baseBranch} 迭代`}
+                  >
+                    基线 {branch.baseBranch}
+                  </span>
+                ) : null}
                 <span
                   className={cx(
                     'version-menu-status',
