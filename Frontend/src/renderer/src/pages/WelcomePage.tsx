@@ -10,6 +10,7 @@ import {
 } from '../components/Welcome'
 import type { ApplicationConfig, ApplicationLifecycle } from '../typings'
 import { cx } from '../utils'
+import studioLogoUrl from '../assets/studio_logo.png'
 import './WelcomePage.less'
 import './WelcomePageLight.less'
 
@@ -38,10 +39,12 @@ export default function WelcomePage({
       <section className={cx('welcome-shell')}>
         <header className={cx('welcome-topbar')}>
           <div className={cx('welcome-brand')} aria-label="DevAgent Studio">
-            <span className={cx('welcome-brand-mark')} aria-hidden="true">
-              <i />
-              <i />
-            </span>
+            <img
+              alt=""
+              aria-hidden="true"
+              className={cx('welcome-brand-mark')}
+              src={studioLogoUrl}
+            />
             <span className={cx('app-version-brand')}>
               <span>DevAgent Studio</span>
               <AppVersionBadge />

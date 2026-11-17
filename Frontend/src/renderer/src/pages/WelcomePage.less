@@ -50,27 +50,12 @@
 }
 
 .@{class-prefix}-welcome-brand-mark {
-  position: relative;
   display: inline-block;
   width: 34px;
   height: 34px;
-
-  i {
-    position: absolute;
-    top: 3px;
-    left: 13px;
-    width: 8px;
-    height: 29px;
-    border-radius: 2px;
-    background: linear-gradient(180deg, #c4b5fd, #8b5cf6);
-    box-shadow: 0 0 14px rgba(139, 92, 246, 0.24);
-    transform: rotate(38deg);
-
-    &:last-child {
-      background: linear-gradient(180deg, #7c3aed, #c084fc);
-      transform: rotate(-38deg);
-    }
-  }
+  flex-shrink: 0;
+  // 图片替代了原本的"两条光条"CSS 绘画；contain 保证任意宽高比的图片完整显示不裁切。
+  object-fit: contain;
 }
 
 .@{class-prefix}-welcome-utilities {

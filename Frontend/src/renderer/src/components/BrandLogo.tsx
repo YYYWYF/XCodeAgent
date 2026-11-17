@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactElement } from 'react'
 import { cx } from '../utils'
+import studioLogoUrl from '../assets/studio_logo.png'
 import './BrandLogo.less'
 
 type Props = {
@@ -9,7 +10,7 @@ type Props = {
   className?: string
 }
 
-/** DevAgent Studio 品牌 Logo：两条倾斜交叉光条 + 文字。欢迎页 / 工作台顶栏共用，避免各处自造。 */
+/** DevAgent Studio 品牌 Logo：使用 studio_logo.png 图片 + 文字。欢迎页 / 工作台顶栏共用，避免各处自造。 */
 export default function BrandLogo({ size = 34, showText = true, className }: Props): ReactElement {
   return (
     <span
@@ -17,10 +18,12 @@ export default function BrandLogo({ size = 34, showText = true, className }: Pro
       className={cx('brand-logo', className)}
       style={{ '--brand-logo-size': `${size}px` } as CSSProperties}
     >
-      <span className={cx('brand-logo-mark')} aria-hidden="true">
-        <i />
-        <i />
-      </span>
+      <img
+        alt=""
+        aria-hidden="true"
+        className={cx('brand-logo-mark')}
+        src={studioLogoUrl}
+      />
       {showText ? <span className={cx('brand-logo-text')}>DevAgent Studio</span> : null}
     </span>
   )
