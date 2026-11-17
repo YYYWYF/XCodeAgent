@@ -1798,6 +1798,15 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setDiagnosticStage('initialize_primary')
   installDesignRuntimeProtocol()
 
+  // macOS dev 模式下 dock 图标默认是 Electron 启动器自带图标（看起来像 React logo），
+  // 不是应用自己的。在 `app.whenReady()` 后立即用 app.dock.setIcon 强制换成
+  // resources/icon.png —— 必须在 runStartupUpdate（更新检测界面）**之前**调用，
+  // 否则用户看到检测界面时 dock 还是默认图标。打包后的 mac 应用走 build/icon.icns，
+  // 这里的 setIcon 会被.icns 覆盖，不影响；Windows/Linux 没有 dock 概念，跳过。
+  if (process.platform === 'darwin') {
+    app.dock?.setIcon(nativeImage.createFromPath(icon))
+  }
+
   // Set app user model id for windows
   if (process.platform === 'win32') {
     app.setAppUserModelId(process.execPath)
