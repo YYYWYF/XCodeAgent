@@ -96,29 +96,8 @@ async def _build_application_planning_recovery_projection(
     """在公开 Workflow 边界调用 Generic Recovery authority 并生成 Planning DTO。"""
 
     input_committed = application_planning_input_committed(source, snapshot)
-    # 只有取消记录与已清锁的结束 lifecycle 同时成立，才是用户主动 End；断连取消不能冒充。
+    # 明确结束的规划只报告终态，不重新签发继续动作。
     lifecycle = load_application_lifecycle(workspace)
-    archived = lifecycle.ended_planning_execution if lifecycle else None
-    if (source is None and archived and archived.run_id == snapshot.values.get("active_run_id")
-            and archived.initialization.thread_id == thread_id and lifecycle.active_run_id is None):
-        return build_application_planning_recovery_projection(
-            classification="completed", source=None, thread_id=thread_id,
-            reason_code="APPLICATION_PLANNING_ENDED", message="本轮任务已结束，已有文件已保留。")
-    from app.services.ended_planning import ended_planning_available
-    if (source is not None and source.status is DurableExecutionStatus.CANCELLED
-            and source.ended_at is not None
-            and ended_planning_available(workspace, lifecycle, run_id=source.run_id, thread_id=thread_id)):
-        from app.services.business_node_retry import retry_action_plan
-
-        # 正常停止仍使用原节点重试签发动作，不恢复停止前的旧确认门。
-        plan = await retry_action_plan(source.model_copy(update={"status": DurableExecutionStatus.INTERRUPTED}), graph)
-        return build_application_planning_recovery_projection(
-            classification="ready_to_continue" if plan.primary_action else "blocked",
-            source=source, thread_id=thread_id, input_committed=input_committed,
-            reason_code="APPLICATION_PLANNING_ENDED", message="本轮任务已结束，已有文件已保留。",
-            can_continue=plan.primary_action is not None,
-            recovery_action_plan=plan.model_dump(mode="json", by_alias=True),
-        )
     if (source is not None and source.status is DurableExecutionStatus.CANCELLED
             and source.ended_at is not None and lifecycle is not None
             and lifecycle.initialization.thread_id == thread_id

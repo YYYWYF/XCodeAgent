@@ -300,8 +300,8 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
         )
         write_application_lifecycle(self.workspace, lifecycle)
 
-    def test_ended_pending_is_inactive_until_original_task_resumes(self) -> None:
-        """结束保留草稿但释放确认占用；继续重新入场后仍须显式确认。"""
+    def test_ended_pending_stays_inactive_without_a_resume_entry(self) -> None:
+        """结束保留草稿但永久释放原 Run 的确认占用，不再提供继续入口。"""
         from tests.test_workflow_run_control import _write_ready_workbench_lifecycle
 
         self._write_pending()
@@ -317,17 +317,14 @@ class PlanningRefreshRecoveryTests(unittest.TestCase):
             "active_executions": {execution.run_id: execution},
         }))
         self.assertEqual(self._resolve()["status"], "awaiting_confirmation")
-        end_workbench_execution(self.workspace, run_id=execution.run_id, preserve_resume=True)
+        end_workbench_execution(self.workspace, run_id=execution.run_id)
         self.assertEqual(self._resolve()["status"], "idle")
         self.assertIsNotNone(load_pending_build_task_plan(self.state))
-        # 只在精确原 Run 被继续并消费归档后恢复草稿行动权。
-        resumed = start_workbench_execution(
-            self.workspace, scope="application", target_id="application", page_id=None,
-            thread_id=execution.thread_id, owner_session_id=execution.owner_session_id,
-            run_id="resumed-pending", phase="prepare_build_tasks", replaces_run_id=execution.run_id,
-        )
-        self.assertNotIn(execution.run_id, resumed.ended_executions)
-        self.assertEqual(self._resolve()["status"], "awaiting_confirmation")
+        with self.assertRaisesRegex(Exception, "已不存在"):
+            start_workbench_execution(self.workspace, scope="application", target_id="application", page_id=None,
+                thread_id=execution.thread_id, owner_session_id=execution.owner_session_id,
+                run_id="resumed-pending", phase="prepare_build_tasks", replaces_run_id=execution.run_id)
+        self.assertEqual(self._resolve()["status"], "idle")
 
     def test_case_a_pending_plan_is_authoritative(self) -> None:
         """存在 PendingPlan 时返回确认态，并直接使用其中冻结的身份。"""

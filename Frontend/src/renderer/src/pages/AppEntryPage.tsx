@@ -249,7 +249,6 @@ function AppEntryContent(): JSX.Element {
         // 不能跳过规划状态恢复，否则就绪卡与"进入开发阶段"入口都不会出现。
         if (
           readyForWorkbench &&
-          !lifecycle.endedPlanningExecution &&
           hasApplicationEnteredDevelopment(
             application.id,
             application.branchName || application.id
@@ -370,8 +369,8 @@ function AppEntryContent(): JSX.Element {
                 planningRuntimeController.saveRequirementSpec(activeApplication.id, spec)
               }
               onStopPlanning={() => planningRuntimeController.stop(activeApplication.id)}
-              onRetryPlanning={(restartInitialPlanning) =>
-                planningRuntimeController.retryCurrentFailure(activeApplication.id, restartInitialPlanning)}
+              onRetryPlanning={() =>
+                planningRuntimeController.retryCurrentFailure(activeApplication.id)}
               onReconcilePlanning={() => {
                 void planningRuntimeController.reconcileCurrentState(activeApplication.id).catch(console.error)
               }}

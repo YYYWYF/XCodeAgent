@@ -222,13 +222,7 @@ def workflow_capabilities() -> dict[str, Any]:
             "actions": ["stop", "end", "abandon"],
             "abandonIdentityFields": ["planningRunId", "draftDigest"],
             "abandonSemantics": "删除精确匹配的 PendingPlan，结束对应 Workflow execution；不取消 active Scheduler。",
-            "endSemantics": "按精确 workspace/runId 停止全部相关工作后释放资源，超时保留锁；归档原执行以供工作区未变化时继续。",
-            "endedResume": {
-                "requestField": "forwardedProps.resumeExecutionRunId",
-                "availabilityField": "lifecycle.endedExecutions.<runId>.workspaceUnchanged",
-                "checkedAtField": "lifecycle.endedExecutionsCheckedAt",
-                "semantics": "原会话/目标/Graph checkpoint；入场锁内复验工作区指纹和资源，继续不提交正式确认。",
-            },
+            "endSemantics": "按精确 workspace/runId 停止全部相关工作后释放资源，超时保留锁；结束后不再提供原任务继续入口。",
             "stopSemantics": "保留当前 execution 的 thread/session 持有校验，只暂停并保留恢复所需的 lifecycle 记录。",
         },
         "clarificationModes": {

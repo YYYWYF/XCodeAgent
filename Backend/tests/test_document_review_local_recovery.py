@@ -11,7 +11,7 @@ from app.domain.execution_recovery import DurableExecutionRecord, DurableExecuti
 from app.graph.application_planning_workflow import application_planning_graph_for_request
 from app.graph.workflow import workflow_graph_for_request
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
-from app.persistence.execution_recovery import get_execution, insert_execution
+from app.persistence.execution_recovery import get_execution, insert_execution, update_execution_status
 from app.protocols.application_lifecycle import build_application_lifecycle_ag_ui_stream
 from app.services import application_lifecycle as lifecycle_service
 from app.services.document_review_assets import find_document_review, require_current_document_review
@@ -137,7 +137,9 @@ class LocalDocumentReviewRecoveryTests(unittest.IsolatedAsyncioTestCase):
         """明确结束后的原现场可以保留，但校准不重新签发确认或恢复占用。"""
         await self.seed_local_checkpoint()
         await reconcile_session_checkpoint(self.workspace, session_id=self.session, thread_id=self.thread)
-        lifecycle_service.end_workbench_execution(self.workspace, run_id=self.run, preserve_resume=True)
+        lifecycle_service.end_workbench_execution(self.workspace, run_id=self.run)
+        await update_execution_status(workspace=self.workspace, run_id=self.run,
+            status=DurableExecutionStatus.CANCELLED, ended=True)
         self.assertFalse(await reconcile_session_checkpoint(self.workspace, session_id=self.session, thread_id=self.thread))
         self.assertFalse(lifecycle_service.load_application_lifecycle(self.workspace).active_executions)
 

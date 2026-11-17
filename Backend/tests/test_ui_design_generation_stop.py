@@ -13,7 +13,6 @@ from app.services.ui_design_generation_task import run_ui_design_thread
 from app.services.ui_design_generator import load_page_code, persist_page_code
 from app.services.run_workers import bind_run_workers, current_run_id, active_worker_runs
 from app.services.planning_execution_end import end_planning_execution
-from app.services.ended_planning import ended_planning_available
 from app.protocols.ui_design_generation import build_ui_design_generation_stream
 from app.services.ui_design_generation_control import inspect_page
 from tests.test_ui_design_generation_pool import _task, FAKE_CODE
@@ -104,7 +103,7 @@ class UiDesignGenerationStopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(set(self.calls)), 2)
         self.assertTrue(all(run.startswith("ui-design-") for run in self.calls))
 
-    async def test_end_waits_for_ui_pool_and_saves_stable_fingerprint(self):
+    async def test_end_waits_for_ui_pool_without_saving_a_continuation(self):
         """整个规划 End 必须等待 UI 池退出，结束后文件不再变化且仍可继续。"""
         await end_fixture.PlanningExecutionEndTests.prepare(self, self.workspace)
         with patch("app.services.ui_design_generation_pool._POOL", self.pool), patch(
@@ -122,7 +121,7 @@ class UiDesignGenerationStopTests(unittest.IsolatedAsyncioTestCase):
             await self.pool._queue.join()
         self.assertFalse(self.pool.pending_page_ids(self.workspace))
         self.assertEqual(self.page()["status"], "cancelled")
-        self.assertTrue(ended_planning_available(self.workspace, ended))
+        self.assertNotIn("endedPlanningExecution", ended.model_dump(by_alias=True))
 
     async def test_ag_ui_success_follows_worker_exit_and_failure_has_complete_lifecycle(self):
         """停止事件流先报告进度，退出后发成功；过时代次失败仍发完整生命周期。"""
@@ -174,7 +173,7 @@ class UiDesignGenerationStopTests(unittest.IsolatedAsyncioTestCase):
             await worker
         self.assertNotIn("ui-adjust-run", active_worker_runs(self.workspace))
 
-    async def test_end_archives_latest_ui_checkpoint_instead_of_initial_owner(self):
+    async def test_end_closes_latest_ui_checkpoint_and_initial_owner(self):
         """多轮 UI 动作结束必须封存最后的 Run，防止只取消最初 owner 后继续按钮空转。"""
         from app.graph.application_planning_workflow import application_planning_graph_for_request
         from app.persistence.execution_recovery import get_execution, insert_execution
@@ -190,8 +189,7 @@ class UiDesignGenerationStopTests(unittest.IsolatedAsyncioTestCase):
         }, as_node="ui_confirmation")
         with patch("app.services.ui_design_generation_pool._POOL", self.pool):
             ended = await end_planning_execution(self.workspace, "thread")
-        self.assertEqual(ended.ended_planning_execution.run_id, "ui-action-run")
         self.assertIsNone(ended.active_run_id)
         self.assertEqual((await get_execution(self.workspace, "ui-action-run")).status, "cancelled")
         self.assertEqual((await get_execution(self.workspace, "design-run")).status, "cancelled")
-        self.assertTrue(ended_planning_available(self.workspace, ended))
+        self.assertNotIn("endedPlanningExecution", ended.model_dump(by_alias=True))

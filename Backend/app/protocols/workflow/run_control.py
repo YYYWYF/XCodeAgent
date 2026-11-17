@@ -721,7 +721,7 @@ def _plan_control_message(action: str, status: str) -> str:
     """根据计划控制结果生成稳定的用户提示。"""
 
     if action == "end" and status == "ended":
-        return "任务已结束，相关后台执行已停止。工作区未变化时可继续任务。"
+        return "任务已结束，相关后台执行已停止。"
     if action == "end" and status == "already_ended":
         return "计划已经结束，当前工作区已处于自由输入状态。"
     if action == "stop" and status == "already_stopped":
@@ -767,7 +767,6 @@ async def _execute_workbench_plan_control(
             end_workbench_execution(
                 workspace,
                 run_id=target_run_id,
-                preserve_resume=True,
             )
         except ApplicationLifecycleConflictError as exc:
             # 另一个 End 可能刚刚完成；重新解析仍只接受同一 workspace/runId。

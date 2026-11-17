@@ -292,12 +292,9 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                 workspace=str(harness.workspace), thread_id=harness.thread_id,
                 graph=harness.graph, source=source, snapshot=committed,
             )
-            self.assertTrue(projected.can_continue)
-            action = projected.recovery_action_plan["primaryAction"]
-            self.assertEqual(action["kind"], "retry_business_node")
-            self.assertEqual(action["targetNode"], "technical_planning_generate")
-            self.assertEqual(action["label"], "继续生成")
+            self.assertFalse(projected.can_continue)
+            self.assertIsNone(projected.recovery_action_plan)
             stopped = load_application_lifecycle(harness.workspace)
             self.assertIsNone(stopped.active_run_id)
             self.assertEqual(stopped.initialization.status, ApplicationLifecycleStatus.CANCELLED)
-            self.assertIsNotNone(stopped.ended_planning_execution)
+            self.assertNotIn("endedPlanningExecution", stopped.model_dump(by_alias=True))

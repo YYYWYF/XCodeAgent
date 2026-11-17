@@ -2,13 +2,6 @@
 
 from __future__ import annotations
 
-from app.domain.application_lifecycle import EndedWorkbenchExecution
-from app.services.ended_workspace import (
-    discard_changed_ended_executions,
-    workspace_fingerprint,
-    ended_workspace_unchanged,
-)
-
 import hashlib
 import json
 import logging
@@ -253,24 +246,15 @@ def create_application_lifecycle(
 
 
 def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | None:
-    """读取当前快照，并在业务内容变化时原子删除已失效的结束任务继续凭据。"""
+    """只读取并校验当前生命周期，不扫描工作区或计算文件指纹。"""
 
     path = application_lifecycle_path(workspace)
     with _application_lifecycle_lock(path):
-        current = _read_application_lifecycle(path)
-        if current is None:
-            return None
-        updated = discard_changed_ended_executions(workspace, current)
-        if updated is current:
-            return current
-        updated = updated.model_copy(update={
-            "revision": current.revision + 1, "updated_at": utc_now(),
-        })
-        return write_application_lifecycle(workspace, updated, expected_revision=current.revision)
+        return _read_application_lifecycle(path)
 
 
 def _read_application_lifecycle(path: Path) -> ApplicationLifecycle | None:
-    """只读取并校验磁盘快照，供持锁清理及写入 CAS 使用，避免递归触发清理。"""
+    """只读取并校验磁盘快照，供持锁读取和写入 CAS 使用。"""
 
     if not path.exists():
         return None
@@ -323,8 +307,6 @@ def write_application_lifecycle(
                 raise ApplicationLifecycleConflictError(
                     f"生命周期 revision 冲突：期望 {expected_revision}，实际 {current_revision}。"
                 )
-        # 普通业务写入也清理失效凭据，不能把旧快照中的恢复信息重新写回文件。
-        state = discard_changed_ended_executions(workspace, state)
         payload = state.model_dump_json(by_alias=True, indent=2) + "\n"
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
@@ -538,67 +520,8 @@ def start_workbench_execution(
             != ApplicationLifecycleStage.READY_FOR_WORKBENCH
         ):
             raise ApplicationPlanningInProgressError(current)
-        archived = current.ended_executions.get(replaces_run_id or "")
-        if replaces_run_id and archived is None and replaces_run_id not in current.active_executions:
-            raise ApplicationLifecycleConflictError(
-                "要继续的工作台执行已不存在或工作区已变化，请重新发起任务。"
-            )
-        if archived is not None:
-            original = archived.execution
-            if (
-                original.thread_id != thread_id
-                or original.scope != scope
-                or original.target_id != target_id
-                or original.owner_session_id
-                != (str(owner_session_id or "").strip() or None)
-            ):
-                raise ApplicationLifecycleConflictError(
-                    "结束任务的继续请求不属于原会话或目标。"
-                )
-            if not ended_workspace_unchanged(str(workspace), archived.fingerprint):
-                raise ApplicationLifecycleConflictError(
-                    "工作区已变化，不能安全继续，请重新发起任务。"
-                )
-            requested_keys = {
-                _resource_claim_key(claim)
-                for claim in [*archived.claims, *(resource_claims or [])]
-            }
-            for other_id in current.active_executions:
-                occupied = {
-                    _resource_claim_key(claim)
-                    for claim in _resource_claims_for_run(
-                        current.resource_locks, other_id
-                    )
-                }
-                if (
-                    requested_keys & occupied
-                    or (requested_keys and "application:application" in occupied)
-                    or (occupied and "application:application" in requested_keys)
-                ):
-                    raise ApplicationLifecycleConflictError(
-                        "原任务资源已被其他执行占用，请先结束相关任务。"
-                    )
-            if current.active_formal_revision is not None:
-                raise ApplicationLifecycleConflictError(
-                    "已有新的正式修订，不能继续旧任务。"
-                )
-            # 仅在内存中恢复原登记以复用既有确认校验；新执行与资源锁成功写盘后才消费归档。
-            current = current.model_copy(
-                update={
-                    "active_executions": {
-                        **current.active_executions,
-                        original.run_id: original,
-                    },
-                    "ended_executions": {
-                        key: value
-                        for key, value in current.ended_executions.items()
-                        if key != replaces_run_id
-                    },
-                    "active_formal_revision": archived.formal_revision
-                    or current.active_formal_revision,
-                }
-            )
-            resource_claims = [*(resource_claims or []), *archived.claims]
+        if replaces_run_id and replaces_run_id not in current.active_executions:
+            raise ApplicationLifecycleConflictError("要继续的工作台执行已不存在，请重新发起任务。")
         _assert_application_mutation_admission(
             workspace,
             current,
@@ -923,9 +846,6 @@ def claim_application_planning_run_for_recovery(
     new_run_id: str,
     thread_id: str,
     expected_lifecycle_revision: int | None,
-    source_run_id: str | None = None,
-    restart_initial_planning: bool = False,
-    generation_stage: ApplicationLifecycleStage | None = None,
 ) -> ApplicationLifecycle:
     """以 lifecycle revision CAS 让 pre-ownership child 取得运行时 ownership。"""
 
@@ -949,22 +869,6 @@ def claim_application_planning_run_for_recovery(
             )
         if current.active_run_id == new_run_id:
             return current
-        if generation_stage is not None:
-            from app.services.ended_planning import stopped_planning_feedback_available
-
-            if not source_run_id or not stopped_planning_feedback_available(workspace, current,
-                    run_id=source_run_id, thread_id=thread_id):
-                raise ApplicationLifecycleConflictError("停止的规划已变化，不能提交本轮补充意见。")
-        if source_run_id is not None:
-            from app.services.ended_planning import restore_ended_planning
-
-            current = restore_ended_planning(workspace, current, source_run_id=source_run_id,
-                thread_id=thread_id, restart_initial=restart_initial_planning)
-        if generation_stage is not None:
-            # 补充意见重开生成，保留迭代和会话身份，绝不恢复上一版的确认权限。
-            current = current.model_copy(update={"initialization": current.initialization.model_copy(update={
-                "stage": generation_stage, "status": ApplicationLifecycleStatus.RUNNING,
-            }), "error": None})
         if not str(new_run_id or "").strip():
             raise ApplicationLifecycleConflictError(
                 "RECOVERY_STATE_DRIFT: child activeRunId 不能为空。"
@@ -1301,9 +1205,8 @@ def end_workbench_execution(
     *,
     run_id: str,
     missing_ok: bool = False,
-    preserve_resume: bool = False,
 ) -> ApplicationLifecycle:
-    """终止当前计划并释放工作区输入锁，同时保留最后执行快照供审计。"""
+    """终止当前计划并释放资源锁，结束后不保存继续凭据。"""
 
     path = application_lifecycle_path(workspace)
     with _application_lifecycle_lock(path):
@@ -1317,27 +1220,6 @@ def end_workbench_execution(
                 return current
             raise ApplicationLifecycleConflictError("当前没有可结束的工作台计划执行。")
         ending_execution = current.active_executions[run_id]
-        if preserve_resume:
-            # 控制面已等待真实工作退出；只在此时采集稳定基线，和释放锁一次写盘。
-            archived = EndedWorkbenchExecution(
-                execution=ending_execution.model_copy(
-                    update={"status": WorkbenchExecutionStatus.STOPPED}
-                ),
-                claims=_resource_claims_for_run(current.resource_locks, run_id),
-                workspace=str(Path(workspace).resolve()),
-                fingerprint=workspace_fingerprint(workspace),
-                sourceFailed=ending_execution.status == WorkbenchExecutionStatus.FAILED,
-                formalRevision=(
-                    current.active_formal_revision
-                    if execution_belongs_to_active_revision(current, ending_execution)
-                    else None
-                ),
-            )
-            current = current.model_copy(
-                update={
-                    "ended_executions": {**current.ended_executions, run_id: archived}
-                }
-            )
         remaining = dict(current.active_executions)
         remaining.pop(run_id, None)
         ended = _persist_workbench_execution_removal(
@@ -1791,30 +1673,6 @@ def application_lifecycle_payload(state: ApplicationLifecycle) -> dict[str, Any]
     # continuation 的原请求和 token 哈希只属于服务端控制面；公开运行结果通过
     # developmentContinuation 单独投射当前可执行动作，生命周期快照不暴露内部登记表。
     payload.pop("developmentContinuations", None)
-    archived_planning = state.ended_planning_execution
-    if archived_planning is not None:
-        from app.services.ended_planning import ended_planning_available, initial_planning_restart_available, stopped_planning_feedback_available
-
-        # 公开控制面只提供原身份与可继续性，不泄漏修订内部凭据和文件摘要。
-        payload["endedPlanningExecution"] = {
-            "runId": archived_planning.run_id,
-            "threadId": archived_planning.initialization.thread_id,
-            "stage": archived_planning.initialization.stage.value,
-            "workspaceUnchanged": ended_planning_available(archived_planning.workspace, state),
-            "canRestart": initial_planning_restart_available(state),
-            "canSubmitFeedback": stopped_planning_feedback_available(archived_planning.workspace, state),
-        }
-    if state.ended_executions or state.ended_planning_execution:
-        payload["endedExecutionsCheckedAt"] = utc_now().isoformat()
-    payload["endedExecutions"] = {
-        run_id: {
-            "execution": item.execution.model_dump(mode="json", by_alias=True),
-            "workspaceUnchanged": ended_workspace_unchanged(
-                item.workspace, item.fingerprint
-            ),
-        }
-        for run_id, item in state.ended_executions.items()
-    }
     return payload
 
 

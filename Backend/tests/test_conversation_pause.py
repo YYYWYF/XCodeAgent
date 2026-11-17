@@ -4,7 +4,8 @@ import tempfile
 import threading
 import unittest
 from unittest.mock import patch
-from langgraph.checkpoint.memory import InMemorySaver
+from contextlib import AsyncExitStack
+from app.persistence.checkpoints import workflow_checkpointer, close_workflow_checkpointer_for_workspace
 from app.domain.application_lifecycle import ApplicationInitialization
 from app.graph.direct_modification_workflow import build_direct_modification_graph
 from app.persistence.execution_recovery import get_execution
@@ -25,8 +26,8 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
         """主动继续的新 Run 若再次异常，仍由兜底恢复原节点。"""
         await self._run_pause_scenario(fail_on_resume=True)
 
-    async def test_continue_after_end_consumes_checkpoint_archive(self):
-        """结束卡继续时仍从原 conversation checkpoint 恢复并原子消费归档。"""
+    async def test_end_disables_pause_continuation(self):
+        """结束释放活动执行后，原暂停 checkpoint 也不能继续。"""
         await self._run_pause_scenario(end_before_resume=True)
 
     async def _run_pause_scenario(self, fail_on_resume=False, end_before_resume=False):
@@ -55,14 +56,16 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
             """保存正常确认边界，不执行下游写入。"""
             return {}
 
-        with tempfile.TemporaryDirectory() as directory:
+        async with AsyncExitStack() as cleanup:
+            directory = cleanup.enter_context(tempfile.TemporaryDirectory())
+            cleanup.push_async_callback(close_workflow_checkpointer_for_workspace, workspace=directory)
             lifecycle = create_application_lifecycle(application_id="app", application_name="暂停验证")
             write_application_lifecycle(directory, lifecycle.model_copy(update={"initialization": ApplicationInitialization(
                 stage="ready_for_workbench", status="completed", threadId="planning")}))
             with (patch("app.graph.direct_modification_workflow.scan_workspace_code", scan),
                   patch("app.graph.direct_modification_workflow.classify_direct_modification", classify),
                   patch("app.graph.direct_modification_workflow.finalize_direct_modification", finalize)):
-                graph = build_direct_modification_graph(checkpointer=InMemorySaver())
+                graph = build_direct_modification_graph(checkpointer=await workflow_checkpointer(workspace=directory))
 
             async def factory(**kwargs):
                 """仅替换 Graph 构造，持久化和控制面使用真实实现。"""
@@ -106,11 +109,12 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("二次修改运行不属于当前会话", await run("wrong-owner", "paused", "other"))
                 self.assertEqual(calls, {"scan": 1, "classify": 1})
                 if end_before_resume:
-                    # Electron 的“任务已结束”按钮先释放活动锁，再从生命周期归档继续。
-                    end_workbench_execution(directory, run_id="paused", preserve_resume=True)
+                    end_workbench_execution(directory, run_id="paused")
                     ended = load_application_lifecycle(directory)
                     self.assertNotIn("paused", ended.active_executions)
-                    self.assertIn("paused", ended.ended_executions)
+                    self.assertIn("不是可继续的主动暂停", await run("continued", "paused"))
+                    self.assertEqual(calls, {"scan": 1, "classify": 1})
+                    return
                 resumed = await run("continued", "paused")
                 expected_run = "continued"
                 if fail_on_resume:
@@ -137,8 +141,6 @@ class ConversationPauseTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(after.values["clarification"]["mode"], "small_task_scope_confirmation")
                 self.assertFalse(after.next)
                 self.assertEqual(load_application_lifecycle(directory).active_executions[expected_run].status.value, "awaiting_user")
-                if end_before_resume:
-                    self.assertNotIn("paused", load_application_lifecycle(directory).ended_executions)
                 self.assertIn("不是可继续的主动暂停", await run("duplicate", "paused"))
                 self.assertEqual(calls, {"scan": 1, "classify": 3 if fail_on_resume else 2})
 

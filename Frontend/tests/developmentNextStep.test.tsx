@@ -1,4 +1,4 @@
-import { mergeEndedTaskAvailability } from '../src/renderer/src/service/endedTaskAvailability'
+
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -16,74 +16,6 @@ import {
 import DevelopmentTargetPicker from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide/DevelopmentTargetPicker'
 import NextDevelopmentGuide from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide'
 import { buildQuickTasks } from '../src/renderer/src/components/AiChatPanel/components/QuickTaskGuide/quickTasks'
-
-test('技术规划停止生成的结束回执不展示开发工作区检查卡', () => {
-  const ended: WorkflowRunPayload = {
-    runId: 'technical-run', threadId: 'planning-thread', events: [],
-    state: { workflow_scope: 'application_planning' },
-    summary: { status: 'completed', phase: 'plan_control',
-      planControl: { action: 'end', status: 'ended', targetRunId: 'technical-run' } }
-  }
-  assert.equal(developmentNextStep([message(completion()), message(ended)]), undefined)
-  const currentLifecycle = { initialization: { threadId: 'planning-thread' }, endedExecutions: {} } as ApplicationLifecycle
-  // 现场已显示的回执即便只有 Run/Thread，也能由当前规划归属判定，不能永远等待不存在的归档。
-  assert.equal(developmentNextStep([message({ ...ended, state: undefined })], currentLifecycle), undefined)
-})
-
-test('原开发 Run 已结束后，同 Thread 新测试失败不显示重新选择开发任务', () => {
-  const failed = { runId: 'test-run', threadId: 'shared-thread', events: [],
-    summary: { status: 'failed', phase: 'integration_test' } } as WorkflowRunPayload
-  const ended = { execution: { runId: 'old-build', threadId: 'shared-thread', status: 'stopped' },
-    workspaceUnchanged: false }
-  const lifecycle = { endedExecutions: { 'old-build': ended } } as unknown as ApplicationLifecycle
-  assert.equal(developmentNextStep([message(failed)], lifecycle), undefined)
-  const sameRun = { ...lifecycle, endedExecutions: { 'test-run': {
-    ...ended, execution: { ...ended.execution, runId: 'test-run' }
-  } } } as ApplicationLifecycle
-  assert.equal(developmentNextStep([message(failed)], sameRun)?.endedRunId, 'test-run')
-})
-
-test('继续已结束任务的启动失败时，只要原 Thread 仍有停止归档就重建继续入口', () => {
-  const failedContinue = {
-    runId: 'continue-attempt',
-    threadId: 'conversation-thread',
-    events: [],
-    state: { workflow_scope: 'conversation' },
-    summary: { status: 'failed', phase: 'conversation' }
-  } as WorkflowRunPayload
-  const archived = {
-    execution: {
-      runId: 'paused-conversation',
-      threadId: 'conversation-thread',
-      scope: 'application',
-      targetId: 'conversation',
-      status: 'stopped',
-      updatedAt: '2026-10-20T00:00:00Z'
-    },
-    workspaceUnchanged: true
-  }
-  const lifecycle = {
-    endedExecutions: { 'paused-conversation': archived }
-  } as unknown as ApplicationLifecycle
-  const userMessage: AgentChatMessage = {
-    id: 2,
-    role: 'user',
-    content: '继续已结束的任务。'
-  }
-  const step = developmentNextStep(
-    [userMessage, message(failedContinue)],
-    lifecycle
-  )
-  assert.equal(step?.endedRunId, 'paused-conversation')
-  assert.equal(step?.workspaceUnchanged, true)
-  assert.equal(
-    developmentNextStep(
-      [userMessage, message({ ...failedContinue, threadId: 'other-thread' })],
-      lifecycle
-    ),
-    undefined
-  )
-})
 
 /** 构造服务端已经确认当前页初次完成的真实结构。 */
 function completion(): WorkflowRunPayload {
@@ -398,44 +330,4 @@ test('完整目录支持状态类型搜索联合筛选，并且只给未开发�
   assert.match(html, /按开发状态筛选/)
   assert.match(html, /开始开发「我的回检」/)
   assert.doesNotMatch(html, /开始开发「介绍页」|开始开发「开发中的页面」|data-recommended/)
-})
-
-
-test('结束后工作区未变化仅提供继续，变化后仅提供重新发起入口', () => {
-  for (const unchanged of [true, false]) {
-    const html = renderToStaticMarkup(<NextDevelopmentGuide
-      step={{ key: 'ended', reason: 'ended', endedRunId: 'source', workspaceUnchanged: unchanged }}
-      tasks={tasks} disabled={false} loading={false} onStart={async () => undefined}
-      onContinue={async () => undefined} />)
-    assert.match(html, unchanged ? /继续任务/ : /重新发起任务/)
-    assert.doesNotMatch(html, unchanged ? /重新发起任务/ : />继续任务</)
-    assert.doesNotMatch(html, /查看全部页面|推荐下一项|aria-label="开发「/)
-  }
-})
-
-test('生命周期清理结束凭据后显示重新发起，未读取生命周期时仍等待校准', () => {
-  const control: WorkflowRunPayload = {
-    runId: 'end-control', threadId: 'development-thread', events: [],
-    summary: { status: 'completed', phase: 'plan_control',
-      planControl: { action: 'end', status: 'ended', targetRunId: 'ended-source' } }
-  }
-  const messages = [message(control)]
-  assert.equal(developmentNextStep(messages)?.workspaceUnchanged, undefined)
-  const step = developmentNextStep(messages, { ...lifecycle, endedExecutions: {} })
-  assert.equal(step?.workspaceUnchanged, false)
-  const html = renderToStaticMarkup(<NextDevelopmentGuide
-    step={step!} tasks={tasks} disabled={false} loading={false}
-    onStart={async () => undefined} onContinue={async () => undefined} />)
-  assert.match(html, /重新发起任务/)
-  assert.doesNotMatch(html, /正在检查工作区状态|>继续任务</)
-})
-
-
-test('结束资格同 revision 更新，迟到或旧 revision 的检查不能回退当前结果', () => {
-  const current = { ...lifecycle, endedExecutionsCheckedAt: '2026-10-15T01:00:00Z' }
-  const incoming = { ...current, endedExecutions: {}, endedExecutionsCheckedAt: '2026-10-15T01:00:03Z' }
-  const latest = mergeEndedTaskAvailability(current, current, incoming)
-  assert.equal(latest.endedExecutionsCheckedAt, incoming.endedExecutionsCheckedAt)
-  assert.equal(mergeEndedTaskAvailability(latest, latest, current), latest)
-  assert.equal(mergeEndedTaskAvailability(latest, latest, { ...incoming, revision: current.revision - 1 }), latest)
 })

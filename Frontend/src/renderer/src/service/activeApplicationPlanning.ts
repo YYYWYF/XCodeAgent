@@ -1,5 +1,4 @@
 import { normalizeWorkspaceRoot, sameApplicationWorkspace } from './applicationWorkspace'
-import { mergeEndedTaskAvailability } from './endedTaskAvailability'
 import type {
   ApplicationConfig,
   ApplicationLifecycle,
@@ -244,7 +243,7 @@ export function latestApplicationLifecycle(
     current,
     incoming
   )
-  return mergeEndedTaskAvailability(mergeWorkbenchProgress(merged, current, incoming), current, incoming)
+  return mergeWorkbenchProgress(merged, current, incoming)
 }
 
 // 直接根据权威 lifecycle 状态计算首页展示状态。

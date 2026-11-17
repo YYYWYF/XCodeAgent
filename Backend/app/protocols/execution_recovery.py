@@ -92,11 +92,10 @@ def execution_recovery_capabilities() -> dict[str, Any]:
             "forwardedProps": {
                 "workspaceRoot": "workspace used to locate the Recovery Store",
                 "executionRecovery": {
-                    "action": "execute | continue | retry_current_failure | restart_initial_planning",
+                    "action": "execute | continue | retry_current_failure",
                     "incidentId": "backend-issued current recovery incident",
                     "actionId": "backend-issued recovery action",
-                    "sourceRunId": "current source hint; restart_initial_planning requires the current ended initial creation",
-                    "feedback": "optional {request, conversationTarget?}, for restart_initial_planning or continue of a stopped formal revision; regenerated artifacts require confirmation",
+                    "sourceRunId": "current failed or interrupted source hint",
                 },
             },
             "clientSelectedFields": ["incidentId", "actionId", "sourceRunId"],
@@ -137,25 +136,11 @@ def build_execution_recovery_ag_ui_stream(
             graph = await recovery_graph_for_execution(source)
             from app.services.checkpoint_execution import resolve_checkpoint_source
             source = await resolve_checkpoint_source(source, graph)
-            feedback = (payload.get("forwardedProps") or {}).get("executionRecovery", {}).get("feedback")
-            if feedback is not None and source.run_id != source_run_id:
-                raise ValueError("停止的规划已被其他执行替换，请同步后重新提交补充意见。")
-            if feedback is not None:
-                from app.services.initial_planning_feedback import InitialPlanningFeedback
-
-                feedback = InitialPlanningFeedback.model_validate(feedback)
             allow_stopped = action == "continue" and source.status is DurableExecutionStatus.CANCELLED
-            from app.services.ended_planning import ended_planning_available
-            stopped_planning = (source.execution_kind == "application_planning"
-                and source.status is DurableExecutionStatus.CANCELLED and source.ended_at is not None
-                and ended_planning_available(workspace, load_application_lifecycle(workspace),
-                    run_id=source.run_id, thread_id=source.thread_id))
-            restart_initial = action == "restart_initial_planning"
-            if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not allow_stopped and not stopped_planning and not restart_initial:
+            if source.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED} and not allow_stopped:
                 raise RecoveryExecutionError("RECOVERY_SOURCE_NOT_ACTIONABLE", "原执行未失败或中断，请同步当前状态。")
             from app.services.business_node_retry import prepare_business_node_retry
-            context = await prepare_business_node_retry(source, graph, allow_stopped=allow_stopped,
-                restart_initial_planning=restart_initial, initial_feedback=feedback)
+            context = await prepare_business_node_retry(source, graph, allow_stopped=allow_stopped)
             async for frame in _native_recovery_stream(context, accept):
                 yield frame
             return
@@ -397,12 +382,12 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
             "executionRecovery 必须包含 workspaceRoot 和对象值。",
         )
     unexpected = sorted(
-        set(recovery) - {"action", "sourceRunId", "incidentId", "actionId", "feedback"}
+        set(recovery) - {"action", "sourceRunId", "incidentId", "actionId"}
     )
     if unexpected:
         raise RecoveryExecutionError(
             "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "executionRecovery 只允许 action、incidentId、actionId、sourceRunId 和 feedback。",
+            "executionRecovery 只允许 action、incidentId、actionId 和 sourceRunId。",
         )
     forbidden = sorted(_FORBIDDEN_RECOVERY_FIELDS.intersection(recovery))
     if forbidden:
@@ -411,16 +396,10 @@ def _parse_request(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
             "executionRecovery 不允许客户端提交：" + ", ".join(forbidden),
         )
     action = str(recovery.get("action") or "")
-    if "feedback" in recovery:
-        from app.services.initial_planning_feedback import InitialPlanningFeedback
-
-        if action not in {"restart_initial_planning", "continue"}:
-            raise ValueError("补充意见只能用于已停止规划的继续或首次重新生成。")
-        InitialPlanningFeedback.model_validate(recovery["feedback"])
-    if action not in {"execute", "continue", "retry_current_failure", "restart_initial_planning"}:
+    if action not in {"execute", "continue", "retry_current_failure"}:
         raise RecoveryExecutionError(
             "INVALID_EXECUTION_RECOVERY_REQUEST",
-            "executionRecovery.action 只支持 execute、continue、retry_current_failure 或 restart_initial_planning。",
+            "executionRecovery.action 只支持 execute、continue 或 retry_current_failure。",
         )
     source_run_id = str(recovery.get("sourceRunId") or "").strip()
     incident_id = str(recovery.get("incidentId") or "").strip()
@@ -454,10 +433,6 @@ async def _resolve_action_source_run(
     lifecycle = load_application_lifecycle(workspace)
     active_workbench_run_ids = set(lifecycle.active_executions) if lifecycle else set()
     records = await list_recovery_projection_candidates(workspace, limit=128)
-    if lifecycle and lifecycle.ended_planning_execution:
-        archived_source = await get_execution(workspace, lifecycle.ended_planning_execution.run_id)
-        if archived_source is not None:
-            records = [archived_source, *records]
     for record in records:
         if (
             record.execution_kind == "workbench"
@@ -482,11 +457,6 @@ async def _resolve_action_source_run(
                 _planning_retry_owner(record, lifecycle, checkpoint, checkpoint.node if checkpoint else "")
             except RecoveryExecutionError:
                 continue
-        from app.services.ended_planning import ended_planning_available
-        if (record.execution_kind == "application_planning" and record.status is DurableExecutionStatus.CANCELLED
-                and record.ended_at is not None and ended_planning_available(workspace, lifecycle,
-                    run_id=record.run_id, thread_id=record.thread_id)):
-            record = record.model_copy(update={"status": DurableExecutionStatus.INTERRUPTED})
         if record.status not in {DurableExecutionStatus.FAILED, DurableExecutionStatus.INTERRUPTED}:
             continue
         from app.services.business_node_retry import retry_action_plan

@@ -58,16 +58,9 @@ export function workflowEndedPlanControl(workflow?: WorkflowRunPayload): boolean
 }
 
 /** 结束事实只属于同一次执行，旧开发 Run 的结束不能遮住同 Thread 新测试的失败重试。 */
-export function workflowExecutionEnded(
-  workflow: WorkflowRunPayload | undefined,
-  lifecycle: ApplicationLifecycle | undefined
-): boolean {
-  if (workflowEndedPlanControl(workflow)) return true
-  if (!workflow || workflow.summary.status !== 'failed') return false
-  const ended = lifecycle?.endedExecutions?.[workflow.runId]?.execution
-  return ended?.runId === workflow.runId && ended.threadId === workflow.threadId
+export function workflowExecutionEnded(workflow: WorkflowRunPayload | undefined): boolean {
+  return workflowEndedPlanControl(workflow)
 }
-
 
 /** 判断 Workflow 是否承载 Build DAG 确认，统一兼容当前 AG-UI 投影位置。 */
 function isDagConfirmationWorkflow(workflow: WorkflowRunPayload): boolean {

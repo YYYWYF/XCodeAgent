@@ -67,12 +67,7 @@ export type SendWorkflowMessageOptions = {
   executionRecovery?:
     | { action: 'execute'; incidentId: string; actionId: string }
     | { action: 'retry_current_failure'; sourceRunId: string }
-    | { action: 'continue'; sourceRunId: string; feedback?: {
-        request: string; conversationTarget?: import('../typings').PlanningConversationTarget
-      } }
-    | { action: 'restart_initial_planning'; sourceRunId: string; feedback?: {
-        request: string; conversationTarget?: import('../typings').PlanningConversationTarget
-      } }
+    | { action: 'continue'; sourceRunId: string }
   onContent?: (content: string) => void
   onApplicationLifecycle?: (lifecycle: ApplicationLifecycle) => void
   onWorkflow?: (workflow: WorkflowRunPayload) => void

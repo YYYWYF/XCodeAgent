@@ -360,7 +360,6 @@ type UseWorkflowConversationResult = {
   loading: boolean
   planEnded: boolean
   endingPlan: boolean
-  handleContinueEndedPlan: (runId: string) => Promise<void>
   phaseExecution?: SessionExecutionEntry
   sessionExecutionLocked: boolean
   sessionRunStates: Record<string, SessionRunStatus>
@@ -748,7 +747,6 @@ export function useWorkflowConversation({
   const connectionStateRef = useRef(connectionState)
   const planControlRequestRef = useRef<PlanControlRequestGuard>()
   const endingPlanRef = useRef(false)
-  const continuingEndedRunRef = useRef<string>()
   const [endingPlan, setEndingPlan] = useState(false)
   const runFinalizationRef = useRef<Record<string, { promise: Promise<void>; resolve: () => void }>>({})
   const activePlanControlContextRef = useRef<ActivePlanControlContext>()
@@ -832,7 +830,7 @@ export function useWorkflowConversation({
   // 结束控制的成功回执属于当前会话消息，即使本地生命周期快照晚到也必须立即恢复输入。
   const planEnded = Boolean(
     endedPlanSessionKeys[activeRuntimeKey || draftKey] ||
-    workflowExecutionEnded(activeWorkflow, applicationLifecycle)
+    workflowExecutionEnded(activeWorkflow)
   )
   // 正常完成回执只清理本会话兜底请求错误；业务失败、连接错误和其它会话不受影响。
   useEffect(() => {
@@ -2656,44 +2654,6 @@ export function useWorkflowConversation({
     return handleSubmitClarification(activeWorkflow, { page_acceptance: 'accepted' })
   }
 
-  /** 继续已结束的原任务；按后端执行范围选择恢复入口，并由后端原子校验 checkpoint 身份。 */
-  const handleContinueEndedPlan = async (runId: string): Promise<void> => {
-    if (loading || workspaceBusy || !activeSession || continuingEndedRunRef.current) return
-    const sessionIdentity = activeSession
-    continuingEndedRunRef.current = runId
-    setRecoveryErrorForSession(sessionIdentity.key)
-    try {
-      if (!(await refreshExecutionRecoveryLifecycle())) {
-        setRecoveryErrorForSession(sessionIdentity.key, '无法读取最新的任务状态，请稍后重试。')
-        return
-      }
-      if (activeInputRef.current.key !== sessionIdentity.key) return
-      const archived = applicationLifecycleRef.current?.endedExecutions?.[runId]
-      if (!archived) {
-        setRecoveryErrorForSession(sessionIdentity.key, '原任务的继续凭据已不存在，请刷新状态后重新发起任务。')
-        return
-      }
-      if (!archived.workspaceUnchanged) {
-        setRecoveryErrorForSession(sessionIdentity.key, '工作区已变化，不能安全恢复原 checkpoint；请重新发起任务。')
-        return
-      }
-      const conversationCheckpoint =
-        archived.execution.scope === 'application' &&
-        archived.execution.targetId === 'conversation'
-      // 原始公开消息可能在断线前未落盘；业务状态和真实入口都从服务端身份及 checkpoint 读取。
-      await sendWorkflowMessage('继续已结束的任务。', {
-        executionThreadId: archived.execution.threadId,
-        resumeExecutionRunId: runId,
-        selectedPageId: archived.execution.scope === 'page' ? archived.execution.targetId : '',
-        conversation: conversationCheckpoint,
-        sessionIdentity,
-        titleFrom: '继续任务'
-      })
-    } finally {
-      if (continuingEndedRunRef.current === runId) continuingEndedRunRef.current = undefined
-    }
-  }
-
   /** 在原审查会话和执行范围内重新调用失败的扫描或修复模型子步骤。 */
   const handleRetryCodeReview = async (): Promise<void> => {
     if (!activeWorkflow || !workflowCodeReviewRetry(activeWorkflow) || loading || workspaceBusy) {
@@ -2866,7 +2826,6 @@ export function useWorkflowConversation({
     loading,
     planEnded,
     endingPlan,
-    handleContinueEndedPlan,
     phaseExecution,
     sessionExecutionLocked,
     sessionRunStates,

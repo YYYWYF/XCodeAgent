@@ -3,8 +3,6 @@ import './formalRevisionHandoffRecovery.test'
 import './formalRevisionStartRetry.test'
 import './phaseSessionSelection.test'
 import './planningStageReentry.test'
-import './initialPlanningRestart.test'
-import './initialPlanningFeedback.test'
 import './applicationWorkspaceIsolation.test'
 import {
   ApplicationPlanningRuntime,
@@ -515,22 +513,6 @@ for (const confirmed of [true, false]) {
     type: 'run_settled', applicationId: 'app-A', threadId: 'thread-A'
   })
   assert.equal(applicationPlanningRecoveryIncident(settled)?.kind, 'recoverable')
-}
-
-// 正常停止展示中性继续入口，真实失败诊断不能被「继续生成」文案隐藏。
-{
-  const current = planningState()
-  const recovery = recoveryProjection('thread-A', { classification: 'ready_to_continue' })
-  recovery.recoveryActionPlan!.primaryAction!.label = '继续生成'
-  current.recovery = recovery
-  const stopped = applicationPlanningRecoveryIncident(current)
-  assert.equal(stopped?.title, '已停止生成')
-  assert.equal(stopped?.kind === 'recoverable' && stopped.presentation, 'stopped_generation')
-  assert.equal(stopped?.failureMessage, undefined)
-  recovery.failureDiagnostic = { sourceRunId: 'run-A', origin: 'model', code: 'MODEL_FAILED', message: '模型调用失败' }
-  const failed = applicationPlanningRecoveryIncident(current)
-  assert.notEqual(failed?.kind === 'recoverable' && failed.presentation, 'stopped_generation')
-  assert.equal(failed?.failureDiagnostic?.message, '模型调用失败')
 }
 
 // 正式修订交接后停服，即使只读对账也断线，启动调用不能触发删除设计会话的回滚。

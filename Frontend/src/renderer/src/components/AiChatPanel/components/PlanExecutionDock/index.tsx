@@ -154,7 +154,7 @@ export default function PlanExecutionDock({
               </>
             )}
             <Popconfirm cancelText="取消" okButtonProps={{ danger: true }} okText="结束任务"
-              onConfirm={onEnd} title="结束后将停止所有相关执行；工作区未变化时可继续任务。">
+              onConfirm={onEnd} title="结束后将停止所有相关执行并释放资源，本轮任务不可继续。">
               <Button danger type="text">结束任务</Button>
             </Popconfirm>
           </div>

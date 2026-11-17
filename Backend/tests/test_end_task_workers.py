@@ -75,54 +75,64 @@ class EndTaskWorkerTests(unittest.IsolatedAsyncioTestCase):
             release.set()
             await asyncio.to_thread(thread.join, 2)
 
-    async def test_end_resume_restores_confirmation_from_backend_checkpoint(self):
-        """真实 Graph 继续只重现确认门，不消费旧提交或信任前端伪造的通过状态。"""
+    async def test_end_releases_resources_without_a_record_or_resume_entry(self):
+        """结束释放资源且不产生归档；旧 Run 即使保留 checkpoint 也不能继续。"""
         from langgraph.checkpoint.memory import InMemorySaver
-        from app.graph.workflow import build_graph
-        from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
+        from langgraph.graph import StateGraph, START, END
+        from app.graph.state import ProjectState
         from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
+        from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 
-        with tempfile.TemporaryDirectory() as directory, patch(
-            "app.graph.nodes.code_review.development_review_files", return_value=[],
-        ):
-            # 真实续接会打开工作区 checkpoint；用例结束时关闭连接，避免测试进程挂起。
+        with tempfile.TemporaryDirectory() as directory:
             self.addAsyncCleanup(close_workflow_checkpointer_for_workspace, workspace=directory)
             _write_ready_workbench_lifecycle(directory)
-            start_workbench_execution(directory, scope="application", target_id="application", page_id=None,
-                                      thread_id="thread", owner_session_id="session", run_id="old", phase="review_phase_confirmation")
-            graph = build_graph(checkpointer=InMemorySaver())
-            await graph.ainvoke({"workspace": directory, "active_run_id": "old", "active_thread_id": "thread",
-                                 "quality_gate_passed": True, "resume_from": "review_phase_confirmation",
-                                 "build_execution_scope": {"type": "application", "targetId": "application"},
-                                 "lifecycle_interaction_submission": {"runId": "stale", "id": "consumed", "basedOnRevision": 1}},
-                                {"configurable": {"thread_id": "thread"}})
-            end_workbench_execution(directory, run_id="old", preserve_resume=True)
-            rejected = "".join([frame async for frame in build_workflow_ag_ui_stream(graph=graph, payload={
-                "threadId": "thread", "runId": "new", "messages": [{"role": "user", "content": "继续任务"}],
-                "forwardedProps": {"workspaceRoot": directory, "sessionId": "session", "resumeExecutionRunId": "old",
-                                   "resumeState": {"summary": {"phase": "review_phase_confirmation"},
-                                                   "state": {"qualityGatePassed": False, "reviewPhaseConfirmation": {"action": "confirm", "reviewMode": "full"}}}},
-            })])
-            # 当前协议直接拒绝客户端状态快照；拒绝不能消费原任务的继续凭据。
-            self.assertIn("不能提交会话状态快照", rejected)
-            self.assertIn("old", load_application_lifecycle(directory).ended_executions)
+            start_workbench_execution(directory, scope="page", target_id="page1", page_id="page1",
+                thread_id="thread", owner_session_id="session", run_id="old", phase="prepare_build_tasks")
+            def original_node(state):
+                """提供可持久化的原任务现场，验证结束后不会被恢复调用执行。"""
+                raise AssertionError("结束后的节点不应执行")
+
+            builder = StateGraph(ProjectState)
+            builder.add_node("prepare_build_tasks", original_node)
+            builder.add_edge(START, "prepare_build_tasks")
+            builder.add_edge("prepare_build_tasks", END)
+            graph = builder.compile(checkpointer=InMemorySaver())
+            await graph.aupdate_state({"configurable": {"thread_id": "thread"}}, {
+                "workspace": directory, "active_run_id": "old", "active_thread_id": "thread",
+                "owner_session_id": "session", "phase": "prepare_build_tasks",
+            }, as_node="prepare_build_tasks")
+            ended = end_workbench_execution(directory, run_id="old")
+            self.assertFalse(ended.active_executions)
+            self.assertFalse(ended.resource_locks.pages)
+            payload = application_lifecycle_payload(ended)
+            self.assertNotIn("endedExecutions", payload)
+            self.assertNotIn("endedPlanningExecution", payload)
+            self.assertNotIn("endedExecutionsCheckedAt", payload)
             frames = "".join([frame async for frame in build_workflow_ag_ui_stream(graph=graph, payload={
-                "threadId": "thread", "runId": "accepted", "messages": [{"role": "user", "content": "继续任务"}],
+                "threadId": "thread", "runId": "new", "messages": [{"role": "user", "content": "继续任务"}],
                 "forwardedProps": {"workspaceRoot": directory, "sessionId": "session", "resumeExecutionRunId": "old"},
             })])
-            self.assertNotIn('"type":"RUN_ERROR"', frames)
-            current = load_application_lifecycle(directory)
-            self.assertFalse(current.ended_executions)
-            self.assertEqual(current.active_executions["accepted"].status, "awaiting_user")
-            self.assertEqual(current.active_executions["accepted"].pending_interaction.type, "review_phase_confirmation")
-            # 即使断线前没有保存任何公开消息，只凭后端归档身份仍可继续。
-            end_workbench_execution(directory, run_id="accepted", preserve_resume=True)
-            frames = "".join([frame async for frame in build_workflow_ag_ui_stream(graph=graph, payload={
-                "threadId": "thread", "runId": "new2", "messages": [{"role": "user", "content": "继续任务"}],
-                "forwardedProps": {"workspaceRoot": directory, "sessionId": "session", "resumeExecutionRunId": "accepted"},
-            })])
-            self.assertNotIn('"type":"RUN_ERROR"', frames)
-            self.assertEqual(load_application_lifecycle(directory).active_executions["new2"].status, "awaiting_user")
+            self.assertIn('"type":"RUN_ERROR"', frames)
+            self.assertFalse(load_application_lifecycle(directory).active_executions)
+
+    async def test_removed_planning_restart_and_feedback_requests_are_rejected(self):
+        """旧的结束后重生成和补充生成请求必须失败，不能保留隐藏续接入口。"""
+        from app.protocols.execution_recovery import build_execution_recovery_ag_ui_stream
+
+        with tempfile.TemporaryDirectory() as directory:
+            _write_ready_workbench_lifecycle(directory)
+            for recovery in (
+                {"action": "restart_initial_planning", "sourceRunId": "ended-run"},
+                {"action": "continue", "sourceRunId": "ended-run", "feedback": {"request": "补充生成"}},
+            ):
+                with self.subTest(recovery=recovery):
+                    frames = "".join([frame async for frame in build_execution_recovery_ag_ui_stream(payload={
+                        "threadId": "thread", "runId": "rejected", "forwardedProps": {
+                            "workspaceRoot": directory, "executionRecovery": recovery,
+                        },
+                    })])
+                    self.assertIn('"type":"RUN_ERROR"', frames)
+                    self.assertFalse(load_application_lifecycle(directory).active_executions)
 
     async def test_async_tool_cancellation_waits_for_real_sync_body(self):
         """异步工具内部的同步线程不会因外层取消提前释放登记。"""
@@ -184,75 +194,3 @@ class EndTaskWorkerTests(unittest.IsolatedAsyncioTestCase):
         await worker
         self.assertTrue(release.is_set())
         self.assertIsNotNone(process_holder[0].poll())
-
-
-class EndedTaskResumeTests(unittest.TestCase):
-    """验证继续资格随真实代码变化失效，且资源锁原子重新获取。"""
-
-    def _end(self, directory):
-        """创建一个有源码、配置及正式产物的已结束任务。"""
-        _write_ready_workbench_lifecycle(directory)
-        root = Path(directory)
-        (root / "app.ts").write_text("original")
-        (root / ".devagentstudio/application.json").write_text("{}")
-        start_workbench_execution(directory, scope="page", target_id="page1", page_id="page1",
-                                  thread_id="thread", owner_session_id="session", run_id="old", phase="build")
-        return end_workbench_execution(directory, run_id="old", preserve_resume=True)
-
-    def _resume(self, directory, **overrides):
-        """从原身份继续，允许测试替换目标或 owner 进行越权验证。"""
-        arguments = dict(scope="page", target_id="page1", page_id="page1", thread_id="thread",
-                         owner_session_id="session", run_id="new", phase="build", replaces_run_id="old")
-        return start_workbench_execution(directory, **{**arguments, **overrides})
-
-    def test_unchanged_releases_then_reacquires_resources(self):
-        """只保留继续资格，结束时释放锁，继续成功时消费归档并重建锁。"""
-        with tempfile.TemporaryDirectory() as directory:
-            ended = self._end(directory)
-            self.assertFalse(ended.active_executions)
-            self.assertFalse(ended.resource_locks.pages)
-            self.assertTrue(application_lifecycle_payload(ended)["endedExecutions"]["old"]["workspaceUnchanged"])
-            runtime = Path(directory) / ".devagentstudio/checkpoints"
-            runtime.mkdir()
-            (runtime / "run.sqlite").write_bytes(b"changed runtime")
-            resumed = self._resume(directory)
-            self.assertNotIn("old", resumed.ended_executions)
-            self.assertEqual(resumed.resource_locks.pages["page1"].run_id, "new")
-
-    def test_changed_code_or_configuration_rejects_resume_and_removes_archive(self):
-        """源码或配置变化后删除继续凭据，不能以旧状态继续。"""
-        for name in ("app.ts", ".devagentstudio/application.json", "new.ts"):
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                ended = self._end(directory)
-                (Path(directory) / name).write_text("changed")
-                self.assertFalse(application_lifecycle_payload(ended)["endedExecutions"]["old"]["workspaceUnchanged"])
-                with self.assertRaisesRegex(ApplicationLifecycleConflictError, "工作区已变化"):
-                    self._resume(directory)
-                self.assertNotIn("old", load_application_lifecycle(directory).ended_executions)
-
-    def test_change_after_eligible_projection_rejects_resume_at_admission(self):
-        """GET 曾允许继续也不能授权后续变更：入场复验并删除失效凭据。"""
-        with tempfile.TemporaryDirectory() as directory:
-            ended = self._end(directory)
-            eligible = application_lifecycle_payload(ended)
-            self.assertTrue(eligible["endedExecutions"]["old"]["workspaceUnchanged"])
-            # 模拟按钮已显示、资格 GET 已返回后，另一会话才改动源码。
-            (Path(directory) / "app.ts").write_text("changed after eligibility GET")
-            with self.assertRaisesRegex(ApplicationLifecycleConflictError, "工作区已变化"):
-                self._resume(directory)
-            current = load_application_lifecycle(directory)
-            self.assertFalse(current.active_executions)
-            self.assertFalse(current.resource_locks.pages)
-            self.assertNotIn("old", current.ended_executions)
-
-    def test_other_session_and_resource_owner_reject_resume(self):
-        """代码未变也不能串会话或抢占另一任务的资源。"""
-        with tempfile.TemporaryDirectory() as directory:
-            self._end(directory)
-            with self.assertRaises(ApplicationLifecycleConflictError):
-                self._resume(directory, owner_session_id="another")
-            start_workbench_execution(directory, scope="page", target_id="page1", page_id="page1",
-                                      thread_id="other", owner_session_id="other", run_id="other", phase="build")
-            with self.assertRaises(ApplicationLifecycleConflictError):
-                self._resume(directory)
-            self.assertIn("old", load_application_lifecycle(directory).ended_executions)

@@ -170,17 +170,6 @@ def application_lifecycle_capabilities() -> dict[str, Any]:
             "identity": ["runId", "threadId", "ownerSessionId"],
             "mode": "development_target_selection", "source": "current-checkpoint",
         },
-        "endedTasks": {
-            "field": "endedExecutions", "checkedAtField": "endedExecutionsCheckedAt",
-            "availability": "workspaceUnchanged", "resumeEndpoint": "/workflow/run",
-            "resumeField": "forwardedProps.resumeExecutionRunId",
-            "checks": ["workspace_fingerprint", "owner_session", "thread", "target", "resource_claims", "checkpoint_run"],
-        },
-        "endedPlanning": {
-            "field": "endedPlanningExecution", "checkedAtField": "endedExecutionsCheckedAt",
-            "availability": "workspaceUnchanged", "resumeEndpoint": "/execution-recovery/execute",
-            "resumeAction": "backend-issued-action", "preservesConfirmationGates": True,
-        },
         "workflowIndependent": True,
         "developmentArtifacts": {
             "targets": ["page", "endpoint"],

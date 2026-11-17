@@ -10,7 +10,6 @@ from unittest.mock import patch
 
 from app.protocols.workflow.projection import _workflow_confirmation_artifact
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
-from app.services.ended_workspace import workspace_fingerprint
 from app.workspace.plan_documents import (
     commit_technical_plan_document, current_technical_plan_json_path,
     technical_plan_json_path, technical_plan_draft_json_path,
@@ -128,22 +127,6 @@ class TechnicalPlanJsonStorageTests(unittest.TestCase):
             self.assertEqual(markdown.read_bytes(), b"\xff")
         finally:
             harness.close()
-
-    def test_extra_markdown_does_not_invalidate_stopped_planning(self) -> None:
-        """停止后新增或修改多余 Markdown 不阻断继续，真实 JSON 变化仍使指纹失效。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            state = _confirmed_state(root)
-            before = workspace_fingerprint(root)
-            markdown = root / ".devagentstudio/plans/technical-plan.md"
-            markdown.write_bytes(b"\xff")
-            draft = root / ".devagentstudio/drafts/revisions/change/technical-plan/artifact.md"
-            draft.parent.mkdir(parents=True)
-            draft.write_bytes(b"\xff")
-            self.assertEqual(workspace_fingerprint(root), before)
-            Path(state["technical_plan_json_path"]).write_text('{"changed":true}')
-            self.assertNotEqual(workspace_fingerprint(root), before)
 
     def test_commit_and_confirmation_ignore_extra_markdown(self) -> None:
         """确认只读取 JSON；即使多余 Markdown 无法解码，也不读取、拒绝或改写它。"""

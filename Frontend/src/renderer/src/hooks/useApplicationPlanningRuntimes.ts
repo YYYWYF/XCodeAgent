@@ -38,7 +38,7 @@ export type ApplicationPlanningRuntimesController = {
     conversationTarget?: import('../typings').PlanningConversationTarget) => Promise<void>
   saveRequirementSpec: (applicationId: string, ...args: Parameters<ApplicationPlanningRuntime['saveRequirementSpec']>) => ReturnType<ApplicationPlanningRuntime['saveRequirementSpec']>
   startDesignRevision: (applicationId: string, input: Parameters<ApplicationPlanningRuntime['startDesignRevision']>[0], target?: PlanningStageTarget) => Promise<void>
-  retryCurrentFailure: (applicationId: string, restartInitialPlanning?: boolean) => Promise<void>
+  retryCurrentFailure: (applicationId: string) => Promise<void>
   startIterationPlanning: (
     applicationId: string,
     request: string,
@@ -194,8 +194,8 @@ export function useApplicationPlanningRuntimes(
       await requireRuntime(applicationId).startDesignRevision(input)
     },
     /** 使用调用时的当前状态重试。 */
-    retryCurrentFailure: (applicationId, restartInitialPlanning) =>
-      requireRuntime(applicationId).retryCurrentFailure(restartInitialPlanning),
+    retryCurrentFailure: (applicationId) =>
+      requireRuntime(applicationId).retryCurrentFailure(),
     /** 新迭代发起后用户输入需求，启动 planning workflow。 */
     startIterationPlanning: (applicationId, request, workflowDebug, debugStage) =>
       requireRuntime(applicationId).startIterationPlanning(request, workflowDebug, debugStage),

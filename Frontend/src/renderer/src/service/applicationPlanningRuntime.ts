@@ -49,7 +49,6 @@ import { productConversationSubmissionError } from './applicationPlanningProduct
 import { readTechnicalPlanningReply, prepareTechnicalPlanningRevision, type TechnicalPlanningReply } from './technicalPlanningConversation'
 import { workflowEndedPlanControl } from '../components/AiChatPanel/planExecutionMode'
 import { isWorkflowDebugNodeForStage } from './workflowDebugNodes'
-import { stoppedPlanningAcceptsFeedback } from '../components/AiChatPanel/planningStageAccess'
 
 export type ApplicationPlanningRuntimeDependencies = {
   readTechnicalPlanningReply?: typeof readTechnicalPlanningReply
@@ -262,7 +261,7 @@ export class ApplicationPlanningRuntime {
   }
 
   /** 先对账，再提交 Backend 签发的恢复动作；缺少 action identity 时保持 fail closed。 */
-  async retryCurrentFailure(restartInitialPlanning = false): Promise<void> {
+  async retryCurrentFailure(): Promise<void> {
     this.dispatch({
       type: 'recovery_action_started',
       applicationId: this.applicationId,
@@ -277,14 +276,6 @@ export class ApplicationPlanningRuntime {
       }
       if (outcome.status !== 'recovered') return
       const current = this.requireCurrentState()
-      if (restartInitialPlanning) {
-        // 工作区变化后只接受明确的新生成动作；原继续入口仍须保持指纹一致。
-        const stopped = current.lifecycle.endedPlanningExecution
-        if (!stopped?.canRestart || stopped.threadId !== this.threadId)
-          throw new Error('当前没有可重新生成的首次创建任务，请同步当前流程。')
-        await this.executeRecoveryRetry({ threadId: this.threadId, sourceRunId: stopped.runId }, true)
-        return
-      }
       const recovery = current.recovery
       // 重试对账发现同一规划已完成时，只消费服务端已签发的原续接，不重新执行模板节点。
       if (current.workflow?.summary.status === 'completed' && revisionContinuationHandoffFromWorkflow(current.workflow)) {
@@ -370,18 +361,6 @@ export class ApplicationPlanningRuntime {
     designThreadHandoff?: () => Promise<void>,
     conversationTarget?: ApplicationPlanningInteraction['conversationTarget']
   ): Promise<void> {
-    const stopped = this.requireCurrentState().lifecycle.endedPlanningExecution
-    if (designChangeRequest?.trim() && stoppedPlanningAcceptsFeedback(stopped) &&
-        stopped?.threadId === this.threadId &&
-        (!technicalPlanningConversation || !conversationTarget || conversationTarget === 'technical_planning')) {
-      if (workflow.threadId !== this.threadId) throw new Error('当前规划会话已经失效。')
-      if (this.runActive || this.session.hasActiveRun()) throw new Error('当前规划正在执行，请等待完成后提交。')
-      // 已结束的旧审阅门没有提交权限；正式修订沿原继续动作恢复其修订上下文再生成。
-      await this.executeRecoveryRetry({ threadId: this.threadId, sourceRunId: stopped.runId }, stopped.canRestart, {
-        request: designChangeRequest.trim(), ...(conversationTarget ? { conversationTarget } : {})
-      })
-      return
-    }
     if (technicalPlanningConversation && designChangeRequest?.trim()) {
       await this.submitTechnicalPlanningMessage(designChangeRequest.trim(), designThreadHandoff, false, conversationTarget)
       return
@@ -734,9 +713,7 @@ export class ApplicationPlanningRuntime {
 
   /** 对无法直接恢复的当前失败提交 source hint，由 Backend 重新判断安全入口。 */
   private async executeRecoveryRetry(
-    plan: Pick<ApplicationPlanningRecoveryActionPlan, 'threadId' | 'sourceRunId'>,
-    restartInitialPlanning = false,
-    feedback?: { request: string; conversationTarget?: ApplicationPlanningInteraction['conversationTarget'] }
+    plan: Pick<ApplicationPlanningRecoveryActionPlan, 'threadId' | 'sourceRunId'>
   ): Promise<void> {
     let recoveryToken: number | undefined
     try {
@@ -748,14 +725,13 @@ export class ApplicationPlanningRuntime {
             : new AgUiChatSession(plan.threadId, getExecutionRecoveryActionUrl())
           const merged = await this.sendMessageWithinTransport(
             token,
-            feedback?.request || (restartInitialPlanning ? '按当前文件重新生成' : '重试'),
+            '重试',
             {
               editorMode: 'frontend',
               workspaceRoot: current.application.workspaceRoot,
               executionRecovery: {
-                action: restartInitialPlanning ? 'restart_initial_planning' : feedback ? 'continue' : 'retry_current_failure',
-                sourceRunId: plan.sourceRunId,
-                ...(feedback ? { feedback } : {})
+                action: 'retry_current_failure',
+                sourceRunId: plan.sourceRunId
               }
             },
             session
@@ -774,8 +750,6 @@ export class ApplicationPlanningRuntime {
       } finally {
         this.reportRecoveryActionFailure(reason, '重新检查当前失败时出错')
       }
-      // 新意见提交失败需恢复 Composer 草稿；既有按钮重试继续原位展示错误。
-      if (feedback) throw reason
     }
   }
 

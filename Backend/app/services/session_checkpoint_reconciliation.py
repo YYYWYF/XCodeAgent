@@ -39,7 +39,7 @@ async def reconcile_session_checkpoint(workspace: str, *, session_id: str, threa
                 or values.get("workflow_scope") == "application_planning"):
             return False
         run_id = str(values.get("active_run_id") or "")
-        if not run_id or run_id in before.ended_executions:
+        if not run_id:
             return False
         latest = await get_latest_execution_for_thread(workspace, thread_id=thread_id)
         if latest and latest.run_id != run_id:

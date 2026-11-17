@@ -97,8 +97,7 @@ import SessionExecutionLockDock from './components/SessionExecutionLockDock'
 import PlanningHistoryNotice from './components/PlanningHistoryNotice'
 import PlanningTaskNotice from './components/PlanningTaskNotice'
 import { planningTaskBlock } from './planningTaskAdmission'
-import { planningStageAccess, planningStageEntryTransferred, planningSessionOwnsThread, stoppedPlanningForSession, stoppedPlanningAcceptsFeedback } from './planningStageAccess'
-import StoppedPlanningNotice from './components/StoppedPlanningNotice'
+import { planningStageAccess, planningStageEntryTransferred, planningSessionOwnsThread } from './planningStageAccess'
 import { shouldPreserveTechnicalPlanningReply } from '../../service/technicalPlanningConversation'
 import DocPanel from './components/DocPanel'
 import SourcePanel from './components/SourcePanel'
@@ -433,7 +432,7 @@ type Props = {
   /** 当前应用是否正在生成模板（驱动前端加载态卡片）。 */
   generatingTemplate?: boolean
   /** 从工作台错误卡片重试规划 Graph。 */
-  onRetryPlanning?: (restartInitialPlanning?: boolean) => void | Promise<void>
+  onRetryPlanning?: () => void | Promise<void>
   /** 底部连接恢复后读取当前规划中断事实，不启动生成或恢复动作。 */
   onReconcilePlanning?: () => void
   /** 仅重试应用模板初始化，独立于规划 Graph 的恢复。 */
@@ -1746,10 +1745,6 @@ export default function AiChatPanel({
     enteringStage: Boolean(planningEntry && planningEntry.workspace === application.workspaceRoot)
   })
   const planningHistoryOnly = planningAccess.historyOnly
-  const stoppedPlanning = stoppedPlanningForSession({
-    phase: activeWorkbenchPhase, lifecycle: applicationLifecycle, session: activeSession
-  })
-  const stoppedPlanningFeedbackAvailable = stoppedPlanningAcceptsFeedback(stoppedPlanning)
   const developmentPlanningBlock = activeWorkbenchPhase === 'development'
     ? planningTaskBlock(applicationLifecycle) : undefined
 
@@ -2576,7 +2571,6 @@ export default function AiChatPanel({
     handleContinueDevelopment: continueDevelopmentExecution,
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
-    handleContinueEndedPlan,
     endingPlan,
     handleContinueRevisionBuild,
     handleEndPlan,
@@ -4211,7 +4205,7 @@ export default function AiChatPanel({
       }
     : undefined
   const currentRecoveryIncident =
-    Boolean(pendingRevisionStart) || Boolean(recoveryProjectionError) || Boolean(stoppedPlanning) ||
+    Boolean(pendingRevisionStart) || Boolean(recoveryProjectionError) ||
     workbenchExecutionInProgress ||
     endedWorkbenchRecovery ||
     Boolean(workflowCodeReviewRetry(activeWorkflow)) ||
@@ -4223,12 +4217,12 @@ export default function AiChatPanel({
         : workbenchRecoveryIncident(activeExecutionRecovery, latestWorkflowForDisplay)
   const globalFallbackError =
     pendingRevisionStartError || recoveryProjectionError ||
-    (isApplicationPlanningPhase && !stoppedPlanning
+    (isApplicationPlanningPhase
       ? uiDesignRecoveryError(sessionPlanningFailureState?.recovery)
       : undefined) ||
     technicalPlanningError ||
     (!planningNeedsRecovery && !conversationNeedsRecovery ? previewFallbackError : undefined) ||
-    (!stoppedPlanning && !templateRecoveryInline && !workbenchExecutionInProgress && !endedWorkbenchRecovery
+    (!templateRecoveryInline && !workbenchExecutionInProgress && !endedWorkbenchRecovery
       ? isApplicationPlanningPhase
         ? sessionPlanningFailureState?.syncError ||
           planningError ||
@@ -4243,7 +4237,6 @@ export default function AiChatPanel({
     recoveryEnded: endedWorkbenchRecovery,
     recoveryError:
       (isApplicationPlanningPhase && planningState?.checkpointMissing) ||
-      Boolean(stoppedPlanning) ||
       workbenchExecutionInProgress ||
       templateRecoveryInline ||
       Boolean(currentPreviewRetry)
@@ -4705,7 +4698,7 @@ export default function AiChatPanel({
   const candidateNextDevelopmentStep = !loading &&
     !loadingSessions && !previewRuntime.repairSession
     ? developmentNextStep(displayedMessages, applicationLifecycle) : undefined
-  const nextDevelopmentStep = candidateNextDevelopmentStep?.endedRunId || activeWorkbenchPhase === 'development'
+  const nextDevelopmentStep = activeWorkbenchPhase === 'development'
     ? candidateNextDevelopmentStep : undefined
   const nextDevelopmentTasks = buildQuickTasks(displayedPlanningPages,
     developmentPlanningApiContracts, [], applicationLifecycle?.developmentArtifacts)
@@ -5578,7 +5571,6 @@ export default function AiChatPanel({
                     loading={!developmentPlanningReady || !applicationLifecycle?.developmentArtifacts}
                     catalogError={applicationLifecycle?.developmentArtifacts?.catalogError}
                     onStart={handleNextDevelopmentStart}
-                    onContinue={handleContinueEndedPlan}
                   />
                 ) : undefined}
                 applicationLifecycle={applicationLifecycle}
@@ -5811,15 +5803,7 @@ export default function AiChatPanel({
                   ) : null}
               </WorkbenchRecoveryNotice>
 
-              {stoppedPlanning ? (
-                <StoppedPlanningNotice application={application} stopped={stoppedPlanning}
-                  onLifecycle={onApplicationLifecycleChange}
-                  disabled={!onRetryPlanning || planningState?.transportState === 'running' || planningState?.transportState === 'reconciling'}
-                  error={planningState?.recoveryActionError || planningState?.syncError}
-                  onContinue={() => onRetryPlanning?.()} onRestart={() => stoppedPlanning.canRestart
-                    ? onRetryPlanning?.(true) : switchPhase('development')} />
-              ) : null}
-              {stoppedPlanning && !stoppedPlanningFeedbackAvailable ? null : planningHistoryOnly ? (
+              {planningHistoryOnly ? (
                 <PlanningHistoryNotice access={planningAccess} onReturn={() => {
                   const destination = planningAccess.destination
                   if (!destination) return

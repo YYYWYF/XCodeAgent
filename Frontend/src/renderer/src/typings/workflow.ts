@@ -1395,16 +1395,6 @@ export type ApplicationLifecycle = {
   }
   activeRunId?: string
   activeExecutions: Record<string, WorkbenchExecution>
-  endedExecutionsCheckedAt?: string
-  endedExecutions?: Record<string, { execution: WorkbenchExecution; workspaceUnchanged: boolean }>
-  endedPlanningExecution?: {
-    runId: string
-    threadId: string
-    stage: ApplicationLifecycleStage
-    workspaceUnchanged: boolean
-    canRestart: boolean
-    canSubmitFeedback?: boolean
-  } | null
   resourceLocks?: {
     application?: ExecutionResourceLock
     pages: Record<string, ExecutionResourceLock>

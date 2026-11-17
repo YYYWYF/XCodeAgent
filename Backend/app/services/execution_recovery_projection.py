@@ -135,8 +135,6 @@ async def _record_has_current_owner(workspace: str, record: DurableExecutionReco
         return record.run_id in lifecycle.active_executions
     if record.thread_id != lifecycle.initialization.thread_id:
         return False
-    if lifecycle.ended_planning_execution is not None and lifecycle.ended_planning_execution.run_id == record.run_id:
-        return False
     # 当前线程最新执行负责定位 Run，生命周期中的镜像字段不再否决 checkpoint。
     from app.persistence.execution_recovery import get_latest_execution_for_thread
     latest = await get_latest_execution_for_thread(workspace, thread_id=record.thread_id)

@@ -280,27 +280,6 @@ class DevelopmentContinuation(ApplicationLifecycleModel):
     consumed_at: datetime | None = Field(default=None, alias="consumedAt")
 
 
-class EndedWorkbenchExecution(ApplicationLifecycleModel):
-    """结束成功后保留原身份与资源声明，释放锁但不丢弃继续资格。"""
-
-    execution: WorkbenchExecution
-    claims: list[ExecutionResourceClaim]
-    workspace: str
-    fingerprint: str
-    source_failed: bool = Field(default=False, alias="sourceFailed")
-    formal_revision: ActiveFormalRevision | None = Field(default=None, alias="formalRevision")
-
-
-class EndedPlanningExecution(ApplicationLifecycleModel):
-    """保留已结束规划的阶段与工作区基线，首次生成和正式修订共用原节点恢复。"""
-
-    run_id: str = Field(alias="runId")
-    initialization: ApplicationInitialization
-    formal_revision: ActiveFormalRevision | None = Field(default=None, alias="formalRevision")
-    fingerprint: str
-    workspace: str
-
-
 class ApplicationLifecycle(ApplicationLifecycleModel):
     """表示 application-lifecycle.json 的完整业务快照。"""
 
@@ -316,8 +295,6 @@ class ApplicationLifecycle(ApplicationLifecycleModel):
         default_factory=dict,
         alias="activeExecutions",
     )
-    ended_executions: dict[str, EndedWorkbenchExecution] = Field(default_factory=dict, alias="endedExecutions")
-    ended_planning_execution: EndedPlanningExecution | None = Field(default=None, alias="endedPlanningExecution")
     development_continuations: dict[str, DevelopmentContinuation] = Field(
         default_factory=dict,
         alias="developmentContinuations",

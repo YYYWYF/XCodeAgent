@@ -171,7 +171,7 @@ class WorkflowRunControlTests(unittest.IsolatedAsyncioTestCase):
             ) as abandon:
                 frames = [frame async for frame in stream]
 
-            end.assert_called_once_with(directory, run_id="run-dag", preserve_resume=True)
+            end.assert_called_once_with(directory, run_id="run-dag")
             abandon.assert_not_called()
             self.assertTrue(frames)
 

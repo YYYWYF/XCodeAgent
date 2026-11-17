@@ -1,14 +1,11 @@
 import assert from 'node:assert/strict'
 import './workbenchEntry.test'
 import './workbenchPlanningCatalog.test'
-import './stoppedPlanningAvailability.test'
-import './stoppedPlanningNotice.test'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import WorkbenchTopBar from '../src/renderer/src/components/WorkbenchTopBar'
-import { planningStageAccess, planningStageEntryTransferred, stoppedPlanningForSession } from '../src/renderer/src/components/AiChatPanel/planningStageAccess'
+import { planningStageAccess, planningStageEntryTransferred } from '../src/renderer/src/components/AiChatPanel/planningStageAccess'
 import { planningMessageAgentPhase } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningMessageWorkflow'
-import EndedTaskNotice from '../src/renderer/src/components/AiChatPanel/components/NextDevelopmentGuide/EndedTaskNotice'
 import { latestApplicationLifecycle } from '../src/renderer/src/service/activeApplicationPlanning'
 import PlanningHistoryNotice from '../src/renderer/src/components/AiChatPanel/components/PlanningHistoryNotice'
 import { WorkbenchPhaseProvider } from '../src/renderer/src/context/WorkbenchPhaseContext'
@@ -22,17 +19,6 @@ import {
   reachedPhaseFromSessions
 } from '../src/renderer/src/workbenchPhaseNavigation'
 import type { ApplicationLifecycle, TestEntryGate, WorkflowRunPayload } from '../src/renderer/src/typings'
-
-test('首次创建停止且文件变化时留在原阶段重新生成，正式修订仍返回开发', () => {
-  for (const initial of [true, false]) {
-    const html = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged={false}
-      restartInitialPlanning={initial} continuing={false} disabled={false}
-      onContinue={async () => {}} onRestart={() => {}} />)
-    assert.equal(html.includes('返回开发阶段'), !initial)
-    assert.equal(html.includes('按当前文件重新生成'), initial)
-    assert.equal(html.includes('完成后仍需审阅确认'), initial)
-  }
-})
 
 test('入口交接后断网及冷启动仍在当前计划线程开放原门，来源会话保持只读', () => {
   const lifecycle: ApplicationLifecycle = {
@@ -72,45 +58,6 @@ const allowed: TestEntryGate = {
 
 /** 阶段覆盖与浏览进度都按「应用 + 版本」作用域，测试统一用这个版本。 */
 const VERSION = 'v1'
-
-test('正式修订停止只在原需求会话显示继续卡，历史确认仍只读', () => {
-  const lifecycle: ApplicationLifecycle = {
-    application: { id: 'app', name: 'app' }, revision: 3, updatedAt: '',
-    initialization: { stage: 'ready_for_workbench', status: 'completed', threadId: 'design' },
-    activeExecutions: {}, extensions: {}, endedPlanningExecution: {
-      runId: 'stopped', threadId: 'design', stage: 'generating_requirement_document',
-      workspaceUnchanged: true, canRestart: false
-    }
-  }
-  const session = { threadId: 'design' }
-  assert.ok(stoppedPlanningForSession({ phase: 'product', lifecycle, session }))
-  assert.equal(stoppedPlanningForSession({ phase: 'planning', lifecycle, session }), undefined)
-  assert.equal(stoppedPlanningForSession({ phase: 'product', lifecycle, session: { threadId: 'old' } }), undefined)
-  assert.equal(planningStageAccess({ phase: 'product', lifecycle, enteredDevelopment: true,
-    sessionThreadId: 'design' }).historyOnly, true)
-  const html = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged
-    continuing={false} disabled={false} onContinue={async () => undefined} />)
-  assert.ok(html.includes('继续生成'))
-  const changed = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged={false}
-    continuing={false} disabled={false} onContinue={async () => undefined} />)
-  assert.ok(changed.includes('工作区已变化'))
-  assert.ok(changed.includes('无法继续原任务'))
-  assert.ok(!changed.match(/<button\b[^>]*>[\s\S]*?<\/button>/g)?.some((button) => button.includes('继续生成')))
-  const changedWithReturn = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" unchanged={false}
-    continuing={false} disabled={false} onContinue={async () => assert.fail('失效规划不能继续')}
-    onRestart={() => undefined} />)
-  assert.ok(changedWithReturn.includes('返回开发阶段'))
-  assert.ok(!changedWithReturn.includes('重新发起任务'))
-  const checking = renderToStaticMarkup(<EndedTaskNotice mode="stopped_generation" checkingWorkspace
-    continuing={false} disabled={false} onContinue={async () => undefined} />)
-  assert.ok(checking.includes('正在检查工作区状态'))
-  assert.ok(!checking.includes('继续生成'))
-  const refreshed = latestApplicationLifecycle(lifecycle, {
-    ...lifecycle, endedExecutionsCheckedAt: '2026-11-04T00:00:01Z',
-    endedPlanningExecution: { ...lifecycle.endedPlanningExecution!, workspaceUnchanged: false }
-  })
-  assert.equal(refreshed.endedPlanningExecution?.workspaceUnchanged, false)
-})
 
 /** 隔离本地存储，覆盖多个应用与组件重新挂载时的真实持久化行为。 */
 function withStorage(run: () => void): void {

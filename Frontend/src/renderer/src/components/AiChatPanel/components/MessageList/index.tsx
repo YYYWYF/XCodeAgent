@@ -1048,12 +1048,6 @@ export default function MessageList({
                               dagPendingPlanCompletion={dagPendingPlanCompletion}
                               loading={messageLoading}
                               onOpenPendingDagConfirmation={onOpenPendingDagConfirmation}
-                              runFinishedAt={
-                                message.workflow
-                                  ? applicationLifecycle?.endedExecutions?.[message.workflow.runId]
-                                      ?.execution.updatedAt
-                                  : undefined
-                              }
                               steps={visibleProcessSteps}
                               workflow={message.workflow}
                             />

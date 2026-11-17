@@ -54,7 +54,7 @@ async def _end_drained_planning_execution(workspace: str, thread_id: str):
         from app.persistence.checkpoints import workflow_checkpoint_db_path
         from app.graph.application_planning_workflow import application_planning_graph_for_request
 
-        # 所有 writer 退出后读取权威 root checkpoint，结束凭据必须指向最后已提交的业务现场。
+        # 所有 writer 退出后读取权威 root checkpoint，结束动作必须收口最后已提交的业务执行。
         if workflow_checkpoint_db_path(workspace=workspace, project_id=source.project_id).is_file():
             graph = await application_planning_graph_for_request(workspace=workspace, project_id=source.project_id)
             snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
@@ -91,17 +91,6 @@ async def _end_drained_planning_execution(workspace: str, thread_id: str):
                for execution in latest.active_executions.values()):
             raise ValueError("当前修订已进入工作台，请在开发阶段结束任务。")
         updates = {"active_formal_revision": None, "pending_revision_impact": None, "error": None}
-        if source is not None:
-            from app.domain.application_lifecycle import EndedPlanningExecution
-            from app.services.ended_workspace import workspace_fingerprint
-
-            # 首次生成与正式修订都保存原阶段；不把未完成的首次创建提升为开发就绪。
-            # 与开发任务 End 一样，在 writer 真实退出后保存稳定基线，释放占用但保留继续凭据。
-            updates["ended_planning_execution"] = EndedPlanningExecution(
-                runId=run_id, initialization=latest.initialization,
-                formalRevision=revision, fingerprint=workspace_fingerprint(workspace),
-                workspace=workspace,
-            )
         if latest.active_run_id in ended_runs:
             updates["active_run_id"] = None
         locks = latest.resource_locks

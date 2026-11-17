@@ -44,8 +44,7 @@ def find_workbench_document_review(files, state: dict, lifecycle) -> DocumentRev
     identity = validate_pending_self_digest(pending)
     formal = load_confirmed_build_task_plan(files.workspace)
     marker = lifecycle.extensions.get("planningResultLifecycle")
-    if (identity.workflow_run_id in lifecycle.ended_executions
-        or (formal and _identity_matches(formal.get("confirmed_from"), identity))
+    if ((formal and _identity_matches(formal.get("confirmed_from"), identity))
         or (isinstance(marker, dict) and marker.get("status") == "abandoned" and _identity_matches(marker, identity, camel_case=True))):
         return None
     _require_confirmed(state["requirement_spec"], "需求文档")

@@ -6,7 +6,6 @@ import { recoveryFailureMessage } from '../../service/recoveryFailureMessage'
 import { cx } from '../../utils'
 import '../ApplicationPlanningRecoveryIncidentCard/ApplicationPlanningRecoveryIncidentCard.less'
 import RetryEntryNotice from '../RetryEntryNotice'
-import EndedTaskNotice from '../AiChatPanel/components/NextDevelopmentGuide/EndedTaskNotice'
 import AgentErrorCard from '../AgentErrorCard'
 import DiagnosticDetails, { recoveryDiagnosticText } from './RecoveryDiagnosticDetails'
 
@@ -53,14 +52,6 @@ export default function RecoveryIncidentCard({
     onAction()
   }
 
-  // 正常停止复用开发阶段的继续卡片，仍沿用服务端恢复动作与原确认要求。
-  if (incident.kind === 'recoverable' && incident.presentation === 'stopped_generation') {
-    return <div className={cx('stopped-generation-recovery')} data-testid={testId}>
-      <EndedTaskNotice mode="stopped_generation" continuing={retrying}
-        disabled={disabled || !onAction} onContinue={async () => handleAction()} />
-      {error ? <AgentErrorCard title="继续生成失败" error={error} /> : null}
-    </div>
-  }
   return (
     <div className={cx('application-planning-recovery-incident')} data-testid={testId}>
       <AgentErrorCard title={incident.title} error={incident.recoveryMessage}

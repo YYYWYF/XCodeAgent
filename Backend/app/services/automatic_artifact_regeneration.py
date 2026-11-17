@@ -7,7 +7,7 @@ from app.services.stage_prerequisites import regeneration_for_retry
 
 async def prepare_automatic_regeneration(inputs: dict[str, Any], *, run_id: str, thread_id: str):
     """保留开发目标与阶段，只在旧 DAG 失效时重新进入开发检查。"""
-    if inputs.get("workflow_scope") or inputs.get("workflow_action") or inputs.get("ended_resume"):
+    if inputs.get("workflow_scope") or inputs.get("workflow_action"):
         return None
     workspace = inputs.get("workspace")
     if not workspace:
