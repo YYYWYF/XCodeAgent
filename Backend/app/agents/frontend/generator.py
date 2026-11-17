@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
+from app.agents.frontend.project_plan_context import project_frontend_task_project_plan
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
@@ -153,6 +154,7 @@ def _frontend_generation_prompt(
 ) -> str:
     """构造前端执行提示词，并观察已注入内容的大小。"""
     app_name = _app_name_from_plan(project_plan)
+    scoped_project_plan = project_frontend_task_project_plan(project_plan, tasks)
     # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
     frontend_root = "frontend"
     # 静态规则只由当前派发任务的来源引用触发，不读取整个 ProjectPlan 的数据源清单。
@@ -307,7 +309,7 @@ def _frontend_generation_prompt(
         "it in the final JSON instead of installing dependencies or creating temporary scripts.\n\n"
         f"Approved frontend tasks:\n{(task_text := json.dumps(tasks, ensure_ascii=False, indent=2))}\n\n"
         f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
-        f"ProjectPlan context:\n{(plan_text := json.dumps(project_plan, ensure_ascii=False, indent=2))}"
+        f"ProjectPlan context:\n{(plan_text := json.dumps(scoped_project_plan, ensure_ascii=False, indent=2))}"
     )
     record_prompt(prompt, task_context=task_text, project_plan=plan_text)
     return prompt
