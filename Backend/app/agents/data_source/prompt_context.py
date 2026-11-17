@@ -3,112 +3,18 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.services.builtin_skills import (
-    BUILTIN_SKILLS_VIRTUAL_ROOT,
-    SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME,
-    SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME,
+from app.agents.data_source.execution_config import (
+    is_bootstrap_task,
+    task_data_source_types,
+    task_endpoint_designs,
+    task_execution_config,
+    task_required_instruction_paths,
 )
-from app.services.api_design import api_design_business_descriptions
-from app.services.unit_task_manifest import BACKEND_STAGE_LABELS
+from app.agents.data_source.business_projection import business_api_design
 
 
-_SOURCE_REFERENCE_DIRECTORIES = {
-    "database": "database",
-    "external_api": "external-api",
-}
-_SOURCE_SKILL_ORDER = ("database", "external_api")
-_BOOTSTRAP_UNIT_ID = "backend:bootstrap"
+_SOURCE_REFERENCE_DIRECTORIES = {"database", "external_api"}
 _OUTER_VERIFICATION_POLICY = "outer_integration_test_only"
-
-
-def task_endpoint_designs(task: dict[str, Any]) -> list[dict[str, Any]]:
-    """读取单个任务已由 Unit 编译器裁剪过的 Endpoint API 设计。"""
-
-    source_refs = task.get("source_refs")
-    source_refs = source_refs if isinstance(source_refs, dict) else {}
-    designs = source_refs.get("endpoint_designs")
-    return (
-        [dict(item) for item in designs if isinstance(item, dict)]
-        if isinstance(designs, list)
-        else []
-    )
-
-
-def task_data_source_types(tasks: list[dict[str, Any]]) -> set[str]:
-    """从当前派发任务的 API 设计来源快照提取数据源类型集合。"""
-
-    return {
-        str(snapshot.get("sourceType") or "").strip()
-        for task in tasks
-        for design in task_endpoint_designs(task)
-        for snapshot in _dict_items(design.get("sourceSnapshots"))
-        if str(snapshot.get("sourceType") or "").strip()
-    }
-
-
-def task_required_skill_paths(task: dict[str, Any]) -> list[str]:
-    """按单个任务的 API 设计来源类型映射必须读取的内置 Skill。"""
-
-    source_types = {
-        str(snapshot.get("sourceType") or "").strip()
-        for design in task_endpoint_designs(task)
-        for snapshot in _dict_items(design.get("sourceSnapshots"))
-        if str(snapshot.get("sourceType") or "").strip()
-    }
-    unsupported = source_types - set(_SOURCE_REFERENCE_DIRECTORIES)
-    if unsupported:
-        raise ValueError(
-            f"DataSource 后端任务 {task.get('id') or '<unknown>'} 包含非法数据源类型："
-            f"{', '.join(sorted(unsupported))}。"
-        )
-    if not source_types:
-        return []
-    return [
-        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
-        f"{SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME}/SKILL.md",
-        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
-        f"{SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME}/SKILL.md",
-    ]
-
-
-def task_required_instruction_paths(task: dict[str, Any]) -> list[str]:
-    """展开任务必须读取的 Skill 入口与当前任务类型对应的条件参考文档。"""
-
-    paths = task_required_skill_paths(task)
-    if not paths:
-        return paths
-    source_types = task_data_source_types([task])
-    reference_name = (
-        "bootstrap.md"
-        if _task_kind(task) == "bootstrap"
-        else "layer-implementation.md"
-    )
-    skill_root = (
-        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
-        f"{SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME}/references/"
-    )
-    if _task_kind(task) == "endpoint":
-        paths.append(f"{skill_root}error-handling.md")
-    paths.extend(
-        f"{skill_root}{_SOURCE_REFERENCE_DIRECTORIES[source_type]}/{reference_name}"
-        for source_type in _SOURCE_SKILL_ORDER
-        if source_type in source_types
-    )
-    # 加载现有模板工程及文件修改边界参考，业务文件按当前任务授权创建或修改。
-    boundary_root = (
-        f"{BUILTIN_SKILLS_VIRTUAL_ROOT}"
-        f"{SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME}/references/"
-    )
-    paths.extend(
-        [
-            f"{boundary_root}module-layout.md",
-            f"{boundary_root}entity-template.md",
-            f"{boundary_root}repository-template.md",
-            f"{boundary_root}dto-template.md",
-            f"{boundary_root}controller-template.md",
-        ]
-    )
-    return paths
 
 
 def execution_task_packet(
@@ -117,12 +23,12 @@ def execution_task_packet(
 ) -> dict[str, Any]:
     """把 Build 任务和已确认设计编译为 Java Agent 可直接执行的最小任务包。"""
 
-    kind = _task_kind(task)
+    config = task_execution_config(task)
     return {
         **({"id": task["id"]} if "id" in task else {}),
         **({"unit_id": task["unit_id"]} if "unit_id" in task else {}),
-        "kind": kind,
-        "stage": _task_stage(task),
+        "kind": config.kind,
+        "stage": config.stage,
         "execution_steps": _task_execution_steps(task),
         "allowed_paths": list(task.get("allowed_paths") or []),
         **({"approved_add_path": task["approved_add_path"]} if task.get("approved_add_path") else {}),
@@ -142,7 +48,7 @@ def task_implementation_contract(
 ) -> dict[str, Any]:
     """按基础环境、骨架、单接口业务和共享 Controller 编译各自的只读契约。"""
 
-    if _task_kind(task) == "bootstrap":
+    if is_bootstrap_task(task):
         source_types = task_data_source_types([task])
         return {
             "kind": "bootstrap",
@@ -186,7 +92,7 @@ def task_implementation_contract(
             "verification_policy": _OUTER_VERIFICATION_POLICY,
         }
 
-    stage = _task_stage(task)
+    stage = task_execution_config(task).stage
     contract_ids, endpoint_ids, entity_ids = _task_scope_ids([task])
     api_contracts = _scoped_api_contracts(
         project_plan,
@@ -215,15 +121,9 @@ def task_implementation_contract(
         return {**contract, "authorization_constraints": _endpoint_authorization_constraints(task)}
     if len(endpoint_designs) != 1:
         raise ValueError("后端业务任务必须且只能携带一个已确认 Endpoint API 设计。")
-    source_refs = task["source_refs"]
     return {
-        **contract,
-        "api_design": endpoint_designs[0],
-        "business_descriptions": [
-            dict(item)
-            for item in source_refs.get("business_descriptions") or api_design_business_descriptions(endpoint_designs)
-            if isinstance(item, dict)
-        ],
+        "api_contract": api_contracts[0],
+        "api_design": business_api_design(endpoint_designs[0]),
     }
 
 
@@ -291,23 +191,6 @@ def _endpoint_authorization_contract(
             for key in resource_keys
         ],
     }
-
-
-def _task_kind(task: dict[str, Any]) -> str:
-    """根据稳定 Unit 标识区分基础设施任务与 Endpoint 实现任务。"""
-
-    return "bootstrap" if str(task.get("unit_id") or "") == _BOOTSTRAP_UNIT_ID else "endpoint"
-
-
-def _task_stage(task: dict[str, Any]) -> str:
-    """读取平台编译的阶段，修复任务沿用父任务阶段。"""
-
-    if _task_kind(task) == "bootstrap":
-        return "bootstrap"
-    stage = (task.get("source_refs") or {}).get("backend_stage")
-    if stage not in BACKEND_STAGE_LABELS:
-        raise ValueError(f"后端模块任务 {task.get('id', '<unknown>')} 缺少有效阶段。")
-    return stage
 
 
 def _task_execution_steps(task: dict[str, Any]) -> list[str]:

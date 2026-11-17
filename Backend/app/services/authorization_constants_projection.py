@@ -27,7 +27,7 @@ def apply_authorization_constants_projection(
     workspace: str | Path,
     projection: Any,
 ) -> dict[str, Any]:
-    """在 Endpoint 叶子任务分发前幂等写入业务操作资源常量。"""
+    """由后端权限资源确定性任务幂等更新业务常量托管区。"""
 
     items = _projection_items(projection)
     if not items:

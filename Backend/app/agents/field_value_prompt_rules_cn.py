@@ -1,4 +1,4 @@
-"""字段取值提示词中文对照，仅供查阅，不参与运行时注入。修改英文规则时同步维护本文件。"""
+"""后端任务规划字段取值提示词的中文对照；英文规则同步维护。"""
 
 FIELD_VALUE_SEMANTICS = (
     "sourceBinding.sourceType=static 表示接口自身持有的 staticData（JSON 对象或同构对象列表）。"
@@ -51,23 +51,7 @@ FIELD_VALUE_PLANNING_RULES = (
     "边界行为写入实现步骤，不额外生成测试、构建或验收任务。",
 )
 
-FIELD_VALUE_IMPLEMENTATION_RULES = (
-    FIELD_VALUE_SEMANTICS + "\n\n"
-    "【字段取值实现顺序】仅实现当前 stage 的职责。service 先校验业务入参、读取可信服务端上下文，"
-    "计算调用前的查询值、写入值或外部入参，再调用已规划的 Repository / Client，最后构造应用响应。"
-    "current_user_id 来自服务端认证主体，current_time 来自服务端时钟；上下文不可用时按缺值策略处理，"
-    "不能信任客户端传入的用户身份。禁止用本次调用尚未返回的响应构造本次请求。保留 false/0，显式区分目标缺席与目标值为 null。\n"
-    "repository 消费已计算的类型化值，保留 AND/OR 括号、重复列和重复参数；omit 后删除空分组，"
-    "但不能将空组替换为恒真条件。update/delete 没有有效条件时拒绝执行。所有值必须参数化；"
-    "contains/starts_with/ends_with 使用带通配符转义的参数化 LIKE；IN 数组非空，BETWEEN 必须为有序的两个值。"
-    "upstream 将已计算值绑定到准确的 path/query/header/request_body；omit 表示不发送目标，不能替换成字符串 null 或空串。"
-    "Client、Mapper、Controller 不重复执行业务规则。\n"
-    "将已确认规则实现为普通类型化 Java 代码，不引入 eval、脚本引擎或新的运行时模型调用。"
-    "必需语义缺失时返回 failed、failure_category=contract_mismatch；任务缺少必要类型边界或写入授权时返回 "
-    "failed、failure_category=plan_mismatch。两者均携带具体 change_request，禁止自行扩展写入范围。\n\n"
-)
-
-# 以下对应两个注入入口中的配套约束，仅用于查阅。
+# 以下为规划提示的配套参考，仅用于查阅。
 SERVICE_STAGE_REFERENCE = (
         "service Task 统一负责 Endpoint fieldMappings、databaseQuery 取值规则、databaseWrites 和 "
         "externalApiBindings 的业务处理与最终响应组装。仅协调 manifest 已包含的 repository/upstream 分支，"

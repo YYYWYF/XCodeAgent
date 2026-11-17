@@ -53,6 +53,7 @@ DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND = {
     "backend.endpoint_controller": "endpoint_id",
     "backend.upstream": "endpoint_id",
     "backend.bootstrap": "data_source_type",
+    "backend.auth.resources": "target_id",
 }
 DELIVERABLE_KINDS = tuple(DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND)
 

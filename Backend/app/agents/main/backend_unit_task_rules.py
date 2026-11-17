@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.builtin_skills import (
@@ -15,25 +14,18 @@ from app.services.unit_task_manifest import (
 )
 
 
-def _text(value: Any) -> str:
-    """只读取无需修剪的非空正式身份。"""
-
-    return value if isinstance(value, str) and value and value == value.strip() else ""
-
-
 def _bootstrap_rules(context: UnitGenerationContext) -> tuple[str, ...]:
-    """为后端公共依赖与框架启用生成唯一 bootstrap Task 规则。"""
+    """保留单任务输出合同，按本轮来源提供简短配置检查项。"""
 
-    source_types = sorted({
-        _text(requirement.source_refs.get("data_source_type"))
+    source_values = [
+        requirement.source_refs.get("data_source_type")
         for requirement in context.generation_requirements
-        if _text(requirement.source_refs.get("data_source_type"))
-    })
+    ]
     if (
-        not source_types
-        or set(source_types) - PHYSICAL_SOURCE_TYPES
+        not source_values
+        or any(not isinstance(source, str) or source not in PHYSICAL_SOURCE_TYPES for source in source_values)
         or any(
-            _text(requirement.source_refs.get("kind")) != "backend.bootstrap"
+            requirement.source_refs.get("kind") != "backend.bootstrap"
             for requirement in context.generation_requirements
         )
     ):
@@ -41,32 +33,37 @@ def _bootstrap_rules(context: UnitGenerationContext) -> tuple[str, ...]:
             "backend:bootstrap 必须只包含 database/external_api 的 "
             "backend.bootstrap 增量职责。"
         )
-    capabilities = []
-    if "database" in source_types:
-        capabilities.append("MyBatis-Plus/MySQL")
-    if "external_api" in source_types:
-        capabilities.append("Spring Cloud OpenFeign")
+    source_types = set(source_values)
     rules = [
+        "You are a Java backend task planner for a Java 8 and Spring Boot project.",
         f"Emit exactly one root Task with id `{backend_bootstrap_task_id(context)}` and dependencies "
-        "`[]`. It must cover every current backend.bootstrap requirement in one Task and "
-        "declare one exact backend.bootstrap deliverable per requirement. Its capability "
-        f"scope is {', '.join(capabilities) or 'the listed bootstrap requirements only'}.",
+        "`[]`. Cover every current backend.bootstrap requirement in this Task and declare one "
+        "exact backend.bootstrap deliverable per requirement.",
         f"Use unit_id `{context.unit_id}`, owner `backend`, task_type `backend.code` and status "
         "`pending`. target_files, allowed_paths and change_scope must list the same exact "
         "workspace-relative files; deliverable paths must stay within them. Give each deliverable "
-        "a unique stable ID under the task ID. Use add for "
-        "missing files and modify for existing files. Write titles and descriptions in Simplified Chinese.",
-        "Plan only the minimum additions to backend/pom.xml and the required common configuration.",
-        "This Unit must not generate endpoint Clients, transport DTOs, endpoint objects, "
-        "repositories, services, Controllers, DDL, migrations, seed data, tests, builds, "
-        "verification, or acceptance work.",
+        "a unique stable ID under the task ID. Use add for missing files and modify for existing files. "
+        "Write titles and descriptions in Simplified Chinese.",
+        "Include the applicable checks below in the task description. Use the backend directory "
+        "tree to identify concrete target files and combine checks for the same file. "
+        "Plan configuration checks without assuming that existing configuration is missing.",
+        "### Shared Maven checks\n"
+        "- Check common dependencies and annotation processor configuration in pom.xml.",
     ]
+    # 公共检查只出现一次，混合来源在同一个任务中先列数据库再列外部 API 检查。
     if "database" in source_types:
-        rules.append("Database: prepare only the required datasource and MyBatis bootstrap configuration.")
+        rules.append(
+            "### Database checks\n"
+            "- Check database Maven dependencies in pom.xml.\n"
+            "- Check database connection configuration in application.yml and application-dev.yml.\n"
+            "- Check MyBatis-Plus pagination configuration."
+        )
     if "external_api" in source_types:
         rules.append(
-            "External API: add only the required OpenFeign dependency and missing @EnableFeignClients "
-            "activation on the real Application.java or existing Feign configuration."
+            "### External API checks\n"
+            "- Check Spring Cloud dependency management and OpenFeign dependencies in pom.xml.\n"
+            "- Check the @EnableFeignClients annotation on the Spring Boot application class "
+            "or existing integration configuration."
         )
     return tuple(rules)
 
@@ -162,14 +159,12 @@ def _foundation_rules(sources: set[str]) -> tuple[str, ...]:
     """定义共享基础骨架的文件边界与复用要求。"""
 
     rules = [
-        "Foundation prepares shared skeletons from confirmed sourceSnapshots, with no business/operation "
-        "methods, transport DTOs, custom Mapper XML or routes."
+        "Plan shared foundations from confirmed sourceSnapshots, reusing existing implementations."
     ]
     if "database" in sources:
-        rules.append("Database foundation: PO, BaseMapper interface, empty domain Repository interface "
-                     "and RepositoryImpl skeleton with Mapper injection only in the implementation.")
+        rules.append("Database foundation: PO, Mapper and Repository foundations.")
     if "external_api" in sources:
-        rules.append("External foundation: compatible FeignClient skeleton and exact client-local connection configuration.")
+        rules.append("External foundation: Client foundation and connection configuration.")
     return tuple(rules)
 
 
@@ -242,46 +237,35 @@ def _service_rules(sources: set[str]) -> tuple[str, ...]:
 
 
 def _field_planning_rules(sources: set[str]) -> tuple[str, ...]:
-    """只注入本轮物理来源适用的规划检查项，执行阶段详细规则保持原样。"""
+    """按来源概括字段实现职责，格式与空值语义直接引用已确认契约。"""
 
-    values = []
+    values = ["fieldMappings"]
     if "database" in sources:
-        values.extend(("databaseQuery.items", "databaseWrites"))
+        values.extend(("databaseQuery", "databaseWrites"))
     if "external_api" in sources:
         values.append("externalApiBindings")
-    rules = [
-        f"Read complete fieldMappings, {', '.join(values)} and optional implementationDescription. "
-        "Assign target paths/columns, dependencies, processing, missing rules and pre-call/post-call order "
-        "to the descriptions of files that implement them, rather than repeating them in every file. "
-        "Service resolves values before access and maps source results after "
-        "access; access layers receive typed values with explicit presence. sourceBinding/sourceSnapshots "
-        "fix the physical sources; equal field names, origin categories or free-text guidance cannot "
-        "invent bindings, sources or override contracts. Missing/blank implementationDescription adds no work.",
-        "Preserve typed fixed values and declared endpointFields/builtinFields/sourceFields dependencies. "
-        "value_mapping needs no sourceFields; direct source_mapping assigns directly, descriptive mappings "
-        "apply their businessDescription. Preserve array order and item correspondence; no implicit flattening "
-        "or first-item selection. Distinguish absence from null, false, zero and empty strings according to "
-        "field constraints. Follow missingBehavior error/omit/default with typed defaultValue and any "
-        "explicit missing-input branch. Never mask invalid inputs or source failures with defaults, omit "
-        "required targets or guess missing algorithms, timezones, rounding or error semantics; report contract gaps.",
-    ]
-    if "database" in sources:
-        rules.append("Repository preserves parameterized values and AND/OR grouping, including repeated "
-                     "columns and omitted predicates. Reject update/delete when omit removes all effective predicates.")
-    return tuple(rules)
+    return (
+        f"Plan methods and supporting types from confirmed {', '.join(values)} and optional "
+        "implementationDescription. Keep physical sources fixed by sourceBinding/sourceSnapshots. "
+        "Describe each file's own responsibility; describe direct conversions by source/target types "
+        "and contract mappings, expanding only nontrivial conversions.",
+        "Use API schemas for field types, formats, required presence and nullability. Keep required "
+        "field presence distinct from nullability and database column constraints. Do not invent time "
+        "formats, timezones, default values or validation branches. Identify unresolved contract gaps "
+        "in the plan instead of prescribing a provisional implementation.",
+    )
 
 
 def _controller_rules() -> tuple[str, ...]:
-    """定义 Endpoint controller 的薄适配职责边界。"""
+    """概括 HTTP 适配职责，按最终路由规划并仅列出已声明的资源权限。"""
 
     return (
-        "The shared controller task runs after the scoped business tasks. For each listed "
-        "Endpoint, implement the exact internal endpointContract method/path, typed request "
-        "binding, status/envelope contract, required authorization annotation, and delegation "
-        "to its Service. It must never expose an upstream path, "
-        "perform repository/client access, repeat fieldMappings, or hard-code sample values.",
-        "Only Controller may add one @RequireAnyResource per endpoint with operationResourceKeys, "
-        "using platform AuthConstants and ANY-OF semantics. Omit it when no operationResourceKeys are declared.",
+        "The shared Controller task follows the scoped Business tasks. Plan HTTP routing, "
+        "request binding, BeeResponseEntity wrapping and delegation to the completed Service.",
+        "Describe routes by HTTP method and effective full path. Account for existing class-level "
+        "mappings when specifying method annotations; preserve compatible handlers and other routes.",
+        "Include resource authorization details only for endpoints with confirmed operationResourceKeys; "
+        "reference constants prepared by the preceding authorization-resource task.",
     )
 
 

@@ -31,6 +31,7 @@ from app.graph.nodes.tasks import (
 )
 from app.graph.state import ProjectState
 from app.services.authorization_overlay import compile_authorization_overlay
+from app.services.backend_authorization_resources import backend_resource_planning_context
 from app.services.application_config import read_application_config
 from app.services.build_task_plan_lifecycle import (
     ConfirmPromotionResult,
@@ -438,11 +439,15 @@ def _assemble_planning_context(
         project_plan, workspace_snapshot, confirmed_plan
     )
     try:
+        application_config = read_application_config(workspace)
         build_context = without_ui_references(compile_authorization_overlay(
             project_plan,
             _resolve_build_context(state, project_plan, scope, skeleton),
-            application_config=read_application_config(workspace),
+            application_config=application_config,
         ))
+        build_context = backend_resource_planning_context(
+            project_plan, build_context, application_config=application_config, workspace=workspace,
+        )
     except ValueError as exc:
         return _context_blocked_result(
             project_plan=project_plan,

@@ -11,6 +11,7 @@ _BUILTIN_UNIT_DISPLAY_NAMES = {
     "frontend:shell": "前端应用环境",
     "frontend:route-registry": "前端页面路由配置",
     "backend:bootstrap": "后端基础环境配置",
+    "backend:auth-resources": "后端权限资源常量",
     "application:root": "应用任务结构",
     "app:integration": "应用集成节点",
 }

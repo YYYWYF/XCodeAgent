@@ -120,7 +120,8 @@ async def generate_unit_candidate_once(
 ) -> UnitGenerationAttemptResult:
     """为一个已分配 Attempt 执行有界 Model/Reader 多轮并只返回一个最终结果。
 
-    Store 由 PlanningRun 调用链显式绑定；每个调用创建独立 Reader。模型可在
+    Bootstrap 只根据职责清单和后端目录规划，不创建 Reader 或绑定契约读取工具。
+    其他 Unit 的 Store 由 PlanningRun 调用链显式绑定；每个带 Store 的调用创建独立 Reader。模型可在
     ``model_turn_limit`` 内零次或多次调用唯一的冻结合同读取工具，所有 turn 仍共享
     当前 Attempt 身份和 Session timeout。预算耗尽、无效 ToolCall、截断或最终解析失败
     均是 Unit 内容失败；Store/catalog 损坏是 platform fatal；成功结果仍交给 Local Validator。
@@ -134,12 +135,16 @@ async def generate_unit_candidate_once(
     )
     business_operation = unit_planning_operation(frozen_job.context, repairing=repairing)
     active_settings = settings or Settings.from_env()
+    # Bootstrap 不依赖契约正文，提示词投影和工具绑定使用同一开关。
+    contract_tool_enabled = (
+        frozen_contract_store is not None and frozen_job.context.unit_id != "backend:bootstrap"
+    )
     prompt = build_unit_generation_prompt(
         frozen_job.context,
         global_feedback=global_feedback,
         latest_local_feedback=local_feedback,
         unit_kind_rules=unit_kind_rules,
-        contract_tool_enabled=frozen_contract_store is not None,
+        contract_tool_enabled=contract_tool_enabled,
     )
     tool_session = (
         ContractToolSession(
@@ -147,7 +152,7 @@ async def generate_unit_candidate_once(
             frozen_contract_store=frozen_contract_store,
             prompt=prompt,
         )
-        if frozen_contract_store is not None
+        if contract_tool_enabled
         else None
     )
 

@@ -46,19 +46,31 @@ class AgentBundle:
     workspace_assistant: Any
     selected_skill_names: tuple[str, ...] = ()
     user_skills_revision: str = ""
+    data_source_builtin_skill_names: tuple[str, ...] = ()
     test_generation: Any = None
 
 
 def create_agent_bundle(
     workspace_root: str | None = None,
     selected_skill_names: Sequence[str] | None = None,
-    *, database_source_ids: tuple[str, ...] = (),
+    *,
+    data_source_builtin_skill_names: tuple[str, ...] = (),
 ) -> AgentBundle:
-    """按工作区、用户技能白名单及本轮数据库身份创建或复用 Deep Agent。"""
+    """按工作区、用户技能及阶段白名单创建或复用 Deep Agent。"""
 
     root = resolve_workspace_root(workspace_root)
     workspace_key = str(root) if root else ""
     selected_skill_key = _normalize_selected_skill_key(selected_skill_names)
+    builtin_skill_key = tuple(
+        sorted(
+            {
+                str(name).strip()
+                for name in data_source_builtin_skill_names
+                if str(name).strip()
+            },
+            key=lambda name: (name.casefold(), name),
+        )
+    )
     for _attempt in range(_MAX_SNAPSHOT_ATTEMPTS):
         user_skills_revision = get_user_skill_runtime_revision()
         agent_memory_revision = get_agent_memory_runtime_revision()
@@ -68,7 +80,7 @@ def create_agent_bundle(
                 selected_skill_key,
                 user_skills_revision,
                 agent_memory_revision,
-                tuple(sorted(set(database_source_ids))),
+                builtin_skill_key,
             )
         except (UserSkillSnapshotChangedError, AgentMemorySnapshotChangedError):
             continue
@@ -86,9 +98,9 @@ def _create_agent_bundle_for_workspace(
     selected_skill_names: tuple[str, ...],
     user_skills_revision: str,
     agent_memory_revision: str,
-    database_source_ids: tuple[str, ...] = (),
+    data_source_builtin_skill_names: tuple[str, ...] = (),
 ) -> AgentBundle:
-    """使用不可变技能、记忆快照及数据库身份构建缓存，避免跨任务复用连接绑定。"""
+    """使用技能、记忆快照及阶段白名单构建隔离缓存。"""
 
     workspace_root = workspace_key or None
     user_skills = create_user_skill_runtime_snapshot(
@@ -136,11 +148,10 @@ def _create_agent_bundle_for_workspace(
     )
     data_source = create_data_source_agent(
         chat_model,
-        database_source_ids=database_source_ids,
         workspace_root=workspace_root,
         user_skills_backend=user_skills.backend,
-        agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
+        builtin_skill_names=data_source_builtin_skill_names,
     )
     database = create_database_agent(
         chat_model,
@@ -195,6 +206,7 @@ def _create_agent_bundle_for_workspace(
         workspace_assistant=workspace_assistant,
         selected_skill_names=selected_skill_names,
         user_skills_revision=user_skills_revision,
+        data_source_builtin_skill_names=data_source_builtin_skill_names,
     )
 
 

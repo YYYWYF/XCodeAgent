@@ -227,5 +227,5 @@ Backend task 不自动安装依赖。即使任务被标记为 repair，依赖缺
 
 ## 与其他技能的关系
 
-- **springboot-backend-generate**：提供后端数据源实现规范（database/external_api 的 bootstrap 和 layer-implementation），本技能是后端模板工程特有的文件边界约束。
-- 生成后端代码时，**先遵守本技能的文件边界与业务文件创建/复用规则**，再按 `springboot-backend-generate` 的规范编写具体实现。
+- 规划阶段仍使用本技能的模块目录与文件职责规范，但 Build 的 DataSource Agent 不加载本技能。
+- Build 执行细则由 `springboot-backend-bootstrap`、`springboot-backend-foundation`、`springboot-backend-business` 和 `springboot-backend-controller` 按当前任务阶段与来源分别提供。

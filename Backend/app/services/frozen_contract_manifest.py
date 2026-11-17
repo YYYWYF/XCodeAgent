@@ -57,6 +57,8 @@ def _endpoint_keys_for_requirement(
     """按职责类别选择 Page 或精确/Scope Endpoint，不扩大到其他 Scope。"""
 
     requirement_kind = exact_manifest_id(source_refs.get("kind"), "generation requirement kind")
+    if requirement_kind == "backend.auth.resources":
+        return None, set()
     if requirement_kind == "frontend.page":
         page_id = exact_manifest_id(source_refs.get("page_id"), "frontend.page.page_id")
         page_contract = page_contracts.get(page_id)
@@ -140,6 +142,8 @@ def compile_expected_unit_formal_source_refs(
     for raw_requirement in generation_requirements:
         requirement_id, source_refs = requirement_record(raw_requirement)
         grant(requirement_id, technical, {"/architecture"})
+        if source_refs.get("kind") == "backend.auth.resources":
+            grant(requirement_id, technical, {"/authorization_manifest", "/api_contracts"})
         page_id, relevant_keys = _endpoint_keys_for_requirement(
             unit_id=unit_id,
             unit_kind=unit_kind,

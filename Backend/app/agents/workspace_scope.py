@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -80,9 +81,12 @@ def create_workspace_backend(
     workspace_root: str | None,
     *,
     include_builtin_skills: bool = False,
+    builtin_skill_names: Sequence[str] | None = None,
     user_skills_backend: BackendProtocol | None = None,
     agent_memory_backend: BackendProtocol | None = None,
 ) -> BackendProtocol:
+    """创建工作区后端，并可按精确白名单构造只读技能子挂载。"""
+
     root = resolve_workspace_root(workspace_root)
     default_backend = (
         StateBackend()
@@ -92,9 +96,9 @@ def create_workspace_backend(
     routes: dict[str, BackendProtocol] = {}
     if include_builtin_skills:
         skills_root = validate_required_builtin_skills()
-        routes[BUILTIN_SKILLS_VIRTUAL_ROOT] = AutoDedupFilesystemBackend(
-            root_dir=skills_root,
-            virtual_mode=True,
+        routes[BUILTIN_SKILLS_VIRTUAL_ROOT] = _builtin_skills_backend(
+            skills_root,
+            builtin_skill_names,
         )
     if user_skills_backend is not None:
         routes[USER_SKILLS_VIRTUAL_ROOT] = user_skills_backend
@@ -106,6 +110,48 @@ def create_workspace_backend(
     return CompositeBackend(
         default=default_backend,
         routes=routes,
+    )
+
+
+def _builtin_skills_backend(
+    skills_root: Path,
+    skill_names: Sequence[str] | None,
+) -> BackendProtocol:
+    """未给白名单时挂载完整技能根，否则只挂载选中技能的独立只读目录。"""
+
+    if skill_names is None:
+        return AutoDedupFilesystemBackend(
+            root_dir=skills_root,
+            virtual_mode=True,
+        )
+
+    available = {
+        child.name
+        for child in skills_root.iterdir()
+        if child.is_dir() and (child / "SKILL.md").is_file()
+    }
+    selected = list(
+        dict.fromkeys(
+            str(name).strip()
+            for name in skill_names
+            if str(name).strip()
+        )
+    )
+    missing = [name for name in selected if name not in available]
+    if missing:
+        raise ValueError(f"未找到指定的内置技能：{', '.join(missing)}。")
+
+    # 虚拟根使用空默认后端，只把本次选中技能作为独立只读子目录路由。
+    skill_routes = {
+        f"/{name}/": AutoDedupFilesystemBackend(
+            root_dir=skills_root / name,
+            virtual_mode=True,
+        )
+        for name in selected
+    }
+    return CompositeBackend(
+        default=StateBackend(),
+        routes=skill_routes,
     )
 
 

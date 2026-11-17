@@ -299,7 +299,7 @@ def build_unit_generation_prompt(
             "merge, or deletion of confirmed historical Tasks. Do not assemble a Scope DAG "
             "or perform Global validation. Do not output PlanningRun/Candidate metadata, "
             "Candidate status, validation issues, execution state, or global summaries. "
-            "Do not generate platform-owned frontend:shell, frontend:auth-guard, route/menu "
+            "Do not generate platform-owned frontend:shell, frontend:auth-guard, backend:auth-resources, route/menu "
             "registration, page placeholder, authorization projection, acceptance, test, "
             "build, verification, persistence, or deterministic-executor responsibilities. "
             "Do not ask the user to resolve platform task boundaries."

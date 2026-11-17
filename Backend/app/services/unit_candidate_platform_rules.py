@@ -21,7 +21,7 @@ from app.services.unit_generation_contracts import UnitGenerationContext
 
 
 _KIND_OWNER = {"page": "frontend", "frontend": "frontend", "backend": "backend", "database": "database"}
-_NON_MODEL_UNITS = {"application:root", "app:integration", "frontend:shell", "frontend:auth-guard", "frontend:route-registry"}
+_NON_MODEL_UNITS = {"application:root", "app:integration", "frontend:shell", "frontend:auth-guard", "frontend:route-registry", "backend:auth-resources"}
 _BUILTIN_STRONG_RULES = {
     "exact_unit_owner", "exact_file_scope", "no_platform_owned_fields",
     "no_platform_owned_tasks", "no_repair_or_verification_tasks", "status_pending",

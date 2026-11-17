@@ -1,4 +1,4 @@
-"""运行时注入的英文字段取值规则；中文对照见 field_value_prompt_rules_cn.py。"""
+"""后端任务规划使用的英文字段取值规则；中文对照见同名中文模块。"""
 
 FIELD_VALUE_SEMANTICS = (
     "[Field-value contract]\n"
@@ -68,26 +68,4 @@ FIELD_VALUE_PLANNING_RULES = (
     "files outside its scope. Retain upstream responsibility for sourceBinding-only operations. Explicitly "
     "require rejecting update/delete when omit removes all effective predicates. Describe boundary behavior "
     "in implementation steps without adding test, build, or acceptance Tasks.",
-)
-
-FIELD_VALUE_IMPLEMENTATION_RULES = (
-    FIELD_VALUE_SEMANTICS + "\n\n"
-    "[Field-value execution order] Apply only the current stage's responsibilities. service first validates "
-    "business inputs and resolves trusted server context, computes pre-call query/write/upstream values, "
-    "invokes the planned Repository / Client, then constructs the internal response. current_user_id comes "
-    "from the authenticated server principal and current_time from the server clock. When context is "
-    "unavailable, obey the missing policy; never trust client-supplied identity. Never construct a call's "
-    "request using its not-yet-available response. Preserve false/zero and explicitly distinguish absence "
-    "from a target whose value is null.\n"
-    "repository consumes resolved typed values and preserves AND/OR parentheses, repeated columns, and "
-    "reused parameters. Remove empty groups after omit, but never replace them with always-true predicates. "
-    "Reject update/delete when no effective predicate remains. Parameterize every value. Use parameterized "
-    "LIKE with wildcard escaping for contains/starts_with/ends_with; require non-empty IN arrays and "
-    "ordered two-value BETWEEN arrays. upstream binds resolved values into the exact "
-    "path/query/header/request_body sections. omit means not sending the target, not substituting a literal "
-    "null string or empty string. Do not repeat business rules in Client, Mapper, or Controller.\n"
-    "Implement confirmed rules as ordinary typed Java code, never as eval, a script engine, or a new runtime "
-    "LLM call. Missing required semantics returns failed with failure_category=contract_mismatch; missing "
-    "planned type boundaries or write authorization returns failed with failure_category=plan_mismatch. "
-    "Both require a concrete change_request; never expand the write scope yourself.\n\n"
 )

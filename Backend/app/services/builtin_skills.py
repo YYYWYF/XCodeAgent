@@ -13,7 +13,10 @@ BUILTIN_SKILLS_DIR_ENV = "DEVAGENTSTUDIO_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.devagentstudio/builtin-skills/"
 REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
-SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME = "springboot-backend-generate"
+SPRINGBOOT_BACKEND_BOOTSTRAP_SKILL_NAME = "springboot-backend-bootstrap"
+SPRINGBOOT_BACKEND_FOUNDATION_SKILL_NAME = "springboot-backend-foundation"
+SPRINGBOOT_BACKEND_BUSINESS_SKILL_NAME = "springboot-backend-business"
+SPRINGBOOT_BACKEND_CONTROLLER_SKILL_NAME = "springboot-backend-controller"
 FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME = "frontend-static-data-generate"
 UI_DESIGN_SKILL_NAME = "antd-ui-design"
 FRONTEND_CODE_SCAN_SKILL_NAME = "frontend-code-scan"
@@ -37,14 +40,6 @@ _CODE_BLOCK_TEMPLATE_REFERENCE_FILES = [
     "references/page-templates.md",
 ]
 
-_SPRINGBOOT_BACKEND_REFERENCE_FILES = [
-    "references/error-handling.md",
-    "references/database/bootstrap.md",
-    "references/database/layer-implementation.md",
-    "references/external-api/bootstrap.md",
-    "references/external-api/layer-implementation.md",
-]
-
 _BACKEND_CODE_SCAN_REFERENCE_FILES = ["references/rules-reference.md"]
 
 _SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES = [
@@ -58,9 +53,25 @@ _SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES = [
 REQUIRED_BUILTIN_SKILL_FILES = {
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
-    SPRINGBOOT_BACKEND_GENERATE_SKILL_NAME: [
+    SPRINGBOOT_BACKEND_BOOTSTRAP_SKILL_NAME: [
         "SKILL.md",
-        *_SPRINGBOOT_BACKEND_REFERENCE_FILES,
+        "references/bootstrap-database.md",
+        "references/bootstrap-external-api.md",
+    ],
+    SPRINGBOOT_BACKEND_FOUNDATION_SKILL_NAME: [
+        "SKILL.md",
+        "references/foundation-database.md",
+        "references/foundation-external-api.md",
+    ],
+    SPRINGBOOT_BACKEND_BUSINESS_SKILL_NAME: [
+        "SKILL.md",
+        "references/business-database.md",
+        "references/business-external-api.md",
+        "references/business-error-handling.md",
+    ],
+    SPRINGBOOT_BACKEND_CONTROLLER_SKILL_NAME: [
+        "SKILL.md",
+        "references/controller-resource-authorization.md",
     ],
     FRONTEND_STATIC_DATA_GENERATE_SKILL_NAME: ["SKILL.md"],
     UI_DESIGN_SKILL_NAME: ["SKILL.md"],

@@ -5,11 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.services.authorization_constants_projection import (
-    AUTH_CONSTANTS_RELATIVE_PATH,
-    AuthorizationConstantsProjectionError,
-    apply_authorization_constants_projection,
-)
 from app.services.authorization_frontend_projection import (
     RESOURCES_RELATIVE_PATH,
     AuthorizationFrontendProjectionError,
@@ -43,18 +38,14 @@ def apply_platform_projections(
     if plan_sha256 and plan_sha256 != actual_plan_sha256:
         raise PlatformProjectionBoundaryError("Build Run 绑定的任务计划摘要与投影输入不一致。")
     frontend_projection = build_task_plan.get("authorization_frontend_projection")
-    constants_projection = build_task_plan.get("authorization_constants_projection")
     workspace_path = Path(workspace).expanduser().resolve()
     if not workspace_path.is_dir():
         raise PlatformProjectionBoundaryError("平台共享投影工作区不存在或不是目录。")
-    # 在任何权限写入前检查两个固定目标，防止符号链接把写入移到工作区之外。
-    for projection, relative_path in (
-        (frontend_projection, RESOURCES_RELATIVE_PATH),
-        (constants_projection, AUTH_CONSTANTS_RELATIVE_PATH),
-    ):
-        if projection is not None and not (workspace_path / relative_path).resolve().is_relative_to(workspace_path):
-            raise PlatformProjectionBoundaryError(f"权限投影目标越过工作区：{relative_path}。")
-    if frontend_projection is not None or constants_projection is not None:
+    # 写入前检查前端目标，防止符号链接把投影移到工作区之外。
+    if frontend_projection is not None and not (workspace_path / RESOURCES_RELATIVE_PATH).resolve().is_relative_to(workspace_path):
+        raise PlatformProjectionBoundaryError(f"权限投影目标越过工作区：{RESOURCES_RELATIVE_PATH}。")
+    # 后端业务常量只由 backend:auth-resources 前置任务写入，收尾不能再次覆盖。
+    if frontend_projection is not None:
         state = load_template_state(workspace)
         if not has_capability(state, "authorization"):
             raise PlatformProjectionError("权限投影要求 TemplateState.effective 含 authorization。")
@@ -68,14 +59,9 @@ def apply_platform_projections(
                     workspace_path,
                     frontend_projection,
                 ),
-                "authConstants": apply_authorization_constants_projection(
-                    workspace_path,
-                    constants_projection,
-                ),
             }
         except (
             AuthorizationFrontendProjectionError,
-            AuthorizationConstantsProjectionError,
             OSError,
             UnicodeError,
         ) as exc:
@@ -94,7 +80,6 @@ def apply_platform_projections(
         "buildRunId": build_run_id,
         "planSha256": actual_plan_sha256,
         "frontend": captured.value["frontend"],
-        "authConstants": captured.value["authConstants"],
         "files": list(change_set.get("files") or []),
         "summary": dict(
             change_set.get("summary")

@@ -14,6 +14,9 @@ from app.services.unit_generation_requirements_contracts import (
     GenerationRequirementsError, UnitGenerationRequirements, fail_requirement_input,
 )
 from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX, backend_module_unit_id
+from app.services.backend_authorization_resources import (
+    BACKEND_AUTH_UNIT, BACKEND_AUTH_CAPABILITY, BACKEND_AUTH_PATH, normalize_backend_constants,
+)
 
 
 _STRUCTURAL_UNITS = {"application:root", "app:integration"}
@@ -173,6 +176,7 @@ def resolve_generation_requirements(
     unit_skeleton: Mapping[str, Any], reuse_facts: ReuseFacts, formal_target: Mapping[str, Any],
     endpoint_designs: Sequence[Mapping[str, Any]] = (),
     completed_backend_endpoints: Sequence[tuple[str, str]] = (),
+    backend_auth_resources: Mapping[str, Any] | None = None,
 ) -> UnitGenerationRequirements:
     """计算当前 Scope 的新增职责、策略和 planning 集合；source type 只来自 Endpoint Design。
 
@@ -208,6 +212,21 @@ def resolve_generation_requirements(
     requirements_by_unit = {}
     strategies = {}
     for unit_id in required:
+        if unit_id == BACKEND_AUTH_UNIT:
+            # 完成事实只认最近成功应用的清单，不复用旧任务声明或计算内容摘要。
+            resource_state = backend_auth_resources or {}
+            constants = normalize_backend_constants(resource_state.get("constants", []))
+            satisfied = resource_state.get("applied") is True
+            duties = [] if not constants or satisfied else [GenerationRequirement(
+                requirement_id=BACKEND_AUTH_CAPABILITY,
+                description="将全部接口的业务权限资源常量写入 AuthConstants.java。",
+                source_refs={"artifact": "technical-plan", "kind": BACKEND_AUTH_CAPABILITY,
+                             "target_id": BACKEND_AUTH_CAPABILITY, "capability_id": BACKEND_AUTH_CAPABILITY,
+                             "constants": constants, "paths": [BACKEND_AUTH_PATH]},
+            )]
+            requirements_by_unit[unit_id] = duties
+            strategies[unit_id] = "deterministic" if duties else "reuse_only" if constants else "not_required"
+            continue
         # 配置检查只服务本轮待开发的后端接口；已完成接口仍保留前端调用上下文。
         unit_sources = sources
         if unit_id == "backend:bootstrap" and build_execution_scope.get("type") == "page":

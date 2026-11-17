@@ -13,6 +13,8 @@ from app.services.authorization_resource_catalog import compile_frontend_resourc
 from app.services.build_task_progress import create_planning_run_progress_publisher
 from app.services.dag_planning_inputs import SequentialPlanningInputs
 from app.services.deterministic_unit_candidates import build_auth_guard_candidate
+from app.services.backend_auth_resource_candidate import build_backend_auth_resource_candidate
+from app.services.backend_authorization_resources import BACKEND_AUTH_UNIT
 from app.services.frozen_contract_store import FrozenContractStore
 from app.services.global_issue_attribution import GlobalRepairDecision, attribute_global_issues
 from app.services.global_planning_validation import CandidateOwnership, TaskProvenance
@@ -238,11 +240,14 @@ async def plan_dag_sequential(
         identity = AttemptIdentity.allocate(planning_run_id=initial.planning_run_id, unit_id=current.unit_id,
                                             generation_round=current.generation_round, attempt_in_round=1)
         await controller.apply(UnitAttemptStarted(identity=identity, at=now()))
-        catalog = compile_frontend_resource_catalog(plain_json(frozen.project_plan.get("authorization_manifest", {})))
-        payload = build_auth_guard_candidate(
-            unit_id=current.unit_id, resource_catalog=catalog, fingerprint=resource_catalog_fingerprint(catalog),
-            generation_requirements=requirements,
-        )
+        if current.unit_id == BACKEND_AUTH_UNIT:
+            payload = build_backend_auth_resource_candidate(requirements)
+        else:
+            catalog = compile_frontend_resource_catalog(plain_json(frozen.project_plan.get("authorization_manifest", {})))
+            payload = build_auth_guard_candidate(
+                unit_id=current.unit_id, resource_catalog=catalog, fingerprint=resource_catalog_fingerprint(catalog),
+                generation_requirements=requirements,
+            )
         if payload is None:
             raise GenerationRequirementsError((ValidationIssue(
                 code="PLANNING_DETERMINISTIC_CANDIDATE_MISSING", level="system", category="platform",

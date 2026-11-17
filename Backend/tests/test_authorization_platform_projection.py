@@ -13,18 +13,21 @@ from app.services.authorization_platform_projection import (
 
 
 class AuthorizationPlatformProjectionTests(unittest.TestCase):
-    """验证显式前端路由和后端常量由平台统一投影。"""
+    """验证前端共享投影及其工作区边界。"""
 
-    def test_records_frontend_and_backend_diffs(self) -> None:
-        """首次生成两处平台文件，重复执行不再产生差异。"""
+    def test_records_frontend_diff_without_rewriting_backend(self) -> None:
+        """收尾只写前端投影，保留前置任务管理的后端常量。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self._write_template(workspace)
+            constants = workspace / "backend/src/main/java/com/cmbchina/backend/auth/domain/constant/AuthConstants.java"
+            original_constants = constants.read_text(encoding="utf-8")
             first = apply_platform_projections(workspace, self._plan())
             second = apply_platform_projections(workspace, self._plan())
+            self.assertEqual(constants.read_text(encoding="utf-8"), original_constants)
 
-        self.assertEqual(first["summary"]["files"], 2)
+        self.assertEqual(first["summary"]["files"], 1)
         self.assertEqual(second["summary"]["files"], 0)
 
     def test_edd_reports_resource_drift_without_rewrite(self) -> None:

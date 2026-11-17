@@ -16,6 +16,7 @@ from app.services.backend_module_scope import design_endpoint_keys, module_task_
 from app.services.planning_issues import ValidationIssue
 from app.services.page_task_freshness import page_task_input_digest
 from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX
+from app.services.backend_authorization_resources import BACKEND_AUTH_UNIT
 
 
 class BuildUnitCompilationError(ValueError):
@@ -305,6 +306,10 @@ def _apply_unit_task_dependencies(
                     if dependency_unit_id in units
                     and dependency_unit_id not in completed_units
                     and dependency_unit_id != "frontend:shell"
+                    and not (dependency_unit_id == BACKEND_AUTH_UNIT and (
+                        not (build_context.get("backend_auth_resources") or {}).get("constants")
+                        or (build_context.get("backend_auth_resources") or {}).get("applied") is True
+                    ))
                     and not (
                         auth_resolution is not None
                         and unit_id in auth_consumer_units

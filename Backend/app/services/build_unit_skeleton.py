@@ -18,6 +18,7 @@ def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
     """返回 Endpoint API 设计旅程固定需要的公共 Unit。"""
 
     return (
+        "backend:auth-resources",
         "frontend:shell",
         "frontend:api-client",
         "frontend:auth-guard",
@@ -136,6 +137,7 @@ def _unit_graph(
     edges: list[dict[str, str]] = []
     errors: list[str] = []
     public_unit_ids = _public_unit_ids(project_plan)
+    edges.append({"from": "backend:auth-resources", "to": "backend:bootstrap", "type": "depends_on"})
     for public_unit_id in public_unit_ids:
         if public_unit_id != "app:integration":
             edges.append(
@@ -158,6 +160,7 @@ def _unit_graph(
             continue
         edges.append({"from": "application:root", "to": module_unit_id, "type": "contains"})
         edges.append({"from": "backend:bootstrap", "to": module_unit_id, "type": "depends_on"})
+        edges.append({"from": "backend:auth-resources", "to": module_unit_id, "type": "depends_on"})
         edges.append({"from": module_unit_id, "to": "app:integration", "type": "depends_on"})
 
     auth_resource_pages = authorization_resource_consumer_page_ids(project_plan)
@@ -229,7 +232,7 @@ def _skeleton_fingerprint(
     """为 Unit 骨架输入生成稳定指纹，供后续页面请求复用。"""
 
     payload = {
-        "skeleton_policy": "backend-module-units-and-shell-prerequisite",
+        "skeleton_policy": "backend-auth-resources-before-bootstrap",
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),

@@ -13,6 +13,7 @@ from app.services.unit_task_manifest import backend_module_unit_id
 TERMINAL_STATUSES = {"completed", "failed", "already_satisfied"}
 RUNNABLE_STATUS = "pending"
 RETRYABLE_FAILURES = {
+    "backend_authorization_resource_write_failed",
     "invalid_structured_response",
     "runner_crash",
     "timeout",

@@ -11,6 +11,7 @@ from app.services.planning_frozen import plain_json
 from app.services.unit_generation_requirements_contracts import (
     UnitGenerationRequirements, fail_requirement_input,
 )
+from app.services.backend_auth_resource_candidate import is_backend_auth_resource_task
 
 
 AUTH_GUARD_UNIT_ID = "frontend:auth-guard"
@@ -53,7 +54,8 @@ def retained_auth_resource_task_ids(plan: Mapping[str, Any], tasks: Sequence[Map
         previous = registry.get(task.get("id"))
         if (
             isinstance(previous, Mapping)
-            and is_deterministic_auth_resource_task(task, task.get("target_files") or [])
+            and (is_deterministic_auth_resource_task(task, task.get("target_files") or [])
+                 or is_backend_auth_resource_task(task, task.get("target_files") or []))
             and all(task.get(field) == previous.get(field) for field in contract_fields)
         ):
             result.add(task["id"])

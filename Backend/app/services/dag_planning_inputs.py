@@ -121,6 +121,7 @@ class SequentialPlanningInputs(FrozenPlanningModel):
             build_execution_scope=self.build_execution_scope, unit_skeleton=self.skeleton_plan,
             reuse_facts=generation_reuse_facts(self.reuse_facts), formal_target=self.project_plan,
             completed_backend_endpoints=sorted(completed_backend_keys(self.build_context)),
+            backend_auth_resources=self.build_context.get("backend_auth_resources"),
             endpoint_designs=plain_json(tuple(
                 contract.content
                 for contract in self.formal_contract_inputs.endpoint_api_designs

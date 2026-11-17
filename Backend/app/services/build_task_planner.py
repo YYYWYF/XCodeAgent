@@ -38,6 +38,7 @@ from app.services.deterministic_unit_candidates import (
 )
 from app.services.template_state import validate_template_context
 from app.services.unit_task_manifest import backend_module_unit_id
+from app.services.backend_auth_resource_candidate import is_backend_auth_resource_task
 
 
 logger = logging.getLogger(__name__)
@@ -1140,7 +1141,13 @@ def _authorization_coverage_errors(
             )
     if any(_is_template_boundary_path(path) for path in task_paths):
         errors.append("Build tasks must not modify platform-owned shared route or menu files.")
-    if any(_is_auth_constants_path(path) for path in task_paths):
+    if any(_is_auth_constants_path(path)
+           for task in tasks
+           if not (is_backend_auth_resource_task(task, _task_declared_paths(task)) and (
+               build_context.get("_compile_auth_capability_dependencies") is True
+               or task.get("id") in build_context.get("_retained_auth_resource_task_ids", ())
+           ))
+           for path in _task_scope_paths(task)):
         errors.append("Build tasks must not modify platform-owned AuthConstants.")
     return errors
 

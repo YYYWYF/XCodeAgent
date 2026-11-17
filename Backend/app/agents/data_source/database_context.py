@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.agents.data_source.prompt_context import task_endpoint_designs
+from app.agents.data_source.execution_config import task_endpoint_designs
 
 
 def task_database_source_ids(tasks: list[dict[str, Any]]) -> tuple[str, ...]:

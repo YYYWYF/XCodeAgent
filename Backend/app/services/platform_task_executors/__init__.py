@@ -10,6 +10,8 @@ from app.services.platform_task_executors.authorization_frontend_resources impor
     EXECUTOR_NAME as AUTHORIZATION_FRONTEND_RESOURCES_EXECUTOR,
     execute_authorization_frontend_resources,
 )
+from app.services.platform_task_executors.authorization_backend_resources import execute_authorization_backend_resources
+from app.services.backend_authorization_resources import BACKEND_AUTH_EXECUTOR
 
 
 PlatformTaskExecutor = Callable[
@@ -24,6 +26,7 @@ class PlatformTaskExecutorRegistryError(ValueError):
 
 _PLATFORM_TASK_EXECUTORS: Mapping[str, PlatformTaskExecutor] = MappingProxyType(
     {
+        BACKEND_AUTH_EXECUTOR: execute_authorization_backend_resources,
         AUTHORIZATION_FRONTEND_RESOURCES_EXECUTOR: (
             execute_authorization_frontend_resources
         ),
@@ -49,5 +52,6 @@ __all__ = [
     "PlatformTaskExecutor",
     "PlatformTaskExecutorRegistryError",
     "execute_authorization_frontend_resources",
+    "execute_authorization_backend_resources",
     "resolve_platform_task_executor",
 ]
