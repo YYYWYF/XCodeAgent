@@ -279,10 +279,22 @@ class FrozenContractReader:
         ref_id: str,
         selector: str,
         cursor: str | None = None,
+        max_bytes: int | None = None,
     ) -> FrozenContractFragment:
-        """执行一次授权、selector、分页和累计预算均受控的冻结读取。"""
+        """执行受控冻结读取；平台预读可缩小页预算，模型工具不暴露此参数。"""
 
         with self._lock:
+            if max_bytes is not None and (
+                isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 4
+            ):
+                raise _read_error(
+                    "FROZEN_CONTRACT_READER_INPUT_INVALID",
+                    "平台单次读取字节上限必须是至少为 4 的整数。",
+                )
+            page_limit = (
+                min(self._policy.max_bytes_per_read, max_bytes)
+                if max_bytes is not None else self._policy.max_bytes_per_read
+            )
             self._charge_read()
             entry = self._allowed.get(ref_id)
             if entry is None:
@@ -315,7 +327,7 @@ class FrozenContractReader:
                     ref_id=ref_id,
                     selector=selector,
                 )
-            end = _page_end(content, offset, self._policy.max_bytes_per_read)
+            end = _page_end(content, offset, page_limit)
             if end == offset:
                 raise _read_error(
                     "FROZEN_CONTRACT_ACCUMULATED_SIZE_EXCEEDED",

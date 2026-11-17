@@ -121,7 +121,8 @@ async def generate_unit_candidate_once(
     """为一个已分配 Attempt 执行有界 Model/Reader 多轮并只返回一个最终结果。
 
     Bootstrap 只根据职责清单和后端目录规划，不创建 Reader 或绑定契约读取工具。
-    其他 Unit 的 Store 由 PlanningRun 调用链显式绑定；每个带 Store 的调用创建独立 Reader。模型可在
+    其他 Unit 的 Store 由 PlanningRun 调用链显式绑定；每个带 Store 的调用创建独立 Reader，平台先有界预读
+    当前 Unit 的职责合同，预读与模型补读共用原预算。模型可在
     ``model_turn_limit`` 内零次或多次调用唯一的冻结合同读取工具，所有 turn 仍共享
     当前 Attempt 身份和 Session timeout。预算耗尽、无效 ToolCall、截断或最终解析失败
     均是 Unit 内容失败；Store/catalog 损坏是 platform fatal；成功结果仍交给 Local Validator。
@@ -237,6 +238,11 @@ async def generate_unit_candidate_once(
         model_turns=model_turns,
         reader=(tool_session.reader if tool_session is not None else None),
     )
+    if tool_session is not None:
+        generation_metadata.update(
+            prefetched_contract_reads=tool_session.prefetched_reads,
+            prefetched_contract_bytes=tool_session.prefetched_bytes,
+        )
     if session_issue is not None:
         tasks = []
         validation_issues: Sequence[ValidationIssue] = (session_issue,)

@@ -144,7 +144,7 @@ build-task-plan.json
 
 # 4. 总体流程
 
-生产入口由 `graph/nodes/task_planning_adapter.py` 统一组装服务端正式输入。输入只来自已确认的 ProductPlan、TechnicalPlan、运行时 PageImplementationContract、TechnicalPlan API Contract、当前有效的 Endpoint API Design，以及按页面／应用裁剪的 authorization slice；Endpoint 设计通过 `api_contract_id + endpoint_id + artifact_revision` 绑定来源。`build_context.endpoint_designs` 会在进入 PlanningRun 前转换为 Frozen Store 中的 `endpoint_api_design`，Unit 只通过 allowlisted `contract_catalog` 和 FrozenContractReader 按需读取，不接收完整合同正文。
+生产入口由 `graph/nodes/task_planning_adapter.py` 统一组装服务端正式输入。输入只来自已确认的 ProductPlan、TechnicalPlan、运行时 PageImplementationContract、TechnicalPlan API Contract、当前有效的 Endpoint API Design，以及按页面／应用裁剪的 authorization slice；Endpoint 设计通过 `api_contract_id + endpoint_id + artifact_revision` 绑定来源。`build_context.endpoint_designs` 会在进入 PlanningRun 前转换为 Frozen Store 中的 `endpoint_api_design`，Unit 只通过 allowlisted `contract_catalog` 和 FrozenContractReader 获取片段。平台在首轮模型请求前有界预读该 Unit 的职责片段，以独立只读消息提供；预读与模型补读共享原 Reader 预算和游标，不把全局合同正文写入 Context。预读上限为剩余次数和累计字节的一半、正文至多 16 KiB，未读完时沿原工具续读。
 
 EntitySourceBinding 仍可作为独立旧流程使用，但不再是 DAG Planning 的正式输入、就绪门禁或 Build Context 来源。页面 Scope 使用其全部 `requiredEndpointIds` 对应的已确认 Endpoint API Design；Endpoint Scope 只使用自身复合身份。缺失、过期、双文件不一致或缺少 `artifactRevision` 的设计都在 Pre-generation Gate 阻断，不能由模型补全。
 

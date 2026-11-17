@@ -64,6 +64,10 @@ attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_i
 设置模型 SDK infrastructure retry 为 2。
 
 每个 Local Attempt 创建独立 FrozenContractReader，只绑定 `read_frozen_contract_fragment`。
+首次模型调用前，平台按当前 Unit 已验证的 catalog 预读职责片段，以独立只读消息提供正文，
+不修改冻结 Context。预读至多使用剩余读取次数和累计字节的一半，且正文不超过 16 KiB；
+先给各 selector 一页，再读取后续页。预读与模型补读共用同一 Reader、游标和原预算，
+大合同未读完时保留 `nextCursor` 供模型续读。完整片段无需模型先请求一次相同读取。
 模型可在一个 Attempt 内执行受 turn/read-count/read-byte 预算限制的多轮 Model → Reader，
 但最终仍只返回一个完整 `tasks[]`，也只增加一次 Local attempt。预算耗尽是内容失败；
 Store/catalog 损坏是 platform fatal，不开放其他 workspace tool。
