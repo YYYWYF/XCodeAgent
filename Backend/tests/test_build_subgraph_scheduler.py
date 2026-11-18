@@ -974,6 +974,22 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
                 {**state, **binding}
             )
             dispatch_drift_errors = _build_run_plan_drift_errors({**state, **binding})
+            # 查看旧执行只读取自己的已绑定计划，不能把最新计划的变化作为入口错误。
+            with patch("app.graph.subgraphs.build._latest_build_task_plan_for_build",
+                       side_effect=AssertionError("只读展示不校验当前正式计划")):
+                displayed, displayed_binding, display_errors = _bound_build_task_plan_for_build(
+                    {**state, **binding}, validate_current_plan=False
+                )
+            self.assertEqual(display_errors, [])
+            self.assertEqual(displayed, snapshot)
+            self.assertEqual(displayed_binding, binding)
+
+            # 只读路径仍拒绝损坏副本，不能用最新计划替代原执行合同。
+            Path(binding["build_run_plan_path"]).write_text("{}", encoding="utf-8")
+            _, _, corrupt_errors = _bound_build_task_plan_for_build(
+                {**state, **binding}, validate_current_plan=False
+            )
+            self.assertIn("副本摘要不匹配", "；".join(corrupt_errors))
 
         self.assertIn("已变化", "；".join(drift_errors))
         self.assertIn("已变化", "；".join(dispatch_drift_errors))

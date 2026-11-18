@@ -65,7 +65,7 @@ const FIELD_DEFS: { title: string; dataIndex: keyof XXXItem }[] = [
 ### 步骤 6：填充数据交互
 
 ```tsx
-// request 函数合并 formValues + 分页
+// 查询状态合并筛选条件和分页；useRequest 输出 dataSource 和 loading
 // toolBarRender 按钮
 // 行内操作列（查看详情 / 编辑 / 删除）
 ```

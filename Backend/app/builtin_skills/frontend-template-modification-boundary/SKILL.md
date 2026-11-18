@@ -33,7 +33,7 @@ description: 前端模板工程文件修改边界规范（前端 skill）。当�
 | `src/constants/resources.ts` | `/frontend/src/constants/resources.ts`（authorization effective 时由平台投影） |
 | `src/constants/routes.tsx` | `/frontend/src/constants/routes.tsx`（所有应用由平台 Route Projection 管理） |
 
-**生成代码前，读取 `/.devagentstudio/template-state.json` 的 `effective` 与当前任务允许路径。** 平台拥有共享路由；authorization effective 时平台额外拥有资源目录与权限 decoration。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
+**生成代码前，使用任务包中已校验的 `template_context.effective_capabilities` 与精确目标文件。** 平台拥有共享路由；authorization effective 时平台额外拥有资源目录与权限 decoration。不要把文件写到工作区根下的裸 `src/` 或 `Frontend/src/`，那会写到错误位置。
 
 ## 🔴 前端工程根目录禁止创建文件
 
@@ -92,7 +92,7 @@ TemplateState 是唯一模板能力事实源：页面任务只生成真实 `src/
 - 页面文件路径必须是 `src/pages/<PageKey>/index.tsx`；`<PageKey>` 由已确认页面设计提供。
 - 页面任务不得修改 `src/routes/index.tsx`、`src/utils/route.tsx`、`src/constants/routes.tsx` 或平台共享注册文件。受控页面的 RouteGuard 由平台 resourceKey decoration 派生，操作控件只按任务提供的 `RESOURCES.OPERATION` 绑定生成。
 - 框架骨架文件（入口、路由、布局、Provider、守卫、配置）**禁止修改**。
-- 页面的类型、常量、hooks、工具函数**统一放公共目录**（`src/typings`、`src/constants`、`src/hooks`、`src/utils`），不放在页面目录内；可复用组件放 `src/components`。
+- 页面的共享类型、业务常量、复杂 Hooks 和纯工具，按职责放入已授权的文件；可复用组件放 `src/components`。
 
 ## 文件修改边界总览
 
@@ -160,7 +160,7 @@ TemplateState 是唯一模板能力事实源：页面任务只生成真实 `src/
 
 ### `src/apis/` — 业务接口
 
-**只能新增**业务 API 文件（如 `dutyApi.ts`），通过 `import` 复用 `service.ts` 导出的 axios 实例，**不得**修改 `service.ts` 及框架自带的 `auth.ts`/`login.ts`/`welcome.ts`。
+在明确授权的业务 API 文件（如 `dutyApi.ts`）增量实现，保留已确认导出，通过 `import` 复用 `service.ts` 的默认导出，**不得**修改 `service.ts` 及框架自带的 `auth.ts`/`login.ts`/`welcome.ts`。
 
 ```ts
 // src/apis/dutyApi.ts
@@ -182,7 +182,7 @@ export async function fetchDutyList(params: DutyListQuery): Promise<DutyListResp
 - 有 `response_schema_ref` 的接口使用 `service.get/post/put/delete<T>()` 并向页面返回
   `Promise<T>`。
 - 没有响应 Schema 的空结果接口执行 `await service.<method><void>()` 后正常返回。
-- 页面、hooks、ProTable request 和 response binding 只消费业务 API 函数返回的业务类型。
+- 页面、Hooks 与响应字段绑定 只消费业务 API 函数返回的业务类型。
 
 ### 🔴 数据源类型决定 API 写法（Static vs Database）
 
@@ -241,7 +241,7 @@ export async function deleteDuty(id: string) {
 }
 ```
 
-页面组件里 `import { fetchDutyList } from '@/apis/dutyApi'`，在 ProTable 的 `request` 里 `const res = await fetchDutyList({...}); return { data: res.data, success: res.success, total: res.total }`。这与所选页面模板（`commonTable`/`tabsTable`）的 `api.ts` 写法完全一致，直接参照模板。
+页面使用 ahooks `useRequest` 调用已完成静态模块的查询导出，通过 `dataSource` 与 `loading` 渲染。
 
 #### 情况 B：数据源是真实接口（mysql / external_api / third_party）
 
@@ -251,32 +251,15 @@ export async function deleteDuty(id: string) {
 
 ## 🟢 自由编写与公共目录放置规则
 
-页面业务代码的**主组件**在 `src/pages/<PageKey>/index.tsx` 自由编写；但页面用到的**类型、常量、hooks、工具函数、可复用组件**统一放到对应的**公共目录**下新增文件，**不要放在页面目录内**。
+页面入口位于 `src/pages/<PageKey>/index.tsx`。按规范组织局部 UI 类型和已授权的可复用代码。
 
 ### 页面主组件：`src/pages/<PageKey>/index.tsx`
 
-这是页面入口，必须 `export default` 一个 React 组件。可自由编写业务逻辑、交互、状态，调用 `src/apis/` 下的业务接口，使用 antd v4 组件、ProComponents、Tailwind 样式。
-
-```tsx
-// src/pages/DutyList/index.tsx
-import { useState, useEffect } from 'react';
-import { Table } from 'antd';
-import { fetchDutyList } from '@/apis/dutyApi';
-import type { DutyListItem, DutyListQuery } from '@/typings/duty';
-import { DUTY_TYPE_LABELS } from '@/constants/duty';
-
-export default function DutyList() {
-  const [data, setData] = useState<DutyListItem[]>([]);
-  useEffect(() => {
-    fetchDutyList({}).then((res) => setData(res?.data ?? []));
-  }, []);
-  return <Table dataSource={data} columns={[/* ... */]} />;
-}
-```
+页面入口默认导出 React 组件。以 [Frontend Engineering Standards](../frontend-engineering-standards/SKILL.md) 为工程规范，按确认设计选用 Ant Design 与 ProComponents。
 
 ### 类型文件：`src/typings/<page>.ts`
 
-每个新增页面如果需要类型，在 `src/typings/` 下新建一个以页面名命名的 `.ts` 文件，**不要**把类型写在页面目录内，也**不要**改框架自带的 `index.ts`/`workbench.ts`/`yst.ts`。
+优先复用已有 API 类型。共享类型可放入已授权的 `src/typings/` 业务文件；保留框架自带的 `index.ts`、`workbench.ts` 和 `yst.ts`。
 
 ```ts
 // src/typings/duty.ts
@@ -302,19 +285,7 @@ export const DUTY_TYPE_LABELS: Record<string, string> = {
 
 ### Hooks 文件：`src/hooks/use<Page>.ts` 或 `src/hooks/<page>.ts`
 
-页面专属 hooks 统一在 `src/hooks/` 下新建文件，**不要**改框架自带的 `useGuard.ts`。
-
-```ts
-// src/hooks/useDutyList.ts
-import { useState, useEffect } from 'react';
-import { fetchDutyList } from '@/apis/dutyApi';
-
-export function useDutyList() {
-  const [data, setData] = useState([]);
-  useEffect(() => { fetchDutyList({}).then(r => setData(r?.data ?? [])); }, []);
-  return { data };
-}
-```
+复杂或可复用请求逻辑可写在已授权的 Hook 文件中；简单查询直接在页面使用 useRequest。模板的 `useGuard.ts` 由平台管理。
 
 ### 工具函数文件：`src/utils/<page>.ts`
 
@@ -355,12 +326,12 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 
 当需要为某个页面生成具体代码时，按以下步骤：
 
-1. **确认页面目录与 key**：页面目录 `src/pages/<PageKey>/index.tsx` 已由脚手架创建（初始内容为 `hello agent!` 占位），`<PageKey>` 与 `menus.ts` 中登记的 `key` 一致。
+1. **确认页面路径**：直接读取任务给定的页面入口。
 2. **新增类型（如需）**：在 `src/typings/<page>.ts` 新建类型文件，不改框架自带类型文件。
 3. **新增常量（如需）**：在 `src/constants/<page>.ts` 新建常量文件。
-4. **新增业务 API（如需）**：在 `src/apis/<biz>Api.ts` 新建文件，复用 `service.ts` 的 axios 实例。
+4. **核对业务 API**：消费已完成的依赖模块导出；缺少已声明的依赖时反馈任务失败。
 5. **新增 hooks/工具函数（如需）**：分别在 `src/hooks/`、`src/utils/` 下新建文件。
-6. **编写页面主组件**：替换 `src/pages/<PageKey>/index.tsx` 的占位内容为真实业务代码，从公共目录 import 类型/常量/hooks/API。
+6. **编写页面主组件**：在任务声明的 `src/pages/<PageKey>/index.tsx` 实现业务代码，从公共目录 import 类型/常量/hooks/API。
 7. **拆分可复用组件（如需）**：页面太长且有可复用模块时，拆到 `src/components/<Module>/`。
 8. **不要碰菜单**：菜单登记和资源控制由 Build 平台处理；生成代码阶段不得改 `menus.ts`。
 
@@ -373,11 +344,11 @@ src/components/DutyTable/index.tsx   // 可复用的值班表格组件
 - ❌ 修改 `src/App.tsx`、`src/index.tsx` 入口装配
 - ❌ 修改 `src/layout/**`、`src/providers/**`、`src/hooks/useGuard.ts`
 - ❌ 修改 `src/apis/service.ts` 请求封装（新增 API 复用即可）
-- ❌ 修改框架自带的 `src/constants/index.ts`/`routes.ts`/`layout.ts`/`yst.ts`/`menus.ts` 结构、`src/typings/**`、`src/utils/route.tsx`/`workbench.tsx`
+- ❌ 修改框架自带的 `src/constants/index.ts`/`routes.ts`/`layout.ts`/`yst.ts`/`menus.ts` 结构、框架自带的类型文件、`src/utils/route.tsx`/`workbench.tsx`
 - ❌ **重新生成或修改 `package.json`、`pnpm-lock.yaml`、`vite.config.ts`、`tsconfig.json`、`tailwind.config.js`、`postcss.config.js`、`index.html`、`Dockerfile`、`.gitignore`、`README.md`**
 - ❌ 删除框架自带的 `Login`/`Logout`/`System`/`DefaultPage` 页面
 - ❌ 在 `menus.ts` 删除或修改已有菜单项（只能追加）
-- ❌ 把页面类型/常量/hooks/工具函数写在页面目录内（必须放公共目录）
+- ❌ 新增任务授权范围之外的业务文件
 - ❌ 修改 `src/styles/**` 全局样式（页面样式用 Tailwind 或在公共目录规范内处理）
 - ❌ 为了加依赖而改 `package.json`（所需依赖应假设已存在；若确实缺失，向用户说明，由用户安装）
 

@@ -20,6 +20,15 @@ class _UncertainScope(ValueError):
     """表示现有正式数据不足以证明裁剪完整性。"""
 
 
+class FrontendTaskProjectionError(ValueError):
+    """以任务、阶段和引用类别报告范围错误。"""
+
+    def __init__(self, task_id, stage: str, reference: str):
+        """保留诊断身份，避免泄露正式契约内容。"""
+        self.stage = stage
+        super().__init__(f"前端任务 {task_id or 'unknown'} 的 {stage} 范围无法确定（{reference}）。")
+
+
 def _identity(value: Any) -> str:
     """要求正式标识为非空字符串，避免把错误值转换成身份。"""
     if not isinstance(value, str) or not value.strip() or value != value.strip():
@@ -176,7 +185,7 @@ def _navigation_targets(page: dict, contract: dict, required: set[str]) -> set[s
 
 
 def _schema_closure(contract: dict, endpoints: list[dict]) -> dict:
-    """保持本地 Schema 的递归闭包，遇到外部或无法解析的指针时回退。"""
+    """保持本地 Schema 的递归闭包，遇到无法解析的指针时报错。"""
     schemas = contract.get("schemas", {})
     if not isinstance(schemas, dict):
         raise _UncertainScope
@@ -197,7 +206,7 @@ def _schema_closure(contract: dict, endpoints: list[dict]) -> dict:
                     continue
                 name = normalize_local_schema_ref(_identity(child), contract_id=contract["id"])
                 if any(marker in name for marker in ("#", "/", "\\", ":")) or not isinstance(schemas.get(name), dict):
-                    raise _UncertainScope
+                    raise _UncertainScope("schema_reference")
                 if name not in visited:
                     visited.add(name)
                     pending.append(schemas[name])
@@ -339,7 +348,10 @@ def _project(project_plan: dict, tasks: list[dict]) -> dict:
         if contract_id in selected_by_contract:
             selected_ids = selected_by_contract[contract_id]
             endpoints = [item for key, item in contract_endpoints[contract_id].items() if key in selected_ids]
-            api_view.append({**contract, "endpoints": endpoints, "schemas": _schema_closure(contract, endpoints)})
+            selected_contract = {key: value for key, value in contract.items()
+                                 if key not in {"page_ids", "endpoints", "schemas"}}
+            api_view.append({**selected_contract, "endpoints": endpoints,
+                             "schemas": _schema_closure(contract, endpoints)})
             entity_ids.update(_ids(contract.get("entity_ids", [])))
 
     entities = _index(_records(project_plan.get("entities", [])), "id")
@@ -347,31 +359,29 @@ def _project(project_plan: dict, tasks: list[dict]) -> dict:
         raise _UncertainScope
     page_contract_view = [contract for key, contract in page_contracts.items() if key in page_ids]
     view = {
-        **project_plan,
+        "app": {key: value for key, value in project_plan.get("app", {}).items()
+                if key in {"name", "appName", "route_root_path"}},
         pages_key: pages_view,
         "page_implementation_contracts": page_contract_view,
         "api_contracts": api_view,
         "entities": [entity for key, entity in entities.items() if key in entity_ids],
     }
-    # 正式 TechnicalPlan 使用 pages，避免备用页面列表把无关页面重新带入提示词。
-    if technical:
-        view.pop("frontend_pages", None)
-    if "authorization_manifest" in view:
+    if "authorization_manifest" in project_plan:
         view["authorization_manifest"] = _authorization_view(
-            view["authorization_manifest"], page_contract_view, endpoint_keys, catalog,
+            project_plan["authorization_manifest"], page_contract_view, endpoint_keys, catalog,
         )
-    if "data_sources" in view:
-        view["data_sources"] = _data_sources_view(view["data_sources"], entity_ids)
+    if "data_sources" in project_plan:
+        view["data_sources"] = _data_sources_view(project_plan["data_sources"], entity_ids)
     return view
 
 
 def project_frontend_task_project_plan(project_plan: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    """返回独立的任务级视图，遇到不可靠范围时返回完整计划副本。"""
+    """返回严格隔离的任务级视图，范围无法确定时显式失败。"""
     if not tasks:
-        return deepcopy(project_plan)
+        return {}
     try:
-        scoped = _project(project_plan, tasks)
-    except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
-        # 仅捕获 JSON 结构与范围错误，工作流取消和进程中断继续向上传播。
-        scoped = project_plan
-    return deepcopy(scoped)
+        return deepcopy(_project(project_plan, tasks))
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
+        task_id = tasks[0].get("id") if isinstance(tasks[0], dict) else None
+        reference = str(exc) if isinstance(exc, _UncertainScope) and str(exc) else type(exc).__name__
+        raise FrontendTaskProjectionError(task_id, "project_plan", reference) from exc

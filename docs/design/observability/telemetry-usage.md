@@ -83,3 +83,18 @@
 - 后端本地 `integration_test` Trace 按 `identity.run_id` 聚合初次检查、规划、修复和复测。按 `context.extra.attempt_id` 区分节点内的独立计划或任务，`repair_round` 关联修复轮次，`model_round` 记录该尝试实际开始的第几次模型调用。首轮 Prompt 大小来自 `initial_prompt`，工具返回大小来自工具片段，`repair_close_reason` 记录固定收尾原因。统计数据只含大小、状态和标识。
 - 两个操作的 Token 和模型耗时只聚合 `span_kind=model` 的唯一片段。阶段墙钟用外层集成节点及不重叠的修复节点区间，跨确认的 Run 用清单关联，等待用户的时间单列。最终通过以平台检查和 `metrics.quality_gate_passed=true` 为据。缺失模型用量单列。至少完成 30 对可比运行后再判定合计 Token 降低 70%、修复链路墙钟 P50 降低 50% 和复测通过率保持。
 - 后端执行扩展以变更前的提交为基线，按同一模型、参数、命令和起始快照配对。单独统计 `repair_backend_integration_code` 的编码与收尾调用、Token、墙钟 P50/P95，以及平台实际复测通过率和确认行为。至少完成 30 对后再核验 Token 和墙钟是否下降、既有可修复样本及确认行为是否有回退。
+
+
+## 前端步骤收敛复测
+
+同一份待 Build 工程、未改动的源码及正式任务计划分别复制到两个隔离工作区。在上一版和本版后端上分别执行同一批准任务，保持模型、模板、输入、技能和观测配置一致。每轮从初始快照恢复，按上面的 Baseline compare 命令比较模型用量、Prompt/工具返回字节、耗时、完成率和 Repair。使用 `FRONTEND_AGENT_TRACE_ENABLED=true` 记录相同 Task ID 的步骤明细，并按文件与步骤汇总以下字段。
+
+| 事件 | 对照字段 |
+| --- | --- |
+| `frontend_file_mutation` | `frontend_step_edit_count`、`frontend_step_no_change_edit_count`、`frontend_step_revert_count` |
+| `frontend_tool_permission` | `duplicate_read`、`duplicate_read_kind`、`frontend_read_repeated_covered_count` |
+| `frontend_acceptance_rule_result` | `rule_id`、`status`、`file_path`、`line`、`file_version` |
+
+本地同快照工具对照从 `Backend` 运行 `.venv/bin/python -m unittest -q tests.test_frontend_step_convergence.FrontendStepConvergenceTests.test_same_snapshot_write_comparison`。两边使用相同四次工具调用与相同初始字节，检查旧写入路径落盘四次，收敛路径落盘两次，最终字节相同。模型侧用量、耗时与成功率由真实 Build 对照独立衡量。
+
+API 模块默认采用任务级执行，不再设置快速路径开关。前端本地日志继续记录 `frontend_tool_permission`、`frontend_file_mutation` 和模型/工具消息；API 权限事件含当前 `run_id`、`task_id`、`task_kind`，`step_id` 为 `null`，不产生 `frontend_step_transition`。页面仍记录四步切换，`source` 为 `agent`。通过 BuildRun、Task ID 和 Attempt 关联标准 Build 验收及 Repair 决策。对固定样本统计初始 Prompt 字节、累计输入/输出 Token、模型轮次、步骤工具次数、业务工具次数及返回量、总耗时、Repair 次数、验收通过率和最终完成率。离线脚本只能验证时序、权限和验收；真实模型用量、耗时及质量必须在相同项目、需求、模型和模板条件下独立复测。

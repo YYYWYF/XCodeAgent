@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from typing import Any
 
-from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
-from app.agents.frontend.project_plan_context import project_frontend_task_project_plan
+from app.agents.frontend.execution_scope import FrontendTaskExecutionScope
+from app.agents.frontend.project_plan_context import FrontendTaskProjectionError
+from app.agents.frontend.task_packet import PAGE, STATIC, frontend_task_packet, task_kind
+from app.agents.frontend.static_prompt import _frontend_generation_prompt
 from app.agents.frontend.trace import frontend_agent_trace
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
@@ -13,307 +16,69 @@ from app.agents.tool_activity_stream import (
 from app.observability.build_instrumentation import record_prompt
 from app.config import Settings
 from app.services.build_result_coordinator import create_agent_task_results
-from app.services.template_state import validate_template_context
-from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
-def _app_name_from_plan(project_plan: dict[str, Any]) -> str:
-    """Extract the application name from ProjectPlan.app.name (defensive)."""
-    app = project_plan.get("app") or {}
-    if isinstance(app, dict):
-        name = app.get("name") or app.get("appName")
-        if name:
-            return str(name)
-    return ""
-
-
-def _page_template_instruction(page_template: dict[str, Any] | None) -> str:
-    """Page template selected by user — have the agent read and use it as reference."""
-    if not page_template:
-        return ""
-    template_id = str(page_template.get("id") or "")
-    template_name = str(page_template.get("name") or "")
-    template_path = str(page_template.get("sourcePath") or "")
-    if not template_path:
-        return ""
-    return (
-        f"## User-Selected Page Template: {template_name} ({template_id})\n"
-        f"The user selected a page template for this design target. Before writing any code, "
-        f"use read_file on the virtual path `/{template_path}/index.tsx` and optionally "
-        f"`/{template_path}/types.ts` and `/{template_path}/api.ts` to study the template's "
-        f"component structure, ProTable / ProForm configuration patterns, data types, and "
-        f"API integration style. Use these patterns as the primary reference when generating "
-        f"the page for this task. Adapt the template structure to match the page's specific "
-        f"requirements as described in the task and ProjectPlan, but keep the overall "
-        f"component selection, layout conventions, and data-fetching pattern consistent with "
-        f"the template.\n\n"
+def _scoped_generation_prompt(packets: list[dict]) -> str:
+    """只序列化任务包，正式实施事实和规范引用各注入一次。"""
+    task_text = json.dumps(packets, ensure_ascii=False, separators=(",", ":"))
+    page = any(packet["kind"] == PAGE for packet in packets)
+    execution = (
+        "每个任务先单独调用 begin_frontend_task。顺序完成四步，每步后单独调用 "
+        "advance_frontend_step 并简述完成情况。Step 1 只读，可按精确文件调用 grep 或 "
+        "code_graph_context。Step 2/3 可写已声明的业务目标。Step 4 只读核对，单独调用 "
+        "complete_frontend_task 后立即停止本任务的工具探索。各控制工具单独发送一轮。"
+        "Step 2/3 验收失败时依据返回的具体问题在当前步骤修复；无法修复时用 defer_to_repair 前进，"
+        "并在 Step 4 以 acceptance_verification_failed 提交失败。"
+        if page else
+        "平台已初始化当前 API 模块任务的权限上下文。仅处理该任务职责，"
+        "按需读取必要 API Contract、请求封装、类型定义及目标文件，在任务授权范围内实现和自检。"
+        "不确定或无法完成时如实返回 failed，不得虚报完成。"
     )
-
-
-def _ui_design_reference_instruction(ui_designs: dict[str, Any] | None) -> str:
-    """构造 UI设计稿参考指令：pageId → 设计稿虚拟路径映射，让 agent 还原视觉。
-
-    仿照 _page_template_instruction 的"read_file 读参考代码再生成"模式。设计稿是
-    UI确认阶段生成并经用户确认的纯视觉 React+antd+pro-components mockup，落盘在
-    /.devagentstudio/ui-design/pages/<page_key>/index.tsx。**只有 status == "confirmed"
-    的页才会进入参考清单**——未生成 / 生成失败 / 已取消的页面对前端 agent 完全透明，
-    让它基于 ProductPlan / TechnicalPlan / 模板技能直接实现，不去 read 一份不存在或
-    未通过校验的设计稿。
-    """
-
-    if not isinstance(ui_designs, dict):
-        return ""
-    pages = ui_designs.get("pages")
-    if not isinstance(pages, list) or not pages:
-        return ""
-    entries: list[dict[str, str]] = []
-    for page in pages:
-        if not isinstance(page, dict):
-            continue
-        # 只引用已确认的设计稿；其它状态（pending / generating / generation_failed /
-        # cancelled）一律不进入参考清单。
-        if str(page.get("status") or "").strip() != "confirmed":
-            continue
-        page_id = str(page.get("pageId") or "").strip()
-        page_key = str(page.get("page_key") or "").strip()
-        if not page_id or not page_key:
-            continue
-        entries.append(
-            {
-                "pageId": page_id,
-                "designPath": f"/.devagentstudio/ui-design/pages/{page_key}/index.tsx",
-                "name": str(page.get("name") or page_id),
-            }
-        )
-    if not entries:
-        return ""
-    return (
-        "## UI Design Reference (MUST READ BEFORE WRITING EACH PAGE)\n"
-        "For each frontend page task, the task's unit_id is `page:<pageId>`. Before writing "
-        "the page, find the matching pageId in the design reference map below and use "
-        "`read_file` on its designPath. The design file is a pure-visual React + antd + "
-        "@ant-design/pro-components mockup created and confirmed by the user during the UI "
-        "design phase. You MUST faithfully reproduce its visual structure: page layout, "
-        "component selection (ProTable / ProForm / ProCard / ProList / ModalForm / "
-        "DrawerForm / StepsForm), column definitions, form fields, card sections, and the "
-        "overall page composition. The design's visual choices are the PRIMARY reference for "
-        "what the page should look like.\n\n"
-        "CRITICAL — the design is pure-visual; you MUST adapt it into real business code:\n"
-        "- The design uses a static in-memory `dataSource` array. You MUST replace it with "
-        "real data fetching: ProTable `request` calling the page's API (from ProjectPlan."
-        "api_contracts and the task's endpoint_ids), OR the in-memory mock data layer "
-        "pattern from the code-block-template skill when ProjectPlan.data_sources declares "
-        "type=static with effective_source=frontend_mock. Never ship the design's raw visual "
-        "sample array as the runtime data source.\n"
-        "- Elements marked `data-preview-only=\"true\"` are UI-review tooling (for example a "
-        "state switcher), not product UI. Omit them from the runtime page.\n"
-        "- Implement only the ProductPlan actions identified by `data-action-id`. Follow the "
-        "confirmed, deterministically compiled PageImplementationContract actionBindings exactly: endpoint actions call the "
-        "declared endpoint, navigation actions route to the declared page, and local/external/sequence "
-        "actions use the upstream ProductPlan/UiManifest behavior. Never guess that every control needs an API "
-        "or reinterpret a non-endpoint behavior as a TechnicalPlan decision.\n"
-        "- The design has no route params. Add React Router params (e.g. :id) and "
-        "useSearchParams per the page's path and navigation requirements.\n"
-        "- Keep the design's Pro component choices and layout intact; only swap the data "
-        "and interaction layer. Do NOT downgrade a ProCard to antd Card, a ProTable to antd "
-        "Table, or a ModalForm to antd Modal.\n"
-        "- If a design file is missing or unreadable for a pageId, fall back to the "
-        "code-block-template skill and ProjectPlan to generate that page; do not block or "
-        "fail the task.\n\n"
-        f"Design reference map (pageId → designPath):\n"
-        f"{json.dumps(entries, ensure_ascii=False, indent=2)}\n\n"
+    skill_loading = (
+        "先单独调用 begin_frontend_task，等待成功返回 Step 1。"
+        "此调用不得与任何其他工具并发或同批发送。仅在进入 Step 1 后，读取：\n"
+        "1. /.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md\n"
+        "2. /.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md\n"
+        "Step 1 之前不得尝试读取 Skill 或业务文件。"
+        "本页面后续步骤复用已读取的 Skill，不因切换步骤重复读取。"
+        "仅按需阅读示例，后续任务复用规范。"
+        if page else
+        "开始实施时读取 /.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md "
+        "和同一技能根下 frontend-template-modification-boundary/SKILL.md；仅按需阅读示例，"
+        "后续任务复用规范。"
     )
-
-
-def _task_frontend_source_types(tasks: list[dict[str, Any]]) -> set[str]:
-    """从当前前端任务的 source_refs 提取来源，避免使用项目级静态标记污染页面。"""
-
-    source_types: set[str] = set()
-    for task in tasks:
-        source_refs = task.get("source_refs")
-        if not isinstance(source_refs, dict):
-            continue
-        designs = source_refs.get("endpoint_designs")
-        if not isinstance(designs, list):
-            continue
-        for design in designs:
-            if not isinstance(design, dict):
-                continue
-            for snapshot in design.get("sourceSnapshots") or []:
-                if isinstance(snapshot, dict) and snapshot.get("sourceType"):
-                    source_types.add(str(snapshot["sourceType"]).strip())
-    return source_types
-
-
-def _frontend_generation_prompt(
-    *,
-    project_plan: dict[str, Any],
-    build_task_plan: dict[str, Any],
-    tasks: list[dict[str, Any]],
-    page_template: dict[str, Any] | None = None,
-    ui_designs: dict[str, Any] | None = None,
-) -> str:
-    """构造前端执行提示词，并观察已注入内容的大小。"""
-    app_name = _app_name_from_plan(project_plan)
-    scoped_project_plan = project_frontend_task_project_plan(project_plan, tasks)
-    # 直接平铺到根目录，不再嵌套 apps/<app_name>/ 前缀
-    frontend_root = "frontend"
-    # 静态规则只由当前派发任务的来源引用触发，不读取整个 ProjectPlan 的数据源清单。
-    task_source_types = _task_frontend_source_types(tasks)
-    has_static_data_source = "static" in task_source_types
-    context_value = build_task_plan.get("template_context")
-    template_context = validate_template_context(context_value) if context_value else {}
-    authorization_effective = "authorization" in template_context.get("effective_capabilities", {})
-    data_source_instruction = (
-        "## CRITICAL: Data source is STATIC with effective_source=frontend_mock\n"
-        "The data source for this page's entities declares type=static. Implement the approved "
-        "API contracts as a frontend in-memory data-access module. This page MUST "
-        "use **in-memory mock functions** for all data — do NOT call real backend APIs, do NOT "
-        "use `service.get('/api/...')`, and do NOT configure a real backend proxy in vite.config.ts. "
-        "Instead, write the mock data layer in `src/apis/<biz>Api.ts` following the page template's "
-        "`api.ts` pattern: a module-level in-memory array of fake records, a `delay(ms)` helper to "
-        "simulate network latency, and async functions (fetchList/update/delete/...) that filter/"
-        "paginate/mutate the in-memory array and return `{ data, success, total }` (list) or "
-        "`{ success }` (mutation). The page component imports these functions and calls them from "
-        "ProTable's `request` / button handlers, exactly like the template. Keep `service.ts` "
-        "untouched. Do NOT modify vite.config.ts to add a mock plugin. Keep all runtime records "
-        "inside the API module; page components must never contain standalone business-data arrays. "
-        "Only implement operations and fields declared by the approved contracts.\n\n"
-        if has_static_data_source
-        else ""
-    )
-    static_skill_requirement = (
-        "3. `/.devagentstudio/builtin-skills/frontend-static-data-generate/SKILL.md` — "
-        "static frontend:data tasks: module-level in-memory records, async contract "
-        "functions, exact fields/operations, and the prohibition on backend APIs or page-local "
-        "business arrays. READ THIS before writing a static data module.\n"
-        if has_static_data_source
-        else ""
-    )
-    service_response_instruction = (
-        "## Template service response boundary\n"
-        "`src/apis/service.ts` is the platform-owned HTTP client. Its response interceptor "
-        "validates the backend response envelope, handles the business return code, and "
-        "resolves a successful request to its business body.\n"
-        "For a real backend endpoint, `response_schema_ref` describes the business value `T` "
-        "returned by service. Import service using the template's existing export style and "
-        "type the request as `service.get<T>()`, `service.post<T>()`, `service.put<T>()`, or "
-        "`service.delete<T>()`.\n"
-        "Export each business API function as `Promise<T>` and return the service result "
-        "directly. For an endpoint without a response schema, await the corresponding "
-        "`service.<method><void>()` call and return normally.\n"
-        "Keep `src/apis/service.ts` unchanged. Pages and components consume the generated "
-        "business API functions. Static frontend data modules continue to return their "
-        "contract business values directly.\n\n"
-    )
-    incremental_api_module_instruction = (
-        "## Incremental API Contract module rule\n"
-        "For every `frontend.api_module` task, the declared target file is the canonical "
-        "`frontend/src/apis/<biz>Api.ts` for that task's API Contract. If that file already "
-        "exists, read it before editing. Preserve every existing formal Endpoint export and "
-        "its implementation, then add only the Endpoint responsibilities declared by the "
-        "current task. A retained Endpoint may remain in the file even when it is not in the "
-        "current task's required list; it is not an error and must not be deleted. Never "
-        "create a second per-Endpoint API module, split one Contract into multiple files, or "
-        "remove existing exports because this task is an incremental PlanningRun. Pages must "
-        "continue importing all business API functions from the shared Contract module.\n\n"
-    )
-    authorization_boundary = (
-        "## Authorization boundary\n"
-        "A task may contain platform-owned `source_refs.authorization.actions`. This is the only action-permission input. "
-        "For every listed action, add this exact named import in the task file that renders the controlled interaction: "
-        "`import { RESOURCES } from '@/constants/resources';`. Do not use a relative path, barrel export, default import, or alias. "
-        "Then use the existing template `Permission` component and wrap exactly one real interaction with the supplied `RESOURCES` reference. "
-        "Do not create AuthProvider instances, permission caches, authorization API clients, resource catalogs, role-management UI, route guards, menus, routers, or shared authorization files. "
-        "The platform has already generated route registration before this task starts; do not modify "
-        "`src/constants/resources.ts` or `src/constants/routes.tsx`.\n\n"
-        if authorization_effective
-        else "## Platform route boundary\n"
-        "Authorization is not effective for this application. Do not import RESOURCES, create permission wrappers, authorization clients, role-management UI, route guards, menus, routers, or shared authorization files. Do not modify shared menu or route files.\n\n"
+    page_guidance = (
+        "页面消费 implementation_contract.api_dependencies 的导出。简单查询在页面直接使用 useRequest，"
+        "复杂复用或跨组件编排再抽取 Hook。"
+        "通过 dataSource、loading 或 options 传给组件，事件型 mutation 可直接调用业务函数。"
+        "确认设计稿和所选模板只参考布局与组件，按规范重新绑定数据，省略示例数据和预览控件。"
+        "设计稿缺失或不可读时按页面契约实现。页面按 authorization_actions 的 resourceConstant "
+        "精确使用模板 Permission 与 import { RESOURCES } from '@/constants/resources'，保持契约指定的权限方案。"
+        "导航使用契约提供的目标与参数。" if page else ""
     )
     prompt = (
-        "You are the Frontend Generation Agent in an app-generation workflow.\n"
-        "Execute only the approved frontend tasks below. Modify code only within "
-        "each task's allowed_paths. Implement layout, components, interactions, "
-        "permissions, API integration, loading/empty/error states. "
-        "ProjectPlan.api_contracts is the only source of API fields. Render and submit only "
-        "fields declared by the task's endpoint_ids, schema refs, and response_bindings; "
-        "do not infer or add frontend-only API fields.\n"
-        "Do not modify RequirementSpec, ProductPlan, TechnicalPlan, API contracts, or "
-        "the task DAG. If an API contract or page plan cannot be implemented, "
-        "return a change_request instead of silently changing it.\n"
-        f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n"
-        f"Frontend path convention: all frontend code for this application MUST be placed "
-        f"under the virtual path `/{frontend_root}/` (resolved from ProjectPlan.app.name = "
-        f"'{app_name}'). Every `src/...` path described in the "
-        f"frontend-template-modification-boundary skill is relative to `/{frontend_root}/`, "
-        f"so `src/pages/<PageKey>/index.tsx` becomes `/{frontend_root}/src/pages/<PageKey>/"
-        f"index.tsx` in filesystem tool calls. Treat every allowed_paths entry as relative "
-        f"to virtual root '/'. Do NOT write to `Frontend/src/`, bare `src/`, or `/app/"
-        f"frontend/` — those are wrong for this workspace. Before writing, use list_files "
-        f"on `/{frontend_root}/src/pages/` to confirm the scaffolded page directories.\n\n"
-        + CODE_GRAPH_TASK_EXECUTION_GUIDANCE
-        + "\n\n"
-        + _page_template_instruction(page_template)
-        + _ui_design_reference_instruction(ui_designs)
-        + data_source_instruction
-        + service_response_instruction
-        + incremental_api_module_instruction
-        + authorization_boundary
-        + "For business APIs, import functions from `src/apis/` "
-        "and invoke them through `useRequest`; page and component code must never call `fetch`, `axios`, or `service` directly. "
-        "If a declared action cannot be uniquely located, return that task as failed rather than guessing.\n\n"
-        + "## Required Skills (MUST READ BEFORE WRITING ANY CODE)\n"
-        "Before generating or modifying any frontend code, you MUST read the following "
-        "the required built-in skills with read_file(limit=400) and follow their instructions. "
-        "These are mandatory constraints:\n"
-        "1. `/.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md` — "
-        "file modification boundary: which files you MUST NOT modify (framework skeleton, "
-        "package.json, tailwind.config.js, vite.config.ts, etc.), which are append-only "
-        "(template-variant-specific shared registration files, src/apis, src/typings, src/constants, src/hooks, "
-        "src/utils, src/components), and where to place page types/constants/hooks/utils/"
-        "components. Violating this destroys the template scaffold. READ THIS FIRST.\n"
-        "2. `/.devagentstudio/builtin-skills/code-block-template/SKILL.md` — the AUTHORITATIVE "
-        "spec for component selection and page assembly. HARD RULE: every page MUST be "
-        "built with `@ant-design/pro-components` (ProTable, ProForm, ProFormText, "
-        "ProFormSelect, ProList, ProCard, ModalForm, DrawerForm, StepsForm). It is "
-        "FORBIDDEN to substitute bare `antd` components for the Pro equivalents — a "
-        "dashboard / overview page MUST use ProCard (never antd Card), a list page MUST "
-        "use ProTable or ProList, a create/edit dialog MUST use ModalForm or DrawerForm, "
-        "a multi-step form MUST use StepsForm. Import Pro components from "
-        "`@ant-design/pro-components`, never from `antd`.\n"
-        "ON-DEMAND references (read only when you need them for the specific page you are "
-        "building, do NOT read all of them up front): `code-block-template/references/"
-        "blocks.md` (ProTable/ProForm/ProList/ProCard usage & decision trees) and "
-        "`code-block-template/references/page-templates.md` (full page templates); "
-        "`react-develop-specification/SKILL.md` (React coding conventions) for style rules "
-        "when unsure. Reading these on demand keeps the context small.\n"
-        "Only after reading all required skills above may you start writing code.\n\n"
-        + static_skill_requirement
-        + "## Required final report\n"
-        "Return one JSON object with `task_results`, containing exactly one result for each "
-        "approved task. Each result must contain `task_id`, `status` "
-        "(`completed`, `already_satisfied`, or `failed`), and `summary`. Use "
-        "`already_satisfied` only when the exact target state already exists without writing. "
-        "The scheduler independently validates every acceptance_check from workspace diffs and "
-        "generated source; your natural-language claim is never acceptance evidence. A "
-        "semantically similar file at "
-        "another path never satisfies a task. Use `failed` plus `failure_category` and "
-        "`failure_reason` when implementation could not be completed. Do not use free-form text "
-        "outside the final JSON object. The JSON must be syntactically valid: escape every "
-        "double quote inside summary text and do not wrap the object in a Markdown fence.\n\n"
-        "## Verification boundary\n"
-        "Do not run project-level dependency installation, build, lint, typecheck, unit-test, "
-        "or dev-server commands during this task. Do not call `pnpm install`, `npm install`, "
-        "or `npx tsc`. The outer integration-test phase performs the repository checks after "
-        "all owner tasks complete. If a dependency or command appears to be missing, report "
-        "it in the final JSON instead of installing dependencies or creating temporary scripts.\n\n"
-        f"Approved frontend tasks:\n{(task_text := json.dumps(tasks, ensure_ascii=False, indent=2))}\n\n"
-        f"BuildTaskPlan summary:\n{json.dumps(build_task_plan.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
-        f"ProjectPlan context:\n{(plan_text := json.dumps(scoped_project_plan, ensure_ascii=False, indent=2))}"
+        "仅实施以下已批准的任务。implementation_contract 是唯一实施事实入口，"
+        "文件用于核对允许范围内的现有实现，按业务契约、模板组件与权限契约、工程规范、示例的优先级实施。使用虚拟绝对文件路径。\n"
+        f"{execution}"
+        "文件未变化时优先复用已读正文，需核对时可正常重读。禁止目录遍历和 Shell。\n"
+        f"{skill_loading}遵循 implementation_contract.frontend_standards 中适用规则。"
+        "先确定方案、集中修改，无需输出独立计划。已有 API 文件使用 edit_file 增量实现。"
+        f"{page_guidance}\n"
+        "最终输出单一 JSON 对象 {\"task_results\":[...]}。每项提供 task_id、summary、"
+        f"{'与完成工具一致的 ' if page else ''}status（completed、already_satisfied 或 failed）。"
+        "失败提供 failure_category、failure_reason，契约外变更提交 change_request。"
+        "契约或计划不适用时分别使用 contract_mismatch 或 plan_mismatch。"
+        "平台独立判定验收后才能完成任务。\n"
+        f"前端任务包\n{task_text}"
     )
-    record_prompt(prompt, task_context=task_text, project_plan=plan_text)
+    record_prompt(prompt, task_context=task_text)
     return prompt
+
+
+def _task_failure(task: dict, reason: str, category: str) -> dict:
+    """使用现有任务结果字段报告平台准备或步骤协议失败。"""
+    return {"task_id": task["id"], "owner": task.get("owner"), "status": "failed",
+            "failure_category": category, "failure_reason": reason, "agent_note": reason}
 
 
 def _invoke_live_frontend_agent(
@@ -326,28 +91,32 @@ def _invoke_live_frontend_agent(
     page_template: dict[str, Any] | None = None,
     ui_designs: dict[str, Any] | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
+    scope: FrontendTaskExecutionScope | None = None,
 ) -> str:
     """使用本次工作流的技能白名单调用前端 Deep Agent。"""
 
     # 延迟创建可确保 Agent 的工作区和技能权限只属于本次运行。
     from app.agents import create_agent_bundle
 
-    agent = create_agent_bundle(workspace, selected_skill_names).frontend
+    bundle = create_agent_bundle(workspace, selected_skill_names)
+    agent = bundle.frontend_build_factory(scope) if scope else bundle.frontend
     payload = {
         "messages": [
             {
                 "role": "user",
-                "content": _frontend_generation_prompt(
+                "content": (_scoped_generation_prompt(scope.packets) if scope else _frontend_generation_prompt(
                     project_plan=project_plan,
                     build_task_plan=build_task_plan,
                     tasks=tasks,
                     page_template=page_template,
                     ui_designs=ui_designs,
-                ),
+                )),
             }
         ]
     }
     with frontend_agent_trace(workspace=workspace, tasks=tasks) as trace:
+        if scope and trace:
+            scope.trace = trace.frontend_event
         return invoke_agent_with_tool_activity(
             agent, payload,
             workspace=workspace,
@@ -365,6 +134,7 @@ def generate_frontend_with_deep_agent(
     selected_skill_names: list[str] | None = None,
     page_template: dict[str, Any] | None = None,
     ui_designs: dict[str, Any] | None = None,
+    template_page_id: str | None = None,
     on_tool_activity: ToolActivityCallback | None = None,
 ) -> list[dict[str, Any]]:
     """通过带技能白名单的 Frontend Deep Agent 执行已批准任务。"""
@@ -373,25 +143,62 @@ def generate_frontend_with_deep_agent(
         return []
 
     settings = Settings.from_env()
-    agent_note = _invoke_live_frontend_agent(
-        project_plan=project_plan,
-        build_task_plan=build_task_plan,
-        tasks=tasks,
-        workspace=workspace,
-        selected_skill_names=selected_skill_names,
-        page_template=page_template,
-        ui_designs=ui_designs,
-        on_tool_activity=on_tool_activity,
-    )
-    return create_agent_task_results(
-        tasks,
-        agent_note,
-        executed_by={
-            "agent": "frontend-generation-agent",
-            "mode": "live",
-            "model": settings.model_name,
-            "source": "frontend_deep_agent",
-            "requiredSkillsLoaded": list(selected_skill_names or []),
-        },
-        require_structured=True,
-    )
+    results = {}
+    static_tasks, scoped_tasks, packets = [], [], []
+    for task in tasks:
+        kind = task_kind(task)
+        if kind == STATIC:
+            static_tasks.append(task)
+            continue
+        try:
+            if not workspace:
+                raise FrontendTaskProjectionError(task.get("id"), "workspace", "missing_workspace")
+            packet = frontend_task_packet(
+                project_plan, build_task_plan, task, ui_designs=ui_designs,
+                page_template=page_template, template_page_id=template_page_id,
+                workspace=workspace,
+            )
+        except FrontendTaskProjectionError as exc:
+            results[task["id"]] = _task_failure(task, str(exc), "runner_protocol_error")
+            continue
+        scoped_tasks.append(task)
+        packets.append(packet)
+
+    # 静态模块与受控任务分开调用，避免静态工作区授权进入受控 Agent。
+    # API 独占一次调用，确保步骤工具不可见且授权不会混入后续任务。
+    groups = []
+    for task, packet in zip(scoped_tasks, packets, strict=True):
+        # 连续页面保持原有批量调用，只有 API 为隔离工具集合而独占调用。
+        if packet["kind"] == PAGE and groups and task_kind(groups[-1][0][-1]) == PAGE:
+            groups[-1][0].append(task)
+            groups[-1][1].packets.append(packet)
+        else:
+            groups.append(([task], FrontendTaskExecutionScope(workspace, [packet])))
+    groups.append((static_tasks, None))
+    for group, group_scope in groups:
+        if not group:
+            continue
+        with group_scope.task_context() if group_scope else nullcontext():
+            agent_note = _invoke_live_frontend_agent(
+                project_plan=project_plan, build_task_plan=build_task_plan, tasks=group,
+                workspace=workspace, selected_skill_names=selected_skill_names,
+                page_template=page_template, ui_designs=ui_designs,
+                on_tool_activity=on_tool_activity, scope=group_scope,
+            )
+        reports = create_agent_task_results(
+            group, agent_note,
+            executed_by={
+                "agent": "frontend-generation-agent", "mode": "live", "model": settings.model_name,
+                "source": "frontend_deep_agent", "requiredSkillsLoaded": list(selected_skill_names or []),
+            },
+            require_structured=True,
+            strict_schema=group_scope is not None,
+        )
+        for task, report in zip(group, reports, strict=True):
+            if (group_scope and task_kind(task) == PAGE
+                and report["status"] in {"completed", "already_satisfied"}
+                and group_scope.outcomes.get(task["id"]) != report["status"]):
+                report = _task_failure(task, "任务未按四步协议完成或报告状态与完成工具不一致。",
+                                       "runner_protocol_error")
+            results[task["id"]] = report
+    return [results[task["id"]] for task in tasks]

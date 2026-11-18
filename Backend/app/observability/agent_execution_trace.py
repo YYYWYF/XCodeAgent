@@ -252,6 +252,11 @@ class AgentExecutionTrace(BaseCallbackHandler):
         self._write("agent_start", workspace=workspace, taskIds=task_ids, **identity)
 
     @_trace_event
+    def frontend_event(self, event: str, **fields: Any) -> None:
+        """写入前端步骤与工具权限事件，沿用同一调用的事件锁与脱敏规则。"""
+        self._write(event, **fields)
+
+    @_trace_event
     def finish(self, start: float, error: BaseException | None = None) -> None:
         """记录成功或原业务异常、取消的终态与耗时。"""
         duration = round((time.monotonic() - start) * 1000)

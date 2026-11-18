@@ -10,6 +10,8 @@ agent_created: true
 
 面向 DevAgent Studio 大模型前端代码生成的区块/页面设计规范。提供 ProComponents 体系下各区块的详细设计、决策逻辑与分步生成策略。
 
+工程规则见 [Frontend Engineering Standards](../frontend-engineering-standards/SKILL.md)，以下内容提供布局和组件参考。
+
 ## When to Use
 
 - 生成带查询、分页、批量操作的 ProTable 表格页
@@ -27,7 +29,7 @@ DevAgent Studio 前端页面由**区块（Blocks）**拼装而成。区块是可
 ```
 ProCard / PageContainer          ← 页面容器与卡片
 ├── ProForm（筛选表单）            ← 横排筛选条件，Row + Col 栅格
-├── ProTable                      ← 表格（search / request / toolBarRender）
+├── ProTable                      ← 表格（dataSource / loading / toolBarRender）
 ├── ModalForm（弹窗表单）          ← 统一弹窗管理
 ├── DrawerForm（抽屉表单）
 └── StepsForm（分步表单）

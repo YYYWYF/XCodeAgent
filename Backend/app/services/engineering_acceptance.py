@@ -322,13 +322,21 @@ def _frontend_api_boundary_checks(task: dict[str, Any]) -> list[dict[str, Any]]:
             for path in _allowed_paths(task)
             if path.casefold().endswith(".tsx")
         ]
+    # 自定义 Hook 及辅助组件同属任务声明的业务源码，显式删除文件无需读取。
+    deleted = {_normalize_path(change.get("path")) for change in _dict_items(task.get("change_scope"))
+               if change.get("operation") == "delete"}
+    paths = [path for path in [
+        *paths,
+        *(_normalize_path(path) for path in _string_list(task.get("target_files"))
+          if path.lower().endswith((".ts", ".tsx"))),
+    ] if path not in deleted]
     if not paths:
         return []
     return [
         _check(
             task,
             kind="frontend_api_boundary",
-            description="页面和任务内组件不得直接调用 fetch、axios 或 service；业务接口必须经 src/apis/ 与 useRequest。",
+            description="页面及任务内组件经业务模块消费 API，查询由 useRequest 管理，UI request 属性不执行请求。",
             target_paths=_dedupe(paths),
             expected={},
         )

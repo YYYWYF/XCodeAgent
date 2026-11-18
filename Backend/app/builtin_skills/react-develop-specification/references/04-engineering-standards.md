@@ -2,20 +2,7 @@
 
 本章规范了 React 的工程结构，包括版本信息、相关 npm 包使用信息、工程化配置信息等。
 
-此规范文档使用的依赖版本参考，项目根据实际场景使用合适版本：
-
-- Node.js: `16.14.0`
-- VSCode: `1.81.1`
-- npm: `6.14.17`
-- yarn: `1.22.19`
-- eslint: `^7.32.0`
-- prettier: `^2.7.1`
-- typescript: `^4.9.3`
-- webpack: `^5.76.2`
-
-## 4.1 React 版本规范
-
-考虑 React 的功能和生态，推荐新增的 React 工程使用 `v18.2.0` 及以上版本。React 各版本区别参见附录 6.1 节：React 的版本更新差异。
+生成应用的依赖和构建工具以模板工程为准。业务分层、请求与组件规则见 [Frontend Engineering Standards](../../frontend-engineering-standards/SKILL.md)。
 
 ## 4.2 组件定义规范
 
@@ -162,27 +149,15 @@ function App() {
 
 ### 4.3.3【推荐】组件库
 
-**说明**：工程构建的组件库使用 antd，推荐使用 v4 版本，项目可按需升级 v5。项目中若含有相关组件的扩展，也应基于 antd 进行，如基于 antd 进行二次组合封装、使用 pro-components 等。在使用 antd 的过程中，通过一些工程化的配置，可实现 antd 的按需引入，Less module 配置，主题定制等。v5 版本的技术调整：
-
-1. 弃用 less，采用 CSS-in-JS，更好地支持动态主题。
-2. 移除 css variables 以及在此之上构筑的动态主题方案。
-3. LocaleProvider 在 4.x 中已经废弃（使用 `<ConfigProvider locale />` 替代），5.x 里彻底移除了相关目录 `antd/es/locale-provider`、`antd/lib/locale-provider`。
-4. 内置的时间库使用 Dayjs 替代 Moment.js。
-5. 不再支持 babel-plugin-import，CSS-in-JS 本身具有按需加载的能力，不再需要插件支持。
+使用模板提供的 Ant Design、ProComponents 与主题配置。
 
 ### 4.3.4【推荐】其他库
 
 **说明**：此章节规范了 React 工程中常用的一些工具类的库，如 http 客户端等。
 
-1. **http 客户端**
-   使用 `axios` 作为 React 工程的 http 客户端。axios 是一个基于 Promise 的 HTTP 库，可以用在浏览器和 Node.js 中，拥有以下特性：支持 Promise API、能够拦截请求和响应、能够转换请求和响应数据、客户端支持防御 CSRF 攻击、同时支持浏览器和 Node.js、能够取消请求或自动转换 JSON 数据。axios 的详细 API 见官方文档：https://axios-http.com。
-   除 axios 之外，还可使用原生的 Fetch API 做为 http 客户端。
-
-2. **函数工具库**
-   使用 `lodash` 作为 React 工程的函数工具库。lodash 提供了关于 array、number、objects、string 的常用方法，帮助处理项目中的数据。lodash 官方提供了插件可以对 lodash 进行按需引入处理：`lodash-webpack-plugin`、`babel-plugin-lodash` 和 `lodash-es`，lodash 的全部功能详见官方文档：https://lodash.com。
-
-3. **React hooks 库**
-   使用 `ahooks` 作为 React 工程的 hooks 库，推荐使用 v3 版本。ahooks 不仅提供了常用的用于异步参数管理的 useRequest、组件生命周期关联的 useMount、useUnmount，还有一些搭配 antd 使用的 hook，如 `useAntdTable`、`usePagination` 等。ahooks 更多使用方式详见官方文档：https://ahooks.js.org。
+1. **HTTP 客户端** 由模板 `src/apis/service.ts` 统一提供。
+2. **函数工具库** 在已安装依赖中按需选择。
+3. **React Hooks 库** 查阅模板已有的 ahooks 能力。
 
 4. **图表库**
    使用 `echarts` 作为 React 工程的数据可视化图表库。echarts 提供了常规的折线图、柱状图、散点图、饼图、K 线图，用于统计的盒形图，用于地理数据可视化的地图、热力图、线图，用于关系数据可视化的关系图、旭日图，多维数据可视化的平行坐标，还有用于 BI 的漏斗图、仪表盘，并且支持图与图之间的混搭。由于 echarts 是以原生 JavaScript 的方式提供，若需要 react 的相关封装，可使用开源 npm 包 `echarts-for-react`。echarts 的更多的使用方式详见官方文档：https://echarts.apache.org/zh/index.html。
@@ -234,9 +209,7 @@ function App() {
 
 ### 4.4.1【推荐】构建工具
 
-**说明**：构建工具具根据团队实际情况、项目模式合理选择使用。本规范推荐内基础设施的情况，建议常规业务工程使用基于 `webpack + babel + TypeScript + eslint + prettier` 进行项目的初始化。webpack 具有一套相对非常完整的构建生态和解决方案。
-
-若对初始化的工程有定制化配置需求，使用 craco，代替运行 `npm run eject`。
+沿用模板已有的 Rsbuild、TypeScript 和构建配置，由外层工程验收负责运行构建。
 
 ### 4.4.2【推荐】格式化工具
 

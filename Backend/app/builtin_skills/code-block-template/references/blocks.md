@@ -9,7 +9,7 @@ ProTable 在 antd `Table` 基础上封装了三个关键能力：
 | 能力 | 说明 | 对应 Props |
 |------|------|-----------|
 | 查询表单 | 根据 columns 的 valueType/valueEnum 自动生成 | search 配置 |
-| 服务端分页 | request 函数自动接管 loading / dataSource / pagination | request |
+| 服务端分页 | 页面查询提供 loading、dataSource 和受控分页 | pagination |
 | 工具栏 | 右上角标准操作按钮区域 | toolBarRender |
 
 ### 决策树：何时用 ProTable 内置 search，何时自定义筛选表单？
@@ -50,7 +50,7 @@ ProTable 在 antd `Table` 基础上封装了三个关键能力：
 
 关键点：
 - 查询按钮用 `onClick` 手动调用 `reload()`，而非依赖 `htmlType="submit"`
-- ProTable 的 `request` 中通过 `formRef.current?.getFieldsValue()` 获取筛选值
+- 筛选提交后更新页面查询状态，由 `useRequest` 获取业务数据。
 - `submitter={false}` 关闭 ProForm 内置按钮，避免与自定义按钮冲突
 
 ### 分页配置
@@ -64,26 +64,11 @@ pagination={{
 }}
 ```
 
-**注意**：必须使用 `defaultPageSize` 而非 `pageSize`。`pageSize` 是受控属性，会导致用户切换每页条数后又被重置。
+服务端分页使用受控的 `current`、`pageSize` 和 `onChange`，同步更新 useRequest 的查询条件。
 
-### request 函数的正确写法
+### 查询数据与展示
 
-```tsx
-request={async (params) => {
-  const formValues = formRef.current?.getFieldsValue() || {};
-  const { current, pageSize } = params;  // ProTable 自动注入的分页参数
-  const res = await fetchList({
-    page: current || 1,
-    pageSize: pageSize || 10,
-    ...formValues,                       // 合并筛选条件
-  });
-  return {
-    data: res.data,     // 当前页数据
-    success: true,      // 是否成功
-    total: res.total,   // 总条数（用于分页计算）
-  };
-}}
-```
+查询及受控分页示例见 [组件规范示例](../../frontend-engineering-standards/references/component-patterns.md)。
 
 ### rowSelection 与批量操作
 
@@ -110,11 +95,12 @@ const [mgmtSelectedRowKeys, setMgmtSelectedRowKeys] = useState<React.Key[]>([]);
 
 ```tsx
 import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { ProTable, type ActionType, type ProColumns } from '@ant-design/pro-components';
+import { ProTable, type ProColumns } from '@ant-design/pro-components';
 import { Button, Popconfirm, message } from 'antd';
-import { useRef } from 'react';
+import { useState } from 'react';
+import { useRequest } from 'ahooks';
 import { cx } from '../utils';
-import { deleteUser, listUsers } from '../api/userApi';
+import { deleteUser, listUsers } from '@/apis/userApi';
 import type { User, UserQuery } from '../typings';
 import './UserTable.less';
 
@@ -124,7 +110,10 @@ type Props = {
 };
 
 export default function UserTable({ onEdit, onCreate }: Props) {
-  const actionRef = useRef<ActionType>();
+  const [query, setQuery] = useState<UserQuery>({ page: 1, pageSize: 10 });
+  const { data, loading, refresh } = useRequest(() => listUsers(query), {
+    refreshDeps: [query],
+  });
 
   const columns: ProColumns<User>[] = [
     { title: '用户名', dataIndex: 'username', valueType: 'text', formItemProps: { rules: [{ required: false }] } },
@@ -153,7 +142,7 @@ export default function UserTable({ onEdit, onCreate }: Props) {
           onConfirm={async () => {
             await deleteUser(record.id);
             message.success('已删除');
-            actionRef.current?.reload();
+            refresh();
           }}
         >
           <a className={cx('danger-link')}>
@@ -167,18 +156,21 @@ export default function UserTable({ onEdit, onCreate }: Props) {
   return (
     <ProTable<User, UserQuery>
       headerTitle="用户列表"
-      actionRef={actionRef}
       rowKey="id"
       columns={columns}
       search={{ labelLayout: 'default', defaultCollapsed: false }}
-      request={async (params) => {
-        const { current, pageSize, ...rest } = params;
-        const res = await listUsers({ page: current ?? 1, pageSize: pageSize ?? 10, ...rest });
-        return { data: res.list, success: true, total: res.total };
+      onSubmit={(filters) => setQuery({ ...filters, page: 1, pageSize: query.pageSize })}
+      dataSource={data?.list ?? []}
+      loading={loading}
+      pagination={{
+        current: query.page,
+        pageSize: query.pageSize,
+        total: data?.total ?? 0,
+        showSizeChanger: true,
+        onChange: (page, pageSize) => setQuery({ ...query, page, pageSize }),
       }}
-      pagination={{ defaultPageSize: 10, showSizeChanger: true }}
       toolBarRender={() => [
-        <Button key="refresh" icon={<ReloadOutlined />} onClick={() => actionRef.current?.reload()}>刷新</Button>,
+        <Button key="refresh" icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>,
         <Button key="create" type="primary" icon={<PlusOutlined />} onClick={onCreate}>新增</Button>,
       ]}
     />
@@ -217,7 +209,7 @@ export default function UserTable({ onEdit, onCreate }: Props) {
 | ProFormText.Password | 密码输入 | string | 自动遮盖 |
 | ProFormTextArea | 多行文本 | string | autoSize, maxLength, showCount |
 | ProFormDigit | 数字输入 | number | min/max/precision |
-| ProFormSelect | 下拉选择 | string/string[] | request 异步加载，mode="multiple" 多选 |
+| ProFormSelect | 下拉选择 | string/string[] | 通过 options 提供选项，mode="multiple" 多选 |
 | ProFormRadio.Group | 单选组 | string | radioType="button" 按钮样式 |
 | ProFormCheckbox.Group | 复选组 | string[] | - |
 | ProFormSwitch | 开关 | boolean | checkedChildren/unCheckedChildren |
@@ -400,7 +392,7 @@ export default function CreateUserSteps({ onSuccess }: Props) {
 
       <StepsForm.StepForm name="account" title="账户配置">
         <ProFormSelect name="deptId" label="部门"
-          request={async () => [{ label: '研发部', value: 'rd' }, { label: '运营部', value: 'ops' }]}
+          options={[{ label: '研发部', value: 'rd' }, { label: '运营部', value: 'ops' }]}
           rules={[{ required: true }]} />
         <ProFormSelect name="role" label="角色"
           options={[{ label: '管理员', value: 'admin' }, { label: '普通用户', value: 'user' }]}

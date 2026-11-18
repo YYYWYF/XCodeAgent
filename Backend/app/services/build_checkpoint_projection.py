@@ -45,12 +45,13 @@ def build_checkpoint_values(source, snapshot, *, live: bool) -> dict:
             or any(record.get(key) != progress.get(key) for key in keys)):
         raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "Build 已提交进度缺少一致的当前运行绑定。")
 
-    # 复用执行入口的身份、范围、计划摘要及任务合同校验；完整绑定确保此处只读已有副本。
+    # 只读进度按原 Run 的身份、范围及计划副本解释，不校验它是否仍可按最新正式计划执行。
     from app.graph.subgraphs.build import _restore_build_runtime
     from app.services.build_scheduler import resolve_execution_slice, summarize_build_runtime
     from app.services.build_task_waiting import task_retry_wait_summary
 
-    restored = _restore_build_runtime(state, source.run_id, progress, retry_failed_tasks=False)
+    restored = _restore_build_runtime(state, source.run_id, progress,
+        retry_failed_tasks=False, validate_current_plan=False)
     sliced = resolve_execution_slice(build_task_plan=restored["build_task_plan"],
         tasks=restored["tasks"], build_execution_scope=restored.get("build_execution_scope"))
     summary = summarize_build_runtime(sliced["tasks"], restored.get("build_results", []),

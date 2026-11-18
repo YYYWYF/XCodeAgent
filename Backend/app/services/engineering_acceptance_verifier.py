@@ -39,6 +39,7 @@ def verify_engineering_acceptance(
     batch_unauthorized_paths: list[str] | None = None,
     authorization_checks_as_warning: bool = False,
     authorization_checks_only: bool = False,
+    frontend_build_task_plan: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """确定性执行选定工程检查，区分接入告警和阻断错误。"""
 
@@ -48,7 +49,14 @@ def verify_engineering_acceptance(
     if not checks:
         return [], ["任务缺少 acceptance_checks，请重新执行 prepare_build_tasks。"]
     if authorization_checks_only:
-        checks = [check for check in checks if check.get("kind") in _AUTHORIZATION_CHECK_KINDS]
+        kinds = set(_AUTHORIZATION_CHECK_KINDS)
+        if frontend_build_task_plan is not None and any(
+            item.get("kind") == "frontend.page" for item in _dict_items(task.get("deliverables"))
+        ):
+            kinds.add("frontend_api_boundary")
+        checks = [check for check in checks if check.get("kind") in kinds]
+        # 保留既有权限检查证据的顺序，将新增阻断检查追加到后面。
+        checks.sort(key=lambda check: check.get("kind") not in _AUTHORIZATION_CHECK_KINDS)
     root = Path(workspace_root).expanduser().resolve() if workspace_root else None
     changes = {
         _normalize_path(item.get("path")): item
@@ -59,10 +67,16 @@ def verify_engineering_acceptance(
     errors: list[str] = []
     for check in checks:
         kind = check.get("kind")
+        rule_results = []
         if kind == "frontend_authorization":
             error, detail, mismatch = _verify_frontend_authorization(check, root=root)
         elif kind == "backend_authorization":
             error, detail, mismatch = _verify_backend_authorization(check, root=root)
+        elif kind == "frontend_api_boundary":
+            error, detail, rule_results = _verify_frontend_api_boundary(
+                check, root=root, task=task, build_task_plan=frontend_build_task_plan,
+            )
+            mismatch = False
         else:
             error, detail = _verify_check(
                 check,
@@ -74,7 +88,8 @@ def verify_engineering_acceptance(
             )
             mismatch = False
         # 只有实际读到的权限接入不符合预期才可告警，读取、解析和定位失败仍阻断。
-        check_status = "passed"
+        check_status = ("not_evaluable" if any(item["status"] == "not_evaluable"
+                        for item in rule_results) else "passed")
         if error:
             check_status = "warning" if authorization_checks_as_warning and mismatch else "failed"
             if check_status == "failed":
@@ -86,6 +101,7 @@ def verify_engineering_acceptance(
                 "status": check_status,
                 "error": error,
                 "evidence": detail,
+                **({"rule_results": rule_results} if rule_results else {}),
             }
         )
     return evidence, errors
@@ -154,8 +170,6 @@ def _verify_check(
         return _verify_page_placeholder(check, root=root)
     if kind == "page_component_reachability":
         return _verify_page_component_reachability(check, root=root)
-    if kind == "frontend_api_boundary":
-        return _verify_frontend_api_boundary(check, root=root)
     return f"不支持的工程验收检查类型：{kind or '<empty>'}", "检查类型无法执行。"
 
 
@@ -443,19 +457,49 @@ def _verify_frontend_api_boundary(
     check: dict[str, Any],
     *,
     root: Path | None,
-) -> tuple[str | None, str]:
-    """验证页面及其任务内组件未绕过领域 API 层直接访问 HTTP 客户端。"""
+    task: dict[str, Any],
+    build_task_plan: dict[str, Any] | None,
+) -> tuple[str | None, str, list[dict]]:
+    """以与步骤相同的规则复验工作区内容，记录不可自动判断项。"""
+    from app.agents.frontend.task_packet import frontend_dependencies
+    from app.services.frontend_step_acceptance import evaluate_frontend_page
 
-    for path in _string_list(check.get("target_paths")):
-        source, error = _read_workspace_file(root, _normalize_path(path))
-        if error:
-            return error, error
-        if re.search(r"\bfetch\s*\(|\baxios\s*\.|\bservice\s*\.", strip_comments(source or "")):
-            return (
-                "页面或组件直接调用 fetch、axios 或 service；业务接口必须经 src/apis/ 与 useRequest。",
-                f"在 {path} 发现页面层直连 HTTP 客户端。",
-            )
-    return None, "页面及任务内组件未发现直连 HTTP 客户端。"
+    def read(path: str) -> bytes:
+        """沿用现有工程路径解析及工作区边界，读取原始字节供指纹比较。"""
+        path = _normalize_path(path)
+        if root is None or not path or _resolved_path_error(root, path):
+            raise ValueError("工程验收路径不可用")
+        target = _workspace_target(root, path)
+        if not target.is_relative_to(root):
+            raise ValueError("工程验收路径越过工作区")
+        with target.open("rb") as stream:
+            return stream.read(512_001)
+
+    paths = _string_list(check.get("target_paths"))
+    entry = next((_normalize_path(path) for item in _dict_items(task.get("deliverables"))
+                  if item.get("kind") == "frontend.page"
+                  for path in _string_list(item.get("paths"))
+                  if path.endswith("/index.tsx")), paths[0] if paths else "")
+    queries = [
+        endpoint for contract in _dict_items(task.get("business_acceptance_checks"))
+        if contract.get("kind") == "frontend.page_endpoint_usage"
+        for endpoint in _dict_items(_dict_value(contract.get("expected")).get("endpoints"))
+        if endpoint.get("method") == "GET" and endpoint.get("path")
+        and endpoint.get("api_contract_id") and endpoint.get("endpoint_id")
+    ]
+    dependencies = frontend_dependencies(task, build_task_plan or {}, {
+        (item["api_contract_id"], item["endpoint_id"]) for item in queries
+    })
+    rules = evaluate_frontend_page(task_id=task.get("id", ""), step_id="step_4", entry=entry,
+                                   targets=paths, queries=queries, dependencies=dependencies, read=read)
+    failures = [item for item in rules if item["status"] == "failed"]
+    if failures:
+        errors = "、".join(f"{item['file_path']}:{item['line']} {item['rule_id']} {item['message']}"
+                         for item in failures)
+        return "前端业务请求违反工程规范：" + errors, "基于任务文件 AST 的确定性结果。", rules
+    if any(item["status"] == "not_evaluable" for item in rules):
+        return None, "部分前端请求规则需要人工确认。", rules
+    return None, "任务文件中的可验证前端请求规则通过。", rules
 
 
 def _verify_backend_authorization(

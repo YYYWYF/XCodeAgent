@@ -1247,48 +1247,27 @@ const callback = () => doSomething(a, b);
 
 **说明**：组件中可复用的逻辑，可以抽离成一个自定义 hook，方便在多个组件中进行逻辑复用。自定义 hook 必须以 use 命名开头。
 
-**正例：**
+**订阅示例**
+
 ```tsx
-const useOnline = () => {
-  const [isOnline, setIsOnline] = useState(false);
-
+/** 订阅浏览器在线状态，供多个组件复用。 */
+function useOnlineStatus() {
+  const [online, setOnline] = useState(() => navigator.onLine);
   useEffect(() => {
-    fetch('/online')
-      .then((res) => res.json())
-      .then((res) => {
-        setIsOnline(res.online);
-      });
-  }, [setIsOnline]);
-
-  return isOnline ? 'online' : 'offline';
-};
-
-const App = () => {
-  const [onlineStatus] = useOnline();
-  return (
-    <div>{onlineStatus}</div>
-  );
-};
+    /** 在浏览器状态变化时同步展示。 */
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
+  return online;
+}
 ```
 
-**反例：**
-```tsx
-const App = () => {
-  const [isOnline, setIsOnline] = useState(false);
-
-  useEffect(() => {
-    fetch('/online')
-      .then((res) => res.json())
-      .then((res) => {
-        setIsOnline(res.online);
-      });
-  }, [setIsOnline]);
-
-  return (
-    <div>{isOnline ? 'online' : 'offline'}</div>
-  );
-};
-```
+业务请求的 Hook 组织与状态管理见 [Frontend Engineering Standards](../../frontend-engineering-standards/SKILL.md)。
 
 ---
 

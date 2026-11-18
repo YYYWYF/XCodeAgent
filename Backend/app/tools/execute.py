@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +45,10 @@ class ExecuteInput(BaseModel):
     )
 
 
-def create_execute_tool(workspace_root: str | None):
-    """Create an `execute` shell tool bound to *workspace_root*."""
+def create_execute_tool(
+    workspace_root: str | None, *, blocked_by: Callable[[], str | None] | None = None,
+):
+    """创建工作区命令工具，可在启动任何进程前执行场景授权策略。"""
 
     cwd = str(Path(workspace_root).resolve()) if workspace_root else str(Path.cwd())
 
@@ -62,6 +65,8 @@ def create_execute_tool(workspace_root: str | None):
         Long-running commands like dev servers may time out; use timeout=0
         for those if needed.
         """
+        if blocked_by is not None and (reason := blocked_by()):
+            return json.dumps({"exit_code": 1, "stdout": "", "stderr": reason}, ensure_ascii=False)
         try:
             result = workspace_process_registry.run(
                 command,

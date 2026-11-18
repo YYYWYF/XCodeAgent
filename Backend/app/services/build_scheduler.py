@@ -360,6 +360,7 @@ def verify_task_file_changes(
     batch_unauthorized_paths: list[str] | None = None,
     authorization_checks_as_warning: bool = False,
     authorization_checks_only: bool = False,
+    frontend_build_task_plan: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """验证任务工程证据，也支持只检查当前 Build 启用的权限接入。"""
 
@@ -409,6 +410,7 @@ def verify_task_file_changes(
             batch_unauthorized_paths=batch_unauthorized_paths,
             authorization_checks_as_warning=authorization_checks_as_warning,
             authorization_checks_only=authorization_checks_only,
+            frontend_build_task_plan=frontend_build_task_plan,
         )
         if authorization_checks_only and not acceptance_evidence and not acceptance_errors:
             verified.append(verified_result)
@@ -417,7 +419,12 @@ def verify_task_file_changes(
         warnings = [check["error"] for check in acceptance_evidence if check["status"] == "warning"]
         if warnings:
             verified_result["authorization_warnings"] = warnings
-        engineering_status = "skipped" if authorization_checks_only else "passed"
+        standard_checked = any(check["kind"] == "frontend_api_boundary" and check["status"] == "passed"
+                               for check in acceptance_evidence)
+        uncertain = any(check["status"] == "not_evaluable" for check in acceptance_evidence)
+        engineering_status = "skipped" if uncertain or (
+            authorization_checks_only and not standard_checked
+        ) else "passed"
         if acceptance_errors:
             engineering_status = "failed"
         elif warnings:

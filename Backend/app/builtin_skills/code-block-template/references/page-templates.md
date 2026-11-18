@@ -17,7 +17,7 @@
 ├── 自定义筛选表单 (ProForm + Row/Col + 手动查询/重置)
 ├── ProTable (search={false})
 │   ├── columns (FIELD_DEFS 驱动 + 操作列)
-│   ├── request (合并 formValues + 分页参数)
+│   ├── dataSource / loading（由 useRequest 提供）
 │   ├── toolBarRender (导入/导出/刷新)
 │   └── rowSelection (keys + rows 合并为一个 selection state)
 └── 弹窗（统一 modal state 管理）
@@ -76,6 +76,7 @@ import * as XLSX from 'xlsx';
 ### 完整示例代码
 
 ```tsx
+import { useRequest } from 'ahooks';
 // pages/Normal_table/index.tsx
 import React, { useRef, useState } from 'react';
 import {
@@ -169,8 +170,8 @@ const ImportModal: React.FC<ImportModalProps> = ({ open, onClose, onImported }) 
     };
 
     return (
-        <ModalForm title="批量导入" visible={open}
-            onVisibleChange={(v) => { if (!v) { resetUpload(); onClose(); } }}
+        <ModalForm title="批量导入" open={open}
+            onOpenChange={(v) => { if (!v) { resetUpload(); onClose(); } }}
             modalProps={{ destroyOnClose: true, width: 520 }}
             submitter={{ searchConfig: { submitText: '确定', resetText: '取消' }, submitButtonProps: { disabled: parsedRows.length === 0 } }}
             onFinish={handleFinish}
@@ -216,8 +217,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ open, rows, onClose }) => {
     };
 
     return (
-        <ModalForm title="批量导出" visible={open}
-            onVisibleChange={(v) => { if (!v) { setExportColumns([]); onClose(); } }}
+        <ModalForm title="批量导出" open={open}
+            onOpenChange={(v) => { if (!v) { setExportColumns([]); onClose(); } }}
             modalProps={{ destroyOnClose: true, width: 520 }}
             submitter={{ searchConfig: { submitText: '确定', resetText: '取消' }, submitButtonProps: { disabled: exportColumns.length === 0 } }}
             onFinish={handleFinish}
@@ -241,8 +242,8 @@ type DetailModalProps = { open: boolean; record?: ReimbursementItem; onClose: ()
 
 const DetailModal: React.FC<DetailModalProps> = ({ open, record, onClose }) => {
     return (
-        <ModalForm title="查看详情" visible={open}
-            onVisibleChange={(v) => { if (!v) onClose(); }}
+        <ModalForm title="查看详情" open={open}
+            onOpenChange={(v) => { if (!v) onClose(); }}
             modalProps={{ destroyOnClose: true, width: 720 }}
             submitter={{ resetButtonProps: { style: { display: 'none' } }, submitButtonProps: { style: { display: 'none' } } }}
             initialValues={record}
@@ -267,6 +268,10 @@ const DetailModal: React.FC<DetailModalProps> = ({ open, record, onClose }) => {
 
 // ==================== 主组件 ====================
 const ReimbursementList: React.FC = () => {
+    const [query, setQuery] = useState<ReimbursementQuery>({ page: 1, pageSize: 10 });
+    const { data, loading, refresh } = useRequest(() => fetchReimbursementList(query), {
+        refreshDeps: [query],
+    });
     const formRef = useRef<FormInstance>(null);
     const tableRef = useRef<any>(null);
 
@@ -292,7 +297,7 @@ const ReimbursementList: React.FC = () => {
 
     const renderFilter = () => (
         <ProForm formRef={formRef} layout="horizontal" submitter={false}
-            onFinish={async () => { tableRef.current?.reload(); }}>
+            onFinish={async () => { setQuery({ ...query, ...formRef.current?.getFieldsValue(), page: 1 }); }}>
             <Row gutter={[16, 16]}>
                 <Col span={6}><ProFormText name="reimbursementNo" label="报销单号" placeholder="请输入内容" /></Col>
                 <Col span={6}><ProFormText name="subjectCode" label="科目代码" placeholder="请输入内容" /></Col>
@@ -311,8 +316,8 @@ const ReimbursementList: React.FC = () => {
                 <Col span={6}><ProFormText name="employeeId" label="员工编号" placeholder="请输入内容" /></Col>
             </Row>
             <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-                <Button type="primary" onClick={async () => { await formRef.current?.validateFields(); tableRef.current?.reload(); }}>查询</Button>
-                <Button onClick={() => { formRef.current?.resetFields(); tableRef.current?.reload(); }}>重置</Button>
+                <Button type="primary" onClick={async () => { await formRef.current?.validateFields(); refresh(); }}>查询</Button>
+                <Button onClick={() => { formRef.current?.resetFields(); setQuery({ page: 1, pageSize: query.pageSize }); }}>重置</Button>
             </div>
         </ProForm>
     );
@@ -320,7 +325,7 @@ const ReimbursementList: React.FC = () => {
     const toolBarRender = () => [
         <Button key="import" icon={<ImportOutlined />} onClick={() => openModal('import')}>批量导入</Button>,
         <Button key="export" icon={<ExportOutlined />} disabled={selection.keys.length === 0} onClick={() => openModal('export')}>批量导出</Button>,
-        <Button key="refresh" icon={<ReloadOutlined />} onClick={() => tableRef.current?.reload()}>刷新</Button>,
+        <Button key="refresh" icon={<ReloadOutlined />} onClick={() => refresh()}>刷新</Button>,
     ];
 
     return (
@@ -328,13 +333,11 @@ const ReimbursementList: React.FC = () => {
             {renderFilter()}
             <ProTable<ReimbursementItem>
                 actionRef={tableRef} columns={columns} rowKey="id"
-                request={async (params) => {
-                    const { current, pageSize, ...rest } = params;
-                    const formValues = formRef.current?.getFieldsValue() || {};
-                    const res = await fetchReimbursementList({ page: current, pageSize, ...formValues, ...rest } as ReimbursementQuery);
-                    return { data: res.data, success: res.success, total: res.total };
-                }}
-                pagination={{ pageSize: 10 }} search={false}
+                dataSource={data?.data ?? []} loading={loading}
+                pagination={{
+                    current: query.page, pageSize: query.pageSize, total: data?.total ?? 0,
+                    onChange: (page, pageSize) => setQuery({ ...query, page, pageSize }),
+                }} search={false}
                 rowSelection={{
                     selectedRowKeys: selection.keys,
                     onChange: (keys, rows) => setSelection({ keys, rows: rows as ReimbursementItem[] }),
@@ -346,7 +349,7 @@ const ReimbursementList: React.FC = () => {
                 toolBarRender={toolBarRender}
             />
             <ImportModal open={modal.type === 'import'} onClose={closeModal}
-                onImported={() => { clearSelection(); closeModal(); tableRef.current?.reload(); }} />
+                onImported={() => { clearSelection(); closeModal(); refresh(); }} />
             <ExportModal open={modal.type === 'export'} rows={selection.rows} onClose={closeModal} />
             <DetailModal open={modal.type === 'detail'} record={modal.record} onClose={closeModal} />
         </div>
@@ -402,12 +405,7 @@ const renderFilterForm = () => {
 
 **2. 工具栏** — `getToolBarRender()` 根据 `activeTab` 返回不同按钮。
 
-**3. API 调用** — `request` 中传入 `tabType` 区分数据来源：
-```tsx
-request={async (params) => {
-  const res = await fetchList({ ...params, tabType: activeTab, ...formValues });
-}}
-```
+**3. API 调用** — 用 `useRequest` 管理 tabType、筛选和分页，当前标签将结果传给表格的 `dataSource` 与 `loading`。
 
 ### Tab 切换钩子
 
@@ -416,7 +414,7 @@ const handleTabChange = (key: string) => {
   setActiveTab(key as TabKey);
   setMgmtSelectedRowKeys([]);        // 清空选中行
   formRef.current?.resetFields();    // 重置筛选表单
-  tableRef.current?.reload();        // 刷新表格
+  setQuery({ page: 1, pageSize: query.pageSize });
 };
 ```
 
@@ -429,6 +427,13 @@ type ModalState = { type: 'add' | 'edit' | 'delete' | 'batchDelete' | 'instEdit'
 
 const ManagementPlatform: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabKey>('managementItems');
+  const [query, setQuery] = useState({ page: 1, pageSize: 10 });
+  const management = useRequest(() => listManagementItems(query), {
+    ready: activeTab === 'managementItems', refreshDeps: [query],
+  });
+  const institution = useRequest(() => listInstitutionParams(query), {
+    ready: activeTab === 'institutionParams', refreshDeps: [query],
+  });
   const [modal, setModal] = useState<ModalState>({ type: null });
 
   const managementItemsColumns: ProColumns<ManagementItem>[] = [...];
@@ -450,7 +455,7 @@ const ManagementPlatform: React.FC = () => {
                   style={{ marginBottom: 16 }}>{renderFilterForm()}</ProForm>
                 <ProTable<ManagementItem>
                   actionRef={tableRef} columns={managementItemsColumns} rowKey="keyValue"
-                  request={async (params) => { /* ... tabType: 'managementItems' */ }}
+                  dataSource={management.data?.data ?? []} loading={management.loading}
                   search={false} rowSelection={{...}}
                   options={{ setting: true, reload: false, density: false, fullScreen: false }}
                   toolBarRender={getToolBarRender}
@@ -465,7 +470,7 @@ const ManagementPlatform: React.FC = () => {
                   style={{ marginBottom: 16 }}>{renderFilterForm()}</ProForm>
                 <ProTable<InstitutionParam>
                   actionRef={tableRef} columns={institutionParamsColumns} rowKey="id"
-                  request={async (params) => { /* ... tabType: 'institutionParams' */ }}
+                  dataSource={institution.data?.data ?? []} loading={institution.loading}
                   search={false}
                   options={{ setting: true, reload: false, density: false, fullScreen: false }}
                   toolBarRender={getToolBarRender}

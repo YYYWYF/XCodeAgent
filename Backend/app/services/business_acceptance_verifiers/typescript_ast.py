@@ -74,7 +74,9 @@ class _ParsedSource:
     root: Any
 
 
-def inspect_typescript_sources(files: dict[str, str]) -> TypeScriptAstModel:
+def inspect_typescript_sources(
+    files: dict[str, str], *, include_default_imports: bool = False,
+) -> TypeScriptAstModel:
     """解析一组任务内 TypeScript 文件并提取可验证事实。"""
 
     parsed = [_parse_source(path, source) for path, source in files.items()]
@@ -90,7 +92,7 @@ def inspect_typescript_sources(files: dict[str, str]) -> TypeScriptAstModel:
     literal_values: set[str] = set()
 
     for item in parsed:
-        imports_by_path[item.path] = _imports(item)
+        imports_by_path[item.path] = _imports(item, include_default=include_default_imports)
         calls_by_path[item.path] = []
         strings_by_path[item.path] = []
         for node in _walk(item.root):
@@ -347,8 +349,8 @@ def _function_calls(
     return calls
 
 
-def _imports(item: _ParsedSource) -> list[TypeScriptImport]:
-    """提取具名、别名和命名空间 import。"""
+def _imports(item: _ParsedSource, *, include_default: bool = False) -> list[TypeScriptImport]:
+    """提取具名、别名、命名空间及按需读取的默认值导入。"""
 
     result: list[TypeScriptImport] = []
     for statement in item.root.named_children:
@@ -356,8 +358,17 @@ def _imports(item: _ParsedSource) -> list[TypeScriptImport]:
             continue
         source_node = statement.child_by_field_name("source")
         module = _literal_value(source_node, item.source) if source_node is not None else ""
+        if include_default:
+            if any(child.type == "type" for child in statement.children):
+                continue
+            clause = next((child for child in statement.named_children if child.type == "import_clause"), None)
+            default = next((child for child in clause.named_children if child.type == "identifier"), None) if clause else None
+            if default is not None:
+                result.append(TypeScriptImport(module, "default", _node_text(default, item.source)))
         for specifier in _walk(statement):
             if specifier.type == "import_specifier":
+                if include_default and any(child.type == "type" for child in specifier.children):
+                    continue
                 name = specifier.child_by_field_name("name")
                 alias = specifier.child_by_field_name("alias")
                 if name is not None:

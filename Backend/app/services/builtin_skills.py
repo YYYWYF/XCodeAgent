@@ -13,6 +13,7 @@ BUILTIN_SKILLS_DIR_ENV = "DEVAGENTSTUDIO_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.devagentstudio/builtin-skills/"
 REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
 CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
+FRONTEND_ENGINEERING_SKILL_NAME = "frontend-engineering-standards"
 SPRINGBOOT_BACKEND_BOOTSTRAP_SKILL_NAME = "springboot-backend-bootstrap"
 SPRINGBOOT_BACKEND_FOUNDATION_SKILL_NAME = "springboot-backend-foundation"
 SPRINGBOOT_BACKEND_BUSINESS_SKILL_NAME = "springboot-backend-business"
@@ -51,6 +52,12 @@ _SPRINGBOOT_TEMPLATE_BOUNDARY_REFERENCE_FILES = [
 ]
 
 REQUIRED_BUILTIN_SKILL_FILES = {
+    FRONTEND_ENGINEERING_SKILL_NAME: [
+        "SKILL.md",
+        "references/api-request-patterns.md",
+        "references/component-patterns.md",
+        "references/page-structure-examples.md",
+    ],
     REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
     CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
     SPRINGBOOT_BACKEND_BOOTSTRAP_SKILL_NAME: [

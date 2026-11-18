@@ -19,6 +19,7 @@ from app.config import dag_business_self_check_enabled
 from app.agents.database.generator import generate_database_with_deep_agent
 from app.agents.data_source.generator import generate_data_sources_with_deep_agent
 from app.agents.frontend.generator import generate_frontend_with_deep_agent
+from app.agents.frontend.task_packet import API, SERVICE as FRONTEND_TEMPLATE_SERVICE, task_kind
 from app.domain.models import (
     BuildTaskExecutionContractError,
     resolve_build_task_execution_contract,
@@ -57,6 +58,7 @@ from app.services.authorization_platform_projection import (
 )
 from app.services.authorization_edd import verify_authorization_edd
 from app.services.business_acceptance_verifier import verify_business_acceptance
+from app.services.engineering_acceptance_verifier import apply_batch_scope_violation, unauthorized_batch_paths
 from app.services.build_task_planner import (
     replace_build_task_plan_tasks,
     tasks_from_build_task_plan,
@@ -607,8 +609,11 @@ def _execute_owner_tasks(
                         if owner == "backend"
                         else {}
                     ),
-                    **({"page_template": state.get("page_template")} if owner == "frontend" else {}),
-                    **({"ui_designs": state.get("ui_designs")} if owner == "frontend" else {}),
+                    **({
+                        "page_template": state.get("page_template"),
+                        "template_page_id": state.get("selectedPageId"),
+                        "ui_designs": state.get("ui_designs"),
+                    } if owner == "frontend" else {}),
                     **(
                         {"database_change_plan": _approved_database_change_plan(owner_tasks)}
                         if owner == "database"
@@ -644,13 +649,12 @@ def _execute_owner_tasks(
         dispatched_tasks=owner_tasks,
         raw_results=captured.value,
     )
-    # Agent 返回的验收字段不是可信证据，先清除后只使用本轮确定性验证结果。
+    # Agent 自报的验收证据不能替代平台独立验收。
     sanitized_results = [
         {
             key: value
             for key, value in result.items()
-            if key
-            not in {
+            if key not in {
                 "acceptance_evidence",
                 "authorization_warnings",
                 "business_acceptance_evidence",
@@ -668,7 +672,14 @@ def _execute_owner_tasks(
             workspace_root=str(workspace) if workspace else None,
             authorization_checks_as_warning=True,
             authorization_checks_only=True,
+            **({"frontend_build_task_plan": state["build_task_plan"]} if owner == "frontend" else {}),
         )
+    sanitized_results = [
+        _require_api_creation_diff(result, task, owner_change_set, batch_tasks=owner_tasks)
+        if task_kind(task) == API and task.get("change_scope")
+        and all(change["operation"] == "add" for change in task["change_scope"]) else result
+        for task, result in zip(owner_tasks, sanitized_results, strict=True)
+    ]
     sanitized_results = observe_validation(
         _verify_business_results,
         state,
@@ -677,6 +688,35 @@ def _execute_owner_tasks(
         workspace_root=str(workspace) if workspace else None,
     )
     return sanitized_results, owner_change_set
+
+
+def _require_api_creation_diff(
+    result: dict, task: dict, change_set: dict | None, *, batch_tasks: list[dict],
+) -> dict:
+    """核对新建 API 的候选确实新增了唯一授权文件，沿用原工程失败分类。"""
+    if result["status"] != "completed":
+        return result
+    targets = task["target_files"]
+    outside = unauthorized_batch_paths(change_set, [
+        {**candidate, "allowed_paths": candidate["target_files"]}
+        if task_kind(candidate) == API else candidate for candidate in batch_tasks
+    ])
+    if outside:
+        return apply_batch_scope_violation([result], outside)[0]
+    expected = {_normalize_tool_activity_path(path) for path in targets}
+    added = {
+        _normalize_tool_activity_path(item["path"]) for item in (change_set or {}).get("files", [])
+        if item["changeType"] == "added"
+    }
+    if added & expected == expected:
+        return result
+    failed = {
+        **result, "status": "failed", "failure_category": "acceptance_verification_failed",
+        "failure_reason": "工作区差异未包含正式 API 模块的新增操作。",
+        "acceptance_status": {**result.get("acceptance_status", {}), "engineering": "failed"},
+    }
+    failed["scheduler_decision"] = classify_task_result(failed)
+    return failed
 
 
 def _verify_business_results(
@@ -693,15 +733,7 @@ def _verify_business_results(
         for task in owner_tasks
         if task.get("id")
     }
-    if not dag_business_self_check_enabled():
-        return [
-            _skip_business_acceptance(
-                result,
-                tasks_by_id.get(str(result.get("task_id") or ""), {}),
-            )
-            for result in results
-        ]
-
+    business_enabled = dag_business_self_check_enabled()
     dependency_evidence = _completed_dependency_business_evidence(
         state.get("build_results"),
         owner_tasks,
@@ -709,6 +741,11 @@ def _verify_business_results(
     verified: list[dict[str, Any]] = []
     for result in results:
         task = tasks_by_id.get(str(result.get("task_id") or ""), {})
+        # API 改为任务级执行后仍须验收正式端点与模板 service，不能由可选自检开关跳过。
+        api_module = task_kind(task) == API
+        if not business_enabled and not api_module:
+            verified.append(_skip_business_acceptance(result, task))
+            continue
         if result.get("status") not in {"completed", "already_satisfied"}:
             verified.append(result)
             continue
@@ -719,6 +756,7 @@ def _verify_business_results(
             if isinstance(state.get("project_plan"), dict)
             else None,
             dependency_evidence=dependency_evidence.get(str(task.get("id") or ""), []),
+            **({"frontend_api_service_path": FRONTEND_TEMPLATE_SERVICE.lstrip("/")} if api_module else {}),
         )
         next_result = {
             **result,
@@ -1163,13 +1201,15 @@ def _latest_build_task_plan_for_build(
 
 def _bound_build_task_plan_for_build(
     state: ProjectState,
+    *, validate_current_plan: bool = True,
 ) -> tuple[dict[str, Any], dict[str, str], list[str]]:
-    """创建或重读当前 Build Run 的只读计划副本，并拒绝规划文件漂移。"""
+    """执行时核验当前正式计划；只读展示仅核验本 Run 的绑定及计划副本。"""
 
     bound_run_id = str(state.get("build_run_id") or "").strip()
     bound_path = str(state.get("build_run_plan_path") or "").strip()
     bound_sha256 = str(state.get("build_run_plan_sha256") or "").strip()
-    latest_plan, latest_errors = _latest_build_task_plan_for_build(state)
+    # 冷进入展示旧 Run 不读取或校验最新计划；实际派发及重试仍使用默认严格校验。
+    latest_plan, latest_errors = _latest_build_task_plan_for_build(state) if validate_current_plan else ({}, [])
     if bound_run_id or bound_path or bound_sha256:
         if not (bound_run_id and bound_path and bound_sha256):
             return {}, {}, ["当前 Build Run 的任务计划绑定不完整。"]
@@ -1181,7 +1221,7 @@ def _bound_build_task_plan_for_build(
             return {}, {}, ["Build Run 的任务计划副本路径与运行标识不一致。"]
         if latest_errors:
             return {}, {}, ["当前规划任务计划已失效，不能继续已绑定 Build Run。", *latest_errors]
-        if build_task_plan_sha256(latest_plan) != bound_sha256:
+        if validate_current_plan and build_task_plan_sha256(latest_plan) != bound_sha256:
             return {}, {}, ["已绑定 Build Run 的任务计划已变化；请以新的已确认计划重新启动 Build。"]
         try:
             snapshot = load_build_task_plan_json(bound_path)
@@ -1195,6 +1235,8 @@ def _bound_build_task_plan_for_build(
             "build_run_plan_sha256": bound_sha256,
         }, []
 
+    if not validate_current_plan:
+        return {}, {}, ["当前 Build Run 的任务计划绑定不完整。"]
     if latest_errors:
         return latest_plan, {}, latest_errors
     build_run_id = f"build-{uuid4().hex}"
@@ -1520,6 +1562,7 @@ def _finalize_build(
 
 def _restore_build_runtime(
     state: ProjectState, source_run_id: str, source: dict[str, Any], *, retry_failed_tasks: bool,
+    validate_current_plan: bool = True,
 ) -> ProjectState:
     """核对来源 Run 的正式计划身份后，按恢复原因还原 Build 运行态。"""
 
@@ -1535,7 +1578,7 @@ def _restore_build_runtime(
     if any(source_binding) and (not all(source_binding) or (any(entry_binding) and entry_binding != source_binding)):
         raise RecoveryExecutionError("BUILD_RETRY_BINDING_DRIFT", "Build Run 绑定与节点入口不一致。")
     plan_state = {**state, **dict(zip(binding_keys, source_binding))}
-    plan, _, errors = _bound_build_task_plan_for_build(plan_state)
+    plan, _, errors = _bound_build_task_plan_for_build(plan_state, validate_current_plan=validate_current_plan)
     if errors:
         raise RecoveryExecutionError("BUILD_RETRY_PLAN_DRIFT", "；".join(errors))
     formal_tasks = tasks_from_build_task_plan(plan)

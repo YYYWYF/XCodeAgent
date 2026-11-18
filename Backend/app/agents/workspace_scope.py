@@ -84,11 +84,12 @@ def create_workspace_backend(
     builtin_skill_names: Sequence[str] | None = None,
     user_skills_backend: BackendProtocol | None = None,
     agent_memory_backend: BackendProtocol | None = None,
+    workspace_backend: BackendProtocol | None = None,
 ) -> BackendProtocol:
     """创建工作区后端，并可按精确白名单构造只读技能子挂载。"""
 
     root = resolve_workspace_root(workspace_root)
-    default_backend = (
+    default_backend = workspace_backend if workspace_backend is not None else (
         StateBackend()
         if root is None
         else AutoDedupFilesystemBackend(root_dir=root, virtual_mode=True)
@@ -162,6 +163,7 @@ def create_workspace_permissions(
     include_builtin_skills: bool = False,
     include_user_skills: bool = False,
     include_agent_memory: bool = False,
+    frontend_design_paths: Sequence[str] = (),
 ) -> list[FilesystemPermission]:
     root = resolve_workspace_root(workspace_root)
     skill_permissions: list[FilesystemPermission] = []
@@ -348,6 +350,11 @@ def create_workspace_permissions(
         return permissions
 
     if mode == "frontend":
+        if frontend_design_paths:
+            # 仅预先编译的确认设计稿只读放行，实际访问仍由当前步骤再次核对。
+            permissions.append(FilesystemPermission(
+                operations=["read"], paths=list(frontend_design_paths), mode="allow",
+            ))
         # 前端编码 Agent：默认在前端目录读写；后端目录只读 —— 看 API 契约/服务代码
         # 是合理诉求（避免凭空实现客户端），但**不能写**。`.devagentstudio` 平台产物
         # 既不能读也不能写：那不是业务代码，读了会让 LLM 把上一轮规划草稿当成

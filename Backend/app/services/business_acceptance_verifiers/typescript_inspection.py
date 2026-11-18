@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Callable
 from typing import Any
 
 from app.services.business_acceptance_verifiers.common import shape_matches, verification_result
@@ -22,10 +23,12 @@ _HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 def verify_api_contract_source(
     files: dict[str, str],
     expected: dict[str, Any],
+    *,
+    service_path: str | None = None,
 ) -> dict[str, Any]:
     """通过 AST 验证 API 导出、公共 client 调用和请求响应类型。"""
 
-    model = _inspect_or_block(files)
+    model = _inspect_or_block(files, include_default_imports=service_path is not None)
     if isinstance(model, dict):
         return model
     direct_calls = _direct_http_calls(model, set(files))
@@ -35,6 +38,23 @@ def verify_api_contract_source(
             "业务 API 模块直接调用 axios/fetch，未通过公共 service。",
             facts={"direct_http_calls": direct_calls},
         )
+    client_call = _is_public_client_call
+    if service_path is not None:
+        if len(files) != 1:
+            return verification_result("blocked", "无法绑定单个 API 模块的模板 service 导入。")
+        path, = files
+        service_imports = {
+            item.local for item in model.imports_by_path[path]
+            if item.imported == "default"
+            and _resolve_import_path(path, item.module, {service_path: ""}) == service_path
+        }
+        if not service_imports:
+            return verification_result("failed", "API 模块缺少模板 service 的默认值导入。")
+
+        def client_call(call: TypeScriptCall) -> bool:
+            """待核验 Endpoint 必须通过模板 service 的实际导入调用。"""
+            return call.object_name in service_imports
+
     required_endpoints = _dict_items(expected.get("required_endpoints"))
     if not required_endpoints:
         # 兼容当前已编译的旧检查：旧 expected.endpoints 的语义就是 required。
@@ -52,7 +72,7 @@ def verify_api_contract_source(
         endpoint_id = str(endpoint.get("endpoint_id") or "")
         method = str(endpoint.get("method") or "GET").upper()
         path = str(endpoint.get("path") or "")
-        matched = _find_endpoint_function(model.functions, method, path)
+        matched = _find_endpoint_function(model.functions, method, path, client_call=client_call)
         if matched is None:
             errors.append(f"未找到实现 {method} {path} 的导出函数（{endpoint_id}）。")
             continue
@@ -82,7 +102,7 @@ def verify_api_contract_source(
         call.path
         for function in model.functions
         for call in function.calls
-        if _is_public_client_call(call)
+        if (client_call(call) or _is_public_client_call(call))
         and call.method.casefold() in _HTTP_METHODS
         and call.path
         and not any(_paths_match(call.path, declared) for declared in declared_paths)
@@ -175,11 +195,13 @@ def verify_page_endpoint_usage_source(
     )
 
 
-def _inspect_or_block(files: dict[str, str]) -> TypeScriptAstModel | dict[str, Any]:
+def _inspect_or_block(
+    files: dict[str, str], *, include_default_imports: bool = False,
+) -> TypeScriptAstModel | dict[str, Any]:
     """统一解析 TypeScript，并把 grammar 不支持收敛为 blocked。"""
 
     try:
-        return inspect_typescript_sources(files)
+        return inspect_typescript_sources(files, include_default_imports=include_default_imports)
     except TypeScriptAstError as exc:
         return verification_result(
             "blocked",
@@ -192,6 +214,8 @@ def _find_endpoint_function(
     functions: list[TypeScriptFunction],
     method: str,
     path: str,
+    *,
+    client_call: Callable[[TypeScriptCall], bool],
 ) -> tuple[TypeScriptFunction, TypeScriptCall] | None:
     """在导出函数 AST 内按公共 client、method 和 path 精确匹配 endpoint。"""
 
@@ -199,7 +223,7 @@ def _find_endpoint_function(
     for function in functions:
         for call in function.calls:
             if (
-                _is_public_client_call(call)
+                client_call(call)
                 and call.method.casefold() == expected_method
                 and _paths_match(call.path, path)
             ):

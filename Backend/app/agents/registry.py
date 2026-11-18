@@ -29,7 +29,6 @@ from app.services.user_skill_runtime import (
     get_user_skill_runtime_revision,
 )
 
-
 logger = logging.getLogger(__name__)
 _MAX_SNAPSHOT_ATTEMPTS = 3
 
@@ -50,6 +49,7 @@ class AgentBundle:
     data_source_builtin_skill_names: tuple[str, ...] = ()
     test_generation: Any = None
     _integration_repair_factory: Callable[[], Any] | None = None
+    frontend_build_factory: Callable[[Any], Any] | None = None
 
     @cached_property
     def integration_repair(self) -> Any:
@@ -98,7 +98,9 @@ def create_agent_bundle(
             and get_agent_memory_runtime_revision() == agent_memory_revision
         ):
             return bundle
-    raise RuntimeError("用户技能或 AGENTS.md 持续变化，无法创建稳定的 Agent 运行时快照。")
+    raise RuntimeError(
+        "用户技能或 AGENTS.md 持续变化，无法创建稳定的 Agent 运行时快照。"
+    )
 
 
 @lru_cache(maxsize=16)
@@ -142,6 +144,18 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+
+    def frontend_build_factory(scope) -> Any:
+        """复用已验证的快照，为本次前端 Build 创建独立步骤状态。"""
+        return create_frontend_agent(
+            chat_model,
+            workspace_root=workspace_root,
+            user_skills_backend=user_skills.backend,
+            agent_memory_backend=agent_memory.backend,
+            required_user_skills_prompt=required_user_skills_prompt,
+            build_scope=scope,
+        )
+
     code_analyze = create_code_analyze_agent(
         chat_model,
         workspace_root=workspace_root,
@@ -183,11 +197,14 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+
     def integration_repair_factory() -> Any:
         """复用本 Bundle 已验证的技能与记忆，不引入其他场景的模型客户端。"""
         return create_integration_repair_agent(
-            create_chat_model(settings, max_retries_override=0), workspace_root,
-            user_skills_backend=user_skills.backend, agent_memory_backend=agent_memory.backend,
+            create_chat_model(settings, max_retries_override=0),
+            workspace_root,
+            user_skills_backend=user_skills.backend,
+            agent_memory_backend=agent_memory.backend,
             required_user_skills_prompt=required_user_skills_prompt,
         )
 
@@ -215,6 +232,7 @@ def _create_agent_bundle_for_workspace(
         code_review_repair=code_review_repair,
         code_review_repair_with_pnpm=code_review_repair_with_pnpm,
         frontend=frontend,
+        frontend_build_factory=frontend_build_factory,
         data_source=data_source,
         database=database,
         repair_planner=repair_planner,
@@ -241,5 +259,7 @@ def _normalize_selected_skill_key(
 
     if not selected_skill_names:
         return ()
-    normalized = {str(name).strip() for name in selected_skill_names if str(name).strip()}
+    normalized = {
+        str(name).strip() for name in selected_skill_names if str(name).strip()
+    }
     return tuple(sorted(normalized, key=lambda name: (name.casefold(), name)))

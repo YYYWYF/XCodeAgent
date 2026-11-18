@@ -60,6 +60,7 @@ class BusinessAcceptanceVerifier:
         *,
         formal_artifacts: dict[str, Any] | None = None,
         dependency_evidence: list[dict[str, Any]] | None = None,
+        frontend_api_service_path: str | None = None,
     ) -> dict[str, Any]:
         """验证单个任务的全部业务检查，Agent 自报结果不参与裁决。"""
 
@@ -70,6 +71,14 @@ class BusinessAcceptanceVerifier:
             if isinstance(item, dict)
         ]
         evidence: list[dict[str, Any]] = []
+        if frontend_api_service_path is not None and (
+            not checks or any(check.get("kind") != "frontend.api_contract" for check in checks)
+        ):
+            evidence.append({
+                "check_id": "", "kind": "frontend.api_contract",
+                **verification_result("blocked", "API 模块需要当前正式契约检查。"),
+            })
+            checks = []
         for check in checks:
             started_at = monotonic()
             evidence.append(
@@ -81,6 +90,7 @@ class BusinessAcceptanceVerifier:
                         formal_artifacts=formal_artifacts,
                         dependency_evidence=dependency_evidence or [],
                         prior_results=evidence,
+                        frontend_api_service_path=frontend_api_service_path,
                     ),
                     "duration_ms": round(max(monotonic() - started_at, 0.0) * 1000, 3),
                 }
@@ -108,6 +118,7 @@ class BusinessAcceptanceVerifier:
         formal_artifacts: dict[str, Any] | None,
         dependency_evidence: list[dict[str, Any]],
         prior_results: list[dict[str, Any]],
+        frontend_api_service_path: str | None,
     ) -> dict[str, Any]:
         """执行单项检查并将异常收敛为 blocked，不允许异常吞掉后通过。"""
 
@@ -180,7 +191,9 @@ class BusinessAcceptanceVerifier:
                 **verification_result("blocked", "；".join(read_errors)),
             }
         try:
-            if kind == "frontend.page_endpoint_usage":
+            if kind == "frontend.api_contract" and frontend_api_service_path is not None:
+                result = verifier(files, check["expected"], service_path=frontend_api_service_path)
+            elif kind == "frontend.page_endpoint_usage":
                 result = verifier(
                     files,
                     check.get("expected") if isinstance(check.get("expected"), dict) else {},
@@ -207,6 +220,8 @@ def verify_business_acceptance(
     workspace_root: str | Path | None,
     formal_artifacts: dict[str, Any] | None = None,
     dependency_evidence: list[dict[str, Any]] | None = None,
+    *,
+    frontend_api_service_path: str | None = None,
 ) -> dict[str, Any]:
     """提供函数式入口，供 Build Scheduler 和单元测试直接调用。"""
 
@@ -215,6 +230,7 @@ def verify_business_acceptance(
         workspace_root,
         formal_artifacts=formal_artifacts,
         dependency_evidence=dependency_evidence,
+        frontend_api_service_path=frontend_api_service_path,
     )
 
 
