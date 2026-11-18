@@ -63,6 +63,12 @@ attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_i
 `UnitGenerationPolicy.model_max_retries=0` 只是 DTO 默认值；production DAG policy 会显式
 设置模型 SDK infrastructure retry 为 2。
 
+前端及 page Unit 的模型工程摘要由 frontend_unit_workspace.py 单独投影。只移除后端与运行统计，
+保留现有前端路径、组件名称、客户端及共享契约事实；同文件名称合并而不裁剪，代码图
+符号及行号继续保留，避免丢掉仅在其中出现的 HTTP Service。风险、索引截断和无法
+判定归属的路径事实保留。该投影只用于 Prompt，不改变完整冻结 Context、输入指纹、
+合同 Reader allowlist、依赖、写入权限或 Local/Global 校验，也不写回 WorkspaceSnapshot。
+
 每个 Local Attempt 创建独立 FrozenContractReader，只绑定 `read_frozen_contract_fragment`。
 首次模型调用前，平台按当前 Unit 已验证的 catalog 预读职责片段，以独立只读消息提供正文，
 不修改冻结 Context。预读至多使用剩余读取次数和累计字节的一半，且正文不超过 16 KiB；

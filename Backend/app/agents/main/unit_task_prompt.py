@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.agents.main.backend_unit_task_prompt import build_backend_unit_generation_prompt
+from app.agents.main.frontend_unit_workspace import project_frontend_workspace_context
 from app.agents.main.unit_task_output import UNIT_TASK_FINAL_OUTPUT_RULE
 from app.agents.main.unit_task_rules import (
     example_task_id,
@@ -60,7 +61,7 @@ def _retained_task_summaries(context: UnitGenerationContext) -> list[dict[str, A
 
 
 def _prompt_context(context: UnitGenerationContext) -> dict[str, Any]:
-    """后端提示词只投影完整目录树，不修改冻结快照或其他类型 Unit 的上下文。"""
+    """按模型 Unit 投影工程事实，完整冻结快照和其他业务字段保持原样。"""
 
     projected = context.model_dump(mode="json")
     if context.unit_kind == "backend":
@@ -71,6 +72,10 @@ def _prompt_context(context: UnitGenerationContext) -> dict[str, Any]:
                 "dir_structure": backend.get("dir_structure") if isinstance(backend, Mapping) else None,
             },
         }
+    elif context.unit_kind in {"frontend", "page"}:
+        projected["workspace_context"] = project_frontend_workspace_context(
+            projected["workspace_context"],
+        )
     return projected
 
 
