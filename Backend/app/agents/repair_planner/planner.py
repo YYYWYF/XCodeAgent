@@ -15,6 +15,7 @@ def _test_repair_planning_prompt(
     test_report: dict[str, Any],
     revision_requests: list[dict[str, Any]],
     build_task_plan: dict[str, Any] | None,
+    integration_entry: bool = False,
 ) -> str:
     """构造集成测试 RepairPlanner 提示并约束修复决策边界。"""
 
@@ -62,8 +63,8 @@ def _test_repair_planning_prompt(
         "terminal_failure when evidence is insufficient or the failure is not "
         "automatically actionable.\n\n"
         f"TestReport:\n{json.dumps(test_report, ensure_ascii=False, indent=2)}\n\n"
-        f"RevisionRequests:\n{json.dumps(revision_requests, ensure_ascii=False, indent=2)}\n\n"
-        f"CurrentBuildTaskPlan:\n{json.dumps(build_task_plan or {}, ensure_ascii=False, indent=2)}"
+        f"RevisionRequests:\n{json.dumps(revision_requests, ensure_ascii=False, indent=2)}"
+        + ("" if integration_entry else f"\n\nCurrentBuildTaskPlan:\n{json.dumps(build_task_plan or {}, ensure_ascii=False, indent=2)}")
     )
 
 
@@ -210,6 +211,7 @@ def plan_repairs_with_repair_planner_agent(
     workspace: str | None = None,
     selected_skill_names: list[str] | None = None,
     business_stage: str = "integration_test",
+    integration_entry: bool = False,
 ) -> dict[str, Any]:
     """在相同技能集合下为集成测试失败生成修复任务。"""
 
@@ -227,6 +229,7 @@ def plan_repairs_with_repair_planner_agent(
                     test_report=test_report,
                     revision_requests=revision_requests,
                     build_task_plan=build_task_plan,
+                    integration_entry=integration_entry,
                 ),
                 workspace=workspace,
                 selected_skill_names=selected_skill_names,

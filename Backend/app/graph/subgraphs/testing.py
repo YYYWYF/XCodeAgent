@@ -1529,7 +1529,12 @@ def _upgrade_candidate_repair_plan(
     }
 
 
-def repair_planning(state: ProjectState) -> dict:
+def integration_repair_planning(state: ProjectState) -> dict:
+    """从集成测试子图显式选择集成规划策略。"""
+    return repair_planning(state, integration_entry=True)
+
+
+def repair_planning(state: ProjectState, *, integration_entry: bool = False) -> dict:
     """根据质量门禁结果选择 RepairPlanner 修复任务或终止路径。"""
 
     if state.get("quality_gate_passed"):
@@ -1660,7 +1665,8 @@ def repair_planning(state: ProjectState) -> dict:
             repair_attempt=repair_iteration + 1,
             workspace=workspace,
             selected_skill_names=state.get("selected_skill_names"),
-            business_stage=("unit_test" if state.get("repair_return_node") == "unit_test" else "integration_test"),
+            business_stage=("unit_test" if not integration_entry and state.get("repair_return_node") == "unit_test" else "integration_test"),
+            integration_entry=integration_entry,
         ),
     )
     repair_task_plan = captured.value
@@ -1908,7 +1914,7 @@ def build_testing_subgraph():
     builder.add_node("skip_frontend_performance", observe_model_node('skip_frontend_performance', skip_frontend_performance, business_stage="integration_test"))
     builder.add_node("frontend_performance_test", observe_model_node('frontend_performance_test', frontend_performance_test, business_stage="integration_test"))
     builder.add_node("main_quality_gate", observe_model_node('main_quality_gate', main_quality_gate, business_stage="integration_test"))
-    builder.add_node("repair_planning", observe_model_node('repair_planning', repair_planning, business_stage="integration_test"))
+    builder.add_node("repair_planning", observe_model_node('repair_planning', integration_repair_planning, business_stage="integration_test"))
 
     builder.add_edge(START, "build_project_checks")
     builder.add_edge("build_project_checks", "frontend_performance_confirmation")
