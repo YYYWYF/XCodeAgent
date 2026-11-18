@@ -321,6 +321,7 @@ class RevisionPreviewLaunchTests(unittest.TestCase):
                 self.assertFalse(start_revision_preview(root, "release")["reused_dependencies"])
                 link.assert_not_called()
                 self.assertFalse(launch.call_args.kwargs["skip_install"])
+                self.assertEqual(launch.call_args.kwargs["install_timeout_seconds"], 600)
                 record_frontend_dependencies(root / ".devagentstudio/runtime/launch", frontend, node)
                 self.assertTrue(start_revision_preview(root, "release")["reused_dependencies"])
                 link.assert_called_once_with(root, revision)

@@ -43,6 +43,7 @@ REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX = "launch-revision-"
 # 等该分支的 dev server 真正就绪的上限。比常规预览宽松：历史分支的首次启动要现编译
 # 该分支的树，比"服务已经在跑"的常规场景慢。
 REVISION_PREVIEW_READY_TIMEOUT_SECONDS = 120
+REVISION_PREVIEW_INSTALL_TIMEOUT_SECONDS = 600
 
 # 目录名只保留安全字符；分支名可以含 `/`（如 feature/login），不能直接当目录名。
 _UNSAFE_DIR_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
@@ -277,6 +278,7 @@ def _start_revision_preview(
             node_runtime=node_runtime,
             runtime_subdir=revision_preview_runtime_subdir(revision),
             server_config=server_config,
+            install_timeout_seconds=REVISION_PREVIEW_INSTALL_TIMEOUT_SECONDS,
             # 复用依赖时跳过安装；否则让启动器正常安装该分支的依赖。
             skip_install=reused,
             # 复用的方式是把工作区的 node_modules 软链进来，要一并告诉包管理器别去"纠正"它。

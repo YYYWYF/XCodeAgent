@@ -426,10 +426,11 @@ class ProjectLauncherTests(unittest.TestCase):
                 patch(
                     "app.services.frontend_project_launcher.workspace_process_registry.run",
                     side_effect=timeout,
-                ),
+                ) as run_install,
             ):
                 result = launch_frontend_project(workspace)
 
+            self.assertEqual(run_install.call_args.kwargs["timeout"], 120)
             self.assertEqual(result["status"], "failed")
             self.assertTrue(result["install"]["timed_out"])
             self.assertEqual(

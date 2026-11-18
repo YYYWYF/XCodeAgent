@@ -47,6 +47,7 @@ def launch_frontend_project(
     node_runtime: FrontendNodeRuntime | None = None,
     preserve_running: bool = False,
     server_config: Path | None = None,
+    install_timeout_seconds: int = INSTALL_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -64,6 +65,7 @@ def launch_frontend_project(
     force_restart 为 True 时不复用健康服务，而是停止 standard preview 后
     重新安装、启动并执行 Ready 检查，供模板更新后的真实工程验收使用。
     server_config 指定仅本轮开发服务器加载的配置，例如历史分支的 API 代理。
+    install_timeout_seconds 控制本轮依赖安装的最长等待时间（秒）。
     """
 
     root = Path(workspace_path).expanduser().resolve()
@@ -103,7 +105,7 @@ def launch_frontend_project(
             script_name=script_name, script_command=str(scripts.get(script_name, "")),
             runtime_subdir=runtime_subdir, skip_install=skip_install, force_restart=force_restart,
             linked_dependencies=linked_dependencies, node_runtime=node_runtime, preserve_running=preserve_running,
-            server_config=server_config,
+            server_config=server_config, install_timeout_seconds=install_timeout_seconds,
         )
 
 
@@ -121,6 +123,7 @@ def _launch_frontend_runtime(
     node_runtime: FrontendNodeRuntime | None,
     preserve_running: bool,
     server_config: Path | None,
+    install_timeout_seconds: int,
 ) -> dict[str, Any]:
     """在同一工作区锁内复用、安装并启动当前 Node 对应的预览。"""
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / runtime_subdir
@@ -196,6 +199,7 @@ def _launch_frontend_runtime(
             cwd=package_path.parent,
             runtime_root=runtime_root,
             node_runtime=node_runtime,
+            timeout_seconds=install_timeout_seconds,
         )
     if install_result["returncode"] != 0:
         result = {
@@ -428,7 +432,9 @@ def _run_install(
     cwd: Path,
     runtime_root: Path,
     node_runtime: FrontendNodeRuntime,
+    timeout_seconds: int,
 ) -> dict[str, Any]:
+    """执行依赖安装并记录受本轮时限约束的进程结果及日志。"""
     argv = [package_manager_command, "install"]
     started_at = datetime.now(UTC).isoformat()
     try:
@@ -439,7 +445,7 @@ def _run_install(
             cwd=str(cwd),
             env=node_runtime.env,
             capture_output=True,
-            timeout=INSTALL_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
             check=False,
         )
         stdout = subprocess_output_text(completed.stdout)
