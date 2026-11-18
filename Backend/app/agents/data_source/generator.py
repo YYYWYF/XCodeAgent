@@ -7,6 +7,7 @@ from app.agents.data_source.execution_config import (
     task_required_instruction_paths,
 )
 from app.agents.data_source.prompts import data_source_generation_prompt
+from app.agents.data_source.trace import data_source_trace
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
@@ -28,28 +29,25 @@ def _invoke_live_data_source_agent(
 
     # 延迟创建可确保 Agent 的工作区和技能权限只属于本次运行。
     from app.agents import create_agent_bundle
+
     agent = create_agent_bundle(
-            workspace,
-            selected_skill_names,
-            data_source_builtin_skill_names=batch_required_builtin_skill_names(tasks),
-        ).data_source
-    return invoke_agent_with_tool_activity(
-        agent,
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": data_source_generation_prompt(
-                        project_plan=project_plan,
-                        workspace_snapshot=workspace_snapshot,
-                        tasks=tasks,
-                    ),
-                }
-            ]
-        },
-        workspace=workspace,
-        on_tool_activity=on_tool_activity,
+        workspace,
+        selected_skill_names,
+        data_source_builtin_skill_names=batch_required_builtin_skill_names(tasks),
+    ).data_source
+    prompt = data_source_generation_prompt(
+        project_plan=project_plan,
+        workspace_snapshot=workspace_snapshot,
+        tasks=tasks,
     )
+    with data_source_trace(workspace=workspace, tasks=tasks) as trace:
+        return invoke_agent_with_tool_activity(
+            agent,
+            {"messages": [{"role": "user", "content": prompt}]},
+            workspace=workspace,
+            on_tool_activity=on_tool_activity,
+            config={"callbacks": [trace]} if trace is not None else None,
+        )
 
 
 def generate_data_sources_with_deep_agent(
@@ -79,11 +77,7 @@ def generate_data_sources_with_deep_agent(
         on_tool_activity=on_tool_activity,
     )
     required_builtin_skills = sorted(
-        {
-            path
-            for task in tasks
-            for path in task_required_instruction_paths(task)
-        }
+        {path for task in tasks for path in task_required_instruction_paths(task)}
     )
     return create_agent_task_results(
         tasks,

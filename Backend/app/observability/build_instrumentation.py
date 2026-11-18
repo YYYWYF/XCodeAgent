@@ -221,6 +221,21 @@ def bind_build_tasks(tasks, task_ids):
             pass
 
 
+def current_build_attempt_identity() -> dict[str, str]:
+    """读取当前观测片段的 BuildRun 和任务尝试标识，供本地明细关联。"""
+    span = _scope.get()
+    if span is None:
+        return {}
+    return {
+        key: value
+        for key, value in (
+            ("buildRunId", span.trace.extra.get("build_run_id")),
+            ("attemptId", span.extra.get("attempt_id")),
+        )
+        if isinstance(value, str) and value
+    }
+
+
 def _task_status(results):
     """把业务结果映射为统计终态，审批暂停独立保留。"""
     statuses = {result.get("status") for result in results}

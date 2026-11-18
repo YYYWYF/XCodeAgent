@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
+
 from app.agents.messages import last_agent_text, optional_last_agent_text
 from app.agents.tool_activity_projection import (
     completed_activity_message,
@@ -24,11 +26,13 @@ def invoke_agent_with_tool_activity(
     workspace: str | None,
     on_tool_activity: ToolActivityCallback | None = None,
     on_text_delta: TextActivityCallback | None = None,
+    config: RunnableConfig | None = None,
 ) -> str:
-    """执行 Deep Agent，并在需要时把安全化的工作区工具活动实时回调给构建调度器。"""
+    """执行 Deep Agent，透传本次运行配置并按需回调安全化的工具活动。"""
 
+    run_options = {"config": config} if config is not None else {}
     if on_tool_activity is None:
-        result = agent.invoke(payload)
+        result = agent.invoke(payload, **run_options)
         return last_agent_text(result)
 
     streamed_states: dict[StreamNamespace, tuple[int, dict[str, Any]]] = {}
@@ -41,6 +45,7 @@ def invoke_agent_with_tool_activity(
         payload,
         stream_mode=["messages", "values"],
         subgraphs=True,
+        **run_options,
     )
     for order, streamed in enumerate(stream):
         stream_part = _parse_stream_part(streamed)

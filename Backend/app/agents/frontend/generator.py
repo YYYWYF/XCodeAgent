@@ -5,6 +5,7 @@ from typing import Any
 
 from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
 from app.agents.frontend.project_plan_context import project_frontend_task_project_plan
+from app.agents.frontend.trace import frontend_agent_trace
 from app.agents.tool_activity_stream import (
     ToolActivityCallback,
     invoke_agent_with_tool_activity,
@@ -331,25 +332,28 @@ def _invoke_live_frontend_agent(
     # 延迟创建可确保 Agent 的工作区和技能权限只属于本次运行。
     from app.agents import create_agent_bundle
 
-    return invoke_agent_with_tool_activity(
-        create_agent_bundle(workspace, selected_skill_names).frontend,
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _frontend_generation_prompt(
-                        project_plan=project_plan,
-                        build_task_plan=build_task_plan,
-                        tasks=tasks,
-                        page_template=page_template,
-                        ui_designs=ui_designs,
-                    ),
-                }
-            ]
-        },
-        workspace=workspace,
-        on_tool_activity=on_tool_activity,
-    )
+    agent = create_agent_bundle(workspace, selected_skill_names).frontend
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": _frontend_generation_prompt(
+                    project_plan=project_plan,
+                    build_task_plan=build_task_plan,
+                    tasks=tasks,
+                    page_template=page_template,
+                    ui_designs=ui_designs,
+                ),
+            }
+        ]
+    }
+    with frontend_agent_trace(workspace=workspace, tasks=tasks) as trace:
+        return invoke_agent_with_tool_activity(
+            agent, payload,
+            workspace=workspace,
+            on_tool_activity=on_tool_activity,
+            config={"callbacks": [trace]} if trace is not None else None,
+        )
 
 
 def generate_frontend_with_deep_agent(
