@@ -1315,7 +1315,7 @@ export default function UiDesignConfirmationPanel({
           })()}
         </div>
         <Text className={cx('ui-design-template-picker-hint')}>
-          模板只定版式与结构（表格/表单/页签等），点击后由 AI 把本页真实信息与操作填入该版式，
+          模板只定版式与结构（表格/表单/页签等），点击后由Studio把本页真实信息与操作填入该版式，
           需重新生成一次，期间该页显示「生成中」。内容与「换一换」一致，只是版式由你指定。
         </Text>
         {/* 悬浮缩略图时的大图预览浮层：position:fixed 脱离 Modal 容器，覆盖在弹窗之上。
