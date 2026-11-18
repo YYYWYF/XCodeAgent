@@ -9,6 +9,16 @@ from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_task_manifest import BACKEND_STAGE_LABELS, backend_stage_manifest
 
 
+class BackendModuleCandidateError(ValueError):
+    """汇总同一候选的全部任务问题，避免每次重试只修复首处遗漏。"""
+
+    def __init__(self, problems: list[dict]) -> None:
+        """保留职责身份与编号，供原 Local feedback 一次传回模型。"""
+
+        self.problems = tuple(problems)
+        super().__init__("；".join(item["message"] for item in problems))
+
+
 def _required_text(value: Any, field: str) -> str:
     """要求模型提供精确非空文本，保留原始路径或说明。"""
     if not isinstance(value, str) or not value or value.strip() != value:
@@ -85,9 +95,15 @@ def _materialize_task(context: UnitGenerationContext, record: dict, draft: dict,
         # 同一模块前序任务可能先创建该文件。后续阶段只计划增量修改。
         operation = "modify" if path.casefold() in prior_paths else file["operation"]
         changes.append({"path": path, "operation": operation, "description": description})
-    prior_paths.update(path_keys)
     if missing := [index for index, paths in coverage.items() if not paths]:
-        raise ValueError(f"{record['key']} 的职责 {missing} 未分配文件。")
+        raise BackendModuleCandidateError([{
+            "task_key": record["key"], "task_id": record["task_id"],
+            "message": f"{record['key']} 的职责 {missing} 未分配文件。",
+            "missing_responsibilities": [
+                {"index": index, **specifications[index - 1]} for index in missing
+            ],
+        }])
+    prior_paths.update(path_keys)
 
     task_id = record["task_id"]
     paths = [change["path"] for change in changes]
@@ -129,4 +145,17 @@ def materialize_backend_candidate(context: UnitGenerationContext, drafts: list[A
     if missing := allowed_keys - by_key.keys():
         raise ValueError(f"后端模块候选缺少任务：{', '.join(sorted(missing))}。")
     prior_paths: set[str] = set()
-    return [_materialize_task(context, record, by_key[record["key"]], prior_paths) for record in manifest]
+    problems: list[dict] = []
+    tasks: list[dict] = []
+    for record in manifest:
+        try:
+            task = _materialize_task(context, record, by_key[record["key"]], prior_paths)
+        except BackendModuleCandidateError as exc:
+            problems.extend(exc.problems)
+        except ValueError as exc:
+            problems.append({"task_key": record["key"], "task_id": record["task_id"], "message": str(exc)})
+        else:
+            tasks.append(task)
+    if problems:
+        raise BackendModuleCandidateError(problems)
+    return tasks

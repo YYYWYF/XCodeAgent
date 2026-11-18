@@ -52,6 +52,10 @@ def _task_manifest(context: UnitGenerationContext) -> str:
             )
             rows.append(f"| {_cell(task['key'])} | {', '.join(task['data_source_types'])} | {coverage} |")
         rows.append(
+            "Responsibility meanings: backend.objects = request/response DTOs, internal data types and their "
+            "typed mappings; backend.application_service = Endpoint business logic and orchestration; "
+            "backend.repository = database access; backend.upstream = upstream Client and transport contract. "
+            "DTO files must cover the objects index, not the application_service index just because a Service uses them. "
             "Each file covers only responsibilities it actually implements; never assign unrelated indices "
             "just to complete coverage. A shared file may cover multiple responsibilities within the same task. "
             "For example, if foundation indices 1 and 2 belong to two Endpoints sharing the same PO, "

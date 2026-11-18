@@ -69,6 +69,13 @@ attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_i
 判定归属的路径事实保留。该投影只用于 Prompt，不改变完整冻结 Context、输入指纹、
 合同 Reader allowlist、依赖、写入权限或 Local/Global 校验，也不写回 WorkspaceSnapshot。
 
+后端模块的 `files[].covers` 记录实际文件变更承担的职责；DTO/Entity/类型化映射对应
+`backend.objects`，Service 的业务编排对应 `backend.application_service`，序号取各任务清单。
+候选只包含 `key/title/files`，文件项只包含 `path/operation/description/covers`；每个交付路径
+仍在当前任务的文件变更范围内，任务顺序与依赖沿用原清单和编译规则。
+同份候选中可定位的任务问题一次汇总为 Local feedback；任何问题仍使整份候选失败，
+不按文件名补职责或改写模型输出。三次 Attempt 预算、原 Local/Global 校验与待确认门不变。
+
 每个 Local Attempt 创建独立 FrozenContractReader，只绑定 `read_frozen_contract_fragment`。
 首次模型调用前，平台按当前 Unit 已验证的 catalog 预读职责片段，以独立只读消息提供正文，
 不修改冻结 Context。预读至多使用剩余读取次数和累计字节的一半，且正文不超过 16 KiB；

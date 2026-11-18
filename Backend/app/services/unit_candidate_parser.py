@@ -225,12 +225,20 @@ def parse_raw_unit_candidate(
         )
 
     if task_identity_context is not None and unit_id.startswith(BACKEND_MODULE_PREFIX):
-        from app.services.backend_module_candidate import materialize_backend_candidate
+        from app.services.backend_module_candidate import BackendModuleCandidateError, materialize_backend_candidate
 
         if task_identity_context.unit_id != unit_id:
             raise ValueError("后端模块 Context 与 Parser Unit 不一致。")
         try:
             raw_tasks = materialize_backend_candidate(task_identity_context, raw_tasks)
+        except BackendModuleCandidateError as exc:
+            raise RawUnitCandidateParseError([
+                _generation_issue(
+                    "BACKEND_MODULE_CANDIDATE_INVALID", problem["message"], unit_id=unit_id,
+                    task_ids=(problem["task_id"],),
+                    **{key: value for key, value in problem.items() if key not in {"message", "task_id"}},
+                ) for problem in exc.problems
+            ]) from exc
         except ValueError as exc:
             raise RawUnitCandidateParseError([
                 _generation_issue("BACKEND_MODULE_CANDIDATE_INVALID", str(exc), unit_id=unit_id)
