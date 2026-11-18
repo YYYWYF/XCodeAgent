@@ -7,9 +7,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import ValidationError
 
+from app.agents.main.unit_task_output import (
+    UNIT_TASK_FINAL_OUTPUT_RULE,
+    UNIT_TASK_OUTPUT_REMINDER,
+)
 from app.services.frozen_contract_reader import (
     FROZEN_CONTRACT_READER_TOOL_NAME,
     FrozenContractReader,
@@ -146,7 +150,10 @@ class ContractToolSession:
             ) from exc
         self.identity = job.identity
         self.unit_id = job.context.unit_id
-        self.messages: list[object] = [HumanMessage(content=prompt)]
+        self.messages: list[object] = [
+            SystemMessage(content=UNIT_TASK_FINAL_OUTPUT_RULE),
+            HumanMessage(content=prompt),
+        ]
         self.tools = (create_frozen_contract_reader_tool(self.reader),)
         self._seen_call_ids: set[str] = set()
         try:
@@ -174,6 +181,7 @@ class ContractToolSession:
                     [fragment.model_dump(mode="json", by_alias=True) for fragment in fragments],
                     ensure_ascii=False, sort_keys=True, separators=(",", ":"),
                 )
+                + "\n\n" + UNIT_TASK_OUTPUT_REMINDER
             )))
 
     def _normalized_calls(
@@ -290,4 +298,6 @@ class ContractToolSession:
                     cause=exc,
                 ) from exc
             self.messages.append(message)
+        # 所有 ToolMessage 都已按原 Call ID 回传后再提醒，不破坏标准工具消息配对。
+        self.messages.append(HumanMessage(content=UNIT_TASK_OUTPUT_REMINDER))
         return ContractToolTurn(requested=True)

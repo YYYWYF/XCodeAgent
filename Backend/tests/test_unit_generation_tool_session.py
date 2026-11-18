@@ -6,7 +6,9 @@ import json
 import unittest
 from unittest.mock import patch
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+from app.agents.main.unit_task_output import UNIT_TASK_FINAL_OUTPUT_RULE, UNIT_TASK_OUTPUT_REMINDER
 
 from app.services.frozen_contract_reader import FROZEN_CONTRACT_READER_TOOL_NAME
 from app.services.frozen_contract_store import FrozenContractStore
@@ -199,7 +201,10 @@ class UnitGenerationToolSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Platform-preloaded", model.invocations[0][-1].content)
         self.assertEqual(len(model.bound_tools), 1)
         self.assertEqual(model.bound_tools[0].name, FROZEN_CONTRACT_READER_TOOL_NAME)
-        self.assertIsInstance(model.invocations[0][0], HumanMessage)
+        self.assertIsInstance(model.invocations[0][0], SystemMessage)
+        self.assertEqual(model.invocations[0][0].content, UNIT_TASK_FINAL_OUTPUT_RULE)
+        self.assertIn(UNIT_TASK_FINAL_OUTPUT_RULE, model.invocations[0][1].content)
+        self.assertTrue(model.invocations[0][-1].content.endswith(UNIT_TASK_OUTPUT_REMINDER))
 
     async def test_one_read_feeds_tool_result_into_second_model_turn(self) -> None:
         """一次读取以标准 ToolMessage 回传后，同一 Attempt 在下一轮产出最终结果。"""
@@ -212,9 +217,11 @@ class UnitGenerationToolSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.generation_metadata["model_turns"], 2)
         self.assertEqual(result.generation_metadata["contract_reads"], 3)
         second_messages = model.invocations[1]
-        self.assertIsInstance(second_messages[-2], AIMessage)
-        self.assertIsInstance(second_messages[-1], ToolMessage)
-        payload = json.loads(second_messages[-1].content)
+        self.assertIsInstance(second_messages[-3], AIMessage)
+        self.assertIsInstance(second_messages[-2], ToolMessage)
+        self.assertIsInstance(second_messages[-1], HumanMessage)
+        self.assertEqual(second_messages[-1].content, UNIT_TASK_OUTPUT_REMINDER)
+        payload = json.loads(second_messages[-2].content)
         self.assertEqual(payload["sourceRef"], ref_id)
         self.assertEqual(json.loads(payload["content"]), "orders")
 
@@ -234,6 +241,58 @@ class UnitGenerationToolSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.generation_metadata["model_turns"], 3)
         self.assertEqual(result.generation_metadata["contract_reads"], 4)
         self.assertEqual(len(model.invocations), 3)
+
+    async def test_wrapped_final_json_keeps_original_and_needs_no_extra_model_turn(self) -> None:
+        """外围说明被确定性剥离，原始回复保留且不再调用模型整理格式。"""
+
+        store, job, _ = _store_and_job()
+        raw = "已完成合同分析。\n" + _final().content + "\n以上是任务。"
+        model = FakeToolModel([AIMessage(content=raw, response_metadata={"finish_reason": "stop"})])
+        result = await self._generate(model, store=store, job=job)
+        self.assertEqual(result.raw_response, raw)
+        self.assertEqual(result.tasks[0]["id"], "task-orders")
+        self.assertEqual(result.validation_issues, ())
+        self.assertEqual(len(model.invocations), 1)
+        self.assertEqual(result.generation_metadata["candidate_response_format"], "extracted_json")
+
+    async def test_thinking_only_keeps_raw_text_and_uses_the_same_strict_parser(self) -> None:
+        """仅在思考块返回最终任务时保留全文，再由同一提取与校验路径处理。"""
+
+        store, job, _ = _store_and_job()
+        raw = "规划分析。\n" + _final().content
+        model = FakeToolModel([AIMessage(content=[{"type": "thinking", "thinking": raw}])])
+        result = await self._generate(model, store=store, job=job)
+        self.assertEqual(result.raw_response, raw)
+        self.assertEqual(result.tasks[0]["id"], "task-orders")
+        self.assertEqual(result.generation_metadata["candidate_response_format"], "extracted_json")
+
+    async def test_thinking_blocks_cannot_hide_multiple_or_truncated_candidates(self) -> None:
+        """思考块路径不得提前选取首个候选或自动补全截断任务。"""
+
+        store, job, _ = _store_and_job()
+        cases = (
+            [{"type": "thinking", "thinking": _final().content},
+             {"type": "thinking", "thinking": _final("other-task").content}],
+            [{"type": "thinking", "thinking": '分析\n{"tasks":[{"id":"task-1"}'}],
+        )
+        for blocks in cases:
+            with self.subTest(blocks=blocks):
+                model = FakeToolModel([AIMessage(content=blocks)])
+                result = await self._generate(model, store=store, job=job)
+                self.assertEqual(result.tasks, ())
+                self.assertEqual(result.validation_issues[0].code, "RAW_CANDIDATE_JSON_MALFORMED")
+
+    async def test_real_text_takes_priority_over_separate_thinking(self) -> None:
+        """有正式正文时正常保留思考通道隔离，不把思考中的示例混入最终任务。"""
+
+        store, job, _ = _store_and_job()
+        model = FakeToolModel([AIMessage(content=[
+            {"type": "thinking", "thinking": _final("example-only").content},
+            {"type": "text", "text": _final().content},
+        ])])
+        result = await self._generate(model, store=store, job=job)
+        self.assertEqual(result.tasks[0]["id"], "task-orders")
+        self.assertEqual(result.raw_response, _final().content)
 
     async def test_turn_limit_is_retryable_content_failure_without_extra_invoke(self) -> None:
         """最后可用 turn 仍请求工具时停止循环，并把当前 Local attempt 判为内容失败。"""

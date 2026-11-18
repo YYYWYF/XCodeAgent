@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any, NoReturn
 
 from app.services.planning_issues import ValidationIssue
+from app.services.unit_candidate_envelope import select_unit_candidate_envelope
 from app.services.unit_candidate_id_binding import bind_missing_task_ids
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX
@@ -88,9 +89,11 @@ def parse_raw_unit_candidate(
     *,
     unit_id: str,
     task_identity_context: UnitGenerationContext | None = None,
+    parse_metadata: dict[str, object] | None = None,
 ) -> list[dict[str, Any]]:
     """严格解析 ``{"tasks": [...]}``，失败时不返回任何部分任务。
 
+    外围说明只允许定位唯一完整的任务根对象，不从截断外层提取嵌套对象。
     严格解析 envelope/Task object；仅在显式提供冻结 Context 时，允许唯一职责绑定补入
     缺失的任务 ID，再校验 ID。原始响应不修改，已有字段不覆盖，其他字段留给完整
     Local Validator；不调用 ``build_task_planner`` normalize 路径。
@@ -108,9 +111,20 @@ def parse_raw_unit_candidate(
             ]
         )
 
+    # 定位阶段只保留原始切片，重复字段、非法数值及任务结构仍由下方原路径检查。
+    envelope = select_unit_candidate_envelope(raw_text)
+    candidate_text = envelope.text if envelope is not None else raw_text
+    wrapper_chars = (
+        envelope.prefix_chars + envelope.suffix_chars if envelope is not None else 0
+    )
+    if parse_metadata is not None:
+        parse_metadata.update(
+            candidate_response_format="invalid_json",
+            candidate_wrapper_chars=wrapper_chars,
+        )
     try:
         document = json.loads(
-            raw_text,
+            candidate_text,
             object_pairs_hook=_strict_json_object,
             parse_constant=_reject_json_constant,
         )
@@ -119,7 +133,7 @@ def parse_raw_unit_candidate(
         # JSON 字符串值内未转义双引号等常见语法错误（如 description 含
         # "hello world" 未转义）。修复成功则继续走后续结构校验；修复失败
         # 再报原始语法错误，保持 fail-closed 语义。
-        repaired = extract_json_root_object_with_repair(raw_text)
+        repaired = extract_json_root_object_with_repair(candidate_text)
         if repaired is None:
             raise RawUnitCandidateParseError(
                 [
@@ -134,6 +148,7 @@ def parse_raw_unit_candidate(
                 ]
             ) from exc
         document = repaired
+        response_format = "repaired_json"
     except _DuplicateJsonKey as exc:
         raise RawUnitCandidateParseError(
             [
@@ -156,6 +171,11 @@ def parse_raw_unit_candidate(
                 )
             ]
         ) from exc
+
+    else:
+        response_format = "extracted_json" if wrapper_chars else "direct_json"
+    if parse_metadata is not None:
+        parse_metadata["candidate_response_format"] = response_format
 
     if not isinstance(document, dict):
         raise RawUnitCandidateParseError(

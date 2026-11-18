@@ -72,6 +72,16 @@ attempt，且 `generated_from.attempt_in_round` 必须等于 Unit 的 `attempt_i
 但最终仍只返回一个完整 `tasks[]`，也只增加一次 Local attempt。预算耗尽是内容失败；
 Store/catalog 损坏是 platform fatal，不开放其他 workspace tool。
 
+任务生成保留模型原有思考设置，不传关闭思考参数。主提示、会话 SystemMessage、
+预读消息及所有工具结果返回后的短提醒统一要求最终正文只包含一个 tasks JSON 根对象。
+若仍夹带说明，Unit 专用提取器仅定位唯一完整的原始 JSON 切片；多候选、
+截断或错配外层容器、嵌套任务对象不允许挑选，提取后仍按原 Parser/Local/Global
+规则拒绝重复键、非法数值、额外字段及职责错误。正文为空且最终任务仅在思考块中时，
+先保留全部思考文本，再走同一受控解析路径，不在消息提取层补齐 JSON 或挑选首个对象。
+raw_response 保留原始候选文本，generation_metadata 记录 candidate_response_format
+（direct_json/extracted_json/repaired_json/invalid_json）及 candidate_wrapper_chars。
+确认门、任务合同、读取/模型预算及原始模型日志保持既有规则，不增加格式整理模型请求。
+
 任一 active model Unit 出现基础设施或 platform fatal 时，Controller 先提交 `RunFailed`，将全部未完成
 Unit 置为 `aborted`；Scheduler 随即停止新 dispatch、丢弃队列中尚未派发的 Job，并
 best-effort 取消其他 active worker。已取消 sibling 若仍返回结果，Controller 的终态门禁会

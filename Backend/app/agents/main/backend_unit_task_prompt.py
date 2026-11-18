@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.agents.main.unit_task_rules import requirement_output_contracts
+from app.agents.main.unit_task_output import UNIT_TASK_FINAL_OUTPUT_RULE
 from app.services.planning_frozen import plain_json
 from app.services.planning_issues import ValidationIssue
 from app.services.unit_generation_contracts import UnitGenerationContext
@@ -162,4 +163,5 @@ def build_backend_unit_generation_prompt(
     feedback = _feedback(global_feedback, local_feedback)
     if feedback:
         sections.append(feedback)
+    sections.append(UNIT_TASK_FINAL_OUTPUT_RULE)
     return "\n\n".join(sections)

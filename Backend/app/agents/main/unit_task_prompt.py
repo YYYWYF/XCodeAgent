@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.agents.main.backend_unit_task_prompt import build_backend_unit_generation_prompt
+from app.agents.main.unit_task_output import UNIT_TASK_FINAL_OUTPUT_RULE
 from app.agents.main.unit_task_rules import (
     example_task_id,
     expected_task_owner,
@@ -309,4 +310,5 @@ def build_unit_generation_prompt(
             "Return only the strict JSON envelope `{" + '"tasks"' + ":[...]}`."
         ),
     ]
+    sections.append(UNIT_TASK_FINAL_OUTPUT_RULE)
     return "\n\n".join(sections)

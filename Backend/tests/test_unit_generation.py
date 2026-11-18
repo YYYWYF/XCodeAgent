@@ -153,6 +153,18 @@ class UnitGenerationOnceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.validation_issues[0].category, "generation")
 
+    async def test_output_recovery_preserves_thinking_configuration_and_raw_response(self) -> None:
+        """受控提取只改变解析，不传关闭思考参数，也不改写原始回复或额外调用模型。"""
+
+        raw = '分析完成。\n{"tasks":[{"id":"task-orders","owner":"frontend"}]}'
+        model = FakeAsyncModel(raw)
+        result, factory = await self._generate(model)
+        self.assertNotIn("extra_model_kwargs", factory.call_args.kwargs)
+        self.assertEqual(result.raw_response, raw)
+        self.assertEqual(result.tasks[0]["id"], "task-orders")
+        self.assertEqual(result.generation_metadata["candidate_response_format"], "extracted_json")
+        self.assertEqual(len(model.prompts), 1)
+
     async def test_length_finish_reason_rejects_even_valid_json_candidate(self) -> None:
         """长度截断是内容失败，即使响应恰好为合法 JSON 也不得返回 Task。"""
 

@@ -252,6 +252,7 @@ async def generate_unit_candidate_once(
                 raw_response,
                 unit_id=frozen_job.context.unit_id,
                 task_identity_context=frozen_job.context,
+                parse_metadata=generation_metadata,
             )
             validation_issues = ()
         except RawUnitCandidateParseError as exc:
