@@ -1,7 +1,7 @@
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from typing import Any
 
 from app.agents.database import create_database_agent
@@ -12,6 +12,7 @@ from app.agents.frontend import create_frontend_agent
 from app.agents.model_factory import create_chat_model
 from app.agents.repair_planner import create_repair_planner_agent
 from app.agents.small_task import create_small_task_agent
+from app.agents.small_task.agent import create_frontend_integration_agent
 from app.agents.test_generation import create_test_generation_agent
 from app.agents.workspace_assistant import create_workspace_assistant_agent
 from app.agents.workspace_scope import resolve_workspace_root
@@ -48,6 +49,14 @@ class AgentBundle:
     user_skills_revision: str = ""
     data_source_builtin_skill_names: tuple[str, ...] = ()
     test_generation: Any = None
+    _frontend_integration_factory: Callable[[], Any] | None = None
+
+    @cached_property
+    def frontend_integration(self) -> Any:
+        """只在前端集成修复首次执行时创建专用 Agent 与模型客户端。"""
+        if self._frontend_integration_factory is None:
+            raise RuntimeError("前端集成修复 Agent 未配置。")
+        return self._frontend_integration_factory()
 
 
 def create_agent_bundle(
@@ -174,6 +183,14 @@ def _create_agent_bundle_for_workspace(
         agent_memory_backend=agent_memory.backend,
         required_user_skills_prompt=required_user_skills_prompt,
     )
+    def frontend_integration_factory() -> Any:
+        """复用本 Bundle 已验证的技能与记忆，不引入其他场景的模型客户端。"""
+        return create_frontend_integration_agent(
+            create_chat_model(settings, max_retries_override=0), workspace_root,
+            user_skills_backend=user_skills.backend, agent_memory_backend=agent_memory.backend,
+            required_user_skills_prompt=required_user_skills_prompt,
+        )
+
     try:
         test_generation = create_test_generation_agent(
             chat_model,
@@ -202,6 +219,7 @@ def _create_agent_bundle_for_workspace(
         database=database,
         repair_planner=repair_planner,
         small_task=small_task,
+        _frontend_integration_factory=frontend_integration_factory,
         test_generation=test_generation,
         workspace_assistant=workspace_assistant,
         selected_skill_names=selected_skill_names,

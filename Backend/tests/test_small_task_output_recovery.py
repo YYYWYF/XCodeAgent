@@ -15,6 +15,61 @@ from tests.test_unit_test_repair_budget import repair_task
 
 
 class SmallTaskOutputRecoveryTests(unittest.TestCase):
+    def test_frontend_invalid_output_closes_once_and_retests_authorized_diff(self) -> None:
+        """编码落盘后格式无效，只收尾一次，然后用平台复测决定质量门禁。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            target = Path(workspace) / "frontend/src/App.tsx"
+            target.parent.mkdir(parents=True)
+            target.write_text("before", encoding="utf-8")
+            task = {
+                "id": "frontend-build", "owner": "frontend", "kind": "repair",
+                "allowed_paths": ["frontend/src/App.tsx"], "target_files": ["frontend/src/App.tsx"],
+            }
+
+            def edit_then_truncate(**kwargs) -> str:
+                """模拟真实的授权文件修改和截断答复。"""
+                target.write_text("after", encoding="utf-8")
+                kwargs["on_tool_activity"]({"tool": "edit_file", "status": "completed", "path": "/frontend/src/App.tsx"})
+                return '{"status":"completed",'
+
+            with patch("app.services.frontend_integration_repair.invoke_small_task_agent",
+                       side_effect=edit_then_truncate) as code, patch(
+                "app.services.frontend_integration_repair.finalize_frontend_repair", return_value=None,
+            ) as close:
+                result = small_task_repair({
+                    "workspace": workspace, "repair_tasks": [task], "repair_return_node": "integration_test",
+                    "quality_gate_passed": False,
+                })
+            code.assert_called_once()
+            close.assert_called_once()
+            self.assertEqual(close.call_args.kwargs["authorized_diff"], [
+                {"path": "frontend/src/App.tsx", "change": "modified"},
+            ])
+            self.assertEqual(close.call_args.kwargs["receipts"][0]["tool"], "edit_file")
+            self.assertEqual(result["integration_next_action"], "integration_test")
+            self.assertFalse(result.get("quality_gate_passed", False))
+            self.assertEqual(result["small_task_results"][0]["changedFiles"], ["frontend/src/App.tsx"])
+
+    def test_frontend_unauthorized_diff_does_not_close_or_retest(self) -> None:
+        """发现越权差异时，结果格式无效也不能发起收尾或复测。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            task = {"id": "frontend-build", "owner": "frontend", "allowed_paths": ["frontend"]}
+
+            def write_outside(**_kwargs) -> str:
+                """模拟批次中出现的未授权文件写入。"""
+                (Path(workspace) / "outside.ts").write_text("unauthorized", encoding="utf-8")
+                return ""
+
+            with patch("app.services.frontend_integration_repair.invoke_small_task_agent",
+                       side_effect=write_outside) as code, patch(
+                "app.services.frontend_integration_repair.finalize_frontend_repair",
+            ) as close:
+                result = execute_small_task_batch(state={"workspace": workspace}, tasks=[task])
+            code.assert_called_once()
+            close.assert_not_called()
+            self.assertEqual(result["unauthorizedPaths"], ["outside.ts"])
+            self.assertEqual(result["results"][0]["status"], "failed")
+
     """执行真实归一化、差异验证、修复节点及预算边界，模型响应使用确定性替身。"""
 
     def test_invalid_outputs_never_become_results_or_generic_summaries(self) -> None:
@@ -103,7 +158,7 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 target.write_text("after", encoding="utf-8")
                 return '处理完成。\n```json\n{"status":"completed","summary":"修复"概览页"类型"}\n```\n请复测。'
 
-            with patch("app.services.small_task.invoke_small_task_agent", side_effect=repair_with_unescaped_summary) as invoke:
+            with patch("app.services.frontend_integration_repair.invoke_small_task_agent", side_effect=repair_with_unescaped_summary) as invoke:
                 result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
             invoke.assert_called_once()
             self.assertEqual(route_small_task_result(result), "integration_test")
@@ -129,7 +184,7 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                     "escalation": {"pendingCommands": ["pnpm run build"]},
                 })
 
-            with patch("app.services.small_task.invoke_small_task_agent", side_effect=complete_repair) as invoke:
+            with patch("app.services.frontend_integration_repair.invoke_small_task_agent", side_effect=complete_repair) as invoke:
                 result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
             invoke.assert_called_once()
             self.assertEqual(route_small_task_result(result), "integration_test")
@@ -197,33 +252,32 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
         self.assertEqual(route_small_task_result(result), "handle_failure")
         self.assertEqual(invoke.call_count, 3)
 
-    def test_integration_invalid_json_retries_same_task_and_preserves_diff(self) -> None:
-        """前后端无效输出在同一修复节点重试，保留首轮修改并返回复测。"""
-        for owner in ("frontend", "backend"):
-            with self.subTest(owner=owner), tempfile.TemporaryDirectory() as workspace:
-                task = repair_task("backend_unit_tests")
-                task.update({"owner": owner, "allowed_paths": [owner]})
-                target = Path(workspace) / owner / "example.txt"
-                target.parent.mkdir(parents=True)
-                target.write_text("before", encoding="utf-8")
-                packets: list[dict] = []
+    def test_backend_integration_invalid_json_retries_same_task_and_preserves_diff(self) -> None:
+        """后端集成修复继续在同一节点完整重试，保留首轮修改并返回复测。"""
+        with tempfile.TemporaryDirectory() as workspace:
+            task = repair_task("backend_unit_tests")
+            task["allowed_paths"] = ["backend"]
+            target = Path(workspace) / "backend/example.txt"
+            target.parent.mkdir(parents=True)
+            target.write_text("before", encoding="utf-8")
+            packets: list[dict] = []
 
-                def invoke_response(**kwargs: object) -> str:
-                    """首轮修改后返回损坏 JSON，下一轮检查既有修改并给出完整结果。"""
-                    packets.append(kwargs["packet"])
-                    if len(packets) == 1:
-                        target.write_text("after", encoding="utf-8")
-                        return '{"status":'
-                    self.assertEqual(target.read_text(encoding="utf-8"), "after")
-                    return '{"status":"completed","summary":"修复完成"}'
+            def invoke_response(**kwargs) -> str:
+                """首轮修改后返回损坏 JSON，下一轮检查既有修改并给出完整结果。"""
+                packets.append(kwargs["packet"])
+                if len(packets) == 1:
+                    target.write_text("after", encoding="utf-8")
+                    return '{"status":'
+                self.assertEqual(target.read_text(encoding="utf-8"), "after")
+                return '{"status":"completed","summary":"修复完成"}'
 
-                with patch("app.services.small_task.invoke_small_task_agent", side_effect=invoke_response):
-                    result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
-                self.assertEqual(len(packets), 2)
-                self.assertEqual(packets[1]["outputRetry"]["attempt"], 2)
-                self.assertEqual(route_small_task_result(result), "integration_test")
-                self.assertEqual(len(result["small_task_results"]), 1)
-                self.assertTrue(result["small_task_code_change_sets"])
+            with patch("app.services.small_task.invoke_small_task_agent", side_effect=invoke_response):
+                result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
+            self.assertEqual(len(packets), 2)
+            self.assertEqual(packets[1]["outputRetry"]["attempt"], 2)
+            self.assertEqual(route_small_task_result(result), "integration_test")
+            self.assertEqual(len(result["small_task_results"]), 1)
+            self.assertTrue(result["small_task_code_change_sets"])
 
     def test_integration_valid_failure_or_confirmation_is_not_retried(self) -> None:
         """集成修复仅重试输出协议错误，保留业务与人工确认边界。"""

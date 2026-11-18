@@ -2,13 +2,16 @@
 
 from asyncio import CancelledError
 from collections import Counter
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import wraps
 import os
 from threading import Lock
 from time import monotonic_ns
+from typing import Any
 from uuid import uuid4
 
 from langgraph.config import get_config
@@ -32,6 +35,7 @@ class BuildTrace:
     planned_ids: set[str] | None = None
     first_completed: set[str] = field(default_factory=set)
     lock: Lock = field(default_factory=Lock)
+    business_stage: str = "build"
 
 
 @dataclass
@@ -46,6 +50,8 @@ class Span:
     operation: str | None = None
     span_id: str = field(default_factory=lambda: uuid4().hex)
     started: int = field(default_factory=monotonic_ns)
+    node_name: str = "build"
+    started_at: str | None = None
 
 
 def _start(name, kind, extra=None):
@@ -56,7 +62,9 @@ def _start(name, kind, extra=None):
             return None
         operation = current_model_context({}).get("business_operation") or parent.operation
         return Span(parent.trace, name, kind, parent.span_id,
-                    {**parent.extra, **(extra or {})}, operation)
+                    {**parent.extra, **(extra or {})}, operation,
+                    node_name=parent.node_name,
+                    started_at=_integration_span_time() if parent.trace.business_stage == "integration_test" else None)
     except Exception:
         return None
 
@@ -74,14 +82,15 @@ def finish(span, status, *, metrics=None, model=None, timed=True):
             "producer": {"source": "backend"},
             "identity": trace.identity,
             "context": {
-                "business_stage": "build", "business_operation": span.operation,
-                "node_name": "build", "extra": {**trace.extra, **span.extra},
+                "business_stage": trace.business_stage, "business_operation": span.operation,
+                "node_name": span.node_name, "extra": {**trace.extra, **span.extra},
             },
             "data": {
                 "trace_id": trace.trace_id, "span_id": span.span_id,
                 "parent_span_id": span.parent, "span_kind": span.kind, "run_name": span.name,
                 "duration_ms": (monotonic_ns() - span.started) // 1_000_000 if timed else None,
                 "status": status, "metrics": metrics, "model": model,
+                **({"started_at": span.started_at, "ended_at": _integration_span_time()} if span.started_at else {}),
             },
         })
     except Exception:
@@ -269,6 +278,69 @@ def activate(span):
         _scope.reset(token)
 
 
+@dataclass
+class IntegrationRepairObservation:
+    """由实际节点或任务设置终态和固定原因枚举，不保存诊断正文。"""
+
+    status: str = "completed"
+    reason: str | None = None
+    quality_gate_passed: bool | None = None
+
+
+@contextmanager
+def integration_repair_trace(
+    node_name: str, *, state: dict[str, Any] | None = None, task_id: str | None = None,
+    repair_round: int | None = None,
+) -> Iterator[IntegrationRepairObservation]:
+    """沿用现有模型和工具回调，以 Run ID 和独立尝试 ID 关联集成修复。"""
+    observation = IntegrationRepairObservation()
+    if not telemetry.enabled():
+        yield observation
+        return
+    from langchain_core.runnables.config import ensure_config
+    from app.services.run_workers import current_run_id
+
+    state = state or {}
+    config = ensure_config()
+    metadata = config.get("metadata", {})
+    context = current_model_context(metadata)
+    attempt = uuid4().hex
+    extra = {key: value for key, value in {
+        "repair_round": repair_round, "task_id": task_id,
+        "attempt_id": attempt if task_id or node_name == "repair_planning" else None,
+    }.items() if value is not None}
+    parent = _scope.get()
+    if parent is not None and parent.trace.business_stage == "integration_test":
+        span = _start(node_name, "node", extra)
+        span.node_name = node_name
+    else:
+        identity = {key: value for key, value in {
+            "run_id": state.get("active_run_id") or current_run_id() or metadata.get("run_id"),
+            "thread_id": state.get("active_thread_id") or config.get("configurable", {}).get("thread_id"),
+            "project_id": state.get("project_id") or metadata.get("project_id"),
+            "operation_id": state.get("operation_id") or metadata.get("operation_id"),
+        }.items() if isinstance(value, str) and value}
+        span = Span(
+            BuildTrace(identity, {}, business_stage="integration_test"), node_name, "node",
+            extra=extra, operation=context.get("business_operation"),
+            node_name=node_name, started_at=_integration_span_time(),
+        )
+    with activate(span):
+        yield observation
+        if observation.reason:
+            span.extra["repair_close_reason"] = observation.reason
+        metrics = (
+            {"quality_gate_passed": observation.quality_gate_passed}
+            if observation.quality_gate_passed is not None else None
+        )
+        finish(span, "cancelled" if _is_cancelled(span) else observation.status, metrics=metrics)
+
+
+def _integration_span_time() -> str:
+    """提供可用于合并并行区间的 UTC 毫秒边界。"""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def observe_validation(action, *args, **kwargs):
     """读取现有验证器返回的检查状态，保留返回值及异常。"""
     span = _start("validation", "node")
@@ -328,6 +400,9 @@ def start_model():
     if span is not None:
         with span.trace.lock:
             span.trace.spans["model_started"] += 1
+            if span.trace.business_stage == "integration_test" and (attempt := span.extra.get("attempt_id")):
+                span.trace.spans[attempt] += 1
+                span.extra["model_round"] = span.trace.spans[attempt]
     return span
 
 

@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.agents.data_source.prompt_context import execution_task_packet
 from app.domain.api_design_static import static_fields, validate_static_design
 from app.services.api_design import confirm_api_design, endpoint_field_nodes, initial_api_design_payload, api_design_readiness
 from app.services.binding_workspace import BindingDraftRequest, save_binding_draft, read_binding_draft
@@ -39,6 +40,38 @@ def fixture():
 
 class StaticApiDesignTests(unittest.TestCase):
     """保证静态数据是可确认的正式配置而非仅前端展示。"""
+
+    def test_business_task_packet_projects_static_json_without_source_snapshots(self):
+        """静态对象和根列表均能进入实际 Business 任务包并保留字面值。"""
+        plan, draft = fixture()
+        for data, path, alias_path in (
+            ({"serverTime": "", "count": 0, "active": False}, "serverTime", "static_1.serverTime"),
+            (draft["staticData"], "[].name", "static_1[].name"),
+        ):
+            with self.subTest(path=path):
+                design = {
+                    **draft,
+                    "staticData": data,
+                    "sourceSnapshots": [],
+                    "fieldMappings": [{
+                        "endpointField": {"path": path},
+                        "mappingType": "source_mapping",
+                        "processingType": "direct",
+                        "sourceFields": [field for field in static_fields(data) if field["path"] == path],
+                    }],
+                }
+                task = {"source_refs": {
+                    "backend_stage": "business",
+                    "target": {"api_contract_id": design["apiContractId"]},
+                    "endpoint_ids": [design["endpointId"]],
+                    "endpoint_designs": [design],
+                }}
+                before = copy.deepcopy(design)
+                packet = execution_task_packet(plan, task)
+                projected = packet["implementation_contract"]["api_design"]
+                self.assertEqual(projected["sources"], {"static_1": {"sourceType": "static", "data": data}})
+                self.assertEqual(projected["fieldMappings"], {path: {"source": alias_path}})
+                self.assertEqual(design, before)
 
     def test_round_trip_and_readiness_without_external_access(self):
         """通过正式确认与准备链路往返完整静态数据，且完全不读取外部元数据。"""

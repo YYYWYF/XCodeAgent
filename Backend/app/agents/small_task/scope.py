@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any, Iterator
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -79,8 +80,10 @@ def is_small_task_path_allowed(path: str) -> bool:
 class ScopedSmallTaskBackend(BackendProtocol):
     """给底层 workspace backend 加上按任务动态收紧的写入边界。"""
 
-    def __init__(self, delegate: BackendProtocol):
+    def __init__(self, delegate: BackendProtocol, *, limit_context: bool = False):
+        """保留任务写入授权，按场景限制返回给模型的读取结果。"""
         self._delegate = delegate
+        self._limit_context = limit_context
 
     def ls(self, path: str) -> LsResult:
         """列出源码目录并过滤安装依赖、缓存和构建产物。"""
@@ -92,6 +95,8 @@ class ScopedSmallTaskBackend(BackendProtocol):
         entries = result.entries
         if not isinstance(entries, list):
             return result
+        if self._limit_context:
+            entries = [item for item in entries if not _is_ignored_code_context_path(item["path"])][:24]
         return LsResult(
             error=result.error,
             entries=[
@@ -107,7 +112,15 @@ class ScopedSmallTaskBackend(BackendProtocol):
         _require_active_small_task()
         if _is_ignored_code_context_path(file_path):
             return ReadResult(error=_read_scope_error(file_path))
-        return self._delegate.read(file_path, offset, limit)
+        result = self._delegate.read(file_path, offset, min(limit, 80) if self._limit_context else limit)
+        if not self._limit_context or not result.file_data:
+            return result
+        data = result.file_data
+        if data.get("encoding") != "utf-8":
+            return ReadResult(error="集成修复只读取文本文件。")
+        if len(data["content"]) <= 4_000:
+            return result
+        return replace(result, file_data={**data, "content": data["content"][:4_000] + "\n[片段已截断，请缩小行范围。]"})
 
     def grep(
         self,
@@ -126,6 +139,13 @@ class ScopedSmallTaskBackend(BackendProtocol):
         matches = result.matches
         if not isinstance(matches, list):
             return result
+        if self._limit_context:
+            visible = [item for item in matches if not _is_ignored_code_context_path(item["path"])]
+            return replace(
+                result, truncated=result.truncated or len(visible) > 24,
+                matches=[{"path": item["path"], "line": item["line"], "text": item["text"][:240]}
+                         for item in visible[:24]],
+            )
         return GrepResult(
             error=result.error,
             matches=[
@@ -147,6 +167,9 @@ class ScopedSmallTaskBackend(BackendProtocol):
         matches = result.matches
         if not isinstance(matches, list):
             return result
+        if self._limit_context:
+            visible = [item for item in matches if not _is_ignored_code_context_path(item["path"])]
+            return replace(result, matches=visible[:24], truncated=result.truncated or len(visible) > 24)
         return GlobResult(
             error=result.error,
             matches=[

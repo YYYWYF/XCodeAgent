@@ -30,7 +30,10 @@ def safe_diagnostic_path(workspace: str | Path, value: str, cwd: str = "") -> st
         candidates.append(root / raw.lstrip("/"))
     valid: list[str] = []
     for candidate in candidates:
-        resolved = (root / candidate).resolve()
+        try:
+            resolved = (root / candidate).resolve()
+        except (OSError, ValueError, RuntimeError):
+            continue
         if not resolved.is_relative_to(root):
             continue
         relative = resolved.relative_to(root)
@@ -48,7 +51,7 @@ def safe_diagnostic_path(workspace: str | Path, value: str, cwd: str = "") -> st
     return valid[0] if valid else None
 
 
-def _safe_text(value: str) -> str:
+def sanitize_diagnostic_text(value: str) -> str:
     """复用预览日志脱敏规则，移除终端控制码。"""
     from app.services.preview_runtime_state import redact
 
@@ -60,7 +63,7 @@ def _safe_argv(argv: list[str]) -> list[str]:
     result: list[str] = []
     sensitive_value = False
     for arg in argv:
-        result.append("[REDACTED]" if sensitive_value else _safe_text(arg))
+        result.append("[REDACTED]" if sensitive_value else sanitize_diagnostic_text(arg))
         sensitive_value = bool(re.fullmatch(r"--?(?:password|passwd|secret|token|api[_-]?key|authorization)", arg, re.I))
     return result
 
@@ -72,10 +75,10 @@ def make_diagnostic(
 ) -> dict[str, Any]:
     """通过严格合同生成可持久化且可直接进入 AG-UI 的安全证据。"""
     return PreviewDiagnostic.model_validate({
-        "stage": stage, "category": category, "message": _safe_text(message)[:4000],
+        "stage": stage, "category": category, "message": sanitize_diagnostic_text(message)[:4000],
         "code": code, "location": location,
         "command": command.model_copy(update={"argv": _safe_argv(command.argv)}) if command else None,
-        "logPaths": log_paths or [], "excerpt": _safe_text(excerpt)[-8000:],
+        "logPaths": log_paths or [], "excerpt": sanitize_diagnostic_text(excerpt)[-8000:],
     }).model_dump(mode="json")
 
 
@@ -147,23 +150,34 @@ def diagnostics_from_command(
             text_parts.append(read_log_tail(path, limit=16000))
         except OSError:
             continue
-    text = _safe_text("\n".join(text_parts))[-24000:]
+    text = sanitize_diagnostic_text("\n".join(text_parts))[-24000:]
     command = DiagnosticCommand(
         argv=[str(arg) for arg in execution.get("argv", [])], cwd=cwd,
         exitCode=execution.get("returncode"), timedOut=bool(execution.get("timed_out")),
     )
-    locations: list[DiagnosticLocation | None] = []
-    for match in _LOCATION.finditer(text):
-        relative = safe_diagnostic_path(root, match["path"], cwd)
-        if relative:
-            locations.append(DiagnosticLocation(
-                path=relative, line=int(match["line"] or match["paren_line"]),
-                column=int(match["column"] or match["paren_column"]) if match["column"] or match["paren_column"] else None,
-            ))
     return [make_diagnostic(
         stage=stage, category=category, message=message, command=command,
         location=location, log_paths=log_paths, excerpt=text,
-    ) for location in (locations[:10] or [None])]
+    ) for location in (diagnostic_locations(root, text, cwd) or [None])]
+
+
+def diagnostic_locations(root: Path, text: str, cwd: str) -> list[DiagnosticLocation]:
+    """从已有输出解析至多十个规范位置，无需读取源码或日志。"""
+    locations: list[DiagnosticLocation] = []
+    for match in _LOCATION.finditer(text):
+        line = match["line"] or match["paren_line"]
+        column = match["column"] or match["paren_column"]
+        if len(line) > 9 or not int(line) or (column and (len(column) > 9 or not int(column))):
+            continue
+        relative = safe_diagnostic_path(root, match["path"], cwd)
+        if relative:
+            locations.append(DiagnosticLocation(
+                path=relative, line=int(line),
+                column=int(column) if column else None,
+            ))
+            if len(locations) == 10:
+                break
+    return locations
 
 
 def launch_diagnostics(workspace: str | Path, layer: str, result: dict[str, Any]) -> list[dict[str, Any]]:

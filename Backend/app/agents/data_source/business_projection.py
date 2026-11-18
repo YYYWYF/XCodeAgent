@@ -7,9 +7,12 @@ from typing import Any
 
 
 def _identity(field: dict[str, Any]) -> tuple[str, ...]:
-    """使用完整物理身份区分同一来源下的不同表或 Operation。"""
+    """区分不同表或 Operation，并使用 Endpoint 内唯一的静态来源身份。"""
 
-    if field.get("sourceType") == "database":
+    source_type = field.get("sourceType")
+    if source_type == "static":
+        return ("static",)
+    if source_type == "database":
         keys = ("sourceType", "sourceId", "schema", "table")
     else:
         keys = ("sourceType", "sourceId", "directoryId", "operationId")
@@ -28,11 +31,16 @@ def _source_fields(value: Any) -> list[dict[str, Any]]:
 
 
 def _sources(design: dict[str, Any]) -> tuple[dict[str, Any], dict[tuple[str, ...], str]]:
-    """集中保存表结构和完整外部 Operation，并为物理身份分配稳定别名。"""
+    """从当前接口内容和来源快照生成 Business 使用的别名表。"""
 
     sources: dict[str, Any] = {}
     aliases: dict[tuple[str, ...], str] = {}
-    refs = _source_fields({key: value for key, value in design.items() if key != "sourceSnapshots"})
+    binding = design.get("sourceBinding") or {}
+    if binding.get("sourceType") == "static":
+        # 静态 JSON 隶属接口，正式设计不会为它生成物理来源快照。
+        aliases[_identity(binding)] = "static_1"
+        sources["static_1"] = {"sourceType": "static", "data": deepcopy(design["staticData"])}
+    refs = _source_fields({key: value for key, value in design.items() if key not in {"sourceSnapshots", "staticData"}})
     for snapshot in design.get("sourceSnapshots") or []:
         details = snapshot.get("details") or {}
         source_type = snapshot["sourceType"]
@@ -95,6 +103,9 @@ def _source_ref(field: dict[str, Any], aliases: dict[tuple[str, ...], str]) -> s
     """把来源字段转换为别名引用，未解析来源在模型执行前明确失败。"""
 
     alias = aliases[_identity(field)]
+    if field["sourceType"] == "static":
+        path = field["path"]
+        return f"{alias}{path}" if path.startswith("[]") else f"{alias}.{path}"
     path = field["column"] if field["sourceType"] == "database" else f"{field['section']}.{field['path']}"
     return f"{alias}.{path}"
 

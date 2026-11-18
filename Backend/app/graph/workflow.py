@@ -420,20 +420,38 @@ def build_graph(
         """刷新测试重入现场，再由原测试子图执行检查和内部修复。"""
 
         from app.services.integration_test_reentry import prepare_integration_test_reentry
+        from app.observability.build_instrumentation import integration_repair_trace
 
         with bind_node_recovery(state, "integration_test"):
             prepared, fields = prepare_integration_test_reentry(state, "integration_test")
             # 先合并重启清理，再让本轮真实结果覆盖，不能用入口重置覆盖新报告或新任务。
-            return {**fields, **nodes.integration_test(prepared)}
+            with integration_repair_trace("integration_test", state=prepared) as trace:
+                result = nodes.integration_test(prepared)
+                trace.status = {
+                    "requires_user_input": "awaiting_user", "failed": "failed",
+                }.get(result.get("status"), "completed")
+                trace.quality_gate_passed = result.get("quality_gate_passed")
+                return {**fields, **result}
 
     def small_task_repair_with_recovery(state: ProjectState) -> dict[str, Any]:
         """仅暂停续接保留修复进度，失败恢复统一由测试阶段入口重新开始。"""
 
         from app.services.integration_test_reentry import prepare_integration_test_reentry
+        from app.observability.build_instrumentation import integration_repair_trace
 
         with bind_node_recovery(state, "small_task_repair"):
             prepared, fields = prepare_integration_test_reentry(state, "small_task_repair")
-            return {**fields, **nodes.small_task_repair(prepared)}
+            tasks = prepared.get("small_task_tasks") or prepared.get("repair_tasks") or []
+            if prepared.get("repair_return_node") != "integration_test" or not any(
+                isinstance(task, dict) and task.get("owner") == "frontend" for task in tasks
+            ):
+                return {**fields, **nodes.small_task_repair(prepared)}
+            with integration_repair_trace("small_task_repair", state=prepared) as trace:
+                result = nodes.small_task_repair(prepared)
+                trace.status = {
+                    "requires_user_input": "awaiting_user", "failed": "failed",
+                }.get(result.get("status"), "completed")
+                return {**fields, **result}
 
     builder.add_node("integration_test", observe_model_node("integration_test", integration_test_with_recovery))
     builder.add_node("small_task_repair", observe_model_node("small_task_repair", small_task_repair_with_recovery))

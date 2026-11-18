@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from app.agents.model_operations import model_operation, observe_model_operation
 from app.agents.messages import last_agent_text
+from app.agents.repair_planner.integration import decide_integration_repair
 from app.config import Settings
 from app.services.test_validation import create_repair_task_plan
 from app.utils.model_output import extract_json_object
@@ -15,9 +17,8 @@ def _test_repair_planning_prompt(
     test_report: dict[str, Any],
     revision_requests: list[dict[str, Any]],
     build_task_plan: dict[str, Any] | None,
-    integration_entry: bool = False,
 ) -> str:
-    """构造集成测试 RepairPlanner 提示并约束修复决策边界。"""
+    """构造单测 RepairPlanner 提示并约束修复决策边界。"""
 
     return (
         "You are the RepairPlanner Agent for an app-generation workflow.\n"
@@ -64,7 +65,7 @@ def _test_repair_planning_prompt(
         "automatically actionable.\n\n"
         f"TestReport:\n{json.dumps(test_report, ensure_ascii=False, indent=2)}\n\n"
         f"RevisionRequests:\n{json.dumps(revision_requests, ensure_ascii=False, indent=2)}"
-        + ("" if integration_entry else f"\n\nCurrentBuildTaskPlan:\n{json.dumps(build_task_plan or {}, ensure_ascii=False, indent=2)}")
+        f"\n\nCurrentBuildTaskPlan:\n{json.dumps(build_task_plan or {}, ensure_ascii=False, indent=2)}"
     )
 
 
@@ -212,13 +213,23 @@ def plan_repairs_with_repair_planner_agent(
     selected_skill_names: list[str] | None = None,
     business_stage: str = "integration_test",
     integration_entry: bool = False,
+    runtime_root: Path | None = None,
 ) -> dict[str, Any]:
     """在相同技能集合下为集成测试失败生成修复任务。"""
 
     settings = Settings.from_env()
+    mode = "bounded_model" if integration_entry else "deep_agent"
     if not revision_requests:
         agent_note = "No repair required because all quality gate checks passed."
         planner_decision: dict[str, Any] = {"decision": "terminal_failure"}
+    elif integration_entry:
+        root = Path(workspace or ".").resolve()
+        planner_decision = decide_integration_repair(
+            workspace=root, runtime_root=runtime_root or root / ".devagentstudio/runtime",
+            requests=revision_requests, scoped_tasks=scoped_tasks or [],
+            selected_skills=selected_skill_names, repair_attempt=repair_attempt, settings=settings,
+        )
+        agent_note = json.dumps(planner_decision, ensure_ascii=False)
     else:
         with model_operation(
             "plan_unit_test_repairs" if business_stage == "unit_test" else "plan_integration_repairs",
@@ -229,7 +240,6 @@ def plan_repairs_with_repair_planner_agent(
                     test_report=test_report,
                     revision_requests=revision_requests,
                     build_task_plan=build_task_plan,
-                    integration_entry=integration_entry,
                 ),
                 workspace=workspace,
                 selected_skill_names=selected_skill_names,
@@ -248,6 +258,15 @@ def plan_repairs_with_repair_planner_agent(
             scoped_tasks=scoped_tasks,
             repair_attempt=repair_attempt,
         )
+        candidate_tasks = bounded_candidate.get("tasks", [])
+        requested_paths = bounded_candidate.get("requestedPaths", [])
+        if integration_entry:
+            if planner_decision.get("escalationKind") != "code_scope":
+                candidate_tasks = []
+            requested_paths = sorted({
+                path for task in candidate_tasks for key in ("allowed_paths", "target_files")
+                for path in task.get(key, []) if not path.casefold().startswith("<no file paths")
+            })
         return {
             "version": "0.1.0",
             "status": decision,
@@ -255,9 +274,9 @@ def plan_repairs_with_repair_planner_agent(
             "generated_at": test_report.get("generated_at"),
             "source": "integration_test",
             "tasks": [],
-            "candidateTasks": bounded_candidate.get("tasks", []),
+            "candidateTasks": candidate_tasks,
             "planId": bounded_candidate.get("planId"),
-            "requestedPaths": bounded_candidate.get("requestedPaths", []),
+            "requestedPaths": requested_paths,
             "repair_scope": bounded_candidate.get("repair_scope", {}),
             "summary": {"total": 0, "frontend": 0, "backend": 0, "database": 0},
             "agent_note": agent_note,
@@ -271,7 +290,7 @@ def plan_repairs_with_repair_planner_agent(
             "failure_handling": planner_decision.get("failure_handling", ""),
             "prepared_by": {
                 "agent": "repair-planner-agent",
-                "mode": "deep_agent",
+                "mode": mode,
                 "model": settings.model_name,
                 "requiredSkillsLoaded": list(selected_skill_names or []),
             },
@@ -285,6 +304,8 @@ def plan_repairs_with_repair_planner_agent(
         repair_attempt=repair_attempt,
     )
     repair_task_plan["prepared_by"]["agent"] = "repair-planner-agent"
+    if integration_entry:
+        repair_task_plan["prepared_by"]["mode"] = mode
     repair_task_plan["prepared_by"]["model"] = settings.model_name
     repair_task_plan["prepared_by"]["requiredSkillsLoaded"] = list(
         selected_skill_names or []

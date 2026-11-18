@@ -259,7 +259,7 @@ class SmallTaskExecutionTests(unittest.TestCase):
                 return json.dumps({"status": "completed", "summary": "已完成"})
 
             with patch(
-                "app.services.small_task.invoke_small_task_agent",
+                "app.services.frontend_integration_repair.invoke_small_task_agent",
                 side_effect=write_for_task,
             ):
                 execution = execute_small_task_batch(
@@ -293,7 +293,7 @@ class SmallTaskExecutionTests(unittest.TestCase):
                 return json.dumps({"status": "completed", "summary": "已修复拼写"})
 
             with patch(
-                "app.services.small_task.invoke_small_task_agent",
+                "app.services.frontend_integration_repair.invoke_small_task_agent",
                 side_effect=repair_source,
             ):
                 execution = execute_small_task_batch(
@@ -364,7 +364,7 @@ class SmallTaskExecutionTests(unittest.TestCase):
                 return json.dumps({"status": "completed", "summary": "修复完成"})
 
             with patch(
-                "app.services.small_task.invoke_small_task_agent",
+                "app.services.frontend_integration_repair.invoke_small_task_agent",
                 side_effect=repair_with_unrelated_changes,
             ):
                 execution = execute_small_task_batch(

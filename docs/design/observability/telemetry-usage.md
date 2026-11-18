@@ -76,3 +76,9 @@
 ```
 
 报告固定分为 Prompt、整体 Token、交付效率与质量三部分。数值按 BuildRun 展示样本数、均值和中位数，逐片段展示 Task/Attempt 与 Span 父链。After 缺失时显示 `N/A`。数据损坏、Span 数目不符、模型用量缺失或条件不同会限制比较结论。质量通过需要最终完成、验收通过及覆盖率至少保持 Baseline 水平，并达到预设阈值；耗时和修复成本也须在预设容差内，才可根据 Token 下降判定该场景有效。
+
+## 集成修复对照回放
+
+- 启用 `DEVAGENTSTUDIO_OBSERVABILITY_MODE=local`，用独立实验标签记录两批运行。在对照清单中为每个固定失败样本登记版本、同一起始工作区快照、实际模型及参数、缓存条件、检查命令、Run ID。对 `be2140e6` 基线从原模型服务取得逐次用量和调用状态，从原 AG-UI 运行与真实检查结果取得时间和质量门禁。前后的同一个样本应从两份相同快照各执行一次。
+- 后端本地 `integration_test` Trace 按 `identity.run_id` 聚合初次检查、规划、修复和复测。按 `context.extra.attempt_id` 区分节点内的独立计划或任务，`repair_round` 关联修复轮次，`model_round` 记录该尝试实际开始的第几次模型调用。首轮 Prompt 大小来自 `initial_prompt`，工具返回大小来自工具片段，`repair_close_reason` 记录固定收尾原因。统计数据只含大小、状态和标识。
+- 两个操作的 Token 和模型耗时只聚合 `span_kind=model` 的唯一片段。阶段墙钟用外层集成节点及不重叠的修复节点区间，跨确认的 Run 用清单关联，等待用户的时间单列。最终通过以平台检查和 `metrics.quality_gate_passed=true` 为据。缺失模型用量单列。至少完成 30 对可比运行后再判定合计 Token 降低 70%、修复链路墙钟 P50 降低 50% 和复测通过率保持。

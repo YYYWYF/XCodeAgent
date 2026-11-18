@@ -1,8 +1,14 @@
 """创建工作台和自由对话共同使用的局部代码修改 Agent。"""
 
-from app.agents.execution_control import create_deep_agent
+from collections.abc import Callable
+
+from app.agents.execution_control import RunCancellationMiddleware, create_deep_agent
 from deepagents.backends.protocol import BackendProtocol
-from langchain.agents.middleware import ModelCallLimitMiddleware
+from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.memory import MemoryMiddleware
+from deepagents.middleware.skills import SkillsMiddleware
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware, ModelRequest, ModelResponse
 
 from app.agents.small_task.scope import ScopedSmallTaskBackend, is_small_task_path_allowed
 from app.agents.frontend_test_instructions import FRONTEND_TEST_INSTRUCTIONS
@@ -12,12 +18,67 @@ from app.agents.workspace_scope import (
 )
 from app.middleware.direct_modification import DirectModificationMiddleware
 from app.middleware.small_task_cancellation import SmallTaskCancellationMiddleware
+from app.observability.build_instrumentation import record_prompt
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.tools.delete_file import create_delete_file_tool
 from app.tools.execute import create_execute_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
+
+
+class FrontendIntegrationPromptMetrics(AgentMiddleware):
+    """首轮记录进入模型的有效内容大小，正文留在现有诊断体系。"""
+
+    def wrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelResponse:
+        """在技能和记忆处理后统计完整系统提示及首轮任务文本。"""
+        if request.state.get("run_model_call_count", 0) == 0 and request.messages:
+            task = request.messages[0].text
+            system = request.system_message.text if request.system_message else ""
+            record_prompt(f"{system}\n{task}", task_context=task)
+        return handler(request)
+
+
+def create_frontend_integration_agent(
+    model, workspace_root: str | None, *, user_skills_backend: BackendProtocol,
+    agent_memory_backend: BackendProtocol, required_user_skills_prompt: str,
+):
+    """组装前端集成文件工具，不加载子 Agent、摘要模型或命令执行工具。"""
+    backend = ScopedSmallTaskBackend(create_workspace_backend(
+        workspace_root, include_builtin_skills=True,
+        user_skills_backend=user_skills_backend, agent_memory_backend=agent_memory_backend,
+    ), limit_context=True)
+    filesystem = FilesystemMiddleware(
+        backend=backend, permissions=create_workspace_permissions(
+            workspace_root, mode="small_task", include_builtin_skills=True,
+            include_user_skills=True, include_agent_memory=True,
+        ),
+    )
+    file_tools = {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}
+    filesystem.tools = [tool for tool in filesystem.tools if tool.name in file_tools]
+    return create_agent(
+        name="frontend-integration-small-task", model=model,
+        system_prompt="\n\n".join(filter(None, [
+            "Repair one frontend integration failure using the task packet. Start with diagnosed source "
+            "before configuration hints. Edit only allowedPaths and preserve acceptance checks and formal "
+            "contracts. The platform runs installation and build checks after edits. Never claim a check "
+            "passed. Keep exploration narrow and make the smallest verified-on-disk change. If more scope "
+            "is needed, return exact requestedPaths with requires_user_confirmation; for formal changes "
+            "return requires_workflow before editing. Finish with one JSON object containing status and summary.",
+            VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS, required_user_skills_prompt,
+        ])),
+        tools=[create_delete_file_tool(workspace_root, path_guard=is_small_task_path_allowed)],
+        middleware=[
+            RunCancellationMiddleware(model), SmallTaskCancellationMiddleware(),
+            ModelCallLimitMiddleware(run_limit=12, exit_behavior="end"),
+            filesystem,
+            SkillsMiddleware(backend=backend, sources=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT]),
+            MemoryMiddleware(backend=backend, sources=[AGENT_MEMORY_VIRTUAL_PATH]),
+            FrontendIntegrationPromptMetrics(),
+        ],
+    ).with_config({"recursion_limit": 128})
 
 
 def create_small_task_agent(

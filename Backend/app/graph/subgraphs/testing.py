@@ -17,6 +17,7 @@ from app.agents.tool_activity_stream import ToolActivityCallback
 from app.graph.nodes.common import capture_agent_file_changes, workspace_from_state
 from app.graph.nodes.confirmation import extract_confirmation_answer, user_confirmed_text
 from app.graph.state import ProjectState
+from app.observability.build_instrumentation import integration_repair_trace
 from app.services.frontend_performance_runner import (
     PERFORMANCE_CHECK_ID,
     PERFORMANCE_CHECK_NAME,
@@ -25,6 +26,8 @@ from app.services.frontend_performance_runner import (
     run_frontend_performance_check,
 )
 from app.services.integration_test_runner import run_integration_checks
+from app.services.revision_routing import build_small_task_revision_confirmation
+from app.services.run_workers import run_worker
 from app.services.backend_startup_diagnostics import startup_source_fingerprint
 from app.services.test_validation import evaluate_quality_gate
 from app.services.test_generation_diagnostics import generation_failure_diagnostics
@@ -1134,12 +1137,16 @@ def build_project_checks(
             "test_events": ["integration_build:reused_after_confirmation"],
         }
 
-    result = run_integration_checks(
-        state,
-        on_progress=_diagnostic_progress_reporter(state, reporter),
-        phase="build",
-        include_backend_startup=True,
-    )
+    with integration_repair_trace(
+        "build_project_checks", state=state, repair_round=int(state.get("repair_iteration") or 0) + 1,
+    ) as trace:
+        result = run_integration_checks(
+            state, on_progress=_diagnostic_progress_reporter(state, reporter),
+            phase="build", include_backend_startup=True,
+        )
+        if any(check.get("passed") is False and check.get("blocking", True)
+               for check in result.get("test_results", [])):
+            trace.status = "failed"
     test_results = _ordered_integration_checks(
         [
             *_without_unit_test_checks(state.get("test_results")),
@@ -1574,7 +1581,8 @@ def repair_planning(state: ProjectState, *, integration_entry: bool = False) -> 
     existing_plan = state.get("repair_task_plan")
     request = str(state.get("request") or "")
     if (
-        isinstance(existing_plan, dict)
+        not integration_entry
+        and isinstance(existing_plan, dict)
         and existing_plan.get("decision") == "requires_user_confirmation"
     ):
         answer = extract_confirmation_answer(request).replace(" ", "")
@@ -1653,10 +1661,10 @@ def repair_planning(state: ProjectState, *, integration_entry: bool = False) -> 
         }
 
     workspace = workspace_from_state(state)
-    captured = capture_agent_file_changes(
-        workspace=workspace,
-        source_tool="repair_planner.deep_agent",
-        action=lambda: plan_repairs_with_repair_planner_agent(
+
+    def plan() -> dict[str, Any]:
+        """使用当前测试证据规划，集成入口无需为只读推理扫描工作区差异。"""
+        return plan_repairs_with_repair_planner_agent(
             test_report=state.get("test_report", {}),
             revision_requests=state.get("revision_requests", []),
             build_task_plan=state.get("build_task_plan"),
@@ -1667,25 +1675,40 @@ def repair_planning(state: ProjectState, *, integration_entry: bool = False) -> 
             selected_skill_names=state.get("selected_skill_names"),
             business_stage=("unit_test" if not integration_entry and state.get("repair_return_node") == "unit_test" else "integration_test"),
             integration_entry=integration_entry,
-        ),
-    )
-    repair_task_plan = captured.value
-    repair_task_plan = _upgrade_candidate_repair_plan(repair_task_plan)
-    repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
+            **({"runtime_root": workflow_artifact_root(state) / "runtime"} if integration_entry else {}),
+        )
+
+    change_update: dict[str, Any] = {}
+    if integration_entry:
+        repair_task_plan = plan()
+        with run_worker():
+            repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
+    else:
+        captured = capture_agent_file_changes(workspace=workspace, source_tool="repair_planner.deep_agent", action=plan)
+        repair_task_plan = _upgrade_candidate_repair_plan(captured.value)
+        change_update = code_change_state_update(captured.code_change_set)
+        repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)
     next_action = _next_action_for_repair_plan(repair_task_plan)
+    confirmation: dict[str, Any] = {"clarification": {}}
+    if next_action == "await_user_input":
+        if integration_entry and repair_task_plan.get("escalationKind") == "formal_revision":
+            reason = str(repair_task_plan.get("reason") or "修复涉及已确认的正式语义。")
+            confirmation = build_small_task_revision_confirmation(
+                state={**state, "request": reason},
+                escalation={"reasonCode": "formal_revision", "reason": reason},
+                reason=reason,
+            )
+        else:
+            confirmation = {"clarification": _repair_scope_confirmation_payload(repair_task_plan)}
     return {
-        **code_change_state_update(captured.code_change_set),
+        **change_update,
+        **confirmation,
         "repair_task_plan": repair_task_plan,
         "repair_task_plan_path": repair_task_plan_path,
         "repair_tasks": repair_task_plan.get("tasks", []),
         "repair_iteration": repair_iteration,
         "max_repair_iterations": max_repair_iterations,
         "integration_next_action": next_action,
-        "clarification": (
-            _repair_scope_confirmation_payload(repair_task_plan)
-            if next_action == "await_user_input"
-            else {}
-        ),
         "test_events": ["repair_planning"],
     }
 
@@ -1723,6 +1746,47 @@ def _repair_scope_confirmation_payload(repair_task_plan: dict[str, Any]) -> dict
                 "placeholder": "回复“批准修复范围”或“拒绝修复范围”。",
             }
         ],
+    }
+
+
+def _resume_integration_repair_scope(state: ProjectState) -> dict[str, Any] | None:
+    """仅消费当前集成范围确认，复用平台已物化的候选与报告。"""
+    plan = state.get("repair_task_plan") or {}
+    clarification = state.get("clarification") or {}
+    if (
+        state.get("integration_next_action") != "await_user_input"
+        or plan.get("decision") != "requires_user_confirmation"
+        or plan.get("escalationKind") != "code_scope"
+        or clarification.get("mode") != "repair_scope_confirmation"
+        or not plan.get("planId")
+        or plan.get("planId") != clarification.get("planId")
+    ):
+        return None
+    answer = extract_confirmation_answer(str(state.get("request") or "")).strip()
+    if answer not in {"批准修复范围", "拒绝修复范围"}:
+        return {"phase": "integration_test", "status": "requires_user_input", "clarification": clarification}
+    tasks = [
+        task for task in plan.get("candidateTasks", [])
+        if isinstance(task, dict) and _task_has_real_repair_paths(task)
+    ] if answer == "批准修复范围" else []
+    accepted = bool(tasks)
+    resolved = {
+        **plan, "status": "ready" if accepted else "terminal_failure",
+        "decision": "repair" if accepted else "terminal_failure", "tasks": tasks,
+        **({"approvedPlanId": plan["planId"]} if accepted else {
+            "reason": "用户拒绝修复范围。" if answer == "拒绝修复范围" else "本轮修复缺少可执行的授权文件范围。",
+        }),
+    }
+    with run_worker():
+        plan_path = write_repair_task_plan_json(state, resolved)
+    return {
+        "phase": "integration_test", "status": "in_progress" if accepted else "failed",
+        "repair_task_plan": resolved, "repair_task_plan_path": plan_path,
+        "repair_tasks": tasks, "small_task_tasks": tasks, "clarification": {},
+        "repair_return_node": "integration_test",
+        "integration_next_action": "small_task_repair" if accepted else "handle_failure",
+        "small_task_route": "small_task_repair" if accepted else "handle_failure",
+        "test_events": ["repair_planning:scope_approved" if accepted else "repair_planning:scope_rejected"],
     }
 
 
@@ -1945,6 +2009,9 @@ def integration_test(state: ProjectState) -> dict:
     from app.workspace.spec_documents import workspace_root
 
     require_test_entry(workspace_root(state))
+    confirmed = _resume_integration_repair_scope(state)
+    if confirmed is not None:
+        return confirmed
     previous_small_task_changes = [
         item
         for item in state.get("small_task_code_change_sets", [])
@@ -2027,7 +2094,10 @@ def integration_test(state: ProjectState) -> dict:
         and result.get("clarification", {}).get("mode")
         == "frontend_performance_confirmation"
     )
-    waiting_for_test_decision = waiting_for_frontend_performance_decision
+    waiting_for_test_decision = (
+        result.get("integration_next_action") == "await_user_input"
+        and bool(result.get("clarification"))
+    )
     quality_gate_passed = (
         False
         if waiting_for_test_decision
@@ -2055,6 +2125,8 @@ def integration_test(state: ProjectState) -> dict:
     return {
         "phase": "integration_test",
         "status": terminal_status,
+        **({key: result[key] for key in ("conversation_intent", "revision_impact") if key in result}
+           if waiting_for_test_decision else {}),
         "clarification": (
             result.get("clarification", {})
             if waiting_for_test_decision

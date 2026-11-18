@@ -18,9 +18,11 @@ from langchain_core.tools import tool
 from langsmith import tracing_context
 
 from app.agents.execution_control import RunCancellationMiddleware
+from app.agents.model_operations import model_operation
 from app.observability import build_instrumentation as observe
 from app.observability.build_baseline_report import render_report
 from app.observability.model_usage_callback import BuildModelUsageCallback
+from app.observability.telemetry_models import ExecutionTraceRecord
 
 
 class ToolCapableTestModel(FakeMessagesListChatModel):
@@ -33,6 +35,40 @@ class ToolCapableTestModel(FakeMessagesListChatModel):
 
 class BuildInstrumentationTests(unittest.TestCase):
     """使用实际 LangGraph 并发和模型生命周期验证归属。"""
+
+    def test_integration_trace_links_calls_and_redacts_evidence(self):
+        """同一 Run 的规划、编码和门禁可配对，真实 Usage 不包含正文。"""
+        state = {"active_run_id": "integration-run", "active_thread_id": "thread"}
+        callback = BuildModelUsageCallback("fake-test", "fake-model")
+        model = ToolCapableTestModel(callbacks=[callback], responses=[AIMessage(
+            content="private reply", usage_metadata={"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
+        )])
+        with tracing_context(enabled=False), patch.object(observe.telemetry, "enabled", return_value=True), patch.object(
+            observe.telemetry, "publish",
+        ) as publish:
+            with observe.integration_repair_trace("integration_test", state=state) as gate:
+                with model_operation("plan_integration_repairs", business_stage="integration_test"), observe.integration_repair_trace(
+                    "repair_planning", repair_round=1,
+                ) as plan:
+                    observe.record_prompt("private prompt", task_context="private evidence")
+                    model.invoke("private evidence")
+                    model.invoke("private evidence")
+                    plan.reason = "additional_evidence"
+                gate.quality_gate_passed = False
+            with model_operation("repair_frontend_integration_code", business_stage="integration_test"), observe.integration_repair_trace(
+                "small_task_repair", state=state, task_id="repair-task", repair_round=1,
+            ):
+                model.invoke("private source")
+        rows = [call.args[0] for call in publish.call_args_list]
+        for row in rows:
+            ExecutionTraceRecord.model_validate(row)
+            self.assertEqual(row["identity"]["run_id"], "integration-run")
+            self.assertEqual(row["context"]["business_stage"], "integration_test")
+        self.assertNotIn("private", json.dumps(rows))
+        models = [row for row in rows if row["data"]["span_kind"] == "model"]
+        self.assertEqual([row["context"]["extra"]["model_round"] for row in models], [1, 2, 1])
+        self.assertEqual([row["data"]["model"]["total_tokens"] for row in models], [6, 6, 6])
+        self.assertEqual(len({row["context"]["extra"]["attempt_id"] for row in models}), 2)
 
     def test_parallel_tasks_model_and_tool(self):
         """并发任务、真实 LangChain 工具和模型回调保留各自 Attempt。"""

@@ -70,6 +70,11 @@ Read a field under the specified source alias.
 
 Assign the database record's `id` from `database_1` to the response's `id` field.
 Source aliases are defined in `sources`, not Java class names or configuration names.
+For a source with `sourceType: "static"`, resolve the path against that source's
+`data` JSON in the current Endpoint. Preserve literal values and their types,
+including empty strings, zero, and false. The `[]` marker denotes traversal by
+array element, including a root array such as `static_1[].name`. Static data
+requires no database or HTTP call.
 
 ### Fixed Value: fixed
 

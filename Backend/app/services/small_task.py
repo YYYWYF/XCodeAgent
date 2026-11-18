@@ -8,8 +8,10 @@ from typing import Any
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 
 from app.agents.small_task import invoke_small_task_agent, normalize_small_task_result
+from app.agents.small_task.frontend_integration import frontend_integration_packet, is_frontend_integration
 from app.agents.tool_activity_stream import ToolActivityCallback
 from app.services.backend_startup_diagnostics import startup_failure_packet
+from app.services.frontend_integration_repair import execute_frontend_integration_task
 from app.services.small_task_context import repair_candidate_files, repair_strategy
 from app.services.engineering_acceptance_verifier import unauthorized_batch_paths
 from app.services.small_task_scope import (
@@ -34,6 +36,8 @@ def build_small_task_packet(
 ) -> dict[str, Any]:
     """构造有界任务包，把结构化工程与业务检查及失败证据交给 Agent。"""
 
+    if is_frontend_integration(source, task.get("owner")):
+        return frontend_integration_packet(task, state, source)
     allowed_paths = _task_paths(task)
     return {
         "schemaVersion": "small-task-packet.v1",
@@ -115,44 +119,14 @@ def execute_small_task_batch(
 
         packet = build_small_task_packet(task, state, source=source)
         try:
-            # 集成测试的输出协议重试留在当前修复节点内，不消耗复测轮次或发布失败状态。
-            max_attempts = 3 if source == "integration_test.small_task" else 1
-            for attempt in range(max_attempts):
-                agent_note = invoke_small_task_agent(
-                    packet=packet,
-                    workspace=workspace,
-                    selected_skill_names=state.get("selected_skill_names"),
-                    on_tool_activity=(
-                        _task_activity_callback(on_tool_activity, task)
-                        if on_tool_activity is not None
-                        else None
-                    ),
+            activity = _task_activity_callback(on_tool_activity, task) if on_tool_activity is not None else None
+            if is_frontend_integration(source, task.get("owner")):
+                normalized = execute_frontend_integration_task(
+                    packet=packet, state=state, task=task, workspace=workspace,
+                    before=before, batch=tasks, on_tool_activity=activity,
                 )
-                normalized = normalize_small_task_result(agent_note)
-                if normalized.get("failureCode") != "invalid_agent_output":
-                    break
-                if attempt + 1 == max_attempts:
-                    break
-                # 重试前检查已落盘变更；越权结果不能借输出协议错误继续执行。
-                current = snapshot_workspace(workspace)
-                current_files = (
-                    diff_workspace_snapshots(before, current, source_tool=source)
-                    if current else []
-                )
-                if unauthorized_batch_paths({"files": current_files}, tasks):
-                    break
-                packet = {
-                    **packet,
-                    "outputRetry": {
-                        "attempt": attempt + 2,
-                        "reason": normalized["failureReason"],
-                        "instruction": (
-                            "Re-read current files: previous edits remain on disk. "
-                            "Continue the same bounded task without duplicating changes. "
-                            "Return one complete JSON result with valid status and nonempty summary."
-                        ),
-                    },
-                }
+            else:
+                normalized = run_shared_task(task, packet, activity)
         except Exception as exc:
             failure_reason = (
                 f"局部任务在 {exc.run_count} 轮模型调用后仍未完成，已停止本轮修复。"
@@ -160,14 +134,9 @@ def execute_small_task_batch(
                 else f"{type(exc).__name__}: {exc}"
             )
             normalized = {
-                "status": "failed",
-                "summary": "SmallTask Agent 执行异常。",
-                "changedFiles": [],
-                "verification": [],
-                "alreadySatisfied": False,
-                "failureReason": failure_reason[:2_000],
-                "escalation": {},
-                "agentNote": "",
+                "status": "failed", "summary": "SmallTask Agent 执行异常。", "changedFiles": [],
+                "verification": [], "alreadySatisfied": False, "failureReason": failure_reason[:2_000],
+                "escalation": {}, "agentNote": "",
             }
         return {
             "taskId": str(task.get("id") or ""),
@@ -183,6 +152,45 @@ def execute_small_task_batch(
             "agentNote": normalized["agentNote"],
             "packet": _packet_preview(packet),
         }
+
+    def run_shared_task(
+        task: dict[str, Any], packet: dict[str, Any], activity: ToolActivityCallback | None,
+    ) -> dict[str, Any]:
+        """保留其他任务来源的既有输出恢复策略。"""
+        max_attempts = 3 if source == "integration_test.small_task" else 1
+        for attempt in range(max_attempts):
+            agent_note = invoke_small_task_agent(
+                packet=packet,
+                workspace=workspace,
+                selected_skill_names=state.get("selected_skill_names"),
+                on_tool_activity=activity,
+            )
+            normalized = normalize_small_task_result(agent_note)
+            if normalized.get("failureCode") != "invalid_agent_output":
+                break
+            if attempt + 1 == max_attempts:
+                break
+            # 重试前检查已落盘变更；越权结果不能借输出协议错误继续执行。
+            current = snapshot_workspace(workspace)
+            current_files = (
+                diff_workspace_snapshots(before, current, source_tool=source)
+                if current else []
+            )
+            if unauthorized_batch_paths({"files": current_files}, tasks):
+                break
+            packet = {
+                **packet,
+                "outputRetry": {
+                    "attempt": attempt + 2,
+                    "reason": normalized["failureReason"],
+                    "instruction": (
+                        "Re-read current files: previous edits remain on disk. "
+                        "Continue the same bounded task without duplicating changes. "
+                        "Return one complete JSON result with valid status and nonempty summary."
+                    ),
+                },
+            }
+        return normalized
 
     with ThreadPoolExecutor(
         max_workers=max(1, min(len(tasks), SMALL_TASK_MAX_CONCURRENCY)),
@@ -218,7 +226,8 @@ def execute_small_task_batch(
             result["status"] = "failed"
             result["failureReason"] = "Agent 报告完成，但授权范围内没有实际代码差异。"
         if unauthorized and (
-            result["status"] in {"completed", "already_satisfied"}
+            is_frontend_integration(source, task.get("owner"))
+            or result["status"] in {"completed", "already_satisfied"}
             or result.get("failureCode") == "invalid_agent_output"
         ):
             result["status"] = "failed"

@@ -42,6 +42,9 @@ class TelemetryTarget(OptionalTelemetryModel):
     api_contract_id: str | None = None
 
 
+Count = Annotated[int, Field(ge=0)]
+
+
 class TelemetryContextExtra(OptionalTelemetryModel):
     """关联 Build 实例、真实任务及仅用于统计的执行尝试。"""
 
@@ -55,9 +58,12 @@ class TelemetryContextExtra(OptionalTelemetryModel):
     scenario_id: str | None = None
     retry: bool | None = None
     repair: bool | None = None
-
-
-Count = Annotated[int, Field(ge=0)]
+    repair_round: Count | None = None
+    model_round: Count | None = None
+    repair_close_reason: Literal[
+        "additional_evidence", "unresolved_evidence", "invalid_result", "model_error", "result_recovered",
+        "verified_diff_pending_retest", "unauthorized_diff"
+    ] | None = None
 
 
 class TelemetryMetrics(OptionalTelemetryModel):
@@ -80,6 +86,7 @@ class TelemetryMetrics(OptionalTelemetryModel):
     model_spans: Count | None = None
     tool_spans: Count | None = None
     node_spans: Count | None = None
+    quality_gate_passed: bool | None = None
 
 
 class TelemetryContext(OptionalTelemetryModel):
