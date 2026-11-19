@@ -940,6 +940,17 @@ def _request_for_requirement_node(
     """为需求节点选择结构化交互中的明确请求，避免用阶段文本猜动作。"""
 
     if state.get("workflow_scope") == "application_planning" and interaction:
+        if interaction.get("action") == "answer":
+            from app.services.requirement_clarification import requirement_clarification_request
+
+            # 需求分析统一在模型边界展开全部问答，不能依赖调用方把选择题压成纯文本。
+            spec = state.get("requirement_spec") or {}
+            return requirement_clarification_request(
+                str(spec.get("source_request") or state.get("request") or ""),
+                state.get("clarification") or {},
+                interaction.get("answers") or {},
+                str(interaction.get("request") or ""),
+            )
         return str(interaction.get("request") or "").strip()
     return str(state.get("request") or "")
 
