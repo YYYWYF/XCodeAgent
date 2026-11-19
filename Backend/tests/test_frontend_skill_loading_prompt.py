@@ -52,8 +52,11 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                         self.assertIn("不因切换步骤重复读取", prompt)
                         for skill in ("frontend-engineering-standards", "frontend-template-modification-boundary"):
                             self.assertIn(f"/.devagentstudio/builtin-skills/{skill}/SKILL.md", prompt)
-                        for step in ("Step 1 只读", "Step 2/3 可写", "Step 4 只读"):
+                        for step in ("Step 1 只读", "Step 2/3 复用核对结果", "Step 4 只读"):
                             self.assertIn(step, prompt)
+                        for boundary in ("不要求读完全部文件", "定向补读已授权精确文件",
+                                         "读取失败不得猜测接口或扩大搜索范围"):
+                            self.assertIn(boundary, prompt)
                         self.assertLess(prompt.index("等待成功返回 Step 1"),
                                         prompt.index("frontend-engineering-standards/SKILL.md"))
                     else:

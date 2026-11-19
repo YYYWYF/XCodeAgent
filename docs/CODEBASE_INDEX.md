@@ -1,6 +1,8 @@
 # DevAgent Studio Codebase Index
 
-前端权限页面的 `task_packet.py::_template_read_dependencies` 在模型前核对当前 V3 TemplateState 与 Build 快照，从 authorization 的 `installedArtifacts` 确定唯一 Permission 源文件；无精确记录时仅核对 `components/authorization/Permission.{ts,tsx}` 和 `Permission/index.{ts,tsx}` 四个约定候选。RESOURCES 路径复用 `authorization_frontend_projection.py` 的规范投影常量。两项依赖逐层拒绝链接、硬链接与非普通文件，缺失、歧义或状态漂移经 `template_read_dependency_unresolved` 只失败当前页面。`generator.py` 仅透传既有 workspace，`execution_scope.py::readable` 仅在页面 Step 3 添加 `template_read_dependencies`；目标、写权限、搜索、Code Graph、页面四步及 API 任务级模式不变。回归见 `tests.test_frontend_project_plan_context`、`tests.test_frontend_build_execution`。
+前端页面 Step 1 统一按需核对任务包已声明的 API、设计稿、权限模板、类型和常量依赖。`execution_scope.py::readable` 在页面 Step 1/3 开放已有 `template_read_dependencies` 和 `type_and_constant_files`，保留 API、设计稿的原有读取步骤，以及 Step 2/4、写入范围、Code Graph 校验和 API 任务模式。`task_packet.py::STEPS` 与 `generator.py` 要求 Step 2/3 复用已核对结果，只在版本变化、未完成核对或明确冲突时定向补读已授权文件；Skill 仍须先 begin 再读取。本次不解析源码引用、不新增依赖字段或收集模块。回归见 `tests.test_frontend_build_execution`、`tests.test_frontend_project_plan_context`、`tests.test_frontend_skill_loading_prompt`。
+
+前端权限页面的 `task_packet.py::_template_read_dependencies` 在模型前核对当前 V3 TemplateState 与 Build 快照，从 authorization 的 `installedArtifacts` 确定唯一 Permission 源文件；无精确记录时仅核对 `components/authorization/Permission.{ts,tsx}` 和 `Permission/index.{ts,tsx}` 四个约定候选。RESOURCES 路径复用 `authorization_frontend_projection.py` 的规范投影常量。两项依赖逐层拒绝链接、硬链接与非普通文件，缺失、歧义或状态漂移经 `template_read_dependency_unresolved` 只失败当前页面。模板依赖的构造和安全校验保持原样。回归见 `tests.test_frontend_project_plan_context`、`tests.test_frontend_build_execution`。
 
 Business 执行投影在 `agents/data_source/business_projection.py` 将已确认的 Endpoint `staticData` 暴露为本地静态别名 `static_1`，字段映射保留原路径、根列表及 JSON 字面值。静态来源不需要物理 `sourceSnapshots`，也不调数据库或外部 API。回归覆盖真实 Business 任务包：`tests.test_api_design_static`。
 

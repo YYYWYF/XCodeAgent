@@ -28,6 +28,8 @@ _DELETED = "/frontend/src/pages/Orders/Obsolete.tsx"
 _SKILL = "/.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md"
 _PERMISSION = "/frontend/src/components/authorization/Permission/index.tsx"
 _RESOURCES = "/frontend/src/constants/resources.ts"
+_TYPE = "/frontend/src/typings/orders.ts"
+_CONSTANT = "/frontend/src/constants/orders.ts"
 
 
 def _packet(kind: str) -> dict:
@@ -40,7 +42,8 @@ def _packet(kind: str) -> dict:
             "target_files": [item["path"] for item in scope], "change_scope": scope,
             "implementation_contract": ({"confirmed_design": _DESIGN, "page_entry": _PAGE,
                     "api_dependencies": [{"path": _API, "kind": API, "endpoints": []}],
-                    "template_read_dependencies": [_PERMISSION, _RESOURCES]} if kind == PAGE else {})}
+                    "template_read_dependencies": [_PERMISSION, _RESOURCES],
+                    "type_and_constant_files": [_TYPE, _CONSTANT]} if kind == PAGE else {})}
 
 
 def _create_file(root: Path, path: str, source: str) -> Path:
@@ -58,19 +61,35 @@ class FrontendBuildExecutionTests(unittest.TestCase):
         """四步均拒绝受管写入，业务 API 仍仅在原定步骤可读。"""
         with TemporaryDirectory() as folder:
             root = Path(folder)
-            for path in (_PERMISSION, _RESOURCES, _API):
+            for path in (_PERMISSION, _RESOURCES, _TYPE, _CONSTANT, _API, _PAGE, _DELETED, _DESIGN):
                 _create_file(root, path, "unchanged")
             packet = _packet(PAGE)
             scope = FrontendTaskExecutionScope(folder, [packet])
             for step in range(1, 5):
                 scope.step = step
-                for path in (_PERMISSION, _RESOURCES):
+                for path in (_PERMISSION, _RESOURCES, _TYPE, _CONSTANT):
                     self.assertNotIn(path, scope.writable())
                     for operation in ("write_file", "edit_file", "delete_file"):
                         with self.assertRaises(ValueError):
                             scope.authorize(operation, path)
-                    with self.assertRaises(ValueError):
+                    if step in {1, 3}:
+                        self.assertEqual(scope.authorize("read_file", path)[0], path)
+                    else:
+                        with self.assertRaises(ValueError):
+                            scope.authorize("read_file", path)
+                    if step == 1:
                         scope.authorize("grep", path)
+                    else:
+                        with self.assertRaises(ValueError):
+                            scope.authorize("grep", path)
+                self.assertEqual(scope.writable(), {} if step in {1, 4} else
+                                 {_PAGE: "add", _DELETED: "delete"})
+                if step in {1, 4}:
+                    for path in packet["target_files"]:
+                        for operation in ("write_file", "edit_file", "delete_file"):
+                            with self.assertRaises(ValueError):
+                                scope.authorize(operation, path)
+                self.assertEqual(_DESIGN in scope.readable(), step in {1, 2})
                 if step == 2:
                     with self.assertRaises(ValueError):
                         scope.authorize("read_file", _API)
@@ -90,7 +109,9 @@ class FrontendBuildExecutionTests(unittest.TestCase):
         _create_file(root, _API, "export const list = () => [];")
         _create_file(root, "/.devagentstudio/ui-design/pages/Other/index.tsx", "// unrelated design")
         _create_file(root, _OTHER, "// unrelated")
-        dependencies = {_PERMISSION: "// permission actual source", _RESOURCES: "// resources actual source"}
+        dependencies = {_PERMISSION: "// permission actual source", _RESOURCES: "// resources actual source",
+                        _TYPE: "export type Order = { id: string };",
+                        _CONSTANT: "export const ORDER_STATUS = 'pending';"}
         for path, source in dependencies.items():
             _create_file(root, path, source)
         other_component = "/frontend/src/components/authorization/Other.tsx"
@@ -122,6 +143,7 @@ class FrontendBuildExecutionTests(unittest.TestCase):
         turn(("begin_frontend_task", {"task_id": PAGE}))
         for path in dependencies:
             turn(path_call("read_file", path))
+        turn(("code_graph_context", {"paths": list(dependencies)}))
         turn(path_call("read_file", _SKILL), ("execute", {"command": "printf scope-check"}))
         turn(("advance_frontend_step", {"task_id": PAGE, "completion_evidence": "checked"}),
              path_call("write_file", _PAGE, content="forbidden"))
@@ -193,9 +215,15 @@ class FrontendBuildExecutionTests(unittest.TestCase):
                      and event.kwargs.get("virtual_path") == path
                      and event.kwargs.get("tool_name") == "read_file"]
             self.assertEqual([(event["step_id"], event["permission_decision"]) for event in reads],
-                             [("step_1", "denied"), ("step_2", "denied"),
+                             [("step_1", "allowed"), ("step_2", "denied"),
                               ("step_3", "allowed"), ("step_4", "denied")])
         receipts = [message for message in tools.values() if message.name == "advance_frontend_step"]
+        graph_events = [event.kwargs for event in trace.call_args_list
+                        if event.args == ("frontend_tool_permission",)
+                        and event.kwargs.get("tool_name") == "code_graph_context"]
+        self.assertTrue(any(event.get("permission_decision") == "allowed"
+                            and set(event.get("code_graph_query_scope", [])) == set(dependencies)
+                            for event in graph_events))
         self.assertTrue(any(_PERMISSION in str(message.content) and _RESOURCES in str(message.content)
                             and "step_3" in str(message.content) for message in receipts))
         self.assertFalse(deleted.exists())

@@ -25,7 +25,10 @@ def _scoped_generation_prompt(packets: list[dict]) -> str:
     execution = (
         "每个任务先单独调用 begin_frontend_task。顺序完成四步，每步后单独调用 "
         "advance_frontend_step 并简述完成情况。Step 1 只读，可按精确文件调用 grep 或 "
-        "code_graph_context。Step 2/3 可写已声明的业务目标。Step 4 只读核对，单独调用 "
+        "code_graph_context。在 Step 1 完整理解需求并按需核对任务已声明的 API、设计稿、模板组件、"
+        "类型和常量依赖，确定实施方案，"
+        "不要求读完全部文件。Step 2/3 复用核对结果，仅可写已声明的业务目标，不开始无关文件探索。"
+        "Step 4 只读核对，单独调用 "
         "complete_frontend_task 后立即停止本任务的工具探索。各控制工具单独发送一轮。"
         "Step 2/3 验收失败时依据返回的具体问题在当前步骤修复；无法修复时用 defer_to_repair 前进，"
         "并在 Step 4 以 acceptance_verification_failed 提交失败。"
@@ -54,6 +57,9 @@ def _scoped_generation_prompt(packets: list[dict]) -> str:
         "确认设计稿和所选模板只参考布局与组件，按规范重新绑定数据，省略示例数据和预览控件。"
         "设计稿缺失或不可读时按页面契约实现。页面按 authorization_actions 的 resourceConstant "
         "精确使用模板 Permission 与 import { RESOURCES } from '@/constants/resources'，保持契约指定的权限方案。"
+        "已声明的权限模板、API、类型和常量的实际导出和用法优先在 Step 1 按需核对；Step 3 复用可靠结果，"
+        "仅当文件版本变化、核对未完成或出现明确契约冲突时，定向补读已授权精确文件；"
+        "读取失败不得猜测接口或扩大搜索范围。"
         "导航使用契约提供的目标与参数。" if page else ""
     )
     prompt = (

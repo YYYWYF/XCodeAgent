@@ -181,7 +181,7 @@ class FrontendTaskExecutionScope:
                 readable.add(contract["confirmed_design"])
             if self.step in {1, 3, 4}:
                 readable.update(module["path"] for module in contract["api_dependencies"])
-            if self.step == 3:
+            if self.step in {1, 3}:
                 readable.update(contract.get("type_and_constant_files", []))
                 readable.update(contract.get("template_read_dependencies", []))
         return readable
