@@ -29,7 +29,7 @@ from app.services.backend_launch_support import (
     _run_backend_repackage,
 )
 from app.services.backend_runtime_jar import (
-    BACKEND_JAR_DIRECTORY, BACKEND_PROCESS_FILENAME, remove_backend_jar,
+    BACKEND_JAR_DIRECTORY, BACKEND_PROCESS_FILENAME, ISOLATED_PREVIEW_SERVER_ARGS, remove_backend_jar,
     stage_backend_jar, write_backend_process_record,
 )
 from app.services.workspace_process_registry import workspace_process_registry
@@ -564,7 +564,7 @@ def _start_backend_server(
     argv = [java_command, *JAVA_BACKEND_JAR_OPTIONS, "-jar", str(jar_path.resolve())]
     if isolated_preview:
         # 由系统在 Spring Boot 启动时分配端口，避免占用或检查当前分支的端口。
-        argv.extend(("--server.address=127.0.0.1", "--server.port=0"))
+        argv.extend(ISOLATED_PREVIEW_SERVER_ARGS)
     stdout_path = runtime_root / "backend.stdout.log"
     stderr_path = runtime_root / "backend.stderr.log"
     record_path = runtime_root / BACKEND_PROCESS_FILENAME

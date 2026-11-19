@@ -13,7 +13,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, read_backend_process_record, remove_backend_jar
+from app.services.backend_runtime_jar import (
+    BACKEND_PROCESS_FILENAME, ISOLATED_PREVIEW_SERVER_ARGS, read_backend_process_record, remove_backend_jar,
+)
 from app.utils.process_liveness import pid_is_running
 from app.utils.subprocess_output import subprocess_output_text
 from app.utils.subprocess_platform import WINDOWS_CREATE_NO_WINDOW
@@ -286,16 +288,17 @@ def _query_process_command(pid: int) -> tuple[str, str | None]:
 
 
 def _command_matches_backend_jar(command: str, jar: Path) -> bool:
-    """核对 Java 可执行文件及最后一个参数，避免路径子串或 JVM 属性误匹配。"""
+    """核对 Java 和完整启动参数，允许历史预览使用固定的独立端口参数。"""
 
     normalized_command = _normalize_process_identity(command)
     launcher, separator, argument = normalized_command.rpartition(" -jar ")
     executable = launcher.partition(" -D" if os.name != "nt" else " -d")[0].strip('"')
     expected = _normalize_process_identity(str(jar))
+    isolated_args = _normalize_process_identity(" ".join(ISOLATED_PREVIEW_SERVER_ARGS))
     return (
         bool(separator)
         and executable.rsplit("/", 1)[-1] in {"java", "java.exe"}
-        and argument in {expected, f'"{expected}"'}
+        and argument in {expected, f'"{expected}"', f"{expected} {isolated_args}", f'"{expected}" {isolated_args}'}
     )
 
 

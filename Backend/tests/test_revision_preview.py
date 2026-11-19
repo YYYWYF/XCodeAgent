@@ -10,10 +10,12 @@ import asyncio
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from app.protocols.revision_preview import build_revision_preview_ag_ui_stream
 from app.services.backend_project_launcher import _detect_backend_port
@@ -30,6 +32,8 @@ from app.services.revision_preview import (
     stop_revision_preview,
     stop_workspace_revision_previews,
 )
+from app.services.workspace_process_registry import workspace_process_registry
+from app.utils.process_liveness import pid_is_running
 from tests.frontend_node_fixture import stub_frontend_node
 
 
@@ -37,26 +41,37 @@ class RevisionPreviewTests(unittest.TestCase):
     """验证物化出的是该版本当时的树，且不碰工作区。"""
 
     def test_workspace_cleanup_finds_worktrees_and_orphaned_runtime(self) -> None:
-        """退出同时识别现存 worktree 和只剩进程登记的分支，范围限于所属工作区。"""
+        """工作区清扫删除现存 worktree、进程登记和仅剩日志的历史目录。"""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             first = revision_preview_dir(root, "feature/one")
             second = revision_preview_dir(root, "feature/two")
             orphan = revision_preview_dir(root, "orphan")
+            log_only = revision_preview_dir(root, "log-only")
             runtime = first.parent.parent
-            for path in (first, second, runtime / revision_preview_runtime_subdir("orphan"), runtime / "launch"):
+            orphan_runtime = runtime / revision_preview_runtime_subdir("orphan")
+            log_only_runtime = runtime / revision_preview_runtime_subdir("log-only")
+            normal_runtime = runtime / "launch"
+            for path in (first, second, orphan_runtime, log_only_runtime, normal_runtime):
                 path.mkdir(parents=True, exist_ok=True)
+            (orphan_runtime / "frontend.pid").write_text("99999", encoding="utf-8")
+            for path in (log_only_runtime, normal_runtime):
+                (path / "frontend.stdout.log").write_text("preview log", encoding="utf-8")
             with (
                 patch("app.services.revision_preview.stop_frontend_project", return_value={"status": "stopped"}) as frontend,
                 patch("app.services.revision_preview.stop_workspace_backend_project", return_value={"status": "stopped"}) as backend,
-                patch("app.services.revision_preview._remove_worktree") as remove,
+                patch("app.services.revision_preview._remove_worktree", side_effect=lambda _root, path: path.rmdir()) as remove,
             ):
                 stop_workspace_revision_previews(root)
             self.assertEqual({call.kwargs["runtime_subdir"] for call in frontend.call_args_list}, {
-                revision_preview_runtime_subdir(branch) for branch in ("feature/one", "feature/two", "orphan")
+                revision_preview_runtime_subdir(branch) for branch in ("feature/one", "feature/two", "orphan", "log-only")
             })
-            self.assertEqual({call.args for call in backend.call_args_list}, {(first,), (second,), (orphan,)})
+            self.assertEqual({call.args for call in backend.call_args_list}, {(first,), (second,), (orphan,), (log_only,)})
             self.assertEqual({call.args for call in remove.call_args_list}, {(root, first), (root, second)})
+            self.assertFalse(first.parent.exists())
+            self.assertFalse(orphan_runtime.exists())
+            self.assertFalse(log_only_runtime.exists())
+            self.assertTrue((normal_runtime / "frontend.stdout.log").is_file())
 
     def test_materializes_the_revision_tree(self) -> None:
         """物化目录里的内容必须是该 tag 当时的版本，而不是工作区当前内容。"""
@@ -148,15 +163,125 @@ class RevisionPreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = self._init_repository(Path(workspace))
             self._git(root, "tag", "v1.0")
-            materialized = materialize_revision(root, "v1.0")
+            with patch("app.services.revision_preview._start_revision_preview", side_effect=self._checkout_preview):
+                outcome = start_revision_preview(root, "v1.0", preview_id="first")
+            materialized = Path(outcome["materialized_path"])
             self.assertTrue(materialized.is_dir())
+            runtime = materialized.parent.parent / revision_preview_runtime_subdir("v1.0")
+            (runtime / "frontend.stdout.log").write_text("preview log", encoding="utf-8")
 
-            stop_revision_preview(root, "v1.0")
+            stop_revision_preview(root, "v1.0", preview_id="first")
 
             self.assertFalse(materialized.exists(), "物化目录应被摘除")
             # worktree 注册项也要清掉，否则会一直堆在 git 的元数据里。
             listed = self._git(root, "worktree", "list")
             self.assertNotIn("revision-preview", listed)
+            self.assertFalse(materialized.parent.exists())
+            self.assertFalse(runtime.exists())
+
+    @staticmethod
+    def _checkout_preview(root: Path, revision: str, _report: object) -> dict[str, str]:
+        """使用实际 Git 检出替代服务启动，验证 worktree 是否正确回收。"""
+
+        return {"materialized_path": str(materialize_revision(root, revision))}
+
+    def test_switch_replaces_checkout_and_stale_same_branch_stop_is_ignored(self) -> None:
+        """连续 A→B→C→A 永远只有一个 worktree，最早的 A 不能停止最后的 A。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            for branch in ("one", "two", "three"):
+                self._git(root, "branch", branch)
+            head = self._git(root, "rev-parse", "HEAD")
+            local_edit = root / "local-edit.txt"
+            local_edit.write_text("working", encoding="utf-8")
+            unrelated = root / "another-worktree"
+            self._git(root, "worktree", "add", "--detach", str(unrelated), "HEAD")
+            # 旧实现可能留下多个已注册的历史目录。首次启动也应回收这些残留。
+            materialize_revision(root, "two")
+            materialize_revision(root, "three")
+            with patch("app.services.revision_preview._start_revision_preview", side_effect=self._checkout_preview):
+                for index, branch in enumerate(("one", "two", "three", "one")):
+                    target = revision_preview_dir(root, branch)
+                    start_revision_preview(root, branch, preview_id=str(index))
+                    self.assertEqual(list(target.parent.iterdir()), [target])
+                    self.assertEqual(self._git(root, "worktree", "list").count("revision-preview"), 1)
+                    self.assertEqual(
+                        list(target.parent.parent.glob("launch-revision-*")),
+                        [target.parent.parent / revision_preview_runtime_subdir(branch)],
+                    )
+                stop_revision_preview(root, "one", preview_id="0")
+                self.assertTrue(target.is_dir())
+                self.assertTrue((target.parent.parent / revision_preview_runtime_subdir("one")).is_dir())
+                stop_revision_preview(root, "one", preview_id="3")
+            self.assertFalse(target.parent.exists())
+            self.assertEqual(list(target.parent.parent.glob("launch-revision-*")), [])
+            self.assertTrue((unrelated / ".git").is_file())
+            self.assertEqual(self._git(root, "rev-parse", "HEAD"), head)
+            self.assertEqual(local_edit.read_text(encoding="utf-8"), "working")
+
+    def test_locked_preview_blocks_replacement(self) -> None:
+        """Git 拒绝移除锁定目录时保留原登记，并拒绝检出另一分支。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            self._git(root, "branch", "one")
+            self._git(root, "branch", "two")
+            with patch("app.services.revision_preview._start_revision_preview", side_effect=self._checkout_preview):
+                start_revision_preview(root, "one", preview_id="first")
+                target = revision_preview_dir(root, "one")
+                self._git(root, "worktree", "lock", str(target))
+                with self.assertRaisesRegex(RevisionPreviewError, "无法清理历史分支 worktree"):
+                    start_revision_preview(root, "two", preview_id="second")
+            self.assertTrue(target.is_dir())
+            self.assertFalse(revision_preview_dir(root, "two").exists())
+
+    def test_stop_cancels_install_process_and_removes_checkout(self) -> None:
+        """退出时终止真实的受控安装子进程，并等待 Git worktree 清理。"""
+
+        stub_frontend_node(self, "app.services.revision_preview")
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self._init_repository(Path(workspace))
+            self._git(root, "branch", "one")
+            marker = root / "install-pid.txt"
+            target = revision_preview_dir(root, "one")
+            preview_id = str(uuid4())
+
+            def install_and_launch(*_args: object, **_kwargs: object) -> dict[str, str]:
+                """用长时间运行的命令模拟包管理器，沿真实运行身份登记子进程。"""
+
+                workspace_process_registry.run(
+                    [sys.executable, "-c", "import os, pathlib, sys, time\n"
+                     "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\ntime.sleep(120)", str(marker)],
+                    workspace=root, cwd=target, timeout=125,
+                )
+                self.fail("安装命令应被取消")
+
+            async def exercise() -> None:
+                """用两个完整 AG-UI 请求启动并停止同一轮预览。"""
+
+                start = asyncio.create_task(_request_preview(root, "start", "one", preview_id))
+                try:
+                    async with asyncio.timeout(8):
+                        while not marker.exists() or not marker.stat().st_size:
+                            if start.done():
+                                self.fail(f"未执行安装就结束：{start.result()}")
+                            await asyncio.sleep(0.02)
+                    pid = int(marker.read_text(encoding="utf-8"))
+                    self.assertTrue(pid_is_running(pid))
+                    stopped = await asyncio.wait_for(_request_preview(root, "stop", "one", preview_id), 10)
+                    self.assertEqual(stopped["previewStatus"], "stopped")
+                    self.assertEqual((await asyncio.wait_for(start, 10))["status"], "failed")
+                    self.assertFalse(pid_is_running(pid))
+                    self.assertFalse(target.parent.exists())
+                    self.assertNotIn("revision-preview", self._git(root, "worktree", "list"))
+                finally:
+                    if not start.done():
+                        await _request_preview(root, "stop", "one", preview_id)
+                        await start
+
+            with patch("app.services.revision_preview.launch_frontend_project", side_effect=install_and_launch):
+                asyncio.run(exercise())
 
     def test_runtime_subdir_is_isolated_per_revision(self) -> None:
         """每个版本有独立运行时目录，进程登记不会互相覆盖。"""
@@ -261,20 +386,26 @@ class RevisionPreviewLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             root = Path(workspace).resolve()
             target = revision_preview_dir(root, "release")
-            (target / "backend").mkdir(parents=True)
-            (target / "backend/pom.xml").touch()
-            (target / "frontend").mkdir()
             config = target / "frontend/rsbuild.config.ts"
             original = "export default { server: { proxy: { '/api': 'http://127.0.0.1:8080' } } };"
-            config.write_text(original, encoding="utf-8")
+
+            def checkout(_root: Path, _revision: str) -> Path:
+                """在启动清扫完成后创建本轮历史工程。"""
+
+                (target / "backend").mkdir(parents=True)
+                (target / "backend/pom.xml").touch()
+                (target / "frontend").mkdir()
+                config.write_text(original, encoding="utf-8")
+                return target
+
             with (
-                patch("app.services.revision_preview.materialize_revision", return_value=target),
+                patch("app.services.revision_preview.materialize_revision", side_effect=checkout),
                 patch("app.services.revision_preview._await_revision_preview_url", return_value="http://localhost:3001"),
                 patch("app.services.revision_preview.launch_backend_project", return_value={"status": "running", "server": {"port": 49152}}) as backend,
                 patch("app.services.revision_preview.launch_frontend_project", return_value={"status": "running"}) as frontend,
                 patch("app.services.revision_preview.stop_workspace_backend_project", return_value={"status": "stopped"}) as stop_backend,
             ):
-                result = start_revision_preview(root, "release")
+                result = start_revision_preview(root, "release", preview_id="first")
                 self.assertEqual(result["preview_url"], "http://localhost:3001")
                 self.assertEqual(backend.call_args.args, (target,))
                 self.assertEqual(backend.call_args.kwargs["preview_application_workspace"], root)
@@ -286,8 +417,9 @@ class RevisionPreviewLaunchTests(unittest.TestCase):
                 frontend.return_value = {"status": "failed", "message": "前端启动失败"}
                 stop_backend.reset_mock()
                 with self.assertRaisesRegex(RevisionPreviewError, "前端启动失败"):
-                    start_revision_preview(root, "release")
+                    start_revision_preview(root, "release", preview_id="second")
                 self.assertEqual([call.args for call in stop_backend.call_args_list], [(target,), (target,)])
+                self.assertFalse(target.parent.exists())
 
     def test_reads_dynamic_java_port_after_zero_port_initialization(self) -> None:
         """Spring Boot 初始化时记录端口零，Tomcat 就绪后才输出所分配的端口。"""
@@ -318,12 +450,12 @@ class RevisionPreviewLaunchTests(unittest.TestCase):
                 patch("app.services.revision_preview.launch_frontend_project", return_value={"status": "running"}) as launch,
                 patch("app.services.revision_preview._link_reused_dependencies", return_value=True) as link,
             ):
-                self.assertFalse(start_revision_preview(root, "release")["reused_dependencies"])
+                self.assertFalse(start_revision_preview(root, "release", preview_id="first")["reused_dependencies"])
                 link.assert_not_called()
                 self.assertFalse(launch.call_args.kwargs["skip_install"])
                 self.assertEqual(launch.call_args.kwargs["install_timeout_seconds"], 600)
                 record_frontend_dependencies(root / ".devagentstudio/runtime/launch", frontend, node)
-                self.assertTrue(start_revision_preview(root, "release")["reused_dependencies"])
+                self.assertTrue(start_revision_preview(root, "release", preview_id="second")["reused_dependencies"])
                 link.assert_called_once_with(root, revision)
                 self.assertIs(launch.call_args.kwargs["node_runtime"], node)
 
@@ -439,32 +571,24 @@ class RevisionPreviewProtocolTests(unittest.TestCase):
     ) -> dict:
         """跑完整条 AG-UI 流，取最后一个 revision-preview 自定义事件。"""
 
-        stream = build_revision_preview_ag_ui_stream(
-            payload={
-                "threadId": "t-1",
-                "runId": "r-1",
-                "forwardedProps": {
-                    "revisionPreview": {
-                        "action": action,
-                        "workspace": workspace,
-                        "revision": revision,
-                    }
-                },
-            },
-            accept="text/event-stream",
-        )
+        return asyncio.run(_request_preview(workspace, action, revision, str(uuid4())))
 
-        async def consume() -> list[dict]:
-            events: list[dict] = []
-            async for chunk in stream:
-                for line in chunk.splitlines():
-                    if not line.startswith("data: "):
-                        continue
-                    event = json.loads(line[len("data: ") :])
-                    if event.get("type") == "CUSTOM" and event.get("name") == "revision-preview":
-                        events.append(event["value"])
-            return events
 
-        events = asyncio.run(consume())
-        self.assertTrue(events, "没有收到 revision-preview 事件")
-        return events[-1]
+async def _request_preview(workspace: str | Path, action: str, revision: str, preview_id: str) -> dict:
+    """消费真实的历史预览 AG-UI 流并返回终态。"""
+
+    stream = build_revision_preview_ag_ui_stream(payload={
+        "threadId": str(uuid4()),
+        "forwardedProps": {"revisionPreview": {
+            "action": action, "workspace": str(workspace), "revision": revision, "previewId": preview_id,
+        }},
+    })
+    events: list[dict] = []
+    async for chunk in stream:
+        for line in chunk.splitlines():
+            if not line.startswith("data: "):
+                continue
+            event = json.loads(line[len("data: "):])
+            if event.get("type") == "CUSTOM" and event.get("name") == "revision-preview":
+                events.append(event["value"])
+    return events[-1]

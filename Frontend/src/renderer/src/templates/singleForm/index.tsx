@@ -81,7 +81,7 @@ const SingleForm: React.FC = () => {
     setEmployeeSearching(false)
   }
 
-  const handleEmployeeChange = (value: string, option?: EmployeeItem | EmployeeItem[]) => {
+  const handleEmployeeChange = (_value: string, option?: EmployeeItem | EmployeeItem[]) => {
     if (Array.isArray(option)) return
     setSelectedEmployee(option ?? null)
   }

@@ -15,6 +15,9 @@ export type RevisionPreviewResult = {
   materialized?: boolean
 }
 
+type PreviewIdentity = { workspace: string; revision: string; previewId: string }
+const pendingAdmissions = new Map<string, Promise<void>>()
+
 type RevisionPreviewAgUiPayload = {
   schemaVersion: 1
   runId: string
@@ -22,6 +25,7 @@ type RevisionPreviewAgUiPayload = {
   status: 'completed' | 'failed'
   action?: 'get' | 'start' | 'stop'
   revision?: string
+  previewId?: string
   /**
    * 预览服务的运行态。
    *
@@ -71,8 +75,9 @@ function readRevisionPreviewFromResult(value: unknown): RevisionPreviewAgUiPaylo
 
 /** 发送一次历史版本预览动作并统一收敛结果。 */
 async function runRevisionPreview(
-  input: { action: 'get' | 'start' | 'stop'; workspace: string; revision: string },
-  messageContent: string
+  input: PreviewIdentity & { action: 'start' | 'stop' },
+  messageContent: string,
+  onRegistered?: () => void
 ): Promise<RevisionPreviewAgUiPayload> {
   const threadId = randomUUID()
   const agent = createAgUiHttpAgent({ url: getRevisionPreviewUrl(), threadId })
@@ -83,6 +88,12 @@ async function runRevisionPreview(
   const subscriber: AgentSubscriber = {
     onCustomEvent: ({ event }) => {
       if (event.name === 'revision-preview') {
+        const progress = event.value as
+          | { previewId?: string; progress?: { stage?: string } }
+          | undefined
+        if (progress?.previewId === input.previewId && progress.progress?.stage === 'registered') {
+          onRegistered?.()
+        }
         revisionPreview = readRevisionPreviewPayload(event.value) ?? revisionPreview
       }
     },
@@ -104,27 +115,53 @@ async function runRevisionPreview(
  *
  * 首次可能要安装依赖（分钟级），调用方应展示加载态。
  */
-export async function startRevisionPreview(input: {
-  workspace: string
-  revision: string
-}): Promise<RevisionPreviewResult> {
-  const response = await runRevisionPreview(
-    { action: 'start', ...input },
-    `启动版本 ${input.revision} 的预览。`
-  )
-  return {
-    action: 'start',
-    status: response.previewStatus === 'idle' ? 'idle' : 'running',
-    revision: String(response.revision || input.revision),
-    previewUrl: String(response.preview_url || ''),
-    reusedDependencies: Boolean(response.reused_dependencies)
+export async function startRevisionPreview(
+  input: PreviewIdentity,
+  options: { isCurrent: () => boolean; onRegistered: () => void }
+): Promise<RevisionPreviewResult | undefined> {
+  const previous = pendingAdmissions.get(input.workspace)
+  let release!: () => void
+  const admission = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  pendingAdmissions.set(input.workspace, admission)
+  let registered = false
+
+  /** 收到登记帧即允许后续版本发起启动，无需等待当前版本安装完成。 */
+  const acknowledge = (): void => {
+    if (registered) return
+    registered = true
+    release()
+    options.onRegistered()
+  }
+
+  try {
+    await previous
+    if (!options.isCurrent()) return undefined
+    const response = await runRevisionPreview(
+      { action: 'start', ...input },
+      `启动版本 ${input.revision} 的预览。`,
+      acknowledge
+    )
+    acknowledge()
+    if (response.previewId !== input.previewId || !response.preview_url) {
+      throw new Error('历史预览没有返回本轮可用的地址。')
+    }
+    return {
+      action: 'start',
+      status: 'running',
+      revision: input.revision,
+      previewUrl: response.preview_url,
+      reusedDependencies: Boolean(response.reused_dependencies)
+    }
+  } finally {
+    release()
+    if (pendingAdmissions.get(input.workspace) === admission)
+      pendingAdmissions.delete(input.workspace)
   }
 }
 
-/** 停止该版本的前端服务并摘除物化目录。 */
-export async function stopRevisionPreview(input: {
-  workspace: string
-  revision: string
-}): Promise<void> {
+/** 停止指定轮次的服务并摘除物化目录。 */
+export async function stopRevisionPreview(input: PreviewIdentity): Promise<void> {
   await runRevisionPreview({ action: 'stop', ...input }, `停止版本 ${input.revision} 的预览。`)
 }

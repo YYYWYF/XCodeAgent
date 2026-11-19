@@ -322,7 +322,9 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
         release_start = Event()
         steps: list[str] = []
 
-        def start_revision(workspace: str, revision: str, *, report_progress: Any) -> None:
+        def start_revision(
+            workspace: str, revision: str, *, preview_id: str, process_run_id: str, report_progress: Any,
+        ) -> None:
             """模拟无法立即中断的 Java 构建，结束后先检查退出信号。"""
             started.set()
             try:
@@ -342,6 +344,7 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
             """通过实际 AG-UI 流提交历史启动。"""
             payload = {"threadId": "revision", "forwardedProps": {"revisionPreview": {
                 "workspace": self.workspace, "action": "start", "revision": "history",
+                "previewId": "e02ddc8d-c467-4a25-a784-efc0371e1a1f",
             }}}
             async for _ in build_revision_preview_ag_ui_stream(payload=payload):
                 pass

@@ -885,6 +885,16 @@ class ProjectLauncherTests(unittest.TestCase):
         self.assertEqual(cleanup["source"], "pid_file")
         kill.assert_called_once_with(24680, backend_process_registry.signal.SIGTERM)
 
+    def test_backend_process_identity_accepts_history_server_args(self) -> None:
+        """恢复历史预览时识别独立端口参数，仍校验确切的运行副本。"""
+
+        jar = Path("historical checkout") / "app.jar"
+        arguments = "--server.address=127.0.0.1 --server.port=0"
+        java = f'java -Dfile.encoding=UTF-8 -jar "{jar}"'
+        self.assertTrue(backend_process_registry._command_matches_backend_jar(f"{java} {arguments}", jar))
+        self.assertFalse(backend_process_registry._command_matches_backend_jar(f"{java} {arguments} extra", jar))
+        self.assertFalse(backend_process_registry._command_matches_backend_jar(f"{java} {arguments}", jar.with_name("other.jar")))
+
     def test_invalid_and_stale_pid_files_are_handled_deterministically(self) -> None:
         """验证损坏 PID 会阻止构建，而已退出 PID 会作为陈旧记录清理。"""
 

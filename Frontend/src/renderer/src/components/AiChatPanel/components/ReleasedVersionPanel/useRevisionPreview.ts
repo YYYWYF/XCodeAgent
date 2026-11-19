@@ -1,4 +1,6 @@
-import { useContext, useEffect, useRef, useState } from 'react'
+import { randomUUID } from '@ag-ui/client'
+import { message } from 'antd'
+import { useContext, useEffect, useState } from 'react'
 import { UiReadVisibility } from '../../../../hooks/uiReadVisibility'
 import { waitForPreviewRuntimeLeave } from '../../../../service/previewRuntime'
 import { startRevisionPreview, stopRevisionPreview } from '../../../../service/revisionPreview'
@@ -7,23 +9,8 @@ type Params = {
   workspaceRoot: string
   /** 要预览的 Git 分支名，未指定时使用工作区预览。 */
   revision?: string
-  /**
-   * 是否要发起启动。
-   *
-   * 只在「应用预览」tab 激活时为 true —— 这是懒启动的落点：在「应用文件」上翻文件
-   * 不该白白拉起一个 dev server。
-   *
-   * 它只决定"要不要**开始**"，不决定"要不要停"：在应用文件与预览之间来回切不该反复
-   * 重建 dev server（一次物化 + 起服务是几十秒级的）。
-   */
+  /** 只有「应用预览」标签页处于激活状态时才保有历史预览。 */
   enabled: boolean
-}
-
-type PreviewTarget = {
-  workspace: string
-  revision: string
-  /** 工作区 + 版本；用来判断"还是同一个目标吗"。 */
-  key: string
 }
 
 export type RevisionPreviewState = {
@@ -76,117 +63,74 @@ export function shouldRunRevisionPreview(input: {
 }
 
 /**
- * 按需保证某个历史版本的预览服务处于运行态，返回它的地址。
- *
- * 预览后端负责检出代码和启停该分支的服务，这里只负责在正确的时机发起
- * 请求：进入预览 tab 时启动，切换版本、切换工作区或面板卸载时停止。
- *
- * 复杂度几乎都来自 React 18 的 StrictMode：开发模式下挂载时的 effect 会跑两遍
- * （effect → cleanup → effect），于是第一次启动必然"作废"，而它拉起的正是第二次想要的
- * 那个服务。因此这里所有收尾判断都不看"某次调用是否作废"，只看**目标是否还是当前目标**
- * （`runningRef`），并在停止上做一拍延迟，让同目标的重新启动有机会把它撤销掉。
+ * 每次进入历史预览申请新轮次，退出时只停止该轮次，并丢弃迟到的结果。
  */
 export function useRevisionPreview({
   workspaceRoot,
   revision,
   enabled
 }: Params): RevisionPreviewState {
-  const [url, setUrl] = useState('')
-  const [reusedDependencies, setReusedDependencies] = useState(false)
-  const [error, setError] = useState('')
+  const [view, setView] = useState<Omit<RevisionPreviewState, 'retry'> & { key: string }>()
   const [retryNonce, setRetryNonce] = useState(0)
   const visible = useContext(UiReadVisibility)
-
-  // 已经（或正在）为其拉起服务的目标。空表示当前没有该由本 hook 负责的服务。
-  const runningRef = useRef<PreviewTarget | undefined>(undefined)
-  // 卸载时排下的停止，见 unmount effect 里的说明。
-  const pendingStopRef = useRef<{ key: string; timer: number } | undefined>(undefined)
-
-  const active = shouldRunRevisionPreview({ enabled, revision, workspaceRoot })
-  const targetKey = `${workspaceRoot}\n${String(revision || '')}`
+  const active = visible && shouldRunRevisionPreview({ enabled, revision, workspaceRoot })
+  const targetKey = JSON.stringify([workspaceRoot, revision, retryNonce])
 
   useEffect(() => {
-    // 撤销"同一个目标"被排下的停止。挂载时的清理（StrictMode 会跑一遍）也会排下停止，
-    // 若不撤销，它就会把这里刚拉起的服务杀掉。
-    if (pendingStopRef.current?.key === targetKey) {
-      window.clearTimeout(pendingStopRef.current.timer)
-      pendingStopRef.current = undefined
+    setView(undefined)
+    if (!active || !revision) return
+
+    const target = { workspace: workspaceRoot, revision, previewId: randomUUID() }
+    let current = true
+    let registered = false
+
+    /** 停止已登记的轮次，向用户报告实际的清理错误。 */
+    const stop = (): void => {
+      void stopRevisionPreview(target).catch((cause) => {
+        void message.error(cause instanceof Error ? cause.message : '历史预览清理失败。')
+      })
     }
 
-    // 欢迎页隐藏工作台但保留组件。退出动作负责停机，这里立即丢弃旧地址和迟到回执。
-    if (!visible) {
-      runningRef.current = undefined
-      setUrl('')
-      setError('')
-      setReusedDependencies(false)
-      return
+    /** 等后端登记后才允许停止，防止关闭动作先于启动请求到达。 */
+    const onRegistered = (): void => {
+      registered = true
+      if (!current) stop()
     }
-
-    // 目标换了（版本或工作区）：上一个目标的服务已无归属，收掉，并清掉它的地址与错误 ——
-    // 留着会先渲染出上一个版本的页面或错误，再被下面的启动覆盖。
-    const previous = runningRef.current
-    if (previous && previous.key !== targetKey) {
-      runningRef.current = undefined
-      setUrl('')
-      setError('')
-      setReusedDependencies(false)
-      void stopRevisionPreview(previous).catch(() => undefined)
-    }
-
-    // 懒启动：没进过预览 tab 就不开始；已经为该目标启动过也不重复启动。
-    if (!active || runningRef.current?.key === targetKey) return
-
-    const target: PreviewTarget = {
-      workspace: workspaceRoot,
-      revision: String(revision || ''),
-      key: targetKey
-    }
-    runningRef.current = target
-    setError('')
-    setUrl('')
-    setReusedDependencies(false)
 
     void waitForPreviewRuntimeLeave(target.workspace)
-      .then(() => (runningRef.current === target ? startRevisionPreview(target) : undefined))
+      .then(() => startRevisionPreview(target, { isCurrent: () => current, onRegistered }))
       .then((result) => {
-        // 切到代码标签页不释放该目标，Java 构建期间切回预览仍可收到这一轮地址。
-        if (!result || runningRef.current !== target) return
-        setUrl(result.previewUrl)
-        setReusedDependencies(Boolean(result.reusedDependencies))
+        if (result && current) {
+          setView({
+            key: targetKey,
+            url: result.previewUrl,
+            reusedDependencies: Boolean(result.reusedDependencies),
+            error: ''
+          })
+        }
       })
       .catch((cause) => {
-        if (runningRef.current !== target) return
-        // 启动失败就不再算"在跑"，否则点重试会被"已在跑"的守卫挡掉。
-        runningRef.current = undefined
-        setError(cause instanceof Error ? cause.message : '历史版本预览启动失败')
+        if (current) {
+          setView({
+            key: targetKey,
+            url: '',
+            reusedDependencies: false,
+            error: cause instanceof Error ? cause.message : '历史版本预览启动失败'
+          })
+        }
       })
-  }, [active, targetKey, workspaceRoot, revision, retryNonce, visible])
 
-  // 只有面板卸载时才收掉当前目标。切标签页仍保留同一次服务启动。
-  useEffect(() => {
     return () => {
-      const target = runningRef.current
-      runningRef.current = undefined
-      if (!target) return
-      // 延后一拍再停：StrictMode 的双挂载会紧接着重跑上面那个 effect，把同一目标要回来，
-      // 那时它会撤销这次停止。真正卸载时，后端会把停止和同一分支的启动串行执行。
-      const entry = { key: target.key, timer: 0 }
-      entry.timer = window.setTimeout(() => {
-        if (pendingStopRef.current === entry) pendingStopRef.current = undefined
-        void stopRevisionPreview(target).catch(() => undefined)
-      }, 0)
-      pendingStopRef.current = entry
+      current = false
+      if (registered) stop()
     }
-  }, [])
+  }, [active, targetKey, workspaceRoot, revision])
 
+  const currentView = active && view?.key === targetKey ? view : undefined
   return {
-    url: visible ? url : '',
-    reusedDependencies: visible && reusedDependencies,
-    error: visible ? error : '',
-    // 先摘掉"在跑"的标记再触发重跑：否则上面那条"已为该目标启动过"的守卫会直接跳过。
-    retry: () => {
-      runningRef.current = undefined
-      setRetryNonce((nonce) => nonce + 1)
-    }
+    url: currentView?.url ?? '',
+    reusedDependencies: currentView?.reusedDependencies ?? false,
+    error: currentView?.error ?? '',
+    retry: () => setRetryNonce((nonce) => nonce + 1)
   }
 }

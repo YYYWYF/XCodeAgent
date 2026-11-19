@@ -12,6 +12,7 @@ from uuid import uuid4
 
 BACKEND_JAR_DIRECTORY = "backend-jar"
 BACKEND_PROCESS_FILENAME = "backend-process.json"
+ISOLATED_PREVIEW_SERVER_ARGS = ("--server.address=127.0.0.1", "--server.port=0")
 
 
 @dataclass(frozen=True)

@@ -268,21 +268,26 @@ test('工作台隐藏后重新打开同一历史预览，先显示启动状态�
   const revision = 'sbw_1'
   const originalFetch = globalThis.fetch
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  const requests: { action: string; respond: (url?: string) => void }[] = []
+  const requests: {
+    action: string
+    previewId?: string
+    register: () => void
+    respond: (url?: string) => void
+  }[] = []
   let renderer: ReactTestRenderer | undefined
 
   /** 让真实 Hook 和展示策略在保留挂载的工作台中响应可见性变化。 */
-  function PreviewProbe(): JSX.Element {
-    const preview = useRevisionPreview({ workspaceRoot, revision, enabled: true })
+  function PreviewProbe({ enabled }: { enabled: boolean }): JSX.Element {
+    const preview = useRevisionPreview({ workspaceRoot, revision, enabled })
     const presentation = revisionPreviewPresentation({ revision, ...preview })
     return <span>{presentation.kind === 'revision' ? presentation.url : presentation.kind}</span>
   }
 
   /** 用真实工作台上下文更新可见性，保持历史预览组件挂载。 */
-  function workbench(visible: boolean): JSX.Element {
+  function workbench(visible: boolean, enabled = true): JSX.Element {
     return (
       <UiReadVisibility.Provider value={visible}>
-        <PreviewProbe />
+        <PreviewProbe enabled={enabled} />
       </UiReadVisibility.Provider>
     )
   }
@@ -296,29 +301,44 @@ test('工作台隐藏后重新打开同一历史预览，先显示启动状态�
     const isRevision = Boolean(request.forwardedProps.revisionPreview)
     const key = isRevision ? 'revisionPreview' : 'previewRuntime'
     const name = isRevision ? 'revision-preview' : 'preview-runtime'
-    const action = request.forwardedProps[key].action
-    return new Promise<Response>((resolve) => {
-      requests.push({
-        action,
-        respond: (url) => {
-          const { threadId, runId } = request
-          const frames = [
-            { type: 'RUN_STARTED', threadId, runId },
-            {
+    const { action, previewId } = request.forwardedProps[key]
+    const { threadId, runId } = request
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        /** 通过同一 SSE 流单独驱动登记帧和终态帧。 */
+        const send = (frame: unknown): void => {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(frame)}\n\n`))
+        }
+        send({ type: 'RUN_STARTED', threadId, runId })
+        requests.push({
+          action,
+          previewId,
+          register: () =>
+            send({
               type: 'CUSTOM',
               name,
-              value: { schemaVersion: 1, threadId, runId, status: 'completed', preview_url: url }
-            },
-            { type: 'RUN_FINISHED', threadId, runId }
-          ]
-          resolve(
-            new Response(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(''), {
-              headers: { 'content-type': 'text/event-stream' }
+              value: { previewId, status: 'in_progress', progress: { stage: 'registered' } }
+            }),
+          respond: (url) => {
+            send({
+              type: 'CUSTOM',
+              name,
+              value: {
+                schemaVersion: 1,
+                threadId,
+                runId,
+                previewId,
+                status: 'completed',
+                preview_url: url
+              }
             })
-          )
-        }
-      })
+            send({ type: 'RUN_FINISHED', threadId, runId })
+            controller.close()
+          }
+        })
+      }
     })
+    return new Response(stream, { headers: { 'content-type': 'text/event-stream' } })
   }
 
   try {
@@ -344,23 +364,58 @@ test('工作台隐藏后重新打开同一历史预览，先显示启动状态�
     })
     assert.deepEqual(
       requests.map(({ action }) => action),
-      ['start', 'leave']
+      ['start', 'leave', 'stop']
     )
+    assert.equal(requests[2].previewId, requests[0].previewId)
     assert.equal(renderer!.root.findByType('span').children[0], 'loading')
 
     await act(async () => {
       requests[1].respond()
+      requests[2].respond()
       await leaving
     })
     assert.deepEqual(
       requests.map(({ action }) => action),
-      ['start', 'leave', 'start']
+      ['start', 'leave', 'stop', 'start']
     )
     assert.equal(renderer!.root.findByType('span').children[0], 'loading')
+
+    // 安装还在进行时切到代码页，收到登记后应立即关闭旧轮次并允许重新启动。
     await act(async () => {
-      requests[2].respond('http://127.0.0.1:3001')
+      renderer!.update(workbench(true, false))
+    })
+    await act(async () => {
+      renderer!.update(workbench(true))
+    })
+    assert.equal(requests.length, 4)
+    await act(async () => {
+      requests[3].register()
+    })
+    assert.deepEqual(
+      requests.slice(4).map(({ action }) => action),
+      ['stop', 'start']
+    )
+    assert.equal(requests[4].previewId, requests[3].previewId)
+    assert.notEqual(requests[5].previewId, requests[3].previewId)
+    await act(async () => {
+      requests[3].respond('http://127.0.0.1:3999')
+      requests[4].respond()
+    })
+    assert.equal(renderer!.root.findByType('span').children[0], 'loading')
+    await act(async () => {
+      requests[5].respond('http://127.0.0.1:3001')
     })
     assert.equal(renderer!.root.findByType('span').children[0], 'http://127.0.0.1:3001')
+    // 返回当前开发分支会卸载历史面板，仍须关闭本轮，而非之前的同名分支。
+    await act(async () => {
+      renderer!.unmount()
+    })
+    renderer = undefined
+    assert.equal(requests[6].action, 'stop')
+    assert.equal(requests[6].previewId, requests[5].previewId)
+    await act(async () => {
+      requests[6].respond()
+    })
   } finally {
     if (renderer) {
       await act(async () => {
@@ -369,6 +424,7 @@ test('工作台隐藏后重新打开同一历史预览，先显示启动状态�
       await act(async () => {
         renderer!.unmount()
       })
+      requests.at(-1)?.respond()
     }
     globalThis.fetch = originalFetch
     if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow)

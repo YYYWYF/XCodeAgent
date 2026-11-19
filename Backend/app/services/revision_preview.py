@@ -6,6 +6,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -29,8 +30,10 @@ from app.services.frontend_project_launcher import (
     stop_frontend_project,
 )
 from app.services.frontend_node_runtime import (
-    FrontendNodeError, frontend_operation_lock, has_matching_frontend_dependencies, resolve_frontend_node,
+    FrontendNodeError, frontend_operation_lock, has_matching_frontend_dependencies,
+    read_node_record, resolve_frontend_node, write_node_record,
 )
+from app.services.run_workers import bind_run_workers
 from app.services.version_control import _run_git
 
 ProgressCallback = Callable[[str, str, int], None]
@@ -39,6 +42,7 @@ ProgressCallback = Callable[[str, str, int], None]
 # 不会污染 `git status`，且随工作区一起被清理。
 REVISION_PREVIEW_ROOT = ".devagentstudio/runtime/revision-preview"
 REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX = "launch-revision-"
+_PREVIEW_OWNER_FILENAME = "preview-owner.json"
 
 # 等该分支的 dev server 真正就绪的上限。比常规预览宽松：历史分支的首次启动要现编译
 # 该分支的树，比"服务已经在跑"的常规场景慢。
@@ -93,29 +97,13 @@ def materialize_revision(workspace_root: str | Path, revision: str) -> Path:
     if target.is_dir() and _worktree_commit(target) == expected_commit:
         return target
 
-    # 目录存在但指向别的 commit（或不是合法 worktree）：先摘掉再重建。
-    target_was_missing = not target.exists()
-    if not target_was_missing:
+    # 目录缺失时仍可能有 Git 登记，只处理当前预览路径。
+    if target.exists() or target.name in _registered_preview_worktrees(root):
         _remove_worktree(root, target)
-    else:
-        # 应用或系统在 worktree remove 完成前退出时，目录可能已经消失，但 Git 仍保留
-        # 一条 prunable 注册。此时 worktree add 会报 missing but already registered；先让
-        # Git 只清理它已确认失效的注册，再创建本轮物化目录。
-        pruned = _run_git(root, ["worktree", "prune", "--expire", "now"])
-        if pruned.returncode != 0:
-            detail = pruned.stderr.strip() or pruned.stdout.strip() or "未知错误"
-            raise RevisionPreviewError(f"无法清理失效的分支预览工作区：{detail}")
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    add_arguments = ["worktree", "add"]
-    if target_was_missing:
-        # prune 在文件权限受限或 Git 认为记录尚未过期时可能无法删掉注册，而且部分 Git
-        # 分支即使清理失败也返回 0。这里只在目标物理目录明确不存在时加一次 force；它能
-        # 覆盖普通 missing registration，但仍不会覆盖 locked worktree（后者需要两次 force）。
-        add_arguments.append("--force")
-    add_arguments.extend(["--detach", str(target), expected_commit])
     completed = _run_git(
-        root, add_arguments, timeout=120
+        root, ["worktree", "add", "--detach", str(target), expected_commit], timeout=120,
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "未知错误"
@@ -141,16 +129,45 @@ def _worktree_commit(directory: Path) -> str:
 
 
 def _remove_worktree(root: Path, target: Path) -> None:
-    """摘除物化目录；失败时退回直接删除并 prune，避免残留注册项。"""
+    """移除指定 Git worktree，只有本应用登记的未注册目录才允许单独删除。"""
 
-    _unlink_reused_dependencies(target)
+    if not target.is_dir() and target.name not in _registered_preview_worktrees(root):
+        return
     completed = _run_git(root, ["worktree", "remove", "--force", str(target)], timeout=60)
-    if completed.returncode != 0 and target.exists():
-        shutil.rmtree(target, ignore_errors=True)
-    # 无论上面成败都 prune 一次：崩溃或强删都可能留下注册项。
-    _run_git(root, ["worktree", "prune"])
-    if target.exists():
-        raise RevisionPreviewError(f"无法清理历史分支 worktree：{target}")
+    if completed.returncode == 0:
+        return
+    if target.is_dir() and target.name not in _registered_preview_worktrees(root):
+        if read_node_record(_preview_owner_path(root, target)):
+            shutil.rmtree(target)
+            return
+    detail = completed.stderr.strip() or completed.stdout.strip() or "未知错误"
+    raise RevisionPreviewError(f"无法清理历史分支 worktree：{target}。{detail}")
+
+
+def _registered_preview_worktrees(root: Path) -> set[str]:
+    """查找当前工作区登记的历史 worktree，包括目录已丢失的登记。"""
+
+    if not (root / ".git").exists():
+        return set()
+    result = _run_git(root, ["worktree", "list", "--porcelain", "-z"])
+    if result.returncode != 0:
+        raise RevisionPreviewError(f"无法读取历史预览的 Git worktree 登记：{result.stderr.strip()}")
+    parent = os.path.normcase(str(root / REVISION_PREVIEW_ROOT))
+    worktrees: set[str] = set()
+    for field in result.stdout.split("\0"):
+        if field.startswith("worktree "):
+            path = Path(field.removeprefix("worktree "))
+            if os.path.normcase(str(path.parent)) == parent and _REVISION_RUNTIME_SLUG.fullmatch(path.name):
+                worktrees.add(path.name)
+    return worktrees
+
+
+def _preview_owner_path(root: Path, target: Path) -> Path:
+    """定位与前端 PID 同目录的轮次登记，使 Backend 重启后仍可校验停止请求。"""
+
+    return root / WORKSPACE_ARTIFACT_DIR / "runtime" / (
+        f"{REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX}{target.name}"
+    ) / _PREVIEW_OWNER_FILENAME
 
 
 def _unlink_reused_dependencies(target: Path) -> None:
@@ -203,21 +220,32 @@ def start_revision_preview(
     workspace_root: str | Path,
     revision: str,
     *,
+    preview_id: str,
+    process_run_id: str = "",
     report_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """串行准备该分支的 worktree 与双端进程，部分启动失败时回收已启动进程。"""
+    """先清空同工作区的历史预览，再启动新轮次，失败时回收本轮目录和进程。"""
 
     root = Path(workspace_root).expanduser().resolve()
     revision = str(revision or "").strip()
     revision_dir = revision_preview_dir(root, revision)
-    with backend_launch_lock(revision_dir):
-        _stop_revision_services(root, revision_dir)
+    with backend_launch_lock(revision_dir.parent):
+        if report_progress is not None:
+            report_progress("cleanup", "正在清理上一次历史预览…", 10)
+        stop_workspace_revision_previews(root)
         try:
-            return _start_revision_preview(root, revision, report_progress)
+            owner = _preview_owner_path(root, revision_dir)
+            if owner.parent.is_symlink():
+                raise RevisionPreviewError(f"历史预览进程登记目录不能是符号链接：{owner.parent}")
+            write_node_record(owner, {"previewId": preview_id})
+            with bind_run_workers(process_run_id, str(root)):
+                result = _start_revision_preview(root, revision, report_progress)
+            return {**result, "previewId": preview_id}
         except Exception as exc:
             try:
-                _stop_revision_services(root, revision_dir)
-            except RevisionPreviewError as cleanup_error:
+                _stop_revision_directory(root, revision_dir)
+                _remove_preview_parent_if_empty(revision_dir.parent)
+            except (RevisionPreviewError, OSError) as cleanup_error:
                 raise RevisionPreviewError(f"{exc}；回收失败：{cleanup_error}") from exc
             raise
 
@@ -244,8 +272,9 @@ def _start_revision_preview(
         port = (backend.get("server") or {}).get("port")
         if backend.get("status") != "running" or type(port) is not int or not 0 < port <= 65535:
             message = backend.get("message") or "没有获取到 Java 后端端口。"
-            logs = revision_dir / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
-            raise RevisionPreviewError(f"分支 {revision} 的 Java 后端启动失败：{message} 日志目录：{logs}")
+            diagnostics = backend.get("diagnostics") or []
+            excerpt = str(diagnostics[0].get("excerpt") or "")[-400:] if diagnostics else ""
+            raise RevisionPreviewError(f"分支 {revision} 的 Java 后端启动失败：{message} {excerpt}".rstrip())
         server_config = _revision_frontend_config(revision_dir / "frontend", port)
 
     with frontend_operation_lock(root):
@@ -398,17 +427,19 @@ def _launch_failure_detail(runtime_root: Path) -> str:
     return ""
 
 
-def stop_revision_preview(workspace_root: str | Path, revision: str) -> dict[str, Any]:
-    """停止该分支的前后端，确认两端都退出后摘除物化目录。"""
+def stop_revision_preview(workspace_root: str | Path, revision: str, *, preview_id: str) -> dict[str, Any]:
+    """停止与轮次登记匹配的历史预览，忽略已经被替换的停止请求。"""
 
     root = Path(workspace_root).expanduser().resolve()
     revision = str(revision or "").strip()
-    if not revision:
-        return {"status": "stopped", "revision": revision}
-
     target = revision_preview_dir(root, revision)
-    _stop_revision_directory(root, target)
-    return {"status": "stopped", "revision": revision, "removed_path": str(target)}
+    result = {"status": "stopped", "revision": revision, "previewId": preview_id}
+    with backend_launch_lock(target.parent):
+        if read_node_record(_preview_owner_path(root, target)).get("previewId") == preview_id:
+            _stop_revision_directory(root, target)
+            _remove_preview_parent_if_empty(target.parent)
+            result["removed_path"] = str(target)
+    return result
 
 
 def stop_workspace_revision_previews(workspace_root: str | Path) -> None:
@@ -416,17 +447,27 @@ def stop_workspace_revision_previews(workspace_root: str | Path) -> None:
 
     root = Path(workspace_root).expanduser().resolve()
     worktrees = root / REVISION_PREVIEW_ROOT
-    runtime = worktrees.parent
-    targets = _revision_directories(worktrees)
-    targets.update(_revision_directories(runtime, prefix=REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX))
-    failures: list[str] = []
-    for slug in sorted(targets):
-        try:
-            _stop_revision_directory(root, worktrees / slug)
-        except (OSError, RevisionPreviewError) as exc:
-            failures.append(f"{slug}：{exc}")
-    if failures:
-        raise RevisionPreviewError("；".join(failures))
+    with backend_launch_lock(worktrees):
+        targets = _revision_directories(worktrees) | _registered_preview_worktrees(root)
+        targets.update(_revision_directories(worktrees.parent, prefix=REVISION_PREVIEW_RUNTIME_SUBDIR_PREFIX))
+        failures: list[str] = []
+        for slug in sorted(targets):
+            try:
+                _stop_revision_directory(root, worktrees / slug)
+            except Exception as exc:
+                failures.append(f"{slug}：{exc}")
+        if failures:
+            raise RevisionPreviewError("；".join(failures))
+        _remove_preview_parent_if_empty(worktrees)
+        if worktrees.exists():
+            raise RevisionPreviewError(f"历史预览目录仍有未识别的内容：{worktrees}")
+
+
+def _remove_preview_parent_if_empty(worktrees: Path) -> None:
+    """确认没有剩余内容后删除空目录，保留外部创建的文件。"""
+
+    if worktrees.is_dir() and not worktrees.is_symlink() and not any(worktrees.iterdir()):
+        worktrees.rmdir()
 
 
 def _revision_directories(directory: Path, *, prefix: str = "") -> set[str]:
@@ -447,14 +488,21 @@ def _revision_directories(directory: Path, *, prefix: str = "") -> set[str]:
 
 
 def _stop_revision_directory(root: Path, target: Path) -> None:
-    """与单分支启动串行，确认服务退出后再删除 worktree。"""
+    """在工作区锁内确认服务退出，再删除 worktree 和本轮日志目录。"""
 
-    if target.is_symlink():
+    if target.is_symlink() or target.parent.is_symlink():
         raise RevisionPreviewError(f"历史分支 worktree 不能是符号链接：{target}")
-    with backend_launch_lock(target):
-        _stop_revision_services(root, target)
-        if target.exists():
-            _remove_worktree(root, target)
+    runtime = _preview_owner_path(root, target).parent
+    if runtime.resolve() != runtime:
+        raise RevisionPreviewError(f"历史预览运行时目录不能经过符号链接：{runtime}")
+    _stop_revision_services(root, target)
+    if target.exists() or target.name in _registered_preview_worktrees(root):
+        _remove_worktree(root, target)
+    if runtime.is_dir():
+        try:
+            shutil.rmtree(runtime)
+        except OSError as exc:
+            raise RevisionPreviewError(f"无法删除历史预览日志目录：{runtime}。{exc}") from exc
 
 
 def _stop_revision_services(root: Path, target: Path) -> None:
@@ -467,7 +515,11 @@ def _stop_revision_services(root: Path, target: Path) -> None:
     else:
         frontend = stop_frontend_project(root, runtime_subdir=runtime_subdir)
     backend = stop_workspace_backend_project(target)
-    failures = [str(result["message"]) for result in (frontend, backend) if result.get("status") == "failed"]
+    failures: list[str] = []
+    for result in (frontend, backend):
+        if result.get("status") == "failed":
+            detail = (result.get("cleanup") or {}).get("error") or ""
+            failures.append(f"{result['message']} {detail}".rstrip())
     if failures:
         raise RevisionPreviewError("；".join(failures))
 
@@ -501,7 +553,7 @@ def revision_preview_state(workspace_root: str | Path, revision: str) -> dict[st
     )
     # 必须确认进程还活着：日志里的地址会一直留在文件里，只看地址会把已经退出的服务
     # 报成 running，前端便不会重新拉起，用户对着一个死地址看空白。
-    running = pid > 0 and bool(preview_url) and bool(_running_pids([pid]))
+    running = target.is_dir() and pid > 0 and bool(preview_url) and bool(_running_pids([pid]))
     if running and find_backend_project_root(target) is not None:
         try:
             record = read_backend_process_record(target / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch" / BACKEND_PROCESS_FILENAME)
