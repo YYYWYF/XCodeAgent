@@ -13,6 +13,7 @@ _CHUNK_CHARS = 1024 * 1024
 
 def record_test_error_log(
     workspace: Path, runtime_root: Path, check: dict[str, Any], *, evidence: str | None = None,
+    captured_output: dict[str, str] | None = None,
 ) -> None:
     """在下一次执行覆盖日志前保存不可变副本；记录失败不改变检查结果。"""
 
@@ -31,6 +32,11 @@ def record_test_error_log(
             for offset in range(0, len(header), _CHUNK_CHARS)
         ]
         for stream in ("stdout", "stderr"):
+            heading = f"\n\n--- {stream} ---\n"
+            if captured_output is not None:
+                if output := captured_output.get(stream):
+                    references.append(put_artifact(workspace, heading + output))
+                continue
             relative = execution.get(f"{stream}_log_virtual")
             if not relative:
                 continue
@@ -38,7 +44,6 @@ def record_test_error_log(
             if not path.is_relative_to(workspace) or not path.is_relative_to(runtime_root.resolve()):
                 raise ValueError("检查日志不在测试运行目录中。")
             with path.open(encoding="utf-8", errors="replace", newline="") as log:
-                heading = f"\n\n--- {stream} ---\n"
                 while chunk := log.read(_CHUNK_CHARS):
                     references.append(put_artifact(workspace, heading + chunk))
                     heading = ""

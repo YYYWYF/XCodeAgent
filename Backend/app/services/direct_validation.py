@@ -6,6 +6,8 @@ import re
 import shutil
 from typing import Any
 
+from app.services.backend_process_registry import backend_launch_lock
+from app.services.direct_restart_diagnostics import capture_direct_restart_failure
 from app.services.integration_test_runner import (
     _find_frontend_package,
     _missing_tool_result,
@@ -75,7 +77,15 @@ def run_direct_fix_validation(
                 return {"test_results": results, "test_events": [item["id"] for item in results]}
 
     # 修复后的产物也要完成整套验收，避免只通过类型检查就遗漏打包或启动错误。
-    restart = run_project_restart_validation(state)
+    workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
+    if workspace:
+        root = workspace_root(state).expanduser().resolve()
+        # 手动重启与验收共用同一把锁，确保日志快照仍对应本轮启动。
+        with backend_launch_lock(root):
+            restart = run_project_restart_validation(state)
+            capture_direct_restart_failure(root, restart["test_results"])
+    else:
+        restart = run_project_restart_validation(state)
     results.extend(restart["test_results"])
     return {"test_results": results, "test_events": [item["id"] for item in results]}
 

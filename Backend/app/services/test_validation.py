@@ -84,8 +84,8 @@ def create_revision_requests(
             "id": f"revision:{result['id']}",
             "source": source,
             "target": "repair-planner-agent",
-            "owner": _revision_owner(result["id"]),
-            "owners": _revision_owners(result["id"]),
+            "owner": owners[0],
+            "owners": owners,
             "reason": result["name"],
             "evidence": result["evidence"],
             "failed_check": result,
@@ -93,11 +93,17 @@ def create_revision_requests(
             "status": "pending",
         }
         for result in failed_results
+        for owners in [_check_repair_owners(result, source)]
     ]
 
 
-def _revision_owner(check_id: str) -> str:
-    return _revision_owners(check_id)[0]
+def _check_repair_owners(result: dict[str, Any], source: str) -> list[str]:
+    """二次修改的重启展示层可与实际故障责任方不同。"""
+
+    owner = result.get("repair_owner")
+    if source == "direct_fix_validation" and owner in ("frontend", "backend"):
+        return [owner]
+    return _revision_owners(result["id"])
 
 
 def _revision_owners(check_id: str) -> list[str]:
@@ -212,6 +218,13 @@ def create_repair_task_plan(
                 f"repair:{plan_id}:{max(repair_attempt, 1)}:"
                 f"{request['failed_check']['id']}:{owner}"
             )
+            description = f"修复测试失败：{request['reason']}"
+            if request["failed_check"].get("restart_repair_paths"):
+                description += (
+                    "。修复实际启动故障，保留构建、测试及启动检查。"
+                    "Java 测试仅修正 mock、fixture 或初始化等测试代码问题，保留有效用例和断言；"
+                    "不得删除用例、弱化断言、忽略测试失败或加入跳过标记。"
+                )
             tasks.append(
                 {
                     "id": task_id,
@@ -219,7 +232,7 @@ def create_repair_task_plan(
                     "repair_attempt": max(repair_attempt, 1),
                     "owner": owner,
                     "unit_id": repair_unit_id,
-                    "description": f"修复测试失败：{request['reason']}",
+                    "description": description,
                     "dependencies": [],
                     "status": "pending",
                     "source_ref": {

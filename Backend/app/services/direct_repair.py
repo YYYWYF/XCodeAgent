@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from app.services.direct_modification import direct_path_matches_owner
+from app.services.direct_restart_diagnostics import verified_restart_repair_path
 from app.services.small_task import build_small_task_handoff
 from app.services.direct_validation import direct_frontend_diagnostic_paths
 from app.services.small_task_scope import (
@@ -20,7 +22,7 @@ REPAIR_OWNERS = ("frontend", "backend")
 
 
 def authorized_direct_repair_paths(state: dict[str, Any]) -> dict[str, list[str]]:
-    """从真实差异和前端编译诊断提取本轮自动修复的精确授权路径。"""
+    """从真实差异或当前重启诊断提取本轮自动修复的精确授权路径。"""
 
     paths = {owner: [] for owner in REPAIR_OWNERS}
 
@@ -33,6 +35,21 @@ def authorized_direct_repair_paths(state: dict[str, Any]) -> dict[str, list[str]
         if owner in paths and direct_path_matches_owner(normalized, owner):
             if normalized.casefold() not in {item.casefold() for item in paths[owner]}:
                 paths[owner].append(normalized)
+
+    # 重启可能暴露另一工程层的故障，只交给诊断定位的文件，避免继承无关的修改范围。
+    for request in direct_repair_dict_list(state.get("revision_requests")):
+        check = request.get("failed_check") or {}
+        restart_paths = check.get("restart_repair_paths")
+        if not isinstance(restart_paths, list):
+            continue
+        workspace = str(state.get("workspace") or state.get("workspace_path") or "").strip()
+        owner = check.get("repair_owner")
+        if workspace and owner in REPAIR_OWNERS:
+            root = Path(workspace).expanduser().resolve()
+            for raw in restart_paths:
+                if isinstance(raw, str) and verified_restart_repair_path(root, owner, raw) == raw:
+                    add(owner, raw)
+        return paths
 
     stage_results = state.get("direct_stage_results")
     if isinstance(stage_results, dict):
