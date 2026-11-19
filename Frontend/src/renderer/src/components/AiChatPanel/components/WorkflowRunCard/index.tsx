@@ -146,6 +146,8 @@ type WorkflowRunCardProps = {
     answers: ClarificationAnswers,
     editedRequirementSpec?: Record<string, unknown>
   ) => void | Promise<void>
+  /** 已结束的测试使用独立启动动作，不继承旧性能确认的禁用判定。 */
+  performanceTestRestart?: { disabled: boolean; onRestart: () => void }
   /** 用户在 UI 调整输入框里提出了页面级新增/删除，需要转交产品意图识别路径处理；
    *  参数是用户的原始指令文本。 */
   onTransferToProductAgent?: (instruction: string) => void | Promise<void>
@@ -183,6 +185,7 @@ export default function WorkflowRunCard({
   onReviseConfirmedTechnicalPlan,
   reviseConfirmedTechnicalPlanDisabled,
   onSubmitClarification,
+  performanceTestRestart,
   onTransferToProductAgent,
   uiDesignActivePageId,
   onUiDesignActivePageChange,
@@ -347,6 +350,9 @@ export default function WorkflowRunCard({
   // Lifecycle 已判定过期的旧快照仍保留问题上下文，但不能继续标成当前待确认。
   const staleConfirmation =
     requiresConfirmation && interactionAvailability === 'stale'
+  const restartPerformanceTest = staleConfirmation && frontendPerformanceConfirmation
+    ? performanceTestRestart
+    : undefined
   const workflowCardStatusVariant =
     workflowCardResult ||
     (staleConfirmation
@@ -556,6 +562,8 @@ export default function WorkflowRunCard({
               message={
                 interactionAvailability === 'unavailable'
                   ? '正在校准确认状态，请稍候。'
+                  : restartPerformanceTest
+                    ? '上一轮测试已结束。重新测试后，可选择是否执行性能测试。'
                   : '此确认已失效，请使用当前计划操作继续。'
               }
               showIcon
@@ -663,6 +671,14 @@ export default function WorkflowRunCard({
                 })
               }
             />
+          ) : restartPerformanceTest ? (
+            <Button
+              disabled={restartPerformanceTest.disabled}
+              onClick={restartPerformanceTest.onRestart}
+              type="primary"
+            >
+              重新开始测试
+            </Button>
           ) : frontendPerformanceConfirmation && requiresConfirmation ? (
             <FrontendPerformanceConfirmationPanel
               disabled={disabled || interactionAvailability !== 'active'}

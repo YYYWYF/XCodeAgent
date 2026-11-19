@@ -9,7 +9,7 @@ import { backendRequestErrorMessage, isBackendTransportError } from '../../../se
 import type { MutableRefObject, SetStateAction } from 'react'
 import { randomUUID } from '@ag-ui/client'
 import { workflowDebugEndedControl, workflowDebugResumeSource } from '../workflowDebugResume'
-import { canEnterModifiedTesting } from '../modifiedTestEntry'
+import { canEnterModifiedTesting, performanceTestRestartTarget } from '../modifiedTestEntry'
 import { executionRecoveryForSession, executionRecoveryReadError } from '../executionRecoveryState'
 import { NO_RECOVERY_ENTRY_ERROR } from '../globalFallbackState'
 import { canRestorePendingWorkflowInput, type PendingWorkflowInput } from '../pendingWorkflowInput'
@@ -2011,28 +2011,52 @@ export function useWorkflowConversation({
     answers: ClarificationAnswers,
     options?: ClarificationSubmissionOptions
   ): Promise<boolean> => {
-    if (canEnterModifiedTesting(workflow) && answers.modified_test_entry) {
+    const testEntryAction = answers.modified_test_entry?.action
+    if (testEntryAction) {
+      const sourceSession = options?.sessionIdentity || activeSession
+      const restartTarget = testEntryAction === 'restart'
+        ? performanceTestRestartTarget(workflow, applicationLifecycleRef.current)
+        : undefined
+      if (testEntryAction === 'restart'
+        ? !restartTarget || sourceSession?.workbenchPhase !== 'test' ||
+          restartTarget.ownerSessionId !== sourceSession.sessionId
+        : !canEnterModifiedTesting(workflow)) return false
       if (loading || workspaceBusy || testPhaseTransitionRunIdsRef.current.has(workflow.runId)) return false
       testPhaseTransitionRunIdsRef.current.add(workflow.runId)
-      const sourceSession = options?.sessionIdentity || activeSession
       const target = revisionStartTarget(workflow)
-      const pageId = target.type === 'page' ? String(target.pageId || '') : ''
-      const apiContractId = target.type === 'endpoint' ? String(target.apiContractId || '') : ''
-      const endpointId = target.type === 'endpoint' ? String(target.endpointId || '') : ''
+      const scope = restartTarget?.scope
+      const type = scope?.type || target.type
+      const pageId = type === 'page' ? String(scope?.targetId || target.pageId || '') : ''
+      const apiContractId = type === 'endpoint' ? String(scope?.apiContractId || target.apiContractId || '') : ''
+      const endpointId = type === 'endpoint' ? String(scope?.targetId || target.endpointId || '') : ''
+      const entityId = type === 'data_source' ? scope?.targetId : undefined
+      const originalRequest = workflowOriginalRequest(workflow)
       let testSession: SessionIdentity | undefined
       let accepted = false
       try {
         testSession = await createTestSession({
-          targetLabel: pageId || endpointId || '当前应用', pageId, apiContractId, endpointId
+          targetLabel: restartTarget?.label || pageId || endpointId || '当前应用',
+          pageId, apiContractId, endpointId, entityId
         })
-        // 新 thread 只带原提问和业务目标；阶段入口从磁盘加载最新代码与产物。
-        return await sendWorkflowMessage(workflowOriginalRequest(workflow), {
+        const testSessionKey = testSession.key
+        // 新 thread 只带业务目标，从磁盘重测当前代码；不提交旧 Run 的确认或恢复引用。
+        const started = await sendWorkflowMessage(restartTarget ? `重新测试：${restartTarget.label}` : originalRequest, {
           workflowAction: 'start_modified_testing',
+          originalRequest,
+          buildExecutionScope: scope,
           selectedPageId: pageId, selectedApiContractId: apiContractId, selectedEndpointId: endpointId,
-          detailTargetType: target.type === 'endpoint' ? 'endpoint' : target.type === 'page' ? 'page' : undefined,
-          sessionIdentity: testSession, titleFrom: '进入本轮测试', conversation: false,
+          selectedEntityId: entityId,
+          detailTargetType: type === 'endpoint' ? 'endpoint' : type === 'page' ? 'page' :
+            type === 'data_source' ? 'entity' : undefined,
+          sessionIdentity: testSession, titleFrom: restartTarget ? '重新开始测试' : '进入本轮测试',
+          conversation: false,
           onExecutionStarted: () => { accepted = true; onEnterTestPhase() }
         })
+        if (!accepted && restartTarget && sourceSession) {
+          setErrors((current) => ({ ...current, [sourceSession.key]:
+            current[testSessionKey] || '未能开始新的测试，请重试。' }))
+        }
+        return started
       } catch (error) {
         setErrors((current) => ({ ...current, [activeRuntimeKey || draftKey]:
           error instanceof Error ? error.message : String(error) }))

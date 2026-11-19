@@ -312,6 +312,8 @@ OpenAI 兼容模型 HTTP 客户端通过 `services/model_request_cancellation.py
 
 二次代码修改完成后的本轮测试入口：`AiChatPanel/modifiedTestEntry.ts` 识别实际成功修改，`MessageList` 在当前结果显示“进入本轮测试”；`useWorkflowConversation` 新建独立测试会话并通过现有 `/workflow/run` AG-UI `start_modified_testing` 动作传递原提问及原业务目标。`protocols/workflow/request.py` 将动作指向现有 `integration_test`，清除旧恢复快照，阶段入口沿用磁盘资产读取；不复用旧确认、旧测试通过状态或旧执行占用，不修改 Agent 节点或增加 Lifecycle 校验。回归：`tests.test_workflow_request`、`pnpm test:workflow-preview`。
 
+测试执行结束后，测试会话最新的历史性能确认卡根据当前 Lifecycle 与旧 Run/Thread、owner 快照显示“重新开始测试”。卡片通过 `modifiedTestEntry.ts` 恢复原测试范围，复用 `start_modified_testing` 创建新的测试 Run；新构建通过后只在当前确认卡提交执行或跳过，启动未被接纳时回到原测试会话。回归：`pnpm test:workflow-preview`、`pnpm test:connection-recovery`。
+
 Use this file before broad code exploration. It is a routing map, not full documentation: read the matching row, then inspect only the listed entry files and nearby code.
 
 验收自动预览由 `AiChatPanel/acceptancePreview.ts` 核对当前工作区、验收会话、Run 和启动轮次。标准启动器在 Workflow 的 `launchResult.attempt_id` 返回同一个运行时 `attemptId`；验收期间 `usePreviewRuntime` 从待启动状态也订阅 `/preview-runtime/run`。运行时确认前端与所需后端就绪后，`BrowserPreviewPanel` 在后台加载当前路由，目标 iframe 发出 load 后原样显示并开放验收操作。故障留在可见的对话与恢复入口。回归：`tests.test_project_launcher`、`pnpm test:acceptance-phase`、`pnpm test:preview-runtime`。

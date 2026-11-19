@@ -6,7 +6,10 @@ import './technicalPlanArtifact.test'
 import './workflowInteractionFeedback.test'
 import { workflowDebugResumeSource } from '../src/renderer/src/components/AiChatPanel/workflowDebugResume'
 import { test } from 'node:test'
-import { canEnterModifiedTesting } from '../src/renderer/src/components/AiChatPanel/modifiedTestEntry'
+import {
+  canEnterModifiedTesting,
+  performanceTestRestartTarget
+} from '../src/renderer/src/components/AiChatPanel/modifiedTestEntry'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { WorkbenchPhaseContext } from '../src/renderer/src/context/workbenchPhaseState'
@@ -1300,6 +1303,65 @@ test('性能测试确认使用 summary 中最新生命周期时保持可提交',
 
   assert.equal(workflowInteractionAvailability(workflow, lifecycle), 'active')
   assert.equal(derivePlanExecutionMode(execution), 'awaiting_frontend_performance_confirmation')
+})
+
+test('测试结束并完成二次修改后，旧性能卡只可重开原目标，新确认保持两个决定可提交', () => {
+  const execution = pageExecution({
+    phase: 'integration_test',
+    status: 'awaiting_user',
+    ownerSessionId: 'test-session',
+    pendingInteraction: {
+      id: 'pending-performance', type: 'frontend_performance_confirmation', basedOnRevision: 4,
+      payload: { mode: 'frontend_performance_confirmation' }, artifactRefs: [],
+      createdAt: '2026-07-23T00:00:00Z', submittedAt: null
+    }
+  })
+  const snapshot = { ...planLifecycle(execution), revision: 4 }
+  const workflow = previewWorkflow({ phase: 'integration_test', status: 'requires_user_input' }, execution.runId)
+  workflow.threadId = execution.threadId
+  workflow.state = {
+    lifecycle: snapshot,
+    testTarget: { type: 'page', id: execution.targetId, label: '服务器时间展示页' },
+    clarification: {
+      mode: 'frontend_performance_confirmation', status: 'requires_user_input',
+      questions: [{ id: 'frontend_performance_confirmation', question: '是否执行性能测试？' }]
+    }
+  }
+  const ended = { ...snapshot, revision: 7, activeExecutions: {}, extensions: { testExecutionStatus: 'pending' } }
+  assert.equal(workflowInteractionAvailability(workflow, ended), 'stale')
+  assert.deepEqual(performanceTestRestartTarget(workflow, ended), {
+    scope: { type: 'page', targetId: execution.targetId }, label: '服务器时间展示页', ownerSessionId: 'test-session'
+  })
+  assert.equal(performanceTestRestartTarget(workflow, snapshot), undefined)
+  assert.equal(performanceTestRestartTarget(workflow, { ...ended, revision: snapshot.revision }), undefined)
+  assert.equal(performanceTestRestartTarget(workflow, {
+    ...ended, extensions: { testExecutionStatus: 'passed' }
+  }), undefined)
+  assert.equal(performanceTestRestartTarget(workflow, {
+    ...ended, activeExecutions: { 'new-test-run': { ...execution, runId: 'new-test-run' } }
+  }), undefined)
+
+  const phaseContext = {
+    phase: 'test', derivedPhase: 'test', reachedPhase: 'test', manualOverride: null,
+    agent: WORKBENCH_PHASE_AGENTS.test, recordReachedPhase: () => undefined,
+    switchPhase: () => undefined, canEdit: () => true
+  } as const
+  const oldCard = renderToStaticMarkup(createElement(WorkbenchPhaseContext.Provider, {
+    value: phaseContext
+  }, createElement(WorkflowRunCard, {
+    workflow, disabled: true, interactionAvailability: 'stale',
+    performanceTestRestart: { disabled: false, onRestart: () => undefined }
+  })))
+  assert.match(oldCard, /<button(?![^>]*disabled)[^>]*><span>重新开始测试<\/span><\/button>/)
+  assert.doesNotMatch(oldCard, /跳过性能测试/)
+  const newCard = renderToStaticMarkup(createElement(WorkbenchPhaseContext.Provider, {
+    value: phaseContext
+  }, createElement(WorkflowRunCard, {
+    workflow, interactionAvailability: 'active'
+  })))
+  assert.match(newCard, /<button(?![^>]*disabled)[^>]*><span>执行性能测试<\/span><\/button>/)
+  assert.match(newCard, /<button(?![^>]*disabled)[^>]*><span>跳过性能测试<\/span><\/button>/)
+  assert.doesNotMatch(newCard, /重新开始测试/)
 })
 
 test('Workflow 生命周期比全局缓存更新时当前审查确认保持可提交', () => {

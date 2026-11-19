@@ -874,6 +874,8 @@ export type WorkflowClarificationAnswers = Record<string, WorkflowClarificationA
   unit_test_confirmation?: 'run' | 'skip'
   /** Build 完成后进入测试阶段的唯一结构化确认动作。 */
   test_phase_confirmation?: WorkflowTestPhaseConfirmation
+  /** 新建一轮测试的本地操作，由工作台提交独立 AG-UI 执行。 */
+  modified_test_entry?: { action: 'start' | 'restart' }
   /** 集成测试通过后进入审查阶段的唯一结构化确认动作。 */
   review_phase_confirmation?: WorkflowReviewPhaseConfirmation
   /** 代码审查完成后进入验收阶段的唯一结构化确认动作。 */

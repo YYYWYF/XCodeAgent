@@ -51,7 +51,7 @@ import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import { isTechnicalPlanGenerationFailure } from '../../globalFallbackState'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
 import DevelopmentContinuationCard from '../WorkflowRunCard/DevelopmentContinuationCard'
-import { canEnterModifiedTesting } from '../../modifiedTestEntry'
+import { canEnterModifiedTesting, performanceTestRestartTarget } from '../../modifiedTestEntry'
 import RemainingEntityBindingsCard from '../WorkflowRunCard/RemainingEntityBindingsCard'
 import TemplatePreparingCard, {
   isTemplatePreparing
@@ -884,6 +884,16 @@ export default function MessageList({
                         conversation || designPhasePlanning
                       )
                   : 'stale'
+              // 只为当前测试会话末尾已结束的确认提供重新测试，历史决定仍由生命周期控制。
+              const restartPerformanceWorkflow =
+                currentPhase === 'test' &&
+                !messageLoading &&
+                message.id === latestAssistantMessageId &&
+                interactionAvailability === 'stale' &&
+                planningCardWorkflow &&
+                performanceTestRestartTarget(planningCardWorkflow, applicationLifecycle)
+                  ? planningCardWorkflow
+                  : undefined
               // 已答过的历史澄清卡：从其后最近的 user 留痕解析「header：答案」行回填为
               // 只读摘要，避免旧表单以空白可填样式重现（恢复会话时 localStorage 草稿已丢）。
               const historicalClarificationAnswers =
@@ -1157,6 +1167,16 @@ export default function MessageList({
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
                               onOpenTechnicalPlanChanges={onOpenTechnicalPlanChanges}
                               onSubmitClarification={onSubmitClarification}
+                              performanceTestRestart={
+                                restartPerformanceWorkflow ? {
+                                  disabled: mutationDisabled,
+                                  onRestart: () => {
+                                    void onSubmitClarification(restartPerformanceWorkflow, {
+                                      modified_test_entry: { action: 'restart' }
+                                    })
+                                  }
+                                } : undefined
+                              }
                               onTransferToProductAgent={onTransferToProductAgent}
                               onReviseConfirmedTechnicalPlan={
                                 messageIndex === latestConfirmedTechnicalPlanMessageIndex &&

@@ -247,14 +247,10 @@ function recoveredPendingInteractionMatches(
 }
 
 /** 从 Workflow 的兼容投影位置读取提交交互所依据的生命周期快照。 */
-function workflowLifecycleSnapshot(workflow: WorkflowRunPayload): ApplicationLifecycle | undefined {
+export function workflowLifecycleSnapshot(workflow: WorkflowRunPayload): ApplicationLifecycle | undefined {
   // 节点边界先在 summary 广播最新生命周期，再生成 state/result；优先读取 summary
   // 可避免当前确认卡因帧间时序被误判为历史卡，同时仍校验交互 id 与 revision。
-  const candidates = [
-    workflow.summary.lifecycle,
-    workflow.state?.lifecycle,
-    workflow.state?.lifecycle
-  ]
+  const candidates = [workflow.summary.lifecycle, workflow.state?.lifecycle]
   return candidates.find((candidate): candidate is ApplicationLifecycle =>
     Boolean(candidate && typeof candidate === 'object')
   )

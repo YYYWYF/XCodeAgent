@@ -2609,9 +2609,9 @@ export default function AiChatPanel({
     onRevisionContinuation: handleRevisionContinuation,
     onEnterTestPhase: handleEnterTestPhase,
     onRollbackTestSession: async (identity, source) => {
-      // 后端未接纳测试运行时删除预创建会话，并回到原开发对话。
+      // 后端未接纳测试运行时删除预创建会话，并回到发起测试的原阶段和会话。
       await discardPreparedSession(identity)
-      switchPhase('development')
+      switchPhase(source?.workbenchPhase || 'development')
       if (source) await handleOpenSession(source.sessionId)
     },
     onEnterReviewPhase: handleEnterReviewPhase,

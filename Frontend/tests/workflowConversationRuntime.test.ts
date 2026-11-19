@@ -532,6 +532,96 @@ test('正式需求与计划交接成功后撤下来源会话上次交接失败�
 
 type WorkflowConversationParams = Parameters<typeof useWorkflowConversation>[0]
 
+test('结束的性能确认可重新测试原页面，并用新 Run 提交执行或跳过', async () => {
+  const originalFetch = globalThis.fetch
+  const originalWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true,
+    value: { devAgentStudio: { agentBaseUrl: 'http://agent.test' } } })
+  const oldSession = { ...buildSessionIdentity('old-test-session', 'old-test-thread'), workbenchPhase: 'test' } as const
+  const newSession = { ...buildSessionIdentity('new-test-session', 'new-test-thread'), workbenchPhase: 'test' } as const
+  const idle = { ...buildIdleLifecycle(), revision: 8, extensions: { testExecutionStatus: 'pending' } }
+  const clarification = { mode: 'frontend_performance_confirmation', status: 'requires_user_input',
+    questions: [{ id: 'frontend_performance_confirmation', question: '是否执行性能测试？' }] }
+  /** 构造卡片与生命周期共同绑定的待确认事实，验证新旧执行的权限边界。 */
+  function waitingTest(runId: string, owner: SessionIdentity, revision: number): WorkflowRunPayload {
+    const threadId = owner.threadId
+    const lifecycle: ApplicationLifecycle = { ...idle, revision, activeExecutions: {
+      [runId]: { runId, threadId, ownerSessionId: owner.sessionId, scope: 'page', targetId: 'home',
+        phase: 'integration_test', status: 'awaiting_user', startedAt: idle.updatedAt, updatedAt: idle.updatedAt,
+        pendingInteraction: { id: `performance-${runId}`, type: 'frontend_performance_confirmation',
+          basedOnRevision: revision, createdAt: idle.updatedAt, artifactRefs: [], payload: clarification } }
+    } }
+    return { runId, threadId, events: [], summary: {
+      status: 'requires_user_input', phase: 'integration_test', request: '测试页面'
+    }, state: {
+      lifecycle, clarification, selectedPageId: 'home',
+      buildExecutionScope: { type: 'page', targetId: 'home' },
+      testTarget: { type: 'page', id: 'home', label: '时间展示页' }
+    } }
+  }
+  const previous = waitingTest('ended-test', oldSession, 6)
+  try {
+    for (const decision of ['run', 'skip'] as const) {
+      let runtime!: ReturnType<typeof useWorkflowConversation>
+      let fresh: WorkflowRunPayload | undefined
+      let enteredTest = 0
+      const params = buildRuntimeParams({ activeSession: oldSession,
+        application: { id: APPLICATION_ID, workspaceRoot: WORKSPACE_ROOT } as ApplicationConfig,
+        applicationLifecycle: idle, agUiSessionsRef: { current: {} },
+        acquireSessionExecution: () => undefined, releaseSessionExecution: () => undefined,
+        onApplicationLifecycleChange: (lifecycle) => { params.applicationLifecycle = lifecycle } })
+      params.selectedPageId = 'other-page'
+      params.ensureActiveSession = async () => params.activeSession!
+      params.onEnterTestPhase = () => { enteredTest += 1 }
+      params.createTestSession = async (target) => {
+        assert.equal(target.pageId, 'home')
+        assert.equal(target.targetLabel, '时间展示页')
+        return newSession
+      }
+      params.onRollbackTestSession = async () => { assert.fail('后端已接管，不应回退会话') }
+      /** 经原工作台 Hook 和标准 AG-UI 客户端提交两段操作。 */
+      function Probe(): ReactElement { runtime = useWorkflowConversation(params); return createElement('div') }
+      globalThis.fetch = async (input, init) => {
+        const request = JSON.parse(String(init?.body))
+        if (String(input).endsWith('/application-lifecycle/run')) {
+          return sseResponse(request.threadId, request.runId, { applicationLifecycle: params.applicationLifecycle! })
+        }
+        assert.ok(String(input).endsWith('/workflow/run'), String(input))
+        assert.equal(request.threadId, newSession.threadId)
+        const forwarded = request.forwardedProps
+        assert.equal(forwarded.sessionId, newSession.sessionId, fresh ? '续接会话' : '新测试会话')
+        assert.equal(forwarded.selectedPageId, 'home')
+        if (!fresh) {
+          assert.equal(forwarded.workflowAction, 'start_modified_testing')
+          assert.deepEqual(forwarded.buildExecutionScope, { type: 'page', targetId: 'home' })
+          assert.equal(forwarded.resumeReference, undefined)
+          assert.equal(forwarded.resumeExecutionRunId, undefined)
+          assert.equal(forwarded.clarificationAnswers?.frontend_performance_confirmation, undefined)
+          fresh = waitingTest(request.runId, newSession, 9)
+          return sseResponse(request.threadId, request.runId, { workflow: fresh })
+        }
+        assert.deepEqual(forwarded.resumeReference, { runId: fresh.runId, threadId: fresh.threadId })
+        assert.equal(forwarded.resumeExecutionRunId, fresh.runId)
+        assert.equal(forwarded.clarificationAnswers.frontend_performance_confirmation, decision)
+        return sseResponse(request.threadId, request.runId, { workflow: {
+          ...fresh, runId: request.runId, summary: { status: 'completed', phase: 'integration_test' }, state: {}
+        } })
+      }
+      renderToStaticMarkup(createElement(Probe))
+      assert.equal(await runtime.handleSubmitClarification(previous, { frontend_performance_confirmation: decision }), false)
+      assert.equal(await runtime.handleSubmitClarification(previous, { modified_test_entry: { action: 'restart' } }), true)
+      assert.equal(enteredTest, 1)
+      assert.ok(fresh)
+      params.activeSession = newSession
+      renderToStaticMarkup(createElement(Probe))
+      assert.equal(await runtime.handleSubmitClarification(fresh, { frontend_performance_confirmation: decision }), true)
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
+})
+
 test('完成引导在同一可见会话开始新页面和 API，使用新 Graph 并清除旧目标参数', async () => {
   const originalFetch = globalThis.fetch
   const originalWindow = globalThis.window
