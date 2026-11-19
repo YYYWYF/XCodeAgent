@@ -436,14 +436,16 @@ def build_graph(
     def small_task_repair_with_recovery(state: ProjectState) -> dict[str, Any]:
         """仅暂停续接保留修复进度，失败恢复统一由测试阶段入口重新开始。"""
 
+        from app.agents.small_task.integration_repair import is_restricted_integration_task
         from app.services.integration_test_reentry import prepare_integration_test_reentry
         from app.observability.build_instrumentation import integration_repair_trace
 
         with bind_node_recovery(state, "small_task_repair"):
             prepared, fields = prepare_integration_test_reentry(state, "small_task_repair")
             tasks = prepared.get("small_task_tasks") or prepared.get("repair_tasks") or []
-            if prepared.get("repair_return_node") != "integration_test" or not any(
-                isinstance(task, dict) and task.get("owner") == "frontend" for task in tasks
+            source = f"{prepared.get('repair_return_node') or 'integration_test'}.small_task"
+            if not any(
+                isinstance(task, dict) and is_restricted_integration_task(source, task.get("owner")) for task in tasks
             ):
                 return {**fields, **nodes.small_task_repair(prepared)}
             with integration_repair_trace("small_task_repair", state=prepared) as trace:

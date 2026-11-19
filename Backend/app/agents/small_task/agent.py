@@ -27,7 +27,7 @@ from app.tools.execute import create_execute_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
 
-class FrontendIntegrationPromptMetrics(AgentMiddleware):
+class IntegrationRepairPromptMetrics(AgentMiddleware):
     """首轮记录进入模型的有效内容大小，正文留在现有诊断体系。"""
 
     def wrap_model_call(
@@ -41,11 +41,11 @@ class FrontendIntegrationPromptMetrics(AgentMiddleware):
         return handler(request)
 
 
-def create_frontend_integration_agent(
+def create_integration_repair_agent(
     model, workspace_root: str | None, *, user_skills_backend: BackendProtocol,
     agent_memory_backend: BackendProtocol, required_user_skills_prompt: str,
 ):
-    """组装前端集成文件工具，不加载子 Agent、摘要模型或命令执行工具。"""
+    """组装集成修复文件工具，不加载子 Agent、摘要模型或命令执行工具。"""
     backend = ScopedSmallTaskBackend(create_workspace_backend(
         workspace_root, include_builtin_skills=True,
         user_skills_backend=user_skills_backend, agent_memory_backend=agent_memory_backend,
@@ -59,9 +59,9 @@ def create_frontend_integration_agent(
     file_tools = {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}
     filesystem.tools = [tool for tool in filesystem.tools if tool.name in file_tools]
     return create_agent(
-        name="frontend-integration-small-task", model=model,
+        name="integration-repair-small-task", model=model,
         system_prompt="\n\n".join(filter(None, [
-            "Repair one frontend integration failure using the task packet. Start with diagnosed source "
+            "Repair one integration failure using the task packet. Start with diagnosed source "
             "before configuration hints. Edit only allowedPaths and preserve acceptance checks and formal "
             "contracts. The platform runs installation and build checks after edits. Never claim a check "
             "passed. Keep exploration narrow and make the smallest verified-on-disk change. If more scope "
@@ -76,7 +76,7 @@ def create_frontend_integration_agent(
             filesystem,
             SkillsMiddleware(backend=backend, sources=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT]),
             MemoryMiddleware(backend=backend, sources=[AGENT_MEMORY_VIRTUAL_PATH]),
-            FrontendIntegrationPromptMetrics(),
+            IntegrationRepairPromptMetrics(),
         ],
     ).with_config({"recursion_limit": 128})
 

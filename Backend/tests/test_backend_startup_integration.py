@@ -129,7 +129,7 @@ class BackendStartupIntegrationTests(unittest.TestCase):
             self.assertTrue(executor.submit(preview_can_start).result(timeout=2))
 
     def test_graph_enables_check_and_failure_reaches_actual_repair_packet(self) -> None:
-        """根因、配置线索与日志跨越门禁、规划和实际修复包后仍完整。"""
+        """规划保留日志引用，执行包保留根因和授权范围。"""
         failure = failed_startup()
         with patch('app.graph.subgraphs.testing.run_integration_checks', return_value={'test_results':[failure]}) as runner:
             state = build_project_checks({}, {})
@@ -143,8 +143,9 @@ class BackendStartupIntegrationTests(unittest.TestCase):
         self.assertIn('Backend/pom.xml', tasks[0]['target_files'])
         plan = create_repair_task_plan(revision_requests=report['revision_requests'], agent_note='', scoped_tasks=tasks)
         packet = build_small_task_packet(plan['tasks'][0], {'test_report': {'huge': 'x' * 20000}}, source='integration_test.small_task')
-        self.assertIn('ConfigurationBeanFactoryMetadata', packet['backendStartupFailure']['rootCause'])
-        self.assertEqual(packet['backendStartupFailure']['stdoutLog'], failure['execution']['stdout_log_virtual'])
+        self.assertIn('ConfigurationBeanFactoryMetadata', packet['failureEvidence']['rootCause'])
+        self.assertIn('Backend', packet['allowedPaths'])
+        self.assertNotIn('confirmedContext', packet)
         prompt = _test_repair_planning_prompt(test_report=report, revision_requests=report['revision_requests'], build_task_plan=None)
         self.assertIn('ConfigurationBeanFactoryMetadata', prompt)
         self.assertIn(failure['execution']['stdout_log_virtual'], prompt)

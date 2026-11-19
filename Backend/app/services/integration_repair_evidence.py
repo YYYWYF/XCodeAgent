@@ -28,7 +28,7 @@ def bounded_diagnostic_text(value: str, limit: int) -> str:
     return text
 
 
-def _log_path(root: Path, runtime: Path, value: str) -> Path | None:
+def repair_log_path(root: Path, runtime: Path, value: str) -> Path | None:
     """只接纳本轮检查引用中位于当前运行目录的真实日志。"""
     if not value or ".." in Path(value).parts:
         return None
@@ -82,7 +82,7 @@ def _diagnosis(root: Path, runtime: Path, request: dict[str, Any]) -> tuple[dict
     ]
     logs = list(dict.fromkeys(
         path.relative_to(root).as_posix() for value in log_refs if isinstance(value, str)
-        if (path := _log_path(root, runtime, value)) and len(path.relative_to(root).as_posix()) <= 320
+        if (path := repair_log_path(root, runtime, value)) and len(path.relative_to(root).as_posix()) <= 320
     ))
     owners = request.get("owners") or [request.get("owner")]
     return {
@@ -155,7 +155,7 @@ def supplement_repair_evidence(root: Path, runtime: Path, evidence: dict[str, An
     for name, line in references:
         try:
             if line is None:
-                log = _log_path(root, runtime, name)
+                log = repair_log_path(root, runtime, name)
                 snippet = read_log_tail(log, limit=1_800) if log else ""
             elif _source_location(root, {"path": name, "line": line}, "") and (root / name).stat().st_size <= 512_000:
                 with (root / name).open(encoding="utf-8", errors="replace") as source:

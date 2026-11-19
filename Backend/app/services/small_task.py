@@ -8,10 +8,10 @@ from typing import Any
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 
 from app.agents.small_task import invoke_small_task_agent, normalize_small_task_result
-from app.agents.small_task.frontend_integration import frontend_integration_packet, is_frontend_integration
+from app.agents.small_task.integration_repair import integration_repair_packet, is_restricted_integration_task
 from app.agents.tool_activity_stream import ToolActivityCallback
 from app.services.backend_startup_diagnostics import startup_failure_packet
-from app.services.frontend_integration_repair import execute_frontend_integration_task
+from app.services.integration_repair_execution import execute_integration_repair_task
 from app.services.small_task_context import repair_candidate_files, repair_strategy
 from app.services.engineering_acceptance_verifier import unauthorized_batch_paths
 from app.services.small_task_scope import (
@@ -36,8 +36,8 @@ def build_small_task_packet(
 ) -> dict[str, Any]:
     """构造有界任务包，把结构化工程与业务检查及失败证据交给 Agent。"""
 
-    if is_frontend_integration(source, task.get("owner")):
-        return frontend_integration_packet(task, state, source)
+    if is_restricted_integration_task(source, task.get("owner")):
+        return integration_repair_packet(task, state, source)
     allowed_paths = _task_paths(task)
     return {
         "schemaVersion": "small-task-packet.v1",
@@ -117,11 +117,12 @@ def execute_small_task_batch(
     def run_one(task: dict[str, Any]) -> dict[str, Any]:
         """在线程中调用一个 SmallTask Agent，并保留异常为结构化失败。"""
 
-        packet = build_small_task_packet(task, state, source=source)
+        packet: dict[str, Any] = {}
         try:
+            packet = build_small_task_packet(task, state, source=source)
             activity = _task_activity_callback(on_tool_activity, task) if on_tool_activity is not None else None
-            if is_frontend_integration(source, task.get("owner")):
-                normalized = execute_frontend_integration_task(
+            if is_restricted_integration_task(source, task.get("owner")):
+                normalized = execute_integration_repair_task(
                     packet=packet, state=state, task=task, workspace=workspace,
                     before=before, batch=tasks, on_tool_activity=activity,
                 )
@@ -226,7 +227,7 @@ def execute_small_task_batch(
             result["status"] = "failed"
             result["failureReason"] = "Agent 报告完成，但授权范围内没有实际代码差异。"
         if unauthorized and (
-            is_frontend_integration(source, task.get("owner"))
+            is_restricted_integration_task(source, task.get("owner"))
             or result["status"] in {"completed", "already_satisfied"}
             or result.get("failureCode") == "invalid_agent_output"
         ):

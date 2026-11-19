@@ -32,9 +32,9 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 kwargs["on_tool_activity"]({"tool": "edit_file", "status": "completed", "path": "/frontend/src/App.tsx"})
                 return '{"status":"completed",'
 
-            with patch("app.services.frontend_integration_repair.invoke_small_task_agent",
+            with patch("app.services.integration_repair_execution.invoke_small_task_agent",
                        side_effect=edit_then_truncate) as code, patch(
-                "app.services.frontend_integration_repair.finalize_frontend_repair", return_value=None,
+                "app.services.integration_repair_execution.finalize_integration_repair", return_value=None,
             ) as close:
                 result = small_task_repair({
                     "workspace": workspace, "repair_tasks": [task], "repair_return_node": "integration_test",
@@ -60,9 +60,9 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 (Path(workspace) / "outside.ts").write_text("unauthorized", encoding="utf-8")
                 return ""
 
-            with patch("app.services.frontend_integration_repair.invoke_small_task_agent",
+            with patch("app.services.integration_repair_execution.invoke_small_task_agent",
                        side_effect=write_outside) as code, patch(
-                "app.services.frontend_integration_repair.finalize_frontend_repair",
+                "app.services.integration_repair_execution.finalize_integration_repair",
             ) as close:
                 result = execute_small_task_batch(state={"workspace": workspace}, tasks=[task])
             code.assert_called_once()
@@ -158,7 +158,7 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 target.write_text("after", encoding="utf-8")
                 return '处理完成。\n```json\n{"status":"completed","summary":"修复"概览页"类型"}\n```\n请复测。'
 
-            with patch("app.services.frontend_integration_repair.invoke_small_task_agent", side_effect=repair_with_unescaped_summary) as invoke:
+            with patch("app.services.integration_repair_execution.invoke_small_task_agent", side_effect=repair_with_unescaped_summary) as invoke:
                 result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
             invoke.assert_called_once()
             self.assertEqual(route_small_task_result(result), "integration_test")
@@ -184,7 +184,7 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                     "escalation": {"pendingCommands": ["pnpm run build"]},
                 })
 
-            with patch("app.services.frontend_integration_repair.invoke_small_task_agent", side_effect=complete_repair) as invoke:
+            with patch("app.services.integration_repair_execution.invoke_small_task_agent", side_effect=complete_repair) as invoke:
                 result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
             invoke.assert_called_once()
             self.assertEqual(route_small_task_result(result), "integration_test")
@@ -245,36 +245,44 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 result = unit_test_repair({"workspace": workspace, "repair_tasks": [repair_task("backend_unit_tests")]})
             self.assertEqual(route_small_task_result(result), "await_user_input" if status == "requires_user_confirmation" else "handle_failure")
 
-    def test_integration_repairs_do_not_inherit_unit_test_retry_policy(self) -> None:
-        """集成测试连续三次无效输出后有界失败，不继承单测预算。"""
-        with tempfile.TemporaryDirectory() as workspace, patch("app.services.small_task.invoke_small_task_agent", return_value="") as invoke:
+    def test_backend_integration_without_diff_fails_after_one_recovery(self) -> None:
+        """无修改且无法恢复有效结果时结构化失败。"""
+        with tempfile.TemporaryDirectory() as workspace, patch(
+            "app.services.integration_repair_execution.invoke_small_task_agent", return_value="",
+        ) as invoke, patch(
+            "app.services.integration_repair_execution.finalize_integration_repair", return_value=None,
+        ) as close:
             result = small_task_repair({"workspace": workspace, "repair_tasks": [repair_task("backend_unit_tests")]})
         self.assertEqual(route_small_task_result(result), "handle_failure")
-        self.assertEqual(invoke.call_count, 3)
+        invoke.assert_called_once()
+        close.assert_called_once()
 
-    def test_backend_integration_invalid_json_retries_same_task_and_preserves_diff(self) -> None:
-        """后端集成修复继续在同一节点完整重试，保留首轮修改并返回复测。"""
+    def test_backend_integration_invalid_json_preserves_diff_without_replaying_agent(self) -> None:
+        """后端只尝试一次结果收尾，已核实的磁盘修改保留并交给集成复测。"""
         with tempfile.TemporaryDirectory() as workspace:
             task = repair_task("backend_unit_tests")
             task["allowed_paths"] = ["backend"]
             target = Path(workspace) / "backend/example.txt"
             target.parent.mkdir(parents=True)
             target.write_text("before", encoding="utf-8")
-            packets: list[dict] = []
 
-            def invoke_response(**kwargs) -> str:
-                """首轮修改后返回损坏 JSON，下一轮检查既有修改并给出完整结果。"""
-                packets.append(kwargs["packet"])
-                if len(packets) == 1:
-                    target.write_text("after", encoding="utf-8")
-                    return '{"status":'
-                self.assertEqual(target.read_text(encoding="utf-8"), "after")
-                return '{"status":"completed","summary":"修复完成"}'
+            def invoke_response(**kwargs: object) -> str:
+                """首轮修改后返回损坏 JSON。"""
+                target.write_text("after", encoding="utf-8")
+                return '{"status":'
 
-            with patch("app.services.small_task.invoke_small_task_agent", side_effect=invoke_response):
+            with patch(
+                "app.services.integration_repair_execution.invoke_small_task_agent", side_effect=invoke_response,
+            ) as invoke, patch(
+                "app.services.integration_repair_execution.finalize_integration_repair", return_value=None,
+            ) as close:
                 result = small_task_repair({"workspace": workspace, "repair_tasks": [task]})
-            self.assertEqual(len(packets), 2)
-            self.assertEqual(packets[1]["outputRetry"]["attempt"], 2)
+            invoke.assert_called_once()
+            close.assert_called_once()
+            self.assertEqual(close.call_args.kwargs["authorized_diff"], [
+                {"path": "backend/example.txt", "change": "modified"},
+            ])
+            self.assertEqual(target.read_text(encoding="utf-8"), "after")
             self.assertEqual(route_small_task_result(result), "integration_test")
             self.assertEqual(len(result["small_task_results"]), 1)
             self.assertTrue(result["small_task_code_change_sets"])
@@ -284,12 +292,44 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
         for status in ("failed", "requires_user_confirmation", "requires_workflow"):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as workspace:
                 response = json.dumps({"status": status, "summary": "需要处理"})
-                with patch("app.services.small_task.invoke_small_task_agent", return_value=response) as invoke:
+                with patch(
+                    "app.services.integration_repair_execution.invoke_small_task_agent", return_value=response,
+                ) as invoke, patch("app.services.integration_repair_execution.finalize_integration_repair") as close:
                     result = execute_small_task_batch(
                         state={"workspace": workspace}, tasks=[repair_task("backend_unit_tests")],
                     )
                 self.assertEqual(invoke.call_count, 1)
+                close.assert_not_called()
                 self.assertEqual(result["results"][0]["status"], status)
+
+    def test_backend_recovered_escalation_uses_existing_confirmation_gate(self) -> None:
+        """收尾恢复的范围或正式变更请求须暂停，后续代码任务不派发。"""
+        for status, mode in (
+            ("requires_user_confirmation", "small_task_scope_confirmation"),
+            ("requires_workflow", "revision_impact_confirmation"),
+        ):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as workspace:
+                tasks = [repair_task("backend_build"), repair_task("backend_build", "later")]
+                tasks[1]["dependencies"] = [tasks[0]["id"]]
+                with patch(
+                    "app.services.integration_repair_execution.invoke_small_task_agent",
+                    return_value=f'{{"status":"{status}",',
+                ) as invoke, patch(
+                    "app.services.integration_repair_execution.finalize_integration_repair",
+                    return_value=json.dumps({
+                        "status": status, "summary": "需要确认 API 变更范围",
+                        "escalation": {
+                            "reasonCode": "new_api", "reason": "需要确认接口契约",
+                            "requestedPaths": ["backend/src/main/java/Other.java"],
+                            "workflowIntent": "project_planning",
+                        },
+                    }),
+                ) as close:
+                    result = small_task_repair({"workspace": workspace, "repair_tasks": tasks})
+                invoke.assert_called_once()
+                close.assert_called_once()
+                self.assertEqual(route_small_task_result(result), "await_user_input")
+                self.assertEqual(result["clarification"]["mode"], mode)
 
     def test_unauthorized_changes_override_protocol_retry(self) -> None:
         """空响应伴随越权写入时仍停止，不能以输出错误为由继续派发。"""
@@ -302,9 +342,12 @@ class SmallTaskOutputRecoveryTests(unittest.TestCase):
                 target.write_text("after", encoding="utf-8")
                 return ""
 
-            with patch("app.services.small_task.invoke_small_task_agent", side_effect=unauthorized_write) as invoke:
+            with patch(
+                "app.services.integration_repair_execution.invoke_small_task_agent", side_effect=unauthorized_write,
+            ) as invoke, patch("app.services.integration_repair_execution.finalize_integration_repair") as close:
                 result = execute_small_task_batch(state={"workspace": workspace}, tasks=[repair_task("backend_unit_tests")])
             self.assertEqual(invoke.call_count, 1)
+            close.assert_not_called()
             self.assertIsNone(result["results"][0]["failureCode"])
             self.assertIn("批次外文件变更", result["results"][0]["failureReason"])
 
