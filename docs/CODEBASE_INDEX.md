@@ -333,6 +333,10 @@ API 映射门禁的“确认并检测”使用原 Run 引用。工作台准入�
 
 新生成 Unit Candidate 的缺失任务级 `id` 绑定由 `services/unit_candidate_id_binding.py` 负责，身份清单在 `services/unit_task_manifest.py` 与 Prompt 共用：Backend 按 Endpoint 阶段、frontend API 按 Contract/本轮 Endpoint 集合、page/static/bootstrap 按固定任务分组。`unit_candidate_parser.py` 严格解析完整任务后，仅在显式冻结 Context 下证明整份候选的 `provides/kind/target_id` 唯一完整覆盖才原子补 ID；已有值不覆盖，无 Context 保持严格拒绝缺 ID。随后仍执行原有 ID 与完整 Local/Global 校验，不改变重试预算、AG-UI、恢复候选、Pending/Formal 文件结构或确认门。不依赖已移除的 DAG 调试开关或日志模块。回归：`tests.test_unit_candidate_id_binding`、`tests.test_unit_generation_orchestrator`、`tests.test_unit_task_prompt`，并覆盖 Scope Assembly、Recovery 和 Pending。
 
+开发阶段外部 API 在 `QuickExternalOperation.tsx` 要求用户填写接口名称、请求方式和路径，从占位符派生 Path 定义。`ExternalApisPane.tsx` 负责接口栏内的删除入口。`ExternalOperationWorkspace.tsx` 依次提供基本信息、编辑接口、调试接口；`OperationBasicInfo.tsx` 原位编辑四项基本信息，`OperationConfigurationPane.tsx` 按请求参数、请求头、请求体、响应体展示配置。`operationEditorDraft.ts` 划分保存字段并按已保存路径重建 Path 定义，`DataSourcesDrawer.tsx` 在最新完整接口上分别合并两处保存。`/external-api-debug/run` 根据工作区中已登记的接口域与保存版本校验请求，支持本次调试的 `requestMethod` 与相对 `requestPath`。
+
+`OperationTabLayout.tsx` 为调试和编辑共用滚动正文及固定底栏，两个页面的子页签共用主题样式。`debugDraft.ts` 按原接口键在客户端恢复普通请求草稿、最近一次脱敏响应及其请求快照和最近 20 条调用摘要。`debugPrivacy.ts` 自动过滤识别到的敏感字段、鉴权值及其回显，页面无需手动标为临时。`operationDebugSync.ts` 从请求快照同步字段名、类型和样例；请求方式或路径不同时，先保存基本信息再导入同一次调用，只导入完整成功的 JSON 响应样例。
+
 ## Update Policy
 
 Update this index in the same change when a code change:

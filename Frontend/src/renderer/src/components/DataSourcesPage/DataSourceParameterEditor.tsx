@@ -5,12 +5,14 @@ import type { DataSourceParameter } from '../../typings'
 import { cx } from '../../utils'
 import { FIELD_TYPE_OPTIONS, PATH_FIELD_TYPES } from './jsonFieldTypes'
 import DataSourceEditorSection from './DataSourceEditorSection'
+import { sectionMeta } from './dataSourceOperationConfig'
 
 /** 参数编辑行的稳定标识只用于草稿，不进入接口存储。 */
 export type ParameterDraft = DataSourceParameter & { rowId: string }
 
 type Props = {
   defaultExpanded?: boolean
+  compact?: boolean
   location: 'path' | 'query' | 'header'
   nested?: boolean
   parameters: ParameterDraft[]
@@ -19,8 +21,8 @@ type Props = {
 }
 
 /** 统一编辑请求参数定义及类型，Path 名称随路径派生。 */
-export default function DataSourceParameterEditor({ defaultExpanded = true, location, nested = false, parameters, onChange, onRemove }: Props): ReactElement {
-  const title = location === 'path' ? 'Path 参数' : location === 'query' ? 'Query 参数' : 'Header 参数'
+export default function DataSourceParameterEditor({ defaultExpanded = true, compact = false, location, nested = false, parameters, onChange, onRemove }: Props): ReactElement {
+  const title = sectionMeta(location).title
   const rows = parameters
   const options = location === 'path' ? FIELD_TYPE_OPTIONS.filter((option) => PATH_FIELD_TYPES.includes(option.value)) : FIELD_TYPE_OPTIONS
   const icon = location === 'path' ? <LinkOutlined /> : location === 'query' ? <SearchOutlined /> : <ApiOutlined />
@@ -36,8 +38,7 @@ export default function DataSourceParameterEditor({ defaultExpanded = true, loca
     {location !== 'path' ? <Button className={cx('data-source-editor-add-button', 'data-source-editor-parameter-add-button')} icon={<PlusOutlined />} onClick={addParameter} size="small">添加参数</Button> : null}
     {onRemove && location !== 'path' ? <Button aria-label={`删除${title}`} className={cx('data-source-editor-remove-button')} icon={<DeleteOutlined />} onClick={onRemove} size="small" type="text" /> : null}
   </>
-  return <DataSourceEditorSection actions={actions} className={nested ? 'data-source-editor-section-nested' : undefined} defaultExpanded={defaultExpanded} icon={nested ? undefined : icon} title={title} tone={location}>
-    <div className={cx('data-source-editor-section-content')}>
+  const content = <div className={cx('data-source-editor-section-content')}>
       {rows.length ? <>
         <div className={cx('data-source-operation-table')}>
           <div aria-hidden="true" className={cx('data-source-parameter-row-labels')}><span>参数名</span><span>字段类型</span><span>必填</span><span>描述</span><span>操作</span></div>
@@ -51,7 +52,14 @@ export default function DataSourceParameterEditor({ defaultExpanded = true, loca
             </div>)}
           </div>
         </div>
-      </> : <div className={cx('data-source-operation-section-empty')}><FileTextOutlined /><span>暂无 {title}，点击右上角添加</span></div>}
+      </> : <div className={cx('data-source-operation-section-empty')}><FileTextOutlined />
+        <span>{location === 'path' ? '当前路径没有占位符' : `暂无 ${title}，点击右上角添加`}</span></div>}
     </div>
+  if (compact) return <section className="source-operation-config-section">
+    <header className="source-operation-config-heading"><h4>{title}</h4><div>{actions}</div></header>
+    {content}
+  </section>
+  return <DataSourceEditorSection actions={actions} className={nested ? 'data-source-editor-section-nested' : undefined} defaultExpanded={defaultExpanded} icon={nested ? undefined : icon} title={title} tone={location}>
+    {content}
   </DataSourceEditorSection>
 }

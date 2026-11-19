@@ -1,0 +1,101 @@
+.external-api-debug {
+  min-width: 0;
+  color: var(--wb-text);
+  font-size: 13px;
+
+  .debug-request-bar {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    .debug-send { min-width: 74px; }
+  }
+
+  .debug-url {
+    display: block;
+    margin: 7px 0 8px;
+    color: var(--wb-text-secondary);
+    overflow-wrap: anywhere;
+    font-size: 11px;
+  }
+
+  .debug-request { margin-bottom: 14px; }
+  .ant-tabs-nav { margin-bottom: 10px; }
+
+  .debug-parameter-group {
+    min-width: 0;
+    margin: 0;
+    padding: 2px 0 8px;
+    border: 0;
+    + .debug-parameter-group { border-top: 1px solid var(--wb-border); padding-top: 10px; }
+    legend { width: auto; margin: 0; border: 0; font-size: 12px; font-weight: 600; color: var(--wb-text); }
+  }
+
+  .debug-row {
+    display: grid;
+    grid-template-columns: 24px minmax(56px, 1fr) minmax(80px, .85fr) minmax(64px, 1.4fr) 26px;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 0;
+    .ant-checkbox-wrapper { justify-self: center; }
+    .ant-btn { padding: 0; }
+    .ant-input, .ant-select { min-width: 0; }
+  }
+
+  .debug-row-labels { color: var(--wb-text-secondary); font-size: 11px; }
+  .debug-add { margin-top: 4px; color: var(--wb-accent); }
+  .debug-muted { margin: 2px 0 5px; color: var(--wb-text-secondary); }
+  .debug-save-error { margin: 4px 0; color: var(--wb-code-delete-text); }
+  .debug-body-input { margin-bottom: 8px; font-family: var(--wb-monospace, Consolas, monospace); }
+  .debug-auth-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .debug-settings { display: flex; gap: 8px; align-items: center; }
+
+  .debug-response {
+    padding-top: 10px;
+    border-top: 1px solid var(--wb-border);
+  }
+
+  .debug-metrics, .debug-body-tools, .debug-history-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .debug-metrics { margin-bottom: 4px; }
+  .debug-metrics span { color: var(--wb-text-secondary); font-size: 12px; }
+  .debug-status { padding: 2px 7px; border-radius: 4px; font-size: 11px; }
+  .debug-status.is-success { background: var(--wb-code-add); color: var(--wb-code-add-text); }
+  .debug-status.is-error { background: var(--wb-code-delete); color: var(--wb-code-delete-text); }
+  .debug-body-tools { justify-content: flex-end; margin: 2px 0 8px; }
+  .debug-code, .debug-empty {
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--wb-border);
+    border-radius: 6px;
+    background: var(--wb-surface-subtle);
+  }
+  .debug-code { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-text); }
+  .debug-empty { color: var(--wb-text-secondary); text-align: center; }
+  .debug-response-headers { margin: 0; }
+  .debug-response-headers > div { display: grid; grid-template-columns: minmax(96px, 1fr) 2fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--wb-border); overflow-wrap: anywhere; }
+  .debug-response-headers dt { color: var(--wb-text-secondary); }
+  .debug-response-headers dd { margin: 0; }
+  .debug-history-row { color: var(--wb-text-secondary); padding: 6px 0; border-bottom: 1px solid var(--wb-border); }
+  .debug-history-row button { margin-left: auto; }
+
+  .ant-select-selector, .ant-input, .ant-input-affix-wrapper, .ant-input-number, .ant-radio-button-wrapper {
+    color: var(--wb-text);
+    background: var(--wb-surface);
+    border-color: var(--wb-border-strong);
+  }
+  .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
+    color: var(--wb-accent);
+    border-color: var(--wb-accent);
+  }
+}
+
+.external-api-debug-modal {
+  .ant-modal-content, .ant-modal-header { color: var(--wb-text); background: var(--wb-surface); border-color: var(--wb-border); }
+  .ant-modal-title, .ant-modal-close { color: var(--wb-text); }
+  .ant-modal-body { height: min(76vh, calc(100vh - 120px)); padding: 0; }
+}

@@ -1,5 +1,5 @@
 import type { DataSourceOperation, DataSourceOperationSection } from '../../typings'
-import type { OperationDraft } from './ExternalApiFormParts'
+import type { OperationDraft } from './operationEditorDraft'
 import { parseJsonSampleText } from './jsonStructure'
 import { operationPathParameterNames } from './dataSourceOperations'
 
@@ -29,7 +29,7 @@ export function sectionMeta(section: DataSourceOperationSection): { title: strin
   const metadata: Record<DataSourceOperationSection, { title: string; description: string }> = {
     path: { title: 'Path 参数', description: '根据路径占位符自动生成' },
     query: { title: 'Query 参数', description: '配置 URL 查询参数' },
-    header: { title: '接口 Header', description: '配置普通请求头' },
+    header: { title: 'Header 参数', description: '配置普通请求头' },
     requestBody: { title: '请求体', description: '用于记录接口请求示例' },
     responseBody: { title: '响应体', description: '用于记录接口响应示例' },
   }
@@ -49,7 +49,7 @@ export function clearOperationSection(operation: OperationDraft, section: DataSo
 export function validateSelectedSections(operation: OperationDraft, sections: ReadonlySet<DataSourceOperationSection>): void {
   if (sections.has('path') && operation.pathParameters.length === 0) throw new Error('Path 参数已添加，请至少填写一条参数。')
   if (sections.has('query') && operation.queryParameters.length === 0) throw new Error('Query 参数已添加，请至少填写一条参数。')
-  if (sections.has('header') && operation.headers.length === 0) throw new Error('接口 Header 已添加，请至少填写一条 Header。')
+  if (sections.has('header') && operation.headers.length === 0) throw new Error('Header 参数已添加，请至少填写一条 Header。')
   if (sections.has('requestBody') && !hasJsonDraftContent(operation.requestSampleText, operation.requestStructure)) throw new Error('请求体已添加，请填写非空 JSON 样例。')
   if (sections.has('responseBody') && !hasJsonDraftContent(operation.responseSampleText, operation.responseStructure)) throw new Error('响应体已添加，请填写非空 JSON 样例。')
 }

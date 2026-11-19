@@ -5985,6 +5985,7 @@ export default function AiChatPanel({
 
       {activeView === 'dataSources' || activeView === 'externalApis' ? (
         <DataSourcesDrawer
+          allowDebug={activeWorkbenchPhase === 'development' && !versionReadOnly}
           key={`${workspaceRoot}:${activeView}`}
           mode={activeView === 'externalApis' ? 'external_api' : 'database'}
           theme={theme}

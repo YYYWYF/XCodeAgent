@@ -1,84 +1,17 @@
 import { ApiOutlined, DeleteOutlined, FileTextOutlined, PlusOutlined, SendOutlined } from '@ant-design/icons'
-import { Button, Input, Modal, Select, Typography, message } from 'antd'
+import { Button, Input, Select, Typography } from 'antd'
 import type { ReactElement } from 'react'
-import { useState } from 'react'
-import type { DataSourceHeader, DataSourceOperation, DataSourceFieldType, DataSourceOperationSection } from '../../typings'
+import type { DataSourceHeader, DataSourceOperationSection } from '../../typings'
 import { confirmWorkspaceAction } from '../workspaceDialogs'
 import { cx } from '../../utils'
-import { JsonSampleTabs } from './JsonStructureViewer'
-import DataSourceParameterEditor, { type ParameterDraft } from './DataSourceParameterEditor'
-import { convertJsonFieldType } from './jsonFieldTypes'
-import { parseJsonSampleText } from './jsonStructure'
-import { readJsonSchemaMetadata } from './jsonSchema'
+import DataSourceParameterEditor from './DataSourceParameterEditor'
+import DataSourceOperationBodyEditor from './DataSourceOperationBodyEditor'
 import DataSourceEditorSection from './DataSourceEditorSection'
 import { clearOperationSection, sectionMeta } from './dataSourceOperationConfig'
 import OperationConfigurationBar, { OperationContentPicker } from './DataSourceOperationConfiguration'
+import type { OperationDraft } from './operationEditorDraft'
 
 const { Text } = Typography
-
-type JsonBodyTab = 'structure' | 'sample'
-
-/** 渲染请求体或响应体标题栏中的结构/样例切换入口。 */
-function JsonBodyTabSwitcher({ activeKey, onChange }: { activeKey: JsonBodyTab; onChange: (key: JsonBodyTab) => void }): ReactElement {
-  return <div aria-label="JSON 内容视图" className={cx('data-source-json-header-tabs')} role="tablist"><button aria-selected={activeKey === 'structure'} className={cx(activeKey === 'structure' && 'is-active')} onClick={() => onChange('structure')} role="tab" type="button">结构</button><button aria-selected={activeKey === 'sample'} className={cx(activeKey === 'sample' && 'is-active')} onClick={() => onChange('sample')} role="tab" type="button">样例</button></div>
-}
-
-/** 描述可编辑的接口草稿，额外保留文本形式的 JSON 样例。 */
-export type OperationDraft = Omit<DataSourceOperation, 'pathParameters' | 'queryParameters' | 'headers'> & {
-  pathParameters: ParameterDraft[]
-  queryParameters: ParameterDraft[]
-  headers: ParameterDraft[]
-  requestSampleText: string
-  responseSampleText: string
-  requestFieldDescriptionsDraft: Record<string, string>
-  responseFieldDescriptionsDraft: Record<string, string>
-  requestFieldTypesDraft: Record<string, DataSourceFieldType>
-  responseFieldTypesDraft: Record<string, DataSourceFieldType>
-}
-
-/** 创建一个新的接口草稿。 */
-export function emptyOperation(): OperationDraft {
-  return {
-    id: `operation-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
-    name: '',
-    description: '',
-    method: 'GET',
-    path: '/',
-    pathParameters: [],
-    queryParameters: [],
-    headers: [],
-    requestSample: undefined,
-    responseSample: undefined,
-    requestStructure: null,
-    responseStructure: null,
-    requestSampleText: '',
-    responseSampleText: '',
-    requestFieldDescriptionsDraft: {},
-    responseFieldDescriptionsDraft: {},
-    requestFieldTypesDraft: {},
-    responseFieldTypesDraft: {}
-  }
-}
-
-/** 将已保存接口转换为可编辑草稿。 */
-export function operationDraftFromSource(operation?: DataSourceOperation): OperationDraft {
-  if (!operation) return emptyOperation()
-  const request = readJsonSchemaMetadata(operation.requestStructure)
-  const response = readJsonSchemaMetadata(operation.responseStructure)
-  return {
-    ...operation,
-    description: operation.description || '',
-    pathParameters: operation.pathParameters.map((parameter) => ({ ...parameter, rowId: crypto.randomUUID() })),
-    queryParameters: operation.queryParameters.map((parameter) => ({ ...parameter, rowId: crypto.randomUUID() })),
-    headers: operation.headers.map((header) => ({ ...header, rowId: crypto.randomUUID() })),
-    requestSampleText: operation.requestSample === undefined ? '' : JSON.stringify(operation.requestSample, null, 2),
-    responseSampleText: operation.responseSample === undefined ? '' : JSON.stringify(operation.responseSample, null, 2),
-    requestFieldDescriptionsDraft: request.descriptions,
-    responseFieldDescriptionsDraft: response.descriptions,
-    requestFieldTypesDraft: request.fieldTypes,
-    responseFieldTypesDraft: response.fieldTypes
-  }
-}
 
 /** 编辑域名级共享 Header 的固定名称和值。 */
 export function HeaderEditor({
@@ -171,48 +104,6 @@ export function OperationFields({
   sections: ReadonlySet<DataSourceOperationSection>
   theme: 'light' | 'dark'
 }): ReactElement {
-  /** 修改当前请求或响应字段说明草稿，不因为样例暂时无效而清空。 */
-  const updateFieldDescription = (key: 'requestFieldDescriptionsDraft' | 'responseFieldDescriptionsDraft', path: string, description: string): void => {
-    const descriptions = { ...operation[key] }
-    if (description.trim()) descriptions[path] = description
-    else delete descriptions[path]
-    onChange({ ...operation, [key]: descriptions })
-  }
-
-  /** 预计算类型转换，确认可能丢弃的容器内容后同步更新样例与类型草稿。 */
-  const updateFieldType = (side: 'request' | 'response', path: string, type?: DataSourceFieldType): void => {
-    const typesKey = side === 'request' ? 'requestFieldTypesDraft' : 'responseFieldTypesDraft'
-    const sampleKey = side === 'request' ? 'requestSampleText' : 'responseSampleText'
-    const types = { ...operation[typesKey] }
-    if (!type) {
-      delete types[path]
-      onChange({ ...operation, [typesKey]: types })
-      return
-    }
-    const parsed = parseJsonSampleText(operation[sampleKey])
-    if (parsed.error || parsed.value === undefined) {
-      message.error(parsed.error || '请先填写 JSON 样例。')
-      return
-    }
-    const conversion = convertJsonFieldType(parsed.value, path, type)
-    if (!conversion.matchedCount) return
-    /** 一次更新样例和声明，取消确认时不修改编辑草稿。 */
-    const applyConversion = (): void => {
-      onChange({ ...operation, [sampleKey]: JSON.stringify(conversion.value, null, 2), [typesKey]: { ...types, [path]: type } })
-    }
-    if (conversion.destructiveCount) {
-      Modal.confirm({
-        centered: true, title: '转换字段类型？',
-        wrapClassName: cx('data-source-editor-modal-wrap', `theme-${theme}`),
-        content: `转换为 ${type} 将移除 ${conversion.destructiveCount} 处对象或数组的子内容。`,
-        cancelText: '取消', okText: '确认转换', onOk: applyConversion
-      })
-    } else applyConversion()
-  }
-
-  const [requestTab, setRequestTab] = useState<JsonBodyTab>('structure')
-  const [responseTab, setResponseTab] = useState<JsonBodyTab>('structure')
-
   /** 关闭一个已选模块，并清理其对应草稿。 */
   const removeSection = (section: DataSourceOperationSection): void => {
     if (section === 'path') return
@@ -268,12 +159,10 @@ export function OperationFields({
             {sections.has('header') ? <DataSourceParameterEditor defaultExpanded={!initiallyCollapsed} location="header" nested onChange={(headers) => onChange({ ...operation, headers })} onRemove={() => removeSection('header')} parameters={operation.headers} /> : null}
           </div>
         </DataSourceEditorSection> : null}
-        {sections.has('requestBody') ? <DataSourceEditorSection actions={<Button aria-label="删除请求体配置" className={cx('data-source-editor-remove-button')} icon={<DeleteOutlined />} onClick={() => removeSection('requestBody')} size="small" type="text" />} defaultExpanded={!initiallyCollapsed} headerContent={<JsonBodyTabSwitcher activeKey={requestTab} onChange={setRequestTab} />} icon={<ApiOutlined />} title="请求体" tone="request">
-          <JsonSampleTabs activeKey={requestTab} editable descriptions={operation.requestFieldDescriptionsDraft} fieldTypes={operation.requestFieldTypesDraft} label="请求体" onActiveKeyChange={(key) => setRequestTab(key === 'sample' ? 'sample' : 'structure')} onChange={(text) => onChange({ ...operation, requestSampleText: text })} onDescriptionChange={(path, description) => updateFieldDescription('requestFieldDescriptionsDraft', path, description)} onTypeChange={(path, type) => updateFieldType('request', path, type)} showTabs={false} showTitle={false} text={operation.requestSampleText} />
-        </DataSourceEditorSection> : null}
-        {sections.has('responseBody') ? <DataSourceEditorSection actions={<Button aria-label="删除响应体配置" className={cx('data-source-editor-remove-button')} icon={<DeleteOutlined />} onClick={() => removeSection('responseBody')} size="small" type="text" />} defaultExpanded={!initiallyCollapsed} headerContent={<JsonBodyTabSwitcher activeKey={responseTab} onChange={setResponseTab} />} icon={<FileTextOutlined />} title="响应体" tone="response">
-          <JsonSampleTabs activeKey={responseTab} editable descriptions={operation.responseFieldDescriptionsDraft} fieldTypes={operation.responseFieldTypesDraft} label="响应体" onActiveKeyChange={(key) => setResponseTab(key === 'sample' ? 'sample' : 'structure')} onChange={(text) => onChange({ ...operation, responseSampleText: text })} onDescriptionChange={(path, description) => updateFieldDescription('responseFieldDescriptionsDraft', path, description)} onTypeChange={(path, type) => updateFieldType('response', path, type)} showTabs={false} showTitle={false} text={operation.responseSampleText} />
-        </DataSourceEditorSection> : null}
+        {sections.has('requestBody') && <DataSourceOperationBodyEditor side="request" operation={operation}
+          theme={theme} defaultExpanded={!initiallyCollapsed} onChange={onChange} onRemove={() => removeSection('requestBody')} />}
+        {sections.has('responseBody') && <DataSourceOperationBodyEditor side="response" operation={operation}
+          theme={theme} defaultExpanded={!initiallyCollapsed} onChange={onChange} onRemove={() => removeSection('responseBody')} />}
       </>}
     </div>
   )

@@ -9,6 +9,9 @@
   --data-source-modal-accent-soft: var(--wb-accent-soft);
   --data-source-modal-danger: var(--wb-code-delete-text);
   --data-source-modal-danger-soft: var(--wb-code-delete);
+  --source-api-delete-text: #285284;
+  --source-api-delete-fill: #e6f0ff;
+  --source-api-delete-border: #bdd4f7;
   --data-source-modal-request: #d46b08;
   --data-source-modal-request-soft: rgba(250, 140, 22, 0.14);
   --data-source-modal-response: #389e0d;
@@ -122,6 +125,39 @@
     }
   }
   .source-method { border: 1px solid var(--wb-border); background: var(--wb-surface-subtle); padding: 3px 6px; border-radius: 6px; font-size: 12px; }
+  .source-api-row {
+    // 给删除按钮留出固定宽度，接口名称和路径只在内容区内收缩。
+    position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 66px; align-items: center; gap: 10px;
+    min-width: 0; padding: 4px 8px; border-radius: 8px;
+    &:hover, &:focus-within { background: var(--wb-surface-hover); }
+    &.selected { background: var(--wb-accent-soft); }
+    .source-api-row-open {
+      display: flex; align-items: center; gap: 8px; min-width: 0;
+      min-height: 36px; padding: 5px 0; border: 0;
+      color: var(--wb-text); background: transparent; text-align: left; cursor: pointer;
+      // 整条卡片都可打开详情，删除按钮在其上层独立接收点击。
+      &::after { position: absolute; inset: 0; border-radius: 8px; content: ''; }
+      &:focus-visible { outline: none; }
+      &:focus-visible::after { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
+      code { flex: none; }
+      strong, .source-api-row-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .source-api-row-path { flex-shrink: 2; color: var(--wb-text-secondary); font-size: 12px; }
+    }
+    .source-api-row-delete {
+      position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      width: 100%; height: 30px; padding: 0 5px; border-radius: 7px; box-shadow: none;
+      color: var(--source-api-delete-text); background: var(--source-api-delete-fill);
+      border-color: var(--source-api-delete-border); font-size: 12px; font-weight: 500;
+      > .anticon { font-size: 13px; }
+      > .anticon + span { margin-inline-start: 0; }
+      &:focus-visible { outline-offset: 2px; }
+      &:not(:disabled):hover, &:not(:disabled):focus-visible, &:not(:disabled):active {
+        color: var(--data-source-modal-danger);
+        background: color-mix(in srgb, var(--data-source-modal-danger) 8%, var(--wb-canvas));
+        border-color: color-mix(in srgb, var(--data-source-modal-danger) 28%, var(--wb-border));
+      }
+    }
+  }
   .source-drawer-detail { width: 680px; min-width: 0; display: flex; flex-direction: column; background: var(--wb-canvas); border-right: 1px solid var(--wb-border); }
   .source-detail-content { overflow-x: hidden; overflow-y: auto; padding: 20px; flex: 1; min-height: 0; scrollbar-gutter: stable; scrollbar-color: var(--wb-border-strong) transparent; scrollbar-width: thin; }
   .source-detail-content::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -140,23 +176,89 @@
     h3 { font-size: 20px; }
     p { margin-top: 4px; font-size: 12px; }
     .source-drawer-header-actions .ant-btn { height: 36px; padding: 0 14px; border-radius: 7px; }
-    .source-operation-header-edit { color: var(--wb-accent); background: transparent; border-color: var(--wb-accent); }
-    .source-operation-header-edit:hover, .source-operation-header-edit:focus { color: var(--wb-accent); background: var(--wb-accent-soft); border-color: var(--wb-accent); }
-    .source-operation-header-delete { color: var(--data-source-modal-danger); background: var(--data-source-modal-danger-soft); border-color: var(--data-source-modal-danger); }
-    .source-operation-header-delete:hover, .source-operation-header-delete:focus { color: var(--data-source-modal-danger); background: var(--data-source-modal-danger-soft); border-color: var(--data-source-modal-danger); }
     .source-drawer-header-actions .source-operation-header-close { width: 36px; padding: 0; color: var(--wb-text-secondary); font-size: 20px; background: transparent; border-color: transparent; }
   }
-  .source-operation-detail-content { padding: 0; background: transparent; }
-  .source-operation-detail-content > .ant-spin-nested-loading,
-  .source-operation-detail-content > .ant-spin-nested-loading > .ant-spin-container,
-  .source-operation-detail-content .@{class-prefix}-data-source-manager-detail,
-  .source-operation-detail-content .@{class-prefix}-data-source-manager-detail-body { min-height: 100%; background: transparent; }
-  .source-domain-picker { display: block; margin-bottom: 16px; .ant-select { display: block; width: 100%; margin-top: 8px; } }
-  .source-operation-editor { display: flex; min-height: 100%; flex-direction: column;
-    .@{class-prefix}-data-source-operation-fields { gap: 12px; }
-    .@{class-prefix}-data-source-operation-add-popover { color: var(--wb-text); }
+  .source-operation-workspace-header {
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    h3 { overflow-wrap: anywhere; }
+    .source-drawer-header-actions { flex-wrap: wrap; justify-content: flex-end; }
   }
-  .source-operation-editor .@{class-prefix}-data-source-modal-footer { position: sticky; z-index: 2; bottom: 0; margin-top: 20px; padding: 16px 0 4px; background: var(--wb-canvas); border-top: 1px solid var(--wb-border); }
+  .source-operation-tabs, .source-operation-subtabs {
+    > .ant-tabs-nav {
+      background: transparent;
+      &::before { border-color: var(--wb-border); }
+      .ant-tabs-tab { color: var(--wb-text-secondary); }
+      .ant-tabs-tab-active .ant-tabs-tab-btn, .ant-tabs-tab:hover { color: var(--wb-accent); }
+      .ant-tabs-tab-btn:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+      .ant-tabs-ink-bar { background: var(--wb-accent); }
+      .ant-tabs-nav-more { color: var(--wb-text); }
+    }
+  }
+  .source-operation-tabs, .source-operation-config-tabs {
+    flex: 1; min-height: 0; min-width: 0;
+    > .ant-tabs-nav { margin: 0; padding-inline: 16px; }
+    // Ant Tabs 默认按内容撑高，限制页签高度后将滚动交给各页的正文。
+    > .ant-tabs-content-holder { min-height: 0; overflow: hidden; }
+    > .ant-tabs-content-holder > .ant-tabs-content { height: 100%; }
+    > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+      height: 100%;
+      &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
+    }
+  }
+  .source-operation-empty .ant-empty-description { color: var(--wb-text-secondary); }
+  .source-domain-picker { display: block; margin-bottom: 16px; .ant-select { display: block; width: 100%; margin-top: 8px; } }
+  .source-operation-tab-layout { display: flex; height: 100%; min-height: 0; min-width: 0; flex-direction: column; }
+  .source-operation-scroll {
+    padding: 12px 16px 18px;
+    overscroll-behavior-y: contain;
+    &:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
+  }
+  .source-operation-basic-card {
+    > .@{class-prefix}-data-source-operation-detail-card-header { padding: 8px 12px; }
+    .source-operation-basic-edit { color: var(--wb-accent); background: var(--wb-canvas); border-color: var(--wb-border-strong); }
+    .source-operation-basic-edit:not(:disabled):hover { background: var(--wb-accent-soft); border-color: var(--wb-accent); }
+  }
+  .source-operation-basic-form { display: grid; gap: 12px; padding: 12px 2px 0; }
+  .source-operation-basic-actions {
+    display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;
+    > .ant-btn-default { color: var(--wb-text); background: var(--wb-canvas); border-color: var(--wb-border-strong); }
+    > .ant-btn-default:not(:disabled):hover { color: var(--wb-accent); border-color: var(--wb-accent); }
+  }
+  .source-operation-config-fields { display: grid; gap: 16px; min-width: 0; padding: 0; border: 0; margin: 0; }
+  .source-operation-config-section > .@{class-prefix}-data-source-editor-section-content { padding: 0; }
+  .source-operation-config-heading {
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px;
+    h4 { margin: 0; color: var(--wb-text); }
+    > div { display: flex; align-items: center; gap: 8px; }
+    .ant-radio-button-wrapper { color: var(--wb-text); background: var(--wb-canvas); border-color: var(--wb-border-strong); }
+    .ant-radio-button-wrapper::before { background: var(--wb-border-strong); }
+    .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
+      color: var(--wb-accent); background: var(--wb-accent-soft); border-color: var(--wb-accent);
+    }
+  }
+  .source-operation-tab-feedback { flex: none; padding: 0 16px 8px; }
+  .source-operation-tab-feedback, .source-operation-basic-form {
+    .ant-alert-error { background: var(--wb-code-delete); border-color: var(--wb-code-delete-text); overflow-wrap: anywhere; }
+    .ant-alert-info { background: var(--wb-accent-soft); border-color: var(--wb-accent-border); overflow-wrap: anywhere; }
+    .ant-alert-message, .ant-alert-description { color: var(--wb-text); }
+    .ant-alert-error .ant-alert-icon { color: var(--wb-code-delete-text); }
+    .ant-alert-info .ant-alert-icon { color: var(--wb-accent); }
+  }
+  .source-operation-tab-actions {
+    display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 10px 16px; background: var(--wb-canvas); border-top: 1px solid var(--wb-border);
+    > .ant-btn { height: 34px; border-radius: 6px; }
+    > .source-operation-sync {
+      min-width: 148px; color: var(--wb-accent); background: var(--wb-canvas); border-color: var(--wb-border-strong);
+      &:not(:disabled):hover, &:not(:disabled):focus-visible { background: var(--wb-accent-soft); border-color: var(--wb-accent); }
+    }
+    > .ant-btn-primary {
+      margin-inline-start: auto; color: var(--wb-canvas); background: var(--wb-accent); border-color: var(--wb-accent);
+      &:not(:disabled):hover, &:not(:disabled):focus-visible { background: var(--wb-accent-hover); border-color: var(--wb-accent-hover); }
+    }
+    > .ant-btn:disabled { opacity: 1; color: var(--wb-text-secondary); background: var(--wb-surface-subtle); border-color: var(--wb-border); }
+  }
   .source-table-picker { display: flex; flex-direction: column; gap: 12px; min-height: 180px; max-height: min(60vh, 560px); overflow: auto; margin-top: 16px; .ant-checkbox-wrapper { margin-left: 0; } }
   .source-table-detail .ant-space { margin-top: 20px; }
   .ant-select-selector, .ant-input, .ant-modal-content, .ant-modal-header, .ant-table, .ant-table-thead > tr > th { background: var(--wb-canvas); color: var(--wb-text); border-color: var(--wb-border); }
@@ -164,8 +266,17 @@
   button:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: -2px; }
   button:disabled { opacity: .5; cursor: default; }
 }
+.source-operation-method-menu.ant-select-dropdown, .source-operation-type-menu.ant-select-dropdown {
+  background: var(--wb-surface); border: 1px solid var(--wb-border);
+  .ant-select-item { color: var(--wb-text); }
+  .ant-select-item-option-active:not(.ant-select-item-option-disabled) { background: var(--wb-surface-hover); }
+  .ant-select-item-option-selected:not(.ant-select-item-option-disabled) { color: var(--wb-accent); background: var(--wb-accent-soft); }
+}
 .@{class-prefix}-workbench-shell[data-theme='dark'] .source-drawer-stack {
   // 深色主题使用同语义的高亮色，保证模块图标与状态标签的对比度。
+  --source-api-delete-text: #c2d9fa;
+  --source-api-delete-fill: #273b56;
+  --source-api-delete-border: #475f81;
   --data-source-modal-request: #ffb65c;
   --data-source-modal-request-soft: rgba(255, 182, 92, 0.2);
   --data-source-modal-response: #73d13d;

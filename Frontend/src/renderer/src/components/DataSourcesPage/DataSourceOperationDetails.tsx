@@ -55,8 +55,14 @@ function toHeaderParameters(operation: DataSourceOperation): DetailParameter[] {
   return operation.headers.map((header) => ({ name: header.name, type: header.type, required: header.required, description: header.description }))
 }
 
+type Props = { directory: DataSourceDirectory; operation: DataSourceOperation } & (
+  | { showHeader: false }
+  | { showHeader?: true; onDelete: () => void; onEdit: () => void }
+)
+
 /** 渲染选中接口的只读配置详情，空的可选模块不占用页面空间。 */
-export default function DataSourceOperationDetails({ directory, operation, onDelete, onEdit, showHeader = true }: { directory: DataSourceDirectory; operation: DataSourceOperation; onDelete: () => void; onEdit: () => void; showHeader?: boolean }): ReactElement {
+export default function DataSourceOperationDetails(props: Props): ReactElement {
+  const { directory, operation } = props
   const pathParameters = toDetailParameters(operation.pathParameters)
   const queryParameters = toDetailParameters(operation.queryParameters)
   const headerParameters = toHeaderParameters(operation)
@@ -75,10 +81,10 @@ export default function DataSourceOperationDetails({ directory, operation, onDel
   }
 
   return (
-    <article className={cx('data-source-manager-detail', !showHeader && 'data-source-manager-detail-workbench')}>
-      {showHeader ? <header className={cx('data-source-manager-detail-header')}>
+    <article className={cx('data-source-manager-detail', props.showHeader === false && 'data-source-manager-detail-workbench')}>
+      {props.showHeader !== false ? <header className={cx('data-source-manager-detail-header')}>
         <div className={cx('data-source-manager-detail-title')}><div><Title level={4}>{operation.name}</Title><Text type="secondary">{directory.name}</Text></div><Tag>{operation.method}</Tag></div>
-        <div className={cx('data-source-manager-detail-actions')}><Button icon={<EditOutlined />} onClick={onEdit}>编辑接口</Button><Button danger icon={<DeleteOutlined />} onClick={onDelete} type="text">删除</Button></div>
+        <div className={cx('data-source-manager-detail-actions')}><Button icon={<EditOutlined />} onClick={props.onEdit}>编辑接口</Button><Button danger icon={<DeleteOutlined />} onClick={props.onDelete} type="text">删除</Button></div>
       </header> : null}
       <div className={cx('data-source-manager-detail-body')}>
         <DetailCard collapsible={false} icon={<BookOutlined />} title="基本信息" tone="basic">
