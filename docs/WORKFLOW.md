@@ -476,7 +476,9 @@ unit_testing.START
   → unit_testing.END
 ```
 
-单测确认使用现有 `run/skip` 结构化答案；无受影响源码时自动按无须执行通过。质量门禁失败最多生成三轮 `unit_test_repair`，修复预算与集成测试完全独立；耗尽后进入 `handle_failure`。
+单测确认使用现有 `run/skip` 结构化答案。无受影响源码时按无须执行通过。每个失败检查独立允许 10 次修复，耗尽后进入 `handle_failure`。
+
+TestGeneration 使用变更源码对应的短职责、Diff、关联测试以及已声明的测试能力。需要澄清行为时读取相关正式工件窗口。单测 RepairPlanner 使用压缩的本轮诊断和只读结构化决策，最多两次模型调用，随后由平台物化修复任务。模型服务拒绝时保留原失败诊断并按单测节点重试。可定位的授权代码修复只使用文件工具，平台负责执行原命令和门禁。依赖、工具链及无法可靠定位的故障仍使用可运行命令的 SmallTask。
 
 ### `integration_test` / Testing Subgraph
 

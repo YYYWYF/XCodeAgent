@@ -64,7 +64,7 @@ def _start(name, kind, extra=None):
         return Span(parent.trace, name, kind, parent.span_id,
                     {**parent.extra, **(extra or {})}, operation,
                     node_name=parent.node_name,
-                    started_at=_integration_span_time() if parent.trace.business_stage == "integration_test" else None)
+                    started_at=_check_span_time() if parent.started_at else None)
     except Exception:
         return None
 
@@ -90,7 +90,7 @@ def finish(span, status, *, metrics=None, model=None, timed=True):
                 "parent_span_id": span.parent, "span_kind": span.kind, "run_name": span.name,
                 "duration_ms": (monotonic_ns() - span.started) // 1_000_000 if timed else None,
                 "status": status, "metrics": metrics, "model": model,
-                **({"started_at": span.started_at, "ended_at": _integration_span_time()} if span.started_at else {}),
+                **({"started_at": span.started_at, "ended_at": _check_span_time()} if span.started_at else {}),
             },
         })
     except Exception:
@@ -305,7 +305,7 @@ class IntegrationRepairObservation:
 @contextmanager
 def integration_repair_trace(
     node_name: str, *, state: dict[str, Any] | None = None, task_id: str | None = None,
-    repair_round: int | None = None,
+    repair_round: int | None = None, business_stage: str = "integration_test",
 ) -> Iterator[IntegrationRepairObservation]:
     """沿用现有模型和工具回调，以 Run ID 和独立尝试 ID 关联集成修复。"""
     observation = IntegrationRepairObservation()
@@ -322,10 +322,10 @@ def integration_repair_trace(
     attempt = uuid4().hex
     extra = {key: value for key, value in {
         "repair_round": repair_round, "task_id": task_id,
-        "attempt_id": attempt if task_id or node_name == "repair_planning" else None,
+        "attempt_id": attempt if task_id or node_name in {"repair_planning", "generate_unit_tests"} else None,
     }.items() if value is not None}
     parent = _scope.get()
-    if parent is not None and parent.trace.business_stage == "integration_test":
+    if parent is not None and parent.trace.business_stage == business_stage:
         span = _start(node_name, "node", extra)
         span.node_name = node_name
     else:
@@ -336,14 +336,16 @@ def integration_repair_trace(
             "operation_id": state.get("operation_id") or metadata.get("operation_id"),
         }.items() if isinstance(value, str) and value}
         span = Span(
-            BuildTrace(identity, {}, business_stage="integration_test"), node_name, "node",
+            BuildTrace(identity, {}, business_stage=business_stage), node_name, "node",
             extra=extra, operation=context.get("business_operation"),
-            node_name=node_name, started_at=_integration_span_time(),
+            node_name=node_name, started_at=_check_span_time(),
         )
     with activate(span):
-        yield observation
-        if observation.reason:
-            span.extra["repair_close_reason"] = observation.reason
+        try:
+            yield observation
+        finally:
+            if observation.reason:
+                span.extra["repair_close_reason"] = observation.reason
         metrics = (
             {"quality_gate_passed": observation.quality_gate_passed}
             if observation.quality_gate_passed is not None else None
@@ -351,9 +353,23 @@ def integration_repair_trace(
         finish(span, "cancelled" if _is_cancelled(span) else observation.status, metrics=metrics)
 
 
-def _integration_span_time() -> str:
+def _check_span_time() -> str:
     """提供可用于合并并行区间的 UTC 毫秒边界。"""
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@contextmanager
+def unit_test_child_trace(name: str, *, kind: str = "node") -> Iterator[IntegrationRepairObservation]:
+    """仅在开发单测已启用 Trace 时记录子动作，避免混入其他命令及缓存。"""
+    observation = IntegrationRepairObservation()
+    parent = _scope.get()
+    if parent is None or parent.trace.business_stage != "unit_test":
+        yield observation
+        return
+    span = _start(name, kind)
+    with activate(span):
+        yield observation
+        finish(span, "cancelled" if _is_cancelled(span) else observation.status)
 
 
 def observe_validation(action, *args, **kwargs):
@@ -415,7 +431,7 @@ def start_model():
     if span is not None:
         with span.trace.lock:
             span.trace.spans["model_started"] += 1
-            if span.trace.business_stage == "integration_test" and (attempt := span.extra.get("attempt_id")):
+            if span.trace.business_stage in {"integration_test", "unit_test"} and (attempt := span.extra.get("attempt_id")):
                 span.trace.spans[attempt] += 1
                 span.extra["model_round"] = span.trace.spans[attempt]
     return span

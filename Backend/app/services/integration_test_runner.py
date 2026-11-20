@@ -14,11 +14,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from app.observability.build_instrumentation import unit_test_child_trace
+
 from app.services.data_source_policy import read_application_datasource_type
 from app.services.backend_process_registry import backend_launch_lock
 from app.services.frontend_node_runtime import (
-    FrontendNodeError, FrontendNodeRuntime, frontend_dependencies_node, frontend_operation_lock, frontend_package_manager,
-    has_matching_frontend_dependencies, record_frontend_dependencies, resolve_frontend_node,
+    FrontendNodeError, FrontendNodeRuntime, frontend_dependencies_node, frontend_operation_lock,
+    frontend_package_manager, frontend_unit_package_manager_argv, has_matching_frontend_dependencies,
+    record_frontend_dependencies, resolve_frontend_node,
 )
 from app.services.workspace_process_registry import workspace_process_registry
 from app.services.backend_startup_check import run_backend_startup_check
@@ -118,6 +121,7 @@ def run_integration_checks(
                     state=state,
                     unit_tests_affected=frontend_unit_tests_affected,
                     on_progress=on_progress,
+                    install_dependencies=install_frontend_dependencies,
                 )
     for result in frontend_results:
         results.append(result)
@@ -364,7 +368,7 @@ def _frontend_checks(
         required=True,
         on_progress=on_progress,
         node_runtime=node_runtime,
-        package_manager_command=package_manager_command,
+        package_manager_argv=[package_manager_command] if package_manager_command else None,
         setup_error=setup_error,
     )
     if not include_unit_tests:
@@ -374,7 +378,7 @@ def _frontend_checks(
         blocked_reason = "前端依赖安装检查失败，跳过本轮前端单元测试。"
     elif not build_result["passed"]:
         blocked_reason = "前端构建检查失败，跳过本轮前端单元测试。"
-    unit_result = _frontend_unit_test_result(
+    unit_results = _frontend_unit_test_results(
         root=root,
         log_root=log_root,
         frontend=frontend,
@@ -383,10 +387,10 @@ def _frontend_checks(
         blocked_reason=blocked_reason,
         on_progress=on_progress,
         node_runtime=node_runtime,
-        package_manager_command=package_manager_command,
+        package_manager_argv=[package_manager_command] if package_manager_command else None,
         setup_error=setup_error,
     )
-    return [install_result, build_result, unit_result]
+    return [install_result, build_result, *unit_results]
 
 
 def _frontend_unit_checks(
@@ -397,8 +401,9 @@ def _frontend_unit_checks(
     state: dict[str, Any],
     unit_tests_affected: bool,
     on_progress: CheckProgressCallback | None,
+    install_dependencies: bool,
 ) -> list[dict[str, Any]]:
-    """在前端构建阶段完成后执行单元测试，不重复安装或构建。"""
+    """独立执行前端单测，存在对应测试时按需准备依赖。"""
 
     if frontend is None:
         return [
@@ -417,20 +422,19 @@ def _frontend_unit_checks(
         check_ids=("frontend_install", "frontend_build"),
         evidence="前端构建检查未通过，跳过本轮前端单元测试。",
     )
-    return [
-        _frontend_unit_test_result(
-            root=root,
-            log_root=log_root,
-            frontend=frontend,
-            state=state,
-            unit_tests_affected=unit_tests_affected,
-            blocked_reason=blocked_reason,
-            on_progress=on_progress,
-        )
-    ]
+    return _frontend_unit_test_results(
+        root=root,
+        log_root=log_root,
+        frontend=frontend,
+        state=state,
+        unit_tests_affected=unit_tests_affected,
+        blocked_reason=blocked_reason,
+        on_progress=on_progress,
+        prepare_dependencies=install_dependencies,
+    )
 
 
-def _frontend_unit_test_result(
+def _frontend_unit_test_results(
     *,
     root: Path,
     log_root: Path,
@@ -440,10 +444,11 @@ def _frontend_unit_test_result(
     blocked_reason: str | None = None,
     on_progress: CheckProgressCallback | None = None,
     node_runtime: FrontendNodeRuntime | None = None,
-    package_manager_command: str | None = None,
+    package_manager_argv: list[str] | None = None,
     setup_error: str | None = None,
-) -> dict[str, Any]:
-    """仅在约定目录存在前端单元测试文件时执行项目测试脚本。"""
+    prepare_dependencies: bool = False,
+) -> list[dict[str, Any]]:
+    """仅在存在对应测试且配置了测试脚本时准备依赖并执行测试。"""
 
     state = state or {}
     has_tests = (
@@ -452,51 +457,77 @@ def _frontend_unit_test_result(
         else _has_frontend_unit_tests(frontend.cwd)
     )
     if not has_tests:
-        return _missing_tool_result(
-            check_id="frontend_unit_tests",
-            name="前端单元测试",
-            layer="frontend",
-            language="typescript",
-            evidence="本次前端功能没有对应单元测试文件，按策略通过。",
-            required=False,
-            on_progress=on_progress,
-        )
-    if not unit_tests_affected:
-        return _missing_tool_result(
-            check_id="frontend_unit_tests",
-            name="前端单元测试",
-            layer="frontend",
-            language="typescript",
-            evidence="本次变更未影响前端业务代码，跳过前端单元测试。",
-            required=False,
-            on_progress=on_progress,
-        )
-    if blocked_reason:
-        return _missing_tool_result(
-            check_id="frontend_unit_tests",
-            name="前端单元测试",
-            layer="frontend",
-            language="typescript",
-            evidence=blocked_reason,
-            required=False,
-            on_progress=on_progress,
-        )
+        blocked_reason = "本次前端功能没有对应单元测试文件，按策略通过。"
+    elif not unit_tests_affected:
+        blocked_reason = "本次变更未影响前端业务代码，跳过前端单元测试。"
     script_name = _first_script(_scripts(frontend), ("test:unit", "test"))
-    return _run_script_result(
-        check_id="frontend_unit_tests",
-        name="前端单元测试",
-        layer="frontend",
-        language="typescript",
-        package=frontend,
-        script_name=script_name,
-        root=root,
-        log_root=log_root,
-        required=True,
-        missing_evidence="发现前端单元测试文件，但 package.json 未声明 test:unit 或 test script。",
-        on_progress=on_progress,
-        node_runtime=node_runtime,
-        package_manager_command=package_manager_command,
-        setup_error=setup_error,
+    results: list[dict[str, Any]] = []
+    if prepare_dependencies and script_name and not blocked_reason:
+        try:
+            node_runtime = resolve_frontend_node(root)
+            package_manager_argv = frontend_unit_package_manager_argv(
+                node_runtime, frontend.package_manager, frontend.package_json.get("packageManager"),
+                workspace=root, cwd=frontend.cwd,
+            )
+        except FrontendNodeError as exc:
+            setup_error = str(exc)
+        else:
+            if not _frontend_unit_dependencies_ready(root, frontend, node_runtime):
+                argv = [*package_manager_argv, "install"]
+                if frontend.package_manager == "pnpm":
+                    argv.append("--prod=false")
+                    if (frontend.cwd / "pnpm-lock.yaml").is_file():
+                        argv.append("--frozen-lockfile")
+                install = _run_command_result(
+                    check_id="frontend_install", name="前端依赖安装检查",
+                    layer="frontend", language="typescript", argv=argv,
+                    cwd=frontend.cwd, root=root, log_root=log_root, required=True,
+                    on_progress=on_progress, node_runtime=node_runtime,
+                    package_manager_argv=package_manager_argv,
+                )
+                results.append(install)
+                if not install["passed"]:
+                    blocked_reason = "前端依赖安装检查失败，跳过本轮前端单元测试。"
+    if blocked_reason:
+        unit_result = _missing_tool_result(
+            check_id="frontend_unit_tests", name="前端单元测试",
+            layer="frontend", language="typescript", evidence=blocked_reason,
+            required=False, on_progress=on_progress,
+        )
+    else:
+        unit_result = _run_script_result(
+            check_id="frontend_unit_tests", name="前端单元测试",
+            layer="frontend", language="typescript", package=frontend,
+            script_name=script_name, root=root, log_root=log_root, required=True,
+            missing_evidence="发现前端单元测试文件，但 package.json 未声明 test:unit 或 test script。",
+            on_progress=on_progress, node_runtime=node_runtime,
+            package_manager_argv=package_manager_argv, setup_error=setup_error,
+        )
+    return [*results, unit_result]
+
+
+def _frontend_unit_dependencies_ready(root: Path, package: PackageProject, node: FrontendNodeRuntime) -> bool:
+    """检查依赖目录、已安装的锁文件及开发依赖是否可用于本轮单测。"""
+    runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime/launch"
+    installed_node = frontend_dependencies_node(runtime_root, package.cwd)
+    if installed_node and not node.matches(installed_node):
+        return False
+    if package.package_manager == "yarn" and (package.cwd / ".pnp.cjs").is_file():
+        return True
+    modules = package.cwd / "node_modules"
+    if package.package_manager == "pnpm":
+        installed_lock = modules / ".pnpm" / "lock.yaml"
+        project_lock = package.cwd / "pnpm-lock.yaml"
+        if installed_lock.is_file() and project_lock.is_file():
+            try:
+                if installed_lock.read_text(encoding="utf-8") != project_lock.read_text(encoding="utf-8"):
+                    return False
+            except (OSError, UnicodeError):
+                return False
+    dev_dependencies = package.package_json.get("devDependencies")
+    return modules.is_dir() and (
+        not isinstance(dev_dependencies, dict)
+        or all((modules / name).is_dir() for name in dev_dependencies)
     )
 
 
@@ -786,7 +817,7 @@ def _run_script_result(
     missing_evidence: str | None = None,
     on_progress: CheckProgressCallback | None,
     node_runtime: FrontendNodeRuntime | None = None,
-    package_manager_command: str | None = None,
+    package_manager_argv: list[str] | None = None,
     setup_error: str | None = None,
 ) -> dict[str, Any]:
     """按当前前端工具链执行项目脚本并保留环境失败证据。"""
@@ -804,7 +835,7 @@ def _run_script_result(
         if setup_error:
             raise FrontendNodeError(setup_error)
         node_runtime = node_runtime or resolve_frontend_node(root)
-        package_manager_command = package_manager_command or node_runtime.command(package.package_manager)
+        package_manager_argv = package_manager_argv or [node_runtime.command(package.package_manager)]
     except FrontendNodeError as exc:
         return _missing_tool_result(
             check_id=check_id,
@@ -820,13 +851,14 @@ def _run_script_result(
         name=name,
         layer=layer,
         language=language,
-        argv=[package_manager_command, "run", script_name],
+        argv=[*package_manager_argv, "run", script_name],
         cwd=package.cwd,
         root=root,
         log_root=log_root,
         required=required,
         on_progress=on_progress,
         node_runtime=node_runtime,
+        package_manager_argv=package_manager_argv,
     )
 
 
@@ -849,6 +881,7 @@ def _run_command_result(
     required: bool,
     on_progress: CheckProgressCallback | None,
     node_runtime: FrontendNodeRuntime | None = None,
+    package_manager_argv: list[str] | None = None,
 ) -> dict[str, Any]:
     """执行实际检查，并为前端命令校验和记录同一 Node。"""
     report_check_progress(
@@ -871,7 +904,10 @@ def _run_command_result(
     try:
         env_options = {}
         if node_runtime is not None:
-            node_runtime.verify(argv[0], workspace=root, cwd=cwd, before_install=check_id == "frontend_install")
+            node_runtime.verify(
+                package_manager_argv or argv[0], workspace=root, cwd=cwd,
+                before_install=check_id == "frontend_install",
+            )
             env_options["env"] = node_runtime.env
             runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime/launch"
             if check_id == "frontend_install":
@@ -883,21 +919,23 @@ def _run_command_result(
                         f"现有依赖由 Node {installed_node.get('version')} 安装，与当前选择的 "
                         f"{node_runtime.describe()} 不一致。请重新安装依赖后再验证。"
                     )
-        completed = workspace_process_registry.run(
-            argv,
-            workspace=root,
-            cwd=str(cwd),
-            text=True,
-            capture_output=True,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-            check=False,
-            **env_options,
-        )
+        with unit_test_child_trace(check_id, kind="tool") as trace:
+            completed = workspace_process_registry.run(
+                argv,
+                workspace=root,
+                cwd=str(cwd),
+                text=True,
+                capture_output=True,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+                check=False,
+                **env_options,
+            )
+            trace.status = "failed" if completed.returncode else "completed"
         stdout = subprocess_output_text(completed.stdout)
         stderr = subprocess_output_text(completed.stderr)
         returncode = completed.returncode
         if node_runtime is not None and check_id == "frontend_install" and returncode == 0:
-            node_runtime.verify(argv[0], workspace=root, cwd=cwd)
+            node_runtime.verify(package_manager_argv or argv[0], workspace=root, cwd=cwd)
             record_frontend_dependencies(runtime_root, cwd, node_runtime)
     except subprocess.TimeoutExpired as exc:
         # TimeoutExpired 即使在 text=True 下也可能携带 bytes，写日志前必须解码。
@@ -994,7 +1032,9 @@ def _extract_test_counts(
     output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", "\n".join((stdout, stderr)))
 
     # Jest: Tests: 3 passed, 1 failed, 4 total；无 Tests 行时兼容 Test Suites 摘要。
-    jest_line = re.search(r"(?im)^\s*(?:Tests|Test Suites):\s*(?P<details>.+)$", output)
+    jest_line = re.search(r"(?im)^[ \t]*Tests:[ \t]*(?P<details>.+)$", output)
+    if jest_line is None:
+        jest_line = re.search(r"(?im)^[ \t]*Test Suites:[ \t]*(?P<details>.+)$", output)
     if jest_line:
         counts = _counts_from_summary_line(jest_line.group("details"))
         if counts != (None, None):
@@ -1010,19 +1050,17 @@ def _extract_test_counts(
             return int(passed_match.group(1)), int(total_match.group(1))
 
     # Maven Surefire: Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
-    maven_matches = re.finditer(
-        r"Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)",
-        output,
-        re.IGNORECASE,
+    maven_summary = (
+        r"Tests run:[ \t]*(\d+),[ \t]*Failures:[ \t]*(\d+),"
+        r"[ \t]*Errors:[ \t]*(\d+),[ \t]*Skipped:[ \t]*(\d+)"
     )
+    # Maven 先打印每个类的结果，汇总行已包含这些数字。多模块项目只累加各模块汇总。
+    maven_matches = re.findall(maven_summary + r"[ \t]*$", output, re.IGNORECASE | re.MULTILINE)
+    if not maven_matches:
+        maven_matches = re.findall(maven_summary, output, re.IGNORECASE)
     maven_counts = [
-        (
-            int(match.group(1)),
-            int(match.group(2)),
-            int(match.group(3)),
-            int(match.group(4)),
-        )
-        for match in maven_matches
+        (int(total), int(failed), int(errors), int(skipped))
+        for total, failed, errors, skipped in maven_matches
     ]
     if maven_counts:
         total = sum(item[0] for item in maven_counts)
@@ -1043,12 +1081,12 @@ def _counts_from_summary_line(details: str) -> tuple[int | None, int | None]:
     """解析包含 passed、failed、error、skipped 和 total 的摘要行。"""
 
     passed_match = re.search(r"(\d+)\s+passed\b", details, re.IGNORECASE)
+    total_match = re.search(r"(\d+)\s+total\b", details, re.IGNORECASE)
+    if total_match:
+        return int(passed_match.group(1)) if passed_match else 0, int(total_match.group(1))
     if not passed_match:
         return None, None
     passed = int(passed_match.group(1))
-    total_match = re.search(r"(\d+)\s+total\b", details, re.IGNORECASE)
-    if total_match:
-        return passed, int(total_match.group(1))
 
     other_count = sum(
         int(match.group(1))

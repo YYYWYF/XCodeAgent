@@ -6,6 +6,7 @@ import fnmatch
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
+from pathlib import PurePosixPath
 from typing import Any, Iterator
 from app.services.workspace_process_registry import workspace_process_registry
 
@@ -77,13 +78,25 @@ def is_small_task_path_allowed(path: str) -> bool:
     return any(_matches_scope(candidate, scope) for scope in _CURRENT_SMALL_TASK_PATHS.get())
 
 
+def is_unit_test_repair_code_path(path: str, owner: str | None = None) -> bool:
+    """识别可供单测局部修复的源码和测试路径，排除命令及清单。"""
+    candidate = PurePosixPath(_normalize_candidate(path))
+    parts = tuple(part.casefold() for part in candidate.parts)
+    if len(parts) < 3 or (owner is not None and parts[0] != owner):
+        return False
+    if parts[0] == "frontend":
+        return parts[1] in {"src", "tests"} and candidate.suffix in {".ts", ".tsx", ".js", ".jsx"}
+    return parts[0] == "backend" and parts[1:3] in {("src", "main"), ("src", "test")} and candidate.suffix == ".java"
+
+
 class ScopedSmallTaskBackend(BackendProtocol):
     """给底层 workspace backend 加上按任务动态收紧的写入边界。"""
 
-    def __init__(self, delegate: BackendProtocol, *, limit_context: bool = False):
+    def __init__(self, delegate: BackendProtocol, *, limit_context: bool = False, unit_test_code_only: bool = False):
         """保留任务写入授权，按场景限制返回给模型的读取结果。"""
         self._delegate = delegate
         self._limit_context = limit_context
+        self._unit_test_code_only = unit_test_code_only
 
     def ls(self, path: str) -> LsResult:
         """列出源码目录并过滤安装依赖、缓存和构建产物。"""
@@ -182,7 +195,7 @@ class ScopedSmallTaskBackend(BackendProtocol):
     def write(self, file_path: str, content: str) -> WriteResult:
         """只允许创建授权范围内的文件，拒绝无范围或越界写入。"""
 
-        if not is_small_task_path_allowed(file_path):
+        if not self._write_allowed(file_path):
             return WriteResult(error=_scope_error(file_path))
         return self._delegate.write(file_path, content)
 
@@ -195,7 +208,7 @@ class ScopedSmallTaskBackend(BackendProtocol):
     ) -> EditResult:
         """只允许修改授权范围内的文件，避免模型扩大任务边界。"""
 
-        if not is_small_task_path_allowed(file_path):
+        if not self._write_allowed(file_path):
             return EditResult(error=_scope_error(file_path))
         return self._delegate.edit(file_path, old_string, new_string, replace_all)
 
@@ -222,7 +235,7 @@ class ScopedSmallTaskBackend(BackendProtocol):
         denied = {
             path
             for path, _content in files
-            if not is_small_task_path_allowed(path)
+            if not self._write_allowed(path)
         }
         if denied:
             return [
@@ -233,6 +246,12 @@ class ScopedSmallTaskBackend(BackendProtocol):
                 for path, _content in files
             ]
         return self._delegate.upload_files(files)
+
+    def _write_allowed(self, path: str) -> bool:
+        """在任务授权内进一步限于代码文件，保障原测试命令的完整性。"""
+        return is_small_task_path_allowed(path) and (
+            not self._unit_test_code_only or is_unit_test_repair_code_path(path)
+        )
 
     def __getattr__(self, name: str) -> Any:
         """把未涉及写入边界的兼容 backend 属性交给底层实现。"""

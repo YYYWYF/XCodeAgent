@@ -10,7 +10,10 @@ from app.agents.model_factory import create_chat_model
 from app.agents.model_operations import model_operation
 from app.config import Settings
 from app.observability.build_instrumentation import integration_repair_trace
-from app.services.integration_repair_evidence import compact_json, integration_repair_evidence, supplement_repair_evidence
+from app.services.integration_repair_evidence import (
+    DIAGNOSTIC_CHARS, compact_json, integration_repair_evidence, supplement_repair_evidence,
+    unit_test_dependency_evidence,
+)
 from app.services.run_workers import run_worker
 from app.services.user_skill_runtime import build_required_user_skills_prompt, create_user_skill_runtime_snapshot
 
@@ -51,33 +54,63 @@ class IntegrationRepairDecision(BaseModel):
         return self
 
 
+class UnitTestRepairDecision(IntegrationRepairDecision):
+    """单测复用同一决策校验，允许省略不适用的说明字段。"""
+
+    escalationKind: Literal["code_scope", "formal_revision"] | None = None
+    strategy: ShortNote = ""
+    reason: ShortNote = ""
+    failure_handling: ShortNote = ""
+
+
 def decide_integration_repair(
     *, workspace: Path, runtime_root: Path, requests: list[dict[str, Any]],
     scoped_tasks: list[dict[str, Any]], selected_skills: list[str] | None, repair_attempt: int,
-    settings: Settings,
+    settings: Settings, business_stage: str = "integration_test",
 ) -> dict[str, Any]:
     """首轮直接规划，最多追加一轮受控证据或格式纠正。"""
-    with model_operation(_OPERATION, business_stage="integration_test"), integration_repair_trace(
-        "repair_planning", repair_round=repair_attempt,
+    unit_test = business_stage == "unit_test"
+    operation = "plan_unit_test_repairs" if unit_test else _OPERATION
+    with model_operation(operation, business_stage=business_stage), integration_repair_trace(
+        "repair_planning", repair_round=repair_attempt, business_stage=business_stage,
     ) as trace, run_worker():
         evidence = integration_repair_evidence(workspace, runtime_root, requests, scoped_tasks)
+        if unit_test and (dependency := unit_test_dependency_evidence(workspace, evidence)):
+            if len(compact_json({**evidence, "dependencyRecovery": dependency})) <= DIAGNOSTIC_CHARS:
+                evidence["dependencyRecovery"] = dependency
         skills_prompt = ""
         if selected_skills:
             skills = create_user_skill_runtime_snapshot(selected_skill_names=tuple(selected_skills))
             skills_prompt = build_required_user_skills_prompt(skills.prompt_documents)
-        instructions = "\n\n".join(filter(None, [_INSTRUCTIONS, skills_prompt]))
+        instructions = _INSTRUCTIONS
+        if unit_test:
+            instructions = instructions.replace("current integration failure", "current unit-test failure") + (
+                " Distinguish test implementation, production behavior, and dependencies or toolchain. "
+                "An actionable compiler or assertion error at an authorized location is enough to "
+                "delegate repair; the coding agent can inspect the file before editing. "
+                "When dependencyRecovery confirms an already declared missing package, choose repair "
+                "with a strategy to install the current declared dependencies and run the failed command. "
+                "The coding agent can run that command within its scope. "
+                "Preserve assertions and the checks that run them. A change to formal semantics requires "
+                "a formal revision and must not be scheduled by a local repair."
+            )
+        instructions = "\n\n".join(filter(None, [instructions, skills_prompt]))
         model = create_chat_model(settings, max_tokens_override=4_096, max_retries_override=0)
         result: IntegrationRepairDecision | None = None
         for attempt in range(2):
             try:
                 result = invoke_repair_result(
-                    model, IntegrationRepairDecision, instructions=instructions,
-                    evidence=compact_json(evidence), first_prompt=attempt == 0,
+                    model, UnitTestRepairDecision if unit_test else IntegrationRepairDecision, instructions=instructions,
+                    evidence=compact_json(evidence), first_prompt=attempt == 0 and not unit_test,
+                    accept_json_text=unit_test,
                 )
             except Exception as error:
                 with run_worker():
                     trace.status = "failed"
                     trace.reason = "model_error"
+                    if unit_test:
+                        # 保留模型原始诊断，让现有单测 Recovery 按真实错误分类。
+                        raise
                     return {
                         "decision": "terminal_failure",
                         "reason": f"集成修复规划调用模型失败（{type(error).__name__}）。",
@@ -87,7 +120,7 @@ def decide_integration_repair(
                 break
             if attempt == 0:
                 trace.reason = "invalid_result" if result is None else "additional_evidence"
-                if result is not None:
+                if result is not None or unit_test:
                     evidence = supplement_repair_evidence(workspace, runtime_root, evidence)
                 instructions += "\nThis is the final attempt. Submit one valid decision."
         if result is None or result.decision == "needs_evidence":
@@ -95,7 +128,7 @@ def decide_integration_repair(
             trace.reason = "unresolved_evidence" if result else "invalid_result"
             return {
                 "decision": "terminal_failure",
-                "reason": "集成修复规划未取得充分证据或有效结构化决策。",
+                "reason": ("单元测试修复规划" if unit_test else "集成修复规划") + "未取得充分证据或有效结构化决策。",
                 "failure_handling": "停止自动修复，保留本轮失败报告。",
             }
         if result.decision == "terminal_failure":

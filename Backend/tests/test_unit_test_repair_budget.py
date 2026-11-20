@@ -65,9 +65,9 @@ class UnitTestRepairBudgetTests(unittest.TestCase):
                     "unit_test_repair_iteration": 10,
                 }
                 plan = {"status": "ready", "decision": "repair", "tasks": [repair_task("backend_unit_tests")]}
-                with patch("app.graph.subgraphs.testing.capture_agent_file_changes", return_value=SimpleNamespace(
-                    value=plan, code_change_set=None,
-                )) as planner, patch("app.graph.subgraphs.testing.write_repair_task_plan_json", return_value="plan.json"):
+                with patch(
+                    "app.graph.subgraphs.testing.plan_repairs_with_repair_planner_agent", return_value=plan,
+                ) as planner, patch("app.graph.subgraphs.testing.write_repair_task_plan_json", return_value="plan.json"):
                     result = unit_repair_planning(state)
                 self.assertEqual(result["unit_test_next_action"], "handle_failure" if count == 10 else "unit_test_repair")
                 self.assertEqual(planner.call_count, 0 if count == 10 else 1)
@@ -114,8 +114,8 @@ class UnitTestRepairBudgetTests(unittest.TestCase):
         state = {"unit_test_repair_attempts": {"backend_unit_tests": 2}, "unit_test_max_repair_iterations": 10}
         summary = _workflow_summary(state, [])
         self.assertEqual(summary["unitTestRepairAttempts"], state["unit_test_repair_attempts"])
-        inputs = workflow_run_inputs({"resumeState": {"state": {"unitTestRepairAttempts": {"backend_unit_tests": 0}}}})
-        self.assertNotIn("unit_test_repair_attempts", inputs["resume_values"])
+        with self.assertRaisesRegex(ValueError, "不能提交会话状态快照"):
+            workflow_run_inputs({"resumeState": {"state": {"unitTestRepairAttempts": {"backend_unit_tests": 0}}}})
 
     def test_exhausted_debug_rerun_replaces_stale_agent_error_with_current_reason(self) -> None:
         """调试重跑保持额度，但节点与失败处理必须展示本次真实终止原因。"""
@@ -143,15 +143,17 @@ class UnitTestConfirmationResetTests(unittest.TestCase):
     """已经走过测试阶段的线程，从单测调试重入时必须重新确认。"""
 
     def test_debug_and_unit_test_answer_discard_old_confirm(self) -> None:
-        """UI 快照和 checkpoint 里的旧确认均由本次空提交显式覆盖。"""
+        """当前请求拒绝旧快照，并显式清除 checkpoint 里的旧确认。"""
         for payload in (
             {"workflowDebug": {"enabled": True, "resumeFrom": "unit_test"}},
             {"workflowDebug": {"enabled": True, "resumeFrom": "test_phase_confirmation"}},
             {"clarificationAnswers": {"unit_test_confirmation": {"selected": "run"}}},
         ):
-            inputs = workflow_run_inputs({**payload, "resumeState": {"state": {
-                "testPhaseConfirmation": {"action": "confirm"},
-            }}})
+            with self.assertRaisesRegex(ValueError, "不能提交会话状态快照"):
+                workflow_run_inputs({**payload, "resumeState": {"state": {
+                    "testPhaseConfirmation": {"action": "confirm"},
+                }}})
+            inputs = workflow_run_inputs(payload)
             self.assertEqual(inputs["resume_values"]["test_phase_confirmation"], {})
 
     def test_unit_test_completion_clears_confirm_and_requires_new_confirmation(self) -> None:

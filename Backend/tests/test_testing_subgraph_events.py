@@ -899,13 +899,18 @@ class TestingSubgraphEventsTests(unittest.TestCase):
         )
 
     def test_generation_tool_activity_updates_checks_and_clears_on_completion(self) -> None:
-        """真实调用适配器必须转发工具生命周期，生成终态必须清除临时活动。"""
+        """前后端生成卡各自更新，共享路径不改变卡片，生成终态清除临时活动。"""
 
         snapshots: list[dict[str, Any]] = []
-        activity = {
+        frontend_activity = {
             "callId": "read-source", "tool": "read_file", "category": "read",
             "message": "正在读取文件：/frontend/src/Orders.tsx",
             "path": "/frontend/src/Orders.tsx",
+        }
+        backend_activity = {
+            "callId": "write-test", "tool": "write_file", "category": "write",
+            "message": "正在写入文件：/backend/src/test/java/OrderServiceTest.java",
+            "path": "/backend/src/test/java/OrderServiceTest.java",
         }
 
         def generate(
@@ -915,12 +920,17 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             selected_skill_names: list[str] | None,
             on_tool_activity: ToolActivityCallback,
         ) -> dict[str, Any]:
-            """模拟底层 Agent 连续发布同一次工具调用的各个状态。"""
+            """模拟底层 Agent 交错发布前后端及共享目录的工具活动。"""
 
             self.assertEqual(workspace, "/tmp/workspace")
             self.assertEqual(selected_skill_names, ["test-skill"])
-            for status in ("running", "completed", "failed"):
-                on_tool_activity({**activity, "status": status})
+            on_tool_activity({**frontend_activity, "status": "running"})
+            on_tool_activity({**backend_activity, "status": "running"})
+            on_tool_activity({**frontend_activity, "status": "completed"})
+            on_tool_activity({**backend_activity, "status": "failed"})
+            on_tool_activity({**frontend_activity, "path": "/.devagentstudio/plans", "status": "running"})
+            on_tool_activity({**backend_activity, "path": "/", "status": "running"})
+            on_tool_activity({"tool": "read_file", "status": "running"})
             return {"status": "skipped", "summary": "无可生成测试。"}
 
         with patch(
@@ -941,12 +951,17 @@ class TestingSubgraphEventsTests(unittest.TestCase):
             generated = generate_unit_tests(state, config=config)
             validate_generated_unit_tests({**state, **generated}, config=config)
 
-        self.assertEqual(len(snapshots), 10)
+        self.assertEqual(len(snapshots), 8)
         self.assertTrue(all(event["type"] == "unit_test.checks" for event in snapshots))
-        for index, status in enumerate(("running", "completed", "failed")):
-            for check in snapshots[3 + index * 2]["checks"]:
-                self.assertEqual(check["activeToolActivity"], {**activity, "status": status})
-                self.assertIn("正在调用 TestGeneration Agent", check["evidence"])
+        frontend, backend = snapshots[2]["checks"]
+        self.assertEqual(frontend["activeToolActivity"], {**frontend_activity, "status": "running"})
+        self.assertNotIn("activeToolActivity", backend)
+        frontend, backend = snapshots[3]["checks"]
+        self.assertEqual(frontend["activeToolActivity"], {**frontend_activity, "status": "running"})
+        self.assertEqual(backend["activeToolActivity"], {**backend_activity, "status": "running"})
+        frontend, backend = snapshots[5]["checks"]
+        self.assertEqual(frontend["activeToolActivity"], {**frontend_activity, "status": "completed"})
+        self.assertEqual(backend["activeToolActivity"], {**backend_activity, "status": "failed"})
         self.assertTrue(all("activeToolActivity" not in check for check in snapshots[-1]["checks"]))
         self.assertNotIn("activeToolActivity", str(generated))
 

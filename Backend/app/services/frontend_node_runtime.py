@@ -76,17 +76,21 @@ class FrontendNodeRuntime:
         return candidates[0]
 
     def verify(
-        self, command: str, *, workspace: Path, cwd: Path, npx: bool = False, before_install: bool = False,
+        self, command: str | list[str], *, workspace: Path, cwd: Path,
+        npx: bool = False, before_install: bool = False,
     ) -> None:
         """从包管理器的脚本环境检查实际 Node，发现被项目或启动器替换时显式失败。"""
+        launcher = [command] if isinstance(command, str) else command
         args = ["--offline", "-c", f'node -p "{_NODE_EXPRESSION}"'] if npx else [
             "exec", "node", "-p", _NODE_EXPRESSION,
         ]
         try:
-            if before_install and Path(command).stem.lower() == "yarn":
-                actual_path, actual_version = _probe_yarn_launcher(command, self.env, workspace, cwd)
+            if before_install and Path(launcher[0]).stem.lower() == "yarn":
+                actual_path, actual_version = _probe_yarn_launcher(launcher[0], self.env, workspace, cwd)
             else:
-                actual_path, actual_version = _probe_node([command, *args], self.env, workspace, cwd)
+                # pnpm 新版的 exec 默认可能安装依赖。探测时禁用，由调用方显式安装并记录日志。
+                env = {**self.env, "pnpm_config_verify_deps_before_run": "false"} if before_install else self.env
+                actual_path, actual_version = _probe_node([*launcher, *args], env, workspace, cwd)
         except (FrontendNodeError, OSError) as exc:
             raise FrontendNodeError(f"无法核对包管理器的 Node。当前选择 {self.describe()}。{exc}") from exc
         if not self.matches({"path": str(actual_path), "version": actual_version}):
@@ -106,6 +110,36 @@ def frontend_package_manager(cwd: Path, package_json: dict[str, Any]) -> str:
     if (cwd / "pnpm-lock.yaml").is_file():
         return "pnpm"
     return "yarn" if (cwd / "yarn.lock").is_file() else "pnpm"
+
+
+def frontend_unit_package_manager_argv(
+    node: FrontendNodeRuntime, name: str, declaration: Any, *, workspace: Path, cwd: Path,
+) -> list[str]:
+    """优先复用版本匹配的 pnpm，必要时用 Corepack 启动工程声明的版本。"""
+    pinned = re.fullmatch(r"pnpm@(\d+\.\d+\.\d+(?:-[\w.-]+)?)(?:\+[\w.-]+)?", str(declaration or ""))
+    if name != "pnpm" or pinned is None:
+        return [node.command(name)]
+    expected = pinned[1]
+    actual = "不可用"
+    try:
+        command = node.command(name)
+        completed = workspace_process_registry.run(
+            [command, "--version"], workspace=workspace, cwd=cwd, env=node.env,
+            capture_output=True, timeout=_PROBE_TIMEOUT, check=False,
+        )
+        if completed.returncode == 0:
+            versions = subprocess_output_text(completed.stdout).strip().splitlines()
+            actual = versions[-1] if versions else actual
+            if actual == expected:
+                return [command]
+    except (OSError, FrontendNodeError, subprocess.TimeoutExpired):
+        pass
+    try:
+        return [node.command("corepack"), pinned[0]]
+    except FrontendNodeError as exc:
+        raise FrontendNodeError(
+            f"工程要求 pnpm {expected}，当前 pnpm {actual}。请在 {node.describe()} 环境提供该版本或 Corepack。"
+        ) from exc
 
 
 def resolve_frontend_node(workspace: Path) -> FrontendNodeRuntime:

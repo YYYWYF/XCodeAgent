@@ -8,12 +8,14 @@ from pydantic import BaseModel, ValidationError
 
 from app.observability.build_instrumentation import record_prompt
 from app.services.run_workers import run_worker
+from app.utils.model_output import extract_json_object
 
 Result = TypeVar("Result", bound=BaseModel)
 
 
 def invoke_repair_result(
-    model: BaseChatModel, schema: type[Result], *, instructions: str, evidence: str, first_prompt: bool = False,
+    model: BaseChatModel, schema: type[Result], *, instructions: str, evidence: str,
+    first_prompt: bool = False, accept_json_text: bool = False,
 ) -> Result | None:
     """只绑定结果 schema，一次调用后由平台验证参数，不执行返回的工具调用。"""
     with run_worker():
@@ -29,9 +31,16 @@ def invoke_repair_result(
         if not isinstance(message, AIMessage):
             return None
         calls = message.tool_calls
-        if len(calls) != 1 or calls[0]["name"] != schema.__name__ or message.invalid_tool_calls:
+        if message.invalid_tool_calls:
+            return None
+        if len(calls) == 1 and calls[0]["name"] == schema.__name__:
+            fields = calls[0]["args"]
+        elif accept_json_text and not calls:
+            # 单测兼容供应商未选择结果工具时直接返回的结构化对象，仍执行同一严格校验。
+            fields = extract_json_object(message.text)
+        else:
             return None
         try:
-            return schema.model_validate(calls[0]["args"])
+            return schema.model_validate(fields)
         except ValidationError:
             return None

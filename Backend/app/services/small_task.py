@@ -9,7 +9,9 @@ from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededE
 
 from app.agents.small_task import invoke_small_task_agent, normalize_small_task_result
 from app.agents.small_task.integration_repair import integration_repair_packet, is_restricted_integration_task
+from app.agents.small_task.unit_test_repair import unit_test_code_packet
 from app.agents.tool_activity_stream import ToolActivityCallback
+from app.observability.build_instrumentation import integration_repair_trace
 from app.services.backend_startup_diagnostics import startup_failure_packet
 from app.services.integration_repair_execution import execute_integration_repair_task
 from app.services.small_task_context import repair_candidate_files, repair_strategy
@@ -38,6 +40,8 @@ def build_small_task_packet(
 
     if is_restricted_integration_task(source, task.get("owner")):
         return integration_repair_packet(task, state, source)
+    if source == "unit_test.small_task" and (unit_packet := unit_test_code_packet(task, state, source)):
+        return unit_packet
     allowed_paths = _task_paths(task)
     return {
         "schemaVersion": "small-task-packet.v1",
@@ -126,6 +130,17 @@ def execute_small_task_batch(
                     packet=packet, state=state, task=task, workspace=workspace,
                     before=before, batch=tasks, on_tool_activity=activity,
                 )
+            elif source == "unit_test.small_task":
+                with integration_repair_trace(
+                    "unit_test_repair_task", state=state, task_id=packet["taskId"],
+                    repair_round=int(task.get("repair_attempt") or (state.get("unit_test_repair_iteration") or 0) + 1),
+                    business_stage="unit_test",
+                ) as trace:
+                    normalized = run_shared_task(task, packet, activity)
+                    trace.status = {
+                        "requires_user_confirmation": "awaiting_user",
+                        "requires_workflow": "awaiting_user", "failed": "failed",
+                    }.get(normalized["status"], "completed")
             else:
                 normalized = run_shared_task(task, packet, activity)
         except Exception as exc:

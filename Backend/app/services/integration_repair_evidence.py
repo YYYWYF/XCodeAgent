@@ -3,6 +3,7 @@
 import json
 from itertools import islice
 from pathlib import Path
+import re
 from typing import Any
 
 from app.branding import WORKSPACE_ARTIFACT_DIR_NAME
@@ -11,6 +12,10 @@ from app.services.preview_diagnostics import diagnostic_locations, sanitize_diag
 
 DIAGNOSTIC_CHARS = 12_000
 _GENERATED_DIRS = {".git", ".devagentstudio", ".next", ".venv", "build", "dist", "node_modules", "target"}
+_MISSING_NODE_MODULE = re.compile(
+    r"""(?:cannot find module|can't resolve)\s+['"]((?:@[\w.-]+/)?[\w.-]+)(?:/[^'"]*)?['"]""",
+    re.IGNORECASE,
+)
 
 
 def compact_json(value: Any) -> str:
@@ -173,3 +178,30 @@ def supplement_repair_evidence(root: Path, runtime: Path, evidence: dict[str, An
             if len(compact_json(result)) > DIAGNOSTIC_CHARS:
                 windows.pop()
     return result
+
+
+def unit_test_dependency_evidence(root: Path, evidence: dict[str, Any]) -> dict[str, str] | None:
+    """校验缺失的前端包已由工程声明，供规划器选择可执行的安装修复。"""
+    package_names = {
+        match.group(1)
+        for check in evidence["checks"] if check["checkId"] == "frontend_unit_tests"
+        for match in _MISSING_NODE_MODULE.finditer(check["error"])
+    }
+    if not package_names:
+        return None
+    for manifest in ("frontend/package.json", "Frontend/package.json", "package.json"):
+        if not (relative := safe_diagnostic_path(root, manifest)):
+            continue
+        path = root / relative
+        try:
+            if path.stat().st_size > 128_000:
+                continue
+            project = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for field in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+            declared = project.get(field) if isinstance(project, dict) else None
+            if isinstance(declared, dict) and (matches := sorted(package_names.intersection(declared))):
+                return {"manifest": relative, "missingDeclaredPackage": matches[0]}
+        return None
+    return None

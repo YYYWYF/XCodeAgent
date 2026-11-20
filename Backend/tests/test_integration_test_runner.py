@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 from tests.frontend_node_fixture import stub_frontend_node
 from app.services.frontend_node_runtime import record_frontend_dependencies
@@ -338,7 +339,7 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 calls.append(argv)
                 return SimpleNamespace(
                     returncode=0,
-                    stdout="Test Suites: 3 passed, 3 total\nTests: 3 passed, 3 total",
+                    stdout="Test Suites: 1 passed, 1 total\nTests: 3 passed, 3 total",
                     stderr="",
                 )
 
@@ -402,6 +403,8 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 """记录两个阶段的前端命令并统一模拟成功。"""
 
                 calls.append(argv)
+                if argv == ["pnpm", "install"]:
+                    (frontend / "node_modules").mkdir()
                 return SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
             with (
@@ -447,6 +450,51 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 ["pnpm", "run", "test:unit"],
             ],
         )
+
+    def test_unit_phase_installs_missing_development_dependencies(self) -> None:
+        """仅生产安装时补装开发依赖，安装失败时保留真实错误且不运行 Jest。"""
+
+        for install_code in (0, 1):
+            with self.subTest(install_code=install_code), tempfile.TemporaryDirectory() as workspace:
+                frontend = Path(workspace) / "frontend"
+                (frontend / "node_modules").mkdir(parents=True)
+                (frontend / "tests").mkdir()
+                (frontend / "tests" / "orders.test.ts").touch()
+                (frontend / "pnpm-lock.yaml").touch()
+                (frontend / "package.json").write_text(
+                    '{"scripts":{"test":"jest"},"devDependencies":{"jest":"^27.0.0"}}', encoding="utf-8",
+                )
+                calls: list[list[str]] = []
+
+                def fake_run(argv: list[str], **kwargs: Any) -> SimpleNamespace:
+                    """分别模拟依赖安装和 Jest 并记录实际命令。"""
+                    calls.append(argv)
+                    if argv[1] == "install":
+                        return SimpleNamespace(returncode=install_code, stdout="", stderr="registry error")
+                    return SimpleNamespace(returncode=0, stdout="Tests: 1 passed, 1 total", stderr="")
+
+                with (
+                    patch("app.services.integration_test_runner.shutil.which", return_value="pnpm"),
+                    patch("app.services.integration_test_runner.workspace_process_registry.run", side_effect=fake_run),
+                ):
+                    result = run_integration_checks(
+                        {"workspace": workspace},
+                        phase="unit",
+                        affected_layers={"frontend"},
+                    )
+
+                install, unit = result["test_results"]
+                self.assertEqual([install["id"], unit["id"]], ["frontend_install", "frontend_unit_tests"])
+                self.assertEqual(calls[0], ["pnpm", "install", "--prod=false", "--frozen-lockfile"])
+                self.assertEqual(install["passed"], install_code == 0)
+                if install_code == 0:
+                    self.assertEqual(calls[1:], [["pnpm", "run", "test"]])
+                    self.assertEqual(unit["passed_tests"], 1)
+                else:
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(install["failure_category"], "dependency_install_failed")
+                    self.assertIn("registry error", install["evidence"])
+                    self.assertTrue(unit["skipped"])
 
     def test_affected_layers_skip_existing_frontend_unit_tests(self) -> None:
         """验证受影响层未包含 frontend 时不执行已有的前端测试。"""
@@ -649,7 +697,13 @@ class IntegrationTestRunnerTests(unittest.TestCase):
                 """记录 Maven 两阶段命令并统一模拟成功。"""
 
                 calls.append(argv)
-                return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+                stdout = (
+                    "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.1 s\n"
+                    "[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.1 s\n"
+                    "[INFO] Results:\n"
+                    "[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0\n"
+                )
+                return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
             with (
                 patch(
@@ -675,6 +729,8 @@ class IntegrationTestRunnerTests(unittest.TestCase):
         )
         self.assertTrue(unit_tests["passed"])
         self.assertFalse(unit_tests["skipped"])
+        self.assertEqual(unit_tests["passed_tests"], 3)
+        self.assertEqual(unit_tests["total_tests"], 3)
 
     def test_affected_layers_skip_existing_backend_unit_tests(self) -> None:
         """验证受影响层未包含 backend 时仍构建后端但不执行已有测试。"""

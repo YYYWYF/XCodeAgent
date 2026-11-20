@@ -44,6 +44,7 @@ from app.workspace.spec_documents import workflow_artifact_root, workspace_root
 
 INTEGRATION_TEST_PROGRESS_REPORTER_KEY = "integration_test_progress_reporter"
 INTEGRATION_REPAIR_PROGRESS_EVENT_TYPE = "integration_test.repair.started"
+_UNIT_TEST_ARTIFACT_NAMESPACE = "unit-tests"
 IntegrationTestProgressReporter = Callable[[dict[str, Any]], None]
 _FRONTEND_SOURCE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx"}
 _BACKEND_SOURCE_SUFFIXES = {".java"}
@@ -578,14 +579,17 @@ def generate_unit_tests(
     generation_evidence = "正在调用 TestGeneration Agent 生成或更新受影响的单元测试文件。"
 
     def report_tool_activity(activity: dict[str, Any]) -> None:
-        """把同一次测试生成调用的最新工具活动同步到本轮各端生成检查。"""
+        """只把路径能明确归属的工具活动投影到对应端的生成检查。"""
 
-        for layer in context_layers:
-            check = _generation_progress_check(
-                layer, evidence=generation_evidence, required=True,
-            )
-            check["activeToolActivity"] = activity
-            _report_generation_progress(reporter, check=check, status="running")
+        path = activity.get("path")
+        if not isinstance(path, str) or not path.startswith("/"):
+            return
+        layer = path.removeprefix("/").partition("/")[0].casefold()
+        if layer not in context_layers:
+            return
+        check = _generation_progress_check(layer, evidence=generation_evidence, required=True)
+        check["activeToolActivity"] = activity
+        _report_generation_progress(reporter, check=check, status="running")
 
     for layer in context_layers:
         _report_generation_progress(
@@ -614,12 +618,17 @@ def generate_unit_tests(
         result = _skipped_generation_result("本轮没有可测试的前后端业务源码变更。")
     else:
         try:
-            result = _invoke_test_generation_agent(
-                state={**state, "unit_test_generation_context": context},
-                workspace=workspace_from_state(state),
-                selected_skill_names=state.get("selected_skill_names"),
-                on_tool_activity=report_tool_activity if reporter is not None else None,
-            )
+            with integration_repair_trace(
+                "generate_unit_tests", state=state, business_stage="unit_test",
+            ) as trace:
+                result = _invoke_test_generation_agent(
+                    state={**state, "unit_test_generation_context": context},
+                    workspace=workspace_from_state(state),
+                    selected_skill_names=state.get("selected_skill_names"),
+                    on_tool_activity=report_tool_activity if reporter is not None else None,
+                )
+                if result.get("status") == "failed":
+                    trace.status = "failed"
         except Exception as exc:
             result = _skipped_generation_result(
                 f"TestGeneration Agent 执行异常，按零个测试文件继续：{type(exc).__name__}: {exc}"
@@ -1314,6 +1323,7 @@ def actual_project_checks(
         state,
         on_progress=_diagnostic_progress_reporter(state, _progress_reporter(config)),
         phase="unit",
+        artifact_namespace=_UNIT_TEST_ARTIFACT_NAMESPACE,
     )
     test_results = _ordered_integration_checks(
         [
@@ -1661,25 +1671,31 @@ def repair_planning(state: ProjectState, *, integration_entry: bool = False) -> 
         }
 
     workspace = workspace_from_state(state)
+    unit_test_entry = not integration_entry and state.get("repair_return_node") == "unit_test"
+    runtime_root = None
+    if integration_entry or unit_test_entry:
+        runtime_root = workflow_artifact_root(state) / "runtime"
+        if unit_test_entry:
+            runtime_root /= _UNIT_TEST_ARTIFACT_NAMESPACE
 
     def plan() -> dict[str, Any]:
         """使用当前测试证据规划，集成入口无需为只读推理扫描工作区差异。"""
         return plan_repairs_with_repair_planner_agent(
             test_report=state.get("test_report", {}),
             revision_requests=state.get("revision_requests", []),
-            build_task_plan=state.get("build_task_plan"),
+            build_task_plan=None if unit_test_entry else state.get("build_task_plan"),
             build_execution_scope=state.get("build_execution_scope"),
             scoped_tasks=_repair_scoped_tasks(state),
             repair_attempt=repair_iteration + 1,
             workspace=workspace,
             selected_skill_names=state.get("selected_skill_names"),
-            business_stage=("unit_test" if not integration_entry and state.get("repair_return_node") == "unit_test" else "integration_test"),
+            business_stage="unit_test" if unit_test_entry else "integration_test",
             integration_entry=integration_entry,
-            **({"runtime_root": workflow_artifact_root(state) / "runtime"} if integration_entry else {}),
+            runtime_root=runtime_root,
         )
 
     change_update: dict[str, Any] = {}
-    if integration_entry:
+    if integration_entry or unit_test_entry:
         repair_task_plan = plan()
         with run_worker():
             repair_task_plan_path = write_repair_task_plan_json(state, repair_task_plan)

@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.services import frontend_node_runtime as node_runtime
@@ -114,3 +115,21 @@ class FrontendNodeRuntimeTests(unittest.TestCase):
             runtime.verify("yarn", workspace=self.root, cwd=self.root)
             self.assertEqual(probe.call_args.args[0][:3], ["yarn", "exec", "node"])
             self.assertNotIn("NODE_OPTIONS", probe.call_args.args[1])
+
+    def test_unit_testing_uses_pinned_pnpm_when_path_has_older_version(self) -> None:
+        """PATH 工具版本不符时选择 Corepack，安装前的 Node 探测不得触发安装。"""
+        node = self._installed_node("v22.23.5")
+        runtime = node_runtime.FrontendNodeRuntime(node, "v22.23.5", "NVM_BIN", {"PATH": str(node.parent)})
+        with (
+            patch.object(node_runtime.FrontendNodeRuntime, "command", side_effect=["pnpm", "corepack"]),
+            patch.object(node_runtime.workspace_process_registry, "run",
+                         return_value=SimpleNamespace(returncode=0, stdout=b"8.12.0\n")),
+            patch.object(node_runtime, "_probe_node", return_value=(node, runtime.version)) as probe,
+        ):
+            launcher = node_runtime.frontend_unit_package_manager_argv(
+                runtime, "pnpm", "pnpm@11.9.0", workspace=self.root, cwd=self.root,
+            )
+            self.assertEqual(launcher, ["corepack", "pnpm@11.9.0"])
+            runtime.verify(launcher, workspace=self.root, cwd=self.root, before_install=True)
+            self.assertEqual(probe.call_args.args[0][:4], [*launcher, "exec", "node"])
+            self.assertEqual(probe.call_args.args[1]["pnpm_config_verify_deps_before_run"], "false")

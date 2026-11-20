@@ -1,11 +1,11 @@
-"""消费 LangChain 终态中的真实用量，不读取消息正文。"""
+"""消费 LangChain 真实用量和单测首轮输入大小，不保存消息正文。"""
 
 from collections import OrderedDict
 from threading import Lock
 
 from langchain_core.callbacks import BaseCallbackHandler
 
-from app.observability.build_instrumentation import finish, start_model, _exception_status, _is_cancelled
+from app.observability.build_instrumentation import finish, record_prompt, start_model, _exception_status, _is_cancelled
 
 
 def _usage(response, provider, name, stream_usage=None):
@@ -48,7 +48,7 @@ class BuildModelUsageCallback(BaseCallbackHandler):
         self.lock = Lock()
 
     def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs):
-        """入栈时捕获并发执行上下文，不保留消息或配置。"""
+        """入栈时捕获并发上下文，只统计单测首轮的实际消息长度。"""
         try:
             span = start_model()
             if span is None:
@@ -58,6 +58,12 @@ class BuildModelUsageCallback(BaseCallbackHandler):
                 evicted = self.inflight.popitem(last=False)[1] if len(self.inflight) > 1024 else None
             if evicted is not None:
                 finish(evicted[0], "interrupted", model=_usage(None, self.provider, self.name, evicted[1]))
+            if span.trace.business_stage == "unit_test" and span.extra.get("model_round") == 1 and messages:
+                first_request = messages[0]
+                record_prompt(
+                    "\n".join(message.text for message in first_request),
+                    task_context="\n".join(message.text for message in first_request if message.type == "human"),
+                )
         except Exception:
             pass
 

@@ -68,7 +68,17 @@ def _tool_display_path(
     """从不同工具参数中提取安全的虚拟路径或查找模式。"""
 
     if tool_name == "glob":
-        return _safe_virtual_path(payload.get("pattern"), workspace=workspace)
+        scope = _safe_virtual_path(payload.get("path"), workspace=workspace)
+        pattern = str(payload.get("pattern") or "").strip().replace("\\", "/")
+        target = _safe_virtual_path(pattern, workspace=workspace)
+        if not scope or scope == "/":
+            return target
+        if not target or not scope.startswith("/"):
+            return scope
+        if pattern.startswith("/") or not target.startswith("/"):
+            return target
+        # 相对模式以实际搜索目录为起点，进度卡可据此区分前端和后端。
+        return _safe_virtual_path(f"{scope}/{pattern}", workspace=workspace)
     file_tools = {"read_file", "write_file", "edit_file", "delete_file"}
     key = "file_path" if tool_name in file_tools else "path"
     return _safe_virtual_path(payload.get(key), workspace=workspace)

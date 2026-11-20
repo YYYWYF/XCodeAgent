@@ -387,19 +387,37 @@ def build_graph(
         """从单测入口重进，交给测试映射缓存和复测机制处理当前文件。"""
 
         from app.services.unit_test_reentry import prepare_unit_test_reentry
+        from app.observability.build_instrumentation import integration_repair_trace
 
-        with bind_node_recovery(state, "unit_test"):
+        with bind_node_recovery(state, "unit_test"), integration_repair_trace(
+            "unit_test", state=state, business_stage="unit_test",
+            repair_round=int(state.get("unit_test_repair_iteration") or 0),
+        ) as trace:
             prepared, fields = prepare_unit_test_reentry(state, "unit_test")
-            return {**nodes.unit_test(prepared), **fields}
+            result = nodes.unit_test(prepared)
+            trace.status = {"requires_user_input": "awaiting_user", "failed": "failed"}.get(
+                result.get("status"), "completed",
+            )
+            if result.get("status") in {"completed", "failed", "in_progress"}:
+                trace.quality_gate_passed = result.get("unit_test_quality_gate_passed")
+            return {**result, **fields}
 
     def unit_test_repair_with_recovery(state: ProjectState) -> dict[str, Any]:
         """从修复入口重进，保留已提交的完成任务和修复额度。"""
 
         from app.services.unit_test_reentry import prepare_unit_test_reentry
+        from app.observability.build_instrumentation import integration_repair_trace
 
-        with bind_node_recovery(state, "unit_test_repair"):
+        with bind_node_recovery(state, "unit_test_repair"), integration_repair_trace(
+            "unit_test_repair", state=state, business_stage="unit_test",
+            repair_round=int(state.get("unit_test_repair_iteration") or 0) + 1,
+        ) as trace:
             prepared, fields = prepare_unit_test_reentry(state, "unit_test_repair")
-            return {**nodes.unit_test_repair(prepared), **fields}
+            result = nodes.unit_test_repair(prepared)
+            trace.status = {"requires_user_input": "awaiting_user", "failed": "failed"}.get(
+                result.get("status"), "completed",
+            )
+            return {**result, **fields}
 
     builder.add_node("unit_test", observe_model_node("unit_test", unit_test_with_recovery))
     builder.add_node("unit_test_repair", observe_model_node("unit_test_repair", unit_test_repair_with_recovery))

@@ -22,6 +22,7 @@ from app.agents.test_generation.capabilities import (
 )
 from app.agents.test_generation.runtime_artifacts import is_preview_runtime_artifact
 from app.agents.test_generation.scope import is_frontend_test_support_path
+from app.observability.build_instrumentation import unit_test_child_trace
 from app.utils.model_output import extract_json_object
 from app.workspace.code_changes import capture_workspace_changes
 from app.workspace.artifact_snapshot import internal_artifact_snapshot
@@ -47,11 +48,16 @@ def generate_or_update_unit_tests_with_agent(
         return _skipped_result("没有可测试源码变更或工作区不可用。")
     cached = _cached_test_result(workspace, source_files)
     if cached is not None:
-        return cached
+        with unit_test_child_trace("unit_test.mapping_cache_hit"):
+            return cached
     try:
         from app.agents import create_agent_bundle
 
         prompt_context = dict(context)
+        prompt_context["existing_test_files"] = _normalize_test_files([
+            *_string_list(context.get("existing_test_files"), limit=MAX_TEST_FILES),
+            *_mapped_existing_tests(Path(workspace), source_files),
+        ])[:MAX_TEST_FILES]
         if "frontend" in _layers_for_sources(source_files):
             prompt_context["frontend_test_capabilities"] = (
                 load_frontend_test_capabilities(workspace)
@@ -256,28 +262,42 @@ def generate_or_update_unit_tests_with_agent(
 def _build_prompt(context: dict[str, Any]) -> str:
     """构造有界测试生成上下文，避免注入完整仓库和会话历史。"""
 
+    source_files = _string_list(context.get("source_files"), limit=100)
+    execution_slice = context.get("build_execution_slice")
+    execution_slice = execution_slice if isinstance(execution_slice, dict) else {}
     references = {
-        "source_files": context.get("source_files", [])[:100],
-        "code_diff": context.get("code_diff", {}),
+        "source_files": source_files,
         "existing_test_files": context.get("existing_test_files", [])[:5],
         "build_task_plan_path": context.get("build_task_plan_path"),
         "technical_plan_json_path": context.get("technical_plan_json_path"),
         "build_execution_scope": context.get("build_execution_scope", {}),
-        "build_execution_slice": context.get("build_execution_slice", {}),
+        "build_execution_slice": {
+            "target_unit_ids": _string_list(execution_slice.get("target_unit_ids"), limit=20),
+            "task_ids": _string_list(execution_slice.get("task_ids"), limit=100),
+            "source_behaviors": _changed_source_behaviors(execution_slice, set(source_files)),
+        },
         "frontend_test_capabilities": context.get(
             "frontend_test_capabilities", {}
         ),
+        # Diff 由收集节点逐条裁剪，序列化时仍保留每个完整字段。
+        "code_diff": context.get("code_diff", {}),
     }
     return (
-        "Generate or update unit tests for this bounded change. Read inputs in this order: "
-        "the frozen Build code diff; changed source files and existing related tests; the "
-        "confirmed Build task plan narrowed by the execution scope and slice; the current "
-        "TechnicalPlan JSON; then only direct source dependencies needed for the test. "
+        "Generate or update unit tests for this bounded change. Start from the frozen Build code diff, "
+        "the source behaviors and the related tests. Read changed source or a direct dependency "
+        "only when a specific behavior, signature or test fixture remains unclear. A complete source "
+        "diff is enough for a new file. Use the exact paths already supplied before searching. "
+        "Read only the "
+        "relevant window of the confirmed Build task plan or TechnicalPlan for unresolved contract details. "
+        "When the change is clear, write the required tests in the next tool turn. "
+        "After successful writes, return the result; the platform reads and validates the files. "
+        "Only re-read a changed range to resolve a tool error or a known mismatch. "
         "Existing tests must be updated in place when they cover the changed source. Do not "
         "create more than five test files. Frontend test filenames only need to remain flat "
         "under frontend/tests and end in .test.ts or .test.tsx; do not require a separator "
         "such as a hyphen. Before writing a frontend test, use only third-party packages "
-        "listed in frontend_test_capabilities.available_packages. Never import a package "
+        "listed in frontend_test_capabilities.available_packages. This list comes from the current "
+        "manifest; do not read the manifest again to verify it. Never import a package "
         "that is absent from that list, never modify package.json or a lockfile, and never "
         "request installation of a new npm package. If a preferred interaction helper is "
         "unavailable, use capabilities already declared by the project or a native DOM API.\n\n"
@@ -294,8 +314,31 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "MockMvcBuilders.standaloneSetup. Never use or import @WebMvcTest, @SpringBootTest, "
         "@MockBean, @Autowired or SpringExtension. If no compatible backend unit-test "
         "capability exists, return a skipped result instead of modifying dependencies.\n\n"
-        f"TestGenerationContext:\n{json.dumps(references, ensure_ascii=False, indent=2, default=str)[:28_000]}"
+        f"TestGenerationContext:\n{json.dumps(references, ensure_ascii=False, separators=(',', ':'), default=str)}"
     )
+
+
+def _changed_source_behaviors(
+    execution_slice: dict[str, Any], source_files: set[str],
+) -> list[dict[str, str]]:
+    """从精确匹配的文件职责提取短行为说明，去掉任务执行和验收历史。"""
+    behaviors: dict[str, str] = {}
+    for task in execution_slice.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        for change in task.get("change_scope") or []:
+            if not isinstance(change, dict):
+                continue
+            path = str(change.get("path") or "")
+            description = str(change.get("description") or "").strip()
+            if path in source_files and description:
+                behaviors.setdefault(path, description[:220])
+        if len(behaviors) >= 8:
+            break
+    return [
+        {"path": path, "behavior": description}
+        for path, description in list(behaviors.items())[:8]
+    ]
 
 
 def _validate_test_files(
@@ -659,15 +702,7 @@ def _existing_related_tests(
     """在生成 Agent 无输出时从映射和测试引用中恢复已有对应测试。"""
 
     root = Path(workspace).expanduser().resolve()
-    mapping_path = root / WORKSPACE_ARTIFACT_DIR / "cache" / "unit-test-mappings.json"
-    mapping = _read_mapping(mapping_path)
-    candidates = [
-        str(entry.get("testPath") or "")
-        for entry in mapping.get("entries", [])
-        if isinstance(entry, dict)
-        for source in source_files
-        if source in _string_list(entry.get("sourcePaths"), limit=20)
-    ]
+    candidates = _mapped_existing_tests(root, source_files)
     if not candidates:
         for source in source_files:
             source_path = root / source
@@ -699,6 +734,18 @@ def _existing_related_tests(
             if (root / path).is_file()
         )
     )[:MAX_TEST_FILES]
+
+
+def _mapped_existing_tests(root: Path, source_files: list[str]) -> list[str]:
+    """把仍存在的已关联测试作为输入线索，源码变化仍由正式缓存校验判断。"""
+    sources = set(source_files)
+    mapping = _read_mapping(root / WORKSPACE_ARTIFACT_DIR / "cache" / "unit-test-mappings.json")
+    candidates = _normalize_test_files([
+        str(entry.get("testPath") or "")
+        for entry in mapping.get("entries", [])
+        if isinstance(entry, dict) and sources.intersection(_string_list(entry.get("sourcePaths"), limit=20))
+    ])
+    return [path for path in candidates if (root / path).is_file()][:MAX_TEST_FILES]
 
 
 def _workspace_test_files(root: Path) -> list[str]:

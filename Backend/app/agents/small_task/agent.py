@@ -43,13 +43,13 @@ class IntegrationRepairPromptMetrics(AgentMiddleware):
 
 def create_integration_repair_agent(
     model, workspace_root: str | None, *, user_skills_backend: BackendProtocol,
-    agent_memory_backend: BackendProtocol, required_user_skills_prompt: str,
+    agent_memory_backend: BackendProtocol, required_user_skills_prompt: str, unit_test: bool = False,
 ):
-    """组装集成修复文件工具，不加载子 Agent、摘要模型或命令执行工具。"""
+    """为集成修复及单测代码修复组装有界文件工具。"""
     backend = ScopedSmallTaskBackend(create_workspace_backend(
         workspace_root, include_builtin_skills=True,
         user_skills_backend=user_skills_backend, agent_memory_backend=agent_memory_backend,
-    ), limit_context=True)
+    ), limit_context=True, unit_test_code_only=unit_test)
     filesystem = FilesystemMiddleware(
         backend=backend, permissions=create_workspace_permissions(
             workspace_root, mode="small_task", include_builtin_skills=True,
@@ -58,25 +58,36 @@ def create_integration_repair_agent(
     )
     file_tools = {"ls", "read_file", "write_file", "edit_file", "glob", "grep"}
     filesystem.tools = [tool for tool in filesystem.tools if tool.name in file_tools]
+    unit_instructions = (
+        "Repair one unit-test code failure. Start with the exact diagnosed location and make the "
+        "smallest authorized edit. Preserve all valid tests, assertions, and formal contracts. "
+        "Do not modify test scripts or dependency manifests. The platform reruns the original tests. "
+        "Return completed with a real edit, or report an exact scope or formal escalation before editing. "
+        "Return one SmallTask JSON object with status, summary, changedFiles, verification, failureReason "
+        "and escalation. Leave verification empty for platform retest."
+    )
+    integration_instructions = (
+        "Repair one integration failure using the task packet. Start with diagnosed source "
+        "before configuration hints. Edit only allowedPaths and preserve acceptance checks and formal "
+        "contracts. The platform runs installation and build checks after edits. Never claim a check "
+        "passed. Keep exploration narrow and make the smallest verified-on-disk change. If more scope "
+        "is needed, return exact requestedPaths with requires_user_confirmation; for formal changes "
+        "return requires_workflow before editing. Finish with one JSON object containing status and summary."
+    )
     return create_agent(
-        name="integration-repair-small-task", model=model,
+        name="unit-test-code-repair" if unit_test else "integration-repair-small-task", model=model,
         system_prompt="\n\n".join(filter(None, [
-            "Repair one integration failure using the task packet. Start with diagnosed source "
-            "before configuration hints. Edit only allowedPaths and preserve acceptance checks and formal "
-            "contracts. The platform runs installation and build checks after edits. Never claim a check "
-            "passed. Keep exploration narrow and make the smallest verified-on-disk change. If more scope "
-            "is needed, return exact requestedPaths with requires_user_confirmation; for formal changes "
-            "return requires_workflow before editing. Finish with one JSON object containing status and summary.",
+            unit_instructions if unit_test else integration_instructions,
             VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS, required_user_skills_prompt,
         ])),
-        tools=[create_delete_file_tool(workspace_root, path_guard=is_small_task_path_allowed)],
+        tools=[] if unit_test else [create_delete_file_tool(workspace_root, path_guard=is_small_task_path_allowed)],
         middleware=[
             RunCancellationMiddleware(model), SmallTaskCancellationMiddleware(),
             ModelCallLimitMiddleware(run_limit=12, exit_behavior="end"),
             filesystem,
             SkillsMiddleware(backend=backend, sources=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT]),
             MemoryMiddleware(backend=backend, sources=[AGENT_MEMORY_VIRTUAL_PATH]),
-            IntegrationRepairPromptMetrics(),
+            *([] if unit_test else [IntegrationRepairPromptMetrics()]),
         ],
     ).with_config({"recursion_limit": 128})
 

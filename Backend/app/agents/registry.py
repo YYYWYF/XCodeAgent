@@ -48,15 +48,22 @@ class AgentBundle:
     user_skills_revision: str = ""
     data_source_builtin_skill_names: tuple[str, ...] = ()
     test_generation: Any = None
-    _integration_repair_factory: Callable[[], Any] | None = None
+    _file_repair_factory: Callable[[bool], Any] | None = None
     frontend_build_factory: Callable[[Any], Any] | None = None
 
     @cached_property
     def integration_repair(self) -> Any:
         """在集成修复首次执行时创建前后端共用的受限 Agent。"""
-        if self._integration_repair_factory is None:
+        if self._file_repair_factory is None:
             raise RuntimeError("集成修复 Agent 未配置。")
-        return self._integration_repair_factory()
+        return self._file_repair_factory(False)
+
+    @cached_property
+    def unit_test_code_repair(self) -> Any:
+        """按需创建只使用文件工具的单测修复 Agent。"""
+        if self._file_repair_factory is None:
+            raise RuntimeError("单测代码修复 Agent 未配置。")
+        return self._file_repair_factory(True)
 
 
 def create_agent_bundle(
@@ -198,7 +205,7 @@ def _create_agent_bundle_for_workspace(
         required_user_skills_prompt=required_user_skills_prompt,
     )
 
-    def integration_repair_factory() -> Any:
+    def file_repair_factory(unit_test: bool) -> Any:
         """复用本 Bundle 已验证的技能与记忆，不引入其他场景的模型客户端。"""
         return create_integration_repair_agent(
             create_chat_model(settings, max_retries_override=0),
@@ -206,6 +213,7 @@ def _create_agent_bundle_for_workspace(
             user_skills_backend=user_skills.backend,
             agent_memory_backend=agent_memory.backend,
             required_user_skills_prompt=required_user_skills_prompt,
+            unit_test=unit_test,
         )
 
     try:
@@ -237,7 +245,7 @@ def _create_agent_bundle_for_workspace(
         database=database,
         repair_planner=repair_planner,
         small_task=small_task,
-        _integration_repair_factory=integration_repair_factory,
+        _file_repair_factory=file_repair_factory,
         test_generation=test_generation,
         workspace_assistant=workspace_assistant,
         selected_skill_names=selected_skill_names,

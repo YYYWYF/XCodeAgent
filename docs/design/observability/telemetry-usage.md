@@ -77,6 +77,12 @@
 
 报告固定分为 Prompt、整体 Token、交付效率与质量三部分。数值按 BuildRun 展示样本数、均值和中位数，逐片段展示 Task/Attempt 与 Span 父链。After 缺失时显示 `N/A`。数据损坏、Span 数目不符、模型用量缺失或条件不同会限制比较结论。质量通过需要最终完成、验收通过及覆盖率至少保持 Baseline 水平，并达到预设阈值；耗时和修复成本也须在预设容差内，才可根据 Token 下降判定该场景有效。
 
+## 开发单测对照回放
+
+开发单测采用同一观测开关。按 `context.business_stage=unit_test` 和 `identity.run_id` 聚合 `unit_test`、`unit_test_repair` 根片段，并沿父链关联 `generate_unit_tests`、`unit_test.mapping_cache_hit`、`repair_planning`、`unit_test_repair_task` 及平台命令。模型片段的 `attempt_id` 和 `model_round` 关联本次 Agent 调用。首轮记录实际文字消息的长度及字节数，模型用量取供应商回包。命令片段记录实际子进程耗时，未跨入命令的环境错误仍由检查报告提供。
+
+对照测量从同一工程快照开始，冷生成、缓存命中和失败修复各自配对。按唯一模型片段统计输入和输出 token、轮次及用量缺失数。阶段时间取根片段区间并集，跨确认的等待单列。把同一失败类型的修复规划、Agent 执行和平台命令耗时分别比较，并同时核对实际运行用例、门禁及重新确认结果。
+
 ## 集成修复对照回放
 
 - 启用 `DEVAGENTSTUDIO_OBSERVABILITY_MODE=local`，用独立实验标签记录两批运行。在对照清单中为每个固定失败样本登记版本、同一起始工作区快照、实际模型及参数、缓存条件、检查命令、Run ID。对 `be2140e6` 基线从原模型服务取得逐次用量和调用状态，从原 AG-UI 运行与真实检查结果取得时间和质量门禁。前后的同一个样本应从两份相同快照各执行一次。

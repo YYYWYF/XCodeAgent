@@ -218,21 +218,24 @@ def plan_repairs_with_repair_planner_agent(
     """在相同技能集合下为集成测试失败生成修复任务。"""
 
     settings = Settings.from_env()
-    mode = "bounded_model" if integration_entry else "deep_agent"
+    unit_test = business_stage == "unit_test"
+    bounded = integration_entry or unit_test
+    mode = "bounded_model" if bounded else "deep_agent"
     if not revision_requests:
         agent_note = "No repair required because all quality gate checks passed."
         planner_decision: dict[str, Any] = {"decision": "terminal_failure"}
-    elif integration_entry:
+    elif bounded:
         root = Path(workspace or ".").resolve()
         planner_decision = decide_integration_repair(
             workspace=root, runtime_root=runtime_root or root / ".devagentstudio/runtime",
             requests=revision_requests, scoped_tasks=scoped_tasks or [],
             selected_skills=selected_skill_names, repair_attempt=repair_attempt, settings=settings,
+            **({"business_stage": "unit_test"} if unit_test else {}),
         )
         agent_note = json.dumps(planner_decision, ensure_ascii=False)
     else:
         with model_operation(
-            "plan_unit_test_repairs" if business_stage == "unit_test" else "plan_integration_repairs",
+            "plan_integration_repairs",
             business_stage=business_stage,
         ):
             agent_note = _invoke_repair_planner_agent(
@@ -260,6 +263,8 @@ def plan_repairs_with_repair_planner_agent(
         )
         candidate_tasks = bounded_candidate.get("tasks", [])
         requested_paths = bounded_candidate.get("requestedPaths", [])
+        if unit_test and planner_decision.get("escalationKind") != "code_scope":
+            candidate_tasks, requested_paths = [], []
         if integration_entry:
             if planner_decision.get("escalationKind") != "code_scope":
                 candidate_tasks = []
@@ -304,7 +309,7 @@ def plan_repairs_with_repair_planner_agent(
         repair_attempt=repair_attempt,
     )
     repair_task_plan["prepared_by"]["agent"] = "repair-planner-agent"
-    if integration_entry:
+    if bounded:
         repair_task_plan["prepared_by"]["mode"] = mode
     repair_task_plan["prepared_by"]["model"] = settings.model_name
     repair_task_plan["prepared_by"]["requiredSkillsLoaded"] = list(

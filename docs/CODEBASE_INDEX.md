@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+开发单测在 `graph/workflow.py` 为 `unit_test`、`unit_test_repair` 建立阶段 Trace，按 Run、尝试和轮次关联实际模型用量、首轮消息大小、命令及缓存命中。TestGeneration 仅下发匹配变更源码的简短职责、Unit/Task ID 和原有 Diff、测试能力及工件引用。单测 RepairPlanner 复用有界诊断和结构化结果校验，最多两次调用，服务错误沿单测 Recovery 传播。明确定位到授权源码的编译或断言失败由仅文件工具的 SmallTask 修复，再由平台执行原单测命令。依赖及不明确的失败沿用命令型 SmallTask。回归见 `tests.test_unit_test_agent_optimization`、`tests.test_unit_test_repair_context`、`tests.test_build_observability`。
+
 Studio 临时资源由 `Backend/app/services/runtime_temporary.py` 管理。首次模板下载、V3/V4 更新和 Agent 只读快照默认写入当前用户环境的 `runtime/temporary/backend-<实例 ID>/`。FastAPI lifespan 建立跨进程实例锁、回收可确认归属的孤儿，退出时释放 Agent bundle 缓存；有读取者时仍保留实例目录。回收范围仅覆盖此私有根内的归属记录，跳过链接和 Windows 目录联接。旧系统临时目录仅供只读盘点，Bootstrap 的项目内解压暂存保持原位。
 
 `runtime_snapshot.py` 按来源和版本共享 `AGENTS.md`，按来源、目录版本和选中集合共享用户 Skill。空 Skill 保留只读虚拟挂载但不落盘，最后一个后端引用释放后清理快照。`workspace_bootstrap/template_generate.py` 提供 ZIP 通用分配和清理，首次下载及 V3/V4 下载在交付前失败或取消时关闭句柄并删除，交付后由调用方释放。首次 Bootstrap 取消时等待 ZIP 校验或物化线程退出，才清理 ZIP 和释放协调器。`application_creation.py` 原子写入原位置的创建请求，并以已落盘的注册状态决定清理，未知、在途或未提交的成功绑定保留。回归覆盖 `tests.test_runtime_temporary`、`tests.test_user_skill_runtime`、`tests.test_agent_memory_runtime`、`tests.test_template_download_cleanup`、`tests.test_workspace_bootstrap_service`、`tests.test_application_creation`。
@@ -68,6 +70,8 @@ Build 已移除任务完成后的独立后端阶段检查调用及 `services/bac
 Windows 发布归档入口为根目录的 `scripts/stage-windows-update.mjs`。签名并刷新 `latest.yml` 后，脚本复用 `Frontend/scripts/app-update-cdn.mjs` 的摘要校验，将 `Frontend/dist` 内全部产物移入清单指定的版本目录。
 
 测试检查失败时，测试子图与 `graph/nodes/direct_modification.py::validate_direct_fix` 都复用 `services/test_error_logs.py` 写入 `errorLogReferences`，按顺序保存完整诊断、stdout 和 stderr 的不可变内容引用；重测覆盖运行日志不影响旧卡片。测试进度和最终快照沿原 AG-UI 工作流投影，Electron 会话保留摘要和引用。`ProcessSteps/TestErrorLogButton.tsx` 经 `/workflow-artifacts/run` 读齐日志片段后通过原生剪贴板复制；仅有卡片摘要时提供“复制错误摘要”。
+
+开发阶段的单测生成工具活动按虚拟路径的 `/frontend`、`/backend` 根目录分别进入现有 `unit_test.checks` AG-UI 卡片，项目共享路径不进入任一端卡片。执行前端单测时，`services/integration_test_runner.py` 在工作区前端操作锁内按需补齐开发依赖，pnpm 使用已有锁文件及项目声明的版本，缺少匹配的 PATH 工具时使用 Corepack。安装失败沿现有进度和日志投影，后续单测按前置失败规则跳过。开发单测命令日志位于 `runtime/unit-tests`。Jest 优先统计测试用例，Maven 继续使用 `-B -DfailIfNoTests=true test` 并统计各模块汇总。
 
 任务规划入口 `dag_planning_inputs.py::SequentialPlanningInputs.requirements` 与 `build_task_reuse.py::_baseline_tasks` 不再要求旧正式任务的 Unit 存在于当前骨架：完整基线身份与 ReuseFacts 索引覆盖仍严格核验，本轮必需 Unit 由 `resolve_generation_requirements` 校验。旧页面、模块、静态数据 Unit 不会因范围变化阻断新任务生成，也不会回填当前 DAG；配置复用继续受本轮来源与输入有效性约束。回归：`tests.test_task_generation_policy`、`tests.test_build_task_reuse`。
 

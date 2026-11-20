@@ -65,9 +65,9 @@ def create_test_generation_agent(
 
     system_prompt = (
         "You are the TestGeneration Agent. Generate or update only the smallest set of "
-        "unit tests for the current business-code change. Read the supplied diff first, "
-        "then the changed source, related tests, confirmed build/task artifacts and only "
-        "the direct dependencies needed for the test. Do not modify production code, "
+        "unit tests for the current business-code change. Use the supplied diff and related "
+        "tests first. Read targeted source or contract windows only to resolve missing facts. "
+        "Do not modify production code, "
         "package manifests, build configuration, formal .devagentstudio artifacts, CSS, "
         "snapshots, or end-to-end tests. Frontend tests must be flat under frontend/tests "
         "and end in .test.ts or .test.tsx; do not impose an additional filename separator "

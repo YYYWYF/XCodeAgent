@@ -28,6 +28,13 @@ _VALID_STATUSES = {
 def build_small_task_prompt(packet: dict[str, Any]) -> str:
     """把受限任务包编码为小任务 Agent 的唯一执行输入。"""
 
+    if packet.get("verificationMode") == "platform_unit_test":
+        return (
+            "Inspect the diagnosed location first and make the smallest authorized edit. "
+            "Preserve every valid test and assertion. The platform reruns the original tests. "
+            "Report the change or escalation as one complete SmallTask JSON result.\n"
+            f"TaskPacket:\n{compact_json(packet)}"
+        )
     if is_restricted_integration_task(packet.get("source"), packet.get("owner")):
         backend_instructions = (
             "For Maven errors, inspect the diagnosed source before POM or application configuration. "
@@ -116,8 +123,11 @@ def invoke_small_task_agent(
         with model_operation(business_operation, business_stage=business_stage):
             bundle = create_agent_bundle(workspace, selected_skill_names)
             prompt = build_small_task_prompt(packet)
+            agent = bundle.integration_repair if restricted_repair else bundle.small_task
+            if packet.get("verificationMode") == "platform_unit_test":
+                agent = bundle.unit_test_code_repair
             return invoke_agent_with_tool_activity(
-                bundle.integration_repair if restricted_repair else bundle.small_task,
+                agent,
                 {"messages": [{"role": "user", "content": prompt}]},
                 workspace=workspace, on_tool_activity=on_tool_activity,
             )
