@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from app.config import Settings
 from app.services.application_lifecycle import (
@@ -15,7 +16,7 @@ from app.services.application_config import read_application_config
 from app.services.repository_branch import push_workspace_branch
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
-from app.services.workspace_bootstrap.models import ArchiveLimits, WorkspaceBootstrapError
+from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageDownload, WorkspaceBootstrapError
 from app.services.workspace_bootstrap.readiness import (
     WorkspaceTemplateStatus,
     classify_workspace_template,
@@ -26,6 +27,28 @@ from app.services.workspace_bootstrap.run_log import TemplateRunLog
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
 from app.services.workspace_bootstrap.template_generate import cleanup_template_download
 from app.services.workspace_bootstrap.template_package import validate_template_package
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+async def _run_archive_reader(function: Callable[_P, _T], *args: _P.args, **kwargs: _P.kwargs) -> _T:
+    """请求取消后等待同步读取者完成，避免提前删除 ZIP 或释放提交区。"""
+    worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        # wait 不会把请求的取消传播给同步线程对应的任务。
+        await asyncio.wait({worker})
+    except asyncio.CancelledError:
+        # 连续取消也不能取消底层线程或跳过等待；原取消结果优先于线程异常。
+        while not worker.done():
+            try:
+                await asyncio.wait({worker})
+            except asyncio.CancelledError:
+                continue
+        if not worker.cancelled():
+            worker.exception()
+        raise
+    return worker.result()
 
 
 class WorkspaceBootstrapService:
@@ -96,7 +119,7 @@ class WorkspaceBootstrapService:
     ) -> dict[str, Any]:
         """编译请求、下载校验、事务物化，并确保失败写入 lifecycle。"""
 
-        download_path: Path | None = None
+        download: TemplatePackageDownload | None = None
         coordinator_started = False
         # 先拒绝非 TechnicalPlan-confirmed 的旧入口，避免下载后才发现 lifecycle 非法。
         with run_log.stage("lifecycle_precondition", "校验模板生成生命周期入口"):
@@ -188,7 +211,7 @@ class WorkspaceBootstrapService:
                 archiveSizeBytes=download.size,
                 sha256=download.sha256,
             ):
-                package = await asyncio.to_thread(
+                package = await _run_archive_reader(
                     validate_template_package,
                     download_path,
                     ArchiveLimits(
@@ -242,7 +265,7 @@ class WorkspaceBootstrapService:
                     )
 
             with run_log.stage("template_materialization", "事务化物化模板文件并完成 readiness"):
-                await asyncio.to_thread(
+                await _run_archive_reader(
                     WorkspaceMaterializer().materialize,
                     workspace=workspace,
                     archive_path=package.archive_path,
@@ -281,8 +304,10 @@ class WorkspaceBootstrapService:
             raise WorkspaceBootstrapError(str(exc)) from exc
         finally:
             try:
-                if download_path is not None:
-                    cleanup_template_download(download_path, run_log=run_log)
+                if download is not None:
+                    cleanup_template_download(
+                        download.temporary_path, run_log=run_log, lease=download.temporary_lease,
+                    )
             finally:
                 # 文件被杀毒软件等占用也必须释放协调器，避免后续执行一直被阻止。
                 if coordinator_started:

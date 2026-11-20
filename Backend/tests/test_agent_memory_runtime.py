@@ -18,9 +18,17 @@ from app.services.agent_file_documents import (
     AgentFilePathError,
     DEFAULT_AGENTS_CONTENT,
 )
+from tests.test_runtime_temporary import isolated_runtime_area
 
 
 class AgentMemoryRuntimeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        """为每个用例使用隔离的 Studio 实例目录。"""
+        root = self.enterContext(tempfile.TemporaryDirectory())
+        area = isolated_runtime_area(Path(root))
+        self.enterContext(patch("app.services.runtime_temporary._area", area))
+        self.addCleanup(area.close)
+
     def test_default_document_snapshot_is_loaded_by_memory_middleware(self) -> None:
         with (
             tempfile.TemporaryDirectory() as temporary_root,
@@ -126,7 +134,6 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
     def test_all_agent_factories_pass_memory_path_and_read_only_mount(self) -> None:
         factories = (
             (frontend_agent, frontend_agent.create_frontend_agent),
-            (data_source_agent, data_source_agent.create_data_source_agent),
             (repair_planner_agent, repair_planner_agent.create_repair_planner_agent),
         )
         for module, factory in factories:
@@ -167,6 +174,22 @@ class AgentMemoryRuntimeTests(unittest.TestCase):
                 self.assertTrue(
                     create_permissions.call_args.kwargs["include_agent_memory"]
                 )
+
+    def test_data_source_agent_mounts_skills_without_agent_memory(self) -> None:
+        """DataSource 使用阶段技能和用户技能，规则快照不进入该运行时。"""
+        with (
+            patch.object(data_source_agent, "create_data_source_runtime") as runtime,
+            patch.object(data_source_agent, "create_workspace_backend", return_value="backend") as backend,
+            patch.object(data_source_agent, "create_workspace_permissions") as permissions,
+            patch.object(data_source_agent, "create_delete_file_tool"),
+        ):
+            data_source_agent.create_data_source_agent("model", user_skills_backend="user-skills")
+
+        self.assertIn(data_source_agent.USER_SKILLS_VIRTUAL_ROOT, runtime.call_args.kwargs["skills"])
+        self.assertNotIn("memory", runtime.call_args.kwargs)
+        self.assertEqual(backend.call_args.kwargs["user_skills_backend"], "user-skills")
+        self.assertNotIn("agent_memory_backend", backend.call_args.kwargs)
+        self.assertNotIn("include_agent_memory", permissions.call_args.kwargs)
 
 
 if __name__ == "__main__":

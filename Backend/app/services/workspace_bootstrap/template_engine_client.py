@@ -20,7 +20,11 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.services.template_engine_tls import build_template_engine_ssl_context
 from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload, UpdatePackageDownloadV4
 from app.services.workspace_bootstrap.run_log import TemplateRunLog
-from app.services.workspace_bootstrap.template_generate import generate_template_package
+from app.services.workspace_bootstrap.template_generate import (
+    cleanup_template_download,
+    create_template_download_file,
+    generate_template_package,
+)
 from app.services.workspace_process_registry import workspace_process_registry
 
 _CHUNK_BYTES = 64 * 1024
@@ -133,11 +137,12 @@ class TemplateEngineClient:
             raise TemplateEngineError("模板生成服务地址未配置。")
         if mode not in {"APPLY", "RECONCILE"}:
             raise TemplateEngineError("模板生成服务更新 mode 必须是 APPLY 或 RECONCILE。")
-        directory = str(Path(temporary_dir)) if temporary_dir is not None else None
-        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-update-", suffix=".zip", dir=directory)
-        temporary_path = Path(name)
+        descriptor, temporary_path, lease = create_template_download_file(
+            "devagentstudio-template-update-", temporary_dir,
+        )
         digest = hashlib.sha256()
         size = 0
+        handed_off = False
         try:
             # 仅记录调用边界与非敏感摘要；不得输出完整请求配置或 ZIP 内容。
             logger.info(
@@ -165,9 +170,6 @@ class TemplateEngineClient:
                         response.status_code,
                     )
                     if response.status_code == 204:
-                        os.close(descriptor)
-                        descriptor = -1
-                        temporary_path.unlink(missing_ok=True)
                         if mode == "RECONCILE":
                             raise TemplateEngineError("模板生成服务 V3 RECONCILE 必须返回更新包，不能返回 HTTP 204。", http_status=204)
                         logger.info("模板更新接口返回无变更（HTTP 204）。")
@@ -187,8 +189,9 @@ class TemplateEngineClient:
                             output.write(chunk)
                         output.flush()
                         os.fsync(output.fileno())
-            download = TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
+            download = TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type, lease)
             logger.info("模板更新 ZIP 下载完成：bytes=%s，sha256=%s。", size, download.sha256)
+            handed_off = True
             return download
         except httpx.TimeoutException as exc:
             logger.warning("模板更新接口调用超时：endpoint=%s/v1/update。", self._base_url)
@@ -198,10 +201,10 @@ class TemplateEngineClient:
             raise TemplateEngineError("调用模板生成服务更新失败。") from exc
         except Exception:
             logger.exception("模板更新接口处理失败：endpoint=%s/v1/update。", self._base_url)
-            if descriptor >= 0:
-                os.close(descriptor)
-            temporary_path.unlink(missing_ok=True)
             raise
+        finally:
+            if not handed_off:
+                cleanup_template_download(temporary_path, descriptor=descriptor, lease=lease)
 
     async def update_v4(
         self,
@@ -217,10 +220,11 @@ class TemplateEngineClient:
             raise TemplateEngineError("V4 模板更新连接或 mode 无效。")
         if set(requested_config) != {"capabilities"}:
             raise TemplateEngineError("V4 requestedConfig 只能包含 capabilities。")
-        directory = str(Path(temporary_dir)) if temporary_dir is not None else None
-        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-v4-", suffix=".zip", dir=directory)
-        temporary_path = Path(name)
+        descriptor, temporary_path, lease = create_template_download_file(
+            "devagentstudio-template-v4-", temporary_dir,
+        )
         size = 0
+        handed_off = False
         try:
             timeout = httpx.Timeout(connect=self._connect_timeout, read=self._read_timeout, write=self._read_timeout, pool=self._connect_timeout)
             async with self._client_factory(timeout=timeout, trust_env=False,verify=build_template_engine_ssl_context()) as client:
@@ -230,9 +234,6 @@ class TemplateEngineClient:
                     headers={"Accept": "application/zip"},
                 ) as response:
                     if response.status_code == 204:
-                        os.close(descriptor)
-                        descriptor = -1
-                        temporary_path.unlink(missing_ok=True)
                         if mode == "RECONCILE":
                             raise TemplateEngineError("V4 RECONCILE 不得返回 204。")
                         return None
@@ -250,16 +251,16 @@ class TemplateEngineClient:
                             output.write(chunk)
                         output.flush()
                         os.fsync(output.fileno())
-            return UpdatePackageDownloadV4(temporary_path, size, content_type)
+            download = UpdatePackageDownloadV4(temporary_path, size, content_type, lease)
+            handed_off = True
+            return download
         except httpx.TimeoutException as exc:
             raise TemplateEngineError("调用 V4 模板更新超时。") from exc
         except httpx.HTTPError as exc:
             raise TemplateEngineError("调用 V4 模板更新失败。") from exc
-        except Exception:
-            if descriptor >= 0:
-                os.close(descriptor)
-            temporary_path.unlink(missing_ok=True)
-            raise
+        finally:
+            if not handed_off:
+                cleanup_template_download(temporary_path, descriptor=descriptor, lease=lease)
 
 
 async def _engine_response_error(response: httpx.Response, prefix: str) -> TemplateEngineError:

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.runtime_temporary import RuntimeTemporaryLease
 
 
 class WorkspaceBootstrapError(ValueError):
@@ -72,6 +76,7 @@ class TemplatePackageDownload:
     sha256: str
     size: int
     content_type: str | None
+    temporary_lease: RuntimeTemporaryLease | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -81,6 +86,7 @@ class UpdatePackageDownloadV4:
     temporary_path: Path
     size: int
     content_type: str | None
+    temporary_lease: RuntimeTemporaryLease | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)

@@ -13,18 +13,59 @@ from app.agents.workspace_scope import create_workspace_backend
 from app.services import user_skill_runtime
 from app.services import user_skills
 from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
+from tests.test_runtime_temporary import isolated_runtime_area
 
 
 class UserSkillRuntimeTests(unittest.TestCase):
-    def test_missing_root_creates_empty_snapshot(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_root:
-            missing = Path(temporary_root) / "missing"
+    def setUp(self) -> None:
+        """为技能运行时准备独立实例目录。"""
+        root = self.enterContext(tempfile.TemporaryDirectory())
+        self.area = isolated_runtime_area(Path(root))
+        self.enterContext(patch("app.services.runtime_temporary._area", self.area))
+        self.addCleanup(self.area.close)
 
-            snapshot = user_skill_runtime.create_user_skill_runtime_snapshot(root=missing)
+    def test_missing_root_mounts_empty_read_only_snapshot_without_disk_writes(self) -> None:
+        """保留虚拟挂载，不提供来自工作区或写操作的技能内容。"""
+        with tempfile.TemporaryDirectory() as temporary_root:
+            workspace = Path(temporary_root)
+            conflicting = workspace / ".devagentstudio" / "user-skills" / "unselected" / "SKILL.md"
+            conflicting.parent.mkdir(parents=True)
+            conflicting.write_text("workspace content", encoding="utf-8")
+
+            snapshot = user_skill_runtime.create_user_skill_runtime_snapshot(root=workspace / "missing")
+            backend = create_workspace_backend(str(workspace), user_skills_backend=snapshot.backend)
 
             self.assertEqual(snapshot.skills, ())
             self.assertEqual(snapshot.issues, ())
             self.assertEqual(snapshot.backend.ls("/").entries, [])
+            virtual_path = user_skill_runtime.USER_SKILLS_VIRTUAL_ROOT + "unselected/SKILL.md"
+            self.assertIsNotNone(backend.read(virtual_path).error)
+            self.assertIsNotNone(backend.write(virtual_path, "test").error)
+            self.assertEqual(list(self.area.directory.iterdir()), [])
+
+    def test_same_skill_selection_shares_backend_across_workspace_mounts(self) -> None:
+        """同一技能集合共享磁盘副本，同时按请求保留技能提示顺序。"""
+        with tempfile.TemporaryDirectory() as temporary_root:
+            root = Path(temporary_root)
+            skills = root / "skills"
+            self._write_skill(skills / "first", name="first")
+            self._write_skill(skills / "second", name="second")
+            workspaces = [root / "workspace-one", root / "workspace-two"]
+            for workspace in workspaces:
+                workspace.mkdir()
+            first = user_skill_runtime.create_user_skill_runtime_snapshot(
+                root=skills, selected_skill_names=("first", "second"),
+            )
+            second = user_skill_runtime.create_user_skill_runtime_snapshot(
+                root=skills, selected_skill_names=("second", "first"),
+            )
+            self.assertIs(first.backend, second.backend)
+            self.assertEqual(tuple(doc.name for doc in second.prompt_documents), ("second", "first"))
+            for workspace, snapshot in zip(workspaces, (first, second), strict=True):
+                backend = create_workspace_backend(str(workspace), user_skills_backend=snapshot.backend)
+                path = user_skill_runtime.USER_SKILLS_VIRTUAL_ROOT + "first/SKILL.md"
+                self.assertIsNone(backend.read(path).error)
+            self.assertEqual(len(list(self.area.directory.iterdir())), 1)
 
     def test_symlinked_root_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_root:

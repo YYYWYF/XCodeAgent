@@ -1,5 +1,9 @@
 # DevAgent Studio Codebase Index
 
+Studio 临时资源由 `Backend/app/services/runtime_temporary.py` 管理。首次模板下载、V3/V4 更新和 Agent 只读快照默认写入当前用户环境的 `runtime/temporary/backend-<实例 ID>/`。FastAPI lifespan 建立跨进程实例锁、回收可确认归属的孤儿，退出时释放 Agent bundle 缓存；有读取者时仍保留实例目录。回收范围仅覆盖此私有根内的归属记录，跳过链接和 Windows 目录联接。旧系统临时目录仅供只读盘点，Bootstrap 的项目内解压暂存保持原位。
+
+`runtime_snapshot.py` 按来源和版本共享 `AGENTS.md`，按来源、目录版本和选中集合共享用户 Skill。空 Skill 保留只读虚拟挂载但不落盘，最后一个后端引用释放后清理快照。`workspace_bootstrap/template_generate.py` 提供 ZIP 通用分配和清理，首次下载及 V3/V4 下载在交付前失败或取消时关闭句柄并删除，交付后由调用方释放。首次 Bootstrap 取消时等待 ZIP 校验或物化线程退出，才清理 ZIP 和释放协调器。`application_creation.py` 原子写入原位置的创建请求，并以已落盘的注册状态决定清理，未知、在途或未提交的成功绑定保留。回归覆盖 `tests.test_runtime_temporary`、`tests.test_user_skill_runtime`、`tests.test_agent_memory_runtime`、`tests.test_template_download_cleanup`、`tests.test_workspace_bootstrap_service`、`tests.test_application_creation`。
+
 前端页面 Step 1 统一按需核对任务包已声明的 API、设计稿、权限模板、类型和常量依赖。`execution_scope.py::readable` 在页面 Step 1/3 开放已有 `template_read_dependencies` 和 `type_and_constant_files`，保留 API、设计稿的原有读取步骤，以及 Step 2/4、写入范围、Code Graph 校验和 API 任务模式。`task_packet.py::STEPS` 与 `generator.py` 要求 Step 2/3 复用已核对结果，只在版本变化、未完成核对或明确冲突时定向补读已授权文件；Skill 仍须先 begin 再读取。本次不解析源码引用、不新增依赖字段或收集模块。回归见 `tests.test_frontend_build_execution`、`tests.test_frontend_project_plan_context`、`tests.test_frontend_skill_loading_prompt`。
 
 前端权限页面的 `task_packet.py::_template_read_dependencies` 在模型前核对当前 V3 TemplateState 与 Build 快照，从 authorization 的 `installedArtifacts` 确定唯一 Permission 源文件；无精确记录时仅核对 `components/authorization/Permission.{ts,tsx}` 和 `Permission/index.{ts,tsx}` 四个约定候选。RESOURCES 路径复用 `authorization_frontend_projection.py` 的规范投影常量。两项依赖逐层拒绝链接、硬链接与非普通文件，缺失、歧义或状态漂移经 `template_read_dependency_unresolved` 只失败当前页面。模板依赖的构造和安全校验保持原样。回归见 `tests.test_frontend_project_plan_context`、`tests.test_frontend_build_execution`。

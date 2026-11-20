@@ -4,6 +4,7 @@ import asyncio
 import json
 import subprocess
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -17,8 +18,10 @@ from app.services.application_lifecycle import (
     transition_application_lifecycle,
     write_application_lifecycle,
 )
+from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.models import TemplatePackageDownload, WorkspaceBootstrapError
 from app.services.workspace_bootstrap.service import WorkspaceBootstrapService
+from app.services.workspace_bootstrap.template_package import validate_template_package
 
 
 def _settings() -> SimpleNamespace:
@@ -268,6 +271,66 @@ class WorkspaceBootstrapServiceTests(unittest.TestCase):
             self.assertIn('stage="template_package_validation"', content)
             self.assertIn("BadZipFile: File is not a zip file", content)
             self.assertIn("validate_template_package", content)
+
+    def test_cancel_waits_for_archive_reader_before_cleanup(self) -> None:
+        """校验或物化仍打开 ZIP 时，连续取消不能提前删文件或释放协调器。"""
+        for stage in ("validation", "materialization"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                _prepare_generating_workspace(workspace)
+                package = workspace / "engine.zip"
+                _write_package(package, include_application=True)
+                download = TemplatePackageDownload(package, "ignored", package.stat().st_size, "application/zip")
+                asyncio.run(self._assert_cancel_drains_reader(workspace, download, stage))
+                self.assertFalse(package.exists())
+                self.assertFalse(template_mutation_coordinator.has_active_mutation(workspace))
+
+    async def _assert_cancel_drains_reader(
+        self, workspace: Path, download: TemplatePackageDownload, stage: str,
+    ) -> None:
+        """以同步读取线程构造可确定的取消时序。"""
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        finish = threading.Event()
+        bytes_read: list[bytes] = []
+
+        def read_archive(*args, **kwargs):
+            """持有打开的文件，收到放行后再读取最后的数据。"""
+            with download.temporary_path.open("rb") as archive:
+                loop.call_soon_threadsafe(started.set)
+                if not finish.wait(5):
+                    raise TimeoutError("测试未放行 ZIP 读取线程")
+                bytes_read.append(archive.read(2))
+            if stage == "validation":
+                return validate_template_package(*args, **kwargs)
+            raise RuntimeError("物化线程退出时的错误不能覆盖取消")
+
+        stub = (
+            "app.services.workspace_bootstrap.service.validate_template_package"
+            if stage == "validation"
+            else "app.services.workspace_bootstrap.service.WorkspaceMaterializer.materialize"
+        )
+        with (
+            patch("app.services.workspace_bootstrap.service.TemplateEngineClient.generate", new=AsyncMock(return_value=download)),
+            patch(stub, side_effect=read_archive),
+        ):
+            service = WorkspaceBootstrapService(_settings())
+            task = asyncio.create_task(service._run(workspace))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=5)
+                for _ in range(2):
+                    task.cancel()
+                    await asyncio.sleep(0)
+                    self.assertFalse(task.done())
+                    self.assertTrue(download.temporary_path.exists())
+                    self.assertTrue(template_mutation_coordinator.has_active_mutation(workspace))
+            finally:
+                finish.set()
+                if not task.done():
+                    task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+        self.assertEqual(bytes_read, [b"PK"])
 
     def test_non_generating_lifecycle_rejects_before_calling_engine(self) -> None:
         """READY 等非生成阶段必须在网络调用前被 lifecycle gate 拒绝。"""

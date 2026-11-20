@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import tempfile
 import time
@@ -12,11 +13,33 @@ from typing import Any
 
 import httpx
 
+from app.services.backend_instance import current_backend_instance
+from app.services.runtime_temporary import (
+    RuntimeTemporaryLease,
+    acquire_runtime_temporary_lease,
+    log_temporary_cleanup_failure,
+)
 from app.services.template_engine_tls import build_template_engine_ssl_context
 from app.services.workspace_bootstrap.models import TemplateEngineError, TemplatePackageDownload
 from app.services.workspace_bootstrap.run_log import TemplateRunLog
 
 _CHUNK_BYTES = 64 * 1024
+_LOGGER = logging.getLogger(__name__)
+
+
+def create_template_download_file(
+    prefix: str, temporary_dir: str | Path | None,
+) -> tuple[int, Path, RuntimeTemporaryLease | None]:
+    """创建下载文件，并在默认临时区内持有实例锁直到用完。"""
+    lease = acquire_runtime_temporary_lease() if temporary_dir is None else None
+    try:
+        directory = lease.directory if lease is not None else temporary_dir
+        descriptor, name = tempfile.mkstemp(prefix=prefix, suffix=".zip", dir=directory)
+        return descriptor, Path(name), lease
+    except BaseException:
+        if lease is not None:
+            lease.release()
+        raise
 
 
 async def generate_template_package(
@@ -47,9 +70,8 @@ async def generate_template_package(
             capabilityKeys=sorted((requested_config.get("capabilities") or {}).keys()),
             applicationConfigIncluded="applicationConfig" in requested_config,
         )
-    directory = str(Path(temporary_dir)) if temporary_dir is not None else None
     try:
-        descriptor, name = tempfile.mkstemp(prefix="devagentstudio-template-", suffix=".zip", dir=directory)
+        descriptor, temporary_path, lease = create_template_download_file("devagentstudio-template-", temporary_dir)
     except BaseException as exc:
         if run_log is not None:
             run_log.event(
@@ -61,7 +83,6 @@ async def generate_template_package(
                 exception=exc,
             )
         raise
-    temporary_path = Path(name)
     digest = hashlib.sha256()
     size = 0
     request_completed = False
@@ -123,7 +144,7 @@ async def generate_template_package(
                         output.write(chunk)
                     output.flush()
                     os.fsync(output.fileno())
-        download = TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type)
+        download = TemplatePackageDownload(temporary_path, digest.hexdigest(), size, content_type, lease)
         if run_log is not None and download_started is not None:
             run_log.event(
                 stage="template_download",
@@ -191,26 +212,49 @@ async def generate_template_package(
     finally:
         # 包括超时、连接失败与任务取消；先关句柄再删文件，兼容 Windows 占用规则。
         if not succeeded:
-            cleanup_template_download(temporary_path, descriptor=descriptor, run_log=run_log)
+            cleanup_template_download(temporary_path, descriptor=descriptor, run_log=run_log, lease=lease)
 
 
 def cleanup_template_download(
     path: Path, *, descriptor: int = -1, run_log: TemplateRunLog | None = None,
+    lease: RuntimeTemporaryLease | None = None,
 ) -> None:
     """尽力释放下载资源并记录结果，清理异常不能覆盖业务异常或已提交成功。"""
+
+    def remove_file() -> None:
+        """在删除已托管的 ZIP 前复核它仍位于原实例。"""
+        if lease is not None:
+            lease.check_resource(path)
+        path.unlink(missing_ok=True)
 
     operations = []
     if descriptor >= 0:
         operations.append(("download_handle_close", lambda: os.close(descriptor)))
-    operations.append(("download_file_cleanup", lambda: path.unlink(missing_ok=True)))
-    for operation, cleanup in operations:
-        try:
-            cleanup()
-        except Exception as exc:
-            if run_log is not None:
-                run_log.event(stage=operation, event="cleanup_failed", level="WARNING",
-                              message="下载资源清理失败", resourcePath=str(path), exception=exc)
+    operations.append(("download_file_cleanup", remove_file))
+    try:
+        for operation, cleanup in operations:
+            try:
+                cleanup()
+            except Exception as exc:
+                instance_id = lease.instance_id if lease is not None else current_backend_instance().instance_id
+                log_temporary_cleanup_failure(operation, instance_id, exc)
+                _record_cleanup(run_log, operation, path, exc)
+            else:
+                _record_cleanup(run_log, operation, path)
+    finally:
+        if lease is not None:
+            lease.release()
+
+
+def _record_cleanup(log: TemplateRunLog | None, stage: str, path: Path, error: Exception | None = None) -> None:
+    """尽力写清理事件，日志不可写时仍继续释放剩余资源。"""
+    if log is None:
+        return
+    try:
+        if error is None:
+            log.event(stage=stage, event="cleanup_completed", message="下载资源已释放", resourcePath=str(path))
         else:
-            if run_log is not None:
-                run_log.event(stage=operation, event="cleanup_completed",
-                              message="下载资源已释放", resourcePath=str(path))
+            log.event(stage=stage, event="cleanup_failed", level="WARNING",
+                      message="下载资源清理失败", resourcePath=str(path), exception=error)
+    except Exception as exc:
+        _LOGGER.warning("写入下载清理事件失败：%s", type(exc).__name__)

@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
-import shutil
 import tempfile
 import threading
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from copy import deepcopy
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
 from app.domain.application_lifecycle import ApplicationLifecycle
+from app.domain.managed_database import ManagedDatabaseRegistration
 from app.services.application_config.repository import ApplicationConfigRepository
 from app.services.application_config.schema import validate_application_configuration
 from app.services.application_config.initial_administrators import validate_new_admins
 from app.services.application_lifecycle import ensure_application_lifecycle, load_application_lifecycle
+from app.services.backend_instance import current_backend_instance
 from app.services.managed_database_registration import ensure_managed_database_registration
+from app.services.runtime_temporary import remove_temporary_tree
+from app.utils.atomic_json import atomic_write_json
 
 _CREATION_LOCK = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
@@ -34,6 +37,31 @@ def _assert_empty_target(target: Path) -> None:
         raise ValueError("新应用项目目录必须是不存在或为空的独立目录。")
     if not target.parent.is_dir():
         raise ValueError("项目创建位置的上级目录不存在。")
+
+
+def _cleanup_creation_staging(staging: Path, *, committed: bool, uses_managed_database: bool) -> None:
+    """仅清理已提交、明确失败或尚未开始注册的事务。"""
+    try:
+        if not committed and uses_managed_database:
+            application_file = staging / WORKSPACE_ARTIFACT_DIR / "application.json"
+            try:
+                application = json.loads(application_file.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                # 注册前必须先持久化配置及 REGISTERING，没有配置时尚未发起注册。
+                application = {}
+            if not isinstance(application, dict):
+                raise ValueError("应用创建暂存配置格式无效。")
+            if "managedDatabase" in application:
+                registration = ManagedDatabaseRegistration.model_validate(application["managedDatabase"])
+                if registration.status in {"REGISTERING", "UNKNOWN", "REGISTERED"}:
+                    return
+        remove_temporary_tree(staging)
+    except (OSError, ValueError) as exc:
+        # 无法确认注册事实时保留暂存，且清理异常不得覆盖原业务结果。
+        _LOGGER.warning(
+            "temporary.cleanup_failed resource=application-creation instanceId=%s errorType=%s",
+            current_backend_instance().instance_id, type(exc).__name__,
+        )
 
 
 def initialize_application(
@@ -69,30 +97,26 @@ def initialize_application(
         if not uses_managed_database:
             key += "-local"
         staging = Path(tempfile.gettempdir()) / f"devagentstudio-create-{key}"
+        if staging.is_symlink() or staging.is_junction():
+            raise ValueError("应用创建暂存必须是真实目录。")
         request_file = staging / "request.json"
-        if request_file.exists():
+        try:
             pending = json.loads(request_file.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            pending = None
+        else:
             if pending["configuration"] != configuration:
                 raise ValueError("该创建请求的数据库注册尚未收口，请保持原配置重试。")
             application_id, thread_id = pending["applicationId"], pending["threadId"]
-        else:
-            staging.mkdir(mode=0o700, exist_ok=True)
-            request_file.write_text(json.dumps({
-                "configuration": configuration, "applicationId": application_id,
-                "threadId": thread_id,
-            }), encoding="utf-8")
         committed = False
 
-        # 新增：只记录本次注册调用是否抛出异常。
-        registration_call_failed = False
-
-        def mark_registration_failure() -> None:
-            """标记本次注册调用失败，供创建事务收尾清理暂存目录。"""
-
-            nonlocal registration_call_failed
-            registration_call_failed = True
-
         try:
+            if pending is None:
+                staging.mkdir(mode=0o700, exist_ok=True)
+                atomic_write_json(request_file, {
+                    "configuration": configuration, "applicationId": application_id,
+                    "threadId": thread_id,
+                })
             metadata = staging / WORKSPACE_ARTIFACT_DIR
             metadata.mkdir(exist_ok=True)
             repository = ApplicationConfigRepository(staging)
@@ -103,9 +127,7 @@ def initialize_application(
                 application_name=application_name, initialization_thread_id=thread_id,
             )
             if uses_managed_database:
-                saved = ensure_managed_database_registration(
-                    staging, on_registration_failure=mark_registration_failure,
-                )
+                saved = ensure_managed_database_registration(staging)
             else:
                 saved = repository.load()
             # 暂存区可能位于另一磁盘；在目标同级准备完整副本后只提交一次 rename。
@@ -127,22 +149,4 @@ def initialize_application(
             committed = True
             return state, saved
         finally:
-            if registration_call_failed:
-                # 新增：注册调用失败后，只删除本次创建的暂存目录。
-                try:
-                    shutil.rmtree(staging)
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    # 删除失败只记录日志，不覆盖原始注册异常。
-                    _LOGGER.warning(
-                        "清理注册失败的创建暂存目录失败，目录=%s，异常类型=%s",
-                        staging, type(exc).__name__,
-                    )
-            else:
-                # 未发生注册调用失败时，完全沿用原来的收尾规则。
-                current_file = staging / WORKSPACE_ARTIFACT_DIR / "application.json"
-                registration = json.loads(current_file.read_text(encoding="utf-8")).get("managedDatabase", {}) if current_file.exists() else {}
-                retain = not committed and registration.get("status") in {"REGISTERING", "UNKNOWN", "REGISTERED"}
-                if not retain:
-                    shutil.rmtree(staging, ignore_errors=True)
+            _cleanup_creation_staging(staging, committed=committed, uses_managed_database=uses_managed_database)

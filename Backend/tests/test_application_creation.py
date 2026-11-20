@@ -132,6 +132,41 @@ class ApplicationCreationTests(unittest.TestCase):
             self.assertEqual(client.return_value.register.call_count, 1)
         self.assertFalse(self.target.exists())
 
+    def test_definite_registration_failure_cleans_staging_and_allows_retry(self) -> None:
+        """明确失败落盘为 FAILED 后，删除暂存并允许重新调用注册。"""
+        self.configuration["datasource"] = {"type": "database", "db": {"useBuiltin": True}}
+        with patch("app.services.managed_database_registration.ManagedDatabaseClient") as client:
+            register = client.return_value.register
+            register.side_effect = [
+                ManagedDatabaseRegistrationError("服务端明确拒绝注册"),
+                {"status": "REGISTERED", "datasourceKey": "12ab34cd56ef", "datasourceId": 2},
+            ]
+            with self.assertRaises(ManagedDatabaseRegistrationError):
+                self.create()
+            self.assertEqual(list(self.root.glob("devagentstudio-create-*")), [])
+            _, saved = self.create()
+            self.assertEqual(saved["managedDatabase"]["status"], "REGISTERED")
+            self.assertEqual(register.call_count, 2)
+
+    def test_unreadable_registration_state_is_retained(self) -> None:
+        """状态无法解析时保留恢复材料，调用方仍收到原来的注册错误。"""
+        self.configuration["datasource"] = {"type": "database", "db": {"useBuiltin": True}}
+
+        def fail(staging: Path) -> None:
+            """模拟远端调用异常且本地状态不完整。"""
+            (staging / ".devagentstudio" / "application.json").write_bytes(b"{")
+            raise RuntimeError("注册连接已中断")
+
+        with (
+            patch("app.services.application_creation.ensure_managed_database_registration", side_effect=fail),
+            self.assertLogs("app.services.application_creation", level="WARNING"),
+            self.assertRaisesRegex(RuntimeError, "注册连接已中断"),
+        ):
+            self.create()
+        staging, = self.root.glob("devagentstudio-create-*")
+        self.assertTrue((staging / "request.json").is_file())
+        self.assertFalse(self.target.exists())
+
     def test_registered_binding_survives_commit_failure(self):
         """已注册但提交失败时复用原绑定和线程，重新打开窗口也不再次注册。"""
         self.configuration["datasource"] = {"type": "database", "db": {"useBuiltin": True}}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Literal, Optional
@@ -122,7 +123,9 @@ from app.services.database_crypto import (
     database_encryption_metadata,
     ensure_database_platform_key,
 )
+from app.agents.registry import clear_agent_bundle_cache
 from app.services.backend_instance import current_backend_instance, initialize_backend_instance
+from app.services.runtime_temporary import close_runtime_temporary_area, start_runtime_temporary_area
 from app.services.workspace_bootstrap.service import workspace_bootstrap_service
 from app.tools import database_tools
 from app.workspace import workspace as workspace_tools
@@ -137,10 +140,10 @@ async def lifespan(_app: FastAPI):
 
     from app.services.builtin_authorization_orchestrator import start_builtin_authorization_tasks
 
-    start_builtin_authorization_tasks()
     ensure_database_platform_key()
     ensure_agents_document()
     backend_instance = initialize_backend_instance()
+    start_runtime_temporary_area(backend_instance.instance_id)
     logging.getLogger("uvicorn.error").info(
         "backend.instance.started instanceId=%s pid=%s startedAt=%s",
         backend_instance.instance_id,
@@ -148,15 +151,22 @@ async def lifespan(_app: FastAPI):
         backend_instance.started_at.isoformat(),
     )
     try:
+        start_builtin_authorization_tasks()
         yield
     finally:
         from app.services.builtin_authorization_orchestrator import shutdown_builtin_authorization_tasks
 
-        await asyncio.to_thread(shutdown_builtin_authorization_tasks)
-        clear_workflow_graph_cache()
-        clear_application_planning_graph_cache()
-        clear_direct_modification_graph_cache()
-        await close_workflow_checkpointer()
+        try:
+            await asyncio.to_thread(shutdown_builtin_authorization_tasks)
+            clear_workflow_graph_cache()
+            clear_application_planning_graph_cache()
+            clear_direct_modification_graph_cache()
+            await close_workflow_checkpointer()
+        finally:
+            clear_agent_bundle_cache()
+            # 已释放的 Agent 图可能仍有引用环，先回收不可达快照，再关闭实例临时区。
+            gc.collect()
+            close_runtime_temporary_area()
 
 
 app = FastAPI(

@@ -18,6 +18,7 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 import json
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplateStateError
 from app.services.workspace_bootstrap.template_engine_client import TemplateEngineClient
+from app.services.workspace_bootstrap.template_generate import cleanup_template_download
 
 class TemplateReconcileService:
     """以受校验的更新包收敛 Capability，全部 Operation 成功后才提交 State。"""
@@ -91,7 +92,7 @@ class TemplateReconcileService:
             apply_working_copy_v4(root, store)
             return "CHANGED"
         finally:
-            download.temporary_path.unlink(missing_ok=True)
+            cleanup_template_download(download.temporary_path, lease=download.temporary_lease)
 
     async def reconcile(self, workspace: str | Path, *, change_id: str, requested_config: dict[str, Any], technical_plan_sha256: str, mode: Literal["APPLY", "RECONCILE"] = "APPLY") -> str:
         """下载、预检并执行一次 V3 更新；V2 State 会被明确拒绝。"""
@@ -129,7 +130,7 @@ class TemplateReconcileService:
                 write_template_state_v3(root, package.nextTemplateState)
             return "CHANGED"
         finally:
-            download.temporary_path.unlink(missing_ok=True)
+            cleanup_template_download(download.temporary_path, lease=download.temporary_lease)
 
     async def retry_template_preparation(self, workspace: str | Path, *, change_id: str, requested_config: dict[str, Any], technical_plan_sha256: str, mode: Literal["APPLY", "RECONCILE"]) -> str:
         """V3 将用户重试映射为一次新的安全执行。"""

@@ -5,13 +5,12 @@ import html
 import os
 import shutil
 import stat
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from deepagents.backends import FilesystemBackend
-from deepagents.backends.protocol import EditResult, WriteResult
+from deepagents.backends.protocol import BackendProtocol
 
+from app.services.runtime_snapshot import EMPTY_SNAPSHOT_BACKEND, RuntimeSnapshotCache
 from app.services.user_skill_documents import (
     MAX_SKILL_CONTENT_BYTES,
     read_user_skill_document,
@@ -30,6 +29,7 @@ MAX_SKILL_BUNDLE_FILES = 256
 MAX_SKILL_BUNDLE_BYTES = 32 * 1024 * 1024
 MAX_USER_SKILL_SNAPSHOT_BYTES = 128 * 1024 * 1024
 MAX_SELECTED_SKILLS_PROMPT_BYTES = 64 * 1024
+_SNAPSHOTS = RuntimeSnapshotCache("user-skills")
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,7 @@ class SelectedSkillPromptDocument:
 @dataclass(frozen=True)
 class UserSkillRuntimeSnapshot:
     revision: str
-    backend: FilesystemBackend
+    backend: BackendProtocol
     skills: tuple[str, ...]
     prompt_documents: tuple[SelectedSkillPromptDocument, ...]
     issues: tuple[UserSkillRuntimeIssue, ...]
@@ -79,46 +79,6 @@ class SelectedSkillValidation:
 
     names: tuple[str, ...]
     revision: str
-
-
-class _OwnedSnapshotBackend(FilesystemBackend):
-    """Keep the temporary snapshot alive for as long as the backend is referenced."""
-
-    def __init__(self, owner: tempfile.TemporaryDirectory[str]) -> None:
-        """持有临时目录，并把用户技能快照挂载为虚拟文件系统。"""
-
-        self._snapshot_owner = owner
-        super().__init__(root_dir=owner.name, virtual_mode=True)
-
-    def close(self) -> None:
-        """释放当前用户技能快照的临时目录。"""
-
-        self._snapshot_owner.cleanup()
-
-    def __del__(self) -> None:
-        """在对象回收时尽力清理快照，不传播解释器退出期异常。"""
-
-        try:
-            self.close()
-        except Exception:
-            # Destructors must not surface cleanup failures during interpreter shutdown.
-            pass
-
-    def write(self, file_path: str, content: str) -> WriteResult:
-        """拒绝写入不可变技能快照，避免依赖平台 chmod 语义。"""
-
-        return WriteResult(error=f"只读快照不允许写入：{file_path}")
-
-    def edit(
-        self,
-        file_path: str,
-        old_string: str,
-        new_string: str,
-        replace_all: bool = False,
-    ) -> EditResult:
-        """拒绝编辑不可变技能快照，确保 Windows 与 macOS 行为一致。"""
-
-        return EditResult(error=f"只读快照不允许编辑：{file_path}")
 
 
 @dataclass(frozen=True)
@@ -161,7 +121,7 @@ def create_user_skill_runtime_snapshot(
     *,
     selected_skill_names: tuple[str, ...] | None = None,
 ) -> UserSkillRuntimeSnapshot:
-    """Create one immutable, read-only snapshot for a DeepAgent bundle."""
+    """按来源、目录版本和实际选中集合共享只读快照。"""
 
     scan = _scan_user_skill_runtime(root)
     if expected_revision is not None and scan.revision != expected_revision:
@@ -175,35 +135,16 @@ def create_user_skill_runtime_snapshot(
         force_load=bool(selected_skill_names),
     )
 
-    owner = tempfile.TemporaryDirectory(prefix="devagentstudio-user-skills-")
-    snapshot_root = Path(owner.name)
-    try:
-        for skill in selected_skills:
-            target_root = snapshot_root / skill.directory_name
-            target_root.mkdir(parents=True, exist_ok=False)
-            for source_file in skill.files:
-                _assert_runtime_file_unchanged(skill, source_file)
-                target_file = target_root / source_file.relative_path
-                target_file.parent.mkdir(parents=True, exist_ok=True)
-                if source_file.relative_path == "SKILL.md":
-                    target_file.write_bytes(skill.document_content.encode("utf-8"))
-                else:
-                    shutil.copyfile(source_file.source, target_file)
-                _assert_runtime_file_unchanged(skill, source_file)
-                if (
-                    source_file.relative_path != "SKILL.md"
-                    and target_file.stat().st_size != source_file.size
-                ):
-                    raise UserSkillSnapshotChangedError(
-                        f"{skill.directory_name}/{source_file.relative_path} 未能稳定复制。"
-                    )
-                os.chmod(target_file, 0o444)
+    backend: BackendProtocol = EMPTY_SNAPSHOT_BACKEND
+    if selected_skills:
+        source = (root if root is not None else resolve_user_skills_root()).resolve()
+        selection = tuple(sorted(skill.name for skill in selected_skills))
 
-        _make_directories_read_only(snapshot_root)
-        backend = _OwnedSnapshotBackend(owner)
-    except Exception:
-        owner.cleanup()
-        raise
+        def populate(snapshot_root: Path) -> None:
+            """仅在缓存未命中时复制经过核对的技能文件。"""
+            _copy_skill_snapshot(snapshot_root, selected_skills)
+
+        backend = _SNAPSHOTS.get((source, scan.revision, selection), populate)
 
     return UserSkillRuntimeSnapshot(
         revision=scan.revision,
@@ -212,6 +153,32 @@ def create_user_skill_runtime_snapshot(
         prompt_documents=prompt_documents,
         issues=scan.issues,
     )
+
+
+def _copy_skill_snapshot(snapshot_root: Path, skills: tuple[_RuntimeSkill, ...]) -> None:
+    """完整复制已选技能，核对复制前后版本并将文件标记为只读。"""
+    for skill in skills:
+        target_root = snapshot_root / skill.directory_name
+        target_root.mkdir(parents=True, exist_ok=False)
+        for source_file in skill.files:
+            _assert_runtime_file_unchanged(skill, source_file)
+            target_file = target_root / source_file.relative_path
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            if source_file.relative_path == "SKILL.md":
+                target_file.write_bytes(skill.document_content.encode("utf-8"))
+            else:
+                shutil.copyfile(source_file.source, target_file)
+            _assert_runtime_file_unchanged(skill, source_file)
+            if (
+                source_file.relative_path != "SKILL.md"
+                and target_file.stat().st_size != source_file.size
+            ):
+                raise UserSkillSnapshotChangedError(
+                    f"{skill.directory_name}/{source_file.relative_path} 未能稳定复制。"
+                )
+            os.chmod(target_file, 0o444)
+
+    _make_directories_read_only(snapshot_root)
 
 
 def build_required_user_skills_prompt(

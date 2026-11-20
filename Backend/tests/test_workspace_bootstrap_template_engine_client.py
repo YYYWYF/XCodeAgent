@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -15,10 +16,18 @@ from app.services.workspace_bootstrap.template_engine_client import (
     _build_fallback_template_state,
 )
 from app.services.workspace_bootstrap.run_log import TemplateRunLog
+from tests.test_runtime_temporary import isolated_runtime_area
 
 
 class TemplateEngineClientTests(unittest.TestCase):
     """验证客户端流式下载 ZIP，且不发送已移除的静态认证头。"""
+
+    def setUp(self) -> None:
+        """将默认下载位置限定在测试实例中。"""
+        root = self.enterContext(tempfile.TemporaryDirectory())
+        area = isolated_runtime_area(Path(root))
+        self.enterContext(patch("app.services.runtime_temporary._area", area))
+        self.addCleanup(area.close)
 
     def test_downloads_zip_and_enforces_size_limit(self) -> None:
         """确认成功下载计算摘要，超限时删除临时文件并失败。"""
