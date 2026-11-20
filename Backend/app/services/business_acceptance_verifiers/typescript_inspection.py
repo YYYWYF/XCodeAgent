@@ -8,6 +8,9 @@ from collections.abc import Callable
 from typing import Any
 
 from app.services.business_acceptance_verifiers.common import shape_matches, verification_result
+from app.services.business_acceptance_verifiers.typescript_api_bindings import (
+    UnsupportedBinding, request_contract_errors,
+)
 from app.services.business_acceptance_verifiers.typescript_ast import (
     TypeScriptAstError,
     TypeScriptAstModel,
@@ -53,7 +56,7 @@ def verify_api_contract_source(
 
         def client_call(call: TypeScriptCall) -> bool:
             """待核验 Endpoint 必须通过模板 service 的实际导入调用。"""
-            return call.object_name in service_imports
+            return call.object_name in service_imports and not call.object_shadowed
 
     required_endpoints = _dict_items(expected.get("required_endpoints"))
     if not required_endpoints:
@@ -61,11 +64,12 @@ def verify_api_contract_source(
         required_endpoints = _dict_items(expected.get("endpoints"))
     allowed_existing_endpoints = _dict_items(expected.get("allowed_existing_endpoints"))
     accepted_endpoints = [*required_endpoints, *allowed_existing_endpoints]
-    declared_paths = {
-        str(endpoint.get("path") or "")
-        for endpoint in accepted_endpoints
-        if str(endpoint.get("path") or "")
-    }
+    http_calls = [call for function in model.functions for call in function.calls
+                  if (client_call(call) or _is_public_client_call(call))
+                  and call.method.casefold() in _HTTP_METHODS]
+    if any(not call.url.get("supported") for call in http_calls):
+        return verification_result("blocked", "HTTP URL 包含无法安全验证的 AST 表达式。",
+                                   facts={"reason_code": "verifier_unsupported_syntax"})
     facts: list[dict[str, Any]] = []
     errors: list[str] = []
     for endpoint in required_endpoints:
@@ -77,12 +81,11 @@ def verify_api_contract_source(
             errors.append(f"未找到实现 {method} {path} 的导出函数（{endpoint_id}）。")
             continue
         function, call = matched
-        errors.extend(_parameter_contract_errors(endpoint, function, call))
-        if endpoint.get("request_schema") and (
-            not function.request_type
-            or not shape_matches(endpoint.get("request_schema"), function.request_shape)
-        ):
-            errors.append(f"{function.export_symbol} 的请求类型不匹配 {endpoint_id}。")
+        try:
+            errors.extend(request_contract_errors(endpoint, function, call))
+        except UnsupportedBinding as exc:
+            return verification_result("blocked", str(exc),
+                                       facts={"reason_code": "verifier_unsupported_syntax"})
         if endpoint.get("response_schema") and (
             not function.response_type
             or not shape_matches(endpoint.get("response_schema"), function.response_shape)
@@ -99,13 +102,11 @@ def verify_api_contract_source(
             }
         )
     unexpected_paths = [
-        call.path
-        for function in model.functions
-        for call in function.calls
-        if (client_call(call) or _is_public_client_call(call))
-        and call.method.casefold() in _HTTP_METHODS
-        and call.path
-        and not any(_paths_match(call.path, declared) for declared in declared_paths)
+        call.path or str(call.url.get("template") or "")
+        for call in http_calls
+        if not any(call.url.get("template") == endpoint.get("path")
+                   and call.method.casefold() == str(endpoint.get("method") or "GET").casefold()
+                   for endpoint in accepted_endpoints)
     ]
     if unexpected_paths:
         errors.append("业务 API 模块实现了契约外路径：" + "、".join(dict.fromkeys(unexpected_paths)))
@@ -225,7 +226,7 @@ def _find_endpoint_function(
             if (
                 client_call(call)
                 and call.method.casefold() == expected_method
-                and _paths_match(call.path, path)
+                and call.url.get("supported") and call.url.get("template") == path
             ):
                 return function, call
     return None
@@ -239,47 +240,14 @@ def _is_public_client_call(call: TypeScriptCall) -> bool:
 
 
 def _paths_match(actual: str, expected: str) -> bool:
-    """归一模板占位符后比较实现路径与正式契约路径。"""
-
+    """保留页面查询识别所用的原文本匹配接口；API 契约只消费结构化 URL。"""
     if not actual or not expected:
         return actual == expected
     actual_path = re.sub(
         r"\$\{[^}]*?([A-Za-z_$][\w$]*)\s*\}",
-        lambda match: "{" + match.group(1) + "}",
-        actual,
+        lambda match: "{" + match.group(1) + "}", actual,
     )
     return actual_path == expected
-
-
-def _parameter_contract_errors(
-    endpoint: dict[str, Any],
-    function: TypeScriptFunction,
-    call: TypeScriptCall,
-) -> list[str]:
-    """验证参数字段存在于请求类型并传入正确的 HTTP 调用位置。"""
-
-    parameters = _dict_items(endpoint.get("parameters"))
-    if not parameters:
-        return []
-    errors: list[str] = []
-    properties = function.request_shape.get("properties", {}) if isinstance(function.request_shape, dict) else {}
-    call_arguments = " ".join(call.arguments)
-    for parameter in parameters:
-        name = str(parameter.get("name") or "")
-        location = str(parameter.get("in") or "query").casefold()
-        if not name:
-            continue
-        if name not in properties:
-            errors.append(f"{function.export_symbol} 的请求类型缺少参数 {name}（{location}）。")
-            continue
-        expected_required = bool(parameter.get("required"))
-        if expected_required and properties[name].get("required") is not True:
-            errors.append(f"{function.export_symbol} 将必填参数 {name} 声明为可选。")
-        if location in {"query", "body", "formdata"} and len(call.arguments) < 2:
-            errors.append(f"{function.export_symbol} 未将 {location} 参数 {name} 传入 HTTP 调用。")
-        if location == "path" and not re.search(rf"\b{re.escape(name)}\b", call_arguments):
-            errors.append(f"{function.export_symbol} 未将 path 参数 {name} 放入请求路径。")
-    return errors
 
 
 def _dependency_exports(evidence: list[dict[str, Any]]) -> dict[str, str]:

@@ -1,12 +1,15 @@
 """串行执行前端工具并在真实调用边界核对任务或步骤授权。"""
 
 from pathlib import Path
+import re
 
+from deepagents.middleware.filesystem import DEFAULT_READ_LIMIT
+from deepagents.backends.utils import EMPTY_CONTENT_WARNING
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from app.agents.frontend.file_backend import FILE_ACCESS
-from app.agents.frontend.execution_scope import FrontendTaskExecutionScope, _CONTROL, _OPERATIONS
+from app.agents.frontend.execution_scope import FRONTEND_CORE_DOCS, FrontendTaskExecutionScope, _CONTROL, _OPERATIONS
 from app.workspace.virtual_paths import is_host_workspace_virtual_path
 
 
@@ -88,10 +91,21 @@ class FrontendExecutionMiddleware(AgentMiddleware):
         name = request.tool_call["name"]
         fields = {"duplicate_read": False}
         if (name == "read_file" and isinstance(result, ToolMessage)
-            and result.status == "success" and isinstance(result.content, str)):
-            fields.update(self.scope.reads.observe(
-                path, physical, version, request.tool_call["args"], result.content, self.scope.step,
-            ))
+            and result.status == "success"):
+            if path in FRONTEND_CORE_DOCS:
+                args = request.tool_call["args"]
+                # 原工具只返回分页正文；不足一页且从首行开始才能确认已到末尾。
+                content = result.content if isinstance(result.content, str) else ""
+                lines = re.findall(r"^\s*(\d+)\t", content, re.MULTILINE)
+                if (args.get("offset", 0) != 0 or not lines
+                    or int(lines[-1]) >= args.get("limit", DEFAULT_READ_LIMIT)
+                    or "[Output was truncated" in content or EMPTY_CONTENT_WARNING in content):
+                    return self._denied(request, "核心文档正文不完整或被截断，请报告任务失败；不得重试扩大读取范围或搜索替代文档", path)
+                self.scope.mark_core_doc_read(path)
+            if isinstance(result.content, str):
+                fields.update(self.scope.reads.observe(
+                    path, physical, version, request.tool_call["args"], result.content, self.scope.step,
+                ))
         if name not in _CONTROL | {"execute", "code_graph_context"}:
             self.scope.record("frontend_tool_permission", tool_name=name, virtual_path=path,
                               operation=_OPERATIONS.get(name, name), permission_decision="allowed", **fields)

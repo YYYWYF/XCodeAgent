@@ -161,27 +161,31 @@ class FrontendApiExecutionTests(unittest.TestCase):
                          "allowed")
         self.assertFalse((self.root / "frontend/src/apis/other.ts").exists())
 
-    def test_invalid_ast_blocks_completion(self):
+    def test_invalid_ast_warns_without_blocking_completion(self):
         """不支持的 AST 语法保留 blocked 证据及真实变更。"""
         result, changes, _ = self._run(_tool("write_file", "created", file_path=f"/{TARGET}",
                                              content="export function malformed( {"))
-        self.assertEqual(result["failure_category"], "business_acceptance_blocked")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["acceptance_status"]["business"], "warning")
+        self.assertIsNone(result["failure_category"])
+        self.assertEqual(result["business_acceptance_evidence"][0]["status"], "blocked")
         self.assertEqual(result["business_acceptance_evidence"][0]["facts"]["reason_code"],
                          "verifier_unsupported_syntax")
         self.assertEqual(changes["files"][0]["changeType"], "added")
 
-    def test_written_file_must_pass_contract(self):
-        """真实写入错误路径的模块仍进入既有 Repair。"""
+    def test_written_file_retains_contract_failure_as_warning(self):
+        """真实错误路径只由 AST 发现时保留失败证据，不进入 Repair。"""
         result, changes, _ = self._run(_tool("write_file", "created", file_path=f"/{TARGET}",
                                              content=VALID_SOURCE.replace("'/orders'", "'/wrong'")))
-        self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["failure_category"], "business_acceptance_failed")
-        self.assertEqual(result["scheduler_decision"]["action"], "repair")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["acceptance_status"]["business"], "warning")
+        self.assertIsNone(result["failure_category"])
+        self.assertNotEqual(result["scheduler_decision"]["action"], "repair")
         self.assertEqual(result["business_acceptance_evidence"][0]["status"], "failed")
         self.assertEqual(changes["files"][0]["changeType"], "added")
 
-    def test_service_name_without_template_binding_is_rejected(self):
-        """同名对象、错误模块和类型导入均不足以证明统一请求路径。"""
+    def test_service_name_without_template_binding_warns(self):
+        """同名对象、错误模块和类型导入仍记录 AST 失败证据。"""
         for declaration in ("const service = { get() {} };",
                             "import service from 'other-service';",
                             "import type service from './service';"):
@@ -190,7 +194,10 @@ class FrontendApiExecutionTests(unittest.TestCase):
                 self.task, self.state = _fixture(self.root)
                 source = VALID_SOURCE.replace("import service from './service';", declaration)
                 result, _, _ = self._run(_tool("write_file", "created", file_path=f"/{TARGET}", content=source))
-                self.assertEqual(result["failure_category"], "business_acceptance_failed")
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["acceptance_status"]["business"], "warning")
+                self.assertEqual(result["business_acceptance_evidence"][0]["status"], "failed")
+                self.assertIsNone(result["failure_category"])
 
     def test_service_default_import_alias_is_accepted(self):
         """端点匹配依据真实默认导入绑定，允许合法 service 别名。"""
@@ -238,13 +245,14 @@ class FrontendApiExecutionTests(unittest.TestCase):
         result, _, _ = self._run(_tool("write_file", "created", file_path=f"/{TARGET}", content=VALID_SOURCE))
         self.assertEqual(result["failure_category"], "business_acceptance_blocked")
 
-    def test_already_satisfied_still_requires_contract_acceptance(self):
-        """已有合规文件允许无修改完成，已有错误实现不能借 already_satisfied 绕过验收。"""
+    def test_already_satisfied_still_records_contract_acceptance(self):
+        """已有文件无修改完成时仍执行验收，AST 失败只改变业务告警状态。"""
         for correct in (False, True):
             with self.subTest(correct=correct):
                 _create_file(self.root, TARGET, VALID_SOURCE if correct else VALID_SOURCE.replace("'/orders'", "'/wrong'"))
                 result, _, _ = self._run(status="already_satisfied")
-                self.assertEqual(result["status"], "already_satisfied" if correct else "failed")
+                self.assertEqual(result["status"], "already_satisfied")
+                self.assertEqual(result["acceptance_status"]["business"], "passed" if correct else "warning")
 
     def test_parallel_ready_batch_uses_same_dispatch(self):
         """并行调度仍按原顺序拆成独立任务，不再区分新旧 API 分支。"""

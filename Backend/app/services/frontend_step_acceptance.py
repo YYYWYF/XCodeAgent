@@ -44,7 +44,7 @@ def evaluate_frontend_page(
         except FileNotFoundError:
             status, detail = "failed", "请先完成任务声明的页面入口。"
         except TypeScriptAstError:
-            status, detail = "failed", "页面入口存在语法错误，请修正后继续。"
+            status, detail = "not_evaluable", "页面入口存在语法错误，请修正后继续。"
         except (OSError, RuntimeError, ValueError):
             status, detail = "not_evaluable", "页面入口无法安全读取或解析。"
         return [result(RequestFinding(_STRUCTURE, status, entry, None, detail))]

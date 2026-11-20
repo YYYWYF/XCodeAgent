@@ -20,6 +20,32 @@ from app.services.engineering_acceptance_verifier import (
 
 
 class EngineeringAcceptanceTests(unittest.TestCase):
+    def test_ast_boundary_warning_preserves_other_engineering_gates(self) -> None:
+        """AST 真实规则失败只告警；同批次的文件缺失仍通过原工程汇合阻断。"""
+        path = "frontend/src/pages/Orders/index.tsx"
+        task = {"id": "page", "owner": "frontend", "unit_id": "page:orders", "status": "pending", "dependencies": [],
+                "deliverables": [{"kind": "frontend.page", "paths": [path]}],
+                "change_scope": [{"operation": "add", "path": path}]}
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / path
+            target.parent.mkdir(parents=True)
+            target.write_text("export default function Page() { fetch('/orders'); return null; }")
+            changes = {"files": [{"path": path, "changeType": "added"}]}
+            result = verify_task_file_changes(results=[{"task_id": "page", "status": "completed"}],
+                tasks=[task], code_change_set=changes, workspace_root=folder)[0]
+            self.assertEqual(result["status"], "completed", result)
+            self.assertEqual(result["acceptance_status"]["engineering"], "warning")
+            boundary = next(item for item in result["acceptance_evidence"] if item["kind"] == "frontend_api_boundary")
+            self.assertEqual(boundary["status"], "warning")
+            self.assertTrue(boundary["error"])
+            rule = next(item for item in boundary["rule_results"] if item["status"] == "failed")
+            self.assertEqual(rule["line"], 1)
+            missing = {**task, "change_scope": [*task["change_scope"],
+                       {"operation": "add", "path": "frontend/src/pages/Orders/Missing.tsx"}]}
+            result = verify_task_file_changes(results=[{"task_id": "page", "status": "completed"}],
+                tasks=[missing], code_change_set=changes, workspace_root=folder)[0]
+            self.assertEqual(result["status"], "failed", result)
+
     def test_backend_endpoint_permission_requires_one_exact_any_of_annotation(self) -> None:
         """后端受控 Endpoint 只能在精确 Controller Method 上使用平台常量。"""
 
@@ -246,7 +272,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 "}\n",
                 encoding="utf-8",
             )
-            _, http_errors = verify_engineering_acceptance(
+            http_evidence, http_errors = verify_engineering_acceptance(
                 task=compiled,
                 status="completed",
                 code_change_set={
@@ -313,13 +339,16 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 )
 
         self.assertTrue(any("RESOURCES" in error for error in errors), errors)
-        self.assertTrue(any("fetch、axios 或 service" in error for error in http_errors), http_errors)
+        boundary = next(item for item in http_evidence if item["kind"] == "frontend_api_boundary")
+        self.assertEqual(boundary["status"], "warning")
+        self.assertTrue(boundary["error"])
+        self.assertFalse(any("前端业务请求" in error for error in http_errors), http_errors)
         self.assertTrue(any("未声明的 RESOURCES" in error for error in uncontrolled_errors), uncontrolled_errors)
         self.assertEqual(mixed_result["status"], "failed")
         self.assertEqual(mixed_result["scheduler_decision"]["action"], "repair")
-        self.assertIn("fetch、axios 或 service", mixed_result["failure_reason"])
+        self.assertNotIn("前端业务请求", mixed_result["failure_reason"])
         self.assertIn("frontend/src/Unrelated.tsx", mixed_result["failure_reason"])
-        self.assertIn("RESOURCES", mixed_result["authorization_warnings"][0])
+        self.assertTrue(any("RESOURCES" in item for item in mixed_result["authorization_warnings"]))
         self.assertEqual(unavailable_evidence[0]["status"], "failed")
         self.assertIn("缺少工作区根目录", unavailable_errors[0])
         self.assertEqual(escaped_evidence[0]["status"], "failed")

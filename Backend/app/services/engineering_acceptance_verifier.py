@@ -87,11 +87,13 @@ def verify_engineering_acceptance(
                 batch_unauthorized_paths=batch_unauthorized_paths or [],
             )
             mismatch = False
-        # 只有实际读到的权限接入不符合预期才可告警，读取、解析和定位失败仍阻断。
+        # AST 推断仅告警；权限读取、解析和定位失败仍沿用原硬门禁。
         check_status = ("not_evaluable" if any(item["status"] == "not_evaluable"
                         for item in rule_results) else "passed")
         if error:
-            check_status = "warning" if authorization_checks_as_warning and mismatch else "failed"
+            ast_failure = kind == "frontend_api_boundary" and any(
+                item["status"] == "failed" for item in rule_results)
+            check_status = "warning" if ast_failure or (authorization_checks_as_warning and mismatch) else "failed"
             if check_status == "failed":
                 errors.append(error)
         evidence.append(

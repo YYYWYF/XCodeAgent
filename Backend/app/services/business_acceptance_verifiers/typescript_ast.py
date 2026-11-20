@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tree_sitter_language_pack import get_parser
+from app.services.business_acceptance_verifiers.typescript_ast_bindings import (
+    declared_names, expression, function_parameters, static_url_constants, url_binding,
+)
 
 from app.services.business_acceptance_verifiers.typescript_ast_types import (
     annotation_value as _annotation_value,
@@ -26,6 +29,9 @@ class TypeScriptCall:
     method: str
     arguments: list[str]
     path: str
+    argument_bindings: list[dict[str, Any]] = field(default_factory=list)
+    url: dict[str, Any] = field(default_factory=dict)
+    object_shadowed: bool = False
 
 
 @dataclass
@@ -40,6 +46,7 @@ class TypeScriptFunction:
     request_shape: dict[str, Any] | None = None
     response_shape: dict[str, Any] | None = None
     calls: list[TypeScriptCall] = field(default_factory=list)
+    parameters: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -241,6 +248,9 @@ def _local_functions(
     """提取函数声明和函数型变量，并关联签名与调用。"""
 
     result: dict[str, TypeScriptFunction] = {}
+    encoding_shadowed = "encodeURIComponent" in declared_names(item.root, item.source) or any(
+        binding.local == "encodeURIComponent" for binding in _imports(item, include_default=True)
+    )
     for node in _walk(item.root):
         function_node = None
         name_node = None
@@ -255,41 +265,27 @@ def _local_functions(
         if function_node is None or name_node is None:
             continue
         name = _node_text(name_node, item.source)
-        parameter_name, request_type, request_shape = _function_parameter(
-            function_node, item.source, declarations
-        )
+        parameters = function_parameters(function_node, item.source, declarations)
+        first = parameters[0] if parameters else {}
         response_type, response_shape = _function_response(
             function_node, item.source, declarations
         )
         result[name] = TypeScriptFunction(
             local_name=name,
             export_symbol=name,
-            parameter_name=parameter_name,
-            request_type=request_type,
+            parameter_name=first.get("name", ""),
+            request_type=first.get("type", ""),
             response_type=response_type,
-            request_shape=request_shape,
+            request_shape=first.get("shape"),
             response_shape=response_shape,
-            calls=_function_calls(function_node, item.source, string_constants),
+            calls=_function_calls(
+                function_node, item.source, string_constants,
+                url_constants=static_url_constants(item.root, function_node, item.source),
+                encoding_shadowed=encoding_shadowed,
+            ),
+            parameters=parameters,
         )
     return result
-
-
-def _function_parameter(
-    node: Any,
-    source: bytes,
-    declarations: dict[str, tuple[Any, bytes]],
-) -> tuple[str, str, dict[str, Any] | None]:
-    """读取函数第一个参数的名称、类型名和结构。"""
-
-    parameters = node.child_by_field_name("parameters")
-    if parameters is None or not parameters.named_children:
-        return "", "", None
-    parameter = parameters.named_children[0]
-    pattern = parameter.child_by_field_name("pattern")
-    type_node = _annotation_value(parameter.child_by_field_name("type"))
-    name = _node_text(pattern, source) if pattern is not None else ""
-    type_name = _node_text(type_node, source) if type_node is not None else ""
-    return name, type_name, _type_shape(type_node, source, declarations, set())
 
 
 def _function_response(
@@ -313,10 +309,12 @@ def _function_calls(
     node: Any,
     source: bytes,
     string_constants: dict[str, str],
+    *, url_constants: dict[str, str], encoding_shadowed: bool = False,
 ) -> list[TypeScriptCall]:
     """提取函数体内的调用对象、method、参数和静态路径。"""
 
     calls: list[TypeScriptCall] = []
+    local_names = declared_names(node, source)
     for call in (item for item in _walk(node) if item.type == "call_expression"):
         function = call.child_by_field_name("function")
         arguments = call.child_by_field_name("arguments")
@@ -328,7 +326,7 @@ def _function_calls(
             property_node = function.child_by_field_name("property")
             object_name = _node_text(object_node, source) if object_node is not None else ""
             method = _node_text(property_node, source) if property_node is not None else ""
-        argument_nodes = list(arguments.named_children)
+        argument_nodes = [child for child in arguments.named_children if child.type != "comment"]
         argument_texts = [_node_text(argument, source) for argument in argument_nodes]
         path = ""
         if argument_nodes:
@@ -337,6 +335,10 @@ def _function_calls(
                 path = _literal_value(first, source)
             elif first.type == "identifier":
                 path = string_constants.get(_node_text(first, source), "")
+        url = url_binding(argument_nodes[0] if argument_nodes else None, source, url_constants)
+        if encoding_shadowed and any(binding["expression"].get("kind") == "encoded"
+                                     for binding in url.get("bindings", [])):
+            url = {"supported": False}
         calls.append(
             TypeScriptCall(
                 callee=_node_text(function, source),
@@ -344,6 +346,9 @@ def _function_calls(
                 method=method,
                 arguments=argument_texts,
                 path=path,
+                argument_bindings=[expression(argument, source) for argument in argument_nodes],
+                url=url,
+                object_shadowed=object_name.partition(".")[0] in local_names,
             )
         )
     return calls

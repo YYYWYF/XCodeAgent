@@ -4,7 +4,9 @@ import json
 from contextlib import nullcontext
 from typing import Any
 
-from app.agents.frontend.execution_scope import FrontendTaskExecutionScope
+from app.agents.frontend.execution_scope import (
+    FRONTEND_ENGINEERING_DOC, FRONTEND_TEMPLATE_AGENTS_DOC, FrontendTaskExecutionScope,
+)
 from app.agents.frontend.project_plan_context import FrontendTaskProjectionError
 from app.agents.frontend.task_packet import PAGE, STATIC, frontend_task_packet, task_kind
 from app.agents.frontend.static_prompt import _frontend_generation_prompt
@@ -40,14 +42,14 @@ def _scoped_generation_prompt(packets: list[dict]) -> str:
     skill_loading = (
         "先单独调用 begin_frontend_task，等待成功返回 Step 1。"
         "此调用不得与任何其他工具并发或同批发送。仅在进入 Step 1 后，读取：\n"
-        "1. /.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md\n"
-        "2. /.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md\n"
+        f"1. {FRONTEND_ENGINEERING_DOC}\n"
+        f"2. {FRONTEND_TEMPLATE_AGENTS_DOC}\n"
         "Step 1 之前不得尝试读取 Skill 或业务文件。"
-        "本页面后续步骤复用已读取的 Skill，不因切换步骤重复读取。"
+        "本页面后续步骤复用已读取的两份核心文档，不因切换步骤重复读取。"
         "仅按需阅读示例，后续任务复用规范。"
         if page else
-        "开始实施时读取 /.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md "
-        "和同一技能根下 frontend-template-modification-boundary/SKILL.md；仅按需阅读示例，"
+        f"开始实施时读取 {FRONTEND_ENGINEERING_DOC} "
+        f"和 {FRONTEND_TEMPLATE_AGENTS_DOC}；仅按需阅读示例，"
         "后续任务复用规范。"
     )
     page_guidance = (
@@ -66,8 +68,15 @@ def _scoped_generation_prompt(packets: list[dict]) -> str:
         "仅实施以下已批准的任务。implementation_contract 是唯一实施事实入口，"
         "文件用于核对允许范围内的现有实现，按业务契约、模板组件与权限契约、工程规范、示例的优先级实施。使用虚拟绝对文件路径。\n"
         f"{execution}"
-        "文件未变化时优先复用已读正文，需核对时可正常重读。禁止目录遍历和 Shell。\n"
+        "普通业务文件未变化时优先复用已读正文，需核对时可正常重读。禁止目录遍历和 Shell。\n"
         f"{skill_loading}遵循 implementation_contract.frontend_standards 中适用规则。"
+        "两份核心文档均须单次完整读取（offset=0，limit=2000），同一任务每份最多成功读取一次。"
+        "多页面任务可复用已有上下文，不强制跨任务重复读取。"
+        "Engineering Skill 负责通用开发规范，模板 AGENTS.md 负责当前工程真实能力和导出；"
+        "有歧义时仅核对已授权源码。implementation_contract 与已确认 API、设计及权限契约决定业务实施事实，"
+        "实际文件授权和步骤约束由平台工具校验，任何文档均不可扩权或覆盖业务契约。"
+        "核心文档缺失、不可读或正文截断时，不搜索替代 AGENTS.md、不回退旧边界 Skill、不猜测模板接口；"
+        "无法完成必要核对时，使用既有 failed 任务结果及简明原因交由原调度和修复链路处理。"
         "先确定方案、集中修改，无需输出独立计划。已有 API 文件使用 edit_file 增量实现。"
         f"{page_guidance}\n"
         "最终输出单一 JSON 对象 {\"task_results\":[...]}。每项提供 task_id、summary、"

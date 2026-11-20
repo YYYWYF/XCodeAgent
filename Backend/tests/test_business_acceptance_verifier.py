@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from copy import deepcopy
+from unittest.mock import Mock
 
 from app.services.business_acceptance import BUSINESS_ACCEPTANCE_KINDS, compile_business_acceptance
-from app.services.business_acceptance_verifier import verify_business_acceptance
+from app.services.business_acceptance_verifier import BusinessAcceptanceVerifier, verify_business_acceptance
 from app.services.business_acceptance_verifiers.backend_domain import verify_objects_source
 from app.services.business_acceptance_verifiers.backend_external_api import verify_upstream_source
 from app.services.business_acceptance_verifiers.java_inspection import verify_external_mapping_source
@@ -98,6 +100,48 @@ def _personal_info_domain_sources() -> dict[str, str]:
 
 class BusinessAcceptanceVerifierTests(unittest.TestCase):
     """验证 verifier 只接受当前工作区和当前正式来源的确定性证据。"""
+
+    def test_ast_source_only_after_verifier_execution(self) -> None:
+        """AST 正常或异常结果有来源标记，所有前置失败均保持硬阻断来源。"""
+        task, formal = _compiled_task("frontend.api_module", "frontend/src/apis/orders.ts")
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "frontend/src/apis/orders.ts"
+            target.parent.mkdir(parents=True)
+            target.write_text("export const load = () => service.get('/orders');")
+            for status in ("passed", "failed", "blocked", "exception"):
+                verifier = Mock(return_value={"status": status, "evidence": "原始证据"})
+                if status == "exception":
+                    verifier.side_effect = ValueError("unsupported")
+                runner = BusinessAcceptanceVerifier({"frontend.api_contract": verifier})
+                result = runner.verify(task, folder, formal_artifacts=formal)
+                item = result["business_acceptance_evidence"][0]
+                self.assertEqual(item["verification_source"], "typescript_ast")
+                self.assertEqual(item["status"], "blocked" if status == "exception" else status)
+            for failure in ("kind", "verifier", "contract", "hash", "formal", "missing", "escape"):
+                with self.subTest(failure=failure):
+                    broken = deepcopy(task)
+                    check = broken["business_acceptance_checks"][0]
+                    artifacts = formal
+                    if failure == "kind":
+                        check["kind"] = "unknown"
+                    elif failure == "verifier":
+                        check["verification"]["verifier"] = "wrong"
+                    elif failure == "contract":
+                        check["expected"] = None
+                    elif failure == "hash":
+                        check["sources"][0]["sha256"] = "0" * 64
+                    elif failure == "formal":
+                        artifacts = None
+                    elif failure == "missing":
+                        check["target_paths"] = ["frontend/src/apis/missing.ts"]
+                    else:
+                        check["target_paths"] = ["../outside.ts"]
+                    verifier = Mock()
+                    result = BusinessAcceptanceVerifier({"frontend.api_contract": verifier}).verify(
+                        broken, folder, formal_artifacts=artifacts)
+                    self.assertEqual(result["status"], "blocked")
+                    self.assertNotIn("verification_source", result["business_acceptance_evidence"][0])
+                    verifier.assert_not_called()
 
     def test_external_api_client_verifier_rejects_missing_parameter(self) -> None:
         """外部 API Client 必须实现正式契约声明的 Path/Query 参数。"""
@@ -249,7 +293,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 type OrderRequest = { status: string }
                 type OrderResponse = { id: string }
                 export async function listOrders(params: OrderRequest): Promise<OrderResponse> {
-                  return service.get('/orders', params)
+                  return service.get('/orders', { params })
                 }
                 """,
                 encoding="utf-8",
@@ -271,7 +315,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
         interface RoleListItem { id: number; name: string }
         interface RoleListOutput { total: number; list: RoleListItem[] }
         export function getRoleList(params?: RoleResourceListParams): Promise<RoleListOutput> {
-          return service.get<RoleListOutput>('/api/roles', params)
+          return service.get<RoleListOutput>('/api/roles', { params })
         }
         """
         expected = {
@@ -434,7 +478,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "type OrderRequest = { status: string }\n"
                 "type OrderResponse = { id: string }\n"
                 "export async function listOrders(params: OrderRequest): Promise<OrderResponse> { "
-                "return service.get('/orders', params) }",
+                "return service.get('/orders', { params }) }",
                 encoding="utf-8",
             )
             page_file.write_text(
@@ -450,6 +494,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             )
         self.assertEqual(api_result["status"], "passed")
         self.assertEqual(page_result["status"], "passed", page_result)
+        self.assertEqual(page_result["business_acceptance_evidence"][0]["verification_source"], "typescript_ast")
 
     def test_page_endpoint_usage_tracks_import_alias_and_rejects_unbound_same_name(self) -> None:
         """页面 AST 应接受 import 别名，并拒绝没有 API import 的本地同名调用。"""
@@ -472,7 +517,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "type OrderRequest = { status: string }\n"
                 "type OrderResponse = { id: string }\n"
                 "export function listOrders(params: OrderRequest): Promise<OrderResponse> { "
-                "return service.get<OrderResponse>('/orders', params) }",
+                "return service.get<OrderResponse>('/orders', { params }) }",
                 encoding="utf-8",
             )
             api_result = verify_business_acceptance(api_task, temp_dir, formal_artifacts=formal)
@@ -780,7 +825,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "type OrderRequest = { status: string }\n"
                 "type OrderResponse = { id: string }\n"
                 "export async function listOrders(params: OrderRequest): Promise<OrderResponse> { "
-                "return service.get('/orders', params) }",
+                "return service.get('/orders', { params }) }",
                 encoding="utf-8",
             )
             page_file.write_text(
@@ -824,7 +869,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
                 "type OrderRequest = { status: string }\n"
                 "type OrderResponse = { id: string }\n"
                 "export async function listOrders(params: OrderRequest): Promise<OrderResponse> { "
-                "return service.get('/orders', params) }"
+                "return service.get('/orders', { params }) }"
             ),
             "frontend.page_endpoint_usage": (
                 "import { listOrders } from '../../apis/orders'\n"
@@ -989,7 +1034,7 @@ class BusinessAcceptanceVerifierTests(unittest.TestCase):
             "type OrderItem = { id: string }\n"
             "type OrderResponse = { items: OrderItem[]; cursor?: string }\n"
             "export async function listOrders(params: OrderRequest): Promise<OrderResponse> { "
-            "return service.get('/orders', params) }"
+            "return service.get('/orders', { params }) }"
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "frontend/src/apis/orders.ts"

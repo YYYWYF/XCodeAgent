@@ -8,7 +8,7 @@ from unittest.mock import patch
 from deepagents.backends import StateBackend
 
 from app.agents.frontend.agent import create_frontend_agent
-from app.agents.frontend.execution_scope import FrontendTaskExecutionScope
+from app.agents.frontend.execution_scope import FRONTEND_CORE_DOCS, FrontendTaskExecutionScope
 from app.agents.frontend.generator import _scoped_generation_prompt
 from app.agents.frontend.task_packet import API, PAGE
 
@@ -39,8 +39,11 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                     for text in (system, prompt):
                         self.assertIn("implementation_contract", text)
                         self.assertIn("task_results", text)
-                    for skill in ("frontend-engineering-standards", "frontend-template-modification-boundary"):
-                        self.assertEqual(prompt.count(f"{skill}/SKILL.md"), 1)
+                    for path in FRONTEND_CORE_DOCS:
+                        self.assertEqual(prompt.count(path), 1)
+                    self.assertNotIn("frontend-template-modification-boundary", prompt)
+                    self.assertIn("同一任务每份最多成功读取一次", prompt)
+                    self.assertIn("不搜索替代 AGENTS.md、不回退旧边界 Skill", prompt)
                     if kind == PAGE:
                         self.assertIn("第一次工具调用必须单独调用 begin_frontend_task", system)
                         self.assertIn("等待其成功返回 Step 1 后", system)
@@ -50,8 +53,8 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                         self.assertIn("仅在进入 Step 1 后，读取", prompt)
                         self.assertIn("Step 1 之前不得尝试读取 Skill 或业务文件", prompt)
                         self.assertIn("不因切换步骤重复读取", prompt)
-                        for skill in ("frontend-engineering-standards", "frontend-template-modification-boundary"):
-                            self.assertIn(f"/.devagentstudio/builtin-skills/{skill}/SKILL.md", prompt)
+                        for path in FRONTEND_CORE_DOCS:
+                            self.assertIn(path, prompt)
                         for step in ("Step 1 只读", "Step 2/3 复用核对结果", "Step 4 只读"):
                             self.assertIn(step, prompt)
                         for boundary in ("不要求读完全部文件", "定向补读已授权精确文件",

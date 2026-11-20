@@ -758,6 +758,15 @@ def _verify_business_results(
             dependency_evidence=dependency_evidence.get(str(task.get("id") or ""), []),
             **({"frontend_api_service_path": FRONTEND_TEMPLATE_SERVICE.lstrip("/")} if api_module else {}),
         )
+        # 原始证据和计数不变，仅由非 AST 失败决定任务阻断与 Repair。
+        unsuccessful = [item for item in business["business_acceptance_evidence"]
+                        if item.get("status") in {"failed", "blocked"}]
+        blocking = [item for item in unsuccessful
+                    if item.get("verification_source") != "typescript_ast"]
+        business_status = (
+            "failed" if any(item["status"] == "failed" for item in blocking)
+            else "blocked" if blocking else "warning" if unsuccessful else "passed"
+        )
         next_result = {
             **result,
             "business_acceptance_evidence": business["business_acceptance_evidence"],
@@ -768,12 +777,12 @@ def _verify_business_results(
                     if isinstance(result.get("acceptance_status"), dict)
                     else {}
                 ),
-                "business": business.get("status"),
+                "business": business_status,
             },
         }
-        if business.get("status") == "failed":
+        if business_status == "failed":
             _merge_business_acceptance_failure(next_result, "business_acceptance_failed")
-        elif business.get("status") == "blocked":
+        elif business_status == "blocked":
             _merge_business_acceptance_failure(next_result, "business_acceptance_blocked")
         elif next_result.get("status") in {"completed", "already_satisfied"}:
             next_result["failure_category"] = None

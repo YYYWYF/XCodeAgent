@@ -27,7 +27,7 @@ from app.services.authorization_platform_projection import PlatformProjectionErr
 from app.services.template_route_projector import TemplateRouteProjectorError
 from app.services.node_recovery_context import NodeRecoveryContext, bind_node_recovery, bind_recovery_runtime
 from app.services.build_task_planner import replace_build_task_plan_tasks, tasks_from_build_task_plan
-from app.services.build_scheduler import attribute_task_file_changes
+from app.services.build_scheduler import attribute_task_file_changes, normalize_task_results, select_ready_build_batch
 from app.services.template_state import load_template_state, template_context
 from app.workspace.task_documents import write_build_execution_record
 
@@ -98,6 +98,44 @@ def _ready_build_state(workspace: str, state: dict) -> dict:
 
 
 class BuildSubgraphSchedulerTests(unittest.TestCase):
+    def test_ast_warnings_preserve_completion_and_dependency_readiness(self) -> None:
+        """真实归一化与验收汇合后，AST 告警不阻断依赖，混合非 AST 失败仍阻断。"""
+        for kind in ("frontend.api_module", "frontend.page"):
+            for status in ("passed", "failed", "blocked"):
+                for initial in ("completed", "already_satisfied"):
+                    for hard_failure in (None, "failed", "blocked"):
+                        with self.subTest(kind=kind, status=status, initial=initial, hard=hard_failure):
+                            task = {"id": "upstream", "owner": "frontend", "dependencies": [],
+                                    "deliverables": [{"kind": kind, "paths": ["frontend/src/upstream.tsx"]}]}
+                            evidence = [{"status": status, "verification_source": "typescript_ast",
+                                         "evidence": "原始 AST 发现", "facts": {"reason_code": "unsupported"}}]
+                            if hard_failure:
+                                evidence.append({"status": hard_failure, "evidence": "正式来源失效"})
+                            summary = {key: sum(item["status"] == key for item in evidence)
+                                       for key in ("passed", "failed", "blocked")}
+                            business = {"status": "failed" if summary["failed"] else "blocked" if summary["blocked"] else "passed",
+                                        "business_acceptance_evidence": evidence,
+                                        "business_acceptance_summary": summary}
+                            normalized = normalize_task_results(dispatched_tasks=[task], raw_results=[{
+                                "task_id": task["id"], "owner": "frontend", "status": initial}])
+                            with patch("app.graph.subgraphs.build.dag_business_self_check_enabled", return_value=True), patch(
+                                "app.graph.subgraphs.build.verify_business_acceptance", return_value=business):
+                                result = _verify_business_results({}, [task], normalized, workspace_root=None)[0]
+                            self.assertEqual(result["business_acceptance_evidence"], evidence)
+                            self.assertEqual(result["business_acceptance_summary"], summary)
+                            self.assertEqual(result["status"], "failed" if hard_failure else initial)
+                            self.assertEqual(result["acceptance_status"]["business"], hard_failure or (
+                                "passed" if status == "passed" else "warning"))
+                            if not hard_failure:
+                                self.assertIsNone(result["failure_category"])
+                                self.assertIsNone(result["failure_reason"])
+                                self.assertNotEqual(result["scheduler_decision"]["action"], "repair")
+                            ready = select_ready_build_batch([
+                                {**task, "status": result["status"]},
+                                {"id": "downstream", "owner": "frontend", "status": "pending", "dependencies": [task["id"]]},
+                            ])
+                            self.assertEqual(ready["ready_task_ids"], [] if hard_failure else ["downstream"])
+
     def test_plan_mismatch_confirms_one_create_only_java_file(self) -> None:
         """真实调度器暂停并复验新增权限，批准后的修复保留仓储任务身份。"""
         unit_id = "backend:endpoint:cards:admins"

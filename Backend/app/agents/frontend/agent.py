@@ -10,7 +10,10 @@ from app.agents.workspace_scope import (
     create_workspace_permissions,
 )
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
-from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT, FRONTEND_ENGINEERING_SKILL_NAME
+from app.services.builtin_skills import (
+    BUILTIN_SKILLS_VIRTUAL_ROOT,
+    FRONTEND_ENGINEERING_SKILL_NAME,
+)
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.middleware.direct_modification import DirectModificationMiddleware
 from app.tools.delete_file import create_delete_file_tool
@@ -18,7 +21,7 @@ from app.tools.code_graph_context import create_code_graph_context_tool
 from app.tools.execute import create_execute_tool
 from app.workspace.virtual_paths import VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS
 
-FRONTEND_BUILD_BUILTIN_SKILLS = (FRONTEND_ENGINEERING_SKILL_NAME, "frontend-template-modification-boundary")
+FRONTEND_BUILD_BUILTIN_SKILLS = (FRONTEND_ENGINEERING_SKILL_NAME,)
 
 
 def create_frontend_agent(
@@ -38,7 +41,9 @@ def create_frontend_agent(
         builtin_skill_names=FRONTEND_BUILD_BUILTIN_SKILLS if build_scope else None,
         user_skills_backend=user_skills_backend,
         agent_memory_backend=agent_memory_backend,
-        workspace_backend=FrontendScopedFilesystemBackend(build_scope) if build_scope else None,
+        workspace_backend=(
+            FrontendScopedFilesystemBackend(build_scope) if build_scope else None
+        ),
     )
     base_system_prompt = (
         "You are the Frontend Coding Agent. Follow the execution contract in the current "
@@ -49,7 +54,7 @@ def create_frontend_agent(
         "and any change request. Follow the current execution prompt for whether project-level "
         "verification is allowed; do not invent validation commands. "
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS} When deleting a file, "
-        "use delete_file(file_path=\"/path\") with a virtual absolute path.\n"
+        'use delete_file(file_path="/path") with a virtual absolute path.\n'
         "IMPORTANT: If write_file returns an error that a file already exists, "
         "use edit_file to modify the existing file instead of retrying write_file "
         "with the same path. If you must create a new file, use a unique filename "
@@ -75,7 +80,8 @@ def create_frontend_agent(
                 "输出既有 task_results JSON，由平台验收。"
             )
         design_paths = [
-            path for packet in build_scope.packets
+            path
+            for packet in build_scope.packets
             if (path := packet["implementation_contract"].get("confirmed_design"))
         ]
         middleware.append(FrontendExecutionMiddleware(build_scope))
@@ -83,8 +89,13 @@ def create_frontend_agent(
     def block_shell() -> str:
         """在启动任何命令前拒绝前端 Build 的 Shell 执行。"""
         reason = "前端 Build 不允许执行 Shell 命令"
-        build_scope.record("frontend_tool_permission", tool_name="execute", operation="shell",
-                           permission_decision="denied", permission_denial_reason=reason)
+        build_scope.record(
+            "frontend_tool_permission",
+            tool_name="execute",
+            operation="shell",
+            permission_decision="denied",
+            permission_denial_reason=reason,
+        )
         return reason
 
     def can_delete(path: str) -> bool:
@@ -92,10 +103,18 @@ def create_frontend_agent(
         build_scope.authorize("delete_file", path)
         return True
 
-    execute_tool = create_execute_tool(workspace_root, blocked_by=block_shell if build_scope else None)
+    execute_tool = create_execute_tool(
+        workspace_root, blocked_by=block_shell if build_scope else None
+    )
     runtime_tools = [
-        build_scope.code_graph_tool() if build_scope else create_code_graph_context_tool(workspace_root),
-        create_delete_file_tool(workspace_root, path_guard=can_delete if build_scope else None),
+        (
+            build_scope.code_graph_tool()
+            if build_scope
+            else create_code_graph_context_tool(workspace_root)
+        ),
+        create_delete_file_tool(
+            workspace_root, path_guard=can_delete if build_scope else None
+        ),
         execute_tool,
         *(build_scope.control_tools() if build_scope else []),
     ]
@@ -108,7 +127,10 @@ def create_frontend_agent(
         skills=[BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT],
         memory=[AGENT_MEMORY_VIRTUAL_PATH],
         tools=runtime_tools,
-        middleware=[*middleware, DirectModificationMiddleware(required_tools=[execute_tool])],
+        middleware=[
+            *middleware,
+            DirectModificationMiddleware(required_tools=[execute_tool]),
+        ],
         backend=backend,
         permissions=create_workspace_permissions(
             workspace_root,

@@ -212,6 +212,10 @@ class BusinessAcceptanceVerifier:
         return {
             **base,
             **result,
+            # 只标记已执行 verifier 的结果，正式来源和文件读取失败仍是硬门禁。
+            **({"verification_source": "typescript_ast"} if kind in {
+                "frontend.api_contract", "frontend.page_endpoint_usage"
+            } else {}),
         }
 
 

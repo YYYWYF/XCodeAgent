@@ -15,7 +15,7 @@ from app.agents.frontend.read_ledger import FrontendReadLedger
 from app.agents.frontend.step_checks import FrontendStepChecks
 from app.agents.frontend.task_packet import API, PAGE, SERVICE, virtual_file
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
-from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT
+from app.services.builtin_skills import BUILTIN_SKILLS_VIRTUAL_ROOT, FRONTEND_ENGINEERING_SKILL_NAME
 from app.services.user_skill_runtime import USER_SKILLS_VIRTUAL_ROOT
 from app.services.run_workers import current_run_id
 from app.workspace.virtual_paths import is_host_workspace_virtual_path
@@ -25,6 +25,9 @@ _OPERATIONS = {"read_file": "read", "write_file": "write", "edit_file": "write",
                "delete_file": "delete", "grep": "search"}
 _SKILL_ROOTS = (BUILTIN_SKILLS_VIRTUAL_ROOT, USER_SKILLS_VIRTUAL_ROOT)
 _STATUSES = {"completed", "already_satisfied", "failed"}
+FRONTEND_ENGINEERING_DOC = f"{BUILTIN_SKILLS_VIRTUAL_ROOT}{FRONTEND_ENGINEERING_SKILL_NAME}/SKILL.md"
+FRONTEND_TEMPLATE_AGENTS_DOC = "/frontend/AGENTS.md"
+FRONTEND_CORE_DOCS = frozenset({FRONTEND_ENGINEERING_DOC, FRONTEND_TEMPLATE_AGENTS_DOC})
 
 
 class FrontendTaskExecutionScope:
@@ -46,6 +49,7 @@ class FrontendTaskExecutionScope:
         self.active = False
         self.run_id = current_run_id() or None
         self.reads = FrontendReadLedger()
+        self.core_docs_read: set[tuple[str, str]] = set()
         self.revisions: dict[tuple[int, str], deque] = {}
         self.revert_warned: set[tuple[int, str]] = set()
         self.mutation_notice: dict | None = None
@@ -72,6 +76,7 @@ class FrontendTaskExecutionScope:
             self.step = 0
             self.checks.clear()
             self.reads.clear()
+            self.core_docs_read.clear()
             self.graph_queries.clear()
             self.revisions.clear()
             self.revert_warned.clear()
@@ -129,7 +134,8 @@ class FrontendTaskExecutionScope:
                     raise ValueError("请提供 1 至 1000 字的步骤记录")
                 if self.current["kind"] == PAGE and previous in {2, 3}:
                     findings = self.checks.run(structure_only=previous == 2)
-                    failed = [item for item in findings if item["status"] == "failed"]
+                    failed = [item for item in findings if item["status"] == "failed"
+                              and item["rule_id"] == "FE-PAGE-STRUCTURE"]
                     if failed and not arguments.get("defer_to_repair"):
                         return {"step": f"step_{previous}", "acceptance_failures": failed[:10]}
                 self.evidence[task_id].append(evidence)
@@ -140,7 +146,8 @@ class FrontendTaskExecutionScope:
                     raise ValueError("任务状态无效")
                 if self.current["kind"] == PAGE:
                     findings = self.checks.final()
-                    failed = [item for item in findings if item["status"] == "failed"]
+                    failed = [item for item in findings if item["status"] == "failed"
+                              and item["rule_id"] == "FE-PAGE-STRUCTURE"]
                     if failed and status != "failed":
                         return {"step": "step_4", "acceptance_failures": failed[:10],
                                 "next_action": "以 failed 完成本任务，由现有 Repair 处理。"}
@@ -152,6 +159,10 @@ class FrontendTaskExecutionScope:
                 from_step=previous, to_step=self.step if name != "complete_frontend_task" else 0,
                 source="agent", reason=None, evidence_ids=[],
             )
+            # 保留 AST 的真实发现，告警不要求 Agent 自报失败。
+            warnings = [item for item in findings if item["status"] in {"failed", "not_evaluable"}
+                        and not (item["rule_id"] == "FE-PAGE-STRUCTURE" and item["status"] == "failed")]
+            warning_result = {"ast_warnings": warnings[:10]} if warnings else {}
             if name == "complete_frontend_task":
                 self.checks.clear()
                 self.reads.clear()
@@ -160,12 +171,10 @@ class FrontendTaskExecutionScope:
                 self.mutation_notice = None
                 self.step = 0
                 self.index += 1
-                return {"status": status}
+                return {"status": status, **warning_result}
             return {"step": f"step_{self.step}", "readable_files": sorted(self.readable()),
                     "writable_files": sorted(self.writable()),
-                    **({"acceptance_failures": [item for item in findings
-                        if item["status"] == "failed"][:10]} if any(
-                            item["status"] == "failed" for item in findings) else {})}
+                    **warning_result}
 
     def readable(self) -> set[str]:
         """从当前任务精确目标及既有依赖授权计算读取范围，页面继续受步骤限制。"""
@@ -192,6 +201,10 @@ class FrontendTaskExecutionScope:
             return {}
         return {item["path"]: item["operation"] for item in self.current["change_scope"]
                 if item["operation"] != "read"}
+
+    def mark_core_doc_read(self, path: str) -> None:
+        """仅由串行工具成功返回完整正文后登记当前任务的核心文档。"""
+        self.core_docs_read.add((self.current["id"], path))
 
     def physical_path(self, path: str) -> Path:
         """校验真实路径、链接、文件类型及硬链接，缺失目标可用于合法创建。"""
@@ -225,6 +238,16 @@ class FrontendTaskExecutionScope:
         if not isinstance(raw_path, str) or not raw_path.startswith("/"):
             raise ValueError("工具只接受工作区虚拟绝对文件路径")
         path = virtual_file(raw_path)
+        if path not in FRONTEND_CORE_DOCS and path.casefold() in {doc.casefold() for doc in FRONTEND_CORE_DOCS}:
+            raise ValueError("核心文档必须使用精确虚拟路径及大小写")
+        if path in FRONTEND_CORE_DOCS:
+            if name != "read_file":
+                raise ValueError("核心文档仅允许 read_file 精确只读")
+            if (self.current["id"], path) in self.core_docs_read:
+                raise ValueError("本任务已读取该规范，请复用已读取内容")
+            if not self.task_level and self.step != 1:
+                raise ValueError("页面核心文档仅允许在 Step 1 读取")
+            return path, (self.physical_path(path) if path == FRONTEND_TEMPLATE_AGENTS_DOC else None)
         scope_label = "任务" if self.task_level else "步骤"
         if name == "read_file" and self.step < 4 and (
             path == AGENT_MEMORY_VIRTUAL_PATH or path.startswith(_SKILL_ROOTS)

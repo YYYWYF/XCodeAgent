@@ -319,7 +319,7 @@ import { ProTable as OrdersTable, ProFormSelect } from '@ant-design/pro-componen
         }, {}))
 
     def test_normal_scheduler_runs_scope_specific_check(self):
-        """普通 Build 的前端验收可阻断绕过 useRequest 的已知查询。"""
+        """普通 Build 保留绕过 useRequest 的 AST 失败证据，但不阻断任务。"""
         with TemporaryDirectory() as folder:
             root = Path(folder)
             api = _API.lstrip("/")
@@ -345,8 +345,10 @@ import { ProTable as OrdersTable, ProFormSelect } from '@ant-design/pro-componen
                 code_change_set=None, tasks=[task], workspace_root=folder,
                 authorization_checks_only=True, frontend_build_task_plan=plan,
             )[0]
-            self.assertEqual(result["status"], "failed", result)
-            self.assertIn("FE-QUERY-USE-REQUEST", result["failure_reason"])
+            self.assertEqual(result["status"], "completed", result)
+            self.assertEqual(result["acceptance_status"]["engineering"], "warning")
+            self.assertIn("FE-QUERY-USE-REQUEST", result["acceptance_evidence"][0]["error"])
+            self.assertIsNone(result["failure_reason"])
             _create_file(root, _API, "export const listOrders = () => [];")
             unknown = verify_task_file_changes(
                 results=[{"task_id": "page", "status": "completed", "changed_files": [page]}],

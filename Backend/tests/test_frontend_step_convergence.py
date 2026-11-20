@@ -4,7 +4,7 @@ import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from app.agents.auto_dedup_backend import AutoDedupFilesystemBackend
 from app.agents.frontend.execution_scope import FrontendTaskExecutionScope
@@ -12,6 +12,7 @@ from app.agents.frontend.file_backend import FILE_ACCESS, FrontendScopedFilesyst
 from app.agents.frontend.read_ledger import FrontendReadLedger
 from app.agents.frontend.task_packet import API, PAGE
 from app.services.frontend_request_acceptance import page_request_findings
+from app.services.business_acceptance_verifiers.typescript_ast import TypeScriptAstError
 from tests.test_frontend_build_execution import _API, _PAGE, _create_file, _packet
 
 
@@ -109,7 +110,7 @@ class FrontendStepConvergenceTests(unittest.TestCase):
                 FILE_ACCESS.reset(token)
 
     def test_step_validation_feedback_retry_and_stale_final(self):
-        """平台按磁盘证据拦截推进，并在最终核对时发现外部版本变化。"""
+        """页面缺失阻断，AST 违规告警，并在最终核对时发现外部版本变化。"""
         with TemporaryDirectory() as folder:
             root = Path(folder)
             scope = _begin(root)
@@ -120,23 +121,21 @@ class FrontendStepConvergenceTests(unittest.TestCase):
             file = _create_file(root, _PAGE, "export default function Page() { fetch('/x'); return null; }")
             self.assertEqual(_advance(scope)["step"], "step_3")
             bad = _advance(scope)
-            self.assertEqual(bad["step"], "step_3")
-            self.assertEqual(bad["acceptance_failures"][0]["rule_id"], "FE-NO-DIRECT-HTTP")
-            self.assertEqual(bad["acceptance_failures"][0]["line"], 1)
-            file.write_text("export default function Page() { return null; }", encoding="utf-8")
-            self.assertEqual(_advance(scope)["step"], "step_4")
+            self.assertEqual(bad["step"], "step_4")
+            self.assertNotIn("acceptance_failures", bad)
+            self.assertEqual(bad["ast_warnings"][0]["rule_id"], "FE-NO-DIRECT-HTTP")
+            self.assertEqual(bad["ast_warnings"][0]["line"], 1)
             previous = scope.checks.results[1]["file_version"]
             file.write_text("export default function Page() { fetch('/again'); return null; }", encoding="utf-8")
             result = scope.transition("complete_frontend_task", {"task_id": PAGE, "status": "completed"})
-            self.assertNotEqual(result["acceptance_failures"][0]["file_version"], previous)
-            self.assertEqual(result["acceptance_failures"][0]["step_id"], "step_4")
-            self.assertNotIn(PAGE, scope.outcomes)
-            scope.transition("complete_frontend_task", {"task_id": PAGE, "status": "failed"})
-            self.assertEqual(scope.outcomes[PAGE], "failed")
+            self.assertNotEqual(result["ast_warnings"][0]["file_version"], previous)
+            self.assertEqual(result["ast_warnings"][0]["step_id"], "step_4")
+            self.assertNotIn("next_action", result)
+            self.assertEqual(scope.outcomes[PAGE], "completed")
             self.assertFalse(scope.checks.results)
 
     def test_defer_to_repair_and_api_rules_are_isolated(self):
-        """明确违规可收敛到既有失败状态，API 封装没有页面规则。"""
+        """旧收敛参数不改变告警策略，API 封装没有页面规则。"""
         with TemporaryDirectory() as folder:
             root = Path(folder)
             _create_file(root, _PAGE, "export default function Page() { fetch('/x'); return null; }")
@@ -146,14 +145,34 @@ class FrontendStepConvergenceTests(unittest.TestCase):
             self.assertEqual(_advance(scope, defer=True)["step"], "step_4")
             self.assertTrue(scope.transition("complete_frontend_task", {
                 "task_id": PAGE, "status": "completed",
-            })["acceptance_failures"])
-            scope.transition("complete_frontend_task", {"task_id": PAGE, "status": "failed"})
+            })["ast_warnings"])
             _create_file(root, _API, "export const load = () => fetch('/api');")
             api = FrontendTaskExecutionScope(folder, [_packet(API)])
             with api.task_context():
                 self.assertEqual(api.authorize("read_file", _API)[0], _API)
                 self.assertEqual(api.step, 0)
                 self.assertEqual(api.control_tools(), [])
+
+    def test_structure_unknown_warns_and_missing_entry_still_blocks_final(self):
+        """AST 不可判定保留版本与告警；实际入口缺失在最后一步仍阻断完成。"""
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            file = _create_file(root, _PAGE, "export default function Page() { return null; }")
+            scope = _begin(root)
+            _advance(scope)
+            with patch("app.services.frontend_step_acceptance._parse_source",
+                       side_effect=TypeScriptAstError("unsupported")):
+                result = _advance(scope)
+            self.assertEqual(result["step"], "step_3")
+            warning = result["ast_warnings"][0]
+            self.assertEqual(warning["status"], "not_evaluable")
+            self.assertTrue(warning["file_version"])
+            _advance(scope)
+            # 移走真实入口，由最终版本复验检测缺失，避免与 AST 不可判定混淆。
+            file.rename(file.with_suffix(".missing"))
+            result = scope.transition("complete_frontend_task", {"task_id": PAGE, "status": "completed"})
+            self.assertEqual(result["acceptance_failures"][0]["rule_id"], "FE-PAGE-STRUCTURE")
+            self.assertNotIn(PAGE, scope.outcomes)
 
 
 
