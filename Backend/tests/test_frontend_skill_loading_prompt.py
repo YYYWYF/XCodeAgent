@@ -43,8 +43,14 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                         self.assertEqual(prompt.count(path), 1)
                     self.assertNotIn("frontend-template-modification-boundary", prompt)
                     self.assertIn("同一任务每份最多成功读取一次", prompt)
+                    self.assertIn("单次完整读取（offset=0，limit=2000）", prompt)
+                    self.assertIn("仅按需阅读示例", prompt)
                     self.assertIn("不搜索替代 AGENTS.md、不回退旧边界 Skill", prompt)
+                    self.assertIn('最终输出单一 JSON 对象 {"task_results":[...]}', prompt)
+                    self.assertIn("status（completed、already_satisfied 或 failed）", prompt)
+                    self.assertIn("失败提供 failure_category、failure_reason", prompt)
                     if kind == PAGE:
+                        self.assertNotIn("不搜索其他业务 API 文件获取契约", prompt)
                         self.assertIn("第一次工具调用必须单独调用 begin_frontend_task", system)
                         self.assertIn("等待其成功返回 Step 1 后", system)
                         self.assertIn("不能将 begin_frontend_task 与其他工具并行调用", system)
@@ -66,7 +72,25 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                         self.assertIn("平台已初始化任务级权限", system)
                         self.assertIn("开始实施时读取", prompt)
                         self.assertIn("后续任务复用规范", prompt)
+                        for guidance in (
+                            "直接使用 implementation_contract 中已注入的正式 API 契约",
+                            "不搜索其他业务 API 文件获取契约",
+                            "按需读取已授权的统一请求封装 src/apis/service.ts 和当前目标文件",
+                            "已有目标文件优先保留符合契约的实现并增量修改",
+                            "必要示例仅用于编码参考，不覆盖业务契约",
+                            "模板 AGENTS.md 中列出的工程文件仅用于说明结构，不是逐一读取清单",
+                            "无当前任务明确依赖时，不读取相邻 API、登录或权限模块",
+                            "状态足以实施时，立即实现并做必要自检",
+                            "不再为了寻找参考而探索其他文件",
+                            "无关文件读取被拒绝时不得转向目录遍历或无关的 grep、Code Graph 搜索",
+                            "若存在真实契约冲突或必要信息缺失，只能在既有授权范围内定向核对",
+                            "无法完成时如实返回 failed，不得虚报完成或请求扩大权限",
+                            "需核对时可正常重读",
+                            "已有 API 文件使用 edit_file 增量实现",
+                        ):
+                            self.assertIn(guidance, prompt)
                         for control in ("begin_frontend_task", "advance_frontend_step", "complete_frontend_task"):
                             self.assertNotIn(control, system)
                             self.assertNotIn(control, prompt)
-                        self.assertNotIn("Step 1", prompt)
+                        for step in ("四步", "Step 1", "Step 2", "Step 3", "Step 4"):
+                            self.assertNotIn(step, prompt)

@@ -35,9 +35,17 @@ def _scoped_generation_prompt(packets: list[dict]) -> str:
         "Step 2/3 验收失败时依据返回的具体问题在当前步骤修复；无法修复时用 defer_to_repair 前进，"
         "并在 Step 4 以 acceptance_verification_failed 提交失败。"
         if page else
-        "平台已初始化当前 API 模块任务的权限上下文。仅处理该任务职责，"
-        "按需读取必要 API Contract、请求封装、类型定义及目标文件，在任务授权范围内实现和自检。"
-        "不确定或无法完成时如实返回 failed，不得虚报完成。"
+        "平台已初始化当前 API 模块任务的权限上下文，仅实施当前 API 模块职责。"
+        "直接使用 implementation_contract 中已注入的正式 API 契约，不搜索其他业务 API 文件获取契约。"
+        "按需读取已授权的统一请求封装 src/apis/service.ts 和当前目标文件；"
+        "已有目标文件优先保留符合契约的实现并增量修改，必要示例仅用于编码参考，不覆盖业务契约。"
+        "模板 AGENTS.md 中列出的工程文件仅用于说明结构，不是逐一读取清单；"
+        "无当前任务明确依赖时，不读取相邻 API、登录或权限模块。"
+        "当契约、规范、请求封装和目标文件状态足以实施时，立即实现并做必要自检，"
+        "不再为了寻找参考而探索其他文件。"
+        "无关文件读取被拒绝时不得转向目录遍历或无关的 grep、Code Graph 搜索；"
+        "若存在真实契约冲突或必要信息缺失，只能在既有授权范围内定向核对，"
+        "无法完成时如实返回 failed，不得虚报完成或请求扩大权限。"
     )
     skill_loading = (
         "先单独调用 begin_frontend_task，等待成功返回 Step 1。"
