@@ -617,8 +617,6 @@ def normalize_entity_field(
         name = str(value.get("name") or "").strip()
         if not ENTITY_FIELD_NAME_RE.match(name):
             name = _derived_field_name(label, index)
-        if name == RESERVED_ENTITY_FIELD:
-            name = _derived_field_name(label, index)
         field_type = str(value.get("type") or "text").strip()
         if field_type not in ENTITY_FIELD_TYPES:
             field_type = "text"
@@ -802,8 +800,6 @@ def validate_entity_definitions(
                 if not field_name:
                     errors.append(f"实体 {entity_id} 存在空字段名。")
                     continue
-                if field_name == RESERVED_ENTITY_FIELD:
-                    errors.append(f"实体 {entity_id} 使用了保留字段 {RESERVED_ENTITY_FIELD}。")
                 if not ENTITY_FIELD_NAME_RE.match(field_name):
                     errors.append(f"实体 {entity_id} 字段名非法：{field_name}。")
                 if field_name in seen_fields:
@@ -817,17 +813,14 @@ def validate_entity_definitions(
     return errors
 
 
-def entity_json_schema(entity: Any) -> dict[str, Any]:
-    """从业务实体字段派生 API 契约 Schema，id 作为隐式主键追加。"""
+def entity_json_schema(entity: Any, *, include_implicit_id: bool = True) -> dict[str, Any]:
+    """从实体字段派生 API Schema，旧 ProjectPlan 可继续使用原有 id 约定。"""
 
     normalized = normalize_entity(entity, 0, with_types=True)
-    properties: dict[str, Any] = {
-        "id": {"type": "string"},
-    }
-    required: list[str] = ["id"]
+    properties: dict[str, Any] = {"id": {"type": "string"}} if include_implicit_id else {}
+    required: list[str] = ["id"] if include_implicit_id else []
     for field in normalized.get("fields", []):
-        # 实体字段名以模型为准（可能为 id）；隐式主键 id 已存在，避免重复定义。
-        if str(field.get("name") or "") == RESERVED_ENTITY_FIELD:
+        if field["name"] in properties:
             continue
         field_type = str(field.get("type") or "text")
         property_schema: dict[str, Any] = {

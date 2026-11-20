@@ -15,36 +15,21 @@ export function pairEntries(
   const renames = new Map<string, string>()
   if (normalize) {
     /** 仅比较非空对象；列表项去掉名称后，其余属性必须完全相同。 */
-    const signature = (value: unknown, key: string, syncReference = false): string | undefined => {
+    const signature = (value: unknown): string | undefined => {
       const record = asRecord(value)
       const content = named
         ? Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'name'))
-        : { ...record }
-      // API 字段改名会同步修改关联实体字段；只规范与自身 key 完全对应的末段。
-      if (
-        syncReference &&
-        !named &&
-        typeof content.entity_field_ref === 'string' &&
-        content.entity_field_ref.endsWith(`.${key}`)
-      )
-        content.entity_field_ref = content.entity_field_ref.slice(0, -key.length) + '$field'
+        : record
       return Object.keys(content).length ? JSON.stringify(normalize(content)) : undefined
     }
-    /** 同时保留原引用和同步改名引用的签名，避免单边规范化破坏原本相同的引用。 */
-    const signatures = (entries: Entries, key: string): (string | undefined)[] => [
-      signature(entries.get(key), key),
-      signature(entries.get(key), key, true)
-    ]
-    const oldSignatures = new Map(removed.map((key) => [key, signatures(before, key)]))
-    const newSignatures = new Map(added.map((key) => [key, signatures(after, key)]))
-    /** 两种匹配方式共享唯一性检查，多个候选时仍保留原始增删。 */
-    const matches = (old: (string | undefined)[], next: (string | undefined)[]): boolean =>
-      old.some((value, index) => value !== undefined && value === next[index])
+    const oldSignatures = new Map(removed.map((key) => [key, signature(before.get(key))]))
+    const newSignatures = new Map(added.map((key) => [key, signature(after.get(key))]))
     for (const [oldKey, value] of oldSignatures) {
-      const candidates = [...newSignatures].filter(([, candidate]) => matches(value, candidate))
+      if (value === undefined) continue
+      const candidates = [...newSignatures].filter(([, candidate]) => value === candidate)
       if (
         candidates.length === 1 &&
-        [...oldSignatures.values()].filter((v) => matches(v, candidates[0][1])).length === 1
+        [...oldSignatures.values()].filter((candidate) => candidate === value).length === 1
       )
         renames.set(oldKey, candidates[0][0])
     }

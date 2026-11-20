@@ -766,8 +766,10 @@ def _required_contract_operations(context: str) -> list[str]:
 def _api_contracts(
     data_sources: list[dict[str, Any]],
     spec: dict[str, Any],
+    *,
+    explicit_identity: bool = False,
 ) -> list[dict[str, Any]]:
-    """按实体生成最小必要数据访问契约，契约只绑定实体 id。"""
+    """按实体生成兜底契约，技术规划仅使用显式标识。"""
 
     contracts: list[dict[str, Any]] = []
     for data_source in data_sources:
@@ -783,7 +785,23 @@ def _api_contracts(
             entity_name = str(entity_object.get("name") or entity)
             route_base = entity_table_name(entity) or _entity_route_slug(entity_name)
             contract_id = f"{route_base}_api"
-            entity_schema = _entity_schema(entity_object)
+            entity_schema = entity_json_schema(entity_object, include_implicit_id=not explicit_identity)
+            identity_field = "id"
+            if explicit_identity:
+                identity_field = next(
+                    (field["name"] for field in entity_object["fields"]
+                     if field["required"] and field["label"].endswith("（唯一标识）")),
+                    "",
+                )
+            path_parts = identity_field.split("_")
+            path_parameter = path_parts[0] + "".join(part.capitalize() for part in path_parts[1:])
+            record_path = f"/api/{route_base}/{{{path_parameter}}}"
+            parameters = [{"name": path_parameter, "in": "path", "required": True,
+                "schema": entity_schema["properties"][identity_field]}] if identity_field else []
+            generated_id = "id" if not explicit_identity or any(
+                field["name"] == "id" and field["type"] == "number" and field["label"] == "记录ID（唯一标识）"
+                for field in entity_object["fields"]
+            ) else ""
             schemas: dict[str, Any] = {entity: entity_schema}
             endpoints: list[dict[str, Any]] = []
             if "list" in operations:
@@ -810,19 +828,19 @@ def _api_contracts(
                     "response_schema_ref": f"{entity}ListOutput",
                     "error_codes": ["UNAUTHORIZED"],
                 })
-            if "detail" in operations:
+            if "detail" in operations and identity_field:
                 endpoints.append({
                     "id": f"{contract_id}.detail",
                     "name": f"查询{entity_name}详情",
                     "method": "GET",
-                    "path": f"/api/{route_base}/{{id}}",
+                    "path": record_path,
                     "summary": f"查询单条{entity_name}详情。",
-                    "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "parameters": deepcopy(parameters),
                     "response_schema_ref": entity,
                     "error_codes": ["NOT_FOUND"],
                 })
             if "create" in operations:
-                schemas[f"{entity}CreateInput"] = _write_schema(entity_schema, partial=False)
+                schemas[f"{entity}CreateInput"] = _write_schema(entity_schema, partial=False, excluded_field=generated_id)
                 endpoints.append({
                     "id": f"{contract_id}.create",
                     "name": f"创建{entity_name}",
@@ -833,29 +851,31 @@ def _api_contracts(
                     "response_schema_ref": entity,
                     "error_codes": ["VALIDATION_ERROR"],
                 })
-            if "update" in operations:
-                schemas[f"{entity}UpdateInput"] = _write_schema(entity_schema, partial=True)
+            if "update" in operations and identity_field:
+                schemas[f"{entity}UpdateInput"] = _write_schema(entity_schema, partial=True, excluded_field=generated_id)
                 endpoints.append({
                     "id": f"{contract_id}.update",
                     "name": f"更新{entity_name}",
                     "method": "PATCH",
-                    "path": f"/api/{route_base}/{{id}}",
+                    "path": record_path,
                     "summary": f"更新{entity_name}。",
-                    "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "parameters": deepcopy(parameters),
                     "request_schema_ref": f"{entity}UpdateInput",
                     "response_schema_ref": entity,
                     "error_codes": ["VALIDATION_ERROR", "NOT_FOUND"],
                 })
-            if "delete" in operations:
+            if "delete" in operations and identity_field:
                 endpoints.append({
                     "id": f"{contract_id}.delete",
                     "name": f"删除{entity_name}",
                     "method": "DELETE",
-                    "path": f"/api/{route_base}/{{id}}",
+                    "path": record_path,
                     "summary": f"删除{entity_name}。",
-                    "parameters": [{"name": "id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "parameters": deepcopy(parameters),
                     "error_codes": ["NOT_FOUND"],
                 })
+            if not endpoints:
+                continue
             contracts.append(
                 {
                     "id": contract_id,
@@ -877,17 +897,13 @@ def _entity_route_slug(entity_name: str) -> str:
     return slug or "entity"
 
 
-def _entity_schema(entity: dict[str, Any]) -> dict[str, Any]:
-    """从已确认业务实体字段派生 API 契约 Schema，id 作为隐式主键。"""
+def _write_schema(entity_schema: dict[str, Any], *, partial: bool, excluded_field: str) -> dict[str, Any]:
+    """构造可写字段 Schema，去掉由服务生成的标识。"""
 
-    return entity_json_schema(entity)
-
-
-def _write_schema(entity_schema: dict[str, Any], *, partial: bool) -> dict[str, Any]:
     properties = {
         key: value
         for key, value in entity_schema["properties"].items()
-        if key != "id"
+        if key != excluded_field
     }
     required = (
         []
@@ -1345,6 +1361,32 @@ def _technical_action_implementations(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _remove_entity_field_refs(schema: Any) -> None:
+    """移除接口 Schema 的实体字段来源标记，保留接口属性及示例数据。"""
+
+    if not isinstance(schema, dict):
+        return
+    schema.pop("entity_field_ref", None)
+    # 只遍历子 Schema，避免改写示例、默认值或名称恰好相同的接口属性。
+    for key in ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas"):
+        children = schema.get(key)
+        if isinstance(children, dict):
+            for child in children.values():
+                _remove_entity_field_refs(child)
+    for key in ("items", "allOf", "anyOf", "oneOf", "prefixItems"):
+        children = schema.get(key)
+        if isinstance(children, list):
+            for child in children:
+                _remove_entity_field_refs(child)
+        else:
+            _remove_entity_field_refs(children)
+    for key in (
+        "not", "if", "then", "else", "additionalProperties", "additionalItems",
+        "contains", "propertyNames", "unevaluatedProperties", "unevaluatedItems",
+    ):
+        _remove_entity_field_refs(schema.get(key))
+
+
 def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """过滤模型多余键，只持久化 API Contract 的开发边界字段。"""
 
@@ -1370,7 +1412,7 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
         "error_codes",
         "authentication",
     )
-    return [
+    contracts = [
         {
             key: (
                 [
@@ -1387,6 +1429,15 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
         }
         for contract in normalized
     ]
+    for contract in contracts:
+        schemas = contract.get("schemas")
+        if isinstance(schemas, dict):
+            for schema in schemas.values():
+                _remove_entity_field_refs(schema)
+        for endpoint in contract["endpoints"]:
+            for parameter in _dict_items(endpoint.get("parameters")):
+                _remove_entity_field_refs(parameter.get("schema"))
+    return contracts
 
 
 def validate_technical_plan_model_authentication(agent_plan: Any) -> list[str]:
@@ -1443,172 +1494,6 @@ def validate_technical_plan_model_authorization(agent_plan: Any) -> list[str]:
     ] if detected else []
 
 
-def _attach_technical_entity_field_refs(
-    contracts: list[dict[str, Any]],
-    entities: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """只为来源唯一的 Schema 字段补充引用，多个实体同名时保留明确来源决策。"""
-
-    fields_by_entity = {
-        str(entity.get("id") or ""): {
-            str(field.get("name") or "")
-            for field in _dict_items(entity.get("fields"))
-            if str(field.get("name") or "").strip()
-        }
-        for entity in entities
-        if str(entity.get("id") or "").strip()
-    }
-
-    def attach(schema: Any, entity_ids: set[str]) -> Any:
-        """递归补充唯一引用，不能按无序实体集合的首项猜测 id 等同名字段归属。"""
-        if not isinstance(schema, dict):
-            return schema
-        updated = deepcopy(schema)
-        properties = updated.get("properties")
-        if isinstance(properties, dict):
-            for name, field_schema in properties.items():
-                if not isinstance(field_schema, dict):
-                    continue
-                if "entity_field_ref" not in field_schema:
-                    candidates = [
-                        entity_id
-                        for entity_id in entity_ids
-                        if str(name) in fields_by_entity.get(entity_id, set())
-                        or (str(name) == "id" and entity_id in fields_by_entity)
-                    ]
-                    if len(candidates) == 1:
-                        updated_schema = dict(field_schema)
-                        updated_schema["entity_field_ref"] = f"{candidates[0]}.{name}"
-                        properties[name] = updated_schema
-                        field_schema = updated_schema
-                properties[name] = attach(field_schema, entity_ids)
-        if isinstance(updated.get("items"), dict):
-            updated["items"] = attach(updated["items"], entity_ids)
-        for key in ("allOf", "anyOf", "oneOf"):
-            if isinstance(updated.get(key), list):
-                updated[key] = [attach(item, entity_ids) for item in updated[key]]
-        return updated
-
-    attached: list[dict[str, Any]] = []
-    for contract in contracts:
-        item = deepcopy(contract)
-        entity_ids = {
-            str(value).strip()
-            for value in item.get("entity_ids", [])
-            if str(value).strip()
-        }
-        if isinstance(item.get("schemas"), dict):
-            item["schemas"] = {
-                schema_id: attach(schema, entity_ids)
-                for schema_id, schema in item["schemas"].items()
-            }
-        attached.append(item)
-    return attached
-
-
-_API_SCHEMA_PAGINATION_FIELDS = {"total", "pageSize", "current", "list"}
-_API_SCHEMA_TRANSPORT_FIELDS = {
-    "code",
-    "count",
-    "data",
-    "detail",
-    "error",
-    "errors",
-    "has_more",
-    "message",
-    "next_cursor",
-    "request_id",
-    "result",
-    "results",
-    "success",
-    "trace_id",
-}
-
-
-def _technical_schema_field_refs(
-    schema: Any,
-    *,
-    contract_id: str,
-    schema_id: str,
-    bound_entity_ids: set[str],
-    entity_fields: dict[str, set[str]],
-    path: str = "",
-) -> list[str]:
-    """校验 API Schema 业务属性到绑定实体字段的显式关联。"""
-
-    if not isinstance(schema, dict):
-        return []
-    errors: list[str] = []
-    properties = schema.get("properties")
-    if isinstance(properties, dict):
-        for field_name, field_schema in properties.items():
-            name = str(field_name or "").strip()
-            current_path = f"{path}.{name}" if path else name
-            if name in _API_SCHEMA_PAGINATION_FIELDS or name in _API_SCHEMA_TRANSPORT_FIELDS:
-                errors.extend(
-                    _technical_schema_field_refs(
-                        field_schema,
-                        contract_id=contract_id,
-                        schema_id=schema_id,
-                        bound_entity_ids=bound_entity_ids,
-                        entity_fields=entity_fields,
-                        path=current_path,
-                    )
-                )
-                continue
-            reference = field_schema.get("entity_field_ref") if isinstance(field_schema, dict) else None
-            if reference is not None and (not isinstance(reference, str) or "." not in reference):
-                errors.append(
-                    f"TechnicalPlan Schema {contract_id}.{schema_id}.{current_path} 的 entity_field_ref 格式非法。"
-                )
-            elif isinstance(reference, str):
-                reference_entity, reference_field = reference.split(".", 1)
-                if reference_entity not in bound_entity_ids:
-                    errors.append(
-                        f"TechnicalPlan Schema {contract_id}.{schema_id}.{current_path} 引用了未绑定实体 {reference_entity}。"
-                    )
-                elif reference_field != "id" and reference_field not in entity_fields.get(reference_entity, set()):
-                    errors.append(
-                        f"TechnicalPlan Schema {contract_id}.{schema_id}.{current_path} 引用了未知字段 {reference}。"
-                    )
-            errors.extend(
-                _technical_schema_field_refs(
-                    field_schema,
-                    contract_id=contract_id,
-                    schema_id=schema_id,
-                    bound_entity_ids=bound_entity_ids,
-                    entity_fields=entity_fields,
-                    path=current_path,
-                )
-            )
-    items = schema.get("items")
-    errors.extend(
-        _technical_schema_field_refs(
-            items,
-            contract_id=contract_id,
-            schema_id=schema_id,
-            bound_entity_ids=bound_entity_ids,
-            entity_fields=entity_fields,
-            path=f"{path}[]" if path else "[]",
-        )
-    )
-    for key in ("allOf", "anyOf", "oneOf"):
-        variants = schema.get(key)
-        if isinstance(variants, list):
-            for variant in variants:
-                errors.extend(
-                    _technical_schema_field_refs(
-                        variant,
-                        contract_id=contract_id,
-                        schema_id=schema_id,
-                        bound_entity_ids=bound_entity_ids,
-                        entity_fields=entity_fields,
-                        path=path,
-                    )
-                )
-    return errors
-
-
 def _schema_for_contract_ref(contract: dict[str, Any], reference: Any) -> dict[str, Any] | None:
     """解析契约内的本地 Schema 引用。"""
 
@@ -1617,70 +1502,14 @@ def _schema_for_contract_ref(contract: dict[str, Any], reference: Any) -> dict[s
     return contract["schemas"].get(reference) if isinstance(contract["schemas"].get(reference), dict) else None
 
 
-def _validate_technical_pagination(
-    contract: dict[str, Any],
-    endpoint: dict[str, Any],
-    *,
-    check_parameters: bool = True,
-) -> list[str]:
-    """校验列表接口的分页响应；分批生成尚无接口参数时只检查冻结的 Schema。"""
-
-    endpoint_id = str(endpoint.get("id") or "unknown")
-    if not endpoint_id.endswith(".list"):
-        return []
-    errors: list[str] = []
-    parameter_names = {
-        str(parameter.get("name") or "")
-        for parameter in _dict_items(endpoint.get("parameters"))
-        if str(parameter.get("in") or "query") == "query"
-    }
-    for name in ("current", "pageSize"):
-        if check_parameters and name not in parameter_names:
-            errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 缺少分页参数 {name}。")
-    response = _schema_for_contract_ref(contract, endpoint.get("response_schema_ref"))
-    properties = response.get("properties") if isinstance(response, dict) else None
-    required = set(response.get("required", [])) if isinstance(response, dict) and isinstance(response.get("required"), list) else set()
-    if not isinstance(properties, dict):
-        return errors + [f"TechnicalPlan 列表 Endpoint {endpoint_id} 的响应 Schema 必须是对象。"]
-    pagination_fields = {"total", "pageSize", "current", "list"}
-    if set(properties) != pagination_fields:
-        extra_fields = sorted(set(properties) - pagination_fields)
-        missing_fields = sorted(pagination_fields - set(properties))
-        details = []
-        if extra_fields:
-            details.append("多余同级字段：" + "、".join(extra_fields))
-        if missing_fields:
-            details.append("缺少字段：" + "、".join(missing_fields))
-        errors.append(
-            f"TechnicalPlan 列表 Endpoint {endpoint_id} 响应同级字段必须且只能是 total、pageSize、current、list（{'；'.join(details)}）。"
-        )
-    if required != pagination_fields:
-        errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 的 total、pageSize、current、list 必须全部为必填字段。")
-    for name in ("total", "pageSize", "current"):
-        if isinstance(properties.get(name), dict) and properties[name].get("type") != "integer":
-            errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 的 {name} 必须是 integer。")
-    if isinstance(properties.get("list"), dict) and properties["list"].get("type") != "array":
-        errors.append(f"TechnicalPlan 列表 Endpoint {endpoint_id} 的 list 必须是 array。")
-    return errors
-
-
 def validate_technical_plan_api_contracts(
     plan: dict[str, Any],
 ) -> list[str]:
-    """校验 API Contract 的实体绑定、Schema 引用和分页契约。"""
+    """校验 API Contract 的实体绑定、Schema 引用和 Endpoint 结构。"""
 
     raw_entities = _dict_items(plan.get("entities"))
     known_entity_ids = {
         str(entity.get("id") or "")
-        for entity in raw_entities
-        if str(entity.get("id") or "").strip()
-    }
-    entity_fields = {
-        str(entity.get("id") or ""): {
-            str(field.get("name") or "")
-            for field in _dict_items(entity.get("fields"))
-            if str(field.get("name") or "").strip()
-        }
         for entity in raw_entities
         if str(entity.get("id") or "").strip()
     }
@@ -1728,17 +1557,6 @@ def validate_technical_plan_api_contracts(
         unknown = sorted(set(ids) - known_entity_ids)
         if unknown:
             errors.append(f"TechnicalPlan API Contract {contract_id} 引用了未知实体：{'、'.join(unknown)}。")
-        schemas = contract.get("schemas") if isinstance(contract.get("schemas"), dict) else {}
-        for schema_id, schema in schemas.items():
-            errors.extend(
-                _technical_schema_field_refs(
-                    schema,
-                    contract_id=contract_id,
-                    schema_id=str(schema_id),
-                    bound_entity_ids=set(ids),
-                    entity_fields=entity_fields,
-                )
-            )
         for endpoint in _dict_items(contract.get("endpoints")):
             endpoint_id = str(endpoint.get("id") or "unknown")
             errors.extend(
@@ -1760,7 +1578,6 @@ def validate_technical_plan_api_contracts(
                 reference = endpoint.get(key)
                 if reference and _schema_for_contract_ref(contract, reference) is None:
                     errors.append(f"TechnicalPlan Endpoint {endpoint.get('id') or 'unknown'} 的 {key} 未解析到本契约 Schema。")
-            errors.extend(_validate_technical_pagination(contract, endpoint))
     return errors
 
 
@@ -1808,9 +1625,7 @@ def create_technical_plan(
     ]
     api_contracts = _technical_api_contracts(
         _merge_agent_items(
-            _attach_technical_entity_field_refs(
-                _api_contracts(contract_sources, {**spec, "entities": entities}), entities,
-            ),
+            _api_contracts(contract_sources, {**spec, "entities": entities}, explicit_identity=True),
             agent_plan,
             "api_contracts",
             authoritative=True,

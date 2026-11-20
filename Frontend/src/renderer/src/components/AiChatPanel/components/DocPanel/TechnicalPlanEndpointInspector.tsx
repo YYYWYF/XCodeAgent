@@ -17,28 +17,50 @@ import './TechnicalPlanEndpointInspector.less'
 
 const { Text } = Typography
 
-/** 参数与正文共用类型树列标题，参数表为每层字段保留默认值列。 */
+const parameterLocationLabels: Record<string, string> = {
+  path: '路径参数',
+  query: '查询参数',
+  header: '请求头参数',
+  cookie: 'Cookie 参数'
+}
+
+/** 参数与正文共用列标题，按展示场景控制必填和默认值列。 */
+function SchemaColumns({
+  showDefault = false,
+  hideRequired = false
+}: {
+  showDefault?: boolean
+  hideRequired?: boolean
+}): ReactElement {
+  return (
+    <div className={cx('technical-plan-schema-column-head')}>
+      <span>字段名</span>
+      <span>类型</span>
+      {hideRequired ? null : <span>必填</span>}
+      {showDefault ? <span>默认值</span> : null}
+      <span>说明</span>
+    </div>
+  )
+}
+
+/** 给参数分组和正文类型树提供一致的表格列宽。 */
 function SchemaTable({
   children,
-  showDefault = false
+  showDefault = false,
+  hideRequired = false
 }: {
   children: ReactNode
   showDefault?: boolean
+  hideRequired?: boolean
 }): ReactElement {
   return (
     <div
       className={cx(
         'technical-plan-schema-table',
-        showDefault && 'technical-plan-schema-with-default'
+        showDefault && 'technical-plan-schema-with-default',
+        hideRequired && 'technical-plan-schema-without-required'
       )}
     >
-      <div className={cx('technical-plan-schema-column-head')}>
-        <span>字段名</span>
-        <span>类型</span>
-        <span>必填</span>
-        {showDefault ? <span>默认值</span> : null}
-        <span>说明</span>
-      </div>
       {children}
     </div>
   )
@@ -88,12 +110,14 @@ function BodySchema({
   label,
   reference,
   contract,
-  help
+  help,
+  isResponse = false
 }: {
   label: string
   reference: string
   contract: JsonRecord
   help?: string
+  isResponse?: boolean
 }): ReactElement {
   const schema = schemaFor(contract, reference)
   return (
@@ -102,8 +126,14 @@ function BodySchema({
       {!reference ? (
         <Text type="secondary">无{label}</Text>
       ) : Object.keys(schema).length ? (
-        <SchemaTable>
-          <SchemaTree name={reference} schema={schema} schemas={asRecord(contract.schemas)} />
+        <SchemaTable hideRequired={isResponse}>
+          <SchemaTree
+            name={reference}
+            schema={schema}
+            schemas={asRecord(contract.schemas)}
+            columnHead={<SchemaColumns hideRequired={isResponse} />}
+            compactArrays={isResponse}
+          />
         </SchemaTable>
       ) : (
         <Text type="secondary">{reference} · 类型定义暂不可读取</Text>
@@ -121,7 +151,7 @@ export function EndpointInspector({
   endpoint: JsonRecord
 }): ReactElement {
   const parameters = recordItems(endpoint.parameters)
-  // 参数位置只在组标题展示一次，避免每个字段重复标注 query/path/header。
+  // 按参数位置分组，每组使用自己的标题和发送方式说明。
   const parameterGroups = new Map<string, JsonRecord[]>()
   for (const parameter of parameters) {
     const location = textValue(parameter.in, 'query')
@@ -134,9 +164,6 @@ export function EndpointInspector({
   const method = textValue(endpoint.method, 'GET').toUpperCase()
   const path = textValue(endpoint.path, '/')
   const requestReference = textValue(endpoint.request_schema_ref).trim()
-  const parameterHelp = Array.from(parameterGroups, ([location, group]) =>
-    parameterTransportHelp(location, group, path)
-  ).join('\n\n')
   return (
     <div className={cx('technical-plan-inspector', 'technical-plan-complete-types')}>
       <div className={cx('technical-plan-inspector-title')}>
@@ -158,31 +185,30 @@ export function EndpointInspector({
         </div>
       </dl>
       <Text type="secondary">以下为 API 契约类型（JSON Schema），数据库列类型单独定义。</Text>
-      {parameters.length ? (
-        <section className={cx('technical-plan-schema-card')} aria-label="请求参数">
-          <SchemaHeading label="请求参数" help={parameterHelp} />
-          {Array.from(parameterGroups, ([location, group]) => (
-            <div className={cx('technical-plan-parameter-group')} key={location}>
-              <span className={cx('technical-plan-parameter-location')}>{location}</span>
-              <SchemaTable showDefault>
-                {group.map((parameter, index) => (
-                  <SchemaTree
-                    key={`${textValue(parameter.name)}:${index}`}
-                    name={textValue(parameter.name, `参数 ${index + 1}`)}
-                    schema={asRecord(parameter.schema)}
-                    description={textValue(parameter.description)}
-                    schemas={schemas}
-                    isField
-                    showDefault
-                    fieldRequired={Boolean(parameter.required)}
-                    fieldOptional={!parameter.required}
-                  />
-                ))}
-              </SchemaTable>
-            </div>
-          ))}
-        </section>
-      ) : null}
+      {Array.from(parameterGroups, ([location, group]) => {
+        const label = parameterLocationLabels[location] ?? `${location} 参数`
+        return (
+          <section className={cx('technical-plan-schema-card')} aria-label={label} key={location}>
+            <SchemaHeading label={label} help={parameterTransportHelp(location, group, path)} />
+            <SchemaTable showDefault>
+              <SchemaColumns showDefault />
+              {group.map((parameter, index) => (
+                <SchemaTree
+                  key={`${textValue(parameter.name)}:${index}`}
+                  name={textValue(parameter.name, `参数 ${index + 1}`)}
+                  schema={asRecord(parameter.schema)}
+                  description={textValue(parameter.description)}
+                  schemas={schemas}
+                  isField
+                  showDefault
+                  fieldRequired={Boolean(parameter.required)}
+                  fieldOptional={!parameter.required}
+                />
+              ))}
+            </SchemaTable>
+          </section>
+        )
+      })}
       {requestReference ? (
         <BodySchema
           label="请求体"
@@ -195,6 +221,7 @@ export function EndpointInspector({
         label="响应体"
         reference={textValue(endpoint.response_schema_ref)}
         contract={contract}
+        isResponse
       />
     </div>
   )

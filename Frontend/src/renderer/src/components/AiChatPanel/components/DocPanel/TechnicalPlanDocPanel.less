@@ -159,6 +159,11 @@
   min-width: 0;
 }
 
+.@{class-prefix}-technical-plan-entity-list {
+  // 实体卡片跟随面板宽度，避免描述参与网格列的最小宽度计算。
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .@{class-prefix}-technical-plan-contract {
   display: grid;
   gap: 8px;
@@ -381,26 +386,33 @@
 }
 
 .@{class-prefix}-technical-plan-method {
+  --technical-plan-method-color: var(--wb-accent);
   min-width: 39px;
   height: 18px;
   padding: 2px 4px;
   border-radius: 4px;
-  color: var(--wb-accent);
-  background: var(--wb-accent-soft);
+  color: var(--technical-plan-method-color);
+  background: color-mix(in srgb, var(--technical-plan-method-color) 7%, var(--wb-canvas));
   font-size: 12px;
   font-weight: 700;
   line-height: 14px;
   text-align: center;
 
-  &.is-post,
-  &.is-patch,
-  &.is-put {
-    color: #a15b2f;
-    background: color-mix(in srgb, #d98b55 13%, var(--wb-canvas));
+  // 方法修饰类由 cx 添加前缀，接口列表和详情共用同一套主题色。
+  &.@{class-prefix}-is-get {
+    --technical-plan-method-color: var(--wb-code-add-text);
   }
-  &.is-delete {
-    color: var(--wb-danger);
-    background: color-mix(in srgb, var(--wb-danger) 10%, var(--wb-canvas));
+
+  &.@{class-prefix}-is-put {
+    --technical-plan-method-color: var(--wb-warning);
+  }
+
+  &.@{class-prefix}-is-patch {
+    --technical-plan-method-color: var(--wb-text-secondary);
+  }
+
+  &.@{class-prefix}-is-delete {
+    --technical-plan-method-color: var(--wb-danger);
   }
 }
 
@@ -656,11 +668,10 @@
 .@{class-prefix}-technical-plan-entity-card > .ant-typography-secondary {
   display: block;
   margin-top: 5px;
-  overflow: hidden;
   color: var(--wb-text-secondary);
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .@{class-prefix}-technical-plan-field-table {

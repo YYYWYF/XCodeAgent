@@ -5,7 +5,9 @@ from hashlib import sha256
 import json
 from typing import Callable
 
-from app.agents.main.technical_plan_generation_prompts import page_prompt
+from app.agents.main.technical_plan_generation_prompts import (
+    API_RECORD_IDENTITY_RULE, API_SCHEMA_RULES, LIST_QUERY_RULE, WRITE_RESPONSE_RULE, page_prompt,
+)
 from app.agents.main.technical_plan_generation_validation import validate_page
 from app.agents.main.technical_plan_catalog_parts import generate_catalog
 from app.agents.main.technical_plan_contract_batches import generate_contract
@@ -26,11 +28,16 @@ def generate_technical_plan_sections(
         "product": product,
         "application_config": frozen.get("application_config"),
         "request": frozen.get("planning_adjustment_request", ""),
+        "catalog_registry_rules": "separate_relationships_and_contracts",
+        "api_record_identity_rule": API_RECORD_IDENTITY_RULE,
+        "api_schema_rules": API_SCHEMA_RULES,
+        "list_query_rule": LIST_QUERY_RULE,
+        "write_response_rule": WRITE_RESPONSE_RULE,
     }
     fingerprint = sha256(json.dumps(identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     progress = fragments if fragments is not None else {}
     if progress.get("input_sha256") != fingerprint:
-        # 上游、配置或真实修改要求变化时整批失效，不混合不同轮次的业务决策。
+        # 上游输入或生成规则变化时重建候选片段，避免复用旧的实体字段和已冻结的接口路径。
         progress.clear()
         progress.update(input_sha256=fingerprint, completed={})
     cache = progress["completed"]

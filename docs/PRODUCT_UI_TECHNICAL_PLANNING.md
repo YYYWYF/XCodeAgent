@@ -177,26 +177,38 @@ TechnicalPlan 包含：
 
 - `architecture` 三段技术架构、业务实体、API Contract、请求/响应 Schema；
 - `entities` 由技术规划模型根据已确认 ProductPlan 的页面、信息项、业务操作与业务流程独立生成，是实体与 API 的唯一字段事实源；技术规划不读取 RequirementSpec 的 `entities`；
-- API Contract 通过 `entity_ids` 关联实体；Schema 字段可使用 `entity_field_ref` 表示实体来源，计算、聚合和传输字段可以不做实体映射；
+- API Contract 通过 `entity_ids` 关联实体。Schema 定义接口字段的结构和约束，字段的数据来源由后续 Endpoint API Design 建立映射；
 - ProductPlan 中 `business` action/step 到 endpoint 的 `action_implementations`；
 - ProductPlan 与 UiManifest 的上游内容哈希。
 
 首版技术规划在同一个生成节点内分段完成：
 
-1. 全应用先统一实体及业务 Contract 的轻量身份与页面归属，再逐实体展开字段、逐 Contract 生成精简接口目录、逐页面生成业务 action/step 的 `action_bindings`；程序合并并验证完整目录，不让模型一次输出全应用字段、接口和动作映射。
+1. `catalog_relationships` 先统一全应用的实体身份和从属关系，`catalog_registry` 再引用这些实体确定业务 Contract 的页面归属。随后逐实体展开字段、逐 Contract 生成精简接口目录，逐页面生成业务 action/step 的 `action_bindings`。程序合并并验证完整目录。
 2. 按业务能力划分 Contract；小 Contract 一次生成参数、请求/响应 Schema 和 Endpoint，大 Contract 在同一身份内分批生成后拼接，只读取关联实体与页面需求，各 Contract 的 Schema 引用在自身内部闭合。
 3. 按页面分别生成 `endpoint_dependencies` 和 `action_implementations`，读取精简全局接口目录，支持跨页面及跨模块复用同一接口，不重复生成实体或 API。
 4. 程序组装现有 TechnicalPlan，补齐固定架构、权限 Manifest、上游哈希并执行原完整校验，保存完整内部 JSON 后停在原技术规划确认门。
 
-全局目录的模型响应边界固定为四类：`catalog_registry` 只返回 `{entities:[{id,name,description}],contracts:[{id,name,entity_ids,base_path,page_ids}]}`；`catalog_entity` 只返回当前实体的 `{fields:[...]}`；`catalog_endpoints` 只返回当前 Contract 的 `{endpoints:[{id,name,method,path,summary}]}`；`catalog_bindings` 只返回当前页面的 `{action_bindings:[...]}`。字段和接口身份不能在其他片段重写。每个接口目录提交前检查能力归属：路径必须位于当前 `base_path` 的完整路径段范围内，不得占用其他已登记 Contract 的 ID 命名空间或更具体的路由范围；不同能力可以共享同一个 `base_path`，但仍不得重复声明相同接口。跨 Contract 的 Endpoint ID 与规范化 method/path 冲突反馈双方接口及归属。接口模型只额外读取其他能力的轻量 ID、名称和路径范围，不携带完整业务正文。恢复时重新校验当前候选接口缓存，原子撤下无效片段后定向重生成，保留有效身份、实体和其他接口；后续目录、映射依赖键包含已完成接口内容，来源改变后不会复用原错误依赖。各生成片段独立最多尝试三次，沿现有恢复入口执行。每页映射提交前检查真实业务槽位完整覆盖。静态页面不额外调用业务映射模型。
+`catalog_relationships` 返回 `{entities:[{id,name,description,owned_entity_ids}]}`。模型根据已确认的流程和页面操作推导资源归属，并在 `owned_entity_ids` 中列出直接从属于当前主体的实体 ID。跨主体共用按实体类型判断，同一类型的多条记录仍属于同一主体。`catalog_registry` 读取确定的实体，返回 `{contracts:[{id,name,entity_ids,base_path,page_ids}]}`，其缓存键包含实体身份和关系的摘要。平台先生成从属实体的字段，再通过 `owned_entities` 向主体提供已生成的直接从属实体字段。字段引用由已确认业务操作决定。字段片段的缓存键包含目录实体摘要及已注入的从属实体内容摘要。目录规则纳入候选生成的缓存摘要。正式 TechnicalPlan 实体按目录原顺序组装，由 `id`、`name`、`description` 和 `fields` 构成。
+
+目录阶段的页面上下文使用页面 ID、名称、用途、去重后的信息项标签，以及业务动作说明和组合动作中的业务步骤结果。实体字段、接口目录和动作映射阶段继续读取各自所需的页面详情。
+
+技术规划片段仅在 `catalog_relationships` 调用开启模型思考。实体关系阶段收齐模型响应后提取 JSON 正文，供前端展示和目录解析。
+
+`catalog_entity` 只返回当前实体的 `{fields:[...]}`。`catalog_endpoints` 只返回当前 Contract 的 `{endpoints:[{id,name,method,path,summary}]}`。`catalog_bindings` 只返回当前页面的 `{action_bindings:[...]}`。字段和接口身份不能在其他片段重写。每个接口目录提交前检查能力归属：路径必须位于当前 `base_path` 的完整路径段范围内，不得占用其他已登记 Contract 的 ID 命名空间或更具体的路由范围；不同能力可以共享同一个 `base_path`，但仍不得重复声明相同接口。跨 Contract 的 Endpoint ID 与规范化 method/path 冲突反馈双方接口及归属。接口模型只额外读取其他能力的轻量 ID、名称和路径范围，不携带完整业务正文。恢复时重新校验当前候选接口缓存，原子撤下无效片段后定向重生成，保留有效身份、实体和其他接口；后续目录、映射依赖键包含已完成接口内容，来源改变后不会复用原错误依赖。各生成片段独立最多尝试三次，沿现有恢复入口执行。每页映射提交前检查真实业务槽位完整覆盖。静态页面不额外调用业务映射模型。
 
 目录子片段以 `catalog-part:` 加阶段和内容摘要标识，校验后先落盘，连接中断或进程退出可从未完成片段继续。完整目录校验成功后，一次原子发布 `catalog`，同时撤下目录子片段引用；完整目录发布前不生成完整 Contract。映射或页面输出错误只在当前片段内重试，不撤下已通过的目录，也不要求目录变更。
 
-轻量身份目录、单个实体字段和单个 Contract 的精简接口目录仍各为一个独立重试单位；本轮不增加它们内部的递归分批。整个应用的完整目录由代码组装，全局引用校验和业务确认规则不变。
+实体关系、Contract 分组、单个实体字段和单个 Contract 的精简接口目录各为一个独立重试单位。整个应用的完整目录由代码组装，沿用原有全局引用校验和业务确认规则。
 
-接口生成按业务要求明确记录操作参数的真实来源：可以使用内部 id、业务编号或上游已提供的身份。需要从列表选择记录时，响应应提供对应身份；模型通过页面需求和关联 GET 的响应字段摘要核对来源。平台不按路径字面量 `/{id}` 或固定响应字段名推断业务用途，也不据此拒绝候选或强制重建 Schema。原有的结构、引用和参数一致性校验保留。实体引用只能选择真实存在的字段；最终物化不替模型按属性同名补引用，尤其不能把备件、供应商等选项 id 猜成采购申请 id。
+接口目录在确定路径时，按实体唯一标识的 API 字段名生成占位符。契约生成沿用同一字段名和 JSON 类型。实体未声明 `id` 时，路径、参数和 Schema 不补造该实体的 `id`。外部标识以已确认的业务事实为准。需要从列表选择记录时，响应应提供对应标识。模型通过页面需求和关联 GET 的响应字段摘要核对来源。
 
-共用生成规则与 `entity_definitions.py::entity_json_schema` 一致：隐式实体 id 在 API JSON 中为 string，关联字段的实体类型为 text，接口响应、请求和路径参数保持同一身份类型，不能因为数据库主键为 BIGINT 就输出 JSON number。整数实体字段使用语义类型 number，整数/非负约束写入说明；API 数值规则仅用于完整或分批 Contract 的 JSON Schema：正整数业务输入使用 integer 和 minimum=1，非负数值包含 minimum=0，不能只在说明中写约束。实体字段阶段不接受 integer、minimum 等 Schema 属性。
+API 契约中，`required` 约束请求参数和请求体。响应 Schema 在 `properties` 中定义业务字段，所有层级均省略 `required`。同一对象用于请求和响应且请求需要必填约束时，分别定义两个 Schema。分批生成的内部响应目录用 `required: []` 表示无必填约束，组装契约时省略该关键字。
+
+列表查询默认分页，用户明确要求不分页时按该要求生成。分页接口的查询参数使用 `current` 和 `pageSize`。响应采用通用泛型 `PageResult<T>`，Schema 名称及 `response_schema_ref` 均使用 `PageResult`。响应包含 `total`、`current`、`pageSize`、`list` 四个同级字段。前三个字段为整数，`list` 为数组，`list.items` 定义列表项类型 `T`。
+
+新增、更新和删除默认共用当前 Contract 的 `OperationResult` 响应 Schema，只包含布尔属性 `success`，例如 `{"success":true}`。业务明确要求返回记录标识或其他数据时，响应按要求定义。删除接口明确要求无响应体时，`response_schema_ref` 取 `null`。
+
+实体描述用一句话说明对象及业务用途，避免罗列字段。每个实体在必填的唯一标识字段的 `label` 末尾加「（唯一标识）」。优先沿用已有的单字段业务标识。需求未指定时，技术规划可以选定一个稳定、每条记录都有值且适合在实体内保持唯一的业务字段。没有合适的字段时，显式声明整数 `id`，实体语义类型使用 `number`。接口响应、请求和路径参数保持同一身份类型，文本标识使用 `string`，整数标识使用 `integer`。技术规划的兜底契约也从显式字段生成。API JSON Schema 中，正整数业务输入使用 `integer` 和 `minimum=1`，非负数值包含 `minimum=0`。实体字段阶段将数值约束写入说明。
 
 逐页映射提示列出从已确认 ProductPlan 提取的全部合法动作/步骤槽位。普通 business 动作始终只有 stepId=null，不能因为刷新多个数据结果就在技术规划中虚构步骤。动作绑定主要业务接口；主体和关联列表已有独立读取接口时，在页面 endpoint_dependencies 中完整声明读取，并通过 trigger 明确初始加载/刷新时触发。不为此重复创建业务接口，也不能声称主要接口返回其他接口的数据。页面生成读取本页已生成的动作映射，补齐页面读取依赖，不再独立返回目录审查报告。片段独立尝试、Schema 依赖修复有界，保留原确认门，不修改已确认产品动作。
 
@@ -416,6 +428,6 @@ ProductPlan 每次自动修复只回灌最多八条校验摘要，TechnicalPlan 
 
 TechnicalPlan 分模块生成时，每个身份目录、实体字段、接口目录、页面绑定、完整小 Contract、Schema 目录、字段组、接口批次和页面技术引用各自拥有最多三次尝试。片段耗尽后不再进入外层重试；同一目录或 Contract Schema 决策的依赖修复链单独最多三轮，成功片段继续复用。完整候选取得后，正式契约的“校验 → 局部编辑修复”仍保留最多三轮预算，与片段次数分离。任一预算耗尽时，节点停留在 `technical_planning` 并返回 `technical_plan_generation_error`，仅包含精简错误与重新生成操作，不写入 TechnicalPlan JSON，也不发出确认产物。失败后的重新生成仍标记为 `repair`：当前 TechnicalPlan 缺失或为空且事务未声明基线摘要时，技术入口与统一兜底执行器允许重入，由节点使用内部候选和错误续修，候选缺失时重新生成；已有计划或已声明摘要必须严格匹配，`revise` 始终要求有效基线。修复或重新生成通过校验后仍必须等待用户确认。规划模型的 `llm.token` 原始 JSON 只用于内部生成过程，前端聊天和历史消息均不得展示；确认卡和右侧文档通过唯一 Workflow `state.artifactRefs` 按需读取结构化计划。服务端在正文外置前投影 `state.technicalPlanConfirmed`，前端只有在当前技术阶段 completed、该值为 true、lifecycle 已进入模板阶段且正式 TechnicalPlan JSON 的确认回执完整时才能触发模板交接；正文引用本身与旧确认回执都不代表新版本已确认。
 
-TechnicalPlan 的实体定义严格校验继续暂停；页面行为闭合校验暂时暂停；API Contract 的 `entity_ids`、可选 `entity_field_ref`、Schema 引用和统一分页校验启用。分页响应对象同级只能有 `total`、`pageSize`、`current`、`list` 四个字段。页面路由和 Endpoint 结构校验保持不变。
+TechnicalPlan 的实体定义严格校验和页面行为闭合校验暂时暂停。TechnicalPlan 校验页面路由，以及 API Contract 的 `entity_ids`、Schema 引用和 Endpoint 结构。
 
 任何完整 TSX、数据库工具原始输出、仓库扫描结果和历史日志都写入文件，只向主上下文返回路径、哈希和有界摘要。

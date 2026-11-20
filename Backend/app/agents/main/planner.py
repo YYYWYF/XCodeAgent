@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 import logging
 from typing import Any, Callable
@@ -21,7 +22,7 @@ from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
 from app.services.frontend_page_tree import flatten_frontend_pages
-from app.services.data_source_policy import DatasourceType, uses_builtin_database
+from app.services.data_source_policy import DatasourceType
 from app.services.project_plan import (
     apply_project_plan_feedback,
     create_project_plan,
@@ -86,260 +87,6 @@ TECHNICAL_PLAN_CONTRACT_LANGUAGE_FINAL_REQUIREMENT = (
 )
 
 
-def _technical_planning_prompt(
-    requirement_spec: dict[str, Any],
-    existing_plan: dict[str, Any] | None,
-) -> str:
-    """构造字段边界明确且按上下文拆分的 TechnicalPlan 提示词。"""
-
-    product_plan = (
-        requirement_spec.get("confirmed_product_plan")
-        if isinstance(requirement_spec.get("confirmed_product_plan"), dict)
-        else {}
-    )
-    pages = [item for item in product_plan.get("pages", []) if isinstance(item, dict)]
-    entity = {
-        "id": "Order",
-        "name": "订单",
-        "description": "记录订单业务信息。",
-        "fields": [{"name": "order_number"}],
-    }
-    entity_id = str(entity.get("id") or "Order")
-    entity_fields = [item for item in entity.get("fields", []) if isinstance(item, dict)]
-    field_name = str((entity_fields[0] if entity_fields else {}).get("name") or "order_number")
-    page_id = str((pages[0] if pages else {}).get("pageId") or "order_list_page")
-    contract_id = f"{entity_id.lower()}_api"
-    list_schema_id = f"{entity_id}ListOutput"
-    item_schema_id = f"{entity_id}ListItem"
-    response_example = {
-        "architecture": {
-            "frontend": "React 单页管理客户端通过 REST 接口与后端交换 JSON 数据。",
-            "backend": "Java8 和 Springboot 服务按业务能力组织并提供 REST 接口。",
-            "data": "MySQL8 负责数据持久化，Redis 负责热点数据缓存。",
-        },
-        "entities": [
-            {
-                "id": entity_id,
-                "name": str(entity.get("name") or entity_id),
-                "description": str(entity.get("description") or "业务实体"),
-                "fields": [
-                    {
-                        "name": field_name,
-                        "label": "订单编号",
-                        "description": "用于唯一识别订单的业务编号。",
-                        "type": "text",
-                        "required": True,
-                    }
-                ],
-            }
-        ],
-        "api_contracts": [
-            {
-                "id": contract_id,
-                "name": "订单管理",
-                "entity_ids": [entity_id],
-                "base_path": f"/api/{entity_id.lower()}",
-                "authentication": {"required": True},
-                "schemas": {
-                    item_schema_id: {
-                        "type": "object",
-                        "properties": {
-                            "displayValue": {
-                                "type": "string",
-                                "description": "用于列表展示的格式化值。",
-                                "entity_field_ref": f"{entity_id}.{field_name}",
-                            }
-                        },
-                        "required": ["displayValue"],
-                    },
-                    list_schema_id: {
-                        "type": "object",
-                        "properties": {
-                            "total": {"type": "integer"},
-                            "pageSize": {"type": "integer"},
-                            "current": {"type": "integer"},
-                            "list": {"type": "array", "items": {"$ref": item_schema_id}},
-                        },
-                        "required": ["total", "pageSize", "current", "list"],
-                    },
-                },
-                "endpoints": [
-                    {
-                        "id": f"{contract_id}.list",
-                        "name": "查询订单列表",
-                        "method": "GET",
-                        "path": f"/api/{entity_id.lower()}",
-                        "summary": "按分页条件查询订单列表。",
-                        "parameters": [
-                            {"name": "current", "in": "query", "required": False, "schema": {"type": "integer", "default": 1}},
-                            {"name": "pageSize", "in": "query", "required": False, "schema": {"type": "integer", "default": 20}},
-                        ],
-                        "request_schema_ref": None,
-                        "response_schema_ref": list_schema_id,
-                        "error_codes": ["UNAUTHORIZED"],
-                        "authentication": {"required": True},
-                    },
-                ],
-            }
-        ],
-        "pages": [
-            {
-                "pageId": page_id,
-                "references": {
-                    "endpoint_dependencies": [
-                        {
-                            "endpoint_id": f"{contract_id}.list",
-                            "usage": "page_load",
-                            "trigger": "进入页面或提交筛选条件时",
-                            "required_for_initial_load": True,
-                        }
-                    ],
-                    "action_implementations": [
-                        {
-                            "actionId": "query_records",
-                            "endpointId": f"{contract_id}.list",
-                        }
-                    ],
-                },
-            }
-        ],
-    }
-    product_goal_context = {
-        "app": {
-            key: product_plan.get("app", {}).get(key)
-            for key in ("name", "summary", "route_root_path", "menu_enabled")
-            if isinstance(product_plan.get("app"), dict)
-            and product_plan["app"].get(key) is not None
-        },
-        "product_acceptance_criteria": product_plan.get("product_acceptance_criteria", []),
-    }
-    authorization_context = {"authorizationTargets": product_plan.get("authorizationTargets", {})}
-    flow_context = {"business_flows": product_plan.get("business_flows", [])}
-    page_context = {
-        "pages": [
-            {
-                key: page.get(key)
-                for key in ("pageId", "goal", "information_items")
-                if page.get(key) is not None
-            }
-            for page in pages
-        ]
-    }
-    action_context = {
-        "page_actions": [
-            {
-                "pageId": page.get("pageId"),
-                "actions": page.get("actions", []),
-            }
-            for page in pages
-            if page.get("pageId")
-        ]
-    }
-    revision_context = (
-        "Revise the existing TechnicalPlan to satisfy the latest confirmed ProductPlan and return the complete four-part object.\n"
-        "The latest confirmed ProductPlan takes precedence over the Existing TechnicalPlan. The existing plan is "
-        "a technical reuse baseline, not an authority that can override current product requirements. Preserve all valid unaffected technical decisions "
-        "only while they remain consistent with the latest confirmed ProductPlan. Compare current product goals, "
-        "information items, actions, and business flows against the existing plan and apply every required technical "
-        "change, including entity fields, API request/response Schemas, Endpoints, and page bindings as needed. "
-        "An upstream requirement change is itself a concrete dependency reason to update the plan, even when "
-        "planning_adjustment_request only says that upstream artifacts were updated and does not repeat the change. "
-        "Do not require the user to restate a requirement already present in the latest confirmed ProductPlan. "
-        "Do not rename, remove, or redesign unrelated entities, API Contracts, "
-        "Endpoints, Schemas, architecture decisions, or page bindings without a concrete dependency reason. Preserve "
-        "the Chinese name of every unchanged API Contract and Endpoint.\n"
-        f"Existing TechnicalPlan:\n{json.dumps(existing_plan, ensure_ascii=False)}\n\n"
-        if existing_plan
-        else "Create a new TechnicalPlan.\n"
-    )
-    return (
-        "You are the technical-planning model in an application-generation workflow. Return exactly one JSON object.\n"
-        "The object has exactly four sections: architecture, entities, api_contracts, and pages.\n\n"
-        f"{TECHNICAL_PLAN_LANGUAGE_REQUIREMENT}\n"
-        "Field definitions:\n"
-        "1. architecture is a technical summary. frontend describes the client form and communication style; "
-        "backend describes the Java8/Springboot service boundary; data describes MySQL8 persistence and Redis caching.\n"
-        "2. entities is the authoritative business-entity field specification. Generate entities "
-        "from the business model implied by pages, feature modules, and business flows. Each entity "
-        "has a stable id, name, description, and fields. Each field contains name, label, description, "
-        "type, and required; enum fields also contain enum_values. type is one of text, long_text, "
-        "number, decimal, date, datetime, enum, or boolean. Field names use snake_case.\n"
-        + ("Entity name and description, and every field label and description, must be non-empty Chinese text "
-        "containing at least one Chinese character. Technical abbreviations such as ID and API may appear within "
-        "Chinese text. Entity description becomes the database table COMMENT, and field label becomes the column "
-        "COMMENT; never use English-only prose for these display fields. Keep entity id, table_name, field name, "
-        "type, and API identifiers in their technical format. When revising an existing candidate, translate any "
-        "English-only display fields into Chinese while preserving their business meaning and technical identifiers.\n"
-        if uses_builtin_database(requirement_spec.get("application_config") or {}) else "")
-        + "3. api_contracts is the interface contract collection. Each contract contains id, name, entity_ids, base_path, "
-        "authentication, schemas, and endpoints. entity_ids identifies every related business entity. A business "
-        "Contract name is a concise user-facing Chinese name such as 订单管理; it is distinct from the stable id. "
-        "Schema properties may use interface-specific names. Add entity_field_ref=<EntityId>.<field_name> when a "
-        "property is directly sourced from an entity field; computed, aggregated, and transport properties may omit "
-        "the mapping. Structural properties organize the response. A paginated list response object has exactly four "
-        "same-level properties: total, pageSize, current, and list. It has no other sibling properties. Its query "
-        "parameters use current and pageSize, while fields inside list items follow the item Schema. "
-        "Schema references resolve to names in the same contract. Each Endpoint contains id, name, method, path, summary, "
-        "parameters, request_schema_ref, response_schema_ref, error_codes, and authentication. "
-        "Endpoint name is a concise user-facing Chinese operation name such as 查询订单列表; summary remains the detailed "
-        "interface description. Both name fields must be non-empty strings containing at least one Chinese character. "
-        "Decide whether a request body exists from the operation semantics, never from the HTTP method alone. If the operation consumes body "
-        "fields, request_schema_ref is a non-empty bare schema name and that schema is defined in the same contract. "
-        "If path/query parameters plus authentication context fully describe a command, request_schema_ref is null even "
-        "for POST, PUT, or PATCH. Never invent an empty request object merely to satisfy a method convention. Before "
-        "returning, verify every non-null request_schema_ref and response_schema_ref resolves inside its own contract.\n"
-        "Request-body semantics examples (illustrative Endpoint fragments, not extra required endpoints):\n"
-        '- command-with-body: {"id":"photo_api.rename","method":"PATCH","path":"/api/photos/{photoId}",'
-        '"request_schema_ref":"PhotoRenameInput","response_schema_ref":"PhotoOutput"}; PhotoRenameInput must be '
-        "defined in photo_api.schemas because the operation consumes a new name.\n"
-        '- command-without-body: {"id":"photo_api.like","method":"POST","path":"/api/photos/{photoId}/like",'
-        '"request_schema_ref":null,"response_schema_ref":"PhotoActionOutput"}; the path plus authenticated user '
-        "fully describes the command.\n"
-        "4. pages contains the technical references from each ProductPlan page to selected endpoints. Each item has "
-        "pageId and references. references contains endpoint_dependencies and action_implementations. Endpoint "
-        "dependencies contain endpoint_id, usage, trigger, and required_for_initial_load. A direct business action "
-        "uses {actionId, endpointId}; a business sequence uses {actionId, stepBindings:[{stepId, endpointId}]}. "
-        "If a ProductPlan page contains one or more direct business actions, action_implementations MUST NOT be empty. "
-        "Every direct business action has exactly one action_implementations entry shaped as {actionId, endpointId}. "
-        "Every sequence containing business steps has exactly one action_implementations entry shaped as "
-        "{actionId, stepBindings:[{stepId, endpointId}]} and covers every and only business stepId. Navigation, "
-        "interface, and external actions do not appear in action_implementations. "
-        "Every selected endpointId exists in api_contracts and also appears in that page's endpoint_dependencies. "
-        "The page set covers every upstream ProductPlan pageId.\n"
-        "Do not emit authorization_manifest, resourceKey, roles, permission bindings, dataRules, policyKey, data-policy bindings, SQL, or executable authorization rules. The platform deterministically compiles all V1 page/action/system resources and Endpoint ANY-OF bindings after your output passes validation.\n\n"
-        "Complete result syntax example only. Never copy its identifiers. Use only actionId values from the confirmed "
-        "ProductPlan and endpointId values declared by the generated TechnicalPlan:\n"
-        f"{json.dumps(response_example, ensure_ascii=False, indent=2)}\n\n"
-        "Additional sequence syntax example only: {\"actionId\":\"submit_order\",\"stepBindings\":["
-        "{\"stepId\":\"validate_order\",\"endpointId\":\"order_api.validate\"},"
-        "{\"stepId\":\"persist_order\",\"endpointId\":\"order_api.create\"}]}. Never copy these identifiers.\n\n"
-        "Dynamic context sections:\n"
-        "- Entity generation boundary: derive business entities exclusively from the confirmed ProductPlan "
-        "pages, information items, actions, and business flows. RequirementSpec entities are not provided "
-        "to or consumed by this stage.\n\n"
-        "- Product goal context: application purpose and product-level acceptance outcomes. Use it to shape the architecture and endpoint scope.\n"
-        f"{json.dumps(product_goal_context, ensure_ascii=False)}\n\n"
-        "- Authorization context: confirmed ProductPlan target identities. Do not generate any authorization field; the system compiles all resources and bindings.\n"
-        f"{json.dumps(authorization_context, ensure_ascii=False)}\n\n"
-        "- Business-flow context: confirmed business flows. Use it to preserve cross-page and multi-step behavior.\n"
-        f"{json.dumps(flow_context, ensure_ascii=False)}\n\n"
-        "- Page context: page goals and information items. Use it to determine read models and page dependencies.\n"
-        f"{json.dumps(page_context, ensure_ascii=False)}\n\n"
-        "- Business-action context: page-scoped ProductPlan actions. Use it to select endpoint implementations only for business actions and business steps.\n"
-        f"{json.dumps(action_context, ensure_ascii=False)}\n\n"
-        "Before returning, audit every confirmed ProductPlan action page by page:\n"
-        "1. behavior.type=business has exactly one action_implementations entry.\n"
-        "2. behavior.type=sequence with business steps has exactly one action_implementations entry whose "
-        "stepBindings covers every and only business stepId.\n"
-        "3. behavior.type=navigation, interface, or external has no action_implementations entry.\n"
-        "4. Every referenced endpointId exists in api_contracts and is also present in the same page's "
-        "endpoint_dependencies. Do not return the TechnicalPlan until this audit passes.\n\n"
-        f"{revision_context}"
-        f"{technical_plan_feedback_prompt(requirement_spec)}"
-        f"{TECHNICAL_PLAN_FINAL_LANGUAGE_REQUIREMENT}"
-    )
-
-
 def _planning_prompt(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any] | None = None,
@@ -347,11 +94,6 @@ def _planning_prompt(
 ) -> str:
     """构造项目规划提示；实体保留业务定义，物理数据来源由 Endpoint 字段映射决定。"""
 
-    if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
-        return _technical_planning_prompt(
-            requirement_spec,
-            existing_plan,
-        )
     datasource_requirement = (
         f"{DATASOURCE_PENDING_REQUIREMENT}\n{BACKEND_TECH_STACK_REQUIREMENT}"
     )
@@ -549,17 +291,20 @@ def _invoke_live_chat_model(
 ) -> str:
     """技术规划分段生成后返回完整候选，其他规划仍透传数据源实现边界。
 
-    GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens。ProjectPlan JSON
-    体量大，thinking 会挤占输出预算，常在写完前被截断，流式投到前端的原始 JSON
-    也随之截断、解析校验失败。与产品/UI 设计生成一致，关闭 thinking 释放输出预算。
+    实体从属关系阶段开启思考。其余片段关闭思考，把输出预算留给完整 JSON。
     """
 
     active_settings = settings or Settings.from_env()
     if isinstance(requirement_spec.get("confirmed_product_plan"), dict):
         def invoke_fragment(prompt: str) -> str:
-            """让所有技术规划片段复用现有模型、流式回调与取消协议。"""
+            """沿用模型回调与取消协议，仅在实体从属关系请求中开启思考。"""
 
-            return _invoke_prompt_with_chat_model(prompt, settings=active_settings, on_token=on_token)
+            return _invoke_prompt_with_chat_model(
+                prompt,
+                settings=active_settings,
+                on_token=on_token,
+                thinking_enabled=prompt.startswith("生成阶段：catalog_relationships（"),
+            )
 
         sections = generate_technical_plan_sections(
             requirement_spec, invoke=invoke_fragment, fragments=generation_fragments,
@@ -578,18 +323,27 @@ def _invoke_prompt_with_chat_model(
     *,
     settings: Settings,
     on_token: Callable[[str], None] | None = None,
+    thinking_enabled: bool = False,
 ) -> str:
     """调用无工具聊天模型执行给定规划提示，并按需转发流式文本。"""
 
-    model = create_chat_model(
-        settings,
-        extra_model_kwargs={"thinking": {"type": "disabled"}},
-    )
-    if on_token is None:
+    thinking: dict[str, str | int] = {"type": "enabled" if thinking_enabled else "disabled"}
+    if thinking_enabled and settings.model_transport == "direct" and settings.model_provider == "anthropic":
+        # 原生 Anthropic 要求思考预算低于总输出上限。
+        thinking["budget_tokens"] = 1024
+        settings = replace(
+            settings,
+            default_max_tokens=max(settings.default_max_tokens, 2048),
+        )
+    model = create_chat_model(settings, extra_model_kwargs={"thinking": thinking})
+    if on_token is None or thinking_enabled:
+        # 思考阶段收齐消息后提取正文，再将正文交给前端和片段解析。
         result = model.invoke(prompt)
         check_output_finish(result)
-        content = getattr(result, "content", "")
-        return _coerce_content_text(content) or ""
+        text = _coerce_content_text(getattr(result, "content", ""))
+        if text and on_token is not None:
+            on_token(text)
+        return text
 
     accumulated_text = ""
     for chunk in model.stream(prompt):

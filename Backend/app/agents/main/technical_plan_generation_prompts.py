@@ -8,26 +8,60 @@ from app.agents.main.technical_plan_catalog_repair import business_slots
 from app.services.api_contracts import response_field_paths
 
 
+ENTITY_DESCRIPTION_RULE = "实体 description 用一句简洁的话说明实体是什么、用于什么，避免列举或复述字段。\n"
+
+RECORD_IDENTITY_RULE = (
+    "1）先为当前实体选择合适的单字段业务标识。已有业务标识时直接沿用。需求未明确指定时，"
+    "可以根据字段的业务用途选定一个稳定、每条记录都有值且适合在当前实体内保持唯一的字段，设为必填，并在 label 末尾加「（唯一标识）」。\n"
+    "2）没有合适的单字段业务标识时，补充一个整数记录标识id。"
+    "字段使用 name=id、label=记录ID（唯一标识）、type=number、required=true，description 写明它是整数记录标识。\n"
+)
+
 COMMON_RULES = (
     "只返回本阶段要求的一个完整 JSON 根对象，不返回 Markdown、说明或其他章节。"
     "所有用户可见名称、说明和 trigger 使用简体中文；ID、字段名、路径和类型保留技术标识。"
     "只实现已确认 ProductPlan 的业务事实，不新增业务需求。"
     "后端固定 Java8 + Springboot，数据库 MySQL8，缓存 Redis。"
     "实体只定义业务语义，不输出 data_source、data_sources、物理来源、字段映射或 SQL。"
-    "平台实体的隐式主键 id 在 API JSON 中统一为 string；数据库 BIGINT 不等于 JSON number。"
-    "引用这些实体主键的关联字段在实体目录中使用 text，在响应、请求和路径参数中均使用 string，跨 Contract 不得改变同一身份的类型。"
     "不输出 authorization_manifest、角色、资源键、策略或权限绑定，平台稍后统一编译。"
     "页面布局、导航、本地交互和产品状态由上游决定，不在技术规划重复设计。\n"
 )
 
+API_RECORD_IDENTITY_RULE = (
+    "操作单条实体记录时，使用该实体已声明的唯一标识，也就是 label 标注「（唯一标识）」的字段；"
+    "只有业务明确使用外部标识时才使用对应的外部字段。路径参数、请求和响应中传递同一标识时，"
+    "沿用其实际字段名（按 API 的 lowerCamelCase 转换）和一致的 JSON 类型，文本用 string，整数用 integer。"
+    "例如唯一标识是文本 code，路径占位符用 {code}，需要返回记录标识时返回 code，并引用实际的实体 code 字段。"
+    "实体未声明 id 时，不得用 id 代称已有的唯一标识，不得在路径、参数或 Schema 中补造该实体的 id。\n"
+)
+
 API_SCHEMA_RULES = (
-    "API 请求和响应 Schema 的 properties 属性名统一使用 lowerCamelCase，"
-    "例如 hireDate、personnelId，不使用 hire_date、personnel_id。"
-    "嵌套对象和数组元素中的属性同样遵守，required 中使用对应名称。"
-    "entity_field_ref 保留实体来源字段的真实名称，"
-    "例如 API 属性 hireDate 可以引用 Personnel.hire_date。\n"
-    "API JSON Schema 中，业务明确为正整数的数量必须使用 type=integer 且 minimum=1；"
+    "Schema 只描述接口实际接收或返回的数据及约束。\n"
+    "Schema 的 properties 属性名统一使用 lowerCamelCase。\n"
+    "Schema 中，业务明确为正整数的数量必须使用 type=integer 且 minimum=1；"
     "明确非负的数值必须包含 minimum=0，不能只把约束写在 description 中。\n"
+    "【请求必填约束】\n"
+    "required 只约束请求参数和请求体。请求体的 required 数组使用 properties 中对应的字段名。"
+    "响应 Schema 按业务要求定义 properties，并省略所有层级的 required，包括嵌套对象和数组元素。"
+    "同一对象用于请求和响应时，如果请求需要 required，以请求为准。\n"
+)
+
+LIST_QUERY_RULE = (
+    "【列表查询】\n"
+    "用户没有明确要求不分页时，列表查询默认分页。\n"
+    "  - 分页查询参数为 current 和 pageSize，默认值分别为 1 和 20。\n"
+    "  - 分页响应采用通用泛型 PageResult<T>。响应 Schema 名称和 response_schema_ref 均使用 PageResult。\n"
+    "  - PageResult 只包含 total、current、pageSize 和 list 四个同级字段。total、current 和 pageSize 为 integer，list 为数组。\n"
+    "  - 列表项类型 T 由 list.items 指定，需要包含页面展示、后续操作或用户明确要求的字段，保留操作所需的记录标识。"
+    "    先查找本 Contract 中已有的响应 Schema，满足条件时直接复用。如果没有符合条件的，新建以 ListItem 结尾的 Schema。\n"
+    "明确不分页时，按已确认的要求定义响应。\n"
+)
+
+WRITE_RESPONSE_RULE = (
+    "【新增、更新与删除响应】\n"
+    "新增、更新和删除未明确要求返回业务数据时，默认使用同一 Contract 内共享的 OperationResult 响应 Schema。"
+    "它只包含布尔属性 success，成功响应示例为 {\"success\":true}。\n"
+    "业务错误沿用接口的 error_codes 和错误响应。明确要求返回记录标识或其他业务数据时，按业务要求定义所需字段。\n"
 )
 
 
@@ -54,22 +88,20 @@ def contract_prompt(requirement: dict, catalog: dict, spec: dict) -> str:
         "保留目录中的 Contract id/name/entity_ids/base_path 以及每个 Endpoint 的 id/name/method/path，"
         "不能增加、删除、重命名 Endpoint 或修改共享实体。\n"
         "schemas 是 JSON Schema 名称到定义的字典。所有 $ref 和 request_schema_ref/response_schema_ref "
-        "使用本契约内的裸 Schema 名称，禁止跨 Contract 引用。Schema 属性可独立命名；"
-        "直接取自实体字段的属性使用 entity_field_ref=EntityId.field_name；计算、聚合和传输字段可省略。"
+        "使用本契约内的裸 Schema 名称，禁止跨 Contract 引用。Schema 属性可独立命名。"
         "读取响应必须覆盖页面 information_items，关联记录编号/名称可以作为只读展示投影；"
-        "不能只返回关联 id 却声称可直接展示名称，也不能伪造当前实体字段来绑定这些投影。"
+        "需要展示关联记录名称时，直接提供名称。"
         "Endpoint 每项包含 id,name,method,path,summary,parameters,request_schema_ref,response_schema_ref,"
         "error_codes,authentication；parameters 每项包含 name,in,required,schema。"
         "error_codes 为字符串数组，例如 [\"INVALID_STATE\",\"NOT_FOUND\"]，不能返回 code/message 对象数组。"
         "路径占位参数必须声明。请求体由业务语义决定，无请求体时 request_schema_ref 为 null，"
-        "涉及选中记录后的操作时，明确操作参数的真实来源；按业务要求使用内部 id、业务编号或上游已提供的身份。"
-        "需要从列表选择记录时，响应应提供对应身份；不要仅凭路径参数名就强制为所有查询添加 id。"
-        "记录 id 应明确标注实际所属实体的 entity_field_ref=EntityId.id；同一 Contract 关联多个实体时，不得混用各自的 id。"
-        "不能仅因 POST/PUT/PATCH 就生成空请求对象。非 DELETE 接口必须定义响应 Schema。"
-        "分页接口使用 current/pageSize 查询参数；分页响应恰好包含 total/pageSize/current/list "
-        "四个同级必填字段，前三者为 integer，list 为 array。"
+        "需要从列表选择记录时，响应应提供后续操作所需的记录标识。"
+        "不能仅因 POST/PUT/PATCH 就生成空请求对象。非 DELETE 接口必须定义响应 Schema。DELETE 的响应按下文的写操作规则生成。"
         "authentication 只能包含 boolean required，不携带 roles 或权限规则。\n"
-        f"当前应用登录能力：{_json({'enabled': bool(auth.get('enable'))})}\n"
+        + API_RECORD_IDENTITY_RULE
+        + LIST_QUERY_RULE
+        + WRITE_RESPONSE_RULE
+        + f"当前应用登录能力：{_json({'enabled': bool(auth.get('enable'))})}\n"
         f"固定 Contract 目录：{_json(spec)}\n"
         f"只读实体字段：{_json(entities)}\n"
         f"本模块页面需求：{_json(pages)}\n"

@@ -1,5 +1,5 @@
 import { DownOutlined } from '@ant-design/icons'
-import { useState, type CSSProperties, type ReactElement } from 'react'
+import { useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import { cx } from '../../../../utils'
 import {
   asRecord,
@@ -23,6 +23,8 @@ type SchemaTreeProps = {
   fieldRequired?: boolean
   fieldOptional?: boolean
   showDefault?: boolean
+  columnHead?: ReactNode
+  compactArrays?: boolean
 }
 
 /** 收集字段、数组和组合类型的引用依赖，循环引用只访问一次。 */
@@ -109,12 +111,13 @@ export function SchemaTree({
   isField = false,
   fieldRequired = false,
   fieldOptional = false,
-  showDefault = false
+  showDefault = false,
+  columnHead,
+  compactArrays = false
 }: SchemaTreeProps): ReactElement {
   const [expanded, setExpanded] = useState(true)
   // 参数说明属于 Parameter，其他字段说明来自 Schema；只展示契约已有文字。
   const displayDescription = description?.trim() || textValue(schema.description).trim()
-  const required = new Set(stringItems(schema.required))
   const properties = schemaProperties(schema)
   const activeReferenceTrail = referenceTrail || new Set([name])
   const reference = textValue(schema.$ref).replace(/^#\/components\/schemas\//, '')
@@ -140,6 +143,37 @@ export function SchemaTree({
         }))
       : []
   )
+  const itemSchema = inlineItemReference ? itemDefinition : items
+  // 简单对象数组的字段可由数组行直接展开。复杂约束、组合类型和不可解析引用继续显示完整节点。
+  const itemFields =
+    compactArrays &&
+    isField &&
+    schema.type === 'array' &&
+    !reference &&
+    !properties.length &&
+    !Object.keys(extraProperties).length &&
+    !compositions.length &&
+    (itemSchema.type === 'object' || !('type' in itemSchema)) &&
+    Object.keys(itemSchema).every((key) =>
+      ['type', 'properties', 'required', 'description', 'title'].includes(key)
+    )
+      ? schemaProperties(itemSchema)
+      : []
+  const compactItem = itemFields.length > 0
+  const required = new Set(stringItems((compactItem ? itemSchema : schema).required))
+  const itemDescription = compactItem ? textValue(itemSchema.description).trim() : ''
+  const fieldTrail =
+    compactItem && itemReference
+      ? new Set([...activeReferenceTrail, itemReference])
+      : activeReferenceTrail
+  const childProps = {
+    schemas,
+    showDefault,
+    compactArrays,
+    depth: depth + 1,
+    referenceTrail: activeReferenceTrail
+  }
+
   const hasChildren = Boolean(
     properties.length ||
       reference ||
@@ -151,7 +185,14 @@ export function SchemaTree({
 
   /** 仅切换当前类型分支的显示状态，不修改接口契约。 */
   function toggleExpanded(): void {
-    setExpanded(!expanded)
+    setExpanded((previous) => !previous)
+  }
+
+  const Row = compactItem ? 'button' : 'div'
+  const disclosureProps = {
+    'aria-label': `${expanded ? '收起' : '展开'} ${name}`,
+    'aria-expanded': expanded,
+    onClick: toggleExpanded
   }
 
   return (
@@ -162,18 +203,20 @@ export function SchemaTree({
       )}
       style={treeStyle}
     >
-      <div
-        className={cx(isField ? 'technical-plan-schema-field' : 'technical-plan-schema-node-head')}
+      <Row
+        className={cx(
+          isField ? 'technical-plan-schema-field' : 'technical-plan-schema-node-head',
+          compactItem && 'technical-plan-schema-array-toggle'
+        )}
+        {...(compactItem ? { type: 'button' as const, ...disclosureProps } : {})}
       >
         <span className={cx('technical-plan-schema-name')}>
-          {hasChildren ? (
-            <button
-              type="button"
-              className={cx('technical-plan-schema-caret')}
-              aria-label={`${expanded ? '收起' : '展开'} ${name}`}
-              aria-expanded={expanded}
-              onClick={toggleExpanded}
-            >
+          {compactItem ? (
+            <span className={cx('technical-plan-schema-caret-space')} aria-hidden="true">
+              <DownOutlined rotate={expanded ? 0 : -90} />
+            </span>
+          ) : hasChildren ? (
+            <button type="button" className={cx('technical-plan-schema-caret')} {...disclosureProps}>
               <DownOutlined rotate={expanded ? 0 : -90} />
             </button>
           ) : (
@@ -200,26 +243,36 @@ export function SchemaTree({
           </span>
         ) : null}
         {displayDescription || (showDefault && isField) ? (
-          <span className={cx('technical-plan-schema-description')}>
+          <span
+            className={cx('technical-plan-schema-description')}
+            title={isField ? displayDescription || undefined : undefined}
+          >
             {displayDescription || '—'}
           </span>
         ) : null}
-      </div>
+      </Row>
       {hasChildren && expanded ? (
-        <div className={cx('technical-plan-schema-children')}>
+        <div
+          className={cx(
+            'technical-plan-schema-children',
+            compactItem && 'technical-plan-schema-array-items'
+          )}
+        >
+          {columnHead}
+          {itemDescription ? (
+            <span className={cx('technical-plan-schema-details')}>{itemDescription}</span>
+          ) : null}
           {reference ? (
             circular ? (
               <span className={cx('technical-plan-schema-details')}>循环引用：{reference}</span>
             ) : Object.keys(referencedSchema).length ? (
               <div className={cx('technical-plan-schema-dependency-rail')}>
                 <SchemaTree
+                  {...childProps}
                   isDependency
                   name={reference}
                   referencedBy={name}
                   schema={referencedSchema}
-                  schemas={schemas}
-                  showDefault={showDefault}
-                  depth={depth + 1}
                   referenceTrail={new Set([...activeReferenceTrail, reference])}
                 />
               </div>
@@ -229,63 +282,42 @@ export function SchemaTree({
               </span>
             )
           ) : null}
-          {properties.map(([fieldName, fieldSchema]) => (
+          {(compactItem ? itemFields : properties).map(([fieldName, fieldSchema]) => (
             <div className={cx('technical-plan-schema-field-group')} key={fieldName}>
               <SchemaTree
+                {...childProps}
                 name={fieldName}
                 schema={fieldSchema}
-                schemas={schemas}
-                showDefault={showDefault}
-                depth={depth + 1}
-                referenceTrail={activeReferenceTrail}
+                referenceTrail={fieldTrail}
                 isField
                 fieldRequired={required.has(fieldName)}
               />
             </div>
           ))}
-          {Object.keys(items).length ? (
+          {!compactItem && Object.keys(items).length ? (
             inlineItemReference ? (
               <div className={cx('technical-plan-schema-dependency-rail')}>
                 <SchemaTree
+                  {...childProps}
                   isDependency
                   name={itemReference}
                   schema={itemDefinition}
-                  schemas={schemas}
-                  showDefault={showDefault}
-                  depth={depth + 1}
                   referenceTrail={new Set([...activeReferenceTrail, itemReference])}
                 />
               </div>
             ) : (
-              <SchemaTree
-                name="数组元素"
-                schema={items}
-                schemas={schemas}
-                showDefault={showDefault}
-                depth={depth + 1}
-                referenceTrail={activeReferenceTrail}
-              />
+              <SchemaTree {...childProps} name="数组元素" schema={items} />
             )
           ) : null}
           {Object.keys(extraProperties).length ? (
-            <SchemaTree
-              name="任意属性值"
-              schema={extraProperties}
-              schemas={schemas}
-              showDefault={showDefault}
-              depth={depth + 1}
-              referenceTrail={activeReferenceTrail}
-            />
+            <SchemaTree {...childProps} name="任意属性值" schema={extraProperties} />
           ) : null}
           {compositions.map((item) => (
             <SchemaTree
+              {...childProps}
               key={`${item.kind}:${item.index}`}
               name={`${item.kind} · ${item.index + 1}`}
               schema={item.schema}
-              schemas={schemas}
-              showDefault={showDefault}
-              depth={depth + 1}
-              referenceTrail={activeReferenceTrail}
             />
           ))}
         </div>

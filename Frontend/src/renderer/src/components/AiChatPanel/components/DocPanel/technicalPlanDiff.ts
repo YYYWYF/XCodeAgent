@@ -57,7 +57,6 @@ const labels: Record<string, string> = {
   endpoints: '接口',
   resources: '资源',
   operationResourceKeys: '操作资源',
-  entity_field_ref: '关联实体字段',
   additionalProperties: '额外字段',
   schemas: '类型定义'
 }

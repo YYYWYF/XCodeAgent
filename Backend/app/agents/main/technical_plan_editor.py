@@ -17,6 +17,10 @@ from langchain_core.callbacks import BaseCallbackHandler
 from app.agents.execution_control import RunCancellationMiddleware
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.main.technical_plan_file_tools import TechnicalPlanFileMiddleware
+from app.agents.main.technical_plan_generation_prompts import (
+    ENTITY_DESCRIPTION_RULE,
+    RECORD_IDENTITY_RULE,
+)
 from app.agents.main.technical_plan_review import TechnicalPlanReview
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
@@ -227,7 +231,9 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
         "候选根对象必须且只能包含 architecture、entities、api_contracts、pages。"
         "架构仅有 frontend/backend/data；所有用户可见说明使用简体中文。"
         "保持未涉及的稳定ID、接口、Schema、参数、页面绑定和字段原样。"
-        "修改字段或接口后，搜索相关 entity_field_ref、$ref、endpointId、endpoint_id 并补齐必要引用；"
+        "新增或调整实体时遵循以下描述与标识规则。\n"
+        + ENTITY_DESCRIPTION_RULE + RECORD_IDENTITY_RULE
+        + "修改字段或接口后，搜索相关 $ref、endpointId、endpoint_id 并补齐必要引用；"
         "Schema 引用必须在所属 Contract 内闭合。分页参数使用 current/pageSize，分页响应同级字段"
         "只能为 total/pageSize/current/list。Contract 和 Endpoint 必须有非空中文 name。"
         "不要生成 authorization_manifest、资源键、角色授权或应用配置；这些由平台编译。"

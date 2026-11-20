@@ -13,11 +13,12 @@ from app.agents.main.technical_plan_language import validate_technical_plan_chin
 
 
 class EntityIdentity(_StrictFragment):
-    """全局阶段只冻结实体身份，字段在独立请求中展开。"""
+    """保存全局阶段确定的实体身份和直接从属实体。"""
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
+    owned_entity_ids: list[str] = Field(default_factory=list)
 
 
 class ContractIdentity(_StrictFragment):
@@ -30,10 +31,15 @@ class ContractIdentity(_StrictFragment):
     page_ids: list[str] = Field(min_length=1)
 
 
-class _Registry(_StrictFragment):
-    """轻量全局目录不接受实体字段、接口或动作映射。"""
+class _Relationships(_StrictFragment):
+    """实体关系阶段只接收实体身份和从属信息。"""
 
     entities: list[EntityIdentity]
+
+
+class _Registry(_StrictFragment):
+    """目录阶段只接收业务 Contract 分组。"""
+
     contracts: list[ContractIdentity]
 
 
@@ -46,19 +52,27 @@ class _Endpoints(_StrictFragment):
 def catalog_registry(catalog: dict) -> dict:
     """从已组装目录投射轻量身份，修复时不回灌全应用完整字段与映射。"""
 
-    return {"entities": [EntityIdentity.model_validate({key: entity[key] for key in ("id", "name", "description")}).model_dump()
+    return {"entities": [EntityIdentity.model_validate({key: entity[key] for key in ("id", "name", "description")}).model_dump(exclude_unset=True)
         for entity in catalog["entities"]],
         "contracts": [{key: deepcopy(contract[key]) for key in ("id", "name", "entity_ids", "base_path", "page_ids")}
             for contract in catalog["contracts"]]}
 
 
-def validate_registry(value: dict, product: dict) -> dict:
-    """检查全局身份及业务页面归属，空目录不能进入实体或接口生成。"""
+def validate_relationships(value: dict) -> dict:
+    """检查实体身份结构、ID 唯一性和中文说明。"""
+
+    relationships = _Relationships.model_validate(value).model_dump()
+    _unique([entity["id"] for entity in relationships["entities"]], "实体 ID")
+    _check(validate_technical_plan_chinese_prose(relationships))
+    return relationships
+
+
+def validate_registry(value: dict, product: dict, *, entities: list[dict]) -> dict:
+    """检查 Contract 使用已确定的实体，并覆盖已确认的业务页面。"""
 
     registry = _Registry.model_validate(value).model_dump()
-    _unique([entity["id"] for entity in registry["entities"]], "实体 ID")
     _unique([contract["id"] for contract in registry["contracts"]], "Contract ID")
-    entity_ids = {entity["id"] for entity in registry["entities"]}
+    entity_ids = {entity["id"] for entity in entities}
     pages = {page["pageId"] for page in product.get("pages", [])}
     claimed = set()
     for contract in registry["contracts"]:
@@ -69,7 +83,7 @@ def validate_registry(value: dict, product: dict) -> dict:
         claimed.update(contract["page_ids"])
     if {slot[0] for slot in business_slots(product)} - claimed:
         raise ValueError("目录遗漏业务页面的 Contract 归属。")
-    _check(validate_technical_plan_chinese_prose({"entities": registry["entities"], "api_contracts": registry["contracts"]}))
+    _check(validate_technical_plan_chinese_prose({"api_contracts": registry["contracts"]}))
     # Contract 的名称校验沿用完整目录规则，实体名称不额外引入新的命名政策。
     if any(not re.search(r"[\u3400-\u9fff]", contract["name"]) for contract in registry["contracts"]):
         raise ValueError("Contract 名称必须包含中文。")
