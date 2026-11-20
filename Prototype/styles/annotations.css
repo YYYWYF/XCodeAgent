@@ -1,0 +1,34 @@
+/* 固定的页面边界与位于其外侧的独立标注区。 */
+/* 明确浅色画布背景与配色方案，避免暗色环境把画布外区域渲染成黑色、淹没 #app 边界线。 */
+/* 内置浏览器会把 html/body 背景强制透明，因此画布底色要落在 .prototype-canvas 这一层。 */
+html{background:#e9e9e9;color-scheme:light}
+body,body.workbench-page{height:auto;min-height:100vh;overflow:auto;background:#e9e9e9}
+.prototype-canvas{width:100%;height:100vh;overflow:auto;background:#e9e9e9}
+.prototype-sheet{position:relative;width:1760px;height:900px}
+#app{position:absolute;top:0;left:0;width:1440px;height:900px;overflow:hidden;border:1px solid #777;background:#fff}
+#app .welcome-screen,#app .wb-shell,#app .planning-shell{height:100%;min-height:0}
+#app .overlay{position:absolute;grid-template-rows:min(900px,100vh);align-content:start}
+#app .dialog{width:min(820px,calc(100vw - 32px));max-height:min(810px,calc(100vh - 32px));min-height:0;transform:translate(var(--dialog-shift-x,0px),var(--dialog-shift-y,0px))}
+#app .dialog-head,#app .dialog-foot{flex:0 0 auto}
+#app .dialog-body{flex:1 1 auto;min-height:0;overflow:auto}
+#annotation-lines{position:absolute;inset:0;width:1760px;height:900px;overflow:visible;pointer-events:none;z-index:6}
+#annotation-lines path{fill:none;stroke:#d94e35;stroke-width:1.5}
+#annotation-lines circle{fill:#d94e35}
+#annotation-notes{position:absolute;left:1464px;top:0;width:280px;height:900px;pointer-events:none}
+.annotation-note{position:absolute;left:0;display:flex;align-items:flex-start;gap:8px;width:270px;color:#a43b29;font-size:13px;line-height:1.5}
+.annotation-number{display:grid;flex:0 0 23px;height:23px;place-items:center;border-radius:50%;background:#d94e35;color:#fff;font-weight:600}
+.annotation-text{padding:2px 0}
+/* 画布尺寸固定，浏览器窄时使用滚动条，不触发页面布局切换。 */
+@media(max-width:1120px){
+  #app .welcome-content{display:grid;grid-template-columns:minmax(400px,.9fr) minmax(540px,1.1fr);height:calc(100% - 58px);padding:28px 4vw}
+  #app .agent-preview{display:flex}
+  #app .welcome-primary{max-width:none;margin:0}
+  #app .welcome-actions{flex-direction:row}
+}
+@media(max-width:900px){
+  #app .wb-layout.has-workspace-panel{display:grid;grid-template-columns:60px minmax(360px,38%) minmax(0,1fr)}
+  #app .wb-layout.is-acceptance{grid-template-columns:60px minmax(0,1fr)}
+  #app .workspace-panel{position:static;width:auto;box-shadow:none}
+  #app .artifact-layout{grid-template-columns:220px minmax(0,1fr)}
+  #app .task-groups{grid-template-columns:1fr 1fr}
+}

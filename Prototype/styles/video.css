@@ -1,0 +1,185 @@
+/* 教学视频主旅程：保留布局层次，使用低保真线框。 */
+.icon-choices{display:flex;gap:8px;align-items:center}
+.icon-choices label{display:flex;align-items:center;margin:0;border:1px solid #bbb;padding:7px;font-weight:400}
+.icon-choices input{width:auto}
+.video-flow .flow-title{display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.video-flow .flow-title strong{font-size:14px}
+.video-flow .flow-body>strong{display:block;margin:4px 0}
+.video-flow .flow-actions{flex-wrap:wrap}
+.video-flow .flow-row span:last-child{display:flex;gap:4px;flex-wrap:wrap}
+.video-flow .flow-row button{padding:5px 8px;font-size:12px}
+.artifact-heading{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);padding:10px 12px;margin-bottom:12px}
+.artifact-heading div{display:grid;gap:3px}
+.artifact-heading small{color:var(--muted)}
+.video-table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
+.video-table input[type=checkbox]{margin:0}
+.video-table th,.video-table td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.video-table th{font-weight:600;background:var(--soft)}
+.video-table select{min-width:100px}
+.ui-panel{display:flex;flex-direction:column}
+.ui-preview-toolbar{align-self:flex-end;margin:8px 0;color:var(--muted);font-size:12px}
+.portal-content{flex:1;min-width:0;overflow:auto;padding:18px 24px;background:#f7f7f7}
+.portal-section{padding:16px;margin-bottom:14px;border:1px solid var(--line);background:#fff}
+.portal-section h3{margin:0 0 8px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.portal-section article{padding:12px 0;border-bottom:1px solid var(--line)}
+.portal-section article:last-child{border-bottom:0}
+.portal-section article p{margin:7px 0;color:var(--muted)}
+.portal-section small{color:var(--muted)}
+.video-quick{width:auto;max-width:none;margin:0;padding:0}
+.video-quick h2{font-size:21px}
+.video-quick>p{color:var(--muted)}
+.video-quick .task-groups section{min-height:150px}
+.current-target{display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--line);margin-bottom:16px}
+.current-target small{color:var(--muted);flex:1}
+.process-list{margin:14px 0;padding-left:15px;border-left:1px solid var(--line)}
+.process-list p{margin:12px 0}
+.video-progress{height:7px;background:#ddd;margin:12px 0}
+.video-progress span{display:block;width:100%;height:100%;background:#777}
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.stats-row span{border:1px solid var(--line);padding:10px 4px;text-align:center;font-size:12px}
+.artifact-tree input{font-size:12px;margin-bottom:8px}
+.artifact-tree button.selected{background:var(--soft)}
+.mapping-layout{grid-template-columns:180px minmax(0,1fr)}
+.mapping-content{overflow:auto;padding:20px}
+.mapping-content .simple-card{margin:12px 0}
+.mapping-content textarea{min-height:70px}
+.source-types{display:flex;gap:0;margin-top:10px}
+.source-types button.selected{background:var(--soft);font-weight:600}
+.mapping-content h2{margin:4px 0}
+.mapping-content .actions{justify-content:flex-end}
+.task-detail{border:1px solid var(--line);padding:12px;margin:8px 0}
+.task-detail summary{cursor:pointer}
+.task-detail p{padding-left:20px;color:var(--muted)}
+.task-plan-actions{position:sticky;bottom:-20px;display:flex;justify-content:flex-end;gap:8px;padding:12px;background:#fff;border-top:1px solid var(--line)}
+.workspace-panel{position:relative}
+.panel-controls{margin-left:auto}
+.workspace-tabs .panel-controls button{border-left:1px solid var(--line)}
+.video-preview{display:flex;flex:1;min-height:0;flex-direction:column;overflow:hidden}
+.video-preview .preview-toolbar input{flex:1}
+.portal-shell{display:grid;grid-template-columns:150px minmax(0,1fr);flex:1;min-height:0}
+.portal-shell>aside{padding:16px;border-right:1px solid var(--line);background:#eee}.portal-shell>aside strong{display:block;margin-bottom:14px}
+.portal-shell>aside p{padding:8px;border:1px solid var(--line)}
+.service-drawer{position:absolute;right:0;top:40px;bottom:0;width:380px;display:flex;flex-direction:column;border-left:1px solid var(--line);background:#fff;z-index:3}
+.service-drawer header{display:flex;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid var(--line)}
+.service-drawer header button{border:0;font-size:20px}
+.service-drawer .simple-card{margin:0}
+.accept-footer{flex:0 0 auto;padding:12px 18px;border-top:1px solid var(--line);background:#fff}
+.accept-reminder{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;margin-bottom:10px;border:1px solid var(--line);background:var(--soft)}
+.accept-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex:0 0 auto}
+.accept-bar p{margin:4px 0 0}
+.accept-bar span{float:none}
+.source-field-table{margin-top:10px;table-layout:fixed}
+.source-field-table th:nth-child(1){width:39%}.source-field-table th:nth-child(2){width:21%}
+.source-field-table td{overflow-wrap:anywhere}
+#app .artifact-tree .artifact-service-entry{display:flex;align-items:center;justify-content:space-between;margin:0;padding:8px 4px;border:0;background:transparent;text-align:left}
+#app .artifact-tree .artifact-service-entry.selected{background:var(--soft)}
+#app .artifact-tree .artifact-service-entry span{font-weight:400}
+#app .artifact-tree .artifact-service-entry small{float:none;color:var(--muted);font-size:11px}
+#app .artifact-tree .artifact-tree-divider{height:0;margin:7px 0 10px;border:0;border-top:1px solid var(--line)}
+#app .service-management{display:flex;min-height:0;flex:1;flex-direction:column;gap:12px;overflow:auto}
+#app .service-status-section,#app .service-maintenance-section{display:flex;flex-direction:column;gap:10px}
+#app .service-status-section h3,#app .service-maintenance-section h3{margin:0}
+#app .service-summary-card{margin:0;padding:14px;border:1px solid var(--line)}
+#app .service-summary-card p{margin:6px 0;color:var(--muted)}
+#app .service-summary-card button{margin-top:8px}
+#app .service-port-row{display:flex;align-items:center;gap:12px;margin-top:8px}
+#app .service-maintenance-status{color:var(--muted);font-size:12px}
+#app .service-failure{margin-top:8px;padding:8px;border:1px solid var(--line);color:#7a3d31}
+#app .service-log-section{margin:0;padding:12px}
+#app .service-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:10px}
+#app .service-log-follow-state{color:var(--muted);font-size:12px}
+#app .service-log-toolbar-actions{display:flex;align-items:center;gap:5px}
+#app .service-log-toolbar button{padding:5px 8px;font-size:12px}
+#app .service-log-content{min-height:108px;max-height:144px;margin:10px 0 0;padding:10px;overflow:auto;border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 monospace;background:#fafafa}
+#app .service-log-content [data-service-log-line]{display:block}
+#app .service-log-empty{display:flex;min-height:80px;align-items:center;justify-content:center;margin-top:10px;border:1px solid var(--line);color:var(--muted)}
+#app .service-log-count{color:var(--muted);font-size:12px}
+#app .service-actions{display:flex;gap:8px}
+#app .service-repair-plan{margin:0}
+#app .page-debugger,#app .api-debugger{display:flex;min-height:0;flex:1;flex-direction:column;overflow:hidden;padding:0}
+#app .debug-header-stack{position:relative;z-index:4;flex:0 0 auto;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+#app .api-request-row.debug-address-row{flex-wrap:nowrap;margin-top:0;align-items:center}
+#app .debug-address-row>select{height:34px;align-self:center}
+#app .debug-address-row>button{display:inline-flex;height:34px;align-items:center;justify-content:center;align-self:center}
+#app .debug-address-services{display:flex;flex:0 0 auto;align-items:center;gap:6px}
+#app .debug-service-wrap{position:relative;flex:0 0 auto}
+#app .debug-service-status-trigger{display:inline-flex;height:34px;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--line);background:var(--surface);white-space:nowrap}
+#app .debug-service-name{font-size:12px;line-height:18px}
+#app .debug-service-status-trigger .tag{line-height:14px}
+#app .dd-chevron{position:relative;display:inline-block;width:9px;height:9px;flex:0 0 9px;color:var(--muted)}
+/* V 形箭头视觉重心偏下，几何居中后再上提 1px 与文字视觉中线对齐 */
+#app .dd-chevron::after{content:"";position:absolute;left:2px;top:0;width:5px;height:5px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(45deg)}
+#app .debug-log-toggle{display:inline-flex;height:34px;align-items:center;justify-content:center;padding:0 9px;border:1px solid var(--line);background:var(--surface);line-height:1;white-space:nowrap}
+#app .debug-log-toggle.selected{background:var(--soft)}
+#app .debug-service-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:20;display:flex;width:340px;max-width:calc(100vw - 32px);flex-direction:column;gap:8px;margin:0;padding:10px;border:1px solid var(--line);background:var(--surface);box-shadow:0 4px 14px #0002}
+#app .debug-service-menu>.row{margin:0}
+#app .debug-service-menu .service-repair-plan{margin:0}
+#app .debug-target-picker{position:relative;z-index:3;flex:0 0 auto;min-width:112px}
+#app .debug-address-field-group{display:flex;width:min(420px,38vw);min-width:240px;flex:0 1 420px;align-items:center;border:1px solid var(--line);background:var(--surface)}
+#app .debug-address-field-group>.debug-target-picker>summary{display:flex;height:32px;align-items:center;justify-content:space-between;gap:10px;padding:0 8px;border:0;border-right:1px solid var(--line);background:transparent;cursor:pointer;list-style:none;line-height:20px;white-space:nowrap}
+#app .debug-address-field-group>input{width:auto;height:32px;min-width:80px;flex:1;border:0;background:transparent;box-shadow:none;line-height:32px}
+#app .debug-address-field-group>input:focus{outline:1px solid var(--line)}
+#app .debug-target-picker>summary{display:flex;min-height:32px;align-items:center;justify-content:space-between;gap:10px;padding:5px 8px;border:1px solid var(--line);background:var(--surface);cursor:pointer;list-style:none;white-space:nowrap}
+#app .debug-target-picker>summary::-webkit-details-marker{display:none}
+/* 请求方法选择复用 debug-target-picker 结构，仅按地址栏行高覆写 */
+#app .debug-method-picker>summary{height:34px;min-height:34px;padding:0 10px;line-height:20px}
+#app .debug-method-picker .debug-target-tree{min-width:100%}
+#app .debug-target-picker>summary span{color:var(--muted)}
+#app .debug-target-tree{position:absolute;top:calc(100% + 3px);left:0;z-index:20;min-width:180px;padding:6px;border:1px solid var(--line);background:var(--surface);box-shadow:0 4px 14px #0002}
+#app .debug-target-group{padding:5px 8px;color:var(--muted);font-size:11px}
+#app .debug-target-item{width:100%;padding:7px 8px;border:0;background:transparent;text-align:left}
+#app .debug-target-item.selected,#app .debug-target-item:hover{background:var(--soft)}
+#app .page-debug-content,#app .api-debug-content{display:flex;min-height:0;flex:1;flex-direction:column;overflow:auto;margin:0;padding:12px 16px}
+#app .api-debug-content>*{flex-shrink:0}
+#app .page-debug-content{display:block;padding:0}
+#app .page-debug-content>.panel-empty{width:100%}
+#app .debug-log-dock{display:flex;min-height:130px;max-height:220px;flex:0 0 190px;flex-direction:column;margin:0;overflow:hidden;border-top:1px solid var(--line);background:var(--surface)}
+#app .debug-log-dock-head{display:flex;min-height:36px;align-items:center;gap:10px;padding:5px 10px 5px 16px;border-bottom:1px solid var(--soft)}
+#app .debug-log-dock-head strong{font-size:12px}
+#app .debug-log-dock-head>span{color:var(--muted);font-size:12px}
+#app .debug-log-dock-head .service-log-toolbar-actions{margin-left:auto}
+#app .debug-log-dock .service-log-content{min-height:0;max-height:none;flex:1;margin:0;padding:10px 16px;overflow:auto;border:0;border-radius:0;background:var(--surface)}
+#app .service-dependency{margin:18px 0}
+#app .debug-address-row input{min-width:80px}
+#app .debug-preview-nav{display:flex;width:76px;height:34px;flex:0 0 76px;align-items:center;justify-content:center;align-self:center;color:var(--muted);line-height:1;white-space:nowrap}
+#app .artifact-page-preview{display:flex;min-height:280px;max-height:480px;flex-direction:column;overflow:auto;border:1px solid var(--line)}
+#app .artifact-page-preview .preview-nav{flex:0 0 auto}
+#app .artifact-page-preview .portal-content{min-height:0}
+#app .api-request-row{display:flex;align-items:center;gap:8px;margin-top:10px}
+#app .api-request-row label{margin:0}
+#app .api-request-row input{flex:1;min-width:80px}
+#app .api-request-row select{width:82px;flex:0 0 82px}
+#app .api-request-row button{flex:0 0 auto;white-space:nowrap}
+#app .api-response{padding:10px;border:1px solid var(--line);background:#fafafa}
+#app .api-response-section{margin-top:18px;padding-top:12px;border-top:1px solid var(--soft)}
+#app .api-response-section>.row{margin-bottom:6px}
+#app .api-response-section .subtabs{margin:6px 0 12px}
+#app .api-response-status{font-size:12px;color:var(--muted)}
+#app .api-response-empty{min-height:180px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+#app .preview-page-content{display:flex;min-width:0;min-height:0;flex:1;flex-direction:column;overflow:auto}
+#app .preview-page-content>.notice{margin:10px}
+#app .wb-layout.has-workspace-panel.is-full{display:grid;grid-template-columns:minmax(0,1fr)}
+#app .wb-layout.is-full .workspace-panel{border-left:0}
+#app .wb-layout.has-workspace-panel.is-hidden{grid-template-columns:68px minmax(0,1fr)}
+#app .wb-layout{position:relative}
+#app .panel-layout-control{position:absolute;top:50%;z-index:3;display:flex;width:8px;height:34px;flex-direction:column;align-items:center;justify-content:center;gap:0;overflow:hidden;padding:0;transform:translateY(-50%);border:1px solid var(--line);background:var(--soft);transition:width .16s ease,height .16s ease,padding .16s ease,gap .16s ease}
+#app .panel-layout-control:hover,#app .panel-layout-control:focus-within{width:92px;height:116px;gap:3px;overflow:visible;padding:6px;background:var(--surface)}
+#app .panel-layout-caption{display:block;width:100%;height:0;overflow:hidden;font-size:12px;line-height:18px;text-align:center;white-space:nowrap;opacity:0;transition:height .16s ease,opacity .12s ease}
+#app .panel-layout-control:hover .panel-layout-caption,#app .panel-layout-control:focus-within .panel-layout-caption{height:18px;opacity:1}
+#app .panel-layout-control button{display:flex;width:0;height:0;align-items:center;justify-content:center;overflow:hidden;padding:0;opacity:0;pointer-events:none;transform:scale(.72);transition:width .16s ease,height .16s ease,padding .16s ease,opacity .12s ease,transform .16s ease}
+#app .panel-layout-control:hover button,#app .panel-layout-control:focus-within button{width:100%;height:24px;padding:0 8px;justify-content:flex-start;opacity:1;pointer-events:auto;transform:none}
+#app .panel-layout-control.docked{left:calc(60px + 38%)}
+#app .panel-layout-control.floating{right:0;transform:translateY(-50%)}
+#app .panel-layout-control button[aria-pressed="true"]{background:var(--soft);font-weight:600}
+@media(max-width:900px){#app .mapping-layout{grid-template-columns:180px minmax(0,1fr)}}
+/* 侧边栏功能图标：统一线框 SVG，视觉大小对齐原 16px 字形 */
+#app .session-rail button svg{width:17px;height:17px;display:block}
+#app .composer svg{width:15px;height:15px;vertical-align:-3px}
+/* 首页执行轨道、文件树、产物树与数据源抽屉复用的线框图标尺寸 */
+#app .agent-stage-icon svg{width:20px;height:20px;display:block}
+#app .agent-tree-title svg,#app .agent-file svg{width:13px;height:13px;vertical-align:-2px}
+#app .welcome-action-button svg{width:16px;height:16px;vertical-align:-3px}
+#app .artifact-tree button svg{width:13px;height:13px;vertical-align:-2px}
+#app .page-choice svg{width:14px;height:14px;vertical-align:-2.5px}
+#app .aux-row svg{width:14px;height:14px;vertical-align:-2.5px}
+#app .icon-choices svg{width:24px;height:24px;vertical-align:middle}

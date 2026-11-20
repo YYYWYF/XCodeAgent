@@ -1,0 +1,39 @@
+/* 工作台公共抽屉、详情与表单弹框。 */
+.wb-shell{position:relative}
+.wb-top{justify-content:flex-start;overflow:visible}
+.wb-top .phase-nav{flex:0 1 auto;justify-content:flex-start;margin-left:4px;overflow:visible}
+.wb-top .phase-cell{gap:4px}
+.wb-top .phase-count{display:inline-block;padding:1px 4px;margin-left:2px;border:1px solid var(--line);font-size:10px;font-weight:400}
+.wb-top .queue-count{padding:2px 4px;margin:0;border:1px solid var(--line);background:var(--surface)}
+.wb-top .release-action{margin-left:4px}
+.version-wrap{position:relative;flex:0 0 auto}
+.version-menu{position:absolute;z-index:4;top:100%;left:0;width:160px;padding:5px;border:1px solid var(--line);background:var(--surface)}
+.version-menu button{width:100%;border:0;text-align:left}
+.session-rail button.active{border-color:var(--line);background:var(--surface)}
+.aux-drawer,.aux-detail{position:absolute;z-index:4;top:58px;bottom:0;display:flex;flex-direction:column;border-right:1px solid var(--line);background:var(--surface)}
+.aux-drawer{left:60px;width:420px}
+.aux-drawer-wide{width:700px}
+.aux-detail{left:480px;width:540px;border-left:1px solid var(--line)}
+.aux-drawer>header,.aux-detail>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.aux-drawer>header div,.aux-detail>header div{display:grid;gap:3px}
+.aux-drawer>header small,.aux-detail>header small{font-size:12px;color:var(--muted)}
+.aux-drawer>header button,.aux-detail>header button{border:0;background:transparent;font-size:20px;padding:0 4px}
+.aux-body{flex:1;min-height:0;overflow:auto;padding:16px}
+.aux-body h3{margin:18px 0 8px}
+.aux-body label{font-weight:400}
+.aux-tabs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:8px}
+.aux-tabs button{border:0;background:transparent;padding:7px 8px}
+.aux-tabs button.active{border-bottom:2px solid #555;font-weight:600}
+.aux-actions{display:flex;justify-content:flex-end;align-items:center;gap:8px;margin:12px 0}
+.aux-row{display:flex;width:100%;justify-content:space-between;gap:8px;padding:12px 8px;border:0;border-bottom:1px solid var(--line);text-align:left;background:var(--surface);font-size:13px}
+.aux-row.selected{background:var(--soft)}
+.aux-row span{color:var(--muted);font-size:12px}
+.aux-empty{padding:35px 0;text-align:center;color:var(--muted)}
+.aux-file-layout{display:grid;grid-template-columns:120px minmax(0,1fr);gap:15px}
+.aux-file-layout aside{border-right:1px solid var(--line)}
+.aux-file-layout textarea{min-height:300px}
+.aux-settings-nav{padding:10px;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px}
+.aux-detail select{width:100px;flex:0 0 100px}
+.aux-overlay{z-index:8}
+.aux-overlay .dialog-body{padding:12px 20px 20px}
+.aux-overlay .dialog-body label:first-child{margin-top:0}
