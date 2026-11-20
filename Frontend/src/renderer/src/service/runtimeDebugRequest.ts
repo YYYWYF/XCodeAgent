@@ -18,8 +18,8 @@ export function debugStringMap(text: string, label: string): Record<string, stri
   const value = debugObject(text, label)
   for (const [key, item] of Object.entries(value)) {
     if (typeof item !== 'string') throw new Error(`${label}的 ${key} 必须是字符串。`)
-    if (label === 'Headers' && (/^(authorization|proxy-authorization|cookie|host|content-length|content-type|accept|connection|transfer-encoding)$/i.test(key)
-      || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) || /[\r\n]/.test(item))) throw new Error('不能覆盖平台 Header，或 Header 格式无效。')
+    if (label === '请求头' && (/^(authorization|proxy-authorization|cookie|host|content-length|content-type|accept|connection|transfer-encoding)$/i.test(key)
+      || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) || /[\r\n]/.test(item))) throw new Error('不能覆盖平台请求头，或请求头格式无效。')
   }
   return value as Record<string, string>
 }

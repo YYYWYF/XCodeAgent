@@ -16,14 +16,14 @@ export default function DebugKeyValueTable({ label, rows, onChange, disabled, fi
   return <section className="debug-key-value-table" aria-label={label}>
     <h5>{label}</h5>
     <Table<DebugKeyValueRow> size="small" pagination={false} rowKey="id" tableLayout="fixed" dataSource={rows}
-      locale={{ emptyText: '暂无参数，可添加 Key–Value 行' }} columns={[
+      locale={{ emptyText: '暂无参数，可添加键值行' }} columns={[
         { key: 'enabled', title: <span className="debug-key-value-enabled-label">启用</span>, width: 48,
           render: (_, row) => <Checkbox aria-label={`启用 ${label} ${row.key || '未命名行'}`} checked={row.enabled}
             disabled={disabled || fixedKeys} onChange={(event) => update(row.id, { enabled: event.target.checked })} /> },
-        { key: 'key', title: 'Key', width: '36%', render: (_, row) => <Input aria-label={`${label} Key`} placeholder="Key"
+        { key: 'key', title: '名称', width: '36%', render: (_, row) => <Input aria-label={`${label}名称`} placeholder="名称"
           value={row.key} disabled={disabled || fixedKeys} onChange={(event) => update(row.id, { key: event.target.value })} /> },
-        { key: 'value', title: 'Value', render: (_, row) => <Input aria-label={`${label} ${row.key || '未命名行'} Value`}
-          placeholder="Value" value={row.value} disabled={disabled} onChange={(event) => update(row.id, { value: event.target.value })} /> },
+        { key: 'value', title: '值', render: (_, row) => <Input aria-label={`${label} ${row.key || '未命名行'}的值`}
+          placeholder="值" value={row.value} disabled={disabled} onChange={(event) => update(row.id, { value: event.target.value })} /> },
         ...(!fixedKeys ? [{ key: 'remove', width: 36, render: (_: unknown, row: DebugKeyValueRow) => <Button type="text" size="small"
           icon={<DeleteOutlined />} aria-label={`删除 ${label} ${row.key || '未命名行'}`} disabled={disabled}
           onClick={() => onChange(rows.filter((item) => item.id !== row.id))} /> }] : [])

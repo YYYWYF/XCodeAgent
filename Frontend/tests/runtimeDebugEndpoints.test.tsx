@@ -36,10 +36,10 @@ test('请求编辑以正式接口为目标，路径和查询编码正确，页�
   assert.throws(() => debugRequestPath(endpoint, { ...values, query: { unknown: '1' } }), /查询参数/)
 })
 
-test('JSON 和 Header 输入给出明确错误，不能覆盖调试身份或伪造交互响应', () => {
-  assert.throws(() => debugObject('[]', 'Body'), /JSON 对象/)
-  assert.throws(() => debugStringMap('{"x":1}', 'Headers'), /字符串/)
-  assert.throws(() => debugStringMap('{"Authorization":"other"}', 'Headers'), /平台 Header/)
+test('JSON 和请求头输入给出明确错误，不能覆盖调试身份或伪造交互响应', () => {
+  assert.throws(() => debugObject('[]', '请求体'), /JSON 对象/)
+  assert.throws(() => debugStringMap('{"x":1}', '请求头'), /字符串/)
+  assert.throws(() => debugStringMap('{"Authorization":"other"}', '请求头'), /平台请求头/)
   assert.throws(() => readDebugFields({ ...initialDebugFields(endpoint), context: '{"interactionResponse":{}}' }), /上下文仅支持/)
 })
 
@@ -50,11 +50,11 @@ test('JSON 调试显示接口、请求配置和响应入口，不依赖页面选
   const html = renderToStaticMarkup(<AgentDebugPanel agent={agent} workspaceRoot="/workspace" />)
   assert.match(html, /POST \/api\/detect\/\{id\}/)
   assert.match(html, /一次性响应/)
-  assert.match(html, /Headers/)
+  assert.match(html, /请求头/)
   assert.match(html, /发送请求/)
   assert.doesNotMatch(html, /调试页面上下文|aria-label="调试对话"/)
   assert.match(html, /aria-label="调试调用接口"/)
-  assert.match(html, /aria-label="JSON 请求体"/, '非流式 POST 默认展开 Body 编辑器')
+  assert.match(html, /aria-label="JSON 请求体"/, '非流式 POST 默认展开请求体编辑器')
 })
 
 test('同一智能体的流式接口显示问答区域，非流式接口显示请求体，空结构化结果不占空间', () => {

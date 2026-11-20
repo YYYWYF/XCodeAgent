@@ -24,7 +24,7 @@ export function readDebugFields(value: DebugRequestFields): DebugRequestValues {
   if (Object.keys(context).some((key) => !['pageId', 'actionId', 'contextItems'].includes(key)))
     throw new Error('上下文仅支持可选的 pageId、actionId、contextItems。')
   return { pathParameters: debugKeyValueMap(value.pathParameters, '路径参数'), query: debugKeyValueMap(value.query, '查询参数'),
-    headers: debugStringMap(JSON.stringify(debugKeyValueMap(value.headers, 'Headers')), 'Headers'), context }
+    headers: debugStringMap(JSON.stringify(debugKeyValueMap(value.headers, '请求头')), '请求头'), context }
 }
 
 /** 单个请求字段按语法、平台 Header 边界和契约参数名校验，错误可直接出现在编辑器下方。 */
@@ -36,10 +36,10 @@ export function validateDebugField(endpoint: DebugEndpoint, key: keyof DebugRequ
     if (Object.keys(value).some((name) => !['pageId', 'actionId', 'contextItems'].includes(name))) throw new Error('上下文仅支持 pageId、actionId、contextItems。')
     return
   }
-  const value = debugKeyValueMap(rows as DebugKeyValueRow[], key === 'headers' ? 'Headers' : '参数')
+  const value = debugKeyValueMap(rows as DebugKeyValueRow[], key === 'headers' ? '请求头' : '参数')
   if (key === 'headers') {
-    debugStringMap(JSON.stringify(value), 'Headers')
-    if (endpoint.responseMode === 'ag-ui' && Object.keys(value).some((name) => name.toLowerCase() !== 'traceparent')) throw new Error('此流式接口可配置 traceparent，其他 Header 由平台管理。')
+    debugStringMap(JSON.stringify(value), '请求头')
+    if (endpoint.responseMode === 'ag-ui' && Object.keys(value).some((name) => name.toLowerCase() !== 'traceparent')) throw new Error('此流式接口可配置 traceparent，其他请求头由平台管理。')
     return
   }
   const names = key === 'pathParameters' ? [...endpoint.path.matchAll(/\{([^}:]+)(?::[^}]+)?\}/g)].map((match) => match[1])
@@ -84,19 +84,19 @@ export default function AgentDebugRequestEditor({ endpoint, value, onChange, dis
           <p>契约参数：{endpoint.parameters.filter((item) => item.in === 'query').map((item) => `${item.name}${item.required ? '（必填）' : ''}`).join('、')}。参数值使用字符串。</p></>
           : !endpoint.path.includes('{') && <div className="agent-debug-inline-empty">此接口没有路径或查询参数。</div>}
       </> },
-      { key: 'headers', label: 'Headers', children: <>{field('headers', 'Headers')}
+      { key: 'headers', label: '请求头', children: <>{field('headers', '请求头')}
         <p>{endpoint.responseMode === 'ag-ui' ? '可设置 traceparent；调试身份、Content-Type 和 Accept 由平台管理。'
-          : '可填写业务 Header；调试身份、Cookie、Content-Type 和 Accept 由平台管理。'}</p></> },
-      ...(json ? [{ key: 'body', label: 'Body', children:
+          : '可填写业务请求头；调试身份、Cookie、Content-Type 和 Accept 由平台管理。'}</p></> },
+      ...(json ? [{ key: 'body', label: '请求体', children:
           ['GET', 'HEAD'].includes(endpoint.method) ? <div className="agent-debug-inline-empty">此接口使用路径和查询参数，无请求体。</div>
             : <DebugJsonEditor label="JSON 请求体" value={body} disabled={disabled} schema={endpoint.requestSchema}
               onChange={onBodyChange} /> }]
-        : [{ key: 'body', label: 'Body', children: <><DebugJsonEditor label="JSON 请求体" compact objectOnly
+        : [{ key: 'body', label: '请求体', children: <><DebugJsonEditor label="JSON 请求体" compact objectOnly
           value={value.context} disabled={disabled} onChange={(context) => onChange({ ...value, context })}
           validate={() => validateDebugField(endpoint, 'context', value.context)} />
           <p>默认不携带页面。需要模拟页面来源时，可填写 pageId、actionId、contextItems。</p></> }]),
-      { key: 'schema', label: '接口契约', children: <><strong>业务输入 Schema</strong><pre>{JSON.stringify(endpoint.requestSchema, null, 2)}</pre>
-        <strong>业务结果 Schema</strong><pre>{JSON.stringify(endpoint.responseSchema, null, 2)}</pre></> }
+      { key: 'schema', label: '接口契约', children: <><strong>业务输入结构</strong><pre>{JSON.stringify(endpoint.requestSchema, null, 2)}</pre>
+        <strong>业务结果结构</strong><pre>{JSON.stringify(endpoint.responseSchema, null, 2)}</pre></> }
     ]} />
   </section>
 }

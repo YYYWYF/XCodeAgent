@@ -16,11 +16,11 @@ export default function AgentDebugResponse({ response, stream, loading }: { resp
     {http?.protocolMismatch && <Alert type="error" showIcon message="实际 Content-Type 与 JSON 契约不一致，请检查接口响应。" />}
     {!http && !stream?.events?.length ? <div className="agent-debug-response-empty" role="status">
       {loading && <Spin size="small" />}<strong>{loading ? '正在等待接口响应' : '等待接口响应'}</strong>
-      <p>{loading ? '收到响应后展示 HTTP 状态、正文和 Headers。' : '完成请求输入并发送后，结果会显示在这里。'}</p></div>
+      <p>{loading ? '收到响应后展示 HTTP 状态、响应体和响应头。' : '完成请求输入并发送后，结果会显示在这里。'}</p></div>
       : <Tabs size="small" items={[
-        { key: 'body', label: response ? 'Body' : '最终结果', children:
+        { key: 'body', label: response ? '响应体' : '最终结果', children:
           <pre>{response ? readableBody(response.body) : stream?.result == null ? '当前没有结构化业务结果' : JSON.stringify(stream.result, null, 2)}</pre> },
-        { key: 'headers', label: '响应 Headers', children: <pre>{JSON.stringify(http?.headers || {}, null, 2)}</pre> },
+        { key: 'headers', label: '响应头', children: <pre>{JSON.stringify(http?.headers || {}, null, 2)}</pre> },
         ...(stream ? [{ key: 'events', label: `执行事件 (${stream.events?.length || 0})`, children: <AgentDebugEvents events={stream.events} /> },
           { key: 'request', label: '请求详情', children: <pre>{JSON.stringify(stream.request || {}, null, 2)}</pre> }] : [])
       ]} />}
