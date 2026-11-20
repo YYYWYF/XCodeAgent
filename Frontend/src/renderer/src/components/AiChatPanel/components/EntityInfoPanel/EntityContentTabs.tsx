@@ -15,7 +15,7 @@ type Props = {
   children: ReactNode
 }
 
-/** 共用实体详情页签，模拟数据表独立懒加载并保留在途操作，DDL 离开后释放。 */
+/** 共用实体详情页签，模拟数据表保留在途操作，DDL 按工作区和实体隔离审阅状态。 */
 export default function EntityContentTabs({
   workspaceRoot,
   entityId,
@@ -25,6 +25,8 @@ export default function EntityContentTabs({
   children
 }: Props): ReactElement {
   const [activeKey, setActiveKey] = useState(initialTab === 'database' && useBuiltinDatabase ? 'database' : 'fields')
+  const [savedDdl, setSavedDdl] = useState<{ scope: string; draftId: string }>()
+  const scope = JSON.stringify([workspaceRoot, entityId])
   // 导航意图只定位页签；实际创建仍由原面板与确认弹窗控制。
   useEffect(() => { setActiveKey(initialTab === 'database' && useBuiltinDatabase ? 'database' : 'fields') }, [initialTab, useBuiltinDatabase, entityId])
 
@@ -52,7 +54,14 @@ export default function EntityContentTabs({
             </span>
           ),
           children: workspaceRoot ? (
-            <EntityTablePanel workspaceRoot={workspaceRoot} entityId={entityId} />
+            <EntityTablePanel
+              key={scope}
+              workspaceRoot={workspaceRoot}
+              entityId={entityId}
+              active={activeKey === 'database'}
+              confirmedDraftId={savedDdl?.scope === scope ? savedDdl.draftId : undefined}
+              onReviewDdl={() => setActiveKey('ddl')}
+            />
           ) : (
             <Typography.Text type="secondary">
               请先打开当前应用工作区，再管理模拟数据表。
@@ -68,7 +77,12 @@ export default function EntityContentTabs({
             </span>
           ),
           children: activeKey === 'ddl' ? (
-            <EntityDdlPreview workspaceRoot={workspaceRoot} entityId={entityId} />
+            <EntityDdlPreview
+              key={scope}
+              workspaceRoot={workspaceRoot}
+              entityId={entityId}
+              onConfirmed={(draftId) => setSavedDdl({ scope, draftId })}
+            />
           ) : null
         }
       ]}

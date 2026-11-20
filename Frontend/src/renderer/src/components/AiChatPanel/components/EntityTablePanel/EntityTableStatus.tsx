@@ -1,6 +1,7 @@
 import {
   CheckOutlined,
   ClockCircleOutlined,
+  CodeOutlined,
   ExclamationCircleOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
@@ -15,18 +16,18 @@ import { cx } from '../../../../utils'
 import type useEntityTable from './useEntityTable'
 
 type State = ReturnType<typeof useEntityTable>
-type Props = { state: State }
+type Props = { state: State; onReviewDdl: () => void }
 const TITLES = {
   SYNCED: '结构一致', NOT_CREATED: '尚未建表',
   STRUCTURE_MISMATCH: '发现结构差异', TABLE_CONFLICT: '表名冲突'
 }
 const DESCRIPTIONS = {
-  SYNCED: '数据表结构与当前字段设计一致', NOT_CREATED: '按当前字段设计创建数据表',
+  SYNCED: '数据表结构与已确认的 DDL 一致', NOT_CREATED: '按已确认的 DDL 创建数据表',
   STRUCTURE_MISMATCH: '数据表与当前设计不一致，请查看差异', TABLE_CONFLICT: '当前表名存在冲突，请核对后刷新结果'
 }
 
 /** 将已确认结构、运行中及未知结果投影到同一状态栏，明确区分受理与成功。 */
-export default function EntityTableStatus({ state }: Props): ReactElement {
+export default function EntityTableStatus({ state, onReviewDdl }: Props): ReactElement {
   const { data, busyAction, loading, error, issue, mustRefresh, autoRefreshScheduled } = state
   const [showDifferences, setShowDifferences] = useState(false)
   const preview = data?.preview
@@ -34,6 +35,7 @@ export default function EntityTableStatus({ state }: Props): ReactElement {
   const running = [data?.operation?.status, data?.receipt?.status, data?.readiness?.operationStatus].includes('RUNNING')
   const knownTable = table && ['SYNCED', 'STRUCTURE_MISMATCH'].includes(table.status)
   const canRebuild = Boolean(knownTable || issue?.action === 'rebuild')
+  const requiresDdl = issue?.action === 'review_ddl'
   let title = table ? TITLES[table.status] : '当前结构未检查'
   let description = table ? DESCRIPTIONS[table.status] : '请刷新结果，确认当前数据表状态'
   let tone = table?.status === 'SYNCED' ? 'success' : table?.status === 'NOT_CREATED' ? 'neutral' : 'warning'
@@ -47,6 +49,9 @@ export default function EntityTableStatus({ state }: Props): ReactElement {
     tone = 'warning'
   } else if (issue?.action === 'rebuild') {
     title = '发现结构差异'
+    description = issue.message
+  } else if (issue?.action === 'review_ddl') {
+    title = issue.title
     description = issue.message
   } else if (error) {
     title = '操作未完成'
@@ -66,9 +71,10 @@ export default function EntityTableStatus({ state }: Props): ReactElement {
           {table?.differences.length ? <Button type="text" disabled={loading} onClick={() => setShowDifferences((value) => !value)}>
             {showDifferences ? '收起差异' : '查看差异'}
           </Button> : null}
-          <Button disabled={loading} icon={<ReloadOutlined />} onClick={() => void state.runAction('refresh')}>刷新结果</Button>
-          {canRebuild ? <Button disabled={loading || mustRefresh} icon={<RetweetOutlined />} onClick={() => state.beginConfirmation('rebuild')}>重建表</Button> : null}
-          {!knownTable && !canRebuild && table?.status !== 'TABLE_CONFLICT' ? <Button
+          {requiresDdl ? <Button type="primary" icon={<CodeOutlined />} onClick={onReviewDdl}>去确认 DDL</Button> :
+            <Button disabled={loading} icon={<ReloadOutlined />} onClick={() => void state.runAction('refresh')}>刷新结果</Button>}
+          {!requiresDdl && canRebuild ? <Button disabled={loading || mustRefresh} icon={<RetweetOutlined />} onClick={() => state.beginConfirmation('rebuild')}>重建表</Button> : null}
+          {!requiresDdl && !knownTable && !canRebuild && table?.status !== 'TABLE_CONFLICT' ? <Button
             type="primary" icon={<PlayCircleOutlined />}
             disabled={loading || mustRefresh || !preview || table?.status !== 'NOT_CREATED'}
             onClick={() => state.beginConfirmation('execute')}

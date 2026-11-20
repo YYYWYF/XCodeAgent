@@ -12,13 +12,6 @@ export type EntityTablePreview = {
   tableName: string
   sql: string
   previewHash: string
-  columns: Array<{
-    name: string
-    type: string
-    nullable: boolean
-    comment: string
-    auto_increment?: boolean
-  }>
 }
 
 export type EntityDdlPreview = {
@@ -26,13 +19,26 @@ export type EntityDdlPreview = {
   entityName: string
   tableName: string
   sql: string
+  draftId: string
+  confirmationStatus: 'draft' | 'confirmed'
 }
+
+type EntityDdlCommand =
+  | { action: 'preview_ddl' }
+  | { action: 'revise_ddl'; draftId: string; feedback: string }
+  | { action: 'confirm_ddl'; draftId: string; confirmed: true }
+
+type EntityTableCommand =
+  | EntityDdlCommand
+  | { action: 'prepare' | 'refresh' }
+  | { action: 'execute'; previewHash?: string; confirmed: true }
+  | { action: 'rebuild'; previewHash?: string; confirmed: true; allowDataLoss: boolean }
 
 export type EntityTableIssue = {
   code: string
   title: string
   message: string
-  action: 'rebuild' | 'refresh'
+  action: 'rebuild' | 'refresh' | 'review_ddl'
 }
 
 /** 保留后端签发的明确业务提示，不根据错误文案判断能否重建。 */
@@ -86,9 +92,7 @@ function readPayload(value: unknown): EntityTablePayload | undefined {
 async function requestEntityTableAction(
   workspaceRoot: string,
   entityId: string,
-  action: 'preview_ddl' | 'prepare' | 'execute' | 'rebuild' | 'refresh',
-  previewHash?: string,
-  allowDataLoss = false
+  command: EntityTableCommand
 ): Promise<EntityTablePayload> {
   const base = window.devAgentStudio?.agentBaseUrl
   const url = base ? `${base.replace(/\/$/, '')}/entity-tables/run` : '/api/agent/entity-tables/run'
@@ -98,11 +102,13 @@ async function requestEntityTableAction(
     role: 'user',
     content: {
       preview_ddl: '查看实体建表 DDL。',
-      prepare: '生成实体建表 SQL。',
+      revise_ddl: '按修改意见重新生成实体建表 DDL。',
+      confirm_ddl: '确认保存本版实体建表 DDL。',
+      prepare: '读取已确认的实体建表 DDL。',
       execute: '确认执行当前实体建表 SQL。',
       rebuild: '确认清空该表数据并按当前 SQL 重建。',
       refresh: '刷新实体表结构及原操作结果。'
-    }[action]
+    }[command.action]
   })
   let payload: EntityTablePayload | undefined
   const subscriber: AgentSubscriber = {
@@ -119,9 +125,7 @@ async function requestEntityTableAction(
         entityTables: {
           workspaceRoot,
           entityId,
-          action,
-          ...(['execute', 'rebuild'].includes(action) ? { previewHash, confirmed: true } : {}),
-          ...(action === 'rebuild' ? { allowDataLoss } : {})
+          ...command
         }
       }
     },
@@ -143,23 +147,24 @@ export async function requestEntityTable(
   previewHash?: string,
   allowDataLoss = false
 ): Promise<EntityTablePayload> {
-  const payload = await requestEntityTableAction(
-    workspaceRoot,
-    entityId,
-    action,
-    previewHash,
-    allowDataLoss
-  )
+  const command: EntityTableCommand =
+    action === 'rebuild'
+      ? { action, previewHash, confirmed: true, allowDataLoss }
+      : action === 'execute'
+        ? { action, previewHash, confirmed: true }
+        : { action }
+  const payload = await requestEntityTableAction(workspaceRoot, entityId, command)
   if (!payload.preview) throw new Error('实体建表接口未返回当前 SQL。')
   return payload
 }
 
-/** 只读取当前实体的确定性 DDL，不提交建表、注册或结构检查动作。 */
-export async function requestEntityDdlPreview(
+/** 加载、按意见修订或明确确认当前实体 DDL，核对返回的审阅版本。 */
+export async function requestEntityDdl(
   workspaceRoot: string,
-  entityId: string
+  entityId: string,
+  command: EntityDdlCommand = { action: 'preview_ddl' }
 ): Promise<EntityDdlPreview> {
-  const payload = await requestEntityTableAction(workspaceRoot, entityId, 'preview_ddl')
+  const payload = await requestEntityTableAction(workspaceRoot, entityId, command)
   const preview = payload.ddlPreview
   if (
     !preview ||
@@ -167,7 +172,14 @@ export async function requestEntityDdlPreview(
     typeof preview.sql !== 'string' ||
     !preview.sql.trim() ||
     typeof preview.tableName !== 'string' ||
-    !preview.tableName.trim()
+    !preview.tableName.trim() ||
+    typeof preview.draftId !== 'string' ||
+    !/^[0-9a-f]{32}$/.test(preview.draftId) ||
+    !['draft', 'confirmed'].includes(preview.confirmationStatus) ||
+    (command.action === 'revise_ddl' &&
+      (preview.confirmationStatus !== 'draft' || preview.draftId === command.draftId)) ||
+    (command.action === 'confirm_ddl' &&
+      (preview.confirmationStatus !== 'confirmed' || preview.draftId !== command.draftId))
   ) {
     throw new Error('实体接口未返回完整的建表 DDL。')
   }

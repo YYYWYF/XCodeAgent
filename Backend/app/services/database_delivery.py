@@ -17,8 +17,8 @@ from app.services.authorization_manifest import SYSTEM_RESOURCE_KEY
 from app.services.authorization_table_projection import compile_authorization_tables
 from app.services.authorization_workspace_projector import RUNTIME, read_record, verify_projection
 from app.services.builtin_authorization_state import builtin_binding, schema_ready
+from app.services.entity_ddl import require_confirmed_entity_ddl
 from app.services.entity_table_binding import bind_plan_entity_tables
-from app.services.entity_table_sql import compile_entity_table
 from app.services.git_branch import validate_branch_name
 from app.workspace.endpoint_design_documents import technical_plan_path
 
@@ -112,8 +112,8 @@ def _write_files(contents: dict[Path, bytes]) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def _current_tables(application: dict, plan: dict) -> list[DeliveryTable]:
-    """只编译已确认且固定表名的完整实体清单，不读取 SaaS 或真实数据库。"""
+def _current_tables(root: Path, application: dict, plan: dict, plan_digest: str) -> list[DeliveryTable]:
+    """从当前规划版本读取各实体的正式 SQL，不读取 SaaS 或真实数据库。"""
 
     if not isinstance(plan, dict) or plan.get("artifact_type") != "technical-plan" \
             or plan.get("confirmation_status") != "confirmed":
@@ -125,8 +125,8 @@ def _current_tables(application: dict, plan: dict) -> list[DeliveryTable]:
         raise ValueError("实体尚未固定完整表名，请重新确认技术规划。")
     tables = []
     for entity in entities:
-        table = compile_entity_table(entity)
-        tables.append(DeliveryTable(name=table["name"], comment=table["comment"], columns=table["columns"]))
+        ddl = require_confirmed_entity_ddl(root, entity, plan_digest)
+        tables.append(DeliveryTable(name=ddl.table_name, sql=ddl.sql))
     if len({table.name for table in tables}) != len(tables):
         raise ValueError("当前实体包含重复表名，不能生成交付脚本。")
     return sorted(tables, key=lambda table: table.name)
@@ -196,7 +196,8 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
         plan_path = _safe_path(root, str(technical_plan_path(root).relative_to(root)))
         original_plan = plan_path.read_bytes()
         plan = json.loads(original_plan)
-        tables = _current_tables(application, plan)
+        plan_digest = _digest(original_plan)
+        tables = _current_tables(root, application, plan, plan_digest)
         authorization_schema = _current_authorization_schema(root, application, plan, tables)
         history_path = _safe_path(root, str(WORKSPACE_ARTIFACT_DIR), _HISTORY_NAME)
         original_history = history_path.read_bytes() if history_path.exists() else None
@@ -243,6 +244,8 @@ def export_database_scripts(workspace: str | Path) -> list[str]:
         if application_path.read_bytes() != original_application or plan_path.read_bytes() != original_plan \
                 or (history_path.read_bytes() if history_path.exists() else None) != original_history:
             raise ValueError("交付期间应用配置、实体设计或基线发生变化，请重新交付。")
+        if _current_tables(root, application, plan, plan_digest) != tables:
+            raise ValueError("交付期间已确认的实体 DDL 发生变化，请重新交付。")
         if authorization_schema is not None:
             # SQL、受管文件或初始化状态在准备期间改变时，不能提交过期核验结果。
             if _current_authorization_schema(root, application, plan, tables) != authorization_schema:

@@ -1,4 +1,3 @@
-import { KeyOutlined } from '@ant-design/icons'
 import { Table, Tag } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { ReactElement } from 'react'
@@ -8,13 +7,8 @@ import type { EntityTableColumn } from './useEntityTable'
 const COLUMNS: ColumnsType<EntityTableColumn> = [
   {
     title: '字段名称', width: '24%', key: 'description',
-    // 实际字段备注优先展示，主键通过图标标记，缺省说明时使用字段名。
-    render: (_, column) => (
-      <span className={cx('entity-table-column-label')}>
-        {column.primaryKey ? <KeyOutlined aria-label="主键" /> : null}
-        {column.description || column.name}
-      </span>
-    )
+    // 展示实际字段备注，缺省时使用字段名。
+    render: (_, column) => column.description || column.name
   },
   {
     title: '字段标识', dataIndex: 'name', width: '32%',

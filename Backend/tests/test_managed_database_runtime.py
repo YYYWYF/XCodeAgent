@@ -22,6 +22,7 @@ from app.services.managed_database_runtime import (
 from app.services.preview_runtime_repair import prepare_repair
 from app.services.preview_runtime_state import begin_attempt, record_database_check, runtime_snapshot
 from app.services.runtime_log_redaction import attach_redacted_logs
+from tests.entity_ddl_fixture import save_fixture_ddl
 from tests.managed_database_http_fixture import saas_success
 
 
@@ -50,6 +51,7 @@ class ManagedDatabaseRuntimeTests(unittest.TestCase):
         }]}
         self.plan_path = folder / "plans/technical-plan.json"
         self.plan_path.write_text(json.dumps(self.plan))
+        self.sql = save_fixture_ddl(self.root, self.plan["entities"][0], ["`amount` DECIMAL(16,2) NOT NULL COMMENT '金额'"])
         self.ready = {"ready": True, "datasourceId": 2, "reason": None, "operationId": None, "operationStatus": None,
                       "tables": [{"tableName": "12ab34cd56ef_order", "status": "SYNCED", "differences": []}]}
         self.connection = {"datasourceKey": "12ab34cd56ef", "datasourceId": 2, "host": "db.invalid", "port": 3306,
@@ -73,6 +75,7 @@ class ManagedDatabaseRuntimeTests(unittest.TestCase):
             sqls = json.loads(request.content)["sqls"]
             self.assertEqual(len(sqls), len(self.plan["entities"]))
             self.assertIn("CREATE TABLE `12ab34cd56ef_order`", sqls[0])
+            self.assertEqual(sqls[0], self.sql)
             return saas_success(200, self.ready)
         self.assertTrue(request.url.path.endswith("/runtime-connection"))
         self.assertEqual(request.method, "GET")
@@ -240,6 +243,8 @@ class ManagedDatabaseRuntimeTests(unittest.TestCase):
         self.plan["entities"].append({**self.plan["entities"][0], "id": "OrderItem", "name": "订单明细",
                                       "table_name": "12ab34cd56ef_order_item"})
         self.plan_path.write_text(json.dumps(self.plan))
+        for entity in self.plan["entities"]:
+            save_fixture_ddl(self.root, entity, ["`amount` DECIMAL(16,2) NOT NULL COMMENT '金额'"])
         self.ready.update(ready=False, tables=[
             {"tableName": "12ab34cd56ef_order_item", "status": "NOT_CREATED", "differences": []},
             {"tableName": "12ab34cd56ef_order", "status": "STRUCTURE_MISMATCH", "differences": [

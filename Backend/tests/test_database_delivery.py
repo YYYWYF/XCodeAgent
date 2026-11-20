@@ -13,6 +13,7 @@ from app.services.database_delivery import export_database_scripts
 from app.services.database_delivery_sql import full_delivery_sql, full_schema_sql, incremental_delivery_sql, incremental_schema_sql
 from app.domain.database_delivery import DatabaseDeliveries
 from app.services.entity_tables import prepare_entity_table
+from tests.entity_ddl_fixture import save_fixture_ddl
 
 
 class DatabaseDeliveryTests(unittest.TestCase):
@@ -45,6 +46,21 @@ class DatabaseDeliveryTests(unittest.TestCase):
 
         (self.root / ".devagentstudio/application.json").write_text(json.dumps(self.application), encoding="utf-8")
         (self.root / ".devagentstudio/plans/technical-plan.json").write_text(json.dumps(self.plan), encoding="utf-8")
+        if self.plan["confirmation_status"] != "confirmed":
+            return
+        types = {"decimal": "DECIMAL(16,2)", "text": "VARCHAR(128)", "number": "INT",
+                 "enum": "VARCHAR(2)", "long_text": "VARCHAR(512)", "datetime": "TIMESTAMP"}
+        for entity in self.plan["entities"]:
+            definitions = []
+            for field in entity["fields"]:
+                name = field["name"]
+                null = "NOT NULL" if field["required"] else "NULL"
+                default = " DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP" if name == "updated_at" else ""
+                definitions.append(f"`{name}` {types[field['type']]} {null}{default} COMMENT '{field['label']}'")
+            if any(field["name"] == "code" for field in entity["fields"]):
+                definitions.extend(["PRIMARY KEY (`code`)", "KEY `idx_amount` (`amount`)"])
+            comment = entity["description"].replace("'", "''")
+            save_fixture_ddl(self.root, entity, definitions, comment=comment)
 
     def script(self, branch: str, name: str) -> Path:
         """定位当前测试工程的版本脚本。"""
@@ -80,16 +96,23 @@ class DatabaseDeliveryTests(unittest.TestCase):
         entity = self.plan["entities"][0]
         entity["description"] = "订单新说明"
         entity["fields"] = [{"name": "amount", "label": "金额", "type": "number", "required": False},
-                            {"name": "status", "label": "状态", "type": "enum", "required": True}]
+                            {"name": "status", "label": "状态", "type": "enum", "required": True},
+                            {"name": "code", "label": "订单编码（唯一标识）", "type": "text", "required": True},
+                            {"name": "updated_at", "label": "更新时间", "type": "datetime", "required": True}]
         self.plan["entities"].append({"id": "OrderItem", "name": "明细", "description": "订单明细",
-                                      "table_name": "12ab34cd56ef_order_item", "fields": []})
+                                      "table_name": "12ab34cd56ef_order_item", "fields": [
+                                          {"name": "amount", "label": "金额", "type": "decimal", "required": True},
+                                      ]})
         self.next_version()
         export_database_scripts(self.root)
         alter = self.script("v1_1", "alter.sql").read_text()
         self.assertIn("CREATE TABLE `12ab34cd56ef_order_item`", alter)
         self.assertIn("DROP COLUMN `note`", alter)
-        self.assertIn("MODIFY COLUMN `amount` BIGINT NULL", alter)
-        self.assertIn("ADD COLUMN `status` VARCHAR(32) NOT NULL", alter)
+        self.assertIn("MODIFY COLUMN `amount` INT NULL", alter)
+        self.assertIn("ADD COLUMN `status` VARCHAR(2) NOT NULL", alter)
+        self.assertIn("ADD COLUMN `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP", alter)
+        self.assertIn("ADD PRIMARY KEY (`code`)", alter)
+        self.assertIn("ADD KEY `idx_amount` (`amount`)", alter)
         self.assertIn("COMMENT='订单新说明'", alter)
         self.assertNotIn("DROP TABLE `12ab34cd56ef_order`", alter)
         self.assertEqual(self.script("v1_0", "create.sql").read_bytes(), original)
@@ -99,13 +122,13 @@ class DatabaseDeliveryTests(unittest.TestCase):
         """同版再次交付仍相对上一版生成累计增量，不能把刚生成的当前版当基线。"""
 
         export_database_scripts(self.root)
-        self.plan["entities"][0]["fields"].append({"name": "status", "label": "状态", "type": "enum"})
+        self.plan["entities"][0]["fields"].append({"name": "status", "label": "状态", "type": "enum", "required": False})
         self.next_version()
         export_database_scripts(self.root)
         first = self.script("v1_1", "alter.sql").read_bytes()
         export_database_scripts(self.root)
         self.assertEqual(self.script("v1_1", "alter.sql").read_bytes(), first)
-        self.plan["entities"][0]["fields"].append({"name": "reason", "label": "事由", "type": "long_text"})
+        self.plan["entities"][0]["fields"].append({"name": "reason", "label": "事由", "type": "long_text", "required": False})
         self.write_inputs()
         export_database_scripts(self.root)
         alter = self.script("v1_1", "alter.sql").read_text()
@@ -128,7 +151,7 @@ class DatabaseDeliveryTests(unittest.TestCase):
 
         export_database_scripts(self.root)
         previous = DatabaseDeliveries.model_validate_json(self.history.read_bytes()).versions[0]
-        self.plan["entities"][0]["fields"].append({"name": "status", "label": "状态", "type": "enum"})
+        self.plan["entities"][0]["fields"].append({"name": "status", "label": "状态", "type": "enum", "required": False})
         self.next_version()
         export_database_scripts(self.root)
         current = DatabaseDeliveries.model_validate_json(self.history.read_bytes()).versions[-1]
@@ -157,7 +180,7 @@ class DatabaseDeliveryTests(unittest.TestCase):
         export_database_scripts(self.root)
         alter = self.script("v1_1", "alter.sql").read_text()
         self.assertIn("MODIFY COLUMN `note`", alter)
-        self.assertIn("AFTER `id`", alter)
+        self.assertIn("COMMENT '备注' FIRST", alter)
         self.assertNotIn("DROP COLUMN", alter)
 
     def test_no_guessing_or_overwriting_when_baseline_is_missing_or_changed(self) -> None:

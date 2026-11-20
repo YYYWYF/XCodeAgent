@@ -15,6 +15,7 @@ from app.protocols.entity_tables import build_entity_tables_stream
 from app.services.entity_tables import prepare_entity_table, run_entity_table_action
 from app.services.managed_database_client import ManagedDatabaseRegistrationError
 from app.services.managed_database_client import ManagedDatabaseClient
+from tests.entity_ddl_fixture import save_fixture_ddl
 from tests.managed_database_http_fixture import saas_success
 
 
@@ -41,9 +42,11 @@ class EntityTableTests(unittest.TestCase):
         self.plan = {
             "artifact_type": "technical-plan", "confirmation_status": "confirmed",
             "entities": [{"id": "Order", "name": "订单'表", "table_name": "12ab34cd56ef_order",
-                          "fields": [{"name": "amount", "label": "金额", "type": "decimal", "required": True}]}],
+                          "fields": [{"name": "code", "label": "订单编码（唯一标识）", "type": "text", "required": True},
+                                     {"name": "amount", "label": "金额", "type": "decimal", "required": True}]}],
         }
         self.write_inputs()
+        self.sql = self.confirm_ddl()
         self.calls: list[httpx.Request] = []
 
     def write_inputs(self) -> None:
@@ -58,6 +61,17 @@ class EntityTableTests(unittest.TestCase):
         return EntityTableRequest.model_validate({"workspaceRoot": str(self.workspace),
                                                   "entityId": "Order", "action": action, **extra})
 
+    def confirm_ddl(self) -> str:
+        """保存当前订单测试的明确列定义与单列业务主键。"""
+
+        entity = self.plan["entities"][0]
+        nullable = "NOT NULL" if entity["fields"][1]["required"] else "NULL"
+        return save_fixture_ddl(self.workspace, entity, [
+            "`code` VARCHAR(64) NOT NULL COMMENT '订单编码'",
+            f"`amount` DECIMAL(16,2) {nullable} COMMENT '金额'",
+            "PRIMARY KEY (`code`)",
+        ], comment="订单''表")
+
     def client(self, handler) -> ManagedDatabaseClient:
         """配置固定假密钥和传输替身，不访问网络。"""
 
@@ -71,8 +85,10 @@ class EntityTableTests(unittest.TestCase):
         result = run_entity_table_action(self.request())
         sql = result["preview"]["sql"]
         self.assertIn("CREATE TABLE `12ab34cd56ef_order`", sql)
-        self.assertIn("`amount` DECIMAL(12,2) NOT NULL", sql)
-        self.assertIn("PRIMARY KEY (`id`)", sql)
+        self.assertEqual(sql, self.sql)
+        self.assertIn("`amount` DECIMAL(16,2) NOT NULL", sql)
+        self.assertIn("PRIMARY KEY (`code`)", sql)
+        self.assertNotIn("AUTO_INCREMENT", sql)
         self.assertTrue(sql.endswith("ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='订单''表';"))
         self.assertNotIn("IF NOT EXISTS", sql)
         self.assertNotIn("test-service-key", json.dumps(result))
@@ -89,8 +105,11 @@ class EntityTableTests(unittest.TestCase):
         preview = prepare_entity_table(self.request())
         with self.assertRaisesRegex(ValueError, "明确确认"):
             run_entity_table_action(self.request("execute", previewHash=preview["previewHash"]), client=client)
-        self.plan["entities"][0]["fields"][0]["required"] = False
+        self.plan["entities"][0]["fields"][1]["required"] = False
         self.write_inputs()
+        with self.assertRaisesRegex(ValueError, "确认并保存当前版本"):
+            run_entity_table_action(self.request("execute", confirmed=True, previewHash=preview["previewHash"]), client=client)
+        self.confirm_ddl()
         with self.assertRaisesRegex(ValueError, "设计变化"):
             run_entity_table_action(self.request("execute", confirmed=True, previewHash=preview["previewHash"]), client=client)
         self.assertEqual(self.calls, [])
@@ -163,8 +182,8 @@ class EntityTableTests(unittest.TestCase):
                 run_entity_table_action(request, client=self.client(handler))
         self.assertEqual(len(self.calls), 1)
 
-    def test_explicit_id_uses_one_implicit_primary_key_without_renaming(self) -> None:
-        """正常规划中的 id 复用隐式主键，不报重复或按展示标签新增列。"""
+    def test_explicit_id_remains_a_business_column(self) -> None:
+        """显式 id 保留用户确认的类型，缺少唯一标识时不变成主键。"""
 
         for label in ["申请ID", "申请编号", "Application ID"]:
             with self.subTest(label=label):
@@ -174,11 +193,13 @@ class EntityTableTests(unittest.TestCase):
                 ]
                 self.write_inputs()
                 before = self.plan_path.read_text()
+                sql = save_fixture_ddl(self.workspace, self.plan["entities"][0], [
+                    "`id` VARCHAR(64) NOT NULL COMMENT '申请编号'",
+                    "`amount` DECIMAL(16,2) NOT NULL COMMENT '金额'",
+                ])
                 preview = prepare_entity_table(self.request())
-                self.assertEqual([column["name"] for column in preview["columns"]], ["id", "amount"])
-                self.assertEqual(preview["columns"][0]["type"], "BIGINT")
-                self.assertTrue(preview["columns"][0]["auto_increment"])
-                self.assertEqual(preview["sql"].count("`id` BIGINT"), 1)
+                self.assertEqual(preview["sql"], sql)
+                self.assertNotIn("PRIMARY KEY", preview["sql"])
                 self.assertEqual(self.plan_path.read_text(), before)
 
     def test_real_duplicate_id_and_business_field_remain_rejected(self) -> None:
@@ -187,11 +208,11 @@ class EntityTableTests(unittest.TestCase):
         for name in ["id", "amount"]:
             with self.subTest(name=name):
                 self.plan["entities"][0]["fields"] = [
-                    {"name": name, "label": "字段一", "type": "number"},
-                    {"name": name, "label": "字段二", "type": "number"},
+                    {"name": name, "label": "字段一", "type": "number", "required": True},
+                    {"name": name, "label": "字段二", "type": "number", "required": True},
                 ]
                 self.write_inputs()
-                with self.assertRaisesRegex(ValueError, f"无效或重复字段 `{name}`"):
+                with self.assertRaisesRegex(ValueError, "无效或重复字段"):
                     prepare_entity_table(self.request())
 
     def test_draft_unbound_or_foreign_prefix_is_rejected(self) -> None:
@@ -222,7 +243,7 @@ class EntityTableTests(unittest.TestCase):
                     "tableNames": ["12ab34cd56ef_order"], "createdAt": "2026-10-15T02:00:00Z",
                     "mode": "CREATE", "status": "SUCCEEDED", "executionResult": {"steps": [], "recoveryState": "NOT_REQUESTED"}}])
             self.assertTrue(request.url.path.endswith("/tables/check"))
-            self.assertEqual(len(json.loads(request.content)["sqls"]), 1)
+            self.assertEqual(json.loads(request.content)["sqls"], [self.sql])
             return saas_success(200, {"ready": False, "datasourceId": 2, "tables": [{
                 "tableName": "12ab34cd56ef_order", "status": "STRUCTURE_MISMATCH", "differences": [{
                     "category": "COLUMN", "target": "amount", "expected": "DECIMAL(12,2)", "actual": "BIGINT"}]}]})
@@ -339,10 +360,12 @@ class EntityTableTests(unittest.TestCase):
             "action": "prepare", "workspaceRoot": str(self.workspace), "entityId": "Order"}}}
         with patch("app.services.preview_runtime_guard.record_product_interaction"):
             success = asyncio.run(collect(payload))
-            payload["forwardedProps"]["entityTables"]["action"] = "execute"
+            self.plan["entities"][0]["name"] = "新订单"
+            self.write_inputs()
             failure = asyncio.run(collect(payload))
         for output in [success, failure]:
             for event in ["RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_END", "STATE_SNAPSHOT", "RUN_FINISHED", "entity-tables"]:
                 self.assertIn(event, output)
         self.assertIn('"status":"completed"', success)
         self.assertIn('"status":"failed"', failure)
+        self.assertIn('"action":"review_ddl"', failure)

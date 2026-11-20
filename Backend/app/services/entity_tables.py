@@ -1,4 +1,4 @@
-"""从已确认技术规划生成 SQL，并代理 SaaS 单表创建与检查。"""
+"""使用已确认的实体 DDL，代理 SaaS 单表创建与检查。"""
 
 from __future__ import annotations
 
@@ -14,17 +14,17 @@ from app.domain.entity_tables import EntityTableRequest, OperationReceipt, Table
 from app.domain.managed_database_operations import parse_database_operations
 from app.domain.managed_database import ManagedDatabaseRegistration
 from app.services.application_config.repository import ApplicationConfigRepository
-from app.services.entity_table_sql import compile_entity_table, create_table_sql
-from app.services.entity_ddl import preview_entity_ddl
+from app.services.entity_ddl import require_confirmed_entity_ddl, run_entity_ddl_action
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.managed_database_client import ManagedDatabaseClient
 from app.services.backend_process_registry import backend_launch_lock
 from app.services.project_launcher import inspect_project_preview
 from app.workspace.endpoint_design_documents import technical_plan_path
+from app.workspace.entity_ddl_documents import require_ddl_plan_version
 
 
 def prepare_entity_table(request: EntityTableRequest) -> dict[str, Any]:
-    """读取当前权威配置和已确认规划，生成完整真实表名及稳定 SQL 指纹。"""
+    """读取当前正式 DDL 和注册绑定，签发应用于本次建表确认的指纹。"""
 
     application = ApplicationConfigRepository(request.workspace_root).load()
     datasource = application.get("datasource") or {}
@@ -33,10 +33,15 @@ def prepare_entity_table(request: EntityTableRequest) -> dict[str, Any]:
     binding = ManagedDatabaseRegistration.model_validate(application.get("managedDatabase") or {})
     if binding.status != "REGISTERED":
         raise ValueError("模拟数据库尚未注册成功。")
+    workspace = Path(request.workspace_root).expanduser().resolve()
+    plan_path = technical_plan_path(workspace).resolve()
+    if not plan_path.is_relative_to(workspace):
+        raise ValueError("技术规划路径超出当前工作区。")
     try:
-        plan = json.loads(technical_plan_path(request.workspace_root).read_text(encoding="utf-8"))
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes.decode("utf-8"))
     except (OSError, ValueError):
-        raise ValueError("请先完成并确认技术规划，再生成实体建表 SQL。") from None
+        raise ValueError("请先完成并确认技术规划，再使用实体建表 DDL。") from None
     if not isinstance(plan, dict) or plan.get("artifact_type") != "technical-plan" or plan.get("confirmation_status") != "confirmed":
         raise ValueError("技术规划尚未确认，不能执行实体建表。")
     # 只校验已确认产物的绑定，不能在这里给旧产物补前缀或静默迁移。
@@ -47,15 +52,16 @@ def prepare_entity_table(request: EntityTableRequest) -> dict[str, Any]:
     if len(matches) != 1:
         raise ValueError("当前技术规划中不存在唯一的目标实体。")
     entity = matches[0]
-    table = compile_entity_table(entity)
-    sql = create_table_sql(table)
+    plan_digest = hashlib.sha256(plan_bytes).hexdigest()
+    ddl = require_confirmed_entity_ddl(workspace, entity, plan_digest)
+    require_ddl_plan_version(plan_path, plan_digest)
     # 把应用绑定与完整当前规划纳入确认指纹，上游变更后旧确认不能执行。
-    fingerprint = json.dumps({"plan": plan, "binding": binding.model_dump(), "sql": sql},
+    fingerprint = json.dumps({"ddl": ddl.model_dump(), "binding": binding.model_dump()},
                              ensure_ascii=False, sort_keys=True).encode()
     return {
         "entityId": request.entity_id, "entityName": entity.get("name") or request.entity_id,
         "datasourceKey": binding.datasource_key, "datasourceId": binding.datasource_id,
-        "tableName": table["name"], "columns": table["columns"], "sql": sql,
+        "tableName": ddl.table_name, "sql": ddl.sql,
         "previewHash": hashlib.sha256(fingerprint).hexdigest(),
     }
 
@@ -63,9 +69,9 @@ def prepare_entity_table(request: EntityTableRequest) -> dict[str, Any]:
 def run_entity_table_action(request: EntityTableRequest, *, client: ManagedDatabaseClient | None = None) -> dict[str, Any]:
     """执行一次明确动作；查询只读，不自动重试、轮询或创建远端资源。"""
 
-    # 普通实体只读查看 DDL，不进入模拟数据库配置校验，也不创建远端客户端。
-    if request.action == "preview_ddl":
-        return {"action": request.action, "ddlPreview": preview_entity_ddl(request.workspace_root, request.entity_id)}
+    # DDL 审阅和保存是本地动作，不进入模拟数据库配置校验或执行。
+    if request.action in {"preview_ddl", "revise_ddl", "confirm_ddl"}:
+        return {"action": request.action, "ddlPreview": run_entity_ddl_action(request)}
     preview = prepare_entity_table(request)
     result: dict[str, Any] = {"action": request.action, "preview": preview}
     if request.action == "prepare":

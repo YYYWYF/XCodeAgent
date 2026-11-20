@@ -19,6 +19,7 @@ from app.services.database_delivery import export_database_scripts
 from app.services.builtin_authorization_bootstrap import refresh_builtin_authorization, run_builtin_authorization_bootstrap
 from app.services.managed_database_client import ManagedDatabaseClient
 from tests.authorization_delivery_fixture import install_authorization
+from tests.entity_ddl_fixture import save_fixture_ddl
 from tests.managed_database_http_fixture import saas_success
 
 
@@ -39,7 +40,9 @@ class AuthorizationDeliveryTests(unittest.TestCase):
             "datasource": {"type": "database", "db": {"useBuiltin": True}},
             "managedDatabase": {"status": "REGISTERED", "datasourceKey": "12ab34cd56ef", "datasourceId": 1}}
         self.plan = {"artifact_type": "technical-plan", "confirmation_status": "confirmed", "entities": [
-            {"id": "Order", "name": "订单", "description": "订单", "table_name": "12ab34cd56ef_order", "fields": []}]}
+            {"id": "Order", "name": "订单", "description": "订单", "table_name": "12ab34cd56ef_order", "fields": [
+                {"name": "code", "type": "text", "required": True},
+            ]}]}
         self.history = self.root / ".devagentstudio/database-deliveries.json"
         self.guards = []
         for target in ("app.services.managed_database_client.ManagedDatabaseClient._http_client",
@@ -65,6 +68,11 @@ class AuthorizationDeliveryTests(unittest.TestCase):
             self.application["authorization"]["api"] = {"baseUrl": "", "viewId": ""}
         (self.root / ".devagentstudio/application.json").write_text(json.dumps(self.application), encoding="utf-8")
         (self.root / ".devagentstudio/plans/technical-plan.json").write_text(json.dumps(self.plan), encoding="utf-8")
+        for entity in self.plan["entities"]:
+            definitions = ["`code` VARCHAR(64) NOT NULL COMMENT '订单编码'"]
+            if any(field["name"] == "note" for field in entity["fields"]):
+                definitions.append("`note` VARCHAR(128) NULL COMMENT '备注'")
+            save_fixture_ddl(self.root, entity, definitions, comment="订单")
 
     def enable(self) -> dict:
         """准备带精确来源与 Schema 成功事实的权限模板。"""
@@ -266,7 +274,7 @@ class AuthorizationDeliveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "已被修改"):
             export_database_scripts(self.root)
         self.script("v2").write_bytes(before[self.script("v2")])
-        self.plan["entities"][0]["fields"].append({"name": "note", "type": "text"})
+        self.plan["entities"][0]["fields"].append({"name": "note", "type": "text", "required": False})
         self.write_inputs()
         replace = os.replace
         failed = False

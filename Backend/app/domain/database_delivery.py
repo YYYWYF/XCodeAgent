@@ -5,37 +5,21 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.services.authorization_table_projection import fingerprint, sql_tokens, table_mapping
-
-
-class DeliveryColumn(BaseModel):
-    """保存当前实体编译器支持的列定义，未知类型不能进入增量脚本。"""
-
-    model_config = ConfigDict(extra="forbid", strict=True)
-    name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    type: Literal["BIGINT", "VARCHAR(255)", "TEXT", "DECIMAL(12,2)", "DATE", "DATETIME", "VARCHAR(32)", "TINYINT(1)"]
-    nullable: bool
-    default: None = None
-    comment: str
-    auto_increment: bool = False
+from app.services.entity_ddl_validation import parse_entity_ddl
 
 
 class DeliveryTable(BaseModel):
-    """保存带前缀的完整表结构，主键始终沿用实体建表合同。"""
+    """保存用户确认并已交付的完整业务表 DDL，作为下次增量的基线。"""
 
     model_config = ConfigDict(extra="forbid", strict=True)
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9_]{0,63}$")
-    comment: str
-    columns: list[DeliveryColumn] = Field(min_length=1)
+    sql: str = Field(min_length=1, max_length=65536)
 
     @model_validator(mode="after")
-    def validate_columns(self) -> "DeliveryTable":
-        """拒绝重复列和被改写的主键，防止损坏快照被当作空基线。"""
+    def validate_sql(self) -> "DeliveryTable":
+        """已交付快照只能包含与表名对应的单条业务表建表语句。"""
 
-        names = [column.name for column in self.columns]
-        primary = self.columns[0]
-        if len(names) != len(set(names)) or primary.name != "id" or primary.type != "BIGINT" \
-                or primary.nullable or not primary.auto_increment or any(c.auto_increment for c in self.columns[1:]):
-            raise ValueError("数据库交付快照的字段或主键无效。")
+        parse_entity_ddl(self.sql, self.name)
         return self
 
 

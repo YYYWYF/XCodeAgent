@@ -9,7 +9,9 @@ export type EntityTableColumn = NonNullable<ApiDesignDatabaseMetadata['columns']
 export type EntityTableAction = 'prepare' | 'execute' | 'rebuild' | 'refresh'
 
 /** 管理实体建表、明确确认与只读检查，字段仅来自已存在表的实时元数据。 */
-export default function useEntityTable(workspaceRoot: string, entityId: string) {
+export default function useEntityTable(
+  workspaceRoot: string, entityId: string, visible: boolean, confirmedDraftId?: string
+) {
   const [data, setData] = useState<EntityTablePayload>()
   const [columns, setColumns] = useState<EntityTableColumn[]>([])
   const [columnsError, setColumnsError] = useState('')
@@ -25,10 +27,11 @@ export default function useEntityTable(workspaceRoot: string, entityId: string) 
   const generation = useRef(0)
   const autoRefreshTimer = useRef<number>()
   const notifiedOperation = useRef<string>()
+  const checkedDraftId = useRef(confirmedDraftId)
 
   useEffect(() => {
     active.current = true
-    // 页签首次打开只生成设计并读取实际状态，不提交任何建表动作。
+    // 页签首次打开只读取正式 DDL 和实际状态，不提交任何建表动作。
     void runAction('prepare')
     return () => {
       active.current = false
@@ -37,6 +40,13 @@ export default function useEntityTable(workspaceRoot: string, entityId: string) 
       cancelAutoRefresh()
     }
   }, [])
+
+  // 在 DDL 页签确认后，回到数据表时只读刷新正式设计及实际结构。
+  useEffect(() => {
+    if (!visible || busyAction || !confirmedDraftId || checkedDraftId.current === confirmedDraftId) return
+    checkedDraftId.current = confirmedDraftId
+    void runAction('prepare')
+  }, [visible, busyAction, confirmedDraftId])
 
   /** 清理单次查询定时器，切换页签保留组件，切换实体或卸载后停止更新。 */
   function cancelAutoRefresh(): void {
@@ -97,7 +107,7 @@ export default function useEntityTable(workspaceRoot: string, entityId: string) 
         }
         const preview = result.preview
         const table = result.readiness?.tables.find((item) => item.tableName === preview?.tableName)
-        // 未建表、归属冲突或结果未知时不查询字段，不能用 preview.columns 冒充实际列。
+        // 未建表、归属冲突或结果未知时不查询字段。
         if (preview && !unsettled && table && ['SYNCED', 'STRUCTURE_MISMATCH'].includes(table.status)) {
           try {
             const metadata = await requestApiDesignDatabaseColumns(
@@ -119,6 +129,10 @@ export default function useEntityTable(workspaceRoot: string, entityId: string) 
         setError(caught instanceof Error ? caught.message : '实体建表操作失败。')
         if (caught instanceof EntityTableActionError) {
           setIssue(caught.issue)
+          if (caught.issue.action === 'review_ddl') {
+            setData(undefined)
+            setMustRefresh(false)
+          }
           // 只有明确拒绝的结构冲突可进入重建确认，网络异常仍需先核对结果。
           if (action === 'execute' && caught.issue.action === 'rebuild') setMustRefresh(false)
         }

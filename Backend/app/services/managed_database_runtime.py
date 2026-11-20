@@ -14,13 +14,16 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from app.config import Settings
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.domain.entity_tables import EntityTableRequest, TableReadiness
+from app.domain.entity_tables import TableReadiness
 from app.domain.managed_database import ManagedDatabaseRegistration
 from app.services.application_config.repository import ApplicationConfigRepository
 from app.services.database_credentials import DatabaseCredentialError, load_application_json
+from app.services.entity_ddl import EntityDdlRequiredError, require_confirmed_entity_ddl
+from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.managed_database_client import ManagedDatabaseClient, ManagedDatabaseStartupError
 from app.services.managed_database_readiness import database_check_report
 from app.workspace.endpoint_design_documents import technical_plan_path
+from app.workspace.entity_ddl_documents import read_confirmed_ddl
 
 
 class RuntimeConnection(BaseModel):
@@ -57,25 +60,39 @@ class StartupSnapshot:
     entities: tuple[tuple[str, str, str], ...] = ()
 
 
-def _current_documents(root: Path) -> tuple[dict, dict, str]:
+def _current_documents(root: Path) -> tuple[dict, dict, str, str]:
     """读取唯一应用配置和当前技术规划，计算不持久化的启动指纹。"""
 
     try:
         application = ApplicationConfigRepository(root).load()
-        plan = json.loads(technical_plan_path(root).read_text(encoding="utf-8"))
+        plan_path = technical_plan_path(root).resolve()
+        if not plan_path.is_relative_to(root):
+            raise ValueError("技术规划路径超出当前工作区。")
+        plan_bytes = plan_path.read_bytes()
+        plan = json.loads(plan_bytes.decode("utf-8"))
     except (OSError, ValueError, DatabaseCredentialError):
         raise ManagedDatabaseStartupError("请先完成应用配置并确认技术规划，再启动内置数据库应用。") from None
     if not isinstance(plan, dict) or plan.get("artifact_type") != "technical-plan" or plan.get("confirmation_status") != "confirmed":
         raise ManagedDatabaseStartupError("技术规划尚未确认，请先确认当前实体设计，再启动应用。")
-    digest = hashlib.sha256(json.dumps([application, plan], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-    return application, plan, digest
+    # DDL 绑定技术规划原文件的摘要，启动检查沿用同一版本边界。
+    plan_digest = hashlib.sha256(plan_bytes).hexdigest()
+    digest = hashlib.sha256(json.dumps([application, plan_digest], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    return application, plan, plan_digest, digest
 
 
 def _require_current(root: Path, snapshot: StartupSnapshot) -> None:
     """等待、构建或取密期间发生配置和设计变更时拒绝旧启动快照。"""
 
-    if _current_documents(root)[2] != snapshot.digest:
+    _, _, plan_digest, digest = _current_documents(root)
+    if digest != snapshot.digest:
         raise ManagedDatabaseStartupError("应用配置或技术规划已变化，请重新启动，不能沿用本次数据库检查。")
+    try:
+        for (entity_id, _, table_name), sql in zip(snapshot.entities, snapshot.sqls):
+            record = read_confirmed_ddl(root, entity_id, plan_digest)
+            if record is None or record.table_name != table_name or record.sql != sql:
+                raise ValueError("已确认的 DDL 与启动快照不一致。")
+    except ValueError:
+        raise ManagedDatabaseStartupError("已确认的实体 DDL 已变化或不可读取，请核对后重新启动。") from None
 
 
 def _client(client: ManagedDatabaseClient | None) -> ManagedDatabaseClient:
@@ -134,8 +151,7 @@ def prepare_managed_startup(
 ) -> StartupSnapshot | None:
     """只对内置应用冻结完整设计并预检；外部模式保持原有连接解析路径。"""
 
-    from app.services.entity_tables import prepare_entity_table
-
+    root = root.expanduser().resolve()
     if not (root / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
         return None
     try:
@@ -146,25 +162,28 @@ def prepare_managed_startup(
     datasource = application.get("datasource") or {}
     if not isinstance(datasource, dict) or not isinstance(datasource.get("db"), dict) or datasource["db"].get("useBuiltin") is not True:
         return None
-    application, plan, digest = _current_documents(root)
+    application, plan, plan_digest, digest = _current_documents(root)
     try:
         binding = ManagedDatabaseRegistration.model_validate(application.get("managedDatabase") or {})
-        if binding.status != "REGISTERED" or datasource.get("type") != "database":
+        current_datasource = application.get("datasource") or {}
+        if (binding.status != "REGISTERED" or current_datasource.get("type") != "database"
+                or (current_datasource.get("db") or {}).get("useBuiltin") is not True):
             raise ValueError()
         entities = plan.get("entities")
         if not isinstance(entities, list) or len(entities) > 200:
             raise ValueError()
-        previews = [prepare_entity_table(EntityTableRequest(action="prepare", workspaceRoot=str(root), entityId=entity["id"]))
-                    for entity in entities]
+        if bind_plan_entity_tables(plan, application).get("entities") != entities:
+            raise ValueError()
+        records = [require_confirmed_entity_ddl(root, entity, plan_digest) for entity in entities]
+    except EntityDdlRequiredError as exc:
+        raise ManagedDatabaseStartupError(str(exc)) from None
     except (ValueError, KeyError, TypeError):
         raise ManagedDatabaseStartupError("内置数据库绑定或实体定义无效，请完成应用注册并重新确认技术规划。") from None
-    names = tuple(preview["tableName"] for preview in previews)
-    if len(names) != len(set(names)):
-        raise ManagedDatabaseStartupError("当前技术规划存在重复实体表，请修订并重新确认。")
+    names = tuple(record.table_name for record in records)
     snapshot = StartupSnapshot(binding.datasource_key, binding.datasource_id, digest, names,
-                               tuple(preview["sql"] for preview in previews),
-                               tuple((entity["id"], str(entity.get("name") or entity["id"]), preview["tableName"])
-                                     for entity, preview in zip(entities, previews)))
+                               tuple(record.sql for record in records),
+                               tuple((record.entity_id, str(entity.get("name") or record.entity_id), record.table_name)
+                                     for entity, record in zip(entities, records)))
     _check(root, snapshot, client, on_readiness)
     return snapshot
 
@@ -175,6 +194,7 @@ def resolve_managed_runtime(
 ) -> RuntimeConnection:
     """Java 创建前复查真实结构、一次取密，并丢弃身份或设计不一致的响应。"""
 
+    root = root.expanduser().resolve()
     remote = _check(root, snapshot, client, on_readiness)
     try:
         connection = RuntimeConnection.model_validate(remote.get_runtime_connection(snapshot.datasource_key))

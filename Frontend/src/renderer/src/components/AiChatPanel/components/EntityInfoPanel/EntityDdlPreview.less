@@ -5,6 +5,48 @@
   gap: 12px;
   color: var(--wb-text);
 
+  .ant-btn:not(.ant-btn-primary) {
+    color: var(--wb-text);
+    background: var(--wb-surface);
+    border-color: var(--wb-border-strong);
+  }
+  .ant-btn-primary:not(:disabled) {
+    color: var(--wb-canvas);
+    background: var(--wb-accent);
+    border-color: var(--wb-accent);
+  }
+  .ant-btn:not(:disabled):hover,
+  .ant-btn:not(:disabled):focus-visible {
+    border-color: var(--wb-accent-hover);
+  }
+  .ant-btn-primary:not(:disabled):hover,
+  .ant-btn-primary:not(:disabled):focus-visible {
+    background: var(--wb-accent-hover);
+  }
+  .ant-btn:focus-visible {
+    outline: 2px solid var(--wb-accent-border);
+    outline-offset: 2px;
+  }
+  .ant-btn:disabled {
+    color: var(--wb-text-secondary);
+    background: var(--wb-control);
+    border-color: var(--wb-border);
+  }
+  .ant-alert {
+    background: var(--wb-surface-subtle);
+    border-color: var(--wb-border);
+  }
+  .ant-alert-message,
+  .ant-alert-description {
+    color: var(--wb-text);
+  }
+  .ant-alert-error .ant-alert-icon {
+    color: var(--wb-danger);
+  }
+  .ant-spin-dot-item {
+    background: var(--wb-accent);
+  }
+
   .@{class-prefix}-entity-ddl-toolbar {
     display: flex;
     align-items: center;
@@ -111,6 +153,48 @@
     > .anticon {
       margin-top: 3px;
     }
+  }
+
+  .@{class-prefix}-entity-ddl-review {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    label {
+      display: block;
+      color: var(--wb-text);
+      font-size: 12px;
+    }
+
+    .ant-input {
+      margin-top: 6px;
+      color: var(--wb-text);
+      background: var(--wb-canvas);
+      border-color: var(--wb-border-strong);
+
+      &::placeholder {
+        color: var(--wb-text-tertiary);
+      }
+      &:not(:disabled):hover,
+      &:focus {
+        border-color: var(--wb-accent);
+      }
+      &:focus {
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-accent) 15%, transparent);
+      }
+      &:disabled {
+        color: var(--wb-text-secondary);
+        background: var(--wb-control);
+        border-color: var(--wb-border);
+      }
+    }
+  }
+
+  .@{class-prefix}-entity-ddl-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .@{class-prefix}-entity-ddl-loading {

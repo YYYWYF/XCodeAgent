@@ -16,12 +16,20 @@ import EntityTableStatus from './EntityTableStatus'
 import useEntityTable from './useEntityTable'
 import './EntityTablePanel.less'
 
-type Props = { workspaceRoot: string; entityId: string }
+type Props = {
+  workspaceRoot: string
+  entityId: string
+  active: boolean
+  confirmedDraftId?: string
+  onReviewDdl: () => void
+}
 const { Text } = Typography
 
 /** 在模拟数据表页签内展示真实结构、受控建表与结果，未建表时不展示字段。 */
-export default function EntityTablePanel({ workspaceRoot, entityId }: Props): ReactElement {
-  const state = useEntityTable(workspaceRoot, entityId)
+export default function EntityTablePanel({
+  workspaceRoot, entityId, active, confirmedDraftId, onReviewDdl
+}: Props): ReactElement {
+  const state = useEntityTable(workspaceRoot, entityId, active, confirmedDraftId)
   const { data, columns, columnsError, loading, error, issue } = state
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState('')
@@ -67,10 +75,10 @@ export default function EntityTablePanel({ workspaceRoot, entityId }: Props): Re
         </div>
         <Button type="text" disabled={loading} icon={<ReloadOutlined />} onClick={() => void state.runAction('prepare')}>刷新设计</Button>
       </div>
-      {error ? <Alert showIcon type={issue ? 'warning' : 'error'}
+      {error && issue?.action !== 'review_ddl' ? <Alert showIcon type={issue ? 'warning' : 'error'}
         message={issue?.title || '操作未完成'} description={error} /> : null}
       {copyError ? <Alert showIcon type="error" message={copyError} /> : null}
-      <EntityTableStatus state={state} />
+      <EntityTableStatus state={state} onReviewDdl={onReviewDdl} />
       {loading ? <div className={cx('entity-table-loading')} role="status"><Spin size="small" /><Text type="secondary">正在同步模拟数据表…</Text></div> : null}
       {!loading && columnsError ? <Alert showIcon type="error" message="数据表字段读取失败" description={columnsError} /> : null}
       {!loading && columns.length > 0 ? <EntityTableFields columns={columns} /> : null}
@@ -81,7 +89,7 @@ export default function EntityTablePanel({ workspaceRoot, entityId }: Props): Re
         {operation?.executionResult.recoveryState === 'MANUALLY_ABANDONED' ? <p>该操作已由人工结束，请以当前结构检查结果为准。</p> : null}
         {data?.readiness?.reason ? <p>{data.readiness.reason}</p> : null}
       </details> : null}
-      <p className={cx('entity-table-hint')}><InfoCircleOutlined />字段设计来自已确认的技术规划，更新后请刷新设计。</p>
+      <p className={cx('entity-table-hint')}><InfoCircleOutlined />表结构以当前已确认保存的建表 DDL 为准。</p>
       <EntityTableConfirmation state={state} />
     </div>
   )
