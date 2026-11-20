@@ -2,7 +2,7 @@
 .@{class-prefix}-technical-plan-complete-types {
   --schema-indent: 20px;
   --schema-column-gap: 14px;
-  --schema-main-columns: clamp(128px, 25%, 182px) clamp(116px, 24%, 192px);
+  --schema-main-columns: clamp(152px, 32%, 224px) clamp(116px, 27%, 220px);
   --schema-required-column: 36px;
   --schema-default-column: 54px;
   min-width: 0;
@@ -43,7 +43,7 @@
     }
   }
 
-  // 各表共用字段名和类型的列宽，说明占用剩余空间。嵌套时只缩进字段名。
+  // 各表共用列宽，给嵌套字段名留出缩进空间，说明在剩余宽度内单行显示。
   .@{class-prefix}-technical-plan-schema-node,
   .@{class-prefix}-technical-plan-schema-table {
     display: grid;
@@ -325,7 +325,7 @@
   .@{class-prefix}-technical-plan-complete-types .@{class-prefix}-technical-plan-schema-table {
     --schema-indent: 14px;
     --schema-column-gap: 8px;
-    --schema-main-columns: minmax(0, 29%) minmax(0, 24%);
+    --schema-main-columns: minmax(0, 35%) minmax(0, 26%);
     --schema-required-column: 28px;
     --schema-default-column: 44px;
   }
@@ -335,7 +335,7 @@
 @container (max-width: 340px) {
   .@{class-prefix}-technical-plan-complete-types .@{class-prefix}-technical-plan-schema-table {
     --schema-indent: 10px;
-    --schema-main-columns: minmax(0, 41%) minmax(0, 1fr);
+    --schema-main-columns: minmax(0, 46%) minmax(0, 1fr);
     grid-template-columns: var(--schema-main-columns) var(--schema-required-column);
 
     &.@{class-prefix}-technical-plan-schema-with-default {

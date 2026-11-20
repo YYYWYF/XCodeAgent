@@ -272,13 +272,17 @@
   }
 }
 
-.@{class-prefix}-technical-plan-endpoint {
+.@{class-prefix}-technical-plan-endpoint,
+.@{class-prefix}-technical-plan-endpoint-head {
   display: grid;
-  grid-template-columns: 48px minmax(72px, 0.6fr) minmax(100px, 1fr) minmax(160px, 1.8fr);
+  grid-template-columns: 48px minmax(0, min(40%, 220px)) minmax(0, 1fr);
+  column-gap: clamp(8px, 2cqi, 12px);
+  padding: 8px 10px;
+}
+
+.@{class-prefix}-technical-plan-endpoint {
   align-items: center;
-  gap: 7px;
   width: 100%;
-  padding: 7px 8px;
   border: 1px solid var(--wb-border);
   color: var(--wb-text);
   background: var(--wb-surface);
@@ -325,14 +329,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
-  > span:last-child {
-    overflow: hidden;
-    color: var(--wb-text-secondary);
-    font-size: 13px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
 }
 
 .@{class-prefix}-technical-plan-endpoint-table {
@@ -343,10 +339,6 @@
 }
 
 .@{class-prefix}-technical-plan-endpoint-head {
-  display: grid;
-  grid-template-columns: 48px minmax(72px, 0.6fr) minmax(100px, 1fr) minmax(160px, 1.8fr);
-  gap: 7px;
-  padding: 7px 8px;
   color: var(--wb-text-tertiary);
   background: var(--wb-surface-subtle);
   font-size: 12px;
@@ -843,11 +835,6 @@
 }
 
 @container (max-width: 360px) {
-  .@{class-prefix}-technical-plan-endpoint,
-  .@{class-prefix}-technical-plan-endpoint-head {
-    grid-template-columns: 42px minmax(64px, 0.7fr) minmax(84px, 1fr) minmax(110px, 1.6fr);
-  }
-
   .@{class-prefix}-technical-plan-page-binding-group {
     grid-template-columns: minmax(0, 1fr);
   }

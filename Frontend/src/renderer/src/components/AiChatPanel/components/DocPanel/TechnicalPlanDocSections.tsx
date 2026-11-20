@@ -255,7 +255,6 @@ export function ContractSection({
               <span>方法</span>
               <span>名称</span>
               <span>路径</span>
-              <span>说明</span>
             </div>
             <div className={cx('technical-plan-endpoint-list')}>
               {endpoints.length ? (
@@ -265,7 +264,6 @@ export function ContractSection({
                     `${selectedContractId}-endpoint-${index + 1}`
                   )
                   const method = textValue(endpoint.method, 'GET').toUpperCase()
-                  const summary = textValue(endpoint.summary, '待补充接口说明')
                   return (
                     <button
                       className={cx(
@@ -284,7 +282,6 @@ export function ContractSection({
                         {textValue(endpoint.name, '未命名接口')}
                       </span>
                       <code>{textValue(endpoint.path, '/')}</code>
-                      <span title={summary}>{summary}</span>
                     </button>
                   )
                 })

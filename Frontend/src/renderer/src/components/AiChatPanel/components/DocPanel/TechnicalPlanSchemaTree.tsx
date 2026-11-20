@@ -52,7 +52,6 @@ export function schemaDependencyNames(schema: JsonRecord, schemas: JsonRecord): 
 }
 
 const constraintLabels: Array<[string, string]> = [
-  ['format', '格式'],
   ['maximum', '最大值'],
   ['exclusiveMinimum', '不含下限'],
   ['exclusiveMaximum', '不含上限'],
@@ -118,6 +117,7 @@ export function SchemaTree({
   const [expanded, setExpanded] = useState(true)
   // 参数说明属于 Parameter，其他字段说明来自 Schema；只展示契约已有文字。
   const displayDescription = description?.trim() || textValue(schema.description).trim()
+  const format = textValue(schema.format).trim()
   const properties = schemaProperties(schema)
   const activeReferenceTrail = referenceTrail || new Set([name])
   const reference = textValue(schema.$ref).replace(/^#\/components\/schemas\//, '')
@@ -224,7 +224,10 @@ export function SchemaTree({
           )}
           <code>{name}</code>
         </span>
-        <span className={cx('technical-plan-type')}>{schemaType(schema)}</span>
+        <span className={cx('technical-plan-type')}>
+          {schemaType(schema)}
+          {format ? ` · ${format}` : null}
+        </span>
         {isField || fieldRequired || fieldOptional ? (
           <span className={cx('technical-plan-schema-status')}>
             {fieldRequired ? <span className={cx('technical-plan-required')}>必填</span> : null}
