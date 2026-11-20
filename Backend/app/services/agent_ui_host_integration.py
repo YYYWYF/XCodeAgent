@@ -39,7 +39,8 @@ def current_host_contract(workspace: Path) -> dict[str, Any]:
 
 
 def _provider_code(source_root: str, *, authenticated: bool, page_ids: list[str], agent_id: str,
-                   endpoint: str, description: str = '', input_schema: dict[str, Any] | None = None) -> str:
+                   endpoint: str, description: str = '', input_schema: dict[str, Any] | None = None,
+                   result_schema: dict[str, Any] | None = None) -> str:
     """使用模板的路由树及身份上下文，不更改 Router/Shell 或复制身份实现。"""
     module = posixpath.relpath(source_root + '/design/SharedApplication', 'src/extensions')
     identity_import = "import { useContext } from 'react'\nimport { IdentityContext } from '@/platform/identity/IdentityContext'\n" if authenticated else ''
@@ -70,7 +71,7 @@ def _provider_code(source_root: str, *, authenticated: bool, page_ids: list[str]
         "  const pageId = selectedPage(APP_PAGE_ROUTE_TREE, pathname.replace(/\\/$/, ''))\n"
         + ('  // 使用已审阅同源业务连接，页面经公开 hook 声明当前记录与输入。\n' if endpoint else
            '  // T27 连接条件尚未闭合；正式 endpoint 记录于转入计划，发送保持禁用。\n')
-        + f'  return <SharedAgentApplication agentId={json.dumps(agent_id)} sessionKey={{{session}}} user={{{user}}} pageId={{pageId}} contextDescription={json.dumps(description, ensure_ascii=False)} inputSchema={{{json.dumps(input_schema or {}, ensure_ascii=False)}}} endpoint={json.dumps(endpoint)}>\n'
+        + f'  return <SharedAgentApplication agentId={json.dumps(agent_id)} sessionKey={{{session}}} user={{{user}}} pageId={{pageId}} contextDescription={json.dumps(description, ensure_ascii=False)} inputSchema={{{json.dumps(input_schema or {}, ensure_ascii=False)}}} resultSchema={{{json.dumps(result_schema or {}, ensure_ascii=False)}}} endpoint={json.dumps(endpoint)}>\n'
         '    {children}\n'
         '  </SharedAgentApplication>\n'
         '}\n'
@@ -86,7 +87,7 @@ def plan_host_integration(state: dict[str, Any], *, target: Path, source: Path,
     try:
         if not all(safe_path(source, 'src/design/' + name).is_file() for name in (
                 'SharedApplication.tsx', 'SharedPage.tsx', 'runtimeResults.ts', 'useRuntimeResult.ts',
-                'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'RuntimeInput.tsx')):
+                'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'businessPresentation.tsx', 'businessValue.tsx', 'RuntimeInput.tsx')):
             raise ValueError('已确认设计缺少当前共享 Host 入口，请按原流程重新生成并确认；不能用默认 Host 替代。')
         for name in ('src/providers/AppProviders.tsx', 'src/routes/pageRegistry.ts',
                      'src/utils/pageRouteTree.ts'):
@@ -130,6 +131,7 @@ def plan_host_integration(state: dict[str, Any], *, target: Path, source: Path,
                        if allowed else connection_blocking_reason(requirements)),
             'files': {REGISTRY: result['after'], PROVIDER: _provider_code(source_root, authenticated=authenticated,
                 page_ids=page_ids, agent_id=agent_id, endpoint=requirements['endpoint'] if allowed else '',
-                description=str(contract['agentSettings']['context'].get('description', '')), input_schema=contract['interactionContract']['inputSchema'])}}
+                description=str(contract['agentSettings']['context'].get('description', '')), input_schema=contract['interactionContract']['inputSchema'],
+                result_schema=contract['interactionContract'].get('resultSchema'))}}
     except (OSError, ValueError, KeyError) as exc:
         return {'status': 'blocked', 'files': {}, 'reason': str(exc)}

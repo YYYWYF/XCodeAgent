@@ -1,6 +1,8 @@
 """后台设计完成后，旧审阅只能刷新，不能确认未审阅的新版本。"""
 
 from copy import deepcopy
+import asyncio
+from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -14,14 +16,39 @@ from app.graph.application_planning_interrupts import (
     prepare_application_planning_review_resume, ui_confirmation_review,
 )
 from app.graph.application_planning_workflow import _route_ui_confirmation
-from app.graph.nodes.ui_confirmation import ui_confirmation
+from app.graph.nodes.ui_confirmation import _apply_ui_design_action, ui_confirmation
 from app.graph.state import ProjectState
+from app.services.ui_design_generation_pool import UiDesignGenerationPool
 from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
 from tests.test_agent_ui_design_confirmation import confirmation_fixture
 
 
 class UiDesignReviewRefreshTests(unittest.IsolatedAsyncioTestCase):
     """通过真实 interrupt 往返核对新版本必须再次显式确认。"""
+
+    async def test_refresh_does_not_wait_for_active_project_writer(self) -> None:
+        """生成或调整持锁时只读清单，刷新不能排队、重写文件或另启生成。"""
+        with TemporaryDirectory() as directory:
+            state, current, _project = confirmation_fixture(directory)
+            pool = UiDesignGenerationPool(concurrency=1)
+            lock = pool.agent_project_lock(str(Path(directory).resolve()))
+            manifest_path = ui_designs_json_path(state)
+            before = {path: path.read_bytes() for path in manifest_path.parent.iterdir() if path.is_file()}
+            for pending in ({"home", "chat"}, set()):
+                with self.subTest(pending=pending):
+                    async with lock:
+                        with patch("app.graph.nodes.ui_confirmation.get_ui_design_generation_pool", return_value=pool), \
+                             patch.object(pool, "pending_page_ids", return_value=pending), \
+                             patch.object(pool, "submit", side_effect=AssertionError("unexpected generation")), \
+                             patch("app.graph.nodes.ui_confirmation.write_ui_designs_json", side_effect=AssertionError("unexpected write")):
+                            refreshed = await asyncio.wait_for(
+                                _apply_ui_design_action(state, {"pages": []}, {"action": "refresh"}),
+                                timeout=0.3,
+                            )
+                        self.assertEqual(refreshed, current)
+                        self.assertTrue(lock.locked())
+                        self.assertFalse(any(page.get("asset_confirmation") for page in refreshed["pages"]))
+            self.assertEqual(before, {path: path.read_bytes() for path in before})
 
     def test_ready_status_does_not_authorize_changed_asset(self) -> None:
         """新旧稿都是 ready 时，仍按真实资产差异刷新，不能仅比较终态。"""

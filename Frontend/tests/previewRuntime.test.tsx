@@ -10,6 +10,7 @@ import { SessionRuntimeProvider } from '../src/renderer/src/components/AiChatPan
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
 import AgentUiConnectionStatus from '../src/renderer/src/components/BrowserPreviewPanel/AgentUiConnectionStatus'
+import AgentUiSourceControls from '../src/renderer/src/components/BrowserPreviewPanel/AgentUiSourceControls'
 import { sameSiteLoopbackPreview } from '../src/renderer/src/utils/previewUrl'
 import {
   previewServiceActionAvailability,
@@ -78,6 +79,14 @@ try {
     action: 'leave',
     includeLogs: false
   })
+  await runPreviewRuntime({ workspace: '/workspace', action: 'switch-source', source: 'replay',
+    recording: 'local-recording', attemptId: 'current-attempt' })
+  assert.deepEqual(forwarded, { workspace: '/workspace', action: 'switch-source', source: 'replay',
+    recording: 'local-recording', attemptId: 'current-attempt' })
+  const sourceControls = renderToStaticMarkup(createElement(AgentUiSourceControls, { busy: true, onSwitch: async () => {} }))
+  assert.match(sourceControls, /停止旧预览并切换/)
+  assert.match(sourceControls, /disabled/)
+  assert.match(sourceControls, /旧问题和待办不会转入/)
   mockStream(true)
   await assert.rejects(
     runPreviewRuntime({ workspace: '/workspace', action: 'restart' }),
@@ -299,8 +308,9 @@ try {
     proxyHealth: { status: 'ready', reason: '当前应用身份核验通过' }, observation: {
       source: 'unknown', sessionId: null, launchId: 'launch-current', identityMatches: false,
       identity: { status: 'available', transferPlanId: 'plan-current', sourceSha256: 'source-current',
-        lockSha256: 'lock-current', packages: [{ name: '@za38.03/agent-ui-runtime', version: '0.0.1', metadataSha256: 'metadata-current' }] },
-      replay: 'not_implemented'
+        lockSha256: 'lock-current', revisionSha256: 'revision-current', workspaceSha256: 'workspace-current',
+        packages: [{ name: '@za38.03/agent-ui-runtime', version: '0.0.1', metadataSha256: 'metadata-current', contentSha256: 'package-content-current' }] },
+      replay: 'sanitized-jsonl'
     }
   } }))
   assert.match(observedConnection, /来源与身份/)
@@ -309,7 +319,9 @@ try {
   assert.match(observedConnection, /未确认或已变化/)
   assert.match(observedConnection, /source-current/)
   assert.match(observedConnection, /metadata-current/)
-  assert.match(observedConnection, /回放尚未实现/)
+  assert.match(observedConnection, /回放仅复现脱敏显示/)
+  assert.match(observedConnection, /revision-current/)
+  assert.match(observedConnection, /package-content-current/)
   assert.doesNotMatch(observedConnection, /<button|业务成功/)
 
   const awaiting = renderToStaticMarkup(
@@ -339,3 +351,5 @@ try {
 } finally {
   globalThis.fetch = originalFetch
 }
+
+await import('./previewObservationScope.test')

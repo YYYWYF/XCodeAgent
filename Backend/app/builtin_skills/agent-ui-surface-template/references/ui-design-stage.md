@@ -35,6 +35,14 @@ the Creator flow below.
    declared action IDs and effects. Never create page-local panel state. An
    explicit business launcher replaces the Host's default launcher; other
    interface actions must not use these panel callbacks.
+   Render panel-open controls as compact circular assistant/bot SVG icon buttons
+   and panel-close controls as borderless X icon buttons, rather than outlined
+   text buttons. Preserve the original action/control/effect IDs and callbacks.
+   Use `type="button"`, an `aria-label` and `title` with the confirmed action name;
+   set decorative SVGs to `aria-hidden="true"` and `focusable="false"`.
+   Use semantic theme colors, readable hover/focus-visible states in light/dark
+   themes, and a suitable pointer target. The Host owns the floating frame,
+   border, shadow and close header; do not generate another frame in business TSX.
    Direct handlers and arrow-function wrappers are both supported. Business
    action and information markers use the same validation as ordinary pages.
 4. Keep stable page/Agent/action/context identities from confirmed ProductPlan.

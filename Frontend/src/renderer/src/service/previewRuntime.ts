@@ -13,6 +13,9 @@ export type PreviewAction =
   | 'revise'
   | 'cancel'
   | 'leave'
+  | 'switch-source'
+export type AgentUiPreviewSource = 'official-mock' | 'real' | 'replay'
+export type AgentUiSourceSelection = { source: AgentUiPreviewSource; recording?: string }
 export type PreviewServiceState = {
   status: 'starting' | 'running' | 'failed' | 'stopped' | 'skipped'
   message?: string
@@ -38,17 +41,20 @@ export type AgentUiRuntimeConnection = {
   observation?: AgentUiObservation | null
 }
 export type AgentUiObservation = {
-  source: 'official-mock' | 'real-text' | 'formal-text' | 'formal-business' | 'unknown'
+  source: 'official-mock' | 'replay' | 'real-text' | 'formal-text' | 'formal-business' | 'unknown'
   sessionId: string | null
   launchId: string | null
   identityMatches: boolean
-  replay: 'not_implemented'
+  replay: 'sanitized-jsonl'
+  replaySha256?: string | null
   identity: {
     status: 'available' | 'unavailable'
     transferPlanId?: string
     sourceSha256?: string
     lockSha256?: string
-    packages?: Array<{ name: string; version: string; metadataSha256: string }>
+    workspaceSha256?: string
+    revisionSha256?: string
+    packages?: Array<{ name: string; version: string; metadataSha256: string; contentSha256: string }>
   }
 }
 export type PreviewRepair = {
@@ -85,6 +91,7 @@ export type PreviewRuntimePayload = {
   runtime?: {
     topologyType: 'backend_direct' | 'agent_runtime_direct' | null
     attemptId: string
+    startedAt?: string
     status: PreviewServiceState['status']
     frontend: PreviewServiceState
     backend: PreviewServiceState
@@ -122,6 +129,8 @@ export async function runPreviewRuntime(
     planId?: string
     feedback?: string
     includeLogs?: boolean
+    source?: AgentUiPreviewSource
+    recording?: string
   },
   options: {
     threadId?: string

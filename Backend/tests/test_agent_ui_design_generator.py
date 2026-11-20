@@ -85,6 +85,10 @@ class AgentUiDesignInputTests(unittest.TestCase):
         props = json.loads(source.split("export const agentProps = ", 1)[1].split(" satisfies", 1)[0])
         self.assertEqual(props["welcome"], {"title": "通用助手", "description": "通用文本对话"})
         self.assertNotIn("suggestions", props)
+        host_files = _host_files(project_agent_design_pages(*formal_facts()))
+        for name in ('businessPresentation.tsx', 'businessValue.tsx', 'RuntimeBusinessPanel.tsx'):
+            self.assertIn('src/design/' + name, host_files)
+
 
     def test_file_set_is_exact_and_rejects_duplicate_or_foreign_paths(self) -> None:
         """模型不能写配置、依赖、包源码或通过重复 JSON key 隐藏覆盖。"""

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { PreviewRuntimeBusinessError, runPreviewRuntime } from '../../../service/previewRuntime'
 import type { PreviewRuntimePayload } from '../../../service/previewRuntime'
 import { completeConnectionRequest, failConnectionRequest, initialConnectionState } from '../../../service/connectionState'
+import type { ConnectionState } from '../../../service/connectionState'
 
 /** 独立订阅预览服务事实，连接结果只影响预览入口，不覆盖 Workflow 的连接状态。 */
 export function usePreviewRuntimeConnection(
@@ -9,11 +10,18 @@ export function usePreviewRuntimeConnection(
   threadId: string | undefined,
   includeLogs: boolean,
   receive: (value: PreviewRuntimePayload, threadId?: string) => void
-) {
+): {
+  connection: ConnectionState
+  businessError: string
+  read: (currentThread?: string) => Promise<PreviewRuntimePayload>
+  reportFailure: (reason: unknown) => void
+} {
   const [connection, setConnection] = useState(() => initialConnectionState())
   const [businessError, setBusinessError] = useState('')
   const generationRef = useRef(0)
   const scopeRef = useRef(workspace)
+  const scopeEpoch = useRef(0)
+  if (scopeRef.current !== workspace) scopeEpoch.current += 1
   scopeRef.current = workspace
 
   /** 只投影本工作区当前请求的通信错误；业务失败意味着 Backend 已响应。 */
@@ -27,16 +35,17 @@ export function usePreviewRuntimeConnection(
   /** 重试先读取权威状态，绝不把断线当作允许重复修复的证据。 */
   const read = useCallback(async (currentThread = threadId): Promise<PreviewRuntimePayload> => {
     const generation = ++generationRef.current
+    const epoch = scopeEpoch.current
     try {
       const value = await runPreviewRuntime({ workspace, action: 'get', includeLogs }, { threadId: currentThread })
-      if (scopeRef.current === workspace) {
+      if (scopeRef.current === workspace && scopeEpoch.current === epoch && generationRef.current === generation) {
         setBusinessError('')
         setConnection((current) => completeConnectionRequest(current, generation))
         receive(value, currentThread)
       }
       return value
     } catch (reason) {
-      if (scopeRef.current === workspace) {
+      if (scopeRef.current === workspace && scopeEpoch.current === epoch && generationRef.current === generation) {
         setConnection((current) => reason instanceof PreviewRuntimeBusinessError
           ? completeConnectionRequest(current, generation)
           : failConnectionRequest(current, generation, String(reason)))
@@ -59,7 +68,7 @@ export function usePreviewRuntimeConnection(
             threadId,
             signal: controller.signal,
             onUpdate: (value) => {
-              if (controller.signal.aborted) return
+              if (controller.signal.aborted || generationRef.current !== generation) return
               setBusinessError(value.status === 'failed' ? value.error?.message || '读取预览服务状态失败' : '')
               setConnection((current) => completeConnectionRequest(current, generation))
               receive(value, threadId)

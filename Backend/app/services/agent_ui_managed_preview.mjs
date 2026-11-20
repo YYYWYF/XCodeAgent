@@ -5,13 +5,15 @@ import { createRequire } from 'node:module'
 import { readFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { loadPreviewMockApi, createReplayHandler } from './agent_ui_preview_replay.mjs'
 
 /** 标准预览拥有 Rsbuild；纯文本模式直连原 Runtime，模拟模式才创建官方 Mock。 */
 async function main() {
   assert.equal(process.argv.length, 3)
   const options = JSON.parse(process.argv[2])
-  assert.ok(['real-text', 'formal-text', 'formal-business', 'official-mock'].includes(options.mode))
-  const realText = options.mode !== 'official-mock'
+  assert.ok(['real-text', 'formal-text', 'formal-business', 'official-mock', 'replay'].includes(options.mode))
+  const replay = options.mode === 'replay'
+  const realText = !['official-mock', 'replay'].includes(options.mode)
   const business = options.mode === 'formal-business'
   const formalText = options.mode === 'formal-text' || business
   assert.match(options.sessionId, /^[a-f0-9]{32}$/)
@@ -26,14 +28,14 @@ async function main() {
   assert.equal(createHash('sha256').update(metadata).digest('hex'), options.packageJsonSha256)
   const identity = JSON.parse(metadata)
   assert.equal(identity.version, options.creatorVersion)
-  // Mock 的公开 export 仅提供 import 条件，不能使用 require 条件解析该子路径。
-  const mockExport = identity.exports?.['./mock-agent']?.import
-  assert.equal(typeof mockExport, 'string', 'Creator 缺少公开 Mock import 入口')
-  const packageRoot = path.dirname(toolRequire.resolve('@za38.03/agent-ui-creator/package.json'))
-  const mockEntry = await realpath(path.resolve(packageRoot, mockExport))
-  assert.ok(mockEntry.startsWith(packageRoot + path.sep), 'Mock export 越过成品包边界')
-  const { createMockAgentHttpHandler } = await import(pathToFileURL(mockEntry).href)
-  const handler = realText ? null : createMockAgentHttpHandler({ defaultScenarioId: 'simple-chat' })
+  const api = await loadPreviewMockApi(options)
+  let recording
+  if (replay) {
+    recording = await readFile(options.replayPath, 'utf8')
+    assert.equal(createHash('sha256').update(recording).digest('hex'), options.replaySha256)
+  }
+  const handler = realText ? null : replay ? await createReplayHandler(api, recording)
+    : api.createMockAgentHttpHandler({ defaultScenarioId: 'simple-chat' })
   const mock = realText ? null : createServer((request, response) => {
     void handler(request, response).catch(() => {
       if (!response.headersSent) response.writeHead(500)
@@ -86,10 +88,10 @@ async function main() {
       html: { ...config.html, tags: [...(Array.isArray(tags) ? tags : tags ? [tags] : []), {
         tag: 'div', head: false, append: false,
         attrs: { role: 'status', 'data-agent-ui-preview-source': options.mode,
-          title: business ? '当前 Python 智能体执行业务合同，支持页面上下文、工具、结果和交互' : realText ? '当前 Python 智能体生成真实回复；仅文本，不传页面业务数据，完整业务能力未验收' : '官方 Mock 提供模拟回复，尚未连接真实智能体',
-          'aria-label': business ? '真实业务连接' : realText ? '真实对话预览，仅文本' : '开发预览，官方 Mock 模拟回复，非真实智能体',
+          title: replay ? '脱敏录制回放，不执行模型、业务工具或批准操作' : business ? '当前 Python 智能体执行业务合同，支持页面上下文、工具、结果和交互' : realText ? '当前 Python 智能体生成真实回复；仅文本，不传页面业务数据，完整业务能力未验收' : '官方 Mock 提供模拟回复，尚未连接真实智能体',
+          'aria-label': replay ? '开发预览，脱敏录制回放' : business ? '真实业务连接' : realText ? '真实对话预览，仅文本' : '开发预览，官方 Mock 模拟回复，非真实智能体',
           style: 'position:fixed;left:8px;bottom:8px;z-index:2147483647;max-width:calc(100vw - 16px);padding:2px 6px;background:Canvas;color:CanvasText;font:11px/1.5 system-ui,sans-serif;pointer-events:none' },
-        children: business ? '真实业务连接 · 正式接线' : formalText ? '真实文本对话 · 正式接线' : realText ? '真实对话预览 · 仅文本' : '开发预览 · 模拟回复',
+        children: replay ? '开发预览 · 脱敏录制回放' : business ? '真实业务连接 · 正式接线' : formalText ? '真实文本对话 · 正式接线' : realText ? '真实对话预览 · 仅文本' : '开发预览 · 模拟回复',
       }] },
       tools: { ...config.tools, bundlerChain: [...(Array.isArray(hooks) ? hooks : hooks ? [hooks] : []),
         /** 同一受检编译输入中注入只读观察；正式模式不改写连接。 */
@@ -102,7 +104,7 @@ async function main() {
     } })
     preview = await rsbuild.startDevServer()
     if (closing) { await preview.server.close(); return }
-    console.log(business ? 'Agent UI 真实业务连接：使用当前 Python Runtime 和正式业务合同。' : realText ? 'Agent UI 真实对话预览：当前 Python 智能体，仅文本；完整 T27 仍待验收。'
+    console.log(replay ? 'Agent UI 开发预览：脱敏录制回放，不执行模型或业务。' : business ? 'Agent UI 真实业务连接：使用当前 Python Runtime 和正式业务合同。' : realText ? 'Agent UI 真实对话预览：当前 Python 智能体，仅文本；完整 T27 仍待验收。'
       : 'Agent UI 开发预览：官方 Mock，真实智能体尚未连接。')
   } catch (error) {
     await close()

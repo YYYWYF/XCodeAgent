@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from app.services.agent_ui_design_transfer import execute_transfer, read_transfer
 from app.services.agent_ui_design_transfer_plan import prepare_transfer_plan
-from app.services.agent_ui_dependency_plan import target_snapshot
+from app.services.agent_ui_dependency_plan import REPOSITORY, sha256, target_snapshot
+from app.services.agent_ui_transfer_files import rewrite_files
 from app.services.agent_ui_transfer_records import transfer_directory
 from app.services.agent_ui_dependency_install import save_record
 from tests.agent_ui_transfer_fixtures import transfer_fixture, verify_target
@@ -67,6 +68,9 @@ class TransferExecutionTests(unittest.TestCase):
         self.assertEqual(result["state"], "verified", result)
         self.assertEqual((self.target / "src/助手/application/project-config.tsx").read_text(),
             (self.source / "src/agent-ui/application/project-config.tsx").read_text())
+        for name in ('RuntimeBusinessPanel.tsx', 'businessPresentation.tsx', 'businessValue.tsx'):
+            self.assertEqual((self.target / 'src/助手/design' / name).read_bytes(),
+                             (self.source / 'src/design' / name).read_bytes())
         before = target_snapshot(self.target)
         self.assertEqual(self.execute(plan, "confirm")["state"], "verified")
         self.assertEqual(target_snapshot(self.target), before)
@@ -79,6 +83,27 @@ class TransferExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "过期|安装"):
             self.execute(plan, "initialize")
         self.assertFalse((self.target / ".agent-ui").exists())
+
+    def test_transfer_repairs_only_the_exact_platform_business_value_source(self) -> None:
+        """已确认的原版组件可转入严格 TypeScript 工程，定制源码不作改写。"""
+        name = 'src/design/businessValue.tsx'
+        current = (REPOSITORY / 'tools/agent-ui-design/businessValue.tsx').read_text(encoding='utf-8')
+        original = current.replace('String(properties[name].title)', 'properties[name].title')
+        path = self.source / name
+        mapping = {name: 'src/助手/design/businessValue.tsx'}
+        with patch('app.services.agent_ui_transfer_files.scan_imports', return_value={}):
+            path.write_text(original, encoding='utf-8')
+            projected, blockers, _ = rewrite_files(self.source, self.target, mapping, [], self.workspace)
+            self.assertFalse(blockers)
+            self.assertEqual(projected[name]['sourceSha256'], sha256(original.encode()))
+            self.assertIn('String(properties[name].title)', projected[name]['after'])
+            self.assertEqual(projected[name]['after'], current)
+            self.assertEqual(path.read_text(encoding='utf-8'), original)
+
+            custom = original + '\n// 用户定制\n'
+            path.write_text(custom, encoding='utf-8')
+            projected, _, _ = rewrite_files(self.source, self.target, mapping, [], self.workspace)
+            self.assertEqual(projected[name]['after'], custom)
 
     def test_initialization_does_not_authorize_later_user_edits(self) -> None:
         """初始化凭据只准许精确工具增量，后续人工编辑使桥接证据失效。"""

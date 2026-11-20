@@ -5,7 +5,7 @@ import { test } from 'node:test'
 
 const require = createRequire(import.meta.url)
 const transform = require('../../../Backend/app/services/agent_ui_preview_endpoint.cjs')
-const code = '<SharedAgentApplication agentId="assistant" sessionKey={session} endpoint="">{children}</SharedAgentApplication>'
+const code = 'import { SharedAgentApplication } from "../agent-ui/design/SharedApplication"\n<SharedAgentApplication agentId="assistant" sessionKey={session} endpoint="">{children}</SharedAgentApplication>'
 const options = { sha256: createHash('sha256').update(code).digest('hex'), agentId: 'assistant',
   mode: 'real-text', endpoint: '/agents/assistant/run', sessionId: 'a'.repeat(32) }
 

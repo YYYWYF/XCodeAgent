@@ -10,7 +10,8 @@ from typing import Any, Callable
 from app.services.agent_ui_design_creator import run_design_creator
 from app.services.agent_ui_design_generator import AgentUiGeneratedDesign, _check_cancel, _host_files, _json, _validate_files, _write_record, _write_sources, design_page_records
 from app.services.agent_ui_design_body_revision import generate_business_revision
-from app.services.agent_ui_design_edit_scope import resolve_design_edit_tasks
+from app.services.agent_ui_design_edit_scope import product_sync_edit_tasks, resolve_design_edit_tasks
+from app.services.agent_ui_design_revision_context import creator_revision_request
 from app.services.agent_ui_design_presentation import read_presentations, validate_presentation
 from app.services.agent_ui_design_project import (
     SEED_FILES, AgentUiDesignProject, build_agent_ui_design_project,
@@ -40,7 +41,8 @@ def _snapshot(project: Path) -> dict[str, str]:
 
 
 def _check_changes(before: dict[str, str], project: Path, root: str,
-                   business_paths: set[str], presentations: dict[str, Any], targets: set[str]) -> list[str]:
+                   business_paths: set[str], presentations: dict[str, Any], targets: set[str], *,
+                   allow_unchanged: bool = False) -> list[str]:
     """逐文件验证目标所有权；共享展示文件只能修改当前页面，服务和 Runtime 保持只读。"""
     after = _snapshot(project)
     changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
@@ -60,40 +62,17 @@ def _check_changes(before: dict[str, str], project: Path, root: str,
         if (not path.startswith(root + '/') or relative.startswith(forbidden)
                 or relative in {'application/runtime-config.generated.ts', 'application/Agent.tsx'}):
             raise ValueError(f'Creator 修改超出当前设计范围：{path}；已保留原设计。')
-    if not changed:
+    if not changed and not allow_unchanged:
         raise ValueError('设计调整未产生可核对的文件修改，已保留原设计；本轮未标记成功。')
     return changed
-
-
-def _creator_request(pages: list[dict[str, Any]], targets: list[str], instruction: str) -> str:
-    """仅把 Agent UI 子任务交给 Creator，业务正文作为有明确所有权的只读上下文。"""
-    business_paths = [f'src/pages/page-{index}.tsx' for index, page in enumerate(pages) if has_business_body(page)]
-    return instruction + '\n\nHost scope data (context, not an additional user request):\n' + _json({
-        'scope': 'shared-application', 'sourceRoot': SHARED_AGENT_ROOT,
-        'targetPageIds': targets, 'allPageIds': [page['pageId'] for page in pages],
-        'businessPagesReadOnly': business_paths, 'sharedPresentationFile': 'src/design/presentation.json',
-        'editablePresentationKeys': targets,
-        'baseline': 'current shared application, including all previously accepted customizations',
-        'pageDifferences': 'use public Agent props in presentation.json for welcome, suggestions, locale, theme, assistantPanelWidth; styles are scoped to each page',
-        'layoutOwner': 'one shared AppUIModel and semantic Plugin composition for every page',
-        'nativeActionOwnership': 'stop_generation uses the official composer submit-action; copy_response uses the official response-footer copy-action and copies the complete response; preserve their slots and do not add page-local substitutes',
-        'sharedChangeEffect': 'shared layout, plugins, application components and styles affect every page and require renewed confirmation of every page',
-        'independentPageLayouts': 'unavailable; do not create per-page applications or source roots',
-        'renderEntry': 'application/project-config.tsx export agentUIProject',
-        'additionalProductCapabilities': 'separate formal revision and user confirmation',
-        'dependencyAndSourceTakeover': 'separate explicit user authorization',
-        'protectedPaths': [*business_paths, 'services', 'agent-contract', 'framework', 'runtime',
-            'application/Agent.tsx', 'application/runtime-config.generated.ts',
-            '.agent-ui', 'node_modules', 'package.json', 'pnpm-lock.yaml'],
-        'formalConfirmation': 'pending_user_confirmation', 'confirmedPages': pages,
-    })
 
 
 def revise_agent_ui_design(inspection: AgentUiToolHostInspection, *, current_project: AgentUiDesignProject,
                           draft_root: Path, pnpm_cli: Path, requirement_spec: dict[str, Any],
                           product_plan: dict[str, Any], targets: list[str], instruction: str,
                           run_id: str, should_cancel: Callable[[], bool] | None = None,
-                          on_progress: Callable[[str, str], None] | None = None) -> AgentUiGeneratedDesign:
+                          on_progress: Callable[[str, str], None] | None = None,
+                          synchronize_product: bool = False) -> AgentUiGeneratedDesign:
     """在同一草稿内按 owner 执行子任务；任何失败均不发布部分结果或替换旧稿。"""
     validate_design_project(current_project)
     require_shared_application(current_project.project_dir)
@@ -102,8 +81,10 @@ def revise_agent_ui_design(inspection: AgentUiToolHostInspection, *, current_pro
         raise ValueError('设计调整必须绑定当前页面和非空修改要求。')
     if on_progress:
         on_progress('正在分析页面正文与 Agent UI 的修改范围', targets[0])
-    tasks = resolve_design_edit_tasks(current_project.project_dir, pages, targets, instruction,
-                                      should_cancel=should_cancel)
+    # 产品同步已由调用方对正式事实指纹判定；普通用户调整仍走原有范围澄清。
+    tasks = (product_sync_edit_tasks(pages, targets, instruction) if synchronize_product else
+             resolve_design_edit_tasks(current_project.project_dir, pages, targets, instruction,
+                                       should_cancel=should_cancel))
     _check_cancel(should_cancel)
     validate_design_project(current_project)
     project = prepare_agent_ui_design_project(inspection, draft_root=draft_root, pnpm_cli=pnpm_cli, run_id=run_id)
@@ -147,22 +128,26 @@ def revise_agent_ui_design(inspection: AgentUiToolHostInspection, *, current_pro
             else:
                 if on_progress:
                     on_progress('正在由 Creator 调整 Agent UI', task.page_ids[0])
-                receipt = {**run_design_creator(inspection, project.project_dir,
-                    _creator_request(pages, list(task.page_ids), task.instruction), run_id=run_id,
-                    should_cancel=should_cancel, source_root=SHARED_AGENT_ROOT,
-                    on_progress=(lambda message: on_progress(message, task.page_ids[0])) if on_progress else None),
-                    'executor': 'creator'}
+                with creator_revision_request(project.project_dir, pages, list(task.page_ids),
+                        task.instruction, synchronize_product=synchronize_product) as request:
+                    receipt = {**run_design_creator(inspection, project.project_dir, request, run_id=run_id,
+                        should_cancel=should_cancel, source_root=SHARED_AGENT_ROOT,
+                        allow_verified_unchanged=synchronize_product,
+                        on_progress=(lambda message: on_progress(message, task.page_ids[0])) if on_progress else None),
+                        'executor': 'creator'}
                 allowed_business = set()
             _check_cancel(should_cancel)
             changed = _check_changes(task_before, project.project_dir, SHARED_AGENT_ROOT,
-                                     allowed_business, task_presentations, set(task.page_ids))
+                                     allowed_business, task_presentations, set(task.page_ids),
+                                     allow_unchanged=synchronize_product)
+            # 同步时一个 owner 可能无需修改；后续仍统一校验全部正文绑定、原生组合并构建。
             evidence['tasks'].append({'pageIds': list(task.page_ids), 'changedFiles': changed, **receipt})
         if on_progress:
             on_progress('正在验证并构建设计稿', targets[-1])
         design = project.project_dir / 'src/design'
         for path, source in _host_files(pages).items():
             if Path(path).name in {'Agent.tsx', 'SharedHost.tsx', 'SharedApplication.tsx', 'SharedPage.tsx',
-                                  'runtimeResults.ts', 'useRuntimeResult.ts', 'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'RuntimeInput.tsx', 'shared-host.css', 'surfaces.ts', 'main.tsx'}:
+                                  'runtimeResults.ts', 'useRuntimeResult.ts', 'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'businessPresentation.tsx', 'businessValue.tsx', 'RuntimeInput.tsx', 'shared-host.css', 'surfaces.ts', 'main.tsx'}:
                 (project.project_dir / path).write_text(source, encoding='utf-8')
         app = project.project_dir / 'src/App.tsx'
         app.write_text(app.read_text(encoding='utf-8').replace("from './agent-ui'", "from './design/Agent'")

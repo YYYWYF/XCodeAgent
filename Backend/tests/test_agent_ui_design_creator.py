@@ -48,7 +48,7 @@ export function createCreatorClient(options) {
         await mkdir(path.join(options.projectRoot,'src/agent-ui'),{recursive:true});
         await writeFile(path.join(options.projectRoot,'src/agent-ui/Component.tsx'),'export const View=()=> <div>显示</div>');
       }
-      return {message:'已完成 fixture-secret',result:{completion:behavior.completion ?? 'success',executionPolicy:behavior.policy ?? 'domain-write',receipt:{files:behavior.noFiles ? [] : [{path:behavior.sourceFile ? 'src/agent-ui/Component.tsx' : 'src/agent-ui/app-ui.json'}],verification:{status:'changed-and-statically-verified'}}}};
+      return {message:'已完成 fixture-secret',result:{completion:behavior.completion ?? 'success',executionPolicy:behavior.policy ?? 'domain-write',noChangeOutcome:behavior.noChangeOutcome,receipt:{files:behavior.noFiles ? [] : [{path:behavior.sourceFile ? 'src/agent-ui/Component.tsx' : 'src/agent-ui/app-ui.json'}],verification:{status:behavior.verificationStatus ?? 'changed-and-statically-verified'}}}};
     },
     async dispose() { await writeFile(new URL('./disposed.json', import.meta.url), '{}'); }
   };
@@ -85,6 +85,46 @@ export function createCreatorClient(options) {
             run_design_creator(self.inspection, self.project, "修改欢迎语", run_id="failure")
         self.assertNotIn("fixture-secret", str(caught.exception))
         self.assertTrue((self.package / "disposed.json").exists())
+
+    def test_route_protocol_failure_and_lost_sdk_result_have_specific_errors(self) -> None:
+        """区分权限结构无效与公开客户端丢失错误，不能误报模型配置异常或泄漏原回复。"""
+        for message, expected in (
+            ('CREATOR_REQUEST_ROUTE_INVALID fixture-secret', 'CREATOR_REQUEST_ROUTE_INVALID'),
+            ('Creator completed without an assistant message.', '未返回助手消息'),
+        ):
+            with self.subTest(message=message):
+                self.behavior(fail=True, errorMessage=message)
+                with self.assertRaisesRegex(ValueError, expected) as caught:
+                    run_design_creator(self.inspection, self.project, '实施产品同步', run_id='route-error')
+                self.assertNotIn('检查模型配置', str(caught.exception))
+                self.assertNotIn('fixture-secret', str(caught.exception))
+
+    def test_installed_public_client_loses_the_run_error_code(self) -> None:
+        """用真实公开 SDK 重现服务 RUN_ERROR 被空助手消息异常覆盖，无真实模型或设计写入。"""
+        script = Path(__file__).resolve().parents[2] / 'tools/agent-ui/tests/creator-client-error.mjs'
+        result = subprocess.run(['node', str(script)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        error = json.loads(result.stdout)
+        self.assertEqual(error['message'], 'Creator completed without an assistant message.')
+        self.assertIsNone(error['code'])
+
+    def test_installed_classifier_requires_plugin_removal_structure(self) -> None:
+        """覆盖真实运行的有插件目录分支，仅有 permission 的替身不足以证明分类通过。"""
+        script = Path(__file__).resolve().parents[2] / 'tools/agent-ui/tests/creator-request-routing.mjs'
+        directory = {'status': 'available', 'plugins': [{'pluginId': 'conversation', 'name': '会话',
+            'description': '共享会话', 'intents': [], 'role': 'ui', 'state': 'available',
+            'instances': [], 'targetNames': []}]}
+        base = {'request': '实施共享 Agent UI 产品同步', 'directory': directory}
+        inputs = [{**base, 'response': {'permission': 'domain_write'}},
+                  {**base, 'response': {'permission': 'domain_write', 'removalTarget': {
+                      'status': 'not_requested', 'description': '', 'pluginIds': []}}}]
+        result = subprocess.run(['node', str(script)], input=json.dumps(inputs),
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        routes = json.loads(result.stdout)
+        self.assertEqual(routes[0]['error'], 'CREATOR_REQUEST_ROUTE_INVALID')
+        self.assertFalse(routes[1]['readOnly'])
+        self.assertGreater(routes[1]['modelCalls'], 0)
 
     def test_sdk_stage_is_reported_without_raw_model_content(self) -> None:
         """公开 SDK 执行阶段进入进度，模型回复和凭据不能进入状态文案。"""
@@ -142,6 +182,27 @@ export function createCreatorClient(options) {
         self.behavior(policy='read-only')
         with self.assertRaisesRegex(ValueError, '识别为检查'):
             run_design_creator(self.inspection, self.project, '检查当前布局', run_id='inspect')
+
+    def test_product_sync_accepts_only_sdk_verified_current_goal_without_changes(self) -> None:
+        """产品同步某个 owner 已满足目标时，必须是 SDK 验证的目标条件，不能采信口头回复。"""
+        outcome = {'toolName': 'verify_creator_outcome', 'status': 'already_current'}
+        self.behavior(noFiles=True, noChangeOutcome=outcome, verificationStatus='no-project-change')
+        receipt = run_design_creator(self.inspection, self.project, '实施产品同步', run_id='verified-current',
+                                     allow_verified_unchanged=True)
+        self.assertEqual(receipt['verificationStatus'], 'no-project-change')
+        with self.assertRaisesRegex(ValueError, '实际设计文件变更回执'):
+            run_design_creator(self.inspection, self.project, '修改布局', run_id='ordinary-change')
+        for invalid in (None, {'toolName': 'verify_creator_outcome', 'status': 'not_satisfied'},
+                        {'toolName': 'prepare_ui_plugin_development', 'status': 'declined'}):
+            with self.subTest(outcome=invalid):
+                self.behavior(noFiles=True, noChangeOutcome=invalid)
+                with self.assertRaisesRegex(ValueError, '实际设计文件变更回执'):
+                    run_design_creator(self.inspection, self.project, '实施产品同步', run_id='unverified',
+                                       allow_verified_unchanged=True)
+        self.behavior(noFiles=True, noChangeOutcome=outcome, policy='read-only')
+        with self.assertRaisesRegex(ValueError, '识别为检查'):
+            run_design_creator(self.inspection, self.project, '实施产品同步', run_id='read-only-sync',
+                               allow_verified_unchanged=True)
 
     def test_application_source_accepts_public_props_but_rejects_new_transport(self) -> None:
         """真实 TypeScript AST 检查组件展示修改，不能被别名导入或注释误导。"""

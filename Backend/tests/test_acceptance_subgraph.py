@@ -104,6 +104,25 @@ class AcceptanceSubgraphTests(unittest.TestCase):
         self.assertEqual(result["status"], "completed")
         self.assertTrue(result["accepted"])
 
+    def test_agent_ui_evidence_is_rechecked_before_explicit_acceptance(self) -> None:
+        """待验收、输入失效或读取失败均不能沿 accepted 决策完成版本。"""
+        for value in ({'ready': False, 'cases': [{'status': 'stale'}]}, ValueError('changed')):
+            options = {'side_effect': value} if isinstance(value, Exception) else {'return_value': value}
+            with patch('app.services.agent_ui_acceptance.acceptance_matrix', **options):
+                result = run_acceptance_subgraph({'workspace': '/target', 'acceptance_decision': 'accepted'})
+            self.assertFalse(result['accepted'])
+            self.assertEqual(result['acceptance_decision'], '')
+            self.assertEqual(result['status'], 'requires_user_input')
+
+    def test_complete_agent_ui_evidence_still_needs_user_decision(self) -> None:
+        """证据齐全不会自动确认版本；显式 accepted 才走原完成链。"""
+        with patch('app.services.agent_ui_acceptance.acceptance_matrix', return_value={'ready': True, 'cases': []}):
+            waiting = run_acceptance_subgraph({'workspace': '/target', 'preview_url': 'http://localhost:3000',
+                'launch_result': {'status': 'completed', 'preview_url': 'http://localhost:3000'}})
+            accepted = run_acceptance_subgraph({'workspace': '/target', 'acceptance_decision': 'accepted'})
+        self.assertFalse(waiting['accepted'])
+        self.assertTrue(accepted['accepted'])
+
 
 if __name__ == "__main__":
     unittest.main()

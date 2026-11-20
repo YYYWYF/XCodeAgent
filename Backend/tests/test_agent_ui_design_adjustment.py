@@ -186,7 +186,7 @@ class AgentUiAdjustmentProjectTests(unittest.TestCase):
         (project_dir / "src/design").mkdir()
         (project_dir / "src/design/presentation.json").write_text(
             '{"home":{"props":{"welcome":{"title":"上轮定制"}},"styles":[]}}', encoding="utf-8")
-        self.asset = {"kind": "agent-ui-project", "revision": "old", "pageIds": ["home", "chat"]}
+        self.asset = {"kind": "agent-ui-project", "revision": "old", "pageIds": ["home", "chat"], "factsDigest": "facts"}
         self.pages = [{"pageId": page_id, "status": "ready", "page_key": page_id.title(),
                        "design_asset": self.asset, "asset_confirmation": {"revision": "old"},
                        "custom": "keep"} for page_id in ("home", "chat")]
@@ -194,7 +194,8 @@ class AgentUiAdjustmentProjectTests(unittest.TestCase):
         self.pages = load_ui_designs_json(ui_designs_json_path(self.state))["pages"]
         project = SimpleNamespace(workspace=workspace, project_dir=project_dir,
             identity="environment", source_digest="new-source", build_digest="new-build")
-        self.enterContext(patch("app.services.agent_ui_design_projection.current_project", return_value=(project, self.asset)))
+        self.enterContext(patch("app.services.agent_ui_design_baseline.revision_project", return_value=(project, self.asset)))
+        self.enterContext(patch("app.services.agent_ui_design_projection.design_facts_digest", return_value="facts"))
         self.enterContext(patch("app.services.agent_ui_design_adjustment.validate_design_project"))
         self.enterContext(patch("app.services.agent_ui_design_adjustment.design_environment",
                                 return_value=(SimpleNamespace(node_executable=Path("/node")), Path("/pnpm.cjs"))))

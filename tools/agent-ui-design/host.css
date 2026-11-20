@@ -1,3 +1,5 @@
+@import './shared-host.css';
+
 /* 画布跟随系统主题；页面公开 theme 可覆盖会话与正文的语义颜色。 */
 html { color-scheme: light dark; color: CanvasText; background: Canvas; }
 /* 背景不会默认继承；画布和浮窗显式使用不透明语义色，避免从 body/#root 继承透明背景。 */
@@ -10,11 +12,5 @@ html { color-scheme: light dark; color: CanvasText; background: Canvas; }
 .agent-design:has([data-agent-ui-root][data-color-scheme="dark"]) { color-scheme: dark; }
 .agent-design-conversation { min-width: 0; min-height: 0; overflow: hidden; }
 .agent-design-conversation.is-standalone { flex: 1; }
-.agent-design-conversation.is-floating { position: fixed; display: flex; flex-direction: column; bottom: 1rem; right: 1rem; width: min(48rem, calc(100vw - 2rem)); height: min(42rem, calc(100dvh - 2rem)); border: 1px solid currentColor; border-radius: .75rem; background: Canvas; }
 .agent-design-conversation > .agent-ui-platform-shell { flex: 1; min-height: 0; }
-.agent-design-launcher, .agent-design-close { padding: .5rem 1rem; border: 1px solid currentColor; border-radius: .5rem; color: inherit; background: inherit; cursor: pointer; }
-.agent-design-launchers { position: fixed; bottom: 1rem; right: 1rem; display: flex; gap: .5rem; }
-.agent-design-close { align-self: flex-end; margin: .5rem; }
-.agent-design-launcher:hover, .agent-design-close:hover { text-decoration: underline; }
-.agent-design-launcher:focus-visible, .agent-design-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .agent-design-conversation[hidden] { display: none; }

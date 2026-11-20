@@ -85,3 +85,12 @@ class FormalTextPreviewTests(TestCase):
         self.provider.write_text(self.provider.read_text() + '\n// user edit')
         with self.assertRaises(ValueError):
             managed_preview_command(self.root, self.target, 'rsbuild dev', runtime_public_url='http://127.0.0.1:9000')
+
+    def test_explicit_mock_override_is_development_only_and_real_never_falls_back(self) -> None:
+        """正式文本 Host 可在开发显式选择模拟，磁盘不改；真实选择仍校验当前 Runtime。"""
+        before = self.provider.read_bytes()
+        command = managed_preview_command(self.root, self.target, 'rsbuild dev', preview_source={'source': 'official-mock'})
+        self.assertEqual(json.loads(command[-1])['mode'], 'official-mock')
+        self.assertEqual(self.provider.read_bytes(), before)
+        with self.assertRaises(ValueError):
+            managed_preview_command(self.root, self.target, 'rsbuild dev', preview_source={'source': 'real'})

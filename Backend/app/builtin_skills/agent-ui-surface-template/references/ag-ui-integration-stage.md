@@ -29,9 +29,10 @@ installs, copies fixed assets, confirms documents or falls back to old templates
   mounted standalone page, using a page-scoped parent selector such as
   `.ant-pro-layout-content:has(> .your-page-class)`. Do not edit the global Shell
   or remove spacing from ordinary business pages.
-  Give the remaining-space region min-width/min-height zero and its direct `.shared-agent-page-slot` height 100%
-  in page-scoped CSS. Measure or inherit actual available height instead of nesting
-  a 100vh page or hard-coding a large minimum height. Use inherited theme tokens.
+  Render `SharedAgentPage` immediately below the toolbar in normal document flow.
+  The shared Host fills the viewport below that anchor. Do not apply sizing to
+  `.shared-agent-page-slot` or introduce a fixed or percentage height wrapper.
+  Use inherited theme tokens.
   This overrides generic page-card advice only around a standalone conversation;
   it does not flatten ordinary business cards or change floating-panel pages.
 - The Host is mounted once inside the template identity boundary, outside routing.

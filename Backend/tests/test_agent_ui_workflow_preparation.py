@@ -126,6 +126,41 @@ class WorkflowPreparationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(target_snapshot(self.target), before)
         execute.assert_not_called()
 
+    async def test_reviewed_ag_ui_upgrade_installs_only_after_confirmation(self) -> None:
+        """把模板的旧 SDK 版本显示为可审阅升级，确认后才安装并继续转入。"""
+
+        import sys
+        from tests.test_agent_ui_dependency_install import AgentUiDependencyPlanTests
+
+        package_path = self.target / 'package.json'
+        names = ('@ag-ui/client', '@ag-ui/core')
+        package = json.loads(package_path.read_text())
+        package['dependencies'].update(dict.fromkeys(names, '0.0.57'))
+        package_path.write_text(json.dumps(package))
+        before = target_snapshot(self.target)
+        with patch('app.services.agent_ui_workflow_preparation.execute_dependency_plan') as execute:
+            result = await self.prepare()
+        review = result['clarification']['agentUiPreparation']
+        self.assertEqual(review['stage'], 'dependency')
+        execute.assert_not_called()
+        self.assertEqual(target_snapshot(self.target), before)
+        plan = review['plan']
+        diff = next(change['diff'] for change in plan['changes'] if change['path'] == 'package.json')
+        for name in names:
+            self.assertIn(f'-    "{name}": "0.0.57"', diff)
+            self.assertIn(f'+    "{name}": "1.0.3"', diff)
+
+        helper = AgentUiDependencyPlanTests()
+        helper.target = self.target
+        with patch('app.services.agent_ui_dependency_install._tools', return_value=[sys.executable, __file__]), \
+             patch('app.services.agent_ui_dependency_install._command', side_effect=helper.fake_command), \
+             patch('app.services.agent_ui_design_transfer.run_public_tool', side_effect=self.tool), \
+             patch('app.services.agent_ui_design_transfer.validate_target', return_value={'static': 'passed'}):
+            self.assertIsNone(await self.prepare(agent_ui_preparation_action={
+                'action': 'confirm', 'planId': plan['planId'], 'reviewId': plan['reviewId']}))
+        actual = json.loads(package_path.read_text())['dependencies']
+        self.assertEqual({name: actual[name] for name in names}, dict.fromkeys(names, '1.0.3'))
+
     async def test_current_verified_evidence_continues_without_preparation(self) -> None:
         """已有效转入的页面直接继续任务规划，不重复展示或执行安装。"""
         with patch('app.services.agent_ui_workflow_preparation.load_build_evidence', return_value={'current': True}):

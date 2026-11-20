@@ -6,16 +6,20 @@ from typing import Any
 # 当前 0.0.1 成品公开 Source Registry 的 platform preset closure；不由模型选包或升级。
 SOURCE_DEPENDENCIES = (('lucide-react', '1.41.0'), ('zod', '4.5.4'),
                        ('@ag-ui/client', '1.0.3'), ('@ag-ui/core', '1.0.3'))
+# 只允许把当前模板的 AG-UI SDK 版本纳入现有依赖审阅，安装仍走确认门。
+_REVIEWABLE_UPGRADES = frozenset({('@ag-ui/client', '0.0.57', '1.0.3'),
+                                  ('@ag-ui/core', '0.0.57', '1.0.3')})
 
 
 def prepare_source_dependencies(package: dict[str, Any]) -> list[dict[str, str]]:
-    """补足默认应用层直接生产声明；已有不同版本或其他字段声明必须单独审阅。"""
+    """补足直接生产依赖，并将已知 SDK 迁移纳入待确认的文件差异。"""
     dependencies = package.setdefault('dependencies', {})
     for name, version in SOURCE_DEPENDENCIES:
         if any(name in package.get(field, {}) for field in ('devDependencies', 'optionalDependencies', 'peerDependencies')):
             raise ValueError(f'{name} 必须单独审阅为直接生产依赖，不能自动移动声明。')
-        if name in dependencies and dependencies[name] != version:
-            raise ValueError(f'{name} 已有版本需单独审阅，不能自动升级或降级。')
+        if name in dependencies and (current := dependencies[name]) != version:
+            if not isinstance(current, str) or (name, current, version) not in _REVIEWABLE_UPGRADES:
+                raise ValueError(f'{name} 已有版本需单独审阅，不能自动升级或降级。')
         dependencies[name] = version
     return [{'name': name, 'version': version} for name, version in SOURCE_DEPENDENCIES]
 

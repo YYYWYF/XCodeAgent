@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from app.services.agent_ui_dependency_plan import safe_path
+from app.services.agent_ui_observation_identity import tree_digest, workspace_revision
 
 PACKAGES = tuple('@za38.03/agent-ui-' + name for name in ('core', 'renderer', 'runtime', 'plugins'))
 
@@ -22,7 +23,7 @@ def _bytes(path: Path, limit: int = 2 * 1024 * 1024) -> bytes:
 
 
 def capture_identity(workspace: Path) -> dict[str, Any]:
-    """仅返回当前共享源码、实际包 metadata 和锁摘要，不返回内容或绝对路径。"""
+    """返回当前源码/正式配置、锁及四个实际包的字节摘要，不返回内容或绝对路径。"""
     unavailable = {'status': 'unavailable'}
     root = workspace.resolve()
     try:
@@ -66,7 +67,8 @@ def capture_identity(workspace: Path) -> dict[str, Any]:
             if (metadata.get('name') != name or not isinstance(version, str)
                     or not re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?', version)):
                 return unavailable
-            packages.append({'name': name, 'version': version, 'metadataSha256': hashlib.sha256(value).hexdigest()})
+            packages.append({'name': name, 'version': version, 'metadataSha256': hashlib.sha256(value).hexdigest(),
+                             'contentSha256': tree_digest(metadata_path.parent, package=True)})
         # 两种当前支持的 manager 均允许；同时存在多个锁则拒绝选择。
         locks = [safe_path(target, name) for name in ('pnpm-lock.yaml', 'package-lock.json')
                  if safe_path(target, name).is_file()]
@@ -74,7 +76,8 @@ def capture_identity(workspace: Path) -> dict[str, Any]:
             return unavailable
         return {'status': 'available', 'transferPlanId': plan_id,
             'sourceSha256': hashlib.sha256(json.dumps(sources, separators=(',', ':')).encode()).hexdigest(),
-            'lockSha256': hashlib.sha256(_bytes(locks[0], 8 * 1024 * 1024)).hexdigest(), 'packages': packages}
+            'lockSha256': hashlib.sha256(_bytes(locks[0], 8 * 1024 * 1024)).hexdigest(), 'packages': packages,
+            **workspace_revision(root, packages)}
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return unavailable
 
@@ -87,9 +90,15 @@ def observation_snapshot(workspace: Path, frontend: Mapping[str, Any], runtime: 
     mode = marker.get('mode') if isinstance(marker, Mapping) else None
     source = 'unknown'
     if (frontend.get('status') == 'running' and isinstance(marker, Mapping)
-            and marker.get('agentId') == agent_id and mode in {'official-mock', 'real-text', 'formal-text', 'formal-business'}
-            and (mode == 'official-mock' or healthy)):
+            and marker.get('agentId') == agent_id and mode in {'official-mock', 'replay', 'real-text', 'formal-text', 'formal-business'}
+            and (mode in {'official-mock', 'replay'} or healthy)):
         source = mode
+    if source == 'replay':
+        from app.services.agent_ui_preview_source import replay_path
+        try:
+            replay_path(workspace, marker.get('replaySha256'))
+        except (OSError, ValueError, TypeError):
+            source = 'unknown'
     session = launch.get('sessionId') if isinstance(launch, Mapping) else None
     session = session if isinstance(session, str) and re.fullmatch('[a-f0-9]{32}', session) else None
     current = capture_identity(workspace)
@@ -97,5 +106,10 @@ def observation_snapshot(workspace: Path, frontend: Mapping[str, Any], runtime: 
     launch_id = runtime.get('launchId')
     launch_id = launch_id if isinstance(launch_id, str) and re.fullmatch('[a-zA-Z0-9_-]{1,128}', launch_id) else None
     return {'source': source, 'sessionId': session, 'launchId': launch_id,
-        'identityMatches': bool(session and current['status'] == 'available' and started == current),
-        'identity': current, 'replay': 'not_implemented'}
+        'identityMatches': bool(session and source != 'unknown' and current['status'] == 'available' and started == current
+                                and isinstance(launch, Mapping) and launch.get('source') == source
+                                and (source != 'replay' or launch.get('replaySha256') == marker.get('replaySha256'))
+                                and (source in {'official-mock', 'replay'} or (isinstance(launch, Mapping)
+                                     and launch.get('launchId') == launch_id and launch_id))),
+        'identity': current, 'replay': 'sanitized-jsonl',
+        'replaySha256': marker.get('replaySha256') if isinstance(marker, Mapping) and mode == 'replay' else None}

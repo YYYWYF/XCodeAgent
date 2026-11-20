@@ -7,7 +7,6 @@ import { designPageGenerationLabel, hasDesignPreview, type DesignPreviewPage } f
 import RichLoading from '../DesignProgress/RichLoading'
 import { cx } from '../../../../utils'
 import './index.less'
-import AgentUiTransfer from '../../../AgentUiTransfer'
 
 const { Text } = Typography
 
@@ -79,11 +78,6 @@ export default function UiDesignPreviewPanel({
 
   return (
     <div className={cx('ui-design-preview-panel')}>
-      {workspaceRoot && pages.some(page => page.design_asset) && (
-        <div className={cx('ui-design-preview-stage-header')}>
-          <AgentUiTransfer key={workspaceRoot} workspaceRoot={workspaceRoot} />
-        </div>
-      )}
       <aside className={cx('ui-design-preview-anchor')}>
         <nav className={cx('ui-design-preview-list')}>
           {pages.map((page, index) => {

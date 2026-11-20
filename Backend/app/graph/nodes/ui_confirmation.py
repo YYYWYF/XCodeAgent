@@ -866,7 +866,13 @@ async def _apply_ui_design_action(
 
     # 显式恢复只进入既有孤立任务自愈；不重做活跃页，不确认产物或推进下游。
     if action_type == "refresh":
-        async with get_ui_design_generation_pool().agent_project_lock(workspace):
+        pool = get_ui_design_generation_pool()
+        project_lock = pool.agent_project_lock(workspace)
+        # 活跃生成或调整拥有工程写权限；刷新只读已原子提交的清单，不排队等待模型。
+        if pool.pending_page_ids(workspace) or project_lock.locked():
+            latest = load_ui_designs_json(ui_designs_json_path(state))
+            return latest if latest.get("pages") else existing
+        async with project_lock:
             latest = await _latest_ui_designs(state, existing)
             # 显式刷新可重建丢失的派生说明；保留用户尚未提交的页面修改文字。
             if any(page.get("design_asset") for page in latest.get("pages", []) if isinstance(page, dict)):

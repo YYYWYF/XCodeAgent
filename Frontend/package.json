@@ -47,6 +47,7 @@
     "test:workflow-preview": "node scripts/run-workflow-preview-tests.mjs",
     "test:test-report": "node scripts/run-test-report-panel-tests.mjs",
     "test:acceptance-phase": "node scripts/run-acceptance-phase-tests.mjs",
+    "test:agent-ui-acceptance": "node scripts/run-acceptance-phase-tests.mjs agentUiAcceptance.test.ts",
     "test:development-artifacts": "node scripts/run-development-artifact-tests.mjs",
     "test:entity-design": "node scripts/run-entity-design-tests.mjs",
     "test:dag-generation": "node scripts/run-dag-generation-tests.mjs",

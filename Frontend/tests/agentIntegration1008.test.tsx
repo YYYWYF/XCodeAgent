@@ -21,6 +21,16 @@ const contract = {
   name: '库存助手',
   purpose: '解释库存状态。',
   pageIds: ['home'],
+  publicEndpoint: true,
+  interactionContract: {
+    mode: 'conversation',
+    inputSchema: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    resultSchema: null,
+    textOutput: true,
+    publicStateSchema: null,
+    outcomes: [],
+    interactionKinds: []
+  },
   agentSettings: {
     prompt: { systemPrompt: '请解释当前库存。' },
     model: { source: 'project' },
@@ -64,9 +74,10 @@ test('智能体完成统计和设计稿运行时使用当前真实合同', () =>
     { total: 1, completed: 0 }
   )
   assert.throws(
-    () => compileTsx(
-      "import { AgentConversationTemplate } from '@xcodeagent/agent-ui-design'; export default AgentConversationTemplate"
-    ),
+    () =>
+      compileTsx(
+        "import { AgentConversationTemplate } from '@xcodeagent/agent-ui-design'; export default AgentConversationTemplate"
+      ),
     /重新生成/
   )
 })
@@ -99,9 +110,7 @@ test('工作台菜单将智能体放在页面与接口之间并使用统一的�
 })
 
 test('智能体分组保留搜索空态和读取失败说明，移除手动刷新入口', () => {
-  const empty = renderToStaticMarkup(
-    <AgentOutlineSection agents={agents} query="不存在的助手" />
-  )
+  const empty = renderToStaticMarkup(<AgentOutlineSection agents={agents} query="不存在的助手" />)
   assert.match(empty, /没有匹配的智能体/)
   assert.doesNotMatch(empty, /库存助手/)
   assert.doesNotMatch(empty, /刷新智能体/)

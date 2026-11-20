@@ -6041,6 +6041,7 @@ export default function AiChatPanel({
                 />
               </div>
               <AcceptanceDecisionDock
+                workspace={application.workspaceRoot || ''}
                 disabled={loading || workspaceBusy || acceptanceRejecting || acceptanceSubmitting}
                 submitting={acceptanceSubmitting}
                 onAccept={handleAcceptanceApprove}

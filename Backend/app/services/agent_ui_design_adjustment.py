@@ -28,12 +28,20 @@ def _adjust_project(state: dict[str, Any], pages: list[dict[str, Any]], targets:
                     instruction: str, cancelled: threading.Event,
                     on_progress: Callable[[str, str], None] | None = None) -> list[dict[str, Any]]:
     """校验旧资产并在新草稿中编辑、编译，成功后才切换预览和共享引用。"""
-    from app.services.agent_ui_design_projection import current_project
+    from app.services.agent_ui_design_baseline import revision_project
+    from app.services.agent_ui_design_projection import design_facts_digest
 
     current = [page for page in pages if page.get("design_asset")]
-    project, asset = current_project(state, next(page for page in current if page["pageId"] in targets))
+    project, asset = revision_project(state, next(page for page in current if page["pageId"] in targets))
     if any(page["design_asset"] != asset for page in current):
         raise ValueError("当前智能体页面的工程身份不一致，请重新生成全部智能体页面。")
+    facts_changed = asset.get('factsDigest') != design_facts_digest(state)
+    # 产品修订影响整个共享工程，所有依赖页均需同步绑定并重新等待确认。
+    if facts_changed:
+        targets = list(asset['pageIds'])
+        instruction = ('按当前已确认的需求与产品规划同步全部页面、业务操作和助手能力；'
+                       '保留仍符合产品的布局和定制，移除已删除动作的控件及绑定。\n' + instruction)
+    baseline = load_ui_designs_json(ui_designs_json_path(state)) or {}
     validate_design_project(project)
     _check_cancel(cancelled.is_set)
     run_id = f"agent-ui-adjust-{uuid.uuid4().hex}"
@@ -41,18 +49,20 @@ def _adjust_project(state: dict[str, Any], pages: list[dict[str, Any]], targets:
     draft = project.workspace / ".devagentstudio/ui-design/drafts" / uuid.uuid4().hex
     design = revise_agent_ui_design(inspection, current_project=project, draft_root=draft, pnpm_cli=cli,
         requirement_spec=state["requirement_spec"], product_plan=state["product_plan"], run_id=run_id,
-        should_cancel=cancelled.is_set, targets=targets, instruction=instruction, on_progress=on_progress)
+        should_cancel=cancelled.is_set, targets=targets, instruction=instruction, on_progress=on_progress,
+        synchronize_product=facts_changed)
     _check_cancel(cancelled.is_set)
     # 模型执行期间旧源码、正式事实或清单变化时拒绝提交，不能覆盖其他已接受的工作。
     validate_design_project(project)
     latest = load_ui_designs_json(ui_designs_json_path(state))
-    if latest and latest.get("pages") != pages:
+    if latest and (latest.get("pages") != pages
+                   or latest.get('product_plan_sha256') != baseline.get('product_plan_sha256')):
         raise ValueError("设计调整期间页面状态已变化，已保留当前设计，请基于最新版本重新提交。")
     updated_asset = {**asset, "draft": draft.name, "revision": design.revision,
         "factsDigest": design.facts_digest, "environmentIdentity": design.project.identity,
         "sourceDigest": design.project.source_digest, "buildDigest": design.project.build_digest}
     # 共享应用变化撤销全部受影响页确认；仅页面展示 props 变化保留其他页的确认。
-    affected = set(design.affected_page_ids)
+    affected = set(asset['pageIds'] if facts_changed else design.affected_page_ids)
     product_pages = {page["pageId"]: page for page in project_agent_design_pages(
         state["requirement_spec"], state["product_plan"])}
     result: list[dict[str, Any]] = []

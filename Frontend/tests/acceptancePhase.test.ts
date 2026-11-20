@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import './agentUiAcceptance.test'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -343,7 +344,19 @@ test('验收底栏参与布局并允许内容变高，避免遮挡预览', () =>
     'utf8'
   )
 
-  assert.match(panelStyles, /browser-preview-panel\s*\{\s*flex:\s*1;\s*height:\s*auto/)
+  // 当前预览先由内容容器分配剩余高度，内部面板再填满容器，不与验收底栏争用 100% 高度。
+  assert.match(
+    panelStyles,
+    /workspace-content\s*\{\s*flex:\s*1;\s*min-height:\s*0;\s*overflow:\s*hidden/
+  )
+  const previewStyles = readFileSync(
+    path.join(
+      process.cwd(),
+      'src/renderer/src/components/BrowserPreviewPanel/BrowserPreviewPanel.less'
+    ),
+    'utf8'
+  )
+  assert.match(previewStyles, /browser-preview-panel\s*\{[^}]*height:\s*100%;\s*min-height:\s*0/s)
   assert.match(dockStyles, /max-height:\s*55%/)
   assert.match(dockStyles, /overflow-y:\s*auto/)
   assert.doesNotMatch(dockStyles, /position:\s*absolute/)

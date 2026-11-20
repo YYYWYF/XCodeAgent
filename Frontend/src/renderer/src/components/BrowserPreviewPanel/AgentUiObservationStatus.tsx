@@ -3,6 +3,7 @@ import type { AgentUiObservation } from '../../service/previewRuntime'
 
 const sources = {
   'official-mock': 'Mock · 模拟回复',
+  replay: '脱敏录制回放 · 不执行业务',
   'real-text': '真实 Python · 开发接线',
   'formal-text': '真实 Python · 正式接线',
   'formal-business': '真实 Python · 业务接线',
@@ -32,17 +33,23 @@ export default function AgentUiObservationStatus({
           <dd>{identity.sourceSha256}</dd>
           <dt>当前锁文件 SHA-256</dt>
           <dd>{identity.lockSha256}</dd>
-          <dt>实际包版本与元数据 SHA-256</dt>
+          <dt>当前源码、配置与包内容修订 SHA-256</dt>
+          <dd>{identity.revisionSha256}</dd>
+          <dt>工作区身份 SHA-256</dt>
+          <dd>{identity.workspaceSha256}</dd>
+          <dt>实际包版本、元数据与完整包内容 SHA-256</dt>
           {identity.packages?.map((item) => (
             <dd key={item.name}>
               {item.name}@{item.version}
               <br />
               {item.metadataSha256}
+              <br />{item.contentSha256}
             </dd>
           ))}
         </dl>
       )}
-      <p>以上是观察摘要，不替代转入验证或业务验收。回放尚未实现。</p>
+      {observation.replaySha256 && <p>脱敏录制 SHA-256：{observation.replaySha256}</p>}
+      <p>以上是观察摘要，不替代转入验证或业务验收。回放仅复现脱敏显示，不证明真实审批或写入。</p>
     </details>
   )
 }

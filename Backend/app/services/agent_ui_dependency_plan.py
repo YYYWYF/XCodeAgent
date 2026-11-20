@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from difflib import unified_diff
 import hashlib
 import json
 import os
@@ -265,6 +266,7 @@ def prepare_dependency_plan(workspace: str | Path, *, source: str = "registry", 
     """生成逐文件 diff 与保护摘要；确认时必须由服务端重新计算。"""
     root, target = target_root(workspace)
     package = read_object(target / "package.json")
+    previous_package = json.dumps(package, ensure_ascii=False, indent=2) + "\n"
     checks = validation_stages(package)
     before = target_snapshot(target)
     manager, version = _manager(target, package)
@@ -291,13 +293,18 @@ def prepare_dependency_plan(workspace: str | Path, *, source: str = "registry", 
     if layout["bundler"] == "rsbuild":
         changes.update(rsbuild_postcss_changes(target))
     changes["package.json"] = json.dumps(package, ensure_ascii=False, indent=2) + "\n"
+    package_diff = "".join(unified_diff(previous_package.splitlines(keepends=True),
+                                       changes["package.json"].splitlines(keepends=True),
+                                       fromfile="a/package.json", tofile="b/package.json"))
     if review_id and not re.fullmatch(r"[a-f0-9]{32}", review_id):
         raise ValueError("安装审阅身份无效。")
     plan = {"workspace": str(root), "target": "frontend", "source": source, **layout, "reviewId": review_id,
             "manager": manager, "managerVersion": version, "lockfile": LOCKFILES[manager],
             "packages": packages, "sourceDependencies": source_dependencies, "before": before, "formal": formal_snapshot(root),
             "changes": [{"path": path, "beforeSha256": before.get(path), "after": content,
-                         "afterSha256": sha256(content.encode())} for path, content in sorted(changes.items())
+                         "afterSha256": sha256(content.encode()),
+                         **({"diff": package_diff} if path == "package.json" and package_diff else {})}
+                        for path, content in sorted(changes.items())
                         if before.get(path) != sha256(content.encode())],
             "checks": checks,
             "recovery": "失败保留文件、锁和命令记录；声明恢复不代表依赖或脚本副作用已恢复。"}

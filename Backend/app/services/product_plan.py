@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import UTC, datetime
 import hashlib
 import json
 import re
+from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
-from app.services.requirement_spec import product_acceptance_criteria
+from app.services.agent_product_actions import (
+    agent_behavior_targets,
+    agent_product_action_errors,
+)
+from app.services.product_plan_capability_ids import allocate_capability_ids
 from app.services.product_plan_carryover import carried_definition_for_page
-from app.services.agent_product_actions import agent_behavior_targets, agent_product_action_errors
+from app.services.requirement_spec import product_acceptance_criteria
 
 PRODUCT_PLAN_SCHEMA_VERSION = "product-plan.v8"
 _STATE_REQUIREMENT_KEYS = ("loading", "empty", "error", "success", "validation")
@@ -880,15 +884,24 @@ def _normalized_agents(
             str(item.get("name") or "").strip(): item
             for item in _dict_items(existing_agent.get("capabilities"))
         }
-        capabilities = []
-        for index, name in enumerate(_text_items(requirement.get("capabilities")), start=1):
+        capability_names = _text_items(requirement.get("capabilities"))
+        capability_ids = allocate_capability_ids(
+            {
+                name: str(supplied_capabilities.get(name, {}).get("capabilityId") or "").strip()
+                or _stable_agent_capability_id(agent_id, name, index)
+                for index, name in enumerate(capability_names, start=1)
+            },
+            {
+                name: str(item.get("capabilityId") or "").strip()
+                for name, item in existing_capabilities.items()
+            },
+        )
+        capabilities: list[dict[str, str]] = []
+        for name in capability_names:
             supplied = supplied_capabilities.get(name, {})
-            existing_capability = existing_capabilities.get(name, {})
             capabilities.append(
                 {
-                    "capabilityId": str(existing_capability.get("capabilityId") or "").strip()
-                    or str(supplied.get("capabilityId") or "").strip()
-                    or _stable_agent_capability_id(agent_id, name, index),
+                    "capabilityId": capability_ids[name],
                     "name": name,
                     "expectedResult": str(
                         supplied.get("expectedResult")

@@ -91,6 +91,7 @@ def launch_project_preview(
     *,
     on_progress: LaunchProgressCallback | None = None,
     force_restart: bool = False,
+    preview_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """串行维护标准预览并同步所有入口的运行事实。"""
     from app.services.backend_process_registry import backend_launch_lock
@@ -98,6 +99,9 @@ def launch_project_preview(
 
     root = Path(workspace_path).expanduser().resolve()
     with backend_launch_lock(root):
+        if preview_source is None:
+            from app.services.agent_ui_preview_source import current_preview_source
+            preview_source = current_preview_source(root)
         # 在清空本轮日志前停止旧进程，避免旧输出污染新的诊断证据。
         if force_restart:
             frontend_stop = stop_frontend_project(root)
@@ -116,7 +120,8 @@ def launch_project_preview(
                 on_progress(stage, status, message)
 
         try:
-            result = _launch_project_preview(root, on_progress=report, force_restart=force_restart)
+            result = _launch_project_preview(root, on_progress=report, force_restart=force_restart,
+                                            **({'preview_source': preview_source} if preview_source else {}))
         except Exception as exc:
             from app.services.preview_runtime_state import redact
 
@@ -132,6 +137,7 @@ def _launch_project_preview(
     *,
     on_progress: LaunchProgressCallback | None = None,
     force_restart: bool = False,
+    preview_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按工作区工程结构启动应用预览；强制模式会重启 standard preview。"""
 
@@ -145,6 +151,7 @@ def _launch_project_preview(
     report("structure", "running", "正在识别工程结构…")
     backend_project_root = find_backend_project_root(root)
     runtime_plan = runtime_check_plan(root, {})
+    simulated = (preview_source or {}).get('source') in {'official-mock', 'replay'}
     no_backend_business = _application_has_no_backend_business(root)
     report("structure", "completed", "工程结构识别完成")
     backend_process = None
@@ -154,14 +161,19 @@ def _launch_project_preview(
             raise ValueError("Runtime Direct 工程包含 Java 后端，请先修正模板布局。")
         backend = {"status": "skipped", "reason": "runtime_direct", "message": "业务由 Python Runtime 承载，无需启动 Java 后端。"}
         report("backend", "skipped", backend["message"])
-        report("agent_runtime", "running", "正在准备并启动 Agent Runtime…")
-        agent_runtime = launch_runtime(root, on_progress=lambda message: report("agent_runtime", "running", message))
-        if agent_runtime.get("status") != "running":
+        if simulated:
+            agent_runtime = {'status': 'skipped', 'message': '当前选择 Mock/回放，不启动 Python 业务 Runtime。'}
+            report('agent_runtime', 'skipped', agent_runtime['message'])
+        else:
+            report("agent_runtime", "running", "正在准备并启动 Agent Runtime…")
+            agent_runtime = launch_runtime(root, on_progress=lambda message: report("agent_runtime", "running", message))
+        if not simulated and agent_runtime.get("status") != "running":
             report("agent_runtime", "failed", agent_runtime.get("message") or "Runtime 启动失败。")
             return {"status": "failed", "message": agent_runtime.get("message"), "workspace": str(root),
                     "preview_url": None, "backend": backend, "agent_runtime": agent_runtime,
                     "frontend": None, "failed_stage": agent_runtime.get("failed_stage")}
-        report("agent_runtime", "completed", agent_runtime["message"])
+        if not simulated:
+            report("agent_runtime", "completed", agent_runtime["message"])
     elif backend_project_root is None or no_backend_business:
         backend = {
             "status": "skipped",
@@ -208,15 +220,16 @@ def _launch_project_preview(
         )
 
     report("frontend", "running", "正在启动前端服务并等待健康检查就绪…")
-    frontend = (
-        launch_frontend_project(root, force_restart=True, runtime_public_url=agent_runtime["preview_url"])
-        if runtime_plan is not None
-        else
-        launch_frontend_project(root, force_restart=True)
-        if force_restart
-        else launch_frontend_project(root)
-    )
-    if runtime_plan is not None and frontend.get("status") == "running":
+    if runtime_plan is not None and not simulated:
+        frontend = launch_frontend_project(root, force_restart=True, runtime_public_url=agent_runtime['preview_url'],
+                                           runtime_launch_id=agent_runtime['launch_id'], preview_source=preview_source)
+    elif simulated:
+        frontend = launch_frontend_project(root, force_restart=True, preview_source=preview_source)
+    elif force_restart:
+        frontend = launch_frontend_project(root, force_restart=True)
+    else:
+        frontend = launch_frontend_project(root)
+    if runtime_plan is not None and not simulated and frontend.get("status") == "running":
         from app.services.agent_runtime_health import wait_runtime_proxy_ready
 
         ready, reason = wait_runtime_proxy_ready(
@@ -267,7 +280,9 @@ def _launch_project_preview(
         "status": "running",
         "message": (
             "Agent Runtime 与前端同源健康核验通过；真实对话尚未验收。"
-            if runtime_plan is not None else
+            if runtime_plan is not None and not simulated else
+            '开发预览已就绪；当前为 Mock/脱敏回放，不执行业务。'
+            if simulated else
             "前端项目已启动并就绪，未识别到后端工程。"
             if frontend_only
             else "Java 后端与前端项目均已启动并就绪。"

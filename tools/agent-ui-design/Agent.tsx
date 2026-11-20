@@ -1,11 +1,16 @@
 import { AgentApplication, type AgentProps } from '@za38.03/agent-ui-runtime/ui'
 import { resolveAgentUILocaleMessages } from '@za38.03/agent-ui-plugins'
 import { useCallback, useState, type ReactElement } from 'react'
+import { useBusinessTransientMessages } from './RuntimeBusinessPanel'
+import { withBusinessPresentation } from './businessPresentation'
 import { agentUIProject } from '../agent-ui/application/project-config'
+
+const businessProject = withBusinessPresentation(agentUIProject)
 
 /** 所有页面复用同一官方应用和会话，页面差异仅通过公开展示 props 传入。 */
 export function Agent({ pageId, ...props }: AgentProps & { pageId: string }): ReactElement {
-  const project = agentUIProject
+  const project = businessProject
+  const transientMessages = useBusinessTransientMessages()
   const [pageLocales, setPageLocales] = useState<Record<string, NonNullable<AgentProps['locale']>>>({})
   /** 页面默认语言跟随实际应用层；用户在官方控件中切换的选择保留在当前预览。 */
   const changeLocale = useCallback((value: NonNullable<AgentProps['locale']>): void => {
@@ -23,7 +28,7 @@ export function Agent({ pageId, ...props }: AgentProps & { pageId: string }): Re
       { title: messages.nextTitle, label: messages.nextLabel, prompt: messages.nextPrompt },
     ]
   }
-  return <AgentApplication project={project} {...props}
+  return <AgentApplication project={project} {...props} transientMessages={transientMessages}
     locale={props.locale ?? pageLocales[pageId] ?? project.defaultLocale}
     onLocaleChange={changeLocale} suggestions={props.suggestions ?? suggestions} />
 }

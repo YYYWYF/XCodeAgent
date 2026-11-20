@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { randomUUID } from '@ag-ui/client'
 import { PreviewRuntimeBusinessError, runPreviewRuntime } from '../../../service/previewRuntime'
-import type { PreviewAction, PreviewRuntimePayload } from '../../../service/previewRuntime'
+import type { AgentUiSourceSelection, PreviewAction, PreviewRuntimePayload } from '../../../service/previewRuntime'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
 import type { PersistSessionInput } from './useChatSessions'
@@ -66,10 +66,20 @@ export function usePreviewRuntime(options: Options): {
   const repairRunning =
     !!activeThread && ['running', 'stopping'].includes(repairs[activeThread]?.status || '')
   const workspaceRef = useRef(options.workspace)
+  const workspaceEpoch = useRef(0)
+  const newestStartedAt = useRef('')
+  if (workspaceRef.current !== options.workspace) {
+    workspaceEpoch.current += 1
+    newestStartedAt.current = ''
+  }
   workspaceRef.current = options.workspace
 
   /** 合并当前工作区运行事实并按会话保存修复状态。 */
   const receive = useCallback((value: PreviewRuntimePayload, threadId?: string): void => {
+    const startedAt = value.runtime?.startedAt || ''
+    // Backend 发布同一规范 UTC 时间；旧启动的迟到快照不能覆盖已观察到的新 epoch。
+    if (startedAt && newestStartedAt.current && startedAt < newestStartedAt.current) return
+    if (startedAt) newestStartedAt.current = startedAt
     const { acquireSessionExecution, releaseSessionExecution, updateSessionExecutionStatus } =
       runtimeStoreRef.current
     setSnapshot((previous) => ({
@@ -83,8 +93,9 @@ export function usePreviewRuntime(options: Options): {
         : ''
     // 服务状态订阅也可能首次发现预览已经恢复；只按 URL 变化同步一次，
     // 清除旧启动错误并避免每轮 watch 重新加载用户正在查看的页面。
-    if (readyUrl && readyUrl !== lastReadyUrlRef.current) {
-      lastReadyUrlRef.current = readyUrl
+    const readyIdentity = readyUrl + ':' + (value.runtime?.agentUiConnection?.observation?.sessionId || '')
+    if (readyUrl && readyIdentity !== lastReadyUrlRef.current) {
+      lastReadyUrlRef.current = readyIdentity
       void window.devAgentStudio?.projectPreview?.registerWorkspace({
         workspaceRoot: workspaceRef.current
       })
@@ -202,7 +213,8 @@ export function usePreviewRuntime(options: Options): {
   const execute = async (
     action: PreviewAction,
     identity?: SessionIdentity,
-    feedback = ''
+    feedback = '',
+    sourceSelection?: AgentUiSourceSelection
   ): Promise<void> => {
     if (busyRef.current && action !== 'cancel') return
     if (action === 'cancel') {
@@ -211,8 +223,9 @@ export function usePreviewRuntime(options: Options): {
     }
     const captured = optionsRef.current
     const workspace = captured.workspace
+    const epoch = workspaceEpoch.current
     // 手动重启一开始就登记工作区，确保 Electron 在重启进行中退出时也会停止残留进程。
-    if (action === 'restart' && workspace) {
+    if (['restart', 'switch-source'].includes(action) && workspace) {
       void window.devAgentStudio?.projectPreview?.registerWorkspace({ workspaceRoot: workspace })
     }
     cancelRequestedRef.current = false
@@ -269,6 +282,7 @@ export function usePreviewRuntime(options: Options): {
           workspace,
           action,
           feedback,
+          ...sourceSelection,
           attemptId: snapshot?.runtime?.attemptId,
           planId: identity ? repairs[identity.threadId]?.planId : undefined
         },
@@ -276,7 +290,7 @@ export function usePreviewRuntime(options: Options): {
           threadId: identity?.threadId || randomUUID(),
           signal: operationController.signal,
           onUpdate: (value) => {
-            if (workspaceRef.current !== workspace) return
+            if (workspaceRef.current !== workspace || workspaceEpoch.current !== epoch) return
             receive(value, identity?.threadId)
             if (cancelRequestedRef.current) return
             if (value.status !== 'failed') accepted = true
@@ -302,7 +316,7 @@ export function usePreviewRuntime(options: Options): {
           }
         }
       )
-      if (cancelRequestedRef.current) return
+      if (cancelRequestedRef.current || workspaceEpoch.current !== epoch) return
       if (value.launchResult?.status === 'failed') {
         failedActionRef.current = { action, identity, workspace }
         setError(value.launchResult.message || '预览服务启动失败。')
@@ -343,7 +357,7 @@ export function usePreviewRuntime(options: Options): {
         return
       }
       const message = reason instanceof Error ? reason.message : '预览服务操作失败'
-      if (workspaceRef.current !== workspace) return
+      if (workspaceRef.current !== workspace || workspaceEpoch.current !== epoch) return
       previewConnection.reportFailure(reason)
       failedActionRef.current = { action, identity, workspace }
       setError(message)
@@ -434,7 +448,8 @@ export function usePreviewRuntime(options: Options): {
       },
       onDiagnose: () => {
         void diagnose()
-      }
+      },
+      onSwitchSource: (selection) => execute('switch-source', undefined, '', selection)
     },
     repairSession,
     repairState: activeThread ? repairs[activeThread] : undefined,

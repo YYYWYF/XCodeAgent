@@ -502,6 +502,7 @@ def _assemble_planning_context(
         owner_session_id=owner_session_id,
         workflow_run_id=workflow_run_id,
         thread_id=thread_id,
+        workspace=workspace,
     )
     return _PlanningContext(
         workspace=workspace,

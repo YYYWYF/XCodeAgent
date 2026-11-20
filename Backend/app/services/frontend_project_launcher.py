@@ -40,6 +40,8 @@ def launch_frontend_project(
     force_restart: bool = False,
     linked_dependencies: bool = False,
     runtime_public_url: str | None = None,
+    runtime_launch_id: str | None = None,
+    preview_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """按普通工作目录安装并启动前端，不依赖 LangGraph 状态。
 
@@ -168,7 +170,8 @@ def launch_frontend_project(
 
         try:
             preview_argv = managed_preview_command(root, package_path.parent, str(scripts.get(script_name, "")),
-                                                   runtime_public_url=runtime_public_url)
+                                                   runtime_public_url=runtime_public_url,
+                                                   runtime_launch_id=runtime_launch_id, preview_source=preview_source)
         except (OSError, ValueError, KeyError) as exc:
             return _failed_launch(f"Agent UI 开发预览准备失败：{exc}", root=root, package_json_path=package_path)
     launch_result, process = _start_dev_server(
@@ -224,7 +227,8 @@ def launch_frontend_project(
             runtime_root=runtime_root,
         ),
         "status": launch_status,
-        "agent_ui_preview": ({key: json.loads(preview_argv[-1])[key] for key in ('mode', 'agentId')}
+        "agent_ui_preview": ({key: json.loads(preview_argv[-1])[key] for key in ('mode', 'agentId', 'replaySha256')
+                              if key in json.loads(preview_argv[-1])}
                              if preview_argv else None),
         "agent_ui_observation": (json.loads(preview_argv[-1])['observation'] if preview_argv else None),
         "message": message,

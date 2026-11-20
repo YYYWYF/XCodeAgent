@@ -42,12 +42,17 @@ export async function mountConsumer(t, scenario = 'simple-chat', sharedProject) 
   }
   globalThis.requestAnimationFrame = (callback) => globalThis.setTimeout(() => callback(Date.now()), 0)
   globalThis.cancelAnimationFrame = globalThis.clearTimeout
+  // 浏览器的全局动画 API 同时位于 window，供受管预览观察器合并布局读取。
+  window.requestAnimationFrame = globalThis.requestAnimationFrame
+  window.cancelAnimationFrame = globalThis.cancelAnimationFrame
   const nativeFetch = globalThis.fetch
   // Node fetch 不接受浏览器相对 URL；仅补同源地址解析，原始响应仍由官方 SDK 消费。
   globalThis.fetch = (input, init) => nativeFetch(typeof input === 'string' ? new URL(input, origin) : input, init)
   const server = await createServer({
     configFile: false,
     root: sharedProject?.root,
+    // 临时工程共用只读依赖安装；优化缓存必须独立，避免并发回归互相覆盖模块。
+    cacheDir: sharedProject ? path.join(sharedProject.root, '.vite') : undefined,
     esbuild: { jsx: 'automatic' },
     server: { host: '127.0.0.1', middlewareMode: true, hmr: false, watch: null },
     ssr: { noExternal: [/^@za38\.03\//] },
@@ -89,12 +94,13 @@ export async function mountConsumer(t, scenario = 'simple-chat', sharedProject) 
   /** 外层 Provider 及 Host 的树位置稳定，测试只更新路由和显隐参数。 */
   function showPage(pageId = 'chat', panelOpen = true, sessionKey = 'user-a') {
     const props = { pageId, endpoint: '/agent', source: 'official-mock', panelOpen, sessionKey, agentId: sharedProject?.agentId,
+      inputSchema: sharedProject?.inputSchema,
       onNavigatePage: (target) => showPage(target, true, sessionKey),
       onPanelOpenChange: (open) => showPage(pageId, open, sessionKey),
       children: createElement('main', null, '业务首页', sessionKey && createElement(Observer), sessionKey && createElement(PageContext),
         module.SharedAgentPage && pageId === 'chat' && createElement(module.SharedAgentPage, { pageId })),
     }
-    root.render(module.SharedAgentApplication
+    root.render(module.SharedAgentApplication || sharedProject?.application
       ? createElement(App, props)
       : createElement(AgentUIProvider, null, createElement(App, sharedProject ? props : {}), createElement(Observer)))
   }
@@ -108,7 +114,7 @@ export async function mountConsumer(t, scenario = 'simple-chat', sharedProject) 
 }
 
 /** 从本仓库的真实应用层准备 Host 回归；独立成品转入另由集成用例验证。 */
-export async function mountSharedConsumer(t, scenario, agentId, mockServer, preview = false) {
+export async function mountSharedConsumer(t, scenario, agentId, mockServer, preview = false, observation = false, options = {}) {
   const seed = path.resolve(import.meta.dirname, '..')
   const root = await mkdtemp(path.join(tmpdir(), 'agent-ui-host-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -117,7 +123,7 @@ export async function mountSharedConsumer(t, scenario, agentId, mockServer, prev
   await writeFile(path.join(root, 'package.json'), await readFile(path.join(seed, 'package.json')))
   await mkdir(path.join(root, 'src/design'))
   for (const name of ['Agent.tsx', 'SharedHost.tsx', 'SharedApplication.tsx', 'SharedPage.tsx',
-    'runtimeResults.ts', 'useRuntimeResult.ts', 'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'RuntimeInput.tsx', 'shared-host.css']) {
+    'runtimeResults.ts', 'useRuntimeResult.ts', 'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'businessPresentation.tsx', 'businessValue.tsx', 'RuntimeInput.tsx', 'shared-host.css']) {
     await cp(path.resolve(seed, '../agent-ui-design', name), path.join(root, 'src/design', name))
   }
   await writeFile(path.join(root, 'src/design/props.ts'), 'export const agentProps = {}')
@@ -142,8 +148,23 @@ export async function mountSharedConsumer(t, scenario, agentId, mockServer, prev
         {pageId:'home',surface:'floating_panel',component:Home,entries:[{actionId:'open',label:'打开助手'}]},
       ]`)
   }
-  return mountConsumer(t, scenario, { root,
-    module: preview ? '/src/App.tsx' : '/src/design/SharedApplication.tsx', agentId, mockServer })
+  if (observation) {
+    const { createHash } = await import('node:crypto')
+    const loader = createRequire(import.meta.url)('../../../Backend/app/services/agent_ui_preview_observer.cjs')
+    const code = `import {SharedAgentApplication} from './design/SharedApplication'
+import {type SharedAgentApplicationProps} from './design/SharedApplication'
+export {useSharedAgentContext,SharedAgentPage} from './design/SharedApplication'
+/** 测试使用实际受管 loader 挂载同一个 Host 下的观察组件。 */
+export function App({children,...props}:SharedAgentApplicationProps){
+  return <SharedAgentApplication {...props}>{children}</SharedAgentApplication>
+}`
+    const output = loader.call({ getOptions: () => ({ sha256: createHash('sha256').update(code).digest('hex'),
+      mode: 'formal-business', sessionId: 'a'.repeat(32), agentId }) }, code)
+    await writeFile(path.join(root, 'src/observed.tsx'), output)
+  }
+  return mountConsumer(t, scenario, { root, application: observation,
+    module: observation ? '/src/observed.tsx' : preview ? '/src/App.tsx' : '/src/design/SharedApplication.tsx', agentId, mockServer,
+    inputSchema: options.inputSchema })
 }
 
 /** 通过真实宿主按钮驱动组件。 */

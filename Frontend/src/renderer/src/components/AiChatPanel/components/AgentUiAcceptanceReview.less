@@ -1,0 +1,64 @@
+.@{class-prefix}-agent-ui-acceptance-case {
+  display: flex;
+  width: 100%;
+
+  .ant-checkbox-wrapper {
+    margin-left: 0;
+    color: var(--wb-text);
+  }
+}
+
+.@{class-prefix}-agent-ui-acceptance-review {
+  .ant-modal-content,
+  .ant-modal-header,
+  .ant-collapse,
+  .ant-collapse-content {
+    color: var(--wb-text);
+    background: var(--wb-canvas);
+    border-color: var(--wb-border);
+  }
+
+  .ant-modal-title,
+  .ant-modal-close,
+  .ant-collapse-header,
+  .ant-typography {
+    color: var(--wb-text);
+  }
+
+  .ant-typography-secondary,
+  .ant-empty-description {
+    color: var(--wb-text-secondary);
+  }
+
+  .ant-collapse-item,
+  .ant-collapse-content {
+    border-color: var(--wb-border);
+  }
+
+  .ant-btn-default,
+  .ant-select-selector {
+    color: var(--wb-text);
+    background: var(--wb-control);
+    border-color: var(--wb-border-strong);
+  }
+
+  .ant-btn:hover:not(:disabled),
+  .ant-btn:focus-visible {
+    color: var(--wb-accent);
+    border-color: var(--wb-accent);
+  }
+
+  .ant-btn:focus-visible,
+  .ant-checkbox-input:focus-visible + .ant-checkbox-inner {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+
+  .ant-btn:disabled,
+  .ant-select-disabled .ant-select-selector,
+  .ant-checkbox-wrapper-disabled {
+    color: var(--wb-text-tertiary);
+    background: var(--wb-control);
+    border-color: var(--wb-border);
+  }
+}

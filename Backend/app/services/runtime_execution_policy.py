@@ -9,6 +9,7 @@ from pathlib import Path
 from app.services.runtime_agent_contracts import agent_contract_index, agent_fact_digest
 from app.services.runtime_agent_implementation import agent_implementation_facts
 from app.services.runtime_endpoint_contracts import agent_execution_capability_snapshot
+from app.services.runtime_endpoint_dependencies import resolve_runtime_target
 
 POLICY_PATH = "agent-runtime/src/app/agent/execution_policy.py"
 BEGIN = "# BEGIN PLATFORM EXECUTION POLICIES\n"
@@ -94,6 +95,12 @@ def publish_execution_policies(root: Path, plan: dict, operation: dict | None, s
         raise ValueError("执行策略装配与已确认 Pending 来源不一致，请重新规划确认。")
     if expected is None:
         return {"status": "not_required"}
+    if scope.get("type") == "endpoint":
+        # 查询等独立接口可能是正式 Agent 的前置。没有 Agent 依赖时不发布策略，
+        # 避免把尚未替换的模板注册表变成这轮接口构建的前置条件。
+        target = resolve_runtime_target(plan, "endpoint", scope.get("targetId", ""), scope.get("apiContractId"))
+        if not target["agent_ids"]:
+            return {"status": "not_required"}
     path, content = root / POLICY_PATH, policy_content(root, plan)
     temporary = path.with_suffix(".py.platform-tmp")
     try:

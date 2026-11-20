@@ -146,7 +146,7 @@ export default function AgentUiTransfer({ workspaceRoot, disabled }: Props): Rea
     dependency?.changes.map((item) => ({
       path: item.path,
       operation: item.beforeSha256 ? 'modify' : 'add',
-      diff: '',
+      diff: item.diff || '',
       after: item.after
     })) ||
     []

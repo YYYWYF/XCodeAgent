@@ -36,7 +36,9 @@ from app.graph.nodes.common import (
 )
 from app.graph.state import ProjectState
 from app.domain.execution_recovery import RecoveryExecutionError, WorkflowReentryReason
-from app.services.build_restart import fresh_build_tasks, refresh_build_workspace, restart_build_state
+from app.services.build_restart import (
+    fresh_build_tasks, refresh_build_workspace, restart_build_state, resume_endpoint_build_tasks,
+)
 from app.services.node_recovery_context import current_node_recovery_context
 from app.services.build_repair_planner import (
     approve_repair_scope_confirmation,
@@ -1718,8 +1720,23 @@ def run_build_scheduler(
     # 后续调度会把任务运行态写回派生计划；平台投影必须始终读取不可变的确认快照。
     confirmed_build_task_plan = deepcopy(build_task_plan)
     # 当前契约直接使用最新计划，不对历史 DAG 做运行时迁移或字段回填。
-    canonical_tasks = (fresh_build_tasks(tasks_from_build_task_plan(build_task_plan))
-                       if restarting else list(state.get("tasks") or tasks_from_build_task_plan(build_task_plan)))
+    plan_tasks = tasks_from_build_task_plan(build_task_plan)
+    canonical_tasks = plan_tasks if restarting else list(state.get("tasks") or plan_tasks)
+    workspace_root = workspace_from_state(state)
+    endpoint_scope = (state.get("build_execution_scope") or {}).get("type") == "endpoint"
+    explicit_restart = restarting and recovery is None
+    recovered_task_ids: set[str] = set()
+    if endpoint_scope and workspace_root and (explicit_restart or state.get("retry_failed_tasks")):
+        before = {task["id"]: task.get("status") for task in canonical_tasks}
+        canonical_tasks = resume_endpoint_build_tasks(
+            state, build_task_plan, canonical_tasks, workspace_root=workspace_root, restarting=explicit_restart,
+        )
+        recovered_task_ids = {
+            task["id"] for task in canonical_tasks
+            if task.get("status") in {"completed", "already_satisfied"} and task.get("status") != before[task["id"]]
+        }
+    elif restarting:
+        canonical_tasks = fresh_build_tasks(canonical_tasks)
     candidate_repair_plan = state.get("repair_task_plan")
     if isinstance(candidate_repair_plan, dict) and candidate_repair_plan.get("source") == "integration_test":
         # 清除旧运行中误追加进 Build DAG 的测试修复节点，保证失败后重试可恢复。
@@ -1739,7 +1756,8 @@ def run_build_scheduler(
         "platform_projection_evidence": state.get("platform_projection_evidence", {}),
         "build_results": hydrate_missing_failed_results(
             canonical_tasks,
-            list(state.get("build_results", [])),
+            [result for result in state.get("build_results", [])
+             if not isinstance(result, dict) or result.get("task_id") not in recovered_task_ids],
         ),
     }
     # 测试阶段也使用 repair_task_plan；Build 只能恢复自身调度器生成的计划。

@@ -118,6 +118,11 @@ def _prompt(pages: list[dict[str, Any]], allowed: tuple[str, ...]) -> str:
         "Do not use href or implement routing. For confirmed interface actions that open/close the Agent panel, "
         "call onOpenAgentPanel / onCloseAgentPanel from the handler, "
         "preserving their action/control/effect IDs. Use agentPanelOpen for their visibility/disabled state. "
+        "PANEL CONTROLS: use compact circular assistant/bot inline SVG icon buttons for panel-open actions, "
+        "and borderless X icon buttons for panel-close actions, never long outlined text launchers. "
+        "Set type=\"button\", aria-label and title to the confirmed action name; decorative SVGs use "
+        "aria-hidden=\"true\" and focusable=\"false\". Provide theme-aware hover and focus-visible states. "
+        "Do not draw another floating frame, border, shadow or close header in business TSX; the Host owns them. "
         "The Host owns panel visibility; do not create local panel state or duplicate chat UI. "
         "Other business interface actions keep their own behavior; never bind them to these callbacks.\n"
         "Use semantic HTML and Tailwind classes. The installed target has React 19 and the official default violet "
@@ -169,6 +174,8 @@ def _host_files(pages: list[dict[str, Any]], panel_actions: dict[str, dict[str, 
         "src/design/runtimeContext.tsx": (REPOSITORY / "tools/agent-ui-design/runtimeContext.tsx").read_text(encoding="utf-8"),
         "src/design/runtimeRequest.ts": (REPOSITORY / "tools/agent-ui-design/runtimeRequest.ts").read_text(encoding="utf-8"),
         "src/design/RuntimeInput.tsx": (REPOSITORY / "tools/agent-ui-design/RuntimeInput.tsx").read_text(encoding="utf-8"),
+        "src/design/businessPresentation.tsx": (REPOSITORY / "tools/agent-ui-design/businessPresentation.tsx").read_text(encoding="utf-8"),
+        "src/design/businessValue.tsx": (REPOSITORY / "tools/agent-ui-design/businessValue.tsx").read_text(encoding="utf-8"),
         "src/design/RuntimeBusinessPanel.tsx": (REPOSITORY / "tools/agent-ui-design/RuntimeBusinessPanel.tsx").read_text(encoding="utf-8"),
         "src/design/shared-host.css": (REPOSITORY / "tools/agent-ui-design/shared-host.css").read_text(encoding="utf-8"),
         "src/design/surfaces.ts": "export const agentSurfaces = " + _json([

@@ -28,7 +28,7 @@ export default function AgentUiPreparationReview({
     dependency?.changes.map((change) => ({
       path: change.path,
       operation: change.beforeSha256 ? '修改' : '新增',
-      content: change.after
+      content: change.diff || change.after
     })) ||
     transfer?.changes
       .filter((change) => change.operation !== 'unchanged')

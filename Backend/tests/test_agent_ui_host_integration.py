@@ -23,7 +23,7 @@ class AgentUiHostIntegrationTests(unittest.TestCase):
         self.source = self.root / 'source'
         (self.source / 'src/design').mkdir(parents=True)
         for name in ('SharedApplication.tsx', 'SharedPage.tsx', 'runtimeResults.ts', 'useRuntimeResult.ts',
-                     'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'RuntimeInput.tsx'):
+                     'runtimeContext.tsx', 'runtimeRequest.ts', 'RuntimeBusinessPanel.tsx', 'businessPresentation.tsx', 'businessValue.tsx', 'RuntimeInput.tsx'):
             shutil.copy2(REPOSITORY / 'tools/agent-ui-design' / name, self.source / 'src/design' / name)
         (self.source / 'package.json').write_text('{}')
         (self.source / 'node_modules').symlink_to(REPOSITORY / 'tools/agent-ui-consumer/node_modules', target_is_directory=True)
@@ -63,6 +63,7 @@ class AgentUiHostIntegrationTests(unittest.TestCase):
         self.assertIn('ExistingProvider', files['src/extensions/providers.ts'])
         self.assertIn('// 用户的原 Provider 保留', files['src/extensions/providers.ts'])
         self.assertIn('SharedAgentHostProvider', files['src/extensions/providers.ts'])
+        self.assertIn('resultSchema=', files['src/extensions/AgentUiHostProvider.tsx'])
         provider = files['src/extensions/AgentUiHostProvider.tsx']
         self.assertIn('APP_PAGE_ROUTE_TREE', provider)
         self.assertIn('useLocation', provider)
@@ -182,6 +183,8 @@ class AgentUiHostIntegrationTests(unittest.TestCase):
             'componentModule': '@/正式助手/design/SharedApplication', 'connection': 'blocked_T27'}}
         instruction = _agent_ui_runtime_instruction([contract])
         self.assertIn('SharedAgentPage', instruction)
+        self.assertIn('Do not size .shared-agent-page-slot', instruction)
+        self.assertNotIn('height:100%', instruction)
         self.assertIn('useSharedAgentPanel', instruction)
         self.assertIn('never become page task allowed_paths', instruction)
         self.assertNotIn('AGENT_UI_CONFIG', instruction)

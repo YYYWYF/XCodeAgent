@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from hashlib import sha256
 import json
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import AfterValidator, BeforeValidator, StringConstraints
@@ -28,7 +29,9 @@ from app.services.planning_unit_display_names import project_plan_unit_display_n
 from app.services.unit_generation_contracts import UnitGenerationContext
 from app.services.unit_generation_requirement_targets import scoped_formal_targets
 from app.services.unit_generation_requirements import resolve_generation_requirements
-from app.services.runtime_business_contract import backend_generation_constraints
+from app.services.runtime_business_contract import (
+    backend_generation_constraints, runtime_endpoint_request_fields, snapshot_prior_runtime_endpoint_operations,
+)
 from app.services.unit_generation_requirements_contracts import (
     UnitGenerationRequirements, fail_requirement_input,
 )
@@ -230,6 +233,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
         registry = self.base_confirmed_plan["task_registry"] if self.base_confirmed_plan is not None else {}
         summaries = [{field: registry[key][field] for field in ("id", "unit_id", "title", "description", "provides_capabilities")
                       if field in registry[key]} for key in unit.retained_task_ids]
+        operations = self.build_context.get("prior_runtime_endpoint_operations", {}).get(unit_id)
+        request_fields = runtime_endpoint_request_fields(plan, unit_id)
         return UnitGenerationContext(
             planning_run_id=run.planning_run_id, unit_id=unit_id, unit_kind=unit.kind,
             build_execution_scope=run.build_execution_scope, input_fingerprint=run.input_fingerprint,
@@ -250,6 +255,8 @@ class SequentialPlanningInputs(FrozenPlanningModel):
                                      for field in ("backend_implementation", "backend_root"))
                              for deliverable in task.get("deliverables", ())],
                          **backend_generation_constraints(plan),
+                         **({"prior_runtime_endpoint_operations": plain_json(operations)} if operations else {}),
+                         **({"runtime_endpoint_request_fields": request_fields} if request_fields else {}),
                          **({"agent_template_policy": plain_json(self.build_context.get("runtime_agent_template_policy", {}))}
                             if unit.kind == "agent" else {}),
                          "managed_files": [], "strong_rules": ["exact_unit_owner", "exact_file_scope",
@@ -288,6 +295,7 @@ def assemble_mainline_planning_inputs(
     owner_session_id: str,
     workflow_run_id: str,
     thread_id: str,
+    workspace: str | Path | None = None,
 ) -> MainlinePlanningInputs:
     """从 Workflow 正式输入编译 mainline DTO，不向 adapter 暴露 Unit Catalog 内部状态。
 
@@ -296,6 +304,12 @@ def assemble_mainline_planning_inputs(
     或 Candidate。
     """
 
+    prior_operations = snapshot_prior_runtime_endpoint_operations(
+        workspace, project_plan, (base_confirmed_plan or {}).get("task_registry", {}),
+        build_context.get("required_unit_ids", ()),
+    )
+    if prior_operations:
+        build_context = {**build_context, "prior_runtime_endpoint_operations": prior_operations}
     provisional = SequentialPlanningInputs(
         project_plan=project_plan,
         base_confirmed_plan=base_confirmed_plan,

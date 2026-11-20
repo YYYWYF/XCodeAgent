@@ -10,7 +10,8 @@ import {
 import { Alert, Button, Drawer, Tabs } from 'antd'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import type { PreviewRuntimePayload } from '../../service/previewRuntime'
+import type { PreviewRuntimePayload, AgentUiSourceSelection } from '../../service/previewRuntime'
+import AgentUiSourceControls from './AgentUiSourceControls'
 import ServiceStatusCards, { serviceLabel, visibleServiceLayers, statusMeta } from './ServiceStatusCards'
 import type { ServiceLayer } from './ServiceStatusCards'
 import { previewServiceActionAvailability, previewServiceLaunchLabel } from './serviceStatusPolicy'
@@ -30,6 +31,7 @@ export type ServiceStatusControl = {
   blockedReason: string
   onRestart: () => void
   onDiagnose: () => void
+  onSwitchSource?: (selection: AgentUiSourceSelection) => Promise<void>
   showDatabaseCheck?: boolean
   onOpenEntity?: (entityId: string) => void
 }
@@ -103,6 +105,11 @@ export default function ServiceStatusDrawer(props: ServiceStatusControl): ReactE
     >
       <div className="preview-service-drawer__body">
         <ServiceStatusCards runtime={runtime} />
+        {runtime?.agentUiConnection?.observation && props.onSwitchSource && <AgentUiSourceControls
+          key={runtime.agentUiConnection.observation.sessionId || runtime.attemptId}
+          initialSource={runtime.agentUiConnection.observation.source === 'replay' ? 'replay'
+            : runtime.agentUiConnection.observation.source.startsWith('real-') || runtime.agentUiConnection.observation.source.startsWith('formal-') ? 'real' : 'official-mock'}
+          busy={busy || !!blockedReason} onSwitch={props.onSwitchSource} />}
 
         <section
           className="preview-service-actions"

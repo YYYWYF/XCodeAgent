@@ -1,0 +1,5 @@
+{"atMs":0,"event":{"type":"RUN_STARTED","threadId":"recorded-thread","runId":"recorded-run"}}
+{"atMs":100,"event":{"type":"TEXT_MESSAGE_START","messageId":"recorded-message","role":"assistant"}}
+{"atMs":5000,"event":{"type":"TEXT_MESSAGE_CONTENT","messageId":"recorded-message","delta":"T28 本地录制演示"}}
+{"atMs":5100,"event":{"type":"TEXT_MESSAGE_END","messageId":"recorded-message"}}
+{"atMs":5200,"event":{"type":"RUN_FINISHED","threadId":"recorded-thread","runId":"recorded-run"}}

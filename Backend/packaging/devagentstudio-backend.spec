@@ -45,6 +45,7 @@ datas = [
     (str(backend_root / "app/services/agent_ui_preview_endpoint.cjs"), "app/services"),
     (str(backend_root / "app/services/agent_ui_preview_observer.cjs"), "app/services"),
     (str(backend_root / "app/services/agent_ui_preview_observer.tsx"), "app/services"),
+    (str(backend_root / "app/services/agent_ui_preview_replay.mjs"), "app/services"),
     # 转入分析和目标 Rsbuild 资源适配共用同一受审阅编译边界。
     (
         str(backend_root / "app" / "services" / "agent_ui_rsbuild_loader.cjs"),

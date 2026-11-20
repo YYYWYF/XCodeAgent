@@ -19,12 +19,15 @@ from app.services.agent_ui_design_shared import require_shared_application
 from app.services.workspace_process_registry import workspace_process_registry
 
 HOST_FILES = {"Agent.tsx", "SharedHost.tsx", "SharedApplication.tsx", "SharedPage.tsx", "runtimeResults.ts",
-              "useRuntimeResult.ts", "runtimeContext.tsx", "runtimeRequest.ts", "RuntimeBusinessPanel.tsx", "RuntimeInput.tsx", "shared-host.css", "surfaces.ts", "props.ts", "presentation.ts", "presentation.json"}
+              "useRuntimeResult.ts", "runtimeContext.tsx", "runtimeRequest.ts", "RuntimeBusinessPanel.tsx", "businessPresentation.tsx", "businessValue.tsx", "RuntimeInput.tsx", "shared-host.css", "surfaces.ts", "props.ts", "presentation.ts", "presentation.json"}
 GENERATED = {"index.ts", "plugins/index.ts", "plugins/registry.generated.ts",
              "application/Agent.tsx", "application/runtime-config.generated.ts",
              "composition-revision.generated.json", "agent-contract/frontend-tools.generated.ts",
              "agent-ui/conversation/frontend-tool-uis.generated.ts", "agent-ui/conversation/integrations.generated.tsx"}
 TEXT_SUFFIXES = {".ts", ".tsx", ".js", ".jsx", ".css", ".json", ".svg"}
+
+# 精确标记仍被正式设计引用的原版平台组件，不能把平台修正套到用户定制上。
+_BUSINESS_VALUE_SOURCE_SHA256 = "678bc049c6238b7b50fef2d8fe5b17c8ff2c048e0bca54b753a58475a2a24448"
 
 
 def plugin_application(root: Path, relative: str) -> bool:
@@ -238,5 +241,9 @@ def rewrite_files(source: Path, target: Path, mapping: dict[str, str], roots: li
         after = code
         for item in sorted(adjustments, key=lambda item: item["start"], reverse=True):
             after = after[:item["start"]] + json.dumps(item["after"], ensure_ascii=False) + after[item["end"]:]
-        result[name] = {"after": after, "sourceSha256": sha256(code.encode()), "importAdjustments": adjustments}
+        source_hash = sha256(code.encode())
+        if name == "src/design/businessValue.tsx" and source_hash == _BUSINESS_VALUE_SOURCE_SHA256:
+            # 目标 TypeScript 不收窄重复索引的标题；在现有字符串检查后明确 JSX 文本类型。
+            after = after.replace("? properties[name].title : name", "? String(properties[name].title) : name", 1)
+        result[name] = {"after": after, "sourceSha256": source_hash, "importAdjustments": adjustments}
     return result, sorted(set(blockers)), deferred

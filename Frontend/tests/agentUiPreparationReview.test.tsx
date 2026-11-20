@@ -30,6 +30,13 @@ const dependency: AgentUiDependencyPlan = {
   ],
   changes: [
     {
+      path: 'package.json',
+      beforeSha256: 'c'.repeat(64),
+      after: 'new package content',
+      afterSha256: 'd'.repeat(64),
+      diff: '- "@ag-ui/client": "0.0.57"\n+ "@ag-ui/client": "1.0.3"'
+    },
+    {
       path: 'src/agent-ui-package.css',
       beforeSha256: null,
       after: 'reviewed style contents',
@@ -180,6 +187,9 @@ try {
   assert.match(JSON.stringify(root?.toJSON()), /自动安装、初始化、转入已确认设计并验证/)
   assert.match(JSON.stringify(root?.toJSON()), /pnpm/)
   assert.match(JSON.stringify(root?.toJSON()), /11\.9\.0/)
+  assert.match(JSON.stringify(root?.toJSON()), /0\.0\.57/)
+  assert.match(JSON.stringify(root?.toJSON()), /1\.0\.3/)
+  assert.doesNotMatch(JSON.stringify(root?.toJSON()), /new package content/)
   assert.match(JSON.stringify(root?.toJSON()), /reviewed style contents/)
   review()
   click('确认依赖变更并继续')

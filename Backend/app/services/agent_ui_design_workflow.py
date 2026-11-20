@@ -20,6 +20,7 @@ from app.services.ui_design_manifest import build_ui_page_manifest
 from app.services.ui_design_interactions import agent_project_page_bindings
 from app.services.agent_ui_design_sources import retained_page_sources, retained_presentations, retained_agent_sources
 from app.services.agent_ui_tool_environment import resolve_design_tools
+from app.workspace.spec_documents import load_ui_designs_json, ui_designs_json_path
 
 if TYPE_CHECKING:
     from app.services.ui_design_generation_pool import UiDesignGenerationTask
@@ -64,14 +65,37 @@ def generate_agent_project(task: UiDesignGenerationTask,
         raise ValueError("多文件 Agent UI 生成缺少当前已联合确认的产品事实。")
     inspection, cli = design_environment(task.workspace, task.job_id)
     pages = project_agent_design_pages(task.requirement_spec, task.product_plan)
-    retained = retained_page_sources(task, pages)
-    presentations = retained_presentations(task)
-    agent_sources = retained_agent_sources(task, pages)
     draft = Path(task.workspace) / ".devagentstudio/ui-design/drafts" / uuid.uuid4().hex
-    design = generate_agent_ui_design(inspection, draft_root=draft, pnpm_cli=cli,
-        requirement_spec=task.requirement_spec, product_plan=task.product_plan,
-        run_id=task.job_id, should_cancel=should_cancel, retained_sources=retained, presentations=presentations,
-        retained_agent_sources=agent_sources, target_page_ids=[member.page_id for member in task.members])
+    state = {'workspace': task.workspace, 'project_id': task.project_id,
+             'requirement_spec': task.requirement_spec, 'product_plan': task.product_plan}
+    manifest = load_ui_designs_json(ui_designs_json_path(state)) or {}
+    current = [page for page in manifest.get('pages', []) if page.get('design_asset')]
+    from app.services.agent_ui_design_projection import design_facts_digest
+    facts_changed = bool(current and current[0]['design_asset'].get('factsDigest') != design_facts_digest(state))
+    if facts_changed:
+        from app.services.agent_ui_design_baseline import revision_project
+        from app.services.agent_ui_design_revision import revise_agent_ui_design
+        from app.services.agent_ui_design_project import validate_design_project
+
+        project, asset = revision_project(state, current[0])
+        if any(page['design_asset'] != asset for page in current):
+            raise ValueError('当前智能体页面的工程身份不一致，请重新生成全部智能体页面。')
+        design = revise_agent_ui_design(inspection, current_project=project, draft_root=draft, pnpm_cli=cli,
+            requirement_spec=task.requirement_spec, product_plan=task.product_plan,
+            targets=[page['pageId'] for page in pages],
+            instruction='按当前已确认的需求与产品规划同步全部页面、业务操作和助手能力；保留仍符合产品的布局和定制，移除已删除动作的控件及绑定。',
+            run_id=task.job_id, should_cancel=should_cancel, synchronize_product=True)
+        validate_design_project(project)
+        if load_ui_designs_json(ui_designs_json_path(state)) != manifest:
+            raise ValueError('设计生成期间产品或页面状态已变化，请基于最新版本重新提交。')
+    else:
+        retained = retained_page_sources(task, pages)
+        presentations = retained_presentations(task)
+        agent_sources = retained_agent_sources(task, pages)
+        design = generate_agent_ui_design(inspection, draft_root=draft, pnpm_cli=cli,
+            requirement_spec=task.requirement_spec, product_plan=task.product_plan,
+            run_id=task.job_id, should_cancel=should_cancel, retained_sources=retained, presentations=presentations,
+            retained_agent_sources=agent_sources, target_page_ids=[member.page_id for member in task.members])
     if should_cancel and should_cancel():
         raise UiDesignStreamCancelled("设计生成已取消。")
     asset = {"kind": "agent-ui-project", "draft": draft.name, "revision": design.revision,
@@ -100,4 +124,5 @@ def generate_agent_project(task: UiDesignGenerationTask,
         if previous is None or launch.launch_id != previous.launch_id:
             agent_ui_design_previews.stop(task.workspace, launch_id=launch.launch_id)
         raise UiDesignStreamCancelled("设计预览已取消。")
-    return {"project_pages": entries, "affected_page_ids": list(design.affected_page_ids)}
+    return {"project_pages": entries, "affected_page_ids":
+            [page['pageId'] for page in pages] if facts_changed else list(design.affected_page_ids)}

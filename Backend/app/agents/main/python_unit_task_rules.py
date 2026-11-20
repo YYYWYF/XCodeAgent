@@ -13,8 +13,10 @@ def resolve_python_unit_task_rules(context: UnitGenerationContext) -> tuple[str,
     common = (
         "When constraints.existing_backend_deliverables identifies an existing implementation "
         "of the same kind, target_id and requirement capability, keep its exact paths. "
-        "Update that implementation in place; never create a second controller, repository or service "
-        "for a changed contract. Reuse existing shared implementation files.",
+        "Use constraints.prior_runtime_endpoint_operations for previously planned paths: "
+        "modify files that exist, add files that were planned but never created. "
+        "Never choose a second controller, repository or service path for a changed contract. "
+        "Reuse existing shared implementation files.",
         "The implementation is Python 3.12 + FastAPI inside agent-runtime. The logical "
         "owner=backend and backend Unit IDs describe business responsibility, not Java. "
         "Never emit Java, Maven, Spring, MyBatis, DDL, migrations, seed data, or SQLite "
@@ -54,6 +56,9 @@ def resolve_python_unit_task_rules(context: UnitGenerationContext) -> tuple[str,
             "MySQL access and persistence records; upstream owns the declared external HTTP "
             "operation; service alone owns field mappings, composition and business rules; "
             "controller owns a thin FastAPI route and the exact confirmed response envelope. "
+            "Plan the objects and controller against constraints.runtime_endpoint_request_fields. "
+            "Keep the location, type and required status of each field, even when it has no mapping. "
+            "A path parameter and a request body field with the same name are separate inputs. "
             "The template app/api/router.py discovers ONLY direct .py modules under "
             "agent-runtime/src/app/api/endpoints/. Each controller task MUST own a uniquely named "
             "module in that directory exporting a module-level APIRouter named router. "

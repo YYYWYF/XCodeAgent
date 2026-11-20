@@ -14,7 +14,7 @@ from app.services.authorization_capability_dependency import (
 from app.services.authorization_overlay import unit_authorization_slice
 from app.services.planning_issues import ValidationIssue
 from app.services.page_task_freshness import page_task_input_digest
-from app.services.runtime_business_contract import backend_generation_constraints
+from app.services.runtime_business_contract import backend_generation_constraints, runtime_endpoint_request_fields
 from app.services.runtime_agent_module_policy import module_source_refs
 from app.services.runtime_agent_contracts import agent_contract_index, agent_fact_digest
 
@@ -147,7 +147,33 @@ def _with_task_unit_metadata(
             _string_list(task.get("provides_capabilities")) or [unit_id]
         ),
     }
+    if source_refs.get("backend_implementation") == "python_runtime" and unit_id.startswith("backend:endpoint:"):
+        return _compile_runtime_endpoint_inputs(task_with_refs, build_context)
     return task_with_refs
+
+
+def _compile_runtime_endpoint_inputs(task: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """用冻结的工作区实情编译文件操作，并把正式请求字段写进开发及审核可见的说明。"""
+
+    operations = _dict_value(_dict_value(context.get("prior_runtime_endpoint_operations")).get(task["unit_id"]))
+    compiled = dict(task)
+    if operations:
+        compiled["change_scope"] = [
+            {**change, "operation": operations[change["path"]]}
+            if change.get("path") in operations and change.get("operation") in {"add", "modify"} else change
+            for change in _dict_items(task.get("change_scope"))
+        ]
+    if any(deliverable.get("kind") in {"backend.objects", "backend.endpoint_controller"}
+           for deliverable in _dict_items(task.get("deliverables"))):
+        fields = runtime_endpoint_request_fields(_dict_value(context.get("project_plan")), task["unit_id"])
+        if fields:
+            marker = "\n\n正式请求字段："
+            description = str(task.get("description") or "").partition(marker)[0]
+            field_summary = "；".join(f"{field['location']}.{field['path']}"
+                                     f"（{field['type']}，{'必填' if field['required'] else '可选'}）"
+                                     for field in fields)
+            compiled["description"] = f"{description}{marker}{field_summary}。同名字段按位置分别处理。"
+    return compiled
 
 
 def _apply_unit_task_dependencies(

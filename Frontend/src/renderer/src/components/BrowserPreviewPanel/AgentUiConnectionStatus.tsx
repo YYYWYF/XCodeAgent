@@ -13,19 +13,20 @@ export default function AgentUiConnectionStatus({
 }): ReactElement | null {
   if (!connection) return null
   const pending = connection.checks.filter((check) => check.status === 'blocked')
+  const simulated = connection.observation?.source === 'official-mock' || connection.observation?.source === 'replay'
   return (
     <Alert
       className="preview-service-callout"
       type="info"
       showIcon
-      message={connection.businessPreview ? '真实业务连接已启用' : connection.plainTextPreview ? '真实文本对话预览已启用' : 'Agent UI 完整连接待完成'}
+      message={simulated ? 'Agent UI 开发模拟来源已启用' : connection.businessPreview ? '真实业务连接已启用' : connection.plainTextPreview ? '真实文本对话预览已启用' : 'Agent UI 完整连接待完成'}
       description={
         <div>
           {connection.endpoint && <p>目标接口：{connection.endpoint}</p>}
           <p>同源健康：{healthLabels[connection.proxyHealth.status]}</p>
           <p>{connection.proxyHealth.reason}</p>
           <p>
-            {connection.businessPreview
+            {simulated ? '当前为 Mock 或脱敏回放，仅复现显示流程；不执行真实模型、业务工具或待办批准。' : connection.businessPreview
               ? '当前 Python 智能体按正式声明处理页面上下文、业务工具、结果和用户交互。请按实际场景完成联调验收。'
               : connection.plainTextPreview
               ? '可发送普通文本，回复来自当前 Python 智能体。页面业务上下文、审批和业务结果尚未验收。'

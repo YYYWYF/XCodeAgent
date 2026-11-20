@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer'
 import UiDesignConfirmationPanel from '../src/renderer/src/components/Welcome/UiDesignConfirmationPanel'
+import { useUiDesignReviewWorkflow } from '../src/renderer/src/hooks/useUiDesignReviewWorkflow'
 import type { DesignPreviewPage } from '../src/renderer/src/components/DesignRenderer/projectPreview'
 import type { WorkflowClarificationAnswers, WorkflowRunPayload } from '../src/renderer/src/typings'
 
@@ -46,6 +47,25 @@ const intervals = new Set<() => void>()
 const submissions: WorkflowClarificationAnswers[] = []
 const disk = [page('new', 'ready')]
 let root: ReactTestRenderer | undefined
+let displayedWorkflow: WorkflowRunPayload
+
+/** 组合真实快照保持逻辑与审阅面板，检查刷新时的页面和确认权限。 */
+function Review({
+  payload,
+  workspaceRoot = '/ui-review-test'
+}: {
+  payload: WorkflowRunPayload
+  workspaceRoot?: string
+}): ReturnType<typeof createElement> {
+  displayedWorkflow = useUiDesignReviewWorkflow(payload, workspaceRoot)
+  return createElement(UiDesignConfirmationPanel, {
+    workflow: displayedWorkflow,
+    workspaceRoot,
+    disabled: payload.summary.status === 'running',
+    onSubmit,
+    showPreview: false
+  })
+}
 
 /** 无 DOM 的 renderer 不分发浏览器可见性事件。 */
 function ignoreDomEvent(): undefined {
@@ -175,6 +195,77 @@ try {
   })
   assert.equal(submissions.length, 0, '已同步的终态不能在挂载时反复启动 Graph')
   assert.equal(nextButton().props.disabled, false)
+  await act(async () => {
+    root!.unmount()
+  })
+  submissions.length = 0
+  const reviewed = workflow(disk, 'reviewed-run')
+  await act(async () => {
+    root = create(createElement(Review, { payload: reviewed }))
+  })
+  const running = workflow([], 'refresh-run')
+  running.summary.status = 'running'
+  running.summary.phase = 'ui_confirmation'
+  running.result = { application_planning_interrupt: { gateId: 'current-gate' } }
+  await act(async () => {
+    root!.update(createElement(Review, { payload: running }))
+  })
+  assert.deepEqual(
+    displayedWorkflow!.summary.clarification?.pages,
+    disk,
+    '刷新中的同模式空页面快照不能清空已展示的页面'
+  )
+  assert.equal(displayedWorkflow!.runId, 'refresh-run', '不能复用旧 run 身份')
+  assert.equal(displayedWorkflow!.result, running.result, '不能复用旧确认门')
+  assert.equal(nextButton().props.disabled, true, '保持页面展示不能放开生成期间的确认')
+  assert.equal(submissions.length, 0, '展示缓存不能自动提交任何动作')
+  const withoutClarification = {
+    ...running,
+    summary: { ...running.summary, clarification: undefined }
+  }
+  await act(async () => {
+    root!.update(createElement(Review, { payload: withoutClarification }))
+  })
+  assert.deepEqual(
+    displayedWorkflow!.summary.clarification?.pages,
+    disk,
+    '运行中的暂缺 clarification 快照也应保留页面'
+  )
+  const failed = { ...running, summary: { ...running.summary, status: 'failed' as const } }
+  await act(async () => {
+    root!.update(createElement(Review, { payload: failed }))
+  })
+  assert.equal(displayedWorkflow!, failed, '终态空列表不能被缓存掩盖')
+  for (const [label, payload, workspaceRoot] of [
+    ['workspace', running, '/another-workspace'],
+    ['thread', { ...running, threadId: 'another-thread' }, '/ui-review-test'],
+    [
+      'phase',
+      { ...running, summary: { ...running.summary, phase: 'technical_planning' } },
+      '/ui-review-test'
+    ],
+    [
+      'error',
+      {
+        ...running,
+        summary: { ...running.summary, clarification: { mode: 'technical_plan_generation_error' } }
+      },
+      '/ui-review-test'
+    ],
+    [
+      'skip',
+      { ...running, state: { ui_designs: { confirmation_status: 'skipped' } } },
+      '/ui-review-test'
+    ]
+  ] as const) {
+    await act(async () => {
+      root!.update(createElement(Review, { payload: reviewed }))
+    })
+    await act(async () => {
+      root!.update(createElement(Review, { payload, workspaceRoot }))
+    })
+    assert.equal(displayedWorkflow!, payload, `${label} 变化不能继续展示旧页面`)
+  }
 } finally {
   await act(async () => {
     root?.unmount()

@@ -16,22 +16,32 @@ from app.services.agent_ui_design_workflow import design_environment
 from app.workspace.spec_documents import workspace_root
 
 
+def design_facts_digest(state: dict[str, Any]) -> str:
+    """计算已联合确认的当前产品事实，未确认文档不能进入生成或预览。"""
+    documents = {"requirement": state.get("requirement_spec"), "product": state.get("product_plan")}
+    if any(not isinstance(value, dict) or value.get("confirmation_status") != "confirmed"
+           for value in documents.values()):
+        raise ValueError("请先联合确认当前需求和产品规划。")
+    return hashlib.sha256(json.dumps(documents, ensure_ascii=False, sort_keys=True,
+                                    separators=(",", ":")).encode()).hexdigest()
+
+
 def current_project(state: dict[str, Any], page: dict[str, Any]) -> tuple[AgentUiDesignProject, dict[str, Any]]:
-    """只解析固定草稿 ID，并复核正式事实、源码、构建及生成记录。"""
+    """预览和确认只接受与当前正式事实一致的完整工程。"""
+    asset = page.get("design_asset")
+    if not isinstance(asset, dict) or asset.get("factsDigest") != design_facts_digest(state):
+        raise ValueError("Agent UI 设计对应的产品事实已变化，请重新生成。")
+    return _project_from_asset(state, page)
+
+
+def _project_from_asset(state: dict[str, Any], page: dict[str, Any]) -> tuple[AgentUiDesignProject, dict[str, Any]]:
+    """复核固定草稿及完整生成证据；仅供当前投影或新草稿修订基底读取。"""
     asset = page.get("design_asset")
     if not isinstance(asset, dict) or asset.get("kind") != "agent-ui-project":
         raise ValueError("当前页面没有 Agent UI 工程设计。")
     draft = asset.get("draft")
     if not isinstance(draft, str) or not re.fullmatch(r"[a-f0-9]{32}", draft):
         raise ValueError("Agent UI 草稿身份无效。")
-    documents = {"requirement": state.get("requirement_spec"), "product": state.get("product_plan")}
-    if any(not isinstance(value, dict) or value.get("confirmation_status") != "confirmed"
-           for value in documents.values()):
-        raise ValueError("请先联合确认当前需求和产品规划。")
-    facts = hashlib.sha256(json.dumps(documents, ensure_ascii=False, sort_keys=True,
-                                     separators=(",", ":")).encode()).hexdigest()
-    if asset.get("factsDigest") != facts:
-        raise ValueError("Agent UI 设计对应的产品事实已变化，请重新生成。")
     workspace = workspace_root(state).resolve()
     root = workspace / WORKSPACE_ARTIFACT_DIR / "ui-design/drafts" / draft / "agent-ui-project"
     project = AgentUiDesignProject(workspace, root, root / "tools/agent-ui-consumer",

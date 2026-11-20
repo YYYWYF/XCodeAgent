@@ -46,6 +46,9 @@ def transfer_fixture(directory: str) -> tuple[Path, Path, str]:
         "src/design/presentation.json": "{}",
         ".agent-ui/project.json": '{"sourceRoot":"src/agent-ui"}',
         ".agent-ui/source-lock.json": '{"sourceRoot":"src/agent-ui","items":{}}'}
+    for name in ('RuntimeBusinessPanel.tsx', 'businessPresentation.tsx', 'businessValue.tsx',
+                 'runtimeContext.tsx', 'runtimeRequest.ts', 'runtimeResults.ts', 'useRuntimeResult.ts'):
+        files['src/design/' + name] = (REPOSITORY / 'tools/agent-ui-design' / name).read_text(encoding='utf-8')
     for name, content in files.items():
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)

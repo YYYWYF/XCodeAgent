@@ -106,7 +106,13 @@ async function start(input) {
       return
     }
     const receipt = response.result?.receipt
-    if (!Array.isArray(receipt?.files) || !receipt.files.length) {
+    // 仅产品同步接受 SDK 对当前源码/组合目标的确定性核验；检查和模型自述仍不能算修改完成。
+    const outcome = response.result?.noChangeOutcome
+    const verifiedUnchanged = input.allowVerifiedUnchanged === true
+      && response.result?.executionPolicy === 'domain-write'
+      && outcome?.toolName === 'verify_creator_outcome' && outcome.status === 'already_current'
+      && receipt?.verification?.status === 'no-project-change'
+    if (!Array.isArray(receipt?.files) || (!receipt.files.length && !verifiedUnchanged)) {
       emit({ type: 'failed', code: 'no_project_change' })
       return
     }
@@ -147,7 +153,10 @@ async function start(input) {
   } catch (error) {
     // 只分类公开错误，不回传可能含凭据的 SDK 原始异常或模型回复。
     const message = error instanceof Error ? error.message : ''
-    const code = /timed?\s*out|timeout|aborted/i.test(message) ? 'creator_timeout'
+    const code = error?.code === 'CREATOR_REQUEST_ROUTE_INVALID' || /\bCREATOR_REQUEST_ROUTE_INVALID\b/.test(message)
+      ? 'creator_route_invalid'
+      : message === 'Creator completed without an assistant message.' ? 'creator_empty_response'
+      : /timed?\s*out|timeout|aborted/i.test(message) ? 'creator_timeout'
       : /429|rate.?limit|too many requests/i.test(message) ? 'creator_rate_limited'
         : /401|unauthori[sz]ed|invalid.api.key/i.test(message) ? 'creator_auth_failed'
           : /connect|network|fetch failed|socket|econn|enotfound/i.test(message) ? 'creator_connection_failed' : 'creator_failed'

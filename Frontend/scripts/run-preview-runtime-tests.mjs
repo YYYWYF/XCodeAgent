@@ -17,6 +17,7 @@ try {
     logLevel: 'error',
     root: frontendRoot,
     ssr: { noExternal: true },
+    define: { 'process.env.NODE_ENV': JSON.stringify('test') },
     // 表详情测试复用生产样式变量，避免独立 SSR 测试缺失 Less 品牌前缀。
     css: {
       preprocessorOptions: {

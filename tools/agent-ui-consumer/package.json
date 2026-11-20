@@ -10,7 +10,9 @@
     "build": "vite build",
     "lint": "eslint src/App.tsx src/main.tsx vite.config.ts",
     "test": "node --test tests/*.test.mjs",
-    "test:t27:manual": "node t27-manual.mjs --verify"
+    "test:t27:manual": "node t27-manual.mjs --verify",
+    "test:t27.1:manual": "node t27-manual.mjs --verify --business-cards",
+    "test:t28:manual": "node t27-manual.mjs --verify --observation"
   },
   "dependencies": {
     "@ag-ui/client": "1.0.3",

@@ -17,7 +17,13 @@ export type AgentUiDependencyPlan = {
   manager: 'npm' | 'pnpm'
   managerVersion: string
   lockfile: string
-  changes: Array<{ path: string; beforeSha256: string | null; after: string; afterSha256: string }>
+  changes: Array<{
+    path: string
+    beforeSha256: string | null
+    after: string
+    afterSha256: string
+    diff?: string
+  }>
   packages: Array<{ name: string; version: string; specifier: string; integrity: string }>
   sourceDependencies: Array<{ name: string; version: string }>
   checks: string[]

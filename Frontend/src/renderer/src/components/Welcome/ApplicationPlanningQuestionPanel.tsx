@@ -30,6 +30,7 @@ import type {
 } from '../../typings'
 import { cx } from '../../utils'
 import { useTabToFillPlaceholder } from './hooks/useTabToFillPlaceholder'
+import { useUiDesignReviewWorkflow } from '../../hooks/useUiDesignReviewWorkflow'
 import './ApplicationPlanningQuestionPanel.less'
 
 const { Paragraph, Text, Title } = Typography
@@ -414,8 +415,14 @@ export default function ApplicationPlanningQuestionPanel({
   const [editingRequirement, setEditingRequirement] = useState(false)
   const [requirementDraft, setRequirementDraft] = useState<Record<string, unknown>>()
   const [savingRequirement, setSavingRequirement] = useState(false)
-  const lastValidUiWorkflowRef = useRef<WorkflowRunPayload | undefined>(undefined)
-  const clarification = planningWorkflowClarification(workflow)
+  const uiReviewWorkflow = useUiDesignReviewWorkflow(workflow, workspaceRoot)
+  const clarification = planningWorkflowClarification(uiReviewWorkflow)
+  // 迭代归属随当前审阅快照更新，不借用旧运行的确认状态。
+  const uiDesignIterationOrigins = useMemo(() => {
+    const raw = (clarification as Record<string, unknown> | undefined)?.iteration_origins
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+    return raw as Record<string, UiDesignIterationOrigin>
+  }, [clarification])
   const questions = clarification?.questions || []
   const isRequirementConfirmation = clarification?.mode === 'requirement_document_confirmation'
   const isProductPlanConfirmation = false
@@ -461,50 +468,6 @@ export default function ApplicationPlanningQuestionPanel({
     typeof technicalPlanFeedback === 'string' && Boolean(technicalPlanFeedback.trim())
 
   if (!clarification) return null
-
-  // run 中途流式快照可能产生未知 mode（如 undefined、技术规划校验错误），
-  // 此时 clarification.pages 也会丢失。缓存最近一次有效的 UI 确认 workflow，run 中途用缓存
-  // 渲染，保持左侧页面列表 + 右侧渲染区布局不动，逐页加载态由面板内 actingPageIds 控制。
-  const clarificationPages = (clarification as unknown as Record<string, unknown>).pages
-  const hasUiDesignPages = Array.isArray(clarificationPages) && clarificationPages.length > 0
-  if (clarification.mode === 'ui_design_confirmation' && hasUiDesignPages) {
-    lastValidUiWorkflowRef.current = workflow
-  }
-  const effectiveWorkflow =
-    clarification.mode === 'ui_design_confirmation' && hasUiDesignPages
-      ? workflow
-      : (lastValidUiWorkflowRef.current ?? workflow)
-  // 每个页面在历史迭代里的归属（后端按迭代记录的页面计划与产出事实），
-  // 驱动设计稿面板上的「v1.0 已设计过」/「v1.0 该设计未设计」标注。
-  // 读不到就传 undefined —— 面板会退化成不标注，不会误标。
-  const uiDesignIterationOrigins = useMemo(() => {
-    const raw = (clarification as unknown as Record<string, unknown>).iteration_origins
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
-    return raw as Record<string, UiDesignIterationOrigin>
-  }, [clarification])
-  // run 中途 mode 变未知但曾进入过
-  // UI 确认阶段：用缓存的有效 UI workflow 渲染，保持布局不动，单页加载态由面板内控制。
-  const knownConfirmationModes = new Set([
-    'ui_design_confirmation',
-    'authorization_configuration_conflict',
-    'requirement_document_confirmation',
-    'technical_plan_confirmation',
-    'technical_plan_topology_selection',
-    'technical_plan_generation_error',
-    'planning_stage_entry_confirmation',
-    'entity_source_binding'
-  ])
-  if (!knownConfirmationModes.has(clarification.mode || '') && lastValidUiWorkflowRef.current) {
-    return (
-      <UiDesignConfirmationPanel
-        workspaceRoot={workspaceRoot}
-        disabled={disabled}
-        iterationOrigins={uiDesignIterationOrigins}
-        onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
-        workflow={effectiveWorkflow}
-      />
-    )
-  }
 
   // 需求确认阶段的自然语言意见直接作为确认答案提交，后端据此区分确认或修订。
   const handleSubmit = (values: { answers?: WorkflowClarificationAnswers }): void => {
@@ -696,10 +659,10 @@ export default function ApplicationPlanningQuestionPanel({
     return (
       <UiDesignConfirmationPanel
         workspaceRoot={workspaceRoot}
-        disabled={disabled}
+        disabled={disabled || workflow.summary.status === 'running'}
         iterationOrigins={uiDesignIterationOrigins}
-        onSubmit={(currentWorkflow, answers) => onSubmit(currentWorkflow, answers)}
-        workflow={workflow}
+        onSubmit={(_currentWorkflow, answers) => onSubmit(workflow, answers)}
+        workflow={uiReviewWorkflow}
       />
     )
   }

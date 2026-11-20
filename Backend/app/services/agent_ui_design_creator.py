@@ -17,7 +17,7 @@ from app.services.workspace_process_registry import workspace_process_registry
 
 def run_design_creator(inspection: AgentUiToolHostInspection, project: Path, request: str, *,
                        run_id: str, should_cancel: Callable[[], bool] | None = None,
-                       source_root: str = '',
+                       source_root: str = '', allow_verified_unchanged: bool = False,
                        on_progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """通过公开 SDK 执行一次受管草稿任务，取消和退出均等待 Creator 清理。"""
     from app.services.ui_design_generator import UiDesignStreamCancelled
@@ -54,7 +54,7 @@ def run_design_creator(inspection: AgentUiToolHostInspection, project: Path, req
         reader.start()
         assert process.stdin is not None
         process.stdin.write((json.dumps({'projectRoot': str(project), 'request': request,
-            'sourceRoot': source_root,
+            'sourceRoot': source_root, 'allowVerifiedUnchanged': allow_verified_unchanged,
             'sourceValidator': Path(__file__).with_name('agent_ui_design_creator_source.mjs').as_uri(),
             'nodeVersion': inspection.node_version, 'packageJsonSha256': inspection.package_json_sha256},
             ensure_ascii=False) + '\n').encode())
@@ -86,6 +86,12 @@ def run_design_creator(inspection: AgentUiToolHostInspection, project: Path, req
                         raise ValueError('Creator 需要补充信息或额外授权，本轮未提交新设计；请明确修改要求后重试。')
                     if failure == 'creator_read_only':
                         raise ValueError('Creator 将本轮请求识别为检查，未执行设计修改；请明确描述需要实施的改动。')
+                    if failure == 'creator_route_invalid':
+                        raise ValueError('Creator 权限分类结果不符合协议（CREATOR_REQUEST_ROUTE_INVALID），'
+                                         '尚未进入设计修改；已保留原设计，需修复 Creator 分类协议后再生成。')
+                    if failure == 'creator_empty_response':
+                        raise ValueError('Creator 公开客户端未返回助手消息或可核验的执行结果；'
+                                         '已保留原设计，需核对本轮 Creator 运行错误，不能确认是模型配置问题。')
                     if failure == 'composition_invalid':
                         raise ValueError('Creator 修改后的 AppUIModel/插件组合未通过官方校验，已保留原设计。')
                     if failure == 'no_project_change':

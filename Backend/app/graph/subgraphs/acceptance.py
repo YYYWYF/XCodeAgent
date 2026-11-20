@@ -69,7 +69,16 @@ def acceptance_review(state: ProjectState) -> dict[str, Any]:
     """展示验收等待状态，已提交 accepted 时保留原有完成语义。"""
 
     decision = str(state.get("acceptance_decision") or "")
-    if decision == "accepted":
+    matrix = None
+    matrix_error = ''
+    if state.get('workspace'):
+        from app.services.agent_ui_acceptance import acceptance_matrix
+        try:
+            matrix = acceptance_matrix(state['workspace'])
+        except (OSError, ValueError, KeyError, TypeError):
+            matrix_error = 'Agent UI 当前来源或验收记录不可核验，请重新读取正式目标。'
+    evidence_ready = not matrix_error and (matrix is None or matrix['ready'])
+    if decision == "accepted" and evidence_ready:
         return {
             "phase": "acceptance",
             "status": "completed",
@@ -91,17 +100,22 @@ def acceptance_review(state: ProjectState) -> dict[str, Any]:
             "message": "项目已启动，请预览应用并完成验收。",
             "preview_url": preview_url,
         }
+    if matrix is not None:
+        acceptance_request['agentUiAcceptance'] = matrix
+    if matrix_error or decision == 'accepted' and not evidence_ready:
+        acceptance_request['message'] = matrix_error or 'Agent UI 分层验收仍有缺失、失败、未知或失效证据，请核验后再次确认版本。'
     return {
         "phase": "acceptance",
         "status": "requires_user_input",
         "accepted": False,
+        "acceptance_decision": "",
         "preview_url": preview_url,
         "launch_result": launch,
         "acceptance_request": acceptance_request,
         "clarification": {
             "mode": "page_acceptance",
             "status": "requires_user_input",
-            "message": "请预览页面并完成最终验收。",
+            "message": acceptance_request.get('message') or "请预览页面并完成最终验收。",
             "questions": [],
         },
         "timeline": ["acceptance"],

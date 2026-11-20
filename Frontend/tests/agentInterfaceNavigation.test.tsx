@@ -16,6 +16,8 @@ const assistant: BusinessAgentOption = {
   label: '通用聊天助手',
   purpose: '两个页面共用对话能力',
   pageIds: ['home', 'chat'],
+  executionMode: 'conversation',
+  publicEndpoint: true,
   capabilities: [],
   boundaries: [],
   agentSettings: {},
@@ -27,6 +29,21 @@ const artifacts = {
   entities: {},
   agents: { assistant: { initialDevelopmentStatus: 'completed' as const } }
 }
+// 当前接口目录由正式 api_contracts 投影，Agent 列表不再自行合成第二份接口。
+const runtimeApi = {
+  id: 'agent.assistant',
+  label: '通用聊天助手',
+  endpoints: [
+    {
+      id: 'agent.assistant.run',
+      name: '通用聊天助手',
+      kind: 'agent_runtime' as const,
+      agent_id: 'assistant',
+      method: 'POST',
+      path: '/agents/assistant/run'
+    }
+  ]
+}
 
 test('左侧接口快捷卡包含智能体接口和普通接口，保留状态与调用路径', () => {
   const props = {
@@ -35,6 +52,7 @@ test('左侧接口快捷卡包含智能体接口和普通接口，保留状态�
     pages: [],
     entities: [],
     apiContracts: [
+      runtimeApi,
       {
         id: 'orders',
         label: '订单',
@@ -56,7 +74,7 @@ test('左侧接口快捷卡包含智能体接口和普通接口，保留状态�
   const apiSection = html.slice(html.indexOf('>接口</strong>'))
   assert.match(apiSection, /通用聊天助手/)
   assert.match(apiSection, /智能体接口/)
-  assert.match(apiSection, /POST \/agents\/assistant\/run/)
+  assert.match(apiSection, /\/agents\/assistant\/run/)
   assert.match(apiSection, /AG-UI \/ SSE/)
   assert.match(apiSection, /已初次完成/)
   assert.match(apiSection, /GET/)
@@ -72,7 +90,7 @@ test('左侧仅有智能体时接口分类非空，没有任何接口时保留�
     const html = renderToStaticMarkup(
       <QuickTaskGuide
         agents={agents}
-        apiContracts={[]}
+        apiContracts={agents.length ? [runtimeApi] : []}
         pages={[]}
         entities={[]}
         disabled={false}
@@ -96,7 +114,7 @@ test('接口分类展示一个带标识的智能体接口，状态复用 Agent �
     <ApplicationOutline
       agents={[assistant]}
       developmentArtifacts={artifacts}
-      apiContracts={[]}
+      apiContracts={[runtimeApi]}
       entities={[]}
       pages={[]}
       pageTree={[]}
@@ -110,7 +128,7 @@ test('接口分类展示一个带标识的智能体接口，状态复用 Agent �
     />
   )
   const apiSection = html.slice(html.indexOf('>接口</span>'), html.indexOf('>实体</span>'))
-  assert.match(apiSection, /智能体接口/)
+  assert.match(apiSection, /aria-label="robot"/)
   assert.match(apiSection, /通用聊天助手/)
   assert.match(apiSection, /POST \/agents\/assistant\/run/)
   assert.doesNotMatch(apiSection, /暂无接口/)

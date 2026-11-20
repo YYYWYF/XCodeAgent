@@ -15,7 +15,8 @@ from app.services.agent_ui_observation import capture_identity
 
 
 def managed_preview_command(workspace: Path, target: Path, script: str, *,
-                            runtime_public_url: str | None = None) -> list[str] | None:
+                            runtime_public_url: str | None = None, runtime_launch_id: str | None = None,
+                            preview_source: dict | None = None) -> list[str] | None:
     """复核归属和正式能力；真实模式只使用原受管 Runtime，不启动另一个聊天服务。"""
     provider = safe_path(target, PROVIDER)
     if not provider.is_file():
@@ -51,7 +52,18 @@ def managed_preview_command(workspace: Path, target: Path, script: str, *,
     options = {"target": str(target), "providerSha256": sha256(provider.read_bytes()), "agentId": agent_id,
         "installationRoot": str(inspection.installation_root), "creatorVersion": inspection.creator_version,
         "packageJsonSha256": inspection.package_json_sha256, "mode": "official-mock", "sessionId": uuid4().hex}
-    options['observation'] = {'sessionId': options['sessionId'], 'identity': capture_identity(workspace)}
+    options['observation'] = {'sessionId': options['sessionId'], 'launchId': runtime_launch_id,
+                              'identity': capture_identity(workspace)}
+    selected = (preview_source or {}).get('source')
+    if selected in {'official-mock', 'replay'}:
+        options['mode'] = selected
+        if selected == 'replay':
+            from app.services.agent_ui_preview_source import replay_path
+            options['replayPath'] = str(replay_path(workspace, preview_source['replaySha256']))
+            options['replaySha256'] = preview_source['replaySha256']
+        options['observation'].update(source=options['mode'], replaySha256=options.get('replaySha256'))
+        return [str(inspection.node_executable), str(Path(__file__).with_name('agent_ui_managed_preview.mjs')),
+                json.dumps(options, ensure_ascii=False)]
     if runtime_public_url is not None:
         plan = runtime_check_plan(workspace, {})
         contracts = agent_contract_index(plan) if plan is not None else {}
@@ -64,5 +76,8 @@ def managed_preview_command(workspace: Path, target: Path, script: str, *,
             options.update(mode=("formal-business" if connection == "business" else "formal-text") if formal_text else "real-text", endpoint=endpoint)
     if formal_text and options['mode'] not in {'formal-text', 'formal-business'}:
         raise ValueError('正式 Agent UI能力或当前 Runtime 不满足接线条件，请重新审阅，不回退 Mock。')
+    if selected == 'real' and options['mode'] == 'official-mock':
+        raise ValueError('当前 Runtime 或正式能力不满足真实连接，不回退 Mock。')
+    options['observation'].update(source=options['mode'], replaySha256=None)
     return [str(inspection.node_executable), str(Path(__file__).with_name("agent_ui_managed_preview.mjs")),
             json.dumps(options, ensure_ascii=False)]

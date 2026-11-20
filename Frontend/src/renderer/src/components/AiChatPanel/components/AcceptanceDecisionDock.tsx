@@ -3,10 +3,12 @@ import { Button, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import { cx } from '../../../utils'
 import './AcceptanceDecisionDock.less'
+import AgentUiAcceptanceReview from './AgentUiAcceptanceReview'
 
 const { Text } = Typography
 
 type Props = {
+  workspace?: string
   disabled?: boolean
   submitting?: boolean
   onReject: () => void
@@ -15,6 +17,7 @@ type Props = {
 
 /** 验收待确认底栏：不通过返回开发对话，通过动作由上层处理。 */
 export default function AcceptanceDecisionDock({
+  workspace = '',
   disabled = false,
   submitting = false,
   onReject,
@@ -27,11 +30,8 @@ export default function AcceptanceDecisionDock({
         <Text type="secondary">请根据需求文档基线验收当前应用。</Text>
       </div>
       <div className={cx('acceptance-decision-actions')}>
-        <Button
-          disabled={disabled}
-          icon={<CloseCircleOutlined />}
-          onClick={onReject}
-        >
+        <AgentUiAcceptanceReview key={workspace} workspace={workspace} disabled={disabled} />
+        <Button disabled={disabled} icon={<CloseCircleOutlined />} onClick={onReject}>
           不通过，进入对话
         </Button>
         <Button

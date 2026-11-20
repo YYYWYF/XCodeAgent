@@ -4,6 +4,36 @@ import { setTimeout } from 'node:timers/promises'
 import { createServer as createHttpServer } from 'node:http'
 import { until, mountConsumer, mountSharedConsumer, click } from './sessionHarness.mjs'
 
+/** 两种生成宿主均使用带可访问名称的图标入口，开关不重建会话或发起请求。 */
+for (const preview of [false, true]) test(`floating ${preview ? 'design preview' : 'shared Host'} uses accessible icon controls`, async (t) => {
+  const { showPage, snapshot, requests } = await mountSharedConsumer(t, 'simple-chat', undefined, undefined, preview)
+  const composer = document.querySelector('textarea')
+  const thread = snapshot().conversation.id
+  showPage('home', false)
+  await until(() => document.querySelector('[data-action-id="open"]'), 'Launcher missing')
+  const launcher = document.querySelector('[data-action-id="open"]')
+  assert.equal(launcher.getAttribute('aria-label'), '打开助手')
+  assert.equal(launcher.getAttribute('title'), '打开助手')
+  assert.equal(launcher.getAttribute('aria-expanded'), 'false')
+  assert.ok(launcher.querySelector('svg[aria-hidden="true"]'))
+  assert.equal(launcher.textContent.trim(), '')
+  launcher.click()
+  await until(() => document.getElementById(launcher.getAttribute('aria-controls'))?.hidden === false, 'Panel did not open')
+  const close = document.querySelector('button[aria-label="关闭助手"]')
+  const panel = document.getElementById(launcher.getAttribute('aria-controls'))
+  assert.equal(panel.hidden, false)
+  assert.ok(close.querySelector('svg[aria-hidden="true"]'))
+  assert.equal(close.textContent.trim(), '')
+  assert.equal(close.getAttribute('title'), '关闭助手')
+  close.click()
+  await until(() => panel.hidden, 'Panel did not close')
+  document.querySelector('[data-action-id="open"]').click()
+  await until(() => !panel.hidden, 'Panel did not reopen')
+  assert.equal(document.querySelector('textarea'), composer)
+  assert.equal(snapshot().conversation.id, thread)
+  assert.equal(requests.length, 0)
+})
+
 /** 独立页导航和官方会话同时可见，来回切页仍保留唯一 Composer 和当前线程。 */
 test('design preview retains standalone navigation beside one official conversation', async (t) => {
   const { snapshot, requests } = await mountSharedConsumer(t, 'simple-chat', undefined, undefined, true)
@@ -68,14 +98,16 @@ test('plain text requests preserve the Python request boundary across two turns'
   assert.equal(inputs[0].threadId, inputs[1].threadId)
 })
 
-/** 即使收到当前请求的合法 Python 结果，包未公开 runId 时仍不能独立核验。 */
+/** 合法 Python 空结果仍由官方状态消费，界面不为普通成功回执额外占位。 */
 test('well-formed Python HTTP result is consumed without requiring package run identity', async (t) => {
   const { getHost, snapshot, requests } = await mountSharedConsumer(t, 'runtime-result', 'assistant', runtimeResultFixture())
   await getHost().sendMessage('仅合同夹具')
-  await until(() => document.querySelector('[data-runtime-business-status="completed"]'), 'Backend receipt did not settle')
+  await until(() => snapshot().state.agentRuntime?.status === 'completed'
+    && document.body.textContent.includes('合同夹具回复'), 'Backend receipt did not settle')
   assert.equal(snapshot().run.id, undefined)
   assert.equal(requests.length, 1)
-  assert.ok(document.querySelector('[data-runtime-business-status="completed"]'))
+  assert.equal(snapshot().state.agentRuntime.result, null)
+  assert.equal(document.querySelector('[data-runtime-business-status]'), null)
   assert.match(document.body.textContent, /合同夹具回复/)
 })
 
@@ -152,11 +184,16 @@ test('standalone placement preserves the Shell and the same conversation element
   showPage('chat', true)
   await until(() => document.querySelector('.shared-agent-page-slot'), 'Page slot missing')
   const slot = document.querySelector('.shared-agent-page-slot')
-  slot.getBoundingClientRect = () => ({ top: 90, left: 200, width: 640, height: 480 })
+  let top = 90
+  slot.getBoundingClientRect = () => ({ top, left: 200, width: 640, height: 0 })
   window.dispatchEvent(new window.Event('resize'))
   await until(() => section.style.width === '640px', 'Host did not use the actual content bounds')
   assert.equal(section.hidden, false)
   assert.equal(section.style.left, '200px')
+  assert.equal(section.style.height, `${window.innerHeight - 90}px`)
+  top = 140
+  window.dispatchEvent(new window.Event('resize'))
+  await until(() => section.style.height === `${window.innerHeight - 140}px`, 'Host did not follow the resized toolbar')
   assert.equal(document.getElementById('shared-agent-conversation'), section)
   assert.equal(snapshot().conversation.id, thread)
   assert.equal(document.querySelector('main').parentElement.hidden, false)

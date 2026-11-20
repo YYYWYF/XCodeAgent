@@ -29,7 +29,9 @@ class PreviewRuntimeInput(BaseModel):
     """在协议边界约束工作区、动作和本次确认身份。"""
     model_config = ConfigDict(extra="forbid")
     workspace: str = Field(min_length=1, max_length=4096)
-    action: Literal["get", "watch", "restart", "stop", "diagnose", "confirm", "revise", "cancel", "leave"]
+    action: Literal["get", "watch", "restart", "stop", "diagnose", "confirm", "revise", "cancel", "leave", "switch-source"]
+    source: Literal['official-mock', 'real', 'replay'] | None = None
+    recording: str = Field(default='', max_length=1024 * 1024)
     attemptId: str = ""
     planId: str = ""
     feedback: str = Field(default="", max_length=4000)
@@ -68,7 +70,10 @@ async def _finish_leave_cleanup(workspace: str, job: asyncio.Task[Any] | None) -
 
 def preview_runtime_capabilities() -> dict[str, Any]:
     """发布当前独立预览协议。"""
-    return {"name": "preview-runtime", "endpoint": "/preview-runtime/run", "transport": "ag-ui-sse", "actions": list(PreviewRuntimeInput.model_fields["action"].annotation.__args__), "customEventName": "preview-runtime", "stateSnapshotKey": "previewRuntime", "workflowIndependent": True}
+    return {"name": "preview-runtime", "endpoint": "/preview-runtime/run", "transport": "ag-ui-sse", "actions": list(PreviewRuntimeInput.model_fields["action"].annotation.__args__), "customEventName": "preview-runtime", "stateSnapshotKey": "previewRuntime", "workflowIndependent": True,
+            'sourceSelection': {'action': 'switch-source', 'sources': ['official-mock', 'real', 'replay'],
+                                'requiresCurrentAttempt': True, 'maxRecordingBytes': 1024 * 1024,
+                                'recordingPersistence': 'sanitized-jsonl-only'}}
 
 
 def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:
@@ -104,7 +109,7 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
         if not owner:
             return
         action = str(owner.get("action") or "")
-        if action not in {"restart", "stop", "diagnose", "confirm", "revise"}:
+        if action not in {"restart", "stop", "switch-source", "diagnose", "confirm", "revise"}:
             return
         key = (str(Path(workspace).expanduser().resolve()), str(owner.get("threadId") or ""))
         job = _jobs.get(key)
@@ -138,7 +143,7 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
         layer = next((item for item in ("frontend", "backend", "agent_runtime")
                       if (record.get(item) or {}).get("status") == "starting"), "")
         stop_project_preview(workspace)
-        if action == "restart":
+        if action in {"restart", "switch-source"}:
             mark_interrupted_attempt(workspace, layer=layer)
         release_maintenance(workspace, str(owner.get("threadId") or ""))
 
@@ -178,6 +183,11 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
     try:
         if task is not None:
             workflow_run_registry.register(run_id, task, workspace=workspace, maintenance_thread_id=thread_id, thread_id=thread_id)
+        if request.action == 'switch-source':
+            from app.services.agent_ui_preview_source import switch_preview_source
+            result = await synchronous(switch_preview_source, Path(workspace), request.attemptId, request.source,
+                                       request.recording, cancel.is_set, progress)
+            return {**snapshot(workspace, thread_id), 'launchResult': result}
         if request.action in {"restart", "stop"}:
             progress("restart", "正在停止旧服务并启动预览…" if request.action == "restart" else "正在更新预览服务…")
             if request.action == "stop":
@@ -227,7 +237,12 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
     """用公共 AG-UI 生命周期承载读取、维护与确认，不手写 SSE。"""
     async def operation(report: Any) -> AgUiActionResult:
         """先原子校验占用，再把持久操作与抽屉订阅生命周期分离。"""
-        request = PreviewRuntimeInput.model_validate((payload.get("forwardedProps") or {}).get("previewRuntime") or {})
+        try:
+            request = PreviewRuntimeInput.model_validate((payload.get("forwardedProps") or {}).get("previewRuntime") or {})
+        except ValueError:
+            raise ValueError('预览操作参数无效，请检查来源、录制大小与当前启动身份。') from None
+        if request.action != 'switch-source' and (request.source is not None or request.recording):
+            raise ValueError('来源与录制只能由显式切换操作提交。')
         root = Path(request.workspace).expanduser().resolve()
         if not (root / WORKSPACE_ARTIFACT_DIR / "application.json").is_file():
             raise ValueError("需要有效的应用工作区。")

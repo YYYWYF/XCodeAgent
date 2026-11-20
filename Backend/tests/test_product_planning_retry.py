@@ -118,7 +118,10 @@ class ProductPlanningRetryTests(unittest.TestCase):
                                 "name": "查看详情",
                                 "description": "进入详情页面。",
                                 "requiresConfirmation": False,
-                                "targetPageId": second_page["pageId"],
+                                "behavior": {
+                                    "type": "navigation",
+                                    "targetPageId": second_page["pageId"],
+                                },
                             }
                         ],
                     }
@@ -223,7 +226,10 @@ class ProductPlanningRetryTests(unittest.TestCase):
                                 "name": "查看详情",
                                 "description": "进入详情页面。",
                                 "requiresConfirmation": False,
-                                "targetPageId": second_page["pageId"],
+                                "behavior": {
+                                    "type": "navigation",
+                                    "targetPageId": second_page["pageId"],
+                                },
                             }
                         ],
                     }
@@ -325,6 +331,10 @@ class ProductPlanningRetryTests(unittest.TestCase):
                                 "name": "搜索指南",
                                 "description": "按关键字查询指南。",
                                 "requiresConfirmation": False,
+                                "behavior": {
+                                    "type": "business",
+                                    "expectedResult": "展示匹配关键字的指南。",
+                                },
                             }
                         ],
                     }
@@ -1044,7 +1054,10 @@ class ProductPlanningRetryTests(unittest.TestCase):
                                 "name": "查看详情",
                                 "description": "进入详情页面。",
                                 "requiresConfirmation": False,
-                                "targetPageId": second_page["pageId"],
+                                "behavior": {
+                                    "type": "navigation",
+                                    "targetPageId": second_page["pageId"],
+                                },
                             }
                         ],
                     }

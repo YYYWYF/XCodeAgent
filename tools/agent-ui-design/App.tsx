@@ -36,18 +36,31 @@ export function App({ pageId, endpoint, source, onNavigatePage }: {
         <Page onOpenAgentPanel={openPanel} onCloseAgentPanel={closePanel} agentPanelOpen={visible}
           onNavigatePage={onNavigatePage ?? ignoreNavigation} />
       </section>}
-      {page.surface === 'floating_panel' && !visible && !page.hasInlineLauncher && <div className="agent-design-launchers">{page.entries.map((entry) => (
-        <button key={entry.actionId} type="button" className="agent-design-launcher"
+      {page.surface === 'floating_panel' && !visible && !page.hasInlineLauncher && <div className="agent-design-launchers shared-agent-launchers">{page.entries.map((entry) => (
+        <button key={entry.actionId} type="button" className="agent-design-launcher shared-agent-launcher"
+          aria-label={entry.label} title={entry.label}
           data-action-id={entry.actionId} aria-expanded={visible}
           aria-controls="agent-design-conversation" onClick={openPanel}>
-          {entry.label}
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor"
+            strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+            <rect x="4" y="6" width="16" height="14" rx="4" />
+            <path d="M12 3v3M9 3h6M8 12v2M16 12v2M9 17h6M2 10v6M22 10v6" />
+          </svg>
         </button>
       ))}</div>}
       <section id="agent-design-conversation" hidden={!visible}
-        className={`agent-design-conversation ${standalone ? 'is-standalone' : 'is-floating'}`}
+        className={`agent-design-conversation shared-agent-conversation ${standalone ? 'is-standalone' : 'is-floating'}`}
         aria-label={labels.conversation}>
-        {!standalone && <button type="button" className="agent-design-close"
-          aria-label={labels.close} onClick={closePanel}>{labels.close}</button>}
+        {!standalone && <header className="shared-agent-panel-header">
+          <span>智能助手</span>
+          <button type="button" className="agent-design-close shared-agent-close"
+            aria-label={labels.close} title={labels.close} onClick={closePanel}>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+              strokeWidth="1.75" strokeLinecap="round" aria-hidden="true" focusable="false">
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </header>}
         {connected
           ? <Agent pageId={page.pageId} {...agentProps} {...presentation?.props} endpoint={endpoint} onError={reportError} />
           : <p role="status">{labels.connectionPending}</p>}

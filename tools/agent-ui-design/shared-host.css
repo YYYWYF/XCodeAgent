@@ -1,22 +1,81 @@
 .shared-agent-host { min-height: 100dvh; }
-.shared-agent-page-slot { width: 100%; height: max(24rem, calc(100dvh - 10rem)); }
+/* 设计预览与正式宿主共用外观；系统语义色随会话主题变化，描边不再使用文字色。 */
+.shared-agent-host, .agent-design {
+  --shared-agent-border: rgba(128, 128, 144, .24);
+  --shared-agent-hover: rgba(128, 128, 144, .12);
+  --shared-agent-shadow: 0 12px 40px rgba(24, 16, 48, .16), 0 2px 8px rgba(24, 16, 48, .08);
+  --shared-agent-accent: #7c3aed;
+  --shared-agent-on-accent: #fff;
+}
+.shared-agent-host:has([data-agent-ui-root][data-color-scheme="light"]) { color-scheme: light; }
+.shared-agent-host:has([data-agent-ui-root][data-color-scheme="dark"]) { color-scheme: dark; }
+.shared-agent-host:has([data-agent-ui-root][data-color-scheme="dark"]),
+.agent-design:has([data-agent-ui-root][data-color-scheme="dark"]) {
+  --shared-agent-border: rgba(176, 176, 192, .24);
+  --shared-agent-hover: rgba(176, 176, 192, .14);
+  --shared-agent-shadow: 0 12px 40px rgba(0, 0, 0, .36), 0 2px 8px rgba(0, 0, 0, .24);
+  --shared-agent-accent: #a78bfa;
+  --shared-agent-on-accent: #21143d;
+}
+.shared-agent-page-slot { width: 100%; height: 0; }
 .shared-agent-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; color: CanvasText; background: Canvas; color-scheme: inherit; }
 .shared-agent-conversation:has([data-agent-ui-root][data-color-scheme="light"]) { color-scheme: light; }
 .shared-agent-conversation:has([data-agent-ui-root][data-color-scheme="dark"]) { color-scheme: dark; }
 .shared-agent-conversation.is-standalone { height: 100dvh; }
-.shared-agent-conversation.is-floating { position: fixed; z-index: 100; bottom: 1rem; right: 1rem; width: min(48rem, calc(100vw - 2rem)); height: min(42rem, calc(100dvh - 2rem)); border: 1px solid currentColor; border-radius: .75rem; }
+.shared-agent-conversation.is-floating { position: fixed; z-index: 100; bottom: 1rem; right: 1rem; box-sizing: border-box; width: min(48rem, calc(100vw - 2rem)); height: min(42rem, calc(100dvh - 2rem)); border: 1px solid var(--shared-agent-border); border-radius: 1rem; box-shadow: var(--shared-agent-shadow); }
 .shared-agent-conversation > .agent-ui-platform-shell { flex: 1; min-height: 0; }
 .shared-agent-conversation[hidden] { display: none; }
-.shared-agent-launchers { position: fixed; bottom: 1rem; right: 1rem; display: flex; gap: .5rem; }
-.shared-agent-launchers button, .shared-agent-close { color-scheme: inherit; color: CanvasText; background: Canvas; padding: .5rem 1rem; border: 1px solid currentColor; border-radius: .5rem; cursor: pointer; }
-.shared-agent-close { align-self: flex-end; margin: .5rem; }
-.shared-agent-business { flex: 0 0 auto; max-height: 40%; overflow: auto; padding: .5rem 1rem; border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); }
+.shared-agent-launchers { position: fixed; z-index: 100; bottom: 1rem; right: 1rem; display: flex; gap: .5rem; }
+.shared-agent-launcher, .shared-agent-close {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  box-sizing: border-box; padding: 0; margin: 0; border: 0; cursor: pointer;
+  color-scheme: inherit; font: inherit; transition: background-color .15s, box-shadow .15s;
+}
+.shared-agent-launcher {
+  width: 3rem; height: 3rem; border-radius: 50%;
+  color: var(--shared-agent-on-accent); background: var(--shared-agent-accent);
+  box-shadow: 0 4px 16px rgba(79, 42, 145, .24);
+}
+.shared-agent-launcher:hover { box-shadow: 0 6px 20px rgba(79, 42, 145, .36); }
+.shared-agent-panel-header {
+  display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto;
+  box-sizing: border-box; min-height: 2.75rem; padding: .25rem .5rem .25rem 1rem;
+  color: CanvasText; background: Canvas;
+  border-bottom: 1px solid var(--shared-agent-border); font: 500 .875rem/1.5 system-ui, sans-serif;
+}
+.shared-agent-close { width: 2rem; height: 2rem; border-radius: .5rem; color: CanvasText; background: transparent; }
+.shared-agent-close:hover { background: var(--shared-agent-hover); }
+.shared-agent-launcher:focus-visible, .shared-agent-close:focus-visible { outline: 2px solid var(--shared-agent-accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  .shared-agent-launcher, .shared-agent-close { transition: none; }
+}
+/* 单独使用系统颜色回退，避免旧版 Lightning CSS 在构建时计算颜色混合。 */
+.shared-agent-business { flex: 0 0 auto; max-height: 40%; overflow: auto; padding: .5rem 1rem; border-bottom: 1px solid var(--border, GrayText); }
 .shared-agent-business p { margin: .25rem 0; }
 .shared-agent-business pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.shared-agent-business button, .shared-agent-business input { color: CanvasText; background: Canvas; border: 1px solid color-mix(in srgb, CanvasText 35%, Canvas); border-radius: .375rem; padding: .375rem .75rem; margin: .25rem; }
+.shared-agent-business fieldset { min-width: 0; margin: .5rem 0 0; padding: .5rem; border: 1px solid var(--border, GrayText); border-radius: .5rem; }
+.shared-agent-business-field { margin-block: .5rem; }
+.shared-agent-business-field label { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem; }
+.shared-agent-business-field p { color: var(--muted-foreground, GrayText); font-size: .875rem; overflow-wrap: anywhere; }
+.shared-agent-business button, .shared-agent-business input, .shared-agent-business select, .shared-agent-business textarea { box-sizing: border-box; max-width: 100%; font: inherit; color: CanvasText; background: Canvas; border: 1px solid var(--input, var(--border, GrayText)); border-radius: .375rem; padding: .375rem .75rem; margin: .25rem; }
+.shared-agent-business textarea { resize: vertical; }
+.shared-agent-business :is(input, select, textarea):disabled { opacity: .65; cursor: default; }
 .shared-agent-business button { cursor: pointer; }
 .shared-agent-business button:disabled { opacity: .5; cursor: default; }
-.shared-agent-business button:hover:not(:disabled) { background: color-mix(in srgb, CanvasText 8%, Canvas); }
-.shared-agent-business button:focus-visible, .shared-agent-business input:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-.shared-agent-launchers button:hover, .shared-agent-close:hover { text-decoration: underline; }
-.shared-agent-launchers button:focus-visible, .shared-agent-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.shared-agent-business button:hover:not(:disabled) { background: var(--accent, ButtonFace); color: var(--accent-foreground, ButtonText); }
+.shared-agent-business :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--ring, currentColor); outline-offset: 2px; }
+
+.shared-agent-step { min-width: 0; margin: .75rem 0; padding: 1rem; border: 1px solid var(--border, GrayText); border-radius: .75rem; background: var(--card, Canvas); color: var(--card-foreground, CanvasText); overflow-wrap: anywhere; }
+.shared-agent-step p { margin: 0 0 .625rem; white-space: pre-wrap; }
+.shared-agent-step dl { margin: .5rem 0; }
+.shared-agent-step dl > div { display: flex; flex-wrap: wrap; gap: .25rem; margin: .25rem 0; }
+.shared-agent-step dt { font-weight: 600; }
+.shared-agent-step dd { margin: 0; min-width: 0; }
+.shared-agent-step ul { padding-inline-start: 1.25rem; margin: .25rem 0; }
+.shared-agent-step-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.shared-agent-step button, .shared-agent-step textarea { font: inherit; color: inherit; background: transparent; border: 1px solid var(--border, currentColor); border-radius: .5rem; padding: .5rem .75rem; }
+.shared-agent-step textarea { display: block; box-sizing: border-box; width: 100%; min-height: 5rem; margin: .5rem 0; resize: vertical; }
+.shared-agent-step button { cursor: pointer; }
+.shared-agent-step button:hover:not(:disabled) { background: var(--accent, ButtonFace); color: var(--accent-foreground, ButtonText); }
+.shared-agent-step button:disabled { opacity: .55; cursor: default; }
+.shared-agent-step button:focus-visible, .shared-agent-step textarea:focus-visible { outline: 2px solid var(--ring, currentColor); outline-offset: 3px; }

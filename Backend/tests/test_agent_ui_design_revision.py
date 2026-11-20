@@ -90,7 +90,7 @@ class DesignCreatorRevisionTests(unittest.TestCase):
             self.assertTrue(request.startswith('侧栏改为 320px\n'))
             self.assertNotIn('不要修改', request)
             self.assertNotIn('只读', request)
-            self.assertIn('protectedPaths', request)
+            self.assertIn('protectedPaths', (project / '.agent-ui/design-revision-context.json').read_text())
             self.assertEqual(json.loads((project / '.agent-ui/project.json').read_text())['sourceRoot'],
                 'src/agent-ui')
             path = project / 'src/agent-ui/app-ui.json'
@@ -144,7 +144,7 @@ class DesignCreatorRevisionTests(unittest.TestCase):
         """欢迎语属于页面展示配置，不改变共享应用，也不撤销其他页确认。"""
         def edit(_inspection, project: Path, request: str, **_options):
             """通过公开 props 的 JSON 投影修改本页欢迎语。"""
-            self.assertIn('shared-application', request)
+            self.assertIn('shared-application', (project / '.agent-ui/design-revision-context.json').read_text())
             (project / 'src/design/presentation.json').write_text(
                 '{"chat":{"props":{"welcome":{"title":"欢迎咨询"}},"styles":[]}}')
             return {'type': 'completed'}
