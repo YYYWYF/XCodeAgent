@@ -1,6 +1,7 @@
 """静态核对页面 Skill 启动顺序和 API 轻量模式的提示边界。"""
 
 import json
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -10,7 +11,8 @@ from deepagents.backends import StateBackend
 from app.agents.frontend.agent import create_frontend_agent
 from app.agents.frontend.execution_scope import FRONTEND_CORE_DOCS, FrontendTaskExecutionScope
 from app.agents.frontend.generator import _scoped_generation_prompt
-from app.agents.frontend.task_packet import API, PAGE
+from app.agents.frontend.task_packet import API, PAGE, _standard_rules
+from app.services.builtin_skills import resolve_builtin_skills_root
 
 
 class FrontendSkillLoadingPromptTests(unittest.TestCase):
@@ -50,6 +52,9 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                     self.assertIn("status（completed、already_satisfied 或 failed）", prompt)
                     self.assertIn("失败提供 failure_category、failure_reason", prompt)
                     if kind == PAGE:
+                        self.assertIn("references/component-patterns.md 对应章节", prompt)
+                        self.assertIn("references/page-structure-examples.md 对应章节", prompt)
+                        self.assertIn("不默认完整读取全部 references", prompt)
                         self.assertNotIn("不搜索其他业务 API 文件获取契约", prompt)
                         self.assertIn("第一次工具调用必须单独调用 begin_frontend_task", system)
                         self.assertIn("等待其成功返回 Step 1 后", system)
@@ -94,3 +99,36 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                             self.assertNotIn(control, prompt)
                         for step in ("四步", "Step 1", "Step 2", "Step 3", "Step 4"):
                             self.assertNotIn(step, prompt)
+
+    def test_required_rules_exist_and_match_task_responsibilities(self):
+        """逐项核对规则声明与适用职责，不给 API 模块下发页面交互规则。"""
+        root = resolve_builtin_skills_root() / "frontend-engineering-standards"
+        standard = (root / "SKILL.md").read_text(encoding="utf-8")
+        rows = dict(re.findall(r"\| `(FE-[A-Z-]+)` \| ([^|]+) \|", standard))
+        for kind in (API, PAGE):
+            rules = _standard_rules(kind)
+            self.assertEqual(len(rules["required_rule_ids"]), len(set(rules["required_rule_ids"])))
+            for rule in rules["required_rule_ids"]:
+                self.assertIn(rule, rows)
+                self.assertIn("页面" if kind == PAGE else "API 模块", rows[rule])
+            for reference in rules["example_refs"]:
+                self.assertTrue((root / "references" / f"{reference}.md").is_file())
+        self.assertEqual(set(_standard_rules(PAGE)["required_rule_ids"]), set(rows))
+        self.assertEqual(set(_standard_rules(API)["required_rule_ids"]), {
+            "FE-API-BOUNDARY", "FE-TYPES", "FE-CODE-LAYERING", "FE-DATA-PRECISION", "FE-NAMING",
+        })
+        for relative in re.findall(r"\]\((references/[^)]+)\)", standard):
+            self.assertTrue((root / relative).is_file())
+
+    def test_reference_examples_do_not_reintroduce_request_coupling(self):
+        """核对示例中 JSX 请求边界和废弃重复查询状态，不冒充真实模型生成验证。"""
+        root = resolve_builtin_skills_root() / "frontend-engineering-standards" / "references"
+        for path in root.glob("*.md"):
+            for code in re.findall(r"```tsx?\n(.*?)```", path.read_text(encoding="utf-8"), re.S):
+                self.assertNotRegex(code, r"\brequest\s*=")
+                self.assertNotIn("requestQuery", code)
+                self.assertNotRegex(code, r"\bvisible[=:\s]")
+                if path.name != "api-request-patterns.md" and "// src/apis/" not in code:
+                    self.assertNotRegex(code, r"\b(?:service|axios|fetch)\s*[.(]")
+                    self.assertNotIn("from 'mockjs'", code)
+                    self.assertNotIn("from 'xlsx'", code)

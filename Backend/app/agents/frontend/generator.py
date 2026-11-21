@@ -63,6 +63,10 @@ def _scoped_generation_prompt(packets: list[dict]) -> str:
     page_guidance = (
         "页面消费 implementation_contract.api_dependencies 的导出。简单查询在页面直接使用 useRequest，"
         "复杂复用或跨组件编排再抽取 Hook。"
+        "遇到复杂表单、联动或批量选择时，可按需读取 references/component-patterns.md 对应章节；"
+        "多标签页或导入导出组合可按需读取 references/page-structure-examples.md 对应章节。"
+        "这些路径相对 Engineering Skill，仅读取指定章节或必要范围，不默认完整读取全部 references，"
+        "不新增 Skill 阅读子任务，也不扩大业务文件权限。"
         "通过 dataSource、loading 或 options 传给组件，事件型 mutation 可直接调用业务函数。"
         "确认设计稿和所选模板只参考布局与组件，按规范重新绑定数据，省略示例数据和预览控件。"
         "设计稿缺失或不可读时按页面契约实现。页面按 authorization_actions 的 resourceConstant "

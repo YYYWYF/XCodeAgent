@@ -117,6 +117,29 @@ class FrontendCoreDocsTests(unittest.TestCase):
         self.assertEqual(tools["after"].status, "error")
         self.assertEqual(scope.outcomes, {"A": "failed", "B": "failed"})
 
+    def test_page_reads_only_requested_example_range_without_expanding_permissions(self):
+        """复杂页面只读取必要示例范围，原业务文件与旧 Skill 边界保持不变。"""
+        scope = FrontendTaskExecutionScope(str(self.root), [_packet(PAGE)])
+        reference = SKILL.removesuffix("SKILL.md") + "references/component-patterns.md"
+        from app.services.builtin_skills import resolve_builtin_skills_root
+
+        source = (resolve_builtin_skills_root() / "frontend-engineering-standards"
+                  / "references/component-patterns.md").read_text(encoding="utf-8")
+        offset = source[:source.index("## ModalForm")].count("\n")
+        tools = self._run(scope, [
+            [_call("begin_frontend_task", "begin", task_id=PAGE)],
+            [_read(SKILL, "core"), _read(AGENTS, "agents")],
+            [_call("read_file", "range", file_path=reference, offset=offset, limit=12)],
+            [_call("read_file", "unrelated", file_path="/frontend/src/apis/private.ts"),
+             _read(SKILL.replace("frontend-engineering-standards", "code-block-template"), "old")],
+        ])
+        self.assertEqual(tools["range"].status, "success", tools["range"])
+        self.assertIn("ModalForm", tools["range"].content)
+        self.assertNotIn("export default function OrderSteps", tools["range"].content)
+        self.assertEqual(tools["unrelated"].status, "error")
+        self.assertEqual(tools["old"].status, "error")
+        self.assertEqual(scope.core_docs_read, {(PAGE, SKILL), (PAGE, AGENTS)})
+
     def test_missing_and_failed_reads_do_not_count(self):
         """缺失文件和后端错误都不登记，恢复后允许首次成功读取。"""
         scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])

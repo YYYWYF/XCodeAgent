@@ -180,9 +180,12 @@ def _standard_rules(kind: str) -> dict:
     return {
         "standard_id": FRONTEND_ENGINEERING_SKILL_NAME,
         "standard_version": "1.0",
-        "required_rule_ids": ["FE-API-BOUNDARY", "FE-TYPES", "FE-CODE-LAYERING", *(
+        "required_rule_ids": ["FE-API-BOUNDARY", "FE-TYPES", "FE-CODE-LAYERING",
+                              "FE-DATA-PRECISION", "FE-NAMING", *(
             ["FE-API-USE-REQUEST", "FE-API-UI-DECOUPLING", "FE-CONSTANTS",
-             "FE-PRO-COMPONENTS", "FE-HOOKS"] if page else []
+             "FE-PRO-COMPONENTS", "FE-HOOKS", "FE-ERROR-PRESENTATION",
+             "FE-REACT-STATE", "FE-RENDER-SECURITY", "FE-LIST-KEY", "FE-JSX",
+             "FE-FORM", "FE-SELECTION"] if page else []
         )],
         "example_refs": ["api-request-patterns", *(
             ["component-patterns", "page-structure-examples"] if page else []

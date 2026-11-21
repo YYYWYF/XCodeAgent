@@ -20,19 +20,22 @@ version: "1.0"
 | 规则 ID | 适用任务 | 要求 |
 | --- | --- | --- |
 | `FE-API-BOUNDARY` | API 模块、页面 | 业务 HTTP 请求封装在 `src/apis/`，复用当前工程统一 `service`，严格遵守已确认的方法、路径、参数和返回类型。统一客户端成功返回业务值时不二次拆包；保留已有符合契约的导出。静态数据模块按正式数据源契约处理，不虚构 HTTP 接口。 |
-| `FE-API-USE-REQUEST` | 页面 | 查询、列表与详情使用 ahooks `useRequest` 管理请求和 loading/error 等状态。简单查询直接在页面使用，不强制抽取自定义 Hook；复杂联动或复用场景再抽取。新增、修改、删除等事件型操作可在处理函数或 `onFinish` 中直接调用业务 API，并按需要刷新查询。 |
-| `FE-API-UI-DECOUPLING` | 页面 | 业务查询与 UI 渲染解耦：ProTable 通过 `dataSource`、`loading` 和受控分页消费状态，ProFormSelect 等通过 `options` 消费数据，不在组件 JSX `request` 属性中直接调用业务 API。查询须按页面契约区分**加载中、成功有数据、成功无数据、请求失败**；请求失败提供可感知的错误反馈，不把失败伪装成空结果。受控分页的页码、页大小、列表记录与总数必须对应同一次成功查询；新页请求失败时，不得将上次成功的数据展示为失败请求对应的新页。若保留历史数据，须保持其成功查询的分页标识，或明确展示为非当前结果。 |
+| `FE-API-USE-REQUEST` | 页面 | 查询、列表与详情使用 ahooks `useRequest` 管理请求和 loading/error 等状态。简单查询直接在页面使用；查询条件和分页保存在页面 State，通过 refreshDeps 驱动查询，这不是重复请求状态。不强制抽取自定义 Hook，复杂联动或复用场景再抽取。新增、修改、删除等事件型操作可在处理函数或 `onFinish` 中直接调用业务 API，并按需要刷新查询。 |
+| `FE-API-UI-DECOUPLING` | 页面 | 业务查询与 UI 渲染解耦：ProTable 通过 `dataSource`、`loading` 和受控分页消费状态，ProFormSelect 等通过 `options` 消费数据，不在组件 JSX `request` 属性中直接调用业务 API。查询须按页面契约区分**加载中、成功有数据、成功无数据、请求失败**；加载时可保留列表并用 loading 明确标识，不强制清空数据；失败用 Result 等明确失败视图及重试处理，不仅在旧表格旁附加错误后仍当正常结果展示；请求失败提供可感知的错误反馈，不把失败伪装成空结果。受控分页的页码、页大小、列表记录与总数必须对应同一次成功查询；新页请求失败时，不得将上次成功的数据展示为失败请求对应的新页。若保留历史数据，须保持其成功查询的分页标识，或明确展示为非当前结果。 |
 | `FE-ERROR-PRESENTATION` | 页面 | 区分业务错误、请求失败和面向用户的提示。复用当前工程统一 `service` 的响应与错误处理，不在页面重复解析业务错误协议。不得把错误码、堆栈或未经转换的技术异常直接作为用户提示；应优先使用工程已确认的安全提示机制，否则展示清晰、非敏感的通用提示及必要的恢复操作。请求失败不得伪装为成功空结果。 |
 | `FE-CONSTANTS` | 页面 | 共享业务字典、枚举映射及固定选项放在已授权的 `src/constants/` 业务文件；仅使用一次的局部值留在使用处，不为形式统一而创建多余文件。 |
-| `FE-TYPES` | API 模块、页面 | API 参数、响应数据和组件 Props 使用明确或可可靠推断的 TypeScript 类型，优先复用已有类型。共享类型放在已授权的 `src/typings/`，局部 UI 类型就近定义；避免重复定义及以 `any` 绕过类型检查。未知外部数据优先使用 `unknown` 并在使用前收窄。 |
+| `FE-TYPES` | API 模块、页面 | API 参数、响应数据和组件 Props 使用明确或可可靠推断的 TypeScript 类型，优先复用已有类型。共享类型放在已授权的 `src/typings/`，局部 UI 类型就近定义；避免重复定义及以 `any` 绕过类型检查。未知外部数据优先使用 `unknown` 并在使用前收窄；可选值使用前收窄或给出符合 UI 语义的默认值，不借默认值改写业务契约。 |
 | `FE-DATA-PRECISION` | API 模块、页面 | 业务标识、金额及高精度数值必须遵循已确认 API 契约的数据类型、精度和序列化方式。不得将可能超出 JavaScript 安全整数范围的服务端标识强制转换为 `number`，也不得用存在浮点精度误差的计算处理需要精确计算的金额。优先复用工程现有的精度处理机制，不擅自修改接口字段类型；若上游 JSON 数值已经丢失精度，不能通过前端字符串转换假装恢复。 |
-| `FE-PRO-COMPONENTS` | 页面 | 依据确认设计选择 ProTable、ProList、ProCard、ProForm、ModalForm、DrawerForm、StepsForm 等；基础交互使用 Ant Design。避免为了使用高级组件而增加不必要的封装。 |
-| `FE-HOOKS` | 页面 | React Hook 只在函数组件或自定义 Hook 的顶层调用，不在条件、循环、普通函数或嵌套回调中调用。复杂编排、联动和可复用逻辑可抽取到已授权 Hook 文件；简单查询直接使用 `useRequest`。Effect 用于必要的外部系统同步，不以 Effect 替代请求状态管理。 |
+| `FE-PRO-COMPONENTS` | 页面 | 依据确认设计，结构化多列表用 ProTable，图文条目用 ProList；分组、概览与卡片容器复用 ProCard，复杂布局使用 Row/Col 栅格。常驻表单用 ProForm，短操作用 ModalForm，多字段且需保留页面上下文用 DrawerForm，确有阶段校验用 StepsForm。Pro 系列从 `@ant-design/pro-components` 导入，基础交互从 `antd` 导入。遵循模板现有样式与主题方案，局部样式限定业务作用域，不泄漏到全局，明暗主题均需可读。不为使用高级组件增加封装。按需见 `references/component-patterns.md` 的对应组件章节。 |
+| `FE-HOOKS` | 页面 | React Hook 只在函数组件或自定义 Hook 的顶层调用，不在条件、循环、普通函数或嵌套回调中调用。复杂编排、联动和可复用逻辑才抽取 Hook；简单查询直接使用 `useRequest`。Effect 仅同步外部系统，列全实际依赖并清理订阅、定时器等资源，不以 Effect 替代请求管理。沿用 useRequest 的并发结果管理，不添加手动竞态标记、自定义缓存或重复请求状态；useMemo/useCallback 仅用于确有收益的计算或引用稳定性。 |
 | `FE-CODE-LAYERING` | API 模块、页面 | 页面组合、交互与视图状态放在 pages；业务请求放在 apis；可复用 UI 放在 components；常量、类型、Hook、纯工具各归其职责。新增文件或修改既有文件均须在任务授权范围内。 |
-| `FE-REACT-STATE` | 页面 | 通过 React State Setter 更新状态，不直接修改 state 对象或数组；渲染过程保持纯净，不在渲染阶段执行无条件状态更新。可由 props/state 计算的数据优先派生，不额外维护重复状态。 |
+| `FE-REACT-STATE` | 页面 | Props 只读，不修改传入对象、数组或 state；通过 Setter 不可变更新，依赖旧值时使用函数式更新。render 不执行请求、DOM 操作或状态更新等副作用。可由 props/state 计算的数据直接派生，不维护重复状态。筛选、重置及改变页容量时复位分页，异步查询的 Loading/Empty/Error 与当前结果一致；不要用 useRequest 的旧 data 表示新查询成功。参考 `references/component-patterns.md` 的基础分页查询。多标签页显式选择独立或共享状态，见 `references/page-structure-examples.md`。 |
 | `FE-RENDER-SECURITY` | 页面 | 外部数据和用户输入默认通过 React 文本插值渲染，不直接拼接或注入 HTML。确需渲染富文本时，仅复用工程已有的可信 HTML 净化机制，且 `dangerouslySetInnerHTML` 不与 children 同用。动态 `href`、`src` 按业务场景校验协议及来源，拒绝不可信的可执行 URL；不得擅自新增净化依赖。 |
 | `FE-LIST-KEY` | 页面 | 列表项使用同级唯一且跨渲染稳定的 `key`；可增删、排序的列表使用稳定业务标识，不使用数组索引、随机数或每次渲染新生成的值。ProTable 使用与业务数据一致的稳定 `rowKey`。 |
-| `FE-NAMING` | API 模块、页面 | React 组件名称用 PascalCase，变量/函数用 camelCase，自定义 Hook 以 `use` 开头；事件处理函数优先 `handleXxx`，回调属性优先 `onXxx`，业务常量命名须语义清晰。文件名遵循当前工程习惯（如页面入口 `index.tsx`），不强制文件名与组件名一致。 |
+| `FE-NAMING` | API 模块、页面 | React 组件和类型用 PascalCase，变量/函数用 camelCase，Hook 以 `use` 开头；事件处理优先 `handleXxx`，回调属性优先 `onXxx`，布尔值和业务常量语义清晰。文件名遵循当前工程习惯（如页面入口 `index.tsx`），含 JSX 使用 `.tsx`。导入置于模块顶部，函数以中文注释说明目的，复杂决策说明原因。 |
+| `FE-JSX` | 页面 | 使用当前版本支持的 JSX/DOM 属性（如 className、对象式 style），组件必须已声明/导入，属性不重复，不将业务 Props 无差别透传 DOM。组件显式返回 JSX 或 null，避免无意义 Fragment 和过深嵌套。操作用 Button、导航用链接并支持键盘；img 提供有意义的 alt（装饰图为空），iframe 提供 title，新窗口外链按需设 rel="noopener noreferrer"。不修改受管 HTML 根文件。使用当前 React API 和 ref，不新增字符串 ref、findDOMNode 或废弃生命周期。 |
+| `FE-FORM` | 页面 | 创建/编辑明确初值；initialValues 仅用于初始化，切换记录及关闭重开时重置或重建表单，不能假定其随 props 自动同步。校验后在 onFinish 调用业务 API，提交中禁用重复操作及切换/关闭，失败保留输入并安全反馈，成功后刷新列表。联动字段隐藏时按契约清理或排除旧值（可用 preserve=false），步骤表单先校验当前步骤再推进。按需见 `references/component-patterns.md` 的 ModalForm、DrawerForm / StepsForm、ProFormDependency。 |
+| `FE-SELECTION` | 页面 | 行选择使用稳定业务 ID，提交 ID 必须来自当前有效勾选项；分页、筛选、刷新后按需求清理或重新核对，不能把旧行对象当作当前数据。默认不跨页保留选择，批量按钮在无选择、查询中或提交中禁用，操作成功后清理选择并刷新，失败反馈并保留可重试状态。跨页选择须有明确契约。按需见 `references/component-patterns.md` 的行选择与批量操作。 |
 
 ## 工程验收规则（沿用现有规则）
 
