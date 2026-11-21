@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import logging
 from typing import Any
-from uuid import uuid4
 
 from app.domain.application_lifecycle import (
     ApplicationLifecycleStage,
@@ -20,8 +20,20 @@ from app.domain.application_planning_recovery import (
     validate_application_planning_baseline,
 )
 from app.graph.nodes.common import workspace_from_state
+
+logger = logging.getLogger("uvicorn.error")
 from app.graph.state import ProjectState
 from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
+from app.services.requirement_spec_carryover import read_requirement_spec_carryover
+from app.services.technical_plan_carryover import (
+    drop_generated_fields,
+    read_technical_plan_carryover,
+)
+from app.services.technical_plan_merger import (
+    merge_technical_plan,
+    relevant_object_ids,
+    strip_change_status,
+)
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -30,6 +42,7 @@ from app.services.application_lifecycle import (
 from app.services.application_planning_persistence import (
     confirm_application_planning_artifacts,
 )
+from app.services.development_change_snapshot import write_change_snapshot
 from app.services.application_revision_lifecycle import (
     begin_technical_plan_revision_generation,
     ensure_technical_plan_generation_lifecycle,
@@ -37,12 +50,94 @@ from app.services.application_revision_lifecycle import (
 )
 from app.workspace.plan_documents import (
     commit_technical_plan_document,
+    current_technical_plan_json_path,
+    load_project_plan_json,
 )
+
+
+def _deleted_page_ids(state: ProjectState) -> set[str]:
+    """取本轮需求标记为删除的页面 ID。
+
+    优先读 `requirement_spec_diff`（带标记的展示版）；没有时回退读 `requirement_spec`
+    上的标记（部分路径直接沿用带标记的规格）。两者都是同一份需求事实。
+    """
+
+    for value in (state.get("requirement_spec_diff"), state.get("requirement_spec")):
+        pages = value.get("pages") if isinstance(value, dict) else None
+        if not isinstance(pages, list):
+            continue
+        deleted = {
+            str(page.get("pageId") or "").strip()
+            for page in pages
+            if isinstance(page, dict)
+            and str(page.get("_change_status") or "") == "deleted"
+            and str(page.get("pageId") or "").strip()
+        }
+        if deleted:
+            return deleted
+    return set()
+
+
+def _technical_plan_transaction_baseline(state: ProjectState, workspace: str) -> dict[str, Any]:
+    """取 TechnicalPlan **事务恢复基线**：优先 state 中的上一版，缺失时回退读磁盘。
+
+    这份基线用于 boundary 摘要、续跑和冷进入判定，回答“本次生成从哪一版继续修改”。
+    它不等于审阅差异用的迭代初始基线：二次修订时上一版已经包含本迭代新增内容，
+    如果也拿它做变更对比，会把较早新增的对象错误显示为未变更。
+
+    **不能直接返回 `state["technical_plan"]`**：换分支派生新迭代时，checkpoint 里可能
+    残留更早一轮的旧技术规划，它描述的是别的分支的现状，拿来当基线会把整份计划标错。
+    只有基线变更块（`technical_plan_baseline_origin`）标记为 `resumed` 时才沿用 state；
+    其余情况一律以磁盘 / 交接记录为准。没有磁盘依据时返回空 dict，按首轮创建处理。
+
+    首轮要显示"全部新增"是**展示层**的事：前端在基线为空时把每个对象都视为新增，
+    见 `TechnicalPlanReviewPanel`。合并逻辑里则由 `merge_technical_plan(None, ...)`
+    标记 added，同样不依赖这个字段。
+    """
+
+    if state.get("technical_plan_baseline_origin") == "resumed":
+        current = state.get("technical_plan")
+        if isinstance(current, dict) and current:
+            return drop_generated_fields(deepcopy(current))
+    # 校验通过的 state 规划就是本事务的基线：begin 冷进入时读到它，说明它还没被
+    # 新一轮生成覆盖（derive 分支残留的旧规划已在 derive 阶段清空）。校验没过时
+    # 上面的异常已经抛出，不会走到这里，因此这里取 state 不会绕过基线一致性校验。
+    current = state.get("technical_plan")
+    if isinstance(current, dict) and current:
+        return drop_generated_fields(deepcopy(current))
+    path = current_technical_plan_json_path(state)
+    if path.is_file():
+        plan = load_project_plan_json(path, hydrate_detail_designs=True)
+        if isinstance(plan, dict) and plan:
+            return drop_generated_fields(plan)
+    carried = read_technical_plan_carryover(workspace)
+    return drop_generated_fields(carried) if carried else {}
+
+
+def _technical_plan_review_baseline(
+    state: ProjectState,
+    workspace: str,
+    *,
+    transaction_baseline: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """取本轮变更审阅的**迭代初始基线**，与 RequirementSpec 保持同口径。
+
+    `technical-plan-carryover.json` 在新迭代开始时冻结，之后本轮多次设计修订、
+    技术修订和开发续接都不会推进它。因此第一次新增的页面与第二次新增的页面，
+    相对同一个上迭代基线都会标 added，而不会出现第二次修订把第一次新增洗成
+    unchanged 的不一致。没有交接记录时回退到事务基线，保持首轮创建行为。
+    """
+
+    carried = read_technical_plan_carryover(workspace)
+    if carried:
+        return drop_generated_fields(carried)
+    if transaction_baseline is not None:
+        return transaction_baseline
+    return _technical_plan_transaction_baseline(state, workspace)
 
 
 def _technical_boundary(state: ProjectState):
     """读取当前 Graph State 中的 TechnicalPlan boundary。"""
-
     boundary = parse_application_planning_boundary(
         state.get("application_planning_recovery_boundary")
     )
@@ -85,11 +180,26 @@ def _boundary_payload_for_state(
     *,
     boundary: ApplicationPlanningRecoveryBoundary,
     candidate: Any | None = None,
+    drop_baseline: bool = False,
 ) -> dict[str, Any]:
-    """沿用既有 operation identity 生成下一事务边界，避免重复分配操作。"""
+    """沿用既有 operation identity 生成下一事务边界，避免重复分配操作。
+
+    `drop_baseline` 用于冷进入清空 `technical_plan` 的场景：此时 state 里的旧规划
+    已不再作为基线，boundary 若继续沿用旧摘要，续修时会拿着"有摘要但没有基线"
+    的状态去校验，必然报 baseline 与 boundary 不匹配。
+    """
 
     current = _technical_boundary(state)
-    baseline = state.get("technical_plan")
+    # 与校验侧（`validate_application_planning_baseline`）同口径：都按业务内容算摘要。
+    # 确认界面的 state 计划可能是带 `_change_status` / `confirmation_status` 的展示版，
+    # 直接算会让"同一份计划"在两侧得到不同摘要。
+    baseline = (
+        None
+        if drop_baseline
+        else drop_generated_fields(state.get("technical_plan"))
+        if isinstance(state.get("technical_plan"), dict) and state.get("technical_plan")
+        else None
+    )
     payload = application_planning_boundary_payload(
         operation_id=current.operation_id,
         operation=ApplicationPlanningOperation(current.operation.value),
@@ -103,7 +213,7 @@ def _boundary_payload_for_state(
     # 后续 boundary 必须沿用同一个事务的 request/baseline identity，不能因 State
     # 在 begin 或 commit 期间改变展示字段而重新计算成另一笔操作。
     payload["requestSha256"] = current.request_sha256
-    if current.baseline_sha256 is None:
+    if current.baseline_sha256 is None or drop_baseline:
         payload.pop("baselineSha256", None)
     else:
         payload["baselineSha256"] = current.baseline_sha256
@@ -122,6 +232,32 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
     if operation is ApplicationPlanningOperation.REVISE and not request:
         raise ValueError("TechnicalPlan revise 必须提供明确的修改要求。")
     validate_application_planning_baseline(boundary, state.get("technical_plan"))
+
+    # 事务基线与审阅基线分开：前者跟随上一版计划用于恢复，后者在本迭代开始时冻结，
+    # 保证多次修订的变更标记始终相对同一个上迭代版本计算。
+    transaction_baseline = _technical_plan_transaction_baseline(state, workspace)
+    technical_plan_baseline = _technical_plan_review_baseline(
+        state, workspace, transaction_baseline=transaction_baseline,
+    )
+    # 沿用 state 里的规划当基线，说明这是同一轮已提交计划的续跑 / 重试；
+    # 否则是冷进入（新迭代、换分支派生），state 里的旧规划不可信。
+    # 比较前先剥掉展示 / 派生字段：`_technical_plan_transaction_baseline` 返回的已是干净版，
+    # state 里可能是带 `_change_status` 的展示版，直接比较会因多出的标记误判成
+    # "不是同一份"，把本应续跑的场景错当成冷进入而清空计划。
+    state_plan_business = (
+        drop_generated_fields(deepcopy(state.get("technical_plan")))
+        if isinstance(state.get("technical_plan"), dict) and state.get("technical_plan")
+        else {}
+    )
+    technical_plan_baseline_origin = (
+        "resumed"
+        if state.get("technical_plan_baseline_origin") == "resumed"
+        or (
+            bool(state_plan_business)
+            and transaction_baseline == state_plan_business
+        )
+        else ""
+    )
 
     change_id = str(state.get("change_id") or "").strip()
     repair_source = str(state.get("technical_plan_repair_source_run_id") or "")
@@ -166,15 +302,32 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
                 else None
             ),
         )
+    # 冷进入 begin 且 state 残留了别的分支的旧规划：不能带着它进 generate，
+    # 否则整份计划被当成"上一版现状"，合并后既丢了本轮产出、又全部标错。
+    # 判定依据是基线取值来源，而不是"baseline 是否非空"——旧规划可能在下一轮
+    # 已作废，derived 分支不会把它登记进交接记录，此时 state 有值但基线为空。
+    cold_stale_plan = (
+        technical_plan_baseline_origin != "resumed"
+        and isinstance(state.get("technical_plan"), dict)
+        and bool(state.get("technical_plan"))
+    )
     return {
         "phase": "technical_planning_begin",
         "status": "running",
         # 每轮从已校验的输入捕获基线；后续候选提交不得覆盖它，冷进入沿 checkpoint 读取。
-        "technical_plan_baseline": deepcopy(state.get("technical_plan") or {}),
+        "technical_plan_baseline": technical_plan_baseline,
+        # 基线来源：本轮已写入 state 的规划视为沿用旧值，冷进入 / 新迭代按磁盘重算。
+        "technical_plan_baseline_origin": technical_plan_baseline_origin,
+        **((
+            {"technical_plan": {}, "project_plan": {}}
+        ) if cold_stale_plan else {}),
         "resume_from": "",
         "application_planning_recovery_boundary": _boundary_payload_for_state(
             state,
             boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+            # 旧规划被清空时必须同步去掉 boundary 里的基线摘要，否则后续续修
+            # 会以"有摘要、无基线"的状态校验失败。
+            drop_baseline=cold_stale_plan,
         ),
         "application_planning_interaction": {},
         "technical_plan_candidate": {},
@@ -197,7 +350,9 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
 
     # 仅在模型节点读取规划助手；这些 import 不能移动到 begin/commit，确保副作用边界清晰。
     from app.graph.nodes.planning import (
+        _attach_technical_plan_contracts,
         _generate_valid_technical_plan,
+        _project_plan_validation_errors,
         _technical_planning_requirement_spec,
     )
 
@@ -217,6 +372,14 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         and state.get("technical_plan")
         else None
     )
+    # 审阅与合并统一使用迭代初始基线，不能直接吃 `state["technical_plan"]`。
+    # existing_plan 可以跟随上一版继续修改，但 baseline 必须保持在进入本迭代时的
+    # 交接版本；否则二次修订会把本迭代较早新增的页面和接口错误标成 unchanged。
+    # 它与 existing_plan 用途不同：
+    # - existing_plan 交给模型当"继续修改的起点"，模型仍会整份重写；
+    # - baseline 用于生成后做**保守合并**和本轮变更标记。
+    workspace = workspace_from_state(state)
+    baseline = _technical_plan_review_baseline(state, workspace) or None
     generation_fragments = {}
     plan, errors, failed_candidate = _generate_valid_technical_plan(
         state,
@@ -242,13 +405,66 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "clarification": _technical_generation_error_payload(errors),
             "timeline": ["technical_planning_generate"],
         }
-    candidate = deepcopy(plan)
+    # 跨迭代增量合并：模型整份重新生成 technical-plan.json 时，会把继承自基线的对象
+    # 也顺手重写一遍（措辞润色、删掉 error_codes、改 required_for_initial_load 等）。
+    # 用户这轮没要求改的对象必须**原样继承基线**，否则下游会基于漂移的契约推进。
+    # 与需求文档侧 requirement_spec_merger 同一口径：基线不动，只做按 ID 的增量合并。
+    #
+    # 合并产出两份：
+    # - candidate：剥离 _change_status 的干净版，走原有校验 / 写盘 / 入库全流程；
+    # - technical_plan_diff：带标记的展示版，仅存 state 供前端分区显示，不落盘。
+    merged_with_status = merge_technical_plan(
+        baseline,
+        plan,
+        relevant=relevant_object_ids(
+            requirement_spec,
+            state.get("product_plan"),
+            baseline,
+            # 上一轮的需求文档：用来判断"本轮需求里这个对象到底改没改"。
+            # 只看"本轮有没有这个对象"不够——上一轮的页面当然还会出现在本轮需求里。
+            read_requirement_spec_carryover(workspace) if workspace else None,
+        ),
+        # 本轮删除的页面：删除要级联到只被它使用的接口 / 实体 / 类型定义。
+        deleted_page_ids=_deleted_page_ids(state),
+    )
+    candidate = deepcopy(strip_change_status(merged_with_status))
+    # 模型候选通过校验不代表增量合并后仍有效：必须复用完整确认校验链，
+    # 不合格的合并结果只进入错误审阅，不能写草稿后再让用户反复点击确认。
+    try:
+        validation_plan = _attach_technical_plan_contracts(state, candidate)
+        errors = _project_plan_validation_errors(validation_plan, state)
+    except (TypeError, ValueError) as exc:
+        errors = [str(exc)]
+    if errors:
+        return {
+            "phase": "technical_planning_generate",
+            "status": "requires_user_input",
+            "technical_plan_repair_candidate": candidate,
+            "technical_plan_repair_errors": errors[:12],
+            "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
+            "application_planning_recovery_boundary": _boundary_payload_for_state(
+                state, boundary=ApplicationPlanningRecoveryBoundary.REVIEW_READY,
+            ),
+            "technical_plan_candidate": {},
+            "technical_plan_candidate_sha256": "",
+            "technical_plan_candidate_diff": {},
+            "clarification": _technical_generation_error_payload(errors),
+            "timeline": ["technical_planning_generate"],
+        }
     candidate_sha256 = application_planning_sha256(candidate)
+    # 展示版必须随候选一起流转：它不参与校验，但 commit 落盘后前端读的是 `technical_plan`，
+    # 只有独立字段才能带着 `_change_status` 抵达确认界面。它经 checkpoint 传递给 commit，
+    # 绝不能放进 `technical_plan`（校验会拒绝该字段，下一轮基线也会被污染）。
     return {
         "phase": "technical_planning_generate",
         "status": "running",
+        # 清理可能残留的展示态；本轮的展示版走 `technical_plan_candidate_diff`。
+        "technical_plan": {},
+        "project_plan": {},
         "technical_plan_candidate": candidate,
         "technical_plan_candidate_sha256": candidate_sha256,
+        "technical_plan_candidate_diff": merged_with_status,
+        "technical_plan_diff": merged_with_status,
         "application_planning_recovery_boundary": _boundary_payload_for_state(
             state,
             boundary=ApplicationPlanningRecoveryBoundary.CANDIDATE_COMMITTED,
@@ -287,6 +503,16 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
     actual_sha256 = application_planning_sha256(candidate)
     if actual_sha256 != candidate_sha256 or actual_sha256 != boundary.candidate_sha256:
         raise ValueError("TechnicalPlan candidate SHA-256 不匹配，拒绝执行 commit。")
+    # 展示版只用于确认界面的分区与徽标；剥离标记后必须与候选完全一致，
+    # 否则说明展示版被篡改，宁可退回不带标记的视图也不能给用户看错的分区。
+    display_plan = state.get("technical_plan_candidate_diff")
+    display_plan = (
+        deepcopy(display_plan)
+        if isinstance(display_plan, dict)
+        and display_plan
+        and application_planning_sha256(strip_change_status(display_plan)) == candidate_sha256
+        else {}
+    )
     workspace, lifecycle = _ensure_technical_lifecycle(state)
     if lifecycle.initialization.stage is ApplicationLifecycleStage.GENERATING_TECHNICAL_PLAN:
         if lifecycle.initialization.status is not ApplicationLifecycleStatus.RUNNING:
@@ -311,10 +537,17 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         )
     from app.graph.nodes.planning import _planning_confirmation_payload
 
+    # 确认界面的 state 规划是展示版；boundary 必须按**展示版剥离后**的口径写基线摘要，
+    # 与入口侧 `_technical_input_boundary` 完全同源。这样用户在确认卡上点"修改"或
+    # 触发 repair 时，begin 拿 state 校验才不会因为"摘要按候选算、state 是展示版"而对不上。
+    committed_plan = display_plan or candidate
     return {
         "phase": "technical_planning",
         "status": "requires_user_input",
-        "technical_plan": candidate,
+        # 确认界面读取的正式计划带本轮变更标记；校验 / 入库始终用剥离标记的候选。
+        "technical_plan": committed_plan,
+        "technical_plan_diff": display_plan,
+        "technical_plan_candidate_diff": {},
         "technical_plan_generation_input_sha256": "",
         "project_plan": candidate,
         "technical_plan_json_path": json_path,
@@ -322,7 +555,7 @@ def technical_planning_commit(state: ProjectState) -> dict[str, Any]:
         "project_plan_json_path": json_path,
         "clarification": _planning_confirmation_payload(state, candidate),
         "application_planning_recovery_boundary": _boundary_payload_for_state(
-            {**state, "technical_plan": candidate},
+            {**state, "technical_plan": committed_plan},
             boundary=ApplicationPlanningRecoveryBoundary.ARTIFACT_COMMITTED,
             candidate=candidate,
         ),
@@ -342,6 +575,16 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     plan = state.get("technical_plan")
     if not isinstance(plan, dict) or not plan:
         raise ValueError("TechnicalPlan 正式候选缺失，无法确认。")
+    # 展示版标记要在剥离前留一份：确认成功后它是本轮变更的唯一来源，
+    # 用来冻结开发阶段的"新增/修改/删除"快照（见 development_change_snapshot）。
+    #
+    # 取值顺序有讲究：`technical_plan_diff` 是 generate 阶段单独存下的展示版，
+    # 从生成到确认一路不受 `technical_plan` 被改写的影响，是权威来源；
+    # `technical_plan` 只在没有该字段时才兜底（例如冷恢复）。
+    display_plan = deepcopy(state.get("technical_plan_diff") or plan)
+    # 确认界面拿到的计划带本轮 `_change_status` 展示标记；确认、校验、落盘一律用剥离后的干净版，
+    # 否则标记会被校验当成非法字段，也会跟着正式产物写进 git。
+    plan = strip_change_status(plan)
     from app.graph.nodes.planning import (
         _attach_technical_plan_contracts,
         _project_plan_dependency_error_payload,
@@ -357,25 +600,21 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     }
     confirmed_plan = _attach_technical_plan_contracts(state, confirmed_plan)
     validation_errors = _project_plan_validation_errors(confirmed_plan, state)
+    # 确认动作只校验并提交当前版本，不是重新生成授权。任何失败都停在原生错误审阅门，
+    # 只有用户提交修改意见才回到 begin/generate，避免内容每次稍变就绕过摘要去重。
     if validation_errors:
-        operation_id = f"technical-plan-repair-{uuid4().hex}"
+        failed_confirm_sha256 = list(state.get("technical_plan_failed_confirm_sha256") or [])
+        confirmed_business_sha256 = application_planning_sha256(drop_generated_fields(confirmed_plan))
         return {
-            "phase": "technical_planning_confirm",
-            "status": "running",
-            "technical_plan": confirmed_plan,
-            "technical_plan_repair_candidate": confirmed_plan,
-            "technical_plan_repair_errors": validation_errors[:12],
-            "application_planning_recovery_boundary": application_planning_boundary_payload(
-                operation_id=operation_id,
-                operation=ApplicationPlanningOperation.REPAIR,
-                boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
-                request=request,
-                gate_id=boundary.gate_id,
-                artifact_revision=boundary.artifact_revision,
-                baseline=confirmed_plan,
-            ),
-            "application_planning_review_route": "technical_planning_begin",
+            "phase": "technical_planning",
+            "status": "requires_user_input",
             "clarification": _project_plan_dependency_error_payload(validation_errors),
+            "technical_plan_repair_errors": validation_errors[:12],
+            "technical_plan_failed_confirm_sha256": list(
+                dict.fromkeys([*failed_confirm_sha256, confirmed_business_sha256])
+            )[-8:],
+            "application_planning_review_route": "",
+            "application_planning_interaction": {},
             "timeline": ["technical_planning_confirm"],
         }
 
@@ -391,6 +630,13 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
             "technical_plan_json_path": technical_plan_json,
         }
     )
+    # 正式产物不带变更标记，开发阶段又要靠它判断"哪些已删除、哪些要重做"，
+    # 所以在确认这一刻把展示版的结论冻结成独立快照。写盘失败只记日志：
+    # 它只影响开发阶段的打标与重做，不能反过来阻断已经完成的技术规划确认。
+    try:
+        write_change_snapshot(workspace, technical_plan=display_plan)
+    except ValueError:
+        logger.warning("development_change_snapshot_missing_marks", exc_info=True)
     revision_continuation: dict[str, Any] = {}
     active_revision = lifecycle.active_formal_revision
     if active_revision is not None and active_revision.formal_branch.value == "design_stage_revision":
@@ -427,6 +673,9 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         "application_planning_confirmation": confirmation,
         "revision_continuation": revision_continuation,
         "template_reconcile_pending": template_reconcile_pending,
+        # 确认成功，失败记录不再有约束意义，清空以免影响下一轮修订。
+        "technical_plan_failed_confirm_sha256": [],
+        "technical_plan_repair_errors": [],
         "application_planning_review_route": "",
         "application_planning_interaction": {},
         "lifecycle": application_lifecycle_payload(lifecycle),

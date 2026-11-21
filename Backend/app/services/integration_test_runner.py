@@ -196,6 +196,21 @@ def _backend_startup_result(
     backend_results: list[dict[str, Any]], on_progress: CheckProgressCallback | None,
 ) -> dict[str, Any]:
     """仅在真实后端构建成功后检测新产物；前置失败不产生重复修复请求。"""
+    # ============================================================================
+    # ⚠️⚠️⚠️  临 时 调 试 用 ，提 交 代 码 前 必 须 删 除  ⚠️⚠️⚠️
+    #
+    # 本地无 Java/Maven 环境，临时跳过"后端启动检查"，便于联调测试阶段后续逻辑。
+    #
+    # 【删除方式】直接删除下面这个 `if True:` 块（含本注释）。
+    # 【搜 索 锚 点】DEVAGENTSTUDIO_LOCAL_DEBUG_SKIP_BACKEND
+    # 【影 响 风 险】这个绕道会让"Java 环境缺失"在用户机器上无声通过，**严禁合入主干**。
+    # ============================================================================
+    if True:  # DEVAGENTSTUDIO_LOCAL_DEBUG_SKIP_BACKEND
+        return _skipped_after_blocking_failure_result(
+            check_id="backend_startup", name="后端启动检查", layer="backend", language="java",
+            evidence="本地调试模式：跳过后端启动检查（无 Java 环境）。",
+            required=False, on_progress=on_progress,
+        )
     build = next((item for item in backend_results if item["id"] == "backend_build"), {})
     backend_root = _find_maven_project_root(root)
     if not backend_root or not build.get("passed") or build.get("skipped"):
@@ -541,6 +556,38 @@ def _backend_checks(
     on_progress: CheckProgressCallback | None = None,
 ) -> list[dict[str, Any]]:
     """执行后端生产构建和可选的 Maven 单测。"""
+
+    # ============================================================================
+    # ⚠️⚠️⚠️  临 时 调 试 用 ，提 交 代 码 前 必 须 删 除  ⚠️⚠️⚠️
+    #
+    # 本地无 Java/Maven 环境，临时跳过后端构建/静态检查/单测，便于联调测试阶段后续逻辑。
+    #
+    # 【删除方式】直接删除下面这个 `if True:` 块（含本注释）。
+    # 【搜 索 锚 点】DEVAGENTSTUDIO_LOCAL_DEBUG_SKIP_BACKEND
+    # 【影 响 风 险】这个绕道会让"Java 环境缺失"在用户机器上无声通过，**严禁合入主干**。
+    # ============================================================================
+    if True:  # DEVAGENTSTUDIO_LOCAL_DEBUG_SKIP_BACKEND
+        results = [
+            _skipped_after_blocking_failure_result(
+                check_id=check_id, name=name, layer="backend", language="java",
+                evidence="本地调试模式：跳过后端构建检查（无 Java 环境）。",
+                required=False, on_progress=on_progress,
+            )
+            for check_id, name in (
+                ("backend_build", "后端构建检查"),
+                ("backend_static_check", "后端静态检查通过"),
+            )
+        ]
+        if include_unit_tests:
+            results.append(
+                _skipped_after_blocking_failure_result(
+                    check_id="backend_unit_tests", name="后端单元测试",
+                    layer="backend", language="java",
+                    evidence="本地调试模式：跳过后端单元测试（无 Java 环境）。",
+                    required=False, on_progress=on_progress,
+                )
+            )
+        return results
 
     state = state or {}
     maven_root = _find_maven_project_root(root)

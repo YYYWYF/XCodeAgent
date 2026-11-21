@@ -66,7 +66,10 @@ from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
 from app.services.entity_table_binding import bind_plan_entity_tables
 from app.services.entity_display_language import validate_entity_display_language
 from app.services.data_source_policy import workspace_uses_builtin_database
-from app.services.product_plan import require_current_product_plan
+from app.services.product_plan import (
+    deleted_page_ids_from_spec,
+    require_current_product_plan,
+)
 from app.services.page_dependencies import (
     close_page_action_endpoint_dependencies,
     validate_project_plan_dependencies,
@@ -375,7 +378,11 @@ def project_planning(state: ProjectState) -> dict:
         if not isinstance(requirement_spec, dict):
             raise ValueError("TechnicalPlan 必须读取已确认的 RequirementSpec。")
         product_plan = require_current_product_plan(
-            state.get("product_plan"), requirement_spec
+            state.get("product_plan"), requirement_spec,
+            # 本轮删除的页面只作为清理依据保留，内容取自上一轮，不按交付标准校验。
+            deleted_page_ids=deleted_page_ids_from_spec(
+                requirement_spec, state.get("requirement_spec_diff")
+            ),
         )
         if product_plan.get("confirmation_status") != "confirmed":
             raise ValueError("TechnicalPlan 必须基于已确认 ProductPlan 生成。")

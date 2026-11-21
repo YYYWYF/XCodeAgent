@@ -13,7 +13,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.graph.nodes.ui_confirmation import _carried_ui_page_manifest, _ui_page_entry
+from app.graph.nodes.ui_confirmation import (
+    _build_pending_ui_designs,
+    _carried_ui_page_manifest,
+    _ui_design_confirmation_payload,
+    _ui_page_entry,
+)
 from app.services.iteration_service import _clear_iteration_artifacts
 from app.services.ui_design_carryover import (
     carried_page_keys,
@@ -302,3 +307,39 @@ class PageKeyReuseTests(unittest.TestCase):
 
             self.assertFalse(inherited)
             self.assertEqual(entry["page_key"], "Home2")
+
+
+class ChangedRequirementNoticeTests(unittest.IsolatedAsyncioTestCase):
+    """文案类需求变化即使能继承旧稿，也必须向确认界面发出更新提示。"""
+
+    async def test_modified_inherited_page_marks_product_plan_stale(self) -> None:
+        """modified 页面以 confirmed 继承旧稿时，清单与交互载荷都带 stale 标记。"""
+
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            project_dir = workspace / ".devagentstudio" / "ui-design"
+            (project_dir / "pages" / _PAGE_KEY).mkdir(parents=True)
+            (project_dir / "pages" / _PAGE_KEY / "index.tsx").write_text(
+                _VALID_CODE, encoding="utf-8"
+            )
+            write_ui_design_carryover(
+                workspace,
+                source_branch="v1_0",
+                pages={_PAGE_ID: {"pageKey": _PAGE_KEY, "templateId": "", "templateSourcePath": ""}},
+            )
+            page = {**_product_page(), "_change_status": "modified"}
+            state = {
+                "workspace": str(workspace),
+                "product_plan": {"pages": [page]},
+                "requirement_spec_diff": {
+                    "pages": [{"pageId": _PAGE_ID, "_change_status": "modified"}]
+                },
+            }
+
+            designs = await _build_pending_ui_designs(state)
+            payload = _ui_design_confirmation_payload(state, designs)
+
+            self.assertEqual(designs["pages"][0]["status"], "confirmed")
+            self.assertTrue(designs["product_plan_stale"])
+            self.assertTrue(payload["product_plan_stale"])
+            self.assertEqual(payload["pages"][0]["change_status"], "modified")

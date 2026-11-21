@@ -3,12 +3,7 @@ import { BuiltinAuthorizationActionsContext, AuthorizationBootstrapRecoveryConte
 import { Alert, Button, message } from 'antd'
 import type { ReactElement } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useUncommittedChanges, useWorkbench, useWorkbenchPhase } from '../../context'
-import {
-  orphanUncommittedPaths,
-  summarizePaths,
-  useModuleOwnedFiles
-} from '../../hooks/useModuleOwnedFiles'
+import { useWorkbench, useWorkbenchPhase } from '../../context'
 import { useUiDesignPagesWithCode } from '../../hooks/useUiDesignPagesWithCode'
 import {
   hasApplicationEnteredDevelopment,
@@ -142,7 +137,7 @@ import ReleasedVersionPanel from './components/ReleasedVersionPanel'
 import SessionSidebar from './components/SessionSidebar'
 import QuickTaskGuide from './components/QuickTaskGuide'
 import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
-import { buildQuickTasks } from './components/QuickTaskGuide/quickTasks'
+import { buildQuickTasks, quickTaskBlocked } from './components/QuickTaskGuide/quickTasks'
 import NextDevelopmentGuide from './components/NextDevelopmentGuide'
 import { developmentNextStep, latestDevelopmentTarget } from './developmentNextStep'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
@@ -788,6 +783,26 @@ function requirementSpecFromWorkflow(
   if (!workflow) return undefined
   for (const source of [workflow.state]) {
     const value = source?.requirement_spec
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return value as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
+/**
+ * 跨迭代增量合并产物：带 `_change_status` 标记的"展示版"RequirementSpec。
+ * 后端 requirements 节点在 LLM 输出后与基线合并（`requirement_spec_merger.merge_requirement_spec`），
+ * 把合并结果同时写入 `requirement_spec`（剥离标记的干净版）和 `requirement_spec_diff`（带标记的展示版）。
+ * 前端用它做"本次变更 vs 未变更内容"的分区显示，让用户在右侧需求文档里清楚看到
+ * 哪些是本轮新增/修改、哪些是从基线继承未动的内容。
+ */
+function requirementSpecDiffFromWorkflow(
+  workflow: WorkflowRunPayload | undefined
+): Record<string, unknown> | undefined {
+  if (!workflow) return undefined
+  for (const source of [workflow.state]) {
+    const value = source?.requirement_spec_diff
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       return value as Record<string, unknown>
     }
@@ -1512,6 +1527,13 @@ export default function AiChatPanel({
   // 需求文档 tab 优先使用结构化可视化；结构化数据不可读时回退 Markdown。
   const requirementSpecForDoc = requirementDocViewActive
     ? requirementSpecMemory || requirementSpecFile
+    : undefined
+  // 跨迭代增量合并产物：带 `_change_status` 标记的"展示版"RequirementSpec。
+  // 与 requirementSpecForDoc 同来源（planning workflow state），后端在 LLM 输出
+  // 后与基线合并时同时写入。仅在"基于历史迭代"场景有值；首轮创建时为 undefined，
+  // 前端按"全部是本轮新增"展示即可。
+  const requirementSpecDiffForDoc = requirementDocViewActive
+    ? requirementSpecDiffFromWorkflow(planningDocumentWorkflow)
     : undefined
   const requirementProductPlanForDoc = requirementDocViewActive
     ? productPlanMemory || productPlanFile
@@ -4333,20 +4355,6 @@ export default function AiChatPanel({
     showGlobalFallback,
     displayedPlanExecutionMode
   )
-  // 「检查遗漏变更」：未提交文件里没被任何模块任务认领的部分。
-  // 用 codePaths 而不是 eligiblePaths —— `.devagentstudio` 平台产物永远不在构建计划的
-  // 模块归属里，算进来会把每个产物文件都误报成"未关联到任何模块"。
-  const { snapshot: uncommittedSnapshot } = useUncommittedChanges()
-  // 与 VersionActions 同一刷新信号：构建推进或文件落盘时重读构建计划，
-  // 否则模块归属停在挂载那一刻，"检查遗漏变更"会拿旧计划比对。
-  const moduleOwnedFiles = useModuleOwnedFiles(
-    application.workspaceRoot || '',
-    `${applicationLifecycle?.revision ?? ''}:${uncommittedSnapshot?.fingerprint ?? ''}`
-  )
-  const orphanChangePaths = orphanUncommittedPaths({
-    uncommittedPaths: uncommittedSnapshot?.codePaths ?? [],
-    moduleOwnedFiles
-  })
   const activeSessionUpdatedAt = sessions.find(
     (session) => session.id === activeSessionId
   )?.updatedAt
@@ -4647,6 +4655,9 @@ export default function AiChatPanel({
   /** 从空白对话快捷任务创建通用历史会话，并仅为本次正式运行设置页面、Endpoint 或实体目标。 */
   const handleQuickTaskStart = async (task: QuickTaskItem): Promise<void> => {
     if (pendingPlanActionable) return
+    // 兜底：本轮未变更的产物不得进入开发流程（与按钮禁用同一条判定）。
+    // 已删除的页面照常进入开发流程，由 workflow 负责删除它的代码与设计稿。
+    if (quickTaskBlocked(task)) return
     setPreviewError('')
     setRightPanel(undefined)
     setActiveView('chat')
@@ -4669,6 +4680,9 @@ export default function AiChatPanel({
   /** 从完成/结束引导在当前会话追加新目标，保留正式开发门禁且不创建第二个可见会话。 */
   const handleNextDevelopmentStart = async (task: QuickTaskItem): Promise<void> => {
     if (loading || workflowInputLocked || otherSessionExecutionLocked || pendingPlanActionable || !activeSession) return
+    // 兜底：本轮未变更的产物不得进入开发流程。按钮已禁用，
+    // 这里再拦一次，防止快捷路径或键盘触发绕过禁用态。
+    if (quickTaskBlocked(task)) return
     if (activeWorkbenchPhase !== 'development') {
       switchPhase('development')
       await handleQuickTaskStart(task)
@@ -6190,6 +6204,7 @@ export default function AiChatPanel({
                   requirementDocViewActive ? requirementProductPlanForDoc : productPlanForDoc
                 }
                 requirementSpec={requirementSpecForDoc}
+                requirementSpecDiff={requirementSpecDiffForDoc}
                 technicalPlan={
                   requirementDocViewActive
                     ? requirementTechnicalPlanForDoc
@@ -6324,30 +6339,17 @@ export default function AiChatPanel({
                 <AcceptanceCommitDock
                   workspaceRoot={application.workspaceRoot || ''}
                   disabled={loading || workspaceBusy || acceptanceRejecting}
-                  renderManualReview={() =>
-                    orphanChangePaths.length > 0 ? (
-                      <MilestoneCommitReminder
-                        inline
-                        workspaceRoot={application.workspaceRoot || ''}
-                        title={`有 ${orphanChangePaths.length} 个文件未关联到任何模块，请确认归属`}
-                        description={`未归属模块：${summarizePaths(orphanChangePaths)}`}
-                        defaultCommitMessage="Z000000-0000 #comment chore: 提交遗漏变更"
-                        milestoneId={`${application.id}:quality-gate-${application.branchName || ''}`}
-                        disabled={loading || workspaceBusy}
-                        hideWhenUnavailable
-                      />
-                    ) : (
-                      <MilestoneCommitReminder
-                        inline
-                        workspaceRoot={application.workspaceRoot || ''}
-                        title="代码已通过自动检查，可先创建版本"
-                        defaultCommitMessage="Z000000-0000 #comment chore: 保存当前模块代码"
-                        milestoneId={`${application.id}:quality-gate-${application.branchName || ''}`}
-                        disabled={loading || workspaceBusy}
-                        hideWhenUnavailable
-                      />
-                    )
-                  }
+                  renderManualReview={() => (
+                    <MilestoneCommitReminder
+                      inline
+                      workspaceRoot={application.workspaceRoot || ''}
+                      title="代码已通过自动检查，可先创建版本"
+                      defaultCommitMessage="Z000000-0000 #comment chore: 保存当前模块代码"
+                      milestoneId={`${application.id}:quality-gate-${application.branchName || ''}`}
+                      disabled={loading || workspaceBusy}
+                      hideWhenUnavailable
+                    />
+                  )}
                 />
               </div>
               <AcceptanceDecisionDock

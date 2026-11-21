@@ -14,6 +14,7 @@ from app.agents.main.requirements_analyzer import (
     MAX_REQUIREMENT_CLARIFICATION_ROUNDS,
     analyze_requirements_with_chat_model,
 )
+from app.graph.nodes.common import workspace_from_state
 from app.graph.nodes.confirmation import (
     extract_confirmation_answer,
     user_confirmed_text,
@@ -29,6 +30,11 @@ from app.services.requirement_spec import (
     apply_requirement_spec_editor_changes,
     validate_authorization_requirements,
     validate_requirement_spec_confirmation_readiness,
+)
+from app.services.requirement_spec_carryover import read_requirement_spec_carryover
+from app.services.requirement_spec_merger import (
+    merge_requirement_spec,
+    strip_change_status,
 )
 from app.tools.ask_user import (
     clear_clarification,
@@ -161,6 +167,9 @@ def confirm_requirement_spec_artifact(
         "phase": "requirements",
         "status": "completed",
         "requirement_spec": spec,
+        # 确认时 spec 内容不变，沿用本轮已合并出的 diff（带 _change_status 标记），
+        # 让前端在确认后仍能做"本次变更 vs 未变更内容"分区显示。
+        "requirement_spec_diff": state.get("requirement_spec_diff") or {},
         "requirements_confirmed": True,
         "requirements_clarification_round": 0,
         "requirement_spec_path": spec_path,
@@ -316,6 +325,34 @@ def requirements(state: ProjectState) -> dict:
         datasource_type,
     )
     _apply_menus_root_path_to_pages(spec, state)
+    # 跨迭代增量合并：LLM 在整份重新生成 spec 时经常自由发挥——简化、重写、
+    # 甚至丢失基线里已有的页面/角色/模块。结果：上一迭代实现的页面在新迭代里
+    # "消失"，下游 UI 设计稿继承、技术规划、构建都基于错位的 spec 推进。
+    #
+    # 这里在 LLM 输出后立即调 merger：把"LLM 重新生成的 spec"与"基线 spec"
+    # （来自 .devagentstudio/requirement-spec-carryover.json，由 iteration_service
+    # 在 start_iteration 时登记）按 pageId 合并。未在 LLM 输出里出现的基线页面
+    # 会被自动补回（_change_status=unchanged），防止"被静默删除"。
+    #
+    # 合并产出**两份**：
+    # - spec：剥离 _change_status 后的"干净版"，走原有所有流程（写盘、校验、入库）；
+    # - requirement_spec_diff：带 _change_status 标记的"展示版"，存到 state 供前端
+    #   做"本次变更 vs 未变更内容"分区显示。
+    workspace = workspace_from_state(state)
+    base_spec = read_requirement_spec_carryover(workspace) if workspace else None
+    # 显式删除声明来自模型输出（`deleted_pages`）：只有用户明确要求删除的页面
+    # 才会被标成 deleted；模型漏写的基线页面一律原样继承，不被误删。
+    merged_with_status = merge_requirement_spec(
+        base_spec,
+        spec,
+        explicit_deleted_ids={
+            str(page_id).strip()
+            for page_id in (analysis.get("explicit_deleted_pages") or [])
+            if str(page_id).strip()
+        },
+    )
+    requirement_spec_diff = merged_with_status
+    spec = strip_change_status(merged_with_status)
     clarification = analysis["clarification"]
     clarification = _without_technical_datasource_questions(clarification, spec)
     clarification = _without_non_substantive_completeness_questions(
@@ -353,6 +390,9 @@ def requirements(state: ProjectState) -> dict:
             "phase": "requirements",
             "status": "requires_user_input",
             "requirement_spec": spec,
+            # 增量合并产物：带 _change_status 标记的"展示版"spec，
+            # 供前端在右侧文档 tab 做"本次变更 vs 未变更内容"分区显示。
+            "requirement_spec_diff": requirement_spec_diff,
             "requirements_confirmed": False,
             "requirements_clarification_round": min(
                 clarification_round + 1,
@@ -413,6 +453,9 @@ def requirements(state: ProjectState) -> dict:
             "phase": "requirements",
             "status": status,
             "requirement_spec": spec,
+            # 增量合并产物：带 _change_status 标记的"展示版"spec，
+            # 供前端在右侧文档 tab 做"本次变更 vs 未变更内容"分区显示。
+            "requirement_spec_diff": requirement_spec_diff,
             "requirements_confirmed": False,
             "requirements_clarification_round": next_clarification_round,
             "requirement_spec_path": "",
@@ -430,6 +473,9 @@ def requirements(state: ProjectState) -> dict:
         "phase": "requirements",
         "status": status,
         "requirement_spec": spec,
+        # 增量合并产物：带 _change_status 标记的"展示版"spec，
+        # 供前端在右侧文档 tab 做"本次变更 vs 未变更内容"分区显示。
+        "requirement_spec_diff": requirement_spec_diff,
         "requirements_confirmed": False,
         "requirements_clarification_round": next_clarification_round,
         "requirement_spec_path": spec_path,

@@ -15,6 +15,11 @@ import './RequirementDocPanel.less'
 type Props = {
   productPlan: JsonRecord
   spec: JsonRecord
+  /** 跨迭代增量合并产物：带 `_change_status` 标记的"展示版"RequirementSpec。
+      后端 requirements 节点在 LLM 输出后与基线合并时同时写入。仅在"基于历史迭代"
+      场景有值；为空时按"全部是本轮新增"展示。pages 子 tab 用它做
+      "本次变更 vs 未变更内容"分区显示。 */
+  specDiff?: JsonRecord
   workspaceRoot?: string
 }
 
@@ -32,6 +37,7 @@ const requirementDocSections: Array<{ key: RequirementSectionKey; label: string 
 export default function RequirementDocPanel({
   productPlan,
   spec,
+  specDiff,
   workspaceRoot
 }: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
@@ -57,22 +63,23 @@ export default function RequirementDocPanel({
         ))}
       </div>
       {activeSection === 'overview' ? (
-        <RequirementOverviewSection sectionKey="overview" spec={spec} />
+        <RequirementOverviewSection sectionKey="overview" spec={spec} specDiff={specDiff} />
       ) : null}
       {activeSection === 'pages' ? (
-        <RequirementPagesSection productPlan={productPlan} sectionKey="pages" spec={spec} />
+        <RequirementPagesSection productPlan={productPlan} sectionKey="pages" spec={spec} specDiff={specDiff} />
       ) : null}
       {activeSection === 'authorization' ? (
-        <RequirementAuthorizationSection spec={spec} productPlan={productPlan} workspaceRoot={workspaceRoot} />
+        <RequirementAuthorizationSection spec={spec} productPlan={productPlan} workspaceRoot={workspaceRoot} specDiff={specDiff} />
       ) : null}
       {activeSection === 'flows' ? (
-        <RequirementFlowsSection sectionKey="flows" spec={spec} />
+        <RequirementFlowsSection sectionKey="flows" spec={spec} specDiff={specDiff} />
       ) : null}
       {activeSection === 'page-design-overview' ? (
         <PageDesignOverviewSection
           productPlan={productPlan}
           sectionKey="page-design-overview"
           spec={spec}
+          specDiff={specDiff}
         />
       ) : null}
     </div>

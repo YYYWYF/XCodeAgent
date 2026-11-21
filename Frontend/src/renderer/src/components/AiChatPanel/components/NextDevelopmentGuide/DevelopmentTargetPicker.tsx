@@ -8,7 +8,7 @@ import { Button, Empty, Input, Select, Typography } from 'antd'
 import { useState, type ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import { developmentDisplayStatus, developmentStatusText } from '../../../../developmentArtifacts'
-import type { QuickTaskItem } from '../QuickTaskGuide/quickTasks'
+import { quickTaskBlocked, type QuickTaskItem } from '../QuickTaskGuide/quickTasks'
 import {
   filterDevelopmentTargets,
   type TargetKindFilter,
@@ -124,7 +124,10 @@ export default function DevelopmentTargetPicker({
                   >
                     {developmentStatusText(task.progress)}
                   </span>
-                  {task.progress && ['pending', 'changed', 'unavailable'].includes(developmentDisplayStatus(task.progress)) ? (
+                  {/* 本轮已删除或未变更的产物不提供入口，与开发入口页的禁用判定保持一致。 */}
+                  {task.progress &&
+                  !quickTaskBlocked(task) &&
+                  ['pending', 'changed', 'unavailable'].includes(developmentDisplayStatus(task.progress)) ? (
                     <Button
                       className={cx('next-development-guide-item-action')}
                       size="small"

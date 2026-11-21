@@ -28,7 +28,10 @@ from app.graph.nodes.confirmation import (
     user_confirmed_text,
 )
 from app.graph.state import ProjectState
-from app.services.product_plan import require_current_product_plan
+from app.services.product_plan import (
+    deleted_page_ids_from_spec,
+    require_current_product_plan,
+)
 from app.services.ui_design_generation_pool import (
     UI_DESIGN_STATUS_GENERATING,
     UI_DESIGN_STATUS_QUEUED,
@@ -86,6 +89,37 @@ def _page_list(state: ProjectState) -> list[dict[str, Any]]:
     return [page for page in pages if isinstance(page, dict)] if isinstance(pages, list) else []
 
 
+def _deleted_page_ids(state: ProjectState) -> set[str]:
+    """取本轮标记为删除的页面 ID。
+
+    ProductPlan 里的删除页已带 `_change_status="deleted"`（产品规划阶段追加），
+    `requirement_spec_diff` 是同一事实的另一处来源，两处任一命中即可。
+    """
+
+    ids: set[str] = set()
+    product_plan = state.get("product_plan")
+    if isinstance(product_plan, dict):
+        for page in _page_dicts(product_plan.get("pages")):
+            if str(page.get("_change_status") or "") == "deleted":
+                pid = _page_id(page)
+                if pid:
+                    ids.add(pid)
+    diff = state.get("requirement_spec_diff")
+    if isinstance(diff, dict):
+        for page in _page_dicts(diff.get("pages")):
+            if str(page.get("_change_status") or "") == "deleted":
+                pid = _page_id(page)
+                if pid:
+                    ids.add(pid)
+    return ids
+
+
+def _page_dicts(value: Any) -> list[dict[str, Any]]:
+    """把未知值收敛成字典条目列表。"""
+
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def _page_id(page: dict[str, Any]) -> str:
     """返回 UI 设计目标的稳定 pageId。"""
 
@@ -122,10 +156,15 @@ def _ui_design_confirmation_payload(
     )
     product_plan = product_plan if isinstance(product_plan, dict) else {}
     pages = present_ui_pages(ui_designs, product_plan)
+    # 注入本轮需求变更状态（added/modified/unchanged），供前端禁用旧页面的生成/换一换。
+    pages = _with_change_status(state, pages)
+    # 已删除页面不需要生成/确认，不能计入待确认数，否则用户永远无法通过本门禁。
     pending_count = sum(
         1
         for page in (pages or [])
-        if isinstance(page, dict) and page.get("status") != "confirmed"
+        if isinstance(page, dict)
+        and page.get("status") != "confirmed"
+        and page.get("change_status") != "deleted"
     )
     payload = build_ask_user_payload(
         [
@@ -182,6 +221,44 @@ def _with_iteration_origins(state: ProjectState, pages: list[dict[str, Any]]) ->
     return iteration_origins_for_pages(workspace_root(state), [pid for pid in page_ids if pid])
 
 
+def _with_change_status(
+    state: ProjectState, pages: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """把 requirement_spec_diff 里每页的 _change_status 注入到 ui_designs pages 上。
+
+    让前端能区分"本轮需求变更的页面"（added/modified，允许生成设计稿）与
+    "继承自基线未变更的旧页面"（unchanged，禁用生成）。判定来源与需求文档（草稿）
+    的"本次变更 vs 未变更"分区同源（requirement_spec_diff），不复用 iteration_origins
+    ——后者是"历史轮次设计归属"语义，与"本轮需求是否变更"不同。
+
+    兜底口径与前端需求文档分区一致：
+    - requirement_spec_diff 完全没值（首轮创建 / 无基线）→ 全部标 added；
+    - 有值但某页没标（理论上 merger 每页都标）→ unchanged 兜底。
+    """
+
+    diff = state.get("requirement_spec_diff")
+    if not isinstance(diff, dict):
+        return [{**page, "change_status": "added"} for page in pages]
+    diff_pages = diff.get("pages")
+    status_by_id: dict[str, str] = {}
+    if isinstance(diff_pages, list):
+        for item in diff_pages:
+            if not isinstance(item, dict):
+                continue
+            pid = str(item.get("pageId") or "").strip()
+            status = str(item.get("_change_status") or "").strip()
+            if pid and status:
+                status_by_id[pid] = status
+    # diff 有值但映射为空（异常情况）时按"有基线"处理，兜底 unchanged。
+    has_baseline = bool(status_by_id)
+    result: list[dict[str, Any]] = []
+    for page in pages:
+        pid = _page_id(page)
+        status = status_by_id.get(pid) or ("unchanged" if has_baseline else "added")
+        result.append({**page, "change_status": status})
+    return result
+
+
 def _ui_design_confirmed_payload(
     state: ProjectState,
     ui_designs: dict[str, Any],
@@ -190,6 +267,9 @@ def _ui_design_confirmed_payload(
 
     product_plan = state.get("product_plan")
     product_plan = product_plan if isinstance(product_plan, dict) else {}
+    pages = present_ui_pages(ui_designs, product_plan)
+    # 注入本轮需求变更状态，与确认中 payload 同口径。
+    pages = _with_change_status(state, pages)
     return {
         "mode": "ui_design_confirmation",
         "status": "clear",
@@ -197,10 +277,8 @@ def _ui_design_confirmed_payload(
         "questions": [],
         "assumptions": [],
         "message": "所有页面设计稿已确认，可以继续项目规划。",
-        "pages": present_ui_pages(ui_designs, product_plan),
-        "iteration_origins": _with_iteration_origins(
-            state, present_ui_pages(ui_designs, product_plan)
-        ),
+        "pages": pages,
+        "iteration_origins": _with_iteration_origins(state, pages),
     }
 
 
@@ -273,7 +351,6 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     pages = _page_list(state)
     valid_pages = [page for page in pages if _page_id(page)]
     total = len(valid_pages)
-
     # 准备设计稿落盘目录（方案 B：仅 mkdir，无 clone/install/launch）。
     setup = await run_ui_design_thread(setup_ui_design_project, workspace)
     project_dir = str(setup.get("project_dir") or "")
@@ -283,7 +360,19 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
     used_keys.update(record["pageKey"] for record in carried.values())
     entries: list[dict[str, Any]] = []
     inherited = 0
+    deleted_ids = _deleted_page_ids(state)
     for page in valid_pages:
+        if _page_id(page) in deleted_ids:
+            # 本轮删除的页面：保留条目让用户看到"已删除"，但不参与生成与确认统计。
+            # PageKey 优先沿用上一轮的，构建阶段据此找到并清理对应页面代码。
+            carried_key = str((carried.get(_page_id(page)) or {}).get("pageKey") or "").strip()
+            entry = build_ui_page_manifest(
+                page,
+                page_key=carried_key or derive_page_key(page, used_keys),
+                status="deleted",
+            )
+            entries.append(entry)
+            continue
         entry, was_inherited = _ui_page_entry(page, project_dir, carried, used_keys)
         entries.append(entry)
         inherited += 1 if was_inherited else 0
@@ -298,20 +387,31 @@ async def _build_pending_ui_designs(state: ProjectState) -> dict[str, Any]:
         total=total,
         pages=list(entries),
     )
-    # 产品事实变更检测：本工作区已有继承记录，但本轮有页面因为产品事实（spec description
-    # 或 ProductPlan actions/items）变化导致继承被拒。把这个事实写到清单顶层 —
-    # clarification 在恢复路径可能用旧的 ui_designs 重放，这里在 _build_pending_ui_designs
-    # 写入的标记会随清单一起持久化到 specs/ui-designs.json，让前端在用户最终确认前
-    # 都能看到这条提示。
+    # 产品事实变更检测有两条路径：
+    # 1. actions/items 的 ID 已变化，旧稿无法通过绑定校验，继承被明确拒绝；
+    # 2. 只修改展示文案等事实，ID 未变化，旧稿仍能通过绑定校验并被直接继承。
+    #    第二种也必须标记 stale——“校验通过”只证明结构兼容，不代表旧稿已反映新需求。
+    # 标记随清单持久化，前端据此显示“检测到产品规划已更新”的提示，但不强制阻断确认。
     has_rejected_carryover = any(
         isinstance(entry, dict) and entry.get("inheritance_rejected") for entry in entries
+    )
+    entries_with_status = _with_change_status(state, entries)
+    has_stale_inherited_page = any(
+        _page_id(entry) in carried
+        and entry.get("status") == "confirmed"
+        and entry.get("change_status") == "modified"
+        for entry in entries_with_status
     )
     return {
         "schema_version": UI_MANIFEST_SCHEMA_VERSION,
         "confirmation_status": "pending_user_confirmation",
         "product_plan_sha256": _product_plan_hash(state),
         "pages": entries,
-        **({"product_plan_stale": True} if has_rejected_carryover else {}),
+        **(
+            {"product_plan_stale": True}
+            if has_rejected_carryover or has_stale_inherited_page
+            else {}
+        ),
     }
 
 
@@ -939,7 +1039,12 @@ async def ui_confirmation(state: ProjectState) -> dict:
     requirement_spec = state.get("requirement_spec")
     if not isinstance(requirement_spec, dict):
         raise ValueError("UI 设计必须读取已确认的 RequirementSpec。")
-    product_plan = require_current_product_plan(state.get("product_plan"), requirement_spec)
+    product_plan = require_current_product_plan(
+        state.get("product_plan"), requirement_spec,
+        deleted_page_ids=deleted_page_ids_from_spec(
+            requirement_spec, state.get("requirement_spec_diff")
+        ),
+    )
     if product_plan.get("confirmation_status") != "confirmed":
         raise ValueError("UI 设计必须基于已确认 ProductPlan 生成。")
     existing = state.get("ui_designs")

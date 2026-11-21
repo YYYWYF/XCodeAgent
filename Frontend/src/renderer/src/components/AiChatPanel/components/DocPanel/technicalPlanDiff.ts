@@ -14,8 +14,19 @@ export type ChangedObject = {
   name: string
   kind: '新增' | '修改' | '删除'
   differences: Difference[]
+  /** 独立于业务内容的带外结论（例如产物上的 `_change_status` 级联删除）。优先级最高。 */
+  declaredKind?: '新增' | '修改' | '删除'
 }
 export type ChangeGroup = { name: string; objects: ChangedObject[] }
+
+/** 从产物条目上读取 `_change_status`，映射成中文变更类型；缺失或未知返回 undefined。 */
+function declaredKind(item: unknown): ChangedObject['declaredKind'] {
+  const declared = textValue(asRecord(item)._change_status)
+  if (declared === 'added') return '新增'
+  if (declared === 'modified') return '修改'
+  if (declared === 'deleted') return '删除'
+  return undefined
+}
 
 const labels: Record<string, string> = {
   frontend: '前端',
@@ -68,6 +79,10 @@ const unordered = new Set([
   'error_codes'
 ])
 
+// 比较时忽略的元数据键：它们描述"本轮相对基线的状态"，不是业务内容本身。
+// 正式产物会保留 `_change_status`，基线通常没有，两边直接比必然不等。
+const COMPARISON_IGNORED_KEYS = new Set(['_change_status'])
+
 /** 中文解释与原始属性名并列，便于将修改指令逐项对应到差异内容。 */
 function differenceLabel(key: string): string {
   return labels[key] ? `${labels[key]}（${key}）` : key
@@ -118,6 +133,10 @@ function normalized(value: unknown, field = ''): unknown {
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value)
+        // `_change_status` 是平台写入的变更标记（正式产物刻意保留它供开发阶段展示），
+        // 不是业务内容；基线通常没有这个字段。若不剔除，每个对象都会因"多了一个键"
+        // 被判成"修改"——那会让整份技术规划看起来全变了。
+        .filter(([key]) => !COMPARISON_IGNORED_KEYS.has(key))
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([key, child]) => [key, normalized(child, key)])
     )
@@ -213,6 +232,15 @@ function differences(before: unknown, after: unknown, path = '', field = ''): Di
 
 type Comparable = { id: string; name: string; value: unknown }
 
+/** 判断一个比较值是否"空"：无内容的对象/数组，或空字符串。 */
+function isEmptyValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true
+  if (typeof value === 'string') return !value.trim()
+  if (Array.isArray(value)) return !value.length
+  if (typeof value === 'object') return !Object.keys(value as object).length
+  return false
+}
+
 /** 按业务对象汇总差异，一个接口修改多个字段仍只计为一个对象。 */
 function changedObjects(before: Comparable[], after: Comparable[]): ChangedObject[] {
   const old = new Map(before.map((item) => [item.id, item]))
@@ -221,13 +249,23 @@ function changedObjects(before: Comparable[], after: Comparable[]): ChangedObjec
     const previous = old.get(id),
       current = next.get(id)
     const changes = differences(previous?.value, current?.value)
+    // 首轮创建的基线是空壳（如 architecture 给 `{}`），此时两边都"存在"但基线无内容，
+    // 语义上是新增而非修改。架构 / 接口权限绑定这类单对象场景全靠这条判断。
+    const previousEmpty = !previous || isEmptyValue(previous.value)
     return changes.length
       ? [
           {
             id,
             name: (current || previous)!.name,
-            kind: !previous ? ('新增' as const) : !current ? ('删除' as const) : ('修改' as const),
-            differences: changes
+            kind: previousEmpty && current
+              ? ('新增' as const)
+              : !current
+                ? ('删除' as const)
+                : ('修改' as const),
+            differences: changes,
+            // 内容差异之外还要带上产物自带的变更类型：架构这类"每轮都会被重写叙事"
+            // 的单对象，diff 会把它标成修改，而后端才是"本轮是否真的改了架构"的权威。
+            declaredKind: declaredKind(current?.value)
           }
         ]
       : []

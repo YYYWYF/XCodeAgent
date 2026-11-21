@@ -19,6 +19,16 @@ from app.services.product_plan_carryover import (
     DEFINITION_FIELDS as _DEFINITION_FIELDS,
     write_product_plan_carryover,
 )
+from app.services.endpoint_design_carryover import (
+    collect_endpoint_design_files,
+    restore_endpoint_design_files,
+    write_endpoint_design_carryover,
+)
+from app.services.requirement_spec_carryover import write_requirement_spec_carryover
+from app.services.technical_plan_carryover import (
+    drop_generated_fields,
+    write_technical_plan_carryover,
+)
 from app.services.ui_design_carryover import (
     carried_page_keys,
     write_ui_design_carryover,
@@ -81,6 +91,9 @@ _CLEARABLE_DIRS = {
 _CLEARABLE_FILES = {
     "application-lifecycle.json",
     "application-lifecycle.json.bak",
+    # 本轮变更快照描述的是"上一轮相对它的基线变了什么"，新一轮必须由自己的
+    # 技术规划确认重新写出；留着旧快照会让新迭代凭空多出一批"删除/修改"的产物。
+    "development-change-snapshot.json",
 }
 
 
@@ -116,6 +129,9 @@ def start_iteration(request: StartIterationRequest) -> StartIterationResult:
         workspace_root=workspace_root,
         branch_name=request.branch_name,
     )
+    # 清理完成后再恢复上一轮已确认的字段映射：`plans/endpoints/` 刚才被清空，
+    # 现在按交接记录放回规范位置。是否仍然有效由读取方按接口契约内容重新判定。
+    restore_endpoint_design_files(workspace_root)
 
     return StartIterationResult(
         workspaceRoot=str(workspace_root),
@@ -215,6 +231,9 @@ def _clear_iteration_artifacts(
     # ProductPlan 都在即将被清掉的目录里。
     _register_ui_design_carryover(workspace_root, devagentstudio_dir)
     _register_product_plan_carryover(workspace_root, devagentstudio_dir)
+    _register_requirement_spec_carryover(workspace_root, devagentstudio_dir)
+    _register_technical_plan_carryover(workspace_root, devagentstudio_dir)
+    _register_endpoint_design_carryover(workspace_root, devagentstudio_dir)
     begin_iteration_round(workspace_root, branch_name)
     carried_keys = carried_page_keys(workspace_root)
 
@@ -320,6 +339,107 @@ def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: P
         workspace_root,
         source_branch=read_workspace_branch_name(workspace_root),
         pages=pages,
+    )
+
+
+def _register_requirement_spec_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+    """登记本轮的 RequirementSpec 作为下一轮的"基线"，供增量合并。
+
+    LLM 在新迭代里会**整份重新生成** RequirementSpec，但它经常自由发挥——
+    简化、重写、甚至丢失基线里已有的页面/角色/模块。结果：上一迭代实现的页面
+    在新迭代里"消失"，下游 UI 设计稿继承、技术规划、构建都基于错位的 spec 推进。
+
+    本函数在 `start_iteration` 时把当前磁盘上的 requirement-spec.json 完整登记到
+    `.devagentstudio/requirement-spec-carryover.json`。新一轮 `requirements` 节点在
+    LLM 输出后调 `requirement_spec_merger.merge_requirement_spec`，把"LLM 重新生成
+    的 spec"与"基线 spec"按 pageId 合并 —— 未在 LLM 输出里出现的基线页面会被
+    自动补回（_change_status=unchanged），防止"被静默删除"。
+
+    读不到文件（首轮、或从未进入规划）时清掉旧记录 —— 否则会让新一轮沿用更早一轮的基线。
+
+    **关键细节**：`agent_note` 是 LLM 输出的"原始 JSON 字符串"，可能含未转义引号、
+    换行符或其他非法 JSON 字符 —— 写入 carryover 会让整个文件变非法 JSON，导致
+    `read_requirement_spec_carryover` 静默返回 None（异常被 except 吞掉），下一轮
+    merger 走"首轮创建"分支，全部标 added（用户实测 hello_world 标了 added 而非
+    unchanged）。这里把 agent_note 剥掉再写盘：它只是 LLM 的思考过程，对下一轮
+    合并判断（按 pageId 对齐）没有价值。
+    """
+
+    try:
+        spec = json.loads(
+            (devagentstudio_dir / "specs" / "requirement-spec.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        write_requirement_spec_carryover(workspace_root, source_branch="", spec=None)
+        return
+
+    if not isinstance(spec, dict):
+        write_requirement_spec_carryover(workspace_root, source_branch="", spec=None)
+        return
+
+    # 剥掉 agent_note：它是 LLM 原始输出，可能含未转义引号让 carryover 变非法 JSON。
+    cleaned_spec = {key: value for key, value in spec.items() if key != "agent_note"}
+
+    write_requirement_spec_carryover(
+        workspace_root,
+        source_branch=read_workspace_branch_name(workspace_root),
+        spec=cleaned_spec,
+    )
+
+
+def _register_technical_plan_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+    """登记本轮**已确认**的技术规划作为下一轮的"基线"，供计划阶段做变更对比。
+
+    发起新迭代会清掉 `.devagentstudio/plans/`，上一轮的 `technical-plan.json` 随之消失。
+    而计划阶段的 `technical_planning_begin` 把基线取自 `state["technical_plan"]`，
+    于是新迭代的基线恒为空，前端的"本次变更 / 完整规划"模式与"新增/修改/未变更"标识
+    全部不出现。本函数在清理之前把已确认版本登记到
+    `.devagentstudio/technical-plan-carryover.json`，新一轮在 state 缺技术规划时回退读它。
+
+    只登记 `confirmed`：待确认草稿描述的是"本轮没做完的事"，不能当作上一轮现状。
+    读不到文件或不是已确认版本时清掉旧记录 —— 否则会让新一轮对比到更早一轮的基线。
+    """
+
+    branch_name = read_workspace_branch_name(workspace_root)
+    try:
+        plan = json.loads(
+            (devagentstudio_dir / "plans" / "technical-plan.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        write_technical_plan_carryover(workspace_root, source_branch=branch_name, plan=None)
+        return
+
+    if (
+        not isinstance(plan, dict)
+        or plan.get("confirmation_status") != "confirmed"
+        or not plan
+    ):
+        write_technical_plan_carryover(workspace_root, source_branch=branch_name, plan=None)
+        return
+
+    write_technical_plan_carryover(
+        workspace_root,
+        source_branch=branch_name,
+        # 剥掉每轮必然变化的派生字段，避免下一轮 diff 把它们全标成"修改"。
+        plan=drop_generated_fields(plan),
+    )
+
+
+def _register_endpoint_design_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+    """登记本轮已确认的 Endpoint 字段映射，供下一轮恢复。
+
+    `plans/endpoints/` 是用户在开发阶段逐项确认的正式成果，但它在 `plans/` 目录里，
+    会随新迭代一起被清空。不登记的话，新一轮点开一个上轮已开发完的页面时，
+    所有映射都显示"待配置"，用户必须重配一遍 —— 这正是本次要修的问题。
+
+    恢复不代表一定有效：设计文件里记录了确认当时的上游指纹，新一轮读回时会按
+    接口契约内容重新校验，接口真变了仍然要求重新配置。
+    """
+
+    write_endpoint_design_carryover(
+        workspace_root,
+        files=collect_endpoint_design_files(devagentstudio_dir),
+        source_branch=read_workspace_branch_name(workspace_root),
     )
 
 

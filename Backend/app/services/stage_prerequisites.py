@@ -86,7 +86,12 @@ def required_artifacts(node: str, *, state: dict | None = None) -> set[str]:
     if node in {"technical_planning_begin", "technical_planning_generate", "technical_planning_commit",
                 "technical_planning_confirm", "project_planning"}:
         keys.discard("technical_plan")
-    if node in _TASK_PLAN_STAGES and node != "prepare_build_tasks":
+    from app.services.development_artifacts import completed_deletion_target
+    deletion_test = node in {
+        "test_phase_confirmation", "integration_test", "small_task_repair", "code_review", "acceptance",
+        "review_phase_confirmation", "acceptance_phase_confirmation", "finalize_project",
+    } and completed_deletion_target(state or {}) is not None
+    if node in _TASK_PLAN_STAGES and node != "prepare_build_tasks" and not deletion_test:
         keys.add("build_task_plan")
     return keys
 

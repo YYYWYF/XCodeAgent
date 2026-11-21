@@ -54,6 +54,89 @@ def technical_plan_sha256(workspace_root: str | Path) -> str:
     return canonical_sha256(path)
 
 
+def endpoint_upstream_content(workspace_root: str | Path, api_contract_id: str, endpoint_id: str) -> dict[str, Any]:
+    """取出某个 Endpoint 真正依赖的上游内容，用于内容级失效判断。
+
+    为什么不能只看整份 TechnicalPlan 的哈希：计划阶段每一轮都会让模型整份重新生成，
+    即使后端契约一字未变，措辞和字段顺序也会变，文件哈希必然不同。按哈希判断会让
+    所有既有字段映射在每一轮迭代里全部作废，用户必须把已确认的映射重新配一遍。
+
+    真正决定映射是否仍然成立的是这个 Endpoint 的**契约语义**：
+    - 该 Endpoint 自身的定义（方法、路径、参数、请求 / 响应 schema 引用）；
+    - 所属分组的配置（base_path、authentication、entity_ids、分组名）；
+    - 分组内被它引用的类型定义（schemas）；
+    - 它绑定的实体定义（字段一列一列比对，字段变了映射就必须重配）。
+    """
+
+    path = technical_plan_path(workspace_root)
+    if not path.is_file():
+        raise ValueError("缺少已确认的 technical-plan.json。")
+    from app.workspace.plan_documents import load_project_plan_json
+
+    plan = load_project_plan_json(path, hydrate_detail_designs=True)
+    contracts = [item for item in plan.get("api_contracts") or [] if isinstance(item, dict)]
+    contract = next((item for item in contracts if item.get("id") == api_contract_id), None)
+    if contract is None:
+        return {}
+    endpoint = next(
+        (item for item in contract.get("endpoints") or []
+         if isinstance(item, dict) and item.get("id") == endpoint_id),
+        None,
+    )
+    if endpoint is None:
+        return {}
+    schemas = contract.get("schemas") if isinstance(contract.get("schemas"), dict) else {}
+    referenced = _referenced_schema_names(endpoint, schemas)
+    entities = [
+        entity for entity in plan.get("entities") or []
+        if isinstance(entity, dict) and str(entity.get("id") or "") in {
+            str(item) for item in contract.get("entity_ids") or []
+        }
+    ]
+    return {
+        "contract": {
+            key: contract.get(key)
+            for key in ("id", "name", "base_path", "authentication", "entity_ids")
+        },
+        "endpoint": endpoint,
+        "schemas": {name: schemas.get(name) for name in referenced},
+        "entities": entities,
+    }
+
+
+def endpoint_upstream_sha256(workspace_root: str | Path, api_contract_id: str, endpoint_id: str) -> str:
+    """计算 Endpoint 依赖内容的规范哈希；读取失败返回空串（视为无法判断）。"""
+
+    try:
+        content = endpoint_upstream_content(workspace_root, api_contract_id, endpoint_id)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        return ""
+    if not content:
+        return ""
+    return hashlib.sha256(
+        json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _referenced_schema_names(endpoint: dict[str, Any], schemas: dict[str, Any]) -> list[str]:
+    """收集该 Endpoint 通过请求 / 响应引用可达的类型名（含嵌套引用）。"""
+
+    found: list[str] = []
+    pending = [
+        str(endpoint.get(key) or "").split("/")[-1]
+        for key in ("request_schema_ref", "response_schema_ref")
+        if endpoint.get(key)
+    ]
+    while pending:
+        name = pending.pop()
+        if not name or name in found or name not in schemas:
+            continue
+        found.append(name)
+        for ref in re.findall(r'"\$ref"\s*:\s*"([^"]+)"', json.dumps(schemas[name], ensure_ascii=False)):
+            pending.append(ref.split("/")[-1])
+    return sorted(found)
+
+
 def write_endpoint_design(
     workspace_root: str | Path,
     design: EndpointApiDesign,
@@ -138,11 +221,65 @@ def read_endpoint_design(
             "",
         )
         try:
-            if not expected or expected != technical_plan_sha256(workspace_root):
+            if not expected:
                 return None
+            if expected == technical_plan_sha256(workspace_root):
+                return design.model_dump(mode="json", by_alias=True, exclude_none=True)
         except ValueError:
             return None
+        # 整份计划哈希不同不代表映射失效：计划阶段每轮都会整份重生成，措辞与字段顺序
+        # 的变化也会改变文件哈希。只有该 Endpoint 真正依赖的契约语义变了，映射才需要重配。
+        current = endpoint_upstream_content(workspace_root, api_contract_id, endpoint_id)
+        if not current:
+            return None
+        design_payload = design.model_dump(mode="json", by_alias=True, exclude_none=True)
+        if not _endpoint_content_matches(design_payload, current):
+            return None
     return design.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _endpoint_content_matches(design: dict[str, Any], current: dict[str, Any]) -> bool:
+    """判断已确认设计所依据的接口定义是否仍与当前技术规划一致。
+
+    设计里存了确认当时的 `endpointContract`，因此可以逐字段比对：接口自身定义变了
+    （方法、路径、参数、schema 引用、错误码），或者它引用的类型 / 绑定实体变了，
+    映射就必须重新配置；只是技术规划整体被重写（措辞、顺序）则继续沿用。
+    """
+
+    previous = design.get("endpointContract")
+    if not isinstance(previous, dict) or not previous:
+        return False
+    if previous != current.get("endpoint"):
+        return False
+    # 绑定的数据源快照也要能对上当前实体字段，否则映射指向的列可能已经不存在。
+    entities = {str(item.get("id") or ""): item for item in current.get("entities") or []}
+    for snapshot in design.get("sourceSnapshots") or []:
+        if not isinstance(snapshot, dict) or snapshot.get("sourceType") != "database":
+            continue
+        details = snapshot.get("details") if isinstance(snapshot.get("details"), dict) else {}
+        table = str(details.get("table") or "")
+        entity = next(
+            (
+                item for item in entities.values()
+                if str(item.get("table_name") or "") == table or str(item.get("id") or "") == table
+            ),
+            None,
+        )
+        if entity is None:
+            continue
+        expected_fields = {
+            str(field.get("name") or "")
+            for field in entity.get("fields") or []
+            if isinstance(field, dict) and str(field.get("name") or "").strip()
+        }
+        used_fields = {
+            str(column.get("name") or column.get("column_name") or "")
+            for column in details.get("columns") or []
+            if isinstance(column, dict)
+        }
+        if used_fields and not used_fields <= expected_fields:
+            return False
+    return True
 
 
 def endpoint_design_status(

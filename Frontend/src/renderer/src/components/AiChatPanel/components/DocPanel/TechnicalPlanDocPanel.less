@@ -1,4 +1,14 @@
 .@{class-prefix}-technical-plan-doc-panel {
+  // 变更徽标复用的语义色（与需求文档同源）。技术规划面板不在
+  // `.requirement-doc-panel` 作用域内，必须自己补齐浅色值，否则 `var(--req-green, …)`
+  // 会落到 fallback 里的深色取值，出现同名标识颜色不一致。
+  --req-green: #1a7f37;
+  --req-green-soft: rgba(26, 127, 55, 0.1);
+  --req-green-border: rgba(26, 127, 55, 0.3);
+  --req-orange: #b45309;
+  --req-orange-soft: rgba(180, 83, 9, 0.1);
+  --req-orange-border: rgba(180, 83, 9, 0.32);
+
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 14px;
@@ -214,6 +224,19 @@
   }
 }
 
+// 分组名与变更徽标同一行：名称可伸缩并省略，徽标只占自身文字宽度。
+.@{class-prefix}-technical-plan-contract-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+
+  > strong {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+}
+
 .@{class-prefix}-technical-plan-contract-tags {
   display: flex;
   flex-wrap: wrap;
@@ -275,12 +298,12 @@
 .@{class-prefix}-technical-plan-endpoint,
 .@{class-prefix}-technical-plan-endpoint-head {
   display: grid;
-  grid-template-columns: 48px minmax(0, min(40%, 220px)) minmax(0, 1fr);
-  column-gap: clamp(8px, 2cqi, 12px);
-  padding: 8px 10px;
+  grid-template-columns: 48px minmax(0, min(40%, 220px)) minmax(0, 1fr) minmax(150px, 1.6fr);
 }
 
 .@{class-prefix}-technical-plan-endpoint {
+  column-gap: clamp(8px, 2cqi, 12px);
+  padding: 8px 10px;
   align-items: center;
   width: 100%;
   border: 1px solid var(--wb-border);
@@ -331,6 +354,33 @@
   }
 }
 
+// 接口行最后一列（说明）+ 行尾变更徽标：说明吃掉剩余宽度，徽标固定贴右，
+// 这样徽标不占方法/名称/路径列，名称也不会因为塞了徽标而被挤窄。
+.@{class-prefix}-technical-plan-endpoint-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--wb-text-secondary);
+  font-size: 13px;
+
+  > .@{class-prefix}-technical-plan-endpoint-summary-text {
+    overflow: hidden;
+    min-width: 0;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  // 需求文档的通用徽标带 `margin-left: auto`，在本列里改由 gap 控制间距。
+  > .@{class-prefix}-requirement-doc-change-badge {
+    flex: 0 0 auto;
+    margin-left: 0;
+  }
+}
+
 .@{class-prefix}-technical-plan-endpoint-table {
   overflow: hidden;
   border: 1px solid var(--wb-border);
@@ -339,6 +389,10 @@
 }
 
 .@{class-prefix}-technical-plan-endpoint-head {
+  display: grid;
+  grid-template-columns: 48px minmax(0, min(40%, 220px)) minmax(0, 1fr) minmax(150px, 1.6fr);
+  gap: 7px;
+  padding: 7px 8px;
   color: var(--wb-text-tertiary);
   background: var(--wb-surface-subtle);
   font-size: 12px;
@@ -747,9 +801,68 @@
   min-width: 0;
 }
 
+// 跨迭代分区容器：把"本次迭代变更"与"未变更内容（继承自基线）"分成两块。
+// 仅靠分组标题的小徽标不足以区分，这里给每块加底色与分隔线，让两段界限一目了然。
+.@{class-prefix}-technical-plan-binding-group {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface);
+
+  // 变更块用主题绿描边强调，与"本次迭代变更"徽标同色。
+  // `--req-*` 由 `.technical-plan-review` 根节点提供，这里带兜底值防止作用域变化时失色。
+  &.@{class-prefix}-is-changed {
+    border-color: var(--req-green-border, rgba(74, 194, 107, 0.3));
+    background: var(--req-green-soft, rgba(74, 194, 107, 0.1));
+
+    // 页面卡片自带不透明底色，会盖住分区绿底；这里让它在绿底上保持同色描边，
+    // 既留住"变更"的视觉强调，又不牺牲卡片内文字的对比度。
+    .@{class-prefix}-technical-plan-page-binding-group {
+      border-color: var(--req-green-border, rgba(74, 194, 107, 0.3));
+    }
+  }
+
+  // 继承块压低对比度，视觉上退居次要，避免与变更内容抢注意力。
+  &.@{class-prefix}-is-unchanged {
+    border-style: dashed;
+    background: var(--wb-surface-subtle);
+
+    .@{class-prefix}-technical-plan-page-binding-group {
+      // 区内容器已自带边框与底色，这里改用更淡的表层，避免双层框线过重。
+      border-color: var(--wb-border-soft);
+      background: var(--wb-surface);
+    }
+  }
+
+  // 分区标题不再需要额外的上下外边距，由容器 padding 统一控制。
+  > .@{class-prefix}-requirement-doc-page-group-title {
+    margin: 0 0 10px;
+  }
+}
+
+// 两个分区之间再拉一条分隔线，明确"上面是变更、下面是继承"。
+// 间距由父容器的 gap 提供，这里只负责画线，不再额外叠加外边距。
+.@{class-prefix}-technical-plan-binding-group + .@{class-prefix}-technical-plan-binding-group {
+  position: relative;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--wb-border);
+  }
+}
+
 .@{class-prefix}-technical-plan-page-binding-group {
   display: grid;
-  grid-template-columns: minmax(96px, 0.62fr) minmax(0, 2fr);
+  // 左列要容纳中文页面名 + 变更徽标，过窄会让徽标被挤到文字末尾。
+  grid-template-columns: minmax(132px, 0.7fr) minmax(0, 2fr);
   align-items: stretch;
   min-width: 0;
   overflow: hidden;
@@ -760,16 +873,35 @@
 
 .@{class-prefix}-technical-plan-page-binding-name {
   display: flex;
+  // 名称与徽标固定同一行并垂直居中：左列较窄时名称省略，绝不让徽标换行到名称下方。
   align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
   min-width: 0;
   padding: 12px;
-  overflow-wrap: anywhere;
+  overflow: hidden;
   border-right: 1px solid var(--wb-border);
   color: var(--wb-text);
   background: var(--wb-surface-subtle);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.5;
+
+  // 变更徽标紧跟页面名称：需求文档的通用徽标带 `margin-left: auto`（用于把徽标
+  // 推到卡片右侧），在本列里会把它顶到最右端。这里改为固定间距并禁止收缩。
+  > .@{class-prefix}-technical-plan-page-binding-label {
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > .@{class-prefix}-requirement-doc-change-badge {
+    flex: 0 0 auto;
+    margin-left: 0;
+    align-self: center;
+  }
 }
 
 .@{class-prefix}-technical-plan-page-binding-rows {
@@ -830,11 +962,16 @@
   }
 
   .@{class-prefix}-technical-plan-page-binding-group {
-    grid-template-columns: minmax(88px, 0.56fr) minmax(0, 2fr);
+    grid-template-columns: minmax(118px, 0.66fr) minmax(0, 2fr);
   }
 }
 
 @container (max-width: 360px) {
+  .@{class-prefix}-technical-plan-endpoint,
+  .@{class-prefix}-technical-plan-endpoint-head {
+    grid-template-columns: 42px minmax(78px, 0.85fr) minmax(84px, 1fr) minmax(104px, 1.5fr);
+  }
+
   .@{class-prefix}-technical-plan-page-binding-group {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -964,8 +1101,26 @@ body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .@{class-prefix}-page
 // 卡片标题：页名/维度名，左侧带语义色竖条强化块归属。
 .@{class-prefix}-page-design-overview-card-title {
   position: relative;
+  // 页面名称与变更徽标同一行：徽标靠右对齐到卡片右上角，和"角色与权限"卡片一致。
+  // 不换行，名称过长时截断，避免徽标被挤到第二行。
+  display: flex;
+  gap: 8px;
+  align-items: center;
   padding-left: 9px;
   overflow: hidden;
+
+  > .ant-typography {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  // 沿用需求文档通用徽标的 `margin-left: auto`，把它推到右上角；
+  // 这里只保证它不参与收缩。
+  > .@{class-prefix}-requirement-doc-change-badge {
+    flex: 0 0 auto;
+  }
 
   &::before {
     position: absolute;
@@ -1156,4 +1311,15 @@ body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .@{class-prefix}-page
   .@{class-prefix}-page-design-overview-tiles {
     grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   }
+}
+
+// 暗色主题：提高语义色亮度与底纹透明度，取值与需求文档面板保持一致。
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .@{class-prefix}-technical-plan-doc-panel,
+body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .@{class-prefix}-technical-plan-doc-panel {
+  --req-green: #4ac26b;
+  --req-green-soft: rgba(74, 194, 107, 0.16);
+  --req-green-border: rgba(74, 194, 107, 0.4);
+  --req-orange: #e8a13d;
+  --req-orange-soft: rgba(232, 161, 61, 0.16);
+  --req-orange-border: rgba(232, 161, 61, 0.42);
 }

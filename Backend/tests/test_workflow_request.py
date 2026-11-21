@@ -1263,7 +1263,8 @@ class WorkflowRequestTests(unittest.TestCase):
 
         self.assertEqual(inputs["resume_from"], "technical_planning_begin")
         self.assertEqual(inputs["resume_values"]["change_id"], pending.change_id)
-        self.assertEqual(inputs["resume_values"]["technical_plan"], baseline)
+        from app.services.technical_plan_carryover import drop_generated_fields
+        self.assertEqual(inputs["resume_values"]["technical_plan"], drop_generated_fields(baseline))
         self.assertEqual(
             inputs["resume_values"]["application_planning_recovery_boundary"]["boundary"],
             "input_committed",

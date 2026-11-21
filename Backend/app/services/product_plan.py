@@ -154,8 +154,15 @@ def _model_behavior_errors(value: Any, location: str) -> list[str]:
 def validate_product_plan_model_output(
     agent_plan: dict[str, Any],
     requirement_spec: dict[str, Any],
+    *,
+    deleted_page_ids: set[str] | None = None,
 ) -> list[str]:
-    """在归一化前严格校验模型 JSON 结构，拒绝重复页面树和自然语言猜字段。"""
+    """在归一化前严格校验模型 JSON 结构，拒绝重复页面树和自然语言猜字段。
+
+    `deleted_page_ids` 是本轮要求删除的页面：它们不该出现在"要交付的产品"里，
+    因此从期望序列中剔除。调用方必须显式传入——传入的 `requirement_spec` 通常是
+    剥离 `_change_status` 的干净版，只看标记会得到空集。
+    """
 
     errors = _exact_keys(agent_plan, _MODEL_ROOT_KEYS, "ProductPlan 模型输出")
     errors.extend(_exact_keys(agent_plan.get("app"), _MODEL_APP_KEYS, "ProductPlan 模型输出.app"))
@@ -165,23 +172,52 @@ def validate_product_plan_model_output(
     pages = agent_plan.get("pages")
     if not isinstance(pages, list):
         return [*errors, "ProductPlan 模型输出.pages 必须是 JSON 数组。"]
+    # 本轮要求删除的页面仍保留在 RequirementSpec 里（标 `_change_status="deleted"`），
+    # 供构建阶段定位并清理页面代码；但它们不该出现在"要交付的产品"里。
+    # 删除集合优先用调用方显式传入的值，其次读 spec 上的标记（兼容带标记调用）。
+    deleted = {
+        str(item).strip() for item in (deleted_page_ids or set()) if str(item).strip()
+    }
+    if not deleted:
+        deleted = {
+            str(item.get("pageId") or "").strip()
+            for item in _dict_items(requirement_spec.get("pages"))
+            if str(item.get("_change_status") or "") == "deleted"
+        }
     expected_page_ids = [
         str(item.get("pageId") or item.get("id") or "").strip()
         for item in _dict_items(requirement_spec.get("pages"))
+        if str(item.get("pageId") or item.get("id") or "").strip() not in deleted
+    ]
+    # 已删页面即使被模型误写回来，也不参与校验：平台在模型输出后会确定性剔除。
+    # 否则其中任一字段不合规（例如动作行为缺 expectedResult）都会让整轮生成失败，
+    # 而这类页面本来就要被删掉，纠错它没有任何意义。
+    pages = [
+        item
+        for item in pages
+        if not (
+            isinstance(item, dict)
+            and str(item.get("pageId") or "").strip() in deleted
+        )
     ]
     actual_page_ids = [
         str(item.get("pageId") or "").strip()
         for item in _dict_items(pages)
     ]
     if actual_page_ids != expected_page_ids:
-        errors.append("ProductPlan 模型输出.pages 必须按 RequirementSpec 顺序完整返回全部页面。")
+        errors.append(
+            "ProductPlan 模型输出.pages 必须按 RequirementSpec 顺序返回本轮保留的全部页面"
+            "（已标记删除的页面不得返回）。"
+        )
     if any(not _is_lower_snake_case(page_id) for page_id in actual_page_ids):
         errors.append("ProductPlan 模型输出.pageId 必须全部为 lower_snake_case。")
     for page_index, page in enumerate(pages):
         location = f"ProductPlan 模型输出.pages[{page_index}]"
         # state_requirements 作为可选字段容忍：校验前剥离，避免"未声明字段"误报。
+        # `_change_status` 是开发阶段要用的展示标记，正式产物刻意保留，不算非法字段。
         page_for_check = (
-            {k: v for k, v in page.items() if k not in _OPTIONAL_PAGE_KEYS}
+            {k: v for k, v in page.items()
+             if k not in _OPTIONAL_PAGE_KEYS and k != "_change_status"}
             if isinstance(page, dict)
             else page
         )
@@ -412,6 +448,7 @@ def _normalized_pages(
     requirement_spec: dict[str, Any],
     agent_plan: dict[str, Any] | None,
     carried_pages: dict[str, dict[str, Any]] | None = None,
+    deleted_page_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """保持 RequirementSpec 页面集合不变，仅合并产品级补充字段。
 
@@ -430,9 +467,13 @@ def _normalized_pages(
         for item in _dict_items(requirement_spec.get("pages"))
     }
     pages: list[dict[str, Any]] = []
+    # 本轮删除的页面不进入产品计划：需求侧保留它们只为后续清理代码与设计稿。
+    deleted = {
+        str(item).strip() for item in (deleted_page_ids or set()) if str(item).strip()
+    }
     for source in _dict_items(requirement_spec.get("pages")):
         page_id = str(source.get("pageId") or source.get("id") or "").strip()
-        if not page_id:
+        if not page_id or page_id in deleted:
             continue
         supplement = agent_pages.get(page_id, {})
         if carried_pages:
@@ -654,15 +695,21 @@ def create_product_plan(
     agent_plan: dict[str, Any] | None = None,
     existing_plan: dict[str, Any] | None = None,
     carried_pages: dict[str, dict[str, Any]] | None = None,
+    deleted_page_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """从已确认 RequirementSpec 构造产品确认用 ProductPlan。
 
     `carried_pages` 见 `_normalized_pages`：上一轮未变的页面整份沿用，避免模型重写。
+
+    `deleted_page_ids` 是本轮要删除的页面：它们仍留在 RequirementSpec 里（供后续清理），
+    但**不进入**本轮产品计划——由调用方在生成后统一以 `deleted` 标记追加。
     """
 
     app_info = requirement_spec.get("app_info")
     app_info = app_info if isinstance(app_info, dict) else {}
-    pages = _normalized_pages(requirement_spec, agent_plan, carried_pages)
+    pages = _normalized_pages(
+        requirement_spec, agent_plan, carried_pages, deleted_page_ids,
+    )
     plan = {
         "schema_version": PRODUCT_PLAN_SCHEMA_VERSION,
         "version": str((existing_plan or {}).get("version") or "0.1.0"),
@@ -729,9 +776,32 @@ def requirement_spec_sha256(requirement_spec: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[str, Any]) -> list[str]:
-    """校验 ProductPlan v4 的结构、需求边界和稳定引用均闭合。"""
+def validate_product_plan(
+    product_plan: dict[str, Any],
+    requirement_spec: dict[str, Any],
+    *,
+    deleted_page_ids: set[str] | None = None,
+) -> list[str]:
+    """校验 ProductPlan v4 的结构、需求边界和稳定引用均闭合。
 
+    `deleted_page_ids` 是本轮要求删除的页面：需求侧为了保留清理依据会把它们继续
+    留在 `RequirementSpec.pages`（标 `_change_status="deleted"`），但它们**不应出现在**
+    产品计划里。不剔除会把"模型正确删掉页面"判成"页面缺失"，让产品规划永远无法通过。
+    删除集合优先用调用方显式传入的值，其次读 spec 上的标记。
+    """
+
+    deleted = {
+        str(item).strip() for item in (deleted_page_ids or set()) if str(item).strip()
+    }
+    if not deleted:
+        deleted = {
+            str(item.get("pageId") or "").strip()
+            for item in _dict_items(requirement_spec.get("pages"))
+            if str(item.get("_change_status") or "") == "deleted"
+        }
+    # 产品计划**保留**本轮删除的页面（标 `_change_status="deleted"`），下游据此清理
+    # 页面代码与设计稿；因此页面集合仍与 RequirementSpec 完整对齐。
+    # 已删除页面不参与页面字段校验：它们的内容来自上一轮，不再是本轮要交付的定义。
     expected = [
         str(item.get("pageId") or item.get("id") or "").strip()
         for item in _dict_items(requirement_spec.get("pages"))
@@ -780,9 +850,14 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
             errors.append(f"ProductPlan.authorizationTargets.{field_name} 必须是 JSON 数组。")
     for page in _dict_items(product_plan.get("pages")):
         page_id = str(page.get("pageId") or "")
+        # 本轮删除的页面：内容取自上一轮定义，只为下游清理而保留，不参与本轮交付校验。
+        if page_id in deleted:
+            continue
         # state_requirements 作为可选字段容忍：校验前剥离，避免"未声明字段"误报。
+        # `_change_status` 是开发阶段要用的展示标记，正式产物刻意保留，不算非法字段。
         page_for_check = (
-            {k: v for k, v in page.items() if k not in _OPTIONAL_PAGE_KEYS}
+            {k: v for k, v in page.items()
+             if k not in _OPTIONAL_PAGE_KEYS and k != "_change_status"}
             if isinstance(page, dict)
             else page
         )
@@ -909,11 +984,56 @@ def validate_product_plan(product_plan: dict[str, Any], requirement_spec: dict[s
     return errors
 
 
+def deleted_page_ids_from_spec(
+    requirement_spec: dict[str, Any],
+    requirement_spec_diff: dict[str, Any] | None = None,
+) -> set[str]:
+    """从需求侧取出本轮删除的页面 ID。
+
+    优先读 diff（需求合并器的展示版带标记）；拿不到时读干净版 spec 上的标记。
+    两处都没有标记时返回空集——首轮创建没有删除概念。
+    """
+
+    source = (
+        requirement_spec_diff
+        if isinstance(requirement_spec_diff, dict) and requirement_spec_diff.get("pages")
+        else requirement_spec
+    )
+    return {
+        str(page.get("pageId") or "").strip()
+        for page in _dict_items(source.get("pages"))
+        if str(page.get("_change_status") or "") == "deleted"
+        and str(page.get("pageId") or "").strip()
+    }
+
+
+def _deleted_page_ids_on_plan(product_plan: Any) -> set[str]:
+    """从产品计划自身读已删页面。
+
+    正式 RequirementSpec 写盘前会剥离 `_change_status`，此时从需求侧推不出删除集合；
+    而产品计划刻意保留该标记供开发阶段使用，因此这里作为最可靠的兜底来源。
+    """
+
+    return {
+        str(page.get("pageId") or "").strip()
+        for page in _dict_items((product_plan or {}).get("pages") if isinstance(product_plan, dict) else None)
+        if str(page.get("_change_status") or "") == "deleted"
+        and str(page.get("pageId") or "").strip()
+    }
+
+
 def require_current_product_plan(
     value: Any,
     requirement_spec: dict[str, Any],
+    *,
+    deleted_page_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """要求下游只消费当前 pages-only ProductPlan，拒绝历史格式和无效快照。"""
+    """要求下游只消费当前 pages-only ProductPlan，拒绝历史格式和无效快照。
+
+    `deleted_page_ids` 是本轮删除的页面：它们在产品计划里只为下游清理而保留，
+    内容取自上一轮（可能已经没有 goal / 业务信息），不能按本轮交付标准校验。
+    未显式传入时先读需求标记，再从产品计划自身的 `_change_status` 兜底。
+    """
 
     if not isinstance(value, dict):
         raise ValueError("缺少当前 ProductPlan。")
@@ -921,7 +1041,14 @@ def require_current_product_plan(
         raise ValueError(
             f"当前流程只接受 {PRODUCT_PLAN_SCHEMA_VERSION}，不读取或迁移历史 ProductPlan。"
         )
-    errors = validate_product_plan(value, requirement_spec)
+    deleted = deleted_page_ids
+    if deleted is None:
+        deleted = deleted_page_ids_from_spec(requirement_spec)
+    # 正式 spec 已剥离标记时，产品计划自身的 deleted 标记是唯一可靠来源。
+    deleted = (deleted or set()) | _deleted_page_ids_on_plan(value)
+    errors = validate_product_plan(
+        value, requirement_spec, deleted_page_ids=deleted,
+    )
     if errors:
         raise ValueError("当前 ProductPlan 不符合正式契约：" + "；".join(errors))
     return value

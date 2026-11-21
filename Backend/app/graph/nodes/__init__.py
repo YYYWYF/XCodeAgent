@@ -19,7 +19,13 @@ from app.graph.nodes.lifecycle import (
     test_phase_confirmation,
 )
 from app.graph.nodes.modification import direct_modification
-from app.graph.nodes.development_readiness import development_readiness_gate
+from app.graph.nodes.development_readiness import (
+    delete_development_endpoint,
+    delete_development_endpoint_if_deleted,
+    delete_development_page,
+    delete_development_page_if_deleted,
+    development_readiness_gate,
+)
 from app.graph.nodes.api_design import api_design_readiness_gate
 from app.graph.nodes.planning import entity_source_binding, project_planning
 from app.graph.nodes.product_planning import product_planning
@@ -41,6 +47,10 @@ __all__ = [
     "builtin_authorization_bootstrap",
     "build",
     "classify_request_complexity",
+    "delete_development_endpoint",
+    "delete_development_endpoint_if_deleted",
+    "delete_development_page",
+    "delete_development_page_if_deleted",
     "development_readiness_gate",
     "api_design_readiness_gate",
     "direct_modification",

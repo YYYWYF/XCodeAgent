@@ -14,6 +14,8 @@ type DocumentData = {
   requirementSpec?: Record<string, unknown>
   productPlan?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
+  /** 本迭代的技术规划对比基线；有值才展示"本次变更 / 完整规划"与增删改标识。 */
+  technicalPlanBaseline?: Record<string, unknown>
   pages?: UiPage[]
 }
 type Props = {
@@ -42,6 +44,30 @@ async function readArtifact(
   return value as Record<string, unknown>
 }
 
+/**
+ * 读取技术规划基线，用于开发阶段展示增删改标识。
+ *
+ * 发起新迭代会清空 `plans/`，上一轮已确认的技术规划被 `start_iteration` 登记到
+ * `.devagentstudio/technical-plan-carryover.json`（跨迭代存活）。读不到就当作首轮创建
+ * （或旧工作区早于该机制），返回 undefined —— 面板会退化成单列表展示，不会报错。
+ */
+async function readTechnicalPlanBaseline(
+  workspaceRoot: string
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const payload = await readArtifact(workspaceRoot, 'technical-plan-carryover.json')
+    const plan = payload.plan
+    if (plan && typeof plan === 'object' && !Array.isArray(plan) && Object.keys(plan).length) {
+      return plan as Record<string, unknown>
+    }
+    return undefined
+  } catch {
+    // 基线缺失是正常空态（首轮创建 / 早于该机制的旧工作区 / 文件损坏），
+    // 不能让整个技术规划文档读取失败；面板退化成单列表展示即可。
+    return undefined
+  }
+}
+
 /** 按当前选择读取正式产物；需求文档继续合并 RequirementSpec 与 ProductPlan 的展示。 */
 export async function readDocument(
   workspaceRoot: string,
@@ -61,16 +87,20 @@ export async function readDocument(
       throw error
     }
   }
+  if (key === 'technical-plan') {
+    // 技术规划额外读取跨迭代基线，否则开发阶段看不到"新增/修改/未变更"标识。
+    const [technicalPlan, productPlan, technicalPlanBaseline] = await Promise.all([
+      readArtifact(workspaceRoot, 'plans/technical-plan.json'),
+      readArtifact(workspaceRoot, 'plans/product-plan.json'),
+      readTechnicalPlanBaseline(workspaceRoot)
+    ])
+    return { technicalPlan, productPlan, technicalPlanBaseline }
+  }
   const [document, productPlan] = await Promise.all([
-    readArtifact(
-      workspaceRoot,
-      key === 'requirement-spec' ? 'specs/requirement-spec.json' : 'plans/technical-plan.json'
-    ),
+    readArtifact(workspaceRoot, 'specs/requirement-spec.json'),
     readArtifact(workspaceRoot, 'plans/product-plan.json')
   ])
-  return key === 'requirement-spec'
-    ? { requirementSpec: document, productPlan }
-    : { technicalPlan: document, productPlan }
+  return { requirementSpec: document, productPlan }
 }
 
 /** 在应用产物内部只读展示上游正式文档；切换工作区、目录刷新和重试均重新读取当前文件。 */
@@ -154,6 +184,7 @@ export default function ArtifactDocument({
       requirementSpec={current?.data?.requirementSpec}
       productPlan={current?.data?.productPlan}
       technicalPlan={current?.data?.technicalPlan}
+      technicalPlanBaseline={current?.data?.technicalPlanBaseline}
       structuredDocument={
         documentKey === 'requirement-spec'
           ? 'requirement-doc'

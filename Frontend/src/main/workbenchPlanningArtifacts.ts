@@ -17,6 +17,25 @@ function validCatalog(plan: Record<string, unknown>, source: 'productPlan' | 'te
       contract.endpoints.every((endpoint) => typeof endpoint.path === 'string' && endpoint.path.trim()))
 }
 
+/** 读取本轮变更快照：技术规划确认时冻结的"新增/修改/未变更/删除"结论。 */
+async function readDevelopmentChangeSnapshot(
+  workspaceRoot: string
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const content = await fs.readFile(
+      path.join(workspaceRoot, WORKSPACE_ARTIFACT_DIR_NAME, 'development-change-snapshot.json'),
+      'utf8'
+    )
+    const value: unknown = JSON.parse(content)
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined
+  } catch {
+    // 快照只用于开发阶段打标与重做判定；缺失时目录仍可浏览，按无变更信息处理。
+    return undefined
+  }
+}
+
 /** 独立读取当前规划供目录浏览，确认状态只影响正式准入，不隐藏结构有效的待确认内容。 */
 export async function readWorkbenchPlanningArtifacts(workspaceRoot: string): Promise<{
   missing: string[]
@@ -24,6 +43,7 @@ export async function readWorkbenchPlanningArtifacts(workspaceRoot: string): Pro
   catalogIssues: PlanningCatalogIssue[]
   productPlan?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
+  changeSnapshot?: Record<string, unknown>
 }> {
   const result: {
     missing: string[]
@@ -31,7 +51,9 @@ export async function readWorkbenchPlanningArtifacts(workspaceRoot: string): Pro
     catalogIssues: PlanningCatalogIssue[]
     productPlan?: Record<string, unknown>
     technicalPlan?: Record<string, unknown>
+    changeSnapshot?: Record<string, unknown>
   } = { missing: [], invalid: [], catalogIssues: [] }
+  result.changeSnapshot = await readDevelopmentChangeSnapshot(workspaceRoot)
   const artifacts = [
     { relativePath: 'specs/requirement-spec.md', format: 'markdown' },
     { relativePath: 'specs/requirement-spec.json', format: 'json' },

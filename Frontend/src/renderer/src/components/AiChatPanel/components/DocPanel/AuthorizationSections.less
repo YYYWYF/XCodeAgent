@@ -25,6 +25,15 @@
   code { color: var(--wb-text-secondary); white-space: normal; }
 }
 
+// 角色卡片头部：名称 + 变更徽标靠右。
+.@{class-prefix}-authorization-stage-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  > strong { font-size: 15px; }
+}
+
 .@{class-prefix}-authorization-stage-resource {
   display: flex;
   flex-direction: column;

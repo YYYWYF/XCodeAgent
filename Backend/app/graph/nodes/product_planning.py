@@ -36,6 +36,7 @@ from app.services.product_plan_carryover import (
     read_product_plan_carryover,
     reconcile_product_plan_ids,
 )
+from app.services.requirement_spec_merger import CHANGE_STATUS_FIELD
 from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.workspace.product_plan_documents import (
     confirmed_product_plan_json_path,
@@ -173,6 +174,30 @@ def _validation_retry_feedback(user_feedback: str, errors: list[str]) -> str:
     return f"{user_feedback}\n\n{repair_instruction}" if user_feedback else repair_instruction
 
 
+def _deleted_page_ids_from_diff(
+    requirement_spec: dict[str, Any],
+    requirement_spec_diff: dict[str, Any] | None,
+) -> set[str]:
+    """取出本轮标记为删除的页面 ID。
+
+    `requirement_spec` 是剥离标记的干净版，`_change_status` 只存在于
+    `requirement_spec_diff`（需求侧 merger 的展示版）。两处都找不到就返回空集。
+    """
+
+    source = (
+        requirement_spec_diff
+        if isinstance(requirement_spec_diff, dict) and requirement_spec_diff.get("pages")
+        else requirement_spec
+    )
+    return {
+        str(page.get("pageId") or "").strip()
+        for page in (source.get("pages") or [])
+        if isinstance(page, dict)
+        and str(page.get(CHANGE_STATUS_FIELD) or "") == "deleted"
+        and str(page.get("pageId") or "").strip()
+    }
+
+
 def _generate_valid_product_plan(
     requirement_spec: dict[str, Any],
     *,
@@ -180,6 +205,7 @@ def _generate_valid_product_plan(
     user_feedback: str,
     carried_pages: dict[str, Any] | None = None,
     business_operation: str | None = None,
+    deleted_page_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """执行生成、校验、反馈修复的有界循环，只向下游返回合格计划。"""
 
@@ -205,6 +231,7 @@ def _generate_valid_product_plan(
                         user_feedback=retry_feedback,
                         on_token=_product_planning_token,
                         carried_pages=carried_pages,
+                        deleted_page_ids=deleted_page_ids,
                     ),
                     operation_name="产品规划模型调用",
                 )
@@ -217,7 +244,9 @@ def _generate_valid_product_plan(
                     requirement_spec,
                     candidate,
                 ),
-                *validate_product_plan(candidate, requirement_spec),
+                *validate_product_plan(
+                    candidate, requirement_spec, deleted_page_ids=deleted_page_ids,
+                ),
             ]
             last_candidate = candidate
         except ValueError as exc:
@@ -255,6 +284,8 @@ def _repair_existing_product_plan(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any],
     errors: list[str],
+    *,
+    deleted_page_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """先确定性重建旧计划，仍不合格时再进入模型自修复循环。"""
 
@@ -262,8 +293,11 @@ def _repair_existing_product_plan(
         requirement_spec,
         agent_plan=existing_plan,
         existing_plan=existing_plan,
+        deleted_page_ids=deleted_page_ids,
     )
-    remaining_errors = validate_product_plan(canonical, requirement_spec)
+    remaining_errors = validate_product_plan(
+        canonical, requirement_spec, deleted_page_ids=deleted_page_ids,
+    )
     if not remaining_errors:
         return canonical
     return _generate_valid_product_plan(
@@ -271,6 +305,7 @@ def _repair_existing_product_plan(
         existing_plan=canonical,
         user_feedback=_validation_retry_feedback("", errors),
         business_operation="repair_product_plan",
+        deleted_page_ids=deleted_page_ids,
     )
 
 
@@ -347,6 +382,8 @@ def _resolve_operation_coverage(
     candidate: dict[str, Any],
     coverage: list[dict[str, Any]],
     answers: dict[str, Any],
+    *,
+    deleted_page_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """按用户选择补齐缺失 action 或确定重复 action 的唯一权限绑定。"""
 
@@ -355,6 +392,7 @@ def _resolve_operation_coverage(
         requirement_spec,
         agent_plan=candidate,
         existing_plan=candidate,
+        deleted_page_ids=deleted_page_ids,
     )
     for item in coverage:
         rule_id = str(item["ruleId"])
@@ -393,7 +431,10 @@ def _resolve_operation_coverage(
             raise ValueError("受限操作归属选择无效，请刷新后重试。")
 
     # 新增 action 后重建服务端派生映射；重复项再以用户选中的 action 覆盖唯一目标。
-    plan = create_product_plan(requirement_spec, agent_plan=plan, existing_plan=plan)
+    plan = create_product_plan(
+        requirement_spec, agent_plan=plan, existing_plan=plan,
+        deleted_page_ids=deleted_page_ids,
+    )
     operation_rules = plan["authorizationTargets"]["operationRules"]
     operation_rules.extend(
         {"ruleId": rule_id, "pageId": page_id, "actionId": action_id}
@@ -424,9 +465,64 @@ def _operation_coverage_update(
     }
 
 
+def _inherit_page_change_status(
+    product_plan: dict[str, Any],
+    requirement_spec: dict[str, Any],
+    requirement_spec_diff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """把需求侧的逐页 `_change_status` 同步到 ProductPlan 的页面上。
+
+    需求文档与产品规划是同一份"页面清单"的两个视角：需求侧由 merger 标好
+    新增/修改/删除/未变更，产品侧必须沿用同一结论，用户才能在产品规划里看到
+    "这页本轮被删了"。不能各自判定 —— 两边口径分叉会直接误导用户。
+
+    标记来源优先 `requirement_spec_diff`：`requirement_spec` 是剥离标记的干净版
+    （写盘与校验用），带标记的展示版单独存在 diff 里（见 requirements 节点）。
+    两者都没有标记时原样返回，不做任何改动。
+
+    `_change_status` 只是展示标记，正式写盘前会被剥离（与需求侧一致）。
+    """
+
+    marked_source = (
+        requirement_spec_diff
+        if isinstance(requirement_spec_diff, dict) and requirement_spec_diff.get("pages")
+        else requirement_spec
+    )
+    status_by_page = {
+        str(page.get("pageId") or "").strip(): str(page.get(CHANGE_STATUS_FIELD) or "").strip()
+        for page in (marked_source.get("pages") or [])
+        if isinstance(page, dict)
+    }
+    if not any(status_by_page.values()):
+        return product_plan
+    pages = product_plan.get("pages")
+    if not isinstance(pages, list):
+        return product_plan
+    synced: list[Any] = []
+    for page in pages:
+        if not isinstance(page, dict):
+            synced.append(page)
+            continue
+        status = status_by_page.get(str(page.get("pageId") or "").strip())
+        synced.append({**page, CHANGE_STATUS_FIELD: status} if status else page)
+    return {**product_plan, "pages": synced}
+
+
+def _without_page_change_status(product_plan: dict[str, Any]) -> dict[str, Any]:
+    """落盘前的 ProductPlan 页面处理。
+
+    **刻意保留 `_change_status`**：开发阶段的工作台目录要逐页标注"本轮新增 / 修改 /
+    继承 / 删除"，它必须随正式产物一起落盘。字段只是展示用的变更类型，不改变任何
+    产品语义；保留它比让开发阶段再去别处拼一份更不易出错。
+
+    函数名保持原样，仅作为"落盘前最后一个加工点"沿用；实际不再剥离。
+    """
+
+    return product_plan
+
+
 def _ordered_page_ids(artifact: dict[str, Any]) -> list[str]:
     """按顺序取产物（RequirementSpec 或 ProductPlan）的 pageId 列表。"""
-
     return [
         str(page.get("pageId") or "")
         for page in (artifact.get("pages") or [])
@@ -526,6 +622,11 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     requirement_spec = state.get("requirement_spec")
     if not isinstance(requirement_spec, dict):
         raise ValueError("产品规划必须读取已校验的 RequirementSpec 草稿。")
+    # 本轮删除的页面：需求侧把它们保留在 spec 里（供后续清理），但产品计划不应包含。
+    # 后续所有校验 / 修复都必须带上这份集合，否则"模型正确删页"会被判成"页面缺失"。
+    deleted_page_ids = _deleted_page_ids_from_diff(
+        requirement_spec, state.get("requirement_spec_diff")
+    )
     interaction = _application_planning_interaction(state)
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _product_planning_request(state, interaction)
@@ -554,8 +655,11 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             existing,
             coverage,
             answers,
+            deleted_page_ids=deleted_page_ids,
         )
-        errors = validate_product_plan(resolved, requirement_spec)
+        errors = validate_product_plan(
+            resolved, requirement_spec, deleted_page_ids=deleted_page_ids,
+        )
         if errors:
             raise ValueError("受限操作归属处理后 ProductPlan 仍未通过校验：" + "；".join(errors))
         return _pending_product_plan_update(state, resolved, requirement_spec)
@@ -579,7 +683,9 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
         )
         pages_drifted = _ordered_page_ids(existing) != _ordered_page_ids(requirement_spec)
         if not revision_generation and not (confirming and pages_drifted):
-            existing_errors = validate_product_plan(existing, requirement_spec)
+            existing_errors = validate_product_plan(
+                existing, requirement_spec, deleted_page_ids=deleted_page_ids,
+            )
             if existing_errors:
                 logger.warning("existing_product_plan_validation_errors: %s", existing_errors)
                 try:
@@ -587,6 +693,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                         requirement_spec,
                         existing,
                         existing_errors,
+                        deleted_page_ids=deleted_page_ids,
                     )
                 except ProductPlanOperationCoverageError as exc:
                     return _operation_coverage_update(state, exc.candidate, exc.coverage)
@@ -633,6 +740,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                     confirmed_requirement_spec,
                     agent_plan=existing,
                     existing_plan=existing,
+                    deleted_page_ids=deleted_page_ids,
                 )
                 if _ordered_page_ids(existing)
                 != _ordered_page_ids(confirmed_requirement_spec)
@@ -644,7 +752,9 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             "confirmation_status": "confirmed",
             "requirement_spec_sha256": requirement_spec_sha256(confirmed_requirement_spec),
         }
-        errors = validate_product_plan(confirmed, confirmed_requirement_spec)
+        errors = validate_product_plan(
+            confirmed, confirmed_requirement_spec, deleted_page_ids=deleted_page_ids,
+        )
         if errors:
             logger.warning("confirmed_product_plan_validation_errors: %s", errors)
             try:
@@ -652,6 +762,7 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
                     confirmed_requirement_spec,
                     synchronized,
                     errors,
+                    deleted_page_ids=deleted_page_ids,
                 )
             except ProductPlanOperationCoverageError as exc:
                 return _operation_coverage_update(state, exc.candidate, exc.coverage)
@@ -763,6 +874,10 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
             existing_plan=existing if isinstance(existing, dict) else None,
             user_feedback=feedback,
             carried_pages=read_product_plan_carryover(str(state.get("workspace") or "")),
+            # 删除标记只存在于 diff 版里：干净版 spec 已剥离 `_change_status`。
+            deleted_page_ids=_deleted_page_ids_from_diff(
+                requirement_spec, state.get("requirement_spec_diff")
+            ),
         )
     except ProductPlanOperationCoverageError as exc:
         return _operation_coverage_update(state, exc.candidate, exc.coverage)
@@ -770,16 +885,23 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     # 那会让上一轮按旧 ID 产出的设计稿对不上、继承被拒（见 product_plan_carryover）。
     # 未变的页面已在 _normalized_pages 里整份沿用，这里只兜"需求确实变了"的残余情况。
     reconcile_product_plan_ids(plan, read_product_plan_carryover(str(state.get("workspace") or "")))
+    # 页面变更状态沿用需求侧结论（新增/修改/删除/未变更），供产品规划文档分区展示。
+    plan_view = _inherit_page_change_status(
+        plan,
+        requirement_spec,
+        state.get("requirement_spec_diff"),
+    )
     markdown_path, json_path = write_generated_documents(
         state, [product_plan_draft_markdown_path(state)],
-        write_product_plan_documents, state, plan,
+        # 落盘的是干净版：`_change_status` 只是本轮展示视图，不是产物业务事实。
+        write_product_plan_documents, state, _without_page_change_status(plan_view),
     )
     return {
         "phase": "product_planning",
         "status": "requires_user_input",
-        "product_plan": plan,
+        "product_plan": plan_view,
         "product_plan_path": markdown_path,
         "product_plan_json_path": json_path,
-        "clarification": _confirmation_payload(plan),
+        "clarification": _confirmation_payload(plan_view),
         "timeline": ["product_planning"],
     }

@@ -1,4 +1,12 @@
 .@{class-prefix}-application-outline {
+  // 变更徽标复用的语义色（与需求文档同源）；该面板不继承 .requirement-doc-panel，
+  // 这里补上浅色值，暗色主题在文件末尾覆盖。
+  --req-green: #1a7f37;
+  --req-green-soft: rgba(26, 127, 55, 0.1);
+  --req-green-border: rgba(26, 127, 55, 0.3);
+  --req-orange: #b45309;
+  --req-orange-soft: rgba(180, 83, 9, 0.1);
+  --req-orange-border: rgba(180, 83, 9, 0.32);
   --outline-accent: #6b3cf0;
   --outline-accent-gradient: linear-gradient(145deg, #a97aff 0%, #7e50f4 52%, #6337e8 100%);
   --outline-accent-soft: linear-gradient(
@@ -118,5 +126,118 @@
 
   &.stale {
     color: var(--color-warning, #d89614);
+  }
+}
+
+// ===== 开发阶段产物变更标记（新增 / 有变更 / 未变更 / 待删除） =====
+// 与设计阶段需求文档的变更徽标（`requirement-doc-change-badge`）同一套形状与配色：
+// 胶囊 + 1px 8px 内边距 + 11px 字号 + 500 字重，语义色新增绿、有变更橙、未变更灰、待删除红。
+.@{class-prefix}-workbench-change-badge {
+  // 徽标可能落在纵向 flex 容器里（如 `.api-copy`）：不设 align-self 时会被
+  // stretch 拉满整行宽度，看起来像一个横贯全宽的框。这里强制按内容宽度左对齐。
+  align-self: center;
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
+  flex: 0 0 auto;
+  margin-inline-start: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  white-space: nowrap;
+
+  // 接口名称行、分组标签与页面标签行都用 gap 控制间距，避免与上面的 margin 叠加成两倍。
+  .@{class-prefix}-api-endpoint-title-row > &,
+  .@{class-prefix}-api-group-label > &,
+  .@{class-prefix}-outline-label-row > & {
+    margin-inline-start: 0;
+  }
+  &.@{class-prefix}-is-added {
+    color: var(--req-green, #4ac26b);
+    background: var(--req-green-soft, rgba(74, 194, 107, 0.12));
+    border: 1px solid var(--req-green-border, rgba(74, 194, 107, 0.32));
+  }
+
+  &.@{class-prefix}-is-modified {
+    color: var(--req-orange, #e8a13d);
+    background: var(--req-orange-soft, rgba(232, 161, 61, 0.12));
+    border: 1px solid var(--req-orange-border, rgba(232, 161, 61, 0.32));
+  }
+
+  &.@{class-prefix}-is-unchanged {
+    color: var(--wb-text-secondary, #65666a);
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.04));
+    border: 1px solid var(--wb-border, rgba(0, 0, 0, 0.08));
+  }
+
+  &.@{class-prefix}-is-deleted {
+    color: #cf1322;
+    background: rgba(255, 77, 79, 0.08);
+    border: 1px solid rgba(255, 77, 79, 0.3);
+  }
+}
+
+// ===== 页面行的名称/徽标排布，与接口行保持一致 =====
+// 公共 `.outline-label` 用 `flex: 1` 撑满，徽标就被推到整行最右侧，看着和名称脱节；
+// 接口行的名称只占内容宽度、徽标紧跟其后、右侧留白，两种版块观感因此不一致。
+// 这里只覆盖本面板的页面行，不修改公共样式（会话侧边栏等仍在用）。
+.@{class-prefix}-application-outline .@{class-prefix}-outline-label-row {
+  > .@{class-prefix}-outline-label {
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  // 徽标紧跟名称，不参与收缩，与接口行同一套间距。
+  > .@{class-prefix}-workbench-change-badge {
+    flex: 0 0 auto;
+    margin-inline-start: 6px;
+  }
+
+  // 名称 + 徽标之后的空间留给归属标签/计数，使它们靠右而不是贴着徽标。
+  > .@{class-prefix}-development-count,
+  > .@{class-prefix}-iteration-badge {
+    flex: 0 0 auto;
+    margin-inline-start: auto;
+  }
+}
+
+// 待删除产物：名称保留原样（不再划线），用"待删除"徽标表达状态即可。
+// 划线会与同级其它产物的名称观感不一致，反而让人以为它已经失效。
+// 它们仍然可点：点进去执行的是清理该产物代码的删除动作，因此悬停要有可点击的反馈。
+.@{class-prefix}-outline-row.@{class-prefix}-is-deleted,
+.@{class-prefix}-api-row.@{class-prefix}-is-deleted {
+  opacity: 1;
+  cursor: pointer;
+
+  .@{class-prefix}-outline-label,
+  .@{class-prefix}-api-copy strong {
+    color: var(--wb-danger, #f5222d);
+    text-decoration: none;
+  }
+
+  &:hover {
+    background: color-mix(in srgb, var(--wb-danger, #f5222d) 7%, transparent);
+  }
+}
+
+// 暗色主题：提亮语义色并加大底纹透明度，保证深色底上仍然清楚。
+.@{class-prefix}-workbench-shell[data-theme='dark'] .@{class-prefix}-application-outline {
+  --req-green: #4ac26b;
+  --req-green-soft: rgba(74, 194, 107, 0.16);
+  --req-green-border: rgba(74, 194, 107, 0.4);
+  --req-orange: #e8a13d;
+  --req-orange-soft: rgba(232, 161, 61, 0.16);
+  --req-orange-border: rgba(232, 161, 61, 0.42);
+
+  // "待删除"用固定红色，深色底上需要单独提亮，否则会糊成一片。
+  .@{class-prefix}-workbench-change-badge.@{class-prefix}-is-deleted {
+    color: #ff7b72;
+    background: rgba(255, 123, 114, 0.14);
+    border-color: rgba(255, 123, 114, 0.36);
   }
 }

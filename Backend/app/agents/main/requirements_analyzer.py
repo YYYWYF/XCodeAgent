@@ -502,7 +502,21 @@ def _requirements_prompt(
         "renames. Update affected references when an identifier changes. Summarize the complete merged "
         "application in app_info.summary. Return the complete document to authoritatively replace the old document; "
         "never return a partial patch.\n"
-        f"Existing RequirementSpec:\n{json.dumps(visible_existing_spec, ensure_ascii=False)}\n"
+        "**Critical page-preservation rule**: every existing page MUST remain unchanged "
+        "(same pageId, name, path, description and content) unless the latest feedback explicitly "
+        "asks to modify or delete that page. Even when a new request looks identical or very similar "
+        "to an existing page, keep the existing page verbatim AND add the newly requested page with "
+        "a different pageId and path. Do not fold a new request into an existing page, merge pages, "
+        "or drop an existing page because it seems redundant.\n"
+        # 删除必须是**显式声明**：平台无法区分"用户要删"和"模型漏了"，
+        # 只能靠模型把删除意图单独说出来。没列进 deleted_pages 的基线页面一律原样继承。
+        "**Explicit deletion declaration**: whenever the latest feedback asks to remove an existing "
+        "page (删除/去掉/移除/不要了 etc.), you MUST list that page's pageId in a top-level "
+        "`deleted_pages` array, and omit the page from `pages`. If the feedback asks for no removal, "
+        "either omit `deleted_pages` or return an empty array. Never put a page in `deleted_pages` "
+        "unless the feedback explicitly asks to remove it — a page you merely forgot to describe is "
+        "NOT deleted, it must stay in `pages` unchanged.\n"
+        f"Existing RequirementSpec:\n{json.dumps(visible_existing_spec, ensure_ascii=False)}\n\n"
         if visible_existing_spec
         else "Create a new RequirementSpec from the user request.\n"
     )
@@ -789,6 +803,13 @@ def _analyze_requirements_once(
     if not asks_for_clarification and not isinstance(agent_spec, dict):
         # 需求已被判定为清晰时必须有完整 JSON，不能退回固定页面模板继续向下游传播。
         raise ValueError("需求 AI 未返回完整 RequirementSpec JSON。")
+    # `deleted_pages` 是删除意图的**显式声明**，不是 RequirementSpec 的业务字段：
+    # 取出来后立刻从 spec 上剥掉，避免它混进正式产物；后续由 merger 消费。
+    explicit_deleted_pages = _explicit_deleted_pages(agent_spec)
+    if isinstance(agent_spec, dict):
+        agent_spec = {
+            key: value for key, value in agent_spec.items() if key != "deleted_pages"
+        }
     # ask_user 不采用并行 JSON；权限角色和规则由独立事实提取步骤写入草稿。
     effective_agent_spec = (
         deepcopy(agent_spec)
@@ -865,11 +886,35 @@ def _analyze_requirements_once(
     )
     return {
         "requirement_spec": spec,
+        # 显式删除声明：由 requirements 节点转交给 merger，决定哪些基线页面标 deleted。
+        "explicit_deleted_pages": explicit_deleted_pages,
         "clarification": clarification,
     }
 
 
 _REQUIREMENT_SPEC_CONTRACT_MARKERS = ('"app_info"', '"user_roles"', '"feature_modules"')
+
+
+def _explicit_deleted_pages(agent_spec: Any) -> list[str]:
+    """读取模型显式声明的待删除页面 ID（`deleted_pages`）。
+
+    这是"用户明确要删"的唯一可信信号。平台无法从"页面没出现在输出里"反推删除
+    （模型漏写与用户要删在数据上无法区分），因此必须由模型单独声明。
+    容忍字段名大小写差异（deleted_pages / deletedPages）与字符串、列表两种写法。
+    """
+
+    if not isinstance(agent_spec, dict):
+        return []
+    raw = agent_spec.get("deleted_pages")
+    if raw is None:
+        raw = agent_spec.get("deletedPages")
+    values: list[Any] = raw if isinstance(raw, list) else [raw] if raw is not None else []
+    result: list[str] = []
+    for value in values:
+        page_id = str(value or "").strip()
+        if page_id and page_id not in result:
+            result.append(page_id)
+    return result
 
 
 def _requirement_spec_fields_missing(agent_spec: Any) -> bool:

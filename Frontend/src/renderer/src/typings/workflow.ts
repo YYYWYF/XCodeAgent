@@ -1332,6 +1332,15 @@ export type DevelopmentArtifactProgress = {
    * 哪些是本轮的"。这个字段就是那个被压掉的维度；一旦写下就不再改写。
    */
   completedBranchName?: string | null
+  /**
+   * 最近一次"开发完成"的运行与线程（每轮开发成功都会刷新）。
+   *
+   * 与上面的 `completedRunId` / `completedThreadId` 不同：那两个是**首次**完成事实，
+   * 用于归属标签，不会被覆盖。重新开发一个已完成目标时只有这两个会变，
+   * 前端据此判断"本轮运行是否完成了该目标"。
+   */
+  lastCompletedRunId?: string | null
+  lastCompletedThreadId?: string | null
 }
 
 export type DevelopmentArtifacts = {

@@ -14,6 +14,31 @@ from app.services.authorization_resource_catalog import authorization_resource_c
 from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX, backend_module_unit_id
 
 
+def _active_page_records(project_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """返回仍需开发的页面记录，剔除本轮已标记删除的页面。
+
+    正式 TechnicalPlan 按契约**保留** `_change_status="deleted"` 的对象（开发阶段要据此
+    定位并清理已生成代码和设计稿）。它们不能进入构建骨架：一旦建成 `page:<id>` Unit，
+    构建阶段就会为这个"已经删掉"的页面重新安排前端开发任务。
+    """
+
+    return [
+        page for page in project_plan_page_records(project_plan)
+        if str(page.get("_change_status") or "") != "deleted"
+    ]
+
+
+def _active_page_id_list(project_plan: dict[str, Any]) -> list[str]:
+    """按页面记录顺序返回仍在开发范围内的 pageId。"""
+
+    result: list[str] = []
+    for page in _active_page_records(project_plan):
+        page_id = str(page.get("pageId") or page.get("id") or "").strip()
+        if page_id and page_id not in result:
+            result.append(page_id)
+    return result
+
+
 def _public_unit_ids(project_plan: dict[str, Any]) -> tuple[str, ...]:
     """返回 Endpoint API 设计旅程固定需要的公共 Unit。"""
 
@@ -89,7 +114,7 @@ def _build_units(
     unit_ids.extend(_backend_module_unit_ids(project_plan.get("api_contracts")))
     unit_ids.extend(
         f"page:{page_id}"
-        for page_id in _ids(project_plan_page_records(project_plan), "pageId")
+        for page_id in _active_page_id_list(project_plan)
     )
     return {
         unit_id: _unit_definition(
@@ -164,7 +189,7 @@ def _unit_graph(
         edges.append({"from": module_unit_id, "to": "app:integration", "type": "depends_on"})
 
     auth_resource_pages = authorization_resource_consumer_page_ids(project_plan)
-    for page in project_plan_page_records(project_plan):
+    for page in _active_page_records(project_plan):
         page_id = str(page.get("pageId") or "")
         if not page_id:
             continue
@@ -236,7 +261,7 @@ def _skeleton_fingerprint(
         "project_plan_version": project_plan.get("version"),
         "architecture": project_plan.get("architecture"),
         "permission_model": project_plan.get("permission_model"),
-        "pages": project_plan_page_records(project_plan),
+        "pages": _active_page_records(project_plan),
         # 绑定增删会改变 Page 前置依赖，必须参与骨架复用指纹。
         "authorization_resource_pages": sorted(authorization_resource_consumer_page_ids(project_plan)),
         "endpoint_api_design_policy": API_DESIGN_SCHEMA_VERSION,

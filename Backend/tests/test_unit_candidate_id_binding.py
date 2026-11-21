@@ -1,14 +1,22 @@
-"""验证缺失 ID 的确定性绑定与歧义拒绝边界。"""
+"""验证缺失 ID 的确定性绑定与歧义拒绝边界。
+
+后端模块 Unit 已改为按接口分组的 `backend:module:<contract>`，候选是
+`key/title/files` 的草稿形态并由生产 Parser 编译；非后端 Unit 仍使用
+`unit_id/deliverables` 形态做缺失 ID 绑定。
+"""
 
 import json
 import unittest
 from copy import deepcopy
 
 from app.services.unit_candidate_parser import RawUnitCandidateParseError, parse_raw_unit_candidate
-from app.services.unit_task_manifest import unit_task_identity_manifest
-from app.services.unit_generation_contracts import UnitGenerationContext
+from app.services.unit_task_manifest import (
+    backend_stage_manifest,
+    unit_task_identity_manifest,
+)
 from app.services.business_acceptance import DELIVERABLE_TARGET_IDENTITY_FIELD_BY_KIND
-from tests.test_unit_task_prompt import _backend_endpoint_context, _unit_context, _requirement
+from app.services.unit_generation_contracts import UnitGenerationContext
+from tests.unit_prompt_contexts import _backend_endpoint_context, _requirement, _unit_context
 from tests.test_unit_candidate_validator import _context, _frontend_api_context
 
 
@@ -28,6 +36,30 @@ def tasks_for(context):
     return result
 
 
+def backend_drafts(context):
+    """构造后端模块草稿：每个阶段任务用 files[].covers 覆盖其全部职责序号。"""
+
+    drafts = []
+    for record in backend_stage_manifest(context):
+        covers = list(range(1, len(record["requirement_ids"]) + 1))
+        path = (
+            f"backend/src/main/java/com/cmbchina/backend/Orders{record['stage'].title()}Handler.java"
+            if record["stage"] == "controller"
+            else "backend/src/main/java/com/cmbchina/backend/OrdersService.java"
+        )
+        drafts.append({
+            "key": record["key"],
+            "title": f"实现 {record['key']}",
+            "files": [{
+                "path": path,
+                "operation": "add",
+                "description": "实现该阶段职责",
+                "covers": covers,
+            }],
+        })
+    return drafts
+
+
 class UnitCandidateIdBindingTests(unittest.TestCase):
     """通过生产 Parser 入口验证职责匹配，不依赖标题、数组顺序或交付物命名。"""
 
@@ -41,7 +73,6 @@ class UnitCandidateIdBindingTests(unittest.TestCase):
         """覆盖多来源后端、页面、多 Endpoint API、bootstrap 和静态数据分组。"""
 
         contexts = [
-            _backend_endpoint_context("database", "external_api"),
             _context(), _frontend_api_context("orders.list", "orders.detail"),
             _unit_context("backend:bootstrap", "backend", [
                 _requirement("backend.bootstrap", "database", data_source_type="database"),
@@ -59,45 +90,70 @@ class UnitCandidateIdBindingTests(unittest.TestCase):
                 self.assertEqual([task["id"] for task in bound], list(reversed(unit_task_identity_manifest(context))))
                 self.assertEqual(tasks, original)
 
+    def test_backend_module_binds_exact_stage_task_ids(self):
+        """后端模块按阶段清单编译，任务 ID 不依赖模型标题。"""
+
+        context = _backend_endpoint_context("database", "external_api")
+        drafts = backend_drafts(context)
+        bound = self.parse(context, list(reversed(drafts)))
+
+        expected = {record["task_id"] for record in backend_stage_manifest(context)}
+        # 编译顺序由阶段清单决定，与草稿顺序无关；只校验身份集合与数量。
+        self.assertEqual({task["id"] for task in bound}, expected)
+        self.assertEqual(len(bound), len(expected))
+        # 草稿正文不被就地改写，编译结果独立返回。
+        self.assertEqual(drafts[0]["key"], backend_stage_manifest(context)[0]["key"])
+
     def test_existing_ids_and_other_fields_are_preserved(self):
         """合法混合候选只补缺失 ID，其他字段连同非法内容原样交给后续校验。"""
 
-        context = _backend_endpoint_context()
+        # 页面 Unit 只有一个任务时，另造第二个任务以验证"齐全 + 非法字段原样保留"。
+        context = _context()
         tasks = tasks_for(context)
         tasks[0]["id"] = next(iter(unit_task_identity_manifest(context)))
-        tasks[1]["owner"] = "wrong-owner"
-        result = self.parse(context, tasks)
-        self.assertEqual(result[0], tasks[0])
-        self.assertEqual(result[1]["owner"], "wrong-owner")
+        tasks.append({**deepcopy(tasks[0]), "id": "", "owner": "wrong-owner"})
+        tasks[1].pop("id")
+        with self.assertRaises(RawUnitCandidateParseError):
+            # 剩余职责已被占满，多出来的任务无法绑定 → 显式拒绝而不是静默丢弃。
+            self.parse(context, tasks)
+        single = tasks_for(context)
+        single[0]["owner"] = "wrong-owner"
+        result = self.parse(context, single)
+        self.assertEqual(result[0]["id"], next(iter(unit_task_identity_manifest(context))))
+        self.assertEqual(result[0]["owner"], "wrong-owner")
 
-    def test_ambiguous_candidates_fail_without_partial_binding(self):
-        """拒绝重复、缺失、多余、合并职责、错误归属、目标或已有 ID。"""
+    def test_backend_module_rejects_unknown_or_duplicate_keys(self):
+        """后端模块只接受清单内的唯一 key；未知、重复或缺少文件都拒绝。"""
 
         context = _backend_endpoint_context()
-        base = tasks_for(context)
-        cases = {}
-        cases["duplicate"] = base + [deepcopy(base[0])]
-        cases["missing"] = base[:-1]
-        mixed = deepcopy(base)
-        mixed[0]["deliverables"] += mixed.pop()["deliverables"]
-        cases["mixed"] = mixed
-        for field, value in (("kind", "backend.repository"), ("target_id", "other"), ("provides", ["unknown"])):
-            tasks = deepcopy(base)
-            tasks[0]["deliverables"][0][field] = value
-            cases[field] = tasks
-        for field, value in (("unit_id", "other-unit"), ("id", "wrong-id"), ("id", ""), ("task_id", "alias")):
-            tasks = deepcopy(base)
-            tasks[0][field] = value
-            cases[f"{field}:{value}"] = tasks
-        repeated = deepcopy(base)
-        repeated[0]["deliverables"].append(deepcopy(repeated[0]["deliverables"][0]))
-        cases["duplicate_requirement"] = repeated
+        base = backend_drafts(context)
+        cases = {
+            "unknown_key": [*base, {**deepcopy(base[0]), "key": "unknown"}],
+            "duplicate_key": [*base, deepcopy(base[0])],
+            "missing_files": [{**deepcopy(base[0]), "files": []}, base[1]],
+            "extra_field": [{**deepcopy(base[0]), "owner": "x"}, base[1]],
+        }
         for name, tasks in cases.items():
             before = deepcopy(tasks)
             with self.subTest(case=name), self.assertRaises(RawUnitCandidateParseError) as caught:
                 self.parse(context, tasks)
             self.assertEqual(tasks, before)
             self.assertTrue(all(issue.retryable for issue in caught.exception.issues))
+
+    def test_backend_module_rejects_uncovered_requirements(self):
+        """covers 必须覆盖该阶段全部职责序号，漏项或越界都拒绝。"""
+
+        context = _backend_endpoint_context()
+        base = backend_drafts(context)
+        first = backend_stage_manifest(context)[0]
+        for name, covers in (
+            ("missing", list(range(1, len(first["requirement_ids"])))),
+            ("out_of_range", [len(first["requirement_ids"]) + 1]),
+        ):
+            tasks = deepcopy(base)
+            tasks[0]["files"][0]["covers"] = covers
+            with self.subTest(case=name), self.assertRaises(RawUnitCandidateParseError):
+                self.parse(context, tasks)
 
     def test_api_contract_cannot_split_or_merge(self):
         """同一 Contract 的多个 Endpoint 必须完整属于同一任务。"""
@@ -118,7 +174,7 @@ class UnitCandidateIdBindingTests(unittest.TestCase):
             self.parse(context, tasks)
 
     def test_incremental_endpoint_does_not_recreate_retained_tasks(self):
-        """增量候选只绑定当前 controller，既有阶段只作为同 Unit 依赖保留。"""
+        """增量候选只绑定当前职责，既有阶段只作为同 Unit 依赖保留。"""
 
         payload = _backend_endpoint_context().model_dump(mode="json")
         payload["generation_requirements"] = payload["generation_requirements"][-1:]
@@ -127,12 +183,22 @@ class UnitCandidateIdBindingTests(unittest.TestCase):
             {"id": f"{unit_id}::service", "unit_id": unit_id},
         ]
         context = UnitGenerationContext.model_validate(payload)
-        tasks = tasks_for(context)
-        tasks[0]["dependencies"] = [f"{unit_id}::service"]
-        result = self.parse(context, tasks)
+        records = backend_stage_manifest(context)
+        drafts = [{
+            "key": record["key"],
+            "title": f"实现 {record['key']}",
+            "files": [{
+                "path": "backend/src/main/java/com/cmbchina/backend/OrdersController.java",
+                "operation": "add",
+                "description": "实现控制器职责",
+                "covers": list(range(1, len(record["requirement_ids"]) + 1)),
+            }],
+        } for record in records]
+
+        result = self.parse(context, drafts)
+
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["id"], f"{unit_id}::controller")
-        self.assertEqual(result[0]["dependencies"], [f"{unit_id}::service"])
+        self.assertEqual(result[0]["id"], records[0]["task_id"])
 
     def test_absent_id_is_distinct_from_invalid_existing_values(self):
         """空值、类型错误、空白和已有 ID 不归一化；无 Context 时仍严格拒绝缺 ID。"""

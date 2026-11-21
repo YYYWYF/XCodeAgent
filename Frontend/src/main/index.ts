@@ -80,6 +80,8 @@ type WorkbenchPageOption = {
   detailPlanStatus?: string
   hasDetailPlan: boolean
   taskSummary?: WorkbenchTaskSummary
+  /** 本轮相对基线的变更类型：新增/修改/继承/删除。deleted 时禁止进入开发流程。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
 }
 
 type WorkbenchTaskSummary = {
@@ -91,6 +93,8 @@ type WorkbenchTaskSummary = {
 }
 
 type WorkbenchPageTreeNode = {
+  /** 本轮相对基线的变更类型（菜单节点取子页面聚合）。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   key: string
   type: 'menu' | 'page'
   label: string
@@ -115,6 +119,8 @@ type WorkbenchApiContract = {
   label: string
   name: string
   entityIds: string[]
+  /** 本轮相对基线的变更类型。deleted 时整组不再参与开发。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   endpoints: Array<{
     apiContractId: string
     id: string
@@ -125,6 +131,8 @@ type WorkbenchApiContract = {
     detailPlanStatus?: string
     hasDetailPlan?: boolean
     designed?: boolean
+    /** 本轮相对基线的变更类型。deleted 时禁止进入开发流程。 */
+    changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   }>
 }
 
@@ -132,6 +140,8 @@ type WorkbenchEntityOption = {
   id: string
   label: string
   purpose: string
+  /** 本轮相对基线的变更类型。deleted 时禁止进入开发流程。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   dataSourceType: string
   fields?: Array<{
     name: string
@@ -227,8 +237,37 @@ function projectPlanPages(value: unknown): Map<string, Record<string, unknown>> 
   return result
 }
 
+type WorkbenchChangeStatus = 'added' | 'modified' | 'unchanged' | 'deleted'
+
+/** 读取正式产物上的逐项变更类型；缺失或不认识时返回空对象（不附加字段）。 */
+function changeStatusOf(record: Record<string, unknown>): { changeStatus?: WorkbenchChangeStatus } {
+  const status = String(record._change_status || '').trim()
+  return status === 'added' || status === 'modified' || status === 'unchanged' || status === 'deleted'
+    ? { changeStatus: status }
+    : {}
+}
+
+/** 从本轮变更快照读取某个产物的变更类型；快照缺失或字段不认识时返回 undefined。 */
+function snapshotChangeStatus(
+  snapshot: Record<string, unknown> | undefined,
+  ...keys: string[]
+): WorkbenchChangeStatus | undefined {
+  let current: unknown = snapshot
+  for (const key of keys) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined
+    current = (current as Record<string, unknown>)[key]
+  }
+  const status = String(current || '').trim()
+  return status === 'added' || status === 'modified' || status === 'unchanged' || status === 'deleted'
+    ? (status as WorkbenchChangeStatus)
+    : undefined
+}
+
 /** 从当前计划的 pages 生成工作台页面目录。 */
-function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
+function projectPlanPageOptions(
+  value: unknown,
+  changeSnapshot?: Record<string, unknown>
+): WorkbenchPageOption[] {
   return [...projectPlanPages(value).entries()].map(([pageId, record], index) => ({
     key: pageId,
     pageId,
@@ -237,7 +276,64 @@ function projectPlanPageOptions(value: unknown): WorkbenchPageOption[] {
     purpose: normalizeWorkbenchNodeLabel(record.description || record.name, `页面 ${index + 1}`),
     designed: false,
     detailPlanStatus: '',
-    hasDetailPlan: false
+    hasDetailPlan: false,
+    // 变更类型优先取本轮快照（技术规划确认时冻结）；正式产物只在模型漏删时残留 deleted 标记。
+    // 两者都没有时不附加字段，界面按"无变更信息"处理。
+    ...(snapshotChangeStatus(changeSnapshot, 'pages', pageId)
+      ? { changeStatus: snapshotChangeStatus(changeSnapshot, 'pages', pageId) }
+      : changeStatusOf(record))
+  }))
+}
+
+/** 把本轮接口变更类型合并进工作台接口目录，供界面打标与禁用已删除/未变更接口。 */
+function applyEndpointChangeStatus(
+  contracts: WorkbenchApiContract[],
+  changeSnapshot?: Record<string, unknown>
+): WorkbenchApiContract[] {
+  if (!changeSnapshot) return contracts
+  // 分组 id 是规范化后的 base_path（如 `/api/access-cards`），而快照按技术规划的
+  // 契约 ID（如 `access_card_contract`）索引，二者不能直接混用；接口自身保留了
+  // 真实的 apiContractId，所以按"接口 → 它所属契约"逐项取变更类型。
+  return contracts.map((contract) => {
+    const statuses = new Map(
+      contract.endpoints.map((endpoint) => [
+        endpoint.id,
+        snapshotChangeStatus(changeSnapshot, 'endpoints', endpoint.apiContractId, endpoint.id)
+      ])
+    )
+    const endpointStatuses = [...statuses.values()].filter(
+      (status): status is WorkbenchChangeStatus => Boolean(status)
+    )
+    // 分组状态取组内接口的汇总：只要还有一个接口有实质变更，分组就不能整体禁用。
+    const groupStatus = endpointStatuses.length !== contract.endpoints.length
+      ? undefined
+      : endpointStatuses.includes('added') || endpointStatuses.includes('modified')
+        ? 'modified'
+        : endpointStatuses.includes('deleted')
+          ? 'deleted'
+          : 'unchanged'
+    return {
+      ...contract,
+      ...(groupStatus ? { changeStatus: groupStatus } : {}),
+      endpoints: contract.endpoints.map((endpoint) => ({
+        ...endpoint,
+        ...(statuses.get(endpoint.id) ? { changeStatus: statuses.get(endpoint.id) } : {})
+      }))
+    }
+  })
+}
+
+/** 把本轮实体变更类型合并进工作台实体目录。 */
+function applyEntityChangeStatus(
+  entities: WorkbenchEntityOption[],
+  changeSnapshot?: Record<string, unknown>
+): WorkbenchEntityOption[] {
+  if (!changeSnapshot) return entities
+  return entities.map((entity) => ({
+    ...entity,
+    ...(snapshotChangeStatus(changeSnapshot, 'entities', entity.id)
+      ? { changeStatus: snapshotChangeStatus(changeSnapshot, 'entities', entity.id) }
+      : {})
   }))
 }
 
@@ -304,7 +400,8 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
       label: basePath,
       name: normalizeWorkbenchNodeLabel(record.name, '未命名接口分组'),
       entityIds: [],
-      endpoints: []
+      endpoints: [],
+      ...changeStatusOf(record)
     }
     entityIds.forEach((entityId) => {
       if (!group.entityIds.includes(entityId)) group.entityIds.push(entityId)
@@ -327,7 +424,8 @@ function projectPlanApiContracts(value: unknown): WorkbenchApiContract[] {
             summary: String(endpointRecord.summary || ''),
             designed: false,
             detailPlanStatus: '',
-            hasDetailPlan: false
+            hasDetailPlan: false,
+            ...changeStatusOf(endpointRecord)
           }
         ]
       })
@@ -377,6 +475,7 @@ function projectPlanEntities(value: unknown): WorkbenchEntityOption[] {
       purpose: normalizeWorkbenchNodeLabel(record.description || record.name, `实体 ${index + 1}`),
       dataSourceType,
       ...(fields.length > 0 ? { fields } : {}),
+      ...changeStatusOf(record),
       designed: Boolean(sourceBinding.json_path),
       detailPlanStatus: String(sourceBinding.status || record.source_binding_status || ''),
       hasDetailPlan: Boolean(sourceBinding.json_path)
@@ -422,15 +521,33 @@ function mergeWorkbenchPageStatus(
 }
 
 /** 把页面叶子的开发状态回写到页面目录树，保留菜单层级不变。 */
+/** 递归收集一棵页面树里所有叶子的变更类型，供菜单节点聚合。 */
+function collectTreeStatuses(node: WorkbenchPageTreeNode): Array<NonNullable<WorkbenchPageTreeNode['changeStatus']>> {
+  const own = node.changeStatus ? [node.changeStatus] : []
+  return [...own, ...(node.children || []).flatMap(collectTreeStatuses)]
+}
+
 function mergeWorkbenchPageTreeStatus(
   pageTree: WorkbenchPageTreeNode[],
   pagesById: Map<string, WorkbenchPageOption>
 ): WorkbenchPageTreeNode[] {
   return pageTree.map((node) => {
     if (node.type === 'menu') {
+      const children = mergeWorkbenchPageTreeStatus(node.children || [], pagesById)
+      const leaves = children.flatMap(collectTreeStatuses)
+      // 菜单本身没有独立业务语义：子页面全部删除时整组都不可开发，标 deleted；
+      // 否则只要有一个子页面是新增/修改，就把这组视为本轮有变更，便于用户定位。
+      const menuStatus = leaves.length && leaves.every((status) => status === 'deleted')
+        ? 'deleted'
+        : leaves.some((status) => status === 'added' || status === 'modified')
+          ? 'modified'
+          : leaves.length
+            ? 'unchanged'
+            : undefined
       return {
         ...node,
-        children: mergeWorkbenchPageTreeStatus(node.children || [], pagesById)
+        children,
+        ...(menuStatus ? { changeStatus: menuStatus } : {})
       }
     }
     const pageId = String(node.pageId || node.key || '').trim()
@@ -443,7 +560,8 @@ function mergeWorkbenchPageTreeStatus(
           purpose: page.purpose,
           designed: page.designed,
           detailPlanStatus: page.detailPlanStatus,
-          hasDetailPlan: page.hasDetailPlan
+          hasDetailPlan: page.hasDetailPlan,
+          ...(page.changeStatus ? { changeStatus: page.changeStatus } : {})
         }
       : node
   })
@@ -558,7 +676,7 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
   apiContracts: WorkbenchApiContract[]
   entities: WorkbenchEntityOption[]
 }> {
-  const { missing, invalid, catalogIssues, productPlan, technicalPlan } =
+  const { missing, invalid, catalogIssues, productPlan, technicalPlan, changeSnapshot } =
     await readWorkbenchPlanningArtifacts(workspaceRoot)
   // 页面读取当前 ProductPlan，接口和实体读取当前 TechnicalPlan；待确认内容仍可浏览。
   // 整体 ready 仍要求全部正式产物已确认，浏览结果不能解除后端开发准入门禁。
@@ -569,12 +687,14 @@ async function inspectWorkspacePlanningArtifacts(workspaceRoot: string): Promise
 
   const buildTaskPlan = await readBuildTaskPlan(workspaceRoot)
   const pages = mergeWorkbenchPageStatus(
-    projectPlanPageOptions({ pages: [...plannedPages.values()] }),
+    projectPlanPageOptions({ pages: [...plannedPages.values()] }, changeSnapshot),
     buildTaskPlan
   )
   const pagesById = new Map(pages.map((page) => [page.pageId, page]))
   apiContracts = await mergeWorkbenchApiStatus(workspaceRoot, apiContracts)
+  apiContracts = applyEndpointChangeStatus(apiContracts, changeSnapshot)
   entities = await mergeWorkbenchEntityStatus(workspaceRoot, entities)
+  entities = applyEntityChangeStatus(entities, changeSnapshot)
 
   return {
     ready: missing.length === 0 && invalid.length === 0,

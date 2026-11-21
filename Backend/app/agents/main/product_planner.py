@@ -7,7 +7,7 @@ from typing import Any, Callable
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.messages import _coerce_content_text
-from app.agents.model_factory import create_chat_model
+from app.agents.model_factory import create_chat_model, thinking_disabled_kwargs
 from app.config import Settings
 from app.services.authorization_manifest import RESOURCE_KEY_MAX_LENGTH
 from app.services.product_plan import create_product_plan, validate_product_plan_model_output
@@ -17,10 +17,17 @@ from json_repair import repair_json
 logger = logging.getLogger(__name__)
 
 
-def _model_product_plan_view(plan: dict[str, Any]) -> dict[str, Any]:
-    """只把当前模型契约允许的产品语义字段提供给修订轮次。"""
+def _model_product_plan_view(
+    plan: dict[str, Any],
+    deleted_page_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """只把当前模型契约允许的产品语义字段提供给修订轮次。
 
-    return {
+    `deleted_page_ids` 的页面会从 `pages` 里剔除：修订轮次要求"保留既有页面"，
+    若待删页仍出现在 Existing ProductPlan 里，模型会照它保留下来，与删除指令冲突。
+    """
+
+    view = {
         key: plan.get(key)
         for key in (
             "app",
@@ -29,16 +36,84 @@ def _model_product_plan_view(plan: dict[str, Any]) -> dict[str, Any]:
             "product_acceptance_criteria",
         )
     }
+    deleted = {str(item).strip() for item in (deleted_page_ids or set()) if str(item).strip()}
+    pages = view.get("pages")
+    if deleted and isinstance(pages, list):
+        view["pages"] = [
+            page
+            for page in pages
+            if not (
+                isinstance(page, dict)
+                and str(page.get("pageId") or "").strip() in deleted
+            )
+        ]
+    return view
 
 
-def _product_plan_json_example(requirement_spec: dict[str, Any]) -> str:
+def _deleted_page_ids(
+    requirement_spec: dict[str, Any],
+    deleted_page_ids: set[str] | None = None,
+) -> set[str]:
+    """取本轮要求删除的页面 ID。
+
+    优先用调用方显式传入的集合：产品规划拿到的是**剥离标记的干净版** spec
+    （`_change_status` 写盘前就被剥掉了），只看 spec 上的标记永远是空集。
+    兜底再读 spec 自身的标记，兼容直接带标记调用的情况。
+    """
+
+    if deleted_page_ids:
+        return {str(item).strip() for item in deleted_page_ids if str(item).strip()}
+    return {
+        str(page.get("pageId") or "").strip()
+        for page in (requirement_spec.get("pages") or [])
+        if isinstance(page, dict)
+        and str(page.get("_change_status") or "") == "deleted"
+        and str(page.get("pageId") or "").strip()
+    }
+
+
+def _spec_without_deleted_pages(
+    requirement_spec: dict[str, Any],
+    deleted_page_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """给模型的 RequirementSpec 视图：剔除已删除页面，避免它"照着清单补回来"。
+
+    删除意图已经通过 `deleted_page_instruction` 单独告知；这里再把页面清单也对齐，
+    否则模型会看到一份"包含待删页面"的 spec，与指令自相矛盾。
+    """
+
+    deleted_pages = _deleted_page_ids(requirement_spec, deleted_page_ids)
+    pages = requirement_spec.get("pages")
+    if not deleted_pages or not isinstance(pages, list):
+        return requirement_spec
+    return {
+        **requirement_spec,
+        "pages": [
+            page
+            for page in pages
+            if not (
+                isinstance(page, dict)
+                and str(page.get("pageId") or "").strip() in deleted_pages
+            )
+        ],
+    }
+
+
+def _product_plan_json_example(
+    requirement_spec: dict[str, Any],
+    deleted_page_ids: set[str] | None = None,
+) -> str:
     """按 RequirementSpec 页面身份生成完整且可直接遵循的 JSON 响应结构示例。"""
 
     pages: list[dict[str, Any]] = []
+    deleted_pages = _deleted_page_ids(requirement_spec, deleted_page_ids)
     for source in requirement_spec.get("pages", []):
         if not isinstance(source, dict):
             continue
         page_id = str(source.get("pageId") or source.get("id") or "page")
+        # 已删除页面不进示例：示例是"照抄结构"，列出来等于让模型把它写回去。
+        if page_id in deleted_pages:
+            continue
         pages.append(
             {
                 "pageId": page_id,
@@ -140,6 +215,7 @@ def _product_planning_prompt(
     requirement_spec: dict[str, Any],
     existing_plan: dict[str, Any] | None = None,
     user_feedback: str = "",
+    deleted_page_ids: set[str] | None = None,
 ) -> str:
     """构造只负责产品语义、不包含技术实现的产品规划提示。"""
 
@@ -151,12 +227,25 @@ def _product_planning_prompt(
         "and app summary. RequirementSpec pageId and every actionId must use lower_snake_case; preserve stable pageId, itemId, actionId, and stepId values for unchanged "
         "product concepts. Return the complete merged ProductPlan, not a patch and not a plan describing "
         "only the latest feedback.\n"
-        f"Existing ProductPlan:\n{json.dumps(_model_product_plan_view(existing_plan), ensure_ascii=False)}\n\n"
+        f"Existing ProductPlan:\n{json.dumps(_model_product_plan_view(existing_plan, deleted_page_ids), ensure_ascii=False)}\n\n"
         if existing_plan
         else "Create a new ProductPlan from the validated RequirementSpec draft in this same requirement-document stage.\n"
     )
     authorization_operation_instruction = _authorization_operation_action_instruction(
         requirement_spec
+    )
+    # 已删除页面：模型不让它出现在最终 ProductPlan 里，但**必须知道有这回事**，
+    # 否则会按"页面消失"自由补一页回来。删除由平台在模型输出后确定性剔除，
+    # 模型只需保证不把它写进输出。
+    deleted_pages = _deleted_page_ids(requirement_spec, deleted_page_ids)
+    deleted_page_instruction = (
+        "The user explicitly asked to DELETE these pages in this iteration: "
+        f"{', '.join(sorted(deleted_pages))}. "
+        "They are marked `_change_status=\"deleted\"` in the RequirementSpec and must NOT appear "
+        "in your output pages array, and nothing may navigate to them. Do not replace them with a "
+        "page covering the same purpose.\n"
+        if deleted_pages
+        else ""
     )
     return (
         "You are the product-planning model for an app-generation workflow.\n"
@@ -208,10 +297,11 @@ def _product_planning_prompt(
         "product facts; do not add keys. For navigation/external/sequence behavior, replace the behavior "
         "object with the exact type-specific fields described above.\n"
         f"{authorization_operation_instruction}"
-        f"Complete JSON response example:\n{_product_plan_json_example(requirement_spec)}\n\n"
+        f"{deleted_page_instruction}"
+        f"Complete JSON response example:\n{_product_plan_json_example(requirement_spec, deleted_page_ids)}\n\n"
         f"{revision_context}"
         f"Latest product feedback:\n{user_feedback}\n\n"
-        f"Validated RequirementSpec draft:\n{json.dumps(requirement_spec, ensure_ascii=False)}"
+        f"Validated RequirementSpec draft:\n{json.dumps(_spec_without_deleted_pages(requirement_spec, deleted_page_ids), ensure_ascii=False)}"
     )
 
 
@@ -221,20 +311,25 @@ def _invoke_product_planner(
     existing_plan: dict[str, Any] | None = None,
     user_feedback: str = "",
     on_token: Callable[[str], None] | None = None,
+    deleted_page_ids: set[str] | None = None,
 ) -> str:
     """调用产品规划 ChatModel，并可选透传流式文本。
 
-    GLM-5.2 默认开启深度思考，thinking 与正文共享 max_tokens。ProductPlan JSON
-    体量大（多页 information_items/actions），thinking 会挤占
-    输出预算，常在写完闭合括号前被截断，流式投到前端的原始 JSON 也随之截断、
-    解析校验失败。与 UI 设计稿生成一致，关闭 thinking 释放输出预算。
+    旧网关推理模型（GLM-5.2）默认开启深度思考，thinking 与正文共享
+    max_tokens，ProductPlan JSON 体量大（多页 information_items/actions），
+    thinking 会挤占输出预算，常在写完闭合括号前被截断。是否关闭 thinking
+    由 MODEL_DISABLE_THINKING 开关控制（见 model_factory.thinking_disabled_kwargs）：
+    CatPaw 网关的 glm-5.3-flash 未验证关闭思考控制，发送会被 400 拒绝，
+    默认不发送；切回旧网关推理模型时设 MODEL_DISABLE_THINKING=1。
     """
 
     model = create_chat_model(
         Settings.from_env(),
-        extra_model_kwargs={"thinking": {"type": "disabled"}},
+        extra_model_kwargs=thinking_disabled_kwargs(),
     )
-    prompt = _product_planning_prompt(requirement_spec, existing_plan, user_feedback)
+    prompt = _product_planning_prompt(
+        requirement_spec, existing_plan, user_feedback, deleted_page_ids
+    )
     if on_token is None:
         result = model.invoke(prompt)
         return _coerce_content_text(getattr(result, "content", "")) or ""
@@ -259,6 +354,7 @@ def plan_product_with_chat_model(
     user_feedback: str = "",
     on_token: Callable[[str], None] | None = None,
     carried_pages: dict[str, Any] | None = None,
+    deleted_page_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """生成经过确定性归一化的 ProductPlan。
 
@@ -271,6 +367,7 @@ def plan_product_with_chat_model(
         existing_plan=existing_plan,
         user_feedback=user_feedback,
         on_token=on_token,
+        deleted_page_ids=deleted_page_ids,
     )
     agent_plan = extract_json_object(agent_note)
     if not isinstance(agent_plan, dict) or not agent_plan.get("pages"):
@@ -294,12 +391,92 @@ def plan_product_with_chat_model(
             )
             agent_plan = repaired
     agent_plan = _normalize_product_plan_root(agent_plan)
-    format_errors = validate_product_plan_model_output(agent_plan, requirement_spec)
+    format_errors = validate_product_plan_model_output(
+        agent_plan, requirement_spec, deleted_page_ids=deleted_page_ids
+    )
     if format_errors:
         raise ValueError("ProductPlan 模型 JSON 格式校验失败：" + "；".join(format_errors))
-    return create_product_plan(
+    plan = create_product_plan(
         requirement_spec,
         agent_plan=agent_plan,
         existing_plan=existing_plan,
         carried_pages=carried_pages,
+        # 已删页面先排除，再由 _append_deleted_pages 统一以 deleted 标记追加，
+        # 避免它们被 spec 页面集合"复活"并打断确认。
+        deleted_page_ids=deleted_page_ids,
     )
+    return _append_deleted_pages(
+        plan, requirement_spec, existing_plan, deleted_page_ids
+    )
+
+
+def _append_deleted_pages(
+    plan: dict[str, Any],
+    requirement_spec: dict[str, Any],
+    existing_plan: dict[str, Any] | None,
+    deleted_page_ids: set[str] | None,
+) -> dict[str, Any]:
+    """把本轮删除的页面以 `_change_status="deleted"` 追加到 ProductPlan 末尾。
+
+    删除页**不交给模型生成**（模型只产出要保留的页面），但必须出现在 ProductPlan 里：
+    UI 设计稿清单、页面绑定、构建范围都以 ProductPlan 为入口，只有留在这里，
+    下游才能显示"已删除"并据此清理设计稿与页面代码。
+
+    页面内容优先取上一轮 ProductPlan 的同名条目（保留原有页面名/路径，便于用户识别），
+    取不到时退回 RequirementSpec 里的定义。
+    """
+
+    deleted = {str(item).strip() for item in (deleted_page_ids or set()) if str(item).strip()}
+    if not deleted:
+        return plan
+    existing_by_id = {
+        str(page.get("pageId") or "").strip(): page
+        for page in (existing_plan or {}).get("pages") or []
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    }
+    spec_by_id = {
+        str(page.get("pageId") or "").strip(): page
+        for page in requirement_spec.get("pages") or []
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    }
+    pages = list(plan.get("pages") or [])
+    present = {str(page.get("pageId") or "").strip() for page in pages if isinstance(page, dict)}
+    # 按 RequirementSpec 的页面顺序插入，保证产品计划与需求文档的页面集合完全对齐；
+    # 追加到末尾会让联合确认以"顺序不一致"为由反复打回。
+    spec_order = [
+        str(page.get("pageId") or "").strip()
+        for page in requirement_spec.get("pages") or []
+        if isinstance(page, dict) and str(page.get("pageId") or "").strip()
+    ]
+    deleted_pages: list[dict[str, Any]] = []
+    for page_id in spec_order:
+        if page_id not in deleted or page_id in present:
+            continue
+        source = existing_by_id.get(page_id) or spec_by_id.get(page_id) or {}
+        deleted_pages.append(
+            {
+                "pageId": page_id,
+                "name": str(source.get("name") or page_id),
+                "path": str(source.get("path") or f"/page/{page_id}"),
+                "module_id": str(source.get("module_id") or "core"),
+                "description": str(source.get("description") or ""),
+                "goal": str(source.get("goal") or ""),
+                "information_items": source.get("information_items") or [],
+                "actions": source.get("actions") or [],
+                "navigation_targets": source.get("navigation_targets") or [],
+                "acceptance_criteria": source.get("acceptance_criteria") or [],
+                "_change_status": "deleted",
+            }
+        )
+    if not deleted_pages:
+        return {**plan, "pages": pages}
+    # 按 RequirementSpec 顺序合并保留页与删除页，保证两边的页面序列完全一致。
+    by_id = {
+        str(page.get("pageId") or "").strip(): page
+        for page in [*pages, *deleted_pages]
+        if isinstance(page, dict)
+    }
+    ordered = [by_id[pid] for pid in spec_order if pid in by_id]
+    # spec 之外的页面（正常情况下不存在）保持原顺序附在后面，避免静默丢页。
+    ordered.extend(page for page in pages if page not in ordered)
+    return {**plan, "pages": ordered}

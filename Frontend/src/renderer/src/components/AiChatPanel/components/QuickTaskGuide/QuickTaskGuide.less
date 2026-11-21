@@ -1,4 +1,15 @@
 .@{class-prefix}-quick-task-guide {
+  // 变更徽标复用的语义色（与需求文档 / 应用产物目录同源）。该面板不继承
+  // `.requirement-doc-panel`，必须在这里补齐浅色值，否则 `var(--req-green, …)`
+  // 会落到 fallback 里的深色取值，出现"同样叫新增、颜色却不一样"。
+  // 暗色主题在下方单独覆盖。
+  --req-green: #1a7f37;
+  --req-green-soft: rgba(26, 127, 55, 0.1);
+  --req-green-border: rgba(26, 127, 55, 0.3);
+  --req-orange: #b45309;
+  --req-orange-soft: rgba(180, 83, 9, 0.1);
+  --req-orange-border: rgba(180, 83, 9, 0.32);
+
   display: flex;
   width: min(100%, 1000px);
   min-height: 100%;
@@ -300,6 +311,7 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
 }
 
 .@{class-prefix}-quick-task-item-title-row {
+  // 名称靠左、变更徽标靠右：徽标落在卡片右上角，与名称同行但不挤占名称宽度。
   display: flex;
   min-width: 0;
   align-items: center;
@@ -308,7 +320,8 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
 
 .@{class-prefix}-quick-task-item-title.ant-typography {
   display: block;
-  flex: 1;
+  // 名称吃掉剩余宽度，徽标按内容宽度贴右。
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--wb-text);
@@ -341,6 +354,26 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
   line-height: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+// 接口卡片：HTTP 方法与路径同行展示，位于名称下方的独立一行。
+.@{class-prefix}-quick-task-item-endpoint-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+
+  > .@{class-prefix}-quick-task-item-meta {
+    flex: 0 0 auto;
+    max-width: none;
+    margin: 0;
+    font-style: normal;
+  }
+
+  > .@{class-prefix}-quick-task-item-path {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
 }
 
 .@{class-prefix}-quick-task-item-path {
@@ -435,8 +468,10 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
     border-radius: 8px;
   }
 
+  // 窄屏下标题行仍保持 flex：徽标要停在名称同行的右上角，不能掉到下一行。
   .@{class-prefix}-quick-task-item-title-row {
-    display: block;
+    align-items: center;
+    gap: 6px;
   }
 
   .@{class-prefix}-quick-task-item-title.ant-typography {
@@ -483,5 +518,136 @@ body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
 
   .@{class-prefix}-quick-task-item {
     padding: 9px;
+  }
+}
+
+// ===== 本轮变更徽标（新增 / 有变更 / 未变更 / 待删除） =====
+//
+// 与设计阶段需求文档的变更徽标（`requirement-doc-change-badge`）统一：
+// 胶囊形状 + 同一组语义色（新增绿、有变更橙、未变更灰、待删除红）。
+// 这里不再按紫色主题另起一套配色，避免同一含义在不同阶段显示出不同颜色。
+
+// 暗色主题：按需求文档面板的深色取值替换语义色，供徽标直接引用变量。
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) .@{class-prefix}-quick-task-guide,
+body:has(.@{class-prefix}-welcome-page[data-theme='dark']) .@{class-prefix}-quick-task-guide {
+  --req-green: #4ac26b;
+  --req-green-soft: rgba(74, 194, 107, 0.16);
+  --req-green-border: rgba(74, 194, 107, 0.4);
+  --req-orange: #e8a13d;
+  --req-orange-soft: rgba(232, 161, 61, 0.16);
+  --req-orange-border: rgba(232, 161, 61, 0.42);
+}
+
+.@{class-prefix}-quick-task-item-change {
+  flex: 0 0 auto;
+  // 窄屏下标题行会退化成 block，徽标必须保持行内块才能继续跟在名称后面。
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
+  // 宽屏是 flex 行（已用 gap 控制间距）：不额外加左边距；
+  // 窄屏是 block 行：补一点间距，避免和名称贴在一起。
+  margin-inline-start: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  vertical-align: middle;
+
+  &.@{class-prefix}-is-added {
+    color: var(--req-green, #4ac26b);
+    background: var(--req-green-soft, rgba(74, 194, 107, 0.12));
+    border-color: var(--req-green-border, rgba(74, 194, 107, 0.32));
+  }
+
+  &.@{class-prefix}-is-modified {
+    color: var(--req-orange, #e8a13d);
+    background: var(--req-orange-soft, rgba(232, 161, 61, 0.12));
+    border-color: var(--req-orange-border, rgba(232, 161, 61, 0.32));
+  }
+
+  &.@{class-prefix}-is-deleted {
+    color: #cf1322;
+    background: rgba(255, 77, 79, 0.08);
+    border-color: rgba(255, 77, 79, 0.3);
+  }
+
+  // 本轮未变更：与需求文档同一组中性灰取值。
+  &.@{class-prefix}-is-unchanged {
+    color: var(--wb-text-secondary, #65666a);
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.04));
+    border-color: var(--wb-border, rgba(0, 0, 0, 0.08));
+  }
+}
+
+// 标题行在宽窄屏都是 flex：间距统一由 gap 控制，徽标不需要额外外边距。
+// 这里只保证窄屏下徽标不被名称挤压。
+@container ai-chat-main (max-width: 680px) {
+  .@{class-prefix}-quick-task-item-change {
+    flex: 0 0 auto;
+  }
+}
+
+// 本轮待删除的页面：仍然可点 —— 点进去执行的是清理代码与设计稿的动作。
+// 用警示色边框提示"这是个删除操作"，但不用删除线把它画成已失效。
+.@{class-prefix}-quick-task-item.@{class-prefix}-is-deletion {
+  background: color-mix(in srgb, rgba(192, 43, 43, 0.06) 70%, var(--wb-canvas));
+  border-color: rgba(192, 43, 43, 0.28);
+
+  &:hover,
+  &:focus-visible {
+    border-color: rgba(192, 43, 43, 0.5);
+    background: color-mix(in srgb, rgba(192, 43, 43, 0.1) 70%, var(--wb-canvas));
+  }
+}
+
+// 本轮未变更的产物：同样不可点，但不打删除线 —— 它仍然有效，只是这轮不需要重做。
+.@{class-prefix}-quick-task-item.@{class-prefix}-is-inherited {
+  cursor: not-allowed;
+  opacity: 0.62;
+  background: var(--wb-surface-subtle, rgba(128, 128, 128, 0.06));
+}
+
+body:has(.@{class-prefix}-workbench-shell[data-theme='dark']) {
+  .@{class-prefix}-quick-task-item-change {
+    // 深色主题下与需求文档面板的深色变量取值保持一致。外层变量只在
+    // `.quick-task-guide` 作用域定义浅色值，深色值需要在这里整体替换。
+    &.@{class-prefix}-is-added {
+      color: #4ac26b;
+      background: rgba(74, 194, 107, 0.16);
+      border-color: rgba(74, 194, 107, 0.4);
+    }
+
+    &.@{class-prefix}-is-modified {
+      color: #e8a13d;
+      background: rgba(232, 161, 61, 0.16);
+      border-color: rgba(232, 161, 61, 0.42);
+    }
+
+    &.@{class-prefix}-is-deleted {
+      color: #ff7b72;
+      background: rgba(255, 123, 114, 0.14);
+      border-color: rgba(255, 123, 114, 0.36);
+    }
+
+    &.@{class-prefix}-is-unchanged {
+      color: #aeadb6;
+      background: rgba(255, 255, 255, 0.07);
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+  }
+
+  // 深色底上单独提亮，避免红色边框在深色画布上糊成一片。
+  .@{class-prefix}-quick-task-item.@{class-prefix}-is-deletion {
+    background: rgba(255, 123, 114, 0.08);
+    border-color: rgba(255, 123, 114, 0.34);
+
+    &:hover,
+    &:focus-visible {
+      border-color: rgba(255, 123, 114, 0.56);
+      background: rgba(255, 123, 114, 0.14);
+    }
   }
 }

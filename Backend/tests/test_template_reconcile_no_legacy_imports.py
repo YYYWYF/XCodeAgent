@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -25,7 +26,9 @@ class TemplateReconcileNoLegacyImportsTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             if "managedFiles" in text:
                 violations.append(f"{relative}: managedFiles")
+            # 精确匹配模块名：当前协议模块叫 update_package_v3 / update_package_v4，
+            # 按子串判断会把它们误判成已删除的 V1 `update_package`。
             for module in _LEGACY_MODULES:
-                if f"template_reconcile.{module}" in text:
+                if re.search(rf"template_reconcile\.{module}\b(?!_)", text):
                     violations.append(f"{relative}: template_reconcile.{module}")
         self.assertEqual([], violations, "V1 Reconcile 不得重新进入生产代码：" + "；".join(violations))

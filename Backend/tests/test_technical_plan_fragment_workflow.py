@@ -102,9 +102,12 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         self.assertGreaterEqual(validate.call_count, 2)
         result = state.values["technical_plan"]
         self.assertIn("FRAGMENT-KEEP", result["architecture"]["frontend"])
-        self.assertEqual(result["api_contracts"], baseline["api_contracts"])
-        self.assertEqual(result["entities"], baseline["entities"])
-        self.assertEqual(result["pages"], baseline["pages"])
+        # 确认界面读取的计划带本轮变更标记（供分区显示），比较业务内容前先剥离标记。
+        from app.services.technical_plan_merger import strip_change_status
+        clean = strip_change_status(result)
+        self.assertEqual(clean["api_contracts"], baseline["api_contracts"])
+        self.assertEqual(clean["entities"], baseline["entities"])
+        self.assertEqual(clean["pages"], baseline["pages"])
         self.assertEqual(result["confirmation_status"], "pending_user_confirmation")
         self.assertNotIn("FragmentMissingOutput", technical_plan_draft_json_path(state.values).read_text())
         for model in (first, second):
@@ -163,9 +166,11 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         self.assertTrue(any(task.interrupts for task in state.tasks))
         result = state.values["technical_plan"]
         self.assertEqual(result["architecture"]["frontend"], "React 渲染天气预报。")
-        self.assertEqual(result["api_contracts"], h.candidate["api_contracts"])
-        self.assertEqual(result["entities"], h.candidate["entities"])
-        self.assertEqual(result["pages"], h.candidate["pages"])
+        from app.services.technical_plan_merger import strip_change_status
+        clean = strip_change_status(result)
+        self.assertEqual(clean["api_contracts"], h.candidate["api_contracts"])
+        self.assertEqual(clean["entities"], h.candidate["entities"])
+        self.assertEqual(clean["pages"], h.candidate["pages"])
         self.assertEqual(result["confirmation_status"], "pending_user_confirmation")
         self.assertTrue(technical_plan_draft_json_path(state.values).is_file())
         self.assertFalse(technical_plan_json_path(state.values).exists())

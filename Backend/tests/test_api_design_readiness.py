@@ -98,6 +98,44 @@ class ApiDesignReadinessTests(unittest.TestCase):
             readiness = api_design_readiness(workspace, plan, target_type="page", target_id="orders")
             self.assertTrue(readiness["ready"])
 
+    def test_rewritten_plan_with_same_contract_keeps_mapping_valid(self) -> None:
+        """计划被整份重写（措辞变化）时，接口契约没变就继续沿用已确认映射。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            _write_plan(workspace, plan)
+            for endpoint_id in ("orders.list", "orders.create"):
+                write_endpoint_design(workspace, _empty_design(workspace, endpoint_id))
+
+            rewritten = json.loads(json.dumps(plan))
+            # 模拟计划阶段每轮必然发生的变化：顺序调整与措辞润色。
+            rewritten["api_contracts"][0]["name"] = "订单接口（表述已调整）"
+            rewritten["api_contracts"][0]["endpoints"].reverse()
+            _write_plan(workspace, rewritten)
+
+            readiness = api_design_readiness(workspace, rewritten, target_type="page", target_id="orders")
+            self.assertTrue(readiness["ready"])
+
+    def test_changed_endpoint_definition_invalidates_only_that_mapping(self) -> None:
+        """接口定义真的变了才作废，且不影响同页面其它接口的映射。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            plan = _plan()
+            _write_plan(workspace, plan)
+            for endpoint_id in ("orders.list", "orders.create"):
+                write_endpoint_design(workspace, _empty_design(workspace, endpoint_id))
+
+            changed = json.loads(json.dumps(plan))
+            changed["api_contracts"][0]["endpoints"][0]["path"] = "/v2/orders"
+            _write_plan(workspace, changed)
+
+            readiness = api_design_readiness(workspace, changed, target_type="page", target_id="orders")
+            self.assertFalse(readiness["ready"])
+            stale = {
+                item["endpoint_id"] for item in readiness["api_designs"] if item["status"] == "stale"
+            }
+            self.assertEqual(stale, {"orders.list"})
+
     def test_invalid_confirmed_mapping_is_stale(self) -> None:
         """正式产物含有草稿态未配置字段时必须回到 stale。"""
 
