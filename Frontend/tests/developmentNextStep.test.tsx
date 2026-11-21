@@ -186,6 +186,27 @@ test('End 成功才出现结束引导，保留未完成目标状态，不把 sto
   assert.equal(developmentNextStep([message(source), message(control)], lifecycle), undefined)
 })
 
+test('删除页完成后继续引导待删除接口，不能把旧版完成状态当成本轮删除完成', () => {
+  const workflow = completion()
+  workflow.summary.status = 'completed'
+  workflow.summary.phase = 'delete_development_page'
+  const currentLifecycle = {
+    ...lifecycle,
+    developmentArtifacts: {
+      ...lifecycle.developmentArtifacts,
+      pages: { one: { initialDevelopmentStatus: 'completed', changeStatus: 'unchanged', lastCompletedRunId: 'run-one' } },
+      endpoints: { api: { remove: { initialDevelopmentStatus: 'completed', changeStatus: 'changed', completedRunId: 'baseline-run' } } }
+    }
+  } as ApplicationLifecycle
+  const step = developmentNextStep([message(workflow)], currentLifecycle)
+  assert.equal(step?.reason, 'completed')
+  const deletionTasks = buildQuickTasks([], [{ id: 'api', label: '注销', endpoints: [
+    { id: 'remove', name: '注销接口', method: 'POST', path: '/api/deactivation-submissions', summary: '', changeStatus: 'deleted' }
+  ] }], [], currentLifecycle.developmentArtifacts)
+  assert.equal(nextDevelopmentTask(deletionTasks, step?.target)?.id, 'endpoint:api:remove')
+  assert.equal(allDevelopmentTargetsCompleted(deletionTasks, false), false)
+})
+
 test('新任务取代上一张引导，推荐跳过当前目标、已完成和开发中目标', () => {
   const first = message(completion())
   assert.equal(

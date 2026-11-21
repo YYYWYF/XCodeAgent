@@ -27,6 +27,8 @@ WORKFLOW_NODE_LABELS = {
     "application_revision": "正式产物二次修改",
     "api_design_readiness_gate": "API 设计前置检查",
     "development_readiness_gate": "开发前置检查",
+    "delete_development_page": "删除页面产物",
+    "delete_development_endpoint": "删除接口产物",
     "entity_source_binding": "实体数据源绑定",
     "project_planning": "技术规划调整",
     "inspect_workspace": "扫描工作区代码",

@@ -24,6 +24,10 @@ from app.persistence.checkpoints import close_workflow_checkpointer_for_workspac
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.execution_recovery_executor import _apply_application_planning_transaction_authority
+from app.services.technical_plan_carryover import (
+    drop_generated_fields,
+    write_technical_plan_carryover,
+)
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -48,12 +52,14 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
         """独立构造当前计划与事务摘要，以覆盖缺失、匹配和篡改场景。"""
 
         harness = self.harness
+        # 生产冷进入（checkpoint derive）不携带上游 state；这里同样只放本事务自己的计划，
+        # 否则会被当成"新迭代残留的旧分支计划"而按首轮创建处理。
         return {
             "workspace": str(harness.workspace),
             "active_thread_id": harness.thread_id,
             "active_run_id": harness.source_run_id,
             "request": harness.request,
-            "technical_plan": baseline,
+            "technical_plan": deepcopy(baseline) if isinstance(baseline, dict) and baseline else baseline,
             "application_planning_recovery_boundary": application_planning_boundary_payload(
                 operation_id="technical-plan-baseline-test", operation=operation,
                 boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
@@ -113,12 +119,41 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                     if allowed:
                         result = await call
                         if entry == "node":
-                            self.assertEqual(result["technical_plan_baseline"], baseline or {})
-                            if baseline:
+                            # 基线是"本轮计划"的业务视图：确认状态等派生字段不进对比基线。
+                            self.assertEqual(
+                                result["technical_plan_baseline"],
+                                drop_generated_fields(baseline or {}),
+                            )
+                            if isinstance(baseline, dict) and baseline:
                                 self.assertIsNot(result["technical_plan_baseline"], baseline)
                     else:
                         with self.assertRaisesRegex(error, "baseline"):
                             await call
+
+    async def test_second_revision_keeps_iteration_review_baseline(self) -> None:
+        """二次修订仍相对上迭代基线展示变更，事务续跑则沿用当前上一版。"""
+
+        current = deepcopy(self.harness.candidate)
+        carried = {
+            "artifact_type": "technical-plan",
+            "architecture": {},
+            "entities": [],
+            "api_contracts": [],
+            "pages": [{"pageId": "home", "references": {}}],
+        }
+        write_technical_plan_carryover(
+            self.harness.workspace, source_branch="v1_5", plan=carried,
+        )
+        state = self._state(
+            ApplicationPlanningOperation.REVISE, current, current,
+        )
+
+        result = await technical_planning_begin(state)
+
+        self.assertEqual(result["technical_plan_baseline"], carried)
+        self.assertEqual(result["technical_plan_baseline_origin"], "resumed")
+        self.assertNotEqual(result["technical_plan_baseline"], current)
+        self.assertNotIn("technical_plan", result, "续跑的当前计划不应被当成冷进入旧数据清空")
 
     async def _retry_failed_begin(self, *, has_candidate: bool, before_handoff: bool = False) -> None:
         """通过公开 AG-UI 重试失败 begin，验证原生成节点重新执行及确认门。"""
@@ -272,3 +307,121 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(load_application_lifecycle(harness.workspace).active_run_id, "technical-plan-review-retry")
             self.assertTrue(any(task.interrupts for task in recovered.tasks))
             self.assertEqual(recovered.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_confirmation")
+    async def test_merge_failure_stops_before_document_confirmation(self) -> None:
+        """合并后的完整校验失败时，真实 Graph 只挂错误门，不写技术草稿。"""
+
+        harness = self.harness
+        from app.workspace.plan_documents import technical_plan_draft_json_path
+        with patch("app.config.Settings.from_env", side_effect=harness.current_settings):
+            await harness.initialize_graph()
+            with (
+                patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(deepcopy(harness.candidate), [], None)),
+                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=["合并后 Schema 引用不存在"]),
+            ):
+                await harness.run_initial()
+            snapshot = await harness.graph.aget_state({"configurable": {"thread_id": harness.thread_id}})
+            self.assertEqual(tuple(snapshot.next), ("technical_planning_review",))
+            pending = snapshot.tasks[0].interrupts[0].value
+            self.assertEqual(pending["clarification"]["mode"], "technical_plan_generation_error")
+            self.assertEqual(snapshot.values["technical_plan_candidate"], {})
+            self.assertFalse(technical_plan_draft_json_path({"workspace": str(harness.workspace)}).exists())
+
+    async def test_confirm_failure_stops_without_generating_another_confirmation(self) -> None:
+        """已有草稿确认失败后，真实 AG-UI/SQLite 挂起错误门，不再调用模型或改写草稿。"""
+
+        harness = self.harness
+        from app.workspace.plan_documents import technical_plan_draft_json_path
+        with patch("app.config.Settings.from_env", side_effect=harness.current_settings):
+            await harness.initialize_graph()
+            with (
+                patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(deepcopy(harness.candidate), [], None)),
+                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            ):
+                await harness.run_initial()
+            config = {"configurable": {"thread_id": harness.thread_id}}
+            before = await harness.graph.aget_state(config)
+            pending = before.tasks[0].interrupts[0].value
+            draft_path = technical_plan_draft_json_path({"workspace": str(harness.workspace)})
+            draft_before = draft_path.read_bytes()
+            with (
+                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=["确认时发现 Schema 引用不存在"]),
+                patch("app.graph.nodes.planning._generate_valid_technical_plan") as generate,
+            ):
+                frames = [frame async for frame in build_workflow_ag_ui_stream(
+                    graph=harness.graph,
+                    payload={
+                        "threadId": harness.thread_id, "runId": "technical-plan-confirm-failure",
+                        "message": "正确，继续",
+                        "forwardedProps": {
+                            "workspaceRoot": str(harness.workspace), "workflowScope": "application_planning",
+                            "applicationPlanningInteraction": {
+                                "gateId": pending["gateId"], "artifact": pending["artifact"],
+                                "artifactRevision": pending["artifactRevision"], "action": "confirm", "request": "正确，继续",
+                            },
+                        },
+                    },
+                )]
+            generate.assert_not_called()
+            after = await harness.graph.aget_state(config)
+            self.assertEqual(tuple(after.next), ("technical_planning_review",))
+            self.assertEqual(drop_generated_fields(after.values["technical_plan"]), drop_generated_fields(before.values["technical_plan"]))
+            self.assertEqual(draft_path.read_bytes(), draft_before)
+            self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "project_plan_dependency_validation_error")
+            self.assertEqual(load_application_lifecycle(harness.workspace).initialization.stage.value, "awaiting_technical_plan_confirmation")
+            self.assertNotIn('"type":"RUN_ERROR"', "".join(frames))
+
+
+class ColdStalePlanBoundaryTests(unittest.TestCase):
+    """冷进入清空旧规划时，boundary 不能继续携带旧基线摘要。
+
+    回归：新迭代从 checkpoint 残留的上一轮 `technical_plan` 取到基线摘要，随后
+    又因 `technical_plan_baseline_origin` 不是 resumed 把它清空，于是留下
+    "boundary 有摘要、state 无基线"的矛盾状态，续修时必然报
+    "baseline 与 boundary 不匹配"。
+    """
+
+    def _state(self, *, stale_plan: dict, origin: str) -> dict:
+        """构造冷进入 begin 所需的最小状态（只覆盖基线判定用到的字段）。"""
+
+        boundary = application_planning_boundary_payload(
+            operation_id="technical-plan-repair-test",
+            operation=ApplicationPlanningOperation.REPAIR,
+            boundary=ApplicationPlanningRecoveryBoundary.INPUT_COMMITTED,
+            request="删除页面",
+            baseline=stale_plan,
+        )
+        return {
+            "workspace": "/nonexistent-workspace",
+            "technical_plan": deepcopy(stale_plan),
+            "technical_plan_baseline_origin": origin,
+            "application_planning_recovery_boundary": boundary,
+        }
+
+    def test_boundary_drops_stale_baseline_when_plan_is_cleared(self) -> None:
+        """旧规划被清空时，boundary 必须同样去掉 baselineSha256。"""
+
+        from app.graph.nodes.application_technical_planning import _boundary_payload_for_state
+
+        stale = {"artifact_type": "technical-plan", "pages": [{"pageId": "home"}]}
+        state = self._state(stale_plan=stale, origin="")
+        payload = _boundary_payload_for_state(
+            state,
+            boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+            drop_baseline=True,
+        )
+
+        self.assertNotIn("baselineSha256", payload)
+
+    def test_boundary_keeps_baseline_when_resumed(self) -> None:
+        """续跑场景仍必须保留基线摘要，基线一致性校验才能生效。"""
+
+        from app.graph.nodes.application_technical_planning import _boundary_payload_for_state
+
+        stale = {"artifact_type": "technical-plan", "pages": [{"pageId": "home"}]}
+        state = self._state(stale_plan=stale, origin="resumed")
+        payload = _boundary_payload_for_state(
+            state,
+            boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+        )
+
+        self.assertIn("baselineSha256", payload)

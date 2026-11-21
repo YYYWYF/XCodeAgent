@@ -184,12 +184,19 @@ export function developmentNextStep(
         ? lifecycle?.developmentArtifacts?.pages[target.pageId]
         : lifecycle?.developmentArtifacts?.endpoints[target.apiContractId]?.[target.endpointId]
     const phase = workflow.summary.phase || workflow.state?.phase
+    // 本轮是否完成了该目标：优先看"最近一次完成"（重新开发已完成目标时首次完成证据
+    // 不会变），同时保留对首次完成字段的判断，兼容只有首次完成记录的产物。
+    const completedByThisRun =
+      progress?.lastCompletedRunId === workflow.runId ||
+      progress?.lastCompletedThreadId === workflow.threadId ||
+      progress?.completedRunId === workflow.runId ||
+      progress?.completedThreadId === workflow.threadId
     const complete =
       progress?.initialDevelopmentStatus === 'completed' &&
       ['requires_user_input', 'completed'].includes(workflow.summary.status || '') &&
-      (phase === 'test_phase_confirmation' || phase === 'finalize_project') &&
-      (progress.completedRunId === workflow.runId ||
-        progress.completedThreadId === workflow.threadId)
+      (phase === 'test_phase_confirmation' || phase === 'finalize_project' ||
+        phase === 'delete_development_page' || phase === 'delete_development_endpoint') &&
+      completedByThisRun
     return complete ? { key: workflow.runId, reason: 'completed', target } : undefined
   }
   return undefined

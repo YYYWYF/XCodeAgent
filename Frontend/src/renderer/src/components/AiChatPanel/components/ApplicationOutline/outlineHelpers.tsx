@@ -11,6 +11,7 @@ import { developmentCompletedCount } from '../../../../developmentArtifacts'
 import DevelopmentStatusDot from './DevelopmentStatusDot'
 import IterationBadge from '../../../../components/IterationBadge'
 import { cx } from '../../../../utils'
+import { WorkbenchChangeBadge, isDeletedStatus } from './WorkbenchChangeBadge'
 
 type OutlineRowProps = {
   /** 当前迭代的分支名，用于标注页面归属。 */
@@ -47,18 +48,22 @@ export function OutlineRow({
   const selected = selectedKey === item.key
   const pageKeys = outlineLeafKeys(item)
   const completed = developmentCompletedCount(pageKeys.map((key) => progressByPage?.[key]))
+  // 已删除的页面仍然可点：点进去执行的是"清理代码、路由与设计稿"的删除动作，
+  // 与开发阶段起始页的待删除项保持一致。只有菜单（文件夹）需要保持可展开。
+  const deleted = isDeletedStatus(item.changeStatus)
 
   return (
     <div className={cx('outline-node')}>
       <button
         aria-current={selected ? 'page' : undefined}
         aria-expanded={isFolder ? expanded : undefined}
-        className={cx('outline-row', selected && 'selected')}
-        disabled={disabled && !isFolder}
+        className={cx('outline-row', selected && 'selected', deleted && 'is-deleted')}
+        disabled={disabled}
         onClick={() => {
           if (isFolder) setExpanded((current) => !current)
           else if (!disabled) onSelect(item.key)
         }}
+        title={deleted ? '本轮待删除，进入开发流程后会清理该页面的代码、路由与设计稿' : undefined}
         style={{ '--outline-level': level } as React.CSSProperties}
         type="button"
       >
@@ -71,6 +76,7 @@ export function OutlineRow({
         <span className={cx('outline-copy')}>
           <span className={cx('outline-label-row')}>
             <span className={cx('outline-label')}>{item.label}</span>
+            <WorkbenchChangeBadge status={item.changeStatus} />
             {isFolder ? (
               <span className={cx('development-count')}>
                 {completed}/{pageKeys.length}

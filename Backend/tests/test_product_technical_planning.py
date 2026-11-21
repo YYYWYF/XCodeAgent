@@ -39,7 +39,10 @@ from app.services.technical_action_binding_repair import (
 from app.services.api_contracts import normalize_api_contracts
 from app.services.page_dependencies import normalize_page_dependencies
 from app.services.product_plan import (
+    PRODUCT_PLAN_SCHEMA_VERSION,
     create_product_plan,
+    require_current_product_plan,
+    requirement_spec_sha256,
     validate_product_plan,
     validate_product_plan_model_output,
 )
@@ -2097,6 +2100,122 @@ class ProductTechnicalPlanningTests(unittest.TestCase):
         errors = validate_page_implementation_contracts(attached, product_plan)
 
         self.assertTrue(any("action_bindings" in error for error in errors))
+
+class DeletedPageProductPlanValidationTests(unittest.TestCase):
+    """本轮删除的页面：内容校验放行，但页面集合仍须与需求完整对齐。
+
+    回归：模型有可能把待删页面误写回来（且字段不合规），这类页面本来就要被删掉，
+    不能因此让整轮产品规划失败；同时产品计划必须保留该页面（标 deleted），
+    供开发阶段清理代码与设计稿。
+    """
+
+    def _spec_with_deleted_page(self) -> dict:
+        """构造含三个页面、其中一页本轮删除的需求。"""
+
+        spec = deepcopy(create_requirement_spec("创建一个库存管理系统"))
+        spec["pages"].append({"pageId": "obsolete_page", "name": "待删除页面"})
+        spec["pages"][-1]["_change_status"] = "deleted"
+        return spec
+
+    def _plan_pages(self, spec: dict, removed: set[str]) -> list[dict]:
+        """按保留页面生成最小页面定义。"""
+
+        pages = []
+        for page in spec["pages"]:
+            if page["pageId"] in removed:
+                continue
+            pages.append({
+                "pageId": page["pageId"], "name": page["name"], "path": f"/{page['pageId']}",
+                "module_id": "core", "description": "说明", "goal": "目标",
+                "information_items": [{"itemId": f"{page['pageId']}-i", "label": "信息", "description": "说明"}],
+                "actions": [], "navigation_targets": [], "acceptance_criteria": ["可完成"],
+            })
+        return pages
+
+    def test_malformed_deleted_page_does_not_block_generation(self) -> None:
+        """模型误写回待删页面且字段不合规时，不参与校验。"""
+
+        spec = self._spec_with_deleted_page()
+        pages = self._plan_pages(spec, set())
+        pages.append({
+            "pageId": "obsolete_page", "name": "待删除页面", "path": "/obsolete_page",
+            "module_id": "core", "description": "说明", "goal": "目标",
+            "information_items": [{"itemId": "obsolete_page-i", "label": "信息", "description": "说明"}],
+            "actions": [{"actionId": "x", "name": "x", "description": "x",
+                         "requiresConfirmation": False, "behavior": {"type": "business"}}],
+            "navigation_targets": [], "acceptance_criteria": ["可完成"],
+        })
+        plan = {
+            "app": {"name": "库存", "summary": "说明"}, "business_flows": [],
+            "pages": pages, "product_acceptance_criteria": ["可用"],
+        }
+
+        errors = validate_product_plan_model_output(plan, spec, deleted_page_ids={"obsolete_page"})
+
+        self.assertEqual(errors, [])
+
+    def test_existing_plan_must_keep_deleted_page(self) -> None:
+        """落盘的产品计划保留删除页（标 deleted），其内容不参与交付校验。"""
+
+        spec = self._spec_with_deleted_page()
+        pages = self._plan_pages(spec, set())
+        # 删除页内容取自上一轮，字段可以很简单
+        pages.append({"pageId": "obsolete_page", "_change_status": "deleted"})
+        plan = {
+            "schema_version": PRODUCT_PLAN_SCHEMA_VERSION,
+            "version": "0.1.0", "generated_at": "2026-01-01T00:00:00+00:00",
+            "requirement_spec_sha256": requirement_spec_sha256(spec),
+            "app": {"name": "库存", "summary": "说明"},
+            "business_flows": [],
+            "pages": pages,
+            "authorizationTargets": {"pageRules": [], "operationRules": []},
+            "product_acceptance_criteria": ["可用"],
+            "confirmation_status": "pending_user_confirmation",
+        }
+
+        self.assertEqual(
+            [e for e in validate_product_plan(plan, spec, deleted_page_ids={"obsolete_page"})
+             if "obsolete_page" in e],
+            [],
+        )
+        # 删掉该页则页面集合不再对齐。
+        missing = {**plan, "pages": pages[:2]}
+        self.assertTrue(any(
+            "pages" in e for e in validate_product_plan(missing, spec, deleted_page_ids={"obsolete_page"})
+        ))
+
+    def test_confirmed_plan_with_empty_deleted_page_passes(self) -> None:
+        """已确认的产品计划里，删除页内容为空也不应被正式契约拦下。
+
+        回归：正式 RequirementSpec 写盘前会剥离 `_change_status`，此时从需求侧
+        推不出删除集合；产品计划刻意保留该标记，下游校验必须据此豁免这些页面，
+        否则技术规划/UI 确认会因"删除页缺少 goal"而整个中断。
+        """
+
+        spec = self._spec_with_deleted_page()
+        pages = self._plan_pages(spec, {"obsolete_page"})
+        # 删除页只保留身份与标记，内容取自上一轮、可能已经为空。
+        pages.append({"pageId": "obsolete_page", "_change_status": "deleted"})
+        plan = {
+            "schema_version": PRODUCT_PLAN_SCHEMA_VERSION,
+            "version": "0.1.0", "generated_at": "2026-01-01T00:00:00+00:00",
+            "requirement_spec_sha256": requirement_spec_sha256(spec),
+            "app": {"name": "库存", "summary": "说明"},
+            "business_flows": [],
+            "pages": pages,
+            "authorizationTargets": {"pageRules": [], "operationRules": []},
+            "product_acceptance_criteria": ["可用"],
+            "confirmation_status": "confirmed",
+        }
+
+        # 正式 spec 不含标记，删除集合只能来自产品计划自身。
+        self.assertEqual(require_current_product_plan(plan, spec), plan)
+
+        # 正常页面缺内容仍必须报错。
+        broken = deepcopy(plan)
+        broken["pages"][0]["goal"] = ""
+        with self.assertRaisesRegex(ValueError, "goal"):
+            require_current_product_plan(broken, spec)
 
 
 if __name__ == "__main__":

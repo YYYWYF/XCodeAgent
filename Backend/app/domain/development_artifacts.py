@@ -53,6 +53,13 @@ class DevelopmentArtifactProgress(DevelopmentArtifactModel):
     # completed 事实会被继承，只靠状态三档分不出来。归属**只增不改**：一旦在 v1.0 完成，
     # 后续迭代继承时保留原值，不会被改写成新分支。
     completed_branch_name: str | None = Field(default=None, alias="completedBranchName")
+    # 最近一次"开发完成"（含重新开发）的运行与线程。
+    # 与上面三个字段的区别：那三个是**首次**完成事实，用于产物归属标签，不会被覆盖；
+    # 这两个每轮开发成功都会刷新，供前端判断"本轮运行是否完成了这个目标"——
+    # 否则重新开发一个已完成目标时，前端看到的是别的运行 id，会误以为本轮没有完成，
+    # 从而不展示"继续开发其他目标"的引导。
+    last_completed_run_id: str | None = Field(default=None, alias="lastCompletedRunId")
+    last_completed_thread_id: str | None = Field(default=None, alias="lastCompletedThreadId")
     # 当前正式合同的增量分析结果独立于首次完成事实，重新开发成功后才清除。
     change_status: Literal["unchanged", "changed", "unavailable"] = Field(default="unchanged", alias="changeStatus")
     change_reason: str | None = Field(default=None, alias="changeReason")

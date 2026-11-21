@@ -1,6 +1,7 @@
 import {
   ArrowUpOutlined,
   CheckOutlined,
+  DeleteOutlined,
   EyeOutlined,
   InboxOutlined,
   LayoutOutlined,
@@ -62,6 +63,9 @@ type PageDesign = {
   error?: string
   /** 用户为本页选中的页面模板 id（后端 ui_confirmation 节点回传），用于回显"已选模板"。 */
   template_id?: string
+  /** 本轮需求变更状态（后端从 requirement_spec_diff 注入）：added/modified/unchanged/deleted。
+   *  旧页面（unchanged）禁用生成/换一换与 / 命令选中。字段缺失（旧数据降级）时不禁用。 */
+  change_status?: 'added' | 'modified' | 'unchanged' | 'deleted'
 }
 
 type Props = {
@@ -114,6 +118,21 @@ function readPages(clarification?: WorkflowClarification): PageDesign[] {
   return Array.isArray(pages)
     ? (pages.filter((item) => item && typeof item === 'object') as PageDesign[])
     : []
+}
+
+// 旧页面（继承自基线未变更）不允许生成/换一换设计稿，也不允许在 / 命令里选中。
+// added/modified 是本轮需求变更，允许操作；deleted 也禁用（页面要删了）。
+// 字段缺失（旧数据降级）时不禁用，保持原行为。
+function isPageActionable(page: PageDesign): boolean {
+  const status = page.change_status
+  if (!status) return true
+  return status === 'added' || status === 'modified'
+}
+
+// 本轮要删除的页面：已确认不再需要，设计稿只保留"已删除"状态，不允许查看。
+// 判定同时认后端注入的 change_status 与页面终态 status：两者任一命中即视为删除。
+function isPageDeleted(page: PageDesign): boolean {
+  return page.change_status === 'deleted' || page.status === 'deleted'
 }
 
 // 在创建规划页面展示逐页设计稿，并收集用户的逐页/全部确认动作。
@@ -790,21 +809,25 @@ export default function UiDesignConfirmationPanel({
                 {pages.map((page, index) => {
                   const pageId = page.pageId || `page-${index + 1}`
                   const confirmed = isPageConfirmedForDisplay(page)
+                  const deleted = isPageDeleted(page)
                   const active = activePageId === pageId
                   return (
                     <button
                       className={cx(
                         'ui-design-anchor-item',
                         confirmed && 'is-confirmed',
+                        deleted && 'is-deleted',
                         active && 'is-active'
                       )}
                       key={pageId}
-                      disabled={disabled}
+                      // 已删除页面不可查看：禁用后连选中都不允许。
+                      disabled={disabled || deleted}
                       onClick={() => setActivePageId(pageId)}
+                      title={deleted ? '该页面已在本轮需求中删除' : undefined}
                       type="button"
                     >
                       <span className={cx('ui-design-anchor-index')}>
-                        {confirmed ? <CheckOutlined /> : index + 1}
+                        {deleted ? <DeleteOutlined /> : confirmed ? <CheckOutlined /> : index + 1}
                       </span>
                       <span className={cx('ui-design-anchor-label')}>
                         {page.name || pageId}
@@ -825,12 +848,14 @@ export default function UiDesignConfirmationPanel({
                 const index = activeIndex >= 0 ? activeIndex : 0
                 const pageId = page.pageId || `page-${index + 1}`
                 const confirmed = isPageConfirmedForDisplay(page)
+                const deleted = isPageDeleted(page)
                 const generating = actingSet.has(pageId) || isPageGenerating(page)
                 return (
                   <div
                     className={cx(
                       'ui-design-card',
-                      confirmed && 'is-confirmed'
+                      confirmed && 'is-confirmed',
+                      deleted && 'is-deleted'
                     )}
                     key={pageId}
                   >
@@ -841,6 +866,13 @@ export default function UiDesignConfirmationPanel({
                         </span>
                         <div className={cx('ui-design-card-title')}>
                           <Text strong>{page.name || pageId}</Text>
+                          {deleted ? (
+                            // 不使用 antd 的 color="red" 预设：它注入的 .ant-tag-red / .ant-tag
+                            // 规则会压过本组件的配色，导致和开发阶段的"待删除"徽标不一致。
+                            <Tag className={cx('ui-design-card-deleted-tag')}>
+                              待删除
+                            </Tag>
+                          ) : null}
                           {page.path ? (
                             <Text className={cx('ui-design-card-path')} code>
                               {page.path}
@@ -853,6 +885,7 @@ export default function UiDesignConfirmationPanel({
                           ) : null}
                         </div>
                       </div>
+                      {deleted ? null : (
                       <div className={cx('ui-design-card-actions')}>
                         <Button
                           className={cx('ui-design-action-btn')}
@@ -876,10 +909,10 @@ export default function UiDesignConfirmationPanel({
                         ) : (
                           <Button
                             className={cx('ui-design-action-btn')}
-                            disabled={disabled || generating || templates.length === 0}
+                            disabled={disabled || generating || templates.length === 0 || !isPageActionable(page)}
                             icon={<LayoutOutlined />}
                             onClick={() => setTemplatePickerFor(pageId)}
-                            title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
+                            title={!isPageActionable(page) ? '旧页面（需求未变更），无需重新生成' : templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
                           >
                             选模板
                           </Button>
@@ -907,15 +940,16 @@ export default function UiDesignConfirmationPanel({
                         ) : (
                           <Button
                             className={cx('ui-design-action-btn')}
-                            disabled={disabled || generating}
+                            disabled={disabled || generating || !isPageActionable(page)}
                             icon={<ReloadOutlined />}
                             onClick={() => submitPageAction(pageId, 'regenerate')}
-                            title={page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
+                            title={!isPageActionable(page) ? '旧页面（需求未变更），无需重新生成' : page.code ? '重新生成本页设计稿' : '生成本页设计稿'}
                           >
                             {page.code ? '换一换' : '生成'}
                           </Button>
                         )}
                       </div>
+                      )}
                     </div>
                     {page.description ? (
                       <Paragraph className={cx('ui-design-card-desc')} type="secondary">
@@ -924,7 +958,18 @@ export default function UiDesignConfirmationPanel({
                     ) : null}
                     {showPreview ? (
                       <div className={cx('ui-design-card-preview')}>
-                        {generating ? (
+                        {deleted ? (
+                          // 已删除页面不渲染设计稿：既不能让用户查看，也不能再生成。
+                          <div className={cx('ui-design-card-empty', 'is-deleted')}>
+                            <DeleteOutlined className={cx('ui-design-card-empty-icon')} />
+                            <span className={cx('ui-design-card-empty-title')}>
+                              该页面已在本轮需求中删除
+                            </span>
+                            <span className={cx('ui-design-card-empty-hint')}>
+                              开发阶段将一并删除它的页面代码，此处仅保留删除记录。
+                            </span>
+                          </div>
+                        ) : generating ? (
                           <div className={cx('ui-design-card-loading')}>
                             <Spin />
                             <span className={cx('ui-design-card-loading-text')}>
@@ -1013,24 +1058,32 @@ export default function UiDesignConfirmationPanel({
             // 认出来 —— 用户没 @ 指定页面时，这是唯一能点亮「生成中」的来源。
             // 刻意不复用给「停止」按钮：本页不在池里，停不掉，不该显示停止。
             const generating = acting || pageId === adjustingPageId
+            const deleted = isPageDeleted(page)
             return (
               <div
                 className={cx(
                   'ui-design-page-row',
                   confirmed && 'is-confirmed',
-                  generating && 'is-acting'
+                  generating && 'is-acting',
+                  deleted && 'is-deleted'
                 )}
                 key={pageId}
               >
                 <div className={cx('ui-design-page-row-meta')}>
                   <span className={cx('ui-design-page-row-index')}>
-                    {confirmed ? <CheckOutlined /> : index + 1}
+                    {deleted ? <DeleteOutlined /> : confirmed ? <CheckOutlined /> : index + 1}
                   </span>
                   <div className={cx('ui-design-page-row-title')}>
                     <span className={cx('ui-design-page-row-name-line')}>
                       <Text className={cx('ui-design-page-row-name')} strong>
                         {page.name || pageId}
                       </Text>
+                      {deleted ? (
+                        // 同上：删除态配色由本地样式表统一，不叠加 antd 的红色预设。
+                        <Tag className={cx('ui-design-page-row-status', 'is-deleted')}>
+                          待删除
+                        </Tag>
+                      ) : null}
                       {/* 迭代归属：这个页面上次是哪个版本设计的 / 哪个版本该设计却没设计。
                           数据来自后端按迭代记录的页面计划与产出事实。 */}
                       <IterationBadge
@@ -1050,7 +1103,7 @@ export default function UiDesignConfirmationPanel({
                       </Text>
                     ) : null}
                   </div>
-                  {generating ? (
+                  {deleted ? null : generating ? (
                     <Tag className={cx('ui-design-page-row-status', 'is-generating')}>{page.status === 'stopping' || cancellation.stopping.includes(pageId) ? '正在停止' : '生成中'}</Tag>
                   ) : confirmed ? (
                     // 行状态和统计使用相同的当前生成事实，不能由旧 code 冒充成功。
@@ -1072,6 +1125,7 @@ export default function UiDesignConfirmationPanel({
                     </Tag>
                   )}
                 </div>
+                {deleted ? null : (
                 <div className={cx('ui-design-page-row-actions')}>
                   <Button
                     className={cx('ui-design-action-btn')}
@@ -1098,10 +1152,10 @@ export default function UiDesignConfirmationPanel({
                   ) : (
                     <Button
                       className={cx('ui-design-action-btn')}
-                      disabled={disabled || generating || templates.length === 0}
+                      disabled={disabled || generating || templates.length === 0 || !isPageActionable(page)}
                       icon={<LayoutOutlined />}
                       onClick={() => setTemplatePickerFor(pageId)}
-                      title={templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
+                      title={!isPageActionable(page) ? '旧页面（需求未变更），无需重新生成' : templates.length === 0 ? '暂无可用页面模板' : '选择模板定版式，由 AI 填入本页内容并重新生成（需等待）'}
                     >
                       选模板
                     </Button>
@@ -1129,21 +1183,24 @@ export default function UiDesignConfirmationPanel({
                   ) : (
                     <Button
                       className={cx('ui-design-action-btn', 'ui-design-action-btn-regenerate')}
-                      disabled={disabled || generating}
+                      disabled={disabled || generating || !isPageActionable(page)}
                       icon={<ReloadOutlined />}
                       onClick={() => submitPageAction(pageId, 'regenerate')}
                       title={
-                        generating
-                          ? '本页正在调整中，请等本轮结束'
-                          : page.code
-                            ? '重新生成本页设计稿'
-                            : '生成本页设计稿'
+                        !isPageActionable(page)
+                          ? '旧页面（需求未变更），无需重新生成'
+                          : generating
+                            ? '本页正在调整中，请等本轮结束'
+                            : page.code
+                              ? '重新生成本页设计稿'
+                              : '生成本页设计稿'
                       }
                     >
                       {page.code ? '换一换' : '生成'}
                     </Button>
                   )}
                 </div>
+                )}
               </div>
             )
           })}
@@ -1189,16 +1246,23 @@ export default function UiDesignConfirmationPanel({
           />
           {mentionOpen && mentionCandidates.length > 0 ? (
             <div className={cx('ui-design-mention-popover')}>
-              {mentionCandidates.map((p) => (
-                <button
-                  className={cx('ui-design-mention-item')}
-                  key={p.pageId}
-                  onClick={() => insertMention(p)}
-                  type="button"
-                >
-                  {p.name || p.pageId}
-                </button>
-              ))}
+              {mentionCandidates.map((p) => {
+                // 旧页面（需求未变更）仍展示在列表里让用户看到全貌，但禁用不可选中。
+                // 不用 disabled 属性（会让原生 title 失效），改用 aria-disabled + 点击拦截。
+                const actionable = isPageActionable(p)
+                return (
+                  <button
+                    aria-disabled={!actionable || undefined}
+                    className={cx('ui-design-mention-item', !actionable && 'is-disabled')}
+                    key={p.pageId}
+                    onClick={() => actionable && insertMention(p)}
+                    title={actionable ? undefined : '未变更页面只允许查看'}
+                    type="button"
+                  >
+                    {p.name || p.pageId}
+                  </button>
+                )
+              })}
             </div>
           ) : null}
         </div>

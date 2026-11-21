@@ -19,6 +19,7 @@ import type {
 import { cx } from '../../../../utils'
 import './ApplicationOutline.less'
 import { OutlineRow } from './outlineHelpers'
+import { WorkbenchChangeBadge, isDeletedStatus } from './WorkbenchChangeBadge'
 import ApiOutlineGroup from './ApiOutlineGroup'
 import CatalogReadNotice from './CatalogReadNotice'
 import DocumentOutline from './DocumentOutline'
@@ -286,20 +287,38 @@ export default function ApplicationOutline({
               </button>
               {entitiesExpanded ? (
                 <div className={cx('api-list')}>
-                  {visibleEntities.map((entity) => (
-                    <button
-                      aria-current={selectedEntityId === entity.id ? 'true' : undefined}
-                      aria-label={`${entity.label}，${entity.id}`}
-                      className={cx('api-row', 'entity-row', selectedEntityId === entity.id && 'selected')}
-                      key={entity.id}
-                      onClick={() => onEntitySelect(entity)}
-                      title={entity.purpose}
-                      type="button"
-                    >
-                      <DatabaseOutlined className={cx('api-endpoint-icon')} />
-                      <span className={cx('api-copy')}><strong>{entity.label}</strong></span>
-                    </button>
-                  ))}
+                  {visibleEntities.map((entity) => {
+                    // 已删除的实体不能进入开发 workflow。
+                    const deleted = isDeletedStatus(entity.changeStatus)
+                    return (
+                      <button
+                        aria-current={selectedEntityId === entity.id ? 'true' : undefined}
+                        aria-label={`${entity.label}，${entity.id}`}
+                        className={cx(
+                          'api-row',
+                          'entity-row',
+                          selectedEntityId === entity.id && 'selected',
+                          deleted && 'is-deleted'
+                        )}
+                        disabled={deleted}
+                        key={entity.id}
+                        onClick={() => {
+                          if (!deleted) onEntitySelect(entity)
+                        }}
+                        title={deleted ? '本轮已删除，不可进入开发流程' : entity.purpose}
+                        type="button"
+                      >
+                        <DatabaseOutlined className={cx('api-endpoint-icon')} />
+                        <span className={cx('api-copy')}>
+                          {/* 名称与变更徽标同一行，与接口行保持一致。 */}
+                          <span className={cx('api-endpoint-title-row')}>
+                            <strong>{entity.label}</strong>
+                            <WorkbenchChangeBadge status={entity.changeStatus} />
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
                   {visibleEntities.length === 0 ? (
                     <div className={cx('outline-empty')}>
                       {!technicalAvailable ? '实体目录尚未读取成功' : entities.length === 0 ? '当前计划中暂无实体' : '没有匹配的实体'}

@@ -762,10 +762,13 @@
     display: flex;
     min-width: 0;
     flex: 1;
-    flex-direction: column;
-    gap: 1px;
+    // 名称与变更徽标同一行；徽标不参与收缩，名称过长时省略。
+    align-items: center;
+    gap: 6px;
 
     strong {
+      min-width: 0;
+      flex: 0 1 auto;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -831,7 +834,17 @@
     flex-direction: column;
     gap: 1px;
 
+    // 名称与变更徽标同一行：名称过长时省略，徽标保持完整宽度不换行。
+    .@{class-prefix}-api-endpoint-title-row {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 6px;
+    }
+
     strong {
+      min-width: 0;
+      flex: 0 1 auto;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;

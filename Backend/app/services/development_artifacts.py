@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.services.development_change_snapshot import read_change_snapshot
 
 import json
 from pathlib import Path
@@ -28,6 +29,28 @@ INITIAL_DEVELOPMENT_PHASES = frozenset({
 })
 ACTIVE_STATUSES = frozenset({"running", "stopping", "awaiting_user"})
 _BUILD_PLAN_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / 'plans/build-task-plan.json'
+# 生命周期 extensions 里记录"本轮变更已重做完成"的产物标识。
+# 变更快照是技术规划确认时一次性冻结的本轮结论，不会随开发完成更新，因此需要
+# 这份独立事实让 reconcile 不再把已重做的产物反复标回 changed。
+_REDEVELOPED_EXTENSION = "redevelopedChangedTargets"
+
+
+def redeveloped_target_keys(state: "ApplicationLifecycle") -> set[str]:
+    """读取本轮已针对变更重新开发完成的产物标识，供目录校准与门禁共用。"""
+
+    values = (state.extensions or {}).get(_REDEVELOPED_EXTENSION)
+    if not isinstance(values, list):
+        return set()
+    return {str(item) for item in values if isinstance(item, str) and item}
+
+
+def _with_redeveloped_target(state: "ApplicationLifecycle", target: DevelopmentArtifactTarget) -> "ApplicationLifecycle":
+    """把目标并入"本轮已重做"集合，返回合并后的生命周期（不写盘）。"""
+
+    keys = redeveloped_target_keys(state) | {development_artifact_key(target)}
+    return state.model_copy(update={
+        "extensions": {**(state.extensions or {}), _REDEVELOPED_EXTENSION: sorted(keys)},
+    })
 
 
 def development_artifact_key(target: DevelopmentArtifactTarget) -> str:
@@ -154,27 +177,93 @@ def _identifier(value: Any) -> str:
     return value
 
 
+def _deleted_page_ids(product: dict[str, Any]) -> set[str]:
+    """取正式 ProductPlan 里标记为本轮删除的页面 ID。
+
+    正式产物刻意保留 `_change_status="deleted"`（见 product_planning 的落盘逻辑）：
+    这是开发阶段清理页面代码、以及"全部产物完成"门禁必须知道的事实。
+    其它状态（added/modified/unchanged）落盘时已剥离，这里只会看到 deleted。
+    """
+
+    return {
+        _identifier(page.get("pageId"))
+        for page in _records(product.get("pages"), "ProductPlan.pages")
+        if str(page.get("_change_status") or "") == "deleted"
+    }
+
+
+def _target_change_status(
+    target: DevelopmentArtifactTarget,
+    pages: dict[str, Any],
+    endpoints: dict[str, Any],
+) -> str:
+    """从变更快照取某个开发产物本轮的变更类型，缺失按未变更处理。
+
+    实体不参与构建跳过判定（技术规划实体不要求独立设计），因此不在这里返回。
+    """
+
+    if target.type == "page":
+        return str(pages.get(target.page_id or "") or "unchanged")
+    if target.type == "endpoint":
+        contract_changes = endpoints.get(target.api_contract_id or "") or {}
+        return str(contract_changes.get(target.endpoint_id or "") or "unchanged")
+    return "unchanged"
+
+
 def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
     """使用 ProductPlan 页面与 TechnicalPlan 接口、实体，与工作台目录保持一致。"""
 
     product = _confirmed_plan(workspace, "product-plan")
     technical = _confirmed_plan(workspace, "technical-plan")
     targets: list[DevelopmentArtifactTarget] = []
+    # 本轮删除的页面不再属于开发产物：留在目录里会让"全部产物完成"门禁永远无法通过，
+    # 也会让构建范围继续以为它还需要开发。
+    # 删除事实有两个来源：正式 ProductPlan 上残留的 deleted 标记（模型漏掉删除时的兜底），
+    # 以及技术规划确认时冻结的变更快照（正常路径）。
+    changes = read_change_snapshot(workspace) or {}
+    deleted_pages = _deleted_page_ids(product) | {
+        page_id for page_id, status in (changes.get("pages") or {}).items() if status == "deleted"
+    }
     for page in _records(product.get("pages"), "ProductPlan.pages"):
-        targets.append(DevelopmentArtifactTarget(type="page", pageId=_identifier(page.get("pageId"))))
+        page_id = _identifier(page.get("pageId"))
+        targets.append(DevelopmentArtifactTarget(type="page", pageId=page_id))
+    # 删除页面可能已经退出 ProductPlan，快照仍保留待清理的稳定身份。
+    listed_pages = {target.page_id for target in targets}
+    targets.extend(DevelopmentArtifactTarget(type="page", pageId=page_id)
+                   for page_id in sorted(deleted_pages - listed_pages))
     contracts: set[str] = set()
+    # 接口级的删除结论以快照为准：分组整体消失时，它的每个接口都必须是 deleted。
+    deleted_endpoints = {
+        (contract_id, endpoint_id)
+        for contract_id, endpoints in (changes.get("endpoints") or {}).items()
+        if isinstance(endpoints, dict)
+        for endpoint_id, status in endpoints.items()
+        if status == "deleted"
+    }
     for contract in _records(technical.get("api_contracts"), "TechnicalPlan.api_contracts"):
         contract_id = _identifier(contract.get("id"))
         if contract_id in contracts:
             raise ValueError("开发产物 API Contract 标识重复。")
         contracts.add(contract_id)
         for endpoint in _records(contract.get("endpoints"), "API Contract.endpoints"):
+            endpoint_id = _identifier(endpoint.get("id"))
+            # 计划删除仍是一项开发清理任务；只有本轮节点完成后才允许进入测试。
             targets.append(DevelopmentArtifactTarget(
                 type="endpoint", apiContractId=contract_id,
-                endpointId=_identifier(endpoint.get("id")),
+                endpointId=endpoint_id,
             ))
+    listed_endpoints = {(target.api_contract_id, target.endpoint_id)
+                        for target in targets if target.type == "endpoint"}
+    targets.extend(DevelopmentArtifactTarget(type="endpoint", apiContractId=contract_id, endpointId=endpoint_id)
+                   for contract_id, endpoint_id in sorted(deleted_endpoints - listed_endpoints))
+    deleted_entities = {
+        entity_id for entity_id, status in (changes.get("entities") or {}).items() if status == "deleted"
+    }
     for entity in _records(technical.get("entities", []), "TechnicalPlan.entities"):
-        targets.append(DevelopmentArtifactTarget(type="entity", entityId=_identifier(entity.get("id"))))
+        entity_id = _identifier(entity.get("id"))
+        if entity_id in deleted_entities:
+            continue
+        targets.append(DevelopmentArtifactTarget(type="entity", entityId=entity_id))
     keys = [target.model_dump_json() for target in targets]
     if len(set(keys)) != len(keys):
         raise ValueError("开发产物标识重复。")
@@ -213,6 +302,22 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
     artifacts.out_of_scope = out_of_scope_keys(workspace, targets)
     # 本次 reconcile 所在的迭代（用于给"本轮才完成"的实体打归属标签）。只读一次。
     current_branch = read_workspace_branch_name(workspace)
+    # 本轮的变更结论来自技术规划确认时冻结的快照。它决定"已完成但本轮改过"的产物
+    # 必须重做（见 test_entry_gate 与 completed_page_backend_endpoints）。
+    changes = read_change_snapshot(workspace) or {}
+    changed_pages = changes.get("pages") or {}
+    changed_entities = changes.get("entities") or {}
+    changed_endpoints = changes.get("endpoints") or {}
+    # 本轮已按最新正式产物重新开发并通过门禁的产物：快照是"本轮相对基线"的一次性冻结结论，
+    # 不会因开发完成而更新，所以必须单独记录这些目标已经重做完成，否则每次 reconcile
+    # 都会把它们重新标回 changed，被测试入口门禁永远算作未完成。
+    redeveloped = redeveloped_target_keys(state)
+    # 快照缺失时无法判断"改没改"。一律按 unchanged 处理会让已改过的产物被跳过，
+    # 所以这里记下缺口并关闭测试入口，要求重新确认技术规划。
+    if not changes:
+        artifacts = artifacts.model_copy(update={
+            "catalog_error": "缺少本轮变更快照，无法判断已完成产物是否需要重做，请重新确认技术规划。",
+        })
     for target in targets:
         if target.type == "entity":
             # 只认当前正式绑定的显式确认；选表、生成设计和等待确认都不算完成。
@@ -254,6 +359,20 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
                 for execution in state.active_executions.values()
             )
             progress = DevelopmentArtifactProgress(initialDevelopmentStatus="in_progress" if active else "pending")
+        # 本轮变更类型：只有"已完成 + 本轮改过"才需要重做，未完成的产物本来就要开发。
+        # 已经针对本轮变更重新开发完成的目标，变更结论已经落实，不再算作待重做。
+        status = _target_change_status(target, changed_pages, changed_endpoints)
+        if status in {"added", "modified", "deleted"} and development_artifact_key(target) not in redeveloped:
+            progress = progress.model_copy(update={
+                "change_status": "changed",
+                "change_reason": (
+                    "本轮技术规划删除了该产物，需要执行代码与设计稿清理。"
+                    if status == "deleted" else
+                    "本轮技术规划新增或修改了该产物，需要按最新正式产物重新开发。"
+                ),
+            })
+        else:
+            progress = progress.model_copy(update={"change_status": "unchanged", "change_reason": None})
         if target.type == "page":
             artifacts.pages[target.page_id or ""] = progress
         else:
@@ -378,6 +497,15 @@ def complete_initial_development(
                 current.completed_thread_id = execution.thread_id
                 current.completed_branch_name = branch
                 changed = True
+            # 每轮开发成功都要刷新"最近一次完成"：重新开发一个已完成的目标时，
+            # 首次完成证据保持不变（归属标签仍指向原来那一版），但本轮运行必须留痕，
+            # 前端才能识别"这次运行完成了该目标"并给出继续开发引导。
+            if current.last_completed_run_id != run_id:
+                current.last_completed_run_id = run_id
+                changed = True
+            if current.last_completed_thread_id != execution.thread_id:
+                current.last_completed_thread_id = execution.thread_id
+                changed = True
             if current.change_status != "unchanged":
                 # 仅清除本轮验证成功目标的变更，首次完成身份与归属保持不变。
                 current.change_status = "unchanged"
@@ -387,6 +515,117 @@ def complete_initial_development(
             return state
         updated = state.model_copy(update={"revision": state.revision + 1, "updated_at": utc_now()})
         return write_application_lifecycle(workspace, updated, expected_revision=state.revision)
+
+
+def complete_scope_target_development(
+    workspace: str | Path,
+    *,
+    scope: dict[str, Any] | None,
+    run_id: str,
+    thread_id: str,
+) -> ApplicationLifecycle:
+    """按本轮 Build 执行范围补记目标完成，供既有完成证据缺失时兜底。
+
+    **为什么需要兜底**：`complete_initial_development` 只能从 execution 的
+    `development_target` 认目标。历史运行或执行记录已收尾时该字段为空，
+    于是一个已经跑完 Build 和单元测试门禁的目标不会被登记为完成；而测试入口门禁
+    又要求"首次完成 + 未变更"才算完成项，本轮目标自己就会一直卡在完成数少一个，
+    导致永远进不了测试阶段的确认门。
+
+    **兜底边界**：调用方必须已经用 Build 成功和单元测试门禁通过证明本次执行确实完成，
+    且只登记本轮 scope 指向的那一个目标；这里不再自行判断执行是否成功。
+    """
+
+    from app.services.application_lifecycle import (
+        _application_lifecycle_lock, application_lifecycle_path, load_application_lifecycle,
+        write_application_lifecycle,
+    )
+
+    target = _target_from_execution_scope(scope)
+    if target is None:
+        # 应用级或身份不完整的范围没有可登记的单项产物，直接返回当前生命周期。
+        return load_application_lifecycle(workspace) or refresh_development_artifacts(workspace)
+
+    with _application_lifecycle_lock(application_lifecycle_path(workspace)):
+        state = refresh_development_artifacts(workspace)
+        current = artifact_progress(state.development_artifacts, target)
+        # 实体完成以正式绑定确认状态为证据，这里只补页面与接口的 Build 完成事实。
+        if not isinstance(current, DevelopmentArtifactProgress):
+            return state
+        run_id = run_id.strip()
+        thread_id = thread_id.strip()
+        if not run_id or not thread_id:
+            # 缺少稳定证据时不伪造完成记录（领域模型会拒绝没有证据的 completed）。
+            return state
+        changed = False
+        if current.initial_development_status != "completed":
+            current.initial_development_status = "completed"
+            current.completed_at = utc_now()
+            current.completed_run_id = run_id
+            current.completed_thread_id = thread_id
+            current.completed_branch_name = read_workspace_branch_name(workspace) or None
+            changed = True
+        # 与正常提交路径一致：本轮运行也要记入"最近一次完成"，供前端识别本轮已完成。
+        if current.last_completed_run_id != run_id:
+            current.last_completed_run_id = run_id
+            changed = True
+        if current.last_completed_thread_id != thread_id:
+            current.last_completed_thread_id = thread_id
+            changed = True
+        if current.change_status != "unchanged":
+            # 本轮已按最新正式产物重新开发并通过门禁，变更标记随之清除。
+            current.change_status = "unchanged"
+            current.change_reason = None
+            changed = True
+        # 记录"本轮该变更已重做"：快照本身不会更新，不记这一条，下一次 calibrate
+        # 又会按快照把它标回 changed。
+        updated = _with_redeveloped_target(state, target)
+        if not changed and updated.extensions == state.extensions:
+            return state
+        updated = updated.model_copy(update={"revision": state.revision + 1, "updated_at": utc_now()})
+        return write_application_lifecycle(workspace, updated, expected_revision=state.revision)
+
+
+def _target_from_execution_scope(scope: dict[str, Any] | None) -> DevelopmentArtifactTarget | None:
+    """把 Build 执行范围转换成产物目标；应用级或字段缺失的范围返回 None。
+
+    范围里的标识可能来自 checkpoint 的 snake_case 或公开投影的 camelCase，
+    两种写法都要识别，否则兜底会因为字段名不一致而静默失效。
+    """
+
+    scope = scope if isinstance(scope, dict) else {}
+    target_type = str(scope.get("type") or "").strip()
+    target_id = str(scope.get("targetId") or scope.get("target_id") or "").strip()
+    if not target_id:
+        return None
+    if target_type == "page":
+        return DevelopmentArtifactTarget(type="page", pageId=target_id)
+    if target_type == "endpoint":
+        contract_id = str(
+            scope.get("apiContractId") or scope.get("api_contract_id") or ""
+        ).strip()
+        # 接口目标必须带契约标识，否则无法唯一定位产物。
+        if not contract_id:
+            return None
+        return DevelopmentArtifactTarget(
+            type="endpoint", apiContractId=contract_id, endpointId=target_id,
+        )
+    return None
+
+
+def completed_deletion_target(state: dict[str, Any]) -> DevelopmentArtifactTarget | None:
+    """只识别删除节点提交的同目标完成结果，测试交接不得借用其他目标或普通 Build 证据。"""
+
+    target = _target_from_execution_scope(state.get("build_execution_scope"))
+    if target is None:
+        return None
+    result = state.get("deleted_page_result" if target.type == "page" else "deleted_endpoint_result")
+    if not isinstance(result, dict) or result.get("completed") is not True:
+        return None
+    matches = result.get("pageId") == target.page_id if target.type == "page" else (
+        result.get("apiContractId") == target.api_contract_id and result.get("endpointId") == target.endpoint_id
+    )
+    return target if matches else None
 
 
 def execution_development_metadata(

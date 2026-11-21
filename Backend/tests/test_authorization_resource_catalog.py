@@ -9,11 +9,16 @@ import tempfile
 import unittest
 
 from app.services.authorization_frontend_projection import (
-    AuthorizationFrontendProjectionError,
-    apply_frontend_resources_projection,
+    apply_authorization_frontend_projection,
     compile_frontend_authorization_projection,
 )
+# 投影侧与资源目录侧各自定义同名异常；投影函数抛出的是它自己那一个。
+from app.services.authorization_frontend_projection import (
+    AuthorizationFrontendProjectionError as ProjectionError,
+)
 from app.services.authorization_resource_catalog import (
+    # 资源目录校验抛出的是本模块自己的异常类型；前端投影侧另有同名但独立的类。
+    AuthorizationFrontendProjectionError,
     ResourceCatalog,
     compile_frontend_resource_catalog,
     resource_catalog_fingerprint,
@@ -142,7 +147,9 @@ class AuthorizationResourceCatalogTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 manifest = _manifest()
                 manifest["resources"].append({**manifest["resources"][1], **changes})
-                with self.assertRaisesRegex(AuthorizationFrontendProjectionError, "常量名冲突|resourceKey 重复"):
+                with self.assertRaisesRegex(
+                    AuthorizationFrontendProjectionError, "RESOURCES 常量名冲突|资源目录 resourceKey 重复"
+                ):
                     compile_frontend_resource_catalog(manifest)
 
     def test_constant_collisions_keep_existing_rule(self) -> None:
@@ -157,7 +164,12 @@ class AuthorizationResourceCatalogTests(unittest.TestCase):
                 manifest = _manifest()
                 manifest["resources"].append({**manifest["resources"][index], **changes})
                 with self.assertRaisesRegex(AuthorizationFrontendProjectionError, f"RESOURCES 常量名冲突：{symbol}"):
-                    compile_frontend_authorization_projection({"authorization_manifest": manifest})
+                    compile_frontend_resource_catalog(manifest)
+                with self.assertRaisesRegex(ProjectionError, f"RESOURCES 常量名冲突：{symbol}"):
+                    compile_frontend_authorization_projection(
+                        {"authorization_manifest": manifest},
+                        application_config={"authorization": {"enabled": True}},
+                    )
 
     def test_same_constant_name_in_different_groups_remains_allowed(self) -> None:
         """既有冲突检测只在同组内生效，跨组同名不误报。"""
@@ -170,7 +182,15 @@ class AuthorizationResourceCatalogTests(unittest.TestCase):
     def test_invalid_input_cannot_be_silently_dropped(self) -> None:
         """非法项、空目录和非精确身份不能静默缩小目录或变成其他资源。"""
 
-        for items in (None, [], [None], [{"resourceKey": "page_orders"}]):
+        # 空目录在资源目录层返回 None（无可编译资源）；"目录必须非空"由前端投影层把关。
+        for items in (None, []):
+            with self.subTest(items=items):
+                self.assertIsNone(compile_frontend_resource_catalog({"enabled": True, "resources": items}))
+                with self.assertRaisesRegex(ProjectionError, "缺少完整资源目录"):
+                    apply_authorization_frontend_projection(
+                        tempfile.mkdtemp(), {"resources": [], "routeDecorations": []}
+                    )
+        for items in ([None], [{"resourceKey": "page_orders"}]):
             with self.subTest(items=items), self.assertRaises(AuthorizationFrontendProjectionError):
                 compile_frontend_resource_catalog({"enabled": True, "resources": items})
         for field in ("resourceKey", "type", "targetResourceRef"):
@@ -197,12 +217,14 @@ class AuthorizationResourceCatalogTests(unittest.TestCase):
 
         manifest = _manifest()
         plan = {"confirmation_status": "confirmed", "authorization_manifest": manifest, "pages": [{"pageId": "page_orders", "path": "/orders"}]}
-        projection = compile_frontend_authorization_projection(plan)
+        projection = compile_frontend_authorization_projection(
+            plan, application_config={"authorization": {"enabled": True}}
+        )
         self.assertEqual(projection["resources"], compile_frontend_resource_catalog(manifest).frontend_resources())
         before = plan_fingerprint(plan)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            apply_frontend_resources_projection(root, projection)
+            apply_authorization_frontend_projection(root, projection)
             resources = root / "frontend/src/constants/resources.ts"
             source = resources.read_text(encoding="utf-8")
             resources.write_text("\n\n" + source.replace("  ", "    ") + "\n", encoding="utf-8")

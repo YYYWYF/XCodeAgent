@@ -870,6 +870,21 @@
   &:hover {
     background: var(--modal-surface-hover, var(--wb-surface-hover, rgba(0, 0, 0, 0.04)));
   }
+
+  // 旧页面（需求未变更）禁用态：明显灰底 + 弱化文字 + 禁用光标，hover 不变亮。
+  // cx() 会给类名统一加前缀（is-disabled → xa-is-disabled），所以这里必须用
+  // @{class-prefix}-is-disabled，写成 &.is-disabled 永远匹配不到。
+  // 底色按当前主题文字色混出灰底（弹窗/工作台、明/暗都能解析出可见的灰），
+  // 不能写死 rgba(0,0,0,x)——深色主题下几乎看不出来。
+  &.@{class-prefix}-is-disabled {
+    background: color-mix(in srgb, var(--modal-text, var(--wb-text, #202124)) 8%, transparent);
+    color: var(--modal-text-secondary, var(--wb-text-tertiary, rgba(0, 0, 0, 0.45)));
+    cursor: not-allowed;
+
+    &:hover {
+      background: color-mix(in srgb, var(--modal-text, var(--wb-text, #202124)) 8%, transparent);
+    }
+  }
 }
 
 // ---------- 输入框 + 圆形发送按钮（悬浮输入框右下角内侧） ----------
@@ -1086,3 +1101,75 @@
 }
 
 @import './UiDesignConfirmationResponsive.less';
+
+// ===== 已删除页面（本轮需求中删除） =====
+// 删除页只保留"删除记录"，不可查看、不可生成；配色取全局 --wb-danger，
+// 深浅主题下都能解析，与其它删除态语义保持一致。
+.@{class-prefix}-ui-design-anchor-item.@{class-prefix}-is-deleted {
+  // 已删除但仍需明确可见：不能被 disabled 的 0.5 透明度弱化成"不可用"。
+  // 名称保留原样、不加删除线 —— 状态由"待删除"标签表达，划线会让名称显得被截断。
+  opacity: 1;
+  color: var(--wb-danger, #f5222d);
+
+  .@{class-prefix}-ui-design-anchor-label {
+    color: var(--wb-danger, #f5222d);
+    text-decoration: none;
+  }
+}
+
+.@{class-prefix}-ui-design-card.@{class-prefix}-is-deleted {
+  border-color: color-mix(in srgb, var(--wb-danger, #f5222d) 34%, var(--modal-border));
+  background: color-mix(in srgb, var(--wb-danger, #f5222d) 5%, var(--modal-surface));
+}
+
+// 卡片标题上的"待删除"标签：与需求文档的变更徽标同一套视觉（胶囊 + 红色底/边框/字），
+// 而不是 antd Tag 的默认浅灰底。
+.@{class-prefix}-ui-design-card-deleted-tag.ant-tag {
+  margin-inline-start: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: #cf1322;
+  background: rgba(255, 77, 79, 0.08);
+  border: 1px solid rgba(255, 77, 79, 0.3);
+}
+
+// 删除页的预览区：用虚线框表达"此处不再提供设计稿"。
+.@{class-prefix}-ui-design-card-empty.@{class-prefix}-is-deleted {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--wb-danger, #f5222d) 30%, var(--modal-border));
+  color: var(--wb-danger, #f5222d);
+
+  .@{class-prefix}-ui-design-card-empty-title {
+    color: var(--wb-danger, #f5222d);
+  }
+}
+
+.@{class-prefix}-ui-design-page-row.@{class-prefix}-is-deleted {
+  border-color: color-mix(in srgb, var(--wb-danger, #f5222d) 26%, var(--modal-border));
+  background: color-mix(in srgb, var(--wb-danger, #f5222d) 4%, var(--modal-surface));
+
+  .@{class-prefix}-ui-design-page-row-name {
+    color: var(--wb-danger, #f5222d);
+    // 同上：只保留醒目的红色，不再给待删除页面的名称加删除线。
+    text-decoration: none;
+  }
+}
+
+.@{class-prefix}-ui-design-page-row-status.@{class-prefix}-is-deleted {
+  // 与卡片标题标签、开发阶段产物目录的"待删除"徽标保持完全一致：
+  // 胶囊形状 + 同一组红色取值。antd 运行时会注入对应的基础 .ant-tag 规则，
+  // 这里显式声明以避免被重置回默认文字色与灰底。
+  color: #cf1322;
+  background: rgba(255, 77, 79, 0.08);
+  border: 1px solid rgba(255, 77, 79, 0.3);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+}

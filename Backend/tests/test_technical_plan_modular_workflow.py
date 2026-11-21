@@ -10,6 +10,7 @@ from app.graph.nodes.application_technical_planning import technical_planning_ge
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.technical_planning_retry import prepare_technical_planning_retry
+from app.services.technical_plan_merger import strip_change_status
 from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
 from app.workspace.plan_documents import technical_plan_json_path, technical_plan_draft_json_path
 from tests.test_technical_plan_modular_generation import fragment_outputs, catalog_bindings
@@ -87,7 +88,7 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(count, len(self.outputs))
         self.assertEqual(snapshot.next, ("technical_planning_review",), "\n".join(frames))
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
-        plan = snapshot.values["technical_plan"]
+        plan = strip_change_status(snapshot.values["technical_plan"])
         self.assertEqual(plan["confirmation_status"], "pending_user_confirmation")
         self.assertEqual(plan["api_contracts"], self.h.candidate["api_contracts"])
         self.assertEqual(plan["pages"], self.h.candidate["pages"])
@@ -114,8 +115,8 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(count, len(outputs))
         self.assertEqual(snapshot.next, ("technical_planning_review",), "\n".join(frames))
         self.assertEqual(snapshot.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
-        self.assertEqual(snapshot.values["technical_plan"]["api_contracts"], self.h.candidate["api_contracts"])
-        self.assertEqual(snapshot.values["technical_plan"]["pages"], pages)
+        self.assertEqual(strip_change_status(snapshot.values["technical_plan"])["api_contracts"], self.h.candidate["api_contracts"])
+        self.assertEqual(strip_change_status(snapshot.values["technical_plan"])["pages"], pages)
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
         self.assertTrue(technical_plan_draft_json_path(snapshot.values).is_file())
         self.assertFalse(technical_plan_json_path(snapshot.values).exists())
@@ -131,7 +132,7 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.next, ("technical_planning_review",), "\n".join(frames))
         self.assertTrue(any(task.interrupts for task in snapshot.tasks))
         self.assertEqual(snapshot.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
-        self.assertEqual(snapshot.values["technical_plan"]["pages"], self.h.candidate["pages"])
+        self.assertEqual(strip_change_status(snapshot.values["technical_plan"])["pages"], self.h.candidate["pages"])
         self.assertTrue(technical_plan_draft_json_path(snapshot.values).is_file())
         self.assertFalse(technical_plan_json_path(snapshot.values).exists())
         self.assertFalse(TechnicalPlanFragmentStore(self.h.workspace).path.exists())

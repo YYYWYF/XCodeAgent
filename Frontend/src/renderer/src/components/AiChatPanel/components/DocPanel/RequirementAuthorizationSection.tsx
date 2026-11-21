@@ -1,17 +1,20 @@
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import { Alert, Spin, Typography } from 'antd'
 import { SafetyCertificateOutlined } from '@ant-design/icons'
 import { cx } from '../../../../utils'
 import { readRequirementAuthorization, type RequirementAuthorizationPreview } from '../../../../service/requirementAuthorization'
 import { requirementAuthorizationRoles } from './RequirementAuthorizationData'
+import { buildChangeStatusMap, ChangeBadge, resolveChangeStatus } from './RequirementDocSections'
 import type { JsonRecord } from './TechnicalPlanDocPanelData'
 import './AuthorizationSections.less'
 
 const { Text } = Typography
 
 /** 在第一阶段展示角色和资源默认授权；接口绑定留给技术规划，不读取 TechnicalPlan。 */
-export default function RequirementAuthorizationSection({ spec, productPlan, workspaceRoot }: {
+export default function RequirementAuthorizationSection({ spec, productPlan, workspaceRoot, specDiff }: {
   spec: JsonRecord; productPlan: JsonRecord; workspaceRoot?: string
+  /** 跨迭代增量合并产物，用于给角色加变更徽标。 */
+  specDiff?: JsonRecord
 }): ReactElement {
   const inputKey = JSON.stringify([workspaceRoot, spec, productPlan])
   const [state, setState] = useState<{ key: string; data?: RequirementAuthorizationPreview; error?: string }>()
@@ -29,6 +32,10 @@ export default function RequirementAuthorizationSection({ spec, productPlan, wor
     // 输入内容变化才重编译，避免无关工作流进度反复读取；旧结果不覆盖新草稿。
   }, [inputKey])
   const roles = requirementAuthorizationRoles(spec, productPlan, current?.data?.manifest)
+  const roleStatusMap = useMemo(
+    () => buildChangeStatusMap(specDiff, 'user_roles', 'id'),
+    [specDiff]
+  )
   return (
     <section aria-label="角色与权限" className={cx('requirement-doc-section', 'authorization-stage-section')}
       id="requirement-doc-panel-authorization" role="tabpanel">
@@ -40,21 +47,59 @@ export default function RequirementAuthorizationSection({ spec, productPlan, wor
               : !current.data.ready ? <Text type="secondary">页面与操作生成后显示默认权限，请一并确认。</Text>
                 : <Text type="secondary">页面与操作分别授权；未设权限要求的功能不受限制。</Text>}
       <div className={cx('authorization-stage-cards')}>
-        {roles.map((role) => (
-          <article className={cx('authorization-stage-card')} key={role.key}>
-            <strong>{role.name}</strong>
-            {role.description ? <Text type="secondary">{role.description}</Text> : null}
-            {current?.data?.enabled && current.data.ready ? <>
-              <Text type="secondary">默认拥有 {role.resources.length} 项权限</Text>
-              {role.resources.map((resource) => <div className={cx('authorization-stage-resource')} key={resource.key}>
-                <Text>{resource.permissionDescription}</Text>
-                {resource.description ? <Text type="secondary">{resource.description}</Text> : null}
-              </div>)}
-              {!role.resources.length ? <Text type="secondary">该角色暂无默认授予的权限。</Text> : null}
-            </> : null}
-          </article>
-        ))}
-        {!roles.length ? <Text type="secondary">暂无业务角色。</Text> : null}
+        {roles.length ? (() => {
+          const rolesWithStatus = roles.map((role) => ({
+            role,
+            changeStatus: resolveChangeStatus(roleStatusMap.get(role.key), Boolean(specDiff)),
+          }))
+          const changed = rolesWithStatus.filter((r) => r.changeStatus !== 'unchanged')
+          const unchanged = rolesWithStatus.filter((r) => r.changeStatus === 'unchanged')
+          const showGroups = changed.length > 0 && unchanged.length > 0
+          const renderCard = (r: typeof rolesWithStatus[number]): ReactElement => (
+            <article className={cx('authorization-stage-card')} key={r.role.key}>
+              <div className={cx('authorization-stage-card-heading')}>
+                <strong>{r.role.name}</strong>
+                <ChangeBadge changeStatus={r.changeStatus} />
+              </div>
+              {r.role.description ? <Text type="secondary">{r.role.description}</Text> : null}
+              {current?.data?.enabled && current.data.ready ? <>
+                <Text type="secondary">默认拥有 {r.role.resources.length} 项权限</Text>
+                {r.role.resources.map((resource) => <div className={cx('authorization-stage-resource')} key={resource.key}>
+                  <Text>{resource.permissionDescription}</Text>
+                  {resource.description ? <Text type="secondary">{resource.description}</Text> : null}
+                </div>)}
+                {!r.role.resources.length ? <Text type="secondary">该角色暂无默认授予的权限。</Text> : null}
+              </> : null}
+            </article>
+          )
+          if (!showGroups) return <>{rolesWithStatus.map((r) => renderCard(r))}</>
+          return (
+            <>
+              <div className={cx('requirement-doc-change-group', 'is-changed')}>
+                <div className={cx('requirement-doc-page-group-title')}>
+                  <span className={cx('requirement-doc-page-group-badge', 'is-changed')}>
+                    本次迭代变更（{changed.length}）
+                  </span>
+                </div>
+                <div className={cx('requirement-doc-card-list')}>
+                  {changed.map((r) => renderCard(r))}
+                </div>
+              </div>
+              <div className={cx('requirement-doc-change-group', 'is-unchanged')}>
+                <div className={cx('requirement-doc-page-group-title')}>
+                  <span className={cx('requirement-doc-page-group-badge', 'is-unchanged')}>
+                    未变更内容（{unchanged.length}）
+                  </span>
+                </div>
+                <div className={cx('requirement-doc-card-list')}>
+                  {unchanged.map((r) => renderCard(r))}
+                </div>
+              </div>
+            </>
+          )
+        })() : (
+          <Text type="secondary">暂无业务角色。</Text>
+        )}
       </div>
     </section>
   )

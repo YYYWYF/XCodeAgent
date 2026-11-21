@@ -83,6 +83,9 @@ class ProjectState(TypedDict, total=False):
     backend_handoff: dict[str, Any]
     integration_repair_enabled: bool
     requirement_spec: dict[str, Any]
+    # 跨迭代增量合并产物：带 _change_status 标记的"展示版"RequirementSpec。
+    # 仅供前端做"本次变更 vs 未变更内容"分区展示，不参与生成/确认/配置决策。
+    requirement_spec_diff: dict[str, Any]
     requirements_confirmed: bool
     requirements_clarification_round: int
     edited_requirement_spec: dict[str, Any]
@@ -96,12 +99,20 @@ class ProjectState(TypedDict, total=False):
     technical_plan: dict[str, Any]
     # 仅供本轮变更审阅的修改前快照，不参与生成、确认或配置决策。
     technical_plan_baseline: dict[str, Any]
+    # 基线来源标记：`resumed` 表示沿用 state 中的本轮规划，空串表示按磁盘/交接记录重算。
+    technical_plan_baseline_origin: str
     technical_plan_json_path: str
     application_planning_recovery_boundary: dict[str, Any]
     technical_plan_candidate: dict[str, Any]
     technical_plan_candidate_sha256: str
+    # 带本轮 `_change_status` 的展示版候选：只用于确认界面分区，绝不校验 / 落盘。
+    technical_plan_candidate_diff: dict[str, Any]
+    # 确认界面读取的当前展示版技术规划（同样只用于展示）。
+    technical_plan_diff: dict[str, Any]
     technical_plan_repair_candidate: dict[str, Any]
     technical_plan_repair_errors: list[str]
+    # 已经确认失败过的候选内容摘要：防止同一份计划被反复"确认→失败→再确认"打转。
+    technical_plan_failed_confirm_sha256: list[str]
     # 当前技术生成的内部片段摘要；正文由唯一候选目录保存，不进入公开状态。
     technical_plan_generation_input_sha256: str
     # 失败审阅门确认重试后，记录待交接的原生成 Run；只供当前事务内部消费。
@@ -170,6 +181,10 @@ class ProjectState(TypedDict, total=False):
     pending_build_results: list[dict[str, Any]]
     build_results: list[dict[str, Any]]
     build_summary: dict[str, Any]
+    # 删除节点清理掉了哪些页面产物；未声明的键会被 TypedDict State 丢弃。
+    deleted_page_result: dict[str, Any]
+    # 接口删除同样保存独立的完成结果，跨测试线程由服务端 checkpoint 交接。
+    deleted_endpoint_result: dict[str, Any]
     authorization_bootstrap_result: dict[str, Any]
     builtin_authorization_bootstrap_result: dict[str, Any]
     platform_projection_evidence: dict[str, Any]

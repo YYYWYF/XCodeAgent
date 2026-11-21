@@ -49,6 +49,8 @@ WORKFLOW_NODE_LABELS = {
     "technical_planning_review": "审阅技术规划",
     "api_design_readiness_gate": "API 设计前置检查",
     "development_readiness_gate": "开发前置检查",
+    "delete_development_page": "删除页面产物",
+    "delete_development_endpoint": "删除接口产物",
     "entity_source_binding": "实体数据源绑定",
     "project_planning": "项目规划",
     "inspect_workspace": "工作区快照检查",
@@ -82,6 +84,9 @@ WORKFLOW_STATIC_NEXT_NODES = {
     "technical_planning_confirm": ["technical_planning_begin"],
     "api_design_readiness_gate": ["inspect_workspace"],
     "development_readiness_gate": ["inspect_workspace"],
+    # 删除产物没有构建/单测：完成后进入集成测试（门禁放行）或直接结束本轮。
+    "delete_development_page": ["integration_test"],
+    "delete_development_endpoint": ["integration_test"],
     "entity_source_binding": [],
     "project_planning": ["api_design_readiness_gate"],
     "inspect_workspace": ["prepare_build_tasks"],

@@ -21,6 +21,8 @@ export type DevelopmentPlanningPageOption = {
   detailPlanStatus?: string
   hasDetailPlan?: boolean
   designed: boolean
+  /** 本轮相对基线的变更类型：新增/修改/继承/删除。deleted 时禁止点选进入开发流程。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   taskSummary?: {
     total: number
     pending: number
@@ -40,6 +42,8 @@ export type DevelopmentPlanningPageTreeNode = {
   detailPlanStatus?: string
   hasDetailPlan?: boolean
   designed?: boolean
+  /** 页面节点的变更类型；菜单节点在其子页面含删除项时为 deleted。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   children?: DevelopmentPlanningPageTreeNode[]
 }
 export type DevelopmentPlanningApiEndpoint = {
@@ -52,12 +56,16 @@ export type DevelopmentPlanningApiEndpoint = {
   detailPlanStatus?: string
   hasDetailPlan?: boolean
   designed?: boolean
+  /** 本轮相对基线的变更类型。deleted 时禁止点选进入开发流程。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
 }
 export type DevelopmentPlanningApiContract = {
   id: string
   label: string
   name?: string
   entityIds?: string[]
+  /** 本轮相对基线的变更类型。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   endpoints: DevelopmentPlanningApiEndpoint[]
 }
 export type DevelopmentPlanningEntityOption = {
@@ -65,6 +73,8 @@ export type DevelopmentPlanningEntityOption = {
   label: string
   purpose: string
   dataSourceType: string
+  /** 本轮相对基线的变更类型。deleted 时禁止点选进入开发流程。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   fields?: Array<{
     name: string
     label?: string

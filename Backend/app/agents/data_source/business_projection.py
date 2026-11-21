@@ -92,8 +92,18 @@ def _request(field: dict[str, Any]) -> str:
 
 
 def _source_ref(field: dict[str, Any], aliases: dict[tuple[str, ...], str]) -> str:
-    """把来源字段转换为别名引用，未解析来源在模型执行前明确失败。"""
+    """把来源字段转换为别名引用；static 字段直读端点 staticData，不走外部别名。
 
+    `sourceType == "static"` 的字段是接口自身持有的静态数据（`endpointContract.staticData`），
+    不属于任何外部数据源——`_source_fields` 不收集它们（见 L23），aliases 里自然
+    没有它们的 key。如果沿用 aliases 查询会抛 KeyError（实测报错
+    `KeyError: ('static', '', '', '')`）。这里给 static 字段一个稳定的
+    `static:<path>` 形式引用，调用方据此到 staticData 取值；其他 sourceType
+    维持原别名查询，未解析来源在模型执行前明确失败。
+    """
+
+    if field.get("sourceType") == "static":
+        return f"static:{field.get('path', '')}"
     alias = aliases[_identity(field)]
     path = field["column"] if field["sourceType"] == "database" else f"{field['section']}.{field['path']}"
     return f"{alias}.{path}"

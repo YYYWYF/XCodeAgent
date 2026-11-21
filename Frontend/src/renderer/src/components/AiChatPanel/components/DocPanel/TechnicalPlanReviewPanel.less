@@ -191,3 +191,41 @@
   margin-right: 6px;
   margin-left: 0;
 }
+
+// ===== 跨迭代变更分区（本次迭代变更 vs 未变更内容） =====
+
+// 技术规划复用需求文档（草稿）的徽标与分组样式类，保证两处展示完全一致。
+// 那些样式依赖 `--req-*` 语义色，而变量定义在 `.requirement-doc-panel` 作用域内，
+// 技术规划面板不继承 —— 这里按同样的浅/深配色在自身根节点补齐，避免徽标退化成裸文字。
+.@{class-prefix}-technical-plan-review {
+  --req-green: #1a7f37;
+  --req-green-soft: rgba(26, 127, 55, 0.1);
+  --req-green-border: rgba(26, 127, 55, 0.3);
+  --req-orange: #b45309;
+  --req-orange-soft: rgba(180, 83, 9, 0.1);
+  --req-orange-border: rgba(180, 83, 9, 0.32);
+}
+
+// 暗色主题下提亮语义色并加大底纹透明度，保证深色底上的可读性。
+.@{class-prefix}-workbench-shell[data-theme='dark']
+  .@{class-prefix}-technical-plan-review {
+  --req-green: #4ac26b;
+  --req-green-soft: rgba(74, 194, 107, 0.16);
+  --req-green-border: rgba(74, 194, 107, 0.4);
+  --req-orange: #e8a13d;
+  --req-orange-soft: rgba(232, 161, 61, 0.16);
+  --req-orange-border: rgba(232, 161, 61, 0.42);
+}
+
+// 徽标默认 `margin-left: auto`（需求文档卡片里贴右）；技术规划里它跟在标题/名称后面，
+// 需要贴紧文字。这里同时声明 inline-block：它是 grid/flex 子项时默认会被拉伸，
+// 显式改回按内容宽度包裹，避免出现"又宽又扁"的框。
+.@{class-prefix}-technical-plan-review {
+  .@{class-prefix}-requirement-doc-change-badge {
+    display: inline-block;
+    width: fit-content;
+    justify-self: start;
+    align-self: center;
+    margin-left: 0;
+  }
+}

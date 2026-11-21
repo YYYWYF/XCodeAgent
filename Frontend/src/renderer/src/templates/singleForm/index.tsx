@@ -81,7 +81,8 @@ const SingleForm: React.FC = () => {
     setEmployeeSearching(false)
   }
 
-  const handleEmployeeChange = (value: string, option?: EmployeeItem | EmployeeItem[]) => {
+  // 员工选择回调：只消费 option（选中项），首参 value 是 Select 回填的原始值，这里用不到。
+  const handleEmployeeChange = (_value: string, option?: EmployeeItem | EmployeeItem[]) => {
     if (Array.isArray(option)) return
     setSelectedEmployee(option ?? null)
   }

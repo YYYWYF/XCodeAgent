@@ -96,6 +96,11 @@ def route_workflow_start(state: ProjectState) -> str:
         return "finalize_project"
     if str(state.get("selected_entity_id") or "").strip():
         return "entity_source_binding"
+    # 本轮已删除的页面 / 接口不走常规开发（它们不在产物目录里），直接进入删除节点。
+    if nodes.delete_development_page_if_deleted(state):
+        return "delete_development_page"
+    if nodes.delete_development_endpoint_if_deleted(state):
+        return "delete_development_endpoint"
     return "api_design_readiness_gate"
 
 
@@ -189,6 +194,13 @@ def route_test_phase_confirmation(state: ProjectState) -> str:
         return str(state["integration_next_action"])
     if state.get("status") == "requires_user_input":
         return "await_user_input"
+    from app.services.development_artifacts import completed_deletion_target
+    if (
+        state.get("status") == "completed"
+        and state.get("integration_next_action") == "integration_test"
+        and completed_deletion_target(state) is not None
+    ):
+        return "integration_test"
     build_summary = state.get("build_summary")
     build_completed = (
         isinstance(build_summary, dict)
@@ -341,6 +353,8 @@ def build_graph(
     builder.add_node("workflow_entry", observe_model_node("workflow_entry", workflow_entry))
 
     builder.add_node("development_readiness_gate", observe_model_node("development_readiness_gate", nodes.development_readiness_gate))
+    builder.add_node("delete_development_page", observe_model_node("delete_development_page", nodes.delete_development_page))
+    builder.add_node("delete_development_endpoint", observe_model_node("delete_development_endpoint", nodes.delete_development_endpoint))
     def api_gate_with_regeneration(state: ProjectState) -> dict[str, Any]:
         """来源变化后撤销旧执行合同，再通过原映射门禁重新生成任务计划。"""
         from app.services.artifact_regeneration_handoff import needs_task_regeneration
@@ -443,6 +457,35 @@ def build_graph(
     builder.add_node("finalize_project", observe_model_node("finalize_project", nodes.finalize_project))
     builder.add_node("handle_failure", observe_model_node("handle_failure", nodes.handle_failure))
 
+    # 删除目标没有 Build / 单测可跑：删除节点自己产出测试确认门，
+    # 确认后由 route_test_phase_confirmation 接续到测试 → 审查 → 验收。
+    def route_delete_development_target(state: ProjectState) -> str:
+        """按删除节点给出的下一步继续或结束本轮开发。"""
+
+        if state.get("status") == "requires_user_input":
+            return "await_user_input"
+        if state.get("integration_next_action") == "integration_test":
+            return "integration_test"
+        return "completed"
+
+    builder.add_conditional_edges(
+        "delete_development_page",
+        route_delete_development_target,
+        {
+            "await_user_input": END,
+            "integration_test": "integration_test",
+            "completed": END,
+        },
+    )
+    builder.add_conditional_edges(
+        "delete_development_endpoint",
+        route_delete_development_target,
+        {
+            "await_user_input": END,
+            "integration_test": "integration_test",
+            "completed": END,
+        },
+    )
     builder.add_edge(START, "workflow_entry")
     builder.add_conditional_edges(
         "workflow_entry",
@@ -450,6 +493,8 @@ def build_graph(
         {
             "api_design_readiness_gate": "api_design_readiness_gate",
             "development_readiness_gate": "development_readiness_gate",
+            "delete_development_page": "delete_development_page",
+            "delete_development_endpoint": "delete_development_endpoint",
             "application_revision": "application_revision",
             "technical_planning": "technical_planning",
             "entity_source_binding": "entity_source_binding",

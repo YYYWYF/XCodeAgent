@@ -661,8 +661,13 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
     )
     from app.services.workflow_input_artifacts import pregraph_artifact_values
     artifact_entry_node = resume_from or "api_design_readiness_gate"
-    artifact_target = {"workspace": workspace, "selected_endpoint_id": selected_endpoint_id,
-                       "selectedPageId": selectedPageId}
+    artifact_target = {
+        **{key: resume_values_from_state[key] for key in ("deleted_page_result", "deleted_endpoint_result")
+           if key in resume_values_from_state},
+        "workspace": workspace, "selected_endpoint_id": selected_endpoint_id,
+        "selectedPageId": selectedPageId,
+        "build_execution_scope": resume_values_from_state.get("build_execution_scope"),
+    }
     if not selected_endpoint_id and not selectedPageId and not revision_build_target_type:
         artifact_target["build_execution_scope"] = (
             _optional_dict(payload.get("buildExecutionScope"))
@@ -1420,6 +1425,8 @@ def _server_resume_values(value: dict[str, Any] | None) -> dict[str, Any]:
         "detail_plans",
         "detail_selection",
         "detail_target_type",
+        "deleted_page_result",
+        "deleted_endpoint_result",
         "entity_source_binding_submission",
         "execution_resource_claims",
         "frontend_pages",
@@ -1550,6 +1557,11 @@ def _validated_technical_revision_intent(
         or baseline.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE
     ):
         raise ValueError("当前 TechnicalPlan baseline 不存在或不是有效的正式产物。")
+    # 与校验侧同口径：正式计划文件可能残留 `confirmation_status`、`_change_status`
+    # 等派生字段，写进 state 的基线和 boundary 摘要统一按业务内容计算。
+    from app.services.technical_plan_carryover import drop_generated_fields
+
+    baseline = drop_generated_fields(baseline)
     boundary = application_planning_boundary_payload(
         operation_id=f"technical-plan-revision:{pending.change_id}",
         operation=ApplicationPlanningOperation.REVISE,

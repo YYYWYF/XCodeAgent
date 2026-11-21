@@ -97,7 +97,15 @@ def validate_application_planning_baseline(
     boundary: ApplicationPlanningBoundary,
     baseline: Any,
 ) -> None:
-    """统一校验修订/修复基线，仅允许无已有计划的失败续修不携带摘要。"""
+    """统一校验修订/修复基线，仅允许无已有计划的失败续修不携带摘要。
+
+    比较口径固定在**业务内容**：先剥掉 `_change_status` / `confirmation_status` 等展示
+    与派生字段再算摘要。确认界面的 `state["technical_plan"]` 是展示版（带本轮变更标记、
+    状态为 `pending_user_confirmation`），而 boundary 摘要由干净候选算出；若这里直接对
+    展示版取哈希，同一份计划会因为多几个展示字段被判成"基线被改写"，阻断本应合法的续修。
+    """
+
+    from app.services.technical_plan_carryover import drop_generated_fields
 
     if boundary.operation not in {
         ApplicationPlanningOperation.REVISE,
@@ -114,12 +122,27 @@ def validate_application_planning_baseline(
         return
     if boundary.baseline_sha256 is None:
         raise ValueError("TechnicalPlan 修订/修复缺少 baseline 摘要。")
+    # 统一剥掉展示 / 派生字段后比较，保证"展示版基线"与"干净摘要"在同一口径下判定。
+    business_baseline = (
+        drop_generated_fields(baseline) if isinstance(baseline, dict) and baseline else None
+    )
     if (
-        not isinstance(baseline, dict)
-        or not baseline
-        or application_planning_sha256(baseline) != boundary.baseline_sha256
+        not isinstance(business_baseline, dict)
+        or not business_baseline
+        or application_planning_sha256(business_baseline) != boundary.baseline_sha256
     ):
-        raise ValueError("TechnicalPlan 修订/修复 baseline 与 boundary 不匹配。")
+        # 诊断信息：续修失败时区分"基线被清空"与"基线内容被改写"，避免只能靠猜。
+        actual = (
+            application_planning_sha256(business_baseline)
+            if isinstance(business_baseline, dict) and business_baseline
+            else "<空基线>"
+        )
+        raise ValueError(
+            "TechnicalPlan 修订/修复 baseline 与 boundary 不匹配。"
+            f"（boundary={boundary.baseline_sha256[:12]}，current={actual[:12]}，"
+            f"baseline_type={type(baseline).__name__}，"
+            f"baseline_pages={len(business_baseline.get('pages') or []) if isinstance(business_baseline, dict) else '-'}）"
+        )
 
 
 def application_planning_boundary_payload(
@@ -135,6 +158,12 @@ def application_planning_boundary_payload(
 ) -> dict[str, Any]:
     """由服务端事实构造可写入 Graph State 的 camelCase boundary payload。"""
 
+    # 基线生产和校验统一按业务内容取摘要；候选摘要仍覆盖完整内容，不能放松提交校验。
+    from app.services.technical_plan_carryover import drop_generated_fields
+
+    business_baseline = (
+        drop_generated_fields(baseline) if isinstance(baseline, dict) else baseline
+    )
     model = ApplicationPlanningBoundary(
         schemaVersion="application-planning-boundary.v1",
         operationId=operation_id,
@@ -145,7 +174,7 @@ def application_planning_boundary_payload(
         artifactRevision=artifact_revision,
         requestSha256=application_planning_sha256(str(request or "")),
         baselineSha256=(
-            application_planning_sha256(baseline) if baseline is not None else None
+            application_planning_sha256(business_baseline) if baseline is not None else None
         ),
         candidateSha256=(
             application_planning_sha256(candidate) if candidate is not None else None

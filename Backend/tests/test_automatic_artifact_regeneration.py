@@ -123,6 +123,26 @@ class AutomaticArtifactRegenerationTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(inputs, before)
                         self.assertEqual({item: item.read_bytes() for item in root.rglob("*.json")}, original)
 
+    async def test_completed_deletion_confirmation_does_not_regenerate_missing_dag(self) -> None:
+        """服务端删除结果已完成时，测试确认不需要不存在的 Build DAG，也不能退回开发。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = self.write_artifacts(workspace)
+            (root / "plans/technical-plan.json").write_text(json.dumps({"confirmation_status": "confirmed"}))
+            inputs = {"workspace": workspace, "resume_from": "test_phase_confirmation", "resume_values": {
+                "build_execution_scope": {"type": "page", "targetId": "return_card"},
+                "deleted_page_result": {"pageId": "return_card", "completed": True},
+                "test_phase_confirmation": {"action": "confirm"},
+            }}
+            self.assertIsNone(regeneration_for_retry(workspace, "test_phase_confirmation", state=inputs["resume_values"]))
+            await prepare_automatic_regeneration(inputs, run_id="test-run", thread_id="test-thread")
+            self.assertEqual(inputs["resume_from"], "test_phase_confirmation")
+            self.assertEqual(inputs["resume_values"]["test_phase_confirmation"], {"action": "confirm"})
+            # 错目标和未完成结果均不能借用删除例外绕过普通开发 DAG 校验。
+            for result in ({"pageId": "other", "completed": True}, {"pageId": "return_card", "completed": False}):
+                state = {**inputs["resume_values"], "deleted_page_result": result}
+                self.assertEqual(regeneration_for_retry(workspace, "test_phase_confirmation", state=state).key, "build_task_plan")
+
     def test_replanning_discards_execution_but_preserves_business_target(self):
         """重规划不能恢复旧任务、运行绑定、修复计划、快照及一次性确认。"""
         before = {"selectedPageId": "orders", "request": "开发订单", "build_execution_scope": {"type": "page", "targetId": "orders"},

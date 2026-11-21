@@ -112,16 +112,21 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
     fields["project_plan_json_path"] = fields["technical_plan_json_path"] if "technical_plan" in required else ""
     if "technical_plan" not in required:
         fields["project_plan_path"] = ""
+    from app.services.development_artifacts import completed_deletion_target
+    deletion_test = completed_deletion_target(state) is not None
     if node in _TASK_PLAN_STAGES:
         from app.workspace.task_documents import load_confirmed_build_task_plan, build_task_plan_json_path
         if node == "prepare_build_tasks":
             prepare_generation_baseline(build_task_plan_json_path({"workspace": workspace}))
-        fields["build_task_plan"] = load_confirmed_build_task_plan(workspace) or {}
+        # 删除没有生成 DAG，测试阶段不能借用其他开发目标遗留的计划。
+        fields["build_task_plan"] = {} if deletion_test else load_confirmed_build_task_plan(workspace) or {}
     if node in _REVIEW_FILE_STAGES:
         from app.services.development_review_files import development_review_files
         # 下游测试/审查以当前已完成模块和 Git 文件为准，不依赖旧 Run 的内存变更集合。
         fields["development_review_files"] = development_review_files(workspace)
-    if node in {"unit_test", "unit_test_repair", "test_phase_confirmation"}:
+    from app.services.development_artifacts import completed_deletion_target
+    deletion_test = completed_deletion_target(state) is not None
+    if node in {"unit_test", "unit_test_repair", "test_phase_confirmation"} and not deletion_test:
         from app.services.stage_execution_artifacts import load_stage_execution_artifacts
         fields.update(load_stage_execution_artifacts({**state, **fields}, fields["build_task_plan"], node))
     if state.get("retry_source_run_id") and node in {"classify_intent", "execute_frontend", "execute_backend", "code_review", "unit_test", "integration_test"}:

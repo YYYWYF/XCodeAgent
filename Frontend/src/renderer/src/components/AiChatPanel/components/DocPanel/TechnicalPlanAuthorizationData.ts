@@ -2,6 +2,8 @@ import { asRecord, recordItems, stringItems, textValue, type JsonRecord } from '
 
 export type EndpointAuthorizationView = {
   id: string
+  /** 所属接口分组 ID：与 API 契约 tab 的 `endpoint:{contractId}:{endpointId}` 变更键对齐。 */
+  contractId: string
   name: string
   method: string
   path: string
@@ -34,12 +36,15 @@ export function endpointAuthorizationView(plan: JsonRecord, productPlan: JsonRec
       }
     }
   }
-  return recordItems(plan.api_contracts).flatMap((contract) => recordItems(contract.endpoints).map((endpoint) => {
-    const id = textValue(endpoint.id)
-    return {
-      id, name: textValue(endpoint.name, id), method: textValue(endpoint.method), path: textValue(endpoint.path), permissionsKnown,
-      operations: [...(operations.get(id) || [])],
-      resources: (bindings.get(id) || []).map((key) => ({ key, name: textValue(resources.get(key)?.name, '引用未解析') }))
-    }
-  }))
+  return recordItems(plan.api_contracts).flatMap((contract) => {
+    const contractId = textValue(contract.id)
+    return recordItems(contract.endpoints).map((endpoint) => {
+      const id = textValue(endpoint.id)
+      return {
+        id, contractId, name: textValue(endpoint.name, id), method: textValue(endpoint.method), path: textValue(endpoint.path), permissionsKnown,
+        operations: [...(operations.get(id) || [])],
+        resources: (bindings.get(id) || []).map((key) => ({ key, name: textValue(resources.get(key)?.name, '引用未解析') }))
+      }
+    })
+  })
 }

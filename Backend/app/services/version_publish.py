@@ -193,6 +193,9 @@ _RUNTIME_ARTIFACT_PATHS = (
     # 本地的执行缓存，被 checkpoint 通过 $artifact 占位符引用，磁盘上不能删，
     # 但也不该进 git。
     ".devagentstudio/artifacts",
+    # 平台落盘的会话上下文调试文件。旧工作区没有排除它时可能已被提交进历史，
+    # 这里兜底从暂存区移除；它的正文含行尾空白，进仓库会让后续提交前检查失败。
+    "conversation_history",
 )
 
 
@@ -252,6 +255,11 @@ _REQUIRED_GITIGNORE_PATTERNS = (
     # 磁盘上不能删，但也不该进 git。这条 pattern 让旧工作区在下次发布时把
     # artifacts/ 加进 .gitignore，配套 _unstage_runtime_artifacts 把暂存条目兜底移除。
     ".devagentstudio/artifacts/",
+    # 平台落盘的会话上下文调试文件（超长 prompt 的转录），写在**工作区根目录**。
+    # 它不是用户维护的业务代码；正文里含 Markdown 硬换行的行尾空格，一旦被
+    # `git add -A` 暂存，提交前的 `git diff --check` 会因 trailing whitespace 失败，
+    # 表现为"代码尚未自动保存"却看不出原因。文件本身保留在工作区供排查，只是不进 git。
+    "conversation_history/",
     ".DS_Store",
 )
 

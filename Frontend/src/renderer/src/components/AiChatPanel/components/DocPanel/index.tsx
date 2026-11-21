@@ -40,6 +40,10 @@ type Props = {
   docName?: string
   productPlan?: Record<string, unknown>
   requirementSpec?: Record<string, unknown>
+  /** 跨迭代增量合并产物：带 `_change_status` 标记的"展示版"RequirementSpec。
+      仅在"基于历史迭代"场景有值。RequirementDocPanel 用它做"本次变更 vs 未变更内容"
+      分区显示；为空时按"全部是本轮新增"展示。 */
+  requirementSpecDiff?: Record<string, unknown>
   technicalPlan?: Record<string, unknown>
   technicalPlanBaseline?: Record<string, unknown>
   technicalPlanUpdating?: boolean
@@ -61,6 +65,7 @@ export default function DocPanel({
   docName,
   productPlan,
   requirementSpec,
+  requirementSpecDiff,
   technicalPlan,
   technicalPlanBaseline,
   technicalPlanUpdating,
@@ -175,6 +180,7 @@ export default function DocPanel({
               <RequirementDocPanel
                 productPlan={productPlan || {}}
                 spec={requirementSpec || {}}
+                specDiff={requirementSpecDiff}
                 workspaceRoot={workspaceRoot}
               />
             ) : isProductPlan && productPlan ? (

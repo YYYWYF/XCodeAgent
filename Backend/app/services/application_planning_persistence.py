@@ -12,7 +12,10 @@ from typing import Any
 from app.services.data_source_policy import CANONICAL_DATASOURCE_TYPES
 from app.services.entity_definitions import plan_data_sources
 from app.services.frontend_page_tree import is_menu_node, project_plan_page_records
-from app.services.product_plan import require_current_product_plan
+from app.services.product_plan import (
+    deleted_page_ids_from_spec,
+    require_current_product_plan,
+)
 from app.services.project_plan import TECHNICAL_PLAN_ARTIFACT_TYPE
 
 
@@ -463,7 +466,12 @@ def _confirmed_artifacts(state: dict[str, Any], workspace: Path) -> dict[str, An
         or technical_plan.get("confirmation_status") != "confirmed"
     ):
         raise ValueError("技术规划必须经开发角色确认后才能进入工作区。")
-    product_plan = require_current_product_plan(product_plan, requirement_spec)
+    product_plan = require_current_product_plan(
+        product_plan, requirement_spec,
+        deleted_page_ids=deleted_page_ids_from_spec(
+            requirement_spec, state.get("requirement_spec_diff")
+        ),
+    )
     if not isinstance(product_plan, dict) or product_plan.get("confirmation_status") != "confirmed":
         raise ValueError("产品规划必须经产品角色确认后才能进入工作区。")
     requirement_markdown = Path(str(state.get("requirement_spec_path") or ""))

@@ -1765,6 +1765,10 @@ def _workflow_visual_payload(
         "developmentContinuation": result.get("development_continuation"),
         "lifecycle": result.get("lifecycle"),
         "ui_designs": result.get("ui_designs"),
+        # 跨迭代增量合并产物：带 _change_status 标记的"展示版"RequirementSpec，
+        # 供前端在需求文档"页面"tab 做"本次变更 vs 未变更内容"分区显示。
+        # 不外置成 artifactRef（带临时标记的展示版，非大块正文），直接内联在 state。
+        "requirement_spec_diff": result.get("requirement_spec_diff"),
         "workspaceInspectionProgress": result.get("workspace_scan_progress"),
     }
     payload = {

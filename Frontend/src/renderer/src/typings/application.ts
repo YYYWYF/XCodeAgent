@@ -285,6 +285,8 @@ export type MenuDataItem = {
 }
 
 export type ApplicationMenuItem = Omit<MenuDataItem, 'routes'> & {
+  /** 本轮相对基线的变更类型：新增/修改/继承/删除。deleted 时禁止点选进入开发流程。 */
+  changeStatus?: 'added' | 'modified' | 'unchanged' | 'deleted'
   children?: ApplicationMenuItem[]
 }
 

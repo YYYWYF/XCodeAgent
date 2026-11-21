@@ -7,6 +7,7 @@ import {
   requirementLayoutRows,
   requirementStyleHints
 } from './RequirementDocPanelData'
+import { ChangeBadge, type ChangeStatus } from './RequirementDocSections'
 import type { JsonRecord } from './TechnicalPlanDocPanelData'
 import './TechnicalPlanDocPanel.less'
 
@@ -15,8 +16,56 @@ const { Text } = Typography
 type Props = {
   productPlan: JsonRecord
   spec: JsonRecord
+  /** 跨迭代增量合并产物（带 `_change_status`）：按 pageId 提供页面的本轮变更类型。
+      为空表示首轮创建，按"本轮新增"展示。 */
+  specDiff?: JsonRecord
   /** 触发 aria id 与 tab 对齐的 section key（如 'page-design-overview'）。 */
   sectionKey: string
+}
+
+/**
+ * 解析应用级变更徽标：读后端写在 diff 上的 `_app_change_status`。
+ * 没有 diff（首轮创建）时全部按"新增"；有 diff 但缺该标记时按"未变更"兜底，
+ * 避免旧数据把风格维度误标成新增。
+ */
+function resolveAppStatus(specDiff: JsonRecord | undefined): ChangeStatus {
+  if (!specDiff) return 'added'
+  const status = specDiff._app_change_status
+  if (status === 'added' || status === 'modified' || status === 'unchanged' || status === 'deleted') {
+    return status
+  }
+  return 'unchanged'
+}
+
+/** 从 specDiff 的页面记录里按 pageId 取出本轮变更类型，供页面卡片打标。 */
+function pageChangeStatusMap(specDiff: JsonRecord | undefined): Map<string, ChangeStatus> {
+  const map = new Map<string, ChangeStatus>()
+  const pages = Array.isArray(specDiff?.pages) ? (specDiff?.pages as unknown[]) : []
+  pages.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return
+    const page = item as Record<string, unknown>
+    const pageId = typeof page.pageId === 'string' && page.pageId.trim()
+      ? page.pageId.trim()
+      : `page-${index + 1}`
+    const status = typeof page._change_status === 'string' ? page._change_status : ''
+    if (status === 'added' || status === 'modified' || status === 'unchanged' || status === 'deleted') {
+      map.set(pageId, status)
+    }
+  })
+  return map
+}
+
+/**
+ * 解析某个页面的变更徽标状态：
+ * - 有 specDiff 且该页有标记 → 用标记；
+ * - specDiff 完全没有值（首轮创建）→ 全部按"新增"；
+ * - specDiff 有值但该页缺标记 → 兜底按"未变更"。
+ */
+function resolvePageStatus(
+  status: ChangeStatus | undefined,
+  hasDiff: boolean
+): ChangeStatus {
+  return status ?? (hasDiff ? 'unchanged' : 'added')
 }
 
 /**
@@ -30,12 +79,21 @@ type Props = {
 export default function PageDesignOverviewSection({
   productPlan,
   spec,
+  specDiff,
   sectionKey
 }: Props): ReactElement {
   // 三块拍平：交互/布局来自 productPlan，风格来自 spec 自由文本。
   const interactions = requirementInteractionRows(productPlan)
   const layouts = requirementLayoutRows(productPlan)
   const styleHints = requirementStyleHints(spec)
+  // 页面身份与需求文档"页面"页签一致：都按 pageId 对齐 ProductPlan 与 specDiff。
+  const statusByPageId = pageChangeStatusMap(specDiff)
+  const hasDiff = Boolean(specDiff)
+  const pageStatus = (pageId: string): ChangeStatus =>
+    resolvePageStatus(statusByPageId.get(pageId), hasDiff)
+  // 应用级变更标记（后端 `_app_change_status`）：风格维度取自需求全文，
+  // 没有页面归属，只能按应用级结论打标。
+  const appStatus = resolveAppStatus(specDiff)
   return (
     <section
       aria-label="页面概览"
@@ -55,6 +113,7 @@ export default function PageDesignOverviewSection({
               <article className={cx('page-design-overview-card')} key={interaction.key}>
                 <header className={cx('page-design-overview-card-title')}>
                   <Text strong>{interaction.pageName}</Text>
+                  <ChangeBadge changeStatus={pageStatus(interaction.pageId)} />
                 </header>
                 {interaction.actions.length ? (
                   <ul className={cx('page-design-overview-action-list')}>
@@ -110,6 +169,7 @@ export default function PageDesignOverviewSection({
               <article className={cx('page-design-overview-card')} key={layout.key}>
                 <header className={cx('page-design-overview-card-title')}>
                   <Text strong>{layout.pageName}</Text>
+                  <ChangeBadge changeStatus={pageStatus(layout.pageId)} />
                 </header>
                 {layout.goal ? (
                   <Text className={cx('page-design-overview-goal')} type="secondary">
@@ -147,6 +207,9 @@ export default function PageDesignOverviewSection({
               <article className={cx('page-design-overview-card')} key={hint.key}>
                 <header className={cx('page-design-overview-card-title')}>
                   <Text strong>{hint.dimensionLabel}</Text>
+                  {/* 风格维度来自需求全文（应用级事实），用后端的应用级变更标记，
+                      而不是某个页面的变更状态。 */}
+                  <ChangeBadge changeStatus={appStatus} />
                 </header>
                 <div className={cx('page-design-overview-tags')}>
                   {hint.labels.map((label) => (

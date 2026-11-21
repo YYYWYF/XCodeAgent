@@ -6,7 +6,8 @@ from app.graph.state import ProjectState
 from app.graph.subgraphs.acceptance import run_acceptance_subgraph
 from app.services.build_scheduler import summarize_build_runtime
 from app.services.development_artifacts import (
-    complete_initial_development, require_test_entry, test_entry_gate,
+    complete_initial_development, complete_scope_target_development,
+    refresh_development_artifacts, require_test_entry, test_entry_gate,
 )
 from app.services.development_review_files import development_review_files
 from app.services.project_launcher import launch_project_preview
@@ -288,6 +289,35 @@ def test_phase_confirmation(state: ProjectState) -> dict:
     """校验当前开发目标的完成事实，并等待用户确认进入测试。"""
 
     target = _test_target_record(state)
+    from app.services.development_artifacts import completed_deletion_target, artifact_progress
+    deletion_target = completed_deletion_target(state)
+    if deletion_target is not None:
+        # 删除流程没有 Build/DAG/开发阶段单测，使用本轮清理完成证据和应用级门禁，
+        # 测试阶段自身仍执行构建、单元测试及性能测试，不能重新进入 API 映射开发。
+        lifecycle = require_test_entry(workspace_root(state))
+        progress = artifact_progress(lifecycle.development_artifacts, deletion_target)
+        if progress is None or progress.initial_development_status != "completed" or progress.change_status != "unchanged":
+            return {
+                "phase": "test_phase_confirmation", "status": "failed",
+                "error": "当前删除任务尚未完成，不能进入测试阶段。", "timeline": ["test_phase_confirmation"],
+            }
+        submission = state.get("test_phase_confirmation")
+        confirmed = isinstance(submission, dict) and submission.get("action") == "confirm"
+        return {
+            "phase": "test_phase_confirmation", "status": "completed" if confirmed else "requires_user_input",
+            "test_phase_confirmation": {}, "test_target": target,
+            "build_summary": state.get("build_summary") or {},
+            "unit_test_gate_passed": True,
+            "clarification": {} if confirmed else {
+                "mode": "test_phase_confirmation", "status": "requires_user_input",
+                "message": "全部开发和删除任务已完成，确认后进入测试阶段。",
+                "testTarget": target, "testEntryGate": test_entry_gate(lifecycle).model_dump(mode="json", by_alias=True),
+                "questions": [],
+            },
+            "integration_next_action": "integration_test" if confirmed else "await_user_input",
+            "repair_iteration": 0, "max_repair_iterations": 3, "repair_return_node": "integration_test",
+            "timeline": ["test_phase_confirmation"],
+        }
     entity_id = str(state.get("entity_test_entry_id") or "").strip()
     if entity_id:
         # 实体没有独立 Build Unit；只有实体确认节点写入的内部标记和全量门禁
@@ -356,10 +386,29 @@ def test_phase_confirmation(state: ProjectState) -> dict:
             "test_target": target,
             "timeline": ["test_phase_confirmation"],
         }
-    lifecycle = complete_initial_development(
-        workspace_root(state), run_id=str(state.get("active_run_id") or ""),
-        build_state=state,
-    )
+    # 本轮 Build 成功且单元测试门禁通过时，scope 指向的目标确实已经开发完成。
+    # `complete_initial_development` 只能从 execution 认目标：执行记录缺失或已收尾时
+    # 它会跳过登记甚至直接抛错，此时必须按 scope 补记完成，否则门禁会把"本轮刚开发完
+    # 的目标"继续算作未完成，导致完成数永远少一个、进不了测试阶段的确认门。
+    # 补记失败不能阻断确认门，所以单独兜住异常并继续走下面的门禁判定。
+    lifecycle: Any = None
+    try:
+        lifecycle = complete_initial_development(
+            workspace_root(state), run_id=str(state.get("active_run_id") or ""),
+            build_state=state,
+        )
+    except ValueError:
+        lifecycle = None
+    try:
+        lifecycle = complete_scope_target_development(
+            workspace_root(state),
+            scope=state.get("build_execution_scope"),
+            run_id=str(state.get("active_run_id") or ""),
+            thread_id=str(state.get("active_thread_id") or ""),
+        )
+    except ValueError:
+        if lifecycle is None:
+            lifecycle = refresh_development_artifacts(workspace_root(state))
     gate = test_entry_gate(lifecycle)
     review_files = development_review_files(workspace_root(state))
     # 单个目标完成即结束本轮开发；应用尚未具备测试资格时不创建不可操作的确认门。

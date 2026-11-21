@@ -5,6 +5,7 @@ from app.agents.model_business_context import observe_model_node
 from app.branding import WORKSPACE_ARTIFACT_DIR
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,9 @@ from app.services.template_reconcile.template_preparation import (
 from app.services.execution_failure_classifier import classify_execution_failure
 from app.services.application_planning_generation_lifecycle import ensure_generation_running
 from app.services.application_planning_persistence import confirm_application_planning_artifacts
+from app.services.development_change_snapshot import write_change_snapshot
+
+logger = logging.getLogger("uvicorn.error")
 from app.services.workflow_reentry import workflow_entry
 from app.graph.nodes.application_technical_planning import (
     technical_planning_begin,
@@ -176,10 +180,15 @@ def _route_technical_planning_generate(state: ProjectState) -> str:
 
 
 def _route_technical_planning_confirm(state: ProjectState) -> str:
-    """校验失败返回生成，正式修订进入模板收口，其余结束规划。"""
+    """确认失败停在错误审阅，成功才进入模板收口或结束规划。"""
 
-    if str(state.get("application_planning_review_route") or "").strip() == "technical_planning_begin":
-        return "technical_planning_begin"
+    clarification = state.get("clarification")
+    if (
+        state.get("status") == "requires_user_input"
+        and isinstance(clarification, dict)
+        and clarification.get("status") == "requires_user_input"
+    ):
+        return "technical_planning_review"
     return "template_reconcile" if state.get("template_reconcile_pending") else "completed"
 
 
@@ -448,6 +457,24 @@ def _technical_planning(state: ProjectState) -> dict:
             )
         merged_state = {**node_state, **update}
         confirmation = confirm_application_planning_artifacts(merged_state)
+        # 这正是"技术规划被确认"的真实位置（`technical_planning_confirm` 不是主流程）。
+        # 正式产物不带变更标记，开发阶段又靠它判断删除与重做，因此在这里冻结快照。
+        # 优先用 `technical_plan_diff`：它是 generate 阶段单独保存的展示版，
+        # 从生成到确认全程不受 `technical_plan` 被改写成干净版的影响。
+        try:
+            write_change_snapshot(
+                workspace,
+                technical_plan=(
+                    update.get("technical_plan_diff")
+                    or update.get("technical_plan_candidate_diff")
+                    or merged_state.get("technical_plan")
+                    or {}
+                ),
+            )
+        except ValueError:
+            # 拿不到逐项标记时宁可没有快照：开发阶段会据此关闭测试入口，
+            # 而不是把"不知道"当成"什么都没变"。确认本身已经成功，不能因此回滚。
+            logger.warning("development_change_snapshot_missing_marks", exc_info=True)
         lifecycle = _sync_design_revision_artifact(
             workspace,
             lifecycle,
@@ -879,7 +906,7 @@ def build_application_planning_graph(*, checkpointer):
         "technical_planning_confirm",
         _route_technical_planning_confirm,
         {
-            "technical_planning_begin": "technical_planning_begin",
+            "technical_planning_review": "technical_planning_review",
             "template_reconcile": "template_reconcile",
             "completed": END,
         },

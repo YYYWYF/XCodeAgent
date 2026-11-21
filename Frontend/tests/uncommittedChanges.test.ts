@@ -8,11 +8,6 @@ import {
   isModuleCheckpointCandidate
 } from '../src/renderer/src/components/AiChatPanel/components/WorkflowRunCard/buildTaskStatus'
 import {
-  moduleOwnedFilesFromPlan,
-  orphanUncommittedPaths,
-  summarizePaths
-} from '../src/renderer/src/hooks/useModuleOwnedFiles'
-import {
   actionableCandidates,
   moduleCandidatesFromPlan
 } from '../src/renderer/src/hooks/useModuleCandidates'
@@ -194,45 +189,6 @@ test('失败但留下代码时只引导审阅，且不与版本提醒重复', ()
   )
 })
 
-test('遗漏变更：模块归属取自构建计划，读不到时不做判断', () => {
-  // 两种字段拼写都要认（服务端 plan 用 target_files，工作流载荷用 targetFiles）。
-  const plan = JSON.stringify({
-    task_registry: {
-      'page:a::page': { target_files: ['frontend/src/pages/A/index.tsx'] },
-      'api:b': { targetFiles: ['./frontend/src/api/b.ts'] }
-    }
-  })
-  const owned = moduleOwnedFilesFromPlan(plan)
-  assert.equal(owned.size, 2)
-  assert.ok(owned.has('frontend/src/pages/A/index.tsx'))
-  // 反斜杠与开头的 ./ 都要归一化，否则路径对不上会整片误报成"未关联"。
-  assert.ok(owned.has('frontend/src/api/b.ts'))
-
-  // 计划缺失/损坏/结构不对：返回空集合，调用方据此不做遗漏判断。
-  assert.equal(moduleOwnedFilesFromPlan('').size, 0)
-  assert.equal(moduleOwnedFilesFromPlan('{ 不是 JSON').size, 0)
-  assert.equal(moduleOwnedFilesFromPlan('{"task_registry": null}').size, 0)
-
-  const paths = [
-    'frontend/src/pages/A/index.tsx',
-    'frontend/src/loose/scratch.ts',
-    './frontend/src/api/b.ts'
-  ]
-  // 模块集合为空 = "还不知道哪些文件属于模块"，不是"全部都没归属"。
-  assert.deepEqual(
-    orphanUncommittedPaths({ uncommittedPaths: paths, moduleOwnedFiles: new Set() }),
-    []
-  )
-  // 认领过的文件不算遗漏，其余才算；路径写法差异不影响判定。
-  assert.deepEqual(orphanUncommittedPaths({ uncommittedPaths: paths, moduleOwnedFiles: owned }), [
-    'frontend/src/loose/scratch.ts'
-  ])
-
-  // 副标题只列前几个再收尾，避免把提醒卡撑成一大块。
-  assert.equal(summarizePaths(['a.ts', 'b.ts']), 'a.ts、b.ts')
-  assert.equal(summarizePaths(['a.ts', 'b.ts', 'c.ts', 'd.ts']), 'a.ts、b.ts、c.ts 等 4 个文件')
-})
-
 test('中等提示：门禁通过等待验收 / 模块完成 / 失败留码 / 遗漏变更', () => {
   // M2 模块级候选提交点：本轮任务全完成、但整体仍在运行。
   // 任务必须声明过 targetFiles —— "完成"要真的写过文件才算数（见 isCheckpointCandidate）。
@@ -282,36 +238,6 @@ test('中等提示：门禁通过等待验收 / 模块完成 / 失败留码 / �
     '快速修改失败时已有 VersionCommitReminder 说同一件事，不重复'
   )
 
-  // M5 遗漏变更：只有"没被任何模块认领"的才算遗漏。
-  const owned = new Set(['frontend/src/pages/A/index.tsx'])
-  assert.deepEqual(
-    orphanUncommittedPaths({
-      uncommittedPaths: ['frontend/src/pages/A/index.tsx', 'frontend/vite.config.ts'],
-      moduleOwnedFiles: owned
-    }),
-    ['frontend/vite.config.ts']
-  )
-  // 路径写法不一致时要归一化，否则整片对不上、把所有文件误报成遗漏。
-  assert.deepEqual(
-    orphanUncommittedPaths({
-      uncommittedPaths: ['./frontend/src/pages/A/index.tsx', 'frontend\\src\\pages\\A\\index.tsx'],
-      moduleOwnedFiles: owned
-    }),
-    [],
-    '同一文件的不同写法必须归一化后再比对'
-  )
-  // 还不知道哪些文件属于模块时，不做遗漏判断（不是"全部都没归属"）。
-  assert.deepEqual(
-    orphanUncommittedPaths({
-      uncommittedPaths: ['a.ts'],
-      moduleOwnedFiles: new Set()
-    }),
-    []
-  )
-
-  // M5 摘要只列前几个，避免把提醒卡撑大。
-  assert.equal(summarizePaths(['a.ts', 'b.ts']), 'a.ts、b.ts')
-  assert.equal(summarizePaths(['a.ts', 'b.ts', 'c.ts', 'd.ts']), 'a.ts、b.ts、c.ts 等 4 个文件')
 })
 
 test('提交提醒按业务代码计数，产物不点亮角标', () => {

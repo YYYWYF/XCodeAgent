@@ -18,7 +18,7 @@ from app.agents.execution_control import RunCancellationMiddleware
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.main.technical_plan_file_tools import TechnicalPlanFileMiddleware
 from app.agents.main.technical_plan_review import TechnicalPlanReview
-from app.agents.model_factory import create_chat_model
+from app.agents.model_factory import create_chat_model, thinking_disabled_kwargs
 from app.config import Settings
 
 
@@ -245,7 +245,9 @@ def edit_technical_plan_with_agent(
 ) -> dict[str, Any]:
     """运行受控的原生工具循环，读取内存候选，始终不写工作区正式文件。"""
 
-    model = create_chat_model(settings, extra_model_kwargs={"thinking": {"type": "disabled"}})
+    # 关闭 thinking 由 MODEL_DISABLE_THINKING 开关控制（见 model_factory.thinking_disabled_kwargs）：
+    # CatPaw 网关的 glm-5.3-flash 发送关闭思考参数会被 400 拒绝，默认不发送。
+    model = create_chat_model(settings, extra_model_kwargs=thinking_disabled_kwargs())
     backend = TechnicalPlanCandidateBackend()
     files = _candidate_files(requirement_spec, existing_plan)
     review = TechnicalPlanReview(backend)

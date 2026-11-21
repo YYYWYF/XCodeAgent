@@ -247,6 +247,18 @@ def _initial_state(
 class TechnicalPlanningNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
     """验证 TechnicalPlan boundary 从 Coordinator 到 child runtime 的完整链路。"""
 
+    async def asyncSetUp(self) -> None:
+        """边界夹具不是完整业务计划，只隔离业务校验，保留真实恢复与提交链路。"""
+
+        # 此文件使用只有 app 的极简候选；完整校验由真实规划旅程及合并回归覆盖。
+        for target, options in (
+            ("app.graph.nodes.planning._attach_technical_plan_contracts", {"side_effect": lambda _state, plan: plan}),
+            ("app.graph.nodes.planning._project_plan_validation_errors", {"return_value": []}),
+        ):
+            mock_patch = patch(target, **options)
+            mock_patch.start()
+            self.addCleanup(mock_patch.stop)
+
     async def _scenario(
         self,
         *,

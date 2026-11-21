@@ -605,3 +605,178 @@
   --req-cyan: #39c5cf;
   --req-cyan-soft: rgba(57, 197, 207, 0.16);
 }
+
+// ===== 跨迭代变更标记（本次迭代变更 vs 未变更内容） =====
+
+// 分区容器：把"本次迭代变更"与"未变更内容（继承自基线）"分成两块。
+// 仅靠分组标题的小徽标不足以区分，这里给每块加底色与分隔线，让两段界限一目了然。
+// 与技术规划文档的分区视觉保持一致。
+.@{class-prefix}-requirement-doc-change-group {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--wb-border);
+  border-radius: 10px;
+  background: var(--wb-surface);
+
+  // 变更块用主题绿描边强调，与"本次迭代变更"徽标同色。
+  &.@{class-prefix}-is-changed {
+    border-color: var(--req-green-border, rgba(74, 194, 107, 0.3));
+    background: var(--req-green-soft, rgba(74, 194, 107, 0.1));
+
+    // 卡片自带不透明底色，会盖住分区绿底；让它在绿底上保持同色描边，
+    // 既留住"变更"的视觉强调，又不牺牲卡片内文字的对比度。
+    .@{class-prefix}-requirement-doc-page-card,
+    .@{class-prefix}-requirement-doc-card,
+    .@{class-prefix}-authorization-stage-card {
+      border-color: var(--req-green-border, rgba(74, 194, 107, 0.3));
+    }
+  }
+
+  // 继承块压低对比度，视觉上退居次要，避免与变更内容抢注意力。
+  &.@{class-prefix}-is-unchanged {
+    border-style: dashed;
+    background: var(--wb-surface-subtle);
+
+    // 外层已用虚线框，内层改用更淡的边框，避免双层框线过重。
+    .@{class-prefix}-requirement-doc-page-card,
+    .@{class-prefix}-requirement-doc-card,
+    .@{class-prefix}-authorization-stage-card {
+      border-color: var(--wb-border-soft);
+      background: var(--wb-surface);
+    }
+  }
+
+  // 分区标题不再需要额外的上下外边距，由容器 padding 统一控制。
+  > .@{class-prefix}-requirement-doc-page-group-title {
+    margin: 0 0 10px;
+  }
+}
+
+// 两个分区之间再拉一条分隔线，明确"上面是变更、下面是继承"。
+// 间距由父容器的 gap 提供，这里只负责画线，不再额外叠加外边距。
+.@{class-prefix}-requirement-doc-change-group + .@{class-prefix}-requirement-doc-change-group {
+  position: relative;
+
+  &::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--wb-border);
+  }
+}
+
+// 分组标题：放在每个分组顶部，给用户明确的"分区"信号。
+.@{class-prefix}-requirement-doc-page-group-title {
+  margin: 4px 0 12px;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.@{class-prefix}-requirement-doc-page-group-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+
+  &.@{class-prefix}-is-changed {
+    background: var(--req-green-soft, rgba(74, 194, 107, 0.12));
+    border: 1px solid var(--req-green-border, rgba(74, 194, 107, 0.3));
+    color: var(--req-green, #4ac26b);
+  }
+
+  &.@{class-prefix}-is-unchanged {
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.04));
+    border: 1px solid var(--wb-border, rgba(0, 0, 0, 0.08));
+    color: var(--wb-text-secondary, #65666a);
+  }
+}
+
+// 单页卡片右上角的变更徽标：标识该页是"本轮新增/修改/继承"。
+.@{class-prefix}-requirement-doc-page-change-badge {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  flex-shrink: 0;
+  white-space: nowrap;
+
+  &.@{class-prefix}-is-added {
+    background: var(--req-green-soft, rgba(74, 194, 107, 0.12));
+    border: 1px solid var(--req-green-border, rgba(74, 194, 107, 0.32));
+    color: var(--req-green, #4ac26b);
+  }
+
+  &.@{class-prefix}-is-modified {
+    background: var(--req-orange-soft, rgba(232, 161, 61, 0.12));
+    border: 1px solid var(--req-orange-border, rgba(232, 161, 61, 0.32));
+    color: var(--req-orange, #e8a13d);
+  }
+
+  &.@{class-prefix}-is-unchanged {
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.04));
+    border: 1px solid var(--wb-border, rgba(0, 0, 0, 0.08));
+    color: var(--wb-text-secondary, #65666a);
+  }
+
+  &.@{class-prefix}-is-deleted {
+    background: rgba(255, 77, 79, 0.08);
+    border: 1px solid rgba(255, 77, 79, 0.3);
+    color: #cf1322;
+  }
+}
+
+// 通用变更徽标样式（概览/业务流程/角色与权限 tab 复用，与页面 tab 同视觉）。
+.@{class-prefix}-requirement-doc-change-badge {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  flex-shrink: 0;
+  white-space: nowrap;
+
+  &.@{class-prefix}-is-added {
+    background: var(--req-green-soft, rgba(74, 194, 107, 0.12));
+    border: 1px solid var(--req-green-border, rgba(74, 194, 107, 0.32));
+    color: var(--req-green, #4ac26b);
+  }
+
+  &.@{class-prefix}-is-modified {
+    background: var(--req-orange-soft, rgba(232, 161, 61, 0.12));
+    border: 1px solid var(--req-orange-border, rgba(232, 161, 61, 0.32));
+    color: var(--req-orange, #e8a13d);
+  }
+
+  &.@{class-prefix}-is-unchanged {
+    background: var(--wb-surface-subtle, rgba(0, 0, 0, 0.04));
+    border: 1px solid var(--wb-border, rgba(0, 0, 0, 0.08));
+    color: var(--wb-text-secondary, #65666a);
+  }
+
+  &.@{class-prefix}-is-deleted {
+    background: rgba(255, 77, 79, 0.08);
+    border: 1px solid rgba(255, 77, 79, 0.3);
+    color: #cf1322;
+  }
+}
+
+// 让卡片头部布局能容纳右侧徽标：标题占满中间，徽标贴右。
+.@{class-prefix}-requirement-doc-page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}

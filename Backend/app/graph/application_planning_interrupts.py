@@ -493,9 +493,21 @@ def _technical_input_boundary(
     artifact_revision: str,
     request: str,
 ) -> dict[str, Any]:
-    """为入口或 TechnicalPlan 修订写入 Backend-owned INPUT_COMMITTED boundary。"""
+    """为入口或 TechnicalPlan 修订写入 Backend-owned INPUT_COMMITTED boundary。
 
-    baseline = state.get("technical_plan")
+    基线统一剥离派生的展示字段（`_change_status`、`confirmation_status` 等）后再算摘要：
+    `state["technical_plan"]` 在确认界面是**展示版**，而后续校验比较的是业务内容。
+    若这里按展示版算摘要，续修时两边口径不同，必然报"baseline 与 boundary 不匹配"。
+
+    **同时要把剥离后的 `state["technical_plan"]` 写回 update**：begin 校验读的是 state，
+    commit 写出的 `baselineSha256` 算的是干净版候选。若只改摘要不改 state，展示版会
+    一直留到 repair，校验侧按展示版取值就与摘要对不上（boundary 摘要与 state 必须同源）。
+    """
+
+    from app.services.technical_plan_carryover import drop_generated_fields
+
+    raw = state.get("technical_plan")
+    baseline = drop_generated_fields(raw) if isinstance(raw, dict) and raw else None
     return application_planning_boundary_payload(
         operation_id=f"technical-plan-{uuid4().hex}",
         operation=operation,
@@ -503,7 +515,7 @@ def _technical_input_boundary(
         request=request,
         gate_id=gate_id,
         artifact_revision=artifact_revision,
-        baseline=baseline if isinstance(baseline, dict) and baseline else None,
+        baseline=baseline if baseline else None,
     )
 
 

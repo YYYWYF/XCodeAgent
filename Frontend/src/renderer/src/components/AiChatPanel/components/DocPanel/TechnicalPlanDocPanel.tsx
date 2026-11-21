@@ -18,6 +18,10 @@ type Props = {
   plan: JsonRecord
   productPlan: JsonRecord
   changes?: ChangeGroup[]
+  /** 是否存在上一迭代基线。首轮创建时为 false：仍展示"新增"标识，但不分区。 */
+  hasBaseline?: boolean
+  /** 规划正在重新生成：此时对比结果不可信，不展示变更标识。 */
+  updating?: boolean
   onReviseAuthorization?: () => void
 }
 
@@ -33,6 +37,8 @@ export default function TechnicalPlanDocPanel({
   plan,
   productPlan,
   changes,
+  hasBaseline: hasBaselineProp,
+  updating,
   onReviseAuthorization
 }: Props): ReactElement {
   const architecture = asRecord(plan.architecture)
@@ -40,7 +46,17 @@ export default function TechnicalPlanDocPanel({
   const contracts = recordItems(plan.api_contracts)
   const pages = recordItems(plan.pages)
   const sections = [...technicalPlanSections, { key: 'authorization' as const, label: '接口权限绑定' }]
-  const changeKinds = Object.fromEntries((changes || []).flatMap((group) => group.objects.map((object) => [object.id, object.kind])))
+  // 正在重新生成时对比结果不可信：不展示任何变更标识，避免用户误判。
+  const changeKinds = updating
+    ? {}
+    : Object.fromEntries(
+        (changes || []).flatMap((group) =>
+          group.objects.map((object) => [object.id, object.declaredKind || object.kind])
+        )
+      )
+  // 是否分区由调用方给出的"有无基线"决定：首轮全部是新增，不该分出"未变更"一组。
+  // 未显式传入时退回旧推导（有变更项即视为有基线），保持其它调用点行为不变。
+  const hasBaseline = !updating && (hasBaselineProp ?? (changes || []).some((group) => group.objects.length > 0))
   const [activeSection, setActiveSection] = useState<SectionKey>('api-contracts')
   const resolvedActiveSection = sections.some((section) => section.key === activeSection)
     ? activeSection
@@ -91,15 +107,16 @@ export default function TechnicalPlanDocPanel({
         ))}
       </div>
       {resolvedActiveSection === 'architecture' ? (
-        <ArchitectureSection architecture={architecture} sectionKey="architecture" />
+        <ArchitectureSection architecture={architecture} sectionKey="architecture" changeKinds={changeKinds} hasBaseline={hasBaseline} />
       ) : null}
       {resolvedActiveSection === 'entities' ? (
-        <EntitiesSection entities={entities} sectionKey="entities" changeKinds={changeKinds} />
+        <EntitiesSection entities={entities} sectionKey="entities" changeKinds={changeKinds} hasBaseline={hasBaseline} />
       ) : null}
       {resolvedActiveSection === 'api-contracts' ? (
         <ContractSection
           changeKinds={changeKinds}
           contracts={contracts}
+          hasBaseline={hasBaseline}
           onContractChange={(id) => {
             setSelectedContractId(id)
             setSelectedEndpointId('')
@@ -118,11 +135,19 @@ export default function TechnicalPlanDocPanel({
           contracts={contracts}
           pages={pages}
           productPlan={productPlan}
+          hasBaseline={hasBaseline}
           sectionKey="page-bindings"
         />
       ) : null}
       {resolvedActiveSection === 'authorization' ? (
-        <AuthorizationSection plan={plan} productPlan={productPlan} sectionKey="authorization" onReviseAuthorization={onReviseAuthorization} />
+        <AuthorizationSection
+          changeKinds={changeKinds}
+          hasBaseline={hasBaseline}
+          onReviseAuthorization={onReviseAuthorization}
+          plan={plan}
+          productPlan={productPlan}
+          sectionKey="authorization"
+        />
       ) : null}
     </div>
   )

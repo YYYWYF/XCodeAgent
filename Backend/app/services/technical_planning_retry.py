@@ -14,6 +14,7 @@ from app.domain.application_planning_recovery import (
     parse_application_planning_boundary,
 )
 from app.workspace.plan_documents import load_project_plan_json, current_technical_plan_json_path
+from app.services.technical_plan_carryover import drop_generated_fields
 from app.services.application_lifecycle import (
     ApplicationLifecycleConflictError, _application_lifecycle_lock, application_lifecycle_path,
     load_application_lifecycle, restart_application_planning_lifecycle,
@@ -80,6 +81,10 @@ def prepare_technical_planning_retry(
     path = current_technical_plan_json_path(state)
     baseline = load_project_plan_json(path, hydrate_detail_designs=True) if path.is_file() else state.get("technical_plan")
     baseline = deepcopy(baseline) if isinstance(baseline, dict) and baseline else {}
+    # 与 `validate_application_planning_baseline` 同口径：磁盘上的正式计划 / state 里的
+    # 展示版都可能带 `confirmation_status`、`_change_status` 等派生字段。这里写进 state
+    # 的基线与 boundary 摘要必须都是剥离后的业务内容，否则 begin 校验会因展示字段对不上。
+    baseline = drop_generated_fields(baseline)
     if new_request is not None:
         # 显式 @技术规划可重新发起首次生成，旧计划只是可选基线；普通修订仍要求已有计划。
         if not baseline and not allow_initial_generation:

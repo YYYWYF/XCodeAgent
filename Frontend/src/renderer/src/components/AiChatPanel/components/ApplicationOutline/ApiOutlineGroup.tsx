@@ -8,6 +8,7 @@ import type { ApplicationOutlineProps } from './index'
 import { apiEndpointSelectionKey } from './outlineUtils'
 import DevelopmentStatusDot from './DevelopmentStatusDot'
 import IterationBadge from '../../../../components/IterationBadge'
+import { WorkbenchChangeBadge, isDeletedStatus } from './WorkbenchChangeBadge'
 
 type Props = {
   contract: DevelopmentPlanningApiContract
@@ -50,6 +51,7 @@ export default function ApiOutlineGroup({
         <CaretDownOutlined className={cx(!expanded && 'collapsed')} />
         <FolderOpenOutlined />
         <span className={cx('api-group-label')}>
+          {/* 分组只作为目录，不展示变更标识：变更只落在组内具体接口上。 */}
           <strong>{contract.name || '未命名接口分组'}</strong>
         </span>
         <span className={cx('development-count')}>
@@ -63,6 +65,9 @@ export default function ApiOutlineGroup({
             const apiContractId = endpoint.apiContractId || contract.id
             const endpointKey = apiEndpointSelectionKey(apiContractId, endpointId)
             const displayPath = apiEndpointDisplayPath(endpoint.path, contract.label)
+            // 已删除的接口仍可点选：点进去执行的是清理该接口产物的删除动作，
+            // 与页面的待删除项保持一致（整组删除时组内接口同样视为删除）。
+            const deleted = isDeletedStatus(endpoint.changeStatus) || isDeletedStatus(contract.changeStatus)
             return (
               <div className={cx('api-node')} key={endpointKey}>
                 <Tooltip
@@ -82,20 +87,27 @@ export default function ApiOutlineGroup({
                     <button
                       aria-current={selectedKey === endpointKey ? 'true' : undefined}
                       aria-label={`${endpoint.name || displayPath}，${endpoint.method} ${endpoint.path}${endpoint.summary ? `，${endpoint.summary}` : ''}`}
-                      className={cx('api-row', selectedKey === endpointKey && 'selected')}
-                      onClick={() =>
+                      className={cx('api-row', selectedKey === endpointKey && 'selected', deleted && 'is-deleted')}
+                      onClick={() => {
                         onSelect({
                           apiContractId,
                           endpointId,
                           endpointKey,
                           label: `${endpoint.name || displayPath} · ${endpoint.method} ${displayPath}`.trim()
                         })
-                      }
+                      }}
+                      title={deleted ? '本轮待删除，进入开发流程后会清理该接口的代码' : undefined}
                       type="button"
                     >
                       <ApiOutlined className={cx('api-endpoint-icon')} />
                       <span className={cx('api-copy')}>
-                        <strong>{endpoint.name || displayPath}</strong>
+                        {/* 名称与变更徽标同一行：徽标跟在名称后，而不是另起一行占满宽度。 */}
+                        <span className={cx('api-endpoint-title-row')}>
+                          <strong>{endpoint.name || displayPath}</strong>
+                          <WorkbenchChangeBadge
+                            status={endpoint.changeStatus || (deleted ? 'deleted' : undefined)}
+                          />
+                        </span>
                       </span>
                       <DevelopmentStatusDot
                         progress={developmentArtifacts?.endpoints[apiContractId]?.[endpointId]}

@@ -12,7 +12,8 @@ export function pageTreeItems(nodes: DevelopmentPlanningPageTreeNode[]): Applica
         path: node.uniquePath || node.path || node.key,
         label: node.label,
         type: 'menu',
-        children
+        children,
+        ...(node.changeStatus ? { changeStatus: node.changeStatus } : {})
       })
       return
     }
@@ -28,7 +29,8 @@ export function pageTreeItems(nodes: DevelopmentPlanningPageTreeNode[]): Applica
       keyFeatures: [],
       designed: Boolean(node.designed),
       detailPlanStatus: node.detailPlanStatus,
-      hasDetailPlan: node.hasDetailPlan
+      hasDetailPlan: node.hasDetailPlan,
+      ...(node.changeStatus ? { changeStatus: node.changeStatus } : {})
     })
   })
   return items
