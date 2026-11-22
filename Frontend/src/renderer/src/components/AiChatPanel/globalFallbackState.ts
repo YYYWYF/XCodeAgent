@@ -13,7 +13,7 @@ export function isTechnicalPlanGenerationFailure(workflow?: WorkflowRunPayload):
     workflowClarification(workflow)?.mode === 'technical_plan_generation_error'
 }
 
-/** 为原底部错误入口提取可读原因，内部片段、文件路径与堆栈不进入界面和复制内容。 */
+/** 保留业务失败原因和接口路径，仅剔除内部片段身份、哈希及堆栈。 */
 export function technicalPlanGenerationFailureMessage(workflow?: WorkflowRunPayload): string | undefined {
   if (!isTechnicalPlanGenerationFailure(workflow)) return undefined
   const errors = workflowClarification(workflow!)?.errors
@@ -22,8 +22,15 @@ export function technicalPlanGenerationFailureMessage(workflow?: WorkflowRunPayl
     .map((error) => error.trim()
       .replace(/^技术规划片段\s+.*?校验失败[：:]\s*/s, '')
       .replace(/^技术规划\s*/, '')
-      .replace(/Endpoint ID\s*/g, '接口标识'))
-    .filter((reason) => reason && !/[\r\n{}\[\]<>/\\]|catalog-part:|[a-f\d]{32,}|Traceback|sha256/i.test(reason))
+      .replace(/Endpoint ID\s*/g, '接口标识')
+      .replace(/Endpoint method\/path\s*/g, '接口请求方法和路径')
+      .split(/\r?\n/)
+      .filter((line) => !/Traceback|^\s*File\s+|^\s*at\s+|https?:\/\/errors\.pydantic\.dev/i.test(line))
+      .join(' ')
+      .replace(/catalog-part:[\w:-]+|\b[a-f\d]{32,}\b/gi, '')
+      .replace(/(?:\/Users\/|\/home\/|[A-Za-z]:\\)[^\s，；。]+/g, '（内部文件）')
+      .trim())
+    .filter((reason) => reason)
     .slice(0, 5)
   return reasons.length ? `技术规划未通过检查：${reasons.join('；')}` : '技术规划未通过检查，请重试。'
 }

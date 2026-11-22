@@ -8,7 +8,10 @@ from app.agents.main.technical_plan_catalog_parts_validation import catalog_regi
 def catalog_responses(catalog: dict, *, entity_ids=None, contract_ids=None, page_ids=None) -> list[dict]:
     """按测试指定所有权构造身份、字段、接口目录及逐页映射响应。"""
 
-    values = [catalog_registry(catalog)]
+    registry = catalog_registry(catalog)
+    relationships = {"entities": [{**entity, "owned_entity_ids": entity.get("owned_entity_ids", [])}
+        for entity in registry["entities"]]}
+    values = [relationships, {"contracts": registry["contracts"]}]
     values.extend({"fields": deepcopy(entity["fields"])} for entity in catalog["entities"]
         if entity_ids is None or entity["id"] in entity_ids)
     values.extend({"endpoints": deepcopy(contract["endpoints"])} for contract in catalog["contracts"]
@@ -25,8 +28,10 @@ def catalog_response(prompt: str, catalog: dict) -> dict:
     import json
     context = json.loads(prompt.splitlines()[-1])
     stage = prompt.splitlines()[0]
+    if "catalog_relationships" in stage:
+        return catalog_responses(catalog)[0]
     if "catalog_registry" in stage:
-        return catalog_registry(catalog)
+        return {"contracts": catalog_registry(catalog)["contracts"]}
     if "catalog_entity" in stage:
         return {"fields": next(entity["fields"] for entity in catalog["entities"] if entity["id"] == context["entity"]["id"])}
     if "catalog_endpoints" in stage:

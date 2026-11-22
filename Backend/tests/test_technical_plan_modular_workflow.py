@@ -57,7 +57,7 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
 
         responses = iter(outputs)
 
-        def invoke(prompt, *, settings, on_token=None):
+        def invoke(prompt, *, settings, on_token=None, thinking_enabled=False):
             """将受控响应送入真实分段解析，并沿原 token 回调投射进度。"""
 
             response = next(responses)
@@ -121,6 +121,23 @@ class TechnicalPlanModularWorkflowTests(IsolatedAsyncioTestCase):
         self.assertTrue(technical_plan_draft_json_path(snapshot.values).is_file())
         self.assertFalse(technical_plan_json_path(snapshot.values).exists())
         self.assertFalse(TechnicalPlanFragmentStore(self.h.workspace).path.exists())
+        self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
+
+    async def test_joint_group_repair_keeps_original_ag_ui_confirmation_gate(self):
+        """联合修正仅替换冲突目录，真实流程仍产出待确认草稿并停在原审阅门。"""
+
+        registry = catalog_responses(self.catalog)[1]
+        original = deepcopy(registry["contracts"][0])
+        registry["contracts"].insert(1, {**deepcopy(original), "id": original["id"] + "_display", "name": original["name"] + "展示"})
+        outputs = [self.outputs[0], json.dumps(registry), json.dumps({"contracts": [original]}), *self.outputs[2:]]
+        snapshot, frames, count = await self._run(outputs)
+        self.assertEqual(count, len(outputs), "\n".join(frames))
+        self.assertEqual(snapshot.next, ("technical_planning_review",))
+        self.assertTrue(any(task.interrupts for task in snapshot.tasks))
+        self.assertEqual(snapshot.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
+        self.assertEqual(strip_change_status(snapshot.values["technical_plan"])["api_contracts"], self.h.candidate["api_contracts"])
+        self.assertTrue(technical_plan_draft_json_path(snapshot.values).is_file())
+        self.assertFalse(technical_plan_json_path(snapshot.values).exists())
         self.assertFalse(any('"RUN_ERROR"' in frame for frame in frames))
 
     async def test_each_fragment_succeeds_on_third_attempt_and_keeps_confirmation_gate(self):

@@ -52,10 +52,11 @@ class TechnicalPlanFragmentPersistenceTests(TestCase):
         """子进程在第二次模型调用直接退出，父进程仍能复用已同步提交的共享目录。"""
 
         fixture = Path(self.temp.name) / "inputs.json"
-        fixture.write_text(json.dumps({"requirement": self.requirement, "catalog": catalog_registry(self.catalog)}))
+        fixture.write_text(json.dumps({"requirement": self.requirement, "catalog": self.catalog}))
         script = '''
 import json,os,sys
 from app.agents.main.technical_plan_generation import generate_technical_plan_sections
+from tests.technical_plan_catalog_fixture import catalog_response
 value=json.load(open(sys.argv[1]))
 count=0
 def invoke(prompt):
@@ -63,7 +64,7 @@ def invoke(prompt):
     global count
     count+=1
     if count>1: os._exit(73)
-    return json.dumps(value["catalog"])
+    return json.dumps(catalog_response(prompt,value["catalog"]))
 generate_technical_plan_sections(value["requirement"],invoke=invoke)
 '''
         process = subprocess.run([sys.executable, "-c", script, str(fixture)], cwd=Path(__file__).parents[1], capture_output=True, timeout=30)

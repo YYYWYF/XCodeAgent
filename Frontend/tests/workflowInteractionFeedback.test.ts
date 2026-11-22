@@ -96,6 +96,23 @@ test('技术规划错误卡只保留可读原因，不展示片段哈希或堆�
   assert.doesNotMatch(message, /catalog-part|19637f54|Traceback|plan\.py/)
 })
 
+// 真实路由中的斜杠和参数括号不能再导致整条诊断被丢弃。
+test('技术规划冲突详情保留请求路径、参数与双方分组，不修改原状态', () => {
+  const workflow = planningInteraction('technical_plan_generation_error')
+  workflow.summary.clarification!.errors = [
+    '技术规划片段 catalog-part:abc:endpoints:def 校验失败：已尝试 3 次。技术规划 Endpoint method/path 存在重复值：GET /api/dog-breeds/{id} 同时出现在 dog_breed_management 的 list 和 dog_breed_display 的 read。',
+    '分组校验失败：管理组与展示组的页面归属 [home, management] 重复。\nTraceback (most recent call last):\n  File "/Users/example/project/plan.py", line 1'
+  ]
+  const original = JSON.stringify(workflow)
+  const message = technicalPlanGenerationFailureMessage(workflow)!
+  assert.match(message, /GET \/api\/dog-breeds\/\{id\}/)
+  assert.match(message, /dog_breed_management.*dog_breed_display/)
+  assert.match(message, /已尝试 3 次/)
+  assert.match(message, /\[home, management\]/)
+  assert.doesNotMatch(message, /catalog-part|Traceback|\/Users\/|plan\.py/)
+  assert.equal(JSON.stringify(workflow), original)
+})
+
 // 校验失败进入原底部兜底，真正运行和正式确认都不借用该失败入口。
 test('技术生成校验失败显示原底部兜底，保留原生门禁状态且不污染新运行', () => {
   const workflow = planningInteraction('technical_plan_generation_error')

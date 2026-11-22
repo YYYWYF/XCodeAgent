@@ -4,6 +4,7 @@ from copy import deepcopy
 import logging
 from typing import Callable
 
+from app.agents.main.technical_plan_catalog_conflict import CatalogContractConflict
 from app.agents.main.technical_plan_contract_batch_validation import SchemaPlanRepairRequired
 from app.agents.main.technical_plan_contract_budget import contract_part_prefix
 from app.agents.main.technical_plan_fragment_output import PlanningOutputTruncated, parse_batch_json
@@ -67,7 +68,7 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
             if not isinstance(value, dict):
                 raise ValueError("输出必须是唯一完整的 JSON 根对象，不能包含多个对象、说明文字或未闭合结构")
             validated = deepcopy(validate(value))
-        except SchemaPlanRepairRequired as exc:
+        except (SchemaPlanRepairRequired, CatalogContractConflict) as exc:
             # 不能在无权修改上游的片段内重复生成，保持原依赖失效与修复路径。
             exc.fragment_key = key
             raise

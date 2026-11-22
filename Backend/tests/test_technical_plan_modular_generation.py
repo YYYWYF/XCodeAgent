@@ -33,7 +33,7 @@ def modular_fixture() -> tuple[dict, dict, list, list]:
         specs.append(spec)
         contracts.append({key: deepcopy(spec[key]) for key in ("id", "name", "entity_ids", "base_path")})
         contracts[-1].update(authentication={"required": False}, schemas={"Output": {"type": "object", "properties": {
-            "code": {"type": "string", "description": f"{name}编号。", "entity_field_ref": entity_id + ".code"},
+            "code": {"type": "string", "description": f"{name}编号。"},
         }, "required": ["code"]}}, endpoints=[{
             **endpoint, "parameters": [], "request_schema_ref": None, "response_schema_ref": "Output",
             "error_codes": [], "authentication": {"required": False},
@@ -307,7 +307,7 @@ class TechnicalPlanModularGenerationTests(TestCase):
         self.requirement["confirmed_product_plan"]["pages"] = [{"pageId": "about", "actions": [], "information_items": []}]
         page = {"pageId": "about", "references": {"endpoint_dependencies": [], "action_implementations": []}}
         plan, prompts = self._generate(fragment_outputs({"entities": [], "contracts": [], "action_bindings": []}, [], [page]))
-        self.assertEqual(len(prompts), 2)
+        self.assertEqual(len(prompts), 3)
         self.assertEqual(plan["api_contracts"], [])
         self.assertEqual(plan["entities"], [])
 

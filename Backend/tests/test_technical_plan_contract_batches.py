@@ -33,7 +33,7 @@ def batch_fixture(count=13, fields=1):
     spec["endpoints"] = [{**spec["endpoints"][0], "id": f"orders.read_{index}",
         "path": f"/api/orders/view_{index}", "name": f"查询订单视图{index}"} for index in range(count)]
     contract["endpoints"] = [{**deepcopy(contract["endpoints"][0]), **endpoint} for endpoint in spec["endpoints"]]
-    properties = {f"code_{index}": {"type": "string", "description": "订单展示编号。", "entity_field_ref": "Order.code"}
+    properties = {f"code_{index}": {"type": "string", "description": "订单展示编号。"}
         for index in range(fields)}
     contract["schemas"] = {"Output": {"type": "object", "properties": properties, "required": list(properties)}}
     plan = {"authentication": {"required": False}, "schemas": [{"name": "Output", "base": {"type": "object"},
@@ -112,7 +112,7 @@ class TechnicalPlanContractBatchTests(TestCase):
             result = generate_technical_plan_sections(requirement, invoke=model)
             self.assertEqual(result["api_contracts"], [contract])
             if count == 12:
-                self.assertEqual(len(model.prompts), 6)
+                self.assertEqual(len(model.prompts), 7)
         complex_catalog = deepcopy(self.catalog)
         complex_catalog["contracts"][0]["endpoints"] = complex_catalog["contracts"][0]["endpoints"][:1]
         complex_catalog["entities"][0]["fields"] *= 100

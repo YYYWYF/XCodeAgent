@@ -56,7 +56,7 @@ class TechnicalPlanCatalogPartsTests(TestCase):
             self.assertEqual(sum(stage in item for item in stages), count)
         contexts = [json.loads(prompt.splitlines()[-1]) for prompt in self.model.calls[:8]]
         self.assertNotIn("fields", catalog_response(self.model.calls[0], self.catalog)["entities"][0])
-        self.assertEqual({page["pageId"] for page in contexts[1]["pages"]}, {"orders", "order_detail"})
+        self.assertEqual({page["pageId"] for page in contexts[2]["pages"]}, {"orders", "order_detail"})
         self.assertNotIn("SECRET-DO-NOT-PROMPT", "".join(self.model.calls))
         self.assertFalse(any(key.startswith("catalog-part:") for key in progress["completed"]))
         self.assertEqual(progress["completed"]["catalog"], self.catalog)
@@ -64,23 +64,33 @@ class TechnicalPlanCatalogPartsTests(TestCase):
     def test_registry_rejects_unknown_ownership_and_old_bulk_response(self):
         """旧的整目录包络及未知实体归属不能作为当前全局身份响应。"""
 
-        registry = catalog_responses(self.catalog)[0]
+        registry = catalog_responses(self.catalog)[1]
         for value in (self.catalog, {"entities": [], "contracts": []},
                 {**registry, "contracts": [{**registry["contracts"][0], "entity_ids": ["unknown"]}]}):
             with self.subTest(value=list(value)), self.assertRaises(ValueError):
-                validate_registry(value, self.requirement["confirmed_product_plan"])
+                validate_registry(value, self.requirement["confirmed_product_plan"], entities=self.catalog["entities"])
 
-    def test_cross_contract_route_conflict_retries_only_current_directory(self):
-        """第二业务目录不能用不同参数名重复占用第一个目录的路由。"""
+    def test_cross_contract_route_conflict_uses_bounded_joint_repair(self):
+        """跨组路由冲突改用联合片段，耗尽后保留原分组及成功接口。"""
 
         self.catalog["contracts"][0]["endpoints"][0]["path"] = "/api/shared/{first}"
         self.catalog["contracts"][1]["endpoints"][0]["path"] = "/api/shared/{second}"
         for spec, contract in zip(self.catalog["contracts"], self.contracts):
             # 两个能力可共享路径范围，但仍不得重复占用同一规范化 HTTP 路由。
             spec["base_path"] = contract["base_path"] = "/api/shared"
-        progress = {}
+        progress, joint_prompts = {}, []
+
+        def invoke(prompt):
+            """联合响应保留冲突，以验证有界失败及未修改原候选。"""
+
+            if "catalog_joint_repair" in prompt.splitlines()[0]:
+                joint_prompts.append(prompt)
+                return json.dumps({"contracts": self.catalog["contracts"]})
+            return self.model(prompt)
+
         with self.assertRaisesRegex(ValueError, "method/path"):
-            generate_technical_plan_sections(self.requirement, invoke=self.model, fragments=progress)
+            generate_technical_plan_sections(self.requirement, invoke=invoke, fragments=progress)
+        self.assertEqual(len(joint_prompts), 3)
         self.assertNotIn("catalog", progress["completed"])
         self.contracts[1]["endpoints"][0]["path"] = "/api/shared/customers"
         self.catalog["contracts"][0]["endpoints"][0]["path"] = self.contracts[0]["endpoints"][0]["path"]
@@ -137,10 +147,10 @@ from tests.technical_plan_catalog_fixture import catalog_response
 req,catalog=json.load(open(sys.argv[1]))
 count=0
 def invoke(prompt):
-    """两个目录片段同步成功后，模拟测试进程立即结束。"""
+    """两个身份阶段及首实体同步成功后，模拟测试进程立即结束。"""
     global count
     count+=1
-    if count>2:os._exit(73)
+    if count>3:os._exit(73)
     return json.dumps(catalog_response(prompt,catalog))
 generate_technical_plan_sections(req,invoke=invoke)
 '''
@@ -149,7 +159,7 @@ generate_technical_plan_sections(req,invoke=invoke)
             store = TechnicalPlanFragmentStore(workspace)
             directory = json.loads(store.path.read_text())
             self.assertNotIn("catalog", directory["completed"])
-            self.assertEqual(len(directory["completed"]), 2)
+            self.assertEqual(len(directory["completed"]), 3)
             resumed = CatalogModel(self.catalog, self.contracts, self.pages)
             result = generate_technical_plan_sections(requirement, invoke=resumed)
             self.assertEqual(result["api_contracts"], self.contracts)
@@ -165,7 +175,7 @@ generate_technical_plan_sections(req,invoke=invoke)
                     generate_technical_plan_sections(requirement, invoke=self.model)
             directory = json.loads(TechnicalPlanFragmentStore(workspace).path.read_text())
             self.assertNotIn("catalog", directory["completed"])
-            self.assertEqual(len(directory["completed"]), 8)
+            self.assertEqual(len(directory["completed"]), 9)
             resumed = CatalogModel(self.catalog, self.contracts, self.pages)
             generate_technical_plan_sections(requirement, invoke=resumed)
             self.assertFalse(any("catalog_" in prompt.splitlines()[0] for prompt in resumed.calls))

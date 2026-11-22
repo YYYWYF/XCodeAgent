@@ -5,6 +5,7 @@ import re
 
 from pydantic import Field
 
+from app.agents.main.technical_plan_catalog_conflict import CatalogContractConflict
 from app.agents.main.technical_plan_catalog_repair import CatalogBinding, business_slots, validate_catalog_coverage
 from app.agents.main.technical_plan_generation_validation import (
     _StrictFragment, _Entity, _Endpoint, _check, _unique, validate_catalog,
@@ -74,19 +75,31 @@ def validate_registry(value: dict, product: dict, *, entities: list[dict]) -> di
     _unique([contract["id"] for contract in registry["contracts"]], "Contract ID")
     entity_ids = {entity["id"] for entity in entities}
     pages = {page["pageId"] for page in product.get("pages", [])}
-    claimed = set()
+    claimed, groups = set(), {}
     for contract in registry["contracts"]:
         _unique(contract["entity_ids"], "Contract 实体引用")
         _unique(contract["page_ids"], "Contract 页面引用")
         if set(contract["entity_ids"]) - entity_ids or set(contract["page_ids"]) - pages:
             raise ValueError("全局身份目录引用了未知实体或页面。")
         claimed.update(contract["page_ids"])
+        # 同一实体集合及同一路径边界不能仅因页面或读写用途拆为多个分组。
+        signature = (tuple(sorted(contract["entity_ids"])), _route(contract["base_path"]))
+        groups.setdefault(signature, []).append(contract)
     if {slot[0] for slot in business_slots(product)} - claimed:
         raise ValueError("目录遗漏业务页面的 Contract 归属。")
     _check(validate_technical_plan_chinese_prose({"api_contracts": registry["contracts"]}))
-    # Contract 的名称校验沿用完整目录规则，实体名称不额外引入新的命名政策。
+    # 先完成整个响应的基础检查，避免无关名称错误阻塞只允许修改冲突组的联合片段。
     if any(not re.search(r"[\u3400-\u9fff]", contract["name"]) for contract in registry["contracts"]):
         raise ValueError("Contract 名称必须包含中文。")
+    overlaps = [items for items in groups.values() if len(items) > 1]
+    if overlaps:
+        # 一次包含当前目录中所有确定重叠的分组，避免另一对只读冲突阻止本次联合修正。
+        reasons = ["、".join(f"{item['name']}（{item['id']}）" for item in items)
+            + f"使用相同实体及路径边界 {items[0]['base_path']}" for items in overlaps]
+        raise CatalogContractConflict(
+            "技术规划分组冲突：" + "；".join(reasons) + "。请合并同一业务主体；确属不同业务聚合时明确各自路径边界。",
+            [item["id"] for items in overlaps for item in items], registry["contracts"],
+        )
     return registry
 
 
@@ -137,24 +150,33 @@ def _validate_endpoint_conflicts(endpoints: list, identity: dict, completed: lis
     """反馈具体冲突接口及双方归属，避免模型只收到无法定位的重复值提示。"""
 
     ids, routes = {}, {}
-    for contract in [*completed, {**identity, "endpoints": endpoints}]:
+    contracts = [*completed, {**identity, "endpoints": endpoints}]
+    for contract in contracts:
         for endpoint in contract["endpoints"]:
             endpoint_id = endpoint["id"]
             route = (endpoint["method"], _route(endpoint["path"]))
             owner = f"{contract['id']} 的 {endpoint_id}"
             if endpoint_id in ids:
-                raise ValueError(f"技术规划 Endpoint ID 存在重复值：{endpoint_id} 同时出现在 {ids[endpoint_id]} 和 {owner}；复用已有接口，不得重复声明。")
+                previous, label = ids[endpoint_id]
+                reason = f"技术规划 Endpoint ID 存在重复值：{endpoint_id} 同时出现在 {label} 和 {owner}；复用已有接口，不得重复声明。"
+                if previous != contract["id"]:
+                    raise CatalogContractConflict(reason, [previous, contract["id"]], contracts)
+                raise ValueError(reason)
             if route in routes:
-                raise ValueError(f"技术规划 Endpoint method/path 存在重复值：{route[0]} {route[1]} 同时出现在 {routes[route]} 和 {owner}；复用已有接口，不得通过改 ID 重复创建。")
-            ids[endpoint_id], routes[route] = owner, owner
+                previous, label = routes[route]
+                reason = f"技术规划 Endpoint method/path 存在重复值：{route[0]} {route[1]} 同时出现在 {label} 和 {owner}；复用已有接口，不得通过改 ID 重复创建。"
+                if previous != contract["id"]:
+                    raise CatalogContractConflict(reason, [previous, contract["id"]], contracts)
+                raise ValueError(reason)
+            ids[endpoint_id] = routes[route] = (contract["id"], owner)
 
 
 def validate_endpoint_directory(value: dict, *, identity: dict, entities: list, completed: list, product: dict, registry: dict) -> dict:
     """接口目录在缓存或复用前检查能力归属、跨 Contract 身份及规范化路由。"""
 
     part = _Endpoints.model_validate(value).model_dump()
-    _validate_endpoint_ownership(part["endpoints"], identity, registry)
     _validate_endpoint_conflicts(part["endpoints"], identity, completed)
+    _validate_endpoint_ownership(part["endpoints"], identity, registry)
     candidate = {"entities": entities, "contracts": [*completed, {**identity, **part}], "action_bindings": []}
     # 此阶段尚未生成动作映射，只检查全部已完成接口的全局身份和引用；完整覆盖在逐页阶段验证。
     validate_catalog(candidate, {"pages": [{"pageId": page["pageId"], "actions": []} for page in product.get("pages", [])]})
