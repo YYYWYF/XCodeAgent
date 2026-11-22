@@ -157,18 +157,37 @@ class FrontendCoreDocsTests(unittest.TestCase):
             self.assertEqual(tools["ok"].status, "success")
             self.assertEqual(tools["duplicate"].status, "error")
 
+    def test_complete_document_with_wrapped_last_line(self):
+        """当前两空格行号及末行续行能完整交付，不将渲染行数误当成源文件行数。"""
+        source = "说明\n" * 1998 + "x" * 6000 + "\n"
+        self.document.write_text(source)
+        for asynchronous in (False, True):
+            with self.subTest(asynchronous=asynchronous):
+                scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])
+                with scope.task_context():
+                    tools = self._run(scope, [[_read(AGENTS, "complete")],
+                                              [_read(AGENTS, "duplicate")]], asynchronous)
+                    self.assertEqual(tools["complete"].status, "success", tools["complete"])
+                    self.assertIn("1999.1  " + "x" * 1000, tools["complete"].content)
+                    self.assertNotIn("[Output was truncated", tools["complete"].content)
+                    self.assertEqual(scope.core_docs_read, {(API, AGENTS)})
+                    self.assertEqual(tools["duplicate"].status, "error")
+                    self.assertIn("本任务已读取该规范", tools["duplicate"].content)
+
     def test_partial_and_truncated_results_do_not_count(self):
-        """真实分页、输出长度截断及空正文均报告失败，不将不完整内容登记。"""
-        scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])
-        with scope.task_context():
-            for source, args in (("one\ntwo\n", {"offset": 1}),
-                                 ("one\n" * 2100, {}), ("x" * 150000, {}), ("", {})):
-                with self.subTest(args=args, length=len(source)):
-                    self.document.write_text(source)
-                    tools = self._run(scope, [[_read(AGENTS, "incomplete", **args)]])
-                    self.assertEqual(tools["incomplete"].status, "error")
-                    self.assertIn("正文不完整或被截断", tools["incomplete"].content)
-                    self.assertEqual(scope.core_docs_read, set())
+        """同步异步的分页、满页、输出长度截断及空正文均拒绝登记。"""
+        for asynchronous in (False, True):
+            scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])
+            with scope.task_context():
+                for source, args in (("one\ntwo\n", {"offset": 1}),
+                                     ("one\n" * 2000, {}), ("one\n" * 2100, {}),
+                                     ("x" * 150000, {}), ("", {})):
+                    with self.subTest(asynchronous=asynchronous, args=args, length=len(source)):
+                        self.document.write_text(source)
+                        tools = self._run(scope, [[_read(AGENTS, "incomplete", **args)]], asynchronous)
+                        self.assertEqual(tools["incomplete"].status, "error")
+                        self.assertIn("正文不完整或被截断", tools["incomplete"].content)
+                        self.assertEqual(scope.core_docs_read, set())
 
     def test_exact_paths_and_physical_aliases(self):
         """大小写、点段、宿主路径以及符号与硬链接不能绕过精确授权。"""

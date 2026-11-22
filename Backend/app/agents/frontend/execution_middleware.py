@@ -94,9 +94,10 @@ class FrontendExecutionMiddleware(AgentMiddleware):
             and result.status == "success"):
             if path in FRONTEND_CORE_DOCS:
                 args = request.tool_call["args"]
-                # 原工具只返回分页正文；不足一页且从首行开始才能确认已到末尾。
+                # 当前工具用两个空格分隔行号与正文；长行续行标记仍属于同一源文件行。
                 content = result.content if isinstance(result.content, str) else ""
-                lines = re.findall(r"^\s*(\d+)\t", content, re.MULTILINE)
+                lines = re.findall(r"^ *(\d+)(?:\.\d+)?  ", content, re.MULTILINE)
+                # 不足一页且从首行开始才能确认已到末尾，真实截断仍拒绝登记。
                 if (args.get("offset", 0) != 0 or not lines
                     or int(lines[-1]) >= args.get("limit", DEFAULT_READ_LIMIT)
                     or "[Output was truncated" in content or EMPTY_CONTENT_WARNING in content):
