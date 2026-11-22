@@ -60,10 +60,9 @@ _CASUAL_RESPONSE_KEY_PATTERN = re.compile(r'"response"\s*:\s*"')
 _DIRECT_IGNORED_PATH_PARTS = frozenset(
     {".next", ".turbo", ".venv", "build", "coverage", "dist", "node_modules", "target"}
 )
-_FRONTEND_REQUIRED_SKILLS = (
-    "/.devagentstudio/builtin-skills/frontend-template-modification-boundary/SKILL.md",
-    "/.devagentstudio/builtin-skills/code-block-template/SKILL.md",
-    "/.devagentstudio/builtin-skills/react-develop-specification/SKILL.md",
+_FRONTEND_REQUIRED_DOCS = (
+    "/.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md",
+    "/frontend/AGENTS.md",
 )
 _DIRECT_RESULT_SUMMARY_INSTRUCTIONS = (
     "## User-facing result summary\n"
@@ -700,17 +699,17 @@ def _frontend_direct_modification_prompt(
         "style-only changes. Never replace command execution with a manual repository-wide review.\n\n"
         f"{_DIRECT_VERIFICATION_REPAIR_INSTRUCTIONS}\n"
         f"{VIRTUAL_WORKSPACE_PATH_INSTRUCTIONS}\n\n"
-        "## Mandatory built-in skills\n"
+        "## Frontend core standards and current project guidance\n"
         "Before writing any code, use read_file(limit=400) to read each file below completely and "
         "follow it. If a read fails, do not treat that single tool error as the final task result: "
         "continue only when the requested change can still be made safely, then verify the outcome "
         "and report the tool error as a warning if the task is otherwise complete.\n"
-        f"1. `{_FRONTEND_REQUIRED_SKILLS[0]}`\n"
-        f"2. `{_FRONTEND_REQUIRED_SKILLS[1]}`\n"
-        f"3. `{_FRONTEND_REQUIRED_SKILLS[2]}`\n"
-        "Read code-block-template references only when relevant to this request; do not load all "
-        "references up front. These built-in skills are mounted read-only and are independent of "
-        "the user-selected skill list.\n\n"
+        f"1. `{_FRONTEND_REQUIRED_DOCS[0]}`\n"
+        f"2. `{_FRONTEND_REQUIRED_DOCS[1]}`\n"
+        "The first document is the built-in coding standard; /frontend/AGENTS.md is a workspace "
+        "document describing the current project, not a built-in Skill. Read relevant sections of "
+        "frontend-engineering-standards/references/ only as needed; do not load all references up front. "
+        "The built-in standard is mounted read-only and is independent of the user-selected skill list.\n\n"
         "Return exactly one JSON object with: status (completed or failed), summary, changedFiles, "
         "verification, alreadySatisfied, and failureReason. Set alreadySatisfied=true only after "
         "verifying that the exact requested behavior already exists. Do not return Markdown around "

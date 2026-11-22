@@ -11,8 +11,6 @@ from app.services.user_skills import ApiModel, parse_skill_frontmatter
 
 BUILTIN_SKILLS_DIR_ENV = "DEVAGENTSTUDIO_BUILTIN_SKILLS_DIR"
 BUILTIN_SKILLS_VIRTUAL_ROOT = "/.devagentstudio/builtin-skills/"
-REACT_DEV_SPEC_SKILL_NAME = "react-develop-specification"
-CODE_BLOCK_TEMPLATE_SKILL_NAME = "code-block-template"
 FRONTEND_ENGINEERING_SKILL_NAME = "frontend-engineering-standards"
 SPRINGBOOT_BACKEND_BOOTSTRAP_SKILL_NAME = "springboot-backend-bootstrap"
 SPRINGBOOT_BACKEND_FOUNDATION_SKILL_NAME = "springboot-backend-foundation"
@@ -23,23 +21,6 @@ UI_DESIGN_SKILL_NAME = "antd-ui-design"
 FRONTEND_CODE_SCAN_SKILL_NAME = "frontend-code-scan"
 BACKEND_CODE_SCAN_SKILL_NAME = "backend-code-scan"
 SPRINGBOOT_TEMPLATE_BOUNDARY_SKILL_NAME = "springboot-template-modification-boundary"
-
-_REACT_DEV_SPEC_REFERENCE_FILES = [
-    "references/00-framework-intro.md",
-    "references/01-naming-standards.md",
-    "references/02-coding-standards.md",
-    "references/03-security-standards.md",
-    "references/04-engineering-standards.md",
-    "references/05-project-example.md",
-    "references/06-appendix.md",
-]
-
-_CODE_BLOCK_TEMPLATE_REFERENCE_FILES = [
-    "references/blocks.md",
-    "references/codegen-strategy.md",
-    "references/mock-data.md",
-    "references/page-templates.md",
-]
 
 _BACKEND_CODE_SCAN_REFERENCE_FILES = ["references/rules-reference.md"]
 
@@ -58,8 +39,6 @@ REQUIRED_BUILTIN_SKILL_FILES = {
         "references/component-patterns.md",
         "references/page-structure-examples.md",
     ],
-    REACT_DEV_SPEC_SKILL_NAME: ["SKILL.md", *_REACT_DEV_SPEC_REFERENCE_FILES],
-    CODE_BLOCK_TEMPLATE_SKILL_NAME: ["SKILL.md", *_CODE_BLOCK_TEMPLATE_REFERENCE_FILES],
     SPRINGBOOT_BACKEND_BOOTSTRAP_SKILL_NAME: [
         "SKILL.md",
         "references/bootstrap-database.md",

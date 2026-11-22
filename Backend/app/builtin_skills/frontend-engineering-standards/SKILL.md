@@ -1,6 +1,6 @@
 ---
 name: frontend-engineering-standards
-description: 前端 Build 的统一工程开发规范，覆盖 API、请求状态、组件、类型、React 状态、Hooks、安全、列表及命名。
+description: 前端 Build（frontend.api_module、frontend.page）及 SmallTask 实际修改/修复前端业务源码的统一工程开发规范，覆盖 API、请求状态、组件、类型、React 状态、Hooks、安全、列表及命名。
 version: "1.0"
 ---
 
@@ -8,7 +8,9 @@ version: "1.0"
 
 ## 定位与使用原则
 
-本 Skill 是前端 Build（`frontend.api_module`、`frontend.page`）的**通用开发规范**，回答“代码应如何实现”。当前工程的技术栈、实际文件结构、已有 API/组件导出、路由、认证与权限能力以**模板 `frontend/AGENTS.md` 和已授权的真实源码**为准；本 Skill 不重复维护工程架构说明。
+本 Skill 是前端 Build（`frontend.api_module`、`frontend.page`）及 SmallTask 实际修改/修复前端业务源码时的**通用开发规范**，回答“代码应如何实现”。当前工程的技术栈、实际文件结构、已有 API/组件导出、路由、认证与权限能力以**模板 `frontend/AGENTS.md` 和已授权的真实源码**为准；本 Skill 不重复维护工程架构说明。
+
+仅在实际涉及前端源码开发时使用本编码规范。非前端修改、工具安装修复、UI 设计与扫描仍按既有专用流程选择；不向 SmallTask 附加前端 Build 四步流程。
 
 - **实施事实**：以当前任务的 `implementation_contract`、已确认设计与 API 契约为准，不猜测接口或现有能力；优先保留已有符合契约的代码。
 - **读写边界**：新增或修改文件必须得到任务授权。本 Skill 和 `AGENTS.md` 均不授予文件读写权限；实际权限由平台任务契约与工具层校验决定。

@@ -63,7 +63,7 @@ def repair_write_policy(root: Path, file_path: str, resolved: Path) -> str:
 
 # 禁止代码生成 agent 在工作区创建的临时脚本扩展名。
 # 这类脚本（run_tsc.sh / run_check.py / run_tsc.js 等）是 agent 为了跑 tsc/build 验证而违规创建的，
-# 项目级验证应由外层 integration-test 阶段统一执行。见 frontend-template-modification-boundary 技能。
+# 项目级验证应由外层 integration-test 阶段统一执行。遵守当前任务授权与模板工程边界。
 # 注意：agent 会换扩展名绕过（.sh 被拦就改 .js），所以这里把常见脚本扩展名一并拦掉。
 BLOCKED_SCRIPT_EXTENSIONS = (".sh", ".bash", ".ps1", ".bat", ".py", ".js", ".mjs", ".cjs")
 

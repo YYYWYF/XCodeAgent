@@ -475,11 +475,11 @@ flowchart TD
 ### 7.4 `frontend_agent / 前端代码生成 Agent`
 
 - **类型**：Frontend Deep Agent，拥有前端文件和受限命令工具。
-- **当前提示词**：System Prompt 位于 `agents/frontend/agent.py`；执行 Prompt 位于 `agents/frontend/generator.py::_frontend_generation_prompt`。要求只执行批准任务；API 字段只能来自 contract；先读取模板修改边界和 code-block-template 技能；页面通过 `ui_designs.pages[].page_key` 读取用户确认的 `/.devagentstudio/ui-design/pages/<PageKey>/index.tsx` 作为视觉结构参考，再把静态 Mock/空交互替换为正式 API 或数据层；Static 数据源使用前端内存 API 模块；禁止在本阶段运行项目级构建/测试。
+- **当前提示词**：System Prompt 位于 `agents/frontend/agent.py`；执行 Prompt 位于 `agents/frontend/generator.py::_frontend_generation_prompt`。要求只执行批准任务；API 字段只能来自 contract；先读取统一 `frontend-engineering-standards/SKILL.md` 和当前生成工程 `/frontend/AGENTS.md`（工作区文档，并非内置 Skill）；页面通过 `ui_designs.pages[].page_key` 读取用户确认的 `/.devagentstudio/ui-design/pages/<PageKey>/index.tsx` 作为视觉结构参考，再把静态 Mock/空交互替换为正式 API 或数据层；Static 数据源使用前端内存 API 模块；禁止在本阶段运行项目级构建/测试。
 - **输入**：frontend owner tasks、BuildTaskPlan、ProjectPlan、PageTemplate、`ui_designs` 映射、工作区和选定技能。
 - **输出**：结构化任务结果、页面/API 代码、菜单变更、真实 diff。
 - **校验规则**：结果必须覆盖全部任务；只允许 authorized paths；模板骨架大部分只读；菜单修改受限；独立 acceptance verifier 检查 diff、页面文件、菜单注册和契约绑定。
-- **依赖文件**：`agents/frontend/agent.py`、`agents/frontend/generator.py`、内置 `frontend-template-modification-boundary`、`code-block-template`、UI 设计稿文件。
+- **依赖文件**：`agents/frontend/agent.py`、`agents/frontend/generator.py`、内置 `frontend-engineering-standards`、当前生成工程 `/frontend/AGENTS.md`、UI 设计稿文件。
 - **依赖节点**：上游 `build`；下游 `engineering_acceptance`。
 
 ### 7.5 `engineering_acceptance / 工程验收与结果归并`

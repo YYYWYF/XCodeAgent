@@ -424,6 +424,35 @@ class FrontendProjectPlanContextTests(unittest.TestCase):
         with self.assertRaises(FrontendTaskProjectionError):
             project_frontend_task_project_plan(plan, [task])
 
+    def test_uncontrolled_prompt_core_docs_and_specialized_static_skill(self):
+        """非受控生成在静态来源和设计稿分支均使用两份核心规范。"""
+        for static in (False, True):
+            for confirmed_design in (False, True):
+                with self.subTest(static=static, confirmed_design=confirmed_design):
+                    task = {"source_refs": {"endpoint_designs": [{"sourceSnapshots": [
+                        {"sourceType": "static" if static else "database"}
+                    ]}]}}
+                    designs = {"pages": [{"pageId": "orders", "page_key": "Orders",
+                                           "status": "confirmed" if confirmed_design else "pending"}]}
+                    prompt = _frontend_generation_prompt(project_plan=_plan(), build_task_plan={},
+                                                         tasks=[task], ui_designs=designs)
+                    self.assertEqual(prompt.count("/.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md"), 1)
+                    self.assertIn("`/frontend/AGENTS.md`", prompt)
+                    self.assertIn("not a built-in Skill", prompt)
+                    for obsolete in ("code-block-template", "react-develop-specification",
+                                     "frontend-template-modification-boundary"):
+                        self.assertNotIn(obsolete, prompt)
+                    self.assertEqual("frontend-static-data-generate/SKILL.md" in prompt, static)
+                    self.assertEqual("UI Design Reference (MUST READ" in prompt, confirmed_design)
+                    if confirmed_design:
+                        self.assertIn("queries managed by `useRequest`", prompt)
+                        self.assertIn("ProTable consuming `dataSource`/`loading`", prompt)
+                        self.assertIn("confirmed page contract", prompt)
+                        self.assertIn("do not block or fail the task", prompt)
+                    if static:
+                        self.assertIn("module-level in-memory array", prompt)
+                        self.assertIn("Keep `service.ts` untouched", prompt)
+
     def test_scoped_prompt_regular_and_static_paths(self):
         """任务包只注入本页设计、正式事实与短验收标识，静态分支原样接收计划。"""
         plan = _plan()

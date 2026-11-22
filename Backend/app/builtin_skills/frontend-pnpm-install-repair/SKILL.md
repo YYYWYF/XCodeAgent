@@ -395,7 +395,7 @@ Unmet peer dependencies
 **自动诊断 + 报告**：
 
 1. 用 `read_file` 读 `/frontend/package.json`，确认所有 `dependencies` 和 `devDependencies` 的版本与模板原始定义一致。
-2. 如果发现**用户业务代码里改了 `package.json` 的依赖版本**（这是模板工程的禁改区，见 `frontend-template-modification-boundary` SKILL），把这条作为诊断发现写入报告，**不要**回滚用户改动，**不要**继续修复——这属于业务侧决定，需要用户回滚或升级。
+2. 如果发现**用户业务代码里改了 `package.json` 的依赖版本**（这是模板工程的禁改区，见当前工程 `/frontend/AGENTS.md`），把这条作为诊断发现写入报告，**不要**回滚用户改动，**不要**继续修复——这属于业务侧决定，需要用户回滚或升级。
 3. 如果 `package.json` 与模板一致但仍冲突，把"模板自身 peer dep 冲突"作为升级信号写入报告，提示用户**升级模板**或**联系模板维护者**。
 
 **绝对不要**：
@@ -588,9 +588,9 @@ DevAgent Studio 的前端 launcher 在**非交互式子进程**里跑 `pnpm inst
 
 ## 与其他 Skill 的关系
 
-- **`frontend-template-modification-boundary`**：本 skill 的修复动作**不允许**修改 `frontend/package.json` 的依赖声明、`pnpm-lock.yaml`、`vite.config.ts` 等模板管理文件；只允许新增/修改 `frontend/.npmrc`，以及删除 `frontend/node_modules/`。
+- **当前工程 `/frontend/AGENTS.md`**：本 skill 的修复动作**不允许**修改 `frontend/package.json` 的依赖声明、`pnpm-lock.yaml`、`vite.config.ts` 等模板管理文件；只允许新增/修改 `frontend/.npmrc`，以及删除 `frontend/node_modules/`。
 - **`frontend-code-scan`**：那个 skill 负责发现 npm 包的版本安全风险（不修复），本 skill 负责安装失败时的环境/配置修复。两者可以串联：先跑本 skill 让依赖装上，再跑 code-scan 检查版本风险。
-- **`react-develop-specification`**：本 skill 不管业务代码，React 编码规范由那个 skill 约束。
+- **`frontend-engineering-standards`**：本 skill 不管业务代码，前端业务源码的编码规范由该统一 Skill 约束。
 
 ---
 

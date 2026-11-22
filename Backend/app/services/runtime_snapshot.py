@@ -10,7 +10,7 @@ from typing import Any
 from weakref import WeakValueDictionary, finalize
 
 from deepagents.backends import FilesystemBackend, StateBackend
-from deepagents.backends.protocol import DeleteResult, EditResult, FileUploadResponse, WriteResult
+from deepagents.backends.protocol import EditResult, FileUploadResponse, WriteResult
 
 from app.services.runtime_temporary import (
     RuntimeTemporaryLease,
@@ -27,17 +27,22 @@ class _ReadOnlySnapshot:
         """拒绝写文件。"""
         return WriteResult(error=f"只读快照不允许写入：{file_path}")
 
-    def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
         """拒绝编辑文件。"""
         return EditResult(error=f"只读快照不允许编辑：{file_path}")
 
-    def delete(self, file_path: str) -> DeleteResult:
-        """拒绝删除文件。"""
-        return DeleteResult(error=f"只读快照不允许删除：{file_path}")
-
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """拒绝批量上传文件。"""
-        return [FileUploadResponse(path=path, error="permission_denied") for path, _ in files]
+        return [
+            FileUploadResponse(path=path, error="permission_denied")
+            for path, _ in files
+        ]
 
 
 class _EmptySnapshotBackend(_ReadOnlySnapshot, StateBackend):
@@ -80,7 +85,9 @@ class RuntimeSnapshotCache:
         """为一种快照保存独立的创建锁和缓存。"""
         self._kind = kind
         self._lock = Lock()
-        self._backends: WeakValueDictionary[Hashable, _SnapshotBackend] = WeakValueDictionary()
+        self._backends: WeakValueDictionary[Hashable, _SnapshotBackend] = (
+            WeakValueDictionary()
+        )
 
     def get(self, key: Hashable, populate: Callable[[Path], None]) -> FilesystemBackend:
         """串行发布已完整生成的快照，构建失败不留下部分结果。"""
@@ -91,7 +98,9 @@ class RuntimeSnapshotCache:
             lease = acquire_runtime_temporary_lease()
             path: Path | None = None
             try:
-                path = Path(tempfile.mkdtemp(prefix=f"{self._kind}-", dir=lease.directory))
+                path = Path(
+                    tempfile.mkdtemp(prefix=f"{self._kind}-", dir=lease.directory)
+                )
                 populate(path)
                 backend = _SnapshotBackend(path, lease, self._kind)
             except BaseException:
